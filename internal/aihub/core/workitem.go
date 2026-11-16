@@ -187,10 +187,11 @@ func (m *WIManager) Create(req CreateRequest) (*WIView, error) {
 		}
 		return nil, err
 	}
+	parentID := ""
 	if req.ParentID != nil && *req.ParentID != "" {
-		var parentProject, parentBundle, grandParent sql.NullString
-		err = tx.QueryRow(`SELECT project_id, bundle_name, parent_id FROM work_items WHERE id=?1`, *req.ParentID).
-			Scan(&parentProject, &parentBundle, &grandParent)
+		var parentProject, grandParent sql.NullString
+		err = tx.QueryRow(`SELECT project_id, parent_id FROM work_items WHERE id=?1`, *req.ParentID).
+			Scan(&parentProject, &grandParent)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, Fail(api.ErrCoreBadInput, "PARENT_NOT_FOUND", "parent %q", *req.ParentID)
 		}
@@ -200,15 +201,17 @@ func (m *WIManager) Create(req CreateRequest) (*WIView, error) {
 		if parentProject.String != projectID {
 			return nil, Fail(api.ErrCoreBadInput, "PARENT_PROJECT_MISMATCH", "parent belongs to another project")
 		}
-		if parentBundle.Valid && parentBundle.String != "" {
-			return nil, Fail(api.ErrCoreBadInput, "PARENT_NOT_REGISTRY", "parent is an execution ticket, not a registry ticket")
-		}
+		// polyforge#77 deleted PARENT_NOT_REGISTRY: a bundle-bound ticket may
+		// be a parent (it executes its own workflow and, once bound, waits
+		// for its children to merge before it is claimable).
+		//
 		// Depth is one level (wi-kind-contract.md §2): the parent may not itself have
-		// a parent. parent_id is immutable after create, so this create
-		// check is the whole rule.
+		// a parent. parent_id is immutable after create (PATCH clears it only),
+		// so this create check is the whole rule.
 		if grandParent.Valid && grandParent.String != "" {
 			return nil, Fail(api.ErrCoreBadInput, "PARENT_DEPTH", "parent %q is itself a child; work items nest one level only", *req.ParentID)
 		}
+		parentID = *req.ParentID
 	} else {
 		req.ParentID = nil
 	}
@@ -227,6 +230,19 @@ func (m *WIManager) Create(req CreateRequest) (*WIView, error) {
 		}
 		if err := checkBlockerTx(tx, bid, ref, projectID); err != nil {
 			return nil, err
+		}
+		// polyforge#77: the new work item gains an outgoing wait toward a
+		// bundle-bound parent (waitEdgesSQL), so a blocker its parent
+		// reaches — or the parent itself — would close a cycle.
+		if parentID != "" {
+			reaches, err := reachesTx(tx, parentID, bid, "blocks")
+			if err != nil {
+				return nil, err
+			}
+			if reaches {
+				return nil, Fail(api.ErrCoreConflict, "DEPENDENCY_CYCLE",
+					"after %s would close a dependency cycle: the parent waits for this child", ref)
+			}
 		}
 		if !seenBlocker[bid] {
 			seenBlocker[bid] = true
@@ -294,7 +310,8 @@ func (m *WIManager) Create(req CreateRequest) (*WIView, error) {
 	if err := appendEventTx(tx, id, now, req.Reporter, "work_item_filed", nil); err != nil {
 		return nil, err
 	}
-	// The new work item has no outgoing edge yet, so no cycle is possible.
+	// Cycle-checked above: the new work item's only outgoing wait is the
+	// one toward its parent.
 	for _, bid := range blockers {
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO wi_dependencies(blocking_wi_id, blocked_wi_id, kind, created_at)
 			VALUES (?1,?2,'blocks',?3)`, bid, id, now); err != nil {
@@ -310,9 +327,12 @@ func (m *WIManager) Create(req CreateRequest) (*WIView, error) {
 // checkBlockerTx enforces the blocker-side rules of a `blocks` edge
 // (polyforge#161): the blocker exists, lives in projectID (dependency
 // edges never cross projects) and is an execution ticket — a ticket with
-// no bundle (registration ticket or epic) runs nothing: it closes only
-// when someone runs `pf wrap` on it once done (an epic only after its
-// children are terminal), so nothing would release the edge on its own.
+// no bundle runs nothing: it closes only when someone runs `pf wrap` on
+// it once done (a parent only after its children are terminal), so
+// nothing would release the edge on its own. A bundle-bound parent is
+// an ordinary execution ticket here (polyforge#77 deleted the
+// registry-only parent rule); its waiting on children is the shared
+// unfinished-blockers judgment, not this check.
 // ref is the caller's spelling for errors.
 func checkBlockerTx(q queryRower, blockingID, ref, projectID string) error {
 	var proj string
@@ -546,7 +566,9 @@ func bundleRef(name *string) (bundleName any) {
 	return *name
 }
 
-// patchableFields (reference.md §4.1). Workflow refs and parent are immutable.
+// patchableFields (reference.md §4.1). Workflow refs are immutable;
+// parent_id may only be cleared (polyforge#77, parseDetachPatch: a child
+// is detached from its parent, never re-parented).
 // clean_pause rides the whitelist per the session-end paused verdict
 // (reference.md §3.3): `pf resume` clears the flag via WI PATCH — the
 // operator resume face.
@@ -557,7 +579,26 @@ func bundleRef(name *string) (bundleName any) {
 var patchableFields = map[string]bool{
 	"goal": true, "content": true, "labels": true, "priority": true,
 	"milestone": true, "waiting_on": true, "clean_pause": true,
-	"bundle_name": true,
+	"bundle_name": true, "parent_id": true,
+}
+
+// parseDetachPatch reads a PATCH parent_id field (polyforge#77): absent →
+// false; null or "" → true (detach); any other value is refused — the
+// field only clears.
+func parseDetachPatch(fields map[string]json.RawMessage) (bool, error) {
+	raw, ok := fields["parent_id"]
+	if !ok {
+		return false, nil
+	}
+	var v *string
+	if json.Unmarshal(raw, &v) != nil {
+		return false, Fail(api.ErrCoreBadInput, "", "parent_id must be null or \"\"")
+	}
+	if v != nil && *v != "" {
+		return false, Fail(api.ErrCoreBadInput, "IMMUTABLE",
+			"parent_id can only be cleared (null or \"\"): a child is detached, never re-parented")
+	}
+	return true, nil
 }
 
 // bundlePatch is a parsed PATCH bundle_name field. Name nil = the
@@ -589,25 +630,6 @@ func parseBundlePatch(fields map[string]json.RawMessage) (*bundlePatch, error) {
 			"bundle_name must be a non-empty string or null (null unbinds)")
 	}
 	return &bp, nil
-}
-
-// refuseBundleWithChildrenTx is the symmetric children-side rule (w140,
-// spec R-对称-1): a ticket WITH children must never GAIN a bundle —
-// children count in any status (terminal included). The PATCH bind entry
-// runs it inside its transaction and re-validates it in the guarded
-// write; the create entry cannot violate it (a created row is childless
-// by construction) but runs the mirror rule instead: a bundle-bound
-// ticket is never a parent (PARENT_NOT_REGISTRY, below).
-func refuseBundleWithChildrenTx(q queryRower, wiID string) error {
-	var n int
-	if err := q.QueryRow(`SELECT COUNT(*) FROM work_items WHERE parent_id=?1`, wiID).Scan(&n); err != nil {
-		return err
-	}
-	if n > 0 {
-		return Fail(api.ErrCoreBadInput, "HAS_CHILDREN_NO_BUNDLE",
-			"work item has %d child ticket(s); a ticket with children cannot bind a workflow bundle", n)
-	}
-	return nil
 }
 
 // diagnoseR2Window is the R2 bundle-PATCH gate's error face (w140). The
@@ -648,6 +670,27 @@ func diagnoseR2Window(q queryRower, wiID string) error {
 	if claims > 0 {
 		return Fail(api.ErrCoreBadInput, "IMMUTABLE",
 			"bundle_name froze at first claim (a session_claimed event exists)")
+	}
+	return nil
+}
+
+// refuseParentBundleFrozenTx refuses changing the bundle of a
+// bundle-bound parent once any of its children has been claimed
+// (polyforge#77): the children started work against the parent's lane,
+// so the lane may no longer move. "Claimed" is the R2 judgment on the
+// children — a session_claimed event, which outlives the session. An
+// unbound parent (no bundle yet) is not under this rule.
+func refuseParentBundleFrozenTx(q queryRower, wiID string) error {
+	var claimed int
+	if err := q.QueryRow(`SELECT COUNT(*) FROM work_items par
+		JOIN work_items c ON c.parent_id = par.id
+		JOIN wi_events e ON e.work_item_id = c.id AND e.event_type='session_claimed'
+		WHERE par.id=?1 AND par.bundle_name IS NOT NULL AND par.bundle_name <> ''`, wiID).Scan(&claimed); err != nil {
+		return err
+	}
+	if claimed > 0 {
+		return Fail(api.ErrCoreBadInput, "PARENT_BUNDLE_FROZEN",
+			"bundle_name is frozen: a child of this work item has been claimed")
 	}
 	return nil
 }
@@ -703,6 +746,10 @@ func (m *WIManager) Patch(idOrSlug string, fields map[string]json.RawMessage, ac
 	if err != nil {
 		return nil, err
 	}
+	detach, err := parseDetachPatch(fields)
+	if err != nil {
+		return nil, err
+	}
 	id, err := m.Resolve(idOrSlug)
 	if err != nil {
 		return nil, err
@@ -724,18 +771,29 @@ func (m *WIManager) Patch(idOrSlug string, fields map[string]json.RawMessage, ac
 	defer tx.Rollback()
 
 	var status string
-	if err := tx.QueryRow(`SELECT status FROM work_items WHERE id=?1`, id).Scan(&status); err != nil {
+	var oldParent sql.NullString
+	if err := tx.QueryRow(`SELECT status, parent_id FROM work_items WHERE id=?1`, id).Scan(&status, &oldParent); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, Fail(api.ErrCoreNotFound, "", "work item %s", id)
 		}
 		return nil, err
 	}
-	if isTerminal(status) {
+	// A detach alone passes a terminal child: a failed or canceled child
+	// holds its bundle-bound parent until it is detached (polyforge#77).
+	if isTerminal(status) && !(detach && len(fields) == 1) {
 		return nil, Fail(api.ErrCoreGone, "TERMINAL_STATE", "work item is in terminal state %s", status)
 	}
+	if detach && status == api.StatusRunning {
+		return nil, Fail(api.ErrCoreConflict, "CHILD_RUNNING",
+			"cannot detach a running work item from its parent: end its session first")
+	}
+	detach = detach && oldParent.Valid && oldParent.String != "" // clearing no parent writes nothing
 
 	sets := []string{"updated_at=?"}
 	args := []any{Now()}
+	if detach {
+		sets = append(sets, "parent_id=NULL")
+	}
 	for _, field := range []string{"goal", "content", "labels", "priority", "milestone", "waiting_on", "clean_pause"} {
 		raw, ok := fields[field]
 		if !ok {
@@ -800,21 +858,21 @@ func (m *WIManager) Patch(idOrSlug string, fields map[string]json.RawMessage, ac
 		}
 	}
 	if bp != nil {
-		// R2 window and the symmetric child rule, judged on this
-		// transaction's snapshot; the store has a single connection (Open:
-		// SetMaxOpenConns(1)), so no claim or child create interleaves
-		// before the write below.
+		// R2 window, judged on this transaction's snapshot; the store has a
+		// single connection (Open: SetMaxOpenConns(1)), so no claim or child
+		// create interleaves before the write below. polyforge#77 deleted the
+		// symmetric child rule: a parent with children may bind a bundle.
 		if err := diagnoseR2Window(tx, id); err != nil {
 			return nil, err
 		}
-		if bp.binding() {
-			// Symmetric child rule, inside the same transaction (w140).
-			if err := refuseBundleWithChildrenTx(tx, id); err != nil {
+		if err := refuseParentBundleFrozenTx(tx, id); err != nil {
+			return nil, err
+		}
+		if !bp.binding() {
+			// polyforge#161: an unbound blocker runs nothing to release its dependents.
+			if err := refuseUnbindWhileBlockingTx(tx, id); err != nil {
 				return nil, err
 			}
-		} else if err := refuseUnbindWhileBlockingTx(tx, id); err != nil {
-			// polyforge#161: an unbound blocker runs nothing to release its dependents.
-			return nil, err
 		}
 		name := bundleRef(bp.Name)
 		sets = append(sets, "bundle_name=?")
@@ -830,6 +888,12 @@ func (m *WIManager) Patch(idOrSlug string, fields map[string]json.RawMessage, ac
 	}
 	if err := appendEventTx(tx, id, Now(), actor, "wi_content_updated", nil); err != nil {
 		return nil, err
+	}
+	if detach {
+		if err := appendEventTx(tx, id, Now(), actor, "wi_detached",
+			map[string]any{"parent_id": oldParent.String}); err != nil {
+			return nil, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
@@ -1297,8 +1361,10 @@ func (m *WIManager) Dependencies(wiID string) (*Deps, error) {
 
 // AddDependency creates a dependency edge with the v0 write-path rules:
 // same-project hard boundary, no self edge, cycle detection for
-// blocks/supersedes; a `blocks` blocker must be an execution ticket
-// (polyforge#161). Adding an existing edge is idempotent.
+// blocks/supersedes (a `blocks` cycle may run through a child's implicit
+// wait on its bundle-bound parent, polyforge#77 — reachesTx); a `blocks`
+// blocker must be an execution ticket (polyforge#161). Adding an
+// existing edge is idempotent.
 func (m *WIManager) AddDependency(blocking, blocked, kind string) error {
 	if kind == "" {
 		kind = "blocks"
@@ -1370,8 +1436,18 @@ func (m *WIManager) RemoveDependency(blocking, blocked, kind string) error {
 	return nil
 }
 
-// reachesTx reports whether src can reach dst over `blocks` edges.
+// reachesTx reports whether src can reach dst over kind edges, walking
+// from blocker to blocked. For `blocks` the walk follows waitEdgesSQL
+// (polyforge#77): explicit edges in any status, plus the implicit wait of
+// an unwrapped child on its bundle-bound parent (a wrapped child no
+// longer holds its parent, so it can close no deadlock).
 func reachesTx(tx *sql.Tx, src, dst, kind string) (bool, error) {
+	next, extra := `SELECT blocked_wi_id FROM wi_dependencies WHERE blocking_wi_id=?1 AND kind=?2`, []any{kind}
+	if kind == "blocks" {
+		next, extra = `SELECT e.blocked_id FROM (`+waitEdgesSQL+`) e
+			JOIN work_items b ON b.id = e.blocker_id
+			WHERE e.blocker_id=?1 AND (e.via='' OR b.status <> 'wrapped')`, nil
+	}
 	seen := map[string]bool{}
 	queue := []string{src}
 	for len(queue) > 0 {
@@ -1384,18 +1460,17 @@ func reachesTx(tx *sql.Tx, src, dst, kind string) (bool, error) {
 			continue
 		}
 		seen[cur] = true
-		rows, err := tx.Query(`SELECT blocked_wi_id FROM wi_dependencies WHERE blocking_wi_id=?1 AND kind=?2`,
-			cur, kind)
+		rows, err := tx.Query(next, append([]any{cur}, extra...)...)
 		if err != nil {
 			return false, err
 		}
 		for rows.Next() {
-			var next string
-			if err := rows.Scan(&next); err != nil {
+			var n string
+			if err := rows.Scan(&n); err != nil {
 				rows.Close()
 				return false, err
 			}
-			queue = append(queue, next)
+			queue = append(queue, n)
 		}
 		rows.Close()
 	}
