@@ -70,9 +70,14 @@ func TestW74SlotsAdjustableBound(t *testing.T) {
 	if s.acquire() {
 		t.Fatal("a lowered bound must refuse new acquires")
 	}
+	// a release to the bound admits nothing; one below it admits one
+	s.release()
+	if s.acquire() {
+		t.Fatal("a release to the bound must not admit a new acquire")
+	}
 	s.release()
 	if !s.acquire() {
-		t.Fatal("a released slot is reusable below the lowered bound")
+		t.Fatal("a release below the bound must admit one new acquire")
 	}
 	s.SetMax(0)
 	if got := s.Max(); got != DefaultLimit {
@@ -96,10 +101,11 @@ func TestW74ManagerSharedBoundAndRefusal(t *testing.T) {
 	if _, err := a.Spawn(Spec{Project: "p", Prompt: "1"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.Spawn(Spec{Project: "p", Prompt: "2"}); err != nil {
+	second, err := b.Spawn(Spec{Project: "p", Prompt: "2"})
+	if err != nil {
 		t.Fatal(err)
 	}
-	_, err := a.Spawn(Spec{Project: "p", Prompt: "3"})
+	_, err = a.Spawn(Spec{Project: "p", Prompt: "3"})
 	if !errors.Is(err, ErrLimit) {
 		t.Fatalf("the third spawn at the default bound must refuse with ErrLimit: %v", err)
 	}
@@ -126,12 +132,21 @@ func TestW74ManagerSharedBoundAndRefusal(t *testing.T) {
 			t.Fatalf("the refusal must name %q: %q", want, err.Error())
 		}
 	}
+	// the AC2 scenario: one release still leaves the bound taken; a
+	// release to 1 running admits one new spawn
 	if err := b.Cancel(third.ID); err != nil {
 		t.Fatal(err)
 	}
 	waitState(t, b, third.ID, StateInterrupted)
+	if _, err := a.Spawn(Spec{Project: "p", Prompt: "4"}); !errors.Is(err, ErrLimit) {
+		t.Fatalf("a release to the bound must still refuse: %v", err)
+	}
+	if err := b.Cancel(second.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, b, second.ID, StateInterrupted)
 	if _, err := a.Spawn(Spec{Project: "p", Prompt: "4"}); err != nil {
-		t.Fatalf("one released slot must admit one new spawn: %v", err)
+		t.Fatalf("a release below the bound must admit one new spawn: %v", err)
 	}
 }
 
