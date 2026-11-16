@@ -32,16 +32,16 @@ func TestW80TargetBranchChecksOutExistingBranch(t *testing.T) {
 	hub := newFakeHub()
 	r, _, _ := newWorkspaceTestRuntime(t, hub, "proj")
 	w80Lanes(t, r, "children_branch: \"epic/{seq}\"\n")
-	// the remote: main at one commit, epic/1 at another
+	// the remote: main at one commit, epic/5 at another
 	src := t.TempDir()
 	mainHead := w079GitRepo(t, src, "readme.txt", "main\n")
-	carrierGit(t, src, "checkout", "-b", "epic/1")
+	carrierGit(t, src, "checkout", "-b", "epic/5")
 	if err := os.WriteFile(filepath.Join(src, "epic.txt"), []byte("epic work\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	carrierGit(t, src, "add", "-A")
 	carrierGit(t, src, "commit", "-m", "epic tip")
-	branchHead := carrierGit(t, src, "rev-parse", "epic/1")
+	branchHead := carrierGit(t, src, "rev-parse", "epic/5")
 	carrierGit(t, src, "checkout", "main")
 
 	const parent = "wi_w80epic5"
@@ -65,14 +65,14 @@ func TestW80TargetBranchChecksOutExistingBranch(t *testing.T) {
 	if head := carrierGit(t, repoDir, "rev-parse", "HEAD"); head != branchHead {
 		t.Fatalf("the clone stands on %q, want the fixed branch's tip %q (main is %q)", head, branchHead, mainHead)
 	}
-	if b := carrierGit(t, repoDir, "symbolic-ref", "--short", "HEAD"); b != "epic/1" {
-		t.Fatalf("HEAD names %q, want the fixed branch epic/1", b)
+	if b := carrierGit(t, repoDir, "symbolic-ref", "--short", "HEAD"); b != "epic/5" {
+		t.Fatalf("HEAD names %q, want the fixed branch epic/5", b)
 	}
 }
 
 // TestW80TargetBranchCarrierOnFixedBranch: a re-claim restores the
 // previous session's carrier head ONTO the fixed branch — HEAD is the
-// carried commit and names epic/1, not the clone's default branch.
+// carried commit and names epic/6, not the clone's default branch.
 func TestW80TargetBranchCarrierOnFixedBranch(t *testing.T) {
 	hub := newFakeHub()
 	r, ws, _ := newWorkspaceTestRuntime(t, hub, "proj")
