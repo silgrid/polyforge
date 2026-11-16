@@ -20,12 +20,14 @@ test("every task route is GET-only, gated in-route and dynamic", () => {
 
 test("the id check and the floor gate run before the show spawn; the floor gate before the list spawn", () => {
   const idCheck = show.indexOf("isPolyforgeTaskId(id)");
+  const profileCheck = show.indexOf("isPolyforgeProfileName(profile)");
   const showCapability = show.indexOf("readPolyforgeTasksCapability()");
-  const showSpawn = show.indexOf("showPolyforgeTask(id)");
-  assert.ok(idCheck >= 0 && showCapability > idCheck && showSpawn > showCapability, "id check, then floor, then the one spawn");
+  const showSpawn = show.indexOf("showPolyforgeTask(id");
+  assert.ok(idCheck >= 0 && profileCheck > idCheck && showCapability > profileCheck && showSpawn > showCapability,
+    "id check, then the profile check, then the floor, then the one spawn");
   const listCapability = list.indexOf("readPolyforgeTasksCapability()");
   const listSpawn = list.indexOf("listPolyforgeTasks()");
-  assert.ok(listCapability >= 0 && listSpawn > listCapability, "floor, then the one list spawn");
+  assert.ok(listCapability >= 0 && listSpawn > listCapability, "floor, then the list spawn");
 });
 
 test("no task route answers 5xx, logs, reads env or exposes a write action", () => {

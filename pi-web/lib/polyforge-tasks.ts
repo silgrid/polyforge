@@ -201,7 +201,9 @@ export async function listPolyforgeTasks(pin: readonly string[] = []): Promise<P
 }
 
 /** The detail face: exactly one `pf --json task show <id>`; the caller has
- *  validated the id. A malformed answer degrades to null, never a guess. */
-export async function showPolyforgeTask(id: string): Promise<PolyforgeTaskDetail | null> {
-  return sanitizeTaskDetail(await runPfJson(["--json", "task", "show", id]));
+ *  validated the id. `pin` names the row's Cell (`--profile <cell>` before
+ *  `--json`, polyforge#73); an empty pin is the unflagged read. A malformed
+ *  answer degrades to null, never a guess. */
+export async function showPolyforgeTask(id: string, pin: readonly string[] = []): Promise<PolyforgeTaskDetail | null> {
+  return sanitizeTaskDetail(await runPfJson([...pin, "--json", "task", "show", id]));
 }
