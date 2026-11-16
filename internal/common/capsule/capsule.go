@@ -330,6 +330,10 @@ type RewindRecord struct {
 const (
 	RewindCharged = "charged"
 	RewindOwner   = "owner"
+	// RewindUncounted is the lane-declared uncounted class
+	// (`uncounted_rewinds`): a gate FAIL whose one-line reason falls in
+	// the class. It counts toward nothing but its own cap.
+	RewindUncounted = "uncounted"
 )
 
 type RewindStats struct {
