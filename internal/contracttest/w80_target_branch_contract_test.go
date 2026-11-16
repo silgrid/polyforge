@@ -16,31 +16,21 @@ import (
 	"testing"
 )
 
-// w80DocPath is the repository root (this package's cwd is the repo's
-// test/ dir).
-func w80DocRoot(t *testing.T) string {
-	t.Helper()
-	root, err := filepath.Abs("..")
-	if err != nil {
-		t.Fatalf("repo root: %v", err)
-	}
-	return root
-}
-
-// w80DocRead answers a repo-relative file's body.
-func w80DocRead(t *testing.T, rel string) string {
-	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(w80DocRoot(t), rel))
-	if err != nil {
-		t.Fatalf("polyforge#80: read %s: %v", rel, err)
-	}
-	return string(raw)
-}
-
 // w80Pins are the sentences the two documents must carry verbatim: each
 // names one rule of the fixed target branch (the ticket's own wording
 // for AC5), and the workflow-contract paragraph's tokens the other
 // contract tests hold the lane key's tables to.
+// w80DocRead answers a repo-relative file's body (v1Root is the module
+// root; this package runs two levels below it).
+func w80DocRead(t *testing.T, rel string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(v1Root(t), filepath.FromSlash(rel)))
+	if err != nil {
+		t.Fatalf("polyforge#80: read %s: %v", rel, err)
+	}
+	return string(b)
+}
+
 var w80ContractPins = []string{
 	"**A sub-ticket's target branch (polyforge#80).**",
 	"the first claim fixes it into `runtime-state/target-branch.json`",
@@ -62,14 +52,22 @@ var w80ConvergePins = []string{
 // the paragraph set and the row above must survive byte-for-byte, and
 // the capsule constants' file must name the path (the layout table's
 // row and the constant are one fact, e5's own rule).
+// w80Norm flattens a Markdown body for sentence pins: line breaks and
+// indentation become single spaces (a sentence the paragraph wraps across
+// lines must still pin).
+func w80Norm(body string) string {
+	flat := strings.Join(strings.Fields(body), " ")
+	return flat
+}
+
 func TestW80TargetBranchDocsContract(t *testing.T) {
-	contract := w80DocRead(t, "docs/reference/workflow-contract.md")
+	contract := w80Norm(w80DocRead(t, "docs/reference/workflow-contract.md"))
 	for _, pin := range w80ContractPins {
 		if !strings.Contains(contract, pin) {
 			t.Errorf("docs/reference/workflow-contract.md does not carry the pinned sentence %q", pin)
 		}
 	}
-	converge := w80DocRead(t, "docs/design/polyforge-vnext/v2-converge.md")
+	converge := w80Norm(w80DocRead(t, "docs/design/polyforge-vnext/v2-converge.md"))
 	for _, pin := range w80ConvergePins {
 		if !strings.Contains(converge, pin) {
 			t.Errorf("docs/design/polyforge-vnext/v2-converge.md does not carry the pinned row text %q", pin)
