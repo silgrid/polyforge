@@ -465,6 +465,11 @@ type Daemon struct {
 	// the supervisor's LiveLimits share, read here by tests that assert a
 	// live reload reached the values the next judgement reads.
 	liveLimitsFn func() supervise.Defaults
+	// textRulesFn answers the current additional classification rules
+	// (textRules, bound once in New): the closure every driver's
+	// TextRulesFunc reads, read here by tests that assert a reload reached
+	// the next classification.
+	textRulesFn func() driver.TextRules
 	// reloadMu guards the reload BOOKKEEPING (pending/overridden/status),
 	// which GET /status reads. It is only ever held for an in-memory
 	// publish — never across file I/O (AGENTS.md runtime locking).
@@ -599,6 +604,15 @@ func New(cfg Config) (*Daemon, error) {
 		}
 	}
 
+	// textRules answers the live additional classification rules
+	// (polyforge#51).
+	textRules := func() driver.TextRules {
+		return driver.TextRules{
+			Transient: live.TransientErrorRules(),
+			Model:     live.ModelErrorRules(),
+		}
+	}
+
 	// addendum 2 (owner ruling A): the dedicated step agent directory is
 	// synced at daemon start — the only point that also prunes entries
 	// outside the minimal set; the spawner refreshes the allowlisted
@@ -677,12 +691,7 @@ func New(cfg Config) (*Daemon, error) {
 				// polyforge#51: the live additional classification
 				// rules — the next text classification reads them, so a
 				// reload reaches the next judgement without a restart.
-				TextRulesFunc: func() driver.TextRules {
-					return driver.TextRules{
-						Transient: live.TransientErrorRules(),
-						Model:     live.ModelErrorRules(),
-					}
-				},
+				TextRulesFunc: func() driver.TextRules { return textRules() },
 				// the heavy-run admission a step declaring it is admitted by
 				Admission: cellAdmission{d},
 				// workflow contract 4: the pending `pf step hub` writes a
@@ -728,6 +737,7 @@ func New(cfg Config) (*Daemon, error) {
 	}
 	d = &Daemon{
 		liveLimitsFn: liveLimits,
+		textRulesFn:  textRules,
 		feed:         feed,
 		cfg:          cfg,
 		hub:          cfg.Hub,
