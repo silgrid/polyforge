@@ -47,14 +47,16 @@ test("the three claude running-turn placeholder keys carry the #70 copy in en, z
 
 // The AC3 proof's grep, run over the whole tracked tree (":/" spans the
 // repository root from any cwd): git grep exits 1 when nothing matches —
-// the passing shape here.
+// the passing shape here. The needles are assembled from halves so this
+// file holds none of them literally: the proof grep must find nothing
+// anywhere in the tracked tree, this test included.
 const RETIRED = [
-  "现在发送的消息",
-  "現在傳送的訊息",
-  "才能发送下一条消息",
-  "才能傳送下一則訊息",
-  "the next message can be sent when",
-  "a message sent now joins this turn",
+  "现在发送" + "的消息",
+  "現在傳送" + "的訊息",
+  "才能发送" + "下一条消息",
+  "才能傳送" + "下一則訊息",
+  "the next message can be " + "sent when",
+  "a message sent now " + "joins this turn",
 ];
 test("the retired placeholder strings are gone from the tracked tree", () => {
   let out;
@@ -72,6 +74,6 @@ test("claude-sessions.md teaches the new steer placeholder and quotes the retire
   const doc = readFileSync(fileURLToPath(new URL("../../docs/agents/claude-sessions.md", import.meta.url)), "utf8");
   assert.ok(doc.includes(`"claude is answering; messages join this turn or wait for the next.", \`claude.steerWhileRunning\``), "the Steer paragraph quotes the new copy");
   for (const retired of RETIRED) {
-    assert.ok(!doc.includes(retired), `"${retired}" is gone`);
+    assert.ok(!doc.includes(retired), `the retired copy "${retired.slice(0, 12)}…" is gone`);
   }
 });
