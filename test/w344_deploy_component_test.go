@@ -97,7 +97,11 @@ func (w *w344DeployWorld) run(extra []string, args ...string) (string, int) {
 	for _, kv := range os.Environ() {
 		k := strings.SplitN(kv, "=", 2)[0]
 		if strings.HasPrefix(k, "AIHUB_") || strings.HasPrefix(k, "COMPOSE_") || strings.HasPrefix(k, "PIWEB_") ||
-			k == "DEPLOY_LOCK_FILE" || k == "GH_REPO" || k == "PATH" || k == "HOME" {
+			k == "DEPLOY_LOCK_FILE" || k == "GH_REPO" || k == "PATH" || k == "HOME" ||
+			// the step env's Cell facts never leak into a w344 deploy either
+			// (polyforge#75 review r1#2): deploy.sh reads PF_DEPLOY_ENV and
+			// PF_CELL_SERVER when a daemon-injected process runs this suite
+			k == "PF_CELL" || k == "PF_CELL_SERVER" || k == "PF_DEPLOY_ENV" {
 			continue
 		}
 		env = append(env, kv)
