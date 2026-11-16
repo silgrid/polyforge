@@ -161,8 +161,8 @@ func TestDeployPreflightListsEveryTarget(t *testing.T) {
 		t.Errorf("the preflight must name every target up front:\n%s", out)
 	}
 	for _, want := range []string{
-		"deploy: preflight OK for component aihub (target fakehost)",
-		"deploy: preflight OK for component aihub (target fakehost2)",
+		"deploy: preflight OK for component aihub (target root@fakehost)",
+		"deploy: preflight OK for component aihub (target root@fakehost2)",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the preflight must check every target, missing %q:\n%s", want, out)
@@ -197,7 +197,7 @@ func TestDeployTargetsSingleTargetBehavesAsPolyforge75(t *testing.T) {
 	}
 	d.assertSecondUntouched("v2.2.1")
 	out, err = d.run("", "--preflight")
-	if err != nil || !strings.Contains(out, "deploy: preflight OK for component aihub (target fakehost2)") {
+	if err != nil || !strings.Contains(out, "deploy: preflight OK for component aihub (target root@fakehost2)") {
 		t.Fatalf("one target keeps the polyforge#75 preflight wording: %v\n%s", err, out)
 	}
 	if strings.Contains(out, "targets (") {
