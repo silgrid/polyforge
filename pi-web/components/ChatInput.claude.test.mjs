@@ -107,6 +107,7 @@ test("a running claude turn (or a state not known yet) disables the model, effor
   assert.match(composer({ ...open, stateKnown: false }, { onCompact() {} }), /<button[^>]*disabled=""[^>]*aria-label="Compact context"/, "not before the stream said the session is idle");
   assert.match(composer(open, { onCompact() {}, isStreaming: true }), /aria-label="Stop agent"/);
   const compacting = composer(open, { onCompact() {}, onAbortCompaction() {}, isCompacting: true });
+  assert.match(compacting, /placeholder="claude is compacting; send when it ends\."/, "the #70 compacting placeholder");
   assert.match(compacting, /aria-label="Stop compaction"/);
   assert.match(compacting, /<button[^>]*disabled=""[^>]*aria-label="Send"/, "nothing is sent during claude's compaction");
   const idle = composer(open, { onCompact() {} });
@@ -215,7 +216,7 @@ test("every claude string exists in en, zh-CN and zh-TW; the retired alias, pres
 test("while a claude turn runs, Send stays visible but disabled, and the composer says why", () => {
   const html = composer({ ...base, choosing: false, harness: "claude" }, { isStreaming: true });
   assert.match(html, /<button type="button" disabled="" aria-label="Send"/);
-  assert.match(html, /placeholder="claude is answering; the next message can be sent when this turn ends\."/);
+  assert.match(html, /placeholder="claude is answering; send when this turn ends\."/);
   const pi = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(ChatInput, {
     onSend() {}, onAbort() {}, isStreaming: true,
   })));
