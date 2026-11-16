@@ -122,9 +122,9 @@ test("a running claude turn hides the compact control (pi's rule); a compaction 
   assert.match(compacting, /aria-label="Stop compaction"/);
   assert.doesNotMatch(compacting, /aria-label="Compact context"/);
   assert.match(compacting, /placeholder="claude is compacting; send when it ends\."/, "the #70 compacting placeholder");
-  assert.match(compacting, /<button[^>]*disabled=""[^>]*aria-label="Send"/, "nothing is sent during claude's compaction");
   const compactingIdleComposer = composer(open, { onCompact() {}, onAbortCompaction() {}, isCompacting: true });
   assert.match(compactingIdleComposer, /aria-label="Stop compaction"/, "the control is Stop compaction however the compaction is shown");
+  assert.match(compactingIdleComposer, /<button[^>]*disabled=""[^>]*aria-label="Send"/, "nothing is sent during claude's compaction");
   const idle = composer(open, { onCompact() {} });
   assert.match(idle, /aria-label="Compact context"/, "an idle claude session offers compaction");
   assert.doesNotMatch(idle, /<button[^>]*disabled=""[^>]*aria-label="Compact context"/, "idle is enabled");
