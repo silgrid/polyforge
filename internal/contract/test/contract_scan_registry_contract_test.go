@@ -102,10 +102,12 @@ func contractScanTestFuncs(root, dir string) map[string]string {
 // contractScanViolations answers every way the repository layout at
 // root violates the one-place convention, one message each: the conf's
 // contract-scan declaration and command shape, the *_contract_test.go
-// tests outside the contract package, the exclusion register's
-// entries, and the package's own emptiness. It reads files only, so
-// the guard can run it on synthetic layouts too.
-func contractScanViolations(root string) []string {
+// tests outside the contract package, and the package's own emptiness,
+// judged against the exclusion register the caller passes (the guard's
+// own register for the real repository, a layout's own for a synthetic
+// one). It reads files only, so the guard can run it on synthetic
+// layouts too.
+func contractScanViolations(root string, excluded map[string]string) []string {
 	var v []string
 	raw, err := os.ReadFile(filepath.Join(root, ".polyforge", "verify-scope.conf"))
 	if err != nil {
@@ -136,23 +138,22 @@ func contractScanViolations(root string) []string {
 	}
 	sort.Strings(names)
 	for _, n := range names {
-		if _, excluded := contractScanExcluded[n]; !excluded {
+		if _, ok := excluded[n]; !ok {
 			v = append(v, fmt.Sprintf("%s: %s sits outside the contract package with no exclusion — a contract test that reads only repository files, starts no process and needs no built artifact goes in %s/ and needs no registration anywhere; anything else joins the exclusion register with its reason", outside[n], n, contractScanPkg))
 		}
 	}
-	excludedNames := make([]string, 0, len(contractScanExcluded))
-	for n := range contractScanExcluded {
+	excludedNames := make([]string, 0, len(excluded))
+	for n := range excluded {
 		excludedNames = append(excludedNames, n)
 	}
 	sort.Strings(excludedNames)
 	for _, n := range excludedNames {
-		reason := contractScanExcluded[n]
 		switch {
 		case outside[n] != "":
 		case inside[n] != "":
-			v = append(v, fmt.Sprintf("the exclusion register lists %q (%s), which the contract package already selects: drop the entry", n, reason))
+			v = append(v, fmt.Sprintf("the exclusion register lists %q (%s), which the contract package already selects: drop the entry", n, excluded[n]))
 		default:
-			v = append(v, fmt.Sprintf("the exclusion register lists %q (%s), which no %s/*_contract_test.go file defines: the entry leaves with its test", n, reason, contractScanOutside))
+			v = append(v, fmt.Sprintf("the exclusion register lists %q (%s), which no %s/*_contract_test.go file defines: the entry leaves with its test", n, excluded[n], contractScanOutside))
 		}
 	}
 	if len(inside) == 0 {
@@ -166,15 +167,16 @@ func contractScanViolations(root string) []string {
 // contract test outside it is excluded with a reason, and the register
 // carries nothing stale.
 func TestContractScanRegistryCoversEveryContractTest(t *testing.T) {
-	for _, v := range contractScanViolations(v1Root(t)) {
+	for _, v := range contractScanViolations(v1Root(t), contractScanExcluded) {
 		t.Error(v)
 	}
 }
 
 // TestContractScanCatchesAMisplacedContractTest: the guard's scan
-// reports a contract test left outside the package, and stays silent
-// on a conforming layout — the catch itself, on synthetic repositories
-// (the real one conforms, so only these pin the reporting).
+// reports a contract test left outside the package, and stays silent on
+// a conforming layout and on an outside test excluded with its reason
+// — the catch itself, on synthetic repositories (the real one
+// conforms, so only these pin the reporting).
 func TestContractScanCatchesAMisplacedContractTest(t *testing.T) {
 	layout := func(t *testing.T, stray string) string {
 		t.Helper()
@@ -201,14 +203,20 @@ func TestContractScanCatchesAMisplacedContractTest(t *testing.T) {
 		return root
 	}
 	t.Run("a contract test outside the package is reported", func(t *testing.T) {
-		v := contractScanViolations(layout(t, "test/stray_contract_test.go"))
+		v := contractScanViolations(layout(t, "test/stray_contract_test.go"), map[string]string{})
 		if len(v) != 1 || !strings.Contains(v[0], "test/stray_contract_test.go") || !strings.Contains(v[0], "TestStray") {
 			t.Fatalf("the guard must report exactly the misplaced contract test (its file and its name); got %d violation(s):\n%s", len(v), strings.Join(v, "\n"))
 		}
 	})
 	t.Run("a conforming layout stays silent", func(t *testing.T) {
-		if v := contractScanViolations(layout(t, "")); len(v) != 0 {
+		if v := contractScanViolations(layout(t, ""), map[string]string{}); len(v) != 0 {
 			t.Fatalf("the guard must report nothing on a conforming layout; got:\n%s", strings.Join(v, "\n"))
+		}
+	})
+	t.Run("an outside test with a stated exclusion stays silent", func(t *testing.T) {
+		v := contractScanViolations(layout(t, "test/stray_contract_test.go"), map[string]string{"TestStray": "starts a process: the whole-repo check starts no process"})
+		if len(v) != 0 {
+			t.Fatalf("the guard must report nothing when the outside test is excluded with its reason; got:\n%s", strings.Join(v, "\n"))
 		}
 	})
 }
