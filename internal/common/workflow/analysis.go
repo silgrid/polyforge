@@ -59,3 +59,23 @@ func HasAnalysis(content string) bool {
 	text, found := analysisSection(content)
 	return found && text != ""
 }
+
+// AutoAnalysisMarker answers the machine-readable unconfirmed marker of
+// the analysis a daemon-scheduled task wrote (polyforge#72, ticket ruling 9):
+// `<!-- pf:auto-analysis <task id> unconfirmed -->`, one line the
+// section's confirm command strips. Stub (build u1, red first).
+func AutoAnalysisMarker(taskID string) string { return "" }
+
+// AnalysisUnconfirmed reports whether content's analysis section still
+// carries an unconfirmed auto-analysis marker. Stub (build u1, red first).
+func AnalysisUnconfirmed(content string) bool { return false }
+
+// ReplaceAnalysisSection answers doc with its first analysis section's
+// text replaced by body (found = the section existed; absent = a new
+// `## 分析` section appended at the end). Stub (build u1, red first).
+func ReplaceAnalysisSection(doc, body string) (string, bool) { return doc, false }
+
+// AnalysisItemCount answers the highest top-level item number (1–7)
+// content's analysis section carries — the「已写到第几项」of a failure
+// comment. Stub (build u1, red first).
+func AnalysisItemCount(content string) int { return 0 }
