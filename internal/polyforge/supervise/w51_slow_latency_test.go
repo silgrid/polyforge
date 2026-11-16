@@ -25,9 +25,13 @@ func w51Latencies(n int, d time.Duration, tail ...time.Duration) []time.Duration
 
 // w51P25 is polyforge#25's dying dispatch, from the ticket's measured
 // session: 652 model calls, single-call median 6s, p90 15s, longest 120s.
+// Sorted: 560 calls of 6s (indexes 0..559, so both middles 325/326 are
+// 6s), 90 of 15s (560..649, holding the nearest-rank p90 index
+// ceil(0.9·652)-1 = 586), then 90s and 120s (self#NB3: the earlier
+// fixture's p90 was 6s, not the ticket's 15s).
 func w51P25() []time.Duration {
-	return append(w51Latencies(610, 6*time.Second, make([]time.Duration, 0)...),
-		append(w51Latencies(40, 15*time.Second), 120*time.Second, 90*time.Second)...)
+	return append(w51Latencies(560, 6*time.Second),
+		append(w51Latencies(90, 15*time.Second), 120*time.Second, 90*time.Second)...)
 }
 
 func TestW51SlowModelJudgesSingleCallLatency(t *testing.T) {
@@ -159,7 +163,7 @@ func TestW51MedianAndP90(t *testing.T) {
 	if m := medianDuration([]time.Duration{1 * time.Second, 2 * time.Second, 3 * time.Second, 200 * time.Second}); m != 2500*time.Millisecond {
 		t.Fatalf("median of an even count = %s, want the mean of the two middles (2.5s)", m)
 	}
-	small := w51Latencies(9, 6*time.Second)
+	small := w51Latencies(10, 6*time.Second)
 	if p := p90Duration(small); p != 6*time.Second {
 		t.Fatalf("p90 of ten 6s calls = %s", p)
 	}
@@ -168,5 +172,43 @@ func TestW51MedianAndP90(t *testing.T) {
 	mixed = append(mixed, 120*time.Second)
 	if p := p90Duration(mixed); p != 15*time.Second {
 		t.Fatalf("p90 = %s, want 15s (the 90th percentile of the #25 shape)", p)
+	}
+}
+
+// TestW51P25FixtureShape: the #25 fixture has the ticket's measured
+// statistics — median 6s, p90 15s, longest 120s over 652 calls.
+func TestW51P25FixtureShape(t *testing.T) {
+	l := w51P25()
+	if len(l) != 652 {
+		t.Fatalf("fixture holds %d calls, want 652", len(l))
+	}
+	if m := medianDuration(l); m != 6*time.Second {
+		t.Fatalf("fixture median = %s, want 6s", m)
+	}
+	if p := p90Duration(l); p != 15*time.Second {
+		t.Fatalf("fixture p90 = %s, want 15s", p)
+	}
+}
+
+// TestW51P90NearestRank: the p90 is the nearest-rank 90th percentile — the
+// ceil(0.9·n)-th smallest value (1-based), hand-computed per n below.
+func TestW51P90NearestRank(t *testing.T) {
+	// n=10: ceil(9.0) = 9th smallest = 10s; the single 200s outlier is
+	// the 10th and is above the 90th percentile
+	ten := append(w51Latencies(9, 10*time.Second), 200*time.Second)
+	if p := p90Duration(ten); p != 10*time.Second {
+		t.Fatalf("p90 of nine 10s and one 200s = %s, want 10s (the 9th smallest)", p)
+	}
+	// n=20, values 1s..20s: ceil(18.0) = 18th smallest = 18s
+	var twenty []time.Duration
+	for i := 20; i >= 1; i-- {
+		twenty = append(twenty, time.Duration(i)*time.Second)
+	}
+	if p := p90Duration(twenty); p != 18*time.Second {
+		t.Fatalf("p90 of 1s..20s = %s, want 18s (the 18th smallest)", p)
+	}
+	// n=1: ceil(0.9) = 1st smallest, the only value
+	if p := p90Duration([]time.Duration{42 * time.Second}); p != 42*time.Second {
+		t.Fatalf("p90 of a single 42s call = %s, want 42s", p)
 	}
 }
