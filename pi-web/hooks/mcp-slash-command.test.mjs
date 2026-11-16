@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
 import { bareMcpOpensSettings } from "../lib/mcp-command.ts";
+import { CLAUDE_SESSION_BUILTIN_COMMANDS } from "../lib/claude-shared.ts";
 
 // A bare /mcp opens Settings › MCP when pi's built-in MCP extension owns it, or
 // when the session has no /mcp at all (ADR 0006, lib/mcp-command.ts). These tests
@@ -59,6 +60,7 @@ function hook({ commands = [], pending = null, getCommands = async () => ({ comm
   const scope = {
     sessionIdRef: { current: "session-1" },
     isClaudeSession,
+    CLAUDE_SESSION_BUILTIN_COMMANDS,
     ensureNewSession: async () => "session-1",
     isCompacting: false,
     addNotice: (notice) => calls.notices.push(notice),
