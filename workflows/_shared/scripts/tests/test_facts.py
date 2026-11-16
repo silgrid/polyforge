@@ -76,6 +76,95 @@ class UnitsTest(GitCase):
         self.assertEqual(gotext.shell_join(["go", "test", "./...", "-run", "^Test(A|B)$", "it's"]), "go test ./... -run '^Test(A|B)$' 'it'\\''s'")
 
 
+PRE_EXISTING_TEST = '''package app
+
+import "testing"
+
+func TestAnswer(t *testing.T) {
+	if Answer() != 42 {
+		t.Fatal("Answer must be 42")
+	}
+}
+'''
+
+
+class PreExistingRedUnitsTest(GitCase):
+    """A unit declared `pre_existing_red: true` (polyforge#59): its
+    reproduction test already exists and is red before the change, so it
+    reports no test_commit — the unit resolves on its implementation
+    commit alone and no test-first shape is asked of it. Expected values
+    come from the declaration's meaning (a shape whose red evidence the
+    engine replays on the tree of the change's base), never from the
+    implementation; the ordinary unit keeps both commits required, and a
+    declaration that also reports a test_commit is refused — one shape a
+    unit."""
+
+    def world(self, base: Dict[str, str]) -> Repo:
+        r = Repo(os.path.join(self.tmp, "repos", "app"), base)
+        r.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        return r
+
+    def decl(self, ic: str, **kw: object) -> Dict[str, object]:
+        d: Dict[str, object] = {"id": "u1", "pre_existing_red": True, "test_commit": "",
+                                "impl_commit": ic, "run": None, "marker": ""}
+        d.update(kw)
+        return d
+
+    def test_the_declaration_resolves_without_a_test_commit(self) -> None:
+        # the reproduction test exists at the base and is red; the change is the fix alone
+        r = self.world({"app_test.go": PRE_EXISTING_TEST, "app.go": "package app\n"})
+        ic = r.commit("the fix", {"app.go": "package app\n\nfunc Answer() int { return 42 }\n"})
+        resolved = facts.units_of(os.path.join(self.tmp, "repos"), ["app"], [self.decl(ic)])
+        u = resolved[0]
+        self.assertEqual(u.why, "", u.why)
+        self.assertEqual((u.pre_existing_red, u.repo, u.test_commit, u.impl_commit, u.test_files),
+                         (True, "app", "", ic, []))
+        self.assertEqual(u.as_dict()["pre_existing_red"], True)
+        # the declaration is part of the shape the reader parses: read_units takes it
+        p = os.path.join(self.tmp, "units.json")
+        with open(p, "w") as f:
+            f.write(json.dumps([{ "id": "u1", "pre_existing_red": True, "impl_commit": ic,
+                                  "run": {"repo": "app", "cwd": ".", "argv": ["go", "test", "./..."]},
+                                  "marker": "^ok"}]))
+        units = facts.read_units(p)
+        self.assertEqual((units[0]["pre_existing_red"], units[0]["test_commit"], units[0]["impl_commit"]),
+                         (True, "", ic))
+
+    def test_a_pre_existing_red_unit_reports_no_test_commit(self) -> None:
+        r = self.world({"app.go": "package app\n"})
+        tc = r.commit("a test commit", {"app_test.go": "package app\n"})
+        ic = r.commit("the fix", {"app.go": "package app\n\nfunc Answer() int { return 42 }\n"})
+        resolved = facts.units_of(os.path.join(self.tmp, "repos"), ["app"], [self.decl(ic, test_commit=tc)])
+        self.assertIn("reports no test_commit", resolved[0].why)
+
+    def test_the_implementation_commit_alone_locates_the_unit(self) -> None:
+        r = self.world({"app.go": "package app\n"})
+        ic = r.commit("the fix", {"app.go": "package app\n\nvar X = 1\n"})
+        resolved = facts.units_of(os.path.join(self.tmp, "repos"), ["app"],
+                                  [self.decl("0000000"), self.decl(ic, id="u2")])
+        self.assertIn("no commit of one task repo", resolved[0].why)
+        self.assertEqual(resolved[1].why, "", resolved[1].why)
+        self.assertEqual(resolved[1].repo, "app")
+
+    def test_the_ordinary_shape_still_requires_both_commits(self) -> None:
+        r = self.world({"app.go": "package app\n"})
+        ic = r.commit("a commit", {"app.go": "package app\n\nvar X = 1\n"})
+        resolved = facts.units_of(os.path.join(self.tmp, "repos"), ["app"],
+                                  [{"id": "u1", "pre_existing_red": False, "test_commit": "", "impl_commit": ic,
+                                    "run": None, "marker": ""}])
+        self.assertIn("test_commit and impl_commit are both required", resolved[0].why)
+
+    def test_a_pre_existing_red_commit_must_be_in_head(self) -> None:
+        r = self.world({"app.go": "package app\n"})
+        ic = r.commit("the fix", {"app.go": "package app\n\nvar X = 1\n"})
+        r.git("checkout", "-q", "-b", "side")
+        side = r.commit("elsewhere", {"other.go": "package app\n"})
+        r.git("checkout", "-q", "main")
+        repo = facts.Repo(os.path.join(self.tmp, "repos"), "app")
+        self.assertEqual(repo.check_pre_existing_commits(ic), "")
+        self.assertIn("not in HEAD's history", repo.check_pre_existing_commits(side))
+
+
 WEAK_TEST = '''// carries: app.go
 package app
 
