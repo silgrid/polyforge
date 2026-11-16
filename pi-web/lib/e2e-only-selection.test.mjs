@@ -4,12 +4,17 @@
 // unset runs every scenario unchanged; an id the suite does not know fails
 // loudly naming it, never a silent zero-scenario run. The selection lives in
 // e2e/harness.mjs, so the unit bar (npm test, no Chromium) pins it against a
-// fake scenario table; the suite's own wiring is pinned by the
-// source-structure test in a later commit (the suite script cannot be
-// imported: it starts servers and browsers on evaluation).
+// fake scenario table; the suite script itself cannot be imported (it starts
+// servers and browsers on evaluation), so its end of the contract is pinned
+// by running it as a child the way the switch is used (r1#2: behaviour, not
+// a regex over its source).
 import "#test-env";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { createCheck, e2eOnlySelection } from "../e2e/harness.mjs";
 
@@ -61,17 +66,30 @@ test("createCheck skips an unselected scenario's checks through the selection's 
   assert.deepEqual(failures, [], "the unselected scenario's throw never recorded a failure");
 });
 
-// The suite script itself cannot be imported (it starts servers and browsers
-// on evaluation), so its wiring of the behaviour-tested selection above is
-// pinned structurally, the way lib/e2e-shared-browser.test.mjs pins the
-// suites' browser launches: it must parse E2E_ONLY through the shared
-// helper, skip unselected scenarios' checks through the selection, and build
-// its report (the failures map reportTitled prints) from the selected titles
-// alone — so a selected run never reports the skipped scenarios as
-// "scenario not reached".
-test("e2e/polyforge.mjs wires the shared selection into its checks and report", () => {
-  const source = readFileSync(new URL("../e2e/polyforge.mjs", import.meta.url), "utf8");
-  assert.ok(/e2eOnlySelection\(\s*T\s*\)/.test(source), "the suite parses E2E_ONLY through the shared e2eOnlySelection(T)");
-  assert.ok(/skip:\s*\(\[title\]\)\s*=>\s*ONLY\.skip\(title\)/.test(source), "its createCheck skips an unselected scenario's checks through the selection");
-  assert.ok(/new Map\(ONLY\.titles\.map/.test(source), "its failures map — the report — holds only the selected scenarios");
+// The suite script cannot be imported (it starts servers and browsers on
+// evaluation), so its end of the E2E_ONLY contract — the half AC2 states at
+// the command level — is pinned by running it as a child, with the unknown
+// id the switch is meant to refuse: the run must fail before anything
+// starts, name the id and the suite's ids, and leave no throwaway work dir
+// behind (a loud failure that leaks its fixtures would fail tmp-guard in the
+// npm test bar for every later change). The child gets its own TMPDIR so the
+// leftover check cannot see another run's directory.
+test("E2E_ONLY with an unknown id fails e2e/polyforge.mjs loudly and leaves nothing behind", () => {
+  const piWebRoot = fileURLToPath(new URL("..", import.meta.url));
+  const childTmp = mkdtempSync(join(tmpdir(), "e2e-only-selection-test-"));
+  try {
+    const result = spawnSync(process.execPath, ["e2e/polyforge.mjs"], {
+      cwd: piWebRoot,
+      env: { ...process.env, E2E_ONLY: "NOPE", TMPDIR: childTmp },
+      encoding: "utf8",
+      timeout: 600_000,
+    });
+    const out = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+    assert.ok(result.status !== 0, `the run fails (status ${result.status}, signal ${result.signal})`);
+    assert.ok(out.includes("NOPE"), "the failure names the unknown id");
+    assert.ok(out.includes("AC1") && out.includes("P53A"), "the failure names the suite's ids");
+    assert.deepEqual(readdirSync(childTmp), [], "the loud failure removes its throwaway work dir");
+  } finally {
+    rmSync(childTmp, { recursive: true, force: true });
+  }
 });
