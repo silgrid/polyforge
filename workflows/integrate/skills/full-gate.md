@@ -44,12 +44,12 @@ through the registration below.
    round, or on other heads, is not this round's. Otherwise run this line as written,
    from the capsule root, without a Bash timeout (it takes the full tool window;
    `--mark-green` writes the green tag itself when every repo passes):
-   `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/gate.py" --isolation container --capsule . --pins artifacts/integrate/revert.json --mark-green --summary "integration batch $PF_WI_ID" --json --out artifacts/integrate/gate.json`
+   `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/gate.py" --isolation container --keep-going --capsule . --pins artifacts/integrate/revert.json --mark-green --summary "integration batch $PF_WI_ID" --json --out artifacts/integrate/gate.json`
    (`--help` is the script's full reference)
 3. **Route on the gate's exit code:**
    - **0** — `result` `green` (the tags are in `details.tags`).
    - **1** — a repo's gate failed: run the triage, this one line as written:
-     `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/gate.py" --isolation container --triage --capsule . --pins artifacts/integrate/revert.json --gate artifacts/integrate/gate.json --batch artifacts/integrate/batch.json --mark-green --summary "integration batch $PF_WI_ID" --json --out artifacts/integrate/triage.json`
+     `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/gate.py" --isolation container --triage --keep-going --capsule . --pins artifacts/integrate/revert.json --gate artifacts/integrate/gate.json --batch artifacts/integrate/batch.json --mark-green --summary "integration batch $PF_WI_ID" --json --out artifacts/integrate/triage.json`
      then route on the triage's exit code:
      - **0** — every failure was flaky and the gate passed again (`details.regate`, its
        tags written): `result` `green`.
