@@ -37,7 +37,10 @@ func TestW51NamedCellReadsHostLiveRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	toml := "[workspace.\"" + ws + "\"]\nprojects = [\"proj\"]\n\n[daemon]\n" +
+	// the Host file keeps the default Cell's AIHub binding (a reload never
+	// moves a Cell's AIHub) and its mapping
+	toml := "server = \"http://hub-default:1\"\napi_key = \"k-default\"\n\n" +
+		"[workspace.\"" + ws + "\"]\nprojects = [\"proj\"]\n\n[daemon]\n" +
 		"transient_error_patterns = ['\\bhost-reloaded\\b']\n" +
 		"model_error_patterns = ['host-boom-model']\n" +
 		"slow_model_median_latency = \"45s\"\n" +
