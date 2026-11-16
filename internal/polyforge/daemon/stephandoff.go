@@ -126,7 +126,9 @@ func (sc *stepCall) handoffVerb(w http.ResponseWriter, raw json.RawMessage) {
 // laneRefusal checks a status against the capsule's lane snapshot and the
 // work item's record: done needs every wrap attr the step declares
 // (`wrap_attrs`, owner ruling R7) registered in its round; fail is a
-// gate's, and once the lane's rewind budget is spent a fail must cite the
+// gate's, and once the budget the FAIL's reason spends is spent — the
+// lane-declared uncounted class's own cap when the reason falls in it
+// (polyforge#67), else the lane's max_rewinds — a fail must cite the
 // owner (--per-owner: the gate asks first, design #483 §5.1); waive is a
 // waivable gate's; rewind's --to a step of the lane at or before this one.
 // why "" = the status stands; readable false = the lane snapshot's
@@ -169,7 +171,7 @@ func (sc *stepCall) laneRefusal(a stepcall.HandoffArgs, lines []stepcall.Line) (
 		if !spec.Gate {
 			return fmt.Sprintf("fail is a gate's verdict and %s is no gate: a step that cannot go on hands off blocked", spec.ID), true
 		}
-		if spent := driver.RewindBudgetSpent(wf, sc.ex); a.PerOwner == "" && spec.OnFail != nil && spent != "" {
+		if spent := driver.FailRewindBudgetSpent(wf, sc.ex, a.Reason); a.PerOwner == "" && spec.OnFail != nil && spent != "" {
 			return spent + ": a fail without the owner's word can rewind no more — ask the owner first (`pf step ask`: one more round, accepting the FAIL on a waivable gate, or cancelling the work item) and hand off as the reply says, citing it with --per-owner", true
 		}
 	case stepcall.StatusWaive:
