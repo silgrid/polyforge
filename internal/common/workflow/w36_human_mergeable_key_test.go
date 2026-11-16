@@ -24,7 +24,7 @@ func TestW36HumanMergeableKey(t *testing.T) {
 	for front, want := range map[string]bool{
 		"steps:\n  - id: x\n    human_mergeable: true\n":  true,
 		"steps:\n  - id: x\n    human_mergeable: false\n": false,
-		"steps:\n  - id: x\n":                              false,
+		"steps:\n  - id: x\n":                             false,
 	} {
 		lane, errs := workflow.Load(workflowtest.WriteLaneUnchecked(t, t.TempDir(), "demo", front))
 		if len(errs) > 0 || lane == nil {
@@ -85,3 +85,5 @@ func TestW36HumanMergeableKey(t *testing.T) {
 		}
 	}
 }
+
+// (u2: the key's red runs on this tree; the loader parses it in C_1.)
