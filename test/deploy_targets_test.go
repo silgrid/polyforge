@@ -570,3 +570,44 @@ func TestDeployTargetsWrongServerRefusalNamesOwnCell(t *testing.T) {
 		})
 	}
 }
+
+// TestDeployTargetsMissingHostRefusedBeforeNetwork (polyforge#76, AC2;
+// review r1#2): a target whose merged configuration sets no AIHUB_HOST
+// does not point at its own Cell's server either - it is refused with
+// the other multi-target checks, before ANY network work in all three
+// modes, naming the target, the unset AIHUB_HOST and its Cell's server;
+// no earlier target is deployed first (which would leave a partial run
+// the pre-network checks exist to prevent).
+func TestDeployTargetsMissingHostRefusedBeforeNetwork(t *testing.T) {
+	for name, args := range map[string][]string{
+		"real deploy": {"v2.3.0", "--confirm", "v2.3.0"},
+		"dry-run":     {"v2.3.0", "--dry-run"},
+		"preflight":   {"--preflight"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := newReadyWorld(t)
+			d.twoTargetEnv(t, "default", "http://fakehost:8080")
+			pubEnv := filepath.Join(d.w, "cfg", "deploy-public.env")
+			b, err := os.ReadFile(pubEnv)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wf(t, pubEnv, strings.Replace(string(b), "AIHUB_HOST=root@fakehost2\n", "", 1), 0o600)
+			out, err := d.run("", args...)
+			if exitCode(err) != 1 || !strings.Contains(out, "REFUSED") {
+				t.Fatalf("want exit 1 + REFUSED, got %v\n%s", err, out)
+			}
+			for _, want := range []string{"target public", "AIHUB_HOST", "fakehost2"} {
+				if !strings.Contains(out, want) {
+					t.Errorf("the refusal must name the target, the unset AIHUB_HOST and its Cell's server, missing %q:\n%s", want, out)
+				}
+			}
+			if got := d.logOf("log-ssh") + d.logOf("log-gh") + d.logOf("log-docker") +
+				d.logOf2("log-ssh") + d.logOf2("log-gh") + d.logOf2("log-docker"); got != "" {
+				t.Errorf("the refusal came after network/tool work:\n%s", got)
+			}
+			d.assertNothingMutated("v2.2.1")
+			d.assertSecondUntouched("v2.2.1")
+		})
+	}
+}
