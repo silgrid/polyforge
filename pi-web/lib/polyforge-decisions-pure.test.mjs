@@ -114,6 +114,11 @@ test("the jump target: any work item opens its job detail in Work › Jobs (live
   assert.deepEqual(pure.decisionJumpTarget(wi(9, { class: "completed" }), jobs), { kind: "job", ref: "wi_W9", profile: "default" },
     "a work item the daemon dropped still opens its job detail (the watch snapshot), never a tab of its own");
   assert.deepEqual(pure.decisionJumpTarget({ id: 4, kind: "task", task_id: "task_0000000000000001", class: "failed" }, jobs), { kind: "task", id: "task_0000000000000001" });
+  // polyforge#73 AC2: a task entry's jump names its own Cell, so the detail
+  // read is pinned to it; an entry without a profile keeps today's target.
+  assert.deepEqual(pure.decisionJumpTarget({ id: 7, kind: "task", task_id: "task_0000000000000007", profile: "public", class: "completed" }, jobs),
+    { kind: "task", id: "task_0000000000000007", profile: "public" },
+    "a task entry of a named Cell carries that Cell on its jump target");
   assert.equal(pure.decisionJumpTarget({ id: 5, kind: "work_item", class: "daemon_restarted" }, jobs), null);
   assert.equal(pure.decisionJumpTarget({ id: 6, kind: "task", class: "failed" }, jobs), null);
 });
@@ -121,12 +126,12 @@ test("the jump target: any work item opens its job detail in Work › Jobs (live
 test("the walk target: a waiting job or a work item entry opens its job detail; a task entry Work › Tasks", () => {
   const jobs = [job(1, "needs_input"), job(2, "running", "lab")];
   const items = pure.attentionItems([jobs[0]], [wi(30, { class: "failed", attention: true, wi: "wi_W2", profile: "lab" }),
-    { id: 29, at: "t", kind: "task", task_id: "task_0000000000000009", class: "failed", attention: true, resolved: false, dismissed: false },
+    { id: 29, at: "t", kind: "task", task_id: "task_0000000000000009", profile: "lab", class: "failed", attention: true, resolved: false, dismissed: false },
     { id: 28, at: "t", kind: "work_item", class: "daemon_restarted", attention: true, resolved: false, dismissed: false }]);
   assert.deepEqual(items.map((item) => pure.attentionTarget(item, jobs)), [
     { kind: "job", ref: "wi_W1" },
     { kind: "job", ref: "wi_W2", profile: "lab" },
-    { kind: "task", id: "task_0000000000000009" },
+    { kind: "task", id: "task_0000000000000009", profile: "lab" },
     null,
   ]);
 });

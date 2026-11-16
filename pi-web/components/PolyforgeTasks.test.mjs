@@ -14,7 +14,11 @@ test("the tab reads on gestures only: one list read per opening, one detail read
   assert.match(source, /const clock = setInterval\(\(\) => setNow\(Date\.now\(\)\), 1000\);/, "the clock only reads the time, about once per second");
   assert.doesNotMatch(source, /localStorage|sessionStorage/, "nothing persisted");
   const urls = [...source.matchAll(/fetch\((`[^`]+`|"[^"]+")/g)].map((m) => m[1]);
-  assert.deepEqual(urls, ['"/api/polyforge/tasks"', "`/api/polyforge/tasks/${encodeURIComponent(id)}`"], "only the two GET task routes");
+  // polyforge#73: the detail URL is built per row — its Cell's ?profile= when
+  // it has one — so only the list read stays a literal fetch argument.
+  assert.deepEqual(urls, ['"/api/polyforge/tasks"'], "the one literal list read");
+  assert.match(source, /`\/api\/polyforge\/tasks\/\$\{encodeURIComponent\(id\)\}\?profile=\$\{encodeURIComponent\(cell\)\}`/, "the Cell-pinned detail read (polyforge#73)");
+  assert.match(source, /: `\/api\/polyforge\/tasks\/\$\{encodeURIComponent\(id\)\}`/, "the Cell-less detail read stays");
   assert.doesNotMatch(source, /method:/, "every fetch is a plain GET");
   assert.match(source, /if \(!isPolyforgeTaskId\(id\)\) return;/, "a malformed id is never fetched");
   assert.match(source, /if \(listReadRef\.current\) return;\s*listReadRef\.current = true;\s*readList\(\);/,
@@ -160,11 +164,11 @@ test("the read surface has no write action and every string is translated", () =
   }
 });
 
-test("an external task id (the analysis card's link) opens that task's existing detail read once", () => {
-  assert.match(source, /openTaskId = null,\s*onOpenTaskHandled,/);
-  const start = source.indexOf("if (!openTaskId) return;");
+test("an external task (the analysis card's link, the walk's target) opens that task's existing detail read once, pinned to its Cell", () => {
+  assert.match(source, /openTask = null,\s*onOpenTaskHandled,/);
+  const start = source.indexOf("if (!openTask) return;");
   assert.ok(start > 0, "the external open exists");
-  const effect = source.slice(start, source.indexOf("}, [openTaskId]);", start));
-  assert.match(effect, /openDetail\(openTaskId\);\s*onOpenTaskHandled\?\.\(\);/, "the same one detail read a row click makes, then handed back");
-  assert.match(source, /<span data-pf-task=\{selected\}/, "the open detail names its task");
+  const effect = source.slice(start, source.indexOf("}, [openTask]);", start));
+  assert.match(effect, /openDetail\(openTask\.id, openTask\.cell \?\? undefined\);\s*onOpenTaskHandled\?\.\(\);/, "the same one detail read a row click makes, then handed back");
+  assert.match(source, /<span data-pf-task=\{selected\.id\}/, "the open detail names its task");
 });
