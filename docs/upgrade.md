@@ -177,4 +177,6 @@ longer red run, the commands after the first red running too. The
 script's default is unchanged — every other caller of `gate.py` (the
 release's, an operator's run) still stops at the first failing command
 unless it passes `--keep-going` itself — and the develop and micro
-lanes' verification, which never stopped at a red, is untouched.
+lanes' verification is untouched: develop's `verify.py` runs its whole
+plan, as before, and micro's evidence (`run.py`) still stops at its
+first failing line.
