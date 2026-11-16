@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 
@@ -719,6 +720,7 @@ var cmdOps = &Command{
 	Summary: "Daemon ops: local job status, the read-only model profile, auto-pull switch, max concurrent jobs, graceful shutdown; end-session recovery",
 	Usage: "pf ops status\n" +
 		"pf ops models           # read-only model+effort x step profile over the events-retention window; --json re-emits GET /models\n" +
+		"pf ops unclassified     # read-only list of the error texts no classification rule named (fallback) over the last 7 days, deduplicated with counts, Host-wide; --json re-emits GET /ops/unclassified; takes no --profile (Host-level)\n" +
 		"pf ops auto [on|off]    # off = only explicit pf submit; on = the daemon also pulls the ready queue itself (bare = show)\n" +
 		"pf ops max [N]          # max concurrent jobs on this machine, N >= 1; lasts until the daemon restarts, and a `pf config set`/`pf config reload` that changes [daemon] max_concurrent_jobs overrides it (last action wins); bare = show\n" +
 		"pf ops role [interactive|runner] [--force|--if-unset]  # the machine role the heartbeat negotiates: interactive (the operator's machine; --force takes it over from the machine holding it) or runner; --if-unset applies only while no operator chose a role on this Cell (the choice is kept across restarts) (the session-start adapters use it); bare = show; the Cell resolves like every Cell-scoped command (--profile, else PF_PROFILE, else the cwd's workspace, else default)\n" +
@@ -727,7 +729,7 @@ var cmdOps = &Command{
 	Setup: func(fs *flag.FlagSet) {},
 	Run: func(ctx *Context, fs *flag.FlagSet, args []string) error {
 		if len(args) == 0 {
-			return fmt.Errorf("ops: expected status|models|auto|max|role|shutdown|end-session")
+			return fmt.Errorf("ops: expected status|models|unclassified|auto|max|role|shutdown|end-session")
 		}
 		if args[0] == "end-session" {
 			return opsEndSession(ctx, args[1:])
@@ -736,6 +738,9 @@ var cmdOps = &Command{
 		// unless an explicit --profile targets one Cell (PF_PROFILE and the
 		// cwd never change a Host command's scope); shutdown is always the
 		// whole Host and refuses a profile.
+		if args[0] == "unclassified" && ctx.FlagProfile != "" {
+			return fmt.Errorf("ops unclassified: the unclassified list is Host-level — it aggregates every Cell and takes no --profile (got %q); run `pf ops unclassified` alone", ctx.FlagProfile)
+		}
 		if args[0] == "shutdown" && ctx.FlagProfile != "" {
 			return fmt.Errorf("ops shutdown: shutdown is Host-level — it stops every Cell of the Host and takes no --profile (got %q); run `pf ops shutdown` alone", ctx.FlagProfile)
 		}
@@ -762,6 +767,19 @@ var cmdOps = &Command{
 			}
 			finishOrRaw(ctx, raw, func(p *modelhealth.Profile) bool {
 				renderModels(ctx.Stdout, p)
+				return true
+			})
+			return nil
+		case "unclassified":
+			if len(args) != 1 {
+				return fmt.Errorf("ops unclassified: unexpected arguments %v", args[1:])
+			}
+			raw, err := d.Unclassified()
+			if err != nil {
+				return err
+			}
+			finishOrRaw(ctx, raw, func(rep *UnclassifiedReport) bool {
+				renderUnclassified(ctx.Stdout, rep)
 				return true
 			})
 			return nil
@@ -1042,4 +1060,13 @@ func opsEndSession(ctx *Context, args []string) error {
 		fmt.Fprintln(ctx.Stdout, "  the previous holder is fenced (its secret no longer matches)")
 	})
 	return nil
+}
+
+// renderUnclassified prints the Host's fallback-classified error texts
+// with their counts (the --json shape is the route's verbatim answer).
+func renderUnclassified(w io.Writer, rep *UnclassifiedReport) {
+	fmt.Fprintf(w, "unclassified errors over the last %d day(s): %d text(s)\n", rep.WindowDays, len(rep.Items))
+	for _, it := range rep.Items {
+		fmt.Fprintf(w, "  %4d×  %s\n", it.Count, it.Text)
+	}
 }

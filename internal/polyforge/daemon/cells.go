@@ -507,6 +507,9 @@ func (h *Host) cellPath(profile string) string {
 func (h *Host) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /profiles", h.profilesRoute)
+	// polyforge#51: the Host-wide list of fallback-classified error
+	// texts (user-only; a step or task process tree is refused).
+	mux.HandleFunc("GET /ops/unclassified", h.unclassifiedRoute)
 	mux.HandleFunc("GET /status", h.statusRoute)
 	mux.HandleFunc("POST /ops/config", h.opsConfigRoute)
 	mux.HandleFunc("POST /shutdown", h.shutdownRoute)
