@@ -167,6 +167,10 @@ echo "fake docker: unhandled: $*" >&2; exit 99
 
 const fakeSSH = `#!/bin/sh
 while [ $# -gt 0 ]; do case "$1" in -o) shift 2 ;; *) break ;; esac; done
+# ssh -G <host>: the local alias resolution deploy.sh's target check uses
+# (never a network call, so not logged; log-ssh holds network calls only).
+# FAKE_SSH_G_HOSTNAME overrides what the alias resolves to.
+case "$1" in -G) echo "hostname ${FAKE_SSH_G_HOSTNAME:-$2}"; exit 0 ;; esac
 # FAKE_SSH_DENY: the host refuses non-interactive auth (#283).
 [ -n "$FAKE_SSH_DENY" ] && { echo "$1: Permission denied (publickey)." >&2; exit 255; }
 shift   # host
