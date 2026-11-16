@@ -14,9 +14,11 @@ package runtime
 // harness-neutral tool window.
 
 import (
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -127,7 +129,8 @@ func JoinPath(paths ...string) string {
 // names its lane), the round the derivation belongs to (spawn.EnvRound; 0
 // = not stated) and the dispatch identity `pf ask` records its question
 // under (spawn.EnvStep / spawn.EnvSpawn; a derivation that names no step
-// states neither).
+// states neither) and the step's params at their final values
+// (spawn.EnvParamName each, polyforge#78).
 func stepEnvAdditions(cfg *Config, p SpawnParams, harnessBin string) []string {
 	var out []string
 	if cfg.StepEnv != nil {
@@ -148,6 +151,9 @@ func stepEnvAdditions(cfg *Config, p SpawnParams, harnessBin string) []string {
 	}
 	if p.StepID != "" && p.SpawnN > 0 {
 		out = append(out, spawn.EnvStep+"="+p.StepID, spawn.EnvSpawn+"="+strconv.Itoa(p.SpawnN))
+	}
+	for _, name := range slices.Sorted(maps.Keys(p.Params)) {
+		out = append(out, spawn.EnvParamName(name)+"="+p.Params[name])
 	}
 	return out
 }

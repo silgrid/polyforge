@@ -17,16 +17,20 @@ package driver
 //     fresh one (B2), so another dispatch's hand-off is never this one's.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/silgrid/polyforge/internal/common/atomicfile"
 	"github.com/silgrid/polyforge/internal/common/capsule"
 	"github.com/silgrid/polyforge/internal/common/harness"
 	"github.com/silgrid/polyforge/internal/common/spawn"
@@ -125,9 +129,15 @@ func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun
 	if spec == nil {
 		return nil, fmt.Errorf("driver: step %q is not in the workflow bundle", sp.StepID)
 	}
-	def, err := readStepDefinition(a.BundleDir, sp.StepID, spec.Vars, nil)
+	// the definition at this dispatch's final param values (polyforge#78):
+	// the prompt carries it, and the rendered copy a sub-agent is pointed
+	// at is rewritten to match
+	def, err := readStepDefinition(a.BundleDir, sp.StepID, spec.Vars, sp.Params)
 	if err != nil {
 		return nil, err
+	}
+	if err := a.writeRenderedDefinition(sp.StepID, spec.Vars, sp.Params); err != nil {
+		return nil, fmt.Errorf("driver: %s/%s: %w", a.WI.ID, sp.StepID, err)
 	}
 	header, err := stepHeader(a.BundleDir)
 	if err != nil {
@@ -215,8 +225,10 @@ func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun
 		}
 		if resume {
 			// the resumed conversation already holds its prompt: it keeps
-			// the language it was told
+			// the language it was told, and the param values it was told —
+			// a value changed since is stated in its first message
 			parts.Language = dispatchLanguage(prev.Language)
+			parts.ParamsChanged = changedParams(prev.Params, sp.Params)
 		} else {
 			// the continuation cannot resume (another harness, or the
 			// native session is gone): the fresh conversation gets the
@@ -352,6 +364,7 @@ func (a *StepSpawnAdapter) launch(ctx context.Context, sp StepSpawn, parts promp
 		Round:          sp.Round,
 		StepID:         sp.StepID,
 		ToolWindow:     sp.ToolWindow,
+		Params:         sp.Params,
 	}
 	var taps []func(string)
 	if translator != nil {
@@ -573,6 +586,11 @@ type promptParts struct {
 	// death, so the new conversation continues in place instead of
 	// starting from scratch. False = today's start-from-scratch wording.
 	ContinueInPlace bool
+	// ParamsChanged are the step params whose value changed since the
+	// dispatch a resumed conversation continues, at their new values
+	// (changedParams, polyforge#78): every resume shape's first message
+	// states them. nil = none changed, or no resume.
+	ParamsChanged map[string]string
 }
 
 // The six parts' headings (the step header and the prohibited actions
@@ -599,11 +617,15 @@ const (
 func assembleStepPrompt(p promptParts) string {
 	if p.ShortMessageResume {
 		// the owner's words continue the conversation they were written
-		// to (relay.go): exactly what a live delivery sends
+		// to (relay.go): exactly what a live delivery sends — and the
+		// params that changed since, when any did
+		if s := paramsChangedSection(p.ParamsChanged); s != "" {
+			return renderOwnerMessages(p.OwnerMessages) + "\n" + s
+		}
 		return renderOwnerMessages(p.OwnerMessages)
 	}
 	if p.ShortEwrResume {
-		return ewrResumeReminder(p) + continuationPart(promptParts{OwnerMessages: p.OwnerMessages})
+		return ewrResumeReminder(p) + continuationPart(promptParts{OwnerMessages: p.OwnerMessages, ParamsChanged: p.ParamsChanged})
 	}
 	var b strings.Builder
 	// 1. the dispatch
@@ -692,7 +714,11 @@ func dispatchPart(p promptParts) string {
 // new conversation.
 func continuationPart(p promptParts) string {
 	var b strings.Builder
+	b.WriteString(paramsChangedSection(p.ParamsChanged))
 	if len(p.OwnerMessages) > 0 {
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
 		b.WriteString("## Owner messages\n\n")
 		b.WriteString("The owner wrote these to this step while it ran, in order; a reply names the question it answers by that question's stamp. ")
 		b.WriteString("Each is verbatim; the bracketed `[pf-msg:…]` line after a message is the daemon's delivery marker, not the owner's words. ")
@@ -728,6 +754,43 @@ func continuationPart(p promptParts) string {
 		return ""
 	}
 	return "\n" + continuationHeading + "\n\n" + b.String()
+}
+
+// paramsChangedHeading heads the section a resumed conversation's first
+// message carries when step params changed since the dispatch it
+// continues (polyforge#78).
+const paramsChangedHeading = "## Step params changed"
+
+// paramsChangedSection renders the changed params ("" when none): each
+// name with its new value, sorted by name.
+func paramsChangedSection(changed map[string]string) string {
+	if len(changed) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(paramsChangedHeading + "\n\n")
+	b.WriteString("These step params changed since the dispatch this conversation continues. Their new values replace the ones your instructions were written with " +
+		"(they are also this dispatch's `" + spawn.EnvParamPrefix + "<NAME>` environment):\n\n")
+	for _, name := range slices.Sorted(maps.Keys(changed)) {
+		fmt.Fprintf(&b, "- `%s`: `%s`\n", name, changed[name])
+	}
+	return b.String()
+}
+
+// changedParams answers the params of cur whose value differs from prev's
+// (a name prev lacks counts as changed), at cur's values; nil when none.
+func changedParams(prev, cur map[string]string) map[string]string {
+	var out map[string]string
+	for name, v := range cur {
+		if old, ok := prev[name]; ok && old == v {
+			continue
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[name] = v
+	}
+	return out
 }
 
 // ewrResumeReminder is the whole instruction of the first retry after a
@@ -810,6 +873,31 @@ func readStepDefinition(bundleDir, stepID string, vars, params map[string]string
 	return def.Body, nil
 }
 
+// renderedDefinitionsDir is the capsule's rendered-definition directory
+// (workflows/_rendered, runtime.renderedDir: the claim writes it; the
+// driver cannot import runtime, so it is named here in one place).
+const renderedDefinitionsDir = "_rendered"
+
+// writeRenderedDefinition rewrites the step's rendered definition
+// (workflows/_rendered/<step>.md, read-only — the text a sub-agent is
+// pointed at) at this dispatch's final param values (polyforge#78): the
+// claim wrote it at the lane defaults. The same bytes are left alone; a
+// changed rendering replaces the file atomically.
+func (a *StepSpawnAdapter) writeRenderedDefinition(stepID string, vars, params map[string]string) error {
+	raw, err := workflow.RenderDefinition(a.BundleDir, stepID, vars, params)
+	if err != nil {
+		return fmt.Errorf("rendering step %s: %w", stepID, err)
+	}
+	path := filepath.Join(a.WI.CapsuleDir, capsule.DirWorkflows, renderedDefinitionsDir, stepID+".md")
+	if cur, err := os.ReadFile(path); err == nil && bytes.Equal(cur, raw) {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return atomicfile.Write(path, raw, 0o444)
+}
+
 // ---------------------------------------------------------------------------
 // Session identity + spawn journal.
 
@@ -868,6 +956,7 @@ func (a *StepSpawnAdapter) appendSpawnJournal(p spawn.Params, stepID, token, lan
 		Harness:        harness.Of(p.Harness),
 		HarnessSession: p.HarnessSession,
 		Language:       language,
+		Params:         p.Params,
 	}
 	blob, err := json.Marshal(entry)
 	if err != nil {

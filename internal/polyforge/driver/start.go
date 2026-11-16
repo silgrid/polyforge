@@ -170,6 +170,7 @@ func Start(ctx context.Context, cfg StartConfig) (*Handle, error) {
 		Limits:      cfg.Limits,
 		LimitsFunc:  cfg.LimitsFunc,
 		Compose:     cfg.Compose,
+		Params:      cfg.Params,
 		Interrupted: cfg.Interrupted,
 		StepEnded:   cfg.StepEnded,
 		Admission:   cfg.Admission,

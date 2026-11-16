@@ -215,6 +215,27 @@ func ComposeStepParams(lane *workflow.Lane, cfg *Config, project string) map[str
 	return out
 }
 
+// ComposeStepParamsWithOverlay is ComposeStepParams with the work item's
+// step-overlay record (polyforge#25/#78) on top: a param the overlay sets
+// takes the overlay's value; a cleared one keeps the level below. An
+// overlay value of a param the step does not declare governs nothing.
+// The dispatch's final values.
+func ComposeStepParamsWithOverlay(lane *workflow.Lane, cfg *Config, project string, ov capsule.StepOverrides) map[string]map[string]string {
+	out := ComposeStepParams(lane, cfg, project)
+	for id, params := range out {
+		e := ov.Steps[id]
+		if e == nil {
+			continue
+		}
+		for name, p := range e.Params {
+			if _, declared := params[name]; declared && p != nil && !p.Cleared {
+				params[name] = p.Value
+			}
+		}
+	}
+	return out
+}
+
 // StepParamSources is ComposeStepParams naming, per param, the level its
 // value came from (the model chain's labels: steps.<project>.<step>.params.<name>
 // for the project, `bundle <lane> step <step> params.<name>` for the lane

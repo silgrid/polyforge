@@ -4,6 +4,7 @@ package spawn
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -165,3 +166,14 @@ const (
 	EnvCellServer = "PF_CELL_SERVER"
 	EnvDeployEnv  = "PF_DEPLOY_ENV"
 )
+
+// EnvParamPrefix starts the name a step param reaches the step process
+// under (polyforge#78): EnvParamName.
+const EnvParamPrefix = "PF_PARAM_"
+
+// EnvParamName answers the environment variable of the step param name
+// (Params.Params): EnvParamPrefix and the name upper-cased — the name's
+// shape (workflow.ParamName) keeps the result a legal variable name. The
+// sanitize point strips every inherited PF_* name, so the step's value is
+// always the daemon's.
+func EnvParamName(name string) string { return EnvParamPrefix + strings.ToUpper(name) }
