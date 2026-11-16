@@ -63,38 +63,44 @@ def commit_all(directory: str, msg: str) -> str:
     return git_t(directory, "rev-parse", "HEAD")
 
 
-def gate_tree(directory: str, conf: str, dockerfile: bool = True) -> None:
-    """The gate's tree in directory: the real engine and gate id, the conf
-    and (when dockerfile) the Dockerfile."""
-    with open(ENGINE_SRC, encoding="utf-8") as f:
-        write_files(directory, {gate.GATE_ENGINE_REL: f.read()}, 0o755)
-    # the engine imports its library (pfstep), which ships beside it
-    for lib in sorted(glob.glob(os.path.join(os.path.dirname(ENGINE_SRC), "pfstep", "*.py"))):
-        rel = os.path.join("workflows", "_shared", "scripts", "pfstep", os.path.basename(lib))
-        with open(lib, encoding="utf-8") as f:
-            write_files(directory, {rel: f.read()})
-    with open(GATE_ID_SRC, encoding="utf-8") as f:
-        write_files(directory, {"tools/gate-id": f.read()}, 0o755)
+def gate_tree(directory: str, conf: str, dockerfile: bool = True, engine: bool = True,
+              gate_id: bool = True) -> None:
+    """The gate's tree in directory: the real engine and gate id (each
+    only when asked — a tree without one falls back to the lane's), the
+    conf and (when dockerfile) the Dockerfile."""
+    if engine:
+        with open(ENGINE_SRC, encoding="utf-8") as f:
+            write_files(directory, {gate.GATE_ENGINE_REL: f.read()}, 0o755)
+        # the engine imports its library (pfstep), which ships beside it
+        for lib in sorted(glob.glob(os.path.join(os.path.dirname(ENGINE_SRC), "pfstep", "*.py"))):
+            rel = os.path.join("workflows", "_shared", "scripts", "pfstep", os.path.basename(lib))
+            with open(lib, encoding="utf-8") as f:
+                write_files(directory, {rel: f.read()})
+    if gate_id:
+        with open(GATE_ID_SRC, encoding="utf-8") as f:
+            write_files(directory, {"tools/gate-id": f.read()}, 0o755)
     write_files(directory, {".polyforge/verify-scope.conf": conf, "README": "x\n"})
     if dockerfile:
         write_files(directory, {container.DOCKERFILE_VERIFY: GATE_DOCKERFILE})
 
 
-def gate_clone(root: str, conf: str, dockerfile: bool = True, name: str = "app") -> str:
+def gate_clone(root: str, conf: str, dockerfile: bool = True, name: str = "app", engine: bool = True,
+              gate_id: bool = True) -> str:
     """A plain clone named name under root carrying the gate tree, committed."""
     d = os.path.join(root, name)
     os.makedirs(d)
     git_t(d, "init", "-q", "-b", "main")
-    gate_tree(d, conf, dockerfile)
+    gate_tree(d, conf, dockerfile, engine=engine, gate_id=gate_id)
     commit_all(d, "tree")
     return d
 
 
-def green_clone(root: str, conf: str) -> str:
+def green_clone(root: str, conf: str, engine: bool = True, gate_id: bool = True) -> str:
     """gate_clone with a bare origin it pushed main to (origin.git beside it)."""
+    os.makedirs(root, exist_ok=True)
     origin = os.path.join(root, "origin.git")
     git_t(root, "init", "-q", "--bare", "-b", "main", origin)
-    d = gate_clone(root, conf)
+    d = gate_clone(root, conf, engine=engine, gate_id=gate_id)
     git_t(d, "remote", "add", "origin", origin)
     git_t(d, "push", "-q", "origin", "main")
     return d

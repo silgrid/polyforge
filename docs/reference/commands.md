@@ -501,8 +501,9 @@ of the capsule chain. A red bar is data; when the tree could not be judged
 
 `gate.py` — the workflow script `workflows/_shared/scripts/gate.py`
 (the step command `pf-gate` before it) — is the full test
-gate: the tree's own scope-engine plan
-(`workflows/_shared/scripts/verify-scope --json --full --base HEAD`) with every command, the engine included, in the container of
+gate: the scope-engine plan — the engine the gated tree carries
+(`workflows/_shared/scripts/verify-scope`), else the lane's own copy —
+with every command, the engine included, in the container of
 the tree's `.polyforge/Dockerfile.verify`. The integrate lane's full-gate
 step runs it from its lane snapshot as its skill writes it, `"$PF_PYTHON"
 "$PF_SHARED_DIR/scripts/gate.py" --isolation container --keep-going --capsule . --pins
@@ -867,17 +868,33 @@ the lane's own identity.
   branch that advanced after verification, or a forge refusal, is the sync
   step's again. Details: `repos[{name, pr_url, branch, head,
   published, merge_commit, how, branch_side, by_this_run, why}]`,
-  `merge_commits`. Exit 0: every PR landed; 1: a PR moved, is closed or
+  `merge_commits`. In the human-merge mode (the work item's frozen step
+  modes, `runtime-state/step-modes.json`, name this step `human` — the
+  project declared `steps.<project>.merge.by: human`) the script asks the
+  forge for nothing and never judges the default branch's freshness: a
+  MERGED PR is taken by the human landing rules (the patch-id
+  fingerprint: a merge commit carrying the verified head as its branch
+  side, a rebase's replayed commits, a squash's whole diff) as `how:
+  merged_by_human`, the landed commit set; a PR closed without merging,
+  merged with content that does not match the verified change, or still
+  open is exit 3 — the step asks the owner, never a FAIL back to `sync`,
+  and the landed set is not taken. Exit 0: every PR landed; 1 (never in
+  the human mode): a PR moved, is closed or
   retargeted, was merged elsewhere off the verified head, the default
   branch advanced after the verified version (origin's default branch is no
   longer the verified base), or the forge refused (the later PRs stay open; the merged ones are landed and a
-  re-run takes them); 2: not judged (an unreadable file, a published repo
+  re-run takes them); 3 (the human mode only): a PR is not landed and the
+  owner is asked; 2: not judged (an unreadable file, a published repo
   the verification names no head for, gh or git unreachable). On exit 0
   `--landing-out` gets the landing record (`{state: landed, repos[{repo,
   pr, head, light_verified_head, merge_commit, accepted}],
   merge_commits}`: the verified head as the head and the light-verified
   one; a `merged_elsewhere` repo's head its branch side, `accepted:
-  true`), which the merge skill registers with `pf step hub wrap-attrs
+  true`) — `merge_commits` naming, per repo, the commit set the change
+  landed as, oldest first, each `{sha, merge}` (the lane's own merges are
+  merge commits; a person's rebase lands plain replayed commits and a
+  squash one plain commit, so the integration lane's `revert.py` reverts
+  them with no `-m 1`) — which the merge skill registers with `pf step hub wrap-attrs
   integration`; on any other exit a stale one is removed.
 - `published.py --publish <publish.json> --verified <result.json>
   [--record-out <file>]` records the published PRs of a work item whose

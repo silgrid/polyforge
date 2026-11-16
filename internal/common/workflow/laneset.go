@@ -266,6 +266,13 @@ func (s LaneSet) SkippableSteps() (map[string]bool, error) {
 	return s.stepIDs(func(st Step) bool { return st.Skippable })
 }
 
+// HumanMergeableSteps answers the set of step ids some lane of the set
+// declares `human_mergeable: true` — the steps whose workspace yaml
+// `by: human` a write may set. Its errors are StepIDs'.
+func (s LaneSet) HumanMergeableSteps() (map[string]bool, error) {
+	return s.stepIDs(func(st Step) bool { return st.HumanMergeable })
+}
+
 // stepIDs answers the ids of the steps of the set's lanes that keep says.
 func (s LaneSet) stepIDs(keep func(Step) bool) (map[string]bool, error) {
 	if _, err := LaneDirs(s.Builtin); err != nil {

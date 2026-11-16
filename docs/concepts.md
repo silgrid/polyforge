@@ -557,6 +557,25 @@ rewind — and reads no content, and no agent merges by hand:
   the landing rules. gh or git unreachable is `blocked`: fix it, then
   tell the step (or `pf resume`). The integration lane's revert takes the same lock.
 
+A project may also declare the develop merge done by a person,
+`steps.<project>.merge.by: human` (fixed at the claim into the capsule's
+`runtime-state/step-modes.json`; a claim of a lane that does not declare
+the step `human_mergeable` is refused naming it). The merge step then
+never asks the forge to merge and never judges the default branch's
+freshness: it asks the owner over the PR links and the verified heads and
+waits (the ask's release, so the waiting holds no step process), and on
+the owner's answer it takes the person's landing by the human landing
+rules — GitHub's three merge methods all count when they land the
+verified change as it stands: **Create a merge commit** (its branch side
+the verified head), **Rebase and merge** (every commit of the branch
+replayed, matched by the patch-id fingerprint) and **Squash and merge**
+(the branch's whole diff); a landing that does not match the verified
+change — a commit added to the branch before the person merged, a content
+changed on the way — is not taken: the step asks the owner again (exit 3,
+never a FAIL back to `sync`). The landing record names the landed commit
+set with each commit's merge flag, so the integration lane reverts a
+squash or a rebase landing too (the plain commits with no `-m 1`).
+
 The merge's pass ends the workflow: before handing off `done` the agent
 registers the landing record `merge.py --landing-out` wrote — `{state:
 landed, repos: [{repo, pr, head, light_verified_head, merge_commit,
@@ -564,8 +583,11 @@ accepted?}], merge_commits}` — as a wrap attr (`pf step hub wrap-attrs
 integration @artifacts/merge/landing.json`; the step declares
 `wrap_attrs: [integration]`, so its `done` is refused until it did), and the
 daemon's wrapped close merges it into the work item's attrs: one `repos`
-entry per merge; `merge_commits` maps each repo to its merge commits,
-oldest first (`{repo: [sha, …]}`). The owner's waivers ride beside it in
+entry per merge; `merge_commits` maps each repo to the commit set the
+change landed as, oldest first, each entry `{sha, merge}` naming the commit
+and whether it is a merge commit (`{repo: [{sha, merge}, …]}` — the lane's
+own merges are merge commits; a person's squash lands one plain commit and a
+rebase the replayed ones). The owner's waivers ride beside it in
 `attrs.waivers`, written by the daemon, never by the agent (aihub merges a
 wrapped session-end's `attrs`; no new work-item status).
 The landing record carries no `waived`: the integration lane reads an
@@ -598,7 +620,10 @@ green. (A project that switches develop's `merge` off,
 `steps.<project>.merge.skip: true`, has its work items end after `publish`,
 wrapped `integration: {state: published, …}` with the PRs awaiting a human
 review: the collect takes `landed` work items only, so they never enter a
-batch.) A batch is a work item on the `integrate` bundle, and only a person
+batch. A project that declares the merge done by a person,
+`steps.<project>.merge.by: human`, has its work items land through the
+person's merge — the lane takes the landing and wraps them `landed`, so
+they enter the batch like the lane's own merges do.) A batch is a work item on the `integrate` bundle, and only a person
 starts one, like a work item on any lane: `pf file create --bundle
 integrate --project <p> --goal <text>`, then `pf submit <batch>`. The daemon
 never files a batch of its own, however long landed items wait.
@@ -666,7 +691,9 @@ with its own credentials (a step agent holds none) once the step hands off
   the project default; heavy admission; the lane's gate) — runs the release's test gate once on every
   gated repo's pinned head — never the live tip, which keeps moving (what
   `.polyforge/release.sh` runs; never the daemon's
-  verification run) — and on a pass writes the green tag itself
+  verification run) — with the repo's own scope engine, else the lane's
+  copy (a repo that provides only `.polyforge/verify-scope.conf` and
+  `.polyforge/Dockerfile.verify` is gated too) — and on a pass writes the green tag itself
   (`--mark-green`). The gate runs with `--keep-going`: every command runs,
   never stopping at the first failing one, so one red batch records every
   failing command and its triage sees them all at once. A red gate is triaged by `gate.py --triage`: each

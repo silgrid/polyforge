@@ -360,7 +360,9 @@ fresh at the next step dispatch; a running step keeps what its dispatch
 read); every `steps.<project>.<step-id>.skip` key is `next-claim` (fixed
 into a work item's capsule when it is first claimed; a claimed work item
 keeps the set it was claimed with —
-[below](#stepsprojectstep-idskip--switching-off-a-skippable-step)).
+[below](#stepsprojectstep-idskip--switching-off-a-skippable-step)), and
+so is every `steps.<project>.<step-id>.by` key
+([below](#stepsprojectstep-idby--declaring-the-steps-work-done-by-a-person)).
 
 ### Machine-readable list, schema and CAS
 
@@ -835,6 +837,64 @@ its PRs open, awaiting a human review, and is wrapped `integration: {state:
 published, …}`, never `landed` (`workflows/develop/README.md`, "Skipping
 merge"); `pf workflows --cwd` reports each step's `skippable` and the
 projects that skip it ([commands](commands.md)).
+
+### `steps.<project>.<step-id>.by` — declaring the step's work done by a person
+
+```yaml
+steps:
+  polyforge:
+    merge: { by: human }      # develop's PRs are reviewed and merged by a person
+```
+
+`by` declares the step's takeover mode — the one value this release knows
+is `human`: the step's work is done by a person, only where the step's
+lane declares it `human_mergeable: true` (workflow.yaml, [workflow
+contract](workflow-contract.md#step-keys)); a step not declared
+human_mergeable always runs itself. The shipped lanes declare one:
+develop's `merge` — the PRs are handed to the project's reviewer, the
+merge step asks the owner instead of merging, and the person's landing is
+taken by the human landing rules
+(`workflows/develop/README.md`, "Merging by a person"). `by` takes the
+mode name `human` (anything else is a load error), and a step entry
+declares `by` or `skip`, never both (a load error naming both). A `by` on
+the bundle-less keys is a load error, as a `skip` is.
+
+- **Class `next-claim`.** The step modes are fixed when a work item is
+  first claimed: the claim writes them into the capsule
+  (`runtime-state/step-modes.json`), and the work item keeps them through
+  a re-claim and `pf resume`. Changing the key governs the work items
+  claimed after the change, never a running one.
+- **Written through `pf config set|unset steps.<project>.<step-id>.by`**
+  (the value is the mode name, `human`). A write for a step no lane of
+  the workspace's lane set declares `human_mergeable` is refused, naming
+  `human_mergeable: true` and that such a step always runs itself;
+  nothing is written.
+- **Refused at the claim of a lane that carries the step undeclared.**
+  The loader has no lane at hand, so a hand-written `by` loads; a claim
+  of a lane that carries the step without declaring it `human_mergeable`
+  — micro's — is refused naming it. A `by` on a step the lane does not
+  carry governs nothing (a skip's rule): the integrate and release lanes
+  carry no `merge` step, and a project declaring
+  `steps.<project>.merge.by: human` still opens its batches on them.
+- **Per lane, by step id.** With `steps.<project>.merge.by: human`
+  develop's merge waits for the person, while micro's `merge`, which
+  declares no `human_mergeable`, is refused the claim.
+
+**The three routes of a develop work item's merge, and which of them
+reaches the integration lane.** The lane's own merge (no `by`, no `skip`)
+lands the work item `landed`, into the integration lane's pool. The
+person's merge (`steps.<project>.merge.by: human`) lands it `landed` the
+same way — the person merges on GitHub with any of the three methods,
+**Create a merge commit**, **Rebase and merge** or **Squash and merge**,
+and the lane takes the landing by the patch-id fingerprint — so it enters
+the integration lane's pool like the lane's own merge does. The skipped
+merge (`steps.<project>.merge.skip: true`) ends the work item `published`
+with the PRs open, and it never enters an integration batch
+([workflows/develop/README.md](../../workflows/develop/README.md),
+"Merging by a person" and "Skipping merge").
+
+`pf workflows --cwd` reports each step's `human_mergeable` and the mapped
+projects' declared modes ([commands](commands.md)).
 
 ### `steps.<project>.task` — the one-shot task agent
 

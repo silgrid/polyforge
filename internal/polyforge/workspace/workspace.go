@@ -12,6 +12,7 @@
 //	    <step-id>:                       # optional: the steps with this id,
 //	      models: [...]                  # in every bundle (fix, code, review, ...)
 //	      skip: true|false               # optional: switch the step off
+//	      by: human                      # optional: the step's takeover mode
 //	tiers:                               # optional section (workflow contract 2)
 //	  <project-name>:                    # one entry per project of this workspace
 //	    <tier>: { models: [...] }        # the list of a step's model_tier
@@ -26,15 +27,22 @@
 // hint, IntegrateRemovedHint: the daemon's automatic batch trigger is
 // gone, a person files a batch.
 //
-// A step entry has two keys, at least one declared: `models`, a list of
+// A step entry has three keys, at least one declared: `models`, a list of
 // model candidates, each `<harness>:<model>` (polyforge#175 — harness ∈
 // pi | claude, split on the first `:`; the prefix is mandatory and is the
-// whole truth of where the candidate runs), and `skip`, a bool
+// whole truth of where the candidate runs); `skip`, a bool
 // `skip: true` switches the step off for the project —
 // only where its lane declares the step `skippable: true` (SkippedSteps;
 // on any other step it governs nothing, and `pf config set` refuses to
-// write it), fixed when a work item is claimed. A skip-only entry is no
-// level of the model chain. `default` and `task` take no `skip`. Any key not shown here — at any level — is a load
+// write it), fixed when a work item is claimed; and `by`, the step's
+// takeover mode — the one value this release knows is `human`: the
+// step's work is done by a person, only where its lane declares the
+// step `human_mergeable: true` (a claim of a lane that does not is
+// refused naming it; HumanMergeSteps), fixed when a work item is claimed
+// exactly as `skip` is. A step entry declares `by` or `skip`, never
+// both: a step is either switched off or taken over. A skip-only entry is no
+// level of the model chain. `default` and `task` take neither `skip` nor
+// `by`. Any key not shown here — at any level — is a load
 // error, as are duplicate keys, type mismatches, an empty project entry,
 // an unprefixed / unknown-prefix / empty-model candidate, and the retired
 // `harness` key and the removed `attrs` key (each refused with a rewrite
@@ -115,6 +123,11 @@ type Config struct {
 	// A step is skipped only where its lane declares it
 	// skippable (SkippedSteps). nil when no entry declares skip.
 	Skip map[string]map[string]bool
+	// By is project name → step id → mode: steps.<project>.<step>.by
+	// (the step's takeover mode; the one value this release knows is
+	// `human`). A lane takes the mode only where it declares the step
+	// human_mergeable (HumanMergeSteps). nil when no entry declares by.
+	By map[string]map[string]string
 	// Tiers is project name → tier name → candidate list:
 	// tiers.<project>.<tier>.models (workflow contract 2), the list of
 	// every bundle step whose model_tier names that tier — above the
@@ -281,8 +294,12 @@ func parse(raw []byte, projects []string) (*Config, string) {
 			if reason != "" {
 				return nil, reason
 			}
-			if e.skip != nil && BundlelessKey(ekv.key) {
-				return nil, fmt.Sprintf("%s.%s.skip: not allowed (`%s` is no step: skip switches off one step a lane declares skippable)", where, ekv.key, ekv.key)
+			if (e.skip != nil || e.by != nil) && BundlelessKey(ekv.key) {
+				leaf, noun := "skip", "skip switches off one step a lane declares skippable"
+				if e.by != nil {
+					leaf, noun = "by", "by names a step's takeover mode, and only a step a lane declares human_mergeable takes `human`"
+				}
+				return nil, fmt.Sprintf("%s.%s.%s: not allowed (`%s` is no step: %s)", where, ekv.key, leaf, ekv.key, noun)
 			}
 			if e.hasModels {
 				cfg.Models[project][ekv.key] = e.models
@@ -295,6 +312,15 @@ func parse(raw []byte, projects []string) (*Config, string) {
 					cfg.Skip[project] = map[string]bool{}
 				}
 				cfg.Skip[project][ekv.key] = *e.skip
+			}
+			if e.by != nil {
+				if cfg.By == nil {
+					cfg.By = map[string]map[string]string{}
+				}
+				if cfg.By[project] == nil {
+					cfg.By[project] = map[string]string{}
+				}
+				cfg.By[project][ekv.key] = *e.by
 			}
 		}
 	}
@@ -367,17 +393,26 @@ func tiersSection(n *yaml.Node, projects []string) (map[string]map[string][]stri
 }
 
 // stepEntryVal is one decoded step entry: its models list when declared
-// (hasModels; a declared empty list governs) and its skip when declared.
+// (hasModels; a declared empty list governs), its skip when declared and
+// its takeover mode when declared (by).
 type stepEntryVal struct {
 	models    []string
 	hasModels bool
 	skip      *bool
+	by        *string
 }
 
-// stepEntry reads one `{ models: [...], skip: <bool> }` step entry at path
-// where: `models` and `skip` are its keys, at least one declared. The
-// retired `harness` key and the removed `attrs` key refuse with their
-// rewrite hints.
+// ByHuman is the one takeover mode a step entry's `by` key knows this
+// release: the step's work is done by a person (develop's merge — the
+// lane hands the PRs to the project's reviewer and takes their landing
+// by the human merge's landing rules, polyforge#36).
+const ByHuman = "human"
+
+// stepEntry reads one `{ models: [...], skip: <bool>, by: <mode> }` step
+// entry at path where: `models`, `skip` and `by` are its keys, at least
+// one declared, `by` never beside `skip` (a step is either switched off
+// or taken over). The retired `harness` key and the removed `attrs` key
+// refuse with their rewrite hints.
 func stepEntry(en *yaml.Node, where string) (stepEntryVal, string) {
 	var e stepEntryVal
 	if en.Kind != yaml.MappingNode {
@@ -398,17 +433,29 @@ func stepEntry(en *yaml.Node, where string) (stepEntryVal, string) {
 				return e, where + ".skip: must be true or false"
 			}
 			e.skip = &b
+		case "by":
+			var s string
+			if kv.val.Kind != yaml.ScalarNode || kv.val.Tag != "!!str" || kv.val.Decode(&s) != nil {
+				return e, where + ".by: takes `human` (the one takeover mode this release knows)"
+			}
+			if s != ByHuman {
+				return e, fmt.Sprintf("%s.by: takes `%s`, not %q (the one takeover mode this release knows)", where, ByHuman, s)
+			}
+			e.by = &s
 		case "attrs":
 			return e, where + ".attrs: " + AttrsRemovedHint
 		case "harness":
 			return e, where + ".harness: " + workflow.RetiredHarnessHint
 		default:
-			return e, fmt.Sprintf("%s.%s: not allowed (a step entry's one key is `models`, beside its `skip` switch)", where, kv.key)
+			return e, fmt.Sprintf("%s.%s: not allowed (a step entry's keys are `models`, beside its `skip` switch and `by` mode)", where, kv.key)
 		}
 	}
+	if e.skip != nil && e.by != nil {
+		return e, fmt.Sprintf("%s: declares both skip and by — a step is either switched off (skip: true) or taken over by a person (by: human), never both", where)
+	}
 	if mn == nil {
-		if e.skip == nil {
-			return e, where + ": entry is empty — declare `models` or `skip`, or remove it"
+		if e.skip == nil && e.by == nil {
+			return e, where + ": entry is empty — declare `models`, `skip` or `by`, or remove it"
 		}
 		return e, ""
 	}
@@ -557,6 +604,11 @@ func StaleKeys(cfg *Config, set workflow.LaneSet) ([]string, error) {
 			note(project, key)
 		}
 	}
+	for project, keys := range cfg.By {
+		for key := range keys {
+			note(project, key)
+		}
+	}
 	sort.Strings(stale)
 	return stale, nil
 }
@@ -577,6 +629,37 @@ func SkippedSteps(cfg *Config, lane *workflow.Lane, project string) []string {
 		}
 	}
 	return out
+}
+
+// HumanMergeSteps answers the work item's step modes: for each step of
+// lane that the project's yaml declares `steps.<project>.<step>.by`, the
+// mode — only where the lane declares the step `human_mergeable: true`.
+// A by on a step the lane does not carry governs nothing (a skip's rule;
+// the loader guarantees the mode itself is `human`): a lane that carries
+// no such step takes none of it, so a project's work items on every lane
+// without the step claim as usual. A by on a step the lane carries
+// without declaring it human_mergeable is the refusal (polyforge#36: a
+// lane that never takes the mode), so a claim of such a lane fails with
+// the reason. An absent by set answers (nil, "").
+func HumanMergeSteps(cfg *Config, lane *workflow.Lane, project string) (map[string]string, string) {
+	if cfg == nil || lane == nil || cfg.By[project] == nil {
+		return nil, ""
+	}
+	var modes map[string]string
+	for _, st := range lane.Steps {
+		mode, declared := cfg.By[project][st.ID]
+		if !declared {
+			continue
+		}
+		if !st.HumanMergeable {
+			return nil, fmt.Sprintf("steps.%s.%s.by: the %s lane declares no `human_mergeable: true` on step `%s`, so it cannot take the human mode — remove the by key or run the work item on a lane that declares it", project, st.ID, lane.Name, st.ID)
+		}
+		if modes == nil {
+			modes = map[string]string{}
+		}
+		modes[st.ID] = mode
+	}
+	return modes, ""
 }
 
 // StaleKeyHint is the rewrite a stale key's warning carries: what a key

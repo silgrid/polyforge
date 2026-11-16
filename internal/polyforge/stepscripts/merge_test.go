@@ -103,7 +103,7 @@ func TestMergeMergesAtTheVerifiedHead(t *testing.T) {
 		if ps := parents(t, w.dir(repo), r.MergeCommit); len(ps) != 2 || ps[1] != head {
 			t.Fatalf("%s: a merge commit of the verified head: %v", repo, ps)
 		}
-		if got := d.MergeCommits[repo]; len(got) != 1 || got[0] != r.MergeCommit {
+		if got := d.MergeCommits[repo]; len(got) != 1 || got[0] != (landedCommit{Sha: r.MergeCommit, Merge: true}) {
 			t.Fatalf("%s: merge_commits %v", repo, d.MergeCommits)
 		}
 		if res.Heads[repo] != head {
@@ -119,7 +119,7 @@ func TestMergeMergesAtTheVerifiedHead(t *testing.T) {
 	want, _ := json.Marshal(landingRecord{State: "landed", Repos: []landingRepo{
 		{Repo: "app", PR: app.PRURL, Head: appHead, LightVerifiedHead: appHead, MergeCommit: app.MergeCommit},
 		{Repo: "lib", PR: lib.PRURL, Head: libHead, LightVerifiedHead: libHead, MergeCommit: lib.MergeCommit},
-	}, MergeCommits: map[string][]string{"app": {app.MergeCommit}, "lib": {lib.MergeCommit}}})
+	}, MergeCommits: map[string][]landedCommit{"app": {{Sha: app.MergeCommit, Merge: true}}, "lib": {{Sha: lib.MergeCommit, Merge: true}}}})
 	if got := readLanding(t, out); string(got) != string(want) {
 		t.Fatalf("the landing record:\n got %s\nwant %s", got, want)
 	}
@@ -192,7 +192,7 @@ func TestMergeTakesAPRMergedElsewhereByTheLandingRule(t *testing.T) {
 	// as the light-verified one, accepted (nobody verified that merge)
 	want, _ := json.Marshal(landingRecord{State: "landed", Repos: []landingRepo{
 		{Repo: "app", PR: r.PRURL, Head: later, LightVerifiedHead: verifiedHead, MergeCommit: r.MergeCommit, Accepted: true},
-	}, MergeCommits: map[string][]string{"app": {r.MergeCommit}}})
+	}, MergeCommits: map[string][]landedCommit{"app": {{Sha: r.MergeCommit, Merge: true}}}})
 	if got := readLanding(t, out); string(got) != string(want) {
 		t.Fatalf("the landing record of a merge made elsewhere:\n got %s\nwant %s", got, want)
 	}

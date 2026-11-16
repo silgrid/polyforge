@@ -63,6 +63,11 @@ steps:
   - id: merge
     gate: true
     skippable: true
+    # the project may take the merge over: `steps.<project>.merge.by:
+    # human` in its workspace yaml (polyforge#36) — the PRs are handed
+    # to the project's reviewer, and the merge step takes the human
+    # landing by the human merge's landing rules. micro declares none.
+    human_mergeable: true
     on_fail: { target: sync }
     skill: merge
     model_tier: cheap

@@ -10,13 +10,29 @@
 # tree, so the id is a property of a commit.
 #
 # The test gate is one definition (docs/reference/release.md, "The test
-# gate"): the full plan of the tree's own scope engine — `workflows/_shared/scripts/verify-scope
-# --json --full --base HEAD`, the fast gates, the full commands and the
+# gate"): the full plan of the repository's scope engine — its own
+# `workflows/_shared/scripts/verify-scope` when the tree carries one,
+# else the lane's copy — asked `--json --full --base HEAD`, the fast
+# gates, the full commands and the
 # engine-appended dependency audit — run, every command, inside the
 # container built from .polyforge/Dockerfile.verify. The release runs it
 # (or reuses a green tag carrying this id, tools/green-tag check), and a
 # green tag is written only by that gate after a pass (the integrate
 # workflow's full gate, or a human's gate.py --mark-green).
+#
+# A tree without this script is served by the lane's own copy,
+# workflows/_shared/scripts/pfstep/gateid.py — the integrate workflow's
+# gate falls back to it (with the lane's scope engine) so a repo that
+# provides only .polyforge/verify-scope.conf and
+# .polyforge/Dockerfile.verify is gated. What that image must carry:
+# python3 (>= 3.9), git, bash and sh beside the repository's own
+# toolchain; a Go repository also govulncheck, one with an npm lockfile
+# also npm; the container must reach the vulnerability databases (the
+# full list and its reasons: docs/reference/release.md, "The test
+# gate"). The two implementations must
+# stay byte-identical, and the consistency test
+# (workflows/_shared/scripts/tests/test_gateid.py) runs both over the
+# same commits to pin it. This script stays the release's.
 #
 # What is hashed: sha256 over this text, every line ending in "\n":
 #

@@ -287,7 +287,12 @@ INTEGRATION_REPO = gd.Struct({
     "repo": gd.STR, "pr": gd.STR, "head": gd.STR, "light_verified_head": gd.STR, "merge_commit": gd.STR, "accepted": gd.BOOL,
 })
 INTEGRATION = gd.Struct({
-    "state": gd.STR, "repos": gd.List(INTEGRATION_REPO), "merge_commits": gd.Map(gd.List(gd.STR)),
+    "state": gd.STR, "repos": gd.List(INTEGRATION_REPO),
+    # the record's merge_commits name each landed commit with its merge
+    # flag since polyforge#36 (a bare string before it):
+    # rules.merge_commits_of reads them, both shapes, so the decode here
+    # takes the entries as they are
+    "merge_commits": gd.Map(gd.List(gd.ANY)),
     "waived": gd.List(gd.Struct({"gate": gd.STR, "ruling": gd.STR})),
 })
 
@@ -299,23 +304,6 @@ def integration_repo_json(r: Dict[str, Any]) -> Dict[str, Any]:
             out[k] = r[k]
     if r["accepted"]:
         out["accepted"] = True
-    return out
-
-
-def merge_commits_of(integration: Optional[Mapping[str, Any]]) -> Dict[str, List[str]]:
-    """A hand-off's merge_commits (repo -> its merge commits, oldest first);
-    a record of any other shape names none."""
-    v = (integration or {}).get("merge_commits")
-    if v is None:
-        return {}
-    mc, err = gd.decode(v, gd.Map(gd.List(gd.STR)))
-    if err is not None or mc is None:
-        return {}
-    out: Dict[str, List[str]] = {}
-    for repo in sorted(mc):
-        for c in mc[repo] or []:
-            if repo and c:
-                out.setdefault(repo, []).append(c)
     return out
 
 
@@ -341,7 +329,7 @@ def batch_item_of(p: Mapping[str, Any]) -> Dict[str, Any]:
         bi["slug"] = p["slug"]
     repos = dec["repos"]
     bi["repos"] = None if repos is None else [integration_repo_json(r) for r in repos]
-    bi["merge_commits"] = merge_commits_of(integ)
+    bi["merge_commits"] = rules.merge_commits_of(integ)
     if p["waivers"]:
         bi["waived"] = True
     rr = _number(integ.get("red_rounds"))
@@ -478,13 +466,9 @@ def read_pool(lister: HubLister, lane: str) -> Dict[str, Any]:
             integ = integ if isinstance(integ, dict) else {}
             st = integ.get("state")
             t["integration"] = st if isinstance(st, str) else ""
-            mc = integ.get("merge_commits")
-            if isinstance(mc, dict):
-                for repo, v in mc.items():
-                    for x in v if isinstance(v, list) else []:
-                        if isinstance(x, str) and repo and x:
-                            t["merge_commits"] = t["merge_commits"] or {}
-                            t["merge_commits"].setdefault(repo, []).append(x)
+            for repo, cs in rules.merge_commits_of(integ).items():
+                t["merge_commits"] = t["merge_commits"] or {}
+                t["merge_commits"][repo] = cs
         tickets: Dict[str, Any] = snap["tickets"] if snap["tickets"] is not None else {}
         tickets[ref] = t
         snap["tickets"] = tickets
@@ -621,7 +605,7 @@ def take_batch(repo_dir: Callable[[str], str], heads: Dict[str, Dict[str, str]],
     fresh_all: Dict[str, bool] = {}
     skipped: List[Dict[str, str]] = []
     for it in snap["items"] or []:
-        mc = merge_commits_of(it["integration"])
+        mc = rules.merge_commits_of(it["integration"])
         name = or_id(it["slug"], it["id"])
         if not mc:
             skipped.append({"wi": it["id"], "name": name, "why": "its record names no merge commit"})
@@ -760,7 +744,7 @@ def holds_of(repo_dir: Callable[[str], str], snap: Mapping[str, Any]) -> List[Di
             prs = [r["pr"] for r in dec["repos"] or []]
             if prs:
                 h["prs"] = prs
-        mc = merge_commits_of(integ)
+        mc = rules.merge_commits_of(integ)
         if mc:
             h["merge_commits"] = mc
         landed_fixes = []
@@ -1087,7 +1071,7 @@ def green_items(repo_dir: Callable[[str], str], snap: Mapping[str, Any], batch: 
     pool order, each with the record it moves to."""
     out: List[Dict[str, Any]] = []
     for it in snap["items"] or []:
-        covered = green_cover(repo_dir, merge_commits_of(it["integration"]), greens, tags)
+        covered = green_cover(repo_dir, rules.merge_commits_of(it["integration"]), greens, tags)
         if covered is None:
             continue
         s: Dict[str, Any] = {"state": INTEGRATION_MERGED, "batch": batch, "green_tags": sorted_dict(covered)}

@@ -132,6 +132,11 @@ type Step struct {
 	// Skippable is `skippable` (default false): a project may switch the
 	// step off (`steps.<project>.<step>.skip` in its workspace yaml).
 	Skippable bool
+	// HumanMergeable is `human_mergeable` (default false): a project may
+	// declare the step's work done by a person
+	// (`steps.<project>.<step>.by: human` in its workspace yaml,
+	// polyforge#36).
+	HumanMergeable bool
 	// ToolMinutes is `budget.tool_minutes` (0 = none declared).
 	ToolMinutes int
 	// ModelTier is `model_tier` ("" = none): a tier of the lane's
@@ -709,6 +714,9 @@ func (l *loader) step(file string, off int, n *yaml.Node, path string, seen map[
 	}
 	if v, ok := keys["skippable"]; ok {
 		s.Skippable, _ = l.boolValue(file, off, v, join(path, "skippable"))
+	}
+	if v, ok := keys["human_mergeable"]; ok {
+		s.HumanMergeable, _ = l.boolValue(file, off, v, join(path, "human_mergeable"))
 	}
 	if v, ok := keys["model_candidates"]; ok {
 		s.ModelCandidates = l.candidates(file, off, v, join(path, "model_candidates"))
