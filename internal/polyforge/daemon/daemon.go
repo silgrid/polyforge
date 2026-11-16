@@ -319,6 +319,10 @@ type Daemon struct {
 	// enqueue route all arrive at it).
 	analysisQ        *analysisQueue
 	analysisDispatch sync.Mutex
+	// analysisSweptAt is when a walk last read a blocked queue's head
+	// (the cleanup read, at most once per DrainInterval). Guarded by
+	// analysisDispatch.
+	analysisSweptAt time.Time
 
 	rt  *runtime.Runtime
 	obs *observe.Observe

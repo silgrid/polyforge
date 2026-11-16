@@ -273,15 +273,30 @@ func (d *Daemon) dispatchAnalysis() {
 		return
 	}
 	q := d.analysisQ
+	swept := false
 	for {
 		head := q.head()
 		if head == nil {
 			return
 		}
-		// The ticket is re-read and re-judged FIRST — a terminal or
-		// analyzed ticket's entry is dropped even while the lane is full
-		// (ruling 12's cleanup); a hub that cannot answer keeps the entry
-		// for the next tick, never drops it.
+		// The lane gate comes before any hub read: a lane that cannot take
+		// the entry (its slots full, the execution plane disabled, a
+		// rotation draining) is judged locally, and its queue is read only
+		// for the cleanup of ruling 12 — a terminal or analyzed ticket's
+		// entry is dropped even while the lane is blocked — at most once
+		// per DrainInterval, the period of the Cell's other hub polling
+		// (never on every 200ms tick: review r1#4).
+		blocked := d.analysisLaneBlocked()
+		if blocked && !swept {
+			now := time.Now()
+			if now.Sub(d.analysisSweptAt) < d.cfg.DrainInterval {
+				return
+			}
+			d.analysisSweptAt = now
+			swept = true
+		}
+		// The ticket is re-read and re-judged; a hub that cannot answer
+		// keeps the entry for the next walk, never drops it.
 		item, err := d.hub.GetWorkItem(head.WorkItemID)
 		if err != nil {
 			// a ticket the daemon can never read (gone, or not this key's)
@@ -298,13 +313,8 @@ func (d *Daemon) dispatchAnalysis() {
 			q.dropHead("no longer needs an analysis")
 			continue
 		}
-		// The cheap lane gate: a full bound must not attempt a spawn on
-		// every tick (the spawn's own refusal re-checks under the
-		// manager's lock, so the gate may race a spawn — the next tick
-		// retries).
-		slots := d.taskSlots()
-		if slots.Running() >= slots.Max() {
-			return
+		if blocked {
+			return // a live head the lane cannot take yet: it stays queued
 		}
 		_, err = d.analysisSpawn(item, head.Retries)
 		if err == nil || errors.Is(err, errNotNeeded) {
@@ -322,6 +332,16 @@ func (d *Daemon) dispatchAnalysis() {
 		fmt.Fprintf(os.Stderr, "daemon: analysis of %s dropped: %v\n", head.WorkItemID, err)
 		q.dropHead("dropped: " + err.Error())
 	}
+}
+
+// analysisLaneBlocked answers whether the task lane cannot take an
+// analysis now — a full bound, a disabled execution plane or a pending
+// rotation — judged locally, with no hub call. It is a cheap gate: the
+// spawn's own refusals re-check under the manager's lock, so the gate may
+// race a spawn — the next walk retries.
+func (d *Daemon) analysisLaneBlocked() bool {
+	slots := d.taskSlots()
+	return slots.Running() >= slots.Max() || d.execDisabledRefusal() != nil || d.drainRefusal() != nil
 }
 
 // analysisRequeueCap is ruling 13's per-ticket cap: an interrupted
