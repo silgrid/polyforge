@@ -237,3 +237,30 @@ func TestW51ConfigGetListKey(t *testing.T) {
 		t.Fatalf("config get = %q, want %q (the list's own rendering)", stdout, want)
 	}
 }
+
+// TestW51ErrorPatternsQuoteNeedingItems: a pattern that a double-quoted
+// value cannot hold verbatim — a `"` (the provider's JSON error body) or a
+// non-printable character such as a tab — is written as a single-quoted
+// literal and reads back exactly; a pattern holding ' but nothing to
+// escape stays writable; one holding both ' and " fits neither quote form
+// and is refused naming the key (self#NB1). Expected values are the
+// patterns the test writes.
+func TestW51ErrorPatternsQuoteNeedingItems(t *testing.T) {
+	key := w51Key(t, "model_error_patterns")
+	want := []string{`"code":"insufficient_quota"`, "model 'x' unavailable", "tab\there"}
+	val, _, err := configSetValue(nil, key, []string{`["\"code\":\"insufficient_quota\"", "model 'x' unavailable", "tab\there"]`})
+	if err != nil {
+		t.Fatalf("configSetValue: %v", err)
+	}
+	s, err := parseDaemonTable("cli.toml", []daemonKV{{key: "model_error_patterns", val: val, line: 1}})
+	if err != nil {
+		t.Fatalf("the rendered value must parse: %v (value %q)", err, val)
+	}
+	if !reflect.DeepEqual(s.ModelErrorPatterns, want) {
+		t.Fatalf("round trip = %q, want %q (value %q)", s.ModelErrorPatterns, want, val)
+	}
+	_, _, err = configSetValue(nil, key, []string{`["model 'x' said \"no\""]`})
+	if err == nil || !strings.Contains(err.Error(), "model_error_patterns") {
+		t.Fatalf("a pattern with both ' and \" must be refused naming the key: %v", err)
+	}
+}
