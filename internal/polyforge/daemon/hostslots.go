@@ -9,20 +9,19 @@ package daemon
 // holds none — plus claims in flight) and, when more than one Cell could
 // start something, admits them round-robin in profile order. No weights,
 // no preemption; an empty Cell holds no slot; a lowered limit kills
-// nothing (it only stops new starts). One-off tasks count against both
-// ceilings like work-item jobs: a task spawn reserves a slot of its Cell
-// through admitTask (refused, nothing queued, at either ceiling) and a job
-// start counts every Cell's running tasks. The task lanes of every Cell
-// also share one background-model-call bound of task.Limit (task.Slots);
-// a summarize call takes none of it (the summarize lane keeps its own
-// per-work-item in-flight and interval guards).
+// nothing (it only stops new starts). One-off tasks take NO execution slot
+// here (polyforge#74): max_concurrent_jobs and cell_max_concurrent_jobs
+// bound work-item jobs only, and the task lanes of every Cell share their
+// own bound — the Host's [daemon] max_concurrent_tasks (task.Slots, set
+// once by NewHost and moved live by the default Cell's reload); a spawn
+// past it is refused by the manager, never here. A summarize call takes
+// none of it either (the summarize lane keeps its own per-work-item
+// in-flight and interval guards).
 
 import (
-	"fmt"
 	"sort"
 	"sync"
 
-	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/polyforge/task"
 )
 
@@ -35,58 +34,25 @@ type hostSlots struct {
 	last string
 	// cells answers the serving Cells in profile order.
 	cells func() []*Daemon
-	// tasks is the shared background-model-call bound.
+	// tasks is the shared task-lane bound (max_concurrent_tasks).
 	tasks *task.Slots
-	// taskRun counts each Cell's running one-off tasks (profile -> n):
-	// they hold execution slots at both levels.
-	taskRun map[string]int
 }
 
 // busyLocked answers the Host's taken slots: every Cell's running jobs
-// and claims in flight plus every running task. s.mu held.
+// and claims in flight. One-off tasks hold none (polyforge#74). s.mu held.
 func (s *hostSlots) busyLocked(cells []*Daemon) int {
 	busy := 0
 	for _, c := range cells {
 		busy += c.q.Busy()
 	}
-	for _, n := range s.taskRun {
-		busy += n
-	}
 	return busy
 }
 
 // cellFullLocked reports whether d's own ceiling (the Host ceiling lowered
-// by cell_max_concurrent_jobs) is taken by its jobs and tasks. s.mu held.
+// by cell_max_concurrent_jobs) is taken by its jobs. One-off tasks hold
+// none (polyforge#74). s.mu held.
 func (s *hostSlots) cellFullLocked(d *Daemon) bool {
-	return d.q.Busy()+s.taskRun[d.profile()] >= d.q.MaxConcurrent()
-}
-
-// admitTask reserves one execution slot for a one-off task of d, or
-// refuses it (DAEMON-409, nothing queued) at the Host or the Cell ceiling.
-func (s *hostSlots) admitTask(d *Daemon) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if busy := s.busyLocked(s.cells()); busy >= s.max {
-		return &api.Error{Code: api.ErrDaemonConflict, Detail: fmt.Sprintf("task spawn refused: the Host ceiling (max_concurrent_jobs %d) is taken by running jobs and tasks over every Cell; nothing is queued — retry when a slot frees", s.max)}
-	}
-	if s.cellFullLocked(d) {
-		return &api.Error{Code: api.ErrDaemonConflict, Detail: fmt.Sprintf("task spawn refused: Cell %q's ceiling (%d) is taken by its running jobs and tasks; nothing is queued — retry when a slot frees", d.profile(), d.q.MaxConcurrent())}
-	}
-	if s.taskRun == nil {
-		s.taskRun = map[string]int{}
-	}
-	s.taskRun[d.profile()]++
-	return nil
-}
-
-// taskDone returns a slot admitTask reserved.
-func (s *hostSlots) taskDone(d *Daemon) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	p := d.profile()
-	if s.taskRun[p]--; s.taskRun[p] <= 0 {
-		delete(s.taskRun, p)
-	}
+	return d.q.Busy() >= d.q.MaxConcurrent()
 }
 
 // Max answers the Host ceiling.

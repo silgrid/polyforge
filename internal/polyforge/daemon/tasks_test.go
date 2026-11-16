@@ -1,7 +1,7 @@
 package daemon
 
 // tasks_test.go: the one-shot task daemon face: spawn /
-// list / show / cancel over the real UDS, the two-slot refusal, the named
+// list / show / cancel over the real UDS, the task-bound refusal, the named
 // missing-key refusal, and the task-peer guard (a task process tree is
 // refused every non-GET route, its read face stays open).
 
@@ -105,7 +105,7 @@ func TestTaskSpawnRefusals(t *testing.T) {
 			t.Fatalf("%s = %d %s, want a refusal naming %q", tc.body, code, body, tc.want)
 		}
 	}
-	for i := 0; i < task.Limit; i++ {
+	for i := 0; i < task.DefaultLimit; i++ {
 		if code, body := stepDo(t, td.sock, "POST", "/task/spawn", `{"project":"proj","prompt":"x"}`); code != 200 {
 			t.Fatalf("spawn %d = %d %s", i, code, body)
 		}
@@ -379,7 +379,7 @@ func TestTaskSpawnReporterResolutionIsBounded(t *testing.T) {
 }
 
 // waitTaskTerminal polls the manager until the task leaves running (the
-// two-slot limit never trips between a test's sequential spawns).
+// task bound never trips between a test's sequential spawns).
 func waitTaskTerminal(t *testing.T, td *testDaemon, id string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)

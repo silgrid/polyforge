@@ -61,48 +61,53 @@ func TestHostSlotsBoundTheSumAndRoundRobin(t *testing.T) {
 	}
 }
 
-// TestTasksCountAgainstBothCeilings: a one-off task takes an execution
-// slot at the Host and at its Cell — with a Host ceiling of 1 a running job
-// refuses a task and a running task holds back every job start; a Cell's
-// own ceiling counts its tasks too; a finished task frees its slot.
-func TestTasksCountAgainstBothCeilings(t *testing.T) {
+// TestTasksTakeNoExecutionSlot (polyforge#74, AC7): a one-off task
+// takes no execution slot at either ceiling — superseded
+// TestTasksCountAgainstBothCeilings, which pinned the old bind; the
+// task lane's own bound (max_concurrent_tasks) is the manager's check.
+// The full both-directions pin (a spawn past full job ceilings, a job
+// start past a full task bound) is TestW74TasksTakeNoJobSlots in
+// w74_no_jobslot_bind_test.go; this one keeps the local, queue-only
+// observation: busyLocked and cellFullLocked count jobs only, and a
+// daemon's admitted tasks move neither.
+func TestTasksTakeNoExecutionSlot(t *testing.T) {
 	def := slotCell("default", 4, "wi_d1", "wi_d2")
 	alpha := slotCell("alpha", 1, "wi_a1")
-	s := &hostSlots{max: 1, tasks: &task.Slots{}, cells: func() []*Daemon { return []*Daemon{def, alpha} }}
+	s := &hostSlots{max: 4, tasks: &task.Slots{}, cells: func() []*Daemon { return []*Daemon{def, alpha} }}
 
-	if err := s.admitTask(def); err != nil {
-		t.Fatalf("a free Host admits a task: %v", err)
+	// alpha's job takes its own ceiling of 1; a task of alpha is admitted
+	// anyway (the old code refused it at the Cell ceiling)
+	if e := s.take(alpha); e == nil || e.WorkItemID != "wi_a1" {
+		t.Fatalf("alpha's job must start: %+v", e)
 	}
-	if e := s.take(alpha); e != nil {
-		t.Fatalf("a job started past the Host ceiling taken by a task: %+v", e)
-	}
-	if err := s.admitTask(alpha); err == nil || !strings.Contains(err.Error(), "Host ceiling") {
-		t.Fatalf("a second task past the Host ceiling of 1 must be refused: %v", err)
-	}
-	s.taskDone(def)
-	if e := s.take(alpha); e == nil {
-		t.Fatal("the finished task must free its slot")
-	}
-	if err := s.admitTask(def); err == nil {
-		t.Fatal("a task past the Host ceiling taken by a job must be refused")
+	alpha.cfg.HostSlots = s
+	if err := alpha.admitTask(); err != nil {
+		t.Fatalf("a task must take no Cell execution slot: %v", err)
 	}
 
-	// the Cell ceiling counts the Cell's tasks
-	s.SetMax(4)
-	if err := s.admitTask(alpha); err == nil || !strings.Contains(err.Error(), `Cell "alpha"`) {
-		t.Fatalf("alpha's ceiling of 1 is taken by its job: %v", err)
+	// the Host/Cell counts are jobs only: admitted tasks move neither
+	def.cfg.HostSlots = s
+	if err := def.admitTask(); err != nil {
+		t.Fatalf("a task must take no execution slot: %v", err)
 	}
-	beta := slotCell("beta", 1, "wi_b1")
-	s.cells = func() []*Daemon { return []*Daemon{def, alpha, beta} }
-	if err := s.admitTask(beta); err != nil {
-		t.Fatalf("beta admits one task: %v", err)
+	if busy := s.busyLocked(s.cells()); busy != 1 {
+		t.Fatalf("the Host count is jobs only, got %d", busy)
 	}
-	if e := s.take(beta); e != nil {
-		t.Fatalf("beta's job started past its ceiling of 1 taken by a task: %+v", e)
+	if s.cellFullLocked(def) {
+		t.Fatal("the Cell ceiling counts jobs only — a task must not fill it")
 	}
-	if got := s.taskRun["beta"]; got != 1 {
-		t.Fatalf("beta's running tasks = %d", got)
+
+	// the Host ceiling taken by jobs refuses no task either
+	s.SetMax(2)
+	if e := s.take(def); e == nil {
+		t.Fatal("default's job must start and take the Host ceiling of 2")
 	}
+	if err := def.admitTask(); err != nil {
+		t.Fatalf("a task must take no Host execution slot: %v", err)
+	}
+	alpha.taskDone()
+	def.taskDone()
+	def.taskDone()
 }
 
 func TestNextTurn(t *testing.T) {
@@ -146,12 +151,12 @@ func TestSummarizeRunsWithTheTaskBoundFull(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(ws, workspace.FileName), []byte(taskYaml), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < task.Limit; i++ {
+	for i := 0; i < task.DefaultLimit; i++ {
 		if code, body := stepDo(t, td.sock, "POST", "/task/spawn", `{"project":"proj","prompt":"x"}`); code != 200 {
 			t.Fatalf("spawn %d = %d %s", i, code, body)
 		}
 	}
-	if n := slots.Running(); n != task.Limit {
+	if n := slots.Running(); n != task.DefaultLimit {
 		t.Fatalf("premise: every task slot is taken, running=%d", n)
 	}
 	if code, body := stepDo(t, td.sock, "POST", "/task/spawn", `{"project":"proj","prompt":"x"}`); code != 409 {

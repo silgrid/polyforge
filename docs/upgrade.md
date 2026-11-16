@@ -281,3 +281,20 @@ operator of a named Cell creates its `deploy-<profile>.env` before that
 Cell's next step-driven deploy, or the deploy refuses naming the missing
 file — the default Cell keeps `deploy.env`. A run by hand, without the
 Cell facts, keeps the old behavior and says the target check was skipped.
+
+## v0.2.1, the task concurrency bound is a Host key
+
+The one-off task lane's concurrency limit is no longer the code constant
+2: it is the Host-only `[daemon] max_concurrent_tasks` (default 2, so an
+untouched cli.toml keeps the old bound), live on reload — the default
+Cell's file moves the one bound every Cell's spawns share, the next spawn
+is judged by the new value, and a lowered bound refuses only new spawns
+(never stopping running tasks). One-off tasks no longer take a
+`max_concurrent_jobs` (or `cell_max_concurrent_jobs`) slot: those keys
+bound work-item jobs only, so a full job ceiling no longer refuses a task
+spawn and running tasks no longer hold back a job start. `pf ops status`'s
+`tasks: x/N` and `background_model_calls.bound` report the configured
+value. A spawn without budget flags now gets 40 minutes and 1000000 tokens
+(the token default is the ceiling, so `--max-tokens` can only lower it);
+the ceilings (60m / 1000000) are unchanged. Raising the bound needs no
+restart: `pf config set max_concurrent_tasks 8 --host` and a reload.

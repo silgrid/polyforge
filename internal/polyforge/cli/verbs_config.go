@@ -22,6 +22,7 @@ import (
 	"github.com/silgrid/polyforge/internal/polyforge/cellcfg"
 	"github.com/silgrid/polyforge/internal/polyforge/mapping"
 	"github.com/silgrid/polyforge/internal/polyforge/stepcall"
+	"github.com/silgrid/polyforge/internal/polyforge/task"
 	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
 
@@ -302,6 +303,10 @@ func daemonValue(d DaemonSettings, key string) string {
 		if d.MaxConcurrentJobs > 0 {
 			return strconv.Itoa(d.MaxConcurrentJobs)
 		}
+	case "max_concurrent_tasks":
+		if d.MaxConcurrentTasks > 0 {
+			return strconv.Itoa(d.MaxConcurrentTasks)
+		}
 	case "max_concurrent_bars":
 		if d.MaxConcurrentBars > 0 {
 			return strconv.Itoa(d.MaxConcurrentBars)
@@ -333,6 +338,8 @@ func daemonValue(d DaemonSettings, key string) string {
 // shown as <unset>).
 func daemonDefault(key string) string {
 	switch key {
+	case "max_concurrent_tasks":
+		return strconv.Itoa(task.DefaultLimit)
 	case "max_concurrent_bars":
 		return strconv.Itoa(DefaultMaxConcurrentBars)
 	case "bar_load_threshold":
@@ -834,7 +841,7 @@ func configSetValue(ctx *Context, k configKey, args []string) (string, []string,
 	}
 	if k.kind == keyDaemon {
 		switch k.name {
-		case "max_concurrent_jobs", "max_concurrent_bars", "bar_load_threshold", "cell_max_concurrent_jobs":
+		case "max_concurrent_jobs", "max_concurrent_tasks", "max_concurrent_bars", "bar_load_threshold", "cell_max_concurrent_jobs":
 			return strings.TrimSpace(val), nil, nil
 		default:
 			return strconv.Quote(val), nil, nil

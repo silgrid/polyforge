@@ -1220,7 +1220,7 @@ helpers, `directRows`, the flat direct area's row sequence,
   code points with `…`. Any other answer is the typed "the analyzer answered
   no structured result" (DAEMON-500) — the retired `conclusion` field is
   neither read nor answered, and there is no second shape. pf's typed refusals
-  keep their 4xx (DAEMON-409 both task slots busy, DAEMON-400 no task model
+  keep their 4xx (DAEMON-409 the task lane's Host bound busy, DAEMON-400 no task model
   chain, DAEMON-412 unmapped project); DAEMON-500 (a `failed`/`capped`/
   `interrupted` task, named in pf's text) and an unreachable pf answer 200
   `{error}` (this repo has no 5xx route path). The analysis exists only in the
@@ -1240,7 +1240,7 @@ helpers, `directRows`, the flat direct area's row sequence,
   exactly `{prompt, task_id, model, duration}` (a non-blank prompt and a task
   id required, extra fields dropped; any other shape is the typed "the prompt
   task answered no prompt", DAEMON-500). pf's typed refusals keep their 4xx
-  (DAEMON-409 both task slots busy, DAEMON-400 no task chain, DAEMON-412
+  (DAEMON-409 the task lane's Host bound busy, DAEMON-400 no task chain, DAEMON-412
   unmapped project, AUTH-403/CORE-404 an unreadable message); DAEMON-500 (a
   failed/capped/interrupted task or a blank report) and an unreachable pf
   answer 200 `{error}`. The prompt exists only in the response and in the
@@ -1364,8 +1364,8 @@ none, and there is no hover-only control or ⋯ menu. One click starts exactly
 one analysis of that message. The in-flight state is per message: while its
 request waits, that message's control is disabled (分析中…, a spinning icon)
 and starts no second task, another message's analysis may still start (pf has
-no analyzer lock — only the task lane's two slots bound it) and the chat stays
-usable. A refusal — both slots busy, no task model chain, an unmapped project,
+no analyzer lock — only the task lane's one Host bound (max_concurrent_tasks) bounds it) and the chat stays
+usable. A refusal — the task bound full, no task model chain, an unmapped project,
 a failed/capped/interrupted task, pf's own text — renders in that message's
 own slot with the control left available to retry, never in the composer's
 send-error line. Below the analysis floor (2.20.18) the click spawns no

@@ -9,11 +9,13 @@ the cwd never change their scope); `shutdown` always stops the whole Host
 and refuses `--profile`. Each Cell has its own machine id and heartbeat:
 the aggregate's `cells[]` rows carry `machine_id` and `heartbeat`. `max`
 is the Host ceiling over the SUM of every Cell's running jobs and one-off
-tasks (a Cell's optional `cell_max_concurrent_jobs` lowers its own share,
-tasks included; a task spawn at a taken ceiling is refused, nothing queued; Cells with
-queued work start round-robin); the aggregate also reports
-`background_model_calls: {bound: 2, running}` — every Cell's one-off tasks
-share that one bound (summarize calls take none of it). Machine-local operations only: what this daemon is
+jobs (a Cell's optional `cell_max_concurrent_jobs` lowers its own share;
+Cells with
+queued work start round-robin; one-off tasks take no job slot — polyforge#74);
+the aggregate also reports
+`background_model_calls: {bound, running}` — every Cell's one-off tasks
+share the task lane's one Host bound `[daemon] max_concurrent_tasks`
+(default 2, live on reload; summarize calls take none of it). Machine-local operations only: what this daemon is
 managing, whether it also pulls work by itself, and how it stops. The
 daemon has ONE switch and ONE number: `auto` (off = only explicit
 `pf submit`; on = the daemon additionally pulls the aihub ready queue by
@@ -72,7 +74,8 @@ The daemon's other production knobs are not ops verbs: they live in the
 the daemon reads itself. Change one with `pf
 config set <key> <value>`; a hand edit needs `pf config reload`. The running daemon applies the live
 keys (`step_timeout`, `stall_window`, `max_concurrent_jobs`,
-`cell_max_concurrent_jobs`, `max_concurrent_bars`, `agent_language`) without a restart, takes the `[workspace]`
+`max_concurrent_tasks`, `cell_max_concurrent_jobs`, `max_concurrent_bars`,
+`agent_language`) without a restart, takes the `[workspace]`
 mapping at the next claim, and reports the restart-only keys (`harness_root`, `operator_agent_dir`, and the flat
 `server`/`api_key`/`daemon_socket`) as pending until the next daemon
 start (`pf ops shutdown`, then `pf daemon ensure`). Job cap: `pf ops max

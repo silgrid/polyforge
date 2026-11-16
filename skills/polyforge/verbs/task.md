@@ -29,8 +29,9 @@ pf task cancel <id>
   `pf task show <id>`.
 - `--project` is required and is the only selector: a project **name** mapped
   on this daemon, never a filesystem path.
-- Budgets: `--max-duration` defaults to `20m` (ceiling `60m`) and
-  `--max-tokens` to `300000` (ceiling `1000000`). The token budget counts
+- Budgets: `--max-duration` defaults to `40m` (ceiling `60m`) and
+  `--max-tokens` to `1000000` — the token default IS the ceiling, so the
+  token budget can only be lowered, never raised. The token budget counts
   **fresh tokens** per model call: uncached input + cache creation/write +
   output. Context re-sent from the prompt cache (a cache read) is not charged
   again. Both are hard caps — a value above its ceiling, or one that is not a
@@ -55,8 +56,9 @@ spawn only after the owner approves:
 - **范围** — which sources, trees or topics are in scope, and explicitly what
   is out of scope.
 - **预算** — a wall-clock/token proposal with its reason: start from the
-  defaults `20m` / `300000` and raise it only when the errand needs it, never
-  above the ceilings.
+  defaults `40m` / `1000000` — the duration may be raised up to the `60m`
+  ceiling when the errand needs it, the token budget already sits at its
+  ceiling and can only be lowered.
 
 Name the model-config requirement in the same breath, so a missing
 `steps.<project>.task.models` (and missing project default) is fixed before
@@ -118,8 +120,10 @@ writes the report into the ticket's `## 分析` section (`pf file edit <id>
 - States: `running`, then exactly one of `completed`, `capped` (a budget was
   hit — the partial report is kept and marked truncated), `failed` (every
   candidate errored) or `interrupted` (`cancel` or a daemon restart).
-- At most 2 tasks run per daemon; a third spawn is refused immediately —
-  nothing is queued.
+- At most `max_concurrent_tasks` tasks run per Host (`[daemon]`, default 2,
+  live on reload; every Cell's spawns share it); a spawn beyond the bound is
+  refused immediately — nothing is queued. Tasks take no `max_concurrent_jobs`
+  slot.
 - Reports stay on this machine: the store keeps the newest 50 entries and the
   last 7 days, oldest removed first. Nothing is uploaded to AIHub or memory.
 - A daemon restart marks a running task `interrupted` and never resumes it:
@@ -149,7 +153,7 @@ Web's Polyforge panel shows it; `pf watch decisions` lists it on the CLI.
 | `DAEMON-414` | the project's workspace yaml fails the strict load (a bad key, or a candidate without a `<harness>:` prefix) | Fix the file the detail names, then retry once — nothing was spawned. |
 | `pf: task spawn: --max-duration … is above the 60m ceiling` / `--max-tokens … is above the 1000000 ceiling` (local, exit 1) | a budget above its ceiling | Lower the budget: the ceilings are code constants, not config. |
 | `pf: task spawn: --max-duration … is not a duration` / `--max-tokens … is not an integer` / `--max-duration … must be positive (got …)` / `--max-tokens … must be positive (got …)` (local, exit 1) | a malformed budget value, or a zero/negative one | Give a Go duration (`20m`, `1h30m`) or a positive integer; nothing was sent. |
-| `DAEMON-409` `task spawn refused: 2 tasks already running` | third concurrent spawn | Wait for a running task to reach a terminal state (nothing is queued) or `pf task cancel <id>` one. |
+| `DAEMON-409` `task spawn refused: N tasks already running (the limit is N, max_concurrent_tasks …)` | a spawn past the Host's task bound | Wait for a running task to reach a terminal state (nothing is queued) or `pf task cancel <id>` one. |
 | `DAEMON-409` `… draining for a pending connection rotation …` | the Cell's same-identity `api_key` rotation waits for it to go idle | Nothing was spawned or queued. Retry once `pf cell list` no longer shows the Cell `draining` (it switches by itself when its work, running tasks included, has ended). |
 | `DAEMON-409` `execution is disabled on this Cell: <reason>` | the Cell's execution plane is closed (no workspace, or no model-credential source) | Nothing was spawned. Relay the reason: it names the fix (a `[workspace]` mapping + `pf config reload`, or `[model] source` + a Host restart). |
 | `pf: task spawn: --models is not supported (…)` (local, exit 1) | asked for a spawn-level model override | Drop the flag: candidates come from `steps.<project>.task.models`, else `steps.<project>.default.models`. |

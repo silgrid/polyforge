@@ -336,6 +336,11 @@ type Daemon struct {
 
 	// tasks is the one-shot task manager (tasks.go).
 	tasks *task.Manager
+	// ownTaskSlots is the unhosted daemon's own task bound: a hosted
+	// Cell shares the Host's one (cfg.HostSlots.tasks, set by NewHost from
+	// the Host file's max_concurrent_tasks); without a Host this daemon
+	// owns the bound itself and a reload moves it live.
+	ownTaskSlots *task.Slots
 	// locateTranscript resolves the current dispatch's live transcript
 	// through the shared per-dispatch rule (runtime.LiveTranscript — the
 	// same function the commit-boundary sync sources from, not a
@@ -468,7 +473,7 @@ type Daemon struct {
 	reloadApplyMu sync.Mutex
 	// drainGate pairs every admission of new work — a submit's pending
 	// check + enqueue, the auto wave's check + enqueue, a task's check +
-	// slot reservation (admitTask) — with the drain switch's pending +
+	// held count (admitTask) — with the drain switch's pending +
 	// safe-idle decision (drain.go), so either the admission is refused
 	// or the switch sees it and waits. Held only across in-memory
 	// bookkeeping, never across file I/O or a Hub/AIHub round trip: a
@@ -730,6 +735,13 @@ func New(cfg Config) (*Daemon, error) {
 		d.verifyQ = newVerifyQueue(cfg.StartupFile.Daemon.MaxConcurrentBars, cfg.StartupFile.Daemon.BarLoadThreshold)
 	}
 	d.runCtx, d.cancelRun = context.WithCancel(context.Background())
+	if cfg.HostSlots == nil {
+		// unhosted: this daemon owns the task lane's bound itself, starting
+		// from its file's value (0 = the default) — a hosted Cell gets the
+		// Host's shared bound through cfg.HostSlots instead
+		d.ownTaskSlots = &task.Slots{}
+		d.ownTaskSlots.SetMax(cfg.StartupFile.Daemon.MaxConcurrentTasks)
+	}
 	d.tasks = d.newTaskManager(&rtCfg)
 	rtCfg.EventTap = d.tapRuntimeEvent
 	// the daemon-owned step environment every step process carries (the

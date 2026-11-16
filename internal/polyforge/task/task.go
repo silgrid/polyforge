@@ -48,19 +48,23 @@ func (s State) Terminal() bool {
 	return false
 }
 
-// The fixed limits and budgets of the task lane. They are
-// code constants: no `.polyforge.yaml` key may change them and no spawn
-// flag may raise them above the ceilings.
+// The task lane's budgets and the concurrency bound's default. The
+// ceilings are code constants: no `.polyforge.yaml` key may change them
+// and no spawn flag may raise them. The concurrency bound itself is the
+// Host's `max_concurrent_tasks` (live, shared by every Cell);
+// DefaultLimit is its one source for an unset key.
 const (
-	// Limit is the fixed concurrency limit of tasks per daemon, OUTSIDE
-	// the job slots. A spawn beyond it is refused immediately; nothing is
-	// queued.
-	Limit = 2
+	// DefaultLimit is the default concurrency bound of the task lane
+	// per Host (the [daemon] max_concurrent_tasks key's unset value):
+	// one shared, adjustable bound outside the job slots. A spawn beyond
+	// it is refused immediately; nothing is queued.
+	DefaultLimit = 2
 
 	// DefaultMaxDuration / DefaultMaxTokens are the budgets a spawn
-	// without budget flags gets.
-	DefaultMaxDuration = 20 * time.Minute
-	DefaultMaxTokens   = 300000
+	// without budget flags gets (polyforge#74: 40 minutes; the token
+	// default IS the MaxTokens ceiling, so --max-tokens can only lower it).
+	DefaultMaxDuration = 40 * time.Minute
+	DefaultMaxTokens   = 1000000
 
 	// MaxDuration / MaxTokens are the code-constant ceilings; a spawn
 	// above either is refused naming the ceiling.

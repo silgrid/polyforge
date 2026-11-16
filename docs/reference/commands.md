@@ -309,7 +309,8 @@ its four columns.
 - **Models.** `steps.<project>.task.models` (the only key under `task`), else
   `steps.<project>.default.models`, else the spawn is refused naming those keys.
   There is no `--models`, `--wait` or `--type`; each is refused.
-- **Budgets.** Wall clock 20m (ceiling 60m) and 300000 tokens (ceiling 1000000),
+- **Budgets.** Wall clock 40m (ceiling 60m) and 1000000 tokens (the
+  ceiling — a spawn can only lower the token budget),
   hard-killed on crossing; a larger `--max-duration`/`--max-tokens` is refused
   naming the ceiling. No yaml key changes them. The token budget counts
   **fresh tokens** per model call — uncached input, cache creation/write and
@@ -320,8 +321,10 @@ its four columns.
   hit; the partial report is kept and marked `truncated`), `failed` (every
   candidate errored) or `interrupted` (`cancel` or a daemon restart; never
   resumed).
-- **Limit.** At most 2 tasks run per daemon (outside `max_concurrent_jobs`); a
-  third spawn is refused, never queued. A Cell whose execution is disabled
+- **Limit.** At most `max_concurrent_tasks` one-off tasks run per Host
+  (`[daemon]`, default 2, live on reload — every Cell's spawns share it);
+  a spawn beyond it is refused `DAEMON-409`, never queued. Tasks take no
+  `max_concurrent_jobs` slot (polyforge#74). A Cell whose execution is disabled
   (`execution_disabled` on `pf cell list`) refuses every spawn `DAEMON-409`
   `execution is disabled on this Cell: <reason>`: no record, slot or run.
 - **Reports** live only on the machine (`<data-dir>/task-reports/`): the newest
@@ -1408,21 +1411,22 @@ recovery; the next successful Hub round trip clears the mark; every other
 Cell keeps serving.
 
 **Two-level concurrency:** that cap is the **Host ceiling** over the sum of
-every Cell's running work-item jobs, claims in flight and running one-off
-tasks (`pf task spawn`); a Cell's optional
-`cell_max_concurrent_jobs` lowers its own share, its tasks included — a
+every Cell's running work-item jobs and claims in flight; a Cell's optional
+`cell_max_concurrent_jobs` lowers its own share — a
 reload applies a changed value at once, clamped to the Host ceiling, and
-unset falls back to it (a task
-spawn at either taken ceiling is refused `DAEMON-409`, nothing queued; a
-running task holds back job starts the same way; while a connection rotation
+unset falls back to it (while a connection rotation
 is pending, a spawn is refused `DAEMON-409` and a running task keeps the Cell
 from switching) (a Host-wide `pf ops max`
 never lifts a Cell above it). When several Cells have startable work they
 start round-robin in profile order — no weights, no preemption; a Cell
 with nothing queued holds no slot; a lowered ceiling only stops new starts
 and kills nothing; a paused job (waiting for a human, no live process)
-holds no slot. Every Cell's one-off tasks share one Host background-model-call
-bound of 2 (summarize-lane calls take none of it; the lane runs at most one
+holds no slot. One-off tasks (`pf task spawn`) take NO job slot here
+(polyforge#74): `max_concurrent_jobs` and `cell_max_concurrent_jobs`
+bound work-item jobs only, and every Cell's tasks share their own Host
+bound — `[daemon] max_concurrent_tasks` (default 2, live on reload) —
+which the manager enforces alone (`DAEMON-409`, nothing queued);
+summarize-lane calls take none of it either (the lane runs at most one
 call per work item at a time, spaced by its interval): the Host aggregate of `pf ops status` (`GET /status`)
 reports `queue.max_concurrent` (the Host ceiling), `queue.running`/
 `queue.pending` summed over Cells, `background_model_calls: {bound,

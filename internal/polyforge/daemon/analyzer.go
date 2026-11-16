@@ -10,7 +10,8 @@ package daemon
 // terminal and answers one structured result; nothing else is stored (the
 // task record, under the lane's retention, is the only copy).
 //
-// There is no analyzer-wide lock: the task lane's two slots are the only
+// There is no analyzer-wide lock: the task lane's one Host bound
+// (max_concurrent_tasks) is the only
 // bound, and a slot-full spawn is the lane's retryable DAEMON-409 refusal.
 // A dropped client ends only the wait — the task runs to its end and its
 // report stays readable through `pf task show`.

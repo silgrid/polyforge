@@ -4,7 +4,8 @@ package daemon
 // reload re-reads the daemon's own cli.toml, runs the SAME shared
 // validator `pf config` runs, and applies each key by its class:
 //
-//   - live: max_concurrent_jobs (the queue), max_concurrent_bars/
+//   - live: max_concurrent_jobs (the queue), max_concurrent_tasks (the
+//     task lane's one bound), max_concurrent_bars/
 //     bar_load_threshold (the heavy-run admission),
 //     command_path (the next step process's PATH and the daemon's own
 //     git and gh),
@@ -305,6 +306,19 @@ func (d *Daemon) applyLive(key string, cfg cli.Config) error {
 		d.maxConfigured = n
 		d.reloadMu.Unlock()
 		return nil
+	case "max_concurrent_tasks":
+		// Host-only, live: the default Cell's file moves the ONE shared
+		// task bound every Cell's spawns read (0 = the default) — the
+		// next spawn is judged by the new value; a lowered bound refuses
+		// only new spawns, nothing running is stopped. An unhosted daemon
+		// owns the bound itself.
+		if d.cfg.HostSlots != nil {
+			if d.profile() == cellcfg.DefaultProfile {
+				d.cfg.HostSlots.tasks.SetMax(cfg.Daemon.MaxConcurrentTasks)
+			}
+		} else {
+			d.ownTaskSlots.SetMax(cfg.Daemon.MaxConcurrentTasks)
+		}
 	case "cell_max_concurrent_jobs":
 		// the Cell's own ceiling governs its admission at once: the file
 		// value clamped to the Host's current ceiling (unset = that
@@ -372,6 +386,8 @@ func configValueChanged(newCfg, baseline cli.Config, key string) bool {
 		return newCfg.Daemon.Python != baseline.Daemon.Python
 	case "max_concurrent_jobs":
 		return newCfg.Daemon.MaxConcurrentJobs != baseline.Daemon.MaxConcurrentJobs
+	case "max_concurrent_tasks":
+		return newCfg.Daemon.MaxConcurrentTasks != baseline.Daemon.MaxConcurrentTasks
 	case "max_concurrent_bars":
 		return newCfg.Daemon.MaxConcurrentBars != baseline.Daemon.MaxConcurrentBars
 	case "bar_load_threshold":
@@ -467,7 +483,7 @@ func (d *Daemon) readReloadFile() (cli.Config, error) {
 func keySectionOf(key string) string {
 	switch key {
 	case "step_timeout", "stall_window", "harness_root", "operator_agent_dir", "python",
-		"max_concurrent_jobs", "max_concurrent_bars", "bar_load_threshold",
+		"max_concurrent_jobs", "max_concurrent_tasks", "max_concurrent_bars", "bar_load_threshold",
 		"command_path", "cell_max_concurrent_jobs", "machine_id", "heartbeat_every", "agent_language":
 		return "daemon"
 	}
