@@ -14,10 +14,14 @@ with its leading whitespace removed that is neither blank nor a ``#``
 comment and whose key — the text before its first ``=`` — is one of
 ``stack``, ``fast_gate``, ``full_command``, ``check``,
 ``check_requires_env``, ``check_requires_cmd`` or ``check_timeout``,
-kept byte for byte in file order, each ending in a newline.
+kept byte for byte in file order, each ending in a newline (a last line
+without a trailing newline still hashes with one, as awk prints it).
 """
 
+import hashlib
 from typing import List, Mapping, Optional
+
+from . import git
 
 CONF = ".polyforge/verify-scope.conf"
 DOCKERFILE = ".polyforge/Dockerfile.verify"
@@ -34,33 +38,67 @@ GATE_KEYS = (
     b"check_requires_cmd",
     b"check_timeout",
 )
+# awk's [[:space:]] in the C locale, minus the \n that never occurs in a
+# \n-split line: the leading bytes the line rule strips.
+_LEADING_SPACE = b" \t\x0b\x0c\r"
 
 
 class GateIdError(Exception):
     """Why the gate id of a commit could not be computed."""
 
 
+def _commit(directory: str, rev: str, environ: Optional[Mapping[str, str]]) -> str:
+    """rev as a full commit id of the clone at directory (GateIdError
+    naming why it is not one, as tools/gate-id refuses it)."""
+    try:
+        out = git.git(directory, "rev-parse", "--verify", rev + "^{commit}", environ=environ)
+    except git.GitError as err:
+        raise GateIdError("%s is not a commit of %s: %s" % (rev, directory, err)) from None
+    return out.strip()
+
+
+def _blob(directory: str, commit: str, path: str, environ: Optional[Mapping[str, str]]) -> bytes:
+    """path's bytes as committed at commit (never the working tree)."""
+    c = git.run(directory, "show", commit + ":" + path, environ=environ)
+    if c.exit_code != 0 or c.error:
+        why = c.error or c.stderr.decode("utf-8", "replace").strip() or "exit %d" % c.exit_code
+        raise GateIdError("%s is not in the tree of %s (%s): %s" % (path, commit, directory, why))
+    return c.stdout
+
+
 def _gate_lines(conf: bytes) -> List[bytes]:
-    """conf's gate lines, byte for byte — stub."""
-    return []
+    """conf's gate lines, byte for byte (the line rule in the module's
+    doc), each ending in a newline, in file order."""
+    out: List[bytes] = []
+    for line in conf.split(b"\n"):
+        i = 0
+        while i < len(line) and line[i] in _LEADING_SPACE:
+            i += 1
+        s = line[i:]
+        if s == b"" or s[0:1] == b"#":
+            continue
+        eq = s.find(b"=")
+        if eq < 0:
+            continue
+        if s[:eq] in GATE_KEYS:
+            out.append(s + b"\n")
+    return out
 
 
 def hashed_text(conf: bytes, dockerfile: bytes) -> bytes:
-    """The exact bytes the id hashes (tools/gate-id --show's output) — stub."""
-    return b""
+    """The exact bytes the id hashes (tools/gate-id --show's output)."""
+    d = hashlib.sha256(dockerfile).hexdigest().encode("ascii")
+    return b"".join([HEADER + b"\n", b"dockerfile " + d + b"\n"] + _gate_lines(conf))
 
 
 def show(directory: str, commit: str, environ: Optional[Mapping[str, str]] = None) -> bytes:
-    """The exact bytes the id of commit hashes, read from that commit's
-    tree — stub."""
-    return b""
+    """The exact bytes the gate id of commit (a rev, resolved in the clone
+    at directory) hashes, both files read from that commit's tree; raises
+    GateIdError naming why it could not."""
+    sha = _commit(directory, commit, environ)
+    return hashed_text(_blob(directory, sha, CONF, environ), _blob(directory, sha, DOCKERFILE, environ))
 
 
 def gate_id(directory: str, commit: str, environ: Optional[Mapping[str, str]] = None) -> str:
-    """The gate id of commit: the sha256 of show's bytes — stub."""
-    return ""
-
-# The "environ" parameter is the hardened git environment gate.py runs
-# the tree's tools/gate-id under; the implementation reads the blobs
-# through it (pfstep.git). The stub imports nothing yet: its signatures
-# are the contract, and the first red is the test's assertion.
+    """The gate id of commit: the sha256 of show's bytes (64 hex)."""
+    return hashlib.sha256(show(directory, commit, environ)).hexdigest()
