@@ -34,21 +34,24 @@
 #   7. GOWORK=off GOOS=darwin GOARCH=amd64 go build -trimpath ./...
 #   8. cd workflows/_shared/scripts && python3 -m mypy --strict --python-version 3.9 pfstep tests *.py
 #      (pf CI's python-types job)
+#   9. GOWORK=off go test ./test/ -run '^(<whole-repo contract tests>)$' -count=1
+#      (the conf's named contract-scan fast check: the test/ contract tests
+#       that scan repository files run in every tier)
 #   full tier only:
-#   9. GOWORK=off go test $(GOWORK=off go list ./... | grep -v '/test$') -count=1
-#  10. GOWORK=off go test -race -count=1 -timeout 30m ./internal/polyforge/daemon/
+#  10. GOWORK=off go test $(GOWORK=off go list ./... | grep -v '/test$') -count=1
+#  11. GOWORK=off go test -race -count=1 -timeout 30m ./internal/polyforge/daemon/
 #      (the daemon package under the race detector)
-#  11. GOWORK=off sh test/e2e-parallel.sh
-#  12-16. the pi-web package's bar from pi-web/: npm ci,
+#  12. GOWORK=off sh test/e2e-parallel.sh
+#  13-17. the pi-web package's bar from pi-web/: npm ci,
 #      npm run lint, node_modules/.bin/tsc --noEmit, npm test,
 #      npm run test:e2e:all (a pi-web/ change forces the full tier)
 #   scoped tier (after the fast gates):
-#   9. GOWORK=off go test -count=1 <changed + reverse-dependency packages>
+#  10. GOWORK=off go test -count=1 <changed + reverse-dependency packages>
 #      (reverse dependencies are computed over each package's test binary
 #       closure, so a package reached only through a `_test.go` import is
 #       selected too)
-#  10. GOWORK=off go test -count=1 -run '^(...)$' <pkg>  (text-referenced tests)
-#  11. E2E_RUN='^(...)$' sh test/e2e-parallel.sh          (text-referenced ./test)
+#  11. GOWORK=off go test -count=1 -run '^(...)$' <pkg>  (text-referenced tests)
+#  12. E2E_RUN='^(...)$' sh test/e2e-parallel.sh          (text-referenced ./test)
 #
 # GOWORK=off keeps the commands correct in a workspace whose root carries an
 # unrelated go.work. The xrefs gate runs python3 directly: a missing python3
@@ -393,6 +396,7 @@ add_cmd "python3 -I docs/design/polyforge-vnext/tools/check-xrefs.py"
 add_cmd "GOWORK=off GOOS=darwin GOARCH=arm64 go build -trimpath ./..."
 add_cmd "GOWORK=off GOOS=darwin GOARCH=amd64 go build -trimpath ./..."
 add_cmd "cd workflows/_shared/scripts && python3 -m mypy --strict --python-version 3.9 pfstep tests *.py"
+add_cmd "GOWORK=off go test ./test/ -run '^(TestAsyncSettleDutyReachesItsSteps|TestBuildPlanUnitsCarryTheTestQualityRecord|TestC5GoCodeNamesNoIntegrateLane|TestCancelPromiseContract|TestContractScanRegistryCoversEveryContractTest|TestGrillStepsRequireQuestionTable|TestLaneRuleTextsContract|TestMicroCheckKeepsNothingTheContractScanCheckRuns|TestOwnerReviewDeclarationReachesAuthoringSteps|TestOwnerReviewDocsNameTheGate|TestOwnerReviewFragmentIsSingleSourceAndLaneNeutral|TestOwnerReviewQuestionIsHumanOnlyInTheSkill|TestPF25OverrideSkillContract|TestPF27PreSubmitAnalysisSkillContract|TestPF49SkillProjectRoutingContract|TestPF59PreExistingRedTextContract|TestReleaseAdoptionContract|TestReviewBlocksOnTestQualityViolations|TestSkillShowsNeedsInputQuestionVerbatim|TestTestQualityFragmentReachesItsSteps|TestV2StepTextsTeachNoRetiredWIAgentProtocol|TestW152FollowUpFragmentContract|TestW152FollowUpSkillStaysProjectionClean|TestW202SessionCloneSyncContract|TestW205FilingAcceptanceCarrierContract|TestW24ScopedGatesFilingHintContract|TestW25ReleaseTreeEngineAndLaneShipTogether|TestW294DoctorDocsTeachSVGGuidance|TestW294OutputFormatSkillSVGRule|TestW30FilingDeepeningContract|TestW320ReleaseBoundaryBehaviourUnchanged|TestW320ReleaseBoundaryComments|TestW320StepTextChecklistRenders|TestW320StepTextReviewJudges|TestW32OutputFormatSkillContract|TestW374DevelopDriverChecksContract|TestW403DevelopGrillAndE2EContract|TestW460SubmitAcceptanceSkillContract|TestW461AcceptanceAtCreationSkillContract|TestW47LaneDowngradeContract|TestW52BuildWritesTheChangeAnalysis|TestW52FixTicketsCarryTheMarker|TestW52ReviewChecksTheChangeAnalysis|TestW52TheReferencesStateTheTierAndTheUnion|TestW58GrillAttentionContract|TestW59TaskSkillContract|TestW80DefaultBranchFallbackStripsRemote|TestW80SharedFragmentsAreTheOneSource)$' -count=1"
 if [ "$mode" = "full" ]; then
 	add_cmd 'GOWORK=off go test $(GOWORK=off go list ./... | grep -v '"'"'/test$'"'"') -count=1'
 	add_cmd "GOWORK=off go test -race -count=1 -timeout 30m ./internal/polyforge/daemon/"
