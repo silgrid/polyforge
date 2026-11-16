@@ -43,10 +43,10 @@ func TestVerbQueueChildWaitingFor(t *testing.T) {
 	}
 	golden(t, "QueueChildWaitingFor", stdout,
 		`2 work item(s)
-SLUG  PROJECT    STATUS   SESSION  PRIORITY  BUNDLE   WAITING-FOR                          GOAL
-----  ---------  -------  -------  --------  -------  -----------------------------------  -----
+SLUG  PROJECT    STATUS   SESSION  PRIORITY  BUNDLE   WAITING-FOR                           GOAL
+----  ---------  -------  -------  --------  -------  ------------------------------------  -----
 pf-1  polyforge  queued   -        normal    develop  pf-2 (child, running), pf-4 (queued)  epic
-pf-2  polyforge  running  -        normal    develop  -                                    child
+pf-2  polyforge  running  -        normal    develop  -                                     child
 `)
 
 	// The detail line names both ways out, each for its own kind.
