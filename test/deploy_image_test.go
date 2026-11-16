@@ -166,7 +166,9 @@ echo "fake docker: unhandled: $*" >&2; exit 99
 `
 
 const fakeSSH = `#!/bin/sh
-while [ $# -gt 0 ]; do case "$1" in -o) shift 2 ;; *) break ;; esac; done
+# -l <user>: rsync's remote shell for a user@host source (polyforge#76's
+# deploy configurations name root@<host>) - the login name is irrelevant here
+while [ $# -gt 0 ]; do case "$1" in -o|-l) shift 2 ;; *) break ;; esac; done
 # ssh -G <host>: the local alias resolution deploy.sh's target check uses
 # (never a network call, so not logged; log-ssh holds network calls only).
 # FAKE_SSH_G_HOSTNAME overrides what the alias resolves to.
