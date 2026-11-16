@@ -40,7 +40,7 @@ func TestW78ParamsDocsRound2(t *testing.T) {
 	t.Run("command reference", func(t *testing.T) {
 		const rel = "docs/reference/commands.md"
 		text := w68Flat(t, rel)
-		cfg := w78Between(text, "`pf config workspace --cwd <dir>` reads", "`pf config migrate`")
+		cfg := w78Between(text, "`pf config workspace --cwd <dir>` reads", "`pf config migrate` (no argument")
 		if cfg == "" {
 			t.Fatalf("%s lost its `pf config workspace --cwd <dir>` paragraph", rel)
 		}
