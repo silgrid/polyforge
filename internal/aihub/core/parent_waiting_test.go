@@ -399,3 +399,73 @@ func TestDetachChildFromParent(t *testing.T) {
 	}
 	mustSessionClaim(t, m, env, p, "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2")
 }
+
+// TestParentBundleFrozenAfterChildClaim (polyforge#77, AC6): once any
+// child of a bundle-bound parent has been claimed, the parent's bundle
+// can no longer change — rename and unbind are refused CORE-400
+// PARENT_BUNDLE_FROZEN and nothing is written, even after that child
+// wrapped. Before any child claim the parent's own R2 window still
+// allows the change, and an unbound parent (registration ticket) may
+// still bind a bundle after its child was claimed.
+func TestParentBundleFrozenAfterChildClaim(t *testing.T) {
+	env, m := sessionEnv(t)
+	frozen := func(label string, err error) {
+		t.Helper()
+		if !IsCode(err, api.ErrCoreBadInput) || ErrorReason(err) != "PARENT_BUNDLE_FROZEN" {
+			t.Fatalf("%s: want CORE-400/PARENT_BUNDLE_FROZEN, got %v", label, err)
+		}
+	}
+	bundleOf := func(id string) string {
+		t.Helper()
+		wi, err := env.WIs.Get(id, GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if wi.BundleName == nil {
+			return ""
+		}
+		return *wi.BundleName
+	}
+
+	p := mustCreateExecWI(t, env, "bound parent", nil, "")
+	c1 := pwChild(t, env, p, "child one")
+	pwChild(t, env, p, "child two")
+
+	// No child claimed yet: rename and rename back pass.
+	if _, err := patchBundle(t, env, p, strPtrTest("lane-b")); err != nil {
+		t.Fatalf("rename before any child claim: %v", err)
+	}
+	if _, err := patchBundle(t, env, p, strPtrTest("demo-bundle")); err != nil {
+		t.Fatalf("rename back before any child claim: %v", err)
+	}
+
+	// One child claimed: the parent's bundle is frozen.
+	secret := "f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1"
+	mustSessionClaim(t, m, env, c1, secret)
+	_, err := patchBundle(t, env, p, strPtrTest("lane-b"))
+	frozen("rename after a child claim", err)
+	_, err = patchBundle(t, env, p, nil)
+	frozen("unbind after a child claim", err)
+	if got := bundleOf(p); got != "demo-bundle" {
+		t.Fatalf("refused PATCH wrote: bundle_name = %q, want demo-bundle", got)
+	}
+
+	// The freeze outlives the claim: the child wrapped, still refused.
+	if err := m.End(c1, api.SessionEndRequest{SessionID: secret, Status: api.StatusWrapped}, env.UserID); err != nil {
+		t.Fatalf("end: %v", err)
+	}
+	_, err = patchBundle(t, env, p, strPtrTest("lane-b"))
+	frozen("rename after the claimed child wrapped", err)
+
+	// An unbound parent is not under the new check: it binds after its
+	// child was claimed.
+	r := mustCreateWI(t, env, "unbound parent", nil, "")
+	rc := pwChild(t, env, r, "child of the unbound parent")
+	mustSessionClaim(t, m, env, rc, "f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2")
+	if _, err := patchBundle(t, env, r, strPtrTest("demo-bundle")); err != nil {
+		t.Fatalf("bind an unbound parent after its child was claimed: %v", err)
+	}
+	if got := bundleOf(r); got != "demo-bundle" {
+		t.Fatalf("bind did not land: bundle_name = %q", got)
+	}
+}
