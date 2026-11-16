@@ -566,7 +566,9 @@ func bundleRef(name *string) (bundleName any) {
 	return *name
 }
 
-// patchableFields (reference.md §4.1). Workflow refs and parent are immutable.
+// patchableFields (reference.md §4.1). Workflow refs are immutable;
+// parent_id may only be cleared (polyforge#77, parseDetachPatch: a child
+// is detached from its parent, never re-parented).
 // clean_pause rides the whitelist per the session-end paused verdict
 // (reference.md §3.3): `pf resume` clears the flag via WI PATCH — the
 // operator resume face.
@@ -577,7 +579,26 @@ func bundleRef(name *string) (bundleName any) {
 var patchableFields = map[string]bool{
 	"goal": true, "content": true, "labels": true, "priority": true,
 	"milestone": true, "waiting_on": true, "clean_pause": true,
-	"bundle_name": true,
+	"bundle_name": true, "parent_id": true,
+}
+
+// parseDetachPatch reads a PATCH parent_id field (polyforge#77): absent →
+// false; null or "" → true (detach); any other value is refused — the
+// field only clears.
+func parseDetachPatch(fields map[string]json.RawMessage) (bool, error) {
+	raw, ok := fields["parent_id"]
+	if !ok {
+		return false, nil
+	}
+	var v *string
+	if json.Unmarshal(raw, &v) != nil {
+		return false, Fail(api.ErrCoreBadInput, "", "parent_id must be null or \"\"")
+	}
+	if v != nil && *v != "" {
+		return false, Fail(api.ErrCoreBadInput, "IMMUTABLE",
+			"parent_id can only be cleared (null or \"\"): a child is detached, never re-parented")
+	}
+	return true, nil
 }
 
 // bundlePatch is a parsed PATCH bundle_name field. Name nil = the
@@ -704,6 +725,10 @@ func (m *WIManager) Patch(idOrSlug string, fields map[string]json.RawMessage, ac
 	if err != nil {
 		return nil, err
 	}
+	detach, err := parseDetachPatch(fields)
+	if err != nil {
+		return nil, err
+	}
 	id, err := m.Resolve(idOrSlug)
 	if err != nil {
 		return nil, err
@@ -725,18 +750,29 @@ func (m *WIManager) Patch(idOrSlug string, fields map[string]json.RawMessage, ac
 	defer tx.Rollback()
 
 	var status string
-	if err := tx.QueryRow(`SELECT status FROM work_items WHERE id=?1`, id).Scan(&status); err != nil {
+	var oldParent sql.NullString
+	if err := tx.QueryRow(`SELECT status, parent_id FROM work_items WHERE id=?1`, id).Scan(&status, &oldParent); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, Fail(api.ErrCoreNotFound, "", "work item %s", id)
 		}
 		return nil, err
 	}
-	if isTerminal(status) {
+	// A detach alone passes a terminal child: a failed or canceled child
+	// holds its bundle-bound parent until it is detached (polyforge#77).
+	if isTerminal(status) && !(detach && len(fields) == 1) {
 		return nil, Fail(api.ErrCoreGone, "TERMINAL_STATE", "work item is in terminal state %s", status)
 	}
+	if detach && status == api.StatusRunning {
+		return nil, Fail(api.ErrCoreConflict, "CHILD_RUNNING",
+			"cannot detach a running work item from its parent: end its session first")
+	}
+	detach = detach && oldParent.Valid && oldParent.String != "" // clearing no parent writes nothing
 
 	sets := []string{"updated_at=?"}
 	args := []any{Now()}
+	if detach {
+		sets = append(sets, "parent_id=NULL")
+	}
 	for _, field := range []string{"goal", "content", "labels", "priority", "milestone", "waiting_on", "clean_pause"} {
 		raw, ok := fields[field]
 		if !ok {
@@ -828,6 +864,12 @@ func (m *WIManager) Patch(idOrSlug string, fields map[string]json.RawMessage, ac
 	}
 	if err := appendEventTx(tx, id, Now(), actor, "wi_content_updated", nil); err != nil {
 		return nil, err
+	}
+	if detach {
+		if err := appendEventTx(tx, id, Now(), actor, "wi_detached",
+			map[string]any{"parent_id": oldParent.String}); err != nil {
+			return nil, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
