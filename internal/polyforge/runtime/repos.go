@@ -398,16 +398,21 @@ func checkoutTargetBranch(ctx context.Context, j *job, dir string) error {
 }
 
 // pushTargetBranch pushes the locally created target branch to the
-// origin non-forced (polyforge#80): the daemon's one outward write to
-// the task repos' origin, creating the branch other claims of the same
-// parent share. The push runs in the clone's own credential context
-// (cloneGitEnv — the same one that cloned), so nothing is injected the
-// clone itself could not do. A rejection — the remote branch exists at
-// another tip — is the caller's, not the push's, to judge: the caller
-// falls back to the remote's copy. pushTargetBranchFn is the seam the
-// race test parks both claims' pushes at.
+// origin as a CREATE-ONLY, non-forced push (polyforge#80; owner ruling
+// 2026-11-16T17:05:35Z over review r1#6): --force-with-lease with an
+// empty expectation is rejected when the remote already carries the
+// branch, whatever the tips' relation, so the daemon never moves the
+// shared branch a first claim created — a plain non-forced push would
+// fast-forward it in the window where a later clone's default tip
+// descends from it — and the caller falls back to the remote's copy
+// (the ticket's 「被拒（已存在）就用远端已有的的那条」). The push runs
+// in the clone's own credential context (cloneGitEnv — the same one
+// that cloned), so nothing is injected the clone itself could not do.
+// pushTargetBranchFn is the seam the race tests park claims' pushes at.
 func pushTargetBranch(ctx context.Context, dir, name string) error {
-	if out, err := gitTaskEnv(ctx, cloneGitEnv(), dir, "push", "origin", "refs/heads/"+name+":refs/heads/"+name); err != nil {
+	if out, err := gitTaskEnv(ctx, cloneGitEnv(), dir, "push",
+		"--force-with-lease=refs/heads/"+name+":", "origin",
+		"refs/heads/"+name+":refs/heads/"+name); err != nil {
 		return fmt.Errorf("%v: %s", err, strings.TrimSpace(out))
 	}
 	return nil

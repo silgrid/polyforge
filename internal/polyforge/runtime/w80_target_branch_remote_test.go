@@ -82,9 +82,9 @@ func TestW80TargetBranchPushRejectedUsesRemote(t *testing.T) {
 	src := t.TempDir()
 	tip := w079GitRepo(t, src, "readme.txt", "main\n")
 	// the remote copy another claim will have created and pushed by the
-	// time both of these pushes run: an unrelated tip (a child of the
-	// default one, so pushing the default tip onto it is not a
-	// fast-forward and a non-forced push is rejected)
+	// time both of these pushes run: an unrelated tip — the create-only
+	// lease rejects both pushes because the branch exists, whatever the
+	// tips' relation (pushTargetBranch, r1#6)
 	other := t.TempDir()
 	if out, err := exec.Command("git", "clone", "--quiet", "--", src, other).CombinedOutput(); err != nil {
 		t.Fatalf("clone: %v: %s", err, out)
