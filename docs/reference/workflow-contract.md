@@ -83,6 +83,7 @@ at once, each with its code, file, line and YAML path.
 | `name` | string, required; `^[a-z][a-z0-9-]{0,39}$` and equal to the lane's directory name (`WFC-113` missing, `WFC-120` otherwise) |
 | `description` | string, required, non-empty (`WFC-121`) |
 | `max_rewinds` | int ≥ 0; the lane's one automatic rewind budget across every gate; required when any step declares `on_fail` (`WFC-113`), refused when none does (`WFC-112`); `0` = every gate FAIL asks the owner first |
+| `uncounted_rewinds` | a map holding `reason_contains` and `max` ([uncounted_rewinds keys](#uncounted_rewinds-keys)): the lane-declared class of gate-FAIL rewinds charged to no budget — a gate FAIL whose one-line hand-off `--reason` carries `reason_contains` rewinds without spending `max_rewinds`, counted on its own toward `max` (the default 2 when the lane declares none; `0` = every matching FAIL asks the owner first, exactly like a spent `max_rewinds`); allowed only when a step declares `on_fail`, refused otherwise (`WFC-112`) |
 | `exclusive` | bool, default `false` ([Properties](#properties)): `true` holds the lane to one unfinished work item per project — a create on it reaches aihub exclusive, refused `CORE-409` `OPEN_ON_BUNDLE` while another work item of the project on the lane is not wrapped, failed or canceled; a built-in lane and a user lane alike; any other value is `WFC-112` |
 | `acceptance` | `required` or `none`, default `required` ([Properties](#properties)): whether a work item on the lane must list an acceptance criterion (`## Acceptance` or `## 验收`) before it runs; `none` is a lane with no criterion to list — the shipped integrate and release lanes declare it, develop and micro do not; a built-in lane and a user lane alike; any other value is `WFC-112` |
 | `defaults` | a map holding `model_candidates` and `tiers` |
@@ -124,7 +125,26 @@ process runs.
 | `target` | an earlier step id, required |
 
 A FAIL handed off without `--per-owner` is charged to `max_rewinds`; one
-handed off with `--per-owner` (the owner said so) is not.
+handed off with `--per-owner` (the owner said so) is not. A FAIL whose
+reason falls in the lane's `uncounted_rewinds` class is charged to no
+budget either and counted on its own — [below](#uncounted_rewinds-keys).
+
+### uncounted_rewinds keys
+
+| Key | Rule |
+|---|---|
+| `reason_contains` | string, required, non-empty (`WFC-113` missing, `WFC-112` blank): the substring a gate FAIL's one-line hand-off reason carries when its rewind falls in the class — the stable prefix of the failing step's script summary; the rest of the line varies |
+| `max` | int ≥ 0, default 2 (`WFC-112` otherwise): the class's own rewind budget, held at `pf step handoff` exactly like `max_rewinds` — once the class's uncounted rewinds reach it, a matching FAIL without the owner's word is refused and the gate asks the owner first; `0` = every matching FAIL asks the owner |
+
+The class is the lane's own declaration: the driver matches the declared
+substring against the FAIL's one-line `--reason` and names no lane, project
+or failure of its own. A matching FAIL rewinds charged to nothing and
+counted apart (the rewind ledger's `uncounted` class, `pf watch`'s
+`uncounted` tally); every other FAIL — a FAIL whose reason falls outside
+the class, or a lane without the declaration — is charged to
+`max_rewinds` as before. The cap keeps an ever-moving default branch
+from looping a work item for ever: past it the lane stops and waits for
+the owner, exactly like a spent `max_rewinds`.
 
 ### resources keys
 

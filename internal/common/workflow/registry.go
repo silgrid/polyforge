@@ -31,14 +31,21 @@ type keySpec struct {
 
 // laneKeys is the closed key set of a workflow.yaml.
 var laneKeys = map[string]keySpec{
-	"contract":    {Type: "int, required, == ContractVersion", Required: true, Schema: jsonSchema{"const": ContractVersion}},
-	"name":        {Type: "string, required, ^[a-z][a-z0-9-]{0,39}$, == directory name", Required: true, Schema: pattern(idPattern.String())},
-	"description": {Type: "string, required, non-empty", Required: true, Schema: pattern(`\S`)},
-	"max_rewinds": {Type: "int >= 0; required when any step declares on_fail, refused otherwise", Schema: jsonSchema{"type": "integer", "minimum": 0}},
-	"acceptance":  {Type: "required|none (default required): whether a work item on the lane must list an acceptance criterion before it runs", Schema: jsonSchema{"enum": []string{AcceptanceNone, AcceptanceRequired}}},
-	"exclusive":   {Type: "bool (default false): one unfinished work item per project on the lane — a create on it reaches aihub exclusive, refused while another is not wrapped, failed or canceled", Schema: jsonSchema{"type": "boolean"}},
-	"defaults":    {Type: "map {model_candidates, tiers}", Schema: object(defaultsKeys)},
-	"steps":       {Type: "[]step, required, non-empty", Required: true, Schema: jsonSchema{"type": "array", "minItems": 1, "items": object(stepKeys)}},
+	"contract":          {Type: "int, required, == ContractVersion", Required: true, Schema: jsonSchema{"const": ContractVersion}},
+	"name":              {Type: "string, required, ^[a-z][a-z0-9-]{0,39}$, == directory name", Required: true, Schema: pattern(idPattern.String())},
+	"description":       {Type: "string, required, non-empty", Required: true, Schema: pattern(`\S`)},
+	"max_rewinds":       {Type: "int >= 0; required when any step declares on_fail, refused otherwise", Schema: jsonSchema{"type": "integer", "minimum": 0}},
+	"uncounted_rewinds": {Type: "map {reason_contains, max}: the lane-declared class of gate-FAIL rewinds charged to no budget — a gate FAIL whose one-line hand-off reason carries reason_contains rewinds without spending max_rewinds, counted on its own toward max (the default 2 when the lane declares none; 0 = every matching FAIL asks the owner first, exactly like a spent max_rewinds); allowed only when a step declares on_fail, refused otherwise", Schema: object(uncountedRewindsKeys)},
+	"acceptance":        {Type: "required|none (default required): whether a work item on the lane must list an acceptance criterion before it runs", Schema: jsonSchema{"enum": []string{AcceptanceNone, AcceptanceRequired}}},
+	"exclusive":         {Type: "bool (default false): one unfinished work item per project on the lane — a create on it reaches aihub exclusive, refused while another is not wrapped, failed or canceled", Schema: jsonSchema{"type": "boolean"}},
+	"defaults":          {Type: "map {model_candidates, tiers}", Schema: object(defaultsKeys)},
+	"steps":             {Type: "[]step, required, non-empty", Required: true, Schema: jsonSchema{"type": "array", "minItems": 1, "items": object(stepKeys)}},
+}
+
+// uncountedRewindsKeys is the closed key set of `uncounted_rewinds`.
+var uncountedRewindsKeys = map[string]keySpec{
+	"reason_contains": {Type: "string, required, non-empty: the substring a gate FAIL's one-line hand-off reason carries when its rewind falls in the class (the stable prefix of the failing step's script summary; the rest of the line varies)", Required: true, Schema: pattern(`\S`)},
+	"max":             {Type: "int >= 0 (the default 2 when the lane declares none): the class's own rewind budget, held at `pf step handoff` exactly like max_rewinds", Schema: jsonSchema{"type": "integer", "minimum": 0}},
 }
 
 // defaultsKeys is the closed key set of `defaults`.
