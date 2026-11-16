@@ -3,8 +3,10 @@
 and the analysis's tests run beside it — the union is add-only — under the
 analysis's supplement cap (the first entries in listed order, the rest cut
 and named), and an entry whose file is not at HEAD or whose name is not in
-the file fails its check naming it. A missing or malformed analysis file
-is the invocation's (exit 2)."""
+the file fails its check naming it — a `.`-, `::`- or `/`-joined name
+exists when every one of its segments is in the file, and the missing
+segment is named. A missing or malformed analysis file is the
+invocation's (exit 2)."""
 
 import json
 import os
@@ -64,6 +66,16 @@ def analysis_fixture(root: str) -> Tuple[Fixture, str]:
     """The app repo (a change over base) whose engine plans one fast
     command, and the fake engine answering it."""
     fx = Fixture(root, {"app": {"tests/test_a.py": "def test_ok():\n"}})
+    fx.commit_in_repo("app", {"lib/x.py": "x = 2\n"}, "feature")
+    eng = fake_engine(root, {"app": report("scoped", cmd_of("gate", "fast", "echo plan-ok"))})
+    return fx, eng
+
+
+def analysis_name_fixture(root: str) -> Tuple[Fixture, str]:
+    """The app repo whose test file carries a class — a qualified name's
+    segments sit on separate lines, so the joined name appears nowhere
+    as one string — and the fake engine answering it."""
+    fx = Fixture(root, {"app": {"tests/test_a.py": "class BuildCase:\n    def test_ok(self):\n"}})
     fx.commit_in_repo("app", {"lib/x.py": "x = 2\n"}, "feature")
     eng = fake_engine(root, {"app": report("scoped", cmd_of("gate", "fast", "echo plan-ok"))})
     return fx, eng
@@ -181,6 +193,48 @@ class AnalysisTest(unittest.TestCase):
         self.assertEqual(no_name["status"], "fail", no_name)
         self.assertIn("test_no_such_one", no_name.get("detail", ""), no_name)
         self.assertIn("tests/test_a.py", no_name.get("detail", ""), no_name)
+
+    def test_missing_segment_fails_its_check_naming_the_segment(self) -> None:
+        """A joined name with a segment missing from the file still says the test does not exist, naming that segment."""
+        fx, eng = analysis_name_fixture(self.root)
+        path = analysis_file(fx, {"tests": [
+            entry("app", "tests/test_a.py", name="BuildCase.test_no_such"),
+            entry("app", "tests/test_a.py", name="NoSuchCase.test_ok", id="a2"),
+        ]})
+        r = self.run_analysis(fx, eng, path)
+        self.assertEqual(r.exit, 1, r.result.get("summary"))
+        for id_, seg in (("a1", "test_no_such"), ("a2", "NoSuchCase")):
+            a = r.check("app:analysis:" + id_)
+            self.assertEqual(a["status"], "fail", a)
+            self.assertIn("its name segment", a.get("detail", ""), a)
+            self.assertIn(seg, a.get("detail", ""), a)
+            self.assertIn("does not exist", a.get("detail", ""), a)
+            self.assertIn("tests/test_a.py", a.get("detail", ""), a)
+
+    def test_qualified_name_passes_when_each_segment_is_in_the_file(self) -> None:
+        """A joined name exists when every segment is in the file, whichever separator joins it."""
+        fx, eng = analysis_name_fixture(self.root)
+        path = analysis_file(fx, {"tests": [
+            entry("app", "tests/test_a.py", name="BuildCase.test_ok"),
+            entry("app", "tests/test_a.py", name="BuildCase::test_ok", id="a2"),
+            entry("app", "tests/test_a.py", name="BuildCase/test_ok", id="a3"),
+        ]})
+        r = self.run_analysis(fx, eng, path)
+        self.assertEqual(r.exit, 0, r.result.get("summary"))
+        for i in (1, 2, 3):
+            a = r.check("app:analysis:a%d" % i)
+            self.assertEqual(a["status"], "pass", a)
+
+    def test_bare_name_keeps_the_verbatim_rule_without_segments(self) -> None:
+        """A name with no separator stays verbatim: one missing from the file fails with the unchanged wording."""
+        fx, eng = analysis_name_fixture(self.root)
+        path = analysis_file(fx, {"tests": [entry("app", "tests/test_a.py", name="test_no_such_one")]})
+        r = self.run_analysis(fx, eng, path)
+        self.assertEqual(r.exit, 1, r.result.get("summary"))
+        a = r.check("app:analysis:a1")
+        self.assertEqual(a["status"], "fail", a)
+        self.assertIn('its name "test_no_such_one" appears nowhere in', a.get("detail", ""), a)
+        self.assertIn("does not exist", a.get("detail", ""), a)
 
     def test_entry_of_an_unknown_repo_fails(self) -> None:
         """An entry naming a repo that is not a task repo of the capsule
