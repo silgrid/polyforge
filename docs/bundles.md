@@ -165,6 +165,19 @@ and YAML path, before a claim ever meets it. The keys:
   this applies — neither check runs. The shipped `integrate` and
   `release` declare `none`; `develop` and `micro` do not. A user lane may
   declare it too; any other value is `WFC-112`.
+- `children_branch:` — the branch-name template a sub-ticket of a work
+  item on the lane is checked out on: it must carry `{seq}` (the parent's
+  seq — polyforge#1 → `epic/1`, one branch for every sub-ticket of the
+  one parent) and may carry `{project}` (the parent's project name); the
+  rest is literal and the substituted name must be a legal git branch
+  ref — anything else is `WFC-112`. The sub-ticket's first claim fixes
+  the branch into `runtime-state/target-branch.json` and checks its task
+  repos out on it, creating it on each origin from the default branch
+  tip with a create-only, non-forced push when the remote does not carry
+  it; a claim that cannot read the parent, or the parent's lane, is
+  refused. No shipped lane declares it yet (the epic lane is a
+  follow-up); a parent whose lane declares none leaves the sub-ticket
+  untouched.
 - `defaults:` — `model_candidates`, the workflow-level fallback chain
   (the format and the whole precedence chain: the
   [config reference](reference/config.md)), and `tiers`.
