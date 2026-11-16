@@ -77,7 +77,10 @@ block per Cell; the aggregate's `tasks` counts — running, completed and the
 terminal states — sum every Cell with a running daemon, so the Tasks badge
 and re-read trigger cover all of them); `PF_PROFILE` and the cwd never change their scope — only
 an explicit `--profile NAME` targets one Cell. `pf ops shutdown` is always
-Host-level: it stops every Cell and refuses `--profile`.
+Host-level: it stops every Cell and refuses `--profile`. `pf ops
+unclassified` is always Host-level too: it lists the last 7 days'
+fallback-classified error texts of every Cell, deduplicated with counts,
+and refuses `--profile`.
 
 ## The verb index
 

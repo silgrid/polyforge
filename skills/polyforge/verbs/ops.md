@@ -43,6 +43,7 @@ the daemon lives.
 ```
 pf ops status                                        # local jobs + auto/max + queue counters + the model-health summary (never reads aihub)
 pf ops models                                        # the model+effort x step profile over the events-retention window (read-only; --json re-emits GET /models)
+pf ops unclassified                                  # Host-level: the last 7 days' error texts that fell into the classification fallback, deduplicated with counts across every Cell (read-only; --json re-emits GET /ops/unclassified; refuses --profile)
 pf ops auto [on|off]                                 # bare: show; on: pull the ready queue itself; off: explicit pf submit only
 pf ops max [N]                                       # bare: show; N >= 1: the cap until the daemon restarts or a pf config set/reload changes [daemon] max_concurrent_jobs (last action wins)
 pf ops role [interactive|runner] [--force|--if-unset] # bare: show this machine's role; interactive|runner: ask the heartbeat for it; --force: take interactive over from the machine holding it; --if-unset: only while no operator chose a role
