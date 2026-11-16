@@ -324,6 +324,37 @@ if [ -n "${HOME:-}" ] && [ -f "$DEPLOY_ENV" ]; then
 fi
 GH_REPO="${GH_REPO:-silgrid/polyforge}"
 
+# tc_mismatch ("" = the target matches): the deploy target a step
+# process must reach is its work item's Cell's server - PF_CELL_SERVER
+# (polyforge#75). The target compared is the MERGED AIHUB_HOST (the
+# environment wins over the file, above) with its user part dropped, any
+# ssh alias resolved LOCALLY - ssh -G reads the configuration, never the
+# network. The answer is the full refusal text naming both sides.
+_tc_mismatch() {
+  _tc_host="${AIHUB_HOST#*@}"
+  _tc_resolved="$(ssh -G "$_tc_host" 2>/dev/null | sed -n 's/^hostname //p' | head -n 1)"
+  [ -n "$_tc_resolved" ] || _tc_resolved="$_tc_host"
+  _tc_cell="$(printf '%s' "$PF_CELL_SERVER" | sed -n 's#^[a-zA-Z][a-zA-Z0-9+.-]*://\([^:/@]*\).*#\1#p' | tr '[:upper:]' '[:lower:]')"
+  if [ "$(printf '%s' "$_tc_resolved" | tr '[:upper:]' '[:lower:]')" != "$_tc_cell" ]; then
+    printf "the deploy target %s (AIHUB_HOST %s) is not this work item's Cell server %s (PF_CELL_SERVER %s)" \
+      "$_tc_resolved" "$AIHUB_HOST" "$_tc_cell" "$PF_CELL_SERVER"
+  fi
+}
+# target_check: the Cell's target gate - refuse naming both sides before any
+# network work, or say the check was skipped (a run without the Cell facts:
+# a human running the script by hand, whose behavior is unchanged).
+target_check() {
+  if [ -z "${PF_CELL_SERVER:-}" ]; then
+    echo "target check: skipped (no Cell stated)"
+    return 0
+  fi
+  _tc_refusal="$(_tc_mismatch)"
+  if [ -n "$_tc_refusal" ]; then
+    echo "deploy: REFUSED - $_tc_refusal; nothing was touched." >&2
+    exit 1
+  fi
+}
+
 # The release a deploy downloads (gh -R GH_REPO) must be the one of the
 # repository this checkout's tags come from: an ambient
 # GH_REPO - an operator env file kept for another channel - must not send a
@@ -380,6 +411,13 @@ if [ -n "$PREFLIGHT" ]; then
       eval "[ -n \"\${$v:-}\" ]" || _vars="$_vars $v"
     done
     [ -z "$_vars" ] || pf_problem "required variable(s) unset:$_vars - set them in the environment or in $DEPLOY_ENV (see this script's header)"
+    # the Cell's target gate (polyforge#75): before the ssh probe below
+    # reaches the network, and as one reported problem among the rest
+    if [ -z "${PF_CELL_SERVER:-}" ]; then
+      echo "target check: skipped (no Cell stated)"
+    elif [ -n "${AIHUB_HOST:-}" ] && [ -n "$(_tc_mismatch)" ]; then
+      pf_problem "$(_tc_mismatch)"
+    fi
     pf_tools gh docker ssh scp rsync python3 sha256sum
     if command -v gh >/dev/null 2>&1 && ! gh auth status >/dev/null 2>&1; then
       pf_problem "gh is not logged in (gh auth status) - the deploy downloads the release assets of $GH_REPO with it"
@@ -460,6 +498,10 @@ if [ -n "$MISSING" ]; then
   echo "deploy: missing required variable(s):$MISSING - set them in the environment or in $DEPLOY_ENV (see this script's header). Nothing was touched." >&2
   exit 2
 fi
+# the Cell's target gate (polyforge#75): after the variables are known,
+# before any network work below (step 0 included) - the same check the
+# preflight reports; a mismatch REFUSES with both sides named
+target_check
 AIHUB_CONTAINER="${AIHUB_CONTAINER:-aihub}"
 BACKUP_ROOT="${BACKUP_ROOT:-/data/polyforge-backups}"
 AIHUB_PORT="${AIHUB_PORT:-8080}"
