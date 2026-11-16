@@ -532,3 +532,41 @@ func TestDeployTargetsSameBackupRootRefused(t *testing.T) {
 		})
 	}
 }
+
+// TestDeployTargetsWrongServerRefusalNamesOwnCell (polyforge#76, AC2;
+// review r1#1): the multi-target refusal of a configuration pointing at
+// another Cell's host names the TARGET's own Cell and its PF_CELL_TARGETS
+// row - the side it was checked against - never "this work item's Cell
+// server" (here the work item's Cell is default, the misconfigured target
+// is public: the polyforge#75 single-target wording would name the wrong
+// side to the operator reading the refusal).
+func TestDeployTargetsWrongServerRefusalNamesOwnCell(t *testing.T) {
+	for name, args := range map[string][]string{
+		"real deploy": {"v2.3.0", "--confirm", "v2.3.0"},
+		"dry-run":     {"v2.3.0", "--dry-run"},
+		"preflight":   {"--preflight"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := newReadyWorld(t)
+			d.twoTargetEnv(t, "default", "http://fakehost:8080")
+			pubEnv := filepath.Join(d.w, "cfg", "deploy-public.env")
+			b, err := os.ReadFile(pubEnv)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wf(t, pubEnv, strings.Replace(string(b), "AIHUB_HOST=root@fakehost2", "AIHUB_HOST=root@fakehost", 1), 0o600)
+			out, err := d.run("", args...)
+			if exitCode(err) != 1 || !strings.Contains(out, "REFUSED") {
+				t.Fatalf("want exit 1 + REFUSED, got %v\n%s", err, out)
+			}
+			for _, want := range []string{"its own Cell public's server fakehost2", "PF_CELL_TARGETS row public", "AIHUB_HOST root@fakehost"} {
+				if !strings.Contains(out, want) {
+					t.Errorf("the refusal must name the target's own Cell and its PF_CELL_TARGETS row, missing %q:\n%s", want, out)
+				}
+			}
+			if strings.Contains(out, "this work item's Cell server") {
+				t.Errorf("the multi-target refusal names the work item's Cell, not the target's own:\n%s", out)
+			}
+		})
+	}
+}
