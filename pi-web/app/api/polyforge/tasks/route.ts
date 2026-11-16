@@ -17,7 +17,7 @@ export const dynamic = "force-dynamic";
  * nine-key row passport itself is unchanged). A Cell whose read fails
  * degrades to one `cellErrors` entry while the rest list. A pf without the
  * multi-Cell protocol — and an aggregate that cannot be read, or one with no
- * serving Cell — keeps today's single unflagged `pf --json task list`.
+ * valid Cell — keeps today's single unflagged `pf --json task list`.
  * Read-only: this route exports GET alone, so any other method is 405.
  * Degradation-first: pf absent, below the 2.20.12 floor and a failed spawn
  * answer 200 with fields, never 5xx; the only non-2xx answer is the gate's
@@ -35,7 +35,7 @@ export async function GET(request: Request) {
   let cells: string[] = [];
   if (hasPolyforgeCellCapabilities(capabilities)) {
     // an aggregate that cannot be read (daemon down) is the pre-Cell
-    // degradation: no serving Cells known, the one unflagged read below
+    // degradation: no valid Cells known, the one unflagged read below
     cells = servingPolyforgeCells((await getPolyforgeOpsStatus().catch(() => null))?.cells);
   }
   try {
