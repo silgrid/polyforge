@@ -70,7 +70,7 @@ verification) and no verification starts beside the procedure; and it runs
 under a 120-minute tool window (`PF_TOOL_WINDOW_MS`; a claude step's Bash
 default timeout equals it), sized for a procedure that runs the full gate
 itself, inside a 135-minute wall (T = 405 minutes across its dispatches).
-`deploy` likewise holds the heavy admission under a 30-minute window;
+`deploy` likewise holds the heavy admission under a 60-minute window (one run may deploy several targets);
 `verify` declares a 30-minute wall and no resources. Downstream verifies
 upstream: `verify` first checks that `release-record.json` parses and names
 the version and its commit, `deploy` that `verified-version.json`'s version
@@ -208,6 +208,36 @@ any network work, that the merged `AIHUB_HOST` names that Cell's server
 (`ssh -G` resolves an alias locally), refusing with both values otherwise;
 `--dry-run` and `--preflight` run the same check. A run without the Cell
 facts (a human operator) skips the target check and says so.
+
+One release work item deploys every deploy target of the machine
+(polyforge#76). The daemon also gives every step process every serving
+Cell's facts — `PF_CELL_TARGETS`, one line per Cell: its profile, its
+server and its deploy configuration file — and every Cell whose deploy
+configuration file exists is one deploy target; a Cell without one (a
+client only) is not. With fewer than two targets the run is the
+single-target one above, unchanged. With two or more, `deploy.sh
+--component aihub` checks before any network work — a real deploy,
+`--dry-run` and `--preflight` alike, the preflight naming every target
+first: the work item's Cell must be one of the targets; every target's
+configuration (the merged `AIHUB_HOST`) must point at its own Cell's
+server; no two targets may back up into the same `BACKUP_ROOT` — each
+refusal naming both sides. Then it deploys the work item's Cell first, the
+rest by name, each target in one clean subprocess that reads only its own
+Cell's configuration. The first failure stops the walk: the later targets
+are `not_attempted`, a target that already succeeded is never rolled back,
+and the exit code is the failed target's. Each target prints one line
+`target: <profile> status=<status> exit=<code> server=<server>` (status
+`deployed`, `already_deployed` — it ran the version already and was
+skipped —, `ok` for a `--dry-run` or `--preflight`, `rolled_back`,
+`rollback_failed`, `not_changed` or `not_attempted`) and the last line is
+`targets: <profile>=<status> ...`. The release lane's deploy step copies
+every `target:` line and that last line into its hand-off; a run that
+deployed some targets but not all is production state `partial`, still a
+failure. Every run, one target or several, refuses a target running a
+foreign version line — a running version with a pre-release suffix this
+repo has no tag for (another fork's build): its schema and rollback are
+unknown here, so it is handled by hand (`not_changed`). `--component
+pi-web` has no targets and is unchanged.
 
 Both procedures check their machine before anything is published.
 `release.sh` runs a preflight after computing the version and before its

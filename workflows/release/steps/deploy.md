@@ -53,13 +53,15 @@ set -o pipefail; cd repos/<owner> && .polyforge/deploy.sh V --confirm V 2>&1 | t
 
 (`V` and `C` substituted). Never add `--force`; never run `--dry-run` as a stand-in for
 the real run; if the procedure refuses, that refusal is the result. The run can be long:
-this step's tool window is 30 minutes (`budget.tool_minutes`; it rides your process as
+this step's tool window is 60 minutes (`budget.tool_minutes`; it rides your process as
 `PF_TOOL_WINDOW_MS`, and a claude step's Bash default timeout equals it) — never
 background the run and poll it, never run it twice. The whole output is in
-`artifacts/deploy.log`; your report carries its `target:` line and its last
-line copied verbatim — the deploy target is what that log says, never a
+`artifacts/deploy.log`; your report carries every `target:` line and its last line copied verbatim — the deploy target is what that log says, never a
 description from memory or inference (a deploy that reached the wrong target
-reads exactly like a successful one otherwise). The procedure runs under your own
+reads exactly like a successful one otherwise). A machine with several deploy
+targets (one per Cell with a deploy configuration) is deployed by this one run,
+one target after another: the log then carries one `target:` line per target
+(with its status) and its last line sums every target up. The procedure runs under your own
 `PATH`, the daemon's command PATH: set anything else it needs inside the line.
 Your dispatch holds the heavy-run admission slot while your process lives
 (`resources: { admission: heavy }`): no verification runs beside the deploy. Do not
@@ -74,7 +76,12 @@ version, and it reports which.
 
 - Exit zero, and its output reports `V` as the version now serving: production state
   `deployed` — hand off `done` (as the lane's last step, after the wrap summary of the
-  step header's Memory section).
+  step header's Memory section). With several targets that is every target
+  `deployed` or `already_deployed` (it served `V` before the run) in the last line.
+- Several targets, nonzero exit, and at least one target `deployed` before the
+  failed one: production state `partial` — some targets serve `V`, the failed one
+  is in the state its `target:` line names, the rest are `not_attempted`. It is
+  still a `fail`: name every target's state from its `target:` line.
 - Nonzero exit: hand off `fail`. Name production's state from what the procedure
   printed: it refused before changing anything (`not_changed`), it rolled back and the
   previous version answers (`rolled_back` - production is safe but the deploy did not
@@ -91,10 +98,10 @@ procedure printed: a human decides what happens next.
   procedure (nothing deployed); `fail` on a version mismatch, an ambiguous owner, a
   refusal or a rollback (this gate has no `on_fail`: a FAIL ends the work item).
 - **结论**: production's state — `deployed` (`V`), `none` (no procedure), `not_changed`,
-  `rolled_back` or `rollback_failed` — and the version serving (and the previous one when
+  `rolled_back`, `rollback_failed` or `partial` (several targets, some deployed) — and the version serving (and the previous one when
   the procedure printed it).
 - **做了什么**: the scan and what it printed; the procedure line as run and its exit; the
-  `target:` line and the last line of `artifacts/deploy.log`, copied verbatim.
+  `target:` line(s) and the last line of `artifacts/deploy.log`, copied verbatim.
 - **验证**: `V` from `artifacts/verified-version.json` against the release record's
   `version`.
 - **给下游与未决**: on a failure, the manual instructions the procedure printed.
