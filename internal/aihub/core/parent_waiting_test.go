@@ -292,3 +292,110 @@ func TestChildParentDependencyCycle(t *testing.T) {
 		t.Fatalf("an unrelated ticket blocks the parent: %v", err)
 	}
 }
+
+// pwPatchParent PATCHes parent_id with the raw JSON value.
+func pwPatchParent(env *testEnv, id, raw string) (*WIView, error) {
+	return env.WIs.Patch(id, map[string]json.RawMessage{"parent_id": json.RawMessage(raw)}, env.UserID)
+}
+
+// pwParent reads the stored parent_id ("" for none).
+func pwParent(t *testing.T, env *testEnv, id string) string {
+	t.Helper()
+	wi, err := env.WIs.Get(id, GetOptions{})
+	if err != nil {
+		t.Fatalf("get %s: %v", id, err)
+	}
+	if wi.ParentID == nil {
+		return ""
+	}
+	return *wi.ParentID
+}
+
+// TestDetachChildFromParent (polyforge#77, AC5): PATCH parent_id may only
+// clear it (null or ""); re-parenting is refused; a running child is
+// refused; a detach records one wi_detached event naming the old parent;
+// once detached the parent no longer waits for it. A terminal (failed)
+// child can be detached — the way out of a parent held by a failed child.
+func TestDetachChildFromParent(t *testing.T) {
+	env, m := sessionEnv(t)
+	p := mustCreateExecWI(t, env, "bound parent", nil, "")
+	c1 := pwChild(t, env, p, "child that fails")
+	c2 := pwChild(t, env, p, "child detached while queued")
+	other := mustCreateWI(t, env, "another parent", nil, "")
+
+	// Re-parenting is refused, both to another ticket and to the same one.
+	for _, target := range []string{other, p} {
+		if _, err := pwPatchParent(env, c1, `"`+target+`"`); !IsCode(err, api.ErrCoreBadInput) || ErrorReason(err) != "IMMUTABLE" {
+			t.Fatalf("re-parent to %s: want CORE-400/IMMUTABLE, got %v", target, err)
+		}
+	}
+	if got := pwParent(t, env, c1); got != p {
+		t.Fatalf("refused re-parent wrote: parent_id = %q, want %q", got, p)
+	}
+
+	// A running child is refused, nothing written.
+	secret := "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1"
+	mustSessionClaim(t, m, env, c1, secret)
+	if _, err := pwPatchParent(env, c1, `null`); !IsCode(err, api.ErrCoreConflict) || ErrorReason(err) != "CHILD_RUNNING" {
+		t.Fatalf("detach a running child: want CORE-409/CHILD_RUNNING, got %v", err)
+	}
+	if got := pwParent(t, env, c1); got != p {
+		t.Fatalf("refused detach wrote: parent_id = %q, want %q", got, p)
+	}
+	if n := countEvents(t, env, c1, "wi_detached"); n != 0 {
+		t.Fatalf("refused detach recorded %d wi_detached events", n)
+	}
+
+	// The child fails: it holds the parent until detached.
+	if err := m.End(c1, api.SessionEndRequest{SessionID: secret, Status: api.StatusFailed}, env.UserID); err != nil {
+		t.Fatalf("end failed: %v", err)
+	}
+	pwWantWaiting(t, "failed child attached", pwWaiting(t, env, p), map[string][2]string{
+		pwSlug(t, env, c1): {api.StatusFailed, "child"},
+		pwSlug(t, env, c2): {api.StatusQueued, "child"},
+	})
+	got, err := pwPatchParent(env, c1, `null`)
+	if err != nil {
+		t.Fatalf("detach the failed child: %v", err)
+	}
+	if got.ParentID != nil {
+		t.Fatalf("detach answer parent_id = %v, want null", *got.ParentID)
+	}
+	if n := countEvents(t, env, c1, "wi_detached"); n != 1 {
+		t.Fatalf("wi_detached events = %d, want 1", n)
+	}
+	events, err := env.WIs.Events(c1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range events {
+		if e.Type != "wi_detached" {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(e.Payload, &payload); err != nil || payload["parent_id"] != p {
+			t.Fatalf("wi_detached payload = %s, want parent_id %s", e.Payload, p)
+		}
+	}
+	pwWantWaiting(t, "failed child detached", pwWaiting(t, env, p), map[string][2]string{
+		pwSlug(t, env, c2): {api.StatusQueued, "child"},
+	})
+
+	// The empty string clears too; the parent is released.
+	if _, err := pwPatchParent(env, c2, `""`); err != nil {
+		t.Fatalf("detach with the empty string: %v", err)
+	}
+	if got := pwParent(t, env, c2); got != "" {
+		t.Fatalf("detached child parent_id = %q, want none", got)
+	}
+	if n := countEvents(t, env, c2, "wi_detached"); n != 1 {
+		t.Fatalf("wi_detached events = %d, want 1", n)
+	}
+	if w := pwWaiting(t, env, p); len(w) != 0 {
+		t.Fatalf("every child detached: waiting_for = %v, want none", w)
+	}
+	if !pwInItems(t, env, p) {
+		t.Fatalf("every child detached: the parent is not in the ready queue")
+	}
+	mustSessionClaim(t, m, env, p, "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2")
+}
