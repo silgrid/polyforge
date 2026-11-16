@@ -332,6 +332,14 @@ func (l *loader) load() *Lane {
 			}
 		}
 	}
+	if n, ok := keys["children_branch"]; ok {
+		if v, good := l.stringValue(file, off, n, "children_branch"); good {
+			lane.ChildrenBranch = v
+			if msg := childrenBranchDefect(v); msg != "" {
+				l.at(CodeInvalidValue, file, off, n, "children_branch", "%s", msg)
+			}
+		}
+	}
 	stepsNode, ok := keys["steps"]
 	if !ok {
 		l.at(CodeMissingKey, file, off, root, "steps", "the lane declares no steps")

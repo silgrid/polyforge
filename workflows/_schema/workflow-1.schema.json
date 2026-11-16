@@ -10,6 +10,11 @@
         "required"
       ]
     },
+    "children_branch": {
+      "description": "string: the branch-name template the daemon checks a sub-ticket of this lane's work items out on — it must carry {seq} (the parent's seq), may carry {project} (the parent's project name), and its substituted name must be a legal git branch ref (WFC-112 otherwise)",
+      "pattern": "\\{seq\\}",
+      "type": "string"
+    },
     "contract": {
       "const": 1,
       "description": "int, required, == ContractVersion"
