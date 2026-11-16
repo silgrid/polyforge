@@ -157,6 +157,17 @@
             ],
             "type": "object"
           },
+          "params": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "map <name> -> a single-line string (the lane default): the step's declared parameters. <name> is ^[a-z][a-z0-9_]{0,63}$, collides with no var or fragment (WFC-195), and a parameter the definition's placeholders never use is allowed (a script reads it); a value is one line of at most 256 bytes (WFC-112). The final value is composed at EVERY dispatch — lane default < the project's steps.<project>.<step-id>.params.<name> in its workspace yaml < the work item's pf override — fills the definition's {{<name>}} and reaches the step's scripts as PF_PARAM_<NAME>",
+            "propertyNames": {
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "type": "string"
+            },
+            "type": "object"
+          },
           "resources": {
             "additionalProperties": false,
             "description": "map {admission, locks}: what the daemon takes for the step's dispatch",

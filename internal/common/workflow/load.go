@@ -169,15 +169,12 @@ type Step struct {
 	// varLines are the workflow.yaml lines of the vars' keys (a
 	// vars_files var's: its vars_files key) and path the
 	// step's YAML path (a definition's var defect points back at them);
-	// fileVars marks the vars read through vars_files; paramLines are the
-	// workflow.yaml lines of the params' keys (a param defect points back
-	// at them); nodes are the
+	// fileVars marks the vars read through vars_files; nodes are the
 	// step's known keys' value nodes.
-	varLines   map[string]int
-	fileVars   map[string]bool
-	paramLines map[string]int
-	path       string
-	nodes      map[string]*yaml.Node
+	varLines map[string]int
+	fileVars map[string]bool
+	path     string
+	nodes    map[string]*yaml.Node
 }
 
 // Step answers the step with id (nil when absent).
@@ -772,7 +769,81 @@ func (l *loader) step(file string, off int, n *yaml.Node, path string, seen map[
 	if v, ok := keys["vars_files"]; ok {
 		l.varsFiles(file, off, v, join(path, "vars_files"), &s)
 	}
+	if v, ok := keys["params"]; ok {
+		s.Params = l.stepParams(file, off, v, join(path, "params"), &s)
+	}
 	return s
+}
+
+// MaxParamValueBytes bounds one parameter's value (a step entry's `params`
+// default, and every layer that overrides it): a value is one line — no
+// newline — of at most this many bytes. A value is inserted verbatim into
+// the step's prompt and exported as PF_PARAM_<NAME>, so the bound keeps
+// both surfaces small (owner ruling 2026-11-16).
+const MaxParamValueBytes = 256
+
+// ParamValueProblem answers why value is not a legal parameter value (""
+// when it is): one line, at most MaxParamValueBytes bytes. The one rule
+// every layer shares — the lane loader (WFC-112), the workspace yaml's
+// parse and the pf override write — so a value cannot grow a new meaning
+// on its way to the prompt or the environment.
+func ParamValueProblem(value string) string {
+	if strings.ContainsAny(value, "\n\r") {
+		return "a param value is one line (no newline)"
+	}
+	if len(value) > MaxParamValueBytes {
+		return fmt.Sprintf("a param value is at most %d bytes", MaxParamValueBytes)
+	}
+	return ""
+}
+
+// stepParams decodes a step's `params`: each name to its lane-default
+// value, a single-line string of at most MaxParamValueBytes bytes. A
+// name takes the param-name shape, collides with no var of the step
+// (vars or vars_files) and shadows no fragment of the shared tree; a
+// parameter the definition never uses is allowed (a script may read it).
+func (l *loader) stepParams(file string, off int, n *yaml.Node, path string, s *Step) map[string]string {
+	if n.Kind != yaml.MappingNode {
+		l.at(CodeInvalidValue, file, off, n, path, "want a mapping of param name to its default value")
+		return nil
+	}
+	out := map[string]string{}
+	seen := map[string]bool{}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		k, v := n.Content[i], n.Content[i+1]
+		p := join(path, k.Value)
+		if seen[k.Value] {
+			l.at(CodeLaneFile, file, off, k, p, "duplicate key")
+			continue
+		}
+		seen[k.Value] = true
+		if !ParamName.MatchString(k.Value) {
+			l.at(CodeInvalidValue, file, off, k, p, "%q is not a param name (%s)", k.Value, ParamName)
+			continue
+		}
+		val, ok := l.stringValue(file, off, v, p)
+		if !ok {
+			continue
+		}
+		if why := ParamValueProblem(val); why != "" {
+			l.at(CodeInvalidValue, file, off, v, p, "%s", why)
+			continue
+		}
+		if _, varDeclared := s.varLines[k.Value]; varDeclared {
+			key := "vars"
+			if s.fileVars[k.Value] {
+				key = "vars_files"
+			}
+			l.at(CodePlaceholder, file, off, k, p, "param %q collides with the var declared in %s.%s: a name is a var's or a param's, never both", k.Value, key, k.Value)
+			continue
+		}
+		if _, err := os.Stat(sharedFragment(l.shared, k.Value)); err == nil {
+			l.at(CodePlaceholder, file, off, k, p, "param %q shadows the fragment %s/%s.md", k.Value, SharedDir, k.Value)
+			continue
+		}
+		out[k.Value] = val
+	}
+	return out
 }
 
 // varsFiles decodes a step's `vars_files` into its vars: each var's value
@@ -1050,7 +1121,6 @@ type placeholderProblem struct {
 // or fragment resolves, a var nothing uses, a var shadowing a fragment.
 // Fragments are inserted verbatim and never re-scanned.
 func renderDefinition(shared string, raw []byte, vars, params map[string]string) ([]byte, []placeholderProblem) {
-	_ = params // the params ride the same resolution once the loader parses them
 	var problems []placeholderProblem
 	lineOf := func(name string) int {
 		idx := strings.Index(string(raw), "{{"+name+"}}")
@@ -1073,6 +1143,9 @@ func renderDefinition(shared string, raw []byte, vars, params map[string]string)
 			used[name] = true
 			return []byte(strings.TrimRight(v, "\n"))
 		}
+		if v, ok := params[name]; ok {
+			return []byte(v)
+		}
 		if v, ok := values[name]; ok {
 			return []byte(v)
 		}
@@ -1085,7 +1158,7 @@ func renderDefinition(shared string, raw []byte, vars, params map[string]string)
 		return []byte(values[name])
 	})
 	for _, name := range sortedKeys(missing) {
-		problems = append(problems, placeholderProblem{line: lineOf(name), msg: fmt.Sprintf("{{%s}} resolves to no var of the step and no fragment %s/%s.md", name, SharedDir, name)})
+		problems = append(problems, placeholderProblem{line: lineOf(name), msg: fmt.Sprintf("{{%s}} resolves to no var or param of the step and no fragment %s/%s.md", name, SharedDir, name)})
 	}
 	for _, name := range sortedKeys(vars) {
 		if !used[name] {

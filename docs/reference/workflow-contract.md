@@ -113,6 +113,7 @@ process runs.
 | `model_candidates` | the step's candidates (`WFC-198`); exclusive with `model_tier` (`WFC-112`) |
 | `model_tier` | a tier of the lane's `defaults.tiers` (`WFC-198` when the table lacks it; `WFC-112` beside `model_candidates`) |
 | `vars` | a map of strings filling the definition's `{{placeholders}}` (`WFC-195`) |
+| `params` | a map of parameter name (`^[a-z][a-z0-9_]{0,63}$`) to its lane-default value, a single-line string of at most 256 bytes (`WFC-112`); a name held by a var (`vars` or `vars_files`) or shadowing a fragment is `WFC-195`; a parameter no placeholder uses is allowed (a script reads it). Unlike `vars` — fixed text of the lane — a parameter's final value is composed at every dispatch: the lane default, overridden by the project's `steps.<project>.<step>.params.<name>` in its workspace yaml ([config.md](config.md); it applies only on a lane that declares the parameter for the step), overridden by the work item's `pf override <wi> --step <id> --param <name>=<value>`. The final value fills the definition's `{{<name>}}` and reaches the step's scripts as `PF_PARAM_<NAME>` ([Scripts](#scripts)) |
 | `vars_files` | a map of var name to a file of the lane (`fragments/<name>.md`): a relative path that stays inside the lane directory and names a regular file reached through no symbolic link (`WFC-112` otherwise). The file's text is the var's value, exactly as if written in `vars`; a var is declared in `vars` or in `vars_files`, not both (`WFC-112`) |
 | `skill` | a skill name: `<lane>/skills/<name>.md`, else `_shared/skills/<name>.md`, rendered into the prompt (`WFC-200`) |
 | `resources` | `{admission, locks}`: what the daemon takes for each dispatch |
@@ -231,15 +232,21 @@ granted.
 | Form | Renders |
 |---|---|
 | `{{<var>}}` | the step's `vars` (and `vars_files`) |
+| `{{<param>}}` | the step's `params`, at the dispatch's final value |
 | `{{<fragment>}}` | `_shared/<fragment>.md`, inserted verbatim, never re-scanned |
 
-Every placeholder resolves at load: one no var and no fragment resolves, a
-var no placeholder uses and a var that shadows a fragment are `WFC-195`.
-They are static text substitution at load, never runtime context. At the
-claim, each step's definition, rendered with its vars and fragments as the
-step's own prompt carries it, is written to the capsule's
+Every placeholder is checked at load: one no var, no param and no fragment
+resolves, a var no placeholder uses, a name both a var and a param hold
+and a var or param that shadows a fragment are `WFC-195` (a param no
+placeholder uses is allowed). Vars and fragments are fixed text of the
+lane; a param is the one placeholder whose value is taken at dispatch
+time — the load renders it with its lane default, each dispatch with its
+final value (lane default < project < work item, [Step keys](#step-keys)).
+At the claim, each step's definition, rendered with its vars, params and
+fragments as the step's own prompt carries it, is written to the capsule's
 `workflows/_rendered/<id>.md` (read-only, recorded in the snapshot's
-marker): the copy a step's sub-agent reads.
+marker): the copy a step's sub-agent reads. Each dispatch rewrites it with
+the parameters' final values of that dispatch.
 
 ## Skills
 
@@ -302,6 +309,7 @@ and `--help` is its full reference: a skill does not repeat it.
 | `PF_LANE_DIR` | `<capsule>/workflows/<lane>`: the lane snapshot the step runs |
 | `PF_SHARED_DIR` | `<capsule>/workflows/_shared`: the shared tree beside it |
 | `PF_PYTHON` | the interpreter's absolute path: `[daemon] python` ([config.md](config.md)), else `python3` on the daemon's `PATH`, resolved once at the daemon's start; a missing one or one older than 3.9 refuses the start, naming why (`pf doctor`'s `python3` row judges the same rule) |
+| `PF_PARAM_<NAME>` | one per parameter the step declares (`params`, [Step keys](#step-keys)): its final value of this dispatch, the name upper-cased (`image` → `PF_PARAM_IMAGE`) |
 | `PF_CELL` | the Cell the work item belongs to: `default`, else the named Cell's profile |
 | `PF_CELL_SERVER` | that Cell's server as configured |
 | `PF_DEPLOY_ENV` | the deploy configuration file that Cell's deploys read |
@@ -496,7 +504,7 @@ Every dispatch's prompt is six parts, in this order, and nothing else:
    memories are (`recalled-memories.json`) and the memory policy to write
    by (`runtime-state/memory-policy.json`); take values for scripts from
    result files; never read `runtime-state/execution.json`.
-4. **The step definition** (vars and fragments rendered at load).
+4. **The step definition** (vars and fragments rendered at load, params at the dispatch's final values).
 5. **The skill**.
 6. **On a resumed dispatch only**: the owner's undelivered messages, or
    "your last run exited without `pf step handoff`".
@@ -792,7 +800,7 @@ that step's dispatches for the whole ticket; see
 | `WFC-140` | `on_fail` on a non-gate step, or a target that is not an earlier step |
 | `WFC-190` | a step's definition file is missing |
 | `WFC-191` | a definition file's frontmatter is missing, unparsable, carries an unknown key, or its `name`/`description` is wrong |
-| `WFC-195` | a placeholder no var or fragment resolves, a var nothing uses, or a var shadowing a fragment |
+| `WFC-195` | a placeholder no var, param or fragment resolves; a var nothing uses; a name held by both a var and a param, or a var or param shadowing a fragment |
 | `WFC-198` | a model candidate is not `<harness>:<model>[:<effort>]`, or `model_tier` names no tier of `defaults.tiers` |
 | `WFC-200` | `skill` resolves to no file (<lane>/skills/<name>.md, else _shared/skills/<name>.md), or its frontmatter is not {name == the file name, description, commands: []string} over a non-empty body |
 
