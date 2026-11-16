@@ -221,6 +221,31 @@ export interface PolyforgeOpsStatus {
   /** Always set by sanitizeOpsStatus (zeros when pf reports none); optional
    *  only because the config page builds a queue-only snapshot. */
   tasks?: PolyforgeTaskCounts;
+  /** The Host aggregate's per-Cell rows (GET /status without a profile,
+   *  polyforge#73): one minimal entry per Cell — profile/state/valid only,
+   *  never a server URL, data dir, machine id or workspace path. Absent on
+   *  an aggregate that carries no `cells` block (a Cell's own status, an
+   *  older daemon). */
+  cells?: PolyforgeOpsCell[];
+}
+
+/** One per-Cell row of the Host aggregate's `cells` block, cut to the three
+ *  fields a Cell-scoped read needs (the Tasks tab's list read). */
+export interface PolyforgeOpsCell {
+  profile: string;
+  state: string;
+  valid: boolean;
+}
+
+/** The Cells a Cell-scoped read may address (polyforge#73): every valid
+ *  Cell of the Host aggregate — its daemon is running, the same set the
+ *  Host's own task sum (polyforge#73 u1) and the Jobs list count. A valid
+ *  Cell whose AIHub is unreachable or credentials are missing reports
+ *  `state: "degraded"` but still answers its local reads (r2#1): dropping
+ *  it would make its tasks silently vanish while the badge counts them.
+ *  `invalid` and `removed` Cells never are read. Pure. */
+export function servingPolyforgeCells(cells: readonly PolyforgeOpsCell[] | undefined): string[] {
+  return (cells ?? []).filter((cell) => cell.valid).map((cell) => cell.profile);
 }
 
 export interface PolyforgeStep {
@@ -865,14 +890,15 @@ function sanitizeContextUsage(value: unknown): PolyforgeContextUsage | undefined
  * Machine ops status → response snapshot. Keeps `queue.running`,
  * `queue.max_concurrent`, per-job wi/slug/status/stepAgeSec/idleAgeSec/
  * candidate/spawnN/verifyQueue/context and `tasks.running`/`tasks.completed` (a
- * missing or malformed `tasks` reads as zeros). Drops the other task
+ * missing or malformed `tasks` reads as zeros), and the Host aggregate's
+ * `cells` block as minimal per-Cell rows (polyforge#73). Drops the other task
  * counters (`capped`, `failed`, `interrupted`, `limit`), `env_names`,
  * `workspaces`, `workflows_dir`, `machine_id`, `shutting_down`,
  * `session_fingerprint`, `origin`.
  */
 export function sanitizeOpsStatus(machine: unknown): PolyforgeOpsStatus | null {
   if (!machine || typeof machine !== "object") return null;
-  const m = machine as { queue?: unknown; jobs?: unknown; tasks?: unknown };
+  const m = machine as { queue?: unknown; jobs?: unknown; tasks?: unknown; cells?: unknown };
   if (!m.queue || typeof m.queue !== "object" || m.queue === null) return null;
   if (!Array.isArray(m.jobs)) return null;
   const queue = m.queue as { running?: unknown; max_concurrent?: unknown };
@@ -908,6 +934,14 @@ export function sanitizeOpsStatus(machine: unknown): PolyforgeOpsStatus | null {
     }];
   });
   const tasks = (m.tasks && typeof m.tasks === "object" ? m.tasks : {}) as { running?: unknown; completed?: unknown };
+  const cells = Array.isArray(m.cells)
+    ? m.cells.flatMap((row): PolyforgeOpsCell[] => {
+      if (!row || typeof row !== "object") return [];
+      const c = row as { profile?: unknown; state?: unknown; valid?: unknown };
+      if (!isPolyforgeProfileName(c.profile)) return [];
+      return [{ profile: c.profile, state: toTrimmedString(c.state), valid: c.valid === true }];
+    })
+    : undefined;
   return {
     queue: {
       running: toNumber(queue.running),
@@ -918,6 +952,7 @@ export function sanitizeOpsStatus(machine: unknown): PolyforgeOpsStatus | null {
       running: toNumber(tasks.running),
       completed: toNumber(tasks.completed),
     },
+    ...(cells ? { cells } : {}),
   };
 }
 
