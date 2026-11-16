@@ -368,9 +368,14 @@ var hostPatterns = regexp.MustCompile(`(?i)(no space left|enospc|disk quota|edqu
 // D7): the account or key cannot use this candidate — a different one may
 // work, so these switch IMMEDIATELY, even when the text also carries a
 // throttle or transport signature ("429 ... exceeded your current quota",
-// "insufficient balance ... connection reset"). verdictCause promotes a
-// live error turn naming it to exit_model_class.
-var allowanceText = regexp.MustCompile(`(?i)(\b401\b|\b403\b|unauthori[sz]ed|authentication|invalid api key|incorrect api key|api key|quota|insufficient|billing|credit|` +
+// "insufficient balance ... connection reset"). The bare 402 and
+// "payment required" are part of it (polyforge#51): a gateway that answers
+// "402 Payment Required" with no balance wording is an allowance failure
+// all the same, and this row is judged before every added rule, so no
+// Host-configured pattern can pull an allowance failure out of model class
+// (AC2). verdictCause promotes a live error turn naming it to
+// exit_model_class.
+var allowanceText = regexp.MustCompile(`(?i)(\b401\b|\b402\b|\b403\b|payment required|unauthori[sz]ed|authentication|invalid api key|incorrect api key|api key|quota|insufficient|billing|credit|` +
 	`余额不足|欠费|(额度|配额)[^，。；,.;\n]{0,6}(用尽|用完|耗尽|不足|超出|超限)|(超出|超过)了?(额度|配额)|` +
 	`账户[^，。；,.;\n]{0,10}(停用|禁用|冻结)|鉴权失败|认证失败|无效的?(密钥|令牌)|(密钥|令牌)无效|` +
 	`(无权限|没有权限|权限不足)[^，。；,.;\n]{0,6}(模型|接口|API|服务)|(模型|接口|API|服务)[^，。；,.;\n]{0,6}(无权限|没有权限|权限不足))`)
@@ -509,12 +514,8 @@ type TextRules struct {
 // classifyText answers the first textClasses cause matching text ("" for
 // none); exited selects the exit-only rows too.
 func classifyText(text string, exited bool) string {
-	for _, c := range textClasses {
-		if (exited || !c.exitOnly) && c.re.MatchString(text) {
-			return c.cause
-		}
-	}
-	return ""
+	cause, _ := classifyTextWith(text, exited, nil)
+	return cause
 }
 
 // classifyTextWith is classifyText with the additional Host-configured
@@ -523,26 +524,45 @@ func classifyText(text string, exited bool) string {
 // then the added transient list, then the added model list, then the
 // remaining built-in rows. rules == nil judges the built-in rows only.
 func classifyTextWith(text string, exited bool, rules *TextRules) (cause, source string) {
-	return "", ""
-}
-
-// classifyWaitFailureWith is classifyWaitFailure over the additional rules,
-// answering also the classification source and the raw text it read. The
-// rules apply only to a process's own text (an exited dispatch's last
-// error, a live error turn) — never to the driver's own error.
-func classifyWaitFailureWith(err error, rules *TextRules) (cause string, exitCode int, detail string, source string, errText string) {
-	return "", 0, "", "", ""
-}
-
-// verdictCauseWith is verdictCause over the additional rules, answering
-// also the classification source.
-func verdictCauseWith(v supervise.StepDead, rules *TextRules) (cause, source string) {
+	// row 0, the allowance/auth row, is judged first and alone: no added
+	// rule re-classifies an allowance or auth failure (AC2).
+	if c := textClasses[0]; (exited || !c.exitOnly) && c.re.MatchString(text) {
+		return c.cause, ClassifiedByBuiltin
+	}
+	if rules != nil {
+		for _, re := range rules.Transient {
+			if re.MatchString(text) {
+				return FailUpstreamTransient, ClassifiedByAdded
+			}
+		}
+		for _, re := range rules.Model {
+			if re.MatchString(text) {
+				return FailExitModel, ClassifiedByAdded
+			}
+		}
+	}
+	for _, c := range textClasses[1:] {
+		if (exited || !c.exitOnly) && c.re.MatchString(text) {
+			return c.cause, ClassifiedByBuiltin
+		}
+	}
 	return "", ""
 }
 
 // classifyWaitFailure maps a Wait error (not a cancellation) onto a
 // failure cause.
 func classifyWaitFailure(err error) (cause string, exitCode int, detail string) {
+	cause, exitCode, detail, _, _ = classifyWaitFailureWith(err, nil)
+	return cause, exitCode, detail
+}
+
+// classifyWaitFailureWith is classifyWaitFailure over the additional rules,
+// answering also the classification source ("builtin" / "added" /
+// "fallback", "" when no text classification decided) and the raw text it
+// read ("" likewise). The added rules apply only to a process's own text —
+// the exited dispatch's last error here; the driver's own error below is
+// judged by the built-in rows alone (Q7).
+func classifyWaitFailureWith(err error, rules *TextRules) (cause string, exitCode int, detail string, source string, errText string) {
 	var ee *ExitedError
 	if errors.As(err, &ee) {
 		text := strings.TrimSpace(ee.LastError)
@@ -557,27 +577,35 @@ func classifyWaitFailure(err error) (cause string, exitCode int, detail string) 
 			// clean stop into a model fault that burns a candidate.
 			cause = FailEndedWithoutResult
 		default:
-			cause = classifyText(text, true)
+			cause, source = classifyTextWith(text, true, rules)
 		}
 		switch {
 		case cause != "":
 		case ee.TurnError:
-			cause = FailExitModel
+			// the exit-path fallback (polyforge#51): an error turn no rule
+			// names is model-class by default.
+			cause, source = FailExitModel, ClassifiedByFallback
 		default:
 			cause = FailExitOther
 		}
-		return cause, ee.ExitCode, ee.Error()
+		if source != "" {
+			errText = text
+		}
+		return cause, ee.ExitCode, ee.Error(), source, errText
 	}
 	// The driver's own failure (staging an envelope, reading the drop,
 	// a harness that died at startup — its error carries the stderr, and a
-	// model-class text there advances the chain, F4).
+	// model-class text there advances the chain, F4). Never re-classified
+	// by an added rule (Q7).
 	if isHostError(err) {
-		return FailExitHost, -1, err.Error()
+		return FailExitHost, -1, err.Error(), "", ""
 	}
-	if cause = classifyText(err.Error(), false); cause == "" {
-		cause = FailExitOther
+	if cause, source = classifyTextWith(err.Error(), false, nil); cause == "" {
+		cause, source = FailExitOther, ""
+	} else if source != "" {
+		errText = err.Error()
 	}
-	return cause, -1, err.Error()
+	return cause, -1, err.Error(), source, errText
 }
 
 // verdictCause answers the failure cause a supervisor verdict records. A
@@ -595,18 +623,67 @@ func classifyWaitFailure(err error) (cause string, exitCode int, detail string) 
 // #483 §7, 约定 4: no same-candidate resume on a first death). The split
 // lands in the archived cause, so the pointer never re-reads the text.
 func verdictCause(v supervise.StepDead) string {
+	cause, _ := verdictCauseWith(v, nil)
+	return cause
+}
+
+// verdictCauseWith is verdictCause over the additional rules, answering
+// also the classification source. A model_error verdict that stays
+// model_error (no row, or only the loose model-name row, matched) records
+// which rule judged the text: builtin, added or — the live-path fallback
+// (polyforge#51) — no rule at all.
+func verdictCauseWith(v supervise.StepDead, rules *TextRules) (cause, source string) {
 	if v.Cause != supervise.CauseModelError || strings.TrimSpace(v.TurnError) == "" {
-		return string(v.Cause)
+		return string(v.Cause), ""
 	}
-	cause, _, _ := classifyWaitFailure(&ExitedError{Step: v.Step, SpawnN: v.SpawnN, ExitCode: -1, LastError: v.TurnError, TurnError: true})
+	cause, _, _, src, _ := classifyWaitFailureWith(&ExitedError{Step: v.Step, SpawnN: v.SpawnN, ExitCode: -1, LastError: v.TurnError, TurnError: true}, rules)
 	switch cause {
 	case FailRateLimited, FailUpstreamTransient:
-		return cause
+		return cause, src
+	case FailExitModel:
+		if src == ClassifiedByAdded {
+			// an added MODEL rule is the operator naming a model-class text
+			// on purpose: it switches at once, like the allowance row.
+			return FailExitModel, src
+		}
 	}
 	if allowanceText.MatchString(v.TurnError) || unresolvedModel(v.TurnError) {
-		return FailExitModel
+		return FailExitModel, ClassifiedByBuiltin
 	}
-	return string(v.Cause)
+	if cause == FailExitModel {
+		// a built-in or added row matched (src), or nothing did (the
+		// fallback): the live path keeps model_error, recording the source.
+		return string(v.Cause), src
+	}
+	return string(v.Cause), ""
+}
+
+// maxErrorTextRunes bounds the raw text a failure record carries: the
+// daemon's unclassified list shows it whole, so a runaway stderr tail
+// cannot bloat the event log.
+const maxErrorTextRunes = 1000
+
+// truncateRunes cuts s to at most n runes (a cut on the boundary, never
+// mid-rune).
+func truncateRunes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n])
+}
+
+// textRules answers the CURRENT Host-configured additional classification
+// rules (nil when none are bound).
+func (d *Driver) textRules() *TextRules {
+	if d.cfg.TextRulesFunc == nil {
+		return nil
+	}
+	r := d.cfg.TextRulesFunc()
+	return &r
 }
 
 // isHostError reports whether err is the driver's own host fault.
@@ -1287,9 +1364,9 @@ func (d *Driver) takeUnbooked(stepID string) int64 {
 // nil — Run exits cleanly, the owner holds the next move), or the context
 // ended during the backoff (no step_start may land then: the successor
 // serves the rest of the wait from the attempts ledger, RetryOwed).
-func (d *Driver) failDispatch(ctx context.Context, stepID string, n int64, since, until time.Time, cause string, exitCode int, detail string, dead *supervise.StepDead) (stop bool, err error) {
+func (d *Driver) failDispatch(ctx context.Context, stepID string, n int64, since, until time.Time, cause string, exitCode int, detail string, dead *supervise.StepDead, classifiedBy, errText string) (stop bool, err error) {
 	d.addUnbookedUntil(stepID, since, until)
-	f := &StepFailure{Cause: cause, Detail: detail, ExitCode: exitCode, WallMs: d.takeUnbooked(stepID)}
+	f := &StepFailure{Cause: cause, Detail: detail, ExitCode: exitCode, WallMs: d.takeUnbooked(stepID), ClassifiedBy: classifiedBy, ErrorText: truncateRunes(errText, maxErrorTextRunes)}
 	// The tree hash is read BEFORE the transition takes the driver's lock
 	// (the VerifiedHeads/LightDiffBase pattern: I/O never under d.mu); a
 	// hash error leaves the field empty — the mismatch/no-hash path is
