@@ -79,10 +79,15 @@ func w72ProbeWrite(t *testing.T, td *testDaemon, taskID, content string) (int, s
 }
 
 // w72AnalysisTask enqueues one analysis and waits until the task is
-// running (its runner call started).
+// running (its runner call started). The ticket body is the standard
+// one unless body names another.
 func w72AnalysisTask(t *testing.T, td *testDaemon, hub *w72Hub, runner *w72Runner, wi string) string {
+	return w72AnalysisTaskWithBody(t, td, hub, runner, wi, "## 背景\n\nthe body before the write\n\n## Acceptance\n\n- AC1 x — carried by build\n")
+}
+
+func w72AnalysisTaskWithBody(t *testing.T, td *testDaemon, hub *w72Hub, runner *w72Runner, wi, body string) string {
 	t.Helper()
-	w72Ticket(t, hub, wi, "## 背景\n\nthe body before the write\n\n## Acceptance\n\n- AC1 x — carried by build\n")
+	w72Ticket(t, hub, wi, body)
 	res := w72Enqueue(t, td, wi)
 	if res.State != "scheduled" {
 		t.Fatalf("the analysis must schedule at once: %+v", res)
@@ -122,10 +127,12 @@ func TestW72AnalysisWriteReplacesOnlySection(t *testing.T) {
 
 func TestW72AnalysisWriteRefusedWhenSectionTaken(t *testing.T) {
 	td, hub, runner := w72World(t, nil)
-	// the owner hand-wrote the section before the analysis ran: no
-	// auto-analysis marker, real content.
-	w72Ticket(t, hub, "wi_w72_taken", "## 背景\n\nx\n\n## 分析\n\n免分析（2026-11-16，owner）\n")
 	id := w72AnalysisTask(t, td, hub, runner, "wi_w72_taken")
+	// the owner hand-wrote the section WHILE the task runs: no
+	// auto-analysis marker, real content.
+	hub.mu.Lock()
+	hub.contents["wi_w72_taken"] = strp("## 背景\n\nx\n\n## 分析\n\n免分析（2026-11-16，owner）\n\n## Acceptance\n\n- AC1 x — carried by build\n")
+	hub.mu.Unlock()
 	before := *hub.contents["wi_w72_taken"]
 	if code, _ := w72ProbeWrite(t, td, id, "### 1. 改动范围\n\n- mine now\n"); code == 200 {
 		t.Fatal("a section someone else wrote must refuse the task's write")

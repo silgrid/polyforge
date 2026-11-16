@@ -77,6 +77,9 @@ func (h *w72Hub) Do(method, path string, body, out any) error {
 		if !ok || cur == nil {
 			return &api.Error{Code: api.ErrCoreNotFound, Detail: "work item not found"}
 		}
+		if h.updatedAt == nil {
+			h.updatedAt = map[string]string{}
+		}
 		stamp := h.updatedAt[id]
 		if stamp == "" {
 			stamp = w72Stamp
