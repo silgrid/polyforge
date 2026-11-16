@@ -76,9 +76,15 @@ func FormatOnce(s *protocol.WatchSnapshot, now time.Time, maxEvents int) string 
 			fmt.Fprintf(&b, "step:       %s\n", line)
 		}
 		// the rewinds the owner's word orders never spend
-		// the agents' budget, so the two counts are shown apart
-		if rw := ex.Rewinds; rw != nil && (rw.Agent > 0 || rw.Owner > 0) {
-			fmt.Fprintf(&b, "rewinds:    agent %d/%d (max_rewinds), owner-initiated %d (charged to no budget)\n", rw.Agent, rw.MaxRewinds, rw.Owner)
+		// the agents' budget, and the lane-declared uncounted
+		// class keeps its own tally, so the three counts are
+		// shown apart
+		if rw := ex.Rewinds; rw != nil && (rw.Agent > 0 || rw.Owner > 0 || rw.Uncounted > 0) {
+			line := fmt.Sprintf("agent %d/%d (max_rewinds), owner-initiated %d (charged to no budget)", rw.Agent, rw.MaxRewinds, rw.Owner)
+			if rw.Uncounted > 0 {
+				line += fmt.Sprintf(", lane-declared uncounted %d/%d", rw.Uncounted, rw.MaxUncountedRewinds)
+			}
+			fmt.Fprintf(&b, "rewinds:    %s\n", line)
 		}
 	}
 	if j := s.Job; j != nil {
