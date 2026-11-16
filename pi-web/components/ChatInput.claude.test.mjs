@@ -6,7 +6,7 @@ import { createJiti } from "jiti";
 const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
-const { ChatInput, ClaudeComposerControls, CLAUDE_EFFORT_ENTRIES, builtinSlashCommands, canRunBuiltinSlashCommandWhileStreaming, claudeModelOptions, filterComposerImageFiles, offersBuiltinSlashCommandWhileStreaming } = await jiti.import("./ChatInput.tsx");
+const { ChatInput, ClaudeComposerControls, CLAUDE_EFFORT_ENTRIES, builtinSlashCommands, canRunBuiltinSlashCommandWhileStreaming, claudeModelOptions, filterComposerImageFiles, filterSlashCommands, offersBuiltinSlashCommandWhileStreaming } = await jiti.import("./ChatInput.tsx");
 const { clearDraft, setDraft } = await jiti.import("@/lib/draft-store");
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
 const { enLocale } = await jiti.import("@/lib/i18n/messages/en");
@@ -233,24 +233,22 @@ test("a claude session's slash menu lists only /compact and /session of pi's bui
   assert.equal(offersBuiltinSlashCommandWhileStreaming("/mcp"), true, "pi's own routing is unchanged");
   assert.equal(canRunBuiltinSlashCommandWhileStreaming("/copy", true), false, "pi-only built-ins never reach pi's handler in a claude session");
 
-  const draftKey = "claude:/tmp/claude-slash-menu";
-  setDraft(draftKey, { value: "/", images: [] });
-  try {
-    const open = { ...base, choosing: false, harness: "claude" };
-    const claudeHtml = composer(open, { draftKey });
-    for (const name of ["/compact", "/session"]) {
-      assert.ok(claudeHtml.includes(`>${name}<`), `the claude menu must list ${name}`);
-    }
-    for (const name of ["/auto-compact", "/reload", "/name", "/copy", "/clone"]) {
-      assert.ok(!claudeHtml.includes(`>${name}<`), `the claude menu must not list ${name}`);
-    }
-    const piHtml = composer(base, { draftKey });
-    for (const name of ["/compact", "/auto-compact", "/reload", "/name", "/session", "/copy", "/clone"]) {
-      assert.ok(piHtml.includes(`>${name}<`), `the pi menu still lists ${name}`);
-    }
-  } finally {
-    clearDraft(draftKey);
-  }
+  // The palette's list is exactly the built-ins the composer's harness offers —
+  // streamed through the component's own combiner (builtinSlashCommands, its
+  // availableWhileStreaming filter, then filterSlashCommands) — plus the session's
+  // extension commands. Static markup never runs the effect that opens the
+  // palette, so the combiner is asserted directly (filterSlashCommands orders
+  // by name, not declaration order).
+  const claudeIdle = filterSlashCommands(builtinSlashCommands(true), "", t);
+  assert.deepEqual(claudeIdle.map((command) => command.name), ["compact", "session"]);
+  const claudeStreaming = filterSlashCommands(builtinSlashCommands(true).filter((command) => command.availableWhileStreaming), "", t);
+  assert.deepEqual(claudeStreaming.map((command) => command.name), ["session"], "while a turn runs only /session is offered, as on pi");
+  const piIdle = filterSlashCommands(builtinSlashCommands(false), "", t);
+  assert.deepEqual(piIdle.map((command) => command.name),
+    ["auto-compact", "clone", "compact", "copy", "name", "reload", "session"]);
+  const claudeWithOwn = filterSlashCommands([...builtinSlashCommands(true), { name: "deep-research", source: "extension", description: "claude's own" }], "", t);
+  assert.deepEqual(claudeWithOwn.map((command) => command.name), ["compact", "session", "deep-research"],
+    "claude's own commands (AC3) arrive beside the two built-ins through the session's command list");
 });
 
 test("while a claude turn runs the composer offers only Steer and Stop, no Send; Send returns when it ends", () => {
