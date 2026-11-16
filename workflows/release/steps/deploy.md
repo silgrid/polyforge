@@ -56,7 +56,10 @@ the real run; if the procedure refuses, that refusal is the result. The run can 
 this step's tool window is 30 minutes (`budget.tool_minutes`; it rides your process as
 `PF_TOOL_WINDOW_MS`, and a claude step's Bash default timeout equals it) — never
 background the run and poll it, never run it twice. The whole output is in
-`artifacts/deploy.log`; quote its tail in your report. The procedure runs under your own
+`artifacts/deploy.log`; your report carries its `target:` line and its last
+line copied verbatim — the deploy target is what that log says, never a
+description from memory or inference (a deploy that reached the wrong target
+reads exactly like a successful one otherwise). The procedure runs under your own
 `PATH`, the daemon's command PATH: set anything else it needs inside the line.
 Your dispatch holds the heavy-run admission slot while your process lives
 (`resources: { admission: heavy }`): no verification runs beside the deploy. Do not
@@ -91,7 +94,7 @@ procedure printed: a human decides what happens next.
   `rolled_back` or `rollback_failed` — and the version serving (and the previous one when
   the procedure printed it).
 - **做了什么**: the scan and what it printed; the procedure line as run and its exit; the
-  tail of `artifacts/deploy.log`.
+  `target:` line and the last line of `artifacts/deploy.log`, copied verbatim.
 - **验证**: `V` from `artifacts/verified-version.json` against the release record's
   `version`.
 - **给下游与未决**: on a failure, the manual instructions the procedure printed.
