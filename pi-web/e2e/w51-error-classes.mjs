@@ -69,12 +69,17 @@ const dir = path.dirname(fs.realpathSync(__filename));
 const state = JSON.parse(fs.readFileSync(path.join(dir, "state.json"), "utf8"));
 const args = process.argv.slice(2);
 fs.appendFileSync(path.join(dir, "argv.log"), JSON.stringify({ args }) + "\\n");
-const rest = args.filter((a) => a !== "--json");
+// the verb after the global flags: --json, and a Cell pane's --profile <cell>
+const rest = args.filter((a, i) => a !== "--json" && a !== "--profile" && args[i - 1] !== "--profile");
 const flag = (name) => { const i = rest.indexOf(name); return i >= 0 ? rest[i + 1] ?? "" : ""; };
 const out = (doc) => { process.stdout.write(JSON.stringify(doc) + "\\n"); process.exit(0); };
+const hostItems = () => JSON.parse(fs.readFileSync(path.join(dir, "host-items.json"), "utf8"));
+// the default Cell's file is cli.toml: pf lists the Host keys there too, so
+// the Cell card's Host-only filter is what keeps the four keys out of it
+const cellItems = ${JSON.stringify(CELL_ITEMS)};
 if (args.includes("--version")) out({ version: "v9.9.9", capabilities: ["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1"] });
 if (rest[0] === "cell" && rest[1] === "list") out({ dir: path.join(dir, "cfg"), profiles: [{ profile: "default", file: "cli.toml", state: "serving", valid: true, workspaces: [] }] });
-if (rest[0] === "config" && rest[1] === "list") out({ file: { sha256: "e2e-sha", exists: true }, items: rest.includes("--host") ? JSON.parse(fs.readFileSync(path.join(dir, "host-items.json"), "utf8")) : ${JSON.stringify(CELL_ITEMS)} });
+if (rest[0] === "config" && rest[1] === "list") out({ file: { sha256: "e2e-sha", exists: true }, items: rest.includes("--host") ? hostItems() : [...cellItems, ...hostItems().filter((item) => !cellItems.some((own) => own.key === item.key))] });
 if (rest[0] === "config" && rest[1] === "workspace") out({ mapped: false, workspace: null, yaml: null, steps: null });
 if (rest[0] === "ops" && rest[1] === "status") out({ queue: { pending: 0, running: 0, max_concurrent: 6, max_configured: 6 }, supervision: { step_timeout: "30m0s", stall_window: "10m0s" }, reload: { pending: [], overridden: [] } });
 if (rest[0] === "ops" && rest[1] === "unclassified") out(${JSON.stringify(UNCLASSIFIED)});
@@ -162,6 +167,12 @@ try {
     await page.locator("[data-pf-cell-entry=\"default\"]").first().click();
     const cell = page.locator('[data-pf-pane="cell:default"]').first();
     await cell.waitFor({ state: "visible", timeout: 30_000 });
+    // the Cell's cli.toml card has settled before its absences are read: a
+    // known Cell key row shows its file value (an unrendered card would
+    // count 0 for every key and pass vacuously)
+    const cellStepTimeout = cell.locator('input[aria-label="step_timeout"]').first();
+    await cellStepTimeout.waitFor({ state: "visible", timeout: 30_000 });
+    assert.ok(await waitForValue(cellStepTimeout, "30m0s"), "the Cell's cli.toml card loaded its step_timeout row");
     for (const key of ["slow_model_median_latency", "slow_model_p90_latency", "transient_error_patterns", "model_error_patterns"]) {
       assert.equal(await cell.locator(`[aria-label="${key}"], [aria-label="${key} (host)"]`).count(), 0, `${key} is Host-only: the cli.toml card must not edit it`);
     }
