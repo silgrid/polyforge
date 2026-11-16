@@ -250,24 +250,26 @@ func quoteList(items []string) string {
 }
 
 // quoteRegexList renders the inner body of a failure-classification
-// pattern array (polyforge#51): an item holding a backslash is a
-// SINGLE-QUOTED literal — the parser refuses backslashes in double quotes
-// (Q2: the parser stays strict, the writer adapts) — an item holding both
-// ' and a backslash is refused (write the quote as \x27), and a line break
-// never fits the one-line syntax.
+// pattern array (polyforge#51). The parser takes a value literally between
+// its quotes and refuses a backslash in double quotes (Q2: the parser stays
+// strict, the writer adapts), so an item a plain double-quoted value holds
+// verbatim is written so; an item that would need an escape there — a
+// backslash, a `"`, a non-printable character — is a SINGLE-QUOTED
+// literal; such an item that also holds ' fits neither form and is
+// refused (write the quote as \x27 or \x22 in the regex), and a line
+// break never fits the one-line syntax.
 func quoteRegexList(key string, items []string) (string, error) {
 	parts := make([]string, len(items))
 	for i, s := range items {
 		switch {
 		case strings.ContainsAny(s, "\n\r"):
 			return "", fmt.Errorf("config set %s: pattern %q holds a line break — the cli.toml syntax is one line", key, s)
-		case strings.ContainsRune(s, '\\'):
-			if strings.ContainsRune(s, '\'') {
-				return "", fmt.Errorf("config set %s: pattern %q holds both ' and a backslash, which the cli.toml syntax cannot express — write the quote as \\x27 in the regex", key, s)
-			}
-			parts[i] = "'" + s + "'"
+		case strconv.Quote(s) == `"`+s+`"`:
+			parts[i] = `"` + s + `"`
+		case strings.ContainsRune(s, '\''):
+			return "", fmt.Errorf("config set %s: pattern %q holds ' beside a backslash, a \" or a non-printable character, which the cli.toml syntax cannot express — write the quote as \\x27 (or the \" as \\x22) in the regex", key, s)
 		default:
-			parts[i] = strconv.Quote(s)
+			parts[i] = "'" + s + "'"
 		}
 	}
 	return strings.Join(parts, ", "), nil
