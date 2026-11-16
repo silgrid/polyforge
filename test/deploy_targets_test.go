@@ -443,3 +443,92 @@ func TestDeployTargetsAlreadyDeployedSkip(t *testing.T) {
 		t.Errorf("an already-deployed target took its deploy lock:\n%s", d.logOf2("log-ssh"))
 	}
 }
+
+// TestDeployForeignVersionLineRefused (polyforge#76, AC4): a target whose
+// running version carries a pre-release suffix this repo has no tag for
+// runs a foreign version line (another fork's build): it is refused
+// before any change - a real deploy and a --dry-run alike, the single
+// target too - naming the running version and asking for a person to
+// handle it. The suffix is the world's own, never a name the script
+// knows: two different suffixes are both refused.
+func TestDeployForeignVersionLineRefused(t *testing.T) {
+	for _, running := range []string{"v2.2.1-gmi.1", "v2.2.0-acme.7"} {
+		for name, args := range map[string][]string{
+			"real deploy": {"v2.3.0", "--confirm", "v2.3.0"},
+			"dry-run":     {"v2.3.0", "--dry-run"},
+		} {
+			t.Run(running+" "+name, func(t *testing.T) {
+				d := newDeployWorld(t, running)
+				d.release("v2.3.0", true, digNew, digNew)
+				out, err := d.run("", args...)
+				if exitCode(err) != 1 || !strings.Contains(out, "REFUSED") {
+					t.Fatalf("want exit 1 + REFUSED for a foreign running line, got %v\n%s", err, out)
+				}
+				for _, want := range []string{running, "by hand"} {
+					if !strings.Contains(out, want) {
+						t.Errorf("the refusal must name the running version and ask for manual handling, missing %q:\n%s", want, out)
+					}
+				}
+				d.assertNothingMutated(running)
+			})
+		}
+	}
+}
+
+// TestDeployTargetsForeignLineMarksNotChanged (polyforge#76, AC4): in a
+// multi-target run the target on a foreign version line is not_changed -
+// the targets before it deployed as usual - and the run fails (exit 1).
+func TestDeployTargetsForeignLineMarksNotChanged(t *testing.T) {
+	d := newReadyWorld(t)
+	d.twoTargetEnvAt(t, "default", "http://fakehost:8080", "v2.2.1-gmi.1")
+	out, err := d.run("", "v2.3.0", "--confirm", "v2.3.0")
+	if exitCode(err) != 1 {
+		t.Fatalf("want exit 1 (the refused target's), got %v\n%s", err, out)
+	}
+	if got, want := lastLine(out), "targets: default=deployed public=not_changed"; got != want {
+		t.Errorf("last line = %q, want %q", got, want)
+	}
+	if !strings.Contains(out, "v2.2.1-gmi.1") || !strings.Contains(out, "by hand") {
+		t.Errorf("the refused target must name its running version and ask for manual handling:\n%s", out)
+	}
+	d.assertSecondUntouched("v2.2.1-gmi.1")
+}
+
+// TestDeployTargetsSameBackupRootRefused (polyforge#76, AC4): two targets
+// backing up into the same BACKUP_ROOT would mix (and prune) each other's
+// backups - refused before any network work in all three modes, naming
+// the directory and the targets that share it.
+func TestDeployTargetsSameBackupRootRefused(t *testing.T) {
+	for name, args := range map[string][]string{
+		"real deploy": {"v2.3.0", "--confirm", "v2.3.0"},
+		"dry-run":     {"v2.3.0", "--dry-run"},
+		"preflight":   {"--preflight"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := newReadyWorld(t)
+			d.twoTargetEnv(t, "default", "http://fakehost:8080")
+			shared := filepath.Join(d.w, "backups")
+			pubEnv := filepath.Join(d.w, "cfg", "deploy-public.env")
+			b, err := os.ReadFile(pubEnv)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wf(t, pubEnv, strings.Replace(string(b), "BACKUP_ROOT="+filepath.Join(d.secondWorld(), "backups"), "BACKUP_ROOT="+shared, 1), 0o600)
+			out, err := d.run("", args...)
+			if exitCode(err) != 1 || !strings.Contains(out, "REFUSED") {
+				t.Fatalf("want exit 1 + REFUSED, got %v\n%s", err, out)
+			}
+			for _, want := range []string{shared, "default", "public"} {
+				if !strings.Contains(out, want) {
+					t.Errorf("the refusal must name the shared directory and both targets, missing %q:\n%s", want, out)
+				}
+			}
+			if got := d.logOf("log-ssh") + d.logOf("log-gh") + d.logOf("log-docker") +
+				d.logOf2("log-ssh") + d.logOf2("log-gh") + d.logOf2("log-docker"); got != "" {
+				t.Errorf("the refusal came after network/tool work:\n%s", got)
+			}
+			d.assertNothingMutated("v2.2.1")
+			d.assertSecondUntouched("v2.2.1")
+		})
+	}
+}
