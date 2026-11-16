@@ -196,7 +196,11 @@ func TestContractScanCatchesAMisplacedContractTest(t *testing.T) {
 			t.Fatal(err)
 		}
 		if stray != "" {
-			if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(stray)), []byte("package test\n\nfunc TestStray(t *testing.T) {}\n"), 0o644); err != nil {
+			p := filepath.Join(root, filepath.FromSlash(stray))
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte("package test\n\nfunc TestStray(t *testing.T) {}\n"), 0o644); err != nil {
 				t.Fatal(err)
 			}
 		}
