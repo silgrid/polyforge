@@ -34,7 +34,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { chromium } from "playwright";
 import { polyforgeDock as pfPanel, polyforgeToggle as pfButton } from "./polyforge-dock.mjs";
 import { NAV_MS } from "./timeouts.mjs";
-import { assertNoDevServer, createCheck, createHarness, reportTitled, root, writeFileAtomic, writeHostSession } from "./harness.mjs";
+import { assertNoDevServer, createCheck, createHarness, e2eOnlySelection, reportTitled, root, writeFileAtomic, writeHostSession } from "./harness.mjs";
 
 assertNoDevServer();
 const work = mkdtempSync(join(tmpdir(), "pi-web-pf-e2e-"));
@@ -515,9 +515,14 @@ const T = {
   P48C: "P48C: A manual DAG choice scrolls the clicked step's records into view from their start — never to the region's bottom, the DAG stays on screen (polyforge#48 AC5)",
   P53A: "P53A: The progress's thinking blocks render collapsed by default; a click expands one, its manual state survives a poll refresh and the other rows stay collapsed (polyforge#53 AC1 AC4 AC5)",
 };
-const failures = new Map(Object.values(T).map((title) => [title, []]));
+// polyforge#63 — `E2E_ONLY=<id>[,<id>…]` runs only the named scenarios;
+// unset keeps every one (as before). An unknown id throws here, before any
+// browser or server starts, naming the id and this suite's ids — never a
+// silent zero-scenario run.
+const ONLY = e2eOnlySelection(T);
+const failures = new Map(ONLY.titles.map((title) => [title, []]));
 const ran = new Set();
-const check = createCheck({ failures: ([title, label], text) => failures.get(title).push(`${label}: ${text}`), before: ([title]) => ran.add(title), pass: null, fail: null });
+const check = createCheck({ failures: ([title, label], text) => failures.get(title).push(`${label}: ${text}`), before: ([title]) => ran.add(title), pass: null, fail: null, skip: ([title]) => ONLY.skip(title) });
 // A check that drives its own fresh browser page (a failure stays local to the scenario).
 const checkPage = (title, label, opts, fn) => check(title, label, () => h.withPage(opts, fn));
 
