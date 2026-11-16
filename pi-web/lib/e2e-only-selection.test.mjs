@@ -9,6 +9,7 @@
 // imported: it starts servers and browsers on evaluation).
 import "#test-env";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { createCheck, e2eOnlySelection } from "../e2e/harness.mjs";
 
@@ -60,4 +61,19 @@ test("createCheck skips an unselected scenario's checks through the selection's 
   assert.equal(check.count, 1, "only the selected scenario's check counts");
   assert.deepEqual(ran, [SCENARIOS.N1], "only the selected scenario ran");
   assert.deepEqual(failures, [], "the unselected scenario's throw never recorded a failure");
+});
+
+// The suite script itself cannot be imported (it starts servers and browsers
+// on evaluation), so its wiring of the behaviour-tested selection above is
+// pinned structurally, the way lib/e2e-shared-browser.test.mjs pins the
+// suites' browser launches: it must parse E2E_ONLY through the shared
+// helper, skip unselected scenarios' checks through the selection, and build
+// its report (the failures map reportTitled prints) from the selected titles
+// alone — so a selected run never reports the skipped scenarios as
+// "scenario not reached".
+test("e2e/polyforge.mjs wires the shared selection into its checks and report", () => {
+  const source = readFileSync(new URL("../e2e/polyforge.mjs", import.meta.url), "utf8");
+  assert.ok(/e2eOnlySelection\(\s*T\s*\)/.test(source), "the suite parses E2E_ONLY through the shared e2eOnlySelection(T)");
+  assert.ok(/skip:\s*\(\[title\]\)\s*=>\s*ONLY\.skip\(title\)/.test(source), "its createCheck skips an unselected scenario's checks through the selection");
+  assert.ok(/new Map\(ONLY\.titles\.map/.test(source), "its failures map — the report — holds only the selected scenarios");
 });
