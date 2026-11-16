@@ -98,6 +98,9 @@ func TestClaudeTaskInitToolsEqualDeclared(t *testing.T) {
 			// does not shape the tool surface the recordings pin, so the
 			// replay matches the profile without it; the next live probe
 			// re-pins the exact argv.
+			if n := len(slices.DeleteFunc(slices.Clone(argv), func(a string) bool { return a != "--include-partial-messages" })); n != 1 {
+				t.Fatalf("%s %s: the task argv must carry --include-partial-messages exactly once, got %d: %v", mode.name, p.name, n, argv)
+			}
 			argv = slices.DeleteFunc(slices.Clone(argv), func(a string) bool { return a == "--include-partial-messages" })
 			matched := claudeinit.Matching(recs, argv, env)
 			for _, rec := range matched {

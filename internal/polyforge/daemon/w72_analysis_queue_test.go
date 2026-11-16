@@ -53,7 +53,10 @@ func (h *w72Hub) GetWorkItem(idOrSlug string) (*api.WorkItem, error) {
 	if err != nil {
 		return nil, err
 	}
-	if c, ok := h.contents[wi.ID]; ok {
+	h.mu.Lock()
+	c, ok := h.contents[wi.ID]
+	h.mu.Unlock()
+	if ok {
 		wi.Content = c
 	}
 	if wi.UpdatedAt == "" {
@@ -308,11 +311,11 @@ func w72Ticket(t *testing.T, hub *w72Hub, id, body string) {
 	}
 	hub.status[id] = api.StatusQueued
 	hub.bundles[id] = bundle
-	hub.mu.Unlock()
 	if hub.contents == nil {
 		hub.contents = map[string]*string{}
 	}
 	hub.contents[id] = strp(body)
+	hub.mu.Unlock()
 }
 
 func w72FillSlots(t *testing.T, td *testDaemon, n int) {
@@ -512,9 +515,11 @@ func TestW72AnalysisQueueDropsTerminalAndAnalyzed(t *testing.T) {
 	hub.mu.Lock()
 	hub.status["wi_w72_late"] = api.StatusCanceled
 	hub.mu.Unlock()
-	// let enough ticks pass, then confirm nothing spawned and the entry
-	// left the queue.
-	time.Sleep(300 * time.Millisecond)
+	// poll until the entry left the queue, then confirm nothing spawned
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && len(readW72Queue(t, td)) != 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
 	for _, tk := range tdTasks(t, td) {
 		if tk.Spec.AnalysisOf == "wi_w72_late" {
 			t.Fatalf("a terminal ticket's analysis must never spawn: %+v", tk)
@@ -537,7 +542,9 @@ func TestW72AnalysisQueuedWhileExecDisabled(t *testing.T) {
 		t.Fatalf("a disabled execution plane dispatches nothing, got %d task(s)", n)
 	}
 	// the plane re-enables: the tick dispatches the entry.
+	td.reloadMu.Lock()
 	td.execDisabled = ""
+	td.reloadMu.Unlock()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if len(runner.taskIDs()) > 0 {
