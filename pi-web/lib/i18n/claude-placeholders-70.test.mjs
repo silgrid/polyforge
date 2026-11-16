@@ -57,12 +57,15 @@ const RETIRED = [
   "a message sent now joins this turn",
 ];
 test("the retired placeholder strings are gone from the tracked tree", () => {
+  let out;
   try {
-    const out = execFileSync("git", ["grep", "-n", ...RETIRED.flatMap((s) => ["-e", s]), "--", ":/"], { encoding: "utf8" });
-    assert.fail(`retired copy is still present:\n${out}`);
+    out = execFileSync("git", ["grep", "-n", ...RETIRED.flatMap((s) => ["-e", s]), "--", ":/"], { encoding: "utf8" });
   } catch (e) {
+    // exit 1: nothing matched — the passing shape. Anything else is a real failure.
     assert.equal(e.status, 1, `git grep failed: ${e.stdout}${e.stderr}`);
+    return;
   }
+  assert.fail(`retired copy is still present:\n${out}`);
 });
 
 test("claude-sessions.md teaches the new steer placeholder and quotes the retired one nowhere", () => {
