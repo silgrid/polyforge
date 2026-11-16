@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/silgrid/polyforge/internal/polyforge/mapping"
+	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 )
 
 // w51_error_patterns_config_test.go (polyforge#51): the two additional
@@ -89,11 +90,11 @@ func TestW51ErrorPatternsRefusals(t *testing.T) {
 	for _, kv := range []struct {
 		key, val, wantReason string
 	}{
-		{"transient_error_patterns", `'('`, "compilable RE2 regex"},
+		{"transient_error_patterns", `['(']`, "compilable RE2 regex"},
 		{"model_error_patterns", `['(?=x)']`, "compilable RE2 regex"},
 		{"transient_error_patterns", `['']`, "empty"},
 		{"transient_error_patterns", `'oops'`, "array of quoted"},
-		{"transient_error_patterns", `["ok", 'unterminated']`, "array of quoted"},
+		{"transient_error_patterns", `["ok", 'unterminated]`, "quoted"},
 		{"slow_model_median_latency", `"0"`, "positive Go duration"},
 		{"slow_model_p90_latency", `"abc"`, "Go duration"},
 		{"slow_model_median_latency", `61s`, "quoted"},
@@ -165,8 +166,12 @@ func TestW51ErrorPatternsListRendering(t *testing.T) {
 	if got := daemonValue(s, "slow_model_median_latency"); got != "1m1s" {
 		t.Fatalf("daemonValue(slow_model_median_latency) = %q", got)
 	}
-	if daemonDefault("slow_model_median_latency") != "60s" || daemonDefault("slow_model_p90_latency") != "180s" {
+	if daemonDefault("slow_model_median_latency") != supervise.DefaultSlowModelMedianLatency.String() ||
+		daemonDefault("slow_model_p90_latency") != supervise.DefaultSlowModelP90Latency.String() {
 		t.Fatalf("the documented defaults must render: %q / %q", daemonDefault("slow_model_median_latency"), daemonDefault("slow_model_p90_latency"))
+	}
+	if supervise.DefaultSlowModelMedianLatency != 60*time.Second || supervise.DefaultSlowModelP90Latency != 180*time.Second {
+		t.Fatalf("the documented defaults are 60s / 180s: %s / %s", supervise.DefaultSlowModelMedianLatency, supervise.DefaultSlowModelP90Latency)
 	}
 }
 
