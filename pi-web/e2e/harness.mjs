@@ -119,8 +119,21 @@ export function createCheck({
  * does not hold throws naming it and the valid ids — a typo fails loudly,
  * never a silent zero-scenario run.
  */
-export function e2eOnlySelection() {
-  return { ids: [], titles: [], skip: () => false };
+export function e2eOnlySelection(scenarios, env = process.env) {
+  const entries = Object.entries(scenarios);
+  const ids = (env.E2E_ONLY ?? "").split(",").filter(Boolean);
+  const valid = new Set(entries.map(([id]) => id));
+  const unknown = ids.filter((id) => !valid.has(id));
+  if (unknown.length) {
+    throw new Error(`E2E_ONLY names unknown scenario id(s) ${unknown.join(", ")}; this suite's ids are: ${[...valid].join(", ")}`);
+  }
+  const wanted = new Set(ids);
+  const idByTitle = new Map(entries);
+  return {
+    ids,
+    titles: (ids.length ? entries.filter(([id]) => wanted.has(id)) : entries).map(([, title]) => title),
+    skip: (title) => ids.length > 0 && !wanted.has(idByTitle.get(title)),
+  };
 }
 
 // Bounded polls
