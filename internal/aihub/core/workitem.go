@@ -674,6 +674,27 @@ func diagnoseR2Window(q queryRower, wiID string) error {
 	return nil
 }
 
+// refuseParentBundleFrozenTx refuses changing the bundle of a
+// bundle-bound parent once any of its children has been claimed
+// (polyforge#77): the children started work against the parent's lane,
+// so the lane may no longer move. "Claimed" is the R2 judgment on the
+// children — a session_claimed event, which outlives the session. An
+// unbound parent (no bundle yet) is not under this rule.
+func refuseParentBundleFrozenTx(q queryRower, wiID string) error {
+	var claimed int
+	if err := q.QueryRow(`SELECT COUNT(*) FROM work_items par
+		JOIN work_items c ON c.parent_id = par.id
+		JOIN wi_events e ON e.work_item_id = c.id AND e.event_type='session_claimed'
+		WHERE par.id=?1 AND par.bundle_name IS NOT NULL AND par.bundle_name <> ''`, wiID).Scan(&claimed); err != nil {
+		return err
+	}
+	if claimed > 0 {
+		return Fail(api.ErrCoreBadInput, "PARENT_BUNDLE_FROZEN",
+			"bundle_name is frozen: a child of this work item has been claimed")
+	}
+	return nil
+}
+
 // refuseUnbindWhileBlockingTx refuses unbinding the bundle of a work item
 // that is still the blocker of a `blocks` edge (polyforge#161): without a
 // bundle it runs nothing and closes only by a hand `pf wrap`, so its
@@ -842,6 +863,9 @@ func (m *WIManager) Patch(idOrSlug string, fields map[string]json.RawMessage, ac
 		// create interleaves before the write below. polyforge#77 deleted the
 		// symmetric child rule: a parent with children may bind a bundle.
 		if err := diagnoseR2Window(tx, id); err != nil {
+			return nil, err
+		}
+		if err := refuseParentBundleFrozenTx(tx, id); err != nil {
 			return nil, err
 		}
 		if !bp.binding() {
