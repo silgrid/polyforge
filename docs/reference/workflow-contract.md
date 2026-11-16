@@ -726,6 +726,23 @@ is granted `wrap-attrs` and its `done` is refused until it registered them
 (develop's `publish`, when its project skips `merge`, registers the record
 `published.py` writes, `integration: {state: published, …}`).
 
+**A step whose work a person does (polyforge#36).** A project declares a
+lane's `human_mergeable` step taken over by a person with
+`steps.<project>.<step>.by: human` in its workspace yaml; the claim fixes
+the declared step modes into the capsule
+(`runtime-state/step-modes.json`, exactly the skipped-step set's rule:
+the first claim writes it, a re-claim or `pf resume` keeps it, and the
+steps' skills and scripts read it, never the yaml). The claim of a lane
+that cannot honor a declared `by` — a step it does not carry, or one its
+workflow.yaml does not declare `human_mergeable` — is refused naming it,
+so the mode never reaches a lane that does not ask for it. The develop
+lane declares its `merge` human_mergeable: such a work item's merge step
+asks the owner over the PRs and takes the person's GitHub landing by the
+human landing rules (the three merge methods all count, by the patch-id
+fingerprint; the landed record names each landed commit with its merge
+flag), and a landing that does not match the verified change is a
+question to the owner, never a FAIL.
+
 **A step the operator skips mid-run (polyforge#25).** The per-step overlay
 (`pf override <id> --step <s> --skip`, written only through the daemon)
 switches a lane-declared skippable step off for THIS one work item without

@@ -195,7 +195,11 @@ The order the system actually runs:
 6. **Deliver.** The workflow's own last steps finish the run: `publish`
    pushes the feature branch at the verified head and opens or reuses the
    PR, and the `merge` step merges it under the repo's merge lock and lands
-   the work item (its agent runs `merge.py`); the integration lane later
+   the work item (its agent runs `merge.py`) — unless the project declared
+   its develop merges done by a person (`steps.<project>.merge.by:
+   human`): the merge step then asks the owner over the open PRs and waits
+   for the person's GitHub merge, which it takes as the landing; the
+   integration lane later
    runs the full gate over what landed. The PR merges at the head the
    verifying step ran over; a PR that moved or closed, a default branch that
    advanced after the verified version (with or without a conflict), or a
