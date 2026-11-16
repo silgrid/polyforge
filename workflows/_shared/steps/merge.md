@@ -7,7 +7,10 @@ description: Merge the published PRs at the heads the {{verifying_gate}} step ra
 
 The lane's last step: the published PRs merged into the default branch at the heads the
 `{{verifying_gate}}` step ran over, under the daemon's per-repo merge lock, by one
-pre-written command. Your skill is the whole procedure: check publish's hand-off against
+pre-written command — or, when the capsule's frozen step modes
+(`runtime-state/step-modes.json`, `steps.<project>.merge.by: human`, polyforge#36) name
+this step `human`, the person's merge taken by the human landing rules: the step asks the
+owner over the PRs first and never merges anything itself. Your skill is the whole procedure: check publish's hand-off against
 the verified heads, reuse this round's result or run the line as written, route on the
 exit code, and register the landing record the command wrote
 (`pf step hub wrap-attrs integration @artifacts/merge/landing.json`). Its pass ends the
