@@ -2,8 +2,9 @@
 
 Execution-plane verb: the whole `pf task` face lives on the local daemon's
 unix-socket face. A task is ONE fresh harness agent started from a free-text
-prompt — no session reuse, no resume, no retry, no queue — running under a
-hard wall-clock and token budget in a mapped project's workspace. It is the
+prompt — no session reuse, no resume; a spawn is never queued or retried
+(only the daemon's own analysis tasks are, below) — running under a hard
+wall-clock and token budget in a mapped project's workspace. It is the
 read-only-errand face: hand it research, analysis, a report or a pre-review,
 never a code change.
 
@@ -71,17 +72,25 @@ commit or PR goes through a ticket (`pf file create --bundle <lane>` +
 `pf submit`, `verbs/execute-intent.md`); a task owns no work item and produces
 no deliverable.
 
-The **pre-submit analysis** (polyforge#27) is a read-only errand par
-excellence: on a ticket filed on a lane that requires acceptance, the session
-proposes `pf task spawn` with the ticket and the code it touches as scope, the
-fresh task answers with the 7-item report (the format lives once in
-`verbs/submit.md`, the analysis check), and the session — never the task —
-writes the report into the ticket's `## 分析` section (`pf file edit <id>
---content @file`); a task cannot write the ticket (DAEMON-403).
+The **pre-submit analysis** (polyforge#27, polyforge#72) is the one task
+that writes: when `pf file create` files a ticket on a lane that requires
+acceptance with no `## 分析` section, the daemon schedules an analysis task
+over the ticket and the code it touches (queued when the task lane is full;
+re-queued at most twice when interrupted). It follows the 7-item report
+(the format lives once in `verbs/submit.md`, the analysis check) and writes
+its draft as it goes with `pf task analysis-write --content <text|@file|->`
+— the ONE write a task may make, replacing only the analyzed ticket's
+`## 分析` section (a task carrying no analysis binding is refused, as is any
+other ticket). Each candidate model starts from the ticket as it stands, so
+what an earlier candidate wrote is kept and continued. A stopped analysis
+leaves a comment on the ticket naming the cause and how far it got. A
+session-spawned errand (`pf task spawn`) still cannot write the ticket: the
+session writes its report (`pf file edit <id> --content @file`).
 
 - The task process carries `PF_TASK_ID` (with `PF_DAEMON_ID`): the daemon
   refuses it every mutating unix-socket request with `DAEMON-403`, and `pf`
-  refuses every write verb locally before any config read or network call. Its
+  refuses every write verb locally before any config read or network call —
+  except `pf task analysis-write` from a running analysis task (above). Its
   reads stay open (`pf recall`, `pf memory show`, `pf watch <wi> --once`).
 - There is no supported bypass. Do not teach or attempt one — unsetting the
   markers, `setsid`/`env -i`, or a raw call to the hub are not a path. Treat

@@ -30,11 +30,8 @@ func Judge(s Snapshot, now time.Time, grace time.Duration) *StepDead {
 	}
 	age := now.Sub(s.StartedAt)
 
-	// 0: harness_silent — nothing but silence (or UI noise) since dispatch.
-	if th.Silence > 0 && s.WorkSignals == 0 && age >= th.Silence {
-		return dead(CauseHarnessSilent, fmt.Sprintf(
-			"no work-class signal within %s of dispatch (%d non-work records seen: UI chatter and echoes never count as work)",
-			th.Silence.Round(time.Second), s.NoiseCount))
+	if v := judgeRule0(s, dead, age); v != nil {
+		return v
 	}
 	// 1: model_error — the turn ended on an error and no result followed.
 	if s.TurnError && now.Sub(s.TurnErrAt) >= grace {
@@ -52,6 +49,64 @@ func Judge(s Snapshot, now time.Time, grace time.Duration) *StepDead {
 			"turn ended normally %s ago and no `pf step handoff` followed within the %s grace",
 			now.Sub(s.TurnEndedAt).Round(time.Second), grace.Round(time.Second)))
 	}
+	if v := judgeRules23(s, now, dead); v != nil {
+		return v
+	}
+	// 4: step_timeout — CUMULATIVE step runtime over T.
+	if th.StepTimeout > 0 {
+		total := th.PriorRuntime + age
+		if total >= th.StepTimeout {
+			cause := CauseStepTimeoutLongTask
+			if slowModelOwnsTimeout(age, s.ModelCallLatencies, th) {
+				cause = CauseStepTimeoutSlowModel
+			}
+			med, p90 := slowLatencyThresholds(th)
+			return dead(cause, fmt.Sprintf(
+				"step ran %s cumulatively (%s before this dispatch + %s now), bound %s; this dispatch ran %d%% of the bound and completed %d model calls (median %s, p90 %s); the slow-model cause needs at least 50%% of the bound and, from at least %d completed calls, a median over %s or a p90 over %s",
+				total.Round(time.Second), th.PriorRuntime.Round(time.Second), age.Round(time.Second),
+				th.StepTimeout.Round(time.Second), percentOf(age, th.StepTimeout),
+				len(s.ModelCallLatencies), medianDuration(s.ModelCallLatencies).Round(time.Millisecond), p90Duration(s.ModelCallLatencies).Round(time.Millisecond),
+				MinSlowModelCalls, med, p90))
+		}
+	}
+	return nil
+}
+
+// JudgeTask applies the task lane's subset of the rules (polyforge#72,
+// AC9/ruling 15): 0 (harness_silent), 2 (model_hung), 3 (tool_hung)
+// only. Rules 1/1b (a step's turn-end grace) and 4 (the cumulative step
+// bound T) are step-only — a task's one turn ends with its process and
+// its bound is its own wall/token budget. The rule bodies are Judge's,
+// one definition each.
+func JudgeTask(s Snapshot, now time.Time) *StepDead {
+	if !s.Begun || s.Exit != nil {
+		return nil
+	}
+	dead := func(c Cause, evidence string) *StepDead {
+		return &StepDead{Step: s.Step, SpawnN: s.SpawnN, Cause: c, Evidence: evidence}
+	}
+	if v := judgeRule0(s, dead, now.Sub(s.StartedAt)); v != nil {
+		return v
+	}
+	return judgeRules23(s, now, dead)
+}
+
+// judgeRule0 and judgeRules23 are the rule bodies a task and a step
+// share, one definition each; each entry point calls them in its own
+// lowest-numbered-first order (a step: 0, 1, 1b, 2, 3, 4; a task: 0, 2, 3).
+func judgeRule0(s Snapshot, dead func(Cause, string) *StepDead, age time.Duration) *StepDead {
+	th := s.Thresholds
+	// 0: harness_silent — nothing but silence (or UI noise) since dispatch.
+	if th.Silence > 0 && s.WorkSignals == 0 && age >= th.Silence {
+		return dead(CauseHarnessSilent, fmt.Sprintf(
+			"no work-class signal within %s of dispatch (%d non-work records seen: UI chatter and echoes never count as work)",
+			th.Silence.Round(time.Second), s.NoiseCount))
+	}
+	return nil
+}
+
+func judgeRules23(s Snapshot, now time.Time, dead func(Cause, string) *StepDead) *StepDead {
+	th := s.Thresholds
 	// 2: model_hung — waiting for the model, no output for X.
 	if th.Silence > 0 && s.Waiting {
 		since := s.WaitingSince
@@ -77,23 +132,6 @@ func Judge(s Snapshot, now time.Time, grace time.Duration) *StepDead {
 			return dead(CauseToolHung, fmt.Sprintf(
 				"sub-agent call %q silent for %s since its last inner activity, running %s in total (bound %s); args: %s",
 				tool.Name, run.Round(time.Second), now.Sub(tool.Since).Round(time.Second), th.Tool.Round(time.Second), tool.Args))
-		}
-	}
-	// 4: step_timeout — CUMULATIVE step runtime over T.
-	if th.StepTimeout > 0 {
-		total := th.PriorRuntime + age
-		if total >= th.StepTimeout {
-			cause := CauseStepTimeoutLongTask
-			if slowModelOwnsTimeout(age, s.ModelCallLatencies, th) {
-				cause = CauseStepTimeoutSlowModel
-			}
-			med, p90 := slowLatencyThresholds(th)
-			return dead(cause, fmt.Sprintf(
-				"step ran %s cumulatively (%s before this dispatch + %s now), bound %s; this dispatch ran %d%% of the bound and completed %d model calls (median %s, p90 %s); the slow-model cause needs at least 50%% of the bound and, from at least %d completed calls, a median over %s or a p90 over %s",
-				total.Round(time.Second), th.PriorRuntime.Round(time.Second), age.Round(time.Second),
-				th.StepTimeout.Round(time.Second), percentOf(age, th.StepTimeout),
-				len(s.ModelCallLatencies), medianDuration(s.ModelCallLatencies).Round(time.Millisecond), p90Duration(s.ModelCallLatencies).Round(time.Millisecond),
-				MinSlowModelCalls, med, p90))
 		}
 	}
 	return nil

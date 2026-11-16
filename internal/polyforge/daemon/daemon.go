@@ -325,6 +325,16 @@ type Daemon struct {
 	hub   Hub
 	modes *ModeCtl
 	q     *jobQueue
+	// analysisQ is the Cell's persisted pending-analysis queue
+	// (analysis_queue.go, polyforge#72); analysisDispatch lets one
+	// dispatch walk run at a time (the tick, a task's end and the
+	// enqueue route all arrive at it).
+	analysisQ        *analysisQueue
+	analysisDispatch sync.Mutex
+	// analysisSweptAt is when a walk last read a blocked queue's head
+	// (the cleanup read, at most once per DrainInterval). Guarded by
+	// analysisDispatch.
+	analysisSweptAt time.Time
 
 	rt  *runtime.Runtime
 	obs *observe.Observe
@@ -794,6 +804,11 @@ func New(cfg Config) (*Daemon, error) {
 		stepHubAllow: laneHubAllow,
 		stepHubAttrs: laneHubAttrs,
 	}
+	// polyforge#72: the Cell's persisted pending-analysis queue — loaded
+	// before the face serves, so a restart's entries replay (the dispatch
+	// tick and every task end re-try them).
+	d.analysisQ = newAnalysisQueue(filepath.Join(cfg.DataDir, analysisQueueFile))
+	d.analysisQ.load()
 	if d.verifyQ == nil {
 		// unhosted: this daemon's own heavy-run admission
 		d.verifyQ = newVerifyQueue(cfg.StartupFile.Daemon.MaxConcurrentBars, cfg.StartupFile.Daemon.BarLoadThreshold)
@@ -806,7 +821,7 @@ func New(cfg Config) (*Daemon, error) {
 		d.ownTaskSlots = &task.Slots{}
 		d.ownTaskSlots.SetMax(cfg.StartupFile.Daemon.MaxConcurrentTasks)
 	}
-	d.tasks = d.newTaskManager(&rtCfg)
+	d.tasks = d.newTaskManager(&rtCfg, liveLimits)
 	rtCfg.EventTap = d.tapRuntimeEvent
 	// the daemon-owned step environment every step process carries (the
 	// live command PATH as its PATH, the Python interpreter; stepenv.go)
@@ -1082,6 +1097,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 			// a queued heavy dispatch the gates now allow
 			// starts here
 			d.verifyQ.Tick()
+			// the pending-analysis queue's wake (polyforge#72): every Cell
+			// re-tries its own head, so any Cell's queued analysis dispatches
+			// within one tick of a Host slot freeing.
+			d.dispatchAnalysis()
 		case <-drain.C:
 			d.fetchAutoWave()
 		}
@@ -1526,12 +1545,14 @@ func (d *Daemon) fetchAutoWave() {
 		if it.Content != nil {
 			content = *it.Content
 		}
-		if (!workflow.HasAcceptance(content) || !workflow.HasAnalysis(content)) && d.laneOf(it.ProjectName, *it.BundleName).RequiresAcceptance() {
+		if (!workflow.HasAcceptance(content) || !workflow.HasAnalysis(content) || workflow.AnalysisUnconfirmed(content)) && d.laneOf(it.ProjectName, *it.BundleName).RequiresAcceptance() {
 			// an execution ticket that lists no acceptance criterion, or
 			// carries no analysis section (polyforge#27), needs interaction
-			// first (the predicates pf submit applies) when its lane
-			// requires one — the lane's `acceptance` declaration; it stays
-			// queued and pf queue marks it
+			// first (the predicates `pf submit` applies) when its lane
+			// requires one — and so does one whose analysis the machine
+			// wrote and the owner has not confirmed yet (polyforge#72 AC6:
+			// the machine never claims its own unconfirmed report); it
+			// stays queued and pf queue marks it
 			continue
 		}
 		if berr, bad := badBundles[it.ProjectName+" "+*it.BundleName]; bad {

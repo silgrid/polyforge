@@ -85,6 +85,16 @@ func w53DaemonProbes() []w53DaemonProbe {
 		{"POST", "/machine/role", `{"role":"interactive","force":true}`},
 		{"POST", "/messages/msg_0000000000000000/analyze", ""},
 		{"POST", "/task/spawn", `{"project":"e2e","prompt":"x"}`},
+		// polyforge#72 (AC3, review r1#3): the analysis request a ticket's
+		// filing makes is a write a task may not make either
+		{"POST", "/analysis/enqueue", `{"work_item_id":"wi_x","project":"e2e"}`},
+		// polyforge#72's one exception (AC3): /task/analysis-write is the
+		// narrow write path a TASK peer may reach — the route itself still
+		// refuses this fake task (it is no running analysis task of this
+		// daemon) with the same DAEMON-403 envelope, never the guard's
+		// wording: the refusal comes from the route's own binding check,
+		// which is exactly the counter-example AC3 asks for.
+		{"POST", "/task/analysis-write", `{"content":"hijack"}`},
 		// last: the pre-guard daemon accepts it and stops serving, which
 		// is exactly the observed baseline this file records
 		{"POST", "/shutdown", ""},
@@ -197,6 +207,9 @@ func TestW53TaskProcessWriteVerbsRefusedByCLI(t *testing.T) {
 		{"msg", "send", "--to", "usr_x", "--text", "hi"},
 		{"step", "handoff", "--status", "done", "--body", "-"},
 		{"task", "spawn", "e2e", "x"},
+		// polyforge#72 (AC3/AC6, review r1#3): an analysis task must never
+		// confirm its own draft past the owner's gate
+		{"file", "analysis", "confirm", "wi_x"},
 	}
 	for _, args := range verbs {
 		out, code := w3PF(t, nil, env, "{}", args...)

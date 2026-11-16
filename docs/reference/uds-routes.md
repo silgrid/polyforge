@@ -11,9 +11,10 @@ tree, or whose UDS peer credential is unavailable, with `DAEMON-403`
 (polyforge#122 accident guard) — except the one step write the step route
 scopes itself: `POST /step/call`.
 A caller in a TASK agent's process tree is
-refused `DAEMON-403` on EVERY mutating route with no allowlist at all —
+refused `DAEMON-403` on EVERY mutating route —
 `/step/call` included, and `/task/spawn` itself (no
-recursion); its reads stay open, and the two `/task/memories` GETs are
+recursion) — except the one task write the route scopes itself:
+`POST /task/analysis-write` (polyforge#72); its reads stay open, and the two `/task/memories` GETs are
 scoped to its own project. The
 concepts (daemon, claim, decision feed) are defined on the [concepts
 page](../concepts.md); the failure codes of the recovery paths are the
@@ -71,6 +72,8 @@ a request carrying a profile is refused `DAEMON-400`).
 | GET | `/task/list` | `pf task list`: every known task (id, project, state, age, and `prompt_summary` — the prompt's first non-empty line, at most 120 code points; `reporter` — the spawn-time snapshot of the self-asserted caller id's display name as a human member of the task's project, else `machine`, never re-read from aihub; `report_tail` — the report's last non-empty line, at most 200 code points (`…` + the last 199 when longer), `""` while running or for an empty report, never the error; no full report and no full prompt — those stay on `/task/show`). | user; any local peer, including a step or task agent, may read (like `GET /status`) |
 | GET | `/task/show/{id}` | `pf task show`: one task's metadata and full report. | user; any local peer may read (like `GET /status`) |
 | POST | `/task/cancel/{id}` | `pf task cancel`: end a running task (it ends `interrupted`). | user; step and task processes refused |
+| POST | `/analysis/enqueue` | `pf file create`'s analysis request (polyforge#72): body `{work_item_id, project}`. The daemon re-reads the ticket and answers `{state}` — `not_needed` (no lane, a terminal ticket, a lane that requires no acceptance, or an analysis section already there), `scheduled` with `task_id` (one analysis task started), `queued` (the task lane is full or execution paused: persisted, dispatched when a slot frees, survives a restart) or `failed` with `detail` (the CLI prints 「未安排分析」). | user; step and task processes refused |
+| POST | `/task/analysis-write` | `pf task analysis-write`: body `{content}` — a running analysis task replaces its own ticket's `## 分析` section (the unconfirmed marker kept; a compare-and-swap on the ticket's `updated_at`, retried on a concurrent edit). Any caller that is not a running analysis task of this daemon is refused `DAEMON-403`, as is a task with no analysis binding. Accident guard, not a boundary: a local process may set `PF_TASK_ID` and pose as the running task (the task-trust ruling). | task (a running analysis task only) |
 | GET | `/task/memories/search` | A task agent's `pf recall`: search the calling task's own project's memories (the daemon holds the key). Search only — no browse mode: an empty `q` is refused before any forward and `after`/`sort` are never forwarded (browse is the human direct-aihub `pf recall`). | task |
 | GET | `/task/memories/{id}` | A task agent's `pf memory show`: read one memory of the calling task's own project. | task |
 

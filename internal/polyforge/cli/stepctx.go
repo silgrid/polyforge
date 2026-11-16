@@ -70,20 +70,28 @@ func taskProcessID() string {
 	return id
 }
 
+// taskAllowed are the read verbs a task agent may run; the one write is
+// `pf task analysis-write` (polyforge#72 AC3) — taskRefusal admits exactly
+// that subaction of `pf task` and nothing else that mutates.
 var taskAllowed = map[string]bool{"recall": true, "memory": true, "watch": true, "version": true}
 
 // taskRefusal refuses, inside a task agent, every verb but the read ones
-// (recall, memory show, watch --once): a task agent never drives the daemon
-// and cannot use the aihub-direct verbs. The spawn env carries no aihub key
-// and task mode clears it, but the shared HOME keeps cli.toml readable — an
+// (recall, memory show, watch --once, version) and the one narrow write
+// (`pf task analysis-write`, a running analysis task writing its own
+// ticket's draft): a task agent never drives the daemon and cannot use
+// the aihub-direct verbs. The spawn env carries no aihub key and task
+// mode clears it, but the shared HOME keeps cli.toml readable — an
 // accident guard, not a boundary.
-func taskRefusal(cmd *Command) error {
+func taskRefusal(cmd *Command, args []string) error {
 	if taskAllowed[cmd.Name] {
 		return nil
 	}
+	if cmd.Name == "task" && len(args) > 1 && args[1] == "analysis-write" {
+		return nil
+	}
 	return &api.Error{Code: api.ErrDaemonForbidden, Detail: fmt.Sprintf(
-		"pf %s refused inside a task agent: a task reads memories (`pf recall`, `pf memory show`) and watch snapshots (`pf watch <wi> --once`) only (PF_TASK_ID=%s is set — unset it if this is not a task)",
-		cmd.Name, os.Getenv("PF_TASK_ID"))}
+		"pf %s refused inside a task agent: a task reads memories (`pf recall`, `pf memory show`), watch snapshots (`pf watch <wi> --once`) and, for a running analysis task, writes its own draft (`pf task analysis-write`) only (PF_TASK_ID=%s is set — unset it if this is not a task)",
+		strings.Join(args, " "), os.Getenv("PF_TASK_ID"))}
 }
 
 // taskMemories is the daemon's memory face of a task agent.

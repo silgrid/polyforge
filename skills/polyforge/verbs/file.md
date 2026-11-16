@@ -183,13 +183,18 @@ case.
 ### Pre-submit analysis
 
 An execution ticket filed on a lane that requires acceptance also carries a
-pre-submit analysis before it is submitted: propose it right after filing (or
-when `pf submit`'s check refuses the ticket for it) — a read-only `pf task
-spawn` errand, the session writing the task's report into the ticket's `##
-分析` section; the owner may instead explicitly waive it with one dated line
-「免分析」. The flow, the 7-item report format, the boundary against grilling
-and the pre-submit confirmation rule are defined once in `verbs/submit.md`
-(the analysis check) — this fragment adds nothing to them.
+pre-submit analysis before it is submitted. When `pf file create` files such
+a ticket with no `## 分析` section, the daemon schedules the analysis at
+once — an analysis task that writes its draft into the ticket's
+`## 分析` section itself (`pf task analysis-write`); the create's output
+names the task, says it is queued, or says 未安排分析 (no daemon reachable —
+fall back to a session errand). A ticket a workflow step files
+(`pf step hub file`) gets no automatic analysis. The draft stays unconfirmed until the owner
+runs `pf file analysis confirm <id>`; the owner may instead explicitly waive
+the analysis with one dated line 「免分析」. The flow, the 7-item report
+format, the boundary against grilling and the pre-submit confirmation rule
+are defined once in `verbs/submit.md` (the analysis check) — this fragment
+adds nothing to them.
 
 ### Deepening check
 

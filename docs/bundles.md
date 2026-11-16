@@ -161,7 +161,9 @@ and YAML path, before a claim ever meets it. The keys:
   pre-submit analysis check: `pf submit` also refuses an item whose content
   carries no `## 分析` / `## Analysis` section (unless
   `--allow-no-analysis`), the auto claim skips it, and `pf queue` marks it
-  需要交互：未分析. `none` is a lane with no criterion to list: none of
+  需要交互：未分析; `pf file create` of such an item asks the daemon to
+  schedule its analysis task, and the auto claim also skips an item whose
+  analysis still awaits the owner's `pf file analysis confirm`. `none` is a lane with no criterion to list: none of
   this applies — neither check runs. The shipped `integrate` and
   `release` declare `none`; `develop` and `micro` do not. A user lane may
   declare it too; any other value is `WFC-112`.

@@ -30,7 +30,7 @@ var CellMembers = []string{
 	"daemon-id", "machine-key", "runtime-state.json", "claiming.json",
 	"submit-queue.json", "manual-models.json", "events", "git", "bar-runs",
 	"model-health.json", "task-reports", "step-agent", "step-agent-sessions",
-	"claude-config", "summarize-cwd",
+	"claude-config", "summarize-cwd", "analysis-queue.json",
 }
 
 // CellDir answers a Cell's state directory.
