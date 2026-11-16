@@ -64,6 +64,7 @@ var stepKeys = map[string]keySpec{
 	"on_fail":          {Type: "map {target}, gate only", Schema: object(onFailKeys)},
 	"waivable":         {Type: "bool (default false), gate only: the gate may hand off waive on the owner's word", Schema: jsonSchema{"type": "boolean"}},
 	"skippable":        {Type: "bool (default false): a project may switch the step off with `steps.<project>.<step>.skip: true` in its workspace yaml, fixed when the work item is first claimed; a switched-off step is never dispatched (its execution status is skipped), and the wrap_attrs of skipped steps at the lane's end pass to the last step that runs", Schema: jsonSchema{"type": "boolean"}},
+	"human_mergeable":  {Type: "bool (default false): a project may declare the step's work done by a person with `steps.<project>.<step>.by: human` in its workspace yaml, fixed when the work item is first claimed; the step then asks the owner to do its work instead of running it itself, and a claim of a lane that does not declare the step human_mergeable is refused naming it", Schema: jsonSchema{"type": "boolean"}},
 	"budget":           {Type: "map {wall_minutes, tool_minutes}", Schema: object(budgetKeys)},
 	"model_candidates": {Type: "[]<harness>:<model>[:<effort>]; exclusive with model_tier", Schema: candidates()},
 	"model_tier":       {Type: "a tier of defaults.tiers; exclusive with model_candidates", Schema: pattern(`\S`)},

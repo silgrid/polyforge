@@ -13,9 +13,10 @@ import shutil
 import subprocess
 import tempfile
 import unittest
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 from pfstep.gitmerge import conf as gconf
+from pfstep.gitmerge import humanmerge
 from pfstep.gitmerge import landing, project, resolve
 from pfstep.gitmerge import merge as gm
 from pfstep.gitmerge import revert as gr
@@ -279,6 +280,23 @@ class ProjectedPinTest(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_GIT, "git not installed")
+class RecordingGit(Git):
+    """A Git that records the revert commands it runs (the mainline flag
+    is the assertion's: a plain commit carries none)."""
+
+    def __init__(self, ctx: Ctx, environ: Optional[Dict[str, str]] = None) -> None:
+        super().__init__(ctx, environ)
+        self.revert_calls: List[Tuple[str, ...]] = []
+
+    def git(self, cwd: str, *args: str) -> str:
+        if args and args[0] == "revert":
+            self.revert_calls.append(args)
+        return super().git(cwd, *args)
+
+    def reverts_of(self, rev: str) -> Tuple[Tuple[str, ...], ...]:
+        return tuple(call for call in self.revert_calls if rev in call)
+
+
 class RevertTest(unittest.TestCase):
     def test_revert_keeps_the_log_and_its_pin(self) -> None:
         w = World(self)
@@ -295,6 +313,33 @@ class RevertTest(unittest.TestCase):
         self.assertIn(sha(log), read(work, "pin_test.go"))
         self.assertTrue(gr.reverted(g, work, ma, "HEAD"))
         self.assertFalse(gr.reverted(g, work, ma, main))
+
+    def test_revert_merge_of_a_plain_commit(self) -> None:
+        """A plain landed commit — a human squash or rebase landing
+        (polyforge#36) — reverts without the mainline flag: ``-m 1`` is
+        the merge commit's, asked of the commit itself (its second
+        parent), never of the record that named it. A merge commit keeps
+        it (the existing revert tests pin that behavior)."""
+        w = World(self)
+        git(w.seed, "fetch", "-q", "origin")
+        git(w.seed, "checkout", "-q", "-B", "main", "origin/main")
+        write(w.seed, "code.go", "package x\n\nfunc F() int { return 2 }\n")
+        sq = w.commit_push("a squash landing", "main")
+        mb = w.land(w.branch("m", "m-section"))
+        work, c = w.work(), read_conf(w.seed)
+        rec = RecordingGit(Ctx(), env())
+        main = git(work, "rev-parse", "origin/main")
+        rec.checkout(work, main)
+        gr.revert_merge(rec, work, c, main, sq)
+        self.assertIn("return 1", read(work, "code.go"))
+        self.assertTrue(gr.reverted(rec, work, sq, "HEAD"))
+        if any("-m" in call for call in rec.reverts_of(sq)):
+            self.fail("a plain commit reverts with no mainline flag: %s" % (rec.reverts_of(sq),))
+        rec2 = RecordingGit(Ctx(), env())
+        rec2.checkout(work, main)
+        gr.revert_merge(rec2, work, c, main, mb)
+        if not any("-m" in call for call in rec2.reverts_of(mb)):
+            self.fail("a merge commit keeps the mainline flag: %s" % (rec2.reverts_of(mb),))
 
     def test_revert_keeps_the_list(self) -> None:
         w = World(self)
@@ -427,6 +472,129 @@ class IdentityAndAttributesTest(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_GIT, "git not installed")
+class HumanLandingTest(unittest.TestCase):
+    """The human merge's landing rules: a PR a person merged on the forge
+    counts as the verified change landed only when what landed is that
+    change — by the patch-id fingerprint, for each of GitHub's three
+    merge methods, and never when the branch gained a commit or the
+    content changed on the way."""
+
+    def commit_file(self, w: World, rel: str, body: str, msg: str, branch: str) -> str:
+        """One more commit on the branch the seed has checked out."""
+        write(w.seed, rel, body)
+        return w.commit_push(msg, branch)
+
+    def land_human(self, w: World, how: str, branch: str, extra: bool = False,
+                   amend: Optional[Tuple[str, str]] = None) -> str:
+        """The human lands branch on origin's main the GitHub way (merge,
+        rebase or squash); extra adds one commit to the branch first (the
+        PR moved), amend changes the landed content (a squash of something
+        else). Answers the forge's mergeCommit: the merge commit, the
+        last replayed commit, the squash commit."""
+        seed = w.seed
+        git(seed, "fetch", "-q", "origin")
+        if extra:
+            git(seed, "checkout", "-q", branch)
+            write(seed, "extra.txt", "extra\n")
+            git(seed, "add", "-A")
+            git(seed, "commit", "-q", "-m", "extra")
+            git(seed, "push", "-q", "-f", "origin", "HEAD:refs/heads/" + branch)
+        git(seed, "checkout", "-q", "--detach", "origin/main")
+        if how == "merge":
+            git(seed, "merge", "-q", "--no-ff", "-m", "Merge pull request #1 from x/" + branch, "origin/" + branch)
+        elif how == "rebase":
+            # the replays carry a fixed committer date: a cherry-pick of
+            # the very commits made seconds ago in the same environment
+            # would otherwise answer the ORIGINAL shas (an identical
+            # parent, tree, message and date is an identical commit), a
+            # fast-forward GitHub's rebase button never makes
+            fork = git(seed, "merge-base", "origin/main", "origin/" + branch)
+            for c in git(seed, "rev-list", "--reverse", "--no-merges", fork + "..origin/" + branch).split():
+                e = env(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@invalid", GIT_COMMITTER_NAME="t",
+                        GIT_COMMITTER_EMAIL="t@invalid", GIT_COMMITTER_DATE="2005-04-05T22:13:13 +0000")
+                picked = subprocess.run(["git", "cherry-pick", c], cwd=seed, env=e,
+                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                assert picked.returncode == 0, picked.stdout.decode()
+        else:
+            git(seed, "merge", "-q", "--squash", "origin/" + branch)
+            if amend is not None:
+                write(seed, amend[0], amend[1])
+            git(seed, "add", "-A")
+            git(seed, "commit", "-q", "-m", branch + " (#1)")
+        git(seed, "push", "-q", "origin", "HEAD:refs/heads/main")
+        return git(seed, "rev-parse", "HEAD")
+
+    def judged(self, w: World, head: str, merge: str) -> Tuple[List[humanmerge.Landed], str]:
+        work, g = w.work(), lane()
+        return humanmerge.human_landing(g, work, "main", head, merge)
+
+    def test_human_landing_merge_commit(self) -> None:
+        w = World(self)
+        head = w.branch("feat", "a-section", "package x\n\nfunc F() int { return 2 }\n")
+        merge = self.land_human(w, "merge", "feat")
+        landed, refused = self.judged(w, head, merge)
+        self.assertEqual(refused, "")
+        self.assertEqual(landed, [humanmerge.Landed(merge, True)])
+
+    def test_human_landing_merge_commit_mismatch(self) -> None:
+        w = World(self)
+        head = w.branch("feat", "a-section")
+        merge = self.land_human(w, "merge", "feat", extra=True)
+        landed, refused = self.judged(w, head, merge)
+        self.assertEqual(landed, [])
+        self.assertIn("not the verified head", refused)
+
+    def test_human_landing_rebase(self) -> None:
+        w = World(self)
+        w.branch("feat", "a-section")
+        head = self.commit_file(w, "code.go", "package x\n\nfunc G() int { return 3 }\n", "second", "feat")
+        merge = self.land_human(w, "rebase", "feat")
+        landed, refused = self.judged(w, head, merge)
+        self.assertEqual(refused, "")
+        # the two replayed commits, oldest first, none a merge commit
+        self.assertEqual([l.sha for l in landed],
+                         [git(w.seed, "rev-parse", merge + "^"), merge])
+        self.assertEqual([l.merge for l in landed], [False, False])
+
+    def test_human_landing_rebase_mismatch(self) -> None:
+        w = World(self)
+        w.branch("feat", "a-section")
+        head = self.commit_file(w, "code.go", "package x\n\nfunc G() int { return 3 }\n", "second", "feat")
+        merge = self.land_human(w, "rebase", "feat", extra=True)
+        landed, refused = self.judged(w, head, merge)
+        self.assertEqual(landed, [])
+        self.assertIn("does not match the verified change", refused)
+
+    def test_human_landing_squash(self) -> None:
+        w = World(self)
+        w.branch("feat", "a-section")
+        head = self.commit_file(w, "code.go", "package x\n\nfunc G() int { return 3 }\n", "second", "feat")
+        merge = self.land_human(w, "squash", "feat")
+        landed, refused = self.judged(w, head, merge)
+        self.assertEqual(refused, "")
+        self.assertEqual(landed, [humanmerge.Landed(merge, False)])
+
+    def test_human_landing_squash_mismatch(self) -> None:
+        w = World(self)
+        w.branch("feat", "a-section")
+        head = self.commit_file(w, "code.go", "package x\n\nfunc G() int { return 3 }\n", "second", "feat")
+        merge = self.land_human(w, "squash", "feat", amend=("code.go", "package x\n\nfunc G() int { return 4 }\n"))
+        landed, refused = self.judged(w, head, merge)
+        self.assertEqual(landed, [])
+        self.assertIn("does not match the verified change", refused)
+
+    def test_human_landing_refusals(self) -> None:
+        w = World(self)
+        head = w.branch("feat", "a-section")
+        off = w.branch("other", "b-section")
+        work, g = w.work(), lane()
+        for merge, want in [("", "names no merge commit"),
+                            (off, "is not on main")]:
+            landed, refused = humanmerge.human_landing(g, work, "main", head, merge)
+            self.assertEqual(landed, [])
+            self.assertIn(want, refused)
+
+
 class LandingTest(unittest.TestCase):
     def test_merged_from_checks_the_branch_side(self) -> None:
         w = World(self)

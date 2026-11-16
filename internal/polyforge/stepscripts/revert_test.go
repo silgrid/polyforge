@@ -47,14 +47,14 @@ func revertHub(t *testing.T, batch string) *fakeHubReads {
 	var res struct {
 		Details struct {
 			Items []struct {
-				ID           string              `json:"id"`
-				Slug         string              `json:"slug"`
-				MergeCommits map[string][]string `json:"merge_commits"`
+				ID           string                       `json:"id"`
+				Slug         string                       `json:"slug"`
+				MergeCommits map[string][]json.RawMessage `json:"merge_commits"`
 			} `json:"items"`
 			Holds []struct {
-				WI           string              `json:"wi"`
-				Name         string              `json:"name"`
-				MergeCommits map[string][]string `json:"merge_commits"`
+				WI           string                       `json:"wi"`
+				Name         string                       `json:"name"`
+				MergeCommits map[string][]json.RawMessage `json:"merge_commits"`
 			} `json:"holds"`
 		} `json:"details"`
 	}
@@ -62,10 +62,19 @@ func revertHub(t *testing.T, batch string) *fakeHubReads {
 		t.Fatal(err)
 	}
 	h := &fakeHubReads{}
-	add := func(id, slug string, merges map[string][]string, rec map[string]any) {
+	add := func(id, slug string, merges map[string][]json.RawMessage, rec map[string]any) {
+		// the record's merge_commits entries pass through as the batch
+		// file carries them (a pre-#36 string, a #36 object)
 		mc := map[string]any{}
 		for repo, cs := range merges {
-			mc[repo] = cs
+			entries := make([]any, 0, len(cs))
+			for _, raw := range cs {
+				var v any
+				if json.Unmarshal(raw, &v) == nil {
+					entries = append(entries, v)
+				}
+			}
+			mc[repo] = entries
 		}
 		rec["state"], rec["merge_commits"] = "landed", mc
 		h.items = append(h.items, api.WorkItem{ID: id, Slug: slug, Status: api.StatusWrapped, Attrs: map[string]any{"integration": rec}})

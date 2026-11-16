@@ -62,7 +62,11 @@ integration batch's fix ticket; the lane's one waivable gate) → `publish`, whi
 PR → `merge` (`merge.py` merges it into the default branch under the
 per-repo merge lock; a project may skip it, `steps.<project>.merge.skip:
 true`, and its work items then end after `publish`, wrapped `published`
-with the PRs awaiting a human review) — the four mechanical steps agent steps on shared
+with the PRs awaiting a human review; a project may also declare the
+merge done by a person, `steps.<project>.merge.by: human`, and its work
+items wait at the merge step for the person's GitHub merge — the lane
+takes the landing and wraps them `landed`, into the integration batch)
+— the four mechanical steps agent steps on shared
 skills;
 [concepts](concepts.md#landed-awaiting-the-full-gate)), `integrate` (the integration
 lane: one work item per batch — `collect` → `revert` → `full-gate` → `close`,

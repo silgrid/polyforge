@@ -136,7 +136,7 @@ reason note names the cause): fix the cause if any, then `resume`, or `cancel`.
 `wrap --fail` (the owner's failed verdict), never to `cancel` (which only
 applies to WIs with no active execution — queued, paused or blocked). "Ship / deliver / push it / open the PR" has no
 verb: delivery is the workflow's own final `publish` and `merge` steps (`verbs/ship.md`) — never route it to
-`submit` (which starts execution), and never answer the publish step's owner-review question (its `pf step ask`) yourself: it is human-only, as are a develop build's stops (its `pf step ask` after the plan: the owner answers in free text that the build reads).
+`submit` (which starts execution), and never answer the publish step's owner-review question (its `pf step ask`) yourself: it is human-only, as are a develop build's stops (its `pf step ask` after the plan: the owner answers in free text that the build reads). A project that declares its develop merges done by a person (`steps.<project>.merge.by: human`) hands the PRs to the project's reviewer: the same is human-only — never merge its PRs in the session, and never answer the merge step's question (its `pf step ask` listing the PRs and the verified heads); the person merges on GitHub and answers the lane, which takes the landing itself.
 
 "Change / upgrade / fix" of a project repo's code is an execution intent (`verbs/execute-intent.md`): file the execution ticket — the bundle is required, a registration ticket runs nothing (CORE-409) — and submit it; never hand-execute the work in the session. "Run it / submit it" of an existing work item stays `submit`; "release / deploy a version" stays the release-bundle route (`file create --bundle release`).
 

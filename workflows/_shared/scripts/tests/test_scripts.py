@@ -310,7 +310,7 @@ class MergeScriptTest(unittest.TestCase):
         with open(landing, encoding="utf-8") as f:
             self.assertEqual(json.load(f), {"state": "landed", "repos": [
                 {"repo": "app", "pr": r["pr_url"], "head": head, "light_verified_head": head, "merge_commit": r["merge_commit"]}],
-                "merge_commits": {"app": [r["merge_commit"]]}})
+                "merge_commits": {"app": [{"sha": r["merge_commit"], "merge": True}]}})
 
     def test_default_branch_freshness_controls_merge(self) -> None:
         w = World(self, "app")

@@ -10,7 +10,14 @@ say what it is. When the lane's merge step runs after you, it merges the PR with
 pre-written command; when the step order of your dispatch header notes you as the last step
 (the steps after you `skipped`; the opening of `artifacts/handoff.md` is the claim-time copy of
 the same order), nobody in the lane merges it — the PR awaits a human
-review (step 5). Either way you never merge anything, merge nothing into the branch and run
+review (step 5). When the capsule's frozen step modes
+(`runtime-state/step-modes.json`, fixed at the claim from
+`steps.<project>.merge.by: human`) name the `merge` step — the step that
+runs after you and merges the PRs — `human` (polyforge#36; your own step is
+never in that file), the
+project declared the merge done by a person: the merge step still runs after you, but it
+asks the owner instead of merging — the PR body's closing lines are the human-merge ones
+(step 2). Either way you never merge anything, merge nothing into the branch and run
 no test. "The verifying
 gate" below is develop's `verification` (result file `artifacts/verify/result.json`),
 micro's `evidence` (`artifacts/run/result.json`); "the step that makes the change" is
@@ -66,8 +73,16 @@ the source and what did not hold (the lane goes back to the step that makes the 
    ticket's, else the plan's `## Acceptance`) and the plan's `## Coverage` table — micro has
    neither, its acceptance is the ticket's goal; a **`## Follow-up`** section listing every
    non-blocking finding of `artifacts/review.md` and every pre-flight hit (or "none") — the
-   owner decides which become tickets, no step files them; and the line "The lane's merge
-   step merges this PR — do not merge it by hand." — or, when the step order of your dispatch
+   owner decides which become tickets, no step files them; and the closing line, in the
+   mode the merge runs in: "The lane's merge step merges this PR — do not merge it by hand."
+   (the lane's own merge, the default) — or, when the capsule's frozen step modes
+   (`runtime-state/step-modes.json`) name the `merge` step `human` (the
+   step that runs after you; your own step is never in that file), the
+   human-merge lines
+   「此 PR 等待人工审查并由人合并，合并后请回复车道」 and
+   「请启用分支保护里的 Require branches to be up to date before merging（合并前分支必须最新）」
+   (the person merges; the branch protection keeps the merge on the verified change) —
+   or, when the step order of your dispatch
    header notes you as the last step (step 5), the line "This lane does not merge this PR — it awaits a human
    review."
 3. **Owner review.** An `owner-review: <paths> — <description>` line in `artifacts/plan.md`
