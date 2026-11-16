@@ -38,13 +38,36 @@ type StepEnv struct {
 	// (spawn.EnvPython): the daemon resolved it once at its start —
 	// [daemon] python, else python3 on its PATH — and checked its version.
 	Python string
+	// Cell is the name of the Cell the step's work item belongs to
+	// (spawn.EnvCell; polyforge#75): "default" for the Host's own Cell,
+	// else the named Cell's profile. The daemon answers it from its own
+	// Cell (d.profile); the step env is the one source every step process
+	// reads it from.
+	Cell string
+	// CellServer is this Cell's AIHub base URL as configured
+	// (spawn.EnvCellServer): the deploy target a step's deploy procedure
+	// must reach — the one server this Cell's identity domain holds.
+	CellServer string
+	// DeployEnv is the deploy configuration file this Cell's deploys read
+	// (spawn.EnvDeployEnv): an absolute path in the Host configuration
+	// directory — deploy.env for the default Cell, deploy-<profile>.env for
+	// a named one (cellcfg.DeployEnvFileName, the Cell file naming).
+	DeployEnv string
 }
 
 // Vars answers the harness-neutral entries of the step env: PF_PYTHON (an
 // empty value included: a set name with an empty value is still the
-// daemon's answer).
+// daemon's answer) and the step's Cell facts (polyforge#75): PF_CELL,
+// PF_CELL_SERVER and PF_DEPLOY_ENV, in that order — empty values included
+// the same way, so a step can always tell a stated fact from an inherited
+// copy (the sanitize point strips those).
 func (e StepEnv) Vars() []string {
-	return []string{spawn.EnvPython + "=" + e.Python}
+	return []string{
+		spawn.EnvPython + "=" + e.Python,
+		spawn.EnvCell + "=" + e.Cell,
+		spawn.EnvCellServer + "=" + e.CellServer,
+		spawn.EnvDeployEnv + "=" + e.DeployEnv,
+	}
 }
 
 // StepPath answers the PATH a step process of the harness binary

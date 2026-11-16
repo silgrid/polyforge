@@ -146,3 +146,18 @@ const (
 	EnvSharedDir = "PF_SHARED_DIR"
 	EnvPython    = "PF_PYTHON"
 )
+
+// The Cell facts a step process carries (polyforge#75): the Cell its
+// work item belongs to (PF_CELL: "default" for the Host's own Cell, else
+// the named Cell's profile), that Cell's AIHub base URL as configured
+// (PF_CELL_SERVER — the deploy target a deploy procedure must reach) and
+// the deploy configuration file that Cell's deploys read (PF_DEPLOY_ENV,
+// an absolute path named by the Host configuration directory: deploy.env
+// for the default Cell, deploy-<profile>.env for a named one). The daemon
+// is the one source of all three; a step's own copy of any of them never
+// reaches it (the sanitize point strips inherited PF_* names).
+const (
+	EnvCell       = "PF_CELL"
+	EnvCellServer = "PF_CELL_SERVER"
+	EnvDeployEnv  = "PF_DEPLOY_ENV"
+)

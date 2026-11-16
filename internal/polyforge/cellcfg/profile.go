@@ -60,6 +60,18 @@ func CellFileName(profile string) string {
 	return "cli-" + profile + ".toml"
 }
 
+// DeployEnvFileName answers the deploy configuration file a profile's
+// deploys read (polyforge#75), in the Host configuration directory beside
+// the Cell files: deploy.env for the default Cell, deploy-<profile>.env for
+// a named one — the Cell file naming, so an operator reading a Cell's file
+// name knows its deploy configuration's without a second lookup.
+func DeployEnvFileName(profile string) string {
+	if profile == DefaultProfile || profile == "" {
+		return "deploy.env"
+	}
+	return "deploy-" + profile + ".env"
+}
+
 // UnknownProfileDetail is the one refusal text for a profile no Cell is
 // configured under — the Host's router (daemon/cells.go) and the CLI's
 // placement validation (cli/profile.go) share it, so a name the Host

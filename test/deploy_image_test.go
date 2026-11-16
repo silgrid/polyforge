@@ -1,3 +1,4 @@
+// carries: .polyforge/deploy.sh
 package test
 
 // Fake-environment tests for .polyforge/deploy.sh's image-pull swap: the
@@ -166,6 +167,10 @@ echo "fake docker: unhandled: $*" >&2; exit 99
 
 const fakeSSH = `#!/bin/sh
 while [ $# -gt 0 ]; do case "$1" in -o) shift 2 ;; *) break ;; esac; done
+# ssh -G <host>: the local alias resolution deploy.sh's target check uses
+# (never a network call, so not logged; log-ssh holds network calls only).
+# FAKE_SSH_G_HOSTNAME overrides what the alias resolves to.
+case "$1" in -G) echo "hostname ${FAKE_SSH_G_HOSTNAME:-$2}"; exit 0 ;; esac
 # FAKE_SSH_DENY: the host refuses non-interactive auth (#283).
 [ -n "$FAKE_SSH_DENY" ] && { echo "$1: Permission denied (publickey)." >&2; exit 255; }
 shift   # host
@@ -356,7 +361,10 @@ c.commit()`
 	d.git("add", "-A")
 	d.git("commit", "-q", "-m", "deployer")
 	d.script = filepath.Join(d.repo, ".polyforge", "deploy.sh")
-	d.env = append(os.Environ(),
+	// the step env's Cell facts never leak from the test process into a
+	// deploy world (polyforge#75): a case sets them itself when it means
+	// them, and the manual path stays hermetic
+	d.env = append(withoutEnv(os.Environ(), "PF_CELL", "PF_CELL_SERVER", "PF_DEPLOY_ENV"),
 		"PATH="+d.path, "FAKE_W="+w, "TMPDIR="+w,
 		"HOME="+filepath.Join(w, "home"), "DOCKER_CONFIG="+filepath.Join(w, "home", ".docker"),
 		"AIHUB_HOST=fakehost", "AIHUB_DATA="+data,
