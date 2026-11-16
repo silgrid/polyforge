@@ -142,6 +142,13 @@ func stepHandoff(ctx *Context, args []string) error {
 
 // stepAsk is `pf step ask`.
 func stepAsk(ctx *Context, args []string) error {
+	// polyforge#68: ask registers no flags, so a literal -h/--help used
+	// to travel to the owner as the question; it is answered locally —
+	// ask's usage on stdout, exit 0, no call — before the body is read.
+	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help") {
+		fmt.Fprintln(ctx.Stdout, stepAskUsage)
+		return nil
+	}
 	text, err := askText(ctx.Stdin, args)
 	if err != nil {
 		return err
@@ -159,6 +166,20 @@ func stepAsk(ctx *Context, args []string) error {
 	})
 	return nil
 }
+
+// stepAskUsage is what `pf step ask -h` / `pf step ask --help` prints:
+// ask's line of `pf help step` plus the flag-like-body rule, so the
+// literal "--help" never travels to the owner as a question
+// (polyforge#68).
+const stepAskUsage = `usage: pf step ask "<question>" | pf step ask - (stdin)
+
+The dispatch's question to the owner: the daemon shows it to the owner and
+the reply comes back as this step's next turn. The question is the
+positional words joined, or "-" to read it from stdin. ask takes no flags:
+-h and --help print this usage (exit 0, nothing is sent); any other
+question whose first word starts with "-" (the lone "-" excepted) is
+refused before any call — quote the "-" word inside the question, or
+read the question from stdin.`
 
 // stepRecall is `pf step recall`: a search of the step's own project.
 func stepRecall(ctx *Context, args []string) error {
@@ -439,6 +460,13 @@ func askText(stdin io.Reader, args []string) (string, error) {
 		}
 		text = string(raw)
 	case len(args) >= 1:
+		// polyforge#68: a first word starting with "-" reads as a flag
+		// ask does not have — refuse it before any call, pointing at the
+		// quoting and stdin escapes (the lone "-" above is the stdin
+		// marker and stays).
+		if w := args[0]; strings.HasPrefix(w, "-") && w != "-" {
+			return "", fmt.Errorf("ask: the first word %q starts with \"-\" and was not sent: ask takes no flags (for its usage: pf step ask --help) — put the \"-\" word in quotes inside the question (pf step ask \"about %s …\"), or read the whole question from stdin: pf step ask -", w, w)
+		}
 		text = strings.Join(args, " ")
 	default:
 		return "", fmt.Errorf("ask: the question is required (`pf step ask \"<question>\"`, or `pf step ask -` with the question on stdin)")
