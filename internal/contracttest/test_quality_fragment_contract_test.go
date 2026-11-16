@@ -61,11 +61,10 @@ func testQualityFragment(t *testing.T) string {
 	return string(raw)
 }
 
-// testQualityStepVars answers the shipped step's own vars (develop's build
-// renders {{supplement_limit}} from its workflow.yaml, polyforge#52), so a
-// raw render of a shipped definition is the shipped one.
 // testQualityStepVars answers the loaded shipped step's vars and params
-// (the render inputs of its dispatched definition at the lane defaults).
+// (develop's build renders {{supplement_limit}} from its workflow.yaml,
+// polyforge#52; params at their lane defaults), so a raw render of a
+// shipped definition is the shipped one.
 func testQualityStepVars(t *testing.T, bundle, step string) (vars, params map[string]string) {
 	t.Helper()
 	lane, err := workflow.LoadStrict(filepath.Join(v1Root(t), "workflows", bundle))
