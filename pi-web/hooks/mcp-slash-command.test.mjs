@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
 import { bareMcpOpensSettings } from "../lib/mcp-command.ts";
+import { CLAUDE_SESSION_BUILTIN_COMMANDS } from "../lib/claude-shared.ts";
 
 // A bare /mcp opens Settings › MCP when pi's built-in MCP extension owns it, or
 // when the session has no /mcp at all (ADR 0006, lib/mcp-command.ts). These tests
@@ -54,13 +55,20 @@ function deferred() {
   return { promise, resolve };
 }
 
-function hook({ commands = [], pending = null, getCommands = async () => ({ commands: [] }), openSettings = true } = {}) {
-  const calls = { notices: [], opened: [], requests: [], lists: [], errors: [], loading: [] };
+function hook({ commands = [], pending = null, getCommands = async () => ({ commands: [] }), openSettings = true, isClaudeSession = false } = {}) {
+  const calls = { notices: [], opened: [], requests: [], lists: [], errors: [], loading: [], compacts: [], statsOpened: 0 };
   const scope = {
     sessionIdRef: { current: "session-1" },
+    isClaudeSession,
+    CLAUDE_SESSION_BUILTIN_COMMANDS,
     ensureNewSession: async () => "session-1",
+    isCompacting: false,
     addNotice: (notice) => calls.notices.push(notice),
     onOpenSettings: openSettings ? (section) => calls.opened.push(section) : undefined,
+    handleCompact: async (instructions) => { calls.compacts.push(instructions ?? null); return true; },
+    onSessionStatsPanelOpen: () => { calls.statsOpened += 1; },
+    setSessionStatsOverride: (stats) => { calls.stats = stats; },
+    sessionStats: null,
     bareMcpOpensSettings,
     slashCommandsRef: { current: commands },
     slashCommandsLoadRef: { current: pending },
@@ -219,4 +227,43 @@ test("without a way to open Settings, /mcp is sent", async () => {
   const { run, calls } = hook({ commands: [builtinMcp], openSettings: false });
   assert.deepEqual(await run("/mcp"), { handled: false });
   assert.deepEqual(calls.requests, []);
+});
+
+// polyforge#71 r1#3/r1#4 (AC2/AC3/AC8): a claude session hands only the two pi
+// built-ins its server answers to pi's handler — /compact (the guarded compaction)
+// and /session (the stats panel). Every other `/` text — pi's other built-ins typed
+// by hand, claude's own commands, /mcp — comes back `{ handled: false }` with no RPC,
+// so the composer sends it to claude verbatim instead of a 400 from the pi-only command.
+test("a claude session routes only /compact and /session to pi's handler; every other / text comes back unhandled (r1#3, r1#4)", async () => {
+  const { run, calls } = hook({ isClaudeSession: true });
+
+  // pi's other built-ins, typed by hand: unhandled, nothing sent, no error notice.
+  for (const text of ["/copy", "/name new title", "/reload", "/clone", "/auto-compact"]) {
+    assert.deepEqual(await run(text), { handled: false }, `${text} must not be routed to pi's handler`);
+    assert.deepEqual(calls.requests, [], `${text} reached the session RPC`);
+  }
+  assert.deepEqual(calls.notices, [], "no refusal notice: the text is the composer's to send");
+  assert.deepEqual(calls.compacts, [], "no compaction started");
+  assert.equal(calls.statsOpened, 0, "no panel opened");
+
+  // claude's own commands (the / menu's AC3 entries) pass through untouched.
+  assert.deepEqual(await run("/deep-research investigate the fixtures"), { handled: false });
+  assert.deepEqual(await run("/security-review"), { handled: false });
+  assert.deepEqual(calls.requests, [], "claude's own commands never reached the session RPC");
+
+  // /mcp is claude's own command too (the exclusion table): no Settings, no RPC.
+  assert.deepEqual(await run("/mcp"), { handled: false });
+  assert.deepEqual(calls.opened, [], "Settings › MCP opened for a claude session");
+
+  // The two supported built-ins keep pi's handlers — /compact the guarded compaction
+  // (the same handler the compact button takes, AC2), /session the stats panel.
+  assert.deepEqual(await run("/compact"), { handled: true, action: "compact" });
+  assert.deepEqual(calls.compacts, [null], "handleCompact ran with no instructions");
+  assert.deepEqual(await run("/compact focus on fixtures"), { handled: true, action: "compact" });
+  assert.deepEqual(calls.compacts, [null, "focus on fixtures"], "the instructions reach handleCompact");
+  assert.deepEqual(await run("/session"), { handled: true, action: "openSessionStats" });
+  assert.equal(calls.statsOpened, 1, "the stats panel opened");
+  // The compaction and the stats read are pi-web's own plumbing, not session RPCs
+  // of a pi-only command: get_session_stats is the one claude answers.
+  assert.deepEqual(calls.requests, ["get_session_stats"], "only the stats read reached the session");
 });

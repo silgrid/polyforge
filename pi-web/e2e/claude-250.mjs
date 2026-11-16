@@ -545,7 +545,6 @@ try {
     assert.equal(await bar.locator(".model-selector").count(), 1, "an existing claude session offers no model selector");
     assert.equal((await modelTrigger().innerText()).trim(), "claude-sonnet-5-5", "the model selector does not show the session's full model name");
     assert.ok(await bar.locator('button[aria-label="Change reasoning level"]').count() > 0, "an existing claude session offers no effort control");
-    assert.ok(await bar.locator('button[aria-label="Compact context"]').count() > 0, "an existing claude session offers no compact control");
     assert.equal(await harnessControl(), null, "an existing claude session still offers a harness selector");
     const text = await composer().innerText();
     assert.ok(!/fixed for this session/i.test(text), `the existing session still shows the fixed-for-this-session line: ${text.slice(-300)}`);
@@ -553,6 +552,9 @@ try {
       const state = await getJson(`/api/agent/${encodeURIComponent(id)}`);
       return !state.state?.isStreaming;
     }, 60_000, "the existing session's turn never ended");
+    // polyforge#71 (AC5): the compact control hides while a turn runs, so this
+    // is asserted once the session is idle — where it belongs.
+    assert.ok(await bar.locator('button[aria-label="Compact context"]').count() > 0, "an existing claude session offers no compact control");
     const before = stubLaunches().length;
     const changed = await postJson(`/api/agent/${id}`, { type: "set_model", provider: "claude", model: "claude-opus-5-5" });
     assert.equal(changed.status, 200, `a set_model request to a full name was not taken: ${changed.status} ${JSON.stringify(changed.body).slice(0, 200)}`);

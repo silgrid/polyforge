@@ -336,7 +336,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
     loadContext, activeLeafId, scrollToBottom, scrollToMessage, scrollToOffset,
     refreshFromDisk,
     manualFetch, manualFetching, manualFetchAvailable,
-    isClaudeSession, claudeSessionChoices, newSessionHarness, chooseNewSessionHarness,
+    isClaudeSession, claudeSessionChoices, claudeModelSwitching, newSessionHarness, chooseNewSessionHarness,
     newSessionClaudeEffort, handleClaudeModelChange, handleClaudeEffortChange, handleClaudeLaunchPermissionModeChange, claudeSwitchError, claudeStateKnown,
     relayToClaudeSubagent,
     claudeBackgroundTasks, claudeForceStopWork, stopClaudeBackgroundTask, readClaudeTaskOutput, forceStopClaudeTurn, dismissClaudeForceStop,
@@ -389,10 +389,12 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
       onLaunchPermissionModeChange: handleClaudeLaunchPermissionModeChange,
       // r3: plan is offered unless the session's approvals are on deny.
       planAvailable: claudeSessionChoices?.planAvailable !== false,
+      // polyforge#71 (AC6): the selector's spinner while a live model switch is under way.
+      modelSwitching: claudeModelSwitching,
       switchError: claudeSwitchError,
       stateKnown: claudeStateKnown,
     };
-  }, [isNew, isClaudeSession, claudeSessionChoices, newSessionHarness, newSessionClaudeModel, newSessionClaudeEffort, claudeAvailability, chooseNewSessionHarness, setNewSessionClaudeModel, handleClaudeModelChange, handleClaudeEffortChange, handleClaudeLaunchPermissionModeChange, claudeSwitchError, claudeStateKnown]);
+  }, [isNew, isClaudeSession, claudeSessionChoices, claudeModelSwitching, newSessionHarness, newSessionClaudeModel, newSessionClaudeEffort, claudeAvailability, chooseNewSessionHarness, setNewSessionClaudeModel, handleClaudeModelChange, handleClaudeEffortChange, handleClaudeLaunchPermissionModeChange, claudeSwitchError, claudeStateKnown]);
   // External-write signal: each new key reloads the mounted session from disk
   // exactly once, and only when it targets the session this window shows.
   const externalSessionChangeKeyRef = useRef<number | null>(null);
@@ -1232,9 +1234,10 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
       onAbort={isActivePane ? handleAbort : (() => {}) as () => void}
       // A claude session steers too: claude takes the message into the running
       // turn or queues it as its next one; it has no follow-up queue of pi's.
+      // polyforge#71 (AC4): a `/` command takes the same entry on both harnesses.
       onSteer={isActivePane && agentRunning ? handleSteer : undefined}
       onFollowUp={isActivePane && agentRunning && !isClaudeSession ? handleFollowUp : undefined}
-      onPromptWithStreamingBehavior={isActivePane && agentRunning && !isClaudeSession ? handlePromptWithStreamingBehavior : undefined}
+      onPromptWithStreamingBehavior={isActivePane && agentRunning ? handlePromptWithStreamingBehavior : undefined}
       isStreaming={sessionBusy}
       model={displayModelValue}
       isAutoModelSelection={isAutoModelSelection}
@@ -1249,9 +1252,11 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
       modelSwitching={modelSwitching}
       defaultModel={defaultModel}
       onSetDefaultModel={handleSetDefaultModel}
-      // claude compacts with its own /compact in an open session, never in a fresh
-      // composer; Stop ends that compaction through claude's abort, not pi's abort_compaction.
-      onCompact={(session || isNew) && !(isNew && isClaudeSession) ? handleCompact : undefined}
+      // Compaction belongs to an open session, either harness (claude's own
+      // /compact as a stoppable turn); a fresh composer — pi or claude — has no
+      // compact control: there is nothing to compact yet (polyforge#71, AC5).
+      // Stop ends a claude compaction through claude's abort, not pi's abort_compaction.
+      onCompact={session ? handleCompact : undefined}
       onAbortCompaction={isClaudeSession ? handleAbort : handleAbortCompaction}
       isCompacting={isCompacting}
       compactError={compactError}
@@ -1273,7 +1278,9 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
       slashCommands={slashCommands}
       slashCommandsLoading={slashCommandsLoading}
       onLoadSlashCommands={loadSlashCommands}
-      onBuiltinCommand={isClaudeSession ? undefined : handleBuiltinSlashCommand}
+      // polyforge#71 (AC2): both harnesses hand pi's built-in handler over — a claude
+      // session's menu offers only the built-ins its server answers (/compact, /session).
+      onBuiltinCommand={handleBuiltinSlashCommand}
       soundEnabled={soundEnabled}
       onSoundToggle={onSoundToggle}
       onAudioUnlock={unlockAudio}

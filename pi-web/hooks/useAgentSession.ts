@@ -24,6 +24,7 @@ import {
   type ClaudeEffort,
   type ClaudeLaunchPermissionMode,
   type SessionHarness,
+  CLAUDE_SESSION_BUILTIN_COMMANDS,
 } from "@/lib/claude-shared";
 import { normalizeToolCalls } from "@/lib/normalize";
 import { claudeSubagentRelayText, mergeClaudeSubagentHistory, mergeClaudeSubagentRuns, type ClaudeSubagentRun, type ClaudeSubagentRuns } from "@/lib/claude-subagent-view";
@@ -799,6 +800,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [liveModel, setLiveModel] = useState<{ provider: string; modelId: string } | null>(null);
   const [pendingModel, setPendingModel] = useState<{ provider: string; modelId: string } | null>(null);
   const [modelSwitching, setModelSwitching] = useState(false);
+  // polyforge#71 (AC6): an open claude session's model switch shows pi's spinner
+  // while claude answers; the effort switch shows none (owner ruling Q3=A).
+  const [claudeModelSwitching, setClaudeModelSwitching] = useState(false);
   const [isCompacting, setIsCompacting] = useState(false);
   const [autoCompactionEnabled, setAutoCompactionEnabled] = useState(true);
   const [compactError, setCompactError] = useState<string | null>(null);
@@ -3438,6 +3442,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     if (!match) return { handled: false };
 
     const [, commandName, rawArgs = ""] = match;
+    // polyforge#71 r1#3 (AC2/AC8): a claude session hands only the two pi built-ins
+    // its server answers to pi's handler; every other `/` text — pi's other built-ins
+    // typed by hand, claude's own commands, /mcp — comes back unhandled, so the
+    // composer sends it to claude verbatim (the menu lists the same two).
+    if (isClaudeSession && !CLAUDE_SESSION_BUILTIN_COMMANDS.includes(commandName)) return { handled: false };
     const args = rawArgs.trim();
     const sid = sessionIdRef.current ?? await ensureNewSession();
     const complete = (result: BuiltinSlashCommandResult): BuiltinSlashCommandResult => {
@@ -3523,9 +3532,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           // Only a bare /mcp, and only when pi's built-in MCP extension owns it or
           // nothing does (lib/mcp-command.ts): another extension's /mcp is sent as
           // before, and so is every subcommand, since `/mcp login`, `logout` and
-          // `reconnect` act on this session's own connections. Returning before
-          // onSend leaves no "/mcp" bubble and no sidebar row for a new chat; a
-          // streaming run is not touched.
+          // `reconnect` act on this session's own connections. A claude session's
+          // /mcp never reaches here (the routing gate above keeps it claude's own).
+          // Returning before onSend leaves no "/mcp" bubble and no sidebar row for a
+          // new chat; a streaming run is not touched.
           if (args || !onOpenSettings) return { handled: false };
           const commands = await slashCommandsForMcp();
           if (!commands || !bareMcpOpensSettings(commands)) return { handled: false };
@@ -3565,7 +3575,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } catch (e) {
       return complete({ handled: true, error: e instanceof Error ? e.message : String(e) });
     }
-  }, [activeLeafId, addNotice, ensureNewSession, handleCompact, isCompacting, loadModels, loadSession, loadSlashCommands, loadTools, promoteNewSession, onOpenSettings, onSessionForked, onSessionStatsPanelOpen, opts.chatInputRef, sessionStats, slashCommandsForMcp]);
+  }, [activeLeafId, addNotice, ensureNewSession, handleCompact, isClaudeSession, isCompacting, loadModels, loadSession, loadSlashCommands, loadTools, promoteNewSession, onOpenSettings, onSessionForked, onSessionStatsPanelOpen, opts.chatInputRef, sessionStats, slashCommandsForMcp]);
 
   // Let AgentSession.prompt decide atomically whether to queue against the
   // current run or start a new turn if it settled while the request was in
@@ -3674,6 +3684,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     const sid = sessionIdRef.current;
     if (!sid) return;
     const prefix = command.type === "set_model" ? "claude.switchModelError" : command.type === "set_effort" ? "claude.effortError" : "claude.permissionModeError";
+    // polyforge#71 (AC6): only a model switch turns the selector's spinner on.
+    const modelSwitch = command.type === "set_model";
+    if (modelSwitch) setClaudeModelSwitching(true);
     try {
       const result = await sendAgentCommand<ClaudeSwitchResult | null>(sid, command);
       if (result?.rejected) {
@@ -3692,6 +3705,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }));
     } catch (e) {
       setClaudeSwitchError({ sessionId: sid, message: translateRef.current(prefix, { error: e instanceof Error ? e.message : String(e) }) });
+    } finally {
+      if (modelSwitch) setClaudeModelSwitching(false);
     }
   }, []);
 
@@ -4297,7 +4312,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     data, loading, error, activeLeafId, messages, activeToolResults, entryIds, messageKeys, historyCursor, hasEarlierMessages, earlierTurnCount, streamingStore,
     agentRunning, modelNames, modelList, modelError, missingCwd, modelScopeWarnings, isModelScopeActive, allModelList, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, toolPreset, thinkingLevel,
     retryInfo, contextUsage, systemPrompt, forkingEntryId,
-    isCompacting, compactError, compactResult, currentModel, displayModel, modelSwitching, sessionStats, autoCompactionEnabled,
+    isCompacting, compactError, compactResult, currentModel, displayModel, modelSwitching, claudeModelSwitching, sessionStats, autoCompactionEnabled,
     slashCommands, slashCommandsLoading, queuedMessages,
     notices: noticeState.visible, extensionDialog, waitingExtensionDialogCount, extensionCustomUi, waitingExtensionCustomUiCount, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput,
     isAutoModelSelection: isNew && newSessionModel === null,

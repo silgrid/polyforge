@@ -223,3 +223,69 @@ export interface ClaudeSettings {
   /** `--include-hook-events`: hook activity shown in the session. */
   includeHookEvents: boolean;
 }
+
+/**
+ * The pi built-in slash commands a claude session's server answers (polyforge#71,
+ * AC2): the `/` menu offers exactly these, and only these reach pi's built-in
+ * handler on a claude session — every other `/` text goes to claude verbatim.
+ * `builtinSlashCommands()` (components/ChatInput.tsx) and the hook's routing
+ * gate (hooks/useAgentSession.ts) both read this one list.
+ */
+export const CLAUDE_SESSION_BUILTIN_COMMANDS: readonly string[] = ["compact", "session"];
+
+/**
+ * One of claude's own commands as its `initialize` answer lists it
+ * (polyforge#71): the fields pi-web reads for the `/` menu.
+ */
+export interface ClaudeCommandEntry {
+  name: string;
+  description?: string;
+  argumentHint?: string;
+  builtin?: boolean;
+}
+
+/**
+ * The claude commands pi-web's `/` menu never lists (polyforge#71, AC3's
+ * exclusion table), each with its reason. Every entry would either derail
+ * pi-web's own bookkeeping or hide its output: claude answers these as
+ * `<local-command-stdout>` bookkeeping the adapter hides, so a listed command
+ * would "do nothing"; the rest duplicate or fight controls pi-web owns.
+ */
+export const CLAUDE_COMMAND_EXCLUSIONS: ReadonlyMap<string, string> = new Map([
+  // claude answers these with `<local-command-stdout>`, which the adapter hides:
+  // a listed command would visibly do nothing.
+  ["autocompact", "its output is hidden bookkeeping; pi-web tracks claude's auto-compaction itself"],
+  ["config", "its output is hidden bookkeeping; Settings › Claude owns what pi-web configures"],
+  ["context", "its output is hidden bookkeeping; the header's context meter answers it"],
+  ["usage", "its output is hidden bookkeeping; the session's stats answer it"],
+  ["list-agents", "its output is hidden bookkeeping; the session's Agent rows answer it"],
+  // These would change state pi-web does not track, so its own bookkeeping diverges.
+  ["clear", "clears claude's context inside the child: pi-web's history and branch model would diverge"],
+  ["rename", "renames claude's own title: pi-web's session name would diverge"],
+  ["model", "bypasses the guarded set_model path and its UI state"],
+  ["effort", "bypasses the guarded set_effort path and its UI state"],
+  ["fast", "toggles a mode pi-web does not track, bypassing the model switch path"],
+  ["output-style", "changes a claude setting pi-web does not track"],
+  ["agents", "claude itself marks it \"(removed)\""],
+  ["mcp", "claude's servers are claude's own; Settings › MCP belongs to pi's built-in /mcp"],
+  ["__remote-workflow", "server-launched workflow plumbing, not a session command"],
+  ["workflow-launch-exec", "server-launched workflow plumbing, not a session command"],
+  // `compact` is not here: claude's own /compact is dropped in claudeSlashCommands
+  // because pi's built-in /compact already runs the guarded compaction path (AC2).
+]);
+
+/**
+ * The claude-own commands pi-web's `/` menu offers (polyforge#71, AC3):
+ * claude's `initialize` answer, minus the terminal-only names claude itself
+ * reports in every init frame's `terminal_slash_commands` (read at runtime,
+ * never hardcoded), minus the exclusion table above, minus `compact` — pi's
+ * built-in `/compact` already runs the guarded compaction path (AC2).
+ */
+export function claudeSlashCommands(commands: readonly ClaudeCommandEntry[], terminalSlashCommands: readonly string[]): ClaudeCommandEntry[] {
+  const terminal = new Set(terminalSlashCommands);
+  return commands.filter((command) => (
+    !terminal.has(command.name)
+    && !CLAUDE_COMMAND_EXCLUSIONS.has(command.name)
+    && command.name !== "compact"
+  ));
+}

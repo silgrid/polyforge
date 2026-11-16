@@ -44,6 +44,14 @@ const recordedAnswer = () => {
   const frames = fs.readFileSync(path.join(recording, "stream.jsonl"), "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
   return frames.find((frame) => frame.type === "control_response" && frame.response?.request_id === "init-1").response.response;
 };
+/** The recorded answer's own commands, normalized by the reading rule the #71 test states. */
+const recordedCommands = recordedAnswer().commands.map((command) => ({
+  name: command.name,
+  ...(command.description ? { description: command.description } : {}),
+  ...(command.argumentHint ? { argumentHint: command.argumentHint } : {}),
+  ...(command.builtin === true ? { builtin: true } : {}),
+}));
+
 const ALIASES = [
   { value: "default", displayName: "Default (recommended)", resolvedModel: "claude-opus-5-5" },
   { value: "opus", displayName: "Opus", resolvedModel: "claude-opus-5-5" },
@@ -54,17 +62,24 @@ const ALIASES = [
 const CAPABILITIES = ["ui_surface_v1", "mcp_call_result_not_for_model_v1", "mcp_call_check_permissions_v1"];
 
 test("the recorded 2.1.322 initialize answer yields the version, claude's alias list with resolved names and its capabilities", () => {
-  assert.deepEqual(probe.claudeInitializeInfo(recordedAnswer()), { version: "2.1.322", models: ALIASES, capabilities: CAPABILITIES, recorded: true });
+  // polyforge#71 (AC3): the whole answer shape, commands included. The expected
+  // command list is derived from the recording itself: name kept, empty
+  // description / argument hint dropped, builtin only when true (the reading rule
+  // claude-commands-71.test.mjs states), never from the implementation's output.
+  assert.equal(recordedCommands.length, 48, "claude 2.1.322's initialize answer lists 48 commands");
+  assert.deepEqual(probe.claudeInitializeInfo(recordedAnswer()),
+    { version: "2.1.322", models: ALIASES, commands: recordedCommands, capabilities: CAPABILITIES, recorded: true });
   // Tolerant: a malformed answer is no version, no model, no capability — never a throw.
   for (const value of [undefined, null, "x", {}, { models: "x", capabilities: [1], claude_code_version: 7 }, { models: [{ value: "-bad name" }, { value: 3 }, null] }]) {
-    assert.deepEqual(probe.claudeInitializeInfo(value), { version: null, models: [], capabilities: [], recorded: false }, JSON.stringify(value));
+    assert.deepEqual(probe.claudeInitializeInfo(value), { version: null, models: [], commands: [], capabilities: [], recorded: false }, JSON.stringify(value));
   }
 });
 
 test("a probe runs one claude with no prompt, answers from its initialize response and caches it per binary", async () => {
   const binary = installStub("probe-bin");
   const answer = await probe.probeClaude(binary);
-  assert.deepEqual(answer, { version: "2.1.322", models: ALIASES, capabilities: CAPABILITIES, recorded: true });
+  assert.deepEqual(answer,
+    { version: "2.1.322", models: ALIASES, commands: recordedCommands, capabilities: CAPABILITIES, recorded: true });
   const records = readStubLog(stubLog);
   const launches = records.filter((entry) => entry.kind === "probe");
   assert.equal(launches.length, 1, "one claude");
