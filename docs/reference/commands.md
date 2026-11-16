@@ -1131,7 +1131,7 @@ an explicit daemon flag. The exact keys, classes and outputs are on the
 are on the [UDS routes page](uds-routes.md).
 
 `pf config workspace --cwd <dir>` reads the mapped workspace's yaml, its
-declared step candidates with each entry's `source`/`class` (and its `skip` when the file declares one) and the
+declared step candidates with each entry's `source`/`class` (and its `skip` when the file declares one, and its `params` when the file sets any — each name to its value) and the
 `default` and `task` rows of every mapped project (one JSON document, no
 `summarize` and no `memory_policy`; a yaml still carrying either retired
 section errors with the file, the line and `pf config migrate`; see the
@@ -1140,6 +1140,9 @@ section errors with the file, the line and `pf config migrate`; see the
 `steps.<project>.<step-id>.models` and `steps.<project>.<step-id>.skip`
 (`true|false`, refused for a step no lane of the workspace declares
 `skippable`; class `next-claim`: fixed when a work item is first claimed)
+and `steps.<project>.<step-id>.params.<name>` (a value of one line of at
+most 256 bytes, refused when no lane of the workspace's lane set declares
+the param on the step; class `live`: composed at every dispatch)
 — and the memory_policy keys,
 `--workspace`/`--cwd`; the CAS comparison runs inside the writer flock, and
 a step-key write needs the running daemon and the workflows dir it names
