@@ -29,7 +29,7 @@ func Judge(s Snapshot, now time.Time, grace time.Duration) *StepDead {
 	}
 	age := now.Sub(s.StartedAt)
 
-	if v := judgeRules023(s, now, dead, age); v != nil {
+	if v := judgeRule0(s, dead, age); v != nil {
 		return v
 	}
 	// 1: model_error — the turn ended on an error and no result followed.
@@ -47,6 +47,9 @@ func Judge(s Snapshot, now time.Time, grace time.Duration) *StepDead {
 		return dead(CauseEndedWithoutResult, fmt.Sprintf(
 			"turn ended normally %s ago and no `pf step handoff` followed within the %s grace",
 			now.Sub(s.TurnEndedAt).Round(time.Second), grace.Round(time.Second)))
+	}
+	if v := judgeRules23(s, now, dead); v != nil {
+		return v
 	}
 	// 4: step_timeout — CUMULATIVE step runtime over T.
 	if th.StepTimeout > 0 {
@@ -79,13 +82,16 @@ func JudgeTask(s Snapshot, now time.Time) *StepDead {
 	dead := func(c Cause, evidence string) *StepDead {
 		return &StepDead{Step: s.Step, SpawnN: s.SpawnN, Cause: c, Evidence: evidence}
 	}
-	return judgeRules023(s, now, dead, now.Sub(s.StartedAt))
+	if v := judgeRule0(s, dead, now.Sub(s.StartedAt)); v != nil {
+		return v
+	}
+	return judgeRules23(s, now, dead)
 }
 
-// judgeRules023 is the rules a task and a step share — 0 (silence since
-// dispatch), 2 (model hung while waiting) and 3 (one tool hung) — in
-// their priority order, one definition both entry points judge by.
-func judgeRules023(s Snapshot, now time.Time, dead func(Cause, string) *StepDead, age time.Duration) *StepDead {
+// judgeRule0 and judgeRules23 are the rule bodies a task and a step
+// share, one definition each; each entry point calls them in its own
+// lowest-numbered-first order (a step: 0, 1, 1b, 2, 3, 4; a task: 0, 2, 3).
+func judgeRule0(s Snapshot, dead func(Cause, string) *StepDead, age time.Duration) *StepDead {
 	th := s.Thresholds
 	// 0: harness_silent — nothing but silence (or UI noise) since dispatch.
 	if th.Silence > 0 && s.WorkSignals == 0 && age >= th.Silence {
@@ -93,6 +99,11 @@ func judgeRules023(s Snapshot, now time.Time, dead func(Cause, string) *StepDead
 			"no work-class signal within %s of dispatch (%d non-work records seen: UI chatter and echoes never count as work)",
 			th.Silence.Round(time.Second), s.NoiseCount))
 	}
+	return nil
+}
+
+func judgeRules23(s Snapshot, now time.Time, dead func(Cause, string) *StepDead) *StepDead {
+	th := s.Thresholds
 	// 2: model_hung — waiting for the model, no output for X.
 	if th.Silence > 0 && s.Waiting {
 		since := s.WaitingSince
