@@ -226,6 +226,10 @@ func (h *Host) build(profile string, c cli.Config) (Config, error) {
 		// bounds, read from the default Cell at each judgement.
 		cfg.HostLive = h.defaultLive
 	}
+	// The all-Cells target facts (polyforge#76): every Cell's daemon injects
+	// the whole registry's target rows beside its own Cell facts, read live
+	// at every step derivation.
+	cfg.CellTargetsSrc = h.liveCellTargets
 	if profile == cellcfg.DefaultProfile {
 		cfg.LoadFile = func() (cli.Config, error) { return cli.LoadFileConfig(hostPath) }
 	} else {
@@ -447,6 +451,12 @@ func (h *Host) servingDaemons() []*Daemon {
 func (h *Host) sortedCells() []*cell {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	return h.sortedCellsLocked()
+}
+
+// sortedCellsLocked answers the registry entries, default first, then by
+// profile; the caller holds h.mu.
+func (h *Host) sortedCellsLocked() []*cell {
 	out := make([]*cell, 0, len(h.cells))
 	for _, e := range h.cells {
 		out = append(out, e)
@@ -457,6 +467,33 @@ func (h *Host) sortedCells() []*cell {
 		}
 		return out[i].profile < out[j].profile
 	})
+	return out
+}
+
+// liveCellTargets answers every serving Cell's target facts (polyforge#76):
+// its profile, its AIHub server as configured and the deploy configuration
+// file that Cell's deploys read (beside its Cell file, the Cell file naming)
+// - the one list a step's deploy procedure derives this machine's deploy
+// targets from and checks each target against its own row. Read live under
+// the registry lock at every step derivation: a Cell added, removed or
+// turned invalid at runtime moves the next one with it. A Cell without a
+// runtime is no target: it serves no work items and its configuration is
+// not trusted.
+func (h *Host) liveCellTargets() []runtime.CellTarget {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	entries := h.sortedCellsLocked()
+	out := make([]runtime.CellTarget, 0, len(entries))
+	for _, e := range entries {
+		if e.d == nil || e.removed {
+			continue
+		}
+		out = append(out, runtime.CellTarget{
+			Profile:   e.profile,
+			Server:    e.d.cfg.Server,
+			DeployEnv: filepath.Join(filepath.Dir(e.file), cellcfg.DeployEnvFileName(e.profile)),
+		})
+	}
 	return out
 }
 

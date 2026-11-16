@@ -9,7 +9,10 @@ package daemon
 // command_path moves both at once. The step env is also the source of the
 // step's Cell facts (polyforge#75): every step process carries its Cell's
 // name, its server and the deploy configuration file that Cell's deploys
-// read — PF_CELL, PF_CELL_SERVER, PF_DEPLOY_ENV.
+// read — PF_CELL, PF_CELL_SERVER, PF_DEPLOY_ENV — and of the all-Cells
+// target facts (polyforge#76): PF_CELL_TARGETS, every serving Cell's
+// profile, server and deploy configuration file, from a live source the
+// Host binds.
 
 import (
 	"os"
@@ -19,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/silgrid/polyforge/internal/common/spawn"
+	"github.com/silgrid/polyforge/internal/polyforge/runtime"
 )
 
 // envPath answers the last PATH value of env.
@@ -55,7 +59,8 @@ func TestStepEnvIsTheCommandPathSource(t *testing.T) {
 		t.Fatalf("the step env carries the interpreter Main resolved (Config.Python): %+v", env)
 	}
 	if got, want := env.Vars(), []string{spawn.EnvPython + "=/usr/bin/python3.12",
-		"PF_CELL=default", "PF_CELL_SERVER=", "PF_DEPLOY_ENV=" + filepath.Join(xdg, "polyforge", "deploy.env")}; !slices.Equal(got, want) {
+		"PF_CELL=default", "PF_CELL_SERVER=", "PF_DEPLOY_ENV=" + filepath.Join(xdg, "polyforge", "deploy.env"),
+		"PF_CELL_TARGETS="}; !slices.Equal(got, want) {
 		t.Fatalf("step env vars %q, want %q", got, want)
 	}
 	// a step: its pf directory first, then the command path
@@ -97,6 +102,46 @@ func TestCommandPathUnsetIsTheDaemonsOwnPATH(t *testing.T) {
 	}
 	if got := d.stepPathNow(); got != os.Getenv("PATH") {
 		t.Fatalf("unset: the reported step PATH %q, want the daemon's own", got)
+	}
+}
+
+// TestStepEnvAsksTheLiveCellTargetsSource (polyforge#76): the step env's
+// all-Cells target facts come from the live source the Host binds - read
+// at every derivation, so a change the source reports moves the next
+// answer with it - and reach the step process as PF_CELL_TARGETS, one
+// line per Cell. A daemon without a source (the unhosted test seam)
+// answers none, and the stated fact stays set with an empty value.
+func TestStepEnvAsksTheLiveCellTargetsSource(t *testing.T) {
+	rows := []runtime.CellTarget{
+		{Profile: "default", Server: "http://in.example:8080", DeployEnv: "/cfg/deploy.env"},
+		{Profile: "public", Server: "http://pub.example:8080", DeployEnv: "/cfg/deploy-public.env"},
+	}
+	next := rows
+	td := newTestDaemon(t, func(c *Config) {
+		c.CellTargetsSrc = func() []runtime.CellTarget { return next }
+	})
+	env := td.Daemon.stepEnv()
+	if !slices.Equal(env.CellTargets, rows) {
+		t.Fatalf("the step env asks the live source: CellTargets %+v, want %+v", env.CellTargets, rows)
+	}
+	if got := env.Vars(); !slices.Contains(got, spawn.EnvCellTargets+
+		"=default\thttp://in.example:8080\t/cfg/deploy.env"+
+		"\npublic\thttp://pub.example:8080\t/cfg/deploy-public.env") {
+		t.Fatalf("the target facts reach the step process as %s lines, got %q", spawn.EnvCellTargets, got)
+	}
+	// the source is LIVE: its next answer is the next derivation's
+	next = rows[:1]
+	if got := td.Daemon.stepEnv().CellTargets; !slices.Equal(got, rows[:1]) {
+		t.Fatalf("a changed source moves the next derivation: %+v, want %+v", got, rows[:1])
+	}
+	// no source: none - but the stated fact stays set (empty), like every Cell fact
+	bare := newTestDaemon(t, nil)
+	benv := bare.Daemon.stepEnv()
+	if len(benv.CellTargets) != 0 {
+		t.Fatalf("a daemon without a source answers no target facts: %+v", benv.CellTargets)
+	}
+	if !slices.Contains(benv.Vars(), spawn.EnvCellTargets+"=") {
+		t.Fatalf("an empty target list stays a stated fact with an empty value: %q", benv.Vars())
 	}
 }
 

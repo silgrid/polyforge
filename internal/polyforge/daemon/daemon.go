@@ -154,6 +154,12 @@ type Config struct {
 	// ConfigPath on its own): the Host binds the Host file for default and
 	// the named file over the Host keys for a named Cell.
 	LoadFile func() (cli.Config, error)
+	// CellTargetsSrc answers every serving Cell's target facts
+	// (runtime.CellTarget; polyforge#76), read live at every derivation:
+	// the Host binds its registry lookup, so a Cell added, removed or
+	// turned invalid at runtime moves the next step derivation with it.
+	// nil = the unhosted test seam: no source, an empty answer.
+	CellTargetsSrc func() []runtime.CellTarget
 	// Hosted marks a Cell run by a DaemonHost (cells.go): the Host owns the
 	// one socket and serves this Cell's routes through its own listener, so
 	// Run opens no face of its own. Every production daemon is hosted; an

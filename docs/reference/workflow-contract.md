@@ -305,6 +305,7 @@ and `--help` is its full reference: a skill does not repeat it.
 | `PF_CELL` | the Cell the work item belongs to: `default`, else the named Cell's profile |
 | `PF_CELL_SERVER` | that Cell's server as configured |
 | `PF_DEPLOY_ENV` | the deploy configuration file that Cell's deploys read |
+| `PF_CELL_TARGETS` | every serving Cell of this machine, one line each: its profile, its server and its deploy configuration file, tab-separated |
 
 **Python.** A script is Python 3.9 or newer and the standard library
 only: no third-party package, no virtual environment. An entry script
@@ -457,7 +458,7 @@ the four a step's scripts run from: `PF_CAPSULE`, `PF_LANE_DIR`,
 item's Cell facts: `PF_CELL`, `PF_CELL_SERVER` and `PF_DEPLOY_ENV` (the
 deploy configuration file that Cell's deploys read; a deploy procedure
 reads it when set, refusing when it is missing —
-[release.md](release.md), the deploy configuration section). With `[daemon]
+[release.md](release.md), the deploy configuration section), and every serving Cell's facts: `PF_CELL_TARGETS` (one line per Cell; a deploy procedure derives its deploy targets from it). With `[daemon]
 command_path` set, its `PATH` is the daemon's own `pf` directory, its
 harness binary's directory and that command PATH — the one the daemon's
 own git and gh run under — each entry once, so a script's commands
@@ -495,7 +496,10 @@ Every dispatch's prompt is six parts, in this order, and nothing else:
    handoff` and when to use each status; where the claim's recalled
    memories are (`recalled-memories.json`) and the memory policy to write
    by (`runtime-state/memory-policy.json`); take values for scripts from
-   result files; never read `runtime-state/execution.json`.
+   result files; never read `runtime-state/execution.json`; the tool-name
+   rule — no MCP server exists, the available tools are the built-in list
+   (named per harness), and a `Tool … not found` reply means a wrong name
+   to retry with the exact one, not an environment fault.
 4. **The step definition** (vars and fragments rendered at load).
 5. **The skill**.
 6. **On a resumed dispatch only**: the owner's undelivered messages, or

@@ -85,7 +85,7 @@ func TestReleaseBundleCarriesNoPrivateProcedure(t *testing.T) {
 // of the lane (workflow contract v2 §4.4, change 9: the procedures run by
 // the step's own agent; `release` and
 // `deploy` hold the heavy-run admission, `release` under a 120-minute tool
-// window inside a 135-minute wall, `deploy` under a 30-minute window,
+// window inside a 135-minute wall, `deploy` under a 60-minute window (polyforge#76: one run deploys every target of the machine),
 // `verify` a 30-minute wall; no gate waivable), the absence of rewinds,
 // the path-convention artifact hand-over and the per-step contract text —
 // since workflow contract 4 what each step reads and checks before it
@@ -114,7 +114,7 @@ func TestReleaseBundleShape(t *testing.T) {
 	}
 	// the admission and the windows (§4.4): release heavy, tool 120 under
 	// wall 135 (the lane's own window must fit the full gate release.sh
-	// may run itself); verify wall 30, no resources; deploy heavy, tool 30
+	// may run itself); verify wall 30, no resources; deploy heavy, tool 60
 	for _, c := range []struct {
 		id              string
 		heavy           bool
@@ -123,7 +123,7 @@ func TestReleaseBundleShape(t *testing.T) {
 	}{
 		{"release", true, 120, 135, 120 * time.Minute},
 		{"verify", false, 0, 30, 0},
-		{"deploy", true, 30, 0, 30 * time.Minute},
+		{"deploy", true, 60, 0, 60 * time.Minute},
 	} {
 		s := wf.step(c.id)
 		if got := s.Resources != nil && s.Resources.Heavy(); got != c.heavy {
@@ -249,7 +249,10 @@ func TestReleaseBundleShape(t *testing.T) {
 		// contract 3's defer verdict: a project without a deploy procedure
 		// hands off done, nothing deployed, and says so
 		"Hand off `done`, the body saying no repo carries a deploy procedure, so nothing was deployed (production state `none`).",
-		`set -o pipefail; cd repos/<owner> && .polyforge/deploy.sh V --confirm V 2>&1 | tee ../../artifacts/deploy.log`, "30 minutes", "heavy-run admission"} {
+		`set -o pipefail; cd repos/<owner> && .polyforge/deploy.sh V --confirm V 2>&1 | tee ../../artifacts/deploy.log`, "60 minutes", "heavy-run admission",
+		// polyforge#76: several deploy targets - every target line copied,
+		// and a run that deployed some targets but not all is partial
+		"every `target:` line and its last line copied verbatim", "`partial`"} {
 		if !strings.Contains(dep, needle) {
 			t.Fatalf("deploy step lost its contract text %q", needle)
 		}

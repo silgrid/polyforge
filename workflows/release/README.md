@@ -23,7 +23,7 @@ release --> verify --> deploy
 |---|---|---|---|---|---|---|
 | `release` | yes | — (the ticket names a bump, or none) | heavy admission | tool 120 min / wall 135 min | `mid` | preconditions, then runs the repo's `.polyforge/release.sh [bump]` itself |
 | `verify` | yes | `release-record.json` parses and names V and its tag's commit | — | wall 30 min | — (strong) | fresh-context audit of what `release` claims, by its own commands, then `release.sh --verify <version>` |
-| `deploy` | yes | `verified-version.json`'s V equals `release-record.json`'s version | heavy admission | tool 30 min | `mid` | runs `.polyforge/deploy.sh <version> --confirm <version>` itself, for the verified version only; deploys nothing (and says so) when the project has no deploy procedure |
+| `deploy` | yes | `verified-version.json`'s V equals `release-record.json`'s version | heavy admission | tool 60 min | `mid` | runs `.polyforge/deploy.sh <version> --confirm <version>` itself, for the verified version only; deploys nothing (and says so) when the project has no deploy procedure |
 
 **Downstream checks upstream.** Every step reads `artifacts/handoff.md` first and ends
 with one `pf step handoff` (`workflows/_shared/step-header.md`). None of the three has a
@@ -117,7 +117,7 @@ has to hold the window (`tool_minutes` ≤ `wall_minutes`). The daemon bounds a 
 total runtime across its dispatches at T = max(3 x its `budget.wall_minutes`, the
 daemon's `--step-timeout`, default 90 minutes), so `release` gets 405 minutes. `verify`
 declares a 30-minute wall (inert under that rule: the 90-minute default applies) and no
-window (the daemon's global one). `deploy` declares a 30-minute window and no wall
+window (the daemon's global one). `deploy` declares a 60-minute window (one run may deploy several targets) and no wall
 (the 90-minute default).
 
 A process killed mid-procedure (a daemon stop, a kill -9) takes the procedure with it;
@@ -146,6 +146,14 @@ contract — never cutting a second one.
   exist, and checks the deploy target against the Cell's server before any
   network work. A run by hand, without the Cell facts, skips the target check
   and says so.
+- A step process also carries every serving Cell's facts (`PF_CELL_TARGETS`:
+  one line per Cell — its profile, its server and its deploy configuration
+  file). A procedure with several deploy targets deploys them all in one run:
+  one deploy target per Cell whose deploy configuration file exists, the work
+  item's Cell first, one after another, stopping at the first failure; it
+  prints one `target:` line per target and sums them up on its last line. A
+  run where some targets serve the version (deployed or already deployed) and a later
+  one failed is `partial`, a failure.
 - `.polyforge/deploy.sh --preflight` (optional) - a read-only check of the deploy
   machine and target that reports every problem in one message and exits 0 only
   when the deploy could run. When it exists, the `release` step runs it before
