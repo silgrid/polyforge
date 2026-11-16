@@ -884,7 +884,14 @@ test("the page is layered — a Host region of Host-only keys, each Cell's file 
   assert.ok(region.length > 0, "the Host region component exists");
   assert.match(region, /fetch\(HOST_REGION_READ_URL\)/, "the region reads the Host scope, never the cwd's Cell");
   assert.match(region, /body: JSON\.stringify\(hostRegionWriteBody\(action, key, value, read\?\.file\?\.sha256 \?\? null\)\)/, "writes go through the scoped writer with the file CAS");
-  assert.match(region, /HOST_ONLY_KEYS\.map\(\(key\) => \(/);
+  // polyforge#51: the scalar Host-only keys stay one-line rows; the two
+  // pattern lists are one-regex-per-line textareas; the slow bounds are
+  // scalar rows.
+  assert.match(region, /HOST_SCALAR_KEYS\.map\(\(key\) => \(/, "the scalar Host keys keep the one-line row");
+  assert.match(region, /HOST_LIST_KEYS\.map\(\(key\) => \(/, "the pattern lists render their own editor");
+  assert.match(region, /data-pf-pattern-list=\{key\}/, "the list editor is addressable");
+  assert.match(region, /split\("\\n"\)/, "the list is edited one pattern per line");
+  assert.match(source, /polyforge\.settings\.hostPatternsHint/, "the list editor carries its hint");
   assert.doesNotMatch(source, /ScopedSettingsRegion|CELL_REGION_KEYS|regionEditableKeys/, "no Cell region is left");
   // a Cell's api_key: write-only in its file card — a password input, its set state, never its value
   const cell = source.slice(source.indexOf("function CellSettings("), source.indexOf("function HostSettingsRegion("));

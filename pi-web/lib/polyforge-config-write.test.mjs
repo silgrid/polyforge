@@ -106,6 +106,45 @@ test("a cli write records the file's real old value, not the previous history va
 
 // summarize.* is a flat cli.toml key — no workspace, the
 // cli.toml CAS, the real old value from `pf config list`.
+// polyforge#51: the Host region's pattern lists and slow thresholds are
+// Host-scoped cli.toml writes; a list reaches pf as one JSON array and a
+// bad shape is refused before any write spawn.
+test("a Host pattern-list write carries the --host pin and reaches pf as one JSON list; bad shapes never spawn", async (t) => {
+  const tree = stubTree({ version: "v2.20.21" });
+  withPath(tree, t);
+  const lib = await jiti.import("./polyforge-config-write.ts");
+
+  const write = await lib.writePolyforgeConfig({
+    action: "set",
+    key: "transient_error_patterns",
+    value: ["\\b402\\b", "payment retry"],
+    host: true,
+    expect_state: { file_sha256: tree.sha(tree.cliToml) },
+  });
+  const setCall = calls(tree).find((call) => call.args.includes("set"));
+  assert.ok(setCall, "the write reached pf");
+  const keyIdx = setCall.args.indexOf("transient_error_patterns");
+  assert.ok(keyIdx > 0, "the key is on the argv");
+  assert.equal(setCall.args[keyIdx + 1], JSON.stringify(["\\b402\\b", "payment retry"]), "the value is one JSON array");
+  assert.ok(setCall.args.includes("--host"), "the write is pinned to the Host scope");
+  assert.ok(!setCall.args.includes("--cwd") && !setCall.args.includes("--workspace"), "a Host key carries no path flag");
+
+  reset(tree);
+  for (const bad of [undefined, "boom", ["ok", ""], [7]]) {
+    await assert.rejects(
+      () => lib.writePolyforgeConfig({ action: "set", key: "model_error_patterns", value: bad, host: true }),
+      (error) => error.status === 400,
+      `refused before any spawn: ${JSON.stringify(bad)}`,
+    );
+  }
+  assert.ok(!calls(tree).some((call) => call.args.includes("set")), "no write spawn for a bad shape");
+  await assert.rejects(
+    () => lib.writePolyforgeConfig({ action: "set", key: "slow_model_median_latency", value: "", host: true }),
+    (error) => error.status === 400,
+    "an empty duration string is refused",
+  );
+});
+
 test("a summarize write is a cli.toml write: no --cwd, the cli.toml hash, the list's old value, and a rollback the same way", async (t) => {
   const tree = stubTree({ version: "v2.20.21" });
   withPath(tree, t);
