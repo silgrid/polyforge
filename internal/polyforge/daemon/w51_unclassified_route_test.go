@@ -28,7 +28,7 @@ func w51StepFailed(at time.Time, cause, classifiedBy, errorText string) protocol
 }
 
 // w51SeedEvents writes one work item's event log in a Cell's data dir.
-func w51SeedEvents(t *testing.T, dataDir, wi string, entries ...protocol.EventEntry) {
+func w51SeedEvents(t *testing.T, dataDir string, wi string, entries ...protocol.EventEntry) {
 	t.Helper()
 	dir := filepath.Join(dataDir, "events")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -87,9 +87,9 @@ func TestW51ScanUnclassifiedWindowDedup(t *testing.T) {
 func TestW51UnclassifiedRouteAggregatesCells(t *testing.T) {
 	th := newTestHost(t, hostCell{profile: "default", machineID: "m-def"}, hostCell{profile: "alpha", machineID: "m-alpha"})
 	at := time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339Nano)
-	w51SeedEvents(th.cellDataDir("default"), "wi_d1",
+	w51SeedEvents(t, th.cellDataDir("default"), "wi_d1",
 		w51StepFailed(time.Now().Add(-24*time.Hour), "model_error", "fallback", "gateway tantrum A"))
-	w51SeedEvents(th.cellDataDir("alpha"), "wi_a1",
+	w51SeedEvents(t, th.cellDataDir("alpha"), "wi_a1",
 		w51StepFailed(time.Now().Add(-25*time.Hour), "exit_model_class", "fallback", "gateway tantrum A"),
 		w51StepFailed(time.Now().Add(-26*time.Hour), "model_error", "fallback", "upstream wailed mysteriously"))
 	raw, err := th.client("").Unclassified()
