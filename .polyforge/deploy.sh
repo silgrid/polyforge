@@ -334,14 +334,21 @@ fi
 # ssh alias resolved LOCALLY - ssh -G reads the configuration, never the
 # network. The answer is the full refusal text naming both sides.
 _tc_mismatch() {
-  _tc_host="${AIHUB_HOST#*@}"
-  _tc_resolved="$(ssh -G "$_tc_host" 2>/dev/null | sed -n 's/^hostname //p' | head -n 1)"
-  [ -n "$_tc_resolved" ] || _tc_resolved="$_tc_host"
-  _tc_cell="$(printf '%s' "$PF_CELL_SERVER" | sed -n 's#^[a-zA-Z][a-zA-Z0-9+.-]*://\([^:/@]*\).*#\1#p' | tr '[:upper:]' '[:lower:]')"
-  if [ "$(printf '%s' "$_tc_resolved" | tr '[:upper:]' '[:lower:]')" != "$_tc_cell" ]; then
+  if _tc_differs "$AIHUB_HOST" "$PF_CELL_SERVER"; then
     printf "the deploy target %s (AIHUB_HOST %s) is not this work item's Cell server %s (PF_CELL_SERVER %s)" \
       "$_tc_resolved" "$AIHUB_HOST" "$_tc_cell" "$PF_CELL_SERVER"
   fi
+}
+# _tc_differs <AIHUB_HOST> <server URL>: succeeds when the host does NOT
+# name that server, leaving both compared sides in _tc_resolved and
+# _tc_cell (the one comparison polyforge#75's check and polyforge#76's
+# per-target check share; each words its own refusal).
+_tc_differs() {
+  _tc_host="${1#*@}"
+  _tc_resolved="$(ssh -G "$_tc_host" 2>/dev/null | sed -n 's/^hostname //p' | head -n 1)"
+  [ -n "$_tc_resolved" ] || _tc_resolved="$_tc_host"
+  _tc_cell="$(printf '%s' "$2" | sed -n 's#^[a-zA-Z][a-zA-Z0-9+.-]*://\([^:/@]*\).*#\1#p' | tr '[:upper:]' '[:lower:]')"
+  [ "$(printf '%s' "$_tc_resolved" | tr '[:upper:]' '[:lower:]')" != "$_tc_cell" ]
 }
 
 # ------------------------------------------------------------- the targets
@@ -405,9 +412,8 @@ MTROWS
       [ -n "$_mt_p" ] || continue
       _mt_h="$(_mt_host "$_mt_e")"
       [ -n "$_mt_h" ] || continue
-      _mt_refusal="$(AIHUB_HOST="$_mt_h" PF_CELL_SERVER="$_mt_s" _tc_mismatch)"
-      if [ -n "$_mt_refusal" ]; then
-        echo "deploy: REFUSED - target $_mt_p: $_mt_refusal. Nothing was touched." >&2
+      if _tc_differs "$_mt_h" "$_mt_s"; then
+        echo "deploy: REFUSED - target $_mt_p: its deploy configuration $_mt_e points at $_tc_resolved (AIHUB_HOST $_mt_h), not at its own Cell $_mt_p's server $_tc_cell (PF_CELL_TARGETS row $_mt_p: $_mt_s). Nothing was touched." >&2
         exit 1
       fi
     done <<MTROWS
