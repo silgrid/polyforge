@@ -9,7 +9,7 @@ package test
 // The verify action runs the engine in the
 // daemon: no lane text names it, so the contract is the shipped engine.
 //
-// Run (targeted): GOWORK=off go test ./test/ -run '^TestW25ReleaseTree' -count=1
+// Run (targeted): GOWORK=off go test ./internal/contracttest/ -run '^TestW25ReleaseTree' -count=1
 
 import (
 	"os"
@@ -19,10 +19,7 @@ import (
 
 // TestW25ReleaseTreeEngineAndLaneShipTogether pins the coexistence guarantee.
 func TestW25ReleaseTreeEngineAndLaneShipTogether(t *testing.T) {
-	root, err := filepath.Abs("..")
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := v1Root(t)
 	engine := filepath.Join(root, "workflows", "_shared", "scripts", "verify-scope")
 	info, err := os.Stat(engine)
 	if err != nil {

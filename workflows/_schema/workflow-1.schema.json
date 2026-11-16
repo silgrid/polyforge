@@ -222,6 +222,26 @@
       },
       "minItems": 1,
       "type": "array"
+    },
+    "uncounted_rewinds": {
+      "additionalProperties": false,
+      "description": "map {reason_contains, max}: the lane-declared class of gate-FAIL rewinds charged to no budget — a gate FAIL whose one-line hand-off reason carries reason_contains rewinds without spending max_rewinds, counted on its own toward max (the default 2 when the lane declares none; 0 = every matching FAIL asks the owner first, exactly like a spent max_rewinds); allowed only when a step declares on_fail, refused otherwise",
+      "properties": {
+        "max": {
+          "description": "int >= 0 (the default 2 when the lane declares none): the class's own rewind budget, held at `pf step handoff` exactly like max_rewinds",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reason_contains": {
+          "description": "string, required, non-empty: the substring a gate FAIL's one-line hand-off reason carries when its rewind falls in the class (the stable prefix of the failing step's script summary; the rest of the line varies)",
+          "pattern": "\\S",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason_contains"
+      ],
+      "type": "object"
     }
   },
   "required": [

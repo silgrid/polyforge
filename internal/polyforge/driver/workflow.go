@@ -28,6 +28,11 @@ type Workflow struct {
 	// counts toward it (an owner-routed one counts
 	// toward nothing). 0 is a valid budget: every gate FAIL asks the owner.
 	MaxRewinds int
+	// UncountedRewinds is the lane's `uncounted_rewinds`: the lane-declared
+	// class of gate-FAIL rewinds charged to no budget — a FAIL whose
+	// one-line hand-off reason contains ReasonContains — counted on its
+	// own toward Max (nil when the lane declares none).
+	UncountedRewinds *workflow.UncountedRewinds
 }
 
 // StepSpec is one workflow step: identity and order, gate policy and the
@@ -307,7 +312,7 @@ func LoadWorkflowGraph(bundleDir string) (*Workflow, error) {
 
 // workflowOf maps a loaded lane onto the execution graph.
 func workflowOf(lane *workflow.Lane) *Workflow {
-	wf := &Workflow{Name: lane.Name, MaxRewinds: lane.MaxRewinds}
+	wf := &Workflow{Name: lane.Name, MaxRewinds: lane.MaxRewinds, UncountedRewinds: lane.UncountedRewinds}
 	for _, s := range lane.Steps {
 		step := StepSpec{
 			ID:          s.ID,

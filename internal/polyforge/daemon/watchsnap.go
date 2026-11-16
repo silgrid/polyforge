@@ -470,11 +470,13 @@ func (d *Daemon) readExecution(wi string, item *api.WorkItem) *protocol.WatchExe
 		Steps: map[string]protocol.WatchStep{}, DeclaredSteps: declaredSteps(wf),
 		Overrides: watchOverrides(d, wi, dir),
 	}
-	// the rewind tally: the automatic rewinds and the owner's apart
+	// the rewind tally: the automatic rewinds, the owner's and the
+	// lane-declared uncounted class's apart
 	if wf != nil {
 		out.Rewinds = &protocol.WatchRewinds{
 			Agent: driver.AgentRewindCount(ex.RewindStats.Rewinds), MaxRewinds: driver.MaxRewinds(wf),
-			Owner: driver.OwnerRewindCount(ex.RewindStats.Rewinds),
+			Owner:     driver.OwnerRewindCount(ex.RewindStats.Rewinds),
+			Uncounted: driver.UncountedRewindCount(ex.RewindStats.Rewinds), MaxUncountedRewinds: driver.MaxUncountedRewinds(wf),
 		}
 	}
 	ids := make([]string, 0, len(ex.Steps))

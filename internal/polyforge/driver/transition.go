@@ -176,6 +176,10 @@ type GateVerdict struct {
 	// (`pf step handoff --status fail --per-owner`, workflow contract 4):
 	// its rewind is the owner's, charged to no budget.
 	PerOwner bool
+	// FailReason is the FAIL's one-line hand-off reason: what the
+	// lane-declared uncounted class (`uncounted_rewinds`) matches its
+	// declared substring against.
+	FailReason string
 }
 
 // appliedInfo records what one apply actually did, for the event body.
@@ -507,6 +511,7 @@ func (d *Driver) applyStepResultLocked(req TransitionRequest, info *appliedInfo)
 		// the workflow's on_fail (validated at load to name an earlier
 		// step) is the one rewind-target authority
 		verdict = d.verdictFor(req.StepID, res)
+		verdict.FailReason, _ = out["fail_reason"].(string)
 	}
 
 	st.Dispatch = 0
@@ -557,9 +562,12 @@ func (d *Driver) applyStepResultLocked(req TransitionRequest, info *appliedInfo)
 // advances), and its candidate pointer is untouched (INV-1g — rewind
 // never switches candidates). The rewind is charged to max_rewinds unless
 // the gate handed it off citing the owner (--per-owner: the owner's,
-// charged to nothing). The budget is held at the call: `pf step handoff`
-// refuses a fail not citing the owner once it is spent
-// (RewindBudgetSpent), so nothing here parks on it.
+// charged to nothing) or the FAIL's reason falls in the lane-declared
+// uncounted class (`uncounted_rewinds`: charged to nothing too, counted
+// on its own toward its cap). The budget is held at the call: `pf step
+// handoff` refuses a fail not citing the owner once it is spent
+// (FailRewindBudgetSpent — the cap the FAIL's reason spends), so nothing
+// here parks on it.
 //
 // It runs inside the gate's step_result write, after that write checked
 // the gate is the running current step (the target is the workflow's
@@ -573,8 +581,11 @@ func (d *Driver) applyGateFailLocked(gate string, v *GateVerdict, out map[string
 	tIdx, _ := d.workflow.indexOf(target)
 	gIdx, _ := d.workflow.indexOf(gate)
 	class := capsule.RewindCharged
-	if v.PerOwner {
+	switch {
+	case v.PerOwner:
 		class = capsule.RewindOwner
+	case uncountedFail(d.workflow, v.FailReason):
+		class = capsule.RewindUncounted
 	}
 	d.applyRewindRangeLocked(tIdx, gIdx, target, gate, CauseGateFailRewind, class, info)
 	d.closeGateRoundLocked(gate, out, "FAIL verdict rewound the workflow to "+target)
@@ -1027,12 +1038,14 @@ func cloneExec(e *capsule.Execution) *capsule.Execution {
 	return &out
 }
 
-// countTowardTotal counts the ledger records max_rewinds counts: every
-// record but an owner-routed one.
+// countTowardTotal counts the ledger records max_rewinds counts: the
+// charged ones alone — an owner-routed rewind and one of the
+// lane-declared uncounted class count toward nothing (the class's own
+// cap, uncountedRewindBudgetSpent).
 func countTowardTotal(rewinds []capsule.RewindRecord) int64 {
 	var n int64
 	for _, r := range rewinds {
-		if r.Class != capsule.RewindOwner {
+		if r.Class == capsule.RewindCharged {
 			n++
 		}
 	}

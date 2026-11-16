@@ -155,7 +155,12 @@ message (`--per-owner`); the daemon checks the message exists and never reads it
    gate, merge's FAIL back to sync included). Once it is spent, `pf step handoff` refuses
    a `fail` that cites no owner message: the gate asks the owner — one more round (a
    `fail` citing the reply, charged to nothing), accepting the red (verification only, the
-   lane's one waivable gate), or cancel.
+   lane's one waivable gate), or cancel. Beside it the lane declares one uncounted class
+   (`uncounted_rewinds`): a FAIL whose reason carries its substring — merge's
+   default-branch-moved FAIL, another lane's landing that moved the default branch past
+   what verification ran over — spends none of `max_rewinds` and counts on its own toward
+   its cap (`max: 2`); `pf watch` shows that count apart, and past the cap the same FAIL
+   asks the owner exactly like a spent `max_rewinds`.
 6. **Publish's owner-review** — an `owner-review:` line holds the publication for the
    owner's 「过目通过」.
 

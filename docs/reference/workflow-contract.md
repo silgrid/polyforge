@@ -83,6 +83,7 @@ at once, each with its code, file, line and YAML path.
 | `name` | string, required; `^[a-z][a-z0-9-]{0,39}$` and equal to the lane's directory name (`WFC-113` missing, `WFC-120` otherwise) |
 | `description` | string, required, non-empty (`WFC-121`) |
 | `max_rewinds` | int ≥ 0; the lane's one automatic rewind budget across every gate; required when any step declares `on_fail` (`WFC-113`), refused when none does (`WFC-112`); `0` = every gate FAIL asks the owner first |
+| `uncounted_rewinds` | a map holding `reason_contains` and `max` ([uncounted_rewinds keys](#uncounted_rewinds-keys)): the lane-declared class of gate-FAIL rewinds charged to no budget — a gate FAIL whose one-line hand-off `--reason` carries `reason_contains` rewinds without spending `max_rewinds`, counted on its own toward `max` (the default 2 when the lane declares none; `0` = every matching FAIL asks the owner first, exactly like a spent `max_rewinds`); allowed only when a step declares `on_fail`, refused otherwise (`WFC-112`) |
 | `exclusive` | bool, default `false` ([Properties](#properties)): `true` holds the lane to one unfinished work item per project — a create on it reaches aihub exclusive, refused `CORE-409` `OPEN_ON_BUNDLE` while another work item of the project on the lane is not wrapped, failed or canceled; a built-in lane and a user lane alike; any other value is `WFC-112` |
 | `acceptance` | `required` or `none`, default `required` ([Properties](#properties)): whether a work item on the lane must list an acceptance criterion (`## Acceptance` or `## 验收`) before it runs; `none` is a lane with no criterion to list — the shipped integrate and release lanes declare it, develop and micro do not; a built-in lane and a user lane alike; any other value is `WFC-112` |
 | `defaults` | a map holding `model_candidates` and `tiers` |
@@ -124,7 +125,26 @@ process runs.
 | `target` | an earlier step id, required |
 
 A FAIL handed off without `--per-owner` is charged to `max_rewinds`; one
-handed off with `--per-owner` (the owner said so) is not.
+handed off with `--per-owner` (the owner said so) is not. A FAIL whose
+reason falls in the lane's `uncounted_rewinds` class is charged to no
+budget either and counted on its own — [below](#uncounted_rewinds-keys).
+
+### uncounted_rewinds keys
+
+| Key | Rule |
+|---|---|
+| `reason_contains` | string, required, non-empty (`WFC-113` missing, `WFC-112` blank): the substring a gate FAIL's one-line hand-off reason carries when its rewind falls in the class — the stable prefix of the failing step's script summary; the rest of the line varies |
+| `max` | int ≥ 0, default 2 (`WFC-112` otherwise): the class's own rewind budget, held at `pf step handoff` exactly like `max_rewinds` — once the class's uncounted rewinds reach it, a matching FAIL without the owner's word is refused and the gate asks the owner first; `0` = every matching FAIL asks the owner |
+
+The class is the lane's own declaration: the driver matches the declared
+substring against the FAIL's one-line `--reason` and names no lane, project
+or failure of its own. A matching FAIL rewinds charged to nothing and
+counted apart (the rewind ledger's `uncounted` class, `pf watch`'s
+`uncounted` tally); every other FAIL — a FAIL whose reason falls outside
+the class, or a lane without the declaration — is charged to
+`max_rewinds` as before. The cap keeps an ever-moving default branch
+from looping a work item for ever: past it the lane stops and waits for
+the owner, exactly like a spent `max_rewinds`.
 
 ### resources keys
 
@@ -511,8 +531,10 @@ are wrong exits non-zero at once, naming why. The command's flags are
 - `--per-owner <at>` names a message of `runtime-state/asks.jsonl` sent to
   this step in this round; the daemon checks that it exists, never what it
   says, and copies it verbatim into the section's header;
-- `fail` from a non-gate is refused (use `blocked`); with `max_rewinds`
-  spent, a `fail` without `--per-owner` is refused: ask the owner first
+- `fail` from a non-gate is refused (use `blocked`); with the budget the
+  FAIL's reason spends — the lane-declared uncounted class's own cap when
+  the reason falls in it, else `max_rewinds` — a `fail` without
+  `--per-owner` is refused: ask the owner first
   (`pf step ask`) — so no work item parks on a spent budget;
 - the body carries the template's seven sections ([handoff.md](#handoffmd))
   in the language the dispatch was told (its spawn-journal line; a line
@@ -580,7 +602,7 @@ body. Every step, the owner and the panel read it (the daemon's
 | opening | the daemon, at the claim | the work item, its goal, the acceptance list verbatim, the lane's step order (each step the work item skips noted `skipped`, the last step that runs noted as the last step) |
 | section header | the daemon | step, round, dispatch, start, end, duration, model, status; the events of the step's round (a model switch, a re-dispatch); the owner's messages to the step this round, verbatim; the message `--per-owner` cites, verbatim; each task repo's start and end commit and diff stat; the evidence paths |
 | section body | the step, `--body` | the template's seven sections in the dispatch's language, plus the re-entry heading on a re-run |
-| event | the daemon | a rewind (the steps to redo, why, the count n/`max_rewinds`); an owner command; the wrap |
+| event | the daemon | a rewind (the steps to redo, why, the count n/`max_rewinds`, and the lane-declared uncounted class's own n/cap beside it once it has a rewind); an owner command; the wrap |
 
 **Stamp language** (`[daemon] agent_language`, `en` or `zh-CN`). Every
 label the daemon writes is in one language, English or Simplified
@@ -624,7 +646,7 @@ with a reason not to change it says so in its body).
 | Event | The daemon |
 |---|---|
 | `handoff --status done` | makes the pending writes, marks the step done, dispatches the next; after the last step, wraps |
-| `fail` (a gate) | appends a rewind event and rewinds to `on_fail.target`, charged to `max_rewinds` unless `--per-owner`; a gate with no `on_fail` (the release lane's three) ends the work item `failed_gate` |
+| `fail` (a gate) | appends a rewind event and rewinds to `on_fail.target`, charged to `max_rewinds` unless `--per-owner` or the reason falls in the lane's `uncounted_rewinds` class (charged to nothing, counted on its own); a gate with no `on_fail` (the release lane's three) ends the work item `failed_gate` |
 | `blocked` | parks the work item blocked |
 | `cancel` / `waive` / `rewind` | ends the work item canceled / accepts the gate as passed and goes on, recording the waiver / appends a rewind event and rewinds to `--to` (charged to nothing) |
 | `pf step ask` | releases the slot and resources and waits; the reply resumes the same session |
@@ -665,7 +687,8 @@ step, which hands off with `--per-owner`.
 
 The daemon does not park a rewound step whose tree did not change: the
 review skill judges that from the stamped commits, and `max_rewinds`
-bounds the loop.
+bounds the loop (the lane-declared uncounted class bounds its own loop
+by its cap).
 
 **`runtime-state/execution.json`** is the daemon's own record — the
 current step and status, why it parked or ended, a cancel request, each
@@ -878,7 +901,7 @@ of the daemon, the driver, the runtime, the CLI, the daemon's aihub client,
 the step call ledger, the pending writes, the workspace yaml,
 `internal/common` or `internal/aihub` mentions the integrate lane —
 `integrat` in any case mix, comments included
-(`test/c5_lane_neutral_go_contract_test.go`). Its exceptions are a list of
+(`internal/contracttest/c5_lane_neutral_go_contract_test.go`). Its exceptions are a list of
 lines, per file each line shape that may still mention it with the reason,
 so a new mention elsewhere in an exempt file is red; an exception no line
 matches any more is red too, so the list only shrinks.

@@ -10,7 +10,7 @@ package test
 // section is red. (The agent verification step that recorded the readings as
 // named checks was deleted.)
 //
-// Run (targeted): GOWORK=off go test ./test/ -run '^TestW320StepText' -count=1
+// Run (targeted): GOWORK=off go test ./internal/contracttest/ -run '^TestW320StepText' -count=1
 
 import (
 	"os"
@@ -32,7 +32,7 @@ var w320stItems = []string{
 // heading to the next `## ` heading.
 func w320stSection(t *testing.T, step string) string {
 	t.Helper()
-	p := filepath.Join("..", "workflows", "_shared", "steps", step+".md")
+	p := filepath.Join(v1Root(t), "workflows", "_shared", "steps", step+".md")
 	raw, err := os.ReadFile(p)
 	if err != nil {
 		t.Fatal(err)
