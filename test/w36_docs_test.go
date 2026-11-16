@@ -34,16 +34,16 @@ func TestW36DocsTeachTheThreeMergeRoutes(t *testing.T) {
 		"human_mergeable",
 	)
 	// AC8: each route says whether it enters the integration lane
-	readme := w254Norm(w254Read(t, "workflows/develop/README.md"))
+	readme := w254Read(t, "workflows/develop/README.md")
 	for _, route := range []struct{ heading, enters string }{
-		{"## Merging by a person", "lands on the merge rules and enters the integration lane's pool"},
-		{"## Skipping merge", "never enters an integration batch"},
+		{"Merging by a person", "lands on the merge rules and enters the integration lane's pool"},
+		{"Skipping merge", "never enters an integration batch"},
 	} {
 		sec := w521Section(readme, route.heading)
 		if sec == "" {
-			t.Fatalf("workflows/develop/README.md has no %s section", route.heading)
+			t.Fatalf("workflows/develop/README.md has no \"%s\" section", route.heading)
 		}
-		if !strings.Contains(sec, route.enters) {
+		if !strings.Contains(w254Norm(sec), route.enters) {
 			t.Errorf("workflows/develop/README.md's %s section does not say the route's integrate reach: %q", route.heading, route.enters)
 		}
 	}
@@ -78,10 +78,10 @@ func TestW36DocsTeachTheThreeMergeRoutes(t *testing.T) {
 	// the command reference: merge.py's human mode, its exit 3 and the
 	// landing record's merge flags
 	commands := w254Read(t, "docs/reference/commands.md")
-	need("docs/reference/commands.md (merge.py)", w521Section(commands, "merge.py"),
+	need("docs/reference/commands.md (Step scripts)", w521Section(commands, "Step scripts"),
 		"step-modes.json",
 		"exit 3",
-		"merge",
+		"merged_by_human",
 	)
 
 	// the bundles chapter and the routing skill: the person's merge is a
