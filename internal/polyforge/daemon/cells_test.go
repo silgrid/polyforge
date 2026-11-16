@@ -6,13 +6,16 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/protocol"
+	"github.com/silgrid/polyforge/internal/polyforge/cellcfg"
 	"github.com/silgrid/polyforge/internal/polyforge/cli"
 	"github.com/silgrid/polyforge/internal/polyforge/mapping"
+	"github.com/silgrid/polyforge/internal/polyforge/runtime"
 )
 
 // testHost is one in-process DaemonHost over fake hubs.
@@ -192,4 +195,35 @@ func TestHostShutdownIsHostLevel(t *testing.T) {
 		t.Fatal("the Host did not stop")
 	}
 	var _ = protocol.ProfileHeader
+}
+
+// TestHostInjectsEveryCellsTargetFacts (polyforge#76): every serving
+// Cell's daemon injects the target facts of ALL this Host's serving Cells
+// - profile, server as configured and the deploy configuration file that
+// Cell's deploys read (beside its Cell file, the Cell file naming) - so a
+// step's deploy procedure can derive the machine's deploy targets from
+// one list. A Cell that cannot load is no target: it serves no work
+// items and its configuration is not trusted.
+func TestHostInjectsEveryCellsTargetFacts(t *testing.T) {
+	th := newTestHost(t,
+		hostCell{profile: "default", machineID: "m-def"},
+		hostCell{profile: "public", machineID: "m-pub"},
+		hostCell{profile: "broken", invalid: "load failure (test)", machineID: "m-bad"},
+	)
+	dir := th.Host.cfg.Set.Dir
+	want := []runtime.CellTarget{
+		{Profile: "default", Server: "http://hub-default:1", DeployEnv: filepath.Join(dir, cellcfg.DeployEnvFileName("default"))},
+		{Profile: "public", Server: "http://hub-public:1", DeployEnv: filepath.Join(dir, cellcfg.DeployEnvFileName("public"))},
+	}
+	for _, p := range []string{"default", "public"} {
+		e := th.Host.cell(p).d.stepEnv()
+		if !slices.Equal(e.CellTargets, want) {
+			t.Fatalf("%s: the step env carries every serving Cell's target facts %+v, want %+v", p, e.CellTargets, want)
+		}
+		for _, row := range e.CellTargets {
+			if row.Profile == "broken" {
+				t.Fatalf("a Cell that cannot load is no deploy target: %+v", e.CellTargets)
+			}
+		}
+	}
 }

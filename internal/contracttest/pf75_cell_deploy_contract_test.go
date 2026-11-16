@@ -24,7 +24,7 @@ import (
 func TestPF75DeployHandoffCopiesTarget(t *testing.T) {
 	dep := w68Flat(t, "workflows/release/steps/deploy.md")
 	for _, want := range []string{
-		"its `target:` line and its last line copied verbatim",
+		"every `target:` line and its last line copied verbatim", // polyforge#76: one per deploy target
 		"never a description from memory or inference",
 	} {
 		if !strings.Contains(dep, want) {

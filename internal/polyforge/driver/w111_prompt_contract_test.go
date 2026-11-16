@@ -158,13 +158,13 @@ func TestW111WaitingPrincipleInEveryPrincipledPrompt(t *testing.T) {
 // runs in the owner repo under the daemon's command PATH (the step's own
 // PATH), its output teed to the step's log, under the
 // step's own tool window (`budget.tool_minutes`: 120 minutes for release,
-// 30 for deploy) — and no background-then-poll or request-and-end-turn
+// 60 for deploy) — and no background-then-poll or request-and-end-turn
 // instruction survives.
 func TestW111ReleaseStepsAwaitInsideOneCall(t *testing.T) {
 	for _, c := range []struct{ step, line, window string }{
 		// pipefail first: `&&` binds tighter than `;`, so a failed cd must
 		// not run the pipeline from the capsule root without it
-		{"deploy", `set -o pipefail; cd repos/<owner> && .polyforge/deploy.sh V --confirm V 2>&1 | tee ../../artifacts/deploy.log`, "30 minutes"},
+		{"deploy", `set -o pipefail; cd repos/<owner> && .polyforge/deploy.sh V --confirm V 2>&1 | tee ../../artifacts/deploy.log`, "60 minutes"},
 		{"release", `set -o pipefail; cd repos/<owner> && .polyforge/release.sh [<bump>] 2>&1 | tee ../../artifacts/release.log`, "120 minutes"},
 	} {
 		bundle := filepath.Join(shippedWorkflowsDir, "release")
