@@ -1250,9 +1250,11 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
       modelSwitching={modelSwitching}
       defaultModel={defaultModel}
       onSetDefaultModel={handleSetDefaultModel}
-      // claude compacts with its own /compact in an open session, never in a fresh
-      // composer; Stop ends that compaction through claude's abort, not pi's abort_compaction.
-      onCompact={(session || isNew) && !(isNew && isClaudeSession) ? handleCompact : undefined}
+      // Compaction belongs to an open session, either harness (claude's own
+      // /compact as a stoppable turn); a fresh composer — pi or claude — has no
+      // compact control: there is nothing to compact yet (polyforge#71, AC5).
+      // Stop ends a claude compaction through claude's abort, not pi's abort_compaction.
+      onCompact={session ? handleCompact : undefined}
       onAbortCompaction={isClaudeSession ? handleAbort : handleAbortCompaction}
       isCompacting={isCompacting}
       compactError={compactError}

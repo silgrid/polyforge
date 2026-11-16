@@ -2045,10 +2045,10 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
     if (!isStreaming) return;
     return () => { runEndedAtRef.current = performance.now(); };
   }, [isStreaming]);
-  // The guard is for pi's Compact (and tools) taking Stop's place as a run ends. An open claude
-  // session's compact control stays in place, disabled while a turn runs, so a
-  // click on it is always meant.
-  const isStrayClick = (e: React.MouseEvent) => !claudeSession && isRunEndStrayClick(e.detail, performance.now() - runEndedAtRef.current);
+  // The guard is for pi's Compact (and tools) taking Stop's place as a run ends.
+  // polyforge#71 (AC5): an open claude session's compact control takes the same
+  // slot the same way, so its clicks are guarded alike.
+  const isStrayClick = (e: React.MouseEvent) => isRunEndStrayClick(e.detail, performance.now() - runEndedAtRef.current);
 
   useEffect(() => {
     if (!isMobile) setControlsMenuOpen(false);
@@ -3295,12 +3295,14 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
               </div>
             )}
 
-            {/* claude's compact control stays in place while a turn runs, disabled. */}
-            {(claudeSession || !isStreaming || isCompacting) && onCompact && (
+            {/* pi's rule, claude's too (#71): the compact control hides while a
+                turn runs and returns as it ends; a compaction keeps it as Stop
+                compaction; an unknown stream state keeps it disabled. */}
+            {(!isStreaming || isCompacting) && onCompact && (
               <div>
                 <button
                   onClick={isCompacting ? onAbortCompaction : (e) => { if (!isStrayClick(e)) onCompact(); }}
-                  disabled={claudeSession && !isCompacting && (isStreaming || claude?.stateKnown === false)}
+                  disabled={claudeSession && !isCompacting && claude?.stateKnown === false}
                   style={{
                     display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
                     padding: isMobile ? "0 10px" : "8px 12px",
