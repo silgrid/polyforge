@@ -280,6 +280,23 @@ class ProjectedPinTest(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_GIT, "git not installed")
+class RecordingGit(Git):
+    """A Git that records the revert commands it runs (the mainline flag
+    is the assertion's: a plain commit carries none)."""
+
+    def __init__(self, ctx: Ctx, environ: Optional[Dict[str, str]] = None) -> None:
+        super().__init__(ctx, environ)
+        self.revert_calls: List[Tuple[str, ...]] = []
+
+    def git(self, cwd: str, *args: str) -> str:
+        if args and args[0] == "revert":
+            self.revert_calls.append(args)
+        return super().git(cwd, *args)
+
+    def reverts_of(self, rev: str) -> Tuple[Tuple[str, ...], ...]:
+        return tuple(call for call in self.revert_calls if rev in call)
+
+
 class RevertTest(unittest.TestCase):
     def test_revert_keeps_the_log_and_its_pin(self) -> None:
         w = World(self)
@@ -301,18 +318,28 @@ class RevertTest(unittest.TestCase):
         """A plain landed commit — a human squash or rebase landing
         (polyforge#36) — reverts without the mainline flag: ``-m 1`` is
         the merge commit's, asked of the commit itself (its second
-        parent), never of the record that named it."""
+        parent), never of the record that named it. A merge commit keeps
+        it (the existing revert tests pin that behavior)."""
         w = World(self)
         git(w.seed, "fetch", "-q", "origin")
         git(w.seed, "checkout", "-q", "-B", "main", "origin/main")
         write(w.seed, "code.go", "package x\n\nfunc F() int { return 2 }\n")
         sq = w.commit_push("a squash landing", "main")
-        work, g, c = w.work(), lane(), read_conf(w.seed)
+        mb = w.land(w.branch("m", "m-section"))
+        work, c = w.work(), read_conf(w.seed)
+        rec = RecordingGit(Ctx(), env())
         main = git(work, "rev-parse", "origin/main")
-        g.checkout(work, main)
-        gr.revert_merge(g, work, c, main, sq)
+        rec.checkout(work, main)
+        gr.revert_merge(rec, work, c, main, sq)
         self.assertIn("return 1", read(work, "code.go"))
-        self.assertTrue(gr.reverted(g, work, sq, "HEAD"))
+        self.assertTrue(gr.reverted(rec, work, sq, "HEAD"))
+        if any("-m" in call for call in rec.reverts_of(sq)):
+            self.fail("a plain commit reverts with no mainline flag: %s" % (rec.reverts_of(sq),))
+        rec2 = RecordingGit(Ctx(), env())
+        rec2.checkout(work, main)
+        gr.revert_merge(rec2, work, c, main, mb)
+        if not any("-m" in call for call in rec2.reverts_of(mb)):
+            self.fail("a merge commit keeps the mainline flag: %s" % (rec2.reverts_of(mb),))
 
     def test_revert_keeps_the_list(self) -> None:
         w = World(self)
