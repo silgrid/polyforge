@@ -125,6 +125,12 @@ func NewHost(hc HostConfig) (*Host, error) {
 	if h.slots.max <= 0 {
 		h.slots.max = cli.DefaultMaxConcurrentJobs
 	}
+	if hc.Set != nil {
+		// the Host file's [daemon] max_concurrent_tasks is the task lane's
+		// one bound over every Cell (0 = the default); a reload of the
+		// default Cell's file moves it live
+		h.slots.tasks.SetMax(hc.Set.Host.Daemon.MaxConcurrentTasks)
+	}
 	h.admission = newVerifyQueue(0, 0)
 	if hc.Set != nil {
 		h.admission = newVerifyQueue(hc.Set.Host.Daemon.MaxConcurrentBars, hc.Set.Host.Daemon.BarLoadThreshold)
@@ -668,10 +674,11 @@ func (h *Host) statusRoute(w http.ResponseWriter, r *http.Request) {
 	agg.Queue.MaxConcurrent = h.slots.Max()
 	// The aggregate's task summary is the sum over every serving Cell
 	// (polyforge#73): the default Cell's own snapshot seeded it, so it starts
-	// from zero (the fixed task.DefaultLimit bound stays) and each serving Cell adds
-	// its own counts below. A Cell's own status (a profile header) is its own.
-	agg.Tasks = &task.Summary{Limit: task.DefaultLimit}
-	agg.BackgroundModelCalls = &cli.BackgroundCalls{Bound: task.DefaultLimit, Running: h.slots.tasks.Running()}
+	// from zero — the bound stays the Host's configured max_concurrent_tasks
+	// — and each serving Cell adds its own counts below. A Cell's own
+	// status (a profile header) is its own.
+	agg.Tasks = &task.Summary{Limit: h.slots.tasks.Max()}
+	agg.BackgroundModelCalls = &cli.BackgroundCalls{Bound: h.slots.tasks.Max(), Running: h.slots.tasks.Running()}
 	for _, e := range h.sortedCells() {
 		row := h.profileRow(e)
 		agg.Cells = append(agg.Cells, row)

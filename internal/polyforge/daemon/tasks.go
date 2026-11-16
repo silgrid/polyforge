@@ -99,13 +99,15 @@ func (d *Daemon) newTaskManager(rtCfg *runtime.Config) *task.Manager {
 	})
 }
 
-// taskSlots answers the Host's shared background-model-call bound (nil
-// unhosted: the manager's own limit).
+// taskSlots answers the task lane's concurrency bound: the Host's one
+// shared bound (set by NewHost from the Host file's max_concurrent_tasks)
+// when this Cell is hosted, else this daemon's own (reload.go moves
+// either live).
 func (d *Daemon) taskSlots() *task.Slots {
-	if d.cfg.HostSlots == nil {
-		return nil
+	if d.cfg.HostSlots != nil {
+		return d.cfg.HostSlots.tasks
 	}
-	return d.cfg.HostSlots.tasks
+	return d.ownTaskSlots
 }
 
 // admitTask is the one admission of every one-off task (task.Manager's
