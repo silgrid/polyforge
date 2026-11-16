@@ -1274,7 +1274,9 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
       slashCommands={slashCommands}
       slashCommandsLoading={slashCommandsLoading}
       onLoadSlashCommands={loadSlashCommands}
-      onBuiltinCommand={isClaudeSession ? undefined : handleBuiltinSlashCommand}
+      // polyforge#71 (AC2): both harnesses hand pi's built-in handler over — a claude
+      // session's menu offers only the built-ins its server answers (/compact, /session).
+      onBuiltinCommand={handleBuiltinSlashCommand}
       soundEnabled={soundEnabled}
       onSoundToggle={onSoundToggle}
       onAudioUnlock={unlockAudio}

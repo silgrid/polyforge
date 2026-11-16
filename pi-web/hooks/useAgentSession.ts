@@ -3523,10 +3523,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           // Only a bare /mcp, and only when pi's built-in MCP extension owns it or
           // nothing does (lib/mcp-command.ts): another extension's /mcp is sent as
           // before, and so is every subcommand, since `/mcp login`, `logout` and
-          // `reconnect` act on this session's own connections. Returning before
-          // onSend leaves no "/mcp" bubble and no sidebar row for a new chat; a
-          // streaming run is not touched.
-          if (args || !onOpenSettings) return { handled: false };
+          // `reconnect` act on this session's own connections. A claude session's
+          // /mcp is claude's own command (polyforge#71's exclusion table): it is
+          // sent to claude as text, and Settings › MCP never opens for it.
+          // Returning before onSend leaves no "/mcp" bubble and no sidebar row for a
+          // new chat; a streaming run is not touched.
+          if (isClaudeSession || args || !onOpenSettings) return { handled: false };
           const commands = await slashCommandsForMcp();
           if (!commands || !bareMcpOpensSettings(commands)) return { handled: false };
           onOpenSettings("mcp");
@@ -3565,7 +3567,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } catch (e) {
       return complete({ handled: true, error: e instanceof Error ? e.message : String(e) });
     }
-  }, [activeLeafId, addNotice, ensureNewSession, handleCompact, isCompacting, loadModels, loadSession, loadSlashCommands, loadTools, promoteNewSession, onOpenSettings, onSessionForked, onSessionStatsPanelOpen, opts.chatInputRef, sessionStats, slashCommandsForMcp]);
+  }, [activeLeafId, addNotice, ensureNewSession, handleCompact, isClaudeSession, isCompacting, loadModels, loadSession, loadSlashCommands, loadTools, promoteNewSession, onOpenSettings, onSessionForked, onSessionStatsPanelOpen, opts.chatInputRef, sessionStats, slashCommandsForMcp]);
 
   // Let AgentSession.prompt decide atomically whether to queue against the
   // current run or start a new turn if it settled while the request was in
