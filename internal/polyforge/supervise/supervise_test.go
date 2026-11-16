@@ -224,15 +224,23 @@ func TestJudgeRuleTable(t *testing.T) {
 		tr.ToolStart("c1", "bash", "{}") // closes the model phase
 		c.advance(91 * time.Minute)
 		if v := judge(c, tr); v == nil || v.Cause != CauseStepTimeoutLongTask {
-			t.Fatalf("verdict %+v, want step_timeout_long_task (time in tools)", v)
+			t.Fatalf("verdict %+v, want step_timeout_long_task (one 0s completed call, under the 5-call minimum)", v)
 		}
+		// polyforge#51: the slow-model cause reads the completed calls'
+		// single-call latencies — six calls of 14m each, the dispatch
+		// itself past half of T. Each call closes with a tool's start (an
+		// error-ended turn would make rule 1 outrank rule 4).
 		tr2 := newTrackerAt(c, Thresholds{Silence: time.Hour * 10, Tool: time.Hour, StepTimeout: T})
-		tr2.WaitingModel()
-		tr2.ModelOutput(OutputText)
-		c.advance(91 * time.Minute)
-		tr2.ModelOutput(OutputText)
+		for i := 0; i < 6; i++ {
+			tr2.WaitingModel()
+			c.advance(14 * time.Minute)
+			id := "c" + string(rune('0'+i))
+			tr2.ToolStart(id, "bash", "")
+			tr2.ToolEnd(id, "bash")
+		}
+		c.advance(7 * time.Minute) // past T, in tool/idle time
 		if v := judge(c, tr2); v == nil || v.Cause != CauseStepTimeoutSlowModel {
-			t.Fatalf("verdict %+v, want step_timeout_slow_model (time waiting on the model)", v)
+			t.Fatalf("verdict %+v, want step_timeout_slow_model (six completed 14m calls)", v)
 		}
 	})
 
@@ -285,58 +293,72 @@ func TestJudgeRuleTable(t *testing.T) {
 // candidate switch) only when it ran at least half of T itself AND waited on
 // the model for at least half of its own runtime. Every other expiry is
 // step_timeout_long_task: the step's length, retried on the same model.
+// TestJudgeStepTimeoutBlamesOnlyTheDyingDispatch pins rule 4's attribution
+// (D1 + polyforge#51): T is cumulative over the whole step, so the dispatch
+// that happens to be running when it runs out is the slow-model cause (a
+// candidate switch) only when it ran at least half of T itself AND its
+// COMPLETED model calls were individually slow — the median over the median
+// bound or the p90 over the p90 bound, from at least MinSlowModelCalls
+// calls (the waiting-share condition is deleted: a workload of many fast
+// calls is never the slow model, polyforge#25). Every other expiry is
+// step_timeout_long_task: the step's length, retried on the same model.
 func TestJudgeStepTimeoutBlamesOnlyTheDyingDispatch(t *testing.T) {
 	const T = 90 * time.Minute
 	now := time.Unix(10_000_000, 0)
+	slowCalls := func(n int, d time.Duration) []time.Duration {
+		out := make([]time.Duration, n)
+		for i := range out {
+			out[i] = d
+		}
+		return out
+	}
 	cases := []struct {
-		name                     string
-		prior, age, tools, model time.Duration
-		want                     Cause
+		name  string
+		prior time.Duration
+		age   time.Duration
+		calls []time.Duration
+		want  Cause
 	}{
 		// code attempt 4, verbatim: "step ran 1h30m0s cumulatively
-		// (1h17m22s before this dispatch + 12m38s now) … waiting on the model
-		// 12m2s". The record's tool time is elided; it is at most the 36s left
-		// of the dispatch and any value in [0, 36s] judges the same.
+		// (1h17m22s before this dispatch + 12m38s now)". However slow the
+		// five completed calls, the tail ran under half of T.
 		{"a 12m38s tail of a step that spent 1h17m22s before it",
-			77*time.Minute + 22*time.Second, 12*time.Minute + 38*time.Second, 30 * time.Second, 12*time.Minute + 2*time.Second,
+			77*time.Minute + 22*time.Second, 12*time.Minute + 38*time.Second, slowCalls(5, 12*time.Minute),
 			CauseStepTimeoutLongTask},
-		// code attempt 1, verbatim: "0s before this dispatch +
-		// 1h30m0s now; tools 31m0s, waiting on the model 59m1s".
-		{"the whole T in one dispatch, mostly waiting on the model",
-			0, 90 * time.Minute, 31 * time.Minute, 59*time.Minute + time.Second,
+		{"the whole T in one dispatch, five individually slow calls",
+			0, 90 * time.Minute, slowCalls(5, 70*time.Second),
 			CauseStepTimeoutSlowModel},
-		{"exactly half of T, exactly half of it on the model",
-			45 * time.Minute, 45 * time.Minute, 0, 22*time.Minute + 30*time.Second,
+		{"exactly half of T, exactly the 5-call minimum",
+			45 * time.Minute, 45 * time.Minute, slowCalls(5, 70*time.Second),
 			CauseStepTimeoutSlowModel},
-		{"one second under half of T, all of it on the model",
-			45*time.Minute + time.Second, 45*time.Minute - time.Second, 0, 45*time.Minute - time.Second,
+		{"one second under half of T, slow calls",
+			45*time.Minute + time.Second, 45*time.Minute - time.Second, slowCalls(5, 70*time.Second),
 			CauseStepTimeoutLongTask},
-		{"the whole T, the model under half of the dispatch",
-			0, 90 * time.Minute, 20 * time.Minute, 44 * time.Minute,
+		{"the whole T, only four completed calls (the fifth still in progress)",
+			0, 90 * time.Minute, slowCalls(4, 80*time.Second),
 			CauseStepTimeoutLongTask},
-		{"the whole T, mostly tools",
-			0, 90 * time.Minute, 80 * time.Minute, 10 * time.Minute,
+		{"the whole T, fifty fast calls of 40s",
+			0, 90 * time.Minute, slowCalls(50, 40*time.Second),
 			CauseStepTimeoutLongTask},
-		// tool time sums every concurrent tool; the model wait is wall clock,
-		// so it is the model's share of the dispatch that decides
-		{"parallel tools out-sum the model, the model still holds most of the clock",
-			0, 90 * time.Minute, 120 * time.Minute, 50 * time.Minute,
+		{"the whole T, the p90 tail past the bound",
+			0, 90 * time.Minute, append(slowCalls(4, 10*time.Second), 200*time.Second),
 			CauseStepTimeoutSlowModel},
 	}
 	for _, tc := range cases {
 		s := Snapshot{
 			Step: "code", SpawnN: 4, Begun: true, StartedAt: now.Add(-tc.age),
-			Thresholds: Thresholds{StepTimeout: T, PriorRuntime: tc.prior},
-			ModelTime:  tc.model, ToolTime: tc.tools,
+			Thresholds:         Thresholds{StepTimeout: T, PriorRuntime: tc.prior},
+			ModelCallLatencies: tc.calls,
 		}
 		v := Judge(s, now, 0)
 		if v == nil || v.Cause != tc.want {
 			t.Errorf("%s: verdict %+v, want %s", tc.name, v, tc.want)
 			continue
 		}
-		// the evidence states the split the attribution read, so the
-		// failure record says why this dispatch was (not) blamed
-		if !strings.Contains(v.Evidence, "of the bound") || !strings.Contains(v.Evidence, "waiting on the model") {
+		// the evidence states the share of the bound and the latency split
+		// the attribution read, so the failure record says why this
+		// dispatch was (not) blamed
+		if !strings.Contains(v.Evidence, "of the bound") || !strings.Contains(v.Evidence, "median") {
 			t.Errorf("%s: evidence does not state the attribution: %s", tc.name, v.Evidence)
 		}
 	}

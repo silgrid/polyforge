@@ -29,11 +29,36 @@ type Defaults struct {
 	// (workflow contract v2 §5.2; default DefaultAskWarmWindow; [daemon]
 	// ask_warm_window).
 	AskWarmWindow time.Duration
+	// SlowModelMedianLatency and SlowModelP90Latency are the slow-model
+	// judgement's single-call bounds (polyforge#51, [daemon]
+	// slow_model_median_latency / slow_model_p90_latency; zero = the
+	// documented defaults).
+	SlowModelMedianLatency time.Duration
+	SlowModelP90Latency    time.Duration
 }
 
 // DefaultAskWarmWindow is the documented warm window of a step awaiting
 // the owner: ~15 minutes, then the idle process exits (owner ruling Q9).
 const DefaultAskWarmWindow = 15 * time.Minute
+
+// The slow-model judgement's single-call latency bounds (polyforge#51):
+// rule 4 blames the model only when the dying dispatch itself ran at
+// least half of T AND its completed model calls were individually slow —
+// the median over DefaultSlowModelMedianLatency or the p90 over
+// DefaultSlowModelP90Latency, from at least MinSlowModelCalls completed
+// calls. These are the documented defaults of the Host-only [daemon] keys
+// slow_model_median_latency / slow_model_p90_latency; the constants live
+// here (the one place) and the cli renders them.
+const (
+	DefaultSlowModelMedianLatency = 60 * time.Second
+	DefaultSlowModelP90Latency    = 180 * time.Second
+)
+
+// MinSlowModelCalls is the least number of COMPLETED model calls the
+// median/p90 of rule 4 is judged on: below it the expiry is
+// step_timeout_long_task however slow the few calls were (a median of two
+// calls is noise, polyforge#51).
+const MinSlowModelCalls = 5
 
 // Fill answers the defaults with every zero field replaced (Silence
 // stays zero: it is resolved per harness by SilenceFor).
@@ -52,6 +77,12 @@ func (d Defaults) Fill() Defaults {
 	}
 	if d.AskWarmWindow <= 0 {
 		d.AskWarmWindow = DefaultAskWarmWindow
+	}
+	if d.SlowModelMedianLatency <= 0 {
+		d.SlowModelMedianLatency = DefaultSlowModelMedianLatency
+	}
+	if d.SlowModelP90Latency <= 0 {
+		d.SlowModelP90Latency = DefaultSlowModelP90Latency
 	}
 	return d
 }

@@ -77,7 +77,10 @@ block per Cell; the aggregate's `tasks` counts — running, completed and the
 terminal states — sum every Cell with a running daemon, so the Tasks badge
 and re-read trigger cover all of them); `PF_PROFILE` and the cwd never change their scope — only
 an explicit `--profile NAME` targets one Cell. `pf ops shutdown` is always
-Host-level: it stops every Cell and refuses `--profile`.
+Host-level: it stops every Cell and refuses `--profile`. `pf ops
+unclassified` is always Host-level too: it lists the last 7 days'
+fallback-classified error texts of every Cell, deduplicated with counts,
+and refuses `--profile`.
 
 ## The verb index
 
@@ -1516,9 +1519,14 @@ long it has run in total (a harness heartbeat for a running call is no
 such record); T
 (`--step-timeout`) ends a step as `step_timeout_long_task` (the same
 session resumed once with T doubled; a second timeout parks) or — only
-when the dispatch that hit T itself ran at least half of it and spent at
-least half of its own time waiting on the model — `step_timeout_slow_model`
-(model class: the next candidate, T doubled); N (`--stall-window`) ends the driver between
+when the dispatch that hit T itself ran at least half of it and at least
+five of its COMPLETED model calls were individually slow: the median over
+`[daemon] slow_model_median_latency` (default 60s) or the p90 over
+`slow_model_p90_latency` (default 180s); the call in progress counts
+nowhere — `step_timeout_slow_model` (model class: the next candidate, T
+doubled). A dispatch of many fast calls — single-call median 6s, p90 15s,
+polyforge#25's 652-call session — is a long task however long it waited:
+the waiting share alone decides nothing; N (`--stall-window`) ends the driver between
 steps as `driver_stalled`. While a dispatch of a step
 declaring `resources: { admission: heavy }` waits for the heavy-run
 admission (`max_concurrent_bars`, `bar_load_threshold`) no
@@ -1532,13 +1540,28 @@ problem: the next candidate at once, and none left parks the work item
 the same session resumes with the reminder to end with a hand-off, and
 the third in a row parks. `rate_limited` and `upstream_transient` retry
 the same model after a backoff of 1 s, doubling to at most 3 min, never
-counted. The transient texts the classification recognizes include the
+counted. The classification is configurable on the Host (polyforge#51):
+the `[daemon] transient_error_patterns` and `model_error_patterns` lists
+hold additional RE2 regexes, judged after the allowance/auth row (which
+also covers the bare 402 and `payment required`) and before the other
+built-in rows, on an exited dispatch's text and on a live error turn
+alike — never on the driver's own error; no added pattern can pull an
+allowance or auth failure (402/401, quota, insufficient balance) out of
+model class. Both lists are live on reload and editable in Pi Web's
+configuration page (Host region). The transient texts the classification
+recognizes include the
 throttles (429 / rate limit / `overloaded` / the gateways' `server
 overload. Please retry later.` and concurrency texts) and the upstream
 transients: a response stream that ended or was interrupted before
 completion, an upstream/gateway named `temporarily unavailable`, a
 gateway's `no available accounts`, and the upstream model reporting an
-error after output had started (the output so far is partial);
+error after output had started (the output so far is partial). Every
+`step_failed` event records which rule judged its text
+(`classified_by`: `builtin`, `added` or `fallback` — no rule named it) and
+the raw text under `error_text`; `pf ops unclassified` lists the fallback
+texts of the last 7 days, deduplicated with counts, aggregated across
+every Cell of the Host (the daemon route serves a human session only — a
+step or task agent's process tree is refused `DAEMON-403`);
 `tool_hung` resumes the same session once with Y doubled (a
 second timeout parks); any other exit (`exit_other`, `exit_host_class`,
 `harness_silent`) resumes once, and the second in a row parks. A

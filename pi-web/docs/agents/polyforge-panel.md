@@ -2526,7 +2526,11 @@ polls.
 
 Each key has exactly one surface: the Host pane's **Host region**
 (`HostSettingsRegion`, `data-pf-host-region`) edits the Host-only keys
-(`HOST_ONLY_KEYS`: the Host ceiling, socket, harness roots) through
+(`HOST_ONLY_KEYS`: the Host ceiling, socket, harness roots, the two
+slow-model latency bounds as one-line rows — `HOST_SCALAR_KEYS` — and the
+two failure-classification pattern lists as one-regex-per-line editors —
+`HOST_LIST_KEYS`, `data-pf-pattern-list`, saved as one JSON array on the
+Host scope —, polyforge#51) through
 `GET /api/polyforge/config?host=1` and `{host: true}` writes (
 removed the read-only `HOST_READ_ONLY_KEYS` row with the per-repository bar
 ceiling) — no Cell's file card renders them; every
@@ -2545,6 +2549,11 @@ after a history rollback every mounted Cell pane re-reads its file. A
 Cell's api_key is write-only: its row shows only whether a key is set
 (`data-pf-api-key-state`), a `password` input whose draft is dropped after
 every confirmation or cancel, Save and Unset; the value is never read back.
+The Host region also lists the unclassified fallback errors
+(`GET /api/polyforge/unclassified` → `pf --json ops unclassified`,
+`data-pf-unclassified`): the error texts no built-in rule and no pattern
+above named over the last 7 days, deduplicated with counts, Host-wide —
+the operator's candidates for the next pattern (polyforge#51).
 A Cell's AIHub `server` is an identity key (`IDENTITY_KEYS`): shown
 read-only in its file card with the new-profile guidance
 (`data-pf-identity-hint`), never edited — the write route refuses it with

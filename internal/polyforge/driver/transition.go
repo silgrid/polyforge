@@ -988,6 +988,14 @@ func (d *Driver) failureEventsLocked(req TransitionRequest, info *appliedInfo, b
 		body["candidate"] = info.candidate
 	}
 	body["detail"] = req.Failure.Detail
+	// polyforge#51: which rule judged the failure's text, and the raw text
+	// it read — the payload the daemon's unclassified list dedupes on.
+	if req.Failure.ClassifiedBy != "" {
+		body["classified_by"] = req.Failure.ClassifiedBy
+	}
+	if req.Failure.ErrorText != "" {
+		body["error_text"] = req.Failure.ErrorText
+	}
 	body["disposition"] = dec.disposition()
 	body["failure_count"] = dec.Count
 	body["next_dispatch"] = "resume"

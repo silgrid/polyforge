@@ -31,28 +31,28 @@ func TestD8TransientTextsClassifyUpstreamTransient(t *testing.T) {
 		"Upstream response stream ended before completion",
 	} {
 		for _, turnErr := range []bool{false, true} {
-			got, _, _ := classifyWaitFailure(&ExitedError{ExitCode: 1, LastError: text, TurnError: turnErr})
+			got, _, _, _, _ := classifyWaitFailureWith(&ExitedError{ExitCode: 1, LastError: text, TurnError: turnErr}, nil)
 			if got != FailUpstreamTransient {
 				t.Errorf("%q (turn error %v) classified %q, want %q", text, turnErr, got, FailUpstreamTransient)
 			}
 		}
 		// the non-exit path is the driver's own failure: never transient
-		if got, _, _ := classifyWaitFailure(errWithText("read transcript: " + text)); got == FailUpstreamTransient {
+		if got, _, _, _, _ := classifyWaitFailureWith(errWithText("read transcript: "+text), nil); got == FailUpstreamTransient {
 			t.Errorf("driver-local %q classified %q, want not transient", text, got)
 		}
 	}
 	// controls: the other classes keep their texts.
-	if got, _, _ := classifyWaitFailure(&ExitedError{ExitCode: 1, LastError: "429 Too Many Requests"}); got != FailRateLimited {
+	if got, _, _, _, _ := classifyWaitFailureWith(&ExitedError{ExitCode: 1, LastError: "429 Too Many Requests"}, nil); got != FailRateLimited {
 		t.Errorf("a throttle must stay a throttle: %q", got)
 	}
-	if got, _, _ := classifyWaitFailure(&ExitedError{ExitCode: 1, LastError: "insufficient quota"}); got != FailExitModel {
+	if got, _, _, _, _ := classifyWaitFailureWith(&ExitedError{ExitCode: 1, LastError: "insufficient quota"}, nil); got != FailExitModel {
 		t.Errorf("an allowance problem must stay model-class: %q", got)
 	}
-	if got, _, _ := classifyWaitFailure(&ExitedError{ExitCode: 1, LastError: `model "x/y" not found`}); got != FailExitModel {
+	if got, _, _, _, _ := classifyWaitFailureWith(&ExitedError{ExitCode: 1, LastError: `model "x/y" not found`}, nil); got != FailExitModel {
 		t.Errorf("a model-name problem must stay model-class: %q", got)
 	}
 	// a bare model "ended" has no upstream/stream subject: never transient.
-	if got, _, _ := classifyWaitFailure(&ExitedError{ExitCode: 1, LastError: "the model ended the turn", TurnError: true}); got == FailUpstreamTransient {
+	if got, _, _, _, _ := classifyWaitFailureWith(&ExitedError{ExitCode: 1, LastError: "the model ended the turn", TurnError: true}, nil); got == FailUpstreamTransient {
 		t.Errorf("a model ending its own turn must not be an upstream transient: %q", got)
 	}
 	if IsModelClass(FailUpstreamTransient) {
@@ -128,7 +128,7 @@ func TestD8ClassificationPrecedence(t *testing.T) {
 		{"context length exceeded", FailExitOther},
 		{"read transcript: unexpected EOF", FailExitOther},
 	} {
-		got, _, _ := classifyWaitFailure(&ExitedError{ExitCode: 1, LastError: tc.text})
+		got, _, _, _, _ := classifyWaitFailureWith(&ExitedError{ExitCode: 1, LastError: tc.text}, nil)
 		if got != tc.want {
 			t.Errorf("%q classified %q, want %q", tc.text, got, tc.want)
 		}
@@ -139,7 +139,7 @@ func TestD8ClassificationPrecedence(t *testing.T) {
 		"stage envelope: connection closed",
 		"read drop: incomplete JSON",
 	} {
-		if got, _, _ := classifyWaitFailure(errWithText(text)); got != FailExitOther {
+		if got, _, _, _, _ := classifyWaitFailureWith(errWithText(text), nil); got != FailExitOther {
 			t.Errorf("driver-local %q classified %q, want %q", text, got, FailExitOther)
 		}
 	}

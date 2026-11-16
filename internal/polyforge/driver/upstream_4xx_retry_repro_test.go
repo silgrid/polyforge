@@ -43,7 +43,7 @@ const (
 func TestUpstream4xxRetryInvitationClassifiesTransient(t *testing.T) {
 	for _, text := range []string{upstream4xxRetryInvitation, upstream4xxRetryBody} {
 		for _, turnErr := range []bool{false, true} {
-			got, _, _ := classifyWaitFailure(&ExitedError{ExitCode: 1, LastError: text, TurnError: turnErr})
+			got, _, _, _, _ := classifyWaitFailureWith(&ExitedError{ExitCode: 1, LastError: text, TurnError: turnErr}, nil)
 			if got != FailUpstreamTransient {
 				t.Errorf("REPORTED FAILURE (polyforge#227): %q (turn error %v) classified %q, want %q — a 4xx body that names upstream AND invites a retry is an upstream transient, not a model fault", text, turnErr, got, FailUpstreamTransient)
 			}
@@ -51,12 +51,12 @@ func TestUpstream4xxRetryInvitationClassifiesTransient(t *testing.T) {
 		// the live path's shape: rule 1 hands down a model_error verdict
 		// with the incident text as the turn error; verdictCause must
 		// re-classify it into the backoff-retry class.
-		if got := verdictCause(supervise.StepDead{Step: "s", SpawnN: 1, Cause: supervise.CauseModelError, TurnError: text}); got != FailUpstreamTransient {
+		if got, _ := verdictCauseWith(supervise.StepDead{Step: "s", SpawnN: 1, Cause: supervise.CauseModelError, TurnError: text}, nil); got != FailUpstreamTransient {
 			t.Errorf("REPORTED FAILURE (polyforge#227): verdictCause(model_error, %q) = %q, want %q — the live 4xx upstream turn burns a candidate instead of backing off", text, got, FailUpstreamTransient)
 		}
 		// the driver's own failure never carries a provider body: like
 		// every other transient signature, this one is exit-only.
-		if got, _, _ := classifyWaitFailure(errWithText("read transcript: " + text)); got == FailUpstreamTransient {
+		if got, _, _, _, _ := classifyWaitFailureWith(errWithText("read transcript: "+text), nil); got == FailUpstreamTransient {
 			t.Errorf("driver-local %q classified %q, want not transient", text, got)
 		}
 	}
@@ -76,23 +76,23 @@ func TestUpstream4xxRetryInvitationControlsStayModelClass(t *testing.T) {
 	}
 	for _, tc := range controls {
 		for _, turnErr := range []bool{false, true} {
-			got, _, _ := classifyWaitFailure(&ExitedError{ExitCode: 1, LastError: tc.text, TurnError: turnErr})
+			got, _, _, _, _ := classifyWaitFailureWith(&ExitedError{ExitCode: 1, LastError: tc.text, TurnError: turnErr}, nil)
 			if got == FailUpstreamTransient {
 				t.Errorf("%s: %q (turn error %v) classified %q — per the WI a plain 4xx stays model-class; the transient extension needs BOTH the upstream subject AND the retry invitation", tc.name, tc.text, turnErr, got)
 			}
 		}
 		// the live path keeps the model_error verdict: a plain 4xx burns
 		// the candidate exactly as before the extension.
-		if got := verdictCause(supervise.StepDead{Step: "s", SpawnN: 1, Cause: supervise.CauseModelError, TurnError: tc.text}); got != FailModelError {
+		if got, _ := verdictCauseWith(supervise.StepDead{Step: "s", SpawnN: 1, Cause: supervise.CauseModelError, TurnError: tc.text}, nil); got != FailModelError {
 			t.Errorf("%s: verdictCause(model_error, %q) = %q, want %q — a plain 4xx stays model-class on the live path", tc.name, tc.text, got, FailModelError)
 		}
 	}
 	// the neighboring classes keep their texts (the extension must not
 	// swallow them).
-	if got, _, _ := classifyWaitFailure(&ExitedError{ExitCode: 1, LastError: "429 Too Many Requests"}); got != FailRateLimited {
+	if got, _, _, _, _ := classifyWaitFailureWith(&ExitedError{ExitCode: 1, LastError: "429 Too Many Requests"}, nil); got != FailRateLimited {
 		t.Errorf("a throttle must stay a throttle: %q", got)
 	}
-	if got, _, _ := classifyWaitFailure(&ExitedError{ExitCode: 1, LastError: "insufficient quota"}); got != FailExitModel {
+	if got, _, _, _, _ := classifyWaitFailureWith(&ExitedError{ExitCode: 1, LastError: "insufficient quota"}, nil); got != FailExitModel {
 		t.Errorf("an allowance problem must stay model-class: %q", got)
 	}
 }

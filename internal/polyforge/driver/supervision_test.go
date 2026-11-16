@@ -156,7 +156,7 @@ func TestClassifyWaitFailure(t *testing.T) {
 		{"driver's own other error", errors.New("something odd"), FailExitOther},
 	}
 	for _, tc := range cases {
-		got, _, _ := classifyWaitFailure(tc.err)
+		got, _, _, _, _ := classifyWaitFailureWith(tc.err, nil)
 		if got != tc.want {
 			t.Errorf("%s: classified %q, want %q", tc.name, got, tc.want)
 		}

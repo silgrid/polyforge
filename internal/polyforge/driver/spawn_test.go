@@ -807,7 +807,7 @@ func TestSpawnStepWiresHarnessTranslatorOntoTheLink(t *testing.T) {
 	if !errors.As(werr, &ee) || !ee.TurnError || !strings.Contains(ee.LastError, "401") {
 		t.Fatalf("exit error %+v, want the error turn + its text", werr)
 	}
-	if cause, _, _ := classifyWaitFailure(werr); cause != FailExitModel {
+	if cause, _, _, _, _ := classifyWaitFailureWith(werr, nil); cause != FailExitModel {
 		t.Fatalf("an error-turn exit is model-class, got %q", cause)
 	}
 }

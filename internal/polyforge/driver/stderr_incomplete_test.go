@@ -33,7 +33,7 @@ func TestIncompleteStderrTailIsRecordedNotClassified(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			run := &stepRun{sp: StepSpawn{StepID: "fix", SpawnN: 2}, handle: exitedHandle{c.info}}
-			cause, code, detail := classifyWaitFailure(run.exited())
+			cause, code, detail, _, _ := classifyWaitFailureWith(run.exited(), nil)
 			if cause != c.wantCause || code != 101 {
 				t.Fatalf("cause %q code %d, want %q code 101 (detail %q)", cause, code, c.wantCause, detail)
 			}
@@ -45,7 +45,7 @@ func TestIncompleteStderrTailIsRecordedNotClassified(t *testing.T) {
 	// the note itself is no failure text: rendered into every classified
 	// field, it matches no class
 	note := (&ExitedError{StderrIncomplete: true}).Error()
-	if hostPatterns.MatchString(note) || classifyText(note, true) != "" {
+	if c, _ := classifyTextWith(note, true, nil); hostPatterns.MatchString(note) || c != "" {
 		t.Fatalf("the incomplete-tail note %q matches a failure class", note)
 	}
 	// the startup-death path (the runtime's injectionFailed) carries the
@@ -54,10 +54,10 @@ func TestIncompleteStderrTailIsRecordedNotClassified(t *testing.T) {
 		return errors.New("runtime: initial prompt injection failed (process torn down): write |1: broken pipe; harness stderr: " +
 			stderr + " [" + spawn.StderrIncompleteNote + "]")
 	}
-	if cause, _, _ := classifyWaitFailure(injection("warn")); cause != FailExitOther {
+	if cause, _, _, _, _ := classifyWaitFailureWith(injection("warn"), nil); cause != FailExitOther {
 		t.Fatalf("an incomplete startup-death tail without failure text classified %q, want %q", cause, FailExitOther)
 	}
-	if cause, _, _ := classifyWaitFailure(injection(providerErr)); cause != FailExitModel {
+	if cause, _, _, _, _ := classifyWaitFailureWith(injection(providerErr), nil); cause != FailExitModel {
 		t.Fatalf("an incomplete startup-death tail with the provider error classified %q, want %q", cause, FailExitModel)
 	}
 }
@@ -85,7 +85,7 @@ func TestIncompleteStdoutIsRecordedNotClassified(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			run := &stepRun{sp: StepSpawn{StepID: "fix", SpawnN: 2}, handle: exitedHandle{c.info}}
-			cause, code, detail := classifyWaitFailure(run.exited())
+			cause, code, detail, _, _ := classifyWaitFailureWith(run.exited(), nil)
 			if cause != c.wantCause || code != 101 {
 				t.Fatalf("cause %q code %d, want %q code 101 (detail %q)", cause, code, c.wantCause, detail)
 			}
@@ -97,7 +97,7 @@ func TestIncompleteStdoutIsRecordedNotClassified(t *testing.T) {
 	// the note itself is no failure text: alone, or rendered into the
 	// archived detail, it matches no class
 	for _, note := range []string{spawn.StdoutIncompleteNote, (&ExitedError{StdoutIncomplete: true}).Error()} {
-		if hostPatterns.MatchString(note) || classifyText(note, true) != "" {
+		if c, _ := classifyTextWith(note, true, nil); hostPatterns.MatchString(note) || c != "" {
 			t.Fatalf("the incomplete-stdout note %q matches a failure class", note)
 		}
 	}

@@ -144,6 +144,12 @@ type Config struct {
 	// AgentLanguageFallback supplies the default Cell's live language to a
 	// named Cell when its own [daemon] agent_language is unset.
 	AgentLanguageFallback func() string
+	// HostLive answers the default Cell's live state to a named Cell, read
+	// at each judgement (nil = this Cell's own state): the Host-only keys
+	// transient_error_patterns, model_error_patterns and the two
+	// slow_model_*_latency bounds reload on the Host only, so a named Cell
+	// reads them there rather than from its startup copy.
+	HostLive func() *liveconfig.State
 	// LoadFile reads this Cell's file config for a reload (nil = parse
 	// ConfigPath on its own): the Host binds the Host file for default and
 	// the named file over the Host keys for a named Cell.
@@ -476,6 +482,16 @@ type Daemon struct {
 	// bounds) behind a mutex; the daemon and the runtime read them at their
 	// use sites, so a reload takes effect without a restart.
 	live *liveconfig.State
+	// liveLimitsFn answers the current supervision defaults (liveLimits,
+	// bound once in New): the single closure the driver's LimitsFunc and
+	// the supervisor's LiveLimits share, read here by tests that assert a
+	// live reload reached the values the next judgement reads.
+	liveLimitsFn func() supervise.Defaults
+	// textRulesFn answers the current additional classification rules
+	// (textRules, bound once in New): the closure every driver's
+	// TextRulesFunc reads, read here by tests that assert a reload reached
+	// the next classification.
+	textRulesFn func() driver.TextRules
 	// reloadMu guards the reload BOOKKEEPING (pending/overridden/status),
 	// which GET /status reads. It is only ever held for an in-memory
 	// publish — never across file I/O (AGENTS.md runtime locking).
@@ -578,8 +594,30 @@ func New(cfg Config) (*Daemon, error) {
 	// file-only startup baseline; a reload swaps them.
 	live.SetSummarize(cfg.StartupFile.Summarize)
 	live.SetAgentLanguage(cfg.StartupFile.Daemon.AgentLanguage)
+	// polyforge#51: the Host's additional classification rules and the
+	// slow-model thresholds are live from the startup file; a reload of
+	// either key swaps them (reload.go).
+	if err := live.SetTransientErrorPatterns(cfg.StartupFile.Daemon.TransientErrorPatterns); err != nil {
+		return nil, fmt.Errorf("startup: %v", err)
+	}
+	if err := live.SetModelErrorPatterns(cfg.StartupFile.Daemon.ModelErrorPatterns); err != nil {
+		return nil, fmt.Errorf("startup: %v", err)
+	}
+	live.SetSlowModelMedianLatency(cfg.StartupFile.Daemon.SlowModelMedianLatency)
+	live.SetSlowModelP90Latency(cfg.StartupFile.Daemon.SlowModelP90Latency)
 	live.SetAgentLanguageFallback(cfg.AgentLanguageFallback)
 	live.SetMemoryPolicy(cfg.StartupFile.MemoryPolicy)
+	// hostLive answers the state the Host-only keys are read from: the
+	// default Cell's for a named Cell (a Host reload updates only that
+	// one), this Cell's own otherwise.
+	hostLive := func() *liveconfig.State {
+		if cfg.HostLive != nil {
+			if h := cfg.HostLive(); h != nil {
+				return h
+			}
+		}
+		return live
+	}
 
 	// liveLimits answers the current supervision defaults (a live reload's
 	// step_timeout / stall_window folded in). A zero duration means unset
@@ -593,6 +631,19 @@ func New(cfg Config) (*Daemon, error) {
 			DriverStall:     live.StallWindow(),
 			ModelErrorGrace: cfg.Supervision.ModelErrorGrace,
 			AskWarmWindow:   cfg.Supervision.AskWarmWindow,
+			// polyforge#51: the slow-model judgement's live bounds
+			SlowModelMedianLatency: hostLive().SlowModelMedianLatency(),
+			SlowModelP90Latency:    hostLive().SlowModelP90Latency(),
+		}
+	}
+
+	// textRules answers the live additional classification rules
+	// (polyforge#51).
+	textRules := func() driver.TextRules {
+		h := hostLive()
+		return driver.TextRules{
+			Transient: h.TransientErrorRules(),
+			Model:     h.ModelErrorRules(),
 		}
 	}
 
@@ -672,6 +723,10 @@ func New(cfg Config) (*Daemon, error) {
 				// the next threshold judgement, including in-flight steps
 				//
 				LimitsFunc: func() supervise.Defaults { return liveLimits() },
+				// polyforge#51: the live additional classification
+				// rules — the next text classification reads them, so a
+				// reload reaches the next judgement without a restart.
+				TextRulesFunc: func() driver.TextRules { return textRules() },
 				// the heavy-run admission a step declaring it is admitted by
 				Admission: cellAdmission{d},
 				// workflow contract 4: the pending `pf step hub` writes a
@@ -716,18 +771,20 @@ func New(cfg Config) (*Daemon, error) {
 		}
 	}
 	d = &Daemon{
-		feed:     feed,
-		cfg:      cfg,
-		hub:      cfg.Hub,
-		live:     live,
-		modes:    NewModeCtl(),
-		q:        NewJobQueue(cfg.MaxConcurrent, func() map[string]bool { return d.occupiedSlots() }),
-		shutDone: make(chan struct{}),
-		obsDone:  make(chan struct{}),
-		ready:    make(chan struct{}),
-		sup:      supervise.NewRegistry(),
-		merges:   newMergeLocks(),
-		verifyQ:  cfg.SharedAdmission,
+		liveLimitsFn: liveLimits,
+		textRulesFn:  textRules,
+		feed:         feed,
+		cfg:          cfg,
+		hub:          cfg.Hub,
+		live:         live,
+		modes:        NewModeCtl(),
+		q:            NewJobQueue(cfg.MaxConcurrent, func() map[string]bool { return d.occupiedSlots() }),
+		shutDone:     make(chan struct{}),
+		obsDone:      make(chan struct{}),
+		ready:        make(chan struct{}),
+		sup:          supervise.NewRegistry(),
+		merges:       newMergeLocks(),
+		verifyQ:      cfg.SharedAdmission,
 		// the Cell's own command_path (a reload moves it)
 		commandPath: cfg.StartupFile.Daemon.CommandPath,
 		pfDir:       selfDir(),

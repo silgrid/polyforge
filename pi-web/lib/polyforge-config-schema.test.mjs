@@ -44,16 +44,20 @@ test("step write keys parse and the guard checks only the shape", () => {
 });
 
 // the cli.toml key sets are one fact for the form and the route.
-test("the cli.toml key sets: five common, 3 + 2 advanced per zone, two Cell keys, three connection keys, ten non-secret writable keys (server is an identity key)", () => {
+test("the cli.toml key sets: five common, 3 + 6 advanced per zone, two Cell keys, three connection keys, fourteen non-secret writable keys (server is an identity key)", () => {
   assert.deepEqual([...schema.CLI_COMMON_KEYS], ["max_concurrent_jobs", "step_timeout", "stall_window", "claude_bin", "api_key"]);
   assert.deepEqual([...schema.CLI_ADVANCED_TOP_LEVEL_KEYS], ["server", "daemon_socket", "user_id"]);
-  assert.deepEqual([...schema.CLI_ADVANCED_DAEMON_KEYS], ["harness_root", "operator_agent_dir"]);
+  assert.deepEqual([...schema.CLI_ADVANCED_DAEMON_KEYS], [
+    "harness_root", "operator_agent_dir",
+    // polyforge#51: the Host-only classification keys and slow bounds
+    "transient_error_patterns", "model_error_patterns", "slow_model_median_latency", "slow_model_p90_latency",
+  ]);
   // the confirmation is narrowed to same-identity edits; server is a new profile
   assert.deepEqual([...schema.CONNECTION_KEYS].sort(), ["api_key", "daemon_socket", "user_id"]);
   assert.deepEqual([...schema.IDENTITY_KEYS], ["server"]);
   const writable = new Set(schema.CLI_WRITABLE_KEYS);
   assert.deepEqual([...schema.CELL_KEYS], ["cell_max_concurrent_jobs", "model.source"], "the named Cell's own keys");
-  assert.equal(writable.size, 11, "ten non-secret keys plus write-only api_key");
+  assert.equal(writable.size, 15, "fourteen non-secret keys plus write-only api_key");
   assert.ok(!writable.has("server"), "server is never written by the panel");
   for (const key of schema.CELL_KEYS) assert.ok(writable.has(key), key);
   for (const key of schema.HOST_ONLY_KEYS) assert.ok(!schema.CELL_KEYS.includes(key), `${key} is Host-only`);
@@ -87,5 +91,21 @@ test("a Cell's mapping row is one whole [workspace.\"<abs path>\"] section with 
   }
   // the Host region's keys are the Host-only keys, none of a Cell's
   for (const key of schema.CELL_KEYS) assert.ok(!schema.HOST_ONLY_KEYS.includes(key), `${key} is a Cell key`);
+});
+
+// polyforge#51: the Host region's own split — scalar rows and pattern-list
+// rows — and the regex-list form guard.
+test("the Host region's scalar keys and pattern-list keys partition the Host-only keys, and a regex list's guard checks only the shape", () => {
+  assert.deepEqual([...schema.HOST_SCALAR_KEYS], ["max_concurrent_jobs", "daemon_socket", "harness_root", "operator_agent_dir", "slow_model_median_latency", "slow_model_p90_latency"]);
+  assert.deepEqual([...schema.HOST_LIST_KEYS], ["transient_error_patterns", "model_error_patterns"]);
+  assert.deepEqual([...schema.HOST_ONLY_KEYS], [...schema.HOST_SCALAR_KEYS, ...schema.HOST_LIST_KEYS], "the Host-only set is exactly the two lists");
+  for (const key of [...schema.HOST_SCALAR_KEYS, ...schema.HOST_LIST_KEYS]) {
+    assert.ok(!schema.CELL_KEYS.includes(key), `${key} is Host-only`);
+  }
+  assert.equal(schema.configValueError("transient_error_patterns", ["\\b402\\b"], { kind: "regex-list" }), null, "the regex itself is pf's to judge (RE2, not JS)");
+  assert.equal(schema.configValueError("transient_error_patterns", ["(?=js)"], { kind: "regex-list" }), null, "a JS-only syntax is pf's refusal, never the form's");
+  assert.equal(schema.configValueError("model_error_patterns", "boom", { kind: "regex-list" }), "a list of regex strings is required");
+  assert.equal(schema.configValueError("model_error_patterns", ["ok", ""], { kind: "regex-list" }), "patterns must be non-empty strings");
+  assert.equal(schema.configValueError("model_error_patterns", [], { kind: "regex-list" }), null, "an empty list is a valid unset-to-empty write");
 });
 

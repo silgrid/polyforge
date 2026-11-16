@@ -43,6 +43,7 @@ the daemon lives.
 ```
 pf ops status                                        # local jobs + auto/max + queue counters + the model-health summary (never reads aihub)
 pf ops models                                        # the model+effort x step profile over the events-retention window (read-only; --json re-emits GET /models)
+pf ops unclassified                                  # Host-level: the last 7 days' error texts that fell into the classification fallback, deduplicated with counts across every Cell (read-only; --json re-emits GET /ops/unclassified; refuses --profile)
 pf ops auto [on|off]                                 # bare: show; on: pull the ready queue itself; off: explicit pf submit only
 pf ops max [N]                                       # bare: show; N >= 1: the cap until the daemon restarts or a pf config set/reload changes [daemon] max_concurrent_jobs (last action wins)
 pf ops role [interactive|runner] [--force|--if-unset] # bare: show this machine's role; interactive|runner: ask the heartbeat for it; --force: take interactive over from the machine holding it; --if-unset: only while no operator chose a role
@@ -70,12 +71,17 @@ exit ends the restart loop as well; `pf daemon ensure` starts it again.
 The daemon's other production knobs are not ops verbs: they live in the
 `[daemon]` table of `cli.toml` (`step_timeout`, `stall_window`,
 `harness_root`, `operator_agent_dir`, `max_concurrent_jobs`,
-`max_concurrent_bars` — how many heavy runs run at once, default 2), which
+`max_concurrent_bars` — how many heavy runs run at once, default 2 —, the
+failure-classification lists `transient_error_patterns` /
+`model_error_patterns` and the slow-model bounds
+`slow_model_median_latency` / `slow_model_p90_latency`, polyforge#51), which
 the daemon reads itself. Change one with `pf
 config set <key> <value>`; a hand edit needs `pf config reload`. The running daemon applies the live
 keys (`step_timeout`, `stall_window`, `max_concurrent_jobs`,
 `max_concurrent_tasks`, `cell_max_concurrent_jobs`, `max_concurrent_bars`,
-`agent_language`) without a restart, takes the `[workspace]`
+`agent_language`, `transient_error_patterns`, `model_error_patterns`,
+`slow_model_median_latency`, `slow_model_p90_latency`) without a restart,
+takes the `[workspace]`
 mapping at the next claim, and reports the restart-only keys (`harness_root`, `operator_agent_dir`, and the flat
 `server`/`api_key`/`daemon_socket`) as pending until the next daemon
 start (`pf ops shutdown`, then `pf daemon ensure`). Job cap: `pf ops max

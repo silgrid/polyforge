@@ -92,7 +92,7 @@ func TestInterruptedRestartAfterPreJournalSpawnFailureKeepsTheRewindOrder(t *tes
 	// The exact durable shape a pre-journal SpawnStep failure writes: the
 	// step_failed attempt, Dispatch back to 0, no journal line for ordinal 4.
 	d0 := e.driver(&fakeSpawner{}, 4, nil)
-	if stop, err := d0.failDispatch(context.Background(), "build", 4, time.Now(), time.Now(), FailExitOther, -1, errSpawnFailed.Error(), nil); stop || err != nil {
+	if stop, err := d0.failDispatch(context.Background(), "build", 4, time.Now(), time.Now(), FailExitOther, -1, errSpawnFailed.Error(), nil, "", ""); stop || err != nil {
 		t.Fatalf("the pre-journal spawn failure write: stop=%v err=%v", stop, err)
 	}
 	if x := readExec(t, e.execPath); x.Steps["build"].Dispatch != 0 {
@@ -187,7 +187,7 @@ func TestPreJournalSpawnFailureAfterGateStepStartStaysFresh(t *testing.T) {
 	e.crashHeld([]fakeEntry{done(`{}`), gateFAIL(), done(`{}`)}, func() {})
 
 	d0 := e.driver(&fakeSpawner{}, 4, nil)
-	if stop, err := d0.failDispatch(context.Background(), "review", 4, time.Now(), time.Now(), FailExitOther, -1, errSpawnFailed.Error(), nil); stop || err != nil {
+	if stop, err := d0.failDispatch(context.Background(), "review", 4, time.Now(), time.Now(), FailExitOther, -1, errSpawnFailed.Error(), nil, "", ""); stop || err != nil {
 		t.Fatalf("the pre-journal spawn failure write: stop=%v err=%v", stop, err)
 	}
 	if st := readExec(t, e.execPath).Steps["review"]; st.Dispatch != 0 || st.Supervision == nil || st.Supervision.NextDispatch != "" {
@@ -252,7 +252,7 @@ func TestPreJournalSpawnFailureAfterSupersededStepStartStaysFresh(t *testing.T) 
 	e.crashHeld([]fakeEntry{done(`{}`), done(`{}`), gateFAIL(), done(`{}`)}, func() {})
 
 	d0 := e.driver(&fakeSpawner{}, 5, nil)
-	if stop, err := d0.failDispatch(context.Background(), "check", 5, time.Now(), time.Now(), FailExitOther, -1, errSpawnFailed.Error(), nil); stop || err != nil {
+	if stop, err := d0.failDispatch(context.Background(), "check", 5, time.Now(), time.Now(), FailExitOther, -1, errSpawnFailed.Error(), nil, "", ""); stop || err != nil {
 		t.Fatalf("the pre-journal spawn failure write: stop=%v err=%v", stop, err)
 	}
 	if st := readExec(t, e.execPath).Steps["check"]; st.Dispatch != 0 || st.Supervision == nil || st.Supervision.NextDispatch != "" {

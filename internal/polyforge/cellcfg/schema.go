@@ -38,6 +38,13 @@ var Keys = []Key{
 	{"max_concurrent_tasks", "daemon", ScopeHost, ClassLive},
 	{"max_concurrent_bars", "daemon", ScopeHost, ClassLive},
 	{"bar_load_threshold", "daemon", ScopeHost, ClassLive},
+	// polyforge#51: the additional failure-classification pattern lists and
+	// the slow-model latency thresholds — Host-configured so a gateway's
+	// new error phrasing or a slower model is adopted without a release.
+	{"transient_error_patterns", "daemon", ScopeHost, ClassLive},
+	{"model_error_patterns", "daemon", ScopeHost, ClassLive},
+	{"slow_model_median_latency", "daemon", ScopeHost, ClassLive},
+	{"slow_model_p90_latency", "daemon", ScopeHost, ClassLive},
 	{"harness_root", "daemon", ScopeHost, ClassRestartOnly},
 	{"operator_agent_dir", "daemon", ScopeHost, ClassRestartOnly},
 	{"python", "daemon", ScopeHost, ClassRestartOnly},

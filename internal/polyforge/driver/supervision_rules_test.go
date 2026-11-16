@@ -372,14 +372,14 @@ func TestAllowanceErrorTurnStillSwitchesAtOnce(t *testing.T) {
 		`model "xyz" not found`,
 		`404 {"error":{"message":"unknown model: prov/xyz"}}`,
 	} {
-		if got := verdictCause(supervise.StepDead{Step: "s", SpawnN: 1, Cause: supervise.CauseModelError, TurnError: text}); got != FailExitModel {
+		if got, _ := verdictCauseWith(supervise.StepDead{Step: "s", SpawnN: 1, Cause: supervise.CauseModelError, TurnError: text}, nil); got != FailExitModel {
 			t.Errorf("verdictCause(%q) = %q, want %q", text, got, FailExitModel)
 		}
-		if exit, _, _ := classifyWaitFailure(&ExitedError{ExitCode: 1, LastError: text, TurnError: true}); exit != FailExitModel {
+		if exit, _, _, _, _ := classifyWaitFailureWith(&ExitedError{ExitCode: 1, LastError: text, TurnError: true}, nil); exit != FailExitModel {
 			t.Errorf("the exit path classified %q as %q: the live path must match it", text, exit)
 		}
 	}
-	if got := verdictCause(supervise.StepDead{Step: "s", SpawnN: 1, Cause: supervise.CauseModelError, TurnError: gateway502}); got != FailModelError {
+	if got, _ := verdictCauseWith(supervise.StepDead{Step: "s", SpawnN: 1, Cause: supervise.CauseModelError, TurnError: gateway502}, nil); got != FailModelError {
 		t.Errorf("verdictCause(%q) = %q, want %q", gateway502, got, FailModelError)
 	}
 }
@@ -402,7 +402,7 @@ func TestOutageShapedModelTextsStayModelError(t *testing.T) {
 		"model endpoint not found, retrying",
 		"the model you requested was not found in the cache, retrying",
 	} {
-		if got := verdictCause(supervise.StepDead{Step: "s", SpawnN: 1, Cause: supervise.CauseModelError, TurnError: text}); got != FailModelError {
+		if got, _ := verdictCauseWith(supervise.StepDead{Step: "s", SpawnN: 1, Cause: supervise.CauseModelError, TurnError: text}, nil); got != FailModelError {
 			t.Errorf("verdictCause(%q) = %q, want %q (an outage)", text, got, FailModelError)
 		}
 	}
@@ -418,7 +418,7 @@ func TestOutageShapedModelTextsStayModelError(t *testing.T) {
 		"no such model: prov/xyz",
 		"unsupported model prov/xyz",
 	} {
-		if got := verdictCause(supervise.StepDead{Step: "s", SpawnN: 1, Cause: supervise.CauseModelError, TurnError: text}); got != FailExitModel {
+		if got, _ := verdictCauseWith(supervise.StepDead{Step: "s", SpawnN: 1, Cause: supervise.CauseModelError, TurnError: text}, nil); got != FailExitModel {
 			t.Errorf("verdictCause(%q) = %q, want %q (an unresolvable model name switches at once)", text, got, FailExitModel)
 		}
 	}

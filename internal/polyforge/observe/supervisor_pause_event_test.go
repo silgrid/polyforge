@@ -6,9 +6,11 @@ package observe
 //   - acceptance 3: one durable event per observation gap naming how long
 //     the supervisor was paused (the ticket explicitly leaves the kind to
 //     the fix, then requires "one event ... how long");
-//   - the model/tool time split: a phase that was open when the host froze
-//     and closed after the resume must not carry the frozen span into the
-//     split that classifies step_timeout_long_task vs _slow_model.
+//   - the recorded model-call latency: a model call that was open when the
+//     host froze and closed after the resume must not carry the frozen span
+//     into the latency that classifies step_timeout_long_task vs
+//     _slow_model (polyforge#51: rule 4 reads the completed calls'
+//     latencies; the cumulative model/tool split is gone).
 //
 // Both are driven through the monitor's tick path against the same
 // injectable clock as the repro (newTickDrivenMonitor/tick/dispatch live in
@@ -65,57 +67,6 @@ func TestSupervisorPauseIsRecordedOncePerGap(t *testing.T) {
 	}
 }
 
-// A tool that was already running when the host froze and whose ToolEnd is
-// folded right after the resume (before the first tick) must not book the
-// frozen hour into the tool time.
-func TestFrozenToolCloseDoesNotBookTheGap(t *testing.T) {
-	clk := newPauseClock(time.Unix(1_700_000_000, 0))
-	m := newTickDrivenMonitor(t, clk, time.Minute)
-	tr := dispatch(m, clk, supervise.Thresholds{
-		Silence: 10 * time.Hour, Tool: 10 * time.Hour, StepTimeout: 10 * time.Hour,
-	})
-	tick(m)
-	tr.ToolStart("t1", "bash", `{"command":"go test ./..."}`)
-
-	clk.Advance(time.Hour) // host frozen; the tool is frozen with it
-	tr.ToolEnd("t1", "bash")
-	tick(m)
-
-	if got := tr.Snapshot(clk.Now()).ToolTime; got > 2*time.Minute {
-		t.Fatalf("tool time after a 1h observation gap = %v, want ~one poll interval (the frozen hour must not count)", got)
-	}
-}
-
-// A phase that was already open when the host froze and whose end is folded
-// after the first post-gap tick must still book its observed span. The gap
-// tick already shifted the open phase's start, so closing it later must not
-// subtract the gap a second time.
-func TestFrozenToolCloseAfterGapTickBooksObservedSpan(t *testing.T) {
-	clk := newPauseClock(time.Unix(1_700_000_000, 0))
-	m := newTickDrivenMonitor(t, clk, time.Minute)
-	tr := dispatch(m, clk, supervise.Thresholds{
-		Silence: 10 * time.Hour, Tool: 10 * time.Hour, StepTimeout: 10 * time.Hour,
-	})
-	start := clk.Now()
-	tr.ToolStart("t1", "bash", `{"command":"go test ./..."}`)
-	// The last pre-gap observation comes well after the phase started, and
-	// the freeze follows it.
-	clk.Advance(58 * time.Minute)
-	tick(m)
-	clk.Advance(time.Hour) // host frozen
-	tick(m)                // the first tick after the gap shifts the open phase's start
-
-	clk.Advance(30 * time.Second)
-	end := clk.Now()
-	tr.ToolEnd("t1", "bash") // closes after the gap tick, before the next one
-	tick(m)                  // the next observation only closes the window
-
-	want := end.Sub(start) - (time.Hour - time.Minute) // the observed span: wall span minus the declared gap
-	if got := tr.Snapshot(clk.Now()).ToolTime; got != want {
-		t.Fatalf("tool time after closing past a gap tick = %v, want exactly the observed span %v", got, want)
-	}
-}
-
 // The between-steps clock (driver_stalled) is judged from the same wall
 // span: a host freeze between steps must not look like a driver stuck for
 // the frozen hour.
@@ -129,8 +80,8 @@ func TestSupervisorPauseDoesNotStallTheDriver(t *testing.T) {
 	noVerdict(t, m, "the first tick after a 1h observation gap between steps")
 }
 
-// The same for the model side: a model wait open at the freeze, closed by
-// the first post-resume tool start before the tick.
+// A model wait open at the freeze, closed by the first post-resume tool
+// start before the tick: the recorded call latency loses the frozen hour.
 func TestFrozenModelCloseDoesNotBookTheGap(t *testing.T) {
 	clk := newPauseClock(time.Unix(1_700_000_000, 0))
 	m := newTickDrivenMonitor(t, clk, time.Minute)
@@ -144,7 +95,8 @@ func TestFrozenModelCloseDoesNotBookTheGap(t *testing.T) {
 	tr.ToolStart("t1", "bash", `{"command":"go test ./..."}`) // closes the model phase
 	tick(m)
 
-	if got := tr.Snapshot(clk.Now()).ModelTime; got > 2*time.Minute {
-		t.Fatalf("model time after a 1h observation gap = %v, want ~one poll interval (the frozen hour must not count)", got)
+	lat := tr.Snapshot(clk.Now()).ModelCallLatencies
+	if len(lat) != 1 || lat[0] > 2*time.Minute {
+		t.Fatalf("model call latencies after a 1h observation gap = %v, want one call of ~one poll interval (the frozen hour must not count)", lat)
 	}
 }

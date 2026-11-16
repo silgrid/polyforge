@@ -19,12 +19,12 @@ const upstream4xxRetryJSON = `400: {"message":"The model request failed due to a
 
 func TestUpstream4xxRetryInvitationJSONBody(t *testing.T) {
 	for _, turnErr := range []bool{false, true} {
-		got, _, _ := classifyWaitFailure(&ExitedError{ExitCode: 1, LastError: upstream4xxRetryJSON, TurnError: turnErr})
+		got, _, _, _, _ := classifyWaitFailureWith(&ExitedError{ExitCode: 1, LastError: upstream4xxRetryJSON, TurnError: turnErr}, nil)
 		if got != FailUpstreamTransient {
 			t.Errorf("%q (turn error %v) classified %q, want %q", upstream4xxRetryJSON, turnErr, got, FailUpstreamTransient)
 		}
 	}
-	if got := verdictCause(supervise.StepDead{Step: "s", SpawnN: 1, Cause: supervise.CauseModelError, TurnError: upstream4xxRetryJSON}); got != FailUpstreamTransient {
+	if got, _ := verdictCauseWith(supervise.StepDead{Step: "s", SpawnN: 1, Cause: supervise.CauseModelError, TurnError: upstream4xxRetryJSON}, nil); got != FailUpstreamTransient {
 		t.Errorf("verdictCause(model_error, %q) = %q, want %q", upstream4xxRetryJSON, got, FailUpstreamTransient)
 	}
 	// the same JSON body without the retry invitation stays model_error,
@@ -33,13 +33,13 @@ func TestUpstream4xxRetryInvitationJSONBody(t *testing.T) {
 	plain := `400: {"message":"The model request failed due to an upstream error.","type":"invalid_request_error"}`
 	unwrapped := "400: The model request failed due to an upstream error."
 	for _, text := range []string{plain, unwrapped} {
-		if got := verdictCause(supervise.StepDead{Step: "s", SpawnN: 1, Cause: supervise.CauseModelError, TurnError: text}); got != FailModelError {
+		if got, _ := verdictCauseWith(supervise.StepDead{Step: "s", SpawnN: 1, Cause: supervise.CauseModelError, TurnError: text}, nil); got != FailModelError {
 			t.Errorf("verdictCause(model_error, %q) = %q, want %q", text, got, FailModelError)
 		}
 	}
 	// and the exit path's model-name row no longer reads the
 	// invalid_request_error type as a model problem
-	if got := classifyText(plain, true); got != "" {
+	if got, _ := classifyTextWith(plain, true, nil); got != "" {
 		t.Errorf("classifyText(%q) = %q, want no text class", plain, got)
 	}
 
