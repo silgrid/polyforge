@@ -10,6 +10,11 @@ package cli
 // entry's params (owner ruling 12), and `pf workflows --cwd` each step
 // param's final value per mapped project with its level — the lane
 // default or the project (owner ruling 13, the model chain's labels).
+//
+// The ticket layer (AC3): `pf override <wi> --step <id> --param
+// <name>=<value>` and `--clear-param <name>` send one action each (any
+// second action is refused locally, nothing reaches the daemon), and the
+// view renders each step's param overrides.
 
 import (
 	"encoding/json"
@@ -17,6 +22,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/silgrid/polyforge/internal/common/protocol"
 )
 
 // w78Lane is a lane whose probe step declares two params; its code step
@@ -131,5 +138,93 @@ func TestW78ConfigWorkflowsParams(t *testing.T) {
 	}}
 	if !reflect.DeepEqual(params, want) {
 		t.Fatalf("pf workflows step params = %v, want %v", params, want)
+	}
+}
+
+func TestW78OverrideParamFlags(t *testing.T) {
+	d := newDaemonFixture(t)
+	env := map[string]string{"PF_DAEMON_SOCKET": d.sock}
+	view := protocol.OverrideView{WorkItem: "wi_w78", Posture: "running", Steps: []protocol.OverrideStepView{
+		{ID: "build", Status: "in_progress"},
+		{ID: "review", Params: []protocol.OverrideParamView{
+			{Name: "flag", Value: "", By: "usr_1"}, {Name: "image", Value: "reg/img:2", By: "usr_1"},
+		}},
+	}}
+	raw, _ := json.Marshal(view)
+	d.answer("GET", "/jobs/wi_w78/overrides", string(raw))
+	write := protocol.OverrideWriteResult{WorkItem: "wi_w78", Changed: true, Posture: "running", Published: true,
+		Step: protocol.OverrideStepView{ID: "review", Params: []protocol.OverrideParamView{{Name: "image", Value: "reg/img:2", By: "usr_2"}}}}
+	wraw, _ := json.Marshal(write)
+	d.answer("POST", "/jobs/wi_w78/overrides", string(wraw))
+
+	// the view renders one line per param override, the empty value visible
+	code, out, errs := runPf(t, env, "override", "wi_w78")
+	if code != 0 {
+		t.Fatalf("view exit = %d: %s", code, errs)
+	}
+	for _, want := range []string{`param image="reg/img:2" (by usr_1)`, `param flag="" (by usr_1)`} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("the view lacks %q:\n%s", want, out)
+		}
+	}
+
+	// one action per call: a param beside any other action is refused
+	// locally, and --step is required
+	posts := func() int {
+		n := 0
+		for _, r := range d.rec.all() {
+			if r.Method == "POST" {
+				n++
+			}
+		}
+		return n
+	}
+	for _, bad := range [][]string{
+		{"override", "wi_w78", "--param", "image=x"},
+		{"override", "wi_w78", "--step", "review", "--param", "image=x", "--clear-param", "flag"},
+		{"override", "wi_w78", "--step", "review", "--param", "image=x", "--models", "pi:a/b"},
+		{"override", "wi_w78", "--step", "review", "--clear-param", "image", "--skip"},
+		{"override", "wi_w78", "--step", "review", "--param", "noequals"},
+	} {
+		code, _, errs := runPf(t, env, bad...)
+		if code == 0 || !strings.Contains(errs, "override:") {
+			t.Fatalf("%v: exit %d, want a refusal naming the verb: %s", bad, code, errs)
+		}
+		if n := posts(); n != 0 {
+			t.Fatalf("%v: a refused call reached the daemon (%d writes)", bad, n)
+		}
+	}
+	for _, bad := range [][]string{
+		{"override", "wi_w78", "--step", "review", "--param", "image=x", "--clear-param", "flag"},
+		{"override", "wi_w78", "--step", "review", "--clear-param", "image", "--skip"},
+	} {
+		if _, _, errs := runPf(t, env, bad...); !strings.Contains(errs, "exactly one action") {
+			t.Fatalf("%v: the refusal must name the one-action rule: %s", bad, errs)
+		}
+	}
+
+	// the write's body per action: the value is everything after the
+	// first '=' (empty included)
+	for _, tc := range []struct {
+		args []string
+		body string
+	}{
+		{[]string{"--param", "image=reg/img:2", "--by", "usr_2"}, `"operator":"usr_2","param":{"name":"image","value":"reg/img:2"}`},
+		{[]string{"--param", "flag="}, `"param":{"name":"flag","value":""}`},
+		{[]string{"--param", "image=a=b"}, `"param":{"name":"image","value":"a=b"}`},
+		{[]string{"--clear-param", "image"}, `"clear_param":"image"`},
+	} {
+		args := append([]string{"override", "wi_w78", "--step", "review"}, tc.args...)
+		code, out, errs := runPf(t, env, args...)
+		if code != 0 {
+			t.Fatalf("%v: exit = %d: %s", tc.args, code, errs)
+		}
+		last := d.rec.last()
+		if last.Method != "POST" || last.Path != "/jobs/wi_w78/overrides" || !strings.Contains(string(last.Body), tc.body) {
+			t.Fatalf("%v: the write sent %s %s %s, want a body with %s", tc.args, last.Method, last.Path, last.Body, tc.body)
+		}
+		if tc.args[0] == "--param" && !strings.Contains(out, `param image="reg/img:2"`) {
+			t.Fatalf("%v: the answer's rendering lacks the param:\n%s", tc.args, out)
+		}
 	}
 }
