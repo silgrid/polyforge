@@ -214,10 +214,13 @@ func TestPatchBundleRepoInventoryUntouched(t *testing.T) {
 	}
 }
 
-// TestPatchBundleWithChildrenRefused: the symmetric children-side rule —
-// a ticket WITH children never gains a bundle, children counting in any
-// status (terminal included), and the refusal writes nothing.
-func TestPatchBundleWithChildrenRefused(t *testing.T) {
+// TestBindBundleWithChildrenAllowed (polyforge#77, AC1): the w140
+// symmetric rules are deleted — a ticket WITH children may GAIN a bundle
+// (PATCH bind succeeds; a terminal child never gated it), and a
+// bundle-bound ticket may be a parent (create succeeds, parent_id
+// lands). The kept faces: one nesting level (PARENT_DEPTH) and the
+// unbound parent accepting children.
+func TestBindBundleWithChildrenAllowed(t *testing.T) {
 	// The children side: file a real child under the parent.
 	env2 := newEnv(t)
 	p2, err := env2.WIs.Create(CreateRequest{
@@ -232,25 +235,24 @@ func TestPatchBundleWithChildrenRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create child: %v", err)
 	}
-	if _, err := patchBundle(t, env2, p2.ID, strPtrTest("w140-sym-p")); !IsCode(err, api.ErrCoreBadInput) || ErrorReason(err) != "HAS_CHILDREN_NO_BUNDLE" {
-		t.Fatalf("bind on parent with children: want CORE-400/HAS_CHILDREN_NO_BUNDLE, got %v", err)
+	got, err := patchBundle(t, env2, p2.ID, strPtrTest("w140-sym-p"))
+	if err != nil {
+		t.Fatalf("bind on parent with children: refused, want accepted: %v", err)
 	}
-	// ... and a terminal child still counts as a child.
+	if got.BundleName == nil || *got.BundleName != "w140-sym-p" {
+		t.Fatalf("accepted bind did not land: bundle_name = %v, want w140-sym-p", got.BundleName)
+	}
+	// ... and a terminal child never gated the bind either: rename passes.
 	if _, err := env2.WIs.Cancel(c2.ID, env2.UserID, api.CancelRequest{}); err != nil {
 		t.Fatalf("cancel child: %v", err)
 	}
-	if _, err := patchBundle(t, env2, p2.ID, strPtrTest("w140-sym-p")); !IsCode(err, api.ErrCoreBadInput) || ErrorReason(err) != "HAS_CHILDREN_NO_BUNDLE" {
-		t.Fatalf("bind on parent whose child is terminal: want CORE-400/HAS_CHILDREN_NO_BUNDLE, got %v", err)
-	}
-	got, err := env2.WIs.Get(p2.ID, GetOptions{})
-	if err != nil {
-		t.Fatalf("get parent: %v", err)
-	}
-	if got.BundleName != nil {
-		t.Fatalf("refused PATCH wrote: bundle_name = %v, want null", got.BundleName)
+	if got, err = patchBundle(t, env2, p2.ID, strPtrTest("w140-sym-p2")); err != nil {
+		t.Fatalf("rename on parent whose child is terminal: refused, want accepted: %v", err)
+	} else if got.BundleName == nil || *got.BundleName != "w140-sym-p2" {
+		t.Fatalf("accepted rename did not land: bundle_name = %v, want w140-sym-p2", got.BundleName)
 	}
 
-	// The create-side mirror: a bundle-bound ticket is never a parent.
+	// The create-side mirror: a bundle-bound ticket IS a parent now.
 	q, err := env2.WIs.Create(CreateRequest{
 		Project: "alpha", Goal: "w140 bound ticket", Reporter: env2.UserID,
 		BundleName: strPtrTest("w140-sym-q"),
@@ -258,22 +260,15 @@ func TestPatchBundleWithChildrenRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create bound ticket: %v", err)
 	}
-	before, err := env2.WIs.List(ListFilters{Project: "alpha"})
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	if _, err := env2.WIs.Create(CreateRequest{
+	qc, err := env2.WIs.Create(CreateRequest{
 		Project: "alpha", Goal: "w140 child under bound parent", Reporter: env2.UserID,
 		ParentID: strPtrTest(q.ID),
-	}); !IsCode(err, api.ErrCoreBadInput) || ErrorReason(err) != "PARENT_NOT_REGISTRY" {
-		t.Fatalf("create child under bound parent: want CORE-400/PARENT_NOT_REGISTRY, got %v", err)
-	}
-	after, err := env2.WIs.List(ListFilters{Project: "alpha"})
+	})
 	if err != nil {
-		t.Fatalf("list: %v", err)
+		t.Fatalf("create child under bound parent: refused, want accepted: %v", err)
 	}
-	if len(after) != len(before) {
-		t.Fatalf("refused create persisted a row: %d before, %d after", len(before), len(after))
+	if qc.ParentID == nil || *qc.ParentID != q.ID {
+		t.Fatalf("child parent_id = %v, want %s", qc.ParentID, q.ID)
 	}
 
 	// ... and the unbound parent accepts children (parent_id lands).
@@ -294,9 +289,9 @@ func TestPatchBundleWithChildrenRefused(t *testing.T) {
 		t.Fatalf("child parent_id = %v, want %s", rc.ParentID, r.ID)
 	}
 
-	// Depth is one level (wi-kind-contract.md §2): a child is never a parent, and the
-	// refused create persists nothing.
-	before, err = env2.WIs.List(ListFilters{Project: "alpha"})
+	// Depth stays one level (wi-kind-contract.md §2): a child is never a
+	// parent, and the refused create persists nothing.
+	before, err := env2.WIs.List(ListFilters{Project: "alpha"})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -306,7 +301,7 @@ func TestPatchBundleWithChildrenRefused(t *testing.T) {
 	}); !IsCode(err, api.ErrCoreBadInput) || ErrorReason(err) != "PARENT_DEPTH" {
 		t.Fatalf("create grandchild: want CORE-400/PARENT_DEPTH, got %v", err)
 	}
-	after, err = env2.WIs.List(ListFilters{Project: "alpha"})
+	after, err := env2.WIs.List(ListFilters{Project: "alpha"})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -315,12 +310,13 @@ func TestPatchBundleWithChildrenRefused(t *testing.T) {
 	}
 }
 
-// TestRaceBindBundleVsNewChild: PATCH bundle (NULL→X) vs create of a
-// child under the same ticket (the w140 race pair 2) — exactly one wins
-// per round and the final state never shows children ∧ bound bundle.
-func TestRaceBindBundleVsNewChild(t *testing.T) {
+// TestBindBundleAndNewChildBothLand: the w140 race pair 2 under
+// polyforge#77's deletion of the symmetric gate — the single-writer
+// connection still serializes a PATCH bundle bind and the create of a
+// child under the same ticket, but BOTH sides now succeed; the final
+// state may show children ∧ a non-empty bundle together.
+func TestBindBundleAndNewChildBothLand(t *testing.T) {
 	env := newEnv(t)
-	patchWins, createWins := 0, 0
 	for i := 0; i < 10; i++ {
 		parent, err := env.WIs.Create(CreateRequest{Project: "alpha", Goal: "w140 race2 parent", Reporter: env.UserID})
 		if err != nil {
@@ -345,12 +341,18 @@ func TestRaceBindBundleVsNewChild(t *testing.T) {
 		close(start)
 		wg.Wait()
 
-		if (patchErr == nil) == (createErr == nil) {
-			t.Fatalf("round %d: exactly one of bind-bundle / new-child must win (patchErr=%v createErr=%v)", i, patchErr, createErr)
+		if patchErr != nil {
+			t.Fatalf("round %d: bind on parent with children must succeed: %v", i, patchErr)
+		}
+		if createErr != nil {
+			t.Fatalf("round %d: create child under bound parent must succeed: %v", i, createErr)
 		}
 		got, err := env.WIs.Get(parent.ID, GetOptions{})
 		if err != nil {
 			t.Fatalf("get: %v", err)
+		}
+		if got.BundleName == nil || *got.BundleName != "w140-race2-bound" {
+			t.Fatalf("round %d: the bind did not land: bundle_name = %v", i, got.BundleName)
 		}
 		children := 0
 		kids, err := env.WIs.List(ListFilters{Project: "alpha"})
@@ -362,29 +364,10 @@ func TestRaceBindBundleVsNewChild(t *testing.T) {
 				children++
 			}
 		}
-		bound := got.BundleName != nil
-		if createErr == nil {
-			createWins++
-			if bound {
-				t.Fatalf("round %d: create won but the parent is ALSO bundle-bound (children ∧ bundle must not coexist)", i)
-			}
-			if children == 0 {
-				t.Fatalf("round %d: create won but no child row landed", i)
-			}
-		} else {
-			patchWins++
-			if !IsCode(createErr, api.ErrCoreBadInput) {
-				t.Fatalf("round %d: losing create is not a typed refusal: %v", i, createErr)
-			}
-			if !bound {
-				t.Fatalf("round %d: PATCH won but the parent has no bundle", i)
-			}
-			if children != 0 {
-				t.Fatalf("round %d: PATCH won but a child landed anyway (children ∧ bundle must not coexist)", i)
-			}
+		if children != 1 {
+			t.Fatalf("round %d: children = %d, want 1 (children ∧ bundle coexist now)", i, children)
 		}
 	}
-	t.Logf("w140 race2: PATCH won %d, create won %d", patchWins, createWins)
 }
 
 // TestPatchWaitingOnValueDomain (polyforge#149): the two LIVE values
