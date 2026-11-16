@@ -190,3 +190,41 @@ func TestW51StepFailedRecordsTheClassification(t *testing.T) {
 		t.Fatalf("error_text %v, want the raw text", ev[0].body["error_text"])
 	}
 }
+
+// TestW51LiveVerdictStepFailedRecordsTheClassification: on the LIVE-process
+// path — the supervisor's model_error verdict over an error turn, not an
+// exit — the step_failed event carries classified_by=added (the Host's
+// rule named the turn's text) and the turn's text with its surrounding
+// whitespace trimmed, as the exit path records it (self#NB4/NB5).
+func TestW51LiveVerdictStepFailedRecordsTheClassification(t *testing.T) {
+	env := newChainEnv(t, func(c *Config) {
+		c.TextRulesFunc = func() TextRules {
+			return TextRules{
+				Transient: []*regexp.Regexp{regexp.MustCompile(`(?i)gateway hiccup`)},
+			}
+		}
+	}, "s", "m1", "m2")
+	env.sp.script = []fakeEntry{{hold: true}, done(`{"ok":true}`)}
+	go func() {
+		waitForSpawns(env, 1)
+		env.link.Verdict(supervise.StepDead{Step: "s", SpawnN: 1, Cause: supervise.CauseModelError,
+			Evidence: "error turn", TurnError: "\n  gateway hiccup, try again \n"})
+	}()
+	if err := env.d.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	ev := env.log.byKind("step_failed")
+	if len(ev) != 1 {
+		t.Fatalf("step_failed events %d, want 1", len(ev))
+	}
+	body := ev[0].body
+	if body["cause"] != FailUpstreamTransient {
+		t.Fatalf("cause %v, want %q (the added rule owns the live error turn)", body["cause"], FailUpstreamTransient)
+	}
+	if body["classified_by"] != ClassifiedByAdded {
+		t.Fatalf("classified_by %v, want %q", body["classified_by"], ClassifiedByAdded)
+	}
+	if body["error_text"] != "gateway hiccup, try again" {
+		t.Fatalf("error_text %q, want the turn's text trimmed: %q", body["error_text"], "gateway hiccup, try again")
+	}
+}
