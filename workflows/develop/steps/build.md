@@ -117,7 +117,7 @@ judge:
  "changed": ["<each behavior, component and interface the change altered, one line each>"],
  "uncovered": {"<repo>": ["<each changed path that repo's --light report leaves covered by no `carries:` declaration>"]},
  "tests": [{"id": "a1", "repo": "<name under repos/>", "file": "<the test's repo-relative file>",
-            "name": "<its test name, when one test is meant>", "cwd": "<directory inside the repo>",
+            "name": "<its test name, when one test is meant — a bare name as it appears in the file, or a qualified name whose segments, joined by `.`, `::` or `/`, each appear in the file>", "cwd": "<directory inside the repo>",
             "argv": ["<the run that shows it passing>"], "marker": "<a line only its passing run prints>",
             "why": "<what of the change it pins>",
             "evidence": "<how you found it: the selector, route, copy key or test name you searched, and where it led>"}]}
