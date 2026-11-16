@@ -127,8 +127,11 @@ document (`pf queue` without `--project`) carries
 ticket on a lane that requires acceptance, whose content has no `## 分析`
 section, asks this machine's daemon (`POST /analysis/enqueue`) to schedule
 one analysis task: the output names the task id, says 分析已排队 (the task lane
-is full — the request is persisted, survives a daemon restart, and an
-interrupted analysis is re-queued at most twice), or says 未安排分析 with the
+is full, or older requests still wait — the request is persisted, survives
+a daemon restart, and dispatches in enqueue order; an analysis a daemon stop
+interrupted is re-queued at most twice, one the owner ended with
+`pf task cancel` is not, and an entry whose ticket the daemon can no longer
+read is dropped), or says 未安排分析 with the
 reason (no daemon reachable, or the daemon refused) — the ticket is filed
 either way. The analysis task follows the 7-item report format and writes
 its draft with `pf task analysis-write`

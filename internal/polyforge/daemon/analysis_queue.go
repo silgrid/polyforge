@@ -284,6 +284,14 @@ func (d *Daemon) dispatchAnalysis() {
 		// for the next tick, never drops it.
 		item, err := d.hub.GetWorkItem(head.WorkItemID)
 		if err != nil {
+			// a ticket the daemon can never read (gone, or not this key's)
+			// would block every entry behind it: dropped, loudly
+			var ae *api.Error
+			if errors.As(err, &ae) && (ae.Code == api.ErrCoreNotFound || ae.Code == api.ErrCoreForbidden) {
+				fmt.Fprintf(os.Stderr, "daemon: analysis queue: %s cannot be read (%v) — entry dropped\n", head.WorkItemID, err)
+				q.dropHead("the ticket cannot be read")
+				continue
+			}
 			return
 		}
 		if !d.analysisNeeds(item) {
@@ -340,8 +348,11 @@ func (d *Daemon) onAnalysisTaskTerminal(t task.Task) {
 		return
 	}
 	state := "截停"
+	cancelled := t.State == task.StateInterrupted && t.Error == task.ErrorCancelled
 	if t.State == task.StateFailed {
 		state = "失败"
+	} else if cancelled {
+		state = "被取消（`pf task cancel`）"
 	} else if t.State == task.StateInterrupted {
 		state = "被中断"
 	}
@@ -350,7 +361,9 @@ func (d *Daemon) onAnalysisTaskTerminal(t task.Task) {
 		items = workflow.AnalysisItemCount(*item.Content)
 	}
 	body := fmt.Sprintf("分析任务 %s %s：已写到第 %d 项（按 1–7 编号），已写部分保留在 `## 分析`。", t.ID, state, items)
-	if t.State == task.StateInterrupted {
+	if cancelled {
+		body += "不自动重派；需要时请重新安排或手动分析并写入。"
+	} else if t.State == task.StateInterrupted {
 		n := t.Spec.AnalysisRetries + 1
 		if n <= analysisRequeueCap {
 			d.analysisQ.add(analysisEntry{
@@ -397,6 +410,18 @@ func (d *Daemon) analysisEnqueueRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	if !d.analysisNeeds(item) {
 		writeJSON(w, http.StatusOK, map[string]any{"state": "not_needed"})
+		return
+	}
+	// entries already wait: the request queues behind them (AC2's enqueue
+	// order), and the walk dispatches what the lane takes now
+	if !d.analysisQ.empty() {
+		d.analysisQ.add(analysisEntry{
+			WorkItemID: req.WorkItemID,
+			Project:    req.Project,
+			EnqueuedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		})
+		d.dispatchAnalysis()
+		writeJSON(w, http.StatusOK, map[string]any{"state": "queued"})
 		return
 	}
 	tk, err := d.analysisSpawn(item, 0)
