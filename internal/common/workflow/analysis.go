@@ -11,6 +11,7 @@ package workflow
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -61,21 +62,102 @@ func HasAnalysis(content string) bool {
 }
 
 // AutoAnalysisMarker answers the machine-readable unconfirmed marker of
-// the analysis a daemon-scheduled task wrote (polyforge#72, ticket ruling 9):
-// `<!-- pf:auto-analysis <task id> unconfirmed -->`, one line the
-// section's confirm command strips. Stub (build u1, red first).
-func AutoAnalysisMarker(taskID string) string { return "" }
+// the analysis a daemon-scheduled task wrote (polyforge#72, ticket ruling
+// 9): `<!-- pf:auto-analysis <task id> unconfirmed -->`, the one line the
+// section's confirm command (`pf file analysis confirm`) strips; a section
+// still carrying it is not claimable by the auto-pull wave (ruling 9).
+func AutoAnalysisMarker(taskID string) string {
+	return "<!-- pf:auto-analysis " + taskID + " unconfirmed -->"
+}
+
+// autoAnalysisMarkerRe matches the unconfirmed marker as one whole line.
+var autoAnalysisMarkerRe = regexp.MustCompile(`^<!--\s*pf:auto-analysis\s+\S+\s+unconfirmed\s*-->`)
 
 // AnalysisUnconfirmed reports whether content's analysis section still
-// carries an unconfirmed auto-analysis marker. Stub (build u1, red first).
-func AnalysisUnconfirmed(content string) bool { return false }
+// carries an unconfirmed auto-analysis marker — the one gate the
+// auto-pull wave skips on and `pf queue` marks「分析待确认」. The marker
+// anywhere else in the ticket is not the section's (a comment quote, a
+// heading elsewhere): only the section's own lines count.
+func AnalysisUnconfirmed(content string) bool {
+	text, found := analysisSection(content)
+	if !found {
+		return false
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if autoAnalysisMarkerRe.MatchString(strings.TrimSpace(line)) {
+			return true
+		}
+	}
+	return false
+}
 
 // ReplaceAnalysisSection answers doc with its first analysis section's
-// text replaced by body (found = the section existed; absent = a new
-// `## 分析` section appended at the end). Stub (build u1, red first).
-func ReplaceAnalysisSection(doc, body string) (string, bool) { return doc, false }
+// text replaced by body — the daemon's narrow write path's one edit
+// (AC4: only this section changes, every other section's bytes survive).
+// found answers whether the section existed; a doc without one gains a
+// new `## 分析` section at the end carrying body (the fresh-ticket shape:
+// the analysis scheduler only fires on tickets without the section).
+func ReplaceAnalysisSection(doc, body string) (string, bool) {
+	body = strings.TrimSpace(body)
+	lines := strings.Split(doc, "\n")
+	for i, line := range lines {
+		if !isAnalysisHeading(strings.TrimSpace(line)) {
+			continue
+		}
+		j := i + 1
+		for j < len(lines) {
+			t := strings.TrimSpace(lines[j])
+			if strings.HasPrefix(t, "# ") || strings.HasPrefix(t, "## ") {
+				break
+			}
+			j++
+		}
+		out := make([]string, 0, len(lines)+len(body)+2)
+		out = append(out, lines[:i+1]...)
+		if body != "" {
+			out = append(out, "")
+			out = append(out, strings.Split(body, "\n")...)
+		}
+		if j < len(lines) {
+			out = append(out, "")
+			out = append(out, lines[j:]...)
+		}
+		return strings.Join(out, "\n"), true
+	}
+	base := strings.TrimRight(doc, "\n")
+	if base != "" {
+		base += "\n"
+	}
+	return base + "\n## 分析\n\n" + body + "\n", false
+}
+
+// analysisItemHeadingRe matches a top-level item heading of the 7-item
+// report the analysis prompt template fixes (`### 1. 改动范围`, ruling 17);
+// analysisItemPlainRe the same number at column zero (`1. 改动范围`).
+var (
+	analysisItemHeadingRe = regexp.MustCompile(`^#{1,6}\s*([1-7])[.、]\s*\S`)
+	analysisItemPlainRe   = regexp.MustCompile(`^([1-7])[.、]\s*\S`)
+)
 
 // AnalysisItemCount answers the highest top-level item number (1–7)
-// content's analysis section carries — the「已写到第几项」of a failure
-// comment. Stub (build u1, red first).
-func AnalysisItemCount(content string) int { return 0 }
+// content's analysis section carries — the「已写到第几项」of the failure
+// comment a stopped analysis task leaves (AC5). Indented or out-of-range
+// numbers are not top-level items and never count.
+func AnalysisItemCount(content string) int {
+	text, found := analysisSection(content)
+	if !found {
+		return 0
+	}
+	best := 0
+	for _, line := range strings.Split(text, "\n") {
+		for _, re := range []*regexp.Regexp{analysisItemHeadingRe, analysisItemPlainRe} {
+			if m := re.FindStringSubmatch(line); m != nil {
+				if n, err := strconv.Atoi(m[1]); err == nil && n > best {
+					best = n
+				}
+				break
+			}
+		}
+	}
+	return best
+}
