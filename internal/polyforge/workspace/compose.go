@@ -195,6 +195,29 @@ type StepModelSource struct {
 	Source string
 }
 
+// ComposeStepParams answers, per step of lane that declares params, the
+// step's params of one claim of project: each declared name to its lane
+// default, overridden by the project's steps.<project>.<step>.params value
+// of that name. A project value of a name the step does not declare
+// governs nothing. A step that declares no params is absent.
+func ComposeStepParams(lane *workflow.Lane, cfg *Config, project string) map[string]map[string]string {
+	return nil
+}
+
+// StepParamSources is ComposeStepParams naming, per param, the level its
+// value came from (the model chain's labels: steps.<project>.<step>.params.<name>
+// for the project, `bundle <lane> step <step> params.<name>` for the lane
+// default) — `pf workflows`' view.
+func StepParamSources(bundle string, lane *workflow.Lane, cfg *Config, project string) map[string]map[string]StepParamSource {
+	return nil
+}
+
+// StepParamSource is one param's value and the level it came from.
+type StepParamSource struct {
+	Value  string
+	Source string
+}
+
 // projectLists answers the claimed project's yaml lists: its step entries
 // (steps.<project>) and its tier lists (tiers.<project>); nil when the
 // yaml declares none.

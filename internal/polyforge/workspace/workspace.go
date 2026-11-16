@@ -128,6 +128,11 @@ type Config struct {
 	// `human`). A lane takes the mode only where it declares the step
 	// human_mergeable (HumanMergeSteps). nil when no entry declares by.
 	By map[string]map[string]string
+	// Params is project name → step id → param name → value:
+	// steps.<project>.<step>.params (polyforge#78). A value governs only
+	// a step whose lane declares the param (ComposeStepParams); nil when
+	// no entry declares params.
+	Params map[string]map[string]map[string]string
 	// Tiers is project name → tier name → candidate list:
 	// tiers.<project>.<tier>.models (workflow contract 2), the list of
 	// every bundle step whose model_tier names that tier — above the
