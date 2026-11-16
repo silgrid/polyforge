@@ -13,9 +13,13 @@ capsule's file, a given path is taken as given):
   facts.py micro-bounds [--capsule DIR] --plan artifacts/fix/evidence.json [--json] [--out PATH]
 
 The task repos are capsule.json's (the claim's) present under repos/;
-units.json is the build's `[{id, test_commit, impl_commit, run{repo, cwd,
-argv}, marker}]` (absent for plan-conformance and carries = no unit;
-required for build). D is a duration (10m, 90s, 1h30m).
+units.json is the build's `[{id, pre_existing_red?, test_commit?,
+impl_commit, run{repo, cwd, argv}, marker}]` (absent for plan-conformance
+and carries = no unit; required for build). D is a duration (10m, 90s,
+1h30m). A unit may instead declare `pre_existing_red: true` — its
+reproduction test already exists and is red before the change (an
+integration fix ticket: the test came with the batch, the fix is the
+change) — and then reports no test_commit.
 
 plan-conformance — the plan's `## Units` declarations (`Touched files:`
 writes and their `Coupled obligations:`) against the delivered diff (each
@@ -307,7 +311,7 @@ def tail_lines(path: str, n: int) -> str:
 
 
 UNIT_RUN = gd.Struct({"repo": gd.STR, "cwd": gd.STR, "argv": gd.List(gd.STR)})
-UNIT_DECL = gd.Struct({"id": gd.STR, "test_commit": gd.STR, "impl_commit": gd.STR, "run": gd.Ptr(UNIT_RUN), "marker": gd.STR})
+UNIT_DECL = gd.Struct({"id": gd.STR, "pre_existing_red": gd.BOOL, "test_commit": gd.STR, "impl_commit": gd.STR, "run": gd.Ptr(UNIT_RUN), "marker": gd.STR})
 
 
 class UnitsError(Exception):
@@ -320,13 +324,14 @@ def read_units(path: str) -> List[Dict[str, Any]]:
         text = read_text(path)
     except OSError as err:
         raise UnitsError(gotext.os_error("open", err)) from None
+    shape = "a JSON array of {id, [pre_existing_red,] [test_commit,] impl_commit, run{repo, cwd, argv}, marker}"
     try:
         doc = loads(text)
     except ValueError as err:
-        raise UnitsError("%s is not a JSON array of {id, test_commit, impl_commit, run{repo, cwd, argv}}: %s" % (path, err)) from None
+        raise UnitsError("%s is not %s: %s" % (path, shape, err)) from None
     units, derr = gd.decode(doc, gd.List(UNIT_DECL))
     if derr is not None:
-        raise UnitsError("%s is not a JSON array of {id, test_commit, impl_commit, run{repo, cwd, argv}}: %s" % (path, derr))
+        raise UnitsError("%s is not %s: %s" % (path, shape, derr))
     return list(units or [])
 
 
@@ -359,6 +364,8 @@ class Unit:
 
     def as_dict(self) -> Dict[str, Any]:
         out: Dict[str, Any] = {"id": self.id}
+        if self.pre_existing_red:
+            out["pre_existing_red"] = True
         for k, v in (("repo", self.repo), ("test_commit", self.test_commit), ("impl_commit", self.impl_commit)):
             if v:
                 out[k] = v
@@ -370,8 +377,9 @@ class Unit:
 
 
 def units_of(repos_dir: str, repos: Sequence[str], decls: Sequence[Dict[str, Any]]) -> List[Unit]:
-    """Each declared unit resolved: the repo of the claim holding both
-    commits and the files test_commit changed."""
+    """Each declared unit resolved: the repo of the claim holding its
+    commits and, for an ordinary unit, the files test_commit changed (a
+    pre_existing_red unit resolves on its implementation commit alone)."""
     opened: Dict[str, Repo] = {}
 
     def repo_of(name: str) -> "Repo":
@@ -382,10 +390,16 @@ def units_of(repos_dir: str, repos: Sequence[str], decls: Sequence[Dict[str, Any
     out = []
     for d in decls:
         u = Unit(d["id"])
-        u.repo, u.test_commit, u.impl_commit, u.why = resolve_unit_commits(
-            repos, trim_space(d["test_commit"]), trim_space(d["impl_commit"]), repo_of
-        )
-        if not u.why:
+        u.pre_existing_red = bool(d.get("pre_existing_red"))
+        if u.pre_existing_red and trim_space(d["test_commit"]):
+            u.why = "a pre_existing_red unit reports no test_commit — its reproduction test already exists at the change's base, and no test commit is asked of it"
+        elif u.pre_existing_red:
+            u.repo, u.impl_commit, u.why = resolve_pre_existing_commit(repos, trim_space(d["impl_commit"]), repo_of)
+        else:
+            u.repo, u.test_commit, u.impl_commit, u.why = resolve_unit_commits(
+                repos, trim_space(d["test_commit"]), trim_space(d["impl_commit"]), repo_of
+            )
+        if not u.why and not u.pre_existing_red:
             files, err = run_git(os.path.join(repos_dir, u.repo), "diff-tree", "-r", "--no-commit-id", "--name-only", "--no-renames", u.test_commit)
             if err is not None:
                 u.why = "its test commit's files are unreadable: " + err
@@ -406,6 +420,27 @@ def unit_test_files(units: Sequence[Unit]) -> List[str]:
                 seen.add(f)
                 out.append(f)
     return out
+
+
+def resolve_pre_existing_commit(
+    repos: Sequence[str], ic: str, repo_of: Callable[[str], "Repo"]
+) -> Tuple[str, str, str]:
+    """A pre_existing_red unit's implementation commit resolved alone: the
+    one repo of the claim holding it, and its full name."""
+    if not ic:
+        return "", "", "impl_commit is required"
+    hits = []
+    for name in repos:
+        sha = repo_of(name).commit(ic)
+        if sha:
+            hits.append((name, sha))
+    if not hits:
+        return "", "", "impl_commit %s is no commit of one task repo of the claim (%s)" % (
+            clip_text(ic), ", ".join(repos))
+    if len(hits) > 1:
+        return "", "", "impl_commit %s names commits in several task repos (%s) — report full shas" % (
+            clip_text(ic), ", ".join(name for name, _ in hits))
+    return hits[0][0], hits[0][1], ""
 
 
 def resolve_unit_commits(
@@ -546,7 +581,12 @@ class Repo:
         return ""
 
     def check_pre_existing_commits(self, i: str) -> str:
-        """A pre_existing_red unit's single commit judged ("" = fine)."""
+        """A pre_existing_red unit's single reported commit judged ("" =
+        fine): its implementation commit is in HEAD's history — no
+        test-first shape is asked of it (its reproduction test already
+        exists at the change's base, and no test commit is asked of it)."""
+        if not self.ancestor(i, "HEAD"):
+            return "impl_commit %s is not in HEAD's history" % short_sha(i)
         return ""
 
     # carries -------------------------------------------------------------
@@ -2018,7 +2058,10 @@ def build(inv: Invocation, args: List[str], environ: Mapping[str, str], runtime:
         else:
             if u.repo not in repos:
                 repos[u.repo] = Repo(c.repos_dir, u.repo)
-            commits = repos[u.repo].check_unit_commits(u.test_commit, u.impl_commit)
+            if u.pre_existing_red:
+                commits = repos[u.repo].check_pre_existing_commits(u.impl_commit)
+            else:
+                commits = repos[u.repo].check_unit_commits(u.test_commit, u.impl_commit)
             if commits:
                 problems.append("unit %s (repos/%s): %s" % (quote(clip_text(u.id)), u.repo, commits))
         if commits:
