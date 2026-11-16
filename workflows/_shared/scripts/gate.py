@@ -11,18 +11,24 @@ only writer of a green tag, and the integrate lane's triage of a red gate.
     gate.py --isolation container --triage --capsule DIR --pins FILE --gate FILE --batch FILE
         [--pool FILE] [--mark-green --summary TEXT [--remote R]] [--json] [--out PATH] [the run flags]
 
-The gate is the tree's own full verification plan — its scope engine,
-``workflows/_shared/scripts/verify-scope --json --full --base HEAD``: the fast gates, the full
+The gate is the tree's own full verification plan — the scope engine the
+repository's tree carries (``workflows/_shared/scripts/verify-scope``),
+else the lane's own copy, mounted read-only beside the clone
+(``--json --full --base HEAD``): the fast gates, the full
 commands and the engine-appended dependency audit, in the engine's order —
 with every command, the engine included, run inside the repository's
 verification container (``--isolation container``, the only isolation a
 gate has: a tree without ``.polyforge/Dockerfile.verify`` at HEAD is not
 judged, exit 2; nothing of the gate runs on the host but git and the docker
-client). The verdict is strict: the gate passes only when every planned
+client). Which engine answered — the tree's (``tree``) or the lane's
+(``lane``) — is recorded in the result as ``engine_source``, and so is
+which gate id computed a green tag's (``gate_id_source``, the tree's
+``tools/gate-id`` or the lane's ``pfstep.gateid``); neither enters the
+plan digest, and neither changes the verdict rules. The verdict is strict: the gate passes only when every planned
 command ran and exited 0; a declared prerequisite the container lacks fails
 its command; there are no flaky re-runs and no pre-existing proofs. It stops
 at the first failing command unless ``--keep-going``. A gate that cannot be
-judged — no Dockerfile or engine at HEAD, the container engine missing or
+judged — no Dockerfile at HEAD, no engine in the tree or the lane, the container engine missing or
 not answering, the image or the container not had, a container lost
 mid-run, an engine that plans nothing, the deadline, an interrupt, HEAD
 moving while it ran — is never a pass and never a failure.
@@ -151,8 +157,19 @@ GATE_RUNNER = "gate.py"
 # this script's (its digest is of another encoding, its runner gate.py).
 GATE_RUNNER_VERSION = "2"
 
-# The scope engine the gate plans with: the tree's own (the workflow's).
+# The scope engine the gate plans with: the tree's own (the workflow's)
+# when the tree carries it, else the lane's own copy beside this script —
+# and the gate id's two homes, with the sources a result records. A
+# repository that provides only .polyforge/verify-scope.conf and
+# .polyforge/Dockerfile.verify is gated by the lane's engine (mounted
+# read-only beside the clone, like the develop lane's verification runs
+# it) and, on a green tag, by the lane's pfstep.gateid; the tree's own
+# copies keep gating polyforge itself, so its plan and tags never move.
 GATE_ENGINE_REL = "workflows/_shared/scripts/verify-scope"
+GATE_ID_REL = "tools/gate-id"
+LANE_ENGINE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "verify-scope")
+ENGINE_SOURCE_TREE = "tree"
+ENGINE_SOURCE_LANE = "lane"
 
 DEFAULT_GATE_DEADLINE = 3 * duration.HOUR
 DEFAULT_COMMAND_TIMEOUT = 20 * duration.MINUTE
@@ -474,6 +491,11 @@ class GateResult:
     container: str = ""
     # engine: the engine invocation the plan came from
     engine: str = ""
+    # engine_source / gate_id_source: which of the two homes served this
+    # run — the tree's (tree) or the lane's (lane); recorded in the result
+    # and in a green tag's message, never in the plan digest
+    engine_source: str = ""
+    gate_id_source: str = ""
     log_dir: str = ""
     commands: List[GateCommand] = field(default_factory=list)
     # incomplete: why the gate could not be judged ("" = it ran)
@@ -497,6 +519,8 @@ class GateResult:
             d["container"] = self.container
         if self.engine:
             d["engine"] = self.engine
+        d["engine_source"] = self.engine_source
+        d["gate_id_source"] = self.gate_id_source
         d["log_dir"] = self.log_dir
         d["commands"] = [c.as_dict() for c in self.commands]
         if self.incomplete:
@@ -512,7 +536,9 @@ class GateResult:
             commit=str(d.get("commit") or ""), clean=bool(d.get("clean")), runner=str(d.get("runner") or ""),
             runner_version=str(d.get("runner_version") or ""), plan=dict(plan) if isinstance(plan, dict) else None,
             plan_digest=str(d.get("plan_digest") or ""), image=str(d.get("image") or ""), built=bool(d.get("built")),
-            container=str(d.get("container") or ""), engine=str(d.get("engine") or ""), log_dir=str(d.get("log_dir") or ""),
+            container=str(d.get("container") or ""), engine=str(d.get("engine") or ""),
+            engine_source=str(d.get("engine_source") or ""), gate_id_source=str(d.get("gate_id_source") or ""),
+            log_dir=str(d.get("log_dir") or ""),
             commands=[GateCommand.of(c) for c in d.get("commands") or [] if isinstance(c, dict)],
             incomplete=str(d.get("incomplete") or ""), passed=bool(d.get("passed")),
             duration_ns=int(d.get("duration_ns") or 0),
@@ -537,6 +563,21 @@ def fail_summary(res: GateResult) -> str:
 def gate_logs(res: GateResult) -> List[str]:
     """A gate run's logs: one per command that ran."""
     return [c.log for c in res.commands if c.log and not c.not_run]
+
+
+def select_engine(directory: str) -> Tuple[str, str, str]:
+    """The scope engine the gate plans with on the clone at directory:
+    the tree's own at GATE_ENGINE_REL when the tree carries it, else the
+    lane's own copy beside this script — (its path, its source, the lane
+    directory a fallback's plan normalizes; ("", "", "") when neither the
+    tree nor the lane carries one)."""
+    tree = os.path.realpath(os.path.join(directory, GATE_ENGINE_REL))
+    if os.path.isfile(tree):
+        return tree, ENGINE_SOURCE_TREE, ""
+    lane = os.path.realpath(LANE_ENGINE)
+    if os.path.isfile(lane):
+        return lane, ENGINE_SOURCE_LANE, os.path.dirname(lane)
+    return "", "", ""
 
 
 # ---- running the gate -------------------------------------------------------------
@@ -612,7 +653,7 @@ class Gate:
             self.swept = True
             container.sweep_run(self.co, self.say)
         r = self.runner_for(directory)
-        engine = os.path.realpath(os.path.join(directory, GATE_ENGINE_REL))
+        engine, _, _ = select_engine(directory)
         self.say("building or finding the image of %s (log %s)"
                  % (container.DOCKERFILE_VERIFY, os.path.join(log_dir, runner.IMAGE_BUILD_LOG)))
         try:
@@ -633,7 +674,7 @@ class Gate:
         return Opened(r=r, box=box, directory=directory, log_dir=log_dir), ""
 
     def ask_engine(self, o: Opened, base: str, full: bool) -> Tuple[Optional[EngineReport], str, str]:
-        """The tree's engine asked in the container (--full, or a scoped
+        """The engine asked in the container (--full, or a scoped
         report for base..HEAD): (report, the invocation, why there is none)."""
         argv = engine_argv_of(o.box.engine) + ["--json"]
         if full:
@@ -706,8 +747,16 @@ class Gate:
         st = git.run(directory, "status", "--porcelain", timeout=GIT_TIMEOUT)
         if st.exit_code == 0:
             res.clean = gostr.trim_space(st.stdout.decode("utf-8", "replace")) == ""
-        if not os.path.isfile(os.path.join(directory, GATE_ENGINE_REL)):
-            res.incomplete = "the tree carries no scope engine %s: the gate's plan is that engine's" % GATE_ENGINE_REL
+        # which engine plans, and which gate id a green tag would name: the
+        # tree's own when the tree carries them, else the lane's — each one
+        # on its own, recorded whichever way the run ends
+        engine, source, _lane_dir = select_engine(directory)
+        res.engine_source = source
+        res.gate_id_source = (ENGINE_SOURCE_TREE if os.path.isfile(os.path.join(directory, GATE_ID_REL))
+                              else ENGINE_SOURCE_LANE)
+        if engine == "":
+            res.incomplete = ("neither the tree nor the lane carries a scope engine: the gate's plan is one's"
+                              " (%s in the tree, %s in the lane)" % (GATE_ENGINE_REL, LANE_ENGINE))
             return
         if not container.has_dockerfile_at(directory, "HEAD"):
             res.incomplete = ("HEAD carries no %s: the gate runs only inside that container (--isolation %s), never on"
