@@ -82,7 +82,8 @@ func TestToolWindowEnvFollowsDeclaredWindow(t *testing.T) {
 // scripts run from and its round, each name exactly once, on both
 // harnesses; an inherited copy never leaks in — the composed step PATH
 // replaces the inherited PATH (added PF_PYTHON, PF_CAPSULE,
-// PF_LANE_DIR and PF_SHARED_DIR).
+// PF_LANE_DIR, PF_SHARED_DIR and, with them, the step's Cell facts
+// PF_CELL / PF_CELL_SERVER / PF_DEPLOY_ENV, polyforge#75).
 func TestStepEnvInjectedOnBothHarnesses(t *testing.T) {
 	clearBashTimeoutEnv(t)
 	t.Setenv("PATH", "/inherited/bin")
@@ -90,8 +91,12 @@ func TestStepEnvInjectedOnBothHarnesses(t *testing.T) {
 	for _, k := range []string{spawn.EnvPython, spawn.EnvCapsule, spawn.EnvLaneDir, spawn.EnvSharedDir} {
 		t.Setenv(k, "/inherited/"+k)
 	}
+	for _, k := range []string{"PF_CELL", "PF_CELL_SERVER", "PF_DEPLOY_ENV"} {
+		t.Setenv(k, "/inherited/"+k)
+	}
 	cfg := &Config{StepEnv: func() StepEnv {
-		return StepEnv{CommandPath: "/opt/pf/bin:/usr/bin", PfDir: "/srv/pf", Python: "/usr/bin/python3.12"}
+		return StepEnv{CommandPath: "/opt/pf/bin:/usr/bin", PfDir: "/srv/pf", Python: "/usr/bin/python3.12",
+			Cell: "public", CellServer: "http://srv.example:8080", DeployEnv: "/cfg/deploy-public.env"}
 	}}
 	// neither harness binary resolves on the inherited PATH: no harness
 	// directory goes in
@@ -102,6 +107,9 @@ func TestStepEnvInjectedOnBothHarnesses(t *testing.T) {
 		spawn.EnvCapsule:   "/c",
 		spawn.EnvLaneDir:   "/c/workflows/develop",
 		spawn.EnvSharedDir: "/c/workflows/_shared",
+		"PF_CELL":          "public",
+		"PF_CELL_SERVER":   "http://srv.example:8080",
+		"PF_DEPLOY_ENV":    "/cfg/deploy-public.env",
 	}
 	lane := "/c/workflows/develop"
 	pi := newPiSpawner(cfg).buildCmd(SpawnParams{CapsuleDir: "/c", LaneDir: lane, SpawnN: 1, Round: 3})
@@ -139,7 +147,7 @@ func TestStepEnvAbsentWithoutSource(t *testing.T) {
 			t.Errorf("%s: PATH %q, want the inherited [/inherited/bin]", name, got)
 		}
 		for _, k := range []string{"PF_COMMAND_PATH", "PF_VERIFY_DAEMON", "PF_VERIFY_BOOT", spawn.EnvRound,
-			spawn.EnvPython, spawn.EnvLaneDir, spawn.EnvSharedDir} {
+			spawn.EnvPython, spawn.EnvLaneDir, spawn.EnvSharedDir, "PF_CELL", "PF_CELL_SERVER", "PF_DEPLOY_ENV"} {
 			if got := envEntries(env, k); got != nil {
 				t.Errorf("%s: %s %q present with no source", name, k, got)
 			}
