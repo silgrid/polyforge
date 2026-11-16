@@ -1,14 +1,17 @@
 import "#test-env";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { Script } from "node:vm";
 import test from "node:test";
 import { createJiti } from "jiti";
+import ts from "typescript";
 
 const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
 const { ChatInput, ClaudeComposerControls, CLAUDE_EFFORT_ENTRIES, builtinSlashCommands, canRunBuiltinSlashCommandWhileStreaming, claudeModelOptions, filterComposerImageFiles, filterSlashCommands, offersBuiltinSlashCommandWhileStreaming } = await jiti.import("./ChatInput.tsx");
 const { clearDraft, setDraft } = await jiti.import("@/lib/draft-store");
+const { isBareMcpCommand } = await jiti.import("@/lib/mcp-command");
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
 const { enLocale } = await jiti.import("@/lib/i18n/messages/en");
 const { zhCNLocale } = await jiti.import("@/lib/i18n/messages/zh-CN");
@@ -35,6 +38,31 @@ function split(html) {
   const start = html.indexOf('class="chat-input-controls"');
   assert.ok(start >= 0, "no bottom bar");
   return { before: html.slice(0, start), after: html.slice(start) };
+}
+
+/**
+ * The same extractor ChatInput.test.mjs's `chatInputCallback` is: the named
+ * callback's source, transpiled and run in a bare scope — so a claude
+ * compaction's send blocking is asserted as behaviour, not as source text
+ * (polyforge#71 r1#2).
+ */
+function claudeInputCallback(name, context) {
+  const sourceText = readFileSync(new URL("./ChatInput.tsx", import.meta.url), "utf8");
+  const source = ts.createSourceFile("ChatInput.tsx", sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let found;
+  const visit = (node) => {
+    if (found) return;
+    if (ts.isVariableDeclaration(node) && node.name.getText(source) === name) {
+      found = node.initializer.arguments[0];
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  assert.ok(found, `callback ${name} not found`);
+  return new Script(ts.transpileModule(found.getText(source), {
+    compilerOptions: { target: ts.ScriptTarget.ES2020 },
+  }).outputText).runInNewContext(context);
 }
 
 test("a fresh composer: the harness selector and the model selector side by side in the bottom bar, no <select>", () => {
@@ -104,16 +132,54 @@ test("an open claude session shows the model selector, the effort control and th
 // pi's run-end stray-click guard. Model and effort stay rendered, disabled.
 // polyforge#71 (AC6): a claude session's model switch shows pi's own spinner
 // (ModelSelector busy), and nothing else — the effort control never spins (Q3=A).
-// polyforge#71 (AC7): a claude compaction takes no message — Enter, a menu
-// submit, the Steer button, every send path is blocked at the send functions'
-// entry and the draft is kept. pi's compaction still queues (ChatInput.test.mjs
-// pins that path; it is untouched).
-test("claude's compaction blocks every send path at its entry and keeps the draft", () => {
-  const source = readFileSync(new URL("./ChatInput.tsx", import.meta.url), "utf8");
-  const handleSendBody = source.slice(source.indexOf("const handleSend = useCallback"), source.indexOf("const slashQuery ="));
-  assert.match(handleSendBody, /if \(claudeComposer && isCompacting\) return;/, "handleSend's entry carries the guard");
-  const sendQueuedBody = source.slice(source.indexOf("const sendQueued = useCallback"), source.indexOf("const getNextSlashIndex"));
-  assert.match(sendQueuedBody, /if \(claudeComposer && isCompacting\) return;/, "sendQueued's entry carries the guard");
+// polyforge#71 (AC7), rewritten as behaviour per review r1#2: a claude compaction
+// takes no message — Enter (handleSend), a menu submit and the Steer button's
+// queued send (sendQueued) all stop at the send functions' entry, the draft kept.
+// pi's compaction still queues (the guard is claude's alone).
+test("claude's compaction blocks every send path at its entry and keeps the draft", async () => {
+  const blocked = (value) => {
+    const calls = { sent: [], steered: [], queuedPrompts: [], builtins: [], cleared: 0, unlocked: 0 };
+    const scope = {
+      value, attachedImages: [],
+      claudeComposer: true, isCompacting: true, isStreaming: false,
+      onAudioUnlock() { calls.unlocked += 1; },
+      offersBuiltinSlashCommandWhileStreaming, canRunBuiltinSlashCommandWhileStreaming, isBareMcpCommand,
+      runBuiltinCommand: async (message) => { calls.builtins.push(message); return false; },
+      clearInput() { calls.cleared += 1; },
+      onSend: (message) => calls.sent.push(message),
+      onSteer: (message) => calls.steered.push(message),
+      onFollowUp() { throw new Error("claude has no follow-up queue"); },
+      onPromptWithStreamingBehavior: (message, behavior) => calls.queuedPrompts.push([message, behavior]),
+      onBuiltinCommand: async () => ({ handled: false }),
+    };
+    return { calls, handleSend: claudeInputCallback("handleSend", scope), sendQueued: claudeInputCallback("sendQueued", scope) };
+  };
+  for (const text of ["kept draft", "/compact focus", "/deep-research x"]) {
+    const { calls, handleSend, sendQueued } = blocked(text);
+    await handleSend();
+    sendQueued("steer");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(calls, { sent: [], steered: [], queuedPrompts: [], builtins: [], cleared: 0, unlocked: 0 },
+      `${text}: the compaction blocked every send path and kept the draft`);
+  }
+  // pi's compaction queues the message as before: the guard is claude's alone.
+  const piCalls = { steered: [], cleared: 0 };
+  const piScope = {
+    value: "queued message", attachedImages: [], claudeComposer: false, isCompacting: true,
+    onAudioUnlock() {}, clearInput() { piCalls.cleared += 1; },
+    canRunBuiltinSlashCommandWhileStreaming, isBareMcpCommand,
+    onBuiltinCommand: async () => ({ handled: false }),
+    onPromptWithStreamingBehavior() { throw new Error("a plain message never takes the / entry"); },
+    onSteer: (message) => piCalls.steered.push(message),
+    onFollowUp() {},
+    runBuiltinCommand: async () => false,
+  };
+  claudeInputCallback("sendQueued", piScope)("steer");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(piCalls.steered, ["queued message"], "pi's compaction queues the message");
+  assert.equal(piCalls.cleared, 1, "pi's queue clears the composer as before");
+
+  // The composer keeps its text while compacting.
   const draftKey = "claude:/tmp/claude-compaction-guard";
   setDraft(draftKey, { value: "kept", images: [] });
   try {
