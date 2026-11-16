@@ -76,8 +76,8 @@ def folded(path: str) -> str:
 
 class GateKeepGoingSkillTextTest(unittest.TestCase):
     def test_the_full_gate_lines_carry_keep_going_and_the_delivery_lanes_ones_do_not(self) -> None:
-        """AC2: the lane's two gate.py lines carry --keep-going, the
-        develop and micro lanes' verification commands do not."""
+        # AC2: the lane's two gate.py lines carry --keep-going, the
+        # develop and micro lanes' verification commands do not.
         skill = folded(FULL_GATE_SKILL)
         for line in (GATE_LINE, TRIAGE_LINE):
             self.assertIn(line, skill)
@@ -154,8 +154,8 @@ class GateKeepGoingLaneRunTest(unittest.TestCase):
         return d
 
     def test_the_gate_line_runs_both_failing_commands(self) -> None:
-        """AC3: two commands both fail and the --keep-going gate records
-        both failed, no command left not_run."""
+        # AC3: two commands both fail and the --keep-going gate records
+        # both failed, no command left not_run.
         capsule, head = self.capsule()
         fb = FakeRuntime(os.path.join(self.root, "box-tmp"))
         m = run_main(self.lane_argv(False), capsule, env={"PF_WI_ID": "wi_kg"}, runtime=fb)
@@ -174,8 +174,8 @@ class GateKeepGoingLaneRunTest(unittest.TestCase):
         self.assertEqual([c["exit"] for c in cmds], [0, 1, 1], "both failing commands ran and are recorded failed")
 
     def test_the_triage_line_reports_each_commands_failed_unit(self) -> None:
-        """AC3: --triage over the keep-going gate's result reports each
-        failing command's own failed unit."""
+        # AC3: --triage over the keep-going gate's result reports each
+        # failing command's own failed unit.
         capsule, head = self.capsule()
         art = os.path.join(capsule, "artifacts", "integrate")
         fb = FakeRuntime(os.path.join(self.root, "box-tmp"))
