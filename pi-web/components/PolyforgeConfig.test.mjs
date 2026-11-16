@@ -1005,3 +1005,13 @@ test(" config card: a skippable step row shows a skip switch that writes", async
   const css = await readFile(new URL("../app/settings.css", import.meta.url), "utf8");
   assert.match(css, /\n\.polyforge-workflow-skip \{/, "the switch is styled");
 });
+
+test("polyforge#51: the Host region lists the unclassified fallback errors under the pattern editors", () => {
+  const region = source.slice(source.indexOf("function HostSettingsRegion("), source.indexOf("function AddCellPane("));
+  assert.ok(region.length > 0, "the Host region component exists");
+  assert.match(region, /\/api\/polyforge\/unclassified/, "the region reads its own route");
+  assert.match(region, /data-pf-unclassified/, "the list is addressable");
+  assert.match(region, /polyforge\.settings\.unclassifiedTitle/, "the section is titled");
+  assert.match(region, /polyforge\.settings\.unclassifiedEmpty/, "the empty state says so");
+  assert.match(region, /\.text\}.*\.count\}|\.count.*\.text/, "a row shows the text and its count");
+});
