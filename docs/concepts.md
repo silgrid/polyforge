@@ -557,6 +557,25 @@ rewind — and reads no content, and no agent merges by hand:
   the landing rules. gh or git unreachable is `blocked`: fix it, then
   tell the step (or `pf resume`). The integration lane's revert takes the same lock.
 
+A project may also declare the develop merge done by a person,
+`steps.<project>.merge.by: human` (fixed at the claim into the capsule's
+`runtime-state/step-modes.json`; a claim of a lane that does not declare
+the step `human_mergeable` is refused naming it). The merge step then
+never asks the forge to merge and never judges the default branch's
+freshness: it asks the owner over the PR links and the verified heads and
+waits (the ask's release, so the waiting holds no step process), and on
+the owner's answer it takes the person's landing by the human landing
+rules — GitHub's three merge methods all count when they land the
+verified change as it stands: **Create a merge commit** (its branch side
+the verified head), **Rebase and merge** (every commit of the branch
+replayed, matched by the patch-id fingerprint) and **Squash and merge**
+(the branch's whole diff); a landing that does not match the verified
+change — a commit added to the branch before the person merged, a content
+changed on the way — is not taken: the step asks the owner again (exit 3,
+never a FAIL back to `sync`). The landing record names the landed commit
+set with each commit's merge flag, so the integration lane reverts a
+squash or a rebase landing too (the plain commits with no `-m 1`).
+
 The merge's pass ends the workflow: before handing off `done` the agent
 registers the landing record `merge.py --landing-out` wrote — `{state:
 landed, repos: [{repo, pr, head, light_verified_head, merge_commit,
@@ -598,7 +617,10 @@ green. (A project that switches develop's `merge` off,
 `steps.<project>.merge.skip: true`, has its work items end after `publish`,
 wrapped `integration: {state: published, …}` with the PRs awaiting a human
 review: the collect takes `landed` work items only, so they never enter a
-batch.) A batch is a work item on the `integrate` bundle, and only a person
+batch. A project that declares the merge done by a person,
+`steps.<project>.merge.by: human`, has its work items land through the
+person's merge — the lane takes the landing and wraps them `landed`, so
+they enter the batch like the lane's own merges do.) A batch is a work item on the `integrate` bundle, and only a person
 starts one, like a work item on any lane: `pf file create --bundle
 integrate --project <p> --goal <text>`, then `pf submit <batch>`. The daemon
 never files a batch of its own, however long landed items wait.

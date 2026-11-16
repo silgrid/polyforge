@@ -17,7 +17,15 @@ lanes, `develop` and `micro` (`workflows/<lane>/README.md`):
    conflicts — FAILs back to `sync`; gh unreachable is `incomplete`,
    `pf resume` once fixed). It asks nobody.
 
-The merge goes ahead unattended once publish passes, which it does when the
+The merge goes ahead only where the project did not declare its develop
+merges done by a person (`steps.<project>.merge.by: human`): declared,
+the merge step asks the owner over the open PRs and waits; the person
+merges on GitHub (any of the three methods) and answers the lane, which
+takes the landing and wraps the work item `landed`. A project that skips
+`merge` (`steps.<project>.merge.skip: true`) never lands here either: its
+work items end after publish, wrapped `published`, out of the integration
+lane. Otherwise the merge goes unattended once publish passes, which it
+does when the
 review passed, the verification (micro: the fast evidence) passed on the
 pushed head (or the owner waived its red), and the work item declared no
 owner-review artifact or the owner answered 过目通过.

@@ -443,13 +443,14 @@ func TestW254QuickstartsMovedIntact(t *testing.T) {
 // - the v0.2.1 section appended with the integrate full gate running every command (the full-gate step's gate and --triage lines pass --keep-going, so one red batch records every failing command; gate.py's default and the develop and micro lanes' verification are unchanged)
 // - the v0.2.1 section appended with units already red before the change (facts.py build --replay understands pre_existing_red: true in units.json: no test_commit, the red evidence is a replay on the tree of the change's base, and a run green there fails the unit — review classes that test_weakened)
 // - the v0.2.1 section appended with pf step ask answering -h/--help itself (the flag-less ask used to post the literal "--help" to the owner as the question; -h/--help now print ask's usage locally with exit 0 and no call, a first word starting with "-" is refused before any call — the lone "-" stdin marker excepted — and the audit of the other step sub-actions found no second case)
+// - the v0.2.1 section appended with the develop merge done by a person (steps.<project>.merge.by: human; the merge step asks the owner over the PRs, merge.py takes the person's GitHub landing by the patch-id fingerprint with exit 3 while it is not landed, and the landing record's merge_commits name each landed commit with its merge flag so revert.py rolls a squash or a rebase landing back)
 // upgrade-sections:end
 // The file is only routed to, from the install ops page and the README
 // landing page.
 func TestW254UpgradeByteIdentical(t *testing.T) {
 	raw := []byte(w254Read(t, "docs/upgrade.md"))
 	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != "b66f18483c90a124d3e7ad6ba91b75e3049f0ceb605ade4a757ab9f2e68b84ef" {
+	if got := hex.EncodeToString(sum[:]); got != "ff3e9c1e07022e99abb143c94d511000f51af23e797b7a4de4863056a5bb4357" {
 		t.Fatalf("docs/upgrade.md must stay byte-identical (only routed to, never rewritten): sha256 %s != the pinned pre-move sha256", got)
 	}
 	// the list beside the pin: one whole `// - ` line per appended section
