@@ -74,7 +74,8 @@ test("the probe reads the initialize answer's commands: all 48, names, descripti
   const info = probe.claudeInitializeInfo(recordedInitializeAnswer());
   assert.equal(info.commands?.length ?? 0, 48, "claude 2.1.322's initialize answer lists 48 commands");
   const deep = info.commands.find((command) => command.name === "deep-research");
-  assert.deepEqual(deep, { name: "deep-research", description: deep.description, argumentHint: "", builtin: true });
+  // An empty argument hint carries nothing and is dropped.
+  assert.deepEqual(deep, { name: "deep-research", description: deep.description, builtin: true });
   assert.match(deep.description, /fan-out web searches/i);
   // The ticket's exclusion-table names are all among them, as recorded.
   for (const name of ["clear", "rename", "model", "effort", "fast", "mcp", "config", "output-style", "autocompact", "usage", "context", "list-agents", "agents", "__remote-workflow", "workflow-launch-exec", "compact"]) {
@@ -86,7 +87,7 @@ test("the probe reads the initialize answer's commands: all 48, names, descripti
   }
 });
 
-test("claudeSlashCommands subtracts the init frames' terminal names and the exclusion table: 48 − 4 − 16 − 1 = 27", () => {
+test("claudeSlashCommands subtracts the init frames' terminal names and the exclusion table: 48 − 4 − 15 − 1 = 28", () => {
   const commands = probe.claudeInitializeInfo(recordedInitializeAnswer()).commands ?? [];
   const terminal = recordedTerminalSlashCommands();
   assert.deepEqual(terminal, ["doctor", "color", "focus", "reload-plugins"], "the recorded init frames' own list");
@@ -99,7 +100,7 @@ test("claudeSlashCommands subtracts the init frames' terminal names and the excl
     "plugin-authoring", "auto-mode-setup", "heapdump", "init", "reload-skills", "security-review", "insights", "recap",
     "goal", "design-consent", "design-revoke", "team-onboarding",
   ]);
-  assert.equal(offered.length, 27);
+  assert.equal(offered.length, 28);
   // No terminal-only name, no table entry, survives.
   for (const name of [...terminal, "clear", "rename", "model", "effort", "fast", "mcp", "config", "output-style", "autocompact", "usage", "context", "list-agents", "agents", "__remote-workflow", "workflow-launch-exec", "compact"]) {
     assert.ok(!offered.some((command) => command.name === name), `/${name} must not be listed`);
@@ -116,7 +117,7 @@ test("the exclusion table carries the ticket's names, each with its reason", () 
     const reason = shared.CLAUDE_COMMAND_EXCLUSIONS.get(name);
     assert.ok(typeof reason === "string" && reason.length > 5, `/${name} needs its written reason`);
   }
-  assert.equal(shared.CLAUDE_COMMAND_EXCLUSIONS.size, 16, "exactly the ticket's sixteen");
+  assert.equal(shared.CLAUDE_COMMAND_EXCLUSIONS.size, 15, "exactly the ticket's fifteen, and nothing more");
 });
 
 test("the translator reads every init frame's terminal_slash_commands", () => {
@@ -145,8 +146,17 @@ test("a live session's get_commands answers the filtered list as extension comma
   const session = claude.startClaudeSession(record);
   try {
     // One turn: the stub replays the compact recording's first segment, whose
-    // init frame carries the terminal-only list, so the runtime exclusion applies.
+    // init frame carries the terminal-only list, so the runtime exclusion
+    // applies. `prompt` resolves before the turn streams: wait for its end
+    // (prompt_done) like the window test does, never a fixed delay.
+    const events = [];
+    session.onEvent((event) => events.push(event));
     await session.send({ type: "prompt", message: "first" });
+    const deadline = Date.now() + 30_000;
+    while (!events.some((event) => event.type === "prompt_done")) {
+      if (Date.now() > deadline) assert.fail("the replayed turn never ended (no prompt_done)");
+      await delay(25);
+    }
     const answer = await session.send({ type: "get_commands" });
     const names = answer.commands.map((command) => command.name);
     assert.deepEqual(names, [
