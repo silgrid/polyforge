@@ -59,10 +59,7 @@ func (d *Daemon) plan() *mapping.Plan {
 
 // reloadPath answers the file this daemon reloads.
 func (d *Daemon) reloadPath() string {
-	if d.cfg.ConfigPath != "" {
-		return d.cfg.ConfigPath
-	}
-	return cli.DefaultConfigPath()
+	return d.configFile()
 }
 
 // reloadConfig re-reads and applies the file. The read, parse, validation

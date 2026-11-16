@@ -22,12 +22,19 @@
 #
 #   {"commit":"<40 hex>","gate_id":"<64 hex>","runner":"gate.py",
 #    "runner_version":"<v>","plan_digest":"<64 hex>",
+#    "engine_source":"<tree|lane>","gate_id_source":"<tree|lane>",
 #    "verified_at":"<YYYY-MM-DDTHH:MM:SSZ>","summary":"<text>"}
 #
-# commit is the tagged commit, gate_id the tools/gate-id of that commit,
-# runner and runner_version the gate runner's identity, plan_digest the
-# sha256 of the plan as executed (commands in order with phase,
-# prerequisites and timeouts, the image and the container limits),
+# commit is the tagged commit, gate_id the tools/gate-id of that commit
+# (the lane's pfstep.gateid over the same bytes, for a tree without
+# tools/gate-id), runner and runner_version the gate runner's identity,
+# plan_digest the sha256 of the plan as executed (commands in order with
+# phase, prerequisites and timeouts, the image and the container limits),
+# engine_source and gate_id_source which of the two homes served the run —
+# the repository's own tree (tree) or the lane's copies (lane; a record
+# written before the fields existed is the tree's by construction; this
+# check never compares them, only the gate's same_green does — the
+# release gates this repository, which always carries its own),
 # verified_at when it passed (UTC), summary a line saying what ran.
 #
 # check <commit>: <commit> must be HEAD and the worktree clean (the plan is

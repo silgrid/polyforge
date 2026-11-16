@@ -13,7 +13,10 @@ build --> review --> sync --> verification --> publish --> merge ==> landed
 ```
 
 A project may skip `merge` (below, **Skipping merge**): the lane then ends after `publish`
-with the PRs open, awaiting a human review — `published`, never `landed`.
+with the PRs open, awaiting a human review — `published`, never `landed`. A project may also
+declare the merge done by a person (below, **Merging by a person**): `steps.<project>.merge.by:
+human` keeps every step running and hands the PRs to the project's reviewer — the lane takes
+the person's landing and wraps the work item `landed`, into the integration lane's pool.
 
 The lane is built for speed and ends with the work item's PRs merged into the default
 branch — each work item merges itself, and resolves its conflicts with the default branch
@@ -117,7 +120,8 @@ and `artifacts/merge/landing.json`. The daemon orchestrates; it judges no conten
   it awaits a human review.", the step runs `published.py`, registers its record —
   `pf step hub wrap-attrs integration @artifacts/publish/integration.json` — and writes the
   wrap summary (below, **Skipping merge**).
-- **merge** (gate, `skippable: true`; skill `merge`, `merge.py`, the per-repo merge lock,
+- **merge** (gate, `skippable: true`, `human_mergeable: true`; skill `merge`, `merge.py`,
+  the per-repo merge lock,
   tool window 10 minutes; wrap attrs `integration`) — checks publish's heads against the verified heads, then
   merges each PR with `gh pr merge --merge --match-head-commit <verified head>` under the
   daemon's merge lock (one per repository, every repo of the item locked in one order). A
@@ -194,6 +198,53 @@ verification → publish and ends:
 
 The micro lane shares the publish skill, but its merge declares no `skippable`: a project's
 `steps.<project>.merge.skip` never skips it.
+
+## Merging by a person
+
+`merge` is the lane's one `human_mergeable` step: a project declares its develop merges
+done by a person with `pf config set steps.<project>.merge.by human` (the workspace
+yaml's `steps.<project>.merge.by`, the one mode this release knows; a `by` on any other
+step is refused naming `human_mergeable`, and a step entry declares `by` or `skip`, never
+both). The mode is fixed when the work item is claimed
+(`runtime-state/step-modes.json`), exactly as the skipped-step set is: changing it later
+governs the next work item, never one already claimed, and a re-claim or `pf resume`
+keeps it. A claim of a lane that carries the step without declaring it `human_mergeable`
+— micro's — is refused naming it, so the mode never reaches a lane that does not ask for
+it; a `by` on a step the lane does not carry governs nothing (a skip's rule), so the
+project's integrate and release batches — lanes with no `merge` step — claim as usual.
+
+For such a work item every step still runs, and `merge` waits for the person:
+
+- `publish` pushes the branch and opens the PR with the human-merge closing lines
+  (「此 PR 等待人工审查并由人合并，合并后请回复车道」 and the hint to enable GitHub's
+  *Require branches to be up to date before merging*, 合并前分支必须最新) — never the
+  lane's own "do not merge it by hand";
+- `merge` begins with `pf step ask`, listing every repo's PR link and the head the lane
+  verified, and ends its turn: the question stands in the decision stream (`pf watch`),
+  the step's process is released and its clocks stop while the owner answers — the ask's
+  release every step has, so the waiting holds no step process and no budget;
+- the owner's revision request is carried to `build` as an owner rewind
+  (`pf step handoff --status rewind --to build --per-owner <at>` — charged to nothing);
+- the person merges on GitHub with any of the three methods — **Create a merge commit,
+  Rebase and merge, Squash and merge** — and the owner's answer resumes the step:
+  `merge.py` never asks the forge to merge and never judges the default branch's
+  freshness (the person's landing is the integration lane's full gate to judge); it
+  takes the landing by the human landing rules — the patch-id fingerprint: a merge
+  commit must carry the verified head as its branch side, a rebase must replay every
+  commit of the branch, a squash must carry the branch's whole diff. What the person
+  merged lands on the merge rules and enters the integration lane's pool: the work
+  item is wrapped `integration: {state: landed, merge_commits: …}` naming, per repo,
+  the landed commit set — a rebase's replayed commits, a squash's one plain commit —
+  each with its merge flag, so the integration lane's `revert.py` reverts it
+  (the plain commits with no `-m 1`);
+- a PR closed without merging, merged with content that does not match the verified
+  change (a commit added to the branch, a content changed on the way), or still open
+  is `merge.py`'s exit 3: the step asks the owner again with that reason — never a
+  FAIL back to `sync`, never `landed`, and the summary is never a lane's
+  `uncounted_rewinds` class's to match.
+
+The micro lane shares the merge skill, but its merge declares no `human_mergeable`: a
+project's `steps.<project>.merge.by` never reaches it (the claim is refused).
 
 ## Rewinds
 

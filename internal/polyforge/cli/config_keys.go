@@ -123,10 +123,11 @@ func ConfigSchema(name string) map[string]any {
 // driver composes every step's chain fresh at every dispatch, so every
 // steps.<project>.<step>.models key is live (a running step keeps what its
 // dispatch read); a steps.<project>.<step>.skip key is next-claim: the
-// claim fixes the work item's skipped steps into its capsule, which a
-// running work item keeps.
+// claim fixes the work item's skipped steps and step modes into its
+// capsule, which a running work item keeps (a steps.<project>.<step>.by
+// key alike: the mode is the claim's to fix).
 func WorkspaceConfigClass(name string) ConfigClass {
-	if sk, ok := parseStepKey(name); ok && sk.leaf == stepLeafSkip {
+	if sk, ok := parseStepKey(name); ok && (sk.leaf == stepLeafSkip || sk.leaf == stepLeafBy) {
 		return ConfigNextClaim
 	}
 	if strings.HasPrefix(name, "steps.") {

@@ -19,6 +19,7 @@ tiers: map <tier> -> []<harness>:<model>[:<effort>]; the table a step's model_ti
 budget: map {wall_minutes, tool_minutes}
 gate: bool
 hub: map {verbs, attrs} (default none): what the step may call through `pf step hub`
+human_mergeable: bool (default false): a project may declare the step's work done by a person with `steps.<project>.<step>.by: human` in its workspace yaml, fixed when the work item is first claimed; the step then asks the owner to do its work instead of running it itself, and a claim of a lane that does not declare the step human_mergeable is refused naming it
 id: string, required, ^[a-z][a-z0-9-]{0,39}$, unique
 model_candidates: []<harness>:<model>[:<effort>]; exclusive with model_tier
 model_tier: a tier of defaults.tiers; exclusive with model_candidates

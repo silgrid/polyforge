@@ -6,7 +6,11 @@ description: Publish the verified change (the publish skill) - check the lane's 
 # publish
 
 You run after review passed, `sync` merged the default branch in and the lane's verifying
-gate (develop's `verification`, micro's `evidence`) ran over the result. Your skill is the
+gate (develop's `verification`, micro's `evidence`) ran over the result. The PR body's closing
+line follows the merge's mode — the lane's own merge, the human merge the
+project declared (`steps.<project>.merge.by: human`, frozen as the capsule's
+`runtime-state/step-modes.json` naming the `merge` step) or no merge at all
+(the merge step skipped). Your skill is the
 whole procedure: check that the verified result file names HEAD (waived or not) and says
 pass — or that the owner's waiver of that gate is of that result's round — and that review
 passed, then push the feature branch, open or update the PR, write the delivery note, ask

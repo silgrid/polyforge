@@ -132,7 +132,15 @@ func (r *syncRecord) repo(name string) *syncRepo {
 const (
 	HowMerged          = "merged"
 	HowMergedElsewhere = "merged_elsewhere"
+	HowMergedByHuman   = "merged_by_human"
 )
+
+// landedCommit is one commit a change landed as, with its merge flag
+// (the landing record's and the result's merge_commits entry).
+type landedCommit struct {
+	Sha   string `json:"sha"`
+	Merge bool   `json:"merge"`
+}
 
 type publishFile struct {
 	Repos []publishEntry `json:"repos"`
@@ -160,10 +168,10 @@ type mergeRepo struct {
 }
 
 type mergeDetails struct {
-	Publish      string              `json:"publish"`
-	Verified     string              `json:"verified"`
-	Repos        []*mergeRepo        `json:"repos"`
-	MergeCommits map[string][]string `json:"merge_commits"`
+	Publish      string                    `json:"publish"`
+	Verified     string                    `json:"verified"`
+	Repos        []*mergeRepo              `json:"repos"`
+	MergeCommits map[string][]landedCommit `json:"merge_commits"`
 }
 
 // ---- revert.py's details

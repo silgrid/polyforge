@@ -1,12 +1,15 @@
-"""gate.py's run: the tree's own full plan, every command — the engine
-included — through the container engine (tests.fakebox's fake runs each
-"container" command on the host and records it); the strict verdict; a gate
+"""gate.py's run: the tree's own full plan — or, a tree that carries no
+engine, the lane's (this script's own neighbour, mounted read-only) —
+every command, the engine included, through the container engine
+(tests.fakebox's fake runs each "container" command on the host and
+records it); the strict verdict; a gate
 that cannot be judged; the plan digest; the container's lifetime, sweep and
 removal; a deadline or an interrupt never red. The Go side's twin was
 verifyrun's w405_gate_test.go, w405_gate_green_test.go (the run half) and
 w405_gate_lifecycle_test.go."""
 
 import hashlib
+import json
 import os
 import signal
 import tempfile
@@ -24,6 +27,7 @@ from .gatefix import (
     HAVE_BASH,
     HAVE_GIT,
     HAVE_PY,
+    SCRIPTS,
     boxed_bash,
     commit_all,
     engine_plan,
@@ -72,6 +76,10 @@ class GateRunTest(unittest.TestCase):
                 saw = True
         self.assertTrue(saw, "the engine ran in the container with --json --full --base HEAD")
         self.assertEqual(res.engine, engine + " --json --full --base HEAD")
+        # a tree that carries its own engine and gate id is served by them:
+        # both sources read "tree" in the result
+        self.assertEqual((res.engine_source, res.gate_id_source), ("tree", "tree"))
+        self.assertEqual((res.as_dict()["engine_source"], res.as_dict()["gate_id_source"]), ("tree", "tree"))
         tag = container.image_tag("app", GATE_DOCKERFILE.encode())
         self.assertEqual([(b[0], b[1]) for b in self.fb.builds], [(tag, GATE_DOCKERFILE.encode())])
         self.assertEqual((res.image, res.built), (tag, True))
@@ -147,14 +155,70 @@ class GateRunTest(unittest.TestCase):
                 self.assertIn("gate: INCOMPLETE", r.progress)
 
     def test_no_engine_and_an_empty_plan_are_not_judged(self) -> None:
+        # an empty plan is never judged, whichever engine planned it
         d = self.clone("stack=none\n")
         r = run_gate(d, self.fb, self.logs)
         self.assertFalse(r.res.passed)
         self.assertIn("planned no command", r.res.incomplete)
+        # a tree that lost its engine is still judged: the lane's engine
+        # plans it — here the same empty plan
         os.remove(os.path.join(d, gate.GATE_ENGINE_REL))
         commit_all(d, "no engine")
         r = run_gate(d, FakeRuntime(os.path.join(self.root, "t2")), os.path.join(self.root, "l2"))
-        self.assertIn("carries no scope engine " + gate.GATE_ENGINE_REL, r.res.incomplete)
+        self.assertFalse(r.res.passed)
+        self.assertIn("planned no command", r.res.incomplete, "the lane's engine planned the empty plan")
+        self.assertEqual(r.res.engine_source, "lane")
+
+    def test_a_tree_without_an_engine_falls_back_to_the_lanes(self) -> None:
+        d = gate_clone(self.root, "stack=none\nfast_gate=echo lane-fast\nfull_command=echo lane-full\n",
+                       name="fallback", engine=False, gate_id=False)
+        r = run_gate(d, self.fb, self.logs)
+        res = r.res
+        self.assertEqual(res.incomplete, "", r.progress)
+        self.assertTrue(res.passed, r.progress)
+        self.assertEqual([c.name for c in res.commands], ["fast-1", "full-1"])
+        # the engine is the lane's — this script's own neighbour — asked
+        # in the container exactly as the tree's is
+        lane = os.path.join(SCRIPTS, "verify-scope")
+        want = [lane] if os.access(lane, os.X_OK) else ["python3", lane]
+        saw = False
+        for _, _, _, argv in self.fb.execs:
+            if argv == want + ["--json", "--full", "--base", "HEAD"]:
+                saw = True
+        self.assertTrue(saw, "the lane's engine ran in the container with --json --full --base HEAD")
+        self.assertEqual(res.engine, " ".join(want + ["--json", "--full", "--base", "HEAD"]))
+        s = self.fb.starts[0]
+        self.assertEqual([(b.path, b.read_only) for b in s.binds], [(d, False), (SCRIPTS, True)],
+                         "the fallback mounts the lane's engine directory read-only beside the clone")
+        # both sources are recorded, and neither the lane's path nor the
+        # sources entered the plan (AC5: the plan digest carries neither)
+        self.assertEqual((res.engine_source, res.gate_id_source), ("lane", "lane"))
+        self.assertEqual((res.as_dict()["engine_source"], res.as_dict()["gate_id_source"]), ("lane", "lane"))
+        assert res.plan is not None
+        self.assertNotIn(SCRIPTS, json.dumps(res.plan))
+        self.assertNotIn("engine_source", json.dumps(res.plan))
+
+    def test_a_failing_fallback_is_a_failure_not_an_incomplete(self) -> None:
+        d = gate_clone(self.root, "stack=none\nfast_gate=echo one\nfull_command=echo the-failure-says-why; exit 3\n",
+                       name="red-fallback", engine=False, gate_id=False)
+        r = run_gate(d, self.fb, self.logs)
+        self.assertEqual(r.res.incomplete, "", r.progress)
+        self.assertFalse(r.res.passed)
+        self.assertEqual(r.res.commands[-1].exit, 3)
+        self.assertIn("gate: FAIL - 1 of 2 commands failed", r.progress)
+
+    def test_the_engine_and_the_gate_id_fall_back_independently(self) -> None:
+        conf = "stack=none\nfast_gate=echo one\n"
+        with self.subTest("the tree's engine, no tools/gate-id"):
+            d = gate_clone(self.root, conf, name="no-gate-id", gate_id=False)
+            r = run_gate(d, FakeRuntime(os.path.join(self.root, "t-no-gate-id")), os.path.join(self.root, "l-no-gate-id"))
+            self.assertTrue(r.res.passed, r.progress)
+            self.assertEqual((r.res.engine_source, r.res.gate_id_source), ("tree", "lane"))
+        with self.subTest("no engine, the tree's tools/gate-id"):
+            d = gate_clone(self.root, conf, name="no-engine", engine=False)
+            r = run_gate(d, FakeRuntime(os.path.join(self.root, "t-no-engine")), os.path.join(self.root, "l-no-engine"))
+            self.assertTrue(r.res.passed, r.progress)
+            self.assertEqual((r.res.engine_source, r.res.gate_id_source), ("lane", "tree"))
 
     def test_it_records_its_runner_and_plan_digest(self) -> None:
         conf = "stack=none\nfast_gate=echo one\ncheck=needs|full|echo two\ncheck_requires_cmd=needs|sh\ncheck_timeout=needs|90s\n"
@@ -206,6 +270,41 @@ class GateRunTest(unittest.TestCase):
 
         self.assertEqual(plan("/one/app", "pf-verify-app:0123456789abcdef0123456789abcdef"),
                          plan("/elsewhere/other-name", "pf-verify-other-name:0123456789abcdef0123456789abcdef"))
+
+    def test_a_fallbacks_plan_digest_ignores_where_the_lane_snapshot_lives(self) -> None:
+        from pfstep.engine import EngineCommand
+
+        def plan(lane: str) -> str:
+            rep = container.ContainerReport(image="pf-verify-app:0123456789abcdef0123456789abcdef", built=False,
+                                            build_log="", name="n", cpus="8", memory="8g", pids=4096)
+            cmds = [EngineCommand(name="audit", phase="full",
+                                  cmd="sh '" + lane + "/audit-deps' --go --ledger '/one/app/.polyforge/audit-exemptions.conf'")]
+            p = gate.plan_of("/one/app", rep, cmds, lambda c: duration.MINUTE, lane_dir=lane)
+            self.assertEqual(p["commands"][0]["cmd"],
+                             "sh '<engine>/audit-deps' --go --ledger '<clone>/.polyforge/audit-exemptions.conf'",
+                             "the fallback's audit names <engine>, not the lane snapshot's path")
+            return gate.plan_digest(p)
+
+        # the same commit in two batch capsules: the lane snapshot lives at
+        # another path in each, the digest is one
+        self.assertEqual(plan("/capsule-one/workflows/_shared/scripts"),
+                         plan("/capsule-two/elsewhere/_shared/scripts"))
+
+    def test_a_fallbacks_audit_names_the_engine_not_the_snapshot(self) -> None:
+        # stack=go (a real analyzer — stack=none pins none and no audit is
+        # appended): the go module makes the engine append its audit, whose
+        # command names the engine's own directory
+        d = gate_clone(self.root, "stack=go\nfast_gate=echo one\n", name="audit-fallback", engine=False, gate_id=False)
+        write_files(d, {"go.mod": "module example.invalid/app\n\ngo 1.21\n", "main.go": "package main\n\nfunc main() {}\n"})
+        commit_all(d, "go module")
+        r = run_gate(d, FakeRuntime(os.path.join(self.root, "t-audit")), os.path.join(self.root, "l-audit"), plan_only=True)
+        res = r.res
+        self.assertEqual(res.incomplete, "", r.progress)
+        assert res.plan is not None
+        audit = [c for c in res.plan["commands"] if c["name"] == "audit"]
+        self.assertEqual(len(audit), 1, "the lane's engine appended its dependency audit for the go module")
+        self.assertEqual(audit[0]["cmd"], "sh '<engine>/audit-deps' --go")
+        self.assertNotIn(SCRIPTS, json.dumps(res.plan), "the lane snapshot's path never enters the plan")
 
     def test_a_dirty_tree_is_recorded(self) -> None:
         d = self.clone("stack=none\nfast_gate=echo one\n")

@@ -63,6 +63,51 @@ class SessionTest(unittest.TestCase):
                 s.close()
             self.assertEqual(fb.removes, ["cid-1", "cid-2"], "the session removes its container")
 
+    def test_a_tree_without_an_engine_is_triaged_by_the_lanes(self) -> None:
+        # the red gate of a tree that carries no engine and no tools/gate-id
+        # opens a session and triages: the lane's engine selects, locates
+        # and re-runs (AC2 — no TriageError names a missing engine)
+        with tempfile.TemporaryDirectory() as td:
+            root = os.path.realpath(td)
+            d = gate_clone(root, "stack=none\nfull_command=sh run-e2e.sh\nrerun=full-1|sh run-e2e.sh {unit}\n",
+                           engine=False, gate_id=False)
+            write_files(d, {"run-e2e.sh": E2E, "e2e/b.mjs": "// carries: web/Panel*\nconsole.log(1)\n"})
+            commit_all(d, "e2e")
+            fb = FakeRuntime(os.path.join(root, "box-tmp"))
+            r = run_gate(d, fb, os.path.join(root, "logs"))
+            self.assertFalse(r.res.passed)
+            self.assertEqual(r.res.incomplete, "", r.progress)
+            g = new_gate(fb)
+            try:
+                s = gate.Session.open(g, d, "app", os.path.join(root, "triage"))
+            except gate.TriageError as e:
+                self.fail("a tree without an engine is triaged by the lane's: %s" % e)
+            try:
+                us = s.units(r.res)
+                self.assertEqual([(u.kind, u.name, u.file) for u in us], [("e2e-suite", "e2e/b.mjs", "e2e/b.mjs")])
+                p = s.probe(us[0])
+                self.assertEqual((p.passed, p.presence), (True, PRESENT), "the re-run passes: flaky")
+                rep = s.select("HEAD~1")
+                self.assertIsInstance(rep, EngineReport)
+            finally:
+                s.close()
+            self.assertEqual(fb.removes, ["cid-1", "cid-2"], "the session removes its container")
+
+    def test_no_engine_anywhere_is_a_triage_error(self) -> None:
+        # neither the tree nor the lane carries an engine: the session is
+        # refused before any container is spent, naming both homes
+        import unittest.mock
+        with tempfile.TemporaryDirectory() as td:
+            root = os.path.realpath(td)
+            d = gate_clone(root, "stack=none\nfull_command=echo one\n", engine=False)
+            fb = FakeRuntime(os.path.join(root, "box-tmp"))
+            g = new_gate(fb)
+            with unittest.mock.patch.object(gate, "LANE_ENGINE", os.path.join(root, "no-such-engine")):
+                with self.assertRaises(gate.TriageError) as got:
+                    gate.Session.open(g, d, "app", os.path.join(root, "triage"))
+            self.assertIn("neither the tree nor the lane", str(got.exception))
+            self.assertEqual(fb.starts, [], "no container was started for a tree no engine can judge")
+
     def test_a_command_whose_output_locates_nothing_is_one_unit_rerun_whole(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = os.path.realpath(td)

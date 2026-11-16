@@ -45,6 +45,20 @@ def json_str(s: str) -> str:
     return s.replace("\\", "\\\\").replace('"', '\\"')
 
 
+def visible_dir(d: "container.DockerCLI", dirs: List[str]) -> str:
+    """A directory of this machine the docker engine mounts at its own
+    path (skips the test when it sees none): where a gate's clone lives."""
+    for base in (tempfile.gettempdir(), os.getcwd()):
+        try:
+            p = os.path.realpath(tempfile.mkdtemp(prefix=".pf-gate-real-", dir=base))
+        except OSError:
+            continue
+        dirs.append(p)
+        if _sees(d, p):
+            return p
+    raise unittest.SkipTest("the docker engine does not see this machine's directories at their own paths")
+
+
 @unittest.skipUnless(ENGINE is not None and shutil.which("git") is not None, "no docker engine (or %s, git)" % PROBE_IMAGE)
 class RealDockerGateTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -69,15 +83,7 @@ class RealDockerGateTest(unittest.TestCase):
             shutil.rmtree(p, ignore_errors=True)
 
     def visible_dir(self) -> str:
-        for base in (tempfile.gettempdir(), os.getcwd()):
-            try:
-                p = os.path.realpath(tempfile.mkdtemp(prefix=".w477-gate-real-", dir=base))
-            except OSError:
-                continue
-            self.dirs.append(p)
-            if _sees(self.d, p):
-                return p
-        self.skipTest("the docker engine does not see this machine's directories at their own paths")
+        return visible_dir(self.d, self.dirs)
 
     def test_the_gate_never_sees_the_host(self) -> None:
         clone = os.path.join(self.visible_dir(), self.repo)
@@ -117,6 +123,64 @@ class RealDockerGateTest(unittest.TestCase):
         left = self.d.list_labelled({container.LABEL_DAEMON: self.owner}, container.LABEL_BOOT)
         self.assertNotIn(old, left)
         self.assertIn(live, left)
+
+
+# The lane's engine is a python3 program that reads git: the smallest image
+# that can run it is alpine -- busybox's userland -- with python3 (the base
+# image), git and bash added. That set is what AC6's "what a project
+# provides" list demands of any Dockerfile.verify whose repo carries no
+# engine of its own; busybox alone cannot run the engine.
+LANE_DOCKERFILE = "FROM python:3.12-alpine\nRUN apk add --no-cache git bash\n"
+
+
+@unittest.skipUnless(ENGINE is not None and shutil.which("git") is not None, "no docker engine (or %s, git)" % PROBE_IMAGE)
+class LaneEngineDockerTest(unittest.TestCase):
+    """The lane's scope engine gating, in a real container, a tree that
+    carries no engine and no tools/gate-id (polyforge#29): the read-only
+    mount beside the clone, the interpreter, the plan and the commands --
+    the fallback's whole path, the minimal docker proof of AC8."""
+
+    def setUp(self) -> None:
+        assert ENGINE is not None
+        self.d = ENGINE
+        self.owner = "w29-lane-" + secrets.token_hex(5)
+        self.repo = "w29-lane-" + secrets.token_hex(5)
+        self.dirs: List[str] = []
+
+    def tearDown(self) -> None:
+        try:
+            for cid in self.d.list_labelled({container.LABEL_DAEMON: self.owner}, container.LABEL_BOOT):
+                try:
+                    self.d.remove(cid)
+                except container.ContainerError:
+                    pass
+        except container.ContainerError:
+            pass
+        proc.run([self.d.bin, "rmi", "--force", container.image_tag(self.repo, LANE_DOCKERFILE.encode())], timeout=60)
+        proc.run([self.d.bin, "volume", "rm", "--force", container.cache_volume(self.repo, LANE_DOCKERFILE.encode())], timeout=60)
+        for p in self.dirs:
+            shutil.rmtree(p, ignore_errors=True)
+
+    def test_the_lane_engine_gates_a_tree_without_one(self) -> None:
+        clone = os.path.join(visible_dir(self.d, self.dirs), self.repo)
+        os.makedirs(clone)
+        git_t(clone, "init", "-q", "-b", "main")
+        # no engine and no tools/gate-id in the tree: only the conf and
+        # the Dockerfile -- exactly what a project provides
+        write_files(clone, {".polyforge/verify-scope.conf": "stack=none\nfast_gate=echo lane-fast\nfull_command=echo lane-full\n",
+                            container.DOCKERFILE_VERIFY: LANE_DOCKERFILE})
+        commit_all(clone, "tree")
+        lines: List[str] = []
+        g = new_gate(self.d, deadline=5 * duration.MINUTE, cpus=1, memory="512m", pids=128, lines=lines, owner=self.owner)
+        res = g.run(clone, self.repo, os.path.join(self.dirs[0], "logs"))
+        self.assertEqual(res.incomplete, "", "\n".join(lines))
+        self.assertTrue(res.passed, "\n".join(lines))
+        self.assertEqual([c.name for c in res.commands], ["fast-1", "full-1"], "\n".join(lines))
+        self.assertEqual((res.engine_source, res.gate_id_source), ("lane", "lane"), "\n".join(lines))
+        self.assertFalse(os.path.exists(os.path.join(clone, gate.GATE_ENGINE_REL)),
+                         "the gate ran with no engine in the tree")
+        left = proc.run([self.d.bin, "ps", "--all", "--quiet", "--filter", "name=^" + res.container + "$"], timeout=60)
+        self.assertEqual(left.stdout.strip(), b"", "the gate's container is still there")
 
 
 if __name__ == "__main__":

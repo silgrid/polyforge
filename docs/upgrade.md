@@ -211,6 +211,77 @@ any call — or takes strict positionals. ask's own semantics (one open
 question per dispatch, the size and UTF-8 bounds) and the daemon's checks
 are unchanged.
 
+## v0.2.1, the gate falls back to the lane's scope engine
+
+The integrate lane's full gate used to judge only a repository whose
+tree carries its own scope engine (workflows/_shared/scripts/verify-scope)
+and tools/gate-id: every other repository was not judged, exit 2 — the
+lane was unusable for anyone but polyforge itself. The gate now falls
+back: the engine the tree carries plans the gate when there is one, else
+the lane's own copy, mounted read-only beside the clone, and the green
+tag's gate id comes from tools/gate-id, else the lane's own
+implementation over the same bytes. A repository needs to provide only
+.polyforge/verify-scope.conf and .polyforge/Dockerfile.verify; the image
+must carry python3 (>= 3.9), git, bash and sh beside the repository's own
+toolchain — a Go repository also govulncheck, one with an npm lockfile
+also npm, the container reaching the vulnerability databases (the audit
+gate never skips). A tree without the Dockerfile at HEAD is still not
+judged: that one the lane cannot provide.
+
+Which source served a run is recorded in the result and in the green
+tag's message (engine_source and gate_id_source, "tree" or "lane"),
+never in the plan digest — a fallback's plan names the lane snapshot's
+directory <engine>, so the same commit digests the same in every batch
+capsule, and a repository with its own engine keeps its digest and
+runner version byte for byte. A green tag is reused only for a record of
+the same sources; one written before the fields existed is the tree's by
+construction. The batch record does not aggregate the sources: each
+repository's result carries its own.
+
+## v0.2.1, the develop merge done by a person (`steps.<project>.merge.by: human`)
+
+A project whose GitHub requires an approving review the lane cannot give
+may now declare its develop merges done by a person:
+`pf config set steps.<project>.merge.by human` (the workspace yaml's
+`steps.<project>.merge.by`, the one mode this release knows; the lane's
+step declares `human_mergeable: true` — develop's `merge` does, micro's
+does not, and a claim of a lane that cannot honor the declaration is
+refused naming it; a step entry declares `by` or `skip`, never both). The
+claim fixes the mode into the capsule's
+`runtime-state/step-modes.json`, exactly as the skipped-step set. For
+such a work item publish's PR body awaits the person's merge (and asks
+for GitHub's *Require branches to be up to date before merging*) instead
+of forbidding the hand merge, and the merge step asks the owner over the
+PR links and the verified heads instead of merging; the owner's revision
+request rewinds to build charged to nothing. `merge.py` takes the
+person's landing by the patch-id fingerprint — GitHub's three merge
+methods all count (a merge commit carrying the verified head as its
+branch side, a rebase's replayed commits, a squash's whole diff); a
+landing that does not match the verified change, a closed PR or one
+still open is the script's exit 3: the step asks the owner again, never a
+FAIL back to `sync` and never a lane's `uncounted_rewinds` class's to
+match. The landing record's `merge_commits` now name each landed commit
+with its merge flag (`{sha, merge}`; a pre-#36 record's bare string reads
+as a merge commit), so the integration lane's `revert.py` reverts a
+squash or a rebase landing too — the mainline flag `-m 1` is asked of the
+commit itself (its second parent), never of the record's word.
+
+## v0.2.2, the deploy configuration follows the work item's Cell
+
+A machine that runs more than one Cell no longer deploys everything
+through the one `~/.config/polyforge/deploy.env`: the daemon states to
+every step process its work item's Cell facts — `PF_CELL` (the Cell's
+name), `PF_CELL_SERVER` (that Cell's server) and `PF_DEPLOY_ENV` (the
+deploy configuration file that Cell's deploys read, in the Host
+configuration directory) — and `.polyforge/deploy.sh` reads that file,
+refusing before any work when it does not exist (both components alike),
+and checks the deploy target against the Cell's server before any network
+work, `--dry-run` and `--preflight` included. After upgrading, an
+operator of a named Cell creates its `deploy-<profile>.env` before that
+Cell's next step-driven deploy, or the deploy refuses naming the missing
+file — the default Cell keeps `deploy.env`. A run by hand, without the
+Cell facts, keeps the old behavior and says the target check was skipped.
+
 ## v0.2.1, the task concurrency bound is a Host key
 
 The one-off task lane's concurrency limit is no longer the code constant

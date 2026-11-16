@@ -34,7 +34,7 @@ func isWorkspaceKey(key string) bool {
 }
 
 // stepKey is one addressed step key: steps.<project>.<step>.<leaf>, the
-// leaf `models` or `skip`; the zero leaf is `models`.
+// leaf `models`, `skip` or `by`; the zero leaf is `models`.
 type stepKey struct {
 	project, step, leaf string
 }
@@ -51,6 +51,7 @@ func (k stepKey) leafName() string {
 const (
 	stepLeafModels = "models"
 	stepLeafSkip   = "skip"
+	stepLeafBy     = "by"
 )
 
 func parseStepKey(key string) (stepKey, bool) {
@@ -63,7 +64,7 @@ func parseStepKey(key string) (stepKey, bool) {
 			return stepKey{}, false
 		}
 	}
-	if len(parts) == 4 && (parts[3] == stepLeafModels || parts[3] == stepLeafSkip) {
+	if len(parts) == 4 && (parts[3] == stepLeafModels || parts[3] == stepLeafSkip || parts[3] == stepLeafBy) {
 		return stepKey{project: parts[1], step: parts[2], leaf: parts[3]}, true
 	}
 	return stepKey{}, false
@@ -121,6 +122,19 @@ func runWorkspaceWrite(ctx *Context, set bool, pos []string, exp configExpectati
 			}
 			if !skippable[sk.step] {
 				return fmt.Errorf("config set %s: no lane of this workspace declares step %s skippable (`skippable: true` in its workflow.yaml); a step its lane does not declare skippable always runs", key, sk.step)
+			}
+		}
+		if sk.leaf == stepLeafBy {
+			// a by governs only a step its lane declares human_mergeable:
+			// a write needs one lane of the set that does (a claim of a
+			// lane that cannot honor the declaration is refused, so a
+			// write may only add one some lane takes)
+			human, err := workflow.ForWorkspace(workflowsDir, ws).HumanMergeableSteps()
+			if err != nil && !errors.As(err, &ule) {
+				return fmt.Errorf("config set %s: the installed workflows are unreadable, so the step cannot be checked: %w", key, err)
+			}
+			if !human[sk.step] {
+				return fmt.Errorf("config set %s: no lane of this workspace declares step %s human_mergeable (`human_mergeable: true` in its workflow.yaml); a step its lane does not declare human_mergeable always runs itself", key, sk.step)
 			}
 		}
 	}
@@ -227,8 +241,15 @@ func resolveWorkspaceTarget(ctx *Context, key, wsFlag, cwdFlag string) (string, 
 }
 
 // stepLeafValue renders the yaml text of the value of the step key named
-// key: a skip is the literal true or false, a models list is stepValue's.
+// key: a skip is the literal true or false, a by is the mode name the
+// loader takes (the one `human`), a models list is stepValue's.
 func stepLeafValue(key, leaf, raw string) (string, error) {
+	if leaf == stepLeafBy {
+		if v := strings.TrimSpace(raw); v == workspace.ByHuman {
+			return v, nil
+		}
+		return "", fmt.Errorf("config set %s: by takes `%s`, not %q (the one takeover mode this release knows)", key, workspace.ByHuman, raw)
+	}
 	if leaf != stepLeafSkip {
 		return stepValue(raw)
 	}

@@ -9,6 +9,23 @@ Usage (from the capsule root, or with --capsule)::
     "$PF_PYTHON" "$PF_SHARED_DIR/scripts/merge.py" --publish <publish.json> --verified <result.json> \\
         [--landing-out PATH] [--capsule DIR] [--deadline D] [--json] [--out PATH]
 
+The script runs in the human-merge mode when the work item's frozen
+step modes (``<capsule>/runtime-state/step-modes.json``, the claim's fix
+of ``steps.<project>.merge.by: human``; polyforge#36) name the step it
+runs as (``PF_STEP``) ``human``: the project declared the merge done by
+a person. In that mode it never asks the forge to merge anything and
+never judges the default branch's freshness (the person's landing is the
+integrate lane's full gate to judge): a MERGED PR is taken by the HUMAN
+landing rules only — the landed commit set with each commit's merge
+flag, by the patch-id fingerprint (a merge commit carrying the verified
+head as its branch side, a rebase's replays, a squash's whole diff);
+anything else — a PR closed without merging, merged with content that
+does not match the verified change, or still open — is exit 3, the
+verdict partial: the step asks the owner, never a FAIL back to sync (its
+summary never carries a lane's uncounted-rewind substring). A capsule
+without the mode (micro's claims, every pre-#36 work item) runs the
+default mode of the paragraphs below.
+
 ``--publish`` is the publish step's artifact: ``{"repos": [{name, branch,
 pr_url, head, skipped_reason}]}`` (a repo with a skipped_reason has nothing
 to merge). ``--verified`` is the verifying gate's result file (schema
@@ -40,21 +57,32 @@ The result's details::
 
 ``heads`` are each repo's HEAD in the capsule (unchanged by the merge).
 
+``merge_commits`` — of the details and the landing record alike — names,
+per repo, the commit set the change landed as, oldest first, each
+``{"sha": ..., "merge": true|false}`` (the default mode's lane merges
+and merges taken elsewhere are merge commits; a human rebase landing
+replays plain commits and a squash lands one).
+
 ``--landing-out`` (the merge skill registers it with ``pf step hub
 wrap-attrs integration``) is written atomically on exit 0 — the landing
 record: ``{state: landed, repos: [{repo, pr, head, light_verified_head,
-merge_commit, accepted}], merge_commits}``, per landed repo its name, PR and
-merge commit, the verified head as its light-verified head, and as its head
-the verified head (``how: merged``) or, for a merge made elsewhere
+merge_commit, accepted}], merge_commits}``, per landed repo its name, PR
+and the forge's merge commit, the verified head as its light-verified
+head, and as its head the verified head (``how: merged`` or, in the human
+mode, ``merged_by_human``) or, for a merge made elsewhere
 (``merged_elsewhere``), the merge's branch side (else the verified head)
-with ``accepted: true``. It carries no waiver. On any other exit a stale
-landing file is removed.
+with ``accepted: true``; ``merge_commits`` the landed commit set, each
+entry with its merge flag. It carries no waiver. On any other exit a
+stale landing file is removed.
 
-Exit 0: every published PR is landed. Exit 1: a PR moved (its head is not
-the verified one), is closed or retargeted, was merged elsewhere off the
-verified head, or the forge refused the merge. Exit 2: not judged — an
-unreadable publish or verified file, a missing verified head, a task repo
-missing, gh or git unreachable, the deadline — or the invocation unusable.
+Exit 0: every published PR is landed. Exit 1 (never in the human mode): a
+PR moved (its head is not the verified one), is closed or retargeted, was
+merged elsewhere off the verified head, or the forge refused the merge.
+Exit 3 (the human mode only): a PR is not landed and the owner is asked —
+closed without merging, merged with content that does not match the
+verified change, or still open. Exit 2: not judged — an unreadable
+publish or verified file, a missing verified head, a task repo missing,
+gh or git unreachable, the deadline — or the invocation unusable.
 """
 
 import os
@@ -66,7 +94,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import argparse  # noqa: E402
 import json  # noqa: E402
 import traceback  # noqa: E402
-from dataclasses import dataclass  # noqa: E402
+from dataclasses import dataclass, field  # noqa: E402
 from typing import Any, Dict, List, Mapping, Optional  # noqa: E402
 
 from pfstep import atomic, jsonout, runner  # noqa: E402
@@ -74,12 +102,14 @@ from pfstep.invoke import Invocation, duration_flag, go_list  # noqa: E402
 from pfstep.gitmerge import gostr  # noqa: E402
 from pfstep.gitmerge.ctx import Ctx, GoError, background  # noqa: E402
 from pfstep.gitmerge.git import Git  # noqa: E402
+from pfstep.gitmerge.humanmerge import Landed, human_landing  # noqa: E402
 from pfstep.gitmerge.landing import take_as_landing  # noqa: E402
 
 NAME = "merge.py"
 
 HOW_MERGED = "merged"
 HOW_MERGED_ELSEWHERE = "merged_elsewhere"
+HOW_MERGED_BY_HUMAN = "merged_by_human"
 
 
 @dataclass
@@ -94,13 +124,16 @@ class MergeRepo:
     published: str
     dir: str
     merge_commit: str = ""
-    # how: merged or merged_elsewhere ("" = not landed)
+    # how: merged, merged_elsewhere or merged_by_human ("" = not landed)
     how: str = ""
     # branch_side: the merge commit's second parent ("" = none); by_this_run:
     # this run asked the forge to merge it
     branch_side: str = ""
     by_this_run: bool = False
     why: str = ""
+    # landed: the commit set the change landed as, oldest first (each
+    # with its merge flag); empty until it lands
+    landed: List[Landed] = field(default_factory=list)
     # The default branch commit recorded by verification (before the branch
     # was published).  ``base`` below is the branch name learned from the
     # forge; keep the two facts separate.
@@ -133,11 +166,11 @@ class Details:
         self.publish = publish
         self.verified = verified
         self.repos: List[MergeRepo] = []
-        self.merge_commits: Dict[str, List[str]] = {}
+        self.merge_commits: Dict[str, List[Landed]] = {}
 
     def to_dict(self) -> Dict[str, Any]:
         return {"publish": self.publish, "verified": self.verified, "repos": [r.to_dict() for r in self.repos],
-                "merge_commits": {k: self.merge_commits[k] for k in sorted(self.merge_commits)}}
+                "merge_commits": {k: [landed_of(c) for c in self.merge_commits[k]] for k in sorted(self.merge_commits)}}
 
 
 def read_json(path: str) -> Any:
@@ -175,8 +208,14 @@ def landing_of(d: Details) -> Dict[str, Any]:
         repos.append(e)
     out: Dict[str, Any] = {"state": "landed", "repos": repos}
     if d.merge_commits:
-        out["merge_commits"] = {k: d.merge_commits[k] for k in sorted(d.merge_commits)}
+        out["merge_commits"] = {k: [landed_of(c) for c in d.merge_commits[k]] for k in sorted(d.merge_commits)}
     return out
+
+
+def landed_of(c: Landed) -> Dict[str, Any]:
+    """One landed commit as the record's entry: its sha and whether it is
+    a merge commit."""
+    return {"sha": c.sha, "merge": c.merge}
 
 
 def remove_stale(*paths: str) -> None:
@@ -189,10 +228,13 @@ def remove_stale(*paths: str) -> None:
 
 
 class Merge:
-    def __init__(self, inv: Invocation, g: Git, ctx: Ctx) -> None:
+    def __init__(self, inv: Invocation, g: Git, ctx: Ctx, human: bool) -> None:
         self.inv = inv
         self.g = g
         self.ctx = ctx
+        # the human-merge mode: the claim's frozen step modes name this
+        # step human (step_mode below)
+        self.human = human
 
     def not_judged(self, why: str) -> int:
         """The run ends as not judged (exit 2), naming an interruption when
@@ -221,9 +263,12 @@ class Merge:
             r.branch_side = g.rev(r.dir, merge + "^2")
         except GoError:
             pass
+        r.landed = [Landed(merge, True)]
         self.inv.say("repos/%s: landed as %s (%s)" % (r.name, gostr.short(merge), r.how))
 
     def judge(self, details: Details) -> int:
+        if self.human:
+            return self.judge_human(details)
         g, inv = self.g, self.inv
         # 1. every PR judged, nothing merged
         opened: List[MergeRepo] = []
@@ -317,6 +362,63 @@ class Merge:
         inv.summary = "%d PR(s) landed on the default branch: %s" % (len(details.repos), ", ".join(landed))
         return 0
 
+    def judge_human(self, details: Details) -> int:
+        """The human-merge mode's judgment (mode file + PF_STEP, run()):
+        every PR read, nothing merged by the run, the freshness never
+        judged — each MERGED one taken by the human landing rules, every
+        other state or a mismatch an exit-3 ask of the owner."""
+        g, inv = self.g, self.inv
+        ask: List[str] = []
+        for r in details.repos:
+            r.base = g.default_branch(r.dir)
+            try:
+                pr = g.view_pr(r.dir, r.pr_url)
+            except GoError as err:
+                return self.not_judged("repos/%s: reading the PR %s: %s" % (r.name, r.pr_url, err))
+            if pr.state == "MERGED":
+                try:
+                    landed, refused = human_landing(g, r.dir, r.base, r.head, pr.merge_commit)
+                except GoError as err:
+                    return self.not_judged("repos/%s: reading the merged PR %s: %s" % (r.name, r.pr_url, err))
+                if refused:
+                    r.why = "its PR %s is merged, and %s" % (r.pr_url, refused)
+                else:
+                    r.merge_commit, r.how, r.landed = pr.merge_commit, HOW_MERGED_BY_HUMAN, landed
+                    inv.say("repos/%s: the person landed it as %d commit(s) (%s)"
+                            % (r.name, len(landed), gostr.short(pr.merge_commit)))
+            elif pr.state == "OPEN":
+                r.why = "its PR %s is still open — the person has not merged it yet" % r.pr_url
+            else:
+                r.why = "its PR %s is %s without merging" % (r.pr_url, pr.state.lower())
+            if r.why:
+                ask.append("repos/" + r.name + ": " + r.why)
+        if ask:
+            inv.summary = "%d PR(s) not landed — %s (ask the owner)" % (len(ask), "; ".join(ask))
+            return 3
+        took = ["repos/%s %s (%d commit(s))" % (r.name, gostr.short(r.merge_commit), len(r.landed)) for r in details.repos]
+        inv.summary = "%d PR(s) landed by a person on the default branch: %s" % (len(details.repos), ", ".join(took))
+        return 0
+
+
+def step_mode(capsule: str, step: str) -> bool:
+    """Whether the work item's claim-frozen step modes (the capsule's
+    runtime-state/step-modes.json) name step `human` — the project
+    declared the step's work done by a person. A missing file, an
+    unreadable one or no name for the step is the default mode (micro's
+    claims, every pre-#36 capsule)."""
+    if step == "":
+        return False
+    try:
+        with open(os.path.join(capsule, "runtime-state", "step-modes.json"), "rb") as f:
+            raw = f.read()
+    except OSError:
+        return False
+    try:
+        modes = json.loads(raw.decode("utf-8", "replace"))
+    except ValueError:
+        return False
+    return isinstance(modes, dict) and modes.get(step) == "human"
+
 
 def _v(err: Optional[GoError]) -> str:
     """Go's %v of an error (<nil> for none)."""
@@ -407,7 +509,7 @@ def run(inv: Invocation, a: argparse.Namespace, held: List[Details]) -> int:
     inv.details = details.to_dict
     held.append(details)
     ctx = Ctx(inv.deadline(a.deadline) / 1e9)
-    m = Merge(inv, Git(ctx, inv.env), ctx)
+    m = Merge(inv, Git(ctx, inv.env), ctx, human=step_mode(capsule, inv.getenv("PF_STEP")))
     try:
         return m.judge(details)
     finally:
@@ -417,8 +519,8 @@ def run(inv: Invocation, a: argparse.Namespace, held: List[Details]) -> int:
                 inv.heads[r.name] = bg.rev(r.dir, "HEAD")
             except GoError:
                 pass
-            if r.merge_commit:
-                details.merge_commits[r.name] = [r.merge_commit]
+            if r.landed:
+                details.merge_commits[r.name] = list(r.landed)
 
 
 def main(argv: Optional[List[str]] = None, environ: Optional[Mapping[str, str]] = None) -> int:
