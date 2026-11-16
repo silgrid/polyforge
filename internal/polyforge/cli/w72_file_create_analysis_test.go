@@ -14,7 +14,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -94,19 +93,23 @@ func TestW72FileCreateAnalysisNoticeJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &wi); err != nil || wi["id"] != "wi_abc" {
 		t.Fatalf("stdout must stay the server's work-item JSON: %s", stdout)
 	}
-	// the machine-readable analysis line rides stderr
+	// the machine-readable analysis line rides stderr (last line — the
+	// carrier advisory may precede it)
 	var note struct {
 		Analysis struct {
 			State  string `json:"state"`
 			TaskID string `json:"task_id"`
 		} `json:"analysis"`
 	}
-	line := strings.TrimSpace(stderr)
-	if err := json.Unmarshal([]byte(line), &note); err != nil {
-		t.Fatalf("stderr must carry the machine-readable analysis line: %s", stderr)
+	lines := strings.Split(strings.TrimRight(stderr, "\n"), "\n")
+	if len(lines) == 0 {
+		t.Fatalf("stderr carries no notice: %q", stderr)
+	}
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &note); err != nil {
+		t.Fatalf("stderr must end with the machine-readable analysis line: %s", stderr)
 	}
 	if note.Analysis.State != "queued" {
-		t.Fatalf("the notice line = %s", line)
+		t.Fatalf("the notice line = %s", lines[len(lines)-1])
 	}
 }
 
@@ -114,7 +117,7 @@ func TestW72FileCreateSkipsAnalysisWhenExempt(t *testing.T) {
 	env, enq := w72AnalysisWorld(t,
 		map[string]string{
 			"develop": "steps:\n  - { id: build }\n",
-			"nolist":   "acceptance: none\nsteps:\n  - { id: work }\n",
+			"nolist":  "acceptance: none\nsteps:\n  - { id: work }\n",
 		},
 		func() string { return `{"state":"scheduled","task_id":"task_x"}` })
 	cases := []struct {
@@ -146,7 +149,19 @@ func TestW72FileCreateSkipsAnalysisWhenExempt(t *testing.T) {
 func TestW72FileCreateAnalysisNoticeOnDaemonDown(t *testing.T) {
 	wf := t.TempDir()
 	writeLane(t, wf, "develop", "steps:\n  - { id: build }\n")
-	sock := filepath.Join(t.TempDir(), "no-daemon.sock") // never served
+	// the daemon's business face works (the create goes through its
+	// aihub proxy), but POST /analysis/enqueue itself fails — a refusal
+	// or a broken answer is exactly the shape AC1's「未安排分析」 names.
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"machine_id":"m-w72","workflows_dir":"`+wf+`","jobs":[],"queue":{}}`)
+	})
+	mux.HandleFunc("POST /analysis/enqueue", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		io.WriteString(w, "the scheduler exploded")
+	})
+	sock := newFakeDaemon(t, mux)
 	env := withMappingConfig(t)
 	srv := newFakeAihub(t, &reqRecorder{}, func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, cannedWI)
@@ -157,7 +172,7 @@ func TestW72FileCreateAnalysisNoticeOnDaemonDown(t *testing.T) {
 	code, stdout, stderr := runPf(t, env, "file", "create", "--project", "polyforge", "--goal", "w72 down",
 		"--bundle", "develop", "--content", w72AcceptanceBody)
 	if code != 0 {
-		t.Fatalf("a daemon that cannot be reached must not fail the create: %d %s", code, stderr)
+		t.Fatalf("a failed notify must not fail the create: %d %s", code, stderr)
 	}
 	if !strings.Contains(stdout, "wi_abc") {
 		t.Fatalf("the created ticket must still be rendered: %s", stdout)
