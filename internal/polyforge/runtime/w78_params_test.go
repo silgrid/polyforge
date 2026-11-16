@@ -11,12 +11,17 @@ package runtime
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/capsule"
 	"github.com/silgrid/polyforge/internal/common/protocol"
+	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 )
 
 func w78Set(name, value, by string) OverrideChange {
@@ -146,5 +151,172 @@ func TestW78MergePendingParams(t *testing.T) {
 	}
 	if e := ov.Steps["fix"]; e == nil || e.Params["image"] == nil || e.Params["image"].Value != "reg/img:9" || e.Params["image"].By != "usr_1" {
 		t.Fatalf("the pending param did not land at the claim: %+v", e)
+	}
+}
+
+// w78Lane declares params on two steps; grill declares none.
+const w78Lane = `name: demo-bundle
+steps:
+  - { id: grill }
+  - id: fix
+    params: { image: lane-img, flag: lane-flag, tag: lane-tag, mode: lane-mode }
+  - id: release
+    params: { image: rel-img }
+`
+
+// TestW78ParamsComposeFor (AC4): the dispatch-time param composition a
+// derivation carries reads the capsule's lane snapshot, the workspace
+// yaml and the capsule's overlay record afresh at every call — the ticket
+// layer over the project's over the lane default, a project or ticket
+// value of a param the step does not declare governing nothing — and it
+// fails like the candidate composition: an unloadable yaml is the
+// DAEMON-414 error the driver blocks on, and a value that is not one line
+// within the bound never reaches a dispatch.
+func TestW78ParamsComposeFor(t *testing.T) {
+	setGitIdentity(t)
+	wfDir := laneBundle(t, w78Lane)
+	hub := newFakeHub()
+	ws := filepath.Join(t.TempDir(), "ws")
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sp := &scriptedSpawner{}
+	toOB := supervise.NewQueue[protocol.RTMsg]()
+	r := New(Config{
+		MachineID:     "m-test",
+		Mapping:       mappingFor(ws, "proj"),
+		DataDir:       filepath.Join(t.TempDir(), "data"),
+		MaxRecoveries: 2,
+	}, hub, sp, toOB, supervise.NewQueue[protocol.OBMsg]())
+	hub.capsuleRepoBase = filepath.Join(r.cfg.DataDir, "capsule-remotes")
+	r.cfg.GitRemoteBase = hub.capsuleRepoBase
+	r.cfg.WorkflowsDir = wfDir
+	rec := &recordingStarter{base: scriptedEngineStarter(sp)}
+	r.cfg.AgentStarter = rec.start
+
+	// the project sets image, flag and tag of fix, and an image of grill,
+	// which declares none
+	writeWorkspaceYaml(t, ws, "steps:\n  proj:\n    fix: { params: { image: proj-img, flag: proj-flag, tag: proj-tag } }\n    grill: { params: { image: proj-grill } }\n")
+	const wi = "wi_w78cf"
+	if err := r.Start(context.Background(), wi, StartOpts{}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	j := r.jobOf(wi)
+	if j == nil {
+		t.Fatal("the claim must run to a live agent")
+	}
+	t.Cleanup(func() { _ = r.Stop(context.Background(), wi, protocol.FinishWrapped) })
+	compose := rec.last().Params
+	if compose == nil {
+		t.Fatal("the derivation carries no dispatch-time param composition")
+	}
+
+	// the ticket layer: flag set, tag cleared (the project's value governs
+	// again), a value for a param fix does not declare, and one for grill
+	ov := capsule.StepOverrides{Steps: map[string]*capsule.StepOverride{
+		"fix": {Params: map[string]*capsule.ParamOverride{
+			"flag":  {Value: "ticket-flag", By: "usr_1", At: "2026-11-16T10:00:00Z"},
+			"tag":   {Cleared: true, By: "usr_1", At: "2026-11-16T10:00:00Z"},
+			"ghost": {Value: "x", By: "usr_1", At: "2026-11-16T10:00:00Z"},
+		}},
+		"grill": {Params: map[string]*capsule.ParamOverride{"image": {Value: "ticket-grill", By: "usr_1", At: "2026-11-16T10:00:00Z"}}},
+	}}
+	if err := capsule.WriteStepOverrides(j.capsuleDir, ov); err != nil {
+		t.Fatal(err)
+	}
+	got, err := compose()
+	if err != nil {
+		t.Fatalf("the param composition: %v", err)
+	}
+	want := map[string]map[string]string{
+		"fix":     {"image": "proj-img", "flag": "ticket-flag", "tag": "proj-tag", "mode": "lane-mode"},
+		"release": {"image": "rel-img"},
+	}
+	if len(got["grill"]) != 0 {
+		t.Fatalf("grill declares no params, yet composes %v", got["grill"])
+	}
+	delete(got, "grill")
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("the composed params\n got %v\nwant %v", got, want)
+	}
+
+	// read afresh at every call: a project edit and a ticket change govern
+	// the next composition
+	writeWorkspaceYaml(t, ws, "steps:\n  proj:\n    release: { params: { image: proj-rel } }\n")
+	ov.Steps["fix"].Params["mode"] = &capsule.ParamOverride{Value: "ticket-mode", By: "usr_2", At: "2026-11-16T11:00:00Z"}
+	if err := capsule.WriteStepOverrides(j.capsuleDir, ov); err != nil {
+		t.Fatal(err)
+	}
+	got, err = compose()
+	if err != nil {
+		t.Fatalf("the param composition after the edits: %v", err)
+	}
+	if w := map[string]string{"image": "lane-img", "flag": "ticket-flag", "tag": "lane-tag", "mode": "ticket-mode"}; !reflect.DeepEqual(got["fix"], w) {
+		t.Fatalf("fix after the edits composes %v, want %v", got["fix"], w)
+	}
+	if w := map[string]string{"image": "proj-rel"}; !reflect.DeepEqual(got["release"], w) {
+		t.Fatalf("release after the edits composes %v, want %v", got["release"], w)
+	}
+
+	// an unloadable yaml fails the composition with DAEMON-414 (the driver
+	// blocks on it)
+	writeWorkspaceYaml(t, ws, "steps:\n  proj:\n    fix: [\n")
+	if _, err := compose(); err == nil || !strings.Contains(err.Error(), "DAEMON-414") {
+		t.Fatalf("the composition over an unloadable yaml: %v, want the DAEMON-414 error", err)
+	}
+	writeWorkspaceYaml(t, ws, "")
+
+	// a ticket value that is not one line within the bound never reaches a
+	// dispatch: the composition fails (the driver blocks)
+	for _, bad := range []string{"two\nlines", strings.Repeat("x", 257)} {
+		ov.Steps["fix"].Params["mode"] = &capsule.ParamOverride{Value: bad, By: "usr_3", At: "2026-11-16T12:00:00Z"}
+		if err := capsule.WriteStepOverrides(j.capsuleDir, ov); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := compose(); err == nil {
+			t.Fatalf("a %d-byte value with newline=%v composed %v, want a refusal", len(bad), strings.Contains(bad, "\n"), got["fix"])
+		}
+	}
+	// 256 bytes is within the bound
+	ov.Steps["fix"].Params["mode"] = &capsule.ParamOverride{Value: strings.Repeat("y", 256), By: "usr_3", At: "2026-11-16T12:00:00Z"}
+	if err := capsule.WriteStepOverrides(j.capsuleDir, ov); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := compose(); err != nil || got["fix"]["mode"] != strings.Repeat("y", 256) {
+		t.Fatalf("a 256-byte value: %v (%v), want it composed", got["fix"], err)
+	}
+}
+
+// TestW78ParamEnv (AC4): a derivation's params reach the step process as
+// PF_PARAM_<NAME upper-cased> on both harnesses, one entry each, the
+// daemon's value replacing an inherited one; a derivation without params
+// carries none.
+func TestW78ParamEnv(t *testing.T) {
+	clearBashTimeoutEnv(t)
+	t.Setenv("PF_PARAM_IMAGE", "inherited")
+	t.Setenv("PF_PARAM_STALE", "inherited")
+	cfg := &Config{}
+	params := map[string]string{"image": "reg/img:2", "dry_run": "", "level2": "high"}
+	want := map[string]string{"PF_PARAM_IMAGE": "reg/img:2", "PF_PARAM_DRY_RUN": "", "PF_PARAM_LEVEL2": "high"}
+	pi := newPiSpawner(cfg).buildCmd(SpawnParams{CapsuleDir: "/c", SpawnN: 1, Params: params})
+	cl, err := (&claudeSpawner{cfg: cfg}).buildCmd(SpawnParams{CapsuleDir: "/c", HarnessSession: testSession, Params: params})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, env := range map[string][]string{"pi": pi.Env, "claude": cl.Env} {
+		for k, v := range want {
+			if got := envEntries(env, k); !slices.Equal(got, []string{v}) {
+				t.Errorf("%s: %s entries %q, want exactly [%s]", name, k, got, v)
+			}
+		}
+		if got := envEntries(env, "PF_PARAM_STALE"); got != nil {
+			t.Errorf("%s: an inherited PF_PARAM_STALE leaked: %q", name, got)
+		}
+	}
+	bare := newPiSpawner(cfg).buildCmd(SpawnParams{CapsuleDir: "/c", SpawnN: 1})
+	for _, e := range bare.Env {
+		if strings.HasPrefix(e, "PF_PARAM_") {
+			t.Errorf("a derivation without params carries %s", e)
+		}
 	}
 }
