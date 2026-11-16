@@ -214,7 +214,7 @@ func fillWorkflows(doc *workflowsDoc, facts daemonFacts, ws string) map[string]*
 			b.Defaults.ModelCandidates = fm.Defaults.ModelCandidates
 		}
 		for _, s := range fm.Steps {
-			b.Steps = append(b.Steps, workflowStep{ID: s.ID, ModelCandidates: s.ModelCandidates, Skippable: s.Skippable})
+			b.Steps = append(b.Steps, workflowStep{ID: s.ID, ModelCandidates: s.ModelCandidates, Skippable: s.Skippable, HumanMergeable: s.HumanMergeable})
 		}
 		doc.Bundles = append(doc.Bundles, b)
 	}
@@ -261,6 +261,18 @@ func fillEffective(doc *workflowsDoc, fms map[string]*workflow.Lane, cfg *worksp
 						b.Steps[j].Skip = map[string]bool{}
 					}
 					b.Steps[j].Skip[project] = true
+				}
+			}
+			// the project's declared step modes (a by its lane cannot
+			// honor shows nothing: the claim and the doctor name it)
+			if modes, refused := workspace.HumanMergeSteps(cfg, fm, project); refused == "" {
+				for j := range b.Steps {
+					if mode, ok := modes[b.Steps[j].ID]; ok {
+						if b.Steps[j].By == nil {
+							b.Steps[j].By = map[string]string{}
+						}
+						b.Steps[j].By[project] = mode
+					}
 				}
 			}
 		}
