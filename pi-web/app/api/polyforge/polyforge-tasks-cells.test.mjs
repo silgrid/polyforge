@@ -159,3 +159,47 @@ test("polyforge#73 u3: a Host aggregate that cannot be read degrades to the one 
   assert.equal(body.tasks[0].cell, undefined);
   assert.equal(body.cellErrors, undefined);
 });
+
+const taskShows = () => calls().filter((argv) => argv.includes("task") && argv.includes("show"));
+const show = (route, id, query = "") => route(
+  get(`/api/polyforge/tasks/${id}${query}`),
+  { params: Promise.resolve({ id }) },
+);
+
+// polyforge#73 AC2: the detail face reads the row's Cell —
+// `pf --profile <cell> --json task show <id>`, the global flags before the
+// verb — and falls back to the unflagged read exactly like the list face.
+test("polyforge#73 u4: the detail read is pinned to the row's Cell; an invalid profile is refused before any spawn", async () => {
+  setState({});
+  writeFileSync(log, "");
+  const { show: SHOW } = await loadRoutes();
+  const response = await show(SHOW, "task_1111111111111111", "?profile=public");
+  assert.equal(response.status, 200, "no 5xx");
+  const body = await response.json();
+  assert.ok(body.task, "the task detail answers");
+  assert.deepEqual(taskShows(), [["--profile", "public", "--json", "task", "show", "task_1111111111111111"]],
+    "one `pf --profile <cell> --json task show <id>`, --profile before --json");
+
+  writeFileSync(log, "");
+  const unflagged = await show(SHOW, "task_1111111111111111");
+  assert.equal((await unflagged.json()).task?.id, "task_1111111111111111");
+  assert.deepEqual(taskShows(), [["--json", "task", "show", "task_1111111111111111"]],
+    "no ?profile: today's unflagged read");
+
+  writeFileSync(log, "");
+  const refused = await show(SHOW, "task_1111111111111111", "?profile=BAD_NAME");
+  assert.equal(refused.status, 400, "a malformed profile is refused");
+  assert.deepEqual(taskShows(), [], "refused before any spawn");
+});
+
+test("polyforge#73 u4: a pf without the multi-Cell protocol ignores ?profile and keeps the unflagged detail read", async () => {
+  setState({ caps: false });
+  writeFileSync(log, "");
+  const { show: SHOW } = await loadRoutes();
+  const response = await show(SHOW, "task_1111111111111111", "?profile=public");
+  assert.equal(response.status, 200, "no 5xx");
+  const body = await response.json();
+  assert.ok(body.task, "the detail still answers");
+  assert.deepEqual(taskShows(), [["--json", "task", "show", "task_1111111111111111"]],
+    "the pre-Cell pf has one Cell and no --profile flag: the fallback reads it unflagged");
+});
