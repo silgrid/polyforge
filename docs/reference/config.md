@@ -210,7 +210,7 @@ max_concurrent_jobs = 6             # --max-concurrent-jobs: unquoted integer >=
 max_concurrent_tasks = 2            # no flag: unquoted integer >= 1 (every Cell's tasks share it)
 max_concurrent_bars = 2             # no flag: unquoted integer >= 1
 bar_load_threshold = 12             # no flag: unquoted number > 0
-transient_error_patterns = ['\\btemporarily\\ down\\b', "over quota for now"]  # no flag: an array of quoted RE2 regexes
+transient_error_patterns = ['\btemporarily down\b', "edge node restarting"]  # no flag: an array of quoted RE2 regexes
 model_error_patterns = ['weird model failure']                             # no flag: the same shape
 slow_model_median_latency = "60s"    # no flag: quoted Go duration > 0
 slow_model_p90_latency = "180s"      # no flag: quoted Go duration > 0
@@ -233,7 +233,7 @@ defaults:
 | `max_concurrent_tasks` | — | `2` (`task.DefaultLimit`) | The task lane's one Host-wide concurrency bound: how many one-off tasks (`pf task spawn`, the message analyze/prompt tasks) run at once over every Cell of the Host. A spawn beyond it is refused `DAEMON-409`, nothing queued. Tasks take NO `max_concurrent_jobs` (or `cell_max_concurrent_jobs`) slot — those bound work-item jobs only — so a full job ceiling never refuses a task and running tasks never hold back a job start; the task lane answers to this key alone. Live (the default Cell's file): a reload applies a change at once — the next spawn is judged by the new value; a lowered bound refuses only new spawns, nothing running is stopped. |
 | `max_concurrent_bars` | — | `2` | The heavy-run admission's global slots: how many dispatches of a step declaring `resources: { admission: heavy }` (the develop lane's verification) run at once across every repo, work item and Cell of the Host. A further run waits in the admission queue — ordered by the work item's priority, then by when it first queued — holding no process, no budget and no job slot (`max_concurrent_jobs` does not count it while it waits — the freed slot may start other work — and counts it again once it is admitted, so the running count can briefly exceed the cap: new starts wait, nothing is stopped). Live (the default Cell's file): the next dispatch tick honours a change. |
 | `bar_load_threshold` | — | cores − 4 (at least `1`) | The heavy-run admission's load gate: a further heavy run is admitted only while the 1-minute load average (`/proc/loadavg`) is below this value. It never holds the only run (with no admitted run running the next one starts whatever the load), and it is ignored where the load cannot be read. An unquoted number > 0; live like `max_concurrent_bars`. |
-| `transient_error_patterns` | — | none (no additional rules) | The additional failure-classification list (polyforge#51): every item is one RE2 regex, and a failure text that matches one is classified `upstream_transient` (the same model retried after the transient backoff, never counted; the 2-consecutive bound applies like the built-in transients'). Judged after the allowance/auth row and before every other built-in row, on the text of an exited dispatch and of a live error turn alike — never on the driver's own error. A pattern that would swallow an allowance or auth failure cannot: that row is judged first and covers the bare 402. Written through `pf config set` as a JSON list of strings; a backslash pattern is stored as a single-quoted literal so it reads back verbatim (a pattern holding both `'` and `\` is refused — write the quote as `\x27), a pattern that does not compile refuses the whole write naming the item, and an empty pattern is refused. Host-only, live: the next text classification reads the reloaded rules, no restart. |
+| `transient_error_patterns` | — | none (no additional rules) | The additional failure-classification list (polyforge#51): every item is one RE2 regex, and a failure text that matches one is classified `upstream_transient` (the same model retried after the transient backoff, never counted; the 2-consecutive bound applies like the built-in transients'). Judged after the allowance/auth row and before every other built-in row, on the text of an exited dispatch and of a live error turn alike — never on the driver's own error. A pattern that would swallow an allowance or auth failure cannot: that row is judged first and covers the bare 402. Written through `pf config set` as a JSON list of strings; a pattern a double-quoted value cannot hold verbatim (a backslash, a `"`, a non-printable character such as a tab) is stored as a single-quoted literal so it reads back verbatim (such a pattern that also holds `'` is refused — write the quote as `\x27`, or the `"` as `\x22`), a pattern that does not compile refuses the whole write naming the item, and an empty pattern is refused. Host-only, live: the next text classification reads the reloaded rules, no restart. |
 | `model_error_patterns` | — | none (no additional rules) | The same list for model-class texts (polyforge#51): a match classifies the failure `exit_model_class`, switching the candidate at once — on a live error turn too, like the allowance row. The same shape, the same quoting rules and the same live behavior as `transient_error_patterns`. |
 | `slow_model_median_latency` | — | `60s` | The slow-model judgement's single-call median bound (polyforge#51): a cumulative-T expiry is `step_timeout_slow_model` only when the dying dispatch itself ran at least half of T AND at least 5 of its completed model calls were individually slow — the median over this bound or the p90 over `slow_model_p90_latency`. The call in progress counts nowhere; a dispatch of many fast calls (median under the bound) stays `step_timeout_long_task` however long it waited (the polyforge#25 misjudgement). A quoted Go duration > 0; live: every tick replays the live bounds, so a reload reaches an in-flight dispatch. |
 | `slow_model_p90_latency` | — | `180s` | The slow-model judgement's single-call p90 bound (polyforge#51); the same rules as `slow_model_median_latency`. |
@@ -610,11 +610,14 @@ An array value (`projects`, `models`, `record`, `skip`, a
 `*_error_patterns` list) may span several
 lines until its closing `]`; every item is a quoted string, a comma inside
 quotes is data (the item stays whole) and one trailing comma is allowed.
-The parsed list is the same as the one-line form. A pattern item holding a
-backslash is written between SINGLE quotes (`'\b402\b'`) — a literal, the
-only way a backslash survives, because a double-quoted value rejects
-backslashes (the grammar stays strict; `pf config set` renders the quotes
-itself). The rest of the grammar
+The parsed list is the same as the one-line form. Every quoted value is
+taken literally between its quotes. A pattern item holding a backslash, a
+`"` or a non-printable character (a tab) is written between SINGLE quotes
+(`'\b402\b'`, `'"code":"insufficient_quota"'`) — a literal, the only way
+a backslash survives, because a double-quoted value rejects backslashes
+(the grammar stays strict; `pf config set` renders the quotes itself and
+refuses an item that also holds `'`: write that quote as `\x27` in the
+regex). The rest of the grammar
 stays strict: escape sequences, inline tables, duplicate keys or tables,
 unquoted section keys and any table outside `[workspace."<path>"]`,
 `[daemon]`, `[summarize]` and `[memory_policy."<path>".<entry>]` refuse
