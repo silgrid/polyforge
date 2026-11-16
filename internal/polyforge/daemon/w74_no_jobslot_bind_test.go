@@ -35,7 +35,8 @@ func TestW74TasksTakeNoJobSlots(t *testing.T) {
 		t.Fatalf("a task must not be refused by the job ceilings: %v", err)
 	}
 
-	// the reverse bind: tasks fill the task bound — a job start passes
+	// the reverse bind: admitted tasks hold no job slot — a job start
+	// passes (the old code counted them against the Host ceiling)
 	s2 := &hostSlots{max: 3, tasks: &task.Slots{}, cells: cells}
 	def2 := slotCell("default", 4)
 	def2.cfg.HostSlots = s2
@@ -45,7 +46,7 @@ func TestW74TasksTakeNoJobSlots(t *testing.T) {
 		}
 	}
 	if e := s2.take(def); e == nil || e.WorkItemID != "wi_d2" {
-		t.Fatalf("a job must start while every task slot is taken: %+v", e)
+		t.Fatalf("a job must start past admitted tasks: %+v", e)
 	}
 
 	// a Cell's own taken ceiling refuses no task either

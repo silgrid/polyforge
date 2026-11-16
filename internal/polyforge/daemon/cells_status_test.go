@@ -55,7 +55,7 @@ func TestHostAggregateTaskCountsSumEveryServingCell(t *testing.T) {
 		t.Fatalf("the aggregate's task counts must sum every serving Cell: running %d completed %d, want 3/3", agg.Tasks.Running, agg.Tasks.Completed)
 	}
 	if agg.Tasks.Limit != task.DefaultLimit {
-		t.Fatalf("the aggregate's task limit stays the fixed bound %d, got %d", task.DefaultLimit, agg.Tasks.Limit)
+		t.Fatalf("the aggregate's task limit is the configured bound %d, got %d", task.DefaultLimit, agg.Tasks.Limit)
 	}
 	if s := statusOf("alpha"); s.Tasks == nil || s.Tasks.Running != 2 || s.Tasks.Completed != 1 {
 		t.Fatalf("alpha's own status keeps its own counts (2 running, 1 completed): %+v", s.Tasks)

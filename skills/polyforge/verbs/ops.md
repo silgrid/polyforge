@@ -74,7 +74,8 @@ The daemon's other production knobs are not ops verbs: they live in the
 the daemon reads itself. Change one with `pf
 config set <key> <value>`; a hand edit needs `pf config reload`. The running daemon applies the live
 keys (`step_timeout`, `stall_window`, `max_concurrent_jobs`,
-`cell_max_concurrent_jobs`, `max_concurrent_bars`, `agent_language`) without a restart, takes the `[workspace]`
+`max_concurrent_tasks`, `cell_max_concurrent_jobs`, `max_concurrent_bars`,
+`agent_language`) without a restart, takes the `[workspace]`
 mapping at the next claim, and reports the restart-only keys (`harness_root`, `operator_agent_dir`, and the flat
 `server`/`api_key`/`daemon_socket`) as pending until the next daemon
 start (`pf ops shutdown`, then `pf daemon ensure`). Job cap: `pf ops max
