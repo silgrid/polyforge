@@ -98,7 +98,7 @@ procedure printed: a human decides what happens next.
   procedure (nothing deployed); `fail` on a version mismatch, an ambiguous owner, a
   refusal or a rollback (this gate has no `on_fail`: a FAIL ends the work item).
 - **结论**: production's state — `deployed` (`V`), `none` (no procedure), `not_changed`,
-  `rolled_back`, `rollback_failed` or `partial` (several targets, some deployed) — and the version serving (and the previous one when
+  `rolled_back`, `rollback_failed` or `partial` (several targets, some serving `V`, then a failure) — and the version serving (and the previous one when
   the procedure printed it).
 - **做了什么**: the scan and what it printed; the procedure line as run and its exit; the
   `target:` line(s) and the last line of `artifacts/deploy.log`, copied verbatim.

@@ -232,7 +232,8 @@ skipped —, `ok` for a `--dry-run` or `--preflight`, `rolled_back`,
 `rollback_failed`, `not_changed` or `not_attempted`) and the last line is
 `targets: <profile>=<status> ...`. The release lane's deploy step copies
 every `target:` line and that last line into its hand-off; a run that
-deployed some targets but not all is production state `partial`, still a
+left some targets serving the version (`deployed` or `already_deployed`)
+before a failed one is production state `partial`, still a
 failure. Every run, one target or several, refuses a target running a
 foreign version line — a running version with a pre-release suffix this
 repo has no tag for (another fork's build): its schema and rollback are

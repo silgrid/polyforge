@@ -152,7 +152,8 @@ contract — never cutting a second one.
   one deploy target per Cell whose deploy configuration file exists, the work
   item's Cell first, one after another, stopping at the first failure; it
   prints one `target:` line per target and sums them up on its last line. A
-  run that deployed some targets but not all is `partial`, a failure.
+  run where some targets serve the version (deployed or already deployed) and a later
+  one failed is `partial`, a failure.
 - `.polyforge/deploy.sh --preflight` (optional) - a read-only check of the deploy
   machine and target that reports every problem in one message and exits 0 only
   when the deploy could run. When it exists, the `release` step runs it before
