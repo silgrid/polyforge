@@ -76,6 +76,10 @@ each runs at the worktree's root, in order, the way the run does (same
 isolation, environment and time limit), the first run's logs kept under
 first/, each line's under setup/<k>/; the run replayed again decides. A
 line that fails makes the unit `not_runnable` by rule `base-setup`.
+Every structural check — the units file's shape, a unit's resolution,
+its commits' test-first shape — runs to completion before any replay:
+any failure among them exits before a replay is made, whatever other
+units are sound.
 Exit 0: every unit resolves, its commits are test-first and, when
 replayed, its run is red at the test commit. Exit 1: no unit is reported,
 a unit does not resolve, its commits are not test-first, or its replay
@@ -2102,6 +2106,13 @@ def build(inv: Invocation, args: List[str], environ: Mapping[str, str], runtime:
     d["test_weakened"] = weakened
     if not decls:
         inv.summary = "no unit is reported in %s — a build without a red-then-green unit proves nothing" % units_file
+        return 1
+    if problems:
+        # every structural check is complete before any replay: one
+        # failure among them stops the run here, nothing is replayed
+        # (polyforge#53 paid five replay minutes to learn its
+        # test_commit had 2 parents; the structure refusal is instant)
+        inv.summary = "%d of %d unit(s) fail the test-first check: %s" % (len(problems), len(units), "; ".join(clip_list(problems, 3)))
         return 1
     if ns.replay:
         logs = ns.log_dir
