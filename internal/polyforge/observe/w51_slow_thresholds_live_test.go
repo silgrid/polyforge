@@ -33,11 +33,14 @@ func TestW51LiveSlowThresholdsReachTheInFlightDispatch(t *testing.T) {
 		SlowModelP90Latency:    time.Hour,
 	})
 	// five completed calls, individually ~70ms — slow once the operator
-	// lowers the live median bound to 10ms
+	// lowers the live median bound to 10ms. Each call is closed by a
+	// tool's start (never an error turn: rule 1 outranks rule 4).
 	for i := 0; i < 5; i++ {
 		tr.WaitingModel()
 		time.Sleep(70 * time.Millisecond)
-		tr.TurnEnded(false, "")
+		id := "c" + string(rune('0'+i))
+		tr.ToolStart(id, "bash", "")
+		tr.ToolEnd(id, "bash")
 	}
 	median.Store(int64(10 * time.Millisecond))
 	// run the clock past T (the calls already put the dispatch past half
