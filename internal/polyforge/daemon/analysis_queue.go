@@ -195,6 +195,24 @@ func (d *Daemon) analysisPrompt(item *api.WorkItem) (string, error) {
 	return harness.TaskProhibitedActions(dir) + "\n" + AnalysisPrompt + "\n\n---\n\n# 工单\n\n" + content, nil
 }
 
+// analysisPromptFor is task.Config.PromptFor: an analysis task's every
+// candidate is prompted from the ticket as it stands NOW — re-read, so a
+// candidate that takes over continues the draft its predecessor already
+// wrote into `## 分析` (AC10). A re-read that fails falls back to the
+// spawn-time prompt (already the whole stdin). Any other task answers ""
+// (the manager's own prompt).
+func (d *Daemon) analysisPromptFor(t task.Task) string {
+	if t.AnalysisOf == "" {
+		return ""
+	}
+	if item, err := d.hub.GetWorkItem(t.AnalysisOf); err == nil {
+		if p, err := d.analysisPrompt(item); err == nil {
+			return p
+		}
+	}
+	return t.Prompt
+}
+
 // analysisSpawn starts one analysis task for the CURRENT record item
 // (already read and judged by the caller). It answers the spawned task
 // (the zero value with errNotNeeded = the ticket no longer needs one;

@@ -74,7 +74,8 @@ type Config struct {
 	// consulted before every candidate dispatch (polyforge#72, AC10: the
 	// daemon re-reads the ticket and rebuilds the prompt so the next
 	// candidate continues what the previous one already wrote into
-	// `## 分析`); nil = dispatchedPrompt, the one prompt the spec carried.
+	// `## 分析`); nil, or an empty answer, = dispatchedPrompt, the one
+	// prompt the spec carried.
 	PromptFor func(t Task) string
 }
 
@@ -321,7 +322,9 @@ func (m *Manager) run(ctx context.Context, e *entry, dir string) {
 	// (the daemon re-reads the ticket there).
 	promptOf := func() string {
 		if m.cfg.PromptFor != nil {
-			return m.cfg.PromptFor(t)
+			if p := m.cfg.PromptFor(t); p != "" {
+				return p
+			}
 		}
 		return dispatchedPrompt(t.Prompt, dir)
 	}

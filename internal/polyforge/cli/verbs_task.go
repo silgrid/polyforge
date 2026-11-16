@@ -219,6 +219,10 @@ func taskShow(ctx *Context, id string) error {
 		if t.Error != "" {
 			fmt.Fprintf(w, "error: %s\n", t.Error)
 		}
+		// the candidates the stuck detection ended (polyforge#72 AC9)
+		for _, a := range t.Attempts {
+			fmt.Fprintf(w, "stuck: %s (%s): %s\n", a.Candidate, a.Cause, a.Evidence)
+		}
 		if t.Truncated {
 			fmt.Fprintln(w, "truncated: true")
 		}

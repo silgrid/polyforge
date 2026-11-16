@@ -343,6 +343,13 @@ its four columns.
   output. Context the harness re-sends and the provider serves from its prompt
   cache (a cache read) was already paid for once and is not charged again, so
   the budget tracks the work a task does, not the turns x context it resends.
+- **Stuck detection.** Every task runs under the step lane's silence and
+  tool-hang rules that apply to a task (rules 0, 2 and 3), with the
+  daemon's supervision windows as thresholds. A candidate judged stuck is
+  killed and the next candidate runs inside the remaining budget; each ended
+  candidate is an `attempts` entry (`candidate`, `cause`, `evidence`) in
+  `task show --json`, one `stuck: <candidate> (<cause>): <evidence>` line in
+  the human `task show`, and is named in the decision feed's task summary.
 - **States.** `running`, then exactly one of `completed`, `capped` (a budget was
   hit; the partial report is kept and marked `truncated`), `failed` (every
   candidate errored) or `interrupted` (`cancel` or a daemon restart; never

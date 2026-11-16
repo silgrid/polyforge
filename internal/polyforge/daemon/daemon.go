@@ -753,7 +753,7 @@ func New(cfg Config) (*Daemon, error) {
 		d.ownTaskSlots = &task.Slots{}
 		d.ownTaskSlots.SetMax(cfg.StartupFile.Daemon.MaxConcurrentTasks)
 	}
-	d.tasks = d.newTaskManager(&rtCfg)
+	d.tasks = d.newTaskManager(&rtCfg, liveLimits)
 	rtCfg.EventTap = d.tapRuntimeEvent
 	// the daemon-owned step environment every step process carries (the
 	// live command PATH as its PATH, the Python interpreter; stepenv.go)
