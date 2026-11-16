@@ -31,10 +31,20 @@ import (
 const w72Stamp = "2026-11-16T00:00:00Z"
 
 // w72Hub layers content and analysis facts over the fake hub: the
-// scheduler's reads must see the ticket body.
+// scheduler's reads must see the ticket body. Do serves the narrow
+// write path's PATCH (with the content CAS, plus the one scripted
+// stale answer with its concurrent owner edit) and the failure comment's
+// POST; anything else falls through to the fake hub.
 type w72Hub struct {
 	*fakeHub
 	contents map[string]*string
+	// staleOnce, when set to a work item id, makes the FIRST content
+	// PATCH of that id answer CONTENT_STALE — and inject the owner edit
+	// that made it stale (another section changed) into the ticket, which
+	// the retry must keep.
+	staleOnce string
+	// comments records every POST /work-items/{id}/comments body.
+	comments map[string][]string
 }
 
 func (h *w72Hub) GetWorkItem(idOrSlug string) (*api.WorkItem, error) {
@@ -49,6 +59,80 @@ func (h *w72Hub) GetWorkItem(idOrSlug string) (*api.WorkItem, error) {
 		wi.UpdatedAt = w72Stamp
 	}
 	return wi, nil
+}
+
+// w72FreshStamp answers a stamp no previous read has seen.
+func w72FreshStamp() string { return time.Now().UTC().Format(time.RFC3339Nano) }
+
+// Do serves the write path's calls on the fake hub.
+func (h *w72Hub) Do(method, path string, body, out any) error {
+	if id, ok := strings.CutPrefix(path, "/api/v1/work-items/"); ok && method == "PATCH" {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(w72RawBody(body)), &fields); err != nil {
+			return &api.Error{Code: api.ErrCoreBadInput, Detail: "bad body"}
+		}
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		cur, ok := h.contents[id]
+		if !ok || cur == nil {
+			return &api.Error{Code: api.ErrCoreNotFound, Detail: "work item not found"}
+		}
+		stamp := h.updatedAt[id]
+		if stamp == "" {
+			stamp = w72Stamp
+		}
+		if h.staleOnce == id {
+			h.staleOnce = ""
+			// the owner edited ANOTHER section while the task held its read
+			owner := strings.Replace(*cur, "the body before the write", "owner edited while the task ran", 1)
+			h.contents[id] = &owner
+			h.updatedAt[id] = w72FreshStamp()
+			return &api.Error{Code: api.ErrCoreConflict, Detail: "work item changed since it was read (CONTENT_STALE): re-read and write again"}
+		}
+		var expected string
+		if raw, has := fields["expected_updated_at"]; has && json.Unmarshal(raw, &expected) == nil && expected != "" && expected != stamp {
+			return &api.Error{Code: api.ErrCoreConflict, Detail: "work item changed since it was read (CONTENT_STALE): re-read and write again"}
+		}
+		var content string
+		if raw, has := fields["content"]; has && json.Unmarshal(raw, &content) == nil {
+			c := content
+			h.contents[id] = &c
+			h.updatedAt[id] = w72FreshStamp()
+		}
+		return nil
+	}
+	if id, ok := strings.CutPrefix(path, "/api/v1/work-items/"); ok && strings.HasSuffix(id, "/comments") && method == "POST" {
+		var req struct {
+			Body string `json:"body"`
+		}
+		if err := json.Unmarshal([]byte(w72RawBody(body)), &req); err != nil || strings.TrimSpace(req.Body) == "" {
+			return &api.Error{Code: api.ErrCoreBadInput, Detail: "comment body required"}
+		}
+		wi := strings.TrimSuffix(id, "/comments")
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		if h.comments == nil {
+			h.comments = map[string][]string{}
+		}
+		h.comments[wi] = append(h.comments[wi], req.Body)
+		return nil
+	}
+	return h.fakeHub.Do(method, path, body, out)
+}
+
+// w72RawBody answers one Do body as JSON bytes.
+func w72RawBody(body any) []byte {
+	switch b := body.(type) {
+	case []byte:
+		return b
+	case string:
+		return []byte(b)
+	case nil:
+		return nil
+	default:
+		raw, _ := json.Marshal(b)
+		return raw
+	}
 }
 
 // w72Runner gates every task on one channel and records the task ids in
