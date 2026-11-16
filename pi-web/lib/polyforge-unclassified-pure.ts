@@ -26,7 +26,20 @@ export interface PolyforgeUnclassifiedReport {
 export const UNCLASSIFIED_TEXT_MAX = 1000;
 export const UNCLASSIFIED_ITEMS_MAX = 100;
 
-/** Parse and bound one report; null when the answer is not one. */
+/** Parse and bound one report; null when the answer is not one. A row that
+ *  is not the shape is dropped, never the whole report. */
 export function sanitizePolyforgeUnclassified(value: unknown): PolyforgeUnclassifiedReport | null {
-  return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const v = value as { window_days?: unknown; items?: unknown };
+  if (!Array.isArray(v.items)) return null;
+  const items = v.items.flatMap((entry): PolyforgeUnclassifiedItem[] => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+    const e = entry as { text?: unknown; count?: unknown; last_at?: unknown };
+    if (typeof e.text !== "string" || typeof e.last_at !== "string") return [];
+    const count = typeof e.count === "number" && Number.isSafeInteger(e.count) && e.count > 0 ? e.count : null;
+    if (count === null) return [];
+    return [{ text: e.text.slice(0, UNCLASSIFIED_TEXT_MAX), count, lastAt: e.last_at }];
+  }).slice(0, UNCLASSIFIED_ITEMS_MAX);
+  const windowDays = typeof v.window_days === "number" && Number.isSafeInteger(v.window_days) && v.window_days > 0 ? v.window_days : 7;
+  return { windowDays, items };
 }

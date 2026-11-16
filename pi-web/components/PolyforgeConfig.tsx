@@ -1905,6 +1905,22 @@ function HostSettingsRegion({ title }: { title: string }) {
 
   const items = read?.items ?? [];
   const itemOf = (key: string) => items.find((item) => item.key === key);
+  // polyforge#51: the unclassified fallback errors under the pattern
+  // editors — the operator's candidates for the next pattern.
+  const [unclassified, setUnclassified] = useState<{ windowDays: number; items: { text: string; count: number; lastAt: string }[] } | null>(null);
+  const [unclassifiedError, setUnclassifiedError] = useState<string | null>(null);
+  const runUnclassified = useCallback(async () => {
+    try {
+      const response = await fetch("/api/polyforge/unclassified");
+      const body = await response.json() as { pfPresent?: boolean; report?: { windowDays: number; items: { text: string; count: number; lastAt: string }[] } | null; error?: string };
+      if (!response.ok || body.error) throw new Error(body.error ?? `HTTP ${response.status}`);
+      setUnclassified(body.report ?? null);
+      setUnclassifiedError(null);
+    } catch (error) {
+      setUnclassifiedError(error instanceof Error ? error.message : String(error));
+    }
+  }, []);
+  useEffect(() => { void runUnclassified(); }, [runUnclassified]);
   // a pattern list's shown value: one regex per line (polyforge#51)
   const hostPatternsShownValue = (item: { key: string; value?: unknown; source?: string } | undefined): string => {
     if (!item || item.source !== "file" || !Array.isArray(item.value)) return "";
@@ -1970,6 +1986,17 @@ function HostSettingsRegion({ title }: { title: string }) {
           </div>
         </div>
       ))}
+      <div className="polyforge-config-unclassified" data-pf-unclassified="host" role="group" aria-label={t("polyforge.settings.unclassifiedTitle")} style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+        <p className="polyforge-config-card-title">{t("polyforge.settings.unclassifiedTitle")}</p>
+        <p className="polyforge-config-card-hint">{t("polyforge.settings.unclassifiedHint")}</p>
+        {unclassifiedError && <p className="config-add-source-error" role="alert">{unclassifiedError}</p>}
+        {unclassified && unclassified.items.length === 0 && <p className="polyforge-config-card-hint">{t("polyforge.settings.unclassifiedEmpty")}</p>}
+        {unclassified?.items.map((item) => (
+          <p key={item.text} className="polyforge-config-unclassified-row" data-pf-unclassified-text={item.text}>
+            <span>{item.count}×</span> <span>{item.text}</span> <span>{item.lastAt}</span>
+          </p>
+        ))}
+      </div>
       {confirming && (
         <div role="alertdialog" aria-label={confirming.key} className="polyforge-config-confirm" data-pf-region-confirm={confirming.key}>
           <p className="polyforge-config-confirm-text">{t("polyforge.settings.configConfirmConnection", { key: confirming.key })}</p>

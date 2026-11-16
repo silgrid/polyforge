@@ -26,7 +26,7 @@ writeFileSync(pf, `#!${process.execPath}
 const fs = require("fs");
 const args = process.argv.slice(2);
 if (args[0] === "--version") { process.stdout.write("v2.21.0\\n"); process.exit(0); }
-fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(args) + "\\n");
+fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ args }) + "\\n");
 const mode = fs.readFileSync(${JSON.stringify(mode)}, "utf8");
 if (mode === "fail") { process.stderr.write("ops unclassified: daemon refused (DAEMON-403)\\n"); process.exit(1); }
 if (mode === "malformed") { process.stdout.write("not json\\n"); process.exit(0); }
@@ -52,8 +52,10 @@ test.after(() => {
   rmSync(work, { recursive: true, force: true });
 });
 
+const get = (host = "127.0.0.1:30141") => new Request(`http://${host}/api/polyforge/unclassified`, { headers: { host } });
+
 test("the route reads the Host's unclassified report through pf and sanitizes it", async () => {
-  const response = await GET(new Request("http://x/api/polyforge/unclassified"));
+  const response = await GET(get());
   assert.equal(response.status, 200);
   const body = await response.json();
   assert.equal(body.pfPresent, true);
@@ -75,9 +77,9 @@ test("degradations are 200 fields, never 5xx: a failed read, an undecodable answ
     ["fail", /daemon refused/],
     ["malformed", /undecodable/],
     ["shape", /undecodable/],
-  ] as const) {
+  ]) {
     writeFileSync(mode, m);
-    const response = await GET(new Request("http://x/api/polyforge/unclassified"));
+    const response = await GET(get());
     assert.equal(response.status, 200, m);
     const body = await response.json();
     assert.equal(body.pfPresent, true, m);
@@ -89,7 +91,7 @@ test("degradations are 200 fields, never 5xx: a failed read, an undecodable answ
   process.env.PF_BIN = join(work, "no-such-pf");
   await statusLib.probePolyforgeVersion(true);
   try {
-    const response = await GET(new Request("http://x/api/polyforge/unclassified"));
+    const response = await GET(get());
     assert.equal(response.status, 200);
     const body = await response.json();
     assert.equal(body.pfPresent, false);
