@@ -293,9 +293,10 @@ and the release:
   `--json --full --base HEAD`: the conf's fast gates, its full commands and
   the engine-appended dependency audit, in that order — with every command,
   the engine included, inside the container built from
-  `.polyforge/Dockerfile.verify`. The tree's own workflow script runs it,
-  `python3 workflows/_shared/scripts/gate.py --isolation container`
-  (`cmd/pf-gate` before), through the workflow scripts'
+  `.polyforge/Dockerfile.verify`. The workflow script runs it — the
+  release and an operator the tree's own, `python3
+  workflows/_shared/scripts/gate.py --isolation container` (`cmd/pf-gate`
+  before), the integrate lane its lane snapshot's — through the workflow scripts'
   container executor (`pfstep.container`): the image tag
   `pf-verify-<clone name>:<hash>` (an image a verification built is
   reused), the clone mounted at its own path (on that fallback, the lane's
@@ -323,9 +324,9 @@ and the release:
   runs it.
 - **What a project provides.** A repository the integrate workflow gates
   needs only `.polyforge/verify-scope.conf` and
-  `.polyforge/Dockerfile.verify`: the scope engine and the gate id come
-  from the lane when the tree carries neither, whichever the tree lacks
-  on its own (which served recorded in the result and the green tag as
+  `.polyforge/Dockerfile.verify`: the scope engine and the gate id each
+  come from the lane when the tree lacks its own (which served recorded
+  in the result and the green tag as
   `engine_source` / `gate_id_source`, `tree` or `lane`). The image must
   carry the gate's own needs — `python3` (≥ 3.9), `git`, `bash` and `sh` —
   beside the repository's own toolchain; a Go repository also needs
