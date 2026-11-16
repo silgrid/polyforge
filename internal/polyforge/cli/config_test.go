@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"os"
+	"reflect"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -349,14 +350,14 @@ func TestConfigDaemonTable(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := DaemonSettings{StepTimeout: 45 * time.Minute, StallWindow: 10 * time.Minute, HarnessRoot: "/srv/h", OperatorAgentDir: "/srv/pi/agent", MaxConcurrentJobs: 6}
-	if cfg.Daemon != want {
+	if !reflect.DeepEqual(cfg.Daemon, want) {
 		t.Fatalf("daemon table = %+v, want %+v", cfg.Daemon, want)
 	}
 	if cfg.Server != "http://hub:8420" || cfg.Mapping.Empty() {
 		t.Fatalf("the table disturbed the rest of the config: %+v", cfg)
 	}
 	// no table: the zero value
-	if cfg, err := LoadConfig(writeTempConfig(t, base)); err != nil || cfg.Daemon != (DaemonSettings{}) {
+	if cfg, err := LoadConfig(writeTempConfig(t, base)); err != nil || !reflect.DeepEqual(cfg.Daemon, DaemonSettings{}) {
 		t.Fatalf("no table: %+v %v", cfg.Daemon, err)
 	}
 
