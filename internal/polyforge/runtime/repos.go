@@ -372,6 +372,26 @@ func checkoutTargetBranch(ctx context.Context, j *job, dir string) error {
 	return nil
 }
 
+// pushTargetBranch pushes the locally created target branch to the
+// origin non-forced (polyforge#80): the daemon's one outward write to
+// the task repos' origin, creating the branch other claims of the same
+// parent share. The push runs in the clone's own credential context
+// (cloneGitEnv — the same one that cloned), so nothing is injected the
+// clone itself could not do. A rejection — the remote branch exists at
+// another tip — is the caller's, not the push's, to judge: the caller
+// falls back to the remote's copy. pushTargetBranchFn is the seam the
+// race test parks both claims' pushes at.
+func pushTargetBranch(ctx context.Context, dir, name string) error {
+	if out, err := gitTaskEnv(ctx, cloneGitEnv(), dir, "push", "origin", "refs/heads/"+name+":refs/heads/"+name); err != nil {
+		return fmt.Errorf("%v: %s", err, strings.TrimSpace(out))
+	}
+	return nil
+}
+
+// pushTargetBranchFn is pushTargetBranch as a seam (the two-claims race
+// test parks both pushes and lets the remote's other copy win).
+var pushTargetBranchFn = pushTargetBranch
+
 // gitTask runs one git command inside a task-repo worktree through
 // taskrepo.Command: the worktree's OWN git-dir (never the capsule's
 // external GIT_DIR binding — the capsule history holds none of these
