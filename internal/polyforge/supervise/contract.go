@@ -91,6 +91,15 @@ type Thresholds struct {
 	// dispatches of the same step (execution.json is the authority);
 	// T is judged against PriorRuntime + this dispatch's age.
 	PriorRuntime time.Duration `json:"prior_runtime"`
+	// SlowModelMedianLatency and SlowModelP90Latency are rule 4's
+	// single-call bounds (polyforge#51): the dying dispatch is the slow
+	// model when it ran at least half of T and its COMPLETED model calls
+	// were individually slow — the median over the first, the p90 over the
+	// second, from at least MinSlowModelCalls completed calls. Zero takes
+	// the documented default (the monitor replays the live values every
+	// tick, so a reload of either key reaches an in-flight dispatch).
+	SlowModelMedianLatency time.Duration `json:"slow_model_median_latency,omitempty"`
+	SlowModelP90Latency    time.Duration `json:"slow_model_p90_latency,omitempty"`
 }
 
 // ---------------------------------------------------------------------------

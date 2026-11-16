@@ -470,8 +470,13 @@ type Snapshot struct {
 	WaitingSince time.Time
 	LastOutput   time.Time
 	ModelTime    time.Duration // closed + current model phase
-	Tools        []ToolRun     // running tools, oldest first
-	ToolTime     time.Duration // closed + running tool time
+	// ModelCallLatencies are the COMPLETED model calls' durations, in
+	// close order (polyforge#51): the call in progress is absent, so rule
+	// 4's median/p90 read only calls that finished. The gap correction of
+	// ObserveTick adjusts the entries of phases it forgives.
+	ModelCallLatencies []time.Duration
+	Tools              []ToolRun     // running tools, oldest first
+	ToolTime           time.Duration // closed + running tool time
 
 	TurnEnded   bool
 	TurnEndedAt time.Time
