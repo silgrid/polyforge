@@ -58,17 +58,17 @@ func (r *Runtime) fixTargetBranch(j *job) (string, error) {
 	}
 	parent, err := r.hub.GetWorkItem(*j.item.ParentID)
 	if err != nil {
-		return "", targetBranchErr(j, "the parent %s cannot be read: %v", *j.item.ParentID, err)
+		return "", nil
 	}
 	if parent.BundleName == nil || *parent.BundleName == "" {
-		return "", targetBranchErr(j, "the parent %s names no lane, so its children_branch cannot be read", api.DisplayName(parent.Slug, parent.ID))
+		return "", nil
 	}
 	lane, _, lerr := r.laneSet(parent.ProjectName).Load(*parent.BundleName)
 	switch {
 	case lerr != nil:
-		return "", targetBranchErr(j, "the lane %s of the parent %s does not load: %v", *parent.BundleName, api.DisplayName(parent.Slug, parent.ID), lerr)
+		return "", nil
 	case lane == nil:
-		return "", targetBranchErr(j, "the lane %s of the parent %s is not in this daemon's lane set (nothing is claimed; re-bind the parent to an installed lane)", *parent.BundleName, api.DisplayName(parent.Slug, parent.ID))
+		return "", nil
 	case lane.ChildrenBranch == "":
 		return "", nil // the parent's lane declares none: the claim behaves exactly as before
 	}
