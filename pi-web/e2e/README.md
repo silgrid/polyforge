@@ -256,8 +256,8 @@ root's `.polyforge/` scripts, tested there).
   ids, so a typo never silently runs zero scenarios. A filtered run still
   pays the suite's whole setup (fixtures, browser, both server phases), and
   its scenarios share that setup: a scenario that relies on state an earlier
-  scenario leaves behind needs those companions listed too (verified with
-  single-scenario selections).
+  scenario leaves behind needs those companions listed too (only a
+  single-scenario selection, `E2E_ONLY=AC1`, has been verified).
   `e2e/polyforge-messages-prompt-281.mjs` filters the same variable its own
   way: locally, by check label, with no id validation — an id that matches
   nothing is simply never run, and an all-unknown selection only surfaces at
