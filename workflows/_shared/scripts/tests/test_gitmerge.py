@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 from pfstep.gitmerge import conf as gconf
 from pfstep.gitmerge import humanmerge
