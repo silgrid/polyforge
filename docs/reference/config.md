@@ -975,7 +975,7 @@ lane, this file and `pf override` share. `default` and `task` take no
   `{{<name>}}` placeholder (the capsule's `workflows/_rendered/<step-id>.md`
   is rewritten at each dispatch's values) and reaches the step's scripts as
   the environment variable `PF_PARAM_<NAME>` (the name upper-cased); the
-  `step_start` event and the spawn journal record the dispatch's values,
+  `step_started` event and the spawn journal record the dispatch's values,
   and a dispatch that continues an earlier conversation of the step after
   a value changed tells the agent so in a `## Step params changed` section.
 
