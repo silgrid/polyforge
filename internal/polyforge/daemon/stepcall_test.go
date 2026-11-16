@@ -191,6 +191,9 @@ func newC4Fixture(t *testing.T, wi string) *c4Fixture {
 // waivable one) under workflow contract 4, merge declaring the landing
 // record its round registers before done.
 const c4Lane = `max_rewinds: 3
+uncounted_rewinds:
+  reason_contains: the default branch moved since verification
+  max: 1
 steps:
   - id: build
   - id: review

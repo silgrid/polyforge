@@ -57,6 +57,11 @@ type Lane struct {
 	// MaxRewinds is the lane-wide automatic rewind budget (0 when the
 	// lane declares no on_fail, which is also when it may not declare one).
 	MaxRewinds int
+	// UncountedRewinds is the lane's `uncounted_rewinds`: the lane-declared
+	// class of gate-FAIL rewinds charged to no budget — a FAIL whose
+	// one-line hand-off reason contains ReasonContains — counted on its
+	// own toward Max (nil when the lane declares none).
+	UncountedRewinds *UncountedRewinds
 	// Exclusive is the lane's `exclusive: true`: the daemon's proxy
 	// forwards a work-item create on the lane exclusive, so aihub refuses
 	// it while another work item of its project on the lane is unfinished.
@@ -67,6 +72,23 @@ type Lane struct {
 	Acceptance string
 	Defaults   *Defaults
 	Steps      []Step
+}
+
+// UncountedRewinds is the lane's declared uncounted rewind class
+// (`uncounted_rewinds`): a gate FAIL whose one-line hand-off reason
+// carries ReasonContains falls in it. Its rewinds are charged to no
+// budget and counted on their own, toward Max.
+type UncountedRewinds struct {
+	// ReasonContains is the substring a gate FAIL's one-line reason
+	// carries when its rewind falls in the class (a stable prefix of the
+	// failing step's script summary; the rest of the line varies).
+	ReasonContains string
+	// Max is the class's own budget: once the class's uncounted rewinds
+	// reach it, a matching FAIL without the owner's word is refused, so
+	// the gate asks the owner first — exactly like a spent max_rewinds.
+	// The loader fills DefaultUncountedRewinds when the lane declares
+	// no max; 0 is a valid budget: every matching FAIL asks the owner.
+	Max int
 }
 
 // Defaults carries the workflow-level fallback model candidates and the
@@ -275,6 +297,9 @@ func (l *loader) load() *Lane {
 			lane.MaxRewinds = v
 		}
 	}
+	if n, ok := keys["uncounted_rewinds"]; ok {
+		lane.UncountedRewinds = l.uncountedRewinds(file, off, n)
+	}
 	if n, ok := keys["exclusive"]; ok {
 		lane.Exclusive, _ = l.boolValue(file, off, n, "exclusive")
 	}
@@ -307,6 +332,9 @@ func (l *loader) load() *Lane {
 		l.at(CodeMissingKey, file, off, root, "max_rewinds", "a step declares on_fail, so the lane must declare max_rewinds (its rewind budget)")
 	case !onFail && hasMax:
 		l.at(CodeInvalidValue, file, off, maxNode, "max_rewinds", "no step declares on_fail, so the lane has nothing to rewind: remove max_rewinds")
+	}
+	if uncountedNode, hasUncounted := keys["uncounted_rewinds"]; !onFail && hasUncounted {
+		l.at(CodeInvalidValue, file, off, uncountedNode, "uncounted_rewinds", "no step declares on_fail, so the lane has nothing to rewind: remove uncounted_rewinds")
 	}
 	l.modelTiers(file, off, lane)
 	l.definitions(lane)
@@ -525,6 +553,34 @@ func (l *loader) defaults(file string, off int, n *yaml.Node) *Defaults {
 		d.Tiers = l.tiers(file, off, t, "defaults.tiers")
 	}
 	return d
+}
+
+// uncountedRewinds decodes the lane's `uncounted_rewinds` (the
+// lane-declared uncounted rewind class): the reason substring a gate
+// FAIL's one-line hand-off reason carries, and the class's own cap —
+// the default (DefaultUncountedRewinds) when the lane declares none.
+func (l *loader) uncountedRewinds(file string, off int, n *yaml.Node) *UncountedRewinds {
+	keys := l.mapping(file, off, n, "uncounted_rewinds", uncountedRewindsKeys, removedKeys["uncounted_rewinds"])
+	c := &UncountedRewinds{Max: DefaultUncountedRewinds}
+	if rn, ok := keys["reason_contains"]; !ok {
+		l.at(CodeMissingKey, file, off, n, "uncounted_rewinds.reason_contains", "the class declares no reason_contains (the substring a gate FAIL's one-line reason carries)")
+	} else if s, good := l.stringValue(file, off, rn, "uncounted_rewinds.reason_contains"); good {
+		if strings.TrimSpace(s) == "" {
+			l.at(CodeInvalidValue, file, off, rn, "uncounted_rewinds.reason_contains", "the reason substring is blank")
+		} else {
+			c.ReasonContains = s
+		}
+	}
+	if mn, ok := keys["max"]; ok {
+		if v, good := l.intValue(file, off, mn, "uncounted_rewinds.max"); good {
+			if v < 0 {
+				l.at(CodeInvalidValue, file, off, mn, "uncounted_rewinds.max", "%d is negative (0 = every matching FAIL asks the owner)", v)
+			} else {
+				c.Max = v
+			}
+		}
+	}
+	return c
 }
 
 // tiers decodes `defaults.tiers`: tier name -> a candidate list.

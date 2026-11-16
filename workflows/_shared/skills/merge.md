@@ -54,8 +54,10 @@ is wrapped with. You never merge by hand, and you never write the landing record
      last step, write the wrap summary (the step header's Memory section), then hand off
      `done`.
    - **1** — a PR moved (its head is not the verified one), the default branch gained commits after verification when the verified result includes `details.repos[].base` (develop verification; micro evidence has no base and does not run this check), closed, retargeted, merged
-     elsewhere off the verified head, or the forge refused the merge: hand off `fail` (the
-     lane goes back to `sync`, which merges the default branch again). The check compares
+     elsewhere off the verified head, or the forge refused the merge: hand off `fail`, the
+     result's `summary` as `--reason` (the one-line reason is what a lane's declared
+     uncounted rewind class, `uncounted_rewinds`, matches, when it declares one) — the
+     lane goes back to `sync`, which merges the default branch again. The check compares
      the current `origin/<default>` with the verifying result's recorded base.
    - **2** — not judged (a file unreadable, a head missing, gh or git unreachable, the
      deadline). Wait one minute and run 2 again, at most twice more; still 2: hand off

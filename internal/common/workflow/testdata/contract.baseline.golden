@@ -9,6 +9,7 @@ exclusive: bool (default false): one unfinished work item per project on the lan
 max_rewinds: int >= 0; required when any step declares on_fail, refused otherwise
 name: string, required, ^[a-z][a-z0-9-]{0,39}$, == directory name
 steps: []step, required, non-empty
+uncounted_rewinds: map {reason_contains, max}: the lane-declared class of gate-FAIL rewinds charged to no budget — a gate FAIL whose one-line hand-off reason carries reason_contains rewinds without spending max_rewinds, counted on its own toward max (the default 2 when the lane declares none; 0 = every matching FAIL asks the owner first, exactly like a spent max_rewinds); allowed only when a step declares on_fail, refused otherwise
 
 [defaults keys]
 model_candidates: []<harness>:<model>[:<effort>]
