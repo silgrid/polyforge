@@ -356,18 +356,43 @@ func checkoutWIPTree(ctx context.Context, dir, head, wip string) error {
 const carrierFallbackBranch = "pf-carrier"
 
 // checkoutTargetBranch moves a FRESH task-repo clone onto the work
-// item's fixed target branch (targetbranch.go): the origin's copy of the
-// branch — refs/remotes/origin/<name>, the plain clone's own fetch — is
-// checked out at its tip. Non-destructive by construction: the worktree
-// is a just-created clone with no local state. (The daemon's create of a
-// branch the origin does not carry is the remote half, u4.)
+// item's fixed target branch (targetbranch.go). The branch the origin
+// carries is checked out at its tip. A branch the origin does not carry
+// is created at the default branch tip (the clone's HEAD) and pushed
+// non-forced — the daemon's one outward write to the task repos' origin
+// (polyforge#80), so the branch the parent's sub-tickets share exists
+// before any of them opens a PR against it; a push another claim won
+// (the branch already exists at another tip) loses to the remote's copy:
+// the clone fetches it and stands on it — two claims of the one parent
+// never end up on two different branches. Non-destructive by
+// construction: the worktree is a just-created clone with no local
+// state.
 func checkoutTargetBranch(ctx context.Context, j *job, dir string) error {
 	name := j.targetBranch
-	if _, err := gitTask(ctx, dir, "rev-parse", "-q", "--verify", "refs/remotes/origin/"+name); err != nil {
-		return fmt.Errorf("the origin carries no branch %s", name)
+	if _, err := gitTask(ctx, dir, "rev-parse", "-q", "--verify", "refs/remotes/origin/"+name); err == nil {
+		// the origin carries the branch: check out at its tip
+		if out, err := gitTask(ctx, dir, "checkout", "--force", "--quiet", "-B", name, "refs/remotes/origin/"+name); err != nil {
+			return fmt.Errorf("checkout %s failed: %v: %s", name, err, strings.TrimSpace(out))
+		}
+		return nil
 	}
-	if out, err := gitTask(ctx, dir, "checkout", "--force", "--quiet", "-B", name, "refs/remotes/origin/"+name); err != nil {
-		return fmt.Errorf("checkout %s failed: %v: %s", name, err, strings.TrimSpace(out))
+	// the origin carries no such branch: create it from the default
+	// branch tip and push it non-forced.
+	if out, err := gitTask(ctx, dir, "checkout", "--force", "--quiet", "-B", name, "HEAD"); err != nil {
+		return fmt.Errorf("branch %s could not be created at the default branch tip: %v: %s", name, err, strings.TrimSpace(out))
+	}
+	if err := pushTargetBranchFn(ctx, dir, name); err != nil {
+		// rejected: the remote may carry the branch another claim created
+		// and pushed first — its copy wins.
+		if _, ferr := gitTask(ctx, dir, "fetch", "--quiet", "origin", "refs/heads/"+name); ferr == nil {
+			if _, verr := gitTask(ctx, dir, "rev-parse", "-q", "--verify", "FETCH_HEAD"); verr == nil {
+				if out, cerr := gitTask(ctx, dir, "checkout", "--force", "--quiet", "-B", name, "FETCH_HEAD"); cerr != nil {
+					return fmt.Errorf("checkout %s of the remote's copy failed: %v: %s", name, cerr, strings.TrimSpace(out))
+				}
+				return nil // the remote's branch wins
+			}
+		}
+		return fmt.Errorf("push failed: %v (and the origin carries no readable branch %s)", err, name)
 	}
 	return nil
 }
