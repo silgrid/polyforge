@@ -195,3 +195,18 @@ change, so it was not already red; review classes that `test_weakened`).
 Everything else is unchanged: an ordinary unit keeps its test commit and
 the four requirements of the test-first shape, and verification still
 runs every recorded run green on the final tree.
+
+## v0.2.1, `pf step ask` answers -h/--help itself
+
+`pf step ask --help` used to post the literal "--help" to the owner as the
+question — the step stalled waiting for an answer to a word its agent only
+wanted explained. ask is a flag-less sub-action: the words after it are the
+question, so nothing parsed them. It now answers `-h` and `--help` locally
+(ask's usage on stdout, exit 0, no call to the daemon) and refuses, before
+any call, a question whose first word starts with `-` (the lone `-` stdin
+marker excepted), pointing at the quoting and stdin escapes. The audit of
+every other `pf step` sub-action found no second case: each either registers
+flags — the flag package answers their `-h`/`--help` with an error before
+any call — or takes strict positionals. ask's own semantics (one open
+question per dispatch, the size and UTF-8 bounds) and the daemon's checks
+are unchanged.

@@ -43,8 +43,10 @@ The analysis's ``supplement_limit`` (the script's default when it names
 none) caps the supplemented runs: the first entries in listed order run,
 the tail is cut and named in the result and the report. Each entry names
 an existing test — its ``file`` must be a tracked file of its task repo at
-HEAD and its ``name`` (when given) must appear in it — and the run that
-shows it passing, judged by its marker under ``--unit-runs``' own rules;
+HEAD and its ``name`` (when given) must appear in it — a ``.``, ``::`` or
+``/``-joined name exists when every one of its segments appears in the
+file, and a missing segment is named — and the run that shows it passing,
+judged by its marker under ``--unit-runs``' own rules;
 a listed test that does not exist fails its check naming it. A missing or
 malformed analysis file is the invocation's (exit 2).
 
@@ -350,6 +352,19 @@ def join_note(a: str, b: str) -> str:
 def log_ref(log_path: str) -> str:
     """A log named as <its directory>/<its name>."""
     return os.path.basename(os.path.dirname(log_path)) + "/" + os.path.basename(log_path)
+
+
+NAME_SEGMENTS = re.compile(r"::|[./]")
+
+
+def name_segments(name: str) -> Optional[List[str]]:
+    """The name's segments when it is qualified — two or more non-empty
+    parts joined by ``.`` (a class and its method), ``::`` or ``/`` (a
+    nested name): the parts sit on separate lines of the source, so the
+    joined name is judged part by part. None when the name carries no
+    separator (or no non-empty part besides one): the verbatim rule."""
+    parts = [p for p in NAME_SEGMENTS.split(name) if p != ""]
+    return parts if len(parts) > 1 else None
 
 
 def is_test_file(p: str, globs: Sequence[str]) -> bool:
@@ -889,9 +904,17 @@ class Verification:
                 body = git_quiet(rr.dir, "show", "HEAD:" + p)
             except git.GitError:
                 body = ""
-            if d.name not in body:
-                s.problem = ("its name %s appears nowhere in %s at HEAD: the analysis lists a test"
-                             " that does not exist" % (gostr.quote(d.name), gostr.quote(p)))
+            segs = name_segments(d.name)
+            if segs is None:
+                if d.name not in body:
+                    s.problem = ("its name %s appears nowhere in %s at HEAD: the analysis lists a test"
+                                 " that does not exist" % (gostr.quote(d.name), gostr.quote(p)))
+                return
+            for seg in segs:
+                if seg not in body:
+                    s.problem = ("its name segment %s appears nowhere in %s at HEAD: the analysis lists a"
+                                 " test that does not exist" % (gostr.quote(seg), gostr.quote(p)))
+                    return
 
     def recorded_reruns(self, rr: RepoRun, s: UnitRunState) -> None:
         """A failed recorded run is re-run once at HEAD (RERUNS): a pass on
