@@ -112,16 +112,36 @@ def marker_matches(marker: str, lines: Sequence[str]) -> bool:
 
 def run_shape_problem(argv: Sequence[str], cwd: str, marker: str, repo_name: str,
                       is_dir: Callable[[str], bool]) -> Tuple[str, str]:
-    """Why a recorded run cannot run as written, and its cleaned cwd
-    (stub)."""
-    return "", ""
+    """Why a recorded run (a units.json run or an analysis entry alike)
+    cannot run as written, and its cleaned cwd ("" while the cwd itself
+    is the problem — "" = it can). The one implementation verify.py's
+    prepare_unit_run and the analysis validator's shape stage share; the
+    messages are the contract its existing tests pin."""
+    if not argv or gostr.trim_space(argv[0]) == "":
+        return "its run has no argv (units.json run.argv is empty): nothing to run as written", ""
+    c, why = clean_cwd(cwd)
+    if why:
+        return why, ""
+    if not is_dir(c):
+        return "its cwd %s is no directory of repos/%s at HEAD" % (c, repo_name), c
+    problem = marker_problem(marker)
+    if problem:
+        return problem, c
+    return "", c
 
 
 def unknown_repo_problem(repo: str) -> str:
-    """Why a declared run names no task repo of the capsule (stub)."""
-    return ""
+    """Why a declared run (a unit run or an analysis entry) names no task
+    repo of the capsule — the one message every caller reports."""
+    return ("repos/%s is not a task repo of this capsule (capsule.json names it"
+            " not, or it is not cloned under repos/)" % repo)
 
 
 def argv_line(cwd: str, argv: Sequence[str]) -> str:
-    """The recorded run's command line, as the record reports it (stub)."""
-    return ""
+    """The recorded run's command line as every record reports it: the argv
+    joined by spaces, prefixed `(cd <cwd>) ` when its cwd is neither empty
+    nor the root."""
+    line = " ".join(argv)
+    if cwd not in ("", "."):
+        line = "(cd " + cwd + ") " + line
+    return line

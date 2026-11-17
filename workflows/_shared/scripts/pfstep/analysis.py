@@ -6,15 +6,23 @@ changed paths no ``carries:`` declaration covers) — are the review's to
 judge; the machine's contract is ``supplement_limit`` and ``tests``. A
 supplement entry names an existing test of a task repo and the run that
 shows it passing, under the same marker rules as a units.json run
-(pfstep/unitruns: the one implementation, never a second copy)."""
+(pfstep/unitruns: the one implementation, never a second copy).
+
+The entry rules themselves — ``name_segments``, ``static_problem`` and the
+cap's ``taken`` split — are the one shared validator every caller judges an
+entry by (verify.py's ``--analysis`` check and facts.py's close check,
+polyforge#112): no second copy of a rule may appear. The git reads they
+need (a file tracked at HEAD, its body) stay the caller's plumbing,
+injected as callables; the rules, their order and their messages live here,
+once."""
 
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Any, Callable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 
 from . import gostr
-from .unitruns import marker_problem
+from .unitruns import run_shape_problem
 
 # The supplement cap when the analysis names none (the lane's build step
 # writes its own value into the file; this is the floor every lane gets).
@@ -39,15 +47,53 @@ class AnalysisDecl:
         return self.repo + ":analysis:" + self.id
 
 
+# The separators a qualified test name joins its parts by.
+NAME_SEGMENTS = re.compile(r"::|[./]")
+
+
 def name_segments(name: str) -> Optional[List[str]]:
-    """The name's segments when it is qualified (stub)."""
-    return None
+    """The name's segments when it is qualified — two or more non-empty
+    parts joined by ``.`` (a class and its method), ``::`` or ``/`` (a
+    nested name): the parts sit on separate lines of the source, so the
+    joined name is judged part by part. None when the name carries no
+    separator (or no non-empty part besides one): the verbatim rule."""
+    parts = [p for p in NAME_SEGMENTS.split(name) if p != ""]
+    return parts if len(parts) > 1 else None
 
 
 def static_problem(d: AnalysisDecl, repo_name: str, is_dir: Callable[[str], bool],
                    tracked: Callable[[str], bool], body_of: Callable[[str], str]) -> Tuple[str, str]:
-    """Why the entry cannot run or names no test at HEAD (stub)."""
-    return "", ""
+    """Why the listed test cannot run or does not exist at HEAD, and its
+    run's cleaned cwd ("" = it can): the run's shape rules first, then the
+    test itself — its ``file`` a repo-relative path tracked at HEAD, its
+    ``name`` (when given) inside it, a bare name verbatim and a `.`-, ``::``
+    or ``/``-joined one segment by segment. The one shared validator
+    (verify.py's ``--analysis`` check and facts.py's close check, the
+    messages the existing tests pin); the git reads arrive as callables
+    (``tracked(p)`` whether p is a tracked file at HEAD, ``body_of(p)`` its
+    body, "" when it cannot be read)."""
+    problem, cwd = run_shape_problem(d.argv, d.cwd, d.marker, repo_name, is_dir)
+    if problem:
+        return problem, cwd
+    p = gostr.clean_rel(d.file)
+    if p == "" or p.startswith("/") or p == ".." or p.startswith("../"):
+        return "its file %s is not a repo-relative path" % gostr.quote(d.file), cwd
+    if not tracked(p):
+        return ("its file %s is not a tracked file of repos/%s at HEAD: the analysis lists a"
+                " test that does not exist" % (gostr.quote(p), repo_name)), cwd
+    if d.name != "":
+        body = body_of(p)
+        segs = name_segments(d.name)
+        if segs is None:
+            if d.name not in body:
+                return ("its name %s appears nowhere in %s at HEAD: the analysis lists a test"
+                        " that does not exist" % (gostr.quote(d.name), gostr.quote(p))), cwd
+        else:
+            for seg in segs:
+                if seg not in body:
+                    return ("its name segment %s appears nowhere in %s at HEAD: the analysis"
+                            " lists a test that does not exist" % (gostr.quote(seg), gostr.quote(p))), cwd
+    return "", cwd
 
 
 @dataclass
@@ -59,8 +105,11 @@ class Analysis:
     decls: List[AnalysisDecl] = field(default_factory=list)
 
     def taken(self) -> Tuple[List[AnalysisDecl], List[AnalysisDecl]]:
-        """The entries the cap takes, and the cut tail (stub)."""
-        return [], []
+        """The entries the supplement cap takes (the first ones in listed
+        order — the order is the cut's), and the cut tail every caller
+        names explicitly: the one selection verification's ``--analysis``
+        and the build close's check share."""
+        return self.decls[: self.limit], self.decls[self.limit:]
 
 
 def _text(v: Any, what: str) -> str:

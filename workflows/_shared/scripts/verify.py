@@ -126,7 +126,7 @@ import pfstep  # noqa: E402
 from pfstep import container, duration, git, gostr, jsonout, result, runner, stepenv, tmpdir  # noqa: E402
 from pfstep import progress  # noqa: E402
 from pfstep import targetbranch  # noqa: E402
-from pfstep.analysis import Analysis, AnalysisDecl, read_analysis  # noqa: E402
+from pfstep.analysis import Analysis, AnalysisDecl, read_analysis, static_problem  # noqa: E402
 from pfstep.carries import file_carries, glob_match  # noqa: E402
 from pfstep.deadline import default_deadline_for  # noqa: E402
 from pfstep.engine import TIER_FULL, TIER_LIGHT, EngineCommand, EngineReport, ReportError, choose, decode_report  # noqa: E402
@@ -155,10 +155,11 @@ from pfstep.units import (  # noqa: E402
 )
 from pfstep.unitruns import (  # noqa: E402
     UnitRunDecl,
-    clean_cwd,
+    argv_line,
     marker_matches,
-    marker_problem,
     read_unit_runs,
+    run_shape_problem,
+    unknown_repo_problem,
 )
 
 COMMAND = "verify.py"
@@ -368,19 +369,6 @@ def log_ref(log_path: str) -> str:
     return os.path.basename(os.path.dirname(log_path)) + "/" + os.path.basename(log_path)
 
 
-NAME_SEGMENTS = re.compile(r"::|[./]")
-
-
-def name_segments(name: str) -> Optional[List[str]]:
-    """The name's segments when it is qualified — two or more non-empty
-    parts joined by ``.`` (a class and its method), ``::`` or ``/`` (a
-    nested name): the parts sit on separate lines of the source, so the
-    joined name is judged part by part. None when the name carries no
-    separator (or no non-empty part besides one): the verbatim rule."""
-    parts = [p for p in NAME_SEGMENTS.split(name) if p != ""]
-    return parts if len(parts) > 1 else None
-
-
 def is_test_file(p: str, globs: Sequence[str]) -> bool:
     """One repo-relative path judged a test file: a generic name pattern, a
     path under a test/ or tests/ directory, or a conf test_glob (matched
@@ -464,8 +452,7 @@ class Verification:
         # the analysis's listed tests: the first `limit` run beside the
         # plan, the tail cut and named (the union is add-only)
         an = analysis or Analysis()
-        self.analysis_taken = an.decls[: an.limit]
-        self.analysis_cut = an.decls[an.limit:]
+        self.analysis_taken, self.analysis_cut = an.taken()
         self.analysis_limit = an.limit
         self.env = env
         self.say = say
@@ -902,52 +889,45 @@ class Verification:
     # -- the build's unit runs and the analysis's supplements
 
     def prepare_unit_run(self, s: UnitRunState, rr: RepoRun) -> str:
-        """Why s cannot run as written in rr ("" = it can)."""
+        """Why s cannot run as written in rr ("" = it can): the shared
+        shape rules (pfstep/unitruns — the one implementation, shared with
+        the analysis entries and fast_checks.py's own check)."""
         d = s.decl
-        if not d.argv or gostr.trim_space(d.argv[0]) == "":
-            return "its run has no argv (units.json run.argv is empty): nothing to run as written"
-        cwd, why = clean_cwd(d.cwd)
-        if why:
-            return why
+        problem, cwd = run_shape_problem(d.argv, d.cwd, d.marker, rr.name,
+                                          lambda c: os.path.isdir(os.path.join(rr.dir, c)))
         s.cwd = cwd
-        if not os.path.isdir(os.path.join(rr.dir, cwd)):
-            return "its cwd %s is no directory of repos/%s at HEAD" % (cwd, rr.name)
-        return marker_problem(d.marker)
+        return problem
 
     def prepare_analysis_run(self, s: AnalysisState, rr: RepoRun) -> None:
         """Why the listed test cannot run or does not exist ("" = it can):
-        the unit-run shape rules, then the test itself — its file tracked at
-        HEAD, its name inside it."""
+        the one shared validator (pfstep/analysis — the same rules the
+        build close's facts check calls, polyforge#112): the unit-run shape
+        rules, then the test itself — its file tracked at HEAD, its name
+        inside it."""
         d = s.decl
-        s.problem = self.prepare_unit_run(s, rr)
-        if s.problem:
-            return
-        p = gostr.clean_rel(d.file)
-        if p == "" or p.startswith("/") or p == ".." or p.startswith("../"):
-            s.problem = "its file %s is not a repo-relative path" % gostr.quote(d.file)
-            return
-        try:
-            git_quiet(rr.dir, "cat-file", "-e", "HEAD:" + p)
-        except git.GitError:
-            s.problem = ("its file %s is not a tracked file of repos/%s at HEAD: the analysis lists a"
-                         " test that does not exist" % (gostr.quote(p), rr.name))
-            return
-        if d.name != "":
+        s.problem, s.cwd = static_problem(
+            d, rr.name,
+            lambda c: os.path.isdir(os.path.join(rr.dir, c)),
+            self._tracked_at_head(rr),
+            self._body_at_head(rr),
+        )
+
+    def _tracked_at_head(self, rr: RepoRun) -> Callable[[str], bool]:
+        def tracked(p: str) -> bool:
             try:
-                body = git_quiet(rr.dir, "show", "HEAD:" + p)
+                git_quiet(rr.dir, "cat-file", "-e", "HEAD:" + p)
+                return True
             except git.GitError:
-                body = ""
-            segs = name_segments(d.name)
-            if segs is None:
-                if d.name not in body:
-                    s.problem = ("its name %s appears nowhere in %s at HEAD: the analysis lists a test"
-                                 " that does not exist" % (gostr.quote(d.name), gostr.quote(p)))
-                return
-            for seg in segs:
-                if seg not in body:
-                    s.problem = ("its name segment %s appears nowhere in %s at HEAD: the analysis lists a"
-                                 " test that does not exist" % (gostr.quote(seg), gostr.quote(p)))
-                    return
+                return False
+        return tracked
+
+    def _body_at_head(self, rr: RepoRun) -> Callable[[str], str]:
+        def body_of(p: str) -> str:
+            try:
+                return git_quiet(rr.dir, "show", "HEAD:" + p)
+            except git.GitError:
+                return ""
+        return body_of
 
     def recorded_reruns(self, rr: RepoRun, s: UnitRunState) -> None:
         """A failed recorded run is re-run once at HEAD (RERUNS): a pass on
@@ -1315,16 +1295,14 @@ class Verification:
             have = {rr.name for rr in repos}
             for d in self.unit_run_decls:
                 if d.repo not in have:
-                    s = UnitRunState(decl=d, problem="repos/%s is not a task repo of this capsule (capsule.json names it"
-                                     " not, or it is not cloned under repos/)" % d.repo)
+                    s = UnitRunState(decl=d, problem=unknown_repo_problem(d.repo))
                     c, ur, rec, _ = self.unit_run_assembly(s)
                     checks.append(c)
                     units.append(ur)
                     unit_runs.append(rec)
             for ad in self.analysis_taken:
                 if ad.repo not in have:
-                    st = AnalysisState(decl=ad, problem="repos/%s is not a task repo of this capsule (capsule.json"
-                                       " names it not, or it is not cloned under repos/)" % ad.repo)
+                    st = AnalysisState(decl=ad, problem=unknown_repo_problem(ad.repo))
                     c, ur, rec, _ = self.analysis_assembly(st)
                     checks.append(c)
                     units.append(ur)
@@ -1391,9 +1369,7 @@ class Verification:
         run or an analysis supplement; the wording names the noun)."""
         d = s.decl
         name = d.check()
-        line = " ".join(d.argv)
-        if s.cwd not in ("", "."):
-            line = "(cd " + s.cwd + ") " + line
+        line = argv_line(s.cwd, d.argv)
         cwd = "" if s.cwd == "." else s.cwd
         status = s.status()
         c_status, detail = "pass", ""
