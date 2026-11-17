@@ -433,7 +433,9 @@ class PreparedImageGateTest(unittest.TestCase):
         return gate_clone(self.root, conf, dockerfile)
 
     def result_of(self, r: Any) -> Dict[str, Any]:
-        return json.loads(r.stdout)["details"]["repos"]["app"]["result"]
+        doc: Dict[str, Any] = json.loads(r.stdout)
+        res: Dict[str, Any] = doc["details"]["repos"]["app"]["result"]
+        return res
 
     def test_the_prepared_image_runs_without_a_build(self) -> None:
         d = self.clone("stack=none\nfast_gate=echo one\n")

@@ -218,7 +218,8 @@ class PreparedImageGreenTest(unittest.TestCase):
 
     def record(self, name: str) -> Dict[str, Any]:
         body = git_t(self.origin, "for-each-ref", "--format=%(contents)", "refs/tags/" + name)
-        return json.loads(body)
+        out: Dict[str, Any] = json.loads(body)
+        return out
 
     def test_the_tag_carries_the_digest_and_another_digest_is_never_reused(self) -> None:
         r1 = self.run_green("first", IMAGE_REF)
