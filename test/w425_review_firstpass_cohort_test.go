@@ -278,7 +278,7 @@ func TestW425ReviewFirstpassCohortTime(t *testing.T) {
 	for name, want := range map[string]string{
 		"t-1": "1560 540 480 1 0 2026-11-02T10:00:00Z 2026-11-02T10:45:00Z 1",
 		"t-3": "170 80 0 1 1 2026-11-04T10:00:00Z  0",
-		"t-2": "0    0  2026-11-03T10:00:00Z  0",
+		"t-2": "0 0 0 0 0 2026-11-03T10:00:00Z  0",
 	} {
 		r, ok := rows[name]
 		if !ok {
