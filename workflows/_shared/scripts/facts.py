@@ -131,6 +131,7 @@ import time  # noqa: E402
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple  # noqa: E402
 
 from pfstep import container, deadline, duration, git, goglob, gotext, runner, secretpat  # noqa: E402
+from pfstep import targetbranch  # noqa: E402
 from pfstep import godecode as gd  # noqa: E402
 from pfstep.gotext import clip_list, clip_runes, clip_text, fields, quote, short_sha, trim_space  # noqa: E402
 from pfstep.invoke import Invocation, Parser  # noqa: E402
@@ -250,13 +251,43 @@ def origin_default_ref(directory: str) -> str:
     return ""
 
 
-def change_base(directory: str) -> Tuple[str, str]:
-    """The tree a unit declared pre_existing_red was already red on: the
-    repo's change base (merge-base HEAD origin/<default>), or why it
-    cannot be read."""
+def capsule_of_repo(directory: str) -> str:
+    """The capsule root that owns a task repo directory
+    (<capsule>/repos/<name>): the fixed target branch's home — the
+    runtime-state file is read there."""
+    return os.path.dirname(os.path.dirname(os.path.abspath(directory)))
+
+
+def base_ref(capsule_dir: str, directory: str) -> Tuple[str, str]:
+    """The ref the change is measured against: the capsule's fixed target
+    branch's origin ref when the capsule carries one (read strictly, the
+    ref checked to exist on origin), else the fetched origin default
+    branch; ("", why) when neither can be named — never a silent
+    fall-back to the default branch behind a fixed target."""
+    try:
+        target = targetbranch.read(capsule_dir)
+    except targetbranch.TargetBranchError as err:
+        return "", str(err)
+    if target:
+        ref = "refs/remotes/origin/" + target
+        _, err = run_git(directory, "rev-parse", "--verify", "-q", ref)
+        if err is not None:
+            return "", ("origin has no branch %s — the capsule's fixed target branch is missing on origin" % target)
+        return ref, ""
     ref = origin_default_ref(directory)
     if not ref:
-        return "", "the fetched origin default branch (origin/HEAD, origin/main, origin/master) is unknown"
+        return "", "the fetched origin default branch is unknown"
+    return ref, ""
+
+
+def change_base(directory: str) -> Tuple[str, str]:
+    """The tree a unit declared pre_existing_red was already red on: the
+    repo's change base (merge-base HEAD origin/<base> — the capsule's
+    fixed target branch when its capsule carries one, else the origin
+    default branch), or why it cannot be read."""
+    ref, unknown = base_ref(capsule_of_repo(directory), directory)
+    if not ref:
+        return "", unknown
     out, err = run_git(directory, "merge-base", "HEAD", ref)
     if err is not None:
         return "", "git merge-base HEAD %s failed: %s" % (ref, err)
@@ -512,7 +543,11 @@ class TestPathRules:
     def at(cls, directory: str) -> "TestPathRules":
         rules = cls()
         conf = ""
-        ref = origin_default_ref(directory)
+        # the change base: the capsule's fixed target branch when its
+        # capsule carries one (a target that cannot be named reads no conf
+        # here — the kinds that judge, changed_files and change_base among
+        # them, refuse on it — never the default branch's conf)
+        ref, _unknown = base_ref(capsule_of_repo(directory), directory)
         if ref:
             base, err = run_git(directory, "merge-base", "HEAD", ref)
             if err is None:
@@ -626,11 +661,11 @@ class Repo:
         """The e2e suites the build added or changed in this repo judged
         ([] = fine): each declares carries:, and one it added or a unit's
         recorded run (units.json) names covers the change."""
-        ref = origin_default_ref(self.dir)
+        ref, unknown = base_ref(capsule_of_repo(self.dir), self.dir)
         if not ref:
             if not unit_repo and not self._local_commits():
                 return []
-            return ["repos/%s: the fetched origin default branch is unknown, so the e2e suites this build changed cannot be judged" % self.name]
+            return ["repos/%s: %s, so the e2e suites this build changed cannot be judged" % (self.name, unknown)]
         out, err = run_git(self.dir, "merge-base", "HEAD", ref)
         if err is not None:
             return ["repos/%s: the diff base is unresolvable, so the e2e suites this build changed cannot be judged: %s" % (self.name, err)]
@@ -901,17 +936,20 @@ _NONE_DECL = re.compile("^" + _ci("none") + r"\b", re.ASCII)
 
 
 def changed_files(repos_dir: str) -> Tuple[Optional[Dict[str, List[str]]], str]:
-    """Every task repo's committed diff against its origin default branch:
-    repo -> changed repo-relative paths; a reason when it cannot be read."""
+    """Every task repo's committed diff against its change base (the
+    capsule's fixed target branch when it carries one, else the origin
+    default branch): repo -> changed repo-relative paths; a reason when
+    it cannot be read."""
+    capsule_dir = os.path.dirname(os.path.abspath(repos_dir))
     names = task_repo_names(repos_dir) if repos_dir else []
     if not names:
         return None, "no task repo is materialized under repos/"
     out: Dict[str, List[str]] = {}
     for name in names:
         d = os.path.join(repos_dir, name)
-        ref = origin_default_ref(d)
+        ref, unknown = base_ref(capsule_dir, d)
         if not ref:
-            return None, "repo %s: the fetched origin default branch (origin/HEAD, origin/main, origin/master) is unknown, so the diff base cannot be resolved" % name
+            return None, "repo %s: %s, so the diff base cannot be resolved" % (name, unknown)
         base, err = run_git(d, "merge-base", "HEAD", ref)
         if err is not None:
             return None, "repo %s: git merge-base HEAD %s failed: %s" % (name, ref, err)
@@ -1583,11 +1621,12 @@ def micro_bounds_of(repos_dir: str, evidence: Sequence[Dict[str, str]]) -> Dict[
 
     if not repos_dir:
         problems.append("the capsule's task repos are unknown")
+    capsule_dir = os.path.dirname(os.path.abspath(repos_dir)) if repos_dir else ""
     for name in task_repo_names(repos_dir):
         d = os.path.join(repos_dir, name)
-        ref = origin_default_ref(d)
+        ref, unknown = base_ref(capsule_dir, d)
         if not ref:
-            refuse(name, "the fetched origin default branch is unknown, so the diff cannot be read")
+            refuse(name, "%s, so the diff cannot be read" % unknown)
             continue
         base_out, err = run_git(d, "merge-base", "HEAD", ref)
         if err is not None:
