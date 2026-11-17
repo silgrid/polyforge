@@ -15,7 +15,8 @@ of the gate that FAILed and the files it names first, and answer every point it 
 ## The declared text boundary
 
 - **Only declared text paths.** Each touched repository declares, in the
-  `.polyforge/verify-scope.conf` of its fetched origin default branch, the paths this lane
+  `.polyforge/verify-scope.conf` of its fetched base branch (the step header's: a fixed
+  target branch, else the origin default branch), the paths this lane
   may change (`micro_path=` lines; the workflow's engine, `verify-scope --micro --json`, reports them as
   `micro_paths`). Change files under those declarations only, and only their text.
   `AGENTS.md` and `CLAUDE.md` are never in bounds.

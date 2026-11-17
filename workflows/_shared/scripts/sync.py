@@ -15,8 +15,14 @@ dir); a merge a crash left in progress (MERGE_HEAD) is aborted; then
 origin's default branch is fetched and merged into the branch checked out —
 fast-forwarded when the branch has no commit of its own, else a ``--no-ff``
 merge with every in-tree merge attribute overridden for it only and the
-conflicts the DEFAULT BRANCH's .polyforge/integrate.conf makes mechanical
-resolved and committed as the lane's identity. A real conflict is left in
+conflicts the merged branch's .polyforge/integrate.conf makes mechanical
+resolved and committed as the lane's identity. A capsule whose fixed
+target branch (``runtime-state/target-branch.json``, a sub-ticket's) is
+set merges that branch in the default branch's place everywhere below:
+the record's ``default_branch``/``default_head`` fields keep their names
+and carry it, only it is fetched, and a file that is there but cannot be
+read refuses the run (exit 2) — never a silent fall-back to the default
+branch. A real conflict is left in
 progress and its files listed: the agent resolves them in place and runs
 ``--continue``, which refuses a residual conflict marker, an unmerged or
 unstaged path, a mechanically resolved file changed and a resolved text
@@ -83,6 +89,7 @@ from dataclasses import dataclass, field  # noqa: E402
 from typing import Any, Dict, List, Mapping, Optional, Tuple  # noqa: E402
 
 from pfstep import atomic, jsonout, runner  # noqa: E402
+from pfstep import targetbranch  # noqa: E402
 from pfstep.invoke import Invocation, duration_flag, go_list  # noqa: E402
 from pfstep.gitmerge import gostr  # noqa: E402
 from pfstep.gitmerge import merge as gm  # noqa: E402
@@ -341,6 +348,19 @@ class Sync:
     def dir(self, name: str) -> str:
         return os.path.join(self.capsule, "repos", name)
 
+    def base_branch(self, d: str) -> str:
+        """The branch this sync merges into one repo: the capsule's fixed
+        target branch when it carries one (runtime-state/target-branch.json,
+        read strictly — a file that is there but cannot be read refuses the
+        run, never a silent fall-back to the default branch), else origin's
+        default branch. The record's default_branch field keeps its name and
+        carries the branch merged (the target or the default alike)."""
+        try:
+            target = targetbranch.read(self.capsule)
+        except targetbranch.TargetBranchError as err:
+            raise Refused("sync refused: %s" % err) from None
+        return target or self.g.default_branch(d)
+
     def heads(self, rec: SyncRecord) -> Dict[str, str]:
         out: Dict[str, str] = {}
         for r in rec.repos:
@@ -457,7 +477,7 @@ class Sync:
         HEAD): nothing when HEAD already contains it, a fast-forward when the
         branch has no commit of its own, else gitmerge's sync."""
         g, inv, name = self.g, self.inv, r.name
-        r.default_branch = g.default_branch(d)
+        r.default_branch = self.base_branch(d)
         try:
             g.fetch(d, r.default_branch)
         except GoError as err:
@@ -580,7 +600,7 @@ class Sync:
     def work_since(self, d: str, r: SyncRepo, head: str) -> List[str]:
         """The commits HEAD carries past r.before that are neither merges nor
         the default branch's (short names, newest first)."""
-        default = r.default_branch or self.g.default_branch(d)
+        default = r.default_branch or self.base_branch(d)
         out = self.g.git(d, "rev-list", "--no-merges", r.before + ".." + head, "--not", "refs/remotes/origin/" + default)
         return [gostr.short(c) for c in non_empty_lines(out)]
 

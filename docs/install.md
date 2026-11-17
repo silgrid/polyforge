@@ -87,8 +87,9 @@ an older `git:...silgrid/polyforge.git@<tag>` entry.
 A first install writes `cli.toml` through `pf config` with the flat
 connection keys (`server`, `api_key`) and **no** `[workspace]` mapping —
 the installer never knows or fabricates a workspace. Add the mapping with
-`pf config set '[workspace."<path>"]' projects=a,b,c`; until one exists the
-daemon refuses to start.
+`pf config set '[workspace."<path>"]' projects=a,b,c`; `pf daemon ensure`
+does not start the daemon until at least one Cell has one (cli.toml, or a
+`cli-*.toml` beside it).
 Changing a `[daemon]` knob is `pf config set <key> <value>`: the running
 daemon applies the live knobs without a restart and reports the restart-only
 keys as pending until `pf ops shutdown` then `pf daemon ensure`; a hand edit
@@ -99,8 +100,8 @@ the harness checks of `pf doctor --harness`: whether Claude Code's
 statusLine still runs the retired `pf watch` progress face (remove it by
 hand — the installer never edits your statusLine), whether pi loads the
 polyforge package, plus the install-layout and v1-leftover checks.
-Then it starts the daemon through `pf daemon ensure` (once a `[workspace]`
-mapping exists): a restart loop in tmux session `polyforge-daemon` runs it
+Then it starts the daemon through `pf daemon ensure` (once at least one
+Cell's `[workspace]` mapping exists): a restart loop in tmux session `polyforge-daemon` runs it
 with `-workflows-dir release/current/workflows` and revives it within ~5s
 after a crash; after a container/machine restart (tmux does not survive
 one) the next pi or Claude Code session runs the same ensure. An upgrade

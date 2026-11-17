@@ -1009,8 +1009,9 @@ the running daemon applies the live keys at once (pf config reload
 applies a hand edit), takes the [workspace] mapping at the next claim
 (no restart needed) and reports the restart-only keys as pending until
 the next daemon start. A reload that changes max_concurrent_jobs
-overrides pf ops max (last action wins). A config without a [workspace]
-mapping is refused (the daemon would refuse to start). pf ops shutdown
+overrides pf ops max (last action wins). A machine whose no Cell
+carries a [workspace] mapping is refused (pf daemon ensure starts the
+daemon only once at least one Cell has one). pf ops shutdown
 stops the daemon for good: the loop ends with the clean exit.
 
 pf daemon [--flag value] ... runs the local polyforge daemon in the

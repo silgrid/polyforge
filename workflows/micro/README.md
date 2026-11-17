@@ -44,7 +44,8 @@ A repository opts in by declaring one or more `micro_path=<glob>` lines in its o
 pattern without a wildcard is that exact path); it may add `micro_check=<command>` lines,
 extra evidence commands run after its fast phase. The platform names no default path, no
 repository and no stack. The declaration that governs is the one at the diff base (the
-merge-base of HEAD with the fetched origin default branch), never one the change
+merge-base of HEAD with the fetched base branch — a fixed target branch, else the origin
+default branch), never one the change
 introduces — a micro change cannot widen its own whitelist. `AGENTS.md` and `CLAUDE.md`
 are out of bounds in every directory, whatever a pattern matches.
 

@@ -284,8 +284,12 @@ items that merged.
   applies only with `e2e_runner=` in `--light`, and only when the selected
   suite count is strictly greater than it;
   the micro lane's `micro_path=` / `micro_check=`
-  (the `--micro` bullet below), and the keys the engine only echoes in its JSON report
-  (`test_glob=`, `base_setup=`, `runner=complete`, `host_requires=`). Any
+  (the `--micro` bullet below), the keys the engine only echoes in its JSON report
+  (`test_glob=`, `base_setup=`, `runner=complete`, `host_requires=`), and
+  the epic-upgrade analysis's keys (`component=`, `epic_components=`,
+  `epic_units=`, `epic_files=` — the components.py tool's, read by no
+  other conf reader, so the engine accepts their lines without the
+  unknown-key diagnostic). Any
   fast-phase line replaces the analyzer's default fast gates and any
   full-phase line its default full tail; a phase's lines keep file order. The
   parser never sources or evaluates the file and has no hook-style keys
@@ -399,7 +403,8 @@ items that merged.
   whose `carries:` meet it), and the rest of the package's bar is the
   integration run's.
 - **The release gate.** This conf's full tier, run inside the image built
-  from `.polyforge/Dockerfile.verify`, is also the release's test gate: one
+  from `.polyforge/Dockerfile.verify` — or, when the step's `image`
+  parameter names one, inside that prepared image — is also the release's test gate: one
   definition, run by the workflow script `gate.py` (`python3
   workflows/_shared/scripts/gate.py --isolation container` from the
   clone's root), reused by the release when the released commit

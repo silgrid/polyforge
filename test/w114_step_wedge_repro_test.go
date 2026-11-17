@@ -28,12 +28,12 @@ package test
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/silgrid/polyforge/internal/polyforge/stepcall"
 )
 
 // w114Plan parks the first dispatch of fix and scripts the healthy
@@ -81,22 +81,21 @@ func w114WedgeDiagnostic(t *testing.T, d *v1Daemon, inst *v1Install, wi string) 
 			journalKinds = append(journalKinds, k)
 		}
 	}
-	envelope := ""
-	if raw, err := os.ReadFile(filepath.Join(capDir, "runtime-state", "pending-results", "1.json")); err == nil {
-		envelope = fmt.Sprintf("%d bytes", len(raw))
-	} else if os.IsNotExist(err) {
-		envelope = "absent (the wedge never wrote it)"
+	handoff := "unexpectedly accepted"
+	if l := stepcall.HandoffOf(ledgerLines(t, capDir), "fix", 1); l == nil {
+		// the wedge shape itself: the parked dispatch never hands off
+		handoff = "absent (the wedge never handed off)"
 	} else {
-		envelope = "unreadable: " + err.Error()
+		handoff = fmt.Sprintf("seq %d, status %s", l.Call, l.Handoff.Status)
 	}
 	return fmt.Sprintf(
 		"wi status=%q (want eventual wrapped)\n"+
 			"event kinds: %v\n"+
 			"fakepi journal: %v\n"+
-			"step envelope drop (ordinal 1): %s\n"+
+			"fix dispatch 1's hand-off on the call ledger: %s\n"+
 			"parked step processes alive: %v\n",
 		inst.wiStatus(t, wi), d.eventKinds(t, wi),
-		journalKinds, envelope, orphanPIDs(wi))
+		journalKinds, handoff, orphanPIDs(wi))
 }
 
 func TestW114StepWedgeDetectedWithoutOperator(t *testing.T) {

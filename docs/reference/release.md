@@ -337,7 +337,14 @@ and the release:
   `--json --full --base HEAD`: the conf's fast gates, its full commands and
   the engine-appended dependency audit, in that order — with every command,
   the engine included, inside the container built from
-  `.polyforge/Dockerfile.verify`. The workflow script runs it — the
+  `.polyforge/Dockerfile.verify` — or, when the step's `image` parameter
+  (a step dispatch's `PF_PARAM_IMAGE`, else `gate.py --image`, which wins
+  and is recorded as the value's source) names one, inside that prepared
+  image: **one image for every gated repo of the project**, resolved to
+  its local ID and started by it, never built, never pulled, Dockerfile
+  or not. The result records that local ID, where the value came from
+  (`flag` or `param`) and the image's RepoDigests; the plan's image half
+  and the gate id hash the ID alone. The workflow script runs it — the
   release and an operator the tree's own, `python3
   workflows/_shared/scripts/gate.py --isolation container` (`cmd/pf-gate`
   before), the integrate lane its lane snapshot's — through the workflow scripts'
@@ -347,8 +354,12 @@ and the release:
   engine directory mounted read-only beside it), the repository's cache
   volume, the environment allowlist, the limits and the 20-minute
   per-command timeout. The container is the only isolation a gate has: a
-  tree without `.polyforge/Dockerfile.verify` at HEAD is not judged (exit
-  2), never run on the host. The limits are the script's own flags
+  tree without `.polyforge/Dockerfile.verify` at HEAD — and no prepared
+  image named — is not judged (exit 2), never run on the host. A prepared
+  image the machine does not carry is not judged either (exit 2, the
+  fixed mark `pf-verify-image-missing` in the summary: the image is
+  prepared by a person, and any other trouble it has is the user's to
+  solve — the gate never pulls and never retries). The limits are the script's own flags
   (`--cpus` / `--memory` / `--pids`), else its defaults 8 capped at the
   host's core count / `16g` / 4096 — the machine's pf CLI config is no input
   of the gate (design r2 D7); a malformed flag is refused (exit 2) before
@@ -377,7 +388,10 @@ and the release:
   `govulncheck` (the engine-appended dependency audit runs it), a
   repository with an npm lockfile also `npm`, and the container must reach
   the vulnerability databases. A tree without the Dockerfile at HEAD is
-  not judged: that one the lane cannot provide.
+  not judged: that one the lane cannot provide — unless the step's
+  `image` parameter names a prepared image, which then carries this list
+  itself and needs no Dockerfile (docs/concepts.md, the
+  verification-container section).
 - **Its container's life.** The gate removes its container when it ends,
   at its deadline and on an interrupt. A gate killed outright (SIGKILL)
   cannot, so the container carries its deadline (label
@@ -392,26 +406,40 @@ and the release:
   the docker engine seeing the clone at the same path (the container
   bind-mounts it there):
   `python3 workflows/_shared/scripts/gate.py --isolation container
-  [--keep-going] [--log-dir DIR]` (`--help` is its full reference). Exit 0:
+  [--keep-going] [--image <ref>] [--log-dir DIR]` (`--help` is its full
+  reference; `--image`, beside a step dispatch's `PF_PARAM_IMAGE`, is the
+  hand run's way to name a prepared image). Exit 0:
   every command passed; 1: a command failed (its log tail is printed); 2:
   not judged. It needs python3 (≥ 3.9) and no build. `--plan-only` runs no command
   and prints the plan the gate would run — computed in the container as a
   run computes it — with its digest and the runner identity, as JSON.
-- **The gate id.** `tools/gate-id [<rev>]` prints the sha256 of the text
+- **The gate id.** `tools/gate-id [--show] [--image <digest>] [<rev>]`
+  prints the sha256 of the text
   `polyforge-gate-id 1`, `dockerfile <sha256 of .polyforge/Dockerfile.verify>`
   and the conf's gate lines — every line whose key is `stack`, `fast_gate`,
   `full_command`, `check`, `check_requires_env`, `check_requires_cmd` or
   `check_timeout`, leading whitespace removed, in file order — each line
   ending in a newline, both files read from that commit (default `HEAD`);
-  `--show` prints the hashed text. Comments and every other key leave it
+  `--show` prints the hashed text. With `--image <digest>` — the prepared
+  image's local ID, what `gate.py --image` passes after a run — an
+  `image <digest>` line follows the dockerfile one, and a tree without a
+  Dockerfile is allowed: the dockerfile line is left out; without
+  `--image` the id is exactly what it always was. Comments and every other key leave it
   unchanged; the engine, the tests and the code are pinned by the commit a
   green tag names, not by the id. A tree without `tools/gate-id` is served
   by the lane's own copy (`pfstep/gateid.py`), byte-identical with this
   one by a consistency test, which the gate uses for its green tag.
+  **The known limitation:** `release.sh` and `tools/green-tag check` never
+  pass `--image` — they compute the id of the tree alone — so a repository
+  that gates in a prepared image gets a green tag whose id they cannot
+  reproduce on their own: the image is a person's, and the release host
+  may not even carry it. Nothing of the release changes for a repository
+  that sets no `image`.
 - **The plan digest.** A gate run records the sha256 of the plan as
   executed (its compact JSON encoding, the keys in the order below,
   non-ASCII as UTF-8): the image's content hash
-  (the `<hash>` half of the tag), the container's cpus / memory / pids and
+  (the `<hash>` half of the tag — with a prepared image, its local ID),
+  the container's cpus / memory / pids and
   every command in order with its name, phase, command line, declared
   `requires_env` / `requires_cmd` and the timeout it runs under; the
   clone's own path inside a command line (the engine's appended audit names
@@ -430,7 +458,9 @@ and the release:
   every name under `refs/tags/green/<YYYYMMDD>-` on the remote — a
   lightweight or malformed one included), whose message is one line of
   JSON:
-  `{"commit":"<sha>","gate_id":"<id>","runner":"gate.py","runner_version":"<v>","plan_digest":"<sha256>","engine_source":"<tree|lane>","gate_id_source":"<tree|lane>","verified_at":"<YYYY-MM-DDTHH:MM:SSZ>","summary":"<text>"}`.
+  `{"commit":"<sha>","gate_id":"<id>","runner":"gate.py","runner_version":"<v>","plan_digest":"<sha256>","engine_source":"<tree|lane>","gate_id_source":"<tree|lane>","verified_at":"<YYYY-MM-DDTHH:MM:SSZ>","summary":"<text>"}` —
+  a gate that ran in a prepared image adds `"image_digest":"<sha256:…>"`
+  (its local ID; the gate id and the plan digest already hash it).
   Only the gate writes one: `gate.py --isolation container --mark-green
   --summary <text> [--remote <r>]` refuses a dirty worktree, a missing committer identity or
   an unreadable remote before it runs, and after a pass pushes the tag for

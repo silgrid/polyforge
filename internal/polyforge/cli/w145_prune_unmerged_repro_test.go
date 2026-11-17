@@ -99,7 +99,7 @@ func TestW145PruneKeepsSetAsideCapsuleWithUnmergedCommits(t *testing.T) {
 		t.Fatal(err)
 	}
 	// the scene's external git-dir, set aside under the same convention
-	gitDir := filepath.Join(data, "git", w145WI+".git.quarantined.w145")
+	gitDir := filepath.Join(data, "cells", "default", "git", w145WI+".git.quarantined.w145")
 	if err := os.MkdirAll(gitDir, 0o755); err != nil {
 		t.Fatal(err)
 	}

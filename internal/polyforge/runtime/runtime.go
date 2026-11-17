@@ -75,7 +75,8 @@ type Config struct {
 	// the daemon assembles it from the shared cli.toml ([workspace.
 	// "<path>"] sections) and the runtime routes every capsule through it
 	// — <mapped-workspace>/capsules/<project>-<seq> per the claim answer.
-	// The daemon refuses to start when the mapping is empty; a recorded
+	// An empty mapping only closes the execution plane (`pf daemon
+	// ensure` is the one that waits for a mapping); a recorded
 	// mid-flight project that falls out of it blocks only that work item
 	// at aihub (restart.go, blockUnrecoverable).
 	Mapping *mapping.Plan

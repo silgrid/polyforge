@@ -179,7 +179,8 @@ projects whose capsules live under that path. It is the daemon's only
 placement source, read per Cell — and the CLI's placement verbs
 (`file create`, `recall`, `remember`) validate their `--project` against
 the same routed Cell's mapping (polyforge#17). Every mapped directory
-must pre-exist, and the daemon refuses to start without a real mapping.
+must pre-exist, and `pf daemon ensure` starts the daemon only once at
+least one Cell carries a real mapping.
 The full shape is
 [extending: workspace mapping](extending.md#workspace-mapping).
 
@@ -383,6 +384,60 @@ every toolchain the conf's commands call (`go` for a Go repository's
 `pf-verify-<repo>:<hash of the file>`, built only when the tag is missing
 (once, however many runs ask at the same moment; its log is
 `runtime-state/verify/<n>/<repo>/image-build.log`).
+
+A project whose container repos need private dependencies (a private Go
+module the proxy cannot serve, a private npm registry) may instead prepare
+the image itself: the verification step declares the `image` parameter
+(the project sets `steps.<project>.verification.params.image` in its
+workspace yaml — [reference/config.md](reference/config.md) — and a
+ticket overrides it with `pf override`; empty, the default, keeps the
+Dockerfile above). The convention is the preparer's: **the image is
+prepared by a person** — its private dependencies and credentials are
+solved when it is built, and **any trouble it has is the user's to
+solve**; the lane never tries to fix or replace it. A set value names **one
+prepared image for every container repo of the project** — the bar never
+builds a Dockerfile then, and a repo needs none at all. The image is
+resolved to its local ID (`sha256:<64 hex>`, its RepoDigests recorded
+when it has any) and the container starts by that ID, **never pulled**: a
+machine without it answers "not checked" (exit 2, the fixed mark
+`pf-verify-image-missing` in the summary — the step hands off blocked
+without retrying, and the summary names the image). The image **must run
+as root** (`/run` must be writable for the keep-alive, the clone and the
+cache volume writable for the bar). Two reminders for the preparer: the
+daemon's allowlisted variables (`GOPROXY`, `GOPRIVATE`, …) still override
+the image's ENV when they are set — a host `GOPRIVATE` makes go fetch
+private modules over git inside the container, where there are no
+credentials — and a new image starts with an empty cache volume, which
+on its first mount copies whatever the image keeps under `/cache`; when
+the dependencies change, rebuild the image. An image with private Go
+dependencies (BuildKit keeps the credentials out of it):
+
+```dockerfile
+# syntax=docker/dockerfile:1
+# pin the base image's Go to the version the repo's go.mod requires: the
+# golang image sets GOTOOLCHAIN=local and never downloads another toolchain
+FROM golang:1.26
+WORKDIR /src
+COPY go.mod go.sum ./
+# go fetches a GOPRIVATE module over https by default: rewrite it to ssh
+# (the agent this line mounts serves it) and know the host first
+RUN --mount=type=ssh \
+    sh -c 'mkdir -p -m 0700 ~/.ssh \
+      && ssh-keyscan example.com >> ~/.ssh/known_hosts \
+      && git config --global url."ssh://git@example.com/".insteadOf "https://example.com/"' \
+ && GOPRIVATE=example.com/* go mod download
+ENV GOCACHE=/cache/go/build GOPRIVATE=example.com/*
+```
+
+built from the project's own repository — the build context is the repo
+(`docker build --ssh default=$SSH_AUTH_SOCK -f <this file> .` from its
+root; its `go.mod` names the private modules) — so nothing of the agent
+lands in the image: the socket lives only inside its one `RUN`. A token
+works the same way as a secret in its env form
+(`--mount=type=secret,id=go_token,env=GO_TOKEN`, read in that one `RUN`),
+never in a file a layer keeps. The module cache stays inside the image
+(`GOMODCACHE` outside `/cache`); only the build cache lives in the volume.
+
 Each run starts one container per such repo (`--init`, labelled
 `pf.verify.daemon` — the script's owner, `pf-step` — `pf.verify.boot` — a
 fresh nonce of the run — `pf.verify.wi`, `pf.verify.run`, `pf.verify.repo`

@@ -6,7 +6,13 @@ step left them (develop's verification step).
 
 Each task repo's tree is verified at its HEAD: no fetch, no merge (a merge in
 progress makes the run not judged); the base, and the baseline a still-red
-unit is proven pre-existing on, is ``merge-base HEAD origin/<default>``. The
+unit is proven pre-existing on, is ``merge-base HEAD origin/<default>``. A
+capsule whose fixed target branch is set (``runtime-state/target-branch.json``,
+a sub-ticket's) measures the same from ``merge-base HEAD origin/<target>`` —
+the record's ``default_branch`` field keeps its name and carries the target —
+and a target that cannot be named (a file that is there but cannot be read,
+or missing on origin) is not judged naming why, never a fall-back to the
+default branch. The
 scope engine plans each touched repo ``--light`` and every nested engine root
 the diff reaches (a subdirectory with its own tracked
 ``.polyforge/verify-scope.conf``; its commands run behind ``cd <root> &&``);
@@ -34,7 +40,14 @@ Where a repo's bar runs is the repo's: one whose HEAD carries
 ``.polyforge/Dockerfile.verify`` runs its engine and bar in a verification
 container of its own (the ``pf.verify.*`` labels, the deadline label and a
 keep-alive ending five minutes after the deadline; removed when the run
-ends); any other runs on the host under the step's PATH.
+ends); any other runs on the host under the step's PATH. The step's
+``image`` parameter (``PF_PARAM_IMAGE``, or ``--image``; the flag wins
+and the result records where the value came from) names a prepared image
+instead — a person's, resolved to its local ID and never built, never
+pulled — and then every touched repo's bar runs in its container,
+Dockerfile or not; an image the machine does not carry is `not judged`
+(exit 2, the fixed mark ``pf-verify-image-missing`` in the summary: a
+person prepares it, a retry cannot).
 
 ``--analysis`` names the build's change analysis
 (``artifacts/build/change-analysis.json``): the tests it lists run beside
@@ -112,6 +125,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pfstep  # noqa: E402
 from pfstep import container, duration, git, gostr, jsonout, result, runner, stepenv, tmpdir  # noqa: E402
 from pfstep import progress  # noqa: E402
+from pfstep import targetbranch  # noqa: E402
 from pfstep.analysis import Analysis, AnalysisDecl, read_analysis  # noqa: E402
 from pfstep.carries import file_carries, glob_match  # noqa: E402
 from pfstep.deadline import default_deadline_for  # noqa: E402
@@ -433,6 +447,8 @@ class Verification:
         tier: str = TIER_LIGHT,
         tier_requested: str = "",
         tier_reason: str = "",
+        image: str = "",
+        image_source: str = "",
     ) -> None:
         self.capsule = capsule
         self.engine = engine
@@ -454,6 +470,11 @@ class Verification:
         self.env = env
         self.say = say
         self.co = co
+        # image: a prepared image every touched repo's bar runs in ("" =
+        # each repo by its own Dockerfile); image_source: which named it —
+        # "flag" (--image) or "param" (PF_PARAM_IMAGE)
+        self.image = image
+        self.image_source = image_source
         self.n, self.run_dir = self._run_dir(run_dir)
         start = time.time()
         # the light tier's rerun budget is its own knob; a full run is
@@ -604,10 +625,9 @@ class Verification:
                         " (its real conflicts resolved, then the sync skill's continue line, `\"$PF_PYTHON\""
                         " \"$PF_SHARED_DIR/scripts/sync.py\" --continue --json --out artifacts/sync/result.json`)"
                         " before a verification runs")
-        default = resolve_default(rr.dir)
+        default, unresolvable = base_branch_of(self.capsule, rr.dir)
         if default == "":
-            return fail("the origin default branch is unresolvable (no refs/remotes/origin/HEAD, origin/main or"
-                        " origin/master in the clone): nothing to measure the change against")
+            return fail(unresolvable)
         m.default_branch = default
         try:
             head = gostr.trim_space(git_quiet(rr.dir, "rev-parse", "--verify", "-q", "HEAD"))
@@ -635,13 +655,21 @@ class Verification:
         reason ("" = every one is up)."""
         if self.co is None:
             return ""
-        need = [rr for rr in repos if rr.merge is not None and rr.touched and container.has_dockerfile_at(rr.dir, "HEAD")]
+        if self.image:
+            # the step parameter names the image: every touched repo's bar
+            # runs in its container, Dockerfile or not
+            need = [rr for rr in repos if rr.merge is not None and rr.touched]
+        else:
+            need = [rr for rr in repos if rr.merge is not None and rr.touched and container.has_dockerfile_at(rr.dir, "HEAD")]
         if not need:
             return ""
         rt = self.co.engine()
         try:
             rt.available()
         except container.ContainerError as err:
+            if self.image:
+                return ("the step parameter image names %s, so every touched repo's bar runs in a container, but the"
+                        " container engine is unavailable: %s" % (self.image, err))
             return ("repos/%s carries %s, so its bar runs in a container, but the container engine is unavailable: %s"
                     % (need[0].name, container.DOCKERFILE_VERIFY, err))
         if not os.path.exists(self.engine):
@@ -650,7 +678,12 @@ class Verification:
         for rr in need:
             try:
                 box = container.start_box(self.co, rr.name, rr.dir, rr.log_dir, self.hard, self.n, self.rel,
-                                          engine=engine, base_root=os.path.join(self.run_dir, "base", rr.name))
+                                          engine=engine, base_root=os.path.join(self.run_dir, "base", rr.name),
+                                          image=self.image)
+            except container.ImageMissing as err:
+                return ("repos/%s: the image %s is not present on this machine and is never pulled (%s): the image is"
+                        " prepared by a person — have one prepared or clear the step parameter; the bar was not run"
+                        % (rr.name, err.ref, container.IMAGE_MISSING_MARK))
             except container.BoxError as err:
                 return "repos/%s: the verification container could not be prepared: %s" % (rr.name, err)
             rr.box = box
@@ -1484,6 +1517,30 @@ def resolve_default(repo_dir: str) -> str:
     return ""
 
 
+def base_branch_of(capsule: str, repo_dir: str) -> Tuple[str, str]:
+    """The branch the change is measured against: the capsule's fixed
+    target branch when it carries one (runtime-state/target-branch.json,
+    read strictly, the origin ref checked to exist), else the origin
+    default branch; ("", why) when neither can be named. The branch lands
+    in the record's default_branch field, which keeps its name and carries
+    either branch (the diff base and the baseline follow it)."""
+    try:
+        target = targetbranch.read(capsule)
+    except targetbranch.TargetBranchError as err:
+        return "", str(err)
+    if target:
+        if git.run(repo_dir, "rev-parse", "-q", "--verify", "refs/remotes/origin/" + target,
+                   timeout=GIT_TIMEOUT).exit_code != 0:
+            return "", ("origin has no branch %s — the capsule's fixed target branch is missing on origin; never a"
+                        " fall-back to the default branch" % target)
+        return target, ""
+    default = resolve_default(repo_dir)
+    if default == "":
+        return "", ("the origin default branch is unresolvable (no refs/remotes/origin/HEAD, origin/main or"
+                    " origin/master in the clone): nothing to measure the change against")
+    return default, ""
+
+
 NO_FALLBACK_DIAGNOSTIC = "the engine answered mode full with no fallback diagnostic (a forced-full path or a full-only declaration)"
 
 # The phrase every engine diagnostic of a full-tier fallback carries; the
@@ -1762,9 +1819,13 @@ def render_report(res: Dict[str, Any]) -> str:
                     b.append("  - `%s`: private TMPDIR `%s` (%d bytes)\n" % (cmd["check"], cmd["tmp_dir"], len(cmd["tmp_dir"].encode("utf-8"))))
             c = rp.get("container")
             if c:
-                built = "built by this run" if c["built"] else "present"
-                b.append("  - ran in container `%s` from image `%s` (%s; build log `%s`), limits cpus %s, memory %s, pids %d\n" % (
-                    c["name"], c["image"], built, c.get("build_log", ""), c["cpus"], c["memory"], c["pids"]))
+                if c.get("digest"):
+                    b.append("  - ran in container `%s` from the prepared image `%s` (local ID `%s`), limits cpus %s,"
+                             " memory %s, pids %d\n" % (c["name"], c["image"], c["digest"], c["cpus"], c["memory"], c["pids"]))
+                else:
+                    built = "built by this run" if c["built"] else "present"
+                    b.append("  - ran in container `%s` from image `%s` (%s; build log `%s`), limits cpus %s, memory %s, pids %d\n" % (
+                        c["name"], c["image"], built, c.get("build_log", ""), c["cpus"], c["memory"], c["pids"]))
                 if c.get("lost"):
                     b.append("  - **the container became unusable:** %s\n" % c["lost"])
                 if c.get("left"):
@@ -1826,6 +1887,8 @@ def details_of(res: Dict[str, Any]) -> Dict[str, Any]:
     """The result file's details, folded from result.json's document."""
     out_dir = res["out_dir"]
     d: Dict[str, Any] = {"tier": res["tier"]}
+    if res.get("image"):
+        d["image"] = res["image"]
     if res["mechanical_verdict"]:
         d["mechanical_verdict"] = res["mechanical_verdict"]
     if res.get("fail_reason"):
@@ -1929,6 +1992,9 @@ def parser() -> argparse.ArgumentParser:
                    " runtime-state/verify/<n>)")
     p.add_argument("--json", action="store_true", help="print the result as one JSON object on stdout")
     p.add_argument("--out", default="", help="write the result file there (atomically)")
+    p.add_argument("--image", default="", help="the prepared image every touched repo's bar runs in (default: each"
+                   " repo by its own .polyforge/Dockerfile.verify); a step dispatch's PF_PARAM_IMAGE names it too —"
+                   " --image wins, and the result records which one did")
     return p
 
 
@@ -2032,16 +2098,21 @@ def run(
         res.summary = "the verification could not run: %s" % why
         return 2
     cmd_env = dict(env)
+    image = a.image or env.get("PF_PARAM_IMAGE", "")
+    image_source = "flag" if a.image else ("param" if image else "")
     try:
         tier, tier_reason = resolve_tier(capsule, a.tier)
         v = Verification(capsule, eng, window, logs, decls, cmd_env, say, co, analysis=analysis,
-                         tier=tier, tier_requested=a.tier, tier_reason=tier_reason)
+                         tier=tier, tier_requested=a.tier, tier_reason=tier_reason,
+                         image=image, image_source=image_source)
     except OSError as err:
         res.summary = "the verification could not run: %s" % err
         return 2
     v.repos_names = repos
     v.fold_unit_runs()
     doc = v.run()
+    if image:
+        doc["image"] = {"value": image, "source": image_source}
     try:
         with open(os.path.join(v.run_dir, "result.json"), "w", encoding="utf-8") as f:
             f.write(json.dumps(doc, ensure_ascii=False, indent=2) + "\n")

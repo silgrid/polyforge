@@ -48,7 +48,9 @@ call, and a pass is the command's, not yours.
 2. **Run this line as written** — no argument added or removed, no Bash timeout:
    `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/verify.py" --tier auto --unit-runs artifacts/build/units.json --analysis artifacts/build/change-analysis.json --json --out artifacts/verify/result.json`
    (a repo carrying `.polyforge/Dockerfile.verify` runs its bar in its verification
-   container, any other on the host; `--unit-runs` runs each unit's green run as the build
+   container, any other on the host — unless the step's `image` parameter (or a hand run's `--image`) names a
+   prepared image, which every touched repo's bar then runs in, Dockerfile or not; the result's `image` record
+   names the value and where it came from; `--unit-runs` runs each unit's green run as the build
    recorded it, beside the light plan: one check `<repo>:unit-run:<id>` per unit;
    `--tier auto` reads the work item's own attrs: an `integration_fix` ticket (an integration
    batch's fix ticket) runs the full bar; every other ticket the light one — the result names
@@ -73,14 +75,17 @@ call, and a pass is the command's, not yours.
      failing `<repo>:unit-run:<id>` check is that unit's own run), a listed test of the
      change analysis (a failing `<repo>:analysis:<id>` check is a test the analysis listed
      as already pinning this change: the change's, on build's own word), a file the change
-     touched (`git -C repos/<name> diff --stat origin/<default>...HEAD`), a suite whose
+     touched (`git -C repos/<name> diff --stat origin/<base>...HEAD`), a suite whose
      check names what the change touched — is the change's: hand off `fail` (the lane goes
      back to `build`). A red you cannot place: `pf step ask` the owner with the red checks,
      the log tails and your reading, then end your turn; on the reply — run again: 2; the
      owner wants it fixed: `fail --per-owner <the reply's at>`; the owner accepts the red:
      `waive --per-owner <the reply's at>`.
-   - **2** — not judged (the environment, the scope engine, a container). Wait one minute
-     and run 2 again, at most twice more; still 2: hand off `blocked`, the result's
+   - **2** — not judged (the environment, the scope engine, a container) — unless the result's `summary`
+     carries `pf-verify-image-missing`: the image the step's `image` parameter names is not present
+     on this machine and is never pulled — hand off `blocked` at once, no retry (a person prepares
+     the image or clears the parameter; the summary names the image). Otherwise: wait one
+     minute and run 2 again, at most twice more; still 2: hand off `blocked`, the result's
      `summary` and the last log's tail in the body, what the machine needs as `--reason`.
 
 ## 交接要写什么 — what your hand-off carries

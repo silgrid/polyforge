@@ -26,6 +26,17 @@ summary never carries a lane's uncounted-rewind substring). A capsule
 without the mode (micro's claims, every pre-#36 work item) runs the
 default mode of the paragraphs below.
 
+The work item's fixed target branch
+(``runtime-state/target-branch.json``, a sub-ticket's) is the default
+branch's stand-in everywhere below — both modes: an open PR must target
+it, the freshness check compares ``origin/<target>`` with the verified
+base, the landing rules judge the merge on it, and the landing record's
+state is ``landed_on_target`` (with ``target``), a value no
+``integration.state=landed`` filter ever takes. The file is read
+strictly: one that is there but cannot be read, or a target branch
+missing on a repo's origin, is not judged (exit 2) naming why — never a
+silent fall-back to the default branch.
+
 ``--publish`` is the publish step's artifact: ``{"repos": [{name, branch,
 pr_url, head, skipped_reason}]}`` (a repo with a skipped_reason has nothing
 to merge). ``--verified`` is the verifying gate's result file (schema
@@ -66,7 +77,9 @@ replays plain commits and a squash lands one).
 ``--landing-out`` (the merge skill registers it with ``pf step hub
 wrap-attrs integration``) is written atomically on exit 0 — the landing
 record: ``{state: landed, repos: [{repo, pr, head, light_verified_head,
-merge_commit, accepted}], merge_commits}``, per landed repo its name, PR
+merge_commit, accepted}], merge_commits}``, or — the work item carrying
+a fixed target branch — ``{state: landed_on_target, target, …}``, per
+landed repo its name, PR
 and the forge's merge commit, the verified head as its light-verified
 head, and as its head the verified head (``how: merged`` or, in the human
 mode, ``merged_by_human``) or, for a merge made elsewhere
@@ -98,6 +111,7 @@ from dataclasses import dataclass, field  # noqa: E402
 from typing import Any, Dict, List, Mapping, Optional  # noqa: E402
 
 from pfstep import atomic, jsonout, runner  # noqa: E402
+from pfstep import targetbranch  # noqa: E402
 from pfstep.invoke import Invocation, duration_flag, go_list  # noqa: E402
 from pfstep.gitmerge import gostr  # noqa: E402
 from pfstep.gitmerge.ctx import Ctx, GoError, background  # noqa: E402
@@ -153,10 +167,17 @@ class MergeRepo:
         return d
 
 
-def default_branch_update_reason(verified_base: str, current_base: str) -> str:
-    """Return the merge failure reason when the verified default moved."""
+def default_branch_update_reason(verified_base: str, current_base: str, base_branch: str = "") -> str:
+    """Return the merge failure reason when the verified base moved. The
+    base is the default branch, or — base_branch naming a sub-ticket's
+    fixed target branch — that branch; either way the reason carries the
+    stable substring a lane's uncounted rewind class matches
+    (``branch moved since verification``)."""
     if verified_base == current_base:
         return ""
+    if base_branch:
+        return ("the target branch moved since verification (%s: verified %s, now %s); "
+                "sync, verify and publish again" % (base_branch, gostr.short(verified_base), gostr.short(current_base)))
     return ("the default branch moved since verification (verified %s, now %s); "
             "sync, verify and publish again" % (gostr.short(verified_base), gostr.short(current_base)))
 
@@ -167,6 +188,9 @@ class Details:
         self.verified = verified
         self.repos: List[MergeRepo] = []
         self.merge_commits: Dict[str, List[Landed]] = {}
+        # the work item's fixed target branch ("" = none): the base the
+        # merge lands on, and the landing record's state names it
+        self.target = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {"publish": self.publish, "verified": self.verified, "repos": [r.to_dict() for r in self.repos],
@@ -206,7 +230,9 @@ def landing_of(d: Details) -> Dict[str, Any]:
         if r.how == HOW_MERGED_ELSEWHERE:
             e["accepted"] = True
         repos.append(e)
-    out: Dict[str, Any] = {"state": "landed", "repos": repos}
+    out: Dict[str, Any] = {"state": "landed_on_target" if d.target else "landed", "repos": repos}
+    if d.target:
+        out["target"] = d.target
     if d.merge_commits:
         out["merge_commits"] = {k: [landed_of(c) for c in d.merge_commits[k]] for k in sorted(d.merge_commits)}
     return out
@@ -228,13 +254,16 @@ def remove_stale(*paths: str) -> None:
 
 
 class Merge:
-    def __init__(self, inv: Invocation, g: Git, ctx: Ctx, human: bool) -> None:
+    def __init__(self, inv: Invocation, g: Git, ctx: Ctx, human: bool, target: str = "") -> None:
         self.inv = inv
         self.g = g
         self.ctx = ctx
         # the human-merge mode: the claim's frozen step modes name this
         # step human (step_mode below)
         self.human = human
+        # the work item's fixed target branch ("" = none): the base of the
+        # merge in the default branch's place
+        self.target = target
 
     def not_judged(self, why: str) -> int:
         """The run ends as not judged (exit 2), naming an interruption when
@@ -274,7 +303,15 @@ class Merge:
         opened: List[MergeRepo] = []
         refused: List[str] = []
         for r in details.repos:
-            r.base = g.default_branch(r.dir)
+            r.base = self.target or g.default_branch(r.dir)
+            if self.target:
+                # a base that cannot be fetched is not judged, never a
+                # judgment over a stand-in default branch (a PR against
+                # main would be refused as though the lane asked for it)
+                try:
+                    g.fetch(r.dir, self.target)
+                except GoError as err:
+                    return self.not_judged("repos/%s: fetching the target branch %s: %s" % (r.name, self.target, err))
             try:
                 pr = g.view_pr(r.dir, r.pr_url)
             except GoError as err:
@@ -285,7 +322,7 @@ class Merge:
                 except GoError as err:
                     return self.not_judged(str(err))
             elif pr.state == "OPEN":
-                why = pr.mismatch(r.base, r.branch)
+                why = pr.mismatch(r.base, r.branch, self.target)
                 if why:
                     r.why = "its PR " + why
                 else:
@@ -304,7 +341,7 @@ class Merge:
                         else:
                             if r.verified_base:
                                 current_base = g.rev(r.dir, "refs/remotes/origin/" + r.base)
-                                r.why = default_branch_update_reason(r.verified_base, current_base)
+                                r.why = default_branch_update_reason(r.verified_base, current_base, self.target)
                             if not r.why:
                                 opened.append(r)
             else:
@@ -370,7 +407,14 @@ class Merge:
         g, inv = self.g, self.inv
         ask: List[str] = []
         for r in details.repos:
-            r.base = g.default_branch(r.dir)
+            r.base = self.target or g.default_branch(r.dir)
+            if self.target:
+                # the same not-judged as the default mode's: a base that
+                # cannot be fetched is never asked over
+                try:
+                    g.fetch(r.dir, self.target)
+                except GoError as err:
+                    return self.not_judged("repos/%s: fetching the target branch %s: %s" % (r.name, self.target, err))
             try:
                 pr = g.view_pr(r.dir, r.pr_url)
             except GoError as err:
@@ -481,6 +525,11 @@ def run(inv: Invocation, a: argparse.Namespace, held: List[Details]) -> int:
     except GoError as err:
         return inv.usage("--verified: %s" % err)
     details = Details(a.publish, a.verified)
+    try:
+        details.target = targetbranch.read(capsule)
+    except targetbranch.TargetBranchError as err:
+        inv.summary = "not judged: %s" % err
+        return 2
     for i, p in enumerate(entries):
         name = gostr.trim_text(p.get("name") or "")
         if name == "":
@@ -509,7 +558,7 @@ def run(inv: Invocation, a: argparse.Namespace, held: List[Details]) -> int:
     inv.details = details.to_dict
     held.append(details)
     ctx = Ctx(inv.deadline(a.deadline) / 1e9)
-    m = Merge(inv, Git(ctx, inv.env), ctx, human=step_mode(capsule, inv.getenv("PF_STEP")))
+    m = Merge(inv, Git(ctx, inv.env), ctx, human=step_mode(capsule, inv.getenv("PF_STEP")), target=details.target)
     try:
         return m.judge(details)
     finally:

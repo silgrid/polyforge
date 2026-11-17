@@ -91,7 +91,7 @@ One row per group, exactly as `pf help` prints it:
 | Data-plane verbs (via the daemon to the Cell's aihub) | `file`, `queue`, `cancel`, `recall`, `remember`, `memory`, `msg` (`send`, `list`, `ack`, `show`, `analyze`, `contacts`) |
 | Execution-plane verbs (local daemon UDS face) | `submit`, `watch` (snapshot, `decisions` — the machine's decision feed —, `dismiss`), `answer` (your words to the current step's agent — a reply to its question, an interjection while it runs, or a message that wakes a parked work item; no question id), `pause`, `resume`, `wrap`, `override` (a work item's per-step overlay: the view; `--step` with `--models`, `--clear-models`, `--skip`, `--unskip`, `--param <name>=<value>` or `--clear-param <name>`, one per call — the model chain over every source, the skip switch of a lane-declared skippable step, a step param the lane declares over its project and lane values; the parked (paused/blocked) ticket accepts chains too, holding on this machine only — not published until this machine's resume or claim publishes the capsule chain; a queued work item's params included, riding the reserved `step_params` attrs key until its claim; a terminal ticket refuses), `params` (a work item's composed params read: every declared step param's final value and the layer it comes from — the per-ticket layer, the project's yaml or the lane default; a queued work item's per-ticket layer is its `step_params` attrs key), `ops` (`status`, `models`, `auto`, `max`, `role` — the interactive/runner machine role, `--force` takes interactive over —, `shutdown`, and `end-session` — aihub-direct, admin/maintainer), `task` (`spawn`, `list`, `show`, `cancel`), `step` (inside a workflow step only: `handoff`, its one result-delivery path; `ask`, its question to the owner; `recall`, `memory show`, `remember`; `hub`, its aihub reads and pending writes — below) |
 | Management face (M1–M5) | `users`, `api-keys`, `projects`, `machines` (`list`, `rekey`), `backup` (database snapshot, see below), `cell` (the Host's Cells: `list`, `add`, `update`, `repair`, `remove`, `cleanup`; owner-only, below), `config` (the one `cli.toml` writer and the daemon reload entry), `workflows` (the read-only workflow face, below) |
-| Diagnostics | `doctor` (`--prune-scratch` removes stale `scratch/` entries; `--prune-chat-state` deletes the retired chat-subscription files the `retired chat state` row lists (`chats.json`, `chat-subs.json`, `chat-status/` and `migration/chat-subs.json.pre-migration` in the data dir, and the runtime dir's `chat-*` and `session-*.chat` files); `--prune-capsules` acts on the entries the `capsule retention` row calls reclaimable or retired — past the 14-day retention, holding no uncommitted or unpushed task-repo work: a wrapped work item's capsule, live or set aside, is slimmed to `artifacts/` + `capsule.json`, and terminal work items' external git dirs and failed or canceled ones' set-aside scenes are removed — a commit counts as pushed when either the task clone's own or the mapped workspace's `.repo/<name>` clone's remote-tracking refs reach it; a capsule holding such work, and the work item's git dirs, are kept and named; its `disk watermark` row reports each mapped workspace's filesystem use and `capsules/` bytes and warns above 70% used; `--fix-harness-prompts` appends the native-SVG diagram-guidance block to each installed harness's existing context file that lacks that block — legacy mermaid-only guidance, which the `harness diagram guidance` row warns as `legacy`, included and left as it is — append-only and idempotent, never creating a file; `--fix-install-layout` links `~/.claude/skills/polyforge` to `<data-dir>/release/current/skills/polyforge` when the `claude install layout` row finds it missing or linked elsewhere — only that entry, idempotent, a no-op on a correct link; a copied directory or a missing release is left to `tools/install.sh`, and it never installs `pf` or a release), `version` (the verb form of `pf --version`), `profile` (the resolved Cell and its source), `init` (a workspace's local layout) |
+| Diagnostics | `doctor` (examines every Cell — the default Cell's full report, then one section per named Cell, each Cell-level read carrying its `X-PF-Profile`; `--prune-scratch` removes stale `scratch/` entries; `--prune-chat-state` deletes the retired chat-subscription files the `retired chat state` row lists (`chats.json`, `chat-subs.json`, `chat-status/` and `migration/chat-subs.json.pre-migration` in the data dir, and the runtime dir's `chat-*` and `session-*.chat` files); `--prune-capsules` acts on the entries the `capsule retention` row calls reclaimable or retired — past the 14-day retention, holding no uncommitted or unpushed task-repo work: a wrapped work item's capsule, live or set aside, is slimmed to `artifacts/` + `capsule.json`, and terminal work items' external git dirs and failed or canceled ones' set-aside scenes are removed — a commit counts as pushed when either the task clone's own or the mapped workspace's `.repo/<name>` clone's remote-tracking refs reach it; a capsule holding such work, and the work item's git dirs, are kept and named; its `disk watermark` row reports each mapped workspace's filesystem use and `capsules/` bytes and warns above 70% used; `--fix-harness-prompts` appends the native-SVG diagram-guidance block to each installed harness's existing context file that lacks that block — legacy mermaid-only guidance, which the `harness diagram guidance` row warns as `legacy`, included and left as it is — append-only and idempotent, never creating a file; `--fix-install-layout` links `~/.claude/skills/polyforge` to `<data-dir>/release/current/skills/polyforge` when the `claude install layout` row finds it missing or linked elsewhere — only that entry, idempotent, a no-op on a correct link; a copied directory or a missing release is left to `tools/install.sh`, and it never installs `pf` or a release), `version` (the verb form of `pf --version`), `profile` (the resolved Cell and its source), `init` (a workspace's local layout) |
 | Process | `daemon` (run the work machine; `pf daemon ensure` starts it), `aihub` (run the aihub server on the service host; `main.go` intercepts `pf aihub`, this verb serves `pf help aihub` only) |
 
 ## `pf submit` — the prechecks; `pf queue` — the interaction marks
@@ -150,7 +150,16 @@ starts from the ticket as it stands; a stopped analysis leaves a comment
 naming the cause and the last item written. `pf file analysis confirm`
 (`pf file analysis confirm <id>`) strips the unconfirmed marker — the
 owner's word that the draft is the ticket's analysis — and the ticket
-becomes claimable.
+becomes claimable. The prompt the task runs on carries the component
+division of the ticket's repositories: the daemon runs
+`workflows/_shared/scripts/components.py` (the shared scripts of its
+lane checkout) over the repositories the ticket will clone — its frozen
+repo_inventory, else the project's every repository — at the mapped
+workspace's `.repo/<name>` clones, bounded, and attaches the tool's
+line report between the template and the ticket; a missing clone, a
+failing or stuck run answers one fallback line and the dispatch
+proceeds, the template's default thresholds applying without the
+division.
 
 A third mark is lane-independent (polyforge#77): a bundle-bound parent waits
 for each child that is not wrapped (aihub's `waiting_for` entries with
@@ -410,8 +419,16 @@ artifacts/verify/result.json` (docs/reference/workflow-contract.md,
 attrs decide — an integration batch's fix ticket (its `integration_fix`
 marker) runs the full bar; every other ticket the light tier — over the
 the task repos as the sync step left them: no fetch, no merge — a merge in progress
-(`MERGE_HEAD`) or an unresolvable default branch makes the run incomplete
-— and it skips a repo with no commit beyond its default branch. The union
+(`MERGE_HEAD`) or an unresolvable base branch makes the run incomplete
+— and it skips a repo with no commit beyond its base branch (the capsule's
+fixed target branch when it carries one, `merge-base HEAD origin/<target>`
+then, else the default branch; a fixed target that cannot be named is
+incomplete naming why, never a fall-back). The
+step's `image` parameter (or `--image`; the flag wins and the result's
+`image` record names the value and where it came from) names a prepared
+image every touched repo's bar then runs in, Dockerfile or not — never
+built, never pulled; a machine without it is not judged (exit 2, the
+fixed mark `pf-verify-image-missing` in the summary, the image named). The union
 with the build's change analysis is add-only: the change analysis's listed
 tests run beside the plan, add-only, under the analysis's supplement cap —
 a listed test that does not exist fails its check naming it, and the
@@ -544,10 +561,12 @@ fallback diagnostics (those saying `falling back to the full tier`, e.g. a
 failed `go list` with its command, exit and first output line,
 or a changed stack config file such as `go.mod`; the
 informational `--light` diagnostics are not reasons); a
-repository whose tree carries `.polyforge/Dockerfile.verify` runs its bar
-in a container (docs/concepts.md), and that repository's `repos[]` entry
-then carries `container` `{image, built, build_log, name, cpus, memory,
-pids, lost}`; the limits are the script's: CPUs min(8,
+repository whose tree carries `.polyforge/Dockerfile.verify` — or whose
+step parameter `image` names a prepared image — runs its bar in a
+container (docs/concepts.md), and that repository's `repos[]` entry then
+carries `container` `{image, built, build_log, name, cpus, memory,
+pids, lost}` (and, in the prepared-image mode, `digest` and `repo_digests`
+— the image's local ID and its RepoDigests, `build_log` never); the limits are the script's: CPUs min(8,
 cores), memory 16g, pids 4096) and `report-mechanical.md` into its run
 directory (`verify.py --log-dir`, else `logs/` beside `--out`, else
 `runtime-state/verify/<n>/`); the
@@ -571,10 +590,16 @@ failing one, so a red batch records every failing command at once (its
 triage, and the regate a fully flaky one triggers, the same); `.polyforge/release.sh` and `tools/green-tag` run the tree's own with
 `python3` (docs/reference/release.md, "The test gate"; `--help` is the
 script's full reference). `--isolation container` is required and the only
-isolation a gate has: a tree without the Dockerfile at HEAD, or a machine
-whose docker engine does not answer, is not judged (exit 2, the reason
-said). The container's limits are the script's flags (`--cpus` /
-`--memory` / `--pids`, default min(8, cores) / `16g` / 4096; design r2 D7).
+isolation a gate has: a tree without the Dockerfile at HEAD — and no
+prepared image named — or a machine whose docker engine does not answer,
+is not judged (exit 2, the reason said). The step's `image` parameter (a
+dispatch's `PF_PARAM_IMAGE`, else `--image`, which wins and is recorded as
+the value's source) names a prepared image every gated repo runs in — one
+image for the project, Dockerfile or not, resolved to its local ID, never
+built, never pulled; a machine without it is not judged either (exit 2,
+the fixed mark `pf-verify-image-missing` in the summary). The container's
+limits are the script's flags (`--cpus` / `--memory` / `--pids`, default
+min(8, cores) / `16g` / 4096; design r2 D7).
 
 - On the clone at the working directory (the release's run): progress and,
   with `--mark-green --summary <text>`, the green tag's name on stdout;
@@ -604,7 +629,10 @@ said). The container's limits are the script's flags (`--cpus` /
 Its result files name the script — `command` `gate.py` (`integrate.py
 close` reads only these), `version` `pfstep/1` — and keep the step
 command's details: `{mode, pins, gated, repos{head, branch, result, tag,
-tag_error}, tags, failed, incomplete, log_dir}` and the triage's. A green
+tag_error}, tags, failed, incomplete, log_dir}` and the triage's; a run in a prepared
+image records `image_digest`, `image_source` and `repo_digests` in its
+`result` (the image's local ID, which named it — `flag` or `param` — and
+its RepoDigests). A green
 tag's `runner` is `gate.py`, its `runner_version` `2`.
 
 ## `pf step` — a step's one entry to the daemon
@@ -878,8 +906,15 @@ the lane's own identity.
   container not had, no Dockerfile in a container run, no such repo), the
   plan is unreadable, the invocation unusable.
 - `sync.py [--continue | --abort]` merges origin's default branch into every
-  task repo of the capsule, in place, in name order: a branch with no
-  commit of its own is fast-forwarded; the conflicts the default branch's
+  task repo of the capsule, in place, in name order — or, when the
+  capsule's fixed target branch is set (`runtime-state/target-branch.json`,
+  a sub-ticket's), that branch in the default branch's place: only
+  `origin/<target>` is fetched and merged, the record's
+  `default_branch`/`default_head` fields carry it, and a file that is
+  there but cannot be read, or a branch missing on origin, is not judged
+  (exit 2) naming why, never a fall-back to the default branch. A
+  branch with no
+  commit of its own is fast-forwarded; the conflicts the merged branch's
   `.polyforge/integrate.conf` makes mechanical are resolved and the merge
   committed; a real conflict is left in progress and its files listed —
   the agent resolves them in place and runs `sync.py --continue`, which
@@ -923,7 +958,10 @@ the lane's own identity.
   one must target the default branch, head the published branch and stand
   at the verified head, and origin's default branch must still be at the
   base the verification result records (`details.repos[].base`, when it
-  records one). No PR branch is updated with the default branch: a default
+  records one) — the capsule's fixed target branch, when it carries one
+  (`runtime-state/target-branch.json`, a sub-ticket's), is the default
+  branch's stand-in in every one of these places, and a FAIL over it
+  carries the same moved-base substring. No PR branch is updated with the default branch: a default
   branch that advanced after verification, or a forge refusal, is the sync
   step's again. Details: `repos[{name, pr_url, branch, head,
   published, merge_commit, how, branch_side, by_this_run, why}]`,
@@ -947,7 +985,9 @@ the lane's own identity.
   the verification names no head for, gh or git unreachable). On exit 0
   `--landing-out` gets the landing record (`{state: landed, repos[{repo,
   pr, head, light_verified_head, merge_commit, accepted}],
-  merge_commits}`: the verified head as the head and the light-verified
+  merge_commits}` — or, the capsule's fixed target branch set, `{state:
+  landed_on_target, target, …}`, a state no `integration.state=landed`
+  filter takes: the verified head as the head and the light-verified
   one; a `merged_elsewhere` repo's head its branch side, `accepted:
   true`) — `merge_commits` naming, per repo, the commit set the change
   landed as, oldest first, each `{sha, merge}` (the lane's own merges are
@@ -1087,6 +1127,16 @@ hold no credential.
   scoped-ready — its manifests and `.polyforge/verify-scope.conf`, read
   only. Exit 0 ready, 1 not ready (each problem named), 2 when no clone is
   named or one is not a git clone.
+- `components.py --repo DIR [--rev REV] [--json]` (the workflow's tool) is
+  the epic-upgrade analysis's component division: each named clone's
+  origin/HEAD (else HEAD) commit tree — never the work tree, never a
+  fetch — read for the conf's `component=` declarations and `epic_*`
+  thresholds and the generic division, answered as one block per
+  repository (a line report, or schema 1 with `--json`): the components
+  with their path ranges and sources, the commit read, the effective
+  thresholds with their sources, and a per-repository error entry when a
+  clone cannot be read. Exit 0 whatever an entry says (each named), 2
+  when no `--repo` is named.
 
 The verification-scope engine is the workflow's too:
 `workflows/_shared/scripts/verify-scope`, with its dependency-audit helper

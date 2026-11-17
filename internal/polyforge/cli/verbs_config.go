@@ -1035,7 +1035,7 @@ func editConfigFileLocked(ctx *Context, path string, apply func([]byte) []byte, 
 		return Config{}, fmt.Errorf("config: write %s: %w", path, err)
 	}
 	if finalCfg.Mapping.Empty() {
-		fmt.Fprintln(ctx.Stderr, "note: no [workspace] mapping is configured; the daemon refuses to start until one exists — add one with `pf config set '[workspace.\"<path>\"]' projects=...`")
+		fmt.Fprintln(ctx.Stderr, "note: no [workspace] mapping is configured in "+path+"; `pf daemon ensure` starts the daemon only once at least one Cell has one — add one with `pf config set '[workspace.\"<path>\"]' projects=...`")
 	}
 	return finalCfg, nil
 }

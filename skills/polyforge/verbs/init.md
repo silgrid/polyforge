@@ -23,7 +23,8 @@ them. The one step
 the script leaves to the operator: add the workspace mapping with
 `pf config set '[workspace."<path>"]' projects=a,b,c` (the installer writes
 only the flat connection keys through `pf config` and never fabricates a
-mapping; the daemon refuses to start until a real one exists) — then run
+mapping; `pf daemon ensure` starts the daemon only once at least one Cell
+has a real one) — then run
 `pf doctor`.
 `tools/install.sh` itself never learns about workspaces.
 

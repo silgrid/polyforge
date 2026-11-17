@@ -83,8 +83,12 @@ is unchanged.
 
 ``--base <rev>`` overrides the default base. The default base is ``git
 merge-base HEAD origin/<default>``, where <default> is the branch
-``origin/HEAD`` points at (fallback ``main``). The capsule baseline in
-``capsule.json`` is NEVER read. ``--full`` forces the full tier whatever
+``origin/HEAD`` points at (fallback ``main``) — or, when the engine runs
+inside a step (``PF_CAPSULE`` names the capsule), the capsule's fixed
+target branch (``runtime-state/target-branch.json``, a sub-ticket's)
+stands in for ``<default>``; a file that is there but cannot be read is
+diagnosed and answers the full tier, never a fall-back to the default
+branch. The capsule baseline in ``capsule.json`` is NEVER read. ``--full`` forces the full tier whatever
 the diff; it never narrows anything (a caller verifying a full-tier work
 item uses it to get the full command list).
 
@@ -155,7 +159,11 @@ ignored, as is a malformed one.
 
 The conf is declarative: it is never evaluated at parse time and it has no
 hook-style keys (pre/post/exec); an unknown key is diagnosed and contributes
-nothing. A command value is an opaque string: it is reported as a
+nothing — except the keys another tool owns (``not_runnable_rule=``, the
+replay judge's, and ``component=`` / ``epic_components=`` / ``epic_units=`` /
+``epic_files=``, the component tool's, polyforge#89): the engine reads none
+of them, so it accepts their lines without the diagnostic. A command value
+is an opaque string: it is reported as a
 ``command:`` line and, only with --run, executed by ``bash -c`` (command
 values are bash), with the same trust as the repository's own Makefile. A
 command value whose first characters are ``$(`` or a backtick is skipped
@@ -242,6 +250,7 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from pfstep import targetbranch  # noqa: E402
 from pfstep.carries import parse_header  # noqa: E402
 from pfstep.goglob import case_match  # noqa: E402
 
@@ -497,6 +506,30 @@ class Engine:
         line = "verify-scope: %s" % msg
         sys.stderr.write(line + "\n")
         self.diag_lines.append(line)
+
+    def diff_base_branch(self) -> Optional[str]:
+        """The branch the default diff base is computed from when --base
+        names none: the step capsule's fixed target branch when
+        PF_CAPSULE names a capsule carrying one (a step context; outside
+        one — `pf doctor`, a hand run — the variable is absent and the
+        answer is the default branch's), else the branch origin/HEAD
+        points at (fallback main). None = the fixed target cannot be
+        read: the engine diagnoses it and never falls back to the default
+        branch behind a sub-ticket's fixed target (the full tier
+        answers)."""
+        capsule = os.environ.get("PF_CAPSULE", "")
+        if capsule:
+            try:
+                target = targetbranch.read(capsule)
+            except targetbranch.TargetBranchError as err:
+                self.diag("%s — the base falls back to nothing: the full tier answers, never the default branch" % err)
+                return None
+            if target:
+                return target
+        c = self.proc(["git", "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"], cwd=self.root)
+        default = c.stdout.decode("utf-8", "replace").strip() if c.returncode == 0 else ""
+        default = default[len("origin/"):] if default.startswith("origin/") else default
+        return default or "main"
 
     def read_text(self, path: str) -> str:
         with open(path, "rb") as f:
@@ -884,6 +917,13 @@ class Engine:
                 # facts.py's replay key: the engine reads none of it, so it
                 # accepts the line without the unknown-key diagnostic — no
                 # conf reader diagnoses a key another tool owns.
+                continue
+            elif key in ("component", "epic_components", "epic_units", "epic_files"):
+                # components.py's keys (polyforge#89): the component
+                # declarations and the epic-upgrade thresholds are the
+                # tool's — the engine reads none of them, so it accepts
+                # the lines without the unknown-key diagnostic, the same
+                # reader split as not_runnable_rule above.
                 continue
             else:
                 self.diag("conf rejects unknown key '%s'" % key)
@@ -2226,15 +2266,12 @@ class Engine:
             if self.micro:
                 mbase = self.base_arg
                 if mbase == "":
-                    mdefault = ""
-                    c = self.proc(["git", "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"], cwd=self.root)
-                    if c.returncode == 0:
-                        mdefault = c.stdout.decode("utf-8", "replace").strip()
-                    mdefault = mdefault[len("origin/"):] if mdefault.startswith("origin/") else mdefault
-                    if mdefault == "":
-                        mdefault = "main"
-                    c = self.proc(["git", "merge-base", "HEAD", "origin/" + mdefault], cwd=self.root)
-                    mbase = c.stdout.decode("utf-8", "replace").strip() if c.returncode == 0 else ""
+                    mdefault = self.diff_base_branch()
+                    if mdefault is None:
+                        mbase = ""
+                    else:
+                        c = self.proc(["git", "merge-base", "HEAD", "origin/" + mdefault], cwd=self.root)
+                        mbase = c.stdout.decode("utf-8", "replace").strip() if c.returncode == 0 else ""
                 base_conf = os.path.join(tmp, "base_conf")
                 ok = False
                 if mbase != "":
@@ -2276,12 +2313,8 @@ class Engine:
                     self.full = 1
                 else:
                     self.root_prefix = c.stdout.decode("utf-8", "replace").strip("\n")
-                    default = ""
-                    c = self.proc(["git", "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"], cwd=self.root)
-                    if c.returncode == 0:
-                        default = c.stdout.decode("utf-8", "replace").strip()
-                    default = default[len("origin/"):] if default.startswith("origin/") else default
-                    self.default_branch = default or "main"
+                    default = self.diff_base_branch()
+                    self.default_branch = default or ""
                     c = self.proc(["git", "rev-parse", "-q", "--verify", "HEAD^{commit}"], cwd=self.root)
                     self.head_sha = c.stdout.decode("utf-8", "replace").strip() if c.returncode == 0 else ""
                     if self.base_arg != "":

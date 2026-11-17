@@ -4,14 +4,15 @@ name: develop
 description: The default development lane - build → review → sync → verification → publish → merge. One build session plans against the work item's acceptance criteria, writes each unit's test red before its implementation turns it green, records each unit's run in artifacts/build/units.json and reviews itself; review judges the change in a fresh context against five blocking classes on the facts the workflow's facts.py computes (the units' red runs replayed at their test commits); sync, verification, publish and merge are mechanical agent steps on the cheap tier, each following a shared skill that runs one pre-written command (sync.py, verify.py, merge.py) and checking what the step before it handed off first - sync merges the default branch in and resolves a real conflict in place, verification runs the tier the work item's own attrs decide (the light tier, or the full bar on an integration batch's fix ticket) beside the change analysis's listed tests, add-only, publish pushes the branch and opens the PR, merge merges it into the default branch and registers the landing record, and the integration lane runs the full gate over what landed. No release slot.
 max_rewinds: 3
 # the lane-declared uncounted rewind class (polyforge#67): merge's
-# default-branch-moved FAIL — another lane's landing moved the default
-# branch past what verification ran over — is not this change's defect,
-# so its rewind spends no max_rewinds; it counts on its own toward
+# moved-base FAIL — another landing moved the base the change is merged
+# into (the default branch's, or a sub-ticket's fixed target branch's,
+# polyforge#88) past what verification ran over — is not this change's
+# defect, so its rewind spends no max_rewinds; it counts on its own toward
 # max: 2, past which the merge gate asks the owner (exactly like a
-# spent max_rewinds). The substring is the stable prefix of merge.py's
-# summary; the ids behind it vary.
+# spent max_rewinds). The substring is the one stable part of merge.py's
+# moved-base summary: both bases' wordings carry it, the ids behind it vary.
 uncounted_rewinds:
-  reason_contains: "the default branch moved since verification"
+  reason_contains: "branch moved since verification"
   max: 2
 defaults:
   model_candidates: [pi:example-gateway/model-a, pi:example-claude/claude-opus-5, pi:example-openai/gpt-x]
@@ -54,6 +55,14 @@ steps:
     # (its attrs carry the integration_fix marker): a light run ends in its
     # own time, the window is a bound, never a spend
     budget: { wall_minutes: 150, tool_minutes: 90 }
+    # the step's `image` parameter (polyforge#64), default empty: an empty
+    # value keeps each repo's own .polyforge/Dockerfile.verify; a value
+    # names a prepared image — a person's, its private dependencies the
+    # preparer solved — that every touched repo's bar then runs in,
+    # Dockerfile or not. The project sets
+    # steps.<project>.verification.params.image, a ticket overrides it
+    # with `pf override`; the value reaches verify.py as PF_PARAM_IMAGE.
+    params: { image: "" }
   - id: publish
     gate: true
     on_fail: { target: build }
