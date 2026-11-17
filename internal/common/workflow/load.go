@@ -351,6 +351,9 @@ func (l *loader) load() *Lane {
 			}
 		}
 	}
+	if n, ok := keys["epic"]; ok {
+		lane.Epic, _ = l.boolValue(file, off, n, "epic")
+	}
 	stepsNode, ok := keys["steps"]
 	if !ok {
 		l.at(CodeMissingKey, file, off, root, "steps", "the lane declares no steps")
@@ -373,6 +376,12 @@ func (l *loader) load() *Lane {
 	}
 	if uncountedNode, hasUncounted := keys["uncounted_rewinds"]; !onFail && hasUncounted {
 		l.at(CodeInvalidValue, file, off, uncountedNode, "uncounted_rewinds", "no step declares on_fail, so the lane has nothing to rewind: remove uncounted_rewinds")
+	}
+	// an epic lane names the branch its own work items work on through
+	// its children_branch: the key without the template would name
+	// nothing (polyforge#117)
+	if lane.Epic && lane.ChildrenBranch == "" {
+		l.at(CodeInvalidValue, file, off, keys["epic"], "epic", "an epic lane's own work items work on the children branch, so the lane must declare children_branch too")
 	}
 	l.modelTiers(file, off, lane)
 	l.definitions(lane)

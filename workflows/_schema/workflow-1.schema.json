@@ -54,6 +54,10 @@
       "pattern": "\\S",
       "type": "string"
     },
+    "epic": {
+      "description": "bool (default false): the lane's own work items are epics — the lane must also declare children_branch (WFC-112 otherwise), and a first claim checks such a work item out on the children branch substituted with its own seq, records no fixed target (it merges into the origin's default branch) and snapshots its children",
+      "type": "boolean"
+    },
     "exclusive": {
       "description": "bool (default false): one unfinished work item per project on the lane — a create on it reaches aihub exclusive, refused while another is not wrapped, failed or canceled",
       "type": "boolean"
