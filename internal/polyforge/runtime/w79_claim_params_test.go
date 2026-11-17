@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/common/capsule"
@@ -69,10 +70,6 @@ func w79ParamsEnv(t *testing.T) (*Runtime, *fakeHub, string) {
 // w79SeedStepParams plants the attrs key on the hub's item.
 // w79Older is a write time long before anything this test run records.
 const w79Older = "2026-01-01T00:00:00Z"
-
-// w79Newer is a write time after anything this test run records (a value
-// written after a re-queue must win over the chain's older aspects).
-const w79Newer = "2027-01-01T00:00:00Z"
 
 func w79SeedStepParams(hub *fakeHub, wi string, key map[string]any) {
 	hub.items = map[string]*api.WorkItem{wi: {ID: wi, ProjectName: "proj",
@@ -327,11 +324,16 @@ func TestW79ClaimResidueByWriteTime(t *testing.T) {
 		t.Fatalf("the second blocked close: %v", err)
 	}
 	// a value written while the ticket sat RE-QUEUED, newer than everything
-	// the chain holds: it WINS (the queued face's write is legitimate)
+	// the chain holds: it WINS (the queued face's write is legitimate).
+	// Its write time is computed AT RUN TIME (now + an hour): the running
+	// write's own stamp is the real wall clock, so a fixed future date
+	// would be a time bomb turning this red the day it passes (review
+	// r3#1).
+	newer := time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano)
 	hub.forceEnd(wi)
 	hub.mu.Lock()
 	delete(hub.seals, wi)
-	hub.items[wi].Attrs[api.StepParamsKey] = map[string]any{"build": map[string]any{"image": w79Attr("reg/queued:9", w79Newer)}}
+	hub.items[wi].Attrs[api.StepParamsKey] = map[string]any{"build": map[string]any{"image": w79Attr("reg/queued:9", newer)}}
 	hub.mu.Unlock()
 	if err := r.Start(context.Background(), wi, StartOpts{}); err != nil {
 		t.Fatalf("the re-queued claim: %v", err)
