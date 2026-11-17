@@ -22,7 +22,7 @@ func TestPF118EpicSplitDocsContract(t *testing.T) {
 	for _, want := range []string{
 		"one sub-ticket per decomposition unit",
 		"check-first per unit, so a re-run files no duplicate",
-		"the routing skill's file verb owns the filing steps",
+		"routing skill's file verb owns the filing steps",
 	} {
 		if !strings.Contains(concepts, want) {
 			t.Errorf("docs/concepts.md (the Work item term) must state %q — the split concept a newcomer meets (polyforge#118 AC3: 概念)", want)
