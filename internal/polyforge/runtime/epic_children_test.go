@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/silgrid/polyforge/internal/common/api"
@@ -127,6 +128,64 @@ func TestEpicClaimSnapshot(t *testing.T) {
 	plainDir := epicClaimPlain(t, r, "wi_plain", hub.items["wi_plain"])
 	if _, err := os.Stat(filepath.Join(plainDir, capsule.DirRuntimeState, "children.json")); !os.IsNotExist(err) {
 		t.Fatalf("a non-epic claim writes no snapshot: %v", err)
+	}
+}
+
+// TestEpicClaimSnapshotLaneReadFailureKeepsTheReset (polyforge#117 r5,
+// review r4#2): a changed-children re-claim whose lane read fails refuses
+// BEFORE the snapshot advances — fixing the lane and claiming again
+// still writes the resume marker. Red before the fix: the snapshot was
+// written first, so the re-claim saw "unchanged children" and the reset
+// was lost forever.
+func TestEpicClaimSnapshotLaneReadFailureKeepsTheReset(t *testing.T) {
+	hub := newFakeHub()
+	r, _, _ := newWorkspaceTestRuntime(t, hub, "proj")
+	epicLanes(t, r, "epic: true\nchildren_branch: \"epic/{seq}\"\nresume_reset: sync\n")
+	const epic = "wi_epic5"
+	hub.items = map[string]*api.WorkItem{
+		epic: {ID: epic, ProjectName: "proj", Slug: "polyforge#5", Seq: 5, BundleName: w80StrPtr("epic-lane")},
+		"wi_c1": {ID: "wi_c1", ProjectName: "proj", ParentID: w80StrPtr(epic), Slug: "polyforge#1", Seq: 1,
+			Status: api.StatusWrapped},
+	}
+	item := hub.items[epic]
+	capDir := epicClaim(t, r, epic, item, nil)
+	_, raw1 := epicReadSnapshot(t, capDir)
+	// a child lands while the epic is parked; the lane goes unreadable
+	hub.items["wi_c2"] = &api.WorkItem{ID: "wi_c2", ProjectName: "proj", ParentID: w80StrPtr(epic), Slug: "polyforge#2", Seq: 2,
+		Status: api.StatusWrapped}
+	lanes := r.cfg.WorkflowsDir
+	r.cfg.WorkflowsDir = filepath.Join(lanes, "gone")
+	j := &job{
+		wi: epic, project: "proj", bundleName: "epic-lane",
+		capsuleDir: testCapsuleDir(r, epic), item: item,
+	}
+	err := r.materialize(context.Background(), j)
+	if err == nil || !strings.Contains(err.Error(), "epic-lane") {
+		t.Fatalf("a changed-children re-claim whose lane cannot be read refuses naming the lane, got %v", err)
+	}
+	// the refused claim advanced nothing: the snapshot is byte for byte
+	// the reviewed baseline
+	if _, raw := epicReadSnapshot(t, capDir); string(raw) != string(raw1) {
+		t.Fatalf("the refused claim must not advance the snapshot:\n%q\n%q", raw1, raw)
+	}
+	// the lane is fixed and the work item claimed again: the marker is
+	// still written, the snapshot advances, the reset is not lost
+	r.cfg.WorkflowsDir = lanes
+	epicClaim(t, r, epic, item, nil)
+	snap, _ := epicReadSnapshot(t, capDir)
+	if snap.Version != 2 || len(snap.Children) != 2 {
+		t.Fatalf("the re-claim over the fixed lane advances the snapshot: %+v", snap)
+	}
+	rawMarker, err := os.ReadFile(filepath.Join(capDir, capsule.DirRuntimeState, "epic-resume.json"))
+	if err != nil {
+		t.Fatalf("the reset survives the refused claim: %v", err)
+	}
+	var marker struct {
+		ResetFrom       string `json:"reset_from"`
+		SnapshotVersion int    `json:"snapshot_version"`
+	}
+	if e := json.Unmarshal(rawMarker, &marker); e != nil || marker.ResetFrom != "sync" || marker.SnapshotVersion != 2 {
+		t.Fatalf("the resume marker names the lane's resume_reset at the snapshot's version: %q", rawMarker)
 	}
 }
 
