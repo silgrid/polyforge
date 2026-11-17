@@ -335,6 +335,79 @@ item with children may bind a bundle.
   renamed or unbound (`PARENT_BUNDLE_FROZEN`): the children work against
   the parent's lane.
 
+### Splitting a ticket into an epic (the owner-confirmed split)
+
+A ticket whose pre-submit analysis carries an upgrade recommendation
+(`### 升级 epic 建议`) is split only on the owner's confirmation — the
+recommendation files nothing by itself. The owner having confirmed the
+upgrade (and with it the analysis's decomposition — its units, in order;
+a unit's key is its stable identifier in that decomposition, never
+re-derived on a re-run), the session runs this procedure once, serially,
+in one sitting. **A re-run of it files no duplicate**: every unit is
+checked before it is filed, and an existing sub-ticket is reused, never
+re-filed.
+
+1. **The window.** `pf file show <original>` must show the original
+   `queued` and never claimed — the bundle-change window. A claimed,
+   paused or terminal original ends the procedure (a mid-run split is
+   out of scope): report what you see and stop. Until the first child
+   exists the original stays claimable, so check and file the first
+   unit in one sitting; an original claimed in between closes the
+   window — stop.
+2. **The first unit, check first — then file.** Check the first
+   decomposition unit exactly as every later one:
+   `pf queue --project P --attr split.origin=<id> --attr split.unit=<key>`
+   plus `pf file show <original>` for older children filed before the
+   markers (the full check shape is step 4's) — no hit: file the first
+   unit's child:
+
+   ```
+   pf file create --project P --goal <the unit's goal> --bundle <the unit's lane> \
+     --parent <original> --attr split.origin=<id> --attr split.unit=<key>
+   ```
+
+   From this create the original is held: a bundle-bound parent waits
+   for its children — out of the ready queue, its claim refused
+   `DEPENDENCY_BLOCKED` — so no machine can claim it until every child
+   wraps. The child itself is not claimable while its analysis awaits
+   the owner's confirmation (the auto-claim skips it); a child on a
+   lane without the analysis check is claimable at once — file it and
+   move the original in the same sitting, and know that a child
+   claimed before the move freezes the original's lane
+   (`PARENT_BUNDLE_FROZEN`) loudly: stop and report, never guess.
+3. **Move the original to the epic lane.** Immediately after the first
+   child, run `pf file edit <original> --bundle epic` — legal while
+   the ticket is queued and never claimed and no child was claimed
+   yet. Every child filed after this points `--parent` at a ticket
+   already bound to the epic lane, and every child's claim then reads
+   the epic lane's `children_branch` as its fixed target branch — the
+   order the owner ruled: hold, move, then the rest.
+4. **The remaining units, check first — then file.** For each
+   remaining unit, in the confirmed order:
+   - Check: `pf queue --project P --attr split.origin=<id> --attr split.unit=<key>`
+     (the plain list — no `--status` — so every status shows), `<id>` the
+     original's wi_ id and `<key>` the unit's stable key; and
+     `pf file show <original>` for older children filed before the
+     markers (they carry no attrs; the parent's `waiting-for` names
+     them). One hit for the unit: reuse that child — file nothing. No
+     hit: file it with step 2's shape plus the sibling order
+     `--after <the previous unit's child>` — written at create, never
+     patched in later. Record the created child's id; a create whose
+     answer was lost is recovered by the same check (the attrs are the
+     record), never by filing again.
+   - A check that cannot be trusted stops the procedure: a list that
+     looks truncated (the server's cap reached), a second child for one
+     unit, or a child nobody can tell apart — report and ask the owner;
+     never guess a match, never re-file over the doubt.
+5. **Verify the checklist, then release.** One child per unit, the
+   sibling order, the lanes and both split attrs — checked against the
+   confirmed decomposition and shown to the owner. Each child's own
+   pre-submit checks (its analysis confirmation, `verbs/submit.md`)
+   and its `pf submit` follow the ordinary rules — until then the
+   unconfirmed analysis holds the auto-claim away; the epic runs when
+   every child has wrapped. A failed or canceled child is never
+   silently re-filed — the owner decides.
+
 ## Success
 
 `--json`: the server's record raw (`comment` answers the stored comment

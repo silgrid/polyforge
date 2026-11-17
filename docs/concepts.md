@@ -38,6 +38,14 @@ run ends (a delivery lane's `merge` step lands it) or by a human's
 an execution ticket (it can be claimed and run); one without is a plain
 tracking ticket that never runs.
 
+Big work splits on the owner's confirmation: the original ticket moves
+onto the epic lane (its goal and acceptance kept), and one sub-ticket
+per decomposition unit is filed `--parent` at it — each sub-ticket lands
+its own lane's work on the epic's children branch, and the epic merges
+the accumulated branch into the default branch as one change. The
+routing skill's file verb owns the filing steps — check-first per unit,
+so a re-run files no duplicate.
+
 ### Workflow (lane)
 
 The ordered set of steps a claimed work item runs, declared by its

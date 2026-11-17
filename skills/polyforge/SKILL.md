@@ -72,6 +72,7 @@ EXTENDED_GLOB and starts a comment after whitespace.
 
 | Intent (EN / 中文) | Fragment | Face |
 |---|---|---|
+| the analysis recommends upgrading this ticket into an epic - do it / split it into an epic and sub-tickets / upgrade it into an epic / 升级成 epic / 把这张票拆成 epic / 按分析拆掉 | `verbs/file.md` (the owner-confirmed split procedure) | AIHub |
 | file a new work item / create a ticket / new task / 建票 / 新建任务 / 提个需求 | `verbs/file.md` (create; check `pf queue --project P` first; when a second ticket is in the same area（同一组文件或同一概念）, add a dependency with `--after`, or merge them into one ticket) | AIHub |
 | run it after X / this waits for X / drop that dependency / who is it waiting for / 等 X 做完再做 / 加依赖 / 去掉依赖 / 它在等谁 | `verbs/file.md` (`dep add` / `dep rm` / `dep list`) | AIHub |
 | edit a work item / update goal or content / 改一下目标 / 编辑这个票 / 更新优先级 | `verbs/file.md` (edit) | AIHub |
