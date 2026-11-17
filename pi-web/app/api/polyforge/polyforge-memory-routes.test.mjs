@@ -8,6 +8,39 @@ const search = await read("./memory/route.ts");
 const show = await read("./memory/[id]/route.ts");
 const lib = await readFile(new URL("../../../lib/polyforge-memory.ts", import.meta.url), "utf8");
 
+test("the writer filter rides both faces: validated with the shape, gated 400 before any config read or recall spawn (Q4)", () => {
+  // The browse face: the writer_kind param enters the shape validation (a
+  // bad kind answers 400 with no pf process at all), then the capability
+  // gate — a legal kind on a pf below the filter's own floor answers 400
+  // with the upgrade message, still before the config read and the recall.
+  const validate = search.indexOf("const browse = validateMemoryBrowse({");
+  const browseWriter = search.indexOf('writer_kind: url.searchParams.get("writer_kind")', validate);
+  const browseCapability = search.indexOf("await readPolyforgeMemoryCapability()", validate);
+  const browseGate = search.indexOf("browse.value.writer_kind && !capability.writerFilterSupported", browseCapability);
+  const browseProjects = search.indexOf("readPolyforgeMemoryProjects(browse.value.cwd, pin)");
+  const browseSpawn = search.indexOf("browsePolyforgeMemory(browse.value, pin)");
+  assert.ok(validate >= 0 && browseWriter > validate, "the browse face reads the writer_kind param into its shape validation");
+  assert.ok(browseCapability > browseWriter, "the shape validation (the writer kind included) precedes the browse face's version probe");
+  assert.ok(browseGate > browseCapability && browseGate < browseProjects,
+    "the browse writer gate answers 400 after the probe, before the config read");
+  assert.ok(browseGate < browseSpawn, "no recall spawn may run under a refused writer filter");
+  // The search face: the same chain.
+  const sValidate = search.indexOf("const validated = validateMemorySearch({");
+  const sWriter = search.indexOf('writer_kind: url.searchParams.get("writer_kind")', sValidate);
+  const sCapability = search.indexOf("await readPolyforgeMemoryCapability()", sValidate);
+  const sGate = search.indexOf("validated.value.writer_kind && !capability.writerFilterSupported", sCapability);
+  const sProjects = search.indexOf("readPolyforgeMemoryProjects(validated.value.cwd, pin)");
+  const sSpawn = search.indexOf("searchPolyforgeMemory(validated.value, pin)");
+  assert.ok(sWriter > sValidate && sCapability > sWriter, "the search face reads the writer_kind param into its shape validation, before its probe");
+  assert.ok(sGate > sCapability && sGate < sProjects && sGate < sSpawn,
+    "the search writer gate answers 400 after the probe and before every spawn");
+  // Q4: the refusal names the upgrade, never a bare error code.
+  assert.match(search, /writer filter needs pf \$\{POLYFORGE_MEMORY_WRITER_FILTER_MINIMUM_PF_VERSION\}/,
+    "the 400 names the filter's own floor (the upgrade hint)");
+  assert.match(search, /import \{[^}]*POLYFORGE_MEMORY_WRITER_FILTER_MINIMUM_PF_VERSION[^}]*\} from "@\/lib\/polyforge-memory"/,
+    "the floor constant is the lib's one value, never a restatement");
+});
+
 test("every memory route re-checks isApiRequestAllowed in-route and is dynamic", () => {
   for (const [name, source] of [["search", search], ["show", show]]) {
     assert.match(source, /import \{ isApiRequestAllowed \} from "@\/lib\/request-security"/, `${name} imports the gate`);
