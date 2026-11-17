@@ -7,10 +7,12 @@ import TypeDot from '../components/TypeDot'
 import SanitizedHtml from '../components/SanitizedHtml'
 import RelativeTime from '../components/RelativeTime'
 import { Muted } from '../components/ui'
+import { memoryAttribution } from '../attribution'
 
 // MemoryDetailPage is the #103 header card over the sanitized body
 // card: kind mark + title, visibility badge, work-item and tag chips, the
-// relative time, then the already-inert HTML (links inside bodies
+// author and writer (polyforge#120, one attribution line with the row),
+// the relative time, then the already-inert HTML (links inside bodies
 // stayed non-clickable text when the server rendered them) and the
 // monospace id footer (#103: the object's id stays visible, verbatim).
 export default function MemoryDetailPage({ project, id }: { project: string; id: string }) {
@@ -50,6 +52,7 @@ export default function MemoryDetailPage({ project, id }: { project: string; id:
               {tag}
             </span>
           ))}
+          <span data-testid="memory-attribution">{memoryAttribution(detail)}</span>
           <span>
             updated <RelativeTime at={detail.updated_at} />
           </span>
