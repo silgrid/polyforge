@@ -257,3 +257,36 @@ func TestW98RepairFreshnessAndWaysOut(t *testing.T) {
 		t.Errorf("workflows/integrate/skills/full-gate.md must exclude the audit red from the repair route")
 	}
 }
+
+// TestW98RevertDescribesThePlanItLands (review round 2, #2): the revert
+// step's own texts describe the plan the round-decoupled repair writes —
+// the shape keyed by brief_round, never a step round — and the landing
+// semantics u8 gave it: a merged PR counts as landed only when the
+// branch head it names is in its merge.
+func TestW98RevertDescribesThePlanItLands(t *testing.T) {
+	skill := w98Flat(t, "workflows/integrate/skills/revert.md")
+	for _, want := range []string{
+		"parses as `{\"brief_round\": <the brief's round>, \"repos\": [{\"name\", \"branch\", \"base\", \"head\", \"units\", \"items\"}]}`",
+		"the plan the review passed — none is a repair whose brief the owner refused or reverted",
+	} {
+		if !strings.Contains(skill, strings.Join(strings.Fields(want), " ")) {
+			t.Errorf("workflows/integrate/skills/revert.md must state %q", want)
+		}
+	}
+	if strings.Contains(skill, `{"round", "repos"`) || strings.Contains(skill, "this round, parses") {
+		t.Errorf("workflows/integrate/skills/revert.md still describes the plan by a step round (review r2 #2)")
+	}
+	// the script's own docstring follows the same shape and semantics
+	doc := w98Flat(t, "workflows/_shared/scripts/revert.py")
+	for _, want := range []string{
+		"{\"brief_round\": <the brief's round>, \"repos\": [{\"name\", \"branch\", \"base\", \"head\", \"units\", \"items\"}]",
+		"a merged PR counts as this round's landing only when the branch head it names is already in its merge",
+	} {
+		if !strings.Contains(doc, strings.Join(strings.Fields(want), " ")) {
+			t.Errorf("workflows/_shared/scripts/revert.py must state %q", want)
+		}
+	}
+	if strings.Contains(doc, "{round, repos") {
+		t.Errorf("workflows/_shared/scripts/revert.py still describes the plan by a step round (review r2 #2)")
+	}
+}
