@@ -31,6 +31,7 @@ import (
 )
 
 const w79ParamsLane = `name: demo-bundle
+max_rewinds: 3
 steps:
   - { id: build, params: { image: base-img } }
   - { id: review, gate: true, on_fail: { target: build }, params: { image: base-img, flag: "" } }
