@@ -472,3 +472,62 @@ func TestW20DoctorEveryCell(t *testing.T) {
 		}
 	}
 }
+
+// TestW20DoctorCellSocketFromEnv (review r1#2): every Cell-level read
+// of a named Cell dials the socket the invocation resolved — cli.toml
+// here carries NO daemon_socket and PF_DAEMON_SOCKET alone names it (the
+// w17 fixture shape): alpha's aihub projects row must pass, its read
+// reaching alpha's own AIHub through that socket. Red on the tree
+// where the named Cell's config kept the Host file's unresolved socket.
+func TestW20DoctorCellSocketFromEnv(t *testing.T) {
+	def, alpha := w20FakeHub(t), w20FakeHub(t)
+	wsD, wsA := t.TempDir(), t.TempDir()
+	dir := t.TempDir()
+	xdg := filepath.Join(dir, "xdg")
+	cfgDir := filepath.Join(xdg, "polyforge")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wf := t.TempDir()
+	writeLane(t, wf, "develop", "steps:\n  - { id: build }\n  - { id: review }\n  - { id: sync }\n  - { id: verification }\n  - { id: publish }\n  - { id: merge }\n")
+	bin := t.TempDir()
+	for _, tool := range []string{"pf", "git"} {
+		if err := os.WriteFile(filepath.Join(bin, tool), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sock := w20CellHost(t, def, alpha, wsD, wsA, wf, bin, &reqRecorder{})
+	// NO daemon_socket in cli.toml: the socket comes from
+	// PF_DAEMON_SOCKET alone
+	host := "server = " + jsonBody(def.srv.URL) + "\napi_key = \"kd\"\n\n" +
+		"[workspace.\"" + wsD + "\"]\nprojects = [\"dproj\"]\n"
+	cell := "server = " + jsonBody(alpha.srv.URL) + "\napi_key = \"ka\"\n\n" +
+		"[workspace.\"" + wsA + "\"]\nprojects = [\"aproj\"]\n"
+	if err := os.WriteFile(filepath.Join(cfgDir, "cli.toml"), []byte(host), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgDir, "cli-alpha.toml"), []byte(cell), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{"XDG_CONFIG_HOME": xdg, "POLYFORGE_DATA_DIR": t.TempDir(), "PF_DAEMON_SOCKET": sock}
+	code, stdout, stderr := runPf(t, env, "--json", "doctor")
+	if code != 0 {
+		t.Fatalf("doctor: exit %d (stdout %s stderr %s)", code, stdout, stderr)
+	}
+	var doc w20Doc
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatalf("doctor --json: %v", err)
+	}
+	if st, detail := w20Find(t, doc, "alpha", "aihub projects"); st != "pass" || !strings.Contains(detail, "aproj") {
+		t.Fatalf("alpha aihub projects = %s %q, want pass naming aproj (the read must dial the env-resolved socket)", st, detail)
+	}
+	aprojSeen := false
+	for _, r := range alpha.rec.all() {
+		if strings.Contains(r.Path, "aproj") {
+			aprojSeen = true
+		}
+	}
+	if !aprojSeen {
+		t.Fatalf("alpha's AIHub saw no aproj read (it went to another socket)")
+	}
+}
