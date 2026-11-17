@@ -6,6 +6,7 @@ import { polyforgePfBin } from "./polyforge-pf-bin";
 // type-only: the override view rides the watch response (polyforge#42
 // G11); the spawn face stays in polyforge-overrides.ts.
 import type { PolyforgeOverrideView } from "./polyforge-overrides";
+import type { PolyforgeParamsView } from "./polyforge-params";
 
 /**
  * Server-side pf reads for the Polyforge dock panel (pi#108). The transport
@@ -376,6 +377,13 @@ export interface PolyforgeWatchStatus extends PolyforgeSummary {
    *  never reads as the values block `overrides` one letter away
    *  (review r1#2). */
   overrideView?: PolyforgeOverrideView;
+  /** (polyforge#79, additive): the composed params view the same watch
+   *  route composes beside `overrideView` (`status.paramsView` — every
+   *  declared param's final value and source, one row per declared step),
+   *  the selected step's params section reads. Absent when the read
+   *  failed, answered nothing or the work item is not asked with
+   *  `?overrides=1`. */
+  paramsView?: PolyforgeParamsView;
   events: PolyforgeEvent[];
   progress?: PolyforgeProgress;
   origin?: PolyforgeOrigin;
