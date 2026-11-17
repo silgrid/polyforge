@@ -318,6 +318,9 @@ func TestW79ClaimResidueByWriteTime(t *testing.T) {
 	}
 	if b := ov.Steps["build"]; b == nil || b.Params["image"] == nil ||
 		b.Params["image"].Value != "reg/run:2" || b.Params["image"].By != "usr_1" {
+		if b := ov.Steps["build"]; b != nil && b.Params["image"] != nil {
+			t.Fatalf("the old residue loses to the running write: got %+v", *b.Params["image"])
+		}
 		t.Fatalf("the old residue loses to the running write: %+v", ov.Steps["build"])
 	}
 	if err := r.Stop(context.Background(), wi, protocol.FinishBlocked); err != nil {

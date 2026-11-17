@@ -245,6 +245,13 @@ func (h *fakeHub) SessionClaim(req api.SessionClaimRequest) (*api.SessionClaimRe
 			if out, cerr := exec.Command("git", "--git-dir", bare, "config", "receive.shallowUpdate", "true").CombinedOutput(); cerr != nil {
 				return nil, &api.Error{Code: "CORE-500", Detail: fmt.Sprintf("bare capsule repo %s: %v: %s", bare, cerr, out)}
 			}
+			// aihub's EnsureBare points the bare's HEAD at the chain's
+			// branch; mirror it — a clone of a bare whose HEAD names an
+			// unborn branch checks nothing out, and a re-claim that
+			// carries no sealed head would clone a stale-looking chain.
+			if out, cerr := exec.Command("git", "--git-dir", bare, "symbolic-ref", "HEAD", "refs/heads/main").CombinedOutput(); cerr != nil {
+				return nil, &api.Error{Code: "CORE-500", Detail: fmt.Sprintf("bare capsule repo %s: %v: %s", bare, cerr, out)}
+			}
 		}
 	}
 	// the holder's replay (the aihub contract, D4): the session that
