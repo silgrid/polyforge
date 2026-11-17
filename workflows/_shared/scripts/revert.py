@@ -226,6 +226,8 @@ class FixRepo:
 
     def to_dict(self) -> Dict[str, Any]:
         d: Dict[str, Any] = {"name": self.name, "branch": self.branch, "units": list(self.units), "items": list(self.items)}
+        if self.head:
+            d["head"] = self.head
         if self.pr:
             d["pr"] = self.pr
         if self.merge:
@@ -460,6 +462,7 @@ def read_plan(plan: Plan) -> None:
             if not isinstance(k, str) or not k:
                 raise _Bad("json: the plan record's fixes are keyed by repo name")
             plan.fixes[k] = FixRepo(name=_get(e, "name", str) or k, branch=_get(e, "branch", str) or "",
+                                    head=_get(e, "head", str) or "",
                                     units=_strs(e, "units"), items=_strs(e, "items"),
                                     pr=_get(e, "pr", str) or "", merge=_get(e, "merge", str) or "",
                                     why=_get(e, "why", str) or "")
@@ -583,15 +586,6 @@ class Revert:
             inv.summary = "not judged: landing the repair of repos/%s: fetching %s: %s" % (f.name, base, err)
             return False
         try:
-            pr = g.find_pr(d, f.branch)
-        except GoError as err:
-            inv.summary = "not judged: landing the repair of repos/%s: %s" % (f.name, err)
-            return False
-        if pr is not None and pr.state == "MERGED":
-            if pr.merge_commit is not None:
-                f.pr, f.merge, f.why = pr.url, pr.merge_commit, ""
-                return True
-        try:
             g.fetch(d, f.branch)
         except GoError:
             pass
@@ -605,10 +599,21 @@ class Revert:
                                % (f.name, f.branch))
                 return False
         head = g.rev(d, "HEAD")
+        try:
+            pr = g.find_pr(d, f.branch)
+        except GoError as err:
+            inv.summary = "not judged: landing the repair of repos/%s: %s" % (f.name, err)
+            return False
+        if pr is not None and pr.state == "MERGED" and pr.merge_commit and g.is_ancestor(d, head, pr.merge_commit):
+            # this very head already landed (an earlier run of the same
+            # round); a merged PR of an OLDER head is not this round's
+            f.pr, f.merge, f.why = pr.url, pr.merge_commit, ""
+            return True
         if pr is not None and pr.state == "OPEN":
             url, merge, fail = pr.url, "", None
             try:
-                g.merge_pr(d, url, pr.head_ref_oid)
+                g.push(d, f.branch)  # the PR's head moves with the branch
+                g.merge_pr(d, url, head)
                 merge = g.view_pr(d, url).merge_commit or ""
             except GoError as err:
                 fail = err
@@ -734,8 +739,6 @@ class Revert:
         batch_id = gostr.or_text(inv.getenv("PF_WI_ID"), NAME)
         reverting = {it for e in details.reverts for it in (e.group or [e.wi])}
         for f in details.fixes:
-            if f.merge != "":
-                continue  # landed by an earlier run
             if fix_blamed(f, reverting):
                 if not f.why:
                     f.why = "the blamed item is reverted in this batch: the owner ruled it reverted, not repaired"

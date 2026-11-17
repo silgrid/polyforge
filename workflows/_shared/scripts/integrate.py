@@ -896,7 +896,7 @@ REVERT_DETAILS = gd.Struct({
         "done": gd.BOOL, "why": gd.STR,
     }))),
     "fixes": gd.List(gd.Ptr(gd.Struct({
-        "name": gd.STR, "branch": gd.STR, "units": gd.List(gd.STR), "items": gd.List(gd.STR),
+        "name": gd.STR, "branch": gd.STR, "head": gd.STR, "units": gd.List(gd.STR), "items": gd.List(gd.STR),
         "pr": gd.STR, "merge": gd.STR, "why": gd.STR,
     }))),
     "heads": gd.Map(gd.STR), "gated": gd.List(gd.STR),
