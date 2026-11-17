@@ -9,8 +9,6 @@ capsule's file, a given path is taken as given):
   facts.py build [--capsule DIR] [--units artifacts/build/units.json]
       [--replay [--isolation container|host]] [--unit-timeout D] [--deadline D]
       [--log-dir DIR] [--json] [--out PATH]
-  facts.py analysis [--capsule DIR] [--analysis artifacts/build/change-analysis.json]
-      [--unit-timeout D] [--deadline D] [--log-dir DIR] [--json] [--out PATH]
   facts.py carries [--capsule DIR] [--units artifacts/build/units.json] [--json] [--out PATH]
   facts.py micro-bounds [--capsule DIR] --plan artifacts/fix/evidence.json [--json] [--out PATH]
 
@@ -94,27 +92,6 @@ replay could not run (a container not had, a worktree not added, the
 deadline, an exit 126/127) — `replay_error` names it. A `test_weakened`
 hunk moves no exit code.
 
-analysis — the build close's own check of the change analysis
-(``artifacts/build/change-analysis.json``), the same shared validator
-verification's ``--analysis`` check calls (``pfstep/analysis.py``: the
-one implementation, never a second copy — polyforge#112). The file's
-shape is judged over every entry (``read_analysis``); then, per the
-supplement cap (the first entries in listed order run, the cut tail
-named in the result), each taken entry's static rules — its repo a task
-repo of the claim, its run's shape (argv, cwd, marker), its file a
-tracked file at HEAD, its name inside it — and its run: executed once
-per distinct (repo, cwd, argv) on the host under the step's PATH, at
-the repo's HEAD working tree, each bounded by ``--unit-timeout`` under
-``--deadline``, and judged by its marker under ``--unit-runs``' own
-rules; an entry that cannot run as written, does not exist or whose
-run does not show its marker is a red the build must fix before its
-hand-off, its summary naming the entry and the rule it violates. A
-missing or malformed analysis file is the invocation's (exit 2, exactly
-verification's treatment of the same file).
-Exit 0: every taken entry passes. Exit 1: an entry fails. Exit 2: not
-judged — no capsule, an unusable analysis file, a run killed at its
-time limit or not started, an infrastructure failure.
-
 carries — every e2e suite the build added or changed in a task repo
 declares `carries:` in its opening comment block, and one it added or a
 unit's run names matches a non-test path the build touched under the
@@ -155,24 +132,20 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from pfstep import container, deadline, duration, git, goglob, gotext, runner, secretpat  # noqa: E402
 from pfstep import targetbranch  # noqa: E402
-from pfstep.analysis import read_analysis, static_problem  # noqa: E402
 from pfstep import godecode as gd  # noqa: E402
 from pfstep.gotext import clip_list, clip_runes, clip_text, fields, quote, short_sha, trim_space  # noqa: E402
 from pfstep.invoke import Invocation, Parser  # noqa: E402
-from pfstep.unitruns import argv_line, marker_matches, unknown_repo_problem  # noqa: E402
 
 COMMAND = "facts.py"
 
 PLAN_CONFORMANCE = "plan-conformance"
 BUILD = "build"
-ANALYSIS = "analysis"
 CARRIES = "carries"
 MICRO_BOUNDS = "micro-bounds"
-KINDS = (PLAN_CONFORMANCE, BUILD, ANALYSIS, CARRIES, MICRO_BOUNDS)
+KINDS = (PLAN_CONFORMANCE, BUILD, CARRIES, MICRO_BOUNDS)
 
 DEFAULT_PLAN = "artifacts/plan.md"
 DEFAULT_UNITS = "artifacts/build/units.json"
-DEFAULT_ANALYSIS = "artifacts/build/change-analysis.json"
 DEFAULT_UNIT_TIMEOUT = 10 * duration.MINUTE
 
 VERIFY_SCOPE_CONF = ".polyforge/verify-scope.conf"
@@ -2358,164 +2331,6 @@ def carries(inv: Invocation, args: List[str]) -> int:
     return 0
 
 
-def _is_dir_of(repo_dir: str) -> Callable[[str], bool]:
-    """Whether a cwd is a directory of repo_dir's working tree (the
-    shared validator's is_dir plumbing)."""
-    def is_dir(c: str) -> bool:
-        return os.path.isdir(os.path.join(repo_dir, c))
-    return is_dir
-
-
-def _tracked_at_head(repo_dir: str) -> Callable[[str], bool]:
-    """Whether a path is a tracked file of repo_dir at HEAD (the shared
-    validator's git plumbing on this script's reads)."""
-    def tracked(p: str) -> bool:
-        return run_git(repo_dir, "cat-file", "-e", "HEAD:" + p)[1] is None
-    return tracked
-
-
-def _body_at_head(repo_dir: str) -> Callable[[str], str]:
-    """A file's body at repo_dir's HEAD ("" when it cannot be read)."""
-    def body_of(p: str) -> str:
-        out, err = run_git(repo_dir, "show", "HEAD:" + p)
-        return out if err is None else ""
-    return body_of
-
-
-def analysis(inv: Invocation, args: List[str], environ: Mapping[str, str],
-             runtime: Optional[container.ContainerRuntime]) -> int:
-    """The build close's own check of the change analysis: the one shared
-    validator (pfstep/analysis.py) — static per taken entry, then the
-    entry's run judged by its marker, one execution per distinct run."""
-    p = _parser(ANALYSIS)
-    p.add_argument("--analysis", default="", help="build's change analysis (default: the capsule's " + DEFAULT_ANALYSIS + ")")
-    p.add_argument("--unit-timeout", type=_duration, default=DEFAULT_UNIT_TIMEOUT, help="one listed test's time limit (default 10m)")
-    p.add_argument("--deadline", type=_duration, default=0, help="the whole run's deadline (default: the step's tool window less two minutes)")
-    p.add_argument("--log-dir", default="", help="where the runs' logs go (default: logs/ beside --out, else the capsule's runtime-state/facts/<n>)")
-    ns, code = _parsed(inv, p, args)
-    if ns is None:
-        return code
-    try:
-        c = Capsule(ns.capsule)
-    except ValueError as err:
-        return inv.usage(str(err))
-    inv.heads = c.heads()
-    path = c.path(ns.analysis, DEFAULT_ANALYSIS)
-    rel = rel_to(c.dir, path)
-    entries: List[Dict[str, Any]] = []
-    d: Dict[str, Any] = {"analysis_file": rel, "entries": entries, "cut": []}
-    inv.details = d
-    try:
-        an = read_analysis(path)
-    except ValueError as err:
-        inv.summary = "not judged: %s is unusable: %s" % (rel, err)
-        return 2
-    taken, cut = an.taken()
-    d["supplement_limit"] = an.limit
-    d["cut"] = [{"id": ad.id, "repo": ad.repo,
-                 "note": "listed after the analysis's first %d (its supplement cap): not run" % an.limit}
-                for ad in cut]
-    problems: List[str] = []
-    # the logs, the deadline and the runs — only when an entry will run
-    runs = [ad for ad in taken if ad.repo in c.repos]
-    logs = ns.log_dir
-    if runs and not logs:
-        if ns.out:
-            logs = os.path.join(os.path.dirname(ns.out), "logs")
-        else:
-            try:
-                logs = next_run_dir(os.path.join(c.dir, "runtime-state", "facts"))
-            except OSError as err:
-                return inv.usage("no log directory: %s" % gotext.os_error("mkdir", err))
-    window = ns.deadline if ns.deadline > 0 else deadline.default_deadline_for(environ)
-    deadline_at = time.time() + window / duration.SECOND
-    co = container.ContainerOptions(runtime=runtime, say=inv.say).with_defaults(environ)
-    env = dict(environ)
-    executed: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
-    by_run: Dict[Tuple[str, str, str], str] = {}
-    seq = 0
-    for ad in taken:
-        rec: Dict[str, Any] = {"id": ad.id, "repo": ad.repo, "file": ad.file}
-        if ad.name:
-            rec["name"] = ad.name
-        if ad.marker:
-            rec["marker"] = ad.marker
-        rec["argv"] = list(ad.argv)
-        entries.append(rec)
-        if ad.repo not in c.repos:
-            rec["status"] = "fail"
-            rec["problem"] = unknown_repo_problem(ad.repo)
-            problems.append("%s: %s" % (quote(clip_text(ad.id)), rec["problem"]))
-            continue
-        repo_dir = os.path.join(c.repos_dir, ad.repo)
-        problem, cwd = static_problem(ad, ad.repo, _is_dir_of(repo_dir),
-                                      _tracked_at_head(repo_dir),
-                                      _body_at_head(repo_dir))
-        if cwd not in ("", "."):
-            rec["cwd"] = cwd
-        if problem:
-            rec["status"] = "fail"
-            rec["problem"] = problem
-            problems.append("%s: %s" % (quote(clip_text(ad.id)), problem))
-            continue
-        key = (ad.repo, cwd, gotext.shell_join(ad.argv))
-        if key in executed:
-            rec["shared_run_with"] = by_run[key]
-        else:
-            by_run[key] = ad.id
-            seq += 1
-            inv.say("%s: running `%s` at HEAD (%d/%d)" % (ad.id, argv_line(cwd, ad.argv), seq, len(runs)))
-            try:
-                res = runner.run_command(runner.CommandOptions(
-                    capsule_dir=c.dir, repo=ad.repo, command=key[2], deadline=deadline_at,
-                    timeout=ns.unit_timeout / duration.SECOND,
-                    log_dir=os.path.join(logs, "analysis", str(seq)), run=seq,
-                    workdir=os.path.join(repo_dir, cwd), isolation=runner.ISOLATION_HOST,
-                    env=env, container=co,
-                ))
-            except runner.ExecutorError as err:
-                inv.summary = "%s could not run (an infrastructure failure, never a verdict): %s" % (ad.id, err)
-                return 2
-            except (KeyboardInterrupt, runner.Interrupted) as err:
-                inv.summary = "interrupted while running %s (%s): nothing is proven" % (ad.id, err or "interrupt")
-                return 2
-            executed[key] = {"exit": res.exit, "timed_out": res.timed_out, "not_started": res.not_started,
-                            "log": res.log, "line": argv_line(cwd, ad.argv)}
-            if res.log:
-                inv.logs.append(res.log)
-        run = executed[key]
-        if run["not_started"]:
-            inv.summary = "%s was not run: the deadline (%s) had passed" % (ad.id, duration.format(window))
-            return 2
-        if run["timed_out"]:
-            inv.summary = "%s's run was killed at its time limit (%s): not judged" % (ad.id, duration.format(ns.unit_timeout))
-            return 2
-        rec["exit_code"] = run["exit"]
-        if run["log"]:
-            rec["log"] = run["log"]
-        if run["exit"] != 0:
-            rec["status"] = "fail"
-            rec["problem"] = "its run `%s` exited %d" % (run["line"], run["exit"])
-            problems.append("%s: %s" % (quote(clip_text(ad.id)), rec["problem"]))
-            continue
-        if not marker_matches(ad.marker, run_output(c.dir, run["log"]).split("\n")):
-            rec["status"] = "fail"
-            rec["problem"] = ("exit 0 but no output line matches its marker `%s`: the run did not show"
-                              " its test passing" % ad.marker)
-            problems.append("%s: %s" % (quote(clip_text(ad.id)), rec["problem"]))
-            continue
-        rec["status"] = "pass"
-    if problems:
-        inv.summary = "%d of %d listed test(s) fail the close check: %s" % (
-            len(problems), len(taken), "; ".join(clip_list(problems, 3)))
-        return 1
-    tail = ""
-    if cut:
-        tail = ", %d cut over its supplement cap (%d) and named" % (len(cut), an.limit)
-    inv.summary = "%d listed test(s) pass the close check%s" % (len(taken), tail)
-    return 0
-
-
 PLAN_LINE = gd.Struct({"repo": gd.STR, "line": gd.STR})
 
 
@@ -2583,8 +2398,6 @@ def main(argv: Optional[List[str]] = None, environ: Optional[Mapping[str, str]] 
             code = plan_conformance(inv, rest)
         elif kind == BUILD:
             code = build(inv, rest, env, runtime)
-        elif kind == ANALYSIS:
-            code = analysis(inv, rest, env, runtime)
         elif kind == CARRIES:
             code = carries(inv, rest)
         else:
