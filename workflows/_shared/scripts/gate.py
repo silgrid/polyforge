@@ -19,7 +19,8 @@ commands and the engine-appended dependency audit, in the engine's order —
 with every command, the engine included, run inside the repository's
 verification container (``--isolation container``, the only isolation a
 gate has: a tree without ``.polyforge/Dockerfile.verify`` at HEAD is not
-judged, exit 2; nothing of the gate runs on the host but git and the docker
+judged, exit 2 — unless ``--image`` names a prepared image, which needs
+no Dockerfile; nothing of the gate runs on the host but git and the docker
 client). Which engine answered — the tree's (``tree``) or the lane's
 (``lane``) — is recorded in the result as ``engine_source``, and so is
 which gate id computed a green tag's (``gate_id_source``, the tree's
@@ -28,13 +29,20 @@ plan digest, and neither changes the verdict rules. The verdict is strict: the g
 command ran and exited 0; a declared prerequisite the container lacks fails
 its command; there are no flaky re-runs and no pre-existing proofs. It stops
 at the first failing command unless ``--keep-going``. A gate that cannot be
-judged — no Dockerfile at HEAD, no engine in the tree or the lane, the container engine missing or
-not answering, the image or the container not had, a container lost
+judged — no Dockerfile at HEAD and no prepared image, no engine in the tree or the lane, the container engine missing or
+not answering, the image or the container not had (a prepared image not
+present is its own ``not judged``, carrying the fixed mark
+``pf-verify-image-missing``: a person prepares it, a retry cannot), a container lost
 mid-run, an engine that plans nothing, the deadline, an interrupt, HEAD
 moving while it ran — is never a pass and never a failure.
 
 The container (``pfstep.container``): the image ``pf-verify-<repo>:<sha16>``
-built from HEAD's Dockerfile alone, the clone mounted at its own path, the
+built from HEAD's Dockerfile alone — or, with ``--image`` (a step
+dispatch's ``PF_PARAM_IMAGE`` names it too; the flag wins and the result
+records where the value came from), a prepared image a person made:
+resolved to its local ID, started by it, never built, never pulled, its
+digest in the plan's image half and in the green tag's record — mounted
+are, either way, the clone at its own path, the
 cache volume, the environment allowlist, a private TMPDIR per command and
 every process a command left killed after it. Its limits are this
 script's: ``--cpus`` (default min(8, this machine's cores)), ``--memory``
@@ -489,7 +497,8 @@ def plan_of(directory: str, report: container.ContainerReport, cmds: Sequence[En
             "requires_env": list(c.requires_env), "requires_cmd": list(c.requires_cmd),
             "timeout": duration.format(timeout_of(c)),
         })
-    return {"image": report.image[report.image.rfind(":") + 1:], "cpus": report.cpus, "memory": report.memory,
+    return {"image": report.digest if report.digest else report.image[report.image.rfind(":") + 1:],
+            "cpus": report.cpus, "memory": report.memory,
             "pids": report.pids, "commands": commands}
 
 
@@ -515,6 +524,11 @@ class GateResult:
     # and in a green tag's message, never in the plan digest
     engine_source: str = ""
     gate_id_source: str = ""
+    # image_digest: the prepared image's local ID (image mode only);
+    # image_source: which named it — "flag" (--image) or "param"
+    # (PF_PARAM_IMAGE)
+    image_digest: str = ""
+    image_source: str = ""
     log_dir: str = ""
     commands: List[GateCommand] = field(default_factory=list)
     # incomplete: why the gate could not be judged ("" = it ran)
@@ -533,6 +547,10 @@ class GateResult:
             d["plan_digest"] = self.plan_digest
         if self.image:
             d["image"] = self.image
+        if self.image_digest:
+            d["image_digest"] = self.image_digest
+        if self.image_source:
+            d["image_source"] = self.image_source
         d["built"] = self.built
         if self.container:
             d["container"] = self.container
@@ -557,6 +575,7 @@ class GateResult:
             plan_digest=str(d.get("plan_digest") or ""), image=str(d.get("image") or ""), built=bool(d.get("built")),
             container=str(d.get("container") or ""), engine=str(d.get("engine") or ""),
             engine_source=str(d.get("engine_source") or ""), gate_id_source=str(d.get("gate_id_source") or ""),
+            image_digest=str(d.get("image_digest") or ""), image_source=str(d.get("image_source") or ""),
             log_dir=str(d.get("log_dir") or ""),
             commands=[GateCommand.of(c) for c in d.get("commands") or [] if isinstance(c, dict)],
             incomplete=str(d.get("incomplete") or ""), passed=bool(d.get("passed")),
@@ -630,6 +649,8 @@ class Gate:
         keep_going: bool,
         cmd_env: Dict[str, str],
         say: Say,
+        image: str = "",
+        image_source: str = "",
     ) -> None:
         # co: for_run's (the defaults, the deadline label, the keep-alive)
         self.co = co
@@ -643,6 +664,10 @@ class Gate:
         self.swept = False
         # interrupted: the signal that ended the run ("" = none)
         self.interrupted = ""
+        # image: a prepared image every container of this invocation runs
+        # in ("" = build the repo's Dockerfile); image_source: which named it
+        self.image = image
+        self.image_source = image_source
 
     def say(self, msg: str) -> None:
         self.say_line("gate: " + msg)
@@ -677,10 +702,18 @@ class Gate:
             container.sweep_run(self.co, self.say)
         r = self.runner_for(directory)
         engine, _, lane_dir = select_engine(directory)
-        self.say("building or finding the image of %s (log %s)"
-                 % (container.DOCKERFILE_VERIFY, os.path.join(log_dir, runner.IMAGE_BUILD_LOG)))
+        if self.image:
+            self.say("starting the gate's container from the prepared image %s" % self.image)
+        else:
+            self.say("building or finding the image of %s (log %s)"
+                     % (container.DOCKERFILE_VERIFY, os.path.join(log_dir, runner.IMAGE_BUILD_LOG)))
         try:
-            box = container.start_box(self.co, repo, directory, log_dir, self.until, 0, r.rel, engine=engine)
+            box = container.start_box(self.co, repo, directory, log_dir, self.until, 0, r.rel, engine=engine,
+                                      image=self.image)
+        except container.ImageMissing as err:
+            return None, ("the gate's image %s is not present on this machine and is never pulled (%s): the image is"
+                          " prepared by a person — have one prepared or clear the step parameter; the gate is not"
+                          " judged" % (err.ref, container.IMAGE_MISSING_MARK))
         except container.BoxError as err:
             return None, "the gate's container could not be prepared: %s" % err
         rep = box.report
@@ -777,11 +810,13 @@ class Gate:
         res.engine_source = source
         res.gate_id_source = (ENGINE_SOURCE_TREE if os.path.isfile(os.path.join(directory, GATE_ID_REL))
                               else ENGINE_SOURCE_LANE)
+        if self.image:
+            res.image, res.image_source = self.image, self.image_source
         if engine == "":
             res.incomplete = ("neither the tree nor the lane carries a scope engine: the gate's plan is one's"
                               " (%s in the tree, %s in the lane)" % (GATE_ENGINE_REL, LANE_ENGINE))
             return
-        if not container.has_dockerfile_at(directory, "HEAD"):
+        if not self.image and not container.has_dockerfile_at(directory, "HEAD"):
             res.incomplete = ("HEAD carries no %s: the gate runs only inside that container (--isolation %s), never on"
                               " the host" % (container.DOCKERFILE_VERIFY, ISOLATION_CONTAINER))
             return
@@ -797,6 +832,7 @@ class Gate:
     def _judge(self, res: GateResult, o: Opened, plan_only: bool) -> None:
         box, r = o.box, o.r
         res.image, res.built, res.container = box.report.image, box.report.built, box.report.name
+        res.image_digest = box.report.digest
         rep, ref, why = self.ask_engine(o, "HEAD", True)
         res.engine = ref
         if rep is None:
@@ -990,19 +1026,23 @@ def same_green(g: Git, directory: str, remote: str, refs: GreenRefs, rec: Mappin
     return ""
 
 
-def gate_id(directory: str, commit: str, environ: Mapping[str, str], lane: bool = False) -> str:
+def gate_id(directory: str, commit: str, environ: Mapping[str, str], lane: bool = False, image_digest: str = "") -> str:
     """The gate id of commit — the tree's tools/gate-id run from the
     clone's tree, else (lane) the lane's pfstep.gateid over the same
-    bytes (raises GreenError)."""
+    bytes (raises GreenError). image_digest, a prepared image's local ID,
+    hashes as an ``image`` line (and allows a tree without a Dockerfile)."""
     if lane:
         try:
-            gid = gostr.trim_space(gateid.gate_id(directory, commit, environ))
+            gid = gostr.trim_space(gateid.gate_id(directory, commit, environ, image=image_digest))
         except gateid.GateIdError as err:
             raise GreenError("the lane's gate id of %s: %s" % (commit, err)) from None
         if not _GATE_ID.fullmatch(gid):
             raise GreenError("the lane's gate id of %s printed %s, not a gate id" % (commit, gostr.quote(gid)))
         return gid
-    c = proc.run(["sh", "tools/gate-id", commit], cwd=directory, env=dict(environ), timeout=GIT_TIMEOUT)
+    argv = ["sh", "tools/gate-id"]
+    if image_digest:
+        argv += ["--image", image_digest]
+    c = proc.run(argv + [commit], cwd=directory, env=dict(environ), timeout=GIT_TIMEOUT)
     if c.exit_code != 0 or c.error:
         why = c.error or "exit %d" % c.exit_code
         raise GreenError("tools/gate-id %s: %s: %s" % (commit, why, c.stderr.decode("utf-8", "replace").strip()))
@@ -1059,7 +1099,8 @@ def mark_green(g: Git, directory: str, remote: str, summary: str, res: GateResul
         raise GreenError(str(err)) from None
     if head != res.commit:
         raise GreenError("HEAD is %s, the gate judged %s" % (head, res.commit))
-    gid = gate_id(directory, res.commit, g.environ, lane=(res.gate_id_source == ENGINE_SOURCE_LANE))
+    gid = gate_id(directory, res.commit, g.environ, lane=(res.gate_id_source == ENGINE_SOURCE_LANE),
+                  image_digest=res.image_digest)
     t = (now or datetime.datetime.now(datetime.timezone.utc)).astimezone(datetime.timezone.utc)
     if gostr.trim_space(tagger):
         ident = "%s %d +0000" % (gostr.trim_space(tagger), int(t.timestamp()))
@@ -1071,6 +1112,10 @@ def mark_green(g: Git, directory: str, remote: str, summary: str, res: GateResul
     rec = {"commit": res.commit, "gate_id": gid, "runner": res.runner, "runner_version": res.runner_version,
            "plan_digest": res.plan_digest, "engine_source": res.engine_source, "gate_id_source": res.gate_id_source,
            "verified_at": t.strftime("%Y-%m-%dT%H:%M:%SZ"), "summary": line}
+    if res.image_digest:
+        # the prepared image's local ID: what the gate_id line and the plan
+        # digest already hash — here for the person reading the tag
+        rec["image_digest"] = res.image_digest
     msg = json.dumps(rec, ensure_ascii=False, separators=(",", ":"))
     day = t.strftime("%Y%m%d")
     refs = remote_green_refs(g, directory, remote)
@@ -1198,7 +1243,7 @@ class Session:
         if select_engine(directory)[0] == "":
             raise TriageError("neither the tree nor the lane carries a scope engine: the gate's plan is one's"
                               " (%s in the tree, %s in the lane)" % (GATE_ENGINE_REL, LANE_ENGINE))
-        if not container.has_dockerfile_at(directory, "HEAD"):
+        if not gate.image and not container.has_dockerfile_at(directory, "HEAD"):
             raise TriageError("HEAD carries no %s: the gate runs only inside that container" % container.DOCKERFILE_VERIFY)
         o, why = gate.open(directory, repo, log_dir)
         if o is None:
@@ -1867,6 +1912,9 @@ def parser() -> argparse.ArgumentParser:
                    " kept; with --capsule: logs/ beside --out, else the capsule's runtime-state/gate/<n>)")
     p.add_argument("--repo", default="", help="the name the image and the cache volume are tagged with (default: the clone"
                    " directory's name)")
+    p.add_argument("--image", default="", help="the prepared image the gate's container runs in (default: build the"
+                   " repo's .polyforge/Dockerfile.verify, which a tree without one still needs); a step dispatch's"
+                   " PF_PARAM_IMAGE names it too — --image wins, and the result records which one did")
     p.add_argument("--json", action="store_true", help="print the result as one JSON object on stdout (progress goes to stderr)")
     p.add_argument("--out", default="", help="write the result file there (atomically)")
     p.add_argument("--mark-green", action="store_true", help="after a pass, push the green tag of each judged head to --remote"
@@ -2035,7 +2083,9 @@ def run(a: argparse.Namespace, env: Dict[str, str], inv: Invocation, runtime: Op
         wi=env.get(stepenv.ENV_WI_ID, "") or GATE_WI, cpus=cpus, memory=memory, pids=pids,
         say=lambda m: say("gate: " + m),
     ), until, env)
-    gate = Gate(co, until, window, timeout, a.keep_going, dict(env), say)
+    gate = Gate(co, until, window, timeout, a.keep_going, dict(env), say,
+                image=(a.image or env.get("PF_PARAM_IMAGE", "")),
+                image_source=("flag" if a.image else ("param" if env.get("PF_PARAM_IMAGE", "") else "")))
     remote = a.remote or "origin"
     if not a.capsule:
         return clone_mode(a, env, inv, gate, remote)
