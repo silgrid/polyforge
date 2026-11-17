@@ -41,14 +41,42 @@ test("work-item references leave through the one callback; a null work item rend
   assert.match(source, /openDetail\(relatedId\)/, "a related id opens in place, through the same show read");
 });
 
-test("no author, owner or user id is rendered anywhere, hover titles included", () => {
-  assert.doesNotMatch(source, /owner_user_id|author/i, "no owner or author notion in the client");
+test("the author and the writer render in every row and the detail; the owner and user ids never do (Q3)", () => {
+  // polyforge#120: the display name and the writer (kind + valued details)
+  // are the shown attribution; a missing one renders its explicit unknown
+  // placeholder — never the current user, never an id, never a blank.
+  for (const used of ["hit.author_display_name", "hit.writer_kind", "hit.writer_details",
+    "detail.author_display_name", "detail.writer_kind", "detail.writer_details"]) {
+    assert.ok(source.includes(used), `the attribution field renders: ${used}`);
+  }
+  assert.match(source, /\|\| t\("polyforge\.memory\.unknownAuthor"\)/, "a missing display name renders the unknown-author placeholder");
+  assert.match(source, /\|\| t\("polyforge\.memory\.unknownWriter"\)/, "a missing writer renders the unknown-writer placeholder");
+  assert.match(source, /formatMemoryWriter\(\{ kind: hit\.writer_kind, details: hit\.writer_details \}\)/,
+    "the row's writer string is the shared pure formatter");
+  assert.match(source, /formatMemoryWriter\(\{ kind: detail\.writer_kind, details: detail\.writer_details \}\)/,
+    "the detail's writer string is the same one formatter");
+  assert.doesNotMatch(source, /owner_user_id/, "no owner id notion in the client");
   // owner-intended change: the search-bar controls keep aria-label +
   // title (the visible field labels are gone). Wire data still carries no
   // hover title.
   assert.doesNotMatch(source, /title=\{(detail|hit)/, "the rows and detail carry no hover titles over wire data");
   for (const used of ["hit.type", "hit.title", "hit.updated_at", "hit.tags", "detail.content", "detail.visibility", "detail.status"]) {
     assert.ok(source.includes(used), `the confirmed fields render: ${used}`);
+  }
+});
+
+test("the writer-kind filter control appears only on a filter-capable pf and rides every list read (Q5)", () => {
+  // The control's own gate is the scope answer's writerFilterSupported — a pf
+  // that browses but predates --writer-kind shows the tab without the
+  // control, and the display of author/writer is never gated by it.
+  assert.match(source, /writerFilterSupported !== false/, "the scope read's own gate is consumed");
+  assert.match(source, /scope\.writerFilter && \(/, "the select renders only on a filter-capable pf");
+  assert.match(source, /params\.set\("writer_kind", writerKind\);/, "every list read carries the current kind — browse, search and continuation alike");
+  assert.match(source, /\[cwd, scope, project, type, tags, writerKind, activeQuery, submits\]/,
+    "a kind change re-issues the current mode's first read (page 1: the cursor resets, Q5)");
+  assert.match(source, /value=\{writerKind\}/, "the select is a controlled input");
+  for (const key of ["polyforge.memory.writerFilter", "polyforge.memory.writerAll", "polyforge.memory.writerSession", "polyforge.memory.writerStep"]) {
+    assert.ok(source.includes(key), `${key} labels the control`);
   }
 });
 
@@ -68,8 +96,8 @@ test("the tab browses by default: the first page is read once the scope is ready
   assert.match(source, /if \(!cwd \|\| !scope\?\.mapped \|\| !scope\.capable \|\| !project\) return;/,
     "no list read without a mapped, capable scope and a selected project");
   assert.match(source, /readList\(activeQuery, null\);/, "the current mode's first page is read by the effect");
-  assert.match(source, /\[cwd, scope, project, type, tags, activeQuery, submits\]/,
-    "project, type and tags changes and every submit re-issue the current mode's read");
+  assert.match(source, /\[cwd, scope, project, type, tags, writerKind, activeQuery, submits\]/,
+    "project, type, tags and writer-kind changes and every submit re-issue the current mode's read");
   assert.match(source, /if \(tagFilter && !isMemoryTagList\(tagFilter\)\) return;/, "a half-typed tag list reads nothing");
 });
 
