@@ -9,8 +9,10 @@ package task
 // dispatched prompt — the ordinary dispatchedPrompt and a PromptFor
 // (analysis) answer alike — ends with the # Scratch section naming the
 // same absolute paths. Expected values are hand-built from the layout
-// rule (raw/<UTC time>-<source id>-<unique suffix>, tasks/<task id>),
-// never copied from the implementation.
+// rule (raw/<UTC time>-<source id>-<unique suffix>, tasks/<task id>) and
+// the owner ruling Q3, never copied from the implementation: the # Scratch
+// section below is written out by hand, the same text the requirement
+// asks the prompt to carry.
 
 import (
 	"context"
@@ -24,6 +26,18 @@ import (
 	"github.com/silgrid/polyforge/internal/common/harness"
 	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
+
+// w121ScratchSection is the # Scratch section a dispatched task prompt
+// closes with — hand-written from owner ruling Q3 (the prompt names the
+// directories the spawn created, and the environment variables that
+// carry them), never taken from the implementation's own text.
+func w121ScratchSection(taskDir, rawDir string) string {
+	return "\n# Scratch\n\n" +
+		"This task's disposable output goes into its own scratch directories, both already created:\n\n" +
+		"- other output: " + taskDir + " (the environment variable PF_SCRATCH_DIR carries it);\n" +
+		"- raw data — batch JSON, logs, downloaded archives, history exports: " + rawDir + " (PF_SCRATCH_RAW_DIR).\n\n" +
+		"Write nothing else into the workspace.\n"
+}
 
 // w121Runner records every candidate's spec and prompt.
 type w121Runner struct {
@@ -85,13 +99,12 @@ func TestW121TaskScratchDirs(t *testing.T) {
 	if spec.ScratchRawDir != rawDir {
 		t.Fatalf("ScratchRawDir = %q, want %q", spec.ScratchRawDir, rawDir)
 	}
-	// the prompt ends with the # Scratch section naming both paths and
-	// the environment variables
+	// the prompt opens with the prohibited-actions list and ends with the
+	// hand-written # Scratch section naming both paths and the variables
 	if !strings.HasPrefix(r.prompts[0], harness.TaskProhibitedActions(ws)) {
 		t.Fatalf("the prompt must open with the prohibited-actions list:\n%s", r.prompts[0])
 	}
-	want := scratchNote(taskDir, rawDir)
-	if !strings.HasSuffix(r.prompts[0], want) {
+	if !strings.HasSuffix(r.prompts[0], w121ScratchSection(taskDir, rawDir)) {
 		t.Fatalf("the prompt must end with the # Scratch section:\n%s", r.prompts[0])
 	}
 	for _, s := range []string{"# Scratch", "PF_SCRATCH_DIR", "PF_SCRATCH_RAW_DIR", taskDir, rawDir} {
@@ -136,8 +149,8 @@ func TestW121TaskScratchPromptForPath(t *testing.T) {
 	if !strings.Contains(p, "# Scratch") {
 		t.Fatalf("the PromptFor path must carry the # Scratch section too:\n%s", p)
 	}
-	if !strings.HasSuffix(p, scratchNote(taskDir, r.specs[0].ScratchRawDir)) {
-		t.Fatalf("the PromptFor path must carry the same # Scratch section:\n%s", p)
+	if !strings.HasSuffix(p, w121ScratchSection(taskDir, r.specs[0].ScratchRawDir)) {
+		t.Fatalf("the PromptFor path must end with the same # Scratch section:\n%s", p)
 	}
 }
 
