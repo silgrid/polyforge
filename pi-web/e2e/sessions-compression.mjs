@@ -1,0 +1,262 @@
+// carries: app/api/sessions/route.ts, app/api/sessions/[[]id]/route.ts, app/api/sessions/filter-match/route.ts, next.config.ts
+// Online compression checks for the session routes (polyforge#105): since
+// Next 16.4.5 the server strips an application-set Content-Encoding and, from
+// 16.4.6 on, compresses large route-handler responses itself. pi-web therefore
+// hands `next start` plain JSON and lets the server do the one and only gzip
+// layer. These scenarios pin that contract over the wire, against a real
+// server, for the three routes that used to self-compress (list, detail,
+// filter-match) — no browser needed: raw `node:http` requests never
+// decompress on their own, so the exact bytes and headers are observable:
+//
+//   S105-1  `Accept-Encoding: identity` — no content-encoding, the raw bytes
+//           are JSON, and each route's body is large enough (>= 1024 bytes)
+//           that the server's compression threshold is not what skips
+//           compression.
+//   S105-2  `Accept-Encoding: gzip` — the body parses as JSON after at most
+//           the one decompression the content-encoding header names, and a
+//           response that does carry content-encoding varies on
+//           `Accept-Encoding`. This is the anti-double-gzip guard: a tree
+//           that self-compresses (the app-layer gzip this ticket removes)
+//           answers with a body that is still gzip after one decompression,
+//           or with no header while the body stays encoded, and both shapes
+//           fail here.
+//   S105-3  start mode only (`E2E_SERVER_MODE=start`): the server itself
+//           compressed each route's response — content-encoding is exactly
+//           `gzip`, one gunzip yields valid JSON, and `Vary` carries
+//           `Accept-Encoding`. Under `next dev` the compression middleware
+//           makes no promise, so dev runs judge S105-1/S105-2 only.
+//
+//   node e2e/sessions-compression.mjs
+//   npm run test:e2e:all -- sessions-compression.mjs
+//
+// The declared carries are exactly the three session routes this suite
+// requests over the wire plus next.config.ts (whose compress flag is the
+// contract's other half). review r1 ruled the earlier narrowing to
+// next.config.ts alone a test_weakened: this suite is AC3's regression guard,
+// and a light tier that changes only a session route must select it.
+// e2e/session-stall-recovery.mjs — which never calls /api/sessions itself
+// (its reads are the page's own polls) — gave up the app/api/sessions/*
+// declaration it held, per docs/contributing.md's rule that a shared file is
+// declared only by the 1-3 suites that exercise it directly, so the per-path
+// cap of 3 (lib/e2e-carries.test.mjs) still holds with this suite added.
+//
+// The suite needs no browser, but `next start` needs a production build:
+// e2e/all.mjs builds once for a run that selects a browser suite and hands
+// every suite that build, so a targeted start-mode run of this suite alone
+// builds into its own dist dir first (the path next-server.mjs's noBuild
+// error names). A start run without a handed-down prebuilt build always
+// rebuilds — correctness first: a BUILD_ID left by an earlier run of a
+// different tree would serve a stale build and judge the wrong tree.
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import http from "node:http";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { gunzipSync } from "node:zlib";
+import { startNextServer } from "./next-server.mjs";
+
+const root = dirname(dirname(fileURLToPath(import.meta.url)));
+const mode = process.env.E2E_SERVER_MODE || "dev";
+assert.ok(mode === "dev" || mode === "start", "E2E_SERVER_MODE must be dev or start");
+process.env.PI_WEB_DIST_DIR ||= ".next/e2e/sessions-compression";
+if (mode === "dev") {
+  assert.ok(
+    !existsSync(join(root, process.env.PI_WEB_DIST_DIR, "dev/lock")),
+    "Run in a checkout without an active dev server",
+  );
+}
+
+const SESSIONS = 6;
+const FIRST_MESSAGE = "compressible session content for the online compression check ".repeat(16);
+// filter-match answers with matched ids alone, so its body needs enough
+// matching sessions to clear the 1024-byte compression threshold by itself.
+const FILTER_SESSIONS = 50;
+const FILTER_MARKER = "filter-match-compression-guard";
+const DETAIL_ID = "compression-0";
+
+const failures = [];
+const ran = new Set();
+async function scenario(id, body) {
+  ran.add(id);
+  try {
+    await body();
+    console.log(`PASS ${id}`);
+  } catch (error) {
+    failures.push(`${id}: ${error?.message ?? error}`);
+    console.error(`FAIL ${id}: ${error?.message ?? error}`);
+  }
+}
+
+const varyHasAcceptEncoding = (headers) =>
+  /(?:^|,\s*)accept-encoding(?:\s*,|$)/i.test(headers.vary ?? "");
+
+/** Seeds throwaway sessions: big-message ones for the list and detail
+ * routes, marker ones so filter-match answers with a >=1KB id list. */
+function seedSessions(agentDir) {
+  const sessionDir = join(agentDir, "sessions", "sessions-compression");
+  mkdirSync(sessionDir, { recursive: true });
+  const stamp = "2026-11-17T00:00:00.000Z";
+  const writeSession = (id, content) => {
+    const lines = [
+      { type: "session", version: 3, id, timestamp: stamp, cwd: join(agentDir, "project") },
+      { type: "message", id: "u1", parentId: null, timestamp: stamp, message: { role: "user", content } },
+    ];
+    writeFileSync(join(sessionDir, `${stamp.replaceAll(":", "-")}_${id}.jsonl`), `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
+  };
+  for (let i = 0; i < SESSIONS; i += 1) {
+    writeSession(`compression-${i}`, `${FIRST_MESSAGE} #${i}`);
+  }
+  for (let i = 0; i < FILTER_SESSIONS; i += 1) {
+    writeSession(`${FILTER_MARKER}-${String(i).padStart(2, "0")}`, `${FILTER_MARKER} filter fixture session ${i}`);
+  }
+}
+
+const agentDir = mkdtempSync(join(tmpdir(), "pi-web-sessions-compression-"));
+seedSessions(agentDir);
+const artifacts = join(root, "test-results/e2e");
+mkdirSync(artifacts, { recursive: true });
+
+/** In start mode with no prebuilt build handed down, build this suite's own. */
+async function ensureStartBuild() {
+  if (process.env.E2E_PREBUILT_DIST) return;
+  rmSync(join(root, process.env.PI_WEB_DIST_DIR), { recursive: true, force: true });
+  const scratchHome = mkdtempSync(join(tmpdir(), "pi-web-sessions-compression-build-"));
+  const build = spawn(
+    process.execPath,
+    [join(root, "node_modules/next/dist/bin/next"), "build", "--webpack"],
+    {
+      cwd: root,
+      env: { ...process.env, HOME: scratchHome, NEXT_TELEMETRY_DISABLED: "1" },
+      stdio: "inherit",
+    },
+  );
+  const code = await new Promise((resolve) => {
+    build.once("error", () => resolve(1));
+    build.once("close", resolve);
+  });
+  rmSync(scratchHome, { recursive: true, force: true });
+  assert.equal(code, 0, `next build --webpack into ${process.env.PI_WEB_DIST_DIR} failed`);
+}
+
+let stop = () => {};
+try {
+  if (mode === "start") await ensureStartBuild();
+
+  const started = await startNextServer({
+    name: "sessions-compression",
+    logFile: join(artifacts, "sessions-compression-server.log"),
+    env: {
+      ...process.env,
+      PI_CODING_AGENT_DIR: agentDir,
+      PI_WEB_PASSWORD: "",
+      NEXT_TELEMETRY_DISABLED: "1",
+    },
+  });
+  stop = started.stop;
+  const { hostname, port } = new URL(started.base);
+
+  /** A raw request that never decompresses: the exact bytes arrive as sent. */
+  const request = (path, acceptEncoding) => new Promise((resolve, reject) => {
+    const req = http.request(
+      { host: hostname, port, path, headers: { "Accept-Encoding": acceptEncoding }, method: "GET" },
+      (res) => {
+        const chunks = [];
+        res.on("data", (chunk) => chunks.push(chunk));
+        res.on("end", () => resolve({
+          status: res.statusCode,
+          headers: res.headers,
+          body: Buffer.concat(chunks),
+        }));
+      },
+    );
+    req.on("error", reject);
+    req.end();
+  });
+
+  // The three routes that used to self-compress (AC2's surface), each with a
+  // >=1KB body: the list's trimmed previews, the detail's full first message
+  // and history, and filter-match's matched-id list.
+  const routes = [
+    {
+      name: "list",
+      path: "/api/sessions?summary=1",
+      check: (payload) => assert.equal(payload.sessions.length, SESSIONS + FILTER_SESSIONS),
+    },
+    {
+      name: "detail",
+      path: `/api/sessions/${DETAIL_ID}`,
+      check: (payload) => {
+        assert.equal(payload.sessionId, DETAIL_ID);
+        assert.ok(payload.info.firstMessage.startsWith(FIRST_MESSAGE.slice(0, 32)));
+      },
+    },
+    {
+      name: "filter-match",
+      path: `/api/sessions/filter-match?patterns=${encodeURIComponent(JSON.stringify([FILTER_MARKER]))}`,
+      check: (payload) => assert.equal(payload.matchedIds.length, FILTER_SESSIONS),
+    },
+  ];
+
+  await scenario("S105-1", async () => {
+    for (const route of routes) {
+      const response = await request(route.path, "identity");
+      assert.equal(response.status, 200, route.name);
+      assert.equal(response.headers["content-encoding"], undefined,
+        `${route.name}: identity request must not carry content-encoding (got ${JSON.stringify(response.headers["content-encoding"])})`);
+      const payload = JSON.parse(response.body.toString("utf8"));
+      route.check(payload);
+      // The compression threshold is 1024 bytes: below it the server
+      // legitimately skips compression, and no later scenario may judge the
+      // compression for this route.
+      assert.ok(response.body.length >= 1024,
+        `${route.name}: the body is ${response.body.length} bytes, under the 1024-byte compression threshold`);
+    }
+  });
+
+  await scenario("S105-2", async () => {
+    for (const route of routes) {
+      const response = await request(route.path, "gzip");
+      assert.equal(response.status, 200, route.name);
+      const encoding = response.headers["content-encoding"];
+      let payload;
+      if (encoding === "gzip") {
+        assert.ok(varyHasAcceptEncoding(response.headers),
+          `${route.name}: a compressed response must vary on Accept-Encoding`);
+        payload = JSON.parse(gunzipSync(response.body).toString("utf8"));
+      } else {
+        assert.equal(encoding, undefined,
+          `${route.name}: unexpected content-encoding ${JSON.stringify(encoding)}: the body must parse after at most the one decompression it names`);
+        payload = JSON.parse(response.body.toString("utf8"));
+      }
+      route.check(payload);
+    }
+  });
+
+  if (mode === "start") {
+    await scenario("S105-3", async () => {
+      for (const route of routes) {
+        const response = await request(route.path, "gzip");
+        assert.equal(response.status, 200, route.name);
+        assert.equal(response.headers["content-encoding"], "gzip",
+          `${route.name}: next start must itself compress the >=1KB response (got ${JSON.stringify(response.headers["content-encoding"])})`);
+        const payload = JSON.parse(gunzipSync(response.body).toString("utf8"));
+        route.check(payload);
+        assert.ok(varyHasAcceptEncoding(response.headers),
+          `${route.name}: the compressed response must vary on Accept-Encoding`);
+      }
+    });
+  } else {
+    console.log("SKIP S105-3 (dev mode: the compression middleware makes no promise under next dev)");
+  }
+
+  if (failures.length === 0 && ran.size > 0) {
+    console.log("sessions-compression: all scenarios passed");
+  } else {
+    process.exitCode = 1;
+  }
+} finally {
+  await stop();
+  rmSync(agentDir, { recursive: true, force: true });
+}

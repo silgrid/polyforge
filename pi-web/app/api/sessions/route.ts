@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { jsonResponse } from "@/lib/json-response";
 import { trimSessionListFirstMessages } from "@/lib/session-list-payload";
 import {
   attachSessionProjectInfo,
@@ -43,8 +42,7 @@ export async function GET(req: Request) {
     // Trim at the RESPONSE layer only — the reader's view cache and the
     // detail endpoint keep full text.
     const sessions = withSubagentDisplayStatus(trimSessionListFirstMessages(mergeSessionLists(persistedSessions, runtimeSessions)));
-    return perf?.attach(jsonResponse(
-      req,
+    return perf?.attach(NextResponse.json(
       {
         sessions,
         sessionListVersion,
@@ -53,8 +51,7 @@ export async function GET(req: Request) {
         completionNotificationSuppressedSessionIds: getCompletionNotificationSuppressedRpcSessionIds(),
       },
       { headers: { "Cache-Control": "no-store" } },
-    )) ?? jsonResponse(
-      req,
+    )) ?? NextResponse.json(
       {
         sessions,
         sessionListVersion,

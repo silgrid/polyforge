@@ -1,5 +1,12 @@
-// carries: components/ChatWindow*, components/ChatInput*, components/MessageView*, hooks/useAgentSession*, lib/agent-*, lib/stream-client*, lib/session-*, app/api/agent/*, app/api/sessions/*
+// carries: components/ChatWindow*, components/ChatInput*, components/MessageView*, hooks/useAgentSession*, lib/agent-*, lib/stream-client*, lib/session-*, app/api/agent/*
 // carries: lib/page-stream-registry*
+// No app/api/sessions/* declaration: this suite never calls a /api/sessions
+// route itself — its own requests go to /api/agent/* and the /api/sessions
+// reads it observes (and asserts on) are the page's own polls. Per
+// docs/contributing.md a shared path is declared only by the 1–3 suites that
+// exercise it directly, and the sessions routes keep their light-tier
+// selection through e2e/claude-session-219.mjs, e2e/run.mjs and
+// e2e/sessions-compression.mjs; this suite still runs in the full bar.
 // repro: the newest session content stays hidden when the page's
 // event stream is ESTABLISHED but silent (a weak mobile network), both while
 // the page has its own run under way and when an idle page first sees another
