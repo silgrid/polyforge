@@ -27,10 +27,10 @@ import (
 type epicSnapChildren struct {
 	Version  int `json:"version"`
 	Children []struct {
-		ID      string          `json:"id"`
-		Slug    string          `json:"slug"`
-		Status  string          `json:"status"`
-		Landing json.RawMessage `json:"landing"`
+		ID     string          `json:"id"`
+		Slug   string          `json:"slug"`
+		Status string          `json:"status"`
+		Wrap   json.RawMessage `json:"landing"`
 	} `json:"children"`
 }
 

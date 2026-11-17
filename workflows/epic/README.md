@@ -88,6 +88,11 @@ verify-children --> sync --> build --> review --> verification --> publish --> m
   owner's; nothing rewinds into them but the merge gate's moved-base FAIL,
   which returns to sync to re-sync and re-run.
 
+- **The rewind budget** — 3 rewinds in total (`max_rewinds: 3`, one
+  budget across every gate after the fix build): once it is spent, a gate
+  that would FAIL asks the owner first. The moved-base class spends none
+  of it and counts on its own toward 2.
+
 The lane is project-neutral: no text names a project, a repository or a
 forge beyond the generic (`gh`, the origin). Its steps are the shared
 mechanical skills (`workflows/_shared/skills/`) with the epic's own

@@ -43,7 +43,7 @@ func TestEpicLaneDocsContract(t *testing.T) {
 		"the driver re-checks against aihub before every dispatch",
 		"parks the workflow blocked on its own authority",
 		"`runtime-state/epic-resume.json`",
-		"one owner-class rewind to the step it names",
+		"one owner-class rewind to the step the lane's `resume_reset` names",
 		"a `children` key carrying the claim's snapshot verbatim",
 		"the ONE record the integrate pool takes",
 	} {

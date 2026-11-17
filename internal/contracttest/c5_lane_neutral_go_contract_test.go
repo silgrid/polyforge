@@ -59,7 +59,7 @@ var c5IntegratAllowed = map[string][]c5Allowed{
 		{"IntegrateKey|IntegrateRemovedHint|`integrate:`", "the removed root `integrate:` section of .polyforge.yaml: refused whole with its rewrite hint, which names the section and how a batch is filed now"},
 	},
 	"internal/polyforge/runtime/epicchildren.go": {
-		{`const childLandingAttr = "integration"`, "the hub attrs key a wrapped child's landing record lives under: the snapshot copies the record verbatim, so the key is the record's data-format name (written by the merge step's wrap-attrs), never the lane's"},
+		{`const childWrapAttr = "integration"`, "the hub attrs key a wrapped child's landing record lives under: the snapshot copies the record verbatim, so the key is the record's data-format name (written by the merge step's wrap-attrs), never the lane's"},
 	},
 }
 

@@ -43,7 +43,7 @@ this gate unless it breaks the epic's total acceptance or a seam.
    `artifacts/build/units.json` (each unit red then green),
    `artifacts/self-review.md`, `artifacts/build/change-analysis.json` —
    checked and replayed exactly as the shared review skill does (the four
-   facts lines, the same classes). On the first round none of these
+   facts lines, the same classes). When every task repo's `git -C repos/<name> rev-parse HEAD` equals the head that round judged and `sha256sum artifacts/build/units.json` equals that line, the build since changed nothing (the daemon does not stop on it — you judge it). Then do not run the facts again: read the fix build's 回应上一轮 — a point it answers with evidence the finding was wrong is withdrawn with the reason in `artifacts/review.md`; a point left unanswered stands as a residual and hands the epic back to the fix build. On the first round none of these
    exists and none is demanded: the change is the children's landed work.
 
 ## Procedure
@@ -69,6 +69,12 @@ this gate unless it breaks the epic's total acceptance or a seam.
    fix build should carry — `pf step ask` the owner proposing a separate fix sub-ticket (a new work item under the epic, on the children
    branch; its own lane's contract tests and driver tests red before its
    fix), then end your turn; the owner's answer decides.
+
+## Never
+
+Never end a turn that needs the owner without `pf step ask`; never
+run a command in the background and poll it, or give it a timeout or
+deadline of your own.
 
 ## 交接要写什么 — what your hand-off carries
 

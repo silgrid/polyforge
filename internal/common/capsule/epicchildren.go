@@ -33,8 +33,8 @@ type EpicChild struct {
 	// landed_on_target evidence (Q6): the PR links and merge commits
 	// review reads and the epic's own landing record attaches. A child
 	// without one is JSON null (the verify-children step judges it,
-	// never the snapshot). The Go name stays out of the integration
-	// lane's vocabulary (workflow contract 4).
+	// never the snapshot). The Go name stays out of the gating lane's
+	// vocabulary (workflow contract 4).
 	Wrap json.RawMessage `json:"landing"`
 }
 

@@ -37,7 +37,8 @@ import (
 // lives under: the snapshot copies the record VERBATIM (the key is the
 // record's data-format name, written by the merge step's wrap-attrs and
 // read back by the landing record's own rules). The Go name stays out of
-// the integration lane's vocabulary (workflow contract 4).
+// the gating lane's vocabulary (workflow contract 4: a lane's terms are
+// its skills' and the hub's, never the execution plane's).
 const childWrapAttr = "integration"
 
 // writeEpicChildren snapshots j's children when the capsule is an epic's

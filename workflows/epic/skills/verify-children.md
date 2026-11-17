@@ -39,6 +39,14 @@ owner (`blocked`), never a FAIL back.
 4. **Everything holds**: hand off `done` — the body names the table's path
    and the epic branch's tips.
 
+## Never
+
+End a turn that needs the owner without `pf step ask` (a question only
+the owner can answer); never run a command in the background and poll
+it, or give it a timeout or deadline of your own — each check is a
+foreground call that ends with its exit code; never hand off `done` on
+an unverified child.
+
 ## 交接要写什么 — what your hand-off carries
 
 - **Status.** `done` only when every child is wrapped and merged into the

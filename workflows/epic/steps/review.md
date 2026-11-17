@@ -62,6 +62,8 @@ are its judgement.
    judgement, the seam findings (blocking and non-blocking), and per child
    its PR link with what its own review left open.
 
+{{review_security}}
+
 ## 交接要写什么 — what your hand-off carries
 
 - **Status.** `done` (a pass) or `fail` (the findings, each numbered) —
