@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -117,7 +118,7 @@ func relGateTree(t *testing.T, dir string) {
 	t.Helper()
 	relWrite(t, filepath.Join(dir, ".polyforge", "verify-scope.conf"), relGateConf, 0o644)
 	relWrite(t, filepath.Join(dir, ".polyforge", "Dockerfile.verify"), relGateDockerfile, 0o644)
-	for _, tool := range []string{"tools/gate-id", "tools/green-tag", "workflows/_shared/scripts/verify-scope"} {
+	for _, tool := range []string{"tools/gate-id", "tools/green-tag", "workflows/_shared/scripts/verify-scope", "workflows/_shared/scripts/audit-deps"} {
 		raw, err := os.ReadFile(filepath.Join("..", filepath.FromSlash(tool)))
 		if err != nil {
 			t.Fatal(err)
@@ -317,6 +318,11 @@ exit 0
 [ -n "$FAKE_NPM_FAIL" ] && [ "$1" = "$FAKE_NPM_FAIL" ] && { echo "npm $1 failed" >&2; exit 1; }
 case "$1" in
   ci) echo "npm ci" >> "$CALLLOG" ;;
+  # the dependency-audit gate's surface run (the engine's audit command,
+  # when RELEASE_AUDIT_CMD is empty): a green report, whole tree and
+  # production-only alike
+  audit) echo "npm $*" >> "$CALLLOG"
+    printf '{"auditReportVersion":2,"vulnerabilities":{},"metadata":{}}\n' ;;
   run) echo "npm run $2 PI_WEB_RELEASE_VERSION=$PI_WEB_RELEASE_VERSION" >> "$CALLLOG" ;;
   version) echo "npm $*" >> "$CALLLOG"
     printf '{\n  "name": "@silgrid/pi-web",\n  "version": "%s"\n}\n' "$2" > package.json ;;
@@ -326,6 +332,16 @@ case "$1" in
     st=$(mktemp -d); mkdir "$st/package"; cp package.json "$st/package/"
     tar -czf "$dest/silgrid-pi-web-$v.tgz" -C "$st" package; rm -rf "$st" ;;
 esac
+exit 0
+`, 0o755)
+	// go and govulncheck: the dependency-audit gate's --go surface (the
+	// engine's audit command, RELEASE_AUDIT_CMD empty). govulncheck answers
+	// a clean scan stream (its config event is the report the gate reads).
+	relWrite(t, filepath.Join(w.bin, "go"), `#!/bin/sh
+exit 0
+`, 0o755)
+	relWrite(t, filepath.Join(w.bin, "govulncheck"), `#!/bin/sh
+[ "$1" = "-json" ] && printf '{"config":{}}\n'
 exit 0
 `, 0o755)
 	relWrite(t, filepath.Join(w.bin, "gh"), `#!/bin/sh
@@ -599,7 +615,7 @@ func TestReleaseScriptHappyPathOrderAndAssets(t *testing.T) {
 		t.Fatalf("release failed: %v\n%s", err, out)
 	}
 	calls := w.calls()
-	order := []string{"xrefs", "tests", "audit", "build", "docker build", "npm ci", "npm run build", "npm version", "npm pack", "git push", "docker push", "docker inspect", "gh release create"}
+	order := []string{"xrefs", "tests", "build", "audit", "docker build", "npm ci", "npm run build", "npm version", "npm pack", "git push", "docker push", "docker inspect", "gh release create"}
 	last := -1
 	for _, p := range order {
 		i := relIndex(calls, p)
@@ -722,42 +738,137 @@ func TestReleaseScriptXrefsGateFailsBeforeTests(t *testing.T) {
 	}
 }
 
-func TestReleaseScriptAuditGateFailsBeforeBuild(t *testing.T) {
-	// The production-dependency audit gate sits between
-	// the test gate and the build: a vulnerable production dependency
-	// stops the release with nothing built or published, and a failing
-	// default (no webui tree) stops it the same way.
-	for name, cmd := range map[string]string{
-		"override": "RELEASE_AUDIT_CMD=echo audit >> \"$CALLLOG\"; exit 1",
-		"default":  "RELEASE_AUDIT_CMD=",
-	} {
-		t.Run(name, func(t *testing.T) {
-			w := newRelWorld(t, []string{"v1.2.0"}, nil)
-			out, err := w.run([]string{cmd})
-			if err == nil {
-				t.Fatalf("release passed with a failing audit gate:\n%s", out)
-			}
-			if !strings.Contains(out, "production-dependency audit") {
-				t.Fatalf("no clear audit message:\n%s", out)
-			}
-			if !strings.Contains(out, "nothing built or published") {
-				t.Fatalf("message does not say nothing was published:\n%s", out)
-			}
-			// The test gate already ran; the build and every publish effect
-			// must NOT have.
-			if i := relIndex(w.calls(), "tests"); i < 0 {
-				t.Fatalf("the test gate did not run before the audit gate: %v", w.calls())
-			}
-			for _, p := range []string{"build", "docker", "git push", "gh release"} {
-				if i := relIndex(w.calls(), p); i >= 0 {
-					t.Fatalf("%q ran after the audit gate failed: %v", p, w.calls())
-				}
-			}
-			if got := w.originTags(); strings.Contains(got, "v1.2.1") {
-				t.Fatalf("tag pushed: %q", got)
-			}
-		})
+// relAuditCmd answers the engine's own dependency-audit command for the
+// world's tree, the way release.sh takes its default: the command named
+// `audit` of workflows/_shared/scripts/verify-scope --json --full.
+func relAuditCmd(t *testing.T, w *relWorld) string {
+	t.Helper()
+	var out, errb strings.Builder
+	cmd := exec.Command("python3", filepath.Join("workflows", "_shared", "scripts", "verify-scope"), "--json", "--full")
+	cmd.Dir = w.work
+	cmd.Stdout = &out
+	cmd.Stderr = &errb
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("the scope engine could not report the world's audit command: %v\n%s", err, errb.String())
 	}
+	var r struct {
+		Commands []struct {
+			Name string `json:"name"`
+			Cmd  string `json:"cmd"`
+		} `json:"commands"`
+	}
+	if err := json.Unmarshal([]byte(out.String()), &r); err != nil {
+		t.Fatalf("the engine's --json report is not JSON: %v\n%s", err, out.String())
+	}
+	for _, c := range r.Commands {
+		if c.Name == "audit" {
+			return c.Cmd
+		}
+	}
+	t.Fatalf("the engine reports no audit command for the world's tree:\n%s", out.String())
+	return ""
+}
+
+// TestReleaseScriptAudit (polyforge#113): without RELEASE_AUDIT_CMD the
+// release's audit gate is the scope engine's own dependency-audit command,
+// verbatim - the invocation log names exactly the command the engine's
+// --json --full report names, declared production level included - and the
+// gate runs after the binaries build, before anything is published, on a
+// tree with an auditable Go module and npm lockfile whose stub tools answer
+// green.
+func TestReleaseScriptAudit(t *testing.T) {
+	w := newRelWorld(t, []string{"v1.2.0"}, nil)
+	// an auditable tree, like the real repository's: a Go module, a root
+	// lockfile and a declared production level the engine's audit command
+	// carries into the release's invocation log
+	relWrite(t, filepath.Join(w.work, "go.mod"), "module example.invalid/rel\n\ngo 1.21\n", 0o644)
+	relWrite(t, filepath.Join(w.work, "package.json"), "{\"name\":\"rel\",\"scripts\":{\"lint\":\"true\"}}\n", 0o644)
+	relWrite(t, filepath.Join(w.work, "package-lock.json"), "{\"lockfileVersion\":3}\n", 0o644)
+	relWrite(t, filepath.Join(w.work, ".polyforge", "verify-scope.conf"),
+		"stack=go\nfast_gate=echo gate-fast\nfull_command=echo gate-full\naudit_prod_level=moderate\n", 0o644)
+	relGit(t, w.work, "add", "-A")
+	relGit(t, w.work, "commit", "-q", "-m", "an auditable tree")
+
+	out, err := w.run([]string{"RELEASE_AUDIT_CMD="})
+	if err != nil {
+		t.Fatalf("release failed: %v\n%s", err, out)
+	}
+	want := relAuditCmd(t, w)
+	if !strings.Contains(want, "--npm-prod-level moderate") {
+		t.Fatalf("the world's engine report must carry the declared level: %q", want)
+	}
+	if !strings.Contains(out, "release: dependency-audit gate: "+want+"\n") {
+		t.Fatalf("the release's invocation log must name the engine's audit command verbatim:\n%s\nwant: %s", out, want)
+	}
+	calls := w.calls()
+	iBuild := relIndex(calls, "build")
+	iAudit := relIndex(calls, "npm audit")
+	iImage := relIndex(calls, "docker build")
+	if iBuild < 0 || iAudit < 0 || iImage < 0 || !(iBuild < iAudit && iAudit < iImage) {
+		t.Fatalf("the audit must run after the binaries build and before the image build: %v", calls)
+	}
+	// the audit really ran: both surface runs, whole tree and production-only
+	if flat := strings.Join(calls, "\n"); !strings.Contains(flat, "--include=dev") || !strings.Contains(flat, "--omit=dev") {
+		t.Fatalf("the audit command's npm surface must run both audits:\n%s", flat)
+	}
+	if got := w.originTags(); !strings.Contains(got, "v1.2.1") {
+		t.Fatalf("v1.2.1 not on origin: %q", got)
+	}
+}
+
+// TestReleaseScriptAuditGateStopsBeforePublish: the dependency-audit gate
+// stops the release with nothing published - a failing RELEASE_AUDIT_CMD
+// after the build, and a tree the engine reports no audit command for
+// (no analyzer, no auditable surface) refuses the same way.
+func TestReleaseScriptAuditGateStopsBeforePublish(t *testing.T) {
+	t.Run("override fails", func(t *testing.T) {
+		w := newRelWorld(t, []string{"v1.2.0"}, nil)
+		out, err := w.run([]string{"RELEASE_AUDIT_CMD=echo audit >> \"$CALLLOG\"; exit 1"})
+		if err == nil {
+			t.Fatalf("release passed with a failing audit gate:\n%s", out)
+		}
+		if !strings.Contains(out, "dependency-audit gate failed") {
+			t.Fatalf("no clear audit message:\n%s", out)
+		}
+		if !strings.Contains(out, "nothing published") {
+			t.Fatalf("message does not say nothing was published:\n%s", out)
+		}
+		// the gate sits after the binaries build; every publish effect must NOT have run
+		if relIndex(w.calls(), "build") < 0 {
+			t.Fatalf("the build did not run before the audit gate: %v", w.calls())
+		}
+		for _, p := range []string{"docker", "git push", "gh release"} {
+			if i := relIndex(w.calls(), p); i >= 0 {
+				t.Fatalf("%q ran after the audit gate failed: %v", p, w.calls())
+			}
+		}
+		if got := w.originTags(); strings.Contains(got, "v1.2.1") {
+			t.Fatalf("tag pushed: %q", got)
+		}
+	})
+	t.Run("no engine audit command refuses", func(t *testing.T) {
+		// the plain world: stack=none, no lockfile - the engine reports no
+		// audit command, and the release refuses rather than skip the gate
+		w := newRelWorld(t, []string{"v1.2.0"}, nil)
+		out, err := w.run([]string{"RELEASE_AUDIT_CMD="})
+		if err == nil {
+			t.Fatalf("release passed with no audit command to run:\n%s", out)
+		}
+		if !strings.Contains(out, "dependency-audit command") {
+			t.Fatalf("no clear audit message:\n%s", out)
+		}
+		if !strings.Contains(out, "nothing published") {
+			t.Fatalf("message does not say nothing was published:\n%s", out)
+		}
+		for _, p := range []string{"docker", "git push", "gh release"} {
+			if i := relIndex(w.calls(), p); i >= 0 {
+				t.Fatalf("%q ran after the audit refusal: %v", p, w.calls())
+			}
+		}
+		if got := w.originTags(); strings.Contains(got, "v1.2.1") {
+			t.Fatalf("tag pushed: %q", got)
+		}
+	})
 }
 
 func TestReleaseScriptVersionFloorAndBump(t *testing.T) {
