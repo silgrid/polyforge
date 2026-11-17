@@ -2,16 +2,20 @@
 
 package test
 
-// w72_analysis_prompt_contract_test.go (polyforge#72, u5 — AC7): the
+// w72_analysis_prompt_contract_test.go (polyforge#72, u5 — AC7;
+// polyforge#89 AC3): the
 // analysis task's prompt template — embedded into the daemon binary
 // with go:embed and read here from the repository source (the embedded
 // copy IS this file at compile time; the daemon package fails to build
 // without it). The contract: the ticket's 7-item report format defined
 // by skills/polyforge/verbs/submit.md, with each item's heading shape
 // fixed (`### <n>. <标题>`), a separate epic-upgrade recommendation
-// section after the seven (ruling 18's default rules, recommendation
-// only, never a sub-ticket), the narrow write command the task writes
-// through, and no project or component name anywhere (the template ships
+// section after the seven (ruling 18's rules, recommendation
+// only, never a sub-ticket; judged on the component division and the
+// effective thresholds the daemon attaches after the template —
+// polyforge#89 — the defaults 3 / 8 / 30 applying without it), the
+// narrow write command the task writes through, and no project or
+// component name anywhere (the template ships
 // with the binary and serves any project).
 
 import (
@@ -60,7 +64,9 @@ func TestW72AnalysisPromptTemplateContract(t *testing.T) {
 	}
 
 	// The epic-upgrade recommendation section after the seven, on
-	// ruling 18's default rules: recommendation only, never a sub-ticket.
+	// ruling 18's rules: recommendation only, never a sub-ticket; judged
+	// on the daemon-attached component division and thresholds, the
+	// defaults named for the no-attachment case (polyforge#89).
 	for _, want := range []string{
 		"升级 epic 建议",
 		"建议升级",
@@ -71,6 +77,10 @@ func TestW72AnalysisPromptTemplateContract(t *testing.T) {
 		"批量修改不算",
 		"只给建议",
 		"不要建子票",
+		"各仓库组件划分与生效阈值",
+		"每个仓库算一个组件",
+		"没有附带这一节时",
+		"3 / 8 / 30",
 	} {
 		if !strings.Contains(flat, want) {
 			t.Errorf("%s must carry %q — the epic-upgrade section and ruling 18's default rules (AC7)", rel, want)
