@@ -49,6 +49,12 @@ type Aihub interface {
 	SessionVerify(wi, sessionID string) (*api.SessionVerifyResponse, error)
 	SessionEnd(wi string, req api.SessionEndRequest) error
 	GetWorkItem(idOrSlug string) (*api.WorkItem, error)
+	// WriteAttrs writes one top-level attrs key of a work item on the
+	// daemon's machine key (PATCH /work-items/{id}/attrs). The claim's
+	// only use is clearing the reserved step_params key once the merge's
+	// publish succeeded (polyforge#79) — the key's values were judged
+	// against a lane before they rode it.
+	WriteAttrs(id string, req api.AttrsWriteRequest) (*api.WorkItem, error)
 }
 
 // Config is the daemon-supplied runtime configuration.
