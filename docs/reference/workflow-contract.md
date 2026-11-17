@@ -87,6 +87,8 @@ at once, each with its code, file, line and YAML path.
 | `exclusive` | bool, default `false` ([Properties](#properties)): `true` holds the lane to one unfinished work item per project — a create on it reaches aihub exclusive, refused `CORE-409` `OPEN_ON_BUNDLE` while another work item of the project on the lane is not wrapped, failed or canceled; a built-in lane and a user lane alike; any other value is `WFC-112` |
 | `acceptance` | `required` or `none`, default `required` ([Properties](#properties)): whether a work item on the lane must list an acceptance criterion (`## Acceptance` or `## 验收`) before it runs; `none` is a lane with no criterion to list — the shipped integrate and release lanes declare it, develop and micro do not; a built-in lane and a user lane alike; any other value is `WFC-112` |
 | `children_branch` | a branch-name template, one string (`WFC-112` any other shape): it must carry `{seq}` (the parent's seq — polyforge#1 → `epic/1`), may carry `{project}` (the parent's project name); the rest is literal and the substituted name must be a legal git branch ref ([Properties](#properties)). A sub-ticket of a work item whose parent runs on the lane has its task repos checked out on the substituted branch: the first claim fixes it into `runtime-state/target-branch.json`, every (re-)claim checks the fixed value out, and a claim that cannot read the parent or its lane is refused; a parent bound to no lane declares nothing the same way — the claim keeps the default branch |
+| `epic` | bool, default `false` ([Properties](#properties)): the lane's own work items are epics — each works on the children branch of its own seq (`children_branch`, which the lane must declare with the key, `WFC-112` otherwise) and merges into the origin's default branch; a built-in lane and a user lane alike; any other value is `WFC-112` |
+| `resume_reset` | a step id, one string (`WFC-112` any other shape): the step an owner-resumed epic's changed-children marker resets the lane to ([Properties](#properties)) — required when the lane declares `epic`, refused without it, and it must name a step of this lane; a built-in lane and a user lane alike |
 | `defaults` | a map holding `model_candidates` and `tiers` |
 | `steps` | a non-empty list of step entries, in execution order (`WFC-113` missing or empty) |
 
@@ -221,6 +223,8 @@ refused for its version (`WFC-101`).
 |---|---|
 | `acceptance` | whether a work item on the lane must list an acceptance criterion (`## Acceptance` or `## 验收`) before it runs (absent = required; none = the lane has no criterion to list): pf submit refuses an item without one only on a lane that requires it, the daemon's auto claim skips such an item only there, pf queue (and the Pi Web list, which reads its acceptance_missing) marks it only there, and pf file create prints the carried-by hint only there; the pre-submit analysis check (a `## 分析` / `## Analysis` section with content) applies on the same lanes — refused by pf submit, skipped by the auto claim, marked 需要交互：未分析 by pf queue; a lane the reader cannot load counts as required |
 | `children_branch` | the branch-name template the daemon's claim of a sub-ticket reads from the PARENT's lane (the lane of the work item its `parent_id` names — never the sub-ticket's own): {seq} is the parent's seq and {project} its project name; the sub-ticket's first claim fixes the substituted branch into runtime-state/target-branch.json before the task repos are cloned, every (re-)claim checks the fixed value out (the carrier restore included) and the daemon creates the branch on each origin from the default branch tip with a non-forced push when the remote does not carry it; a claim that cannot read the parent or its lane is refused naming why; a parent whose lane declares none leaves the sub-ticket untouched |
+| `epic` | the lane's own work items are epics: the lane must also declare children_branch and resume_reset (the loader refuses the key without them, WFC-112); a first claim fixes the children branch substituted with the work item's own seq into runtime-state/target-branch.json as the record's checkout key — no target key, so every reader keeps its default-branch logic and the epic merges into the origin's default branch — and snapshots the item's children into runtime-state/children.json, which the driver re-checks against aihub before every dispatch; a sub-ticket's claim reads the parent's lane exactly as before |
+| `resume_reset` | the step id an owner-resumed epic's changed-children marker (runtime-state/epic-resume.json) resets the lane to — required when the lane declares epic and refused without it (WFC-112), and it must name a step of this lane: the runtime writes it into the marker and the driver lands it as one owner-class rewind, charged to no budget; the Go code names no step id (workflow contract ⑥) |
 | `exclusive` | one unfinished work item per project on the lane: the daemon's data-plane proxy reads it in the lane set of the project's workspace and forwards a work-item create on the lane (`pf file create --bundle <lane>`) to aihub exclusive, refused CORE-409 OPEN_ON_BUNDLE while another work item of the project on the lane is not wrapped, failed or canceled; nothing else reads it |
 
 A property is a declaration the code reads, never a lane's name: nothing
@@ -849,9 +853,46 @@ expected, or the branch missing on a task repo's origin is not judged
 The landing the sub-ticket's merge registers is `state:
 landed_on_target` with `target` naming the branch: the integrate pool's
 `integration.state=landed` filter (and the web UI's alike) never takes
-it. The record's shape keeps room for the epic ticket's own extension
-(its checkout start point and merge target) — keys the readers here
-tolerate and no shipped step reads.
+it. The record's shape keeps room for the epic ticket's own extension —
+keys the readers here tolerate and no shipped step reads, filled by the
+epic below.
+
+**An epic's own record (polyforge#117).** A lane may declare `epic`
+([Lane keys](#lane-keys)): its OWN work items are epics — each works on
+the children branch substituted with its own seq, and the first claim
+fixes that branch into `runtime-state/target-branch.json` as the
+record's `checkout` key and no `target` (exactly the sub-ticket's file,
+the same strictness and the same checkout and carrier-restore rules).
+No `target` means the epic's merge target is the origin's default
+branch: every reader keeps its default-branch logic — the steps' sync
+merges the default branch into the checked-out epic branch, the
+verification and the facts measure the whole epic from `merge-base HEAD
+origin/<the default branch>`, the PRs target the default branch —
+exactly as for a work item with no fixed target. The same claim writes
+the epic's children — every child's id, slug, status and its landing
+record verbatim — into `runtime-state/children.json`, immutable while
+the epic runs: a re-claim over unchanged children keeps the file byte
+for byte, and a changed set writes the next version. The driver
+re-checks the snapshot against aihub before every dispatch (the merge's
+own dispatch included): a child that failed or was canceled, one the
+snapshot does not carry or one gone from the live set parks the
+workflow blocked on its own authority — no question is asked; the
+owner's next message (a re-claim is one) resumes it. A changed
+snapshot's re-claim writes `runtime-state/epic-resume.json` beside the
+new version, and the driver's next plan pass lands it as one
+owner-class rewind to the step the lane's `resume_reset` names — the
+steps from there re-run (the fix build the rewind covers included),
+charged to no budget: that step is the epic's re-sync point, and the
+sync takes the changed set's commits on the epic branch in first (its
+own checkout branch, then the default branch), so the resumed lane
+judges a tree that contains them. The Go code names no step id
+(workflow contract ⑥): the lane declares the step, the runtime writes
+the declaration into the marker and the driver rewinds to it. The epic's merge registers the ONE landed
+record the work item is wrapped with: `state: landed` (the pool's own),
+its `merge_commits` the actual default-branch landing, and a `children`
+key carrying the claim's snapshot verbatim — the ONE record the
+integrate pool takes, each child's landed_on_target evidence riding it
+with its source and staying on the child's own work item.
 
 ## Error codes
 

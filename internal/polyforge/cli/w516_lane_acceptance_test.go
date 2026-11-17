@@ -255,11 +255,12 @@ func w516SubmitOn(t *testing.T, wf, bundle string) (int, string, string, bool) {
 }
 
 // TestW516ShippedLanesAcceptance: the repository's own lanes, as a daemon
-// serving them names them. develop and micro declare nothing and still
-// refuse a work item without acceptance; every other shipped lane (release
-// and the lane that gates the landed work — four lanes in all) declares
+// serving them names them. develop, micro and epic declare nothing and
+// still refuse a work item without acceptance (an epic's work item
+// carries the total acceptance its review judges); every other shipped
+// lane (release and the lane that gates the landed work) declares
 // acceptance none, so its work item is submitted as is, with no
-// --allow-no-acceptance. All four validate.
+// --allow-no-acceptance. All five validate.
 func TestW516ShippedLanesAcceptance(t *testing.T) {
 	wf, err := filepath.Abs(filepath.Join("..", "..", "..", "workflows"))
 	if err != nil {
@@ -269,7 +270,7 @@ func TestW516ShippedLanesAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	requires := map[string]bool{"develop": true, "micro": true}
+	requires := map[string]bool{"develop": true, "micro": true, "epic": true}
 	var lanes []string
 	shipped := map[string]bool{}
 	for _, d := range dirs {
@@ -277,8 +278,8 @@ func TestW516ShippedLanesAcceptance(t *testing.T) {
 		shipped[filepath.Base(d)] = true
 	}
 	sort.Strings(lanes)
-	if len(lanes) != 4 || !shipped["develop"] || !shipped["micro"] || !shipped["release"] {
-		t.Fatalf("the shipped lanes are %v: want develop, micro, release and the gating lane — a new shipped lane states its acceptance here", lanes)
+	if len(lanes) != 5 || !shipped["develop"] || !shipped["micro"] || !shipped["release"] || !shipped["epic"] {
+		t.Fatalf("the shipped lanes are %v: want develop, epic, micro, release and the gating lane — a new shipped lane states its acceptance here", lanes)
 	}
 	for _, lane := range lanes {
 		if requires[lane] {
