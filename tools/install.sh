@@ -137,6 +137,18 @@ BIN="${PF_BIN:-/usr/local/bin/pf}"
 CFG="$HOME/.config/polyforge/cli.toml"
 # has_config: this machine already has its config (kept, never rewritten)
 has_config() { [ -f "$CFG" ] && grep -q "api_key" "$CFG"; }
+
+# any_cell_mapping: does any Cell's file carry a [workspace] section — the
+# Host config itself or a cli-*.toml beside it (polyforge#20, Q8=a)? The
+# installer's daemon gate mirrors `pf daemon ensure`'s: a mapping in any
+# valid Cell admits the launch; a machine no Cell of maps gets no daemon.
+any_cell_mapping() {
+  for f in "$CFG" "$(dirname "$CFG")"/cli-*.toml; do
+    [ -f "$f" ] || continue
+    grep -q '^[[:space:]]*\[workspace' "$f" && return 0
+  done
+  return 1
+}
 if [ -z "$HOST" ] && ! has_config; then
   echo "usage: install.sh [--with-pi-web [--restart-pi-web] [--reinstall-pi-web]] <api-key|-> <server-host>  (or PF_HOST=<server-host>)"
   echo "ERROR: a first install writes $CFG and needs the aihub <server-host> (argument 2 or PF_HOST); nothing on this machine was changed."
@@ -550,18 +562,19 @@ echo "== 3/5 config + harnesses"
 mkdir -p "$(dirname "$CFG")"
 if has_config; then
   echo "   config exists ($CFG)"
-  if grep -q '^[[:space:]]*\[workspace' "$CFG"; then
+  if any_cell_mapping; then
     echo "   workspace mapping present (the daemon routes capsules by it)"
   else
     # polyforge#113: the config is the operator's — name the one command, never teach a hand edit
-    echo "   ACTION: the config has no [workspace] mapping (there is no default \`project\` key): the daemon refuses to start until it has one. Add one section per workspace through \`pf config\` (\`~\` expands to your home; keys absolute, no trailing separator; the daemon creates only capsules/ inside it, and a re-added workspace keeps its capsules), then check with \`pf doctor\` and run \`pf daemon ensure\`:"
+    echo "   ACTION: no [workspace] mapping in any Cell yet (cli.toml or a cli-*.toml beside it; there is no default \`project\` key): \`pf daemon ensure\` does not start the daemon until at least one Cell has one. Add one section per workspace through \`pf config\` (\`~\` expands to your home; keys absolute, no trailing separator; the daemon creates only capsules/ inside it, and a re-added workspace keeps its capsules), then check with \`pf doctor\` and run \`pf daemon ensure\`:"
     echo "     pf config set '[workspace.\"<absolute-path-to-your-workspace>\"]' projects=your-project,another-project"
   fi
 else
   # Write the config through `pf config` (the one supported writer): only
   # the flat connection keys. The installer NEVER knows or fabricates a
   # [workspace] mapping (polyforge#113): the operator / init skill adds it,
-  # and the daemon refuses to start until one exists.
+  # and `pf daemon ensure` starts the daemon only once at least one Cell
+  # (cli.toml or a cli-*.toml beside it) has one.
   "$BIN" --config "$CFG" config set server "$API" >/dev/null
   printf '%s\n' "$KEY" | "$BIN" --config "$CFG" config set api_key >/dev/null
   chmod 600 "$CFG" 2>/dev/null || true
@@ -569,7 +582,7 @@ else
   echo "   ACTION: add the [workspace] mapping, then check it and start the daemon:"
   echo "     pf config set '[workspace.\"<absolute-path-to-your-workspace>\"]' projects=your-project,another-project"
   echo "     pf doctor && pf daemon ensure"
-  echo "   The daemon refuses to start (and this installer skips it) until a real mapping exists."
+  echo "   `pf daemon ensure` starts the daemon only once at least one Cell has a real mapping — this installer runs it only then."
 fi
 # --- harness settings: one python edit per file. Invalid JSON or an
 # unexpected shape changes nothing; a change backs the file up
@@ -741,9 +754,9 @@ elif ST=$(status 5) && printf '%s' "$ST" | grep -q machine_id; then
   if ! loop_running; then
     echo "   ACTION: the daemon runs without its restart loop (no tmux session $LOOP_SESSION): a crash is not restarted. When no job needs it, restart it under the loop: $ENSURE_FIX"
   fi
-elif ! grep -q '^[[:space:]]*\[workspace' "$CFG"; then
-  # polyforge#113: no mapping — the daemon would refuse to start
-  echo "   SKIP: $CFG has no [workspace] section yet — the daemon refuses to start until one exists"
+elif ! any_cell_mapping; then
+  # polyforge#113/#20: no mapping in any Cell — nothing for the daemon to execute
+  echo "   SKIP: no [workspace] section in any Cell yet ($CFG, or a cli-*.toml beside it) — `pf daemon ensure` starts the daemon only once at least one has one"
   echo "   add projects (pf config set '[workspace.\"<path>\"]' projects=a,b), then: pf daemon ensure"
 else
   # `pf daemon ensure` owns the launch (polyforge#174): the restart loop
