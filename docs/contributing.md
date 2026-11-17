@@ -280,7 +280,13 @@ items that merged.
   `check_requires_env=` / `check_requires_cmd=` / `check_timeout=` /
   `report=` / `rerun=` declarations), the tier triggers `forced_full=`, `module_root=`,
   `exclude=`, the carries keys `e2e_runner=`, `suite_glob=`, `e2e_map=` and
-  `smoke_suite=` (below), the light-tier threshold `e2e_start_threshold=` (not a
+  `smoke_suite=` (below), the conditional scoped-selection command
+  `scoped_command=` (polyforge#111: a changed path an `exclude=` match has not
+  removed that matches the declaration's glob adds the command to the scoped
+  tier after the analyzer's own — once per declaration, file order, the light
+  tier included; `--full`, `--micro` and no-analyzer reports never carry it,
+  and a malformed value fails closed like the carries keys'),
+  the light-tier threshold `e2e_start_threshold=` (not a
   carries key: a bad value is diagnosed and ignored, never fail-closed), which
   applies only with `e2e_runner=` in `--light`, and only when the selected
   suite count is strictly greater than it;
