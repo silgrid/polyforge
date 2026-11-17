@@ -367,5 +367,125 @@ class NamesAndLimitsTest(unittest.TestCase):
         self.assertTrue(re.fullmatch(r"[0-9a-f]{8}", container.container_name("w", 1, "a")[-8:]))
 
 
+@unittest.skipUnless(HAVE_GIT, "git is not on PATH")
+class PreparedImageTest(unittest.TestCase):
+    """start_box's prepared-image mode (the step's `image` parameter):
+    the image a person prepared is resolved to its local ID and the
+    container starts by that ID — never built, never pulled — so a repo
+    without .polyforge/Dockerfile.verify runs in its container too, with
+    the default mode's container contract unchanged: the clone and the
+    cache volume alone mounted, the labels, the image's environment. The
+    expected values are the ticket's rulings (polyforge#64), not the
+    implementation's own answers: the digest is the resolved local ID, the
+    cache volume's generation is its first 32 hex, and a missing image is
+    its own error (ImageMissing, a BoxError), never an engine failure."""
+
+    IMAGE_REF = "registry.example/team/verify:2026-11"
+    IMAGE_ID = "sha256:" + "ab" * 32
+    REPO_DIGESTS = ["registry.example/team/verify@sha256:" + "cd" * 32]
+
+    def setUp(self) -> None:
+        self._td = tempfile.TemporaryDirectory()
+        self.root = os.path.realpath(self._td.name)
+        self.capsule = make_capsule(self.root, "app", {"a.txt": "a\n", container.DOCKERFILE_VERIFY: TEST_DOCKERFILE})
+        self.clone = os.path.join(self.capsule, "repos", "app")
+        self.log_dir = os.path.join(self.capsule, "runtime-state", "run", "2", "app")
+        tmp_root = os.path.join(self.root, "box-tmp")
+        os.mkdir(tmp_root)
+        self.fb = FakeRuntime(tmp_root)
+        self.fb.identities[self.IMAGE_REF] = (self.IMAGE_ID, list(self.REPO_DIGESTS))
+        self.said: List[str] = []
+
+    def tearDown(self) -> None:
+        self._td.cleanup()
+
+    def co(self) -> ContainerOptions:
+        return ContainerOptions(runtime=self.fb, owner="/srv/pf-data", boot="boot-1", wi="wi_x",
+                                 cpus=2.0, memory="1g", pids=33, say=self.said.append)
+
+    def start(self, image: str = "", repo: str = "app", clone: str = "", log_dir: str = "") -> container.Box:
+        return container.start_box(self.co(), repo, clone or self.clone, log_dir or self.log_dir,
+                                   time.time() + 60.0, 2, lambda p: p, image=image)
+
+    def test_starts_by_the_resolved_local_id_and_builds_nothing(self) -> None:
+        box = self.start(image=self.IMAGE_REF)
+        spec = self.fb.starts[0]
+        self.assertEqual(spec.image, self.IMAGE_ID, "the container starts by the image's local ID")
+        self.assertTrue(spec.pull_never, "a prepared image is never pulled")
+        self.assertEqual(self.fb.builds, [], "a prepared image is never built")
+        self.assertEqual(spec.volumes,
+                         {"pf-verify-cache-app-" + self.IMAGE_ID[len("sha256:"):][:32]: container.CONTAINER_CACHE_DIR})
+        self.assertEqual([(b.path, b.read_only) for b in spec.binds], [(self.clone, False)],
+                         "the clone alone is mounted, as in the default mode")
+        self.assertEqual(spec.labels, {
+            container.LABEL_DAEMON: "/srv/pf-data", container.LABEL_BOOT: "boot-1", container.LABEL_WI: "wi_x",
+            container.LABEL_RUN: "2", container.LABEL_REPO: "app",
+        })
+        self.assertEqual((spec.cpus, spec.memory, spec.pids), (2.0, "1g", 33))
+        rep = box.report
+        self.assertEqual((rep.image, rep.built, rep.build_log, rep.digest, rep.repo_digests),
+                         (self.IMAGE_REF, False, "", self.IMAGE_ID, self.REPO_DIGESTS))
+        self.assertEqual(rep.as_dict(), {"image": self.IMAGE_REF, "built": False, "digest": self.IMAGE_ID,
+                                         "repo_digests": self.REPO_DIGESTS, "name": spec.name,
+                                         "cpus": "2", "memory": "1g", "pids": 33})
+        self.assertEqual(box.env, self.fb.image_environ, "the environment is the image's own")
+        self.assertEqual(os.listdir(self.log_dir), [], "no build log is written")
+        box.remove()
+        self.assertEqual(self.fb.removes, [box.id])
+
+    def test_a_repo_without_a_dockerfile_runs_in_its_container(self) -> None:
+        capsule = make_capsule(self.root, "bare", {"a.txt": "a\n"})
+        clone = os.path.join(capsule, "repos", "bare")
+        log_dir = os.path.join(capsule, "runtime-state", "run", "2", "bare")
+        try:
+            box = self.start(image=self.IMAGE_REF, repo="bare", clone=clone, log_dir=log_dir)
+        except container.BoxError as err:
+            self.fail("a prepared image needs no Dockerfile: %s" % err)
+        spec = self.fb.starts[0]
+        self.assertEqual((self.fb.builds, spec.image, spec.pull_never), ([], self.IMAGE_ID, True))
+        self.assertEqual(spec.volumes,
+                         {"pf-verify-cache-bare-" + self.IMAGE_ID[len("sha256:"):][:32]: "/cache"})
+        box.remove()
+        # the default mode still needs the Dockerfile: unchanged
+        with self.assertRaises(container.BoxError) as got:
+            self.start(repo="bare", clone=clone, log_dir=log_dir)
+        self.assertIn("unreadable at HEAD", str(got.exception))
+
+    def test_a_missing_image_is_its_own_error_never_a_start(self) -> None:
+        with self.assertRaises(container.ImageMissing) as got:
+            self.start(image="registry.example/nope:1")
+        self.assertEqual(got.exception.ref, "registry.example/nope:1")
+        self.assertIsInstance(got.exception, container.BoxError, "a caller catching BoxError still catches it")
+        self.assertEqual((self.fb.builds, self.fb.starts), ([], []))
+
+    def test_without_the_parameter_the_default_mode_is_unchanged(self) -> None:
+        box = self.start()
+        spec = self.fb.starts[0]
+        tag = container.image_tag("app", TEST_DOCKERFILE.encode())
+        self.assertFalse(spec.pull_never)
+        self.assertEqual(spec.image, tag)
+        self.assertEqual(self.fb.builds, [(tag, TEST_DOCKERFILE.encode(), {container.LABEL_REPO: "app"})])
+        rep = box.report
+        self.assertEqual((rep.digest, rep.repo_digests), ("", []))
+        self.assertEqual(rep.build_log, os.path.join(self.log_dir, "image-build.log"))
+        self.assertNotIn("digest", rep.as_dict())
+        self.assertNotIn("repo_digests", rep.as_dict())
+        box.remove()
+
+    def test_start_args_pull_never_only_for_a_prepared_image(self) -> None:
+        args = DockerCLI().start_args(ContainerSpec(name="n", image="sha256:" + "ab" * 32, pull_never=True))
+        i = args.index("--pull")
+        self.assertEqual(args[i + 1], "never")
+        self.assertEqual(DockerCLI().start_args(ContainerSpec(name="n", image="i:t")).count("--pull"), 0)
+
+    def test_a_reference_that_cannot_be_one_is_refused_before_the_engine(self) -> None:
+        for bad in ("--privileged", "x y", "a\nb", " sha256:x"):
+            with self.assertRaises(container.BoxError) as got:
+                self.start(image=bad)
+            self.assertNotIsInstance(got.exception, container.ImageMissing, bad)
+            self.assertIn("not a docker image reference", str(got.exception), bad)
+        self.assertEqual((self.fb.builds, self.fb.starts), ([], []))
+
+
 if __name__ == "__main__":
     unittest.main()

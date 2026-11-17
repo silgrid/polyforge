@@ -11,7 +11,7 @@ import shutil
 import threading
 from typing import IO, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
-from pfstep.container import ContainerError, ContainerSpec
+from pfstep.container import ContainerError, ContainerSpec, ImageIdentity, ImageMissing
 
 
 class FakeRuntime:
@@ -31,6 +31,10 @@ class FakeRuntime:
         self.volume_remove_err = ""
         self.builds: List[Tuple[str, bytes, Dict[str, str]]] = []
         self.starts: List[ContainerSpec] = []
+        # a prepared image's local identity, as image_identity answers it:
+        # reference -> (its local ID, its RepoDigests); a reference not
+        # seeded is not present (ImageMissing)
+        self.identities: Dict[str, Tuple[str, List[str]]] = {}
         self.execs: List[Tuple[str, str, List[str], List[str]]] = []
         self.reaps: List[List[str]] = []
         self.removes: List[str] = []
@@ -66,6 +70,12 @@ class FakeRuntime:
 
     def image_env(self, tag: str) -> List[str]:
         return list(self.image_environ)
+
+    def image_identity(self, ref: str) -> ImageIdentity:
+        got = self.identities.get(ref)
+        if got is None:
+            raise ImageMissing(ref)
+        return ImageIdentity(id=got[0], repo_digests=list(got[1]))
 
     def start(self, spec: ContainerSpec) -> str:
         if self.start_err:

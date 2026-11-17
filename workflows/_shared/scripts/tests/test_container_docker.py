@@ -14,7 +14,7 @@ import shutil
 import tempfile
 import time
 import unittest
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from pfstep import container, proc, runner
 from pfstep.container import ContainerOptions, ContainerSpec, DockerCLI
@@ -180,6 +180,103 @@ class RealDockerTest(unittest.TestCase):
         self.assertEqual(container.sweep_expired(self.d, self.owner, time.time(), False, said.append), [old])
         self.assertEqual(self.left(self.owner), [live])
         self.assertEqual(self.left(other), [theirs])
+
+
+@unittest.skipUnless(ENGINE is not None, "no docker engine (or %s cannot be had)" % PROBE_IMAGE)
+class PreparedImageDockerTest(unittest.TestCase):
+    """start_box's prepared-image mode against the real engine — the minimal
+    true-docker proof of polyforge#64: the image the step names (busybox:1.37,
+    already on this machine) is resolved to its local ID, read here again
+    independently with docker image inspect, and the container starts by
+    that ID, nothing built; a reference the machine does not have is its
+    own error (ImageMissing), never a pull."""
+
+    def setUp(self) -> None:
+        assert ENGINE is not None
+        self.d = ENGINE
+        self.owner = "pfstep-real-" + secrets.token_hex(6)
+        self.tags: List[str] = []
+        self.volumes: List[str] = []
+        self.dirs: List[str] = []
+
+    def tearDown(self) -> None:
+        try:
+            for cid in self.d.list_labelled({container.LABEL_DAEMON: self.owner}, container.LABEL_BOOT):
+                try:
+                    self.d.remove(cid)
+                except container.ContainerError:
+                    pass
+        except container.ContainerError:
+            pass
+        for tag in self.tags:
+            proc.run([self.d.bin, "rmi", "--force", tag], timeout=60)
+        for v in self.volumes:
+            proc.run([self.d.bin, "volume", "rm", "--force", v], timeout=60)
+        for p in self.dirs:
+            shutil.rmtree(p, ignore_errors=True)
+
+    def visible_dir(self) -> str:
+        for base in (tempfile.gettempdir(), os.getcwd()):
+            try:
+                p = os.path.realpath(tempfile.mkdtemp(prefix=".pfstep-docker-", dir=base))
+            except OSError:
+                continue
+            self.dirs.append(p)
+            if _sees(self.d, p):
+                return p
+        self.skipTest("the docker engine does not see this machine's directories at its own paths")
+
+    def opts(self, root: str, repo: str) -> Tuple[str, str, str]:
+        capsule = make_capsule(root, repo, {"a.txt": "a\n", container.DOCKERFILE_VERIFY: REAL_DOCKERFILE})
+        clone = os.path.join(capsule, "repos", repo)
+        log_dir = os.path.join(capsule, "runtime-state", "run", "1", repo)
+        # the tags and volumes of both modes: the red run of this test on the
+        # pre-change tree builds the Dockerfile's image instead
+        self.tags.append(container.image_tag(repo, REAL_DOCKERFILE.encode()))
+        self.volumes.append(container.cache_volume(repo, REAL_DOCKERFILE.encode()))
+        return capsule, clone, log_dir
+
+    def co(self) -> ContainerOptions:
+        return ContainerOptions(runtime=self.d, owner=self.owner, boot="boot-1", wi="wi_real",
+                                cpus=1, memory="256m", pids=64, say=lambda _: None)
+
+    @unittest.skipUnless(HAVE_GIT, "git is not on PATH")
+    def test_the_prepared_image_starts_by_its_local_id(self) -> None:
+        repo = "pfstep-real-" + secrets.token_hex(4)
+        _, clone, log_dir = self.opts(self.visible_dir(), repo)
+        # the expected local ID, read independently of the module under test
+        c = proc.run([self.d.bin, "image", "inspect", PROBE_IMAGE, "--format", "{{.Id}}"], timeout=60)
+        self.assertEqual(c.exit_code, 0, "busybox:1.37 must be inspectable")
+        want_id = c.stdout.decode("utf-8", "replace").strip()
+        self.volumes.append("pf-verify-cache-" + repo + "-" + want_id[len("sha256:"):][:32])
+        box = container.start_box(self.co(), repo, clone, log_dir, time.time() + 240.0, 1, lambda p: p, image=PROBE_IMAGE)
+        try:
+            self.assertEqual((box.report.image, box.report.built, box.report.build_log), (PROBE_IMAGE, False, ""))
+            self.assertEqual(box.report.digest, want_id, "the report names the image's local ID")
+            got = proc.run([self.d.bin, "inspect", box.id, "--format", "{{.Image}}"], timeout=60)
+            self.assertEqual(got.stdout.decode("utf-8", "replace").strip(), want_id,
+                             "the container runs the resolved local ID, not the reference")
+            self.assertEqual(os.listdir(log_dir), [], "nothing was built")
+        finally:
+            box.remove()
+        with self.assertRaises(container.ContainerError):
+            self.d.remove(box.id)
+
+    @unittest.skipUnless(HAVE_GIT, "git is not on PATH")
+    def test_a_missing_reference_is_its_own_error(self) -> None:
+        repo = "pfstep-real-" + secrets.token_hex(4)
+        _, clone, log_dir = self.opts(self.visible_dir(), repo)
+        missing = "registry.example/pf-no-such-image-64:1"
+        self.volumes.append("pf-verify-cache-" + repo + "-" + "ab" * 16)
+        with self.assertRaises(container.ImageMissing) as got:
+            container.start_box(self.co(), repo, clone, log_dir, time.time() + 60.0, 1, lambda p: p, image=missing)
+        self.assertEqual(got.exception.ref, missing)
+        # never pulled: the engine still does not know the reference
+        c = proc.run([self.d.bin, "image", "ls", "--quiet", "--filter", "reference=" + missing], timeout=60)
+        self.assertEqual(c.exit_code, 0)
+        self.assertEqual(c.stdout.decode("utf-8", "replace").strip(), "")
+        self.assertEqual(self.d.list_labelled({container.LABEL_DAEMON: self.owner}, container.LABEL_BOOT), {},
+                        "no container was started")
 
 
 if __name__ == "__main__":
