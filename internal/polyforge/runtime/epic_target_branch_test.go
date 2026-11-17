@@ -34,8 +34,9 @@ import (
 func epicLanes(t *testing.T, r *Runtime, front string) {
 	t.Helper()
 	lanes := t.TempDir()
-	workflowtest.WriteLane(t, lanes, "plain-lane", "steps:\n  - { id: a }\n")
-	workflowtest.WriteLane(t, lanes, "epic-lane", front+"steps:\n  - { id: a }\n")
+	// the steps carry a sync step the epic lanes' resume_reset names
+	workflowtest.WriteLane(t, lanes, "plain-lane", "steps:\n  - { id: a }\n  - { id: sync }\n")
+	workflowtest.WriteLane(t, lanes, "epic-lane", front+"steps:\n  - { id: a }\n  - { id: sync }\n")
 	r.cfg.WorkflowsDir = lanes
 }
 
