@@ -73,6 +73,22 @@ func TestEpicLaneKey(t *testing.T) {
 	}
 }
 
+// TestEpicShippedLaneLoads pins the SHIPPED epic lane's load: it loads
+// strict with its capability keys and its rewind budget.
+func TestEpicShippedLaneLoads(t *testing.T) {
+	lane, errs := workflow.Load(filepath.Join(shippedLanes, "epic"))
+	if len(errs) != 0 {
+		t.Fatalf("the shipped epic lane loads with no defect, got %v", errs)
+	}
+	if lane == nil || !lane.Epic || lane.ChildrenBranch != "epic/{seq}" {
+		t.Fatalf("the shipped epic lane declares epic over epic/{seq}: %+v", lane)
+	}
+	strict, err := workflow.LoadStrict(filepath.Join(shippedLanes, "epic"))
+	if err != nil || strict == nil || strict.MaxRewinds != 3 {
+		t.Fatalf("the shipped epic lane loads strict with max_rewinds 3: %v, %v", strict, err)
+	}
+}
+
 // TestEpicLaneKeyNeedsChildrenBranch: `epic: true` names the branch its
 // work items work on through the lane's children_branch — a lane that
 // declares the key without the template is refused at the key naming
