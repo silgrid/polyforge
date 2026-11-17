@@ -812,7 +812,7 @@ remote's copy), so the branch exists before a sub-ticket opens a PR
 against it. A claim that cannot read the parent, or the parent's lane,
 is refused naming why (`DAEMON-507`, the blocked note carries the
 reason), never a silent fall-back to the default branch; a parent whose
-lane declares none leaves the sub-ticket untouched. A parent bound to
+lane declares none leaves the sub-ticket untouched — a parent bound to
 no lane (a registry ticket used as the parent) declares nothing the same
 way: no target-branch file is written and the claim keeps the default
 branch.
