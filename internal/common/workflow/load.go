@@ -76,8 +76,15 @@ type Lane struct {
 	// the parent's project name; "" when the lane declares none, which
 	// leaves such a sub-ticket's claim untouched).
 	ChildrenBranch string
-	Defaults       *Defaults
-	Steps          []Step
+	// Epic is the lane's `epic: true` (polyforge#117): the lane's own
+	// work items are epics — each checks the children branch of its OWN
+	// seq out (children_branch, which the lane must then declare) and
+	// merges into the origin's default branch (the runtime fixes the
+	// checkout branch into the capsule and snapshots the item's
+	// children).
+	Epic     bool
+	Defaults *Defaults
+	Steps    []Step
 }
 
 // UncountedRewinds is the lane's declared uncounted rewind class
