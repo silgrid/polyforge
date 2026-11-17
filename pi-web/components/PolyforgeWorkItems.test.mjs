@@ -146,7 +146,7 @@ test("a row pf marks acceptance_missing shows the needs-interaction label beside
 // per-param write controls, the surface's one write (owner ruling
 // 2026-11-17: the 配置入口 lives in the 工单详情).
 test("the detail mounts the params section; the list itself keeps its two GET reads and gains no fetch of its own", () => {
-  assert.match(source, /<PolyforgeWorkItemParams\s+wi=\{selected\}/, "the detail renders the params section for the selected work item");
+  assert.match(source, /<PolyforgeWorkItemParams\s+key=\{selected\}\s+wi=\{selected\}/, "the detail renders the params section for the selected work item, remounted per ticket");
   assert.match(source, /import \{ PolyforgeWorkItemParams \} from "\.\/PolyforgeWorkItemParams";/);
   const urls = [...source.matchAll(/fetch\((`[^`]+`|"[^"]+")/g)].map((m) => m[1]);
   assert.deepEqual(urls, ['"/api/polyforge/work-items"', "`/api/polyforge/work-items/${encodeURIComponent(id)}`"], "the params read and write live in the child component, not here");

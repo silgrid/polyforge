@@ -232,7 +232,7 @@ export function PolyforgeWorkItems({
               {meta(t("polyforge.workItems.field.closed"), detail.closed_at)}
               {waiting && meta(t("polyforge.workItems.field.waitingFor"), waiting)}
             </div>
-            <PolyforgeWorkItemParams wi={selected} />
+            <PolyforgeWorkItemParams key={selected} wi={selected} />
             {truncated && <div style={{ fontSize: 11, color: "#d97706" }}>{t("polyforge.workItems.truncated")}</div>}
             {/* The height clip never slices the markdown source. */}
             <div style={collapsible && !expanded ? { maxHeight: COLLAPSE_MAX_HEIGHT_PX, overflowY: "hidden" } : undefined}>

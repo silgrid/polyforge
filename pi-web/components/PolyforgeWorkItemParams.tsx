@@ -48,13 +48,15 @@ export function PolyforgeWorkItemParams({ wi }: { wi: string }) {
       });
   };
 
-  // the one read per open: the section mounts with the detail
-  const readRef = useRef(false);
+  // the one read per open: the section mounts with the detail, and a
+  // re-used instance reads again for a CHANGED wi (the parent keys the
+  // mount by the ticket, so this is the belt, not the mechanism)
+  const readWiRef = useRef<string | null>(null);
   useEffect(() => {
-    if (readRef.current) return;
-    readRef.current = true;
+    if (readWiRef.current === wi) return;
+    readWiRef.current = wi;
     read();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- one read per opening
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one read per opening, none per re-render
   }, [wi]);
 
   const write = (step: string, name: string, kind: "param" | "clearParam") => {
