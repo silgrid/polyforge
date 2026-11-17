@@ -22,12 +22,20 @@ import (
 func TestW79StepParamsReservedAtCreate(t *testing.T) {
 	env := newEnv(t)
 	// a create cannot plant the key (the top level only: nested
-	// step_params under another key stays business data)
+	// step_params under another key stays business data) — not even as an
+	// explicit JSON null, whose presence is still the filer's word on a
+	// key the daemon alone writes
 	if _, err := env.WIs.Create(CreateRequest{
 		Project: "alpha", Goal: "planted params", Reporter: env.UserID,
 		Attrs: map[string]any{"step_params": map[string]any{"build": map[string]any{"image": "reg/x:1"}}},
 	}); !IsCode(err, api.ErrCoreBadInput) || ErrorReason(err) != "EXECUTION_STATE_REJECTED" {
 		t.Fatalf("a planted step_params not rejected: %v", err)
+	}
+	if _, err := env.WIs.Create(CreateRequest{
+		Project: "alpha", Goal: "planted null", Reporter: env.UserID,
+		Attrs: map[string]any{api.StepParamsKey: nil},
+	}); !IsCode(err, api.ErrCoreBadInput) || ErrorReason(err) != "EXECUTION_STATE_REJECTED" {
+		t.Fatalf("an explicit null step_params not rejected: %v", err)
 	}
 	if _, err := env.WIs.Create(CreateRequest{
 		Project: "alpha", Goal: "free attrs", Reporter: env.UserID,
