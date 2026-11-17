@@ -1,7 +1,8 @@
 # recall — search (or browse) project memories
 
-Data-plane verb: the `pf` CLI talks HTTP direct to AIHub (memory
-retrieval). The daemon is not involved. Write paths (creating or updating
+Data-plane verb: every call goes through the running daemon's /aihub
+proxy to the routed Cell's AIHub (memory
+retrieval). Write paths (creating or updating
 memories) are not part of this verb — retrieval only.
 
 ## Triggers

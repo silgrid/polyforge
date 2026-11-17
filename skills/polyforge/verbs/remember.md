@@ -1,6 +1,7 @@
 # remember — store a project memory
 
-Data-plane verb: the `pf` CLI talks HTTP direct to AIHub (the memory
+Data-plane verb: every call goes through the running daemon's /aihub
+proxy to the routed Cell's AIHub (the memory
 write face). It is the write counterpart of
 `recall` (retrieval): `pf remember` files a lesson, fact or note into
 the project memory so a later `recall` finds it.
