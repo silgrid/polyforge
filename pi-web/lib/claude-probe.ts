@@ -194,6 +194,28 @@ export async function probeClaude(binary: string, options: { timeoutMs?: number 
   return pending;
 }
 
+/**
+ * How long a state read waits for the alias-resolution probe (#108): the probe's own
+ * deadline is unchanged — an answer slower than this keeps running and settles the
+ * cache for later reads; this caller does not wait for it.
+ */
+export const CLAUDE_ALIAS_PROBE_WAIT_MS = 3_000;
+
+/**
+ * #108: a probe of `binary`, waited at most `waitMs` — the one chance a state read of
+ * an alias the cache cannot resolve gets on demand. The same probe every caller shares
+ * (`probeClaude`, an in-flight one included); a probe that fails, refuses or outruns
+ * the wait changes nothing here, and the caller re-reads the cache. Never throws.
+ */
+export async function probeClaudeWithin(binary: string, waitMs: number = CLAUDE_ALIAS_PROBE_WAIT_MS): Promise<void> {
+  await Promise.race([
+    probeClaude(binary),
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, waitMs).unref();
+    }),
+  ]);
+}
+
 /** The full name claude's latest answer resolves `model` to when it is one of its aliases; otherwise `model` itself. */
 export function claudeResolvedModel(model: string): string {
   return cache.latest?.models.find((alias) => alias.value === model)?.resolvedModel ?? model;
