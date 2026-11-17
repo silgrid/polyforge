@@ -82,9 +82,15 @@ type Lane struct {
 	// merges into the origin's default branch (the runtime fixes the
 	// checkout branch into the capsule and snapshots the item's
 	// children).
-	Epic     bool
-	Defaults *Defaults
-	Steps    []Step
+	Epic bool
+	// ResumeReset is the lane's `resume_reset`: the step id an
+	// owner-resumed epic's changed-children marker resets the lane to
+	// — required when the lane declares epic, refused without it, and
+	// it must name a step of this lane (the runtime writes it into the
+	// marker, the driver rewinds to it; polyforge#117 r4).
+	ResumeReset string
+	Defaults    *Defaults
+	Steps       []Step
 }
 
 // UncountedRewinds is the lane's declared uncounted rewind class
