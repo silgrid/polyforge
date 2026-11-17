@@ -487,7 +487,7 @@ class PreparedImageGateTest(unittest.TestCase):
         r = run_main(["--isolation", "container", "--json", "--image", "registry.example/nope:1"],
                      cwd=d, runtime=self.fb)
         self.assertEqual(r.exit, 2)
-        summary = json.loads(r.stdout)["summary"]
+        summary = json.loads(r.stdout)["summary"] if r.stdout.strip() else ""
         self.assertIn(container.IMAGE_MISSING_MARK, summary)
         self.assertIn("registry.example/nope:1", summary)
         self.assertIn("prepared by a person", summary)
