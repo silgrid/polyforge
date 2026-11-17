@@ -55,11 +55,11 @@ import (
 // pf101ClaudeCompactVerdict is what a claude session record says about
 // the rule across one compaction.
 type pf101ClaudeCompactVerdict struct {
-	CompactSeen                bool `json:"compact_seen"`                 // a compact boundary record exists
-	PostCompactRequest         bool `json:"post_compact_request"`         // an api-request-blob exists after the boundary
-	RuleInPostCompactRequest   bool `json:"rule_in_post_compact_request"` // that request carries the rule bytes
-	RuleInPostCompactEphemeral bool `json:"rule_in_post_compact_attachment"`
-	Detail                     string
+	CompactSeen                bool   `json:"compact_seen"`                 // a compact boundary record exists
+	PostCompactRequest         bool   `json:"post_compact_request"`         // an api-request-blob exists after the boundary
+	RuleInPostCompactRequest   bool   `json:"rule_in_post_compact_request"` // that request carries the rule bytes
+	RuleInPostCompactEphemeral bool   `json:"rule_in_post_compact_attachment"`
+	Detail                     string `json:"detail"`
 }
 
 // pf101ClaudeCompactVerdict reads a claude session JSONL and answers
@@ -70,14 +70,90 @@ type pf101ClaudeCompactVerdict struct {
 // Stub ahead of the fixtures (polyforge#101 u8): the zero-value body
 // keeps the first red an assertion, never a compile error.
 func pf101ClaudeCompactVerdictOf(raw []byte, rule string) pf101ClaudeCompactVerdict {
-	return pf101ClaudeCompactVerdict{}
+	// a decoded string value may drop the rule's one trailing newline
+	// (the file's last byte); the body is the full text either way
+	rule = strings.TrimSuffix(rule, "\n")
+	var v pf101ClaudeCompactVerdict
+	type rec struct {
+		Type       string `json:"type"`
+		Subtype    string `json:"subtype"`
+		Attachment *struct {
+			Type  string `json:"type"`
+			Files []struct {
+				Path    string `json:"path"`
+				Content string `json:"content"`
+			} `json:"files"`
+		} `json:"attachment"`
+	}
+	lastBoundary := -1
+	for i, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var r rec
+		if json.Unmarshal([]byte(line), &r) != nil {
+			continue
+		}
+		switch {
+		case r.Type == "system" && r.Subtype == "compact_boundary":
+			lastBoundary = i
+			v.CompactSeen = true
+		case lastBoundary >= 0 && r.Type == "api-request-blob":
+			v.PostCompactRequest = true
+			// a JSONL record is one line: the rule's newlines arrive as
+			// \n escapes, so the comparison reads the decoded strings
+			if pf101AnyString(line, rule) {
+				v.RuleInPostCompactRequest = true
+			}
+		case lastBoundary >= 0 && r.Attachment != nil && r.Attachment.Type == "instructions":
+			for _, f := range r.Attachment.Files {
+				if strings.Contains(f.Content, rule) {
+					v.RuleInPostCompactEphemeral = true
+				}
+			}
+		}
+	}
+	v.Detail = fmt.Sprintf("boundary line %d", lastBoundary)
+	return v
+}
+
+// pf101AnyString reports whether any string value of the one JSON record
+// carries want (a JSONL record is one line; embedded newlines are \n
+// escapes there, so the raw bytes never match a multi-line want).
+func pf101AnyString(record, want string) bool {
+	var walk func(v any) bool
+	walk = func(v any) bool {
+		switch t := v.(type) {
+		case string:
+			return strings.Contains(t, want)
+		case []any:
+			for _, e := range t {
+				if walk(e) {
+					return true
+				}
+			}
+		case map[string]any:
+			for _, e := range t {
+				if walk(e) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	var decoded any
+	if json.Unmarshal([]byte(record), &decoded) != nil {
+		return false
+	}
+	return walk(decoded)
 }
 
 // pf101PiSystemVerdict is what a pi session record says about the rule.
 type pf101PiSystemVerdict struct {
-	SystemSeen      bool `json:"system_seen"`
-	RuleInSystemCtx bool `json:"rule_in_system_context"`
-	Detail          string
+	SystemSeen      bool   `json:"system_seen"`
+	RuleInSystemCtx bool   `json:"rule_in_system_context"`
+	Detail          string `json:"detail"`
 }
 
 // pf101PiSystemVerdict reads a pi session JSONL and answers whether the
@@ -86,7 +162,32 @@ type pf101PiSystemVerdict struct {
 //
 // Stub ahead of the fixtures (polyforge#101 u8).
 func pf101PiSystemVerdictOf(raw []byte, rule string) pf101PiSystemVerdict {
-	return pf101PiSystemVerdict{}
+	rule = strings.TrimSuffix(rule, "\n")
+	var v pf101PiSystemVerdict
+	type rec struct {
+		Type    string `json:"type"`
+		Message *struct {
+			Role     string            `json:"role"`
+			Sections map[string]string `json:"sections"`
+		} `json:"message"`
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var r rec
+		if json.Unmarshal([]byte(line), &r) != nil || r.Message == nil {
+			continue
+		}
+		if r.Message.Role == "system" {
+			v.SystemSeen = true
+			if strings.Contains(r.Message.Sections["project_context"], rule) {
+				v.RuleInSystemCtx = true
+			}
+		}
+	}
+	return v
 }
 
 // TestPF101ClaudeVerdictFromRecords: the verdict reads Claude Code's own
@@ -96,13 +197,13 @@ func pf101PiSystemVerdictOf(raw []byte, rule string) pf101PiSystemVerdict {
 // is the negative.
 func TestPF101ClaudeVerdictFromRecords(t *testing.T) {
 	rule := harness.ConciseRule()
-	blobWith := fmt.Sprintf(`{"type":"api-request-blob","sessionId":"s","hash":"h1","message":{"role":"user","content":[{"type":"text","text":"Codebase and user instructions are shown below"}]}}`) + "\n" +
-		"PREFIX " + rule
+	ruleEsc := strings.ReplaceAll(strings.TrimSuffix(rule, "\n"), "\n", "\\n")
+	blobWith := `{"type":"api-request-blob","sessionId":"s","hash":"h1","message":{"role":"user","content":[{"type":"text","text":"Codebase and user instructions are shown below\n` + ruleEsc + `"}]}}`
 	records := []string{
 		`{"type":"user","message":{"role":"user","content":"turn 1"}}`,
 		`{"type":"api-request-blob","message":{"role":"user","content":"no rule here yet"}}`,
 		`{"type":"system","subtype":"compact_boundary","content":"Conversation compacted"}`,
-		`{"type":"attachment","attachment":{"type":"instructions","files":[{"path":"/h/.claude/AGENTS.md","type":"Project","content":"` + strings.ReplaceAll(strings.TrimSuffix(rule, "\n"), "\n", "\\n") + `"}]}}`,
+		`{"type":"attachment","attachment":{"type":"instructions","files":[{"path":"/h/.claude/AGENTS.md","type":"Project","content":"` + ruleEsc + `"}]}}`,
 		blobWith,
 	}
 	v := pf101ClaudeCompactVerdictOf([]byte(strings.Join(records, "\n")), rule)
@@ -111,7 +212,7 @@ func TestPF101ClaudeVerdictFromRecords(t *testing.T) {
 	}
 	// the boundary is the LAST one: a rule before it does not count
 	negative := []string{
-		`{"type":"api-request-blob","message":{"role":"user","content":"PREFIX ` + strings.ReplaceAll(strings.TrimSuffix(rule, "\n"), "\n", "\\n") + `"}}`,
+		`{"type":"api-request-blob","message":{"role":"user","content":"PREFIX ` + ruleEsc + `"}}`,
 		`{"type":"system","subtype":"compact_boundary","content":"Conversation compacted"}`,
 		`{"type":"api-request-blob","message":{"role":"user","content":"no rule after the boundary"}}`,
 	}
@@ -120,7 +221,7 @@ func TestPF101ClaudeVerdictFromRecords(t *testing.T) {
 		t.Fatalf("a rule only BEFORE the boundary must not count: %+v (detail %q)", v, v.Detail)
 	}
 	// no compact at all: not this probe's question
-	none := []string{`{"type":"api-request-blob","message":{"role":"user","content":"PREFIX ` + strings.ReplaceAll(strings.TrimSuffix(rule, "\n"), "\n", "\\n") + `"}}`}
+	none := []string{`{"type":"api-request-blob","message":{"role":"user","content":"PREFIX ` + ruleEsc + `"}}`}
 	v = pf101ClaudeCompactVerdictOf([]byte(strings.Join(none, "\n")), rule)
 	if v.CompactSeen {
 		t.Fatalf("no compact boundary, but one was seen: %+v", v)
@@ -203,15 +304,21 @@ func pf101FakeAnthropic(t *testing.T) *httptest.Server {
 			return
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		for _, ev := range []string{
-			`{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"m","stop_reason":null,"usage":{"input_tokens":1,"output_tokens":1}}}`,
-			`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
-			`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"PROBE-REPLY"}}`,
-			`{"type":"content_block_stop","index":0}`,
-			`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`,
-			`{"type":"message_stop"}`,
+		w.Header().Set("Connection", "close") // close-delimited, not chunked: Claude Code's SSE reader parses it
+		for _, ev := range []struct{ event, data string }{
+			{"message_start", `{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"m","stop_reason":null,"usage":{"input_tokens":1,"output_tokens":1}}}`},
+			{"content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`},
+			{"content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"PROBE-REPLY"}}`},
+			{"content_block_stop", `{"type":"content_block_stop","index":0}`},
+			{"message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`},
+			{"message_stop", `{"type":"message_stop"}`},
 		} {
-			fmt.Fprintf(w, "event: x\ndata: %s\n\n", ev)
+			// the anthropic wire shape: an `event:` line above each
+			// `data:` frame, and the body flushed per event
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.event, ev.data)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
 		}
 	}))
 	t.Cleanup(srv.Close)
@@ -236,6 +343,25 @@ func pf101Record(t *testing.T, name string, v any) {
 	if err := os.WriteFile(filepath.Join(dir, name+".json"), raw, 0o644); err != nil {
 		t.Fatalf("write recording: %v", err)
 	}
+}
+
+// pf101ChildEnv answers the test process's environment with the named
+// overrides applied ONCE: exec passes duplicates through and a child's
+// getenv takes the first match, so an appended HOME beside the process's
+// own would silently win (testenv relocates the test binary's HOME).
+func pf101ChildEnv(overrides map[string]string) []string {
+	var out []string
+	for _, kv := range os.Environ() {
+		name, _, _ := strings.Cut(kv, "=")
+		if _, dup := overrides[name]; dup {
+			continue
+		}
+		out = append(out, kv)
+	}
+	for k, v := range overrides {
+		out = append(out, k+"="+v)
+	}
+	return out
 }
 
 // pf101RunOf runs one bounded foreground harness command.
@@ -281,7 +407,7 @@ func TestPF101PiMainSessionRuleInSystemPrompt(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(agentDir, "models.json"), []byte(models), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	env := append(os.Environ(), "PI_CODING_AGENT_DIR="+agentDir)
+	env := pf101ChildEnv(map[string]string{"PI_CODING_AGENT_DIR": agentDir})
 	out, code := pf101RunOf(t, "pi", bin, []string{"--session-dir", sessions, "-p", "--mode", "json", "--model", "probe/model-a", "Reply with exactly: PROBE-REPLY"}, env, t.TempDir())
 	if code != 0 {
 		t.Fatalf("pi: exit %d\n%s", code, out)
@@ -328,7 +454,13 @@ func TestPF101ClaudeCompactKeepsTheRule(t *testing.T) {
 	}
 	ccDir := t.TempDir() // CLAUDE_CONFIG_DIR: settings + the session record
 	home := t.TempDir()  // HOME: the ~/.claude/AGENTS.md claude loads
-	work := t.TempDir()  // the session's cwd
+	// the session's cwd lives UNDER the home: cc-plugin-agents-md loads
+	// ~/.claude/AGENTS.md as an ancestor directory's context file, so a
+	// sibling cwd would never see it
+	work := filepath.Join(home, "work")
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	model := os.Getenv("POLYFORGE_TEST_CLAUDE_MODEL")
 	if fake {
 		srv := pf101FakeAnthropic(t)
@@ -363,7 +495,10 @@ func TestPF101ClaudeCompactKeepsTheRule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := append(os.Environ(), "HOME="+home, "CLAUDE_CONFIG_DIR="+ccDir)
+	// Claude Code writes a claude-0 scratch entry into TMPDIR; the
+	// package's TestMain guards its own private TMPDIR against exactly
+	// that, so the probe gives the harness its own
+	env := pf101ChildEnv(map[string]string{"HOME": home, "CLAUDE_CONFIG_DIR": ccDir, "TMPDIR": t.TempDir()})
 	run := func(args ...string) string {
 		full := append([]string{"-p", "--model", model}, args...)
 		out, code := pf101RunOf(t, "claude "+args[0], bin, full, env, work)
