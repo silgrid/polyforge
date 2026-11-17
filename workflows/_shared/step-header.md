@@ -63,6 +63,15 @@ what you check before you start (开工前读什么、核对什么) and what you
 
 - `runtime-state/work-item.json` — the work item: `project`, `slug`, `goal`, `content`
   (its acceptance section included).
+- `runtime-state/target-branch.json` — the work item's fixed target branch (`target`),
+  written by the daemon at the first claim of a sub-ticket whose parent's lane declares
+  it. It is the **base branch**: the one branch every step's diff, merge and PR commands
+  below are based on — wherever a step's text or command names the default branch, a
+  capsule carrying this file means this branch. A capsule without the file (or with an
+  empty `target`) has no base branch of its own: the origin's default branch is it. The
+  file is read strictly — one that is there but cannot be read, or names a branch
+  missing on origin, makes the pre-written commands refuse (exit 2, not judged) naming
+  why, never a silent fall-back to the default branch.
 - `runtime-state/asks.jsonl` — every owner message to a step, verbatim, each with its
   `at` stamp, its step and its round.
 - `runtime-state/recalled-memories.json` — the project memories recalled at claim. Use the

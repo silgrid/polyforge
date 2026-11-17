@@ -12,6 +12,9 @@ import tempfile
 import unittest
 from typing import Any, Dict, Tuple
 
+import verify
+from pfstep.engine import TIER_LIGHT
+
 from .verifyfix import (
     HAVE_BASH,
     HAVE_GIT,
@@ -129,6 +132,22 @@ class TiersTest(unittest.TestCase):
         r = run_verify(fx.capsule, eng, tier="scoped")
         self.assertEqual(r.exit, 2, r.result.get("summary"))
         self.assertIn("light, full or auto", r.result.get("summary", ""))
+
+    def test_a_target_branch_file_changes_no_tier(self) -> None:
+        """A capsule's fixed target branch never enters the tier
+        resolution (polyforge#88, AC5): --tier auto reads the work item's
+        attrs exactly as before, the target-branch file valid or not —
+        the sub-ticket runs the light tier like any other ticket."""
+        d = os.path.join(self.root, "tb-capsule")
+        os.makedirs(os.path.join(d, "runtime-state"), exist_ok=True)
+        with open(os.path.join(d, "runtime-state", "work-item.json"), "w", encoding="utf-8") as f:
+            f.write(json.dumps({"id": "wi_sub", "slug": "app#2", "project": "app", "goal": "sub",
+                               "content": "## Acceptance\n- the gate is green\n", "attrs": {}}) + "\n")
+        for body in ('{"target": "epic/1", "parent": "epic#1"}', "{not json"):
+            with self.subTest(body):
+                with open(os.path.join(d, "runtime-state", "target-branch.json"), "w", encoding="utf-8") as f:
+                    f.write(body)
+                self.assertEqual(verify.resolve_tier(d, "auto"), (TIER_LIGHT, ""), body)
 
 
 if __name__ == "__main__":

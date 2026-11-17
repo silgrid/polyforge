@@ -6,7 +6,13 @@ step left them (develop's verification step).
 
 Each task repo's tree is verified at its HEAD: no fetch, no merge (a merge in
 progress makes the run not judged); the base, and the baseline a still-red
-unit is proven pre-existing on, is ``merge-base HEAD origin/<default>``. The
+unit is proven pre-existing on, is ``merge-base HEAD origin/<default>``. A
+capsule whose fixed target branch is set (``runtime-state/target-branch.json``,
+a sub-ticket's) measures the same from ``merge-base HEAD origin/<target>`` —
+the record's ``default_branch`` field keeps its name and carries the target —
+and a target that cannot be named (a file that is there but cannot be read,
+or missing on origin) is not judged naming why, never a fall-back to the
+default branch. The
 scope engine plans each touched repo ``--light`` and every nested engine root
 the diff reaches (a subdirectory with its own tracked
 ``.polyforge/verify-scope.conf``; its commands run behind ``cd <root> &&``);
@@ -119,6 +125,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pfstep  # noqa: E402
 from pfstep import container, duration, git, gostr, jsonout, result, runner, stepenv, tmpdir  # noqa: E402
 from pfstep import progress  # noqa: E402
+from pfstep import targetbranch  # noqa: E402
 from pfstep.analysis import Analysis, AnalysisDecl, read_analysis  # noqa: E402
 from pfstep.carries import file_carries, glob_match  # noqa: E402
 from pfstep.deadline import default_deadline_for  # noqa: E402
@@ -618,10 +625,9 @@ class Verification:
                         " (its real conflicts resolved, then the sync skill's continue line, `\"$PF_PYTHON\""
                         " \"$PF_SHARED_DIR/scripts/sync.py\" --continue --json --out artifacts/sync/result.json`)"
                         " before a verification runs")
-        default = resolve_default(rr.dir)
+        default, unresolvable = base_branch_of(self.capsule, rr.dir)
         if default == "":
-            return fail("the origin default branch is unresolvable (no refs/remotes/origin/HEAD, origin/main or"
-                        " origin/master in the clone): nothing to measure the change against")
+            return fail(unresolvable)
         m.default_branch = default
         try:
             head = gostr.trim_space(git_quiet(rr.dir, "rev-parse", "--verify", "-q", "HEAD"))
@@ -1509,6 +1515,30 @@ def resolve_default(repo_dir: str) -> str:
         if git.run(repo_dir, "rev-parse", "-q", "--verify", "refs/remotes/origin/" + b, timeout=GIT_TIMEOUT).exit_code == 0:
             return b
     return ""
+
+
+def base_branch_of(capsule: str, repo_dir: str) -> Tuple[str, str]:
+    """The branch the change is measured against: the capsule's fixed
+    target branch when it carries one (runtime-state/target-branch.json,
+    read strictly, the origin ref checked to exist), else the origin
+    default branch; ("", why) when neither can be named. The branch lands
+    in the record's default_branch field, which keeps its name and carries
+    either branch (the diff base and the baseline follow it)."""
+    try:
+        target = targetbranch.read(capsule)
+    except targetbranch.TargetBranchError as err:
+        return "", str(err)
+    if target:
+        if git.run(repo_dir, "rev-parse", "-q", "--verify", "refs/remotes/origin/" + target,
+                   timeout=GIT_TIMEOUT).exit_code != 0:
+            return "", ("origin has no branch %s — the capsule's fixed target branch is missing on origin; never a"
+                        " fall-back to the default branch" % target)
+        return target, ""
+    default = resolve_default(repo_dir)
+    if default == "":
+        return "", ("the origin default branch is unresolvable (no refs/remotes/origin/HEAD, origin/main or"
+                    " origin/master in the clone): nothing to measure the change against")
+    return default, ""
 
 
 NO_FALLBACK_DIAGNOSTIC = "the engine answered mode full with no fallback diagnostic (a forced-full path or a full-only declaration)"
