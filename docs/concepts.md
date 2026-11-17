@@ -954,7 +954,7 @@ setting:
   integration fix ticket — declares `pre_existing_red: true` and reports no
   `test_commit`, its red evidence a replay on the tree of the change's base; the
   daemon checks only that the file parses), and the steps after it verify
-  it. Review runs three pre-written lines of the workflow's script
+  it. Review runs four pre-written lines of the workflow's script
   `facts.py` as written — `plan-conformance` (the plan's two-way
   conformance with the diff), `build --replay --isolation host` (each
   unit's test commit a one-parent
@@ -968,7 +968,10 @@ setting:
   either: its red evidence is missing, `test_weakened` too) and `carries` (an e2e suite
   the build added, or whose run a unit records, whose `carries:` matches
   none of the paths it touched; an edited suite owes a well-formed
-  `carries:`) — and judges the coverage (every criterion of the judged
+  `carries:`) and `analysis` (the change analysis's own close check — the same
+  shared validator `verify.py --analysis` calls: every listed entry judged statically,
+  and each taken one's run executed once at HEAD and judged by its marker; a red entry is
+  a blocking `test_weakened` finding naming it) — and judges the coverage (every criterion of the judged
   list exactly once), the hand-off's decisions against the owner's own
   words and, on a `confirm_plan` ticket, a reply older than the first test
   commit. A blocking finding names its class in `artifacts/review.md`;

@@ -60,7 +60,9 @@ and `artifacts/merge/landing.json`. The daemon orchestrates; it judges no conten
   flaky failure re-runs only the suite that failed, once; and a long command writes its output to
   a log file with its exit code and the log is searched after the run, never piped straight into
   grep, head or tail. Fast
-  checks plus every new test; a self-review against review's five
+  checks plus every new test; the change analysis's close check (`facts.py analysis` — the
+  same shared validator `verify.py --analysis` calls; a red names the entry and the rule it
+  violates and must be fixed before the hand-off); a self-review against review's five
   blocking classes (`artifacts/self-review.md`). It asks the owner (`pf step ask`) only
   when the code reveals something the ticket did not decide, when the plan diverges from
   the ticket, when the ticket carries `confirm_plan: true`, or when it has no acceptance
@@ -70,11 +72,13 @@ and `artifacts/merge/landing.json`. The daemon orchestrates; it judges no conten
   The session orchestrates fresh-context sub-agents (`workflows/_shared/build_subagents.md`;
   a pi dispatch is told, as a dispatch fact, that it dispatches none).
 - **review** (fresh, gate; skill `review`, heavy-run admission, tool window 20 minutes) —
-  the shared review (`workflows/_shared/steps/review.md`), on the facts of three
+  the shared review (`workflows/_shared/steps/review.md`), on the facts of four
   pre-written lines of the workflow's script `facts.py`: `plan-conformance`, `build
   --replay --isolation host` (each unit's run replayed on the tree of its test commit
   (or of the change's base for a unit declared `pre_existing_red`, whose red evidence
-  that replay is), on the host: it must be red) and `carries`. A
+  that replay is), on the host: it must be red), `carries` and `analysis` (the change
+  analysis's own close check — the same shared validator `verify.py --analysis` calls;
+  every entry it fails is a blocking `test_weakened` finding naming the entry). A
   blocking finding names one of five classes: `bug`, `ac_gap`, `project_rule`,
   `test_weakened`, `guarantee`; everything else is non-blocking. A unit that misses its
   test-quality record (`workflows/_shared/test_quality.md`), or whose replayed red

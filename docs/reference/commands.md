@@ -1088,7 +1088,12 @@ hold no credential.
   `.polyforge/verify-scope.conf` governing the replayed run's cwd — its
   browser preflight's text, for example), in its output, is reported
   `not_runnable`, a difference to class (exit 1), never red), `carries` (every e2e suite the build added
-  or changed declares a `carries:` that covers it) and `micro-bounds
+  or changed declares a `carries:` that covers it), `analysis` (the change analysis's own
+  close check — the same shared validator verification's `--analysis` check calls: every
+  listed entry judged statically — its repo, its run's shape, its file at HEAD, its name
+  inside it — and each taken one's run executed once at HEAD and judged by its marker,
+  the cut tail named over the supplement cap; a red names the entry and the rule it
+  violates, and the build must fix it before its hand-off) and `micro-bounds
   --plan <evidence.json>` (every changed path inside the repo's
   `micro_path=` at the change's base; the credential plan). Exit 0: the
   facts hold; 1: a difference to class; 2: not judged.
