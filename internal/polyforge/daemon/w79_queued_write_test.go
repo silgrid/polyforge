@@ -77,6 +77,9 @@ func TestW79QueuedParamWrite(t *testing.T) {
 	if vals := w79AttrsValues(got); !reflect.DeepEqual(vals, map[string]map[string]string{"review": {"image": "reg/x:1"}}) {
 		t.Fatalf("the attrs key after the set: %+v", vals)
 	}
+	if at := got["review"]["image"].At; at == "" {
+		t.Fatalf("the set's entry carries its write time: %+v", got["review"])
+	}
 	if got := w78Params(res.Step.Params); !reflect.DeepEqual(got, []protocol.OverrideParamView{{Name: "image", Value: "reg/x:1", By: "usr_1"}}) {
 		t.Fatalf("the answer's step row: %+v", res.Step.Params)
 	}

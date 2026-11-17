@@ -70,6 +70,10 @@ func w79ParamsEnv(t *testing.T) (*Runtime, *fakeHub, string) {
 // w79Older is a write time long before anything this test run records.
 const w79Older = "2026-01-01T00:00:00Z"
 
+// w79Newer is a write time after anything this test run records (a value
+// written after a re-queue must win over the chain's older aspects).
+const w79Newer = "2027-01-01T00:00:00Z"
+
 func w79SeedStepParams(hub *fakeHub, wi string, key map[string]any) {
 	hub.items = map[string]*api.WorkItem{wi: {ID: wi, ProjectName: "proj",
 		Attrs: map[string]any{api.StepParamsKey: key}}}
@@ -266,6 +270,79 @@ func TestW79ClaimResidueYieldsToRunningWrite(t *testing.T) {
 	hub.mu.Unlock()
 	if has {
 		t.Fatal("the residue is cleared without merging")
+	}
+	if err := r.Stop(context.Background(), wi, protocol.FinishWrapped); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+}
+
+// The residue rule is the WRITE TIME, never the re-claim path: a re-claim
+// that carries no sealed record at all (the ticket was re-queued) merges
+// the key by the recorded times too — the old residue loses to the newer
+// running write, and a value written while the ticket sat RE-QUEUED wins
+// over the chain's older one (review r2#1: neither may be dropped).
+func TestW79ClaimResidueByWriteTime(t *testing.T) {
+	r, hub, _ := w79ParamsEnv(t)
+	const wi = "wi_w79g"
+	w79SeedStepParams(hub, wi, map[string]any{"build": map[string]any{"image": w79Attr("reg/w79:1", w79Older)}})
+	if err := r.Start(context.Background(), wi, StartOpts{}); err != nil {
+		t.Fatalf("the first claim: %v", err)
+	}
+	if j := r.jobOf(wi); j == nil {
+		t.Fatal("the first claim must run to a live agent")
+	}
+	// a running write of the same param — newer than the key's every entry
+	if _, err := r.ApplyStepOverride(context.Background(), wi, OverrideChange{Step: "build", Operator: "usr_1",
+		Param: &protocol.OverrideParam{Name: "image", Value: "reg/run:2"}}); err != nil {
+		t.Fatalf("the running write: %v", err)
+	}
+	if err := r.Stop(context.Background(), wi, protocol.FinishBlocked); err != nil {
+		t.Fatalf("the blocked close: %v", err)
+	}
+	// the re-queue: the session is force-ended and no sealed record remains
+	hub.forceEnd(wi)
+	hub.mu.Lock()
+	delete(hub.seals, wi)
+	hub.items[wi].Attrs[api.StepParamsKey] = map[string]any{"build": map[string]any{"image": w79Attr("reg/w79:1", w79Older)}}
+	hub.mu.Unlock()
+	if err := r.Start(context.Background(), wi, StartOpts{}); err != nil {
+		t.Fatalf("the re-claim: %v", err)
+	}
+	j := r.jobOf(wi)
+	if j == nil {
+		t.Fatal("the re-claim must run to a live agent")
+	}
+	ov, err := capsule.ReadStepOverrides(j.capsuleDir)
+	if err != nil {
+		t.Fatalf("read the re-claimed capsule's overlay: %v", err)
+	}
+	if b := ov.Steps["build"]; b == nil || b.Params["image"] == nil ||
+		b.Params["image"].Value != "reg/run:2" || b.Params["image"].By != "usr_1" {
+		t.Fatalf("the old residue loses to the running write: %+v", ov.Steps["build"])
+	}
+	if err := r.Stop(context.Background(), wi, protocol.FinishBlocked); err != nil {
+		t.Fatalf("the second blocked close: %v", err)
+	}
+	// a value written while the ticket sat RE-QUEUED, newer than everything
+	// the chain carries: it WINS (the queued face's write is legitimate)
+	hub.forceEnd(wi)
+	hub.mu.Lock()
+	delete(hub.seals, wi)
+	hub.items[wi].Attrs[api.StepParamsKey] = map[string]any{"build": map[string]any{"image": w79Attr("reg/queued:9", w79Newer)}}
+	hub.mu.Unlock()
+	if err := r.Start(context.Background(), wi, StartOpts{}); err != nil {
+		t.Fatalf("the re-queued claim: %v", err)
+	}
+	j = r.jobOf(wi)
+	if j == nil {
+		t.Fatal("the re-queued claim must run to a live agent")
+	}
+	if ov, err = capsule.ReadStepOverrides(j.capsuleDir); err != nil {
+		t.Fatalf("read the re-queued capsule's overlay: %v", err)
+	}
+	if b := ov.Steps["build"]; b == nil || b.Params["image"] == nil ||
+		b.Params["image"].Value != "reg/queued:9" || b.Params["image"].By != "step_params" {
+		t.Fatalf("the re-queue's own newer write wins: %+v", ov.Steps["build"])
 	}
 	if err := r.Stop(context.Background(), wi, protocol.FinishWrapped); err != nil {
 		t.Fatalf("Stop: %v", err)
