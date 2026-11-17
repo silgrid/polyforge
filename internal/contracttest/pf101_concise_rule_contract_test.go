@@ -1,4 +1,4 @@
-// carries: internal/common/harness/concise.go
+// carries: internal/common/harness/concise.go, internal/polyforge/driver/spawn.go, internal/polyforge/task/manager.go, internal/polyforge/daemon/analysis_queue.go, internal/polyforge/cli/doctor_concise_prompts.go
 
 package test
 
@@ -129,4 +129,28 @@ func pf101WalkGo(t *testing.T, p string, d fs.DirEntry, err error, heading strin
 		*where = append(*where, filepath.ToSlash(rel))
 	}
 	return nil
+}
+
+// TestPF101ConciseRuleReferencedByEveryPromptSite: every rendering site
+// composes the prompt from the one source — the driver's step-prompt
+// assembly, the task manager's dispatched prompt and the daemon's
+// ticket-analysis prompt reference harness.ConciseRule, and the
+// doctor's concise row appends harness.ConciseGuidanceBlock — no site
+// keeps a copy of its own.
+func TestPF101ConciseRuleReferencedByEveryPromptSite(t *testing.T) {
+	root := v1Root(t)
+	for rel, want := range map[string]string{
+		filepath.Join("internal", "polyforge", "driver", "spawn.go"):               "harness.ConciseRule()",
+		filepath.Join("internal", "polyforge", "task", "manager.go"):               "harness.ConciseRule()",
+		filepath.Join("internal", "polyforge", "daemon", "analysis_queue.go"):      "harness.ConciseRule()",
+		filepath.Join("internal", "polyforge", "cli", "doctor_concise_prompts.go"): "harness.ConciseGuidanceBlock()",
+	} {
+		raw, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			t.Fatalf("%s: %v", rel, err)
+		}
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("%s must render from the one source (%s), not keep a copy of its own", rel, want)
+		}
+	}
 }
