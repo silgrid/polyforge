@@ -132,7 +132,11 @@ def read_conf(text: str) -> ConfReading:
     past these."""
     components: List[Component] = []
     seen: List[str] = []
-    thresholds = _threshold_defaults()
+    defaults = _threshold_defaults()
+    values: Dict[str, int] = {"epic_components": defaults.epic_components,
+                             "epic_units": defaults.epic_units,
+                             "epic_files": defaults.epic_files}
+    source: Dict[str, str] = dict(defaults.source)
     diag: List[str] = []
     for raw in text.split("\n"):
         line = raw.strip()
@@ -147,10 +151,10 @@ def read_conf(text: str) -> ConfReading:
             if not re.fullmatch(r"[1-9][0-9]*", value, re.ASCII):
                 diag.append("%s '%s' rejected (expected a positive integer): %s"
                             % (key, value, line))
-            elif thresholds.source[key] == "declared":
+            elif source[key] == "declared":
                 diag.append("a second %s is ignored, the first one wins: %s" % (key, line))
             else:
-                thresholds = thresholds._replace(**{key: int(value)})
-                thresholds = thresholds._replace(
-                    source=dict(thresholds.source, **{key: "declared"}))
-    return ConfReading(components, thresholds, diag)
+                values[key] = int(value)
+                source[key] = "declared"
+    return ConfReading(components, Thresholds(values["epic_components"], values["epic_units"],
+                                              values["epic_files"], source), diag)
