@@ -60,7 +60,7 @@ func TestSearchFresherWinsEqualMatch(t *testing.T) {
 	age(t, e, fresh.ID, 2)
 	age(t, e, stale.ID, 400)
 	for _, m := range []struct{ mode, q string }{{MatchAll, "quokka"}, {MatchAny, "quokka ladder"}, {MatchAll, "重试"}} {
-		hits, err := e.store.SearchMode(m.mode, nil, m.q, "", nil, 10, nil)
+		hits, err := e.store.SearchMode(m.mode, nil, m.q, "", "", nil, 10, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -110,7 +110,7 @@ func TestSearchMuchBetterOldMatchBeatsWeakFresh(t *testing.T) {
 		t.Fatalf("fixture too weak: bm25 strong %f vs weak %f", rs, rw)
 	}
 	for _, mode := range []string{MatchAll, MatchAny} {
-		hits, err := e.store.SearchMode(mode, nil, "numbat", "", nil, 10, nil)
+		hits, err := e.store.SearchMode(mode, nil, "numbat", "", "", nil, 10, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -145,7 +145,7 @@ func TestSearchFresherWinsNearTie(t *testing.T) {
 		t.Fatalf("fixture is not a near-tie favouring the stale entry: bm25 stale %f fresh %f", rs, rf)
 	}
 	for _, mode := range []string{MatchAll, MatchAny} {
-		hits, err := e.store.SearchMode(mode, nil, "quokka", "", nil, 10, nil)
+		hits, err := e.store.SearchMode(mode, nil, "quokka", "", "", nil, 10, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -454,7 +454,7 @@ func TestSearchModeExactOrder(t *testing.T) {
 		for _, r := range ref[:min(c.limit, len(ref))] {
 			want = append(want, r.id)
 		}
-		hits, err := e.store.SearchMode(c.mode, c.projects, c.q, c.typ, c.tags, c.limit, nil)
+		hits, err := e.store.SearchMode(c.mode, c.projects, c.q, c.typ, "", c.tags, c.limit, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -61,7 +61,7 @@ func TestRevisionOrderControlKeepsRelevance(t *testing.T) {
 		r1 := revEntry(t, e, typ, "demo/widget rev1", rev1Strong, widgetTags, 5)
 		r2 := revEntry(t, e, typ, "demo/widget rev2", revWeak, widgetTags, 1)
 		for _, match := range []string{MatchAll, MatchAny} {
-			got, err := e.store.SearchMode(match, nil, "sprocket", "", nil, 50, nil)
+			got, err := e.store.SearchMode(match, nil, "sprocket", "", "", nil, 50, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -76,13 +76,13 @@ func TestRevisionOrderCurrentFirstBothModes(t *testing.T) {
 	r1 := revEntry(t, e, moduleMapType, "demo/widget rev1", rev1Strong, widgetTags, 5)
 	r2 := revEntry(t, e, moduleMapType, "demo/widget rev2", revWeak, widgetTags, 1)
 	for _, match := range []string{MatchAll, MatchAny} {
-		got, err := e.store.SearchMode(match, nil, "sprocket", "", nil, 50, nil)
+		got, err := e.store.SearchMode(match, nil, "sprocket", "", "", nil, 50, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 		wantOrder(t, match, entryIDs(got), r2.ID, r1.ID)
 		// A query only rev1 answers still returns it.
-		got, err = e.store.SearchMode(match, nil, "abc1234", "", nil, 50, nil)
+		got, err = e.store.SearchMode(match, nil, "abc1234", "", "", nil, 50, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -91,7 +91,7 @@ func TestRevisionOrderCurrentFirstBothModes(t *testing.T) {
 	// The key is the title's: rev01 and rev2 of demo/widget are one key,
 	// and the latest updated_at is current whatever the revision number.
 	r01 := revEntry(t, e, moduleMapType, "demo/widget rev01", rev1Strong, widgetTags, 0)
-	got, err := e.store.SearchMode(MatchAll, nil, "sprocket", "", nil, 50, nil)
+	got, err := e.store.SearchMode(MatchAll, nil, "sprocket", "", "", nil, 50, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestRevisionOrderCutsArePrefixes(t *testing.T) {
 	revEntry(t, e, "fact.note", "other", "sprocket sprocket noise", nil, 3)
 	revEntry(t, e, moduleMapType, "demo/gear rev1", "baseline @abc1234 2026-10-01\nsprocket sprocket\n", []string{"demo", "gear"}, 3)
 	for _, match := range []string{MatchAll, MatchAny} {
-		full, err := e.store.SearchMode(match, nil, "sprocket", "", nil, 50, nil)
+		full, err := e.store.SearchMode(match, nil, "sprocket", "", "", nil, 50, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -117,7 +117,7 @@ func TestRevisionOrderCutsArePrefixes(t *testing.T) {
 			t.Fatalf("%s: %d hits, want 5", match, len(all))
 		}
 		for k := 1; k <= len(all); k++ {
-			cut, err := e.store.SearchMode(match, nil, "sprocket", "", nil, k, nil)
+			cut, err := e.store.SearchMode(match, nil, "sprocket", "", "", nil, k, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -135,7 +135,7 @@ func TestRevisionOrderCutsArePrefixes(t *testing.T) {
 		}
 		paged = append(paged, page[0].id)
 	}
-	full, _ := e.store.SearchMode(MatchAll, nil, "sprocket", "", nil, 50, nil)
+	full, _ := e.store.SearchMode(MatchAll, nil, "sprocket", "", "", nil, 50, nil)
 	wantOrder(t, "ftsPage pages of 1", paged, entryIDs(full)...)
 }
 
@@ -146,7 +146,7 @@ func TestRevisionOrderOnlyKeyedRowsMove(t *testing.T) {
 	pinClock(e)
 	strong := revEntry(t, e, moduleMapType, "demo/gear rev1", rev1Strong, []string{"demo", "gear"}, 5)
 	weak := revEntry(t, e, moduleMapType, "demo/widget rev1", revWeak, widgetTags, 1)
-	got, err := e.store.SearchMode(MatchAll, nil, "sprocket", "", nil, 50, nil)
+	got, err := e.store.SearchMode(MatchAll, nil, "sprocket", "", "", nil, 50, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestRevisionOrderOnlyKeyedRowsMove(t *testing.T) {
 		t.Fatal(err)
 	}
 	cur := revEntry(t, e, moduleMapType, "demo/widget rev2", revWeak, widgetTags, 1)
-	got, err = e.store.SearchMode(MatchAny, nil, "sprocket", "", nil, 50, nil)
+	got, err = e.store.SearchMode(MatchAny, nil, "sprocket", "", "", nil, 50, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestRevisionOrderShortTokenScan(t *testing.T) {
 	r1 := revEntry(t, e, moduleMapType, "demo/widget rev1", rev1Strong+" zq", widgetTags, 5)
 	other := revEntry(t, e, "doc.track", "ledger", "ledger zq", nil, 3)
 	r2 := revEntry(t, e, moduleMapType, "demo/widget rev2", revWeak+" zq", widgetTags, 1)
-	got, err := e.store.SearchMode(MatchAll, nil, "zq", "", nil, 50, nil)
+	got, err := e.store.SearchMode(MatchAll, nil, "zq", "", "", nil, 50, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +193,7 @@ func TestRevisionOrderBrowseAndVisibility(t *testing.T) {
 	var walked []string
 	after := ""
 	for {
-		items, next, err := e.store.Browse(nil, "", after, "", nil, 1, browseAll)
+		items, next, err := e.store.Browse(nil, "", after, "", "", nil, 1, browseAll)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -204,13 +204,13 @@ func TestRevisionOrderBrowseAndVisibility(t *testing.T) {
 		after = next
 	}
 	wantOrder(t, "browse walk", walked, r2.ID, r1.ID)
-	if _, _, err := e.store.Browse(nil, "", "not-a-cursor", "", nil, 1, browseAll); err == nil ||
+	if _, _, err := e.store.Browse(nil, "", "not-a-cursor", "", "", nil, 1, browseAll); err == nil ||
 		err.(*APIError).Code != "MEM-400" {
 		t.Fatalf("bad cursor: %v, want MEM-400", err)
 	}
-	if _, created, err := e.store.Browse(nil, "created", "", "", nil, 1, browseAll); err != nil {
+	if _, created, err := e.store.Browse(nil, "created", "", "", "", nil, 1, browseAll); err != nil {
 		t.Fatal(err)
-	} else if _, _, err := e.store.Browse(nil, "", created, "", nil, 1, browseAll); err == nil ||
+	} else if _, _, err := e.store.Browse(nil, "", created, "", "", nil, 1, browseAll); err == nil ||
 		err.(*APIError).Code != "MEM-400" {
 		t.Fatalf("wrong-sort cursor: %v, want MEM-400", err)
 	}
@@ -223,7 +223,7 @@ func TestRevisionOrderBrowseAndVisibility(t *testing.T) {
 	if err != nil || !strings.Contains(string(body), "sprocket sprocket") {
 		t.Fatalf("rev1 content: %v", err)
 	}
-	hits, err := e.store.SearchMode(MatchAll, nil, "sprocket", "", []string{"widget"}, 50, nil)
+	hits, err := e.store.SearchMode(MatchAll, nil, "sprocket", "", "", []string{"widget"}, 50, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

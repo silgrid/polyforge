@@ -513,7 +513,8 @@ func webTimeline(events []core.Event) []webEvent {
 const webListSearchCap = 20
 
 // webMemoryRow is one console memory row: the public fields alone —
-// the list fields every consumer (list page and search group) needs.
+// the list fields every consumer (list page and search group) needs,
+// plus the author's display name and the writer (polyforge#107).
 type webMemoryRow struct {
 	ID         string   `json:"id"`
 	Title      string   `json:"title"`
@@ -522,6 +523,13 @@ type webMemoryRow struct {
 	Tags       []string `json:"tags"`
 	UpdatedAt  string   `json:"updated_at"`
 	WorkItemID string   `json:"work_item_id,omitempty"`
+	// OwnerDisplayName is the author's display name joined at read time
+	// (an admin rename shows on the next read); WriterKind/WriterDetails
+	// are the daemon-stamped writer attribution, null on a writerless
+	// row. The console page's own rendering is polyforge#120.
+	OwnerDisplayName string          `json:"owner_display_name"`
+	WriterKind       *string         `json:"writer_kind"`
+	WriterDetails    json.RawMessage `json:"writer_details"`
 }
 
 // webMemoryList is the memories page: the rows plus the browse path's
@@ -534,7 +542,8 @@ type webMemoryList struct {
 }
 
 // webMemoryDetail is the memory detail: the header-card fields plus
-// the body already sanitized by the one server-side renderer.
+// the body already sanitized by the one server-side renderer, plus the
+// author's display name and the writer (polyforge#107).
 type webMemoryDetail struct {
 	ID         string   `json:"id"`
 	Title      string   `json:"title"`
@@ -545,6 +554,10 @@ type webMemoryDetail struct {
 	UpdatedAt  string   `json:"updated_at"`
 	WorkItemID string   `json:"work_item_id,omitempty"`
 	HTML       string   `json:"html"`
+	// The same attribution fields as the list row.
+	OwnerDisplayName string          `json:"owner_display_name"`
+	WriterKind       *string         `json:"writer_kind"`
+	WriterDetails    json.RawMessage `json:"writer_details"`
 }
 
 // The console memory page sizes (the #103 semantics carried over
@@ -583,7 +596,7 @@ func (s *Server) webAPIMemories(w http.ResponseWriter, r *http.Request, idn *ide
 	}
 	visible := s.memVisible(idn)
 	if keyword := strings.TrimSpace(q.Get("q")); keyword != "" {
-		items, serr := s.Mems.SearchMode("", []string{projectID}, keyword, memType, tags, webMemSearchLimit, visible)
+		items, serr := s.Mems.SearchMode("", []string{projectID}, keyword, memType, "", tags, webMemSearchLimit, visible)
 		if serr != nil {
 			writeWebError(w, r, serr)
 			return
@@ -597,7 +610,7 @@ func (s *Server) webAPIMemories(w http.ResponseWriter, r *http.Request, idn *ide
 		})
 		return
 	}
-	items, next, berr := s.Mems.Browse([]string{projectID}, "", q.Get("after"), memType, tags, webMemBrowseLimit, visible)
+	items, next, berr := s.Mems.Browse([]string{projectID}, "", q.Get("after"), memType, "", tags, webMemBrowseLimit, visible)
 	if berr != nil {
 		writeWebError(w, r, berr)
 		return
@@ -652,6 +665,8 @@ func (s *Server) webAPIMemoryDetail(w http.ResponseWriter, r *http.Request, idn 
 		ID: entry.ID, Title: webMemTitle(entry), Type: entry.Type,
 		Visibility: entry.Visibility, Tags: entry.Tags,
 		CreatedAt: entry.CreatedAt, UpdatedAt: entry.UpdatedAt, HTML: string(html),
+		OwnerDisplayName: entry.OwnerDisplayName, WriterKind: entry.WriterKind,
+		WriterDetails: entry.WriterDetails,
 	}
 	if entry.WorkItemID != nil {
 		detail.WorkItemID = *entry.WorkItemID
@@ -708,7 +723,7 @@ func (s *Server) webAPISearch(w http.ResponseWriter, r *http.Request, idn *ident
 			Content: it.Content,
 		})
 	}
-	memHits, merr := s.Mems.SearchMode("", []string{projectID}, keyword, "", nil, webMemSearchLimit, s.memVisible(idn))
+	memHits, merr := s.Mems.SearchMode("", []string{projectID}, keyword, "", "", nil, webMemSearchLimit, s.memVisible(idn))
 	if merr != nil {
 		writeWebError(w, r, merr)
 		return

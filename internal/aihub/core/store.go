@@ -239,7 +239,19 @@ CREATE TABLE IF NOT EXISTS memories (
   -- The stored document (frontmatter + body); content_sha/content_len
   -- describe it. NULL only on a row the memory content migration could
   -- not fill (memory/migrate.go): such a row is never served.
-  content      TEXT
+  content      TEXT,
+  -- polyforge#107: the writer attribution every memory read face
+  -- serves. writer_kind is the daemon-stamped writer class
+  -- ('session' or 'step'; NULL on rows written before v0.2.3 and by
+  -- callers that send none — the v0.2.2 binary keeps reading and
+  -- writing the table unchanged beside the two columns); writer_details
+  -- is the writer's JSON detail object (a step write: work_item /
+  -- step / attempt / model). Both are server-side metadata: the stored
+  -- document's frontmatter never carries them. deploy/sql/v0.2.3/
+  -- adds them to an existing database, backfilling the rows a step
+  -- dispatch wrote (their pf-step-memory: idempotency key).
+  writer_kind    TEXT CHECK (writer_kind IN ('session','step')),
+  writer_details TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_mem_work_item ON memories(work_item_id) WHERE work_item_id IS NOT NULL;

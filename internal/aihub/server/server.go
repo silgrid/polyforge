@@ -1568,13 +1568,13 @@ func (s *Server) hSearchMemory(w http.ResponseWriter, r *http.Request, idn *iden
 	// either (an empty value included) is refused before the keyword
 	// path, which stays byte-identical and never sees a cursor.
 	if strings.TrimSpace(q.Get("q")) == "" {
-		return s.hBrowseMemory(w, r, tags, project, idn)
+		return s.hBrowseMemory(w, r, tags, project, q.Get("writer_kind"), idn)
 	}
 	if q.Has("after") || q.Has("sort") {
 		return core.Fail(api.ErrMemBadInput, "",
 			"after and sort are browse parameters and cannot be combined with q")
 	}
-	return s.hSearchRun(w, q.Get("match"), q.Get("q"), q.Get("type"), tags, project, limit, excerpt, idn)
+	return s.hSearchRun(w, q.Get("match"), q.Get("q"), q.Get("type"), q.Get("writer_kind"), tags, project, limit, excerpt, idn)
 }
 
 // Browse page-size bounds: default 20, maximum 200.
@@ -1598,7 +1598,7 @@ type browseResponse struct {
 // (absent = 20, 1..200 accepted, anything else MEM-400 — no silent
 // substitution); sort and after are validated by the store (a malformed
 // or sort-mismatched cursor is MEM-400, never a restart).
-func (s *Server) hBrowseMemory(w http.ResponseWriter, r *http.Request, tags []string, project string, idn *identity) error {
+func (s *Server) hBrowseMemory(w http.ResponseWriter, r *http.Request, tags []string, project, writerKind string, idn *identity) error {
 	q := r.URL.Query()
 	limit := defaultBrowseLimit
 	if q.Has("limit") {
@@ -1619,13 +1619,13 @@ func (s *Server) hBrowseMemory(w http.ResponseWriter, r *http.Request, tags []st
 		projects = []string{project}
 	}
 	visible := s.memVisible(idn)
-	items, next, err := s.Mems.Browse(projects, q.Get("sort"), q.Get("after"), q.Get("type"), tags, limit, visible)
+	items, next, err := s.Mems.Browse(projects, q.Get("sort"), q.Get("after"), q.Get("type"), writerKind, tags, limit, visible)
 	if err != nil {
 		return err
 	}
 	// total is the whole walk's size under the same narrowing and
 	// visibility, not the page length.
-	total, err := s.Mems.BrowseTotal(projects, q.Get("type"), tags, visible)
+	total, err := s.Mems.BrowseTotal(projects, q.Get("type"), writerKind, tags, visible)
 	if err != nil {
 		return err
 	}
@@ -1652,7 +1652,7 @@ type memoryHitList struct {
 	Total int         `json:"total"`
 }
 
-func (s *Server) hSearchRun(w http.ResponseWriter, match, query, memType string, tags []string, project string, limit, excerpt int, idn *identity) error {
+func (s *Server) hSearchRun(w http.ResponseWriter, match, query, memType, writerKind string, tags []string, project string, limit, excerpt int, idn *identity) error {
 	// The caller's readable-project set (key scope ∩ membership) is
 	// computed once and pushed into the candidate SQL: unreadable matches
 	// cost no load at all. nil = no narrowing (an unscoped
@@ -1672,7 +1672,7 @@ func (s *Server) hSearchRun(w http.ResponseWriter, match, query, memType string,
 	if projects != nil && len(projects) == 0 {
 		return reply(w, http.StatusOK, api.ListResponse[memory.Entry]{Items: []memory.Entry{}, Total: 0})
 	}
-	items, err := s.Mems.SearchMode(match, projects, query, memType, tags, limit, s.memVisible(idn))
+	items, err := s.Mems.SearchMode(match, projects, query, memType, writerKind, tags, limit, s.memVisible(idn))
 	if err != nil {
 		return err
 	}
