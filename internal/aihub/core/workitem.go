@@ -125,23 +125,6 @@ func checkAttrs(attrs map[string]any) error {
 	return nil
 }
 
-// checkCreateAttrs is checkAttrs for the create path: it also refuses the
-// daemon-written reserved key a create must not plant — `step_params`, a
-// queued work item's per-ticket step params (polyforge#79). The daemon's
-// machine-signed attrs route is its one writer (validating the params
-// against a lane before they ride the key); a filer planting them at
-// create would hand a lane values no lane ever judged.
-func checkCreateAttrs(attrs map[string]any) error {
-	if err := checkAttrs(attrs); err != nil {
-		return err
-	}
-	if _, ok := attrs[api.StepParamsKey]; ok {
-		return Fail(api.ErrCoreBadInput, "EXECUTION_STATE_REJECTED",
-			"attrs key %s carries a queued work item's step params and is written by the daemon's machine key only; a create cannot set it", api.StepParamsKey)
-	}
-	return nil
-}
-
 // Create inserts a new queued work item and returns it.
 func (m *WIManager) Create(req CreateRequest) (*WIView, error) {
 	req.Goal = strings.TrimSpace(req.Goal)
@@ -160,7 +143,7 @@ func (m *WIManager) Create(req CreateRequest) (*WIView, error) {
 	if req.Attrs == nil {
 		req.Attrs = map[string]any{}
 	}
-	if err := checkCreateAttrs(req.Attrs); err != nil {
+	if err := checkAttrs(req.Attrs); err != nil {
 		return nil, err
 	}
 	if req.Labels == nil {
