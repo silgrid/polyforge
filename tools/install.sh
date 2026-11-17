@@ -582,7 +582,7 @@ else
   echo "   ACTION: add the [workspace] mapping, then check it and start the daemon:"
   echo "     pf config set '[workspace.\"<absolute-path-to-your-workspace>\"]' projects=your-project,another-project"
   echo "     pf doctor && pf daemon ensure"
-  echo "   `pf daemon ensure` starts the daemon only once at least one Cell has a real mapping — this installer runs it only then."
+  echo "   \`pf daemon ensure\` starts the daemon only once at least one Cell has a real mapping — this installer runs it only then."
 fi
 # --- harness settings: one python edit per file. Invalid JSON or an
 # unexpected shape changes nothing; a change backs the file up
@@ -756,7 +756,7 @@ elif ST=$(status 5) && printf '%s' "$ST" | grep -q machine_id; then
   fi
 elif ! any_cell_mapping; then
   # polyforge#113/#20: no mapping in any Cell — nothing for the daemon to execute
-  echo "   SKIP: no [workspace] section in any Cell yet ($CFG, or a cli-*.toml beside it) — `pf daemon ensure` starts the daemon only once at least one has one"
+  echo "   SKIP: no [workspace] section in any Cell yet ($CFG, or a cli-*.toml beside it) — \`pf daemon ensure\` starts the daemon only once at least one has one"
   echo "   add projects (pf config set '[workspace.\"<path>\"]' projects=a,b), then: pf daemon ensure"
 else
   # `pf daemon ensure` owns the launch (polyforge#174): the restart loop
