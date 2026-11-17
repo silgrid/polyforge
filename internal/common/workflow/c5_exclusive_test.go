@@ -38,7 +38,7 @@ func TestC5ExclusiveLaneKey(t *testing.T) {
 }
 
 func TestC5ShippedIntegrateIsExclusive(t *testing.T) {
-	for _, name := range []string{"develop", "integrate", "micro", "release"} {
+	for _, name := range []string{"develop", "epic", "integrate", "micro", "release"} {
 		lane, errs := workflow.Load(filepath.Join(shippedLanes, name))
 		if len(errs) > 0 {
 			t.Fatalf("%s: %v", name, errs)

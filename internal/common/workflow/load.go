@@ -76,8 +76,21 @@ type Lane struct {
 	// the parent's project name; "" when the lane declares none, which
 	// leaves such a sub-ticket's claim untouched).
 	ChildrenBranch string
-	Defaults       *Defaults
-	Steps          []Step
+	// Epic is the lane's `epic: true` (polyforge#117): the lane's own
+	// work items are epics — each checks the children branch of its OWN
+	// seq out (children_branch, which the lane must then declare) and
+	// merges into the origin's default branch (the runtime fixes the
+	// checkout branch into the capsule and snapshots the item's
+	// children).
+	Epic bool
+	// ResumeReset is the lane's `resume_reset`: the step id an
+	// owner-resumed epic's changed-children marker resets the lane to
+	// — required when the lane declares epic, refused without it, and
+	// it must name a step of this lane (the runtime writes it into the
+	// marker, the driver rewinds to it; polyforge#117 r4).
+	ResumeReset string
+	Defaults    *Defaults
+	Steps       []Step
 }
 
 // UncountedRewinds is the lane's declared uncounted rewind class
@@ -344,6 +357,14 @@ func (l *loader) load() *Lane {
 			}
 		}
 	}
+	if n, ok := keys["epic"]; ok {
+		lane.Epic, _ = l.boolValue(file, off, n, "epic")
+	}
+	if n, ok := keys["resume_reset"]; ok {
+		if v, good := l.stringValue(file, off, n, "resume_reset"); good {
+			lane.ResumeReset = v
+		}
+	}
 	stepsNode, ok := keys["steps"]
 	if !ok {
 		l.at(CodeMissingKey, file, off, root, "steps", "the lane declares no steps")
@@ -366,6 +387,31 @@ func (l *loader) load() *Lane {
 	}
 	if uncountedNode, hasUncounted := keys["uncounted_rewinds"]; !onFail && hasUncounted {
 		l.at(CodeInvalidValue, file, off, uncountedNode, "uncounted_rewinds", "no step declares on_fail, so the lane has nothing to rewind: remove uncounted_rewinds")
+	}
+	// an epic lane names the branch its own work items work on through
+	// its children_branch, and the step an owner-resumed changed-children
+	// marker resets it to through resume_reset: either key without epic
+	// names nothing, and epic without either is refused (polyforge#117)
+	if lane.Epic && lane.ChildrenBranch == "" {
+		l.at(CodeInvalidValue, file, off, keys["epic"], "epic", "an epic lane's own work items work on the children branch, so the lane must declare children_branch too")
+	}
+	if lane.Epic && lane.ResumeReset == "" {
+		l.at(CodeInvalidValue, file, off, keys["epic"], "epic", "an owner-resumed epic's changed-children marker resets the lane to a step, so the lane must declare resume_reset too")
+	}
+	if !lane.Epic && lane.ResumeReset != "" {
+		l.at(CodeInvalidValue, file, off, keys["resume_reset"], "resume_reset", "the lane declares no epic: no changed-children marker of its work items ever resets it, so resume_reset names nothing")
+	}
+	if lane.ResumeReset != "" {
+		found := false
+		for _, s := range lane.Steps {
+			if s.ID == lane.ResumeReset {
+				found = true
+				break
+			}
+		}
+		if !found {
+			l.at(CodeInvalidValue, file, off, keys["resume_reset"], "resume_reset", "%q is not a step of this lane", lane.ResumeReset)
+		}
 	}
 	l.modelTiers(file, off, lane)
 	l.definitions(lane)

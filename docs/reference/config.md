@@ -873,7 +873,7 @@ where the step's lane declares it `skippable: true` (workflow.yaml,
 [workflow contract](workflow-contract.md#step-keys)); a step not declared
 skippable runs on every round of the work item (a `rewind_only`
 declaration alone can hold a step's first round back). The shipped lanes
-declare one: develop's `merge`.
+declare it on develop's and epic's `merge`.
 `skip` is a bool (`true` or `false`; anything else is a load error) and
 `default` and `task` take none (they are no step).
 
@@ -915,11 +915,12 @@ steps:
 is `human`: the step's work is done by a person, only where the step's
 lane declares it `human_mergeable: true` (workflow.yaml, [workflow
 contract](workflow-contract.md#step-keys)); a step not declared
-human_mergeable always runs itself. The shipped lanes declare one:
-develop's `merge` — the PRs are handed to the project's reviewer, the
-merge step asks the owner instead of merging, and the person's landing is
-taken by the human landing rules
-(`workflows/develop/README.md`, "Merging by a person"). `by` takes the
+human_mergeable always runs itself. The shipped lanes declare two:
+develop's and epic's `merge` — the PRs are handed to the project's
+reviewer, the merge step asks the owner instead of merging, and the
+person's landing is taken by the human landing rules
+(`workflows/develop/README.md`, "Merging by a person"; the epic lane's
+merge follows the same rules its README names). `by` takes the
 mode name `human` (anything else is a load error), and a step entry
 declares `by` or `skip`, never both (a load error naming both). A `by` on
 the bundle-less keys is a load error, as a `skip` is.

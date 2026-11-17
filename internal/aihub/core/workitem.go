@@ -1261,6 +1261,10 @@ type ListFilters struct {
 	// /work-items?attr=<path>:<value>).
 	Bundle string
 	Attrs  []AttrMatch
+	// Parent narrows the page to one parent's children ("" = any;
+	// polyforge#117: the epic lane's daemon lists an epic's children
+	// through GET /work-items?parent=<id>).
+	Parent string
 	// Limit caps the page. 0 = the production default (500, the queue
 	// views). Explicit values are clamped to maxListLimit.
 	Limit int
@@ -1310,6 +1314,10 @@ func (m *WIManager) List(f ListFilters) ([]WIView, error) {
 	if f.Bundle != "" {
 		q += ` AND w.bundle_name=?`
 		args = append(args, f.Bundle)
+	}
+	if f.Parent != "" {
+		q += ` AND w.parent_id=?`
+		args = append(args, f.Parent)
 	}
 	for _, a := range f.Attrs {
 		q += ` AND json_extract(w.attrs, ?)=?`

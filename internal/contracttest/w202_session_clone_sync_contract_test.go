@@ -36,7 +36,7 @@ func TestW202SessionCloneSyncContract(t *testing.T) {
 
 	skill := read("skills/polyforge/SKILL.md")
 	for _, tok := range []string{
-		"Eight standing rules",
+		"Nine standing rules",
 		"8. **Sync the session clone before reading it as fact",
 		"`<workspace>/.repo/<repo>`",
 		"`git fetch origin && git pull --ff-only`",
@@ -55,8 +55,10 @@ func TestW202SessionCloneSyncContract(t *testing.T) {
 			t.Errorf("skills/polyforge/SKILL.md: session rule 8 lacks pinned token %q", tok)
 		}
 	}
-	if strings.Contains(skill, "Seven standing rules") {
-		t.Errorf("skills/polyforge/SKILL.md: the Session rules lead-in still counts seven rules")
+	for _, stale := range []string{"Seven standing rules", "Eight standing rules"} {
+		if strings.Contains(skill, stale) {
+			t.Errorf("skills/polyforge/SKILL.md: the Session rules lead-in still counts %q — the ninth rule (forensics, polyforge#122) is in", stale)
+		}
 	}
 
 	for _, frag := range []string{

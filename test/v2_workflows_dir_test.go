@@ -9,8 +9,12 @@ package test
 // `publish` and the `merge` that merges what publish opened
 // — which push to the task repos' origins: scenarios that are not about
 // delivery run without those step lines; the delivery scenarios set
-// inst.keepDeliver. Every copy is a lane the contract accepts (the
-// daemon refuses to start on one it refuses).
+// inst.keepDeliver. A lane whose declaration references a step the strip
+// removes loses the declaration with it — the epic lane's `epic` and
+// `resume_reset` keys name its stripped re-sync point, so they leave
+// with the delivery steps and the copy is a plain lane. Every copy is a
+// lane the contract accepts (the daemon refuses to start on one it
+// refuses; TestStrippedCopiesLoad).
 
 import (
 	"fmt"
@@ -30,6 +34,14 @@ import (
 // the list item, or blank), up to the next step entry or the
 // frontmatter's end.
 var deliverStepBlock = regexp.MustCompile(`(?m)^  - id: (sync|verification|evidence|publish|merge)\n(?:(?:    [^\n]*)?\n)*`)
+
+// epicResetKeys matches the epic lane's two lane-level keys that name its
+// stripped re-sync point (polyforge#117): `epic: true` requires
+// `resume_reset`, and `resume_reset` must name a step of the lane — the
+// strip removes the sync step it names, so both keys leave with the
+// delivery steps and the copy is a plain lane the contract accepts
+// (children_branch stays: a lane may declare it without epic).
+var epicResetKeys = regexp.MustCompile(`(?m)^epic: true\n(?:(?:#[^\n]*)?\n)*|^resume_reset: [^\n]*\n`)
 
 // microFixOutputs matches micro fix's declared artifacts — the evidence
 // plan the stripped evidence step would run and fix's own micro-bounds
@@ -128,6 +140,26 @@ func strippedWorkflowsDir(t testing.TB, shipped string) string {
 	return copyWorkflowsDir(t, shipped, true)
 }
 
+// TestStrippedCopiesLoad pins the file's own rule — "Every copy is a lane
+// the contract accepts": the daemon of a scenario starts on the stripped
+// tree, so a lane whose declaration references a step the strip removes
+// is a copy the daemon refuses to load. Red before polyforge#117 r6: the
+// strip removed the sync step the epic lane's resume_reset names, and the
+// copy refused WFC-112 (verification r2's 22 e2e reds).
+func TestStrippedCopiesLoad(t *testing.T) {
+	dir := strippedWorkflowsDir(t, filepath.Join(v1Root(t), "workflows"))
+	dirs, err := workflow.LaneDirs(dir)
+	if err != nil || len(dirs) == 0 {
+		t.Fatalf("the stripped copy carries no lanes: %v", err)
+	}
+	for _, d := range dirs {
+		if _, errs := workflow.Load(d); len(errs) > 0 {
+			t.Errorf("the stripped copy of %s is not a lane the contract accepts: %v",
+				filepath.Base(d), workflow.AsLoadError(d, errs))
+		}
+	}
+}
+
 // copyWorkflowsDir is strippedWorkflowsDir with the deliver step kept when
 // stripDeliver is false.
 func copyWorkflowsDir(t testing.TB, shipped string, stripDeliver bool) string {
@@ -135,6 +167,7 @@ func copyWorkflowsDir(t testing.TB, shipped string, stripDeliver bool) string {
 	return copyWorkflowsTrees(t, func(raw []byte) []byte {
 		if stripDeliver {
 			raw = deliverStepBlock.ReplaceAll(raw, nil)
+			raw = epicResetKeys.ReplaceAll(raw, nil)
 			raw = microFixOutputs.ReplaceAll(raw, nil)
 			raw = microReviewVerifies.ReplaceAll(raw, nil)
 		}

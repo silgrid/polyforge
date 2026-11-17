@@ -489,6 +489,67 @@ the npm registry the surface's npm is configured against, or
 Nothing to do on the work machines: the engine ships with the release and
 reads the conf from the repository.
 
+## v0.2.4, the forensics standing rule
+
+The routing skill gains its ninth standing rule (polyforge#122):
+forensics — raw material lands on disk, the conversation carries
+conclusions and references. Six duties: a command's full output, a
+large response or an export is saved complete into a dedicated
+subdirectory of the workspace's temporary directory before it is
+quoted (the conversation carries counts, differences and short
+excerpts only); history is located first and then read by range;
+one logical tool result carries at most 8 KiB of visible text, a
+longer body going to disk with an excerpt read back and the
+truncation stated; already-read material is referenced instead of
+reloaded while a redirected command's exit code is captured and
+kept; a report filed where it belongs is later referenced by
+conclusions and pointers only; and a task prompt or a sub-agent
+brief states the same constraints, naming the raw directory. The
+`pf task` drafting list and the develop build's sub-agent brief
+rule carry them bound to their own directories (a task's raw
+batch, a step's `downloads/`). No action on upgrade: skills are
+wired by reference from the release checkout, so sessions pick
+the rule up at their next start.
+
+## v0.2.3, the epic lane (polyforge#117)
+
+The new `epic` lane runs one work item per epic: verify-children → sync
+→ build (`rewind_only`: the fix build runs only after a rewind covers
+it, inheriting the plan) → review (the epic mode: the total acceptance,
+the children's landing records and PR bodies, the seams and the final
+diff — never a child's internals) → verification (the full bar
+explicitly) → publish → merge. The gates after build rewind to it;
+merge's moved-base FAIL goes back to sync (the same uncounted class
+develop declares, its own cap of 2), and the lane re-runs from there.
+
+A lane declares it with the new `epic` key (which must name
+`children_branch` too): its OWN work items are epics, each checking out
+the children branch of its own seq — recorded as
+`runtime-state/target-branch.json`'s `checkout` key with NO `target`, so
+the epic's merge target is the origin's default branch and every step
+script keeps its default-branch logic. The first claim also snapshots
+the epic's children (ids, slugs, statuses, landing records verbatim)
+into `runtime-state/children.json`, immutable while the epic runs; the
+driver re-checks it against aihub before every dispatch, and a changed
+child parks the workflow blocked — the daemon asks nothing. A re-claim
+over changed children writes the next snapshot version beside
+`runtime-state/epic-resume.json`, which the driver lands as one
+owner-class rewind to the step the lane's `resume_reset` names (the
+epic lane names its sync step; charged to no budget), so the affected
+steps re-run over a tree that first takes the changed set's commits on
+the epic branch in (the epic's sync merges its own checkout branch
+before the default branch). The hub's work-item list gained a `parent` filter
+(`GET /work-items?parent=<id>`); the daemon's runtime reads an epic's
+children through it.
+
+The epic's merge registers ONE landed record — `state: landed`, the
+integrate pool's own — with a `children` key carrying the claim's
+snapshot verbatim: each child keeps its own `landed_on_target` evidence
+on its own work item and never enters the pool; a children snapshot a
+step cannot read is not judged (exit 2). Sub-tickets are untouched: a
+sub-ticket's claim still reads the PARENT's lane's `children_branch`
+and merges into the children branch, never the default branch.
+
 ## v0.2.3, the light tier's selection closes its historical misses (harness carries and scoped_command)
 
 Five changes of this release reached the develop lane's light verification
