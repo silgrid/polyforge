@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { gunzipSync } from "node:zlib";
 import test from "node:test";
 import { createJiti } from "jiti";
 
@@ -74,7 +73,7 @@ test("list versions expose idle session creation, rename and deletion to other w
   assert.equal((await (await getRunningSessions()).json()).sessionListVersion, deleted.sessionListVersion);
 });
 
-test("session listing returns a gzip-compressed response when the client accepts it", async (t) => {
+test("session listing returns plain JSON without content-encoding when the client accepts gzip", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "pi-web-list-gzip-"));
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = dir;
@@ -86,11 +85,16 @@ test("session listing returns a gzip-compressed response when the client accepts
     await rm(dir, { recursive: true, force: true });
   });
 
+  // From Next 16.4.5 on, the server strips an application-set Content-Encoding
+  // and its own compression layer then gzips the still-encoded body again
+  // (polyforge#105, upstream #101465: stripping is the intended security fix),
+  // so these routes must never compress on their own: next start (>= 16.4.6)
+  // compresses large responses itself, and the route hands it plain JSON.
   // The list carries at most 500 characters of each first message, so a few
-  // sessions make the body large enough to compress.
+  // sessions make the body large enough that compression would apply.
   const firstMessage = "compressible session content ".repeat(500);
   // Trimmed rows are small (that is the point of the audit task), so the
-  // fixture needs several sessions for the body to cross the gzip size
+  // fixture needs several sessions for the body to cross the compression size
   // threshold again.
   for (let i = 0; i < 6; i++) {
     const manager = SessionManager.create(dir);
@@ -104,9 +108,8 @@ test("session listing returns a gzip-compressed response when the client accepts
   }));
 
   assert.equal(response.status, 200);
-  assert.equal(response.headers.get("Content-Encoding"), "gzip");
-  assert.match(response.headers.get("Vary") ?? "", /(?:^|,\s*)Accept-Encoding(?:\s*,|$)/i);
-  const payload = JSON.parse(gunzipSync(Buffer.from(await response.arrayBuffer())).toString("utf8"));
+  assert.equal(response.headers.get("Content-Encoding"), null);
+  const payload = JSON.parse(Buffer.from(await response.arrayBuffer()).toString("utf8"));
   // The list payload carries a trimmed preview (audit task: list size),
   // never the full first-message text.
   assert.equal(payload.sessions.length, 6);
@@ -360,7 +363,7 @@ test("live detail and state routes work without a persisted JSONL file", async (
   });
 });
 
-test("session detail returns a gzip-compressed response when the client accepts it", async (t) => {
+test("session detail returns plain JSON without content-encoding when the client accepts gzip", async (t) => {
   const previousRegistry = globalThis.__piSessions;
   const id = "live-route-gzip-test";
   const timestamp = "2026-09-05T00:00:00.000Z";
@@ -400,7 +403,7 @@ test("session detail returns a gzip-compressed response when the client accepts 
   );
 
   assert.equal(response.status, 200);
-  assert.equal(response.headers.get("Content-Encoding"), "gzip");
-  const payload = JSON.parse(gunzipSync(Buffer.from(await response.arrayBuffer())).toString("utf8"));
+  assert.equal(response.headers.get("Content-Encoding"), null);
+  const payload = JSON.parse(Buffer.from(await response.arrayBuffer()).toString("utf8"));
   assert.equal(payload.info.firstMessage, firstMessage);
 });
