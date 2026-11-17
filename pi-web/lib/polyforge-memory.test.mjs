@@ -25,6 +25,9 @@ test("the Memory floor is 2.20.12 (browse-mode recall) and the boundary is inclu
 test("the hit passport keeps exactly the allowed keys and drops owner/project/sha/excerpt/hint and their values", () => {
   const raw = {
     id: "mem_abc123", project_id: "prj_SENTINEL", owner_user_id: "u_SENTINEL",
+    owner_display_name: "Ada Lovelace", writer_kind: "step",
+    writer_details: { work_item: "wi_9", step: "build", attempt: 2, model: "pi:glm-5.3",
+      evil: "NESTED_SENTINEL", note: null, machine: { deep: "NESTED_SENTINEL" }, cell: "" },
     work_item_id: "wi_1", type: "doc.decision", title: "t", visibility: "private",
     content: "SHOULD-NOT-PASS", content_sha: "sha_SENTINEL", content_excerpt: "SHOULD-NOT-PASS",
     internal_hint: "HINT_SENTINEL", tags: ["audit", "review", "", 7], related: ["mem_x", "not-an-id"],
@@ -32,13 +35,26 @@ test("the hit passport keeps exactly the allowed keys and drops owner/project/sh
   };
   const hit = lib.sanitizeMemoryHit(raw);
   assert.deepEqual(Object.keys(hit).sort(), [
-    "content_len", "created_at", "id", "related", "status", "tags", "title", "type", "updated_at", "visibility", "work_item_id",
+    "author_display_name", "content_len", "created_at", "id", "related", "status", "tags", "title", "type",
+    "updated_at", "visibility", "work_item_id", "writer_details", "writer_kind",
   ]);
+  // polyforge#107/#120: the author's DISPLAY NAME and the writer pass; the
+  // stable ids never do, and the writer's details keep only the known,
+  // valued keys — an unknown key, a null and a nested object are dropped
+  // whole (never a guess, never a pass-through).
+  assert.equal(hit.author_display_name, "Ada Lovelace");
+  assert.equal(hit.writer_kind, "step");
+  assert.deepEqual(hit.writer_details, { work_item: "wi_9", step: "build", attempt: 2, model: "pi:glm-5.3" });
+  const writerless = lib.sanitizeMemoryHit({ ...raw, id: "mem_def456", writer_kind: null, writer_details: null });
+  assert.equal(writerless.writer_kind, null, "a writerless row reads kind null");
+  assert.deepEqual(writerless.writer_details, {}, "a writerless row reads no details");
+  const unattributed = lib.sanitizeMemoryHit({ ...raw, id: "mem_ghi789", owner_display_name: "" });
+  assert.equal(unattributed.author_display_name, "", "a missing display name reads as the empty string (the placeholder is the client's)");
   assert.deepEqual(hit.tags, ["audit", "review"], "tags stay trimmed strings");
   assert.deepEqual(hit.related, ["mem_x", "not-an-id"], "related ids pass as strings");
   const serialized = JSON.stringify(lib.sanitizeMemorySearchAnswer({ items: [raw], total: 1 }));
   for (const dropped of ["owner_user_id", "project_id", "content_sha", "content_excerpt", "internal_hint",
-    "u_SENTINEL", "prj_SENTINEL", "sha_SENTINEL", "HINT_SENTINEL", "SHOULD-NOT-PASS"]) {
+    "u_SENTINEL", "prj_SENTINEL", "sha_SENTINEL", "HINT_SENTINEL", "SHOULD-NOT-PASS", "NESTED_SENTINEL"]) {
     assert.ok(!serialized.includes(dropped), `the search answer must not carry ${dropped}`);
   }
   assert.equal(lib.sanitizeMemoryHit({ id: "not_mem", title: "x" }), null, "an invalid id drops the row");
@@ -49,8 +65,11 @@ test("the hit passport keeps exactly the allowed keys and drops owner/project/sh
 test("the detail passport adds only content, capped at the forward cap on a code-point boundary", () => {
   const base = { id: "mem_abc123", type: "t", title: "t", visibility: "project", status: "active",
     tags: [], related: [], work_item_id: null, created_at: "c", updated_at: "u", content_len: 999999 };
-  const detail = lib.sanitizeMemoryDetail({ ...base, content: "short", owner_user_id: "u_SENTINEL" });
-  assert.deepEqual(Object.keys(detail).sort(), ["content", "content_len", "created_at", "id", "related", "status", "tags", "title", "type", "updated_at", "visibility", "work_item_id"]);
+  const detail = lib.sanitizeMemoryDetail({ ...base, content: "short", owner_user_id: "u_SENTINEL",
+    owner_display_name: "Ada Lovelace", writer_kind: "session", writer_details: { machine: "m-op", cell: "public" } });
+  assert.deepEqual(Object.keys(detail).sort(), ["author_display_name", "content", "content_len", "created_at", "id", "related", "status", "tags", "title", "type", "updated_at", "visibility", "work_item_id", "writer_details", "writer_kind"]);
+  assert.equal(detail.author_display_name, "Ada Lovelace", "the detail passport passes the display name");
+  assert.equal(detail.writer_kind, "session", "the detail passport passes the writer kind");
   assert.equal(detail.content, "short");
   // A multibyte char that would straddle the cap is dropped whole, never split.
   const exact = "a".repeat(262144);
@@ -80,18 +99,48 @@ test("validators refuse a flag keyword, a bad type, bad tags and a bad project; 
     ["off-shape project", { ...params, project: "../../etc/passwd" }],
     ["bad cwd", { ...params, cwd: "" }],
     ["control-byte cwd", { ...params, cwd: "/ws\n" }],
+    ["unknown writer kind", { ...params, writer_kind: "human" }],
+    ["flag-shaped writer kind", { ...params, writer_kind: "--limit" }],
   ]) {
     const result = lib.validateMemorySearch(bad);
     assert.ok(!result.ok && result.error, `${label} is refused with a field-level message`);
   }
-  assert.ok(lib.validateMemorySearch({ ...params, tags: "audit,review", any: "1" }).ok, "a well-shaped filtered search passes");
-  const optional = lib.validateMemorySearch({ ...params, tags: "", any: "0" });
-  assert.ok(optional.ok && optional.value.tags === undefined && optional.value.any === undefined, "empty tags and a non-1 any stay absent");
+  assert.ok(lib.validateMemorySearch({ ...params, tags: "audit,review", any: "1", writer_kind: "session" }).ok, "a well-shaped filtered search passes");
+  const optional = lib.validateMemorySearch({ ...params, tags: "", any: "0", writer_kind: "" });
+  assert.ok(optional.ok && optional.value.writer_kind === undefined, "an empty writer kind stays absent (no filter)");
+  assert.equal(lib.validateMemorySearch({ ...params, writer_kind: "step" }).value.writer_kind, "step");
   assert.equal(pure.isPolyforgeMemoryId("mem_abc123"), true);
   assert.equal(pure.isPolyforgeMemoryId("mem_   "), false, "mem_ + whitespace is not an id");
   assert.equal(pure.isPolyforgeMemoryId("../../etc/passwd"), false);
   assert.equal(pure.isMemoryTagList("audit,review"), true);
   assert.equal(pure.isMemoryTagList(""), false);
+});
+
+test("the writer display string shows the kind plus only the valued known details, never a guess", () => {
+  // The fixed key order (machine, cell, work_item, step, attempt, model) is
+  // the daemon's two stamps (session: machine/cell; step: work_item/step/
+  // attempt/model); a null kind answers "" — the placeholder is the
+  // client's, so this helper never invents an author or a writer.
+  assert.equal(typeof pure.formatMemoryWriter, "function", "formatMemoryWriter is exported");
+  if (typeof pure.formatMemoryWriter !== "function") return;
+  assert.equal(pure.formatMemoryWriter({ kind: null, details: {} }), "");
+  assert.equal(pure.formatMemoryWriter({ kind: "step", details: {} }), "step", "a known kind with no details shows the kind alone");
+  assert.equal(pure.formatMemoryWriter({ kind: "session", details: { machine: "m-op", cell: "" } }), "session (machine=m-op)", "an empty detail value is skipped");
+  assert.equal(pure.formatMemoryWriter({ kind: "session", details: { cell: "public", machine: "m-op" } }), "session (machine=m-op, cell=public)", "the key order is fixed, not the wire's");
+  assert.equal(pure.formatMemoryWriter({ kind: "step", details: { work_item: "wi_9", step: "build", attempt: 2, model: null } }), "step (work_item=wi_9, step=build, attempt=2)", "a null model is skipped, a number prints bare");
+});
+
+test("the writer filter's own floor is pf 0.2.3: same-core prereleases and the retired 2.20.x line stay below", async () => {
+  const detect = await jiti.import("./polyforge-detect.ts");
+  assert.equal(lib.POLYFORGE_MEMORY_WRITER_FILTER_MINIMUM_PF_VERSION, "0.2.3",
+    "the filter rides the first official release that carries --writer-kind (polyforge#119, after v0.2.2; deploy/sql/v0.2.3)");
+  const below = (v) => detect.isPolyforgeVersionBelowMinimum(v, lib.POLYFORGE_MEMORY_WRITER_FILTER_MINIMUM_PF_VERSION, true);
+  assert.equal(below("v0.2.2"), true, "v0.2.2 predates the flag");
+  assert.equal(below("v0.2.3"), false, "the floor is inclusive");
+  assert.equal(below("v0.2.3-rc.1"), true, "a prerelease of the same core does not pass (Q2)");
+  assert.equal(below("v2.20.16"), true, "the retired 2.20.x line is below the unified line's floor");
+  assert.equal(below("v0.2.4"), false);
+  assert.equal(below(null), true, "an unparseable version is never filter-capable (unknownIsBelow)");
 });
 
 test("hits re-sort newest-first against relevance order and page at 20", () => {
@@ -127,11 +176,13 @@ test("the recall argv is exactly one spawn: flags opt-in, the keyword one positi
   const base = { cwd: "/ws", q: "memory panel", project: "workbench", type: "*" };
   const plain = lib.buildRecallArgv(lib.validateMemorySearch(base).value);
   assert.deepEqual(plain, ["--json", "recall", "--project", "workbench", "--limit", "200", "memory panel"]);
-  assert.ok(!plain.includes("--any") && !plain.includes("--tags") && !plain.includes("--type"));
-  const filtered = lib.buildRecallArgv(lib.validateMemorySearch({ ...base, tags: "a,b", type: "doc.*", any: "1" }).value);
+  assert.ok(!plain.includes("--any") && !plain.includes("--tags") && !plain.includes("--type") && !plain.includes("--writer-kind"),
+    "the default search carries no optional flag, the writer filter included");
+  const filtered = lib.buildRecallArgv(lib.validateMemorySearch({ ...base, tags: "a,b", type: "doc.*", any: "1", writer_kind: "step" }).value);
   const argAfter = (argv, name) => argv[argv.indexOf(name) + 1];
   assert.equal(argAfter(filtered, "--tags"), "a,b", "tags travel as one argument");
   assert.equal(argAfter(filtered, "--type"), "doc.*");
+  assert.equal(argAfter(filtered, "--writer-kind"), "step", "the writer filter travels as --writer-kind (polyforge#120)");
   assert.ok(filtered.includes("--any"));
   assert.equal(filtered.at(-1), "memory panel", "the keyword is the one positional, last");
   assert.equal(filtered.filter((token) => token === "--json").length, 1);
@@ -151,13 +202,19 @@ test("the browse argv is one no-query pf recall: 20 rows, updated, cursor and fi
   assert.ok(first.ok);
   assert.deepEqual(lib.buildBrowseRecallArgv(first.value),
     ["--json", "recall", "--project", "workbench", "--limit", "20", "--sort", "updated"]);
-  const next = lib.validateMemoryBrowse({ ...base, type: "doc.*", tags: "audit", after: "cur20" });
+  const next = lib.validateMemoryBrowse({ ...base, type: "doc.*", tags: "audit", after: "cur20", writer_kind: "session" });
   assert.ok(next.ok);
   const argv = lib.buildBrowseRecallArgv(next.value);
   const argAfter = (name) => argv[argv.indexOf(name) + 1];
   assert.equal(argAfter("--after"), "cur20", "the cursor travels unchanged as one argument");
   assert.equal(argAfter("--type"), "doc.*");
   assert.equal(argAfter("--tags"), "audit");
+  assert.equal(argAfter("--writer-kind"), "session", "a browse continuation carries the same kind (Q5)");
+  for (const bad of ["human", "--limit", "SESSION"]) {
+    assert.ok(!lib.validateMemoryBrowse({ ...base, writer_kind: bad }).ok, `a browse refuses the writer kind ${JSON.stringify(bad)}`);
+  }
+  assert.ok(lib.validateMemoryBrowse({ ...base, writer_kind: "" }).ok && lib.validateMemoryBrowse({ ...base, writer_kind: "" }).value.writer_kind === undefined,
+    "an empty writer kind stays absent");
   const pairs = argv.slice(2);
   for (let i = 0; i < pairs.length; i += 2) assert.ok(pairs[i].startsWith("--"), `no positional keyword: ${JSON.stringify(argv)}`);
   assert.equal(pairs.length % 2, 0, "every token after the verb is a flag/value pair");
@@ -225,10 +282,11 @@ async function cellPf(t, { capabilities = ["cells-v1", "config-host-cell-v1", "c
   writeFileSync(bin, `#!${process.execPath}
 const fs = require("fs");
 const args = process.argv.slice(2);
+const s = { version: ${JSON.stringify(version)} };
 fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(args) + "\\n");
 const out = (v) => { process.stdout.write(JSON.stringify(v)); process.exit(0); };
-if (args[0] === "--version") { process.stdout.write("v2.20.16\\n"); process.exit(0); }
-if (args[0] === "--json" && args[1] === "--version") out({ version: "v2.20.16", capabilities: ${JSON.stringify(capabilities)} });
+if (args[0] === "--version") { process.stdout.write(s.version + "\\n"); process.exit(0); }
+if (args[0] === "--json" && args[1] === "--version") out({ version: s.version, capabilities: ${JSON.stringify(capabilities)} });
 if (args[0] === "--json" && args[1] === "profile") { ${profile ? `out({ profile: ${JSON.stringify(profile)}, source: "cwd" });` : 'process.exit(2);'} }
 const rest = args.filter((a) => a !== "--json");
 const pi = rest.indexOf("--profile"); if (pi >= 0) rest.splice(pi, 2);
@@ -303,4 +361,23 @@ test("a multi-Cell pf that cannot resolve a Cell pins the default Cell explicitl
   for (const argv of dataCalls(calls)) {
     assert.deepEqual(argv.slice(0, 2), ["--profile", "default"], `the default Cell is named, never ambient: ${JSON.stringify(argv)}`);
   }
+});
+
+test("the capability read answers writerFilterSupported from the same single probe: 2.20.16 no, 0.2.3 yes", async (t) => {
+  // polyforge#120: the filter's gate is its own (Q2), never the browse
+  // floor's — a pf that browses but predates --writer-kind answers
+  // capable:true with writerFilterSupported:false, from the one presence
+  // probe (no second spawn, polyforge#46).
+  await cellPf(t, {});
+  let capability = await lib.readPolyforgeMemoryCapability();
+  assert.equal(capability.capable, true, "2.20.16 still browses (the old floor stands)");
+  assert.equal(capability.writerFilterSupported, false, "a 2.20.x pf cannot filter by writer");
+  await cellPf(t, { version: "v0.2.3" });
+  capability = await lib.readPolyforgeMemoryCapability();
+  assert.equal(capability.capable, true);
+  assert.equal(capability.writerFilterSupported, true, "the first official release carrying the flag answers true");
+  await cellPf(t, { version: "v0.2.3-rc.1" });
+  capability = await lib.readPolyforgeMemoryCapability();
+  assert.equal(capability.capable, true);
+  assert.equal(capability.writerFilterSupported, false, "a prerelease of the same core is not auto-passed (Q2)");
 });
