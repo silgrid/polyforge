@@ -12,6 +12,7 @@ package daemon
 import (
 	"testing"
 
+	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/common/protocol"
 	"github.com/silgrid/polyforge/internal/polyforge/task"
 )
@@ -145,5 +146,94 @@ func TestPF106RerunSuccessResolvesEarlierFailures(t *testing.T) {
 	rec("default", "task_0000000000000301", task.StateFailed, "wi_pf106_other")
 	if got := f.List().Attention; got != 2 {
 		t.Fatalf("another ticket's failure must be its own open entry: attention = %d, %v", got, f.List())
+	}
+}
+
+// TestPF106TicketEndResolvesTaskEntries (AC3): the Cell's reconcile reads
+// its own open task entries' tickets at aihub: a ticket that ended —
+// wrapped, canceled, failed, or gone (CORE-404) — resolves its entries;
+// a queued, running or blocked one, a CORE-403 and a transport blip keep
+// them for the next round; another Cell's ticket is never read through
+// this Cell's hub (the read counts).
+func TestPF106TicketEndResolvesTaskEntries(t *testing.T) {
+	td := newTestDaemon(t, nil)
+	d := td.Daemon
+	f := d.feed
+	rec := func(profile, wi string) {
+		t.Helper()
+		if err := f.RecordTask(profile, pf106AnalysisTask("task_0000000000000"+wi, task.StateFailed, wi)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, wi := range []string{"wi_pf106_blip", "wi_pf106_block", "wi_pf106_cancel", "wi_pf106_deny",
+		"wi_pf106_end", "wi_pf106_fail", "wi_pf106_gone", "wi_pf106_live", "wi_pf106_run"} {
+		rec("default", wi)
+	}
+	rec("alpha", "wi_pf106_alpha") // another Cell's entry: this hub never reads it
+	td.hub.mu.Lock()
+	td.hub.status["wi_pf106_end"] = api.StatusWrapped
+	td.hub.status["wi_pf106_cancel"] = api.StatusCanceled
+	td.hub.status["wi_pf106_fail"] = api.StatusFailed
+	td.hub.unknown["wi_pf106_gone"] = true
+	td.hub.status["wi_pf106_live"] = api.StatusQueued
+	td.hub.status["wi_pf106_block"] = api.StatusBlocked
+	td.hub.probe403["wi_pf106_deny"] = true
+	td.hub.probeFails = 1 // the first read (wi_pf106_blip, sorted first) is a transport blip
+	td.hub.mu.Unlock()
+	// wi_pf106_run carries no status: the hub answers running
+
+	open := map[string]bool{}
+	for _, e := range f.List().Decisions {
+		if e.Kind == protocol.DecisionTask && e.Profile == "default" {
+			open[e.WI] = e.Open()
+		}
+	}
+	d.reconcileDecisions()
+	for wi, want := range map[string]bool{
+		"wi_pf106_end": false, "wi_pf106_cancel": false, "wi_pf106_fail": false, "wi_pf106_gone": false,
+		"wi_pf106_live": true, "wi_pf106_run": true, "wi_pf106_block": true,
+		"wi_pf106_deny": true, "wi_pf106_blip": true,
+	} {
+		got := false
+		for _, e := range f.List().Decisions {
+			if e.Kind == protocol.DecisionTask && e.Profile == "default" && e.WI == wi {
+				got = e.Open()
+			}
+		}
+		if got != want {
+			t.Fatalf("%s after the reconcile: open = %v, want %v", wi, got, want)
+		}
+	}
+	// only this Cell's tickets were read, once each; the transport blip
+	// never reached the hub's counter and is re-read the next round
+	td.hub.mu.Lock()
+	for wi, n := range td.hub.gets {
+		t.Logf("hub gets %s = %d", wi, n)
+	}
+	if n := td.hub.gets["wi_pf106_alpha"]; n != 0 {
+		t.Fatalf("another Cell's ticket was read through this Cell's hub: %d reads", n)
+	}
+	if n := td.hub.gets["wi_pf106_blip"]; n != 0 {
+		t.Fatalf("the transport blip counted a read it never made: %d", n)
+	}
+	if n := td.hub.gets["wi_pf106_end"]; n != 1 {
+		t.Fatalf("a resolved ticket must not be re-read: %d reads", n)
+	}
+	td.hub.mu.Unlock()
+	// the kept entries wait for the next round: it reads them again
+	d.reconcileDecisions()
+	td.hub.mu.Lock()
+	if n := td.hub.gets["wi_pf106_live"]; n != 2 {
+		t.Fatalf("a kept ticket must be re-read each round: %d reads", n)
+	}
+	if n := td.hub.gets["wi_pf106_blip"]; n != 1 {
+		t.Fatalf("the blipped ticket must be read again once the hub answers: %d reads", n)
+	}
+	td.hub.mu.Unlock()
+	// and the alpha entry still stands: this Cell's reconcile never touched it
+	for _, e := range f.List().Decisions {
+		if e.Profile == "alpha" && (!e.Open() || e.Resolved) {
+			t.Fatalf("another Cell's entry was resolved by this Cell's reconcile: %+v", e)
+		}
 	}
 }
