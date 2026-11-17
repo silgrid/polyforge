@@ -3,12 +3,13 @@ package cli
 import (
 	"bytes"
 	"errors"
-	"github.com/silgrid/polyforge/internal/common/harness"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/silgrid/polyforge/internal/common/harness"
 )
 
 // doctor_harness_prompts_test.go: the `harness diagram guidance` row —
