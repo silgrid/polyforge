@@ -75,11 +75,12 @@ func w79SeedStepParams(hub *fakeHub, wi string, key map[string]any) {
 // publish reached the hub's bare repo).
 func w79GitLog(t *testing.T, hub *fakeHub, wi string) string {
 	t.Helper()
-	out, err := gitLog(hub.capsuleRepoBase, wi)
+	out, err := exec.Command("git", "--git-dir", filepath.Join(hub.capsuleRepoBase, wi+".git"),
+		"log", "--format=%s", "-10").CombinedOutput()
 	if err != nil {
 		t.Fatalf("git log of the pushed chain: %v\n%s", err, out)
 	}
-	return out
+	return string(out)
 }
 
 // The claim merges the attrs' declared, legal entries into the fresh
