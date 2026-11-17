@@ -304,6 +304,32 @@ func TestPF89StuckToolTimesOutAndWritesTheFallbackLine(t *testing.T) {
 	}
 }
 
+// TestPF89ProjectReposCarryTheDivisionToo: a ticket without a frozen
+// repo_inventory falls back to the project's every repository (the
+// claim's own list, claimRepoNames) — the division attaches the same
+// way (review r1#7; the fallback route itself is pinned by the
+// placement tests, this pins the analysis's use of it).
+func TestPF89ProjectReposCarryTheDivisionToo(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not installed")
+	}
+	td, hub, runner := pf89World(t, func(h *fakeHub) {
+		// the view read answers (an empty map: the view declares no
+		// inventory), so the project's repository list is the fallback
+		h.repoInventory = map[string][]string{}
+		h.projectRepos = map[string][]string{"proj": {"repoA"}}
+	})
+	pf89SharedScripts(t, td)
+	pf89Clone(t, td, "repoA")
+	prompt := pf89Prompt(t, td, hub, runner, "wi_pf89_g")
+	if !strings.Contains(prompt, "component core  [src]  declared") {
+		t.Fatalf("the project's repositories answer the division too:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "epic_units 9 (declared)") {
+		t.Fatalf("the project's repositories answer the thresholds too:\n%s", prompt)
+	}
+}
+
 // TestPF89NoRepositoryNamesNoSection: a ticket whose inventory and
 // project repos read answers nothing names no repository and the prompt
 // carries no section — the template's defaults apply on their own.
