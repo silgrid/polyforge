@@ -528,3 +528,26 @@ class EngineTargetTest(GitCase):
         self.assertEqual(rep["default_branch"], "", rep)
         rep = self.run_engine(r.dir)  # outside a step the file is not read at all
         self.assertEqual(rep["default_branch"], "main", rep)
+
+    def test_a_target_missing_on_origin_is_not_judged_in_either_mode(self) -> None:
+        w = World(self, "app")
+        fix_target(w, "epic/9")  # origin carries no epic/9
+        w.change("app", {"feature.txt": "f\n"}, "app-section")
+        # a PR against the default branch: without the fix the default mode
+        # would judge it (the refusal, exit 1) and the human mode ask
+        # (exit 3); neither may run on a base that cannot be fetched
+        entry = w.publish("app")
+        publish, verified, out = inputs_on(w, entry, "main")
+        code, res, err = w.run("merge.py", "--publish", publish, "--verified", verified,
+                               "--capsule", w.capsule, "--json", "--out", out)
+        assert res is not None
+        self.assertEqual(code, 2, err)
+        self.assertIn("not judged", res["summary"], res["summary"])
+        self.assertIn("epic/9", res["summary"], res["summary"])
+        # the human mode refuses the same way, never an exit-3 ask
+        write(w.capsule, "runtime-state/step-modes.json", json.dumps({"merge": "human"}))
+        code, res, err = w.run("merge.py", "--publish", publish, "--verified", verified,
+                               "--capsule", w.capsule, "--json", "--out", out, PF_STEP="merge")
+        assert res is not None
+        self.assertEqual(code, 2, err)
+        self.assertIn("epic/9", res["summary"], res["summary"])
