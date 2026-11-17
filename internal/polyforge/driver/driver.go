@@ -768,6 +768,25 @@ func rewindArchive(cause string) bool {
 	return false
 }
 
+// rewindActivated reports whether the step's own attempts carry a rewind
+// archive (rewindArchive): a rewind — a gate FAIL's or an owner's, the
+// target record or the superseded one — has covered the step, so a
+// rewind_only step it is has its first round behind it and runs. The
+// first pass sees no record: nothing but the step's own archives
+// activates it, so another step's rewind, a restart or an infra_failure
+// alone never does.
+func rewindActivated(st *capsule.Step) bool {
+	if st == nil {
+		return false
+	}
+	for _, a := range st.Attempts {
+		if rewindArchive(a.Cause) {
+			return true
+		}
+	}
+	return false
+}
+
 // spawnJournaledSince reports whether a dispatch of this step was journaled
 // after the rewind archive: the new round's conversation exists on disk, so
 // an ordinary resume is correct and the rewind order no longer needs
@@ -808,8 +827,10 @@ func (d *Driver) settle(ctx context.Context, stepID string, n int64, res *StepRe
 // loop (nil error); a current dispatch with an open `pf ask` parks the loop until
 // the owner's reply (or another transition) wakes it; otherwise the
 // earliest step neither done nor skipped (next_step_by_order, 01 §6.5) is
-// dispatched — unless the workflow skips it (StepSpec.Skipped):
-// then it is recorded skipped and the pass selects again —
+// dispatched — unless the workflow skips it (StepSpec.Skipped, the
+// project's switch) or it is a rewind_only step no rewind has covered
+// yet (its first round): then it is recorded skipped and the pass
+// selects again —
 // and an empty selection over a running workflow is the §6.5 step 6
 // check: every step done or skipped, so the loop writes completed and
 // stops.
@@ -845,7 +866,7 @@ func (d *Driver) plan(ctx context.Context) (stop bool, stepID string, err error)
 				st := d.exec.Steps[spec.ID]
 				if st == nil || (st.Status != capsule.StepDone && st.Status != capsule.StepSkipped) {
 					next = spec.ID
-					skip = spec.Skipped && (st == nil || st.Status == capsule.StepPending || st.Status == "")
+					skip = (spec.Skipped || (spec.RewindOnly && !rewindActivated(st))) && (st == nil || st.Status == capsule.StepPending || st.Status == "")
 					break
 				}
 			}
