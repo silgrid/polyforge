@@ -949,9 +949,14 @@ fi
 # was skipped because docker's config already named ghcr.io, with a
 # credential that could not push).
 #   - tools: git gh docker npm node sha256sum tar, plus make and go for the
-#     default build, python3 for the default xrefs gate and the default
-#     test gate (workflows/_shared/scripts/gate.py), which needs python3
-#     >= 3.9 (an older one is a preflight problem, never a gate verdict);
+#     default build, python3 for the default xrefs gate, the default
+#     test gate (workflows/_shared/scripts/gate.py) and the default
+#     dependency audit (the scope engine that reports the audit command;
+#     it needs python3 >= 3.9 - an older one is a preflight problem, never
+#     a gate verdict), and, for the default dependency audit's Go surface
+#     (a root go.mod gives the engine's audit command its --go flag:
+#     govulncheck loads every Go package), go and govulncheck
+#     (polyforge#113: the audit runs on the release host after the build);
 #   - node: its major must equal the repo-root .nvmrc's (when present) - for
 #     the build on this host; the test gate runs in its container, with the
 #     image's own node;
@@ -968,13 +973,25 @@ pf_problem() { PF_PROBLEMS="$PF_PROBLEMS
   - $*"; }
 _need="git gh docker npm node sha256sum tar"
 [ -n "${RELEASE_BUILD_CMD:-}" ] || _need="$_need make go"
-[ -n "${RELEASE_XREFS_CMD:-}" ] && [ -n "${RELEASE_TEST_CMD:-}" ] || _need="$_need python3"
+# python3: whichever of the default xrefs gate, the default test gate and
+# the default dependency audit runs (the audit's scope engine needs it)
+if [ -n "${RELEASE_XREFS_CMD:-}" ] && [ -n "${RELEASE_TEST_CMD:-}" ] && [ -n "${RELEASE_AUDIT_CMD:-}" ]; then
+  :
+else
+  _need="$_need python3"
+fi
+# the default dependency audit's Go surface (polyforge#113): a root go.mod
+# gives the engine's audit command --go, whose govulncheck loads every Go
+# package - so the release host needs go and govulncheck, checked HERE
+if [ -z "${RELEASE_AUDIT_CMD:-}" ] && [ -f go.mod ]; then
+  _need="$_need go govulncheck"
+fi
 _miss=""
 for _c in $_need; do command -v "$_c" >/dev/null 2>&1 || _miss="$_miss $_c"; done
 [ -z "$_miss" ] || pf_problem "tool(s) not on PATH:$_miss"
-if [ -z "${RELEASE_TEST_CMD:-}" ] && command -v python3 >/dev/null 2>&1 \
+if { [ -z "${RELEASE_TEST_CMD:-}" ] || [ -z "${RELEASE_AUDIT_CMD:-}" ]; } && command -v python3 >/dev/null 2>&1 \
   && ! python3 -c 'import sys; sys.exit(sys.version_info < (3, 9))' >/dev/null 2>&1; then
-  pf_problem "python3 $(python3 -c 'import platform; print(platform.python_version())' 2>/dev/null || echo '(version unreadable)') is older than 3.9: the test gate (workflows/_shared/scripts/gate.py) needs python3 >= 3.9 - install a newer one first"
+  pf_problem "python3 $(python3 -c 'import platform; print(platform.python_version())' 2>/dev/null || echo '(version unreadable)') is older than 3.9: the test gate (workflows/_shared/scripts/gate.py) and the dependency audit's scope engine need python3 >= 3.9 - install a newer one first"
 fi
 if [ -f .nvmrc ] && command -v node >/dev/null 2>&1; then
   _want=$(sed -n '1{s/^[[:space:]]*v\{0,1\}//; s/[.[:space:]].*$//; p;}' .nvmrc)
@@ -1250,7 +1267,7 @@ for c in r.get("commands", []):
   if [ -d webui ] && [ ! -e webui/dist/index.html ]; then
     (cd webui && npm ci && npm run build) || die "building the console SPA's go:embed tree for the dependency audit failed; nothing published, $NOCLAIM"
   fi
-  sh -c "$AUDIT_CMD" || die "dependency-audit gate failed - a dependency of a tree this release ships carries a known advisory at the declared level; nothing published, $NOCLAIM - after a fix, or for an owner-ruled exemption row, run the release again"
+  sh -c "$AUDIT_CMD" || die "dependency-audit gate failed - its finding:, tool-missing:, db-unreachable: or ledger-invalid: lines above name why; nothing published, $NOCLAIM - after a fix, or for an owner-ruled exemption row, run the release again"
 fi
 
 # build image (context: temp dir with the linux binary as `pf` - the

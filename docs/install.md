@@ -251,10 +251,12 @@ this page.
 ## Dependency-audit tools
 
 A machine that runs the full verification bar outside a container (a
-`verify` step at the full tier, in the daemon) needs the dependency-audit
-gate's two tools on `PATH`, and
-the gate fails closed without them — a missing tool is a red bar, never a
-skip:
+`verify` step at the full tier, in the daemon), and a machine that cuts a
+release (`.polyforge/release.sh`, whose default dependency audit runs the
+same gate's command on the release host, after the build) need the
+dependency-audit gate's two tools on `PATH`, and
+the gate fails closed without them — a missing tool is a red bar (on the
+release host, a preflight problem before any gate), never a skip:
 
 - **npm** — comes with Node.js (macOS: `brew install node`; Linux:
   `apt install nodejs npm`).
