@@ -301,6 +301,20 @@ func TestPF101PiVerdictFromSession(t *testing.T) {
 	if v.SystemSeen || v.RuleInSystemCtx {
 		t.Fatalf("a session without a system message must not pass: %+v", v)
 	}
+	// the rule in a NON-context section of the system record must not
+	// count: the verdict answers whether pi's LOADED CONTEXT FILE
+	// (the system message's project-context section) carries the rule,
+	// and nothing else (review r2#1: the widened helper read any string
+	// of the record)
+	wrongPlace := []string{
+		`{"type":"session","version":3,"id":"s","cwd":"/w"}`,
+		`{"type":"message","message":{"role":"system","content":"","sections":{"rules":` + quoteJSON(t, rule) + `,"project_context":"<project_context>\nnothing here\n</project_context>"}}}`,
+		`{"type":"message","message":{"role":"user","content":[{"type":"text","text":"` + "PREFIX " + `say OK"}]}}`,
+	}
+	v = pf101PiSystemVerdictOf([]byte(strings.Join(wrongPlace, "\n")), rule)
+	if !v.SystemSeen || v.RuleInSystemCtx {
+		t.Fatalf("the rule outside the project-context section must not count: %+v (excerpt %q)", v, v.Excerpt)
+	}
 }
 
 // quoteJSON answers s as a JSON string literal.
