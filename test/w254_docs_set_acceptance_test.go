@@ -451,13 +451,14 @@ func TestW254QuickstartsMovedIntact(t *testing.T) {
 // - the v0.2.3 section appended with the corrections to the v0.2.2 upgrade notes (five headings above say v0.2.1 but shipped with v0.2.2 — the pf step ask, gate fallback, human merge, task concurrency and bundle-parent sections; and the v0.2.2 pf/daemon writes that carry expected_updated_at need the new aihub first, the v0.2.1 server rejects the whole PATCH with field … is not patchable, pf file edit still writes)
 // - the v0.2.4 section appended with the scratch layout categories (raw/ kept 3 days, tasks/ and sessions/ kept 14 days, one directory per run, no loose top-level file; --prune-scratch only removes a category's stale batches and the flat top-level 14-day rule is gone, entries outside the categories are only ever reported; re-run pf init to create the categories and refresh the notes' layout section — doctor warns an outdated one; a dispatched task is handed PF_SCRATCH_DIR/PF_SCRATCH_RAW_DIR and the same paths in its prompt)
 // - the v0.2.3 section appended with the memory writer columns (polyforge#107: writer_kind/writer_details on memories, owner_display_name on every read; upgrade aihub and run deploy/sql/v0.2.3 first or every memory request fails; the backfill marks the pf-step-memory:-keyed rows as step; the rollback is a no-op and never drops the durable columns)
+// - the v0.2.3 section appended with the dependency audit's declared level and the release reusing the gate's audit (audit_prod_level=moderate in .polyforge/verify-scope.conf, the only conf key that reaches the audit gate and tightening only: production dependencies turn the audit red from moderate up via --npm-prod-level, dev stays at high, the gate id hashes the key; the release's default audit is the engine's own audit command, run verbatim after the build and never skipped by a reused green tag; every audited surface prints its fetch time, UTC, and source)
 // upgrade-sections:end
 // The file is only routed to, from the install ops page and the README
 // landing page.
 func TestW254UpgradeByteIdentical(t *testing.T) {
 	raw := []byte(w254Read(t, "docs/upgrade.md"))
 	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != "dcfc64245209d32a33a277ab3914fbb8a59ad737b6c6027b0141b9542ed0e1f8" {
+	if got := hex.EncodeToString(sum[:]); got != "1999ed05467b5a20e6b1a86dc7c75bbf8810aebf475cd13d272dc225f9d7f7c8" {
 		t.Fatalf("docs/upgrade.md must stay byte-identical (only routed to, never rewritten): sha256 %s != the pinned pre-move sha256", got)
 	}
 	// the list beside the pin: one whole `// - ` line per appended section
