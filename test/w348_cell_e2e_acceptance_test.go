@@ -2255,7 +2255,7 @@ func TestW348TasksDoNotTakeJobSlots(t *testing.T) {
 	alpha := newV1Install(t)
 	plans := t.TempDir()
 	def.planDir, alpha.planDir = plans, plans
-	d := def.newWI(t, "w348 task ceiling job", w348LongPlan(10000), nil)
+	d := def.newWI(t, "w348 task ceiling job", w348LongPlan(30000), nil)
 	wsAlpha := t.TempDir()
 	// A "slow" task model keeps the admitted task in flight long enough to
 	// hold the task bound (the fake harness delays it 12 s before answering).
