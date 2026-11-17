@@ -585,3 +585,31 @@ reads the declarations from the repository. A repository's own conf may
 declare `scoped_command=` lines the same way; the engine of an older release
 diagnoses the key as unknown and ignores it, so a conf may declare them
 before this release ships.
+
+## v0.2.4, the epic split filing procedure and the split metrics (polyforge#118)
+
+The routing skill's file verb gains the owner-confirmed split: a
+queued, never-claimed ticket whose pre-submit analysis recommends an
+upgrade is, on the owner's confirmation, held by its first sub-ticket
+(a bound parent waits for its children — out of the ready queue,
+`DEPENDENCY_BLOCKED`), moved to the epic lane with `pf file edit
+--bundle epic`, and split per analysis unit into sub-tickets filed
+`--parent` with the split attrs (`split.origin`, `split.unit`) —
+check-first per unit, so a re-run files no duplicate — and the sibling
+order as `--after` dependencies written at create; the checklist is
+verified against the confirmed decomposition before the children are
+released. The docs follow (concepts' Work item term, bundles'
+children_branch bullet, the config reference's epic thresholds).
+
+tools/review-firstpass gains `--cohort`: an owner-confirmed cohort
+manifest groups exported capsule runs — unsplit control, split
+children, the epic aggregation listed apart — prints the #1 background
+baseline the manifest carries, and reports, beside the first-pass
+table, the rework share of proxy execution time (a rewind section's
+named steps' later rounds over all stamped attempt time; counted and
+owner/uncounted rewinds and infra-retry rounds listed apart) and the
+claim-to-merge duration (the merge step's end as the labeled proxy;
+the real merge moment is N/A offline). No action on upgrade beyond
+picking the texts up: the skill is wired by reference, sessions load
+it at their next start, and the metrics tool reads exported capsule
+trees and touches no protocol.

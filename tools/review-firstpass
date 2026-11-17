@@ -2,37 +2,107 @@
 """review-firstpass — first-pass review rate by plan write-set size and by implementer.
 
 Usage:
-  python3 -I tools/review-firstpass <capsules-dir> [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--csv <file>]
+  python3 -I tools/review-firstpass <capsules-dir> [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--csv <file>] [--cohort <manifest.json>]
 
 Read-only over <capsules-dir> (a workspace's capsules/, one directory per work
 item run). It prints two tables and, with --csv, writes one row per run.
 
-The measure is the 2026-11-09 rework baseline's (aihub doc.audit
-mem_2wmAvnsWFWmw), kept byte-for-byte where it decides
-a number:
+With --cohort it also appends the split-comparison section (polyforge#118):
+an owner-confirmed cohort manifest (JSON) groups the collected runs —
 
-  run set      every capsule directory except `*.quarantined.*`; --since/--until
-               filter on capsule.json created_at (UTC date, both ends inclusive).
-  first pass   the verdict of the lowest-numbered artifacts/steps/review/s<n>/
-               result.json (output.verdict, else the outcome); a run with no
-               review result is not reviewed and counts nowhere.
-  write set    the distinct paths artifacts/plan.md declares `(write)` in its
-               `Touched files` blocks, counted before any code: on the develop
-               lane only the units of the lowest-numbered build result (its
-               initial plan; every unit when that result lists none). A run
-               without a parseable plan has no write set and stays out of the
-               size table (the baseline's plan-declared, ex-ante size).
+  {"version": "<the cohort's daemon/workflow version>",
+   "window": {"since": "YYYY-MM-DD", "until": "YYYY-MM-DD"},   // optional; only filters
+   "baseline": {"firstpass": {"<=7": "31/38", "8-22": "13/31", ">22": "4/34"},
+                 "source": "<where the pinned numbers come from>"},
+   "control": ["<capsule dir name>", ...],                      // unsplit runs
+   "split": [{"origin": "<wi id>", "epic": "<capsule dir>",
+              "children": ["<capsule dir>", ...]}]}            // 原票/子票对应
+
+— and reports each group's first-pass rate beside the plan-size buckets
+(a reviewed run with no parseable plan counts `unknown`), the epic
+aggregation on its own line (never in the children's denominators), the
+pinned baseline verbatim (the #1 background numbers travel in the
+manifest, not in this tool), and the honesty lines: a manifest name
+absent from the input is counted and listed as missing, a name the
+window filtered is listed as filtered (dates only ever filter — the
+grouping itself is the manifest's), and a split group with no samples
+says N/A, never a fabricated number. Without --cohort the output is
+byte-for-byte the pre-cohort report.
+
+Each group line is followed by the two time metrics, the owner's ruled
+calibers (the capsule's own durable record — the daemon-stamped
+hand-off sections and capsule.json created_at — is all an offline run
+can read):
+
+  proxy execution time    the sum of every stamped step-round duration;
+                          a dispatch that ends in an ask is never
+                          stamped, so owner-wait never enters — and the
+                          work done before that ask is unmeasured too
+                          (an undercount, stated). rework = the rounds
+                          of the steps a rewind section named that ran
+                          after it, over that total; counted and
+                          owner/uncounted rewinds are told apart by the
+                          daemon's own texts and the cumulative notes'
+                          movement; infra-retry rounds (their events
+                          name rate_limited / model_error /
+                          step_timeout / upstream_transient) are listed
+                          apart — the span listed is the successful
+                          retry's stamped round; the failed dispatch is
+                          never stamped. A round paused mid-dispatch
+                          overstates its span and cannot be identified
+                          offline: a stated gap.
+  claim->merge            earliest claim (created_at, the first claim
+                          creates the capsule) to the merge step's last
+                          done section's end — the labeled PROXY. The
+                          real merge moment lives in no capsule, so the
+                          real endpoint is N/A offline; a run with no
+                          merge section counts as not merged.
+
+The measure follows the 2026-11-09 rework baseline (aihub doc.audit
+mem_2wmAvnsWFWmw); its numbers keep their meaning, and the two data
+eras state their own reads (polyforge#118, review r2#3 — the caliber
+below is the record RUN.md names authoritative):
+
+  run set      every capsule directory in <capsules-dir> except
+               `*.quarantined.*`; --since/--until (and the manifest's
+               window) filter on capsule.json created_at (UTC date, both
+               ends inclusive). The cohort lines read ONLY the names the
+               manifest carries — point the tool at a directory holding
+               exactly the cohort (a symlink farm), or the honesty lines
+               answer for the rest.
+  first pass   two eras, one question — did the first review pass? A
+               capsule of the old protocol answers from the
+               lowest-numbered artifacts/steps/review/s<n>/result.json
+               (output.verdict, else the outcome); a capsule of the
+               current protocol answers from its stamped hand-off
+               sections (the lowest review round's status: done = PASS,
+               fail = FAIL). A run neither shape reviews is not
+               reviewed and counts nowhere.
+  write set    the distinct paths artifacts/plan.md declares `(write)` in
+               its `Touched files` blocks, counted before any code: on
+               the develop lane only the initial units count — the old
+               protocol reads the lowest-numbered build result's units,
+               the current protocol reads artifacts/build/units.json.
+               THE GAP, stated: units.json is rewritten every build
+               round, so a current-protocol run with rework yields its
+               FINAL plan's size — an upper bound of the ex-ante size,
+               biased up for runs whose first review failed, and not
+               bucket-comparable with the baseline's ex-ante measure.
+               A run without a parseable plan has no write set and stays
+               out of the size table.
   buckets      <=7, 8-22, >22 written files.
 
 The implementer grouping reads the build result the first
 review judged — the highest-numbered artifacts/steps/build/s<m>/result.json
 with m below the first review's n — and its units' implemented_by: `subagent`
 when every unit says subagent, `main` when every unit says main, `mixed` for
-both, `unrecorded` when no unit records one (runs before the field, and lanes
-whose build reports no units).
+both, `unrecorded` when no unit records one (runs before the field, lanes
+whose build reports no units, and every current-protocol run, whose build
+leaves no result.json — its units.json is not read for this).
 """
 import argparse
 import csv
+from datetime import datetime
 import glob
 import json
 import os
@@ -110,9 +180,17 @@ def written_files(cap, lane, builds):
     if not os.path.exists(plan):
         return None
     units = [u for u in parse_plan(plan) if u[1]]
-    if lane == 'develop' and builds:
-        first = (builds[0][1].get('output') or {}).get('units') or []
-        init_ids = {u.get('id') for u in first if isinstance(u, dict)}
+    if lane == 'develop':
+        init_ids = set()
+        if builds:
+            first = (builds[0][1].get('output') or {}).get('units') or []
+            init_ids = {u.get('id') for u in first if isinstance(u, dict)}
+        if not init_ids:
+            # the current protocol records the build's units in
+            # artifacts/build/units.json (no step result.json is written)
+            uj = jload(os.path.join(cap, 'artifacts', 'build', 'units.json'))
+            if isinstance(uj, list):
+                init_ids = {u.get('id') for u in uj if isinstance(u, dict)}
         if init_ids:
             units = [u for u in units if u[0] in init_ids] or units
     if not units:
@@ -138,6 +216,35 @@ def bucket(n):
     return None
 
 
+def stamped_reviews(cap):
+    """[(round, verdict)] of the review sections the daemon stamped into
+    artifacts/handoff.md, by round — the CURRENT protocol: a step's
+    conclusion is its stamped hand-off section (a gate passes as `done`,
+    fails as `fail`), and no artifacts/steps/*/result.json is written.
+    The old result.json shape below stays for the 2026-11-09 baseline
+    cohort's historical capsules — reading recorded history, not a
+    second behavior of one protocol."""
+    hb = os.path.join(cap, 'artifacts', 'handoff.md')
+    if not os.path.exists(hb):
+        return []
+    with open(hb, errors='replace') as f:
+        text = f.read()
+    out = []
+    for sec in [s for s in ('\n---\n' + text).split('\n---\n') if s.strip()]:
+        step = section_row(sec, ('步骤',)) or section_row(sec, ('Step',))
+        if step != 'review':
+            continue
+        status = section_row(sec, ('状态',)) or section_row(sec, ('Status',))
+        if status not in ('done', 'fail'):
+            continue
+        try:
+            rnd = int(section_row(sec, ('轮次',)) or section_row(sec, ('Round',)))
+        except ValueError:
+            continue
+        out.append((rnd, 'PASS' if status == 'done' else 'FAIL'))
+    return sorted(out)
+
+
 def collect(caps_dir, since, until):
     rows, quarantined = [], 0
     for name in sorted(os.listdir(caps_dir)):
@@ -153,11 +260,18 @@ def collect(caps_dir, since, until):
             continue
         lane = cj.get('bundle_name') or '?'
         reviews = runs_of(cap, 'review')
-        row = {'capsule': name, 'lane': lane, 'created': created, 'review_runs': len(reviews),
-               'first_review': '', 'written_files': '', 'bucket': '', 'implementer': ''}
         if reviews:
             n, r = reviews[0]
-            row['first_review'] = ((r.get('output') or {}).get('verdict') or r.get('outcome') or '?').upper()
+            first = ((r.get('output') or {}).get('verdict') or r.get('outcome') or '?').upper()
+            n_reviews = len(reviews)
+        else:
+            stamps = stamped_reviews(cap)
+            n_reviews = len(stamps)
+            first = stamps[0][1] if stamps else ''
+            n = stamps[0][0] if stamps else 0
+        row = {'capsule': name, 'lane': lane, 'created': created, 'review_runs': n_reviews,
+               'first_review': first, 'written_files': '', 'bucket': '', 'implementer': ''}
+        if first:
             builds = runs_of(cap, 'build')
             row['implementer'] = implementer(builds, n)
             w = written_files(cap, lane, builds)
@@ -178,6 +292,228 @@ def line(label, rs):
     rate = f'{100 * ok / n:.0f}%' if n else '-'
     med = f"{statistics.median([r['review_runs'] for r in rs]):g}" if rs else '-'
     return f'{label:<24} {len(rs):>4}  {f"{ok}/{n}":>10}  {rate:>5}  {med:>7}'
+
+
+
+# ---------------------------------------------------------------- time metrics
+# The owner's Q3/Q4 calibers (polyforge#118), over the capsule's own
+# durable record: the daemon-stamped sections of artifacts/handoff.md
+# (zh and EN labels alike — the daemon's own constants) and capsule.json
+# created_at (the earliest claim — the first claim creates the capsule).
+# A dispatch that ends in `pf step ask` is never stamped (no section), so
+# owner-wait time never enters the measured attempt time; a round paused
+# mid-dispatch does overstate its span and cannot be identified offline —
+# a stated gap of this proxy, never silently repaired.
+
+INFRA_CAUSES = ('rate_limited', 'model_error', 'step_timeout', 'upstream_transient')
+REWIND_TITLE = ('事件 · 回退', 'Event · Rewind')
+REDO_LABELS = ('要重做的步骤（按顺序）：', 'Steps to redo (in order): ')
+# per-owner rewinds carry their marker directly (driver/handoff.go,
+# language.go) — both languages
+PEROWNER_MARKS = ('本次依据 owner 的话，不计次数', "; this one rests on the owner's word and is not counted")
+# the other two notes are CUMULATIVE counts: an event is of the class
+# only when its count moved since the previous rewind section (review
+# r1#5 — the note alone must not swallow a later counted rewind)
+OWNER_NOTE = re.compile(r'另有 owner 的回退 (\d+) 次|\(plus (\d+) owner rewinds')
+UNCOUNTED_NOTE = re.compile(r'另有不计数类回退 (\d+)/|\(plus (\d+)/\d+ lane-declared uncounted rewinds')
+EVENTS_HEADINGS = ('**本轮事件**', '**Events of this round**')
+
+
+def _note_count(sec, rx):
+    m = rx.search(sec)
+    if not m:
+        return None
+    for g in m.groups():
+        if g is not None:
+            return int(g)
+    return None
+
+
+def parse_go_duration(s):
+    """`10m0s` / `1h5m3s` / `30s` -> seconds (the daemon stamps whole
+    seconds); anything unparsable is 0 and counted as unmeasured."""
+    total = 0
+    for n, unit in re.findall(r'(\d+)(h|m|s)', s or ''):
+        total += int(n) * {'h': 3600, 'm': 60, 's': 1}[unit]
+    return total
+
+
+def section_row(sec, labels):
+    """the value of the first `| <label> | <v> |` row whose label is one
+    of the given (zh, en) pair, else ''."""
+    for line in sec.split('\n'):
+        if line.startswith('| '):
+            parts = [x.strip() for x in line.strip().strip('|').split('|')]
+            if len(parts) == 2 and parts[0] in labels:
+                return parts[1]
+    return ''
+
+
+def capsule_time_metrics(cap):
+    """-> dict: the proxy-time measures of one capsule (attempt_s,
+    rework_s, infra_retry_s, rewinds_counted, rewinds_uncounted,
+    claim_at, merge_done_at, merged)."""
+    out = {'attempt_s': 0, 'rework_s': 0, 'infra_retry_s': 0, 'rewinds_counted': 0,
+           'rewinds_uncounted': 0, 'claim_at': '', 'merge_done_at': '', 'merged': 0}
+    cj = jload(os.path.join(cap, 'capsule.json')) or {}
+    out['claim_at'] = cj.get('created_at') or ''
+    hb = os.path.join(cap, 'artifacts', 'handoff.md')
+    if not os.path.exists(hb):
+        return out
+    with open(hb, errors='replace') as f:
+        text = f.read()
+    redo_seen = set()          # steps a rewind section has named so far
+    prev_owner, prev_uncounted = 0, 0
+    sections = [s for s in ('\n---\n' + text).split('\n---\n') if s.strip()]
+    for sec in sections:
+        first = sec.strip().split('\n')[0]
+        if any(m in first for m in REWIND_TITLE):
+            owner_n = _note_count(sec, OWNER_NOTE)
+            uncounted_n = _note_count(sec, UNCOUNTED_NOTE)
+            if any(m in sec for m in PEROWNER_MARKS) \
+                    or (owner_n is not None and owner_n > prev_owner) \
+                    or (uncounted_n is not None and uncounted_n > prev_uncounted):
+                out['rewinds_uncounted'] += 1
+            else:
+                out['rewinds_counted'] += 1
+            if owner_n is not None:
+                prev_owner = owner_n
+            if uncounted_n is not None:
+                prev_uncounted = uncounted_n
+            for line in sec.split('\n'):
+                for lbl in REDO_LABELS:
+                    if line.startswith('- ' + lbl):
+                        redo_seen.update(re.findall(r'`([^`]+)`', line))
+            continue
+        step = section_row(sec, ('步骤',)) or section_row(sec, ('Step',))
+        if not step:
+            continue
+        dur = parse_go_duration(section_row(sec, ('耗时',)) or section_row(sec, ('Duration',)))
+        status = section_row(sec, ('状态',)) or section_row(sec, ('Status',))
+        out['attempt_s'] += dur
+        if step in redo_seen:
+            out['rework_s'] += dur
+        events = []
+        lines = sec.split('\n')
+        for i, line in enumerate(lines):
+            if any(h in line for h in EVENTS_HEADINGS):
+                for nxt in lines[i + 1:]:
+                    if nxt.startswith('- '):
+                        events.append(nxt)
+                    elif nxt.strip():
+                        break
+                break
+        if any(c in e for e in events for c in INFRA_CAUSES):
+            out['infra_retry_s'] += dur
+        if step == 'merge' and status == 'done':
+            ended = section_row(sec, ('结束',)) or section_row(sec, ('Ended',))
+            out['merge_done_at'] = ended
+            out['merged'] = 1
+    return out
+
+
+def fmt_mins(secs):
+    return f'{secs / 60:g}m'
+
+
+def parse_ts(s):
+    """an RFC3339 stamp to a datetime, tolerant of the fractional
+    seconds capsule.json's created_at carries (RFC3339Nano) — the
+    seconds are the proxy's own granularity."""
+    m = re.match(r'(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})', s or '')
+    if not m:
+        return None
+    return datetime(*[int(x) for x in m.groups()])
+
+
+def time_group_line(metrics):
+    """the two Q3/Q4 lines of one cohort group; N/A where the caliber
+    has nothing to measure (the honesty rules — never a 0 dressed as a
+    rate)."""
+    att = sum(m['attempt_s'] for m in metrics)
+    rew = sum(m['rework_s'] for m in metrics)
+    if att:
+        rework = f'rework {rew}s ({100 * rew / att:.0f}%)'
+    else:
+        rework = 'rework N/A (0 measurable)'
+    cnt = sum(m['rewinds_counted'] for m in metrics)
+    unc = sum(m['rewinds_uncounted'] for m in metrics)
+    infra_n = sum(1 for m in metrics if m['infra_retry_s'])
+    infra_s = sum(m['infra_retry_s'] for m in metrics)
+    merged = [m for m in metrics if m['merged']]
+    spans = []
+    for m in merged:
+        c, e = parse_ts(m['claim_at']), parse_ts(m['merge_done_at'])
+        if c is not None and e is not None:
+            spans.append(round((e - c).total_seconds()))
+    med = f'median {fmt_mins(statistics.median(spans))}' if spans else 'median N/A'
+    nmerged = len(merged)
+    notmerged = len(metrics) - nmerged
+    l1 = (f'  proxy execution time: {att}s measurable, {rework}; '
+          f'rewinds counted {cnt}, owner/uncounted {unc}; infra-retry rounds {infra_n} ({infra_s}s) listed apart')
+    l2 = (f'  claim->merge: merge-step proxy {med} ({nmerged} merged, {notmerged} not merged); '
+          f'real endpoint N/A ({len(metrics)} runs with no offline record)')
+    return l1 + '\n' + l2
+
+# ---------------------------------------------------------------- cohort view
+# The owner-confirmed split comparison (polyforge#118): the manifest IS
+# the grouping; dates only filter. Every honesty rule below answers a
+# ruled decision of the work item (Q2: 未拆票作对照、子票作拆后组、epic 聚合
+# 另列；Q5: 缺样本如实标 N/A，不拿演示输出冒充真实比较)。
+
+def jload_strict(path, what):
+    try:
+        with open(path) as f:
+            v = json.load(f)
+    except (OSError, ValueError) as e:
+        print(f'review-firstpass: {what}: {e}', file=sys.stderr)
+        sys.exit(2)
+    if not isinstance(v, dict):
+        print(f'review-firstpass: {what}: not a JSON object', file=sys.stderr)
+        sys.exit(2)
+    return v
+
+
+def cohort_names(manifest, key):
+    v = manifest.get(key, [])
+    if not isinstance(v, list) or any(not isinstance(x, str) for x in v):
+        print(f'review-firstpass: the cohort manifest’s {key} must be a list of capsule dir names', file=sys.stderr)
+        sys.exit(2)
+    return v
+
+
+def cohort_split(manifest):
+    out = []
+    v = manifest.get('split', [])
+    if not isinstance(v, list):
+        print('review-firstpass: the cohort manifest’s split must be a list', file=sys.stderr)
+        sys.exit(2)
+    for e in v:
+        if not isinstance(e, dict) or not isinstance(e.get('children'), list) \
+                or any(not isinstance(x, str) for x in e['children']) \
+                or not isinstance(e.get('origin', ''), str) \
+                or not isinstance(e.get('epic', ''), str):
+            print('review-firstpass: every split entry needs origin (str), children (list of capsule dir names) and epic (str)', file=sys.stderr)
+            sys.exit(2)
+        out.append(e)
+    return out
+
+
+def cohort_group_line(label, rs, empty_note=''):
+    judged = [r for r in rs if r['first_review'] in ('PASS', 'FAIL')]
+    ok = sum(1 for r in judged if r['first_review'] == 'PASS')
+    parts = []
+    for name, _, _ in BUCKETS:
+        b = [r for r in judged if r['bucket'] == name]
+        parts.append(f'{name} {sum(1 for r in b if r["first_review"] == "PASS")}/{len(b)}')
+    unk = sum(1 for r in judged if not r['bucket'])
+    parts.append(f'unknown {unk}')
+    sizes = ', '.join(parts)
+    if judged:
+        fp = f'first-pass {ok}/{len(judged)} ({100 * ok / len(judged):.0f}%)'
+    else:
+        fp = f'first-pass N/A (0 samples{empty_note})'
+    return f'{label}: {len(rs)} runs ({len(judged)} reviewed), {fp}, plan sizes {sizes}'
 
 
 def report(rows, quarantined, out=sys.stdout):
@@ -206,23 +542,125 @@ def report(rows, quarantined, out=sys.stdout):
                 p(line(f'  {name}', g))
 
 
+def cohort_report(rows, caps_dir, manifest, path, out=sys.stdout):
+    """The split comparison (polyforge#118): per-group first-pass beside
+    the plan-size buckets, the pinned baseline verbatim, and the honesty
+    lines — missing, filtered, and the empty split group's N/A."""
+    p = lambda s='': print(s, file=out)
+    win = manifest.get('window') or {}
+    if not isinstance(win, dict):
+        print('review-firstpass: the cohort manifest’s window must be an object', file=sys.stderr)
+        sys.exit(2)
+    since, until = win.get('since', ''), win.get('until', '')
+    window = f'{since}..{until}' if (since or until) else 'none'
+    p()
+    p(f'== cohort comparison (manifest: {os.path.basename(path)}, version: {manifest.get("version", "unknown")}, window: {window}) ==')
+    base = manifest.get('baseline')
+    if isinstance(base, dict) and isinstance(base.get('firstpass'), dict):
+        fp = base['firstpass']
+        p(f'baseline (pinned #1 background, source: {base.get("source", "unnamed")}): '
+          f'first-pass <=7 {fp.get("<=7", "?")}, 8-22 {fp.get("8-22", "?")}, >22 {fp.get(">22", "?")}')
+
+    by_name = {r['capsule']: r for r in rows}
+    splits = cohort_split(manifest)
+    children = [c for e in splits for c in e['children']]
+    epics = [e['epic'] for e in splits if e.get('epic')]
+    control = cohort_names(manifest, 'control')
+    time_of = {n: capsule_time_metrics(os.path.join(caps_dir, n))
+               for n in set(control + children + epics) if n in by_name}
+
+    def group(names, label, empty_note=''):
+        found = [n for n in names if n in by_name]
+        p(cohort_group_line(label, [by_name[n] for n in found], empty_note))
+        p(time_group_line([time_of[n] for n in found]))
+
+    group(control, 'control (unsplit runs)')
+    group(children, 'split children', ' - no epic run has completed yet' if not splits else '')
+    group(epics, 'split epics (listed apart)')
+
+    # the honesty lines: every manifest name the collect did not return
+    # is told where it went (review r1#N3) — quarantined, window-filtered,
+    # CLI-flag-filtered or missing — none is dropped silently.
+    missing, filtered, clifiltered, quarantined = [], [], [], []
+    for n in control + children + epics:
+        if n in by_name:
+            continue
+        cap = os.path.join(caps_dir, n)
+        if '.quarantined.' in n:
+            quarantined.append(n)
+            continue
+        cj = jload(os.path.join(cap, 'capsule.json')) or {}
+        created = (cj.get('created_at') or '')[:10]
+        if not os.path.isdir(cap):
+            missing.append(n)
+        elif created and ((since and created < since) or (until and created > until)):
+            filtered.append(n)
+        else:
+            clifiltered.append(n)  # the CLI date flags hold it out of the collect
+    if filtered:
+        p(f'outside the manifest window (filtered): {", ".join(filtered)} ({len(filtered)})')
+    if clifiltered:
+        p(f'excluded by the CLI date flags: {", ".join(clifiltered)} ({len(clifiltered)})')
+    if quarantined:
+        p(f'quarantined (counted, excluded): {", ".join(quarantined)} ({len(quarantined)})')
+    if missing:
+        p(f'missing from the input (counted, excluded): {", ".join(missing)} ({len(missing)})')
+
+
 def main(argv):
     ap = argparse.ArgumentParser(prog='review-firstpass', description=__doc__.split('\n')[0])
     ap.add_argument('capsules_dir')
     ap.add_argument('--since', help='first capsule.json created_at date (YYYY-MM-DD), inclusive')
     ap.add_argument('--until', help='last capsule.json created_at date (YYYY-MM-DD), inclusive')
     ap.add_argument('--csv', help='write one row per run to this file')
+    ap.add_argument('--cohort', help='an owner-confirmed cohort manifest (JSON): the split-comparison grouping')
     a = ap.parse_args(argv)
     if not os.path.isdir(a.capsules_dir):
         print(f'review-firstpass: {a.capsules_dir} is not a directory', file=sys.stderr)
         return 2
-    rows, quarantined = collect(a.capsules_dir, a.since, a.until)
+    manifest, cohort_path = None, None
+    since, until = a.since, a.until
+    if a.cohort:
+        cohort_path = a.cohort
+        manifest = jload_strict(a.cohort, a.cohort)
+        win = manifest.get('window') or {}
+        if not isinstance(win, dict):
+            print('review-firstpass: the cohort manifest’s window must be an object', file=sys.stderr)
+            return 2
+        # the window only filters, like the flags: both apply, intersected
+        def _later(x, y):
+            return x if (not y or (x and x >= y)) else y
+
+        def _earlier(x, y):
+            return x if (not y or (x and x <= y)) else y
+
+        since = _later(since, win.get('since', ''))
+        until = _earlier(until, win.get('until', ''))
+    rows, quarantined = collect(a.capsules_dir, since, until)
     if a.csv:
-        with open(a.csv, 'w', newline='') as f:
-            w = csv.DictWriter(f, fieldnames=list(rows[0]) if rows else ['capsule'])
-            w.writeheader()
-            w.writerows(rows)
+        if manifest is not None:
+            extra = ('attempt_s', 'rework_s', 'infra_retry_s', 'rewinds_counted',
+                     'rewinds_uncounted', 'claim_at', 'merge_done_at', 'merged')
+            for r in rows:
+                m = capsule_time_metrics(os.path.join(a.capsules_dir, r['capsule']))
+                for k in extra:
+                    r[k] = m[k]
+            with open(a.csv, 'w', newline='') as f:
+                names = list(rows[0]) if rows else list(extra)
+                for k in extra:
+                    if k not in names:
+                        names.append(k)
+                w = csv.DictWriter(f, fieldnames=names, extrasaction='ignore')
+                w.writeheader()
+                w.writerows(rows)
+        else:
+            with open(a.csv, 'w', newline='') as f:
+                w = csv.DictWriter(f, fieldnames=list(rows[0]) if rows else ['capsule'])
+                w.writeheader()
+                w.writerows(rows)
     report(rows, quarantined)
+    if manifest is not None:
+        cohort_report(rows, a.capsules_dir, manifest, cohort_path)
     return 0
 
 

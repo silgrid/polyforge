@@ -185,7 +185,13 @@ and YAML path, before a claim ever meets it. The keys:
   registers is `state: landed_on_target` (never in the integrate pool's
   `landed` records). The shipped epic lane declares it (its own work
   items check the branch of their own seq out and merge into the default
-  branch); a parent whose lane declares none leaves the sub-ticket
+  branch) — and that lane is where an owner-confirmed split lands a
+  ticket: its first sub-ticket filed `--parent` holds the original out
+  of the ready queue, `pf file edit --bundle epic` moves it once held,
+  and the decomposition's sub-tickets are filed check-first, one per
+  unit (the filing procedure is the routing skill's file verb's, never
+  this doc's to restate); a parent whose lane declares none leaves the
+  sub-ticket
   untouched — a parent bound to no lane (a registry ticket used as the
   parent) declares nothing the same way: no target-branch file is
   written and the claim keeps the default branch.
