@@ -1,11 +1,13 @@
 package cli
 
 // verbs_override.go: `pf override` (polyforge#25) — the step-overlay
-// face: view a running WI's per-step overlay (the model chains, the skip
+// face: view a work item's per-step overlay (the model chains, the skip
 // switches, the param overrides, the effective chain and its source), or
 // apply one change to one step — set a model chain, clear it, switch the
 // skip of a step the lane declares skippable, or set or clear one param
-// the lane declares on the step (polyforge#78). One action per call; the write goes
+// the lane declares on the step (polyforge#78). A QUEUED work item takes
+// the param changes only: they ride the reserved step_params attrs key
+// until the claim merges them into its capsule (polyforge#79). One action per call; the write goes
 // through the daemon (a step agent is refused there, DAEMON-403) and
 // governs the work item's next dispatch of that step. The overlay
 // outranks every other candidate source (`pf submit --models`, the
@@ -24,7 +26,7 @@ import (
 var cmdOverride = &Command{
 	Name:    "override",
 	Group:   GroupExec,
-	Summary: "View or change a running WI's per-step overlay: the model chain, the skip switch and the params of one step",
+	Summary: "View or change a work item's per-step overlay: the model chain, the skip switch and the params of one step — a queued work item's params included (they ride its attrs until the claim)",
 	Usage:   "pf override <id> [--step <step-id> [--models <h:m[:e],...] | --clear-models | --skip | --unskip | --param <name>=<value> | --clear-param <name>] [--by user]]",
 	Setup: func(fs *flag.FlagSet) {
 		fs.String("step", "", "the step id the change applies to (required for every action; without it the command is the view)")
