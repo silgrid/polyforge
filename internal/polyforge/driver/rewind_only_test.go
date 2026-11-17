@@ -15,6 +15,7 @@ package driver
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -215,7 +216,7 @@ func TestRewindOnlyActivationSurvivesTheRestart(t *testing.T) {
 	d1, _, _, dir := rewindEnv(t, rewindOnlyMidLane, nil, "")
 	mustInit(t, d1)
 	mustStart(t, d1, "build", 1)
-	if err := d1.transition(TransitionRequest{Kind: TransStepResult, StepID: "build", SpawnN: 1, Result: completedResult("build", 1, `{}`)}); err != nil {
+	if err := d1.transition(TransitionRequest{Kind: TransStepResult, StepID: "build", SpawnN: 1, Result: &StepResult{WIID: "wi_rewind", StepID: "build", SpawnN: 1, Outcome: OutcomeCompleted, Output: json.RawMessage(`{}`)}}); err != nil {
 		t.Fatalf("result build: %v", err)
 	}
 	mustStart(t, d1, "review", 2)
