@@ -890,8 +890,9 @@ class Verification:
 
     def prepare_unit_run(self, s: UnitRunState, rr: RepoRun) -> str:
         """Why s cannot run as written in rr ("" = it can): the shared
-        shape rules (pfstep/unitruns — the one implementation, shared with
-        the analysis entries and fast_checks.py's own check)."""
+        shape rules (pfstep/unitruns — the one implementation the unit
+        runs and the analysis entries share; fast_checks.py's own check
+        keeps its separate copy)."""
         d = s.decl
         problem, cwd = run_shape_problem(d.argv, d.cwd, d.marker, rr.name,
                                           lambda c: os.path.isdir(os.path.join(rr.dir, c)))
