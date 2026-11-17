@@ -144,3 +144,40 @@ test("a refused probe leaves get_state null, the one attempt spent", async () =>
     delete process.env.PI_TEST_CLAUDE_STUB_PROBE_MODE;
   }
 });
+
+// #108 (AC3): a probe claude never answers is waited for at most ~3 s — the wait's
+// own cap, not the probe's 15 s deadline, and not an instant null — and later reads
+// re-pull nothing: the stub log's probe count does not grow with the reads.
+test("a probe that never answers is waited for at most ~3 s and never re-asked by later reads", async () => {
+  process.env.PI_TEST_CLAUDE_STUB_MODE = "replay";
+  process.env.PI_TEST_CLAUDE_STUB_PROBE_MODE = "deaf";
+  try {
+    coldCache();
+    const record = await newRecord({ model: "haiku" });
+    const session = claude.startClaudeSession(record);
+    const before = probes().length;
+    const started = Date.now();
+    assert.equal((await session.send({ type: "get_state" })).contextUsage, null);
+    const waited = Date.now() - started;
+    assert.ok(waited >= 2_700 && waited <= 5_000, `waited ${waited} ms: the ~3 s cap, not the 15 s deadline, not an instant null`);
+    assert.equal(probes().length - before, 1, "one probe asked");
+    for (let i = 0; i < 3; i += 1) {
+      const read = Date.now();
+      assert.equal((await session.send({ type: "get_state" })).contextUsage, null);
+      assert.ok(Date.now() - read < 2_000, "a later read does not wait again");
+    }
+    assert.equal(probes().length - before, 1, "the probe count does not grow with the reads");
+    await session.shutdown();
+    // The deaf probe this run started is ended here: it never answers, so the probe's
+    // own 15 s deadline would otherwise hold the file's exit.
+    for (const probe of probes().slice(before)) {
+      try {
+        process.kill(probe.pid, "SIGTERM");
+      } catch {
+        // already gone
+      }
+    }
+  } finally {
+    delete process.env.PI_TEST_CLAUDE_STUB_PROBE_MODE;
+  }
+});
