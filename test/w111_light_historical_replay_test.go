@@ -1,4 +1,4 @@
-// carries: workflows/_shared/scripts/*, .polyforge/verify-scope.conf, pi-web/e2e/w367-default-cell-pinned.mjs, test/testdata/light-replay/*
+// carries: workflows/_shared/scripts/*, .polyforge/verify-scope.conf, pi-web/.polyforge/verify-scope.conf, pi-web/e2e/w367-default-cell-pinned.mjs, pi-web/e2e/claude-composer-272.mjs, test/w348_cell_e2e_acceptance_test.go, test/w113_workspace_mapping_acceptance_test.go, test/testdata/light-replay/*
 
 package test
 
@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -36,14 +37,22 @@ type w111lrTarget struct {
 // w111lrCase is one historical miss (or already-covered counterexample)
 // with its input paths and the caps of its selection.
 type w111lrCase struct {
-	Id       string         `json:"id"`
-	Status   string         `json:"status"` // miss | covered
-	Root     string         `json:"root"`   // "" = the repository root, "pi-web" = the nested root
-	Paths    []string       `json:"paths"`
-	Target   w111lrTarget   `json:"target"`
-	Note     string         `json:"note"`
-	Baseline map[string]int `json:"baseline"` // the old rules' measured counts (provenance)
-	Cap      map[string]int `json:"cap"`      // the upper bounds the selection must stay inside
+	Id         string                   `json:"id"`
+	Status     string                   `json:"status"` // miss | covered
+	Root       string                   `json:"root"`   // "" = the repository root, "pi-web" = the nested root
+	Paths      []string                 `json:"paths"`
+	Target     w111lrTarget             `json:"target"`
+	Note       string                   `json:"note"`
+	Old        map[string][]string      `json:"old"`         // the old rules' measured selection, item by item (the baseline replay)
+	AllowedNew map[string][]w111lrAllow `json:"allowed_new"` // what this change may add, item by item with the declaration that brings it
+	Cap        map[string]int           `json:"cap"`         // the numeric upper bounds the selection must stay inside
+}
+
+// w111lrAllow is one allowed addition: the item and the declaration that
+// brings it (which carries header or conf line matched which changed path).
+type w111lrAllow struct {
+	Name string `json:"name"`
+	Via  string `json:"via"`
 }
 
 // w111lrDoc is the corpus's static file.
@@ -175,11 +184,64 @@ func TestLightHistoricalReplay(t *testing.T) {
 			if !k.has(c.Target.Kind, c.Target.Value) {
 				t.Fatalf("%s (%s): the full-gate-red target is not selected:\n%s", c.Id, c.Status, strings.Join(k.cmds, "\n"))
 			}
+			// The selection stays inside old ∪ allowed_new, item by item:
+			// a swap of equal count (one old name dropped, another slipped
+			// in) reds here, and so does any addition no declaration names.
+			measured := map[string][]string{
+				"go_pkg_cmds":   nil,
+				"go_run_cmds":   nil,
+				"e2e_run_names": nil,
+				"conf_cmds":     nil,
+				"npm_suites":    nil,
+			}
+			for _, c2 := range r.scoped() {
+				switch {
+				case strings.HasPrefix(c2.Cmd, "E2E_RUN"):
+					measured["e2e_run_names"] = append(measured["e2e_run_names"], strings.Split(strings.TrimSuffix(strings.TrimPrefix(c2.Cmd, "E2E_RUN='^("), ")$' sh test/e2e-parallel.sh"), "|")...)
+				case strings.HasPrefix(c2.Cmd, "npm run test:e2e:all"):
+					measured["npm_suites"] = append(measured["npm_suites"], strings.Split(strings.SplitN(c2.Cmd, "-- ", 2)[1], " ")...)
+				case c2.Source == "conf":
+					measured["conf_cmds"] = append(measured["conf_cmds"], c2.Cmd)
+				case strings.Contains(c2.Cmd, "go test") && strings.Contains(c2.Cmd, " -run "):
+					measured["go_run_cmds"] = append(measured["go_run_cmds"], c2.Cmd)
+				case strings.Contains(c2.Cmd, "go test"):
+					measured["go_pkg_cmds"] = append(measured["go_pkg_cmds"], c2.Cmd)
+				}
+			}
+			allowed := map[string]map[string]bool{}
+			for kind, items := range c.Old {
+				m := allowed[kind]
+				if m == nil {
+					m = map[string]bool{}
+					allowed[kind] = m
+				}
+				for _, v := range items {
+					m[v] = true
+				}
+			}
+			for kind, items := range c.AllowedNew {
+				m := allowed[kind]
+				if m == nil {
+					m = map[string]bool{}
+					allowed[kind] = m
+				}
+				for _, it := range items {
+					m[it.Name] = true
+				}
+			}
+			for kind, items := range measured {
+				for _, v := range items {
+					if !allowed[kind][v] {
+						t.Fatalf("%s: the selection gained %s %q, outside the old set and the allowed additions:\nselected:\n%s\nallowed:\n%s",
+							c.Id, kind, v, strings.Join(items, "\n"), w111lrAllowedList(allowed[kind]))
+					}
+				}
+			}
 			for kind, cap := range c.Cap {
 				got := map[string]int{"pkg": k.pkg, "run": k.run, "conf": k.conf, "e2e_names": k.e2eNames, "suites": k.suites}[kind]
 				if got > cap {
-					t.Fatalf("%s: %s selected %d, over the cap %d (baseline %d):\n%s",
-						c.Id, kind, got, cap, c.Baseline[kind], strings.Join(k.cmds, "\n"))
+					t.Fatalf("%s: %s selected %d, over the cap %d:\n%s",
+						c.Id, kind, got, cap, strings.Join(k.cmds, "\n"))
 				}
 			}
 			// The unrelated counterexample adds no selection: appended to
@@ -212,6 +274,16 @@ func TestLightHistoricalReplay(t *testing.T) {
 			}
 		}
 	})
+}
+
+// w111lrAllowedList answers the allowed items, sorted, one per line.
+func w111lrAllowedList(m map[string]bool) string {
+	var items []string
+	for v := range m {
+		items = append(items, v)
+	}
+	sort.Strings(items)
+	return strings.Join(items, "\n")
 }
 
 // RootLabel answers the case's engine root for messages.
