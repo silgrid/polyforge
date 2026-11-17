@@ -57,7 +57,7 @@ func TestW121ScratchLayoutTextsContract(t *testing.T) {
 				"PF_SCRATCH_DIR",
 				"PF_SCRATCH_RAW_DIR",
 				"sub-agent brief",
-				"--prune-scratch removes only stale batches inside the categories",
+				"`--prune-scratch` removes only stale batches inside the categories",
 			},
 			[]string{
 				// the retired flat 14-day wording
@@ -71,7 +71,7 @@ func TestW121ScratchLayoutTextsContract(t *testing.T) {
 				"removes the stale scratch batches inside the categories",
 				"raw/ 3 days, tasks/ 14 days, sessions/ 14 days",
 				"every entry outside the categories",
-				"--prune-scratch never removes them",
+				"`--prune-scratch` never removes them",
 				"outdated layout section",
 				"one directory per run",
 			},
