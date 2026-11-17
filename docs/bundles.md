@@ -218,9 +218,10 @@ and YAML path, before a claim ever meets it. The keys:
     [config reference](reference/config.md)): fixed when a work item is
     first claimed, the step is then never dispatched (its execution status
     `skipped`), and the wrap attrs of skipped steps at the lane's end pass
-    to the last step that runs. A step not declaring it always runs; the
-    shipped lanes declare it on develop's `merge` alone (micro's `merge`
-    runs whatever the switch says).
+    to the last step that runs. A step not declaring it runs on every round
+    of the work item — a `rewind_only` declaration alone can hold a step's
+    first round back; the shipped lanes declare it on develop's `merge`
+    alone (micro's `merge` runs whatever the switch says).
   - `skill:` — the skill the step follows: `<lane>/skills/<name>.md`, else
     `_shared/skills/<name>.md`, rendered after the step definition; a skill
     names the workflow scripts it runs (`commands:`, by file name), each line
