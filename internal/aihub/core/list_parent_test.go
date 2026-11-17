@@ -36,7 +36,7 @@ func lpChild(t *testing.T, env *testEnv, parent, goal string) string {
 // parent's children; the filter combines with the project one and an
 // unknown parent answers an empty page.
 func TestListFiltersParent(t *testing.T) {
-	env := newTestEnv(t)
+	env := newEnv(t)
 	parent := mustCreateWI(t, env, "the epic", nil, "")
 	childA := lpChild(t, env, parent, "child a")
 	childB := lpChild(t, env, parent, "child b")
