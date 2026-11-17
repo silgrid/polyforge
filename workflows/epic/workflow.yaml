@@ -1,0 +1,71 @@
+# yaml-language-server: $schema=../_schema/workflow-1.schema.json
+contract: 1
+name: epic
+description: The epic lane - one work item per epic. Its own work items are epics (the `epic` key over `children_branch`) - the first claim checks the epic out on the children branch of its own seq, records no fixed target (it merges into the default branch) and snapshots its children, which the driver re-checks before every dispatch. The lane runs verify-children (every child wrapped and merged into the children branch), then sync (the default branch merged into the epic branch, once per closing and again whenever it moved), then build (rewind_only - the fix build that runs only after a rewind covers it, inheriting the plan), then review (the epic mode - the total acceptance, the children's landing records and PR bodies, the seams and the final diff, never a child's internals), then verification (the full bar explicitly), then publish, then merge (the landing record the epic is wrapped with, its children attached). The gates after build rewind to it; merge's moved-base FAIL goes back to sync and the lane re-runs from there.
+max_rewinds: 3
+# the lane's own work items are epics (polyforge#117): each checks the
+# children branch of its own seq out and merges into the default branch;
+# the lane must declare children_branch with the key (WFC-112 otherwise)
+epic: true
+children_branch: "epic/{seq}"
+# the same uncounted moved-base class develop declares: a default branch
+# that moved past what verification ran over is not the epic's defect, so
+# its rewind (the re-sync and the re-run of everything after it) spends
+# no max_rewinds; past max: 2 the merge gate asks the owner
+uncounted_rewinds:
+  reason_contains: "branch moved since verification"
+  max: 2
+defaults:
+  model_candidates: [pi:example-gateway/model-a, pi:example-claude/claude-opus-5, pi:example-openai/gpt-x]
+  tiers: { cheap: [pi:example-gateway/model-cheap], mid: [pi:example-gateway/model-mid] }
+steps:
+  - id: verify-children
+    skill: verify-children
+    model_tier: cheap
+    budget: { tool_minutes: 10 }
+  - id: sync
+    skill: sync
+    model_tier: cheap
+    budget: { tool_minutes: 20 }
+    vars: { verifying_gate: verification, change_step: build }
+  - id: build
+    skill: build
+    rewind_only: true
+    budget: { wall_minutes: 60 }
+    # the lane's supplement cap, the same as develop's: the fix build's
+    # change analysis names the tests verification runs beside the
+    # engine's own selection
+    vars: { supplement_limit: "10" }
+  - id: review
+    gate: true
+    on_fail: { target: build }
+    skill: review
+    resources: { admission: heavy }
+    budget: { wall_minutes: 30, tool_minutes: 20 }
+  - id: verification
+    gate: true
+    on_fail: { target: build }
+    waivable: true
+    skill: verify
+    model_tier: cheap
+    resources: { admission: heavy }
+    budget: { wall_minutes: 150, tool_minutes: 90 }
+    # the step's `image` parameter, the same as develop's
+    params: { image: "" }
+  - id: publish
+    gate: true
+    on_fail: { target: build }
+    skill: publish
+    model_tier: cheap
+    budget: { wall_minutes: 15 }
+  - id: merge
+    gate: true
+    skippable: true
+    human_mergeable: true
+    on_fail: { target: sync }
+    skill: merge
+    model_tier: cheap
+    resources: { locks: [merge] }
+    budget: { tool_minutes: 10 }
+    wrap_attrs: [integration]
+    vars: { verifying_gate: verification }

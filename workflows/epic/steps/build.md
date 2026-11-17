@@ -1,0 +1,59 @@
+---
+name: build
+description: The epic's fix build - a rewind_only step that never runs on the first round (the children's landed work is the change); it runs only after a gate FAIL or an owner's rewind covers it, inheriting the plan and answering every point that sent the lane back, never re-planning.
+---
+
+# build
+
+The epic's fix build. It runs ONLY after a rewind covers it: on the first
+round the lane records it skipped (the children's landed work is the
+change, already reviewed and verified on their own lanes); a gate FAIL
+back to you, or an owner's rewind naming you, is the work to do — the
+increment the lane sent back, not the epic again. Your skill is the whole
+procedure; on this lane its 3a plan is INHERITED, never re-made.
+
+## 开工前读什么、核对什么 — before you start: what you read and check
+
+1. **What sent the lane back.** The 回退 section of `artifacts/handoff.md`
+   that named this step, and the FAILing gate's section (its 结论 and
+   发现的问题和风险, its evidence files): every point raised gets an
+   answer in your 回应上一轮.
+2. **The inherited plan.** `artifacts/plan.md`, `artifacts/build/units.json`
+   and the plan's `## Coverage` as an earlier round left them — cumulative,
+   never rewritten; a rewind that moved the default branch past
+   verification (a sync round, no gate findings) leaves the plan standing
+   and your build with nothing to change: hand off `done` saying exactly
+   that, per point.
+3. **A plan that does not exist** (a FAIL arrived before any build ran):
+   you are the first build — run your skill's 3a against the FAIL's points
+   and the epic's own increment only, and say so in your hand-off.
+
+## Procedure
+
+Your skill's, with these lane bindings: the units are red then green,
+recorded in `artifacts/build/units.json` and checked as the skill says;
+the change analysis (`artifacts/build/change-analysis.json`) names the
+tests the full verification runs beside the engine's own selection —
+write it, its supplement cap the lane's `vars.supplement_limit`
+({{supplement_limit}}); the fast checks run over the whole increment; the self-review
+reads the full diff of the INCREMENT
+(`git diff $(git merge-base HEAD origin/<the default branch>)..HEAD`)
+against review's five blocking classes. `pf step ask` only on the cases
+your skill names, right after the
+plan, never at the end.
+
+## 交接要写什么 — what your hand-off carries
+
+- **Status.** `done` only on a green increment; a real blocker is
+  `blocked` with `--reason`.
+- **回应上一轮**: every point of the FAIL or the owner's words, numbered
+  as there — the commit or the units.json entry that answers it, or the
+  evidence for leaving it as it was.
+- **做了什么**: the units, their commits and who built them; the fast
+  checks. **验证**: each unit's red and green, the fast checks,
+  `artifacts/self-review.md`. **给下游与未决**: what review should look at
+  first.
+- **Evidence**: your skill's list — `artifacts/plan.md`,
+  `artifacts/build/units.json`, `artifacts/build/change-analysis.json`,
+  `artifacts/build/units-check.json`,
+  `artifacts/build/fast-checks/<repo>.json`, `artifacts/self-review.md`.
