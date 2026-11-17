@@ -200,3 +200,66 @@ func TestW79ClaimKeepsKeyOnPublishFailure(t *testing.T) {
 		t.Fatalf("Stop: %v", err)
 	}
 }
+
+// A residual step_params key (the race the write side detected and left
+// behind, a publish that failed at the first claim, a clear that failed)
+// never resurrects its pre-claim values over the running writes the
+// capsule chain carries: a re-claim — the sealed-head continue — clears
+// the key without merging (review r1#8; the key belongs to the QUEUED
+// ticket, a claimed one's truth is the chain).
+func TestW79ClaimResidueYieldsToRunningWrite(t *testing.T) {
+	r, hub, _ := w79ParamsEnv(t)
+	const wi = "wi_w79f"
+	w79SeedStepParams(hub, wi, map[string]any{"build": map[string]any{"image": "reg/w79:1"}})
+	if err := r.Start(context.Background(), wi, StartOpts{}); err != nil {
+		t.Fatalf("the first claim: %v", err)
+	}
+	j := r.jobOf(wi)
+	if j == nil {
+		t.Fatal("the first claim must run to a live agent")
+	}
+	ov, err := capsule.ReadStepOverrides(j.capsuleDir)
+	if err != nil {
+		t.Fatalf("read the fresh capsule's overlay: %v", err)
+	}
+	if b := ov.Steps["build"]; b == nil || b.Params["image"] == nil || b.Params["image"].Value != "reg/w79:1" || b.Params["image"].By != "step_params" {
+		t.Fatalf("the first claim merges the attrs' value: %+v", ov.Steps["build"])
+	}
+	// a running write of the same param — newer than anything the key holds
+	if _, err := r.ApplyStepOverride(context.Background(), wi, OverrideChange{Step: "build", Operator: "usr_1",
+		Param: &protocol.OverrideParam{Name: "image", Value: "reg/run:2"}}); err != nil {
+		t.Fatalf("the running write: %v", err)
+	}
+	if err := r.Stop(context.Background(), wi, protocol.FinishBlocked); err != nil {
+		t.Fatalf("the blocked close: %v", err)
+	}
+	// the residue: the key is back on the hub item (any of the three ways
+	// it can outlive the first claim)
+	hub.mu.Lock()
+	hub.items[wi].Attrs[api.StepParamsKey] = map[string]any{"build": map[string]any{"image": "reg/w79:1"}}
+	hub.mu.Unlock()
+	if err := r.Start(context.Background(), wi, StartOpts{}); err != nil {
+		t.Fatalf("the re-claim: %v", err)
+	}
+	j = r.jobOf(wi)
+	if j == nil {
+		t.Fatal("the re-claim must run to a live agent")
+	}
+	ov, err = capsule.ReadStepOverrides(j.capsuleDir)
+	if err != nil {
+		t.Fatalf("read the re-claimed capsule's overlay: %v", err)
+	}
+	if b := ov.Steps["build"]; b == nil || b.Params["image"] == nil ||
+		b.Params["image"].Value != "reg/run:2" || b.Params["image"].By != "usr_1" {
+		t.Fatalf("the running write survives the residue: %+v", ov.Steps["build"])
+	}
+	hub.mu.Lock()
+	_, has := hub.items[wi].Attrs[api.StepParamsKey]
+	hub.mu.Unlock()
+	if has {
+		t.Fatal("the residue is cleared without merging")
+	}
+	if err := r.Stop(context.Background(), wi, protocol.FinishWrapped); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+}
