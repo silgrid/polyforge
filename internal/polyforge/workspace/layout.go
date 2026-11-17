@@ -247,10 +247,15 @@ func categoryAge(dir string) time.Duration {
 // the boundary stays). Each batch is judged immediately before its
 // removal; a file written into a stale batch between that judgment and
 // RemoveAll is removed with it (scratch/ is disposable by convention).
-// Every target sits inside the resolved scratch dir; the category roots
-// are never removed. An entry that cannot be judged or removed is
-// skipped and reported, never fatal. A workspace without scratch/ has
-// none.
+// Every deletion goes through an os.Root anchored at the resolved scratch
+// dir, so a category or a batch swapped for a symlink between the
+// listing and the removal can never lead a RemoveAll outside scratch/ —
+// a name whose resolution escapes the anchor is an error, reported in
+// Skipped, never a deletion. The age walk itself stays path-based (a
+// swapped category can at worst misjudge, read-only; its removal then
+// fails through the anchor). The category roots are never removed. An
+// entry that cannot be judged or removed is skipped and reported, never
+// fatal. A workspace without scratch/ has none.
 func Scratch(root string, now time.Time, prune bool) (ScratchReport, error) {
 	var rep ScratchReport
 	dir, err := scratchRoot(root)
@@ -261,6 +266,11 @@ func Scratch(root string, now time.Time, prune bool) (ScratchReport, error) {
 	if err != nil {
 		return rep, err
 	}
+	anchor, err := os.OpenRoot(dir)
+	if err != nil {
+		return rep, err
+	}
+	defer anchor.Close()
 	for _, e := range entries {
 		name := e.Name()
 		age := categoryAge(name)
@@ -272,8 +282,13 @@ func Scratch(root string, now time.Time, prune bool) (ScratchReport, error) {
 			rep.Stray = append(rep.Stray, name)
 			continue
 		}
-		cat := filepath.Join(dir, name)
-		batches, err := os.ReadDir(cat)
+		cat, err := anchor.Open(name)
+		if err != nil {
+			rep.Skipped = append(rep.Skipped, fmt.Sprintf("%s: %v", name, err))
+			continue
+		}
+		batches, err := cat.ReadDir(-1)
+		cat.Close()
 		if err != nil {
 			rep.Skipped = append(rep.Skipped, fmt.Sprintf("%s: %v", name, err))
 			continue
@@ -286,9 +301,9 @@ func Scratch(root string, now time.Time, prune bool) (ScratchReport, error) {
 				rep.Stray = append(rep.Stray, rel)
 				continue
 			}
-			newest, err := newestChange(filepath.Join(cat, bname))
+			newest, err := newestChange(filepath.Join(dir, name, bname))
 			if err == nil && newest.Before(cutoff) && prune {
-				err = os.RemoveAll(filepath.Join(cat, bname))
+				err = anchor.RemoveAll(rel)
 			}
 			switch {
 			case err != nil:
