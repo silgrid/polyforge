@@ -193,7 +193,6 @@ func TestPF89AnalysisPromptCarriesTheComponentSection(t *testing.T) {
 	// the attached division, between the template and the ticket
 	iIntro := strings.Index(prompt, "各仓库组件划分与生效阈值")
 	iSec := strings.Index(prompt, "component core  [src]  declared")
-	iThr := strings.Index(prompt, "epic_units 9 (declared)")
 	iBody := strings.Index(prompt, "# 工单")
 	for _, c := range []struct{ what, s string }{
 		{"the section intro", "各仓库组件划分与生效阈值"},
