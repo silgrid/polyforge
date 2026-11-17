@@ -349,20 +349,24 @@ func TestScratchCategoryRetention(t *testing.T) {
 	if rep, err := Scratch(ws, now, true); err != nil || len(rep.Stale) != 0 {
 		t.Fatalf("a second prune must be a no-op: %+v %v", rep, err)
 	}
-	// a download keeping an old mtime but arriving now (its ctime) is
-	// not stale on arrival, in every category
-	ws2 := t.TempDir()
+}
+
+// TestScratchCategoryCtimeArrival: a download keeping an old mtime but
+// arriving now (its ctime) is not stale on arrival, in every category —
+// this one runs WITHOUT the mtime-only seam: the ctime is the evidence.
+func TestScratchCategoryCtimeArrival(t *testing.T) {
+	ws := t.TempDir()
 	backdated := time.Now().Add(-30 * 24 * time.Hour)
-	scratchBatch(t, ws2, ScratchRawDir+"/arrival", backdated)
-	scratchBatch(t, ws2, ScratchTasksDir+"/arrival", backdated)
+	scratchBatch(t, ws, ScratchRawDir+"/arrival", backdated)
+	scratchBatch(t, ws, ScratchTasksDir+"/arrival", backdated)
 	for _, prune := range []bool{false, true} {
-		rep, err := Scratch(ws2, time.Now(), prune)
+		rep, err := Scratch(ws, time.Now(), prune)
 		if err != nil || len(rep.Stale) != 0 {
 			t.Fatalf("a backdated-mtime arrival is stale (prune=%v): %+v %v", prune, rep, err)
 		}
 	}
 	for _, keep := range []string{ScratchRawDir + "/arrival", ScratchTasksDir + "/arrival"} {
-		if _, err := os.Stat(filepath.Join(ws2, ScratchDir, keep)); err != nil {
+		if _, err := os.Stat(filepath.Join(ws, ScratchDir, keep)); err != nil {
 			t.Fatalf("prune removed a fresh arrival: %v", err)
 		}
 	}
@@ -423,6 +427,9 @@ func TestScratchCategorySymlinks(t *testing.T) {
 	}
 	// a batch that is a symlink: a stray, never pruned
 	ws3 := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(ws3, ScratchDir, ScratchRawDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Symlink(outside, filepath.Join(ws3, ScratchDir, ScratchRawDir, "link-batch")); err != nil {
 		t.Fatal(err)
 	}
