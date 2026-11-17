@@ -45,9 +45,10 @@ the source and what did not hold (the lane goes back to the step that makes the 
 ## Procedure
 
 1. **Per task repo** (`repos/<name>/`; a capsule with none publishes nothing and writes
-   `{"repos": []}`): `git fetch origin`; `<default>` is
-   `git symbolic-ref --short refs/remotes/origin/HEAD` less `origin/` (else `main`).
-   `git rev-list --count origin/<default>..HEAD` of 0: record `skipped_reason`, nothing to
+   `{"repos": []}`): `git fetch origin`; `<base>` is the step header's base branch — the
+   capsule's fixed target branch (`runtime-state/target-branch.json`) when it carries
+   one, else `git symbolic-ref --short refs/remotes/origin/HEAD` less `origin/` (else
+   `main`). `git rev-list --count origin/<base>..HEAD` of 0: record `skipped_reason`, nothing to
    publish. Else: `git status --porcelain --untracked-files=all` is empty, no tag points at
    a commit of this work item (a hit is a `## Follow-up` point, not a stop). The branch is
    `polyforge/<capsule directory name>` (`basename "$PWD"`). **Push, idempotent:**
@@ -139,7 +140,7 @@ the source and what did not hold (the lane goes back to the step that makes the 
 `git commit`, `git cherry-pick`, `git reset` or `git am` — you push exactly the head the
 verified result names; `--force`, `-f`, `--force-with-lease`, `--all`, `--mirror`,
 `--tags`, `--delete`, a `+` refspec, `--no-verify`, `-c core.hooksPath=…`, a push to the
-default branch or without a refspec; writing or editing `artifacts/publish/record.json` or
+default branch (a fixed target branch alike) or without a refspec; writing or editing `artifacts/publish/record.json` or
 `artifacts/publish/integration.json`; any build, lint or test command; a publication while
 a check before you started does not hold; writing `runtime-state/asks.jsonl`; ending a turn
 that needs the owner without `pf step ask`; a command run in the background and polled, or

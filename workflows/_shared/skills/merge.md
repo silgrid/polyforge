@@ -95,7 +95,7 @@ whose frozen modes name no mode runs the default of this skill unchanged.
      result's `summary` as `--reason` (the one-line reason is what a lane's declared
      uncounted rewind class, `uncounted_rewinds`, matches, when it declares one) — the
      lane goes back to `sync`, which merges the default branch again. The check compares
-     the current `origin/<default>` with the verifying result's recorded base. The
+     the current `origin/<base>` (the step header's base branch) with the verifying result's recorded base. The
      human-merge mode never exits 1.
    - **2** — not judged (a file unreadable, a head missing, gh or git unreachable, the
      deadline). Wait one minute and run 3 again, at most twice more; still 2: hand off

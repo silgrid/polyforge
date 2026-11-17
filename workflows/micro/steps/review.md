@@ -40,8 +40,9 @@ procedure.
 
 ## What to judge
 
-Read the whole diff, in each task repo `git diff $(git merge-base HEAD origin/HEAD)..HEAD`
-(falling back to `origin/main` or `origin/master` when `origin/HEAD` is unset), including
+Read the whole diff, in each task repo `git diff $(git merge-base HEAD origin/<base>)..HEAD`
+(`<base>` the step header's base branch: a fixed target branch, else the branch `origin/HEAD`
+names, falling back to `origin/main` or `origin/master` when it is unset), including
 any commit fix did not report. Pass only when ALL hold, and fail with one finding per
 violation otherwise, naming the path and why:
 

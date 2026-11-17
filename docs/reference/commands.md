@@ -410,8 +410,11 @@ artifacts/verify/result.json` (docs/reference/workflow-contract.md,
 attrs decide — an integration batch's fix ticket (its `integration_fix`
 marker) runs the full bar; every other ticket the light tier — over the
 the task repos as the sync step left them: no fetch, no merge — a merge in progress
-(`MERGE_HEAD`) or an unresolvable default branch makes the run incomplete
-— and it skips a repo with no commit beyond its default branch. The union
+(`MERGE_HEAD`) or an unresolvable base branch makes the run incomplete
+— and it skips a repo with no commit beyond its base branch (the capsule's
+fixed target branch when it carries one, `merge-base HEAD origin/<target>`
+then, else the default branch; a fixed target that cannot be named is
+incomplete naming why, never a fall-back). The union
 with the build's change analysis is add-only: the change analysis's listed
 tests run beside the plan, add-only, under the analysis's supplement cap —
 a listed test that does not exist fails its check naming it, and the
@@ -878,8 +881,15 @@ the lane's own identity.
   container not had, no Dockerfile in a container run, no such repo), the
   plan is unreadable, the invocation unusable.
 - `sync.py [--continue | --abort]` merges origin's default branch into every
-  task repo of the capsule, in place, in name order: a branch with no
-  commit of its own is fast-forwarded; the conflicts the default branch's
+  task repo of the capsule, in place, in name order — or, when the
+  capsule's fixed target branch is set (`runtime-state/target-branch.json`,
+  a sub-ticket's), that branch in the default branch's place: only
+  `origin/<target>` is fetched and merged, the record's
+  `default_branch`/`default_head` fields carry it, and a file that is
+  there but cannot be read, or a branch missing on origin, is not judged
+  (exit 2) naming why, never a fall-back to the default branch. A
+  branch with no
+  commit of its own is fast-forwarded; the conflicts the merged branch's
   `.polyforge/integrate.conf` makes mechanical are resolved and the merge
   committed; a real conflict is left in progress and its files listed —
   the agent resolves them in place and runs `sync.py --continue`, which
@@ -923,7 +933,10 @@ the lane's own identity.
   one must target the default branch, head the published branch and stand
   at the verified head, and origin's default branch must still be at the
   base the verification result records (`details.repos[].base`, when it
-  records one). No PR branch is updated with the default branch: a default
+  records one) — the capsule's fixed target branch, when it carries one
+  (`runtime-state/target-branch.json`, a sub-ticket's), is the default
+  branch's stand-in in every one of these places, and a FAIL over it
+  carries the same moved-base substring. No PR branch is updated with the default branch: a default
   branch that advanced after verification, or a forge refusal, is the sync
   step's again. Details: `repos[{name, pr_url, branch, head,
   published, merge_commit, how, branch_side, by_this_run, why}]`,
@@ -947,7 +960,9 @@ the lane's own identity.
   the verification names no head for, gh or git unreachable). On exit 0
   `--landing-out` gets the landing record (`{state: landed, repos[{repo,
   pr, head, light_verified_head, merge_commit, accepted}],
-  merge_commits}`: the verified head as the head and the light-verified
+  merge_commits}` — or, the capsule's fixed target branch set, `{state:
+  landed_on_target, target, …}`, a state no `integration.state=landed`
+  filter takes: the verified head as the head and the light-verified
   one; a `merged_elsewhere` repo's head its branch side, `accepted:
   true`) — `merge_commits` naming, per repo, the commit set the change
   landed as, oldest first, each `{sha, merge}` (the lane's own merges are

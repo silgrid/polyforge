@@ -73,7 +73,7 @@ call, and a pass is the command's, not yours.
      failing `<repo>:unit-run:<id>` check is that unit's own run), a listed test of the
      change analysis (a failing `<repo>:analysis:<id>` check is a test the analysis listed
      as already pinning this change: the change's, on build's own word), a file the change
-     touched (`git -C repos/<name> diff --stat origin/<default>...HEAD`), a suite whose
+     touched (`git -C repos/<name> diff --stat origin/<base>...HEAD`), a suite whose
      check names what the change touched — is the change's: hand off `fail` (the lane goes
      back to `build`). A red you cannot place: `pf step ask` the owner with the red checks,
      the log tails and your reading, then end your turn; on the reply — run again: 2; the
