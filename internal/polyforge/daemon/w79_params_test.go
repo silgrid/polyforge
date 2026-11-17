@@ -194,3 +194,49 @@ func TestW79ParamsViewRefusals(t *testing.T) {
 		t.Fatalf("a queued work item whose lane does not load: %+v", ae)
 	}
 }
+
+// The queued work item's OVERLAY view (GET /jobs/{wi}/overrides,
+// review r1#7): it composes from this machine's lane set and the
+// reserved step_params attrs key — the overlay layer — with the model
+// sources below it, never from a capsule the daemon does not hold (the
+// unbranded path read the daemon's own current directory).
+func TestW79OverrideViewQueued(t *testing.T) {
+	wf := t.TempDir()
+	workflowtest.WriteLane(t, wf, "w79-lane", w79Lane)
+	td := newTestDaemon(t, func(c *Config) { c.WorkflowsDir = wf })
+	td.hub.items = map[string]*api.WorkItem{}
+	bundle := "w79-lane"
+	td.hub.items["wi_w79v"] = &api.WorkItem{ID: "wi_w79v", Status: api.StatusQueued, ProjectName: "proj",
+		BundleName: &bundle, Attrs: map[string]any{
+			api.StepParamsKey: map[string]any{"review": map[string]any{"image": "reg/ticket:3"}},
+		}}
+	// the chain below the overlay: review's models from the workspace yaml
+	ws, err := td.cfg.Mapping.WorkspaceFor("proj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, ".polyforge.yaml"),
+		[]byte("steps:\n  proj:\n    review: { models: [pi:ovtest/m-review] }\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	v, ae := td.ovView(t, "wi_w79v")
+	if ae != nil {
+		t.Fatalf("a queued work item's overlay view: %s (%s)", ae.Code, ae.Detail)
+	}
+	if v.Posture != "queued" {
+		t.Fatalf("the posture of a queued work item's overlay view: %+v", v)
+	}
+	byID := map[string]protocol.OverrideStepView{}
+	for _, s := range v.Steps {
+		byID[s.ID] = s
+	}
+	if p := byID["review"].Params; len(p) != 1 || p[0].Name != "image" || p[0].Value != "reg/ticket:3" || p[0].By != "step_params" {
+		t.Fatalf("the attrs key is the overlay layer of the queued view: %+v", p)
+	}
+	if r := byID["review"]; len(r.Effective) != 1 || r.Effective[0] != "pi:ovtest/m-review" || r.Source != "steps.proj.review.models" {
+		t.Fatalf("the queued view composes the sources below the overlay: %+v", byID["review"])
+	}
+	if m := byID["merge"]; !m.Skippable || m.Pending {
+		t.Fatalf("the skippable tail keeps its declaration and carries no pending mark: %+v", m)
+	}
+}
