@@ -56,19 +56,24 @@ not in the batch, a task repo missing, git or gh unreachable, the deadline
 — or the invocation unusable.
 
 ``--repair`` names the repair step's plan file (default: none): the
-branch the batch's own repair round fixed its red units on, per repo
-``{round, repos: [{name, branch, base, head, units, items}]}`` — the
-branch standing in the capsule's clone, never pushed by the repair. A
-missing file is a step that never ran (nothing is landed); a malformed
-one is exit 2. Each entry's branch is pushed, one PR opened and merged
+plan the repair wrote for the gate red it answers — first key
+``{"brief_round": <the brief's round>, "repos": [{"name", "branch",
+"base", "head", "units", "items"}]}`` — the branch of each repo it
+fixed standing in the capsule's clone, never pushed by the repair (a
+missing file is a repair that never wrote one: nothing is landed; a
+malformed one is exit 2; the plan's round is the brief's, never a
+step's own). Each entry's branch is pushed, one PR opened and merged
 onto the default branch matching the pushed head — under the merge lock
 this step already holds — and the pins follow the fix's merge, so the
-gate re-runs on the default branch and a green tag lands there. A fix
-whose blamed item (``items``) a revert of the same run carries is never
-landed: its PR is not opened (the owner ruled the item reverted, not
-repaired). The landings are resumable through the plan record like the
-reverts: a merged PR is read back, a refused merge keeps its PR (exit
-1, the ``why`` naming the repo).
+gate re-runs on the default branch and a green tag lands there; a merged
+PR counts as this round's landing only when the branch head it names is
+already in its merge: an older round's merged PR does not hide the new
+round's, so each round opens and lands its own PR. A fix whose blamed
+item (``items``) a revert of the same run carries is never landed: its
+PR is not opened (the owner ruled the item reverted, not repaired). The
+landings are resumable through the plan record like the reverts: a
+merged PR of this very head is read back, a refused merge keeps its PR
+(exit 1, the ``why`` naming the repo).
 
 ``--ops-out`` (the revert skill registers it with ``pf step hub batch``) is
 written atomically on exit 0: a JSON array of hub writes, per done revert

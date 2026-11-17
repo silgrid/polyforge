@@ -30,13 +30,16 @@ registration.
    The union, each id once, is the list; an id must be an `id` of `batch.json`'s
    `details.items` or a `wi` of its `details.holds` (a stuck hold the owner ruled reverted
    is a held item, seldom a batch item); `pf step ask` the owner about any other.
-3. **The batch's repair branches.** `artifacts/integrate/repair-plan.json`, when the
-   repair step wrote one this round, parses as `{"round", "repos": [{"name", "branch",
-   "base", "head", "units", "items"}]}` — the branch of each repo it fixed, standing in
-   the capsule's clone (a file that does not exist is a step that never ran: the line
-   passes it the same, and the script lands nothing). Your line always names it; the
-   script pushes each branch, opens and merges its PR onto the default branch under the
-   merge lock you hold, and never lands a fix whose blamed item this run reverts.
+3. **The batch's repair branches.** `artifacts/integrate/repair-plan.json` parses as
+   `{"brief_round": <the brief's round>, "repos": [{"name", "branch",
+   "base", "head", "units", "items"}]}` — the plan the review passed — none is a repair
+   whose brief the owner refused or reverted — and the lane's rounds never decide what
+   you land (the plan answers the gate red its `brief_round` names). The branch of each
+   repo it fixed stands in the capsule's clone (a file that does not exist is a repair
+   that never wrote one: the line passes it the same, and the script lands nothing).
+   Your line always names it; the script pushes each branch, opens and merges its PR
+   onto the default branch under the merge lock you hold, and never lands a fix whose
+   blamed item this run reverts.
 
 ## Procedure
 

@@ -96,8 +96,9 @@ integration_batch`). What a later step's command needs travels in files, never i
   re-run full gate alone decides the batch — a pass here is never a green.
 - **revert** (`revert.py`, cheap tier, the merge lock; hub `get batch`, attrs `integration`) — carries out the
   reverts: the ids in `rulings.json`'s `reverts`, plus those in
-  `artifacts/integrate/gate-decision.json`'s `reverts` after a full-gate FAIL (the owner's
-  revert after a red gate), each passed as `--item`; without one it only copies the pins.
+  `artifacts/integrate/gate-decision.json`'s `reverts` — the owner's revert after a red
+  gate, or the repair step's owner-ruled revert of a source the batch cannot fix in
+  place — each passed as `--item`; without one it only copies the pins.
   Each item and its landed fix tickets are reverted per repo, newest first, on a revert PR
   opened and merged under the repo's merge lock — the one develop's `merge` step holds.
   The step also lands the batch's repair branches (`--repair`, the repair step's plan

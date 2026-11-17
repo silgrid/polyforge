@@ -33,9 +33,10 @@ through the registration below.
    `full-gate` section, read it: what was red, what the owner ruled, which items the revert
    step then reverted. An earlier round's `artifacts/integrate/repair.json` is not this
    round's: rewrite it when this round's red is one the batch can repair (below), and never
-   take the repair route over an `artifacts/integrate/repair-refused.json` the repair step
-   wrote — the owner ruled those units out of the batch, so this round files the fix
-   tickets as it did before.
+   take the repair route over an `artifacts/integrate/repair-refused.json` whose
+   `brief_round` names this brief — the owner ruled those units out of the batch, so this
+   round files the fix tickets as it did before. A refusal of an older brief is history:
+   a newer brief is new work (the repair reads it the same way).
 
 ## Procedure
 
