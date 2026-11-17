@@ -77,7 +77,7 @@ func TestW425ReviewFirstpassCohort(t *testing.T) {
 		{"kid-1", "develop", "2026-11-04", w425Plan(map[string]int{"u1": 2, "u2": 1}),
 			map[string]string{"build/s1": w425Build("main"), "review/s2": w425Review("pass")}, ""},
 		{"kid-2", "develop", "2026-11-05", w425Plan(map[string]int{"u1": 6, "u2": 6}),
-			map[string]string{"build/s1": w425Build("subagent"), "review/s2": w425Review("pass")}, ""},
+			map[string]string{"build/s1": w425Build("subagent", "subagent"), "review/s2": w425Review("pass")}, ""},
 		{"ep-1", "epic", "2026-11-06", "",
 			map[string]string{"review/s1": w425Review("pass")}, ""},
 	} {
