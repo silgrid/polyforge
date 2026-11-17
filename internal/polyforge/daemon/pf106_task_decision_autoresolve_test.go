@@ -174,10 +174,10 @@ func TestPF106TicketEndResolvesTaskEntries(t *testing.T) {
 	td.hub.status["wi_pf106_end"] = api.StatusWrapped
 	td.hub.status["wi_pf106_cancel"] = api.StatusCanceled
 	td.hub.status["wi_pf106_fail"] = api.StatusFailed
-	td.hub.unknown["wi_pf106_gone"] = true
+	td.hub.unknown = map[string]bool{"wi_pf106_gone": true}
 	td.hub.status["wi_pf106_live"] = api.StatusQueued
 	td.hub.status["wi_pf106_block"] = api.StatusBlocked
-	td.hub.probe403["wi_pf106_deny"] = true
+	td.hub.probe403 = map[string]bool{"wi_pf106_deny": true}
 	td.hub.probeFails = 1 // the first read (wi_pf106_blip, sorted first) is a transport blip
 	td.hub.mu.Unlock()
 	// wi_pf106_run carries no status: the hub answers running
