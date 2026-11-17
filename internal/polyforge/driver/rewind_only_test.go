@@ -212,6 +212,34 @@ func TestRewindOnlyDispatch(t *testing.T) {
 		}
 	})
 
+	t.Run("a rewind outside the range, before the pass reaches the step, does not activate it", func(t *testing.T) {
+		// fix sits after the review gate, so the review FAIL's rewind
+		// [build, review) lands while fix is still unwalked and pending —
+		// the one reachable state where a mis-drawn activation (the
+		// ledger's RewindStats.Count, another step's archive) would
+		// dispatch it. The correct criterion — the step's OWN attempts —
+		// keeps it skipped: the rewind did not cover it.
+		front := "max_rewinds: 1\nsteps:\n  - { id: build }\n  - { id: review, gate: true, on_fail: { target: build } }\n  - { id: fix, rewind_only: true }\n  - { id: verify, gate: true, on_fail: { target: fix } }\n"
+		script := []fakeEntry{done(`{}`), gateFAIL(), done(`{}`), done(`{}`), done(`{}`)}
+		d, sp, log, dir := rewindEnv(t, front, script, "")
+		if err := d.Run(context.Background()); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if got := rewindDispatched(sp); !reflect.DeepEqual(got, []string{"build", "review", "build", "review", "verify"}) {
+			t.Fatalf("dispatched %v, want fix never dispatched (the review FAIL rewinds [build, review), not over fix)", got)
+		}
+		x := readExec(t, filepath.Join(dir, capsule.ExecutionJSON))
+		if x.RewindStats.Count != 1 {
+			t.Fatalf("rewinds %d, want exactly one (the state the mis-drawn criteria would fire on)", x.RewindStats.Count)
+		}
+		if x.Steps["fix"].Status != capsule.StepSkipped || len(x.Steps["fix"].Attempts) != 0 {
+			t.Fatalf("fix %q with %+v attempts, want skipped with none (a rewind outside its range activates nothing)", x.Steps["fix"].Status, x.Steps["fix"].Attempts)
+		}
+		if n := log.count("step_skipped"); n != 1 || !log.has("step_skipped", "step", "fix") {
+			t.Fatalf("events %v: want one step_skipped {step: fix}", log.kinds())
+		}
+	})
+
 	t.Run("a project skip wins over the activation", func(t *testing.T) {
 		d, sp, log, dir := rewindEnv(t, rewindOnlySkipLane, []fakeEntry{done(`{}`), gateFAIL(), done(`{}`), done(`{}`)}, `["fix"]`+"\n")
 		if err := d.Run(context.Background()); err != nil {
