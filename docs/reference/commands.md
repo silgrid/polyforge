@@ -331,8 +331,10 @@ its four columns.
   step carries (the daemon's data and config, Claude settings,
   hooks and command-running git config, other work items' capsules and
   worktrees, processes it did not start), scoped to that directory and
-  excepting only what the task itself explicitly requires, then
-  `# Task` and the task's prompt — a soft rule the agent keeps, not a boundary;
+  excepting only what the task itself explicitly requires, then the concise
+  output-discipline rule (`harness.ConciseRule`, the same bytes every step
+  dispatch carries), then `# Task` and the task's prompt — a soft rule the
+  agent keeps, not a boundary;
   `list` and `show` keep the prompt as given. The harness tool allowlist
   (read/search, Bash and the web tools) is the lane's own scope, not a
   security boundary. A claude task runs a claude step's profile in every

@@ -14,15 +14,18 @@ the way `tools/install.sh` sets it up, and whether v1 polyforge artifacts are
 still installed — and whether each mapped workspace keeps the runtime-artifact
 layout (polyforge#177), whether state of the retired chat subscriptions is
 left on disk, and whether each installed harness's context file
-carries the native-SVG diagram guidance block. It is a read face: nothing is
+carries the native-SVG diagram guidance block and the concise-output guidance
+block. It is a read face: nothing is
 mutated, nothing is auto-fixed (remediation is manual, the check detail
 names it) — the only writes are five explicit flags: `--prune-scratch`,
 which removes stale `scratch/` entries and lists them, `--prune-capsules`,
 which slims or removes the entries the `capsule retention` row calls
 reclaimable or retired and lists them, `--prune-chat-state`, which deletes
-the files the `retired chat state` row lists, and `--fix-harness-prompts`, which appends the
-SVG diagram-guidance block to the existing context files the `harness diagram
-guidance` row reports `missing` or `legacy` (see below), and `--fix-install-layout`,
+the files the `retired chat state` row lists, and `--fix-harness-prompts`, which appends the SVG
+diagram-guidance block and the concise-output guidance block to the existing
+context files the `harness diagram guidance` and `harness concise guidance`
+rows report `missing` (the diagram row also reports `legacy`, see below), and
+`--fix-install-layout`,
 which links the Claude Code polyforge skill the `claude install layout` row
 reports missing or linked elsewhere (see below). The one remediation the agent runs itself is the
 daemon-down case: `pf daemon ensure`, then `pf doctor` again.
@@ -56,7 +59,7 @@ pf doctor [--harness] [--prune-scratch] [--prune-capsules] [--prune-chat-state] 
 
 `--harness` runs only the harness family (statusline and pi package, install
 layout, v1 leftovers, retired chat state — no config, no network);
-`tools/install.sh` prints its rows. `--fix-harness-prompts` needs the full report (its row is
+`tools/install.sh` prints its rows. `--fix-harness-prompts` needs the full report (their rows are
 config-dependent): combined with `--harness` it is refused before any
 check runs (exit 1). `--fix-install-layout` is refused with `--harness` the
 same way (exit 1), and so is `--prune-chat-state`: the `--harness`
