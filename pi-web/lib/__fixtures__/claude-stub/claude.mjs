@@ -73,6 +73,9 @@
 //   request's id; PI_TEST_CLAUDE_STUB_VERSION replaces its `claude_code_version`. A launch
 //   with `--no-session-persistence` and no session (Pi Web's probe, lib/claude-probe.ts) is
 //   logged as `kind: "probe"`, never `launch`, so a session's launch count is its own.
+//   PI_TEST_CLAUDE_STUB_PROBE_MODE  only a probe launch's initialize answer: refuse —
+//                             answered with an error control_response. Empty or any other
+//                             value, and every session launch: the recorded answer.
 //   A `set_model` takes any name `--model` takes (no fixed list) but
 //   `claude-bogus-0-0`, the name the 2.1.312 model-switch recording shows claude refusing.
 import { spawn } from "node:child_process";
@@ -370,6 +373,10 @@ process.stdin.on("data", (chunk) => {
     const event = JSON.parse(line);
     const text = typeof event.message?.content === "string" ? event.message.content.trim() : "";
     if (event.type === "control_request" && event.request?.subtype === "initialize") {
+      if (probing && process.env.PI_TEST_CLAUDE_STUB_PROBE_MODE === "refuse") {
+        emit({ type: "control_response", response: { subtype: "error", request_id: event.request_id, error: "PI_TEST_CLAUDE_STUB_PROBE_MODE=refuse" } });
+        continue;
+      }
       emit(initializeAnswer(event.request_id));
       continue;
     }
