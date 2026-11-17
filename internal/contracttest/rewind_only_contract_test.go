@@ -1,6 +1,6 @@
 package test
 
-// carries: docs/reference/workflow-contract.md, docs/bundles.md, docs/reference/config.md, workflows/_schema/workflow-1.schema.json, internal/contracttest/rewind_only_contract_test.go
+// carries: docs/reference/workflow-contract.md, docs/bundles.md, docs/reference/config.md, internal/polyforge/cli/config_yaml_edit.go, workflows/_schema/workflow-1.schema.json, internal/contracttest/rewind_only_contract_test.go
 
 // rewind_only_contract_test.go (polyforge#116, AC4): the `rewind_only`
 // step key is one contract across its four faces — the lane schema's
@@ -10,7 +10,8 @@ package test
 // any rewind that covers it (a gate FAIL's or an owner's) runs it, a
 // project skip wins over it, the loader refuses a declaration no gate's
 // range covers, and the absolute "a step not declared skippable always
-// runs" wording is gone from the two documents that carried it. The
+// runs" wording is gone from the documents and the CLI's refusal
+// message that carried it. The
 // pinned sentences name no lane and no project.
 
 import (
@@ -54,6 +55,10 @@ var pf116Wants = map[string][]string{
 	},
 	"docs/reference/config.md": {
 		"a step not declared skippable runs on every round of the work item",
+		"naming `skippable: true` and that such a step cannot be switched off",
+	},
+	"internal/polyforge/cli/config_yaml_edit.go": {
+		"a step its lane does not declare skippable cannot be switched off",
 	},
 }
 
@@ -63,6 +68,10 @@ var pf116Banned = map[string][]string{
 		"A step not declaring it always runs",
 	},
 	"docs/reference/config.md": {
+		"skippable always runs",
+		"such a step always runs;",
+	},
+	"internal/polyforge/cli/config_yaml_edit.go": {
 		"skippable always runs",
 	},
 }
