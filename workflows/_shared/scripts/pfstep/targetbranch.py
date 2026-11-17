@@ -21,7 +21,6 @@ keys are tolerated: the epic record extends the shape later.
 import json
 import os
 from typing import Any
-
 # The fixed file's place under the capsule root.
 DIR = "runtime-state"
 FILE = "target-branch.json"
@@ -42,4 +41,22 @@ def read(capsule_dir: str) -> str:
     key, stripped; a missing file, a missing key or an empty value is no
     target. A file that is there but unreadable, or not the JSON object
     with a string ``target``, raises TargetBranchError naming why."""
-    return ""
+    try:
+        with open(path_of(capsule_dir), "rb") as f:
+            raw = f.read()
+    except FileNotFoundError:
+        return ""
+    except OSError as err:
+        raise TargetBranchError("runtime-state/%s is unreadable: %s" % (FILE, err)) from None
+    try:
+        doc: Any = json.loads(raw.decode("utf-8", "replace"))
+    except ValueError as err:
+        raise TargetBranchError("runtime-state/%s is not valid JSON: %s" % (FILE, err)) from None
+    if not isinstance(doc, dict):
+        raise TargetBranchError("runtime-state/%s is not the JSON object expected" % FILE) from None
+    target = doc.get("target")
+    if target is None:
+        return ""
+    if not isinstance(target, str):
+        raise TargetBranchError("runtime-state/%s: target is not a string" % FILE) from None
+    return target.strip()
