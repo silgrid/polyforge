@@ -54,7 +54,7 @@ const defaultBrowseLimit = 20
 // visibility tiers over the narrowed page. The answer carries the next
 // page's cursor whenever a further visible entry exists ("" on the last
 // page).
-func (s *Store) Browse(projects []string, sort, after, memType string, tags []string, limit int, allowed func(*Entry) bool) ([]Entry, string, error) {
+func (s *Store) Browse(projects []string, sort, after, memType, writerKind string, tags []string, limit int, allowed func(*Entry) bool) ([]Entry, string, error) {
 	if sort == "" {
 		sort = "updated"
 	}
@@ -183,7 +183,7 @@ func browseFilter(projects []string, memType string, tags []string) (string, []a
 // statement over the narrowed candidates — O(matching rows), not
 // constant per page; owner ruling 2026-10-29 (memory volumes are in the
 // hundreds).
-func (s *Store) BrowseTotal(projects []string, memType string, tags []string, allowed func(*Entry) bool) (int, error) {
+func (s *Store) BrowseTotal(projects []string, memType, writerKind string, tags []string, allowed func(*Entry) bool) (int, error) {
 	if memType == "*" {
 		memType = ""
 	}

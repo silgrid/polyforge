@@ -583,7 +583,7 @@ func (s *Server) webAPIMemories(w http.ResponseWriter, r *http.Request, idn *ide
 	}
 	visible := s.memVisible(idn)
 	if keyword := strings.TrimSpace(q.Get("q")); keyword != "" {
-		items, serr := s.Mems.SearchMode("", []string{projectID}, keyword, memType, tags, webMemSearchLimit, visible)
+		items, serr := s.Mems.SearchMode("", []string{projectID}, keyword, memType, "", tags, webMemSearchLimit, visible)
 		if serr != nil {
 			writeWebError(w, r, serr)
 			return
@@ -597,7 +597,7 @@ func (s *Server) webAPIMemories(w http.ResponseWriter, r *http.Request, idn *ide
 		})
 		return
 	}
-	items, next, berr := s.Mems.Browse([]string{projectID}, "", q.Get("after"), memType, tags, webMemBrowseLimit, visible)
+	items, next, berr := s.Mems.Browse([]string{projectID}, "", q.Get("after"), memType, "", tags, webMemBrowseLimit, visible)
 	if berr != nil {
 		writeWebError(w, r, berr)
 		return
@@ -708,7 +708,7 @@ func (s *Server) webAPISearch(w http.ResponseWriter, r *http.Request, idn *ident
 			Content: it.Content,
 		})
 	}
-	memHits, merr := s.Mems.SearchMode("", []string{projectID}, keyword, "", nil, webMemSearchLimit, s.memVisible(idn))
+	memHits, merr := s.Mems.SearchMode("", []string{projectID}, keyword, "", "", nil, webMemSearchLimit, s.memVisible(idn))
 	if merr != nil {
 		writeWebError(w, r, merr)
 		return

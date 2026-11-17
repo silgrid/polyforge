@@ -319,7 +319,7 @@ func (s *Store) load(memID string) (*Entry, error) {
 // match (X.* → prefix "X."), any other value is an exact match.
 // allowed filters candidates (visibility, applied by the server layer).
 func (s *Store) Search(q string, memType string, tags []string, limit int, allowed func(*Entry) bool) ([]Entry, error) {
-	return s.SearchMode(MatchAll, nil, q, memType, tags, limit, allowed)
+	return s.SearchMode(MatchAll, nil, q, memType, "", tags, limit, allowed)
 }
 
 // SearchMode is the search face's single entry: match picks the mode
@@ -331,7 +331,7 @@ func (s *Store) Search(q string, memType string, tags []string, limit int, allow
 // replaced the caller's per-candidate membership predicate, so
 // unreadable matches cost no load at all; the caller's
 // allowed predicate still enforces the visibility tiers.
-func (s *Store) SearchMode(match string, projects []string, q, memType string, tags []string, limit int, allowed func(*Entry) bool) ([]Entry, error) {
+func (s *Store) SearchMode(match string, projects []string, q, memType, writerKind string, tags []string, limit int, allowed func(*Entry) bool) ([]Entry, error) {
 	switch match {
 	case "", MatchAll, MatchAny:
 	default:
