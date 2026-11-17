@@ -69,8 +69,8 @@ test("the spawn is `pf [--json] params <wi>` over the shared read timeout: a ref
 const fs = require("fs");
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(argvLog)}, JSON.stringify(args) + "\\n");
-if (args.includes("refuse")) { process.stderr.write("pf: DAEMON-409: the lane does not load on this daemon\\n"); process.exit(1); }
-if (args.includes("garbage")) { process.stdout.write("not json\\n"); process.exit(0); }
+if (args.some((a) => a.includes("refuse"))) { process.stderr.write(JSON.stringify({ code: "DAEMON-409", detail: "the lane does not load on this daemon" }) + "\\n"); process.exit(1); }
+if (args.some((a) => a.includes("garbage"))) { process.stdout.write("not json\\n"); process.exit(0); }
 process.stdout.write(JSON.stringify({ work_item: "wi_A1", posture: "queued", steps: [
   { id: "build", params: [{ name: "image", value: "base-img", source: "bundle demo step build params.image" }] },
 ] }) + "\\n");
@@ -87,7 +87,12 @@ process.stdout.write(JSON.stringify({ work_item: "wi_A1", posture: "queued", ste
     });
     assert.deepEqual(await argvLines(), [["--json", "params", "wi_A1"]]);
 
-    await assert.rejects(() => lib.getPolyforgeParams("wi_refuse"), /the lane does not load on this daemon/);
+    try {
+      const v = await lib.getPolyforgeParams("wi_refuse");
+      assert.ok(false, `a refusal must reject, resolved ${JSON.stringify(v)}`);
+    } catch (e) {
+      assert.match(e.message, /the lane does not load on this daemon/);
+    }
     assert.equal(await lib.getPolyforgeParams("wi_garbage"), null);
 
     const profiled = await lib.getPolyforgeParams("wi_A1", "lab");

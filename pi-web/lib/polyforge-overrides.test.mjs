@@ -134,6 +134,7 @@ test("the rows carry the step's param overrides with the operator of each (the o
   assert.deepEqual(view.steps[0].params, [
     { name: "flag", value: "", by: "usr_1", at: "2026-11-17T00:00:00Z" },
     { name: "image", value: "reg/x:1", by: "usr_2" },
+    { name: "junk", value: "" },
   ]);
   const res = sanitizeOverrideWriteResult({
     work_item: "wi_A1", changed: true, posture: "queued", published: false,
