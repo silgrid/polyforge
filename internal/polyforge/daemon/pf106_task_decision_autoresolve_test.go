@@ -67,8 +67,11 @@ func TestPF106TaskEntryCarriesItsTicket(t *testing.T) {
 		}
 		switch e.TaskID {
 		case "task_00000000000000a1", "task_00000000000000a2", "task_00000000000000a3":
-			if e.WI == "" || !e.Attention {
-				t.Fatalf("an analysis task's terminal entry must carry its ticket and stay attention: %+v", e)
+			// the ticket each task served, exactly (a mis-written id must fail)
+			want := map[string]string{"task_00000000000000a1": "wi_pf106_a",
+				"task_00000000000000a2": "wi_pf106_b", "task_00000000000000a3": "wi_pf106_c"}[e.TaskID]
+			if e.WI != want || !e.Attention {
+				t.Fatalf("an analysis task's terminal entry must carry its own ticket and stay attention: %+v", e)
 			}
 		case "task_00000000000000ff":
 			if e.WI != "" || !e.Attention {
@@ -219,9 +222,6 @@ func TestPF106TicketEndResolvesTaskEntries(t *testing.T) {
 	if n := td.hub.gets["wi_pf106_blip"]; n != 0 {
 		t.Fatalf("the transport blip counted a read it never made: %d", n)
 	}
-	if n := td.hub.gets["wi_pf106_end"]; n != 1 {
-		t.Fatalf("a resolved ticket must not be re-read: %d reads", n)
-	}
 	td.hub.mu.Unlock()
 	// the kept entries wait for the next round: it reads them again
 	d.reconcileDecisions()
@@ -231,6 +231,12 @@ func TestPF106TicketEndResolvesTaskEntries(t *testing.T) {
 	}
 	if n := td.hub.gets["wi_pf106_blip"]; n != 1 {
 		t.Fatalf("the blipped ticket must be read again once the hub answers: %d reads", n)
+	}
+	// a ticket whose entries the first round resolved is never read again
+	for _, wi := range []string{"wi_pf106_end", "wi_pf106_cancel", "wi_pf106_fail", "wi_pf106_gone"} {
+		if n := td.hub.gets[wi]; n != 1 {
+			t.Fatalf("a resolved ticket must not be re-read: %s has %d reads", wi, n)
+		}
 	}
 	td.hub.mu.Unlock()
 	// and the alpha entry still stands: this Cell's reconcile never touched it
@@ -310,6 +316,16 @@ func TestPF106TaskEntriesExpire(t *testing.T) {
 	if err := f.RecordTask("default", pf106AnalysisTask("task_0000000000000new", task.StateFailed, "wi_pf106_new")); err != nil {
 		t.Fatal(err)
 	}
+	// the boundary itself: one second past three days resolves, exactly
+	// three days does not (the bound is strictly "earlier than")
+	f.now = func() time.Time { return now.Add(-3 * 24 * time.Hour).Add(-time.Second) }
+	if err := f.RecordTask("default", pf106AnalysisTask("task_0000000000000past", task.StateFailed, "")); err != nil {
+		t.Fatal(err)
+	}
+	f.now = func() time.Time { return now.Add(-3 * 24 * time.Hour) }
+	if err := f.RecordTask("default", pf106AnalysisTask("task_0000000000000edge", task.StateFailed, "")); err != nil {
+		t.Fatal(err)
+	}
 	// a work item's old open occurrence: the task age bound never touches it
 	f.Ingest("default", protocol.EventEntry{WI: "wi_pf106_wi", Kind: "submit_dropped",
 		At: now.Add(-4 * 24 * time.Hour).Format(time.RFC3339)}, nil)
@@ -321,7 +337,7 @@ func TestPF106TaskEntriesExpire(t *testing.T) {
 	}
 	for _, id := range []string{"task_0000000000000old_defaultwi_pf106_old_default",
 		"task_0000000000000old_alphawi_pf106_old_alpha", "task_0000000000000old_gonewi_pf106_old_gone",
-		"task_0000000000000plain"} {
+		"task_0000000000000plain", "task_0000000000000past"} {
 		e, ok := state[id]
 		if !ok {
 			t.Fatalf("no entry for %s: %+v", id, f.List().Decisions)
@@ -330,13 +346,13 @@ func TestPF106TaskEntriesExpire(t *testing.T) {
 			t.Fatalf("an open task entry past the age bound must resolve (never dismiss): %+v", e)
 		}
 	}
-	for _, id := range []string{"task_0000000000000newwi_pf106_new", "wi_pf106_wi"} {
+	for _, id := range []string{"task_0000000000000newwi_pf106_new", "task_0000000000000edge", "wi_pf106_wi"} {
 		if e := state[id]; !e.Open() {
 			t.Fatalf("an entry within the bound (or a work item's) must stay: %+v", e)
 		}
 	}
-	if got := f.List().Attention; got != 2 {
-		t.Fatalf("attention = %d, want the fresh task entry and the work item's: %v", got, f.List())
+	if got := f.List().Attention; got != 3 {
+		t.Fatalf("attention = %d, want the fresh entry, the exactly-three-days one and the work item's: %v", got, f.List())
 	}
 	// the age bound reads no hub: the expired tickets were never read
 	// (the fresh entry's ticket is the reconcile's own business)
