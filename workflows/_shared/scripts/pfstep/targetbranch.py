@@ -15,7 +15,12 @@ The read is strict (never a silent fall-back to the default branch): a
 file that is there but cannot be read, or is not the JSON object with a
 string ``target``, raises :class:`TargetBranchError` naming why — the
 caller refuses (a step's not-judged exit 2 naming the reason). Unknown
-keys are tolerated: the epic record extends the shape later.
+keys are tolerated: an EPIC's own record (polyforge#117) carries a
+``checkout`` key (the branch of its own seq it works on) and NO
+``target`` — the epic merges into the origin's default branch, so every
+reader's default-branch logic is its base, exactly as for a capsule
+without a fixed target; the ``checkout`` key itself is the daemon's own
+(the runtime's checkout), no step script reads it here.
 """
 
 import json
