@@ -20,20 +20,20 @@ import {
 } from "@/lib/polyforge-status";
 
 /** toTrimmedString keeps a string's trimmed form ("" for anything else). */
-function toTrimmedString(value: unknown): string {
+export function toTrimmedString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
 /** toOptionalTrimmedString keeps a non-empty trimmed string, else
  *  undefined. */
-function toOptionalTrimmedString(value: unknown): string | undefined {
+export function toOptionalTrimmedString(value: unknown): string | undefined {
   const trimmed = toTrimmedString(value);
   return trimmed ? trimmed : undefined;
 }
 
 /** profileArgv is the named Cell's argv prefix (no prefix for the default
  *  Cell) — the same shape every other polyforge spawn builds. */
-function profileArgv(profile: string | undefined): string[] {
+export function profileArgv(profile: string | undefined): string[] {
   return profile ? ["--profile", profile] : [];
 }
 
@@ -53,9 +53,22 @@ export interface PolyforgeOverrideStepRow {
   modelsBy?: string;
   skip?: boolean;
   skipBy?: string;
+  /** The step's per-ticket param overrides (the overlay layer only,
+   *  never the final value — the composed face is polyforge-params.ts),
+   *  sorted by name. */
+  params?: PolyforgeOverrideParam[];
   pending?: boolean;
   effective?: string[];
   source?: string;
+}
+
+/** One param override of a row: the value it sets, with the operator
+ *  and time of the change. */
+export interface PolyforgeOverrideParam {
+  name: string;
+  value: string;
+  by?: string;
+  at?: string;
 }
 
 /** The view: the work item's posture on this daemon and one row per
@@ -76,17 +89,22 @@ export interface PolyforgeOverrideWriteResult {
   step: PolyforgeOverrideStepRow;
 }
 
-/** One overlay action, exactly one per write. */
+/** One overlay action, exactly one per write. The param actions ride
+ *  the same one-action face (polyforge#79): a queued work item's params
+ *  take them too — the daemon routes them to the reserved attrs key. */
 export type PolyforgeOverrideAction =
   | { kind: "models"; step: string; models: string[] }
   | { kind: "clearModels"; step: string }
-  | { kind: "skip"; step: string; value: boolean };
+  | { kind: "skip"; step: string; value: boolean }
+  | { kind: "param"; step: string; name: string; value: string }
+  | { kind: "clearParam"; step: string; name: string };
 
 /** overrideActionArgv answers the pf argv of one action (the profile
  *  prefix first, exactly as every other polyforge spawn builds it), or
  *  null when the action is invalid: a blank step, an empty chain, a
- *  candidate that is blank or carries the list's own comma separator, or
- *  an unknown kind. Pure; the route refuses the body before any spawn. */
+ *  candidate that is blank or carries the list's own comma separator, a
+ *  param without a name, a name with a space, a multi-line value, or an
+ *  unknown kind. Pure; the route refuses the body before any spawn. */
 export function overrideActionArgv(wi: string, action: PolyforgeOverrideAction | null, profile?: string): string[] | null {
   if (!action || typeof action !== "object") return null;
   const step = typeof action.step === "string" ? action.step.trim() : "";
@@ -108,6 +126,18 @@ export function overrideActionArgv(wi: string, action: PolyforgeOverrideAction |
       return [...base, "--clear-models"];
     case "skip":
       return action.value === true ? [...base, "--skip"] : action.value === false ? [...base, "--unskip"] : null;
+    case "param": {
+      if (typeof action.name !== "string") return null;
+      const name = action.name.trim();
+      if (!name || name.includes(" ") || typeof action.value !== "string" || action.value.includes("\n")) return null;
+      return [...base, "--param", `${name}=${action.value}`];
+    }
+    case "clearParam": {
+      if (typeof action.name !== "string") return null;
+      const name = action.name.trim();
+      if (!name || name.includes(" ")) return null;
+      return [...base, "--clear-param", name];
+    }
     default:
       return null;
   }
@@ -137,11 +167,33 @@ function sanitizeStepRow(value: unknown): PolyforgeOverrideStepRow | null {
     ...(strings("models_by") ? { modelsBy: strings("models_by") } : {}),
     ...(typeof row.skip === "boolean" ? { skip: row.skip } : {}),
     ...(strings("skip_by") ? { skipBy: strings("skip_by") } : {}),
+    ...(paramList(row.params) ? { params: paramList(row.params) } : {}),
     ...(row.pending === true ? { pending: true } : {}),
     ...(list("effective") ? { effective: list("effective") } : {}),
     ...(strings("source") ? { source: strings("source") } : {}),
   };
   return out;
+}
+
+/** paramList keeps a row's param overrides — each one's name (required),
+ *  value ("" for anything else) and operator/time — dropping junk;
+ *  undefined when the field is absent or holds nothing. */
+function paramList(value: unknown): PolyforgeOverrideParam[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out: PolyforgeOverrideParam[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const p = entry as Record<string, unknown>;
+    const name = toTrimmedString(p.name);
+    if (!name) continue;
+    out.push({
+      name,
+      value: typeof p.value === "string" ? p.value : "",
+      ...(toOptionalTrimmedString(p.by) ? { by: toOptionalTrimmedString(p.by) } : {}),
+      ...(toOptionalTrimmedString(p.at) ? { at: toOptionalTrimmedString(p.at) } : {}),
+    });
+  }
+  return out.length > 0 ? out : undefined;
 }
 
 /** sanitizeOverrideView keeps the view's posture and rows in lane order.

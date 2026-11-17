@@ -189,6 +189,13 @@ type fakeHub struct {
 	projectRepos  map[string][]string
 	// memContent scripts GetMemoryContent (the step memory read).
 	memContent func(id string) ([]byte, error)
+	// attrsWrites records every WriteAttrs call (the step_params key's
+	// whole-key writes, polyforge#79); onAttrsWrite, when set, runs
+	// inside the hub's lock right after the stored item's key changed —
+	// the tests' in-flight seam for the claim race the write side detects
+	// by its re-read.
+	attrsWrites  []api.AttrsWriteRequest
+	onAttrsWrite func()
 	// queueErr, when non-nil, is what Queue answers instead of the
 	// seeded list — the drain degraded-signal test scripts denials with
 	// it.
@@ -425,6 +432,44 @@ func (h *fakeHub) GetWorkItem(idOrSlug string) (*api.WorkItem, error) {
 // the resume door returns the WI to claimable (queued, session cleared).
 // It records the transition in the status map; the returned view is
 // unused by the routes (only the error matters).
+// WriteAttrs is the fake of the daemon's machine-signed attrs face: one
+// top-level key of the stored item is replaced whole (null deletes it)
+// and the call is recorded. onAttrsWrite, when set, runs inside the lock
+// right after the key changed — the claim-race seam.
+func (h *fakeHub) WriteAttrs(idOrSlug string, req api.AttrsWriteRequest) (*api.WorkItem, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	id := h.canonicalID(idOrSlug)
+	if h.unknown[id] {
+		return nil, &api.Error{Code: api.ErrCoreNotFound, Detail: "work item not found"}
+	}
+	var value any
+	if len(req.Value) == 0 || json.Unmarshal(req.Value, &value) != nil {
+		return nil, &api.Error{Code: api.ErrCoreBadInput, Detail: "value is one JSON document"}
+	}
+	it := h.items[id]
+	if it == nil {
+		it = &api.WorkItem{ID: id, ProjectName: "proj", Status: api.StatusRunning,
+			Attrs: map[string]any{}, UpdatedAt: "2026-11-17T00:00:00Z"}
+		h.items[id] = it
+	}
+	if it.Attrs == nil {
+		it.Attrs = map[string]any{}
+	}
+	if value == nil {
+		delete(it.Attrs, req.Key)
+	} else {
+		it.Attrs[req.Key] = value
+	}
+	cp := append([]api.AttrsWriteRequest(nil), h.attrsWrites...)
+	h.attrsWrites = append(cp, req)
+	if h.onAttrsWrite != nil {
+		h.onAttrsWrite()
+	}
+	wi := *it
+	return &wi, nil
+}
+
 func (h *fakeHub) ResumeBlockedWorkItem(idOrSlug string) (json.RawMessage, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

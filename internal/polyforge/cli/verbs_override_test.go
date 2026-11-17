@@ -103,3 +103,33 @@ func TestPF25OverrideVerbViewAndActions(t *testing.T) {
 		t.Fatalf("the refusal must surface the daemon's words:\n%s", errs)
 	}
 }
+
+// TestW79OverrideQueuedFace (polyforge#79 u3): the queued posture is the
+// verb's face too — the Summary names it, and a queued write's answer
+// (posture queued, published false) renders the daemon's note of where
+// the change rides.
+func TestW79OverrideQueuedFace(t *testing.T) {
+	if !strings.Contains(cmdOverride.Summary, "queued") {
+		t.Fatalf("the Summary must name the queued posture: %q", cmdOverride.Summary)
+	}
+	d := newDaemonFixture(t)
+	write := protocol.OverrideWriteResult{WorkItem: "wi_w79q", Changed: true, Posture: "queued", Published: false,
+		Note: "queued: the params ride the work item's step_params attrs key — the claim merges them into its capsule and clears the key once that publish succeeded",
+		Step: protocol.OverrideStepView{ID: "review", Params: []protocol.OverrideParamView{{Name: "image", Value: "reg/x:1", By: "usr_1"}}}}
+	raw, _ := json.Marshal(write)
+	d.answer("POST", "/jobs/wi_w79q/overrides", string(raw))
+	code, out, _ := runPf(t, map[string]string{"PF_DAEMON_SOCKET": d.sock},
+		"override", "wi_w79q", "--step", "review", "--param", "image=reg/x:1", "--by", "usr_1")
+	if code != 0 {
+		t.Fatalf("the queued write's exit = %d, output %q", code, out)
+	}
+	for _, want := range []string{
+		`overlay param image="reg/x:1"`,
+		"(posture queued, by usr_1)",
+		"the params ride the work item's step_params attrs key",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("the queued answer's rendering lacks %q:\n%s", want, out)
+		}
+	}
+}

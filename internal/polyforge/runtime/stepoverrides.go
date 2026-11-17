@@ -55,12 +55,93 @@ const (
 )
 
 // The postures the write lands in (protocol.OverrideView.Posture's
-// words).
+// words). The queued posture (polyforge#79) is a work item no daemon
+// holds: its per-ticket params ride the reserved step_params attrs key,
+// and the write face there is the daemon's machine-signed attrs route
+// (never a capsule).
 const (
 	OverridePostureRunning = "running"
 	OverridePosturePaused  = "paused"
 	OverridePostureBlocked = "blocked"
+	OverridePostureQueued  = "queued"
 )
+
+// StepParamAttr is one param's entry in the reserved step_params attrs
+// key (polyforge#79): the value the queued write set, with the time it
+// was written. The claim merges by that time (mergePendingAspects), so a
+// residue from before an earlier claim loses to the newer running writes
+// the capsule chain carries, and a value written after a re-queue wins —
+// neither may be dropped by the re-claim path (review r2#1).
+type StepParamAttr struct {
+	Value string `json:"value"`
+	At    string `json:"at"`
+}
+
+// StepParamsOfAttrs answers the per-ticket step params an attrs map
+// carries under api.StepParamsKey — {"<step-id>": {"<param>": {"value":
+// "<value>", "at": "<RFC 3339 write time>"}}}, map[step]map[param]entry —
+// tolerating anything else: a non-object key, a step entry that is no
+// object, an entry that is no map or whose value is missing, null or not
+// a string, an empty step or param name are all dropped — never kept as
+// an empty value (the attrs key is a machine-written boundary whose
+// entries were judged against a lane at write time; the claim re-validates
+// every kept entry against its own lane snapshot, and a planted or
+// drifted shape never blocks a claim). An entry without a parseable time
+// keeps an empty At — the merge counts it older than any timed capsule
+// aspect (pendingAspectApplies). A key that carries nothing usable
+// answers nil.
+func StepParamsOfAttrs(attrs map[string]any) map[string]map[string]StepParamAttr {
+	raw, ok := attrs[api.StepParamsKey]
+	if !ok {
+		return nil
+	}
+	obj, ok := raw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	out := map[string]map[string]StepParamAttr{}
+	for step, sv := range obj {
+		if step == "" {
+			continue
+		}
+		so, ok := sv.(map[string]any)
+		if !ok {
+			continue
+		}
+		for name, v := range so {
+			if name == "" {
+				continue
+			}
+			// the key's ONE writer (the daemon's queued write) produces
+			// one entry object per param; anything else — a bare string
+			// (a shape only this change's intermediate commits wrote,
+			// never shipped: no compat path), an entry that is no map —
+			// is junk
+			e, ok := v.(map[string]any)
+			if !ok {
+				continue
+			}
+			value, ok := e["value"].(string)
+			if !ok {
+				// a missing, null or non-string value is an entry without
+				// a usable value: dropped, never kept as ""
+				continue
+			}
+			at, _ := e["at"].(string)
+			if strings.Contains(value, "\n") {
+				continue
+			}
+			if out[step] == nil {
+				out[step] = map[string]StepParamAttr{}
+			}
+			out[step][name] = StepParamAttr{Value: value, At: at}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
 
 // overridePushTimeout bounds the running posture's chain push (the same
 // deadline the claim's pending-record publish uses, protocol.PushTimeout;

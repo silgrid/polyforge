@@ -2241,25 +2241,30 @@ export function PolyforgePanel({
                               finished job from the status/cards lists, so the
                               wi falls back to the selection's watch snapshot
                               (reset per selection) and the last stream stays. */}
-                          {/* polyforge#25: the selected unstarted step's overlay
+                          {/* polyforge#25: the selected step's overlay
                               controls — the effective-model source line, the
                               single-candidate setter and the skip switch of a
                               lane-declared skippable step (the waive hint for
-                              any other). A step with a live dispatch or one
-                              that already ran never shows them. */}
+                              any other). polyforge#79: the params section
+                              renders for EVERY selected step (a step that
+                              already ran shows it read-only); the write
+                              controls stay an UNSTARTED step's — the same
+                              posture rules `pf override` enforces. */}
                           {/* polyforge#48 AC4: the key is the ticket + step —
                               React remounts the controls on either change, so
                               a switch starts from a fresh state and never
                               shows the previous step's input, result or error. */}
-                          {watchStatus && selectedStep && stepUnstarted(watchStatus, selectedStep) && (
+                          {watchStatus && selectedStep && (
                             <PolyforgeStepControls
                               key={`${progressWi ?? "none"}:${selectedStep}`}
                               wi={progressWi}
                               profile={selectedJob?.profile ?? selectedProfile}
                               step={selectedStep}
                               skippable={watchStatus.skippableSteps?.includes(selectedStep) ?? false}
+                              unstarted={stepUnstarted(watchStatus, selectedStep)}
                               overlay={watchStatus.overrides?.[selectedStep]}
                               row={watchStatus.overrideView?.steps.find((r) => r.id === selectedStep)}
+                              params={watchStatus.paramsView?.steps.find((r) => r.id === selectedStep)}
                               onApplied={onRefresh}
                             />
                           )}

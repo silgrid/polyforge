@@ -257,7 +257,13 @@ func (r *Runtime) materialize(ctx context.Context, j *job) error {
 	if err := r.writeStepModes(j); err != nil {
 		return err
 	}
-	return r.writePendingStepOverrides(ctx, j)
+	if err := r.writePendingStepOverrides(ctx, j); err != nil {
+		return err
+	}
+	// a queued work item's step params (the attrs key any machine's
+	// daemon wrote while it was held by no one) merge here, judged
+	// against this fresh capsule's own lane snapshot (polyforge#79).
+	return r.writeClaimedStepParams(ctx, j)
 }
 
 // writeCapsuleGitignore writes the capsule .gitignore — the capsule's

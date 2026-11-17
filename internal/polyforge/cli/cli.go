@@ -196,6 +196,7 @@ var commands = []*Command{
 	cmdResume,
 	cmdWrap,
 	cmdOverride,
+	cmdParams,
 	cmdOps,
 	cmdWatch,
 	cmdTask,

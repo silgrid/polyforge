@@ -68,6 +68,12 @@ type Hub interface {
 	// generic entry): the F6 memory adapters use it for the calls the
 	// shared client carries no typed method for.
 	Do(method, path string, body, out any) error
+	// WriteAttrs writes one top-level attrs key of a work item on the
+	// daemon's machine key (PATCH /work-items/{id}/attrs) — the reserved
+	// step_params key of a queued work item's params is its one writer
+	// (polyforge#79): a param write the lane here judged first, so the
+	// key never carries a value no lane declared.
+	WriteAttrs(id string, req api.AttrsWriteRequest) (*api.WorkItem, error)
 	// ProjectContactsWithCaller reads a project's human members with the
 	// daemon key's owner kept (the member face's include_caller=true):
 	// the task spawn route's one-time reporter resolution,

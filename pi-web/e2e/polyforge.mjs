@@ -1,6 +1,6 @@
-// carries: components/PolyforgePanel*, components/ThinkingFold*, hooks/usePolyforge.*, lib/polyforge-status*, lib/polyforge-pf-bin*, app/api/polyforge/status/*, components/PolyforgeJobComposer*, lib/polyforge-conversation-pure*, lib/polyforge-cards-pure*, app/api/polyforge/watch/*, components/PolyforgeStepControls*, app/api/polyforge/override/*, lib/polyforge-overrides*
+// carries: components/PolyforgePanel*, components/ThinkingFold*, hooks/usePolyforge.*, lib/polyforge-status*, lib/polyforge-pf-bin*, app/api/polyforge/status/*, components/PolyforgeJobComposer*, lib/polyforge-conversation-pure*, lib/polyforge-cards-pure*, app/api/polyforge/watch/*, components/PolyforgeStepControls*, app/api/polyforge/override/*, lib/polyforge-overrides*, lib/polyforge-params*, app/api/polyforge/params/*, components/PolyforgeWorkItemParams*
 // carries: components/AppShell*, app/api/polyforge/polyforge-routes*, app/api/polyforge/polyforge-status-route*, lib/i18n/*, docs/agents/polyforge-panel.md
-// carries: components/PolyforgeDetailProgress*, hooks/__fixtures__/react-hook-shim.mjs, hooks/__tests__/polyforge-panel-progress-stubs.mjs, app/api/polyforge/polyforge-override-route*
+// carries: components/PolyforgeDetailProgress*, hooks/__fixtures__/react-hook-shim.mjs, hooks/__tests__/polyforge-panel-progress-stubs.mjs, app/api/polyforge/polyforge-override-route*, app/api/polyforge/polyforge-params-route*
 // pi#108 (wi_y3y9SMz4IXKg) — Polyforge dock panel: end-to-end acceptance pass.
 //
 // Authored pre-code against artifacts/spec.md (AC1–AC10; AC11's e2e half is this
@@ -373,6 +373,19 @@ const OVERRIDE_VIEW_P25 = { work_item: WIP25, posture: "running", steps: [
 ] };
 const OVERRIDE_WRITE_P25 = { work_item: WIP25, changed: true, posture: "running", published: true,
   step: { id: "bravo-code", status: "pending", skippable: true } };
+// polyforge#79: the composed params view of the same lane (alpha-plan and
+// bravo-code declare params; the panel's params section renders them for
+// EVERY selected step, started ones read-only).
+const PARAMS_VIEW_P25 = { work_item: WIP25, posture: "running", steps: [
+  { id: "zulu-grill", status: "done", params: [{ name: "image", value: "reg/e2e:done", source: "steps.e2e.zulu-grill.params.image" }] },
+  { id: "mike-spec", status: "done", params: [] },
+  { id: "alpha-plan", status: "pending", params: [{ name: "image", value: "reg/e2e:plan", source: "step override" }] },
+  { id: "kilo-author", status: "in_progress", params: [{ name: "depth", value: "2", source: "bundle e2e step kilo-author params.depth" }] },
+  { id: "bravo-code", status: "pending", params: [
+    { name: "image", value: "reg/e2e:code", source: "steps.e2e.bravo-code.params.image" },
+    { name: "flag", value: "", source: "bundle e2e step bravo-code params.flag" },
+  ] },
+] };
 // ── polyforge#31: the long event-only stream (at3 caps at minute 59, so the
 // 259 fixtures run over the whole day: hour = floor((n-1)/60)).
 const atP31 = (n) => `2026-10-18T${String(Math.floor((n - 1) / 60)).padStart(2, "0")}:${String((n - 1) % 60).padStart(2, "0")}:00Z`;
@@ -448,6 +461,9 @@ const run = () => {
     const w = s.watch[rest[1]] || { work_item: rest[1], known: false, events: [], last_seq: 0 };
     out({ ...w, events: (w.events || []).slice(-n) });
   }
+  if (rest[0] === "params") {
+    out(s.paramsView ?? { work_item: rest[1], posture: "running", steps: [] });
+  }
   if (rest[0] === "override") {
     if (s.overrideRefuse) { process.stderr.write(JSON.stringify(s.overrideRefuse) + "\\n"); process.exit(1); }
     if (rest.indexOf("--step") >= 0) {
@@ -504,6 +520,7 @@ const T = {
   P25A: "P25A: The selected unstarted step offers the model-chain controls and the skippable tail's skip switch (polyforge#25 AC8)",
   P25B: "P25B: A non-skippable unstarted step shows no skip switch, only the waive hint (polyforge#25 AC8)",
   P25C: "P25C: A refused write shows pf's typed words inline; the view's source line names where the chain comes from (polyforge#25 AC8)",
+  P25D: "P25D: Every selected step shows its params (final value and source, started ones read-only) and an unstarted one writes a param through the same face (polyforge#79 AC1 AC2)",
   P31A: "P31A: Mid-progress both centered jump buttons show; up reaches the top, latest the bottom and restores the follow (AC1 AC2 AC4)",
   P2R3A: "P2R3A: while a card's detail read is in flight the poll sends no second one; the read cycle settles without a Loading flash",
   P2R3B: "P2R3B: an answer older than the displayed one is dropped — the first read returns after the second and never overwrites",
@@ -1388,6 +1405,36 @@ try {
     const entry = errors.findIndex((line) => line.includes("409"));
     if (entry >= 0) errors.splice(entry, 1);
     setState({ overrideView: OVERRIDE_VIEW_P25, overrideWrite: OVERRIDE_WRITE_P25 });
+  });
+
+  // P25D — polyforge#79 (AC1 AC2): every selected step shows its params —
+  // the composed final values and sources (a step that already ran
+  // read-only), and an unstarted step's set/clear row writes through the
+  // same one-action face.
+  await checkPage(T.P25D, "params of every selected step", {}, async (page) => {
+    const ovrLog = join(stubDir, "ovr.log");
+    setState({ overrideView: OVERRIDE_VIEW_P25, overrideWrite: OVERRIDE_WRITE_P25, paramsView: PARAMS_VIEW_P25 });
+    writeFileSync(ovrLog, "");
+    const panel = await ensureDetail24(page, SLUGP25, WIP25);
+    const node = (id) => panel.getByRole("listitem", { name: new RegExp(`^${id} ·`) }).first();
+    const controls = panel.locator("[data-pf-step-controls]");
+    // a STARTED step (done): the params display, read-only
+    await node("zulu-grill").click();
+    await pollUntil(async () => (await controls.count()) === 1, "the started step's section renders");
+    const zulu = controls.locator("[data-pf-step-controls-params]");
+    await pollUntil(async () => /reg\/e2e:done/.test(await zulu.innerText()), "the done step's params show with their value");
+    assert.ok((await zulu.innerText()).includes("steps.e2e.zulu-grill.params.image"), "the source shows");
+    assert.equal(await controls.locator("[data-pf-param-set=\"image\"]").count(), 0, "a started step offers no write");
+    // an UNSTARTED step: the set/clear row per declared param, one write argv
+    await node("bravo-code").click();
+    await pollUntil(async () => (await controls.locator("[data-pf-param-input=\"image\"]").count()) === 1, "the unstarted step's param input renders");
+    await controls.locator("[data-pf-param-input=\"image\"]").fill("reg/e2e:new");
+    await controls.locator("[data-pf-param-set=\"image\"]").click();
+    await pollUntil(async () => {
+      const lines = readFileSync(ovrLog, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+      return lines.some((argv) => JSON.stringify(argv) === JSON.stringify(["--json", "override", WIP25, "--step", "bravo-code", "--param", "image=reg/e2e:new"]));
+    }, "the set ran `pf --json override <wi> --step bravo-code --param image=reg/e2e:new`");
+    await pollUntil(async () => (await controls.locator("[data-pf-step-controls-applied]").count()) === 1, "the set's feedback shows");
   });
 
   // P31A — polyforge#31 (AC1, AC2, AC4): over a long execution progress the

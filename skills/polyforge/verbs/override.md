@@ -1,4 +1,4 @@
-# override — a running ticket's per-step overlay: the model chain, the skip switch and the step params
+# override — a work item's per-step overlay: the model chain, the skip switch and the step params
 
 Execution-plane verb: routed to the local daemon (the override routes). A
 work item's **step overlay** is a capsule-scoped record (`runtime-state/
@@ -7,12 +7,16 @@ chain and a skip switch that outrank every other candidate source at
 dispatch time, and param values that outrank the project's and the
 lane's (polyforge#78). It changes no lane snapshot, travels with the capsule
 chain, and is written only through the daemon (a step agent's process
-tree is refused `DAEMON-403`).
+tree is refused `DAEMON-403`). A **queued** work item takes its param
+changes the same way (polyforge#79): they ride the reserved `step_params`
+attrs key until its claim, so the owner can configure a ticket's params
+before it is submitted or claimed — the composed final values and sources
+read back with `pf params <id>`.
 
 ## Triggers
 
 - EN: set this ticket's value of a step param / clear the step's param override / change this step's model / give the review step another model / use opus for the verification step / skip this ticket's merge step / un-skip it / clear the step's override / what model will the next step run / 给这一步换个模型 / 跳过这张票的 merge / 取消跳过 / 清掉这步的覆盖 / 下一步会用什么模型
-- 中文: 改某步的模型链 / 停住的票换个模型再继续 / 看看每步的模型来源 / 这张票改某步的参数 / 清掉这步的参数覆盖
+- 中文: 改某步的模型链 / 停住的票换个模型再继续 / 看看每步的模型来源 / 这张票改某步的参数 / 清掉这步的参数覆盖 / 看看每步参数的最终值和来源 / 给排队的票先配好参数
 
 ## Command
 
@@ -39,6 +43,21 @@ included) until cleared.
 
 ## Who may be written
 
+- A **queued** work item (polyforge#79): the params only — `--param` and
+  `--clear-param` write the reserved `step_params` attrs key through the
+  daemon's machine-signed route, whole-key read-merge-write, judged
+  against this machine's lane set before anything is written (a step or
+  param the lane does not declare, or a value off the one-line bound, is
+  `DAEMON-400`; a lane that does not load on this daemon is `DAEMON-409`).
+  The chain and the skip switch are refused here (`DAEMON-409`): they are
+  set once the ticket runs. A claim that lands while the write does is
+  detected by the re-read and named in the answer — the key gone says the
+  claim merged the params into its capsule, the key still there says the
+  change never reached it: set the param on the running ticket again. At
+  the claim the fresh capsule's own lane snapshot re-judges every entry:
+  declared, legal ones merge into the capsule's overlay record (the
+  per-ticket layer), anything else is dropped with a line — never a
+  refused claim — and the key is cleared once that publish succeeded.
 - A step **with a live dispatch** (a running ticket's current
   in_progress step): refused `DAEMON-409`.
 - A step that **already ran** (done/skipped): refused for every action.
@@ -96,9 +115,12 @@ which values changed.
   ran refuses it (`DAEMON-409`); a parked ticket's change holds on this
   machine only, like a chain.
 - The view lists the param overrides only, never the final value: each
-  `param <name>="<value>" (by <user>)`. The lane default and the
-  project's value with the final one are `pf workflows --cwd <dir>`'s;
-  the project's own value is written with `pf config set
+  `param <name>="<value>" (by <user>)`. The composed final value and the
+  layer each param comes from — the per-ticket layer, the project's
+  `steps.<project>.<step-id>.params.<name>`, or the lane default — read
+  back with `pf params <id>` (a queued work item included: its per-ticket
+  layer is the `step_params` attrs key, labelled `step override` like the
+  overlay's). The project's own value is written with `pf config set
   steps.<project>.<step-id>.params.<name> <value>` (docs/reference/config.md).
 
 ## Success
@@ -120,8 +142,12 @@ for a param —, the new value, the operator).
 | `DAEMON-400` | a pi model the Cell's step-agent `models.json` does not declare | Add the model there first (the operator agent dir's `models.json`), then retry; claude candidates are not file-checked. |
 | `DAEMON-409` | the step holds a live dispatch, already ran, is not declared skippable, or is skipped at the project level (`--unskip` refused naming it) | Set it on a step that has not started, or while the ticket is parked; for a gate that must pass, use the waive; a project-level skip is the project's switch, not this ticket's. |
 | `DAEMON-403` | a step or task agent's process tree called | The overlay is the owner's move; call it from a human session. |
-| `DAEMON-404` | this daemon holds neither a job nor a capsule of the ticket | Set the overlay on the machine that runs (or last ran) the ticket. |
+| `DAEMON-404` | this daemon holds neither a job nor a capsule of the ticket, and the ticket is not queued (an id aihub does not know, one running on another machine, a terminal one with no scene here) | Set the overlay on the machine that runs (or last ran) the ticket; a queued work item answers here — its params ride the `step_params` attrs key. |
+| `DAEMON-409` | a queued work item's lane does not load on this daemon (its params are written against its lane), or its chain/skip write reached the queued posture | Write the params on a machine whose lane set has the bundle; the chain and the skip switch wait until the ticket runs. |
 
 Pi Web's job detail reaches the same face through this verb's routes; the
-panel offers the single-candidate form (harness + model) and the skip
-toggle of a skippable step.
+panel offers the single-candidate form (harness + model), the skip
+toggle of a skippable step and — per declared param — a set/clear row
+(queued work items get theirs in the 工单详情; a step that already ran
+shows its params read-only). `pf params <id>` is the composed read both
+surfaces display.

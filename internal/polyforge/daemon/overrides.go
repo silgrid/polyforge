@@ -34,6 +34,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"time"
 
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/common/capsule"
@@ -83,6 +84,19 @@ func (d *Daemon) resolveOverrideScene(wi string, item *api.WorkItem) (*overrideS
 			return nil, &api.Error{Code: api.ErrDaemonConflict,
 				Detail: fmt.Sprintf("%s is %s on this daemon right now; try again in a moment", wi, ji.State)}
 		}
+	}
+	// polyforge#79: a QUEUED work item takes the attrs face — its
+	// per-ticket params ride the reserved step_params attrs key, so any
+	// machine and any Cell that claims it sees them — never a local
+	// scene, not even one an earlier claim left here. Only the params
+	// actions answer here (the write route refuses the rest); the read
+	// face composes from this machine's lane set.
+	if item != nil && item.Status == api.StatusQueued {
+		bundle := ""
+		if item.BundleName != nil {
+			bundle = *item.BundleName
+		}
+		return &overrideScene{posture: runtime.OverridePostureQueued, bundle: bundle}, nil
 	}
 	// no job here: the sealed scene of the last close (a blocked or
 	// long-paused work item), located the answer path's way
@@ -174,6 +188,13 @@ func (d *Daemon) overrideView(wi string, item *api.WorkItem) (*protocol.Override
 	scene, err := d.resolveOverrideScene(wi, item)
 	if err != nil {
 		return nil, err
+	}
+	// polyforge#79: a queued work item owns no capsule here — its overlay
+	// view composes from this machine's lane set and the attrs key
+	// (review r1#7: the capsule paths below would read the daemon's own
+	// current directory).
+	if scene.posture == runtime.OverridePostureQueued {
+		return d.queuedOverrideView(wi, item, scene)
 	}
 	wf, err := scene.laneGraph()
 	if err != nil {
@@ -313,6 +334,21 @@ func (d *Daemon) overrideWriteRoute(w http.ResponseWriter, r *http.Request) {
 	scene, err := d.resolveOverrideScene(wi, item)
 	if err != nil {
 		writeErrOf(w, err)
+		return
+	}
+	// polyforge#79: a queued work item's write is the attrs-key face —
+	// the params ride the reserved step_params key (the claim merges
+	// them into its capsule); it owns no capsule here, so the lane
+	// snapshot below is never its guard. The queue write applies the
+	// request itself, validates it against this machine's lane set and
+	// answers its own shape.
+	if scene.posture == runtime.OverridePostureQueued {
+		out, qerr := d.queuedParamWrite(wi, item, req, operator)
+		if qerr != nil {
+			writeErrOf(w, qerr)
+			return
+		}
+		writeJSON(w, http.StatusOK, out)
 		return
 	}
 	wf, err := scene.laneGraph()
@@ -559,4 +595,133 @@ func (d *Daemon) piModelsAcceptable() map[string]bool {
 		}
 	}
 	return out
+}
+
+// queuedParamWrite applies one param change of a QUEUED work item to the
+// reserved step_params attrs key (polyforge#79): the write is the
+// daemon's machine-signed hub face (the key's one writer), whole-key
+// read-merge-write so every step's params survive one another, judged
+// against THIS machine's lane set before anything is written — the same
+// guard the running posture's capsule snapshot is. Only the params
+// answer here: a queued work item's chain and skip switch are set once
+// it runs. The aihub-side attrs_written event is the change's record
+// (no observe-lane event: no capsule here carries one). A claim that
+// lands while the write does is detected by the re-read (the owner's
+// 已定 3): the key gone says the claim merged the params into its
+// capsule; the key still there says the change never reached the claim
+// and the running ticket needs the set again.
+func (d *Daemon) queuedParamWrite(wi string, item *api.WorkItem, req protocol.OverrideWriteRequest, operator string) (*protocol.OverrideWriteResult, error) {
+	if req.Param == nil && req.ClearParam == "" {
+		return nil, &api.Error{Code: api.ErrDaemonConflict,
+			Detail: fmt.Sprintf("%s is queued: a queued work item takes its params only (they ride the work item's attrs until its claim) — set the model chain or the skip switch once it runs", wi)}
+	}
+	if item.BundleName == nil || *item.BundleName == "" {
+		return nil, &api.Error{Code: api.ErrDaemonConflict,
+			Detail: fmt.Sprintf("%s names no bundle: its params are written against the lane it will run, and the lane is the bundle it names", wi)}
+	}
+	lane := d.laneOf(item.ProjectName, *item.BundleName)
+	if lane == nil {
+		return nil, &api.Error{Code: api.ErrDaemonConflict,
+			Detail: fmt.Sprintf("the lane %s of %s does not load on this daemon — a queued work item's params are written against its lane (the step declarations); write them on a machine whose lane set has it", *item.BundleName, item.ProjectName)}
+	}
+	var spec *workflow.Step
+	for i := range lane.Steps {
+		if lane.Steps[i].ID == req.Step {
+			spec = &lane.Steps[i]
+		}
+	}
+	if spec == nil {
+		return nil, &api.Error{Code: api.ErrDaemonBadInput,
+			Detail: fmt.Sprintf("the lane declares no step %q", req.Step)}
+	}
+	name := req.ClearParam
+	if req.Param != nil {
+		name = req.Param.Name
+	}
+	if _, declared := spec.Params[name]; !declared {
+		return nil, &api.Error{Code: api.ErrDaemonBadInput,
+			Detail: fmt.Sprintf("the lane declares no step param %q on step %s: a param is set only where the lane declares it", name, req.Step)}
+	}
+	if req.Param != nil {
+		if why := workflow.ParamValueProblem(req.Param.Value); why != "" {
+			return nil, &api.Error{Code: api.ErrDaemonBadInput,
+				Detail: fmt.Sprintf("param %s: %s", name, why)}
+		}
+	}
+	// the whole-key read-merge-write: the current key (this route's own
+	// reads resolved the item fresh), the change applied to a copy
+	current := runtime.StepParamsOfAttrs(item.Attrs)
+	merged := map[string]map[string]runtime.StepParamAttr{}
+	for step, params := range current {
+		merged[step] = map[string]runtime.StepParamAttr{}
+		for n, v := range params {
+			merged[step][n] = v
+		}
+	}
+	if req.Param != nil {
+		if v, ok := merged[req.Step][name]; ok && v.Value == req.Param.Value {
+			// the idempotent no-change success: nothing written
+			return d.queuedParamAnswer(wi, req, spec, merged, false, "", operator), nil
+		}
+		if merged[req.Step] == nil {
+			merged[req.Step] = map[string]runtime.StepParamAttr{}
+		}
+		// the entry's own write time — the claim merges by it, so a
+		// residue never beats a newer running write and a re-queue's own
+		// write wins (review r2#1)
+		merged[req.Step][name] = runtime.StepParamAttr{Value: req.Param.Value,
+			At: time.Now().UTC().Format(time.RFC3339Nano)}
+	} else {
+		if _, ok := merged[req.Step][name]; !ok {
+			return d.queuedParamAnswer(wi, req, spec, merged, false, "", operator), nil
+		}
+		delete(merged[req.Step], name)
+		if len(merged[req.Step]) == 0 {
+			delete(merged, req.Step)
+		}
+	}
+	raw, merr := json.Marshal(merged)
+	if merr != nil {
+		return nil, merr
+	}
+	if len(merged) == 0 {
+		raw = []byte("null") // the last param's clear deletes the key
+	}
+	out, werr := d.hub.WriteAttrs(wi, api.AttrsWriteRequest{Key: api.StepParamsKey, Value: raw})
+	if werr != nil {
+		return nil, werr
+	}
+	note := "queued: the params ride the work item's step_params attrs key — the claim merges them into its capsule and clears the key once that publish succeeded"
+	if out != nil && out.Status != api.StatusQueued {
+		// the claim race the write side detects: one re-read says which
+		// of the two races it was
+		if cur, gerr := d.hub.GetWorkItem(wi); gerr == nil && cur != nil {
+			if runtime.StepParamsOfAttrs(cur.Attrs) == nil {
+				note = fmt.Sprintf("the work item was claimed while the write landed (its status is %s) and the claim merged the params into its capsule: read them with pf params", cur.Status)
+			} else {
+				note = fmt.Sprintf("the work item was claimed while the write landed (its status is %s) and this change did not reach its capsule: set the param on the running ticket again", cur.Status)
+			}
+		} else {
+			note = fmt.Sprintf("the work item was claimed while the write landed (its status is %s): read the view before you send the change again", out.Status)
+		}
+	}
+	return d.queuedParamAnswer(wi, req, spec, merged, true, note, operator), nil
+}
+
+// queuedParamAnswer shapes the attrs-key write's answer: the step's row
+// carries the params the merged key holds for it (the overlay-view
+// shape), changed false naming the idempotent no-change success.
+func (d *Daemon) queuedParamAnswer(wi string, req protocol.OverrideWriteRequest, spec *workflow.Step,
+	merged map[string]map[string]runtime.StepParamAttr, changed bool, note, operator string) *protocol.OverrideWriteResult {
+	row := protocol.OverrideStepView{ID: req.Step, Skippable: spec.Skippable}
+	names := make([]string, 0, len(merged[req.Step]))
+	for name := range merged[req.Step] {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		row.Params = append(row.Params, protocol.OverrideParamView{Name: name, Value: merged[req.Step][name].Value, By: operator})
+	}
+	return &protocol.OverrideWriteResult{WorkItem: wi, Changed: changed,
+		Posture: runtime.OverridePostureQueued, Published: false, Note: note, Step: row}
 }

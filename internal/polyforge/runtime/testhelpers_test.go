@@ -245,6 +245,13 @@ func (h *fakeHub) SessionClaim(req api.SessionClaimRequest) (*api.SessionClaimRe
 			if out, cerr := exec.Command("git", "--git-dir", bare, "config", "receive.shallowUpdate", "true").CombinedOutput(); cerr != nil {
 				return nil, &api.Error{Code: "CORE-500", Detail: fmt.Sprintf("bare capsule repo %s: %v: %s", bare, cerr, out)}
 			}
+			// aihub's EnsureBare points the bare's HEAD at the chain's
+			// branch; mirror it — a clone of a bare whose HEAD names an
+			// unborn branch checks nothing out, and a re-claim that
+			// carries no sealed head would clone a stale-looking chain.
+			if out, cerr := exec.Command("git", "--git-dir", bare, "symbolic-ref", "HEAD", "refs/heads/main").CombinedOutput(); cerr != nil {
+				return nil, &api.Error{Code: "CORE-500", Detail: fmt.Sprintf("bare capsule repo %s: %v: %s", bare, cerr, out)}
+			}
 		}
 	}
 	// the holder's replay (the aihub contract, D4): the session that
@@ -356,6 +363,36 @@ func (h *fakeHub) SessionEnd(wi string, req api.SessionEndRequest) error {
 	}
 	h.status[id] = req.Status
 	return nil
+}
+
+// WriteAttrs is the fake of the daemon's machine-signed attrs face: one
+// top-level key of the stored item is replaced whole (null deletes it).
+func (h *fakeHub) WriteAttrs(idOrSlug string, req api.AttrsWriteRequest) (*api.WorkItem, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	id := h.canonicalID(idOrSlug)
+	var value any
+	if len(req.Value) == 0 || json.Unmarshal(req.Value, &value) != nil {
+		return nil, &api.Error{Code: api.ErrCoreBadInput, Detail: "value is one JSON document"}
+	}
+	it := h.items[id]
+	if it == nil {
+		it = &api.WorkItem{ID: id, ProjectName: "proj", Status: api.StatusRunning, Attrs: map[string]any{}}
+		if h.items == nil {
+			h.items = map[string]*api.WorkItem{}
+		}
+		h.items[id] = it
+	}
+	if it.Attrs == nil {
+		it.Attrs = map[string]any{}
+	}
+	if value == nil {
+		delete(it.Attrs, req.Key)
+	} else {
+		it.Attrs[req.Key] = value
+	}
+	wi := *it
+	return &wi, nil
 }
 
 func (h *fakeHub) GetWorkItem(idOrSlug string) (*api.WorkItem, error) {

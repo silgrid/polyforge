@@ -15,6 +15,7 @@ import {
   type PolyforgeWorkItemRow,
 } from "@/lib/polyforge-work-items-pure";
 import { MarkdownBody } from "./MarkdownBody";
+import { PolyforgeWorkItemParams } from "./PolyforgeWorkItemParams";
 import { POLYFORGE_SEARCH_CONTROL_CLASS, PolyforgeRefreshButton, PolyforgeSearchBar } from "./PolyforgeSearchBar";
 
 /**
@@ -231,6 +232,7 @@ export function PolyforgeWorkItems({
               {meta(t("polyforge.workItems.field.closed"), detail.closed_at)}
               {waiting && meta(t("polyforge.workItems.field.waitingFor"), waiting)}
             </div>
+            <PolyforgeWorkItemParams key={selected} wi={selected} />
             {truncated && <div style={{ fontSize: 11, color: "#d97706" }}>{t("polyforge.workItems.truncated")}</div>}
             {/* The height clip never slices the markdown source. */}
             <div style={collapsible && !expanded ? { maxHeight: COLLAPSE_MAX_HEIGHT_PX, overflowY: "hidden" } : undefined}>

@@ -162,6 +162,9 @@ func (d *Daemon) routes() *http.ServeMux {
 	// POST here, so a step or task process tree is refused DAEMON-403.
 	mux.HandleFunc("GET /jobs/{wi}/overrides", d.overrideViewRoute)
 	mux.HandleFunc("POST /jobs/{wi}/overrides", d.overrideWriteRoute)
+	// the params read face (polyforge#79): a read any local peer may
+	// make — the composed final values and sources, `pf params`' face.
+	mux.HandleFunc("GET /jobs/{wi}/params", d.paramsViewRoute)
 	mux.HandleFunc("GET /jobs/{wi}/artifact", d.artifactRoute)
 	mux.HandleFunc("GET /decisions", d.decisionsRoute)
 	mux.HandleFunc("POST /decisions/dismiss", d.decisionsDismissRoute)

@@ -138,7 +138,9 @@ func TestW78ParamsDocsContract(t *testing.T) {
 	t.Run("command reference", func(t *testing.T) {
 		const rel = "docs/reference/commands.md"
 		text := w68Flat(t, rel)
-		override := w78Between(text, "`override` (a running ticket's per-step overlay", "), `")
+		// polyforge#79 widened the verb's reach (a queued work item's params
+		// ride the reserved attrs key): the entry's opening names a work item.
+		override := w78Between(text, "`override` (a work item's per-step overlay", "), `")
 		if override == "" {
 			t.Fatalf("%s: the execution-plane summary's `override` entry is missing", rel)
 		}

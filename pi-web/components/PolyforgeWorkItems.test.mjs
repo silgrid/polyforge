@@ -140,3 +140,16 @@ test("a row pf marks acceptance_missing shows the needs-interaction label beside
   assert.equal(locales.en["polyforge.workItems.acceptanceMissing"], "Needs interaction: no acceptance");
   assert.equal(locales["zh-TW"]["polyforge.workItems.acceptanceMissing"], "需要互動：缺驗收");
 });
+
+// polyforge#79 (review r1#6): the detail's params section is pinned by
+// the e2e scenario S203-15 (polyforge-work-items-203.mjs) as BEHAVIOUR —
+// the section renders for the selected work item, reads
+// /api/polyforge/params once per open and carries the QUEUED ticket's
+// write controls. The mount regex below is an AUXILIARY source pin (the
+// list itself must keep its two GET reads and gain no fetch of its own).
+test("the list keeps its two GET reads; the detail's params section is the child component's (auxiliary to S203-15's behaviour pin)", () => {
+  assert.match(source, /<PolyforgeWorkItemParams\s+key=\{selected\}\s+wi=\{selected\}/, "the detail renders the params section for the selected work item, remounted per ticket");
+  assert.match(source, /import \{ PolyforgeWorkItemParams \} from "\.\/PolyforgeWorkItemParams";/);
+  const urls = [...source.matchAll(/fetch\((`[^`]+`|"[^"]+")/g)].map((m) => m[1]);
+  assert.deepEqual(urls, ['"/api/polyforge/work-items"', "`/api/polyforge/work-items/${encodeURIComponent(id)}`"], "the params read and write live in the child component, not here");
+});

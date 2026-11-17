@@ -45,6 +45,7 @@ probe; the section UI itself is in [settings-ui.md](settings-ui.md).
   currentStep,updatedAt,steps:[{name,status,startedAt?}],declared_steps:[{id}]|null,
   skippableSteps?:[id],overrides?:{[id]:{models?,skip?,pending?}},
   overrideView?:{wi,posture,steps:[{id,status,skippable,models?,modelsBy?,skip?,skipBy?,pending?,effective?,source?}]},
+  paramsView?:{wi,posture,steps:[{id,status,params:[{name,value,source?}]}]},
   events:[{at,kind,step?,…,question?,question_id?,by?,disposition?,intent?}],progress?:{command,command_age_sec,tool_calls,
   recent_files},origin?:{kind:"chat",owner},summary?,summary_age_sec?,
   summary_error?,summary_capped?,blocked?:{kind,step?,reason,requiredAction?},
@@ -645,12 +646,31 @@ ended — and the view read starts together with the watch read, each bounded
 by its own read timeout, never composed for a terminal answer; the panel's
 watch poll keeps at most one read in flight). The write is one action per POST (`models`,
 `clearModels`, `skip`), and the next watch poll carries the fresh row.
+polyforge#79: the controls render for EVERY selected step now, but the
+params section is the only part a started step sees — every declared
+param's final value and source from the params view the watch route
+composes beside the overlay one (`status.paramsView`, one
+`pf --json params <wi>` read per asked watch answer, the same
+`?overrides=1` opt-in, degraded to absent on any failure, never composed
+for an ended ticket; G11 keeps holding — the section fetches nothing on
+selection). The write controls — the model setter, the skip switch and a
+set/clear row per declared param (the same one-action POST face, `pf
+override --param` / `--clear-param`'s shapes) — stay an UNSTARTED step's
+only; a step that already ran or holds a live dispatch shows its params
+read-only, and the daemon's typed refusal of a write shows inline.
 Files: `components/PolyforgeStepControls.tsx` (the controls; the panel
-mounts them and passes the snapshot's row), `lib/polyforge-overrides.ts`
-(the spawn face), `app/api/polyforge/override/route.ts` (the POST write
-face), `app/api/polyforge/watch/route.ts` (the composed view), the
-skippable declaration and the `overrides` block in
-`lib/polyforge-status.ts`.
+mounts them for every selected step and passes the snapshot's rows),
+`lib/polyforge-overrides.ts` and `lib/polyforge-params.ts` (the spawn
+faces), `app/api/polyforge/override/route.ts` (the POST write face),
+`app/api/polyforge/watch/route.ts` (the composed views),
+`app/api/polyforge/params/route.ts` and
+`components/PolyforgeWorkItemParams.tsx` (the 工单详情's params section —
+one `GET /api/polyforge/params` read per open, every step's declared
+params with their final value and source; a QUEUED work item's rows carry
+the per-param set/clear controls, the surface's one write — owner ruling
+2026-11-17 — while a claimed one is read-only, its write face being the
+running job's panel), the skippable declaration, the `overrides` block,
+`overrideView` and `paramsView` in `lib/polyforge-status.ts`.
 
 - **The flow.** The selected-step progress stream (polyforge#24: the panel's
   step filter over the whole-job read; [Job detail layout and
