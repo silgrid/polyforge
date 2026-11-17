@@ -9,7 +9,8 @@
 // inside the named Cell alpha's mapped workspace, so every unscoped pf call
 // would land on alpha. The `pf` stub first on PATH answers the real pf wire
 // and resolves exactly that way (`--host` is the Host scope; `pf ops status`
-// is the Host aggregate unless `--profile` targets a Cell). The suite drives
+// is the Host aggregate unless `--profile` targets a Cell; `pf ops unclassified`
+// is Host-level only — pf refuses its `--profile` outright). The suite drives
 // the default Cell's pane — its read, a key write, the write-only api_key,
 // Reload, a rollback from the history and the workflow card's reads — and
 // asserts the exact argv the server hands to pf, that every write landed in
@@ -139,6 +140,12 @@ if (verb[0] === "ops" && verb[1] === "status") {
   const source = s.files[flagProfile || "default"];
   out({ queue: { pending: 0, running: 0, max_concurrent: 6, max_configured: 6 }, supervision: { step_timeout: source.step_timeout, stall_window: source.stall_window }, reload: { pending: [], overridden: [] }, jobs: [] });
 }
+// pf ops unclassified: Host-level only — pf refuses --profile for it (verbs_daemon.go)
+if (verb[0] === "ops" && verb[1] === "unclassified") {
+  record.cell = flagProfile || "host";
+  if (flagProfile) { done(); process.stderr.write("ops unclassified: the unclassified list is Host-level — it aggregates every Cell and takes no --profile\\n"); process.exit(2); }
+  out({ window_days: 7, items: [] });
+}
 // pf workflows reads cli.toml's mapping (the default Cell's)
 if (verb[0] === "workflows") {
   const ws = Object.keys(s.files.default.mapping).find((w) => within(w, opt("--cwd"))) ?? null;
@@ -171,6 +178,12 @@ const expectState = (args) => JSON.parse(args[args.indexOf("--expect-state") + 1
 // Every config verb the server spawns names its scope: --profile NAME or --host.
 const unscoped = () => calls().filter((call) => (isConfig(call) || call.args.includes("workflows"))
   && !(call.args[0] === "--profile" && call.args[1]) && !call.args.includes("--host"));
+// The page's Host reads, exact: `ops status` is the Host aggregate unless
+// `--profile` targets a Cell; `ops unclassified` is Host-level only (pf refuses
+// its `--profile`). An ops call outside this table is red — `ops role` is
+// Cell-scoped, so "no --profile" alone would wave an unpinned Cell-level ops
+// read through.
+const HOST_READS = [["--json", "ops", "status"], ["--json", "ops", "unclassified"]];
 
 const failures = [];
 const check = createCheck({ failures, message: joinedLines(4), record: ([label], text) => `${label}: ${text}` });
@@ -245,7 +258,8 @@ try {
     assert.ok(await mapping.count() > 0, "the default Cell's workspace mapping (acme) is not shown");
     assert.equal(await def.getByText("beta", { exact: true }).count(), 0, "alpha's mapping renders in the default Cell's pane");
     for (const call of calls().filter((entry) => entry.args.includes("ops"))) {
-      assert.deepEqual(call.args, ["--json", "ops", "status"], "ops status is a Host read: no profile");
+      assert.ok(HOST_READS.some((want) => JSON.stringify(want) === JSON.stringify(call.args)),
+        `an ops call outside the page's Host reads (no --profile): ${call.args.join(" ")}`);
     }
     assert.deepEqual(unscoped().map((call) => call.args), [], "an unscoped config verb reached pf");
   });
@@ -298,7 +312,7 @@ try {
     assert.deepEqual(stubState().reloads, ["default"]);
     const followUp = () => {
       const log = calls();
-      return log.slice(log.findIndex((call) => call.args.includes("reload")) + 1).find((call) => call.args.includes("ops")) ?? null;
+      return log.slice(log.findIndex((call) => call.args.includes("reload")) + 1).find((call) => call.args.includes("ops") && call.args.includes("status")) ?? null;
     };
     let status = followUp();
     for (const deadline = Date.now() + 20_000; !status && Date.now() < deadline; status = followUp()) await delay(100);

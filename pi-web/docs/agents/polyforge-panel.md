@@ -2480,6 +2480,8 @@ carried.
   `PF_PROFILE` or the cwd say: `pf --json ops status` (the Host aggregate,
   which starts from the default Cell's own facts — except a named Cell's
   read and reload, which read that Cell's status with `--profile NAME`),
+  `pf --json ops unclassified` (the Host region's unclassified fallback list —
+  Host-level only: pf refuses its `--profile` outright),
   `pf cell …` (its Cell positional) and `pf --json --version`. Every write's
   history entry records its scope (`profile: "default"` too).
   `e2e/w367-default-cell-pinned.mjs` runs the server with `PF_PROFILE` and
