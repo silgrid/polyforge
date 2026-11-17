@@ -135,7 +135,7 @@ func TestW79QueuedWriteRefusals(t *testing.T) {
 	// param the lane does not declare on the step, a value that is not
 	// one line
 	for _, tc := range []struct {
-		req protocol.OverrideWriteRequest
+		req  protocol.OverrideWriteRequest
 		want string
 	}{
 		{protocol.OverrideWriteRequest{Step: "nosuch", Operator: "u", Param: &protocol.OverrideParam{Name: "image", Value: "x"}}, "declares no step"},
