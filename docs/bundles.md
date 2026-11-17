@@ -185,7 +185,9 @@ and YAML path, before a claim ever meets it. The keys:
   registers is `state: landed_on_target` (never in the integrate pool's
   `landed` records). No shipped lane declares it yet (the epic lane is a
   follow-up); a parent whose lane declares none leaves the sub-ticket
-  untouched.
+  untouched. A parent bound to no lane (a registry ticket used as the
+  parent) declares nothing the same way: no target-branch file is
+  written and the claim keeps the default branch.
 - `defaults:` — `model_candidates`, the workflow-level fallback chain
   (the format and the whole precedence chain: the
   [config reference](reference/config.md)), and `tiers`.
