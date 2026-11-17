@@ -15,7 +15,7 @@ const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
 const { MemoryRowAttribution, MemoryDetailAttribution, MemoryWriterFilterSelect } = await jiti.import("./PolyforgeMemory.tsx");
 const en = await jiti.import("@/lib/i18n/messages/en");
-const t = (key) => en.enLocale[key] ?? key;
+const t = (key) => en.enLocale.messages[key] ?? key;
 const render = (component, props) => renderToStaticMarkup(React.createElement(component, props));
 const attributedHit = { id: "mem_e2eRow00001", type: "doc.note", title: "t", visibility: "project", status: "active",
   tags: [], related: [], work_item_id: null, created_at: "c", updated_at: "u", content_len: 1,
