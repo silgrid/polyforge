@@ -457,7 +457,9 @@ func (f *decisionFeed) RecordStatus(profile, wi, slug, status string) error {
 	return err
 }
 
-// RecordTask records a background task's terminal transition.
+// RecordTask records a background task's terminal transition. An
+// analysis task (Spec.AnalysisOf, polyforge#72) names the ticket it
+// served: the entry carries the id (polyforge#106).
 func (f *decisionFeed) RecordTask(profile string, t task.Task) error {
 	d, ok := watcher.TaskDecision(string(t.State))
 	if !ok {
@@ -466,7 +468,7 @@ func (f *decisionFeed) RecordTask(profile string, t task.Task) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.appendLocked(protocol.Decision{
-		Kind: protocol.DecisionTask, Profile: normProfile(profile), TaskID: t.ID,
+		Kind: protocol.DecisionTask, Profile: normProfile(profile), TaskID: t.ID, WI: t.Spec.AnalysisOf,
 		Class: d.Class, Source: d.Source, Phrase: d.Phrase, Text: t.Summary(), Attention: d.Attention,
 	})
 	return f.persistLocked()
