@@ -43,6 +43,11 @@ var pf116Wants = map[string][]string{
 		"A project skip of the step (a `skippable` it declares) wins over the declaration",
 		"The loader refuses a `rewind_only` step no gate's `[on_fail target, gate)` range covers (`WFC-112`, naming the step)",
 		"When every gate covering it is switched off for a project, the step does not run on that project's work items",
+		"A step that runs only after a rewind.",
+		"the first round's pass records it `skipped`",
+		"every later rewind that covers it again runs it once more",
+		"a switched-off step is skipped on every round, the rewind or not",
+		"a later step or gate that reads its artifacts in the first round finds none",
 	},
 	"docs/bundles.md": {
 		"A step not declaring it runs on every round of the work item",
