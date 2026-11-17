@@ -468,10 +468,16 @@ items that merged.
   `go_harness=<path>`: then that harness's directory is kept out of the
   package graph, its `*_test.go` files are skipped by the `-run` selection,
   and the engine adds `E2E_RUN='^(...)$' sh <path>` with the test names whose
-  source references a changed path. The filename is never assumed: a
+  source references a changed path and the test names of the harness
+  directory's `*_test.go` files whose `carries:` declaration covers a changed
+  path (polyforge#111 — a harness test's declaration is optional, a
+  malformed one fails closed like the carries layer's own structural
+  breaks; the names union into the one command). The filename is never
+  assumed: a
   repository that ships a `test/e2e-parallel.sh` without declaring it still
-  gets the ordinary-package behavior. The Go analyzer never reads `carries:`
-  headers: its harness selection stays the source-reference one above.
+  gets the ordinary-package behavior, and without a declared `go_harness`
+  `carries:` headers stay the comments they were: an ordinary test package's
+  are consumed by nobody.
 - **npm scoped selection and full tier.** The npm analyzer reads the scripts
   `package.json` actually declares: it reports `npm run lint` and `npm test`
   only when those scripts exist, and `tsc --noEmit` only when TypeScript is
@@ -670,7 +676,10 @@ items that merged.
 ### Carries — declaring what an e2e suite covers
 
 The npm, python and rust analyzers select e2e/acceptance suites by
-declaration, not by guessing. A suite declares the repository paths it covers
+declaration, not by guessing — and, since polyforge#111, a Go repository
+with a declared `go_harness=` selects its harness tests by the same
+declaration. A suite (and, in such a Go repository, a harness test file of
+the declared harness directory) declares the repository paths it covers
 in its **opening comment block** — the leading blank and comment lines before
 its first line of code:
 
@@ -697,7 +706,12 @@ declaration.
   imports it, transitively. The selected suites run as one `e2e_runner=`
   command (the suites appended in stable order) or, without the key, as one
   `node <suite>`, `pytest <suite>` or `cargo test --test <name>` each — after
-  the analyzer's own scoped commands.
+  the analyzer's own scoped commands. A Go repository's declared harness
+  directory has no suites: a harness test file's declaration selects that
+  file's `func Test` names into the one `E2E_RUN='^(...)$' sh <go_harness>`
+  command, beside (unioned with) the names its source references — a
+  harness test without a declaration is an ordinary harness test, and a
+  malformed declaration fails closed to `full` exactly like a suite's.
 - **At most 3 suites per path.** Each path — the declared globs expanded to
   the repository's files — is declared by at most 3 suites, so a small change
   selects a few suites rather than dozens. A shared file (the locale tables,
