@@ -72,11 +72,25 @@ package test
 //     revert;
 //   - batch 5, a breaking item landed again: full-gate puts the red triage
 //     to the owner (`pf step ask`), the owner's words say revert — the
-//     gate writes the revert into gate-decision.json and hands off fail
-//     citing the owner's reply (--per-owner: an owner-routed rewind,
-//     charged to nothing), the revert step's next round reads the item from
-//     gate-decision.json, the revert lands and the gate runs again on the
-//     revert's merge, green, in the same batch.
+//     gate writes the revert into gate-decision.json and rewinds to the
+//     revert step citing the owner's reply (`rewind --to revert
+//     --per-owner`: the gate's own FAIL would go to the repair step now;
+//     an owner-routed rewind, charged to nothing), the revert step's next
+//     round reads the item from gate-decision.json, the revert lands and
+//     the gate runs again on the revert's merge, green, in the same batch;
+//   - batch 6, a landing stales an old test (a product change the batch's
+//     repair fixes by touching only the test): the gate hands the batch
+//     back over a repair brief with a charged FAIL, the repair fixes the
+//     expectation on one branch off the pin (no ticket filed), its review
+//     passes, the revert step lands the repair PR onto main under the
+//     merge lock, the gate re-runs on the fix's merge and tags main, close
+//     moves the source to merged with the batch's fixes on record — one
+//     batch ticket, zero fix tickets (I7);
+//   - batch 7, the repair does not take: three charged repair rounds spend
+//     max_rewinds 3, the fourth red the gate puts to the owner (a FAIL not
+//     citing the owner is refused), the owner's words say close red — the
+//     remaining red is filed as a fix ticket carrying the integration_fix
+//     marker, the batch closes red (I8).
 //
 // Run (targeted): GOWORK=off go test ./test/ -run '^TestW404IntegrateLaneEndToEnd$' -count=1 -v -timeout 25m
 
@@ -140,8 +154,12 @@ exit 0
 `
 
 // w404Check is the gate's one command: green unless the tree carries a
-// file named broken (a Go-test-shaped output, so the failing unit is
-// located and its file found).
+// file named broken, or a stale-probe names a stale expectation (a
+// Go-test-shaped output either way, so the failing unit is located and
+// its file found). The probe lets one world carry both reds: a breaking
+// landing (I2) and a legitimate product change an old test no longer
+// matches (I7, I8) — the batch's repair fixes the expectation, a test
+// file, in place.
 const w404Check = `#!/bin/sh
 if [ -e broken ]; then
   echo "--- FAIL: TestBroken (0.00s)"
@@ -150,7 +168,15 @@ if [ -e broken ]; then
   echo "FAIL	example.com/demo/pkg	0.01s"
   exit 1
 fi
+if [ -e stale-probe ] && [ "$(cat code.txt)" != "$(cat tests/expected.txt)" ]; then
+  echo "--- FAIL: TestStale (0.00s)"
+  echo "    expected_test.go:1: code.txt is $(cat code.txt), the test expects $(cat tests/expected.txt)"
+  echo "FAIL"
+  echo "FAIL	example.com/demo/pkg	0.01s"
+  exit 1
+fi
 echo "--- PASS: TestBroken (0.00s)"
+echo "--- PASS: TestStale (0.00s)"
 echo "PASS"
 echo "ok  	example.com/demo/pkg	0.01s"
 `
@@ -307,7 +333,7 @@ def revert(args):
         line = '"$PF_PYTHON" "$PF_SHARED_DIR/scripts/revert.py" --batch artifacts/integrate/batch.json'
         for i in items:
             line += " --item " + i
-        run(line + " --ops-out artifacts/integrate/revert-ops.json --json --out artifacts/integrate/revert.json")
+        run(line + " --repair artifacts/integrate/repair-plan.json --ops-out artifacts/integrate/revert-ops.json --json --out artifacts/integrate/revert.json")
         r = load("revert.json")
     if r["exit_code"] != 0:
         raise SystemExit("revert.py exit %d: %s" % (r["exit_code"], r["summary"]))
@@ -341,19 +367,40 @@ def fullgate(args):
         units = ["%s %s (%s, %s)" % (u["repo"], u["unit"], u["class"], u.get("item", "")) for u in t["details"]["units"]]
         subprocess.run(["pf", "step", "ask", "The gate is red: " + "; ".join(units) + ". revert <item> / rerun / close?"], check=True)
         return
+    if "--ask-spent" in args and t["exit_code"] == 1:
+        # the lane's rewind budget is spent: a FAIL not citing the owner is
+        # refused at the call, so the gate asks (one more round, close red
+        # with the remaining reds filed as fix tickets, or cancel)
+        subprocess.run(["pf", "step", "ask", "The gate is red again and the batch's rewind budget (max_rewinds 3) is spent: one more round / close red (the remaining reds get fix tickets) / cancel?"], check=True)
+        return
+    if "--repair" in args and t["exit_code"] == 1 and all(u["class"] == "attributed" for u in t["details"]["units"]):
+        # the batch repairs its red units in place: every unit is attributed
+        # and fixable by touching only tests (the stale expectation), so no
+        # fix ticket is filed — the brief goes to the repair step and the
+        # FAIL (charged) hands the batch back to it
+        write("repair.json", {"round": round_no(), "heads": heads,
+                             "units": [{"repo": u["repo"], "unit": u["unit"], "item": u.get("item", ""),
+                                        "file": u.get("file", ""), "log": u.get("log", ""), "excerpt": u.get("excerpt", ""),
+                                        "rerun": u.get("rerun", "")} for u in t["details"]["units"] if u["class"] == "attributed"]})
+        decision("red")
+        write("full-gate-output.json", {"verdict": "fail", "fail_reason": "the batch repairs its red units in-batch (no fix ticket)", "summary": t["summary"]})
+        return
     if t["exit_code"] == 0:
         decision("green")
         write("full-gate-output.json", {"summary": t["summary"]}); return
     if t["exit_code"] != 1:
         raise SystemExit("triage exit %d: %s" % (t["exit_code"], t["summary"]))
     if decide.startswith("revert:"):
-        # the owner's revert: the decision names it, the hand-off is a fail
-        # citing the owner's reply, no hub writes (a fail drops them)
+        # the owner's revert: the decision names it, the hand-off is a
+        # rewind to the revert step citing the owner's reply (the gate's
+        # on_fail target is the repair step, so its FAIL would go there),
+        # no hub writes (the lane runs the reverts)
         wi = decide.split(":", 1)[1]
         at, words = owner_said("full-gate")
         decision("red", [wi])
-        write("full-gate-output.json", {"verdict": "fail", "fail_reason": "the owner rules %s reverted: %s" % (wi, words), "summary": t["summary"]})
-        write("full-gate-intent.json", {"kind": "one_more_round", "reply_at": at})
+        write("full-gate-output.json", {"summary": "the owner rules %s reverted: %s" % (wi, words)})
+        write("full-gate-intent.json", {"kind": "rewind", "to": "revert", "reply_at": at,
+                                        "reason": "the owner rules %s reverted" % wi})
         return
     items = {it["id"]: it for it in load("batch.json")["details"]["items"]}
     by_item = {}
@@ -395,7 +442,66 @@ def close(args):
     must("pf step hub wrap-attrs integration_batch @artifacts/integrate/integration-batch.json")
     write("close-output.json", {"summary": c["summary"]})
 
-{"collect": collect, "revert": revert, "full-gate": fullgate, "close": close}[sys.argv[1]](sys.argv[2:])
+def repair(args):
+    # the batch's own repair round: the gate's brief (no brief of this
+    # round: the lane came back over a check that is not the repair
+    # route) fixes each red unit on one branch per repo, off the pinned
+    # head, touching only tests; --bogus scripts a fix that does not
+    # take (the gate re-runs red)
+    brief = load("repair.json")
+    if not (brief and brief.get("round") == round_no()):
+        write("repair-output.json", {"summary": "no repair brief of this round: nothing to repair"}); return
+    repos = {}
+    for u in brief["units"]:
+        d = os.path.join("repos", u["repo"])
+        if u["repo"] not in repos:
+            run("git -C %s fetch origin" % d)
+            run("git -C %s checkout -q -B integrate/repair-%s %s" % (d, WI, brief["heads"][u["repo"]]))
+        expected = os.path.join(d, "tests", "expected.txt")
+        with open(expected) as f:
+            body = f.read()
+        if "--bogus" in args:
+            body = body + "# the batch's repair, round %s\n" % ROUND   # a test-only change that fixes nothing
+        else:
+            body = open(os.path.join(d, "code.txt")).read()             # the stale expectation, fixed in place
+        with open(expected, "w") as f:
+            f.write(body)
+        run("git -C %s add -- tests/expected.txt" % d)
+        run("git -C %s commit -q -m \"the batch repairs its stale test in place\"" % d)
+        r = subprocess.run(u["rerun"], shell=True, cwd=d)
+        if r.returncode != 0 and "--bogus" not in args:
+            raise SystemExit("%s: the fix did not turn the unit green" % u["rerun"])
+        e = repos.setdefault(u["repo"], {"name": u["repo"], "branch": "integrate/repair-" + WI,
+                                         "base": brief["heads"][u["repo"]], "head": "", "units": [], "items": []})
+        if u["unit"] not in e["units"]:
+            e["units"].append(u["unit"])
+        if u["item"] not in e["items"]:
+            e["items"].append(u["item"])
+    for e in repos.values():
+        e["head"] = subprocess.run("git -C %s rev-parse HEAD" % os.path.join("repos", e["name"]), shell=True, capture_output=True, text=True).stdout.strip()
+    write("repair-plan.json", {"round": round_no(), "repos": list(repos.values())})
+    write("repair-output.json", {"summary": "the batch's red units fixed on integrate/repair-%s (tests only)" % WI})
+
+def review(args):
+    # the repair's fresh judgment: the branch diff stays inside tests and
+    # docs and fixes the brief's units (the mechanical check a scripted
+    # agent makes; no plan of this round is a pass with nothing judged)
+    plan = load("repair-plan.json")
+    if not (plan and plan.get("round") == round_no()):
+        write("review-output.json", {"summary": "nothing of this round to judge"}); return
+    findings = []
+    for e in plan["repos"]:
+        d = os.path.join("repos", e["name"])
+        files = subprocess.run("git -C %s diff --name-only %s..%s" % (d, e["base"], e["head"]), shell=True, capture_output=True, text=True).stdout.split()
+        for p in files:
+            if not (p.startswith("tests/") or p.startswith("docs/")):
+                findings.append("out of the repair scope: %s" % p)
+    if findings:
+        write("review-output.json", {"verdict": "fail", "fail_reason": "; ".join(findings)})
+        return
+    write("review-output.json", {"summary": "the repair stays inside tests, every brief unit fixed: pass"})
+
+{"collect": collect, "repair": repair, "review": review, "revert": revert, "full-gate": fullgate, "close": close}[sys.argv[1]](sys.argv[2:])
 `
 
 type w404World struct {
@@ -442,6 +548,7 @@ func newW404World(t *testing.T) *w404World {
 		".polyforge/verify-scope.conf":           "stack=none\nfull_command=sh tests/check.sh\nrerun=full-1|sh tests/check.sh {unit}\n",
 		".polyforge/integrate.conf":              "append_only=docs/upgrade.md\npin=docs/upgrade.md pin.txt\n",
 		"tests/check.sh":                         w404Check,
+		"tests/expected.txt":                     "one\n",
 		"pkg/broken_test.go":                     "package pkg\n\nfunc TestBroken(t *testing.T) {}\n",
 		"docs/upgrade.md":                        up,
 		"pin.txt":                                w404Sha(up) + "\n",
@@ -655,8 +762,12 @@ func w404Action(step string, extra ...string) map[string]any {
 		"output_file": "artifacts/integrate/" + step + "-output.json", "intent_file": "artifacts/integrate/" + step + "-intent.json"}
 }
 
-// w404Plan is the four steps' plan, every decision mechanical (a green,
-// red or empty batch runs through on it).
+// w404Plan is the plan a batch whose decisions are all mechanical runs
+// on (a green, red or empty batch): the fakepi plan indexes its
+// envelope actions by spawn number, and on a batch that never rewinds
+// over them the two rewind_only steps spawn nothing — their envelopes
+// would shift every dispatch after them — so the four spawns the lane
+// makes on such a batch take exactly these four envelopes.
 func w404Plan() []map[string]any {
 	return []map[string]any{w404Action("collect"), w404Action("revert"), w404Action("full-gate"), w404Action("close")}
 }
@@ -802,9 +913,19 @@ func TestW404IntegrateLaneEndToEnd(t *testing.T) {
 			t.Fatalf("step %s done: %+v", step, st)
 		}
 	}
+	// the rewind_only pair never ran: a green batch's first round records
+	// them skipped, no dispatch of either
+	for _, step := range []string{"repair", "review"} {
+		if st := x.Steps[step]; st == nil || st.Status != "skipped" || len(st.Attempts) != 0 {
+			t.Fatalf("step %s skipped on the first round with no attempt: %+v", step, st)
+		}
+	}
 	fmt.Println("PASS I1 two landed items gated on the pinned head, green tag, records merged by registered hub writes, no PR merged by the lane")
 
-	// --- batch 2: a red gate triaged, attributed, a fix ticket filed by a hub write
+	// --- batch 2: a red gate triaged, attributed, a fix ticket filed by a hub
+	// write — the red is out of the batch's repair scope (the fix is a
+	// product change: deleting the landed `broken` file), so the gate files
+	// a ticket exactly as it did before the repair route existed
 	r, prR, _ := w.land("pr", "", map[string]string{"broken": "x\n", "pkg/broken.go": "package pkg\n"})
 	k, _, _ := w.land("pk", "", map[string]string{"code.txt": "one-k\n"})
 	main2 := strings.TrimSpace(gitRun(t, w.origin, "rev-parse", "main"))
@@ -1040,8 +1161,12 @@ func TestW404IntegrateLaneEndToEnd(t *testing.T) {
 		w404Action("collect"), w404Action("revert"),
 		// full-gate puts the red triage to the owner and ends its turn (it
 		// holds heavy admission: no warm window, the reply resumes it)
-		{"do": "envelope", "id": "full-gate", "end_turn": true, "run": []string{"w404-step full-gate --ask"}},
-		w404Action("full-gate", "--decide", "revert:"+r2),
+		{"do": "envelope", "id": "full-gate", "end_turn": true, "run": []string{"w404-step full-gate --ask"},
+			"output_file": "artifacts/integrate/full-gate-output.json", "intent_file": "artifacts/integrate/full-gate-intent.json"},
+		// the owner's revert is a rewind to the revert step citing the
+		// reply — the gate's own FAIL would go to the repair step
+		{"do": "envelope", "id": "full-gate", "outcome": "intent", "run": []string{"w404-step full-gate --decide revert:" + r2},
+			"output_file": "artifacts/integrate/full-gate-output.json", "intent_file": "artifacts/integrate/full-gate-intent.json"},
 		w404Action("revert"), w404Action("full-gate"), w404Action("close"),
 	}, nil)
 	waitUntil(t, 180*time.Second, "full-gate's ask on the red gate", func() bool { return len(v26cAwaiting(t, d.dataDir, b5)) == 1 })
@@ -1060,12 +1185,12 @@ func TestW404IntegrateLaneEndToEnd(t *testing.T) {
 	if st := x.Steps["revert"]; st == nil || st.Status != "done" {
 		t.Fatalf("the revert step done: %+v", st)
 	}
-	// the gate handed off fail citing the owner's reply (its round's
-	// message), the reason naming the item; after the revert, done
+	// the gate rewound to the revert step citing the owner's reply (its
+	// round's message), the reason naming the item; after the revert, done
 	reply := w404OwnerReply(t, capB5, "full-gate")
-	if hs := w404Handoffs(t, capB5, "full-gate"); len(hs) != 2 || hs[0].Status != stepcall.StatusFail || hs[0].PerOwner != reply.At ||
+	if hs := w404Handoffs(t, capB5, "full-gate"); len(hs) != 2 || hs[0].Status != stepcall.StatusRewind || hs[0].To != "revert" || hs[0].PerOwner != reply.At ||
 		!strings.Contains(hs[0].Reason, r2) || hs[1].Status != stepcall.StatusDone {
-		t.Fatalf("full-gate's hand-offs: the owner's revert (fail --per-owner the reply), then done: %+v (the reply %+v)", hs, reply)
+		t.Fatalf("full-gate's hand-offs: the owner's revert (rewind --to revert --per-owner the reply), then done: %+v (the reply %+v)", hs, reply)
 	}
 	// the revert step's second round read the item from the gate's
 	// decision file and reverted it (its result file and its move)
@@ -1087,8 +1212,9 @@ func TestW404IntegrateLaneEndToEnd(t *testing.T) {
 	if moves := w404Made(t, capB5, "revert", stepcall.HubAttrs); len(moves) != 1 || moves[0].Round != 2 {
 		t.Fatalf("the revert's move made in the revert step's second round: %+v", moves)
 	}
-	// the FAIL cites the owner's message in the gate's round: the rewind is
-	// the owner's, charged to no budget
+	// the rewind cites the owner's message in the gate's round: it is the
+	// owner's, charged to no budget — and the two rewind_only steps it does
+	// not cover stay skipped (the repair route was never taken)
 	rws, _ := x.RewindStats["rewinds"].([]any)
 	if len(rws) != 1 {
 		t.Fatalf("one rewind, the gate's FAIL to revert: %v", x.RewindStats)
@@ -1098,6 +1224,11 @@ func TestW404IntegrateLaneEndToEnd(t *testing.T) {
 	}
 	if st := x.Steps["full-gate"]; st == nil || st.Status != "done" {
 		t.Fatalf("full-gate done after the revert: %+v", st)
+	}
+	for _, step := range []string{"repair", "review"} {
+		if st := x.Steps[step]; st == nil || st.Status != "skipped" || len(st.Attempts) != 0 {
+			t.Fatalf("%s stays skipped: the owner's rewind to revert covers only [revert, close): %+v", step, st)
+		}
 	}
 	if rin := w.integration(t, r2); rin["state"] != "reverted" || rin["batch"] != b5 {
 		t.Fatalf("the item the owner reverted on the red gate: %v", rin)
@@ -1113,5 +1244,143 @@ func TestW404IntegrateLaneEndToEnd(t *testing.T) {
 	if rec["result"] != "green" || len(rec["reverts"].([]any)) != 1 {
 		t.Fatalf("the batch closed green with its revert on record: %v", rec)
 	}
-	fmt.Println("PASS I6 the owner's revert on a red gate: the owner-routed FAIL rewinds to revert, the revert lands and the gate runs again")
+	fmt.Println("PASS I6 the owner's revert on a red gate: the owner-routed rewind to revert, the revert lands and the gate runs again")
+
+	// --- batch 6 (I7): a landing stales an old test — the batch repairs it
+	// in place; one batch ticket, zero fix tickets, the green tag on main
+	stale, _, _ := w.land("p6", "", map[string]string{"code.txt": "two\n", "stale-probe": "x\n"})
+	main6 := strings.TrimSpace(gitRun(t, w.origin, "rev-parse", "main"))
+	b6 := w.startBatch(t, d)
+	t.Cleanup(func() { killOrphans(b6) })
+	w.inst.setPlanFull(t, b6, []map[string]any{
+		w404Action("collect"), w404Action("revert"), w404Action("full-gate", "--repair"),
+		w404Action("repair"), w404Action("review"), w404Action("revert"),
+		w404Action("full-gate"), w404Action("close"),
+	}, nil)
+	waitWorkflowStatus(t, d, b6, "completed", 600*time.Second)
+	w.inst.waitWIStatus(t, b6, "wrapped", 60*time.Second)
+	capB6 := d.capsuleDir(b6)
+	x = readExecution(t, capB6)
+	// the charged FAIL rewound to the repair step, once
+	rws, _ = x.RewindStats["rewinds"].([]any)
+	if len(rws) != 1 || fmt.Sprint(x.RewindStats["count"]) != "1" {
+		t.Fatalf("one charged rewind for the whole repair round: %v", x.RewindStats)
+	}
+	if rw := rws[0].(map[string]any); rw["gate"] != "full-gate" || rw["to_step"] != "repair" || rw["class"] != "charged" {
+		t.Fatalf("the gate's FAIL rewinds to the repair step charged (never a free extra round): %v", rw)
+	}
+	for _, step := range []string{"repair", "review"} {
+		st := x.Steps[step]
+		if st == nil || st.Status != "done" {
+			t.Fatalf("%s ran its one repair round after the rewind: %+v", step, st)
+		}
+		rewinds := 0
+		for _, a := range st.Attempts {
+			if cause, _ := a["cause"].(string); cause == "gate_fail_rewind" || cause == "superseded_by_rewind" {
+				rewinds++
+			}
+		}
+		if rewinds != 1 {
+			t.Fatalf("%s carries exactly the one rewind's archive (its own done attempt beside it): %+v", step, st.Attempts)
+		}
+	}
+	// no fix ticket: the gate filed nothing
+	if files := w404Made(t, capB6, "full-gate", stepcall.HubFile); len(files) != 0 {
+		t.Fatalf("the in-batch repair files no fix ticket: %+v", files)
+	}
+	// the repair landed: main moved onto the fix's merge and carries the
+	// fixed expectation; the green tag sits on main's head
+	mainNow := strings.TrimSpace(gitRun(t, w.origin, "rev-parse", "main"))
+	if mainNow == main6 {
+		t.Fatal("the repair PR moved main")
+	}
+	if ls := gitRun(t, w.origin, "show", mainNow+":tests/expected.txt"); strings.TrimSpace(ls) != "two" {
+		t.Fatalf("main carries the repaired expectation: %q", ls)
+	}
+	if tag := strings.TrimSpace(gitRun(t, w.origin, "tag", "--points-at", mainNow)); !strings.HasPrefix(tag, "green/") {
+		t.Fatalf("the re-run gate tags main's head: %q", tag)
+	}
+	if calls, _ := os.ReadFile(filepath.Join(w.state, "calls.log")); !strings.Contains(string(calls), "pr merge") {
+		t.Fatalf("the revert step merged the repair PR through gh: %s", calls)
+	}
+	// the source item moved to merged, covered by the green tag
+	if in := w.integration(t, stale); in["state"] != "merged" || in["batch"] != b6 {
+		t.Fatalf("the stale test's source merged with the batch that repaired it: %v", in)
+	}
+	// the batch's record: green, its fixes on it — repo, branch, PR,
+	// merge, the fixed units and the items they were attributed to
+	rec = w.record(t, b6)
+	recFixes, _ := rec["fixes"].([]any)
+	if rec["result"] != "green" || rec["fix_tickets"] != nil || len(recFixes) != 1 {
+		t.Fatalf("the repaired batch's record: %v", rec)
+	}
+	fix, _ := recFixes[0].(map[string]any)
+	if fix["repo"] != "demo" || fix["branch"] != "integrate/repair-"+b6 || fix["pr"] == "" || fix["merge"] != mainNow ||
+		fmt.Sprint(fix["units"]) != "[TestStale]" || fmt.Sprint(fix["items"]) != "["+stale+"]" {
+		t.Fatalf("the record's fixes name the repair's repo, branch, PR, merge, units and sources: %v", fix)
+	}
+	fmt.Println("PASS I7 the batch repairs a stale test in place: charged rewind, repair PR merged onto main by the revert step, gate re-run green, zero fix tickets")
+
+	// --- batch 7 (I8): the repair does not take — three charged repair
+	// rounds spend max_rewinds 3; the fourth red goes to the owner, whose
+	// red close files the fix ticket the batch did not
+	r3, _, _ := w.land("p7", "", map[string]string{"code.txt": "three\n"})
+	b7 := w.startBatch(t, d)
+	t.Cleanup(func() { killOrphans(b7) })
+	w.inst.setPlanFull(t, b7, []map[string]any{
+		w404Action("collect"), w404Action("revert"), w404Action("full-gate", "--repair"),
+		w404Action("repair", "--bogus"), w404Action("review"), w404Action("revert"), w404Action("full-gate", "--repair"),
+		w404Action("repair", "--bogus"), w404Action("review"), w404Action("revert"), w404Action("full-gate", "--repair"),
+		w404Action("repair", "--bogus"), w404Action("review"), w404Action("revert"),
+		// the spent budget: a FAIL not citing the owner is refused at the
+		// call, so the gate asks — one more round, close red, or cancel
+		{"do": "envelope", "id": "full-gate", "end_turn": true, "run": []string{"w404-step full-gate --ask-spent"},
+			"output_file": "artifacts/integrate/full-gate-output.json", "intent_file": "artifacts/integrate/full-gate-intent.json"},
+		// the owner's close red: the remaining red filed as a fix ticket
+		w404Action("full-gate"), w404Action("close"),
+	}, nil)
+	waitUntil(t, 300*time.Second, "full-gate's ask on the spent budget", func() bool { return len(v26cAwaiting(t, d.dataDir, b7)) == 1 })
+	if q, _ := v26cBody(v26cAwaiting(t, d.dataDir, b7)[0])["question"].(string); !strings.Contains(q, "one more round") || !strings.Contains(q, "close red") {
+		t.Fatalf("the spent-budget ask names the ways out: %q", q)
+	}
+	if out := d.pf(t, "answer", b7, "--text", "close red — file the ticket", "--by", "usr_root"); !strings.Contains(out, "resumes the session") {
+		t.Fatalf("pf answer: %s", out)
+	}
+	waitWorkflowStatus(t, d, b7, "completed", 600*time.Second)
+	w.inst.waitWIStatus(t, b7, "wrapped", 60*time.Second)
+	capB7 := d.capsuleDir(b7)
+	x = readExecution(t, capB7)
+	// three charged repair rounds spent the lane's one budget
+	rws, _ = x.RewindStats["rewinds"].([]any)
+	if fmt.Sprint(x.RewindStats["count"]) != "3" || len(rws) != 3 {
+		t.Fatalf("three charged repair rewinds: %v", x.RewindStats)
+	}
+	for _, raw := range rws {
+		if rw := raw.(map[string]any); rw["gate"] != "full-gate" || rw["to_step"] != "repair" || rw["class"] != "charged" {
+			t.Fatalf("every repair round rewinds the same edge charged: %v", rw)
+		}
+	}
+	// the gate asked once, and after the owner's red close filed the fix
+	// ticket the batch did not file itself
+	if hs := w404Handoffs(t, capB7, "full-gate"); len(hs) != 4 || hs[0].Status != stepcall.StatusFail || hs[1].Status != stepcall.StatusFail || hs[2].Status != stepcall.StatusFail || hs[3].Status != stepcall.StatusDone {
+		t.Fatalf("full-gate: three charged FAILs, then the owner's red close: %+v", hs)
+	}
+	rin = w.integration(t, r3)
+	b7Tickets, _ := rin["fix_tickets"].([]any)
+	if rin["state"] != "landed" || fmt.Sprint(rin["red_rounds"]) != "1" || len(b7Tickets) != 1 {
+		t.Fatalf("the remaining red is filed on its source as before: %v", rin)
+	}
+	b7Ticket, err := w.inst.client.GetWorkItem(b7Tickets[0].(string))
+	if err != nil || b7Ticket.BundleName == nil || *b7Ticket.BundleName != "develop" || b7Ticket.Priority != "high" || b7Ticket.Attrs["integration_fix"] != true ||
+		b7Ticket.Content == nil || !strings.Contains(*b7Ticket.Content, "TestStale") {
+		t.Fatalf("the red close's fix ticket: develop, high, its acceptance naming the red unit, the full-bar marker: %+v %v", b7Ticket, err)
+	}
+	rec = w.record(t, b7)
+	if rec["result"] != "red" || fmt.Sprint(rec["fix_tickets"]) != "["+b7Tickets[0].(string)+"]" {
+		t.Fatalf("the batch closes red with the ticket on record: %v", rec)
+	}
+	if tags := strings.TrimSpace(gitRun(t, w.origin, "tag", "--points-at", strings.TrimSpace(gitRun(t, w.origin, "rev-parse", "main")))); strings.HasPrefix(tags, "green/") {
+		t.Fatalf("a red batch tags nothing: %q", tags)
+	}
+	fmt.Println("PASS I8 three charged repair rounds spend max_rewinds, the spent budget goes to the owner, whose red close files the fix ticket")
 }
