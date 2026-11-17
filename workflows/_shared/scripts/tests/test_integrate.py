@@ -419,7 +419,8 @@ class CloseFixesTest(unittest.TestCase):
                               environ={"PATH": os.environ.get("PATH", ""), "PF_WI_ID": "wi_batch"})
         self.assertEqual(code, 0)
         with open(rec) as f:
-            return json.load(f)
+            out: Dict[str, Any] = json.load(f)
+            return out
 
     def test_the_landed_fixes_ride_the_record(self) -> None:
         rec = self.close([
