@@ -9,7 +9,7 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Any, List, Sequence, Tuple
+from typing import Any, Callable, List, Sequence, Tuple
 
 from . import gostr
 
@@ -108,3 +108,20 @@ def marker_matches(marker: str, lines: Sequence[str]) -> bool:
     except re.error:
         return False
     return any(r.search(ln) for ln in lines)
+
+
+def run_shape_problem(argv: Sequence[str], cwd: str, marker: str, repo_name: str,
+                      is_dir: Callable[[str], bool]) -> Tuple[str, str]:
+    """Why a recorded run cannot run as written, and its cleaned cwd
+    (stub)."""
+    return "", ""
+
+
+def unknown_repo_problem(repo: str) -> str:
+    """Why a declared run names no task repo of the capsule (stub)."""
+    return ""
+
+
+def argv_line(cwd: str, argv: Sequence[str]) -> str:
+    """The recorded run's command line, as the record reports it (stub)."""
+    return ""

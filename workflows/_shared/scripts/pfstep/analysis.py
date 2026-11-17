@@ -9,8 +9,9 @@ shows it passing, under the same marker rules as a units.json run
 (pfstep/unitruns: the one implementation, never a second copy)."""
 
 import json
+import re
 from dataclasses import dataclass, field
-from typing import Any, List
+from typing import Any, Callable, List, Optional, Sequence, Tuple
 
 from . import gostr
 from .unitruns import marker_problem
@@ -38,6 +39,17 @@ class AnalysisDecl:
         return self.repo + ":analysis:" + self.id
 
 
+def name_segments(name: str) -> Optional[List[str]]:
+    """The name's segments when it is qualified (stub)."""
+    return None
+
+
+def static_problem(d: AnalysisDecl, repo_name: str, is_dir: Callable[[str], bool],
+                   tracked: Callable[[str], bool], body_of: Callable[[str], str]) -> Tuple[str, str]:
+    """Why the entry cannot run or names no test at HEAD (stub)."""
+    return "", ""
+
+
 @dataclass
 class Analysis:
     """The analysis as the machine consumes it: the cap and the listed
@@ -45,6 +57,10 @@ class Analysis:
 
     limit: int = DEFAULT_SUPPLEMENT_LIMIT
     decls: List[AnalysisDecl] = field(default_factory=list)
+
+    def taken(self) -> Tuple[List[AnalysisDecl], List[AnalysisDecl]]:
+        """The entries the cap takes, and the cut tail (stub)."""
+        return [], []
 
 
 def _text(v: Any, what: str) -> str:
