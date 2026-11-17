@@ -806,8 +806,10 @@ following it in the engine itself (there is no plugin loader or hook):
    `gofmt`, npm lint/typecheck/unit, `python -m compileall -q`,
    `cargo build --all-targets`), replaced wholesale by any conf fast line.
 3. **Scoped.** The unit tests a static scan resolves for the diff, then the
-   carries-selected suites (the Go analyzer keeps its own harness selection).
-   When the scan cannot resolve a changed path's affected tests with
+   carries-selected suites (the Go analyzer keeps its own harness selection,
+   which consumes the harness directory's carries: declarations — the
+   [Carries](#carries--declaring-what-an-e2e-suite-covers) section). When
+   the scan cannot resolve a changed path's affected tests with
    confidence it reports `full` with a diagnostic, never a guessed narrow
    set.
 4. **Full.** The stack's whole test command (`go test ./...`, the npm scripts
