@@ -60,8 +60,8 @@ func TestPF118EpicSplitDocsContract(t *testing.T) {
 	// config paths (.polyforge/, polyforge.yaml) that are not routing
 	// targets.
 	for rel, text := range map[string]string{
-		"docs/concepts.md (the Work item term)": pf118Section(t, w68Raw(t, "docs/concepts.md"), "### Work item", "### "),
-		"docs/bundles.md (the children_branch bullet)": pf118Bullet(t, w68Raw(t, "docs/bundles.md"), "`children_branch:`"),
+		"docs/concepts.md (the Work item term)":              pf118Section(t, w68Raw(t, "docs/concepts.md"), "### Work item", "### "),
+		"docs/bundles.md (the children_branch bullet)":       pf118Bullet(t, w68Raw(t, "docs/bundles.md"), "`children_branch:`"),
 		"docs/reference/config.md (the epic_components row)": pf118Bullet(t, w68Raw(t, "docs/reference/config.md"), "`epic_components`"),
 	} {
 		for _, m := range regexp.MustCompile(`polyforge(#[0-9]+)?`).FindAllStringSubmatch(text, -1) {
