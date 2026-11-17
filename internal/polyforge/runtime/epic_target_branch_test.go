@@ -111,8 +111,13 @@ func TestEpicClaimCheckoutRecord(t *testing.T) {
 		t.Fatalf("HEAD names %q, want the epic branch epic/7", b)
 	}
 	// the re-claim keeps the fixed value after the lane's template moved
+	// (the claim path quarantines the previous scene; the fixture removes
+	// the materialized repos the same way)
 	epicLanes(t, r, "epic: true\nchildren_branch: \"moved/{seq}\"\n")
-	epicClaim(t, r, epic, item, nil)
+	if err := os.RemoveAll(filepath.Join(capDir, capsule.DirRepos)); err != nil {
+		t.Fatal(err)
+	}
+	epicClaim(t, r, epic, item, hub.repos)
 	if rec := epicRecord(t, capDir); rec["checkout"] != "epic/7" {
 		t.Fatalf("a re-claim keeps the fixed checkout, got %v", rec)
 	}
