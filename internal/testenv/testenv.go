@@ -166,8 +166,13 @@ func run(m *testing.M, atExit []func() error) (int, error) {
 		os.Setenv(k, v)
 	}
 	// Ambient daemon/connection settings must not leak in either.
-	// (GOTMPDIR too: t.TempDir() prefers it to the private TMPDIR)
-	for _, k := range []string{"PF_DAEMON_SOCKET", "PF_WI_ID", "PF_DAEMON_ID", "POLYFORGE_MACHINE_ID", "TMUX", "TMUX_PANE", "PI_CODING_AGENT_DIR", "GOTMPDIR"} {
+	// (GOTMPDIR too: t.TempDir() prefers it to the private TMPDIR. The
+	// step-process Cell facts are the same leak class: a step dispatched
+	// on a machine serving several Cells carries PF_CELL, PF_CELL_SERVER,
+	// PF_DEPLOY_ENV and PF_CELL_TARGETS — the last naming the operator's
+	// deploy configuration file — and the deploy acceptance tests must
+	// not see a serving-Cell machine the test world never built.)
+	for _, k := range []string{"PF_DAEMON_SOCKET", "PF_WI_ID", "PF_DAEMON_ID", "POLYFORGE_MACHINE_ID", "TMUX", "TMUX_PANE", "PI_CODING_AGENT_DIR", "GOTMPDIR", "PF_CELL", "PF_CELL_SERVER", "PF_DEPLOY_ENV", "PF_CELL_TARGETS"} {
 		os.Unsetenv(k)
 	}
 	code := m.Run()
