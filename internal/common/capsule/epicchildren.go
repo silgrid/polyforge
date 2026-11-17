@@ -27,12 +27,15 @@ type EpicChild struct {
 	ID     string `json:"id"`
 	Slug   string `json:"slug"`
 	Status string `json:"status"`
-	// Landing is the child's landing record as the hub carried it,
-	// verbatim — a wrapped child's landed_on_target evidence (Q6): the
-	// PR links and merge commits review reads and the epic's own landing
-	// record attaches. A child without one is JSON null (the
-	// verify-children step judges it, never the snapshot).
-	Landing json.RawMessage `json:"landing"`
+	// Wrap is the child's landing record as the hub carried it, verbatim
+	// (the JSON key stays "landing", the wire format the Python reader
+	// and the landing record's own rules share) — a wrapped child's
+	// landed_on_target evidence (Q6): the PR links and merge commits
+	// review reads and the epic's own landing record attaches. A child
+	// without one is JSON null (the verify-children step judges it,
+	// never the snapshot). The Go name stays out of the integration
+	// lane's vocabulary (workflow contract 4).
+	Wrap json.RawMessage `json:"landing"`
 }
 
 // EpicChildren is the snapshot file's shape.

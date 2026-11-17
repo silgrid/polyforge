@@ -30,7 +30,7 @@ import (
 // lane declares it too; and a non-boolean value is refused at the key.
 func TestEpicLaneKey(t *testing.T) {
 	dir := workflowtest.WriteLane(t, t.TempDir(), "demo",
-		"children_branch: \"epic/{seq}\"\nepic: true\nsteps:\n  - { id: fix }\n")
+		"children_branch: \"epic/{seq}\"\nepic: true\nresume_reset: fix\nsteps:\n  - { id: fix }\n")
 	lane, errs := workflow.Load(dir)
 	if len(errs) != 0 {
 		t.Fatalf("a lane declaring epic over children_branch loads with no defect, got %v", errs)
@@ -47,7 +47,7 @@ func TestEpicLaneKey(t *testing.T) {
 	// a user lane declares it too, over its own children_branch
 	set := workflow.ForWorkspace(t.TempDir(), t.TempDir())
 	workflowtest.WriteLane(t, set.User, "mine",
-		"children_branch: \"feature/{seq}\"\nepic: true\nsteps:\n  - { id: fix }\n")
+		"children_branch: \"feature/{seq}\"\nepic: true\nresume_reset: fix\nsteps:\n  - { id: fix }\n")
 	user, _, err := set.Load("mine")
 	if err != nil || user == nil || !user.Epic {
 		t.Fatalf("a user lane declares epic too: %v, %v", user, err)
@@ -55,7 +55,7 @@ func TestEpicLaneKey(t *testing.T) {
 	// epic does not weaken children_branch's own judgement: a defective
 	// template is refused at children_branch, exactly as without epic
 	defect := workflowtest.WriteLaneUnchecked(t, t.TempDir(), "demo",
-		"children_branch: \"epic/{n}\"\nepic: true\nsteps:\n  - { id: fix }\n")
+		"children_branch: \"epic/{n}\"\nepic: true\nresume_reset: fix\nsteps:\n  - { id: fix }\n")
 	_, errs = workflow.Load(defect)
 	if len(errs) != 1 || errs[0].Code != workflow.CodeInvalidValue || errs[0].Path != "children_branch" {
 		t.Fatalf("defects %v, want one %s at children_branch", errs, workflow.CodeInvalidValue)
@@ -137,7 +137,7 @@ func TestEpicResumeResetKey(t *testing.T) {
 // children_branch (WFC-112); `epic: false` alone stays a plain lane.
 func TestEpicLaneKeyNeedsChildrenBranch(t *testing.T) {
 	dir := workflowtest.WriteLaneUnchecked(t, t.TempDir(), "demo",
-		"epic: true\nsteps:\n  - { id: fix }\n")
+		"epic: true\nresume_reset: fix\nsteps:\n  - { id: fix }\n")
 	_, errs := workflow.Load(dir)
 	if len(errs) != 1 || errs[0].Code != workflow.CodeInvalidValue || errs[0].Path != "epic" {
 		t.Fatalf("defects %v, want one %s at epic", errs, workflow.CodeInvalidValue)

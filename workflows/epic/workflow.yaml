@@ -8,6 +8,10 @@ max_rewinds: 3
 # the lane must declare children_branch with the key (WFC-112 otherwise)
 epic: true
 children_branch: "epic/{seq}"
+# the step an owner-resumed epic's changed-children marker resets the
+# lane to: the re-sync point (the epic branch's own commits come in
+# first, then the default branch) before the lane judges again
+resume_reset: sync
 # the same uncounted moved-base class develop declares: a default branch
 # that moved past what verification ran over is not the epic's defect, so
 # its rewind (the re-sync and the re-run of everything after it) spends

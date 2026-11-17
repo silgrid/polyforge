@@ -360,6 +360,11 @@ func (l *loader) load() *Lane {
 	if n, ok := keys["epic"]; ok {
 		lane.Epic, _ = l.boolValue(file, off, n, "epic")
 	}
+	if n, ok := keys["resume_reset"]; ok {
+		if v, good := l.stringValue(file, off, n, "resume_reset"); good {
+			lane.ResumeReset = v
+		}
+	}
 	stepsNode, ok := keys["steps"]
 	if !ok {
 		l.at(CodeMissingKey, file, off, root, "steps", "the lane declares no steps")
@@ -384,10 +389,29 @@ func (l *loader) load() *Lane {
 		l.at(CodeInvalidValue, file, off, uncountedNode, "uncounted_rewinds", "no step declares on_fail, so the lane has nothing to rewind: remove uncounted_rewinds")
 	}
 	// an epic lane names the branch its own work items work on through
-	// its children_branch: the key without the template would name
-	// nothing (polyforge#117)
+	// its children_branch, and the step an owner-resumed changed-children
+	// marker resets it to through resume_reset: either key without epic
+	// names nothing, and epic without either is refused (polyforge#117)
 	if lane.Epic && lane.ChildrenBranch == "" {
 		l.at(CodeInvalidValue, file, off, keys["epic"], "epic", "an epic lane's own work items work on the children branch, so the lane must declare children_branch too")
+	}
+	if lane.Epic && lane.ResumeReset == "" {
+		l.at(CodeInvalidValue, file, off, keys["epic"], "epic", "an owner-resumed epic's changed-children marker resets the lane to a step, so the lane must declare resume_reset too")
+	}
+	if !lane.Epic && lane.ResumeReset != "" {
+		l.at(CodeInvalidValue, file, off, keys["resume_reset"], "resume_reset", "the lane declares no epic: no changed-children marker of its work items ever resets it, so resume_reset names nothing")
+	}
+	if lane.ResumeReset != "" {
+		found := false
+		for _, s := range lane.Steps {
+			if s.ID == lane.ResumeReset {
+				found = true
+				break
+			}
+		}
+		if !found {
+			l.at(CodeInvalidValue, file, off, keys["resume_reset"], "resume_reset", "%q is not a step of this lane", lane.ResumeReset)
+		}
 	}
 	l.modelTiers(file, off, lane)
 	l.definitions(lane)

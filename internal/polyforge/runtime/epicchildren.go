@@ -33,11 +33,12 @@ import (
 	"github.com/silgrid/polyforge/internal/common/capsule"
 )
 
-// childLandingAttr is the hub attrs key a wrapped child's landing record
+// childWrapAttr is the hub attrs key a wrapped child's landing record
 // lives under: the snapshot copies the record VERBATIM (the key is the
 // record's data-format name, written by the merge step's wrap-attrs and
-// read back by the landing record's own rules).
-const childLandingAttr = "integration"
+// read back by the landing record's own rules). The Go name stays out of
+// the integration lane's vocabulary (workflow contract 4).
+const childWrapAttr = "integration"
 
 // writeEpicChildren snapshots j's children when the capsule is an epic's
 // (its target-branch record carries a checkout key and no target): the
@@ -80,7 +81,19 @@ func (r *Runtime) writeEpicChildren(j *job) error {
 	if existing == nil {
 		return nil // the first claim: nothing was reviewed yet, nothing re-runs
 	}
-	marker, err := json.Marshal(capsule.EpicResume{ResetFrom: "sync", SnapshotVersion: next.Version})
+	// the reset step is the lane's own declaration (resume_reset,
+	// required with epic): the Go code names no step id (workflow
+	// contract ⑥), the marker carries the declaration's value
+	lane, lerr := r.readLane(j.project, j.bundleName)
+	switch {
+	case lerr != nil:
+		return epicChildrenErr(j, "the item's own lane %s does not load: %v", j.bundleName, lerr)
+	case lane == nil:
+		return epicChildrenErr(j, "the item's own lane %s is not in this daemon's lane set, so its resume_reset cannot be read", j.bundleName)
+	case lane.ResumeReset == "":
+		return epicChildrenErr(j, "the item's own lane %s declares no resume_reset step for the changed-children marker", j.bundleName)
+	}
+	marker, err := json.Marshal(capsule.EpicResume{ResetFrom: lane.ResumeReset, SnapshotVersion: next.Version})
 	if err != nil {
 		return epicChildrenErr(j, "%s cannot be written: %v", capsule.EpicResumeJSON, err)
 	}
@@ -99,9 +112,9 @@ func snapshotChildren(items []api.WorkItem) []capsule.EpicChild {
 	for _, wi := range sorted {
 		c := capsule.EpicChild{ID: wi.ID, Slug: wi.Slug, Status: wi.Status}
 		if wi.Attrs != nil {
-			if landing, ok := wi.Attrs[childLandingAttr]; ok && landing != nil {
-				if raw, err := json.Marshal(landing); err == nil {
-					c.Landing = raw
+			if wrap, ok := wi.Attrs[childWrapAttr]; ok && wrap != nil {
+				if raw, err := json.Marshal(wrap); err == nil {
+					c.Wrap = raw
 				}
 			}
 		}
@@ -121,17 +134,17 @@ func sameChildren(have capsule.EpicChildren, next capsule.EpicChildren) bool {
 	for i := range have.Children {
 		a, b := have.Children[i], next.Children[i]
 		if a.ID != b.ID || a.Slug != b.Slug || a.Status != b.Status ||
-			landingKey(a.Landing) != landingKey(b.Landing) {
+			wrapKey(a.Wrap) != wrapKey(b.Wrap) {
 			return false
 		}
 	}
 	return true
 }
 
-// landingKey answers the landing record's comparison key: the raw JSON
-// with an absent one (nil or the null literal) normalized to the one
-// empty spelling.
-func landingKey(raw []byte) string {
+// wrapKey answers the child's wrap record's comparison key: the raw
+// JSON with an absent one (nil or the null literal) normalized to the
+// one empty spelling.
+func wrapKey(raw []byte) string {
 	s := string(raw)
 	if s == "" || s == "null" {
 		return ""

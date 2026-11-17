@@ -101,6 +101,9 @@ func TestEpicLaneContract(t *testing.T) {
 	if !lane.Epic || lane.ChildrenBranch != "epic/{seq}" {
 		t.Fatalf("the epic lane declares its capability: epic %v children_branch %q", lane.Epic, lane.ChildrenBranch)
 	}
+	if lane.ResumeReset != "sync" {
+		t.Fatalf("the epic lane declares the step its changed-children marker resets to: resume_reset %q, want sync", lane.ResumeReset)
+	}
 	if wf.MaxRewinds != 3 {
 		t.Fatalf("the epic lane's rewind budget is 3, got %d", wf.MaxRewinds)
 	}

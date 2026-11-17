@@ -483,7 +483,8 @@ driver re-checks it against aihub before every dispatch, and a changed
 child parks the workflow blocked — the daemon asks nothing. A re-claim
 over changed children writes the next snapshot version beside
 `runtime-state/epic-resume.json`, which the driver lands as one
-owner-class rewind to sync (charged to no budget), so the affected
+owner-class rewind to the step the lane's `resume_reset` names (the
+epic lane names its sync step; charged to no budget), so the affected
 steps re-run over a tree that first takes the changed set's commits on
 the epic branch in (the epic's sync merges its own checkout branch
 before the default branch). The hub's work-item list gained a `parent` filter

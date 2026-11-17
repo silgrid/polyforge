@@ -54,7 +54,7 @@ func epicReadSnapshot(t *testing.T, capDir string) (epicSnapChildren, []byte) {
 func TestEpicClaimSnapshot(t *testing.T) {
 	hub := newFakeHub()
 	r, _, _ := newWorkspaceTestRuntime(t, hub, "proj")
-	epicLanes(t, r, "epic: true\nchildren_branch: \"epic/{seq}\"\n")
+	epicLanes(t, r, "epic: true\nchildren_branch: \"epic/{seq}\"\nresume_reset: sync\n")
 	const epic = "wi_epic3"
 	landing := map[string]any{"state": "landed_on_target", "target": "epic/3",
 		"repos": []any{map[string]any{"repo": "app", "pr": "https://example/pr/11"}}}
@@ -74,8 +74,8 @@ func TestEpicClaimSnapshot(t *testing.T) {
 		t.Fatalf("the children sort by seq, the first is c1: %+v", snap.Children[0])
 	}
 	var landingBack map[string]any
-	if err := json.Unmarshal(snap.Children[0].Landing, &landingBack); err != nil {
-		t.Fatalf("the landing record is the hub's verbatim: %v (%s)", err, snap.Children[0].Landing)
+	if err := json.Unmarshal(snap.Children[0].Wrap, &landingBack); err != nil {
+		t.Fatalf("the landing record is the hub's verbatim: %v (%s)", err, snap.Children[0].Wrap)
 	}
 	if landingBack["state"] != "landed_on_target" || landingBack["target"] != "epic/3" {
 		t.Fatalf("the landing record is the hub's verbatim: %v", landingBack)

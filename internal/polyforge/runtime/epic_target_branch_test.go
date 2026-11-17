@@ -78,7 +78,7 @@ func epicRecord(t *testing.T, capDir string) map[string]any {
 func TestEpicClaimCheckoutRecord(t *testing.T) {
 	hub := newFakeHub()
 	r, ws, _ := newWorkspaceTestRuntime(t, hub, "proj")
-	epicLanes(t, r, "epic: true\nchildren_branch: \"epic/{seq}\"\n")
+	epicLanes(t, r, "epic: true\nchildren_branch: \"epic/{seq}\"\nresume_reset: sync\n")
 	// the remote: main at one commit, epic/7 at another (the children
 	// landed on it)
 	src := filepath.Join(ws, ".repo", "app")
@@ -113,7 +113,7 @@ func TestEpicClaimCheckoutRecord(t *testing.T) {
 	// the re-claim keeps the fixed value after the lane's template moved
 	// (the claim path quarantines the previous scene; the fixture removes
 	// the materialized repos the same way)
-	epicLanes(t, r, "epic: true\nchildren_branch: \"moved/{seq}\"\n")
+	epicLanes(t, r, "epic: true\nchildren_branch: \"moved/{seq}\"\nresume_reset: sync\n")
 	if err := os.RemoveAll(filepath.Join(capDir, capsule.DirRepos)); err != nil {
 		t.Fatal(err)
 	}
