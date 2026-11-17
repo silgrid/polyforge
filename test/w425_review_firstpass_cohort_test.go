@@ -19,6 +19,7 @@ package test
 // which must not swallow a later counted one.
 
 import (
+	"encoding/csv"
 	"fmt"
 	"os"
 	"os/exec"
@@ -31,8 +32,8 @@ import (
 type w425CohortCap struct {
 	name, lane, created string
 	plan                string            // artifacts/plan.md; "" = none
-	results             map[string]string // "<step>/s<n>" → result.json (old protocol)
 	units               string            // artifacts/build/units.json; "" = none
+	results             map[string]string // "<step>/s<n>" → result.json (old protocol)
 	handoff             string            // artifacts/handoff.md; "" = none
 }
 
