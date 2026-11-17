@@ -123,3 +123,24 @@ test("a resumed alias session's get_state resolves the window through one on-dem
     await resumed.shutdown();
   }
 });
+
+// #108 (AC2): claude refuses to answer the probe — a claude not logged in, say — and
+// the meter answers null. The one attempt is spent with it: the next read re-pulls
+// nothing (the stub log's probe count stays).
+test("a refused probe leaves get_state null, the one attempt spent", async () => {
+  process.env.PI_TEST_CLAUDE_STUB_MODE = "replay";
+  process.env.PI_TEST_CLAUDE_STUB_PROBE_MODE = "refuse";
+  try {
+    coldCache();
+    const record = await newRecord({ model: "haiku" });
+    const session = claude.startClaudeSession(record);
+    const before = probes().length;
+    assert.equal((await session.send({ type: "get_state" })).contextUsage, null);
+    assert.equal(probes().length - before, 1, "the one on-demand probe");
+    assert.equal((await session.send({ type: "get_state" })).contextUsage, null, "the attempt is spent: null again");
+    assert.equal(probes().length - before, 1, "no re-pull on the next read");
+    await session.shutdown();
+  } finally {
+    delete process.env.PI_TEST_CLAUDE_STUB_PROBE_MODE;
+  }
+});
