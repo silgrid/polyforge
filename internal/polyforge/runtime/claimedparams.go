@@ -132,7 +132,7 @@ func claimedStepParams(params map[string]map[string]StepParamAttr, j *job) map[s
 			if entries[step].Params == nil {
 				entries[step].Params = map[string]*capsule.ParamOverride{}
 			}
-			entries[step].Params[name] = &capsule.ParamOverride{Value: entry.Value, By: StepParamsClaimedBy, At: nowStamp()}
+			entries[step].Params[name] = &capsule.ParamOverride{Value: entry.Value, By: StepParamsClaimedBy, At: at}
 		}
 	}
 	return entries
