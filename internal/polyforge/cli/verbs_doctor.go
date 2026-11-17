@@ -113,6 +113,7 @@ const (
 type doctorRun struct {
 	cell, profile, cellPath string
 	cfg                     Config
+	anyMapped               bool     // any Cell of the machine carries a mapping (the mapping row's verdict)
 	present, missing        []string // mapped workspaces that exist as directories / do not
 	prune                   bool     // --prune-scratch
 	pruneCapsules           bool     // --prune-capsules
@@ -441,9 +442,18 @@ func runDoctorChecks(ctx *Context, pruneScratch, pruneCapsules, fixPrompts bool)
 	if where == "" {
 		where = DefaultConfigPath()
 	}
+	// the mapping row judges the whole machine: any Cell with a mapping
+	// (the Host file's, or a valid named Cell's) keeps a mapping-less
+	// Cell a warn — the same fact `pf daemon ensure` gates on (Q2=c)
+	anyMapped := !set.Host.Mapping.Empty()
+	for _, cc := range set.Cells {
+		if cc.Invalid == "" && !cc.Cfg.Mapping.Empty() {
+			anyMapped = true
+		}
+	}
 	checks := []doctorCheck{{Name: docChConfig, Cell: cellcfg.DefaultProfile, Status: "pass", Detail: "loaded from " + where}}
 
-	r := &doctorRun{cell: cellcfg.DefaultProfile, cellPath: where, cfg: cfg, prune: pruneScratch, pruneCapsules: pruneCapsules, fixPrompts: fixPrompts}
+	r := &doctorRun{cell: cellcfg.DefaultProfile, cellPath: where, cfg: cfg, anyMapped: anyMapped, prune: pruneScratch, pruneCapsules: pruneCapsules, fixPrompts: fixPrompts}
 	for _, ws := range cfg.Mapping.Workspaces() {
 		if st, err := os.Stat(ws); err == nil && st.IsDir() {
 			r.present = append(r.present, ws)
@@ -492,7 +502,7 @@ func runDoctorChecks(ctx *Context, pruneScratch, pruneCapsules, fixPrompts bool)
 			sections = append(sections, sec)
 			continue
 		}
-		rr := &doctorRun{cell: cc.Profile, profile: cc.Profile, cellPath: cc.Path, cfg: cc.Cfg,
+		rr := &doctorRun{cell: cc.Profile, profile: cc.Profile, cellPath: cc.Path, cfg: cc.Cfg, anyMapped: anyMapped,
 			prune: pruneScratch, pruneCapsules: pruneCapsules, fixPrompts: fixPrompts}
 		for _, ws := range cc.Cfg.Mapping.Workspaces() {
 			if st, err := os.Stat(ws); err == nil && st.IsDir() {
@@ -525,10 +535,18 @@ func runDoctorChecks(ctx *Context, pruneScratch, pruneCapsules, fixPrompts bool)
 }
 
 // mappingCheck runs the SHARED mapping/workspace validator (the same one
-// daemon startup and `pf config` use) and fails the fresh-template shape
-// (zero [workspace] sections) with the shape guidance.
+// daemon startup and `pf config` use) and judges the mapping row
+// machine-wide (polyforge#20, Q2=c): a Cell without a mapping warns —
+// its execution plane is closed, and another Cell's mapping keeps
+// `pf daemon ensure` starting — while any Cell of the machine has one;
+// a machine whose every Cell lacks a mapping fails with the
+// fresh-template shape guidance, exactly as before (and as `pf daemon
+// ensure` refuses).
 func mappingCheck(r *doctorRun) (string, string) {
 	if err := ValidateMappingForDaemon(r.cfg); err != nil {
+		if r.cfg.Mapping.Empty() && r.anyMapped {
+			return "warn", "no [workspace] mapping in this Cell — its execution plane is closed (the daemon serves its data plane only); another Cell of this machine has a mapping, so `pf daemon ensure` still starts — add one with `pf config set '[workspace.\"<path>\"]' projects=...` to open it"
+		}
 		return "fail", err.Error() + "; " + extensionsPointer
 	}
 	return "pass", fmt.Sprintf("%d workspace(s) mapping %d project(s)", len(r.cfg.Mapping.Workspaces()), len(r.cfg.Mapping.Projects()))
