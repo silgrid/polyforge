@@ -13,6 +13,7 @@ import unittest
 from typing import Any, Dict, Tuple
 
 import verify
+from pfstep.engine import TIER_LIGHT
 
 from .verifyfix import (
     HAVE_BASH,
@@ -146,7 +147,7 @@ class TiersTest(unittest.TestCase):
             with self.subTest(body):
                 with open(os.path.join(d, "runtime-state", "target-branch.json"), "w", encoding="utf-8") as f:
                     f.write(body)
-                self.assertEqual(verify.resolve_tier(d, "auto"), (verify.TIER_LIGHT, ""), body)
+                self.assertEqual(verify.resolve_tier(d, "auto"), (TIER_LIGHT, ""), body)
 
 
 if __name__ == "__main__":

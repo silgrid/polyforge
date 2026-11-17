@@ -270,8 +270,8 @@ def base_ref(capsule_dir: str, directory: str) -> Tuple[str, str]:
         return "", str(err)
     if target:
         ref = "refs/remotes/origin/" + target
-        _, err = run_git(directory, "rev-parse", "--verify", "-q", ref)
-        if err is not None:
+        _, missing = run_git(directory, "rev-parse", "--verify", "-q", ref)
+        if missing is not None:
             return "", ("origin has no branch %s — the capsule's fixed target branch is missing on origin" % target)
         return ref, ""
     ref = origin_default_ref(directory)
