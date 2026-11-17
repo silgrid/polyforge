@@ -85,20 +85,20 @@ def _gate_lines(conf: bytes) -> List[bytes]:
     return out
 
 
-def hashed_text(conf: bytes, dockerfile: bytes) -> bytes:
+def hashed_text(conf: bytes, dockerfile: bytes, image: str = "") -> bytes:
     """The exact bytes the id hashes (tools/gate-id --show's output)."""
     d = hashlib.sha256(dockerfile).hexdigest().encode("ascii")
     return b"".join([HEADER + b"\n", b"dockerfile " + d + b"\n"] + _gate_lines(conf))
 
 
-def show(directory: str, commit: str, environ: Optional[Mapping[str, str]] = None) -> bytes:
+def show(directory: str, commit: str, environ: Optional[Mapping[str, str]] = None, image: str = "") -> bytes:
     """The exact bytes the gate id of commit (a rev, resolved in the clone
     at directory) hashes, both files read from that commit's tree; raises
     GateIdError naming why it could not."""
     sha = _commit(directory, commit, environ)
-    return hashed_text(_blob(directory, sha, CONF, environ), _blob(directory, sha, DOCKERFILE, environ))
+    return hashed_text(_blob(directory, sha, CONF, environ), _blob(directory, sha, DOCKERFILE, environ), image)
 
 
-def gate_id(directory: str, commit: str, environ: Optional[Mapping[str, str]] = None) -> str:
+def gate_id(directory: str, commit: str, environ: Optional[Mapping[str, str]] = None, image: str = "") -> str:
     """The gate id of commit: the sha256 of show's bytes (64 hex)."""
-    return hashlib.sha256(show(directory, commit, environ)).hexdigest()
+    return hashlib.sha256(show(directory, commit, environ, image)).hexdigest()
