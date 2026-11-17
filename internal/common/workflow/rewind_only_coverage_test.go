@@ -19,10 +19,10 @@ import (
 func TestRewindOnlyCoverage(t *testing.T) {
 	// covered: every shape the range takes
 	for name, front := range map[string]string{
-		"the on_fail target itself": "max_rewinds: 1\nsteps:\n  - id: build\n    rewind_only: true\n  - id: check\n    gate: true\n    on_fail: { target: build }\n",
-		"a step between target and gate": "max_rewinds: 1\nsteps:\n  - id: build\n  - id: fix\n    rewind_only: true\n  - id: check\n    gate: true\n    on_fail: { target: build }\n",
+		"the on_fail target itself":              "max_rewinds: 1\nsteps:\n  - id: build\n    rewind_only: true\n  - id: check\n    gate: true\n    on_fail: { target: build }\n",
+		"a step between target and gate":         "max_rewinds: 1\nsteps:\n  - id: build\n  - id: fix\n    rewind_only: true\n  - id: check\n    gate: true\n    on_fail: { target: build }\n",
 		"a gate covered by a later gate's range": "max_rewinds: 1\nsteps:\n  - id: build\n  - id: check-a\n    gate: true\n    rewind_only: true\n    on_fail: { target: build }\n  - id: check-b\n    gate: true\n    on_fail: { target: build }\n",
-		"either of two gates covers it": "max_rewinds: 1\nsteps:\n  - id: build\n  - id: fix\n    rewind_only: true\n  - id: check-b\n    gate: true\n    on_fail: { target: build }\n  - id: check-a\n    gate: true\n    on_fail: { target: fix }\n",
+		"either of two gates covers it":          "max_rewinds: 1\nsteps:\n  - id: build\n  - id: fix\n    rewind_only: true\n  - id: check-b\n    gate: true\n    on_fail: { target: build }\n  - id: check-a\n    gate: true\n    on_fail: { target: fix }\n",
 	} {
 		lane, errs := workflow.Load(workflowtest.WriteLane(t, t.TempDir(), "demo", front))
 		if len(errs) > 0 || lane == nil {
@@ -35,9 +35,9 @@ func TestRewindOnlyCoverage(t *testing.T) {
 		front  string
 		stepID string
 	}{
-		"a step after the last gate": {"max_rewinds: 1\nsteps:\n  - id: build\n  - id: check\n    gate: true\n    on_fail: { target: build }\n  - id: tail\n    rewind_only: true\n", "tail"},
-		"a step before every target": {"max_rewinds: 1\nsteps:\n  - id: pre\n    rewind_only: true\n  - id: build\n  - id: check\n    gate: true\n    on_fail: { target: build }\n", "pre"},
-		"a lane without any gate": {"steps:\n  - id: x\n    rewind_only: true\n", "x"},
+		"a step after the last gate":  {"max_rewinds: 1\nsteps:\n  - id: build\n  - id: check\n    gate: true\n    on_fail: { target: build }\n  - id: tail\n    rewind_only: true\n", "tail"},
+		"a step before every target":  {"max_rewinds: 1\nsteps:\n  - id: pre\n    rewind_only: true\n  - id: build\n  - id: check\n    gate: true\n    on_fail: { target: build }\n", "pre"},
+		"a lane without any gate":     {"steps:\n  - id: x\n    rewind_only: true\n", "x"},
 		"a gate nothing later covers": {"max_rewinds: 1\nsteps:\n  - id: build\n  - id: check-a\n    gate: true\n    rewind_only: true\n    on_fail: { target: build }\n", "check-a"},
 	} {
 		_, errs := workflow.Load(workflowtest.WriteLaneUnchecked(t, t.TempDir(), "demo", tc.front))
