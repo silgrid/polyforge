@@ -1315,8 +1315,10 @@ func (m *WIManager) List(f ListFilters) ([]WIView, error) {
 		q += ` AND w.bundle_name=?`
 		args = append(args, f.Bundle)
 	}
-	// polyforge#117 u8's red round: the parent filter's SQL is off for
-	// one commit (restored by the revert right after)
+	if f.Parent != "" {
+		q += ` AND w.parent_id=?`
+		args = append(args, f.Parent)
+	}
 	for _, a := range f.Attrs {
 		q += ` AND json_extract(w.attrs, ?)=?`
 		args = append(args, jsonPath(a.Path), a.Value)

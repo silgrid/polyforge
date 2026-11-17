@@ -688,6 +688,7 @@ func (s *Server) hListWIs(w http.ResponseWriter, r *http.Request, idn *identity)
 	}
 	items, err := s.WIs.List(core.ListFilters{
 		Project:          q.Get("project"),
+		Parent:           q.Get("parent"),
 		Status:           q.Get("status"),
 		Assignee:         q.Get("assignee"),
 		Priority:         q.Get("priority"),
