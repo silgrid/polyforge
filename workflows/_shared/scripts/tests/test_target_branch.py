@@ -485,7 +485,8 @@ class EngineTargetTest(GitCase):
         p = subprocess.run([sys.executable, self.ENGINE, "--json", *flags], cwd=cwd, env=env,
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.assertEqual(p.returncode, 0, p.stderr.decode())
-        return json.loads(p.stdout.decode("utf-8", "replace"))
+        rep: Dict[str, Any] = json.loads(p.stdout.decode("utf-8", "replace"))
+        return rep
 
     def test_the_step_capsules_target_is_the_default_base(self) -> None:
         b0, r = self.repo_with()
