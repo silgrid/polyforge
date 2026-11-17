@@ -438,7 +438,7 @@ def red_heads_of(heads: Dict[str, str], attrs: Mapping[str, Any]) -> Dict[str, s
 def read_pool(lister: HubLister, lane: str) -> Dict[str, Any]:
     """The project's integration pool, the batches being lane's. A fix
     ticket's merge_commits come from the one decode,
-    rules.merge_commits_of: an entry that is neither polyforge#36's
+    pfstep.integration.merge_commits_of: an entry that is neither polyforge#36's
     {sha, merge} object nor a pre-#36 bare string voids the record's
     merge_commits whole (an empty string is skipped) — a malformed
     record names no landed commit, never its valid entries one by one
