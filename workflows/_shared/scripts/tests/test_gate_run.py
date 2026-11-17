@@ -501,7 +501,7 @@ class PreparedImageGateTest(unittest.TestCase):
         self.assertFalse(res["passed"])
         failed = [c for c in res["commands"] if c["exit"] != 0]
         self.assertEqual(len(failed), 1, res["commands"])
-        self.assertEqual((failed[0]["exit"], failed[0]["not_run"]), (3, False))
+        self.assertEqual((failed[0]["exit"], failed[0].get("not_run", False)), (3, False))
         self.assertEqual(res.get("image_digest"), IMAGE_ID)
 
     def test_the_triage_opens_the_prepared_image_too(self) -> None:
