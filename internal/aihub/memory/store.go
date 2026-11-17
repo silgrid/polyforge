@@ -25,22 +25,28 @@ import (
 // and by callers that send none. The writer is server-side metadata —
 // the stored document's frontmatter never carries it.
 type Entry struct {
-	ID            string          `json:"id"`
-	ProjectID     string          `json:"project_id"`
-	OwnerUserID   string          `json:"owner_user_id"`
-	WorkItemID    *string         `json:"work_item_id"`
-	Type          string          `json:"type"`
-	Title         *string         `json:"title"`
-	Visibility    string          `json:"visibility"`
-	ContentSHA    string          `json:"content_sha"`
-	ContentLen    int64           `json:"content_len"`
-	Tags          []string        `json:"tags"`
-	Related       []string        `json:"related"`
-	Status        string          `json:"status"`
-	CreatedAt     string          `json:"created_at"`
-	UpdatedAt     string          `json:"updated_at"`
-	WriterKind    *string         `json:"writer_kind"`
-	WriterDetails json.RawMessage `json:"writer_details"`
+	ID          string `json:"id"`
+	ProjectID   string `json:"project_id"`
+	OwnerUserID string `json:"owner_user_id"`
+	// OwnerDisplayName is the owner's display name joined live from the
+	// users table (polyforge#107, Q3): an admin rename shows on the next
+	// read — no snapshot is stored. owner_user_id is NOT NULL with a
+	// users reference and no users row is ever deleted, so the join
+	// always finds its row.
+	OwnerDisplayName string          `json:"owner_display_name"`
+	WorkItemID       *string         `json:"work_item_id"`
+	Type             string          `json:"type"`
+	Title            *string         `json:"title"`
+	Visibility       string          `json:"visibility"`
+	ContentSHA       string          `json:"content_sha"`
+	ContentLen       int64           `json:"content_len"`
+	Tags             []string        `json:"tags"`
+	Related          []string        `json:"related"`
+	Status           string          `json:"status"`
+	CreatedAt        string          `json:"created_at"`
+	UpdatedAt        string          `json:"updated_at"`
+	WriterKind       *string         `json:"writer_kind"`
+	WriterDetails    json.RawMessage `json:"writer_details"`
 }
 
 // Store is the memory subsystem.
@@ -275,10 +281,11 @@ func (s *Store) load(memID string) (*Entry, error) {
 	var e Entry
 	var wi, title, writerKind, writerDetails sql.NullString
 	var tags, related string
-	err := s.db.QueryRow(`SELECT id, project_id, owner_user_id, work_item_id, type, title, visibility,
-		content_sha, content_len, tags, related, status, created_at, updated_at, writer_kind, writer_details
-		FROM memories WHERE id=?1 AND content IS NOT NULL`, memID).
-		Scan(&e.ID, &e.ProjectID, &e.OwnerUserID, &wi, &e.Type, &title, &e.Visibility,
+	err := s.db.QueryRow(`SELECT m.id, m.project_id, m.owner_user_id, u.display_name, m.work_item_id, m.type,
+		m.title, m.visibility, m.content_sha, m.content_len, m.tags, m.related, m.status, m.created_at, m.updated_at,
+		m.writer_kind, m.writer_details
+		FROM memories m JOIN users u ON u.id = m.owner_user_id WHERE m.id=?1 AND m.content IS NOT NULL`, memID).
+		Scan(&e.ID, &e.ProjectID, &e.OwnerUserID, &e.OwnerDisplayName, &wi, &e.Type, &title, &e.Visibility,
 			&e.ContentSHA, &e.ContentLen, &tags, &related, &e.Status, &e.CreatedAt, &e.UpdatedAt,
 			&writerKind, &writerDetails)
 	if errors.Is(err, sql.ErrNoRows) {

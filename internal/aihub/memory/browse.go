@@ -141,10 +141,10 @@ func (s *Store) Browse(projects []string, sort, after, memType, writerKind strin
 }
 
 // browseSelect is the candidate row's column set (scanBrowseRow's order).
-const browseSelect = `SELECT m.rowid, m.id, m.project_id, m.owner_user_id, m.work_item_id, m.type, m.title,
-		m.visibility, m.content_sha, m.content_len, m.tags, m.related, m.status, m.created_at, m.updated_at,
+const browseSelect = `SELECT m.rowid, m.id, m.project_id, m.owner_user_id, u.display_name, m.work_item_id, m.type,
+		m.title, m.visibility, m.content_sha, m.content_len, m.tags, m.related, m.status, m.created_at, m.updated_at,
 		m.writer_kind, m.writer_details
-		FROM memories m`
+		FROM memories m JOIN users u ON u.id = m.owner_user_id`
 
 // browseFilter is the browse narrowing shared by the page and the total:
 // active entries with content, the readable projects (nil = every
@@ -231,7 +231,7 @@ func scanBrowseRow(scan browseScanner) (*Entry, int64, error) {
 	var rowid int64
 	var wi, title, writerKind, writerDetails sql.NullString
 	var tags, related string
-	if err := scan.Scan(&rowid, &e.ID, &e.ProjectID, &e.OwnerUserID, &wi, &e.Type, &title, &e.Visibility,
+	if err := scan.Scan(&rowid, &e.ID, &e.ProjectID, &e.OwnerUserID, &e.OwnerDisplayName, &wi, &e.Type, &title, &e.Visibility,
 		&e.ContentSHA, &e.ContentLen, &tags, &related, &e.Status, &e.CreatedAt, &e.UpdatedAt,
 		&writerKind, &writerDetails); err != nil {
 		return nil, 0, err
