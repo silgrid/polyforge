@@ -469,6 +469,27 @@ class FactsTargetTest(GitCase):
         self.assertTrue(v["in_bounds"], v)
         self.assertEqual(v["repos"][0]["base"], sibling, v["repos"][0])
 
+    def test_e2e_carries_judge_from_the_targets_base(self) -> None:
+        repos_dir, r = self.world()
+        # a sibling's commit on the target branch added an undeclared e2e
+        # suite; this change's commit comes after it: judged from the
+        # target's base the suite is not this build's, from the default
+        # branch's it would be reported
+        r.commit("base files", {
+            "web/.polyforge/verify-scope.conf": "stack=npm\n",
+            "web/package.json": '{"scripts":{"test:e2e:all":"node e2e/all.mjs"}}\n',
+            "web/lib/panel.ts": "export const panel = 1;\n"})
+        r.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        sibling = r.commit("the sibling lands on the target", {"web/e2e/panel.mjs": 'import "node:assert";\n'})
+        r.git("update-ref", "refs/remotes/origin/epic/1", sibling)
+        r.commit("mine", {"web/lib/panel.ts": "export const panel = 2;\n"})
+        fix_target_dir(self.tmp)
+        self.assertEqual(facts.Repo(repos_dir, "app").check_e2e_carries(False, []), [])
+        os.remove(os.path.join(self.tmp, "runtime-state", targetbranch.FILE))
+        problems = facts.Repo(repos_dir, "app").check_e2e_carries(False, [])
+        self.assertTrue(problems, "SYMPTOM: the default branch's base reports the sibling's suite")
+        self.assertIn("declares no `carries:`", problems[0], problems[0])
+
     def test_a_target_that_cannot_be_named_is_an_error_naming_why(self) -> None:
         repos_dir, r = self.world()
         r.commit("mine", {"docs/mine.txt": "m\n"})
@@ -553,3 +574,65 @@ class EngineTargetTest(GitCase):
         self.assertEqual(rep["default_branch"], "", rep)
         rep = self.run_engine(r.dir)  # outside a step the file is not read at all
         self.assertEqual(rep["default_branch"], "main", rep)
+
+
+@unittest.skipUnless(HAVE_GIT, "git not installed")
+class FactsCliTargetTest(GitCase):
+    """facts.py's judged kinds at the CLI on a capsule whose fixed target
+    branch cannot name the change base: carries and micro-bounds answer
+    not judged (exit 2, the reason named) — never a findings verdict (exit
+    1) over a stand-in default branch; a capsule without a target keeps
+    its own judgment."""
+
+    def capsule(self, target_body: str) -> Tuple[str, str]:
+        """A capsule with one repo and the fixed target branch file; answers
+        (the capsule root, the repo directory) — a fresh directory per
+        call (a shared one would leave nothing new to commit)."""
+        cap = self.new_dir("capsule-%d" % len(os.listdir(self.tmp)))
+        d = os.path.join(cap, "repos", "app")
+        r = Repo(d, {"base.txt": "base\n"})
+        r.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        r.commit("mine", {"docs/mine.txt": "m\n"})
+        write(os.path.join(cap, "runtime-state"), targetbranch.FILE, target_body)
+        with open(os.path.join(cap, "capsule.json"), "w", encoding="utf-8") as f:
+            f.write(json.dumps({"work_item_id": "wi_sub", "capsule_id": "cap_sub", "project": "app",
+                                "bundle_name": "develop", "repos": {"app": r.head()}, "created_at": "2026-11-17T00:00:00Z"}))
+        return cap, d
+
+    def run_facts(self, kind: str, cap: str, *args: str) -> Tuple[int, Dict[str, Any]]:
+        out = os.path.join(self.tmp, kind + ".json")
+        argv = [sys.executable, os.path.join(SCRIPTS, "facts.py"), kind, "--capsule", cap,
+                "--json", "--out", out, *args]
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_", "PF_"))}
+        p = subprocess.run(argv, cwd=self.tmp, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        res: Dict[str, Any] = {}
+        if os.path.exists(out):
+            with open(out, encoding="utf-8") as f:
+                res = json.load(f)
+        return p.returncode, res
+
+    def test_carries_is_not_judged_over_a_target_it_cannot_name(self) -> None:
+        for body, want in [("{not json", "not valid JSON"),
+                           (json.dumps({"target": "epic/9", "parent": "epic#1"}), "origin has no branch epic/9")]:
+            with self.subTest(want):
+                cap, _ = self.capsule(body)
+                code, res = self.run_facts("carries", cap)
+                self.assertEqual(code, 2, res.get("summary"))
+                self.assertIn("not judged", res.get("summary", ""), res.get("summary", ""))
+                self.assertIn(want, res.get("summary", ""), res.get("summary", ""))
+        # a capsule whose target names a base is judged as before
+        cap, _ = self.capsule(json.dumps({"target": "main", "parent": "epic#1"}))
+        code, res = self.run_facts("carries", cap)
+        self.assertEqual(code, 0, res.get("summary"))
+
+    def test_micro_bounds_is_not_judged_over_a_target_it_cannot_name(self) -> None:
+        plan = os.path.join(self.tmp, "plan.json")
+        with open(plan, "w", encoding="utf-8") as f:
+            f.write(json.dumps([{"repo": "app", "line": "echo fast-ok"}]))
+        for body, want in [("{not json", "not valid JSON"),
+                           (json.dumps({"target": "epic/9", "parent": "epic#1"}), "origin has no branch epic/9")]:
+            with self.subTest(want):
+                cap, _ = self.capsule(body)
+                code, res = self.run_facts("micro-bounds", cap, "--plan", plan)
+                self.assertEqual(code, 2, res.get("summary"))
+                self.assertIn(want, res.get("summary", ""), res.get("summary", ""))
