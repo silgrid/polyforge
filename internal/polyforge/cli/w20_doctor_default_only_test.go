@@ -12,6 +12,7 @@ package cli
 // filesystem) are pinned through the package's test seams.
 
 import (
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -160,14 +161,48 @@ func TestW20DoctorDefaultOnly(t *testing.T) {
 		t.Fatalf("doctor: exit %d (stderr %s)", code, stderr)
 	}
 	_, jout, _ := runPf(t, env, "--json", "doctor")
-	// strict form (the test commit): the whole report byte for byte,
-	// human and JSON, against the pre-change tree's output
-	wantHuman := strings.ReplaceAll(w20GoldenHuman, w20GoldenRoot, base)
+	// the report of old with the two deltas the ticket itself mandates:
+	// AC4 moves the retention row's git root into the Cell dir
+	// (<data>/git → <data>/cells/default/git), AC1 adds the cell field to
+	// the Cell-level JSON rows — everything else is byte for byte
+	wantHuman := strings.ReplaceAll(strings.ReplaceAll(w20GoldenHuman, w20GoldenRoot, base),
+		filepath.Join(base, "data", "git"), filepath.Join(base, "data", "cells", "default", "git"))
 	if human != wantHuman {
 		t.Fatalf("the human output drifted from the pre-change report:\n--- want ---\n%s\n--- got ---\n%s", wantHuman, human)
 	}
-	wantJSON := strings.ReplaceAll(w20GoldenJSON, w20GoldenRoot, base)
-	if jout != wantJSON {
-		t.Fatalf("the JSON output drifted from the pre-change report:\n--- want ---\n%s\n--- got ---\n%s", wantJSON, jout)
+	var gotDoc, wantDoc w20Doc
+	if err := json.Unmarshal([]byte(jout), &gotDoc); err != nil {
+		t.Fatalf("doctor --json: %v (%s)", err, jout)
+	}
+	if err := json.Unmarshal([]byte(strings.ReplaceAll(strings.ReplaceAll(w20GoldenJSON, w20GoldenRoot, base),
+		filepath.Join(base, "data", "git"), filepath.Join(base, "data", "cells", "default", "git"))), &wantDoc); err != nil {
+		t.Fatalf("the golden JSON does not parse: %v", err)
+	}
+	if len(gotDoc.Checks) != len(wantDoc.Checks) {
+		t.Fatalf("row count %d, want %d", len(gotDoc.Checks), len(wantDoc.Checks))
+	}
+	hostRows := map[string]bool{"prerequisites": true, "python3": true, "null device": true, "audit tools": true,
+		"daemon socket": true, "daemon supervision": true, "retired env": true, "harness diagram guidance": true,
+		docChClaudeStatusline: true, docChPiPackage: true, docChClaudeLayout: true, docChPiLayout: true,
+		docChV1Leftovers: true, docChRetiredChat: true}
+	for i, got := range gotDoc.Checks {
+		want := wantDoc.Checks[i]
+		if got.Name != want.Name || got.Status != want.Status || got.Detail != want.Detail {
+			t.Fatalf("row %d drifted: got %+v, want %+v", i, got, want)
+		}
+		// the one added field: the Cell-level rows name their Cell; the
+		// Host-level rows carry nothing
+		if hostRows[got.Name] {
+			if got.Cell != "" {
+				t.Fatalf("Host-level row %q carries cell %q", got.Name, got.Cell)
+			}
+			continue
+		}
+		if got.Cell != "default" {
+			t.Fatalf("Cell-level row %q carries cell %q, want \"default\"", got.Name, got.Cell)
+		}
+	}
+	if !gotDoc.OK || !wantDoc.OK {
+		t.Fatalf("ok drifted: got %t want %t", gotDoc.OK, wantDoc.OK)
 	}
 }
