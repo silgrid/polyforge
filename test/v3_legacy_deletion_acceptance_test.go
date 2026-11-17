@@ -83,7 +83,7 @@ func v3SpecFloorTerms() []string {
 		v3Tok("jobs/{wi}/", "observe"),                // the retired observe route
 		v3Tok("Start", "Intent"),                      // the retired start-intent plumbing
 		v3Tok("sync", "Transcript", "Before", "Seal"), // the job-level seal-time transcript overwrite
-		v3Tok("pending", "-", "results"),       // the retired result-envelope drop directory (polyforge#12: hand-offs moved to the step-call ledger)
+		v3Tok("pending", "-", "results"),              // the retired result-envelope drop directory (polyforge#12: hand-offs moved to the step-call ledger)
 	}
 }
 
