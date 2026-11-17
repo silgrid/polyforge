@@ -107,6 +107,7 @@ func TestW36StepModesFrozenAtFirstClaim(t *testing.T) {
 	// succeeds and the file carries it, the refusal still only for a
 	// step the lane carries
 	workflowtest.WriteLane(t, lanes, "demo-pool", "steps:\n  - { id: collect }\n  - { id: close }\n")
+	writeWorkspaceYaml(t, ws, "steps:\n  proj:\n    merge: { by: human }\n")
 	capPool, err := w36Claim(t, r, "wi_w36pool", "demo-pool")
 	if err != nil {
 		t.Fatalf("a by on a step the lane does not carry must not refuse the claim: %v", err)
