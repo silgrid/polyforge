@@ -347,7 +347,7 @@ def time_group_line(label, metrics):
             spans.append((e - c).total_seconds())
         except ValueError:
             continue
-    med = f'median {fmt_mins(statistics.median(spans))}' if spans else 'median N/A (0 merged)'
+    med = f'median {fmt_mins(statistics.median(spans))}' if spans else 'median N/A'
     nmerged = len(merged)
     notmerged = len(metrics) - nmerged
     l1 = (f'  proxy execution time: {att}s measurable, {rework}; '
