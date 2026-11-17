@@ -25,7 +25,13 @@ package daemon
 //     and records canceled / completed / failed, or resolves the entry
 //     when the work item runs again (`pf cancel` and a resume elsewhere
 //     never pass through this daemon);
-//   - a background task's terminal transition (task.Config.OnTerminal).
+//   - a background task's terminal transition (task.Config.OnTerminal):
+//     failed, capped or interrupted still count as needing the owner, but
+//     the entry names the ticket a daemon-scheduled analysis served and
+//     auto-resolves once it is no longer needed — a later terminal of the
+//     same ticket (a rerun that completed ends the story), the ticket's
+//     end or confirmed analysis read at aihub by the reconcile loop below,
+//     or the entry simply aging past three days (polyforge#106).
 //
 // <host-data-dir>/decisions.json holds the entries (newest
 // decisionFeedMax, none older than decisionFeedMaxAge), written atomically
@@ -40,6 +46,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -50,6 +57,7 @@ import (
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/common/atomicfile"
 	"github.com/silgrid/polyforge/internal/common/protocol"
+	"github.com/silgrid/polyforge/internal/common/workflow"
 	"github.com/silgrid/polyforge/internal/polyforge/cellcfg"
 	"github.com/silgrid/polyforge/internal/polyforge/driver"
 	"github.com/silgrid/polyforge/internal/polyforge/observe"
@@ -63,6 +71,10 @@ const (
 	decisionFeedMax        = 300
 	decisionFeedMaxAge     = 14 * 24 * time.Hour
 	decisionReconcileEvery = time.Minute
+	// decisionTaskMaxAge is the age bound of an open task entry
+	// (polyforge#106): past it the entry resolves — however the task
+	// ended and whatever Cell it belonged to, a removed one included.
+	decisionTaskMaxAge = 3 * 24 * time.Hour
 	// The driver's events of a step's accepted result (transition.go
 	// emitLocked): a completed step, a gate's verdict, an incomplete step.
 	evStepDone    = "step_done"
@@ -457,19 +469,81 @@ func (f *decisionFeed) RecordStatus(profile, wi, slug, status string) error {
 	return err
 }
 
-// RecordTask records a background task's terminal transition.
+// RecordTask records a background task's terminal transition. An
+// analysis task (Spec.AnalysisOf, polyforge#72) names the ticket it
+// served: the entry carries the id (polyforge#106), and a later terminal
+// of the same ticket resolves its earlier open task entries — a rerun
+// that completed ends the story, a newer failure stands in for the older
+// one; at most one open entry of the ticket per Cell.
 func (f *decisionFeed) RecordTask(profile string, t task.Task) error {
 	d, ok := watcher.TaskDecision(string(t.State))
 	if !ok {
 		return nil
 	}
+	profile = normProfile(profile)
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if t.Spec.AnalysisOf != "" {
+		f.resolveTaskTicketLocked(profile, t.Spec.AnalysisOf)
+	}
 	f.appendLocked(protocol.Decision{
-		Kind: protocol.DecisionTask, Profile: normProfile(profile), TaskID: t.ID,
+		Kind: protocol.DecisionTask, Profile: profile, TaskID: t.ID, WI: t.Spec.AnalysisOf,
 		Class: d.Class, Source: d.Source, Phrase: d.Phrase, Text: t.Summary(), Attention: d.Attention,
 	})
 	return f.persistLocked()
+}
+
+// resolveTaskTicketLocked marks the profile's unresolved task entries of
+// ticket wi resolved, reporting a change (the caller persists): the
+// ticket's own story moved on — the rerun completed, a newer terminal
+// stands in for the older ones, or the reconcile learned the ticket ended.
+// Another Cell's entries of the same ticket are that Cell's.
+func (f *decisionFeed) resolveTaskTicketLocked(profile, wi string) bool {
+	changed := false
+	for i := range f.doc.Entries {
+		e := &f.doc.Entries[i]
+		if e.Kind != protocol.DecisionTask || e.Profile != profile || e.WI != wi || e.Resolved {
+			continue
+		}
+		e.Resolved = true
+		changed = true
+	}
+	return changed
+}
+
+// resolveTaskTicket resolves the profile's open task entries of ticket wi
+// and persists on a change — the reconcile loop's close.
+func (f *decisionFeed) resolveTaskTicket(profile, wi string) error {
+	profile = normProfile(profile)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.resolveTaskTicketLocked(profile, wi) {
+		return nil
+	}
+	return f.persistLocked()
+}
+
+// taskTicketsFor answers the Cell's open task entries' ticket ids, sorted
+// and unique — the reconcile loop's task set, its own set beside trackedFor
+// (a task's ticket is never a tracked work item).
+func (f *decisionFeed) taskTicketsFor(profile string) []string {
+	profile = normProfile(profile)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	seen := map[string]bool{}
+	for i := len(f.doc.Entries) - 1; i >= 0; i-- {
+		e := f.doc.Entries[i]
+		if e.Kind != protocol.DecisionTask || e.Profile != profile || e.WI == "" || seen[e.WI] {
+			continue
+		}
+		seen[e.WI] = true
+		if e.Open() {
+			out = append(out, e.WI)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // List answers the feed newest first with its open count.
@@ -605,11 +679,48 @@ func (d *Daemon) recordTask(t task.Task) {
 	}
 }
 
+// expireTaskEntries resolves open task entries older than
+// decisionTaskMaxAge and persists on a change — every Cell's alike (a
+// removed Cell's entries too: no daemon of theirs re-reads a ticket),
+// and no hub is read: time alone decides. Work item entries never age
+// out here (their rules are the work item's own).
+func (f *decisionFeed) expireTaskEntries() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cut := f.now().Add(-decisionTaskMaxAge)
+	changed := false
+	for i := range f.doc.Entries {
+		e := &f.doc.Entries[i]
+		if e.Kind != protocol.DecisionTask || !e.Open() {
+			continue
+		}
+		if at, err := time.Parse(time.RFC3339, e.At); err == nil && at.Before(cut) {
+			e.Resolved = true
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return f.persistLocked()
+}
+
 // reconcileDecisions re-reads the aihub status of this Cell's tracked
 // work items (an unresolved blocked or paused state with no running local
-// job): a final status is recorded, a work item that runs again resolves.
+// job) and of its open task entries' tickets: a final status is recorded
+// (a work item) or resolves the ticket's entries (a task), and a work item
+// that runs again resolves.
 func (d *Daemon) reconcileDecisions() {
-	if d.feed == nil || d.hub == nil {
+	if d.feed == nil {
+		return
+	}
+	// the task entries' age bound runs first, on every Cell's loop alike:
+	// it is Host-level and reads no hub, so a removed Cell's stale entries
+	// close wherever a daemon still serves the Host's feed
+	if err := d.feed.expireTaskEntries(); err != nil {
+		fmt.Fprintf(os.Stderr, "daemon: decision feed: task entries: %v\n", err)
+	}
+	if d.hub == nil {
 		return
 	}
 	for _, wi := range d.feed.trackedFor(d.profile()) {
@@ -627,6 +738,38 @@ func (d *Daemon) reconcileDecisions() {
 		} else {
 			// queued, running: the work item moves again
 			_ = d.feed.resolve(d.profile(), wi, nil)
+		}
+	}
+	// the Cell's open task entries' tickets: an entry the ticket no longer
+	// needs resolves — the ticket ended for good (or is gone), whatever its
+	// Cell recorded; anything else (queued, running, blocked, a CORE-403, a
+	// hub that cannot answer) keeps the entry for the next round
+	for _, wi := range d.feed.taskTicketsFor(d.profile()) {
+		item, err := d.hub.GetWorkItem(wi)
+		if err != nil {
+			var ae *api.Error
+			if errors.As(err, &ae) && ae.Code == api.ErrCoreNotFound {
+				_ = d.feed.resolveTaskTicket(d.profile(), wi) // the ticket is gone
+			}
+			continue
+		}
+		if item == nil {
+			continue
+		}
+		if s, ok := watcher.StatusDecision(item.Status); ok && s.Final {
+			_ = d.feed.resolveTaskTicket(d.profile(), wi)
+			continue
+		}
+		// a confirmed analysis — content in the section and no unconfirmed
+		// marker (confirmed, human-written or the owner's 「免分析」); a
+		// half-written draft the task itself left still carries the marker
+		// and keeps the entry open (the confirmation is the owner's word)
+		content := ""
+		if item.Content != nil {
+			content = *item.Content
+		}
+		if workflow.HasAnalysis(content) && !workflow.AnalysisUnconfirmed(content) {
+			_ = d.feed.resolveTaskTicket(d.profile(), wi)
 		}
 	}
 }
