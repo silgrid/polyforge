@@ -5,6 +5,8 @@ none for a record an earlier round already moved, a refusal for one the
 rules do not move. (The reverts themselves run against git and a fake gh
 in internal/polyforge/stepscripts.)"""
 
+import json
+import os
 import unittest
 from typing import Any, Dict
 
@@ -61,3 +63,60 @@ class RevertWritesTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RepairPlanTest(unittest.TestCase):
+    """revert.py's --repair input (the repair step's plan file): a missing
+    file is a step that never ran (no fix), a malformed one is refused
+    naming the entry, and a fix whose blamed item a revert of the same
+    run carries is not landed."""
+
+    def write(self, doc: Any) -> str:
+        import tempfile
+        fd, path = tempfile.mkstemp(suffix=".json")
+        with os.fdopen(fd, "w") as f:
+            json.dump(doc, f)
+        return path
+
+    def test_a_missing_file_is_a_step_that_never_ran(self) -> None:
+        self.assertEqual(revert.read_repair("no-such-repair-plan.json"), [])
+
+    def test_the_plan_reads(self) -> None:
+        p = self.write({"round": 1, "repos": [{"name": "app", "branch": "integrate/repair-b",
+                                               "base": "pin", "head": "head", "units": ["TestStale"], "items": ["wi_src"]}]})
+        fixes = revert.read_repair(p)
+        self.assertEqual(len(fixes), 1)
+        f = fixes[0]
+        self.assertEqual((f.name, f.branch, f.base, f.head, f.units, f.items, f.pr, f.merge, f.why),
+                         ("app", "integrate/repair-b", "pin", "head", ["TestStale"], ["wi_src"], "", "", ""))
+
+    def test_a_malformed_plan_is_refused(self) -> None:
+        for name, doc in (
+            ("not an object", []),
+            ("no repos", {"round": 1}),
+            ("repos not a list", {"round": 1, "repos": {}}),
+            ("an entry not an object", {"round": 1, "repos": ["app"]}),
+            ("no name", {"round": 1, "repos": [{"branch": "b", "units": ["u"], "items": ["wi"]}]}),
+            ("no branch", {"round": 1, "repos": [{"name": "app", "units": ["u"], "items": ["wi"]}]}),
+            ("no units", {"round": 1, "repos": [{"name": "app", "branch": "b", "items": ["wi"]}]}),
+            ("no items", {"round": 1, "repos": [{"name": "app", "branch": "b", "units": ["u"]}]}),
+            ("a repo twice", {"round": 1, "repos": [{"name": "app", "branch": "b", "units": ["u"], "items": ["wi"]},
+                                                    {"name": "app", "branch": "b2", "units": ["u"], "items": ["wi"]}]}),
+            ("not JSON", "not json"),
+        ):
+            with self.subTest(name):
+                if name == "not JSON":
+                    import tempfile
+                    fd, path = tempfile.mkstemp(suffix=".json")
+                    with os.fdopen(fd, "w") as f:
+                        f.write("not json")
+                else:
+                    path = self.write(doc)
+                with self.assertRaises(revert._Bad):
+                    revert.read_repair(path)
+
+    def test_a_fix_of_a_reverted_item_is_blamed(self) -> None:
+        f = revert.FixRepo(name="app", branch="b", units=["u"], items=["wi_src", "wi_2"])
+        self.assertTrue(revert.fix_blamed(f, {"wi_src"}))
+        self.assertFalse(revert.fix_blamed(f, {"wi_other"}))
+        self.assertFalse(revert.fix_blamed(f, set()))
