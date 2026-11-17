@@ -686,10 +686,10 @@ func TestW107StepWriterStamp(t *testing.T) {
 		}
 	}
 
-	// A trusted dispatch whose candidate is empty: the empty model is
-	// stored (Q4's nullable rule), not refused and not invented. A fresh
-	// work item, so the idempotency key does not collide with the first
-	// summary above.
+	// A trusted dispatch whose candidate is empty: the model is stored
+	// as JSON null (Q4's 可空约定, r1#11), not refused and not invented.
+	// A fresh work item, so the idempotency key does not collide with the
+	// first summary above.
 	td2 := stepDaemon(t, "wi_ws2")
 	w119WriteExecution(t, td2, "wi_ws2", capsule.StepInProgress, 2, "")
 	mh2 := &memHub{}
@@ -701,8 +701,8 @@ func TestW107StepWriterStamp(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("empty-candidate store = %d %s", code, body)
 	}
-	if d, _ := mh2.posts[0]["writer_details"].(map[string]any); d["model"] != "" {
-		t.Fatalf("empty candidate must store an empty model: %v", mh2.posts[0]["writer_details"])
+	if d, _ := mh2.posts[0]["writer_details"].(map[string]any); d["model"] != nil {
+		t.Fatalf("empty candidate must store a null model: %v", mh2.posts[0]["writer_details"])
 	}
 
 	// The step's search face takes no writer filter: the call args are

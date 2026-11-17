@@ -218,12 +218,18 @@ func jsonEscape(t *testing.T, s string) string {
 // carries the author and the writer. author: the server's display name,
 // falling back to the stable owner id when it names none (a pre-#107
 // aihub), "-" when neither rides; writer: the writer kind with its
-// valued details rendered k=v (sorted keys), "-" on a row written
-// before the writer columns existed.
+// VALUED details rendered k=v (sorted keys) — a detail whose value is
+// null or the empty string is not listed at all (Q2: 有值的细节), and a
+// detail object with no valued key renders the kind alone — "-" on a
+// row written before the writer columns existed.
 func TestW107ShowWriterLines(t *testing.T) {
 	const stepRow = `{"id":"mem_w1","type":"experience.wrap","title":"proj#1: did it",` +
 		`"owner_user_id":"usr_1","owner_display_name":"Ada Lovelace",` +
 		`"writer_kind":"step","writer_details":{"work_item":"wi_9","step":"build","attempt":1,"model":"pi:glm-5.3"},` +
+		`"visibility":"project","content_len":4,"updated_at":"2026-11-18T00:00:00Z"}`
+	const sparseRow = `{"id":"mem_w4","type":"experience.wrap","title":"proj#2: sparse",` +
+		`"owner_user_id":"usr_4","owner_display_name":"Grace",` +
+		`"writer_kind":"step","writer_details":{"work_item":"wi_9","step":"build","attempt":2,"model":"","note":null},` +
 		`"visibility":"project","content_len":4,"updated_at":"2026-11-18T00:00:00Z"}`
 	const sessionRow = `{"id":"mem_w2","type":"fact.note","owner_user_id":"usr_2",` +
 		`"owner_display_name":"","writer_kind":"session",` +
@@ -244,6 +250,8 @@ func TestW107ShowWriterLines(t *testing.T) {
 			io.WriteString(w, sessionRow)
 		case "/api/v1/memories/mem_w3":
 			io.WriteString(w, oldRow)
+		case "/api/v1/memories/mem_w4":
+			io.WriteString(w, sparseRow)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 			io.WriteString(w, `{"code":"MEM-404","detail":"no such memory"}`)
@@ -282,5 +290,17 @@ func TestW107ShowWriterLines(t *testing.T) {
 		if !strings.Contains(stdout, want+"\n") {
 			t.Errorf("pre-writer row missing %q:\n%s", want, stdout)
 		}
+	}
+	// Q2 (r1#2): only VALUED details are listed — the empty-string model
+	// (Q4's nullable shape) and a null detail are not printed at all.
+	code, stdout, stderr = runPf(t, env, "memory", "show", "mem_w4")
+	if code != 0 {
+		t.Fatalf("sparse-details row: code=%d stderr=%s", code, stderr)
+	}
+	if want := "writer: step (attempt=2, step=build, work_item=wi_9)\n"; !strings.Contains(stdout, want) {
+		t.Errorf("sparse-details row missing %q:\n%s", want, stdout)
+	}
+	if strings.Contains(stdout, "model=") || strings.Contains(stdout, "note=") {
+		t.Errorf("unvalued details must not be listed:\n%s", stdout)
 	}
 }
