@@ -188,6 +188,13 @@ func (d *Daemon) overrideView(wi string, item *api.WorkItem) (*protocol.Override
 	if err != nil {
 		return nil, err
 	}
+	// polyforge#79: a queued work item owns no capsule here — its overlay
+	// view composes from this machine's lane set and the attrs key
+	// (review r1#7: the capsule paths below would read the daemon's own
+	// current directory).
+	if scene.posture == runtime.OverridePostureQueued {
+		return d.queuedOverrideView(wi, item, scene)
+	}
 	wf, err := scene.laneGraph()
 	if err != nil {
 		return nil, err

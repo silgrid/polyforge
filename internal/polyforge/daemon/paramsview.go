@@ -83,6 +83,47 @@ func (d *Daemon) paramsView(wi string, item *api.WorkItem) (*protocol.ParamsView
 	return out, nil
 }
 
+// queuedOverrideView answers a queued work item's OVERLAY view (the
+// GET /jobs/{wi}/overrides face, polyforge#79): the lane from this
+// machine's set, the reserved step_params attrs key as the overlay layer
+// (By=step_params), and the model sources below it. The models and skip
+// aspects never ride the key — they are the claimed ticket's — so the
+// rows carry no overlay of them (review r1#7: the unbranched path read
+// the daemon's own current directory).
+func (d *Daemon) queuedOverrideView(wi string, item *api.WorkItem, scene *overrideScene) (*protocol.OverrideView, error) {
+	if scene.bundle == "" {
+		return nil, &api.Error{Code: api.ErrDaemonConflict,
+			Detail: fmt.Sprintf("%s names no bundle: its overlay is composed from its lane, and the lane is the bundle it will run", wi)}
+	}
+	lane := d.laneOf(item.ProjectName, scene.bundle)
+	if lane == nil {
+		return nil, &api.Error{Code: api.ErrDaemonConflict,
+			Detail: fmt.Sprintf("the lane %s of %s does not load on this daemon — a queued work item's overlay is composed from its lane (the step declarations); it loads on a machine whose lane set has it", scene.bundle, item.ProjectName)}
+	}
+	cfg, _ := d.rt.LoadWorkspace(item.ProjectName)
+	sources := workspace.StepModelSources(lane, cfg, item.ProjectName, nil)
+	ov := capsule.StepOverrides{Steps: map[string]*capsule.StepOverride{}}
+	for step, params := range runtime.StepParamsOfAttrs(item.Attrs) {
+		e := &capsule.StepOverride{Params: map[string]*capsule.ParamOverride{}}
+		for name, value := range params {
+			e.Params[name] = &capsule.ParamOverride{Value: value, By: runtime.StepParamsClaimedBy}
+		}
+		ov.Steps[step] = e
+	}
+	out := &protocol.OverrideView{WorkItem: wi, Posture: scene.posture, Steps: []protocol.OverrideStepView{}}
+	for _, s := range lane.Steps {
+		row := protocol.OverrideStepView{ID: s.ID, Skippable: s.Skippable}
+		if e := ov.Steps[s.ID]; e != nil {
+			fillRow(&row, e)
+		}
+		if src, ok := sources[s.ID]; ok {
+			row.Effective, row.Source = src.Models, src.Source
+		}
+		out.Steps = append(out.Steps, row)
+	}
+	return out, nil
+}
+
 // queuedParamsView composes a queued work item's face: this machine's
 // lane set, the project's yaml and the reserved step_params attrs key.
 func (d *Daemon) queuedParamsView(wi string, item *api.WorkItem, scene *overrideScene) (*protocol.ParamsView, error) {

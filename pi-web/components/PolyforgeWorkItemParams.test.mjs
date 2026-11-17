@@ -122,17 +122,31 @@ test("a queued ticket's declared params carry the set and clear controls; a succ
   done();
 });
 
-test("a refused write shows the daemon's words inline; a refused read degrades to the error line, never a throw", async () => {
+test("the claim race rides the 200 answer's note and shows (AC3); a refused write and a refused read degrade to their own line, never a throw", async () => {
   const { hook, calls, answer, done } = setup();
   await answer(0, 200, { params: QUEUED_VIEW });
   nodes(hook).find((n) => n.type === "button" && n.props["data-pf-wi-param-clear"] === "image" && n.props["data-pf-wi-param-step"] === "review").props.onClick();
   await settle();
-  calls[1].resolve(409, { ok: false, error: "DAEMON-409: the work item was claimed while the write landed (its status is running) and this change did not reach its capsule: set the param on the running ticket again" });
+  // the daemon's REAL shape (review r1#9): the race is a success answer
+  // whose note names it — never a 409
+  calls[1].resolve(200, { ok: true, result: { wi: "wi_Q79", changed: true, posture: "running", published: false,
+    note: "the work item was claimed while the write landed (its status is running) and this change did not reach its capsule: set the param on the running ticket again",
+    step: { id: "review", status: "pending", skippable: false } } });
+  await settle();
+  hook.flush();
+  const note = nodes(hook).find((n) => "data-pf-wi-params-note" in (n.props ?? {}));
+  assert.ok(note, "the note line renders");
+  assert.match(textOf(note), /set the param on the running ticket again/);
+  assert.ok(!nodes(hook).some((n) => "data-pf-wi-params-error" in (n.props ?? {})), "a note is not an error line");
+  // a genuine refusal (an undeclared name) keeps the error line
+  nodes(hook).find((n) => n.type === "button" && n.props["data-pf-wi-param-set"] === "image" && n.props["data-pf-wi-param-step"] === "build").props.onClick();
+  await settle();
+  calls[3].resolve(409, { ok: false, error: 'DAEMON-400: the lane declares no step param "nosuch" on step review: a param is set only where the lane declares it' });
   await settle();
   hook.flush();
   const error = nodes(hook).find((n) => "data-pf-wi-params-error" in (n.props ?? {}));
   assert.ok(error, "the refusal line renders");
-  assert.match(textOf(error), /set the param on the running ticket again/);
+  assert.match(textOf(error), /declares no step param/);
   // a refused read degrades too
   const second = setup("wi_X79");
   await second.answer(0, 200, { params: null, error: "DAEMON-409: the lane no-such does not load on this daemon" });

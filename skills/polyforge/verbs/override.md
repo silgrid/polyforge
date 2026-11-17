@@ -142,7 +142,7 @@ for a param —, the new value, the operator).
 | `DAEMON-400` | a pi model the Cell's step-agent `models.json` does not declare | Add the model there first (the operator agent dir's `models.json`), then retry; claude candidates are not file-checked. |
 | `DAEMON-409` | the step holds a live dispatch, already ran, is not declared skippable, or is skipped at the project level (`--unskip` refused naming it) | Set it on a step that has not started, or while the ticket is parked; for a gate that must pass, use the waive; a project-level skip is the project's switch, not this ticket's. |
 | `DAEMON-403` | a step or task agent's process tree called | The overlay is the owner's move; call it from a human session. |
-| `DAEMON-404` | this daemon holds neither a job nor a capsule of the ticket, and aihub knows no such work item | Set the overlay on the machine that runs (or last ran) the ticket. |
+| `DAEMON-404` | this daemon holds neither a job nor a capsule of the ticket, and the ticket is not queued (an id aihub does not know, one running on another machine, a terminal one with no scene here) | Set the overlay on the machine that runs (or last ran) the ticket; a queued work item answers here — its params ride the `step_params` attrs key. |
 | `DAEMON-409` | a queued work item's lane does not load on this daemon (its params are written against its lane), or its chain/skip write reached the queued posture | Write the params on a machine whose lane set has the bundle; the chain and the skip switch wait until the ticket runs. |
 
 Pi Web's job detail reaches the same face through this verb's routes; the

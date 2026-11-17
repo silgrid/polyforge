@@ -123,6 +123,12 @@ if (rest[0] === "msg" && rest[1] === "contacts") out({ contacts: [] });
 if (rest[0] === "params") out({ work_item: rest[1], posture: "queued", steps: [
   { id: "fix", status: "not started", params: [{ name: "image", value: "reg/wi203:1", source: "step override" }] },
 ] });
+if (rest[0] === "override") {
+  if (s.overrideRefuse) { process.stderr.write(JSON.stringify(s.overrideRefuse) + "\\n"); process.exit(1); }
+  out({ work_item: rest[1], changed: true, posture: "queued", published: false,
+    note: s.overrideNote ?? "queued: the params ride the work item's step_params attrs key — the claim merges them into its capsule and clears the key once that publish succeeded",
+    step: { id: flag("--step") ?? "fix", status: "pending", skippable: false } });
+}
 if (rest[0] === "recall") out({ items: [], total: 0 });
 if (rest[0] === "task" && rest[1] === "list") out({ tasks: [], now: new Date().toISOString() });
 if (rest[0] === "queue") {
@@ -684,6 +690,43 @@ try {
     assert.equal(body.pfPresent, false, "without pf the body says pfPresent:false");
     assert.ok(Array.isArray(body.items) && body.items.length === 0, "without pf the item list is empty");
     assert.equal(itemVerbs(), 0, "without pf no queue or file verb is spawned");
+  });
+
+  // polyforge#79 (AC1/AC3, review r1#10): the 工单详情's params section —
+  // every step's declared params with the composed value and source (AC1),
+  // a QUEUED ticket's per-param write through the same one-action face
+  // (AC3), and the claim-race word the daemon rides on the 200 answer's
+  // note (AC3's 提示). Every wait is a bounded poll on a real condition.
+  await check("S203-15", async () => {
+    const queued = item(3, "workbench", "queued", 3, "GOAL-C waits in the queue");
+    const body = "queued ticket detail body";
+    seed({ detail: { ...queued, content: body, content_len: Buffer.byteLength(body, "utf8") } });
+    await withPage({}, async (page) => {
+      const panel = await openItems(page);
+      await rowButton(panel, queued.goal).click();
+      await waitFor(async () => (await panel.innerText()).includes(body), "the queued detail read lands", 20_000);
+      const params = panel.locator("[data-pf-wi-params]");
+      await waitFor(async () => /reg\/wi203:1/.test(await params.innerText()), "the params section shows the composed final value", 20_000);
+      assert.ok((await params.innerText()).includes("step override"), "the source label shows");
+      assert.equal(await params.locator('[data-pf-wi-param-input="image"]').count(), 1, "a queued ticket's param row carries the write controls");
+      // the set rides `pf --json override <wi> --step fix --param …`
+      await params.locator('[data-pf-wi-param-input="image"]').fill("reg/wi203:new");
+      await params.locator('[data-pf-wi-param-set="image"]').click();
+      await waitFor(async () => {
+        const line = calls().find((a) => a[0] === "override");
+        return line && JSON.stringify(line) === JSON.stringify(["override", queued.id, "--step", "fix", "--param", "image=reg/wi203:new"]);
+      }, "the set ran `pf --json override <wi> --step fix --param image=reg/wi203:new`", 20_000);
+      // the write's success re-reads the view exactly once
+      const paramReads = () => calls().filter((a) => a[0] === "params").length;
+      const after = paramReads();
+      await waitFor(async () => paramReads() === after + 1, "the write's success re-reads the params view once", 20_000);
+      // the claim race: the 200 answer's note names it, and it shows
+      seed({ detail: { ...queued, content: body, content_len: Buffer.byteLength(body, "utf8") },
+        overrideNote: "the work item was claimed while the write landed (its status is running) and this change did not reach its capsule: set the param on the running ticket again" });
+      await params.locator('[data-pf-wi-param-clear="image"]').click();
+      await waitFor(async () => (await params.locator("[data-pf-wi-params-note]").innerText()).includes("set the param on the running ticket again"),
+        "the claim race rides the 200 answer's note and shows", 20_000);
+    });
   });
 } catch (error) {
   failures.push("suite");

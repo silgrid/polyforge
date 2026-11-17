@@ -24,6 +24,10 @@ export function PolyforgeWorkItemParams({ wi }: { wi: string }) {
   const [view, setView] = useState<PolyforgeParamsView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [writeError, setWriteError] = useState<string | null>(null);
+  // the write's success note — the claim-race word the daemon rides on a
+  // 200 answer (the key gone: the claim merged the params; the key still
+  // there: set the param on the running ticket again), AC3's 提示
+  const [note, setNote] = useState<string | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -62,17 +66,19 @@ export function PolyforgeWorkItemParams({ wi }: { wi: string }) {
   const write = (step: string, name: string, kind: "param" | "clearParam") => {
     setBusy(true);
     setWriteError(null);
+    setNote(null);
     fetch("/api/polyforge/override", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ wi, action: kind === "param" ? { kind, step, name, value: values[`${step}/${name}`] ?? "" } : { kind, step, name } }),
     })
-      .then(async (response) => ({ status: response.status, body: await response.json().catch(() => ({})) as { ok?: boolean; error?: string } }))
+      .then(async (response) => ({ status: response.status, body: await response.json().catch(() => ({})) as { ok?: boolean; error?: string; result?: { note?: string } } }))
       .then(({ status, body }) => {
         if (body.ok !== true) {
           setWriteError(body.error || `HTTP ${status}`);
           return;
         }
+        setNote(body.result?.note ?? null);
         setValues((current) => {
           const next = { ...current };
           delete next[`${step}/${name}`];
@@ -136,6 +142,7 @@ export function PolyforgeWorkItemParams({ wi }: { wi: string }) {
           ))}
         </div>
       ))}
+      {note && <span data-pf-wi-params-note="" style={{ color: "#d97706" }}>{note}</span>}
       {writeError && <span data-pf-wi-params-error="" style={{ color: "#dc2626" }}>{writeError}</span>}
     </div>
   );
