@@ -10,6 +10,7 @@ package daemon
 // Every auto-close writes resolved — never dismissed — and persists.
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -346,4 +347,70 @@ func TestPF106TaskEntriesExpire(t *testing.T) {
 		}
 	}
 	td.hub.mu.Unlock()
+}
+
+// TestPF106AutoResolveSurvivesReopen (AC6): every auto-close writes
+// resolved — never dismissed — and survives the disk: a feed reopened
+// from the persisted file still shows the auto-closed entries resolved
+// and the attention count does not rebound. A regression pin over the
+// units that delivered the behavior (the rerun close, the age bound):
+// the reopen semantics landed with them, so this proof test the ticket
+// names rides the docs unit's test commit as an addendum, not a unit of
+// its own.
+func TestPF106AutoResolveSurvivesReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), decisionsFile)
+	f, err := newDecisionFeed(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	f.now = func() time.Time { return now }
+	if err := f.RecordTask("default", pf106AnalysisTask("task_00000000000000r1", task.StateFailed, "wi_pf106_reopen")); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.RecordTask("alpha", pf106AnalysisTask("task_00000000000000g1", task.StateFailed, "")); err != nil {
+		t.Fatal(err)
+	}
+	// a four-day-old plain entry: the age bound closes it
+	f.now = func() time.Time { return now.Add(-4 * 24 * time.Hour) }
+	if err := f.RecordTask("default", pf106AnalysisTask("task_00000000000000o1", task.StateCapped, "")); err != nil {
+		t.Fatal(err)
+	}
+	f.now = func() time.Time { return now }
+	if err := f.expireTaskEntries(); err != nil {
+		t.Fatal(err)
+	}
+	// the rerun completes: the ticket's failure closes
+	if err := f.RecordTask("default", pf106AnalysisTask("task_00000000000000r2", task.StateCompleted, "wi_pf106_reopen")); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.List().Attention; got != 1 {
+		t.Fatalf("live attention = %d, want only the other Cell's entry: %v", got, f.List())
+	}
+	// reopen from disk: resolved stands, dismissed stays false, the count
+	// does not rebound
+	g, err := newDecisionFeed(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	feed := g.List()
+	if feed.Attention != 1 {
+		t.Fatalf("reopened attention = %d, want 1 (no rebound): %v", feed.Attention, feed)
+	}
+	for _, e := range feed.Decisions {
+		switch e.TaskID {
+		case "task_00000000000000r1", "task_00000000000000o1":
+			if !e.Resolved || e.Dismissed {
+				t.Fatalf("an auto-closed entry must be resolved, never dismissed, across the reopen: %+v", e)
+			}
+		case "task_00000000000000g1":
+			if !e.Open() {
+				t.Fatalf("the untouched entry must still stand open: %+v", e)
+			}
+		case "task_00000000000000r2":
+			if e.Attention || e.Resolved {
+				t.Fatalf("the completed rerun is the informational completion: %+v", e)
+			}
+		}
+	}
 }
