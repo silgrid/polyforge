@@ -343,8 +343,11 @@ func (s *Store) SearchMode(match string, projects []string, q, memType, writerKi
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	f := searchFilter{projects: projects, memType: memType, tags: tags, limit: limit, allowed: allowed,
-		now: s.now()}
+	if writerKind != "" && !writerKinds[writerKind] {
+		return nil, errf(api.ErrMemBadInput, "", "writer_kind must be session or step")
+	}
+	f := searchFilter{projects: projects, memType: memType, writerKind: writerKind, tags: tags, limit: limit,
+		allowed: allowed, now: s.now()}
 	if match == MatchAny {
 		return s.searchAny(q, f)
 	}
@@ -365,12 +368,13 @@ func (s *Store) SearchMode(match string, projects []string, q, memType, writerKi
 
 // searchFilter is one search's post-MATCH filter set plus its limit.
 type searchFilter struct {
-	projects []string // project ids narrowing the SQL candidates; nil = all, empty = none
-	memType  string
-	tags     []string
-	limit    int
-	allowed  func(*Entry) bool
-	now      time.Time // the query time the freshness term ages against
+	projects   []string // project ids narrowing the SQL candidates; nil = all, empty = none
+	memType    string
+	writerKind string // the writer_kind filter ("" = no filter; validated by SearchMode)
+	tags       []string
+	limit      int
+	allowed    func(*Entry) bool
+	now        time.Time // the query time the freshness term ages against
 }
 
 // collect answers the filtered hits for one search. match is the FTS5
@@ -411,6 +415,9 @@ func (s *Store) collect(match string, short []string, maxCands int, f searchFilt
 				continue
 			}
 			if !typeMatches(e.Type, memType) {
+				continue
+			}
+			if f.writerKind != "" && (e.WriterKind == nil || *e.WriterKind != f.writerKind) {
 				continue
 			}
 			if len(tags) > 0 && !containsAll(e.Tags, tags) {

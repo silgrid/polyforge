@@ -61,6 +61,9 @@ func (s *Store) Browse(projects []string, sort, after, memType, writerKind strin
 	if sort != "updated" && sort != "created" {
 		return nil, "", errf(api.ErrMemBadInput, "", "sort must be %s", browseSortKeys)
 	}
+	if writerKind != "" && !writerKinds[writerKind] {
+		return nil, "", errf(api.ErrMemBadInput, "", "writer_kind must be session or step")
+	}
 	if memType == "*" {
 		memType = ""
 	}
@@ -92,7 +95,7 @@ func (s *Store) Browse(projects []string, sort, after, memType, writerKind strin
 	// the deterministic tie-break; rows stream through the visibility
 	// predicate (pure, no I/O) until limit+1 survived — the probe row
 	// proves whether a next page exists.
-	where, args := browseFilter(projects, memType, tags)
+	where, args := browseFilter(projects, memType, writerKind, tags)
 	if after != "" {
 		n := len(args)
 		where += " AND (julianday(m." + column + ") < julianday(?" + strconv.Itoa(n+1) + ")" +
@@ -145,9 +148,10 @@ const browseSelect = `SELECT m.rowid, m.id, m.project_id, m.owner_user_id, m.wor
 
 // browseFilter is the browse narrowing shared by the page and the total:
 // active entries with content, the readable projects (nil = every
-// project), the type (exact or "X.*" prefix, "" = any) and every listed
-// tag. Placeholders are numbered from ?1; callers append after them.
-func browseFilter(projects []string, memType string, tags []string) (string, []any) {
+// project), the type (exact or "X.*" prefix, "" = any), the writer kind
+// ("" = any writer, NULL included) and every listed tag. Placeholders
+// are numbered from ?1; callers append after them.
+func browseFilter(projects []string, memType, writerKind string, tags []string) (string, []any) {
 	where := " WHERE m.status='active' AND m.content IS NOT NULL"
 	args := []any{}
 	if len(projects) > 0 {
@@ -168,6 +172,10 @@ func browseFilter(projects []string, memType string, tags []string) (string, []a
 			args = append(args, memType)
 		}
 	}
+	if writerKind != "" {
+		where += " AND m.writer_kind=?" + strconv.Itoa(len(args)+1)
+		args = append(args, writerKind)
+	}
 	for _, tag := range tags {
 		where += " AND EXISTS (SELECT 1 FROM json_each(m.tags) je WHERE je.value=?" +
 			strconv.Itoa(len(args)+1) + ")"
@@ -187,10 +195,13 @@ func (s *Store) BrowseTotal(projects []string, memType, writerKind string, tags 
 	if memType == "*" {
 		memType = ""
 	}
+	if writerKind != "" && !writerKinds[writerKind] {
+		return 0, errf(api.ErrMemBadInput, "", "writer_kind must be session or step")
+	}
 	if projects != nil && len(projects) == 0 {
 		return 0, nil
 	}
-	where, args := browseFilter(projects, memType, tags)
+	where, args := browseFilter(projects, memType, writerKind, tags)
 	rows, err := s.db.Query(browseSelect+where, args...)
 	if err != nil {
 		return 0, err
