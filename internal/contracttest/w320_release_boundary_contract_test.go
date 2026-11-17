@@ -1,11 +1,13 @@
 package test
 
-// w320_release_boundary_contract_test.go: `.polyforge/release.sh`'s audit
-// boundary comments describe both audits — the verification bar's
-// dependency-audit gate over the whole tree (dev dependencies included) and
-// the release's production-only gate — and the release's audit behaviour is
-// unchanged: it still runs npm audit over production dependencies at the high
-// threshold. The old boundary wording ("the test bar never runs it") is red.
+// w320_release_boundary_contract_test.go (polyforge#113): one audit, one
+// command — the release's dependency audit is the scope engine's own gate.
+// release.sh takes its default audit command from the engine's
+// --json --full report and runs it verbatim after the binaries build,
+// unconditionally: a reused green tag skips the test gate, never the audit.
+// No hardcoded component audit (`cd webui && npm audit …`) remains, and
+// RELEASE_AUDIT_CMD still replaces the whole gate. The old boundary
+// wording ("Two audits, two scopes") is red.
 //
 // Run (targeted): GOWORK=off go test ./internal/contracttest/ -run '^TestW320ReleaseBoundary' -count=1
 
@@ -40,40 +42,68 @@ func w320rbComments(script string) string {
 	return regexp.MustCompile(`\s+`).ReplaceAllString(b.String(), " ")
 }
 
-// TestW320ReleaseBoundaryComments pins the two-audit boundary text in both
-// places (the release walkthrough and the gate's own comment).
+// TestW320ReleaseBoundaryComments pins the one-audit boundary text in the
+// gate's own comment (and its header pointer).
 func TestW320ReleaseBoundaryComments(t *testing.T) {
-	script := w320rbScript(t)
-	c := w320rbComments(script)
+	c := w320rbComments(w320rbScript(t))
 	for _, want := range []string{
-		"Two audits, two scopes: the verification bar's dependency-audit gate audits the whole tree, dev dependencies included, on every full-tier run; the release audits production dependencies only;",
-		"Two audits, two scopes: the verification bar's dependency-audit gate (workflows/_shared/scripts/audit-deps, every full-tier run) audits the whole tree, dev dependencies included; this release gate audits production dependencies only.",
+		"one audit, one command - the release runs the scope engine's own dependency-audit gate, the same `audit` command the verification bar and main's CI run",
+		"over the same trees: the Go module and every shipped npm tree, pi-web and its demo included - never the one hardcoded tree of the old gate",
+		"a reused green tag skips the test gate, never the audit - the advisory feed moves, a green tag says nothing about today's advisories",
 	} {
 		if !strings.Contains(c, want) {
 			t.Fatalf("release.sh must state the audit boundary %q", want)
 		}
 	}
-	for _, old := range []string{"the test bar never runs it", "The test bar never runs this; only a release does."} {
+	for _, old := range []string{
+		"Two audits, two scopes",
+		"the release audits production dependencies only",
+		"npm audit --omit=dev",
+	} {
 		if strings.Contains(c, old) {
 			t.Fatalf("release.sh still carries the old audit boundary %q", old)
 		}
 	}
 }
 
-// TestW320ReleaseBoundaryBehaviourUnchanged: the release still audits
-// production dependencies only, at high, and refuses on a hit.
-func TestW320ReleaseBoundaryBehaviourUnchanged(t *testing.T) {
+// TestW320ReleaseBoundaryRunsTheEngineAudit pins the gate's behaviour: the
+// default audit command is the engine's own `audit` command, taken from its
+// --json --full report and run verbatim, placed after the binaries build
+// and before anything is published, and never skipped by the test gate's
+// branches (RELEASE_TEST_CMD, a reused green tag).
+func TestW320ReleaseBoundaryRunsTheEngineAudit(t *testing.T) {
 	script := w320rbScript(t)
-	want := `(cd webui && npm audit --omit=dev --audit-level=high) || die "production-dependency audit failed`
-	if strings.Count(script, want) != 1 {
-		t.Fatalf("release.sh must keep exactly one production-only high audit refusal: %q", want)
+	if strings.Contains(script, "cd webui && npm audit") {
+		t.Fatalf("release.sh must not hardcode a component audit: `cd webui && npm audit` is gone")
 	}
-	for _, ln := range strings.Split(script, "\n") {
+	for i, ln := range strings.Split(script, "\n") {
 		if tl := strings.TrimSpace(ln); strings.HasPrefix(tl, "#") {
 			continue
+		} else if strings.Contains(ln, "npm audit") {
+			t.Fatalf("release.sh line %d runs npm audit itself - the audit command comes from the engine: %q", i+1, ln)
 		}
-		if strings.Contains(ln, "npm audit") && !strings.Contains(ln, "--omit=dev --audit-level=high") {
-			t.Fatalf("every release npm audit stays production-only at high: %q", ln)
+	}
+	const head = `echo "release: running dependency-audit gate"`
+	idxAudit := strings.Index(script, head)
+	idxBuild := strings.Index(script, "# build binaries: the full matrix")
+	idxImage := strings.Index(script, "# build image (context:")
+	if idxAudit < 0 || idxBuild < 0 || idxImage < 0 || !(idxBuild < idxAudit && idxAudit < idxImage) {
+		t.Fatalf("the audit gate must sit between the binaries build and the image build (audit %d, build %d, image %d)", idxAudit, idxBuild, idxImage)
+	}
+	block := script[idxAudit:idxImage]
+	for _, want := range []string{
+		`python3 "$ENGINE" --json --full`,
+		`== "audit"`,
+		`sh -c "$AUDIT_CMD"`,
+		`[ -n "${RELEASE_AUDIT_CMD:-}" ]`,
+	} {
+		if !strings.Contains(block, want) {
+			t.Fatalf("the audit gate must contain %s:\n%s", want, block)
+		}
+	}
+	for _, banned := range []string{"GREEN", "RELEASE_TEST_CMD"} {
+		if strings.Contains(block, banned) {
+			t.Fatalf("the audit gate must be unconditional - %s must not reach it (a reused green tag skips the test gate, never the audit)", banned)
 		}
 	}
 }
