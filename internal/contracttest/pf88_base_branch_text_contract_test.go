@@ -43,7 +43,7 @@ var pf88Wants = map[string][]string{
 	"workflows/_shared/skills/publish.md": {
 		"`<base>` is the step header's base branch — the",
 		"`git rev-list --count origin/<base>..HEAD`",
-		"`gh pr create --base <base> --head <branch>`",
+		"`gh pr create --base <base> --head <branch> --title",
 		"per repo the base branch's commit merged in",
 		"a push to the default branch (a fixed target branch alike) or without a refspec",
 	},
