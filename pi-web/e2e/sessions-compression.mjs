@@ -26,7 +26,14 @@
 //
 //   node e2e/sessions-compression.mjs
 //   npm run test:e2e:all -- sessions-compression.mjs
+//
+// The suite needs no browser, but `next start` needs a production build:
+// e2e/all.mjs builds once for a run that selects a browser suite, so a
+// targeted start-mode run of this suite alone builds into its own dist dir
+// first (the path next-server.mjs's noBuild error names) unless the runner
+// already handed every suite a prebuilt build.
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
@@ -85,8 +92,32 @@ seedSessions(agentDir);
 const artifacts = join(root, "test-results/e2e");
 mkdirSync(artifacts, { recursive: true });
 
+/** In start mode with no prebuilt build handed down, build this suite's own. */
+async function ensureStartBuild() {
+  if (process.env.E2E_PREBUILT_DIST
+      || existsSync(join(root, process.env.PI_WEB_DIST_DIR, "BUILD_ID"))) return;
+  const scratchHome = mkdtempSync(join(tmpdir(), "pi-web-sessions-compression-build-"));
+  const build = spawn(
+    process.execPath,
+    [join(root, "node_modules/next/dist/bin/next"), "build", "--webpack"],
+    {
+      cwd: root,
+      env: { ...process.env, HOME: scratchHome, NEXT_TELEMETRY_DISABLED: "1" },
+      stdio: "inherit",
+    },
+  );
+  const code = await new Promise((resolve) => {
+    build.once("error", () => resolve(1));
+    build.once("close", resolve);
+  });
+  rmSync(scratchHome, { recursive: true, force: true });
+  assert.equal(code, 0, `next build --webpack into ${process.env.PI_WEB_DIST_DIR} failed`);
+}
+
 let stop = () => {};
 try {
+  if (mode === "start") await ensureStartBuild();
+
   const started = await startNextServer({
     name: "sessions-compression",
     logFile: join(artifacts, "sessions-compression-server.log"),
@@ -118,7 +149,6 @@ try {
     req.end();
   });
 
-  let identityBody;
   await scenario("S105-1", async () => {
     const response = await request("/api/sessions?summary=1", "identity");
     assert.equal(response.status, 200);
@@ -126,11 +156,10 @@ try {
       `identity request must not carry content-encoding (got ${JSON.stringify(response.headers["content-encoding"])})`);
     const payload = JSON.parse(response.body.toString("utf8"));
     assert.equal(payload.sessions.length, SESSIONS);
-    identityBody = response.body.length;
     // The compression threshold is 1024 bytes: below it the server legitimately
     // skips compression, and no later scenario may judge the compression.
-    assert.ok(identityBody >= 1024,
-      `the summary list body is ${identityBody} bytes, under the 1024-byte compression threshold`);
+    assert.ok(response.body.length >= 1024,
+      `the summary list body is ${response.body.length} bytes, under the 1024-byte compression threshold`);
   });
 
   await scenario("S105-2", async () => {
