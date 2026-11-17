@@ -213,3 +213,61 @@ class EpicSyncTest(unittest.TestCase):
         # the record's default_branch/default_head keep naming the default
         # branch's merge (the last one in)
         self.assertEqual((app["default_branch"], app["default_head"]), ("main", main_sha), app)
+
+    def test_a_checkout_conflict_leaves_the_default_branch_to_continue(self) -> None:
+        # A real conflict on the epic branch's own merge stops the loop:
+        # the pending merge the record names is the checkout branch's (the
+        # agent resolves it), and --continue commits it and then merges the
+        # default branch in — the resumed lane judges a tree with both.
+        # Red before polyforge#117 r3: the loop ran on over the pending
+        # conflict, clobbered the record with the default branch's fields
+        # and left the conflict unresumable.
+        w = World(self, "app")
+        fix_epic(w)
+        seed, d = w.seeds["app"], w.dir("app")
+        out = os.path.join(w.capsule, "artifacts", "sync", "result.json")
+        # the epic branch on origin; the clone on it, with the epic's own
+        # work on side.txt
+        w.git(seed, "fetch", "-q", "origin")
+        w.git(seed, "checkout", "-q", "-B", "epic/2", "origin/main")
+        write(seed, "side.txt", "base\n")
+        w.git(seed, "add", "-A")
+        w.git(seed, "commit", "-q", "-m", "the branch point")
+        w.git(seed, "push", "-q", "origin", "HEAD:refs/heads/epic/2")
+        w.git(d, "fetch", "-q", "origin")
+        w.git(d, "checkout", "-q", "-B", "epic/2", "refs/remotes/origin/epic/2")
+        w.change("app", {"side.txt": "base\nepic side\n"}, "branch-section")
+        # the fix child lands on origin/epic/2 touching the SAME file: a
+        # real conflict with the epic's own work
+        w.git(seed, "checkout", "-q", "-B", "child-work", "refs/remotes/origin/epic/2")
+        write(seed, "side.txt", "base\nchild side\n")
+        w.git(seed, "add", "-A")
+        w.git(seed, "commit", "-q", "-m", "the child lands on the epic branch")
+        w.git(seed, "push", "-q", "origin", "HEAD:refs/heads/epic/2")
+        child_sha = w.git(seed, "rev-parse", "HEAD")
+        main_sha = w.main_moves("app", {"main-side.txt": "the default branch moved\n"}, "main-section")
+        w.git(d, "fetch", "-q", "origin")
+        code, res, err = w.run("sync.py", "--capsule", w.capsule, "--json", "--out", out, PF_ROUND="r1")
+        assert res is not None
+        app = repo_of(res, "app")
+        self.assertEqual(code, 1, err)
+        self.assertEqual(app["conflicts"], ["side.txt"], app)
+        # the pending merge the record names is the CHECKOUT branch's
+        self.assertEqual(app["default_branch"], "epic/2", app)
+        self.assertEqual(app["default_head"], child_sha, app)
+        # the agent resolves the conflict in place and continues: the merge
+        # commits, then the default branch merges in
+        write(d, "side.txt", "base\nepic side and child side\n")
+        w.git(d, "add", "-A")
+        code, res, err = w.run("sync.py", "--continue", "--capsule", w.capsule, "--json", "--out", out, PF_ROUND="r1")
+        assert res is not None
+        self.assertEqual(code, 0, err)
+        app = repo_of(res, "app")
+        self.assertEqual(app["conflicts"], [], app)
+        self.assertIn("side.txt", app["resolved"], app)
+        # both the child's commit and the default branch's are in HEAD, and
+        # the record names the default branch's merge (the last one in)
+        for sha, what in ((child_sha, "the child's"), (main_sha, "the default branch's")):
+            check = w.git(d, "merge-base", "--is-ancestor", sha, "HEAD")
+            self.assertEqual(check, "", "%s commit %s never reached the epic's tree" % (what, sha))
+        self.assertEqual((app["default_branch"], app["default_head"]), ("main", main_sha), app)
