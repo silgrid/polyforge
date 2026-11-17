@@ -190,6 +190,10 @@ type browserFixtures struct {
 	AttributedTitle  string `json:"attributed_title"`
 	AttributedAuthor string `json:"attributed_author"`
 	AttributedWriter string `json:"attributed_writer"`
+	// polyforge#120 (r1#N1): one memory whose author row carries no display
+	// name — the console must show the explicit unknown-author placeholder.
+	BlankMem   string `json:"blank_mem"`
+	BlankTitle string `json:"blank_title"`
 }
 
 // seedBrowserFixtures seeds the suite's data through the real API
@@ -246,7 +250,9 @@ func seedBrowserFixtures(t *testing.T, inst *v1Install) browserFixtures {
 	// author and writer (the earlier rows above stay writerless: their
 	// explicit unknown-writer placeholder is the other half of the
 	// assertion). The author display name is read back through the v1
-	// face, the one source this fixture trusts.
+	// face, the one source this fixture trusts. The model detail is
+	// seeded padded (r1#N4): the display must trim it to its valued
+	// form, which the expected string below states.
 	{
 		var created struct {
 			ID string `json:"id"`
@@ -257,7 +263,7 @@ func seedBrowserFixtures(t *testing.T, inst *v1Install) browserFixtures {
 			"title": f.AttributedTitle, "content": "attributed body",
 			"tags": []string{"browser"}, "visibility": "project",
 			"writer_kind":    "step",
-			"writer_details": map[string]any{"work_item": hostile.ID, "step": "build", "attempt": 1, "model": "pi:mock"},
+			"writer_details": map[string]any{"work_item": hostile.ID, "step": "build", "attempt": 1, "model": " pi:mock "},
 		}, &created); err != nil || created.ID == "" {
 			t.Fatalf("attributed memory: %v (%s)", err, created.ID)
 		}
@@ -419,6 +425,53 @@ func seedBrowserFixtures(t *testing.T, inst *v1Install) browserFixtures {
 		t.Fatalf("odd memory: %v", err)
 	}
 	f.OddMem = oddMem.ID
+
+	// polyforge#120 (r1#N1): one memory whose author has no display name —
+	// the console's rows must show the explicit unknown-author placeholder.
+	// The API requires a display name at user creation, so the blank is a
+	// direct SQL edit (the same split this seeder uses for the machine
+	// rows); the membership and the memory itself go through the real v1
+	// doors, the memory with the author's own key.
+	{
+		var blankUser struct {
+			ID string `json:"id"`
+		}
+		if err := inst.client.Do("POST", "/api/v1/users", map[string]any{
+			"display_name": "w120 blank author", "email": "w120-blank@invalid", "role": "writer",
+		}, &blankUser); err != nil || blankUser.ID == "" {
+			t.Fatalf("blank author user: %v", err)
+		}
+		var blankKey struct {
+			Plain string `json:"plain"`
+		}
+		if err := inst.client.Do("POST", "/api/v1/api-keys", map[string]any{
+			"user_id": blankUser.ID, "name": "w120 blank",
+		}, &blankKey); err != nil || blankKey.Plain == "" {
+			t.Fatalf("blank author key: %v", err)
+		}
+		if _, err := db.Exec(`UPDATE users SET display_name='' WHERE id=?1`, blankUser.ID); err != nil {
+			t.Fatalf("blank display name: %v", err)
+		}
+		if _, err := db.Exec(`INSERT INTO project_members(project_id, user_id, role, created_at)
+			SELECT id, ?1, 'writer', ?2 FROM projects WHERE name=?3`,
+			blankUser.ID, now.Format(time.RFC3339Nano), v1Project); err != nil {
+			t.Fatalf("blank author membership: %v", err)
+		}
+		blankClient := aihubclient.New(inst.url, blankKey.Plain)
+		var blankMem struct {
+			ID string `json:"id"`
+		}
+		f.BlankTitle = "browser blank author memory"
+		if err := blankClient.Do("POST", "/api/v1/memories", map[string]any{
+			"project": v1Project, "type": "fact.note",
+			"title": f.BlankTitle, "content": "blank body",
+			"visibility": "project",
+		}, &blankMem); err != nil || blankMem.ID == "" {
+			t.Fatalf("blank author memory: %v", err)
+		}
+		f.BlankMem = blankMem.ID
+	}
+
 	// The deactivated project (S24): created and deactivated through the
 	// real doors — no work item, so the deactivation is accepted as-is.
 	f.DeactivatedProject = "w30dormant"

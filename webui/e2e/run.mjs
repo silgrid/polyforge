@@ -1,7 +1,7 @@
 // run.mjs — the console's browser acceptance runner,
 // rewritten against the console's visual contract.
 //
-// carries: webui/src/pages/MemoriesPage*, webui/src/pages/MemoryDetailPage*, webui/src/types.ts
+// carries: webui/src/pages/MemoriesPage*, webui/src/pages/MemoryDetailPage*, webui/src/attribution*, webui/src/types.ts
 //
 // Drives the browser-rendered scenarios of artifacts/e2e-scenarios.md
 // (hostile corpus inert, the one visual language and its four-step type
@@ -743,6 +743,11 @@ async function scenarioMemoryVisual(page) {
     `the attributed row does not show the writer: ${attributedText}`)
   await waitForContent(list.getByTestId('memory-attribution').filter({ hasText: 'unknown writer' }),
     'no writerless row shows the explicit unknown-writer placeholder')
+  const blankRow = list.getByTestId('memory-row').filter({ hasText: fixtures.blank_title }).first()
+  await waitForContent(blankRow, 'the blank-author memory is not in the list')
+  const blankText = await blankRow.textContent()
+  assert(blankText.includes('unknown author'),
+    `the row of an author with no display name must show the explicit unknown-author placeholder: ${blankText}`)
   assert(!attributedText.includes('owner_user_id') && !attributedText.includes('user_id'),
     'an owner or user id never reaches a row')
 
