@@ -7,7 +7,16 @@ started is found and removed by the next.
 - The image is built from the repo's ``.polyforge/Dockerfile.verify`` at
   HEAD alone (an empty build context) and tagged
   ``pf-verify-<repo>:<first 16 bytes of the file's sha256, hex>``; its
-  build log is ``image-build.log`` in the run's log directory.
+  build log is ``image-build.log`` in the run's log directory. A caller
+  may instead name a prepared image (``start_box``'s ``image``): a
+  person's image — its private dependencies and credentials were the
+  preparer's to solve — resolved to its local ID (``sha256:<64 hex>``,
+  its RepoDigests recorded when it has any) and started by that ID with
+  ``--pull never``, never built (no ``image-build.log``) and never
+  pulled: a machine without it answers ``ImageMissing`` and the run that
+  asked is not judged. The repo then needs no Dockerfile at all; the
+  cache volume's generation is the ID's first 32 hex, the pruning shape
+  of the built volumes.
 - The container (``--init``, ``--log-driver none``) carries the labels
   ``pf.verify.daemon`` (the owner), ``.boot``, ``.wi``, ``.run``,
   ``.repo`` and, when it has a deadline, ``.expires`` (unix seconds). It
@@ -139,6 +148,12 @@ _WAIT_KEEP_ALIVE = (
 _TAG_UNSAFE = re.compile(r"[^a-z0-9._-]+", re.ASCII)
 _NAME_UNSAFE = re.compile(r"[^a-zA-Z0-9_.-]+", re.ASCII)
 _INT = re.compile(r"[+-]?[0-9]+", re.ASCII)
+# a docker image ID as the engine answers it ({{.Id}})
+_IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}", re.ASCII)
+# a prepared image reference that can never be one: an option (a leading
+# -) or whitespace, which docker's reference grammar forbids — refused
+# before the engine is asked
+_BAD_IMAGE_REF = re.compile(r"^-|[\s]", re.ASCII)
 
 
 class ContainerError(Exception):
@@ -287,6 +302,12 @@ class ContainerRuntime(Protocol):
 
     def image_env(self, tag: str) -> List[str]:
         """The image's own environment (NAME=value)."""
+
+    def image_identity(self, ref: str) -> ImageIdentity:
+        """A prepared image ref's local identity: its local ID (what a
+        container starts by) and its RepoDigests, when it has any. A ref
+        not present locally raises ImageMissing (never pulled); an engine
+        failure ContainerError."""
 
     def start(self, spec: ContainerSpec) -> str:
         """Start a container that stays up until removed; answer its id."""
@@ -469,9 +490,37 @@ class DockerCLI:
             raise ContainerError("docker image inspect: unreadable environment: %s" % json.dumps(out.strip()))
         return list(env)
 
+    def image_identity(self, ref: str) -> ImageIdentity:
+        try:
+            out = self._run(["image", "inspect", "--format", "{{.Id}}\n{{json .RepoDigests}}", ref])
+        except ContainerError as err:
+            # "No such image" is the engine's own missing-image answer, not
+            # an engine failure: image ls --filter cannot decide it (a
+            # reference with a digest answers empty there)
+            if "No such image" in str(err):
+                raise ImageMissing(ref) from None
+            raise
+        lines = out.split("\n")
+        if not lines or not _IMAGE_ID.fullmatch(lines[0].strip()):
+            raise ContainerError("docker image inspect: %s answered no readable local image ID (%s)"
+                                 % (ref, json.dumps(out.strip())))
+        try:
+            digests = json.loads(lines[1].strip()) if len(lines) > 1 and lines[1].strip() else []
+        except ValueError as err:
+            raise ContainerError("docker image inspect: %s's RepoDigests are unreadable: %s" % (ref, err)) from None
+        if digests is None:
+            digests = []
+        if not isinstance(digests, list) or not all(isinstance(d, str) for d in digests):
+            raise ContainerError("docker image inspect: %s's RepoDigests are unreadable" % ref)
+        return ImageIdentity(id=lines[0].strip(), repo_digests=list(digests))
+
     def start_args(self, spec: ContainerSpec) -> List[str]:
         """The ``docker run`` arguments of spec (Go's DockerCLI.StartArgs)."""
         args = ["run", "--detach", "--init", "--name", spec.name, "--log-driver", "none"]
+        if spec.pull_never:
+            # a prepared image, started by its local ID: the engine is never
+            # to fetch one (a missing image is the caller's "not judged")
+            args += ["--pull", "never"]
         keep_alive = KEEP_ALIVE_SCRIPT
         if spec.lifetime > 0:
             # the keep-alive ends the container at its lifetime; the engine
@@ -584,6 +633,14 @@ def cache_volume(repo: str, dockerfile: bytes) -> str:
     """The repo's named cache volume for the image of dockerfile:
     pf-verify-cache-<repo>-<generation>, the image tag's own hash."""
     return _cache_volume_prefix(repo) + _generation(dockerfile)
+
+
+def image_cache_volume(repo: str, digest: str) -> str:
+    """The repo's named cache volume of a prepared image:
+    pf-verify-cache-<repo>-<the digest's first 32 hex> — the generation
+    shape of the built volumes (prune_cache_volumes' rule), so a new
+    image gives a new, empty volume and the older one is pruned."""
+    return _cache_volume_prefix(repo) + digest[digest.rfind(":") + 1:][:32]
 
 
 def prune_cache_volumes(rt: ContainerRuntime, repo: str, keep: str, say: Say) -> List[str]:
@@ -880,24 +937,50 @@ def start_box(
     why = container_usable_clone(repo_dir)
     if why:
         raise BoxError(why)
+    # the image the container runs: a prepared one (started by its resolved
+    # local ID, never built) or the Dockerfile's own tag
+    started = ""
+    built = False
+    build_log = ""
+    digest = ""
+    repo_digests: List[str] = []
+    volume = ""
+    if image:
+        if _BAD_IMAGE_REF.search(image):
+            raise BoxError("the image reference %s is not a docker image reference" % json.dumps(image))
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+        except OSError as err:
+            raise BoxError(str(err)) from None
+        try:
+            identity = rt.image_identity(image)
+        except ImageMissing:
+            raise
+        except ContainerError as err:
+            raise BoxError("image %s: %s" % (image, err)) from None
+        started, digest, repo_digests = identity.id, identity.id, identity.repo_digests
+        volume = image_cache_volume(repo, identity.id)
+    else:
+        try:
+            dockerfile = read_dockerfile(repo_dir)
+        except git.GitError as err:
+            raise BoxError("%s unreadable at HEAD: %s" % (DOCKERFILE_VERIFY, err)) from None
+        tag = image_tag(repo, dockerfile)
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+        except OSError as err:
+            raise BoxError(str(err)) from None
+        build_log = os.path.join(log_dir, "image-build.log")
+        try:
+            built = ensure_image(rt, tag, dockerfile, {LABEL_REPO: repo}, build_log, deadline)
+        except (ContainerError, OSError) as err:
+            raise BoxError("image %s from %s: %s (build log %s)" % (tag, DOCKERFILE_VERIFY, err, rel(build_log))) from None
+        started = tag
+        volume = cache_volume(repo, dockerfile)
     try:
-        dockerfile = read_dockerfile(repo_dir)
-    except git.GitError as err:
-        raise BoxError("%s unreadable at HEAD: %s" % (DOCKERFILE_VERIFY, err)) from None
-    tag = image_tag(repo, dockerfile)
-    try:
-        os.makedirs(log_dir, exist_ok=True)
-    except OSError as err:
-        raise BoxError(str(err)) from None
-    build_log = os.path.join(log_dir, "image-build.log")
-    try:
-        built = ensure_image(rt, tag, dockerfile, {LABEL_REPO: repo}, build_log, deadline)
-    except (ContainerError, OSError) as err:
-        raise BoxError("image %s from %s: %s (build log %s)" % (tag, DOCKERFILE_VERIFY, err, rel(build_log))) from None
-    try:
-        env = rt.image_env(tag)
+        env = rt.image_env(started)
     except ContainerError as err:
-        raise BoxError("image %s: its environment is unreadable: %s" % (tag, err)) from None
+        raise BoxError("image %s: its environment is unreadable: %s" % (started, err)) from None
     binds = [Bind(repo_dir)]
     if base_root:
         try:
@@ -913,16 +996,16 @@ def start_box(
             raise BoxError("the path %s holds a comma, which a container mount cannot name" % b.path)
     labels = {LABEL_DAEMON: co.owner, LABEL_BOOT: co.boot, LABEL_WI: co.wi, LABEL_RUN: str(run), LABEL_REPO: repo}
     labels.update(co.labels)
-    volume = cache_volume(repo, dockerfile)
     spec = ContainerSpec(
         name=container_name(co.wi, run, repo),
-        image=tag,
+        image=started,
         labels=labels,
         binds=binds,
         volumes={volume: CONTAINER_CACHE_DIR},
         cpus=co.cpus,
         memory=co.memory,
         pids=co.pids,
+        pull_never=bool(image),
     )
     if co.until > 0:
         # counted from now, not from the run's start: a build may have taken a while
@@ -930,11 +1013,12 @@ def start_box(
     try:
         cid = rt.start(spec)
     except ContainerError as err:
-        raise BoxError("starting %s from %s: %s" % (spec.name, tag, err)) from None
+        raise BoxError("starting %s from %s: %s" % (spec.name, started, err)) from None
     prune_cache_volumes(rt, repo, volume, co.say or (lambda _: None))
     report = ContainerReport(
-        image=tag, built=built, build_log=rel(build_log), name=spec.name,
+        image=image or started, built=built, build_log=rel(build_log) if build_log else "", name=spec.name,
         cpus=format_cpus(co.cpus), memory=co.memory, pids=co.pids,
+        digest=digest, repo_digests=repo_digests,
     )
     return Box(rt, cid, env, report, say=co.say, engine=engine, base_root=base_root)
 
