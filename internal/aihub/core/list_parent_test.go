@@ -66,6 +66,12 @@ func TestListFiltersParent(t *testing.T) {
 	if err != nil || len(wis) != 0 {
 		t.Fatalf("an unknown parent answers an empty page, got %v, %v", wis, err)
 	}
+	// a work item that is nobody's parent answers an empty page: the
+	// filter matches parent_id exactly, never a grandchild chain
+	wis, err = env.WIs.List(ListFilters{Parent: childA, Project: "alpha"})
+	if err != nil || len(wis) != 0 {
+		t.Fatalf("a work item with no children answers an empty page, got %v, %v", wis, err)
+	}
 	// the plain list is unchanged: every item is there (six were created)
 	wis, err = env.WIs.List(ListFilters{Project: "alpha"})
 	if err != nil || len(wis) != 6 {
