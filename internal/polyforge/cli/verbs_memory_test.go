@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -211,4 +212,75 @@ func jsonEscape(t *testing.T, s string) string {
 		t.Fatalf("json.Marshal: %v", err)
 	}
 	return string(b)
+}
+
+// TestW107ShowWriterLines (polyforge#119 AC2): the memory-show header
+// carries the author and the writer. author: the server's display name,
+// falling back to the stable owner id when it names none (a pre-#107
+// aihub), "-" when neither rides; writer: the writer kind with its
+// valued details rendered k=v (sorted keys), "-" on a row written
+// before the writer columns existed.
+func TestW107ShowWriterLines(t *testing.T) {
+	const stepRow = `{"id":"mem_w1","type":"experience.wrap","title":"proj#1: did it",` +
+		`"owner_user_id":"usr_1","owner_display_name":"Ada Lovelace",` +
+		`"writer_kind":"step","writer_details":{"work_item":"wi_9","step":"build","attempt":1,"model":"pi:glm-5.3"},` +
+		`"visibility":"project","content_len":4,"updated_at":"2026-11-18T00:00:00Z"}`
+	const sessionRow = `{"id":"mem_w2","type":"fact.note","owner_user_id":"usr_2",` +
+		`"owner_display_name":"","writer_kind":"session",` +
+		`"writer_details":{"machine":"m-e2e","cell":"default"},` +
+		`"visibility":"project","content_len":4,"updated_at":"2026-11-18T00:00:00Z"}`
+	const oldRow = `{"id":"mem_w3","type":"fact.note","title":"old","visibility":"private",` +
+		`"content_len":4,"updated_at":"2026-10-01T00:00:00Z"}`
+	var rec reqRecorder
+	srv := newFakeAihub(t, &rec, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("format") == "content" {
+			io.WriteString(w, "body")
+			return
+		}
+		switch r.URL.Path {
+		case "/api/v1/memories/mem_w1":
+			io.WriteString(w, stepRow)
+		case "/api/v1/memories/mem_w2":
+			io.WriteString(w, sessionRow)
+		case "/api/v1/memories/mem_w3":
+			io.WriteString(w, oldRow)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			io.WriteString(w, `{"code":"MEM-404","detail":"no such memory"}`)
+		}
+	})
+	env := map[string]string{"PF_SERVER": srv.URL, "PF_API_KEY": "k_cli"}
+	code, stdout, stderr := runPf(t, env, "memory", "show", "mem_w1")
+	if code != 0 {
+		t.Fatalf("step-written row: code=%d stderr=%s", code, stderr)
+	}
+	for _, want := range []string{
+		"author: Ada Lovelace",
+		"writer: step (attempt=1, model=pi:glm-5.3, step=build, work_item=wi_9)",
+	} {
+		if !strings.Contains(stdout, want+"\n") {
+			t.Errorf("step-written row missing %q:\n%s", want, stdout)
+		}
+	}
+	code, stdout, stderr = runPf(t, env, "memory", "show", "mem_w2")
+	if code != 0 {
+		t.Fatalf("session-written row: code=%d stderr=%s", code, stderr)
+	}
+	for _, want := range []string{
+		"author: usr_2",
+		"writer: session (cell=default, machine=m-e2e)",
+	} {
+		if !strings.Contains(stdout, want+"\n") {
+			t.Errorf("session-written row missing %q:\n%s", want, stdout)
+		}
+	}
+	code, stdout, stderr = runPf(t, env, "memory", "show", "mem_w3")
+	if code != 0 {
+		t.Fatalf("pre-writer row: code=%d stderr=%s", code, stderr)
+	}
+	for _, want := range []string{"author: -", "writer: -"} {
+		if !strings.Contains(stdout, want+"\n") {
+			t.Errorf("pre-writer row missing %q:\n%s", want, stdout)
+		}
+	}
 }
