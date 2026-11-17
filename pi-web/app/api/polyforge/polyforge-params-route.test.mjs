@@ -66,6 +66,16 @@ test("the route is GET-only, gated in-route, force-dynamic and never 5xx; the re
   assert.ok(source.indexOf("isPolyforgeWiRef(wi)") < source.indexOf("await getPolyforgeParams"), "the ref is validated before the spawn");
 });
 
+test("a foreign origin is the gate's 403 — the only other non-2xx beside the malformed-ref 400", async () => {
+  reset("view");
+  const response = await GET(new Request("http://evil.example:9/api/polyforge/params?wi=wi_A1", {
+    method: "GET", headers: { host: "evil.example:9", origin: "http://evil.example:9" },
+  }));
+  assert.equal(response.status, 403);
+  assert.deepEqual(await response.json(), { error: "Forbidden" });
+  assert.deepEqual(argv(), [], "the gate refuses before any spawn");
+});
+
 test("one params read answers the view through the passport", async () => {
   reset("view");
   const response = await GET(get("?wi=wi_A1"));
