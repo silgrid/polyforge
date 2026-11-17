@@ -117,14 +117,19 @@ def _threshold_defaults() -> Thresholds:
 
 
 def _component_paths_ok(name: str, val: str, line: str, diag: List[str]) -> Optional[List[str]]:
-    """The declared paths of one component= line, or None (diagnosed)."""
-    paths = [p.strip() for p in val.split(",")]
-    for p in paths:
-        if p == "" or p.startswith("/") or p == ".." or p.startswith("../") or "/../" in p:
-            diag.append("component '%s': rejected path '%s' (expected one or more"
-                        " repository-relative paths, never absolute or ..-escaping): %s"
-                        % (name, p, line))
+    """The declared paths of one component= line, or None (diagnosed).
+    A range is a prefix: a trailing slash is the same prefix (normalized
+    away) and a bare dot names no path ever (polyforge#89 r1#5)."""
+    paths: List[str] = []
+    for item in val.split(","):
+        p = item.strip()
+        if p == "" or p == "." or p.startswith("/") or p == ".." or p.startswith("../") or "/../" in p:
+            why = "a '.' range, which names no path" if p == "." else "'%s'" % p
+            diag.append("component '%s': rejected path %s (expected one or more"
+                        " repository-relative paths, never absolute, a bare dot"
+                        " or ..-escaping): %s" % (name, why, line))
             return None
+        paths.append(p.rstrip("/"))
     return paths
 
 
