@@ -484,16 +484,22 @@ func orDash(s string) string {
 // (memory.Entry plus the excerpt extension): there is no `content` on the
 // wire — only content_excerpt, which SearchMemories always asks for.
 type memorySearchHit struct {
-	ID             string   `json:"id"`
-	Type           string   `json:"type"`
-	Title          *string  `json:"title"`
-	ContentExcerpt string   `json:"content_excerpt"`
-	UpdatedAt      string   `json:"updated_at"`
-	Tags           []string `json:"tags"`
+	ID               string   `json:"id"`
+	Type             string   `json:"type"`
+	OwnerUserID      string   `json:"owner_user_id"`
+	OwnerDisplayName string   `json:"owner_display_name"`
+	WriterKind       *string  `json:"writer_kind"`
+	Title            *string  `json:"title"`
+	ContentExcerpt   string   `json:"content_excerpt"`
+	UpdatedAt        string   `json:"updated_at"`
+	Tags             []string `json:"tags"`
 }
 
 // renderMemories renders a memory search result: the SUMMARY column is
 // the title when the memory has one, else the excerpt's first line.
+// AUTHOR is the writer's display name (the stable id when the server
+// names none, "-" when neither rides); WRITER is the writer kind alone
+// ("-" on a row written before the writer existed).
 func renderMemories(w io.Writer, items []memorySearchHit) {
 	rows := make([][]string, 0, len(items))
 	for _, it := range items {
@@ -505,9 +511,9 @@ func renderMemories(w io.Writer, items []memorySearchHit) {
 		if it.Title != nil && strings.TrimSpace(*it.Title) != "" {
 			summary = *it.Title
 		}
-		rows = append(rows, []string{it.ID, it.Type, truncate(orDash(summary), 50), it.UpdatedAt, tags})
+		rows = append(rows, []string{it.ID, it.Type, memoryAuthor(it.OwnerDisplayName, it.OwnerUserID), nullable(it.WriterKind), truncate(orDash(summary), 50), it.UpdatedAt, tags})
 	}
-	printTable(w, []string{"ID", "TYPE", "SUMMARY", "UPDATED", "TAGS"}, rows)
+	printTable(w, []string{"ID", "TYPE", "AUTHOR", "WRITER", "SUMMARY", "UPDATED", "TAGS"}, rows)
 }
 
 // memoryPage is the browse-mode answer: the page, the
