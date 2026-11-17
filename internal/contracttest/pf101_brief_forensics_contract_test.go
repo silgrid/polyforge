@@ -57,12 +57,13 @@ func TestPF101SubagentBriefForensicsContract(t *testing.T) {
 	}
 
 	// The pinned halves the w425 driver test keeps (spot-checked here
-	// so this change is seen to add, not rewrite).
+	// so this change is seen to add, not rewrite; whitespace-collapsed
+	// like the pins above).
 	for _, keep := range []string{
 		"It never runs `pf step`",
 		"You write `artifacts/build/units.json` from what the tasks return",
 	} {
-		if !strings.Contains(frag, keep) {
+		if !strings.Contains(flat, keep) {
 			t.Errorf("workflows/_shared/build_subagents.md: the w425-pinned token %q is gone — the brief extension rewrites no existing half", keep)
 		}
 	}
