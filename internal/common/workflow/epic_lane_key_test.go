@@ -90,6 +90,47 @@ func TestEpicShippedLaneLoads(t *testing.T) {
 	}
 }
 
+// TestEpicResumeResetKey pins the lane key `resume_reset` (polyforge#117
+// r4): the step an owner-resumed epic's changed-children marker resets
+// the lane to — a lane declaring `epic` must name it (it is what the
+// runtime writes into the marker and the driver rewinds to), a lane
+// without `epic` refuses it, and it must name a step of this lane.
+func TestEpicResumeResetKey(t *testing.T) {
+	dir := workflowtest.WriteLane(t, t.TempDir(), "demo",
+		"children_branch: \"epic/{seq}\"\nepic: true\nresume_reset: sync\nsteps:\n  - { id: verify-children }\n  - { id: sync }\n")
+	lane, errs := workflow.Load(dir)
+	if len(errs) != 0 {
+		t.Fatalf("an epic lane naming its resume_reset step loads with no defect, got %v", errs)
+	}
+	if lane == nil || lane.ResumeReset != "sync" {
+		t.Fatalf("Lane.ResumeReset = %v, want sync", lane)
+	}
+	// epic without the key is refused at the key
+	bare := workflowtest.WriteLaneUnchecked(t, t.TempDir(), "demo",
+		"children_branch: \"epic/{seq}\"\nepic: true\nsteps:\n  - { id: sync }\n")
+	_, errs = workflow.Load(bare)
+	if len(errs) != 1 || errs[0].Code != workflow.CodeInvalidValue || errs[0].Path != "epic" {
+		t.Fatalf("epic without resume_reset: defects %v, want one %s at epic", errs, workflow.CodeInvalidValue)
+	}
+	if !strings.Contains(errs[0].Msg, "resume_reset") {
+		t.Errorf("the defect %q does not name resume_reset", errs[0].Msg)
+	}
+	// the key without epic is refused at the key
+	lonely := workflowtest.WriteLaneUnchecked(t, t.TempDir(), "demo",
+		"children_branch: \"epic/{seq}\"\nresume_reset: sync\nsteps:\n  - { id: sync }\n")
+	_, errs = workflow.Load(lonely)
+	if len(errs) != 1 || errs[0].Code != workflow.CodeInvalidValue || errs[0].Path != "resume_reset" {
+		t.Fatalf("resume_reset without epic: defects %v, want one %s at resume_reset", errs, workflow.CodeInvalidValue)
+	}
+	// a step this lane does not define is refused at the key
+	missing := workflowtest.WriteLaneUnchecked(t, t.TempDir(), "demo",
+		"children_branch: \"epic/{seq}\"\nepic: true\nresume_reset: nope\nsteps:\n  - { id: sync }\n")
+	_, errs = workflow.Load(missing)
+	if len(errs) != 1 || errs[0].Code != workflow.CodeInvalidValue || errs[0].Path != "resume_reset" {
+		t.Fatalf("resume_reset naming no step of the lane: defects %v, want one %s at resume_reset", errs, workflow.CodeInvalidValue)
+	}
+}
+
 // TestEpicLaneKeyNeedsChildrenBranch: `epic: true` names the branch its
 // work items work on through the lane's children_branch — a lane that
 // declares the key without the template is refused at the key naming
