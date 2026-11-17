@@ -30,12 +30,15 @@ func pf101Read(t *testing.T, rel string) string {
 }
 
 func TestPF101DocsSyncContract(t *testing.T) {
-	// the commands reference: the fix appends both blocks, and the row
-	// is named
+	// the commands reference: the fix appends both blocks, the row is
+	// named, and the task prompt's structure names the rule between the
+	// list and # Task (review r1#2: the sentence was left on the
+	// list-then-Task shape)
 	commands := pf101Read(t, filepath.Join("docs", "reference", "commands.md"))
 	for _, want := range []string{
 		"`--fix-harness-prompts` appends the native-SVG diagram-guidance block",
 		"it appends the concise-output guidance block too (the `harness concise guidance` row)",
+		"then the concise output-discipline rule (`harness.ConciseRule`, the same bytes every step dispatch carries), then `# Task` and the task's prompt",
 	} {
 		if !strings.Contains(commands, want) {
 			t.Errorf("docs/reference/commands.md's doctor row lacks %q", want)
@@ -60,12 +63,17 @@ func TestPF101DocsSyncContract(t *testing.T) {
 	}
 
 	// the doctor verb doc: the new row, the claude target resolution and
-	// the section
+	// the section — and the opening summary's enumeration and flag
+	// sentence name both blocks (review r1#1: the intro was left on the
+	// diagram-only wording)
 	doctor := pf101Read(t, filepath.Join("skills", "polyforge", "verbs", "doctor.md"))
 	for _, want := range []string{
 		"`harness concise guidance`",
 		"`~/.claude/CLAUDE.md`, else `~/.claude/AGENTS.md`",
 		"<!-- polyforge:concise-guidance:begin -->",
+		"carries the native-SVG diagram guidance block and the concise-output guidance block", // the intro's check enumeration
+		"appends the SVG diagram-guidance block and the concise-output guidance block to the existing context files the `harness diagram guidance` and `harness concise guidance` rows report", // the intro's flag sentence
+		"their rows are config-dependent", // the --harness refusal note names both rows
 	} {
 		if !strings.Contains(doctor, want) {
 			t.Errorf("skills/polyforge/verbs/doctor.md lacks %q", want)
