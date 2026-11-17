@@ -411,7 +411,12 @@ attrs decide — an integration batch's fix ticket (its `integration_fix`
 marker) runs the full bar; every other ticket the light tier — over the
 the task repos as the sync step left them: no fetch, no merge — a merge in progress
 (`MERGE_HEAD`) or an unresolvable default branch makes the run incomplete
-— and it skips a repo with no commit beyond its default branch. The union
+— and it skips a repo with no commit beyond its default branch. The
+step's `image` parameter (or `--image`; the flag wins and the result's
+`image` record names the value and where it came from) names a prepared
+image every touched repo's bar then runs in, Dockerfile or not — never
+built, never pulled; a machine without it is not judged (exit 2, the
+fixed mark `pf-verify-image-missing` in the summary, the image named). The union
 with the build's change analysis is add-only: the change analysis's listed
 tests run beside the plan, add-only, under the analysis's supplement cap —
 a listed test that does not exist fails its check naming it, and the
@@ -571,10 +576,16 @@ failing one, so a red batch records every failing command at once (its
 triage, and the regate a fully flaky one triggers, the same); `.polyforge/release.sh` and `tools/green-tag` run the tree's own with
 `python3` (docs/reference/release.md, "The test gate"; `--help` is the
 script's full reference). `--isolation container` is required and the only
-isolation a gate has: a tree without the Dockerfile at HEAD, or a machine
-whose docker engine does not answer, is not judged (exit 2, the reason
-said). The container's limits are the script's flags (`--cpus` /
-`--memory` / `--pids`, default min(8, cores) / `16g` / 4096; design r2 D7).
+isolation a gate has: a tree without the Dockerfile at HEAD — and no
+prepared image named — or a machine whose docker engine does not answer,
+is not judged (exit 2, the reason said). The step's `image` parameter (a
+dispatch's `PF_PARAM_IMAGE`, else `--image`, which wins and is recorded as
+the value's source) names a prepared image every gated repo runs in — one
+image for the project, Dockerfile or not, resolved to its local ID, never
+built, never pulled; a machine without it is not judged either (exit 2,
+the fixed mark `pf-verify-image-missing` in the summary). The container's
+limits are the script's flags (`--cpus` / `--memory` / `--pids`, default
+min(8, cores) / `16g` / 4096; design r2 D7).
 
 - On the clone at the working directory (the release's run): progress and,
   with `--mark-green --summary <text>`, the green tag's name on stdout;

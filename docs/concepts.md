@@ -383,6 +383,46 @@ every toolchain the conf's commands call (`go` for a Go repository's
 `pf-verify-<repo>:<hash of the file>`, built only when the tag is missing
 (once, however many runs ask at the same moment; its log is
 `runtime-state/verify/<n>/<repo>/image-build.log`).
+
+A project whose container repos need private dependencies (a private Go
+module the proxy cannot serve, a private npm registry) may instead prepare
+the image itself: the verification step declares the `image` parameter
+(the project sets `steps.<project>.verification.params.image` in its
+workspace yaml — [reference/config.md](reference/config.md) — and a
+ticket overrides it with `pf override`; empty, the default, keeps the
+Dockerfile above). The convention is the preparer's: **the image is
+prepared by a person** — its private dependencies and credentials are
+solved when it is built, and **any trouble it has is the user's to
+solve**; the lane never tries to fix or replace it. A set value names **one
+prepared image for every container repo of the project** — the bar never
+builds a Dockerfile then, and a repo needs none at all. The image is
+resolved to its local ID (`sha256:<64 hex>`, its RepoDigests recorded
+when it has any) and the container starts by that ID, **never pulled**: a
+machine without it answers "not checked" (exit 2, the fixed mark
+`pf-verify-image-missing` in the summary — the step hands off blocked
+without retrying, and the summary names the image). The image **must run
+as root** (`/run` must be writable for the keep-alive, the clone and the
+cache volume writable for the bar). Two reminders for the preparer: the
+daemon's allowlisted variables (`GOPROXY`, `GOPRIVATE`, …) still override
+the image's ENV when they are set — a host `GOPRIVATE` makes go fetch
+private modules over git inside the container, where there are no
+credentials — and a new image starts with an empty cache volume, which
+on its first mount copies whatever the image keeps under `/cache`; when
+the dependencies change, rebuild the image. An image with private Go
+dependencies (BuildKit keeps the credentials out of it):
+
+```dockerfile
+# syntax=docker/dockerfile:1
+FROM golang:1.24
+RUN --mount=type=ssh GOPRIVATE=example.com/* go mod download
+ENV GOCACHE=/cache/go/build
+```
+
+built with the preparer's agent (`docker build --ssh default=$SSH_AUTH_SOCK …`;
+a `--mount=type=secret` token works the same) — nothing of either lands
+in the image; the module cache stays inside it (`GOMODCACHE` outside
+`/cache`), only the build cache lives in the volume.
+
 Each run starts one container per such repo (`--init`, labelled
 `pf.verify.daemon` — the script's owner, `pf-step` — `pf.verify.boot` — a
 fresh nonce of the run — `pf.verify.wi`, `pf.verify.run`, `pf.verify.repo`
