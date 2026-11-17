@@ -11,8 +11,7 @@ refused, and `pf step remember` accepts only `experience.wrap`
 A follow-up is an item a delivered work item leaves for later (its PR body's
 follow-up section, or its capsule's `artifacts/delivery.md`). The ledger keeps
 every such item durable and searchable across work items; it lives in AIHub
-memories, never in the workspace's `scratch/` (disposable, pruned after 14
-days).
+memories, never in the workspace's `scratch/` (disposable, pruned by each category's retention).
 
 ## Triggers
 

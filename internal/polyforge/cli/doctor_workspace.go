@@ -16,12 +16,17 @@ import (
 //   - "workspace layout": root and .polyforge/ entries outside the
 //     convention, each with its suggested destination, a notes file
 //     (workspace.Notes: AGENTS.md, else CLAUDE.md) whose polyforge-managed
-//     block lacks the layout section, and a CLAUDE.md beside AGENTS.md
-//     that carries a duplicate managed block.
-//   - "workspace scratch": scratch/ entries older than 14 days, reported;
-//     `pf doctor --prune-scratch` removes them and lists them. Deletion
-//     stays an explicit operator act so doctor remains a probe anyone may
-//     run at any time.
+//     block lacks the layout section or carries an outdated one (a
+//     pre-#121 text — `pf init` refreshes it), and a CLAUDE.md beside
+//     AGENTS.md that carries a duplicate managed block.
+//   - "workspace scratch": the scratch/ category layout (polyforge#121)
+//     — every entry outside the categories (a loose top-level file, an
+//     unknown top-level directory, a category occupied by a file or
+//     symlink, a loose file inside a category) and every batch past its
+//     category's retention, each by its full path, with no row cap;
+//     `pf doctor --prune-scratch` removes only the stale batches inside
+//     the categories and lists them. Deletion stays an explicit operator
+//     act so doctor remains a probe anyone may run at any time.
 //   - "workspace memory policy": a mapped workspace path whose cli.toml
 //     declares no [memory_policy."<path>".<entry>] block (the built-in
 //     default applies; `pf init <ws>` writes an editable copy). A yaml
@@ -57,6 +62,18 @@ func workspaceLayoutCheck(wss []string) doctorCheck {
 			errs = append(errs, fmt.Sprintf("%s: %v", path, err))
 		} else if exists && !has {
 			notes = append(notes, fmt.Sprintf("%s has no <!-- polyforge:layout --> section in its polyforge-managed block — run `pf init %s` to add it", path, ws))
+		} else if has {
+			// a section that is not the current one is an outdated
+			// convention (a pre-#121 layout, before the scratch
+			// categories) — `pf init` replaces it in place. The trailing
+			// newline is trimmed on both sides: a section at the very end
+			// of a file may lack the one LayoutBlock carries.
+			text, _, err := workspace.LayoutSectionText(path)
+			if err != nil {
+				errs = append(errs, fmt.Sprintf("%s: %v", path, err))
+			} else if strings.TrimSuffix(text, "\n") != strings.TrimSuffix(workspace.LayoutBlock(), "\n") {
+				notes = append(notes, fmt.Sprintf("%s carries an outdated layout section — run `pf init %s` to refresh it", path, ws))
+			}
 		}
 		if dup {
 			notes = append(notes, fmt.Sprintf("%s carries a duplicate polyforge-managed block — %s is the canonical notes file; remove the block from %s by hand (pf never edits it)",
@@ -115,19 +132,29 @@ func memoryPolicyCheck(cfg Config, wss []string) doctorCheck {
 	return c
 }
 
-// scratchCheck reports — or, with prune, removes — the stale scratch
-// entries of every mapped workspace.
+// scratchRetention is the one wording of the categories' retentions —
+// the pass detail, the report and the prune line all spell it from here.
+const scratchRetention = "raw/ 3 days, tasks/ 14 days, sessions/ 14 days"
+
+// scratchCheck reports — or, with prune, removes — every mapped
+// workspace's stale scratch batches, and reports every scratch entry
+// outside the categories one by one (polyforge#121: the scratch row
+// lists full paths with no cap; strays are never removed, not even with
+// prune).
 func scratchCheck(wss []string, now time.Time, prune bool) doctorCheck {
 	c := doctorCheck{Name: docChScratch, Status: "pass"}
-	var found, errs []string
+	var stale, stray, errs []string
 	for _, ws := range wss {
-		rep, err := workspace.Scratch(ws, now, workspace.ScratchMaxAge, prune)
+		rep, err := workspace.Scratch(ws, now, prune)
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", ws, err))
 			continue
 		}
 		for _, n := range rep.Stale {
-			found = append(found, filepath.Join(ws, workspace.ScratchDir, n))
+			stale = append(stale, filepath.Join(ws, workspace.ScratchDir, n))
+		}
+		for _, n := range rep.Stray {
+			stray = append(stray, filepath.Join(ws, workspace.ScratchDir, n))
 		}
 		for _, sk := range rep.Skipped {
 			errs = append(errs, filepath.Join(ws, workspace.ScratchDir, sk))
@@ -135,15 +162,22 @@ func scratchCheck(wss []string, now time.Time, prune bool) doctorCheck {
 	}
 	var parts []string
 	switch {
-	case len(found) > 0 && !prune:
+	case len(stray) > 0:
 		c.Status = "warn"
-		parts = append(parts, fmt.Sprintf("%d scratch entr(ies) older than 14 days: %s — `pf doctor --prune-scratch` removes them", len(found), strings.Join(capRows(found), "; ")))
-	case len(found) > 0:
-		parts = append(parts, fmt.Sprintf("pruned %d scratch entr(ies) older than 14 days: %s", len(found), strings.Join(found, "; ")))
+		parts = append(parts, fmt.Sprintf("%d scratch entr(ies) outside the layout: %s — move them into raw/, tasks/ or sessions/, or delete them by hand; --prune-scratch never removes them (the top level holds only raw/, tasks/, sessions/)",
+			len(stray), strings.Join(stray, "; ")))
+	}
+	switch {
+	case len(stale) > 0 && !prune:
+		c.Status = "warn"
+		parts = append(parts, fmt.Sprintf("%d batch(es) past retention (%s): %s — `pf doctor --prune-scratch` removes them",
+			len(stale), scratchRetention, strings.Join(stale, "; ")))
+	case len(stale) > 0:
+		parts = append(parts, fmt.Sprintf("pruned %d batch(es) past retention: %s", len(stale), strings.Join(stale, "; ")))
 	case prune:
-		parts = append(parts, "no scratch entry older than 14 days: nothing pruned")
-	default:
-		parts = append(parts, "no scratch entry older than 14 days")
+		parts = append(parts, "no batch past retention: nothing pruned")
+	case len(stray) == 0:
+		parts = append(parts, "no stray scratch entry, no batch past its retention ("+scratchRetention+")")
 	}
 	if len(errs) > 0 {
 		c.Status = "warn"

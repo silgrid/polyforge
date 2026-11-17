@@ -216,9 +216,26 @@ Eight standing rules, binding on every polyforge session:
    `experience.*` / `fact.*`. Locally a workspace holds only `.repo/`
    (clones), `capsules/` (daemon-managed), `.polyforge/`
    (polyforge-generated only, plus `.polyforge/workflows/<lane>/`: the
-   workspace's own workflow lanes) and `scratch/` (disposable output; `pf
-   doctor` reports entries older than 14 days, `--prune-scratch` removes
-   them). Never write documents into the workspace root or `.polyforge/`.
+   workspace's own workflow lanes) and `scratch/` — disposable output in
+   fixed categories (polyforge#121), no loose file at its top level:
+   `scratch/raw/` for raw data (batch JSON, logs, downloaded archives,
+   history exports), whoever writes it — one directory per run, named
+   `<UTC time>-<source id>-<unique suffix>`, kept 3 days;
+   `scratch/tasks/` for a background task's other disposable output —
+   one directory per task, kept 14 days; and `scratch/sessions/` for a
+   session's other intermediate output — one directory per run, named
+   `<UTC time>-<id>`, its sub-agents under `agents/<id>/` inside it,
+   kept 14 days. `pf doctor` reports every entry outside the categories
+   and every batch past its retention; `--prune-scratch` removes only
+   stale batches inside the categories. A dispatched background task is
+   handed its directories at spawn: `PF_SCRATCH_DIR` (its
+   `scratch/tasks/<task id>/`) and `PF_SCRATCH_RAW_DIR` (its own raw
+   batch) in its environment, and the same absolute paths in its
+   prompt. A session settles its run directory at its first
+   intermediate artifact, writes raw data to its own raw batch under
+   `scratch/raw/`, and puts both full paths into every sub-agent brief
+   it dispatches. Never write documents into the workspace root or
+   `.polyforge/`.
 3. **Blockers become work items.** Root-cause obstacles instead of
    routing around them; an obstacle that is a bug or unresolvable here
    is tracked as a work item via `pf file`.
