@@ -85,7 +85,7 @@ func w79Attr(value, at string) map[string]any {
 }
 
 // w79GitLog answers the pushed chain's commit subjects (the claim's own
-// publish reached the hub's bare repo, so the clone's chain carries it).
+// publish reached the hub's bare repo, so the clone's chain holds it).
 func w79GitLog(t *testing.T, j *job, wi string) string {
 	t.Helper()
 	out, err := exec.Command("git", "--git-dir", j.git.GitDir,
@@ -145,7 +145,7 @@ func TestW79ClaimMergesStepParams(t *testing.T) {
 	}
 }
 
-// A key that carries nothing the lane declares is consumed (dropped with
+// A key that holds nothing the lane declares is consumed (dropped with
 // a line, never a refused claim) and cleared the same.
 func TestW79ClaimDropsUndeclaredStepParams(t *testing.T) {
 	r, hub, _ := w79ParamsEnv(t)
@@ -277,7 +277,7 @@ func TestW79ClaimResidueYieldsToRunningWrite(t *testing.T) {
 }
 
 // The residue rule is the WRITE TIME, never the re-claim path: a re-claim
-// that carries no sealed record at all (the ticket was re-queued) merges
+// that holds no sealed record at all (the ticket was re-queued) merges
 // the key by the recorded times too — the old residue loses to the newer
 // running write, and a value written while the ticket sat RE-QUEUED wins
 // over the chain's older one (review r2#1: neither may be dropped).
@@ -327,7 +327,7 @@ func TestW79ClaimResidueByWriteTime(t *testing.T) {
 		t.Fatalf("the second blocked close: %v", err)
 	}
 	// a value written while the ticket sat RE-QUEUED, newer than everything
-	// the chain carries: it WINS (the queued face's write is legitimate)
+	// the chain holds: it WINS (the queued face's write is legitimate)
 	hub.forceEnd(wi)
 	hub.mu.Lock()
 	delete(hub.seals, wi)
