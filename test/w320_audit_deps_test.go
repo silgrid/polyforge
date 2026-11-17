@@ -444,13 +444,22 @@ func TestW320AuditFetchLine(t *testing.T) {
 
 // TestW320AuditUsage: no surface or an unknown argument is a usage error.
 // --npm-prod-level tightens the npm production threshold only: its value may
-// be moderate or low, never high or critical (the default) or garbage.
+// be moderate or low, never high or critical (the default) or garbage - and
+// the rejection is real only with a surface named, so the value check is not
+// shadowed by the no-surface one (review r1#2): deleting the validation
+// turns these cases green, not exit-2 for another reason.
 func TestW320AuditUsage(t *testing.T) {
 	dir := w320aTree(t)
-	for _, args := range [][]string{nil, {"--skip"}, {"--npm"}, {"--npm-prod-level"}, {"--npm-prod-level", "high"}, {"--npm-prod-level", "critical"}} {
+	for _, args := range [][]string{nil, {"--skip"}, {"--npm"}, {"--npm-prod-level"}} {
 		err, code, _ := w320aExec(t, dir, w320aRun{args: args})
 		if code != 2 {
 			t.Fatalf("args %q: exit %d, want 2 (usage); stderr:\n%s", args, code, err)
+		}
+	}
+	for _, val := range []string{"high", "critical", "severe"} {
+		err, code, _ := w320aExec(t, dir, w320aRun{args: []string{"--npm", "web", "--npm-prod-level", val}})
+		if code != 2 || !strings.Contains(err, "audit-deps: --npm-prod-level must be moderate or low") {
+			t.Fatalf("--npm-prod-level %s: exit %d, want 2 with the value rejection; stderr:\n%s", val, code, err)
 		}
 	}
 }
