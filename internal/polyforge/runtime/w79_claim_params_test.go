@@ -73,10 +73,10 @@ func w79SeedStepParams(hub *fakeHub, wi string, key map[string]any) {
 }
 
 // w79GitLog answers the pushed chain's commit subjects (the claim's own
-// publish reached the hub's bare repo).
-func w79GitLog(t *testing.T, hub *fakeHub, wi string) string {
+// publish reached the hub's bare repo, so the clone's chain carries it).
+func w79GitLog(t *testing.T, j *job, wi string) string {
 	t.Helper()
-	out, err := exec.Command("git", "--git-dir", filepath.Join(hub.capsuleRepoBase, wi+".git"),
+	out, err := exec.Command("git", "--git-dir", j.git.GitDir,
 		"log", "--format=%s", "-10").CombinedOutput()
 	if err != nil {
 		t.Fatalf("git log of the pushed chain: %v\n%s", err, out)
@@ -122,7 +122,7 @@ func TestW79ClaimMergesStepParams(t *testing.T) {
 	if m := ov.Steps["merge"]; m != nil && len(m.Params) != 0 {
 		t.Fatalf("an undeclared param never enters the overlay: %+v", m.Params)
 	}
-	if log := w79GitLog(t, hub, wi); !strings.Contains(log, "step params:") {
+	if log := w79GitLog(t, j, wi); !strings.Contains(log, "step params:") {
 		t.Fatalf("the claim's publish of the merged params: %s", log)
 	}
 	if _, has := hub.items[wi].Attrs[api.StepParamsKey]; has {
