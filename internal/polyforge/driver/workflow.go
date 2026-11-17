@@ -60,6 +60,10 @@ type StepSpec struct {
 	// the driver never dispatches it.
 	Skippable bool
 	Skipped   bool
+	// RewindOnly mirrors `rewind_only` (default false): the step runs
+	// only after a rewind covers it — plan's pass records it skipped
+	// while its own attempts carry no rewind archive.
+	RewindOnly bool
 	// Skill mirrors `skill` ("" = none): the lane snapshot's skill file
 	// rendered into the prompt as the `# Skill` section.
 	Skill string
@@ -324,6 +328,7 @@ func workflowOf(lane *workflow.Lane) *Workflow {
 			ToolMinutes: s.ToolMinutes,
 			Waivable:    s.Waivable,
 			Skippable:   s.Skippable,
+			RewindOnly:  s.RewindOnly,
 			Skill:       s.Skill,
 			Resources:   s.Resources,
 			Vars:        s.Vars,
