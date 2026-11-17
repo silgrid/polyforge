@@ -40,6 +40,7 @@ var w80ContractPins = []string{
 	"a push another claim won loses to the remote's copy",
 	"is refused naming why (`DAEMON-507`, the blocked note carries the reason), never a silent fall-back to the default branch",
 	"a parent whose lane declares none leaves the sub-ticket untouched",
+	"a parent bound to no lane (a registry ticket used as the parent) declares nothing the same way: no target-branch file is written and the claim keeps the default branch",
 }
 
 var w80ConvergePins = []string{
@@ -66,6 +67,14 @@ func TestW80TargetBranchDocsContract(t *testing.T) {
 		if !strings.Contains(contract, pin) {
 			t.Errorf("docs/reference/workflow-contract.md does not carry the pinned sentence %q", pin)
 		}
+	}
+	// polyforge#114: the no-lane parent's unchanged sentence is pinned in
+	// BOTH documents — the lane key's bullet in docs/bundles.md carries
+	// the same rule the reference paragraph does.
+	noLanePin := w80ContractPins[len(w80ContractPins)-1]
+	bundles := w80Norm(w80DocRead(t, "docs/bundles.md"))
+	if !strings.Contains(bundles, noLanePin) {
+		t.Errorf("docs/bundles.md does not carry the pinned sentence %q", noLanePin)
 	}
 	converge := w80Norm(w80DocRead(t, "docs/design/polyforge-vnext/v2-converge.md"))
 	for _, pin := range w80ConvergePins {
