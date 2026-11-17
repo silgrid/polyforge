@@ -78,7 +78,15 @@ func TestW107OwnerName(t *testing.T) {
 			if code != http.StatusOK {
 				t.Fatalf("keyword: %d %s", code, raw)
 			}
-			return w107FirstItem(t, raw)
+			item := w107FirstItem(t, raw)
+			// r1#4: the excerpt flag must be seen working — the answer
+			// carries the bounded content excerpt, so this face really is
+			// the excerpt path, not the plain one.
+			ce, ok := item["content_excerpt"].(string)
+			if !ok || ce == "" {
+				t.Fatalf("the excerpt answer carries no content_excerpt: %s", raw)
+			}
+			return item
 		},
 		"browse": func() map[string]any {
 			code, raw := e.do(t, "GET", "/api/v1/memories/search?limit=20", e.key, nil, nil)
@@ -111,15 +119,22 @@ func TestW107OwnerName(t *testing.T) {
 		}
 	}
 
-	// The browse total is unchanged by the rename (no row rewrite).
+	// The browse answer is still exactly the one memory — the page and
+	// the total both; the rename rewrote no row (r1#4: exact, not
+	// "at least").
 	code, raw := e.do(t, "GET", "/api/v1/memories/search?limit=20", e.key, nil, nil)
 	if code != http.StatusOK {
 		t.Fatalf("browse after rename: %d %s", code, raw)
 	}
 	var page struct {
-		Total int `json:"total"`
+		Items []map[string]any `json:"items"`
+		Total int              `json:"total"`
 	}
-	if err := json.Unmarshal(raw, &page); err != nil || page.Total < 1 {
-		t.Fatalf("browse total after the rename: %v (%s)", err, raw)
+	if err := json.Unmarshal(raw, &page); err != nil {
+		t.Fatalf("browse after the rename: %v (%s)", err, raw)
+	}
+	if len(page.Items) != 1 || page.Total != 1 || page.Items[0]["id"] != created.ID {
+		t.Fatalf("browse after the rename = %d item(s) / total %d, want exactly the one memory: %s",
+			len(page.Items), page.Total, raw)
 	}
 }
