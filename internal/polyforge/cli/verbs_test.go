@@ -1397,19 +1397,20 @@ func TestW107Compat(t *testing.T) {
 		name   string
 		args   []string
 		offend string
+		id     string
 	}{
-		{"keyword human", []string{"recall", "--project", "polyforge", "needle", "--writer-kind", "step"}, sessionRow},
-		{"keyword --json", []string{"--json", "recall", "--project", "polyforge", "needle", "--writer-kind", "step"}, sessionRow},
-		{"browse human", []string{"recall", "--project", "polyforge", "--writer-kind", "step"}, sessionRow},
-		{"browse --json", []string{"--json", "recall", "--project", "polyforge", "--writer-kind", "step"}, sessionRow},
-		{"pre-writer row", []string{"recall", "--project", "polyforge", "needle", "--writer-kind", "session"}, oldRow},
+		{"keyword human", []string{"recall", "--project", "polyforge", "needle", "--writer-kind", "step"}, sessionRow, "mem_n"},
+		{"keyword --json", []string{"--json", "recall", "--project", "polyforge", "needle", "--writer-kind", "step"}, sessionRow, "mem_n"},
+		{"browse human", []string{"recall", "--project", "polyforge", "--writer-kind", "step"}, sessionRow, "mem_n"},
+		{"browse --json", []string{"--json", "recall", "--project", "polyforge", "--writer-kind", "step"}, sessionRow, "mem_n"},
+		{"pre-writer row", []string{"recall", "--project", "polyforge", "needle", "--writer-kind", "session"}, oldRow, "mem_o"},
 	} {
 		answer = `{"items":[` + tc.offend + `],"total":1}`
 		code, stdout, stderr := runPf(t, env, tc.args...)
 		if code == 0 {
 			t.Fatalf("%s: a mismatched page was accepted", tc.name)
 		}
-		if !strings.Contains(stderr, "did not apply the --writer-kind") || !strings.Contains(stderr, tc.offend[1:8]) {
+		if !strings.Contains(stderr, "did not apply the --writer-kind") || !strings.Contains(stderr, tc.id) {
 			t.Fatalf("%s: stderr = %q", tc.name, stderr)
 		}
 		if stdout != "" {
