@@ -1020,7 +1020,7 @@ var cmdRecall = &Command{
 	Name:    "recall",
 	Group:   GroupData,
 	Summary: "Search project memories (or browse them, with no query)",
-	Usage:   "pf recall --project P <query> [--any] [--type T] [--tags a,b] [--limit N]\n       pf recall --project P [--after CURSOR] [--sort updated|created] [--type T] [--tags a,b] [--limit N]",
+	Usage:   "pf recall --project P <query> [--any] [--type T] [--tags a,b] [--limit N] [--writer-kind session|step]\n       pf recall --project P [--after CURSOR] [--sort updated|created] [--type T] [--tags a,b] [--limit N] [--writer-kind session|step]",
 	Setup: func(fs *flag.FlagSet) {
 		fs.String("project", "", "project name (required; validated against the [workspace] mapping)")
 		fs.String("q", "", "query text (alternative to the positional argument); none = browse mode")
@@ -1033,6 +1033,7 @@ var cmdRecall = &Command{
 		// without --sort is aihub's own default, updated.
 		fs.String("after", "", "browse mode: continue after a previous page's next cursor")
 		fs.String("sort", "", "browse mode: updated (aihub's default) or created, both descending")
+		fs.String("writer-kind", "", "writer filter: session or step (memories the daemon stamped as a session or a step dispatch)")
 	},
 	Run: func(ctx *Context, fs *flag.FlagSet, args []string) error {
 		q := stringFlag(fs, "q")
@@ -1041,6 +1042,17 @@ var cmdRecall = &Command{
 		}
 		browse := strings.TrimSpace(q) == ""
 		after, sort := stringFlag(fs, "after"), stringFlag(fs, "sort")
+		// The writer filter is the #107 wire name verbatim, validated
+		// locally: an illegal value fails loudly here and no request is
+		// sent (an omitted flag is no filter at all — nothing default
+		// rides the wire).
+		writerKind := stringFlag(fs, "writer-kind")
+		switch writerKind {
+		case "":
+		case "session", "step":
+		default:
+			return fmt.Errorf("recall: --writer-kind must be session or step (got %q)", writerKind)
+		}
 		// Local flag validation, ahead of any config resolution or wire
 		// call: a refusal fails loudly here and no request is sent.
 		if browse && boolFlag(fs, "any") {
@@ -1054,6 +1066,9 @@ var cmdRecall = &Command{
 			}
 			if after != "" || sort != "" {
 				return fmt.Errorf("recall: --after and --sort are browse flags of the human direct-aihub path; a task agent searches only")
+			}
+			if writerKind != "" {
+				return fmt.Errorf("recall: --writer-kind is a filter of the human direct-aihub path; a task agent searches only")
 			}
 		}
 		// The default-20 limit is the CLI's product choice (aihub's
@@ -1087,7 +1102,7 @@ var cmdRecall = &Command{
 		}
 		// A keyword search forwards an explicitly given --after/--sort
 		// too: aihub answers the mixed shape with MEM-400 itself.
-		raw, err := ctx.searchMemories(proj, q, memType, tagList, limit, match, sort, after)
+		raw, err := ctx.searchMemories(proj, q, memType, tagList, limit, match, sort, after, writerKind)
 		if err != nil {
 			return err
 		}

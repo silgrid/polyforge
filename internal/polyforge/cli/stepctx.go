@@ -101,10 +101,12 @@ const taskMemories = "/task/memories"
 // sort and after (browse paging) reach aihub on the human
 // direct path only: the daemon's task memory proxy is search-only and
 // cmdRecall refuses browse and its flags there before calling this, so
-// they are never put on a daemon request.
-func (ctx *Context) searchMemories(proj, q, memType string, tags []string, limit int, match, sort, after string) (json.RawMessage, error) {
+// they are never put on a daemon request. writerKind (the #107 wire
+// filter) rides the human direct path only — cmdRecall refuses it inside
+// a task before this call.
+func (ctx *Context) searchMemories(proj, q, memType string, tags []string, limit int, match, sort, after, writerKind string) (json.RawMessage, error) {
 	if ctx.Task == "" {
-		return ctx.aihub().SearchMemories(proj, q, memType, tags, limit, match, sort, after, "")
+		return ctx.aihub().SearchMemories(proj, q, memType, tags, limit, match, sort, after, writerKind)
 	}
 	v := url.Values{"q": {q}, "project": {proj}, "type": {memType}, "tags": {strings.Join(tags, ",")},
 		"limit": {strconv.Itoa(limit)}, "match": {match}}
