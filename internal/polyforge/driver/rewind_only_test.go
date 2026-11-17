@@ -109,8 +109,8 @@ func TestRewindOnlyFirstRoundSkipped(t *testing.T) {
 		t.Fatal("the last step an agent runs is review, unmoved by the skip")
 	}
 	doc := handoffDocOf(t, dir)
-	if want := "1. `build`\n2. `fix`\n3. `review`（最后一步）"; !strings.Contains(doc, want) {
-		t.Fatalf("the opening's step order lacks the plain %q:\n%s", want, doc)
+	if !strings.Contains(doc, "1. `build`\n2. `fix`\n") || strings.Contains(doc, "`fix`（已跳过）") {
+		t.Fatalf("the opening's step order names fix a plain step (only a project skip is annotated):\n%s", doc)
 	}
 }
 
