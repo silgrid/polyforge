@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 
 	"github.com/silgrid/polyforge/internal/common/api"
@@ -181,7 +182,11 @@ type stepRememberRequest struct {
 	WorkItem                      string `json:"work_item"`
 }
 
-// stepRememberAs stores req as the step j's summary (stepRememberRoute).
+// stepRememberAs stores req as the step j's summary (stepRememberRoute),
+// stamped with the calling dispatch's writer identity: kind "step" and
+// the work item / step / attempt / model of the dispatch the caller runs
+// under (stepWriterModel) — the caller cannot self-report a writer (its
+// args are decoded strictly and carry none of the fields).
 func (d *Daemon) stepRememberAs(w http.ResponseWriter, j stepJob, req stepRememberRequest) {
 	switch {
 	case req.Project != "" && req.Project != j.project:
@@ -199,10 +204,18 @@ func (d *Daemon) stepRememberAs(w http.ResponseWriter, j stepJob, req stepRememb
 		writeErr(w, api.ErrMemBadInput, why)
 		return
 	}
+	model, trusted := stepWriterModel(readExecutionFile(filepath.Join(j.capsuleDir, capsule.ExecutionJSON)), j.step, j.attempt)
+	if !trusted {
+		writeErr(w, api.ErrDaemonBadInput, fmt.Sprintf(
+			"a step memory is stamped with its own dispatch's model, and work item %s's execution record does not name the calling dispatch (step %q, attempt %d) as its current one; nothing was stored", j.wi, j.step, j.attempt))
+		return
+	}
 	body := map[string]any{
 		"project": j.project, "work_item_id": j.wi, "type": req.Type, "visibility": "project",
 		"title": strings.TrimSpace(req.Title), "content": req.Content, "tags": req.Tags,
 		"idempotency_key": stepmem.IdempotencyKey(j.wi, j.step, j.attempt),
+		"writer_kind":     "step",
+		"writer_details":  map[string]any{"work_item": j.wi, "step": j.step, "attempt": j.attempt, "model": model},
 	}
 	var stored json.RawMessage
 	if err := d.hub.Do("POST", "/api/v1/memories", body, &stored); err != nil {
@@ -225,4 +238,27 @@ func (d *Daemon) stepRememberAs(w http.ResponseWriter, j stepJob, req stepRememb
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(stored)
+}
+
+// stepWriterModel answers the model of the calling dispatch from the
+// capsule's execution record. The record's own step_start wrote the
+// candidate BEFORE the dispatch's agent ran and cleared the ordinal
+// when the dispatch settled, so a record that still names the caller's
+// spawn (Dispatch == attempt) on an in-progress step proves the model
+// of THIS dispatch: a mid-flight model switch rewrites the candidate
+// only with the death's archive entry, after the ordinal cleared, so an
+// old attempt is never answered the next dispatch's model (the owner's
+// Q4 ruling). trusted false — the record absent or torn, the step
+// missing or settled, the ordinal naming another dispatch — refuses
+// the write; trusted with an empty candidate stores the empty model
+// (Q4's nullable rule), never an invented one.
+func stepWriterModel(ex *capsule.Execution, step string, attempt int) (model string, trusted bool) {
+	if ex == nil {
+		return "", false
+	}
+	st := ex.Steps[step]
+	if st == nil || st.Status != capsule.StepInProgress || st.Dispatch != int64(attempt) {
+		return "", false
+	}
+	return st.Candidate, true
 }

@@ -57,11 +57,19 @@ func stepDo(t *testing.T, sock, method, path, body string) (int, string) {
 }
 
 // stepDaemon is a test daemon whose /step/call callers all resolve to wi.
+// Its capsule carries a trusted execution record — step "fix" in
+// progress on dispatch 2 (the spawn the fake origin reports), candidate
+// pi:glm-5.3 — so `pf step remember`, which stamps the calling
+// dispatch's model and refuses a record that cannot prove it
+// (polyforge#119 Q4), has something real to read; a test that wants a
+// different or absent record rewrites or removes it (w119WriteExecution
+// / w119RemoveExecution).
 func stepDaemon(t *testing.T, wi string) *testDaemon {
 	t.Helper()
 	td := newTestDaemon(t, nil)
 	td.submitClaim(t, wi)
 	td.stepOriginOf = func(*http.Request) (stepJob, string) { return stepJob{wi: wi, step: "fix", attempt: 2}, "" }
+	w119WriteExecution(t, td, wi, capsule.StepInProgress, 2, "pi:glm-5.3")
 	return td
 }
 
@@ -364,6 +372,10 @@ func TestStepRoutesResolveTheSpawnedStep(t *testing.T) {
 	td := newTestDaemon(t, nil)
 	td.submitClaim(t, "wi_sm4")
 	td.submitClaim(t, "wi_sm5")
+	// the journaled dispatch is the record's current one (the driver's
+	// step_start precedes the spawn), so the step's summary write is
+	// stampable (polyforge#119)
+	w119WriteExecution(t, td, "wi_sm4", capsule.StepInProgress, 7, "pi:glm-5.3")
 	mh := &memHub{}
 	td.hub.mu.Lock()
 	td.hub.memDo = mh.do
@@ -420,6 +432,7 @@ func TestStepRoutesResolveTheSpawnedStep(t *testing.T) {
 func TestStepRoutesIdentifyAStepWhoseEnvironmentIsUnreadable(t *testing.T) {
 	td := newTestDaemon(t, nil)
 	td.submitClaim(t, "wi_sm6")
+	w119WriteExecution(t, td, "wi_sm6", capsule.StepInProgress, 3, "pi:glm-5.3")
 	mh := &memHub{}
 	td.hub.mu.Lock()
 	td.hub.memDo = mh.do
@@ -624,7 +637,7 @@ func TestW107StepWriterStamp(t *testing.T) {
 		t.Fatalf("writer_kind = %v, want step", p["writer_kind"])
 	}
 	d, ok := p["writer_details"].(map[string]any)
-	if !ok || d["work_item"] != "wi_ws1" || d["step"] != "fix" || d["attempt"] != float64(2) || d["model"] != "pi:glm-5.3" {
+	if !ok || d["work_item"] != "wi_ws1" || d["step"] != "fix" || d["attempt"] != 2 || d["model"] != "pi:glm-5.3" {
 		t.Fatalf("writer_details = %v, want the calling dispatch's identity", p["writer_details"])
 	}
 	// the idempotency key is unchanged (the stamp adds identity, not a
