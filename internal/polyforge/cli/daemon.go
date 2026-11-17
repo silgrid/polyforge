@@ -522,6 +522,12 @@ func (d *DaemonClient) OverrideWrite(wiID string, req protocol.OverrideWriteRequ
 		map[string]string{"X-PF-User": req.Operator})
 }
 
+// ParamsView reads one work item's params face — every declared step
+// param's final value and source (GET /jobs/{wi}/params, polyforge#79).
+func (d *DaemonClient) ParamsView(wiID string) (json.RawMessage, error) {
+	return d.do("GET", "/jobs/"+url.PathEscape(wiID)+"/params", "", nil, nil)
+}
+
 // Pause asks the daemon to pause a running WI (no body: the daemon's close
 // path carries the clean_pause semantics itself).
 func (d *DaemonClient) Pause(wiID string) (json.RawMessage, error) {

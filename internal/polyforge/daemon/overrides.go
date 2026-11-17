@@ -84,6 +84,19 @@ func (d *Daemon) resolveOverrideScene(wi string, item *api.WorkItem) (*overrideS
 				Detail: fmt.Sprintf("%s is %s on this daemon right now; try again in a moment", wi, ji.State)}
 		}
 	}
+	// polyforge#79: a QUEUED work item takes the attrs face — its
+	// per-ticket params ride the reserved step_params attrs key, so any
+	// machine and any Cell that claims it sees them — never a local
+	// scene, not even one an earlier claim left here. Only the params
+	// actions answer here (the write route refuses the rest); the read
+	// face composes from this machine's lane set.
+	if item != nil && item.Status == api.StatusQueued {
+		bundle := ""
+		if item.BundleName != nil {
+			bundle = *item.BundleName
+		}
+		return &overrideScene{posture: runtime.OverridePostureQueued, bundle: bundle}, nil
+	}
 	// no job here: the sealed scene of the last close (a blocked or
 	// long-paused work item), located the answer path's way
 	ex, dir := d.loadExecution(wi, item)

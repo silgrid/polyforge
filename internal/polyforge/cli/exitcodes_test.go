@@ -347,7 +347,7 @@ func TestDaemonVerbHelpOnlyExitGoldens(t *testing.T) {
 	want := []string{
 		"file", "queue", "cancel", "recall", "remember", "memory",
 		"submit", "answer", "pause", "resume",
-		"wrap", "override", "ops", "watch", "task", "step", "msg", "users", "api-keys", "machines", "projects",
+		"wrap", "override", "params", "ops", "watch", "task", "step", "msg", "users", "api-keys", "machines", "projects",
 		"backup", "cell", "migrate",
 		"doctor", "version", "profile", "init", "config", "workflows", "daemon", "aihub",
 	}

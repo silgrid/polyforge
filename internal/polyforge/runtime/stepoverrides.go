@@ -55,12 +55,60 @@ const (
 )
 
 // The postures the write lands in (protocol.OverrideView.Posture's
-// words).
+// words). The queued posture (polyforge#79) is a work item no daemon
+// holds: its per-ticket params ride the reserved step_params attrs key,
+// and the write face there is the daemon's machine-signed attrs route
+// (never a capsule).
 const (
 	OverridePostureRunning = "running"
 	OverridePosturePaused  = "paused"
 	OverridePostureBlocked = "blocked"
+	OverridePostureQueued  = "queued"
 )
+
+// StepParamsOfAttrs answers the per-ticket step params an attrs map
+// carries under api.StepParamsKey — {"<step-id>": {"<param>":
+// "<value>"}}, map[step]map[param]value — tolerating anything else: a
+// non-object key, a step entry that is no object, a param value that is
+// no single-line string, an empty step or param name are all dropped
+// (the attrs key is a machine-written boundary whose entries were
+// judged against a lane at write time; the claim re-validates every kept
+// entry against its own lane snapshot, and a planted or drifted shape
+// never blocks a claim). A key that carries nothing usable answers nil.
+func StepParamsOfAttrs(attrs map[string]any) map[string]map[string]string {
+	raw, ok := attrs[api.StepParamsKey]
+	if !ok {
+		return nil
+	}
+	obj, ok := raw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	out := map[string]map[string]string{}
+	for step, sv := range obj {
+		if step == "" {
+			continue
+		}
+		so, ok := sv.(map[string]any)
+		if !ok {
+			continue
+		}
+		for name, v := range so {
+			value, ok := v.(string)
+			if !ok || name == "" || strings.Contains(value, "\n") {
+				continue
+			}
+			if out[step] == nil {
+				out[step] = map[string]string{}
+			}
+			out[step][name] = value
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
 
 // overridePushTimeout bounds the running posture's chain push (the same
 // deadline the claim's pending-record publish uses, protocol.PushTimeout;
