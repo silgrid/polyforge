@@ -40,7 +40,7 @@ func TestShippedLanesLoad(t *testing.T) {
 		}
 		got[lane.Name] = lane
 	}
-	for name, max := range map[string]int{"develop": 3, "micro": 3, "integrate": 3, "release": 0} {
+	for name, max := range map[string]int{"develop": 3, "epic": 3, "micro": 3, "integrate": 3, "release": 0} {
 		l := got[name]
 		if l == nil {
 			t.Fatalf("shipped lane %s missing (have %v)", name, keys(got))

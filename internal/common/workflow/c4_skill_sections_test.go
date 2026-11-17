@@ -3,7 +3,7 @@ package workflow_test
 // c4_skill_sections_test.go: workflow contract 4 moves what a step reads
 // and checks before it starts, and what its hand-off carries, out of lane
 // keys (inputs, verifies, outputs) into prose (design #483 §12 row 10).
-// Every step of the four built-in lanes says both: its
+// Every step of the five built-in lanes says both: its
 // skill carries the two sections, and a step without a skill carries them
 // in its own definition. The loader does not judge prose; this test does.
 
@@ -24,12 +24,12 @@ var c4Sections = map[string]*regexp.Regexp{
 	"交接要写什么":      regexp.MustCompile(`(?m)^#{1,6} 交接要写什么(\s|$)`),
 }
 
-// TestShippedStepsSayWhatTheyReadAndHandOff: per step of develop, micro,
-// integrate and release, its skill file — or, without one, its
+// TestShippedStepsSayWhatTheyReadAndHandOff: per step of develop, epic,
+// micro, integrate and release, its skill file — or, without one, its
 // definition — carries both sections.
 func TestShippedStepsSayWhatTheyReadAndHandOff(t *testing.T) {
 	checked := 0
-	for _, name := range []string{"develop", "micro", "integrate", "release"} {
+	for _, name := range []string{"develop", "epic", "micro", "integrate", "release"} {
 		dir := filepath.Join(shippedLanes, name)
 		lane, errs := workflow.Load(dir)
 		if len(errs) > 0 {
@@ -59,7 +59,7 @@ func TestShippedStepsSayWhatTheyReadAndHandOff(t *testing.T) {
 			checked++
 		}
 	}
-	if checked < 19 {
+	if checked < 26 {
 		t.Fatalf("checked %d steps, want the four lanes' 19 at least", checked)
 	}
 }
