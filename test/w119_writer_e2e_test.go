@@ -187,6 +187,11 @@ func TestW107DaemonCLIWriterStampE2E(t *testing.T) {
 	if fixStep == nil {
 		t.Fatalf("the execution record carries no fix step: %s", ex)
 	}
+	// r1#5: without this the model comparison below could hold vacuously
+	// (an empty candidate would stamp a null model either way)
+	if fixStep.Candidate == "" {
+		t.Fatalf("the fix dispatch's candidate is empty, so the model check would be vacuous: %+v", fixStep)
+	}
 	if stepDetails["model"] != fixStep.Candidate {
 		t.Fatalf("step writer_details model = %v, want the dispatch's candidate %q", stepDetails["model"], fixStep.Candidate)
 	}
