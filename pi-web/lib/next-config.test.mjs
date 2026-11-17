@@ -1,4 +1,4 @@
-// Pins the agent-build escape: Next.js 16.4.x defaults experimental.agentUpgrade
+// Pins the agent-build escape: Next.js defaults experimental.agentUpgrade
 // to 'security' (next/dist/server/config-shared.js), and with that policy a
 // build whose environment looks like an agent stops with SecurityFatalError as
 // soon as the advisory bulk check finds the installed version affected
@@ -46,6 +46,6 @@ test("switches off Next's agent security-upgrade abort (experimental.agentUpgrad
   assert.equal(
     config.experimental?.agentUpgrade,
     false,
-    "next.config.ts must set experimental.agentUpgrade to false: with the 16.4.x default 'security' an agent-run build stops with SecurityFatalError on any advisory affecting the installed next",
+    "next.config.ts must set experimental.agentUpgrade to false: with the default 'security' an agent-run build stops with SecurityFatalError on any advisory affecting the installed next",
   );
 });
