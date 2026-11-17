@@ -44,6 +44,14 @@ type RunSpec struct {
 	MaxTokens int64
 	WorkDir   string
 	TaskID    string
+	// ScratchTaskDir / ScratchRawDir are the task's scratch directories
+	// the daemon created before this dispatch (empty when the caller wired
+	// none): the harness's environment carries them as
+	// workspace.EnvScratchDir / workspace.EnvScratchRawDir and the prompt's
+	// closing # Scratch section names the same absolute paths
+	// (polyforge#121, owner ruling Q3).
+	ScratchTaskDir string
+	ScratchRawDir  string
 	// ReadOnlyTools selects the read/search-only tool profile.
 	ReadOnlyTools bool
 	// Limits are the stuck-detection bounds of this attempt (AC9: the
