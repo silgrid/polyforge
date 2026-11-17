@@ -62,10 +62,10 @@ const argv = () => readFileSync(argvLog, "utf8").trim().split("\n").filter(Boole
  *  presence probe's cache so the route reads the new version). */
 async function atVersion(version) {
   writeFileSync(versionFile, version + "\n");
-  writeFileSync(argvLog, "");
   await status.probePolyforgeVersion(true);
+  writeFileSync(argvLog, "");
 }
-const onlyProbes = () => argv().every((call) => call.includes("--version")) && argv().length > 0;
+const onlyProbes = () => argv().every((call) => call.includes("--version"));
 
 test("the writer filter's shape refusal: an illegal kind answers 400 with no pf process at all (r2#1)", async () => {
   await atVersion("v0.2.3");
