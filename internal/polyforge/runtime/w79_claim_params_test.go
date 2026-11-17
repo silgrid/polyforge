@@ -204,7 +204,7 @@ func TestW79ClaimKeepsKeyOnPublishFailure(t *testing.T) {
 // A residual step_params key (the race the write side detected and left
 // behind, a publish that failed at the first claim, a clear that failed)
 // never resurrects its pre-claim values over the running writes the
-// capsule chain carries: a re-claim — the sealed-head continue — clears
+// capsule chain holds: a re-claim — the sealed-head continue — clears
 // the key without merging (review r1#8; the key belongs to the QUEUED
 // ticket, a claimed one's truth is the chain).
 func TestW79ClaimResidueYieldsToRunningWrite(t *testing.T) {
