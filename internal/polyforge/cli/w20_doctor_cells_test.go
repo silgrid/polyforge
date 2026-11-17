@@ -518,8 +518,10 @@ func TestW20DoctorCellSocketFromEnv(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
 		t.Fatalf("doctor --json: %v", err)
 	}
-	if st, detail := w20Find(t, doc, "alpha", "aihub projects"); st != "pass" || !strings.Contains(detail, "aproj") {
-		t.Fatalf("alpha aihub projects = %s %q, want pass naming aproj (the read must dial the env-resolved socket)", st, detail)
+	// the pass detail counts ("all 1 mapped project(s) are known to
+	// aihub"); the project's own read is judged by the hub recorder below
+	if st, detail := w20Find(t, doc, "alpha", "aihub projects"); st != "pass" {
+		t.Fatalf("alpha aihub projects = %s %q, want pass (the read must dial the env-resolved socket)", st, detail)
 	}
 	aprojSeen := false
 	for _, r := range alpha.rec.all() {

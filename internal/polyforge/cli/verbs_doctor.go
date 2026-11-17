@@ -499,6 +499,12 @@ func runDoctorChecks(ctx *Context, pruneScratch, pruneCapsules, fixPrompts bool)
 		}
 		rr := &doctorRun{cell: cc.Profile, profile: cc.Profile, cellPath: cc.Path, cfg: cc.Cfg, anyMapped: anyMapped,
 			prune: pruneScratch, pruneCapsules: pruneCapsules, fixPrompts: fixPrompts}
+		// the Cell file's socket is the Host file's own value (LoadCellFile
+		// copies it without the environment overlay); every read of this
+		// Cell dials the socket the invocation resolved (PF_DAEMON_SOCKET /
+		// --socket, polyforge#20 review r1#2), exactly like the Host-level
+		// probes above
+		rr.cfg.DaemonSocket = cfg.DaemonSocket
 		for _, ws := range cc.Cfg.Mapping.Workspaces() {
 			if st, err := os.Stat(ws); err == nil && st.IsDir() {
 				rr.present = append(rr.present, ws)
