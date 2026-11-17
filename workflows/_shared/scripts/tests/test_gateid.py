@@ -171,7 +171,7 @@ class ToolsGateIdConsistencyTest(unittest.TestCase):
                 self.assertEqual(sh.returncode, 0, sh.stderr)
                 self.assertEqual(gateid.show(d, rev, image=IMAGE_ID), sh.stdout,
                                  "the lane's --show text with an image differs from tools/gate-id's")
-                shid = self.sh_gate_id(d, "--show", "--image", IMAGE_ID, rev)
+                shid = self.sh_gate_id(d, "--image", IMAGE_ID, rev)
                 self.assertEqual(shid.returncode, 0, shid.stderr)
                 self.assertEqual(gateid.gate_id(d, rev, image=IMAGE_ID), shid.stdout.decode("utf-8").strip())
                 # the image moves the id: never the no-image one
