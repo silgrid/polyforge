@@ -129,6 +129,14 @@ func TestEpicResumeResetKey(t *testing.T) {
 	if len(errs) != 1 || errs[0].Code != workflow.CodeInvalidValue || errs[0].Path != "resume_reset" {
 		t.Fatalf("resume_reset naming no step of the lane: defects %v, want one %s at resume_reset", errs, workflow.CodeInvalidValue)
 	}
+	// a user lane declares the key too, over its own steps
+	set := workflow.ForWorkspace(t.TempDir(), t.TempDir())
+	workflowtest.WriteLane(t, set.User, "mine",
+		"children_branch: \"feature/{seq}\"\nepic: true\nresume_reset: work\nsteps:\n  - { id: work }\n")
+	user, _, err := set.Load("mine")
+	if err != nil || user == nil || user.ResumeReset != "work" {
+		t.Fatalf("a user lane declares resume_reset too: %v, %v", user, err)
+	}
 }
 
 // TestEpicLaneKeyNeedsChildrenBranch: `epic: true` names the branch its
