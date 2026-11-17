@@ -474,8 +474,8 @@ class PreparedImageTest(unittest.TestCase):
 
     def test_start_args_pull_never_only_for_a_prepared_image(self) -> None:
         args = DockerCLI().start_args(ContainerSpec(name="n", image="sha256:" + "ab" * 32, pull_never=True))
-        i = args.index("--pull")
-        self.assertEqual(args[i + 1], "never")
+        self.assertIn("--pull", args, "a prepared image is started with --pull never")
+        self.assertEqual(args[args.index("--pull") + 1], "never")
         self.assertEqual(DockerCLI().start_args(ContainerSpec(name="n", image="i:t")).count("--pull"), 0)
 
     def test_a_reference_that_cannot_be_one_is_refused_before_the_engine(self) -> None:
