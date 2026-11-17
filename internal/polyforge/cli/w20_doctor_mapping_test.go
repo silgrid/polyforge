@@ -19,8 +19,9 @@ import (
 // w20MappingFixture builds a dual-Cell machine whose two config files
 // carry mappings as told (defMapping/alphaMapping: "" = none), over the
 // w20 fake Host (per-profile GET /status, per-Cell AIHubs). It answers
-// the runPf env and the config dir.
-func w20MappingFixture(t *testing.T, defMapping, alphaMapping string) (map[string]string, string) {
+// the runPf env, the config dir and the two Cells' fake AIHubs (their
+// recorders judge per-Cell segregation).
+func w20MappingFixture(t *testing.T, defMapping, alphaMapping string) (map[string]string, string, *w17Hub, *w17Hub) {
 	t.Helper()
 	def, alpha := w20FakeHub(t), w20FakeHub(t)
 	wsD, wsA := t.TempDir(), t.TempDir()
@@ -53,7 +54,7 @@ func w20MappingFixture(t *testing.T, defMapping, alphaMapping string) (map[strin
 	if err := os.WriteFile(filepath.Join(cfgDir, "cli-alpha.toml"), []byte(cell), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return map[string]string{"XDG_CONFIG_HOME": xdg, "POLYFORGE_DATA_DIR": t.TempDir()}, cfgDir
+	return map[string]string{"XDG_CONFIG_HOME": xdg, "POLYFORGE_DATA_DIR": t.TempDir()}, cfgDir, def, alpha
 }
 
 // TestW20DoctorMappingVerdict (AC3): the mapping row judges the whole
@@ -62,7 +63,7 @@ func w20MappingFixture(t *testing.T, defMapping, alphaMapping string) (map[strin
 // a Cell with a mapping passes as before.
 func TestW20DoctorMappingVerdict(t *testing.T) {
 	t.Run("default unmapped, alpha mapped", func(t *testing.T) {
-		env, _ := w20MappingFixture(t, "", t.TempDir())
+		env, _, _, _ := w20MappingFixture(t, "", t.TempDir())
 		code, stdout, stderr := runPf(t, env, "--json", "doctor")
 		if code != 0 {
 			t.Fatalf("a machine whose alpha Cell maps: exit %d (stdout %s stderr %s)", code, stdout, stderr)
@@ -86,7 +87,7 @@ func TestW20DoctorMappingVerdict(t *testing.T) {
 		}
 	})
 	t.Run("every Cell unmapped", func(t *testing.T) {
-		env, _ := w20MappingFixture(t, "", "")
+		env, _, _, _ := w20MappingFixture(t, "", "")
 		code, stdout, _ := runPf(t, env, "--json", "doctor")
 		if code != 1 {
 			t.Fatalf("a machine no Cell maps: exit %d, want 1 (stdout %s)", code, stdout)
@@ -106,7 +107,7 @@ func TestW20DoctorMappingVerdict(t *testing.T) {
 		}
 	})
 	t.Run("only the default Cell mapped", func(t *testing.T) {
-		env, _ := w20MappingFixture(t, t.TempDir(), "")
+		env, _, _, _ := w20MappingFixture(t, t.TempDir(), "")
 		// no named Cell file exists: drop cli-alpha.toml's mapping by
 		// removing the file — w20MappingFixture wrote it, so remove it here
 		cfgDir := filepath.Join(env["XDG_CONFIG_HOME"], "polyforge")

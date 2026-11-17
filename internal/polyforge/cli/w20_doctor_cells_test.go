@@ -65,6 +65,8 @@ func w20FakeHub(t *testing.T) *w17Hub {
 			io.WriteString(w, `{"items":[]}`)
 		case strings.HasPrefix(r.URL.Path, "/api/v1/projects/") && strings.HasSuffix(r.URL.Path, "/ready-queue"):
 			io.WriteString(w, `{"project":"`+strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/v1/projects/"), "/ready-queue")+`","items":[],"running":[],"paused":[]}`)
+		case strings.HasPrefix(r.URL.Path, "/api/v1/work-items/"):
+			io.WriteString(w, `{"id":"`+strings.TrimPrefix(r.URL.Path, "/api/v1/work-items/")+`","status":"wrapped"}`)
 		case r.URL.Path == "/api/v1/work-items":
 			io.WriteString(w, `{"items":[]}`)
 		default:
