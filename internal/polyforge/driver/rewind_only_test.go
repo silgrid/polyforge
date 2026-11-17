@@ -7,8 +7,10 @@ package driver
 // resets it to pending it runs — a gate FAIL's (automatic or
 // --per-owner) and an owner's rewind alike, both recording the same
 // archives on the step's own attempts — and it runs on every later round
-// another rewind resets it to. A project skip of a `skippable` it
-// declares wins over the activation, and the step never reaches the
+// another rewind resets it to. A rewind OUTSIDE the range activates
+// nothing, a restart before any rewind keeps the skip, the activation
+// survives the restart, and a project skip of a `skippable` it declares
+// wins over the activation; the step never reaches the
 // lane's end, so the last step an agent runs and the wrap attrs of a
 // skipped tail move nowhere. The activation is the durable ledger's
 // (execution.json): a restarted driver dispatches the activated step too.
@@ -191,6 +193,25 @@ func TestRewindOnlyDispatch(t *testing.T) {
 		}
 	})
 
+	t.Run("a rewind outside the range does not activate it", func(t *testing.T) {
+		front := "max_rewinds: 1\nsteps:\n  - { id: build }\n  - { id: fix, rewind_only: true }\n  - { id: review, gate: true, on_fail: { target: build } }\n  - { id: test }\n  - { id: verify, gate: true, on_fail: { target: test } }\n"
+		script := []fakeEntry{done(`{}`), done(`{}`), done(`{}`), gateFAIL(), done(`{}`), done(`{}`)}
+		d, sp, log, dir := rewindEnv(t, front, script, "")
+		if err := d.Run(context.Background()); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if got := rewindDispatched(sp); !reflect.DeepEqual(got, []string{"build", "review", "test", "verify", "test", "verify"}) {
+			t.Fatalf("dispatched %v, want fix never dispatched (the verify FAIL rewinds [test, verify), not over fix)", got)
+		}
+		x := readExec(t, filepath.Join(dir, capsule.ExecutionJSON))
+		if x.Steps["fix"].Status != capsule.StepSkipped || len(x.Steps["fix"].Attempts) != 0 {
+			t.Fatalf("fix %q with %+v attempts, want skipped with none (a rewind outside its range activates nothing)", x.Steps["fix"].Status, x.Steps["fix"].Attempts)
+		}
+		if n := log.count("step_skipped"); n != 1 || !log.has("step_skipped", "step", "fix") {
+			t.Fatalf("events %v: want one step_skipped {step: fix}", log.kinds())
+		}
+	})
+
 	t.Run("a project skip wins over the activation", func(t *testing.T) {
 		d, sp, log, dir := rewindEnv(t, rewindOnlySkipLane, []fakeEntry{done(`{}`), gateFAIL(), done(`{}`), done(`{}`)}, `["fix"]`+"\n")
 		if err := d.Run(context.Background()); err != nil {
@@ -209,12 +230,23 @@ func TestRewindOnlyDispatch(t *testing.T) {
 	})
 }
 
-// The activation is the durable ledger's: a fresh driver over the same
-// execution.json — the restart after a daemon death — dispatches the
-// activated step with no replay of the first round.
+// The activation is the durable ledger's — and so is the first-round
+// skip. The round-1 state is landed through the transitions plan's pass
+// itself issues (the loop cannot be stopped between a FAIL's rewind and
+// the next dispatch without a crash harness): TransStepSkipped records
+// the skip (refused by the pre-rewind_only guard, so this is red on the
+// old code), the results complete the round, and a fresh driver over
+// the same execution.json — the restart after a daemon death — then
+// dispatches the activated step with no replay of the first round.
 func TestRewindOnlyActivationSurvivesTheRestart(t *testing.T) {
-	d1, _, _, dir := rewindEnv(t, rewindOnlyMidLane, nil, "")
+	d1, _, log1, dir := rewindEnv(t, rewindOnlyMidLane, nil, "")
 	mustInit(t, d1)
+	if err := d1.transition(TransitionRequest{Kind: TransStepSkipped, StepID: "fix", SpawnN: 0}); err != nil {
+		t.Fatalf("skip fix (the first round's own recording): %v", err)
+	}
+	if n := log1.count("step_skipped"); n != 1 || !log1.has("step_skipped", "step", "fix") {
+		t.Fatalf("events %v: want the first round to have recorded fix skipped", log1.kinds())
+	}
 	mustStart(t, d1, "build", 1)
 	if err := d1.transition(TransitionRequest{Kind: TransStepResult, StepID: "build", SpawnN: 1, Result: &StepResult{WIID: "wi_rewind", StepID: "build", SpawnN: 1, Outcome: OutcomeCompleted, Output: json.RawMessage(`{}`)}}); err != nil {
 		t.Fatalf("result build: %v", err)
@@ -244,5 +276,45 @@ func TestRewindOnlyActivationSurvivesTheRestart(t *testing.T) {
 	}
 	if got := rewindDispatched(sp); !reflect.DeepEqual(got, []string{"build", "fix", "review"}) {
 		t.Fatalf("dispatched %v, want the restarted driver to run the activated fix", got)
+	}
+}
+
+// A restart before any rewind keeps the first-round skip: nothing but a
+// rewind archive activates the step, so the restarted driver skips it
+// again (red on the old code at the first round's own skip transition).
+func TestRewindOnlyRestartBeforeActivationKeepsTheSkip(t *testing.T) {
+	d1, _, log1, dir := rewindEnv(t, rewindOnlyMidLane, nil, "")
+	mustInit(t, d1)
+	if err := d1.transition(TransitionRequest{Kind: TransStepSkipped, StepID: "fix", SpawnN: 0}); err != nil {
+		t.Fatalf("skip fix (the first round's own recording): %v", err)
+	}
+	if n := log1.count("step_skipped"); n != 1 {
+		t.Fatalf("events %v: want the first round to have recorded fix skipped", log1.kinds())
+	}
+	mustStart(t, d1, "build", 1)
+	if err := d1.transition(TransitionRequest{Kind: TransStepResult, StepID: "build", SpawnN: 1, Result: &StepResult{WIID: "wi_rewind", StepID: "build", SpawnN: 1, Outcome: OutcomeCompleted, Output: json.RawMessage(`{}`)}}); err != nil {
+		t.Fatalf("result build: %v", err)
+	}
+
+	sp := &fakeSpawner{script: []fakeEntry{done(`{}`)}}
+	d2, err := New(Config{
+		WI:       WIInfo{ID: "wi_rewind", CapsuleDir: dir, BundleName: "demo"},
+		Spawner:  sp,
+		Log:      &eventLog{},
+		SpawnN:   2,
+		Language: func() string { return stepcall.LangZhCN },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := d2.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := rewindDispatched(sp); !reflect.DeepEqual(got, []string{"review"}) {
+		t.Fatalf("dispatched %v, want the restart to skip fix again (no rewind has covered it)", got)
+	}
+	x := readExec(t, filepath.Join(dir, capsule.ExecutionJSON))
+	if x.WorkflowStatus != StatusCompleted || x.Steps["fix"].Status != capsule.StepSkipped || len(x.Steps["fix"].Attempts) != 0 {
+		t.Fatalf("the unrestored first-round skip: %q fix %q %+v", x.WorkflowStatus, x.Steps["fix"].Status, x.Steps["fix"].Attempts)
 	}
 }
