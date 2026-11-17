@@ -16,6 +16,8 @@ package test
 // order: hold, move, then the rest, then verify and release).
 
 import (
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -109,7 +111,7 @@ func TestPF118EpicSplitSkillContract(t *testing.T) {
 	}
 	for rel, text := range map[string]string{
 		"skills/polyforge/verbs/file.md (the split section)": sec,
-		"skills/polyforge/SKILL.md (the intent row)":          strings.Join(strings.Fields(row), " "),
+		"skills/polyforge/SKILL.md (the intent row)":         strings.Join(strings.Fields(row), " "),
 	} {
 		for _, m := range regexp.MustCompile(`polyforge(#[0-9]+)?`).FindAllStringSubmatch(text, -1) {
 			if m[1] == "" {
@@ -117,4 +119,40 @@ func TestPF118EpicSplitSkillContract(t *testing.T) {
 			}
 		}
 	}
+}
+
+// pf118Section answers the part of body from the first line starting
+// with from up to (not including) the first later line starting with
+// upto (a heading at the same or higher level).
+func pf118Section(t *testing.T, body, from, upto string) string {
+	t.Helper()
+	lines := strings.Split(body, "\n")
+	start := -1
+	for i, l := range lines {
+		if strings.HasPrefix(l, from) {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		t.Fatalf("the section starting %q is absent", from)
+	}
+	var out []string
+	for _, l := range lines[start:] {
+		if len(out) > 0 && strings.HasPrefix(l, upto) {
+			break
+		}
+		out = append(out, l)
+	}
+	return strings.Join(out, "\n")
+}
+
+// w68Raw reads one repo-relative file whole (no flattening).
+func w68Raw(t *testing.T, rel string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(v1Root(t), filepath.FromSlash(rel)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }
