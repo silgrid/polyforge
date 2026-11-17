@@ -114,9 +114,10 @@ func TestW405ReleaseGateIsTheConfPlanInTheContainer(t *testing.T) {
 		t.Fatalf("the gate ran %q in the container, want the conf's full plan %q\n%v", got, want, calls)
 	}
 	// the order: the xrefs gate, the image, the container, the engine, the
-	// plan, the container's removal, then the audit gate and the release
-	// build
-	order := []string{"xrefs", "docker gate-build ", "docker run ", "docker exec ", "docker rm ", "audit", "build"}
+	// plan, the container's removal, the release build, then the audit
+	// gate (polyforge#113: the default audit is the engine's own command
+	// and runs after the binaries build)
+	order := []string{"xrefs", "docker gate-build ", "docker run ", "docker exec ", "docker rm ", "build", "audit"}
 	last := -1
 	for _, p := range order {
 		i := relIndex(calls[last+1:], p)

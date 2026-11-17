@@ -50,6 +50,12 @@ what it claims before you build on it or report it.
   (absolute) and that every capsule-relative path resolves against it, the work item
   (`runtime-state/work-item.json`), its instruction — the sections of this step's definition it
   follows, read from its rendered copy `workflows/_rendered/<step>.md` — what it may write and what it returns.
+  Its brief also carries the output constraints (SKILL.md session rule 9's six duties — a
+  sub-agent cannot be relied on to load the rules itself): the sub-agent saves its raw
+  material complete into the step's `downloads/` directory (the brief names the absolute
+  path), returns only a summary and an evidence index — paths, line ranges or JSON
+  pointers, with hashes — that you can read on from, keeps each of its tool returns within
+  rule 9's bound, and never reloads material it already saved.
   It never runs `pf step` (no question to the owner, no hand-off, no hub call), never writes
   `runtime-state/` or `artifacts/handoff.md`, starts nothing in the background and dispatches no
   sub-agent of its own; an open question comes back in its answer.

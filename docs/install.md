@@ -253,10 +253,12 @@ this page.
 ## Dependency-audit tools
 
 A machine that runs the full verification bar outside a container (a
-`verify` step at the full tier, in the daemon) needs the dependency-audit
-gate's two tools on `PATH`, and
-the gate fails closed without them — a missing tool is a red bar, never a
-skip:
+`verify` step at the full tier, in the daemon), and a machine that cuts a
+release (`.polyforge/release.sh`, whose default dependency audit runs the
+same gate's command on the release host, after the build) need the
+dependency-audit gate's two tools on `PATH`, and
+the gate fails closed without them — a missing tool is a red bar (on the
+release host, a preflight problem before any gate), never a skip:
 
 - **npm** — comes with Node.js (macOS: `brew install node`; Linux:
   `apt install nodejs npm`).
@@ -267,5 +269,7 @@ skip:
 
 The gate reads the public advisory data over the network (the npm registry's
 advisory endpoint and vuln.go.dev), so an unreachable source is a red bar
-too. `pf doctor`'s `audit tools` row reports each missing tool with this
+too. Every audited surface prints when its data was fetched (UTC) and its
+source — `surface <name>: advisories fetched <time> from <source>` — so a
+report's freshness is visible. `pf doctor`'s `audit tools` row reports each missing tool with this
 install command; it only warns and never moves the doctor's exit code.

@@ -2,12 +2,19 @@
 # Stub npm for the audit-deps unit tests: records its arguments and replays a
 # recorded `npm audit --json` report. W320_NPM_OUT names the stdout file,
 # W320_NPM_ERR an optional stderr file, W320_NPM_RC the exit status. A run
-# that drops dev dependencies (--omit=dev) answers an empty report, so a
-# helper that narrowed the tree would turn a dev-only finding green.
+# that drops dev dependencies (--omit=dev) answers W320_NPM_PROD_OUT when
+# it names a file (the production-tree audit a declared --npm-prod-level
+# runs), else an empty report, so a helper that narrowed the whole-tree run
+# would turn a dev-only finding green.
 printf '%s\n' "$*" >>"${W320_STUB_ARGS:-/dev/null}"
 case " $* " in
+*" config get registry "*) echo https://registry.npmjs.org/; exit 0 ;;
 *" --omit=dev "* | *" --omit dev "* | *" --production "*)
-	printf '{"auditReportVersion":2,"vulnerabilities":{},"metadata":{}}\n'
+	if [ -n "${W320_NPM_PROD_OUT:-}" ]; then
+		cat "$W320_NPM_PROD_OUT"
+	else
+		printf '{"auditReportVersion":2,"vulnerabilities":{},"metadata":{}}\n'
+	fi
 	exit 0
 	;;
 esac
