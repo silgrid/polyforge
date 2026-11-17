@@ -133,16 +133,28 @@ func TestW111ScopedCommandSelected(t *testing.T) {
 }
 
 // TestW111ScopedCommandExcludedAndOnce: an exclude= match removes the path
-// from the mapping's reach, and one declaration adds its command however
-// many of its paths changed.
+// from the mapping's reach — a change confined to the excluded path adds
+// nothing (delete the engine's path_excluded check and this reds) — and one
+// declaration adds its command however many of its paths changed.
 func TestW111ScopedCommandExcludedAndOnce(t *testing.T) {
 	conf := "stack=go\nfast_gate=echo FAST\nexclude=lib/skip.go\nscoped_command=lib/*|echo LIB-SUITE\n"
 	dir, base := w25e2eFixture(t, w111scFiles(conf))
 	w25e2eWrite(t, dir, "lib/skip.go", "package lib\n\nfunc Skipped() int { return 1 }\n")
-	w25e2eWrite(t, dir, "lib/two.go", "package lib\n\nfunc Two() int { return 2 }\n")
-	w25e2eCommit(t, dir, "change lib twice")
+	w25e2eCommit(t, dir, "change the excluded path alone")
 	r := w111scRun(t, dir, "--light", "--base", base)
 	got := r.scoped()
+	for _, c := range got {
+		if c.Source == "conf" {
+			t.Fatalf("a changed path an exclude= match removed must not trigger the declaration:\n%+v", got)
+		}
+	}
+
+	dir, base = w25e2eFixture(t, w111scFiles(conf))
+	w25e2eWrite(t, dir, "lib/skip.go", "package lib\n\nfunc Skipped() int { return 1 }\n")
+	w25e2eWrite(t, dir, "lib/two.go", "package lib\n\nfunc Two() int { return 2 }\n")
+	w25e2eCommit(t, dir, "change lib twice")
+	r = w111scRun(t, dir, "--light", "--base", base)
+	got = r.scoped()
 	count := 0
 	for _, c := range got {
 		if c.Cmd == "echo LIB-SUITE" {
