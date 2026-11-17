@@ -134,12 +134,18 @@ func TestW121ScratchLayoutTextsContract(t *testing.T) {
 			[]string{"`scratch/` (disposable output)"},
 		},
 		{
-			// the reference's doctor row: the prune semantics
+			// the reference's doctor row and task section: the prune
+			// semantics, and the task prompt's closing # Scratch section
+			// with the delivered directories and variables (review r1 #3)
 			"docs/reference/commands.md",
 			[]string{
 				"removes the stale scratch batches inside the fixed categories",
 				"past 3 days",
 				"only ever reported",
+				"a closing `# Scratch` section naming the task's own scratch directories",
+				"`PF_SCRATCH_DIR` and `PF_SCRATCH_RAW_DIR`",
+				"creates `scratch/tasks/<task id>/` and the task's own raw batch `scratch/raw/<UTC time>-<task id>-<unique suffix>/` before the dispatch",
+				"a read-only errand runs without them and creates nothing",
 			},
 			[]string{"removes stale `scratch/` entries"},
 		},
@@ -197,5 +203,27 @@ func TestW121ScratchLayoutSourceDrift(t *testing.T) {
 	}
 	if workspace.EnvScratchDir != "PF_SCRATCH_DIR" || workspace.EnvScratchRawDir != "PF_SCRATCH_RAW_DIR" {
 		t.Errorf("the scratch env names moved: %q / %q", workspace.EnvScratchDir, workspace.EnvScratchRawDir)
+	}
+}
+
+// TestW121ScratchLayoutProjectNeutral (AC3): the scratch-layout texts
+// name no concrete workspace, project or machine — the rule is spelled
+// for any workspace (review r1 #9). The blocklist is the negative
+// counterpart of the generic phrasing the contract above pins
+// ("whoever writes it", "<task id>", "<UTC time>-<source id>").
+func TestW121ScratchLayoutProjectNeutral(t *testing.T) {
+	for _, rel := range []string{
+		"skills/polyforge/SKILL.md",
+		"docs/reference/commands.md",
+	} {
+		text := w121Read(t, rel)
+		for _, concrete := range []string{"osp-ws", "/root/", "task-105", "wi87-"} {
+			if strings.Contains(text, concrete) {
+				t.Errorf("%s names the concrete %q — the scratch layout is project-neutral", rel, concrete)
+			}
+		}
+	}
+	if block := workspace.LayoutBlock(); strings.Contains(block, "osp-ws") || strings.Contains(block, "/root/") {
+		t.Errorf("workspace.LayoutBlock() names a concrete workspace:\n%s", block)
 	}
 }
