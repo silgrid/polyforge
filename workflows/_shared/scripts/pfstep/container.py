@@ -149,6 +149,30 @@ class BoxError(Exception):
     """Why a repo's container could not be had (the image, the start)."""
 
 
+class ImageMissing(BoxError):
+    """A prepared image that is not present on this machine. Never pulled:
+    the run that asked for it is not judged (a person prepares the image)."""
+
+    def __init__(self, ref: str) -> None:
+        super().__init__("the image %s is not present on this machine and is never pulled" % ref)
+        self.ref = ref
+
+
+# The fixed marker a missing prepared image puts in the run's summary:
+# the skills (verify.md, full-gate.md) read it and hand off blocked at once,
+# never retry — a retry cannot make a person have prepared the image.
+IMAGE_MISSING_MARK = "pf-verify-image-missing"
+
+
+@dataclass
+class ImageIdentity:
+    """A prepared image's local identity: its local ID (what the engine
+    starts it by) and its RepoDigests, when the image has any."""
+
+    id: str
+    repo_digests: List[str] = field(default_factory=list)
+
+
 Say = Callable[[str], None]
 
 
@@ -205,6 +229,9 @@ class ContainerSpec:
     # lifetime bounds the keep-alive (seconds; 0 = up until removed): the
     # container then ends and the engine removes it
     lifetime: float = 0.0
+    # pull_never: the image is a local ID of a prepared image — the engine
+    # is told --pull never, so a missing image is never fetched
+    pull_never: bool = False
 
 
 @dataclass
@@ -222,12 +249,20 @@ class ContainerReport:
     lost: str = ""
     # left: why the run could not remove it
     left: str = ""
+    # digest: the prepared image's local ID (sha256:<64 hex>), image mode only
+    digest: str = ""
+    # repo_digests: the prepared image's RepoDigests, when it has any
+    repo_digests: List[str] = field(default_factory=list)
 
     def as_dict(self) -> Dict[str, object]:
         """The Go record's JSON (ContainerReport): empty optional keys left out."""
         out: Dict[str, object] = {"image": self.image, "built": self.built}
         if self.build_log:
             out["build_log"] = self.build_log
+        if self.digest:
+            out["digest"] = self.digest
+        if self.repo_digests:
+            out["repo_digests"] = list(self.repo_digests)
         out.update({"name": self.name, "cpus": self.cpus, "memory": self.memory, "pids": self.pids})
         if self.lost:
             out["lost"] = self.lost
@@ -832,12 +867,15 @@ def start_box(
     rel: Callable[[str], str],
     engine: str = "",
     base_root: str = "",
+    image: str = "",
 ) -> Box:
     """Build (or find) repo's image and start its container (co must carry
     its defaults). It mounts the clone, base_root when given (a base
     worktree directory) and the directory of engine when given and outside
     the clone (read-only). rel renders a log path for the messages.
-    Raises BoxError naming why."""
+    image, when set, is a prepared image the container runs in instead:
+    resolved to its local ID, never built, never pulled. Raises BoxError
+    naming why."""
     rt = co.engine()
     why = container_usable_clone(repo_dir)
     if why:
