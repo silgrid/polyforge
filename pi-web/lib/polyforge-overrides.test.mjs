@@ -97,3 +97,50 @@ test("the capability floor is declared for the panel's gate", () => {
   assert.equal(typeof POLYFORGE_OVERRIDE_MINIMUM_PF_VERSION, "string");
   assert.match(POLYFORGE_OVERRIDE_MINIMUM_PF_VERSION, /^\d+\.\d+\.\d+$/);
 });
+
+// polyforge#79 (u5): the param actions ride the same one-action write face
+// — `--param <name>=<value>` and `--clear-param <name>` — and the rows
+// carry the param overrides (the overlay layer's own list, with by).
+test("the param actions answer one argv; a profile prefixes; a blank name or a multi-line value is invalid before any spawn", () => {
+  assert.deepEqual(
+    overrideActionArgv("wi_A1", { kind: "param", step: "review", name: "image", value: "reg/x:1" }),
+    ["--json", "override", "wi_A1", "--step", "review", "--param", "image=reg/x:1"],
+  );
+  assert.deepEqual(
+    overrideActionArgv("wi_A1", { kind: "clearParam", step: "review", name: "image" }),
+    ["--json", "override", "wi_A1", "--step", "review", "--clear-param", "image"],
+  );
+  assert.deepEqual(
+    overrideActionArgv("wi_A1", { kind: "param", step: "review", name: "flag", value: "" }, "lab"),
+    ["--profile", "lab", "--json", "override", "wi_A1", "--step", "review", "--param", "flag="],
+  );
+  assert.equal(overrideActionArgv("wi_A1", { kind: "param", step: "review", name: "", value: "x" }), null, "a blank name");
+  assert.equal(overrideActionArgv("wi_A1", { kind: "param", step: "review", name: "two words", value: "x" }), null, "a name with a space");
+  assert.equal(overrideActionArgv("wi_A1", { kind: "param", step: "review", name: "x", value: "two\nlines" }), null, "a multi-line value");
+  assert.equal(overrideActionArgv("wi_A1", { kind: "clearParam", step: "review", name: "" }), null);
+  assert.equal(overrideActionArgv("wi_A1", { kind: "param", step: "review" }), null, "a param action without its name");
+});
+
+test("the rows carry the step's param overrides with the operator of each (the overlay layer only)", () => {
+  const view = sanitizeOverrideView({
+    work_item: "wi_A1", posture: "queued",
+    steps: [{ id: "review", params: [
+      { name: "flag", value: "", by: "usr_1", at: "2026-11-17T00:00:00Z" },
+      { name: "image", value: "reg/x:1", by: "usr_2" },
+      { name: "junk", value: 3 },
+      "nope",
+    ] }],
+  });
+  assert.deepEqual(view.steps[0].params, [
+    { name: "flag", value: "", by: "usr_1", at: "2026-11-17T00:00:00Z" },
+    { name: "image", value: "reg/x:1", by: "usr_2" },
+  ]);
+  const res = sanitizeOverrideWriteResult({
+    work_item: "wi_A1", changed: true, posture: "queued", published: false,
+    note: "queued: the params ride the work item's step_params attrs key — the claim merges them into its capsule and clears the key once that publish succeeded",
+    step: { id: "review", skippable: false, params: [{ name: "image", value: "reg/x:1", by: "usr_1" }] },
+  });
+  assert.equal(res.posture, "queued");
+  assert.ok(res.note.startsWith("queued:"));
+  assert.deepEqual(res.step.params, [{ name: "image", value: "reg/x:1", by: "usr_1" }]);
+});
