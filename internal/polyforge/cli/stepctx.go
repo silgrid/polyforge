@@ -104,7 +104,7 @@ const taskMemories = "/task/memories"
 // they are never put on a daemon request.
 func (ctx *Context) searchMemories(proj, q, memType string, tags []string, limit int, match, sort, after string) (json.RawMessage, error) {
 	if ctx.Task == "" {
-		return ctx.aihub().SearchMemories(proj, q, memType, tags, limit, match, sort, after)
+		return ctx.aihub().SearchMemories(proj, q, memType, tags, limit, match, sort, after, "")
 	}
 	v := url.Values{"q": {q}, "project": {proj}, "type": {memType}, "tags": {strings.Join(tags, ",")},
 		"limit": {strconv.Itoa(limit)}, "match": {match}}

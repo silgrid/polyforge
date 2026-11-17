@@ -304,7 +304,7 @@ func TestSearchMemoriesBrowseShape(t *testing.T) {
 	defer srv.Close()
 	c := New(srv.URL, "k")
 
-	raw, err := c.SearchMemories("p", "", "", nil, 20, "", "created", "cur-1")
+	raw, err := c.SearchMemories("p", "", "", nil, 20, "", "created", "cur-1", "")
 	if err != nil {
 		t.Fatalf("browse: %v", err)
 	}
@@ -317,7 +317,7 @@ func TestSearchMemoriesBrowseShape(t *testing.T) {
 		!strings.Contains(browse, "limit=20") || !strings.Contains(browse, "project=p") {
 		t.Fatalf("browse request = %s", browse)
 	}
-	if _, err := c.SearchMemories("p", "needle", "", nil, 20, "", "", ""); err != nil {
+	if _, err := c.SearchMemories("p", "needle", "", nil, 20, "", "", "", ""); err != nil {
 		t.Fatalf("keyword: %v", err)
 	}
 	if kw := got[1]; !strings.Contains(kw, "q=needle") || strings.Contains(kw, "sort=") || strings.Contains(kw, "after=") {

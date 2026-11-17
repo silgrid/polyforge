@@ -407,7 +407,7 @@ const SearchExcerptRunes = 120
 // only when non-empty: aihub answers MEM-400 when they ride a keyword
 // search, so the mixed shape is refused there, never paraphrased here.
 // Each keyword hit carries a SearchExcerptRunes content_excerpt.
-func (c *Client) SearchMemories(project, q, memType string, tags []string, limit int, match, sort, after string) (json.RawMessage, error) {
+func (c *Client) SearchMemories(project, q, memType string, tags []string, limit int, match, sort, after, writerKind string) (json.RawMessage, error) {
 	v := url.Values{}
 	v.Set("project", project)
 	if q != "" {
