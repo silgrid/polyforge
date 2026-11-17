@@ -1,0 +1,30 @@
+{
+  "auditReportVersion": 2,
+  "vulnerabilities": {
+    "next": {
+      "name": "next",
+      "severity": "moderate",
+      "isDirect": true,
+      "via": [
+        {
+          "source": 1247486,
+          "name": "next",
+          "dependency": "next",
+          "title": "Next.js: Information disclosure across root params when a 'use cache' function is called through unstable_cache()",
+          "url": "https://github.com/advisories/GHSA-mfr8-8qww-v76h",
+          "severity": "moderate",
+          "cwe": ["CWE-200"],
+          "range": ">=16.3.0 <=16.4.4"
+        }
+      ],
+      "effects": [],
+      "range": ">=16.3.0 <=16.4.4",
+      "nodes": ["node_modules/next"],
+      "fixAvailable": {"name": "next", "version": "16.4.6", "isSemVerMajor": false}
+    }
+  },
+  "metadata": {
+    "vulnerabilities": {"info": 0, "low": 0, "moderate": 1, "high": 0, "critical": 0, "total": 1},
+    "dependencies": {"prod": 5, "dev": 200, "optional": 40, "peer": 0, "peerOptional": 0, "total": 245}
+  }
+}

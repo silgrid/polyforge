@@ -459,3 +459,32 @@ this upgrade:
 Rollback for either block: delete the lines between its two markers
 (`polyforge:diagram-guidance:svg:` / `polyforge:concise-guidance:`) —
 nothing else changed in those files.
+
+## v0.2.3, the dependency audit declares its level and the release reuses the gate's audit
+
+The dependency-audit gate audits production dependencies from the declared
+level up: this repository declares moderate (`.polyforge/verify-scope.conf`,
+the new `audit_prod_level` key — the only conf key that reaches the gate, and
+it only tightens; the value may be moderate or low, never above the default
+high). Each npm surface then runs a second, production-only audit
+(`--omit=dev`) whose moderate and above are findings; dev dependencies stay
+at the high threshold, and a repository that declares nothing is unchanged.
+The gate id hashes the key (`tools/gate-id`, the lane's `pfstep/gateid.py`),
+so a green tag of one level is never reused for another; main's CI
+full-audit job runs the same command, `--npm-prod-level moderate` included.
+
+The release no longer audits one hardcoded tree at the high level: its
+default audit is the scope engine's own `audit` command, taken verbatim from
+`verify-scope --json --full`, run after the binaries build (govulncheck
+loads every Go package, so a resume that built no binary builds the console
+SPA's go:embed tree first) and never skipped by a reused green tag. A tree
+the engine reports no audit command for refuses. `RELEASE_AUDIT_CMD` still
+replaces the whole gate.
+
+Every audited surface now prints when its advisory data was fetched (UTC)
+and its source (`surface <name>: advisories fetched <time> from <source>`):
+the npm registry the surface's npm is configured against, or
+`https://vuln.go.dev` for the Go module.
+
+Nothing to do on the work machines: the engine ships with the release and
+reads the conf from the repository.

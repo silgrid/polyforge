@@ -245,7 +245,12 @@ Both procedures check their machine before anything is published.
 gates — the tools, the node major against `.nvmrc`, and the `ghcr.io` push
 credential (docker logs in with gh's token when that token carries
 `write:packages`, replacing a stale stored login) — and reports every
-problem in one message. `deploy.sh --preflight [--component aihub|pi-web]`
+problem in one message. The tools cover the default dependency audit too
+(polyforge#113): python3 for the scope engine that reports the audit
+command, and go and govulncheck when the repository root carries a go.mod
+(the audit's `--go` surface runs on the release host, after the build) —
+so a missing tool is a preflight problem, never a red audit after the
+test gate and the build. `deploy.sh --preflight [--component aihub|pi-web]`
 takes no version and changes nothing: the required variables, the local
 tools, gh's login, ssh `BatchMode` to `AIHUB_HOST`, the server tools,
 docker compose and the running container, every problem in one message;
@@ -417,8 +422,10 @@ and the release:
   prints the sha256 of the text
   `polyforge-gate-id 1`, `dockerfile <sha256 of .polyforge/Dockerfile.verify>`
   and the conf's gate lines — every line whose key is `stack`, `fast_gate`,
-  `full_command`, `check`, `check_requires_env`, `check_requires_cmd` or
-  `check_timeout`, leading whitespace removed, in file order — each line
+  `full_command`, `check`, `check_requires_env`, `check_requires_cmd`,
+  `check_timeout` or `audit_prod_level` (polyforge#113: a declared level
+  moves the engine-appended audit command, so a green tag of one level is
+  never reused for another), leading whitespace removed, in file order — each line
   ending in a newline, both files read from that commit (default `HEAD`);
   `--show` prints the hashed text. With `--image <digest>` — the prepared
   image's local ID, what `gate.py --image` passes after a run — an
@@ -503,7 +510,13 @@ and the release:
   as a failed gate, exit 2 as a gate that was not judged. Either way the
   release notes end with a `## Test gate` section naming the reused tag or
   the run, with the gate id. `RELEASE_TEST_CMD` (for the fake-environment
-  tests) replaces the whole gate: no green tag is consulted.
+  tests) replaces the whole gate: no green tag is consulted. After the
+  binaries build the release runs the dependency audit (polyforge#113): the
+  scope engine's own `audit` command, taken verbatim from `verify-scope
+  --json --full` (a declared `audit_prod_level` rides in it), over the same
+  trees the verification bar audits - never skipped by a reused green tag,
+  whose record says nothing about today's advisories. `RELEASE_AUDIT_CMD`
+  (the fake-environment tests) replaces the whole gate.
   `release-manifest.json`, the assets and `release.sh --verify` are
   unchanged.
 - **In the release (notes).** The release notes never exceed GitHub's

@@ -514,7 +514,7 @@ items that merged.
 - **Dependency-audit gate.** Every full-tier report of a repository with an
   analyzer ends in one engine-appended command, `{name: "audit", phase:
   "full", source: "default"}` with no prerequisites and a `null` timeout:
-  `sh '<engine dir>/audit-deps' [--go] [--npm '<dir>']... [--ledger '<path>']`, the
+  `sh '<engine dir>/audit-deps' [--go] [--npm '<dir>']... [--npm-prod-level '<level>'] [--ledger '<path>']`, the
   `workflows/_shared/scripts/audit-deps` helper shipped beside the engine. Its surfaces are the
   root `go.mod` (`--go`: `GOWORK=off govulncheck -json ./...`, symbol mode —
   only a vulnerability reached through a called symbol is a finding, an
@@ -523,11 +523,19 @@ items that merged.
   audit --json --audit-level=high --package-lock-only --include=dev` — the
   whole lockfile tree, dev dependencies included; a high or critical advisory
   is a finding, moderate and low are not); a repository with no surface, and
-  every no-analyzer report, gets no audit. It runs after the conf's or
+  every no-analyzer report, gets no audit. The one conf key that reaches the
+  gate is `audit_prod_level=` (polyforge#113), and it only tightens: a
+  declared `moderate` or `low` appends `--npm-prod-level <level>` to the
+  command and every npm surface runs a second, production-only audit
+  (`--omit=dev`) whose findings at the level or above are findings, while dev
+  dependencies stay at the high threshold; an empty or non-tightening value,
+  or a second declaration, is diagnosed and ignored (the first valid
+  declaration wins) and the command stays byte-identical. It runs after the conf's or
   analyzer's full tail and after the carries selection, and ends
   `e2e_selection.full_commands`, so the delivery re-run carries it; scoped
-  and `--micro` reports never carry it. No conf key reaches it: `audit` and
-  `audit-*` are reserved check names (diagnosed and ignored), a `check_*`
+  and `--micro` reports never carry it. One conf key reaches it —
+  `audit_prod_level=`, tightening only, as above; no other key does: `audit`
+  and `audit-*` are reserved check names (diagnosed and ignored), a `check_*`
   line cannot bind a prerequisite or timeout to it, and `exclude=` does not
   narrow its surfaces. It is an ordinary command entry, so the `--json`
   shape and `schema` (`1`) do not move. The gate exits 0 only when every
@@ -537,7 +545,9 @@ items that merged.
   source could not be reached — red), `finding:` (advisory, package,
   surface), `ledger-invalid:` (a malformed exemption row — red),
   `ledger-expired:` and `stale:` (reported, never red on their own),
-  `surface <name>:` (the per-surface summary) and `audit-deps:` (any other
+  `surface <name>:` (the per-surface summary, preceded by its
+  `advisories fetched` line naming the fetch moment, UTC, and the advisory
+  source) and `audit-deps:` (any other
   tool error — red). The only exemption is a valid, unexpired row of the
   repository's `.polyforge/audit-exemptions.conf` ([config
   reference](reference/config.md#polyforgeaudit-exemptionsconf--dependency-audit-exemptions)),

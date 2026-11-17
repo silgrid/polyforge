@@ -286,6 +286,112 @@ func TestW372ReleasePreflightReportsEveryMissingPrerequisiteFirst(t *testing.T) 
 	}
 }
 
+// w113HostTools are the host tools the restricted-PATH worlds still need:
+// everything the release and the fake world's own stubs use before and
+// besides the audit's own tools (node, sha256sum and tar are prerequisites
+// the preflight itself checks; jq is the fake gh's --jq filter).
+var w113HostTools = []string{"node", "sha256sum", "tar", "sh", "tr", "sed", "cut", "grep", "head", "tail", "wc", "cat", "rm", "mkdir", "cp", "mv", "mktemp", "date", "sort", "awk", "basename", "dirname", "env", "jq"}
+
+// TestW113ReleasePreflightReportsTheAuditTools: the default dependency audit
+// (the scope engine's own audit command, polyforge#113) puts machine
+// prerequisites on the release host: python3 for the engine, go and
+// govulncheck for the Go surface a root go.mod gives the audit command. A
+// missing one is a preflight problem - reported with every other before any
+// gate, build or claim - never a red audit discovered after the test gate
+// and the three-platform build. Red on the round-1 tree, which checked none
+// of them (review r1#1).
+func TestW113ReleasePreflightReportsTheAuditTools(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not installed")
+	}
+	t.Run("the audit's go tools", func(t *testing.T) {
+		w := newRelWorld(t, []string{"v1.2.0"}, nil)
+		// an auditable tree: a root go.mod gives the engine's audit command
+		// its --go surface
+		relWrite(t, filepath.Join(w.work, "go.mod"), "module example.invalid/rel\n\ngo 1.21\n", 0o644)
+		relGit(t, w.work, "add", "-A")
+		relGit(t, w.work, "commit", "-q", "-m", "an auditable tree")
+		relGit(t, w.work, "push", "-q", "origin", "main")
+		w.recordPR(relGit(t, w.work, "rev-parse", "HEAD"))
+		// this world's own audit stubs (newRelWorld writes fake go and
+		// govulncheck for the green-path tests) are removed: the PATH must
+		// offer neither, or the preflight would find the stubs
+		for _, name := range []string{"go", "govulncheck"} {
+			if err := os.Remove(filepath.Join(w.bin, name)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// a PATH with neither go nor govulncheck: the fake world's stubs
+		// first, then only the host tools the release still needs
+		tools := t.TempDir()
+		for _, name := range append([]string{"python3"}, w113HostTools...) {
+			p, err := exec.LookPath(name)
+			if err != nil {
+				t.Fatalf("host tool %s: %v", name, err)
+			}
+			if err := os.Symlink(p, filepath.Join(tools, name)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		out, err := w.run([]string{
+			"RELEASE_AUDIT_CMD=",
+			"PATH=" + w.bin + string(os.PathListSeparator) + tools,
+		})
+		if err == nil {
+			t.Fatalf("a release whose audit needs go and govulncheck must refuse when they are absent:\n%s", out)
+		}
+		for _, want := range []string{
+			"preflight failed", "nothing built or published, no version claimed",
+			"tool(s) not on PATH: go govulncheck",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("preflight message lacks %q:\n%s", want, out)
+			}
+		}
+		if c := w.calls(); len(c) != 0 {
+			t.Fatalf("work ran before the preflight refusal: %v", c)
+		}
+		if got := w.originTags(); strings.Contains(got, "v1.2.1") {
+			t.Fatalf("a version was claimed: %q", got)
+		}
+	})
+	t.Run("the audit's python3 (the engine)", func(t *testing.T) {
+		w := newRelWorld(t, []string{"v1.2.0"}, nil)
+		// no go.mod, no lockfile: the audit still runs the engine to learn
+		// there is no audit command, so the engine's python3 is a
+		// prerequisite of the default audit path alone here (the xrefs and
+		// test gates are overridden in this fake env)
+		tools := t.TempDir()
+		for _, name := range w113HostTools {
+			p, err := exec.LookPath(name)
+			if err != nil {
+				t.Fatalf("host tool %s: %v", name, err)
+			}
+			if err := os.Symlink(p, filepath.Join(tools, name)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		out, err := w.run([]string{
+			"RELEASE_AUDIT_CMD=",
+			"PATH=" + w.bin + string(os.PathListSeparator) + tools,
+		})
+		if err == nil {
+			t.Fatalf("a release whose audit runs the scope engine must refuse without python3:\n%s", out)
+		}
+		for _, want := range []string{
+			"preflight failed", "nothing built or published, no version claimed",
+			"tool(s) not on PATH: python3",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("preflight message lacks %q:\n%s", want, out)
+			}
+		}
+		if c := w.calls(); len(c) != 0 {
+			t.Fatalf("work ran before the preflight refusal: %v", c)
+		}
+	})
+}
+
 // TestW372ReleasePreflightRefreshesAStoredGhcrLogin: #265's machine had a
 // ghcr.io login stored that could not push, and the old script skipped its
 // login. A stored login that cannot even read the image's repository is
