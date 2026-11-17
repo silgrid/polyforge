@@ -18,6 +18,7 @@ import unittest
 from typing import Any, Dict, List, Optional, Tuple
 
 from .schemacheck import errors as schema_errors
+from pfstep.stepenv import ENV_BASH_MAX_TIMEOUT
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS = os.path.dirname(HERE)
@@ -86,6 +87,10 @@ class World:
 
     def env(self, **extra: str) -> Dict[str, str]:
         e = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_", "PF_"))}
+        # a host's own bash window cap is not the test's: a run's deadline
+        # comes from the window the test passes, never a leaked
+        # BASH_MAX_TIMEOUT_MS (review r1#1)
+        e.pop(ENV_BASH_MAX_TIMEOUT, None)
         e.update(HOME=self.home, GIT_CONFIG_NOSYSTEM="1", PATH=self.bin + os.pathsep + os.environ.get("PATH", ""),
                  FAKE_GH_STATE=self.gh, FAKE_GH_ORIGINS=self.origins, FAKE_DOCKER_STATE=os.path.join(self.root, "docker"),
                  FAKE_DOCKER_PATH=os.environ.get("PATH", "/usr/bin:/bin"))

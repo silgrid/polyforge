@@ -238,16 +238,24 @@ def wi(wid: str, status: str = "wrapped", attrs: Optional[Dict[str, Any]] = None
 class PoolTest(unittest.TestCase):
     def test_reads_and_their_flags(self) -> None:
         hub = FakeHub(
-            [wi("wi_h", attrs={"integration": {"state": "landed", "red_rounds": 1, "fix_tickets": ["p#9", "other#1", "p#9"]}}, slug="p#2", closed_at="2026-11-10T07:00:00Z")],
+            [wi("wi_h", attrs={"integration": {"state": "landed", "red_rounds": 1, "fix_tickets": ["p#9", "other#1", "p#3", "p#9"]}}, slug="p#2", closed_at="2026-11-10T07:00:00Z")],
             batches=[wi("wi_b1", seq=1, attrs={"integration_batch": {"result": "red", "main": {"app": "red-old", "lib": "lib-red"}}}),
                      wi("wi_b2", seq=2, attrs={"integration_batch": {"result": "red", "main": {"app": "red-new"}}}),
                      wi("wi_b3", seq=3, status="failed", attrs={"integration_batch": {"result": "red", "main": {"app": "failed"}}}),
                      wi("wi_b4", seq=4, status="running"), wi("wi_b5", seq=5, status="queued")],
-            tickets=[wi("wi_t9", slug="p#9", attrs={"integration": {"state": "landed", "merge_commits": {"app": ["m1", "", 3]}}})])
+            tickets=[wi("wi_t9", slug="p#9", attrs={"integration": {"state": "landed", "merge_commits": {"app": [{"sha": "m1", "merge": True}, "m2", ""]}}}),
+                     wi("wi_t3", slug="p#3", attrs={"integration": {"state": "landed", "merge_commits": {"app": ["m1", 3]}}})])
         s = integrate.read_pool(integrate.HubLister(hub), "integrate")
-        self.assertEqual(hub.calls, ["list --status wrapped --attr integration.state=landed --limit 1000", "get p#9", "get other#1", "list --bundle integrate --limit 200"])
+        self.assertEqual(hub.calls, ["list --status wrapped --attr integration.state=landed --limit 1000", "get p#9", "get other#1", "get p#3", "list --bundle integrate --limit 200"])
         self.assertEqual(s["items"][0]["landed"], "2026-11-10T07:00:00Z")
-        self.assertEqual(s["tickets"]["p#9"], {"status": "wrapped", "integration": "landed", "merge_commits": {"app": ["m1"]}})
+        # polyforge#90: a ticket's merge_commits come from the one decode
+        # (pfstep.integration.merge_commits_of) — the pin moved to it: #36's
+        # {sha, merge} objects and pre-#36 bare strings each name their sha
+        # (an empty string is skipped), an entry of any other shape voids
+        # the record's merge_commits whole; the old pin (per-entry skip:
+        # ["m1", "", 3] read ["m1"]) held the decode #36 deleted.
+        self.assertEqual(s["tickets"]["p#9"], {"status": "wrapped", "integration": "landed", "merge_commits": {"app": ["m1", "m2"]}})
+        self.assertEqual(s["tickets"]["p#3"], {"status": "wrapped", "integration": "landed", "merge_commits": None}, "an invalid entry voids the record's merge_commits whole")
         self.assertEqual(s["tickets"]["other#1"]["status"], "", "a ticket the hub does not find")
         self.assertEqual(s["red_heads"], {"app": "red-new", "lib": "lib-red"})
         self.assertEqual(s["open_batches"], ["wi_b5", "wi_b4"])
