@@ -1323,3 +1323,48 @@ func TestRequireMappedProjectTyped(t *testing.T) {
 		t.Fatalf("mapped project refused: %v", err)
 	}
 }
+
+// TestW107RecallWriterKindFilter (polyforge#119 AC2, the filter half):
+// --writer-kind session|step rides the search URL in BOTH modes — the
+// keyword search and the browse — as writer_kind= (the #107 wire name),
+// is absent from the wire when the flag is omitted (an unfiltered
+// request gains no default filter), and an illegal value is refused
+// LOCALLY: no request is sent at all.
+func TestW107RecallWriterKindFilter(t *testing.T) {
+	var rec reqRecorder
+	srv := newFakeAihub(t, &rec, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"items":[],"total":0}`)
+	})
+	env := withMappingConfig(t)
+	env["PF_SERVER"] = srv.URL
+
+	if code, _, stderr := runPf(t, env, "recall", "--project", "polyforge", "needle", "--writer-kind", "step"); code != 0 {
+		t.Fatalf("keyword --writer-kind step: code=%d stderr=%s", code, stderr)
+	}
+	if got := rec.last().Path; !strings.Contains(got, "writer_kind=step") || !strings.Contains(got, "q=needle") {
+		t.Fatalf("keyword request = %s", got)
+	}
+	if code, _, stderr := runPf(t, env, "recall", "--project", "polyforge", "--writer-kind", "session"); code != 0 {
+		t.Fatalf("browse --writer-kind session: code=%d stderr=%s", code, stderr)
+	}
+	if got := rec.last().Path; !strings.Contains(got, "writer_kind=session") || strings.Contains(got, "q=") {
+		t.Fatalf("browse request = %s", got)
+	}
+	if code, _, stderr := runPf(t, env, "recall", "--project", "polyforge", "needle"); code != 0 {
+		t.Fatalf("unfiltered recall: code=%d stderr=%s", code, stderr)
+	}
+	if got := rec.last().Path; strings.Contains(got, "writer_kind") {
+		t.Fatalf("an unfiltered request must not carry a default writer_kind: %s", got)
+	}
+
+	for _, bad := range []string{"foo", "STEP", "sessions", "session "} {
+		before := len(rec.all())
+		code, _, stderr := runPf(t, env, "recall", "--project", "polyforge", "needle", "--writer-kind", bad)
+		if code == 0 || !strings.Contains(stderr, "--writer-kind must be session or step") {
+			t.Fatalf("--writer-kind %q: code=%d stderr=%q", bad, code, stderr)
+		}
+		if after := len(rec.all()); after != before {
+			t.Fatalf("--writer-kind %q sent a request (%d → %d)", bad, before, after)
+		}
+	}
+}
