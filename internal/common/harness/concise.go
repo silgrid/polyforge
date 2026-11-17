@@ -15,8 +15,9 @@ import "strings"
 // tests. The rule is the floor; the output-format skill (loaded by the
 // interactive session) carries the details.
 //
-// The stub bodies ship one ordinary commit ahead of the tests so the
-// first red is an assertion, never a compile error.
+// The function bodies first shipped one ordinary commit ahead of the
+// tests as zero-value stubs, so the contract test's first red was an
+// assertion, never a compile error (the test-first record).
 
 // The concise-guidance block's markers: the idempotency and rollback
 // anchors (the doctor appends the block between them; deleting the two
