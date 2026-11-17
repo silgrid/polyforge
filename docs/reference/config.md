@@ -1009,6 +1009,18 @@ param's final value per mapped project and its level — the project's
 value or the lane default ([commands](commands.md)); `pf config workspace`
 lists the file's own values.
 
+The first lane-declared parameter is `image` (polyforge#64): the develop
+lane's `verification` step and the integrate lane's `full-gate` step
+declare it, default empty. A project whose container repos need private
+dependencies sets it to one prepared image for all of them —
+`pf config set steps.<project>.verification.params.image <ref>` (and
+`steps.<project>.full-gate.params.image <ref>`) — and a ticket overrides
+it per work item with
+`pf override <id> --step <step-id> --param image=<ref>`. What the image
+is, who prepares it and what a missing one means:
+[concepts.md](../concepts.md)'s verification-container section and
+[release.md](release.md)'s test gate.
+
 ### `steps.<project>.task` — the one-shot task agent
 
 ```yaml

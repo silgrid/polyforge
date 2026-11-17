@@ -98,7 +98,11 @@ through the registration below.
        c. Otherwise (at least one red unit, every red unit attributed, no source past two
           rounds): `result` `red`, with the tickets of (a).
    - **2** — not judged (the docker engine, the image, a gated repo without
-     `.polyforge/Dockerfile.verify`, a fetch or checkout, the deadline): wait one
+     `.polyforge/Dockerfile.verify` and no prepared image, a fetch or checkout, the
+     deadline) — unless the command's `summary` carries `pf-verify-image-missing`: the
+     image the step's `image` parameter names is not present on this machine and is never
+     pulled — hand off `blocked` at once, no retry (a person prepares the image or clears
+     the parameter; the summary names the image). Otherwise: wait one
      minute and run the gate line again, at most twice more; still 2 → hand off `blocked`,
      the command's `summary` and the last gate log's tail (`logs`) in the body. No question
      to the owner: an environment problem is fixed on the machine, and the owner's message

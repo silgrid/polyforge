@@ -16,13 +16,13 @@ import os
 import subprocess
 import tempfile
 import unittest
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import gate
 from pfstep import proc
 
 from .fakebox import FakeRuntime
-from .gatefix import GATE_ID_SRC, HAVE_BASH, HAVE_GIT, HAVE_PY, IDENT, git_t, green_clone, run_gate, write_files
+from .gatefix import GATE_ID_SRC, HAVE_BASH, HAVE_GIT, HAVE_PY, IDENT, git_t, green_clone, run_gate, run_main, write_files
 
 NOW = datetime.datetime(2026, 11, 8, 9, 30, 0, tzinfo=datetime.timezone.utc)
 
@@ -177,6 +177,77 @@ class GreenTagTest(unittest.TestCase):
         name, created = gate.mark_green(Racing(self.g.environ), self.dir, "origin", "s", self.res, now=NOW)
         self.assertEqual((name, created), ("green/20261108-2", True))
         self.assertEqual(git_t(origin, "rev-parse", "refs/tags/green/20261108-1"), other, "the other writer's tag was not forced over")
+
+
+# a prepared image and its local ID, as the gate's --image names them
+# (polyforge#64)
+IMAGE_REF = "registry.example/team/verify:2026-11"
+IMAGE_ID = "sha256:" + "ab" * 32
+OTHER_REF = "registry.example/team/verify:2026-12"
+OTHER_ID = "sha256:" + "cd" * 32
+DIGESTS = {IMAGE_REF: IMAGE_ID, OTHER_REF: OTHER_ID}
+
+
+@unittest.skipUnless(HAVE_GIT and HAVE_BASH and HAVE_PY, "git, bash and python3 needed")
+class PreparedImageGreenTest(unittest.TestCase):
+    """A pass in a prepared image is tagged with the image's own identity
+    (polyforge#64): the tag's record carries the image's digest, the gate id
+    is the one tools/gate-id --image computes over the same commit (read
+    here again, independently, through the tree's own script), and a tag
+    another digest wrote is never reused — the plan digest and the gate id
+    both move with the image. A pass without an image writes its own tag
+    too, its record exactly what it always was."""
+
+    def setUp(self) -> None:
+        self._td = tempfile.TemporaryDirectory()
+        self.root = os.path.realpath(self._td.name)
+        self.dir = green_clone(self.root, "stack=none\nfast_gate=echo one\n")
+        self.origin = os.path.join(self.root, "origin.git")
+
+    def tearDown(self) -> None:
+        self._td.cleanup()
+
+    def run_green(self, name: str, ref: str) -> Any:
+        fb = FakeRuntime(os.path.join(self.root, "box-" + name))
+        if ref:
+            fb.identities[ref] = (DIGESTS[ref], [])
+        argv = ["--isolation", "container", "--json", "--mark-green", "--summary", name]
+        if ref:
+            argv += ["--image", ref]
+        return run_main(argv, cwd=self.dir, runtime=fb)
+
+    def record(self, name: str) -> Dict[str, Any]:
+        body = git_t(self.origin, "for-each-ref", "--format=%(contents)", "refs/tags/" + name)
+        out: Dict[str, Any] = json.loads(body)
+        return out
+
+    def test_the_tag_carries_the_digest_and_another_digest_is_never_reused(self) -> None:
+        r1 = self.run_green("first", IMAGE_REF)
+        self.assertEqual(r1.exit, 0, r1.stderr)
+        doc1 = json.loads(r1.stdout)
+        tag1 = doc1["details"]["tags"]["app"]
+        rec1 = self.record(tag1)
+        self.assertEqual(rec1["image_digest"], IMAGE_ID)
+        head = git_t(self.dir, "rev-parse", "HEAD")
+        gid = subprocess.run(["sh", "tools/gate-id", "--image", IMAGE_ID, head], cwd=self.dir, check=True,
+                            stdout=subprocess.PIPE).stdout.decode().strip()
+        self.assertEqual(rec1["gate_id"], gid, "the gate id is the image one")
+        self.assertEqual(doc1["details"]["repos"]["app"]["result"]["plan"]["image"], IMAGE_ID)
+        # another digest: a new tag, the old one never reused
+        r2 = self.run_green("second", OTHER_REF)
+        self.assertEqual(r2.exit, 0, r2.stderr)
+        tag2 = json.loads(r2.stdout)["details"]["tags"]["app"]
+        self.assertNotEqual(tag2, tag1)
+        rec2 = self.record(tag2)
+        self.assertEqual(rec2["image_digest"], OTHER_ID)
+        self.assertNotEqual(rec2["gate_id"], rec1["gate_id"])
+        # a pass without an image is its own tag too: neither is reused
+        r3 = self.run_green("third", "")
+        self.assertEqual(r3.exit, 0, r3.stderr)
+        tag3 = json.loads(r3.stdout)["details"]["tags"]["app"]
+        self.assertNotIn(tag3, (tag1, tag2))
+        rec3 = self.record(tag3)
+        self.assertNotIn("image_digest", rec3)
 
 
 if __name__ == "__main__":
