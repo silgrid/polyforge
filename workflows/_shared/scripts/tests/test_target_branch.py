@@ -89,15 +89,20 @@ class SyncTargetTest(unittest.TestCase):
         self.fix_target(w)
         seed, d = w.seeds["app"], w.dir("app")
         out = os.path.join(w.capsule, "artifacts", "sync", "result.json")
-        # the branch's own change: code, the upgrade pair and side.txt
+        # the file the target's conf declares append-only, on the base first
+        w.main_moves("app", {"side.txt": "base\n"})
+        w.git(d, "fetch", "-q", "origin")
+        w.git(d, "reset", "-q", "--hard", "origin/main")
+        main_before = w.git(d, "rev-parse", "refs/remotes/origin/main")
+        # the branch's own change: code, the upgrade pair and side.txt's tail
         head = w.change("app", {"pkg/code.go": "package pkg\n\nfunc F() int { return 2 }\n",
-                                "side.txt": "branch side\n"}, "branch-section")
+                                "side.txt": "base\nbranch side\n"}, "branch-section")
         # the target branch is created from main's tip, widens its own
         # integrate.conf (append_only=side.txt) and carries its own commit
         w.git(seed, "fetch", "-q", "origin")
         w.git(seed, "checkout", "-q", "-B", "epic/1", "origin/main")
         write(seed, ".polyforge/integrate.conf", read(seed, ".polyforge/integrate.conf") + "append_only=side.txt\n")
-        for rel, body in dict(w.upgrade(seed, "epic-section"), **{"side.txt": "epic side\n"}).items():
+        for rel, body in dict(w.upgrade(seed, "epic-section"), **{"side.txt": "base\nepic side\n"}).items():
             write(seed, rel, body)
         target_head = w.commit(seed, "the epic branch's commit")
         w.git(seed, "push", "-q", "origin", "HEAD:refs/heads/epic/1")
@@ -116,8 +121,9 @@ class SyncTargetTest(unittest.TestCase):
         self.assertEqual(app["conflicts"], [], app["conflicts"])
         # HEAD is the merge of the branch and the target branch's commit
         self.assertEqual(w.git(d, "log", "-1", "--format=%P"), head + " " + target_head)
-        # the default branch's later commit is fetched by nobody, merged by nobody
-        self.assertEqual(w.git(d, "rev-list", "--count", main_sha, "--not", "HEAD"), "1")
+        # the default branch's later commit never reached this clone: its
+        # ref stays where the sync found it (only the target is fetched)
+        self.assertEqual(w.git(d, "rev-parse", "refs/remotes/origin/main"), main_before)
 
     def test_an_unreadable_fixed_file_refuses_the_sync(self) -> None:
         w = World(self, "app")
