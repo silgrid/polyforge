@@ -259,8 +259,8 @@ class PreparedImageDockerTest(unittest.TestCase):
             self.assertEqual(os.listdir(log_dir), [], "nothing was built")
         finally:
             box.remove()
-        with self.assertRaises(container.ContainerError):
-            self.d.remove(box.id)
+        self.assertEqual(self.d.list_labelled({container.LABEL_DAEMON: self.owner}, container.LABEL_BOOT), {},
+                         "the container is gone once the box is removed")
 
     @unittest.skipUnless(HAVE_GIT, "git is not on PATH")
     def test_a_missing_reference_is_its_own_error(self) -> None:
