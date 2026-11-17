@@ -16,7 +16,7 @@ import tempfile
 import threading
 import time
 import unittest
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence
 
 import gate
 from pfstep import container, duration

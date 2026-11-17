@@ -16,7 +16,7 @@ import os
 import subprocess
 import tempfile
 import unittest
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import gate
 from pfstep import proc
