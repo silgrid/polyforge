@@ -35,6 +35,7 @@ CONF = (
     b"check_requires_env=n|FOO\n"
     b"check_requires_cmd=n|sh\n"
     b"check_timeout=n|90s\n"
+    b"audit_prod_level=moderate\n"
     b"\x0bfull_command=echo vtab\n"
     b"full_command=echo no trailing newline"
 )
@@ -57,6 +58,7 @@ def gate_lines_of(conf: bytes) -> bytes:
             b"check_requires_env=n|FOO\n"
             b"check_requires_cmd=n|sh\n"
             b"check_timeout=n|90s\n"
+            b"audit_prod_level=moderate\n"
             b"full_command=echo vtab\n"
             b"full_command=echo no trailing newline\n"
         )
@@ -107,6 +109,23 @@ class HashedTextTest(unittest.TestCase):
         d = hashlib.sha256(b"FROM x\n").hexdigest().encode("ascii")
         self.assertEqual(gateid.hashed_text(b"# nothing hashes\nnot_a_key=1\n", b"FROM x\n"),
                          b"polyforge-gate-id 1\ndockerfile " + d + b"\n")
+
+    def test_audit_prod_level_is_a_gate_line(self) -> None:
+        # polyforge#113: the declared audit level changes the --full plan's
+        # audit command, so it must move the gate id — a green tag of one
+        # level is never reused for another, and a repository that declares
+        # none keeps the id it always had.
+        self.assertIn(b"audit_prod_level=moderate\n", gate_lines_of(CONF),
+                      "the CONF fixture must declare the level for the line rule above")
+        moderate = b"stack=go\naudit_prod_level=moderate\n"
+        low = b"stack=go\naudit_prod_level=low\n"
+        plain = b"stack=go\n"
+        self.assertNotEqual(gateid.hashed_text(moderate, DOCKERFILE),
+                            gateid.hashed_text(low, DOCKERFILE),
+                            "two levels must hash differently")
+        self.assertNotEqual(gateid.hashed_text(moderate, DOCKERFILE),
+                            gateid.hashed_text(plain, DOCKERFILE),
+                            "a declared level must move the id from the undeclared one")
 
 
 @unittest.skipUnless(HAVE_GIT and os.path.isfile(GATE_ID_SRC), "git and the repository's tools/gate-id")

@@ -250,6 +250,57 @@ func TestW320AuditEngineNoAnalyzer(t *testing.T) {
 	w320aeRequireNoAudit(t, "--micro", w320aeJSON(t, mdir, "--micro"))
 }
 
+// TestW320AuditEngineDeclaredLevel: the one conf key that reaches the audit
+// gate is audit_prod_level, and it only tightens. A declared moderate or low
+// appends --npm-prod-level <level> to the engine's audit command, after the
+// surfaces and before the ledger; without the key — and for every value that
+// does not tighten (empty, high, critical, garbage) — the command stays
+// byte-identical, so a repository that declares nothing is unaffected; a
+// second declaration is diagnosed and ignored, the first wins (polyforge#113
+// AC1: the integrate lane's full gate runs exactly this command).
+func TestW320AuditEngineDeclaredLevel(t *testing.T) {
+	files := w25e2eGoModule("fixture.test/w320lvl")
+	files["web/package.json"] = "{\"name\":\"web\"}\n"
+	files["web/package-lock.json"] = "{\"lockfileVersion\":3}\n"
+	base := " --go --npm 'web'"
+	engineDir := w320aeEngineDir(t)
+
+	for _, level := range []string{"moderate", "low"} {
+		files[".polyforge/verify-scope.conf"] = "stack=go\naudit_prod_level=" + level + "\n"
+		dir, _ := w25e2eFixture(t, files)
+		w320aeRequireAudit(t, "declared "+level, w320aeJSON(t, dir, "--full"),
+			w320AuditCmd(engineDir, base)+" --npm-prod-level "+level)
+	}
+
+	// Undeclared and every non-tightening value: byte-identical, diagnosed.
+	wantPlain := w320AuditCmd(engineDir, base)
+	cases := []struct {
+		name, conf string
+		diag       string
+	}{
+		{"undeclared", "stack=go\n", ""},
+		{"empty", "stack=go\naudit_prod_level=\n", "conf rejects an empty audit_prod_level"},
+		{"high", "stack=go\naudit_prod_level=high\n", "conf rejects audit_prod_level 'high'"},
+		{"critical", "stack=go\naudit_prod_level=critical\n", "conf rejects audit_prod_level 'critical'"},
+		{"garbage", "stack=go\naudit_prod_level=severe\n", "conf rejects audit_prod_level 'severe'"},
+		{"a second one", "stack=go\naudit_prod_level=moderate\naudit_prod_level=low\n", "conf ignores a second audit_prod_level"},
+	}
+	for _, c := range cases {
+		files[".polyforge/verify-scope.conf"] = c.conf
+		dir, _ := w25e2eFixture(t, files)
+		r := w320aeJSON(t, dir, "--full")
+		want := wantPlain
+		if c.name == "a second one" {
+			// the first declaration wins, exactly as every other single key
+			want = w320AuditCmd(engineDir, base) + " --npm-prod-level moderate"
+		}
+		w320aeRequireAudit(t, c.name, r, want)
+		if c.diag != "" && !strings.Contains(strings.Join(r.Diagnostics, "\n"), c.diag) {
+			t.Fatalf("%s: the declaration must be diagnosed with %q:\n%s", c.name, c.diag, strings.Join(r.Diagnostics, "\n"))
+		}
+	}
+}
+
 // TestW320AuditEngineConfCannotReach: a conf full_command= replacement keeps
 // the audit as the last command; a check named audit or audit-* is diagnosed
 // and ignored; a check_* line naming audit binds nothing to it.
