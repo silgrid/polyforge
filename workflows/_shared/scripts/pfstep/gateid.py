@@ -16,6 +16,12 @@ comment and whose key — the text before its first ``=`` — is one of
 ``check_requires_env``, ``check_requires_cmd`` or ``check_timeout``,
 kept byte for byte in file order, each ending in a newline (a last line
 without a trailing newline still hashes with one, as awk prints it).
+
+A gate that runs in a prepared image (the step's ``image`` parameter,
+polyforge#64) hashes one line more — ``image <the image's local ID>``,
+after the dockerfile one — and a tree without a Dockerfile is then
+allowed: its line is left out. Without an image the bytes are exactly
+what they always were.
 """
 
 import hashlib
@@ -85,18 +91,36 @@ def _gate_lines(conf: bytes) -> List[bytes]:
     return out
 
 
-def hashed_text(conf: bytes, dockerfile: bytes, image: str = "") -> bytes:
-    """The exact bytes the id hashes (tools/gate-id --show's output)."""
-    d = hashlib.sha256(dockerfile).hexdigest().encode("ascii")
-    return b"".join([HEADER + b"\n", b"dockerfile " + d + b"\n"] + _gate_lines(conf))
+def hashed_text(conf: bytes, dockerfile: Optional[bytes], image: str = "") -> bytes:
+    """The exact bytes the id hashes (tools/gate-id --show's output).
+    dockerfile None is a tree without one, allowed only with a prepared
+    image: its line is left out and the ``image <local ID>`` line stands
+    in for the image's content half. Without an image the bytes are
+    exactly what they always were."""
+    out = [HEADER + b"\n"]
+    if dockerfile is not None:
+        out.append(b"dockerfile " + hashlib.sha256(dockerfile).hexdigest().encode("ascii") + b"\n")
+    if image:
+        out.append(b"image " + image.encode("ascii") + b"\n")
+    return b"".join(out + _gate_lines(conf))
 
 
 def show(directory: str, commit: str, environ: Optional[Mapping[str, str]] = None, image: str = "") -> bytes:
     """The exact bytes the gate id of commit (a rev, resolved in the clone
     at directory) hashes, both files read from that commit's tree; raises
-    GateIdError naming why it could not."""
+    GateIdError naming why it could not. With a prepared image a tree
+    without a Dockerfile is allowed: its line is left out."""
     sha = _commit(directory, commit, environ)
-    return hashed_text(_blob(directory, sha, CONF, environ), _blob(directory, sha, DOCKERFILE, environ), image)
+    conf = _blob(directory, sha, CONF, environ)
+    dockerfile: Optional[bytes]
+    if image:
+        try:
+            dockerfile = _blob(directory, sha, DOCKERFILE, environ)
+        except GateIdError:
+            dockerfile = None  # the prepared image replaces the built one
+    else:
+        dockerfile = _blob(directory, sha, DOCKERFILE, environ)
+    return hashed_text(conf, dockerfile, image)
 
 
 def gate_id(directory: str, commit: str, environ: Optional[Mapping[str, str]] = None, image: str = "") -> str:
