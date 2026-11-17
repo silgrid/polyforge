@@ -256,7 +256,7 @@ func TestW320AuditEngineNoAnalyzer(t *testing.T) {
 // surfaces and before the ledger; without the key — and for every value that
 // does not tighten (empty, high, critical, garbage) — the command stays
 // byte-identical, so a repository that declares nothing is unaffected; a
-// second declaration is diagnosed and ignored, the first wins (polyforge#113
+// second declaration is diagnosed and ignored, the first valid one wins (polyforge#113
 // AC1: the integrate lane's full gate runs exactly this command).
 func TestW320AuditEngineDeclaredLevel(t *testing.T) {
 	files := w25e2eGoModule("fixture.test/w320lvl")

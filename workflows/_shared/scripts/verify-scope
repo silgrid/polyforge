@@ -2649,7 +2649,7 @@ class Engine:
                 # The dependency-audit gate closes every full-tier report of
                 # a repository with an analyzer: after the conf's or
                 # analyzer's full tail and after the carries selection, so
-                # no conf key reaches it.
+                # no conf key reaches it but the tightening audit_prod_level.
                 audit_cmd = self.audit_command()
                 if audit_cmd != "" and self.analyzer != "":
                     self.commands.append(["audit", "full", "default", audit_cmd])

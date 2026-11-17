@@ -529,8 +529,8 @@ items that merged.
   command and every npm surface runs a second, production-only audit
   (`--omit=dev`) whose findings at the level or above are findings, while dev
   dependencies stay at the high threshold; an empty or non-tightening value,
-  or a second declaration, is diagnosed and ignored and the command stays
-  byte-identical. It runs after the conf's or
+  or a second declaration, is diagnosed and ignored (the first valid
+  declaration wins) and the command stays byte-identical. It runs after the conf's or
   analyzer's full tail and after the carries selection, and ends
   `e2e_selection.full_commands`, so the delivery re-run carries it; scoped
   and `--micro` reports never carry it. One conf key reaches it —
