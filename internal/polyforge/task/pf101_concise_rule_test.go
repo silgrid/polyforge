@@ -19,14 +19,15 @@ import (
 )
 
 // pf101SeenPrompt runs one task through the manager with a recording
-// runner and answers the prompt its harness read.
-func pf101SeenPrompt(t *testing.T, prompt string) string {
+// runner and answers the prompt its harness read, with the working
+// directory the prohibited-actions list is scoped to.
+func pf101SeenPrompt(t *testing.T, prompt string) (string, string) {
 	t.Helper()
 	var mu sync.Mutex
-	var got []string
+	var got []RunSpec
 	m, _ := newTestManager(t, fakeRunner{func(_ context.Context, s RunSpec) (RunResult, error) {
 		mu.Lock()
-		got = append(got, s.Prompt)
+		got = append(got, s)
 		mu.Unlock()
 		return RunResult{Report: "done", Tokens: 1}, nil
 	}}, []string{"pi:a/b"})
@@ -40,7 +41,7 @@ func pf101SeenPrompt(t *testing.T, prompt string) string {
 	if len(got) != 1 {
 		t.Fatalf("runs = %d, want 1", len(got))
 	}
-	return got[0]
+	return got[0].Prompt, got[0].WorkDir
 }
 
 // pf101AssertRulePosition asserts the rule rides the input exactly
@@ -66,7 +67,7 @@ func pf101AssertRulePosition(t *testing.T, face, p string) {
 // input carries the rule exactly once, in position.
 func TestPF101TaskPromptCarriesConciseRuleOnce(t *testing.T) {
 	const prompt = "Summarize the open questions.\nKeep it short."
-	p := pf101SeenPrompt(t, prompt)
+	p, _ := pf101SeenPrompt(t, prompt)
 	pf101AssertRulePosition(t, "ordinary task", p)
 	if !strings.HasSuffix(p, "\n# Task\n\n"+prompt) {
 		t.Errorf("the task's own prompt must still follow under `# Task` unchanged:\n%s", p)
@@ -78,7 +79,7 @@ func TestPF101TaskPromptCarriesConciseRuleOnce(t *testing.T) {
 // stays intact after it.
 func TestPF101MessageAnalysisKeepsJSONContract(t *testing.T) {
 	const prompt = "Analyze message msg_8\n\nYou are analyzing one user-to-user message for its recipient.\n\nAnswer with exactly one JSON object and nothing else:\n{\"type\": \"...\"}\n"
-	p := pf101SeenPrompt(t, prompt)
+	p, _ := pf101SeenPrompt(t, prompt)
 	pf101AssertRulePosition(t, "message analysis", p)
 	if !strings.Contains(p, "Answer with exactly one JSON object and nothing else") {
 		t.Errorf("the message-analysis JSON contract must stay in the task body:\n%s", p)
@@ -89,9 +90,8 @@ func TestPF101MessageAnalysisKeepsJSONContract(t *testing.T) {
 // into it — the list is still exactly harness.TaskProhibitedActions,
 // still ≤1024 bytes.
 func TestPF101ProhibitedListUntouched(t *testing.T) {
-	const dir = "/ws/demo"
+	p, dir := pf101SeenPrompt(t, "the body")
 	list := harness.TaskProhibitedActions(dir)
-	p := pf101SeenPrompt(t, "the body")
 	if !strings.HasPrefix(p, list+"\n") {
 		t.Errorf("the input must still open with the prohibited-actions list:\n%s", p[:len(list)+32])
 	}
