@@ -121,7 +121,7 @@ func scratchCheck(wss []string, now time.Time, prune bool) doctorCheck {
 	c := doctorCheck{Name: docChScratch, Status: "pass"}
 	var found, errs []string
 	for _, ws := range wss {
-		rep, err := workspace.Scratch(ws, now, workspace.ScratchMaxAge, prune)
+		rep, err := workspace.Scratch(ws, now, prune)
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", ws, err))
 			continue

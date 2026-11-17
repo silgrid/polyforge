@@ -49,8 +49,28 @@ const (
 	ClaudeNotes = "CLAUDE.md"
 )
 
-// ScratchMaxAge is the age past which a scratch entry is stale.
-const ScratchMaxAge = 14 * 24 * time.Hour
+// The scratch categories: scratch/'s fixed subdirectories, each named
+// by who writes into it and how long it keeps a batch (polyforge#121):
+//
+//	raw/      raw data (batch JSON, logs, downloaded archives, history
+//	          exports), whoever writes it — kept 3 days;
+//	tasks/    a background task's other disposable output — kept 14 days;
+//	sessions/ a session's other intermediate output — kept 14 days.
+//
+// A category's immediate subdirectory is one batch — the unit doctor
+// judges and --prune-scratch removes. Everything else under scratch/ (a
+// loose file at the top level, an unknown top-level directory, a loose
+// file or symlink inside a category, a category name occupied by anything
+// but a plain directory) is only ever reported, never removed.
+const (
+	ScratchRawDir      = "raw"
+	ScratchTasksDir    = "tasks"
+	ScratchSessionsDir = "sessions"
+
+	RawMaxAge      = 3 * 24 * time.Hour
+	TasksMaxAge    = 14 * 24 * time.Hour
+	SessionsMaxAge = 14 * 24 * time.Hour
+)
 
 // IsRepoClone reports whether dir is a git clone: its .git is a directory
 // (a clone) or a regular file (a linked worktree's pointer file — a
@@ -162,8 +182,9 @@ func destFor(path string, e fs.DirEntry) string {
 
 // ScratchReport is the outcome of a scratch/ scan or prune.
 type ScratchReport struct {
-	Stale   []string // stale entry names, sorted (with prune: the ones removed)
-	Skipped []string // "name: reason" for entries that could not be judged or removed
+	Stale   []string // batches past their category's retention, sorted ("raw/<batch>"); with prune: the ones removed
+	Stray   []string // entries outside the layout, sorted (top-level non-categories, a category occupied by a file or symlink, a loose file or symlink inside a category) — reported only, never removed
+	Skipped []string // "<path>: reason" for entries that could not be judged or removed
 }
 
 // scratchRoot answers the resolved path of <root>/scratch, or "" when
@@ -187,18 +208,22 @@ func scratchRoot(root string) (string, error) {
 	return filepath.EvalSymlinks(p)
 }
 
-// Scratch answers — and, with prune, removes — the scratch/ entries
-// whose newest change is older than maxAge at now. The newest change is
-// the later of mtime and ctime, of the entry and, for a directory, of
-// every path under it (symlinks are not followed); ctime counts because
-// a download or an extracted archive keeps its old mtimes yet arrived
-// just now. Each entry is judged immediately before its removal; a file
-// written into a stale directory between that judgment and RemoveAll is
-// removed with it (scratch/ is disposable by convention). Every target
-// sits directly under the resolved scratch dir: nothing outside it is
-// ever touched. An entry that cannot be judged or removed is skipped and
-// reported, never fatal. A workspace without scratch/ has none.
-func Scratch(root string, now time.Time, maxAge time.Duration, prune bool) (ScratchReport, error) {
+// Scratch answers — and, with prune, removes — the scratch/ batches past
+// their category's retention at now (polyforge#121: the layout above; the
+// old top-level 14-day rule is replaced — top-level entries outside the
+// categories are strays, reported only, never removed). Each batch is
+// judged by the newest change of its whole subtree — the later of mtime
+// and ctime of every path under it, symlinks not followed; ctime counts
+// because a download or an extracted archive keeps its old mtimes yet
+// arrived just now — and strictly before its category's cutoff (a batch
+// exactly at the boundary stays). Each batch is judged immediately
+// before its removal; a file written into a stale batch between that
+// judgment and RemoveAll is removed with it (scratch/ is disposable by
+// convention). Every target sits inside the resolved scratch dir;
+// category roots are never removed. An entry that cannot be judged or
+// removed is skipped and reported, never fatal. A workspace without
+// scratch/ has none.
+func Scratch(root string, now time.Time, prune bool) (ScratchReport, error) {
 	var rep ScratchReport
 	dir, err := scratchRoot(root)
 	if err != nil || dir == "" {
@@ -208,6 +233,10 @@ func Scratch(root string, now time.Time, maxAge time.Duration, prune bool) (Scra
 	if err != nil {
 		return rep, err
 	}
+	// transitional body (the signature prelude): the pre-#121 top-level
+	// rule, so every caller compiles unchanged until the category scan
+	// lands with its tests.
+	maxAge := 14 * 24 * time.Hour
 	cutoff := now.Add(-maxAge)
 	for _, e := range entries {
 		name := e.Name()
