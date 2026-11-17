@@ -698,6 +698,9 @@ try {
   // (AC3), and the claim-race word the daemon rides on the 200 answer's
   // note (AC3's 提示). Every wait is a bounded poll on a real condition.
   await check("S203-15", async () => {
+    // S203-12 leaves the server absent (no pf on PATH) — back to the stub first
+    await h.stop();
+    await startServer("main");
     const queued = item(3, "workbench", "queued", 3, "GOAL-C waits in the queue");
     const body = "queued ticket detail body";
     seed({ detail: { ...queued, content: body, content_len: Buffer.byteLength(body, "utf8") } });
