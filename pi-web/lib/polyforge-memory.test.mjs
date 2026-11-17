@@ -274,7 +274,7 @@ test("the shared UTF-8 cap cuts on a code-point boundary and passes a text at th
 
 /** A stub pf that reports the multi-Cell capabilities and resolves the
  *  public Cell, logging every argv. answers holds the data verbs. */
-async function cellPf(t, { capabilities = ["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1"], profile = "public", answers = {} } = {}) {
+async function cellPf(t, { capabilities = ["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1"], profile = "public", version = "v2.20.16", answers = {} } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "pf-cellmem-"));
   const log = join(dir, "calls.log");
   writeFileSync(log, "");
