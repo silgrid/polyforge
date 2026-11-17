@@ -28,8 +28,15 @@ content, only `?format=content` returns the body.
 
 ## Success
 
-Human mode: a metadata header (id, type, title, visibility, updated,
-content_len), a blank line, then the body. When the body exceeds the cap
+Human mode: a metadata header (id, type, title, author, writer,
+visibility, updated, content_len), a blank line, then the body. `author:`
+is the writer's display name (the stable owner id when the server
+predates the display-name join); `writer:` is the stamped writer kind
+with its valued details — e.g. `writer: step (attempt=1, model=pi:glm-5.3,
+step=build, work_item=wi_9)` or `writer: session (cell=default,
+machine=m-e2e)` — and `-` on a row written before the writer columns
+existed. The same header serves `pf step memory show` and a task agent's
+`pf memory show` (the three faces share it). When the body exceeds the cap
 the output ends with exactly:
 
 ```

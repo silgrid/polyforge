@@ -308,7 +308,12 @@ in your head or your workspace.
 
 - **Before starting work**, recall: `pf recall --project <project> "<topic>"`.
   Hits are non-binding history: designs, decisions, pitfalls; use what helps
-  and ignore the rest.
+  and ignore the rest. Every row names its AUTHOR and WRITER (`pf memory
+  show`'s `author:`/`writer:` header carries the same), and
+  `pf recall --project <project> --writer-kind session|step "<topic>"`
+  narrows a search to the human-session or the step-dispatch writes — the
+  stamp is the daemon's, so it is trustworthy (a step or task agent gets
+  no filter; its own faces stay search-only).
 - **When you learn something durable**, remember:
   `pf remember --project <project> --type experience.wrap --title "<lesson>" "<content>"`.
 - **To browse the project in a browser**, open the server's web console
