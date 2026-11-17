@@ -153,8 +153,7 @@ check_*, report= or rerun= line names a declared conf command (a check=
 name, or fast-<i>/full-<i>/micro-<i>); a line naming none is diagnosed and
 ignored, as is a malformed one.
 
-The conf is declarative: it is never parsed beyond its keys at parse time
-and it has no
+The conf is declarative: it is never evaluated at parse time and it has no
 hook-style keys (pre/post/exec); an unknown key is diagnosed and contributes
 nothing — except the keys another tool owns (``not_runnable_rule=``, the
 replay judge's, and ``component=`` / ``epic_components=`` / ``epic_units=`` /
