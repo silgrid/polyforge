@@ -521,7 +521,7 @@ class PreparedImageVerifyTest(unittest.TestCase):
         fb.identities[IMAGE_REF] = (IMAGE_ID, [])
         r = self.image_run(f.capsule, eng, fb, env={"PF_PARAM_IMAGE": IMAGE_REF})
         self.assertEqual(r.exit, 0, r.stderr)
-        self.assertEqual(doc_of(r)["image"], {"value": IMAGE_REF, "source": "param"})
+        self.assertEqual(doc_of(r).get("image"), {"value": IMAGE_REF, "source": "param"})
         fb2 = FakeRuntime(os.path.join(self.root, "box2"))
         fb2.identities[OTHER_REF] = (OTHER_ID, [])
         r2 = self.image_run(f.capsule, eng, fb2, env={"PF_PARAM_IMAGE": IMAGE_REF}, image=OTHER_REF)
