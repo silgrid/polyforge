@@ -57,6 +57,7 @@ import (
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/common/atomicfile"
 	"github.com/silgrid/polyforge/internal/common/protocol"
+	"github.com/silgrid/polyforge/internal/common/workflow"
 	"github.com/silgrid/polyforge/internal/polyforge/cellcfg"
 	"github.com/silgrid/polyforge/internal/polyforge/driver"
 	"github.com/silgrid/polyforge/internal/polyforge/observe"
@@ -717,6 +718,18 @@ func (d *Daemon) reconcileDecisions() {
 			continue
 		}
 		if s, ok := watcher.StatusDecision(item.Status); ok && s.Final {
+			_ = d.feed.resolveTaskTicket(d.profile(), wi)
+			continue
+		}
+		// a confirmed analysis — content in the section and no unconfirmed
+		// marker (confirmed, human-written or the owner's 「免分析」); a
+		// half-written draft the task itself left still carries the marker
+		// and keeps the entry open (the confirmation is the owner's word)
+		content := ""
+		if item.Content != nil {
+			content = *item.Content
+		}
+		if workflow.HasAnalysis(content) && !workflow.AnalysisUnconfirmed(content) {
 			_ = d.feed.resolveTaskTicket(d.profile(), wi)
 		}
 	}
