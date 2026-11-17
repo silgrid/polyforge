@@ -286,6 +286,11 @@ func TestW372ReleasePreflightReportsEveryMissingPrerequisiteFirst(t *testing.T) 
 	}
 }
 
+// w113HostTools are the host tools the restricted-PATH worlds still need:
+// everything the release uses before and besides the audit's own tools
+// (node, sha256sum and tar are prerequisites the preflight itself checks).
+var w113HostTools = []string{"node", "sha256sum", "tar", "python3", "sh", "tr", "sed", "cut", "grep", "head", "tail", "wc", "cat", "rm", "mkdir", "cp", "mv", "mktemp", "date"}
+
 // TestW113ReleasePreflightReportsTheAuditTools: the default dependency audit
 // (the scope engine's own audit command, polyforge#113) puts machine
 // prerequisites on the release host: python3 for the engine, go and
@@ -310,7 +315,7 @@ func TestW113ReleasePreflightReportsTheAuditTools(t *testing.T) {
 		// a PATH with neither go nor govulncheck: the fake world's stubs
 		// first, then only the host tools the release still needs
 		tools := t.TempDir()
-		for _, name := range []string{"node", "sha256sum", "tar", "python3", "sh"} {
+		for _, name := range w113HostTools {
 			p, err := exec.LookPath(name)
 			if err != nil {
 				t.Fatalf("host tool %s: %v", name, err)
@@ -348,7 +353,7 @@ func TestW113ReleasePreflightReportsTheAuditTools(t *testing.T) {
 		// prerequisite of the default audit path alone here (the xrefs and
 		// test gates are overridden in this fake env)
 		tools := t.TempDir()
-		for _, name := range []string{"node", "sha256sum", "tar", "sh"} {
+		for _, name := range w113HostTools {
 			p, err := exec.LookPath(name)
 			if err != nil {
 				t.Fatalf("host tool %s: %v", name, err)
