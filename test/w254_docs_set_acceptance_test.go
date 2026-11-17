@@ -449,13 +449,14 @@ func TestW254QuickstartsMovedIntact(t *testing.T) {
 // - the v0.2.1 section appended with the task concurrency bound as a Host key (max_concurrent_tasks, default 2, live on reload; one-off tasks take no max_concurrent_jobs slot any more, and a spawn without budget flags gets 40m / 1000000 — the token default is the ceiling)
 // - the v0.2.1 section appended with a bundle-bound ticket as a parent (PARENT_NOT_REGISTRY and HAS_CHILDREN_NO_BUNDLE are gone; a bound parent waits for its children to merge, via "child" in waiting_for, pf file edit <child> --parent "" detaches, PARENT_BUNDLE_FROZEN; deploy aihub before pf, and a rollback to the old aihub loses the wait)
 // - the v0.2.3 section appended with the corrections to the v0.2.2 upgrade notes (five headings above say v0.2.1 but shipped with v0.2.2 — the pf step ask, gate fallback, human merge, task concurrency and bundle-parent sections; and the v0.2.2 pf/daemon writes that carry expected_updated_at need the new aihub first, the v0.2.1 server rejects the whole PATCH with field … is not patchable, pf file edit still writes)
+// - the second v0.2.3 section appended with the harness guidance (every step dispatch and task input carries the short output-discipline rule from the one source harness.ConciseRule, the doctor's harness concise guidance row and claude's resolved ~/.claude/CLAUDE.md-else-AGENTS.md target, and tools/install.sh auto-runs pf doctor --fix-harness-prompts once per install)
 // upgrade-sections:end
 // The file is only routed to, from the install ops page and the README
 // landing page.
 func TestW254UpgradeByteIdentical(t *testing.T) {
 	raw := []byte(w254Read(t, "docs/upgrade.md"))
 	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != "5d63051269f7e806011a9a46acf45d8a9dda0c711d266be8554a6f105bff7ab4" {
+	if got := hex.EncodeToString(sum[:]); got != "675b5f5fbca3df7e2021207310aaf3b6e8bdd045e84db683723d516ec908442a" {
 		t.Fatalf("docs/upgrade.md must stay byte-identical (only routed to, never rewritten): sha256 %s != the pinned pre-move sha256", got)
 	}
 	// the list beside the pin: one whole `// - ` line per appended section

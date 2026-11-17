@@ -77,7 +77,7 @@ func TestPF101DocsSyncContract(t *testing.T) {
 	if !strings.Contains(upgrade, "## v0.2.3, harness guidance: the concise-output block, doctor's claude target and the installer's auto-fix") {
 		t.Errorf("docs/upgrade.md lacks the appended harness-guidance section")
 	}
-	for _, want := range []string{"`harness.ConciseRule`", "`harness concise guidance`", "tools/install.sh runs `pf doctor --fix-harness-prompts`"} {
+	for _, want := range []string{"`harness.ConciseRule`", "`harness concise guidance`", "`tools/install.sh` runs `pf doctor --fix-harness-prompts`"} {
 		if !strings.Contains(upgrade, want) {
 			t.Errorf("docs/upgrade.md's new section lacks %q", want)
 		}

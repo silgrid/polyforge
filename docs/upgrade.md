@@ -364,3 +364,28 @@ writes against the older server. Deploy the new aihub first, then
 upgrade the pf clients — and an aihub rolled back to v0.2.1 leaves the
 v0.2.2 automatic analysis write-back refused until it is upgraded
 again.
+
+## v0.2.3, harness guidance: the concise-output block, doctor's claude target and the installer's auto-fix
+
+Three changes reach the harness context files and every dispatched prompt
+this upgrade:
+
+- every step dispatch and every task input (a normal task, the ticket
+  auto-analysis, the message analysis) now carries a short
+  output-discipline rule — one English source in the binary
+  (`harness.ConciseRule`), the same bytes everywhere, riding the prompt
+  right after the prohibited actions;
+- `pf doctor` gained the `harness concise guidance` row beside the
+  diagram row: it warns while an installed harness's context file lacks
+  the concise-output block, and `--fix-harness-prompts` appends it —
+  append-only, idempotent, never creating a file. Claude Code's target is
+  resolved: `~/.claude/CLAUDE.md` when it exists, else
+  `~/.claude/AGENTS.md` — the file Claude Code actually loads, so a
+  machine with only the AGENTS.md gets the fix there;
+- `tools/install.sh` runs `pf doctor --fix-harness-prompts` once per
+  install or upgrade (it is idempotent), so the blocks reach machines
+  that already carry harness context files without a manual step.
+
+Rollback for either block: delete the lines between its two markers
+(`polyforge:diagram-guidance:svg:` / `polyforge:concise-guidance:`) —
+nothing else changed in those files.
