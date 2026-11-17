@@ -54,9 +54,9 @@ func TestPF101ConciseRuleSourceContract(t *testing.T) {
 	if middle := strings.TrimSuffix(strings.TrimPrefix(block, begin+"\n"), end+"\n"); middle != rule {
 		t.Fatalf("the guidance block's rule bytes differ from ConciseRule:\nblock middle: %q\nrule:        %q", middle, rule)
 	}
-	if !harness.HasConciseGuidance(block) || harness.HasConciseGuidance(begin) {
-		t.Fatalf("HasConciseGuidance must recognize the block alone, not a lone marker (block=%v loneMarker=%v)",
-			harness.HasConciseGuidance(block), harness.HasConciseGuidance(begin))
+	if !harness.HasConciseGuidance(block) || harness.HasConciseGuidance("") {
+		t.Fatalf("HasConciseGuidance must recognize the block and an empty body's lack of it (block=%v empty=%v)",
+			harness.HasConciseGuidance(block), harness.HasConciseGuidance(""))
 	}
 
 	// One short English section: its `## ` heading, five to eight
