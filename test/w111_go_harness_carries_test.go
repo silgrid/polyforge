@@ -58,8 +58,8 @@ func w111HarnessCarried(t *testing.T, light bool) {
 	}
 	want := "E2E_RUN='^(TestCarriedAcceptance)$' sh test/harness.sh"
 	got := r.phase("scoped")
-	if len(got) != 1 || got[0] != want {
-		t.Fatalf("the carries-matched harness test must be the one selected:\n got %v\nwant [%s]", got, want)
+	if len(got) != 2 || !strings.Contains(got[0], "./lib") || got[1] != want {
+		t.Fatalf("the changed package's own command and the carries-matched harness test are the selection:\n got %v\nwant [go test ./lib, %s]", got, want)
 	}
 	for _, absent := range []string{"TestCarriedOther", "TestPlainUncarried"} {
 		if strings.Contains(strings.Join(got, "\n"), absent) {
