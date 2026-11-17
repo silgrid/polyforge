@@ -137,6 +137,14 @@ func TestEpicResumeResetKey(t *testing.T) {
 	if err != nil || user == nil || user.ResumeReset != "work" {
 		t.Fatalf("a user lane declares resume_reset too: %v, %v", user, err)
 	}
+	// a lane whose resume_reset names its LAST step is as legal as one
+	// naming an early one: the key judges membership, never position
+	last := workflowtest.WriteLane(t, t.TempDir(), "demo",
+		"children_branch: \"epic/{seq}\"\nepic: true\nresume_reset: merge\nsteps:\n  - { id: sync }\n  - { id: merge }\n")
+	tail, errs := workflow.Load(last)
+	if len(errs) != 0 || tail == nil || tail.ResumeReset != "merge" {
+		t.Fatalf("resume_reset may name any step of the lane, the last included: %v, %v", tail, errs)
+	}
 }
 
 // TestEpicLaneKeyNeedsChildrenBranch: `epic: true` names the branch its
