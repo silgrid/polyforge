@@ -12,6 +12,7 @@ package test
 // and an empty split group prints N/A — never a fabricated comparison.
 
 import (
+	"encoding/csv"
 	"fmt"
 	"os"
 	"os/exec"
@@ -146,5 +147,158 @@ func TestW425ReviewFirstpassCohort(t *testing.T) {
 	// without --cohort the report is unchanged: no cohort section appears.
 	if plain := run(""); strings.Contains(plain, "cohort comparison") {
 		t.Errorf("without --cohort the report must not grow a cohort section:\n%s", plain)
+	}
+}
+
+// w425ZhSection builds one zh-language hand-off section (the rows the
+// metrics parser reads), the daemon's stamped shape.
+func w425ZhSection(step string, round int, started, ended, dur, status string, events []string) string {
+	b := fmt.Sprintf("---\n\n## %s · 第 %d 轮 · 派发 %d · %s\n\n", step, round, round, status)
+	b += "| 项 | 值 |\n|---|---|\n"
+	b += fmt.Sprintf("| 步骤 | %s |\n| 轮次 | %d |\n| 开始 | %s |\n| 结束 | %s |\n| 耗时 | %s |\n| 状态 | %s |\n", step, round, started, ended, dur, status)
+	if len(events) > 0 {
+		b += "\n**本轮事件**\n\n"
+		for _, e := range events {
+			b += "- " + e + "\n"
+		}
+	}
+	b += "\n### 正文（step 撰写）\n\nx\n"
+	return b
+}
+
+// w425EnSection is the EN-language twin.
+func w425EnSection(step string, round int, started, ended, dur, status string, events []string) string {
+	b := fmt.Sprintf("---\n\n## %s · Round %d · Dispatch %d · %s\n\n", step, round, round, status)
+	b += "| Item | Value |\n|---|---|\n"
+	b += fmt.Sprintf("| Step | %s |\n| Round | %d |\n| Started | %s |\n| Ended | %s |\n| Duration | %s |\n| Status | %s |\n", step, round, started, ended, dur, status)
+	if len(events) > 0 {
+		b += "\n**Events of this round**\n\n"
+		for _, e := range events {
+			b += "- " + e + "\n"
+		}
+	}
+	b += "\n### Body (written by the step)\n\nx\n"
+	return b
+}
+
+// TestW425ReviewFirstpassCohortTime pins the cohort time metrics (AC2,
+// the owner's Q3/Q4 calibers): the rework share of proxy execution time
+// (a rewind section's named steps' later rounds over all measured
+// attempt time; counted and owner/uncounted rewinds split; infra-retry
+// rounds listed apart), and the claim-to-merge duration (the merge
+// step's end as the labeled proxy — the real merge moment is N/A
+// offline), with the zero-denominator and not-merged honesty. Every
+// expected value below is hand-computed from the fixture sections.
+func TestW425ReviewFirstpassCohortTime(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Fatalf("python3 is a pf doctor prerequisite and runs this tool: %v", err)
+	}
+	// t-1 (zh): attempts 600+120+480+60+300=1560s; after the counted
+	// rewind naming build and review, build r2 (480s) and review r2
+	// (60s) re-run → rework 540s (35%); build r2 carries an infra event
+	// (rate_limited) → 1 infra-retry round (480s) listed apart; merged
+	// at 10:45, claim 10:00 → proxy 45m.
+	t1 := "# 交接文档\n\n"
+	t1 += w425ZhSection("build", 1, "2026-11-02T10:01:00Z", "2026-11-02T10:11:00Z", "10m0s", "done", nil)
+	t1 += w425ZhSection("review", 1, "2026-11-02T10:12:00Z", "2026-11-02T10:14:00Z", "2m0s", "fail", nil)
+	t1 += "---\n\n## 事件 · 回退 · 2026-11-02T10:15:00Z\n\n- 触发：`review` 第 1 轮交接 `fail`\n- 原因：见该步该段正文\n- 要重做的步骤（按顺序）：`build` → `review`\n- 回退次数：1/3\n"
+	t1 += w425ZhSection("build", 2, "2026-11-02T10:20:00Z", "2026-11-02T10:28:00Z", "8m0s", "done",
+		[]string{"2026-11-02T10:21:00Z step_failed rate_limited (pi:example): 429"})
+	t1 += w425ZhSection("review", 2, "2026-11-02T10:29:00Z", "2026-11-02T10:30:00Z", "1m0s", "done", nil)
+	t1 += w425ZhSection("merge", 1, "2026-11-02T10:40:00Z", "2026-11-02T10:45:00Z", "5m0s", "done", nil)
+
+	// t-3 (EN): attempts 60+30+30+30+20=170s; rewind #1 (counted) names
+	// build and review → build r2, review r2; rewind #2 (owner, not
+	// counted) names build → build r3; rework 30+30+20=80s (47%); never
+	// merged.
+	t3 := "# Hand-off document\n\n"
+	t3 += w425EnSection("build", 1, "2026-11-04T10:01:00Z", "2026-11-04T10:02:00Z", "1m0s", "done", nil)
+	t3 += w425EnSection("review", 1, "2026-11-04T10:03:00Z", "2026-11-04T10:03:30Z", "30s", "fail", nil)
+	t3 += "---\n\n## Event · Rewind · 2026-11-04T10:04:00Z\n\n- Trigger: `review` Round 1 handed off `fail`\n- Reason: see that step's section body\n- Steps to redo (in order): `build` → `review`\n- Rewinds: 1/3\n"
+	t3 += w425EnSection("build", 2, "2026-11-04T10:10:00Z", "2026-11-04T10:10:30Z", "30s", "done", nil)
+	t3 += w425EnSection("review", 2, "2026-11-04T10:11:00Z", "2026-11-04T10:11:30Z", "30s", "done", nil)
+	t3 += "---\n\n## Event · Rewind · 2026-11-04T10:12:00Z\n\n- Trigger: `review` Round 2 handed off `rewind → build`\n- Reason: see that step's section body\n- Steps to redo (in order): `build`\n- Rewinds: 1/3；本次依据 owner 的话，不计次数\n"
+	t3 += w425EnSection("build", 3, "2026-11-04T10:20:00Z", "2026-11-04T10:20:20Z", "20s", "done", nil)
+
+	caps := t.TempDir()
+	w425CohortWrite(t, caps, w425CohortCap{"t-1", "develop", "2026-11-02", w425Plan(map[string]int{"u1": 2}),
+		map[string]string{"build/s1": w425Build("main"), "review/s2": w425Review("pass")}, t1})
+	// t-2: reviewed, no hand-off sections at all → zero measurable
+	// attempts, not merged.
+	w425CohortWrite(t, caps, w425CohortCap{"t-2", "develop", "2026-11-03", w425Plan(map[string]int{"u1": 1}),
+		map[string]string{"review/s1": w425Review("pass")}, "# 交接文档\n"})
+	w425CohortWrite(t, caps, w425CohortCap{"t-3", "develop", "2026-11-04", w425Plan(map[string]int{"u1": 1}),
+		map[string]string{"review/s2": w425Review("pass")}, t3})
+
+	manifest := filepath.Join(t.TempDir(), "cohort.json")
+	man := `{"version": "v0.2.2", "control": ["t-1", "t-2", "t-3"], "split": []}`
+	if err := os.WriteFile(manifest, []byte(man), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "runs.csv")
+	args := []string{"-I", filepath.Join(v1Root(t), "tools", "review-firstpass"), caps,
+		"--cohort", manifest, "--csv", out}
+	got, err := exec.Command("python3", args...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("review-firstpass --cohort: %v\n%s", err, got)
+	}
+	text := string(got)
+	for _, want := range []string{
+		// measurable 1560+0+170=1730s; rework 540+80=620s → 36%;
+		// counted 1+1=2, owner/uncounted 1; infra 1 round (480s).
+		"  proxy execution time: 1730s measurable, rework 620s (36%); rewinds counted 2, owner/uncounted 1; infra-retry rounds 1 (480s) listed apart",
+		// merged 1 (claim 10:00 → merge ended 10:45 → 45m); the real
+		// endpoint is N/A offline, and t-2/t-3 never merged.
+		"  claim->merge: merge-step proxy median 45m (1 merged, 2 not merged); real endpoint N/A (3 runs with no offline record)",
+		// the empty split group keeps the same honesty.
+		"  proxy execution time: 0s measurable, rework N/A (0 measurable); rewinds counted 0, owner/uncounted 0; infra-retry rounds 0 (0s) listed apart",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the cohort time metrics must carry %q:\n%s", want, text)
+		}
+	}
+
+	f, err := os.Open(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	recs, err := csv.NewReader(f).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := map[string]map[string]string{}
+	for _, r := range recs[1:] {
+		m := map[string]string{}
+		for i, k := range recs[0] {
+			m[k] = r[i]
+		}
+		rows[m["capsule"]] = m
+	}
+	for name, want := range map[string]string{
+		"t-1": "1560 540 480 1 0 2026-11-02T10:00:00Z 2026-11-02T10:45:00Z 1",
+		"t-3": "170 80 0 1 1 2026-11-04T10:00:00Z  0",
+		"t-2": "0    0  2026-11-03T10:00:00Z  0",
+	} {
+		r, ok := rows[name]
+		if !ok {
+			t.Fatalf("run %s missing from the CSV", name)
+		}
+		if g := strings.Join([]string{r["attempt_s"], r["rework_s"], r["infra_retry_s"], r["rewinds_counted"], r["rewinds_uncounted"], r["claim_at"], r["merge_done_at"], r["merged"]}, " "); g != want {
+			t.Errorf("run %s: attempt rework infra counted uncounted claim merge merged = %q, want %q", name, g, want)
+		}
+	}
+
+	// without --cohort the CSV schema stays the pre-cohort one.
+	plain := filepath.Join(t.TempDir(), "plain.csv")
+	if plainOut, err := exec.Command("python3", "-I", filepath.Join(v1Root(t), "tools", "review-firstpass"), caps, "--csv", plain).CombinedOutput(); err != nil {
+		t.Fatalf("review-firstpass plain: %v\n%s", err, plainOut)
+	}
+	head, err := os.ReadFile(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(head), "attempt_s") {
+		t.Error("without --cohort the CSV must keep the pre-cohort schema (no attempt_s column)")
 	}
 }
