@@ -48,6 +48,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/silgrid/polyforge/internal/common/workflow/workflowtest"
 	"github.com/silgrid/polyforge/internal/polyforge/aihubclient"
 	"github.com/silgrid/polyforge/internal/polyforge/cli"
 )
@@ -726,8 +727,21 @@ func w113InstallPrep(t *testing.T) *w113InstallCtx {
 		t.Fatal(err)
 	}
 	gh := "#!/bin/sh\n" +
-		"# w113 stub gh: serves the local fake release (hermetic installer run).\n" +
+		"# w113 stub gh: serves the local fake release and the release-tag\n" +
+		"# checkout (hermetic installer run; the checkout is the pre-created\n" +
+		"# package tree, W113_CO).\n" +
 		"case \"$1\" in\n" +
+		"repo)\n" +
+		"  case \"$2\" in\n" +
+		"  clone)\n" +
+		"    # gh repo clone <repo> <dir> …: the dir is $4\n" +
+		"    if [ -n \"$4\" ] && [ -n \"$W113_CO\" ]; then\n" +
+		"      mkdir -p \"$4\"\n" +
+		"      cp -R \"$W113_CO/\". \"$4/\" 2>/dev/null\n" +
+		"    fi\n" +
+		"    ;;\n" +
+		"  esac\n" +
+		"  ;;\n" +
 		"release)\n" +
 		"  case \"$2\" in\n" +
 		"  list) echo '[{\"tagName\":\"v0.0.0-w113\"}]' ;;\n" +
@@ -758,9 +772,11 @@ func w113InstallPrep(t *testing.T) *w113InstallCtx {
 	pkg := filepath.Join(ic.home, ".pi", "agent", "git", "github.com", "silgrid", "polyforge")
 	pkgJSON := "{\n  \"keywords\": [\"pi-package\"],\n  \"pi\": {\"skills\": [\"./skills/polyforge\"]}\n}\n"
 	files := map[string]string{
-		filepath.Join(pkg, "package.json"):                          pkgJSON,
-		filepath.Join(pkg, "skills", "polyforge", "SKILL.md"):       "# polyforge routing skill (w113 stub)\n",
-		filepath.Join(pkg, "workflows", "develop", "workflow.yaml"): "# stub workflow\n",
+		filepath.Join(pkg, "package.json"):                    pkgJSON,
+		filepath.Join(pkg, "skills", "polyforge", "SKILL.md"): "# polyforge routing skill (w113 stub)\n",
+		// the SessionStart hook the installer chmods (step 3's harness
+		// settings); a release checkout carries it
+		filepath.Join(pkg, "skills", "polyforge", "hooks", "claude-session-start.sh"): "#!/bin/sh\nexit 0\n",
 	}
 	for dir, content := range files {
 		if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
@@ -770,6 +786,12 @@ func w113InstallPrep(t *testing.T) *w113InstallCtx {
 			t.Fatal(err)
 		}
 	}
+	// the checkout's lane is a real, contract-valid one: the installer
+	// hands the daemon the release's workflows, and the daemon loads
+	// every installed lane at start — a "# stub workflow" is a release
+	// defect it refuses to start on
+	workflowtest.WriteLane(t, filepath.Join(pkg, "workflows"), "develop",
+		"steps:\n  - { id: build }\n  - { id: review }\n  - { id: sync }\n  - { id: verification }\n  - { id: publish }\n  - { id: merge }\n")
 
 	// The /usr/local/bin write gate (the installer hard-codes it), with
 	// snapshot/restore of any pre-existing pf binary. Opt-in only: the
@@ -809,6 +831,7 @@ func w113RunInstall(t *testing.T, ic *w113InstallCtx) (string, int) {
 		"PATH=" + ic.stubBin + ":" + os.Getenv("PATH"),
 		"HOME=" + ic.home,
 		"W113_REL=" + ic.rel,
+		"W113_CO=" + filepath.Join(ic.home, ".pi", "agent", "git", "github.com", "silgrid", "polyforge"),
 		// never the operator's tmux server (TMUX is not passed either)
 		"TMUX_TMPDIR=" + ic.tmuxDir,
 	}
