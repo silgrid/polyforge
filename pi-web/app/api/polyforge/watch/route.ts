@@ -4,7 +4,9 @@ import { getPolyforgeWatch, isPolyforgeWiRef, PolyforgeError } from "@/lib/polyf
 import { isPolyforgeProfileName } from "@/lib/polyforge-cells-pure";
 import { FINISHED_STATUSES } from "@/lib/polyforge-conversation-pure";
 import { getPolyforgeOverride } from "@/lib/polyforge-overrides";
+import { getPolyforgeParams } from "@/lib/polyforge-params";
 import type { PolyforgeOverrideView } from "@/lib/polyforge-overrides";
+import type { PolyforgeParamsView } from "@/lib/polyforge-params";
 
 export const dynamic = "force-dynamic";
 
@@ -35,6 +37,13 @@ export const dynamic = "force-dynamic";
  * switch (skippable, the overlay's values) and only the effective-model
  * source line falls back to its none text. Writes keep their own POST face
  * (app/api/polyforge/override/route.ts).
+ *
+ * polyforge#79: the same opt-in also composes the params view
+ * (`status.paramsView`, `pf [--json] params <wi>` — one more parallel
+ * spawn with its own 10 s bound, never the sum, degraded to absent on
+ * any failure and never composed for an ended ticket): the composed
+ * final values and sources the selected step's params display renders
+ * (G11 keeps holding — the controls fetch nothing on selection).
  */
 export async function GET(request: Request) {
   if (!isApiRequestAllowed(request)) {
@@ -60,12 +69,19 @@ export async function GET(request: Request) {
     const overrideRead = searchParams.get("overrides") === "1"
       ? getPolyforgeOverride(wi, profile).catch(() => null)
       : null;
+    // polyforge#79: the params view rides the same opt-in and the same
+    // bounds — one more parallel spawn, degraded to absent on any failure.
+    const paramsRead = searchParams.get("overrides") === "1"
+      ? getPolyforgeParams(wi, profile).catch(() => null)
+      : null;
     const status = await getPolyforgeWatch(wi, profile);
     let overrideView: PolyforgeOverrideView | undefined;
-    if (status && overrideRead && !FINISHED_STATUSES.has(status.workflowStatus)) {
-      overrideView = await overrideRead ?? undefined;
+    let paramsView: PolyforgeParamsView | undefined;
+    if (status && !FINISHED_STATUSES.has(status.workflowStatus)) {
+      if (overrideRead) overrideView = await overrideRead ?? undefined;
+      if (paramsRead) paramsView = await paramsRead ?? undefined;
     }
-    return NextResponse.json({ status: status ? { ...status, ...(overrideView ? { overrideView } : {}) } : status });
+    return NextResponse.json({ status: status ? { ...status, ...(overrideView ? { overrideView } : {}), ...(paramsView ? { paramsView } : {}) } : status });
   } catch (error) {
     if (error instanceof PolyforgeError) {
       return NextResponse.json({ status: null, error: error.message });
