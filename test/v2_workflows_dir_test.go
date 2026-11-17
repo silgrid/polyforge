@@ -128,6 +128,26 @@ func strippedWorkflowsDir(t testing.TB, shipped string) string {
 	return copyWorkflowsDir(t, shipped, true)
 }
 
+// TestStrippedCopiesLoad pins the file's own rule — "Every copy is a lane
+// the contract accepts": the daemon of a scenario starts on the stripped
+// tree, so a lane whose declaration references a step the strip removes
+// is a copy the daemon refuses to load. Red before polyforge#117 r6: the
+// strip removed the sync step the epic lane's resume_reset names, and the
+// copy refused WFC-112 (verification r2's 22 e2e reds).
+func TestStrippedCopiesLoad(t *testing.T) {
+	dir := strippedWorkflowsDir(t, filepath.Join(v1Root(t), "workflows"))
+	dirs, err := workflow.LaneDirs(dir)
+	if err != nil || len(dirs) == 0 {
+		t.Fatalf("the stripped copy carries no lanes: %v", err)
+	}
+	for _, d := range dirs {
+		if _, errs := workflow.Load(d); len(errs) > 0 {
+			t.Errorf("the stripped copy of %s is not a lane the contract accepts: %v",
+				filepath.Base(d), workflow.AsLoadError(d, errs))
+		}
+	}
+}
+
 // copyWorkflowsDir is strippedWorkflowsDir with the deliver step kept when
 // stripDeliver is false.
 func copyWorkflowsDir(t testing.TB, shipped string, stripDeliver bool) string {
