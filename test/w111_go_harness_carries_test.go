@@ -58,8 +58,8 @@ func w111HarnessCarried(t *testing.T, light bool) {
 	}
 	want := "E2E_RUN='^(TestCarriedAcceptance)$' sh test/harness.sh"
 	got := r.phase("scoped")
-	if len(got) != 2 || !strings.Contains(got[0], "./lib") || got[1] != want {
-		t.Fatalf("the changed package's own command and the carries-matched harness test are the selection:\n got %v\nwant [go test ./lib, %s]", got, want)
+	if len(got) != 2 || got[0] != "GOWORK=off go test -count=1 ./lib" || got[1] != want {
+		t.Fatalf("the changed package's own command and the carries-matched harness test are the selection:\n got %v\nwant [GOWORK=off go test -count=1 ./lib, %s]", got, want)
 	}
 	for _, absent := range []string{"TestCarriedOther", "TestPlainUncarried"} {
 		if strings.Contains(strings.Join(got, "\n"), absent) {
@@ -68,18 +68,28 @@ func w111HarnessCarried(t *testing.T, light bool) {
 	}
 }
 
-// TestW111GoHarnessCarriesSelected: the declared harness directory's carries
+// TestW111GoHarnessCarries: the declared harness directory's carries
 // declarations are consumed — on the light tier and on the default scoped
 // tier alike — and a documentation path matching a glob selects its
-// harness test the same way the npm carries layer would.
+// harness test the same way the npm carries layer would. The deep path pins
+// the glob's `*` crossing `/`: a path.Match reading (where `*` stops at a
+// separator) would leave docs/sub/page.md uncovered by docs/* and this red.
 func TestW111GoHarnessCarries(t *testing.T) {
 	w111HarnessCarried(t, false)
 	w111HarnessCarried(t, true)
 
 	dir, base := w25e2eFixture(t, w111HarnessFiles())
+	w25e2eWrite(t, dir, "docs/sub/page.md", "# deep page\n")
+	w25e2eCommit(t, dir, "add a deep doc path")
+	r := w403Run(t, dir, "--light", "--base", base)
+	if got := r.phase("scoped"); len(got) != 1 || got[0] != "E2E_RUN='^(TestCarriedOther)$' sh test/harness.sh" {
+		t.Fatalf("a changed path below a directory a harness test's carries glob names (docs/* covering docs/sub/page.md, `*` crossing `/`) must select it:\n got %v", got)
+	}
+
+	dir, base = w25e2eFixture(t, w111HarnessFiles())
 	w25e2eWrite(t, dir, "docs/guide.md", "# guide 2\n")
 	w25e2eCommit(t, dir, "change docs")
-	r := w403Run(t, dir, "--light", "--base", base)
+	r = w403Run(t, dir, "--light", "--base", base)
 	if got := r.phase("scoped"); len(got) != 1 || got[0] != "E2E_RUN='^(TestCarriedOther)$' sh test/harness.sh" {
 		t.Fatalf("a changed path matching a harness test's carries glob must select it (the npm carries layer's semantics):\n got %v", got)
 	}
