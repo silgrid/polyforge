@@ -741,6 +741,9 @@ func (l *loader) step(file string, off int, n *yaml.Node, path string, seen map[
 	if v, ok := keys["skippable"]; ok {
 		s.Skippable, _ = l.boolValue(file, off, v, join(path, "skippable"))
 	}
+	if v, ok := keys["rewind_only"]; ok {
+		s.RewindOnly, _ = l.boolValue(file, off, v, join(path, "rewind_only"))
+	}
 	if v, ok := keys["human_mergeable"]; ok {
 		s.HumanMergeable, _ = l.boolValue(file, off, v, join(path, "human_mergeable"))
 	}
