@@ -221,12 +221,14 @@ def _outermost(roots: List[str]) -> List[str]:
     return [r for r in unique if not any(r != o and _under(r, o) for o in unique)]
 
 
-def _assign(p: str, declared: List[Component], nested: List[str],
-            manifest: List[str]) -> Tuple[str, str]:
+def _assign(p: str, declared: List[Component], roots: List[str],
+            kind: Dict[str, str]) -> Tuple[str, str]:
     """One path's component: (source, name). A declared range wins
-    (the longest prefix of overlapping declarations), then a nested
-    conf root, then a manifest subdirectory, then the first-level
-    directory, the root files answering as \".\""""
+    (the longest prefix of overlapping declarations), then a generic
+    nest root - a nested conf root or a manifest subdirectory, the
+    outermost of them together, no kept root containing another -,
+    then the first-level directory, the root files answering as the
+    dot component."""
     best: Optional[Tuple[str, int, str]] = None
     for comp in declared:
         for r in comp.paths:
@@ -234,12 +236,9 @@ def _assign(p: str, declared: List[Component], nested: List[str],
                 best = ("declared", len(r), comp.name)
     if best is not None:
         return ("declared", best[2])
-    for n in nested:
-        if _under(p, n):
-            return ("nested conf", n)
-    for m in manifest:
-        if _under(p, m):
-            return ("manifest", m)
+    for r in roots:
+        if _under(p, r):
+            return (kind[r], r)
     if "/" not in p:
         return ("root files", ".")
     return ("top-level", p.split("/", 1)[0])
@@ -248,29 +247,34 @@ def _assign(p: str, declared: List[Component], nested: List[str],
 def divide(paths: List[str], reading: ConfReading) -> List[Division]:
     """The division of a repository's tracked paths: the declared
     components in conf order (a declaration answers even where no path
-    falls in it — the report shows it), the generic components only
-    where paths fell in them, the root files last."""
+    falls in it - the report shows it), the generic components only
+    where paths fell in them, the root files last. A nested conf root
+    and a manifest subdirectory are one kind of thing - an
+    independently-checkable subdirectory - so their candidates are
+    taken outermost TOGETHER: the outermost directory answers whatever
+    kind marks it, a directory both kinds mark answering as the nested
+    conf's (polyforge#89 r1#1)."""
     kept = [p for p in paths if not _excluded(p)]
-    nested = _outermost([f[:-len(CONF_SUFFIX)] for f in kept
-                        if f.endswith(CONF_SUFFIX) and len(f) > len(CONF)])
-    manifest = [m for m in _outermost([os.path.dirname(f) for f in kept
-                                       if os.path.basename(f) in MANIFESTS
-                                       and os.path.dirname(f) != ""])
-                if not any(_under(m, n) for n in nested)]
+    conf_roots = [f[:-len(CONF_SUFFIX)] for f in kept
+                  if f.endswith(CONF_SUFFIX) and len(f) > len(CONF)]
+    manifest_roots = [os.path.dirname(f) for f in kept
+                      if os.path.basename(f) in MANIFESTS and os.path.dirname(f) != ""]
+    roots = _outermost(conf_roots + manifest_roots)
+    kind: Dict[str, str] = {r: ("nested conf" if r in conf_roots else "manifest")
+                            for r in roots}
     groups: Dict[Tuple[str, str], List[str]] = {}
     for p in kept:
-        groups.setdefault(_assign(p, reading.components, nested, manifest), []).append(p)
+        groups.setdefault(_assign(p, reading.components, roots, kind), []).append(p)
 
     out: List[Division] = []
     for comp in reading.components:
         assigned = groups.get(("declared", comp.name), [])
         out.append(Division(comp.name, list(comp.paths), "declared",
                             bool(assigned) and all(is_doc_path(p) for p in assigned)))
-    for source, roots in (("nested conf", nested), ("manifest", manifest)):
-        for r in roots:
-            assigned = groups.get((source, r), [])
-            if assigned:
-                out.append(Division(r, [r], source, all(is_doc_path(p) for p in assigned)))
+    for r in roots:
+        assigned = groups.get((kind[r], r), [])
+        if assigned:
+            out.append(Division(r, [r], kind[r], all(is_doc_path(p) for p in assigned)))
     for t in sorted(name for src, name in groups if src == "top-level"):
         assigned = groups[("top-level", t)]
         out.append(Division(t, [t], "top-level", all(is_doc_path(p) for p in assigned)))
