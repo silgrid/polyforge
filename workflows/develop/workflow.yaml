@@ -54,6 +54,14 @@ steps:
     # (its attrs carry the integration_fix marker): a light run ends in its
     # own time, the window is a bound, never a spend
     budget: { wall_minutes: 150, tool_minutes: 90 }
+    # the step's `image` parameter (polyforge#64), default empty: an empty
+    # value keeps each repo's own .polyforge/Dockerfile.verify; a value
+    # names a prepared image — a person's, its private dependencies the
+    # preparer solved — that every touched repo's bar then runs in,
+    # Dockerfile or not. The project sets
+    # steps.<project>.verification.params.image, a ticket overrides it
+    # with `pf override`; the value reaches verify.py as PF_PARAM_IMAGE.
+    params: { image: "" }
   - id: publish
     gate: true
     on_fail: { target: build }

@@ -26,6 +26,14 @@ steps:
     skill: full-gate
     budget: { wall_minutes: 150, tool_minutes: 90 }
     resources: { admission: heavy }
+    # the step's `image` parameter (polyforge#64), default empty: an empty
+    # value keeps each repo's own .polyforge/Dockerfile.verify (required
+    # then, a tree without one is not judged); a value names a prepared
+    # image that gates every repo — one image for the project's every
+    # container repo, Dockerfile or not. The project sets
+    # steps.<project>.full-gate.params.image, a ticket overrides it with
+    # `pf override`; the value reaches gate.py as PF_PARAM_IMAGE.
+    params: { image: "" }
     hub: { verbs: [get, list, batch, file], attrs: [integration, integration_fix] }
   - id: close
     skill: close
