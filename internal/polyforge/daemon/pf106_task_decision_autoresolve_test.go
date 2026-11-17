@@ -10,7 +10,9 @@ package daemon
 // Every auto-close writes resolved — never dismissed — and persists.
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/common/protocol"
@@ -281,4 +283,67 @@ func TestPF106ConfirmedAnalysisResolvesTaskEntries(t *testing.T) {
 			t.Fatalf("%s after the reconcile: open = %v, want %v", wi, open, want)
 		}
 	}
+}
+
+// TestPF106TaskEntriesExpire (AC5): an open task entry older than three
+// days resolves — with or without a ticket, of any Cell including one no
+// daemon serves anymore (the bound is time alone, no hub read: the still
+// fresh entries' tickets are what the reconcile reads); an entry within
+// the bound and a work item's old open entry stay as they are.
+func TestPF106TaskEntriesExpire(t *testing.T) {
+	td := newTestDaemon(t, nil)
+	d := td.Daemon
+	f := d.feed
+	now := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	f.now = func() time.Time { return now.Add(-4 * 24 * time.Hour) }
+	for _, p := range []string{"default", "alpha", "gone"} {
+		if err := f.RecordTask(p, pf106AnalysisTask("task_0000000000000old_"+p, task.StateFailed, "wi_pf106_old_"+p)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// an old plain task's entry: no ticket, nothing but the age to close it
+	if err := f.RecordTask("default", pf106AnalysisTask("task_0000000000000plain", task.StateFailed, "")); err != nil {
+		t.Fatal(err)
+	}
+	f.now = func() time.Time { return now.Add(-2 * 24 * time.Hour) }
+	if err := f.RecordTask("default", pf106AnalysisTask("task_0000000000000new", task.StateFailed, "wi_pf106_new")); err != nil {
+		t.Fatal(err)
+	}
+	// a work item's old open occurrence: the task age bound never touches it
+	f.Ingest("default", protocol.EventEntry{WI: "wi_pf106_wi", Kind: "submit_dropped",
+		At: now.Add(-4 * 24 * time.Hour).Format(time.RFC3339)}, nil)
+	f.now = func() time.Time { return now }
+	d.reconcileDecisions()
+	state := map[string]protocol.Decision{}
+	for _, e := range f.List().Decisions {
+		state[e.TaskID+e.WI] = e
+	}
+	for _, id := range []string{"task_0000000000000old_defaultwi_pf106_old_default",
+		"task_0000000000000old_alphawi_pf106_old_alpha", "task_0000000000000old_gonewi_pf106_old_gone",
+		"task_0000000000000plain"} {
+		e, ok := state[id]
+		if !ok {
+			t.Fatalf("no entry for %s: %+v", id, f.List().Decisions)
+		}
+		if !e.Resolved || e.Dismissed {
+			t.Fatalf("an open task entry past the age bound must resolve (never dismiss): %+v", e)
+		}
+	}
+	for _, id := range []string{"task_0000000000000newwi_pf106_new", "wi_pf106_wi"} {
+		if e := state[id]; !e.Open() {
+			t.Fatalf("an entry within the bound (or a work item's) must stay: %+v", e)
+		}
+	}
+	if got := f.List().Attention; got != 2 {
+		t.Fatalf("attention = %d, want the fresh task entry and the work item's: %v", got, f.List())
+	}
+	// the age bound reads no hub: the expired tickets were never read
+	// (the fresh entry's ticket is the reconcile's own business)
+	td.hub.mu.Lock()
+	for wi, n := range td.hub.gets {
+		if (strings.HasPrefix(wi, "wi_pf106_old") || wi == "wi_pf106_wi") && n > 0 {
+			t.Fatalf("the age bound read the hub for %s: %d reads", wi, n)
+		}
+	}
+	td.hub.mu.Unlock()
 }
