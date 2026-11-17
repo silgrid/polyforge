@@ -364,3 +364,23 @@ writes against the older server. Deploy the new aihub first, then
 upgrade the pf clients — and an aihub rolled back to v0.2.1 leaves the
 v0.2.2 automatic analysis write-back refused until it is upgraded
 again.
+
+## v0.2.4, the scratch layout categories
+
+`scratch/` gets a fixed category layout (polyforge#121): `raw/` for raw
+data (batch JSON, logs, downloaded archives, history exports — kept
+3 days), `tasks/` for a background task's other disposable output
+(kept 14 days) and `sessions/` for a session's other intermediate
+output (kept 14 days), each entry one directory per run, and no loose
+file at the top level. The old rule — `pf doctor --prune-scratch`
+deleting any top-level entry older than 14 days — is replaced: entries
+outside the categories are only ever reported, whatever their age, and
+the prune removes only a category's stale batches (judged by the newest
+mtime or ctime of the whole batch subtree, strictly past the retention).
+After upgrading, run `pf init` again in every workspace: it creates the
+three categories and refreshes the notes file's layout section, and
+`pf doctor` warns a workspace whose section is still an old one. A
+dispatched background task is handed its directories at spawn —
+`PF_SCRATCH_DIR` and `PF_SCRATCH_RAW_DIR` in its environment and the
+same absolute paths in its prompt — so nothing depends on the old flat
+layout.

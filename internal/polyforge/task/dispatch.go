@@ -31,6 +31,7 @@ import (
 	"github.com/silgrid/polyforge/internal/common/harness"
 	"github.com/silgrid/polyforge/internal/polyforge/runtime"
 	"github.com/silgrid/polyforge/internal/polyforge/supervise"
+	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
 
 // RunSpec is one runner call: one candidate, one prompt, the remaining
@@ -44,6 +45,14 @@ type RunSpec struct {
 	MaxTokens int64
 	WorkDir   string
 	TaskID    string
+	// ScratchTaskDir / ScratchRawDir are the task's scratch directories
+	// the daemon created before this dispatch (empty when the caller wired
+	// none): the harness's environment carries them as
+	// workspace.EnvScratchDir / workspace.EnvScratchRawDir and the prompt's
+	// closing # Scratch section names the same absolute paths
+	// (polyforge#121, owner ruling Q3).
+	ScratchTaskDir string
+	ScratchRawDir  string
 	// ReadOnlyTools selects the read/search-only tool profile.
 	ReadOnlyTools bool
 	// Limits are the stuck-detection bounds of this attempt (AC9: the
@@ -225,6 +234,15 @@ func (r *ExecRunner) command(ctx context.Context, spec RunSpec) (*exec.Cmd, erro
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = spec.WorkDir
 	cmd.Env = taskEnv(os.Environ(), spec.TaskID, r.DaemonID, r.SocketPath, r.ClaudeConfigDir, r.PiAgentDir)
+	// the daemon-determined scratch directories (polyforge#121): set
+	// after the inherited env is stripped of every PF_* name, so the
+	// child never inherits a stale copy
+	if spec.ScratchTaskDir != "" {
+		cmd.Env = append(cmd.Env, workspace.EnvScratchDir+"="+spec.ScratchTaskDir)
+	}
+	if spec.ScratchRawDir != "" {
+		cmd.Env = append(cmd.Env, workspace.EnvScratchRawDir+"="+spec.ScratchRawDir)
+	}
 	if harness.Of(spec.Candidate.Harness) == harness.Claude {
 		cmd.Env = runtime.WithEnv(cmd.Env, runtime.ClaudeIsolationEnv()...)
 	}

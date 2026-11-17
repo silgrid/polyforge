@@ -15,11 +15,15 @@ package workspace
 //	  capsules/<wi>/    work item workspaces (daemon-managed)
 //	  .polyforge/       polyforge-generated files only (no documents) —
 //	                    and workflows/<lane>/, the workspace's user lanes
-//	  scratch/          disposable output; entries older than 14 days are stale
+//	  scratch/          disposable output in fixed categories (polyforge#121):
+//	                    raw/ (raw data, 3 days), tasks/ (background
+//	                    tasks, 14 days), sessions/ (sessions, 14 days);
+//	                    no loose file at its top level
 //
 // `pf init` applies it (Init); `pf doctor` lints it (StrayEntries,
 // Notes, LayoutSection, Scratch). Nothing here moves or deletes anything except
-// Scratch with prune, and that only inside scratch/.
+// Scratch with prune, and that only stale batches inside scratch/'s
+// categories.
 
 import (
 	"errors"
@@ -49,8 +53,28 @@ const (
 	ClaudeNotes = "CLAUDE.md"
 )
 
-// ScratchMaxAge is the age past which a scratch entry is stale.
-const ScratchMaxAge = 14 * 24 * time.Hour
+// The scratch categories: scratch/'s fixed subdirectories, each named
+// by who writes into it and how long it keeps a batch (polyforge#121):
+//
+//	raw/      raw data (batch JSON, logs, downloaded archives, history
+//	          exports), whoever writes it — kept 3 days;
+//	tasks/    a background task's other disposable output — kept 14 days;
+//	sessions/ a session's other intermediate output — kept 14 days.
+//
+// A category's immediate subdirectory is one batch — the unit doctor
+// judges and --prune-scratch removes. Everything else under scratch/ (a
+// loose file at the top level, an unknown top-level directory, a loose
+// file or symlink inside a category, a category name occupied by anything
+// but a plain directory) is only ever reported, never removed.
+const (
+	ScratchRawDir      = "raw"
+	ScratchTasksDir    = "tasks"
+	ScratchSessionsDir = "sessions"
+
+	RawMaxAge      = 3 * 24 * time.Hour
+	TasksMaxAge    = 14 * 24 * time.Hour
+	SessionsMaxAge = 14 * 24 * time.Hour
+)
 
 // IsRepoClone reports whether dir is a git clone: its .git is a directory
 // (a clone) or a regular file (a linked worktree's pointer file — a
@@ -162,8 +186,9 @@ func destFor(path string, e fs.DirEntry) string {
 
 // ScratchReport is the outcome of a scratch/ scan or prune.
 type ScratchReport struct {
-	Stale   []string // stale entry names, sorted (with prune: the ones removed)
-	Skipped []string // "name: reason" for entries that could not be judged or removed
+	Stale   []string // batches past their category's retention, sorted ("raw/<batch>"); with prune: the ones removed
+	Stray   []string // entries outside the layout, sorted (top-level non-categories, a category occupied by a file or symlink, a loose file or symlink inside a category) — reported only, never removed
+	Skipped []string // "<path>: reason" for entries that could not be judged or removed
 }
 
 // scratchRoot answers the resolved path of <root>/scratch, or "" when
@@ -187,18 +212,51 @@ func scratchRoot(root string) (string, error) {
 	return filepath.EvalSymlinks(p)
 }
 
-// Scratch answers — and, with prune, removes — the scratch/ entries
-// whose newest change is older than maxAge at now. The newest change is
-// the later of mtime and ctime, of the entry and, for a directory, of
-// every path under it (symlinks are not followed); ctime counts because
-// a download or an extracted archive keeps its old mtimes yet arrived
-// just now. Each entry is judged immediately before its removal; a file
-// written into a stale directory between that judgment and RemoveAll is
-// removed with it (scratch/ is disposable by convention). Every target
-// sits directly under the resolved scratch dir: nothing outside it is
-// ever touched. An entry that cannot be judged or removed is skipped and
-// reported, never fatal. A workspace without scratch/ has none.
-func Scratch(root string, now time.Time, maxAge time.Duration, prune bool) (ScratchReport, error) {
+// scratchCategories is the layout's one category table: each fixed
+// subdirectory of scratch/ and how long one of its batches is kept.
+var scratchCategories = []struct {
+	dir string
+	age time.Duration
+}{
+	{ScratchRawDir, RawMaxAge},
+	{ScratchTasksDir, TasksMaxAge},
+	{ScratchSessionsDir, SessionsMaxAge},
+}
+
+// categoryAge answers the retention of the category named dir, or -1
+// when it is not one of scratch/'s categories.
+func categoryAge(dir string) time.Duration {
+	for _, c := range scratchCategories {
+		if c.dir == dir {
+			return c.age
+		}
+	}
+	return -1
+}
+
+// Scratch answers — and, with prune, removes — the scratch/ batches past
+// their category's retention at now (the layout rule the header comment
+// carries: a category's immediate subdirectory is one batch, the unit
+// doctor judges and --prune-scratch removes; the pre-#121 top-level
+// age rule is replaced — every entry outside the categories is a stray,
+// reported only, at any age, never removed). A batch is judged by the
+// newest change of its whole subtree — the later of mtime and ctime of
+// every path under it, symlinks not followed; ctime counts because a
+// download or an extracted archive keeps its old mtimes yet arrived just
+// now — and strictly before its category's cutoff (a batch exactly at
+// the boundary stays). Each batch is judged immediately before its
+// removal; a file written into a stale batch between that judgment and
+// RemoveAll is removed with it (scratch/ is disposable by convention).
+// Every deletion goes through an os.Root anchored at the resolved scratch
+// dir, so a category or a batch swapped for a symlink between the
+// listing and the removal can never lead a RemoveAll outside scratch/ —
+// a name whose resolution escapes the anchor is an error, reported in
+// Skipped, never a deletion. The age walk itself stays path-based (a
+// swapped category can at worst misjudge, read-only; its removal then
+// fails through the anchor). The category roots are never removed. An
+// entry that cannot be judged or removed is skipped and reported, never
+// fatal. A workspace without scratch/ has none.
+func Scratch(root string, now time.Time, prune bool) (ScratchReport, error) {
 	var rep ScratchReport
 	dir, err := scratchRoot(root)
 	if err != nil || dir == "" {
@@ -208,21 +266,55 @@ func Scratch(root string, now time.Time, maxAge time.Duration, prune bool) (Scra
 	if err != nil {
 		return rep, err
 	}
-	cutoff := now.Add(-maxAge)
+	anchor, err := os.OpenRoot(dir)
+	if err != nil {
+		return rep, err
+	}
+	defer anchor.Close()
 	for _, e := range entries {
 		name := e.Name()
-		newest, err := newestChange(filepath.Join(dir, name))
-		if err == nil && newest.Before(cutoff) && prune {
-			err = os.RemoveAll(filepath.Join(dir, name))
+		age := categoryAge(name)
+		if age < 0 { // a loose file or an unknown directory at the top level
+			rep.Stray = append(rep.Stray, name)
+			continue
 		}
-		switch {
-		case err != nil:
+		if !e.IsDir() { // a category name occupied by a file or a symlink
+			rep.Stray = append(rep.Stray, name)
+			continue
+		}
+		cat, err := anchor.Open(name)
+		if err != nil {
 			rep.Skipped = append(rep.Skipped, fmt.Sprintf("%s: %v", name, err))
-		case newest.Before(cutoff):
-			rep.Stale = append(rep.Stale, name)
+			continue
+		}
+		batches, err := cat.ReadDir(-1)
+		cat.Close()
+		if err != nil {
+			rep.Skipped = append(rep.Skipped, fmt.Sprintf("%s: %v", name, err))
+			continue
+		}
+		cutoff := now.Add(-age)
+		for _, b := range batches {
+			bname := b.Name()
+			rel := name + "/" + bname
+			if !b.IsDir() { // a loose file or a symlink where a batch belongs
+				rep.Stray = append(rep.Stray, rel)
+				continue
+			}
+			newest, err := newestChange(filepath.Join(dir, name, bname))
+			if err == nil && newest.Before(cutoff) && prune {
+				err = anchor.RemoveAll(rel)
+			}
+			switch {
+			case err != nil:
+				rep.Skipped = append(rep.Skipped, fmt.Sprintf("%s: %v", rel, err))
+			case newest.Before(cutoff):
+				rep.Stale = append(rep.Stale, rel)
+			}
 		}
 	}
 	sort.Strings(rep.Stale)
+	sort.Strings(rep.Stray)
 	return rep, nil
 }
 
@@ -265,7 +357,8 @@ const (
 )
 
 // LayoutBlock is the convention as `pf init` writes it into the notes file
-// (markers included).
+// (markers included). The scratch part is the one source of the category
+// names and retentions the contract tests hold the skills and docs to.
 func LayoutBlock() string {
 	return layoutOpen + `
 ## Workspace layout (polyforge)
@@ -284,14 +377,65 @@ Locally only:
 
 - ` + "`.repo/<repo>/`" + ` — repository clones;
 - ` + "`capsules/<wi>/`" + ` — work item workspaces (the daemon manages them);
-- ` + "`scratch/`" + ` — disposable output (logs, briefs, e2e output, downloads);
-  ` + "`pf doctor`" + ` reports entries older than 14 days, ` + "`pf doctor --prune-scratch`" + ` removes them;
+- ` + "`scratch/`" + ` — disposable output; no loose file at its top
+  level. Its fixed categories, one directory per run, named by who
+  writes and how long it keeps:
+  - ` + "`scratch/raw/`" + ` — raw data (batch JSON, logs, downloaded
+    archives, history exports), whoever writes it; a run's directory
+    is ` + "`<UTC time>-<source id>-<unique suffix>`" + `; kept 3 days;
+  - ` + "`scratch/tasks/`" + ` — a background task's other disposable
+    output, one directory per task (` + "`<task id>`" + `); kept 14 days;
+  - ` + "`scratch/sessions/`" + ` — a session's other intermediate
+    output, one directory per run (` + "`<UTC time>-<id>`" + `), its
+    sub-agents under ` + "`agents/<id>/`" + ` inside it; kept 14 days.
+  ` + "`pf doctor`" + ` reports every entry outside the categories and
+  every batch past its retention; ` + "`pf doctor --prune-scratch`" + `
+  removes only stale batches inside the categories, nothing else;
 - ` + "`.polyforge/`" + ` — polyforge-generated files only, and
   ` + "`.polyforge/workflows/<lane>/`" + ` — this workspace's own workflow lanes (user lanes).
 
 Never write documents into the workspace root or ` + "`.polyforge/`" + `;
 ` + "`pf doctor`" + ` warns about anything else found there.
 ` + layoutClose + "\n"
+}
+
+// ensureScratch creates scratch/ and its fixed categories under root and
+// answers the scratch path; created reports whether scratch/ itself was
+// made now. A scratch or a category that exists as anything but a plain
+// directory is refused — never followed, never moved away (the one rule
+// Init applies and TaskScratch reuses).
+func ensureScratch(root string) (dir string, created bool, err error) {
+	dir = filepath.Join(root, ScratchDir)
+	switch st, e := os.Lstat(dir); {
+	case e == nil && st.IsDir():
+	case e == nil:
+		return "", false, fmt.Errorf("%s exists and is not a plain directory (a symlink or a file)", dir)
+	case errors.Is(e, fs.ErrNotExist):
+		if e := os.Mkdir(dir, 0o755); e != nil {
+			return "", false, e
+		}
+		created = true
+	default:
+		return "", false, e
+	}
+	// the fixed categories come with scratch/ (polyforge#121): created
+	// when missing, refused when a category name is occupied by anything
+	// but a plain directory
+	for _, cat := range []string{ScratchRawDir, ScratchTasksDir, ScratchSessionsDir} {
+		p := filepath.Join(dir, cat)
+		switch st, e := os.Lstat(p); {
+		case e == nil && st.IsDir():
+		case e == nil:
+			return "", false, fmt.Errorf("%s exists and is not a plain directory (a symlink or a file)", p)
+		case errors.Is(e, fs.ErrNotExist):
+			if e := os.Mkdir(p, 0o755); e != nil {
+				return "", false, e
+			}
+		default:
+			return "", false, e
+		}
+	}
+	return dir, created, nil
 }
 
 // InitResult reports what Init did.
@@ -326,19 +470,13 @@ func Init(root string) (InitResult, error) {
 		return res, fmt.Errorf("%s carries a polyforge-managed block, but %s is the workspace notes file — remove the block from %s by hand, then re-run",
 			filepath.Join(root, ClaudeNotes), AgentsNotes, ClaudeNotes)
 	}
-	scratch := filepath.Join(root, ScratchDir)
-	switch st, err := os.Lstat(scratch); {
-	case err == nil && st.IsDir():
-		res.Scratch = "exists"
-	case err == nil:
-		return res, fmt.Errorf("%s exists and is not a plain directory (a symlink or a file)", scratch)
-	case errors.Is(err, fs.ErrNotExist):
-		if err := os.Mkdir(scratch, 0o755); err != nil {
-			return res, err
-		}
-		res.Scratch = "created"
-	default:
+	_, created, err := ensureScratch(root)
+	if err != nil {
 		return res, err
+	}
+	res.Scratch = "exists"
+	if created {
+		res.Scratch = "created"
 	}
 
 	notes := filepath.Join(root, name)
@@ -446,6 +584,42 @@ func LayoutSection(path string) (exists, has bool, err error) {
 		return true, false, err
 	}
 	return true, strings.Contains(text[i:at], layoutOpen), nil
+}
+
+// LayoutSectionText answers the notes file's layout section — the text
+// from its opening to its closing marker, both included, line endings
+// normalized to \n — and whether the file exists. A file without a managed
+// block, or a block without a layout section, answers ("", true, nil);
+// a missing file ("", false, nil); an unclosed block the error Init and
+// LayoutSection answer. `pf doctor` compares the answer with
+// LayoutBlock(): anything else is an outdated section, one `pf init`
+// refreshes (polyforge#121, Q9).
+func LayoutSectionText(path string) (string, bool, error) {
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	text := strings.ReplaceAll(string(raw), "\r\n", "\n")
+	i, at, err := managedBlock(text)
+	if err != nil {
+		return "", true, err
+	}
+	if i < 0 {
+		return "", true, nil
+	}
+	inner := text[i:at]
+	s := strings.Index(inner, layoutOpen)
+	if s < 0 {
+		return "", true, nil
+	}
+	k := strings.Index(text[i+s:at], layoutClose)
+	if k < 0 {
+		return "", true, fmt.Errorf("%s has no closing %s inside the polyforge-managed block — fix the file by hand, then re-run", layoutOpen, layoutClose)
+	}
+	return text[i+s : i+s+k+len(layoutClose)], true, nil
 }
 
 // managedBlock locates the polyforge-managed block: its opening marker's

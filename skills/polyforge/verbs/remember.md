@@ -71,7 +71,8 @@ the authoritative map.
 
 Pass the body as `@file` (≤1 MiB). A memory cannot be edited — store a
 new one (or redact). Local disposable output belongs in the workspace's
-`scratch/` only (`pf doctor` reports entries older than 14 days).
+`scratch/` categories (`raw/` for raw data, `sessions/` for the rest;
+`SKILL.md` names the retention of each).
 
 ## The wrap summary a workflow writes (daemon-mediated)
 
