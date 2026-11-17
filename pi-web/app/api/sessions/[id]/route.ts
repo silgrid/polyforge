@@ -19,7 +19,6 @@ import { computeSessionRevision } from "@/lib/session-revision";
 import type { SessionEntry } from "@/lib/types";
 import { readSubagentRun, readSubagentSessionResources } from "@/lib/subagents";
 import { readSessionToolSelection } from "@/lib/session-tool-selection";
-import { jsonResponse } from "@/lib/json-response";
 import { deleteSessions } from "@/lib/session-delete";
 import { attachTranscriptNotices, readSessionTranscriptNotices } from "@/lib/transcript-notices-server";
 import { getClaudeSessionRecord, removeClaudeSessionRecord, updateClaudeSessionRecord, type ClaudeSessionRecord } from "@/lib/claude-index";
@@ -34,11 +33,11 @@ import { normalizeToolCalls } from "@/lib/normalize";
  * sidecars. No branch tree: the history is the transcript's active branch
  * alone, with the user messages an in-session edit can start from.
  */
-async function claudeSessionDetail(req: Request, record: ClaudeSessionRecord) {
+async function claudeSessionDetail(_req: Request, record: ClaudeSessionRecord) {
   const history = readClaudeHistory(record.id);
   const [info] = await attachSessionProjectInfo([claudeSessionInfo(record, history)]);
   const messages = history.messages.map(normalizeToolCalls);
-  return jsonResponse(req, {
+  return NextResponse.json({
     sessionId: record.id,
     filePath: history.file ?? "",
     info,
@@ -196,8 +195,7 @@ export async function GET(
       transient: !filePath || !existsSync(filePath),
     }]))[0] : null;
 
-    return perf?.attach(jsonResponse(
-      req,
+    return perf?.attach(NextResponse.json(
       {
         sessionId: id,
         filePath,
@@ -212,8 +210,7 @@ export async function GET(
         ...(toolNames !== undefined ? { toolNames } : {}),
         ...(wrapperRebuilt ? { wrapperRebuilt: true } : {}),
       },
-    )) ?? jsonResponse(
-      req,
+    )) ?? NextResponse.json(
       {
         sessionId: id,
         filePath,

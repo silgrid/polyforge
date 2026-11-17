@@ -93,8 +93,11 @@ the user saying "init workspace".
    `summarize:`) section is refused whole — `pf config migrate` moves it.
 
 5. **Lay out the workspace**: `pf init <workspace-root>` (default: the
-   current directory) creates `scratch/` and writes the runtime-artifact
-   convention (polyforge#177) into the workspace notes file as a layout
+   current directory) creates `scratch/` with its fixed categories —
+   `raw/` (raw data, kept 3 days), `tasks/` (background tasks, kept 14
+   days) and `sessions/` (sessions, kept 14 days), polyforge#121 — and
+   writes the runtime-artifact convention (polyforge#177) into the
+   workspace notes file as a layout
    section inside the `polyforge:managed` block — appended to an
    existing block, or a new block on top. The notes file is `AGENTS.md`
    when it exists, else `CLAUDE.md`; a workspace with neither gets
@@ -111,8 +114,9 @@ the user saying "init workspace".
    `doc.decision` / `doc.audit` memories; experience → `experience.*` /
    `fact.*`); locally only `.repo/`, `capsules/`, `.polyforge/`
    (polyforge-generated only, plus `.polyforge/workflows/<lane>/`, the
-   workspace's own workflow lanes) and `scratch/` (disposable, reported by
-   `pf doctor` after 14 days). For a workspace the routed Cell maps, it
+   workspace's own workflow lanes) and `scratch/` (disposable output in
+   the fixed categories above; `pf doctor` reports every entry outside
+   them and every batch past its category's retention). For a workspace the routed Cell maps, it
    also writes the default `[memory_policy."<root>".default]` block (with
    its comment) into that Cell's own file — cli.toml for the default
    Cell, `cli-<profile>.toml` for a named one — once — byte-preserving and

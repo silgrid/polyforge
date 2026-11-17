@@ -296,6 +296,9 @@ func upgradeStatements(block string) []string {
 // sqlVer021 adds the project deactivation status column (polyforge#30;
 // the first public-tagged window: a v0.2.0 database picks it up in the
 // v0.2.0 -> v0.2.1 deploy).
+// sqlVer023 adds the memory writer columns and backfills the step
+// dispatch rows (polyforge#107; its rollback is a no-op — the columns
+// are durable provenance and never dropped).
 const (
 	sqlVer     = "v2.4.0"
 	sqlVer250  = "v2.5.0"
@@ -305,11 +308,12 @@ const (
 	sqlVer2207 = "v2.20.7"
 	sqlVer2208 = "v2.20.8"
 	sqlVer021  = "v0.2.1"
+	sqlVer023  = "v0.2.3"
 )
 
 // sqlVers lists every deploy/sql version in ascending order: a pre-#149
 // database needs all of them before the current code runs on it.
-var sqlVers = []string{sqlVer, sqlVer250, sqlVer2140, sqlVer2170, sqlVer2206, sqlVer2207, sqlVer2208, sqlVer021}
+var sqlVers = []string{sqlVer, sqlVer250, sqlVer2140, sqlVer2170, sqlVer2206, sqlVer2207, sqlVer2208, sqlVer021, sqlVer023}
 
 // loadSQLFile reads one file of deploy/sql/v2.4.0/.
 func loadSQLFile(t *testing.T, name string) string { return loadSQLFileOf(t, sqlVer, name) }

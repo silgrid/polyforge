@@ -329,7 +329,7 @@ var cmdDoctor = &Command{
 	NoConfigLoad: true,
 	Setup: func(fs *flag.FlagSet) {
 		fs.Bool("harness", false, "run only the harness checks (statusLine leftover, pi package, install layout, v1 leftovers, retired chat state)")
-		fs.Bool("prune-scratch", false, "remove the mapped workspaces' scratch/ entries older than 14 days (default: report them only)")
+		fs.Bool("prune-scratch", false, "remove the mapped workspaces' stale scratch batches (raw/ past 3 days, tasks/ and sessions/ past 14 days); entries outside the categories are only ever reported (default: report only)")
 		fs.Bool("prune-capsules", false, "slim wrapped work items' capsules (live or set aside) to artifacts/ + capsule.json, and remove the external git dirs and set-aside scenes of failed/canceled ones, untouched for more than 14 days (default: report them only; never while the daemon is down)")
 		fs.Bool("prune-chat-state", false, "delete the retired chat-subscription state (chats.json, chat-subs.json, chat-status/ and the old watcher's runtime files; default: report them only)")
 		fs.Bool("fix-harness-prompts", false, "append the native-SVG diagram-guidance block and the concise-output guidance block to each installed harness's existing context file that lacks them — legacy mermaid-only guidance included, left as it is (append-only, idempotent; never creates a file; default: report only)")

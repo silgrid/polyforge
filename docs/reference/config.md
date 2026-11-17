@@ -871,7 +871,9 @@ steps:
 `skip: true` switches the step off for the project's work items — only
 where the step's lane declares it `skippable: true` (workflow.yaml,
 [workflow contract](workflow-contract.md#step-keys)); a step not declared
-skippable always runs. The shipped lanes declare one: develop's `merge`.
+skippable runs on every round of the work item (a `rewind_only`
+declaration alone can hold a step's first round back). The shipped lanes
+declare one: develop's `merge`.
 `skip` is a bool (`true` or `false`; anything else is a load error) and
 `default` and `task` take none (they are no step).
 
@@ -884,8 +886,8 @@ skippable always runs. The shipped lanes declare one: develop's `merge`.
 - **Written through `pf config set|unset steps.<project>.<step-id>.skip`**
   (the write above). A write for a step
   no lane of the workspace's lane set declares `skippable` is refused,
-  naming `skippable: true` and that such a step always runs; nothing is
-  written.
+  naming `skippable: true` and that such a step cannot be switched off;
+  nothing is written.
 - **Written by hand on another step, it is ignored.** The loader has no
   lane at hand: a `skip: true` a hand edit puts on a step its lane does not
   declare skippable loads, governs nothing, and is ignored when a work item

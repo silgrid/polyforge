@@ -225,7 +225,7 @@ workspace root or `.polyforge/` (polyforge#177). A terminal work item
 refuses the edit (`CORE-410`): store the design as a memory instead —
 `pf remember --project P --type doc.design --work-item <wi> @design.md`
 (see `remember.md` for reviews, decisions and audits). Scratch output
-goes to the workspace's `scratch/` only.
+goes to the workspace's `scratch/` categories (`SKILL.md` names them).
 
 `show` takes exactly one id (or slug) and renders the detail record, its
 comment thread and its dependency block.

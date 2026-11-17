@@ -118,7 +118,12 @@ A directory on a work machine that holds the capsules of the projects
 mapped to it: `<workspace>/capsules/<project>-<seq>/`. Its layout is the
 convention `pf init` writes: `.polyforge.yaml`, the workspace notes file,
 `.repo/` clones for humans, `capsules/` (daemon-managed) and `scratch/`
-(disposable output). The notes file is `AGENTS.md` when it exists, else
+(disposable output in fixed categories, polyforge#121: `raw/` kept 3
+days, `tasks/` and `sessions/` kept 14 days, one directory per run, no
+loose file at its top level; `pf doctor` reports every entry outside
+the categories and every batch past its retention, and
+`--prune-scratch` removes only the stale batches). The notes file is
+`AGENTS.md` when it exists, else
 `CLAUDE.md` — both names are supported permanently, and `pf init` creates
 `AGENTS.md` in a workspace with neither. Anything meant to be shared goes
 to aihub, never to a workspace file.

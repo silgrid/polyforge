@@ -108,7 +108,8 @@ process runs.
 | `gate` | bool; only a gate may hand off `fail` |
 | `on_fail` | `{target}`, only on a gate (`WFC-140`) |
 | `waivable` | bool, default false; only a gate declaring `waivable: true` may hand off `waive` (`WFC-112` on a non-gate) |
-| `skippable` | bool, default false (`WFC-112` otherwise): a project may switch the step off with `steps.<project>.<step>.skip: true` in its workspace yaml ([config.md](config.md)); the switch is fixed when the work item is first claimed, and a switched-off step is never dispatched (its execution status is `skipped`). A step not declaring it always runs |
+| `skippable` | bool, default false (`WFC-112` otherwise): a project may switch the step off with `steps.<project>.<step>.skip: true` in its workspace yaml ([config.md](config.md)); the switch is fixed when the work item is first claimed, and a switched-off step is never dispatched (its execution status is `skipped`). A step not declaring it runs on every round of the work item — a `rewind_only` declaration alone can hold a step's first round back |
+| `rewind_only` | bool, default false (`WFC-112` otherwise): the step runs only after a rewind covers it. The first round records it skipped without a dispatch (a `step_skipped` event, no model session, no artifacts — nothing before the covering gate may rely on its output in the first round); once any rewind that covers it resets it to pending it runs, on that round and on every later round another rewind resets it to — a gate FAIL's rewind (automatic or `--per-owner`) and an owner's rewind record the same archives on the step's own attempts, so any of them activates it. A project skip of the step (a `skippable` it declares) wins over the declaration. The loader refuses a `rewind_only` step no gate's `[on_fail target, gate)` range covers (`WFC-112`, naming the step): without a covering gate it would never run. When every gate covering it is switched off for a project, the step does not run on that project's work items |
 | `human_mergeable` | bool, default false (`WFC-112` otherwise): a project may declare the step's work done by a person with `steps.<project>.<step>.by: human` in its workspace yaml ([config.md](config.md)); the declaration is fixed when the work item is first claimed, and a claim of a lane that does not declare the step `human_mergeable` is refused naming it — the mode never reaches a lane that does not ask for it |
 | `budget` | `{wall_minutes, tool_minutes}` |
 | `model_candidates` | the step's candidates (`WFC-198`); exclusive with `model_tier` (`WFC-112`) |
@@ -755,6 +756,21 @@ to it — it
 is granted `wrap-attrs` and its `done` is refused until it registered them
 (develop's `publish`, when its project skips `merge`, registers the record
 `published.py` writes, `integration: {state: published, …}`).
+
+**A step that runs only after a rewind.** A step whose lane declares
+`rewind_only: true` is held back until a rewind covers it: the first
+round's pass records it `skipped` — the same `step_skipped` event as a
+project skip, no dispatch, no model session — and the lane goes on to
+the next step. The declaration must sit inside a gate's `[on_fail target,
+gate)` range (the loader refuses it otherwise, above); once a rewind of
+that range resets it to pending — a gate FAIL's, with or without
+`--per-owner`, or an owner's rewind, which write the same archives on the
+step's own attempts — the pass dispatches it, and every later rewind
+that covers it again runs it once more. A `skippable` beside it stays
+the project's to switch off: a switched-off step is skipped on every
+round, the rewind or not. Nothing the step would have built exists
+before the rewind: a later step or gate that reads its artifacts in the
+first round finds none.
 
 **A step whose work a person does (polyforge#36).** A project declares a
 lane's `human_mergeable` step taken over by a person with
