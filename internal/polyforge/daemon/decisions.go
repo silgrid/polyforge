@@ -71,6 +71,10 @@ const (
 	decisionFeedMax        = 300
 	decisionFeedMaxAge     = 14 * 24 * time.Hour
 	decisionReconcileEvery = time.Minute
+	// decisionTaskMaxAge is the age bound of an open task entry
+	// (polyforge#106): past it the entry resolves — however the task
+	// ended and whatever Cell it belonged to, a removed one included.
+	decisionTaskMaxAge = 3 * 24 * time.Hour
 	// The driver's events of a step's accepted result (transition.go
 	// emitLocked): a completed step, a gate's verdict, an incomplete step.
 	evStepDone    = "step_done"
@@ -675,13 +679,48 @@ func (d *Daemon) recordTask(t task.Task) {
 	}
 }
 
+// expireTaskEntries resolves open task entries older than
+// decisionTaskMaxAge and persists on a change — every Cell's alike (a
+// removed Cell's entries too: no daemon of theirs re-reads a ticket),
+// and no hub is read: time alone decides. Work item entries never age
+// out here (their rules are the work item's own).
+func (f *decisionFeed) expireTaskEntries() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cut := f.now().Add(-decisionTaskMaxAge)
+	changed := false
+	for i := range f.doc.Entries {
+		e := &f.doc.Entries[i]
+		if e.Kind != protocol.DecisionTask || !e.Open() {
+			continue
+		}
+		if at, err := time.Parse(time.RFC3339, e.At); err == nil && at.Before(cut) {
+			e.Resolved = true
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return f.persistLocked()
+}
+
 // reconcileDecisions re-reads the aihub status of this Cell's tracked
 // work items (an unresolved blocked or paused state with no running local
 // job) and of its open task entries' tickets: a final status is recorded
 // (a work item) or resolves the ticket's entries (a task), and a work item
 // that runs again resolves.
 func (d *Daemon) reconcileDecisions() {
-	if d.feed == nil || d.hub == nil {
+	if d.feed == nil {
+		return
+	}
+	// the task entries' age bound runs first, on every Cell's loop alike:
+	// it is Host-level and reads no hub, so a removed Cell's stale entries
+	// close wherever a daemon still serves the Host's feed
+	if err := d.feed.expireTaskEntries(); err != nil {
+		fmt.Fprintf(os.Stderr, "daemon: decision feed: task entries: %v\n", err)
+	}
+	if d.hub == nil {
 		return
 	}
 	for _, wi := range d.feed.trackedFor(d.profile()) {
