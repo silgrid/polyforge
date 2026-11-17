@@ -155,7 +155,7 @@ func TestSearchReadablePathBoundedToo(t *testing.T) {
 			t.Fatalf("member got %d hits, want min(5, %d) = %d: %v %v", len(ids), readable, want, ids, projects)
 		}
 		total, membership := counts.snapshot()
-		perReadable[i].total, perReadable[i].membership, perReadable[i].loads = total, membership, counts.having("FROM memories WHERE id=")
+		perReadable[i].total, perReadable[i].membership, perReadable[i].loads = total, membership, counts.having("FROM memories m JOIN users u ON u.id = m.owner_user_id WHERE m.id=")
 		if membership != 1 {
 			t.Fatalf("%d readable matches: %d membership statements, want exactly 1", readable, membership)
 		}
