@@ -42,6 +42,8 @@ CONF = (
 # record is the \n-delimited line, byte for byte).
 CRLF_CONF = b"stack=none\r\n  fast_gate=echo one\r\nforced_full=x\r\n"
 DOCKERFILE = b"FROM gate-id-test-image\nRUN true\n"
+# a prepared image's local ID, as the gate hands it to the id (polyforge#64)
+IMAGE_ID = "sha256:" + "ab" * 32
 
 
 def gate_lines_of(conf: bytes) -> bytes:
@@ -66,6 +68,29 @@ def documented_text(conf: bytes, dockerfile: bytes) -> bytes:
     algorithm: the header, the Dockerfile's sha256, then the gate lines."""
     d = hashlib.sha256(dockerfile).hexdigest().encode("ascii")
     return b"polyforge-gate-id 1\ndockerfile " + d + b"\n" + gate_lines_of(conf)
+
+
+def documented_image_text(conf: bytes, dockerfile: bytes, image: str) -> bytes:
+    """The text the id hashes with a prepared image, derived by hand the
+    same way: the image's local-ID line follows the dockerfile one."""
+    d = hashlib.sha256(dockerfile).hexdigest().encode("ascii")
+    return (b"polyforge-gate-id 1\ndockerfile " + d + b"\nimage " + image.encode("ascii")
+            + b"\n" + gate_lines_of(conf))
+
+
+@unittest.skipUnless(os.path.isfile(GATE_ID_SRC), "the repository's tools/gate-id")
+class ImageLineTest(unittest.TestCase):
+    """The pure core with a prepared image (polyforge#64): an
+    ``image <local ID>`` line follows the dockerfile one, and without an
+    image the bytes are exactly what they were — the id of a repository
+    that names no image never moves."""
+
+    def test_the_image_line_follows_the_dockerfile_one(self) -> None:
+        self.assertEqual(gateid.hashed_text(CONF, DOCKERFILE, IMAGE_ID),
+                         documented_image_text(CONF, DOCKERFILE, IMAGE_ID))
+
+    def test_without_an_image_the_bytes_are_unchanged(self) -> None:
+        self.assertEqual(gateid.hashed_text(CONF, DOCKERFILE, ""), documented_text(CONF, DOCKERFILE))
 
 
 @unittest.skipUnless(os.path.isfile(GATE_ID_SRC), "the repository's tools/gate-id")
@@ -137,6 +162,33 @@ class ToolsGateIdConsistencyTest(unittest.TestCase):
         self.assertIn("Dockerfile.verify", str(got.exception))
         with self.assertRaises(gateid.GateIdError):
             gateid.show(d, "no-such-rev")
+
+    def test_with_an_image_both_implementations_match_byte_for_byte(self) -> None:
+        for name, conf in (("edge", CONF), ("crlf", CRLF_CONF)):
+            with self.subTest(name):
+                d, rev = self.fixture(name + "-image", conf, DOCKERFILE)
+                sh = self.sh_gate_id(d, "--image", IMAGE_ID, "--show", rev)
+                self.assertEqual(sh.returncode, 0, sh.stderr)
+                self.assertEqual(gateid.show(d, rev, image=IMAGE_ID), sh.stdout,
+                                 "the lane's --show text with an image differs from tools/gate-id's")
+                shid = self.sh_gate_id(d, "--show", "--image", IMAGE_ID, rev)
+                self.assertEqual(shid.returncode, 0, shid.stderr)
+                self.assertEqual(gateid.gate_id(d, rev, image=IMAGE_ID), shid.stdout.decode("utf-8").strip())
+                # the image moves the id: never the no-image one
+                self.assertNotEqual(gateid.gate_id(d, rev, image=IMAGE_ID), gateid.gate_id(d, rev))
+
+    def test_a_tree_without_a_dockerfile_is_allowed_with_an_image(self) -> None:
+        d, rev = self.fixture("bare-image", CONF, DOCKERFILE)
+        os.remove(os.path.join(d, ".polyforge", "Dockerfile.verify"))
+        gone = commit_all(d, "no Dockerfile, a prepared image instead")
+        want = b"polyforge-gate-id 1\nimage " + IMAGE_ID.encode("ascii") + b"\n" + gate_lines_of(CONF)
+        sh = self.sh_gate_id(d, "--image", IMAGE_ID, "--show", gone)
+        self.assertEqual(sh.returncode, 0, sh.stderr)
+        self.assertEqual(sh.stdout, want, "tools/gate-id leaves the dockerfile line out")
+        self.assertEqual(gateid.show(d, gone, image=IMAGE_ID), want,
+                         "the lane's gate id leaves the dockerfile line out, byte for byte")
+        self.assertEqual(gateid.gate_id(d, gone, image=IMAGE_ID),
+                         self.sh_gate_id(d, "--image", IMAGE_ID, gone).stdout.decode("utf-8").strip())
 
 
 if __name__ == "__main__":
