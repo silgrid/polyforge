@@ -171,12 +171,12 @@ class EpicSyncTest(unittest.TestCase):
         self.assertEqual(w.git(d, "log", "-1", "--format=%P"), head + " " + main_sha)
 
     def test_sync_merges_the_checkout_branch_before_the_default(self) -> None:
-        """The epic's sync takes the children's commits on its own branch in
-        FIRST (a fix child landed on origin/epic/2 while the epic was
-        parked; the resumed lane judges a tree that contains them), then
-        the default branch. Red before polyforge#117 r2: the sync merged
-        the default branch only, so the child's commit never reached the
-        epic's tree."""
+        # The epic's sync takes the children's commits on its own branch
+        # in FIRST (a fix child landed on origin/epic/2 while the epic
+        # was parked; the resumed lane judges a tree that contains them),
+        # then the default branch. Red before polyforge#117 r2: the sync
+        # merged the default branch only, so the child's commit never
+        # reached the epic's tree.
         w = World(self, "app")
         fix_epic(w)
         seed, d = w.seeds["app"], w.dir("app")
