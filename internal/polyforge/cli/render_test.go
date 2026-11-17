@@ -161,7 +161,7 @@ func TestGoldenMemories(t *testing.T) {
 		`ID     TYPE              AUTHOR  WRITER   SUMMARY          UPDATED  TAGS
 -----  ----------------  ------  -------  ---------------  -------  ----
 mem_1  experience.debug  Ada     step     first line       t1       go
-mem_2  fact.note         usr_2   -       a titled lesson  t2       -
+mem_2  fact.note         usr_2   -        a titled lesson  t2       -
 mem_3  fact.note         -       session  -                t3       -
 `)
 }

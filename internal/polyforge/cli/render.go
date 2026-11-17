@@ -497,6 +497,9 @@ type memorySearchHit struct {
 
 // renderMemories renders a memory search result: the SUMMARY column is
 // the title when the memory has one, else the excerpt's first line.
+// AUTHOR is the writer's display name (the stable id when the server
+// names none, "-" when neither rides); WRITER is the writer kind alone
+// ("-" on a row written before the writer existed).
 func renderMemories(w io.Writer, items []memorySearchHit) {
 	rows := make([][]string, 0, len(items))
 	for _, it := range items {
@@ -508,9 +511,9 @@ func renderMemories(w io.Writer, items []memorySearchHit) {
 		if it.Title != nil && strings.TrimSpace(*it.Title) != "" {
 			summary = *it.Title
 		}
-		rows = append(rows, []string{it.ID, it.Type, truncate(orDash(summary), 50), it.UpdatedAt, tags})
+		rows = append(rows, []string{it.ID, it.Type, memoryAuthor(it.OwnerDisplayName, it.OwnerUserID), nullable(it.WriterKind), truncate(orDash(summary), 50), it.UpdatedAt, tags})
 	}
-	printTable(w, []string{"ID", "TYPE", "SUMMARY", "UPDATED", "TAGS"}, rows)
+	printTable(w, []string{"ID", "TYPE", "AUTHOR", "WRITER", "SUMMARY", "UPDATED", "TAGS"}, rows)
 }
 
 // memoryPage is the browse-mode answer: the page, the

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/silgrid/polyforge/internal/common/api"
@@ -1310,6 +1311,8 @@ func memoryShowWith(ctx *Context, name string, args []string, read func(id strin
 	fmt.Fprintf(ctx.Stdout, "id: %s\n", meta.ID)
 	fmt.Fprintf(ctx.Stdout, "type: %s\n", meta.Type)
 	fmt.Fprintf(ctx.Stdout, "title: %s\n", orDash(meta.Title))
+	fmt.Fprintf(ctx.Stdout, "author: %s\n", memoryAuthor(meta.OwnerDisplayName, meta.OwnerUserID))
+	fmt.Fprintf(ctx.Stdout, "writer: %s\n", memoryWriterLine(meta.WriterKind, meta.WriterDetails))
 	fmt.Fprintf(ctx.Stdout, "visibility: %s\n", meta.Visibility)
 	fmt.Fprintf(ctx.Stdout, "updated: %s\n", meta.UpdatedAt)
 	fmt.Fprintf(ctx.Stdout, "content_len: %d\n", meta.ContentLen)
@@ -1328,6 +1331,60 @@ func memoryShowWith(ctx *Context, name string, args []string, read func(id strin
 		fmt.Fprintf(ctx.Stdout, "[truncated: showed %d of %d bytes — use --max-bytes 0 for the full body]\n", capBytes, len(body))
 	}
 	return nil
+}
+
+// memoryAuthor answers a memory row's author for the table and the
+// show header: the display name the server joins live from its users
+// (polyforge#107), the stable owner id when the server names none (a
+// pre-#107 aihub), "-" when neither rides.
+func memoryAuthor(displayName, ownerID string) string {
+	if displayName != "" {
+		return displayName
+	}
+	if ownerID != "" {
+		return ownerID
+	}
+	return "-"
+}
+
+// memoryWriterLine renders the writer of memory show's header: the kind
+// with its valued details — "kind (k=v, ...)", keys sorted, scalars
+// bare (numbers, booleans), null as null, anything nested as compact
+// JSON; the kind alone when the row carries no detail object; "-" on a
+// row written before the writer columns existed.
+func memoryWriterLine(kind *string, details json.RawMessage) string {
+	if kind == nil {
+		return "-"
+	}
+	var d map[string]json.RawMessage
+	if json.Unmarshal(details, &d) != nil || d == nil {
+		return *kind
+	}
+	keys := make([]string, 0, len(d))
+	for k := range d {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		var v any
+		if err := json.Unmarshal(d[k], &v); err != nil {
+			parts = append(parts, k+"="+string(d[k]))
+			continue
+		}
+		switch t := v.(type) {
+		case string:
+			parts = append(parts, k+"="+t)
+		case nil:
+			parts = append(parts, k+"=null")
+		default:
+			parts = append(parts, k+"="+string(d[k]))
+		}
+	}
+	if len(parts) == 0 {
+		return *kind
+	}
+	return *kind + " (" + strings.Join(parts, ", ") + ")"
 }
 
 // memoryJSONWithContent merges the fetched body into the server's
