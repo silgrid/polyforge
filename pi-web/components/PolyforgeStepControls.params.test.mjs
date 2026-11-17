@@ -77,11 +77,6 @@ function setup(props) {
   const hook = renderHook(PolyforgeStepControls, {
     wi: "wi_A1", profile: undefined, step: "review", skippable: false, unstarted: true, onApplied() {}, ...props,
   });
-  const answer = async (index, status, body) => {
-    posts[index].resolve(status, body);
-    await settle();
-    hook.flush();
-  };
   return { hook, posts, done: () => { globalThis.fetch = originalFetch; } };
 }
 

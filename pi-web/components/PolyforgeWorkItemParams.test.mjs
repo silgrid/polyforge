@@ -81,11 +81,11 @@ function setup(wi = "wi_Q79") {
     await settle();
     hook.flush();
   };
-  return { hook, calls, done: () => { globalThis.fetch = originalFetch; } };
+  return { hook, calls, answer, done: () => { globalThis.fetch = originalFetch; } };
 }
 
 test("one params read per open renders every step's declared params with the final value and source; a claimed ticket is read-only", async () => {
-  const { hook, calls, done } = setup("wi_R79");
+  const { hook, calls, answer, done } = setup("wi_R79");
   assert.equal(calls.length, 1, "exactly one read on open");
   assert.equal(calls[0].url, "/api/polyforge/params?wi=wi_R79");
   await answer(0, 200, { params: RUNNING_VIEW });
@@ -100,7 +100,7 @@ test("one params read per open renders every step's declared params with the fin
 });
 
 test("a queued ticket's declared params carry the set and clear controls; a successful write re-reads the view once", async () => {
-  const { hook, calls, done } = setup();
+  const { hook, calls, answer, done } = setup();
   await answer(0, 200, { params: QUEUED_VIEW });
   assert.equal(nodes(hook).filter((n) => "data-pf-wi-param-set" in (n.props ?? {})).length, 3, "a set per declared param");
   const input = nodes(hook).find((n) => n.type === "input" && n.props["data-pf-wi-param-input"] === "image" && n.props["data-pf-wi-param-step"] === "build");
@@ -123,7 +123,7 @@ test("a queued ticket's declared params carry the set and clear controls; a succ
 });
 
 test("a refused write shows the daemon's words inline; a refused read degrades to the error line, never a throw", async () => {
-  const { hook, calls, done } = setup();
+  const { hook, calls, answer, done } = setup();
   await answer(0, 200, { params: QUEUED_VIEW });
   nodes(hook).find((n) => n.type === "button" && n.props["data-pf-wi-param-clear"] === "image" && n.props["data-pf-wi-param-step"] === "review").props.onClick();
   await settle();
