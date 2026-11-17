@@ -49,7 +49,7 @@ func TestRewindOnlyCoverage(t *testing.T) {
 		if e.Code != workflow.CodeInvalidValue {
 			t.Errorf("%s: code %s, want %s", name, e.Code, workflow.CodeInvalidValue)
 		}
-		if !strings.Contains(e.Path, tc.stepID+".rewind_only") {
+		if !strings.Contains(e.Path, "("+tc.stepID+").rewind_only") {
 			t.Errorf("%s: path %q names not the step's rewind_only", name, e.Path)
 		}
 		if !strings.Contains(e.Msg, tc.stepID) {
