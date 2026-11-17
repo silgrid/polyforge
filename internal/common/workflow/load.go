@@ -360,8 +360,11 @@ func (l *loader) load() *Lane {
 	if n, ok := keys["epic"]; ok {
 		lane.Epic, _ = l.boolValue(file, off, n, "epic")
 	}
-	// polyforge#117 u12's red round: the resume_reset key's parsing is
-	// off for one commit (restored by the revert right after)
+	if n, ok := keys["resume_reset"]; ok {
+		if v, good := l.stringValue(file, off, n, "resume_reset"); good {
+			lane.ResumeReset = v
+		}
+	}
 	stepsNode, ok := keys["steps"]
 	if !ok {
 		l.at(CodeMissingKey, file, off, root, "steps", "the lane declares no steps")
