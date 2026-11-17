@@ -1,6 +1,8 @@
 // run.mjs — the console's browser acceptance runner,
 // rewritten against the console's visual contract.
 //
+// carries: webui/src/pages/MemoriesPage*, webui/src/pages/MemoryDetailPage*, webui/src/types.ts
+//
 // Drives the browser-rendered scenarios of artifacts/e2e-scenarios.md
 // (hostile corpus inert, the one visual language and its four-step type
 // hierarchy, the disabled search box, computed-style contrast and
@@ -727,6 +729,23 @@ async function scenarioMemoryVisual(page) {
   const [kind] = await colourAudit(page, [['kind', '[data-testid="memories"] .t-fact']], 'semantic')
   assert(kind.element && kind.chroma > 0.05, `the memory kind hook resolves to no colour: ${JSON.stringify(kind)}`)
 
+  // polyforge#120 (AC2): every list row shows the author's display name and
+  // the writer; the attributed fixture shows its exact strings and a
+  // writerless row the explicit unknown-writer placeholder — never an owner
+  // or user id.
+  await waitForContent(list.getByTestId('memory-attribution'), 'the memory rows carry no attribution line')
+  const attributedRow = list.getByTestId('memory-row').filter({ hasText: fixtures.attributed_title }).first()
+  await waitForContent(attributedRow, 'the attributed memory is not in the list')
+  const attributedText = await attributedRow.textContent()
+  assert(attributedText.includes(fixtures.attributed_author),
+    `the attributed row does not show the author display name: ${attributedText}`)
+  assert(attributedText.includes(fixtures.attributed_writer),
+    `the attributed row does not show the writer: ${attributedText}`)
+  await waitForContent(list.getByTestId('memory-attribution').filter({ hasText: 'unknown writer' }),
+    'no writerless row shows the explicit unknown-writer placeholder')
+  assert(!attributedText.includes('owner_user_id') && !attributedText.includes('user_id'),
+    'an owner or user id never reaches a row')
+
   // Work items render their status as a pill with its status-* testid.
   await page.goto(`/web/${enc(fixtures.project)}/work-items`)
   const items = page.getByTestId('work-items')
@@ -762,6 +781,13 @@ async function scenarioMemoryVisual(page) {
   const footerClass = await footer.getAttribute('class')
   assert((footerClass ?? '').includes('id-footer'), `the id footer lost its .id-footer hook: ${footerClass}`)
   assert((await footer.textContent()) === wantID, 'the id footer does not show the exact memory id')
+  // polyforge#120 (AC2): the detail header carries the same attribution
+  // strings the row showed.
+  const detailAttribution = detail.getByTestId('memory-attribution')
+  await waitForContent(detailAttribution.filter({ hasText: fixtures.attributed_writer }),
+    'the memory detail shows no writer attribution')
+  assert((await detailAttribution.textContent()).includes(fixtures.attributed_author),
+    'the memory detail does not show the author display name')
   const prose = await page.evaluate(() => {
     const el = document.querySelector('[data-testid="sanitized-body"]')
     if (!el) return null

@@ -181,6 +181,15 @@ type browserFixtures struct {
 	// one deactivated project (S24): the picker hides it by default and
 	// restores it in place through the console's own write route.
 	DeactivatedProject string `json:"deactivated_project"`
+	// polyforge#120 (AC2): one attributed memory (a step write with its
+	// details) and the strings the console must show for it — the author
+	// display name read back from the v1 face (the independent source,
+	// never the /web projection under test) and the writer string built
+	// from the seeded values.
+	AttributedMem    string `json:"attributed_mem"`
+	AttributedTitle  string `json:"attributed_title"`
+	AttributedAuthor string `json:"attributed_author"`
+	AttributedWriter string `json:"attributed_writer"`
 }
 
 // seedBrowserFixtures seeds the suite's data through the real API
@@ -232,6 +241,37 @@ func seedBrowserFixtures(t *testing.T, inst *v1Install) browserFixtures {
 			t.Fatalf("search memory: %v", err)
 		}
 	}
+	// polyforge#120 (AC2): one attributed memory — a step write carrying
+	// its writer details — so the console's rows and detail show a real
+	// author and writer (the earlier rows above stay writerless: their
+	// explicit unknown-writer placeholder is the other half of the
+	// assertion). The author display name is read back through the v1
+	// face, the one source this fixture trusts.
+	{
+		var created struct {
+			ID string `json:"id"`
+		}
+		f.AttributedTitle = "browser attributed memory"
+		if err := inst.client.Do("POST", "/api/v1/memories", map[string]any{
+			"project": v1Project, "type": "fact.note",
+			"title": f.AttributedTitle, "content": "attributed body",
+			"tags": []string{"browser"}, "visibility": "project",
+			"writer_kind":    "step",
+			"writer_details": map[string]any{"work_item": hostile.ID, "step": "build", "attempt": 1, "model": "pi:mock"},
+		}, &created); err != nil || created.ID == "" {
+			t.Fatalf("attributed memory: %v (%s)", err, created.ID)
+		}
+		f.AttributedMem = created.ID
+		var read struct {
+			Owner string `json:"owner_display_name"`
+		}
+		if err := inst.client.Do("GET", "/api/v1/memories/"+f.AttributedMem, nil, &read); err != nil {
+			t.Fatalf("attributed memory read: %v", err)
+		}
+		f.AttributedAuthor = read.Owner
+		f.AttributedWriter = fmt.Sprintf("step (work_item=%s, step=build, attempt=1, model=pi:mock)", hostile.ID)
+	}
+
 	// One memory per remaining kind hook (fact is seeded above): the
 	// four kinds, the four named doc.* types and a plain doc, so the
 	// colour scenario measures every hook side by side. doc.module-map
