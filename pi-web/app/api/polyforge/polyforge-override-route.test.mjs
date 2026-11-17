@@ -137,8 +137,9 @@ test("the watch route composes the override view into the same response (polyfor
   });
   assert.deepEqual([...argv()].sort(), [
     ["--json", "override", "wi_A1"],
+    ["--json", "params", "wi_A1"],
     ["--json", "watch", "wi_A1", "--once", "--demand", "--events", "40"],
-  ], "one watch read and the view read it composes (polyforge#48: the spawn order is not pinned — they start together)");
+  ], "one watch read and the two composed reads it starts (polyforge#48/#79: the spawn order is not pinned — they start together)");
 });
 
 test("polyforge#48 AC3: without overrides=1 the watch route never reads the view", async () => {
@@ -180,6 +181,7 @@ test("the composed view read names the Cell exactly like the watch read (a slug 
   await response.json();
   assert.deepEqual([...argv()].sort(), [
     ["--profile", "lab", "--json", "override", "demo#1"],
+    ["--profile", "lab", "--json", "params", "demo#1"],
     ["--profile", "lab", "--json", "watch", "demo#1", "--once", "--demand", "--events", "40"],
   ]);
 });
@@ -277,11 +279,12 @@ test("a bad wi or profile, no action, an unknown kind or an empty chain is a 400
 // composes the params view beside the override view (the same opt-in,
 // never for an ended ticket, never without it).
 test("the param actions ride the POST face: set and clear, the refusal's words, the 400 before any spawn", async () => {
-  reset("view");
+  reset("write");
   let response = await POST(post({ wi: "wi_A1", action: { kind: "param", step: "review", name: "image", value: "reg/x:1" } }));
   assert.equal(response.status, 200);
   assert.equal((await response.json()).ok, true);
   assert.deepEqual(argv().at(-1), ["--json", "override", "wi_A1", "--step", "review", "--param", "image=reg/x:1"]);
+  reset("write");
   response = await POST(post({ wi: "wi_A1", action: { kind: "clearParam", step: "review", name: "image" } }));
   assert.equal((await response.json()).ok, true);
   assert.deepEqual(argv().at(-1), ["--json", "override", "wi_A1", "--step", "review", "--clear-param", "image"]);
@@ -308,13 +311,14 @@ test("the watch route composes the params view beside the override view (the sam
     steps: [{ id: "review", status: "in_progress", params: [{ name: "image", value: "reg/x:1", source: "step override" }] }],
   }, "the composed params view rides the snapshot (G11: the controls fetch nothing on selection)");
   assert.ok(argv().some((a) => JSON.stringify(a) === JSON.stringify(["--json", "params", "wi_A1"])), "the params read starts together with the watch read");
-  // an ended ticket composes neither view, and the params read never spawns
+  // an ended ticket composes neither view — the reads may have started
+  // (the one transitional ask before the panel knows, polyforge#48), but
+  // the answer drops them
   reset("ended");
   response = await WATCH_GET(watchGet("?wi=wi_A1&overrides=1"));
   body = await response.json();
   assert.equal(body.status?.overrideView, undefined, "an ended ticket composes no override view (polyforge#48)");
   assert.equal(body.status?.paramsView, undefined, "an ended ticket composes no params view either");
-  assert.deepEqual([...argv()].sort(), [["--json", "watch", "wi_A1", "--once", "--demand", "--events", "40"]], "the ended ask reads the watch only");
   // without the opt-in the params view is not asked for
   reset("view");
   response = await WATCH_GET(watchGet("?wi=wi_A1"));

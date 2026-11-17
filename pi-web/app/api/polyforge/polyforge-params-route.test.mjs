@@ -63,7 +63,7 @@ test("the route is GET-only, gated in-route, force-dynamic and never 5xx; the re
   assert.match(source, /export const dynamic = "force-dynamic"/);
   assert.doesNotMatch(source, /status: 5\d\d/, "never 5xx");
   assert.doesNotMatch(source, /console\.(log|error|warn)/, "never logs");
-  assert.ok(source.indexOf("isPolyforgeWiRef(wi)") < source.indexOf("getPolyforgeParams"), "the ref is validated before the spawn");
+  assert.ok(source.indexOf("isPolyforgeWiRef(wi)") < source.indexOf("await getPolyforgeParams"), "the ref is validated before the spawn");
 });
 
 test("one params read answers the view through the passport", async () => {
