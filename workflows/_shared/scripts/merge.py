@@ -33,8 +33,9 @@ it, the freshness check compares ``origin/<target>`` with the verified
 base, the landing rules judge the merge on it, and the landing record's
 state is ``landed_on_target`` (with ``target``), a value no
 ``integration.state=landed`` filter ever takes. The file is read
-strictly: one that is there but cannot be read is not judged (exit 2)
-naming why — never a silent fall-back to the default branch.
+strictly: one that is there but cannot be read, or a target branch
+missing on a repo's origin, is not judged (exit 2) naming why — never a
+silent fall-back to the default branch.
 
 ``--publish`` is the publish step's artifact: ``{"repos": [{name, branch,
 pr_url, head, skipped_reason}]}`` (a repo with a skipped_reason has nothing
@@ -303,6 +304,14 @@ class Merge:
         refused: List[str] = []
         for r in details.repos:
             r.base = self.target or g.default_branch(r.dir)
+            if self.target:
+                # a base that cannot be fetched is not judged, never a
+                # judgment over a stand-in default branch (a PR against
+                # main would be refused as though the lane asked for it)
+                try:
+                    g.fetch(r.dir, self.target)
+                except GoError as err:
+                    return self.not_judged("repos/%s: fetching the target branch %s: %s" % (r.name, self.target, err))
             try:
                 pr = g.view_pr(r.dir, r.pr_url)
             except GoError as err:
@@ -399,6 +408,13 @@ class Merge:
         ask: List[str] = []
         for r in details.repos:
             r.base = self.target or g.default_branch(r.dir)
+            if self.target:
+                # the same not-judged as the default mode's: a base that
+                # cannot be fetched is never asked over
+                try:
+                    g.fetch(r.dir, self.target)
+                except GoError as err:
+                    return self.not_judged("repos/%s: fetching the target branch %s: %s" % (r.name, self.target, err))
             try:
                 pr = g.view_pr(r.dir, r.pr_url)
             except GoError as err:
