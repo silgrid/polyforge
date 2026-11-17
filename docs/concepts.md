@@ -413,7 +413,9 @@ dependencies (BuildKit keeps the credentials out of it):
 
 ```dockerfile
 # syntax=docker/dockerfile:1
-FROM golang:1.24
+# pin the base image's Go to the version the repo's go.mod requires: the
+# golang image sets GOTOOLCHAIN=local and never downloads another toolchain
+FROM golang:1.26
 WORKDIR /src
 COPY go.mod go.sum ./
 # go fetches a GOPRIVATE module over https by default: rewrite it to ssh
