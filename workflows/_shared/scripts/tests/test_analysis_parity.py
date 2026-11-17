@@ -135,10 +135,14 @@ class AnalysisParityTest(unittest.TestCase):
         self.assert_same_conclusion({"tests": [entry(repo="web", file="tests/test_a.py")]}, "red", static=["a1"])
 
     def test_an_unusable_file_is_not_judged_on_both_sides(self) -> None:
+        """A malformed analysis file is not judged on both sides — and the
+        close check's own summary names the file unusable, which an unknown
+        kind never prints ("no kind of fact" writes no result file at all)."""
         path = analysis_file(self.fx, {"tests": "nope"})
-        fcode, _fres = run_facts(self.fx.capsule, path, self.out)
+        fcode, fres = run_facts(self.fx.capsule, path, self.out)
         r = run_verify(self.fx.capsule, self.eng, "--analysis", path)
         self.assertEqual(fcode, 2)
+        self.assertIn("is unusable", fres.get("summary", ""), fres)
         self.assertEqual(r.exit, 2, "verification's own treatment of the same file")
 
 

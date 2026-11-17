@@ -173,14 +173,21 @@ class AnalysisCloseCheckTest(unittest.TestCase):
         self.assertEqual(entries[1].get("log"), entries[0].get("log"))
 
     def test_an_unusable_analysis_file_is_not_judged(self) -> None:
+        """A malformed analysis file, an entry without its run and a missing
+        one are each not judged — and the kind itself must be the one saying
+        so: the summary names the file unusable, which an unknown kind
+        never prints (it answers "no kind of fact" with no result file at
+        all)."""
         for name, doc in (("malformed", {"tests": "nope"}),
                           ("no run", {"tests": [{"id": "a1", "repo": "app", "file": "tests/test_a.py"}]})):
             with self.subTest(name):
-                code, _res = self.check(doc)
+                code, res = self.check(doc)
                 self.assertEqual(code, 2)
-        code, _res = run_facts(self.fx.capsule, os.path.join(self.fx.capsule, "artifacts", "build", "nope.json"),
-                               self.out)
+                self.assertIn("is unusable", res.get("summary", ""), res)
+        code, res = run_facts(self.fx.capsule, os.path.join(self.fx.capsule, "artifacts", "build", "nope.json"),
+                              self.out)
         self.assertEqual(code, 2)
+        self.assertIn("is unusable", res.get("summary", ""), res)
 
 
 if __name__ == "__main__":
