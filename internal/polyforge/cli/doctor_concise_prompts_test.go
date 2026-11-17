@@ -145,8 +145,8 @@ func TestPF101ClaudeTargetResolution(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, check := range []struct {
-		name string
-		run  func(home, piDir, root string, fix bool) doctorCheck
+		name  string
+		run   func(home, piDir, root string, fix bool) doctorCheck
 		block string
 	}{
 		{"diagram", harnessPromptCheck, diagramGuidanceBlock},
