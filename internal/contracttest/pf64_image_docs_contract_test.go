@@ -106,7 +106,7 @@ func TestPF64ImageParamDocs(t *testing.T) {
 			"names a prepared image every gated repo runs in",
 			"`pf-verify-image-missing`",
 			// the container record's keys and the gated condition (review r1#3)
-			"or whose step parameter `image` names one",
+			"or whose step parameter `image` names a prepared image",
 			"`digest` and `repo_digests`",
 			"image_digest`, `image_source` and `repo_digests`",
 		)

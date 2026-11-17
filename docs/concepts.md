@@ -414,14 +414,26 @@ dependencies (BuildKit keeps the credentials out of it):
 ```dockerfile
 # syntax=docker/dockerfile:1
 FROM golang:1.24
-RUN --mount=type=ssh GOPRIVATE=example.com/* go mod download
-ENV GOCACHE=/cache/go/build
+WORKDIR /src
+COPY go.mod go.sum ./
+# go fetches a GOPRIVATE module over https by default: rewrite it to ssh
+# (the agent this line mounts serves it) and know the host first
+RUN --mount=type=ssh \
+    sh -c 'mkdir -p -m 0700 ~/.ssh \
+      && ssh-keyscan example.com >> ~/.ssh/known_hosts \
+      && git config --global url."ssh://git@example.com/".insteadOf "https://example.com/"' \
+ && GOPRIVATE=example.com/* go mod download
+ENV GOCACHE=/cache/go/build GOPRIVATE=example.com/*
 ```
 
-built with the preparer's agent (`docker build --ssh default=$SSH_AUTH_SOCK …`;
-a `--mount=type=secret` token works the same) — nothing of either lands
-in the image; the module cache stays inside it (`GOMODCACHE` outside
-`/cache`), only the build cache lives in the volume.
+built from the project's own repository — the build context is the repo
+(`docker build --ssh default=$SSH_AUTH_SOCK -f <this file> .` from its
+root; its `go.mod` names the private modules) — so nothing of the agent
+lands in the image: the socket lives only inside its one `RUN`. A token
+works the same way as a secret in its env form
+(`--mount=type=secret,id=go_token,env=GO_TOKEN`, read in that one `RUN`),
+never in a file a layer keeps. The module cache stays inside the image
+(`GOMODCACHE` outside `/cache`); only the build cache lives in the volume.
 
 Each run starts one container per such repo (`--init`, labelled
 `pf.verify.daemon` — the script's owner, `pf-step` — `pf.verify.boot` — a

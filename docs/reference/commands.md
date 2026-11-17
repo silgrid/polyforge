@@ -549,10 +549,12 @@ fallback diagnostics (those saying `falling back to the full tier`, e.g. a
 failed `go list` with its command, exit and first output line,
 or a changed stack config file such as `go.mod`; the
 informational `--light` diagnostics are not reasons); a
-repository whose tree carries `.polyforge/Dockerfile.verify` runs its bar
-in a container (docs/concepts.md), and that repository's `repos[]` entry
-then carries `container` `{image, built, build_log, name, cpus, memory,
-pids, lost}`; the limits are the script's: CPUs min(8,
+repository whose tree carries `.polyforge/Dockerfile.verify` — or whose
+step parameter `image` names a prepared image — runs its bar in a
+container (docs/concepts.md), and that repository's `repos[]` entry then
+carries `container` `{image, built, build_log, name, cpus, memory,
+pids, lost}` (and, in the prepared-image mode, `digest` and `repo_digests`
+— the image's local ID and its RepoDigests, `build_log` never); the limits are the script's: CPUs min(8,
 cores), memory 16g, pids 4096) and `report-mechanical.md` into its run
 directory (`verify.py --log-dir`, else `logs/` beside `--out`, else
 `runtime-state/verify/<n>/`); the
@@ -615,7 +617,10 @@ min(8, cores) / `16g` / 4096; design r2 D7).
 Its result files name the script — `command` `gate.py` (`integrate.py
 close` reads only these), `version` `pfstep/1` — and keep the step
 command's details: `{mode, pins, gated, repos{head, branch, result, tag,
-tag_error}, tags, failed, incomplete, log_dir}` and the triage's. A green
+tag_error}, tags, failed, incomplete, log_dir}` and the triage's; a run in a prepared
+image records `image_digest`, `image_source` and `repo_digests` in its
+`result` (the image's local ID, which named it — `flag` or `param` — and
+its RepoDigests). A green
 tag's `runner` is `gate.py`, its `runner_version` `2`.
 
 ## `pf step` — a step's one entry to the daemon

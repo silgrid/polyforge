@@ -342,7 +342,9 @@ and the release:
   and is recorded as the value's source) names one, inside that prepared
   image: **one image for every gated repo of the project**, resolved to
   its local ID and started by it, never built, never pulled, Dockerfile
-  or not. The workflow script runs it — the
+  or not. The result records that local ID, where the value came from
+  (`flag` or `param`) and the image's RepoDigests; the plan's image half
+  and the gate id hash the ID alone. The workflow script runs it — the
   release and an operator the tree's own, `python3
   workflows/_shared/scripts/gate.py --isolation container` (`cmd/pf-gate`
   before), the integrate lane its lane snapshot's — through the workflow scripts'
