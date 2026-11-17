@@ -115,7 +115,9 @@ exit 78, below),
 swaps the binary, then ensures again; meanwhile it holds the ensure lock,
 so a harness session starting mid-upgrade starts nothing. A daemon already running with a different workflows
 dir, or without its loop, is reported, never auto-restarted. Finally it
-runs `pf doctor`. A new machine registers itself: when the key's user is a
+runs `pf doctor --fix-harness-prompts` once (the harness context files'
+guidance blocks — append-only, idempotent, never creating a file) and
+then `pf doctor`. A new machine registers itself: when the key's user is a
 member of any project (or a global admin), the daemon's first signed
 heartbeat registers it. The installer prints a note naming the refusal
 causes — AUTH-403 when the key's user is in no project (joining any project

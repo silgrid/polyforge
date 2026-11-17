@@ -631,9 +631,15 @@ func assembleStepPrompt(p promptParts) string {
 	// 1. the dispatch
 	b.WriteString(dispatchPart(p))
 	// 2. the prohibited actions, beside the capsule-root
-	// binding they scope
+	// binding they scope, with the concise output-discipline rule
+	// (polyforge#101) as their closing `## ` subsection — the same
+	// rule the harness context files and every task input carry, from
+	// the one source (harness.ConciseRule); a `## ` heading keeps the
+	// prompt's six level-1 parts six
 	b.WriteString("\n")
 	b.WriteString(harness.StepProhibitedActions(p.CapsuleRoot))
+	b.WriteString("\n")
+	b.WriteString(harness.ConciseRule())
 	// 3. how a step runs, and the hand-off body
 	b.WriteString("\n")
 	b.WriteString(strings.TrimSpace(p.StepHeader))

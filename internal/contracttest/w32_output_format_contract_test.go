@@ -4,7 +4,7 @@ package test
 //
 // Work item #32 ships a standalone output-format skill (skills/output-format/
 // SKILL.md): output discipline for the three owner-facing surfaces — the
-// session face, the grill-family needs_input envelope face, and the
+// session face, the `pf step ask` question-card envelope face, and the
 // panel face (the session agent's status restatement) — derived from
 // the five cognitive facts, with a Bad/Good pair per surface, a pre-send
 // first/last-line check and a whole-session persistence clause. The
@@ -145,7 +145,7 @@ func TestW32OutputFormatSkillContract(t *testing.T) {
 		"At most 10 one-line bullets",
 		"cause and fix",
 		"conditional menu",
-		"needs_input",
+		"`pf step ask`",
 		"Ban preamble, process recap and pleasantry sign-off",
 		"Restate state, not process",
 		"Ban binary contrast",

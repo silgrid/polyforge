@@ -1817,8 +1817,8 @@ func TestW113DoctorHealthyMachine(t *testing.T) {
 		case "claude statusline", "pi package",
 			"claude install layout", "pi install layout", "v1 harness leftovers", "retired chat state":
 			continue // the harness family (polyforge#142, #174): no harness in the scratch HOME
-		case "harness diagram guidance":
-			continue // skips when no harness is installed, as here
+		case "harness diagram guidance", "harness concise guidance":
+			continue // skip when no harness is installed, as here
 		case "daemon supervision":
 			// polyforge#174: this test runs its daemon directly, not under
 			// the tmux restart loop — a warn, never a fail

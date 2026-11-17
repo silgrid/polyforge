@@ -6,7 +6,9 @@ package daemon
 // through the routed Cell's effective connection: method, path, query and
 // body forwarded, status and body answered unchanged — save a work-item
 // create on a lane declaring `exclusive: true`, forwarded exclusive
-// (exclusive.go). The forwarded path is
+// (exclusive.go), and a session memory create (`POST /api/v1/memories`),
+// stamped with the daemon's writer — kind session, the routed Cell's
+// machine and profile (writerstamp.go). The forwarded path is
 // the request's ESCAPED path, byte for byte: decoding it here and letting the
 // client re-parse it turned an escaped reserved byte ("%23", "%3F", "%2F",
 // "%25") into URL syntax, so a "<project>#<seq>" work-item reference
@@ -86,6 +88,15 @@ func (d *Daemon) serveProxy(w http.ResponseWriter, r *http.Request, profile stri
 	if err != nil {
 		writeErr(w, api.ErrDaemonBadInput, "read body: "+err.Error())
 		return
+	}
+	// The session memory create is stamped with the routed Cell's writer
+	// identity before anything is forwarded; a body that cannot be
+	// stamped is refused here (DAEMON-400, writerstamp.go).
+	if stamped, ae := d.stampSessionWriter(r.Method, strings.TrimPrefix(r.URL.Path, "/aihub"), profile, body); ae != nil {
+		writeErr(w, ae.Code, ae.Detail)
+		return
+	} else if stamped != nil {
+		body = stamped
 	}
 	if r.URL.RawQuery != "" {
 		path += "?" + r.URL.RawQuery

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/silgrid/polyforge/internal/common/api"
@@ -1019,7 +1020,7 @@ var cmdRecall = &Command{
 	Name:    "recall",
 	Group:   GroupData,
 	Summary: "Search project memories (or browse them, with no query)",
-	Usage:   "pf recall --project P <query> [--any] [--type T] [--tags a,b] [--limit N]\n       pf recall --project P [--after CURSOR] [--sort updated|created] [--type T] [--tags a,b] [--limit N]",
+	Usage:   "pf recall --project P <query> [--any] [--type T] [--tags a,b] [--limit N] [--writer-kind session|step]\n       pf recall --project P [--after CURSOR] [--sort updated|created] [--type T] [--tags a,b] [--limit N] [--writer-kind session|step]",
 	Setup: func(fs *flag.FlagSet) {
 		fs.String("project", "", "project name (required; validated against the [workspace] mapping)")
 		fs.String("q", "", "query text (alternative to the positional argument); none = browse mode")
@@ -1032,6 +1033,7 @@ var cmdRecall = &Command{
 		// without --sort is aihub's own default, updated.
 		fs.String("after", "", "browse mode: continue after a previous page's next cursor")
 		fs.String("sort", "", "browse mode: updated (aihub's default) or created, both descending")
+		fs.String("writer-kind", "", "writer filter: session or step (memories the daemon stamped as a session or a step dispatch)")
 	},
 	Run: func(ctx *Context, fs *flag.FlagSet, args []string) error {
 		q := stringFlag(fs, "q")
@@ -1040,6 +1042,17 @@ var cmdRecall = &Command{
 		}
 		browse := strings.TrimSpace(q) == ""
 		after, sort := stringFlag(fs, "after"), stringFlag(fs, "sort")
+		// The writer filter is the #107 wire name verbatim, validated
+		// locally: an illegal value fails loudly here and no request is
+		// sent (an omitted flag is no filter at all — nothing default
+		// rides the wire).
+		writerKind := stringFlag(fs, "writer-kind")
+		switch writerKind {
+		case "":
+		case "session", "step":
+		default:
+			return fmt.Errorf("recall: --writer-kind must be session or step (got %q)", writerKind)
+		}
 		// Local flag validation, ahead of any config resolution or wire
 		// call: a refusal fails loudly here and no request is sent.
 		if browse && boolFlag(fs, "any") {
@@ -1053,6 +1066,9 @@ var cmdRecall = &Command{
 			}
 			if after != "" || sort != "" {
 				return fmt.Errorf("recall: --after and --sort are browse flags of the human direct-aihub path; a task agent searches only")
+			}
+			if writerKind != "" {
+				return fmt.Errorf("recall: --writer-kind is a filter of the human direct-aihub path; a task agent searches only")
 			}
 		}
 		// The default-20 limit is the CLI's product choice (aihub's
@@ -1086,9 +1102,22 @@ var cmdRecall = &Command{
 		}
 		// A keyword search forwards an explicitly given --after/--sort
 		// too: aihub answers the mixed shape with MEM-400 itself.
-		raw, err := ctx.searchMemories(proj, q, memType, tagList, limit, match, sort, after)
+		raw, err := ctx.searchMemories(proj, q, memType, tagList, limit, match, sort, after, writerKind)
 		if err != nil {
 			return err
+		}
+		// AC3 (polyforge#119): a server older than the writer filter
+		// (polyforge#107) silently ignores it, so the REQUESTED filter is
+		// proven against every returned item BEFORE any output — a mismatch
+		// (another kind, or no kind at all on a pre-writer row) refuses
+		// with nothing shown. The check's provable boundary (Q5): an empty
+		// page and a page whose every item matches are accepted — a silent
+		// filter that happens to match cannot be detected, and no probing
+		// request is made to try.
+		if writerKind != "" {
+			if err := checkWriterKindConsistency(raw, writerKind); err != nil {
+				return err
+			}
 		}
 		if browse {
 			finishAs(ctx, raw, func(p *memoryPage) { renderMemoryPage(ctx.Stdout, p) })
@@ -1100,6 +1129,36 @@ var cmdRecall = &Command{
 		})
 		return nil
 	},
+}
+
+// checkWriterKindConsistency proves one filtered recall's answer against
+// the requested --writer-kind value (AC3, polyforge#119): every returned
+// item's writer_kind must equal want. The first item that does not — a
+// different kind, or none at all — answers the refusal naming it, so a
+// server that silently ignored the filter never shows its unfiltered
+// rows as if they were filtered. An empty items list passes (the
+// boundary the owner accepted, Q5).
+func checkWriterKindConsistency(raw json.RawMessage, want string) error {
+	var page struct {
+		Items []struct {
+			ID         string  `json:"id"`
+			WriterKind *string `json:"writer_kind"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &page); err != nil {
+		return fmt.Errorf("recall: the server's answer is not a memory page: %w", err)
+	}
+	for _, it := range page.Items {
+		if it.WriterKind != nil && *it.WriterKind == want {
+			continue
+		}
+		id := it.ID
+		if id == "" {
+			id = "(no id)"
+		}
+		return fmt.Errorf("recall: the server did not apply the --writer-kind %s filter (memory %s is not a %s write): the aihub is older than the writer filter and ignored it — nothing was shown; drop --writer-kind or upgrade the aihub", want, id, want)
+	}
+	return nil
 }
 
 // recallTypeFilter validates the --type form and returns the value to
@@ -1245,12 +1304,16 @@ const defaultMemoryShowCap = 262144
 // metadata JSON (additive: unknown fields are ignored — the raw bytes
 // stay the --json face's authority).
 type memoryMetaView struct {
-	ID         string `json:"id"`
-	Type       string `json:"type"`
-	Title      string `json:"title"`
-	Visibility string `json:"visibility"`
-	UpdatedAt  string `json:"updated_at"`
-	ContentLen int64  `json:"content_len"`
+	ID               string          `json:"id"`
+	Type             string          `json:"type"`
+	Title            string          `json:"title"`
+	OwnerUserID      string          `json:"owner_user_id"`
+	OwnerDisplayName string          `json:"owner_display_name"`
+	WriterKind       *string         `json:"writer_kind"`
+	WriterDetails    json.RawMessage `json:"writer_details"`
+	Visibility       string          `json:"visibility"`
+	UpdatedAt        string          `json:"updated_at"`
+	ContentLen       int64           `json:"content_len"`
 }
 
 // memoryShow reads one memory by id: metadata from the default JSON face
@@ -1306,6 +1369,8 @@ func memoryShowWith(ctx *Context, name string, args []string, read func(id strin
 	fmt.Fprintf(ctx.Stdout, "id: %s\n", meta.ID)
 	fmt.Fprintf(ctx.Stdout, "type: %s\n", meta.Type)
 	fmt.Fprintf(ctx.Stdout, "title: %s\n", orDash(meta.Title))
+	fmt.Fprintf(ctx.Stdout, "author: %s\n", memoryAuthor(meta.OwnerDisplayName, meta.OwnerUserID))
+	fmt.Fprintf(ctx.Stdout, "writer: %s\n", memoryWriterLine(meta.WriterKind, meta.WriterDetails))
 	fmt.Fprintf(ctx.Stdout, "visibility: %s\n", meta.Visibility)
 	fmt.Fprintf(ctx.Stdout, "updated: %s\n", meta.UpdatedAt)
 	fmt.Fprintf(ctx.Stdout, "content_len: %d\n", meta.ContentLen)
@@ -1324,6 +1389,64 @@ func memoryShowWith(ctx *Context, name string, args []string, read func(id strin
 		fmt.Fprintf(ctx.Stdout, "[truncated: showed %d of %d bytes — use --max-bytes 0 for the full body]\n", capBytes, len(body))
 	}
 	return nil
+}
+
+// memoryAuthor answers a memory row's author for the table and the
+// show header: the display name the server joins live from its users
+// (polyforge#107), the stable owner id when the server names none (a
+// pre-#107 aihub), "-" when neither rides.
+func memoryAuthor(displayName, ownerID string) string {
+	if displayName != "" {
+		return displayName
+	}
+	if ownerID != "" {
+		return ownerID
+	}
+	return "-"
+}
+
+// memoryWriterLine renders the writer of memory show's header: the kind
+// with its VALUED details — "kind (k=v, ...)", keys sorted, scalars
+// bare (numbers, booleans), anything nested as compact JSON. A detail
+// whose value is null or the empty string is not listed at all (Q2:
+// 有值的细节 — a key every test of which was skipped renders the kind
+// alone); "-" on a row written before the writer columns existed.
+func memoryWriterLine(kind *string, details json.RawMessage) string {
+	if kind == nil {
+		return "-"
+	}
+	var d map[string]json.RawMessage
+	if json.Unmarshal(details, &d) != nil || d == nil {
+		return *kind
+	}
+	keys := make([]string, 0, len(d))
+	for k := range d {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		var v any
+		if err := json.Unmarshal(d[k], &v); err != nil {
+			parts = append(parts, k+"="+string(d[k]))
+			continue
+		}
+		switch t := v.(type) {
+		case string:
+			if t == "" {
+				continue // unvalued: not listed
+			}
+			parts = append(parts, k+"="+t)
+		case nil:
+			continue // unvalued: not listed
+		default:
+			parts = append(parts, k+"="+string(d[k]))
+		}
+	}
+	if len(parts) == 0 {
+		return *kind
+	}
+	return *kind + " (" + strings.Join(parts, ", ") + ")"
 }
 
 // memoryJSONWithContent merges the fetched body into the server's

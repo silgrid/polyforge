@@ -407,11 +407,13 @@ const ErrorCancelled = "cancelled by `pf task cancel`"
 // dispatchedPrompt answers what one run's harness reads: the shared
 // prohibited-actions section (harness.TaskProhibitedActions,
 // — the list every step carries, scoped to the task's
-// working directory, its exception naming the task alone) ahead of the
-// task's own prompt. The record keeps the prompt as given: list, show and
-// the prompt summary never carry the section.
+// working directory, its exception naming the task alone), the concise
+// output-discipline rule (harness.ConciseRule, the one source every
+// step dispatch and harness context file also carries — polyforge#101)
+// ahead of the task's own prompt. The record keeps the prompt as
+// given: list, show and the prompt summary never carry the section.
 func dispatchedPrompt(prompt, dir string) string {
-	return harness.TaskProhibitedActions(dir) + "\n# Task\n\n" + prompt
+	return harness.TaskProhibitedActions(dir) + "\n" + harness.ConciseRule() + "\n# Task\n\n" + prompt
 }
 
 // scratchNote is the section every dispatched task prompt ends with

@@ -194,7 +194,7 @@ func (d *Daemon) analysisPrompt(item *api.WorkItem) (string, error) {
 	if item.Content != nil {
 		content = *item.Content
 	}
-	p := harness.TaskProhibitedActions(dir) + "\n" + AnalysisPrompt
+	p := harness.TaskProhibitedActions(dir) + "\n" + harness.ConciseRule() + "\n" + AnalysisPrompt
 	if sec := d.analysisComponentsSection(item, dir); sec != "" {
 		p += "\n\n---\n\n" + sec
 	}

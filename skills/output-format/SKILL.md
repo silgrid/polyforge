@@ -1,6 +1,6 @@
 ---
 name: output-format
-description: "Apply to every owner-facing reply in a polyforge session. Owner-facing output discipline for a polyforge session's three surfaces: the session face (what the agent says back to the owner), the envelope face (a grill-family needs_input decision), and the panel face (the session agent restating a work item's status). Every rule is derived from five cognitive facts about attention and action; each surface carries a Bad/Good pair, and the skill ends with a pre-send first/last-line check and a whole-session persistence clause. It is independent of the polyforge routing skill and never touches it."
+description: "Apply to every owner-facing reply in a polyforge session. Owner-facing output discipline for a polyforge session's three surfaces: the session face (what the agent says back to the owner), the envelope face (a `pf step ask` question card), and the panel face (the session agent restating a work item's status). Every rule is derived from five cognitive facts about attention and action; each surface carries a Bad/Good pair, and the skill ends with a pre-send first/last-line check and a whole-session persistence clause. It is independent of the polyforge routing skill and never touches it."
 license: PolyForm-Noncommercial-1.0.0
 compatibility:
   harnesses: [pi, claude]
@@ -12,8 +12,13 @@ This skill governs how a session presents results to the owner — and nothing e
 independent of the polyforge routing skill: that skill decides *which* `pf` verb an intent
 becomes; this one decides the *shape* of the words that carry the outcome back. Both load
 independently; neither dilutes the other. It is for the interactive session and the lane
-narration the session shows, not for step agents (their outputs are schema-bound
-envelopes).
+narration the session shows. Step agents, one-off tasks and this session share one floor:
+the short output-discipline rule (a few lines, one source) that rides every step dispatch
+and every task input, and that `pf doctor --fix-harness-prompts` keeps appended to each
+installed harness's context file — so the main session and its sub-agents hold it too,
+across sessions and compactions. This skill does not repeat that floor: the persistent
+short rule sets the floor, this skill carries the details of the interactive session's
+three faces.
 
 ## The five cognitive facts
 
@@ -62,8 +67,8 @@ Every rule below is derived from one of these. They describe the reader, not the
 - **Errors give cause and fix only** — `cause → fix`. No stack dump, no apology paragraph,
   no re-narration of the attempt.
 - **Prose never opens a conditional menu** ("要不要我…" / "if you want, I could…"). Kill it
-  and state the next action: "下一步: 跑 X". The one exception is a genuine needs_input
-  decision — that is the envelope face below.
+  and state the next action: "下一步: 跑 X". The one exception is a genuine question to the
+  owner — a `pf step ask` question card, the envelope face below.
 - **Don't dump large files.** Give paths; a path is navigation, a pasted file is noise.
 - **Match length to the question.** A yes/no question gets a yes/no and the reason.
 
@@ -131,11 +136,11 @@ The interactive conversation: every reply, including status answers and error re
 
 Two kinds of incoming signal reach the session, and they carry different attention.
 
-- A **decision line** is the highest-attention signal: a human decision — a grill-family
-  `needs_input`, a gate to pass, or a failed / blocked / completed workflow. It wakes the
-  session (the harness turns it into a turn), so surface it immediately and **verbatim** —
-  never soften, summarize or defer it. A grill-family `needs_input` decision lands in the
-  envelope face below.
+- A **decision line** is the highest-attention signal: a human decision — an answered
+  `pf step ask` question, a gate to pass, or a failed / blocked / completed workflow.
+  Surface it immediately and **verbatim** — never soften, summarize or defer it. A step's
+  open question reaches the owner as a `pf step ask` question card, the envelope face
+  below.
 - A **message line** is lower attention: a user-to-user message shown to the owner. Present
   it, then wait for the owner — it is **not** a wake, **not** a decision, and it opens **no**
   conditional menu. An unanchored message (no work-item anchor) degrades: it sits lower in
@@ -144,11 +149,11 @@ Two kinds of incoming signal reach the session, and they carry different attenti
 The mechanics of a message — drafting, sending, the receiving discipline — belong to the
 routing skill's message fragment; this skill owns only the attention grade above.
 
-## Envelope face (grill-family needs_input)
+## Envelope face (a `pf step ask` question card)
 
 When a step genuinely needs the owner's decision, the decision must be on the table. This
-face invents no new shape: it is the four-column table the grill-family steps already
-require.
+face invents no new shape: it is the four-column table a `pf step ask` question card
+already requires.
 
 - Header exactly `| 问题 | 推荐选项 | 理由 | 重点关注程度 |`, one row per focused
   question, numbered in the 问题 cell, no fifth column. 重点关注程度 is last and
@@ -182,16 +187,15 @@ require.
 注意事项：第 1 行依赖第 2 行的结论；第 2 行是例行确认，可直接批量通过。
 ```
 
-A genuine needs_input question stays a question — that is the only place a conditional may
-live, and it lives as a table row, not as prose.
+A genuine `pf step ask` question stays a question — that is the only place a conditional
+may live, and it lives as a table row, not as prose.
 
 ## Panel face (session agent restating a WI's status)
 
-The `summarize` lane itself emits ONE plain-text line of at most 200 characters (no
-markdown), and its summarizer never loads this skill — so the lane does not follow the
-rules here. They govern the **session agent** whenever it restates or relays a work item's
-status to the owner: it uses the three beats **current step / next step / the one thing
-only a human can do** in ONE live line.
+Pi Web caps a panel summary at 200 characters — the panel truncates on its own; this
+skill does not govern that truncation. The rules here govern the **session agent**
+whenever it restates or relays a work item's status to the owner: it uses the three beats
+**current step / next step / the one thing only a human can do** in ONE live line.
 
 **Bad** (process replay; no human action named):
 
@@ -219,8 +223,10 @@ These rules are in force for the **whole session** once this skill is loaded —
 first reply. They survive a **topic switch**: changing subject does not reset the format,
 and a later reply is as bound as the first. They end only on an explicit **close phrase**
 ("格式可以放开了" / "you can drop the format now"), after which normal output resumes until
-the owner re-arms it (the same phrases, e.g. "用输出形制" / "back to the format") or the
-skill loads again at the next session start.
+the owner re-arms it (the same phrases, e.g. "用输出形制" / "back to the format"). This
+skill loads the way the harness loads skills — per session; what survives a session
+boundary and a compaction is the short output-discipline rule the harness context file
+carries (`pf doctor --fix-harness-prompts` keeps it there), not a reload of this skill.
 
 ## Credits
 
