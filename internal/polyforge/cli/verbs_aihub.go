@@ -1106,6 +1106,19 @@ var cmdRecall = &Command{
 		if err != nil {
 			return err
 		}
+		// AC3 (polyforge#119): a server older than the writer filter
+		// (polyforge#107) silently ignores it, so the REQUESTED filter is
+		// proven against every returned item BEFORE any output — a mismatch
+		// (another kind, or no kind at all on a pre-writer row) refuses
+		// with nothing shown. The check's provable boundary (Q5): an empty
+		// page and a page whose every item matches are accepted — a silent
+		// filter that happens to match cannot be detected, and no probing
+		// request is made to try.
+		if writerKind != "" {
+			if err := checkWriterKindConsistency(raw, writerKind); err != nil {
+				return err
+			}
+		}
 		if browse {
 			finishAs(ctx, raw, func(p *memoryPage) { renderMemoryPage(ctx.Stdout, p) })
 			return nil
@@ -1116,6 +1129,36 @@ var cmdRecall = &Command{
 		})
 		return nil
 	},
+}
+
+// checkWriterKindConsistency proves one filtered recall's answer against
+// the requested --writer-kind value (AC3, polyforge#119): every returned
+// item's writer_kind must equal want. The first item that does not — a
+// different kind, or none at all — answers the refusal naming it, so a
+// server that silently ignored the filter never shows its unfiltered
+// rows as if they were filtered. An empty items list passes (the
+// boundary the owner accepted, Q5).
+func checkWriterKindConsistency(raw json.RawMessage, want string) error {
+	var page struct {
+		Items []struct {
+			ID         string  `json:"id"`
+			WriterKind *string `json:"writer_kind"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &page); err != nil {
+		return fmt.Errorf("recall: the server's answer is not a memory page: %w", err)
+	}
+	for _, it := range page.Items {
+		if it.WriterKind != nil && *it.WriterKind == want {
+			continue
+		}
+		id := it.ID
+		if id == "" {
+			id = "(no id)"
+		}
+		return fmt.Errorf("recall: the server did not apply the --writer-kind %s filter (memory %s is not a %s write): the aihub is older than the writer filter and ignored it — nothing was shown; drop --writer-kind or upgrade the aihub", want, id, want)
+	}
+	return nil
 }
 
 // recallTypeFilter validates the --type form and returns the value to
