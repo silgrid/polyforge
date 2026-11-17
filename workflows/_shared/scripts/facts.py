@@ -280,6 +280,25 @@ def base_ref(capsule_dir: str, directory: str) -> Tuple[str, str]:
     return ref, ""
 
 
+def target_base_problem(capsule_dir: str, directory: str) -> str:
+    """Why the capsule's fixed target branch cannot name this repo's
+    change base ("" = it can, or the capsule carries no target at all):
+    the file unreadable, or the branch missing on origin — the reason the
+    judged kinds answer with not judged (exit 2). A capsule without a
+    target keeps its own judgment: its default-branch problem is the
+    caller's finding, never this not-judged reason."""
+    try:
+        target = targetbranch.read(capsule_dir)
+    except targetbranch.TargetBranchError as err:
+        return str(err)
+    if not target:
+        return ""
+    _, missing = run_git(directory, "rev-parse", "--verify", "-q", "refs/remotes/origin/" + target)
+    if missing is not None:
+        return "origin has no branch %s — the capsule's fixed target branch is missing on origin" % target
+    return ""
+
+
 def change_base(directory: str) -> Tuple[str, str]:
     """The tree a unit declared pre_existing_red was already red on: the
     repo's change base (merge-base HEAD origin/<base> — the capsule's
@@ -1622,8 +1641,17 @@ def micro_bounds_of(repos_dir: str, evidence: Sequence[Dict[str, str]]) -> Dict[
     if not repos_dir:
         problems.append("the capsule's task repos are unknown")
     capsule_dir = os.path.dirname(os.path.abspath(repos_dir)) if repos_dir else ""
+    not_judged = False
     for name in task_repo_names(repos_dir):
         d = os.path.join(repos_dir, name)
+        # a fixed target that cannot name the base is not judged (exit 2,
+        # its reason kept): never a bounds verdict over a stand-in
+        # default branch; a capsule without a target keeps its own
+        why = target_base_problem(capsule_dir, d)
+        if why:
+            refuse(name, "%s, so the diff cannot be read" % why)
+            not_judged = True
+            continue
         ref, unknown = base_ref(capsule_dir, d)
         if not ref:
             refuse(name, "%s, so the diff cannot be read" % unknown)
@@ -1674,7 +1702,10 @@ def micro_bounds_of(repos_dir: str, evidence: Sequence[Dict[str, str]]) -> Dict[
     if not problems and not repos_out:
         problems.append("the change touches no task repository")
     if problems:
-        return {"in_bounds": False, "reason": MICRO_REASON_HEAD + "; ".join(problems), "repos": []}
+        out = {"in_bounds": False, "reason": MICRO_REASON_HEAD + "; ".join(problems), "repos": []}
+        if not_judged:
+            out["not_judged"] = True
+        return out
     return {"in_bounds": True, "repos": repos_out}
 
 
@@ -2280,6 +2311,14 @@ def carries(inv: Invocation, args: List[str]) -> int:
     unit_repos = {u.repo for u in units_of(c.repos_dir, c.repos, decls) if not u.why}
     bindings = [Binding(decl["run"]["repo"], gotext.shell_join(decl["run"]["argv"]))
                 for decl in decls if decl["run"] is not None and decl["run"]["argv"]]
+    # a fixed target that cannot name a repo's change base is not judged
+    # (exit 2) — never a findings verdict over a stand-in default branch;
+    # a capsule without a target keeps its own judgment
+    for name in c.repos:
+        why = target_base_problem(c.dir, os.path.join(c.repos_dir, name))
+        if why:
+            inv.summary = "not judged: repos/%s: %s, so the e2e suites this build changed cannot be judged" % (name, why)
+            return 2
     for name in c.repos:
         problems = Repo(c.repos_dir, name).check_e2e_carries(name in unit_repos, bindings)
         repos_out.append({"name": name, "unit_repo": name in unit_repos, "problems": problems})
@@ -2329,7 +2368,9 @@ def micro_bounds(inv: Invocation, args: List[str]) -> int:
     inv.details = d
     if not mb["in_bounds"]:
         inv.summary = mb["reason"]
-        return 1
+        # a fixed target that could not name the base is not judged, never
+        # a bounds verdict
+        return 2 if mb.get("not_judged") else 1
     inv.summary = "in bounds: " + ", ".join(
         "repos/%s (%d path(s), %d command(s))" % (r["name"], len(r["changed_paths"] or []), len(r["commands"])) for r in mb["repos"])
     return 0
