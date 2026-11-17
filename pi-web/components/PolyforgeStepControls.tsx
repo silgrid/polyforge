@@ -14,12 +14,16 @@
 // override route's POST, and the next watch poll (the snapshot's own 3 s
 // cadence) carries the fresh row.
 //
-// polyforge#79: the params section renders for EVERY selected step — the
-// composed final values and sources the watch route's `paramsView` carries
-// (`params`), so a step that already ran shows its params read-only (AC1's
-// 「已经跑过的 step 只读」); the write controls (the model chain, the skip
-// switch and a set/clear per declared param) stay an UNSTARTED step's — the
-// same posture rules `pf override` enforces server-side.
+// polyforge#79: the params section renders for every selected step that
+// has one — the composed final values and sources the watch route's
+// `paramsView` carries (`params`), so a step that already ran shows its
+// params read-only (AC1's 「已经跑过的 step 只读」); the write controls (the
+// model chain, the skip switch and a set/clear per declared param) stay
+// an UNSTARTED step's — the same posture rules `pf override` enforces
+// server-side. A step with neither (a started step whose snapshot carries
+// no params view) renders nothing at all: no empty shell above the
+// progress region — a mounting shell would shrink the region under the
+// reader's scroll and break the detail's opens-at-bottom follow.
 
 import { useState, type CSSProperties } from "react";
 import type { PolyforgeStepOverride, PolyforgeWatchStatus } from "@/lib/polyforge-status";
@@ -75,6 +79,9 @@ export function PolyforgeStepControls({ wi, profile, step, skippable, unstarted,
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false));
   };
+  if (params === undefined && !unstarted) {
+    return null; // no params to show, nothing to write: no shell at all
+  }
   const effective = row?.effective ?? [];
   const source = row?.source ?? "";
   const pending = row?.pending || overlay?.pending;

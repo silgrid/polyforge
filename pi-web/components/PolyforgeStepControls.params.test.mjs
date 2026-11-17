@@ -98,6 +98,14 @@ test("an unstarted step renders the params section read-write: every declared pa
   done();
 });
 
+test("a started step with no params view renders nothing at all — no shell shrinks the progress region (the e2e P31A finding)", () => {
+  const hook = renderHook(PolyforgeStepControls, {
+    wi: "wi_A1", profile: undefined, step: "review", skippable: false, unstarted: false, onApplied() {},
+  });
+  assert.equal(hook.result ?? null, null, "nothing renders");
+  hook.flush();
+});
+
 test("a started step is read-only: the params rows stay, the write controls and the model/skip ones never render (AC1)", () => {
   const { hook, done } = setup({ params: PARAMS_ROW, unstarted: false, overlay: undefined, row: undefined });
   assert.equal(paramRows(hook).length, 2, "the read-only rows stay");
