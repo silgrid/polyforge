@@ -1406,10 +1406,11 @@ func memoryAuthor(displayName, ownerID string) string {
 }
 
 // memoryWriterLine renders the writer of memory show's header: the kind
-// with its valued details — "kind (k=v, ...)", keys sorted, scalars
-// bare (numbers, booleans), null as null, anything nested as compact
-// JSON; the kind alone when the row carries no detail object; "-" on a
-// row written before the writer columns existed.
+// with its VALUED details — "kind (k=v, ...)", keys sorted, scalars
+// bare (numbers, booleans), anything nested as compact JSON. A detail
+// whose value is null or the empty string is not listed at all (Q2:
+// 有值的细节 — a key every test of which was skipped renders the kind
+// alone); "-" on a row written before the writer columns existed.
 func memoryWriterLine(kind *string, details json.RawMessage) string {
 	if kind == nil {
 		return "-"
@@ -1432,9 +1433,12 @@ func memoryWriterLine(kind *string, details json.RawMessage) string {
 		}
 		switch t := v.(type) {
 		case string:
+			if t == "" {
+				continue // unvalued: not listed
+			}
 			parts = append(parts, k+"="+t)
 		case nil:
-			parts = append(parts, k+"=null")
+			continue // unvalued: not listed
 		default:
 			parts = append(parts, k+"="+string(d[k]))
 		}

@@ -210,12 +210,19 @@ func (d *Daemon) stepRememberAs(w http.ResponseWriter, j stepJob, req stepRememb
 			"a step memory is stamped with its own dispatch's model, and work item %s's execution record does not name the calling dispatch (step %q, attempt %d) as its current one; nothing was stored", j.wi, j.step, j.attempt))
 		return
 	}
+	// Q4's 可空约定: a trusted dispatch whose candidate is empty stores a
+	// null model, never an invented one — the null is what the show face
+	// and the tables render as the missing value.
+	var modelField any
+	if model != "" {
+		modelField = model
+	}
 	body := map[string]any{
 		"project": j.project, "work_item_id": j.wi, "type": req.Type, "visibility": "project",
 		"title": strings.TrimSpace(req.Title), "content": req.Content, "tags": req.Tags,
 		"idempotency_key": stepmem.IdempotencyKey(j.wi, j.step, j.attempt),
 		"writer_kind":     "step",
-		"writer_details":  map[string]any{"work_item": j.wi, "step": j.step, "attempt": j.attempt, "model": model},
+		"writer_details":  map[string]any{"work_item": j.wi, "step": j.step, "attempt": j.attempt, "model": modelField},
 	}
 	var stored json.RawMessage
 	if err := d.hub.Do("POST", "/api/v1/memories", body, &stored); err != nil {
@@ -250,8 +257,8 @@ func (d *Daemon) stepRememberAs(w http.ResponseWriter, j stepJob, req stepRememb
 // old attempt is never answered the next dispatch's model (the owner's
 // Q4 ruling). trusted false — the record absent or torn, the step
 // missing or settled, the ordinal naming another dispatch — refuses
-// the write; trusted with an empty candidate stores the empty model
-// (Q4's nullable rule), never an invented one.
+// the write; trusted with an empty candidate stores a null model (Q4's
+// 可空约定), never an invented one.
 func stepWriterModel(ex *capsule.Execution, step string, attempt int) (model string, trusted bool) {
 	if ex == nil {
 		return "", false
