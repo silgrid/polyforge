@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { copyText } from "@/lib/clipboard";
 import {
+  formatMemoryWriter,
   MEMORY_COLLAPSE_BYTES,
   MEMORY_PAGE_SIZE,
   MEMORY_RESULT_LIMIT,
@@ -28,13 +29,21 @@ import { POLYFORGE_SEARCH_CHECK_CLASS, POLYFORGE_SEARCH_CONTROL_CLASS, Polyforge
  * the total shown) with "load more" appending the next keyset page. A
  * submitted non-empty keyword switches to the #99 relevance read (one
  * 200-row `pf recall`, newest-first, 20-row client pages); submitting an
- * empty keyword returns to browse. Project, type and tags re-issue the
- * current mode's read. A single-memory read on selection. No timer, no
- * polling, no storage: query, results and detail live in component state and
- * die with the tab. renders the form through the shared search
+ * empty keyword returns to browse. Project, type, tags and the writer kind
+ * re-issue the current mode's read. A single-memory read on selection. No
+ * timer, no polling, no storage: query, results and detail live in component
+ * state and die with the tab. renders the form through the shared search
  * bar (keyword + 🔍 action, then project/type/tags/any-word filters); the
  * visible field labels are gone while each control keeps its accessible name
- * and the keyword still applies only on submit.
+ * and the keyword still applies only on submit. polyforge#120: every row and
+ * the detail show the author's display name and the writer (kind + the
+ * valued details through `formatMemoryWriter`; a missing one renders its
+ * explicit unknown placeholder, Q3) — never an owner or user id — and, only
+ * when the scope answer's writerFilterSupported says the pf carries
+ * `--writer-kind` (its own 0.2.3 floor, never the browse floor), a
+ * writer-kind select joins the filters: its value rides every browse, search
+ * and continuation read, and a change re-issues the current mode's first
+ * read (the cursor resets, Q5).
  */
 
 export interface PolyforgeMemoryProps {
@@ -53,6 +62,10 @@ interface MemoryScope {
   projects: string[];
   /** the Cell the CLI resolves for this cwd. */
   cell?: string;
+  /** polyforge#120: the writer filter's own gate (a pf at or above its
+   *  0.2.3 floor); false or absent hides the kind control — the display of
+   *  author and writer is never gated by it. */
+  writerFilter?: boolean;
 }
 
 interface SearchResponse extends Partial<MemoryScope> {
@@ -60,6 +73,8 @@ interface SearchResponse extends Partial<MemoryScope> {
   /** Browse face only: the project total and the next page's cursor. */
   total?: number;
   next_cursor?: string;
+  /** polyforge#120: the capability field as the route spreads it. */
+  writerFilterSupported?: boolean;
   error?: string;
 }
 
@@ -97,6 +112,10 @@ export function PolyforgeMemory({ cwd, onOpenWorkItem }: PolyforgeMemoryProps) {
   const [tags, setTags] = useState("");
   const [type, setType] = useState<string>(MEMORY_TYPE_FILTERS[0]);
   const [project, setProject] = useState("");
+  // polyforge#120 (Q5): the writer-kind filter — "" browses every writer; a
+  // change re-issues the current mode's first read (the cursor resets) and
+  // every browse continuation carries the same kind.
+  const [writerKind, setWriterKind] = useState("");
 
   // The submitted keyword ("" = browse mode) and a submit counter, so
   // re-submitting the same keyword reads again.
@@ -147,6 +166,7 @@ export function PolyforgeMemory({ cwd, onOpenWorkItem }: PolyforgeMemoryProps) {
           ...(body.reason ? { reason: body.reason } : {}),
           mapped: body.mapped === true,
           projects,
+          ...(body.writerFilterSupported === true ? { writerFilter: true } : {}),
           ...(typeof body.cell === "string" ? { cell: body.cell } : {}),
         });
         // The first project is selected by default (Assumption 8); a project
@@ -195,6 +215,7 @@ export function PolyforgeMemory({ cwd, onOpenWorkItem }: PolyforgeMemoryProps) {
     const seq = ++listSeqRef.current;
     const params = new URLSearchParams({ cwd, project, type });
     if (tags.trim()) params.set("tags", tags.trim());
+    if (writerKind) params.set("writer_kind", writerKind);
     if (query) {
       params.set("q", query);
       if (anyWord) params.set("any", "1");
@@ -246,7 +267,7 @@ export function PolyforgeMemory({ cwd, onOpenWorkItem }: PolyforgeMemoryProps) {
     if (tagFilter && !isMemoryTagList(tagFilter)) return;
     readList(activeQuery, null);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reads follow these gestures only; `any` applies at the next submit
-  }, [cwd, scope, project, type, tags, activeQuery, submits]);
+  }, [cwd, scope, project, type, tags, writerKind, activeQuery, submits]);
 
   const submit = useCallback((event: React.FormEvent) => {
     event.preventDefault();
@@ -338,6 +359,19 @@ export function PolyforgeMemory({ cwd, onOpenWorkItem }: PolyforgeMemoryProps) {
           </option>
         ))}
       </select>
+      {scope.writerFilter && (
+        <select
+          value={writerKind}
+          onChange={(event) => setWriterKind(event.target.value)}
+          aria-label={t("polyforge.memory.writerFilter")}
+          title={t("polyforge.memory.writerFilter")}
+          className={POLYFORGE_SEARCH_CONTROL_CLASS}
+        >
+          <option value="">{t("polyforge.memory.writerAll")}</option>
+          <option value="session">{t("polyforge.memory.writerSession")}</option>
+          <option value="step">{t("polyforge.memory.writerStep")}</option>
+        </select>
+      )}
       <input
         type="text"
         value={tags}
@@ -395,6 +429,16 @@ export function PolyforgeMemory({ cwd, onOpenWorkItem }: PolyforgeMemoryProps) {
                 <span style={{ color: "var(--text-dim)", flexShrink: 0, width: 76 }}>{t("polyforge.memory.metaStatus")}</span>
                 <span style={{ color: "var(--text)", ...(detail.status !== "active" ? { border: "1px solid var(--border)", borderRadius: 4, padding: "0 6px" } : {}) }}>
                   {detail.status}
+                </span>
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <span style={{ color: "var(--text-dim)", flexShrink: 0, width: 76 }}>{t("polyforge.memory.author")}</span>
+                <span style={{ color: "var(--text)", overflowWrap: "anywhere" }}>{detail.author_display_name || t("polyforge.memory.unknownAuthor")}</span>
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <span style={{ color: "var(--text-dim)", flexShrink: 0, width: 76 }}>{t("polyforge.memory.writer")}</span>
+                <span style={{ color: "var(--text)", overflowWrap: "anywhere" }}>
+                  {formatMemoryWriter({ kind: detail.writer_kind, details: detail.writer_details }) || t("polyforge.memory.unknownWriter")}
                 </span>
               </div>
               {detail.tags.length > 0 && (
@@ -501,8 +545,10 @@ export function PolyforgeMemory({ cwd, onOpenWorkItem }: PolyforgeMemoryProps) {
               <span style={{ flexShrink: 0, color: "var(--text-muted)" }}>[{hit.type}]</span>
               <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{hit.title}</span>
             </span>
-            <span style={{ display: "flex", gap: 8, fontSize: 11, color: "var(--text-dim)" }}>
+            <span style={{ display: "flex", gap: 8, fontSize: 11, color: "var(--text-dim)", flexWrap: "wrap" }}>
               <span>{hit.updated_at}</span>
+              <span>{hit.author_display_name || t("polyforge.memory.unknownAuthor")}</span>
+              <span>{formatMemoryWriter({ kind: hit.writer_kind, details: hit.writer_details }) || t("polyforge.memory.unknownWriter")}</span>
               {hit.tags.length > 0 && <span>{hit.tags.join(", ")}</span>}
             </span>
           </button>
