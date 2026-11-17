@@ -197,6 +197,10 @@
             },
             "type": "object"
           },
+          "rewind_only": {
+            "description": "bool (default false): the step runs only after a rewind covers it — the first round records it skipped without a dispatch, and it runs once any rewind that covers it (a gate FAIL's or an owner's) resets it to pending; a project skip of a `skippable` it declares wins over it, and the loader refuses the declaration when no gate's [on_fail target, gate) range covers the step (WFC-112)",
+            "type": "boolean"
+          },
           "skill": {
             "description": "skill name: <lane>/skills/<name>.md, else _shared/skills/<name>.md, rendered into the prompt",
             "pattern": "^[a-z][a-z0-9-]{0,39}$",
