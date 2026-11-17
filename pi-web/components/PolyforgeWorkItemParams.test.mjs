@@ -122,6 +122,20 @@ test("a queued ticket's declared params carry the set and clear controls; a succ
   done();
 });
 
+test("a successful write whose answer carries no note leaves no note line (the note is the daemon's word, never invented)", async () => {
+  const { hook, calls, answer, done } = setup();
+  await answer(0, 200, { params: QUEUED_VIEW });
+  nodes(hook).find((n) => n.type === "button" && n.props["data-pf-wi-param-set"] === "image" && n.props["data-pf-wi-param-step"] === "build").props.onClick();
+  await settle();
+  calls[1].resolve(200, { ok: true, result: { wi: "wi_Q79", changed: true, posture: "queued", published: false,
+    step: { id: "build", status: "pending", skippable: false } } });
+  await settle();
+  hook.flush();
+  assert.equal(nodes(hook).filter((n) => "data-pf-wi-params-note" in (n.props ?? {})).length, 0, "no note, no note line");
+  assert.equal(nodes(hook).filter((n) => "data-pf-wi-params-error" in (n.props ?? {})).length, 0, "a success is no error either");
+  done();
+});
+
 test("the claim race rides the 200 answer's note and shows (AC3); a refused write and a refused read degrade to their own line, never a throw", async () => {
   const { hook, calls, answer, done } = setup();
   await answer(0, 200, { params: QUEUED_VIEW });
