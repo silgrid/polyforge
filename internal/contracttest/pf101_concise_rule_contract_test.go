@@ -84,12 +84,12 @@ func TestPF101ConciseRuleSourceContract(t *testing.T) {
 	}
 
 	// Project-neutral: no project or component name (the w72 list) in
-	// the rule or the block.
-	for _, text := range []struct{ name, body string }{{"the rule", rule}, {"the block", block}} {
-		for _, banned := range []string{"polyforge", "aihub", "pi-web", "webui"} {
-			if strings.Contains(strings.ToLower(text.body), banned) {
-				t.Errorf("%s names the project/component %q — it ships with the binary and serves any project", text.name, banned)
-			}
+	// the rule text. The block's markers carry the `polyforge:` prefix by
+	// the diagram-block precedent (the rollback namespace), so the ban
+	// reads the rule, not the block.
+	for _, banned := range []string{"polyforge", "aihub", "pi-web", "webui"} {
+		if strings.Contains(strings.ToLower(rule), banned) {
+			t.Errorf("the rule names the project/component %q — it ships with the binary and serves any project", banned)
 		}
 	}
 
