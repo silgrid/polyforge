@@ -33,8 +33,9 @@ The Host-level rows — the machine's one socket, its tools, its
 supervision, the retired-environment check and the harness prompt files —
 run once; every Cell-level row runs once per Cell, each of that Cell's
 daemon reads (its `GET /status` and every `/aihub` proxy read) carrying
-the Cell's `X-PF-Profile`, so two Cells never read through one another's
-connection. The human output is the default Cell's full report — the rows
+the Cell's `X-PF-Profile` — the default Cell rides the Host's unprofiled
+route, which by protocol IS the default Cell — so two Cells never read
+through one another's connection. The human output is the default Cell's full report — the rows
 of old in their order — then one section per named Cell under a
 `== Cell <profile>: <file> ==` header; `--profile` narrows nothing: the
 doctor always examines every Cell.

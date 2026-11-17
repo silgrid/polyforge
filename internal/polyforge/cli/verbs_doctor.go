@@ -514,6 +514,12 @@ func runDoctorChecks(ctx *Context, pruneScratch, pruneCapsules, fixPrompts bool)
 		}
 		rr.sockOK, rr.sockMsg, rr.status = probeCellStatus(cfg.DaemonSocket, cc.Profile)
 		rr.reachOK, rr.reachMsg = probeServerReach(cfg.DaemonSocket, rr.sockOK, rr.profile)
+		// the Cell's own probe says why it does not answer (its file may
+		// exist while the Host has not loaded it — starting the daemon
+		// would not fix that); the reach-dependent skip rows show it
+		if !rr.sockOK {
+			rr.reachMsg = rr.sockMsg
+		}
 		sec.Checks = append(sec.Checks, row("pass", "loaded from "+cc.Path))
 		for _, d := range doctorChecks {
 			if d.scope != scopeCell {
@@ -639,7 +645,7 @@ func probeCellStatus(sock, profile string) (bool, string, StatusResponse) {
 	var st StatusResponse
 	raw, err := c.Status()
 	if err != nil {
-		return false, fmt.Sprintf("the daemon does not answer for the Cell %s (not loaded, or the daemon is down): %v", profile, err), st
+		return false, fmt.Sprintf("the daemon does not answer for the Cell %s (its file exists but the Host has not loaded it — `pf cell list` shows what it serves; or the daemon is down): %v", profile, err), st
 	}
 	_ = json.Unmarshal(raw, &st)
 	return true, fmt.Sprintf("the daemon answers for the Cell %s (daemon %s)", profile, st.MachineID), st
