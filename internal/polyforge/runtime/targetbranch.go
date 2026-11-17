@@ -11,7 +11,9 @@ package runtime
 // runs never moves the branch. A claim that must compute the value and
 // cannot read the parent, or the parent's lane, is refused naming why
 // (never a silent fall-back to the default branch); a sub-ticket whose
-// parent's lane declares nothing, and a work item without a parent, keep
+// parent's lane declares nothing — a parent bound to no lane (a registry
+// ticket) counts as declaring nothing, exactly like a parent whose lane
+// declares no children_branch — and a work item without a parent keep
 // the claim exactly as it was.
 
 import (
@@ -61,7 +63,12 @@ func (r *Runtime) fixTargetBranch(j *job) (string, error) {
 		return "", targetBranchErr(j, "the parent %s cannot be read: %v", *j.item.ParentID, err)
 	}
 	if parent.BundleName == nil || *parent.BundleName == "" {
-		return "", targetBranchErr(j, "the parent %s names no lane, so its children_branch cannot be read", api.DisplayName(parent.Slug, parent.ID))
+		// polyforge#114: a parent bound to no lane (a registry ticket
+		// used as the parent) declares nothing, exactly like a lane that
+		// declares no children_branch — the claim behaves exactly as
+		// before; only a parent that NAMES a lane this daemon cannot
+		// read (below) is refused.
+		return "", nil
 	}
 	lane, _, lerr := r.laneSet(parent.ProjectName).Load(*parent.BundleName)
 	switch {
