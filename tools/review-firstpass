@@ -2,10 +2,32 @@
 """review-firstpass — first-pass review rate by plan write-set size and by implementer.
 
 Usage:
-  python3 -I tools/review-firstpass <capsules-dir> [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--csv <file>]
+  python3 -I tools/review-firstpass <capsules-dir> [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--csv <file>] [--cohort <manifest.json>]
 
 Read-only over <capsules-dir> (a workspace's capsules/, one directory per work
 item run). It prints two tables and, with --csv, writes one row per run.
+
+With --cohort it also appends the split-comparison section (polyforge#118):
+an owner-confirmed cohort manifest (JSON) groups the collected runs —
+
+  {"version": "<the cohort's daemon/workflow version>",
+   "window": {"since": "YYYY-MM-DD", "until": "YYYY-MM-DD"},   // optional; only filters
+   "baseline": {"firstpass": {"<=7": "31/38", "8-22": "13/31", ">22": "4/34"},
+                 "source": "<where the pinned numbers come from>"},
+   "control": ["<capsule dir name>", ...],                      // unsplit runs
+   "split": [{"origin": "<wi id>", "epic": "<capsule dir>",
+              "children": ["<capsule dir>", ...]}]}            // 原票/子票对应
+
+— and reports each group's first-pass rate beside the plan-size buckets
+(a reviewed run with no parseable plan counts `unknown`), the epic
+aggregation on its own line (never in the children's denominators), the
+pinned baseline verbatim (the #1 background numbers travel in the
+manifest, not in this tool), and the honesty lines: a manifest name
+absent from the input is counted and listed as missing, a name the
+window filtered is listed as filtered (dates only ever filter — the
+grouping itself is the manifest's), and a split group with no samples
+says N/A, never a fabricated number. Without --cohort the output is
+byte-for-byte the pre-cohort report.
 
 The measure is the 2026-11-09 rework baseline's (aihub doc.audit
 mem_2wmAvnsWFWmw), kept byte-for-byte where it decides
@@ -180,6 +202,67 @@ def line(label, rs):
     return f'{label:<24} {len(rs):>4}  {f"{ok}/{n}":>10}  {rate:>5}  {med:>7}'
 
 
+# ---------------------------------------------------------------- cohort view
+# The owner-confirmed split comparison (polyforge#118): the manifest IS
+# the grouping; dates only filter. Every honesty rule below answers a
+# ruled decision of the work item (Q2: 未拆票作对照、子票作拆后组、epic 聚合
+# 另列；Q5: 缺样本如实标 N/A，不拿演示输出冒充真实比较)。
+
+def jload_strict(path, what):
+    try:
+        with open(path) as f:
+            v = json.load(f)
+    except (OSError, ValueError) as e:
+        print(f'review-firstpass: {what}: {e}', file=sys.stderr)
+        sys.exit(2)
+    if not isinstance(v, dict):
+        print(f'review-firstpass: {what}: not a JSON object', file=sys.stderr)
+        sys.exit(2)
+    return v
+
+
+def cohort_names(manifest, key):
+    v = manifest.get(key, [])
+    if not isinstance(v, list) or any(not isinstance(x, str) for x in v):
+        print(f'review-firstpass: the cohort manifest’s {key} must be a list of capsule dir names', file=sys.stderr)
+        sys.exit(2)
+    return v
+
+
+def cohort_split(manifest):
+    out = []
+    v = manifest.get('split', [])
+    if not isinstance(v, list):
+        print('review-firstpass: the cohort manifest’s split must be a list', file=sys.stderr)
+        sys.exit(2)
+    for e in v:
+        if not isinstance(e, dict) or not isinstance(e.get('children'), list) \
+                or any(not isinstance(x, str) for x in e['children']) \
+                or not isinstance(e.get('origin', ''), str) \
+                or not isinstance(e.get('epic', ''), str):
+            print('review-firstpass: every split entry needs origin (str), children (list of capsule dir names) and epic (str)', file=sys.stderr)
+            sys.exit(2)
+        out.append(e)
+    return out
+
+
+def cohort_group_line(label, rs, empty_note=''):
+    judged = [r for r in rs if r['first_review'] in ('PASS', 'FAIL')]
+    ok = sum(1 for r in judged if r['first_review'] == 'PASS')
+    parts = []
+    for name, _, _ in BUCKETS:
+        b = [r for r in judged if r['bucket'] == name]
+        parts.append(f'{name} {sum(1 for r in b if r["first_review"] == "PASS")}/{len(b)}')
+    unk = sum(1 for r in judged if not r['bucket'])
+    parts.append(f'unknown {unk}')
+    sizes = ', '.join(parts)
+    if judged:
+        fp = f'first-pass {ok}/{len(judged)} ({100 * ok / len(judged):.0f}%)'
+    else:
+        fp = f'first-pass N/A (0 samples{empty_note})'
+    return f'{label}: {len(rs)} runs ({len(judged)} reviewed), {fp}, plan sizes {sizes}'
+
+
 def report(rows, quarantined, out=sys.stdout):
     reviewed = [r for r in rows if r['review_runs']]
     sized = [r for r in reviewed if r['bucket']]
@@ -206,23 +289,99 @@ def report(rows, quarantined, out=sys.stdout):
                 p(line(f'  {name}', g))
 
 
+def cohort_report(rows, caps_dir, manifest, path, out=sys.stdout):
+    """The split comparison (polyforge#118): per-group first-pass beside
+    the plan-size buckets, the pinned baseline verbatim, and the honesty
+    lines — missing, filtered, and the empty split group's N/A."""
+    p = lambda s='': print(s, file=out)
+    win = manifest.get('window') or {}
+    if not isinstance(win, dict):
+        print('review-firstpass: the cohort manifest’s window must be an object', file=sys.stderr)
+        sys.exit(2)
+    since, until = win.get('since', ''), win.get('until', '')
+    window = f'{since}..{until}' if (since or until) else 'none'
+    p()
+    p(f'== cohort comparison (manifest: {os.path.basename(path)}, version: {manifest.get("version", "unknown")}, window: {window}) ==')
+    base = manifest.get('baseline')
+    if isinstance(base, dict) and isinstance(base.get('firstpass'), dict):
+        fp = base['firstpass']
+        p(f'baseline (pinned #1 background, source: {base.get("source", "unamed")}): '
+          f'first-pass <=7 {fp.get("<=7", "?")}, 8-22 {fp.get("8-22", "?")}, >22 {fp.get(">22", "?")}')
+
+    by_name = {r['capsule']: r for r in rows}
+    splits = cohort_split(manifest)
+    children = [c for e in splits for c in e['children']]
+    epics = [e['epic'] for e in splits if e.get('epic')]
+    control = cohort_names(manifest, 'control')
+
+    def group(names, label, empty_note=''):
+        p(cohort_group_line(label, [by_name[n] for n in names if n in by_name], empty_note))
+
+    group(control, 'control (unsplit runs)')
+    group(children, 'split children', ' - no epic run has completed yet' if not splits else '')
+    group(epics, 'split epics (listed apart)')
+
+    # the honesty lines: a manifest name the collect did not return is
+    # either filtered by the window (it IS in the input) or missing.
+    missing, filtered = [], []
+    for n in control + children + epics:
+        if n in by_name:
+            continue
+        cap = os.path.join(caps_dir, n)
+        cj = jload(os.path.join(cap, 'capsule.json')) or {}
+        created = (cj.get('created_at') or '')[:10]
+        if os.path.isdir(cap) and created and \
+                not (since and (not created or created < since)) and \
+                not (until and (not created or created > until)):
+            continue  # the CLI flags (not the window) filtered it
+        if os.path.isdir(cap) and (since or until):
+            filtered.append(n)
+        else:
+            missing.append(n)
+    if filtered:
+        p(f'outside the manifest window (filtered): {", ".join(filtered)} ({len(filtered)})')
+    if missing:
+        p(f'missing from the input (counted, excluded): {", ".join(missing)} ({len(missing)})')
+
+
 def main(argv):
     ap = argparse.ArgumentParser(prog='review-firstpass', description=__doc__.split('\n')[0])
     ap.add_argument('capsules_dir')
     ap.add_argument('--since', help='first capsule.json created_at date (YYYY-MM-DD), inclusive')
     ap.add_argument('--until', help='last capsule.json created_at date (YYYY-MM-DD), inclusive')
     ap.add_argument('--csv', help='write one row per run to this file')
+    ap.add_argument('--cohort', help='an owner-confirmed cohort manifest (JSON): the split-comparison grouping')
     a = ap.parse_args(argv)
     if not os.path.isdir(a.capsules_dir):
         print(f'review-firstpass: {a.capsules_dir} is not a directory', file=sys.stderr)
         return 2
-    rows, quarantined = collect(a.capsules_dir, a.since, a.until)
+    manifest, cohort_path = None, None
+    since, until = a.since, a.until
+    if a.cohort:
+        cohort_path = a.cohort
+        manifest = jload_strict(a.cohort, a.cohort)
+        win = manifest.get('window') or {}
+        if not isinstance(win, dict):
+            print('review-firstpass: the cohort manifest’s window must be an object', file=sys.stderr)
+            return 2
+        # the window only filters, like the flags: both apply, intersected
+        def _later(x, y):
+            return x if (not y or (x and x >= y)) else y
+
+        def _earlier(x, y):
+            return x if (not y or (x and x <= y)) else y
+
+        since = _later(since, win.get('since', ''))
+        until = _earlier(until, win.get('until', ''))
+    rows, quarantined = collect(a.capsules_dir, since, until)
     if a.csv:
         with open(a.csv, 'w', newline='') as f:
             w = csv.DictWriter(f, fieldnames=list(rows[0]) if rows else ['capsule'])
             w.writeheader()
             w.writerows(rows)
     report(rows, quarantined)
+    if manifest is not None:
+        cohort_report(rows, a.capsules_dir, manifest, cohort_path)
     return 0
 
 
