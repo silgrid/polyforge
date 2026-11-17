@@ -111,3 +111,37 @@ type OverrideWriteResult struct {
 	Note string           `json:"note,omitempty"`
 	Step OverrideStepView `json:"step"`
 }
+
+// ParamFinalView is one step param's composed answer (polyforge#79,
+// GET /jobs/{wi}/params): the FINAL value the step's next dispatch
+// takes and the layer it comes from — "step override" (the per-ticket
+// layer: the capsule's overlay record of a claimed work item, or the
+// reserved step_params attrs key of a queued one),
+// steps.<project>.<step>.params.<name> (the project's yaml) or
+// bundle <lane> step <step> params.<name> (the lane default).
+type ParamFinalView struct {
+	Name   string `json:"name"`
+	Value  string `json:"value"`
+	Source string `json:"source"`
+}
+
+// ParamsStepView is one step's params face: its recorded status and
+// every param the lane declares on it, sorted by name, each with its
+// final value and source (a step that declares none carries an empty
+// list).
+type ParamsStepView struct {
+	ID     string           `json:"id"`
+	Status string           `json:"status,omitempty"`
+	Params []ParamFinalView `json:"params"`
+}
+
+// ParamsView is the answer of GET /jobs/{wi}/params (polyforge#79): the
+// work item's posture (running, paused, blocked or queued) and one row
+// per declared step in lane order — the final value of every param the
+// lane declares, with the layer each one comes from. The overlay view
+// (OverrideView) stays the overlay layer alone; this face composes.
+type ParamsView struct {
+	WorkItem string           `json:"work_item"`
+	Posture  string           `json:"posture"`
+	Steps    []ParamsStepView `json:"steps"`
+}
