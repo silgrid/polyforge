@@ -13,16 +13,27 @@ import os
 import shutil
 import tempfile
 import unittest
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
+import facts
+import verify
 from pfstep import targetbranch
 
+from .gitworld import GitCase, Repo
 from .test_scripts import HAVE_GIT, World, read, repo_of, write
+from .test_verify_tree import trivial_plan
+from .verifyfix import HAVE_BASH, Fixture, Run, engine_args, git_t, run_verify, write_files
 
 
 def fix_target(w: World, target: str = "epic/1") -> None:
     """The capsule's fixed target branch (the daemon's own file shape)."""
     write(w.capsule, "runtime-state/" + targetbranch.FILE,
+          json.dumps({"target": target, "parent": "epic#1"}))
+
+
+def fix_target_dir(capsule_dir: str, target: str = "epic/1") -> None:
+    """The capsule root's fixed target branch file (tests' direct helper)."""
+    write(os.path.join(capsule_dir, "runtime-state"), targetbranch.FILE,
           json.dumps({"target": target, "parent": "epic#1"}))
 
 
@@ -309,3 +320,138 @@ class MergeTargetTest(unittest.TestCase):
         self.assertIn("not judged", res["summary"], res["summary"])
         self.assertIn("not valid JSON", res["summary"], res["summary"])
         self.assertFalse(os.path.exists(landing))
+
+
+@unittest.skipUnless(HAVE_GIT and HAVE_BASH, "git and bash are required")
+class VerifyTargetTest(unittest.TestCase):
+    """verify.py on a capsule whose target branch is fixed: the untouched
+    judgment and the diff base (and the engine's --base, the baseline
+    with it) take merge-base HEAD origin/<target>, and a target that
+    cannot be named is not judged — never a fall-back to the default
+    branch. A sibling's commit already on the target branch is not this
+    change's."""
+
+    def setUp(self) -> None:
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        self.root = os.path.realpath(td.name)
+
+    def fix_target(self, fx: Fixture, target: str = "epic/1") -> None:
+        write_files(fx.capsule, {"runtime-state/target-branch.json": json.dumps({"target": target, "parent": "epic#1"})})
+
+    def doc(self, r: Run) -> Dict[str, Any]:
+        self.assertIsNotNone(r.doc, "no result.json: %s\n%s" % (json.dumps(r.result, indent=1), r.stderr))
+        assert r.doc is not None
+        return r.doc
+
+    def test_the_target_branch_decides_untouched_and_the_diff_base(self) -> None:
+        fx = Fixture(self.root, {"app": {"a.txt": "base\n"}})
+        self.fix_target(fx)
+        base = fx.head("app")
+        head = fx.commit_in_repo("app", {"c.txt": "mine\n"}, "the sub-ticket's own commit")
+        # the sibling landed that very commit on the target branch: with
+        # the target fixed the repo carries nothing beyond origin/epic/1
+        # (against the default branch it would be a touched repo)
+        git_t(fx.repo("app"), "push", "-q", "origin", "HEAD:refs/heads/epic/1")
+        git_t(fx.repo("app"), "fetch", "-q", "origin")
+        eng = trivial_plan(self.root, "app")
+        r = run_verify(fx.capsule, eng)
+        m = self.doc(r)["merge_outcomes"]["app"]
+        self.assertEqual((m["outcome"], m["touched"], m["default_branch"], m["base"]),
+                         (verify.MERGE_NONE, False, "epic/1", head), m)
+        self.assertEqual(engine_args(eng), [], "the engine must not be asked about an untouched repo")
+        self.assertEqual(r.check("app:untouched")["status"], "skipped")
+        # a commit of the item's own beyond the target branch: measured
+        # from merge-base HEAD origin/epic/1, never origin/main
+        beyond = fx.commit_in_repo("app", {"d.txt": "beyond\n"}, "beyond the target")
+        eng2 = trivial_plan(self.root, "app")
+        r = run_verify(fx.capsule, eng2)
+        m = self.doc(r)["merge_outcomes"]["app"]
+        self.assertEqual((m["outcome"], m["touched"], m["head"], m["base"], m["default_branch"]),
+                         (verify.MERGE_NONE, True, beyond, head, "epic/1"), m)
+        self.assertIn("--json --light --base " + head, "\n".join(engine_args(eng2)))
+        self.assertEqual(r.check("app:full-1")["status"], "pass")
+
+    def test_an_unreadable_fixed_file_is_incomplete(self) -> None:
+        fx = Fixture(self.root, {"app": {"a.txt": "base\n"}})
+        write_files(fx.capsule, {"runtime-state/target-branch.json": "{not json"})
+        fx.commit_in_repo("app", {"c.txt": "mine\n"}, "change")
+        r = run_verify(fx.capsule, trivial_plan(self.root, "app"))
+        d = self.doc(r)
+        self.assertIn(targetbranch.FILE, d.get("incomplete", ""))
+        self.assertIn("not valid JSON", d.get("incomplete", ""))
+        self.assertEqual(r.exit, 2, r.result.get("summary"))
+
+    def test_a_target_missing_on_origin_is_incomplete(self) -> None:
+        fx = Fixture(self.root, {"app": {"a.txt": "base\n"}})
+        self.fix_target(fx, "epic/9")  # origin carries no epic/9
+        fx.commit_in_repo("app", {"c.txt": "mine\n"}, "change")
+        r = run_verify(fx.capsule, trivial_plan(self.root, "app"))
+        d = self.doc(r)
+        self.assertIn("origin has no branch epic/9", d.get("incomplete", ""))
+        self.assertEqual(r.exit, 2, r.result.get("summary"))
+
+
+@unittest.skipUnless(HAVE_GIT, "git not installed")
+class FactsTargetTest(GitCase):
+    """facts.py on a capsule whose target branch is fixed: every change
+    base (changed_files, change_base, the test paths' conf, the micro
+    bounds) is merge-base HEAD origin/<target>, so a sibling's commit
+    already on the target branch is not this change's; a target that
+    cannot be named is an error naming why, never the default branch."""
+
+    def world(self) -> Tuple[str, Repo]:
+        """A capsule-shaped tmp (the capsule root is it, its repos/ holds
+        app) with the repo's base on origin/main."""
+        r = Repo(os.path.join(self.tmp, "repos", "app"), {"base.txt": "base\n"})
+        r.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        return os.path.join(self.tmp, "repos"), r
+
+    def test_changed_files_and_change_base_take_the_target(self) -> None:
+        repos_dir, r = self.world()
+        # the sibling's commit is the target branch's tip on origin: the
+        # change is measured from it, not from origin/main
+        sibling = r.commit("the sibling lands on the target", {"docs/sibling.txt": "s\n"})
+        r.git("update-ref", "refs/remotes/origin/epic/1", sibling)
+        r.commit("mine", {"docs/mine.txt": "m\n"})
+        fix_target_dir(self.tmp)
+        changed, why = facts.changed_files(repos_dir)
+        self.assertEqual((why, changed), ("", {"app": ["docs/mine.txt"]}), why)
+        base, why = facts.change_base(os.path.join(repos_dir, "app"))
+        self.assertEqual((why, base), ("", sibling), why)
+
+    def test_the_test_paths_come_from_the_conf_at_the_target_base(self) -> None:
+        repos_dir, r = self.world()
+        sibling = r.commit("the sibling lands on the target",
+                           {".polyforge/verify-scope.conf": "test_glob=*_test.py\n", "docs/sibling.txt": "s\n"})
+        r.git("update-ref", "refs/remotes/origin/epic/1", sibling)
+        r.commit("mine", {"docs/mine.txt": "m\n"})
+        fix_target_dir(self.tmp)
+        rules = facts.TestPathRules.at(os.path.join(repos_dir, "app"))
+        self.assertIn("*_test.py", rules.globs, rules.globs)
+
+    def test_micro_bounds_judge_from_the_target_base(self) -> None:
+        repos_dir, r = self.world()
+        sibling = r.commit("the sibling lands on the target",
+                           {".polyforge/verify-scope.conf": "micro_path=docs/*.md\nmicro_check=echo micro-ok\n",
+                            "docs/sibling.txt": "s\n"})
+        r.git("update-ref", "refs/remotes/origin/epic/1", sibling)
+        r.commit("mine", {"docs/mine.txt": "m\n"})
+        fix_target_dir(self.tmp)
+        v = facts.micro_bounds_of(repos_dir, [{"repo": "app", "command": "echo fast-ok"}])
+        self.assertTrue(v["in_bounds"], v)
+        self.assertEqual(v["repos"][0]["base"], sibling, v["repos"][0])
+
+    def test_a_target_that_cannot_be_named_is_an_error_naming_why(self) -> None:
+        repos_dir, r = self.world()
+        r.commit("mine", {"docs/mine.txt": "m\n"})
+        for body, want in [("{not json", "not valid JSON"),
+                           (json.dumps({"target": "epic/9", "parent": "epic#1"}), "origin has no branch epic/9")]:
+            with self.subTest(want):
+                write(os.path.join(self.tmp, "runtime-state"), targetbranch.FILE, body)
+                changed, why = facts.changed_files(repos_dir)
+                self.assertIsNone(changed, why)
+                self.assertIn(want, why, why)
+                base, why = facts.change_base(os.path.join(repos_dir, "app"))
+                self.assertEqual(base, "", why)
+                self.assertIn(want, why, why)
