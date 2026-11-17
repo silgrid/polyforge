@@ -193,13 +193,14 @@ func w20DualCellFixture(t *testing.T) (env map[string]string, wsD, wsA string, d
 }
 
 // w20RowName answers a human-mode row's check name (the row prints as
-// "<status> <name>  <detail>").
+// "<status padded to 6> <name>  <detail>": the name is the field
+// between the status padding and the double space before the detail).
 func w20RowName(line string) string {
-	f := strings.Fields(line)
-	if len(f) < 2 {
+	parts := strings.SplitN(line, "  ", 3)
+	if len(parts) < 3 {
 		return ""
 	}
-	return f[1]
+	return strings.TrimSpace(parts[1])
 }
 
 // w20SectionRows splits the human output into sections: the default
@@ -209,6 +210,9 @@ func w20Sections(out string) (def []string, named map[string][]string, headers [
 	named = map[string][]string{}
 	cur := ""
 	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		if line == "" || strings.HasPrefix(line, "ok: ") {
+			continue
+		}
 		if strings.HasPrefix(line, "== Cell ") && strings.HasSuffix(line, " ==") {
 			// header line: "== Cell <profile>: <file> =="
 			rest := strings.TrimSuffix(strings.TrimPrefix(line, "== Cell "), " ==")
@@ -249,9 +253,10 @@ func TestW20DoctorEveryCell(t *testing.T) {
 		t.Fatalf("ok = false on a healthy dual-Cell machine (%d rows)", len(doc.Checks))
 	}
 
-	// ── the JSON rows: the default section is today's ladder, then the
-	// named Cell's Cell-level rows, then the harness family; the
-	// Cell-level rows carry the cell field, the Host-level rows do not
+	// ── the JSON rows: the default section is today's full report (the
+	// ladder with the Host rows interleaved, then the harness family),
+	// then the named Cell's section; the Cell-level rows carry the cell
+	// field, the Host-level rows do not
 	hostRows := []string{"prerequisites", "python3", "null device", "audit tools", "daemon socket",
 		"daemon supervision", "retired env", "harness diagram guidance"}
 	cellRows := []string{"workspace mapping", "workspace dirs", "workspace layout", "workspace scratch",
@@ -260,14 +265,18 @@ func TestW20DoctorEveryCell(t *testing.T) {
 		"daemon env", "daemon command path", "workspace yaml", "harness claude", "workflow lanes",
 		"aihub projects", "auth"}
 	want := []string{"config"}
-	want = append(want, cellRows[:8]...)                    // mapping … light fallbacks
-	want = append(want, hostRows[:4]...)                    // prerequisites … audit tools
+	want = append(want, cellRows[:9]...) // mapping … workspace memory policy
+	want = append(want, hostRows[:4]...) // prerequisites … audit tools
 	want = append(want, "host prerequisites", "server reach", "daemon socket", "daemon supervision", "config reload", "model health")
-	want = append(want, hostRows[6:]...)                     // retired env, harness diagram guidance
-	want = append(want, "daemon env", "daemon command path", "workspace yaml", "harness claude", "workflow lanes", "aihub projects", "auth")
-	want = append(want, "config")                            // the alpha section's config row
-	want = append(want, cellRows...)
+	want = append(want, hostRows[6]) // retired env
+	want = append(want, "daemon env", "daemon command path", "workspace yaml", "harness claude")
+	want = append(want, hostRows[7]) // harness diagram guidance
+	want = append(want, "workflow lanes", "aihub projects", "auth")
+	// the harness family belongs to the default section — today's full
+	// report — so it prints before the alpha section (Q1=A')
 	want = append(want, docChClaudeStatusline, docChPiPackage, docChClaudeLayout, docChPiLayout, docChV1Leftovers, docChRetiredChat)
+	want = append(want, "config") // the alpha section's config row
+	want = append(want, cellRows...)
 	var got []string
 	for _, c := range doc.Checks {
 		got = append(got, c.Name)
@@ -360,7 +369,7 @@ func TestW20DoctorEveryCell(t *testing.T) {
 	}
 	// the alpha section's config row names its file
 	alphaConfig := strings.Join(namedRows["alpha"], "\n")
-	if !strings.Contains(alphaConfig, "pass  config  loaded from "+filepath.Join(cfgDir, "cli-alpha.toml")) {
+	if !strings.Contains(alphaConfig, "pass   config  loaded from "+filepath.Join(cfgDir, "cli-alpha.toml")) {
 		t.Errorf("alpha config row does not name its file:\n%s", alphaConfig)
 	}
 
@@ -441,7 +450,7 @@ func TestW20DoctorEveryCell(t *testing.T) {
 	}
 	// the default section is still there in full, the Host rows once and
 	// every Cell-level row twice — the same report as without the flag
-	if !strings.Contains(pOut, "pass  config  loaded from "+filepath.Join(cfgDir, "cli.toml")) {
+	if !strings.Contains(pOut, "pass   config  loaded from "+filepath.Join(cfgDir, "cli.toml")) {
 		t.Fatalf("doctor --profile alpha drops the default Cell's rows:\n%s", pOut)
 	}
 	pCounts := map[string]int{}
