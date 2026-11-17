@@ -510,3 +510,32 @@ rule carry them bound to their own directories (a task's raw
 batch, a step's `downloads/`). No action on upgrade: skills are
 wired by reference from the release checkout, so sessions pick
 the rule up at their next start.
+
+## v0.2.4, the integration batch's in-batch repair
+
+The integrate lane grows two steps between `collect` and `revert`, both
+`rewind_only` (skipped without a dispatch until a rewind covers them):
+`repair` and its `review`. A red full gate whose every failing unit is
+attributed and fixable by touching only tests or documentation no longer
+files a fix ticket first — the gate writes the units to a repair brief
+and hands the batch back with a charged FAIL, the repair fixes them on
+one branch per repo off the pinned heads, the review judges the branch,
+and the revert step lands it as a PR onto the default branch under the
+merge lock it already holds; the gate re-runs on the fix's merge and a
+green tag lands on the default branch, so one batch covers its own fix.
+The rounds are bounded by the lane's one `max_rewinds: 3` (a FAIL not
+citing the owner is refused once it is spent, and the gate takes the
+spent budget to the owner: one more round, close red — the remaining
+reds filed as fix tickets exactly as before — or cancel). A red out of
+the repair's scope (a product change, pre-existing, unattributed, a
+source past two fix rounds, an audit red) still files fix tickets or
+goes to the owner; an owner's revert after a red rewinds to `revert` by
+name (`rewind --to revert --per-owner`); a project that declares its
+merge done by a person (`steps.<project>.merge.by: human`, frozen into
+the capsule's step modes at the claim) gets no in-batch repair — its
+PRs await the person, so the gate files the fix tickets as before. The
+batch's record gains `fixes` (repo, branch, PR, merge, the fixed units
+and their attributed items) beside `reverts`. No action on upgrade: the
+lane and its skills ship with the release; a workspace's
+`steps.<project>.merge.by` is read through the claim's frozen step
+modes, which the first claim after the upgrade freezes.

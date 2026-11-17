@@ -1508,11 +1508,15 @@ it resolved (stderr, a `retired_env_ignored` event, `env_warnings` in
 **Integration:** an integration batch is a work item on the `integrate`
 lane, filed by a person like any work item — `pf file create --bundle
 integrate --project <p> --goal <text>`, then `pf submit <batch>`; the daemon
-files none of its own. The local daemon runs `collect` → `revert` →
-`full-gate` → `close` (`workflows/integrate/README.md`,
+files none of its own. The local daemon runs `collect` → `repair` →
+`review` → `revert` → `full-gate` → `close` (`workflows/integrate/README.md`,
 [concepts](../concepts.md#the-integration-lane)): it pins each repo's default
 branch, gates the pinned heads once and tags a green one, moving the landed
-work items it covers to `merged`. The lane declares `exclusive: true`, so
+work items it covers to `merged` — and when the gate's red is fixable by
+touching only tests or documentation, the batch repairs it in place: the
+middle two steps (`rewind_only`, skipped until the gate's FAIL hands the
+batch back) fix the red units on one branch per repo and land it under the
+merge lock, so one batch covers the fix instead of a fix ticket. The lane declares `exclusive: true`, so
 the daemon's proxy forwards its create exclusive and aihub refuses a second
 batch of the project while one is not finished — atomically, across
 machines: `pf file create` answers `CORE-409` naming the open

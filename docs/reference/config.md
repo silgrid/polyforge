@@ -1088,10 +1088,10 @@ else `steps.<project>.default.models`, else the bundle's
 `defaults.model_candidates`; the first candidate runs, read
 fresh at every dispatch. Develop's verification runs `verify.py` on the
 lane's `cheap` tier, overridden by its own key or the project default like
-any step; the integration lane's four steps (`collect`, `revert`,
-`full-gate`, `close`) each run on their own key — their lane tiers are
+any step; the integration lane's six steps (`collect`, `repair`, `review`,
+`revert`, `full-gate`, `close`) each run on their own key — their lane tiers are
 placeholders, so the step's key or the project default governs — and
-dispatch no sub-agent. The retired `verify-judge` key is stale: it governs
+dispatch no sub-agent (the repair step fixes in its own session). The retired `verify-judge` key is stale: it governs
 nothing, and `pf doctor` names it — rename it to `verification`.
 
 ### `integrate:` — removed

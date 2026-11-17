@@ -698,9 +698,13 @@ machine ever claimed (its filer stopped between filing and submitting it)
 is named with `pf submit <batch>` to run it or `pf cancel <batch>` to drop
 it.
 
-A batch's steps are four agent steps, each running one pre-written command
-under its skill (`workflows/integrate/skills/<step>.md`) and routing on
-the exit code. The
+A batch's steps are six agent steps. Four run one pre-written command
+under their skill (`workflows/integrate/skills/<step>.md`), routing on
+the exit code; the two between `collect` and `revert` — the batch's
+repair and its review — are `rewind_only` (workflow contract's step key):
+the first round records them skipped without a dispatch, and they run
+only after a rewind covers them, which the gate's red hands back to them
+over the lane's one `max_rewinds` budget. The
 commands read aihub through `pf step hub list` and `get`, and write the
 aihub writes they decide (fix tickets, record moves, hold clears) to a file
 the skill registers with one `pf step hub batch`; the daemon makes them
@@ -738,14 +742,37 @@ with its own credentials (a step agent holds none) once the step hands off
   the `integration_fix` attr that makes its own verification run the full bar —
   the hold reads its registered tickets, so it is open again while the new one
   can release it).
+- `repair` (`rewind_only`, no tier — its step key, else the project
+  default; no hub verbs: it fixes on files alone) — the gate handed the
+  batch back over a red every unit of which is attributed and fixable by
+  touching only tests or documentation: it fixes exactly those units on
+  one local branch per repo (`integrate/repair-<batch>`) off the pinned
+  heads, runs each unit's own rerun command for the host green (the
+  re-run gate alone decides the batch) and writes the branch plan the
+  revert step lands. It never pushes and never opens a PR; a fix that
+  would leave the tests-or-documents scope goes to the owner — fix anyway,
+  revert the blamed item, or hand the units back (the next gate run files
+  the fix tickets as it did before). A round that reached it with no
+  repair brief changes nothing.
+- `review` (`rewind_only`, a gate whose FAIL rewinds to the repair
+  step; no tier, no skill: its definition is the whole procedure) — the
+  fresh judgment of the repair's branch: the diff from the pinned base
+  touches only test and documentation files, every brief unit fixed, no
+  fix that weakens a test to pass it. Findings land in
+  `artifacts/review.md`; a blocking finding rewinds to the repair step
+  charged.
 - `revert` (`revert.py`, the cheap tier; the merge lock) — carries out the
-  reverts the owner ruled, collect's and a red gate's (the ones a full-gate
-  FAIL names in its hand-off): each item and its landed fix tickets reverted
-  per repo, newest first, on a revert PR opened and merged under the
+  reverts the owner ruled, collect's and a red gate's (the ones its
+  decision file names), and lands the batch's repair branches the same
+  way: each item and its landed fix tickets reverted per repo, newest
+  first, on a revert PR opened and merged under the
   repo's merge lock — the one develop's `merge` step holds, so nothing
-  else merges meanwhile — the gate's pins following the reverts, and the
-  item's record moved to `reverted` (an `attrs` write). Nothing to revert
-  only copies the pins. A revert the forge refuses is a `pf step ask`: the
+  else merges meanwhile — each repair branch pushed, its PR merged onto
+  the default branch matching the pushed head (a fix whose blamed item
+  the same run reverts is never landed) — the gate's pins following both,
+  and the reverted item's record moved to `reverted` (an `attrs` write).
+  Nothing to revert and nothing to land only copies the pins. A revert
+  the forge refuses is a `pf step ask`: the
   owner fixes it and the agent retries, or rewinds, or cancels.
 - `full-gate` (the script `gate.py --isolation container --capsule --pins`,
   no tier — its step key, else
@@ -771,7 +798,13 @@ with its own credentials (a step agent holds none) once the step hands off
   over every first-parent commit since the baseline (both ends tested; a
   unit absent at a commit is not failing there; a first red commit that is
   no landed item's merge is outside the batch and the owner's). The step's
-  agent decides on the triage: one fix ticket per root cause, a `file`
+  agent first judges whether the batch repairs in place: every red unit
+  attributed, no source past two fix rounds, the fix of every unit
+  touching only tests or documentation, and the claim's frozen step modes
+  not naming `merge` `human` (a project whose PRs await a person merges
+  none by machine) — the gate writes the repair brief and hands off
+  `fail`, charged, back to the repair step. Otherwise it decides one fix
+  ticket per root cause, a `file`
   write whose acceptance names each red unit that passes on the fixed head
   (filed on the develop lane at high priority under a stable key, so a
   resumed batch never files twice) — each fix ticket filed with the
@@ -781,10 +814,10 @@ with its own credentials (a step agent holds none) once the step hands off
   (its round, the gated heads as `red_heads`, the ticket, named `key:<k>`
   until it is filed); the batch's result is then `red`. A source whose fix
   tickets failed two rounds, a pre-existing or an unattributed red goes to
-  the owner (`pf step ask`): revert → the gate FAILs naming the item, the
-  rewind to `revert` carries it out and the gate runs again on the
-  revert's merge in the same batch (the FAIL is handed off with
-  `--per-owner`, charged to nothing); rerun → the same pinned heads gated
+  the owner (`pf step ask`): revert → the gate rewinds to `revert` by name
+  (`rewind --to revert --per-owner`: its own FAIL would go to the repair
+  step), the revert carries it out and the gate runs again on the
+  revert's merge in the same batch (charged to nothing); rerun → the same pinned heads gated
   again (at most twice); close → the batch ends red now. A gate that
   cannot be judged three times in a row hands off `blocked` (its body
   names why and the last gate log's tail): fix the machine, then tell the
@@ -799,7 +832,10 @@ with its own credentials (a step agent holds none) once the step hands off
   wrap came after a tag covering its merge moves too — and records the
   batch's record as the wrap attr `integration_batch` (`result`, `main`,
   `tags`, `items`, `green_items`, `fix_tickets`, `hold_rulings`,
-  `reverts`, …), which the wrap merges into the work item's attrs. A red
+  `reverts`, `fixes` — the landed repairs: repo, branch, PR, merge, the
+  fixed units, their attributed items — …), which the wrap merges into
+  the work item's attrs; a green batch whose record carries `fixes`
+  names the attributed source items in its wrap summary. A red
   batch tags nothing; the heads its gate failed on are the next batch's
   "last red" heads, so a later batch waits for that repo's default branch
   to move (a repo that passed, or could not be judged, is gated again).
