@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=../_schema/workflow-1.schema.json
 contract: 1
 name: integrate
-description: The integration lane - one work item per batch. The develop lane merges every work item into the default branch itself and wraps it landed; this lane only gates what landed. Four agent steps, each running one pre-written command and routing on its exit code - collect pins each repo's default branch and takes the landed items those heads carry (it reads the project's pool through the step's hub; a hold nothing can release is put to the owner, whose word alone clears one), revert carries out the reverts the owner ruled under the merge lock, full-gate runs the release's full test gate once on the pinned heads - a pass tags the green head green/<YYYYMMDD>-<n> - and triages a red one down to one fix ticket per root cause (a revert the owner rules is gated again in the same batch), close moves every landed item a green tag covers to merged and registers the batch's record for the wrap. Started only by a person, with `pf file create --bundle integrate` and `pf submit`; the lane is exclusive, so aihub holds every project to one unfinished batch.
+description: The integration lane - one work item per batch. The develop lane merges every work item into the default branch itself and wraps it landed; this lane only gates what landed. Six agent steps - collect pins each repo's default branch and takes the landed items those heads carry (it reads the project's pool through the step's hub; a hold nothing can release is put to the owner, whose word alone clears one), repair and its review run only after a rewind covers them (rewind_only; the gate's red hands the batch back over units every one of which is attributed and fixable by touching only tests or documentation - the repair fixes them on one local branch per repo off the pinned heads and its review judges the branch; the landing is the revert step's, under the merge lock), revert carries out the reverts the owner ruled and lands the repair branches the same way, writing the gate's pins after both, full-gate runs the release's full test gate once on the pinned heads - a pass tags the green head green/<YYYYMMDD>-<n> - and a red it cannot hand back to the repair goes down to one fix ticket per root cause (a revert the owner rules is gated again in the same batch), close moves every landed item a green tag covers to merged and registers the batch's record for the wrap. Started only by a person, with `pf file create --bundle integrate` and `pf submit`; the lane is exclusive, so aihub holds every project to one unfinished batch.
 max_rewinds: 3
 exclusive: true
 acceptance: none
@@ -14,6 +14,15 @@ steps:
     model_tier: mid
     budget: { wall_minutes: 20, tool_minutes: 10 }
     hub: { verbs: [get, list, batch, file], attrs: [integration, integration_fix] }
+  - id: repair
+    skill: repair
+    rewind_only: true
+    budget: { wall_minutes: 60, tool_minutes: 45 }
+  - id: review
+    gate: true
+    on_fail: { target: repair }
+    rewind_only: true
+    budget: { wall_minutes: 30, tool_minutes: 20 }
   - id: revert
     skill: revert
     model_tier: cheap
@@ -22,7 +31,7 @@ steps:
     hub: { verbs: [get, batch], attrs: [integration] }
   - id: full-gate
     gate: true
-    on_fail: { target: revert }
+    on_fail: { target: repair }
     skill: full-gate
     budget: { wall_minutes: 150, tool_minutes: 90 }
     resources: { admission: heavy }

@@ -32,12 +32,14 @@ func w98Result(stepID string, n int64, output string) *StepResult {
 // number.
 func w98DriveRound(t *testing.T, d *Driver, wf *Workflow, first bool, n int64) int64 {
 	t.Helper()
-	mustStart(t, d, "collect", n)
-	if err := d.transition(TransitionRequest{Kind: TransStepResult, StepID: "collect", SpawnN: n,
-		Result: w98Result("collect", n, `{}`)}); err != nil {
-		t.Fatalf("result collect (%d): %v", n, err)
+	if first {
+		mustStart(t, d, "collect", n)
+		if err := d.transition(TransitionRequest{Kind: TransStepResult, StepID: "collect", SpawnN: n,
+			Result: w98Result("collect", n, `{}`)}); err != nil {
+			t.Fatalf("result collect (%d): %v", n, err)
+		}
+		n++
 	}
-	n++
 	if first {
 		for _, sid := range []string{"repair", "review"} {
 			if err := d.transition(TransitionRequest{Kind: TransStepSkipped, StepID: sid, SpawnN: n - 1}); err != nil {
@@ -127,8 +129,15 @@ func TestW98RepairFailChargesAndActivates(t *testing.T) {
 		}
 	}
 	for _, sid := range []string{"repair", "review"} {
-		if st := x.Steps[sid]; st.Status != capsule.StepPending || len(st.Attempts) != 3 {
-			t.Fatalf("%s ran on every rewound round (three archives, pending again): %q %+v", sid, st.Status, st.Attempts)
+		st := x.Steps[sid]
+		rewinds := 0
+		for _, a := range st.Attempts {
+			if a.Cause == CauseGateFailRewind || a.Cause == CauseSupersededByRewind {
+				rewinds++
+			}
+		}
+		if st.Status != capsule.StepPending || rewinds != 3 {
+			t.Fatalf("%s ran on every rewound round (three rewind archives, pending again): %q %+v", sid, st.Status, st.Attempts)
 		}
 	}
 	// the budget is spent: the next FAIL not citing the owner is refused
