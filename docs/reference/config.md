@@ -1090,8 +1090,10 @@ fresh at every dispatch. Develop's verification runs `verify.py` on the
 lane's `cheap` tier, overridden by its own key or the project default like
 any step; the integration lane's six steps (`collect`, `repair`, `review`,
 `revert`, `full-gate`, `close`) each run on their own key — their lane tiers are
-placeholders, so the step's key or the project default governs — and
-dispatch no sub-agent (the repair step fixes in its own session). The retired `verify-judge` key is stale: it governs
+placeholders, so the step's key or the project default governs; the lane's
+`review` is the develop lane's step id too, so a `steps.<project>.review`
+key governs both lanes' reviews — and the lane
+dispatches no sub-agent (the repair step fixes in its own session). The retired `verify-judge` key is stale: it governs
 nothing, and `pf doctor` names it — rename it to `verification`.
 
 ### `integrate:` — removed

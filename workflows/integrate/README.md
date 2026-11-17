@@ -83,9 +83,10 @@ integration_batch`). What a later step's command needs travels in files, never i
   `artifacts/integrate/repair-plan.json` — the branch, its base and head, the fixed units
   and the items they were attributed to. It never pushes and never opens a PR (the revert
   step lands its branch); a fix that would leave the tests-or-documents scope goes to the
-  owner in one `pf step ask` — fix anyway, revert the blamed item (a rewind to revert
-  citing the reply), or hand the units back (`repair-refused.json`: the next gate run
-  files the fix tickets). It runs only after a rewind covered it: a round that reached it
+  owner in one `pf step ask` — fix anyway, revert the blamed item (its id rides the
+  gate decision's `reverts` with a plain `done`: the revert step reads it), or hand the
+  units back (`repair-refused.json`, answered by `brief_round`: the next gate run files
+  the fix tickets). It runs only after a rewind covered it: a round that reached it
   with no brief of its own changes nothing and hands off `done`.
 - **review** (`rewind_only`, a gate whose FAIL rewinds to repair, no tier, no skill) —
   the fresh judgment of the repair's branch: the diff from the pinned base touches only
