@@ -11,6 +11,8 @@ its diff measured from merge-base HEAD origin/main."""
 import json
 import os
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from typing import Any, Dict, Optional, Tuple
@@ -20,7 +22,7 @@ import verify
 from pfstep import targetbranch
 
 from .gitworld import GitCase, Repo
-from .test_scripts import HAVE_GIT, World, read, repo_of, write
+from .test_scripts import HAVE_GIT, SCRIPTS, World, read, repo_of, write
 from .test_verify_tree import trivial_plan
 from .verifyfix import HAVE_BASH, Fixture, Run, engine_args, git_t, run_verify, write_files
 
@@ -455,3 +457,73 @@ class FactsTargetTest(GitCase):
                 base, why = facts.change_base(os.path.join(repos_dir, "app"))
                 self.assertEqual(base, "", why)
                 self.assertIn(want, why, why)
+
+
+@unittest.skipUnless(HAVE_GIT, "git not installed")
+class EngineTargetTest(GitCase):
+    """verify-scope inside a step (PF_CAPSULE names the capsule): the
+    default diff base — and --micro's, whose governing conf is read at it
+    — is merge-base HEAD origin/<target>, so a sibling's commit already
+    on the target branch is not this change's; outside a step nothing
+    changes, and a fixed target that cannot be read is diagnosed and
+    answers the full tier — never a fall-back to the default branch."""
+
+    ENGINE = os.path.join(SCRIPTS, "verify-scope")
+
+    def repo_with(self) -> Tuple[str, Repo]:
+        r = Repo(os.path.join(self.tmp, "repos", "app"), {"base.txt": "base\n"})
+        r.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        return r.head(), r
+
+    def run_engine(self, cwd: str, *flags: str, capsule: str = "") -> Dict[str, Any]:
+        """The repo's own engine as a subprocess, in a step's environment
+        (PF_CAPSULE names the capsule) or outside one (the variable
+        stripped, a hand run's)."""
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_", "PF_"))}
+        if capsule:
+            env["PF_CAPSULE"] = capsule
+        p = subprocess.run([sys.executable, self.ENGINE, "--json", *flags], cwd=cwd, env=env,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(p.returncode, 0, p.stderr.decode())
+        return json.loads(p.stdout.decode("utf-8", "replace"))
+
+    def test_the_step_capsules_target_is_the_default_base(self) -> None:
+        b0, r = self.repo_with()
+        sibling = r.commit("the sibling lands on the target",
+                           {".polyforge/verify-scope.conf": "fast_gate=echo epic-ok\n", "docs/s.txt": "s\n"})
+        r.git("update-ref", "refs/remotes/origin/epic/1", sibling)
+        r.commit("mine", {"docs/mine.txt": "m\n"})
+        fix_target_dir(self.tmp)
+        rep = self.run_engine(r.dir, capsule=self.tmp)
+        self.assertEqual((rep["default_branch"], rep["base"]), ("epic/1", sibling), rep)
+        # outside a step (no PF_CAPSULE): the default branch again
+        rep = self.run_engine(r.dir)
+        self.assertEqual((rep["default_branch"], rep["base"]), ("main", b0), rep)
+
+    def test_micro_reads_the_conf_at_the_targets_base(self) -> None:
+        b0, r = self.repo_with()
+        sibling = r.commit("the sibling lands on the target",
+                           {".polyforge/verify-scope.conf": "micro_path=docs/**\nmicro_check=echo epic-ok\n",
+                            "docs/s.txt": "s\n"})
+        r.git("update-ref", "refs/remotes/origin/epic/1", sibling)
+        r.commit("mine", {"docs/mine.txt": "m\n"})
+        fix_target_dir(self.tmp)
+        rep = self.run_engine(r.dir, "--micro", capsule=self.tmp)
+        self.assertEqual((rep["default_branch"], rep["base"]), ("epic/1", sibling), rep)
+        self.assertIn("echo epic-ok", [c["cmd"] for c in rep["commands"]], rep["commands"])
+        # outside a step the governing conf is the default branch's base's
+        rep = self.run_engine(r.dir, "--micro")
+        self.assertEqual((rep["default_branch"], rep["base"]), ("main", b0), rep)
+        self.assertNotIn("echo epic-ok", [c["cmd"] for c in rep["commands"]], rep["commands"])
+
+    def test_an_unreadable_fixed_target_is_diagnosed_never_fallen_back(self) -> None:
+        _, r = self.repo_with()
+        r.commit("mine", {"docs/mine.txt": "m\n"})
+        write(os.path.join(self.tmp, "runtime-state"), targetbranch.FILE, "{not json")
+        rep = self.run_engine(r.dir, capsule=self.tmp)
+        self.assertTrue(any(targetbranch.FILE in d and "not valid JSON" in d for d in rep["diagnostics"]),
+                        rep["diagnostics"])
+        # the base falls back to nothing — the default branch is never the answer
+        self.assertEqual(rep["default_branch"], "", rep)
+        rep = self.run_engine(r.dir)  # outside a step the file is not read at all
+        self.assertEqual(rep["default_branch"], "main", rep)
