@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/silgrid/polyforge/internal/common/api"
@@ -165,8 +166,9 @@ func TestW79ParamsViewQueued(t *testing.T) {
 	}
 }
 
-// The refusals: an unknown work item answers 404; a terminal one 409; a
-// queued one whose lane does not load here names it.
+// The refusals: an unknown or terminal work item answers 404 (this
+// daemon holds no scene of it); a queued one whose lane does not load
+// here, or that names no bundle, is refused naming it.
 func TestW79ParamsViewRefusals(t *testing.T) {
 	wf := t.TempDir()
 	workflowtest.WriteLane(t, wf, "w79-lane", w79Lane)
@@ -176,12 +178,12 @@ func TestW79ParamsViewRefusals(t *testing.T) {
 		t.Fatalf("an unknown work item: %+v", ae)
 	}
 	td.hub.items["wi_w79t"] = &api.WorkItem{ID: "wi_w79t", Status: api.StatusWrapped, ProjectName: "proj"}
-	if _, ae := td.w79Params(t, "wi_w79t"); ae == nil || ae.Code != api.ErrDaemonConflict {
-		t.Fatalf("a terminal work item: %+v", ae)
+	if _, ae := td.w79Params(t, "wi_w79t"); ae == nil || ae.Code != api.ErrDaemonNotFound {
+		t.Fatalf("a terminal work item this daemon holds no scene of: %+v", ae)
 	}
 	noBundle := "wi_w79nb"
 	td.hub.items[noBundle] = &api.WorkItem{ID: noBundle, Status: api.StatusQueued, ProjectName: "proj"}
-	if _, ae := td.w79Params(t, noBundle); ae == nil || ae.Code != api.ErrDaemonConflict {
+	if _, ae := td.w79Params(t, noBundle); ae == nil || ae.Code != api.ErrDaemonConflict || !strings.Contains(ae.Detail, "bundle") {
 		t.Fatalf("a queued work item with no bundle: %+v", ae)
 	}
 	gone := "wi_w79gone"
