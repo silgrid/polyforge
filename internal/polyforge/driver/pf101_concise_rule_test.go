@@ -75,8 +75,11 @@ func TestPF101DegradedResumeCarriesTheRuleOnce(t *testing.T) {
 	if _, err := ad.SpawnStep(context.Background(), StepSpawn{StepID: "grill", WIID: "wi_sp", SpawnN: 1, Harness: harness.Pi}); err != nil {
 		t.Fatalf("SpawnStep: %v", err)
 	}
-	// no journal entry: the previous session is gone, so the resume
-	// degrades to a new conversation with the full prompt
+	// the spawn-2 dispatch names another harness, so the resume degrades
+	// through the harness-switch branch (driver/spawn.go's condition 1);
+	// the session-gone branch (condition 2) assembles the same full prompt
+	// through the same assembleStepPrompt, which the position assertions
+	// below read (review r1#2: the earlier comment misnamed the branch)
 	if _, err := ad.SpawnStep(context.Background(), StepSpawn{StepID: "grill", WIID: "wi_sp", SpawnN: 2, Harness: harness.Claude,
 		Resume: true, RetryTriggered: true}); err != nil {
 		t.Fatalf("SpawnStep: %v", err)
