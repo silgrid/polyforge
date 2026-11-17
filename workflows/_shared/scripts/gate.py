@@ -41,7 +41,8 @@ built from HEAD's Dockerfile alone — or, with ``--image`` (a step
 dispatch's ``PF_PARAM_IMAGE`` names it too; the flag wins and the result
 records where the value came from), a prepared image a person made:
 resolved to its local ID, started by it, never built, never pulled, its
-digest in the plan's image half and in the green tag's record — mounted
+digest in the plan's image half and in the green tag's record, and its
+RepoDigests (when it has any) in the result alone — mounted
 are, either way, the clone at its own path, the
 cache volume, the environment allowlist, a private TMPDIR per command and
 every process a command left killed after it. Its limits are this
@@ -526,9 +527,12 @@ class GateResult:
     gate_id_source: str = ""
     # image_digest: the prepared image's local ID (image mode only);
     # image_source: which named it — "flag" (--image) or "param"
-    # (PF_PARAM_IMAGE)
+    # (PF_PARAM_IMAGE); repo_digests: the image's RepoDigests, when it has
+    # any — recorded in the result alone, never in the plan digest or the
+    # gate id (the digest already hashes there)
     image_digest: str = ""
     image_source: str = ""
+    repo_digests: List[str] = field(default_factory=list)
     log_dir: str = ""
     commands: List[GateCommand] = field(default_factory=list)
     # incomplete: why the gate could not be judged ("" = it ran)
@@ -551,6 +555,8 @@ class GateResult:
             d["image_digest"] = self.image_digest
         if self.image_source:
             d["image_source"] = self.image_source
+        if self.repo_digests:
+            d["repo_digests"] = list(self.repo_digests)
         d["built"] = self.built
         if self.container:
             d["container"] = self.container
@@ -576,6 +582,7 @@ class GateResult:
             container=str(d.get("container") or ""), engine=str(d.get("engine") or ""),
             engine_source=str(d.get("engine_source") or ""), gate_id_source=str(d.get("gate_id_source") or ""),
             image_digest=str(d.get("image_digest") or ""), image_source=str(d.get("image_source") or ""),
+            repo_digests=[str(x) for x in (d.get("repo_digests") or [])],
             log_dir=str(d.get("log_dir") or ""),
             commands=[GateCommand.of(c) for c in d.get("commands") or [] if isinstance(c, dict)],
             incomplete=str(d.get("incomplete") or ""), passed=bool(d.get("passed")),
@@ -833,6 +840,7 @@ class Gate:
         box, r = o.box, o.r
         res.image, res.built, res.container = box.report.image, box.report.built, box.report.name
         res.image_digest = box.report.digest
+        res.repo_digests = list(box.report.repo_digests)
         rep, ref, why = self.ask_engine(o, "HEAD", True)
         res.engine = ref
         if rep is None:
