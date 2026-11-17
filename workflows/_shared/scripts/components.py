@@ -47,6 +47,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import argparse  # noqa: E402
 import json  # noqa: E402
+from typing import Any, Dict, List, Optional  # noqa: E402
 
 from pfstep import components  # noqa: E402
 
@@ -68,7 +69,7 @@ def render(report: components.RepoReport) -> str:
     return "\n".join(lines) + "\n"
 
 
-def entry(report: components.RepoReport) -> dict:
+def entry(report: components.RepoReport) -> Dict[str, Any]:
     """One repository's --json entry (schema 1)."""
     e = {
         "repo": report.name,
@@ -89,7 +90,7 @@ def entry(report: components.RepoReport) -> dict:
     return e
 
 
-def main(argv=None) -> int:
+def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="components.py", description=__doc__.splitlines()[0])
     ap.add_argument("--repo", action="append", default=[], metavar="DIR",
                     help="a repository clone (repeatable)")

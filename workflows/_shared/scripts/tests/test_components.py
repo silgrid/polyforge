@@ -178,7 +178,7 @@ class ComponentsToolTest(GitCase):
     division is derived by hand from the fixture's layout (the ticket's
     generic definition), never from the implementation's output."""
 
-    def run_tool(self, *args: str) -> subprocess.CompletedProcess:
+    def run_tool(self, *args: str) -> "subprocess.CompletedProcess[str]":
         return subprocess.run(["python3", TOOL, *args], capture_output=True, text=True,
                               stdin=subprocess.DEVNULL)
 
