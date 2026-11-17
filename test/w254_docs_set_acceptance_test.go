@@ -453,13 +453,14 @@ func TestW254QuickstartsMovedIntact(t *testing.T) {
 // - the v0.2.3 section appended with the memory writer columns (polyforge#107: writer_kind/writer_details on memories, owner_display_name on every read; upgrade aihub and run deploy/sql/v0.2.3 first or every memory request fails; the backfill marks the pf-step-memory:-keyed rows as step; the rollback is a no-op and never drops the durable columns)
 // - the second v0.2.3 section appended with the harness guidance (every step dispatch and task input carries the short output-discipline rule from the one source harness.ConciseRule, the doctor's harness concise guidance row and claude's resolved ~/.claude/CLAUDE.md-else-AGENTS.md target, and tools/install.sh auto-runs pf doctor --fix-harness-prompts once per install)
 // - the v0.2.3 section appended with the dependency audit's declared level and the release reusing the gate's audit (audit_prod_level=moderate in .polyforge/verify-scope.conf, the only conf key that reaches the audit gate and tightening only: production dependencies turn the audit red from moderate up via --npm-prod-level, dev stays at high, the gate id hashes the key; the release's default audit is the engine's own audit command, run verbatim after the build and never skipped by a reused green tag; every audited surface prints its fetch time, UTC, and source)
+// - the v0.2.3 section appended with the light tier's selection closing its historical misses (a declared go_harness's directory carries: declarations are consumed into the E2E_RUN name set, malformed fail-closed; the scoped_command=<glob>|<command> conf key maps a changed path to a conditional scoped command, this repository declaring the step scripts' Python unit suite for workflows/_shared/scripts/*; test/w111_light_historical_replay_test.go replays polyforge#87's five historical misses and reds on any quiet regression or ballooning of the selection)
 // upgrade-sections:end
 // The file is only routed to, from the install ops page and the README
 // landing page.
 func TestW254UpgradeByteIdentical(t *testing.T) {
 	raw := []byte(w254Read(t, "docs/upgrade.md"))
 	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != "d4a0938ff749b7ed31056eeaa50e419fc641a0e9327dfbd5c9faccb6da4b5ef4" {
+	if got := hex.EncodeToString(sum[:]); got != "71fff106528b72066d99aa10237f84a00f7e07c33b0799d3fb57e298efc6d8d7" {
 		t.Fatalf("docs/upgrade.md must stay byte-identical (only routed to, never rewritten): sha256 %s != the pinned pre-move sha256", got)
 	}
 	// the list beside the pin: one whole `// - ` line per appended section
