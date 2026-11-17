@@ -190,7 +190,7 @@ pull, `pf watch <wi> --once`.
 
 ## Session rules
 
-Eight standing rules, binding on every polyforge session:
+Nine standing rules, binding on every polyforge session:
 
 1. **Surface discipline — the `pf` CLI is the only client.** All AIHub
    data-plane interaction goes through the `pf` CLI; never issue a raw
@@ -356,6 +356,16 @@ Eight standing rules, binding on every polyforge session:
    clone, this rule makes the session's reading copy current. When a sync shows earlier
    analysis ran on an old head, say so: restate the conclusion against the synced head
    and name the baseline, or withdraw it.
+9. **Forensics: raw material lands on disk; the conversation carries
+   conclusions and references.** Six duties, binding on every session —
+   and, through the prompt or brief it is handed, on every task and
+   sub-agent dispatched downstream:
+   - **Save the raw data first.** Before a command's full output, a large response or an export is quoted, its complete original lands in a dedicated subdirectory of the workspace's temporary directory; the conversation then carries counts, differences and short evidence excerpts only — never the full body.
+   - **Locate first, then read by range.** Searching history — past sessions, long files, logs: locate first (a search, an index, a listing), then read only the located range; never load a whole history into the conversation.
+   - **Bound every tool return.** One logical tool result carries at most 8 KiB of visible text (UTF-8, errors and truncation notices included); a longer body goes to disk and the conversation reads back an excerpt, and a trimmed return states what was cut and where the complete original lies.
+   - **Never reload what is already read.** Material the conversation or the disk already holds is referenced, not fetched again; when a command's output goes to a file, its exit code is captured and kept with the result — never swallowed by a pipe.
+   - **A filed report is referenced, not restated.** Once a report is filed where it belongs, later replies carry conclusions and references only — the path, line or pointer a reader follows to the original.
+   - **Pass the same constraints downstream.** A task prompt or a sub-agent brief states these output constraints, naming the directory its raw material lands in and the bound its tool returns keep.
 
 ## The `pf` CLI: shared invocation contract
 
