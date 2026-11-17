@@ -4,6 +4,7 @@ import { isApiRequestAllowed } from "@/lib/request-security";
 import {
   browsePolyforgeMemory,
   PolyforgeMemoryError,
+  POLYFORGE_MEMORY_WRITER_FILTER_MINIMUM_PF_VERSION,
   readPolyforgeMemoryCapability,
   readPolyforgeMemoryProjects,
   searchPolyforgeMemory,
@@ -18,18 +19,29 @@ export const dynamic = "force-dynamic";
  * (D2, browse):
  *   - no `q`, no `project`: the SCOPE read (capability plus the cwd's
  *     workspace projects, no memory verb);
- *   - no `q`, a `project` (optional `type`, `tags`, `after`): one BROWSE page,
- *     exactly one `pf recall` with no query (20 rows, updated-desc), answered
- *     with `hits`, `total` and, while more remain, `next_cursor`;
- *   - `q` (and `project`, `type`, optional `tags`, optional `any=1`): the
- *     keyword SEARCH, exactly one 200-row `pf recall`.
+ *   - no `q`, a `project` (optional `type`, `tags`, `after`, `writer_kind`):
+ *     one BROWSE page, exactly one `pf recall` with no query (20 rows,
+ *     updated-desc), answered with `hits`, `total` and, while more remain,
+ *     `next_cursor`;
+ *   - `q` (and `project`, `type`, optional `tags`, optional `any=1`, optional
+ *     `writer_kind`): the keyword SEARCH, exactly one 200-row `pf recall`.
  * Degradation-first: pf absent, below the 2.20.12 floor, an unmapped cwd, an
  * off-list project's config read and a failed spawn all answer 200 with
- * fields, never 5xx; the only non-2xx answers are the gate's 403 and the
- * shape-validation/membership 400s, which run before any recall spawn.
+ * fields, never 5xx; the only non-2xx answers are the gate's 403, the
+ * shape-validation/membership 400s and the writer-filter 400 (Q4: a legal
+ * `writer_kind` on a pf below the filter's own 0.2.3 floor — run before any
+ * config read or recall spawn), which run before any recall spawn.
  */
 function failureText(error: unknown): string {
   return error instanceof PolyforgeMemoryError ? error.message : "polyforge is unavailable";
+}
+
+/** Q4 (polyforge#120): a legal writer-kind request on a pf below the
+ *  filter's own floor answers 400 with the upgrade hint — never a recall
+ *  spawn that would silently drop the filter, never a filtered-looking
+ *  answer. */
+function writerFilterRefusal(pfVersion: string | null): { error: string } {
+  return { error: `the writer filter needs pf ${POLYFORGE_MEMORY_WRITER_FILTER_MINIMUM_PF_VERSION} or newer (found ${pfVersion ?? "an unparseable version"}) — drop the writer filter or upgrade pf` };
 }
 
 export async function GET(request: Request) {
@@ -70,6 +82,7 @@ export async function GET(request: Request) {
       type: url.searchParams.get("type") ?? undefined,
       tags: url.searchParams.get("tags") ?? undefined,
       after: url.searchParams.get("after") ?? undefined,
+      writer_kind: url.searchParams.get("writer_kind") ?? undefined,
     });
     if (!browse.ok) {
       return NextResponse.json({ error: browse.error }, { status: 400 });
@@ -77,6 +90,9 @@ export async function GET(request: Request) {
     const capability = await readPolyforgeMemoryCapability();
     if (!capability.capable) {
       return NextResponse.json({ ...capability, mapped: false, projects: [], hits: [], total: 0 });
+    }
+    if (browse.value.writer_kind && !capability.writerFilterSupported) {
+      return NextResponse.json(writerFilterRefusal(capability.pfVersion), { status: 400 });
     }
     // the pinned Cell scope of this browse (polyforge#18): every call of
     // the request names the Cell pf resolves for the cwd
@@ -114,6 +130,7 @@ export async function GET(request: Request) {
     type: url.searchParams.get("type"),
     tags: url.searchParams.get("tags") ?? undefined,
     any: url.searchParams.get("any") ?? undefined,
+    writer_kind: url.searchParams.get("writer_kind") ?? undefined,
   });
   if (!validated.ok) {
     return NextResponse.json({ error: validated.error }, { status: 400 });
@@ -121,6 +138,9 @@ export async function GET(request: Request) {
   const capability = await readPolyforgeMemoryCapability();
   if (!capability.capable) {
     return NextResponse.json({ ...capability, mapped: false, projects: [], hits: [] });
+  }
+  if (validated.value.writer_kind && !capability.writerFilterSupported) {
+    return NextResponse.json(writerFilterRefusal(capability.pfVersion), { status: 400 });
   }
   // the pinned Cell scope of this search (polyforge#18): every call of
   // the request names the Cell pf resolves for the cwd

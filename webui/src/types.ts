@@ -94,6 +94,11 @@ export interface MemoryRow {
   tags: string[]
   updated_at: string
   work_item_id?: string
+  // polyforge#107/#120: the author's display name and the daemon-stamped
+  // writer (null kind and null details on a pre-writer row).
+  owner_display_name: string
+  writer_kind: string | null
+  writer_details: Record<string, unknown> | null
 }
 
 export interface MemoryList {
@@ -112,6 +117,10 @@ export interface MemoryDetail {
   created_at: string
   work_item_id?: string
   html: string
+  // the same attribution fields as the list row (polyforge#107/#120).
+  owner_display_name: string
+  writer_kind: string | null
+  writer_details: Record<string, unknown> | null
 }
 
 export interface SearchResults {

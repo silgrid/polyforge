@@ -982,6 +982,11 @@ name `polyforge.memory.search`), and a project/type/tags change still
 re-issues the current read; Tasks' existing ↻ is unchanged. Memory's visible
 field labels are gone — each control keeps `aria-label` + `title` and the text
 inputs a placeholder, while the any-word checkbox keeps its visible text.
+polyforge#120 adds the conditional fourth filter: a writer-kind select
+(`polyforge.memory.writerFilter`, options all/session/step) that renders
+ONLY while the scope answer's `writerFilterSupported` is true — a pf at or
+above the filter's own 0.2.3 floor — and a change re-issues the current
+read like the other filters (page 1, the cursor resets).
 
 ## Messages tab (layout redone)
 
@@ -1518,18 +1523,31 @@ newest-first, 20-row client pages, the narrowing notice at 200. Only the newest
 list read lands (a sequence guard, like the detail reads). The `any` checkbox
 applies at the next submit. An unmapped cwd or a below-floor pf issues no list
 read. Back restores the list, page and filters from component state without
-re-fetching.
+re-fetching. polyforge#120: every row and the detail show the author's display
+name and the writer — the kind plus the valued known details through
+`formatMemoryWriter` (a fixed key order; a missing one renders its explicit
+「unknown author / unknown writer」 placeholder, never the current user, never
+an id, never a blank). When the scope answer's `writerFilterSupported` says
+the pf carries `--writer-kind` (the filter's own floor, below), a writer-kind
+select joins the filters: `""` browses every writer; its value rides the
+browse, the keyword search and every browse continuation (`writer_kind`), and
+a change re-issues the current mode's first read — page 1, the cursor resets
+(Q5). The select never renders on an older pf, and the attribution display is
+never gated by it.
 
 **Routes.** `GET /api/polyforge/memory?cwd=…` is three faces: without `q`
 and without `project` it is the SCOPE read (capability plus the cwd's
 workspace projects, empty hit list, no memory verb); without `q` but with a
-`project` (optional `type`, `tags`, `after`) it is one BROWSE page: exactly
-one `pf --json recall --project <p> --limit 20 --sort updated [--after <c>]
-[--tags …] [--type …]` with no query, answered as `hits`, `total` and, while
-more entries remain, `next_cursor`; with `q` (plus `project`, `type`,
-optional `tags`, optional `any=1`) it is the keyword SEARCH: exactly one
+`project` (optional `type`, `tags`, `after`, `writer_kind`) it is one BROWSE
+page: exactly one `pf --json recall --project <p> --limit 20 --sort updated
+[--after <c>] [--tags …] [--type …] [--writer-kind session|step]` with no
+query, answered as `hits`, `total` and, while more entries remain,
+`next_cursor`; with `q` (plus `project`, `type`, optional `tags`, optional
+`any=1`, optional `writer_kind`) it is the keyword SEARCH: exactly one
 `pf --json recall --project <p> --limit 200 [<flags>] <q>` (`--type` is sent
-only for the five non-`*` values in both modes).
+only for the five non-`*` values in both modes; `--writer-kind` only for its
+two non-empty values — polyforge#120, carried alike by every browse
+continuation).
 `GET /api/polyforge/memory/[id]` is the single-memory read: one
 `pf --json memory show <id>`. Both answer 200 JSON on every failure (pf
 absent → `pfPresent:false`, below the floor → `capable:false` + reason, a
@@ -1540,9 +1558,14 @@ answers are the in-route `isApiRequestAllowed` 403 and the 400s below.
 that is empty, starts with `-` or carries control bytes; `validateMemoryBrowse`:
 a cursor that is empty, over 1024 bytes, starts with `-` or carries control
 bytes — the cursor is opaque, never parsed or re-encoded; both: a project not
-shaped like one, a type outside the six values, a bad tag list; on the show
-route a malformed `mem_` id) answers 400 BEFORE any pf process, the version
-probe included. Project MEMBERSHIP ("one of the projects the panel offered")
+shaped like one, a type outside the six values, a bad tag list, a
+`writer_kind` outside `session|step` — polyforge#120; on the show route a
+malformed `mem_` id) answers 400 BEFORE any pf process, the version probe
+included. A LEGAL `writer_kind` on a pf below the filter's own floor answers
+its own 400 — `the writer filter needs pf 0.2.3 or newer (found …)`, naming
+the filter's floor, never the browse floor — after the probe and before the
+config read, so no recall spawn runs under a refused filter (Q4: a silently
+dropped filter is never shown as filtered results). Project MEMBERSHIP ("one of the projects the panel offered")
 is judged against the same `pf config` read that fills the dropdown — that
 read runs first and an off-list project answers 400 with no recall spawn,
 but after the config read. Zero pf processes would need a per-cwd scope
@@ -1550,8 +1573,14 @@ cache, which the spec's non-goals forbid. An unmapped cwd answers 200 with
 `mapped:false` and no recall.
 
 **Passports.** A hit keeps exactly id/type/title/visibility/status/tags/
-related/work_item_id/created_at/updated_at/content_len — the search and
-browse responses carry no `content` or `content_excerpt`. A browse page adds a
+related/work_item_id/created_at/updated_at/content_len plus the attribution —
+`author_display_name` (the joined display name, `""` when the server names
+none), `writer_kind` (`null` on a writerless row) and `writer_details`
+carrying only the known, valued keys of the daemon's two stamps (session
+`machine`/`cell`, step `work_item`/`step`/`attempt`/`model`; an unknown key,
+a null, an empty string and a nested object are dropped whole —
+polyforge#120) — the search and browse responses carry no `content` or
+`content_excerpt`. A browse page adds a
 finite non-negative `total` (the page length when pf's is missing or
 malformed) and `next_cursor` only when it passes the cursor check. The detail adds `content`, cut to
 at most 262144 UTF-8 bytes on a code-point boundary (`MEMORY_BODY_FORWARD_CAP`,
@@ -1562,7 +1591,13 @@ body's UTF-8 byte length with `content_len` and shows the notice. The floor
 is `POLYFORGE_MEMORY_MINIMUM_PF_VERSION = "2.20.12"` (the first pf whose
 `recall` browses with no query, `--after`, `--sort`); below it every face
 answers `capable:false` + reason, no memory verb is spawned and there is no
-search-only fallback. pf's stderr is the only error text (capped at 512), and no
+search-only fallback. The writer filter keeps its own, higher floor
+(`POLYFORGE_MEMORY_WRITER_FILTER_MINIMUM_PF_VERSION = "0.2.3"`, the first
+official release carrying `--writer-kind`, polyforge#119 — same-core
+prereleases and the retired 2.20.x line stay below, and an unparseable
+version is never filter-capable): the scope/browse/search answers carry
+`writerFilterSupported` beside `capable`, true only at or above it; the kind
+select waits for it while the attribution display never does. pf's stderr is the only error text (capped at 512), and no
 module or route calls `console.*` — a memory body never enters the log.
 
 **Body collapse.** A body whose `content_len` exceeds 2000 renders inside a

@@ -11,10 +11,13 @@ import {
   MEMORY_BROWSE_LIMIT,
   MEMORY_RESULT_LIMIT,
   MEMORY_TYPE_FILTERS,
+  MEMORY_WRITER_KINDS,
   type MemoryTypeFilter,
+  type MemoryWriterKind,
   type PolyforgeMemoryDetail,
   type PolyforgeMemoryHit,
   type PolyforgeMemoryPage,
+  type PolyforgeMemoryWriterDetails,
 } from "./polyforge-memory-pure";
 
 /**
@@ -29,17 +32,29 @@ import {
  *
  * The sanitizers are the only passport off this module: a hit keeps exactly
  * id/type/title/visibility/status/tags/related/work_item_id/created_at/
- * updated_at/content_len and the detail adds `content` (capped at
+ * updated_at/content_len plus the author's display name and the writer —
+ * `writer_kind` (null on a writerless row) and `writer_details` carrying
+ * only the known, valued keys of the daemon's two stamps (polyforge#107/#120)
+ * — and the detail adds `content` (capped at
  * MEMORY_BODY_FORWARD_CAP); a browse page is those hits plus a finite
  * non-negative `total` and a validated `next_cursor`. `owner_user_id`, `project_id`, `content_sha`,
- * `content_excerpt` and every unknown field never leave the server, and no
- * response carries the pf api key, user id, server address or an environment
- * value. No memory body is ever logged.
+ * `content_excerpt`, an unknown writer-details key and every unknown field
+ * never leave the server, and no response carries the pf api key, user id,
+ * server address or an environment value. No memory body is ever logged.
  */
 
 /** The first pf whose `recall` browses with no query (`--after`, `--sort`).
  *  Below it the tab shows its upgrade state, no fallback. */
 export const POLYFORGE_MEMORY_MINIMUM_PF_VERSION = "2.20.12";
+
+/** The first pf whose `recall` filters by writer (`--writer-kind`,
+ *  polyforge#119 — the first official release carrying the flag; v0.2.2
+ *  predates it, deploy/sql/v0.2.3 and docs/upgrade.md name v0.2.3). The
+ *  filter's gate is its own (Q2): a same-core prerelease and the retired
+ *  2.20.x line stay below, and an unparseable version is never capable —
+ *  the browse floor above is untouched (a pf that browses still lists,
+ *  shows details and displays the writer; only the filter control waits). */
+export const POLYFORGE_MEMORY_WRITER_FILTER_MINIMUM_PF_VERSION = "0.2.3";
 
 /** The body this module forwards, cut on a code-point boundary (Assumption 4). */
 export const MEMORY_BODY_FORWARD_CAP = 262144;
@@ -57,8 +72,8 @@ const CURSOR_MAX_BYTES = 1024;
 
 export type ValidationResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
-export { isMemoryTagList, isPolyforgeMemoryId } from "./polyforge-memory-pure";
-export type { MemoryTypeFilter, PolyforgeMemoryDetail, PolyforgeMemoryHit, PolyforgeMemoryPage } from "./polyforge-memory-pure";
+export { formatMemoryWriter, isMemoryTagList, isPolyforgeMemoryId } from "./polyforge-memory-pure";
+export type { MemoryTypeFilter, MemoryWriterKind, PolyforgeMemoryDetail, PolyforgeMemoryHit, PolyforgeMemoryPage, PolyforgeMemoryWriterDetails } from "./polyforge-memory-pure";
 
 /** A search after validation, in the CLI's own face. */
 export interface PolyforgeMemorySearchInput {
@@ -68,6 +83,8 @@ export interface PolyforgeMemorySearchInput {
   type: MemoryTypeFilter;
   tags?: string;
   any?: boolean;
+  /** polyforge#120: the writer filter (`--writer-kind session|step`). */
+  writer_kind?: MemoryWriterKind;
 }
 
 /** A browse page request after validation: no keyword. */
@@ -77,6 +94,9 @@ export interface PolyforgeMemoryBrowseInput {
   type: MemoryTypeFilter;
   tags?: string;
   after?: string;
+  /** polyforge#120: the writer filter, carried by every continuation page
+   *  of the same walk (Q5). */
+  writer_kind?: MemoryWriterKind;
 }
 
 /** pf's typed/plain failure text, bounded: never our argv, never env values. */
@@ -131,6 +151,7 @@ export function validateMemorySearch(params: {
   type: unknown;
   tags?: unknown;
   any?: unknown;
+  writer_kind?: unknown;
 }): ValidationResult<PolyforgeMemorySearchInput> {
   const cwd = params.cwd;
   if (!validCwd(cwd)) {
@@ -152,6 +173,10 @@ export function validateMemorySearch(params: {
   if (tags !== undefined && tags !== "" && !isMemoryTagList(tags)) {
     return { ok: false, error: "tags must be a comma-separated list of tag tokens" };
   }
+  const writerKind = params.writer_kind;
+  if (typeof writerKind === "string" && writerKind !== "" && !(MEMORY_WRITER_KINDS as readonly string[]).includes(writerKind)) {
+    return { ok: false, error: "writer_kind must be session or step" };
+  }
   const value: PolyforgeMemorySearchInput = {
     cwd,
     q,
@@ -160,6 +185,7 @@ export function validateMemorySearch(params: {
   };
   if (tags !== undefined && tags !== "") value.tags = tags;
   if (params.any === "1" || params.any === true) value.any = true;
+  if (writerKind) value.writer_kind = writerKind as MemoryWriterKind;
   return { ok: true, value };
 }
 
@@ -172,6 +198,7 @@ export function validateMemoryBrowse(params: {
   type: unknown;
   tags?: unknown;
   after?: unknown;
+  writer_kind?: unknown;
 }): ValidationResult<PolyforgeMemoryBrowseInput> {
   if (!validCwd(params.cwd)) return { ok: false, error: "cwd must be a directory path" };
   const project = params.project;
@@ -190,9 +217,14 @@ export function validateMemoryBrowse(params: {
   if (after !== undefined && !isMemoryBrowseCursor(after)) {
     return { ok: false, error: "after must be a browse cursor" };
   }
+  const writerKind = params.writer_kind;
+  if (typeof writerKind === "string" && writerKind !== "" && !(MEMORY_WRITER_KINDS as readonly string[]).includes(writerKind)) {
+    return { ok: false, error: "writer_kind must be session or step" };
+  }
   const value: PolyforgeMemoryBrowseInput = { cwd: params.cwd, project, type: type as MemoryTypeFilter };
   if (tags !== undefined && tags !== "") value.tags = tags;
   if (after !== undefined) value.after = after;
+  if (writerKind) value.writer_kind = writerKind as MemoryWriterKind;
   return { ok: true, value };
 }
 
@@ -204,6 +236,7 @@ export function buildBrowseRecallArgv(input: PolyforgeMemoryBrowseInput): string
   if (input.after) argv.push("--after", input.after);
   if (input.tags) argv.push("--tags", input.tags);
   if (input.type !== "*") argv.push("--type", input.type);
+  if (input.writer_kind) argv.push("--writer-kind", input.writer_kind);
   return argv;
 }
 
@@ -215,6 +248,7 @@ export function buildRecallArgv(input: PolyforgeMemorySearchInput): string[] {
   if (input.any) argv.push("--any");
   if (input.tags) argv.push("--tags", input.tags);
   if (input.type !== "*") argv.push("--type", input.type);
+  if (input.writer_kind) argv.push("--writer-kind", input.writer_kind);
   argv.push(input.q);
   return argv;
 }
@@ -234,6 +268,26 @@ function strList(value: unknown): string[] {
   return value.filter((item): item is string => typeof item === "string" && item.trim() !== "").map((item) => item.trim());
 }
 
+/** The writer's details, cut to the known keys of the daemon's two stamps
+ *  and their valued entries (a non-empty string; a finite non-negative
+ *  integer attempt): an unknown key, a null, an empty string and any
+ *  nested object are dropped whole — never a pass-through, never a guess
+ *  (polyforge#120, Q3). */
+const WRITER_DETAIL_STRING_KEYS = ["machine", "cell", "work_item", "step", "model"] as const;
+
+function sanitizeWriterDetails(raw: unknown): PolyforgeMemoryWriterDetails {
+  const details: PolyforgeMemoryWriterDetails = {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return details;
+  const row = raw as Record<string, unknown>;
+  for (const key of WRITER_DETAIL_STRING_KEYS) {
+    const value = row[key];
+    if (typeof value === "string" && value.trim()) details[key] = value.trim();
+  }
+  const attempt = row.attempt;
+  if (typeof attempt === "number" && Number.isInteger(attempt) && attempt >= 0) details.attempt = attempt;
+  return details;
+}
+
 /** One hit, cut to the allowed field set. `owner_user_id`, `project_id`,
  *  `content_sha`, `content_excerpt` and unknown fields never pass; an
  *  invalid id drops the row. */
@@ -243,6 +297,7 @@ export function sanitizeMemoryHit(raw: unknown): PolyforgeMemoryHit | null {
   const id = str(row.id);
   if (!isPolyforgeMemoryId(id)) return null;
   const workItem = str(row.work_item_id);
+  const writerKind = str(row.writer_kind);
   return {
     id,
     type: str(row.type),
@@ -255,6 +310,9 @@ export function sanitizeMemoryHit(raw: unknown): PolyforgeMemoryHit | null {
     created_at: str(row.created_at),
     updated_at: str(row.updated_at),
     content_len: num(row.content_len),
+    author_display_name: str(row.owner_display_name),
+    writer_kind: writerKind || null,
+    writer_details: sanitizeWriterDetails(row.writer_details),
   };
 }
 
@@ -311,6 +369,10 @@ export interface PolyforgeMemoryCapability {
   pfVersion: string | null;
   capable: boolean;
   reason?: string;
+  /** polyforge#120: the writer filter's own gate (Q2) — true only on a pf
+   *  at or above POLYFORGE_MEMORY_WRITER_FILTER_MINIMUM_PF_VERSION, read
+   *  from the same single presence probe as `capable` (no second spawn). */
+  writerFilterSupported: boolean;
 }
 
 /** The Memory floor gate: presence + the 2.20.12 capability floor, from the
@@ -318,17 +380,27 @@ export interface PolyforgeMemoryCapability {
 export async function readPolyforgeMemoryCapability(): Promise<PolyforgeMemoryCapability> {
   const presence = await probePolyforgeVersion();
   if (!presence.present) {
-    return { pfPresent: false, pfVersion: null, capable: false };
+    return { pfPresent: false, pfVersion: null, capable: false, writerFilterSupported: false };
   }
   if (isPolyforgeVersionBelowMinimum(presence.version, POLYFORGE_MEMORY_MINIMUM_PF_VERSION)) {
     return {
       pfPresent: true,
       pfVersion: presence.version,
       capable: false,
+      writerFilterSupported: false,
       reason: `the Memory tab needs pf ${POLYFORGE_MEMORY_MINIMUM_PF_VERSION} or newer (found ${presence.version ?? "an unparseable version"})`,
     };
   }
-  return { pfPresent: true, pfVersion: presence.version, capable: true };
+  return {
+    pfPresent: true,
+    pfVersion: presence.version,
+    capable: true,
+    writerFilterSupported: !isPolyforgeVersionBelowMinimum(
+      presence.version,
+      POLYFORGE_MEMORY_WRITER_FILTER_MINIMUM_PF_VERSION,
+      true,
+    ),
+  };
 }
 
 // ---- the project scope (D3: the config panel's cwd→workspace rule) ----

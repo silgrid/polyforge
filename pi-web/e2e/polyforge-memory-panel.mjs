@@ -16,7 +16,13 @@
 // relaxation): the tab strip reads Work | Memory | Messages (#178), the
 // Memory tab browses on open (one no-keyword `pf recall --limit 20 --sort
 // updated`) instead of showing a keyword guidance, filter changes re-issue the
-// current mode's read, and the pf floor is 2.20.12.
+// current mode's read, and the pf floor is 2.20.12. polyforge#120: every
+// row and the detail show the author's display name and the writer (a
+// missing one renders its explicit unknown placeholder), the owner and user
+// ids never render, and a writer-kind select appears only on a pf at or
+// above the filter's own 0.2.3 floor — there a kind rides the browse/search
+// argv, while a legal kind on an older pf answers the route's 400 upgrade
+// hint with no recall spawn.
 //
 //   node e2e/polyforge-memory-panel.mjs
 import assert from "node:assert/strict";
@@ -52,8 +58,9 @@ const BODY_SENTINEL = "E2E-MEMORY-BODY-SENTINEL-99";
 const PROJECT_ID = "prj_e2e_sentinel_99";
 const CONTENT_SHA = "e2econtentsha99e2econtentsha99";
 const HINT = "E2E-INTERNAL-HINT-99";
-const DROPPED = ["owner_user_id", "project_id", "content_sha", "internal_hint", USER_SENTINEL, PROJECT_ID, CONTENT_SHA, HINT];
-const SENTINELS = [KEY_SENTINEL, USER_SENTINEL, SERVER_SENTINEL, ENV_SENTINEL];
+const NESTED_SENTINEL = "E2E-NESTED-WRITER-SENTINEL-99";
+const DROPPED = ["owner_user_id", "project_id", "content_sha", "internal_hint", USER_SENTINEL, PROJECT_ID, CONTENT_SHA, HINT, NESTED_SENTINEL];
+const SENTINELS = [KEY_SENTINEL, USER_SENTINEL, SERVER_SENTINEL, ENV_SENTINEL, NESTED_SENTINEL];
 
 // ---- fixtures: real `pf --json recall` / `memory show` shapes ----
 const bytes = (s) => Buffer.byteLength(s, "utf8");
@@ -63,10 +70,21 @@ const mem = (id, type, title, updated, extra = {}) => ({ id, project_id: PROJECT
 const DOC_BODY = `${BODY_SENTINEL} decision record\n\n<script>window.__pwned=1</script>\n\n<img src=x onerror="window.__pwned=2">\n\n**E2E-BOLD** stays emphasis.\n`;
 let LONG_BODY = "# Long experience\n\n" + Array.from({ length: 120 }, (_, i) => `- line ${i + 1} of the long experience body, padded for height`).join("\n") + "\n\n";
 LONG_BODY += "x".repeat(7751 - bytes(LONG_BODY) - bytes("\nE2E-LAST-LINE")) + "\nE2E-LAST-LINE";
+// polyforge#120: DOC is a step write whose writer_details carry a hostile
+// unknown key and a nested object under a known one (both dropped by the
+// passport), EXP a session write, CAP a pre-writer row with no display name
+// (the explicit unknown placeholders).
 const DOC = mem("mem_e2eDoc000001", "doc.decision", "E2E-DOC memory panel decision", "2026-10-26T10:00:00Z", { visibility: "private",
-  tags: ["audit", "review"], related: ["mem_e2eExp000002"], work_item_id: "wi_e2eaaaa0001", content: DOC_BODY });
-const EXP = mem("mem_e2eExp000002", "experience.wrap", "E2E-EXP memory panel experience", "2026-10-25T10:00:00Z", { status: "superseded", content: LONG_BODY });
+  tags: ["audit", "review"], related: ["mem_e2eExp000002"], work_item_id: "wi_e2eaaaa0001", content: DOC_BODY,
+  owner_display_name: "E2E Ada", writer_kind: "step",
+  writer_details: { work_item: "wi_e2eaaaa0001", step: "build", attempt: 1, model: "pi:e2e", evil: NESTED_SENTINEL, machine: { deep: NESTED_SENTINEL } } });
+const EXP = mem("mem_e2eExp000002", "experience.wrap", "E2E-EXP memory panel experience", "2026-10-25T10:00:00Z", { status: "superseded", content: LONG_BODY,
+  owner_display_name: "E2E Grace", writer_kind: "session", writer_details: { machine: "m-e2e", cell: "public" } });
 const CAP = mem("mem_e2eCap000003", "fact.decision", "E2E-CAP capped memory", "2026-10-24T10:00:00Z", { content: "E2E-CAP head only" });
+// The writer strings the rows must render (the fixed key order, the valued
+// known keys only — the evil/machine intrusions above never show).
+const DOC_WRITER = "step (work_item=wi_e2eaaaa0001, step=build, attempt=1, model=pi:e2e)";
+const EXP_WRITER = "session (machine=m-e2e, cell=public)";
 const withLen = (m, len) => ({ ...m, content_len: len ?? bytes(m.content) });
 const MEMORIES = Object.fromEntries([withLen(DOC), withLen(EXP), withLen(CAP, 9000)].map((m) => [m.id, m]));
 const hit = (m) => { const { content, ...rest } = MEMORIES[m.id] ?? withLen(m); return { ...rest, content_excerpt: content.slice(0, 80) }; };
@@ -114,8 +132,10 @@ if (rest[0] === "recall" || (rest[0] === "memory" && rest[1] === "show")) {
   if (s.mode === "fail") { process.stderr.write(JSON.stringify({ code: "CORE-500", detail: "stub recall failure" }) + "\\n"); process.exit(4); }
 }
 if (rest[0] === "recall") {
-  const words = []; for (let i = 1; i < rest.length; i++) { if (["--project", "--limit", "--tags", "--type", "--sort", "--after"].includes(rest[i])) i++; else if (rest[i] !== "--any") words.push(rest[i]); }
-  const hits = s.recall[words.join(" ")] || s.recall[""];
+  const words = []; for (let i = 1; i < rest.length; i++) { if (["--project", "--limit", "--tags", "--type", "--sort", "--after", "--writer-kind"].includes(rest[i])) i++; else if (rest[i] !== "--any") words.push(rest[i]); }
+  let hits = s.recall[words.join(" ")] || s.recall[""];
+  const kind = at("--writer-kind");
+  if (kind) hits = hits.filter((h) => h.writer_kind === kind);
   out({ items: hits, total: hits.length });
 }
 if (rest[0] === "memory" && rest[1] === "show") {
@@ -146,12 +166,12 @@ const T = {
   MP3: "MP3: a project dropdown mirrors the cwd's workspace projects, a default submit spawns exactly one recall --project workbench --limit 200 <keyword>, and the three filters are opt-in",
   MP4: "MP4: a flag-shaped keyword, an off-list project, an unknown type or a malformed memory id answers 400 with no memory spawn",
   MP5: "MP5: results render newest-first by updated_at, page at 20 client-side, show the narrowing notice at 200 and the empty state at zero hits",
-  MP6: "MP6: a result row shows [type] title, updated time and tags and never an owner or user id",
+  MP6: "MP6: a result row shows [type] title, updated time, tags, the author and the writer — and never an owner or user id",
   MP7: "MP7: selecting a row spawns one memory show, renders inert sanitized markdown in place, and back restores the list without re-searching",
   MP8: "MP8: the detail shows metadata with private and non-active badges, collapses a 7751-byte body behind a toggle, copies the id and announces a capped body",
   MP9: "MP9: a work_item_id opens the Jobs watch read, a related id opens in the Memory tab, and a null work_item_id renders no link",
   MP10: "MP10: both memory routes pass only the allowed field set, degrade to 200 JSON on failure, and answer 403 to an in-route gate refusal with no spawn",
-  MP11: "MP11: below pf 2.20.12 the tab shows the upgrade-required state and spawns no recall; without pf the route degrades to 200 with no console error",
+  MP11: "MP11: below pf 2.20.12 the tab shows the upgrade-required state and spawns no recall; without pf the route degrades to 200 with no console error; the writer filter keeps its own gate — v0.2.2 hides the control and 400s a manual kind, v0.2.3 shows it and the kind rides the argv",
   MP12: "MP12: an unmapped cwd shows the unmapped state and runs no search, and no response or server log carries a sentinel or a memory body",
 };
 const failures = new Map(Object.values(T).map((title) => [title, []]));
@@ -301,19 +321,31 @@ try {
     await panel.getByRole("combobox", { name: /type/i }).selectOption("*");
     await settled((a) => !a.includes("--type"), "the all-types choice re-issues the keyword read");
     await search(page, "memory panel");
-    assert.ok(!recalls().at(-1).some((a) => ["--any", "--tags", "--type"].includes(a)), "unticking returns to the flag-less form");
+    assert.ok(!recalls().at(-1).some((a) => ["--any", "--tags", "--type", "--writer-kind"].includes(a)), "unticking returns to the flag-less form");
+    assert.equal(await panel.getByRole("combobox", { name: /writer kind|writer filter/i }).count(), 0,
+      "on a pf below the filter's own floor the kind control stays hidden (Q2 — the browse floor it is not)");
   }));
 
   await check(T.MP4, "MP4 refused before spawn", async () => {
     seed();
     for (const [label, path] of [["flag keyword", searchPath("--limit 1")], ["off-list project", searchPath("memory", { project: "not-offered" })],
       ["unknown type", searchPath("memory", { type: "bogus.*" })], ["traversal id", `/api/polyforge/memory/${encodeURIComponent("../../etc/passwd")}`],
-      ["blank id", `/api/polyforge/memory/${encodeURIComponent("mem_   ")}`]]) {
+      ["blank id", `/api/polyforge/memory/${encodeURIComponent("mem_   ")}`],
+      ["illegal writer kind", searchPath("memory", { writer_kind: "human" })],
+      ["legal writer kind on a filter-incapable pf", searchPath("memory", { writer_kind: "session" })]]) {
       const r = await get(path);
       assert.equal(r.status, 400, `${label} must answer 400, got ${r.status}`);
       assert.ok(json(r.text), `${label} must answer JSON`);
       assert.equal(memoryVerbs(), 0, `${label} must spawn no recall / memory show`);
+      if (label.startsWith("legal writer kind")) {
+        assert.match(r.text, /0\.2\.3/, "the refusal must name the filter's own floor (Q4)");
+      }
     }
+    // A browse face kind meets the same two refusals.
+    const browseKind = await get(`/api/polyforge/memory?${new URLSearchParams({ cwd: ws1, project: "workbench", type: "*", writer_kind: "step" })}`);
+    assert.equal(browseKind.status, 400, "a browse writer kind on a filter-incapable pf must answer 400");
+    assert.match(browseKind.text, /0\.2\.3/, "the browse refusal names the floor too");
+    assert.equal(memoryVerbs(), 0, "the refused browse spawns nothing");
   });
 
   await check(T.MP5, "MP5 order, paging, notice, empty", () => withPage({}, async (page) => {
@@ -340,9 +372,11 @@ try {
     seed(); const panel = await memoryTab(page);
     await search(page, "memory panel"); await panel.getByText(DOC.title).waitFor();
     const text = await panel.innerText();
-    for (const want of ["doc.decision", DOC.title, "audit", "review", "2026"]) assert.ok(text.includes(want), `the row must show ${want}`);
+    for (const want of ["doc.decision", DOC.title, "audit", "review", "2026",
+      "E2E Ada", DOC_WRITER, "E2E Grace", EXP_WRITER]) assert.ok(text.includes(want), `the row must show ${JSON.stringify(want)}`);
     const html = await panel.innerHTML();
-    assert.ok(!html.includes(USER_SENTINEL) && !html.includes("owner_user_id") && !/author/i.test(text), "no author / owner / user id may render, hover titles included");
+    assert.ok(!html.includes(USER_SENTINEL) && !html.includes("owner_user_id"), "no owner or user id may render, hover titles included");
+    assert.ok(!html.includes(NESTED_SENTINEL), "an unknown writer-details key never reaches the DOM");
   }));
 
   await check(T.MP7, "MP7 show, inert markdown, back", () => withPage({}, async (page) => {
@@ -365,7 +399,8 @@ try {
     seed(); const panel = await memoryTab(page);
     await search(page, "memory panel"); await panel.getByText(DOC.title).click(); await panel.getByText("E2E-BOLD").first().waitFor();
     const text = await panel.innerText();
-    for (const want of ["doc.decision", "private", "active", "audit", "review", EXP.id, "wi_e2eaaaa0001"]) assert.ok(text.includes(want), `the detail must show ${want}`);
+    for (const want of ["doc.decision", "private", "active", "audit", "review", EXP.id, "wi_e2eaaaa0001",
+      "E2E Ada", DOC_WRITER]) assert.ok(text.includes(want), `the detail must show ${want}`);
     for (const day of [/2026-10-20|10\/20\/2026|Oct\w* 20/, /2026-10-26|10\/26\/2026|Oct\w* 26/]) assert.match(text, day, "the detail must show created and updated");
     assert.ok(!/inactive|non-active/i.test(text), "an active status carries no non-active badge");
     assert.equal(await panel.getByRole("button", { name: /expand|show more|展开/i }).count(), 0, "a short body has no expand control");
@@ -384,7 +419,10 @@ try {
     assert.equal(await clipped(panel, "E2E-LAST-LINE"), true, "collapsing again must restore the clipped view");
     await panel.getByRole("button", { name: /back|←/i }).first().click();
     await search(page, "capped"); await panel.getByText(CAP.title).click(); await panel.getByText("E2E-CAP head only").waitFor();
-    assert.match(await panel.innerText(), /truncat/i, "a body shorter than content_len must carry a truncation notice");
+    const capText = await panel.innerText();
+    assert.match(capText, /truncat/i, "a body shorter than content_len must carry a truncation notice");
+    assert.match(capText, /unknown author/i, "a row with no display name shows the explicit unknown-author placeholder (Q3)");
+    assert.match(capText, /unknown writer/i, "a pre-writer row shows the explicit unknown-writer placeholder (Q3)");
   }));
 
   await check(T.MP9, "MP9 reference links", () => withPage({}, async (page) => {
@@ -412,6 +450,8 @@ try {
     const found = await get(searchPath("memory panel")); const shown = await get(`/api/polyforge/memory/${DOC.id}`);
     assert.equal(found.status, 200, `search answered ${found.status}`); assert.equal(shown.status, 200, `show answered ${shown.status}`);
     assert.ok(found.text.includes(DOC.id) && shown.text.includes("E2E-BOLD"), "both routes must carry the memory");
+    assert.ok(found.text.includes("E2E Ada") && found.text.includes("writer_kind"), "the search answer carries the attribution the passport now passes");
+    assert.ok(shown.text.includes("E2E Ada") && shown.text.includes("writer_kind"), "the show answer carries the attribution the passport now passes");
     for (const r of [found, shown]) for (const word of DROPPED) assert.ok(!r.text.includes(word), `a response carries the dropped ${word}`);
     assert.ok(!hasKey(json(found.text), ["content", "content_excerpt"]) && !found.text.includes(BODY_SENTINEL), "the search carries no content field");
     for (const mode of ["down", "fail"]) {
@@ -460,6 +500,40 @@ try {
     assert.ok(json(r.text) && /pfPresent"\s*:\s*false|not installed|absent/i.test(r.text), "without pf the body must carry the not-installed reason");
     await withPage({}, async () => delay(1500));
     assert.deepEqual(errors.filter((l) => !/favicon/i.test(l)), [], "without pf no browser console error may be raised");
+  });
+
+  await check(T.MP11, "MP11 the writer filter keeps its own gate: v0.2.2 hides the control and 400s a manual kind; v0.2.3 shows it and the kind rides the argv", async () => {
+    await h.stop(); seed({ version: "v0.2.2" }); await startServer("v022");
+    const refused = await get(searchPath("memory", { writer_kind: "step" }));
+    assert.equal(refused.status, 400, `a legal kind on v0.2.2 must answer 400, got ${refused.status}`);
+    assert.match(refused.text, /0\.2\.3/, "the refusal names the filter's own floor, never the browse floor");
+    await withPage({}, async (page) => {
+      const panel = await memoryTab(page);
+      await panel.getByText(DOC.title).waitFor({ timeout: 10_000 });
+      assert.equal(await panel.getByRole("combobox", { name: /writer kind|writer filter/i }).count(), 0,
+        "v0.2.2 keeps the tab (its browse floor is met) without the kind control");
+      const text = await panel.innerText();
+      assert.ok(text.includes("E2E Ada") && text.includes(DOC_WRITER), "the attribution display is never gated by the filter");
+    });
+    await h.stop(); seed({ version: "v0.2.3" }); await startServer("v023");
+    await withPage({}, async (page) => {
+      const panel = await memoryTab(page);
+      const kindSelect = panel.getByRole("combobox", { name: /writer kind|writer filter/i }).first();
+      await kindSelect.waitFor({ timeout: 10_000 });
+      assert.ok(!recalls().at(-1).includes("--writer-kind"), "the all-writers default browse sends no flag");
+      await kindSelect.selectOption("session");
+      await settled((a) => argAfter(a, "--writer-kind") === "session", "a session kind re-issues the browse read carrying the flag");
+      await panel.getByText(EXP.title).waitFor({ timeout: 10_000 });
+      const sessionText = await panel.innerText();
+      assert.ok(sessionText.includes(EXP_WRITER) && !sessionText.includes(DOC.title), "the filtered browse shows only the session rows (the stub filters like the aihub)");
+      await kindSelect.selectOption("step");
+      await settled((a) => argAfter(a, "--writer-kind") === "step" && !a.includes("--after"), "a kind switch re-reads page 1 — the cursor resets (Q5)");
+      await panel.getByText(DOC.title).waitFor({ timeout: 10_000 });
+      await search(page, "memory panel", recalls().length + 1);
+      assert.equal(argAfter(recalls().at(-1), "--writer-kind"), "step", "the keyword search carries the same kind (Q5)");
+      await panel.getByText(DOC.title).first().waitFor({ timeout: 10_000 });
+      assert.ok(!(await panel.innerText()).includes(EXP.title), "the step-filtered search leaves the session row out");
+    });
   });
 
   await check(T.MP12, "MP12 sentinels and bodies stay server-side", async () => {
