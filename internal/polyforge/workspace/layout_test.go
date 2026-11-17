@@ -1,8 +1,10 @@
 package workspace
 
-// layout_test.go: the runtime-artifact convention (polyforge#177) —
-// Init's idempotent notes-file upsert (AGENTS.md, else CLAUDE.md), the stray-entry classification
-// and the scratch staleness/prune rules. Temp dirs only.
+// layout_test.go: the runtime-artifact convention (polyforge#177,
+// #121) — Init's idempotent notes-file upsert (AGENTS.md, else
+// CLAUDE.md) and category creation, the stray-entry classification and
+// the scratch category layout: retention, strays and prune rules. Temp
+// dirs only.
 
 import (
 	"errors"
@@ -48,8 +50,14 @@ func TestInitFreshWorkspace(t *testing.T) {
 	if st, err := os.Stat(filepath.Join(ws, ScratchDir)); err != nil || !st.IsDir() {
 		t.Fatalf("scratch/ not created: %v", err)
 	}
+	// the fixed categories come with it
+	for _, cat := range []string{ScratchRawDir, ScratchTasksDir, ScratchSessionsDir} {
+		if st, err := os.Stat(filepath.Join(ws, ScratchDir, cat)); err != nil || !st.IsDir() {
+			t.Fatalf("scratch/%s not created: %v", cat, err)
+		}
+	}
 	text := readFile(t, filepath.Join(ws, AgentsNotes))
-	for _, want := range []string{managedOpen, managedClose, layoutOpen, layoutClose, "doc.design", "doc.review", "doc.decision", "doc.audit", "experience.*", "fact.*", "scratch/", ".repo/", "capsules/", ".polyforge/", "14 days", "--prune-scratch"} {
+	for _, want := range []string{managedOpen, managedClose, layoutOpen, layoutClose, "doc.design", "doc.review", "doc.decision", "doc.audit", "experience.*", "fact.*", "scratch/", ".repo/", "capsules/", ".polyforge/", "raw/", "tasks/", "sessions/", "3 days", "14 days", "agents/<id>/", "--prune-scratch"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("AGENTS.md lacks %q:\n%s", want, text)
 		}
@@ -131,6 +139,19 @@ func TestInitRefusesBrokenMarkersAndScratchFile(t *testing.T) {
 	if _, err := Init(ws2); err == nil {
 		t.Fatal("init accepted a scratch file in place of scratch/")
 	}
+	// a category name occupied by a file (or a symlink) is refused too:
+	// pf never follows it and never silently moves it away
+	ws3 := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(ws3, ScratchDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(ws3, ScratchDir, ScratchTasksDir), "a file")
+	if _, err := Init(ws3); err == nil || !strings.Contains(err.Error(), ScratchTasksDir) {
+		t.Fatalf("init accepted a file in place of scratch/%s: %v", ScratchTasksDir, err)
+	}
+	if _, err := os.Stat(filepath.Join(ws3, ScratchDir, ScratchTasksDir)); err != nil {
+		t.Fatalf("init moved the file away: %v", err)
+	}
 }
 
 func TestStrayEntries(t *testing.T) {
@@ -178,99 +199,263 @@ func mtimeOnly(t *testing.T) {
 	t.Cleanup(func() { ChangeTime = orig })
 }
 
-func TestStaleScratchAndPrune(t *testing.T) {
-	mtimeOnly(t)
-	ws := t.TempDir()
-	now := time.Now()
-	old := now.Add(-15 * 24 * time.Hour)
-	set := func(rel string, at time.Time) {
-		t.Helper()
-		if err := os.Chtimes(filepath.Join(ws, ScratchDir, rel), at, at); err != nil {
+// scratchBatch writes one batch directory under ws/scratch/<name> with a
+// file in it and backdates every path's mtime to at (the judge is mtime-
+// only in these tests — mtimeOnly below).
+func scratchBatch(t *testing.T, ws, name string, at time.Time) {
+	t.Helper()
+	p := filepath.Join(ws, ScratchDir, name)
+	writeFile(t, filepath.Join(p, "data.bin"), "x")
+	for _, q := range []string{filepath.Join(p, "data.bin"), p} {
+		if err := os.Chtimes(q, at, at); err != nil {
 			t.Fatal(err)
 		}
 	}
-	writeFile(t, filepath.Join(ws, ScratchDir, "old.log"), "x")
-	writeFile(t, filepath.Join(ws, ScratchDir, "fresh.log"), "x")
-	writeFile(t, filepath.Join(ws, ScratchDir, "olddir", "a.txt"), "x")
-	writeFile(t, filepath.Join(ws, ScratchDir, "mixed", "old.txt"), "x")
-	writeFile(t, filepath.Join(ws, ScratchDir, "mixed", "new.txt"), "x")
-	set("old.log", old)
-	set("olddir/a.txt", old)
-	set("olddir", old)
-	set("mixed/old.txt", old)
-	set("mixed", old) // the dir is old, but new.txt under it is fresh
-	rep, err := Scratch(ws, now, false)
-	if err != nil {
+}
+
+// TestScratchCategoryClean: a tree that keeps the layout reports clean —
+// one fresh batch per category, empty category directories (never stale,
+// never a prune target), and a workspace without scratch/.
+func TestScratchCategoryClean(t *testing.T) {
+	now := time.Now()
+	ws := t.TempDir()
+	if _, err := Init(ws); err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"old.log", "olddir"}; !reflect.DeepEqual(rep.Stale, want) || len(rep.Skipped) != 0 {
-		t.Fatalf("stale = %+v, want %v", rep, want)
+	for _, cat := range []string{ScratchRawDir, ScratchTasksDir, ScratchSessionsDir} {
+		scratchBatch(t, ws, cat+"/b1", now.Add(-time.Hour))
+	}
+	for _, prune := range []bool{false, true} {
+		rep, err := Scratch(ws, now, prune)
+		if err != nil || len(rep.Stale) != 0 || len(rep.Stray) != 0 || len(rep.Skipped) != 0 {
+			t.Fatalf("a conforming tree must report clean (prune=%v): %+v %v", prune, rep, err)
+		}
+	}
+	// empty categories and no scratch/ at all are clean too
+	ws2 := t.TempDir()
+	for _, cat := range []string{ScratchRawDir, ScratchTasksDir, ScratchSessionsDir} {
+		if err := os.MkdirAll(filepath.Join(ws2, ScratchDir, cat), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if rep, err := Scratch(ws2, now, false); err != nil || len(rep.Stale) != 0 || len(rep.Stray) != 0 {
+		t.Fatalf("empty categories must be clean: %+v %v", rep, err)
+	}
+	if rep, err := Scratch(t.TempDir(), now, false); err != nil || rep.Stale != nil || rep.Stray != nil {
+		t.Fatalf("no scratch/: %+v %v", rep, err)
+	}
+}
+
+// TestScratchCategoryStrays: everything outside the categories — a loose
+// top-level file, an unknown top-level directory, a category name
+// occupied by a file, a loose file inside a category — is listed one by
+// one, at any age, and never removed, not even with prune.
+func TestScratchCategoryStrays(t *testing.T) {
+	mtimeOnly(t)
+	ws := t.TempDir()
+	now := time.Now()
+	old := now.Add(-30 * 24 * time.Hour)
+	writeFile(t, filepath.Join(ws, ScratchDir, "loose.log"), "x")
+	writeFile(t, filepath.Join(ws, ScratchDir, "unknown-dir", "keep.txt"), "x")
+	writeFile(t, filepath.Join(ws, ScratchDir, ScratchTasksDir), "a file")
+	writeFile(t, filepath.Join(ws, ScratchDir, ScratchRawDir, "notes.log"), "x")
+	for _, p := range []string{
+		filepath.Join(ws, ScratchDir, "loose.log"),
+		filepath.Join(ws, ScratchDir, "unknown-dir"),
+		filepath.Join(ws, ScratchDir, "unknown-dir", "keep.txt"),
+		filepath.Join(ws, ScratchDir, ScratchTasksDir),
+		filepath.Join(ws, ScratchDir, ScratchRawDir, "notes.log"),
+	} {
+		if err := os.Chtimes(p, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []string{"loose.log", "raw/notes.log", "tasks", "unknown-dir"}
+	rep, err := Scratch(ws, now, false)
+	if err != nil || !reflect.DeepEqual(rep.Stray, want) || len(rep.Stale) != 0 || len(rep.Skipped) != 0 {
+		t.Fatalf("strays = %+v, want %v (%v)", rep, want, err)
+	}
+	// prune never removes a stray, however old
+	rep, err = Scratch(ws, now, true)
+	if err != nil || !reflect.DeepEqual(rep.Stray, want) || len(rep.Stale) != 0 {
+		t.Fatalf("prune must not touch strays: %+v %v", rep, err)
+	}
+	for _, p := range []string{
+		filepath.Join(ws, ScratchDir, "loose.log"),
+		filepath.Join(ws, ScratchDir, "unknown-dir", "keep.txt"),
+		filepath.Join(ws, ScratchDir, ScratchTasksDir),
+		filepath.Join(ws, ScratchDir, ScratchRawDir, "notes.log"),
+	} {
+		if _, err := os.Lstat(p); err != nil {
+			t.Fatalf("prune removed the stray %s: %v", p, err)
+		}
+	}
+}
+
+// TestScratchCategoryRetention: each category judges its batches by its
+// own retention — raw/ 3 days, tasks/ and sessions/ 14 days — by the
+// newest change of the whole batch subtree; a batch exactly at the
+// boundary stays; prune removes only the stale batches, keeps the
+// category roots, is idempotent, and never deletes a just-arrived
+// download that keeps an old mtime (its ctime counts).
+func TestScratchCategoryRetention(t *testing.T) {
+	mtimeOnly(t)
+	ws := t.TempDir()
+	now := time.Now()
+	scratchBatch(t, ws, ScratchRawDir+"/old-batch", now.Add(-4*24*time.Hour))   // past raw's 3 days
+	scratchBatch(t, ws, ScratchRawDir+"/new-batch", now.Add(-2*24*time.Hour))   // inside
+	scratchBatch(t, ws, ScratchRawDir+"/edge-batch", now.Add(-RawMaxAge))       // exactly at the boundary: kept
+	scratchBatch(t, ws, ScratchTasksDir+"/old-b", now.Add(-15*24*time.Hour))    // past 14 days
+	scratchBatch(t, ws, ScratchTasksDir+"/new-b", now.Add(-13*24*time.Hour))    // inside
+	scratchBatch(t, ws, ScratchSessionsDir+"/old-b", now.Add(-15*24*time.Hour)) // past 14 days
+	scratchBatch(t, ws, ScratchSessionsDir+"/new-b", now.Add(-13*24*time.Hour)) // inside
+	// a batch whose subtree has one fresh descendant is not stale
+	scratchBatch(t, ws, ScratchRawDir+"/mixed-b", now.Add(-10*24*time.Hour))
+	writeFile(t, filepath.Join(ws, ScratchDir, ScratchRawDir, "mixed-b", "new.txt"), "x")
+	if err := os.Chtimes(filepath.Join(ws, ScratchDir, ScratchRawDir, "mixed-b", "new.txt"), now.Add(-time.Hour), now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"raw/old-batch", "sessions/old-b", "tasks/old-b"}
+	rep, err := Scratch(ws, now, false)
+	if err != nil || !reflect.DeepEqual(rep.Stale, want) || len(rep.Stray) != 0 || len(rep.Skipped) != 0 {
+		t.Fatalf("stale = %+v, want %v (%v)", rep, want, err)
 	}
 	pruned, err := Scratch(ws, now, true)
-	if err != nil || !reflect.DeepEqual(pruned.Stale, rep.Stale) {
-		t.Fatalf("prune = %+v, %v", pruned, err)
+	if err != nil || !reflect.DeepEqual(pruned.Stale, want) {
+		t.Fatalf("prune = %+v, want %v (%v)", pruned, want, err)
 	}
 	left, _ := os.ReadDir(filepath.Join(ws, ScratchDir))
 	var names []string
 	for _, e := range left {
 		names = append(names, e.Name())
 	}
-	if want := []string{"fresh.log", "mixed"}; !reflect.DeepEqual(names, want) {
-		t.Fatalf("scratch after prune = %v, want %v", names, want)
+	if !reflect.DeepEqual(names, []string{ScratchRawDir, ScratchSessionsDir, ScratchTasksDir}) {
+		t.Fatalf("scratch after prune = %v: the category roots must stay", names)
 	}
-	if rep, err := Scratch(t.TempDir(), now, false); err != nil || rep.Stale != nil {
-		t.Fatalf("no scratch/: %+v %v", rep, err)
+	for _, keep := range []string{
+		ScratchRawDir + "/new-batch", ScratchRawDir + "/edge-batch", ScratchRawDir + "/mixed-b",
+		ScratchTasksDir + "/new-b", ScratchSessionsDir + "/new-b",
+	} {
+		if _, err := os.Stat(filepath.Join(ws, ScratchDir, keep)); err != nil {
+			t.Fatalf("prune removed %s: %v", keep, err)
+		}
+	}
+	for _, gone := range []string{ScratchRawDir + "/old-batch", ScratchTasksDir + "/old-b", ScratchSessionsDir + "/old-b"} {
+		if _, err := os.Lstat(filepath.Join(ws, ScratchDir, gone)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("prune kept %s: %v", gone, err)
+		}
+	}
+	// a second prune finds nothing
+	if rep, err := Scratch(ws, now, true); err != nil || len(rep.Stale) != 0 {
+		t.Fatalf("a second prune must be a no-op: %+v %v", rep, err)
+	}
+	// a download keeping an old mtime but arriving now (its ctime) is
+	// not stale on arrival, in every category
+	ws2 := t.TempDir()
+	backdated := time.Now().Add(-30 * 24 * time.Hour)
+	scratchBatch(t, ws2, ScratchRawDir+"/arrival", backdated)
+	scratchBatch(t, ws2, ScratchTasksDir+"/arrival", backdated)
+	for _, prune := range []bool{false, true} {
+		rep, err := Scratch(ws2, time.Now(), prune)
+		if err != nil || len(rep.Stale) != 0 {
+			t.Fatalf("a backdated-mtime arrival is stale (prune=%v): %+v %v", prune, rep, err)
+		}
+	}
+	for _, keep := range []string{ScratchRawDir + "/arrival", ScratchTasksDir + "/arrival"} {
+		if _, err := os.Stat(filepath.Join(ws2, ScratchDir, keep)); err != nil {
+			t.Fatalf("prune removed a fresh arrival: %v", err)
+		}
 	}
 }
 
-// TestScratchCountsCtime: a download or an extracted archive keeps an
-// old mtime but arrives now (its ctime) — it is not stale on arrival.
-func TestScratchCountsCtime(t *testing.T) {
-	ws := t.TempDir()
-	old := time.Now().Add(-30 * 24 * time.Hour)
-	writeFile(t, filepath.Join(ws, ScratchDir, "download.tar"), "x")
-	if err := os.Chtimes(filepath.Join(ws, ScratchDir, "download.tar"), old, old); err != nil {
-		t.Fatal(err)
-	}
-	rep, err := Scratch(ws, time.Now(), false)
-	if err != nil || len(rep.Stale) != 0 {
-		t.Fatalf("a backdated-mtime arrival is stale: %+v %v", rep, err)
-	}
-	rep, err = Scratch(ws, time.Now(), true)
-	if err != nil || len(rep.Stale) != 0 {
-		t.Fatalf("prune removed a fresh arrival: %+v %v", rep, err)
-	}
-	if _, err := os.Stat(filepath.Join(ws, ScratchDir, "download.tar")); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// TestScratchSymlinkNeverFollowed: a scratch that is a symlink is never
-// scanned or pruned — its target may be anything ($HOME, /).
-func TestScratchSymlinkNeverFollowed(t *testing.T) {
+// TestScratchCategorySymlinks: a scratch that is a symlink is refused; a
+// category replaced by a symlink and a batch that is a symlink are
+// strays, never followed, never removed — and the race a replacement
+// between the report and the prune run loses to the re-scan: the outside
+// target keeps everything.
+func TestScratchCategorySymlinks(t *testing.T) {
 	mtimeOnly(t)
+	now := time.Now()
+	// scratch itself a symlink: never scanned or pruned — its target may
+	// be anything ($HOME, /)
 	ws := t.TempDir()
 	target := t.TempDir()
-	old := time.Now().Add(-30 * 24 * time.Hour)
 	precious := filepath.Join(target, "precious")
 	writeFile(t, precious, "x")
-	if err := os.Chtimes(precious, old, old); err != nil {
+	if err := os.Chtimes(precious, now.Add(-30*24*time.Hour), now.Add(-30*24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(target, filepath.Join(ws, ScratchDir)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Scratch(ws, time.Now(), false); err == nil || !strings.Contains(err.Error(), "not a plain directory") {
-		t.Fatalf("Scratch(prune=false) on a symlinked scratch: %v", err)
-	}
-	if rep, err := Scratch(ws, time.Now(), true); err == nil || len(rep.Stale) != 0 {
-		t.Fatalf("Scratch(prune=true) on a symlinked scratch: %+v %v", rep, err)
+	for _, prune := range []bool{false, true} {
+		if _, err := Scratch(ws, now, prune); err == nil || !strings.Contains(err.Error(), "not a plain directory") {
+			t.Fatalf("Scratch(prune=%v) on a symlinked scratch: %v", prune, err)
+		}
 	}
 	if _, err := os.Stat(precious); err != nil {
 		t.Fatalf("the symlink target lost its file: %v", err)
 	}
 	if _, err := Init(ws); err == nil {
 		t.Fatal("init accepted a symlinked scratch")
+	}
+	// a category replaced by a symlink: a stray, never followed, never
+	// removed — the target outside keeps its old files
+	ws2 := t.TempDir()
+	outside := t.TempDir()
+	writeFile(t, filepath.Join(outside, "keep.txt"), "x")
+	if err := os.Chtimes(filepath.Join(outside, "keep.txt"), now.Add(-30*24*time.Hour), now.Add(-30*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	scratchBatch(t, ws2, ScratchRawDir+"/fresh-b", now.Add(-time.Hour))
+	if err := os.Symlink(outside, filepath.Join(ws2, ScratchDir, ScratchTasksDir)); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := Scratch(ws2, now, true)
+	if err != nil || !reflect.DeepEqual(rep.Stray, []string{"tasks"}) || len(rep.Stale) != 0 {
+		t.Fatalf("a symlinked category must be a stray, never scanned: %+v %v", rep, err)
+	}
+	if fi, err := os.Lstat(filepath.Join(ws2, ScratchDir, ScratchTasksDir)); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("prune removed or replaced the category symlink: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "keep.txt")); err != nil {
+		t.Fatalf("prune followed the category symlink: %v", err)
+	}
+	// a batch that is a symlink: a stray, never pruned
+	ws3 := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(ws3, ScratchDir, ScratchRawDir, "link-batch")); err != nil {
+		t.Fatal(err)
+	}
+	rep, err = Scratch(ws3, now, true)
+	if err != nil || !reflect.DeepEqual(rep.Stray, []string{"raw/link-batch"}) || len(rep.Stale) != 0 {
+		t.Fatalf("a symlink batch must be a stray, never pruned: %+v %v", rep, err)
+	}
+	if fi, err := os.Lstat(filepath.Join(ws3, ScratchDir, ScratchRawDir, "link-batch")); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("prune removed the batch symlink: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "keep.txt")); err != nil {
+		t.Fatalf("prune followed the batch symlink: %v", err)
+	}
+	// the race: the report calls a raw batch stale; before the prune run
+	// the batch is replaced by a symlink to an outside directory — the
+	// prune re-scans, sees a symlink, refuses; the outside keeps its files
+	ws4 := t.TempDir()
+	scratchBatch(t, ws4, ScratchRawDir+"/stale-batch", now.Add(-30*24*time.Hour))
+	if rep, err := Scratch(ws4, now, false); err != nil || !reflect.DeepEqual(rep.Stale, []string{"raw/stale-batch"}) {
+		t.Fatalf("the report must call the batch stale: %+v %v", rep, err)
+	}
+	if err := os.RemoveAll(filepath.Join(ws4, ScratchDir, ScratchRawDir, "stale-batch")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(ws4, ScratchDir, ScratchRawDir, "stale-batch")); err != nil {
+		t.Fatal(err)
+	}
+	rep, err = Scratch(ws4, now, true)
+	if err != nil || len(rep.Stale) != 0 || !reflect.DeepEqual(rep.Stray, []string{"raw/stale-batch"}) {
+		t.Fatalf("the prune run must re-scan and refuse the replacement: %+v %v", rep, err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "keep.txt")); err != nil {
+		t.Fatalf("the prune deleted through the replacement: %v", err)
 	}
 }
 
