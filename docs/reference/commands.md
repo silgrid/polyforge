@@ -150,7 +150,16 @@ starts from the ticket as it stands; a stopped analysis leaves a comment
 naming the cause and the last item written. `pf file analysis confirm`
 (`pf file analysis confirm <id>`) strips the unconfirmed marker — the
 owner's word that the draft is the ticket's analysis — and the ticket
-becomes claimable.
+becomes claimable. The prompt the task runs on carries the component
+division of the ticket's repositories: the daemon runs
+`workflows/_shared/scripts/components.py` (the shared scripts of its
+lane checkout) over the repositories the ticket will clone — its frozen
+repo_inventory, else the project's every repository — at the mapped
+workspace's `.repo/<name>` clones, bounded, and attaches the tool's
+line report between the template and the ticket; a missing clone, a
+failing or stuck run answers one fallback line and the dispatch
+proceeds, the template's default thresholds applying without the
+division.
 
 A third mark is lane-independent (polyforge#77): a bundle-bound parent waits
 for each child that is not wrapped (aihub's `waiting_for` entries with
@@ -1087,6 +1096,16 @@ hold no credential.
   scoped-ready — its manifests and `.polyforge/verify-scope.conf`, read
   only. Exit 0 ready, 1 not ready (each problem named), 2 when no clone is
   named or one is not a git clone.
+- `components.py --repo DIR [--rev REV] [--json]` (the workflow's tool) is
+  the epic-upgrade analysis's component division: each named clone's
+  origin/HEAD (else HEAD) commit tree — never the work tree, never a
+  fetch — read for the conf's `component=` declarations and `epic_*`
+  thresholds and the generic division, answered as one block per
+  repository (a line report, or schema 1 with `--json`): the components
+  with their path ranges and sources, the commit read, the effective
+  thresholds with their sources, and a per-repository error entry when a
+  clone cannot be read. Exit 0 whatever an entry says (each named), 2
+  when no `--repo` is named.
 
 The verification-scope engine is the workflow's too:
 `workflows/_shared/scripts/verify-scope`, with its dependency-audit helper
