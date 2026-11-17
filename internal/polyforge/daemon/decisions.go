@@ -46,6 +46,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -488,17 +489,56 @@ func (f *decisionFeed) RecordTask(profile string, t task.Task) error {
 }
 
 // resolveTaskTicketLocked marks the profile's unresolved task entries of
-// ticket wi resolved (the caller persists): the ticket's own story moved
-// on — the rerun completed, or a newer terminal stands in for the older
-// ones. Another Cell's entries of the same ticket are that Cell's.
-func (f *decisionFeed) resolveTaskTicketLocked(profile, wi string) {
+// ticket wi resolved, reporting a change (the caller persists): the
+// ticket's own story moved on — the rerun completed, a newer terminal
+// stands in for the older ones, or the reconcile learned the ticket ended.
+// Another Cell's entries of the same ticket are that Cell's.
+func (f *decisionFeed) resolveTaskTicketLocked(profile, wi string) bool {
+	changed := false
 	for i := range f.doc.Entries {
 		e := &f.doc.Entries[i]
 		if e.Kind != protocol.DecisionTask || e.Profile != profile || e.WI != wi || e.Resolved {
 			continue
 		}
 		e.Resolved = true
+		changed = true
 	}
+	return changed
+}
+
+// resolveTaskTicket resolves the profile's open task entries of ticket wi
+// and persists on a change — the reconcile loop's close.
+func (f *decisionFeed) resolveTaskTicket(profile, wi string) error {
+	profile = normProfile(profile)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.resolveTaskTicketLocked(profile, wi) {
+		return nil
+	}
+	return f.persistLocked()
+}
+
+// taskTicketsFor answers the Cell's open task entries' ticket ids, sorted
+// and unique — the reconcile loop's task set, its own set beside trackedFor
+// (a task's ticket is never a tracked work item).
+func (f *decisionFeed) taskTicketsFor(profile string) []string {
+	profile = normProfile(profile)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	seen := map[string]bool{}
+	for i := len(f.doc.Entries) - 1; i >= 0; i-- {
+		e := f.doc.Entries[i]
+		if e.Kind != protocol.DecisionTask || e.Profile != profile || e.WI == "" || seen[e.WI] {
+			continue
+		}
+		seen[e.WI] = true
+		if e.Open() {
+			out = append(out, e.WI)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // List answers the feed newest first with its open count.
@@ -636,7 +676,9 @@ func (d *Daemon) recordTask(t task.Task) {
 
 // reconcileDecisions re-reads the aihub status of this Cell's tracked
 // work items (an unresolved blocked or paused state with no running local
-// job): a final status is recorded, a work item that runs again resolves.
+// job) and of its open task entries' tickets: a final status is recorded
+// (a work item) or resolves the ticket's entries (a task), and a work item
+// that runs again resolves.
 func (d *Daemon) reconcileDecisions() {
 	if d.feed == nil || d.hub == nil {
 		return
@@ -656,6 +698,26 @@ func (d *Daemon) reconcileDecisions() {
 		} else {
 			// queued, running: the work item moves again
 			_ = d.feed.resolve(d.profile(), wi, nil)
+		}
+	}
+	// the Cell's open task entries' tickets: an entry the ticket no longer
+	// needs resolves — the ticket ended for good (or is gone), whatever its
+	// Cell recorded; anything else (queued, running, blocked, a CORE-403, a
+	// hub that cannot answer) keeps the entry for the next round
+	for _, wi := range d.feed.taskTicketsFor(d.profile()) {
+		item, err := d.hub.GetWorkItem(wi)
+		if err != nil {
+			var ae *api.Error
+			if errors.As(err, &ae) && ae.Code == api.ErrCoreNotFound {
+				_ = d.feed.resolveTaskTicket(d.profile(), wi) // the ticket is gone
+			}
+			continue
+		}
+		if item == nil {
+			continue
+		}
+		if s, ok := watcher.StatusDecision(item.Status); ok && s.Final {
+			_ = d.feed.resolveTaskTicket(d.profile(), wi)
 		}
 	}
 }
