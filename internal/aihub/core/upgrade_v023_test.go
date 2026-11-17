@@ -144,15 +144,15 @@ func TestW107Upgrade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open fresh: %v", err)
 	}
-	if !rawColumnExists(t, fresh, "memories", "writer_kind") ||
-		!rawColumnExists(t, fresh, "memories", "writer_details") {
+	if !rawColumnExists(t, fresh.DB, "memories", "writer_kind") ||
+		!rawColumnExists(t, fresh.DB, "memories", "writer_details") {
 		t.Fatal("a fresh database lacks the writer columns — the DDL must install writer_kind and writer_details")
 	}
 	if err := fresh.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	dataDir, raw := w107V022ShapeDB(t)
+	_, raw := w107V022ShapeDB(t)
 
 	// The probe: apply on the v0.2.2 shape.
 	if v := w107ProbeValue(t, raw); v == 0 {
