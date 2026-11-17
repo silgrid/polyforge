@@ -237,3 +237,48 @@ func TestPF106TicketEndResolvesTaskEntries(t *testing.T) {
 		}
 	}
 }
+
+// TestPF106ConfirmedAnalysisResolvesTaskEntries (AC4): a ticket whose
+// `## 分析` carries content and no unconfirmed marker needs no lingering
+// task attention anymore — a confirmed analysis, a human-written one, or
+// the owner's 「免分析」 — so the reconcile resolves its open task entries;
+// a section still carrying the auto-analysis marker (the half-written
+// draft the interrupted task itself left) and a ticket with no analysis
+// content keep their entries open.
+func TestPF106ConfirmedAnalysisResolvesTaskEntries(t *testing.T) {
+	td := newTestDaemon(t, nil)
+	d := td.Daemon
+	f := d.feed
+	human := "## 背景\n\nthe ticket's own text\n\n## 分析\n\na human-written analysis stands here\n"
+	skip := "## 分析\n\n免分析（owner ruled the ticket needs none）\n"
+	draft := "## 分析\n\n<!-- pf:auto-analysis task_00000000000000d1 unconfirmed -->\n\nthe half-written draft the interrupted task left\n"
+	none := "## 背景\n\nno analysis section at all\n"
+	td.hub.mu.Lock()
+	td.hub.items = map[string]*api.WorkItem{
+		"wi_pf106_human": {ID: "wi_pf106_human", Status: api.StatusRunning, Content: &human},
+		"wi_pf106_skip":  {ID: "wi_pf106_skip", Status: api.StatusRunning, Content: &skip},
+		"wi_pf106_draft": {ID: "wi_pf106_draft", Status: api.StatusRunning, Content: &draft},
+		"wi_pf106_none":  {ID: "wi_pf106_none", Status: api.StatusRunning, Content: &none},
+	}
+	td.hub.mu.Unlock()
+	for _, wi := range []string{"wi_pf106_human", "wi_pf106_skip", "wi_pf106_draft", "wi_pf106_none"} {
+		if err := f.RecordTask("default", pf106AnalysisTask("task_0000000000000"+wi, task.StateFailed, wi)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d.reconcileDecisions()
+	for wi, want := range map[string]bool{
+		"wi_pf106_human": false, "wi_pf106_skip": false,
+		"wi_pf106_draft": true, "wi_pf106_none": true,
+	} {
+		open := false
+		for _, e := range f.List().Decisions {
+			if e.Kind == protocol.DecisionTask && e.Profile == "default" && e.WI == wi {
+				open = e.Open()
+			}
+		}
+		if open != want {
+			t.Fatalf("%s after the reconcile: open = %v, want %v", wi, open, want)
+		}
+	}
+}
