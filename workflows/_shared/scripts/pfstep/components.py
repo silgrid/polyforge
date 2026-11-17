@@ -30,8 +30,11 @@ directory, the repository's root files forming the ``.`` component. A
 path with a ``testdata``, ``node_modules`` or ``vendor`` segment is
 excluded from the division entirely."""
 
+import os
 import re
-from typing import Dict, List, NamedTuple, Optional
+from typing import Dict, List, NamedTuple, Optional, Tuple
+
+from pfstep import git as gitlib
 
 CONF = ".polyforge/verify-scope.conf"
 
@@ -80,6 +83,31 @@ class ConfReading(NamedTuple):
 
     components: List[Component]
     thresholds: Thresholds
+    diagnostics: List[str]
+
+
+class Division(NamedTuple):
+    """One component of a repository as the division found it: its name,
+    the path range that defines it, its source, and whether every path
+    in it is documentation (never counted by the epic rules)."""
+
+    name: str
+    paths: List[str]
+    source: str
+    documentation_only: bool
+
+
+class RepoReport(NamedTuple):
+    """One repository's answer: its name, the commit (and which revision
+    it came from), the division, the effective thresholds, and — on a
+    read failure — why nothing else is there."""
+
+    name: str
+    commit: str
+    rev: str
+    division: List[Division]
+    thresholds: Thresholds
+    error: str
     diagnostics: List[str]
 
 
@@ -158,3 +186,143 @@ def read_conf(text: str) -> ConfReading:
                 source[key] = "declared"
     return ConfReading(components, Thresholds(values["epic_components"], values["epic_units"],
                                               values["epic_files"], source), diag)
+
+
+# ---------------------------------------------------------------------------
+# The component division (polyforge#89, AC2): a repository's components
+# from its commit tree — a declared range first, then a nested engine
+# root, then a manifest subdirectory (each nest outermost), then the
+# first-level directory, the root files forming the "." component.
+# ---------------------------------------------------------------------------
+
+def is_doc_path(p: str) -> bool:
+    """verify-scope's documentation rule, mirrored: the paths the
+    spanning rule never counts."""
+    if p.endswith((".md", ".markdown", ".rst", ".txt")):
+        return True
+    return p.startswith("docs/") or p.startswith("doc/")
+
+
+def _excluded(p: str) -> bool:
+    """Whether the generic division skips the path entirely."""
+    return any(seg in EXCLUDED_SEGMENTS for seg in p.split("/"))
+
+
+def _under(p: str, root: str) -> bool:
+    """Whether path p sits in root's prefix range (the module_root
+    rule's match)."""
+    return p == root or p.startswith(root + "/")
+
+
+def _outermost(roots: List[str]) -> List[str]:
+    """The roots no other root contains (a nest answers at its
+    outermost directory), in stable order."""
+    unique = sorted(set(roots))
+    return [r for r in unique if not any(r != o and _under(r, o) for o in unique)]
+
+
+def _assign(p: str, declared: List[Component], nested: List[str],
+            manifest: List[str]) -> Tuple[str, str]:
+    """One path's component: (source, name). A declared range wins
+    (the longest prefix of overlapping declarations), then a nested
+    conf root, then a manifest subdirectory, then the first-level
+    directory, the root files answering as \".\""""
+    best: Optional[Tuple[str, int, str]] = None
+    for comp in declared:
+        for r in comp.paths:
+            if _under(p, r) and (best is None or len(r) > best[1]):
+                best = ("declared", len(r), comp.name)
+    if best is not None:
+        return ("declared", best[2])
+    for n in nested:
+        if _under(p, n):
+            return ("nested conf", n)
+    for m in manifest:
+        if _under(p, m):
+            return ("manifest", m)
+    if "/" not in p:
+        return ("root files", ".")
+    return ("top-level", p.split("/", 1)[0])
+
+
+def divide(paths: List[str], reading: ConfReading) -> List[Division]:
+    """The division of a repository's tracked paths: the declared
+    components in conf order (a declaration answers even where no path
+    falls in it — the report shows it), the generic components only
+    where paths fell in them, the root files last."""
+    kept = [p for p in paths if not _excluded(p)]
+    nested = _outermost([f[:-len(CONF_SUFFIX)] for f in kept
+                        if f.endswith(CONF_SUFFIX) and len(f) > len(CONF)])
+    manifest = [m for m in _outermost([os.path.dirname(f) for f in kept
+                                       if os.path.basename(f) in MANIFESTS
+                                       and os.path.dirname(f) != ""])
+                if not any(_under(m, n) for n in nested)]
+    groups: Dict[Tuple[str, str], List[str]] = {}
+    for p in kept:
+        groups.setdefault(_assign(p, reading.components, nested, manifest), []).append(p)
+
+    out: List[Division] = []
+    for comp in reading.components:
+        assigned = groups.get(("declared", comp.name), [])
+        out.append(Division(comp.name, list(comp.paths), "declared",
+                            bool(assigned) and all(is_doc_path(p) for p in assigned)))
+    for source, roots in (("nested conf", nested), ("manifest", manifest)):
+        for r in roots:
+            assigned = groups.get((source, r), [])
+            if assigned:
+                out.append(Division(r, [r], source, all(is_doc_path(p) for p in assigned)))
+    for t in sorted(name for src, name in groups if src == "top-level"):
+        assigned = groups[("top-level", t)]
+        out.append(Division(t, [t], "top-level", all(is_doc_path(p) for p in assigned)))
+    root_files = groups.get(("root files", "."), [])
+    if root_files:
+        out.append(Division(".", sorted(root_files), "root files",
+                            all(is_doc_path(p) for p in root_files)))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Reading one clone (polyforge#89, AC2): the origin/HEAD (else HEAD)
+# commit tree — never the work tree, never a fetch.
+# ---------------------------------------------------------------------------
+
+def resolve_rev(repo_dir: str, rev: str) -> Tuple[str, str]:
+    """The commit the tool reads and which revision named it: --rev's,
+    else origin/HEAD's, else HEAD's."""
+    if rev != "":
+        return gitlib.git(repo_dir, "rev-parse", "--verify", rev + "^{commit}").strip(), rev
+    try:
+        return (gitlib.git(repo_dir, "rev-parse", "--verify",
+                           "origin/HEAD^{commit}").strip(), "origin/HEAD")
+    except gitlib.GitError:
+        return gitlib.git(repo_dir, "rev-parse", "--verify",
+                          "HEAD^{commit}").strip(), "HEAD"
+
+
+def tree_paths(repo_dir: str, commit: str) -> List[str]:
+    """The tracked paths of commit's tree, in git's order."""
+    return [p for p in gitlib.git(repo_dir, "ls-tree", "-r", "--name-only",
+                                  "-z", commit).split("\x00") if p != ""]
+
+
+def tree_file(repo_dir: str, commit: str, path: str) -> str:
+    """One file of commit's tree, "" when the tree holds no such path."""
+    try:
+        return gitlib.git(repo_dir, "show", commit + ":" + path)
+    except gitlib.GitError:
+        return ""
+
+
+def read_repo(repo_dir: str, rev: str = "") -> RepoReport:
+    """One clone's whole answer. A repository that cannot be read is an
+    error entry, never a wrong division: no components, the default
+    thresholds, and the reason."""
+    name = os.path.basename(os.path.abspath(repo_dir))
+    try:
+        commit, rev_name = resolve_rev(repo_dir, rev)
+        reading = read_conf(tree_file(repo_dir, commit, CONF))
+        return RepoReport(name, commit, rev_name, divide(tree_paths(repo_dir, commit), reading),
+                          reading.thresholds, "", reading.diagnostics)
+    except gitlib.GitError as err:
+        return RepoReport(name, "", rev if rev != "" else "origin/HEAD", [],
+                         _threshold_defaults(), str(err), [])
