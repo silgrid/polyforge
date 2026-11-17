@@ -8,6 +8,7 @@
 # would turn a dev-only finding green.
 printf '%s\n' "$*" >>"${W320_STUB_ARGS:-/dev/null}"
 case " $* " in
+*" config get registry "*) echo https://registry.npmjs.org/; exit 0 ;;
 *" --omit=dev "* | *" --omit dev "* | *" --production "*)
 	if [ -n "${W320_NPM_PROD_OUT:-}" ]; then
 		cat "$W320_NPM_PROD_OUT"

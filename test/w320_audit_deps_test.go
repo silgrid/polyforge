@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -392,6 +393,53 @@ func TestW320AuditGoReachability(t *testing.T) {
 		args: []string{"--go", "--npm", "web"},
 	})
 	w320aWant(t, "two surfaces", errb, code, 1, []string{"surface go:.: audited", "finding: surface npm:web"}, nil)
+}
+
+// TestW320AuditFetchLine: every audited surface prints one line naming when
+// its advisory data was fetched (UTC) and from what source — the npm
+// registry the surface's npm is configured against (npm config get
+// registry), https://vuln.go.dev for the Go surface — before its summary
+// line (polyforge#113 AC4). A surface that was not audited prints none.
+func TestW320AuditFetchLine(t *testing.T) {
+	dir := w320aTree(t)
+	errb, code, _ := w320aExec(t, dir, w320aRun{npmOut: w320aFixture(t, "npm-moderate.json"), args: []string{"--npm", "web"}})
+	w320aWant(t, "npm surface", errb, code, 0, []string{"surface npm:web: audited, 0 finding(s)"}, []string{"finding:"})
+	fetched := regexp.MustCompile(`surface npm:web: advisories fetched 20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z from https://registry\.npmjs\.org/`)
+	if !fetched.MatchString(errb) {
+		t.Fatalf("the npm surface must print one advisories-fetched line with a UTC time and the registry:\n%s", errb)
+	}
+	if i, j := strings.Index(errb, "advisories fetched"), strings.Index(errb, "audited,"); i < 0 || j < i {
+		t.Fatalf("the fetched line precedes the surface summary:\n%s", errb)
+	}
+
+	errb, code, _ = w320aExec(t, dir, w320aRun{govulnOut: w320aFixture(t, "govulncheck-clean.json"), args: []string{"--go"}})
+	w320aWant(t, "go surface", errb, code, 0, []string{"surface go:.: audited, 0 finding(s)"}, nil)
+	if !regexp.MustCompile(`surface go:\.: advisories fetched 20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z from https://vuln\.go\.dev`).MatchString(errb) {
+		t.Fatalf("the go surface must print one advisories-fetched line naming vuln.go.dev:\n%s", errb)
+	}
+
+	// one line per audited directory, none for one that was not audited
+	errb, _, _ = w320aExec(t, dir, w320aRun{
+		govulnOut: w320aFixture(t, "govulncheck-clean.json"), npmOut: w320aFixture(t, "npm-moderate.json"),
+		args: []string{"--go", "--npm", "web"},
+	})
+	if n := strings.Count(errb, "advisories fetched"); n != 2 {
+		t.Fatalf("two audited surfaces print two fetched lines, got %d:\n%s", n, errb)
+	}
+	bin := t.TempDir()
+	for _, name := range []string{"python3", "mktemp", "rm", "cat", "date"} {
+		p, err := exec.LookPath(name)
+		if err != nil {
+			t.Fatalf("host tool %s: %v", name, err)
+		}
+		if err := os.Symlink(p, filepath.Join(bin, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	errb, _, _ = w320aExec(t, dir, w320aRun{path: bin, args: []string{"--npm", "web"}})
+	if strings.Contains(errb, "advisories fetched") {
+		t.Fatalf("a surface that was not audited prints no fetched line:\n%s", errb)
+	}
 }
 
 // TestW320AuditUsage: no surface or an unknown argument is a usage error.
