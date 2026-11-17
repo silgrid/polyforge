@@ -7,6 +7,7 @@ with the R13 waiver fallback and the call ledger's filed tickets."""
 
 import json
 import os
+import tempfile
 import unittest
 from typing import Any, Callable, Dict, List, Optional
 
@@ -383,3 +384,55 @@ class CloseShapesTest(GitCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CloseFixesTest(unittest.TestCase):
+    """close reads the landed fixes off the revert step's result (the
+    repair branches it merged) and writes them on the batch's record:
+    repo, branch, PR, merge, the units fixed and the items they were
+    attributed to — only the ones that landed (a skipped fix reverted
+    with its item is no fix of the batch); a result carrying none writes
+    no key."""
+
+    def close(self, fixes: Any) -> Dict[str, Any]:
+        cap = tempfile.mkdtemp()
+        r = MRepo(os.path.join(cap, "repos", "app"), {"base.txt": "b\n"})
+        origin = os.path.join(cap, "origin.git")
+        r.git("init", "-q", "--bare", "-b", "main", origin)
+        r.git("remote", "add", "origin", origin)
+        r.merge("m")
+        r.git("push", "-q", "origin", "main")
+        m = "m1"
+        env = {"schema": "pf-step-result/1", "version": "", "argv": [], "round": "", "started_at": "", "ended_at": "",
+               "exit_code": 0, "verdict": "pass", "heads": {"app": m}, "summary": "", "logs": []}
+        batch = dict(env, command="integrate.py",
+                     details={"batch": "wi_batch", "heads": {"app": m}, "refused": "", "empty": "nothing new", "items": []})
+        details: Dict[str, Any] = {"reverts": [], "heads": {"app": m}, "gated": ["app"]}
+        if fixes is not None:
+            details["fixes"] = fixes
+        write(cap, {"pool.json": json.dumps({"items": [], "red_heads": {}}),
+                    "batch.json": json.dumps(batch), "revert.json": json.dumps(dict(env, command="revert.py", details=details))})
+        rec = os.path.join(cap, "record.json")
+        code = integrate.main(["close", "--pool", os.path.join(cap, "pool.json"), "--batch", os.path.join(cap, "batch.json"),
+                               "--revert", os.path.join(cap, "revert.json"), "--capsule", cap,
+                               "--record-out", rec, "--out", os.path.join(cap, "close.json")],
+                              environ={"PATH": os.environ.get("PATH", ""), "PF_WI_ID": "wi_batch"})
+        self.assertEqual(code, 0)
+        with open(rec) as f:
+            return json.load(f)
+
+    def test_the_landed_fixes_ride_the_record(self) -> None:
+        rec = self.close([
+            {"name": "app", "branch": "integrate/repair-wi_batch", "units": ["TestStale"], "items": ["wi_a"],
+             "pr": "https://forge.invalid/pr/78", "merge": "m2"},
+            {"name": "app", "branch": "integrate/repair-wi_batch", "units": ["TestSkipped"], "items": ["wi_b"],
+             "why": "the blamed item is reverted in this batch"},
+        ])
+        self.assertEqual(rec["fixes"], [{"repo": "app", "branch": "integrate/repair-wi_batch", "pr": "https://forge.invalid/pr/78",
+                                         "merge": "m2", "units": ["TestStale"], "items": ["wi_a"]}])
+
+    def test_no_landed_fix_no_key(self) -> None:
+        rec = self.close([])
+        self.assertNotIn("fixes", rec)
+        rec = self.close(None)
+        self.assertNotIn("fixes", rec)
