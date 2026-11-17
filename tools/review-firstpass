@@ -29,6 +29,30 @@ grouping itself is the manifest's), and a split group with no samples
 says N/A, never a fabricated number. Without --cohort the output is
 byte-for-byte the pre-cohort report.
 
+Each group line is followed by the two time metrics, the owner's ruled
+calibers (the capsule's own durable record — the daemon-stamped
+hand-off sections and capsule.json created_at — is all an offline run
+can read):
+
+  proxy execution time    the sum of every stamped step-round duration;
+                          a dispatch that ends in an ask is never
+                          stamped, so owner-wait never enters. rework =
+                          the rounds of the steps a rewind section named
+                          that ran after it, over that total; counted and
+                          owner/uncounted rewinds are reported apart, and
+                          so are infra-retry rounds (their events name
+                          rate_limited / model_error / step_timeout /
+                          upstream_transient) — listed, never silently
+                          subtracted. A round paused mid-dispatch
+                          overstates its span and cannot be identified
+                          offline: a stated gap.
+  claim->merge            earliest claim (created_at, the first claim
+                          creates the capsule) to the merge step's last
+                          done section's end — the labeled PROXY. The
+                          real merge moment lives in no capsule, so the
+                          real endpoint is N/A offline; a run with no
+                          merge section counts as not merged.
+
 The measure is the 2026-11-09 rework baseline's (aihub doc.audit
 mem_2wmAvnsWFWmw), kept byte-for-byte where it decides
 a number:
@@ -55,6 +79,7 @@ whose build reports no units).
 """
 import argparse
 import csv
+from datetime import datetime
 import glob
 import json
 import os
@@ -202,6 +227,135 @@ def line(label, rs):
     return f'{label:<24} {len(rs):>4}  {f"{ok}/{n}":>10}  {rate:>5}  {med:>7}'
 
 
+
+# ---------------------------------------------------------------- time metrics
+# The owner's Q3/Q4 calibers (polyforge#118), over the capsule's own
+# durable record: the daemon-stamped sections of artifacts/handoff.md
+# (zh and EN labels alike — the daemon's own constants) and capsule.json
+# created_at (the earliest claim — the first claim creates the capsule).
+# A dispatch that ends in `pf step ask` is never stamped (no section), so
+# owner-wait time never enters the measured attempt time; a round paused
+# mid-dispatch does overstate its span and cannot be identified offline —
+# a stated gap of this proxy, never silently repaired.
+
+INFRA_CAUSES = ('rate_limited', 'model_error', 'step_timeout', 'upstream_transient')
+REWIND_TITLE = ('事件 · 回退', 'Event · Rewind')
+REDO_LABELS = ('要重做的步骤（按顺序）：', 'Steps to redo (in order): ')
+UNCOUNTED_MARKS = ('本次依据 owner 的话，不计次数', '另有不计数类回退')
+EVENTS_HEADINGS = ('**本轮事件**', '**Events of this round**')
+
+
+def parse_go_duration(s):
+    """`10m0s` / `1h5m3s` / `30s` -> seconds (the daemon stamps whole
+    seconds); anything unparsable is 0 and counted as unmeasured."""
+    total = 0
+    for n, unit in re.findall(r'(\d+)(h|m|s)', s or ''):
+        total += int(n) * {'h': 3600, 'm': 60, 's': 1}[unit]
+    return total
+
+
+def section_row(sec, labels):
+    """the value of the first `| <label> | <v> |` row whose label is one
+    of the given (zh, en) pair, else ''."""
+    for line in sec.split('\n'):
+        if line.startswith('| '):
+            parts = [x.strip() for x in line.strip().strip('|').split('|')]
+            if len(parts) == 2 and parts[0] in labels:
+                return parts[1]
+    return ''
+
+
+def capsule_time_metrics(cap):
+    """-> dict: the proxy-time measures of one capsule (attempt_s,
+    rework_s, infra_retry_s, rewinds_counted, rewinds_uncounted,
+    claim_at, merge_done_at, merged)."""
+    out = {'attempt_s': 0, 'rework_s': 0, 'infra_retry_s': 0, 'rewinds_counted': 0,
+           'rewinds_uncounted': 0, 'claim_at': '', 'merge_done_at': '', 'merged': 0}
+    cj = jload(os.path.join(cap, 'capsule.json')) or {}
+    out['claim_at'] = cj.get('created_at') or ''
+    hb = os.path.join(cap, 'artifacts', 'handoff.md')
+    if not os.path.exists(hb):
+        return out
+    with open(hb, errors='replace') as f:
+        text = f.read()
+    redo_seen = set()          # steps a rewind section has named so far
+    sections = [s for s in ('\n---\n' + text).split('\n---\n') if s.strip()]
+    for sec in sections:
+        first = sec.strip().split('\n')[0]
+        if any(m in first for m in REWIND_TITLE):
+            counted = not any(m in sec for m in UNCOUNTED_MARKS)
+            if counted:
+                out['rewinds_counted'] += 1
+            else:
+                out['rewinds_uncounted'] += 1
+            for line in sec.split('\n'):
+                for lbl in REDO_LABELS:
+                    if line.startswith('- ' + lbl):
+                        redo_seen.update(re.findall(r'`([^`]+)`', line))
+            continue
+        step = section_row(sec, ('步骤',)) or section_row(sec, ('Step',))
+        if not step:
+            continue
+        dur = parse_go_duration(section_row(sec, ('耗时',)) or section_row(sec, ('Duration',)))
+        status = section_row(sec, ('状态',)) or section_row(sec, ('Status',))
+        out['attempt_s'] += dur
+        if step in redo_seen:
+            out['rework_s'] += dur
+        events = []
+        lines = sec.split('\n')
+        for i, line in enumerate(lines):
+            if any(h in line for h in EVENTS_HEADINGS):
+                for nxt in lines[i + 1:]:
+                    if nxt.startswith('- '):
+                        events.append(nxt)
+                    elif nxt.strip():
+                        break
+                break
+        if any(c in e for e in events for c in INFRA_CAUSES):
+            out['infra_retry_s'] += dur
+        if step == 'merge' and status == 'done':
+            ended = section_row(sec, ('结束',)) or section_row(sec, ('Ended',))
+            out['merge_done_at'] = ended
+            out['merged'] = 1
+    return out
+
+
+def fmt_mins(secs):
+    return f'{secs / 60:g}m'
+
+
+def time_group_line(label, metrics):
+    """the two Q3/Q4 lines of one cohort group; N/A where the caliber
+    has nothing to measure (the honesty rules — never a 0 dressed as a
+    rate)."""
+    att = sum(m['attempt_s'] for m in metrics)
+    rew = sum(m['rework_s'] for m in metrics)
+    if att:
+        rework = f'rework {rew}s ({100 * rew / att:.0f}%)'
+    else:
+        rework = 'rework N/A (0 measurable)'
+    cnt = sum(m['rewinds_counted'] for m in metrics)
+    unc = sum(m['rewinds_uncounted'] for m in metrics)
+    infra_n = sum(1 for m in metrics if m['infra_retry_s'])
+    infra_s = sum(m['infra_retry_s'] for m in metrics)
+    merged = [m for m in metrics if m['merged']]
+    spans = []
+    for m in merged:
+        try:
+            c = datetime.strptime(m['claim_at'], '%Y-%m-%dT%H:%M:%SZ')
+            e = datetime.strptime(m['merge_done_at'], '%Y-%m-%dT%H:%M:%SZ')
+            spans.append((e - c).total_seconds())
+        except ValueError:
+            continue
+    med = f'median {fmt_mins(statistics.median(spans))}' if spans else 'median N/A (0 merged)'
+    nmerged = len(merged)
+    notmerged = len(metrics) - nmerged
+    l1 = (f'  proxy execution time: {att}s measurable, {rework}; '
+          f'rewinds counted {cnt}, owner/uncounted {unc}; infra-retry rounds {infra_n} ({infra_s}s) listed apart')
+    l2 = (f'  claim->merge: merge-step proxy {med} ({nmerged} merged, {notmerged} not merged); '
+          f'real endpoint N/A ({len(metrics)} runs with no offline record)')
+    return l1 + '\n' + l2
+
 # ---------------------------------------------------------------- cohort view
 # The owner-confirmed split comparison (polyforge#118): the manifest IS
 # the grouping; dates only filter. Every honesty rule below answers a
@@ -313,9 +467,13 @@ def cohort_report(rows, caps_dir, manifest, path, out=sys.stdout):
     children = [c for e in splits for c in e['children']]
     epics = [e['epic'] for e in splits if e.get('epic')]
     control = cohort_names(manifest, 'control')
+    time_of = {n: capsule_time_metrics(os.path.join(caps_dir, n))
+               for n in set(control + children + epics) if n in by_name}
 
     def group(names, label, empty_note=''):
-        p(cohort_group_line(label, [by_name[n] for n in names if n in by_name], empty_note))
+        found = [n for n in names if n in by_name]
+        p(cohort_group_line(label, [by_name[n] for n in found], empty_note))
+        p(time_group_line(label, [time_of[n] for n in found]))
 
     group(control, 'control (unsplit runs)')
     group(children, 'split children', ' - no epic run has completed yet' if not splits else '')
@@ -375,10 +533,26 @@ def main(argv):
         until = _earlier(until, win.get('until', ''))
     rows, quarantined = collect(a.capsules_dir, since, until)
     if a.csv:
-        with open(a.csv, 'w', newline='') as f:
-            w = csv.DictWriter(f, fieldnames=list(rows[0]) if rows else ['capsule'])
-            w.writeheader()
-            w.writerows(rows)
+        if manifest is not None:
+            extra = ('attempt_s', 'rework_s', 'infra_retry_s', 'rewinds_counted',
+                     'rewinds_uncounted', 'claim_at', 'merge_done_at', 'merged')
+            for r in rows:
+                m = capsule_time_metrics(os.path.join(a.capsules_dir, r['capsule']))
+                for k in extra:
+                    r[k] = m[k]
+            with open(a.csv, 'w', newline='') as f:
+                names = list(rows[0]) if rows else list(extra)
+                for k in extra:
+                    if k not in names:
+                        names.append(k)
+                w = csv.DictWriter(f, fieldnames=names, extrasaction='ignore')
+                w.writeheader()
+                w.writerows(rows)
+        else:
+            with open(a.csv, 'w', newline='') as f:
+                w = csv.DictWriter(f, fieldnames=list(rows[0]) if rows else ['capsule'])
+                w.writeheader()
+                w.writerows(rows)
     report(rows, quarantined)
     if manifest is not None:
         cohort_report(rows, a.capsules_dir, manifest, cohort_path)
