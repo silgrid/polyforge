@@ -3,13 +3,14 @@
 // build whose environment looks like an agent stops with SecurityFatalError as
 // soon as the advisory bulk check finds the installed version affected
 // (next/dist/lib/upgrade/nudge.js) — both v0.2.2 release attempts stopped there
-// on next 16.4.4 (advisory 1247486, moderate, >=16.3.0 <=16.4.4). The owner
-// ruling of 2026-11-17 (polyforge#104 r2) keeps pi-web on 16.4.4 — the 16.4.6
-// bump ships a compression regression (double-gzipped route-handler responses,
-// follow-up ticket) — so the abort is switched off here instead: pi-web serves
-// behind an authenticated edge proxy and the release gate builds offline, where
-// the advisory check never ran anyway. A change that re-enables the policy
-// (or bumps next past it) updates this pin in the same commit.
+// on advisory 1247486 (moderate, >=16.3.0 <=16.4.4). This pin holds regardless
+// of the installed next version (owner rulings 2026-11-17, polyforge#104 r2 and
+// polyforge#105, which bumped next to 16.4.6 and dropped the app-layer gzip):
+// dependency advisories are judged by pi-web's own audit before a release (the
+// integrate gate, polyforge#113), never by a third-party check aborting an
+// agent-run build — and the release gate builds offline, where this check
+// never runs anyway. A change that re-enables the policy updates this pin in
+// the same commit.
 import "#test-env";
 import assert from "node:assert/strict";
 import path from "node:path";

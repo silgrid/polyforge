@@ -34,27 +34,36 @@ const nextConfig: NextConfig = {
     ? { typescript: { tsconfigPath: "tsconfig.e2e.json" } }
     : {}),
   outputFileTracingRoot: configDir,
-  // Compress HTML and static responses with Next's built-in gzip. Direct
-  // clients that bypass the edge reverse proxy — e.g. a Chrome app-mode
-  // window (`piweb` alias) pointed at the raw IP:port — would otherwise
-  // pull several MB of uncompressed JS chunks on a slow link (measured
-  // 2026-09-27: a 1.1 MB static chunk serves as ~380 KB gzipped, -67%).
-  // Clients reaching the server through Caddy are unaffected: Caddy passes
-  // through responses that already carry content-encoding, so its own
-  // `encode zstd gzip` layer keeps serving domain clients and nothing is
-  // double-compressed. (Compress was disabled in pi#40 to work around a
-  // since-removed client's HTML proxy and kept off as an unneeded behavior
-  // change; the direct-IP gap was measured on 2026-09-27 and it is
+  // Compress responses with Next's built-in gzip: HTML, static assets and,
+  // from Next 16.4.6 on, route-handler responses over the 1024-byte threshold
+  // (the same threshold and Accept-Encoding negotiation the removed app-layer
+  // gzip used, polyforge#105). Direct clients that bypass the edge reverse
+  // proxy — e.g. a Chrome app-mode window (`piweb` alias) pointed at the raw
+  // IP:port — would otherwise pull several MB of uncompressed JS chunks on a
+  // slow link (measured 2026-09-27: a 1.1 MB static chunk serves as ~380 KB
+  // gzipped, -67%). Clients reaching the server through Caddy are
+  // unaffected: Caddy passes through responses that already carry
+  // content-encoding, so its own `encode zstd gzip` layer keeps serving domain
+  // clients and nothing is double-compressed. The routes must never compress
+  // on their own, though: since Next 16.4.5 the server strips an
+  // application-set Content-Encoding (upstream GHSA-pc58 fix; #101465 rules
+  // it intended) and then compresses the still-encoded body again, so
+  // compression lives here alone. (Compress was disabled in pi#40 to work
+  // around a since-removed client's HTML proxy and kept off as an unneeded
+  // behavior change; the direct-IP gap was measured on 2026-09-27 and it is
   // re-enabled here.)
   compress: true,
   experimental: {
-    // Next.js 16.4.x defaults agentUpgrade to 'security' (server/config-shared.js):
+    // Next.js defaults agentUpgrade to 'security' (server/config-shared.js):
     // a build whose environment looks like an agent stops with SecurityFatalError
     // when the advisory bulk check finds the installed version affected
     // (lib/upgrade/nudge.js) — both v0.2.2 release attempts stopped there on
-    // advisory 1247486. Off while pi-web stays on 16.4.4 (owner ruling
-    // 2026-11-17, polyforge#104 r2: the 16.4.6 bump ships a compression
-    // regression, see the follow-up ticket).
+    // advisory 1247486. This stays off regardless of the installed Next
+    // version (owner rulings 2026-11-17, polyforge#104 r2 and polyforge#105):
+    // dependency advisories are pi-web's own audit's to judge, in the
+    // integrate gate before a release — not a third-party check's to abort
+    // an agent-run build with — and the release gate builds offline, where
+    // this check would never run anyway.
     agentUpgrade: false,
     // proxy.ts matches /api/:path*, and Next buffers the request body whenever
     // a proxy is present, capped at 10 MB by default. The upload route accepts
