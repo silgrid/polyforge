@@ -448,13 +448,14 @@ func TestW254QuickstartsMovedIntact(t *testing.T) {
 // - the v0.2.2 section appended with the deploy configuration following the work item's Cell (every step process carries PF_CELL, PF_CELL_SERVER and PF_DEPLOY_ENV; deploy.sh reads the file PF_DEPLOY_ENV names, refusing when it is missing, and checks the deploy target against the Cell's server before any network work; a named Cell's operator creates its deploy-<profile>.env after upgrading, a manual run keeps the old behavior)
 // - the v0.2.1 section appended with the task concurrency bound as a Host key (max_concurrent_tasks, default 2, live on reload; one-off tasks take no max_concurrent_jobs slot any more, and a spawn without budget flags gets 40m / 1000000 — the token default is the ceiling)
 // - the v0.2.1 section appended with a bundle-bound ticket as a parent (PARENT_NOT_REGISTRY and HAS_CHILDREN_NO_BUNDLE are gone; a bound parent waits for its children to merge, via "child" in waiting_for, pf file edit <child> --parent "" detaches, PARENT_BUNDLE_FROZEN; deploy aihub before pf, and a rollback to the old aihub loses the wait)
+// - the v0.2.3 section appended with the corrections to the v0.2.2 upgrade notes (five headings above say v0.2.1 but shipped with v0.2.2 — the pf step ask, gate fallback, human merge, task concurrency and bundle-parent sections; and the v0.2.2 pf/daemon writes that carry expected_updated_at need the new aihub first, the v0.2.1 server rejects the whole PATCH with field … is not patchable, pf file edit still writes)
 // upgrade-sections:end
 // The file is only routed to, from the install ops page and the README
 // landing page.
 func TestW254UpgradeByteIdentical(t *testing.T) {
 	raw := []byte(w254Read(t, "docs/upgrade.md"))
 	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != "96a9498202a960c40669d5c1e6fb241a8acc8ddbf931facea806a6b59f6a3f49" {
+	if got := hex.EncodeToString(sum[:]); got != "c6b8a4597ddd39c9502a767bd1752f37e9065f9ea1da5dac18a1b0c9416f12f8" {
 		t.Fatalf("docs/upgrade.md must stay byte-identical (only routed to, never rewritten): sha256 %s != the pinned pre-move sha256", got)
 	}
 	// the list beside the pin: one whole `// - ` line per appended section
