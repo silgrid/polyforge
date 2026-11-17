@@ -170,11 +170,19 @@ func pf89Prompt(t *testing.T, td *testDaemon, hub *w72Hub, runner *w72Runner, id
 	if res.State != "scheduled" || !strings.HasPrefix(res.TaskID, "task_") {
 		t.Fatalf("the analysis must dispatch with the division attached or fallen back: %+v", res)
 	}
-	spec, ok := runner.specOf(res.TaskID)
-	if !ok {
-		t.Fatal("the runner never saw the analysis task")
+	// The manager records the runner's spec on the task's own goroutine:
+	// await the settled state before asserting on it (a bounded poll, never
+	// a read-once race).
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if spec, ok := runner.specOf(res.TaskID); ok {
+			return spec.Prompt
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the runner never saw the analysis task")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	return spec.Prompt
 }
 
 // TestPF89AnalysisPromptCarriesTheComponentSection: with the tool in the
@@ -302,8 +310,14 @@ func TestPF89StuckToolTimesOutAndWritesTheFallbackLine(t *testing.T) {
 func TestPF89NoRepositoryNamesNoSection(t *testing.T) {
 	td, hub, runner := pf89World(t, nil)
 	prompt := pf89Prompt(t, td, hub, runner, "wi_pf89_f")
-	if strings.Contains(prompt, "组件划分") {
-		t.Fatalf("no repository named answers no section:\n%s", prompt)
+	for _, absent := range []string{
+		"（工具对本票各仓库的输出",
+		"组件划分：",
+		"组件划分未附带",
+	} {
+		if strings.Contains(prompt, absent) {
+			t.Fatalf("no repository named answers no section (%q must not appear):\n%s", absent, prompt)
+		}
 	}
 	if !strings.Contains(prompt, "升级 epic 建议") || !strings.Contains(prompt, "the ticket body") {
 		t.Fatal("the template and the ticket stay in the prompt")
