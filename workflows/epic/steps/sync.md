@@ -5,12 +5,15 @@ description: The epic's closing-phase sync - the default branch merged into the 
 
 # sync
 
-The epic's own sync: the default branch merged into the branch the capsule
-checked out (the epic branch), after the children are verified and before
-the lane judges the epic. The epic merges into the DEFAULT branch, so this
-sync merges the default branch in — exactly what the script does for a
-capsule without a fixed target (the epic's record carries a `checkout`, no
-`target`). This is the closing-phase sync the lane runs once, and the step
+The epic's own sync: the epic branch's own remote commits merged in FIRST
+(the children's — a fix child lands on `origin/<the checkout branch>`
+while the epic runs or is parked, and the resumed lane judges a tree that
+contains them), then the default branch merged into the branch the
+capsule checked out (the epic branch), after the children are verified
+and before the lane judges the epic. The epic merges into the DEFAULT
+branch, so the base the scripts take is the default branch — exactly
+what they do for a capsule without a fixed target (the epic's record
+carries a `checkout`, no `target`). This is the closing-phase sync the lane runs once, and the step
 the merge gate's moved-base FAIL returns to: the default branch moved past
 what verification ran over, the sync merges it in again, and the lane
 re-runs from here — the review and the full verification included. Your

@@ -41,16 +41,15 @@ def path_of(capsule_dir: str) -> str:
     return os.path.join(capsule_dir, DIR, FILE)
 
 
-def read(capsule_dir: str) -> str:
-    """The capsule's fixed target branch ("" = none): the file's ``target``
-    key, stripped; a missing file, a missing key or an empty value is no
-    target. A file that is there but unreadable, or not the JSON object
-    with a string ``target``, raises TargetBranchError naming why."""
+def _read_doc(capsule_dir: str) -> Any:
+    """The fixed file's parsed JSON object, or None when the capsule
+    carries no file. A file that is there but unreadable, or not valid
+    JSON, raises :class:`TargetBranchError` naming why."""
     try:
         with open(path_of(capsule_dir), "rb") as f:
             raw = f.read()
     except FileNotFoundError:
-        return ""
+        return None
     except OSError as err:
         raise TargetBranchError("runtime-state/%s is unreadable: %s" % (FILE, err)) from None
     try:
@@ -59,9 +58,36 @@ def read(capsule_dir: str) -> str:
         raise TargetBranchError("runtime-state/%s is not valid JSON: %s" % (FILE, err)) from None
     if not isinstance(doc, dict):
         raise TargetBranchError("runtime-state/%s is not the JSON object expected" % FILE) from None
+    return doc
+
+
+def read(capsule_dir: str) -> str:
+    """The capsule's fixed target branch ("" = none): the file's ``target``
+    key, stripped; a missing file, a missing key or an empty value is no
+    target. A file that is there but unreadable, or not the JSON object
+    with a string ``target``, raises TargetBranchError naming why."""
+    doc = _read_doc(capsule_dir)
+    if doc is None:
+        return ""
     target = doc.get("target")
     if target is None:
         return ""
     if not isinstance(target, str):
         raise TargetBranchError("runtime-state/%s: target is not a string" % FILE) from None
     return target.strip()
+
+
+def read_checkout(capsule_dir: str) -> str:
+    """The capsule's checkout branch ("" = none): the record's ``checkout``
+    key — an EPIC's own record (polyforge#117), the branch of its own seq
+    its repos are checked out on. The read is as strict as read's; a
+    checkout that is not a string names why."""
+    doc = _read_doc(capsule_dir)
+    if doc is None:
+        return ""
+    checkout = doc.get("checkout")
+    if checkout is None:
+        return ""
+    if not isinstance(checkout, str):
+        raise TargetBranchError("runtime-state/%s: checkout is not a string" % FILE) from None
+    return checkout.strip()

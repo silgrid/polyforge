@@ -149,6 +149,13 @@ class EpicSyncTest(unittest.TestCase):
         fix_epic(w)
         seed, d = w.seeds["app"], w.dir("app")
         out = os.path.join(w.capsule, "artifacts", "sync", "result.json")
+        # the epic branch exists on origin (the children landed on it) and
+        # the clone is checked out on it: the claim's own rule
+        w.git(seed, "fetch", "-q", "origin")
+        w.git(seed, "checkout", "-q", "-B", "epic/2", "origin/main")
+        w.git(seed, "push", "-q", "origin", "HEAD:refs/heads/epic/2")
+        w.git(d, "fetch", "-q", "origin")
+        w.git(d, "checkout", "-q", "-B", "epic/2", "refs/remotes/origin/epic/2")
         # the default branch moves after the epic branch's own work (in a
         # file the branch's work does not touch: a real conflict is the
         # sync agent's, not this pin's)
