@@ -433,7 +433,7 @@ class FactsTargetTest(GitCase):
     def test_micro_bounds_judge_from_the_target_base(self) -> None:
         repos_dir, r = self.world()
         sibling = r.commit("the sibling lands on the target",
-                           {".polyforge/verify-scope.conf": "micro_path=docs/*.md\nmicro_check=echo micro-ok\n",
+                           {".polyforge/verify-scope.conf": "micro_path=docs/**\nmicro_check=echo micro-ok\n",
                             "docs/sibling.txt": "s\n"})
         r.git("update-ref", "refs/remotes/origin/epic/1", sibling)
         r.commit("mine", {"docs/mine.txt": "m\n"})
