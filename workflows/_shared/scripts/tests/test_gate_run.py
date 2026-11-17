@@ -506,6 +506,24 @@ class PreparedImageGateTest(unittest.TestCase):
         self.assertEqual((failed[0]["exit"], failed[0].get("not_run", False)), (3, False))
         self.assertEqual(res.get("image_digest"), IMAGE_ID)
 
+    def test_the_result_records_the_images_repo_digests(self) -> None:
+        repo_digests = ["registry.example/team/verify@sha256:" + "cd" * 32]
+        self.fb.identities[IMAGE_REF] = (IMAGE_ID, list(repo_digests))
+        d = self.clone("stack=none\nfast_gate=echo one\n")
+        r = run_main(["--isolation", "container", "--json", "--image", IMAGE_REF], cwd=d, runtime=self.fb)
+        self.assertEqual(r.exit, 0, r.stderr)
+        res = self.result_of(r)
+        self.assertEqual(res.get("repo_digests"), repo_digests,
+                         "the gate result records the image's RepoDigests beside its local ID")
+        # an image without any: the key is left out, never an empty list
+        fb2 = FakeRuntime(os.path.join(self.root, "box-tmp2"))
+        fb2.identities[OTHER_REF] = (OTHER_ID, [])
+        r2 = run_main(["--isolation", "container", "--json", "--image", OTHER_REF], cwd=d, runtime=fb2)
+        self.assertEqual(r2.exit, 0, r2.stderr)
+        res2 = self.result_of(r2)
+        self.assertNotIn("repo_digests", res2, "no RepoDigests, no key")
+        self.assertEqual(res2.get("image_digest"), OTHER_ID)
+
     def test_the_triage_opens_the_prepared_image_too(self) -> None:
         d = self.clone("stack=none\nfast_gate=echo one\n")
         lines: List[str] = []

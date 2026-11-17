@@ -541,6 +541,21 @@ class PreparedImageVerifyTest(unittest.TestCase):
         self.assertEqual((fb.builds, fb.starts), ([], []))
         self.assertIn(container.IMAGE_MISSING_MARK, doc_of(r)["incomplete"])
 
+    def test_the_container_report_records_the_images_repo_digests(self) -> None:
+        """Pins end to end what u1 pinned at the report level: a non-empty
+        RepoDigest reaches verify.py's own result, repos[].container. Born
+        green on the tree it lands on — the record has carried it since u1 —
+        the gate side's twin (PreparedImageGateTest) is the red one."""
+        repo_digests = ["registry.example/team/verify@sha256:" + "cd" * 32]
+        f, eng = self.fx("fx", True, cmd_of("unit", "fast", "true"))
+        fb = FakeRuntime(os.path.join(self.root, "box"))
+        fb.identities[IMAGE_REF] = (IMAGE_ID, list(repo_digests))
+        r = self.image_run(f.capsule, eng, fb, image=IMAGE_REF)
+        self.assertEqual(r.exit, 0, r.stderr)
+        reps = {rp["name"]: rp for rp in doc_of(r)["repos"]}
+        self.assertEqual(reps["app"]["container"]["repo_digests"], repo_digests,
+                        "verify.py's result carries the image's RepoDigests")
+
 
 if __name__ == "__main__":
     unittest.main()
