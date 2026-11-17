@@ -35,10 +35,13 @@ recorded in `artifacts/build/units.json` and checked as the skill says;
 the change analysis (`artifacts/build/change-analysis.json`) names the
 tests the full verification runs beside the engine's own selection —
 write it, its supplement cap the lane's `vars.supplement_limit`
-({{supplement_limit}}); the fast checks run over the whole increment; the self-review
-reads the full diff of the INCREMENT
-(`git diff $(git merge-base HEAD origin/<the default branch>)..HEAD`)
-against review's five blocking classes. `pf step ask` only on the cases
+({{supplement_limit}}); the fast checks run over the whole increment; the
+self-review reads the full diff review judges — the WHOLE epic against
+the default branch
+(`git diff $(git merge-base HEAD origin/<the default branch>)..HEAD`) —
+against review's five blocking classes, naming within it the increment
+this round owns (the commits since the heads the FAILing gate's header
+stamps). `pf step ask` only on the cases
 your skill names, right after the
 plan, never at the end.
 

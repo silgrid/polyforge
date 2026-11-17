@@ -10,12 +10,13 @@ own landing record (the ONE record the integrate pool takes; each
 child's ``landed_on_target`` evidence rides it verbatim and stays on the
 child's own work item).
 
-The read is strict (never a silent landing without the children): a file
+The read is strict (never a landing over an unreadable snapshot): a file
 that is there but cannot be read, is not valid JSON, or is not the
-expected object raises :class:`ChildrenError`` naming why — the caller
+expected object raises :class:`ChildrenError` naming why — the caller
 refuses (a step's not-judged exit 2 naming the reason). A capsule
-without the file is not an epic's: :func:`read` answers ``None`` and the
-caller keeps its own shape, unchanged.
+without the file is not an epic's — the landing needs no children then:
+:func:`read` answers ``None`` and the caller keeps its own shape,
+unchanged.
 
 The snapshot's children are exactly the claim's own, sorted by seq; each
 entry carries ``id``, ``slug``, ``status`` and the ``landing`` record the
