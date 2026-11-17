@@ -332,7 +332,9 @@ its four columns.
   hooks and command-running git config, other work items' capsules and
   worktrees, processes it did not start), scoped to that directory and
   excepting only what the task itself explicitly requires, then
-  `# Task` and the task's prompt — a soft rule the agent keeps, not a boundary;
+  `# Task` and the task's prompt, and — since the scratch layout
+  (polyforge#121) — a closing `# Scratch` section naming the task's own
+  scratch directories — a soft rule the agent keeps, not a boundary;
   `list` and `show` keep the prompt as given. The harness tool allowlist
   (read/search, Bash and the web tools) is the lane's own scope, not a
   security boundary. A claude task runs a claude step's profile in every
@@ -340,7 +342,11 @@ its four columns.
   AGENTS.md plugin off, no cross-session messaging inbox), so the tools it
   has are exactly that allowlist.
 - **The one capability gate is the write-verb guard.** The task process is
-  spawned with `PF_TASK_ID` and `PF_DAEMON_ID`, so the daemon refuses it
+  spawned with `PF_TASK_ID` and `PF_DAEMON_ID`, and — for every task that
+  may write — with `PF_SCRATCH_DIR` and `PF_SCRATCH_RAW_DIR`: the daemon
+  creates `scratch/tasks/<task id>/` and the task's own raw batch
+  `scratch/raw/<UTC time>-<task id>-<unique suffix>/` before the dispatch
+  (a read-only errand runs without them and creates nothing), so the daemon refuses it
   `DAEMON-403` on EVERY mutating request to its Unix socket (spawning or
   cancelling a task, `/step/call`, job lifecycle, shutdown included) and
   `pf` refuses it every write verb locally before any config read or network
