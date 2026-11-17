@@ -28,9 +28,9 @@ package runtime
 //     never reach a log, an artifact or the recording.
 //   - POLYFORGE_TEST_PF101_RECORD_DIR names a directory the probes write
 //     their JSON recordings into (the binary's version line, the argv
-//     shape with the prompt elided, the verdict and a 120-byte excerpt
-//     around the rule from the decoded record; never a credential, never
-//     a full transcript).
+//     shape with the prompt elided, the verdict and a short rune-aligned
+//     window around the rule from the decoded record; never a credential,
+//     never a full transcript).
 //
 // The probes are bounded: every harness run is a foreground
 // exec.CommandContext with a deadline, and the local endpoints close
@@ -60,7 +60,7 @@ type pf101ClaudeCompactVerdict struct {
 	PostCompactRequest         bool   `json:"post_compact_request"`         // an api-request-blob exists after the boundary
 	RuleInPostCompactRequest   bool   `json:"rule_in_post_compact_request"` // that request carries the rule bytes
 	RuleInPostCompactEphemeral bool   `json:"rule_in_post_compact_attachment"`
-	Excerpt                    string `json:"rule_excerpt,omitempty"` // 120 bytes around the rule, from the decoded request string
+	Excerpt                    string `json:"rule_excerpt,omitempty"` // the window around the rule, from the decoded request string that carries it
 	Detail                     string `json:"detail"`
 }
 
@@ -69,8 +69,9 @@ type pf101ClaudeCompactVerdict struct {
 // still carries the rule — and whether the instructions attachment
 // (the context file Claude Code re-reads) carries it too.
 //
-// Stub ahead of the fixtures (polyforge#101 u8): the zero-value body
-// keeps the first red an assertion, never a compile error.
+// The bodies first shipped one ordinary commit ahead of the tests as
+// zero-value stubs, so the fixtures' first red was an assertion, never a
+// compile error (the test-first record).
 func pf101ClaudeCompactVerdictOf(raw []byte, rule string) pf101ClaudeCompactVerdict {
 	// a decoded string value may drop the rule's one trailing newline
 	// (the file's last byte); the body is the full text either way
@@ -121,7 +122,24 @@ func pf101ClaudeCompactVerdictOf(raw []byte, rule string) pf101ClaudeCompactVerd
 	return v
 }
 
-// pf101Excerpt answers 120 bytes around want from the first decoded
+// pf101Window answers a short window around want inside s, from i (the
+// byte index want was found at) — rune-aligned, so a multibyte character
+// is never cut in half (review r2#N2).
+func pf101Window(s string, i, n int) string {
+	r := []rune(s)
+	ri := len([]rune(s[:i]))
+	rn := len([]rune(s[i : i+n]))
+	lo, hi := ri-40, ri+rn+80
+	if lo < 0 {
+		lo = 0
+	}
+	if hi > len(r) {
+		hi = len(r)
+	}
+	return string(r[lo:hi])
+}
+
+// pf101Excerpt answers a short window around want from the first decoded
 // string value of the one JSON record that carries it ("" when none
 // does). A JSONL record is one line; embedded newlines are \n escapes
 // there, so the comparison reads the decoded strings.
@@ -159,15 +177,7 @@ func pf101Excerpt(record, want string) string {
 		return ""
 	}
 	i := strings.Index(found, want)
-	lo := i - 40
-	if lo < 0 {
-		lo = 0
-	}
-	hi := i + len(want) + 80
-	if hi > len(found) {
-		hi = len(found)
-	}
-	return found[lo:hi]
+	return pf101Window(found, i, len(want))
 }
 
 // pf101AnyString reports whether any string value of the one JSON record
@@ -205,15 +215,14 @@ func pf101AnyString(record, want string) bool {
 type pf101PiSystemVerdict struct {
 	SystemSeen      bool   `json:"system_seen"`
 	RuleInSystemCtx bool   `json:"rule_in_system_context"`
-	Excerpt         string `json:"rule_excerpt,omitempty"` // 120 bytes around the rule, from the project-context section
+	Excerpt         string `json:"rule_excerpt,omitempty"` // the window around the rule, from the project-context section alone
 	Detail          string `json:"detail"`
 }
 
 // pf101PiSystemVerdict reads a pi session JSONL and answers whether the
 // system message's project-context section (the context file pi loads)
-// carries the rule bytes.
-//
-// Stub ahead of the fixtures (polyforge#101 u8).
+// carries the rule bytes — that section alone: a rule appearing anywhere
+// else in the record does not count (the fixture pins it).
 func pf101PiSystemVerdictOf(raw []byte, rule string) pf101PiSystemVerdict {
 	rule = strings.TrimSuffix(rule, "\n")
 	var v pf101PiSystemVerdict
@@ -235,9 +244,14 @@ func pf101PiSystemVerdictOf(raw []byte, rule string) pf101PiSystemVerdict {
 		}
 		if r.Message.Role == "system" {
 			v.SystemSeen = true
-			if ex := pf101Excerpt(line, rule); ex != "" {
+			// the verdict answers whether pi's LOADED CONTEXT FILE
+			// (the system message's project-context section) carries
+			// the rule — that section alone, never another section of
+			// the record (review r2#1)
+			ctx := r.Message.Sections["project_context"]
+			if i := strings.Index(ctx, rule); i >= 0 {
 				v.RuleInSystemCtx = true
-				v.Excerpt = ex
+				v.Excerpt = pf101Window(ctx, i, len(rule))
 			}
 		}
 	}
