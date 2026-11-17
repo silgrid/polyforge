@@ -26,33 +26,45 @@ import (
 
 	"github.com/silgrid/polyforge/internal/common/capsule"
 	"github.com/silgrid/polyforge/internal/common/workflow"
-	"github.com/silgrid/polyforge/internal/common/workflow/workflowtest"
 	"github.com/silgrid/polyforge/internal/polyforge/stepcall"
 )
 
 const epicBundle = "epic"
 
 // epicEnv lays out a capsule whose lane is the SHIPPED epic lane (the
-// bundle read from the workflows tree, as a claim's snapshot copies it)
-// and builds a driver over it with the scripted spawner.
+// bundle read from the shipped workflows tree, as a claim's snapshot
+// copies it, shared tree included) and builds a driver over it with the
+// scripted spawner.
 func epicEnv(t *testing.T, script []fakeEntry) (*Driver, *fakeSpawner, *eventLog, string) {
 	t.Helper()
 	ws := t.TempDir()
 	dir := filepath.Join(ws, "capsules", "wi_epic")
-	workflowtest.WriteLane(t, filepath.Join(dir, capsule.DirWorkflows), epicBundle, epicShippedFront(t))
 	writeCapsuleFile(t, dir, capsule.WorkItemJSON, `{"id":"wi_epic","slug":"demo-2","project":"proj","goal":"g"}`)
 	sp := &fakeSpawner{script: script}
 	log := &eventLog{}
 	d, err := New(Config{
-		WI:       WIInfo{ID: "wi_epic", CapsuleDir: dir, BundleName: epicBundle},
-		Spawner:  sp,
-		Log:      log,
-		Language: func() string { return stepcall.LangZhCN },
+		WI:        WIInfo{ID: "wi_epic", CapsuleDir: dir, BundleName: epicBundle},
+		BundleDir: filepath.Join(shippedWorkflowsDir, epicBundle),
+		Spawner:   sp,
+		Forge:     epicFakeForge{},
+		Log:       log,
+		Language:  func() string { return stepcall.LangZhCN },
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	return d, sp, log, dir
+}
+
+// epicFakeForge is the forge binding the scripted runs take the merge
+// lock through (a capsule with no task repos names no key, so the lock
+// itself is never taken).
+type epicFakeForge struct{}
+
+func (epicFakeForge) CommandEnv() []string { return nil }
+
+func (epicFakeForge) LockRepo(context.Context, string) (func(), error) {
+	return func() {}, nil
 }
 
 // epicShippedFront answers the shipped epic workflow.yaml verbatim (the
