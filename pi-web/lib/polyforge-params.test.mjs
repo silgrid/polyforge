@@ -19,7 +19,7 @@ const lib = await jiti.import("./polyforge-params.ts");
 
 test("the params floor is documentation-only (the read degrades like the override view's)", () => {
   assert.equal(typeof lib.POLYFORGE_PARAMS_MINIMUM_PF_VERSION, "string");
-  assert.match(lib.POLYFORGE_PARAMS_MINIMUM_PF_VERSION, /^2\.2[0-9]\.[0-9]+$/);
+  assert.equal(lib.POLYFORGE_PARAMS_MINIMUM_PF_VERSION, "2.22.0", "the exact first release whose pf carries the params verb");
 });
 
 test("the view's wire sanitization keeps every declared param's final value and source", () => {
@@ -49,6 +49,13 @@ test("the view's wire sanitization keeps every declared param's final value and 
   });
   assert.equal(lib.sanitizeParamsView(null), null);
   assert.equal(lib.sanitizeParamsView({ work_item: "", posture: "queued", steps: [] }), null, "no work item names no view");
+  // a step row whose wire carries no params at all keeps its empty list
+  // (the lane declares none on it)
+  const bare = lib.sanitizeParamsView({ work_item: "wi_A1", posture: "running", steps: [{ id: "merge" }, { id: "build", params: undefined }] });
+  assert.deepEqual(bare.steps, [
+    { id: "merge", status: "not started", params: [] },
+    { id: "build", status: "not started", params: [] },
+  ], "a row without a params list keeps the empty list");
   assert.equal(lib.sanitizeParamsView({ work_item: "wi_A1", posture: "queued", steps: [{ id: "" }] }), null, "a row without an id is no view");
   const junk = lib.sanitizeParamsView({
     work_item: "wi_A1", posture: "queued",
