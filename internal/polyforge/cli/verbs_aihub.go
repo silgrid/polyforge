@@ -1245,12 +1245,16 @@ const defaultMemoryShowCap = 262144
 // metadata JSON (additive: unknown fields are ignored — the raw bytes
 // stay the --json face's authority).
 type memoryMetaView struct {
-	ID         string `json:"id"`
-	Type       string `json:"type"`
-	Title      string `json:"title"`
-	Visibility string `json:"visibility"`
-	UpdatedAt  string `json:"updated_at"`
-	ContentLen int64  `json:"content_len"`
+	ID               string          `json:"id"`
+	Type             string          `json:"type"`
+	Title            string          `json:"title"`
+	OwnerUserID      string          `json:"owner_user_id"`
+	OwnerDisplayName string          `json:"owner_display_name"`
+	WriterKind       *string         `json:"writer_kind"`
+	WriterDetails    json.RawMessage `json:"writer_details"`
+	Visibility       string          `json:"visibility"`
+	UpdatedAt        string          `json:"updated_at"`
+	ContentLen       int64           `json:"content_len"`
 }
 
 // memoryShow reads one memory by id: metadata from the default JSON face
