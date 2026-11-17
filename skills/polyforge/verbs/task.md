@@ -87,6 +87,17 @@ leaves a comment on the ticket naming the cause and how far it got. A
 session-spawned errand (`pf task spawn`) still cannot write the ticket: the
 session writes its report (`pf file edit <id> --content @file`).
 
+- The task process carries its scratch directories (polyforge#121):
+  the daemon creates `scratch/tasks/<task id>/` and the task's own raw
+  batch `scratch/raw/<UTC time>-<task id>-<unique suffix>/` before the
+  dispatch and hands them both ways — `PF_SCRATCH_DIR` and
+  `PF_SCRATCH_RAW_DIR` in the environment, and the same absolute paths
+  in the prompt's closing `# Scratch` section. A task's disposable
+  output (logs, downloads, intermediate extracts) goes there — raw data
+  (batch JSON, logs, downloaded archives, history exports) into the raw
+  batch — and nowhere else in the workspace. The directories are kept
+  by the layout's retention: raw 3 days, tasks 14 days, whole
+  directories, `pf doctor --prune-scratch` reclaims them.
 - The task process carries `PF_TASK_ID` (with `PF_DAEMON_ID`): the daemon
   refuses it every mutating unix-socket request with `DAEMON-403`, and `pf`
   refuses every write verb locally before any config read or network call —
