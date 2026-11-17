@@ -335,3 +335,32 @@ children, `HAS_CHILDREN_NO_BUNDLE`; a detach, `CORE-400`). Before rolling
 back, list the bound parents with unwrapped children and either accept that,
 or keep each one waiting with an explicit edge from each bundle-bound child
 (`pf file dep add <child> <parent>`), which both aihubs honor.
+
+## v0.2.3, corrections to the v0.2.2 upgrade notes
+
+Five sections above say v0.2.1 in their headings but belong to v0.2.2:
+each was appended after the v0.2.1 tag and first shipped in the v0.2.2
+release. They are "`pf step ask` answers -h/--help itself", "the gate
+falls back to the lane's scope engine", "the develop merge done by a
+person (`steps.<project>.merge.by: human`)", "the task concurrency
+bound is a Host key" and "a bundle-bound ticket can be a parent"; a
+section that documents a v0.2.1 feature predates the tag, so only those
+five headings misdate their content. The pin's comment list in
+`test/w254_docs_set_acceptance_test.go` still describes the five with
+their v0.2.1 labels, and the w77 contract test pins the bundle-parent
+heading (`v0.2.1, a bundle-bound ticket can be a parent`) verbatim, so
+the older labels stay visible there — this section is the correction
+of record: read each of the five as a v0.2.2 section.
+
+A v0.2.2 pf or daemon that writes a ticket's analysis back to an aihub
+server still on v0.2.1 gets the whole write refused: the request carries
+the new `expected_updated_at` field, and the older server rejects the
+unknown PATCH key before its transaction starts —
+`CORE-400 IMMUTABLE field "expected_updated_at" is not patchable`,
+nothing written. Two writes carry the field: the daemon's automatic
+analysis write-back (the same route as `pf task analysis-write`) and
+`pf file analysis confirm`; `pf file edit` does not carry it and still
+writes against the older server. Deploy the new aihub first, then
+upgrade the pf clients — and an aihub rolled back to v0.2.1 leaves the
+v0.2.2 automatic analysis write-back refused until it is upgraded
+again.
