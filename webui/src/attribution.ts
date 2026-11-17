@@ -29,7 +29,7 @@ export function writerLabel(memory: Pick<MemoryRow, 'writer_kind' | 'writer_deta
   for (const key of WRITER_DETAIL_ORDER) {
     const value = details[key]
     if (typeof value === 'number' && Number.isFinite(value)) parts.push(`${key}=${value}`)
-    else if (typeof value === 'string' && value) parts.push(`${key}=${value}`)
+    else if (typeof value === 'string' && value.trim()) parts.push(`${key}=${value.trim()}`)
   }
   return parts.length ? `${kind} (${parts.join(', ')})` : kind
 }
