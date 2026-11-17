@@ -28,10 +28,12 @@
 //   npm run test:e2e:all -- sessions-compression.mjs
 //
 // The suite needs no browser, but `next start` needs a production build:
-// e2e/all.mjs builds once for a run that selects a browser suite, so a
-// targeted start-mode run of this suite alone builds into its own dist dir
-// first (the path next-server.mjs's noBuild error names) unless the runner
-// already handed every suite a prebuilt build.
+// e2e/all.mjs builds once for a run that selects a browser suite and hands
+// every suite that build, so a targeted start-mode run of this suite alone
+// builds into its own dist dir first (the path next-server.mjs's noBuild
+// error names). A start run without a handed-down prebuilt build always
+// rebuilds — correctness first: a BUILD_ID left by an earlier run of a
+// different tree would serve a stale build and judge the wrong tree.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -94,8 +96,8 @@ mkdirSync(artifacts, { recursive: true });
 
 /** In start mode with no prebuilt build handed down, build this suite's own. */
 async function ensureStartBuild() {
-  if (process.env.E2E_PREBUILT_DIST
-      || existsSync(join(root, process.env.PI_WEB_DIST_DIR, "BUILD_ID"))) return;
+  if (process.env.E2E_PREBUILT_DIST) return;
+  rmSync(join(root, process.env.PI_WEB_DIST_DIR), { recursive: true, force: true });
   const scratchHome = mkdtempSync(join(tmpdir(), "pi-web-sessions-compression-build-"));
   const build = spawn(
     process.execPath,
