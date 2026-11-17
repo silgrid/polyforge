@@ -873,7 +873,7 @@ where the step's lane declares it `skippable: true` (workflow.yaml,
 [workflow contract](workflow-contract.md#step-keys)); a step not declared
 skippable runs on every round of the work item (a `rewind_only`
 declaration alone can hold a step's first round back). The shipped lanes
-declare one: develop's `merge`.
+declare it on develop's and epic's `merge`.
 `skip` is a bool (`true` or `false`; anything else is a load error) and
 `default` and `task` take none (they are no step).
 

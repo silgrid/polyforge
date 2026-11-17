@@ -343,9 +343,22 @@ const listChildrenLimit = 1000
 
 // ListChildren lists the work items whose parent is parentID, newest
 // first (the epic lane's daemon reads an epic's children through it,
-// polyforge#117).
+// polyforge#117). The answer is filtered by parent_id on the client
+// side too: an older server that ignores the parent parameter answers
+// the whole project's page, and the epic's snapshot and running
+// re-check must never see a stranger's work item as its child.
 func (c *Client) ListChildren(parentID string) ([]api.WorkItem, error) {
-	return c.ListWorkItems(WorkItemFilter{Parent: parentID, Limit: listChildrenLimit})
+	items, err := c.ListWorkItems(WorkItemFilter{Parent: parentID, Limit: listChildrenLimit})
+	if err != nil {
+		return nil, err
+	}
+	out := items[:0]
+	for _, wi := range items {
+		if wi.ParentID != nil && *wi.ParentID == parentID {
+			out = append(out, wi)
+		}
+	}
+	return out, nil
 }
 
 // ListWorkItems lists the work items a filter selects, newest first.
