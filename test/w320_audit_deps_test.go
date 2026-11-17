@@ -41,6 +41,7 @@ func w320aFixture(t *testing.T, name string) string {
 // extra environment and the args.
 type w320aRun struct {
 	npmOut, npmErr, npmRC          string
+	npmProdOut                     string // the production-tree audit's replayed report (--omit=dev)
 	govulnOut, govulnErr, govulnRC string
 	path                           string // PATH override; empty = stubs first, then the host PATH
 	args                           []string
@@ -62,6 +63,7 @@ func w320aExec(t *testing.T, dir string, r w320aRun) (string, int, string) {
 		}
 	}
 	add("W320_NPM_OUT", r.npmOut)
+	add("W320_NPM_PROD_OUT", r.npmProdOut)
 	add("W320_NPM_ERR", r.npmErr)
 	add("W320_NPM_RC", r.npmRC)
 	add("W320_GOVULN_OUT", r.govulnOut)
@@ -159,6 +161,59 @@ func TestW320AuditNpmThreshold(t *testing.T) {
 
 	errb, code, _ = w320aExec(t, dir, w320aRun{npmOut: w320aFixture(t, "npm-moderate.json"), args: []string{"--npm", "web"}})
 	w320aWant(t, "moderate only", errb, code, 0, []string{"surface npm:web: audited, 0 finding(s)"}, []string{"finding:"})
+}
+
+// TestW320AuditDeclaredLevel: with --npm-prod-level moderate the gate runs
+// a second, production-only audit per npm surface and a moderate advisory on
+// a production dependency is a red finding that names the surface, the
+// package and the advisory — the polyforge#113 fixture: next 16.4.4,
+// GHSA-mfr8-8qww-v76h (npm advisory 1247486), the advisory that shipped with
+// v0.2.2. The fixed tree (16.4.6) passes; a moderate confined to dev
+// dependencies is not a finding (dev stays at the high threshold); without
+// the flag the behaviour is unchanged, other projects unaffected.
+func TestW320AuditDeclaredLevel(t *testing.T) {
+	dir := w320aTree(t)
+	// The production tree carries the moderate: red, naming surface, package and advisory.
+	err, code, args := w320aExec(t, dir, w320aRun{
+		npmOut:     w320aFixture(t, "npm-next-moderate.json"), npmRC: "1",
+		npmProdOut: w320aFixture(t, "npm-next-moderate.json"),
+		args:       []string{"--npm", "web", "--npm-prod-level", "moderate"},
+	})
+	w320aWant(t, "declared level, prod moderate", err, code, 1,
+		[]string{"finding: surface npm:web: GHSA-mfr8-8qww-v76h in next (moderate", "surface npm:web: audited, 1 finding(s)"},
+		[]string{"tool-missing:", "db-unreachable:"})
+	flat := strings.Join(strings.Fields(args), " ")
+	for _, a := range []string{"--audit-level=moderate", "--package-lock-only", "--omit=dev"} {
+		if !strings.Contains(flat, a) {
+			t.Fatalf("the production-only audit must run with %s: %q", a, args)
+		}
+	}
+	if strings.Count(flat, "--include=dev") != 1 || strings.Count(flat, "--omit=dev") != 1 {
+		t.Fatalf("a declared level runs the whole-tree audit and one production-only audit, no more: %q", args)
+	}
+
+	// The fixed tree passes.
+	err, code, _ = w320aExec(t, dir, w320aRun{
+		npmOut:     w320aFixture(t, "npm-next-fixed.json"),
+		npmProdOut: w320aFixture(t, "npm-next-fixed.json"),
+		args:       []string{"--npm", "web", "--npm-prod-level", "moderate"},
+	})
+	w320aWant(t, "fixed tree", err, code, 0, []string{"surface npm:web: audited, 0 finding(s)"}, []string{"finding:"})
+
+	// A moderate confined to dev dependencies (the production tree is clean)
+	// stays green: dev dependencies remain at the high threshold.
+	err, code, _ = w320aExec(t, dir, w320aRun{
+		npmOut: w320aFixture(t, "npm-next-moderate.json"),
+		args:   []string{"--npm", "web", "--npm-prod-level", "moderate"},
+	})
+	w320aWant(t, "dev-only moderate", err, code, 0, []string{"surface npm:web: audited, 0 finding(s)"}, []string{"finding:"})
+
+	// Without the flag nothing changes: the whole tree at high, no second run.
+	err, code, args = w320aExec(t, dir, w320aRun{npmOut: w320aFixture(t, "npm-next-moderate.json"), args: []string{"--npm", "web"}})
+	w320aWant(t, "undeclared level", err, code, 0, []string{"surface npm:web: audited, 0 finding(s)"}, []string{"finding:"})
+	if flat = strings.Join(strings.Fields(args), " "); strings.Contains(flat, "--omit") || strings.Contains(flat, "prod-level") {
+		t.Fatalf("without --npm-prod-level the whole-tree audit alone runs: %q", args)
+	}
 }
 
 // TestW320AuditNpmDevOnly: the only high hit is in a dev dependency; a run
@@ -340,12 +395,14 @@ func TestW320AuditGoReachability(t *testing.T) {
 }
 
 // TestW320AuditUsage: no surface or an unknown argument is a usage error.
+// --npm-prod-level tightens the npm production threshold only: its value may
+// be moderate or low, never high or critical (the default) or garbage.
 func TestW320AuditUsage(t *testing.T) {
 	dir := w320aTree(t)
-	for _, args := range [][]string{nil, {"--skip"}, {"--npm"}} {
-		errb, code, _ := w320aExec(t, dir, w320aRun{args: args})
+	for _, args := range [][]string{nil, {"--skip"}, {"--npm"}, {"--npm-prod-level"}, {"--npm-prod-level", "high"}, {"--npm-prod-level", "critical"}} {
+		err, code, _ := w320aExec(t, dir, w320aRun{args: args})
 		if code != 2 {
-			t.Fatalf("args %q: exit %d, want 2 (usage); stderr:\n%s", args, code, errb)
+			t.Fatalf("args %q: exit %d, want 2 (usage); stderr:\n%s", args, code, err)
 		}
 	}
 }
