@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/workflow/workflowtest"
+	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
 
 // pf89Root answers the repository root (this package sits three levels
@@ -113,7 +114,7 @@ func pf89WriteWorkspace(t *testing.T, td *testDaemon) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(ws, "workspace.yaml"),
+	if err := os.WriteFile(filepath.Join(ws, workspace.FileName),
 		[]byte("steps:\n  proj:\n    task: { models: [pi:pf89/m] }\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -136,8 +137,10 @@ func pf89Clone(t *testing.T, td *testDaemon, name string) {
 	}
 	run := func(args ...string) {
 		t.Helper()
-		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
-			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		cmd := exec.Command("git", args...)
+		cmd.Dir = d
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s in %s: %v\n%s", strings.Join(args, " "), d, err, out)
 		}
 	}
 	run("init", "-q", "-b", "main")
