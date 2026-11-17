@@ -77,7 +77,7 @@ func newGitDirsFixture(t *testing.T, daemonUp bool) gitDirsFixture {
 	ws := filepath.Join(filepath.Dir(env["XDG_CONFIG_HOME"]), "ws-polyforge")
 	data := t.TempDir()
 	env["POLYFORGE_DATA_DIR"] = data
-	git := filepath.Join(data, "git")
+	git := filepath.Join(data, "cells", "default", "git")
 	f := gitDirsFixture{
 		env:        env,
 		rec:        rec,

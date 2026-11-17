@@ -179,7 +179,8 @@ projects whose capsules live under that path. It is the daemon's only
 placement source, read per Cell — and the CLI's placement verbs
 (`file create`, `recall`, `remember`) validate their `--project` against
 the same routed Cell's mapping (polyforge#17). Every mapped directory
-must pre-exist, and the daemon refuses to start without a real mapping.
+must pre-exist, and `pf daemon ensure` starts the daemon only once at
+least one Cell carries a real mapping.
 The full shape is
 [extending: workspace mapping](extending.md#workspace-mapping).
 

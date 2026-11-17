@@ -16,9 +16,12 @@ import (
 	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
 
-// doctor_gitdirs.go: the "capsule retention" row of `pf doctor`. The
-// runtime never deletes a work item's capsule (capsules/<name>), its
-// external git dir (<data-dir>/git/<wi>.git) nor a quarantined scene
+// doctor_gitdirs.go: the "capsule retention" row of `pf doctor`, run
+// once per Cell: it scans that Cell's external git dir
+// (<data-dir>/cells/<profile>/git/<wi>.git, polyforge#20 — the
+// pre-migration <data-dir>/git root is never read again) and that
+// Cell's workspaces' capsules. The runtime never deletes a work item's
+// capsule (capsules/<name>), its external git dir nor a quarantined scene
 // (<wi>.git.quarantined.<ts>, capsules/<name>.quarantined.<ts>):
 // quarantine only renames, so the bytes always survive. This row
 // reports them — count and size — and `pf doctor --prune-capsules`
@@ -92,8 +95,8 @@ const (
 )
 
 // scanRetainedDirs lists the external git dirs and quarantined git dirs
-// under <dataDir>/git and the capsules, live and quarantined, of every
-// workspace.
+// under the Cell dir's git/ and the capsules, live and quarantined, of
+// every workspace of that Cell.
 func scanRetainedDirs(dataDir string, wss []string) ([]retainedDir, []string) {
 	var out []retainedDir
 	var errs []string
@@ -405,7 +408,7 @@ func capsuleRetentionCheck(r *doctorRun, dataDir string, now time.Time) (string,
 	}
 	states := map[string]string{}
 	if r.reachOK && len(owners) > 0 {
-		states = workItemStates(newProxyClient(r.cfg.DaemonSocket, ""), r.cfg.Mapping.Projects(), owners)
+		states = workItemStates(newProxyClient(r.cfg.DaemonSocket, r.profile), r.cfg.Mapping.Projects(), owners)
 	}
 	type tally struct {
 		n    int

@@ -44,8 +44,9 @@ operator's; AUTH-401: signature or clock) and `daemon.log` shows which.
 The one step the installer leaves to you: add the `[workspace."<path>"]`
 mapping with the projects you work in through the one supported writer,
 `pf config set '[workspace."<path>"]' projects=a,b,c` — the installer writes
-only the flat connection keys and never fabricates a mapping; the daemon
-refuses to start without a real mapping and the installer skips the daemon
+only the flat connection keys and never fabricates a mapping; `pf daemon
+ensure` starts the daemon only once at least one Cell (cli.toml or a
+`cli-*.toml` beside it) has a real mapping, and the installer skips the daemon
 start until one exists (a Host file with a connection and no mapping now
 loads with execution disabled). One daemon serves several AIHubs, one Cell
 per profile: `printf '%s\n' "$KEY" | pf cell add <name> --server <url>

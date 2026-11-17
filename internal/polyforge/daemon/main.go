@@ -17,8 +17,10 @@ package daemon
 // polyforge#113: there is NO launch-time workspace and NO project scope
 // anymore. The [workspace."<path>"] mapping in the shared config (the
 // --config file, defaulting to the standard cli.toml location) is the
-// only workspace source — the daemon refuses to start without a non-empty
-// mapping, validates every mapped workspace, routes capsules per project
+// only workspace source — the daemon starts with an empty mapping (its
+// execution plane just stays closed; `pf daemon ensure` is the one that
+// waits for a mapping in some Cell), validates every mapped workspace,
+// routes capsules per project
 // through the inverse mapping, and iterates all mapped projects when
 // auto-pulling. The retired selection surfaces (the -workspace flag, the
 // --project flag and their env mirrors) are refused loudly at boot.

@@ -76,8 +76,9 @@ curl -s -H "Authorization: token $(gh auth token)" \
   | bash -s -- "$PF_KEY" 127.0.0.1
 ```
 
-**5. Add the `[workspace]` mapping to your config** — the daemon refuses
-to start without one (polyforge#113): the installer writes only the flat
+**5. Add the `[workspace]` mapping to your config** — `pf daemon ensure`
+does not start the daemon until at least one Cell has one
+(polyforge#113): the installer writes only the flat
 connection keys, so the mapping below is what makes `pf daemon ensure`
 startable, and the mapped directory must pre-exist. Use `pf config` (the
 one supported writer) rather than editing the file:

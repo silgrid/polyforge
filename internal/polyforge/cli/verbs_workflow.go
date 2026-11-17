@@ -390,7 +390,7 @@ func workflowLanesCheck(r *doctorRun) (string, string) {
 		}
 		return "pass", ok + "; the queued work items were not read: " + r.reachMsg
 	}
-	client := newProxyClient(r.cfg.DaemonSocket, "")
+	client := newProxyClient(r.cfg.DaemonSocket, r.profile)
 	var items []WIView
 	var unread []string
 	for _, p := range r.cfg.Mapping.Projects() {

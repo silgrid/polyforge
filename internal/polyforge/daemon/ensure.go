@@ -107,14 +107,22 @@ func Ensure(argv []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// planEnsure resolves the canonical launch. A config without a workspace
-// mapping is refused: the daemon would refuse it and the loop would spin.
+// planEnsure resolves the canonical launch. The mapping gate is
+// machine-wide (polyforge#20): any Cell — the Host file's, or a valid
+// named Cell's (Q7=b) — carrying a [workspace] mapping admits the
+// plan; a machine whose every Cell lacks one is refused, because
+// nothing could ever execute on it (the daemon itself starts fine with
+// empty mappings — its execution plane just stays closed).
 func planEnsure(cfgPath, workflowsDir string, timeout time.Duration) (*ensurePlan, error) {
 	if cfgPath == "" {
 		cfgPath = cli.DefaultConfigPath()
 	}
 	cfgPath = absOr(cfgPath)
 	shared, err := cli.LoadConfig(cfgPath)
+	if err != nil {
+		return nil, err
+	}
+	set, err := cli.LoadHostSet(cfgPath)
 	if err != nil {
 		return nil, err
 	}
@@ -130,8 +138,18 @@ func planEnsure(cfgPath, workflowsDir string, timeout time.Duration) (*ensurePla
 	p := &ensurePlan{pfBin: exe, configPath: cfgPath, dataDir: dataDir, socket: shared.DaemonSocket,
 		workflowsDir: absOr(workflowsDir), machineID: ensureMachineID(dataDir), home: home, timeout: timeout,
 		launcher: launcherFromEnv(os.Environ())}
-	if shared.Mapping.Empty() {
-		p.refuse = fmt.Errorf("not starting the daemon: %s has no [workspace.\"<path>\"] mapping, so the daemon would refuse to start — add one, check it with `pf doctor`, then run `pf daemon ensure` again", cfgPath)
+	mapped := !set.Host.Mapping.Empty()
+	for _, c := range set.Cells {
+		if c.Invalid == "" && !c.Cfg.Mapping.Empty() {
+			mapped = true
+		}
+	}
+	if !mapped {
+		files := []string{cfgPath}
+		for _, c := range set.Cells {
+			files = append(files, c.Path)
+		}
+		p.refuse = fmt.Errorf("not starting the daemon: no [workspace] mapping in any Cell — checked %s — add one with `pf config set '[workspace.\"<path>\"]' projects=...`, check it with `pf doctor`, then run `pf daemon ensure` again", strings.Join(files, ", "))
 	}
 	return p, nil
 }

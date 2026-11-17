@@ -350,7 +350,7 @@ func cloneRemediation(name string, reg *repoRegistry) string {
 // verdicts into ONE row (status pass|skip|warn as plan decision 6 —
 // never fail; pass says how many were scanned).
 func repoClonesCheck(r *doctorRun) (string, string) {
-	aihub := newProxyClient(r.cfg.DaemonSocket, "")
+	aihub := newProxyClient(r.cfg.DaemonSocket, r.profile)
 	reg := repoRegistry{client: aihub, projects: r.cfg.Mapping.Projects()}
 	var warnNotes, skipNotes []string
 	scanned := 0

@@ -16,6 +16,7 @@ import (
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/common/harness"
 	"github.com/silgrid/polyforge/internal/common/workflow"
+	"github.com/silgrid/polyforge/internal/polyforge/cellcfg"
 	"github.com/silgrid/polyforge/internal/polyforge/mapping"
 	"github.com/silgrid/polyforge/internal/polyforge/supervisor"
 	"github.com/silgrid/polyforge/internal/polyforge/workspace"
@@ -39,24 +40,43 @@ import (
 //
 // Exit codes: 0 every check passes, 1 any check fails, 2 usage errors.
 // --json emits {"ok": <bool>, "checks": [{"name", "status":
-// "pass"|"fail"|"skip"|"warn", "detail"}]}.
+// "pass"|"fail"|"skip"|"warn", "detail", "cell"}]}: the `cell` field
+// names the Cell a Cell-level row examined (absent on the Host-level
+// rows). The human output is the default Cell's full report, then one
+// section per named Cell under a header naming the Cell and its file.
+// `--profile` narrows nothing: the doctor always examines every Cell
+// (polyforge#20).
 //
 // The verb loads the config ITSELF (Command.NoConfigLoad): an unloadable
 // config is the subject of the report, not an early exit.
 
-// doctorCheck is one check row of the report.
+// doctorCheck is one check row of the report. Cell names the Cell a
+// Cell-level row examined ("" = a Host-level row, run once for the
+// machine).
 type doctorCheck struct {
 	Name   string `json:"name"`
 	Status string `json:"status"` // pass | fail | skip | warn
 	Detail string `json:"detail"`
+	Cell   string `json:"cell,omitempty"`
 }
 
 func (c doctorCheck) row() (string, string) { return c.Status, c.Detail }
 
-// doctorReport is the --json document shape.
+// doctorReport is the --json document shape. sections (unexported, so
+// never marshaled) carries the named Cells' section metadata for the
+// human renderer.
 type doctorReport struct {
-	OK     bool          `json:"ok"`
-	Checks []doctorCheck `json:"checks"`
+	OK       bool          `json:"ok"`
+	Checks   []doctorCheck `json:"checks"`
+	sections []doctorSection
+}
+
+// doctorSection is one named Cell's block of the human output: the
+// header facts (the Cell's profile and its file) and its Cell-level
+// rows.
+type doctorSection struct {
+	Profile, Path string
+	Checks        []doctorCheck
 }
 
 // The check names (stable faces; the details carry the specifics).
@@ -84,18 +104,25 @@ const (
 	docChLanes = "workflow lanes"
 )
 
-// doctorRun is what one run loaded and probed once; the checks read it.
+// doctorRun is what one Cell's run loaded and probed once; the checks
+// read it. cell is the row label ("default" or the named profile);
+// profile is the X-PF-Profile value of this Cell's daemon reads (""
+// for the default Cell — the Host's unprofiled route IS the default
+// Cell's); cellPath is the file this Cell's keys live in (the auth
+// wording names it).
 type doctorRun struct {
-	cfg               Config
-	present, missing  []string // mapped workspaces that exist as directories / do not
-	prune             bool     // --prune-scratch
-	pruneCapsules     bool     // --prune-capsules
-	fixPrompts        bool     // --fix-harness-prompts
-	reachOK, sockOK   bool
-	reachMsg, sockMsg string
-	status            StatusResponse
-	claudeSteps       []workspace.StepResolution // set by the workspace yaml check
-	auth              doctorCheck                // set by the aihub projects check
+	cell, profile, cellPath string
+	cfg                     Config
+	anyMapped               bool     // any Cell of the machine carries a mapping (the mapping row's verdict)
+	present, missing        []string // mapped workspaces that exist as directories / do not
+	prune                   bool     // --prune-scratch
+	pruneCapsules           bool     // --prune-capsules
+	fixPrompts              bool     // --fix-harness-prompts
+	reachOK, sockOK         bool
+	reachMsg, sockMsg       string
+	status                  StatusResponse
+	claudeSteps             []workspace.StepResolution // set by the workspace yaml check
+	auth                    doctorCheck                // set by the aihub projects check
 }
 
 // doctorNeed is a check's prerequisite beyond a loadable config.
@@ -107,71 +134,86 @@ const (
 	needAihub              // a reachable aihub, then a mapping
 )
 
+// doctorScope says whether a row runs once for the machine (host) or
+// once per Cell (cell) — polyforge#20's division of the ladder, kept in
+// the ladder's one order: the default Cell's section prints the rows
+// interleaved exactly as before, each named Cell's section carries the
+// Cell-level rows alone.
+type doctorScope int
+
+const (
+	scopeHost doctorScope = iota
+	scopeCell
+)
+
 // doctorCheckSpec is one rung of the check ladder: the row name, its
+// scope (host: once per machine; cell: once per Cell), its
 // prerequisite and the check itself.
 type doctorCheckSpec struct {
-	name string
-	need doctorNeed
-	run  func(*doctorRun) (string, string)
+	name  string
+	scope doctorScope
+	need  doctorNeed
+	run   func(*doctorRun) (string, string)
 }
 
 // doctorChecks is the check ladder in report order. A check whose need
-// is unmet is reported skip with the reason.
+// is unmet is reported skip with the reason; a check whose scope is
+// cell runs once per Cell, host once per machine.
 var doctorChecks = []doctorCheckSpec{
-	{docChMapping, needConfig, mappingCheck},
-	{docChDirs, needMapping, func(r *doctorRun) (string, string) {
+	{docChMapping, scopeCell, needConfig, mappingCheck},
+	{docChDirs, scopeCell, needMapping, func(r *doctorRun) (string, string) {
 		if len(r.missing) > 0 {
 			return "fail", "mapped workspace directory missing or not a directory: " + strings.Join(r.missing, ", ") + " — create it (the daemon never does) or fix the [workspace] key"
 		}
 		return "pass", fmt.Sprintf("all %d mapped workspace(s) exist as directories", len(r.present))
 	}},
-	{docChLayout, needMapping, func(r *doctorRun) (string, string) { return workspaceLayoutCheck(r.present).row() }},
-	{docChScratch, needMapping, func(r *doctorRun) (string, string) { return scratchCheck(r.present, time.Now(), r.prune).row() }},
-	{docChCapsuleRetention, needConfig, func(r *doctorRun) (string, string) {
+	{docChLayout, scopeCell, needMapping, func(r *doctorRun) (string, string) { return workspaceLayoutCheck(r.present).row() }},
+	{docChScratch, scopeCell, needMapping, func(r *doctorRun) (string, string) { return scratchCheck(r.present, time.Now(), r.prune).row() }},
+	{docChCapsuleRetention, scopeCell, needConfig, func(r *doctorRun) (string, string) {
 		home, _ := os.UserHomeDir()
-		return capsuleRetentionCheck(r, DataDir(home), time.Now())
+		return capsuleRetentionCheck(r, cellcfg.CellDir(DataDir(home), r.cell), time.Now())
 	}},
-	{docChDisk, needMapping, func(r *doctorRun) (string, string) { return diskCheck(r.present).row() }},
-	{docChRepoClones, needMapping, func(r *doctorRun) (string, string) { return repoClonesCheck(r) }},
-	{docChLightFallbacks, needMapping, lightFallbacksCheck},
-	{docChMemPolicy, needMapping, func(r *doctorRun) (string, string) { return memoryPolicyCheck(r.cfg, r.present).row() }},
-	{docChPrereqs, needConfig, func(r *doctorRun) (string, string) { return prerequisitesCheck(exec.LookPath).row() }},
-	{docChPython, needConfig, func(r *doctorRun) (string, string) {
+	{docChDisk, scopeCell, needMapping, func(r *doctorRun) (string, string) { return diskCheck(r.present).row() }},
+	{docChRepoClones, scopeCell, needMapping, func(r *doctorRun) (string, string) { return repoClonesCheck(r) }},
+	{docChLightFallbacks, scopeCell, needMapping, lightFallbacksCheck},
+	{docChMemPolicy, scopeCell, needMapping, func(r *doctorRun) (string, string) { return memoryPolicyCheck(r.cfg, r.present).row() }},
+	{docChPrereqs, scopeHost, needConfig, func(r *doctorRun) (string, string) { return prerequisitesCheck(exec.LookPath).row() }},
+	{docChPython, scopeHost, needConfig, func(r *doctorRun) (string, string) {
 		return pythonCheck(r.cfg.Daemon.Python, exec.LookPath, ProbePython).row()
 	}},
-	{docChDevNull, needConfig, func(r *doctorRun) (string, string) { return devNullCheck(os.DevNull).row() }},
-	{docChAuditTools, needConfig, func(r *doctorRun) (string, string) { return auditToolsCheck(exec.LookPath).row() }},
-	{docChHostRequires, needMapping, hostRequiresCheck},
-	{docChServer, needConfig, func(r *doctorRun) (string, string) {
+	{docChDevNull, scopeHost, needConfig, func(r *doctorRun) (string, string) { return devNullCheck(os.DevNull).row() }},
+	{docChAuditTools, scopeHost, needConfig, func(r *doctorRun) (string, string) { return auditToolsCheck(exec.LookPath).row() }},
+	{docChHostRequires, scopeCell, needMapping, hostRequiresCheck},
+	{docChServer, scopeCell, needConfig, func(r *doctorRun) (string, string) {
 		if !r.sockOK {
 			return "skip", "not run: " + r.reachMsg
 		}
 		return passOrFail(r.reachOK), r.reachMsg
 	}},
-	{docChSocket, needConfig, func(r *doctorRun) (string, string) { return passOrFail(r.sockOK), r.sockMsg }},
-	{docChSupervision, needConfig, func(r *doctorRun) (string, string) { return supervisionCheck(r.sockOK).row() }},
-	{docChReload, needConfig, reloadCheck},
-	{docChModelHealth, needConfig, func(r *doctorRun) (string, string) { return modelHealthCheck(r) }},
-	{docChEnv, needConfig, func(r *doctorRun) (string, string) { return retiredEnvCheck(os.Getenv, r.status.EnvWarnings).row() }},
-	{docChDaemonEnv, needConfig, func(r *doctorRun) (string, string) {
+	{docChSocket, scopeHost, needConfig, func(r *doctorRun) (string, string) { return passOrFail(r.sockOK), r.sockMsg }},
+	{docChSupervision, scopeHost, needConfig, func(r *doctorRun) (string, string) { return supervisionCheck(r.sockOK).row() }},
+	{docChReload, scopeCell, needConfig, reloadCheck},
+	{docChModelHealth, scopeCell, needConfig, func(r *doctorRun) (string, string) { return modelHealthCheck(r) }},
+	{docChEnv, scopeHost, needConfig, func(r *doctorRun) (string, string) { return retiredEnvCheck(os.Getenv, r.status.EnvWarnings).row() }},
+	{docChDaemonEnv, scopeCell, needConfig, func(r *doctorRun) (string, string) {
 		return daemonEnvCheck(r.sockOK, r.status.EnvNames, r.status.PiModelsEnvRefs).row()
 	}},
-	{docChCommandPath, needConfig, commandPathCheck},
-	{docChYaml, needMapping, func(r *doctorRun) (string, string) {
+	{docChCommandPath, scopeCell, needConfig, commandPathCheck},
+	{docChYaml, scopeCell, needMapping, func(r *doctorRun) (string, string) {
 		st, detail, steps := workspaceYamlCheck(r.cfg.Mapping, r.status.WorkflowsDir, r.sockOK)
 		r.claudeSteps = steps
 		return st, detail
 	}},
-	{docChClaude, needMapping, func(r *doctorRun) (string, string) {
+	{docChClaude, scopeCell, needMapping, func(r *doctorRun) (string, string) {
 		// the daemon's harness view (it may run `claude --version`) is
 		// asked for only when some step actually runs on claude
 		var hs map[string]HarnessStatus
 		if len(r.claudeSteps) > 0 && r.sockOK {
-			hs = probeDaemonHarnesses(r.cfg.DaemonSocket)
+			hs = probeDaemonHarnesses(r.cfg.DaemonSocket, r.profile)
 		}
 		return claudeHarnessCheck(r.claudeSteps, r.status.WorkflowsDir, r.sockOK, hs)
 	}},
-	{docChHarnessPrompts, needConfig, func(r *doctorRun) (string, string) {
+	{docChHarnessPrompts, scopeHost, needConfig, func(r *doctorRun) (string, string) {
 		home, _ := os.UserHomeDir()
 		piDir := piAgentDir(home)
 		root := r.cfg.Daemon.HarnessRoot
@@ -180,9 +222,9 @@ var doctorChecks = []doctorCheckSpec{
 		}
 		return harnessPromptCheck(home, piDir, root, r.fixPrompts).row()
 	}},
-	{docChLanes, needMapping, workflowLanesCheck},
-	{docChProjects, needAihub, projectsCheck},
-	{docChAuth, needAihub, func(r *doctorRun) (string, string) { return r.auth.row() }},
+	{docChLanes, scopeCell, needMapping, workflowLanesCheck},
+	{docChProjects, scopeCell, needAihub, projectsCheck},
+	{docChAuth, scopeCell, needAihub, func(r *doctorRun) (string, string) { return r.auth.row() }},
 }
 
 // reloadCheck is the warn-only cli.toml hot-reload row (R13):
@@ -307,10 +349,16 @@ var cmdDoctor = &Command{
 			return fmt.Errorf("doctor: --prune-chat-state cannot be combined with --harness (the --harness projection tools/install.sh runs is read-only)")
 		}
 		checks := harnessDisplayChecks(boolFlag(fs, "fix-install-layout"), boolFlag(fs, "prune-chat-state"))
+		var sections []doctorSection
 		if !boolFlag(fs, "harness") {
-			checks = append(runDoctorChecks(ctx, boolFlag(fs, "prune-scratch"), boolFlag(fs, "prune-capsules"), boolFlag(fs, "fix-harness-prompts")), checks...)
+			var ladder []doctorCheck
+			ladder, sections = runDoctorChecks(ctx, boolFlag(fs, "prune-scratch"), boolFlag(fs, "prune-capsules"), boolFlag(fs, "fix-harness-prompts"))
+			checks = append(ladder, checks...)
+			for i := range sections {
+				checks = append(checks, sections[i].Checks...)
+			}
 		}
-		rep := doctorReport{Checks: checks}
+		rep := doctorReport{Checks: checks, sections: sections}
 		fails := countFails(rep)
 		rep.OK = fails == 0
 		if ctx.JSON {
@@ -320,7 +368,19 @@ var cmdDoctor = &Command{
 			}
 			ctx.Out(b)
 		} else {
+			// a named Cell's rows print under a header naming the Cell and
+			// its file; the default Cell's section — the full report of
+			// old — carries no header
+			files := map[string]string{}
+			for _, s := range rep.sections {
+				files[s.Profile] = s.Path
+			}
+			headed := map[string]bool{}
 			for _, c := range rep.Checks {
+				if path, ok := files[c.Cell]; ok && !headed[c.Cell] {
+					headed[c.Cell] = true
+					fmt.Fprintf(ctx.Stdout, "== Cell %s: %s ==\n", c.Cell, path)
+				}
 				fmt.Fprintf(ctx.Stdout, "%-6s %s  %s\n", c.Status, c.Name, c.Detail)
 			}
 			fmt.Fprintf(ctx.Stdout, "\nok: %t\n", rep.OK)
@@ -345,27 +405,50 @@ func countFails(rep doctorReport) int {
 	return n
 }
 
-// runDoctorChecks runs the config check and then doctorChecks, skipping
-// each check whose prerequisite is missing. pruneScratch lets the
-// scratch check remove the stale entries it would otherwise report;
+// runDoctorChecks runs the config check, the Host-level rows and the
+// default Cell's ladder (the full report of old, byte for byte), then
+// answers each named Cell's section. pruneScratch lets the scratch
+// check remove the stale entries it would otherwise report;
 // pruneCapsules does the same for the capsule retention check;
 // fixPrompts lets the harness diagram guidance check append its block.
-func runDoctorChecks(ctx *Context, pruneScratch, pruneCapsules, fixPrompts bool) []doctorCheck {
+func runDoctorChecks(ctx *Context, pruneScratch, pruneCapsules, fixPrompts bool) ([]doctorCheck, []doctorSection) {
 	cfg, err := LoadConfig(ctx.ConfigPath)
 	if err != nil {
-		checks := []doctorCheck{{docChConfig, "fail", err.Error() + " — see the install docs for the migration steps"}}
+		checks := []doctorCheck{{Name: docChConfig, Status: "fail", Detail: err.Error() + " — see the install docs for the migration steps"}}
 		for _, d := range doctorChecks {
-			checks = append(checks, doctorCheck{d.name, "skip", "config-dependent check not run: the config could not be loaded"})
+			checks = append(checks, doctorCheck{Name: d.name, Status: "skip", Detail: "config-dependent check not run: the config could not be loaded"})
 		}
-		return checks
+		return checks, nil
+	}
+	// the named Cells come from the disk set (LoadHostSet: no environment
+	// overlay — a Cell's connection lives in its file), so the doctor
+	// works with the daemon down; the Host-level probes keep the
+	// env-overlaid config (the socket resolution the fixtures and
+	// PF_DAEMON_SOCKET rely on).
+	set, err := LoadHostSet(ctx.ConfigPath)
+	if err != nil {
+		checks := []doctorCheck{{Name: docChConfig, Status: "fail", Detail: err.Error() + " — see the install docs for the migration steps"}}
+		for _, d := range doctorChecks {
+			checks = append(checks, doctorCheck{Name: d.name, Status: "skip", Detail: "config-dependent check not run: the config could not be loaded"})
+		}
+		return checks, nil
 	}
 	where := ctx.ConfigPath
 	if where == "" {
 		where = DefaultConfigPath()
 	}
-	checks := []doctorCheck{{docChConfig, "pass", "loaded from " + where}}
+	// the mapping row judges the whole machine: any Cell with a mapping
+	// (the Host file's, or a valid named Cell's) keeps a mapping-less
+	// Cell a warn — the same fact `pf daemon ensure` gates on (Q2=c)
+	anyMapped := !set.Host.Mapping.Empty()
+	for _, cc := range set.Cells {
+		if cc.Invalid == "" && !cc.Cfg.Mapping.Empty() {
+			anyMapped = true
+		}
+	}
+	checks := []doctorCheck{{Name: docChConfig, Cell: cellcfg.DefaultProfile, Status: "pass", Detail: "loaded from " + where}}
 
-	r := &doctorRun{cfg: cfg, prune: pruneScratch, pruneCapsules: pruneCapsules, fixPrompts: fixPrompts}
+	r := &doctorRun{cell: cellcfg.DefaultProfile, cellPath: where, cfg: cfg, anyMapped: anyMapped, prune: pruneScratch, pruneCapsules: pruneCapsules, fixPrompts: fixPrompts}
 	for _, ws := range cfg.Mapping.Workspaces() {
 		if st, err := os.Stat(ws); err == nil && st.IsDir() {
 			r.present = append(r.present, ws)
@@ -374,7 +457,7 @@ func runDoctorChecks(ctx *Context, pruneScratch, pruneCapsules, fixPrompts bool)
 		}
 	}
 	r.sockOK, r.sockMsg, r.status = probeDaemonSocket(cfg.DaemonSocket)
-	r.reachOK, r.reachMsg = probeServerReach(cfg.DaemonSocket, r.sockOK)
+	r.reachOK, r.reachMsg = probeServerReach(cfg.DaemonSocket, r.sockOK, r.profile)
 
 	for _, d := range doctorChecks {
 		c := doctorCheck{Name: d.name, Status: "skip"}
@@ -386,16 +469,91 @@ func runDoctorChecks(ctx *Context, pruneScratch, pruneCapsules, fixPrompts bool)
 		default:
 			c.Status, c.Detail = d.run(r)
 		}
+		if d.scope == scopeCell {
+			c.Cell = r.cell
+		}
 		checks = append(checks, c)
 	}
-	return checks
+
+	// each named Cell: one section — its config row, then its Cell-level
+	// rows, every daemon read carrying its X-PF-Profile. An invalid Cell
+	// (a parse refusal, an incomplete connection, a conflict) fails its
+	// config row and skips the rest, exactly like an unloadable Host
+	// file.
+	var sections []doctorSection
+	for _, cc := range set.Cells {
+		sec := doctorSection{Profile: cc.Profile, Path: cc.Path}
+		row := func(status, detail string) doctorCheck {
+			return doctorCheck{Name: docChConfig, Cell: cc.Profile, Status: status, Detail: detail}
+		}
+		if cc.Invalid != "" {
+			sec.Checks = append(sec.Checks, row("fail", cc.Invalid+" — see the install docs for the migration steps"))
+			for _, d := range doctorChecks {
+				if d.scope != scopeCell {
+					continue
+				}
+				sec.Checks = append(sec.Checks, doctorCheck{Name: d.name, Cell: cc.Profile, Status: "skip", Detail: "config-dependent check not run: the Cell's config could not be loaded"})
+			}
+			sections = append(sections, sec)
+			continue
+		}
+		rr := &doctorRun{cell: cc.Profile, profile: cc.Profile, cellPath: cc.Path, cfg: cc.Cfg, anyMapped: anyMapped,
+			prune: pruneScratch, pruneCapsules: pruneCapsules, fixPrompts: fixPrompts}
+		// the Cell file's socket is the Host file's own value (LoadCellFile
+		// copies it without the environment overlay); every read of this
+		// Cell dials the socket the invocation resolved (PF_DAEMON_SOCKET /
+		// --socket, polyforge#20 review r1#2), exactly like the Host-level
+		// probes above
+		rr.cfg.DaemonSocket = cfg.DaemonSocket
+		for _, ws := range cc.Cfg.Mapping.Workspaces() {
+			if st, err := os.Stat(ws); err == nil && st.IsDir() {
+				rr.present = append(rr.present, ws)
+			} else {
+				rr.missing = append(rr.missing, ws)
+			}
+		}
+		rr.sockOK, rr.sockMsg, rr.status = probeCellStatus(cfg.DaemonSocket, cc.Profile)
+		rr.reachOK, rr.reachMsg = probeServerReach(cfg.DaemonSocket, rr.sockOK, rr.profile)
+		// the Cell's own probe says why it does not answer (its file may
+		// exist while the Host has not loaded it — starting the daemon
+		// would not fix that); the reach-dependent skip rows show it
+		if !rr.sockOK {
+			rr.reachMsg = rr.sockMsg
+		}
+		sec.Checks = append(sec.Checks, row("pass", "loaded from "+cc.Path))
+		for _, d := range doctorChecks {
+			if d.scope != scopeCell {
+				continue
+			}
+			c := doctorCheck{Name: d.name, Cell: cc.Profile, Status: "skip"}
+			switch {
+			case d.need == needAihub && !rr.reachOK:
+				c.Detail = "not run: " + rr.reachMsg
+			case d.need >= needMapping && rr.cfg.Mapping.Empty():
+				c.Detail = "not run: the mapping is absent"
+			default:
+				c.Status, c.Detail = d.run(rr)
+			}
+			sec.Checks = append(sec.Checks, c)
+		}
+		sections = append(sections, sec)
+	}
+	return checks, sections
 }
 
 // mappingCheck runs the SHARED mapping/workspace validator (the same one
-// daemon startup and `pf config` use) and fails the fresh-template shape
-// (zero [workspace] sections) with the shape guidance.
+// daemon startup and `pf config` use) and judges the mapping row
+// machine-wide (polyforge#20, Q2=c): a Cell without a mapping warns —
+// its execution plane is closed, and another Cell's mapping keeps
+// `pf daemon ensure` starting — while any Cell of the machine has one;
+// a machine whose every Cell lacks a mapping fails with the
+// fresh-template shape guidance, exactly as before (and as `pf daemon
+// ensure` refuses).
 func mappingCheck(r *doctorRun) (string, string) {
 	if err := ValidateMappingForDaemon(r.cfg); err != nil {
+		if r.cfg.Mapping.Empty() && r.anyMapped {
+			return "warn", "no [workspace] mapping in this Cell — its execution plane is closed (the daemon serves its data plane only); another Cell of this machine has a mapping, so `pf daemon ensure` still starts — add one with `pf config set '[workspace.\"<path>\"]' projects=...` to open it"
+		}
 		return "fail", err.Error() + "; " + extensionsPointer
 	}
 	return "pass", fmt.Sprintf("%d workspace(s) mapping %d project(s)", len(r.cfg.Mapping.Workspaces()), len(r.cfg.Mapping.Projects()))
@@ -408,7 +566,7 @@ func mappingCheck(r *doctorRun) (string, string) {
 // fails it, any successful read proves it. aihub answers 404 both for an
 // unknown project and for one the key's user is not a member of.
 func projectsCheck(r *doctorRun) (string, string) {
-	client := newProxyClient(r.cfg.DaemonSocket, "")
+	client := newProxyClient(r.cfg.DaemonSocket, r.profile)
 	var fails []string
 	denied, proven := false, false
 	for _, project := range r.cfg.Mapping.Projects() {
@@ -432,7 +590,7 @@ func projectsCheck(r *doctorRun) (string, string) {
 	}
 	switch {
 	case denied:
-		r.auth = doctorCheck{Status: "fail", Detail: "aihub rejected the credential with a 401/403 answer — fix the api key (config api_key / PF_API_KEY)"}
+		r.auth = doctorCheck{Status: "fail", Detail: "aihub rejected the credential with a 401/403 answer — fix the api key (config api_key in " + r.cellPath + ")"}
 	case proven:
 		r.auth = doctorCheck{Status: "pass", Detail: "the api key got past aihub's auth boundary (the project read answered)"}
 	default:
@@ -451,25 +609,46 @@ func passOrFail(ok bool) string {
 	return "fail"
 }
 
-// probeServerReach asks the default Cell's AIHub through the daemon's
-// data-plane proxy (the CLI never dials a Hub itself). With the daemon down
-// the Hub-dependent checks are skipped, never failed: local repair keeps
-// working.
-func probeServerReach(sock string, daemonUp bool) (bool, string) {
+// probeServerReach asks the named Cell's AIHub through the daemon's
+// data-plane proxy (the CLI never dials a Hub itself; "" is the default
+// Cell's route, exactly the daemon's own convention). With the daemon
+// down the Hub-dependent checks are skipped, never failed: local repair
+// keeps working.
+func probeServerReach(sock string, daemonUp bool, profile string) (bool, string) {
+	name := profile
+	if name == "" {
+		name = cellcfg.DefaultProfile
+	}
 	if !daemonUp {
 		return false, "the daemon does not answer — the Hub-dependent checks go through it (start it with `pf daemon ensure`)"
 	}
-	c := newProxyClient(sock, "")
+	c := newProxyClient(sock, profile)
 	c.HTTP.Timeout = 5 * time.Second
 	_, err := c.ListProjects(false)
 	var ae *api.Error
 	switch {
 	case err == nil:
-		return true, "the default Cell's aihub answered through the daemon"
+		return true, fmt.Sprintf("the %s Cell's aihub answered through the daemon", name)
 	case errors.As(err, &ae) && ae.Code != api.ErrDaemonHubUnavailable && ae.Code != api.ErrDaemonGone:
-		return true, fmt.Sprintf("the default Cell's aihub answered through the daemon (%s)", ae.Code)
+		return true, fmt.Sprintf("the %s Cell's aihub answered through the daemon (%s)", name, ae.Code)
 	}
-	return false, fmt.Sprintf("the default Cell's aihub is unreachable through the daemon: %v", err)
+	return false, fmt.Sprintf("the %s Cell's aihub is unreachable through the daemon: %v", name, err)
+}
+
+// probeCellStatus reads one named Cell's own GET /status (the
+// X-PF-Profile header routes it); it gates that Cell's daemon-sourced
+// rows, never the Host-level socket row.
+func probeCellStatus(sock, profile string) (bool, string, StatusResponse) {
+	c := NewDaemonClient(sock)
+	c.Profile = profile
+	c.HTTP.Timeout = 5 * time.Second
+	var st StatusResponse
+	raw, err := c.Status()
+	if err != nil {
+		return false, fmt.Sprintf("the daemon does not answer for the Cell %s (its file exists but the Host has not loaded it — `pf cell list` shows what it serves; or the daemon is down): %v", profile, err), st
+	}
+	_ = json.Unmarshal(raw, &st)
+	return true, fmt.Sprintf("the daemon answers for the Cell %s (daemon %s)", profile, st.MachineID), st
 }
 
 // probeDaemonSocket dials the daemon's UDS face and asks GET /status;
@@ -483,16 +662,23 @@ func probeDaemonSocket(sock string) (bool, string, StatusResponse) {
 }
 
 // probeDaemonHarnesses asks GET /status?harnesses=1 — the daemon's view
-// of the step harness binaries (nil when it does not answer or is too old
-// to report it).
-func probeDaemonHarnesses(sock string) map[string]HarnessStatus {
-	st, _ := daemonStatus(sock, 15*time.Second, true)
+// of the step harness binaries of the named Cell ("" = the default
+// Cell; nil when it does not answer or is too old to report it).
+func probeDaemonHarnesses(sock, profile string) map[string]HarnessStatus {
+	st, _ := daemonStatusProfile(sock, 15*time.Second, true, profile)
 	return st.Harnesses
 }
 
 func daemonStatus(sock string, timeout time.Duration, harnesses bool) (StatusResponse, error) {
+	return daemonStatusProfile(sock, timeout, harnesses, "")
+}
+
+// daemonStatusProfile is daemonStatus with a Cell's profile header on
+// the request.
+func daemonStatusProfile(sock string, timeout time.Duration, harnesses bool, profile string) (StatusResponse, error) {
 	c := NewDaemonClient(sock)
 	c.HTTP.Timeout = timeout
+	c.Profile = profile
 	status := c.Status
 	if harnesses {
 		status = c.StatusWithHarnesses
