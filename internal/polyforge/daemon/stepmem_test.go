@@ -557,3 +557,150 @@ func TestDaemonRouteSetHasNoWebRoute(t *testing.T) {
 		}
 	}
 }
+
+// w119WriteExecution writes the capsule's execution record: step "fix"
+// with the given status, dispatch ordinal and candidate.
+func w119WriteExecution(t *testing.T, td *testDaemon, wi, status string, dispatch int64, candidate string) {
+	t.Helper()
+	ji, live := td.rt.Info(td.canonWI(wi))
+	if !live || ji.CapsuleDir == "" {
+		t.Fatalf("%s is not a live job of the test daemon", wi)
+	}
+	ex := capsule.Execution{
+		WorkflowStatus: capsule.WorkflowStatusRunning, CurrentStep: "fix",
+		Steps:     map[string]*capsule.Step{"fix": {Status: status, Dispatch: dispatch, Candidate: candidate}},
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano), Version: 1,
+	}
+	blob, err := json.Marshal(ex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ji.CapsuleDir, capsule.ExecutionJSON), blob, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// w119RemoveExecution removes the capsule's execution record (the
+// missing-record refusal case).
+func w119RemoveExecution(t *testing.T, td *testDaemon, wi string) {
+	t.Helper()
+	ji, live := td.rt.Info(td.canonWI(wi))
+	if !live || ji.CapsuleDir == "" {
+		t.Fatalf("%s is not a live job of the test daemon", wi)
+	}
+	if err := os.Remove(filepath.Join(ji.CapsuleDir, capsule.ExecutionJSON)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestW107StepWriterStamp (polyforge#119 AC1, the step half): `pf step
+// remember` stores its summary with the daemon-stamped step writer —
+// kind "step" with the work item / step / attempt / model of the
+// CALLING dispatch, the model taken from the capsule's execution record
+// (the current dispatch's candidate: the step in progress and its
+// dispatch ordinal equal to the spawn the caller runs under), never
+// from the request (whose args cannot even name the fields — the decode
+// is strict). A record that cannot prove the calling dispatch is
+// refused DAEMON-400 and nothing is forwarded (the owner's Q4 ruling:
+// a mid-dispatch model switch must not misattribute an old attempt);
+// a trusted dispatch whose candidate is empty stores the empty model.
+// The recall proxy stays filter-free: a recall call naming writer_kind
+// is refused at the strict decode, nothing forwarded.
+func TestW107StepWriterStamp(t *testing.T) {
+	td := stepDaemon(t, "wi_ws1")
+	w119WriteExecution(t, td, "wi_ws1", capsule.StepInProgress, 2, "pi:glm-5.3")
+	mh := &memHub{}
+	td.hub.mu.Lock()
+	td.hub.memDo = mh.do
+	td.hub.memContent = mh.content
+	td.hub.mu.Unlock()
+
+	code, body := rememberCall(t, td, wrapBody(""))
+	if code != 200 || !strings.Contains(body, `"id":"mem_1"`) {
+		t.Fatalf("store = %d %s", code, body)
+	}
+	p := mh.posts[0]
+	if p["writer_kind"] != "step" {
+		t.Fatalf("writer_kind = %v, want step", p["writer_kind"])
+	}
+	d, ok := p["writer_details"].(map[string]any)
+	if !ok || d["work_item"] != "wi_ws1" || d["step"] != "fix" || d["attempt"] != float64(2) || d["model"] != "pi:glm-5.3" {
+		t.Fatalf("writer_details = %v, want the calling dispatch's identity", p["writer_details"])
+	}
+	// the idempotency key is unchanged (the stamp adds identity, not a
+	// second summary shape)
+	if p["idempotency_key"] != "pf-step-memory:wi_ws1:fix:2" {
+		t.Fatalf("idempotency_key = %v", p["idempotency_key"])
+	}
+
+	// Q4: no execution record, a step the record does not carry, a
+	// settled dispatch (dispatch ordinal 0), and a record naming ANOTHER
+	// dispatch — each refuses DAEMON-400 and forwards nothing.
+	badRecord := func(steps map[string]*capsule.Step) {
+		t.Helper()
+		ji, _ := td.rt.Info(td.canonWI("wi_ws1"))
+		ex := capsule.Execution{WorkflowStatus: capsule.WorkflowStatusRunning, CurrentStep: "fix",
+			Steps: steps, UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano), Version: 1}
+		blob, err := json.Marshal(ex)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(ji.CapsuleDir, capsule.ExecutionJSON), blob, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		name  string
+		setup func()
+	}{
+		{"no execution record", func() { w119RemoveExecution(t, td, "wi_ws1") }},
+		{"no step in the record", func() { badRecord(map[string]*capsule.Step{}) }},
+		{"settled dispatch", func() {
+			badRecord(map[string]*capsule.Step{"fix": {Status: capsule.StepDone, Candidate: "pi:glm-5.3"}})
+		}},
+		{"dispatch mismatch", func() {
+			badRecord(map[string]*capsule.Step{"fix": {Status: capsule.StepInProgress, Dispatch: 1, Candidate: "pi:glm-4.7"}})
+		}},
+	} {
+		tc.setup()
+		before := len(mh.posts)
+		code, body = rememberCall(t, td, wrapBody(""))
+		if code != 400 || !strings.Contains(body, "does not name the calling dispatch") {
+			t.Fatalf("%s: %d %s, want the DAEMON-400 refusal", tc.name, code, body)
+		}
+		if after := len(mh.posts); after != before {
+			t.Fatalf("%s: forwarded (%d → %d)", tc.name, before, after)
+		}
+	}
+
+	// A trusted dispatch whose candidate is empty: the empty model is
+	// stored (Q4's nullable rule), not refused and not invented. A fresh
+	// work item, so the idempotency key does not collide with the first
+	// summary above.
+	td2 := stepDaemon(t, "wi_ws2")
+	w119WriteExecution(t, td2, "wi_ws2", capsule.StepInProgress, 2, "")
+	mh2 := &memHub{}
+	td2.hub.mu.Lock()
+	td2.hub.memDo = mh2.do
+	td2.hub.memContent = mh2.content
+	td2.hub.mu.Unlock()
+	code, body = rememberCall(t, td2, wrapBody(""))
+	if code != 200 {
+		t.Fatalf("empty-candidate store = %d %s", code, body)
+	}
+	if d, _ := mh2.posts[0]["writer_details"].(map[string]any); d["model"] != "" {
+		t.Fatalf("empty candidate must store an empty model: %v", mh2.posts[0]["writer_details"])
+	}
+
+	// The step's search face takes no writer filter: the call args are
+	// decoded strictly, so writer_kind is refused before anything is
+	// forwarded (the proxy whitelist stays type/tags/limit/match).
+	before := len(mh.posts)
+	code, body = c4Call(t, td, "recall", map[string]any{"q": "x", "writer_kind": "step"})
+	if code != 400 || !strings.Contains(body, "writer_kind") {
+		t.Fatalf("a recall call naming writer_kind: %d %s, want the strict-decode refusal", code, body)
+	}
+	if after := len(mh.posts); after != before {
+		t.Fatalf("the refused recall was forwarded (%d → %d)", before, after)
+	}
+}
