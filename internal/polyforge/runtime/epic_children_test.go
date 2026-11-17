@@ -117,8 +117,8 @@ func TestEpicClaimSnapshot(t *testing.T) {
 		ResetFrom       string `json:"reset_from"`
 		SnapshotVersion int    `json:"snapshot_version"`
 	}
-	if err := json.Unmarshal(rawMarker, &marker); err != nil || marker.ResetFrom != "review" || marker.SnapshotVersion != 2 {
-		t.Fatalf("the resume marker orders the re-run from review at the snapshot's version: %q", rawMarker)
+	if err := json.Unmarshal(rawMarker, &marker); err != nil || marker.ResetFrom != "sync" || marker.SnapshotVersion != 2 {
+		t.Fatalf("the resume marker orders the re-run from sync at the snapshot's version: %q", rawMarker)
 	}
 
 	// a non-epic item's claim writes no snapshot at all (its own lane

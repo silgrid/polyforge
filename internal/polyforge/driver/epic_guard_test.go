@@ -121,12 +121,14 @@ func TestEpicGuardUnchangedPasses(t *testing.T) {
 	}
 }
 
-// TestEpicSnapshotResumeResetsReview: after the guard parks the epic over
-// a changed child, the owner resumes — the marker the changed snapshot
-// wrote applies as ONE owner-class rewind to review (the agent budget
-// untouched), the lane re-runs from review and completes, and the marker
-// is consumed.
-func TestEpicSnapshotResumeResetsReview(t *testing.T) {
+// TestEpicSnapshotResumeResetsFromSync: after the guard parks the epic
+// over a changed child, the owner resumes — the marker the changed
+// snapshot wrote applies as ONE owner-class rewind to sync (the agent
+// budget untouched; the sync takes the new child's commits on the epic
+// branch in before the lane judges again — review r1#3, owner
+// 2026-11-17T19:36:47Z), the lane re-runs from sync and completes, and
+// the marker is consumed.
+func TestEpicSnapshotResumeResetsFromSync(t *testing.T) {
 	live := []capsule.EpicChild{epicWrap("wi_c1", "demo#1")}
 	resumed := false
 	calls := 0
@@ -143,7 +145,7 @@ func TestEpicSnapshotResumeResetsReview(t *testing.T) {
 	d, sp, _, dir := epicGuardEnv(t,
 		capsule.EpicChildren{Version: 1, Children: []capsule.EpicChild{epicWrap("wi_c1", "demo#1")}},
 		[]fakeEntry{done(`{}`), done(`{}`), done(`{}`), done(`{}`), done(`{}`),
-			done(`{}`), done(`{}`), done(`{}`), done(`{}`)},
+			done(`{}`), done(`{}`), done(`{}`), done(`{}`), done(`{}`)},
 		guard)
 	if err := d.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -161,7 +163,7 @@ func TestEpicSnapshotResumeResetsReview(t *testing.T) {
 	live = []capsule.EpicChild{epicWrap("wi_c1", "demo#1"), epicWrap("wi_c2", "demo#2")}
 	next, _ := json.Marshal(capsule.EpicChildren{Version: 2, Children: live})
 	writeCapsuleFile(t, dir, capsule.ChildrenJSON, string(next))
-	writeCapsuleFile(t, dir, capsule.EpicResumeJSON, `{"reset_from": "review", "snapshot_version": 2}`)
+	writeCapsuleFile(t, dir, capsule.EpicResumeJSON, `{"reset_from": "sync", "snapshot_version": 2}`)
 	if err := d.ResumeCurrent(); err != nil {
 		t.Fatalf("the owner resumes: %v", err)
 	}
@@ -169,8 +171,8 @@ func TestEpicSnapshotResumeResetsReview(t *testing.T) {
 		t.Fatalf("the resumed Run: %v", err)
 	}
 	if got := rewindDispatched(sp); !reflect.DeepEqual(got,
-		[]string{"verify-children", "sync", reviewStepID, verificationStepID, publishStepID, reviewStepID, verificationStepID, publishStepID, "merge"}) {
-		t.Fatalf("the resume re-runs from review, got %v", got)
+		[]string{"verify-children", "sync", reviewStepID, verificationStepID, publishStepID, "sync", reviewStepID, verificationStepID, publishStepID, "merge"}) {
+		t.Fatalf("the resume re-runs from sync, got %v", got)
 	}
 	x = readExec(t, filepath.Join(dir, capsule.ExecutionJSON))
 	if x.WorkflowStatus != StatusCompleted {
@@ -179,14 +181,17 @@ func TestEpicSnapshotResumeResetsReview(t *testing.T) {
 	if len(x.RewindStats.Rewinds) != 1 {
 		t.Fatalf("the reset is one rewind: %+v", x.RewindStats)
 	}
-	if r := x.RewindStats.Rewinds[0]; r.Class != capsule.RewindOwner || r.ToStep != reviewStepID || r.Gate != "merge" {
-		t.Fatalf("the reset is an owner-class rewind from merge to review: %+v", r)
+	if r := x.RewindStats.Rewinds[0]; r.Class != capsule.RewindOwner || r.ToStep != "sync" || r.Gate != "merge" {
+		t.Fatalf("the reset is an owner-class rewind from merge to sync: %+v", r)
 	}
 	if n := AgentRewindCount(x.RewindStats.Rewinds); n != 0 {
 		t.Fatalf("the reset is charged to no budget: %d toward max_rewinds", n)
 	}
 	if st := x.Steps[reviewStepID]; st == nil || st.Status != capsule.StepDone || st.Round < 2 {
 		t.Fatalf("review re-ran on its second round: %+v", st)
+	}
+	if st := x.Steps["sync"]; st == nil || st.Status != capsule.StepDone || st.Round < 2 {
+		t.Fatalf("sync re-ran on its second round: %+v", st)
 	}
 	if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(capsule.EpicResumeJSON))); !os.IsNotExist(err) {
 		t.Fatalf("the marker is consumed by the reset, got %v", err)
