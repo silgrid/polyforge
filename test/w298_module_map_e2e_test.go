@@ -92,7 +92,7 @@ func w298Refuse(t *testing.T, inst *v1Install, name string, req map[string]any) 
 // w298ModuleMapCount counts the doc.module-map rows a real browse shows.
 func w298ModuleMapCount(t *testing.T, inst *v1Install) int {
 	t.Helper()
-	raw, err := inst.client.SearchMemories(v1Project, "", w298Type, nil, 200, "", "", "")
+	raw, err := inst.client.SearchMemories(v1Project, "", w298Type, nil, 200, "", "", "", "")
 	if err != nil {
 		t.Fatalf("browse doc.module-map: %v", err)
 	}

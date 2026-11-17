@@ -331,4 +331,4 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: Dependency-audit gate (the engine's full-tier audit command)
-        run: sh workflows/_shared/scripts/audit-deps --go --npm 'pi-web' --npm 'pi-web/demo' --npm 'webui'
+        run: sh workflows/_shared/scripts/audit-deps --go --npm 'pi-web' --npm 'pi-web/demo' --npm 'webui' --npm-prod-level moderate

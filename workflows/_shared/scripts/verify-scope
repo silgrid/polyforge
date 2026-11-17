@@ -94,7 +94,7 @@ item uses it to get the full command list).
 
 The target repository is the current working directory (the engine root).
 A nested project root — a subdirectory of a git work tree with its own
-conf, such as ``cd pi-web`` — is a repository of its own: git names a
+conf, such as ``cd tools/site`` — is a repository of its own: git names a
 diff's paths from the work tree's top, so the engine makes them relative to
 the engine root, like every other path it reads (the conf's globs, the
 carries declarations, the listed files). A changed path outside the engine
@@ -178,8 +178,16 @@ shipped beside this engine over the repository's auditable surfaces — the
 root go.mod (--go) and every package-lock.json/npm-shrinkwrap.json outside
 node_modules/ (--npm <dir>, sorted); a repository with none gets no audit.
 It follows the conf's full lines and the carries selection, ends
-e2e_selection.full_commands, and no conf key reaches it: ``audit`` and
-``audit-*`` are reserved check names, a check_* or report= line cannot bind
+e2e_selection.full_commands, and exactly one conf key reaches it —
+``audit_prod_level=`` (polyforge#113), which only tightens: a declared
+``moderate`` or ``low`` appends `` --npm-prod-level <level>`` to the command
+(the helper then runs each npm surface's production-only audit at that
+level too), while an empty value, one that does not tighten (high, critical,
+anything else) or a second declaration is diagnosed and ignored and the
+command stays byte-identical — a repository that declares none is
+unaffected, and an engine that predates the key diagnoses it as unknown.
+Every other key stays out of its reach: ``audit`` and ``audit-*`` are
+reserved check names, a check_* or report= line cannot bind
 to it and exclude= does not narrow its surfaces. At a nested engine root
 (below the top of the git work tree) it names the repository's one ledger,
 the top's .polyforge/audit-exemptions.conf, as --ledger relative to the
@@ -370,6 +378,9 @@ class Engine:
         self.conf_e2e_runner = ""
         self.conf_e2e_start_threshold = ""
         self.conf_e2e_start_prefix = ""
+        # polyforge#113: the one conf key that reaches the audit gate, and
+        # only tightens — the npm production threshold below the default high.
+        self.conf_audit_prod_level = ""
         self.anon_fast = 0
         self.anon_full = 0
         self.anon_micro = 0
@@ -743,6 +754,20 @@ class Engine:
                     self.diag("conf ignores a second check_timeout for '%s': %s" % (rname, line))
                     continue
                 self.conf_timeout.append((rname, dur))
+            elif key == "audit_prod_level":
+                # polyforge#113: the one key that reaches the audit gate, and
+                # it only tightens — a value below the default high threshold.
+                val = c_rstrip(val)
+                if val == "":
+                    self.diag("conf rejects an empty audit_prod_level: %s" % line)
+                elif val not in ("moderate", "low"):
+                    self.diag("conf rejects audit_prod_level '%s' (expected moderate or low —"
+                             " the key only tightens the audit gate's npm production threshold"
+                             " below the default high): %s" % (val, line))
+                elif self.conf_audit_prod_level != "":
+                    self.diag("conf ignores a second audit_prod_level: %s" % line)
+                else:
+                    self.conf_audit_prod_level = val
             elif key == "host_requires":
                 if val.count("|") < 2:
                     self.diag("conf rejects host_requires without the <name>|<probe>|<hint> shape: %s" % line)
@@ -1864,7 +1889,9 @@ class Engine:
     # (--npm <dir>, sorted) — run by the audit-deps helper shipped beside
     # this engine; "" when the repository has no surface. exclude= does
     # not apply. The ledger is the repository's one, at the top of the
-    # git work tree.
+    # git work tree. A declared audit_prod_level (polyforge#113, the one
+    # conf key that reaches the gate, tightening only) appends
+    # --npm-prod-level after the surfaces, before the ledger.
     # -------------------------------------------------------------------
 
     def audit_command(self) -> str:
@@ -1885,7 +1912,10 @@ class Engine:
         ledger = ""
         if self.root_prefix != "":
             ledger = " --ledger " + sq(self.root_up() + ".polyforge/audit-exemptions.conf")
-        return "sh %s%s%s" % (sq(os.path.join(self.engine_dir, "audit-deps")), surfaces, ledger)
+        level = ""
+        if self.conf_audit_prod_level != "":
+            level = " --npm-prod-level " + self.conf_audit_prod_level
+        return "sh %s%s%s%s" % (sq(os.path.join(self.engine_dir, "audit-deps")), surfaces, level, ledger)
 
     # -------------------------------------------------------------------
     # npm helpers.
@@ -2619,7 +2649,7 @@ class Engine:
                 # The dependency-audit gate closes every full-tier report of
                 # a repository with an analyzer: after the conf's or
                 # analyzer's full tail and after the carries selection, so
-                # no conf key reaches it.
+                # no conf key reaches it but the tightening audit_prod_level.
                 audit_cmd = self.audit_command()
                 if audit_cmd != "" and self.analyzer != "":
                     self.commands.append(["audit", "full", "default", audit_cmd])

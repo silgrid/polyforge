@@ -717,7 +717,10 @@ command's face.
   to read the question from stdin with `-`.
 - `recall`, `memory show` and `remember` are the calling step's own
   project's memories through the daemon (the step holds no aihub key);
-  `remember` is the wrap-summary write.
+  `remember` is the wrap-summary write — stamped with the dispatch's
+  writer (kind `step`, its work item / step / attempt / model), and a
+  record that cannot prove the calling dispatch is its current one
+  refuses `DAEMON-400` and nothing is stored.
 - `hub get` and `hub list` read aihub work items of the step's own project
   through the daemon; each `--attr <path>=<value>` keeps the work items
   whose attr at the dot path (e.g. `integration.state`) is that string.

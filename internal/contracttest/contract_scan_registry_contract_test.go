@@ -69,6 +69,7 @@ const (
 // It shrinks only: an entry leaves with its test.
 var contractScanExcluded = map[string]string{
 	"TestW320AuditEngineConfCannotReach":          "spawns the shipped audit engine as a subprocess: the whole-repo check starts no process",
+	"TestW320AuditEngineDeclaredLevel":            "spawns the shipped audit engine as a subprocess: the whole-repo check starts no process",
 	"TestW320AuditEngineGoWithNpmTree":            "spawns the shipped audit engine as a subprocess: the whole-repo check starts no process",
 	"TestW320AuditEngineNestedRootReadsTopLedger": "spawns the shipped audit engine as a subprocess: the whole-repo check starts no process",
 	"TestW320AuditEngineNoAnalyzer":               "spawns the shipped audit engine as a subprocess: the whole-repo check starts no process",

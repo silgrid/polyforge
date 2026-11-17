@@ -452,6 +452,7 @@ func TestW254QuickstartsMovedIntact(t *testing.T) {
 // - the v0.2.4 section appended with the scratch layout categories (raw/ kept 3 days, tasks/ and sessions/ kept 14 days, one directory per run, no loose top-level file; --prune-scratch only removes a category's stale batches and the flat top-level 14-day rule is gone, entries outside the categories are only ever reported; re-run pf init to create the categories and refresh the notes' layout section — doctor warns an outdated one; a dispatched task is handed PF_SCRATCH_DIR/PF_SCRATCH_RAW_DIR and the same paths in its prompt)
 // - the v0.2.3 section appended with the memory writer columns (polyforge#107: writer_kind/writer_details on memories, owner_display_name on every read; upgrade aihub and run deploy/sql/v0.2.3 first or every memory request fails; the backfill marks the pf-step-memory:-keyed rows as step; the rollback is a no-op and never drops the durable columns)
 // - the second v0.2.3 section appended with the harness guidance (every step dispatch and task input carries the short output-discipline rule from the one source harness.ConciseRule, the doctor's harness concise guidance row and claude's resolved ~/.claude/CLAUDE.md-else-AGENTS.md target, and tools/install.sh auto-runs pf doctor --fix-harness-prompts once per install)
+// - the v0.2.3 section appended with the dependency audit's declared level and the release reusing the gate's audit (audit_prod_level=moderate in .polyforge/verify-scope.conf, the only conf key that reaches the audit gate and tightening only: production dependencies turn the audit red from moderate up via --npm-prod-level, dev stays at high, the gate id hashes the key; the release's default audit is the engine's own audit command, run verbatim after the build and never skipped by a reused green tag; every audited surface prints its fetch time, UTC, and source)
 // - the v0.2.4 section appended with the forensics standing rule (polyforge#122: SKILL.md session rule 9's six duties — raw data on disk first, locate then read by range, tool returns bounded at 8 KiB with the truncation stated, no reload with the exit code kept, conclusions and references after filing, the same constraints passed to a task or sub-agent brief; the task drafting list and the build's sub-agent brief rule bind their own directories; no action on upgrade, the skill is wired by reference)
 // upgrade-sections:end
 // The file is only routed to, from the install ops page and the README
@@ -459,7 +460,7 @@ func TestW254QuickstartsMovedIntact(t *testing.T) {
 func TestW254UpgradeByteIdentical(t *testing.T) {
 	raw := []byte(w254Read(t, "docs/upgrade.md"))
 	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != "469a131fd0e02a9df8bbb8b5b23848a4f67eb61e4ca1674afbe995ac13bd1a5d" {
+	if got := hex.EncodeToString(sum[:]); got != "12c06a089d28a494a87f3f08291c5cacab74fe8f18dc24f2b5d5a99db92f7000" {
 		t.Fatalf("docs/upgrade.md must stay byte-identical (only routed to, never rewritten): sha256 %s != the pinned pre-move sha256", got)
 	}
 	// the list beside the pin: one whole `// - ` line per appended section

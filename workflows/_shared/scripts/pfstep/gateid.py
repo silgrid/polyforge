@@ -13,8 +13,9 @@ it. The algorithm is the documented one (``tools/gate-id``'s header,
 with its leading whitespace removed that is neither blank nor a ``#``
 comment and whose key — the text before its first ``=`` — is one of
 ``stack``, ``fast_gate``, ``full_command``, ``check``,
-``check_requires_env``, ``check_requires_cmd`` or ``check_timeout``,
-kept byte for byte in file order, each ending in a newline (a last line
+``check_requires_env``, ``check_requires_cmd``, ``check_timeout`` or
+``audit_prod_level`` (polyforge#113: a declared level moves the
+engine-appended audit command), kept byte for byte in file order, each ending in a newline (a last line
 without a trailing newline still hashes with one, as awk prints it).
 
 A gate that runs in a prepared image (the step's ``image`` parameter,
@@ -43,6 +44,7 @@ GATE_KEYS = (
     b"check_requires_env",
     b"check_requires_cmd",
     b"check_timeout",
+    b"audit_prod_level",
 )
 # awk's [[:space:]] in the C locale, minus the \n that never occurs in a
 # \n-split line: the leading bytes the line rule strips.

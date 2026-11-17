@@ -1,7 +1,8 @@
 # recall — search (or browse) project memories
 
-Data-plane verb: the `pf` CLI talks HTTP direct to AIHub (memory
-retrieval). The daemon is not involved. Write paths (creating or updating
+Data-plane verb: every call goes through the running daemon's /aihub
+proxy to the routed Cell's AIHub (memory
+retrieval). Write paths (creating or updating
 memories) are not part of this verb — retrieval only.
 
 ## Triggers
@@ -13,8 +14,8 @@ memories) are not part of this verb — retrieval only.
 ## Command
 
 ```
-pf recall --project P <query> [--any] [--type T] [--tags a,b] [--limit N]
-pf recall --project P [--after CURSOR] [--sort updated|created] [--type T] [--tags a,b] [--limit N]
+pf recall --project P <query> [--any] [--type T] [--tags a,b] [--limit N] [--writer-kind session|step]
+pf recall --project P [--after CURSOR] [--sort updated|created] [--type T] [--tags a,b] [--limit N] [--writer-kind session|step]
 ```
 
 The query is the positional argument (or `--q`); `--project` is REQUIRED
@@ -52,6 +53,27 @@ pieces so neither crowds the other out. Against an aihub too old to know
 `--any`, the flag is silently ignored and the search falls back to the
 every-word match.
 
+`--writer-kind session|step` filters by the daemon-stamped writer
+(polyforge#107/#119): `session` — a human session's `pf remember`,
+stamped by the daemon that relayed it with its machine and Cell — or
+`step` — a step agent's `pf step remember`, stamped with its work item,
+step, attempt and model. The value is validated locally (anything but
+`session` or `step` refuses with no request sent) and rides the search
+URL in both modes, keyword and browse alike. A row written before the
+writer columns existed carries no kind and never matches a filter.
+Step and task agents get no filter: `pf step recall` has no such flag,
+and a task's `pf recall --writer-kind` is refused locally before any
+daemon request.
+
+The answer is proven before anything is shown: with `--writer-kind` set,
+every returned row's writer kind must equal the requested one — a row of
+another kind, or of none, answers a loud error naming it, so a server
+older than the filter (one that silently ignores it) never shows its
+unfiltered rows as if they were filtered. The check's provable boundary:
+an empty page and a page whose every row matches are accepted — a silent
+filter that happens to return only matching rows cannot be detected,
+and no probing request is made to try.
+
 ## Inside a workflow step
 
 A step agent holds no aihub credential path. Inside a step (`PF_WI_ID` and
@@ -71,7 +93,10 @@ forwards a cursor or sort.
 ## Success
 
 `--json`: the server body raw (`{items:[...]}`; each hit carries a 120-rune
-`content_excerpt`). Human mode: `N hit(s)` + a table of ID, TYPE, SUMMARY
+`content_excerpt`). Human mode: `N hit(s)` + a table of ID, TYPE, AUTHOR
+(the writer's display name; the stable owner id when the server predates
+the display-name join), WRITER (the stamped writer kind, `-` on a row
+written before the writer columns existed), SUMMARY
 (the title, else the excerpt's first line), UPDATED, TAGS.
 
 Browse mode: `--json` is the server body raw, `{items, total, next_cursor?}`.

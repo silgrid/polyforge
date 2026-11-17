@@ -1323,3 +1323,118 @@ func TestRequireMappedProjectTyped(t *testing.T) {
 		t.Fatalf("mapped project refused: %v", err)
 	}
 }
+
+// TestW107RecallWriterKindFilter (polyforge#119 AC2, the filter half):
+// --writer-kind session|step rides the search URL in BOTH modes — the
+// keyword search and the browse — as writer_kind= (the #107 wire name),
+// is absent from the wire when the flag is omitted (an unfiltered
+// request gains no default filter), and an illegal value is refused
+// LOCALLY: no request is sent at all.
+func TestW107RecallWriterKindFilter(t *testing.T) {
+	var rec reqRecorder
+	srv := newFakeAihub(t, &rec, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"items":[],"total":0}`)
+	})
+	env := withMappingConfig(t)
+	env["PF_SERVER"] = srv.URL
+
+	if code, _, stderr := runPf(t, env, "recall", "--project", "polyforge", "needle", "--writer-kind", "step"); code != 0 {
+		t.Fatalf("keyword --writer-kind step: code=%d stderr=%s", code, stderr)
+	}
+	if got := rec.last().Path; !strings.Contains(got, "writer_kind=step") || !strings.Contains(got, "q=needle") {
+		t.Fatalf("keyword request = %s", got)
+	}
+	if code, _, stderr := runPf(t, env, "recall", "--project", "polyforge", "--writer-kind", "session"); code != 0 {
+		t.Fatalf("browse --writer-kind session: code=%d stderr=%s", code, stderr)
+	}
+	if got := rec.last().Path; !strings.Contains(got, "writer_kind=session") || strings.Contains(got, "q=") {
+		t.Fatalf("browse request = %s", got)
+	}
+	if code, _, stderr := runPf(t, env, "recall", "--project", "polyforge", "needle"); code != 0 {
+		t.Fatalf("unfiltered recall: code=%d stderr=%s", code, stderr)
+	}
+	if got := rec.last().Path; strings.Contains(got, "writer_kind") {
+		t.Fatalf("an unfiltered request must not carry a default writer_kind: %s", got)
+	}
+
+	for _, bad := range []string{"foo", "STEP", "sessions", "session "} {
+		before := len(rec.all())
+		code, _, stderr := runPf(t, env, "recall", "--project", "polyforge", "needle", "--writer-kind", bad)
+		if code == 0 || !strings.Contains(stderr, "--writer-kind must be session or step") {
+			t.Fatalf("--writer-kind %q: code=%d stderr=%q", bad, code, stderr)
+		}
+		if after := len(rec.all()); after != before {
+			t.Fatalf("--writer-kind %q sent a request (%d → %d)", bad, before, after)
+		}
+	}
+}
+
+// TestW107Compat (polyforge#119 AC3): against a server that silently
+// ignores the writer_kind filter (an aihub older than polyforge#107), a
+// filtered recall — keyword or browse, human or --json — refuses BEFORE
+// any output when a returned item does not match the filter (a
+// different kind, or no kind at all on a pre-writer row): nothing is
+// shown. An empty page and a page whose every item matches are accepted
+// (Q5: the check's provable boundary — it cannot detect a silent
+// filter that happens to return only matching rows); an unfiltered
+// recall runs no check at all.
+func TestW107Compat(t *testing.T) {
+	const stepRow = `{"id":"mem_s","type":"experience.wrap","writer_kind":"step","updated_at":"t"}`
+	const sessionRow = `{"id":"mem_n","type":"fact.note","writer_kind":"session","updated_at":"t"}`
+	const oldRow = `{"id":"mem_o","type":"fact.note","updated_at":"t"}`
+	var answer string
+	var rec reqRecorder
+	srv := newFakeAihub(t, &rec, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, answer)
+	})
+	env := withMappingConfig(t)
+	env["PF_SERVER"] = srv.URL
+
+	// A server that ignored the filter answers a session row to a step
+	// filter — refused before any output, in both modes and both output
+	// shapes.
+	for _, tc := range []struct {
+		name   string
+		args   []string
+		offend string
+		id     string
+	}{
+		{"keyword human", []string{"recall", "--project", "polyforge", "needle", "--writer-kind", "step"}, sessionRow, "mem_n"},
+		{"keyword --json", []string{"--json", "recall", "--project", "polyforge", "needle", "--writer-kind", "step"}, sessionRow, "mem_n"},
+		{"browse human", []string{"recall", "--project", "polyforge", "--writer-kind", "step"}, sessionRow, "mem_n"},
+		{"browse --json", []string{"--json", "recall", "--project", "polyforge", "--writer-kind", "step"}, sessionRow, "mem_n"},
+		{"pre-writer row", []string{"recall", "--project", "polyforge", "needle", "--writer-kind", "session"}, oldRow, "mem_o"},
+	} {
+		answer = `{"items":[` + tc.offend + `],"total":1}`
+		code, stdout, stderr := runPf(t, env, tc.args...)
+		if code == 0 {
+			t.Fatalf("%s: a mismatched page was accepted", tc.name)
+		}
+		if !strings.Contains(stderr, "did not apply the --writer-kind") || !strings.Contains(stderr, tc.id) {
+			t.Fatalf("%s: stderr = %q", tc.name, stderr)
+		}
+		if stdout != "" {
+			t.Fatalf("%s: output preceded the refusal:\n%s", tc.name, stdout)
+		}
+	}
+
+	// The provable boundary (Q5): an empty page and an all-match page
+	// are accepted — the check proves only a demonstrated mismatch.
+	answer = `{"items":[],"total":0}`
+	if code, stdout, stderr := runPf(t, env, "recall", "--project", "polyforge", "needle", "--writer-kind", "step"); code != 0 ||
+		!strings.Contains(stdout, "0 hit(s)") {
+		t.Fatalf("empty page: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	answer = `{"items":[` + stepRow + `],"total":1}`
+	if code, stdout, stderr := runPf(t, env, "recall", "--project", "polyforge", "needle", "--writer-kind", "step"); code != 0 ||
+		!strings.Contains(stdout, "mem_s") {
+		t.Fatalf("all-match page: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+
+	// No filter: no check — a pre-#107 aihub's rows pass through as
+	// they always did.
+	answer = `{"items":[` + oldRow + `],"total":1}`
+	if code, _, stderr := runPf(t, env, "recall", "--project", "polyforge", "needle"); code != 0 {
+		t.Fatalf("unfiltered old-row page: code=%d stderr=%q", code, stderr)
+	}
+}

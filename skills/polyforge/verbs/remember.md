@@ -1,9 +1,18 @@
 # remember — store a project memory
 
-Data-plane verb: the `pf` CLI talks HTTP direct to AIHub (the memory
-write face). The daemon is not involved. It is the write counterpart of
+Data-plane verb: every call goes through the running daemon's /aihub
+proxy to the routed Cell's AIHub (the memory
+write face). It is the write counterpart of
 `recall` (retrieval): `pf remember` files a lesson, fact or note into
 the project memory so a later `recall` finds it.
+
+Every memory write is stamped with its writer (polyforge#107/#119):
+the request goes through the daemon's data-plane proxy, and the daemon
+— the one place that can tell a session from a step — stamps
+`writer_kind` `session` with the routed Cell's machine and profile,
+overriding any writer fields the request body carried (a caller cannot
+self-report a writer). A body that is not a complete JSON object is
+refused `DAEMON-400` and never forwarded.
 
 ## Triggers
 
