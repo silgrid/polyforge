@@ -17,17 +17,20 @@ conversation).
 ## 开工前读什么、核对什么 — before you start: what you read and check
 
 1. **What you judge against.** The opening of `artifacts/handoff.md`,
-   the repair brief `artifacts/integrate/repair.json` of this round and
-   the repair's latest section — the units it claims fixed, the branch,
+   the repair brief `artifacts/integrate/repair.json` — the gate red the
+   batch owes work to (its `round` is the gate's) — and
+   the repair's latest section: the units it claims fixed, the branch,
    the host-green evidence it ran, its reading of any owner reply.
 2. **The plan and the branch.** `artifacts/integrate/repair-plan.json`
-   parses as the repair wrote it — `{round, repos: [{name, branch,
-   base, head, units, items}]}` — and each entry's `head` is its
+   parses as the repair wrote it — `{"brief_round": <the brief's round>,
+   "repos": [{"name", "branch", "base", "head", "units", "items"}]}` —
+   and you judge the plan whose `brief_round` equals the brief's
+   `round`: the plan answers that gate red. Each entry's `head` is its
    repo's branch head in the clone (`git -C repos/<name> rev-parse
    <branch>`), its `base` the pinned head the brief names. A plan that
-   does not hold is a blocking finding; no plan of this round at all
-   (nothing was repaired, or the owner refused) is a pass: nothing of
-   the batch changed, hand off `done`.
+   does not hold is a blocking finding; the refusal of this brief, a
+   plan answering an older brief, or no plan at all: nothing to judge —
+   nothing of the batch changed, hand off `done`.
 3. **A later round of yours.** When `artifacts/handoff.md` carries an
    earlier `review` section, read it and `artifacts/review.md` as that
    round left them: each of its blocking findings is fixed on the

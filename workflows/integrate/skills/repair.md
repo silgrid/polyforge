@@ -21,29 +21,44 @@ with no repair brief, change nothing, commit nothing and hand off
 1. **The repair brief.** `artifacts/integrate/repair.json` parses as the
    gate wrote it — `{"round": <number>, "heads": {"<repo>": "<sha>"},
    "units": [{"repo", "unit", "item", "file", "log", "excerpt",
-   "rerun"}]}` — and its `round` is this round's. An earlier round's
-   brief is not this round's: the gate rewrote its files when it re-ran.
-   `artifacts/integrate/repair-refused.json` beside it means the owner
-   already ruled these units out of the batch: hand off `done` and touch
-   nothing.
-2. **The clones and the pins.** Each unit's `repo` has its clone under
+   "rerun"}]}`. The brief's `round` is the gate's, never yours — no
+   comparison with your own round decides anything (rounds are each
+   step's own: a review FAIL or an owner's rewind moves them apart; the
+   brief's round names the gate red you owe work to, and the gate
+   rewrites the file when it re-runs). No brief at all: nothing of the
+   batch's repair is yours — change nothing, commit nothing, hand off
+   `done`.
+2. **The refusal of this brief.** `artifacts/integrate/repair-refused.json`
+   carries `"brief_round"`: when it names the brief before you, the owner
+   already ruled those units out of the batch — hand off `done` and touch
+   nothing. A refusal of an older brief is history: a newer brief is new
+   work.
+3. **Your own earlier round.** `artifacts/integrate/repair-plan.json`
+   with `"brief_round"` equal to the brief's `round` is the work the
+   review sent back: read the section and its findings in
+   `artifacts/review.md` — each blocking finding is fixed on the branch
+   (a new commit — history is never rewritten), or it stands and your
+   hand-off says why. A plan answering an older brief is history: the
+   gate re-red and wrote a new brief, and the older branch is already
+   landed or dead.
+4. **The clones and the pins.** Each unit's `repo` has its clone under
    `repos/`, and the brief's `heads` name the pinned head the gate
    judged — the branch you grow must stand on that head, never on a
    default branch that may have moved past it.
-3. **A later round of yours.** When `artifacts/handoff.md` carries an
-   earlier `repair` section, read it and the review's latest section:
-   each of its blocking findings is fixed on the branch (a new commit —
-   history is never rewritten), or it is still there and your hand-off
-   says why. Keep the earlier round's branch and plan; build on them.
 
 ## Procedure
 
-1. **Branch off the pin.** Per repo the brief names, from the capsule
-   root:
+1. **Branch off the pin — or continue your own.** When the plan on disk
+   answers this very brief (its `brief_round` equals the brief's
+   `round`), an existing plan answering this very brief is kept: check
+   its branch out as it stands (never `checkout -B`, never rewritten
+   history) and build on it with new commits answering the review's
+   findings. Otherwise start fresh: per repo the brief names, from the
+   capsule root,
    `git -C repos/<repo> fetch origin`
    then `git -C repos/<repo> checkout -B integrate/repair-$PF_WI_ID <the pinned head>`
-   (an existing branch of this batch is kept as it stands and checked
-   out — you build on it, never rewrite it).
+   (the older brief's landing is already on the default branch; the
+   branch starts over on the new pins).
 2. **Fix only tests or documentation.** Fix each unit exactly as its
    `log` and `excerpt` show it, touching only the repository's test and
    documentation files. The moment a fix turns out to need more — a
@@ -55,12 +70,16 @@ with no repair brief, change nothing, commit nothing and hand off
    **revert <item>** (the batch reverts the blamed item with its landed
    fixes and gates again: write the item into
    `artifacts/integrate/gate-decision.json`'s `reverts` — the file's one
-   line yours to write, only on this ruling — then hand off `--status
-   rewind --to revert --per-owner <the reply's at>`),
+   line yours to write, only on this ruling — remove the repair plan
+   file so nothing of this brief is left to land, then hand off `done`:
+   a rewind to the later step is the daemon's to refuse, and the lane
+   needs none — the review passes with nothing to judge, the revert step
+   reads the decision and carries the revert out),
    **hand back** (the batch does not fix these in-batch: write
-   `artifacts/integrate/repair-refused.json` — `{"round", "units",
-   "why", "at"}` with the owner's words — and hand off `done`; the next
-   gate run files the fix tickets as it did before). End your turn
+   `artifacts/integrate/repair-refused.json` —
+   `{"brief_round": <the brief's round>, "units", "why", "at"}` with the
+   owner's words — remove the repair plan file, and hand off `done`; the
+   next gate run files the fix tickets as it did before). End your turn
    there; act on the reply as the ways out read.
 3. **Verify each unit on the host.** With the branch checked out, run
    the unit's own `rerun` command from the brief in its clone
@@ -73,11 +92,12 @@ with no repair brief, change nothing, commit nothing and hand off
    Never claim a green you did not see.
 4. **Commit and write the plan.** Commit the fix files alone
    (`git -C repos/<repo> add -- <each path>`, never `-A`), then write
-   `artifacts/integrate/repair-plan.json`:
-   `{"round": <number>, "repos": [{"name", "branch", "base", "head",
-   "units", "items"}]}` — the branch, the pinned head it grew from, its
-   head after your commits, the units it fixes and the items the gate
-   attributed them to.
+   `artifacts/integrate/repair-plan.json`, whose first key is
+   `"brief_round": <the brief's round>` — the brief it answers — beside
+   `"repos": [{"name", "branch", "base", "head", "units", "items"}]`:
+   the branch, the pinned head it grew from, its head after your
+   commits, the units it fixes and the items the gate attributed them
+   to.
 5. **Hand off `done`.** The review judges your branch next; the landing
    is the revert step's. Nothing you write is a green — the batch is
    green only when the gate's re-run says so.

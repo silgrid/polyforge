@@ -75,7 +75,8 @@ through the registration below.
        tests or documentation — a stale expectation, a test the landed change outgrew;
        you judge from each unit's `log` and `excerpt` and the file it names, and a fix
        that must change product behaviour, configuration or a generated file is not the
-       batch's to make — UNLESS the frozen step modes
+       batch's to make; a red the dependency audit raised is never the batch's either
+       (it attributes to no landed item) — UNLESS the frozen step modes
        (`runtime-state/step-modes.json`) name `merge` `human`: a project whose PRs await
        a person merges none by machine: the fix tickets it is (below). A repair
        step that finds a fix out of that scope mid-work puts it to the owner. On the

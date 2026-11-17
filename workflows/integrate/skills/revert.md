@@ -22,9 +22,11 @@ registration.
    edited), end your turn, and act on the reply: `rewind --to collect`, `rewind --to revert`
    (this step again from the start), or `cancel`.
 2. **The items to revert, by work item id**, read from files, never from a body: every id
-   in `artifacts/integrate/rulings.json`'s `reverts`, plus — when the lane came back here
-   from the full gate — every id in `artifacts/integrate/gate-decision.json`'s `reverts`
-   (the owner's revert after a red gate; read full-gate's latest section for the words).
+   in `artifacts/integrate/rulings.json`'s `reverts`, plus every id in
+   `artifacts/integrate/gate-decision.json`'s `reverts` — the owner's revert after a red
+   gate, or the repair step's owner-ruled revert of a source the batch cannot fix in
+   place (both ride the same decision; read full-gate's or the repair step's latest
+   section for the words).
    The union, each id once, is the list; an id must be an `id` of `batch.json`'s
    `details.items` or a `wi` of its `details.holds` (a stuck hold the owner ruled reverted
    is a held item, seldom a batch item); `pf step ask` the owner about any other.

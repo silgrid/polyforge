@@ -14,8 +14,9 @@ repair brief of its own, change nothing, commit nothing and hand off
 
 ## 开工前读什么、核对什么 — before you start: what you read and check
 
-1. The repair brief `artifacts/integrate/repair.json` of this round, the
-   clones and the pins it names — your skill's first section reads them.
+1. The repair brief `artifacts/integrate/repair.json` — the gate red the
+   batch owes work to; its `round` is the gate's, never yours — the
+   clones and the pins it names: your skill's first section reads them.
 2. An earlier `repair` section of `artifacts/handoff.md` and the
    review's latest findings when the lane came back to you.
 
