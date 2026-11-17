@@ -230,13 +230,13 @@ class ComponentsToolTest(GitCase):
         entry = doc["repos"][0]
         self.assertEqual(entry["commit"], old_commit)
         self.assertEqual(entry["rev"], "origin/HEAD")
-        self.assertEqual([cmp["name"] for cmp in entry["components"]], ["old"])
+        self.assertEqual([cmp["name"] for cmp in entry["components"]], ["old", ".polyforge", "."])
         # --rev overrides the revision read
         c = self.run_tool("--repo", d, "--rev", "HEAD", "--json")
         entry = json.loads(c.stdout)["repos"][0]
         self.assertEqual(entry["rev"], "HEAD")
         self.assertNotEqual(entry["commit"], old_commit)
-        self.assertEqual([cmp["name"] for cmp in entry["components"]], ["new"])
+        self.assertEqual([cmp["name"] for cmp in entry["components"]], ["new", ".polyforge", "."])
 
     def test_the_json_schema_and_the_threshold_sources(self) -> None:
         d = self.repo_with("declared", {CONF: "component=core|src,lib\nepic_units=9\n",
@@ -249,6 +249,8 @@ class ComponentsToolTest(GitCase):
         self.assertEqual(set(entry), {"repo", "commit", "rev", "components", "thresholds"})
         self.assertEqual(entry["components"], [
             {"name": "core", "paths": ["src", "lib"], "source": "declared",
+             "documentation_only": False},
+            {"name": ".polyforge", "paths": [".polyforge"], "source": "top-level",
              "documentation_only": False},
             {"name": "docs", "paths": ["docs"], "source": "top-level",
              "documentation_only": True},
@@ -266,7 +268,7 @@ class ComponentsToolTest(GitCase):
                                    "other/o.go": "package o\n"})
         c = self.run_tool("--repo", d, "--json")
         entry = json.loads(c.stdout)["repos"][0]
-        self.assertEqual([cmp["name"] for cmp in entry["components"]], ["ui", "other"])
+        self.assertEqual([cmp["name"] for cmp in entry["components"]], ["ui", ".polyforge", "other"])
         self.assertEqual(entry["components"][0]["paths"], ["web"])
 
     def test_several_repos_report_in_order_with_per_repo_errors(self) -> None:
@@ -285,7 +287,7 @@ class ComponentsToolTest(GitCase):
         c = self.run_tool("--repo", d)
         self.assertEqual(c.returncode, 0)
         self.assertEqual([cmp["name"] for cmp in json.loads(self.run_tool(
-            "--repo", d, "--json").stdout)["repos"][0]["components"]], ["core"])
+            "--repo", d, "--json").stdout)["repos"][0]["components"]], ["core", ".polyforge"])
         self.assertTrue(any("component" in line for line in c.stderr.splitlines()), c.stderr)
 
     def test_usage_errors(self) -> None:
