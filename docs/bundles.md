@@ -177,7 +177,13 @@ and YAML path, before a claim ever meets it. The keys:
   repos out on it, creating it on each origin from the default branch
   tip with a create-only, non-forced push when the remote does not carry
   it; a claim that cannot read the parent, or the parent's lane, is
-  refused. No shipped lane declares it yet (the epic lane is a
+  refused. The fixed branch is the sub-ticket's steps' base: their sync
+  merges `origin/<target>` (the default branch by nobody), the review
+  facts, the change analysis, the verification and the scope engine's
+  default base all measure the change from `merge-base HEAD
+  origin/<target>`, the PRs target the branch, and the landing its merge
+  registers is `state: landed_on_target` (never in the integrate pool's
+  `landed` records). No shipped lane declares it yet (the epic lane is a
   follow-up); a parent whose lane declares none leaves the sub-ticket
   untouched.
 - `defaults:` — `model_candidates`, the workflow-level fallback chain

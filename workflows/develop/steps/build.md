@@ -102,7 +102,7 @@ change, run its validator and name it in its `## Coverage` row.
 Run the fast checks over the whole change (the written command once per touched repo) and
 every unit test targeted, then the written unit check over the whole `artifacts/build/units.json`
 (the same command with no `--unit`) (the full bar is `verification`'s). Read your full diff (per repo `git diff
-$(git merge-base HEAD origin/HEAD)..HEAD`) as `review` will, against its five blocking classes:
+$(git merge-base HEAD origin/<base>)..HEAD`, `<base>` the step header's base branch) as `review` will, against its five blocking classes:
 `bug`, `ac_gap`, `project_rule`, `test_weakened`, `guarantee`; write each hit and its disposition
 to `artifacts/self-review.md` and fix what you can now (a new unit for a behaviour fix).
 

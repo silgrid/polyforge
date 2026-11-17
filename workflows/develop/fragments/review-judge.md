@@ -5,9 +5,10 @@
    `artifacts/build/change-analysis.json` (the change analysis);
    `artifacts/self-review.md`; build's latest section of `artifacts/handoff.md`; the
    facts your skill writes under `artifacts/facts/`; and the full diff, tests
-   included — in each task repo `git diff $(git merge-base HEAD origin/HEAD)..HEAD`
-   (fall back to `origin/main` or `origin/master` when `origin/HEAD` is unset). The
-   machine gate (`verification`) runs after you: judge the diff itself.
+   included — in each task repo `git diff $(git merge-base HEAD origin/<base>)..HEAD`,
+   `<base>` the step header's base branch (a fixed target branch, else the branch
+   `origin/HEAD` names, falling back to `origin/main` or `origin/master` when it is
+   unset). The machine gate (`verification`) runs after you: judge the diff itself.
 2. **Coverage, criterion by criterion (`ac_gap`).** The plan's `## Coverage` names,
    per criterion id, a unit's test — unit-level or an e2e scenario — (kind `test`),
    an existing test (kind `existing`) or a doc validator (kind `doc`). Read each named

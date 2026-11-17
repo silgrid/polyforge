@@ -150,7 +150,16 @@ starts from the ticket as it stands; a stopped analysis leaves a comment
 naming the cause and the last item written. `pf file analysis confirm`
 (`pf file analysis confirm <id>`) strips the unconfirmed marker — the
 owner's word that the draft is the ticket's analysis — and the ticket
-becomes claimable.
+becomes claimable. The prompt the task runs on carries the component
+division of the ticket's repositories: the daemon runs
+`workflows/_shared/scripts/components.py` (the shared scripts of its
+lane checkout) over the repositories the ticket will clone — its frozen
+repo_inventory, else the project's every repository — at the mapped
+workspace's `.repo/<name>` clones, bounded, and attaches the tool's
+line report between the template and the ticket; a missing clone, a
+failing or stuck run answers one fallback line and the dispatch
+proceeds, the template's default thresholds applying without the
+division.
 
 A third mark is lane-independent (polyforge#77): a bundle-bound parent waits
 for each child that is not wrapped (aihub's `waiting_for` entries with
@@ -410,8 +419,11 @@ artifacts/verify/result.json` (docs/reference/workflow-contract.md,
 attrs decide — an integration batch's fix ticket (its `integration_fix`
 marker) runs the full bar; every other ticket the light tier — over the
 the task repos as the sync step left them: no fetch, no merge — a merge in progress
-(`MERGE_HEAD`) or an unresolvable default branch makes the run incomplete
-— and it skips a repo with no commit beyond its default branch. The
+(`MERGE_HEAD`) or an unresolvable base branch makes the run incomplete
+— and it skips a repo with no commit beyond its base branch (the capsule's
+fixed target branch when it carries one, `merge-base HEAD origin/<target>`
+then, else the default branch; a fixed target that cannot be named is
+incomplete naming why, never a fall-back). The
 step's `image` parameter (or `--image`; the flag wins and the result's
 `image` record names the value and where it came from) names a prepared
 image every touched repo's bar then runs in, Dockerfile or not — never
@@ -894,8 +906,15 @@ the lane's own identity.
   container not had, no Dockerfile in a container run, no such repo), the
   plan is unreadable, the invocation unusable.
 - `sync.py [--continue | --abort]` merges origin's default branch into every
-  task repo of the capsule, in place, in name order: a branch with no
-  commit of its own is fast-forwarded; the conflicts the default branch's
+  task repo of the capsule, in place, in name order — or, when the
+  capsule's fixed target branch is set (`runtime-state/target-branch.json`,
+  a sub-ticket's), that branch in the default branch's place: only
+  `origin/<target>` is fetched and merged, the record's
+  `default_branch`/`default_head` fields carry it, and a file that is
+  there but cannot be read, or a branch missing on origin, is not judged
+  (exit 2) naming why, never a fall-back to the default branch. A
+  branch with no
+  commit of its own is fast-forwarded; the conflicts the merged branch's
   `.polyforge/integrate.conf` makes mechanical are resolved and the merge
   committed; a real conflict is left in progress and its files listed —
   the agent resolves them in place and runs `sync.py --continue`, which
@@ -939,7 +958,10 @@ the lane's own identity.
   one must target the default branch, head the published branch and stand
   at the verified head, and origin's default branch must still be at the
   base the verification result records (`details.repos[].base`, when it
-  records one). No PR branch is updated with the default branch: a default
+  records one) — the capsule's fixed target branch, when it carries one
+  (`runtime-state/target-branch.json`, a sub-ticket's), is the default
+  branch's stand-in in every one of these places, and a FAIL over it
+  carries the same moved-base substring. No PR branch is updated with the default branch: a default
   branch that advanced after verification, or a forge refusal, is the sync
   step's again. Details: `repos[{name, pr_url, branch, head,
   published, merge_commit, how, branch_side, by_this_run, why}]`,
@@ -963,7 +985,9 @@ the lane's own identity.
   the verification names no head for, gh or git unreachable). On exit 0
   `--landing-out` gets the landing record (`{state: landed, repos[{repo,
   pr, head, light_verified_head, merge_commit, accepted}],
-  merge_commits}`: the verified head as the head and the light-verified
+  merge_commits}` — or, the capsule's fixed target branch set, `{state:
+  landed_on_target, target, …}`, a state no `integration.state=landed`
+  filter takes: the verified head as the head and the light-verified
   one; a `merged_elsewhere` repo's head its branch side, `accepted:
   true`) — `merge_commits` naming, per repo, the commit set the change
   landed as, oldest first, each `{sha, merge}` (the lane's own merges are
@@ -1103,6 +1127,16 @@ hold no credential.
   scoped-ready — its manifests and `.polyforge/verify-scope.conf`, read
   only. Exit 0 ready, 1 not ready (each problem named), 2 when no clone is
   named or one is not a git clone.
+- `components.py --repo DIR [--rev REV] [--json]` (the workflow's tool) is
+  the epic-upgrade analysis's component division: each named clone's
+  origin/HEAD (else HEAD) commit tree — never the work tree, never a
+  fetch — read for the conf's `component=` declarations and `epic_*`
+  thresholds and the generic division, answered as one block per
+  repository (a line report, or schema 1 with `--json`): the components
+  with their path ranges and sources, the commit read, the effective
+  thresholds with their sources, and a per-repository error entry when a
+  clone cannot be read. Exit 0 whatever an entry says (each named), 2
+  when no `--repo` is named.
 
 The verification-scope engine is the workflow's too:
 `workflows/_shared/scripts/verify-scope`, with its dependency-audit helper

@@ -6,7 +6,8 @@ commands: [facts.py]
 # micro-bounds
 
 One pre-written command judges every touched repository's diff (the merge-base with the
-fetched default branch to HEAD, both sides of a rename or deletion) against the
+fetched base branch — a fixed target branch, else the origin default branch — to HEAD,
+both sides of a rename or deletion) against the
 `micro_path=` lines of that repository's `.polyforge/verify-scope.conf` **at the diff
 base**, and lists per repository the commands the delivery re-runs: your plan's lines
 plus every declared `micro_check` the plan omitted. Its `verdict` is the exit code's

@@ -136,7 +136,7 @@ budget either and counted on its own — [below](#uncounted_rewinds-keys).
 
 | Key | Rule |
 |---|---|
-| `reason_contains` | string, required, non-empty (`WFC-113` missing, `WFC-112` blank): the substring a gate FAIL's one-line hand-off reason carries when its rewind falls in the class — the stable prefix of the failing step's script summary; the rest of the line varies |
+| `reason_contains` | string, required, non-empty (`WFC-113` missing, `WFC-112` blank): the substring a gate FAIL's one-line hand-off reason carries when its rewind falls in the class — the stable substring of the failing step's script summary, a wording every base the failure can be about carries (a prefix is one); the rest of the line varies |
 | `max` | int ≥ 0, default 2 (`WFC-112` otherwise): the class's own rewind budget, held at `pf step handoff` exactly like `max_rewinds` — once the class's uncounted rewinds reach it, a matching FAIL without the owner's word is refused and the gate asks the owner first; `0` = every matching FAIL asks the owner |
 
 The class is the lane's own declaration: the driver matches the declared
@@ -145,8 +145,9 @@ or failure of its own. A matching FAIL rewinds charged to nothing and
 counted apart (the rewind ledger's `uncounted` class, `pf watch`'s
 `uncounted` tally); every other FAIL — a FAIL whose reason falls outside
 the class, or a lane without the declaration — is charged to
-`max_rewinds` as before. The cap keeps an ever-moving default branch
-from looping a work item for ever: past it the lane stops and waits for
+`max_rewinds` as before. The cap keeps an ever-moving base branch (the
+default branch, a sub-ticket's fixed target branch alike) from looping a
+work item for ever: past it the lane stops and waits for
 the owner, exactly like a spent `max_rewinds`.
 
 ### resources keys
@@ -812,6 +813,23 @@ against it. A claim that cannot read the parent, or the parent's lane,
 is refused naming why (`DAEMON-507`, the blocked note carries the
 reason), never a silent fall-back to the default branch; a parent whose
 lane declares none leaves the sub-ticket untouched.
+
+The fixed branch is the sub-ticket's steps' base too, the default
+branch's stand-in everywhere below the claim: the steps' sync merges
+`origin/<target>` into the task repos (the default branch is fetched and
+merged by nobody), the review facts, the change analysis and the
+verification measure the change from `merge-base HEAD origin/<target>`, the
+scope engine's default base — and the micro lane's governing conf, read
+at it — is that merge-base, the PRs target the branch, and the merge
+lands on it. A step that finds the file unreadable, not the JSON
+expected, or the branch missing on a task repo's origin is not judged
+(exit 2) naming why — never a silent fall-back to the default branch.
+The landing the sub-ticket's merge registers is `state:
+landed_on_target` with `target` naming the branch: the integrate pool's
+`integration.state=landed` filter (and the web UI's alike) never takes
+it. The record's shape keeps room for the epic ticket's own extension
+(its checkout start point and merge target) — keys the readers here
+tolerate and no shipped step reads.
 
 ## Error codes
 

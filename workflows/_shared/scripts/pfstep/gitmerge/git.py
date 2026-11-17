@@ -75,9 +75,13 @@ class PR:
     base_ref_name: str = ""
     merge_commit: str = ""
 
-    def mismatch(self, base: str, branch: str) -> str:
-        """Why an OPEN PR is not the lane's PR of branch into base ("" = it is)."""
+    def mismatch(self, base: str, branch: str, target: str = "") -> str:
+        """Why an OPEN PR is not the lane's PR of branch into base ("" = it
+        is). target names the work item's fixed target branch ("" = base is
+        the default branch) and only picks the refusal's wording."""
         if self.base_ref_name != base:
+            if target:
+                return "targets %s, not the target branch %s" % (self.base_ref_name, base)
             return "targets %s, not the default branch %s" % (self.base_ref_name, base)
         if self.head_ref_name != branch:
             return "heads the branch %s, not the published %s" % (self.head_ref_name, branch)
