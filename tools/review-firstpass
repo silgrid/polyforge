@@ -58,29 +58,47 @@ can read):
                           real endpoint is N/A offline; a run with no
                           merge section counts as not merged.
 
-The measure is the 2026-11-09 rework baseline's (aihub doc.audit
-mem_2wmAvnsWFWmw), kept byte-for-byte where it decides
-a number:
+The measure follows the 2026-11-09 rework baseline (aihub doc.audit
+mem_2wmAvnsWFWmw); its numbers keep their meaning, and the two data
+eras state their own reads (polyforge#118, review r2#3 — the caliber
+below is the record RUN.md names authoritative):
 
-  run set      every capsule directory except `*.quarantined.*`; --since/--until
-               filter on capsule.json created_at (UTC date, both ends inclusive).
-  first pass   the verdict of the lowest-numbered artifacts/steps/review/s<n>/
-               result.json (output.verdict, else the outcome); a run with no
-               review result is not reviewed and counts nowhere.
-  write set    the distinct paths artifacts/plan.md declares `(write)` in its
-               `Touched files` blocks, counted before any code: on the develop
-               lane only the units of the lowest-numbered build result (its
-               initial plan; every unit when that result lists none). A run
-               without a parseable plan has no write set and stays out of the
-               size table (the baseline's plan-declared, ex-ante size).
+  run set      every capsule directory in <capsules-dir> except
+               `*.quarantined.*`; --since/--until (and the manifest's
+               window) filter on capsule.json created_at (UTC date, both
+               ends inclusive). The cohort lines read ONLY the names the
+               manifest carries — point the tool at a directory holding
+               exactly the cohort (a symlink farm), or the honesty lines
+               answer for the rest.
+  first pass   two eras, one question — did the first review pass? A
+               capsule of the old protocol answers from the
+               lowest-numbered artifacts/steps/review/s<n>/result.json
+               (output.verdict, else the outcome); a capsule of the
+               current protocol answers from its stamped hand-off
+               sections (the lowest review round's status: done = PASS,
+               fail = FAIL). A run neither shape reviews is not
+               reviewed and counts nowhere.
+  write set    the distinct paths artifacts/plan.md declares `(write)` in
+               its `Touched files` blocks, counted before any code: on
+               the develop lane only the initial units count — the old
+               protocol reads the lowest-numbered build result's units,
+               the current protocol reads artifacts/build/units.json.
+               THE GAP, stated: units.json is rewritten every build
+               round, so a current-protocol run with rework yields its
+               FINAL plan's size — an upper bound of the ex-ante size,
+               biased up for runs whose first review failed, and not
+               bucket-comparable with the baseline's ex-ante measure.
+               A run without a parseable plan has no write set and stays
+               out of the size table.
   buckets      <=7, 8-22, >22 written files.
 
 The implementer grouping reads the build result the first
 review judged — the highest-numbered artifacts/steps/build/s<m>/result.json
 with m below the first review's n — and its units' implemented_by: `subagent`
 when every unit says subagent, `main` when every unit says main, `mixed` for
-both, `unrecorded` when no unit records one (runs before the field, and lanes
-whose build reports no units).
+both, `unrecorded` when no unit records one (runs before the field, lanes
+whose build reports no units, and every current-protocol run, whose build
+leaves no result.json — its units.json is not read for this).
 """
 import argparse
 import csv
