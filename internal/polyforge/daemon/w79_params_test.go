@@ -133,6 +133,7 @@ func TestW79ParamsViewQueued(t *testing.T) {
 	wf := t.TempDir()
 	workflowtest.WriteLane(t, wf, "w79-lane", w79Lane)
 	td := newTestDaemon(t, func(c *Config) { c.WorkflowsDir = wf })
+	td.hub.items = map[string]*api.WorkItem{}
 	bundle := "w79-lane"
 	td.hub.items["wi_w79q"] = &api.WorkItem{ID: "wi_w79q", Status: api.StatusQueued, ProjectName: "proj",
 		BundleName: &bundle, Attrs: map[string]any{
@@ -170,6 +171,7 @@ func TestW79ParamsViewRefusals(t *testing.T) {
 	wf := t.TempDir()
 	workflowtest.WriteLane(t, wf, "w79-lane", w79Lane)
 	td := newTestDaemon(t, func(c *Config) { c.WorkflowsDir = wf })
+	td.hub.items = map[string]*api.WorkItem{}
 	if _, ae := td.w79Params(t, "wi_nope"); ae == nil || ae.Code != api.ErrDaemonNotFound {
 		t.Fatalf("an unknown work item: %+v", ae)
 	}
