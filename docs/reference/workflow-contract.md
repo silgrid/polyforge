@@ -507,7 +507,10 @@ Every dispatch's prompt is six parts, in this order, and nothing else:
    item's capsule or a workspace file outside the capsule, never kill a
    process the agent did not start. A soft mitigation (owner, 2026-11-10):
    nothing enforces it. Its text is `harness.StepProhibitedActions`; a
-   lane cannot change it.
+   lane cannot change it. Beside the list rides the concise
+   output-discipline rule — `harness.ConciseRule`, the one short rule the
+   harness context files and every task input also carry; a lane cannot
+   change it either.
 3. **The step header** (`_shared/step-header.md`): read
    `artifacts/handoff.md` first and how; end with exactly one `pf step
    handoff` and when to use each status; where the claim's recalled

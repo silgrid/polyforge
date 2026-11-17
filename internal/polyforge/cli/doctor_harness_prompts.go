@@ -82,12 +82,12 @@ func hasLegacyDiagramGuidance(body string) bool {
 	return false
 }
 
-// appendDiagramGuidance appends diagramGuidanceBlock to the existing
-// file at path unless it already carries the SVG block, keeping every
-// existing byte and the file's mode; it answers whether it wrote. A
-// symlinked file is written at its target. The write is atomic, so an
-// interrupted run leaves the old file intact; a second run is a no-op.
-func appendDiagramGuidance(path string) (bool, error) {
+// appendGuidanceBlock appends block to the existing file at path unless
+// has already reports the guidance carried, keeping every existing byte
+// and the file's mode; it answers whether it wrote. A symlinked file is
+// written at its target. The write is atomic, so an interrupted run
+// leaves the old file intact; a second run is a no-op.
+func appendGuidanceBlock(path string, block string, has func(string) bool) (bool, error) {
 	target, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		return false, err
@@ -100,7 +100,7 @@ func appendDiagramGuidance(path string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if hasDiagramGuidance(string(body)) {
+	if has(string(body)) {
 		return false, nil
 	}
 	sep := ""
@@ -111,32 +111,95 @@ func appendDiagramGuidance(path string) (bool, error) {
 	case !strings.HasSuffix(string(body), "\n\n"):
 		sep = "\n"
 	}
-	data := append(append(body, sep...), diagramGuidanceBlock...)
+	data := append(append(body, sep...), block...)
 	if err := atomicfile.Write(target, data, st.Mode().Perm()); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-// harnessPromptCheck judges the context file of every installed harness:
-// pi (piDir/AGENTS.md), Claude Code (~/.claude/CLAUDE.md) and the
-// daemon's step agent (<harnessRoot>/step-agent/AGENTS.md). A harness
-// whose directory is absent is not installed and is left out. With fix,
-// an existing file lacking the SVG block (legacy or missing) gets it
-// appended after its existing bytes first.
-func harnessPromptCheck(home, piDir, harnessRoot string, fix bool) doctorCheck {
-	c := doctorCheck{Name: docChHarnessPrompts}
-	targets := []struct{ name, dir, file string }{
+// appendDiagramGuidance appends diagramGuidanceBlock to the existing
+// file at path unless it already carries the SVG block.
+func appendDiagramGuidance(path string) (bool, error) {
+	return appendGuidanceBlock(path, diagramGuidanceBlock, hasDiagramGuidance)
+}
+
+// claudeContextFiles are Claude Code's user context files, in the order
+// the doctor resolves the claude target (polyforge#101, owner ruling
+// 2026-11-17): the CLAUDE.md Claude Code reads natively, else the
+// AGENTS.md its built-in cc-plugin-agents-md plugin loads where no
+// CLAUDE.md exists — the file the harness actually loads, and the one
+// the fix appends to.
+var claudeContextFiles = []string{"CLAUDE.md", "AGENTS.md"}
+
+// harnessPromptTarget is one installed harness's context file the
+// doctor judges.
+type harnessPromptTarget struct{ name, dir, file string }
+
+// harnessPromptTargets answers the context file of every installed
+// harness: pi (piDir/AGENTS.md), Claude Code (~/.claude, resolved
+// through claudeContextFiles) and the daemon's step agent
+// (<harnessRoot>/step-agent/AGENTS.md). A harness whose directory is
+// absent is not installed and is left out. With neither claude file,
+// the canonical CLAUDE.md names the absence.
+func harnessPromptTargets(home, piDir, harnessRoot string) []harnessPromptTarget {
+	candidates := []struct{ name, dir, file string }{
 		{"pi", piDir, "AGENTS.md"},
-		{"claude", filepath.Join(home, ".claude"), "CLAUDE.md"},
+		{"claude", filepath.Join(home, ".claude"), claudeContextFiles[0]},
 		{"step-agent", filepath.Join(harnessRoot, "step-agent"), "AGENTS.md"},
 	}
-	var rows []string
-	warn, fixable, legacy, stepAgentMissing := false, false, false, false
-	for _, t := range targets {
+	var out []harnessPromptTarget
+	for _, t := range candidates {
 		if st, err := os.Stat(t.dir); err != nil || !st.IsDir() {
 			continue
 		}
+		file := t.file
+		if t.name == "claude" {
+			for _, f := range claudeContextFiles {
+				if _, err := os.Stat(filepath.Join(t.dir, f)); err == nil {
+					file = f
+					break
+				}
+			}
+		}
+		out = append(out, harnessPromptTarget{t.name, t.dir, file})
+	}
+	return out
+}
+
+// noHarnessInstalledDetail is the two harness-guidance rows' shared
+// skip detail.
+const noHarnessInstalledDetail = "no harness installed here (no pi agent dir, ~/.claude or step-agent dir)"
+
+// stepAgentNoFileCaveat is the sentence both rows append when the
+// step-agent dir carries no context file.
+const stepAgentNoFileCaveat = "the daemon's step-agent dir deliberately carries no AGENTS.md and prunes entries outside its minimal set at daemon start, so a hand-made file there does not persist"
+
+// harnessPromptContext answers the home, pi agent dir and harness root
+// the harness-guidance rows judge (the daemon's harness_root, else the
+// data dir).
+func harnessPromptContext(r *doctorRun) (home, piDir, root string) {
+	home, _ = os.UserHomeDir()
+	piDir = piAgentDir(home)
+	root = r.cfg.Daemon.HarnessRoot
+	if root == "" {
+		root = DataDir(home)
+	}
+	return
+}
+
+// harnessPromptCheck judges the context file of every installed harness:
+// pi (piDir/AGENTS.md), Claude Code (resolved through
+// claudeContextFiles) and the daemon's step agent
+// (<harnessRoot>/step-agent/AGENTS.md). A harness whose directory is
+// absent is not installed and is left out. With fix, an existing file
+// lacking the SVG block (legacy or missing) gets it appended after its
+// existing bytes first.
+func harnessPromptCheck(home, piDir, harnessRoot string, fix bool) doctorCheck {
+	c := doctorCheck{Name: docChHarnessPrompts}
+	var rows []string
+	warn, fixable, legacy, stepAgentMissing := false, false, false, false
+	for _, t := range harnessPromptTargets(home, piDir, harnessRoot) {
 		path := filepath.Join(t.dir, t.file)
 		body, err := os.ReadFile(path)
 		switch {
@@ -168,7 +231,7 @@ func harnessPromptCheck(home, piDir, harnessRoot string, fix bool) doctorCheck {
 		}
 	}
 	if len(rows) == 0 {
-		c.Status, c.Detail = "skip", "no harness installed here (no pi agent dir, ~/.claude or step-agent dir)"
+		c.Status, c.Detail = "skip", noHarnessInstalledDetail
 		return c
 	}
 	c.Status, c.Detail = "pass", strings.Join(rows, "; ")
@@ -183,7 +246,7 @@ func harnessPromptCheck(home, piDir, harnessRoot string, fix bool) doctorCheck {
 		c.Detail += " — run `pf doctor --fix-harness-prompts` to append the SVG block below after the existing bytes of the file(s) (append-only, idempotent; a legacy section is never rewritten — delete it by hand after reading it; a missing file is never created)"
 	}
 	if stepAgentMissing {
-		c.Detail += " — the daemon's step-agent dir deliberately carries no AGENTS.md and prunes entries outside its minimal set at daemon start, so a hand-made file there does not persist"
+		c.Detail += " — " + stepAgentNoFileCaveat
 	}
 	c.Detail += " — the SVG guidance block:\n" + diagramGuidanceBlock
 	return c

@@ -19,6 +19,14 @@ Unless your step definition explicitly requires it, never:
 - read or write another work item's capsule or worktree, or a workspace file outside `<capsule>`;
 - kill or signal a process you did not start.
 
+## Output discipline (concise, plain speech)
+
+- Lead with the outcome: the first line of a reply states the result or the next action — no preamble, no process retelling, no sign-off.
+- Match the reply's length and depth to the question; explain a term where it first appears; no filler, no decorative structure.
+- A task's own required format (a JSON contract, a fixed schema) always wins over this rule's shape.
+- Keep raw material out of the conversation: full command output, logs and dumps go into a dedicated subdirectory of the workspace's temporary directory; the reply carries counts, differences, short excerpts and the paths to read on.
+- Once a report is filed where it belongs, later replies carry conclusions and references only.
+
 # How a step runs (probe)
 
 Read artifacts/handoff.md first; end with one `pf step handoff`.

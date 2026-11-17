@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/silgrid/polyforge/internal/common/harness"
 	"github.com/silgrid/polyforge/internal/common/workflow"
 )
 
@@ -154,9 +155,9 @@ func TestDoctorHealthyMachineAllPassExit0(t *testing.T) {
 	env["POLYFORGE_DATA_DIR"] = ""
 	layoutRelease(t, env["HOME"])
 	layoutClaudeLink(t, env["HOME"])
-	// both installed harnesses carry the diagram guidance
+	// both installed harnesses carry the diagram and concise guidance
 	for _, p := range []string{".claude/CLAUDE.md", ".pi/agent/AGENTS.md"} {
-		if err := os.WriteFile(filepath.Join(env["HOME"], p), []byte(diagramGuidanceBlock), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(env["HOME"], p), []byte(diagramGuidanceBlock+"\n"+harness.ConciseGuidanceBlock()), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}

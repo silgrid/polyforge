@@ -373,7 +373,7 @@ The human moves, when a run is not simply going:
   owns the move).
 - **A suspicious machine**: `pf doctor` is the diagnostic first stop: config,
   mapping, connectivity, daemon supervision, the harness integration, retired
-  chat-subscription state and diagram guidance. It reports; it writes only on
+  chat-subscription state and diagram and concise-output guidance. It reports; it writes only on
   an explicit flag (`--prune-scratch`, `--prune-capsules`, `--prune-chat-state`,
   `--fix-harness-prompts`, `--fix-install-layout`).
 
