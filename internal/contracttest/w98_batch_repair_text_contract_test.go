@@ -158,3 +158,48 @@ func TestW98NewStepTextsNameNoProject(t *testing.T) {
 		}
 	}
 }
+
+// w98Flat reads a repository file with its whitespace folded (the w52
+// rule: a rewrap keeps the pin).
+func w98Flat(t *testing.T, rel string) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(v1Root(t), filepath.FromSlash(rel)))
+	if err != nil {
+		t.Fatalf("%s: %v", rel, err)
+	}
+	return strings.Join(strings.Fields(string(raw)), " ")
+}
+
+// TestW98FullGateRepairRouteText (AC1, AC2, AC5, AC6): the gate's own
+// routing text — the red it hands back to the repair step (the brief's
+// schema, the charged FAIL, the human-merge read that switches the route
+// off, the refused repair it reads back), and the owner's revert
+// rewinding to the revert step by name. Whitespace-flattened, so a
+// rewrap keeps them pinned.
+func TestW98FullGateRepairRouteText(t *testing.T) {
+	flat := w98Flat(t, "workflows/integrate/skills/full-gate.md")
+	for _, want := range []string{
+		// the route's conditions: every red unit attributed, no source
+		// past two fix rounds, and the fix of every unit touching only
+		// tests or documentation
+		"the fix of every unit touches only tests or documentation",
+		// a project whose PRs await a person merges none by machine: the
+		// frozen merge mode switches the route off (AC6)
+		"the frozen step modes (`runtime-state/step-modes.json`) name `merge` `human`",
+		"a project whose PRs await a person merges none by machine: the fix tickets it is",
+		// the brief's schema, written before the FAIL
+		"`artifacts/integrate/repair.json`: `{\"round\": <$PF_ROUND, a number>, \"heads\": {\"<repo>\": \"<sha>\"}, \"units\": [{\"repo\", \"unit\", \"item\", \"file\", \"log\", \"excerpt\", \"rerun\"}]}`",
+		// the charged FAIL — never the owner's
+		"hand off `--status fail` — charged, never `--per-owner`",
+		// the owner's revert names the revert step: the gate's own FAIL
+		// would rewind to the repair step (AC5)
+		"hand off `--status rewind --to revert --per-owner <the reply's at>`",
+		// a repair the owner refused is never taken again: the next round
+		// files the fix tickets (AC2)
+		"`artifacts/integrate/repair-refused.json`",
+	} {
+		if !strings.Contains(flat, strings.Join(strings.Fields(want), " ")) {
+			t.Errorf("workflows/integrate/skills/full-gate.md must state %q", want)
+		}
+	}
+}
