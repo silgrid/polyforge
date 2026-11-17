@@ -498,9 +498,16 @@ class Sync:
         """Every incoming branch fetched and merged into one repo (r.before
         is HEAD where the pass found it), in the incoming_branches order —
         an epic's own checkout branch first, the base branch last (its
-        head is the record's default_head)."""
+        head is the record's default_head). A branch that leaves a real
+        conflict STOPS the loop: the pending merge the record names is
+        that branch's, the agent resolves it and `--continue` commits it
+        — which walks this same pass again, so the branches after it
+        (the default branch's among them) merge in over the committed
+        tree, never over a merge in progress."""
         for branch in self.incoming_branches(d):
             self.merge_branch(d, r, branch)
+            if r.pending():
+                return
 
     def merge_branch(self, d: str, r: SyncRepo, branch: str) -> None:
         """One branch fetched and merged into one repo: nothing when HEAD
@@ -723,6 +730,21 @@ class Sync:
                     return 2
                 inv.say("repos/%s: the resolved merge of %s committed as %s (resolved: %s)" % (
                     r.name, r.default_branch, gostr.short(after), ", ".join(or_empty(r.resolved))))
+                # the committed merge was ONE of the incoming branches
+                # (an epic's own checkout branch, typically): walk the
+                # same pass again over the committed tree — the branches
+                # already in are no-ops, the rest merge in, and a new real
+                # conflict stops the pass and stays here for the agent
+                try:
+                    self.sync_one(d, r)
+                except GoError as err:
+                    inv.summary = "repos/%s: %s" % (r.name, err)
+                    return 2
+                try:
+                    rec.save()
+                except OSError as err:
+                    inv.summary = "%s not written: %s" % (self.record, err)
+                    return 2
             pend = rec.pending()
             if pend:
                 lines = ["repos/%s: %s" % (r.name, "; ".join(or_empty(r.notes))) for r in pend]

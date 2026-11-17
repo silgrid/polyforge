@@ -10,7 +10,7 @@ package runtime
 // already judged. A re-claim whose children changed — a child added or
 // its status moved — writes the NEXT version beside a resume marker
 // (runtime-state/epic-resume.json) that orders the driver to re-run the
-// steps from review onward (an owner-class rewind, charged to no budget:
+// steps from sync onward (an owner-class rewind, charged to no budget:
 // Q5 is the owner's settled word). The snapshot's shape is the Go/Python
 // dual contract (the scripts read it through pfstep/children.py):
 //

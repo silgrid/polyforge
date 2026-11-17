@@ -337,16 +337,17 @@ func (f WorkItemFilter) path() string {
 	return "/api/v1/work-items?" + q.Encode()
 }
 
-// listChildrenLimit caps the children page: the server clamps to its own
-// maximum; a whole epic's children fit far below it.
+// listChildrenLimit caps the children page the request names: the server
+// clamps to its own maximum, and an epic's children live far below it.
 const listChildrenLimit = 1000
 
 // ListChildren lists the work items whose parent is parentID, newest
 // first (the epic lane's daemon reads an epic's children through it,
-// polyforge#117). The answer is filtered by parent_id on the client
-// side too: an older server that ignores the parent parameter answers
-// the whole project's page, and the epic's snapshot and running
-// re-check must never see a stranger's work item as its child.
+// polyforge#117). The answer is validated at the boundary the response
+// crosses: a work item whose parent_id is not parentID never enters an
+// epic's snapshot or its running re-check, whatever the server paged —
+// a server that ignores the parent parameter answers the whole
+// project's page, and the filter keeps the answer the epic's own.
 func (c *Client) ListChildren(parentID string) ([]api.WorkItem, error) {
 	items, err := c.ListWorkItems(WorkItemFilter{Parent: parentID, Limit: listChildrenLimit})
 	if err != nil {

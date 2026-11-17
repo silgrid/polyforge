@@ -19,12 +19,17 @@ verify-children --> sync --> build --> review --> verification --> publish --> m
   repos — every child wrapped and its landing record's merge commits actual
   ancestors of the epic branch. An anomaly is a `blocked` hand-off to the
   owner, never a rewind; the preparation steps carry no `on_fail`.
-- **sync** (skill `sync`) — the closing-phase sync: the DEFAULT branch merged
-  into the epic branch (the capsule's `runtime-state/target-branch.json`
-  carries a `checkout` — the epic branch of its own seq — and no `target`,
-  so every script keeps its default-branch logic: the epic merges into the
-  default branch). A conflict the agent cannot resolve is the owner's; the
-  default branch moving past verification is merge's FAIL below.
+- **sync** (skill `sync`) — the closing-phase sync: the epic branch's own
+  remote commits merged in FIRST (the children's — a fix child lands on
+  `origin/<the checkout branch>` while the epic runs or is parked), then
+  the DEFAULT branch merged into the epic branch (the capsule's
+  `runtime-state/target-branch.json` carries a `checkout` — the epic
+  branch of its own seq — and no `target`, so every script keeps its
+  default-branch logic for the base: the epic merges into the default
+  branch). A real conflict stops the pass for the agent to resolve and
+  `--continue` to commit, then the rest merge in; a conflict the agent
+  cannot resolve is the owner's; the default branch moving past
+  verification is merge's FAIL below.
 - **build** (`rewind_only`, skill `build`) — the fix build. It never runs on
   the first round (the children's landed work is the change); a gate FAIL or
   an owner's rewind that covers it runs it — inheriting the plan, answering

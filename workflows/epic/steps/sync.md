@@ -1,6 +1,6 @@
 ---
 name: sync
-description: The epic's closing-phase sync - the default branch merged into the epic branch (the branch of the capsule's checkout) with the pre-written sync script, once per closing and again whenever it moved past verification; a conflict you cannot resolve is the owner's, never a rewind.
+description: The epic's closing-phase sync - the epic branch's own remote commits (the children's) merged in first, then the default branch merged into the epic branch (the branch of the capsule's checkout) with the pre-written sync script, once per closing and again whenever it moved; a real conflict stops the pass for the agent and --continue commits it; a conflict you cannot resolve is the owner's, never a rewind.
 ---
 
 # sync
