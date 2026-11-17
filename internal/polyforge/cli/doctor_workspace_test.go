@@ -7,6 +7,7 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,7 +50,8 @@ func TestDoctorWorkspaceLayoutCleanPasses(t *testing.T) {
 		}
 	}
 	touch(t, filepath.Join(ws, ".polyforge.yaml"), time.Now())
-	touch(t, filepath.Join(ws, "scratch", "fresh.log"), time.Now())
+	// a conforming scratch: one fresh batch inside a category
+	touch(t, filepath.Join(ws, "scratch", "raw", "b1", "out.txt"), time.Now())
 	_, _, doc := doctorStatus(t, env, "--json", "doctor")
 	for _, name := range []string{docChLayout, docChScratch} {
 		if st, detail := doctorFind(t, doc, name); st != "pass" {
@@ -106,6 +108,30 @@ func TestDoctorWorkspaceNotesWithoutLayoutWarns(t *testing.T) {
 	st, detail := doctorFind(t, doc, docChLayout)
 	if st != "warn" || !strings.Contains(detail, "pf init "+ws) || !strings.Contains(detail, "polyforge:layout") {
 		t.Fatalf("layout = %s (%s), want warn suggesting pf init %s", st, detail, ws)
+	}
+	if code, _, stderr := runPf(t, env, "init", ws); code != 0 {
+		t.Fatalf("pf init: exit %d (%s)", code, stderr)
+	}
+	_, _, doc = doctorStatus(t, env, "--json", "doctor")
+	if st, detail := doctorFind(t, doc, docChLayout); st != "pass" {
+		t.Fatalf("after pf init: layout = %s (%s), want pass", st, detail)
+	}
+}
+
+// A notes file whose managed block carries an OUTDATED layout section (a
+// pre-#121 one, before the scratch categories) warns as outdated with the
+// `pf init` fix; `pf init` replaces the section in place and the check
+// passes again (Q9).
+func TestDoctorNotesLayoutOutdatedWarns(t *testing.T) {
+	env, ws := doctorWorkspace(t)
+	old := "<!-- polyforge:managed:version=\"1.0\" -->\n## Repos\n\n<!-- polyforge:layout -->\nold convention, no categories\n<!-- /polyforge:layout -->\n\n<!-- /polyforge:managed -->\n"
+	if err := os.WriteFile(filepath.Join(ws, "CLAUDE.md"), []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, _, doc := doctorStatus(t, env, "--json", "doctor")
+	st, detail := doctorFind(t, doc, docChLayout)
+	if st != "warn" || !strings.Contains(detail, "outdated layout section") || !strings.Contains(detail, "pf init "+ws) {
+		t.Fatalf("outdated layout = %s (%s), want warn suggesting pf init %s", st, detail, ws)
 	}
 	if code, _, stderr := runPf(t, env, "init", ws); code != 0 {
 		t.Fatalf("pf init: exit %d (%s)", code, stderr)
@@ -181,47 +207,130 @@ func mtimeOnlyScratch(t *testing.T) {
 	t.Cleanup(func() { workspace.ChangeTime = orig })
 }
 
-func TestDoctorScratchReportsThenPrunesOnFlag(t *testing.T) {
+// TestDoctorScratchWarnsEveryPath (AC1): every entry outside the
+// categories is warned one by one — 25 loose top-level files, an unknown
+// top-level directory and a loose file inside a category — with no
+// 20-row cap on the scratch line (Q8); nothing is removed, and the
+// detail says --prune-scratch never removes them.
+func TestDoctorScratchWarnsEveryPath(t *testing.T) {
 	mtimeOnlyScratch(t)
 	env, ws := doctorWorkspace(t)
-	old := time.Now().Add(-15 * 24 * time.Hour)
-	touch(t, filepath.Join(ws, "scratch", "old.log"), old)
-	touch(t, filepath.Join(ws, "scratch", "e2e", "out.txt"), old)
-	if err := os.Chtimes(filepath.Join(ws, "scratch", "e2e"), old, old); err != nil {
+	now := time.Now()
+	for i := 0; i < 25; i++ {
+		touch(t, filepath.Join(ws, "scratch", fmt.Sprintf("loose-%02d.log", i)), now.Add(-30*24*time.Hour))
+	}
+	touch(t, filepath.Join(ws, "scratch", "unknown-dir", "keep.txt"), now.Add(-30*24*time.Hour))
+	if err := os.Chtimes(filepath.Join(ws, "scratch", "unknown-dir"), now.Add(-30*24*time.Hour), now.Add(-30*24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	touch(t, filepath.Join(ws, "scratch", "fresh.log"), time.Now())
-	touch(t, filepath.Join(ws, "scratch", "edge.log"), time.Now().Add(-13*24*time.Hour))
-
-	// default: reported, nothing removed
+	touch(t, filepath.Join(ws, "scratch", "raw", "notes.log"), now.Add(-30*24*time.Hour))
 	_, _, doc := doctorStatus(t, env, "--json", "doctor")
 	st, detail := doctorFind(t, doc, docChScratch)
-	if st != "warn" || !strings.Contains(detail, filepath.Join(ws, "scratch", "old.log")) ||
-		!strings.Contains(detail, filepath.Join(ws, "scratch", "e2e")) || strings.Contains(detail, "fresh.log") ||
-		strings.Contains(detail, "edge.log") || !strings.Contains(detail, "--prune-scratch") {
-		t.Fatalf("report-only scratch = %s (%s)", st, detail)
+	if st != "warn" {
+		t.Fatalf("scratch = %s (%s), want warn", st, detail)
 	}
-	if _, err := os.Stat(filepath.Join(ws, "scratch", "old.log")); err != nil {
-		t.Fatalf("report-only doctor removed old.log: %v", err)
+	for i := 0; i < 25; i++ {
+		if !strings.Contains(detail, filepath.Join(ws, "scratch", fmt.Sprintf("loose-%02d.log", i))) {
+			t.Fatalf("the detail must list loose-%02d.log by its full path: %s", i, detail)
+		}
+	}
+	for _, want := range []string{
+		filepath.Join(ws, "scratch", "unknown-dir"),
+		filepath.Join(ws, "scratch", "raw", "notes.log"),
+		"--prune-scratch never removes them",
+	} {
+		if !strings.Contains(detail, want) {
+			t.Fatalf("the detail lacks %q: %s", want, detail)
+		}
+	}
+	if strings.Contains(detail, "… more") {
+		t.Fatalf("the scratch row must not cap its path list: %s", detail)
+	}
+	if _, err := os.Stat(filepath.Join(ws, "scratch", "loose-00.log")); err != nil {
+		t.Fatalf("doctor removed a stray: %v", err)
+	}
+}
+
+// TestDoctorScratchPrunesPerRetention (AC2): --prune-scratch removes
+// only the batches past their own category's retention — raw/ 3 days,
+// tasks/ and sessions/ 14 days — keeps the fresh batches, the category
+// roots and every entry outside the categories, and never touches
+// anything outside scratch/.
+func TestDoctorScratchPrunesPerRetention(t *testing.T) {
+	mtimeOnlyScratch(t)
+	env, ws := doctorWorkspace(t)
+	now := time.Now()
+	batch := func(rel string, age time.Duration) {
+		t.Helper()
+		p := filepath.Join(ws, "scratch", rel, "data.bin")
+		touch(t, p, now.Add(-age))
+		if err := os.Chtimes(filepath.Dir(p), now.Add(-age), now.Add(-age)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	batch(filepath.Join("raw", "old-b"), 4*24*time.Hour)    // past raw's 3 days
+	batch(filepath.Join("raw", "new-b"), 2*24*time.Hour)    // inside
+	batch(filepath.Join("tasks", "old-t"), 15*24*time.Hour) // past 14 days
+	batch(filepath.Join("tasks", "new-t"), 13*24*time.Hour) // inside
+	batch(filepath.Join("sessions", "old-s"), 15*24*time.Hour)
+	batch(filepath.Join("sessions", "new-s"), 13*24*time.Hour)
+	touch(t, filepath.Join(ws, "scratch", "loose.log"), now.Add(-30*24*time.Hour))
+	touch(t, filepath.Join(ws, "scratch", "unknown-dir", "keep.txt"), now.Add(-30*24*time.Hour))
+	touch(t, filepath.Join(ws, "keep-me.log"), now.Add(-30*24*time.Hour)) // outside scratch/, never touched
+
+	// default: reported per path, nothing removed
+	_, _, doc := doctorStatus(t, env, "--json", "doctor")
+	st, detail := doctorFind(t, doc, docChScratch)
+	if st != "warn" {
+		t.Fatalf("scratch = %s (%s), want warn", st, detail)
+	}
+	for _, rel := range []string{filepath.Join("raw", "old-b"), filepath.Join("tasks", "old-t"), filepath.Join("sessions", "old-s"), "loose.log", "unknown-dir"} {
+		if !strings.Contains(detail, filepath.Join(ws, "scratch", rel)) {
+			t.Fatalf("the report must list %s by its full path: %s", rel, detail)
+		}
+	}
+	for _, rel := range []string{filepath.Join("raw", "new-b"), filepath.Join("tasks", "new-t"), filepath.Join("sessions", "new-s")} {
+		if strings.Contains(detail, filepath.Join(ws, "scratch", rel)) {
+			t.Fatalf("the report must not list the fresh batch %s: %s", rel, detail)
+		}
+	}
+	for _, p := range []string{
+		filepath.Join(ws, "scratch", "raw", "old-b", "data.bin"),
+		filepath.Join(ws, "scratch", "loose.log"),
+		filepath.Join(ws, "keep-me.log"),
+	} {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("the report-only doctor removed %s: %v", p, err)
+		}
 	}
 
-	// --prune-scratch: removed and listed; the fresh entries stay
+	// --prune-scratch: the three stale batches go, everything else stays
 	code, stdout, _ := runPf(t, env, "doctor", "--prune-scratch")
-	if code != 1 || !strings.Contains(stdout, "pruned 2 scratch entr(ies)") ||
-		!strings.Contains(stdout, filepath.Join(ws, "scratch", "old.log")) {
+	if code != 1 || !strings.Contains(stdout, "pruned 3 batch(es)") {
 		t.Fatalf("prune doctor: exit %d output %s", code, stdout)
 	}
-	left, _ := os.ReadDir(filepath.Join(ws, "scratch"))
-	var names []string
-	for _, e := range left {
-		names = append(names, e.Name())
+	for _, rel := range []string{filepath.Join("raw", "old-b"), filepath.Join("tasks", "old-t"), filepath.Join("sessions", "old-s")} {
+		if !strings.Contains(stdout, filepath.Join(ws, "scratch", rel)) {
+			t.Fatalf("the prune must list %s: %s", rel, stdout)
+		}
+		if _, err := os.Lstat(filepath.Join(ws, "scratch", rel)); !os.IsNotExist(err) {
+			t.Fatalf("the prune kept %s: %v", rel, err)
+		}
 	}
-	if strings.Join(names, ",") != "edge.log,fresh.log" {
-		t.Fatalf("scratch after prune = %v", names)
-	}
-	_, _, doc = doctorStatus(t, env, "--json", "doctor")
-	if st, detail := doctorFind(t, doc, docChScratch); st != "pass" {
-		t.Fatalf("after prune scratch = %s (%s)", st, detail)
+	for _, p := range []string{
+		filepath.Join(ws, "scratch", "raw", "new-b", "data.bin"),
+		filepath.Join(ws, "scratch", "tasks", "new-t", "data.bin"),
+		filepath.Join(ws, "scratch", "sessions", "new-s", "data.bin"),
+		filepath.Join(ws, "scratch", "loose.log"),
+		filepath.Join(ws, "scratch", "unknown-dir", "keep.txt"),
+		filepath.Join(ws, "scratch", "raw"),
+		filepath.Join(ws, "scratch", "tasks"),
+		filepath.Join(ws, "scratch", "sessions"),
+		filepath.Join(ws, "keep-me.log"),
+	} {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("the prune removed %s, which it must never touch: %v", p, err)
+		}
 	}
 }
 

@@ -134,8 +134,10 @@ func TestW20DoctorCellRetention(t *testing.T) {
 	}
 }
 
-// TestW20DoctorPruneScratchEveryCell (AC4): --prune-scratch removes the
-// stale entries of every Cell's workspaces, not only the default's.
+// TestW20DoctorPruneScratchEveryCell (AC4): --prune-scratch removes
+// the stale batches of every Cell's workspaces, not only the default's
+// (polyforge#121: a batch is a category's subdirectory — a top-level
+// stray is only ever reported, never removed, owner rulings Q5/Q6).
 func TestW20DoctorPruneScratchEveryCell(t *testing.T) {
 	env, _, _, _ := w20RetentionFixture(t)
 	// ctime cannot be backdated from a test (the download-arrival case it
@@ -156,10 +158,11 @@ func TestW20DoctorPruneScratchEveryCell(t *testing.T) {
 	}
 	wsA := w20MappedWorkspace(t, string(rawA))
 	old := time.Now().Add(-30 * 24 * time.Hour)
-	staleD := filepath.Join(wsD, "scratch", "old-d")
-	staleA := filepath.Join(wsA, "scratch", "old-a")
-	freshD := filepath.Join(wsD, "scratch", "fresh")
-	for _, d := range []string{staleD, staleA, freshD} {
+	staleD := filepath.Join(wsD, "scratch", "tasks", "old-d")
+	staleA := filepath.Join(wsA, "scratch", "tasks", "old-a")
+	freshD := filepath.Join(wsD, "scratch", "tasks", "fresh")
+	strayD := filepath.Join(wsD, "scratch", "stray-d")
+	for _, d := range []string{staleD, staleA, freshD, strayD} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -169,6 +172,7 @@ func TestW20DoctorPruneScratchEveryCell(t *testing.T) {
 	}
 	w20Backdate(t, staleD, old)
 	w20Backdate(t, staleA, old)
+	w20Backdate(t, strayD, old)
 	code, stdout, _ := runPf(t, env, "doctor", "--prune-scratch")
 	if code != 0 {
 		t.Fatalf("doctor --prune-scratch: exit %d (%s)", code, stdout)
@@ -179,10 +183,17 @@ func TestW20DoctorPruneScratchEveryCell(t *testing.T) {
 		}
 	}
 	if _, err := os.Stat(freshD); err != nil {
-		t.Fatalf("the fresh entry was pruned: %v", err)
+		t.Fatalf("the fresh batch was pruned: %v", err)
+	}
+	// a top-level stray is never removed, not even by --prune-scratch
+	if _, err := os.Stat(strayD); err != nil {
+		t.Fatalf("the top-level stray was pruned: %v", err)
 	}
 	if !strings.Contains(stdout, "old-d") || !strings.Contains(stdout, "old-a") {
-		t.Fatalf("the report must list each Cell's removed entry:\n%s", stdout)
+		t.Fatalf("the report must list each Cell's removed batch:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "stray-d") || !strings.Contains(stdout, "--prune-scratch never removes them") {
+		t.Fatalf("the report must name the top-level stray as never pruned:\n%s", stdout)
 	}
 }
 

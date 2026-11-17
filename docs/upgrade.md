@@ -364,3 +364,73 @@ writes against the older server. Deploy the new aihub first, then
 upgrade the pf clients — and an aihub rolled back to v0.2.1 leaves the
 v0.2.2 automatic analysis write-back refused until it is upgraded
 again.
+
+## v0.2.4, the scratch layout categories
+
+`scratch/` gets a fixed category layout (polyforge#121): `raw/` for raw
+data (batch JSON, logs, downloaded archives, history exports — kept
+3 days), `tasks/` for a background task's other disposable output
+(kept 14 days) and `sessions/` for a session's other intermediate
+output (kept 14 days), each entry one directory per run, and no loose
+file at the top level. The old rule — `pf doctor --prune-scratch`
+deleting any top-level entry older than 14 days — is replaced: entries
+outside the categories are only ever reported, whatever their age, and
+the prune removes only a category's stale batches (judged by the newest
+mtime or ctime of the whole batch subtree, strictly past the retention).
+After upgrading, run `pf init` again in every workspace: it creates the
+three categories and refreshes the notes file's layout section, and
+`pf doctor` warns a workspace whose section is still an old one. A
+dispatched background task is handed its directories at spawn —
+`PF_SCRATCH_DIR` and `PF_SCRATCH_RAW_DIR` in its environment and the
+same absolute paths in its prompt — so nothing depends on the old flat
+layout.
+
+## v0.2.3, the memory writer columns
+
+polyforge#107: memories gain their writer attribution — `writer_kind`
+(the daemon-stamped writer class, `session` or `step`; `NULL` on rows
+written before this release and on requests that send none) and
+`writer_details` (the writer's JSON detail object) — and every memory
+read face also serves the owner's display name (`owner_display_name`,
+read live from the users table, so an admin rename shows on the next
+read). **Upgrade the aihub server first and run the migration**: the new
+server reads both columns on every memory path, so on a database that
+has not been migrated every memory request fails with a SQLite error.
+A `deploy.sh` run applies the SQL below inside its switch window by
+itself (its probe skips a database that already carries the columns); a
+manual deploy runs it by hand first, as one transaction:
+
+```sql
+ALTER TABLE memories ADD COLUMN writer_kind TEXT CHECK (writer_kind IN ('session','step'));
+ALTER TABLE memories ADD COLUMN writer_details TEXT;
+UPDATE memories AS m SET writer_kind = 'step',
+    writer_details = json_object(
+        'work_item', s.wi, 'step', s.step, 'attempt', s.attempt)
+  FROM (SELECT id,
+          substr(k, 1, instr(k, ':') - 1) AS wi,
+          substr(substr(k, instr(k, ':') + 1), 1,
+                 instr(substr(k, instr(k, ':') + 1), ':') - 1) AS step,
+          CAST(substr(k,
+                 instr(k, ':') + instr(substr(k, instr(k, ':') + 1), ':') + 1)
+               AS INTEGER) AS attempt
+          FROM (SELECT id, substr(idempotency_key, 16) AS k
+                  FROM memories
+                 WHERE idempotency_key LIKE 'pf-step-memory:%') AS keyrows
+         WHERE instr(k, ':') > 0
+           AND instr(substr(k, instr(k, ':') + 1), ':') > 0) AS s
+ WHERE m.id = s.id;
+```
+
+These are `deploy/sql/v0.2.3/upgrade.sql`; the same directory's
+`probe.sql` answers 0 when a database already carries the columns. The
+one-time backfill in the same file marks exactly the rows a step
+dispatch wrote — those carrying the daemon's idempotency key
+`pf-step-memory:<wi>:<step>:<attempt>` — as `step`, with the work item,
+step and attempt parsed out of the key; every other row keeps `NULL`.
+The rollback is a no-op by decision: the writer attribution is durable
+data, the columns are never dropped, and the v0.2.2 binary keeps reading
+and writing the table unchanged beside them (its statements name their
+columns) — so the probe keeps answering 0 after a rollback and a
+re-deploy correctly skips the SQL. Work machines are unaffected until
+they upgrade: an old `pf`/daemon sending no writer fields stores `NULL`,
+and the new fields in the answers are ignored by old clients.

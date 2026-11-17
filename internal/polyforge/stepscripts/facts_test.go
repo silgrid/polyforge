@@ -53,7 +53,7 @@ func factsRun(t *testing.T, f *capsuleFixture, rt *fakeRuntime, kind string, arg
 func TestFactsNeedsAKind(t *testing.T) {
 	for _, args := range [][]string{nil, {"--json"}, {"nonsense"}} {
 		exit, _, errb := invoke(t, NameFacts, args, stepEnv(), newFakeRuntime(t))
-		if exit != 2 || !strings.Contains(errb, "plan-conformance | build | carries | micro-bounds") {
+		if exit != 2 || !strings.Contains(errb, "plan-conformance | build | analysis | carries | micro-bounds") {
 			t.Fatalf("args %v: exit %d, stderr %q", args, exit, errb)
 		}
 	}

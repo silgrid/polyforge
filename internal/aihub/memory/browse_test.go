@@ -47,7 +47,7 @@ func TestBrowseDefaultOrderIsUpdatedDescending(t *testing.T) {
 	m2 := e.browseEntry(t, "fact.note", "two", "browse body", nil, "project")
 	m3 := e.browseEntry(t, "fact.note", "three", "browse body", nil, "project")
 
-	items, next, err := e.store.Browse(nil, "", "", "", nil, 20, browseAll)
+	items, next, err := e.store.Browse(nil, "", "", "", "", nil, 20, browseAll)
 	if err != nil {
 		t.Fatalf("browse: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestBrowseSortCreatedAndUnknownSort(t *testing.T) {
 		t.Fatalf("backdate: %v", err)
 	}
 
-	items, _, err := e.store.Browse(nil, "created", "", "", nil, 20, browseAll)
+	items, _, err := e.store.Browse(nil, "created", "", "", "", nil, 20, browseAll)
 	if err != nil {
 		t.Fatalf("browse created: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestBrowseSortCreatedAndUnknownSort(t *testing.T) {
 		t.Fatalf("sort=created order = %s, want creation-descending with the backdated entry last", got)
 	}
 	for _, bad := range []string{"asc", "created_at", "UPDATED"} {
-		_, _, err := e.store.Browse(nil, bad, "", "", nil, 20, browseAll)
+		_, _, err := e.store.Browse(nil, bad, "", "", "", nil, 20, browseAll)
 		var ae *APIError
 		if !asAPIError(err, &ae) || ae.Code != api.ErrMemBadInput {
 			t.Fatalf("sort=%s = %v, want MEM-400", bad, err)
@@ -111,7 +111,7 @@ func TestBrowseWalks45InPagesOf20(t *testing.T) {
 	sizes := []int{}
 	after := ""
 	for {
-		items, next, err := e.store.Browse(nil, "", after, "", nil, 20, browseAll)
+		items, next, err := e.store.Browse(nil, "", after, "", "", nil, 20, browseAll)
 		if err != nil {
 			t.Fatalf("browse after %q: %v", after, err)
 		}
@@ -141,7 +141,7 @@ func TestBrowseEntryMovedBetweenPages(t *testing.T) {
 	for i := range ids {
 		ids[i] = e.browseEntry(t, "fact.note", "moved", "moved body", nil, "project").ID
 	}
-	first, next, err := e.store.Browse(nil, "", "", "", nil, 2, browseAll)
+	first, next, err := e.store.Browse(nil, "", "", "", "", nil, 2, browseAll)
 	if err != nil || len(first) != 2 || next == "" {
 		t.Fatalf("first page = %d items cursor %q err %v", len(first), next, err)
 	}
@@ -151,7 +151,7 @@ func TestBrowseEntryMovedBetweenPages(t *testing.T) {
 		time.Now().UTC().Format(time.RFC3339Nano), ids[0]); err != nil {
 		t.Fatalf("move: %v", err)
 	}
-	second, next2, err := e.store.Browse(nil, "", next, "", nil, 2, browseAll)
+	second, next2, err := e.store.Browse(nil, "", next, "", "", nil, 2, browseAll)
 	if err != nil {
 		t.Fatalf("second page: %v", err)
 	}
@@ -179,13 +179,13 @@ func TestBrowseCursorEdgeCases(t *testing.T) {
 	for i := range ids {
 		ids[i] = e.browseEntry(t, "fact.note", "cursor", "cursor body", nil, "project").ID
 	}
-	_, next, err := e.store.Browse(nil, "", "", "", nil, 1, browseAll)
+	_, next, err := e.store.Browse(nil, "", "", "", "", nil, 1, browseAll)
 	if err != nil || next == "" {
 		t.Fatalf("setup page: %d items, cursor %q, err %v", 1, next, err)
 	}
 
 	// A malformed cursor is refused, never restarted.
-	if _, _, err := e.store.Browse(nil, "", "not-a-cursor", "", nil, 2, browseAll); err == nil {
+	if _, _, err := e.store.Browse(nil, "", "not-a-cursor", "", "", nil, 2, browseAll); err == nil {
 		t.Fatal("malformed cursor was accepted")
 	} else {
 		var ae *APIError
@@ -194,11 +194,11 @@ func TestBrowseCursorEdgeCases(t *testing.T) {
 		}
 	}
 	// A cursor issued under another sort is refused the same way.
-	_, createdCursor, err := e.store.Browse(nil, "created", "", "", nil, 2, browseAll)
+	_, createdCursor, err := e.store.Browse(nil, "created", "", "", "", nil, 2, browseAll)
 	if err != nil || createdCursor == "" {
 		t.Fatalf("created-sort page: cursor %q, err %v", createdCursor, err)
 	}
-	if _, _, err := e.store.Browse(nil, "", createdCursor, "", nil, 2, browseAll); err == nil {
+	if _, _, err := e.store.Browse(nil, "", createdCursor, "", "", nil, 2, browseAll); err == nil {
 		t.Fatal("sort-mismatched cursor was accepted")
 	}
 
@@ -210,7 +210,7 @@ func TestBrowseCursorEdgeCases(t *testing.T) {
 			t.Fatalf("redact %s: %v", id, err)
 		}
 	}
-	items, next2, err := e.store.Browse(nil, "", pastEnd, "", nil, 2, browseAll)
+	items, next2, err := e.store.Browse(nil, "", pastEnd, "", "", nil, 2, browseAll)
 	if err != nil {
 		t.Fatalf("past-end browse: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestBrowseFiltersTypeTagsVisibilityAndProjects(t *testing.T) {
 	}
 
 	// type prefix + every-tag AND + the readable-set narrowing.
-	items, _, err := e.store.Browse([]string{alphaID(t, e)}, "", "", "experience.*", []string{"a", "b"}, 20, browseAll)
+	items, _, err := e.store.Browse([]string{alphaID(t, e)}, "", "", "experience.*", "", []string{"a", "b"}, 20, browseAll)
 	if err != nil {
 		t.Fatalf("browse: %v", err)
 	}
@@ -244,7 +244,7 @@ func TestBrowseFiltersTypeTagsVisibilityAndProjects(t *testing.T) {
 	// The visibility predicate (the server layer's memVisible) drops the
 	// private entry for a non-owner non-admin caller.
 	visible := func(en *Entry) bool { return en.Visibility != "private" }
-	items, _, err = e.store.Browse([]string{alphaID(t, e)}, "", "", "experience.*", []string{"a", "b"}, 20, visible)
+	items, _, err = e.store.Browse([]string{alphaID(t, e)}, "", "", "experience.*", "", []string{"a", "b"}, 20, visible)
 	if err != nil {
 		t.Fatalf("browse: %v", err)
 	}
@@ -252,12 +252,12 @@ func TestBrowseFiltersTypeTagsVisibilityAndProjects(t *testing.T) {
 		t.Fatalf("visibility browse = %s, want %s only", browseIDs(items), kept.ID)
 	}
 	// An exact type match and the * wildcard.
-	if items, _, _ = e.store.Browse(nil, "", "", "*", nil, 20, browseAll); len(items) != 5 {
+	if items, _, _ = e.store.Browse(nil, "", "", "*", "", nil, 20, browseAll); len(items) != 5 {
 		t.Fatalf("type=* browse = %d items, want every type (the foreign entry included: nil projects = all)", len(items))
 	}
 	// An unreadable project narrows to nothing: the empty readable set
 	// answers an empty page without a candidate query.
-	items, next, err := e.store.Browse([]string{}, "", "", "", nil, 20, browseAll)
+	items, next, err := e.store.Browse([]string{}, "", "", "", "", nil, 20, browseAll)
 	if err != nil || len(items) != 0 || next != "" {
 		t.Fatalf("empty readable set = %d items cursor %q err %v, want an empty page", len(items), next, err)
 	}
@@ -315,7 +315,7 @@ func TestBrowseTotalCountsTheVisibleWalk(t *testing.T) {
 	}
 	alpha := []string{alphaID(t, e)}
 
-	page, _, err := e.store.Browse(alpha, "", "", "experience.*", []string{"a", "b"}, 2, browseAll)
+	page, _, err := e.store.Browse(alpha, "", "", "experience.*", "", []string{"a", "b"}, 2, browseAll)
 	if err != nil || len(page) != 2 {
 		t.Fatalf("page = %d items, err %v; want a 2-row page", len(page), err)
 	}
@@ -332,7 +332,7 @@ func TestBrowseTotalCountsTheVisibleWalk(t *testing.T) {
 		{"every project, every type", nil, "*", nil, browseAll, 7},
 		{"nothing readable", []string{}, "", nil, browseAll, 0},
 	} {
-		got, err := e.store.BrowseTotal(tc.projects, tc.memType, tc.tags, tc.allowed)
+		got, err := e.store.BrowseTotal(tc.projects, tc.memType, "", tc.tags, tc.allowed)
 		if err != nil || got != tc.want {
 			t.Fatalf("%s: total = %d (err %v), want %d", tc.name, got, err, tc.want)
 		}
@@ -361,7 +361,7 @@ func TestBrowseTiedTimestampsKeepCreationOrder(t *testing.T) {
 		want[len(created)-1-i] = id
 	}
 	for _, sort := range []string{"", "created"} {
-		items, _, err := e.store.Browse(nil, sort, "", "", nil, 20, browseAll)
+		items, _, err := e.store.Browse(nil, sort, "", "", "", nil, 20, browseAll)
 		if err != nil {
 			t.Fatalf("browse sort=%q: %v", sort, err)
 		}
@@ -371,7 +371,7 @@ func TestBrowseTiedTimestampsKeepCreationOrder(t *testing.T) {
 		walked := []string{}
 		after := ""
 		for {
-			page, next, err := e.store.Browse(nil, sort, after, "", nil, 3, browseAll)
+			page, next, err := e.store.Browse(nil, sort, after, "", "", nil, 3, browseAll)
 			if err != nil {
 				t.Fatalf("walk sort=%q after %q: %v", sort, after, err)
 			}

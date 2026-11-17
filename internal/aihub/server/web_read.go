@@ -170,6 +170,8 @@ func webMemEntry(e *memory.Entry) webMemoryRow {
 	row := webMemoryRow{
 		ID: e.ID, Type: e.Type, Visibility: e.Visibility,
 		Tags: e.Tags, UpdatedAt: e.UpdatedAt, Title: webMemTitle(e),
+		OwnerDisplayName: e.OwnerDisplayName, WriterKind: e.WriterKind,
+		WriterDetails: e.WriterDetails,
 	}
 	if e.WorkItemID != nil {
 		row.WorkItemID = *e.WorkItemID
