@@ -99,7 +99,7 @@ func TestPF118EpicSplitSkillContract(t *testing.T) {
 	}
 	for rel, text := range map[string]string{
 		"skills/polyforge/verbs/file.md (the split section)": strings.Join(strings.Fields(sec), " "),
-		"skills/polyforge/SKILL.md (the intent row)":          strings.Join(strings.Fields(row), " "),
+		"skills/polyforge/SKILL.md (the intent row)":         strings.Join(strings.Fields(row), " "),
 	} {
 		for _, m := range regexp.MustCompile(`polyforge(#[0-9]+)?`).FindAllStringSubmatch(text, -1) {
 			if m[1] == "" {
