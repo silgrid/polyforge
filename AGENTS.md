@@ -47,6 +47,14 @@ below as a blocking finding.
     line per section, never words spliced into an existing line (the
     daemon's mechanical merge — develop's sync and merge steps — unions two
     lines appended at once, and nothing else).
+  - a section appended to `docs/upgrade.md` takes as its heading version
+    the next patch of the latest tag (after `v0.2.2` that is `v0.2.3`),
+    unless the ticket names the version, and every section appended after
+    one tag shares that one version; a section the latest tag does not
+    include may still be corrected in place — its heading version included
+    — with the sha256 pin and the pin's list line moved in the same
+    commit, while a released section's bytes are never rewritten.
+    `test/pf123_upgrade_section_version_test.go` pins the version rule.
 
   Review treats a coupled obligation named here that the plan omits, or that
   the delivered diff leaves unchanged, as a blocking finding.

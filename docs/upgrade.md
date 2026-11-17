@@ -365,7 +365,7 @@ upgrade the pf clients — and an aihub rolled back to v0.2.1 leaves the
 v0.2.2 automatic analysis write-back refused until it is upgraded
 again.
 
-## v0.2.4, the scratch layout categories
+## v0.2.3, the scratch layout categories
 
 `scratch/` gets a fixed category layout (polyforge#121): `raw/` for raw
 data (batch JSON, logs, downloaded archives, history exports — kept
@@ -489,7 +489,7 @@ the npm registry the surface's npm is configured against, or
 Nothing to do on the work machines: the engine ships with the release and
 reads the conf from the repository.
 
-## v0.2.4, the forensics standing rule
+## v0.2.3, the forensics standing rule
 
 The routing skill gains its ninth standing rule (polyforge#122):
 forensics — raw material lands on disk, the conversation carries
@@ -586,7 +586,7 @@ declare `scoped_command=` lines the same way; the engine of an older release
 diagnoses the key as unknown and ignores it, so a conf may declare them
 before this release ships.
 
-## v0.2.4, the epic split filing procedure and the split metrics (polyforge#118)
+## v0.2.3, the epic split filing procedure and the split metrics (polyforge#118)
 
 The routing skill's file verb gains the owner-confirmed split: a
 queued, never-claimed ticket whose pre-submit analysis recommends an
@@ -614,7 +614,7 @@ picking the texts up: the skill is wired by reference, sessions load
 it at their next start, and the metrics tool reads exported capsule
 trees and touches no protocol.
 
-## v0.2.4, the integration batch's in-batch repair
+## v0.2.3, the integration batch's in-batch repair
 
 The integrate lane grows two steps between `collect` and `revert`, both
 `rewind_only` (skipped without a dispatch until a rewind covers them):

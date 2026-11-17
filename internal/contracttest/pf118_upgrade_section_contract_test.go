@@ -19,7 +19,7 @@ import (
 // its list line in the pin's comment.
 func TestPF118UpgradeSectionContract(t *testing.T) {
 	upgrade := w68Raw(t, "docs/upgrade.md")
-	heading := "## v0.2.4, the epic split filing procedure and the split metrics (polyforge#118)"
+	heading := "## v0.2.3, the epic split filing procedure and the split metrics (polyforge#118)"
 	if !strings.Contains(upgrade, heading) {
 		t.Errorf("docs/upgrade.md must carry the appended section %q (polyforge#118 AC3: docs/upgrade.md 末尾追加一节同步更新)", heading)
 	}
