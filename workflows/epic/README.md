@@ -73,8 +73,10 @@ verify-children --> sync --> build --> review --> verification --> publish --> m
   snapshot against aihub: a child that failed or was canceled, or a child
   added while the epic runs, parks the workflow blocked — no question, the
   owner's next message wakes it. A resume after that re-claims: the changed
-  children go into a NEW version of the snapshot and the steps from review
-  onward re-run (an owner-class rewind, charged to no budget).
+  children go into a NEW version of the snapshot and the steps from sync
+  onward re-run (an owner-class rewind, charged to no budget) — the sync
+  takes the new child's commits on the epic branch in first, so the
+  resumed lane judges a tree that contains them.
 - **The preparation steps.** `verify-children` and `sync` carry no
   `on_fail`: a child anomaly blocks (the daemon's or the step's own
   `blocked` hand-off), a sync conflict the agent cannot resolve is the

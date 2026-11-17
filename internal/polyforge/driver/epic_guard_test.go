@@ -145,7 +145,7 @@ func TestEpicSnapshotResumeResetsFromSync(t *testing.T) {
 	d, sp, _, dir := epicGuardEnv(t,
 		capsule.EpicChildren{Version: 1, Children: []capsule.EpicChild{epicWrap("wi_c1", "demo#1")}},
 		[]fakeEntry{done(`{}`), done(`{}`), done(`{}`), done(`{}`), done(`{}`),
-			done(`{}`), done(`{}`), done(`{}`), done(`{}`), done(`{}`)},
+			done(`{}`), done(`{}`), done(`{}`), done(`{}`), done(`{}`), done(`{}`)},
 		guard)
 	if err := d.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -171,8 +171,9 @@ func TestEpicSnapshotResumeResetsFromSync(t *testing.T) {
 		t.Fatalf("the resumed Run: %v", err)
 	}
 	if got := rewindDispatched(sp); !reflect.DeepEqual(got,
-		[]string{"verify-children", "sync", reviewStepID, verificationStepID, publishStepID, "sync", reviewStepID, verificationStepID, publishStepID, "merge"}) {
-		t.Fatalf("the resume re-runs from sync, got %v", got)
+		[]string{"verify-children", "sync", reviewStepID, verificationStepID, publishStepID,
+			"sync", "build", reviewStepID, verificationStepID, publishStepID, "merge"}) {
+		t.Fatalf("the resume re-runs from sync (the fix build covered by the rewind included), got %v", got)
 	}
 	x = readExec(t, filepath.Join(dir, capsule.ExecutionJSON))
 	if x.WorkflowStatus != StatusCompleted {
@@ -189,6 +190,9 @@ func TestEpicSnapshotResumeResetsFromSync(t *testing.T) {
 	}
 	if st := x.Steps[reviewStepID]; st == nil || st.Status != capsule.StepDone || st.Round < 2 {
 		t.Fatalf("review re-ran on its second round: %+v", st)
+	}
+	if st := x.Steps["build"]; st == nil || st.Status != capsule.StepDone {
+		t.Fatalf("the rewind covered the fix build and it ran: %+v", st)
 	}
 	if st := x.Steps["sync"]; st == nil || st.Status != capsule.StepDone || st.Round < 2 {
 		t.Fatalf("sync re-ran on its second round: %+v", st)

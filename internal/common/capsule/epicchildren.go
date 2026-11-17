@@ -42,7 +42,8 @@ type EpicChildren struct {
 }
 
 // EpicResume is the resume marker's shape: the step the driver re-runs
-// from (review) and the snapshot version that moved.
+// from (sync — the epic branch's own commits come in before the lane
+// judges again) and the snapshot version that moved.
 type EpicResume struct {
 	ResetFrom       string `json:"reset_from"`
 	SnapshotVersion int    `json:"snapshot_version"`

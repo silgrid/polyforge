@@ -80,7 +80,7 @@ func (r *Runtime) writeEpicChildren(j *job) error {
 	if existing == nil {
 		return nil // the first claim: nothing was reviewed yet, nothing re-runs
 	}
-	marker, err := json.Marshal(capsule.EpicResume{ResetFrom: "review", SnapshotVersion: next.Version})
+	marker, err := json.Marshal(capsule.EpicResume{ResetFrom: "sync", SnapshotVersion: next.Version})
 	if err != nil {
 		return epicChildrenErr(j, "%s cannot be written: %v", capsule.EpicResumeJSON, err)
 	}

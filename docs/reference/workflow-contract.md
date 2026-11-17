@@ -875,8 +875,11 @@ workflow blocked on its own authority — no question is asked; the
 owner's next message (a re-claim is one) resumes it. A changed
 snapshot's re-claim writes `runtime-state/epic-resume.json` beside the
 new version, and the driver's next plan pass lands it as one
-owner-class rewind to the step it names (review) — the steps from there
-re-run, charged to no budget. The epic's merge registers the ONE landed
+owner-class rewind to the step it names (sync) — the steps from there
+re-run (the fix build the rewind covers included), charged to no budget:
+the sync takes the changed set's commits on the epic branch in first
+(its own checkout branch, then the default branch), so the resumed lane
+judges a tree that contains them. The epic's merge registers the ONE landed
 record the work item is wrapped with: `state: landed` (the pool's own),
 its `merge_commits` the actual default-branch landing, and a `children`
 key carrying the claim's snapshot verbatim — the ONE record the
