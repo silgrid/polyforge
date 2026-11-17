@@ -171,7 +171,7 @@ var doctorChecks = []doctorCheckSpec{
 	{docChScratch, scopeCell, needMapping, func(r *doctorRun) (string, string) { return scratchCheck(r.present, time.Now(), r.prune).row() }},
 	{docChCapsuleRetention, scopeCell, needConfig, func(r *doctorRun) (string, string) {
 		home, _ := os.UserHomeDir()
-		return capsuleRetentionCheck(r, DataDir(home), time.Now())
+		return capsuleRetentionCheck(r, cellcfg.CellDir(DataDir(home), r.cell), time.Now())
 	}},
 	{docChDisk, scopeCell, needMapping, func(r *doctorRun) (string, string) { return diskCheck(r.present).row() }},
 	{docChRepoClones, scopeCell, needMapping, func(r *doctorRun) (string, string) { return repoClonesCheck(r) }},
