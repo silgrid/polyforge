@@ -122,7 +122,7 @@ func TestPF101ForensicsSkillRuleContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("docs/upgrade.md: %v", err)
 	}
-	if !strings.Contains(string(upgrade), "## v0.2.4, the forensics standing rule") {
+	if !strings.Contains(string(upgrade), "## v0.2.3, the forensics standing rule") {
 		t.Errorf("docs/upgrade.md lacks the appended forensics-rule section (append-only; the w254 pin moves in the same commit)")
 	}
 }
