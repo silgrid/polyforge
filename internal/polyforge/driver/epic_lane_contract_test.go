@@ -142,6 +142,14 @@ func TestEpicLaneContract(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "skills", reviewStepID+".md")); err != nil {
 		t.Fatalf("the epic lane ships its own review skill: %v", err)
 	}
+	// the fix build inherits the plan and never re-makes it (AC1): the
+	// definition a rewound dispatch renders says both
+	build := readBundleFile(t, epicBundle, "steps", "build.md")
+	for _, want := range []string{"never runs on the first round", "inheriting the plan", "never re-planning"} {
+		if !strings.Contains(build, want) {
+			t.Errorf("the epic fix build's definition must state %q (the inherited plan, never re-planned)", want)
+		}
+	}
 }
 
 // TestEpicRewindBuild: the first round records the rewind_only build

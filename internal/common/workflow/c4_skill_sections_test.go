@@ -60,6 +60,6 @@ func TestShippedStepsSayWhatTheyReadAndHandOff(t *testing.T) {
 		}
 	}
 	if checked < 26 {
-		t.Fatalf("checked %d steps, want the four lanes' 19 at least", checked)
+		t.Fatalf("checked %d steps, want the five lanes' 26 at least", checked)
 	}
 }

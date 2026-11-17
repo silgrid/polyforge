@@ -10,6 +10,10 @@ package test
 // the epic's own.
 
 import (
+	"io/fs"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -55,5 +59,46 @@ func TestEpicLaneDocsContract(t *testing.T) {
 		if !strings.Contains(upgrade, want) {
 			t.Errorf("docs/upgrade.md must state %q", want)
 		}
+	}
+}
+
+// TestEpicLaneTextsAreProjectNeutral pins AC4's 「车道文字与项目无关」:
+// the epic lane's own files name no project — every "polyforge" is a
+// ticket citation (`polyforge#<n>`), and no forge account appears at
+// all. The lane ships to any project; a name here would be the first
+// step back to special-casing one.
+func TestEpicLaneTextsAreProjectNeutral(t *testing.T) {
+	root := v1Root(t)
+	citation := regexp.MustCompile(`polyforge(#[0-9]+)?`)
+	var files int
+	err := filepath.WalkDir(filepath.Join(root, "workflows", "epic"), func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(path, ".md") && !strings.HasSuffix(path, ".yaml") {
+			return nil
+		}
+		files++
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(root, path)
+		text := string(raw)
+		if strings.Contains(strings.ToLower(text), "silgrid") {
+			t.Errorf("%s names a forge account", filepath.ToSlash(rel))
+		}
+		for _, m := range citation.FindAllStringSubmatch(text, -1) {
+			if m[1] == "" {
+				t.Errorf("%s names the project outside a ticket citation: %q", filepath.ToSlash(rel), m[0])
+			}
+		}
+		return nil
+	})
+	if err != nil || files < 10 {
+		t.Fatalf("the epic lane's files did not walk: %d files, %v", files, err)
 	}
 }
