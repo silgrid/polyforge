@@ -886,8 +886,8 @@ declare one: develop's `merge`.
 - **Written through `pf config set|unset steps.<project>.<step-id>.skip`**
   (the write above). A write for a step
   no lane of the workspace's lane set declares `skippable` is refused,
-  naming `skippable: true` and that such a step always runs; nothing is
-  written.
+  naming `skippable: true` and that such a step cannot be switched off;
+  nothing is written.
 - **Written by hand on another step, it is ignored.** The loader has no
   lane at hand: a `skip: true` a hand edit puts on a step its lane does not
   declare skippable loads, governs nothing, and is ignored when a work item

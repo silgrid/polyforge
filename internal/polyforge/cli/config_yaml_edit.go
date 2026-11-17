@@ -127,7 +127,7 @@ func runWorkspaceWrite(ctx *Context, set bool, pos []string, exp configExpectati
 				return fmt.Errorf("config set %s: the installed workflows are unreadable, so the step cannot be checked: %w", key, err)
 			}
 			if !skippable[sk.step] {
-				return fmt.Errorf("config set %s: no lane of this workspace declares step %s skippable (`skippable: true` in its workflow.yaml); a step its lane does not declare skippable always runs", key, sk.step)
+				return fmt.Errorf("config set %s: no lane of this workspace declares step %s skippable (`skippable: true` in its workflow.yaml); a step its lane does not declare skippable cannot be switched off", key, sk.step)
 			}
 		}
 		if sk.leaf == stepLeafBy {
