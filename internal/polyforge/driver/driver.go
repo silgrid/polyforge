@@ -74,6 +74,14 @@ type Config struct {
 	// Workflow supplies the execution graph directly (tests, or a
 	// daemon that already parsed it); nil → loaded from BundleDir.
 	Workflow *Workflow
+	// EpicChildren answers the epic's children as aihub holds them now
+	// (nil = the work item is not an epic, or its lane runs no re-check):
+	// the driver calls it before EVERY dispatch (the merge's included)
+	// and compares the answer with the claim's immutable snapshot
+	// (capsule.ChildrenJSON) — a child that failed or was canceled, or
+	// one the snapshot does not carry, parks the workflow blocked on the
+	// driver's own authority, no question asked (polyforge#117, Q3/Q5).
+	EpicChildren func() ([]capsule.EpicChild, error)
 	// Compose answers the per-step candidate lists (polyforge#33): the
 	// driver calls it at EVERY dispatch (outside its mutex), so a yaml or
 	// bundle edit governs the next dispatch. It composes over every
