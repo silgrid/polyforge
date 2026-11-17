@@ -31,7 +31,6 @@ import (
 	"github.com/silgrid/polyforge/internal/common/harness"
 	"github.com/silgrid/polyforge/internal/polyforge/runtime"
 	"github.com/silgrid/polyforge/internal/polyforge/supervise"
-	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
 
 // RunSpec is one runner call: one candidate, one prompt, the remaining
@@ -234,15 +233,6 @@ func (r *ExecRunner) command(ctx context.Context, spec RunSpec) (*exec.Cmd, erro
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = spec.WorkDir
 	cmd.Env = taskEnv(os.Environ(), spec.TaskID, r.DaemonID, r.SocketPath, r.ClaudeConfigDir, r.PiAgentDir)
-	// the daemon-determined scratch directories (polyforge#121): set
-	// after the inherited env is stripped of every PF_* name, so the
-	// child never inherits a stale copy
-	if spec.ScratchTaskDir != "" {
-		cmd.Env = append(cmd.Env, workspace.EnvScratchDir+"="+spec.ScratchTaskDir)
-	}
-	if spec.ScratchRawDir != "" {
-		cmd.Env = append(cmd.Env, workspace.EnvScratchRawDir+"="+spec.ScratchRawDir)
-	}
 	if harness.Of(spec.Candidate.Harness) == harness.Claude {
 		cmd.Env = runtime.WithEnv(cmd.Env, runtime.ClaudeIsolationEnv()...)
 	}
