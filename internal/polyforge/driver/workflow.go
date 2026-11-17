@@ -188,6 +188,15 @@ func (w *Workflow) skipped(id string) bool {
 	return s != nil && s.Skipped
 }
 
+// rewindOnly reports whether the lane declares step id rewind_only: the
+// step runs only after a rewind covers it (its own attempts carry a
+// rewind archive — the first round records it skipped without a
+// dispatch).
+func (w *Workflow) rewindOnly(id string) bool {
+	s := w.step(id)
+	return s != nil && s.RewindOnly
+}
+
 // ReadSkippedSteps reads the work item's skipped-step set the daemon
 // fixed in the capsule at the first claim (capsule.SkippedStepsJSON); a
 // capsule without one (or with an unreadable one) skips nothing.

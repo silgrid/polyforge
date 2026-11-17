@@ -302,10 +302,13 @@ func (d *Driver) applyLocked(req TransitionRequest, info *appliedInfo) error {
 }
 
 // applyStepSkippedLocked records a pending step the workflow skips as
-// skipped under a running workflow. A rewind that resets it to pending
-// leaves it for the next plan pass to skip again.
+// skipped under a running workflow: a step the project switches off
+// (skippable, StepSpec.Skipped), or a rewind_only step no rewind has
+// covered yet — its first round. A rewind that resets it to pending
+// leaves it for the next plan pass to skip again — or, for a rewind_only
+// step the rewind covered, to dispatch.
 func (d *Driver) applyStepSkippedLocked(req TransitionRequest) error {
-	if !d.workflow.skipped(req.StepID) {
+	if !d.workflow.skipped(req.StepID) && !d.rewindOnlySkipLocked(req.StepID) {
 		return fmt.Errorf("driver: step %q is not skipped by the workflow", req.StepID)
 	}
 	if d.exec.WorkflowStatus != StatusRunning {
@@ -321,6 +324,19 @@ func (d *Driver) applyStepSkippedLocked(req TransitionRequest) error {
 	}
 	st.Status = capsule.StepSkipped
 	return nil
+}
+
+// rewindOnlySkipLocked answers whether step id is a rewind_only step no
+// rewind has covered yet — the first-round skip plan's pass records. It
+// is the guard's other half: plan and this transition answer the one
+// question in both places, so a rewind_only skip the pass decided is
+// never refused here — and a rewind_only step a rewind covered is never
+// recorded skipped again (plan dispatches it).
+func (d *Driver) rewindOnlySkipLocked(id string) bool {
+	if !d.workflow.rewindOnly(id) {
+		return false
+	}
+	return !rewindActivated(d.exec.Steps[id])
 }
 
 // applyInitLocked lands the first execution.json: identity, the closed
