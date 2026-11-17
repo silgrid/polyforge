@@ -74,13 +74,9 @@
 #      check-xrefs.py, the Makefile's `xrefs` check; python3 is REQUIRED here -
 #      unlike `make xrefs`, a release never skips it), then the test gate
 #      (see "Test gate" below: the verification's full plan inside its
-#      container, or the reused result of a green tag on HEAD), then the
-#      production-dependency audit gate (the console SPA put npm inside
-#      the aihub trust surface, so a release refuses on a known vulnerable
-#      production dependency). Two audits, two scopes: the verification
-#      bar's dependency-audit gate audits the whole tree, dev dependencies
-#      included, on every full-tier run; the release audits production
-#      dependencies only;
+#      container, or the reused result of a green tag on HEAD); the
+#      dependency audit follows the binaries build - step 3b below, the
+#      same gate the verification bar runs;
 #   3. build the binaries (GOWORK=off make release VERSION=<tag>) -> the
 #      one pf binary for linux-amd64, darwin-arm64, darwin-amd64
 #      (the server runs as `pf aihub`); build the image from
@@ -279,10 +275,13 @@
 #                       workflows/_shared/scripts/gate.py --isolation
 #                       container from the root unless a green tag is
 #                       reused)
-#   RELEASE_AUDIT_CMD   production-dependency audit gate command
-#                       (default: sh -c 'cd webui && npm audit --omit=dev
-#                       --audit-level=high'); runs AFTER the test gate and
-#                       BEFORE the build, like the other gates
+#   RELEASE_AUDIT_CMD   dependency-audit gate command (default: the scope
+#                       engine's own `audit` command - the one named `audit`
+#                       of workflows/_shared/scripts/verify-scope --json
+#                       --full, run verbatim, declared level included); runs
+#                       AFTER the test gate and the binaries build, before
+#                       anything is published, never skipped by a reused
+#                       green tag
 #   RELEASE_BUILD_CMD   build command; sees TAG; must leave
 #                       artifacts/release-$TAG/pf and the two darwin
 #                       binaries .../pf-darwin-arm64, .../pf-darwin-amd64
@@ -1193,20 +1192,6 @@ else
   fi
 fi
 
-# 2b. production-dependency audit gate: the console SPA build chain put
-# npm inside the aihub trust surface, so the release
-# refuses when a PRODUCTION dependency carries a known high/critical
-# advisory. Two audits, two scopes: the verification bar's dependency-audit
-# gate (workflows/_shared/scripts/audit-deps, every full-tier run) audits the whole tree, dev
-# dependencies included; this release gate audits production dependencies
-# only.
-echo "release: running production-dependency audit gate"
-if [ -n "${RELEASE_AUDIT_CMD:-}" ]; then
-  sh -c "$RELEASE_AUDIT_CMD" || die "production-dependency audit gate failed (RELEASE_AUDIT_CMD); nothing built or published, $NOCLAIM"
-else
-  (cd webui && npm audit --omit=dev --audit-level=high) || die "production-dependency audit failed: a production dependency of the console SPA carries a known high or critical advisory; nothing built or published, $NOCLAIM"
-fi
-
 # build binaries: the full matrix (linux-amd64 pf consumed by the image
 # build and the deploy path, the darwin pf binaries shipped as assets). A
 # resume builds them only when one is not published yet, and publishes only
@@ -1224,6 +1209,48 @@ if [ -n "$NEED_BIN" ]; then
   for a in darwin-arm64 darwin-amd64; do
     [ -f "$OUT/pf-$a" ] || cp "$ART/pf-$a" "$OUT/pf-$a"
   done
+fi
+
+# 3b. dependency-audit gate: one audit, one command - the release runs the
+# scope engine's own dependency-audit gate, the same `audit` command the
+# verification bar and main's CI run (workflows/_shared/scripts/verify-scope
+# --json --full reports it; a declared audit_prod_level rides in it), over
+# the same trees: the Go module and every shipped npm tree, pi-web and its
+# demo included - never the one hardcoded tree of the old gate. It runs
+# AFTER the binaries build (govulncheck loads every Go package, so the
+# console SPA's go:embed tree must exist; a resume that built no binary
+# builds it here) and unconditionally: a reused green tag skips the test
+# gate, never the audit - the advisory feed moves, a green tag says nothing
+# about today's advisories. RELEASE_AUDIT_CMD (mainly for the fake-env
+# tests) replaces the whole gate.
+echo "release: running dependency-audit gate"
+if [ -n "${RELEASE_AUDIT_CMD:-}" ]; then
+  echo "release: dependency-audit gate: $RELEASE_AUDIT_CMD"
+  sh -c "$RELEASE_AUDIT_CMD" || die "dependency-audit gate failed (RELEASE_AUDIT_CMD); nothing published, $NOCLAIM"
+else
+  ENGINE=workflows/_shared/scripts/verify-scope
+  [ -f "$ENGINE" ] || die "the tree carries no scope engine ($ENGINE at $COMMIT), so no dependency-audit command to run; nothing published, $NOCLAIM"
+  AUDIT_CMD=$(python3 "$ENGINE" --json --full | python3 -c '
+import json, sys
+try:
+    r = json.load(sys.stdin)
+except ValueError:
+    sys.exit(1)
+for c in r.get("commands", []):
+    if c.get("name") == "audit":
+        print(c["cmd"])
+        break
+') || die "the scope engine could not report the dependency-audit command ($ENGINE --json --full at $COMMIT); nothing published, $NOCLAIM"
+  [ -n "$AUDIT_CMD" ] || die "the scope engine reports no dependency-audit command for this tree (no analyzer or no auditable surface at $COMMIT); nothing published, $NOCLAIM"
+  echo "release: dependency-audit gate: $AUDIT_CMD"
+  # govulncheck (the audit's Go surface) loads every Go package: the
+  # console SPA's go:embed tree must exist. The build above made it; a
+  # resume that built no binary makes it here (a tree with no webui/ has
+  # no go:embed tree to make).
+  if [ -d webui ] && [ ! -e webui/dist/index.html ]; then
+    (cd webui && npm ci && npm run build) || die "building the console SPA's go:embed tree for the dependency audit failed; nothing published, $NOCLAIM"
+  fi
+  sh -c "$AUDIT_CMD" || die "dependency-audit gate failed - a dependency of a tree this release ships carries a known advisory at the declared level; nothing published, $NOCLAIM - after a fix, or for an owner-ruled exemption row, run the release again"
 fi
 
 # build image (context: temp dir with the linux binary as `pf` - the

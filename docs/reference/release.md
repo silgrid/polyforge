@@ -505,7 +505,13 @@ and the release:
   as a failed gate, exit 2 as a gate that was not judged. Either way the
   release notes end with a `## Test gate` section naming the reused tag or
   the run, with the gate id. `RELEASE_TEST_CMD` (for the fake-environment
-  tests) replaces the whole gate: no green tag is consulted.
+  tests) replaces the whole gate: no green tag is consulted. After the
+  binaries build the release runs the dependency audit (polyforge#113): the
+  scope engine's own `audit` command, taken verbatim from `verify-scope
+  --json --full` (a declared `audit_prod_level` rides in it), over the same
+  trees the verification bar audits - never skipped by a reused green tag,
+  whose record says nothing about today's advisories. `RELEASE_AUDIT_CMD`
+  (the fake-environment tests) replaces the whole gate.
   `release-manifest.json`, the assets and `release.sh --verify` are
   unchanged.
 - **In the release (notes).** The release notes never exceed GitHub's
