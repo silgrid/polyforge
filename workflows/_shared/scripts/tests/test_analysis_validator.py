@@ -1,0 +1,182 @@
+# carries: workflows/_shared/scripts/pfstep/analysis.py, workflows/_shared/scripts/pfstep/unitruns.py, workflows/_shared/scripts/verify.py
+"""The change analysis's one shared validator (pfstep/analysis.py and
+pfstep/unitruns.py — polyforge#112): the run's shape rules (argv, cwd,
+marker), the file and name rules at HEAD (a bare name verbatim, a
+`.`-, `::`- or `/`-joined name segment by segment), the unknown-repo
+message and the supplement cap's taken/cut split. The exact messages are
+the contract verification has printed since polyforge#52 and #65 — pinned
+by tests/test_verify_analysis.py, which AC4 keeps passing unchanged — so
+the expected strings here are copied from that existing contract, never
+derived from the implementation under test. Both callers (verify.py's
+--analysis check and facts.py's close check) call these functions; a
+second copy of a rule may not appear."""
+
+import unittest
+from typing import Callable, Dict, List, Optional, Tuple
+
+from pfstep.analysis import Analysis, AnalysisDecl, name_segments, static_problem
+from pfstep.unitruns import argv_line, run_shape_problem, unknown_repo_problem
+
+# the file the fixture entries name, and its body at HEAD
+A_FILE = "tests/test_a.py"
+A_BODY = "class BuildCase:\n    def test_ok(self):\n        pass\n"
+
+ARGV_EMPTY = "its run has no argv (units.json run.argv is empty): nothing to run as written"
+CWD_OUTSIDE = 'its cwd "/abs" is not a directory inside the repo'
+CWD_NO_DIR = "its cwd sub is no directory of repos/app at HEAD"
+BAD_MARKER = 'its marker "^(" is not a regexp: '
+EMPTY_MARKER = ('its marker "a*" matches the empty string: every output would show it,'
+                " so it proves no pass")
+FILE_NOT_TRACKED = ('its file "tests/gone.py" is not a tracked file of repos/app at HEAD:'
+                    " the analysis lists a test that does not exist")
+NAME_NOWHERE = ('its name "test_ok + test_other" appears nowhere in "tests/test_a.py" at HEAD:'
+                " the analysis lists a test that does not exist")
+SEGMENT_NOWHERE = ('its name segment "NoSuchCase" appears nowhere in "tests/test_a.py" at HEAD:'
+                   " the analysis lists a test that does not exist")
+UNKNOWN_REPO = ("repos/web is not a task repo of this capsule (capsule.json names it"
+                " not, or it is not cloned under repos/)")
+
+
+def decl(file: str = A_FILE, name: str = "", cwd: str = ".",
+         argv: Optional[List[str]] = None, marker: str = "^ok$") -> AnalysisDecl:
+    """One listed test with the field defaults every entry carries."""
+    return AnalysisDecl(id="a1", repo="app", file=file, name=name, cwd=cwd,
+                        argv=list(argv) if argv is not None else ["python3", "-m", "unittest", "-h"],
+                        marker=marker, why="pins it")
+
+
+def tracked_of(files: List[str]) -> Callable[[str], bool]:
+    return lambda p: p in files
+
+
+def body_of(bodies: Dict[str, str]) -> Callable[[str], str]:
+    return lambda p: bodies.get(p, "")
+
+
+class RunShapeTest(unittest.TestCase):
+    """The shape rules every recorded run (a units.json run and an
+    analysis entry alike) is judged by, with the cleaned cwd they leave."""
+
+    def test_no_argv_names_the_rule(self) -> None:
+        self.assertEqual(run_shape_problem([], ".", "^x$", "app", lambda c: True), (ARGV_EMPTY, ""))
+
+    def test_a_blank_first_word_is_no_argv(self) -> None:
+        self.assertEqual(run_shape_problem([" "], ".", "^x$", "app", lambda c: True), (ARGV_EMPTY, ""))
+
+    def test_a_cwd_outside_the_repo(self) -> None:
+        self.assertEqual(run_shape_problem(["x"], "/abs", "^x$", "app", lambda c: True), (CWD_OUTSIDE, ""))
+
+    def test_a_cwd_that_is_no_directory_at_head(self) -> None:
+        problem, cwd = run_shape_problem(["x"], "sub", "^x$", "app", lambda c: False)
+        self.assertEqual(problem, CWD_NO_DIR)
+        self.assertEqual(cwd, "sub", "the cleaned cwd stays for the record")
+
+    def test_a_bad_marker(self) -> None:
+        problem, _cwd = run_shape_problem(["x"], "sub", "^(", "app", lambda c: True)
+        self.assertTrue(problem.startswith(BAD_MARKER), problem)
+
+    def test_a_marker_matching_the_empty_string(self) -> None:
+        problem, _cwd = run_shape_problem(["x"], "sub", "a*", "app", lambda c: True)
+        self.assertEqual(problem, EMPTY_MARKER)
+
+    def test_a_run_that_can_run(self) -> None:
+        self.assertEqual(run_shape_problem(["x"], "  . ", "^x$", "app", lambda c: True), ("", "."))
+
+
+class EntryProblemTest(unittest.TestCase):
+    """One analysis entry's static rules: shape first, then the file at
+    HEAD, then the name inside it."""
+
+    def setUp(self) -> None:
+        self.is_dir: Callable[[str], bool] = lambda c: True
+        self.tracked = tracked_of([A_FILE])
+        self.body = body_of({A_FILE: A_BODY})
+
+    def problem(self, d: AnalysisDecl) -> Tuple[str, str]:
+        return static_problem(d, "app", self.is_dir, self.tracked, self.body)
+
+    def test_a_shape_problem_wins_over_the_file(self) -> None:
+        self.assertEqual(self.problem(decl(argv=[], file="nope")), (ARGV_EMPTY, ""))
+
+    def test_a_file_that_is_no_repo_relative_path(self) -> None:
+        for f in ("", "/etc/x", "../x"):
+            with self.subTest(f):
+                self.assertEqual(self.problem(decl(file=f))[0],
+                                'its file "%s" is not a repo-relative path' % f)
+
+    def test_a_file_that_is_not_tracked_at_head(self) -> None:
+        problem, cwd = self.problem(decl(file="tests/gone.py"))
+        self.assertEqual(problem, FILE_NOT_TRACKED)
+        self.assertEqual(cwd, ".")
+
+    def test_a_composite_bare_name_appears_nowhere(self) -> None:
+        """polyforge#79's a3 class: two names joined into one string — a
+        bare name (no separator), judged verbatim, so it does not exist."""
+        self.assertEqual(self.problem(decl(name="test_ok + test_other")), (NAME_NOWHERE, "."))
+
+    def test_a_descriptive_name_appears_nowhere(self) -> None:
+        """polyforge#97's class: a scenario's description, not a test's
+        name — bare (no separator), so judged verbatim."""
+        self.assertEqual(self.problem(decl(name="app-suite (scenario, D0–D7)"))[0],
+                         ('its name "app-suite (scenario, D0–D7)" appears nowhere in'
+                          ' "tests/test_a.py" at HEAD: the analysis lists a test that'
+                          " does not exist"))
+
+    def test_a_cross_file_name_appears_nowhere_in_the_named_file(self) -> None:
+        """polyforge#79's a12 class: the entry names one file, the test
+        lives in another; the name is judged inside the named file."""
+        self.assertEqual(self.problem(decl(name="test_other"))[0],
+                         ('its name "test_other" appears nowhere in "tests/test_a.py" at'
+                          " HEAD: the analysis lists a test that does not exist"))
+
+    def test_a_bare_name_that_exists(self) -> None:
+        self.assertEqual(self.problem(decl(name="test_ok")), ("", "."))
+
+    def test_a_qualified_name_passes_when_every_segment_is_there(self) -> None:
+        for name in ("BuildCase.test_ok", "BuildCase::test_ok", "BuildCase/test_ok"):
+            with self.subTest(name):
+                self.assertEqual(self.problem(decl(name=name)), ("", "."))
+
+    def test_a_missing_segment_is_named(self) -> None:
+        self.assertEqual(self.problem(decl(name="NoSuchCase.test_ok")), (SEGMENT_NOWHERE, "."))
+
+    def test_no_name_skips_the_name_rule(self) -> None:
+        self.assertEqual(self.problem(decl(name="")), ("", "."))
+
+
+class HelperTest(unittest.TestCase):
+    def test_name_segments(self) -> None:
+        table: List[Tuple[str, Optional[List[str]]]] = [
+            ("test_ok", None),
+            ("test_ok + test_other", None),          # #79's composite: bare
+            ("app-suite (scenario, D0–D7)", None),   # #97's descriptive: bare
+            ("BuildCase.", None),                    # one non-empty segment: verbatim
+            ("BuildCase.test_ok", ["BuildCase", "test_ok"]),
+            ("BuildCase::test_ok", ["BuildCase", "test_ok"]),
+            ("BuildCase/test_ok", ["BuildCase", "test_ok"]),
+            ("a..b", ["a", "b"]),                    # empty parts drop, the parts remain
+        ]
+        for name, want in table:
+            with self.subTest(name):
+                self.assertEqual(name_segments(name), want)
+
+    def test_unknown_repo_problem(self) -> None:
+        self.assertEqual(unknown_repo_problem("web"), UNKNOWN_REPO)
+
+    def test_argv_line(self) -> None:
+        self.assertEqual(argv_line("", ["go", "test", "./..."]), "go test ./...")
+        self.assertEqual(argv_line(".", ["go", "test"]), "go test")
+        self.assertEqual(argv_line("sub", ["go", "test"]), "(cd sub) go test")
+
+    def test_the_cap_takes_the_head_and_names_the_cut_tail(self) -> None:
+        decls = [AnalysisDecl(id="a%d" % (i + 1)) for i in range(12)]
+        taken, cut = Analysis(decls=decls).taken()
+        self.assertEqual([d.id for d in taken], ["a%d" % (i + 1) for i in range(10)])
+        self.assertEqual([d.id for d in cut], ["a11", "a12"])
+        taken, cut = Analysis(limit=1, decls=decls).taken()
+        self.assertEqual([d.id for d in taken], ["a1"])
+        self.assertEqual([d.id for d in cut], ["a%d" % (i + 1) for i in range(1, 12)])
+
+
+if __name__ == "__main__":
+    unittest.main()

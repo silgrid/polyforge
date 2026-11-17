@@ -1,7 +1,7 @@
 ---
 name: build
 description: Build the change test first and record each unit's red-then-green run in artifacts/build/units.json - the run review replays red at the test commit and verification runs green again - asking the owner only in the four cases, right after the plan.
-commands: [fast_checks.py]
+commands: [fast_checks.py, facts.py]
 ---
 # build
 
@@ -113,11 +113,15 @@ record exactly what ran.
    `| AC | kind | ref |`, kind `test` (ref `<repo>/<test file>: <test name>`), `existing`
    (the test already pinning it) or `doc` (the file and the validator that shows it).
    Keep it current with every round.
+5. **The close's analysis check.** The step's close (3c) runs the change analysis's own
+   facts line, `facts.py analysis` — the same shared validator `verification` calls; its
+   red names the entry and the rule it violates, and the close check must be green before
+   the hand-off.
 
 ## 交接要写什么 — what your hand-off carries
 
 - **Status.** `done` only on a green build: every unit red then green, the fast checks
-  green, the self-review written. A real blocker — the machine, not a choice — is
+  green, the close analysis check green, the self-review written. A real blocker — the machine, not a choice — is
   `blocked` with `--reason`. A choice that is the owner's is a `pf step ask`, not a
   hand-off. `cancel` only on the owner's word (`--per-owner`).
 - **回应上一轮** (a later round): each point of the FAIL or the owner's words, numbered as
@@ -134,7 +138,7 @@ record exactly what ran.
   at first.
 - **Evidence**: `artifacts/plan.md`, `artifacts/build/units.json`,
   `artifacts/build/change-analysis.json`, `artifacts/build/units-check.json`,
-  `artifacts/build/fast-checks/<repo>.json`,
+  `artifacts/build/fast-checks/<repo>.json`, `artifacts/facts/analysis.json`,
   `artifacts/self-review.md` (and `artifacts/grill-qa.md` when there is one).
 
 ## Never

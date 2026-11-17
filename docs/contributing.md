@@ -101,7 +101,8 @@ exactly as it ran (a unit whose reproduction test already exists and is red befo
 the change declares `pre_existing_red: true` and reports no `test_commit`, its red
 evidence a replay on the tree of the change's base) —
 and the steps after it verify that record. Review runs the workflow's `facts.py
-plan-conformance`, `build --replay --isolation host` and `carries` and judges their facts: each unit's test
+plan-conformance`, `build --replay --isolation host`, `carries` and `analysis` (the change
+analysis's own close check) and judges their facts: each unit's test
 commit a one-parent ancestor of its implementation commit touching test paths only (the
 mechanical bar's test files — `*_test.go`, `*.test.*`, `*.spec.*`, `test_*.py`,
 `*_test.py`, a `test/` or `tests/` directory, the base conf's `test_glob=` lines — plus

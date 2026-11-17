@@ -133,6 +133,15 @@ fast-checks command logged): its `e2e_selection.uncovered_paths`, else its
 `--light: carries: changed path …` diagnostics. `review` judges the analysis for obviously
 missing tests.
 
+Then run the change analysis's close check — the facts engine's own fact, the same validator
+`verification` calls (`verify.py --analysis`: one implementation, never a second copy):
+`"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" analysis --json --out artifacts/facts/analysis.json`
+It judges every listed entry the way verification will — statically (its repo, its run's shape,
+its file at HEAD, its name inside it) and, for the entries its supplement cap takes, by running
+each distinct run once at HEAD and matching its marker; over the cap the tail is cut and named.
+A red names the entry and the rule it violates: fix it and re-run until green — never hand off
+with this check red.
+
 ## If you cannot finish
 
 Never hand off `done` on a build that is not green: a real blocker — the machine, not a choice —
