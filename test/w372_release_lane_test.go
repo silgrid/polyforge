@@ -287,9 +287,10 @@ func TestW372ReleasePreflightReportsEveryMissingPrerequisiteFirst(t *testing.T) 
 }
 
 // w113HostTools are the host tools the restricted-PATH worlds still need:
-// everything the release uses before and besides the audit's own tools
-// (node, sha256sum and tar are prerequisites the preflight itself checks).
-var w113HostTools = []string{"node", "sha256sum", "tar", "python3", "sh", "tr", "sed", "cut", "grep", "head", "tail", "wc", "cat", "rm", "mkdir", "cp", "mv", "mktemp", "date", "sort", "awk", "basename", "dirname", "env"}
+// everything the release and the fake world's own stubs use before and
+// besides the audit's own tools (node, sha256sum and tar are prerequisites
+// the preflight itself checks; jq is the fake gh's --jq filter).
+var w113HostTools = []string{"node", "sha256sum", "tar", "python3", "sh", "tr", "sed", "cut", "grep", "head", "tail", "wc", "cat", "rm", "mkdir", "cp", "mv", "mktemp", "date", "sort", "awk", "basename", "dirname", "env", "jq"}
 
 // TestW113ReleasePreflightReportsTheAuditTools: the default dependency audit
 // (the scope engine's own audit command, polyforge#113) puts machine
