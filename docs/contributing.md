@@ -545,7 +545,9 @@ items that merged.
   source could not be reached — red), `finding:` (advisory, package,
   surface), `ledger-invalid:` (a malformed exemption row — red),
   `ledger-expired:` and `stale:` (reported, never red on their own),
-  `surface <name>:` (the per-surface summary) and `audit-deps:` (any other
+  `surface <name>:` (the per-surface summary, preceded by its
+  `advisories fetched` line naming the fetch moment, UTC, and the advisory
+  source) and `audit-deps:` (any other
   tool error — red). The only exemption is a valid, unexpired row of the
   repository's `.polyforge/audit-exemptions.conf` ([config
   reference](reference/config.md#polyforgeaudit-exemptionsconf--dependency-audit-exemptions)),

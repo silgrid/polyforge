@@ -47,7 +47,11 @@
 #   ledger-invalid:  a malformed row (never honoured)
 #   ledger-expired:  a row past its expiry (never honoured)
 #   stale:           a valid row that matches no current finding
-#   surface <name>:  the per-surface summary (npm:<dir> or go:.)
+#   surface <name>:  the per-surface summary, preceded by its
+#                   advisories-fetched line (one per audited directory:
+#                   when the advisory data was fetched, UTC, and its source -
+#                   the npm registry the surface's npm is configured against
+#                   for an npm surface, https://vuln.go.dev for the Go one)
 #   audit-deps:      any other failure (a tool's unexpected error)
 #
 # Exit 0 only when every surface was audited, no unexempted finding remains
@@ -68,6 +72,7 @@ usage() {
 tmp="$(mktemp -d)" || exit 1
 trap 'rm -rf "$tmp"' EXIT INT TERM
 : >"$tmp/surfaces"
+FMT="%Y-%m-%dT%H:%M:%SZ"
 ledger=".polyforge/audit-exemptions.conf"
 prod_level=""
 n=0
@@ -124,9 +129,14 @@ command -v python3 >/dev/null 2>&1 || {
 
 # Run each surface's tool; its stdout, stderr and exit status are kept for the
 # evaluation below. A missing tool or directory is recorded, never skipped.
+# The UTC moment a run starts bounds its advisory fetch; the npm source is the
+# registry the surface's npm is configured against, the Go source the
+# govulncheck database.
 : >"$tmp/runs"
 while IFS="$(printf '\t')" read -r i kind dir; do
 	state="ran"
+	src=""
+	fetched="$(date -u "+$FMT")"
 	if [ "$kind" = "go" ]; then
 		for tool in go govulncheck; do
 			command -v "$tool" >/dev/null 2>&1 || {
@@ -137,6 +147,7 @@ while IFS="$(printf '\t')" read -r i kind dir; do
 		if [ "$state" = "ran" ]; then
 			GOWORK=off govulncheck -json ./... >"$tmp/$i.out" 2>"$tmp/$i.err" </dev/null
 			state="ran:$?"
+			src=https://vuln.go.dev
 		fi
 	else
 		if ! command -v npm >/dev/null 2>&1; then
@@ -154,9 +165,10 @@ while IFS="$(printf '\t')" read -r i kind dir; do
 				(cd "$dir" && npm audit --json --audit-level="$prod_level" --package-lock-only --omit=dev) \
 				>"$tmp/$i.prod.out" 2>"$tmp/$i.prod.err" </dev/null
 			fi
+			src="$( (cd "$dir" && npm config get registry 2>/dev/null) 2>/dev/null)" || src=""
 		fi
 	fi
-	printf '%s\t%s\t%s\t%s\n' "$i" "$kind" "$dir" "$state" >>"$tmp/runs"
+	printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$i" "$kind" "$dir" "$state" "$fetched" "$src" >>"$tmp/runs"
 done <"$tmp/surfaces"
 
 python3 -I - "$tmp" "$ledger" "$prod_level" <<'PY'
@@ -275,7 +287,7 @@ def go_findings(out, err, rc):
 findings = []  # (surface, advisory, package, detail)
 audited_all = True
 for ln in read("runs").splitlines():
-    i, kind, d, state = ln.split("\t")
+    i, kind, d, state, fetched, src = ln.split("\t")
     name = "%s:%s" % (kind, d)
     if state.startswith("tool-missing:"):
         tool = state.split(":", 1)[1]
@@ -309,6 +321,7 @@ for ln in read("runs").splitlines():
         continue
     for (adv, pkg), detail in sorted(found.items()):
         findings.append((name, adv, pkg, detail))
+    say("surface %s: advisories fetched %s from %s" % (name, fetched, src or "npm audit"))
     say("surface %s: audited, %d finding(s) before exemptions" % (name, len(found)))
 
 # The ledger: one exempt= row per exemption; an absent file exempts nothing.

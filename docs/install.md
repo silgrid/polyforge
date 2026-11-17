@@ -265,5 +265,7 @@ skip:
 
 The gate reads the public advisory data over the network (the npm registry's
 advisory endpoint and vuln.go.dev), so an unreachable source is a red bar
-too. `pf doctor`'s `audit tools` row reports each missing tool with this
+too. Every audited surface prints when its data was fetched (UTC) and its
+source — `surface <name>: advisories fetched <time> from <source>` — so a
+report's freshness is visible. `pf doctor`'s `audit tools` row reports each missing tool with this
 install command; it only warns and never moves the doctor's exit code.
