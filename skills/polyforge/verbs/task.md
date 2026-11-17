@@ -144,6 +144,11 @@ A finished task (whoever spawned it) records one entry in the daemon's
 decision feed — `completed`, or `failed` / `capped` / `interrupted`, which
 count as needing the owner — carrying the report's tail as its text. Pi
 Web's Polyforge panel shows it; `pf watch decisions` lists it on the CLI.
+That ends on its own once the ticket no longer needs it: an entry of a
+ticket the daemon scheduled the task for resolves when a later terminal of
+the ticket lands (the rerun completed), the ticket ends or gains a
+confirmed analysis, or the entry passes three days; the daemon writes
+`resolved`, never `dismissed`.
 
 - It is a feed entry, not a wake-up: it **does not trigger an agent turn**. When the owner brings it to you,
   present it like a message and let the owner decide; never answer, retry or

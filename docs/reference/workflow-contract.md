@@ -86,7 +86,7 @@ at once, each with its code, file, line and YAML path.
 | `uncounted_rewinds` | a map holding `reason_contains` and `max` ([uncounted_rewinds keys](#uncounted_rewinds-keys)): the lane-declared class of gate-FAIL rewinds charged to no budget — a gate FAIL whose one-line hand-off `--reason` carries `reason_contains` rewinds without spending `max_rewinds`, counted on its own toward `max` (the default 2 when the lane declares none; `0` = every matching FAIL asks the owner first, exactly like a spent `max_rewinds`); allowed only when a step declares `on_fail`, refused otherwise (`WFC-112`) |
 | `exclusive` | bool, default `false` ([Properties](#properties)): `true` holds the lane to one unfinished work item per project — a create on it reaches aihub exclusive, refused `CORE-409` `OPEN_ON_BUNDLE` while another work item of the project on the lane is not wrapped, failed or canceled; a built-in lane and a user lane alike; any other value is `WFC-112` |
 | `acceptance` | `required` or `none`, default `required` ([Properties](#properties)): whether a work item on the lane must list an acceptance criterion (`## Acceptance` or `## 验收`) before it runs; `none` is a lane with no criterion to list — the shipped integrate and release lanes declare it, develop and micro do not; a built-in lane and a user lane alike; any other value is `WFC-112` |
-| `children_branch` | a branch-name template, one string (`WFC-112` any other shape): it must carry `{seq}` (the parent's seq — polyforge#1 → `epic/1`), may carry `{project}` (the parent's project name); the rest is literal and the substituted name must be a legal git branch ref ([Properties](#properties)). A sub-ticket of a work item whose parent runs on the lane has its task repos checked out on the substituted branch: the first claim fixes it into `runtime-state/target-branch.json`, every (re-)claim checks the fixed value out, and a claim that cannot read the parent or its lane is refused |
+| `children_branch` | a branch-name template, one string (`WFC-112` any other shape): it must carry `{seq}` (the parent's seq — polyforge#1 → `epic/1`), may carry `{project}` (the parent's project name); the rest is literal and the substituted name must be a legal git branch ref ([Properties](#properties)). A sub-ticket of a work item whose parent runs on the lane has its task repos checked out on the substituted branch: the first claim fixes it into `runtime-state/target-branch.json`, every (re-)claim checks the fixed value out, and a claim that cannot read the parent or its lane is refused; a parent bound to no lane declares nothing the same way — the claim keeps the default branch |
 | `defaults` | a map holding `model_candidates` and `tiers` |
 | `steps` | a non-empty list of step entries, in execution order (`WFC-113` missing or empty) |
 
@@ -828,7 +828,10 @@ remote's copy), so the branch exists before a sub-ticket opens a PR
 against it. A claim that cannot read the parent, or the parent's lane,
 is refused naming why (`DAEMON-507`, the blocked note carries the
 reason), never a silent fall-back to the default branch; a parent whose
-lane declares none leaves the sub-ticket untouched.
+lane declares none leaves the sub-ticket untouched — a parent bound to
+no lane (a registry ticket used as the parent) declares nothing the same
+way: no target-branch file is written and the claim keeps the default
+branch.
 
 The fixed branch is the sub-ticket's steps' base too, the default
 branch's stand-in everywhere below the claim: the steps' sync merges

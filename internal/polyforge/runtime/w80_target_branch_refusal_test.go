@@ -22,10 +22,13 @@ import (
 
 // TestW80TargetBranchRefusesUnreadableParent pins every refusal case,
 // each with the reason in the typed error's detail: a hub that cannot
-// read the parent, a parent that names no lane, a parent's lane that is
-// not in this daemon's lane set, and a parent's lane the loader refuses.
-// A parent whose lane loads and declares no children_branch stays green
-// (covered by TestW80TargetBranchNoDeclarationUnchanged).
+// read the parent, a parent's lane that is not in this daemon's lane
+// set, and a parent's lane the loader refuses. A parent whose lane loads
+// and declares no children_branch stays green (covered by
+// TestW80TargetBranchNoDeclarationUnchanged), and a parent bound to no
+// lane (a registry ticket) stays green too — covered by
+// TestW80TargetBranchRegistryParentUnchanged (polyforge#114: it was
+// wrongly refused as "names no lane" in v0.2.2).
 func TestW80TargetBranchRefusesUnreadableParent(t *testing.T) {
 	const parent = "wi_w80epic11"
 	const child = "wi_w80child11"
@@ -37,9 +40,6 @@ func TestW80TargetBranchRefusesUnreadableParent(t *testing.T) {
 		{"the hub cannot read the parent", func(t *testing.T, r *Runtime, hub *fakeHub) {
 			hub.lookupErr[parent] = errors.New("connection refused")
 		}, "the parent " + parent + " cannot be read"},
-		{"the parent names no lane", func(t *testing.T, r *Runtime, hub *fakeHub) {
-			hub.items[parent] = &api.WorkItem{ID: parent, Seq: 11, ProjectName: "proj"}
-		}, "names no lane"},
 		{"the parent's lane is not in the lane set", func(t *testing.T, r *Runtime, hub *fakeHub) {
 			hub.items[parent] = &api.WorkItem{
 				ID: parent, Slug: "polyforge#11", Seq: 11, ProjectName: "proj", BundleName: w80StrPtr("no-such-lane"),

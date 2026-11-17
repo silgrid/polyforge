@@ -66,10 +66,9 @@ resolves entries itself: the step's accepted result (or a new ask) resolves
 the open `needs_input`, a work item that runs again resolves its earlier
 entries, a later status resolves the earlier `needs_input` / `blocked` /
 `paused` ones, and a final one (completed, failed, canceled) the work
-item's `carrier_push_failed` ones. The owner's reply naming the entry's ask marks it
+item's `carrier_push_failed` ones. A task entry ends the same way its ticket's story does — a later terminal of the same ticket (the rerun completed), the ticket's end or confirmed analysis read at aihub by the entry's own Cell (wrapped, canceled, failed, CORE-404, content without the unconfirmed marker), or the entry passing three days of age (every Cell's alike, no aihub read) — always written `resolved`, never `dismissed`. The owner's reply naming the entry's ask marks it
 `replied` (with `replied_at`): no longer open (`attention` false), still
-unresolved until the step hands over; an interjection changes nothing. The feed keeps the
-newest 300 entries and none older than 14 days.
+unresolved until the step hands over; an interjection changes nothing. The feed keeps the newest 300 entries; a closed entry older than 14 days goes, an open work item entry never does (an open task entry resolves at three days and then ages out with the rest).
 
 Text mode prints one line per retained entry, newest first; `--json` (or the
 global `--json`) prints `GET /decisions` verbatim. An entry carries no

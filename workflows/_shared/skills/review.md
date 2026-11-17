@@ -1,11 +1,11 @@
 ---
 name: review
-description: Judge the build in a fresh context on the facts three pre-written facts.py lines compute - the plan against the diff, each unit's commits test first with its red run replayed at its test commit, the e2e carries - and the owner's words against build's reading of them; on a later round, check the previous round's findings and whether the build changed anything.
+description: Judge the build in a fresh context on the facts four pre-written facts.py lines compute - the plan against the diff, each unit's commits test first with its red run replayed at its test commit, the change analysis's own close check, the e2e carries - and the owner's words against build's reading of them; on a later round, check the previous round's findings and whether the build changed anything.
 commands: [facts.py]
 ---
 # review
 
-You read and judge; three pre-written commands compute the facts you judge with. A result
+You read and judge; four pre-written commands compute the facts you judge with. A result
 file's `verdict` is its exit code's (0: nothing found, 1: something to class, 2: not
 judged), never yours, and never the gate's verdict by itself: what a fact means is the step
 definition's judgment.
@@ -43,6 +43,7 @@ definition's judgment.
    `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" plan-conformance --json --out artifacts/facts/plan-conformance.json`
    `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" build --replay --isolation host --json --out artifacts/facts/build.json`
    `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" carries --json --out artifacts/facts/carries.json`
+   `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" analysis --json --out artifacts/facts/analysis.json`
    The replay runs on the host (`--isolation host`), under the step's command PATH. Exit 2 is not judged: read the
    result's `summary` (for `build`, each unit's `replay_error`) — docker, a worktree, the
    deadline: wait one minute and run that line again, at most twice; still 2 — hand off
@@ -66,6 +67,11 @@ definition's judgment.
      such a tree needs as `base_setup=` in `.polyforge/verify-scope.conf`, and the replay
      runs it). It is the result's exit 1, a fact to class, never the exit 2 retried above.
    - `carries.json`: each `problems` entry is blocking `test_weakened`.
+   - `analysis.json`: every entry problem is a blocking `test_weakened` finding, naming the
+     entry and the rule it violates — a listed test that does not exist, a run that cannot
+     run as written, or one whose run does not show its marker. This fact red is never
+     classed away: the lane goes back to `build` — the build was told to fix it before
+     handing off.
    - `plan-conformance.json`: `undeclared` and `unchanged_obligations` entries are facts,
      blocking only inside a class.
    - The owner's words: the messages quoted in build's section headers (and
@@ -116,7 +122,8 @@ moot, or accepts it) is not re-raised: cite it.
   owner.
 - **验证**: each facts file and its verdict; the `units.json sha256:` you judged.
 - **Evidence**: `artifacts/review.md`, `artifacts/facts/plan-conformance.json`,
-  `artifacts/facts/build.json`, `artifacts/facts/carries.json`.
+  `artifacts/facts/build.json`, `artifacts/facts/carries.json`,
+  `artifacts/facts/analysis.json`.
 
 ## Never
 
