@@ -46,11 +46,12 @@ write to aihub but through that registration, never tag, and never edit a result
      accepted as a recorded no-op);
      `pf step hub wrap-attrs integration_batch @artifacts/integrate/integration-batch.json`
      — always (the batch's record — `{result, main, tags, items, waived, green_items,
-     fix_tickets, hold_rulings, reverts, refused, empty, closed_at}` — which the wrap carries
+     fix_tickets, hold_rulings, reverts, fixes, refused, empty, closed_at}` — which the wrap carries
      into this work item's attrs; the step declares `wrap_attrs: [integration_batch]`, so
      `pf step handoff --status done` is refused until this line was accepted).
      Then, as the lane's last step, write the wrap summary (the step header's Memory
-     section), then hand off `done`.
+     section) — a batch whose record carries `fixes` names in it the source items
+     its units were attributed to (each `fixes` entry's `items`), then hand off `done`.
    - **2** — not judged (an input unreadable, a fetch failed, the pool unreadable through
      the hub, every judged repo passed but one carries no tag, the gate decision
      contradicting the gate files): wait one minute and run 2 again, at most twice more;

@@ -774,7 +774,9 @@ that covers it again runs it once more. A `skippable` beside it stays
 the project's to switch off: a switched-off step is skipped on every
 round, the rewind or not. Nothing the step would have built exists
 before the rewind: a later step or gate that reads its artifacts in the
-first round finds none.
+first round finds none. The shipped integrate lane declares it on its
+two repair steps: a batch's red hands it back over the units its repair
+fixed, and the lane's one rewind budget bounds the rounds.
 
 **A step whose work a person does (polyforge#36).** A project declares a
 lane's `human_mergeable` step taken over by a person with

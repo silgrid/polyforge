@@ -8,11 +8,14 @@ the releasable commit; the release lane ships the newest marked commit. The `ste
 array of its `workflow.yaml` is the only execution order.
 
 ```
-collect --> revert --> full-gate --> close
-  mid       cheap     (no tier)      cheap
- (pool)   (merge lock)  (heavy)     (record)
-                ^           |
-                +-- FAIL ---+  (the owner's revert: gated again in the same batch)
+collect --> repair* --> review* --> revert --> full-gate --> close
+  mid      (no tier)   (no tier)   cheap     (no tier)      cheap
+ (pool)               (gate→repair) (merge lock)  (heavy)   (record)
+                                       ^            |
+                                       +--- FAIL ---+  (the batch's own repair:
+                                       (rewind_only: skipped until a FAIL
+                                        covers them) the owner's revert rewinds
+                                        to revert by name; charged to nothing)
 ```
 
 A batch is a work item on this bundle, filed by a person like a work item on any lane —
@@ -71,13 +74,38 @@ integration_batch`). What a later step's command needs travels in files, never i
   while another batch of the lane runs.
   It always writes `artifacts/integrate/rulings.json` (the reverts and the hold rulings,
   the owner's words verbatim), which revert and close read.
+- **repair** (`rewind_only`, no tier, no skill commands: it runs the repository's own
+  checks; hub verbs none) — the gate handed the batch back over a red every unit of which
+  is attributed and fixable by touching only tests or documentation: it fixes exactly
+  those units, on one local branch per repo (`integrate/repair-<batch>`) off the pinned
+  heads the brief names, runs each unit's own rerun command for the host green (a host
+  that cannot run it says so — the re-run gate alone judges green), and writes
+  `artifacts/integrate/repair-plan.json` — the branch, its base and head, the fixed units
+  and the items they were attributed to. It never pushes and never opens a PR (the revert
+  step lands its branch); a fix that would leave the tests-or-documents scope goes to the
+  owner in one `pf step ask` — fix anyway, revert the blamed item (its id rides the
+  gate decision's `reverts` with a plain `done`: the revert step reads it), or hand the
+  units back (`repair-refused.json`, answered by `brief_round`: the next gate run files
+  the fix tickets). It runs only after a rewind covered it: a round that reached it
+  with no brief of its own changes nothing and hands off `done`.
+- **review** (`rewind_only`, a gate whose FAIL rewinds to repair, no tier, no skill) —
+  the fresh judgment of the repair's branch: the diff from the pinned base touches only
+  test and documentation files, every brief unit is fixed (no fix that weakens a test to
+  pass it), and the repair's green evidence is real. Findings land in
+  `artifacts/review.md`; a blocking finding rewinds to the repair step charged. The
+  re-run full gate alone decides the batch — a pass here is never a green.
 - **revert** (`revert.py`, cheap tier, the merge lock; hub `get batch`, attrs `integration`) — carries out the
   reverts: the ids in `rulings.json`'s `reverts`, plus those in
-  `artifacts/integrate/gate-decision.json`'s `reverts` after a full-gate FAIL (the owner's
-  revert after a red gate), each passed as `--item`; without one it only copies the pins.
+  `artifacts/integrate/gate-decision.json`'s `reverts` — the owner's revert after a red
+  gate, or the repair step's owner-ruled revert of a source the batch cannot fix in
+  place — each passed as `--item`; without one it only copies the pins.
   Each item and its landed fix tickets are reverted per repo, newest first, on a revert PR
-  opened and merged under the repo's merge lock — the one develop's `merge` step holds;
-  the gate's pins follow the reverts (`artifacts/integrate/revert.json`). The command
+  opened and merged under the repo's merge lock — the one develop's `merge` step holds.
+  The step also lands the batch's repair branches (`--repair`, the repair step's plan
+  file): each is pushed, its PR opened and merged onto the default branch matching the
+  pushed head, and the gate's pins follow both (`artifacts/integrate/revert.json`) — the
+  re-run gate and its green tag land on the default branch; a fix whose blamed item the
+  same run reverts is never landed (its PR is not opened). The command
   writes each reverted item's move to `reverted` (`artifacts/integrate/revert-ops.json`),
   which the step registers. A revert the forge refuses is put to the owner.
 - **full-gate** (the script `gate.py --isolation container --capsule --pins`, no tier;
@@ -95,15 +123,21 @@ integration_batch`). What a later step's command needs travels in files, never i
   databases — docs/reference/release.md, "The test gate"); which source
   served is in each repo's result and green tag. Nothing gated → result
   `empty`. Green → `green`. Red → `gate.py --triage` (re-runs, the baseline, attribution,
-  bisection); the agent decides one fix ticket per root cause (filed on `develop`, high
-  priority, under its stable key, so a resumed batch never files twice) and an attribution
-  per blamed source, registered as hub writes, then `red` — every fix ticket it files carries
-  the integration_fix attr (an attrs hub write beside the file) — the full gate's own
+  bisection); the agent first judges whether the batch repairs in place — every red unit
+  `attributed`, no source past two fix rounds, the fix of every unit touching only tests
+  or documentation, and the claim's frozen step modes (`runtime-state/step-modes.json`) not
+  naming `merge` `human` (a project whose PRs await a person merges none by machine): the
+  gate writes the repair brief and hands off `fail` — charged, back to the repair step over
+  the lane's one `max_rewinds` budget. Otherwise it decides one fix ticket per root cause
+  (filed on `develop`, high priority, under its stable key, so a resumed batch never files
+  twice) and an attribution per blamed source, registered as hub writes, then `red` — every
+  fix ticket it files carries the integration_fix attr (an attrs hub write beside the file) — the full gate's own
   tickets and the hold rulings' collect ones alike — so the ticket's own develop
   verification runs the full bar instead of the light tier, because a fix that passes
   light may still break something only the full bar catches. A source red after two fix
-  rounds, or a pre-existing or unattributed red, goes to the owner: revert (a `fail`
-  citing the owner — back to revert, charged to nothing), rerun, or close red. It writes
+  rounds, or a pre-existing or unattributed red, goes to the owner: revert (a `rewind
+  --to revert` citing the owner — the gate's own FAIL would go to the repair step; back
+  to revert, charged to nothing), rerun, or close red. It writes
   `artifacts/integrate/gate-decision.json` (`result`, `reverts`) before every hand-off.
 - **close** (`integrate.py close`, cheap tier; hub `get list batch`, attrs `integration`; wrap attrs
   `integration_batch`) —
@@ -113,17 +147,21 @@ integration_batch`). What a later step's command needs travels in files, never i
   landed item a green tag — this batch's or an earlier one's — covers, and writes their
   moves to `merged` (`artifacts/integrate/close-ops.json`) and the batch's record
   (`artifacts/integrate/integration-batch.json`: `{result, main, tags, items, waived,
-  green_items, fix_tickets, hold_rulings, reverts, refused, empty, closed_at}`, the fix
-  tickets read from the step call ledger). The step registers both. A red batch tags
+  green_items, fix_tickets, hold_rulings, reverts, fixes, refused, empty, closed_at}`,
+  the fix tickets read from the step call ledger; `fixes` the landed repairs — repo,
+  branch, PR, merge, the fixed units and their attributed items). A green batch whose
+  record carries `fixes` names the attributed source items in its wrap summary. The step registers both. A red batch tags
   nothing; the heads its gate failed on are the red heads the next batch's pool carries.
   As the lane's last step it writes the work item's wrap summary.
 
 ## Human stops
 
 The daemon asks nothing: each step's own agent asks, with `pf step ask`, and acts on the
-owner's free-text reply — a stuck hold (collect), a revert the forge refused (revert), a
-source red after two fix rounds or a pre-existing / unattributed red (full-gate), an
-upstream file that does not hold (any step). The owner answers in the work item's panel or
+owner's free-text reply — a stuck hold (collect), a fix out of the tests-or-documents
+scope mid-repair (repair), a revert the forge refused (revert), a source red after two
+fix rounds or a pre-existing / unattributed red (full-gate), a spent rewind budget
+(full-gate: one more round, close red or cancel — the remaining reds filed as fix
+tickets), an upstream file that does not hold (any step). The owner answers in the work item's panel or
 with `pf answer <wi> "<words>"`; the agent states its reading of the words in its hand-off,
 where the next step can check it against the words the daemon quotes. A spent rewind budget
 (`max_rewinds: 3`) is full-gate's to ask about too: one more round, close red, or cancel.
@@ -135,7 +173,10 @@ heads, which are gated and why not, the batch's items, the holds), `rulings.json
 (collect's: the reverts and the hold rulings), `collect-records.json` and `collect-ops.json`
 (collect's record entries and the hub writes `integrate.py records` built from them),
 `revert.json`, `revert-plan.json` and `revert-ops.json` (revert.py's result, its resumable
-plan and its moves), `gate.json` and `triage.json` (gate.py's results; the logs under
+plan — the reverts and the fix landings alike — and its moves), `repair.json` (full-gate's
+repair brief), `repair-plan.json` (the repair step's branch plan the revert step lands),
+`repair-refused.json` (the repair's hand-back of units the owner ruled out of the batch),
+`gate.json` and `triage.json` (gate.py's results; the logs under
 `artifacts/integrate/logs/`), `gate-decision.json`, `full-gate-records.json` and
 `full-gate-ops.json` (full-gate's decision, record entries and hub writes), `close.json`, `close-ops.json` and `integration-batch.json`
 (integrate.py close's result, its moves and the record). Every hub write a step registered,

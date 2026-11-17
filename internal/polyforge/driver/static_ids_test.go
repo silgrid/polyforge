@@ -44,6 +44,7 @@ var coincidences = map[string]string{
 	"cli/doctor_layout.go:release":     "the release tree's directory",
 	"cli/verbs_workflow.go:release":    "the release tree's directory",
 	"cli/verbs_step.go:evidence":       "the `pf step handoff --evidence` flag and its wire key",
+	"cli/verbs_cell.go:repair":         "a cell verb (a profile's repair: `pf cell repair <profile>`), predating the step id",
 	"workspace/workspace.go:integrate": "the removed .polyforge.yaml top-level section integrate:, refused with its rewrite hint",
 }
 

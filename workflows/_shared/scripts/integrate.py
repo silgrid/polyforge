@@ -895,6 +895,10 @@ REVERT_DETAILS = gd.Struct({
         "repos": gd.List(gd.Ptr(gd.Struct({"name": gd.STR, "merge_commits": gd.List(gd.STR), "revert_pr": gd.STR, "revert_merge": gd.STR}))),
         "done": gd.BOOL, "why": gd.STR,
     }))),
+    "fixes": gd.List(gd.Ptr(gd.Struct({
+        "name": gd.STR, "branch": gd.STR, "head": gd.STR, "units": gd.List(gd.STR), "items": gd.List(gd.STR),
+        "pr": gd.STR, "merge": gd.STR, "why": gd.STR,
+    }))),
     "heads": gd.Map(gd.STR), "gated": gd.List(gd.STR),
 })
 RESULT_FILE = gd.Struct({
@@ -1116,6 +1120,8 @@ def batch_record(f: Mapping[str, Any]) -> Dict[str, Any]:
         b["green_items"] = sorted(f["green_items"])
     if f["fix_tickets"]:
         b["fix_tickets"] = sorted(f["fix_tickets"])
+    if f.get("fixes"):
+        b["fixes"] = f["fixes"]
     b["closed_at"] = f["closed_at"]
     return b
 
@@ -1210,6 +1216,7 @@ def _close_run(inv: Invocation, ns: argparse.Namespace, environ: Mapping[str, st
                 and tri_res["round"] == gate_res["round"] and same_heads(tri_res["heads"], gate_res["heads"])):
             gd_ = dict(regate)  # every failure was flaky: the gate ran once more
     reverts: List[Dict[str, Any]] = []
+    fixes: List[Dict[str, Any]] = []
     if ns.revert and _exists(ns.revert):
         try:
             rd = read_step_result(ns.revert, REVERT, REVERT_DETAILS)
@@ -1221,6 +1228,11 @@ def _close_run(inv: Invocation, ns: argparse.Namespace, environ: Mapping[str, st
                 continue
             prs = [r["revert_pr"] for r in e["repos"] if r is not None and r["revert_pr"]]
             reverts.append({"name": e["name"], "prs": prs, "wi": e["wi"]})
+        for fx in (rd.get("fixes") or []):
+            if fx is None or not fx.get("merge"):
+                continue  # not landed (a reverted item's fix is no fix of the batch)
+            fixes.append({"repo": fx["name"], "branch": fx["branch"], "pr": fx.get("pr", ""),
+                          "merge": fx["merge"], "units": list(fx.get("units") or []), "items": list(fx.get("items") or [])})
     fix_tickets: List[str] = []
     if ns.calls:
         try:
@@ -1246,7 +1258,7 @@ def _close_run(inv: Invocation, ns: argparse.Namespace, environ: Mapping[str, st
     name = or_text(bd["batch"], environ.get(stepenv.ENV_WI_ID, ""))
     f: Dict[str, Any] = {"items": bd["items"] or [], "refused": bd["refused"], "empty": bd["empty"], "main": {}, "tags": {},
                          "fix_tickets": fix_tickets, "hold_rulings": rulings, "closed_at": now_stamp(), "green_items": [],
-                         "result": ""}
+                         "fixes": fixes, "result": ""}
     greens: Dict[str, str] = {}
     if bd["refused"]:
         f["result"] = RESULT_EMPTY

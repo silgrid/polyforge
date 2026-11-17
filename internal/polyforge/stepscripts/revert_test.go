@@ -340,3 +340,240 @@ func TestRevertRevertsAHeldItemWithItsLandedFixes(t *testing.T) {
 		t.Fatal("the other landing stays")
 	}
 }
+
+// w98RepairPlan writes the repair step's plan file at path: one entry
+// per repo the repair fixed (the branch off the pinned head, its head,
+// the units and the items the gate attributed them to).
+func w98RepairPlan(t *testing.T, path string, entries ...map[string]any) {
+	t.Helper()
+	repos := make([]any, 0, len(entries))
+	for _, e := range entries {
+		repos = append(repos, e)
+	}
+	raw, err := json.Marshal(map[string]any{"round": 1, "repos": repos})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// w98RepairBranch stands the repair step's branch in the capsule's
+// clone: one commit fixing a stale test off the pinned head, answering
+// the branch head. file names the test file the round fixes (a later
+// round fixes another, so the landings stay distinct).
+func w98RepairBranch(w *gitWorld, repo, branch, pin, file string) string {
+	t := w.t
+	d := w.dir(repo)
+	gitT(t, d, "fetch", "-q", "origin")
+	gitT(t, d, "checkout", "-q", "-B", branch, pin)
+	writeFile(t, d, file, "package tests\n\n// the stale expectation the batch fixes in place\n")
+	gitT(t, d, "add", "--", file)
+	gitT(t, d, "commit", "-q", "-m", "the batch's in-batch repair")
+	return w.head(repo)
+}
+
+// TestRevertLandsTheBatchRepair (polyforge#98): the repair step's branch
+// — one local commit per repo off the pinned head, never pushed by the
+// repair — is landed by revert.py under the merge lock it already holds:
+// pushed, one PR opened and merged onto the default branch matching the
+// pushed head, the pins following the fix's merge (the gate re-runs on
+// it, and the green tag lands on the default branch), the details
+// carrying the fix for the batch's record. A crash between the merge and
+// its record resumes from the merged PR; a refused merge is exit 1 with
+// the PR kept for the next run; a fix whose blamed item the same run
+// reverts is not landed at all (its PR is never opened).
+func TestRevertLandsTheBatchRepair(t *testing.T) {
+	w := newGitWorld(t, "app", "lib")
+	src := w.land("app", "wi/src", map[string]string{"src.txt": "s\n"}, "")
+	batch := filepath.Join(w.capsule, "artifacts", "integrate", "batch.json")
+	pin := w.originMain("app")
+	w.writeBatch(batch, map[string]string{"app": pin, "lib": w.originMain("lib")}, []batchItem{
+		{ID: "wi_src", Slug: "p#1", MergeCommits: map[string][]string{"app": {src}}},
+	})
+	branch := "integrate/repair-wi_batch"
+	fixHead := w98RepairBranch(w, "app", branch, pin, "tests/stale_test.go")
+	plan := filepath.Join(w.capsule, "artifacts", "integrate", "repair-plan.json")
+	w98RepairPlan(t, plan, map[string]any{"name": "app", "branch": branch, "base": pin, "head": fixHead,
+		"units": []string{"TestStale"}, "items": []string{"wi_src"}})
+	out := filepath.Join(w.capsule, "artifacts", "integrate", "revert.json")
+	exit, res, d, errb := runRevert(w, out, "--repair", plan)
+	if exit != 0 || res.Verdict != VerdictPass {
+		t.Fatalf("exit %d, %+v\n%s", exit, res, errb)
+	}
+	if len(d.Fixes) != 1 {
+		t.Fatalf("the details carry the landed fix: %+v", d.Fixes)
+	}
+	f := d.Fixes[0]
+	if f.Name != "app" || f.Branch != branch || f.PR == "" || f.Merge == "" || strings.Join(f.Units, ",") != "TestStale" || strings.Join(f.Items, ",") != "wi_src" || f.Why != "" {
+		t.Fatalf("the landed fix: %+v", f)
+	}
+	if f.Merge != w.originMain("app") || res.Heads["app"] != f.Merge || d.Heads["app"] != f.Merge {
+		t.Fatalf("the pin follows the fix's merge onto the default branch: %+v %v %v", f, d.Heads, res.Heads)
+	}
+	if w.head("app") != f.Merge {
+		t.Fatalf("the clone stands at the fix's merge: %s", w.head("app"))
+	}
+	if fileIn(t, w.dir("app"), "tests/stale_test.go") == "" || fileIn(t, w.dir("app"), "src.txt") != "s\n" {
+		t.Fatal("the default branch carries the repair beside the landed change")
+	}
+	if w.prCount("app") != 2 || w.prFile("app", 2, "state") != "MERGED" || w.prFile("app", 2, "head") != branch {
+		t.Fatalf("one fix PR per repo, merged: %d %s %s", w.prCount("app"), w.prFile("app", 2, "state"), w.prFile("app", 2, "head"))
+	}
+	if got := readOps(t, out); got != "[]" {
+		t.Fatalf("nothing reverted: no move: %q", got)
+	}
+	// a crash between the merge and its record: the plan record loses the
+	// fix's landing — the next run reads the merged PR back, opens none
+	raw, err := os.ReadFile(d.Plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trimmed := strings.Replace(string(raw), f.Merge, "", 1)
+	if trimmed == string(raw) {
+		t.Fatalf("the plan record carries the fix's merge:\n%s", raw)
+	}
+	if err := os.WriteFile(d.Plan, []byte(trimmed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	exit, res, d, errb = runRevert(w, out, "--repair", plan)
+	if exit != 0 || len(d.Fixes) != 1 || d.Fixes[0].Merge != f.Merge || d.Fixes[0].PR != f.PR || w.prCount("app") != 2 || res.Heads["app"] != f.Merge {
+		t.Fatalf("the re-run reads the merged fix PR back: exit %d, %+v\n%s", exit, d.Fixes, errb)
+	}
+	// a fix whose blamed item the same run reverts is not landed: no PR
+	w2 := newGitWorld(t, "app")
+	src2 := w2.land("app", "wi/src", map[string]string{"src.txt": "s\n"}, "")
+	batch2 := filepath.Join(w2.capsule, "artifacts", "integrate", "batch.json")
+	pin2 := w2.originMain("app")
+	w2.writeBatch(batch2, map[string]string{"app": pin2}, []batchItem{
+		{ID: "wi_src", Slug: "p#1", MergeCommits: map[string][]string{"app": {src2}}},
+	})
+	fixHead2 := w98RepairBranch(w2, "app", branch, pin2, "tests/stale_test.go")
+	plan2 := filepath.Join(w2.capsule, "artifacts", "integrate", "repair-plan.json")
+	w98RepairPlan(t, plan2, map[string]any{"name": "app", "branch": branch, "base": pin2, "head": fixHead2,
+		"units": []string{"TestStale"}, "items": []string{"wi_src"}})
+	out2 := filepath.Join(w2.capsule, "artifacts", "integrate", "revert.json")
+	exit, res, d, errb = runRevert(w2, out2, "--repair", plan2, "--item", "p#1")
+	if exit != 0 || len(d.Fixes) != 1 || d.Fixes[0].PR != "" || d.Fixes[0].Merge != "" || d.Fixes[0].Why == "" ||
+		len(d.Reverts) != 1 || !d.Reverts[0].Done || res.Heads["app"] != d.Reverts[0].repo("app").RevertMerge {
+		t.Fatalf("the reverted item's fix is not landed, the pin follows the revert: exit %d, %+v %+v\n%s", exit, d.Fixes, d.Reverts, errb)
+	}
+	if w2.prCount("app") != 2 || w2.prFile("app", 2, "head") != "integrate/revert-p-1" {
+		t.Fatalf("only the revert's PR: %d %s", w2.prCount("app"), w2.prFile("app", 1, "head"))
+	}
+	// a refused merge keeps the PR for the next run (exit 1, the why)
+	w3 := newGitWorld(t, "app")
+	src3 := w3.land("app", "wi/src", map[string]string{"src.txt": "s\n"}, "")
+	batch3 := filepath.Join(w3.capsule, "artifacts", "integrate", "batch.json")
+	pin3 := w3.originMain("app")
+	w3.writeBatch(batch3, map[string]string{"app": pin3}, []batchItem{
+		{ID: "wi_src", Slug: "p#1", MergeCommits: map[string][]string{"app": {src3}}},
+	})
+	fixHead3 := w98RepairBranch(w3, "app", branch, pin3, "tests/stale_test.go")
+	plan3 := filepath.Join(w3.capsule, "artifacts", "integrate", "repair-plan.json")
+	w98RepairPlan(t, plan3, map[string]any{"name": "app", "branch": branch, "base": pin3, "head": fixHead3,
+		"units": []string{"TestStale"}, "items": []string{"wi_src"}})
+	out3 := filepath.Join(w3.capsule, "artifacts", "integrate", "revert.json")
+	if err := os.WriteFile(filepath.Join(w3.ghState, "fail-created-merge"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	exit, res, d, errb = runRevert(w3, out3, "--repair", plan3)
+	if exit != 1 || res.Verdict != VerdictFail || !strings.Contains(res.Summary, "repos/app") || d.Fixes[0].Why == "" || w3.prFile("app", 2, "state") != "OPEN" {
+		t.Fatalf("the refused fix merge: exit %d, %+v, %+v\n%s", exit, res, d.Fixes, errb)
+	}
+	// the fake gh consumes the marker: the PR's merge fails once, the next
+	// run merges the same PR
+	exit, res, d, errb = runRevert(w3, out3, "--repair", plan3)
+	if exit != 0 || d.Fixes[0].Merge == "" || d.Fixes[0].Why != "" || w3.prCount("app") != 2 || res.Heads["app"] != w3.originMain("app") {
+		t.Fatalf("the next run merges the same fix PR: exit %d, %+v\n%s", exit, d.Fixes, errb)
+	}
+	// the repair file of a step that never ran is absent (no fix, the pins
+	// copied); a malformed one is refused
+	w4 := newGitWorld(t, "app")
+	batch4 := filepath.Join(w4.capsule, "artifacts", "integrate", "batch.json")
+	pin4 := w4.originMain("app")
+	w4.writeBatch(batch4, map[string]string{"app": pin4}, nil)
+	out4 := filepath.Join(w4.capsule, "artifacts", "integrate", "revert.json")
+	plan4 := filepath.Join(w4.capsule, "artifacts", "integrate", "repair-plan.json")
+	exit, _, d, errb = runRevert(w4, out4, "--repair", plan4)
+	if exit != 0 || len(d.Fixes) != 0 || d.Heads["app"] != pin4 {
+		t.Fatalf("a missing repair plan is a step that never ran: exit %d, %+v\n%s", exit, d, errb)
+	}
+	if err := os.WriteFile(plan4, []byte("{\"round\": 1, \"repos\": [{\"name\": \"app\"}]}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	exit, _, errb = invokePy(t, scriptRevert, []string{"--capsule", w4.capsule, "--batch", batch4, "--repair", plan4}, w4.env("PF_WI_ID=wi_batch"))
+	if exit != 2 || !strings.Contains(errb, "repair plan") {
+		t.Fatalf("a malformed repair plan is refused: exit %d, stderr %q", exit, errb)
+	}
+}
+
+// TestRevertLandsEachRoundsRepair (review round 1, #2): the same repo's
+// second repair round lands beside the first — the gate re-red and the
+// repair started the branch over on the new pins, so the plan record's
+// first landing hides nothing: a second PR opens and merges, and the
+// pins follow the second merge (the first round's fix ride along: it is
+// an ancestor of the second round's branch).
+func TestRevertLandsEachRoundsRepair(t *testing.T) {
+	w := newGitWorld(t, "app")
+	src := w.land("app", "wi/src", map[string]string{"src.txt": "s\n"}, "")
+	batch := filepath.Join(w.capsule, "artifacts", "integrate", "batch.json")
+	pin := w.originMain("app")
+	w.writeBatch(batch, map[string]string{"app": pin}, []batchItem{
+		{ID: "wi_src", Slug: "p#1", MergeCommits: map[string][]string{"app": {src}}},
+	})
+	branch := "integrate/repair-wi_batch"
+	plan := filepath.Join(w.capsule, "artifacts", "integrate", "repair-plan.json")
+	out := filepath.Join(w.capsule, "artifacts", "integrate", "revert.json")
+	// round 1: the fix off the batch's pin
+	fix1 := w98RepairBranch(w, "app", branch, pin, "tests/first_test.go")
+	w98RepairPlan(t, plan, map[string]any{"name": "app", "branch": branch, "base": pin, "head": fix1,
+		"units": []string{"TestFirst"}, "items": []string{"wi_src"}})
+	exit, res, d, errb := runRevert(w, out, "--repair", plan)
+	if exit != 0 || len(d.Fixes) != 1 || d.Fixes[0].Merge == "" || res.Heads["app"] != d.Fixes[0].Merge {
+		t.Fatalf("the first round lands: exit %d, %+v\n%s", exit, d.Fixes, errb)
+	}
+	merge1 := d.Fixes[0].Merge
+	if merge1 != w.originMain("app") || w.prCount("app") != 2 {
+		t.Fatalf("the first round's PR merged onto the default branch: %d PRs", w.prCount("app"))
+	}
+	// round 2: the gate re-red, the repair starts the branch over on the
+	// new pins (the first landing among them)
+	fix2 := w98RepairBranch(w, "app", branch, merge1, "tests/second_test.go")
+	if fix2 == fix1 {
+		t.Fatal("the second round is a new head")
+	}
+	w98RepairPlan(t, plan, map[string]any{"name": "app", "branch": branch, "base": merge1, "head": fix2,
+		"units": []string{"TestSecond"}, "items": []string{"wi_src"}})
+	exit, res, d, errb = runRevert(w, out, "--repair", plan)
+	if exit != 0 {
+		t.Fatalf("the second round lands: exit %d\n%s", exit, errb)
+	}
+	merge2 := d.Fixes[0].Merge
+	if merge2 == "" || merge2 == merge1 || merge2 != w.originMain("app") || res.Heads["app"] != merge2 {
+		t.Fatalf("the second round's own PR merged and the pin follows it: merge1 %s, %+v %v", merge1, d.Fixes, res.Heads)
+	}
+	if w.prCount("app") != 3 || w.prFile("app", 3, "state") != "MERGED" || w.prFile("app", 3, "head") != branch {
+		t.Fatalf("a second fix PR per repo, merged: %d %s", w.prCount("app"), w.prFile("app", 3, "state"))
+	}
+	// both rounds' fixes ride on the default branch
+	gitT(t, w.dir("app"), "checkout", "-q", "--detach", merge2)
+	if fileIn(t, w.dir("app"), "tests/first_test.go") == "" || fileIn(t, w.dir("app"), "tests/second_test.go") == "" {
+		t.Fatal("the default branch carries both rounds' fixes")
+	}
+	// the resumed run reads the second merged PR back and opens nothing
+	raw, err := os.ReadFile(d.Plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trimmed := strings.Replace(string(raw), merge2, "", 1); trimmed == string(raw) {
+		t.Fatalf("the plan record carries the second merge:\n%s", raw)
+	} else if err := os.WriteFile(d.Plan, []byte(trimmed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	exit, res, d, errb = runRevert(w, out, "--repair", plan)
+	if exit != 0 || d.Fixes[0].Merge != merge2 || d.Fixes[0].PR != w.prURL("app", 3) || w.prCount("app") != 3 || res.Heads["app"] != merge2 {
+		t.Fatalf("the resumed run reads the second merged PR back: exit %d, %+v\n%s", exit, d.Fixes, errb)
+	}
+}

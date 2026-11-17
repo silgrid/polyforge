@@ -69,8 +69,11 @@ takes the landing and wraps them `landed`, into the integration batch)
 — the four mechanical steps agent steps on shared
 skills;
 [concepts](concepts.md#landed-awaiting-the-full-gate)), `integrate` (the integration
-lane: one work item per batch — `collect` → `revert` → `full-gate` → `close`,
-four agent steps running pre-written commands, gating what landed, filed
+lane: one work item per batch — `collect` → `repair` → `review` →
+`revert` → `full-gate` → `close`, six agent steps (the middle two
+`rewind_only`: the batch's own repair of a red fixable by tests or
+documentation alone, and its review — they run only after the gate's
+FAIL hands the batch back), gating what landed, filed
 by a person with `pf file create --bundle integrate` and `pf submit`, one
 unfinished batch per project (`exclusive: true`);
 [concepts](concepts.md#the-integration-lane)),

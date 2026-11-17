@@ -13,7 +13,11 @@ package runtime
 // yaml. A lane the yaml's by cannot honor — a step it does not carry, or
 // one it does not declare human_mergeable (micro accepts none) — refuses
 // the claim with the judgment's reason: the mode is the lane's to accept,
-// never silently ignored.
+// never silently ignored. A by the yaml declares for a step the lane does
+// not carry rides along unchanged — a lane's step may read another lane's
+// step mode (the batch repair's gate reads the merge mode to switch the
+// route off for a project whose PRs await a person), and the claim never
+// refuses over one.
 
 import (
 	"encoding/json"
@@ -55,6 +59,22 @@ func (r *Runtime) writeStepModes(j *job) error {
 	}
 	if modes == nil {
 		modes = map[string]string{}
+	}
+	// a by the yaml declares for a step this lane does not carry rides
+	// along unchanged: a lane's step may read another lane's step mode
+	// (the batch repair's gate reads the merge mode), and the claim
+	// never refuses over one — the refusal above is only for a step the
+	// lane carries
+	if lane != nil && cfg != nil && cfg.By != nil {
+		carried := make(map[string]bool, len(lane.Steps))
+		for _, st := range lane.Steps {
+			carried[st.ID] = true
+		}
+		for id, mode := range cfg.By[j.project] {
+			if !carried[id] {
+				modes[id] = mode
+			}
+		}
 	}
 	blob, err := json.Marshal(modes)
 	if err != nil {

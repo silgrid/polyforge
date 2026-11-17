@@ -201,10 +201,21 @@ type revertEntry struct {
 	Why   string        `json:"why,omitempty"`
 }
 
+type revertFix struct {
+	Name   string   `json:"name"`
+	Branch string   `json:"branch"`
+	Units  []string `json:"units"`
+	Items  []string `json:"items"`
+	PR     string   `json:"pr,omitempty"`
+	Merge  string   `json:"merge,omitempty"`
+	Why    string   `json:"why,omitempty"`
+}
+
 type revertDetails struct {
 	Batch   string            `json:"batch"`
 	Plan    string            `json:"plan"`
 	Reverts []*revertEntry    `json:"reverts"`
+	Fixes   []*revertFix      `json:"fixes"`
 	Heads   map[string]string `json:"heads"`
 	Gated   []string          `json:"gated"`
 }
