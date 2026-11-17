@@ -67,9 +67,17 @@ func w79ParamsEnv(t *testing.T) (*Runtime, *fakeHub, string) {
 }
 
 // w79SeedStepParams plants the attrs key on the hub's item.
+// w79Older is a write time long before anything this test run records.
+const w79Older = "2026-01-01T00:00:00Z"
+
 func w79SeedStepParams(hub *fakeHub, wi string, key map[string]any) {
 	hub.items = map[string]*api.WorkItem{wi: {ID: wi, ProjectName: "proj",
 		Attrs: map[string]any{api.StepParamsKey: key}}}
+}
+
+// w79Attr answers one param's key entry with its write time.
+func w79Attr(value, at string) map[string]any {
+	return map[string]any{"value": value, "at": at}
 }
 
 // w79GitLog answers the pushed chain's commit subjects (the claim's own
@@ -90,12 +98,12 @@ func TestW79ClaimMergesStepParams(t *testing.T) {
 	r, hub, _ := w79ParamsEnv(t)
 	const wi = "wi_w79c"
 	w79SeedStepParams(hub, wi, map[string]any{
-		"build":  map[string]any{"image": "reg/w79:1"},
-		"review": map[string]any{"image": "reg/w79:2", "flag": "on"},
+		"build":  map[string]any{"image": w79Attr("reg/w79:1", w79Older)},
+		"review": map[string]any{"image": w79Attr("reg/w79:2", w79Older), "flag": w79Attr("on", w79Older)},
 		// a step the lane does not declare, and a param the declared step
 		// does not carry: both dropped, never a refused claim
-		"nosuch": map[string]any{"x": "y"},
-		"merge":  map[string]any{"image": "z"},
+		"nosuch": map[string]any{"x": w79Attr("y", w79Older)},
+		"merge":  map[string]any{"image": w79Attr("z", w79Older)},
 	})
 	if err := r.Start(context.Background(), wi, StartOpts{}); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -139,9 +147,9 @@ func TestW79ClaimDropsUndeclaredStepParams(t *testing.T) {
 	r, hub, _ := w79ParamsEnv(t)
 	const wi = "wi_w79d"
 	w79SeedStepParams(hub, wi, map[string]any{
-		"nosuch": map[string]any{"image": "x"},
-		"build":  map[string]any{"nosuch": "x"},
-		"review": map[string]any{"image": strings.Repeat("x", 257)},
+		"nosuch": map[string]any{"image": w79Attr("x", w79Older)},
+		"build":  map[string]any{"nosuch": w79Attr("x", w79Older)},
+		"review": map[string]any{"image": w79Attr(strings.Repeat("x", 257), w79Older)},
 	})
 	if err := r.Start(context.Background(), wi, StartOpts{}); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -204,13 +212,13 @@ func TestW79ClaimKeepsKeyOnPublishFailure(t *testing.T) {
 // A residual step_params key (the race the write side detected and left
 // behind, a publish that failed at the first claim, a clear that failed)
 // never resurrects its pre-claim values over the running writes the
-// capsule chain holds: a re-claim — the sealed-head continue — clears
-// the key without merging (review r1#8; the key belongs to the QUEUED
-// ticket, a claimed one's truth is the chain).
+// capsule chain holds: the claim merges every entry by ITS OWN recorded
+// write time (review r2#1), so an old residue loses to the newer running
+// write. This case walks the quarantined-adopt re-claim path.
 func TestW79ClaimResidueYieldsToRunningWrite(t *testing.T) {
 	r, hub, _ := w79ParamsEnv(t)
 	const wi = "wi_w79f"
-	w79SeedStepParams(hub, wi, map[string]any{"build": map[string]any{"image": "reg/w79:1"}})
+	w79SeedStepParams(hub, wi, map[string]any{"build": map[string]any{"image": w79Attr("reg/w79:1", w79Older)}})
 	if err := r.Start(context.Background(), wi, StartOpts{}); err != nil {
 		t.Fatalf("the first claim: %v", err)
 	}
@@ -236,7 +244,7 @@ func TestW79ClaimResidueYieldsToRunningWrite(t *testing.T) {
 	// the residue: the key is back on the hub item (any of the three ways
 	// it can outlive the first claim)
 	hub.mu.Lock()
-	hub.items[wi].Attrs[api.StepParamsKey] = map[string]any{"build": map[string]any{"image": "reg/w79:1"}}
+	hub.items[wi].Attrs[api.StepParamsKey] = map[string]any{"build": map[string]any{"image": w79Attr("reg/w79:1", w79Older)}}
 	hub.mu.Unlock()
 	if err := r.Start(context.Background(), wi, StartOpts{}); err != nil {
 		t.Fatalf("the re-claim: %v", err)

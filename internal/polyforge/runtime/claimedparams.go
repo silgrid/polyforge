@@ -95,7 +95,7 @@ func (r *Runtime) writeClaimedStepParams(ctx context.Context, j *job) error {
 // param with By=step_params and the claim's time — later than any pending
 // aspect of the same param). An entry the snapshot does not declare, or
 // whose value breaks the bound, is dropped with one stderr line naming it.
-func claimedStepParams(params map[string]map[string]string, j *job) map[string]*capsule.StepOverride {
+func claimedStepParams(params map[string]map[string]StepParamAttr, j *job) map[string]*capsule.StepOverride {
 	dir := filepath.Join(j.capsuleDir, capsule.DirWorkflows, j.bundleName)
 	lane, errs := workflow.Load(dir)
 	if lane == nil {
@@ -106,12 +106,12 @@ func claimedStepParams(params map[string]map[string]string, j *job) map[string]*
 	for i := range lane.Steps {
 		byID[lane.Steps[i].ID] = &lane.Steps[i]
 	}
-	at := nowStamp()
 	entries := map[string]*capsule.StepOverride{}
 	for _, step := range sortedKeys(params) {
 		spec := byID[step]
 		for _, name := range sortedKeys(params[step]) {
-			value := params[step][name]
+			entry := params[step][name]
+			value := entry.Value
 			reason := ""
 			switch {
 			case spec == nil:
@@ -131,7 +131,7 @@ func claimedStepParams(params map[string]map[string]string, j *job) map[string]*
 			if entries[step].Params == nil {
 				entries[step].Params = map[string]*capsule.ParamOverride{}
 			}
-			entries[step].Params[name] = &capsule.ParamOverride{Value: value, By: StepParamsClaimedBy, At: at}
+			entries[step].Params[name] = &capsule.ParamOverride{Value: entry.Value, By: StepParamsClaimedBy, At: entry.At}
 		}
 	}
 	return entries

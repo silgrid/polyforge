@@ -105,8 +105,8 @@ func (d *Daemon) queuedOverrideView(wi string, item *api.WorkItem, scene *overri
 	ov := capsule.StepOverrides{Steps: map[string]*capsule.StepOverride{}}
 	for step, params := range runtime.StepParamsOfAttrs(item.Attrs) {
 		e := &capsule.StepOverride{Params: map[string]*capsule.ParamOverride{}}
-		for name, value := range params {
-			e.Params[name] = &capsule.ParamOverride{Value: value, By: runtime.StepParamsClaimedBy}
+		for name, entry := range params {
+			e.Params[name] = &capsule.ParamOverride{Value: entry.Value, By: runtime.StepParamsClaimedBy}
 		}
 		ov.Steps[step] = e
 	}
@@ -143,8 +143,8 @@ func (d *Daemon) queuedParamsView(wi string, item *api.WorkItem, scene *override
 	ov := capsule.StepOverrides{Steps: map[string]*capsule.StepOverride{}}
 	for step, params := range ticket {
 		e := &capsule.StepOverride{Params: map[string]*capsule.ParamOverride{}}
-		for name, value := range params {
-			e.Params[name] = &capsule.ParamOverride{Value: value}
+		for name, entry := range params {
+			e.Params[name] = &capsule.ParamOverride{Value: entry.Value}
 		}
 		ov.Steps[step] = e
 	}

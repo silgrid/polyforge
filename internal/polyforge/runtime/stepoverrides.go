@@ -66,16 +66,30 @@ const (
 	OverridePostureQueued  = "queued"
 )
 
+// StepParamAttr is one param's entry in the reserved step_params attrs
+// key (polyforge#79): the value the queued write set, with the time it
+// was written. The claim merges by that time (mergePendingAspects), so a
+// residue from before an earlier claim loses to the newer running writes
+// the capsule chain carries, and a value written after a re-queue wins —
+// neither may be dropped by the re-claim path (review r2#1).
+type StepParamAttr struct {
+	Value string `json:"value"`
+	At    string `json:"at"`
+}
+
 // StepParamsOfAttrs answers the per-ticket step params an attrs map
-// carries under api.StepParamsKey — {"<step-id>": {"<param>":
-// "<value>"}}, map[step]map[param]value — tolerating anything else: a
-// non-object key, a step entry that is no object, a param value that is
-// no single-line string, an empty step or param name are all dropped
-// (the attrs key is a machine-written boundary whose entries were
-// judged against a lane at write time; the claim re-validates every kept
-// entry against its own lane snapshot, and a planted or drifted shape
-// never blocks a claim). A key that carries nothing usable answers nil.
-func StepParamsOfAttrs(attrs map[string]any) map[string]map[string]string {
+// carries under api.StepParamsKey — {"<step-id>": {"<param>": {"value":
+// "<value>", "at": "<RFC 3339 write time>"}}}, map[step]map[param]entry —
+// tolerating anything else: a non-object key, a step entry that is no
+// object, an entry without a usable value, an empty step or param name
+// are all dropped (the attrs key is a machine-written boundary whose
+// entries were judged against a lane at write time; the claim re-validates
+// every kept entry against its own lane snapshot, and a planted or
+// drifted shape never blocks a claim). An entry without a parseable time
+// keeps an empty At — the merge counts it older than any timed capsule
+// aspect (pendingAspectApplies). A key that carries nothing usable
+// answers nil.
+func StepParamsOfAttrs(attrs map[string]any) map[string]map[string]StepParamAttr {
 	raw, ok := attrs[api.StepParamsKey]
 	if !ok {
 		return nil
@@ -84,7 +98,7 @@ func StepParamsOfAttrs(attrs map[string]any) map[string]map[string]string {
 	if !ok {
 		return nil
 	}
-	out := map[string]map[string]string{}
+	out := map[string]map[string]StepParamAttr{}
 	for step, sv := range obj {
 		if step == "" {
 			continue
@@ -94,14 +108,30 @@ func StepParamsOfAttrs(attrs map[string]any) map[string]map[string]string {
 			continue
 		}
 		for name, v := range so {
-			value, ok := v.(string)
-			if !ok || name == "" || strings.Contains(value, "\n") {
+			if name == "" {
+				continue
+			}
+			value, at := "", ""
+			switch e := v.(type) {
+			case string:
+				// a bare value (the signature stage's own writes): its
+				// write time is unknown
+				value = e
+			case map[string]any:
+				if s, ok := e["value"].(string); ok {
+					value = s
+				}
+				if s, ok := e["at"].(string); ok {
+					at = s
+				}
+			}
+			if strings.Contains(value, "\n") {
 				continue
 			}
 			if out[step] == nil {
-				out[step] = map[string]string{}
+				out[step] = map[string]StepParamAttr{}
 			}
-			out[step][name] = value
+			out[step][name] = StepParamAttr{Value: value, At: at}
 		}
 	}
 	if len(out) == 0 {

@@ -650,22 +650,22 @@ func (d *Daemon) queuedParamWrite(wi string, item *api.WorkItem, req protocol.Ov
 	// the whole-key read-merge-write: the current key (this route's own
 	// reads resolved the item fresh), the change applied to a copy
 	current := runtime.StepParamsOfAttrs(item.Attrs)
-	merged := map[string]map[string]string{}
+	merged := map[string]map[string]runtime.StepParamAttr{}
 	for step, params := range current {
-		merged[step] = map[string]string{}
+		merged[step] = map[string]runtime.StepParamAttr{}
 		for n, v := range params {
 			merged[step][n] = v
 		}
 	}
 	if req.Param != nil {
-		if v, ok := merged[req.Step][name]; ok && v == req.Param.Value {
+		if v, ok := merged[req.Step][name]; ok && v.Value == req.Param.Value {
 			// the idempotent no-change success: nothing written
 			return d.queuedParamAnswer(wi, req, spec, merged, false, "", operator), nil
 		}
 		if merged[req.Step] == nil {
-			merged[req.Step] = map[string]string{}
+			merged[req.Step] = map[string]runtime.StepParamAttr{}
 		}
-		merged[req.Step][name] = req.Param.Value
+		merged[req.Step][name] = runtime.StepParamAttr{Value: req.Param.Value}
 	} else {
 		if _, ok := merged[req.Step][name]; !ok {
 			return d.queuedParamAnswer(wi, req, spec, merged, false, "", operator), nil
@@ -707,7 +707,7 @@ func (d *Daemon) queuedParamWrite(wi string, item *api.WorkItem, req protocol.Ov
 // carries the params the merged key holds for it (the overlay-view
 // shape), changed false naming the idempotent no-change success.
 func (d *Daemon) queuedParamAnswer(wi string, req protocol.OverrideWriteRequest, spec *workflow.Step,
-	merged map[string]map[string]string, changed bool, note, operator string) *protocol.OverrideWriteResult {
+	merged map[string]map[string]runtime.StepParamAttr, changed bool, note, operator string) *protocol.OverrideWriteResult {
 	row := protocol.OverrideStepView{ID: req.Step, Skippable: spec.Skippable}
 	names := make([]string, 0, len(merged[req.Step]))
 	for name := range merged[req.Step] {
@@ -715,7 +715,7 @@ func (d *Daemon) queuedParamAnswer(wi string, req protocol.OverrideWriteRequest,
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		row.Params = append(row.Params, protocol.OverrideParamView{Name: name, Value: merged[req.Step][name], By: operator})
+		row.Params = append(row.Params, protocol.OverrideParamView{Name: name, Value: merged[req.Step][name].Value, By: operator})
 	}
 	return &protocol.OverrideWriteResult{WorkItem: wi, Changed: changed,
 		Posture: runtime.OverridePostureQueued, Published: false, Note: note, Step: row}

@@ -36,13 +36,25 @@ func w79QueuedFixture(t *testing.T) *testDaemon {
 	return td
 }
 
-func w79AttrsOf(t *testing.T, td *testDaemon, wi string) map[string]map[string]string {
+func w79AttrsOf(t *testing.T, td *testDaemon, wi string) map[string]map[string]runtime.StepParamAttr {
 	t.Helper()
 	it, ok := td.hub.items[wi]
 	if !ok {
 		t.Fatalf("the hub holds no item %s", wi)
 	}
 	return runtime.StepParamsOfAttrs(it.Attrs)
+}
+
+// w79AttrsValues flattens the key's values for a by-value compare.
+func w79AttrsValues(attrs map[string]map[string]runtime.StepParamAttr) map[string]map[string]string {
+	out := map[string]map[string]string{}
+	for step, params := range attrs {
+		out[step] = map[string]string{}
+		for name, e := range params {
+			out[step][name] = e.Value
+		}
+	}
+	return out
 }
 
 func TestW79QueuedParamWrite(t *testing.T) {
@@ -61,8 +73,9 @@ func TestW79QueuedParamWrite(t *testing.T) {
 	if !strings.Contains(res.Note, "attrs") || !strings.Contains(res.Note, "claim") {
 		t.Fatalf("the answer's note says where the change rides: %+v", res.Note)
 	}
-	if got := w79AttrsOf(t, td, wi); !reflect.DeepEqual(got, map[string]map[string]string{"review": {"image": "reg/x:1"}}) {
-		t.Fatalf("the attrs key after the set: %+v", got)
+	got := w79AttrsOf(t, td, wi)
+	if vals := w79AttrsValues(got); !reflect.DeepEqual(vals, map[string]map[string]string{"review": {"image": "reg/x:1"}}) {
+		t.Fatalf("the attrs key after the set: %+v", vals)
 	}
 	if got := w78Params(res.Step.Params); !reflect.DeepEqual(got, []protocol.OverrideParamView{{Name: "image", Value: "reg/x:1", By: "usr_1"}}) {
 		t.Fatalf("the answer's step row: %+v", res.Step.Params)
@@ -74,7 +87,7 @@ func TestW79QueuedParamWrite(t *testing.T) {
 		Param: &protocol.OverrideParam{Name: "flag", Value: ""}}); ae != nil || !res.Changed {
 		t.Fatalf("an empty value is a queued set: %+v %+v", res, ae)
 	}
-	if got := w79AttrsOf(t, td, wi)["review"]; !reflect.DeepEqual(got, map[string]string{"image": "reg/x:1", "flag": ""}) {
+	if got := w79AttrsValues(w79AttrsOf(t, td, wi))["review"]; !reflect.DeepEqual(got, map[string]string{"image": "reg/x:1", "flag": ""}) {
 		t.Fatalf("the attrs key carries both params: %+v", got)
 	}
 
@@ -93,7 +106,7 @@ func TestW79QueuedParamWrite(t *testing.T) {
 		ClearParam: "image"}); ae != nil || !res.Changed {
 		t.Fatalf("the clear: %+v %+v", res, ae)
 	}
-	if got := w79AttrsOf(t, td, wi)["review"]; !reflect.DeepEqual(got, map[string]string{"flag": ""}) {
+	if got := w79AttrsValues(w79AttrsOf(t, td, wi))["review"]; !reflect.DeepEqual(got, map[string]string{"flag": ""}) {
 		t.Fatalf("the clear removes only its own param: %+v", got)
 	}
 	// a repeated clear is the unchanged success
