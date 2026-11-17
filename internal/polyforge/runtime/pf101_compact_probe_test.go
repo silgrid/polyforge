@@ -27,9 +27,10 @@ package runtime
 //     settings.json in-process for the real gateway — the credentials
 //     never reach a log, an artifact or the recording.
 //   - POLYFORGE_TEST_PF101_RECORD_DIR names a directory the probes write
-//     their JSON recordings into (versions, argv shape, the verdict and
-//     a short excerpt around the rule; never a credential, never a
-//     full transcript).
+//     their JSON recordings into (the binary's version line, the argv
+//     shape with the prompt elided, the verdict and a 120-byte excerpt
+//     around the rule from the decoded record; never a credential, never
+//     a full transcript).
 //
 // The probes are bounded: every harness run is a foreground
 // exec.CommandContext with a deadline, and the local endpoints close
@@ -59,6 +60,7 @@ type pf101ClaudeCompactVerdict struct {
 	PostCompactRequest         bool   `json:"post_compact_request"`         // an api-request-blob exists after the boundary
 	RuleInPostCompactRequest   bool   `json:"rule_in_post_compact_request"` // that request carries the rule bytes
 	RuleInPostCompactEphemeral bool   `json:"rule_in_post_compact_attachment"`
+	Excerpt                    string `json:"rule_excerpt,omitempty"` // 120 bytes around the rule, from the decoded request string
 	Detail                     string `json:"detail"`
 }
 
@@ -103,8 +105,9 @@ func pf101ClaudeCompactVerdictOf(raw []byte, rule string) pf101ClaudeCompactVerd
 			v.PostCompactRequest = true
 			// a JSONL record is one line: the rule's newlines arrive as
 			// \n escapes, so the comparison reads the decoded strings
-			if pf101AnyString(line, rule) {
+			if ex := pf101Excerpt(line, rule); ex != "" {
 				v.RuleInPostCompactRequest = true
+				v.Excerpt = ex
 			}
 		case lastBoundary >= 0 && r.Attachment != nil && r.Attachment.Type == "instructions":
 			for _, f := range r.Attachment.Files {
@@ -116,6 +119,55 @@ func pf101ClaudeCompactVerdictOf(raw []byte, rule string) pf101ClaudeCompactVerd
 	}
 	v.Detail = fmt.Sprintf("boundary line %d", lastBoundary)
 	return v
+}
+
+// pf101Excerpt answers 120 bytes around want from the first decoded
+// string value of the one JSON record that carries it ("" when none
+// does). A JSONL record is one line; embedded newlines are \n escapes
+// there, so the comparison reads the decoded strings.
+func pf101Excerpt(record, want string) string {
+	var found string
+	var walk func(v any) bool
+	walk = func(v any) bool {
+		switch t := v.(type) {
+		case string:
+			if strings.Contains(t, want) {
+				found = t
+				return true
+			}
+		case []any:
+			for _, e := range t {
+				if walk(e) {
+					return true
+				}
+			}
+		case map[string]any:
+			for _, e := range t {
+				if walk(e) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	var decoded any
+	if json.Unmarshal([]byte(record), &decoded) != nil {
+		return ""
+	}
+	walk(decoded)
+	if found == "" {
+		return ""
+	}
+	i := strings.Index(found, want)
+	lo := i - 40
+	if lo < 0 {
+		lo = 0
+	}
+	hi := i + len(want) + 80
+	if hi > len(found) {
+		hi = len(found)
+	}
+	return found[lo:hi]
 }
 
 // pf101AnyString reports whether any string value of the one JSON record
@@ -153,6 +205,7 @@ func pf101AnyString(record, want string) bool {
 type pf101PiSystemVerdict struct {
 	SystemSeen      bool   `json:"system_seen"`
 	RuleInSystemCtx bool   `json:"rule_in_system_context"`
+	Excerpt         string `json:"rule_excerpt,omitempty"` // 120 bytes around the rule, from the project-context section
 	Detail          string `json:"detail"`
 }
 
@@ -182,8 +235,9 @@ func pf101PiSystemVerdictOf(raw []byte, rule string) pf101PiSystemVerdict {
 		}
 		if r.Message.Role == "system" {
 			v.SystemSeen = true
-			if strings.Contains(r.Message.Sections["project_context"], rule) {
+			if ex := pf101Excerpt(line, rule); ex != "" {
 				v.RuleInSystemCtx = true
+				v.Excerpt = ex
 			}
 		}
 	}
@@ -345,6 +399,24 @@ func pf101Record(t *testing.T, name string, v any) {
 	}
 }
 
+// pf101VersionOf answers the binary's first --version line.
+func pf101VersionOf(t *testing.T, name, bin string, env []string, dir string) string {
+	t.Helper()
+	out, _ := pf101RunOf(t, name+" --version", bin, []string{"--version"}, env, dir)
+	return firstLineOf(out)
+}
+
+// firstLineOf answers s's first line, capped.
+func firstLineOf(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	if len(s) > 200 {
+		s = s[:200]
+	}
+	return s
+}
+
 // pf101ChildEnv answers the test process's environment with the named
 // overrides applied ONCE: exec passes duplicates through and a child's
 // getenv takes the first match, so an appended HOME beside the process's
@@ -426,6 +498,8 @@ func TestPF101PiMainSessionRuleInSystemPrompt(t *testing.T) {
 	}
 	pf101Record(t, "pf101-pi-main-session", map[string]any{
 		"harness": "pi", "binary": bin, "verdict": v,
+		"version":      pf101VersionOf(t, "pi", bin, env, t.TempDir()),
+		"argv":         "pi --session-dir <dir> -p --mode json --model probe/model-a <prompt>",
 		"session_file": filepath.Base(files[0]),
 	})
 }
@@ -525,5 +599,8 @@ func TestPF101ClaudeCompactKeepsTheRule(t *testing.T) {
 	}
 	pf101Record(t, "pf101-claude-compact", map[string]any{
 		"harness": "claude", "binary": bin, "mode": map[bool]string{true: "fake-endpoint", false: "real-gateway"}[fake], "verdict": v,
+		"version": pf101VersionOf(t, "claude", bin, env, work),
+		"model":   model,
+		"argv":    "claude -p --model <model> (--session-id <uuid> | --resume <uuid>) <prompt>, then --resume <uuid> /compact, then --resume <uuid> <prompt>",
 	})
 }
