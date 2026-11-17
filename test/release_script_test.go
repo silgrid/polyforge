@@ -789,6 +789,9 @@ func TestReleaseScriptAudit(t *testing.T) {
 	relGit(t, w.work, "add", "-A")
 	relGit(t, w.work, "commit", "-q", "-m", "an auditable tree")
 	relGit(t, w.work, "push", "-q", "origin", "main")
+	// the PR-only gate: the tree lands as a recorded merged PR, like every
+	// change the fake world releases
+	w.recordPR(relGit(t, w.work, "rev-parse", "HEAD"))
 
 	out, err := w.run([]string{"RELEASE_AUDIT_CMD="})
 	if err != nil {
