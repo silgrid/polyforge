@@ -139,7 +139,8 @@ func (s *Store) Browse(projects []string, sort, after, memType string, tags []st
 
 // browseSelect is the candidate row's column set (scanBrowseRow's order).
 const browseSelect = `SELECT m.rowid, m.id, m.project_id, m.owner_user_id, m.work_item_id, m.type, m.title,
-		m.visibility, m.content_sha, m.content_len, m.tags, m.related, m.status, m.created_at, m.updated_at
+		m.visibility, m.content_sha, m.content_len, m.tags, m.related, m.status, m.created_at, m.updated_at,
+		m.writer_kind, m.writer_details
 		FROM memories m`
 
 // browseFilter is the browse narrowing shared by the page and the total:
@@ -217,10 +218,11 @@ type browseScanner interface{ Scan(dest ...any) error }
 func scanBrowseRow(scan browseScanner) (*Entry, int64, error) {
 	var e Entry
 	var rowid int64
-	var wi, title sql.NullString
+	var wi, title, writerKind, writerDetails sql.NullString
 	var tags, related string
 	if err := scan.Scan(&rowid, &e.ID, &e.ProjectID, &e.OwnerUserID, &wi, &e.Type, &title, &e.Visibility,
-		&e.ContentSHA, &e.ContentLen, &tags, &related, &e.Status, &e.CreatedAt, &e.UpdatedAt); err != nil {
+		&e.ContentSHA, &e.ContentLen, &tags, &related, &e.Status, &e.CreatedAt, &e.UpdatedAt,
+		&writerKind, &writerDetails); err != nil {
 		return nil, 0, err
 	}
 	if wi.Valid {
@@ -228,6 +230,12 @@ func scanBrowseRow(scan browseScanner) (*Entry, int64, error) {
 	}
 	if title.Valid {
 		e.Title = &title.String
+	}
+	if writerKind.Valid {
+		e.WriterKind = &writerKind.String
+	}
+	if writerDetails.Valid {
+		e.WriterDetails = json.RawMessage(writerDetails.String)
 	}
 	_ = jsonUnmarshalStrings(tags, &e.Tags)
 	_ = jsonUnmarshalStrings(related, &e.Related)

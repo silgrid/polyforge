@@ -19,22 +19,28 @@ import (
 )
 
 // Entry is the memories row as served. ContentSHA and ContentLen
-// describe the stored document (frontmatter + body).
+// describe the stored document (frontmatter + body). WriterKind and
+// WriterDetails are the daemon-stamped writer attribution
+// (polyforge#107): nil (null on the wire) on rows written before v0.2.3
+// and by callers that send none. The writer is server-side metadata —
+// the stored document's frontmatter never carries it.
 type Entry struct {
-	ID          string   `json:"id"`
-	ProjectID   string   `json:"project_id"`
-	OwnerUserID string   `json:"owner_user_id"`
-	WorkItemID  *string  `json:"work_item_id"`
-	Type        string   `json:"type"`
-	Title       *string  `json:"title"`
-	Visibility  string   `json:"visibility"`
-	ContentSHA  string   `json:"content_sha"`
-	ContentLen  int64    `json:"content_len"`
-	Tags        []string `json:"tags"`
-	Related     []string `json:"related"`
-	Status      string   `json:"status"`
-	CreatedAt   string   `json:"created_at"`
-	UpdatedAt   string   `json:"updated_at"`
+	ID            string          `json:"id"`
+	ProjectID     string          `json:"project_id"`
+	OwnerUserID   string          `json:"owner_user_id"`
+	WorkItemID    *string         `json:"work_item_id"`
+	Type          string          `json:"type"`
+	Title         *string         `json:"title"`
+	Visibility    string          `json:"visibility"`
+	ContentSHA    string          `json:"content_sha"`
+	ContentLen    int64           `json:"content_len"`
+	Tags          []string        `json:"tags"`
+	Related       []string        `json:"related"`
+	Status        string          `json:"status"`
+	CreatedAt     string          `json:"created_at"`
+	UpdatedAt     string          `json:"updated_at"`
+	WriterKind    *string         `json:"writer_kind"`
+	WriterDetails json.RawMessage `json:"writer_details"`
 }
 
 // Store is the memory subsystem.
@@ -54,17 +60,63 @@ func NewStore(db *core.DB, dataDir string) *Store {
 	return &Store{db: db, dataDir: dataDir, now: time.Now}
 }
 
-// CreateRequest is the POST /api/v1/memories body.
+// CreateRequest is the POST /api/v1/memories body. The writer fields
+// (polyforge#107) are optional: the daemon stamps them (a session write
+// kind=session, a step write kind=step with its details); a caller that
+// sends none stores NULL.
 type CreateRequest struct {
-	Project        string   `json:"project"`
-	Type           string   `json:"type"`
-	Title          *string  `json:"title"`
-	Visibility     string   `json:"visibility"`
-	Content        string   `json:"content"`
-	Tags           []string `json:"tags"`
-	Related        []string `json:"related"`
-	WorkItemID     *string  `json:"work_item_id"`
-	IdempotencyKey *string  `json:"idempotency_key"`
+	Project        string           `json:"project"`
+	Type           string           `json:"type"`
+	Title          *string          `json:"title"`
+	Visibility     string           `json:"visibility"`
+	Content        string           `json:"content"`
+	Tags           []string         `json:"tags"`
+	Related        []string         `json:"related"`
+	WorkItemID     *string          `json:"work_item_id"`
+	IdempotencyKey *string          `json:"idempotency_key"`
+	WriterKind     *string          `json:"writer_kind"`
+	WriterDetails  *json.RawMessage `json:"writer_details"`
+}
+
+// writerKinds is the closed writer-kind enum: the writer classes that
+// exist today — a session's pf remember and a step's pf step remember,
+// both stamped by the daemon (the stamping itself is ②, polyforge#119).
+var writerKinds = map[string]bool{"session": true, "step": true}
+
+// maxWriterDetailsBytes bounds the writer detail object a create
+// accepts: the daemon sends a handful of small fields (work item, step,
+// attempt, model), and no caller needs more.
+const maxWriterDetailsBytes = 4096
+
+// checkWriter validates one create's writer fields: a kind outside the
+// enum is MEM-400, details without a kind are MEM-400 (the detail
+// object belongs to a writer class), details that are not a JSON object
+// are MEM-400, and the details are bounded. An absent kind (nil or
+// empty) with absent details is no writer at all.
+func checkWriter(kind *string, details *json.RawMessage) error {
+	k := ""
+	if kind != nil {
+		k = *kind
+	}
+	if k == "" {
+		if details != nil && len(*details) > 0 {
+			return errf(api.ErrMemBadInput, "", "writer_details requires writer_kind")
+		}
+		return nil
+	}
+	if !writerKinds[k] {
+		return errf(api.ErrMemBadInput, "", "writer_kind must be session or step")
+	}
+	if details != nil && len(*details) > 0 {
+		if len(*details) > maxWriterDetailsBytes {
+			return errf(api.ErrMemBadInput, "", "writer_details exceeds %d bytes", maxWriterDetailsBytes)
+		}
+		var obj map[string]any
+		if err := json.Unmarshal(*details, &obj); err != nil || obj == nil {
+			return errf(api.ErrMemBadInput, "", "writer_details must be a JSON object")
+		}
+	}
+	return nil
 }
 
 // Create renders the stored document (frontmatter + body) and writes the
@@ -80,6 +132,9 @@ func (s *Store) Create(req CreateRequest, owner string) (*Entry, error) {
 	}
 	if !visibilities[req.Visibility] {
 		return nil, errf(api.ErrMemBadInput, "", "bad visibility %q", req.Visibility)
+	}
+	if err := checkWriter(req.WriterKind, req.WriterDetails); err != nil {
+		return nil, err
 	}
 	if len(req.Content) > maxContentBytes {
 		return nil, errf(api.ErrMemTooLarge, "", "content exceeds 1 MiB")
@@ -154,6 +209,14 @@ func (s *Store) Create(req CreateRequest, owner string) (*Entry, error) {
 	if req.IdempotencyKey != nil && *req.IdempotencyKey != "" {
 		idem = *req.IdempotencyKey
 	}
+	// The writer columns: nil (NULL) when the request carries no writer.
+	var writerKind, writerDetails any
+	if req.WriterKind != nil && *req.WriterKind != "" {
+		writerKind = *req.WriterKind
+		if req.WriterDetails != nil && len(*req.WriterDetails) > 0 {
+			writerDetails = string(*req.WriterDetails)
+		}
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
@@ -163,11 +226,11 @@ func (s *Store) Create(req CreateRequest, owner string) (*Entry, error) {
 	title := rowTitle(req.Title, docBody)
 	if _, err := tx.Exec(`INSERT INTO memories(id, project_id, owner_user_id, work_item_id, type, title,
 		visibility, authority_path, content_sha, content_len, tags, related, idempotency_key, status, created_at, updated_at,
-		content)
-		VALUES (?1,?2,?3,?4,?5,?6,?7,?15,?8,?9,?10,?11,?12,'active',?13,?13,?14)`,
+		content, writer_kind, writer_details)
+		VALUES (?1,?2,?3,?4,?5,?6,?7,?15,?8,?9,?10,?11,?12,'active',?13,?13,?14,?16,?17)`,
 		memID, projectID, owner, anyPtr(req.WorkItemID), req.Type, anyPtr(title), req.Visibility,
 		shaHex([]byte(doc)), len(doc), jsonOrEmpty(req.Tags), jsonOrEmpty(req.Related), idem, now,
-		doc, authorityRel(projectID, memID)); err != nil {
+		doc, authorityRel(projectID, memID), writerKind, writerDetails); err != nil {
 		return nil, err
 	}
 	if err := ftsReplace(tx, memID, extractBody(doc)); err != nil {
@@ -210,13 +273,14 @@ func (s *Store) Content(memID string) ([]byte, error) {
 // serving is concerned.
 func (s *Store) load(memID string) (*Entry, error) {
 	var e Entry
-	var wi, title sql.NullString
+	var wi, title, writerKind, writerDetails sql.NullString
 	var tags, related string
 	err := s.db.QueryRow(`SELECT id, project_id, owner_user_id, work_item_id, type, title, visibility,
-		content_sha, content_len, tags, related, status, created_at, updated_at
+		content_sha, content_len, tags, related, status, created_at, updated_at, writer_kind, writer_details
 		FROM memories WHERE id=?1 AND content IS NOT NULL`, memID).
 		Scan(&e.ID, &e.ProjectID, &e.OwnerUserID, &wi, &e.Type, &title, &e.Visibility,
-			&e.ContentSHA, &e.ContentLen, &tags, &related, &e.Status, &e.CreatedAt, &e.UpdatedAt)
+			&e.ContentSHA, &e.ContentLen, &tags, &related, &e.Status, &e.CreatedAt, &e.UpdatedAt,
+			&writerKind, &writerDetails)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, errf(api.ErrMemNotFound, "", "memory %s", memID)
 	}
@@ -236,6 +300,13 @@ func (s *Store) load(memID string) (*Entry, error) {
 	_ = json.Unmarshal([]byte(related), &e.Related)
 	if e.Related == nil {
 		e.Related = []string{}
+	}
+	if writerKind.Valid {
+		k := writerKind.String
+		e.WriterKind = &k
+	}
+	if writerDetails.Valid {
+		e.WriterDetails = json.RawMessage(writerDetails.String)
 	}
 	return &e, nil
 }
