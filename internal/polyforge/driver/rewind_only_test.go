@@ -148,7 +148,8 @@ func TestRewindOnlyDispatch(t *testing.T) {
 
 	t.Run("a FAIL the owner's words routed activates it too", func(t *testing.T) {
 		at := "2026-11-17T09:00:00.000000001Z"
-		d, sp, _, dir := rewindEnv(t, rewindOnlyMidLane, []fakeEntry{done(`{}`), rewindFailCiting(t, dir, at), done(`{}`), done(`{}`), done(`{}`)}, "")
+		d, sp, _, dir := rewindEnv(t, rewindOnlyMidLane, nil, "")
+		sp.script = []fakeEntry{done(`{}`), rewindFailCiting(t, dir, at), done(`{}`), done(`{}`), done(`{}`)}
 		if err := d.Run(context.Background()); err != nil {
 			t.Fatalf("Run: %v", err)
 		}
@@ -163,7 +164,8 @@ func TestRewindOnlyDispatch(t *testing.T) {
 
 	t.Run("an owner rewind to the target runs it", func(t *testing.T) {
 		at := "2026-11-17T09:00:00.000000001Z"
-		d, sp, _, _ := rewindEnv(t, rewindOnlyMidLane, []fakeEntry{done(`{}`), rewindTo(t, dir, at, "build"), done(`{}`), done(`{}`), done(`{}`)}, "")
+		d, sp, _, dir := rewindEnv(t, rewindOnlyMidLane, nil, "")
+		sp.script = []fakeEntry{done(`{}`), rewindTo(t, dir, at, "build"), done(`{}`), done(`{}`), done(`{}`)}
 		if err := d.Run(context.Background()); err != nil {
 			t.Fatalf("Run: %v", err)
 		}
