@@ -162,3 +162,47 @@ class EpicSyncTest(unittest.TestCase):
         self.assertEqual(app["conflicts"], [], app["conflicts"])
         # HEAD is the merge of the branch's work and the default branch
         self.assertEqual(w.git(d, "log", "-1", "--format=%P"), head + " " + main_sha)
+
+    def test_sync_merges_the_checkout_branch_before_the_default(self) -> None:
+        """The epic's sync takes the children's commits on its own branch in
+        FIRST (a fix child landed on origin/epic/2 while the epic was
+        parked; the resumed lane judges a tree that contains them), then
+        the default branch. Red before polyforge#117 r2: the sync merged
+        the default branch only, so the child's commit never reached the
+        epic's tree."""
+        w = World(self, "app")
+        fix_epic(w)
+        seed, d = w.seeds["app"], w.dir("app")
+        out = os.path.join(w.capsule, "artifacts", "sync", "result.json")
+        # the epic branch on origin, from main's tip; the clone moves onto
+        # it (the claim's own checkout) and does the epic's own work
+        w.git(seed, "fetch", "-q", "origin")
+        w.git(seed, "checkout", "-q", "-B", "epic/2", "origin/main")
+        w.git(seed, "push", "-q", "origin", "HEAD:refs/heads/epic/2")
+        w.git(d, "fetch", "-q", "origin")
+        w.git(d, "checkout", "-q", "-B", "epic/2", "refs/remotes/origin/epic/2")
+        head = w.change("app", {"pkg/code.go": "package pkg\n\nfunc F() int { return 2 }\n"}, "branch-section")
+        # the fix child lands on origin/epic/2 (on the branch point, in a
+        # file the epic's own work does not touch): a commit the clone's
+        # HEAD does not contain
+        w.git(seed, "checkout", "-q", "-B", "child-work", "refs/remotes/origin/epic/2")
+        write(seed, "child-fix.txt", "the child's fix\n")
+        w.git(seed, "add", "-A")
+        w.git(seed, "commit", "-q", "-m", "the child lands on the epic branch")
+        w.git(seed, "push", "-q", "origin", "HEAD:refs/heads/epic/2")
+        child_sha = w.git(seed, "rev-parse", "HEAD")
+        # the default branch moves too (in its own file)
+        main_sha = w.main_moves("app", {"main-side.txt": "the default branch moved\n"}, "main-section")
+        w.git(d, "fetch", "-q", "origin")
+        code, res, err = w.run("sync.py", "--capsule", w.capsule, "--json", "--out", out, PF_ROUND="r1")
+        assert res is not None
+        app = repo_of(res, "app")
+        self.assertEqual(code, 0, err)
+        # the child's commit and the default branch's are both in HEAD
+        for sha, what in ((child_sha, "the child's"), (main_sha, "the default branch's")):
+            check = w.git(d, "merge-base", "--is-ancestor", sha, "HEAD")
+            self.assertEqual(check, "", "%s commit %s never reached the epic's tree" % (what, sha))
+        self.assertEqual(w.git(d, "merge-base", "--is-ancestor", head, "HEAD"), "")
+        # the record's default_branch/default_head keep naming the default
+        # branch's merge (the last one in)
+        self.assertEqual((app["default_branch"], app["default_head"]), ("main", main_sha), app)
