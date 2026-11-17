@@ -397,7 +397,12 @@ its four columns.
   records one entry in the daemon's decision feed (`completed`, or `failed` /
   `capped` / `interrupted`, which count as needing the owner) carrying the
   report's tail; pi-web's Polyforge panel shows it and `pf watch decisions`
-  lists it.
+  lists it. That attention ends on its own once the ticket no longer needs
+  it: the entry names the ticket a daemon-scheduled analysis served and
+  resolves when the ticket's analysis rerun completes, the ticket ends
+  (wrapped, canceled, failed, or gone), its analysis section carries
+  confirmed content, or the entry passes three days — written `resolved`,
+  never `dismissed`.
 - Inside a task, `pf recall`, `pf memory show` and `pf watch <wi> --once`
   work; every other `pf` verb is refused with `DAEMON-403`. The refusal is an
   accident guard, not a boundary: no aihub key is placed in the spawn env and
