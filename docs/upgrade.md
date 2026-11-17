@@ -343,13 +343,14 @@ each was appended after the v0.2.1 tag and first shipped in the v0.2.2
 release. They are "`pf step ask` answers -h/--help itself", "the gate
 falls back to the lane's scope engine", "the develop merge done by a
 person (`steps.<project>.merge.by: human`)", "the task concurrency
-bound is a Host key" and "a bundle-bound ticket can be a parent"; the
+bound is a Host key" and "a bundle-bound ticket can be a parent"; a
 section that documents a v0.2.1 feature predates the tag, so only those
 five headings misdate their content. The pin's comment list in
-`test/w254_docs_set_acceptance_test.go` and the w77 contract test quote
-the same five headings verbatim, so the older labels stay visible there
-— this section is the correction of record: read each of the five as a
-v0.2.2 section.
+`test/w254_docs_set_acceptance_test.go` still describes the five with
+their v0.2.1 labels, and the w77 contract test pins the bundle-parent
+heading (`v0.2.1, a bundle-bound ticket can be a parent`) verbatim, so
+the older labels stay visible there — this section is the correction
+of record: read each of the five as a v0.2.2 section.
 
 A v0.2.2 pf or daemon that writes a ticket's analysis back to an aihub
 server still on v0.2.1 gets the whole write refused: the request carries
