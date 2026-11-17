@@ -31,7 +31,11 @@ through the registration below.
    `red_rounds`, its PRs under `repos[].pr`).
 3. **An earlier round of this gate.** When `artifacts/handoff.md` carries an earlier
    `full-gate` section, read it: what was red, what the owner ruled, which items the revert
-   step then reverted.
+   step then reverted. An earlier round's `artifacts/integrate/repair.json` is not this
+   round's: rewrite it when this round's red is one the batch can repair (below), and never
+   take the repair route over an `artifacts/integrate/repair-refused.json` the repair step
+   wrote — the owner ruled those units out of the batch, so this round files the fix
+   tickets as it did before.
 
 ## Procedure
 
@@ -66,6 +70,25 @@ through the registration below.
        (`item` names the landed item, `root` the first red commit or the merge, `why` how
        it was attributed, `log`, `excerpt`), `unattributed` (no item; bisection found
        nothing or the first red commit is outside the batch: `outside`). Then:
+       **The batch repairs in place when it can**: every red unit is `attributed`, no
+       blamed source's `red_rounds` is 2 or more, and the fix of every unit touches only
+       tests or documentation — a stale expectation, a test the landed change outgrew;
+       you judge from each unit's `log` and `excerpt` and the file it names, and a fix
+       that must change product behaviour, configuration or a generated file is not the
+       batch's to make — UNLESS the frozen step modes
+       (`runtime-state/step-modes.json`) name `merge` `human`: a project whose PRs await
+       a person merges none by machine: the fix tickets it is (below). A repair
+       step that finds a fix out of that scope mid-work puts it to the owner. On the
+       repair route write the brief `artifacts/integrate/repair.json`:
+       `{"round": <$PF_ROUND, a number>, "heads": {"<repo>": "<sha>"}, "units": [{"repo", "unit", "item", "file", "log", "excerpt", "rerun"}]}`
+       (the pins you judged this round, per unit its attribution and its own `rerun`
+       command off the triage), write the decision file (`result` `red`), and hand off
+       `--status fail` — charged, never `--per-owner`: the batch repairs its own red, and
+       the lane's one `max_rewinds` budget bounds the rounds. The repair step fixes the
+       units on one branch per repo off the pins, its review judges the branch, the
+       revert step lands it under the merge lock, and your next run gates the pins that
+       landing wrote — the green tag lands on the default branch. With any condition
+       failing, the routes below:
        a. **The fix tickets.** Group the `attributed` units by `item` and root cause (one
           reason, one ticket; read each unit's `log` and `excerpt`; a source can need
           several tickets, never one ticket for two sources). Write
@@ -91,8 +114,10 @@ through the registration below.
           **rerun** (the same pins gated again, at most twice in this step), **close** (the
           batch ends red now; the fix tickets ride, nothing is gated again). End your turn.
           On the reply: revert → write the decision file (`result` `red`, `reverts` the
-          items) and hand off `--status fail --per-owner <the reply's at>` — no hub writes
-          (a FAIL drops them; the gate after the revert triages again); rerun → run the gate
+          items) and hand off `--status rewind --to revert --per-owner <the reply's at>` —
+          your gate's own FAIL would rewind to the repair step, so the owner's revert names
+          the revert step itself; charged to nothing, and no hub writes (the lane runs the
+          reverts; the gate after them triages again); rerun → run the gate
           line of 2 again (count it in `reruns`; after the second rerun ask once more);
           close → `result` `red`, with the tickets of (a).
        c. Otherwise (at least one red unit, every red unit attributed, no source past two
