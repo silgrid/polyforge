@@ -874,7 +874,13 @@ judged dead, a rejected or dropped submit, a daemon restart — and every
 background task's terminal summary — across every Cell of the Host,
 newest first (the newest 300, none older than 14 days). An entry that
 needs a human stays open until the run answers it or moves on (the
-daemon resolves it) or the human dismisses it. Pi-web's Polyforge panel
+daemon resolves it) or the human dismisses it. A background task's
+failed, capped or interrupted entry resolves on its own once the ticket
+it served no longer needs it — the analysis rerun completed, the ticket
+ended at aihub (wrapped, canceled, failed, or gone with CORE-404), its
+analysis section carries confirmed content, or the entry is older than
+three days; the daemon writes resolved, never dismissed, and a reopened
+feed keeps it so. Pi-web's Polyforge panel
 reads it and counts the open entries; `pf watch decisions` prints it and
 `pf watch dismiss` marks entries seen. No session is woken and no session
 identity exists: an agent relays a decision only when the human brings it.
