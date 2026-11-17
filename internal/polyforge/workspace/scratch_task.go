@@ -11,7 +11,15 @@
 
 package workspace
 
-import "time"
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+)
 
 // EnvScratchDir / EnvScratchRawDir are the environment variables a
 // dispatched task's harness runs with: its own scratch directory and its
@@ -23,15 +31,56 @@ const (
 	EnvScratchRawDir = "PF_SCRATCH_RAW_DIR"
 )
 
+// rawBatchName answers one raw batch's directory name: a UTC timestamp,
+// the writing run's id and a unique suffix — readable, sortable and
+// whole-directory deletable (the naming rule the notes file's layout
+// section carries).
+func rawBatchName(sourceID string, now time.Time, suffix string) string {
+	return now.UTC().Format("20060102T150405Z") + "-" + sourceID + "-" + suffix
+}
+
+// randSuffix answers a short unique suffix (lowercase hex).
+func randSuffix() (string, error) {
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
 // TaskScratch creates the scratch directories of the background task
 // taskID in the workspace ws and answers both absolute paths:
 // <ws>/scratch/tasks/<taskID>/ and
 // <ws>/scratch/raw/<UTC time>-<taskID>-<unique suffix>/. scratch/ and its
-// fixed categories are created as needed (Init's convention); a scratch
-// or a category that exists as anything but a plain directory is
-// refused, never followed, never moved away. taskID must be one safe
+// fixed categories are created as needed (Init's convention, the one
+// ensureScratch applies); a scratch or a category that exists as
+// anything but a plain directory is refused, never followed, never moved
+// away — and with them the dispatch is refused. taskID must be one safe
 // path segment (no separator, no "." or "..").
 func TaskScratch(ws, taskID string, now time.Time) (taskDir, rawDir string, err error) {
-	// signature prelude (polyforge#121 u2): the body lands with the tests.
-	return "", "", nil
+	if taskID == "" || taskID == "." || taskID == ".." || strings.ContainsAny(taskID, `/\`) {
+		return "", "", fmt.Errorf("task scratch: %q is not one safe path segment", taskID)
+	}
+	scratch, _, err := ensureScratch(ws)
+	if err != nil {
+		return "", "", err
+	}
+	taskDir = filepath.Join(scratch, ScratchTasksDir, taskID)
+	if st, e := os.Lstat(taskDir); e == nil && !st.IsDir() {
+		return "", "", fmt.Errorf("%s exists and is not a plain directory (a symlink or a file)", taskDir)
+	} else if e != nil && !os.IsNotExist(e) {
+		return "", "", e
+	}
+	if err := os.MkdirAll(taskDir, 0o755); err != nil {
+		return "", "", err
+	}
+	suffix, err := randSuffix()
+	if err != nil {
+		return "", "", err
+	}
+	rawDir = filepath.Join(scratch, ScratchRawDir, rawBatchName(taskID, now, suffix))
+	if err := os.Mkdir(rawDir, 0o755); err != nil {
+		return "", "", err
+	}
+	return taskDir, rawDir, nil
 }

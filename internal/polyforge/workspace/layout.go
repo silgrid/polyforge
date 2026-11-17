@@ -384,6 +384,45 @@ Never write documents into the workspace root or ` + "`.polyforge/`" + `;
 ` + layoutClose + "\n"
 }
 
+// ensureScratch creates scratch/ and its fixed categories under root and
+// answers the scratch path; created reports whether scratch/ itself was
+// made now. A scratch or a category that exists as anything but a plain
+// directory is refused — never followed, never moved away (the one rule
+// Init applies and TaskScratch reuses).
+func ensureScratch(root string) (dir string, created bool, err error) {
+	dir = filepath.Join(root, ScratchDir)
+	switch st, e := os.Lstat(dir); {
+	case e == nil && st.IsDir():
+	case e == nil:
+		return "", false, fmt.Errorf("%s exists and is not a plain directory (a symlink or a file)", dir)
+	case errors.Is(e, fs.ErrNotExist):
+		if e := os.Mkdir(dir, 0o755); e != nil {
+			return "", false, e
+		}
+		created = true
+	default:
+		return "", false, e
+	}
+	// the fixed categories come with scratch/ (polyforge#121): created
+	// when missing, refused when a category name is occupied by anything
+	// but a plain directory
+	for _, cat := range []string{ScratchRawDir, ScratchTasksDir, ScratchSessionsDir} {
+		p := filepath.Join(dir, cat)
+		switch st, e := os.Lstat(p); {
+		case e == nil && st.IsDir():
+		case e == nil:
+			return "", false, fmt.Errorf("%s exists and is not a plain directory (a symlink or a file)", p)
+		case errors.Is(e, fs.ErrNotExist):
+			if e := os.Mkdir(p, 0o755); e != nil {
+				return "", false, e
+			}
+		default:
+			return "", false, e
+		}
+	}
+	return dir, created, nil
+}
+
 // InitResult reports what Init did.
 type InitResult struct {
 	Workspace string `json:"workspace"`
@@ -416,36 +455,13 @@ func Init(root string) (InitResult, error) {
 		return res, fmt.Errorf("%s carries a polyforge-managed block, but %s is the workspace notes file — remove the block from %s by hand, then re-run",
 			filepath.Join(root, ClaudeNotes), AgentsNotes, ClaudeNotes)
 	}
-	scratch := filepath.Join(root, ScratchDir)
-	switch st, err := os.Lstat(scratch); {
-	case err == nil && st.IsDir():
-		res.Scratch = "exists"
-	case err == nil:
-		return res, fmt.Errorf("%s exists and is not a plain directory (a symlink or a file)", scratch)
-	case errors.Is(err, fs.ErrNotExist):
-		if err := os.Mkdir(scratch, 0o755); err != nil {
-			return res, err
-		}
-		res.Scratch = "created"
-	default:
+	_, created, err := ensureScratch(root)
+	if err != nil {
 		return res, err
 	}
-	// the fixed categories come with scratch/ (polyforge#121): created
-	// when missing, refused when a category name is occupied by anything
-	// but a plain directory — pf never follows it and never moves it away
-	for _, cat := range []string{ScratchRawDir, ScratchTasksDir, ScratchSessionsDir} {
-		p := filepath.Join(scratch, cat)
-		switch st, err := os.Lstat(p); {
-		case err == nil && st.IsDir():
-		case err == nil:
-			return res, fmt.Errorf("%s exists and is not a plain directory (a symlink or a file)", p)
-		case errors.Is(err, fs.ErrNotExist):
-			if err := os.Mkdir(p, 0o755); err != nil {
-				return res, err
-			}
-		default:
-			return res, err
-		}
+	res.Scratch = "exists"
+	if created {
+		res.Scratch = "created"
 	}
 
 	notes := filepath.Join(root, name)

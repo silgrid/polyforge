@@ -46,8 +46,14 @@ func TestW440TaskRunCarriesTheProhibitedActions(t *testing.T) {
 		if !strings.HasPrefix(s.Prompt, list) || strings.Count(s.Prompt, "# Prohibited actions") != 1 {
 			t.Errorf("run %d: the harness prompt must open with the prohibited-actions list scoped to %s, once:\n%s", i, s.WorkDir, s.Prompt)
 		}
-		if !strings.HasSuffix(s.Prompt, "\n# Task\n\n"+prompt) {
-			t.Errorf("run %d: the task's own prompt follows the list under `# Task`:\n%s", i, s.Prompt)
+		// since polyforge#121 the prompt closes with the # Scratch section
+		// (the spawn's directories, one section, once) after the task's own
+		// prompt under `# Task`
+		if !strings.HasSuffix(s.Prompt, prompt+scratchNote(s.ScratchTaskDir, s.ScratchRawDir)) {
+			t.Errorf("run %d: the task's own prompt follows the list under `# Task`, the # Scratch section closes it:\n%s", i, s.Prompt)
+		}
+		if strings.Count(s.Prompt, "# Scratch") != 1 {
+			t.Errorf("run %d: exactly one # Scratch section:\n%s", i, s.Prompt)
 		}
 	}
 	if done.Prompt != prompt || PromptSummary(done.Prompt) != "Summarize the open questions." {

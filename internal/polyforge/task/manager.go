@@ -22,6 +22,7 @@ import (
 
 	"github.com/silgrid/polyforge/internal/common/harness"
 	"github.com/silgrid/polyforge/internal/polyforge/supervise"
+	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
 
 // ErrLimit is the sentinel of a spawn refused at the task lane's
@@ -153,6 +154,9 @@ type entry struct {
 	cancel context.CancelFunc
 	// userCancel is set when Cancel (not the wall budget) ended the run.
 	userCancel bool
+	// scratchTask / scratchRaw are the task's scratch directories the
+	// spawn created (workspace.TaskScratch); empty when none were wired.
+	scratchTask, scratchRaw string
 }
 
 // Manager is the task manager of one daemon.
@@ -230,6 +234,19 @@ func (m *Manager) Spawn(spec Spec) (Task, error) {
 	if err != nil {
 		return Task{}, err
 	}
+	// the task's scratch directories are created BEFORE the dispatch
+	// (polyforge#121, owner ruling Q3): a refusal — a broken scratch —
+	// refuses the spawn, before any admission or record. A read-only
+	// errand (the message analyzer) writes nothing: it runs without
+	// them, keeping its own invariant that not one path of the workspace
+	// changes.
+	var taskDir, rawDir string
+	if !spec.ReadOnlyTools {
+		taskDir, rawDir, err = workspace.TaskScratch(dir, id, m.cfg.Now())
+		if err != nil {
+			return Task{}, err
+		}
+	}
 	if m.cfg.Admit != nil {
 		if err := m.cfg.Admit(); err != nil {
 			return Task{}, err
@@ -258,7 +275,7 @@ func (m *Manager) Spawn(spec Spec) (Task, error) {
 		return Task{}, err
 	}
 	ctx, cancel := context.WithTimeout(m.base, spec.MaxDuration)
-	e := &entry{t: t, cancel: cancel}
+	e := &entry{t: t, cancel: cancel, scratchTask: taskDir, scratchRaw: rawDir}
 	m.mu.Lock()
 	m.tasks[id] = e
 	m.mu.Unlock()
@@ -321,12 +338,19 @@ func (m *Manager) run(ctx context.Context, e *entry, dir string) {
 	// takes over continues from the section its predecessor already wrote
 	// (the daemon re-reads the ticket there).
 	promptOf := func() string {
+		p := dispatchedPrompt(t.Prompt, dir)
 		if m.cfg.PromptFor != nil {
-			if p := m.cfg.PromptFor(t); p != "" {
-				return p
+			if q := m.cfg.PromptFor(t); q != "" {
+				p = q
 			}
 		}
-		return dispatchedPrompt(t.Prompt, dir)
+		// the # Scratch section closes every dispatched prompt (the
+		// analysis re-read path included — it lands here, where the two
+		// paths join)
+		if e.scratchTask != "" {
+			p += scratchNote(e.scratchTask, e.scratchRaw)
+		}
+		return p
 	}
 	for _, cand := range t.Candidates {
 		if ctx.Err() != nil {
@@ -338,6 +362,7 @@ func (m *Manager) run(ctx context.Context, e *entry, dir string) {
 		m.mu.Unlock()
 		res, err := m.cfg.Runner.Run(ctx, RunSpec{
 			Candidate: c, Prompt: promptOf(), MaxTokens: t.MaxTokens - tokens, WorkDir: dir, TaskID: t.ID,
+			ScratchTaskDir: e.scratchTask, ScratchRawDir: e.scratchRaw,
 			ReadOnlyTools: t.ReadOnlyTools, Limits: limits(),
 		}, func(n int64) {
 			m.mu.Lock()
@@ -385,6 +410,19 @@ const ErrorCancelled = "cancelled by `pf task cancel`"
 // the prompt summary never carry the section.
 func dispatchedPrompt(prompt, dir string) string {
 	return harness.TaskProhibitedActions(dir) + "\n# Task\n\n" + prompt
+}
+
+// scratchNote is the section every dispatched task prompt ends with
+// (polyforge#121, owner ruling Q3): the task's own scratch directories,
+// already created, and the environment variables that carry them. The
+// manager appends it to every candidate's prompt — the ordinary
+// dispatchedPrompt and a PromptFor (analysis) answer alike.
+func scratchNote(taskDir, rawDir string) string {
+	return "\n# Scratch\n\n" +
+		"This task's disposable output goes into its own scratch directories, both already created:\n\n" +
+		"- other output: " + taskDir + " (the environment variable " + workspace.EnvScratchDir + " carries it);\n" +
+		"- raw data — batch JSON, logs, downloaded archives, history exports: " + rawDir + " (" + workspace.EnvScratchRawDir + ").\n\n" +
+		"Write nothing else into the workspace.\n"
 }
 
 func (m *Manager) finish(ctx context.Context, e *entry, report string, tokens int64, capped, completed bool, lastErr error, attempts []Attempt) {
