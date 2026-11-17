@@ -172,7 +172,7 @@ def publish_on(w: World, repo: str, base: str) -> Dict[str, str]:
     n = len(os.listdir(prs)) + 1 if os.path.isdir(prs) else 1
     url = "https://github.com/fake/%s/pull/%d" % (repo, n)
     for k, v in {"head": World.BRANCH, "base": base, "state": "OPEN", "url": url}.items():
-        write(prs, str(n), k, v + "\n")
+        write(os.path.join(prs, str(n)), k, v + "\n")
     return {"name": repo, "branch": World.BRANCH, "pr_url": url, "head": w.head(repo)}
 
 
