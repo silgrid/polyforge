@@ -114,7 +114,7 @@ func TestW79QueuedParamsDocsContract(t *testing.T) {
 		text := w68Flat(t, rel)
 		w79Has(t, rel, text,
 			// the new component's line
-			"PolyforgeWorkItemParams.tsx  polyforge#79: the 工单详情's params section",
+			"PolyforgeWorkItemParams.tsx polyforge#79: the 工单详情's params section",
 			// the controls' line names the params display
 			"polyforge#79's params display for every step",
 			// the work items' line: the read-only surface's one write
