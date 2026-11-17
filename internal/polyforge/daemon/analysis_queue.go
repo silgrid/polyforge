@@ -180,9 +180,11 @@ func (d *Daemon) analysisNeeds(item *api.WorkItem) bool {
 }
 
 // analysisPrompt answers the whole stdin one analysis candidate runs
-// with: the prohibited-actions section, the embedded template, then the
-// ticket body (whose `## 分析` section is the current draft — AC10: a
-// candidate that takes over continues it).
+// with: the prohibited-actions section, the embedded template, the
+// daemon-attached component division of the ticket's repositories
+// (polyforge#89 — one fallback line when it could not be computed),
+// then the ticket body (whose `## 分析` section is the current draft —
+// AC10: a candidate that takes over continues it).
 func (d *Daemon) analysisPrompt(item *api.WorkItem) (string, error) {
 	dir, err := d.taskWorkDir(item.ProjectName)
 	if err != nil {
@@ -192,7 +194,11 @@ func (d *Daemon) analysisPrompt(item *api.WorkItem) (string, error) {
 	if item.Content != nil {
 		content = *item.Content
 	}
-	return harness.TaskProhibitedActions(dir) + "\n" + AnalysisPrompt + "\n\n---\n\n# 工单\n\n" + content, nil
+	p := harness.TaskProhibitedActions(dir) + "\n" + AnalysisPrompt
+	if sec := d.analysisComponentsSection(item, dir); sec != "" {
+		p += "\n\n---\n\n" + sec
+	}
+	return p + "\n\n---\n\n# 工单\n\n" + content, nil
 }
 
 // analysisPromptFor is task.Config.PromptFor: an analysis task's every
