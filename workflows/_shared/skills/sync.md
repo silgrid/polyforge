@@ -5,7 +5,7 @@ commands: [sync.py]
 ---
 # sync
 
-One pre-written script merges origin's default branch into each task repo in place —
+One pre-written script merges the step header's base branch (the capsule's fixed target branch, else origin's default branch) into each task repo in place —
 fast-forward when the branch has no commit of its own, else a merge commit — resolves the
 conflicts the default branch's `.polyforge/integrate.conf` makes mechanical, and writes the
 result file. A real conflict is left in progress for you to resolve; the same script,

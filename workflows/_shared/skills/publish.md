@@ -59,13 +59,13 @@ the source and what did not hold (the lane goes back to the step that makes the 
    `artifacts/publish-pr-<name>.md`, then `gh pr list --head <branch> --state all --json
    number,url,state`: an OPEN one — `gh pr edit <url> --body-file artifacts/publish-pr-<name>.md`;
    a MERGED one whose branch carries new commits since — exactly one follow-up PR; none —
-   `gh pr create --base <default> --head <branch> --title "<slug>: <one line>" --body-file
+   `gh pr create --base <base> --head <branch> --title "<slug>: <one line>" --body-file
    artifacts/publish-pr-<name>.md`. No GitHub origin, or no `gh`: hand off `blocked`.
 2. **The PR body**, in this order: the slug and a change summary; when the verifying gate
    was waived, first the line that the change's verification (micro: its evidence) was red
    and waived (the owner's words verbatim, as the header quotes them) and that the
    integration lane's full gate is its next bar; the sync record from
-   `artifacts/sync/result.json` — per repo the default branch's commit merged in
+   `artifacts/sync/result.json` — per repo the base branch's commit merged in
    (`default_head`), the files resolved mechanically and, verbatim as the owner's to read
    since no review judged them, "conflict resolved in sync: <files>" from `resolved[]`; the
    review's verdict; the verified result (its `verdict` and, on develop, each check of
