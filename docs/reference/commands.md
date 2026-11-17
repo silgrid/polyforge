@@ -420,7 +420,12 @@ attrs decide — an integration batch's fix ticket (its `integration_fix`
 marker) runs the full bar; every other ticket the light tier — over the
 the task repos as the sync step left them: no fetch, no merge — a merge in progress
 (`MERGE_HEAD`) or an unresolvable default branch makes the run incomplete
-— and it skips a repo with no commit beyond its default branch. The union
+— and it skips a repo with no commit beyond its default branch. The
+step's `image` parameter (or `--image`; the flag wins and the result's
+`image` record names the value and where it came from) names a prepared
+image every touched repo's bar then runs in, Dockerfile or not — never
+built, never pulled; a machine without it is not judged (exit 2, the
+fixed mark `pf-verify-image-missing` in the summary, the image named). The union
 with the build's change analysis is add-only: the change analysis's listed
 tests run beside the plan, add-only, under the analysis's supplement cap —
 a listed test that does not exist fails its check naming it, and the
@@ -553,10 +558,12 @@ fallback diagnostics (those saying `falling back to the full tier`, e.g. a
 failed `go list` with its command, exit and first output line,
 or a changed stack config file such as `go.mod`; the
 informational `--light` diagnostics are not reasons); a
-repository whose tree carries `.polyforge/Dockerfile.verify` runs its bar
-in a container (docs/concepts.md), and that repository's `repos[]` entry
-then carries `container` `{image, built, build_log, name, cpus, memory,
-pids, lost}`; the limits are the script's: CPUs min(8,
+repository whose tree carries `.polyforge/Dockerfile.verify` — or whose
+step parameter `image` names a prepared image — runs its bar in a
+container (docs/concepts.md), and that repository's `repos[]` entry then
+carries `container` `{image, built, build_log, name, cpus, memory,
+pids, lost}` (and, in the prepared-image mode, `digest` and `repo_digests`
+— the image's local ID and its RepoDigests, `build_log` never); the limits are the script's: CPUs min(8,
 cores), memory 16g, pids 4096) and `report-mechanical.md` into its run
 directory (`verify.py --log-dir`, else `logs/` beside `--out`, else
 `runtime-state/verify/<n>/`); the
@@ -580,10 +587,16 @@ failing one, so a red batch records every failing command at once (its
 triage, and the regate a fully flaky one triggers, the same); `.polyforge/release.sh` and `tools/green-tag` run the tree's own with
 `python3` (docs/reference/release.md, "The test gate"; `--help` is the
 script's full reference). `--isolation container` is required and the only
-isolation a gate has: a tree without the Dockerfile at HEAD, or a machine
-whose docker engine does not answer, is not judged (exit 2, the reason
-said). The container's limits are the script's flags (`--cpus` /
-`--memory` / `--pids`, default min(8, cores) / `16g` / 4096; design r2 D7).
+isolation a gate has: a tree without the Dockerfile at HEAD — and no
+prepared image named — or a machine whose docker engine does not answer,
+is not judged (exit 2, the reason said). The step's `image` parameter (a
+dispatch's `PF_PARAM_IMAGE`, else `--image`, which wins and is recorded as
+the value's source) names a prepared image every gated repo runs in — one
+image for the project, Dockerfile or not, resolved to its local ID, never
+built, never pulled; a machine without it is not judged either (exit 2,
+the fixed mark `pf-verify-image-missing` in the summary). The container's
+limits are the script's flags (`--cpus` / `--memory` / `--pids`, default
+min(8, cores) / `16g` / 4096; design r2 D7).
 
 - On the clone at the working directory (the release's run): progress and,
   with `--mark-green --summary <text>`, the green tag's name on stdout;
@@ -613,7 +626,10 @@ said). The container's limits are the script's flags (`--cpus` /
 Its result files name the script — `command` `gate.py` (`integrate.py
 close` reads only these), `version` `pfstep/1` — and keep the step
 command's details: `{mode, pins, gated, repos{head, branch, result, tag,
-tag_error}, tags, failed, incomplete, log_dir}` and the triage's. A green
+tag_error}, tags, failed, incomplete, log_dir}` and the triage's; a run in a prepared
+image records `image_digest`, `image_source` and `repo_digests` in its
+`result` (the image's local ID, which named it — `flag` or `param` — and
+its RepoDigests). A green
 tag's `runner` is `gate.py`, its `runner_version` `2`.
 
 ## `pf step` — a step's one entry to the daemon

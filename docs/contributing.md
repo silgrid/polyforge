@@ -403,7 +403,8 @@ items that merged.
   whose `carries:` meet it), and the rest of the package's bar is the
   integration run's.
 - **The release gate.** This conf's full tier, run inside the image built
-  from `.polyforge/Dockerfile.verify`, is also the release's test gate: one
+  from `.polyforge/Dockerfile.verify` — or, when the step's `image`
+  parameter names one, inside that prepared image — is also the release's test gate: one
   definition, run by the workflow script `gate.py` (`python3
   workflows/_shared/scripts/gate.py --isolation container` from the
   clone's root), reused by the release when the released commit

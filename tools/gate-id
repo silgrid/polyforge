@@ -2,9 +2,9 @@
 # gate-id — the identity of this repository's test gate at a commit.
 #
 # Usage:
-#   tools/gate-id [<rev>]          print the gate id (64 lowercase hex)
-#   tools/gate-id --show [<rev>]   print the exact bytes the id hashes
-#
+#   tools/gate-id [--show] [--image <digest>] [<rev>]
+#                 print the gate id (64 lowercase hex); --show prints the
+#                 exact bytes the id hashes
 # Run from the repository root. <rev> defaults to HEAD; both files are read
 # from that commit's tree (git show <rev>:<path>), never from the working
 # tree, so the id is a property of a commit.
@@ -38,6 +38,7 @@
 #
 #   polyforge-gate-id 1
 #   dockerfile <sha256 of .polyforge/Dockerfile.verify, its bytes as committed>
+#   image <the prepared image's local ID, only with --image>
 #   <gate line>
 #   ...
 #
@@ -53,6 +54,14 @@
 # comment is left out: editing them does not change the gate. The engine
 # itself, the tests and the code are not hashed — a green tag names one
 # commit, whose tree pins them.
+#
+# --image names the prepared image a gate ran in (polyforge#64): the
+# gate's own runner (gate.py --image) passes the image's local ID
+# (sha256:<64 hex>); the release's scripts never do (the known limitation
+# docs/reference/release.md names). With --image a tree without
+# .polyforge/Dockerfile.verify is allowed — the dockerfile line is left
+# out and the image line stands in for the image's content half; without
+# --image the id is exactly what it always was.
 #
 # Exit 0 with the id on stdout; exit 2 (a message on stderr) when <rev> or
 # either file cannot be read. No network, no mutation.
@@ -74,23 +83,45 @@ sha256_of() {   # stdin -> 64 hex
 }
 
 SHOW=""
-if [ "${1:-}" = "--show" ]; then SHOW=1; shift; fi
-case "${1:-}" in
-  -h|--help) sed -n '2,/^set -eu$/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
-  -*) die "unknown option $1 (usage: tools/gate-id [--show] [<rev>])" ;;
-esac
-[ $# -le 1 ] || die "too many arguments (usage: tools/gate-id [--show] [<rev>])"
+IMAGE=""
+while : ; do
+  case "${1:-}" in
+    --show)
+      [ -z "$SHOW" ] || die "--show is given twice (usage: tools/gate-id [--show] [--image <digest>] [<rev>])"
+      SHOW=1; shift ;;
+    --image)
+      [ -z "$IMAGE" ] || die "--image is given twice (usage: tools/gate-id [--show] [--image <digest>] [<rev>])"
+      [ "$#" -ge 2 ] || die "--image needs the prepared image's local ID (usage: tools/gate-id [--image sha256:...])"
+      IMAGE="$2"; shift 2 ;;
+    -h|--help) sed -n '2,/^set -eu$/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
+    -*) die "unknown option $1 (usage: tools/gate-id [--show] [--image <digest>] [<rev>])" ;;
+    *) break ;;
+  esac
+done
+[ $# -le 1 ] || die "too many arguments (usage: tools/gate-id [--show] [--image <digest>] [<rev>])"
 REV="${1:-HEAD}"
 
 commit=$(git rev-parse --verify --quiet "$REV^{commit}" 2>/dev/null) || die "$REV is not a commit of this repository"
 work=$(mktemp -d "${TMPDIR:-/tmp}/gate-id.XXXXXX")
 trap 'rm -rf "$work"' EXIT INT TERM
 git show "$commit:$CONF" >"$work/conf" 2>/dev/null || die "$CONF is not in the tree of $REV ($commit)"
-git show "$commit:$DOCKERFILE" >"$work/dockerfile" 2>/dev/null || die "$DOCKERFILE is not in the tree of $REV ($commit): the gate runs in that container"
+HAVE_DOCKERFILE=""
+if git show "$commit:$DOCKERFILE" >"$work/dockerfile" 2>/dev/null; then
+  HAVE_DOCKERFILE=1
+elif [ -n "$IMAGE" ]; then
+  :  # a prepared image needs no Dockerfile: its line is left out
+else
+  die "$DOCKERFILE is not in the tree of $REV ($commit): the gate runs in that container"
+fi
 
 {
   echo "polyforge-gate-id 1"
-  echo "dockerfile $(sha256_of <"$work/dockerfile")"
+  if [ -n "$HAVE_DOCKERFILE" ]; then
+    echo "dockerfile $(sha256_of <"$work/dockerfile")"
+  fi
+  if [ -n "$IMAGE" ]; then
+    echo "image $IMAGE"
+  fi
   awk '
     { sub(/^[[:space:]]+/, "") }
     $0 == "" || substr($0, 1, 1) == "#" { next }
