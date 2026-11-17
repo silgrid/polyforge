@@ -40,7 +40,14 @@ Where a repo's bar runs is the repo's: one whose HEAD carries
 ``.polyforge/Dockerfile.verify`` runs its engine and bar in a verification
 container of its own (the ``pf.verify.*`` labels, the deadline label and a
 keep-alive ending five minutes after the deadline; removed when the run
-ends); any other runs on the host under the step's PATH.
+ends); any other runs on the host under the step's PATH. The step's
+``image`` parameter (``PF_PARAM_IMAGE``, or ``--image``; the flag wins
+and the result records where the value came from) names a prepared image
+instead — a person's, resolved to its local ID and never built, never
+pulled — and then every touched repo's bar runs in its container,
+Dockerfile or not; an image the machine does not carry is `not judged`
+(exit 2, the fixed mark ``pf-verify-image-missing`` in the summary: a
+person prepares it, a retry cannot).
 
 ``--analysis`` names the build's change analysis
 (``artifacts/build/change-analysis.json``): the tests it lists run beside
@@ -440,6 +447,8 @@ class Verification:
         tier: str = TIER_LIGHT,
         tier_requested: str = "",
         tier_reason: str = "",
+        image: str = "",
+        image_source: str = "",
     ) -> None:
         self.capsule = capsule
         self.engine = engine
@@ -461,6 +470,11 @@ class Verification:
         self.env = env
         self.say = say
         self.co = co
+        # image: a prepared image every touched repo's bar runs in ("" =
+        # each repo by its own Dockerfile); image_source: which named it —
+        # "flag" (--image) or "param" (PF_PARAM_IMAGE)
+        self.image = image
+        self.image_source = image_source
         self.n, self.run_dir = self._run_dir(run_dir)
         start = time.time()
         # the light tier's rerun budget is its own knob; a full run is
@@ -641,13 +655,21 @@ class Verification:
         reason ("" = every one is up)."""
         if self.co is None:
             return ""
-        need = [rr for rr in repos if rr.merge is not None and rr.touched and container.has_dockerfile_at(rr.dir, "HEAD")]
+        if self.image:
+            # the step parameter names the image: every touched repo's bar
+            # runs in its container, Dockerfile or not
+            need = [rr for rr in repos if rr.merge is not None and rr.touched]
+        else:
+            need = [rr for rr in repos if rr.merge is not None and rr.touched and container.has_dockerfile_at(rr.dir, "HEAD")]
         if not need:
             return ""
         rt = self.co.engine()
         try:
             rt.available()
         except container.ContainerError as err:
+            if self.image:
+                return ("the step parameter image names %s, so every touched repo's bar runs in a container, but the"
+                        " container engine is unavailable: %s" % (self.image, err))
             return ("repos/%s carries %s, so its bar runs in a container, but the container engine is unavailable: %s"
                     % (need[0].name, container.DOCKERFILE_VERIFY, err))
         if not os.path.exists(self.engine):
@@ -656,7 +678,12 @@ class Verification:
         for rr in need:
             try:
                 box = container.start_box(self.co, rr.name, rr.dir, rr.log_dir, self.hard, self.n, self.rel,
-                                          engine=engine, base_root=os.path.join(self.run_dir, "base", rr.name))
+                                          engine=engine, base_root=os.path.join(self.run_dir, "base", rr.name),
+                                          image=self.image)
+            except container.ImageMissing as err:
+                return ("repos/%s: the image %s is not present on this machine and is never pulled (%s): the image is"
+                        " prepared by a person — have one prepared or clear the step parameter; the bar was not run"
+                        % (rr.name, err.ref, container.IMAGE_MISSING_MARK))
             except container.BoxError as err:
                 return "repos/%s: the verification container could not be prepared: %s" % (rr.name, err)
             rr.box = box
@@ -1792,9 +1819,13 @@ def render_report(res: Dict[str, Any]) -> str:
                     b.append("  - `%s`: private TMPDIR `%s` (%d bytes)\n" % (cmd["check"], cmd["tmp_dir"], len(cmd["tmp_dir"].encode("utf-8"))))
             c = rp.get("container")
             if c:
-                built = "built by this run" if c["built"] else "present"
-                b.append("  - ran in container `%s` from image `%s` (%s; build log `%s`), limits cpus %s, memory %s, pids %d\n" % (
-                    c["name"], c["image"], built, c.get("build_log", ""), c["cpus"], c["memory"], c["pids"]))
+                if c.get("digest"):
+                    b.append("  - ran in container `%s` from the prepared image `%s` (local ID `%s`), limits cpus %s,"
+                             " memory %s, pids %d\n" % (c["name"], c["image"], c["digest"], c["cpus"], c["memory"], c["pids"]))
+                else:
+                    built = "built by this run" if c["built"] else "present"
+                    b.append("  - ran in container `%s` from image `%s` (%s; build log `%s`), limits cpus %s, memory %s, pids %d\n" % (
+                        c["name"], c["image"], built, c.get("build_log", ""), c["cpus"], c["memory"], c["pids"]))
                 if c.get("lost"):
                     b.append("  - **the container became unusable:** %s\n" % c["lost"])
                 if c.get("left"):
@@ -1856,6 +1887,8 @@ def details_of(res: Dict[str, Any]) -> Dict[str, Any]:
     """The result file's details, folded from result.json's document."""
     out_dir = res["out_dir"]
     d: Dict[str, Any] = {"tier": res["tier"]}
+    if res.get("image"):
+        d["image"] = res["image"]
     if res["mechanical_verdict"]:
         d["mechanical_verdict"] = res["mechanical_verdict"]
     if res.get("fail_reason"):
@@ -1959,6 +1992,9 @@ def parser() -> argparse.ArgumentParser:
                    " runtime-state/verify/<n>)")
     p.add_argument("--json", action="store_true", help="print the result as one JSON object on stdout")
     p.add_argument("--out", default="", help="write the result file there (atomically)")
+    p.add_argument("--image", default="", help="the prepared image every touched repo's bar runs in (default: each"
+                   " repo by its own .polyforge/Dockerfile.verify); a step dispatch's PF_PARAM_IMAGE names it too —"
+                   " --image wins, and the result records which one did")
     return p
 
 
@@ -2062,16 +2098,21 @@ def run(
         res.summary = "the verification could not run: %s" % why
         return 2
     cmd_env = dict(env)
+    image = a.image or env.get("PF_PARAM_IMAGE", "")
+    image_source = "flag" if a.image else ("param" if image else "")
     try:
         tier, tier_reason = resolve_tier(capsule, a.tier)
         v = Verification(capsule, eng, window, logs, decls, cmd_env, say, co, analysis=analysis,
-                         tier=tier, tier_requested=a.tier, tier_reason=tier_reason)
+                         tier=tier, tier_requested=a.tier, tier_reason=tier_reason,
+                         image=image, image_source=image_source)
     except OSError as err:
         res.summary = "the verification could not run: %s" % err
         return 2
     v.repos_names = repos
     v.fold_unit_runs()
     doc = v.run()
+    if image:
+        doc["image"] = {"value": image, "source": image_source}
     try:
         with open(os.path.join(v.run_dir, "result.json"), "w", encoding="utf-8") as f:
             f.write(json.dumps(doc, ensure_ascii=False, indent=2) + "\n")

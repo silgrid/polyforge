@@ -364,7 +364,9 @@ repo — `bash -c <line>` in `<capsule>/repos/<repo>`, on the host or in the
 repo's verification container, killed at its deadline (exit 124), its log
 `command.log` (`runner`) — with the container itself (`container`): the
 image `pf-verify-<repo>:<hash>` built from the repo's
-`.polyforge/Dockerfile.verify` at HEAD alone, the `pf.verify.*` labels
+`.polyforge/Dockerfile.verify` at HEAD alone — or, when a script's
+`--image` / the step's `PF_PARAM_IMAGE` names one, a prepared image
+resolved to its local ID and started by it, never built, never pulled — the `pf.verify.*` labels
 (owner `pf-step` — `gate.py`'s `pf-gate` — a fresh boot nonce, work item
 `PF_WI_ID`, run, repo, `expires`), the limits a script passes (CPUs
 min(8, cores), memory 16g, pids 4096 when it passes none), the clone and a

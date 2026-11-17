@@ -456,15 +456,17 @@ func (d *driveEnv) runClaudeAction(act planAction) {
 		}
 		os.Exit(101)
 	}
-	drop := filepath.Join("runtime-state", "pending-results", strconv.Itoa(d.spawnN)+".json")
-	claudeToolUse("toolu_env", "Write", map[string]any{"file_path": drop, "content": "{...}"})
+	// The delivery itself is the pf step call (below); the tool_use record
+	// mirrors how a real Claude Code step hands off: a Bash call of
+	// 'pf step handoff', with the body on stdin (--body -).
+	claudeToolUse("toolu_handoff", "Bash", map[string]any{"command": "pf step handoff --body -"})
 	d.writeEnvelope(act)
-	claudeToolResult("toolu_env")
+	claudeToolResult("toolu_handoff")
 	claudeJournal("envelope", map[string]any{"step": act.ID, "outcome": act.Outcome, "spawn_n": d.spawnN})
 	if act.Crash == "after" {
 		os.Exit(101)
 	}
-	claudeAssistantText("Result envelope written.")
+	claudeAssistantText("Handed off.")
 	claudeResultOK(d)
 	d.completeAbsorbed()
 }

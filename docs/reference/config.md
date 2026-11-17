@@ -1009,6 +1009,18 @@ param's final value per mapped project and its level — the project's
 value or the lane default ([commands](commands.md)); `pf config workspace`
 lists the file's own values.
 
+The first lane-declared parameter is `image` (polyforge#64): the develop
+lane's `verification` step and the integrate lane's `full-gate` step
+declare it, default empty. A project whose container repos need private
+dependencies sets it to one prepared image for all of them —
+`pf config set steps.<project>.verification.params.image <ref>` (and
+`steps.<project>.full-gate.params.image <ref>`) — and a ticket overrides
+it per work item with
+`pf override <id> --step <step-id> --param image=<ref>`. What the image
+is, who prepares it and what a missing one means:
+[concepts.md](../concepts.md)'s verification-container section and
+[release.md](release.md)'s test gate.
+
 ### `steps.<project>.task` — the one-shot task agent
 
 ```yaml
@@ -1086,7 +1098,13 @@ The file is line-oriented: one `key=value` per line, leading whitespace
 ignored, `#` comment lines and blank lines ignored, and a value runs to the
 end of its line (there is no trailing comment on a value line). It is never
 sourced or evaluated; an unknown key or a malformed line is diagnosed on
-stderr and contributes nothing.
+stderr and contributes nothing — except the keys another tool owns
+(`not_runnable_rule=`, the replay judge's, and the epic-upgrade
+analysis's `component=`, `epic_components=`, `epic_units=` and
+`epic_files=`, the component tool's): the engine reads none of them, so
+it accepts their lines without the diagnostic, and an engine that
+predates the keys diagnoses them as unknown and ignores them, so a conf
+may declare them before the release ships the engine.
 
 | Key | Value | Meaning |
 |---|---|---|
@@ -1116,6 +1134,26 @@ stderr and contributes nothing.
 | `smoke_suite` | suite path | Repeatable: a repository-relative suite the full-tier e2e selection always runs. Declaring at least one is the repository's opt-in: full-tier verification (`--full`) of a non-empty diff then runs the fast gates plus the carries-selected suites union the smoke suites (only the smoke suites for a documentation-only diff), lists an uncovered non-documentation path instead of forcing the full tail, and runs the full tail on a forced-full match, a change to this conf or a structural diagnostic ([contributing's Carries](../contributing.md#carries--declaring-what-an-e2e-suite-covers)). The full-phase commands stay the carried full bar delivery re-runs. The scoped tier ignores the key. Echoed as `smoke_suite`; the selection as `e2e_selection`. |
 | `micro_path` | path pattern | Repeatable: a repository-relative path the `micro` lane may change. Declaring at least one is the repository's micro opt-in; a repository that declares none is refused by that lane. An absolute, `./`-prefixed, blank or `..`-escaping value is diagnosed and contributes nothing. Echoed as `micro_paths` (see the micro paragraph below). |
 | `micro_check` | command | Repeatable, ordered: an extra micro-lane evidence command, named `micro-<i>`, run after the fast phase only under `--micro`. Echoed as `micro_checks`. |
+| `component` | `<name>\|<path>[,<path>…]` | Repeatable: one named component of this repository for the epic-upgrade analysis. `<name>` has the `check` name shape; `<path>` is a repository-relative prefix — a declared path and everything under it, overlapping declarations taking the longest prefix. A malformed line (no `\|`, a bad name, an empty, absolute or `..`-escaping path), or a second line naming an already-declared component, is diagnosed and ignored. The engine reads none of the key (it accepts the line without the unknown-key diagnostic, like `not_runnable_rule`); the component tool `components.py` parses it, and the gate id hashes none of it. |
+| `epic_components` | positive integer | The epic-upgrade analysis's component-count threshold (rule ①'s "at least"); without a declaration 3 applies. A value that is not a positive integer, or a second declaration, is diagnosed and ignored — the first declaration wins. Like `component=`, the key is the component tool's: the engine reads none of it. |
+| `epic_units` | positive integer | The same for rule ①'s unit fallback ("more than"); without a declaration 8 applies. |
+| `epic_files` | positive integer | The same for rule ②'s single-repository file count ("more than"); without a declaration 30 applies. |
+
+The epic-upgrade analysis's component definition, the one the component
+tool `workflows/_shared/scripts/components.py` divides a repository by
+and the analysis prompt judges on: a repository's components are its
+declared `component=` ranges first (in file order); a path no declaration
+covers falls to the generic division — a nested engine root (a
+subdirectory with its own conf; only the root conf's declarations are
+read, a nested conf only marks its subdirectory), then a manifest
+subdirectory (one holding go.mod, package.json,
+pyproject.toml/requirements.txt or Cargo.toml), each nest at its
+outermost, then the first-level directory, with the repository's root
+files forming one component; a path with a testdata, node_modules or
+vendor segment is excluded from the division entirely, and a component
+whose every path is documentation is listed but never counted. The
+defaults 3 / 8 / 30 apply without declarations; a cross-repository ticket
+counts every repository as one component.
 
 Command values — `fast_gate`, `full_command`, the command of a `check`, and
 `base_setup` — are bash: `--run` executes them with `bash -c` from the
