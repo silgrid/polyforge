@@ -1,45 +1,120 @@
 import "#test-env";
 import assert from "node:assert/strict";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
+import { createJiti } from "jiti";
 
 const read = (path) => readFile(new URL(path, import.meta.url), "utf8");
 const search = await read("./memory/route.ts");
 const show = await read("./memory/[id]/route.ts");
 const lib = await readFile(new URL("../../../lib/polyforge-memory.ts", import.meta.url), "utf8");
 
-test("the writer filter rides both faces: validated with the shape, gated 400 before any config read or recall spawn (Q4)", () => {
-  // The browse face: the writer_kind param enters the shape validation (a
-  // bad kind answers 400 with no pf process at all), then the capability
-  // gate — a legal kind on a pf below the filter's own floor answers 400
-  // with the upgrade message, still before the config read and the recall.
-  const validate = search.indexOf("const browse = validateMemoryBrowse({");
-  const browseWriter = search.indexOf('writer_kind: url.searchParams.get("writer_kind")', validate);
-  const browseCapability = search.indexOf("await readPolyforgeMemoryCapability()", validate);
-  const browseGate = search.indexOf("browse.value.writer_kind && !capability.writerFilterSupported", browseCapability);
-  const browseProjects = search.indexOf("readPolyforgeMemoryProjects(browse.value.cwd, pin)");
-  const browseSpawn = search.indexOf("browsePolyforgeMemory(browse.value, pin)");
-  assert.ok(validate >= 0 && browseWriter > validate, "the browse face reads the writer_kind param into its shape validation");
-  assert.ok(browseCapability > browseWriter, "the shape validation (the writer kind included) precedes the browse face's version probe");
-  assert.ok(browseGate > browseCapability && browseGate < browseProjects,
-    "the browse writer gate answers 400 after the probe, before the config read");
-  assert.ok(browseGate < browseSpawn, "no recall spawn may run under a refused writer filter");
-  // The search face: the same chain.
-  const sValidate = search.indexOf("const validated = validateMemorySearch({");
-  const sWriter = search.indexOf('writer_kind: url.searchParams.get("writer_kind")', sValidate);
-  const sCapability = search.indexOf("await readPolyforgeMemoryCapability()", sValidate);
-  const sGate = search.indexOf("validated.value.writer_kind && !capability.writerFilterSupported", sCapability);
-  const sProjects = search.indexOf("readPolyforgeMemoryProjects(validated.value.cwd, pin)");
-  const sSpawn = search.indexOf("searchPolyforgeMemory(validated.value, pin)");
-  assert.ok(sWriter > sValidate && sCapability > sWriter, "the search face reads the writer_kind param into its shape validation, before its probe");
-  assert.ok(sGate > sCapability && sGate < sProjects && sGate < sSpawn,
-    "the search writer gate answers 400 after the probe and before every spawn");
-  // Q4: the refusal names the upgrade, never a bare error code.
-  assert.match(search, /writer filter needs pf \$\{POLYFORGE_MEMORY_WRITER_FILTER_MINIMUM_PF_VERSION\}/,
-    "the 400 names the filter's own floor (the upgrade hint)");
-  assert.match(search, /import \{[^}]*POLYFORGE_MEMORY_WRITER_FILTER_MINIMUM_PF_VERSION[^}]*\} from "@\/lib\/polyforge-memory"/,
-    "the floor constant is the lib's one value, never a restatement");
+// ---- polyforge#120 u2 (r2#1): the writer filter's HTTP behaviour, over a
+// stub pf whose version the test swaps. The route's GET is called directly
+// (the polyforge-params-route pattern); the stub logs every argv, so a
+// refusal is proven by what never spawned, not by source text. ----
+const work = mkdtempSync(join(tmpdir(), "pf-memory-route-"));
+const saved = { PF_BIN: process.env.PF_BIN, POLYFORGE_DATA_DIR: process.env.POLYFORGE_DATA_DIR };
+const argvLog = join(work, "argv.log");
+const versionFile = join(work, "version");
+mkdirSync(join(work, "data"), { recursive: true });
+writeFileSync(argvLog, "");
+writeFileSync(versionFile, "v0.2.3");
+writeFileSync(join(work, "pf"), `#!${process.execPath}
+const fs = require("fs");
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(argvLog)}, JSON.stringify(args) + "\\n");
+const out = (v) => { process.stdout.write(JSON.stringify(v) + "\\n"); process.exit(0); };
+if (args[0] === "--version") { process.stdout.write(fs.readFileSync(${JSON.stringify(versionFile)}, "utf8").trim() + "\\n"); process.exit(0); }
+if (args[0] === "--json" && args[1] === "--version") out({ version: fs.readFileSync(${JSON.stringify(versionFile)}, "utf8").trim(), capabilities: [] });
+const rest = args.filter((a) => a !== "--json");
+if (rest[0] === "config" && rest[1] === "workspace") out({ mapped: true, workspace: "/ws" });
+if (rest[0] === "config" && rest[1] === "list") out({ items: [
+  { key: "user_id", value: "u1", source: "file" },
+  { key: '[workspace."/ws"]', section: true, value: "workbench" },
+] });
+if (rest[0] === "recall") out({ items: [{ id: "mem_e2eRoute0001", type: "doc.note", title: "attributed", visibility: "project", status: "active",
+  tags: [], related: [], work_item_id: null, created_at: "2026-11-17T00:00:00Z", updated_at: "2026-11-17T00:00:00Z", content_len: 3,
+  owner_display_name: "E2E Ada", writer_kind: "step",
+  writer_details: { work_item: "wi_e2e", step: "build", attempt: 1, model: "pi:e2e", evil: "E2E-NESTED-SENTINEL" } }], total: 1 });
+process.stderr.write("pf: unknown command\\n"); process.exit(2);
+`);
+chmodSync(join(work, "pf"), 0o755);
+process.env.PF_BIN = join(work, "pf");
+process.env.POLYFORGE_DATA_DIR = join(work, "data");
+
+const jiti = createJiti(import.meta.url, { alias: { "@": process.cwd() }, interopDefault: true });
+const { GET } = await jiti.import("./memory/route.ts");
+const status = await jiti.import("@/lib/polyforge-status");
+
+test.after(() => {
+  for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  rmSync(work, { force: true, recursive: true });
 });
+
+const host = "127.0.0.1:30141";
+const get = (query) => new Request(`http://${host}/api/polyforge/memory${query}`, { method: "GET", headers: { host, origin: `http://${host}` } });
+const argv = () => readFileSync(argvLog, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+/** Swap the stub's pf version (a new pf is a new probe: refresh the one
+ *  presence probe's cache so the route reads the new version). */
+async function atVersion(version) {
+  writeFileSync(versionFile, version + "\n");
+  writeFileSync(argvLog, "");
+  await status.probePolyforgeVersion(true);
+}
+const onlyProbes = () => argv().every((call) => call.includes("--version")) && argv().length > 0;
+
+test("the writer filter's shape refusal: an illegal kind answers 400 with no pf process at all (r2#1)", async () => {
+  await atVersion("v0.2.3");
+  const refused = await GET(get(`?cwd=/ws&project=workbench&type=*&q=kw&writer_kind=human`));
+  assert.equal(refused.status, 400, `an illegal kind must answer 400, got ${refused.status}`);
+  assert.deepEqual(argv(), [], "the shape refusal runs before any pf process, the version probe included");
+});
+
+test("a legal writer kind on a filter-incapable pf answers 400 naming the 0.2.3 floor — no config or recall spawn, on both faces (r2#1)", async () => {
+  await atVersion("v0.2.2");
+  const browse = await GET(get(`?cwd=/ws&project=workbench&type=*&writer_kind=step`));
+  assert.equal(browse.status, 400, `the browse face must refuse, got ${browse.status}`);
+  const browseBody = await browse.json();
+  assert.match(browseBody.error, /0\.2\.3/, "the refusal names the filter's own floor, never the browse floor (Q4)");
+  assert.ok(browseBody.error.includes("v0.2.2"), "the refusal names the found version");
+  assert.ok(onlyProbes(), `only the version probe may run under a refused filter: ${JSON.stringify(argv())}`);
+  const keyword = await GET(get(`?cwd=/ws&project=workbench&type=*&q=kw&writer_kind=session`));
+  assert.equal(keyword.status, 400, `the search face must refuse too, got ${keyword.status}`);
+  assert.match((await keyword.json()).error, /0\.2\.3/);
+  assert.ok(onlyProbes(), `the search refusal spawns nothing past the probe: ${JSON.stringify(argv())}`);
+  // A v2.20.x pf that browses meets the same refusal (the retired line is
+  // below the filter's floor, never below the browse floor).
+  await atVersion("v2.20.16");
+  const retired = await GET(get(`?cwd=/ws&project=workbench&type=*&writer_kind=session`));
+  assert.equal(retired.status, 400);
+  assert.match((await retired.json()).error, /0\.2\.3/);
+  assert.ok(onlyProbes(), JSON.stringify(argv()));
+});
+
+test("a legal writer kind on a filter-capable pf rides the recall argv on both faces and the hits carry the attribution (r2#1)", async () => {
+  await atVersion("v0.2.3");
+  const browse = await GET(get(`?cwd=/ws&project=workbench&type=*&writer_kind=step`));
+  assert.equal(browse.status, 200, `the browse face must answer, got ${browse.status}`);
+  const body = await browse.json();
+  assert.equal(body.writerFilterSupported, true, "the capability answer states the filter's own gate");
+  assert.equal(body.hits.length, 1);
+  assert.equal(body.hits[0].author_display_name, "E2E Ada", "the passported hit carries the author's display name");
+  assert.equal(body.hits[0].writer_kind, "step");
+  assert.deepEqual(body.hits[0].writer_details, { work_item: "wi_e2e", step: "build", attempt: 1, model: "pi:e2e" },
+    "an unknown writer-details key never passes the passport");
+  assert.ok(!JSON.stringify(body).includes("E2E-NESTED-SENTINEL") && !JSON.stringify(body).includes("owner_user_id"));
+  assert.deepEqual(argv().at(-1), ["--json", "recall", "--project", "workbench", "--limit", "20", "--sort", "updated", "--writer-kind", "step"],
+    `the browse recall carries the kind: ${JSON.stringify(argv())}`);
+  const keyword = await GET(get(`?cwd=/ws&project=workbench&type=*&q=kw&writer_kind=session`));
+  assert.equal(keyword.status, 200);
+  assert.deepEqual(argv().at(-1), ["--json", "recall", "--project", "workbench", "--limit", "200", "--writer-kind", "session", "kw"],
+    `the keyword recall carries the same kind, the keyword last: ${JSON.stringify(argv())}`);
+});
+
 
 test("every memory route re-checks isApiRequestAllowed in-route and is dynamic", () => {
   for (const [name, source] of [["search", search], ["show", show]]) {
