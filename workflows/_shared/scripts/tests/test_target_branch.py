@@ -13,10 +13,17 @@ import os
 import shutil
 import tempfile
 import unittest
+from typing import Dict, Optional, Tuple
 
 from pfstep import targetbranch
 
 from .test_scripts import HAVE_GIT, World, read, repo_of, write
+
+
+def fix_target(w: World, target: str = "epic/1") -> None:
+    """The capsule's fixed target branch (the daemon's own file shape)."""
+    write(w.capsule, "runtime-state/" + targetbranch.FILE,
+          json.dumps({"target": target, "parent": "epic#1"}))
 
 
 class TargetBranchReadTest(unittest.TestCase):
@@ -145,3 +152,158 @@ class SyncTargetTest(unittest.TestCase):
         assert res is not None
         self.assertEqual(code, 2, err)
         self.assertIn("fetching epic/1", res["summary"], res["summary"])
+
+
+def target_branch_on(w: World, repo: str, target: str = "epic/1") -> str:
+    """origin's <target> created from main's tip (the daemon's own rule):
+    answers the sha the clone sees for refs/remotes/origin/<target>."""
+    seed = w.seeds[repo]
+    w.git(seed, "fetch", "-q", "origin")
+    w.git(seed, "checkout", "-q", "-B", target, "origin/main")
+    w.git(seed, "push", "-q", "origin", "HEAD:refs/heads/" + target)
+    w.git(w.dir(repo), "fetch", "-q", "origin")
+    return w.git(w.dir(repo), "rev-parse", "refs/remotes/origin/" + target)
+
+
+def publish_on(w: World, repo: str, base: str) -> Dict[str, str]:
+    """Push the branch, open its PR at the fake gh targeting base."""
+    w.git(w.dir(repo), "push", "-q", "origin", "HEAD:refs/heads/" + World.BRANCH)
+    prs = os.path.join(w.gh, repo, "prs")
+    n = len(os.listdir(prs)) + 1 if os.path.isdir(prs) else 1
+    url = "https://github.com/fake/%s/pull/%d" % (repo, n)
+    for k, v in {"head": World.BRANCH, "base": base, "state": "OPEN", "url": url}.items():
+        write(prs, str(n), k, v + "\n")
+    return {"name": repo, "branch": World.BRANCH, "pr_url": url, "head": w.head(repo)}
+
+
+def inputs_on(w: World, entry: Dict[str, str], base: str,
+              heads: Optional[Dict[str, str]] = None) -> Tuple[str, str, str]:
+    """The merge's inputs against base: publish.json and the verified
+    result (its details.repos[].base = origin/<base> as verification
+    recorded it), answering (publish, verified, result-out)."""
+    publish = os.path.join(w.capsule, "artifacts", "publish.json")
+    write(w.capsule, "artifacts/publish.json", json.dumps({"repos": [entry]}))
+    verified = os.path.join(w.capsule, "artifacts", "verify", "result.json")
+    base_sha = w.git(w.dir(entry["name"]), "rev-parse", "refs/remotes/origin/" + base)
+    write(w.capsule, "artifacts/verify/result.json", json.dumps({
+        "schema": "pf-step-result/1",
+        "heads": heads or {entry["name"]: entry["head"]},
+        "details": {"repos": [{"name": entry["name"], "base": base_sha}]}}))
+    return publish, verified, os.path.join(w.capsule, "artifacts", "merge", "result.json")
+
+
+@unittest.skipUnless(HAVE_GIT, "git or bash not installed")
+class MergeTargetTest(unittest.TestCase):
+    """merge.py on a capsule whose target branch is fixed: both modes take
+    the target as the base (the PR's target, the freshness check, the
+    landing rules) and the landing record never enters the integrate
+    pool (its state is landed_on_target, not landed)."""
+
+    def test_merge_lands_on_the_target_and_registers_landed_on_target(self) -> None:
+        import integrate
+        w = World(self, "app")
+        fix_target(w)
+        target_branch_on(w, "app")
+        head = w.change("app", {"feature.txt": "f\n"}, "app-section")
+        entry = publish_on(w, "app", "epic/1")
+        publish, verified, out = inputs_on(w, entry, "epic/1")
+        landing = os.path.join(w.capsule, "artifacts", "merge", "landing.json")
+        code, res, err = w.run("merge.py", "--publish", publish, "--verified", verified, "--landing-out", landing,
+                               "--capsule", w.capsule, "--json", "--out", out)
+        assert res is not None
+        r = repo_of(res, "app")
+        self.assertEqual((code, r["how"], r["by_this_run"], r["branch_side"]), (0, "merged", True, head), err)
+        with open(landing, encoding="utf-8") as f:
+            rec = json.load(f)
+        self.assertEqual((rec["state"], rec["target"]), ("landed_on_target", "epic/1"), rec)
+        # the integrate pool's filter (integrate.py's LANDED_FILTER, the
+        # same integration.state=landed Pi Web matches) takes landed
+        # records only: this state never answers it
+        self.assertNotEqual(rec["state"], integrate.LANDED_FILTER.split("=", 1)[1])
+        self.assertEqual(rec["repos"][0]["head"], head)
+        self.assertEqual(rec["merge_commits"]["app"][0]["merge"], True)
+        # the landing is on the target branch, not the default branch
+        w.git(w.seeds["app"], "fetch", "-q", "origin")
+        self.assertEqual(w.git(w.seeds["app"], "rev-parse", "refs/remotes/origin/epic/1"),
+                         rec["repos"][0]["merge_commit"])
+        self.assertNotEqual(w.git(w.seeds["app"], "rev-parse", "refs/remotes/origin/epic/1"),
+                            w.git(w.seeds["app"], "rev-parse", "refs/remotes/origin/main"))
+
+    def test_a_moved_target_branch_fails_inside_the_uncounted_substring(self) -> None:
+        w = World(self, "app")
+        fix_target(w)
+        target_branch_on(w, "app")
+        w.change("app", {"feature.txt": "f\n"}, "app-section")
+        entry = publish_on(w, "app", "epic/1")
+        publish, verified, out = inputs_on(w, entry, "epic/1")
+        landing = os.path.join(w.capsule, "artifacts", "merge", "landing.json")
+        # a sibling sub-ticket lands on the target branch after verification
+        seed = w.seeds["app"]
+        w.git(seed, "fetch", "-q", "origin")
+        w.git(seed, "checkout", "-q", "-B", "epic/1", "origin/epic/1")
+        w.git(seed, "commit", "-q", "--allow-empty", "-m", "a sibling lands on the target")
+        w.git(seed, "push", "-q", "origin", "HEAD:refs/heads/epic/1")
+        code, res, err = w.run("merge.py", "--publish", publish, "--verified", verified, "--landing-out", landing,
+                               "--capsule", w.capsule, "--json", "--out", out)
+        assert res is not None
+        self.assertEqual(code, 1, err)
+        self.assertIn("the target branch moved since verification (epic/1: ", res["summary"], res["summary"])
+        # the reason carries the substring the lane's uncounted rewind
+        # class matches, and never the default branch's wording
+        self.assertIn("branch moved since verification", res["summary"], res["summary"])
+        self.assertNotIn("default branch moved", res["summary"], res["summary"])
+        self.assertFalse(os.path.exists(landing))
+
+    def test_a_pr_not_targeting_the_target_branch_is_refused(self) -> None:
+        w = World(self, "app")
+        fix_target(w)
+        target_branch_on(w, "app")
+        w.change("app", {"feature.txt": "f\n"}, "app-section")
+        entry = publish_on(w, "app", "main")  # the PR targets the default branch
+        publish, verified, out = inputs_on(w, entry, "main")
+        code, res, err = w.run("merge.py", "--publish", publish, "--verified", verified,
+                               "--capsule", w.capsule, "--json", "--out", out)
+        assert res is not None
+        self.assertEqual(code, 1, err)
+        self.assertIn("targets main, not the target branch epic/1", res["summary"], res["summary"])
+
+    def test_the_human_mode_takes_a_landing_made_on_the_target(self) -> None:
+        import subprocess
+        w = World(self, "app")
+        fix_target(w)
+        target_branch_on(w, "app")
+        head = w.change("app", {"feature.txt": "f\n"}, "app-section")
+        entry = publish_on(w, "app", "epic/1")
+        # the person merges the PR: the fake gh's real --no-ff merge into
+        # origin's target branch
+        done = subprocess.run([os.path.join(w.bin, "gh"), "pr", "merge", entry["pr_url"],
+                               "--merge", "--match-head-commit", head],
+                              cwd=w.dir("app"), env=w.env(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        self.assertEqual(done.returncode, 0, done.stdout.decode())
+        # the claim froze this step human
+        write(w.capsule, "runtime-state/step-modes.json", json.dumps({"merge": "human"}))
+        publish, verified, out = inputs_on(w, entry, "epic/1")
+        landing = os.path.join(w.capsule, "artifacts", "merge", "landing.json")
+        code, res, err = w.run("merge.py", "--publish", publish, "--verified", verified, "--landing-out", landing,
+                               "--capsule", w.capsule, "--json", "--out", out, PF_STEP="merge")
+        assert res is not None
+        r = repo_of(res, "app")
+        self.assertEqual((code, r["how"]), (0, "merged_by_human"), err)
+        with open(landing, encoding="utf-8") as f:
+            rec = json.load(f)
+        self.assertEqual((rec["state"], rec["target"]), ("landed_on_target", "epic/1"), rec)
+
+    def test_an_unreadable_fixed_file_is_not_judged(self) -> None:
+        w = World(self, "app")
+        w.change("app", {"feature.txt": "f\n"})
+        entry = w.publish("app")
+        write(w.capsule, "runtime-state/" + targetbranch.FILE, "{not json")
+        publish, verified, out = inputs_on(w, entry, "main")
+        landing = os.path.join(w.capsule, "artifacts", "merge", "landing.json")
+        code, res, err = w.run("merge.py", "--publish", publish, "--verified", verified, "--landing-out", landing,
+                               "--capsule", w.capsule, "--json", "--out", out)
+        assert res is not None
+        self.assertEqual(code, 2, err)
+        self.assertIn("not judged", res["summary"], res["summary"])
+        self.assertIn("not valid JSON", res["summary"], res["summary"])
+        self.assertFalse(os.path.exists(landing))
