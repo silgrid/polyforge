@@ -16,7 +16,7 @@ import tempfile
 import threading
 import time
 import unittest
-from typing import List, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import gate
 from pfstep import container, duration
@@ -35,6 +35,7 @@ from .gatefix import (
     git_t,
     new_gate,
     run_gate,
+    run_main,
     write_files,
 )
 
@@ -395,6 +396,125 @@ class GateRulesTest(unittest.TestCase):
         self.assertEqual(gate.newest_green_of(["green/20261107-9", "green/20261108-2", "green/20261108-10", "green/x"]),
                          "green/20261108-10")
         self.assertEqual(gate.newest_green_of([]), "")
+
+
+# a prepared image and its local ID, as a step's `image` parameter names
+# them (polyforge#64)
+IMAGE_REF = "registry.example/team/verify:2026-11"
+IMAGE_ID = "sha256:" + "ab" * 32
+OTHER_REF = "registry.example/team/verify:2026-12"
+OTHER_ID = "sha256:" + "cd" * 32
+
+
+@unittest.skipUnless(HAVE_GIT and HAVE_BASH and HAVE_PY, "git, bash and python3 needed")
+class PreparedImageGateTest(unittest.TestCase):
+    """The gate with a prepared image (the step's `image` parameter,
+    polyforge#64), run through the command line as the skill runs it — the
+    expected values are the ticket's rulings, not the implementation's own
+    answers: nothing is built, the container starts by the image's local
+    ID with --pull never, the plan's image half and the result record the
+    digest and where the value came from (the flag wins over the step
+    environment), a tree without a Dockerfile is gated too, a missing
+    image is `not judged` carrying the fixed mark, and a command the
+    image fails is a real failure — the container contract (the mount, the
+    allowlist) is the default mode's."""
+
+    def setUp(self) -> None:
+        self._td = tempfile.TemporaryDirectory()
+        self.root = os.path.realpath(self._td.name)
+        self.fb = FakeRuntime(os.path.join(self.root, "box-tmp"))
+        self.fb.identities[IMAGE_REF] = (IMAGE_ID, [])
+        self.logs = os.path.join(self.root, "logs")
+
+    def tearDown(self) -> None:
+        self._td.cleanup()
+
+    def clone(self, conf: str, dockerfile: bool = True) -> str:
+        return gate_clone(self.root, conf, dockerfile)
+
+    def result_of(self, r: Any) -> Dict[str, Any]:
+        return json.loads(r.stdout)["details"]["repos"]["app"]["result"]
+
+    def test_the_prepared_image_runs_without_a_build(self) -> None:
+        d = self.clone("stack=none\nfast_gate=echo one\n")
+        r = run_main(["--isolation", "container", "--json", "--image", IMAGE_REF], cwd=d, runtime=self.fb)
+        self.assertEqual(r.exit, 0, r.stderr)
+        res = self.result_of(r)
+        self.assertTrue(res["passed"])
+        self.assertEqual(self.fb.builds, [], "nothing is built")
+        self.assertEqual(len(self.fb.starts), 1)
+        s = self.fb.starts[0]
+        self.assertEqual((s.image, s.pull_never), (IMAGE_ID, True), "started by the local ID, never pulled")
+        self.assertEqual((res.get("image"), res.get("built"), res.get("image_digest"), res.get("image_source")),
+                         (IMAGE_REF, False, IMAGE_ID, "flag"))
+        self.assertEqual(res.get("plan", {}).get("image"), IMAGE_ID, "the plan's image half is the digest")
+        self.assertEqual([(b.path, b.read_only) for b in s.binds], [(d, False)], "the clone alone is mounted")
+        for _, _, env, _ in self.fb.execs:
+            for kv in env:
+                k = kv.partition("=")[0]
+                self.assertTrue(k == "TMPDIR" or k in container.CONTAINER_ENV_ALLOW, "%s reached the container" % k)
+
+    def test_the_step_environment_names_it_and_the_flag_wins(self) -> None:
+        d = self.clone("stack=none\nfast_gate=echo one\n")
+        r = run_main(["--isolation", "container", "--json"], cwd=d, env={"PF_PARAM_IMAGE": IMAGE_REF}, runtime=self.fb)
+        self.assertEqual(r.exit, 0, r.stderr)
+        res = self.result_of(r)
+        self.assertEqual(self.fb.builds, [], "the parameter names the image: nothing is built")
+        self.assertEqual((res.get("image_digest"), res.get("image_source")), (IMAGE_ID, "param"))
+        fb2 = FakeRuntime(os.path.join(self.root, "box-tmp2"))
+        fb2.identities[OTHER_REF] = (OTHER_ID, [])
+        r2 = run_main(["--isolation", "container", "--json", "--image", OTHER_REF], cwd=d,
+                      env={"PF_PARAM_IMAGE": IMAGE_REF}, runtime=fb2)
+        self.assertEqual(r2.exit, 0, r2.stderr)
+        res2 = self.result_of(r2)
+        self.assertEqual((res2.get("image_digest"), res2.get("image_source")), (OTHER_ID, "flag"),
+                         "the command line wins over the step environment")
+
+    def test_a_tree_without_a_dockerfile_is_gated_with_an_image(self) -> None:
+        d = self.clone("stack=none\nfast_gate=echo one\n", dockerfile=False)
+        r = run_main(["--isolation", "container", "--json", "--image", IMAGE_REF], cwd=d, runtime=self.fb)
+        self.assertEqual(r.exit, 0, r.stderr)
+        res = self.result_of(r)
+        self.assertTrue(res["passed"])
+        self.assertEqual((self.fb.builds, res.get("image_digest")), ([], IMAGE_ID))
+        # without an image the gate still refuses such a tree: unchanged
+        fb2 = FakeRuntime(os.path.join(self.root, "box-tmp2"))
+        r2 = run_main(["--isolation", "container", "--json"], cwd=d, runtime=fb2)
+        self.assertEqual(r2.exit, 2, "no Dockerfile and no image is still not judged")
+
+    def test_a_missing_image_is_not_judged_with_the_fixed_mark(self) -> None:
+        d = self.clone("stack=none\nfast_gate=echo one\n")
+        r = run_main(["--isolation", "container", "--json", "--image", "registry.example/nope:1"],
+                     cwd=d, runtime=self.fb)
+        self.assertEqual(r.exit, 2)
+        summary = json.loads(r.stdout)["summary"]
+        self.assertIn(container.IMAGE_MISSING_MARK, summary)
+        self.assertIn("registry.example/nope:1", summary)
+        self.assertIn("prepared by a person", summary)
+        self.assertEqual((self.fb.builds, self.fb.starts), ([], []))
+
+    def test_a_failing_command_in_the_image_is_a_real_failure(self) -> None:
+        d = self.clone("stack=none\nfull_command=echo the-failure-says-why; exit 3\n")
+        r = run_main(["--isolation", "container", "--json", "--image", IMAGE_REF], cwd=d, runtime=self.fb)
+        self.assertEqual(r.exit, 1, r.stderr)
+        res = self.result_of(r)
+        self.assertFalse(res["passed"])
+        self.assertEqual(res["commands"][1]["exit"], 3)
+        self.assertEqual(res.get("image_digest"), IMAGE_ID)
+
+    def test_the_triage_opens_the_prepared_image_too(self) -> None:
+        d = self.clone("stack=none\nfast_gate=echo one\n")
+        lines: List[str] = []
+        g = new_gate(self.fb, lines=lines)
+        # the command line's route is pinned above; setting the field keeps
+        # this test's red an assertion, not a missing constructor name
+        g.image = IMAGE_REF
+        sess = gate.Session.open(g, d, "app", self.logs)
+        try:
+            self.assertEqual(self.fb.builds, [], "the triage builds nothing either")
+            self.assertEqual((self.fb.starts[0].image, self.fb.starts[0].pull_never), (IMAGE_ID, True))
+        finally:
+            sess.close()
 
 
 if __name__ == "__main__":
