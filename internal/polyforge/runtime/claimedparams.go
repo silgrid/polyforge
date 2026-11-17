@@ -106,6 +106,7 @@ func claimedStepParams(params map[string]map[string]StepParamAttr, j *job) map[s
 	for i := range lane.Steps {
 		byID[lane.Steps[i].ID] = &lane.Steps[i]
 	}
+	at := nowStamp()
 	entries := map[string]*capsule.StepOverride{}
 	for _, step := range sortedKeys(params) {
 		spec := byID[step]
@@ -131,7 +132,7 @@ func claimedStepParams(params map[string]map[string]StepParamAttr, j *job) map[s
 			if entries[step].Params == nil {
 				entries[step].Params = map[string]*capsule.ParamOverride{}
 			}
-			entries[step].Params[name] = &capsule.ParamOverride{Value: entry.Value, By: StepParamsClaimedBy, At: entry.At}
+			entries[step].Params[name] = &capsule.ParamOverride{Value: entry.Value, By: StepParamsClaimedBy, At: nowStamp()}
 		}
 	}
 	return entries
