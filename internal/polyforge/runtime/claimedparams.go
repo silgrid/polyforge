@@ -16,19 +16,19 @@ package runtime
 // writePendingStepOverrides rule: a failed publish keeps the key for the
 // next claim while the job's own publishes carry the merged overlay.
 //
-// The key belongs to the QUEUED ticket (owner ruling 2026-11-17: 未领取的
-// 票的参数)； a claimed one's truth is the capsule chain. A RE-claim — the
-// sealed-head continue of a blocked ticket (j.sealedScene) — therefore
-// clears any residual key WITHOUT merging (review r1#8): the residue is
-// a word from before the first claim (the write-side race that left it,
-// a publish that failed, a clear that failed), and merging it again with
-// the claim's own time would let it win over the running writes the
-// chain carries — the newer word. A first claim (no sealed head) is the
-// key's one consumption; the narrow loss window of a first claim that
-// never published anything is the crash a pending record survives too.
+// The merged entry keeps THE ENTRY'S OWN recorded write time (the
+// daemon's queued write stamps it; review r2#1), and the merge rides
+// mergePendingAspects' time rule: a residue from before an earlier claim
+// — the write-side race that left it, a publish that failed, a clear
+// that failed — is older than the running writes the capsule chain
+// carries and loses to them, whatever re-claim path brings it in (the
+// quarantined adopt, the at-head continue, another machine's clone, a
+// re-queue with no sealed record at all); a value written while the
+// ticket sat RE-QUEUED is newer than the chain's and wins (the queued
+// face's write is legitimate — neither may be dropped by the path).
 //
 // A clear that fails is one loud stderr line; the residue stays for the
-// next re-claim, which clears it again without merging.
+// next claim, which judges it by its time again.
 
 import (
 	"context"
@@ -54,16 +54,6 @@ const StepParamsClaimedBy = "step_params"
 func (r *Runtime) writeClaimedStepParams(ctx context.Context, j *job) error {
 	params := StepParamsOfAttrs(j.item.Attrs)
 	if len(params) == 0 {
-		return nil
-	}
-	if j.sealedScene != "" {
-		// a re-claim: the key is residue of the queued ticket this
-		// capsule's chain superseded — cleared, never merged (the file
-		// comment's rule)
-		fmt.Fprintf(os.Stderr, "runtime: %s: a residual step_params attrs key is cleared at the re-claim without merging (the capsule chain is the truth of a claimed work item)\n", j.wi)
-		if _, err := r.hub.WriteAttrs(j.wi, api.AttrsWriteRequest{Key: api.StepParamsKey, Value: []byte("null")}); err != nil {
-			fmt.Fprintf(os.Stderr, "runtime: %s: clearing the residual step_params attrs key failed (it is cleared again at the next re-claim): %v\n", j.wi, err)
-		}
 		return nil
 	}
 	kept := claimedStepParams(params, j)
@@ -106,7 +96,6 @@ func claimedStepParams(params map[string]map[string]StepParamAttr, j *job) map[s
 	for i := range lane.Steps {
 		byID[lane.Steps[i].ID] = &lane.Steps[i]
 	}
-	at := nowStamp()
 	entries := map[string]*capsule.StepOverride{}
 	for _, step := range sortedKeys(params) {
 		spec := byID[step]
@@ -132,7 +121,7 @@ func claimedStepParams(params map[string]map[string]StepParamAttr, j *job) map[s
 			if entries[step].Params == nil {
 				entries[step].Params = map[string]*capsule.ParamOverride{}
 			}
-			entries[step].Params[name] = &capsule.ParamOverride{Value: entry.Value, By: StepParamsClaimedBy, At: at}
+			entries[step].Params[name] = &capsule.ParamOverride{Value: entry.Value, By: StepParamsClaimedBy, At: entry.At}
 		}
 	}
 	return entries

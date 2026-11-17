@@ -34,6 +34,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"time"
 
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/common/capsule"
@@ -665,7 +666,11 @@ func (d *Daemon) queuedParamWrite(wi string, item *api.WorkItem, req protocol.Ov
 		if merged[req.Step] == nil {
 			merged[req.Step] = map[string]runtime.StepParamAttr{}
 		}
-		merged[req.Step][name] = runtime.StepParamAttr{Value: req.Param.Value}
+		// the entry's own write time — the claim merges by it, so a
+		// residue never beats a newer running write and a re-queue's own
+		// write wins (review r2#1)
+		merged[req.Step][name] = runtime.StepParamAttr{Value: req.Param.Value,
+			At: time.Now().UTC().Format(time.RFC3339Nano)}
 	} else {
 		if _, ok := merged[req.Step][name]; !ok {
 			return d.queuedParamAnswer(wi, req, spec, merged, false, "", operator), nil

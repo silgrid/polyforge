@@ -24,8 +24,10 @@ export function PolyforgeWorkItemParams({ wi }: { wi: string }) {
   const [view, setView] = useState<PolyforgeParamsView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [writeError, setWriteError] = useState<string | null>(null);
-  // the write's success note — the claim-race word the daemon rides on a
-  // 200 answer (the key gone: the claim merged the params; the key still
+  // the write's success note: the daemon rides an explanatory note on
+  // EVERY queued write's 200 answer (where the params ride until the
+  // claim) — and a claim that landed mid-write replaces it with the race
+  // word (the key gone: the claim merged the params; the key still
   // there: set the param on the running ticket again), AC3's 提示
   const [note, setNote] = useState<string | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});

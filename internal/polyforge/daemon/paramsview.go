@@ -29,6 +29,7 @@ import (
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/common/capsule"
 	"github.com/silgrid/polyforge/internal/common/protocol"
+	"github.com/silgrid/polyforge/internal/common/workflow"
 	"github.com/silgrid/polyforge/internal/polyforge/runtime"
 	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
@@ -91,25 +92,13 @@ func (d *Daemon) paramsView(wi string, item *api.WorkItem) (*protocol.ParamsView
 // rows carry no overlay of them (review r1#7: the unbranched path read
 // the daemon's own current directory).
 func (d *Daemon) queuedOverrideView(wi string, item *api.WorkItem, scene *overrideScene) (*protocol.OverrideView, error) {
-	if scene.bundle == "" {
-		return nil, &api.Error{Code: api.ErrDaemonConflict,
-			Detail: fmt.Sprintf("%s names no bundle: its overlay is composed from its lane, and the lane is the bundle it will run", wi)}
-	}
-	lane := d.laneOf(item.ProjectName, scene.bundle)
-	if lane == nil {
-		return nil, &api.Error{Code: api.ErrDaemonConflict,
-			Detail: fmt.Sprintf("the lane %s of %s does not load on this daemon — a queued work item's overlay is composed from its lane (the step declarations); it loads on a machine whose lane set has it", scene.bundle, item.ProjectName)}
+	lane, err := d.queuedLaneOf(wi, item, scene, "its overlay is composed from its lane")
+	if err != nil {
+		return nil, err
 	}
 	cfg, _ := d.rt.LoadWorkspace(item.ProjectName)
-	sources := workspace.StepModelSources(lane, cfg, item.ProjectName, nil)
-	ov := capsule.StepOverrides{Steps: map[string]*capsule.StepOverride{}}
-	for step, params := range runtime.StepParamsOfAttrs(item.Attrs) {
-		e := &capsule.StepOverride{Params: map[string]*capsule.ParamOverride{}}
-		for name, entry := range params {
-			e.Params[name] = &capsule.ParamOverride{Value: entry.Value, By: runtime.StepParamsClaimedBy}
-		}
-		ov.Steps[step] = e
-	}
+	sources := workspace.StepModelSources(lane, cfg, item.ProjectName, d.rt.ManualModels(wi))
+	ov := queuedOverlayOf(item.Attrs, runtime.StepParamsClaimedBy)
 	out := &protocol.OverrideView{WorkItem: wi, Posture: scene.posture, Steps: []protocol.OverrideStepView{}}
 	for _, s := range lane.Steps {
 		row := protocol.OverrideStepView{ID: s.ID, Skippable: s.Skippable}
@@ -124,30 +113,49 @@ func (d *Daemon) queuedOverrideView(wi string, item *api.WorkItem, scene *overri
 	return out, nil
 }
 
-// queuedParamsView composes a queued work item's face: this machine's
-// lane set, the project's yaml and the reserved step_params attrs key.
-func (d *Daemon) queuedParamsView(wi string, item *api.WorkItem, scene *overrideScene) (*protocol.ParamsView, error) {
+// queuedLaneOf resolves a queued work item's lane from this machine's set
+// — the one resolution both queued faces share (the bundle must name the
+// lane, and it must load here; why names the face's own wording).
+func (d *Daemon) queuedLaneOf(wi string, item *api.WorkItem, scene *overrideScene, why string) (*workflow.Lane, error) {
 	if scene.bundle == "" {
 		return nil, &api.Error{Code: api.ErrDaemonConflict,
-			Detail: fmt.Sprintf("%s names no bundle: a queued work item's params are composed from its lane, and the lane is the bundle it will run", wi)}
+			Detail: fmt.Sprintf("%s names no bundle: %s, and the lane is the bundle it names", wi, why)}
 	}
-	project := item.ProjectName
-	lane := d.laneOf(project, scene.bundle)
+	lane := d.laneOf(item.ProjectName, scene.bundle)
 	if lane == nil {
 		return nil, &api.Error{Code: api.ErrDaemonConflict,
-			Detail: fmt.Sprintf("the lane %s of %s does not load on this daemon — a queued work item's params need its lane (the step declarations); it loads on a machine whose lane set has it", scene.bundle, project)}
+			Detail: fmt.Sprintf("the lane %s of %s does not load on this daemon — %s (the step declarations); it loads on a machine whose lane set has it", scene.bundle, item.ProjectName, why)}
 	}
-	cfg, _ := d.rt.LoadWorkspace(project)
-	below := workspace.StepParamSources(scene.bundle, lane, cfg, project)
-	ticket := runtime.StepParamsOfAttrs(item.Attrs)
+	return lane, nil
+}
+
+// queuedOverlayOf answers the reserved step_params attrs key as the
+// overlay-layer record the two queued faces read — one entry per kept
+// param, the writer label the face's own (the overlay view labels it
+// step_params; the params view carries no label).
+func queuedOverlayOf(attrs map[string]any, by string) capsule.StepOverrides {
 	ov := capsule.StepOverrides{Steps: map[string]*capsule.StepOverride{}}
-	for step, params := range ticket {
+	for step, params := range runtime.StepParamsOfAttrs(attrs) {
 		e := &capsule.StepOverride{Params: map[string]*capsule.ParamOverride{}}
 		for name, entry := range params {
-			e.Params[name] = &capsule.ParamOverride{Value: entry.Value}
+			e.Params[name] = &capsule.ParamOverride{Value: entry.Value, By: by}
 		}
 		ov.Steps[step] = e
 	}
+	return ov
+}
+
+// queuedParamsView composes a queued work item's face: this machine's
+// lane set, the project's yaml and the reserved step_params attrs key.
+func (d *Daemon) queuedParamsView(wi string, item *api.WorkItem, scene *overrideScene) (*protocol.ParamsView, error) {
+	lane, err := d.queuedLaneOf(wi, item, scene, "a queued work item's params are composed from its lane")
+	if err != nil {
+		return nil, err
+	}
+	project := item.ProjectName
+	cfg, _ := d.rt.LoadWorkspace(project)
+	below := workspace.StepParamSources(scene.bundle, lane, cfg, project)
+	ov := queuedOverlayOf(item.Attrs, "")
 	out := &protocol.ParamsView{WorkItem: wi, Posture: scene.posture, Steps: []protocol.ParamsStepView{}}
 	for _, s := range lane.Steps {
 		out.Steps = append(out.Steps, d.paramsRow(s.ID, s.Params, "", below, ov))
