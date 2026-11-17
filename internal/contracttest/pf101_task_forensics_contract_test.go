@@ -51,6 +51,9 @@ func TestPF101TaskDraftingForensicsContract(t *testing.T) {
 	// delivered as PF_SCRATCH_RAW_DIR and named by the closing #
 	// Scratch section), the report back only a summary and an
 	// evidence index a reader can follow, the tool-return bound.
+	// Tokens are checked against whitespace-collapsed text (the
+	// package's house style): a rewrap that keeps the words stays green.
+	flat := strings.Join(strings.Fields(sec), " ")
 	for _, tok := range []string{
 		"**输出约束**",
 		"session rule 9",
@@ -59,11 +62,11 @@ func TestPF101TaskDraftingForensicsContract(t *testing.T) {
 		"a summary and an evidence index",
 		"line ranges or JSON pointers",
 	} {
-		if !strings.Contains(sec, tok) {
+		if !strings.Contains(flat, tok) {
 			t.Errorf("the Drafting section lacks the pinned token %q — the output-constraints drafting item is missing or reworded past recognition", tok)
 		}
 	}
-	if !strings.Contains(sec, "hashes") {
+	if !strings.Contains(flat, "hashes") {
 		t.Errorf("the Drafting section's evidence index must carry hashes (the ticket's Q6 reference syntax)")
 	}
 
