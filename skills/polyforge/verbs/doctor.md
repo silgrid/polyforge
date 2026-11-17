@@ -14,15 +14,18 @@ the way `tools/install.sh` sets it up, and whether v1 polyforge artifacts are
 still installed — and whether each mapped workspace keeps the runtime-artifact
 layout (polyforge#177), whether state of the retired chat subscriptions is
 left on disk, and whether each installed harness's context file
-carries the native-SVG diagram guidance block. It is a read face: nothing is
+carries the native-SVG diagram guidance block and the concise-output guidance
+block. It is a read face: nothing is
 mutated, nothing is auto-fixed (remediation is manual, the check detail
 names it) — the only writes are five explicit flags: `--prune-scratch`,
-which removes stale `scratch/` entries and lists them, `--prune-capsules`,
+which removes the stale scratch batches inside the categories and lists them, `--prune-capsules`,
 which slims or removes the entries the `capsule retention` row calls
 reclaimable or retired and lists them, `--prune-chat-state`, which deletes
-the files the `retired chat state` row lists, and `--fix-harness-prompts`, which appends the
-SVG diagram-guidance block to the existing context files the `harness diagram
-guidance` row reports `missing` or `legacy` (see below), and `--fix-install-layout`,
+the files the `retired chat state` row lists, and `--fix-harness-prompts`, which appends the SVG
+diagram-guidance block and the concise-output guidance block to the existing
+context files the `harness diagram guidance` and `harness concise guidance`
+rows report `missing` (the diagram row also reports `legacy`, see below), and
+`--fix-install-layout`,
 which links the Claude Code polyforge skill the `claude install layout` row
 reports missing or linked elsewhere (see below). The one remediation the agent runs itself is the
 daemon-down case: `pf daemon ensure`, then `pf doctor` again.
@@ -56,7 +59,7 @@ pf doctor [--harness] [--prune-scratch] [--prune-capsules] [--prune-chat-state] 
 
 `--harness` runs only the harness family (statusline and pi package, install
 layout, v1 leftovers, retired chat state — no config, no network);
-`tools/install.sh` prints its rows. `--fix-harness-prompts` needs the full report (its row is
+`tools/install.sh` prints its rows. `--fix-harness-prompts` needs the full report (their rows are
 config-dependent): combined with `--harness` it is refused before any
 check runs (exit 1). `--fix-install-layout` is refused with `--harness` the
 same way (exit 1), and so is `--prune-chat-state`: the `--harness`
@@ -96,6 +99,7 @@ every defect prints with its `WFC-*` code, file:line and YAML path
 | `workflow lanes` | the built-in lanes the daemon runs work items on (its workflows dir) and every mapped workspace's user lanes (`.polyforge/workflows/<lane>/`) load through the one lane loader under the workflow contract — the same judgement as `pf workflows validate` — and no queued work item of a mapped project is bound to a lane its workspace's lane set does not carry; `skip` while the daemon does not answer; out of `--harness` | `fail` naming every `WFC-*` defect of a built-in lane with its file:line and YAML path (a release defect; a claim on such a lane is refused); `warn` naming every defect of a user lane (`WFC-122` included: only that lane is unavailable) and listing each queued work item bound to a missing lane (`WFC-123`: a claim refuses it and it stays queued) — fix the user lane, re-bind the work item (`pf file edit <wi> --bundle <lane>`) or cancel it |
 | `harness claude` | when some resolved candidate is `claude:…`: the daemon finds the claude binary (see below) | the binary the daemon could not resolve |
 | `harness diagram guidance` | every installed harness's context file carries the native-SVG diagram guidance block (see below); `warn` at most — never `fail`, never moves the exit code; `skip` when no harness is installed | — (`warn` lists each file as `pass` / `legacy` / `missing` / `no file` / `unreadable` and carries the SVG block to add; `legacy` = mermaid-only guidance, which no longer passes) |
+| `harness concise guidance` | every installed harness's context file carries the concise-output guidance block (see below) — the one short output-discipline rule every step dispatch and every task input also carries, from the one source; `warn` at most — never `fail`, never moves the exit code; `skip` when no harness is installed | — (`warn` lists each file as `pass` / `missing` / `no file` / `unreadable` and carries the concise-output block to add) |
 | `aihub projects` | every mapped project is known to aihub and readable with the api key (its ready-queue read — the project-member face the daemon uses; no admin role needed) | the project AND its workspace, named (an ambiguous inverse or duplicate surfaces through the config check, both workspaces named) |
 | `workspace repo clones` | no uncovered uncommitted change or unpushed local commit in the `.repo/` git clones of every existing mapped workspace and their linked worktrees (see below); `warn` at most — never `fail`, never moves the exit code; `skip` naming the unit and its reason when the covering WI state could not be read | the clone AND its owning workspace, named, with the remediation (see below) |
 | `light verification fallbacks` | reads (never writes) the latest verify run of each live — not `.quarantined.` — capsule of every mapped workspace (`capsules/<name>/runtime-state/verify/<n>/result.json`, highest `<n>`) and, when light verifications ran full, reports `the latest light verification of N capsule(s) ran full — reasons: <category> ×k, …` (the `tier.reasons` entries by category: go package graph, stack config file changed, carries, conf, no analyzer, analyzer could not resolve, git, unplanned, unexplained, other) — a report only: always `pass`, never moves the exit code; `skip` when no mapped workspace directory exists; out of `--harness` (it rode the scoped-gates readiness row until that check moved into the workflow, see below) | — (`pass` with the counts; the scoped-gates readiness of a repo whose light runs fall back: `scope_ready.py`, below) |
@@ -212,15 +216,15 @@ fail):
 
 | Check | `pass` | `warn` | `skip` |
 |---|---|---|---|
-| `workspace layout` | the root holds only `.repo/`, `capsules/`, `scratch/`, `.polyforge/`, `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `go.work` / `go.work.sum` (a Go workspace tying the `.repo/` clones together) and dot-entries (`.polyforge.yaml`, `.gitignore`, `.pi`, `.claude`, `.mcp.json`, … — harness/tool owned), and `.polyforge/` only `repo-map/` and `watchers/` (legacy v1 artifacts nothing generates any more — tolerated, safe to delete) | each other entry, with its destination: a document (`.md`, `.txt`, `.pdf`, `.html`, …) → aihub (`pf file edit <wi> --content @f` while the work item is open, else `pf remember --type doc.design\|doc.review\|doc.decision\|doc.audit`); a `.polyforge.yaml.*` backup or other file → `scratch/`; a directory holding `.git` → `.repo/`; another directory → `scratch/`. Also the notes file (`AGENTS.md` when it exists, else `CLAUDE.md`) whose `polyforge:managed` block has no `<!-- polyforge:layout -->` section — run `pf init <ws>` (a workspace with neither file is not flagged); and a `CLAUDE.md` beside a separate `AGENTS.md` that carries a duplicate `polyforge:managed` block — `AGENTS.md` is canonical, remove the block from `CLAUDE.md` by hand (a block-less `CLAUDE.md`, e.g. an `@AGENTS.md` import, is not flagged). Nothing is moved or deleted | no mapping |
+| `workspace layout` | the root holds only `.repo/`, `capsules/`, `scratch/`, `.polyforge/`, `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `go.work` / `go.work.sum` (a Go workspace tying the `.repo/` clones together) and dot-entries (`.polyforge.yaml`, `.gitignore`, `.pi`, `.claude`, `.mcp.json`, … — harness/tool owned), and `.polyforge/` only `repo-map/` and `watchers/` (legacy v1 artifacts nothing generates any more — tolerated, safe to delete) | each other entry, with its destination: a document (`.md`, `.txt`, `.pdf`, `.html`, …) → aihub (`pf file edit <wi> --content @f` while the work item is open, else `pf remember --type doc.design\|doc.review\|doc.decision\|doc.audit`); a `.polyforge.yaml.*` backup or other file → `scratch/`; a directory holding `.git` → `.repo/`; another directory → `scratch/`. Also the notes file (`AGENTS.md` when it exists, else `CLAUDE.md`) whose `polyforge:managed` block has no `<!-- polyforge:layout -->` section — run `pf init <ws>` (a workspace with neither file is not flagged) — or carries an outdated layout section, an older convention's text (a pre-category one, polyforge#121) — `pf init <ws>` refreshes it in place; and a `CLAUDE.md` beside a separate `AGENTS.md` that carries a duplicate `polyforge:managed` block — `AGENTS.md` is canonical, remove the block from `CLAUDE.md` by hand (a block-less `CLAUDE.md`, e.g. an `@AGENTS.md` import, is not flagged). Nothing is moved or deleted | no mapping |
 | `workspace memory policy` | every mapped workspace path declares a `[memory_policy."<path>".<entry>]` block in cli.toml (the yaml is no source) | a path without a block — the step prompts then carry the built-in default policy; run `pf init <ws>` to write an editable copy into cli.toml (doctor itself never writes it). A `.polyforge.yaml` still carrying `memory_policy:` or `summarize:` is the `workspace yaml` check's fail (file, line and `pf config migrate`), not this row's | no mapping |
-| `workspace scratch` | no `scratch/` entry older than 14 days (or `--prune-scratch` removed them — the detail lists each path) | entries whose newest change — the later of mtime and ctime, of the entry and everything under it, so a download keeping old mtimes is not stale on arrival — is older than 14 days, listed; run `pf doctor --prune-scratch` to remove them. Also a `scratch` that is a symlink or a file (never scanned or pruned), and an entry that could not be read (skipped, the rest still judged) | no mapping |
+| `workspace scratch` | the scratch/ category layout is kept (raw/ 3 days, tasks/ 14 days, sessions/ 14 days): no entry outside the categories and no batch past its retention (or `--prune-scratch` removed the stale batches — the detail lists each path) | every entry outside the categories — a loose top-level file, an unknown top-level directory, a category occupied by a file or symlink, a loose file inside a category — each by its full path with no row cap, however old: move it by hand or delete it, `--prune-scratch` never removes them. Batches (a category's immediate subdirectory, one directory per run) whose newest change — the later of mtime and ctime, of every path under the batch, so a download keeping old mtimes is not stale on arrival — is strictly past their category's retention; run `pf doctor --prune-scratch` to remove them. Also a `scratch` that is a symlink or a file (never scanned or pruned), and an entry that could not be read (skipped, the rest still judged) | no mapping |
 
 Stale scratch is reported, not removed, by default: the doctor is a probe
 anyone may run at any time, so deletion stays an explicit act.
 Move legacy `.polyforge/*.md` documents into memories (docs/upgrade.md);
-`pf init` (see `init.md`) creates `scratch/` and the notes file's layout
-section.
+`pf init` (see `init.md`) creates `scratch/` with its fixed categories
+and writes the notes file's layout section.
 
 ## Workspace repo clones (polyforge#198 — `warn` at most, out of `--harness`)
 
@@ -328,7 +332,7 @@ left out, never warned — the row reads the context file that harness loads:
 | Harness | Context file |
 |---|---|
 | pi | `$PI_CODING_AGENT_DIR/AGENTS.md`, else `~/.pi/agent/AGENTS.md` |
-| claude | `~/.claude/CLAUDE.md` |
+| claude | `~/.claude/CLAUDE.md`, else `~/.claude/AGENTS.md` |
 | step-agent | `<harness-root>/step-agent/AGENTS.md` (`[daemon] harness_root`, else the data dir) |
 
 A file passes only when it carries the SVG block: its begin marker
@@ -366,6 +370,35 @@ The step-agent caveat: the daemon's step-agent dir deliberately carries no
 daemon start, so that file is normally absent (`warn`, with this caveat in
 the detail), the fix does not create it, and a file made by hand there does
 not survive a daemon restart.
+
+## Harness concise guidance (`warn` at most, out of `--harness`)
+
+The row judges the same context files as the harness diagram guidance row
+(the target table above; Claude Code's file resolved: `~/.claude/CLAUDE.md`
+when it exists, else `~/.claude/AGENTS.md`, the file its built-in
+cc-plugin-agents-md plugin loads where no CLAUDE.md exists — the fix
+appends to the file the harness actually loads; with neither, the canonical
+`CLAUDE.md` path names the absence and nothing is created). A file passes
+only when it carries the concise-output block: its begin marker
+`<!-- polyforge:concise-guidance:begin -->`. The block is the one short
+output-discipline rule — `## Output discipline (concise, plain speech)`:
+lead with the outcome, match the reply's length to the question, a task's
+own required format wins, raw material goes to a dedicated subdirectory of
+the workspace's temporary directory with counts/differences/excerpts/paths
+back, conclusions and references only once a report is filed — the same
+bytes every step dispatch and every task input carries, from the one Go
+source (`internal/common/harness`); the output-format skill holds the
+interactive session's details. There is no legacy shape: the block is new.
+`pass` = every installed harness's file carries it; `warn` = a file is
+missing, absent or unreadable — the detail carries the block to add by
+hand. `pf doctor --fix-harness-prompts` appends the block to every
+**existing, readable** context file of an installed harness that lacks it,
+beside the SVG block, with the same append-only, idempotent,
+never-create, mode-preserving, atomic-write contract; a second run changes
+nothing. To roll back, delete only the concise block: the lines from
+`<!-- polyforge:concise-guidance:begin -->` to
+`<!-- polyforge:concise-guidance:end -->`. The step-agent caveat above
+holds for this row too.
 
 ## Success
 

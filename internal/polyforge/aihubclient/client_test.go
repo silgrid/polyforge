@@ -304,7 +304,7 @@ func TestSearchMemoriesBrowseShape(t *testing.T) {
 	defer srv.Close()
 	c := New(srv.URL, "k")
 
-	raw, err := c.SearchMemories("p", "", "", nil, 20, "", "created", "cur-1")
+	raw, err := c.SearchMemories("p", "", "", nil, 20, "", "created", "cur-1", "")
 	if err != nil {
 		t.Fatalf("browse: %v", err)
 	}
@@ -317,10 +317,48 @@ func TestSearchMemoriesBrowseShape(t *testing.T) {
 		!strings.Contains(browse, "limit=20") || !strings.Contains(browse, "project=p") {
 		t.Fatalf("browse request = %s", browse)
 	}
-	if _, err := c.SearchMemories("p", "needle", "", nil, 20, "", "", ""); err != nil {
+	if _, err := c.SearchMemories("p", "needle", "", nil, 20, "", "", "", ""); err != nil {
 		t.Fatalf("keyword: %v", err)
 	}
 	if kw := got[1]; !strings.Contains(kw, "q=needle") || strings.Contains(kw, "sort=") || strings.Contains(kw, "after=") {
 		t.Fatalf("keyword request = %s", kw)
+	}
+}
+
+// TestSearchMemoriesWriterKindShape (polyforge#119): the writer_kind
+// parameter rides the search URL in both modes — keyword and browse —
+// without disturbing the other parameters, and only when non-empty.
+func TestSearchMemoriesWriterKindShape(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.URL.Path+"?"+r.URL.RawQuery)
+		_, _ = w.Write([]byte(`{"items":[],"total":0}`))
+	}))
+	defer srv.Close()
+	c := New(srv.URL, "k")
+	if _, err := c.SearchMemories("p", "needle", "experience.*", []string{"a"}, 5, "any", "", "", "step"); err != nil {
+		t.Fatalf("keyword: %v", err)
+	}
+	kw := got[len(got)-1]
+	for _, want := range []string{"q=needle", "type=experience.%2A", "tags=a", "limit=5", "match=any", "writer_kind=step"} {
+		if !strings.Contains(kw, want) {
+			t.Errorf("keyword request lacks %s: %s", want, kw)
+		}
+	}
+	if strings.Contains(kw, "sort=") || strings.Contains(kw, "after=") {
+		t.Errorf("keyword request must stay cursor-free: %s", kw)
+	}
+	if _, err := c.SearchMemories("p", "", "", nil, 20, "", "updated", "", "session"); err != nil {
+		t.Fatalf("browse: %v", err)
+	}
+	browse := got[len(got)-1]
+	if !strings.Contains(browse, "writer_kind=session") || strings.Contains(browse, "q=") {
+		t.Errorf("browse request = %s", browse)
+	}
+	if _, err := c.SearchMemories("p", "needle", "", nil, 20, "", "", "", ""); err != nil {
+		t.Fatalf("unfiltered: %v", err)
+	}
+	if plain := got[len(got)-1]; strings.Contains(plain, "writer_kind") {
+		t.Errorf("an unfiltered request must carry no writer_kind: %s", plain)
 	}
 }

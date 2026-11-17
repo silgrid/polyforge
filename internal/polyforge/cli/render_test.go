@@ -149,19 +149,20 @@ ID  ROLE  LAUNCHER  MODE  RUNTIME  LIVE WI  HEARTBEAT AGE  LAST HEARTBEAT  STATE
 
 func TestGoldenMemories(t *testing.T) {
 	title := "a titled lesson"
+	step, session := "step", "session"
 	items := []memorySearchHit{
-		{ID: "mem_1", Type: "experience.debug", ContentExcerpt: "first line\nsecond line", UpdatedAt: "t1", Tags: []string{"go"}},
-		{ID: "mem_2", Type: "fact.note", Title: &title, ContentExcerpt: "body", UpdatedAt: "t2"},
-		{ID: "mem_3", Type: "fact.note", UpdatedAt: "t3"},
+		{ID: "mem_1", Type: "experience.debug", OwnerDisplayName: "Ada", WriterKind: &step, ContentExcerpt: "first line\nsecond line", UpdatedAt: "t1", Tags: []string{"go"}},
+		{ID: "mem_2", Type: "fact.note", OwnerUserID: "usr_2", Title: &title, ContentExcerpt: "body", UpdatedAt: "t2"},
+		{ID: "mem_3", Type: "fact.note", WriterKind: &session, UpdatedAt: "t3"},
 	}
 	var b bytes.Buffer
 	renderMemories(&b, items)
 	golden(t, "Memories", b.String(),
-		`ID     TYPE              SUMMARY          UPDATED  TAGS
------  ----------------  ---------------  -------  ----
-mem_1  experience.debug  first line       t1       go
-mem_2  fact.note         a titled lesson  t2       -
-mem_3  fact.note         -                t3       -
+		`ID     TYPE              AUTHOR  WRITER   SUMMARY          UPDATED  TAGS
+-----  ----------------  ------  -------  ---------------  -------  ----
+mem_1  experience.debug  Ada     step     first line       t1       go
+mem_2  fact.note         usr_2   -        a titled lesson  t2       -
+mem_3  fact.note         -       session  -                t3       -
 `)
 }
 

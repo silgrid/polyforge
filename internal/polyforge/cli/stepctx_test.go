@@ -205,3 +205,30 @@ func TestStepRefusesProfileFlag(t *testing.T) {
 		})
 	}
 }
+
+// TestStepTaskRecallNoWriterFilter (polyforge#119 AC2): the writer
+// filter is the human face's alone. A task agent's
+// `pf recall --writer-kind` is refused locally before any daemon
+// request; `pf step recall` has no such flag at all (the flag parser
+// refuses it inside a step, and the daemon's search proxy forwards no
+// writer parameter either).
+func TestStepTaskRecallNoWriterFilter(t *testing.T) {
+	env, drec, arec := stepEnv(t)
+	// Task mode: refused locally, no daemon call, no aihub call.
+	env["PF_TASK_ID"] = "task_0123456789abcdef"
+	delete(env, "PF_WI_ID")
+	if code, _, stderr := runPf(t, env, "recall", "--project", "polyforge", "x", "--writer-kind", "step"); code != 1 ||
+		!strings.Contains(stderr, "a task agent searches only") {
+		t.Fatalf("task --writer-kind: exit %d %s", code, stderr)
+	}
+	if n := len(drec.all()); n != 0 {
+		t.Fatalf("the refused task filter reached the daemon %d time(s)", n)
+	}
+	if n := len(arec.all()); n != 0 {
+		t.Fatalf("the refused task filter reached aihub %d time(s)", n)
+	}
+	// Step mode: pf step recall carries no writer filter flag.
+	if code, _, stderr := runPf(t, env, "step", "recall", "--writer-kind", "step", "x"); code != 1 {
+		t.Fatalf("step recall --writer-kind: exit %d %s", code, stderr)
+	}
+}

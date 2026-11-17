@@ -1,0 +1,14 @@
+-- deploy/sql/v0.2.3/rollback.sql — the automatic-rollback counterpart of
+-- upgrade.sql (the memory writer columns, polyforge#107).
+--
+-- deploy.sh runs this ONLY for a version applied in the same deploy run,
+-- as ONE SQLite transaction, BEFORE the old image is recreated. Unlike
+-- v0.2.1's rollback this one is a NO-OP by owner ruling (Q7): the writer
+-- attribution is durable provenance data — dropping the columns would
+-- lose it — and the v0.2.2 binary names its columns on every read and
+-- write, so it serves the table unchanged with the two extra nullable
+-- columns present. The probe keeps answering 0 (the columns are still
+-- there), which is correct: a re-deploy of this version needs no SQL,
+-- the columns already exist. The statement below only satisfies the
+-- runner's one-statement minimum; it writes nothing.
+SELECT 1;

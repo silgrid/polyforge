@@ -434,8 +434,10 @@ const SearchExcerptRunes = 120
 // browse page's next_cursor) are the browse paging parameters, sent
 // only when non-empty: aihub answers MEM-400 when they ride a keyword
 // search, so the mixed shape is refused there, never paraphrased here.
+// writerKind ("session"/"step", polyforge#107's writer filter) is sent
+// only when non-empty, in both modes — the caller validates it.
 // Each keyword hit carries a SearchExcerptRunes content_excerpt.
-func (c *Client) SearchMemories(project, q, memType string, tags []string, limit int, match, sort, after string) (json.RawMessage, error) {
+func (c *Client) SearchMemories(project, q, memType string, tags []string, limit int, match, sort, after, writerKind string) (json.RawMessage, error) {
 	v := url.Values{}
 	v.Set("project", project)
 	if q != "" {
@@ -459,6 +461,9 @@ func (c *Client) SearchMemories(project, q, memType string, tags []string, limit
 	}
 	if limit > 0 {
 		v.Set("limit", strconv.Itoa(limit))
+	}
+	if writerKind != "" {
+		v.Set("writer_kind", writerKind)
 	}
 	return c.raw("GET", "/api/v1/memories/search?"+v.Encode(), nil)
 }

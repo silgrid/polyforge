@@ -24,7 +24,10 @@
 #      declares both skills).
 #   4. daemon — `pf daemon ensure` (also run by the harness adapters at
 #      session start, e.g. after a reboot).
-#   5. verify — pf doctor.
+#   5. verify — the harness context files' guidance blocks (one
+#      `pf doctor --fix-harness-prompts` append per install/upgrade,
+#      idempotent, never creating a file — polyforge#101), then
+#      `pf doctor` as the one health judgement.
 #   Opt-in --with-pi-web (the default installs pf only): the
 #      Pi Web package of the SAME release — silgrid-pi-web-<VER>.tgz and its
 #      SHA256SUMS line from $REPO at $VER — is downloaded and checksum-
@@ -788,6 +791,13 @@ else
 fi
 # ─── 5. verify ──────────────────────────────────────────────────────
 echo "== 5/5 verify"
+# The harness context files' guidance blocks (the native-SVG diagram
+# block and the concise-output block): one append per install/upgrade
+# (polyforge#101 — the owner-ruled automatic fix; the flag is
+# append-only, idempotent and never creates a file, so a machine whose
+# files already carry the blocks changes nothing and a first install
+# with no context files is a no-op). Not fatal: a warn is reported.
+"$BIN" doctor --fix-harness-prompts 2>&1 | sed 's/^/   /' || true
 # pf doctor is the one health judgement (aihub key and projects, daemon
 # socket, mapping, harnesses); a fail is reported, never fatal here.
 "$BIN" doctor 2>&1 | sed 's/^/   /' || true
