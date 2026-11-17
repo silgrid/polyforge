@@ -1702,10 +1702,10 @@ def micro_bounds_of(repos_dir: str, evidence: Sequence[Dict[str, str]]) -> Dict[
     if not problems and not repos_out:
         problems.append("the change touches no task repository")
     if problems:
-        out = {"in_bounds": False, "reason": MICRO_REASON_HEAD + "; ".join(problems), "repos": []}
+        verdict = {"in_bounds": False, "reason": MICRO_REASON_HEAD + "; ".join(problems), "repos": []}
         if not_judged:
-            out["not_judged"] = True
-        return out
+            verdict["not_judged"] = True
+        return verdict
     return {"in_bounds": True, "repos": repos_out}
 
 
