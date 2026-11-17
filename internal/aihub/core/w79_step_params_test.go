@@ -2,7 +2,8 @@ package core
 
 // w79_step_params_test.go (u1, polyforge#79): a queued work item's
 // per-ticket step params ride ONE reserved top-level attrs key,
-// `step_params` — {"<step-id>": {"<param>": "<value>"}} — so any machine
+// `step_params` — one entry object per param, {"<step-id>": {"<param>":
+// {"value": …, "at": <write time>}}} — so any machine
 // and any Cell that claims the ticket sees them. The key's one writer is
 // the daemon on its machine-signed attrs route (the write validates the
 // params against this machine's lane and merges them into the capsule

@@ -81,8 +81,9 @@ type StepParamAttr struct {
 // carries under api.StepParamsKey — {"<step-id>": {"<param>": {"value":
 // "<value>", "at": "<RFC 3339 write time>"}}}, map[step]map[param]entry —
 // tolerating anything else: a non-object key, a step entry that is no
-// object, an entry without a usable value, an empty step or param name
-// are all dropped (the attrs key is a machine-written boundary whose
+// object, an entry that is no map or whose value is missing, null or not
+// a string, an empty step or param name are all dropped — never kept as
+// an empty value (the attrs key is a machine-written boundary whose
 // entries were judged against a lane at write time; the claim re-validates
 // every kept entry against its own lane snapshot, and a planted or
 // drifted shape never blocks a claim). An entry without a parseable time
@@ -111,20 +112,22 @@ func StepParamsOfAttrs(attrs map[string]any) map[string]map[string]StepParamAttr
 			if name == "" {
 				continue
 			}
-			value, at := "", ""
-			switch e := v.(type) {
-			case string:
-				// a bare value (the signature stage's own writes): its
-				// write time is unknown
-				value = e
-			case map[string]any:
-				if s, ok := e["value"].(string); ok {
-					value = s
-				}
-				if s, ok := e["at"].(string); ok {
-					at = s
-				}
+			// the key's ONE writer (the daemon's queued write) produces
+			// one entry object per param; anything else — a bare string
+			// (a shape only this change's intermediate commits wrote,
+			// never shipped: no compat path), an entry that is no map —
+			// is junk
+			e, ok := v.(map[string]any)
+			if !ok {
+				continue
 			}
+			value, ok := e["value"].(string)
+			if !ok {
+				// a missing, null or non-string value is an entry without
+				// a usable value: dropped, never kept as ""
+				continue
+			}
+			at, _ := e["at"].(string)
 			if strings.Contains(value, "\n") {
 				continue
 			}

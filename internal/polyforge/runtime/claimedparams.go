@@ -82,9 +82,10 @@ func (r *Runtime) writeClaimedStepParams(ctx context.Context, j *job) error {
 
 // claimedStepParams judges the attrs' entries against the fresh capsule's
 // lane snapshot: it answers the pending-shaped entries to merge (each
-// param with By=step_params and the claim's time — later than any pending
-// aspect of the same param). An entry the snapshot does not declare, or
-// whose value breaks the bound, is dropped with one stderr line naming it.
+// param with By=step_params and its OWN recorded write time — the time
+// the merge judges it by, never the claim's). An entry the snapshot does
+// not declare, or whose value breaks the bound, is dropped with one
+// stderr line naming it.
 func claimedStepParams(params map[string]map[string]StepParamAttr, j *job) map[string]*capsule.StepOverride {
 	dir := filepath.Join(j.capsuleDir, capsule.DirWorkflows, j.bundleName)
 	lane, errs := workflow.Load(dir)

@@ -184,7 +184,7 @@ func TestW79ClaimKeepsKeyOnPublishFailure(t *testing.T) {
 	r, hub, _ := w79ParamsEnv(t)
 	const wi = "wi_w79e"
 	w79SeedStepParams(hub, wi, map[string]any{
-		"build": map[string]any{"image": "reg/w79:1"},
+		"build": map[string]any{"image": w79Attr("reg/w79:1", w79Older)},
 	})
 	real := pendingPublishFn
 	t.Cleanup(func() { pendingPublishFn = real })

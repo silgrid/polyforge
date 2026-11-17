@@ -92,8 +92,9 @@ const (
 )
 
 // StepParamsKey is the reserved top-level WI attrs key carrying a QUEUED
-// work item's per-ticket step params (polyforge#79):
-// {"<step-id>": {"<param>": "<value>"}}. Any machine and any Cell that
+// work item's per-ticket step params (polyforge#79): one entry object
+// per param, {"<step-id>": {"<param>": {"value": …, "at": <write time>}}}.
+// Any machine and any Cell that
 // claims the ticket sees them; the daemon's machine-signed attrs route is
 // the one writer (a create cannot plant it), and the claim merges them
 // into the capsule and clears the key once that publish succeeded.
