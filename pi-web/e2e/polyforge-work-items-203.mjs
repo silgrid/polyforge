@@ -1,4 +1,4 @@
-// carries: components/PolyforgeWorkItems*, components/PolyforgeSearchBar*, lib/polyforge-work-items*, app/api/polyforge/work-items/*, app/api/polyforge/polyforge-work-items-routes*
+// carries: components/PolyforgeWorkItems*, components/PolyforgeWorkItemParams*, components/PolyforgeSearchBar*, lib/polyforge-work-items*, app/api/polyforge/work-items/*, app/api/polyforge/polyforge-work-items-routes*
 // — the Work panel's third, read-only 全部 sub-tab.
 //
 // Authored pre-code against artifacts/spec.md (Requirements 1–11) and
@@ -120,6 +120,9 @@ if (rest[0] === "config" && rest[1] === "list") out({ items: [{ key: "user_id", 
   { key: '[workspace."' + s.ws + '"]', section: true, value: "workbench, polyforge" }] });
 if (rest[0] === "msg" && rest[1] === "list") out({ conversations: [] });
 if (rest[0] === "msg" && rest[1] === "contacts") out({ contacts: [] });
+if (rest[0] === "params") out({ work_item: rest[1], posture: "queued", steps: [
+  { id: "fix", status: "not started", params: [{ name: "image", value: "reg/wi203:1", source: "step override" }] },
+] });
 if (rest[0] === "recall") out({ items: [], total: 0 });
 if (rest[0] === "task" && rest[1] === "list") out({ tasks: [], now: new Date().toISOString() });
 if (rest[0] === "queue") {

@@ -1009,6 +1009,24 @@ param's final value per mapped project and its level — the project's
 value or the lane default ([commands](commands.md)); `pf config workspace`
 lists the file's own values.
 
+#### Queued work items — params before the claim (polyforge#79)
+
+A queued work item's per-ticket params ride the reserved `step_params`
+attrs key of the work item (one JSON document,
+`{"<step-id>": {"<param>": "<value>"}}`) — any machine and any Cell that
+claims the ticket sees them, an auto-claimed one included. The CLI face is
+the same: `pf override <id> --step <step-id> --param <name>=<value>` (or
+`--clear-param <name>`) on a queued work item writes the key through the
+daemon's machine-signed attrs route, judged against the writing machine's
+lane set; `pf file create --attr step_params=…` is refused (the daemon is
+the one writer). At the claim the fresh capsule's own lane snapshot is the
+judge: every declared, legal entry merges into the capsule's overlay
+record (the per-ticket layer above), anything else is dropped with a line
+— never a refused claim — and the claim merges them into the capsule and
+clears the key once that publish succeeded. `pf params <id>` reads every
+declared param's final value and its source back, a queued work item
+included ([commands](commands.md)).
+
 ### `steps.<project>.task` — the one-shot task agent
 
 ```yaml
