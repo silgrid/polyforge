@@ -212,7 +212,8 @@ class MergeTargetTest(unittest.TestCase):
                                "--capsule", w.capsule, "--json", "--out", out)
         assert res is not None
         r = repo_of(res, "app")
-        self.assertEqual((code, r["how"], r["by_this_run"], r["branch_side"]), (0, "merged", True, head), err)
+        self.assertEqual(code, 0, err)
+        self.assertEqual((r["how"], r["by_this_run"], r["branch_side"]), ("merged", True, head), r)
         with open(landing, encoding="utf-8") as f:
             rec = json.load(f)
         self.assertEqual((rec["state"], rec["target"]), ("landed_on_target", "epic/1"), rec)
@@ -288,7 +289,8 @@ class MergeTargetTest(unittest.TestCase):
                                "--capsule", w.capsule, "--json", "--out", out, PF_STEP="merge")
         assert res is not None
         r = repo_of(res, "app")
-        self.assertEqual((code, r["how"]), (0, "merged_by_human"), err)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(r["how"], "merged_by_human", r)
         with open(landing, encoding="utf-8") as f:
             rec = json.load(f)
         self.assertEqual((rec["state"], rec["target"]), ("landed_on_target", "epic/1"), rec)
