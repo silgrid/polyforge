@@ -157,10 +157,12 @@ const (
 	// until this line was accepted in the round)
 	w374WrapAttrsLine = "pf step hub wrap-attrs integration @artifacts/merge/landing.json"
 	w374AbortLine     = `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/sync.py" --abort --json --out artifacts/sync/result.json`
-	// the review skill's three lines (workflow contract v2 PR 12)
-	w374FactsPlanLine    = `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" plan-conformance --json --out artifacts/facts/plan-conformance.json`
-	w374FactsReplayLine  = `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" build --replay --isolation host --json --out artifacts/facts/build.json`
-	w374FactsCarriesLine = `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" carries --json --out artifacts/facts/carries.json`
+	// the review skill's four lines (workflow contract v2 PR 12; the
+	// analysis line is polyforge#112's)
+	w374FactsPlanLine     = `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" plan-conformance --json --out artifacts/facts/plan-conformance.json`
+	w374FactsReplayLine   = `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" build --replay --isolation host --json --out artifacts/facts/build.json`
+	w374FactsCarriesLine  = `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" carries --json --out artifacts/facts/carries.json`
+	w374FactsAnalysisLine = `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" analysis --json --out artifacts/facts/analysis.json`
 )
 
 // w374ReviewRoute is the python the scripted review agent classes the
@@ -395,11 +397,11 @@ func (x *w374DevelopWorld) mainMoves(files map[string]string, msg string) string
 	return b.String()
 }
 
-// reviewAction is the scripted review agent: the skill's three facts.py
+// reviewAction is the scripted review agent: the skill's four facts.py
 // lines as written, then the route (review-route.py with mode).
 func (x *w374DevelopWorld) reviewAction(mode string, world ...string) map[string]any {
 	act := map[string]any{"do": "envelope", "id": "review", "outcome": "completed", "output_file": "artifacts/review-out.json", "no_started_at": true,
-		"run": []string{w374FactsPlanLine, w374FactsReplayLine, w374FactsCarriesLine,
+		"run": []string{w374FactsPlanLine, w374FactsReplayLine, w374FactsCarriesLine, w374FactsAnalysisLine,
 			"python3 -I " + filepath.Join(x.scripts, "review-route.py") + " " + shellQuote(mode)}}
 	if len(world) > 0 {
 		act["world"] = world

@@ -84,3 +84,7 @@
    diff touches; the engine's `--light` report and its `carries:` declarations). So is an
    `uncovered` list that does not match that report, or a listed test that does not exist
    (its file or name) — each finding names the missing or wrong entry.
+   `artifacts/facts/analysis.json` (`facts.py analysis`) names each entry that fails the
+   close check (the same shared validator this gate's machine twin calls): a listed test
+   that does not exist, cannot run as written, or whose run does not show its marker is a
+   blocking `test_weakened` finding naming the entry.
