@@ -83,3 +83,67 @@ func TestPF106TaskEntryCarriesItsTicket(t *testing.T) {
 		t.Fatalf("a completed analysis entry = %+v", e)
 	}
 }
+
+// TestPF106RerunSuccessResolvesEarlierFailures (AC2): a later terminal of
+// the same Cell's ticket resolves the ticket's earlier open task entries —
+// a rerun that completed ends the story (the feed's attention count drops
+// with it), a newer failure stands in for the older one (at most one open
+// entry per ticket); another ticket's, and another Cell's entries of the
+// same ticket id stay untouched.
+func TestPF106RerunSuccessResolvesEarlierFailures(t *testing.T) {
+	f := testFeed(t)
+	rec := func(profile, id string, st task.State, wi string) {
+		t.Helper()
+		if err := f.RecordTask(profile, pf106AnalysisTask(id, st, wi)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entry := func(id string) protocol.Decision {
+		t.Helper()
+		for _, e := range f.List().Decisions {
+			if e.TaskID == id {
+				return e
+			}
+		}
+		t.Fatalf("no entry of task %s", id)
+		return protocol.Decision{}
+	}
+	rec("default", "task_0000000000000101", task.StateFailed, "wi_pf106")
+	rec("alpha", "task_0000000000000201", task.StateFailed, "wi_pf106")
+	if got := f.List().Attention; got != 2 {
+		t.Fatalf("setup: attention = %d, want both first failures: %v", got, f.List())
+	}
+	// a newer terminal stands in for the older failure: one open entry of
+	// the ticket per Cell
+	rec("default", "task_0000000000000102", task.StateInterrupted, "wi_pf106")
+	if got := f.List().Attention; got != 2 {
+		t.Fatalf("the interrupted terminal left the earlier failure open: attention = %d, %v", got, f.List())
+	}
+	if e := entry("task_0000000000000101"); !e.Resolved || e.Dismissed {
+		t.Fatalf("the earlier failure of the ticket must be resolved by the newer terminal: %+v", e)
+	}
+	if e := entry("task_0000000000000201"); e.Resolved {
+		t.Fatalf("another Cell's entry of the same ticket must stay: %+v", e)
+	}
+	// the rerun completes: the ticket's story ends here, attention drops
+	rec("default", "task_0000000000000103", task.StateCompleted, "wi_pf106")
+	if got := f.List().Attention; got != 1 {
+		t.Fatalf("a completed rerun must leave only the other Cell's entry: attention = %d, %v", got, f.List())
+	}
+	for _, id := range []string{"task_0000000000000101", "task_0000000000000102"} {
+		if e := entry(id); !e.Resolved {
+			t.Fatalf("the ticket's earlier entries must be resolved: %+v", e)
+		}
+	}
+	if e := entry("task_0000000000000103"); e.Attention || e.Resolved {
+		t.Fatalf("the completed rerun is the informational completion: %+v", e)
+	}
+	if e := entry("task_0000000000000201"); e.Resolved || !e.Open() {
+		t.Fatalf("another Cell's entry of the same ticket must still stand open: %+v", e)
+	}
+	// another ticket's failure never resolves: the binding is the ticket id
+	rec("default", "task_0000000000000301", task.StateFailed, "wi_pf106_other")
+	if got := f.List().Attention; got != 2 {
+		t.Fatalf("another ticket's failure must be its own open entry: attention = %d, %v", got, f.List())
+	}
+}
