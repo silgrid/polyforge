@@ -23,6 +23,7 @@ func TestRewindOnlyCoverage(t *testing.T) {
 		"a step between target and gate":         "max_rewinds: 1\nsteps:\n  - id: build\n  - id: fix\n    rewind_only: true\n  - id: check\n    gate: true\n    on_fail: { target: build }\n",
 		"a gate covered by a later gate's range": "max_rewinds: 1\nsteps:\n  - id: build\n  - id: check-a\n    gate: true\n    rewind_only: true\n    on_fail: { target: build }\n  - id: check-b\n    gate: true\n    on_fail: { target: build }\n",
 		"either of two gates covers it":          "max_rewinds: 1\nsteps:\n  - id: build\n  - id: fix\n    rewind_only: true\n  - id: check-b\n    gate: true\n    on_fail: { target: build }\n  - id: check-a\n    gate: true\n    on_fail: { target: fix }\n",
+		"only an earlier gate's range covers it": "max_rewinds: 1\nsteps:\n  - id: build\n  - id: fix\n    rewind_only: true\n  - id: check-a\n    gate: true\n    on_fail: { target: fix }\n  - id: check-b\n    gate: true\n    on_fail: { target: check-a }\n",
 	} {
 		lane, errs := workflow.Load(workflowtest.WriteLane(t, t.TempDir(), "demo", front))
 		if len(errs) > 0 || lane == nil {
