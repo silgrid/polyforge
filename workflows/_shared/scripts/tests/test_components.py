@@ -6,7 +6,14 @@ and the scope engine's acceptance of the keys: the engine reads none of
 them (the components.py tool owns them — the not_runnable_rule
 precedent), so it answers the same report for a conf that declares them
 and one that does not, keeps the gate id unchanged (the keys are no gate
-keys), and never diagnoses them as unknown."""
+keys), and never diagnoses them as unknown.
+
+The tool itself (AC2): workflows/_shared/scripts/components.py — one or
+more clones, the origin/HEAD (else HEAD) commit tree read (never the
+work tree), the generic division (declared ranges, nested conf roots,
+manifest subdirectories — each nest outermost —, first-level
+directories, the root files), the testdata/node_modules/vendor segments
+excluded, the line report and the --json schema 1."""
 
 import json
 import os
@@ -16,10 +23,11 @@ from typing import Any, Dict, Tuple
 
 from pfstep import components, gateid
 
-from .gitworld import GitCase, Repo
+from .gitworld import GitCase, Repo, git
 
 SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENGINE = os.path.join(SCRIPTS, "verify-scope")
+TOOL = os.path.join(SCRIPTS, "components.py")
 CONF = ".polyforge/verify-scope.conf"
 DOCKERFILE = ".polyforge/Dockerfile.verify"
 
@@ -144,6 +152,146 @@ class GateIdUnchangedTest(GitCase):
         repo.commit("a gate key moves",
                     {CONF: BASE_CONF + "full_command=echo full\n", DOCKERFILE: "FROM demo\n"})
         self.assertNotEqual(gateid.gate_id(d, "HEAD"), with_id)
+
+
+GENERIC_FILES = {
+    "web/.polyforge/verify-scope.conf": "component=ignored|web/src\n",  # only marks the subdir
+    "web/src/app.ts": "x\n",
+    "tools/py/pyproject.toml": "[project]\n",
+    "tools/py/mod.py": "x = 1\n",
+    "tools/run.sh": "echo\n",
+    "internal/x.go": "package x\n",
+    "test/main.go": "package test\n",
+    "test/testdata/verify-scope/go-fixture/go.mod": "module fixture\n",  # excluded: testdata
+    "node_modules/pkg/package.json": "{}\n",  # excluded: node_modules
+    "vendor/lib/a.c": "int a;\n",  # excluded: vendor
+    "docs/a.md": "a\n",
+    "docs/b.txt": "b\n",
+    "go.mod": "module m\n",
+    "README.md": "readme\n",
+    ".polyforge/verify-scope.conf": "stack=none\nfast_gate=true\n",
+}
+
+
+class ComponentsToolTest(GitCase):
+    """The entry script's behaviour on synthetic clones. The expected
+    division is derived by hand from the fixture's layout (the ticket's
+    generic definition), never from the implementation's output."""
+
+    def run_tool(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["python3", TOOL, *args], capture_output=True, text=True,
+                              stdin=subprocess.DEVNULL)
+
+    def repo_with(self, name: str, files: Dict[str, str]) -> str:
+        d = os.path.join(self.tmp, name)
+        Repo(d, files)
+        return d
+
+    def test_the_tool_divides_by_the_generic_definition(self) -> None:
+        d = self.repo_with("generic", GENERIC_FILES)
+        c = self.run_tool("--repo", d)
+        self.assertEqual(c.returncode, 0, c.stderr)
+        self.assertEqual(c.stderr, "")
+        for want in (
+            "  component web  [web]  nested conf",
+            "  component tools/py  [tools/py]  manifest",
+            "  component .polyforge  [.polyforge]  top-level",
+            "  component docs  [docs]  top-level, documentation",
+            "  component internal  [internal]  top-level",
+            "  component test  [test]  top-level",
+            "  component tools  [tools]  top-level",
+            "  component .  [README.md, go.mod]  root files",
+            "  thresholds epic_components 3 (default), epic_units 8 (default),"
+            " epic_files 30 (default)",
+        ):
+            self.assertIn(want, c.stdout, want)
+        # the excluded segments leave no component behind
+        self.assertNotIn("testdata", c.stdout)
+        self.assertNotIn("node_modules", c.stdout)
+        self.assertNotIn("vendor", c.stdout)
+        # the root report names the commit it read
+        self.assertRegex(c.stdout.splitlines()[0], r"^repo generic [0-9a-f]{40} \(HEAD\)$")
+
+    def test_the_tree_read_is_origin_head_not_the_worktree(self) -> None:
+        origin = self.repo_with("origin", {"a.go": "a\n",
+                                            CONF: "component=old|old\n"})
+        d = os.path.join(self.tmp, "clone")
+        git(self.tmp, "clone", "-q", origin, d)
+        old_commit = git(d, "rev-parse", "origin/HEAD")
+        # a newer commit on the clone's own branch, invisible to origin/HEAD
+        with open(os.path.join(d, CONF), "w", encoding="utf-8") as f:
+            f.write("component=new|new\n")
+        git(d, "add", "-A")
+        git(d, "commit", "-q", "-m", "new declaration")
+        c = self.run_tool("--repo", d, "--json")
+        self.assertEqual(c.returncode, 0, c.stderr)
+        doc = json.loads(c.stdout)
+        self.assertEqual(doc["schema"], 1)
+        entry = doc["repos"][0]
+        self.assertEqual(entry["commit"], old_commit)
+        self.assertEqual(entry["rev"], "origin/HEAD")
+        self.assertEqual([cmp["name"] for cmp in entry["components"]], ["old"])
+        # --rev overrides the revision read
+        c = self.run_tool("--repo", d, "--rev", "HEAD", "--json")
+        entry = json.loads(c.stdout)["repos"][0]
+        self.assertEqual(entry["rev"], "HEAD")
+        self.assertNotEqual(entry["commit"], old_commit)
+        self.assertEqual([cmp["name"] for cmp in entry["components"]], ["new"])
+
+    def test_the_json_schema_and_the_threshold_sources(self) -> None:
+        d = self.repo_with("declared", {CONF: "component=core|src,lib\nepic_units=9\n",
+                                        "src/a.go": "package a\n", "lib/b.go": "package b\n",
+                                        "docs/x.md": "x\n"})
+        c = self.run_tool("--repo", d, "--json")
+        self.assertEqual(c.returncode, 0, c.stderr)
+        entry = json.loads(c.stdout)["repos"][0]
+        self.assertEqual(entry["repo"], "declared")
+        self.assertEqual(set(entry), {"repo", "commit", "rev", "components", "thresholds"})
+        self.assertEqual(entry["components"], [
+            {"name": "core", "paths": ["src", "lib"], "source": "declared",
+             "documentation_only": False},
+            {"name": "docs", "paths": ["docs"], "source": "top-level",
+             "documentation_only": True},
+        ])
+        self.assertEqual(entry["thresholds"], {
+            "epic_components": 3, "epic_units": 9, "epic_files": 30,
+            "source": {"epic_components": "default", "epic_units": "declared",
+                       "epic_files": "default"},
+        })
+
+    def test_a_declared_range_wins_over_the_generic_division(self) -> None:
+        d = self.repo_with("win", {CONF: "component=ui|web\n",
+                                   "web/.polyforge/verify-scope.conf": "stack=none\n",
+                                   "web/src/app.ts": "x\n", "web/e2e/a.mjs": "e\n",
+                                   "other/o.go": "package o\n"})
+        c = self.run_tool("--repo", d, "--json")
+        entry = json.loads(c.stdout)["repos"][0]
+        self.assertEqual([cmp["name"] for cmp in entry["components"]], ["ui", "other"])
+        self.assertEqual(entry["components"][0]["paths"], ["web"])
+
+    def test_several_repos_report_in_order_with_per_repo_errors(self) -> None:
+        a = self.repo_with("a", {"x.go": "x\n"})
+        b = self.repo_with("b", {CONF: "component=core|src\n", "src/y.go": "y\n"})
+        c = self.run_tool("--repo", a, "--repo", b, "--repo", self.new_dir("plain"))
+        self.assertEqual(c.returncode, 0, c.stderr)
+        self.assertIn("repo a ", c.stdout)
+        self.assertIn("component core  [src]  declared", c.stdout)
+        self.assertIn("repo plain ", c.stdout)
+        self.assertIn("cannot read", c.stdout)
+
+    def test_bad_conf_lines_are_diagnosed_on_stderr(self) -> None:
+        d = self.repo_with("bad", {CONF: "component=x|../escape\ncomponent=core|src\n",
+                                   "src/a.go": "a\n"})
+        c = self.run_tool("--repo", d)
+        self.assertEqual(c.returncode, 0)
+        self.assertEqual([cmp["name"] for cmp in json.loads(self.run_tool(
+            "--repo", d, "--json").stdout)["repos"][0]["components"]], ["core"])
+        self.assertTrue(any("component" in line for line in c.stderr.splitlines()), c.stderr)
+
+    def test_usage_errors(self) -> None:
+        c = self.run_tool()
+        self.assertEqual(c.returncode, 2)
+        self.assertIn("--repo", c.stderr)
 
 
 if __name__ == "__main__":
