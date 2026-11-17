@@ -96,6 +96,18 @@ class ConfKeysTest(unittest.TestCase):
                 self.assertEqual(r.thresholds.epic_components, 3, bad)
                 self.assertTrue(any("epic_components" in d for d in r.diagnostics), bad)
 
+    def test_a_trailing_slash_is_normalized_and_a_dot_range_is_rejected(self) -> None:
+        """A declared path range is a prefix: a trailing slash is the
+        same prefix (normalized, no diagnostic) and a bare dot names no
+        path ever (diagnosed and ignored — review r1#5). The expected
+        values come from the range's meaning, not the parser's output."""
+        r = components.read_conf("component=core|src/,lib\n")
+        self.assertEqual([c.paths for c in r.components], [["src", "lib"]])
+        self.assertEqual(r.diagnostics, [])
+        r = components.read_conf(BASE_CONF + "component=core|.\n")
+        self.assertEqual(r.components, [])
+        self.assertTrue(any("component" in d for d in r.diagnostics))
+
     def test_a_repeated_threshold_keeps_its_first_declaration(self) -> None:
         r = components.read_conf("epic_units=9\nepic_units=10\n")
         self.assertEqual(r.thresholds.epic_units, 9)
