@@ -31,9 +31,9 @@ func TestPF89ComponentRulesTextsContract(t *testing.T) {
 		}
 		return string(raw)
 	}
-	configMD := read(filepath.Join("docs", "reference", "config.md"))
-	commandsMD := read(filepath.Join("docs", "reference", "commands.md"))
-	promptMD := read(filepath.Join("internal", "polyforge", "daemon", "analysis_prompt.md"))
+	configMD := strings.Join(strings.Fields(read(filepath.Join("docs", "reference", "config.md"))), " ")
+	commandsMD := strings.Join(strings.Fields(read(filepath.Join("docs", "reference", "commands.md"))), " ")
+	promptMD := strings.Join(strings.Fields(read(filepath.Join("internal", "polyforge", "daemon", "analysis_prompt.md"))), " ")
 
 	// The config reference's key table: the declaration, the three
 	// thresholds, the defaults and the reader split (the engine reads
@@ -59,7 +59,7 @@ func TestPF89ComponentRulesTextsContract(t *testing.T) {
 		"nested engine root",
 		"each nest at its outermost",
 		"first-level directory",
-		"the root files forming one component",
+		"root files forming one component",
 		"testdata, node_modules or vendor",
 		"listed but never counted",
 	} {
