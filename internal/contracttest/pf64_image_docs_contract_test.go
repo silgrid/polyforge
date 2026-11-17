@@ -61,6 +61,13 @@ func TestPF64ImageParamDocs(t *testing.T) {
 			"--mount=type=secret",
 			"--ssh default=$SSH_AUTH_SOCK",
 			"`GOMODCACHE` outside",
+			// the example builds as written: the module files are copied in,
+			// and the ssh agent can actually serve the private fetch
+			"COPY go.mod go.sum",
+			"insteadOf",
+			"ssh-keyscan",
+			"the build context is the repo",
+			"in its env form",
 		)
 	})
 	t.Run("config: the first lane-declared parameter", func(t *testing.T) {
@@ -77,6 +84,9 @@ func TestPF64ImageParamDocs(t *testing.T) {
 			"one image for every gated repo of the project",
 			"resolved to its local ID and started by it",
 			"the fixed mark `pf-verify-image-missing` in the summary",
+			// what a run in a prepared image records in its result
+			"where the value came from",
+			"hash the ID alone",
 			// the gate id's image line, and the missing dockerfile line
 			"tools/gate-id [--show] [--image <digest>] [<rev>]",
 			"line follows the dockerfile one",
@@ -95,6 +105,10 @@ func TestPF64ImageParamDocs(t *testing.T) {
 			"names a prepared image every touched repo's bar then runs in, Dockerfile or not",
 			"names a prepared image every gated repo runs in",
 			"`pf-verify-image-missing`",
+			// the container record's keys and the gated condition (review r1#3)
+			"or whose step parameter `image` names one",
+			"`digest` and `repo_digests`",
+			"image_digest`, `image_source` and `repo_digests`",
 		)
 	})
 	t.Run("the Dockerfile-only statements elsewhere", func(t *testing.T) {
