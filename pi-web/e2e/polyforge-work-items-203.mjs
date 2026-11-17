@@ -712,16 +712,17 @@ try {
       await waitFor(async () => /reg\/wi203:1/.test(await params.innerText()), "the params section shows the composed final value", 20_000);
       assert.ok((await params.innerText()).includes("step override"), "the source label shows");
       assert.equal(await params.locator('[data-pf-wi-param-input="image"]').count(), 1, "a queued ticket's param row carries the write controls");
-      // the set rides `pf --json override <wi> --step fix --param …`
+      // the set rides `pf --json override <wi> --step fix --param …`; the
+      // success's one re-read is counted from BEFORE the click (the POST
+      // may settle while the argv wait below runs)
+      const paramReads = () => calls().filter((a) => a[0] === "params").length;
+      const after = paramReads();
       await params.locator('[data-pf-wi-param-input="image"]').fill("reg/wi203:new");
       await params.locator('[data-pf-wi-param-set="image"]').click();
       await waitFor(async () => {
         const line = calls().find((a) => a[0] === "override");
         return line && JSON.stringify(line) === JSON.stringify(["override", queued.id, "--step", "fix", "--param", "image=reg/wi203:new"]);
       }, "the set ran `pf --json override <wi> --step fix --param image=reg/wi203:new`", 20_000);
-      // the write's success re-reads the view exactly once
-      const paramReads = () => calls().filter((a) => a[0] === "params").length;
-      const after = paramReads();
       await waitFor(async () => paramReads() === after + 1, "the write's success re-reads the params view once", 20_000);
       // the claim race: the 200 answer's note names it, and it shows
       seed({ detail: { ...queued, content: body, content_len: Buffer.byteLength(body, "utf8") },
