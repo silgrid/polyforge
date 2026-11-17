@@ -1,4 +1,4 @@
-// carries: app/api/sessions/*, lib/json-response*, next.config.ts
+// carries: next.config.ts
 // Online compression checks for the session routes (polyforge#105): since
 // Next 16.4.5 the server strips an application-set Content-Encoding and, from
 // 16.4.6 on, compresses large route-handler responses itself. pi-web therefore
@@ -26,6 +26,14 @@
 //
 //   node e2e/sessions-compression.mjs
 //   npm run test:e2e:all -- sessions-compression.mjs
+//
+// carries: only next.config.ts. app/api/sessions/* already has its three
+// declarers (e2e/claude-session-219.mjs, e2e/run.mjs,
+// e2e/session-stall-recovery.mjs) and lib/e2e-carries.test.mjs caps a
+// tracked path at 3 declaring suites, so this suite must not declare them;
+// the full bar (E2E_SERVER_MODE=start npm run test:e2e:all) runs it for any
+// change anyway, and a light tier that changes only a route keeps its three
+// existing suites.
 //
 // The suite needs no browser, but `next start` needs a production build:
 // e2e/all.mjs builds once for a run that selects a browser suite and hands
