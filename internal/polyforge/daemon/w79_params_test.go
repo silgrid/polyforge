@@ -25,6 +25,12 @@ import (
 )
 
 // w79Lane: build and review declare params, merge declares none.
+// w79Entry answers one param's key entry in the shape the key's one
+// writer produces: {"value": …, "at": …}.
+func w79Entry(value string) map[string]any {
+	return map[string]any{"value": value, "at": "2026-01-01T00:00:00Z"}
+}
+
 const w79Lane = `max_rewinds: 3
 steps:
   - id: build
@@ -138,7 +144,7 @@ func TestW79ParamsViewQueued(t *testing.T) {
 	bundle := "w79-lane"
 	td.hub.items["wi_w79q"] = &api.WorkItem{ID: "wi_w79q", Status: api.StatusQueued, ProjectName: "proj",
 		BundleName: &bundle, Attrs: map[string]any{
-			api.StepParamsKey: map[string]any{"review": map[string]any{"image": "reg/ticket:3"}},
+			api.StepParamsKey: map[string]any{"review": map[string]any{"image": w79Entry("reg/ticket:3")}},
 		}}
 	v, ae := td.w79Params(t, "wi_w79q")
 	if ae != nil {
@@ -208,7 +214,7 @@ func TestW79OverrideViewQueued(t *testing.T) {
 	bundle := "w79-lane"
 	td.hub.items["wi_w79v"] = &api.WorkItem{ID: "wi_w79v", Status: api.StatusQueued, ProjectName: "proj",
 		BundleName: &bundle, Attrs: map[string]any{
-			api.StepParamsKey: map[string]any{"review": map[string]any{"image": "reg/ticket:3"}},
+			api.StepParamsKey: map[string]any{"review": map[string]any{"image": w79Entry("reg/ticket:3")}},
 		}}
 	// the chain below the overlay: review's models from the workspace yaml
 	ws, err := td.cfg.Mapping.WorkspaceFor("proj")
