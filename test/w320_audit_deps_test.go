@@ -175,7 +175,7 @@ func TestW320AuditDeclaredLevel(t *testing.T) {
 	dir := w320aTree(t)
 	// The production tree carries the moderate: red, naming surface, package and advisory.
 	err, code, args := w320aExec(t, dir, w320aRun{
-		npmOut:     w320aFixture(t, "npm-next-moderate.json"), npmRC: "1",
+		npmOut: w320aFixture(t, "npm-next-moderate.json"), npmRC: "1",
 		npmProdOut: w320aFixture(t, "npm-next-moderate.json"),
 		args:       []string{"--npm", "web", "--npm-prod-level", "moderate"},
 	})
