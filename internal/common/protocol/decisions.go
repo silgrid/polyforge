@@ -22,7 +22,10 @@ const (
 // event kind, workflow status or aihub status it came from (e.g. class
 // "failed" from source "failed_gate"). Phrase is the table's fixed
 // sentence — never text an agent wrote. Text is set only on a task entry:
-// the task's terminal summary.
+// the task's terminal summary. WI names the work item a work-item entry
+// belongs to — and, on a task entry, the ticket a daemon-scheduled
+// analysis task served (Spec.AnalysisOf, polyforge#72; empty for an
+// ordinary spawned task).
 type Decision struct {
 	ID         int64  `json:"id"`
 	At         string `json:"at"`

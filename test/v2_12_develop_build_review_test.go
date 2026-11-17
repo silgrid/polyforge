@@ -77,10 +77,13 @@ const v212WeakUnit = `cd repos/demo && printf '#!/bin/sh\necho NOTES-PASS\n' > t
 	`printf 'Notes.\n' > NOTES.md && git add -A && ` + w374Commit + ` -m 'u2: impl' && C2=$(git rev-parse HEAD) && sh tests/notes.sh && ` +
 	`printf 'T2=%s\nC2=%s\n' "$T2" "$C2" > ../../artifacts/u2.env`
 
-// v212UnitsBoth records u1 and u2 in artifacts/build/units.json.
+// v212UnitsBoth records u1 and u2 in artifacts/build/units.json (and the
+// change analysis a build's close writes, so the review's analysis line
+// judges a real file).
 const v212UnitsBoth = `. artifacts/u1.env && . artifacts/u2.env && mkdir -p artifacts/build && ` +
 	`printf '[{"id":"u1","test_commit":"%s","impl_commit":"%s","run":{"repo":"demo","cwd":".","argv":["sh","tests/answer.sh"]},"marker":"^ANSWER-PASS$"},` +
-	`{"id":"u2","test_commit":"%s","impl_commit":"%s","run":{"repo":"demo","cwd":".","argv":["sh","tests/notes.sh"]},"marker":"^NOTES-PASS$"}]' "$T" "$C" "$T2" "$C2" > artifacts/build/units.json`
+	`{"id":"u2","test_commit":"%s","impl_commit":"%s","run":{"repo":"demo","cwd":".","argv":["sh","tests/notes.sh"]},"marker":"^NOTES-PASS$"}]' "$T" "$C" "$T2" "$C2" > artifacts/build/units.json && ` +
+	`printf '{"supplement_limit": 10, "changed": ["answer.txt: the answer"], "uncovered": {"demo": []}, "tests": []}' > artifacts/build/change-analysis.json`
 
 // v212SameTree is the python a scripted agent applies its skill's
 // same-tree rule with: review compares every task repo's HEAD with the
@@ -333,7 +336,7 @@ func TestV212SameTreeVerificationAsks(t *testing.T) {
 		buildAction([]string{w374Output("u1; nothing changed")}),
 		// review: a new tree for it (sync merged after its last round)
 		{"do": "envelope", "id": "review", "outcome": "completed", "output_file": "artifacts/review-out.json", "no_started_at": true,
-			"run": []string{x.sameTree("review"), w374FactsPlanLine, w374FactsReplayLine, w374FactsCarriesLine, "python3 -I " + filepath.Join(x.scripts, "review-route.py") + " facts"}},
+			"run": []string{x.sameTree("review"), w374FactsPlanLine, w374FactsReplayLine, w374FactsCarriesLine, w374FactsAnalysisLine, "python3 -I " + filepath.Join(x.scripts, "review-route.py") + " facts"}},
 		x.syncAction(),
 		// verification's re-entry: the earlier round failed on this tree
 		{"do": "envelope", "id": "verification", "end_turn": true, "run": []string{x.sameTree("verification")}},

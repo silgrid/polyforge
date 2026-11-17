@@ -166,6 +166,10 @@ type fakeHub struct {
 	claimErr error
 	// unknown lists canonical ids GetWorkItem answers CORE-404 for.
 	unknown map[string]bool
+	// probe403 lists canonical ids GetWorkItem answers CORE-403 for (a
+	// ticket this Cell's key may not read — polyforge#106's reconcile
+	// keeps such an entry open, waiting for the age bound).
+	probe403 map[string]bool
 	// bundles maps a canonical id to the bundle GetWorkItem reports
 	// (polyforge#175 pre-claim bundle check); unmapped ids report none.
 	bundles map[string]string
@@ -408,6 +412,9 @@ func (h *fakeHub) GetWorkItem(idOrSlug string) (*api.WorkItem, error) {
 	h.gets[id]++
 	if h.unknown[id] {
 		return nil, &api.Error{Code: api.ErrCoreNotFound, Detail: "work item not found"}
+	}
+	if h.probe403[id] {
+		return nil, &api.Error{Code: api.ErrCoreForbidden, Detail: "work item not readable"}
 	}
 	st := h.status[id]
 	if st == "" {
