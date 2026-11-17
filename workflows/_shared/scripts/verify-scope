@@ -153,9 +153,14 @@ check_*, report= or rerun= line names a declared conf command (a check=
 name, or fast-<i>/full-<i>/micro-<i>); a line naming none is diagnosed and
 ignored, as is a malformed one.
 
-The conf is declarative: it is never evaluated at parse time and it has no
+The conf is declarative: it is never parsed beyond its keys at parse time
+and it has no
 hook-style keys (pre/post/exec); an unknown key is diagnosed and contributes
-nothing. A command value is an opaque string: it is reported as a
+nothing — except the keys another tool owns (``not_runnable_rule=``, the
+replay judge's, and ``component=`` / ``epic_components=`` / ``epic_units=`` /
+``epic_files=``, the component tool's, polyforge#89): the engine reads none
+of them, so it accepts their lines without the diagnostic. A command value
+is an opaque string: it is reported as a
 ``command:`` line and, only with --run, executed by ``bash -c`` (command
 values are bash), with the same trust as the repository's own Makefile. A
 command value whose first characters are ``$(`` or a backtick is skipped
@@ -884,6 +889,13 @@ class Engine:
                 # facts.py's replay key: the engine reads none of it, so it
                 # accepts the line without the unknown-key diagnostic — no
                 # conf reader diagnoses a key another tool owns.
+                continue
+            elif key in ("component", "epic_components", "epic_units", "epic_files"):
+                # components.py's keys (polyforge#89): the component
+                # declarations and the epic-upgrade thresholds are the
+                # tool's — the engine reads none of them, so it accepts
+                # the lines without the unknown-key diagnostic, the same
+                # reader split as not_runnable_rule above.
                 continue
             else:
                 self.diag("conf rejects unknown key '%s'" % key)
