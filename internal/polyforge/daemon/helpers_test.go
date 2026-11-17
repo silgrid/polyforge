@@ -189,6 +189,13 @@ type fakeHub struct {
 	projectRepos  map[string][]string
 	// memContent scripts GetMemoryContent (the step memory read).
 	memContent func(id string) ([]byte, error)
+	// attrsWrites records every WriteAttrs call (the step_params key's
+	// whole-key writes, polyforge#79); onAttrsWrite, when set, runs
+	// inside the hub's lock right after the stored item's key changed —
+	// the tests' in-flight seam for the claim race the write side detects
+	// by its re-read.
+	attrsWrites  []api.AttrsWriteRequest
+	onAttrsWrite func()
 	// queueErr, when non-nil, is what Queue answers instead of the
 	// seeded list — the drain degraded-signal test scripts denials with
 	// it.
