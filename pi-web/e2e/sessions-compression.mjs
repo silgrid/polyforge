@@ -27,8 +27,8 @@
 //   node e2e/sessions-compression.mjs
 //   npm run test:e2e:all -- sessions-compression.mjs
 //
-// carries: only next.config.ts. app/api/sessions/* already has its three
-// declarers (e2e/claude-session-219.mjs, e2e/run.mjs,
+// The declared carries stop at next.config.ts: app/api/sessions/* already
+// has its three declarers (e2e/claude-session-219.mjs, e2e/run.mjs,
 // e2e/session-stall-recovery.mjs) and lib/e2e-carries.test.mjs caps a
 // tracked path at 3 declaring suites, so this suite must not declare them;
 // the full bar (E2E_SERVER_MODE=start npm run test:e2e:all) runs it for any
