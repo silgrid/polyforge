@@ -41,9 +41,11 @@ func pf101RulePosition(t *testing.T, key, prompt string) {
 }
 
 // TestPF101StepPromptCarriesConciseRuleOnce: the three full-prompt
-// dispatch shapes, every shipped lane's every step, both harnesses —
-// and the six level-1 headings stay six (the rule is part 2's own
-// closing `## ` subsection, not a seventh part).
+// dispatch shapes, every shipped lane's every step, both harnesses.
+// (The six level-1 headings of the probe prompt stay six — pinned by
+// TestPromptIsTheSixFixedParts, whose probe step definition carries no
+// heading of its own; a real definition's own `# ` headings are its
+// content, not the prompt's part structure.)
 func TestPF101StepPromptCarriesConciseRuleOnce(t *testing.T) {
 	for _, dir := range shippedBundleDirs(t) {
 		bundle := filepath.Base(dir)
@@ -62,10 +64,6 @@ func TestPF101StepPromptCarriesConciseRuleOnce(t *testing.T) {
 				pf101RulePosition(t, bundle+"/"+s.ID+"/"+h+" fresh retry", prompt)
 			}
 		}
-	}
-	// the six level-1 headings of workflow contract 4 stay six
-	if prompt := spawnStepPrompt(t, "develop", "build"); len(topHeadings(prompt)) != 6 {
-		t.Errorf("the prompt's level-1 headings = %d, want the contract's six:\n%v", len(topHeadings(prompt)), topHeadings(prompt))
 	}
 }
 
