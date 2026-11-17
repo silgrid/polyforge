@@ -290,3 +290,28 @@ func TestW98RevertDescribesThePlanItLands(t *testing.T) {
 		t.Errorf("workflows/_shared/scripts/revert.py still describes the plan by a step round (review r2 #2)")
 	}
 }
+
+// TestW98FullGateHonorsTheHandBack (review round 3, #1): the owner's
+// hand-back is honored on the gate's next run — the refusal the repair
+// wrote is read unconditionally, because it always answers an earlier
+// run's brief (the refusal exists only after the owner ruled the units
+// out of the batch, and this gate's next round is that earlier round's
+// successor): this round files the fix tickets as before and writes no
+// new brief. A refusal scoped to "this brief", or dismissed as an older
+// brief's history, would send the batch around the repair route again
+// until the rewind budget is spent — never honoring the ruling.
+func TestW98FullGateHonorsTheHandBack(t *testing.T) {
+	flat := w98Flat(t, "workflows/integrate/skills/full-gate.md")
+	want := "never take the repair route over an `artifacts/integrate/repair-refused.json`: the refusal always answers an earlier run's brief — the owner ruled those units out of the batch, so this round files the fix tickets as it did before and writes no new brief"
+	if !strings.Contains(flat, strings.Join(strings.Fields(want), " ")) {
+		t.Errorf("workflows/integrate/skills/full-gate.md must state %q", want)
+	}
+	for _, banned := range []string{
+		"whose `brief_round` names this brief",
+		"A refusal of an older brief is history",
+	} {
+		if strings.Contains(flat, strings.Join(strings.Fields(banned), " ")) {
+			t.Errorf("workflows/integrate/skills/full-gate.md must not scope the refusal to this brief or dismiss an older refusal as history (review r3 #1): %q", banned)
+		}
+	}
+}
