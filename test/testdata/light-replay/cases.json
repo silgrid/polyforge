@@ -1,0 +1,301 @@
+{
+ "counterexample": "unrelated/w111-counterexample.txt",
+ "ac3_paths": [
+  "workflows/_shared/scripts/verify-scope",
+  ".polyforge/verify-scope.conf",
+  "pi-web/e2e/w367-default-cell-pinned.mjs",
+  "test/testdata/light-replay/cases.json"
+ ],
+ "cases": [
+  {
+   "id": "polyforge-36",
+   "status": "miss",
+   "source": {
+    "merge": "a2b1436cfe88ed20803a3d5efe9fc72bd14e9f35",
+    "fix": "polyforge#90"
+   },
+   "root": "",
+   "paths": [
+    "internal/polyforge/stepscripts/integrate_test.go",
+    "workflows/_shared/scripts/gate.py",
+    "workflows/_shared/scripts/integrate.py",
+    "workflows/_shared/scripts/pfstep/gitmerge/revert.py",
+    "workflows/_shared/scripts/pfstep/integration.py",
+    "workflows/_shared/scripts/revert.py"
+   ],
+   "target": {
+    "kind": "command",
+    "value": "python3 -B -m unittest discover -s workflows/_shared/scripts -t workflows/_shared/scripts"
+   },
+   "note": "the merge_commits decode change reached the full gate red through workflows/_shared/scripts/tests/test_integrate.py's PoolTest; no tier ran the python unit suite",
+   "baseline": {
+    "pkg": 1,
+    "run": 1,
+    "e2e_names": 37,
+    "conf": 0
+   },
+   "cap": {
+    "pkg": 1,
+    "run": 1,
+    "e2e_names": 48,
+    "conf": 1
+   }
+  },
+  {
+   "id": "polyforge-20",
+   "status": "covered",
+   "source": {
+    "merge": "d2d8e2de",
+    "fix": "polyforge#20 itself (the fixture was already red on main)"
+   },
+   "root": "",
+   "paths": [
+    "docs/concepts.md",
+    "docs/install.md",
+    "docs/quickstart-macos.md",
+    "docs/reference/commands.md",
+    "docs/reference/config.md",
+    "docs/user-guide.md",
+    "internal/contracttest/w20_doctor_cells_texts_contract_test.go",
+    "internal/polyforge/cli/config_validate.go",
+    "internal/polyforge/cli/doctor_gitdirs.go",
+    "internal/polyforge/cli/doctor_gitdirs_test.go",
+    "internal/polyforge/cli/doctor_repos.go",
+    "internal/polyforge/cli/verbs_config.go",
+    "internal/polyforge/cli/verbs_daemon.go",
+    "internal/polyforge/cli/verbs_doctor.go",
+    "internal/polyforge/cli/verbs_workflow.go",
+    "internal/polyforge/cli/w145_prune_unmerged_repro_test.go",
+    "internal/polyforge/cli/w20_doctor_cells_test.go",
+    "internal/polyforge/cli/w20_doctor_default_only_test.go",
+    "internal/polyforge/cli/w20_doctor_mapping_test.go",
+    "internal/polyforge/cli/w20_doctor_retention_test.go",
+    "internal/polyforge/daemon/ensure.go",
+    "internal/polyforge/daemon/main.go",
+    "internal/polyforge/daemon/w20_ensure_cells_test.go",
+    "internal/polyforge/runtime/runtime.go",
+    "skills/polyforge/verbs/doctor.md",
+    "skills/polyforge/verbs/init.md",
+    "test/w113_workspace_mapping_acceptance_test.go",
+    "test/w20_install_named_cell_mapping_test.go",
+    "test/w20_install_wording_test.go",
+    "tools/install.sh"
+   ],
+   "target": {
+    "kind": "harness_name",
+    "value": "TestW113InstallFreshTemplate"
+   },
+   "note": "already selected today: the w113 harness test source names tools/install.sh, which the change touched",
+   "baseline": {
+    "pkg": 1,
+    "run": 1,
+    "e2e_names": 265,
+    "conf": 0
+   },
+   "cap": {
+    "pkg": 1,
+    "run": 1,
+    "e2e_names": 338,
+    "conf": 0
+   }
+  },
+  {
+   "id": "polyforge-74",
+   "status": "miss",
+   "source": {
+    "merge": "a508347ab1dac47c740d00c798f6c68f1275883b",
+    "fix": "polyforge#95"
+   },
+   "root": "",
+   "paths": [
+    "docs/concepts.md",
+    "docs/design/polyforge-vnext/reference.md",
+    "docs/reference/commands.md",
+    "docs/reference/config.md",
+    "docs/reference/uds-routes.md",
+    "docs/upgrade.md",
+    "internal/contracttest/w59_task_skill_contract_test.go",
+    "internal/polyforge/cellcfg/schema.go",
+    "internal/polyforge/cellcfg/w74_schema_test.go",
+    "internal/polyforge/cli/config.go",
+    "internal/polyforge/cli/config_keys.go",
+    "internal/polyforge/cli/daemon.go",
+    "internal/polyforge/cli/verbs_config.go",
+    "internal/polyforge/cli/verbs_task.go",
+    "internal/polyforge/cli/w74_max_tasks_key_test.go",
+    "internal/polyforge/daemon/analyzer.go",
+    "internal/polyforge/daemon/analyzer_test.go",
+    "internal/polyforge/daemon/cells.go",
+    "internal/polyforge/daemon/cells_status_test.go",
+    "internal/polyforge/daemon/daemon.go",
+    "internal/polyforge/daemon/hostslots.go",
+    "internal/polyforge/daemon/hostslots_test.go",
+    "internal/polyforge/daemon/reload.go",
+    "internal/polyforge/daemon/tasks.go",
+    "internal/polyforge/daemon/tasks_test.go",
+    "internal/polyforge/daemon/w74_no_jobslot_bind_test.go",
+    "internal/polyforge/daemon/w74_task_bound_test.go",
+    "internal/polyforge/task/manager.go",
+    "internal/polyforge/task/slots_test.go",
+    "internal/polyforge/task/task.go",
+    "internal/polyforge/task/task_test.go",
+    "internal/polyforge/task/w74_limit_test.go",
+    "pi-web/docs/agents/polyforge-panel.md",
+    "skills/polyforge/verbs/message.md",
+    "skills/polyforge/verbs/ops.md",
+    "skills/polyforge/verbs/task.md",
+    "test/w254_docs_set_acceptance_test.go"
+   ],
+   "target": {
+    "kind": "harness_name",
+    "value": "TestW348TasksDoNotTakeJobSlots"
+   },
+   "note": "test/w348_cell_e2e_acceptance_test.go declared carries: internal/polyforge/daemon/* \u2026 all along; the Go analyzer consumed none of it",
+   "baseline": {
+    "pkg": 1,
+    "run": 6,
+    "e2e_names": 120,
+    "conf": 0
+   },
+   "cap": {
+    "pkg": 1,
+    "run": 6,
+    "e2e_names": 193,
+    "conf": 0
+   }
+  },
+  {
+   "id": "polyforge-71",
+   "status": "covered",
+   "source": {
+    "merge": "01ec2f4a",
+    "fix": "polyforge#96"
+   },
+   "root": "pi-web",
+   "paths": [
+    "pi-web/AGENTS.md",
+    "pi-web/components/ChatInput.claude.test.mjs",
+    "pi-web/components/ChatInput.test.mjs",
+    "pi-web/components/ChatInput.tsx",
+    "pi-web/components/ChatWindow.claude.test.mjs",
+    "pi-web/components/ChatWindow.tsx",
+    "pi-web/docs/agents/claude-sessions.md",
+    "pi-web/e2e/claude-250.mjs",
+    "pi-web/e2e/claude-composer-272.mjs",
+    "pi-web/e2e/claude-session-219.mjs",
+    "pi-web/hooks/compact-command.test.mjs",
+    "pi-web/hooks/mcp-slash-command.test.mjs",
+    "pi-web/hooks/useAgentSession.ts",
+    "pi-web/lib/claude-adapter.ts",
+    "pi-web/lib/claude-commands-71.test.mjs",
+    "pi-web/lib/claude-probe.test.mjs",
+    "pi-web/lib/claude-probe.ts",
+    "pi-web/lib/claude-session.ts",
+    "pi-web/lib/claude-shared.ts"
+   ],
+   "target": {
+    "kind": "suite",
+    "value": "e2e/claude-composer-272.mjs"
+   },
+   "note": "already selected: the carries selection took the suite; the red was the S272-01 scenario's missing wait (the dev/start mode mismatch is another ticket, Q3)",
+   "baseline": {
+    "suites": 10
+   },
+   "cap": {
+    "suites": 10
+   }
+  },
+  {
+   "id": "polyforge-51",
+   "status": "miss",
+   "source": {
+    "merge": "a3b2191",
+    "fix": "polyforge#97"
+   },
+   "root": "pi-web",
+   "paths": [
+    "docs/design/polyforge-vnext/v2-converge.md",
+    "docs/reference/commands.md",
+    "docs/reference/config.md",
+    "docs/reference/uds-routes.md",
+    "internal/polyforge/cellcfg/schema.go",
+    "internal/polyforge/cellcfg/w51_schema_test.go",
+    "internal/polyforge/cli/config.go",
+    "internal/polyforge/cli/config_edit.go",
+    "internal/polyforge/cli/config_keys.go",
+    "internal/polyforge/cli/config_test.go",
+    "internal/polyforge/cli/daemon.go",
+    "internal/polyforge/cli/unclassified.go",
+    "internal/polyforge/cli/verbs_config.go",
+    "internal/polyforge/cli/verbs_daemon.go",
+    "internal/polyforge/cli/w51_error_patterns_config_test.go",
+    "internal/polyforge/daemon/cells.go",
+    "internal/polyforge/daemon/daemon.go",
+    "internal/polyforge/daemon/reload.go",
+    "internal/polyforge/daemon/unclassified.go",
+    "internal/polyforge/daemon/w51_live_error_patterns_test.go",
+    "internal/polyforge/daemon/w51_named_cell_live_test.go",
+    "internal/polyforge/daemon/w51_unclassified_route_test.go",
+    "internal/polyforge/driver/claude_d7_test.go",
+    "internal/polyforge/driver/claude_live_turn_parity_test.go",
+    "internal/polyforge/driver/d6_budget_test.go",
+    "internal/polyforge/driver/d7_ratelimit_test.go",
+    "internal/polyforge/driver/d8_upstream_transient_test.go",
+    "internal/polyforge/driver/driver.go",
+    "internal/polyforge/driver/gateway_transient_test.go",
+    "internal/polyforge/driver/rewind_reentry_crash_test.go",
+    "internal/polyforge/driver/spawn_test.go",
+    "internal/polyforge/driver/start.go",
+    "internal/polyforge/driver/stderr_incomplete_test.go",
+    "internal/polyforge/driver/stream_ended_repro_test.go",
+    "internal/polyforge/driver/supervision.go",
+    "internal/polyforge/driver/supervision_rules_test.go",
+    "internal/polyforge/driver/supervision_test.go",
+    "internal/polyforge/driver/transition.go",
+    "internal/polyforge/driver/upstream_4xx_retry_json_test.go",
+    "internal/polyforge/driver/upstream_4xx_retry_repro_test.go",
+    "internal/polyforge/driver/w51_added_rules_test.go",
+    "internal/polyforge/liveconfig/liveconfig.go",
+    "internal/polyforge/observe/monitor.go",
+    "internal/polyforge/observe/supervisor_pause_event_test.go",
+    "internal/polyforge/observe/w51_slow_thresholds_live_test.go",
+    "internal/polyforge/supervise/contract.go",
+    "internal/polyforge/supervise/defaults.go",
+    "internal/polyforge/supervise/rules.go",
+    "internal/polyforge/supervise/supervise_test.go",
+    "internal/polyforge/supervise/tracker.go",
+    "internal/polyforge/supervise/w51_slow_latency_test.go",
+    "pi-web/AGENTS.md",
+    "pi-web/app/api/polyforge/polyforge-unclassified-routes.test.mjs",
+    "pi-web/app/api/polyforge/unclassified/route.ts",
+    "pi-web/components/PolyforgeConfig.test.mjs",
+    "pi-web/components/PolyforgeConfig.tsx",
+    "pi-web/docs/agents/polyforge-panel.md",
+    "pi-web/docs/agents/settings-ui.md",
+    "pi-web/e2e/w51-error-classes.mjs",
+    "pi-web/lib/i18n/messages/en.ts",
+    "pi-web/lib/i18n/messages/zh-CN.ts",
+    "pi-web/lib/i18n/messages/zh-TW.ts",
+    "pi-web/lib/polyforge-config-schema.test.mjs",
+    "pi-web/lib/polyforge-config-schema.ts",
+    "pi-web/lib/polyforge-config-write.test.mjs",
+    "pi-web/lib/polyforge-config-write.ts",
+    "pi-web/lib/polyforge-unclassified-pure.ts",
+    "pi-web/lib/polyforge-unclassified.test.mjs",
+    "pi-web/lib/polyforge-unclassified.ts",
+    "skills/polyforge/verbs/ops.md"
+   ],
+   "target": {
+    "kind": "suite",
+    "value": "e2e/w367-default-cell-pinned.mjs"
+   },
+   "note": "w367's carries covered none of the #51 pi-web paths; this change adds app/api/polyforge/unclassified/* and lib/polyforge-unclassified*",
+   "baseline": {
+    "suites": 8
+   },
+   "cap": {
+    "suites": 9
+   }
+  }
+ ]
+}
