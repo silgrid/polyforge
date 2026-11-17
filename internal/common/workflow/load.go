@@ -138,6 +138,10 @@ type Step struct {
 	// Skippable is `skippable` (default false): a project may switch the
 	// step off (`steps.<project>.<step>.skip` in its workspace yaml).
 	Skippable bool
+	// RewindOnly is `rewind_only` (default false): the step runs only
+	// after a rewind covers it — the first round records it skipped
+	// without a dispatch.
+	RewindOnly bool
 	// HumanMergeable is `human_mergeable` (default false): a project may
 	// declare the step's work done by a person
 	// (`steps.<project>.<step>.by: human` in its workspace yaml,
