@@ -54,6 +54,10 @@ below as a blocking finding.
 An e2e suite in a repository the verification-scope engine reports on
 declares the paths it covers in its opening comment block, for example
 `// carries: components/Panel*, lib/panel*`; the syntax and its fail-closed
-rules are in docs/contributing.md, "Carries".
+rules are in docs/contributing.md, "Carries". In a Go repository whose conf
+declares `go_harness=`, the harness directory's `*_test.go` files declare
+the same way, and the engine consumes them the same (polyforge#111); a
+Go test file outside the harness directory is not a suite — its carries
+comments stay comments.
 
 Contributor guide (filing work items, change coverage): docs/contributing.md.

@@ -66,7 +66,9 @@ out.
 — touch the affected set of this diff (base..HEAD). It is symmetric: each
 side's affected set is computed the same way (Go: the changed packages,
 their reverse-dependency closure — the go_harness package kept in it — the
-packages whose tests name a changed path, the declared go_harness;
+packages whose tests name a changed path, the harness a carries:
+declaration of the declared harness directory reaches, the declared
+go_harness;
 npm/python/rust: the carries-selected suites; any stack: the changed paths
 themselves) and the answer is whether they meet, so an upstream change to
 a dependency of this diff's packages meets it as well as one to a
@@ -126,9 +128,11 @@ the end of its line, so there is no trailing comment on a value line). The
 key list is docs/reference/config.md's conf reference; the shell engine's
 header comment carried it verbatim and this rewrite changes none of it.
 
-An empty or malformed e2e_runner=, suite_glob=, e2e_map= or smoke_suite=
-value (e2e_map= split by exactly one ``=``; smoke_suite= one relative path
-without blanks) is diagnosed and forces the full tier.
+An empty or malformed e2e_runner=, suite_glob=, e2e_map=, smoke_suite=
+or scoped_command= value (e2e_map= split by exactly one ``=``; a
+scoped_command= split on its first ``|``, its command free to carry more;
+smoke_suite= one relative path without blanks) is diagnosed and forces
+the full tier.
 
 Full-tier e2e selection: with --full, at least one smoke_suite= line and a
 non-empty diff, the full tier's e2e phase is not the full tail but the
@@ -156,6 +160,20 @@ names), nor audit or audit-<anything> (the dependency-audit gate's). A
 check_*, report= or rerun= line names a declared conf command (a check=
 name, or fast-<i>/full-<i>/micro-<i>); a line naming none is diagnosed and
 ignored, as is a malformed one.
+
+``scoped_command=<glob>|<command>`` (polyforge#111) adds one conditional
+command to the scoped selection, the cross-analyzer mapping the analyzers'
+own rules cannot express (a Go repository's python unit suite): a changed
+path an exclude= match has not removed that matches the glob (the
+shell-case syntax every other path key uses) adds the command, once per
+declaration, in file order, after the analyzer's own scoped commands —
+reported as a scoped command of source ``conf``. The scoped tier only (the
+light tier included): a full-tier, ``--micro`` or no-analyzer report never
+carries the lines, and nothing else about the tier moves — the spanning
+rule and the analyzer's fallbacks answer as before. The command is a
+value like any other (never evaluated at parse time), and a declaration
+whose value has no ``|``, an empty glob or an empty command is diagnosed
+and fails the conf closed.
 
 The conf is declarative: it is never evaluated at parse time and it has no
 hook-style keys (pre/post/exec); an unknown key is diagnosed and contributes
@@ -199,8 +217,12 @@ Zero-config defaults are stack-generic. A Go repo's top-level test/
 directory is an ordinary package unless the conf declares
 ``go_harness=<path>`` (for example ``go_harness=test/e2e-parallel.sh``): the
 engine then keeps the harness's directory out of the Go package graph and
-runs the harness for the tests whose source references a changed path; the
-Go analyzer never reads carries: headers. The npm, python and rust
+runs the harness for the tests whose source references a changed path and
+for the harness directory's test files whose carries: declaration covers
+a changed path (polyforge#111 — a harness test's carries is optional, a
+malformed one fails closed like the carries layer's own structural breaks;
+without a declared go_harness carries headers stay the comments they were).
+The npm, python and rust
 analyzers select e2e suites by their carries: declarations (the carries
 layer, described below). The npm fast gates come from the scripts
 package.json actually declares (lint, test, and a TypeScript typecheck only
@@ -216,7 +238,8 @@ Repository-specific commands belong in the conf.
 The carries layer is stack-neutral. A suite declares the repository paths
 it covers, relative to the engine root, in its opening comment block — the
 leading blank and comment lines (``//`` or ``#``) before the first line of
-code:
+code — and so, in a Go repository with a declared go_harness, does each
+harness test file of the declared harness directory:
 
     // carries: components/Panel*, lib/panel*
 
@@ -242,6 +265,10 @@ such a path instead; see the opening contract).
 The carries: header parse is pfstep's one implementation
 (``pfstep/carries.py`` — parse_header), shared with the step scripts, and
 the shell-case globs are pfstep's too (``pfstep/goglob.py`` — case_match).
+A harness test file's declaration selects that file's tests through the
+declared harness command, merged with the literal-reference rule's names
+into one command; its glob is answered against every changed path, the
+npm layer's own semantics.
 
 This is a verification reporter, not a release or deploy entry point.
 """
@@ -371,6 +398,8 @@ class Engine:
         self.conf_suite_glob: List[str] = []
         self.conf_e2e_map: List[str] = []
         self.conf_smoke: List[str] = []
+        self.conf_scoped_cmd: List[Tuple[str, str]] = []
+        self.scoped_conf_cmds: List[str] = []
         self.conf_micro_path: List[str] = []
         self.conf_micro: List[Tuple[str, str]] = []
         self.conf_host: List[Tuple[str, ...]] = []
@@ -430,6 +459,7 @@ class Engine:
         self.go_graph_why = ""
         self.packages: List[Tuple[str, str, str]] = []
         self.pkg_dirs: Set[str] = set()
+        self.harness_carries: Optional[List[Tuple[str, str, List[str]]]] = None
         # --since state.
         self.since_head = ""
         self.since_intersects = "true"
@@ -906,6 +936,15 @@ class Engine:
                     self.conf_closed = True
                     continue
                 self.conf_e2e_map.append(val)
+            elif key == "scoped_command":
+                val = c_rstrip(val)
+                glob, sep, cmd = val.partition("|")
+                if not sep or glob == "" or cmd == "":
+                    self.diag("conf rejects scoped_command value (expected <glob>|<command>, split on the first '|');"
+                             " falling back to the full tier: %s" % line)
+                    self.conf_closed = True
+                    continue
+                self.conf_scoped_cmd.append((glob, cmd))
             elif key == "smoke_suite":
                 self.smoke_declared = True
                 val = c_rstrip(val)
@@ -1158,6 +1197,40 @@ class Engine:
             return []
         return sorted({m.group(1) for m in re.finditer(r"^func (Test[^ (]*).*", text, re.ASCII | re.MULTILINE)})
 
+    def go_harness_carries(self) -> Optional[List[Tuple[str, str, List[str]]]]:
+        """(file, status, globs) per *_test.go under the declared harness
+        directory, or None when no go_harness is declared. The Go analyzer
+        consumes these carries: declarations the way the npm, python and rust
+        analyzers consume their suites' (polyforge#111): a changed path a
+        declaration covers selects the file's tests through the harness
+        command, beside the literal-reference rule. The header parse is
+        pfstep's one implementation (parse_header); a harness test without
+        a declaration is an ordinary harness test (carries is optional
+        there, unlike a suite's), a malformed one is the structural break
+        the caller reports."""
+        if self.go_harness == "":
+            return None
+        if self.harness_carries is not None:
+            return self.harness_carries
+        listed: List[str] = []
+        if self.inside_work_tree():
+            c = self.proc(["git", "-c", "core.quotePath=off", "ls-files",
+                           "-co", "--exclude-standard", "--", self.go_harness_dir], cwd=self.root)
+            if c.returncode == 0:
+                listed = c.stdout.decode("utf-8", "replace").split("\n")
+        out: List[Tuple[str, str, List[str]]] = []
+        for f in sorted(set(ln for ln in listed if ln != "")):
+            if not f.endswith("_test.go"):
+                continue
+            try:
+                src = self.read_text(os.path.join(self.root, f))
+            except OSError:
+                continue
+            status, globs = parse_header(src)
+            out.append((f, status, globs))
+        self.harness_carries = out
+        return out
+
     def add_scoped(self, cmd: str) -> None:
         self.scoped_cmds.append(cmd)
 
@@ -1200,8 +1273,18 @@ class Engine:
                 pkg = "." if d == "." else "./" + d
                 self.add_scoped("GOWORK=off go test -count=1 -run '^(%s)$' %s" % (join_pipe(names), pkg))
         # The repo's declared harness runs the acceptance tests whose
-        # source names a changed path, by test name.
+        # source names a changed path, by test name — and the carries:
+        # declarations of the harness directory's test files select their
+        # tests the same way (polyforge#111): a declaration the harness
+        # tests have carried as comments all along is consumed here, a
+        # malformed one is the structural break that fails closed.
         if self.go_harness != "":
+            decls = self.go_harness_carries()
+            for f, status, _globs in decls or []:
+                if status == "malformed":
+                    self.diag("carries: harness test %s has a malformed carries: declaration (an empty value or"
+                             " a carries line without its colon); falling back to the full tier" % f)
+                    return False
             e2e_names: Set[str] = set()
             for p in self.changed:
                 for f in self.git_grep_literal(p):
@@ -1210,6 +1293,11 @@ class Engine:
                     if self.go_harness == "" or not f.startswith(self.go_harness_dir + "/") or not f.endswith(".go"):
                         continue
                     e2e_names.update(self.go_test_names(f))
+                for f, status, globs in decls or []:
+                    if status != "declared" or not globs:
+                        continue
+                    if any(case_match(g, p) for g in globs):
+                        e2e_names.update(self.go_test_names(f))
             if e2e_names:
                 names = sorted(e2e_names)
                 self.add_scoped("E2E_RUN='^(%s)$' sh %s" % (join_pipe(names), self.go_harness))
@@ -2069,6 +2157,15 @@ class Engine:
                 h = tr_harness
                 if self.go_harness != "" and any(p.startswith(self.go_harness_dir + "/") for p in paths):
                     h = True
+                for f, status, globs in self.go_harness_carries() or []:
+                    if status == "malformed":
+                        h = True  # the declarations are untrustworthy: fail closed
+                        break
+                    if status != "declared" or not globs:
+                        continue
+                    if any(case_match(g, p) for p in paths for g in globs):
+                        h = True
+                        break
                 harness[side] = h
             pk = sorted(set(aff["t"]) & set(aff["u"]))
             if pk:
@@ -2579,6 +2676,22 @@ class Engine:
                     else:
                         self.full = 1
 
+            # polyforge#111 — the conf's scoped_command= lines join the
+            # scoped selection after the analyzer's own: a changed path an
+            # exclude= match has not removed that matches a declaration's
+            # glob adds the declared command, once per declaration, in file
+            # order. The scoped tier only (the light tier included): a
+            # full-tier, micro or no-analyzer report never carries them,
+            # and a malformed declaration already failed the conf closed.
+            if self.mode == "scoped":
+                for g, c in self.conf_scoped_cmd:
+                    for p in self.changed:
+                        if p == "" or self.path_excluded(p):
+                            continue
+                        if case_match(g, p):
+                            self.scoped_conf_cmds.append(c)
+                            break
+
             # Commands: fast gates first, then the scoped selection or the
             # full tail.
             fast_scripts: Set[str] = set()
@@ -2657,6 +2770,8 @@ class Engine:
             else:
                 for c in self.scoped_cmds:
                     self.add_cmd("scoped", c)
+                for c in self.scoped_conf_cmds:
+                    self.commands.append(["", "scoped", "conf", c])
 
             self.name_commands()
 
