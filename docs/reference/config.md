@@ -367,8 +367,8 @@ workspace, an invalid `[daemon]` value, a removal that would strand an
 in-flight job) leaves the file untouched and names the key. The
 mapping-non-empty and workspace-usability checks apply to a write that
 touches the mapping or leaves a mapping in place; a flat/`[daemon]` write
-to a file with no mapping is accepted, and the daemon refuses to start
-until a mapping exists.
+to a file with no mapping is accepted, and `pf daemon ensure` starts the
+daemon only once at least one Cell has a mapping.
 
 Reload classes (one class per key):
 
@@ -598,7 +598,7 @@ spec/plan (they live in the work item and the capsule), what code or git
 shows directly, transient state, and credential values (the block carries
 these lists written in Chinese; this is an English paraphrase).
 `pf doctor` warns about a mapped path without a block and points at
-`pf init`. The daemon serves the family from its loaded cli.toml snapshot
+`pf init`. The daemon serves the family from the serving Cell's loaded config
 (class `next-claim`): at a claim it writes the project's effective policy
 to the capsule (`runtime-state/memory-policy.json`) and the driver renders
 it into the last step's wrap duty; a running job keeps the policy its

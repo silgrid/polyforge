@@ -132,8 +132,7 @@ func ValidateConfigForDaemon(cfg Config) error {
 // workspace-usability checks apply only when the write touches the mapping
 // (`touchesMapping`, a [workspace] set/unset) or the resulting file
 // already carries a mapping. A flat/[daemon] write to a mapping-less file
-// is accepted; the caller notes that the daemon refuses to start until a
-// mapping exists. The operator-agent-dir check always applies.
+// is accepted; the caller notes that pf daemon ensure starts the daemon only once at least one Cell has a mapping. The operator-agent-dir check always applies.
 func ValidateConfigWrite(cfg Config, touchesMapping bool) error {
 	if touchesMapping || !cfg.Mapping.Empty() {
 		if err := ValidateMappingForDaemon(cfg); err != nil {
