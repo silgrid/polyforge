@@ -66,8 +66,8 @@ func TestPF64ImageParamDocs(t *testing.T) {
 	t.Run("config: the first lane-declared parameter", func(t *testing.T) {
 		pf64DocsHas(t, "docs/reference/config.md",
 			"The first lane-declared parameter is `image`",
-			"`steps.<project>.verification.params.image <ref>`",
-			"`steps.<project>.full-gate.params.image <ref>`",
+			"set steps.<project>.verification.params.image <ref>",
+			"steps.<project>.full-gate.params.image <ref>",
 			"--param image=<ref>",
 		)
 	})
@@ -78,7 +78,7 @@ func TestPF64ImageParamDocs(t *testing.T) {
 			"resolved to its local ID and started by it",
 			"the fixed mark `pf-verify-image-missing` in the summary",
 			// the gate id's image line, and the missing dockerfile line
-			"tools/gate-id `[--show] [--image <digest>] [<rev>]`",
+			"tools/gate-id [--show] [--image <digest>] [<rev>]",
 			"line follows the dockerfile one",
 			"the dockerfile line is left out",
 			// the release-side known limitation
