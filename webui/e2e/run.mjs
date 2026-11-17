@@ -781,13 +781,6 @@ async function scenarioMemoryVisual(page) {
   const footerClass = await footer.getAttribute('class')
   assert((footerClass ?? '').includes('id-footer'), `the id footer lost its .id-footer hook: ${footerClass}`)
   assert((await footer.textContent()) === wantID, 'the id footer does not show the exact memory id')
-  // polyforge#120 (AC2): the detail header carries the same attribution
-  // strings the row showed.
-  const detailAttribution = detail.getByTestId('memory-attribution')
-  await waitForContent(detailAttribution.filter({ hasText: fixtures.attributed_writer }),
-    'the memory detail shows no writer attribution')
-  assert((await detailAttribution.textContent()).includes(fixtures.attributed_author),
-    'the memory detail does not show the author display name')
   const prose = await page.evaluate(() => {
     const el = document.querySelector('[data-testid="sanitized-body"]')
     if (!el) return null
@@ -804,6 +797,18 @@ async function scenarioMemoryVisual(page) {
     assert(parseFloat(prose.maxWidth) <= limit * 1.02, `the prose measure max-width is ${prose.maxWidth} (want <= 72ch)`)
   }
   assert(prose.width <= limit * 1.02, `the prose body renders ${prose.width}px wide (want <= 72ch = ${limit.toFixed(1)}px)`)
+
+  // polyforge#120 (AC2): the attributed memory's detail header carries the
+  // same attribution strings its row showed (navigated directly — the newest
+  // row above is a kind-hook memory, not the attributed one).
+  await page.goto(`/web/${enc(fixtures.project)}/memories/${enc(fixtures.attributed_mem)}`)
+  const attributedDetail = page.getByTestId('memory-detail')
+  await waitForContent(attributedDetail, 'the attributed memory detail never rendered')
+  const detailAttribution = attributedDetail.getByTestId('memory-attribution')
+  await waitForContent(detailAttribution.filter({ hasText: fixtures.attributed_writer }),
+    'the memory detail shows no writer attribution')
+  assert((await detailAttribution.textContent()).includes(fixtures.attributed_author),
+    'the memory detail does not show the author display name')
 }
 
 // ---------------------------------------------------------------------------
