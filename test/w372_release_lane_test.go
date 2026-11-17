@@ -290,7 +290,7 @@ func TestW372ReleasePreflightReportsEveryMissingPrerequisiteFirst(t *testing.T) 
 // everything the release and the fake world's own stubs use before and
 // besides the audit's own tools (node, sha256sum and tar are prerequisites
 // the preflight itself checks; jq is the fake gh's --jq filter).
-var w113HostTools = []string{"node", "sha256sum", "tar", "python3", "sh", "tr", "sed", "cut", "grep", "head", "tail", "wc", "cat", "rm", "mkdir", "cp", "mv", "mktemp", "date", "sort", "awk", "basename", "dirname", "env", "jq"}
+var w113HostTools = []string{"node", "sha256sum", "tar", "sh", "tr", "sed", "cut", "grep", "head", "tail", "wc", "cat", "rm", "mkdir", "cp", "mv", "mktemp", "date", "sort", "awk", "basename", "dirname", "env", "jq"}
 
 // TestW113ReleasePreflightReportsTheAuditTools: the default dependency audit
 // (the scope engine's own audit command, polyforge#113) puts machine
@@ -313,10 +313,18 @@ func TestW113ReleasePreflightReportsTheAuditTools(t *testing.T) {
 		relGit(t, w.work, "commit", "-q", "-m", "an auditable tree")
 		relGit(t, w.work, "push", "-q", "origin", "main")
 		w.recordPR(relGit(t, w.work, "rev-parse", "HEAD"))
+		// this world's own audit stubs (newRelWorld writes fake go and
+		// govulncheck for the green-path tests) are removed: the PATH must
+		// offer neither, or the preflight would find the stubs
+		for _, name := range []string{"go", "govulncheck"} {
+			if err := os.Remove(filepath.Join(w.bin, name)); err != nil {
+				t.Fatal(err)
+			}
+		}
 		// a PATH with neither go nor govulncheck: the fake world's stubs
 		// first, then only the host tools the release still needs
 		tools := t.TempDir()
-		for _, name := range w113HostTools {
+		for _, name := range append([]string{"python3"}, w113HostTools...) {
 			p, err := exec.LookPath(name)
 			if err != nil {
 				t.Fatalf("host tool %s: %v", name, err)
