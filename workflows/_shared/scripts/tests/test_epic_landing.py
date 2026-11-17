@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional
 from pfstep import targetbranch
 
 from .test_scripts import HAVE_GIT, World, repo_of, write
-from .test_target_branch import fix_target, inputs_on, publish_on
+from .test_target_branch import fix_target, inputs_on, publish_on, target_branch_on
 
 
 def fix_epic(w: World, children: Optional[List[Dict[str, Any]]] = None,
@@ -90,6 +90,7 @@ class EpicLandingTest(unittest.TestCase):
     def test_a_sub_ticket_capsule_is_untouched(self) -> None:
         w = World(self, "app")
         fix_target(w)  # a target record, no children snapshot
+        target_branch_on(w, "app")
         w.change("app", {"feature.txt": "f\n"}, "child-section")
         entry = publish_on(w, "app", "epic/1")
         publish, verified, out = inputs_on(w, entry, "epic/1")
@@ -148,10 +149,11 @@ class EpicSyncTest(unittest.TestCase):
         fix_epic(w)
         seed, d = w.seeds["app"], w.dir("app")
         out = os.path.join(w.capsule, "artifacts", "sync", "result.json")
-        # the default branch moves after the epic branch's own work
-        head = w.change("app", {"pkg/code.go": "package pkg\n\nfunc F() int { return 2 }\n",
-                                "side.txt": "base\nbranch side\n"}, "branch-section")
-        main_sha = w.main_moves("app", {"pkg/code.go": "package pkg\n\nfunc F() int { return 3 }\n"}, "main-section")
+        # the default branch moves after the epic branch's own work (in a
+        # file the branch's work does not touch: a real conflict is the
+        # sync agent's, not this pin's)
+        head = w.change("app", {"pkg/code.go": "package pkg\n\nfunc F() int { return 2 }\n"}, "branch-section")
+        main_sha = w.main_moves("app", {"main-side.txt": "the default branch moved\n"}, "main-section")
         code, res, err = w.run("sync.py", "--capsule", w.capsule, "--json", "--out", out, PF_ROUND="r1")
         assert res is not None
         app = repo_of(res, "app")
