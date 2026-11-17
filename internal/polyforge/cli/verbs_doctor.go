@@ -405,11 +405,6 @@ func countFails(rep doctorReport) int {
 	return n
 }
 
-// runDoctorChecks runs the config check and then doctorChecks, skipping
-// each check whose prerequisite is missing. pruneScratch lets the
-// scratch check remove the stale entries it would otherwise report;
-// pruneCapsules does the same for the capsule retention check;
-// fixPrompts lets the harness diagram guidance check append its block.
 // runDoctorChecks runs the config check, the Host-level rows and the
 // default Cell's ladder (the full report of old, byte for byte), then
 // answers each named Cell's section. pruneScratch lets the scratch
