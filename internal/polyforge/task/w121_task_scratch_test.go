@@ -215,3 +215,35 @@ func TestW121TaskScratchEnv(t *testing.T) {
 		}
 	}
 }
+
+// TestW121TaskScratchReadOnlyNone: a read-only errand (the message
+// analyzer) runs without scratch directories — no dirs created in the
+// workspace, none in the spec, no # Scratch section: its invariant is
+// that not one path of the workspace changes.
+func TestW121TaskScratchReadOnlyNone(t *testing.T) {
+	ws := t.TempDir()
+	r := &w121Runner{}
+	m := NewManager(Config{
+		Store:  NewStore(t.TempDir()),
+		Runner: r,
+		Resolve: func(string) ([]string, string, error) {
+			return []string{"pi:a/one"}, "steps.p.task.models", nil
+		},
+		WorkDir: func(string) (string, error) { return ws, nil },
+	})
+	t.Cleanup(m.Close)
+	tk, err := m.Spawn(Spec{Project: "p", Prompt: "read only", ReadOnlyTools: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, m, tk.ID, StateCompleted)
+	if r.specs[0].ScratchTaskDir != "" || r.specs[0].ScratchRawDir != "" {
+		t.Fatalf("a read-only errand carries no scratch directories: %+v", r.specs[0])
+	}
+	if strings.Contains(r.prompts[0], "# Scratch") {
+		t.Fatalf("a read-only errand's prompt carries no # Scratch section:\n%s", r.prompts[0])
+	}
+	if _, err := os.Stat(filepath.Join(ws, workspace.ScratchDir)); !os.IsNotExist(err) {
+		t.Fatalf("a read-only errand created scratch/ in the workspace: %v", err)
+	}
+}
