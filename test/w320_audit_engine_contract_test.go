@@ -86,7 +86,7 @@ func w320AuditAppended(t *testing.T, frozenOut, dir, engineDir string) string {
 	if s == "" {
 		return frozenOut
 	}
-	return frozenOut + "command: " + w320AuditCmd(engineDir, s) + "\n"
+	return frozenOut + "command: " + w320AuditCmd(engineDir, s) + w320LevelOf(t, dir) + "\n"
 }
 
 type w320aeCommand struct {
@@ -394,6 +394,32 @@ func w320aeRunPlanned(t *testing.T, top, nestedRel, planned string) (string, int
 	return errb.String(), code
 }
 
+// w320LevelOf answers the audit_prod_level an engine root's conf declares,
+// as the audit-command suffix it produces ("" when undeclared or unreadable)
+// — a report of a tree built from a conf that declares a level carries it.
+func w320LevelOf(t *testing.T, engineRoot string) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(engineRoot, ".polyforge", "verify-scope.conf"))
+	if err != nil {
+		return ""
+	}
+	for _, ln := range strings.Split(string(raw), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(ln), "audit_prod_level="); ok && v != "" {
+			return " --npm-prod-level " + strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
+// w320aeShippedLevel answers the shipped conf's declared audit_prod_level
+// as the audit-command suffix it produces ("" when undeclared): a fixture
+// built from the repository's own conf expects exactly what that conf
+// declares (polyforge#113 — the repository declares moderate).
+func w320aeShippedLevel(t *testing.T) string {
+	t.Helper()
+	return w320LevelOf(t, w25engRoot(t))
+}
+
 // TestW320AuditEngineNestedRootReadsTopLedger: at a nested engine root (a
 // subdirectory with its own conf, whose commands run behind `cd <root> &&`)
 // the audit reads the repository's one exemption ledger, at the top of the
@@ -444,7 +470,7 @@ func TestW320AuditEngineNestedRootReadsTopLedger(t *testing.T) {
 
 	// The top: unchanged, no --ledger.
 	w320aeRequireAudit(t, "the top, --full", w320aeJSON(t, dir, "--full"),
-		w320AuditCmd(engineDir, " --go --npm 'pi-web' --npm 'pi-web/demo' --npm 'tools/site'"))
+		w320AuditCmd(engineDir, " --go --npm 'pi-web' --npm 'pi-web/demo' --npm 'tools/site'")+w320aeShippedLevel(t))
 
 	// The top's ledger absent: nothing is exempt, and a ledger under the
 	// nested root is not the repository's.

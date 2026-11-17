@@ -417,8 +417,10 @@ and the release:
   prints the sha256 of the text
   `polyforge-gate-id 1`, `dockerfile <sha256 of .polyforge/Dockerfile.verify>`
   and the conf's gate lines — every line whose key is `stack`, `fast_gate`,
-  `full_command`, `check`, `check_requires_env`, `check_requires_cmd` or
-  `check_timeout`, leading whitespace removed, in file order — each line
+  `full_command`, `check`, `check_requires_env`, `check_requires_cmd`,
+  `check_timeout` or `audit_prod_level` (polyforge#113: a declared level
+  moves the engine-appended audit command, so a green tag of one level is
+  never reused for another), leading whitespace removed, in file order — each line
   ending in a newline, both files read from that commit (default `HEAD`);
   `--show` prints the hashed text. With `--image <digest>` — the prepared
   image's local ID, what `gate.py --image` passes after a run — an

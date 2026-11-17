@@ -46,9 +46,11 @@
 # whitespace removed (as the engine reads it) that is neither blank nor a
 # `#` comment and whose key — the text before its first `=` — is one of
 # stack, fast_gate, full_command, check, check_requires_env,
-# check_requires_cmd or check_timeout: the keys that decide which commands
-# a --full plan on an empty diff runs, in which order, under which
-# prerequisites and timeouts. They are kept in file order, byte for byte
+# check_requires_cmd, check_timeout or audit_prod_level: the keys that
+# decide which commands a --full plan on an empty diff runs, in which
+# order, under which prerequisites and timeouts (audit_prod_level moves
+# the engine-appended audit command's --npm-prod-level, polyforge#113).
+# They are kept in file order, byte for byte
 # otherwise. Every other key (forced_full, module_root, test_glob,
 # base_setup, the selection and micro keys, report=) and every
 # comment is left out: editing them does not change the gate. The engine
@@ -130,7 +132,8 @@ fi
       if (i == 0) next
       k = substr($0, 1, i - 1)
       if (k == "stack" || k == "fast_gate" || k == "full_command" || k == "check" ||
-          k == "check_requires_env" || k == "check_requires_cmd" || k == "check_timeout") print
+          k == "check_requires_env" || k == "check_requires_cmd" || k == "check_timeout" ||
+          k == "audit_prod_level") print
     }' "$work/conf"
 } >"$work/input"
 
