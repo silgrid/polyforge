@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { jsonResponse } from "@/lib/json-response";
 import { isSessionFiltered } from "@/lib/session-filter";
 import { listAllSessions } from "@/lib/session-reader";
 
@@ -43,7 +42,7 @@ export async function GET(req: Request) {
       .filter((session) => isSessionFiltered(session, patterns as string[]))
       .map((session) => session.id);
 
-    return jsonResponse(req, { matchedIds }, { headers: { "Cache-Control": "no-store" } });
+    return NextResponse.json({ matchedIds }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return NextResponse.json(
       { error: String(error) },
