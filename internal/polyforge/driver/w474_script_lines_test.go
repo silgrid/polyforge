@@ -28,8 +28,8 @@ func TestW474ScriptStepsCarryTheirLines(t *testing.T) {
 		{"micro", "merge", "merge.py", []string{" --publish artifacts/publish.json --verified artifacts/run/result.json --landing-out artifacts/merge/landing.json --json --out artifacts/merge/result.json"}},
 		{"micro", "evidence", "run.py", []string{" --isolation host --plan-from artifacts/fix/evidence.json --json --out artifacts/run/result.json"}},
 		{"integrate", "revert", "revert.py", []string{
-			" --batch artifacts/integrate/batch.json --item <id> --item <id> … --ops-out artifacts/integrate/revert-ops.json --json --out artifacts/integrate/revert.json",
-			" --batch artifacts/integrate/batch.json --ops-out artifacts/integrate/revert-ops.json --json --out artifacts/integrate/revert.json"}},
+			" --batch artifacts/integrate/batch.json --item <id> --item <id> … --repair artifacts/integrate/repair-plan.json --ops-out artifacts/integrate/revert-ops.json --json --out artifacts/integrate/revert.json",
+			" --batch artifacts/integrate/batch.json --repair artifacts/integrate/repair-plan.json --ops-out artifacts/integrate/revert-ops.json --json --out artifacts/integrate/revert.json"}},
 	} {
 		p := spawnStepPrompt(t, c.bundle, c.step)
 		for _, l := range c.lines {

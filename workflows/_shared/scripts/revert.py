@@ -7,7 +7,7 @@ applied.
 Usage (from the capsule root, or with --capsule)::
 
     "$PF_PYTHON" "$PF_SHARED_DIR/scripts/revert.py" --batch <batch.json> [--item <wi>]... \\
-        [--ops-out PATH] [--capsule DIR] [--plan PATH] [--deadline D] [--json] [--out PATH]
+        [--ops-out PATH] [--repair PATH] [--capsule DIR] [--plan PATH] [--deadline D] [--json] [--out PATH]
 
 ``--batch`` is the collect step's result file (schema pf-step-result/1):
 its ``heads`` are the batch's pins — repo → the default branch head the
@@ -42,6 +42,7 @@ The result's details::
 
     { "batch": "<file>", "plan": "<file>",
       "reverts": [{wi, name, group[], repos: [{name, merge_commits[], revert_pr, revert_merge}], done, why}],
+      "fixes": [{name, branch, units[], items[], pr, merge, why}],
       "heads": {"<repo>": "<sha>"}, "gated": ["<repo>", …] }
 
 ``heads`` (the result's and the details') are the pins after the reverts —
@@ -53,6 +54,21 @@ PR, or a merge conflicts in code — named under ``why``; the plan keeps it
 for the next run. Exit 2: not judged — an unreadable batch or plan, an item
 not in the batch, a task repo missing, git or gh unreachable, the deadline
 — or the invocation unusable.
+
+``--repair`` names the repair step's plan file (default: none): the
+branch the batch's own repair round fixed its red units on, per repo
+``{round, repos: [{name, branch, base, head, units, items}]}`` — the
+branch standing in the capsule's clone, never pushed by the repair. A
+missing file is a step that never ran (nothing is landed); a malformed
+one is exit 2. Each entry's branch is pushed, one PR opened and merged
+onto the default branch matching the pushed head — under the merge lock
+this step already holds — and the pins follow the fix's merge, so the
+gate re-runs on the default branch and a green tag lands there. A fix
+whose blamed item (``items``) a revert of the same run carries is never
+landed: its PR is not opened (the owner ruled the item reverted, not
+repaired). The landings are resumable through the plan record like the
+reverts: a merged PR is read back, a refused merge keeps its PR (exit
+1, the ``why`` naming the repo).
 
 ``--ops-out`` (the revert skill registers it with ``pf step hub batch``) is
 written atomically on exit 0: a JSON array of hub writes, per done revert
@@ -79,7 +95,7 @@ import argparse  # noqa: E402
 import json  # noqa: E402
 import traceback  # noqa: E402
 from dataclasses import dataclass, field  # noqa: E402
-from typing import Any, Dict, List, Mapping, Optional, Tuple  # noqa: E402
+from typing import Any, Dict, List, Mapping, Optional, Set, Tuple  # noqa: E402
 
 from pfstep import atomic, jsonout, runner  # noqa: E402
 from pfstep import integration as rules  # noqa: E402
@@ -190,19 +206,54 @@ class RevertEntry:
         return d
 
 
+@dataclass
+class FixRepo:
+    """One repo's repair branch to land: the branch the batch's repair
+    round fixed its red units on (never pushed by the repair), the units
+    and the items the gate attributed them to — and, as the landing
+    stands, its PR and merge once landed, else why it was not."""
+
+    name: str = ""
+    branch: str = ""
+    base: str = ""
+    head: str = ""
+    units: List[str] = field(default_factory=list)
+    items: List[str] = field(default_factory=list)
+    pr: str = ""
+    merge: str = ""
+    # why the last run did not land it
+    why: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        d: Dict[str, Any] = {"name": self.name, "branch": self.branch, "units": list(self.units), "items": list(self.items)}
+        if self.pr:
+            d["pr"] = self.pr
+        if self.merge:
+            d["merge"] = self.merge
+        if self.why:
+            d["why"] = self.why
+        return d
+
+
 class Plan:
-    """The plan record: the reverts by source item id."""
+    """The plan record: the reverts by source item id, the fix landings by
+    repo name."""
 
     def __init__(self, path: str) -> None:
         self.path = path
         self.reverts: Dict[str, RevertEntry] = {}
+        self.fixes: Dict[str, FixRepo] = {}
 
     def save(self) -> None:
-        doc = {"reverts": {k: self.reverts[k].to_dict() for k in sorted(self.reverts)}}
+        doc = {"reverts": {k: self.reverts[k].to_dict() for k in sorted(self.reverts)},
+               "fixes": {k: self.fixes[k].to_dict() for k in sorted(self.fixes)}}
         atomic.write(self.path, jsonout.dumps(doc).encode("utf-8"), 0o644)
 
     def sorted(self) -> List[RevertEntry]:
         return [self.reverts[k] for k in sorted(self.reverts)]
+
+    def fixes_list(self) -> List[FixRepo]:
+        return [self.fixes[k] for k in sorted(self.fixes)]
 
 
 def plan_revert(item: BatchItem, items: List[BatchItem]) -> RevertEntry:
@@ -233,15 +284,17 @@ def plan_revert(item: BatchItem, items: List[BatchItem]) -> RevertEntry:
 
 
 class Details:
-    def __init__(self, batch: str, plan: str, reverts: List[RevertEntry]) -> None:
+    def __init__(self, batch: str, plan: str, reverts: List[RevertEntry], fixes: List[FixRepo]) -> None:
         self.batch = batch
         self.plan = plan
         self.reverts = reverts
+        self.fixes = fixes
         self.heads: Dict[str, str] = {}
         self.gated: List[str] = []
 
     def to_dict(self) -> Dict[str, Any]:
         return {"batch": self.batch, "plan": self.plan, "reverts": [e.to_dict() for e in self.reverts],
+                "fixes": [f.to_dict() for f in self.fixes],
                 "heads": {k: self.heads[k] for k in sorted(self.heads)}, "gated": list(self.gated)}
 
     def pins(self, g: Git, capsule: str, batch: Dict[str, str], gated: List[str]) -> Dict[str, str]:
@@ -259,6 +312,15 @@ class Details:
                 if cur == "" or cur == r.revert_merge or not g.is_ancestor(os.path.join(capsule, "repos", r.name), r.revert_merge, cur):
                     heads[r.name] = r.revert_merge
                 append_new(self.gated, r.name)
+        for f in self.fixes:
+            if f.merge == "":
+                continue
+            cur = heads.get(f.name, "")
+            # the fix grew on the pinned head, so its merge is the newest
+            # of the two landings; the ancestor check keeps a newer head
+            if cur == "" or cur == f.merge or not g.is_ancestor(os.path.join(capsule, "repos", f.name), f.merge, cur):
+                heads[f.name] = f.merge
+            append_new(self.gated, f.name)
         self.heads = heads
         self.gated.sort()
         return heads
@@ -393,8 +455,72 @@ def read_plan(plan: Plan) -> None:
             plan.reverts[k] = RevertEntry(wi=_get(e, "wi", str) or "", name=_get(e, "name", str) or "",
                                           group=None if grp is None else _strs(e, "group"), repos=repos,
                                           done=bool(_get(e, "done", bool)), why=_get(e, "why", str) or "")
+        for k, e in (_get(doc, "fixes", dict) or {}).items():
+            _obj(e)
+            if not isinstance(k, str) or not k:
+                raise _Bad("json: the plan record's fixes are keyed by repo name")
+            plan.fixes[k] = FixRepo(name=_get(e, "name", str) or k, branch=_get(e, "branch", str) or "",
+                                    units=_strs(e, "units"), items=_strs(e, "items"),
+                                    pr=_get(e, "pr", str) or "", merge=_get(e, "merge", str) or "",
+                                    why=_get(e, "why", str) or "")
     except ValueError as err:
         raise GoError("the plan record %s is not JSON: %s" % (plan.path, err)) from None
+
+
+def _strs_req(v: Any, key: str, at: str) -> List[str]:
+    xs = _strs(v, key)
+    if not xs:
+        raise _Bad("%s: %s is a non-empty list" % (at, key))
+    return xs
+
+
+def read_repair(path: str) -> List[FixRepo]:
+    """The repair step's plan file: one FixRepo per repo it fixed. A
+    missing file is a step that never ran (no fix); a malformed entry is
+    _Bad naming it."""
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+    except FileNotFoundError:
+        return []
+    except OSError as err:
+        raise _Bad("the repair plan %s: %s" % (path, gostr.os_error("open", path, err))) from None
+    try:
+        doc = json.loads(raw.decode("utf-8", "replace"))
+        if not isinstance(doc, dict):
+            raise _Bad("json: cannot unmarshal %s into the repair plan" % type(doc).__name__)
+        if "repos" not in doc:
+            raise _Bad("json: the repair plan carries no repos")
+        out: List[FixRepo] = []
+        seen: Set[str] = set()
+        repos = _get(doc, "repos", list) or []
+        if not isinstance(repos, list):
+            raise _Bad("json: cannot unmarshal %s into the field repos" % type(repos).__name__)
+        for i, e in enumerate(repos):
+            at = "the repair plan's repo %d" % (i + 1)
+            _obj(e)
+            name = _get(e, "name", str) or ""
+            if name == "" or name in seen:
+                raise _Bad("%s names no repo or names one twice" % at)
+            seen.add(name)
+            branch = _get(e, "branch", str) or ""
+            if branch == "":
+                raise _Bad("%s names no branch" % at)
+            out.append(FixRepo(name=name, branch=branch,
+                               base=_get(e, "base", str) or "", head=_get(e, "head", str) or "",
+                               units=_strs_req(e, "units", at), items=_strs_req(e, "items", at)))
+    except ValueError as err:
+        if isinstance(err, _Bad):
+            raise
+        raise _Bad("the repair plan %s is not JSON: %s" % (path, err)) from None
+    return out
+
+
+def fix_blamed(f: FixRepo, reverting: Set[str]) -> bool:
+    """Whether a revert this run carries blames one of the fix's items:
+    the owner ruled the item reverted, not repaired, so its fix PR is
+    never opened."""
+    return any(it in reverting for it in f.items)
 
 
 def parser() -> argparse.ArgumentParser:
@@ -403,6 +529,8 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--item", action="append", default=[],
                     help="an item (id or slug) to revert, with its landed fix tickets; repeatable — the only way items to revert"
                          " arrive: the skill passes collect's reverts and the round's rewind input (full-gate's reverts) each as --item")
+    ap.add_argument("--repair", default="",
+                    help="the repair step's plan file (repair-plan.json): the branch each repo's fix stands on; a missing file is a step that never ran")
     ap.add_argument("--capsule", default=".", help="the capsule root (its repos/<name> are the clones)")
     ap.add_argument("--plan", default="", help="the plan record (default: revert-plan.json beside --out, else the capsule's artifacts/integrate/)")
     ap.add_argument("--deadline", type=duration_flag, default=0,
@@ -415,10 +543,13 @@ def parser() -> argparse.ArgumentParser:
 
 
 class Revert:
-    def __init__(self, inv: Invocation, g: Git, ctx: Ctx) -> None:
+    def __init__(self, inv: Invocation, g: Git, ctx: Ctx, fix_reverting: List[RevertEntry]) -> None:
         self.inv = inv
         self.g = g
         self.ctx = ctx
+        # the reverts this run carries: a fix blaming one of their items
+        # never lands
+        self.fix_reverting = fix_reverting
 
     def not_judged(self, why: str) -> int:
         e = self.ctx.err()
@@ -426,6 +557,101 @@ class Revert:
             why = "interrupted (%s): %s" % (e, why)
         self.inv.summary = "not judged: " + why
         return 2
+
+    def land_fix(self, capsule: str, plan: Plan, f: FixRepo, batch_id: str) -> bool:
+        """One repair branch landed onto the default branch: pushed, its PR
+        opened (an earlier attempt picked up: a merged one read back, an
+        open one merged) and merged matching the pushed head; the landing
+        recorded in the plan as it stands. Answers whether the run may go
+        on (a fix whose blamed item this run reverts is not attempted at
+        all)."""
+        g, inv = self.g, self.inv
+        reverting: Set[str] = set()
+        for e in self.fix_reverting:
+            reverting.update(e.group or [e.wi])
+        if fix_blamed(f, reverting):
+            f.why = "the blamed item is reverted in this batch: the owner ruled it reverted, not repaired"
+            return True
+        d = os.path.join(capsule, "repos", f.name)
+        if not os.path.isdir(d):
+            inv.summary = "not judged: landing the repair of repos/%s: it is not a task repo of the capsule %s" % (f.name, capsule)
+            return False
+        base = g.default_branch(d)
+        try:
+            g.fetch(d, base)
+        except GoError as err:
+            inv.summary = "not judged: landing the repair of repos/%s: fetching %s: %s" % (f.name, base, err)
+            return False
+        try:
+            pr = g.find_pr(d, f.branch)
+        except GoError as err:
+            inv.summary = "not judged: landing the repair of repos/%s: %s" % (f.name, err)
+            return False
+        if pr is not None and pr.state == "MERGED":
+            if pr.merge_commit is not None:
+                f.pr, f.merge, f.why = pr.url, pr.merge_commit, ""
+                return True
+        try:
+            g.fetch(d, f.branch)
+        except GoError:
+            pass
+        try:
+            g.checkout(d, f.branch)  # the repair's local branch
+        except GoError:
+            try:
+                g.checkout(d, "refs/remotes/origin/" + f.branch)
+            except GoError:
+                inv.summary = ("not judged: landing the repair of repos/%s: the branch %s is in neither the clone nor origin"
+                               % (f.name, f.branch))
+                return False
+        head = g.rev(d, "HEAD")
+        if pr is not None and pr.state == "OPEN":
+            url, merge, fail = pr.url, "", None
+            try:
+                g.merge_pr(d, url, pr.head_ref_oid)
+                merge = g.view_pr(d, url).merge_commit or ""
+            except GoError as err:
+                fail = err
+        else:
+            url, merge, fail = "", "", None
+            try:
+                g.push(d, f.branch)
+                url = g.create_pr(d, base, f.branch,
+                                  "Fix the batch's red units (integration batch %s)" % batch_id,
+                                  "The integration batch %s fixes its red units on %s (units: %s; items: %s).\n"
+                                  % (batch_id, f.branch, ", ".join(f.units), ", ".join(f.items)))
+                g.merge_pr(d, url, head)
+                merge = g.view_pr(d, url).merge_commit or ""
+            except GoError as err:
+                fail = err
+        if url != "":
+            f.pr = url
+        if fail is not None:
+            f.why = "repos/%s: %s" % (f.name, fail)
+            try:
+                plan.save()
+            except OSError as serr:
+                inv.summary = "not judged: the plan record %s could not be written: %s" % (plan.path, serr)
+                return False
+            inv.summary = ("the repair of repos/%s did not land: %s (the plan keeps it: fix the cause, then run"
+                           " revert.py again)" % (f.name, fail))
+            return False
+        f.merge, f.why = merge, ""
+        try:
+            plan.save()
+        except OSError as serr:
+            inv.summary = "not judged: the plan record %s could not be written: %s" % (plan.path, serr)
+            return False
+        try:
+            g.fetch(d, base)
+            try:
+                g.checkout(d, merge)
+            except GoError:
+                pass
+        except GoError:
+            pass
+        inv.say("landed the repair of repos/%s: %s merged as %s" % (f.name, gostr.or_text(url, "(already merged)"), gostr.short(merge)))
+        return True
 
     def carry_out(self, capsule: str, plan: Plan, details: Details, batch: Batch) -> int:
         g, inv = self.g, self.inv
@@ -502,11 +728,37 @@ class Revert:
                 plan.save()
             except OSError as serr:
                 return self.not_judged("the plan record %s could not be written: %s" % (plan.path, serr))
-        names = [e.name for e in details.reverts]
-        if not names:
-            inv.summary = "nothing to revert: the pins copied for %d repo(s)" % len(batch.heads)
+        # the batch's repair branches land after the reverts: a fix grew on
+        # the head the gate judged, so its merge onto the default branch is
+        # the newest landing and the pin the re-run gate judges
+        batch_id = gostr.or_text(inv.getenv("PF_WI_ID"), NAME)
+        reverting = {it for e in details.reverts for it in (e.group or [e.wi])}
+        for f in details.fixes:
+            if f.merge != "":
+                continue  # landed by an earlier run
+            if fix_blamed(f, reverting):
+                if not f.why:
+                    f.why = "the blamed item is reverted in this batch: the owner ruled it reverted, not repaired"
+                continue  # not this batch's to land
+            if not self.land_fix(capsule, plan, f, batch_id):
+                return 1 if "did not land" in (inv.summary or "") else 2
+        for f in details.fixes:
+            if f.merge == "" and f.why == "" and not fix_blamed(f, reverting):
+                inv.summary = "not judged: the repair of repos/%s neither landed nor refused" % f.name
+                return 2
+        landed_fixes = [f for f in details.fixes if f.merge != ""]
+        skipped_fixes = [f for f in details.fixes if f.merge == "" and f.why != ""]
+        summary = ""
+        if details.reverts:
+            summary = "%d revert(s) landed (%s)" % (len(details.reverts), ", ".join(e.name for e in details.reverts))
         else:
-            inv.summary = "%d revert(s) landed (%s); the pins written with them" % (len(names), ", ".join(names))
+            summary = "nothing to revert"
+        if landed_fixes:
+            summary += "; %d repair branch(es) landed (%s)" % (len(landed_fixes), ", ".join(f.name for f in landed_fixes))
+        if skipped_fixes:
+            summary += "; %d repair branch(es) not landed (%s)" % (len(skipped_fixes), ", ".join(f.name for f in skipped_fixes))
+        summary += "; the pins written"
+        inv.summary = summary
         return 0
 
 
@@ -560,15 +812,29 @@ def run(inv: Invocation, a: argparse.Namespace, held: List[Details]) -> int:
     for e in plan.reverts.values():
         if not e.repos:
             e.done = True  # nothing of it is on any default branch
+    if a.repair:
+        try:
+            incoming = read_repair(a.repair)
+        except _Bad as err:
+            return inv.usage("the repair plan: %s" % err)
+        for fx in incoming:
+            kept = plan.fixes.get(fx.name)
+            if kept is None:
+                plan.fixes[fx.name] = fx
+                continue
+            # an earlier run's landing is kept: the plan file's round may be
+            # newer, so its units and items refresh the record
+            kept.branch, kept.base, kept.head = fx.branch, fx.base, fx.head
+            kept.units, kept.items = list(fx.units), list(fx.items)
     try:
         plan.save()
     except OSError as err:
         return inv.usage("the plan record %s could not be written: %s" % (plan.path, err))
-    details = Details(a.batch, plan.path, plan.sorted())
+    details = Details(a.batch, plan.path, plan.sorted(), plan.fixes_list())
     inv.details = details.to_dict
     held.append(details)
     ctx = Ctx(inv.deadline(a.deadline) / 1e9)
-    rv = Revert(inv, Git(ctx, inv.env), ctx)
+    rv = Revert(inv, Git(ctx, inv.env), ctx, plan.sorted())
     try:
         return rv.carry_out(capsule, plan, details, batch)
     finally:

@@ -18,7 +18,7 @@ from .test_integrate import FakeHub, wi
 
 
 def details(*entries: revert.RevertEntry) -> revert.Details:
-    return revert.Details("batch.json", "plan.json", list(entries))
+    return revert.Details("batch.json", "plan.json", list(entries), [])
 
 
 def landed(wid: str, slug: str, **rec: Any) -> Dict[str, Any]:

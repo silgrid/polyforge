@@ -417,8 +417,8 @@ func TestRevertLandsTheBatchRepair(t *testing.T) {
 	if fileIn(t, w.dir("app"), "tests/stale_test.go") == "" || fileIn(t, w.dir("app"), "src.txt") != "s\n" {
 		t.Fatal("the default branch carries the repair beside the landed change")
 	}
-	if w.prCount("app") != 1 || w.prFile("app", 1, "state") != "MERGED" || w.prFile("app", 1, "head") != branch {
-		t.Fatalf("one fix PR per repo, merged: %d %s", w.prCount("app"), w.prFile("app", 1, "state"))
+	if w.prCount("app") != 2 || w.prFile("app", 2, "state") != "MERGED" || w.prFile("app", 2, "head") != branch {
+		t.Fatalf("one fix PR per repo, merged: %d %s %s", w.prCount("app"), w.prFile("app", 2, "state"), w.prFile("app", 2, "head"))
 	}
 	if got := readOps(t, out); got != "[]" {
 		t.Fatalf("nothing reverted: no move: %q", got)
@@ -437,7 +437,7 @@ func TestRevertLandsTheBatchRepair(t *testing.T) {
 		t.Fatal(err)
 	}
 	exit, res, d, errb = runRevert(w, out, "--repair", plan)
-	if exit != 0 || len(d.Fixes) != 1 || d.Fixes[0].Merge != f.Merge || d.Fixes[0].PR != f.PR || w.prCount("app") != 1 || res.Heads["app"] != f.Merge {
+	if exit != 0 || len(d.Fixes) != 1 || d.Fixes[0].Merge != f.Merge || d.Fixes[0].PR != f.PR || w.prCount("app") != 2 || res.Heads["app"] != f.Merge {
 		t.Fatalf("the re-run reads the merged fix PR back: exit %d, %+v\n%s", exit, d.Fixes, errb)
 	}
 	// a fix whose blamed item the same run reverts is not landed: no PR
@@ -458,7 +458,7 @@ func TestRevertLandsTheBatchRepair(t *testing.T) {
 		len(d.Reverts) != 1 || !d.Reverts[0].Done || res.Heads["app"] != d.Reverts[0].repo("app").RevertMerge {
 		t.Fatalf("the reverted item's fix is not landed, the pin follows the revert: exit %d, %+v %+v\n%s", exit, d.Fixes, d.Reverts, errb)
 	}
-	if w2.prCount("app") != 1 || w2.prFile("app", 1, "head") != "integrate/revert-p-1" {
+	if w2.prCount("app") != 2 || w2.prFile("app", 2, "head") != "integrate/revert-p-1" {
 		t.Fatalf("only the revert's PR: %d %s", w2.prCount("app"), w2.prFile("app", 1, "head"))
 	}
 	// a refused merge keeps the PR for the next run (exit 1, the why)
@@ -478,14 +478,13 @@ func TestRevertLandsTheBatchRepair(t *testing.T) {
 		t.Fatal(err)
 	}
 	exit, res, d, errb = runRevert(w3, out3, "--repair", plan3)
-	if exit != 1 || res.Verdict != VerdictFail || !strings.Contains(res.Summary, "repos/app") || d.Fixes[0].Why == "" || w3.prFile("app", 1, "state") != "OPEN" {
+	if exit != 1 || res.Verdict != VerdictFail || !strings.Contains(res.Summary, "repos/app") || d.Fixes[0].Why == "" || w3.prFile("app", 2, "state") != "OPEN" {
 		t.Fatalf("the refused fix merge: exit %d, %+v, %+v\n%s", exit, res, d.Fixes, errb)
 	}
-	if err := os.Remove(filepath.Join(w3.ghState, "fail-created-merge")); err != nil {
-		t.Fatal(err)
-	}
+	// the fake gh consumes the marker: the PR's merge fails once, the next
+	// run merges the same PR
 	exit, res, d, errb = runRevert(w3, out3, "--repair", plan3)
-	if exit != 0 || d.Fixes[0].Merge == "" || d.Fixes[0].Why != "" || w3.prCount("app") != 1 || res.Heads["app"] != w3.originMain("app") {
+	if exit != 0 || d.Fixes[0].Merge == "" || d.Fixes[0].Why != "" || w3.prCount("app") != 2 || res.Heads["app"] != w3.originMain("app") {
 		t.Fatalf("the next run merges the same fix PR: exit %d, %+v\n%s", exit, d.Fixes, errb)
 	}
 	// the repair file of a step that never ran is absent (no fix, the pins

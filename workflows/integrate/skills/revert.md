@@ -1,6 +1,6 @@
 ---
 name: revert
-description: Carry out the owner's reverts with the revert script under the merge locks, write the gate's pins and register the record moves it writes; with nothing to revert, copy the pins.
+description: Carry out the owner's reverts and land the batch's repair branches with the revert script under the merge locks, write the gate's pins and register the record moves it writes; with nothing to revert and nothing to land, copy the pins.
 commands: [revert.py]
 ---
 # revert
@@ -28,6 +28,13 @@ registration.
    The union, each id once, is the list; an id must be an `id` of `batch.json`'s
    `details.items` or a `wi` of its `details.holds` (a stuck hold the owner ruled reverted
    is a held item, seldom a batch item); `pf step ask` the owner about any other.
+3. **The batch's repair branches.** `artifacts/integrate/repair-plan.json`, when the
+   repair step wrote one this round, parses as `{"round", "repos": [{"name", "branch",
+   "base", "head", "units", "items"}]}` — the branch of each repo it fixed, standing in
+   the capsule's clone (a file that does not exist is a step that never ran: the line
+   passes it the same, and the script lands nothing). Your line always names it; the
+   script pushes each branch, opens and merges its PR onto the default branch under the
+   merge lock you hold, and never lands a fix whose blamed item this run reverts.
 
 ## Procedure
 
@@ -42,8 +49,8 @@ registration.
 
    | Your list | The line |
    |---|---|
-   | one or more ids | `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/revert.py" --batch artifacts/integrate/batch.json --item <id> --item <id> … --ops-out artifacts/integrate/revert-ops.json --json --out artifacts/integrate/revert.json` |
-   | empty | `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/revert.py" --batch artifacts/integrate/batch.json --ops-out artifacts/integrate/revert-ops.json --json --out artifacts/integrate/revert.json` |
+   | one or more ids | `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/revert.py" --batch artifacts/integrate/batch.json --item <id> --item <id> … --repair artifacts/integrate/repair-plan.json --ops-out artifacts/integrate/revert-ops.json --json --out artifacts/integrate/revert.json` |
+   | empty | `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/revert.py" --batch artifacts/integrate/batch.json --repair artifacts/integrate/repair-plan.json --ops-out artifacts/integrate/revert-ops.json --json --out artifacts/integrate/revert.json` |
 
    With an empty list it copies the pins; `gated` stays collect's, so an empty batch stays
    empty. The full gate checks the result's `argv` against this table.
@@ -74,7 +81,9 @@ registration.
 - **回应上一轮** (after a full-gate FAIL): the owner's revert ruling the gate's section
   quotes, and the reverts this round carried out for it.
 - **做了什么**: the reverts that landed (item, repo, PR, merge), or that there was nothing
-  to revert; the pins the gate gets (`revert.json`'s `heads`).
+  to revert; the repair branches that landed (repo, PR, merge) and any the script did not
+  land (its `why` — a reverted item's is the owner's ruling, not a failure); the pins the
+  gate gets (`revert.json`'s `heads`).
 - **关键决定和理由**: where each item to revert came from (collect's ruling, or the owner's
   revert after the gate), and each owner message you acted on (its `at`, the words, your
   reading).
