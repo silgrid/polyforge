@@ -33,40 +33,6 @@ import (
 	"github.com/silgrid/polyforge/internal/common/capsule"
 )
 
-// childrenJSON is the snapshot file's capsule-relative path.
-const childrenJSON = "runtime-state/children.json"
-
-// epicResumeJSON is the resume marker's capsule-relative path: written
-// beside a NEW snapshot version, consumed (and removed) by the driver at
-// its next start.
-const epicResumeJSON = "runtime-state/epic-resume.json"
-
-// epicChild is one child of the snapshot.
-type epicChild struct {
-	ID     string `json:"id"`
-	Slug   string `json:"slug"`
-	Status string `json:"status"`
-	// Landing is the child's landing record as the hub carries it,
-	// verbatim (childLandingAttr) — a wrapped child's landed_on_target
-	// evidence (Q6): the PR links and merge commits review reads and the
-	// epic's own landing record attaches. A child without one lands as
-	// null (the verify-children step judges it, never the snapshot).
-	Landing json.RawMessage `json:"landing"`
-}
-
-// epicChildrenFile is the snapshot's shape.
-type epicChildrenFile struct {
-	Version  int         `json:"version"`
-	Children []epicChild `json:"children"`
-}
-
-// epicResumeMarker is the resume marker's shape: the step the driver
-// re-runs from (review) and the snapshot version that moved.
-type epicResumeMarker struct {
-	ResetFrom       string `json:"reset_from"`
-	SnapshotVersion int    `json:"snapshot_version"`
-}
-
 // childLandingAttr is the hub attrs key a wrapped child's landing record
 // lives under: the snapshot copies the record VERBATIM (the key is the
 // record's data-format name, written by the merge step's wrap-attrs and
@@ -82,56 +48,56 @@ func (r *Runtime) writeEpicChildren(j *job) error {
 	if !capsuleIsEpic(j.capsuleDir) {
 		return nil // not an epic: no snapshot, the claim behaves as before
 	}
-	path := filepath.Join(j.capsuleDir, filepath.FromSlash(childrenJSON))
+	path := filepath.Join(j.capsuleDir, filepath.FromSlash(capsule.ChildrenJSON))
 	current, err := r.hub.ListChildren(j.wi)
 	if err != nil {
 		return epicChildrenErr(j, "the children cannot be read: %v", err)
 	}
-	next := epicChildrenFile{Children: snapshotChildren(current)}
+	next := capsule.EpicChildren{Children: snapshotChildren(current)}
 	var existing []byte
 	if raw, err := os.ReadFile(path); err == nil {
 		existing = raw
-		var have epicChildrenFile
+		var have capsule.EpicChildren
 		if err := json.Unmarshal(raw, &have); err != nil {
-			return epicChildrenErr(j, "%s does not parse: %v", childrenJSON, err)
+			return epicChildrenErr(j, "%s does not parse: %v", capsule.ChildrenJSON, err)
 		}
 		if sameChildren(have, next) {
 			return nil // unchanged: the reviewed baseline stays byte for byte
 		}
 		next.Version = have.Version + 1
 	} else if !os.IsNotExist(err) {
-		return epicChildrenErr(j, "%s is unreadable: %v", childrenJSON, err)
+		return epicChildrenErr(j, "%s is unreadable: %v", capsule.ChildrenJSON, err)
 	} else {
 		next.Version = 1
 	}
 	blob, err := json.Marshal(next)
 	if err != nil {
-		return epicChildrenErr(j, "%s cannot be written: %v", childrenJSON, err)
+		return epicChildrenErr(j, "%s cannot be written: %v", capsule.ChildrenJSON, err)
 	}
 	if err := atomicfile.Write(path, append(blob, '\n'), 0o644); err != nil {
-		return epicChildrenErr(j, "%s cannot be written: %v", childrenJSON, err)
+		return epicChildrenErr(j, "%s cannot be written: %v", capsule.ChildrenJSON, err)
 	}
 	if existing == nil {
 		return nil // the first claim: nothing was reviewed yet, nothing re-runs
 	}
-	marker, err := json.Marshal(epicResumeMarker{ResetFrom: "review", SnapshotVersion: next.Version})
+	marker, err := json.Marshal(capsule.EpicResume{ResetFrom: "review", SnapshotVersion: next.Version})
 	if err != nil {
-		return epicChildrenErr(j, "%s cannot be written: %v", epicResumeJSON, err)
+		return epicChildrenErr(j, "%s cannot be written: %v", capsule.EpicResumeJSON, err)
 	}
-	if err := atomicfile.Write(filepath.Join(j.capsuleDir, filepath.FromSlash(epicResumeJSON)), append(marker, '\n'), 0o644); err != nil {
-		return epicChildrenErr(j, "%s cannot be written: %v", epicResumeJSON, err)
+	if err := atomicfile.Write(filepath.Join(j.capsuleDir, filepath.FromSlash(capsule.EpicResumeJSON)), append(marker, '\n'), 0o644); err != nil {
+		return epicChildrenErr(j, "%s cannot be written: %v", capsule.EpicResumeJSON, err)
 	}
 	return nil
 }
 
 // snapshotChildren answers the snapshot's children of the hub's list:
 // the child fields and the landing record verbatim, sorted by seq.
-func snapshotChildren(items []api.WorkItem) []epicChild {
+func snapshotChildren(items []api.WorkItem) []capsule.EpicChild {
 	sorted := append([]api.WorkItem(nil), items...)
 	sort.SliceStable(sorted, func(a, b int) bool { return sorted[a].Seq < sorted[b].Seq })
-	out := make([]epicChild, 0, len(sorted))
+	out := make([]capsule.EpicChild, 0, len(sorted))
 	for _, wi := range sorted {
-		c := epicChild{ID: wi.ID, Slug: wi.Slug, Status: wi.Status}
+		c := capsule.EpicChild{ID: wi.ID, Slug: wi.Slug, Status: wi.Status}
 		if wi.Attrs != nil {
 			if landing, ok := wi.Attrs[childLandingAttr]; ok && landing != nil {
 				if raw, err := json.Marshal(landing); err == nil {
@@ -148,7 +114,7 @@ func snapshotChildren(items []api.WorkItem) []epicChild {
 // carry the same children (the version key apart): the ids, statuses and
 // landing records all match. A missing landing (nil) and an explicit
 // null are the one absence, however JSON spelled it.
-func sameChildren(have epicChildrenFile, next epicChildrenFile) bool {
+func sameChildren(have capsule.EpicChildren, next capsule.EpicChildren) bool {
 	if len(have.Children) != len(next.Children) {
 		return false
 	}
@@ -165,7 +131,7 @@ func sameChildren(have epicChildrenFile, next epicChildrenFile) bool {
 // landingKey answers the landing record's comparison key: the raw JSON
 // with an absent one (nil or the null literal) normalized to the one
 // empty spelling.
-func landingKey(raw json.RawMessage) string {
+func landingKey(raw []byte) string {
 	s := string(raw)
 	if s == "" || s == "null" {
 		return ""
@@ -198,5 +164,22 @@ func epicChildrenErr(j *job, format string, args ...any) *api.Error {
 		Code: api.ErrDaemonSpawnFail,
 		Detail: fmt.Sprintf("work item %s: the epic's children snapshot could not be written: "+format,
 			append([]any{j.wi}, args...)...),
+	}
+}
+
+// epicChildrenProvider answers the runtime's hub read of j's children —
+// the closure the driver's running re-check calls before every dispatch
+// (AgentStartInput.EpicChildren). nil on a capsule that is not an
+// epic's: the re-check is an epic's own.
+func epicChildrenProvider(r *Runtime, j *job) func() ([]capsule.EpicChild, error) {
+	if !capsuleIsEpic(j.capsuleDir) {
+		return nil
+	}
+	return func() ([]capsule.EpicChild, error) {
+		items, err := r.hub.ListChildren(j.wi)
+		if err != nil {
+			return nil, err
+		}
+		return snapshotChildren(items), nil
 	}
 }

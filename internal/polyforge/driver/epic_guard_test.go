@@ -128,7 +128,18 @@ func TestEpicGuardUnchangedPasses(t *testing.T) {
 // is consumed.
 func TestEpicSnapshotResumeResetsReview(t *testing.T) {
 	live := []capsule.EpicChild{epicWrap("wi_c1", "demo#1")}
-	guard := func() ([]capsule.EpicChild, error) { return live, nil }
+	resumed := false
+	calls := 0
+	// the guard answers the wrapped set for the first five dispatches
+	// (verify-children .. publish) and the failed child at the merge's
+	// own check; after the owner's resume it answers the new set
+	guard := func() ([]capsule.EpicChild, error) {
+		calls++
+		if !resumed && calls >= 6 {
+			return []capsule.EpicChild{{ID: "wi_c1", Slug: "demo#1", Status: "failed"}}, nil
+		}
+		return live, nil
+	}
 	d, sp, _, dir := epicGuardEnv(t,
 		capsule.EpicChildren{Version: 1, Children: []capsule.EpicChild{epicWrap("wi_c1", "demo#1")}},
 		[]fakeEntry{done(`{}`), done(`{}`), done(`{}`), done(`{}`), done(`{}`),
@@ -137,7 +148,7 @@ func TestEpicSnapshotResumeResetsReview(t *testing.T) {
 	if err := d.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if got := rewindDispatched(sp); reflect.DeepEqual(got, []string{"verify-children", "sync", reviewStepID, verificationStepID, publishStepID}) {
+	if got := rewindDispatched(sp); !reflect.DeepEqual(got, []string{"verify-children", "sync", reviewStepID, verificationStepID, publishStepID}) {
 		t.Fatalf("the guard parks the epic before merge, got %v", got)
 	}
 	x := readExec(t, filepath.Join(dir, capsule.ExecutionJSON))
@@ -146,6 +157,7 @@ func TestEpicSnapshotResumeResetsReview(t *testing.T) {
 	}
 	// the owner's fix child lands: the re-claim wrote snapshot v2 and
 	// the marker; the guard answers the new set
+	resumed = true
 	live = []capsule.EpicChild{epicWrap("wi_c1", "demo#1"), epicWrap("wi_c2", "demo#2")}
 	next, _ := json.Marshal(capsule.EpicChildren{Version: 2, Children: live})
 	writeCapsuleFile(t, dir, capsule.ChildrenJSON, string(next))
@@ -164,11 +176,14 @@ func TestEpicSnapshotResumeResetsReview(t *testing.T) {
 	if x.WorkflowStatus != StatusCompleted {
 		t.Fatalf("the resumed epic completes, got %q", x.WorkflowStatus)
 	}
-	if x.RewindStats.Count != 0 || len(x.RewindStats.Rewinds) != 1 {
-		t.Fatalf("the reset is one rewind charged to no budget: %+v", x.RewindStats)
+	if len(x.RewindStats.Rewinds) != 1 {
+		t.Fatalf("the reset is one rewind: %+v", x.RewindStats)
 	}
-	if r := x.RewindStats.Rewinds[0]; r.Class != capsule.RewindOwner || r.ToStep != reviewStepID || r.Gate != "" {
-		t.Fatalf("the reset is an owner-class rewind to review: %+v", r)
+	if r := x.RewindStats.Rewinds[0]; r.Class != capsule.RewindOwner || r.ToStep != reviewStepID || r.Gate != "merge" {
+		t.Fatalf("the reset is an owner-class rewind from merge to review: %+v", r)
+	}
+	if n := AgentRewindCount(x.RewindStats.Rewinds); n != 0 {
+		t.Fatalf("the reset is charged to no budget: %d toward max_rewinds", n)
 	}
 	if st := x.Steps[reviewStepID]; st == nil || st.Status != capsule.StepDone || st.Round < 2 {
 		t.Fatalf("review re-ran on its second round: %+v", st)

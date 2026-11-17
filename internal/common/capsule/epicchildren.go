@@ -1,5 +1,7 @@
 package capsule
 
+import "encoding/json"
+
 // epicchildren.go: the epic's children snapshot and its resume marker —
 // the runtime-state files an epic's claim writes (runtime/
 // epicchildren.go, polyforge#117) and the driver reads back (its running
@@ -30,7 +32,7 @@ type EpicChild struct {
 	// PR links and merge commits review reads and the epic's own landing
 	// record attaches. A child without one is JSON null (the
 	// verify-children step judges it, never the snapshot).
-	Landing []byte `json:"landing"`
+	Landing json.RawMessage `json:"landing"`
 }
 
 // EpicChildren is the snapshot file's shape.

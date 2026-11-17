@@ -712,6 +712,7 @@ func New(cfg Config) (*Daemon, error) {
 				SpawnN:        in.SpawnN,
 				Spawner:       in.Spawner,
 				Compose:       in.Compose,
+				EpicChildren:  in.EpicChildren,
 				Params:        in.Params,
 				Interrupted:   interruptedFromCause(in.InterruptedCause),
 				StepEnded:     in.StepEnded,

@@ -477,6 +477,17 @@ func (d *Driver) Run(ctx context.Context) error {
 			return nil
 		}
 
+		// the epic's running re-check (epicguard.go, polyforge#117):
+		// before the dispatch the children as aihub holds them must
+		// still match the claim's snapshot — a change parks the
+		// workflow blocked, no question asked
+		if reason := d.epicChildrenBlocked(stepID); reason != "" {
+			if err := d.transition(TransitionRequest{Kind: TransBlocked, StepID: stepID, Reason: reason, SpawnN: d.currentSpawnN()}); err != nil {
+				return fmt.Errorf("driver: step %s children-re-check block write failed: %w", stepID, err)
+			}
+			continue // the workflow is blocked: plan stops the loop
+		}
+
 		if blocked, err := d.composeDispatch(stepID); err != nil {
 			return err
 		} else if blocked {
@@ -844,6 +855,31 @@ func (d *Driver) settle(ctx context.Context, stepID string, n int64, res *StepRe
 // stops.
 func (d *Driver) plan(ctx context.Context) (stop bool, stepID string, err error) {
 	for {
+		// The epic's resume marker (epicguard.go, polyforge#117): a
+		// re-claim over changed children wrote it beside the new
+		// snapshot version; the pass lands it as an owner-class rewind
+		// to the step it names and consumes it, then plans again. The
+		// read runs before the mutex, like the skips below.
+		if marker, pending, err := d.epicResumePending(); err != nil {
+			return false, "", err
+		} else if pending {
+			reason := fmt.Sprintf("The epic's children changed (the claim wrote snapshot version %d); the owner resumed, and the steps from %s re-run.", marker.SnapshotVersion, marker.ResetFrom)
+			if err := d.transition(TransitionRequest{
+				Kind:   TransEpicResume,
+				SpawnN: d.currentSpawnN(),
+				OwnerRewind: &capsule.OwnerRewindRequest{
+					To:     marker.ResetFrom,
+					By:     "owner (the epic's children changed)",
+					Reason: reason,
+				},
+			}); err != nil {
+				return false, "", fmt.Errorf("driver: the epic resume reset failed: %w", err)
+			}
+			if err := os.Remove(epicResumePath(d.wi.CapsuleDir)); err != nil && !os.IsNotExist(err) {
+				return false, "", fmt.Errorf("driver: the epic resume marker could not be consumed: %w", err)
+			}
+			continue // re-plan: the reset moved the position
+		}
 		// The overlay's skip switch may change between steps (polyforge#25,
 		// the daemon's override route): every plan pass re-reads the
 		// effective set — file reads, outside the mutex — and re-derives
