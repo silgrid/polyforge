@@ -410,5 +410,137 @@ class ContainerRunTest(unittest.TestCase):
         self.assertEqual(rn.box_env(), [], "an empty run environment gave the container something")
 
 
+# a prepared image and its local ID, as a step's `image` parameter names
+# them (polyforge#64)
+IMAGE_REF = "registry.example/team/verify:2026-11"
+IMAGE_ID = "sha256:" + "ab" * 32
+OTHER_REF = "registry.example/team/verify:2026-12"
+OTHER_ID = "sha256:" + "cd" * 32
+
+
+@unittest.skipUnless(HAVE_GIT and HAVE_BASH, "git and bash are needed")
+class PreparedImageVerifyTest(unittest.TestCase):
+    """verify.py with a prepared image (the step's `image` parameter,
+    polyforge#64): every touched repo's bar runs in its container — one
+    whose HEAD carries no Dockerfile too — nothing is built, the container
+    report carries the image's local ID, the result records where the
+    value came from (the flag wins over the step environment), and a
+    missing image is `not judged` (exit 2) with the fixed mark in the
+    summary. The expected values are the ticket's rulings, not the
+    implementation's own answers; the container contract (the clone
+    mount, the environment allowlist, no credential) is the default
+    mode's, pinned by the same assertions as ContainerRunTest's."""
+
+    def setUp(self) -> None:
+        self._td = tempfile.TemporaryDirectory()
+        self.root = os.path.realpath(self._td.name)
+
+    def tearDown(self) -> None:
+        self._td.cleanup()
+
+    def image_run(self, capsule: str, engine: str, rt: FakeRuntime, env: Optional[Mapping[str, str]] = None,
+                  image: str = "") -> Run:
+        """box_run's shape with the image flags: --image when asked, the
+        step environment beside it; the result file read from --json's
+        stdout."""
+        argv = ["--tier", "light", "--capsule", capsule, "--engine", engine, "--json"]
+        if image:
+            argv += ["--image", image]
+        so, se = io.StringIO(), io.StringIO()
+        with redirect_stdout(so), redirect_stderr(se):
+            code = verify.main(argv, step_env(env), runtime=rt)
+        lines = [ln for ln in so.getvalue().split("\n") if ln.strip()]
+        self.assertTrue(lines, "verify.py printed no result (exit %d): %s" % (code, se.getvalue()))
+        res = json.loads(lines[-1])
+        doc: Optional[Dict[str, Any]] = None
+        rep = ""
+        d = res.get("details") or {}
+        if d.get("result"):
+            p = os.path.join(capsule, d["result"])
+            with open(p, encoding="utf-8") as f:
+                doc = json.load(f)
+            with open(os.path.join(os.path.dirname(p), "report-mechanical.md"), encoding="utf-8") as f:
+                rep = f.read()
+        return Run(exit=code, stdout=so.getvalue(), stderr=se.getvalue(), result=res, doc=doc, report=rep)
+
+    def fx(self, sub: str, with_dockerfile: bool, *cmds: Dict[str, Any]) -> Tuple[Fixture, str]:
+        """A capsule whose repo app carries the Dockerfile on its task branch
+        (a touched repo) and a full report of the given commands."""
+        root = os.path.join(self.root, sub)
+        os.makedirs(root)
+        f = Fixture(root, {"app": {"a.txt": "a\n"}})
+        files = {"a.txt": "a2\n"}
+        if with_dockerfile:
+            files[DOCKERFILE] = TEST_DOCKERFILE
+        f.commit_in_repo("app", files, "change")
+        return f, fake_engine(root, {"app": report("full", *cmds)})
+
+    def test_every_touched_repo_runs_in_the_prepared_image(self) -> None:
+        """Both repos — one with the Dockerfile, one without — are boxed."""
+        root = os.path.join(self.root, "fx")
+        os.makedirs(root)
+        f = Fixture(root, {"app": {"a.txt": "a\n"}, "bare": {"b.txt": "b\n"}})
+        f.commit_in_repo("app", {"a.txt": "a2\n", DOCKERFILE: TEST_DOCKERFILE}, "change")
+        f.commit_in_repo("bare", {"b.txt": "b2\n"}, "change")
+        eng = fake_engine(root, {"app": report("full", cmd_of("unit", "fast", 'echo "image=$IMAGE_ONLY"')),
+                                 "bare": report("full", cmd_of("unit", "fast", "true"))})
+        fb = FakeRuntime(os.path.join(self.root, "box"))
+        fb.identities[IMAGE_REF] = (IMAGE_ID, [])
+        r = self.image_run(f.capsule, eng, fb, env={"PF_WI_ID": "wi_x", "PF_SECRET": "s3"}, image=IMAGE_REF)
+        doc = doc_of(r)
+        self.assertEqual((doc.get("incomplete", ""), doc["mechanical_verdict"]), ("", "pass"),
+                         doc.get("fail_reason", r.stderr))
+        self.assertEqual(fb.builds, [], "nothing is built")
+        self.assertEqual(len(fb.starts), 2, fb.starts)
+        by_repo = {s.labels[container.LABEL_REPO]: s for s in fb.starts}
+        self.assertEqual(sorted(by_repo), ["app", "bare"])
+        for name, s in by_repo.items():
+            self.assertEqual((s.image, s.pull_never), (IMAGE_ID, True), name)
+            self.assertEqual(s.volumes, {"pf-verify-cache-%s-%s" % (name, IMAGE_ID[len("sha256:"):][:32]): "/cache"}, name)
+            self.assertIn(f.repo(name), [b.path for b in s.binds], "the clone alone is mounted, as in the default mode")
+        for _, _, xenv, _ in fb.execs:
+            for kv in xenv:
+                k = kv.partition("=")[0]
+                self.assertTrue(k == "TMPDIR" or k in container.CONTAINER_ENV_ALLOW, "%s reached the container" % kv)
+        # the container report carries the digest; the result records the source
+        reps = {rp["name"]: rp for rp in doc["repos"]}
+        for name in ("app", "bare"):
+            c = reps[name].get("container")
+            self.assertTrue(c, name)
+            self.assertEqual((c["image"], c["built"], c["digest"]), (IMAGE_REF, False, IMAGE_ID), name)
+            self.assertNotIn("build_log", c, name)
+        self.assertEqual(doc["image"], {"value": IMAGE_REF, "source": "flag"})
+        self.assertEqual(r.details["image"], {"value": IMAGE_REF, "source": "flag"})
+        # the report names the prepared image, not a build
+        self.assertIn(IMAGE_REF, r.report)
+        self.assertIn(IMAGE_ID, r.report)
+
+    def test_the_step_environment_names_it_and_the_flag_wins(self) -> None:
+        f, eng = self.fx("fx", True, cmd_of("unit", "fast", "true"))
+        fb = FakeRuntime(os.path.join(self.root, "box"))
+        fb.identities[IMAGE_REF] = (IMAGE_ID, [])
+        r = self.image_run(f.capsule, eng, fb, env={"PF_PARAM_IMAGE": IMAGE_REF})
+        self.assertEqual(r.exit, 0, r.stderr)
+        self.assertEqual(doc_of(r)["image"], {"value": IMAGE_REF, "source": "param"})
+        fb2 = FakeRuntime(os.path.join(self.root, "box2"))
+        fb2.identities[OTHER_REF] = (OTHER_ID, [])
+        r2 = self.image_run(f.capsule, eng, fb2, env={"PF_PARAM_IMAGE": IMAGE_REF}, image=OTHER_REF)
+        self.assertEqual(r2.exit, 0, r2.stderr)
+        self.assertEqual(doc_of(r2)["image"], {"value": OTHER_REF, "source": "flag"},
+                        "the command line wins over the step environment")
+        self.assertEqual(doc_of(r2)["repos"][0]["container"]["digest"], OTHER_ID)
+
+    def test_a_missing_image_is_not_judged_with_the_fixed_mark(self) -> None:
+        f, eng = self.fx("fx", True, cmd_of("unit", "fast", "true"))
+        fb = FakeRuntime(os.path.join(self.root, "box"))
+        r = self.image_run(f.capsule, eng, fb, image="registry.example/nope:1")
+        self.assertEqual(r.exit, 2)
+        self.assertIn(container.IMAGE_MISSING_MARK, r.result["summary"])
+        self.assertIn("registry.example/nope:1", r.result["summary"])
+        self.assertIn("prepared by a person", r.result["summary"])
+        self.assertEqual((fb.builds, fb.starts), ([], []))
+        self.assertIn(container.IMAGE_MISSING_MARK, doc_of(r)["incomplete"])
+
+
 if __name__ == "__main__":
     unittest.main()
