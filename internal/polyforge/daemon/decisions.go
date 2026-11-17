@@ -25,7 +25,13 @@ package daemon
 //     and records canceled / completed / failed, or resolves the entry
 //     when the work item runs again (`pf cancel` and a resume elsewhere
 //     never pass through this daemon);
-//   - a background task's terminal transition (task.Config.OnTerminal).
+//   - a background task's terminal transition (task.Config.OnTerminal):
+//     failed, capped or interrupted still count as needing the owner, but
+//     the entry names the ticket a daemon-scheduled analysis served and
+//     auto-resolves once it is no longer needed — a later terminal of the
+//     same ticket (a rerun that completed ends the story), the ticket's
+//     end or confirmed analysis read at aihub by the reconcile loop below,
+//     or the entry simply aging past three days (polyforge#106).
 //
 // <host-data-dir>/decisions.json holds the entries (newest
 // decisionFeedMax, none older than decisionFeedMaxAge), written atomically
@@ -459,19 +465,40 @@ func (f *decisionFeed) RecordStatus(profile, wi, slug, status string) error {
 
 // RecordTask records a background task's terminal transition. An
 // analysis task (Spec.AnalysisOf, polyforge#72) names the ticket it
-// served: the entry carries the id (polyforge#106).
+// served: the entry carries the id (polyforge#106), and a later terminal
+// of the same ticket resolves its earlier open task entries — a rerun
+// that completed ends the story, a newer failure stands in for the older
+// one; at most one open entry of the ticket per Cell.
 func (f *decisionFeed) RecordTask(profile string, t task.Task) error {
 	d, ok := watcher.TaskDecision(string(t.State))
 	if !ok {
 		return nil
 	}
+	profile = normProfile(profile)
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if t.Spec.AnalysisOf != "" {
+		f.resolveTaskTicketLocked(profile, t.Spec.AnalysisOf)
+	}
 	f.appendLocked(protocol.Decision{
-		Kind: protocol.DecisionTask, Profile: normProfile(profile), TaskID: t.ID, WI: t.Spec.AnalysisOf,
+		Kind: protocol.DecisionTask, Profile: profile, TaskID: t.ID, WI: t.Spec.AnalysisOf,
 		Class: d.Class, Source: d.Source, Phrase: d.Phrase, Text: t.Summary(), Attention: d.Attention,
 	})
 	return f.persistLocked()
+}
+
+// resolveTaskTicketLocked marks the profile's unresolved task entries of
+// ticket wi resolved (the caller persists): the ticket's own story moved
+// on — the rerun completed, or a newer terminal stands in for the older
+// ones. Another Cell's entries of the same ticket are that Cell's.
+func (f *decisionFeed) resolveTaskTicketLocked(profile, wi string) {
+	for i := range f.doc.Entries {
+		e := &f.doc.Entries[i]
+		if e.Kind != protocol.DecisionTask || e.Profile != profile || e.WI != wi || e.Resolved {
+			continue
+		}
+		e.Resolved = true
+	}
 }
 
 // List answers the feed newest first with its open count.
