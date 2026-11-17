@@ -754,6 +754,21 @@ is granted `wrap-attrs` and its `done` is refused until it registered them
 (develop's `publish`, when its project skips `merge`, registers the record
 `published.py` writes, `integration: {state: published, …}`).
 
+**A step that runs only after a rewind.** A step whose lane declares
+`rewind_only: true` is held back until a rewind covers it: the first
+round's pass records it `skipped` — the same `step_skipped` event as a
+project skip, no dispatch, no model session — and the lane goes on to
+the next step. The declaration must sit inside a gate's `[on_fail target,
+gate)` range (the loader refuses it otherwise, above); once a rewind of
+that range resets it to pending — a gate FAIL's, with or without
+`--per-owner`, or an owner's rewind, which write the same archives on the
+step's own attempts — the pass dispatches it, and every later rewind
+that covers it again runs it once more. A `skippable` beside it stays
+the project's to switch off: a switched-off step is skipped on every
+round, the rewind or not. Nothing the step would have built exists
+before the rewind: a later step or gate that reads its artifacts in the
+first round finds none.
+
 **A step whose work a person does (polyforge#36).** A project declares a
 lane's `human_mergeable` step taken over by a person with
 `steps.<project>.<step>.by: human` in its workspace yaml; the claim fixes
