@@ -20,7 +20,7 @@ package driver
 // (runtime/epicchildren.go) beside its new version. The plan pass reads
 // it first and, after the owner's resume (a claim of the parked capsule
 // is one, start.go), lands it as ONE owner-class rewind to the step it
-// names (review): the steps from there through the current one archive
+// names (the lane's resume_reset): the steps from there through the current one archive
 // and reset, the ledger records the owner class — charged to no budget,
 // Q5 is the owner's settled word — and the marker is consumed. A marker
 // whose target is not behind the current step (the epic parked before

@@ -6,7 +6,8 @@ package runtime
 // verbatim), a re-claim over unchanged children keeps the file byte for
 // byte (a crash restart never refreshes a reviewed baseline), and a
 // changed set writes a NEW VERSION beside a resume marker that orders
-// the driver to re-run the steps from review onward.
+// the driver to re-run the steps from sync onward (the lane's declared
+// resume_reset).
 //
 // Expected values are the owner's settled Q5 and the plan's own snapshot
 // shape, not the implementation's: version 1 then 2, the children sorted
@@ -99,7 +100,7 @@ func TestEpicClaimSnapshot(t *testing.T) {
 
 	// a changed re-claim: a new child lands, the snapshot moves to the
 	// next version and the resume marker orders the driver to re-run
-	// from review
+	// from sync
 	hub.items["wi_c3"] = &api.WorkItem{ID: "wi_c3", ProjectName: "proj", ParentID: w80StrPtr(epic), Slug: "polyforge#4", Seq: 4,
 		Status: api.StatusWrapped}
 	if err := os.RemoveAll(filepath.Join(capDir, capsule.DirRepos)); err != nil {

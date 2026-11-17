@@ -8,13 +8,14 @@ package driver
 // carry parks it naming the gain, and an unchanged set lets the lane
 // proceed. The resume half: the marker a changed snapshot wrote
 // (runtime-state/epic-resume.json) applies at the plan pass after the
-// owner's resume as an owner-class rewind to review — the affected steps
+// owner's resume as an owner-class rewind to the lane's resume_reset
+// step (sync on the shipped epic lane) — the affected steps
 // re-run, charged to no budget — and is consumed.
 //
 // Expected values are the owner's settled Q3/Q5 and AC2's own words
 // (阻塞交给 owner, daemon 不提问), not the implementation's shape: the
 // blocked reason names the child and its status, the gain names the
-// child, and the reset is one owner-class rewind to review with the
+// child, and the reset is one owner-class rewind to sync with the
 // agent budget untouched.
 
 import (

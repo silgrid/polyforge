@@ -5,7 +5,8 @@ description: The epic lane - one work item per epic. Its own work items are epic
 max_rewinds: 3
 # the lane's own work items are epics (polyforge#117): each checks the
 # children branch of its own seq out and merges into the default branch;
-# the lane must declare children_branch with the key (WFC-112 otherwise)
+# the lane must declare children_branch and resume_reset with the key
+# (WFC-112 otherwise)
 epic: true
 children_branch: "epic/{seq}"
 # the step an owner-resumed epic's changed-children marker resets the

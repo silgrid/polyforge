@@ -72,34 +72,42 @@ func (r *Runtime) writeEpicChildren(j *job) error {
 	} else {
 		next.Version = 1
 	}
+	// A CHANGED set (existing != nil) resets the lane, and the reset's
+	// inputs are read and written BEFORE the snapshot advances: the reset
+	// step is the lane's own declaration (resume_reset, required with
+	// epic — the Go code names no step id, workflow contract ⑥), and a
+	// claim that cannot read it refuses having written nothing — a later
+	// claim over the fixed lane still sees changed children and writes
+	// the marker, so the reset is never lost to a refused claim or a
+	// crash between the two writes (the marker first is the safe order:
+	// a crash after it leaves the OLD snapshot, and the next claim writes
+	// the same marker again, idempotently; the reverse order would leave
+	// an advanced snapshot no marker ever matches again).
+	var marker []byte
+	if existing != nil {
+		lane, lerr := r.readLane(j.project, j.bundleName)
+		switch {
+		case lerr != nil:
+			return epicChildrenErr(j, "the item's own lane %s does not load: %v", j.bundleName, lerr)
+		case lane == nil:
+			return epicChildrenErr(j, "the item's own lane %s is not in this daemon's lane set, so its resume_reset cannot be read", j.bundleName)
+		case lane.ResumeReset == "":
+			return epicChildrenErr(j, "the item's own lane %s declares no resume_reset step for the changed-children marker", j.bundleName)
+		}
+		marker, err = json.Marshal(capsule.EpicResume{ResetFrom: lane.ResumeReset, SnapshotVersion: next.Version})
+		if err != nil {
+			return epicChildrenErr(j, "%s cannot be written: %v", capsule.EpicResumeJSON, err)
+		}
+		if err := atomicfile.Write(filepath.Join(j.capsuleDir, filepath.FromSlash(capsule.EpicResumeJSON)), append(marker, '\n'), 0o644); err != nil {
+			return epicChildrenErr(j, "%s cannot be written: %v", capsule.EpicResumeJSON, err)
+		}
+	}
 	blob, err := json.Marshal(next)
 	if err != nil {
 		return epicChildrenErr(j, "%s cannot be written: %v", capsule.ChildrenJSON, err)
 	}
 	if err := atomicfile.Write(path, append(blob, '\n'), 0o644); err != nil {
 		return epicChildrenErr(j, "%s cannot be written: %v", capsule.ChildrenJSON, err)
-	}
-	if existing == nil {
-		return nil // the first claim: nothing was reviewed yet, nothing re-runs
-	}
-	// the reset step is the lane's own declaration (resume_reset,
-	// required with epic): the Go code names no step id (workflow
-	// contract ⑥), the marker carries the declaration's value
-	lane, lerr := r.readLane(j.project, j.bundleName)
-	switch {
-	case lerr != nil:
-		return epicChildrenErr(j, "the item's own lane %s does not load: %v", j.bundleName, lerr)
-	case lane == nil:
-		return epicChildrenErr(j, "the item's own lane %s is not in this daemon's lane set, so its resume_reset cannot be read", j.bundleName)
-	case lane.ResumeReset == "":
-		return epicChildrenErr(j, "the item's own lane %s declares no resume_reset step for the changed-children marker", j.bundleName)
-	}
-	marker, err := json.Marshal(capsule.EpicResume{ResetFrom: lane.ResumeReset, SnapshotVersion: next.Version})
-	if err != nil {
-		return epicChildrenErr(j, "%s cannot be written: %v", capsule.EpicResumeJSON, err)
-	}
-	if err := atomicfile.Write(filepath.Join(j.capsuleDir, filepath.FromSlash(capsule.EpicResumeJSON)), append(marker, '\n'), 0o644); err != nil {
-		return epicChildrenErr(j, "%s cannot be written: %v", capsule.EpicResumeJSON, err)
 	}
 	return nil
 }
