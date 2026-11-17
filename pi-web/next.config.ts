@@ -48,6 +48,14 @@ const nextConfig: NextConfig = {
   // re-enabled here.)
   compress: true,
   experimental: {
+    // Next.js 16.4.x defaults agentUpgrade to 'security' (server/config-shared.js):
+    // a build whose environment looks like an agent stops with SecurityFatalError
+    // when the advisory bulk check finds the installed version affected
+    // (lib/upgrade/nudge.js) — both v0.2.2 release attempts stopped there on
+    // advisory 1247486. Off while pi-web stays on 16.4.4 (owner ruling
+    // 2026-11-17, polyforge#104 r2: the 16.4.6 bump ships a compression
+    // regression, see the follow-up ticket).
+    agentUpgrade: false,
     // proxy.ts matches /api/:path*, and Next buffers the request body whenever
     // a proxy is present, capped at 10 MB by default. The upload route accepts
     // up to 100 MB per request, so raise the buffer above that or large uploads
