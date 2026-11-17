@@ -788,6 +788,7 @@ func TestReleaseScriptAudit(t *testing.T) {
 		"stack=go\nfast_gate=echo gate-fast\nfull_command=echo gate-full\naudit_prod_level=moderate\n", 0o644)
 	relGit(t, w.work, "add", "-A")
 	relGit(t, w.work, "commit", "-q", "-m", "an auditable tree")
+	relGit(t, w.work, "push", "-q", "origin", "main")
 
 	out, err := w.run([]string{"RELEASE_AUDIT_CMD="})
 	if err != nil {
