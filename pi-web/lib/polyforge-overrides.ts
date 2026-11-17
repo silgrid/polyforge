@@ -20,20 +20,20 @@ import {
 } from "@/lib/polyforge-status";
 
 /** toTrimmedString keeps a string's trimmed form ("" for anything else). */
-function toTrimmedString(value: unknown): string {
+export function toTrimmedString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
 /** toOptionalTrimmedString keeps a non-empty trimmed string, else
  *  undefined. */
-function toOptionalTrimmedString(value: unknown): string | undefined {
+export function toOptionalTrimmedString(value: unknown): string | undefined {
   const trimmed = toTrimmedString(value);
   return trimmed ? trimmed : undefined;
 }
 
 /** profileArgv is the named Cell's argv prefix (no prefix for the default
  *  Cell) — the same shape every other polyforge spawn builds. */
-function profileArgv(profile: string | undefined): string[] {
+export function profileArgv(profile: string | undefined): string[] {
   return profile ? ["--profile", profile] : [];
 }
 
