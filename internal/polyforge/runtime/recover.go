@@ -304,6 +304,7 @@ func (r *Runtime) startEngine(ctx context.Context, j *job, interruptedCause stri
 		StepEnded:        r.stepEnded(j.wi),
 		Compose:          r.composeFor(j.capsuleDir, project, bundle, manual),
 		Params:           r.paramsFor(j.capsuleDir, project, bundle),
+		EpicChildren:     epicChildrenProvider(r, j),
 		InterruptedCause: interruptedCause,
 		OwnerWait: func(waiting bool) {
 			j.mu.Lock()

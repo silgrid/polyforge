@@ -22,7 +22,12 @@ set merges that branch in the default branch's place everywhere below:
 the record's ``default_branch``/``default_head`` fields keep their names
 and carry it, only it is fetched, and a file that is there but cannot be
 read refuses the run (exit 2) — never a silent fall-back to the default
-branch. A real conflict is left in
+branch. An EPIC's own record carries a ``checkout`` key and no target
+(polyforge#117): its sync merges the checkout branch in FIRST — the
+children's commits land on it while the epic runs or is parked, and a
+resumed lane judges a tree that contains them — then the default branch
+(the record's ``default_branch``/``default_head`` fields keep naming the
+base branch's merge, the last one in). A real conflict is left in
 progress and its files listed: the agent resolves them in place and runs
 ``--continue``, which refuses a residual conflict marker, an unmerged or
 unstaged path, a mechanically resolved file changed and a resolved text
@@ -349,17 +354,34 @@ class Sync:
         return os.path.join(self.capsule, "repos", name)
 
     def base_branch(self, d: str) -> str:
-        """The branch this sync merges into one repo: the capsule's fixed
-        target branch when it carries one (runtime-state/target-branch.json,
+        """The branch this sync merges into one repo LAST: the capsule's
+        fixed target branch when it carries one (runtime-state/target-branch.json,
         read strictly — a file that is there but cannot be read refuses the
         run, never a silent fall-back to the default branch), else origin's
         default branch. The record's default_branch field keeps its name and
-        carries the branch merged (the target or the default alike)."""
+        carries the branch merged last (the target or the default alike)."""
         try:
             target = targetbranch.read(self.capsule)
         except targetbranch.TargetBranchError as err:
             raise Refused("sync refused: %s" % err) from None
         return target or self.g.default_branch(d)
+
+    def incoming_branches(self, d: str) -> List[str]:
+        """The branches this sync merges into one repo, in order: an
+        EPIC's own checkout branch first (runtime-state/target-branch.json's
+        checkout key, polyforge#117 — the children's commits land on it
+        while the epic runs or is parked, and a resumed lane judges a tree
+        that contains them), then the base branch. A capsule without a
+        checkout (a sub-ticket's fixed target, a plain work item) merges
+        the base branch alone, exactly as before."""
+        base = self.base_branch(d)
+        try:
+            checkout = targetbranch.read_checkout(self.capsule)
+        except targetbranch.TargetBranchError as err:
+            raise Refused("sync refused: %s" % err) from None
+        if checkout != "" and checkout != base:
+            return [checkout, base]
+        return [base]
 
     def heads(self, rec: SyncRecord) -> Dict[str, str]:
         out: Dict[str, str] = {}
@@ -473,21 +495,36 @@ class Sync:
         return rec, None
 
     def sync_one(self, d: str, r: SyncRepo) -> None:
-        """The default branch fetched and merged into one repo (r.before is
-        HEAD): nothing when HEAD already contains it, a fast-forward when the
-        branch has no commit of its own, else gitmerge's sync."""
+        """Every incoming branch fetched and merged into one repo (r.before
+        is HEAD where the pass found it), in the incoming_branches order —
+        an epic's own checkout branch first, the base branch last (its
+        head is the record's default_head). A branch that leaves a real
+        conflict STOPS the loop: the pending merge the record names is
+        that branch's, the agent resolves it and `--continue` commits it
+        — which walks this same pass again, so the branches after it
+        (the default branch's among them) merge in over the committed
+        tree, never over a merge in progress."""
+        for branch in self.incoming_branches(d):
+            self.merge_branch(d, r, branch)
+            if r.pending():
+                return
+
+    def merge_branch(self, d: str, r: SyncRepo, branch: str) -> None:
+        """One branch fetched and merged into one repo: nothing when HEAD
+        already contains it, a fast-forward when the branch has no commit
+        of its own, else gitmerge's sync."""
         g, inv, name = self.g, self.inv, r.name
-        r.default_branch = self.base_branch(d)
+        r.default_branch = branch
         try:
-            g.fetch(d, r.default_branch)
+            g.fetch(d, branch)
         except GoError as err:
-            raise err.wrap("repos/%s: fetching %s" % (name, r.default_branch)) from None
+            raise err.wrap("repos/%s: fetching %s" % (name, branch)) from None
         try:
-            r.default_head = g.rev(d, "refs/remotes/origin/" + r.default_branch)
+            r.default_head = g.rev(d, "refs/remotes/origin/" + branch)
         except GoError as err:
-            raise err.wrap("repos/%s: origin has no %s" % (name, r.default_branch)) from None
+            raise err.wrap("repos/%s: origin has no %s" % (name, branch)) from None
         try:
-            conf = gm.conf_at(g, d, "refs/remotes/origin/" + r.default_branch)
+            conf = gm.conf_at(g, d, "refs/remotes/origin/" + branch)
         except GoError as err:
             raise err.wrap("repos/" + name) from None
         try:
@@ -693,6 +730,21 @@ class Sync:
                     return 2
                 inv.say("repos/%s: the resolved merge of %s committed as %s (resolved: %s)" % (
                     r.name, r.default_branch, gostr.short(after), ", ".join(or_empty(r.resolved))))
+                # the committed merge was ONE of the incoming branches
+                # (an epic's own checkout branch, typically): walk the
+                # same pass again over the committed tree — the branches
+                # already in are no-ops, the rest merge in, and a new real
+                # conflict stops the pass and stays here for the agent
+                try:
+                    self.sync_one(d, r)
+                except GoError as err:
+                    inv.summary = "repos/%s: %s" % (r.name, err)
+                    return 2
+                try:
+                    rec.save()
+                except OSError as err:
+                    inv.summary = "%s not written: %s" % (self.record, err)
+                    return 2
             pend = rec.pending()
             if pend:
                 lines = ["repos/%s: %s" % (r.name, "; ".join(or_empty(r.notes))) for r in pend]

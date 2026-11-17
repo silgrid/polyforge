@@ -7,9 +7,12 @@ import TypeDot from '../components/TypeDot'
 import RelativeTime from '../components/RelativeTime'
 import { ArrowRightIcon } from '../icons'
 import { buttonClass, Chip, DataTable, EmptyState, inputClass, Muted, PageHeader, SectionHeading } from '../components/ui'
+import { memoryAttribution } from '../attribution'
 
 // MemoriesPage is the project's memory module — the #103 read face at
-// the console prefix: an empty query browses (date-grouped dense rows
+// the console prefix. polyforge#120: every row shows the author's display
+// name and the writer (a missing one its explicit unknown placeholder)
+// under the title. An empty query browses (date-grouped dense rows
 // with tag chips, a forward Next while the face returns a cursor); a
 // keyword renders the one top-50 page with the refine hint when it came
 // back full, and a zero-hit keyword answers a guiding empty state that
@@ -134,6 +137,9 @@ function DateGroupedRows({ project, rows }: { project: string; rows: MemoryRow[]
                     {row.title}
                   </a>
                   <span className="ml-2 text-caption text-muted">{row.type}</span>
+                  <div className="text-caption text-muted" data-testid="memory-attribution">
+                    {memoryAttribution(row)}
+                  </div>
                 </td>
                 <td>
                   {row.tags.map((tag) => (

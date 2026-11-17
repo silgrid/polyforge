@@ -199,6 +199,14 @@ func (r *Runtime) materialize(ctx context.Context, j *job) error {
 		return err
 	}
 	j.targetBranch = target
+	// the epic's children snapshot (epicchildren.go, polyforge#117): the
+	// FIRST claim writes it, a re-claim keeps it over unchanged children
+	// and a changed set writes the next version beside the resume marker
+	// — before the task repos are cloned, so a hub the snapshot cannot
+	// read refuses the claim here
+	if err := r.writeEpicChildren(j); err != nil {
+		return err
+	}
 	// Task repos land before capsule.json so the identity below can
 	// record their claim-time HEAD SHAs. The clones carry their own
 	// independent .git directories and repos/ is capsule-gitignored,

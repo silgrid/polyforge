@@ -186,8 +186,9 @@ and YAML path, before a claim ever meets it. The keys:
   default base all measure the change from `merge-base HEAD
   origin/<target>`, the PRs target the branch, and the landing its merge
   registers is `state: landed_on_target` (never in the integrate pool's
-  `landed` records). No shipped lane declares it yet (the epic lane is a
-  follow-up); a parent whose lane declares none leaves the sub-ticket
+  `landed` records). The shipped epic lane declares it (its own work
+  items check the branch of their own seq out and merge into the default
+  branch); a parent whose lane declares none leaves the sub-ticket
   untouched — a parent bound to no lane (a registry ticket used as the
   parent) declares nothing the same way: no target-branch file is
   written and the claim keeps the default branch.
@@ -223,8 +224,8 @@ and YAML path, before a claim ever meets it. The keys:
     `skipped`), and the wrap attrs of skipped steps at the lane's end pass
     to the last step that runs. A step not declaring it runs on every round
     of the work item — a `rewind_only` declaration alone can hold a step's
-    first round back; the shipped lanes declare it on develop's `merge`
-    alone (micro's `merge` runs whatever the switch says).
+    first round back; the shipped lanes declare it on develop's and epic's
+    `merge` (micro's `merge` runs whatever the switch says).
   - `skill:` — the skill the step follows: `<lane>/skills/<name>.md`, else
     `_shared/skills/<name>.md`, rendered after the step definition; a skill
     names the workflow scripts it runs (`commands:`, by file name), each line

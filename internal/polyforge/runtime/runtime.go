@@ -49,6 +49,10 @@ type Aihub interface {
 	SessionVerify(wi, sessionID string) (*api.SessionVerifyResponse, error)
 	SessionEnd(wi string, req api.SessionEndRequest) error
 	GetWorkItem(idOrSlug string) (*api.WorkItem, error)
+	// ListChildren lists the work items whose parent is parentID, newest
+	// first (polyforge#117: the epic lane's claim snapshots an epic's
+	// children and the running re-check reads them back through it).
+	ListChildren(parentID string) ([]api.WorkItem, error)
 	// WriteAttrs writes one top-level attrs key of a work item on the
 	// daemon's machine key (PATCH /work-items/{id}/attrs). The claim's
 	// only use is clearing the reserved step_params key once the merge's
@@ -284,6 +288,11 @@ type AgentStartInput struct {
 	// governs the next dispatch (the manual `pf submit --models` list stays
 	// frozen). Every candidate is `<harness>:<model>` (polyforge#175).
 	Compose func() (map[string][]string, error)
+	// EpicChildren is the hub read of the epic's children as they stand
+	// (polyforge#117): the driver's running re-check calls it before
+	// every dispatch and compares with the claim's snapshot. nil on a
+	// capsule that is not an epic's.
+	EpicChildren func() ([]capsule.EpicChild, error)
 	// Params is the dispatch-time param composition (polyforge#78): each
 	// step's declared params at their final values — the ticket overlay
 	// over the project's yaml over the lane default — read fresh at every
