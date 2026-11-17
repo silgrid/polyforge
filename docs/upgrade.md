@@ -550,6 +550,42 @@ step cannot read is not judged (exit 2). Sub-tickets are untouched: a
 sub-ticket's claim still reads the PARENT's lane's `children_branch`
 and merges into the children branch, never the default branch.
 
+## v0.2.3, the light tier's selection closes its historical misses (harness carries and scoped_command)
+
+Five changes of this release reached the develop lane's light verification
+green and broke only at the integration full gate (polyforge#87's five, each
+with its own fix ticket). The engine now consumes what the repository had
+declared all along, and a new conf key maps what no analyzer's own rule can
+express. Both are selection rules of the shipped engine
+(`workflows/_shared/scripts/verify-scope`); neither changes any tier's
+commands by itself, and both are guarded by a replay corpus
+(`test/w111_light_historical_replay_test.go`) that reds when a rule quietly
+regresses — or quietly balloons.
+
+- In a repository whose conf declares `go_harness=`, the harness directory's
+  `*_test.go` files' `carries:` declarations are consumed the way the npm,
+  python and rust analyzers consume their suites': a changed path a
+  declaration covers selects that file's tests through the harness command,
+  beside the literal-reference names (one `E2E_RUN='^(…)$' sh <go_harness>`
+  command); a malformed declaration fails closed, and a harness test without
+  one is unchanged. Outside the declared harness directory a Go test file's
+  `carries:` comments stay comments.
+- `scoped_command=<glob>|<command>` (repeatable) adds a conditional command
+  to the scoped tier's report: a changed path an `exclude=` match has not
+  removed that matches the glob adds the command, once per declaration, after
+  the analyzer's own scoped commands. The light tier included; `--full`,
+  `--micro` and no-analyzer reports never carry it; a value with no `|` or
+  an empty side is diagnosed and fails the conf closed. This repository
+  declares one: `workflows/_shared/scripts/*` selects the step scripts'
+  Python unit suite (CI parity, `python3 -B -m unittest discover`), which no
+  tier selected before — polyforge#36's PoolTest miss.
+
+An upgrading machine does nothing: the engine ships with the release and
+reads the declarations from the repository. A repository's own conf may
+declare `scoped_command=` lines the same way; the engine of an older release
+diagnoses the key as unknown and ignores it, so a conf may declare them
+before this release ships.
+
 ## v0.2.4, the epic split filing procedure and the split metrics (polyforge#118)
 
 The routing skill's file verb gains the owner-confirmed split: a

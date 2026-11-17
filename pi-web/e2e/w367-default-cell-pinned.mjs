@@ -1,4 +1,5 @@
 // carries: lib/polyforge-cells.ts, lib/polyforge-cells-pure.ts
+// carries: app/api/polyforge/unclassified/*, lib/polyforge-unclassified*
 // carries: app/api/polyforge/config/*, app/api/polyforge/workflows/*, app/api/polyforge/cells/*
 // — Settings › Polyforge's default Cell pane reads and writes
 // the default Cell, whatever Cell the server process itself sits in.

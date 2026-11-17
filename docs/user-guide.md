@@ -334,8 +334,12 @@ in your head or your workspace.
     with the Next link, or one keyword page of the top 50 matches (the
     page tells you when it is only showing the top matches); a
     memory's page shows its header card and its full body rendered
-    read-only. The private and admin visibility tiers stay hidden
-    from anyone but their readers, exactly as on the CLI.
+    read-only. Every row and a memory's page name the memory's author
+    (the writer's display name) and its writer — the daemon-stamped kind
+    and its valued details, `unknown author` / `unknown writer` when a
+    row predates the attribution — never an owner or user id. The
+    private and admin visibility tiers stay hidden from anyone but
+    their readers, exactly as on the CLI.
   - **Machines** (admins only) — a health snapshot of the registered
     machines: role, runtime, launcher, heartbeat age and staleness.
   The top bar also offers a project-scoped global search that groups

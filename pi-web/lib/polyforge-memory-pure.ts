@@ -1,6 +1,8 @@
 /**
  * Client-safe pure model for the Memory tab (browse mode):
- * the wire types, the six type-filter values, the display
+ * the wire types (incl. the author display name and the writer, polyforge#107/#120),
+ * the six type-filter values, the two writer-filter kinds and the writer
+ * display string, the display
  * constants (page size, pf-side result limit, browse page size, collapse
  * threshold), the id/tag validators, the newest-first sort, the page slicer,
  * the browse-page merge, the UTF-8 cap (shared with the Tasks server) and the
@@ -8,7 +10,22 @@
  * the client panels can use it.
  */
 
-/** One recall hit, exactly the field set the sanitizer forwards (no body). */
+/** The writer's stamped details, exactly the keys the daemon's two
+ *  stamps carry (writerstamp.go / stepmem.go) and only their valued
+ *  entries: session {machine, cell}, step {work_item, step, attempt,
+ *  model}. Nothing else ever passes the passport. */
+export interface PolyforgeMemoryWriterDetails {
+  machine?: string;
+  cell?: string;
+  work_item?: string;
+  step?: string;
+  attempt?: number;
+  model?: string;
+}
+
+/** One recall hit, exactly the field set the sanitizer forwards (no body).
+ *  polyforge#107/#120: the author's display name and the writer (kind +
+ *  the valued known details) ride; the stable ids never do. */
 export interface PolyforgeMemoryHit {
   id: string;
   type: string;
@@ -21,6 +38,9 @@ export interface PolyforgeMemoryHit {
   created_at: string;
   updated_at: string;
   content_len: number;
+  author_display_name: string;
+  writer_kind: string | null;
+  writer_details: PolyforgeMemoryWriterDetails;
 }
 
 /** One single-memory read: the hit's fields plus the (capped) body. */
@@ -48,6 +68,33 @@ export const MEMORY_TYPE_FILTERS = [
 ] as const;
 
 export type MemoryTypeFilter = (typeof MEMORY_TYPE_FILTERS)[number];
+
+/** The two writer kinds the filter accepts (`pf recall --writer-kind`). */
+export const MEMORY_WRITER_KINDS = ["session", "step"] as const;
+
+export type MemoryWriterKind = (typeof MEMORY_WRITER_KINDS)[number];
+
+/** The writer display string: the kind plus only the valued known details
+ *  in the fixed order (machine, cell, work_item, step, attempt, model),
+ *  e.g. `step (work_item=wi_9, step=build, attempt=2, model=pi:glm-5.3)`;
+ *  a kind with no details shows alone; a null kind answers "" — the
+ *  placeholder is the client's, this helper never invents a writer. */
+const WRITER_DETAIL_ORDER: (keyof PolyforgeMemoryWriterDetails)[] = ["machine", "cell", "work_item", "step", "attempt", "model"];
+
+export function formatMemoryWriter(writer: { kind: string | null; details: PolyforgeMemoryWriterDetails }): string {
+  const kind = typeof writer?.kind === "string" ? writer.kind.trim() : "";
+  if (!kind) return "";
+  const parts: string[] = [];
+  for (const key of WRITER_DETAIL_ORDER) {
+    const value = writer.details?.[key];
+    if (typeof value === "number") {
+      if (Number.isFinite(value)) parts.push(`${key}=${value}`);
+    } else if (typeof value === "string" && value.trim()) {
+      parts.push(`${key}=${value.trim()}`);
+    }
+  }
+  return parts.length ? `${kind} (${parts.join(", ")})` : kind;
+}
 
 /** Client-side page size (rows per page). */
 export const MEMORY_PAGE_SIZE = 20;
