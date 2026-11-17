@@ -72,7 +72,7 @@ import {
   type ClaudeLaunchPermissionMode,
   type ClaudePermissionMode,
 } from "./claude-shared";
-import { claudeResolvedModel, probeClaude } from "./claude-probe";
+import { claudeResolvedModel, probeClaude, probeClaudeWithin } from "./claude-probe";
 import type { ClaudeSubagentRun } from "./claude-subagent-view";
 import type { ContextUsage } from "./pi-types";
 import { resolveSessionIdleTimeoutMs } from "./rpc-manager";
@@ -578,6 +578,8 @@ export class ClaudeSession {
   private stderrTail = "";
   /** The transcript's count, read once for a child that has reported none yet. */
   private transcriptContext: { tokens: number | null } | null = null;
+  /** #108: whether this session has spent its one wait for an alias's probe. */
+  private aliasProbeWaited = false;
   /** Control requests written to stdin, by request id, waiting for claude's answer. */
   private readonly pendingControls = new Map<string, (response: ClaudeControlResponse) => void>();
   /** claude's permission prompts waiting for the user's answer, as Pi Web dialogs. */
@@ -811,7 +813,7 @@ export class ClaudeSession {
     return getClaudeSessionRecord(this.sessionId) ?? this.record;
   }
 
-  private state(): Record<string, unknown> {
+  private async state(): Promise<Record<string, unknown>> {
     // The index's current model and effort (a switch rewrites them), not the launch copy.
     const record = this.currentRecord();
     return {
@@ -830,7 +832,7 @@ export class ClaudeSession {
       messageCount: 0,
       pendingMessageCount: this.steering.size,
       queuedMessages: this.queue(),
-      contextUsage: this.contextUsage(record.model),
+      contextUsage: await this.contextUsage(record.model),
       thinkingLevel: "off",
       extensionStatuses: [],
       extensionWidgets: [],
@@ -845,9 +847,17 @@ export class ClaudeSession {
    * (an account without the long context gets a smaller one than the
    * catalog's), else, before it reported one, pi's catalog entry.
    */
-  private contextUsage(model: string): ContextUsage | null {
-    // claude reports a window under the full name an alias resolves to.
-    const contextWindow = this.translator.contextWindow(claudeResolvedModel(model)) ?? claudeContextWindow(model);
+  private async contextUsage(model: string): Promise<ContextUsage | null> {
+    // claude reports a window under the full name an alias resolves to. After a
+    // restart the probe cache is empty and the alias does not resolve (#108): ask
+    // once on demand and wait briefly — one wait per session, so a failed or slow
+    // probe answers null this time and later reads re-pull nothing.
+    let contextWindow = this.contextWindowOf(model);
+    if (contextWindow === null && !this.aliasProbeWaited) {
+      this.aliasProbeWaited = true;
+      await probeClaudeWithin(this.binary);
+      contextWindow = this.contextWindowOf(model);
+    }
     if (contextWindow === null) return null;
     let tokens = this.translator.contextTokens;
     if (tokens === undefined) {
@@ -856,6 +866,11 @@ export class ClaudeSession {
       tokens = this.transcriptContext.tokens;
     }
     return claudeContextUsage(tokens, contextWindow);
+  }
+
+  /** The window of `model` as it resolves right now: this child's claude's report, else pi's catalog entry. */
+  private contextWindowOf(model: string): number | null {
+    return this.translator.contextWindow(claudeResolvedModel(model)) ?? claudeContextWindow(model);
   }
 
   /** pi's queue of a claude session: the messages sent mid-turn that claude has not started. */
