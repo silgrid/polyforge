@@ -3,6 +3,7 @@
 #
 # Usage:
 #   workflows/_shared/scripts/audit-deps [--go] [--npm <dir>]... [--ledger <path>]
+#                                          [--npm-prod-level <moderate|low>]
 #
 # verify-scope (beside it) appends this gate, as the full-phase command named
 # `audit`, to every full-tier report of a repository that carries an
@@ -18,6 +19,17 @@
 #                 --include=dev, run in <dir> (repository-relative): the
 #                 whole lockfile tree, dev dependencies included; a high or
 #                 critical advisory is a finding, moderate and low are not
+#   --npm-prod-level <moderate|low>
+#                 tightens the npm production threshold below the default
+#                 high (a repository declares it; verify-scope passes it as
+#                 the audit command's --npm-prod-level when the conf's
+#                 audit_prod_level key is declared): every npm surface runs
+#                 a second, production-only audit — npm audit --json
+#                 --audit-level=<level> --package-lock-only --omit=dev — and
+#                 its findings at <level> or above are findings; dev
+#                 dependencies stay at the high threshold. The value may
+#                 only tighten: moderate or low, never high, critical or
+#                 anything else
 #   --ledger <p>  the exemption ledger (default .polyforge/audit-exemptions.conf
 #                 in the current directory; an absent file exempts nothing)
 #
@@ -43,19 +55,21 @@
 # missing tool, an unreachable advisory source or a tool error is red, never
 # a skip. stale: and ledger-expired: alone never turn the gate red.
 #
-# The gate has no switch that disables, narrows or relaxes it.
+# The gate has no switch that disables, narrows or relaxes it; the declared
+# production level only tightens it.
 
 set -u
 export LC_ALL=C
 
 usage() {
-	echo "usage: workflows/_shared/scripts/audit-deps [--go] [--npm <dir>]... [--ledger <path>]" >&2
+	echo "usage: workflows/_shared/scripts/audit-deps [--go] [--npm <dir>]... [--ledger <path>] [--npm-prod-level <moderate|low>]" >&2
 }
 
 tmp="$(mktemp -d)" || exit 1
 trap 'rm -rf "$tmp"' EXIT INT TERM
 : >"$tmp/surfaces"
 ledger=".polyforge/audit-exemptions.conf"
+prod_level=""
 n=0
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -64,7 +78,7 @@ while [ $# -gt 0 ]; do
 		printf '%s\tgo\t.\n' "$n" >>"$tmp/surfaces"
 		shift
 		;;
-	--npm | --ledger)
+	--npm | --ledger | --npm-prod-level)
 		[ $# -ge 2 ] && [ -n "$2" ] || {
 			echo "audit-deps: $1 needs a value" >&2
 			usage
@@ -73,8 +87,17 @@ while [ $# -gt 0 ]; do
 		if [ "$1" = "--npm" ]; then
 			n=$((n + 1))
 			printf '%s\tnpm\t%s\n' "$n" "$2" >>"$tmp/surfaces"
-		else
+		elif [ "$1" = "--ledger" ]; then
 			ledger="$2"
+		else
+			case "$2" in
+			moderate | low) prod_level="$2" ;;
+			*)
+				echo "audit-deps: --npm-prod-level must be moderate or low (the default threshold is high, and a declared level can only tighten it)" >&2
+				usage
+				exit 2
+				;;
+			esac
 		fi
 		shift 2
 		;;
@@ -124,20 +147,35 @@ while IFS="$(printf '\t')" read -r i kind dir; do
 			(cd "$dir" && npm audit --json --audit-level=high --package-lock-only --include=dev) \
 				>"$tmp/$i.out" 2>"$tmp/$i.err" </dev/null
 			state="ran:$?"
+			# a declared production level runs a second, production-only audit
+			# of the same surface; its findings at the level or above are
+			# findings (dev dependencies stay at the high threshold above)
+			if [ -n "$prod_level" ]; then
+				(cd "$dir" && npm audit --json --audit-level="$prod_level" --package-lock-only --omit=dev) \
+				>"$tmp/$i.prod.out" 2>"$tmp/$i.prod.err" </dev/null
+			fi
 		fi
 	fi
 	printf '%s\t%s\t%s\t%s\n' "$i" "$kind" "$dir" "$state" >>"$tmp/runs"
 done <"$tmp/surfaces"
 
-python3 -I - "$tmp" "$ledger" <<'PY'
+python3 -I - "$tmp" "$ledger" "$prod_level" <<'PY'
 import datetime
 import json
 import re
 import sys
 
-tmp, ledger_path = sys.argv[1:3]
+tmp, ledger_path, prod_level = sys.argv[1:4]
 today = datetime.datetime.now(datetime.timezone.utc).date()
 red = False
+
+# A declared --npm-prod-level names the severities its production-only
+# audit counts; the whole-tree audit always counts high and critical.
+PROD_SEVERITIES = {
+    "moderate": ("moderate", "high", "critical"),
+    "low": ("low", "moderate", "high", "critical"),
+}
+SEVERITIES = {"high": ("high", "critical")}
 
 HINT = {
     "npm": "install Node.js with npm",
@@ -172,8 +210,9 @@ def last_line(text):
     return lines[-1] if lines else "(no output)"
 
 
-def npm_findings(out, err):
-    """Answer (findings, failure): findings are (advisory, package, detail)."""
+def npm_findings(out, err, severities):
+    """Answer (findings, failure) for a report whose advisories carry one of
+    severities: findings are (advisory, package, detail)."""
     try:
         report = json.loads(out)
     except ValueError:
@@ -190,7 +229,7 @@ def npm_findings(out, err):
     found = {}
     for vuln in report["vulnerabilities"].values():
         for via in vuln.get("via", []):
-            if not isinstance(via, dict) or via.get("severity") not in ("high", "critical"):
+            if not isinstance(via, dict) or via.get("severity") not in severities:
                 continue
             url = str(via.get("url", ""))
             adv = url.rsplit("/", 1)[-1] or str(via.get("source", ""))
@@ -250,7 +289,17 @@ for ln in read("runs").splitlines():
     rc = int(state.split(":", 1)[1])
     out, err = read(i + ".out"), read(i + ".err")
     if kind == "npm":
-        found, failure = npm_findings(out, err)
+        found, failure = npm_findings(out, err, SEVERITIES["high"])
+        # a declared level: the production-only audit of the same surface,
+        # merged into the whole tree's findings (its high and critical
+        # findings are the same ones; only the tighter ones are new)
+        if failure is None and prod_level:
+            prod_found, prod_failure = npm_findings(read(i + ".prod.out"), read(i + ".prod.err"), PROD_SEVERITIES[prod_level])
+            if prod_failure is not None:
+                found, failure = None, prod_failure
+            else:
+                for key, detail in prod_found.items():
+                    found.setdefault(key, detail)
     else:
         found, failure = go_findings(out, err, rc)
     if failure:
