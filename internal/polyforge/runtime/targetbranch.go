@@ -80,14 +80,18 @@ func (r *Runtime) fixTargetBranch(j *job) (string, error) {
 	}
 	// the item's own lane may declare it an epic (polyforge#117): the
 	// checkout branch is the children branch of its OWN seq, recorded
-	// with no target — the epic merges into the default branch
+	// with no target — the epic merges into the default branch. A lane the
+	// set does not carry (no workflows dir, a name outside the set) leaves
+	// the claim to its own bundle check exactly as before; one it carries
+	// but cannot load refuses here naming why.
 	if j.item != nil && j.bundleName != "" {
 		lane, lerr := r.readLane(j.project, j.bundleName)
 		switch {
 		case lerr != nil:
 			return "", targetBranchErr(j, "the item's own lane %s does not load: %v", j.bundleName, lerr)
 		case lane == nil:
-			return "", targetBranchErr(j, "the item's own lane %s is not in this daemon's lane set (nothing is claimed; re-bind the work item to an installed lane)", j.bundleName)
+			// not in this daemon's lane set: the claim's own bundle check
+			// judges it, never this file's reader
 		case lane.Epic:
 			if lane.ChildrenBranch == "" {
 				return "", targetBranchErr(j, "the epic lane %s declares no children_branch to name the checkout branch", j.bundleName)

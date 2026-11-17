@@ -66,9 +66,9 @@ func TestListFiltersParent(t *testing.T) {
 	if err != nil || len(wis) != 0 {
 		t.Fatalf("an unknown parent answers an empty page, got %v, %v", wis, err)
 	}
-	// the plain list is unchanged: every item is there
+	// the plain list is unchanged: every item is there (six were created)
 	wis, err = env.WIs.List(ListFilters{Project: "alpha"})
-	if err != nil || len(wis) != 5 {
+	if err != nil || len(wis) != 6 {
 		t.Fatalf("the plain list still answers everything: %d, %v", len(wis), err)
 	}
 	seen := map[string]bool{childA: true, childB: true, parent: true, stray: true}

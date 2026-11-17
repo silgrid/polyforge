@@ -138,14 +138,17 @@ func TestEpicClaimNoEpicKeyUnchanged(t *testing.T) {
 	}
 }
 
-// TestEpicClaimLaneUnreadableRefused: an epic lane the claim cannot read
-// refuses the claim naming why — never a silent fall-back to the default
-// branch.
+// TestEpicClaimLaneUnreadableRefused: an epic lane the set carries but
+// the loader refuses refuses the claim naming the lane — never a silent
+// fall-back to the default branch.
 func TestEpicClaimLaneUnreadableRefused(t *testing.T) {
 	hub := newFakeHub()
 	r, _, _ := newWorkspaceTestRuntime(t, hub, "proj")
-	epicLanes(t, r, "epic: true\nchildren_branch: \"epic/{seq}\"\n")
-	r.cfg.WorkflowsDir = filepath.Join(r.cfg.WorkflowsDir, "gone") // the lane set is gone
+	epics := t.TempDir()
+	workflowtest.WriteLane(t, epics, "plain-lane", "steps:\n  - { id: a }\n")
+	// a lane the loader refuses: the epic key without children_branch
+	workflowtest.WriteLaneUnchecked(t, epics, "epic-lane", "epic: true\nsteps:\n  - { id: a }\n")
+	r.cfg.WorkflowsDir = epics
 	const epic = "wi_epic9"
 	item := &api.WorkItem{ID: epic, ProjectName: "proj", Slug: "polyforge#9", Seq: 9, BundleName: w80StrPtr("epic-lane")}
 	j := &job{
@@ -154,6 +157,6 @@ func TestEpicClaimLaneUnreadableRefused(t *testing.T) {
 	}
 	err := r.materialize(context.Background(), j)
 	if err == nil || !strings.Contains(err.Error(), "epic-lane") {
-		t.Fatalf("an epic lane the claim cannot read refuses the claim naming the lane, got %v", err)
+		t.Fatalf("an epic lane the loader refuses names the lane in the refusal, got %v", err)
 	}
 }

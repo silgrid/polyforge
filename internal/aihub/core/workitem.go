@@ -1315,6 +1315,10 @@ func (m *WIManager) List(f ListFilters) ([]WIView, error) {
 		q += ` AND w.bundle_name=?`
 		args = append(args, f.Bundle)
 	}
+	if f.Parent != "" {
+		q += ` AND w.parent_id=?`
+		args = append(args, f.Parent)
+	}
 	for _, a := range f.Attrs {
 		q += ` AND json_extract(w.attrs, ?)=?`
 		args = append(args, jsonPath(a.Path), a.Value)

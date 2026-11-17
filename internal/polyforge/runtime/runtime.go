@@ -49,6 +49,10 @@ type Aihub interface {
 	SessionVerify(wi, sessionID string) (*api.SessionVerifyResponse, error)
 	SessionEnd(wi string, req api.SessionEndRequest) error
 	GetWorkItem(idOrSlug string) (*api.WorkItem, error)
+	// ListChildren lists the work items whose parent is parentID, newest
+	// first (polyforge#117: the epic lane's claim snapshots an epic's
+	// children and the running re-check reads them back through it).
+	ListChildren(parentID string) ([]api.WorkItem, error)
 	// WriteAttrs writes one top-level attrs key of a work item on the
 	// daemon's machine key (PATCH /work-items/{id}/attrs). The claim's
 	// only use is clearing the reserved step_params key once the merge's

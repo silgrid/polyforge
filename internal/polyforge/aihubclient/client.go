@@ -312,15 +312,18 @@ func (c *Client) ListWorkItemsRaw(project, status string, limit int) (json.RawMe
 // is that string; GET /work-items?attr=…, repeatable).
 type WorkItemFilter struct {
 	Project, Status, Bundle string
-	Attrs                   []string
-	Limit                   int
+	// Parent narrows the page to one parent's children ("" = any;
+	// polyforge#117: the epic lane's daemon lists an epic's children).
+	Parent string
+	Attrs  []string
+	Limit  int
 }
 
 // path is the list request a filter selects (empty fields are left off;
 // Attrs keep their order).
 func (f WorkItemFilter) path() string {
 	q := url.Values{}
-	for k, v := range map[string]string{"project": f.Project, "status": f.Status, "bundle": f.Bundle} {
+	for k, v := range map[string]string{"project": f.Project, "status": f.Status, "bundle": f.Bundle, "parent": f.Parent} {
 		if v != "" {
 			q.Set(k, v)
 		}
@@ -332,6 +335,17 @@ func (f WorkItemFilter) path() string {
 		q.Set("limit", strconv.Itoa(f.Limit))
 	}
 	return "/api/v1/work-items?" + q.Encode()
+}
+
+// listChildrenLimit caps the children page: the server clamps to its own
+// maximum; a whole epic's children fit far below it.
+const listChildrenLimit = 1000
+
+// ListChildren lists the work items whose parent is parentID, newest
+// first (the epic lane's daemon reads an epic's children through it,
+// polyforge#117).
+func (c *Client) ListChildren(parentID string) ([]api.WorkItem, error) {
+	return c.ListWorkItems(WorkItemFilter{Parent: parentID, Limit: listChildrenLimit})
 }
 
 // ListWorkItems lists the work items a filter selects, newest first.
