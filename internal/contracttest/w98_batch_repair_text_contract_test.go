@@ -203,3 +203,57 @@ func TestW98FullGateRepairRouteText(t *testing.T) {
 		}
 	}
 }
+
+// TestW98RepairFreshnessAndWaysOut (review round 1, #1 and #3): the
+// repair route's freshness never compares a file's round with a step's
+// own — rounds are per step, so the brief carries the gate's round and
+// the plan and the refusal carry the brief round they answer — and the
+// repair's out-of-scope ways out are shapes the daemon accepts: the
+// owner-ruled revert rides the gate decision's reverts with a plain
+// done (a rewind to a later step the call always refuses), and a refused
+// or reverted brief leaves no plan behind to land.
+func TestW98RepairFreshnessAndWaysOut(t *testing.T) {
+	repair := w98Flat(t, "workflows/integrate/skills/repair.md")
+	for _, want := range []string{
+		// #1: the freshness keys on the brief's round, never the step's
+		// own (a review FAIL or an owner's rewind-to-revert shifts the
+		// steps' rounds apart)
+		"The brief's `round` is the gate's, never yours — no comparison with your own round decides anything",
+		// the plan and the refusal answer a brief, not a step round
+		"`\"brief_round\": <the brief's round>`",
+		"an existing plan answering this very brief is kept: check its branch out as it stands (never `checkout -B`, never rewritten history)",
+		// #3: the owner-ruled revert rides the decision and a plain done
+		"write the item into `artifacts/integrate/gate-decision.json`'s `reverts`",
+		"remove the repair plan file",
+		"then hand off `done`",
+	} {
+		if !strings.Contains(repair, strings.Join(strings.Fields(want), " ")) {
+			t.Errorf("workflows/integrate/skills/repair.md must state %q", want)
+		}
+	}
+	if strings.Contains(repair, "--status rewind") {
+		t.Errorf("workflows/integrate/skills/repair.md hands off a rewind — to the later step the daemon always refuses it (review r1 #3)")
+	}
+	// the review judges the plan answering the brief, and passes with
+	// nothing that does
+	review := w98Flat(t, "workflows/integrate/steps/review.md")
+	for _, want := range []string{
+		"whose `brief_round` equals the brief's `round`",
+		"the refusal of this brief, a plan answering an older brief, or no plan at all: nothing to judge",
+	} {
+		if !strings.Contains(review, strings.Join(strings.Fields(want), " ")) {
+			t.Errorf("workflows/integrate/steps/review.md must state %q", want)
+		}
+	}
+	// the revert step reads the reverts the repair step's ruling wrote
+	// beside the gate's
+	revertSkill := w98Flat(t, "workflows/integrate/skills/revert.md")
+	if !strings.Contains(revertSkill, "the repair step's owner-ruled revert of a source the batch cannot fix in place") {
+		t.Errorf("workflows/integrate/skills/revert.md must name the repair step's reverts as a source of its list")
+	}
+	// #N5: a red the dependency audit raised is never the batch's
+	fg := w98Flat(t, "workflows/integrate/skills/full-gate.md")
+	if !strings.Contains(fg, "a red the dependency audit raised is never the batch's") {
+		t.Errorf("workflows/integrate/skills/full-gate.md must exclude the audit red from the repair route")
+	}
+}
