@@ -661,7 +661,43 @@ func (l *loader) steps(file string, off int, n *yaml.Node) []Step {
 		}
 		out = append(out, s)
 	}
+	l.rewindOnlyCoverage(file, off, n, out)
 	return out
+}
+
+// rewindOnlyCoverage judges every rewind_only step against the gates'
+// rewind ranges: a step declaring the key must sit in some gate's
+// [on_fail target, gate) range — the range a rewind of that gate resets
+// — or it would never run (the first round skips it and no rewind can
+// reach it). The judgement needs the whole step list, so it runs after
+// the list is parsed; the defect is WFC-112 at the step's own path,
+// naming the step.
+func (l *loader) rewindOnlyCoverage(file string, off int, n *yaml.Node, steps []Step) {
+	idx := map[string]int{}
+	for i, s := range steps {
+		idx[s.ID] = i
+	}
+	for i, s := range steps {
+		if !s.RewindOnly {
+			continue
+		}
+		covered := false
+		for _, g := range steps {
+			if !g.Gate || g.OnFailTarget == "" {
+				continue
+			}
+			if t, ok := idx[g.OnFailTarget]; ok && t <= i && i < idx[g.ID] {
+				covered = true
+				break
+			}
+		}
+		if covered {
+			continue
+		}
+		l.at(CodeInvalidValue, file, off, mappingNode(n.Content[i], "rewind_only"),
+			fmt.Sprintf("steps[%d](%s).rewind_only", i, s.ID),
+			"step %q declares rewind_only, but no gate's [on_fail target, gate) range covers it: the first round skips the step and no rewind would ever reach it, so it would never run — drop the key or place the step inside a gate's rewind range", s.ID)
+	}
 }
 
 // step decodes and judges one step entry; seen holds the ids declared
