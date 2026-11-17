@@ -94,7 +94,7 @@ item uses it to get the full command list).
 
 The target repository is the current working directory (the engine root).
 A nested project root — a subdirectory of a git work tree with its own
-conf, such as ``cd pi-web`` — is a repository of its own: git names a
+conf, such as ``cd tools/site`` — is a repository of its own: git names a
 diff's paths from the work tree's top, so the engine makes them relative to
 the engine root, like every other path it reads (the conf's globs, the
 carries declarations, the listed files). A changed path outside the engine
