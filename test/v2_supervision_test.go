@@ -265,9 +265,8 @@ func TestV2DaemonRestartNotCountedSameModel(t *testing.T) {
 // where Wait and the verdict path's final look collect it) before the
 // dispatch starts: a delivery wins any verdict, so the outcome no longer
 // depends on tick timing. (It used to be staged at the old envelope drop
-// path, runtime-state/pending-results/<spawn>.json; nothing has read that
-// path since hand-offs moved to `pf step handoff`, which is why this test
-// became flaky again.) The retry itself still dispatches (asserted below),
+// path — nothing has read that path since hand-offs moved to `pf step
+// handoff`, which is why this test became flaky again.) The retry itself still dispatches (asserted below),
 // and the scripted 150ms delivery delay is kept so a tree that goes back to
 // relying on delivery timing fails here under load. Rule 0 outranking rule 4
 // at one instant is pinned deterministically by TestJudgeRuleTable's
