@@ -218,6 +218,10 @@ def write(name, obj):
     with open(os.path.join(ART, name), "w") as f:
         json.dump(obj, f)
 
+def writeFile(root, rel, body):
+    with open(os.path.join(root, rel), "w") as f:
+        f.write(body)
+
 def run(line):
     # the skill's line, verbatim, as a real agent's shell runs it
     return subprocess.run(line, shell=True, cwd=os.getcwd()).returncode
@@ -443,35 +447,58 @@ def close(args):
     write("close-output.json", {"summary": c["summary"]})
 
 def repair(args):
-    # the batch's own repair round: the gate's brief (no brief of this
-    # round: the lane came back over a check that is not the repair
-    # route) fixes each red unit on one branch per repo, off the pinned
-    # head, touching only tests; --bogus scripts a fix that does not
-    # take (the gate re-runs red)
+    # the batch's own repair round. The freshness never compares a file's
+    # round with this step's own (rounds are each step's): the brief's
+    # round is the gate's, the plan and the refusal answer it by
+    # brief_round. No brief: nothing of the batch's repair is ours. A
+    # refusal of this brief: done. A plan answering this very brief: the
+    # review sent the branch back — continue on it as it stands (never
+    # checkout -B). Otherwise start fresh off the brief's pinned heads.
+    # --bogus scripts a test-only fix that does not take; --stray scripts
+    # a fix that also touches a product file (the review's scope finding).
     brief = load("repair.json")
-    if not (brief and brief.get("round") == round_no()):
-        write("repair-output.json", {"summary": "no repair brief of this round: nothing to repair"}); return
+    if not brief:
+        write("repair-output.json", {"summary": "no repair brief: nothing of the batch's repair is ours"}); return
+    refused = load("repair-refused.json")
+    if refused and refused.get("brief_round") == brief.get("round"):
+        write("repair-output.json", {"summary": "the owner refused this brief's units: nothing to repair"}); return
+    plan = load("repair-plan.json")
+    continuing = plan is not None and plan.get("brief_round") == brief.get("round")
     repos = {}
     for u in brief["units"]:
         d = os.path.join("repos", u["repo"])
+        branch = "integrate/repair-" + WI
+        if continuing:
+            for e in plan["repos"]:
+                if e["name"] == u["repo"]:
+                    branch = e["branch"]
         if u["repo"] not in repos:
             run("git -C %s fetch origin" % d)
-            run("git -C %s checkout -q -B integrate/repair-%s %s" % (d, WI, brief["heads"][u["repo"]]))
+            if continuing:
+                run("git -C %s checkout %s" % (d, branch))
+            else:
+                run("git -C %s checkout -q -B %s %s" % (d, branch, brief["heads"][u["repo"]]))
         expected = os.path.join(d, "tests", "expected.txt")
         with open(expected) as f:
             body = f.read()
         if "--bogus" in args:
-            body = body + "# the batch's repair, round %s\n" % ROUND   # a test-only change that fixes nothing
+            body = body + "# the batch's repair, dispatch %s\n" % ROUND  # a test-only change that fixes nothing
         else:
-            body = open(os.path.join(d, "code.txt")).read()             # the stale expectation, fixed in place
+            body = open(os.path.join(d, "code.txt")).read()               # the stale expectation, fixed in place
         with open(expected, "w") as f:
             f.write(body)
         run("git -C %s add -- tests/expected.txt" % d)
+        if "--stray" in args:
+            writeFile(d, "stray.txt", "a product file the repair must not touch\n")
+            run("git -C %s add -- stray.txt" % d)
+        stray = os.path.join(d, "stray.txt")
+        if os.path.exists(stray) and "--stray" not in args:
+            run("git -C %s rm -q -- stray.txt" % d)                      # the review's finding, answered
         run("git -C %s commit -q -m \"the batch repairs its stale test in place\"" % d)
         r = subprocess.run(u["rerun"], shell=True, cwd=d)
         if r.returncode != 0 and "--bogus" not in args:
             raise SystemExit("%s: the fix did not turn the unit green" % u["rerun"])
-        e = repos.setdefault(u["repo"], {"name": u["repo"], "branch": "integrate/repair-" + WI,
+        e = repos.setdefault(u["repo"], {"name": u["repo"], "branch": branch,
                                          "base": brief["heads"][u["repo"]], "head": "", "units": [], "items": []})
         if u["unit"] not in e["units"]:
             e["units"].append(u["unit"])
@@ -479,16 +506,19 @@ def repair(args):
             e["items"].append(u["item"])
     for e in repos.values():
         e["head"] = subprocess.run("git -C %s rev-parse HEAD" % os.path.join("repos", e["name"]), shell=True, capture_output=True, text=True).stdout.strip()
-    write("repair-plan.json", {"round": round_no(), "repos": list(repos.values())})
+    write("repair-plan.json", {"brief_round": brief.get("round"), "repos": list(repos.values())})
     write("repair-output.json", {"summary": "the batch's red units fixed on integrate/repair-%s (tests only)" % WI})
 
 def review(args):
-    # the repair's fresh judgment: the branch diff stays inside tests and
-    # docs and fixes the brief's units (the mechanical check a scripted
-    # agent makes; no plan of this round is a pass with nothing judged)
+    # the repair's fresh judgment: the plan answering the brief (its
+    # brief_round equals the brief's round — never this step's own round),
+    # the branch diff staying inside tests and docs (the mechanical check
+    # a scripted agent makes); the refusal of this brief, a plan answering
+    # an older brief or no plan at all: nothing to judge
+    brief = load("repair.json")
     plan = load("repair-plan.json")
-    if not (plan and plan.get("round") == round_no()):
-        write("review-output.json", {"summary": "nothing of this round to judge"}); return
+    if not (plan and brief and plan.get("brief_round") == brief.get("round")):
+        write("review-output.json", {"summary": "nothing to judge: no brief, no plan answering it, or the owner's refusal"}); return
     findings = []
     for e in plan["repos"]:
         d = os.path.join("repos", e["name"])
@@ -770,6 +800,17 @@ func w404Action(step string, extra ...string) map[string]any {
 // makes on such a batch take exactly these four envelopes.
 func w404Plan() []map[string]any {
 	return []map[string]any{w404Action("collect"), w404Action("revert"), w404Action("full-gate"), w404Action("close")}
+}
+
+// w404PRCount answers the fake gh's PR count of the demo repo (the
+// landings and the repair PRs alike).
+func w404PRCount(t *testing.T, w *w404World) int {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(w.state, "demo", "prs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(entries)
 }
 
 // record answers the batch's integration_batch record from its wrap.
@@ -1383,4 +1424,113 @@ func TestW404IntegrateLaneEndToEnd(t *testing.T) {
 		t.Fatalf("a red batch tags nothing: %q", tags)
 	}
 	fmt.Println("PASS I8 three charged repair rounds spend max_rewinds, the spent budget goes to the owner, whose red close files the fix ticket")
+
+	// --- batch 8 (I9): the first round's fix does not take — the gate
+	// re-reds and the second round, started over on the new pins, lands its
+	// own PR beside the first (review r1 #2's e2e face): two charged
+	// rounds, two fix PRs merged, the pins and the green tag on the second
+	r2b, _, _ := w.land("p8", "", map[string]string{"code.txt": "four\n"})
+	prs8 := w404PRCount(t, w)
+	b8 := w.startBatch(t, d)
+	t.Cleanup(func() { killOrphans(b8) })
+	w.inst.setPlanFull(t, b8, []map[string]any{
+		w404Action("collect"), w404Action("revert"), w404Action("full-gate", "--repair"),
+		w404Action("repair", "--bogus"), w404Action("review"), w404Action("revert"),
+		w404Action("full-gate", "--repair"),
+		w404Action("repair"), w404Action("review"), w404Action("revert"),
+		w404Action("full-gate"), w404Action("close"),
+	}, nil)
+	waitWorkflowStatus(t, d, b8, "completed", 600*time.Second)
+	w.inst.waitWIStatus(t, b8, "wrapped", 60*time.Second)
+	capB8 := d.capsuleDir(b8)
+	x = readExecution(t, capB8)
+	rws, _ = x.RewindStats["rewinds"].([]any)
+	if len(rws) != 2 || fmt.Sprint(x.RewindStats["count"]) != "2" {
+		t.Fatalf("two charged repair rounds: %v", x.RewindStats)
+	}
+	for _, raw := range rws {
+		if rw := raw.(map[string]any); rw["gate"] != "full-gate" || rw["to_step"] != "repair" || rw["class"] != "charged" {
+			t.Fatalf("each round's FAIL rewinds to the repair step charged: %v", rw)
+		}
+	}
+	// the two rounds' landings: a second fix PR merged onto the default
+	// branch, both fixes riding it (the baseline counted the source's own
+	// landing)
+	if n := w404PRCount(t, w) - prs8; n != 2 {
+		t.Fatalf("the second round's own fix PR: %d fix PRs this batch", n)
+	}
+	main8 := strings.TrimSpace(gitRun(t, w.origin, "rev-parse", "main"))
+	if ls := gitRun(t, w.origin, "show", main8+":tests/expected.txt"); strings.TrimSpace(ls) != "four" {
+		t.Fatalf("the second round's fix rides the default branch: %q", ls)
+	}
+	if tag := strings.TrimSpace(gitRun(t, w.origin, "tag", "--points-at", main8)); !strings.HasPrefix(tag, "green/") {
+		t.Fatalf("the re-run gate tags the second landing: %q", tag)
+	}
+	rec = w.record(t, b8)
+	recFixes9, _ := rec["fixes"].([]any)
+	if rec["result"] != "green" || len(recFixes9) != 1 || recFixes9[0].(map[string]any)["merge"] != main8 {
+		t.Fatalf("the record names the second landing: %v", rec)
+	}
+	if in := w.integration(t, r2b); in["state"] != "merged" || in["batch"] != b8 {
+		t.Fatalf("the stale test's source merged with the batch that repaired it twice: %v", in)
+	}
+	fmt.Println("PASS I9 the second repair round lands its own PR beside the first, the pins and the green tag following it")
+
+	// --- batch 9 (I10): the review rejects the first fix — its FAIL
+	// rewinds to the repair step charged, and the repair continues on the
+	// very same branch (never reset) until the review passes: the rounds
+	// never compare a file's with a step's own
+	r2c, _, _ := w.land("p9", "", map[string]string{"code.txt": "five\n"})
+	prs9 := w404PRCount(t, w)
+	b9 := w.startBatch(t, d)
+	t.Cleanup(func() { killOrphans(b9) })
+	w.inst.setPlanFull(t, b9, []map[string]any{
+		w404Action("collect"), w404Action("revert"), w404Action("full-gate", "--repair"),
+		w404Action("repair", "--stray"), w404Action("review"),
+		w404Action("repair"), w404Action("review"), w404Action("revert"),
+		w404Action("full-gate"), w404Action("close"),
+	}, nil)
+	waitWorkflowStatus(t, d, b9, "completed", 600*time.Second)
+	w.inst.waitWIStatus(t, b9, "wrapped", 60*time.Second)
+	capB9 := d.capsuleDir(b9)
+	x = readExecution(t, capB9)
+	// the two charged rewinds: the gate's FAIL to the repair, and the
+	// review's own FAIL back to it
+	rws, _ = x.RewindStats["rewinds"].([]any)
+	if len(rws) != 2 {
+		t.Fatalf("the gate's and the review's charged FAILs: %v", x.RewindStats)
+	}
+	byGate := map[string]map[string]any{}
+	for _, raw := range rws {
+		rw := raw.(map[string]any)
+		byGate[rw["gate"].(string)] = rw
+	}
+	if byGate["full-gate"] == nil || byGate["full-gate"]["to_step"] != "repair" || byGate["full-gate"]["class"] != "charged" ||
+		byGate["review"] == nil || byGate["review"]["to_step"] != "repair" || byGate["review"]["class"] != "charged" {
+		t.Fatalf("the gate and the review each rewind to the repair step charged: %v", x.RewindStats)
+	}
+	// the review: one FAIL over the stray product file, then its pass
+	if hs := w404Handoffs(t, capB9, "review"); len(hs) != 2 || hs[0].Status != stepcall.StatusFail || !strings.Contains(hs[0].Reason, "stray.txt") || hs[1].Status != stepcall.StatusDone {
+		t.Fatalf("the review's FAIL over the out-of-scope fix, then its pass: %+v", hs)
+	}
+	// the branch continued as it stands: one branch, one fix PR carrying
+	// both commits — the stray added, then answered (the baseline counted
+	// the source's own landing)
+	if n := w404PRCount(t, w) - prs9; n != 1 {
+		t.Fatalf("one fix PR for the whole round trip: %d fix PRs this batch", n)
+	}
+	main9 := strings.TrimSpace(gitRun(t, w.origin, "rev-parse", "main"))
+	if ls := gitRun(t, w.origin, "show", main9+":tests/expected.txt"); strings.TrimSpace(ls) != "five" {
+		t.Fatalf("the default branch carries the fixed expectation: %q", ls)
+	}
+	if _, err := os.Stat(filepath.Join(capB9, "repos", "demo", "stray.txt")); !os.IsNotExist(err) {
+		t.Fatal("the answered finding is gone: no stray product file on the branch")
+	}
+	if tag := strings.TrimSpace(gitRun(t, w.origin, "tag", "--points-at", main9)); !strings.HasPrefix(tag, "green/") {
+		t.Fatalf("the re-run gate tags the answered fix: %q", tag)
+	}
+	if in := w.integration(t, r2c); in["state"] != "merged" || in["batch"] != b9 {
+		t.Fatalf("the source merged with the batch that answered the review: %v", in)
+	}
+	fmt.Println("PASS I10 the review's FAIL rewinds to the repair charged, the branch continues as it stands and the answered fix lands")
 }
