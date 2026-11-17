@@ -324,6 +324,16 @@ def fmt_mins(secs):
     return f'{secs / 60:g}m'
 
 
+def parse_ts(s):
+    """an RFC3339 stamp to a datetime, tolerant of the fractional
+    seconds capsule.json's created_at carries (RFC3339Nano) — the
+    seconds are the proxy's own granularity."""
+    m = re.match(r'(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})', s or '')
+    if not m:
+        return None
+    return datetime(*[int(x) for x in m.groups()])
+
+
 def time_group_line(label, metrics):
     """the two Q3/Q4 lines of one cohort group; N/A where the caliber
     has nothing to measure (the honesty rules — never a 0 dressed as a
@@ -341,12 +351,9 @@ def time_group_line(label, metrics):
     merged = [m for m in metrics if m['merged']]
     spans = []
     for m in merged:
-        try:
-            c = datetime.strptime(m['claim_at'], '%Y-%m-%dT%H:%M:%SZ')
-            e = datetime.strptime(m['merge_done_at'], '%Y-%m-%dT%H:%M:%SZ')
-            spans.append((e - c).total_seconds())
-        except ValueError:
-            continue
+        c, e = parse_ts(m['claim_at']), parse_ts(m['merge_done_at'])
+        if c is not None and e is not None:
+            spans.append(round((e - c).total_seconds()))
     med = f'median {fmt_mins(statistics.median(spans))}' if spans else 'median N/A'
     nmerged = len(merged)
     notmerged = len(metrics) - nmerged

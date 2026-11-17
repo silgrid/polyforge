@@ -42,7 +42,11 @@ func w425CohortWrite(t *testing.T, caps string, c w425CohortCap) {
 			t.Fatal(err)
 		}
 	}
-	write("capsule.json", fmt.Sprintf(`{"bundle_name":%q,"created_at":"%sT10:00:00Z"}`, c.lane, c.created))
+	created := c.created
+	if !strings.Contains(created, "T") {
+		created += "T10:00:00Z"
+	}
+	write("capsule.json", fmt.Sprintf(`{"bundle_name":%q,"created_at":%q}`, c.lane, created))
 	if c.plan != "" {
 		write("artifacts/plan.md", c.plan)
 	}
@@ -221,7 +225,7 @@ func TestW425ReviewFirstpassCohortTime(t *testing.T) {
 	t3 += w425EnSection("build", 3, "2026-11-04T10:20:00Z", "2026-11-04T10:20:20Z", "20s", "done", nil)
 
 	caps := t.TempDir()
-	w425CohortWrite(t, caps, w425CohortCap{"t-1", "develop", "2026-11-02", w425Plan(map[string]int{"u1": 2}),
+	w425CohortWrite(t, caps, w425CohortCap{"t-1", "develop", "2026-11-02T10:00:00.123456789Z", w425Plan(map[string]int{"u1": 2}),
 		map[string]string{"build/s1": w425Build("main"), "review/s2": w425Review("pass")}, t1})
 	// t-2: reviewed, no hand-off sections at all → zero measurable
 	// attempts, not merged.
@@ -276,7 +280,7 @@ func TestW425ReviewFirstpassCohortTime(t *testing.T) {
 		rows[m["capsule"]] = m
 	}
 	for name, want := range map[string]string{
-		"t-1": "1560 540 480 1 0 2026-11-02T10:00:00Z 2026-11-02T10:45:00Z 1",
+		"t-1": "1560 540 480 1 0 2026-11-02T10:00:00.123456789Z 2026-11-02T10:45:00Z 1",
 		"t-3": "170 80 0 1 1 2026-11-04T10:00:00Z  0",
 		"t-2": "0 0 0 0 0 2026-11-03T10:00:00Z  0",
 	} {

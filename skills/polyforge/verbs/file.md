@@ -353,19 +353,24 @@ re-filed.
    out of scope): report what you see and stop.
 2. **Every unit, check first — then file.** For each decomposition unit,
    in the analysis's order:
-   - Check: `pf queue --project P --attr split.origin=<original's wi_
-     id> --attr split.unit=<unit key>` (the plain list — no `--status` —
-     so every status shows), and `pf file show <original>` for older
-     children filed before the markers (they carry no attrs; the
-     parent's `waiting-for` names them). One hit for the unit: reuse
-     that child — file nothing. No hit: file it:
-     `pf file create --project P --goal <the unit's goal> --bundle <the
-     unit's lane> --parent <original> --attr split.origin=<original's
-     wi_ id> --attr split.unit=<unit key> [--after <the previous unit's
-     child>]` — the `--after` sibling dependency is written at create
-     (never patched in later), so the units' order holds. Record the
-     created child's id; a create whose answer was lost is recovered by
-     the same check (the attrs are the record), never by filing again.
+   - Check: `pf queue --project P --attr split.origin=<id> --attr split.unit=<key>`
+     (the plain list — no `--status` — so every status shows), `<id>` the
+     original's wi_ id and `<key>` the unit's stable key; and
+     `pf file show <original>` for older children filed before the
+     markers (they carry no attrs; the parent's `waiting-for` names
+     them). One hit for the unit: reuse that child — file nothing. No
+     hit: file it:
+
+     ```
+     pf file create --project P --goal <the unit's goal> --bundle <the unit's lane> \
+       --parent <original> --attr split.origin=<id> --attr split.unit=<key> \
+       [--after <the previous unit's child>]
+     ```
+
+     The `--after` sibling dependency is written at create (never
+     patched in later), so the units' order holds. Record the created
+     child's id; a create whose answer was lost is recovered by the
+     same check (the attrs are the record), never by filing again.
    - A check that cannot be trusted stops the procedure: a list that
      looks truncated (the server's cap reached), a second child for one
      unit, or a child nobody can tell apart — report and ask the owner;
@@ -375,11 +380,11 @@ re-filed.
    `DEPENDENCY_BLOCKED` — so from the first create until every child
    wraps, no machine can claim the original: the preparation window is
    closed by the children-wait, not by speed.
-4. **Move the original to the epic lane.** `pf file edit <original>
-   --bundle epic` — legal while the ticket is queued and never claimed
-   (a child already claimed would freeze the lane,
-   `PARENT_BUNDLE_FROZEN`); done after the first child exists, so the
-   ticket is held while its lane changes.
+4. **Move the original to the epic lane.** Once the first child holds
+   it, run `pf file edit <original> --bundle epic` — legal while the
+   ticket is queued and never claimed (a child already claimed would
+   freeze the lane, `PARENT_BUNDLE_FROZEN`); done after the first child
+   exists, so the ticket is held while its lane changes.
 5. **Verify the checklist, then release.** One child per unit, the
    sibling order, the lanes and both split attrs — checked against the
    confirmed decomposition and shown to the owner. Each child's own
