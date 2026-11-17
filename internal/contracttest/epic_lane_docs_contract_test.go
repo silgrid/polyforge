@@ -50,7 +50,7 @@ func TestEpicLaneDocsContract(t *testing.T) {
 
 	upgrade := w68Flat(t, "docs/upgrade.md")
 	for _, want := range []string{
-		"## The epic lane (polyforge#117)",
+		"## v0.2.3, the epic lane (polyforge#117)",
 	} {
 		if !strings.Contains(upgrade, want) {
 			t.Errorf("docs/upgrade.md must state %q", want)

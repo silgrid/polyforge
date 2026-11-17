@@ -848,9 +848,40 @@ expected, or the branch missing on a task repo's origin is not judged
 The landing the sub-ticket's merge registers is `state:
 landed_on_target` with `target` naming the branch: the integrate pool's
 `integration.state=landed` filter (and the web UI's alike) never takes
-it. The record's shape keeps room for the epic ticket's own extension
-(its checkout start point and merge target) — keys the readers here
-tolerate and no shipped step reads.
+it. The record's shape keeps room for the epic ticket's own extension —
+keys the readers here tolerate and no shipped step reads, filled by the
+epic below.
+
+**An epic's own record (polyforge#117).** A lane may declare `epic`
+([Lane keys](#lane-keys)): its OWN work items are epics — each works on
+the children branch substituted with its own seq, and the first claim
+fixes that branch into `runtime-state/target-branch.json` as the
+record's `checkout` key and no `target` (exactly the sub-ticket's file,
+the same strictness and the same checkout and carrier-restore rules).
+No `target` means the epic's merge target is the origin's default
+branch: every reader keeps its default-branch logic — the steps' sync
+merges the default branch into the checked-out epic branch, the
+verification and the facts measure the whole epic from `merge-base HEAD
+origin/<the default branch>`, the PRs target the default branch —
+exactly as for a work item with no fixed target. The same claim writes
+the epic's children — every child's id, slug, status and its landing
+record verbatim — into `runtime-state/children.json`, immutable while
+the epic runs: a re-claim over unchanged children keeps the file byte
+for byte, and a changed set writes the next version. The driver
+re-checks the snapshot against aihub before every dispatch (the merge's
+own dispatch included): a child that failed or was canceled, one the
+snapshot does not carry or one gone from the live set parks the
+workflow blocked on its own authority — no question is asked; the
+owner's next message (a re-claim is one) resumes it. A changed
+snapshot's re-claim writes `runtime-state/epic-resume.json` beside the
+new version, and the driver's next plan pass lands it as one
+owner-class rewind to the step it names (review) — the steps from there
+re-run, charged to no budget. The epic's merge registers the ONE landed
+record the work item is wrapped with: `state: landed` (the pool's own),
+its `merge_commits` the actual default-branch landing, and a `children`
+key carrying the claim's snapshot verbatim — the ONE record the
+integrate pool takes, each child's landed_on_target evidence riding it
+with its source and staying on the child's own work item.
 
 ## Error codes
 

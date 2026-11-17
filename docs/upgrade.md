@@ -364,3 +364,39 @@ writes against the older server. Deploy the new aihub first, then
 upgrade the pf clients — and an aihub rolled back to v0.2.1 leaves the
 v0.2.2 automatic analysis write-back refused until it is upgraded
 again.
+
+## v0.2.3, the epic lane (polyforge#117)
+
+The new `epic` lane runs one work item per epic: verify-children → sync
+→ build (`rewind_only`: the fix build runs only after a rewind covers
+it, inheriting the plan) → review (the epic mode: the total acceptance,
+the children's landing records and PR bodies, the seams and the final
+diff — never a child's internals) → verification (the full bar
+explicitly) → publish → merge. The gates after build rewind to it;
+merge's moved-base FAIL goes back to sync (the same uncounted class
+develop declares, its own cap of 2), and the lane re-runs from there.
+
+A lane declares it with the new `epic` key (which must name
+`children_branch` too): its OWN work items are epics, each checking out
+the children branch of its own seq — recorded as
+`runtime-state/target-branch.json`'s `checkout` key with NO `target`, so
+the epic's merge target is the origin's default branch and every step
+script keeps its default-branch logic. The first claim also snapshots
+the epic's children (ids, slugs, statuses, landing records verbatim)
+into `runtime-state/children.json`, immutable while the epic runs; the
+driver re-checks it against aihub before every dispatch, and a changed
+child parks the workflow blocked — the daemon asks nothing. A re-claim
+over changed children writes the next snapshot version beside
+`runtime-state/epic-resume.json`, which the driver lands as one
+owner-class rewind to review (charged to no budget), so the affected
+steps re-run. The hub's work-item list gained a `parent` filter
+(`GET /work-items?parent=<id>`); the daemon's runtime reads an epic's
+children through it.
+
+The epic's merge registers ONE landed record — `state: landed`, the
+integrate pool's own — with a `children` key carrying the claim's
+snapshot verbatim: each child keeps its own `landed_on_target` evidence
+on its own work item and never enters the pool; a children snapshot a
+step cannot read is not judged (exit 2). Sub-tickets are untouched: a
+sub-ticket's claim still reads the PARENT's lane's `children_branch`
+and merges into the children branch, never the default branch.

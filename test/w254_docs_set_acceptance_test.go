@@ -449,13 +449,14 @@ func TestW254QuickstartsMovedIntact(t *testing.T) {
 // - the v0.2.1 section appended with the task concurrency bound as a Host key (max_concurrent_tasks, default 2, live on reload; one-off tasks take no max_concurrent_jobs slot any more, and a spawn without budget flags gets 40m / 1000000 — the token default is the ceiling)
 // - the v0.2.1 section appended with a bundle-bound ticket as a parent (PARENT_NOT_REGISTRY and HAS_CHILDREN_NO_BUNDLE are gone; a bound parent waits for its children to merge, via "child" in waiting_for, pf file edit <child> --parent "" detaches, PARENT_BUNDLE_FROZEN; deploy aihub before pf, and a rollback to the old aihub loses the wait)
 // - the v0.2.3 section appended with the corrections to the v0.2.2 upgrade notes (five headings above say v0.2.1 but shipped with v0.2.2 — the pf step ask, gate fallback, human merge, task concurrency and bundle-parent sections; and the v0.2.2 pf/daemon writes that carry expected_updated_at need the new aihub first, the v0.2.1 server rejects the whole PATCH with field … is not patchable, pf file edit still writes)
+// - the v0.2.3 section appended with the epic lane (a lane's `epic` key over `children_branch`: its own work items check the children branch of their own seq out — target-branch.json's `checkout` key, no `target`, so the epic merges into the default branch — the claim's children snapshot `runtime-state/children.json` is immutable while the epic runs, the driver re-checks it before every dispatch and parks a changed set blocked without a question, a changed re-claim writes `runtime-state/epic-resume.json` which lands as one owner-class rewind to review charged to no budget, the hub list gained a `parent` filter, and the epic's merge registers ONE landed record with the children attached verbatim)
 // upgrade-sections:end
 // The file is only routed to, from the install ops page and the README
 // landing page.
 func TestW254UpgradeByteIdentical(t *testing.T) {
 	raw := []byte(w254Read(t, "docs/upgrade.md"))
 	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != "5d63051269f7e806011a9a46acf45d8a9dda0c711d266be8554a6f105bff7ab4" {
+	if got := hex.EncodeToString(sum[:]); got != "a40df203a3f0f1d644f9cae494ea76ca90ba9eb13aee57bad1c6c5daa7709efd" {
 		t.Fatalf("docs/upgrade.md must stay byte-identical (only routed to, never rewritten): sha256 %s != the pinned pre-move sha256", got)
 	}
 	// the list beside the pin: one whole `// - ` line per appended section

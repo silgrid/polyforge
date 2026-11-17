@@ -47,7 +47,13 @@ develop workflow". Each lane's own narrative is its
 `workflows/<bundle>/README.md`; the shipped lanes are **develop** — the
 default development lane (build → review → sync →
 verification → publish → merge: each work item merges itself into the
-default branch at its end, as the daemon) — micro, integrate and release.
+default branch at its end, as the daemon) — **epic** — one work item per
+epic (verify-children → sync → build → review →
+verification → publish → merge: an epic's sub-tickets each land their
+own lane's work on the children branch, and the epic merges the
+accumulated branch into the default branch as one change, reviewed by
+its total acceptance and its seams, never re-auditing a child's
+internals) — micro, integrate and release.
 The four lanes develop superseded were removed
 (`workflows/_archive/README.md`): a work item still bound to one is refused
 at claim, and a terminal one keeps displaying. micro is the pure-text
