@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"github.com/silgrid/polyforge/internal/common/harness"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -385,6 +386,9 @@ func TestDoctorFixHarnessPromptsFlag(t *testing.T) {
 	if st, detail := doctorFind(t, doc, docChHarnessPrompts); st != "warn" || !strings.Contains(detail, "claude "+claude+": missing") {
 		t.Fatalf("report run: %s %q", st, detail)
 	}
+	if st, detail := doctorFind(t, doc, docChConcisePrompts); st != "warn" || !strings.Contains(detail, "claude "+claude+": missing") {
+		t.Fatalf("concise report run: %s %q", st, detail)
+	}
 	if b, _ := os.ReadFile(claude); string(b) != "# mine\n" {
 		t.Fatalf("the report-only run wrote the file: %q", b)
 	}
@@ -393,7 +397,10 @@ func TestDoctorFixHarnessPromptsFlag(t *testing.T) {
 	if st, detail := doctorFind(t, doc, docChHarnessPrompts); st != "pass" || !strings.Contains(detail, "claude "+claude+": missing; appended") {
 		t.Fatalf("fix run: %s %q", st, detail)
 	}
-	if b, _ := os.ReadFile(claude); string(b) != "# mine\n\n"+diagramGuidanceBlock {
+	if st, detail := doctorFind(t, doc, docChConcisePrompts); st != "pass" || !strings.Contains(detail, "claude "+claude+": missing; appended") {
+		t.Fatalf("concise fix run: %s %q", st, detail)
+	}
+	if b, _ := os.ReadFile(claude); string(b) != "# mine\n\n"+diagramGuidanceBlock+"\n"+harness.ConciseGuidanceBlock() {
 		t.Fatalf("fixed file = %q", b)
 	}
 }

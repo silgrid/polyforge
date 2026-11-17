@@ -96,6 +96,7 @@ every defect prints with its `WFC-*` code, file:line and YAML path
 | `workflow lanes` | the built-in lanes the daemon runs work items on (its workflows dir) and every mapped workspace's user lanes (`.polyforge/workflows/<lane>/`) load through the one lane loader under the workflow contract — the same judgement as `pf workflows validate` — and no queued work item of a mapped project is bound to a lane its workspace's lane set does not carry; `skip` while the daemon does not answer; out of `--harness` | `fail` naming every `WFC-*` defect of a built-in lane with its file:line and YAML path (a release defect; a claim on such a lane is refused); `warn` naming every defect of a user lane (`WFC-122` included: only that lane is unavailable) and listing each queued work item bound to a missing lane (`WFC-123`: a claim refuses it and it stays queued) — fix the user lane, re-bind the work item (`pf file edit <wi> --bundle <lane>`) or cancel it |
 | `harness claude` | when some resolved candidate is `claude:…`: the daemon finds the claude binary (see below) | the binary the daemon could not resolve |
 | `harness diagram guidance` | every installed harness's context file carries the native-SVG diagram guidance block (see below); `warn` at most — never `fail`, never moves the exit code; `skip` when no harness is installed | — (`warn` lists each file as `pass` / `legacy` / `missing` / `no file` / `unreadable` and carries the SVG block to add; `legacy` = mermaid-only guidance, which no longer passes) |
+| `harness concise guidance` | every installed harness's context file carries the concise-output guidance block (see below) — the one short output-discipline rule every step dispatch and every task input also carries, from the one source; `warn` at most — never `fail`, never moves the exit code; `skip` when no harness is installed | — (`warn` lists each file as `pass` / `missing` / `no file` / `unreadable` and carries the concise-output block to add) |
 | `aihub projects` | every mapped project is known to aihub and readable with the api key (its ready-queue read — the project-member face the daemon uses; no admin role needed) | the project AND its workspace, named (an ambiguous inverse or duplicate surfaces through the config check, both workspaces named) |
 | `workspace repo clones` | no uncovered uncommitted change or unpushed local commit in the `.repo/` git clones of every existing mapped workspace and their linked worktrees (see below); `warn` at most — never `fail`, never moves the exit code; `skip` naming the unit and its reason when the covering WI state could not be read | the clone AND its owning workspace, named, with the remediation (see below) |
 | `light verification fallbacks` | reads (never writes) the latest verify run of each live — not `.quarantined.` — capsule of every mapped workspace (`capsules/<name>/runtime-state/verify/<n>/result.json`, highest `<n>`) and, when light verifications ran full, reports `the latest light verification of N capsule(s) ran full — reasons: <category> ×k, …` (the `tier.reasons` entries by category: go package graph, stack config file changed, carries, conf, no analyzer, analyzer could not resolve, git, unplanned, unexplained, other) — a report only: always `pass`, never moves the exit code; `skip` when no mapped workspace directory exists; out of `--harness` (it rode the scoped-gates readiness row until that check moved into the workflow, see below) | — (`pass` with the counts; the scoped-gates readiness of a repo whose light runs fall back: `scope_ready.py`, below) |
@@ -328,7 +329,7 @@ left out, never warned — the row reads the context file that harness loads:
 | Harness | Context file |
 |---|---|
 | pi | `$PI_CODING_AGENT_DIR/AGENTS.md`, else `~/.pi/agent/AGENTS.md` |
-| claude | `~/.claude/CLAUDE.md` |
+| claude | `~/.claude/CLAUDE.md`, else `~/.claude/AGENTS.md` |
 | step-agent | `<harness-root>/step-agent/AGENTS.md` (`[daemon] harness_root`, else the data dir) |
 
 A file passes only when it carries the SVG block: its begin marker
@@ -366,6 +367,35 @@ The step-agent caveat: the daemon's step-agent dir deliberately carries no
 daemon start, so that file is normally absent (`warn`, with this caveat in
 the detail), the fix does not create it, and a file made by hand there does
 not survive a daemon restart.
+
+## Harness concise guidance (`warn` at most, out of `--harness`)
+
+The row judges the same context files as the harness diagram guidance row
+(the target table above; Claude Code's file resolved: `~/.claude/CLAUDE.md`
+when it exists, else `~/.claude/AGENTS.md`, the file its built-in
+cc-plugin-agents-md plugin loads where no CLAUDE.md exists — the fix
+appends to the file the harness actually loads; with neither, the canonical
+`CLAUDE.md` path names the absence and nothing is created). A file passes
+only when it carries the concise-output block: its begin marker
+`<!-- polyforge:concise-guidance:begin -->`. The block is the one short
+output-discipline rule — `## Output discipline (concise, plain speech)`:
+lead with the outcome, match the reply's length to the question, a task's
+own required format wins, raw material goes to a dedicated subdirectory of
+the workspace's temporary directory with counts/differences/excerpts/paths
+back, conclusions and references only once a report is filed — the same
+bytes every step dispatch and every task input carries, from the one Go
+source (`internal/common/harness`); the output-format skill holds the
+interactive session's details. There is no legacy shape: the block is new.
+`pass` = every installed harness's file carries it; `warn` = a file is
+missing, absent or unreadable — the detail carries the block to add by
+hand. `pf doctor --fix-harness-prompts` appends the block to every
+**existing, readable** context file of an installed harness that lacks it,
+beside the SVG block, with the same append-only, idempotent,
+never-create, mode-preserving, atomic-write contract; a second run changes
+nothing. To roll back, delete only the concise block: the lines from
+`<!-- polyforge:concise-guidance:begin -->` to
+`<!-- polyforge:concise-guidance:end -->`. The step-agent caveat above
+holds for this row too.
 
 ## Success
 

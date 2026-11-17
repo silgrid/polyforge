@@ -28,8 +28,9 @@ import (
 // .polyforge.yaml a claim would load), the workspace layout
 // (doctor_workspace.go), connectivity (server reach, daemon socket,
 // auth), daemon supervision and environment hygiene, the claude step
-// harness, the harness context files' diagram guidance
-// (doctor_harness_prompts.go; --fix-harness-prompts appends it), and
+// harness, the harness context files' diagram and concise-output
+// guidance (doctor_harness_prompts.go, doctor_concise_prompts.go;
+// --fix-harness-prompts appends them), and
 // the harness family (doctor_display.go, doctor_layout.go:
 // progress display and install layout; never fail, and `--harness` runs
 // them alone for tools/install.sh; --fix-install-layout links the claude
@@ -214,13 +215,12 @@ var doctorChecks = []doctorCheckSpec{
 		return claudeHarnessCheck(r.claudeSteps, r.status.WorkflowsDir, r.sockOK, hs)
 	}},
 	{docChHarnessPrompts, scopeHost, needConfig, func(r *doctorRun) (string, string) {
-		home, _ := os.UserHomeDir()
-		piDir := piAgentDir(home)
-		root := r.cfg.Daemon.HarnessRoot
-		if root == "" {
-			root = DataDir(home)
-		}
+		home, piDir, root := harnessPromptContext(r)
 		return harnessPromptCheck(home, piDir, root, r.fixPrompts).row()
+	}},
+	{docChConcisePrompts, scopeHost, needConfig, func(r *doctorRun) (string, string) {
+		home, piDir, root := harnessPromptContext(r)
+		return concisePromptCheck(home, piDir, root, r.fixPrompts).row()
 	}},
 	{docChLanes, scopeCell, needMapping, workflowLanesCheck},
 	{docChProjects, scopeCell, needAihub, projectsCheck},
@@ -332,7 +332,7 @@ var cmdDoctor = &Command{
 		fs.Bool("prune-scratch", false, "remove the mapped workspaces' scratch/ entries older than 14 days (default: report them only)")
 		fs.Bool("prune-capsules", false, "slim wrapped work items' capsules (live or set aside) to artifacts/ + capsule.json, and remove the external git dirs and set-aside scenes of failed/canceled ones, untouched for more than 14 days (default: report them only; never while the daemon is down)")
 		fs.Bool("prune-chat-state", false, "delete the retired chat-subscription state (chats.json, chat-subs.json, chat-status/ and the old watcher's runtime files; default: report them only)")
-		fs.Bool("fix-harness-prompts", false, "append the native-SVG diagram-guidance block to each installed harness's existing context file that lacks that block — legacy mermaid-only guidance included, left as it is (append-only, idempotent; never creates a file; default: report only)")
+		fs.Bool("fix-harness-prompts", false, "append the native-SVG diagram-guidance block and the concise-output guidance block to each installed harness's existing context file that lacks them — legacy mermaid-only guidance included, left as it is (append-only, idempotent; never creates a file; default: report only)")
 		fs.Bool("fix-install-layout", false, "link ~/.claude/skills/polyforge to the installed release's skill when it is missing or links elsewhere — only that one entry; idempotent, a no-op when the link is already correct; never removes a copied directory and never installs pf or a release (no release: re-run tools/install.sh); default: report only")
 	},
 	Run: func(ctx *Context, fs *flag.FlagSet, args []string) error {
@@ -340,7 +340,7 @@ var cmdDoctor = &Command{
 			return fmt.Errorf("doctor: unexpected arguments %v", args)
 		}
 		if boolFlag(fs, "harness") && boolFlag(fs, "fix-harness-prompts") {
-			return fmt.Errorf("doctor: --fix-harness-prompts cannot be combined with --harness (the harness diagram guidance row runs only in the full report)")
+			return fmt.Errorf("doctor: --fix-harness-prompts cannot be combined with --harness (the harness guidance rows run only in the full report)")
 		}
 		if boolFlag(fs, "harness") && boolFlag(fs, "fix-install-layout") {
 			return fmt.Errorf("doctor: --fix-install-layout cannot be combined with --harness (the --harness projection tools/install.sh runs is read-only)")

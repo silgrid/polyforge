@@ -20,17 +20,76 @@ package cli
 // built-in cc-plugin-agents-md loads that one when no CLAUDE.md exists)
 // — the fix appends to the file the harness actually loads.
 
+import (
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/silgrid/polyforge/internal/common/harness"
+)
+
 // docChConcisePrompts is the row's name in the doctor report.
 const docChConcisePrompts = "harness concise guidance"
 
-// concisePromptCheck judges every installed harness's context file for
-// the concise-output guidance block; fix appends it where missing.
-// Stub ahead of the tests (polyforge#101 u2): the zero-value body keeps
-// the first red an assertion, never a compile error.
+// appendConciseGuidance appends the concise-output guidance block to
+// the existing file at path unless it already carries it.
+func appendConciseGuidance(path string) (bool, error) {
+	return appendGuidanceBlock(path, harness.ConciseGuidanceBlock(), harness.HasConciseGuidance)
+}
+
+// concisePromptCheck judges the context file of every installed harness
+// (harnessPromptTargets) for the concise-output guidance block. With
+// fix, an existing file lacking the block gets it appended after its
+// existing bytes first.
 func concisePromptCheck(home, piDir, harnessRoot string, fix bool) doctorCheck {
-	_ = home
-	_ = piDir
-	_ = harnessRoot
-	_ = fix
-	return doctorCheck{Name: docChConcisePrompts}
+	c := doctorCheck{Name: docChConcisePrompts}
+	var rows []string
+	warn, fixable, stepAgentMissing := false, false, false
+	for _, t := range harnessPromptTargets(home, piDir, harnessRoot) {
+		path := filepath.Join(t.dir, t.file)
+		body, err := os.ReadFile(path)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			warn = true
+			if t.name == "step-agent" {
+				stepAgentMissing = true
+			}
+			rows = append(rows, fmt.Sprintf("%s %s: no file (not created)", t.name, path))
+		case err != nil:
+			warn = true
+			rows = append(rows, fmt.Sprintf("%s %s: unreadable (%v)", t.name, path, err))
+		case harness.HasConciseGuidance(string(body)):
+			rows = append(rows, fmt.Sprintf("%s %s: pass", t.name, path))
+		default:
+			if !fix {
+				warn, fixable = true, true
+				rows = append(rows, fmt.Sprintf("%s %s: missing", t.name, path))
+			} else if _, aerr := appendConciseGuidance(path); aerr != nil {
+				warn = true
+				rows = append(rows, fmt.Sprintf("%s %s: missing; append failed (%v)", t.name, path, aerr))
+			} else {
+				rows = append(rows, fmt.Sprintf("%s %s: missing; appended", t.name, path))
+			}
+		}
+	}
+	if len(rows) == 0 {
+		c.Status, c.Detail = "skip", noHarnessInstalledDetail
+		return c
+	}
+	c.Status, c.Detail = "pass", strings.Join(rows, "; ")
+	if !warn {
+		return c
+	}
+	c.Status = "warn"
+	if fixable {
+		c.Detail += " — run `pf doctor --fix-harness-prompts` to append the concise-output block below after the existing bytes of the file(s) (append-only, idempotent; a missing file is never created)"
+	}
+	if stepAgentMissing {
+		c.Detail += " — " + stepAgentNoFileCaveat
+	}
+	c.Detail += " — the concise-output guidance block:\n" + harness.ConciseGuidanceBlock()
+	return c
 }
