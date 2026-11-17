@@ -69,7 +69,7 @@ test("the writer-kind filter control appears only on a filter-capable pf and rid
   // The control's own gate is the scope answer's writerFilterSupported — a pf
   // that browses but predates --writer-kind shows the tab without the
   // control, and the display of author/writer is never gated by it.
-  assert.match(source, /writerFilterSupported !== false/, "the scope read's own gate is consumed");
+  assert.match(source, /writerFilterSupported === true/, "the scope read's own gate is consumed, fail-closed on an absent field");
   assert.match(source, /scope\.writerFilter && \(/, "the select renders only on a filter-capable pf");
   assert.match(source, /params\.set\("writer_kind", writerKind\);/, "every list read carries the current kind — browse, search and continuation alike");
   assert.match(source, /\[cwd, scope, project, type, tags, writerKind, activeQuery, submits\]/,
