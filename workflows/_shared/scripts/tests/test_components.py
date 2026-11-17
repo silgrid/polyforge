@@ -212,6 +212,37 @@ class ComponentsToolTest(GitCase):
         # the root report names the commit it read
         self.assertRegex(c.stdout.splitlines()[0], r"^repo generic [0-9a-f]{40} \(HEAD\)$")
 
+    def test_nests_answer_at_their_outermost(self) -> None:
+        """AC2's「嵌套时取最外层」: an independently-checkable
+        subdirectory — a nested conf root or a manifest subdirectory —
+        answers at its outermost directory whatever kind marks it (a
+        directory both kinds mark answers as the conf's). The
+        expectations are hand-derived from the definition (review
+        r1#1/#2), never from the implementation's output."""
+        # ① a manifest inside a manifest directory: only the outer one
+        d = self.repo_with("mm", {"svc/go.mod": "module svc\n", "svc/y.js": "y\n",
+                                  "svc/sub/package.json": "{}\n", "svc/sub/z.ts": "z\n"})
+        c = self.run_tool("--repo", d, "--json")
+        self.assertEqual(c.returncode, 0, c.stderr)
+        entry = json.loads(c.stdout)["repos"][0]
+        self.assertEqual([(x["name"], x["source"]) for x in entry["components"]],
+                         [("svc", "manifest")], c.stdout)
+        # ② a manifest inside a nested conf root: one component, the conf's
+        d = self.repo_with("cm", {"web/.polyforge/verify-scope.conf": "stack=none\n",
+                                  "web/package.json": "{}\n", "web/src/a.ts": "a\n"})
+        c = self.run_tool("--repo", d, "--json")
+        entry = json.loads(c.stdout)["repos"][0]
+        self.assertEqual([(x["name"], x["source"]) for x in entry["components"]],
+                         [("web", "nested conf")], c.stdout)
+        # ③ a nested conf inside a manifest directory (r1#1's shape)
+        d = self.repo_with("mc", {"svc/package.json": "{}\n", "svc/y.js": "y\n",
+                                  "svc/api/.polyforge/verify-scope.conf": "stack=none\n",
+                                  "svc/api/x.go": "package x\n"})
+        c = self.run_tool("--repo", d, "--json")
+        entry = json.loads(c.stdout)["repos"][0]
+        self.assertEqual([(x["name"], x["source"]) for x in entry["components"]],
+                         [("svc", "manifest")], c.stdout)
+
     def test_the_tree_read_is_origin_head_not_the_worktree(self) -> None:
         origin = self.repo_with("origin", {"a.go": "a\n",
                                             CONF: "component=old|old\n"})
