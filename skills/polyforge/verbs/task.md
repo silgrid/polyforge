@@ -60,6 +60,14 @@ spawn only after the owner approves:
   defaults `40m` / `1000000` — the duration may be raised up to the `60m`
   ceiling when the errand needs it, the token budget already sits at its
   ceiling and can only be lowered.
+- **输出约束** — the prompt states the task's output constraints explicitly
+  (SKILL.md session rule 9's six duties, bound here to the task's own
+  directories): raw material — full command output, logs, exports — lands
+  complete in the task's own raw batch (the `PF_SCRATCH_RAW_DIR` path its
+  closing `# Scratch` section names), and the report back to the session
+  carries only a summary and an evidence index — paths, line ranges or
+  JSON pointers, with hashes — that the session can read on from; no tool
+  return exceeds rule 9's bound.
 
 Name the model-config requirement in the same breath, so a missing
 `steps.<project>.task.models` (and missing project default) is fixed before
