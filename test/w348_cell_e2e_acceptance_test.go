@@ -2241,16 +2241,26 @@ func w348WorkspaceYAML(t *testing.T, path, project string) {
 		"steps:\n  "+project+":\n    task:\n      models: [\"pi:e2e\"]\n")
 }
 
-// TestW348TasksCountAgainstTheCeilings — AC7: with the Host ceiling taken by
-// a running work item, a one-off task is refused at the same ceiling.
-func TestW348TasksCountAgainstTheCeilings(t *testing.T) {
+// TestW348TasksDoNotTakeJobSlots — AC7 under polyforge#74's semantics
+// (the owner's Q3 ruling: a one-off task takes no running-work-item slot):
+// with the Host job ceiling (max_concurrent_jobs=1) taken by a running work
+// item, a task spawn from another Cell is admitted and the job keeps
+// running to its normal close; a spawn is refused only at the task lane's
+// own bound (the Host's [daemon] max_concurrent_tasks), and the refusal
+// names that key. Supersedes TestW348TasksCountAgainstTheCeilings, which
+// pinned the pre-#74 bind that merge a508347 removed (the full gate's red,
+// polyforge#95).
+func TestW348TasksDoNotTakeJobSlots(t *testing.T) {
 	def := newV1Install(t)
 	alpha := newV1Install(t)
 	plans := t.TempDir()
 	def.planDir, alpha.planDir = plans, plans
-	d := def.newWI(t, "w348 task ceiling job", w348LongPlan(10000), nil)
+	d := def.newWI(t, "w348 task ceiling job", w348LongPlan(30000), nil)
 	wsAlpha := t.TempDir()
-	w348WorkspaceYAML(t, wsAlpha, "e2e")
+	// A "slow" task model keeps the admitted task in flight long enough to
+	// hold the task bound (the fake harness delays it 12 s before answering).
+	w348WriteFile(t, filepath.Join(wsAlpha, ".polyforge.yaml"),
+		"steps:\n  e2e:\n    task:\n      models: [\"pi:slow\"]\n")
 	h := w348NewHost(t)
 	w348WriteHostWithModel(t, h, def.url, def.adminKey, 1, []w348WS{{path: t.TempDir(), projects: []string{"e2e"}}})
 	w348WriteCellWithModel(t, h, "alpha", alpha.url, alpha.adminKey, 0, []w348WS{{path: wsAlpha, projects: []string{"e2e"}}})
@@ -2259,12 +2269,35 @@ func TestW348TasksCountAgainstTheCeilings(t *testing.T) {
 		t.Fatalf("submit default job: exit %d (%q)", code, out)
 	}
 	w348WaitJobStatus(t, h, "default", d, "running", 30*time.Second)
-	out, code := h.pf("", "--profile", "alpha", "task", "spawn", "--project", "e2e", "w348 ceiling")
-	if code == 0 || !strings.Contains(out, "DAEMON-409") {
-		t.Fatalf("a task spawn bypassed the taken Host ceiling: exit %d (%q)", code, out)
+	// The task lane's own bound, lowered to 1 (a live Host-only key).
+	if out, code := h.pf("", "config", "set", "max_concurrent_tasks", "1", "--host"); code != 0 {
+		t.Fatalf("config set max_concurrent_tasks 1 --host: exit %d (%q)", code, out)
 	}
-	if low := strings.ToLower(out); !strings.Contains(low, "ceiling") && !strings.Contains(low, "concurrent") {
-		t.Fatalf("the task refusal must name the ceiling: %q", out)
+	// The Host job ceiling is taken by the running job: alpha's spawn
+	// passes it anyway (polyforge#74 — the old test expected the refusal).
+	if out, code := h.pf("", "--profile", "alpha", "task", "spawn", "--project", "e2e", "w348 task past the job ceiling"); code != 0 {
+		t.Fatalf("a task spawn was refused at the taken Host job ceiling: exit %d (%q)", code, out)
+	}
+	waitUntil(t, 30*time.Second, "the admitted task never ran", func() bool {
+		for _, row := range w350Tasks(t, h, "alpha") {
+			if st, _ := row["state"].(string); st == "running" {
+				return true
+			}
+		}
+		return false
+	})
+	// The taken task bound refuses the second spawn, and the refusal names it.
+	out, code := h.pf("", "--profile", "alpha", "task", "spawn", "--project", "e2e", "w348 task past the task bound")
+	if code == 0 || !strings.Contains(out, "DAEMON-409") {
+		t.Fatalf("a task spawn passed the full task bound: exit %d (%q)", code, out)
+	}
+	if low := strings.ToLower(out); !strings.Contains(low, "max_concurrent_tasks") {
+		t.Fatalf("the task refusal must name the task bound (max_concurrent_tasks): %q", out)
+	}
+	// The job was not disturbed: it holds its slot and runs to its normal close.
+	w348WaitTerminal(t, h, def, d, 120*time.Second)
+	if st := def.wiStatus(t, d); st != "wrapped" {
+		t.Fatalf("the job did not run to its normal close: %s (log tail: %s)", st, h.logTail())
 	}
 }
 
