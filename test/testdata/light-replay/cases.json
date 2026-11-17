@@ -1,0 +1,1423 @@
+{
+ "counterexample": "unrelated/w111-counterexample.txt",
+ "ac3_paths": [
+  "workflows/_shared/scripts/verify-scope",
+  ".polyforge/verify-scope.conf",
+  "pi-web/e2e/w367-default-cell-pinned.mjs",
+  "test/testdata/light-replay/cases.json",
+  "pi-web/.polyforge/verify-scope.conf",
+  "pi-web/e2e/claude-composer-272.mjs",
+  "test/w348_cell_e2e_acceptance_test.go",
+  "test/w113_workspace_mapping_acceptance_test.go"
+ ],
+ "cases": [
+  {
+   "id": "polyforge-36",
+   "status": "miss",
+   "source": {
+    "merge": "a2b1436cfe88ed20803a3d5efe9fc72bd14e9f35",
+    "fix": "polyforge#90"
+   },
+   "root": "",
+   "paths": [
+    "internal/polyforge/stepscripts/integrate_test.go",
+    "workflows/_shared/scripts/gate.py",
+    "workflows/_shared/scripts/integrate.py",
+    "workflows/_shared/scripts/pfstep/gitmerge/revert.py",
+    "workflows/_shared/scripts/pfstep/integration.py",
+    "workflows/_shared/scripts/revert.py"
+   ],
+   "target": {
+    "kind": "command",
+    "value": "python3 -B -m unittest discover -s workflows/_shared/scripts -t workflows/_shared/scripts"
+   },
+   "note": "the merge_commits decode change reached the full gate red through workflows/_shared/scripts/tests/test_integrate.py's PoolTest; no tier ran the python unit suite",
+   "old": {
+    "go_pkg_cmds": [
+     "GOWORK=off go test -count=1 ./internal/polyforge/stepscripts"
+    ],
+    "go_run_cmds": [
+     "GOWORK=off go test -count=1 -run '^(TestPf113IntegrateLaneNamesNoProjectPackage)$' ./internal/contracttest"
+    ],
+    "e2e_run_names": [
+     "TestReleaseScriptAcceptsAMergedPRSquashCommit",
+     "TestReleaseScriptAllowsNamedCommitsForOneRun",
+     "TestReleaseScriptAudit",
+     "TestReleaseScriptAuditGateStopsBeforePublish",
+     "TestReleaseScriptCommittedNotesTooLongRefused",
+     "TestReleaseScriptCommittedNotesUsedAsIs",
+     "TestReleaseScriptHappyPathOrderAndAssets",
+     "TestReleaseScriptHelpMentionsVerify",
+     "TestReleaseScriptLoginWhenNotLoggedIn",
+     "TestReleaseScriptLsRemoteFailureIsFatalBeforeAnyWork",
+     "TestReleaseScriptNotesGeneratedWhenMissing",
+     "TestReleaseScriptNotesTooLongAreTruncated",
+     "TestReleaseScriptNotesTooLongResume",
+     "TestReleaseScriptOwnerDirectAllowlist",
+     "TestReleaseScriptPagesPastANullMergeCommitSha",
+     "TestReleaseScriptPiwebPackFailureStopsBeforeTag",
+     "TestReleaseScriptPostFailTextIsAccurate",
+     "TestReleaseScriptRefusals",
+     "TestReleaseScriptRefusesAHeadWithTwoReleaseTags",
+     "TestReleaseScriptRefusesAnImageTagAlreadyInThePackage",
+     "TestReleaseScriptRefusesCommitsNotFromAMergedPR",
+     "TestReleaseScriptSuffixVersion",
+     "TestReleaseScriptTagTakenOnOriginStopsBeforePublish",
+     "TestReleaseScriptVerify",
+     "TestReleaseScriptVerifyOwnerDirectAllowlist",
+     "TestReleaseScriptVerifyPROnly",
+     "TestReleaseScriptVersionFloorAndBump",
+     "TestReleaseScriptVersionLineCutover",
+     "TestReleaseScriptXrefsGateFailsBeforeTests",
+     "TestW404IntegrateLaneEndToEnd",
+     "TestW405PfGateLimitsAreTheScriptsFlags",
+     "TestW405PfGateNeedsTheDockerfile",
+     "TestW405ReleaseGateIsTheConfPlanInTheContainer",
+     "TestW405ReleaseNeverRunsMakeTest",
+     "TestW405ReleasePreflightRefusesAnOldPython",
+     "TestW405ReleaseRedOrUnjudgedGateStopsBeforeTheBuild",
+     "TestW405ReleaseReusesAGreenTagForTheSameGate"
+    ]
+   },
+   "allowed_new": {
+    "conf_cmds": [
+     {
+      "name": "python3 -B -m unittest discover -s workflows/_shared/scripts -t workflows/_shared/scripts",
+      "via": ".polyforge/verify-scope.conf: scoped_command=workflows/_shared/scripts/*"
+     }
+    ],
+    "e2e_run_names": [
+     {
+      "name": "TestLightHistoricalReplay",
+      "via": "w111_light_historical_replay_test.go: carries workflows/_shared/scripts/* matches workflows/_shared/scripts/gate.py"
+     },
+     {
+      "name": "TestV2DevelopSyncRewindKeepsBuildsWork",
+      "via": "w374_develop_lane_e2e_test.go: carries workflows/_shared/scripts/* matches workflows/_shared/scripts/gate.py"
+     },
+     {
+      "name": "TestV2DevelopVerificationRedAskedThenWaived",
+      "via": "w374_develop_lane_e2e_test.go: carries workflows/_shared/scripts/* matches workflows/_shared/scripts/gate.py"
+     },
+     {
+      "name": "TestV2MicroEvidenceFailsOnASyncArgvMismatch",
+      "via": "v2_micro_lane_e2e_test.go: carries workflows/_shared/scripts/* matches workflows/_shared/scripts/gate.py"
+     },
+     {
+      "name": "TestV2MicroEvidenceWaivedByIntent",
+      "via": "v2_micro_lane_e2e_test.go: carries workflows/_shared/scripts/* matches workflows/_shared/scripts/gate.py"
+     },
+     {
+      "name": "TestV2MicroLaneEndToEnd",
+      "via": "v2_micro_lane_e2e_test.go: carries workflows/_shared/scripts/* matches workflows/_shared/scripts/gate.py"
+     },
+     {
+      "name": "TestV2MicroOutOfBoundsReviewFailsThenOwnerCancels",
+      "via": "v2_micro_lane_e2e_test.go: carries workflows/_shared/scripts/* matches workflows/_shared/scripts/gate.py"
+     },
+     {
+      "name": "TestV2MicroSyncRewindToFixAborts",
+      "via": "v2_micro_lane_e2e_test.go: carries workflows/_shared/scripts/* matches workflows/_shared/scripts/gate.py"
+     },
+     {
+      "name": "TestW36DevelopHumanMergeEndsLanded",
+      "via": "w36_human_merge_e2e_test.go: carries workflows/_shared/scripts/* matches workflows/_shared/scripts/gate.py"
+     },
+     {
+      "name": "TestW374DevelopLaneEndToEnd",
+      "via": "w374_develop_lane_e2e_test.go: carries workflows/_shared/scripts/* matches workflows/_shared/scripts/gate.py"
+     },
+     {
+      "name": "TestW521DevelopMergeSkippedEndsPublished",
+      "via": "w521_develop_skip_merge_e2e_test.go: carries workflows/_shared/scripts/* matches workflows/_shared/scripts/gate.py"
+     }
+    ]
+   },
+   "cap": {
+    "pkg": 1,
+    "run": 1,
+    "e2e_names": 48,
+    "conf": 1
+   }
+  },
+  {
+   "id": "polyforge-20",
+   "status": "covered",
+   "source": {
+    "merge": "d2d8e2de",
+    "fix": "polyforge#20 itself (the fixture was already red on main)"
+   },
+   "root": "",
+   "paths": [
+    "docs/concepts.md",
+    "docs/install.md",
+    "docs/quickstart-macos.md",
+    "docs/reference/commands.md",
+    "docs/reference/config.md",
+    "docs/user-guide.md",
+    "internal/contracttest/w20_doctor_cells_texts_contract_test.go",
+    "internal/polyforge/cli/config_validate.go",
+    "internal/polyforge/cli/doctor_gitdirs.go",
+    "internal/polyforge/cli/doctor_gitdirs_test.go",
+    "internal/polyforge/cli/doctor_repos.go",
+    "internal/polyforge/cli/verbs_config.go",
+    "internal/polyforge/cli/verbs_daemon.go",
+    "internal/polyforge/cli/verbs_doctor.go",
+    "internal/polyforge/cli/verbs_workflow.go",
+    "internal/polyforge/cli/w145_prune_unmerged_repro_test.go",
+    "internal/polyforge/cli/w20_doctor_cells_test.go",
+    "internal/polyforge/cli/w20_doctor_default_only_test.go",
+    "internal/polyforge/cli/w20_doctor_mapping_test.go",
+    "internal/polyforge/cli/w20_doctor_retention_test.go",
+    "internal/polyforge/daemon/ensure.go",
+    "internal/polyforge/daemon/main.go",
+    "internal/polyforge/daemon/w20_ensure_cells_test.go",
+    "internal/polyforge/runtime/runtime.go",
+    "skills/polyforge/verbs/doctor.md",
+    "skills/polyforge/verbs/init.md",
+    "test/w113_workspace_mapping_acceptance_test.go",
+    "test/w20_install_named_cell_mapping_test.go",
+    "test/w20_install_wording_test.go",
+    "tools/install.sh"
+   ],
+   "target": {
+    "kind": "harness_name",
+    "value": "TestW113InstallFreshTemplate"
+   },
+   "note": "already selected today: the w113 harness test source names tools/install.sh, which the change touched",
+   "old": {
+    "go_pkg_cmds": [
+     "GOWORK=off go test -count=1 ./cmd/pf ./internal/contracttest ./internal/polyforge/cli ./internal/polyforge/daemon ./internal/polyforge/driver ./internal/polyforge/runtime ./internal/polyforge/summarize ./internal/polyforge/task"
+    ],
+    "go_run_cmds": [
+     "GOWORK=off go test -count=1 -run '^(TestW479IntegrateSectionRefused)$' ./internal/polyforge/workspace"
+    ],
+    "e2e_run_names": [
+     "TestB4InstallShDoesNotForceAutoOrConcurrency",
+     "TestInstallShRepoReleaseChannel",
+     "TestInstallSuffixVersionTransitions",
+     "TestInstallVersionLineCutover",
+     "TestInstallWithPiWebOptIn",
+     "TestInstallWithPiWebScriptsNotAllowed",
+     "TestPF101InstallRunsTheHarnessPromptFixOnce",
+     "TestProjectDeleteAuditRow",
+     "TestProjectDeleteBlockedByNonTerminal",
+     "TestProjectDeleteBlockedByScopedKey",
+     "TestProjectDeleteCLINonTTYRefuses",
+     "TestProjectDeleteCLITypedErrorAndJSON",
+     "TestProjectDeleteCLIYes",
+     "TestProjectDeleteDocsCover",
+     "TestProjectDeleteFullCascade",
+     "TestProjectDeleteNonAdminRefused",
+     "TestProjectDeleteReplayConverges",
+     "TestProjectDeleteScopedAdminRefused",
+     "TestProjectDeleteUnknownProject",
+     "TestReleaseScriptAcceptsAMergedPRSquashCommit",
+     "TestReleaseScriptAllowsNamedCommitsForOneRun",
+     "TestReleaseScriptAudit",
+     "TestReleaseScriptAuditGateStopsBeforePublish",
+     "TestReleaseScriptCommittedNotesTooLongRefused",
+     "TestReleaseScriptCommittedNotesUsedAsIs",
+     "TestReleaseScriptHappyPathOrderAndAssets",
+     "TestReleaseScriptHelpMentionsVerify",
+     "TestReleaseScriptLoginWhenNotLoggedIn",
+     "TestReleaseScriptLsRemoteFailureIsFatalBeforeAnyWork",
+     "TestReleaseScriptNotesGeneratedWhenMissing",
+     "TestReleaseScriptNotesTooLongAreTruncated",
+     "TestReleaseScriptNotesTooLongResume",
+     "TestReleaseScriptOwnerDirectAllowlist",
+     "TestReleaseScriptPagesPastANullMergeCommitSha",
+     "TestReleaseScriptPiwebPackFailureStopsBeforeTag",
+     "TestReleaseScriptPostFailTextIsAccurate",
+     "TestReleaseScriptRefusals",
+     "TestReleaseScriptRefusesAHeadWithTwoReleaseTags",
+     "TestReleaseScriptRefusesAnImageTagAlreadyInThePackage",
+     "TestReleaseScriptRefusesCommitsNotFromAMergedPR",
+     "TestReleaseScriptSuffixVersion",
+     "TestReleaseScriptTagTakenOnOriginStopsBeforePublish",
+     "TestReleaseScriptVerify",
+     "TestReleaseScriptVerifyOwnerDirectAllowlist",
+     "TestReleaseScriptVerifyPROnly",
+     "TestReleaseScriptVersionFloorAndBump",
+     "TestReleaseScriptVersionLineCutover",
+     "TestReleaseScriptXrefsGateFailsBeforeTests",
+     "TestV2StepCommandsDispatchByArgv0",
+     "TestV2StepCommandsInstallLinks",
+     "TestW079AbsentAndEmptyYamlRunExactlyAsHead",
+     "TestW079ExplicitProjectBypassesInference",
+     "TestW079FixYamlAndResubmitIsClean",
+     "TestW079GateFailRewindKeepsTheEffectiveCandidate",
+     "TestW079InitFragmentPointerAndWorkspaceInit",
+     "TestW079InstallScriptStaysWorkspaceBlind",
+     "TestW079InvalidYamlOfOneWorkspaceDoesNotBlockAnother",
+     "TestW079InvalidYamlRefusesWithoutClaim",
+     "TestW079MultiProjectWorkspaceAsksForProject",
+     "TestW079NoRestartTeachingNearYamlMentions",
+     "TestW079OneDaemonTwoWorkspacesTwoYamls",
+     "TestW079PerProjectModelPrecedence",
+     "TestW079PlacementFollowsCliTomlOnly",
+     "TestW079ProjectStepOnlyFallsThroughToBundle",
+     "TestW079RepoInventoryComesFromTheRegistry",
+     "TestW079RestartReadsLiveYaml",
+     "TestW079RotationAdvancesAndCapsOnEffectiveList",
+     "TestW079RotationUntouchedWithoutYaml",
+     "TestW079SingleProjectWorkspaceInfersDefault",
+     "TestW079SkillTeachesModelsYaml",
+     "TestW079UnmatchedCwdRequiredProjectErrorStands",
+     "TestW079YamlEditGovernsNextClaimNoRestart",
+     "TestW103S01EmptyQueryBrowses",
+     "TestW103S02BrowseSortsDescending",
+     "TestW103S03BrowseFiltersAndGates",
+     "TestW103S04BrowsePageSize",
+     "TestW103S05BrowseWalksTheWholeList",
+     "TestW103S06BrowseCursorEdges",
+     "TestW103S07KeywordCannotMixWithBrowse",
+     "TestW103S08BasicAuthAndGates",
+     "TestW103S09UnauthenticatedGuide",
+     "TestW103S10ReadOnlyMethods",
+     "TestW103S11PickerReadableProjects",
+     "TestW103S12ListPagesAndTypeFilter",
+     "TestW103S13SearchOnePage",
+     "TestW103S14NonLeaking404",
+     "TestW103S15DetailHeaderCard",
+     "TestW103S16HostileMarkdown",
+     "TestW103S17SecurityHeaders",
+     "TestW103S19NoKeyLeak",
+     "TestW103S20Docs",
+     "TestW103S21ReachStatement",
+     "TestW105BasicAuthGuidesAndReauthenticates",
+     "TestW105BuildTargetFrontendFirstAndTreeClean",
+     "TestW105DependenciesPointBothWaysWithoutLeaking",
+     "TestW105DocumentsDescribeTheConsoleAndReachability",
+     "TestW105EmbeddedShellAssetsAndDeepLinks",
+     "TestW105EveryResponseClassCarriesTheSecurityHeaders",
+     "TestW105GlobalSearchGroupsAndCaps",
+     "TestW105MachinesAreAdminOnlyAndReportHealth",
+     "TestW105MethodGateAfterAuthAndHeadMirrorsGet",
+     "TestW105OddPathsNeverEscapeTheHeaderSet",
+     "TestW105OldViewPrefixIsIndistinguishableFromUnknownPath",
+     "TestW105ReadGatesMatchTheApi",
+     "TestW105TimelineCoversEventsAndHidesSensitiveColumns",
+     "TestW105UnknownAndUnreadableShareOne404",
+     "TestW105WorkItemListFiltersAndSearch",
+     "TestW105WorkItemListPagesExactlyOnce",
+     "TestW113AmbiguousInverseRejected",
+     "TestW113CLIIgnoresRetiredEnv",
+     "TestW113CrossProjectClaimsRoutePerWorkspace",
+     "TestW113DaemonDefaultConfigLocation",
+     "TestW113DaemonNoMappingRefusesStartup",
+     "TestW113DaemonSourcesNoRetiredEnvTokens",
+     "TestW113DaemonValidatesAllMappedWorkspaces",
+     "TestW113DesignDocsTeachMappingContract",
+     "TestW113DoctorConnectivityChecks",
+     "TestW113DoctorHealthyMachine",
+     "TestW113DoctorMappingChecks",
+     "TestW113DoctorUnloadableConfig",
+     "TestW113DoctorUsageErrors",
+     "TestW113DrainIteratesAllMappedProjects",
+     "TestW113DuplicateProjectInOneListRejected",
+     "TestW113HelpDaemonTeachesNewContract",
+     "TestW113InflightCapsulesKeepHomesAcrossRestart",
+     "TestW113InstallDaemonFlagSurface",
+     "TestW113InstallFreshTemplate",
+     "TestW113InstallOldShapeUntouched",
+     "TestW113LegacyConfigLocationDropped",
+     "TestW113MappingInvalidKeysRejected",
+     "TestW113MappingTildeExpansionAndRouting",
+     "TestW113OldShapeConfigRefusedEverywhere",
+     "TestW113PlacementVerbsRequireProject",
+     "TestW113PlacementVerbsValidateProject",
+     "TestW113QueueMergedAllMapped",
+     "TestW113QueueNoMappingFailsLoudly",
+     "TestW113QueueProjectPassThrough",
+     "TestW113SkillsTeachMappingContract",
+     "TestW113UnmappedMidflightWIBlocksThenResumes",
+     "TestW113UnmappedProjectClaimRefused",
+     "TestW174InstallAbortAfterStopReportsState",
+     "TestW174InstallDarwinAssetPickAndShasumFallback",
+     "TestW174InstallJobCheckFailsClosed",
+     "TestW174InstallKeepsForeignSkillDir",
+     "TestW174InstallMigratesOldLayoutThenIsIdempotent",
+     "TestW174InstallMissingPrerequisiteRefuses",
+     "TestW174InstallPrepFailureLeavesMachineUntouched",
+     "TestW174InstallRefusesWhileJobsRunThenForceProceeds",
+     "TestW174InstallReleaseSwitchWithoutGnuMvT",
+     "TestW174InstallShutdownFailureStopsAtOnce",
+     "TestW174InstallUpgradeFromUnsupervisedNohupDaemon",
+     "TestW174InstallUpgradeOrderAndLock",
+     "TestW198AihubUnreachableSkipVsLocalWarn",
+     "TestW198CleanAndNonGitNeverWarn",
+     "TestW198CoveredCloneNoWarning",
+     "TestW198DirtyReleaseCloneWarns",
+     "TestW198LinkedWorktreeScanned",
+     "TestW198SkillAndDoctorDocsTeachFence",
+     "TestW198TerminalOrDetachedWarns",
+     "TestW198UnpushedLocalCommitWarns",
+     "TestW198UnregisteredRepoCloneWarns",
+     "TestW198WarnOnlyAndNotInHarness",
+     "TestW20InstallGateWording",
+     "TestW20InstallNamedCellMapping",
+     "TestW212InstallFirstInstallNeedsHost",
+     "TestW212InstallUpgradeNeedsNoHost",
+     "TestW218InstallRefusesMissingPrerequisite",
+     "TestW218InstallRefusesUnsupportedPlatform",
+     "TestW218InstallSwitchSurvivesBsdMv",
+     "TestW218ReadmePlatformMatrix",
+     "TestW218ReadmeQuickstartRegistration",
+     "TestW235InstallShCoversDarwinDefaultConfigPath",
+     "TestW237InstallDarwinClearsSignsProvesStagedBeforeSwap",
+     "TestW237InstallDarwinRefusesWithNothingChanged",
+     "TestW237InstallLinuxNeverSigns",
+     "TestW241GuideChatPathPrimary",
+     "TestW241GuideCoreConceptsNamed",
+     "TestW241GuideDriftCheckRedSide",
+     "TestW241GuideExistsForNewMember",
+     "TestW241GuideFlowRealOrder",
+     "TestW241GuideMemoryAndRecoveryMoves",
+     "TestW241GuideNoRestatedFlagTables",
+     "TestW241GuideWhereToFindWhat",
+     "TestW241GuideWorkedExampleDevelop",
+     "TestW241GuideWrapHumanCloseVerb",
+     "TestW241HelpExtensionsNamesGuide",
+     "TestW241ReadmeLinksGuide",
+     "TestW241SkillHelpFragmentNamesGuide",
+     "TestW254ArchitectureOverview",
+     "TestW254ContributingGuide",
+     "TestW254InTreePointersFollowMoves",
+     "TestW254NeverUnattendedSettledPolicy",
+     "TestW254NewDocsClean",
+     "TestW254QuickstartsMovedIntact",
+     "TestW254ReadmeLandingPage",
+     "TestW254ReferencePages",
+     "TestW254SkillSedimentationPointer",
+     "TestW254UnattendedModeActualBehavior",
+     "TestW254UpgradeByteIdentical",
+     "TestW25EngineConfLintAndOpaqueCommands",
+     "TestW25EngineGoByteContrast",
+     "TestW25EngineGoHarnessDeclared",
+     "TestW25EngineGoSyntheticFixture",
+     "TestW25EngineNpmGenericDefaults",
+     "TestW25EnginePythonAnalyzer",
+     "TestW25EngineReportGrammarAndBase",
+     "TestW25EngineRustAnalyzer",
+     "TestW25EngineTestImportClosure",
+     "TestW25EngineUnexpectedShapeFallsBackFull",
+     "TestW25EngineUnsupportedStackFallsBackFull",
+     "TestW25EngineZeroConfigSpanningIgnoresDocs",
+     "TestW25EngineZeroConfigTestPackageStaysOrdinary",
+     "TestW25NpmAnalyzerSelectsDeclaredSuites",
+     "TestW25NpmByteContrast",
+     "TestW25NpmChangedSuitesAndExclusions",
+     "TestW27ScopedSelectionIncludesTestOnlyImporters",
+     "TestW33ChainEndModelDeathBlocksAndResumeKeepsEndModel",
+     "TestW33ConfigEditGovernsNextDispatch",
+     "TestW33InvalidYamlBlocksAndResumeContinues",
+     "TestW33ManualModelsFrozenWithModelRotation",
+     "TestW33NoDocKeepsClaimTimeFreeze",
+     "TestW33SummarizeLaneReadsLive",
+     "TestW344ScopePiWebDiffForcesFull",
+     "TestW36DocsTeachTheThreeMergeRoutes",
+     "TestW3ConfigAPIKeyWriteOnly",
+     "TestW3ConfigCommandFamilyAndSource",
+     "TestW3ConfigConcurrentSetsSerialize",
+     "TestW3ConfigCrashAtomicAndMode",
+     "TestW3ConfigHandEditNeedsReload",
+     "TestW3ConfigReloadBadFileInert",
+     "TestW3ConfigReloadFlagOverrideAndOpsMax",
+     "TestW3ConfigReloadFlagPinnedStepTimeout",
+     "TestW3ConfigReloadLiveCapAndOutcomes",
+     "TestW3ConfigReloadMappingAdditionWithoutRestart",
+     "TestW3ConfigReloadRemovalInFlightRefused",
+     "TestW3ConfigReloadRemovalWithoutInFlight",
+     "TestW3ConfigReloadRestartOnlyPending",
+     "TestW3ConfigSharedValidationRefusalRepairAndDaemon",
+     "TestW3ConfigStepAgentRefused",
+     "TestW3ConfigWritePreservesBytes",
+     "TestW3ConfigWriteWithoutDaemonReportsNextStart",
+     "TestW3InstallAndDocsThroughPFConfig",
+     "TestW404IntegrateLaneEndToEnd",
+     "TestW418InstallFirstInstallNeedsStdinKey",
+     "TestW418InstallReadsKeyFromStdin",
+     "TestW418InstallUpgradeWithEmptyStdin",
+     "TestW451InstallRestartPiWeb",
+     "TestW451InstallWithPiWebFresh",
+     "TestW451InstallWithPiWebNoPiWeb",
+     "TestW451InstallWithPiWebStale",
+     "TestW451StaleActionNamesTheSwitchForTheNextUpgrade",
+     "TestW457MicroJSONReportsTheDocsDeclaration",
+     "TestW457MicroRunFailsOnABrokenPinnedDoc",
+     "TestW503RefusalHeardOnTheSpotStillRecordsSubmitRejected",
+     "TestW503SubmitClaimLineOnlyAfterTheClaim",
+     "TestW503SubmitQueuedWhenSlotsFullAndLaterRefusalRecorded",
+     "TestW503SubmitRefusedByUnfinishedBlockerFailsOnTheSpot",
+     "TestW512AlreadyStalePiWebIsDetected",
+     "TestW521DocsTeachTheProjectSkip",
+     "TestW523InstallPiWebOtherVersionInstalls",
+     "TestW523InstallPiWebReinstallSwitch",
+     "TestW523InstallPiWebSameVersionSkipsNpm",
+     "TestW534ReleaseChecksTheDocsSinceTheLastTag",
+     "TestW534ReviewChecksTheDocImpact",
+     "TestW78CouplingRulesLiveInAgentsMd"
+    ]
+   },
+   "allowed_new": {
+    "e2e_run_names": [
+     {
+      "name": "TestLightHistoricalReplay",
+      "via": "w111_light_historical_replay_test.go: carries test/w113_workspace_mapping_acceptance_test.go matches test/w113_workspace_mapping_acceptance_test.go"
+     },
+     {
+      "name": "TestV2DevelopSyncRewindKeepsBuildsWork",
+      "via": "w374_develop_lane_e2e_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestV2DevelopVerificationRedAskedThenWaived",
+      "via": "w374_develop_lane_e2e_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestV2MicroEvidenceFailsOnASyncArgvMismatch",
+      "via": "v2_micro_lane_e2e_test.go: carries internal/polyforge/daemon/* matches internal/polyforge/daemon/ensure.go"
+     },
+     {
+      "name": "TestV2MicroEvidenceWaivedByIntent",
+      "via": "v2_micro_lane_e2e_test.go: carries internal/polyforge/daemon/* matches internal/polyforge/daemon/ensure.go"
+     },
+     {
+      "name": "TestV2MicroLaneEndToEnd",
+      "via": "v2_micro_lane_e2e_test.go: carries internal/polyforge/daemon/* matches internal/polyforge/daemon/ensure.go"
+     },
+     {
+      "name": "TestV2MicroOutOfBoundsReviewFailsThenOwnerCancels",
+      "via": "v2_micro_lane_e2e_test.go: carries internal/polyforge/daemon/* matches internal/polyforge/daemon/ensure.go"
+     },
+     {
+      "name": "TestV2MicroSyncRewindToFixAborts",
+      "via": "v2_micro_lane_e2e_test.go: carries internal/polyforge/daemon/* matches internal/polyforge/daemon/ensure.go"
+     },
+     {
+      "name": "TestW286ConfigSetWritesFamilies",
+      "via": "w286_config_cli_toml_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW286InitWritesCliPolicy",
+      "via": "w286_config_cli_toml_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW286LegacyYamlRefused",
+      "via": "w286_config_cli_toml_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW286MemoryPolicyPathFamily",
+      "via": "w286_config_cli_toml_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW286MigrateConvergesAndNoOp",
+      "via": "w286_config_cli_toml_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW286MigrateMovesValues",
+      "via": "w286_config_cli_toml_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW286MigrateRefusesDisagreement",
+      "via": "w286_config_cli_toml_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW286ParserMultilineAndStrict",
+      "via": "w286_config_cli_toml_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW286SummarizeOptionalDefaults",
+      "via": "w286_config_cli_toml_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW286SummarizeTableIsOnlySource",
+      "via": "w286_config_cli_toml_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348BusinessCallsEgressFromTheirCellHub",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348BusinessConnectionOverridesAreRefused",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348CellAddedAtRuntimeByReload",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348CleanupLeavesNothingRoutable",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348ConflictingCellProfileRowsAreBothInvalid",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348ConflictingCellsAreBothInvalid",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348DaemonArgvMatchesOnlyTheDaemon",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348DaemonDownNoDirectFallbackLocalRepairWorks",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348DecisionFeedCarriesTheWorkRef",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348FollowUpUsesPFProfileNotTheCwd",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348HostScopeIgnoresProfileAndShutdownIsHostLevel",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348HubFailureDegradesOnlyItsCell",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348InvalidNamedCellIsIsolatedButInvalidHostBlocks",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348InvalidNamedCellProfileRowIsInvalid",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348KeyRotationDrainsAndSwitchesAfterIdle",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348Kill9DuringDrainRestoresEffectiveAndPending",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348LoweringTheCeilingKillsNothing",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348MigrationKill9DuringApplyConverges",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348MigrationPlanAndApplyPreserveIdentity",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348MigrationRollbackInsideWindow",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348NoWorkspaceCellServesDataPlaneWithExecutionDisabled",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348OldLayoutIsRefusedAtStartup",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348OneHostOneSocketServesTwoCells",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348PendingCellMappingDoesNotPreRoute",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348ProfileResolverOrder",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348RemovedCellKeepsStateAndRestoreIdentityIsChecked",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348RestoreBackupNeedsConfirmation",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348RollbackRefusedAfterTheHostServedMigratedLayout",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348RoundRobinServesTheOtherCellBeforeTheBusyOne",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348StatusReportsTwoLevelCountsAndBackgroundBound",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348StepAgentCannotLifecycleOrConfigWrite",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348StepAgentNamingAnotherCellIsRefused",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348TasksDoNotTakeJobSlots",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348UnknownOutcomeIsNotResent",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348UnknownProfileFailsNamingItsFile",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348UserChangeIsRefusedRequiringANewProfile",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348VersionMismatchBlocksHostWhileLocalRepairWorks",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW348WaitingJobFreesItsSlot",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW350D1MigrationHoldsHostLock",
+      "via": "w350_defect_groups_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW350D1ReapplyKeepsPostMigrationWrites",
+      "via": "w350_defect_groups_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW350D1RollbackKeepsPostMigrationWrites",
+      "via": "w350_defect_groups_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW350D2EffectiveIndexSurvivesRemovedFile",
+      "via": "w350_defect_groups_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW350D2UnreadableIndexFailsClosed",
+      "via": "w350_defect_groups_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW350D3ReloadedCellLimitGovernsAdmission",
+      "via": "w350_defect_groups_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW350D4PendingRefusesNewTaskSpawn",
+      "via": "w350_defect_groups_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW350D4RunningTaskBlocksPendingSwitch",
+      "via": "w350_defect_groups_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW350D5DisabledCellRefusesAnswer",
+      "via": "w350_defect_groups_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW350D5DisabledCellRefusesResume",
+      "via": "w350_defect_groups_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW350D5DisabledCellRefusesTaskSpawn",
+      "via": "w350_defect_groups_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW350D6ConfigListSurvivesInheritedEnv",
+      "via": "w350_defect_groups_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW350D6DoctorNeverDialsInheritedEnv",
+      "via": "w350_defect_groups_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW350D6WhitelistAndExplicitFlagBoundary",
+      "via": "w350_defect_groups_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW36DevelopHumanMergeEndsLanded",
+      "via": "w36_human_merge_e2e_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW374DevelopLaneEndToEnd",
+      "via": "w374_develop_lane_e2e_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW521DevelopMergeSkippedEndsPublished",
+      "via": "w521_develop_skip_merge_e2e_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     },
+     {
+      "name": "TestW530DoctorCodeNamesNoDeclaredHostTool",
+      "via": "w530_doctor_names_no_host_tool_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config_validate.go"
+     }
+    ]
+   },
+   "cap": {
+    "pkg": 1,
+    "run": 1,
+    "e2e_names": 339,
+    "conf": 0
+   }
+  },
+  {
+   "id": "polyforge-74",
+   "status": "miss",
+   "source": {
+    "merge": "a508347ab1dac47c740d00c798f6c68f1275883b",
+    "fix": "polyforge#95"
+   },
+   "root": "",
+   "paths": [
+    "docs/concepts.md",
+    "docs/design/polyforge-vnext/reference.md",
+    "docs/reference/commands.md",
+    "docs/reference/config.md",
+    "docs/reference/uds-routes.md",
+    "docs/upgrade.md",
+    "internal/contracttest/w59_task_skill_contract_test.go",
+    "internal/polyforge/cellcfg/schema.go",
+    "internal/polyforge/cellcfg/w74_schema_test.go",
+    "internal/polyforge/cli/config.go",
+    "internal/polyforge/cli/config_keys.go",
+    "internal/polyforge/cli/daemon.go",
+    "internal/polyforge/cli/verbs_config.go",
+    "internal/polyforge/cli/verbs_task.go",
+    "internal/polyforge/cli/w74_max_tasks_key_test.go",
+    "internal/polyforge/daemon/analyzer.go",
+    "internal/polyforge/daemon/analyzer_test.go",
+    "internal/polyforge/daemon/cells.go",
+    "internal/polyforge/daemon/cells_status_test.go",
+    "internal/polyforge/daemon/daemon.go",
+    "internal/polyforge/daemon/hostslots.go",
+    "internal/polyforge/daemon/hostslots_test.go",
+    "internal/polyforge/daemon/reload.go",
+    "internal/polyforge/daemon/tasks.go",
+    "internal/polyforge/daemon/tasks_test.go",
+    "internal/polyforge/daemon/w74_no_jobslot_bind_test.go",
+    "internal/polyforge/daemon/w74_task_bound_test.go",
+    "internal/polyforge/task/manager.go",
+    "internal/polyforge/task/slots_test.go",
+    "internal/polyforge/task/task.go",
+    "internal/polyforge/task/task_test.go",
+    "internal/polyforge/task/w74_limit_test.go",
+    "pi-web/docs/agents/polyforge-panel.md",
+    "skills/polyforge/verbs/message.md",
+    "skills/polyforge/verbs/ops.md",
+    "skills/polyforge/verbs/task.md",
+    "test/w254_docs_set_acceptance_test.go"
+   ],
+   "target": {
+    "kind": "harness_name",
+    "value": "TestW348TasksDoNotTakeJobSlots"
+   },
+   "note": "test/w348_cell_e2e_acceptance_test.go declared carries: internal/polyforge/daemon/* … all along; the Go analyzer consumed none of it",
+   "old": {
+    "go_pkg_cmds": [
+     "GOWORK=off go test -count=1 ./cmd/pf ./internal/contracttest ./internal/polyforge/cellcfg ./internal/polyforge/cli ./internal/polyforge/daemon ./internal/polyforge/task"
+    ],
+    "go_run_cmds": [
+     "GOWORK=off go test -count=1 -run '^(TestDocsQuoteTheWindowSQL|TestOpenRunsNoAutoMigration|TestProbeRunOnceSemantics|TestUpgradeOldEmptyDB|TestUpgradeOldPopulatedDB|TestUpgradeRollbackRoundTrip)$' ./internal/aihub/core",
+     "GOWORK=off go test -count=1 -run '^(TestW107Web)$' ./internal/aihub/server",
+     "GOWORK=off go test -count=1 -run '^(TestContentHashCoversPathsAndBytes|TestEveryCodeHasABadLane|TestLoadReadsTheLane|TestLoadReportsEveryDefectAtOnce|TestLoadReportsFrontmatterBesidePlaceholderDefects|TestOtherContractVersionsRefused|TestRegistryGoldenPinsTheVersion|TestShippedLanesLoad|TestStepIDsReadThroughTheLoader)$' ./internal/common/workflow",
+     "GOWORK=off go test -count=1 -run '^(TestContractMismatchBlocksTheStart|TestW111AgentsMDKeepsTheUpgradePinRule|TestW111BuildStepsRunTheScopedReport|TestW111NoSleepOutsideTheWaitingRule|TestW111ReleaseStepsAwaitInsideOneCall|TestW111WaitingPrincipleInEveryPrincipledPrompt|TestW371TextContract)$' ./internal/polyforge/driver",
+     "GOWORK=off go test -count=1 -run '^(TestRevertCopiesThePinsWhenNothingIsToRevert|TestRevertOneItemTwoReposResumable|TestRevertResumesAfterACrashBetweenRepos|TestRevertRevertsAHeldItemWithItsLandedFixes|TestSyncAbortDropsTheMergeAndTheRecord|TestSyncContinueOverRoundsRecordsEveryResolvedFile|TestSyncMergesCleanlyAndFastForwards|TestSyncRealConflictThenContinue|TestSyncRecordOfAnEarlierRoundNeverResetsNewerCommits|TestSyncReentryResetsAndMergesAgain|TestSyncRefusesToDiscardWorkCommittedAfterItStarted|TestSyncRefusesUnusableInvocations|TestSyncResolvesMechanicalConflicts)$' ./internal/polyforge/stepscripts",
+     "GOWORK=off go test -count=1 -run '^(TestStaleKeyHintNamesTheUpgradeSection|TestW432EveryListIsKeyedByAStep|TestW432StaleKeysLoadAndAreNamed|TestW432TheDispatchingStepKeyGoverns|TestW479IntegrateSectionRefused)$' ./internal/polyforge/workspace"
+    ],
+    "e2e_run_names": [
+     "TestPF49UpgradeAnalysisSection",
+     "TestW103S01EmptyQueryBrowses",
+     "TestW103S02BrowseSortsDescending",
+     "TestW103S03BrowseFiltersAndGates",
+     "TestW103S04BrowsePageSize",
+     "TestW103S05BrowseWalksTheWholeList",
+     "TestW103S06BrowseCursorEdges",
+     "TestW103S07KeywordCannotMixWithBrowse",
+     "TestW103S08BasicAuthAndGates",
+     "TestW103S09UnauthenticatedGuide",
+     "TestW103S10ReadOnlyMethods",
+     "TestW103S11PickerReadableProjects",
+     "TestW103S12ListPagesAndTypeFilter",
+     "TestW103S13SearchOnePage",
+     "TestW103S14NonLeaking404",
+     "TestW103S15DetailHeaderCard",
+     "TestW103S16HostileMarkdown",
+     "TestW103S17SecurityHeaders",
+     "TestW103S19NoKeyLeak",
+     "TestW103S20Docs",
+     "TestW103S21ReachStatement",
+     "TestW105BasicAuthGuidesAndReauthenticates",
+     "TestW105BuildTargetFrontendFirstAndTreeClean",
+     "TestW105DependenciesPointBothWaysWithoutLeaking",
+     "TestW105DocumentsDescribeTheConsoleAndReachability",
+     "TestW105EmbeddedShellAssetsAndDeepLinks",
+     "TestW105EveryResponseClassCarriesTheSecurityHeaders",
+     "TestW105GlobalSearchGroupsAndCaps",
+     "TestW105MachinesAreAdminOnlyAndReportHealth",
+     "TestW105MethodGateAfterAuthAndHeadMirrorsGet",
+     "TestW105OddPathsNeverEscapeTheHeaderSet",
+     "TestW105OldViewPrefixIsIndistinguishableFromUnknownPath",
+     "TestW105ReadGatesMatchTheApi",
+     "TestW105TimelineCoversEventsAndHidesSensitiveColumns",
+     "TestW105UnknownAndUnreadableShareOne404",
+     "TestW105WorkItemListFiltersAndSearch",
+     "TestW105WorkItemListPagesExactlyOnce",
+     "TestW123KeywordMixRefused",
+     "TestW123RecallAnyBrowseRefused",
+     "TestW123RecallBrowseFirstPage",
+     "TestW123RecallBrowseLimit",
+     "TestW123RecallBrowseReachabilityDocumented",
+     "TestW123RecallBrowseSort",
+     "TestW123RecallBrowseWalkCursor",
+     "TestW123TaskListEmptyPromptSummary",
+     "TestW123TaskListPromptSummary",
+     "TestW167CallerIDSource",
+     "TestW167CoupledDocsStateFieldsAndTrust",
+     "TestW167HumanMemberReporter",
+     "TestW167IncludeCallerResolvesDaemonOwner",
+     "TestW167LargeReportRowBounded",
+     "TestW167ReportTailEmptyAndNoFallback",
+     "TestW167ReportTailLongLine",
+     "TestW167ReportTailMarkdownLine",
+     "TestW167ReportTailSameTextAsShow",
+     "TestW167ReportTailShortLine",
+     "TestW167ReporterMachineFallbacks",
+     "TestW167ReporterSnapshotSurvivesRenameAndOutage",
+     "TestW167SpawnSucceedsWithAihubDown",
+     "TestW167TextTableUnchangedFieldsJSONOnly",
+     "TestW241GuideChatPathPrimary",
+     "TestW241GuideCoreConceptsNamed",
+     "TestW241GuideDriftCheckRedSide",
+     "TestW241GuideExistsForNewMember",
+     "TestW241GuideFlowRealOrder",
+     "TestW241GuideMemoryAndRecoveryMoves",
+     "TestW241GuideNoRestatedFlagTables",
+     "TestW241GuideWhereToFindWhat",
+     "TestW241GuideWorkedExampleDevelop",
+     "TestW241GuideWrapHumanCloseVerb",
+     "TestW241HelpExtensionsNamesGuide",
+     "TestW241ReadmeLinksGuide",
+     "TestW241SkillHelpFragmentNamesGuide",
+     "TestW254ArchitectureOverview",
+     "TestW254ContributingGuide",
+     "TestW254InTreePointersFollowMoves",
+     "TestW254NeverUnattendedSettledPolicy",
+     "TestW254NewDocsClean",
+     "TestW254QuickstartsMovedIntact",
+     "TestW254ReadmeLandingPage",
+     "TestW254ReferencePages",
+     "TestW254SkillSedimentationPointer",
+     "TestW254UnattendedModeActualBehavior",
+     "TestW254UpgradeByteIdentical",
+     "TestW33ChainEndModelDeathBlocksAndResumeKeepsEndModel",
+     "TestW33ConfigEditGovernsNextDispatch",
+     "TestW33InvalidYamlBlocksAndResumeContinues",
+     "TestW33ManualModelsFrozenWithModelRotation",
+     "TestW33NoDocKeepsClaimTimeFreeze",
+     "TestW33SummarizeLaneReadsLive",
+     "TestW36DocsTeachTheThreeMergeRoutes",
+     "TestW3ConfigAPIKeyWriteOnly",
+     "TestW3ConfigCommandFamilyAndSource",
+     "TestW3ConfigConcurrentSetsSerialize",
+     "TestW3ConfigCrashAtomicAndMode",
+     "TestW3ConfigHandEditNeedsReload",
+     "TestW3ConfigReloadBadFileInert",
+     "TestW3ConfigReloadFlagOverrideAndOpsMax",
+     "TestW3ConfigReloadFlagPinnedStepTimeout",
+     "TestW3ConfigReloadLiveCapAndOutcomes",
+     "TestW3ConfigReloadMappingAdditionWithoutRestart",
+     "TestW3ConfigReloadRemovalInFlightRefused",
+     "TestW3ConfigReloadRemovalWithoutInFlight",
+     "TestW3ConfigReloadRestartOnlyPending",
+     "TestW3ConfigSharedValidationRefusalRepairAndDaemon",
+     "TestW3ConfigStepAgentRefused",
+     "TestW3ConfigWritePreservesBytes",
+     "TestW3ConfigWriteWithoutDaemonReportsNextStart",
+     "TestW3InstallAndDocsThroughPFConfig",
+     "TestW404IntegrateLaneEndToEnd",
+     "TestW457MicroJSONReportsTheDocsDeclaration",
+     "TestW457MicroRunFailsOnABrokenPinnedDoc",
+     "TestW503RefusalHeardOnTheSpotStillRecordsSubmitRejected",
+     "TestW503SubmitClaimLineOnlyAfterTheClaim",
+     "TestW503SubmitQueuedWhenSlotsFullAndLaterRefusalRecorded",
+     "TestW503SubmitRefusedByUnfinishedBlockerFailsOnTheSpot",
+     "TestW520ReleaseContractCheck",
+     "TestW521DocsTeachTheProjectSkip",
+     "TestW534ReleaseChecksTheDocsSinceTheLastTag",
+     "TestW534ReviewChecksTheDocImpact"
+    ]
+   },
+   "allowed_new": {
+    "e2e_run_names": [
+     {
+      "name": "TestV2DevelopSyncRewindKeepsBuildsWork",
+      "via": "w374_develop_lane_e2e_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config.go"
+     },
+     {
+      "name": "TestV2DevelopVerificationRedAskedThenWaived",
+      "via": "w374_develop_lane_e2e_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config.go"
+     },
+     {
+      "name": "TestV2MicroEvidenceFailsOnASyncArgvMismatch",
+      "via": "v2_micro_lane_e2e_test.go: carries internal/polyforge/daemon/* matches internal/polyforge/daemon/analyzer.go"
+     },
+     {
+      "name": "TestV2MicroEvidenceWaivedByIntent",
+      "via": "v2_micro_lane_e2e_test.go: carries internal/polyforge/daemon/* matches internal/polyforge/daemon/analyzer.go"
+     },
+     {
+      "name": "TestV2MicroLaneEndToEnd",
+      "via": "v2_micro_lane_e2e_test.go: carries internal/polyforge/daemon/* matches internal/polyforge/daemon/analyzer.go"
+     },
+     {
+      "name": "TestV2MicroOutOfBoundsReviewFailsThenOwnerCancels",
+      "via": "v2_micro_lane_e2e_test.go: carries internal/polyforge/daemon/* matches internal/polyforge/daemon/analyzer.go"
+     },
+     {
+      "name": "TestV2MicroSyncRewindToFixAborts",
+      "via": "v2_micro_lane_e2e_test.go: carries internal/polyforge/daemon/* matches internal/polyforge/daemon/analyzer.go"
+     },
+     {
+      "name": "TestW286ConfigSetWritesFamilies",
+      "via": "w286_config_cli_toml_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config.go"
+     },
+     {
+      "name": "TestW286InitWritesCliPolicy",
+      "via": "w286_config_cli_toml_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config.go"
+     },
+     {
+      "name": "TestW286LegacyYamlRefused",
+      "via": "w286_config_cli_toml_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config.go"
+     },
+     {
+      "name": "TestW286MemoryPolicyPathFamily",
+      "via": "w286_config_cli_toml_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config.go"
+     },
+     {
+      "name": "TestW286MigrateConvergesAndNoOp",
+      "via": "w286_config_cli_toml_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config.go"
+     },
+     {
+      "name": "TestW286MigrateMovesValues",
+      "via": "w286_config_cli_toml_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config.go"
+     },
+     {
+      "name": "TestW286MigrateRefusesDisagreement",
+      "via": "w286_config_cli_toml_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config.go"
+     },
+     {
+      "name": "TestW286ParserMultilineAndStrict",
+      "via": "w286_config_cli_toml_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config.go"
+     },
+     {
+      "name": "TestW286SummarizeOptionalDefaults",
+      "via": "w286_config_cli_toml_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config.go"
+     },
+     {
+      "name": "TestW286SummarizeTableIsOnlySource",
+      "via": "w286_config_cli_toml_acceptance_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config.go"
+     },
+     {
+      "name": "TestW348BusinessCallsEgressFromTheirCellHub",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348BusinessConnectionOverridesAreRefused",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348CellAddedAtRuntimeByReload",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348CleanupLeavesNothingRoutable",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348ConflictingCellProfileRowsAreBothInvalid",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348ConflictingCellsAreBothInvalid",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348DaemonArgvMatchesOnlyTheDaemon",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348DaemonDownNoDirectFallbackLocalRepairWorks",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348DecisionFeedCarriesTheWorkRef",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348FollowUpUsesPFProfileNotTheCwd",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348HostScopeIgnoresProfileAndShutdownIsHostLevel",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348HubFailureDegradesOnlyItsCell",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348InvalidNamedCellIsIsolatedButInvalidHostBlocks",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348InvalidNamedCellProfileRowIsInvalid",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348KeyRotationDrainsAndSwitchesAfterIdle",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348Kill9DuringDrainRestoresEffectiveAndPending",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348LoweringTheCeilingKillsNothing",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348MigrationKill9DuringApplyConverges",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348MigrationPlanAndApplyPreserveIdentity",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348MigrationRollbackInsideWindow",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348NoWorkspaceCellServesDataPlaneWithExecutionDisabled",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348OldLayoutIsRefusedAtStartup",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348OneHostOneSocketServesTwoCells",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348PendingCellMappingDoesNotPreRoute",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348ProfileResolverOrder",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348RemovedCellKeepsStateAndRestoreIdentityIsChecked",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348RestoreBackupNeedsConfirmation",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348RollbackRefusedAfterTheHostServedMigratedLayout",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348RoundRobinServesTheOtherCellBeforeTheBusyOne",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348StatusReportsTwoLevelCountsAndBackgroundBound",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348StepAgentCannotLifecycleOrConfigWrite",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348StepAgentNamingAnotherCellIsRefused",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348TasksDoNotTakeJobSlots",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348UnknownOutcomeIsNotResent",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348UnknownProfileFailsNamingItsFile",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348UserChangeIsRefusedRequiringANewProfile",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348VersionMismatchBlocksHostWhileLocalRepairWorks",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW348WaitingJobFreesItsSlot",
+      "via": "w348_cell_e2e_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW350D1MigrationHoldsHostLock",
+      "via": "w350_defect_groups_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW350D1ReapplyKeepsPostMigrationWrites",
+      "via": "w350_defect_groups_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW350D1RollbackKeepsPostMigrationWrites",
+      "via": "w350_defect_groups_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW350D2EffectiveIndexSurvivesRemovedFile",
+      "via": "w350_defect_groups_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW350D2UnreadableIndexFailsClosed",
+      "via": "w350_defect_groups_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW350D3ReloadedCellLimitGovernsAdmission",
+      "via": "w350_defect_groups_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW350D4PendingRefusesNewTaskSpawn",
+      "via": "w350_defect_groups_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW350D4RunningTaskBlocksPendingSwitch",
+      "via": "w350_defect_groups_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW350D5DisabledCellRefusesAnswer",
+      "via": "w350_defect_groups_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW350D5DisabledCellRefusesResume",
+      "via": "w350_defect_groups_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW350D5DisabledCellRefusesTaskSpawn",
+      "via": "w350_defect_groups_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW350D6ConfigListSurvivesInheritedEnv",
+      "via": "w350_defect_groups_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW350D6DoctorNeverDialsInheritedEnv",
+      "via": "w350_defect_groups_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW350D6WhitelistAndExplicitFlagBoundary",
+      "via": "w350_defect_groups_acceptance_test.go: carries internal/polyforge/cellcfg/* matches internal/polyforge/cellcfg/schema.go"
+     },
+     {
+      "name": "TestW36DevelopHumanMergeEndsLanded",
+      "via": "w36_human_merge_e2e_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config.go"
+     },
+     {
+      "name": "TestW374DevelopLaneEndToEnd",
+      "via": "w374_develop_lane_e2e_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config.go"
+     },
+     {
+      "name": "TestW521DevelopMergeSkippedEndsPublished",
+      "via": "w521_develop_skip_merge_e2e_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config.go"
+     },
+     {
+      "name": "TestW530DoctorCodeNamesNoDeclaredHostTool",
+      "via": "w530_doctor_names_no_host_tool_test.go: carries internal/polyforge/cli/* matches internal/polyforge/cli/config.go"
+     }
+    ]
+   },
+   "cap": {
+    "pkg": 1,
+    "run": 6,
+    "e2e_names": 193,
+    "conf": 0
+   }
+  },
+  {
+   "id": "polyforge-71",
+   "status": "covered",
+   "source": {
+    "merge": "01ec2f4a",
+    "fix": "polyforge#96"
+   },
+   "root": "pi-web",
+   "paths": [
+    "pi-web/AGENTS.md",
+    "pi-web/components/ChatInput.claude.test.mjs",
+    "pi-web/components/ChatInput.test.mjs",
+    "pi-web/components/ChatInput.tsx",
+    "pi-web/components/ChatWindow.claude.test.mjs",
+    "pi-web/components/ChatWindow.tsx",
+    "pi-web/docs/agents/claude-sessions.md",
+    "pi-web/e2e/claude-250.mjs",
+    "pi-web/e2e/claude-composer-272.mjs",
+    "pi-web/e2e/claude-session-219.mjs",
+    "pi-web/hooks/compact-command.test.mjs",
+    "pi-web/hooks/mcp-slash-command.test.mjs",
+    "pi-web/hooks/useAgentSession.ts",
+    "pi-web/lib/claude-adapter.ts",
+    "pi-web/lib/claude-commands-71.test.mjs",
+    "pi-web/lib/claude-probe.test.mjs",
+    "pi-web/lib/claude-probe.ts",
+    "pi-web/lib/claude-session.ts",
+    "pi-web/lib/claude-shared.ts"
+   ],
+   "target": {
+    "kind": "suite",
+    "value": "e2e/claude-composer-272.mjs"
+   },
+   "note": "already selected: the carries selection took the suite; the red was the S272-01 scenario's missing wait (the dev/start mode mismatch is another ticket, Q3)",
+   "old": {
+    "npm_suites": [
+     "e2e/agent-language-293.mjs",
+     "e2e/claude-250.mjs",
+     "e2e/claude-composer-272.mjs",
+     "e2e/claude-session-219.mjs",
+     "e2e/claude-settings-445.mjs",
+     "e2e/claude-steer-395.mjs",
+     "e2e/claude-subagent-253.mjs",
+     "e2e/context-after-compact-368.mjs",
+     "e2e/run.mjs",
+     "e2e/session-stall-recovery.mjs"
+    ]
+   },
+   "allowed_new": {},
+   "cap": {
+    "suites": 10
+   }
+  },
+  {
+   "id": "polyforge-51",
+   "status": "miss",
+   "source": {
+    "merge": "a3b2191",
+    "fix": "polyforge#97"
+   },
+   "root": "pi-web",
+   "paths": [
+    "docs/design/polyforge-vnext/v2-converge.md",
+    "docs/reference/commands.md",
+    "docs/reference/config.md",
+    "docs/reference/uds-routes.md",
+    "internal/polyforge/cellcfg/schema.go",
+    "internal/polyforge/cellcfg/w51_schema_test.go",
+    "internal/polyforge/cli/config.go",
+    "internal/polyforge/cli/config_edit.go",
+    "internal/polyforge/cli/config_keys.go",
+    "internal/polyforge/cli/config_test.go",
+    "internal/polyforge/cli/daemon.go",
+    "internal/polyforge/cli/unclassified.go",
+    "internal/polyforge/cli/verbs_config.go",
+    "internal/polyforge/cli/verbs_daemon.go",
+    "internal/polyforge/cli/w51_error_patterns_config_test.go",
+    "internal/polyforge/daemon/cells.go",
+    "internal/polyforge/daemon/daemon.go",
+    "internal/polyforge/daemon/reload.go",
+    "internal/polyforge/daemon/unclassified.go",
+    "internal/polyforge/daemon/w51_live_error_patterns_test.go",
+    "internal/polyforge/daemon/w51_named_cell_live_test.go",
+    "internal/polyforge/daemon/w51_unclassified_route_test.go",
+    "internal/polyforge/driver/claude_d7_test.go",
+    "internal/polyforge/driver/claude_live_turn_parity_test.go",
+    "internal/polyforge/driver/d6_budget_test.go",
+    "internal/polyforge/driver/d7_ratelimit_test.go",
+    "internal/polyforge/driver/d8_upstream_transient_test.go",
+    "internal/polyforge/driver/driver.go",
+    "internal/polyforge/driver/gateway_transient_test.go",
+    "internal/polyforge/driver/rewind_reentry_crash_test.go",
+    "internal/polyforge/driver/spawn_test.go",
+    "internal/polyforge/driver/start.go",
+    "internal/polyforge/driver/stderr_incomplete_test.go",
+    "internal/polyforge/driver/stream_ended_repro_test.go",
+    "internal/polyforge/driver/supervision.go",
+    "internal/polyforge/driver/supervision_rules_test.go",
+    "internal/polyforge/driver/supervision_test.go",
+    "internal/polyforge/driver/transition.go",
+    "internal/polyforge/driver/upstream_4xx_retry_json_test.go",
+    "internal/polyforge/driver/upstream_4xx_retry_repro_test.go",
+    "internal/polyforge/driver/w51_added_rules_test.go",
+    "internal/polyforge/liveconfig/liveconfig.go",
+    "internal/polyforge/observe/monitor.go",
+    "internal/polyforge/observe/supervisor_pause_event_test.go",
+    "internal/polyforge/observe/w51_slow_thresholds_live_test.go",
+    "internal/polyforge/supervise/contract.go",
+    "internal/polyforge/supervise/defaults.go",
+    "internal/polyforge/supervise/rules.go",
+    "internal/polyforge/supervise/supervise_test.go",
+    "internal/polyforge/supervise/tracker.go",
+    "internal/polyforge/supervise/w51_slow_latency_test.go",
+    "pi-web/AGENTS.md",
+    "pi-web/app/api/polyforge/polyforge-unclassified-routes.test.mjs",
+    "pi-web/app/api/polyforge/unclassified/route.ts",
+    "pi-web/components/PolyforgeConfig.test.mjs",
+    "pi-web/components/PolyforgeConfig.tsx",
+    "pi-web/docs/agents/polyforge-panel.md",
+    "pi-web/docs/agents/settings-ui.md",
+    "pi-web/e2e/w51-error-classes.mjs",
+    "pi-web/lib/i18n/messages/en.ts",
+    "pi-web/lib/i18n/messages/zh-CN.ts",
+    "pi-web/lib/i18n/messages/zh-TW.ts",
+    "pi-web/lib/polyforge-config-schema.test.mjs",
+    "pi-web/lib/polyforge-config-schema.ts",
+    "pi-web/lib/polyforge-config-write.test.mjs",
+    "pi-web/lib/polyforge-config-write.ts",
+    "pi-web/lib/polyforge-unclassified-pure.ts",
+    "pi-web/lib/polyforge-unclassified.test.mjs",
+    "pi-web/lib/polyforge-unclassified.ts",
+    "skills/polyforge/verbs/ops.md"
+   ],
+   "target": {
+    "kind": "suite",
+    "value": "e2e/w367-default-cell-pinned.mjs"
+   },
+   "note": "w367's carries covered none of the #51 pi-web paths; this change adds app/api/polyforge/unclassified/* and lib/polyforge-unclassified*",
+   "old": {
+    "npm_suites": [
+     "e2e/agent-language-293.mjs",
+     "e2e/claude-settings-445.mjs",
+     "e2e/polyforge-config-layout.mjs",
+     "e2e/polyforge-config-panel.mjs",
+     "e2e/polyforge-settings.mjs",
+     "e2e/polyforge-workflow-216.mjs",
+     "e2e/polyforge.mjs",
+     "e2e/w51-error-classes.mjs"
+    ]
+   },
+   "allowed_new": {
+    "npm_suites": [
+     {
+      "name": "e2e/w367-default-cell-pinned.mjs",
+      "via": "pi-web/e2e/w367-default-cell-pinned.mjs: carries app/api/polyforge/unclassified/* matches app/api/polyforge/unclassified/route.ts"
+     }
+    ]
+   },
+   "cap": {
+    "suites": 9
+   }
+  }
+ ]
+}

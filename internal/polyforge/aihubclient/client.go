@@ -312,15 +312,18 @@ func (c *Client) ListWorkItemsRaw(project, status string, limit int) (json.RawMe
 // is that string; GET /work-items?attr=…, repeatable).
 type WorkItemFilter struct {
 	Project, Status, Bundle string
-	Attrs                   []string
-	Limit                   int
+	// Parent narrows the page to one parent's children ("" = any;
+	// polyforge#117: the epic lane's daemon lists an epic's children).
+	Parent string
+	Attrs  []string
+	Limit  int
 }
 
 // path is the list request a filter selects (empty fields are left off;
 // Attrs keep their order).
 func (f WorkItemFilter) path() string {
 	q := url.Values{}
-	for k, v := range map[string]string{"project": f.Project, "status": f.Status, "bundle": f.Bundle} {
+	for k, v := range map[string]string{"project": f.Project, "status": f.Status, "bundle": f.Bundle, "parent": f.Parent} {
 		if v != "" {
 			q.Set(k, v)
 		}
@@ -332,6 +335,31 @@ func (f WorkItemFilter) path() string {
 		q.Set("limit", strconv.Itoa(f.Limit))
 	}
 	return "/api/v1/work-items?" + q.Encode()
+}
+
+// listChildrenLimit caps the children page the request names: the server
+// clamps to its own maximum, and an epic's children live far below it.
+const listChildrenLimit = 1000
+
+// ListChildren lists the work items whose parent is parentID, newest
+// first (the epic lane's daemon reads an epic's children through it,
+// polyforge#117). The answer is validated at the boundary the response
+// crosses: a work item whose parent_id is not parentID never enters an
+// epic's snapshot or its running re-check, whatever the server paged —
+// a server that ignores the parent parameter answers the whole
+// project's page, and the filter keeps the answer the epic's own.
+func (c *Client) ListChildren(parentID string) ([]api.WorkItem, error) {
+	items, err := c.ListWorkItems(WorkItemFilter{Parent: parentID, Limit: listChildrenLimit})
+	if err != nil {
+		return nil, err
+	}
+	out := items[:0]
+	for _, wi := range items {
+		if wi.ParentID != nil && *wi.ParentID == parentID {
+			out = append(out, wi)
+		}
+	}
+	return out, nil
 }
 
 // ListWorkItems lists the work items a filter selects, newest first.

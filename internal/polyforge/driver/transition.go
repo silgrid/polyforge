@@ -282,6 +282,8 @@ func (d *Driver) applyLocked(req TransitionRequest, info *appliedInfo) error {
 		return d.applyStepFailedLocked(req, info)
 	case TransStepSkipped:
 		return d.applyStepSkippedLocked(req)
+	case TransEpicResume:
+		return d.applyEpicResumeLocked(req, info)
 	case TransBlocked:
 		if isTerminalStatus(d.exec.WorkflowStatus) {
 			return fmt.Errorf("driver: workflow is terminal (%s)", d.exec.WorkflowStatus)
@@ -974,6 +976,8 @@ func (d *Driver) emitLocked(req TransitionRequest, info *appliedInfo) {
 	case TransStepFailed:
 		kind = "step_failed"
 		d.failureEventsLocked(req, info, body)
+	case TransEpicResume:
+		return // the owner_rewind event (applyEpicResumeLocked) is the move's own record
 	case TransStepSkipped:
 		kind = "step_skipped"
 		body["step"] = req.StepID

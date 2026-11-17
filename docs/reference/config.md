@@ -873,7 +873,7 @@ where the step's lane declares it `skippable: true` (workflow.yaml,
 [workflow contract](workflow-contract.md#step-keys)); a step not declared
 skippable runs on every round of the work item (a `rewind_only`
 declaration alone can hold a step's first round back). The shipped lanes
-declare one: develop's `merge`.
+declare it on develop's and epic's `merge`.
 `skip` is a bool (`true` or `false`; anything else is a load error) and
 `default` and `task` take none (they are no step).
 
@@ -915,11 +915,12 @@ steps:
 is `human`: the step's work is done by a person, only where the step's
 lane declares it `human_mergeable: true` (workflow.yaml, [workflow
 contract](workflow-contract.md#step-keys)); a step not declared
-human_mergeable always runs itself. The shipped lanes declare one:
-develop's `merge` — the PRs are handed to the project's reviewer, the
-merge step asks the owner instead of merging, and the person's landing is
-taken by the human landing rules
-(`workflows/develop/README.md`, "Merging by a person"). `by` takes the
+human_mergeable always runs itself. The shipped lanes declare two:
+develop's and epic's `merge` — the PRs are handed to the project's
+reviewer, the merge step asks the owner instead of merging, and the
+person's landing is taken by the human landing rules
+(`workflows/develop/README.md`, "Merging by a person"; the epic lane's
+merge follows the same rules its README names). `by` takes the
 mode name `human` (anything else is a load error), and a step entry
 declares `by` or `skip`, never both (a load error naming both). A `by` on
 the bundle-less keys is a load error, as a `skip` is.
@@ -1156,6 +1157,7 @@ may declare them before the release ships the engine.
 | `suite_glob` | glob | Repeatable: replaces the analyzer's suite discovery for the repository (the undeclared-suite and selection rules then apply to the files it matches). Echoed as `suite_glob`. |
 | `e2e_map` | `<glob>=<suite>` | Repeatable: declares `<glob>` as the coverage of the repository-relative `<suite>`, replacing that suite's `carries:` header outright (not merged); several lines for one suite union. A `<suite>` that is not a discovered suite forces the full tier. Echoed as `e2e_map`. |
 | `smoke_suite` | suite path | Repeatable: a repository-relative suite the full-tier e2e selection always runs. Declaring at least one is the repository's opt-in: full-tier verification (`--full`) of a non-empty diff then runs the fast gates plus the carries-selected suites union the smoke suites (only the smoke suites for a documentation-only diff), lists an uncovered non-documentation path instead of forcing the full tail, and runs the full tail on a forced-full match, a change to this conf or a structural diagnostic ([contributing's Carries](../contributing.md#carries--declaring-what-an-e2e-suite-covers)). The full-phase commands stay the carried full bar delivery re-runs. The scoped tier ignores the key. Echoed as `smoke_suite`; the selection as `e2e_selection`. |
+| `scoped_command` | `<glob>\|<command>` | Repeatable: one conditional command of the scoped selection (polyforge#111). A changed path an `exclude=` match has not removed that matches `<glob>` adds `<command>` to the scoped tier's report — once per declaration, in file order, after the analyzer's own scoped commands, reported as a scoped command of source `conf` (the light tier included); a nested engine root reads its own conf's lines, paths relative to itself. `--full`, `--micro` and no-analyzer reports never carry it. The value splits on its first `\|` (the command may carry more); a value without one, an empty glob or an empty command is diagnosed, naming the line, and fails the conf closed. The command is a bash command value like any other. Not echoed in the JSON report beyond the matched commands themselves. |
 | `micro_path` | path pattern | Repeatable: a repository-relative path the `micro` lane may change. Declaring at least one is the repository's micro opt-in; a repository that declares none is refused by that lane. An absolute, `./`-prefixed, blank or `..`-escaping value is diagnosed and contributes nothing. Echoed as `micro_paths` (see the micro paragraph below). |
 | `micro_check` | command | Repeatable, ordered: an extra micro-lane evidence command, named `micro-<i>`, run after the fast phase only under `--micro`. Echoed as `micro_checks`. |
 | `component` | `<name>\|<path>[,<path>…]` | Repeatable: one named component of this repository for the epic-upgrade analysis. `<name>` has the `check` name shape; `<path>` is a repository-relative prefix — a declared path and everything under it, overlapping declarations taking the longest prefix. A malformed line (no `\|`, a bad name, an empty, absolute or `..`-escaping path), or a second line naming an already-declared component, is diagnosed and ignored. The engine reads none of the key (it accepts the line without the unknown-key diagnostic, like `not_runnable_rule`); the component tool `components.py` parses it, and the gate id hashes none of it. |
@@ -1179,8 +1181,8 @@ whose every path is documentation is listed but never counted. The
 defaults 3 / 8 / 30 apply without declarations; a cross-repository ticket
 counts every repository as one component.
 
-Command values — `fast_gate`, `full_command`, the command of a `check`, and
-`base_setup` — are bash: `--run` executes them with `bash -c` from the
+Command values — `fast_gate`, `full_command`, the command of a `check`,
+`base_setup` and the command of a `scoped_command` — are bash: `--run` executes them with `bash -c` from the
 repository root, and a value that begins with `$(` or a backtick is skipped
 with a lint diagnostic. A phase's conf lines, anonymous or named, replace the
 analyzer's default commands of that phase. A `<name>` is letters, digits,
@@ -1191,17 +1193,18 @@ anonymous and analyzer commands' names), nor `audit` or `audit-<anything>`
 diagnosed and ignored). A `check_*` or `report` line names a declared
 command — a `check` name or an anonymous `fast-<i>` / `full-<i>` / `micro-<i>`
 — and may precede it;
-one naming no declared command is diagnosed and ignored. The four carries
-keys fail closed instead: an empty `e2e_runner=` (or a second one, or one that
+one naming no declared command is diagnosed and ignored. The carries keys and
+`scoped_command=` fail closed instead: an empty `e2e_runner=` (or a second one, or one that
 begins with a command substitution), an empty `suite_glob=`, an `e2e_map=`
-value that is not split by exactly one `=` into two non-empty sides, and a
-`smoke_suite=` value that is empty or not one relative path without blanks are
+value that is not split by exactly one `=` into two non-empty sides, a
+`smoke_suite=` value that is empty or not one relative path without blanks,
+and a `scoped_command=` value with no `|` or with an empty side are
 diagnosed, naming the line, and force the full tier for every diff — never a
 scoped tier computed as if the key were absent (for an opted-in repository the
 full-tier e2e selection then falls back to the full tail). An engine that predates the
 keys diagnoses them as unknown and ignores them, so a conf may declare them
 before the release ships the engine. Glob values (`forced_full`, `exclude`,
-`suite_glob`, `e2e_map`, `carries:`) are shell-case patterns: `*` crosses
+`suite_glob`, `e2e_map`, `scoped_command`, `carries:`) are shell-case patterns: `*` crosses
 `/`. The workflow's readiness check
 (`workflows/_shared/scripts/scope_ready.py`) reads this file (never
 executes it).

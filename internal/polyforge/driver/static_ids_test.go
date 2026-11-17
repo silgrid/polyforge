@@ -147,7 +147,7 @@ func laneShape(t *testing.T, wf *Workflow) []string {
 // TestRenameInvariant (⑦): every shipped lane, renamed together with one
 // step its own directory defines, loads to the same execution graph.
 func TestRenameInvariant(t *testing.T) {
-	for lane, step := range map[string]string{"develop": "build", "micro": "fix", "release": "verify", "integrate": "close"} {
+	for lane, step := range map[string]string{"develop": "build", "micro": "fix", "release": "verify", "integrate": "close", "epic": "sync"} {
 		t.Run(lane, func(t *testing.T) {
 			orig, err := LoadWorkflow(filepath.Join(shippedWorkflowsDir, lane))
 			if err != nil {

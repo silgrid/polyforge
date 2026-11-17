@@ -77,7 +77,11 @@ replays plain commits and a squash lands one).
 ``--landing-out`` (the merge skill registers it with ``pf step hub
 wrap-attrs integration``) is written atomically on exit 0 — the landing
 record: ``{state: landed, repos: [{repo, pr, head, light_verified_head,
-merge_commit, accepted}], merge_commits}``, or — the work item carrying
+merge_commit, accepted}], merge_commits}`` — and, on an EPIC's capsule
+(``runtime-state/children.json``, polyforge#117), a ``children`` key
+carrying the claim's snapshot verbatim: the ONE record the integrate
+pool takes, each child's landed_on_target evidence riding it with its
+source — or — the work item carrying
 a fixed target branch — ``{state: landed_on_target, target, …}``, per
 landed repo its name, PR
 and the forge's merge commit, the verified head as its light-verified
@@ -110,7 +114,7 @@ import traceback  # noqa: E402
 from dataclasses import dataclass, field  # noqa: E402
 from typing import Any, Dict, List, Mapping, Optional  # noqa: E402
 
-from pfstep import atomic, jsonout, runner  # noqa: E402
+from pfstep import atomic, children, jsonout, runner  # noqa: E402
 from pfstep import targetbranch  # noqa: E402
 from pfstep.invoke import Invocation, duration_flag, go_list  # noqa: E402
 from pfstep.gitmerge import gostr  # noqa: E402
@@ -191,6 +195,10 @@ class Details:
         # the work item's fixed target branch ("" = none): the base the
         # merge lands on, and the landing record's state names it
         self.target = ""
+        # the epic's children snapshot (None = the capsule carries none:
+        # not an epic's): the children the landing record attaches
+        # verbatim (polyforge#117)
+        self.children: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {"publish": self.publish, "verified": self.verified, "repos": [r.to_dict() for r in self.repos],
@@ -233,6 +241,11 @@ def landing_of(d: Details) -> Dict[str, Any]:
     out: Dict[str, Any] = {"state": "landed_on_target" if d.target else "landed", "repos": repos}
     if d.target:
         out["target"] = d.target
+    if d.children is not None:
+        # the epic's one record carries the children the claim snapshotted
+        # verbatim (each child's landed_on_target evidence with its
+        # source); the state stays landed, the pool's own
+        out["children"] = d.children["children"]
     if d.merge_commits:
         out["merge_commits"] = {k: [landed_of(c) for c in d.merge_commits[k]] for k in sorted(d.merge_commits)}
     return out
@@ -527,7 +540,11 @@ def run(inv: Invocation, a: argparse.Namespace, held: List[Details]) -> int:
     details = Details(a.publish, a.verified)
     try:
         details.target = targetbranch.read(capsule)
+        details.children = children.read(capsule)
     except targetbranch.TargetBranchError as err:
+        inv.summary = "not judged: %s" % err
+        return 2
+    except children.ChildrenError as err:
         inv.summary = "not judged: %s" % err
         return 2
     for i, p in enumerate(entries):

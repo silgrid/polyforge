@@ -103,12 +103,12 @@ func yamlAsJSON(t *testing.T, text string) any {
 	return out
 }
 
-// TestShippedLanesValidateAgainstTheSchema: each of the four shipped lanes
+// TestShippedLanesValidateAgainstTheSchema: each of the five shipped lanes
 // opens with the editor's pointer at the schema and validates against it.
 func TestShippedLanesValidateAgainstTheSchema(t *testing.T) {
 	s := laneSchema(t)
 	pointer := "# yaml-language-server: $schema=../" + SchemaDir + "/" + SchemaFile(ContractVersion) + "\n"
-	for _, lane := range []string{"develop", "micro", "integrate", "release"} {
+	for _, lane := range []string{"develop", "epic", "micro", "integrate", "release"} {
 		raw, err := os.ReadFile(filepath.Join(shippedRoot, lane, WorkflowFile))
 		if err != nil {
 			t.Fatal(err)

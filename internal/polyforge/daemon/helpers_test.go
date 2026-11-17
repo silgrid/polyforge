@@ -392,6 +392,18 @@ func (h *fakeHub) SessionEnd(wi string, req api.SessionEndRequest) error {
 	return nil
 }
 
+func (h *fakeHub) ListChildren(parentID string) ([]api.WorkItem, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var out []api.WorkItem
+	for _, wi := range h.items {
+		if wi != nil && wi.ParentID != nil && *wi.ParentID == parentID {
+			out = append(out, *wi)
+		}
+	}
+	return out, nil
+}
+
 func (h *fakeHub) GetWorkItem(idOrSlug string) (*api.WorkItem, error) {
 	h.mu.Lock()
 	block := h.blockProbe
