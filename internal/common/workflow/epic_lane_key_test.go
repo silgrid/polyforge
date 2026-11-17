@@ -51,6 +51,14 @@ func TestEpicLaneKey(t *testing.T) {
 	if err != nil || user == nil || !user.Epic {
 		t.Fatalf("a user lane declares epic too: %v, %v", user, err)
 	}
+	// epic does not weaken children_branch's own judgement: a defective
+	// template is refused at children_branch, exactly as without epic
+	defect := workflowtest.WriteLaneUnchecked(t, t.TempDir(), "demo",
+		"children_branch: \"epic/{n}\"\nepic: true\nsteps:\n  - { id: fix }\n")
+	_, errs = workflow.Load(defect)
+	if len(errs) != 1 || errs[0].Code != workflow.CodeInvalidValue || errs[0].Path != "children_branch" {
+		t.Fatalf("defects %v, want one %s at children_branch", errs, workflow.CodeInvalidValue)
+	}
 	// a non-boolean value is WFC-112 at the key
 	for _, v := range []string{`"true"`, "yes", "1", "[true]"} {
 		bad := workflowtest.WriteLaneUnchecked(t, t.TempDir(), "demo",
