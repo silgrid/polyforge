@@ -363,15 +363,19 @@ try {
   await desktopContext.tracing.start({ screenshots: true, snapshots: true });
   page = desktopPage;
 
-  // S272-01 — criterion: an open claude session shows model, effort and compact in
-  // pi's own slots/components/DOM.
+  // S272-01 — criterion: an open, idle claude session shows model, effort and
+  // compact in pi's own slots/components/DOM.
   await scenario("S272-01", "An open claude session shows the model, effort and compact controls in pi's slots", async () => {
     const id = await createClaudeSession({ message: "E2E 272 controls", model: "claude-opus-5-5" });
     await openSession(id);
+    // polyforge#71 (AC5): the compact control hides while a turn runs.
+    await waitFor(async () => (await getJson(`/api/agent/${encodeURIComponent(id)}`)).state?.isStreaming === false, 60_000, "the creation prompt's turn never ended", 400);
     const bar = bottomBar();
     assert.ok(await bar.locator(".model-selector").count() > 0, "the claude composer has no model selector in pi's slot");
     assert.ok(await effortTrigger().count() > 0, "the claude composer has no reasoning-strength control (pi's reasoning button)");
-    assert.ok(await compactTrigger().count() > 0, "the claude composer has no compact control");
+    // The page's own view of the turn lands over SSE after the server's, so the
+    // DOM control is polled into place — never read once off the API wait (r1#2).
+    await waitFor(async () => (await compactTrigger().count()) > 0, NAV_MS, "the claude composer has no compact control");
     const menu = await openModelMenu();
     assert.deepEqual([...menu.texts].sort(), [...CLAUDE_MODELS, "claude-opus-5-5"].sort(), `the claude model selector is not claude's aliases plus the session's own model: ${menu.texts.join(", ")}`);
     await closeMenu();
