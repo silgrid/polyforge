@@ -396,7 +396,6 @@ if [ -n "$DEV" ]; then
   # daemon as they were. The channel writes nothing to GitHub: it reads
   # the green tag and clones, and that is all.
   [ -x "$BIN" ] || prep_fail "--dev upgrades an installed pf; a machine without one takes the formal channel first (run this installer without --dev)"
-  [ -z "$WITH_PIWEB" ] || prep_fail "--dev --with-pi-web is not wired yet; take pf alone for now"
   TMP=$(mktemp -d)
   SRC="$TMP/src"
   echo "   dev channel: the latest green tag of $REPO, built on this machine"
@@ -479,6 +478,28 @@ if [ -n "$DEV" ]; then
     [ "$GOTV" = "$DEVVER" ] || prep_fail "the built pf reports $GOTV, not the dev version $DEVVER"
     echo "   pf $DEVVER built from $GNAME ($GCOMMIT), staged"
   fi
+  # --dev --with-pi-web: the SAME shared packaging script the formal
+  # release runs, on the green commit's tree, locally — the package is
+  # built and packed here (version <dev version>), never downloaded and
+  # never published. Everything else rides the ordinary --with-pi-web
+  # flow (the served == installed probe, npm install -g, the install
+  # check) over the packed tarball.
+  if [ -n "$WITH_PIWEB" ]; then
+    PIWEB_DIR=$(mktemp -d)
+    ( cd "$SRC" && sh tools/package-pi-web.sh "$GCOMMIT" "$DEVVER" "$PIWEB_DIR" ) \
+      || prep_fail "building or packing the pi-web package of $GNAME failed; nothing on this machine was changed"
+    PIWEB_TGZ="silgrid-pi-web-$DEVVER.tgz"
+    # the served == installed definition and the package version come
+    # from the packed tarball, as the formal channel's download does
+    tar -xzf "$PIWEB_DIR/$PIWEB_TGZ" -C "$PIWEB_DIR" package/bin/pi-web-served.js 2>/dev/null \
+      || prep_fail "$PIWEB_TGZ carries no package/bin/pi-web-served.js (--dev --with-pi-web)"
+    PIWEB_SERVED="$PIWEB_DIR/package/bin/pi-web-served.js"
+    tar -xzf "$PIWEB_DIR/$PIWEB_TGZ" -C "$PIWEB_DIR" package/package.json 2>/dev/null \
+      || prep_fail "$PIWEB_TGZ carries no package/package.json (--dev --with-pi-web)"
+    PIWEB_WANT=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["version"])' "$PIWEB_DIR/package/package.json" 2>/dev/null) || PIWEB_WANT=""
+    [ -n "$PIWEB_WANT" ] || prep_fail "$PIWEB_TGZ names no version (--dev --with-pi-web)"
+    echo "   Pi Web $PIWEB_TGZ built and packed locally (installed after pf)"
+  fi
   VER="$DEVVER"
 else
   version_transition_allowed "$RUNNING" "$VER" \
@@ -532,7 +553,7 @@ fi
 
 # --with-pi-web: the Pi Web tarball of the same release, verified now so a
 # missing asset or a bad checksum refuses before anything is installed.
-if [ -n "$WITH_PIWEB" ]; then
+if [ -n "$WITH_PIWEB" ] && [ -z "$DEV" ]; then
   PIWEB_TGZ="silgrid-pi-web-$VER.tgz"
   PIWEB_DIR=$(mktemp -d)
   gh release download "$VER" --repo "$REPO" --pattern "$PIWEB_TGZ" --dir "$PIWEB_DIR" 2>/dev/null \
@@ -993,7 +1014,7 @@ if [ -n "$WITH_PIWEB" ]; then
     piweb_check_failed
   fi
   node "$PIWEB_CHECKER" || piweb_check_failed
-  [ -z "$PIWEB_INSTALLED" ] || echo "   Pi Web installed from $PIWEB_TGZ (release $VER)"
+  [ -z "$PIWEB_INSTALLED" ] || echo "   Pi Web installed from $PIWEB_TGZ ($VER)"
   # Served == installed (the deploy's definition): a running pi-web serving
   # another package keeps rendering pages whose /_next/static/* files npm
   # just deleted. Never restarted here: a restart ends its agent turns.
