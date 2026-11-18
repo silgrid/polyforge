@@ -719,3 +719,29 @@ test("128 u1 a running background task takes a plain prompt; the refused edit an
   await session.shutdown();
   await waitFor(() => !alive(task.taskPid), 5_000, "the task child outlived its claude");
 });
+
+// 128 u3: a permission override applies at the child's next launch, so it ends the
+// idle one — refused while a background task runs (ending the child would end it),
+// naming it, changing nothing: neither mode nor clear writes the index (#128 AC5).
+test("128 u3 a permission override is refused while a background task runs, naming it; the child and the task live on", async () => {
+  const { session } = await sessionAfter(["bg: npm run dev"]);
+  const task = await waitFor(() => taskOf(session.pid, "npm run dev"), 5_000, "the stub started no task child");
+  const launches = records().filter((entry) => entry.kind === "launch").length;
+
+  for (const override of ["deny", null]) {
+    await assert.rejects(claude.setClaudePermissionOverride(session.sessionId, override), (error) => {
+      assert.ok(error instanceof claude.ClaudeSessionBusyError, `the ${override ?? "clear"} refusal is not a busy error the settings route answers 409`);
+      assert.match(error.message, /Changing the permission mode/, `the ${override ?? "clear"} refusal does not say what was refused: ${error.message}`);
+      assert.ok(error.message.includes("npm run dev"), `the ${override ?? "clear"} refusal does not name the task's command: ${error.message}`);
+      return true;
+    });
+  }
+  assert.equal(session.isAlive(), true, "the override ended the child");
+  assert.equal(alive(session.pid), true, "the claude process exited");
+  assert.equal(alive(task.taskPid), true, "the override killed the background task");
+  assert.equal(index.getClaudeSessionRecord(session.sessionId).permissionMode, undefined, "the index recorded the override");
+  assert.equal(records().filter((entry) => entry.kind === "launch").length, launches, "a child was started");
+  assert.ok(!records().some((entry) => entry.kind === "signal" && entry.pid === session.pid), "claude's process group was signalled");
+  await session.shutdown();
+  await waitFor(() => !alive(task.taskPid), 5_000, "the task child outlived its claude");
+});
