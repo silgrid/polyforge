@@ -14,8 +14,10 @@ package test
 // and a review FAIL resumes build's previous session. Whitespace-flattened, so a
 // rewrap keeps them pinned; build.md stays within its line budget — 120
 // lines, raised to 145 when the grill and e2e authoring moved into build
-// (A1), and to 160 when the analysis and a big plan's units
-// moved to sub-agents.
+// (A1), to 160 when the analysis and a big plan's units
+// moved to sub-agents, and to 170 when the close's two facts lines moved
+// into the step (the static checks review judges with, run by the builder
+// first; polyforge#131).
 
 import (
 	"os"
@@ -90,7 +92,7 @@ func TestW374DevelopDriverChecksContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n := strings.Count(string(raw), "\n"); n > 160 {
-		t.Errorf("workflows/develop/steps/build.md is %d lines, over its 160-line budget", n)
+	if n := strings.Count(string(raw), "\n"); n > 170 {
+		t.Errorf("workflows/develop/steps/build.md is %d lines, over its 170-line budget", n)
 	}
 }
