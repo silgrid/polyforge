@@ -74,7 +74,10 @@ test("a fresh composer passes the harness switch (with its model reset), the cla
 });
 
 test("the chat hands a claude session's subagent runs to every Agent row, listed or streamed", () => {
-  assert.match(chatWindow, /claudeAvailability, claudeSubagents,\n  \} = useAgentSession\(/);
+  // #128 u6 added the restart-refusal answers' destructure line just before the
+  // hook call's closing line, so the pin allows the lines between the claude
+  // availability fields and that closing line to change.
+  assert.match(chatWindow, /claudeAvailability, claudeSubagents,\n(?:[^\n]*\n)*  \} = useAgentSession\(/);
   assert.match(chatWindow, /<ClaudeSubagentContext\.Provider value=\{claudeSubagents\}>/);
   const provider = chatWindow.indexOf("<ClaudeSubagentContext.Provider");
   assert.ok(provider < chatWindow.indexOf("<StreamingReply store="), "the streaming reply is inside the provider");
