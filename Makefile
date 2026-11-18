@@ -123,3 +123,22 @@ release: webui-build
 	GOWORK=off GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$(GO_LDFLAGS)" -o artifacts/release-$(VERSION)/pf-darwin-arm64 ./cmd/pf
 	GOWORK=off GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags "$(GO_LDFLAGS)" -o artifacts/release-$(VERSION)/pf-darwin-amd64 ./cmd/pf
 	@echo "release: injected internal/version.Version=$(VERSION) (ldflags -X) into the 3 pf binaries: linux-amd64 + darwin-arm64 + darwin-amd64"
+
+# dev-build (polyforge#136): the local development channel's build entry,
+# the one tools/install.sh --dev calls so the installer never rewrites
+# build commands. Everything is explicit and never read from git: VERSION
+# is the channel's dev version (vX.Y.Z-dev.N) and COMMIT the green-tag
+# commit it installs; an empty or non-release VERSION refuses (a dev
+# string must be release-shaped so install.sh's SemVer downgrade guard
+# compares it, and +build metadata would silently disable that guard).
+# Like make release it stamps internal/version at link time, and like
+# every binary-producing target it builds the locked webui frontend first.
+dev-build: webui-build
+	@if [ -z "$(VERSION)" ] || [ -z "$(COMMIT)" ] || [ -z "$(OUT)" ]; then \
+		echo "make dev-build: VERSION=<vX.Y.Z-dev.N> COMMIT=<source commit> OUT=<binary path> are all required"; exit 1; \
+	fi
+	@if ! printf '%s' "$(VERSION)" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$$'; then \
+		echo "make dev-build: VERSION must be a release-shaped vX.Y.Z[-<pre>] string without +build metadata, got '$(VERSION)'"; exit 1; \
+	fi
+	GOWORK=off go build -trimpath -ldflags "$(GO_LDFLAGS) -X github.com/silgrid/polyforge/internal/version.Commit=$(COMMIT)" -o "$(OUT)" ./cmd/pf
+	@echo "dev-build: stamped internal/version.Version=$(VERSION) and internal/version.Commit=$(COMMIT) into $(OUT)"
