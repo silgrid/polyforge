@@ -356,7 +356,7 @@ func TestGCDeclaredDirProbe(t *testing.T) {
 	t.Run("tracked content under the declared directory keeps it", func(t *testing.T) {
 		clone := newGCProbeRepo(t, "build/\n")
 		gcWrite(t, filepath.Join(clone, "build", "dist", "tracked.bin"), 10)
-		gcGit(t, clone, "add", "build/dist/tracked.bin") // staged: the index carries it
+		gcGit(t, clone, "add", "-f", "build/dist/tracked.bin") // force-added past the ignore: staged, the index carries it
 		tgt, err := Probe(clone, "build/dist")
 		if err != nil {
 			t.Fatalf("Probe: %v", err)
@@ -380,6 +380,9 @@ func TestGCDeclaredDirProbe(t *testing.T) {
 
 	t.Run("a nested repository keeps it", func(t *testing.T) {
 		clone := newGCProbeRepo(t, "build/\n")
+		if err := os.MkdirAll(filepath.Join(clone, "build", "dist", "inner"), 0o755); err != nil {
+			t.Fatal(err)
+		}
 		gcGit(t, filepath.Join(clone, "build", "dist", "inner"), "-c", "init.defaultBranch=main", "init", "-q")
 		tgt, err := Probe(clone, "build/dist")
 		if err != nil {
