@@ -331,6 +331,26 @@ own versions the plain range stands, unchanged.
  +-----------------------------------------------------------+
 ```
 
+## The development channel (`--dev`)
+
+`tools/install.sh --dev` is the channel beside the formal release
+(polyforge#136): a work machine takes the latest green tag (see "Green
+tags" below), builds pf locally from that commit and installs
+`v<next patch of the latest release tag>-dev.<N>` — `N` the
+first-parent commit count release-tag..green-commit, stable because main
+only fast-forwards — and nothing is published: no release, no asset, no
+push. The two AIHubs do not follow it: a green commit whose
+release-tag..green diff touches any path of `tools/aihub-paths.conf` is
+refused in prepare, needing a formal release instead. The channel's
+residual risk is the green tag's own ("The residual risk" below): the
+tag proves its record matches the commit's gate, not who wrote it. The
+development version is a SemVer pre-release of the next formal release,
+so a formal release over a dev install is an ordinary upgrade while
+the formal channel stays refused until it ships;
+`tools/package-pi-web.sh` is the one packaging path both channels
+share, and `docs/install.md` carries the operator's page — the
+prerequisites, the boundaries and the way back.
+
 ## The test gate
 
 One gate definition serves both the integrate workflow's full verification
