@@ -91,8 +91,8 @@ func TestW136DoctorBuildRow(t *testing.T) {
 		t.Fatalf("the pf build row's detail %q must name the version and the source commit of a development build", c.Detail)
 	}
 	version.Commit = ""
-	if c := buildCheck(); strings.Contains(c.Detail, "commit") || !strings.Contains(c.Detail, version.Version) {
-		t.Fatalf("a release build's pf build row %q names the version alone (the tag is the commit)", c.Detail)
+	if c := buildCheck(); c.Detail != version.Version {
+		t.Fatalf("a release build's pf build row detail %q must be the version alone (the tag names the commit; nothing else may ride the detail)", c.Detail)
 	}
 
 	// the row sits in the ladder, Host-level, needing nothing
@@ -135,10 +135,12 @@ func TestW136VersionSourceDocs(t *testing.T) {
 			t.Fatalf("skills/polyforge/verbs/version.md lacks %q: the development channel's source commit rides the machine line, the page must say so", want)
 		}
 	}
-	// the command reference: the same field on the version verb's line
+	// the command reference: the same field on the version verb's line —
+	// the new sentence itself, absent on the pre-#136 tree (the word
+	// "commit" alone appears 36 times there and would pin nothing)
 	cm := read(filepath.Join("docs", "reference", "commands.md"))
-	if !strings.Contains(cm, "commit") {
-		t.Fatal("docs/reference/commands.md does not name the version line's commit field (pf subcommands change → the reference changes, same commit)")
+	if !strings.Contains(cm, "adds `commit`, the source commit the build was cut from") {
+		t.Fatal("docs/reference/commands.md does not carry the machine line's commit-field sentence (pf subcommands change → the reference changes, same commit)")
 	}
 	// the doctor verb's check enumeration: the new row, its version and commit
 	dm := read(filepath.Join("skills", "polyforge", "verbs", "doctor.md"))
