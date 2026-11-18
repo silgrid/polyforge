@@ -26,8 +26,11 @@ package test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -371,7 +374,146 @@ func w111lrAllowedList(m map[string]bool) string {
 // cap kind, how many baseline-carried items the selection carries: the
 // numeric caps judge only those.
 func w111lrJudge(c w111lrCase, r w111scReport, baseline string, atBaseline func(name string) bool) (violations, passed []string, counts map[string]int) {
-	return nil, nil, nil
+	measured := map[string][]string{
+		"go_run_pairs":  nil,
+		"go_pkg_dirs":   nil,
+		"e2e_run_names": nil,
+		"conf_cmds":     nil,
+		"npm_suites":    nil,
+	}
+	runNames := map[string][]string{} // one entry per run command: its package's selected names
+	counts = map[string]int{
+		"conf":   0,
+		"suites": 0,
+	}
+	for _, c2 := range r.scoped() {
+		switch {
+		case strings.HasPrefix(c2.Cmd, "E2E_RUN"):
+			measured["e2e_run_names"] = append(measured["e2e_run_names"], strings.Split(strings.TrimSuffix(strings.TrimPrefix(c2.Cmd, "E2E_RUN='^("), ")$' sh test/e2e-parallel.sh"), "|")...)
+		case strings.HasPrefix(c2.Cmd, "npm run test:e2e:all"):
+			measured["npm_suites"] = append(measured["npm_suites"], strings.Split(strings.SplitN(c2.Cmd, "-- ", 2)[1], " ")...)
+		case c2.Source == "conf":
+			measured["conf_cmds"] = append(measured["conf_cmds"], c2.Cmd)
+		case strings.Contains(c2.Cmd, "go test") && strings.Contains(c2.Cmd, " -run "):
+			for _, pair := range w111lrRunPairs(c2.Cmd) {
+				measured["go_run_pairs"] = append(measured["go_run_pairs"], pair)
+				i := strings.LastIndex(pair, " ")
+				runNames[pair[:i]] = append(runNames[pair[:i]], pair[i+1:])
+			}
+		case strings.Contains(c2.Cmd, "go test"):
+			measured["go_pkg_dirs"] = append(measured["go_pkg_dirs"], w111lrPkgDirs(c2.Cmd)...)
+			counts["pkg"]++ // the cap counts package commands, as #111 measured them
+		}
+	}
+	allowed := map[string]map[string]bool{
+		"go_run_pairs": {}, "go_pkg_dirs": {}, "e2e_run_names": {}, "conf_cmds": {}, "npm_suites": {},
+	}
+	recorded := func(kind string, items []string, split func(string) []string) {
+		for _, v := range items {
+			for _, item := range split(v) {
+				allowed[kind][item] = true
+			}
+		}
+	}
+	for kind, items := range c.Old {
+		switch kind {
+		case "go_run_cmds":
+			recorded("go_run_pairs", items, w111lrRunPairs)
+		case "go_pkg_cmds":
+			recorded("go_pkg_dirs", items, w111lrPkgDirs)
+		default:
+			recorded(kind, items, func(s string) []string { return []string{s} })
+		}
+	}
+	for kind, items := range c.AllowedNew {
+		names := make([]string, len(items))
+		for i, it := range items {
+			names[i] = it.Name
+		}
+		switch kind {
+		case "go_run_cmds":
+			recorded("go_run_pairs", names, w111lrRunPairs)
+		case "go_pkg_cmds":
+			recorded("go_pkg_dirs", names, w111lrPkgDirs)
+		default:
+			recorded(kind, names, func(s string) []string { return []string{s} })
+		}
+	}
+	for kind, items := range measured {
+		for _, v := range items {
+			if allowed[kind][v] {
+				continue
+			}
+			// Only a Test function added after the baseline commit passes;
+			// a package directory, a conf command and a suite are not Test
+			// functions and stay judged (a growth there reds as before).
+			var name string
+			switch kind {
+			case "go_run_pairs":
+				name = v[strings.LastIndex(v, " ")+1:]
+			case "e2e_run_names":
+				name = v
+			}
+			if name != "" && !atBaseline(name) {
+				passed = append(passed, fmt.Sprintf("%s %q — a Test function added after the corpus's baseline commit %s", kind, v, baseline))
+				continue
+			}
+			violations = append(violations, fmt.Sprintf("%s: the selection gained %s %q, outside the old set and the allowed additions:\nselected:\n%s\nallowed:\n%s",
+				c.Id, kind, v, strings.Join(measured[kind], "\n"), w111lrAllowedList(allowed[kind])))
+		}
+	}
+	sort.Strings(violations)
+	sort.Strings(passed)
+	for _, n := range measured["e2e_run_names"] {
+		if atBaseline(n) {
+			counts["e2e_names"]++
+		}
+	}
+	for _, names := range runNames {
+		for _, n := range names {
+			if atBaseline(n) {
+				counts["run"]++
+				break
+			}
+		}
+	}
+	return violations, passed, counts
+}
+
+// w111lrRunRe parses the engine's scoped run command: the -run name list
+// and the package it selects.
+var w111lrRunRe = regexp.MustCompile(`-run '\^\((.*)\)\$' (\.[^']*)$`)
+
+// w111lrRunPairs splits one run command into its items, one "pkg name" per
+// selected test. Both sides of the comparison parse through this one
+// function, so a shape the engine changes stays symmetric; a command the
+// expression does not match stays one whole item.
+func w111lrRunPairs(cmd string) []string {
+	m := w111lrRunRe.FindStringSubmatch(cmd)
+	if m == nil {
+		return []string{cmd}
+	}
+	out := make([]string, 0, len(strings.Split(m[1], "|")))
+	for _, n := range strings.Split(m[1], "|") {
+		out = append(out, m[2]+" "+n)
+	}
+	return out
+}
+
+// w111lrPkgDirs splits one package command into its directory items — the
+// package closure is judged per directory, so a package that joins or leaves
+// the closure is one item, not a whole new command.
+func w111lrPkgDirs(cmd string) []string {
+	var out []string
+	for _, f := range strings.Fields(cmd) {
+		if strings.HasPrefix(f, ".") {
+			out = append(out, f)
+		}
+	}
+	if len(out) == 0 {
+		return []string{cmd}
+	}
+	return out
 }
 
 // w111lrBaselineErr answers why the corpus's baseline commit is unusable
@@ -379,6 +521,14 @@ func w111lrJudge(c w111lrCase, r w111scReport, baseline string, atBaseline func(
 // that commit, so a clone without it must fail loudly naming it — never
 // silently pass everything.
 func w111lrBaselineErr(root, commit string) error {
+	if commit == "" {
+		return fmt.Errorf("the corpus's cases.json must record its baseline commit")
+	}
+	c := exec.Command("git", "cat-file", "-e", commit+"^{commit}")
+	c.Dir = root
+	if out, err := c.CombinedOutput(); err != nil {
+		return fmt.Errorf("the corpus's baseline commit %s is not in this clone — the replay corpus judges against it, fetch the full history (git cat-file says: %v)\n%s", commit, err, out)
+	}
 	return nil
 }
 
@@ -387,6 +537,16 @@ func w111lrBaselineErr(root, commit string) error {
 // question. git grep answers from the object store, so the worktree's state
 // does not matter.
 func w111lrNameAtBaseline(root, baseline, name string) (bool, error) {
+	c := exec.Command("git", "grep", "-F", "-e", "func "+name+"(", baseline, "--", "*_test.go")
+	c.Dir = root
+	_, err := c.Output()
+	if err == nil {
+		return true, nil
+	}
+	ee, ok := err.(*exec.ExitError)
+	if !ok || ee.ExitCode() != 1 { // 1 is git grep's plain "no match"
+		return false, err
+	}
 	return false, nil
 }
 
