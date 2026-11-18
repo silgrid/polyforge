@@ -415,6 +415,14 @@ if [ -n "$DEV" ]; then
     || prep_fail "the latest green tag $GNAME points at a commit that is not an ancestor of origin/main: the dev channel installs only main's verified line"
   git -C "$SRC" merge-base --is-ancestor "$TAGCOMMIT" "$GCOMMIT" \
     || prep_fail "the latest green tag $GNAME points before the latest release $VER (not a descendant of the release tag's commit); use the formal channel"
+  # the channel builds THE GREEN COMMIT, never main's HEAD: the clone
+  # starts at the default branch's tip, which normally sits AHEAD of the
+  # green tag, so switch the working tree to the green commit before
+  # anything reads it (the AIHub list, the .nvmrc, make dev-build, the
+  # packaging script) — an unverified post-green commit must never reach
+  # the build, whatever it changes
+  git -C "$SRC" checkout -q --detach "$GCOMMIT" \
+    || prep_fail "cannot check out the green tag $GNAME's commit $GCOMMIT in the clone"
   N=$(git -C "$SRC" rev-list --count --first-parent "$TAGCOMMIT..$GCOMMIT") \
     || prep_fail "cannot count the first-parent commits $VER..$GNAME in the clone"
   case "$VER" in
