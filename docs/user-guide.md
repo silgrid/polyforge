@@ -383,8 +383,8 @@ The human moves, when a run is not simply going:
 - **A suspicious machine**: `pf doctor` is the diagnostic first stop: config,
   mapping, connectivity, daemon supervision, the harness integration, retired
   chat-subscription state and diagram and concise-output guidance. It reports; it writes only on
-  an explicit flag (`--prune-scratch`, `--prune-capsules`, `--prune-chat-state`,
-  `--fix-harness-prompts`, `--fix-install-layout`).
+  an explicit flag (`--prune-scratch`, `--prune-capsules`, `--prune-rebuildables`,
+  `--prune-chat-state`, `--fix-harness-prompts`, `--fix-install-layout`).
 
 [pause](../skills/polyforge/verbs/pause.md),
 [resume](../skills/polyforge/verbs/resume.md),
