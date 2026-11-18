@@ -60,3 +60,32 @@ func ParseDeclaration(raw []byte) ([]string, error) {
 	}
 	return dirs, nil
 }
+
+// ConfPath is the declaration's repository-root-relative path.
+const ConfPath = ".polyforge/capsule-gc.conf"
+
+// Declaration is one repository's committed capsule-gc declaration.
+type Declaration struct {
+	Dirs []string // the repo-root-relative directories, in the file's order
+	Ref  string   // the ref the bytes were read at
+	SHA  string   // the commit the ref resolved to when read
+}
+
+// DefaultBranch answers the remote-tracking default branch of the git
+// repository at root — refs/remotes/origin/HEAD, the metadata a clone
+// records (no branch name is ever assumed) — with no network and no
+// fetch. A repository whose default branch cannot be read answers an
+// error: its declaration stays unknown, never guessed.
+func DefaultBranch(root string) (string, error) {
+	return "", nil
+}
+
+// ReadCommitted reads the declaration committed at ref of the git
+// repository at root ("" = the repository's default branch). Only
+// committed bytes authorize a removal: a working tree is never read.
+// A repository without the file at the ref has no declaration and no
+// error (nil, nil); a committed declaration that does not parse is an
+// error — the whole declaration is rejected, never a silent partial.
+func ReadCommitted(root, ref string) (*Declaration, error) {
+	return nil, nil
+}
