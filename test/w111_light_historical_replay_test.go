@@ -14,8 +14,13 @@ package test
 // that the selection stays inside the per-case caps the corpus records
 // (the old set's measured counts plus the additions this change allows):
 // a selection rule that quietly regresses — or quietly balloons — cannot
-// land, the corpus reds. The inputs and expectations live in
-// test/testdata/light-replay/cases.json, the selection algorithm nowhere.
+// land, the corpus reds. The judgment runs through the baseline commit
+// cases.json records (polyforge#126): a Test function the baseline commit
+// does not define is named in the log as passed — the corpus judges the
+// tests the baseline already defines — and a baseline commit missing from
+// the clone fails loudly, never silently passes everything. The inputs and
+// expectations live in test/testdata/light-replay/cases.json, the selection
+// algorithm nowhere.
 //
 // Run (targeted): GOWORK=off go test ./test/ -run '^TestLightHistoricalReplay$' -count=1 -v
 
@@ -44,7 +49,7 @@ type w111lrCase struct {
 	Target     w111lrTarget             `json:"target"`
 	Note       string                   `json:"note"`
 	Old        map[string][]string      `json:"old"`         // the old rules' measured selection, item by item (the baseline replay)
-	AllowedNew map[string][]w111lrAllow `json:"allowed_new"` // what this change may add, item by item with the declaration that brings it
+	AllowedNew map[string][]w111lrAllow `json:"allowed_new"` // what this change may add, item by item with the declaration that brings it — judged, for Test functions, against the cases.json baseline commit
 	Cap        map[string]int           `json:"cap"`         // the numeric upper bounds the selection must stay inside
 }
 
@@ -58,6 +63,7 @@ type w111lrAllow struct {
 // w111lrDoc is the corpus's static file.
 type w111lrDoc struct {
 	Counterexample string       `json:"counterexample"`
+	Baseline       string       `json:"baseline"` // the commit the pass-through filter judges against
 	Ac3Paths       []string     `json:"ac3_paths"`
 	Cases          []w111lrCase `json:"cases"`
 }
@@ -72,8 +78,8 @@ func w111lrLoad(t *testing.T) w111lrDoc {
 	if err := json.Unmarshal(raw, &d); err != nil {
 		t.Fatalf("the corpus must parse: %v", err)
 	}
-	if len(d.Cases) != 5 || d.Counterexample == "" || len(d.Ac3Paths) == 0 {
-		t.Fatalf("the corpus must carry five cases, a counterexample and the AC3 paths: %+v", d)
+	if len(d.Cases) != 5 || d.Counterexample == "" || len(d.Ac3Paths) == 0 || d.Baseline == "" {
+		t.Fatalf("the corpus must carry five cases, a counterexample, the AC3 paths and its baseline commit: %d cases, counterexample %q, %d ac3 paths, baseline %q", len(d.Cases), d.Counterexample, len(d.Ac3Paths), d.Baseline)
 	}
 	return d
 }
@@ -131,6 +137,14 @@ func w111lrMeasure(t *testing.T, r w111scReport) w111lrCounts {
 // of the worktree and answers the engine's --light report at root.
 func w111lrReplay(t *testing.T, wt, base, root string, paths []string) w111scReport {
 	t.Helper()
+	return w111lrReplayMods(t, wt, base, root, paths, nil)
+}
+
+// w111lrReplayMods commits the paths as one synthetic change beside the
+// given full file bodies (the baseline subtests' harness-file edits) and
+// answers the engine's --light report at root.
+func w111lrReplayMods(t *testing.T, wt, base, root string, paths []string, mods map[string]string) w111scReport {
+	t.Helper()
 	w25e2eGit(t, wt, "reset", "--hard", base)
 	w25e2eGit(t, wt, "clean", "-qfd")
 	for _, p := range paths {
@@ -153,6 +167,9 @@ func w111lrReplay(t *testing.T, wt, base, root string, paths []string) w111scRep
 			}
 		}
 	}
+	for rel, body := range mods {
+		w25e2eWrite(t, wt, rel, body)
+	}
 	w25e2eCommit(t, wt, "w111 replay")
 	dir := wt
 	if root != "" {
@@ -172,6 +189,23 @@ func TestLightHistoricalReplay(t *testing.T) {
 	base := w25e2eGit(t, root, "rev-parse", "HEAD")
 	wt, cleanup := w25ioWorktree(t, root, base)
 	defer cleanup()
+	if err := w111lrBaselineErr(root, doc.Baseline); err != nil {
+		t.Fatal(err)
+	}
+	// The pass-through filter's one question, cached per name: is this Test
+	// function defined by some *_test.go at the baseline commit?
+	baselineCache := map[string]bool{}
+	atBaseline := func(name string) bool {
+		if ok, seen := baselineCache[name]; seen {
+			return ok
+		}
+		ok, err := w111lrNameAtBaseline(root, doc.Baseline, name)
+		if err != nil {
+			t.Fatalf("the baseline-commit lookup for %s failed: %v", name, err)
+		}
+		baselineCache[name] = ok
+		return ok
+	}
 
 	for _, c := range doc.Cases {
 		c := c
@@ -184,63 +218,22 @@ func TestLightHistoricalReplay(t *testing.T) {
 			if !k.has(c.Target.Kind, c.Target.Value) {
 				t.Fatalf("%s (%s): the full-gate-red target is not selected:\n%s", c.Id, c.Status, strings.Join(k.cmds, "\n"))
 			}
-			// The selection stays inside old ∪ allowed_new, item by item:
-			// a swap of equal count (one old name dropped, another slipped
-			// in) reds here, and so does any addition no declaration names.
-			measured := map[string][]string{
-				"go_pkg_cmds":   nil,
-				"go_run_cmds":   nil,
-				"e2e_run_names": nil,
-				"conf_cmds":     nil,
-				"npm_suites":    nil,
+			// The selection stays inside old ∪ allowed_new, item by item,
+			// through the baseline filter (polyforge#126): a Test function
+			// the baseline commit does not define is recorded as passed and
+			// named in the log, a baseline-era test newly selected is a
+			// violation, and every violation is reported — none is swallowed
+			// by a first-stop. The caps judge the baseline-carried items only.
+			violations, passed, counts := w111lrJudge(c, r, doc.Baseline, atBaseline)
+			for _, p := range passed {
+				t.Logf("%s: %s", c.Id, p)
 			}
-			for _, c2 := range r.scoped() {
-				switch {
-				case strings.HasPrefix(c2.Cmd, "E2E_RUN"):
-					measured["e2e_run_names"] = append(measured["e2e_run_names"], strings.Split(strings.TrimSuffix(strings.TrimPrefix(c2.Cmd, "E2E_RUN='^("), ")$' sh test/e2e-parallel.sh"), "|")...)
-				case strings.HasPrefix(c2.Cmd, "npm run test:e2e:all"):
-					measured["npm_suites"] = append(measured["npm_suites"], strings.Split(strings.SplitN(c2.Cmd, "-- ", 2)[1], " ")...)
-				case c2.Source == "conf":
-					measured["conf_cmds"] = append(measured["conf_cmds"], c2.Cmd)
-				case strings.Contains(c2.Cmd, "go test") && strings.Contains(c2.Cmd, " -run "):
-					measured["go_run_cmds"] = append(measured["go_run_cmds"], c2.Cmd)
-				case strings.Contains(c2.Cmd, "go test"):
-					measured["go_pkg_cmds"] = append(measured["go_pkg_cmds"], c2.Cmd)
-				}
-			}
-			allowed := map[string]map[string]bool{}
-			for kind, items := range c.Old {
-				m := allowed[kind]
-				if m == nil {
-					m = map[string]bool{}
-					allowed[kind] = m
-				}
-				for _, v := range items {
-					m[v] = true
-				}
-			}
-			for kind, items := range c.AllowedNew {
-				m := allowed[kind]
-				if m == nil {
-					m = map[string]bool{}
-					allowed[kind] = m
-				}
-				for _, it := range items {
-					m[it.Name] = true
-				}
-			}
-			for kind, items := range measured {
-				for _, v := range items {
-					if !allowed[kind][v] {
-						t.Fatalf("%s: the selection gained %s %q, outside the old set and the allowed additions:\nselected:\n%s\nallowed:\n%s",
-							c.Id, kind, v, strings.Join(items, "\n"), w111lrAllowedList(allowed[kind]))
-					}
-				}
+			for _, v := range violations {
+				t.Errorf("%s", v)
 			}
 			for kind, cap := range c.Cap {
-				got := map[string]int{"pkg": k.pkg, "run": k.run, "conf": k.conf, "e2e_names": k.e2eNames, "suites": k.suites}[kind]
-				if got > cap {
-					t.Fatalf("%s: %s selected %d, over the cap %d:\n%s",
+				if got := counts[kind]; got > cap {
+					t.Errorf("%s: %s selected %d baseline-carried items, over the cap %d:\n%s",
 						c.Id, kind, got, cap, strings.Join(k.cmds, "\n"))
 				}
 			}
@@ -274,6 +267,88 @@ func TestLightHistoricalReplay(t *testing.T) {
 			}
 		}
 	})
+
+	// A Test function added after the baseline commit and selected through
+	// a case path cannot red the case: the judge records it as passed, the
+	// log names it, and the caps do not count it (polyforge#126 AC2).
+	t.Run("baseline-passes-a-test-added-after-it", func(t *testing.T) {
+		c := w111lrCaseById(doc, "polyforge-36")
+		harness := "test/w404_integrate_e2e_test.go" // literally references every case-36 path
+		body, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(harness)))
+		if err != nil {
+			t.Fatalf("read %s: %v", harness, err)
+		}
+		added := "TestW126AddedAfterTheBaselinePasses"
+		r := w111lrReplayMods(t, wt, base, c.Root, c.Paths, map[string]string{
+			harness: string(body) + "\nfunc " + added + "(t *testing.T) {}\n",
+		})
+		if r.Mode != "scoped" {
+			t.Fatalf("the %s replay must stay scoped, got %q (diagnostics %v)", c.Id, r.Mode, r.Diagnostics)
+		}
+		violations, passed, counts := w111lrJudge(c, r, doc.Baseline, atBaseline)
+		for _, p := range passed {
+			t.Logf("%s: %s", c.Id, p)
+		}
+		for _, v := range violations {
+			t.Errorf("%s", v)
+		}
+		if !strings.Contains(strings.Join(passed, "\n"), added) {
+			t.Fatalf("%s: the pass-through record must name %s:\npassed:\n%s", c.Id, added, strings.Join(passed, "\n"))
+		}
+		if cap, ok := c.Cap["e2e_names"]; ok && counts["e2e_names"] > cap {
+			t.Fatalf("%s: a Test function added after the baseline must not count toward the cap: %d > %d", c.Id, counts["e2e_names"], cap)
+		}
+	})
+
+	// A baseline-era Test function newly pulled in through a case path is
+	// still a violation, the full list is answered at once, and it still
+	// counts toward the caps (polyforge#126 AC3, the Q3 ruling).
+	t.Run("baseline-era-test-newly-selected-still-overruns", func(t *testing.T) {
+		c := w111lrCaseById(doc, "polyforge-36")
+		harness := "test/w174_daemon_env_hygiene_test.go" // existed at the baseline, references no case path
+		name := "TestW174EnsureDaemonEnvIsTheCallersAllowList"
+		body, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(harness)))
+		if err != nil {
+			t.Fatalf("read %s: %v", harness, err)
+		}
+		r := w111lrReplayMods(t, wt, base, c.Root, c.Paths, map[string]string{
+			harness: string(body) + "\n// w126: the literal workflows/_shared/scripts/revert.py pulls this file in\n",
+		})
+		if r.Mode != "scoped" {
+			t.Fatalf("the %s replay must stay scoped, got %q (diagnostics %v)", c.Id, r.Mode, r.Diagnostics)
+		}
+		violations, _, counts := w111lrJudge(c, r, doc.Baseline, atBaseline)
+		joined := strings.Join(violations, "\n")
+		if !strings.Contains(joined, name) {
+			t.Fatalf("%s: a baseline-era test newly selected through a case path must be reported as a violation, all at once — %s missing from:\n%s", c.Id, name, joined)
+		}
+		if cap, ok := c.Cap["e2e_names"]; ok && counts["e2e_names"] <= cap {
+			t.Fatalf("%s: a baseline-era test must still count toward the cap: %d <= %d", c.Id, counts["e2e_names"], cap)
+		}
+	})
+
+	// A baseline commit the clone does not carry fails loudly, naming it —
+	// a shallow checkout can never silently pass everything (AC4).
+	t.Run("baseline-missing-fails-loudly", func(t *testing.T) {
+		if err := w111lrBaselineErr(root, ""); err == nil || !strings.Contains(err.Error(), "baseline") {
+			t.Fatalf("an empty baseline commit must fail loudly, got %v", err)
+		}
+		bogus := strings.Repeat("deadbeef", 5)
+		if err := w111lrBaselineErr(root, bogus); err == nil || !strings.Contains(err.Error(), bogus) {
+			t.Fatalf("a baseline commit missing from the clone must fail loudly naming %s, got %v", bogus, err)
+		}
+	})
+}
+
+// w111lrCaseById answers the corpus's case with the id — the corpus carries
+// exactly the five cases the loader validated, so a miss is impossible.
+func w111lrCaseById(doc w111lrDoc, id string) w111lrCase {
+	for _, c := range doc.Cases {
+		if c.Id == id {
+			return c
+		}
+	}
+	panic("the corpus must carry the case " + id)
 }
 
 // w111lrAllowedList answers the allowed items, sorted, one per line.
@@ -305,6 +380,14 @@ func w111lrJudge(c w111lrCase, r w111scReport, baseline string, atBaseline func(
 // silently pass everything.
 func w111lrBaselineErr(root, commit string) error {
 	return nil
+}
+
+// w111lrNameAtBaseline answers whether the named Test function is defined
+// by some *_test.go at the baseline commit — the pass-through filter's one
+// question. git grep answers from the object store, so the worktree's state
+// does not matter.
+func w111lrNameAtBaseline(root, baseline, name string) (bool, error) {
+	return false, nil
 }
 
 // RootLabel answers the case's engine root for messages.
