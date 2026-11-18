@@ -132,8 +132,9 @@ func TestShippedDevelopLanePromptsRender(t *testing.T) {
 			// contract 3's `memory: recall`
 			"## Prior experience (`pf step recall`)",
 			// contract 3's declared artifact units.json: what build hands off
-			// (polyforge#112: the close analysis check adds artifacts/facts/analysis.json)
-			"**Evidence**: `artifacts/plan.md`, `artifacts/build/units.json`, `artifacts/build/change-analysis.json`, `artifacts/build/units-check.json`, `artifacts/build/fast-checks/<repo>.json`, `artifacts/facts/analysis.json`, `artifacts/self-review.md`",
+			// (polyforge#112: the close analysis check adds artifacts/facts/analysis.json;
+			// polyforge#131: the close's facts checks add build.json and carries.json)
+			"**Evidence**: `artifacts/plan.md`, `artifacts/build/units.json`, `artifacts/build/change-analysis.json`, `artifacts/build/units-check.json`, `artifacts/build/fast-checks/<repo>.json`, `artifacts/facts/build.json`, `artifacts/facts/carries.json`, `artifacts/facts/analysis.json`, `artifacts/self-review.md`",
 			// contract 3's "never complete on the same tree … with the same
 			// units.json": since contract 4 build may hand an unchanged tree
 			// off only with a reason per point, and review judges it

@@ -91,6 +91,10 @@ record exactly what ran.
    the red run also prints, never one a filter that matched no test prints (`ok  ` alone is
    not a marker: `go test -run NoSuchTest` prints it), never one the empty string matches
    (`.*`, `^`, `a*`: verification fails such a unit without running it).
+   Both commit ids are the full output of `git -C repos/<repo> rev-parse <ref>`, taken right
+   after each commit is made and saved where the unit is recorded — never hand-copied from a
+   transcript or a log (`test_commit` and `impl_commit` each resolve their own commit the
+   moment it is made; a `pre_existing_red` unit reports only `impl_commit`, taken the same way).
    A unit whose reproduction test already exists and is red before the change — an
    integration fix ticket: the test came with the batch, only the fix is this change —
    is not rewritten: it declares `"pre_existing_red": true` and reports no

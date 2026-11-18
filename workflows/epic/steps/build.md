@@ -35,7 +35,10 @@ recorded in `artifacts/build/units.json` and checked as the skill says;
 the change analysis (`artifacts/build/change-analysis.json`) names the
 tests the full verification runs beside the engine's own selection —
 write it, its supplement cap the lane's `vars.supplement_limit`
-({{supplement_limit}}); the fast checks run over the whole increment; the
+({{supplement_limit}}); the fast checks run over the whole increment;
+the close's facts checks (`facts.py build` without the replay, and
+`carries` — the skill's own lines) run over it too, a red fixed before
+the hand-off; the
 self-review reads the full diff review judges — the WHOLE epic against
 the default branch
 (`git diff $(git merge-base HEAD origin/<the default branch>)..HEAD`) —
@@ -59,4 +62,5 @@ plan, never at the end.
 - **Evidence**: your skill's list — `artifacts/plan.md`,
   `artifacts/build/units.json`, `artifacts/build/change-analysis.json`,
   `artifacts/build/units-check.json`,
-  `artifacts/build/fast-checks/<repo>.json`, `artifacts/self-review.md`.
+  `artifacts/build/fast-checks/<repo>.json`, `artifacts/facts/build.json`,
+  `artifacts/facts/carries.json`, `artifacts/self-review.md`.
