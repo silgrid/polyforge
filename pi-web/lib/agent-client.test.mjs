@@ -103,7 +103,7 @@ test("only an explicit negative prompt acknowledgement is definitive", () => {
   // #128 r1#3: the structured restart refusal is as definite as the generic code —
   // the server answered `accepted: false` — and only with that acknowledgement.
   assert.equal(
-    isPromptRejectedError(new AgentCommandError("A claude background task is still running. Editing a message restarts claude", 500, "claude_restart_refused", false)),
+    isPromptRejectedError(new AgentCommandError("A claude background task is still running. Editing a message restarts claude", 500, "claude_restart_refused", true)),
     false,
     "a restart refusal without accepted: false stays ambiguous",
   );
