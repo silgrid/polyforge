@@ -430,6 +430,34 @@ if [ -n "$DEV" ]; then
   # the dev version: the next patch as a SemVer pre-release —
   # release-shaped (the downgrade guard compares it), never +metadata
   DEVVER="v$VMAJ.$VMIN.$((VPATCH + 1))-dev.$N"
+  # the AIHub-side preflight: the two AIHubs do not follow dev builds,
+  # so a green commit whose release-tag..green diff touches any path of
+  # the list needs a formal release. The list is the repository's own
+  # file, read from the green commit's tree (the same file the tests
+  # read — one list, never a second copy).
+  aihub_side_path() {
+    # <conf> <changed path>: an entry ending in /** covers the directory
+    # recursively; any other entry is one exact path
+    while IFS= read -r pat; do
+      pat=$(printf '%s\n' "$pat" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+      case "$pat" in ""|'#'*) continue ;; esac
+      [ "$pat" = "$2" ] && return 0
+      case "$pat" in
+        */'**') case "$2" in "${pat%/'**'}"/*) return 0 ;; esac ;;
+      esac
+    done < "$1"
+    return 1
+  }
+  AIHUB_HIT=$(git -C "$SRC" diff --name-only "$TAGCOMMIT" "$GCOMMIT" | (
+    while IFS= read -r ch; do
+      [ -n "$ch" ] || continue
+      if aihub_side_path "$SRC/tools/aihub-paths.conf" "$ch"; then
+        printf '%s\n' "$ch"
+        break
+      fi
+    done
+  ))
+  [ -z "$AIHUB_HIT" ] || prep_fail "the green tag $GNAME carries AIHub-side changes ($AIHUB_HIT, matched against tools/aihub-paths.conf): the two AIHubs do not follow dev builds — this set needs a formal release"
   # the node major the checkout pins
   NODEWANT=$(cat "$SRC/.nvmrc" 2>/dev/null) || prep_fail "the green commit's tree carries no .nvmrc to pin the node major"
   NODEWANT=$(printf '%s' "$NODEWANT" | tr -d '[:space:]')
