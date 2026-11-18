@@ -41,9 +41,14 @@ func TestW136DevChannelDocs(t *testing.T) {
 	// docs/install.md: the entry, the prerequisites, the boundaries, the
 	// formal-channel refusal and the way back
 	im := read(filepath.Join("docs", "install.md"))
+	// distinctive sentences, not bare tool names: the prerequisites carry
+	// their own wording (the node pin), the boundaries their precondition,
+	// and the way back its mechanism (review r1 N10)
 	for _, want := range []string{
 		"--dev", "green tag", "AIHub", "fast-forward",
-		"formal channel", "go", "make", "node",
+		"formal channel",
+		"`node` of the major the\ncheckout's `.nvmrc` pins",
+		"rebuild the formal release from its tag",
 	} {
 		if !strings.Contains(im, want) {
 			t.Fatalf("docs/install.md lacks %q: the ops page must document the development channel's entry, its build prerequisites, its boundaries and the way back to the formal channel", want)

@@ -172,9 +172,10 @@ tag's own commit — never an unverified HEAD. It needs an installed pf:
 a first install takes the formal channel. On the green commit it builds
 pf ON THIS MACHINE (`make -C <clone> dev-build`), so besides the
 installer's own prerequisites it checks and reports the build tools the
-same way — `go` (the major version `go.mod` pins), `make`, `npm`, and
-`node` of the major the checkout's `.nvmrc` pins — all missing ones in
-one refusal, nothing changed.
+same way — `go` (its presence is checked; the build itself needs the
+version `go.mod` pins), `make`, `npm`, and `node` of the major the
+checkout's `.nvmrc` pins — all missing ones in one refusal, nothing
+changed.
 
 The version is `v<next patch of the latest release tag>-dev.<N>`, with
 `N` the first-parent commit count release-tag..green-commit:

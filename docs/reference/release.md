@@ -335,7 +335,9 @@ own versions the plain range stands, unchanged.
 
 `tools/install.sh --dev` is the channel beside the formal release
 (polyforge#136): a work machine takes the latest green tag (see "Green
-tags" below), builds pf locally from that commit and installs
+tags" below), builds pf locally from that commit — through the Makefile's
+`make dev-build` entry, the one build path the installer calls — and
+installs
 `v<next patch of the latest release tag>-dev.<N>` — `N` the
 first-parent commit count release-tag..green-commit, stable because main
 only fast-forwards — and nothing is published: no release, no asset, no

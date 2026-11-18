@@ -455,15 +455,18 @@ if [ -n "$DEV" ]; then
     done < "$1"
     return 1
   }
-  AIHUB_HIT=$(git -C "$SRC" diff --name-only "$TAGCOMMIT" "$GCOMMIT" | (
-    while IFS= read -r ch; do
-      [ -n "$ch" ] || continue
-      if aihub_side_path "$SRC/tools/aihub-paths.conf" "$ch"; then
-        printf '%s\n' "$ch"
-        break
-      fi
-    done
-  ))
+  # the diff lands in a file first: a git failure must refuse (fail
+  # closed), not hand an empty list to the loop
+  git -C "$SRC" diff --name-only "$TAGCOMMIT" "$GCOMMIT" > "$TMP/aihub-changed" \
+    || prep_fail "cannot diff $VER..$GNAME in the clone for the AIHub-side preflight"
+  AIHUB_HIT=""
+  while IFS= read -r ch; do
+    [ -n "$ch" ] || continue
+    if aihub_side_path "$SRC/tools/aihub-paths.conf" "$ch"; then
+      AIHUB_HIT="$ch"
+      break
+    fi
+  done < "$TMP/aihub-changed"
   [ -z "$AIHUB_HIT" ] || prep_fail "the green tag $GNAME carries AIHub-side changes ($AIHUB_HIT, matched against tools/aihub-paths.conf): the two AIHubs do not follow dev builds — this set needs a formal release"
   # the node major the checkout pins
   NODEWANT=$(cat "$SRC/.nvmrc" 2>/dev/null) || prep_fail "the green commit's tree carries no .nvmrc to pin the node major"
@@ -515,48 +518,48 @@ else
 
   if [ "$RUNNING" = "$VER" ]; then
     echo "   pf $VER already current, skipping"
-else
-  TMP=$(mktemp -d)
-  gh release download "$VER" --repo "$REPO" --pattern "$PF_ASSET" --dir "$TMP" 2>/dev/null \
-    || prep_fail "$PF_ASSET not on release $VER"
-  gh release download "$VER" --repo "$REPO" --pattern "SHA256SUMS" --dir "$TMP" 2>/dev/null \
-    || prep_fail "SHA256SUMS not on release $VER"
-  EXP=$(grep "$PF_ASSET" "$TMP/SHA256SUMS" | awk '{print $1}')
-  # sha256sum on Linux; macOS ships shasum (same `<hex>  <file>` print)
-  if command -v sha256sum >/dev/null 2>&1; then
-    GOT=$(sha256sum "$TMP/$PF_ASSET" | awk '{print $1}')
   else
-    GOT=$(shasum -a 256 "$TMP/$PF_ASSET" 2>/dev/null | awk '{print $1}')
+    TMP=$(mktemp -d)
+    gh release download "$VER" --repo "$REPO" --pattern "$PF_ASSET" --dir "$TMP" 2>/dev/null \
+      || prep_fail "$PF_ASSET not on release $VER"
+    gh release download "$VER" --repo "$REPO" --pattern "SHA256SUMS" --dir "$TMP" 2>/dev/null \
+      || prep_fail "SHA256SUMS not on release $VER"
+    EXP=$(grep "$PF_ASSET" "$TMP/SHA256SUMS" | awk '{print $1}')
+    # sha256sum on Linux; macOS ships shasum (same `<hex>  <file>` print)
+    if command -v sha256sum >/dev/null 2>&1; then
+      GOT=$(sha256sum "$TMP/$PF_ASSET" | awk '{print $1}')
+  else
+      GOT=$(shasum -a 256 "$TMP/$PF_ASSET" 2>/dev/null | awk '{print $1}')
   fi
-  [ -n "$GOT" ] || prep_fail "no sha256sum and no shasum to verify $PF_ASSET with"
-  [ "$GOT" = "$EXP" ] || prep_fail "SHA mismatch on $PF_ASSET of $VER"
-  # Stage the new binary in $BIN's own directory, already executable: the
-  # swap in step 2 is then one rename(2) — `pf` is at every instant
-  # either the complete old or the complete new binary, never a partial
-  # or non-executable file (a harness hook or pf-chat may run it then).
-  mkdir -p "$(dirname "$BIN")" || prep_fail "cannot create $(dirname "$BIN")"
-  STAGED="$BIN.new.$$"
-  { cp "$TMP/$PF_ASSET" "$STAGED" && chmod 755 "$STAGED"; } \
-    || prep_fail "cannot stage the new binary at $STAGED (write access to $(dirname "$BIN")?)"
-  # darwin (polyforge#237): macOS may kill a quarantined or unsigned
-  # downloaded binary on first run (`Killed: 9`). Clear its extended
-  # attributes, ad-hoc sign it and prove it runs — all on the STAGED file,
-  # so a pf that cannot run is never swapped in. Linux never reaches this.
-  case "$PF_ASSET" in pf-darwin-*)
-    for t in xattr codesign; do
-      command -v "$t" >/dev/null 2>&1 \
-        || prep_fail "$t not on PATH; it is needed to clear quarantine and ad-hoc sign the staged pf (macOS: xcode-select --install)"
-    done
-    xattr -c "$STAGED" || prep_fail "xattr -c (clear quarantine) failed on the staged pf $STAGED"
-    SIGN=$(codesign -f -s - "$STAGED" 2>&1) \
-      || prep_fail "codesign -f -s - (ad-hoc sign) failed on the staged pf $STAGED: $SIGN"
-    "$STAGED" --version >/dev/null 2>&1 \
-      || prep_fail "run-proof failed: the staged pf $STAGED does not run (--version exit non-zero; killed by Gatekeeper?)"
-    ;;
-  esac
-  rm -rf "$TMP"; TMP=""
-  echo "   pf $VER downloaded, SHA-verified, staged"
-fi
+    [ -n "$GOT" ] || prep_fail "no sha256sum and no shasum to verify $PF_ASSET with"
+    [ "$GOT" = "$EXP" ] || prep_fail "SHA mismatch on $PF_ASSET of $VER"
+    # Stage the new binary in $BIN's own directory, already executable: the
+    # swap in step 2 is then one rename(2) — `pf` is at every instant
+    # either the complete old or the complete new binary, never a partial
+    # or non-executable file (a harness hook or pf-chat may run it then).
+    mkdir -p "$(dirname "$BIN")" || prep_fail "cannot create $(dirname "$BIN")"
+    STAGED="$BIN.new.$$"
+    { cp "$TMP/$PF_ASSET" "$STAGED" && chmod 755 "$STAGED"; } \
+      || prep_fail "cannot stage the new binary at $STAGED (write access to $(dirname "$BIN")?)"
+    # darwin (polyforge#237): macOS may kill a quarantined or unsigned
+    # downloaded binary on first run (`Killed: 9`). Clear its extended
+    # attributes, ad-hoc sign it and prove it runs — all on the STAGED file,
+    # so a pf that cannot run is never swapped in. Linux never reaches this.
+    case "$PF_ASSET" in pf-darwin-*)
+      for t in xattr codesign; do
+        command -v "$t" >/dev/null 2>&1 \
+          || prep_fail "$t not on PATH; it is needed to clear quarantine and ad-hoc sign the staged pf (macOS: xcode-select --install)"
+      done
+      xattr -c "$STAGED" || prep_fail "xattr -c (clear quarantine) failed on the staged pf $STAGED"
+      SIGN=$(codesign -f -s - "$STAGED" 2>&1) \
+        || prep_fail "codesign -f -s - (ad-hoc sign) failed on the staged pf $STAGED: $SIGN"
+      "$STAGED" --version >/dev/null 2>&1 \
+        || prep_fail "run-proof failed: the staged pf $STAGED does not run (--version exit non-zero; killed by Gatekeeper?)"
+      ;;
+    esac
+    rm -rf "$TMP"; TMP=""
+    echo "   pf $VER downloaded, SHA-verified, staged"
+  fi
 fi
 
 # --with-pi-web: the Pi Web tarball of the same release, verified now so a
