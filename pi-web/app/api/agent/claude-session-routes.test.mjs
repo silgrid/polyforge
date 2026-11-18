@@ -1,3 +1,4 @@
+// carries: app/api/agent/*, lib/claude-session.ts, lib/claude-shared.ts
 import "#test-env";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -672,5 +673,50 @@ test("a pending claude permission: lease, running and the session list report it
   } finally {
     fs.rmSync(permissionConfig, { force: true });
     await claude.getClaudeSession(record.id)?.shutdown();
+  }
+});
+
+// 128 u2: the page's「作为新消息发送」/「保留编辑」prompt keys on a code the generic
+// prompt_rejected does not carry — so the route answers a restart refusal (unfinished
+// background work) with the structured code, and keeps prompt_rejected for the rest.
+test("128 u2 the route answers a restart-refused edit with the structured code, a turn refusal with prompt_rejected", async () => {
+  // Unfinished background work: an unsettled background subagent refuses the edit
+  // with the structured code, changing nothing.
+  process.env.PI_TEST_CLAUDE_STUB_MODE = "subagent-early";
+  process.env.PI_TEST_CLAUDE_STUB_HOLD_MS = "60000";
+  const record = await newRecord();
+  try {
+    await send(record.id, { type: "prompt", message: "launch it" });
+    const session = claude.getClaudeSession(record.id);
+    await waitFor(() => session && !session.isRunning() && session.hasUnsettledSubagents(), 10_000, "the parent turn never ended with the subagent running");
+    const refused = await send(record.id, { type: "prompt", message: "edited", entryId: "any" });
+    assert.equal(refused.status, 500);
+    const body = await refused.json();
+    assert.match(body.error, /background subagent is still running/);
+    assert.equal(body.code, "claude_restart_refused", "the restart refusal carries no structured code");
+    assert.equal(body.accepted, false);
+    assert.equal(claude.getClaudeSession(record.id), session, "the edit replaced the child");
+  } finally {
+    delete process.env.PI_TEST_CLAUDE_STUB_HOLD_MS;
+    await claude.getClaudeSession(record.id)?.shutdown();
+  }
+
+  // A turn running is no restart refusal: the plain prompt_rejected code, as before.
+  process.env.PI_TEST_CLAUDE_STUB_MODE = "hang";
+  const busy = await newRecord();
+  try {
+    await send(busy.id, { type: "prompt", message: "long" });
+    const busySession = claude.getClaudeSession(busy.id);
+    assert.ok(busySession?.isRunning());
+    const turnRefused = await send(busy.id, { type: "prompt", message: "edited", entryId: "any" });
+    assert.equal(turnRefused.status, 500);
+    const turnBody = await turnRefused.json();
+    assert.match(turnBody.error, /turn is running/);
+    assert.equal(turnBody.code, "prompt_rejected", "a turn refusal is not a restart refusal");
+    assert.equal(turnBody.accepted, false);
+    await send(busy.id, { type: "abort" });
+    await waitFor(() => !busySession.isRunning(), 5_000, "abort did not end the turn");
+  } finally {
+    await claude.getClaudeSession(busy.id)?.shutdown();
   }
 });
