@@ -66,7 +66,7 @@ func TestW136DevBuildEntry(t *testing.T) {
 	if gr == nil {
 		t.Fatal("make dev-build carries no grep -Eq version guard")
 	}
-	pat := strings.ReplaceAll(gr[1], "$", "")
+	pat := strings.ReplaceAll(gr[1], "$$", "$")
 	guard := regexp.MustCompile(pat)
 	for _, ok := range []string{"v0.2.4-dev.1", "v0.2.4-dev.12", "v0.2.4", "v1.2.3-rc.4"} {
 		if !guard.MatchString(ok) {
