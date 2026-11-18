@@ -75,11 +75,13 @@ def one_line(path: str, kind: str, replayed: Optional[bool] = None) -> List[str]
     return got[0]
 
 
-def static_units(res: Dict[str, Any]) -> List[Dict[str, Any]]:
+def static_units(res: Dict[str, Any]) -> List[Optional[Dict[str, Any]]]:
     """The static commit facts of a build result: each unit as the
     close's own line (no replay) reports it — the replay record and its
-    errors are never part of the comparison."""
-    return [{k: v for k, v in u.items() if k not in ("replay", "replay_error")} for u in res["details"]["units"]]
+    errors are never part of the comparison. An unjudged result (exit 2)
+    carries no units on either side — that emptiness is the agreement."""
+    return [{k: v for k, v in u.items() if k not in ("replay", "replay_error")}
+            for u in res["details"].get("units", [])]
 
 
 class BuildCloseFactsTest(GitCase):
@@ -257,7 +259,7 @@ class BuildCloseFactsTest(GitCase):
                 c_code, c_res = self.run_line(cap, close_carries)
                 r_code, r_res = self.run_line(cap, review_carries)
                 self.assertEqual(c_code, r_code)
-                self.assertEqual(c_res["details"]["problems"], r_res["details"]["problems"],
+                self.assertEqual(c_res["details"].get("problems"), r_res["details"].get("problems"),
                                  "the carries conclusions must agree between the close and review")
         panel = "export const panel = 2;\n"
         for name, change in (
@@ -268,7 +270,7 @@ class BuildCloseFactsTest(GitCase):
                 c_code, c_res = self.run_line(cap, close_carries)
                 r_code, r_res = self.run_line(cap, review_carries)
                 self.assertEqual(c_code, r_code)
-                self.assertEqual(c_res["details"]["problems"], r_res["details"]["problems"])
+                self.assertEqual(c_res["details"].get("problems"), r_res["details"].get("problems"))
 
 
 if __name__ == "__main__":
