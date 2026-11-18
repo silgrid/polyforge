@@ -210,6 +210,7 @@ func TestLightHistoricalReplay(t *testing.T) {
 		return ok
 	}
 
+	caseCounts := map[string]map[string]int{}
 	for _, c := range doc.Cases {
 		c := c
 		t.Run(c.Id, func(t *testing.T) {
@@ -240,6 +241,7 @@ func TestLightHistoricalReplay(t *testing.T) {
 						c.Id, kind, got, cap, strings.Join(k.cmds, "\n"))
 				}
 			}
+			caseCounts[c.Id] = counts
 			// The unrelated counterexample adds no selection: appended to
 			// this case's input it leaves the scoped commands byte-identical.
 			with := w111lrReplay(t, wt, base, c.Root, append(append([]string{}, c.Paths...), doc.Counterexample))
@@ -298,35 +300,46 @@ func TestLightHistoricalReplay(t *testing.T) {
 		if !strings.Contains(strings.Join(passed, "\n"), added) {
 			t.Fatalf("%s: the pass-through record must name %s:\npassed:\n%s", c.Id, added, strings.Join(passed, "\n"))
 		}
-		if cap, ok := c.Cap["e2e_names"]; ok && counts["e2e_names"] > cap {
-			t.Fatalf("%s: a Test function added after the baseline must not count toward the cap: %d > %d", c.Id, counts["e2e_names"], cap)
+		for kind, cap := range c.Cap {
+			if got := counts[kind]; got > cap {
+				t.Fatalf("%s: a Test function added after the baseline must not red any cap: %s %d > %d", c.Id, kind, got, cap)
+			}
 		}
 	})
 
-	// A baseline-era Test function newly pulled in through a case path is
-	// still a violation, the full list is answered at once, and it still
-	// counts toward the caps (polyforge#126 AC3, the Q3 ruling).
+	// Baseline-era Test functions newly pulled in through a case path are
+	// still violations — two injections, so a judge that stops at the
+	// first violation cannot pass — the full list names them all at once,
+	// and both still count toward the caps (polyforge#126 AC3, the Q3/Q4
+	// rulings; review r1 #2).
 	t.Run("baseline-era-test-newly-selected-still-overruns", func(t *testing.T) {
 		c := w111lrCaseById(doc, "polyforge-36")
-		harness := "test/w174_daemon_env_hygiene_test.go" // existed at the baseline, references no case path
-		name := "TestW174EnsureDaemonEnvIsTheCallersAllowList"
-		body, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(harness)))
-		if err != nil {
-			t.Fatalf("read %s: %v", harness, err)
+		pull := "// w126: the literal workflows/_shared/scripts/revert.py pulls this file in\n"
+		mods := map[string]string{}
+		for _, harness := range []string{
+			"test/w174_daemon_env_hygiene_test.go",   // existed at the baseline, references no case path
+			"test/w218_doctor_prerequisites_test.go", // the same, a second injection: a first-stop judge fails here
+		} {
+			body, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(harness)))
+			if err != nil {
+				t.Fatalf("read %s: %v", harness, err)
+			}
+			mods[harness] = string(body) + "\n" + pull
 		}
-		r := w111lrReplayMods(t, wt, base, c.Root, c.Paths, map[string]string{
-			harness: string(body) + "\n// w126: the literal workflows/_shared/scripts/revert.py pulls this file in\n",
-		})
+		r := w111lrReplayMods(t, wt, base, c.Root, c.Paths, mods)
 		if r.Mode != "scoped" {
 			t.Fatalf("the %s replay must stay scoped, got %q (diagnostics %v)", c.Id, r.Mode, r.Diagnostics)
 		}
 		violations, _, counts := w111lrJudge(c, r, doc.Baseline, atBaseline)
 		joined := strings.Join(violations, "\n")
-		if !strings.Contains(joined, name) {
-			t.Fatalf("%s: a baseline-era test newly selected through a case path must be reported as a violation, all at once — %s missing from:\n%s", c.Id, name, joined)
+		for _, name := range []string{"TestW174EnsureDaemonEnvIsTheCallersAllowList", "TestW218DoctorPrerequisitesRowWarns"} {
+			if !strings.Contains(joined, name) {
+				t.Fatalf("%s: every baseline-era test newly selected through a case path must be reported as a violation, all at once — %s missing from:\n%s", c.Id, name, joined)
+			}
 		}
-		if cap, ok := c.Cap["e2e_names"]; ok && counts["e2e_names"] <= cap {
-			t.Fatalf("%s: a baseline-era test must still count toward the cap: %d <= %d", c.Id, counts["e2e_names"], cap)
+		untouched := caseCounts[c.Id]["e2e_names"]
+		if got := counts["e2e_names"]; got != untouched+2 {
+			t.Fatalf("%s: both baseline-era tests must still count toward the cap: %d, want the untouched replay's %d + 2", c.Id, got, untouched)
 		}
 	})
 
@@ -339,6 +352,45 @@ func TestLightHistoricalReplay(t *testing.T) {
 		bogus := strings.Repeat("deadbeef", 5)
 		if err := w111lrBaselineErr(root, bogus); err == nil || !strings.Contains(err.Error(), bogus) {
 			t.Fatalf("a baseline commit missing from the clone must fail loudly naming %s, got %v", bogus, err)
+		}
+	})
+
+	// The judge's own accounting on a constructed report, no replay: the
+	// conf and suites caps' inputs are counted whole (they are never
+	// pass-throughs), and only a well-shaped Test name passes — a package
+	// path, a command fragment or an unparseable shape is a violation,
+	// never a pass-through (review r1 #1/#3).
+	t.Run("judge-counts-what-the-caps-judge", func(t *testing.T) {
+		c := w111lrCaseById(doc, "polyforge-36")
+		runTrailing := "GOWORK=off go test -count=1 -run '^(TestW126NeverAddedAnywhere)$' ./internal/polyforge/stepscripts E2E_EXTRA=1"
+		runUnparsed := "GOWORK=off go test -count=1 -run '^(TestW126NeverAddedAnywhere)$' internal/polyforge/stepscripts"
+		e2eTrailing := "E2E_RUN='^(TestW126NeverAddedAnywhere)$' sh test/e2e-parallel.sh --extra"
+		rep := w111scReport{Commands: []w111scCommand{
+			{Name: "conf-one", Phase: "scoped", Source: "conf", Cmd: "echo CONF-ONE"},
+			{Name: "conf-two", Phase: "scoped", Source: "conf", Cmd: "echo CONF-TWO"},
+			{Name: "suites", Phase: "scoped", Source: "default", Cmd: "npm run test:e2e:all -- e2e/a.mjs e2e/b.mjs e2e/c.mjs"},
+			{Name: "run-new", Phase: "scoped", Source: "default", Cmd: "GOWORK=off go test -count=1 -run '^(TestW126NeverAddedAnywhere)$' ./internal/polyforge/stepscripts"},
+			{Name: "run-trailing", Phase: "scoped", Source: "default", Cmd: runTrailing},
+			{Name: "run-unparsed", Phase: "scoped", Source: "default", Cmd: runUnparsed},
+			{Name: "e2e-new", Phase: "scoped", Source: "default", Cmd: "E2E_RUN='^(TestW126NeverAddedAnywhere|not-an-identifier)$' sh test/e2e-parallel.sh"},
+			{Name: "e2e-trailing", Phase: "scoped", Source: "default", Cmd: e2eTrailing},
+		}}
+		violations, passed, counts := w111lrJudge(c, rep, doc.Baseline, atBaseline)
+		if counts["conf"] != 2 || counts["suites"] != 3 {
+			t.Fatalf("the conf and suites caps must count every conf command and suite item: conf %d, suites %d", counts["conf"], counts["suites"])
+		}
+		passedJoined := strings.Join(passed, "\n")
+		if !strings.Contains(passedJoined, "TestW126NeverAddedAnywhere") {
+			t.Fatalf("a Test function added after the baseline must pass, named:\n%s", passedJoined)
+		}
+		violationsJoined := strings.Join(violations, "\n")
+		for _, bad := range []string{runTrailing, runUnparsed, e2eTrailing, "not-an-identifier"} {
+			if strings.Contains(passedJoined, bad) {
+				t.Fatalf("a malformed or non-identifier item must never be a pass-through: %q in:\n%s", bad, passedJoined)
+			}
+			if !strings.Contains(violationsJoined, bad) {
+				t.Fatalf("a malformed or non-identifier item must be a violation: %q missing from:\n%s", bad, violationsJoined)
+			}
 		}
 	})
 }
