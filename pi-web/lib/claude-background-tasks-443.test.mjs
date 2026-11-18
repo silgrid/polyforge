@@ -1,4 +1,4 @@
-// carries: lib/claude-adapter.ts, lib/claude-background-task-view.ts, lib/claude-session.ts, lib/__fixtures__/claude-2.1.319/*, e2e/claude-stub/claude-bg-tasks.mjs, lib/__fixtures__/claude-stub/claude.mjs
+// carries: lib/claude-adapter.ts, lib/claude-background-task-view.ts, lib/claude-session.ts, lib/claude-shared.ts, lib/__fixtures__/claude-2.1.319/*, e2e/claude-stub/claude-bg-tasks.mjs, lib/__fixtures__/claude-stub/claude.mjs
 // claude's background tasks — a `Bash` run in the background, a
 // `Monitor` (both `task_type: "local_bash"`) — are not subagent runs. u1 replays the
 // real 2.1.319 `absorbed-notification/` recording (a background and a foreground
@@ -681,4 +681,41 @@ test("443 u8 the stub's plain interrupt stops its background tasks; one sparing 
     await Promise.race([exited, delay(5_000)]);
     if (stub.exitCode === null) stub.kill("SIGKILL");
   }
+});
+
+// 128 u1: the chat goes on while a background task runs — a plain prompt is a new
+// turn on the same child, and an in-session edit is refused with the structured
+// restart-refused code (the page's two-choice prompt keys on it), not a plain Error.
+test("128 u1 a running background task takes a plain prompt; the refused edit answers the structured restart code", async () => {
+  const { session, events } = await sessionAfter(["bg: npm run dev"]);
+  const task = await waitFor(() => taskOf(session.pid, "npm run dev"), 5_000, "the stub started no task child");
+  const settledBefore = settledCount(events);
+  const launchesBefore = records().filter((entry) => entry.kind === "launch").length;
+
+  // A plain prompt is accepted: a new turn on the same child, the task untouched.
+  await session.send({ type: "prompt", message: "and then?" });
+  await waitFor(() => settledCount(events) === settledBefore + 1, 5_000, "the plain prompt's turn never ended");
+  assert.equal(session.isAlive(), true, "the plain prompt ended the child");
+  assert.equal(alive(task.taskPid), true, "the plain prompt killed the background task");
+  assert.equal(records().filter((entry) => entry.kind === "launch").length, launchesBefore, "the plain prompt relaunched claude");
+
+  // The edit is refused with the structured code, changing nothing.
+  const second = stdinOf(session.pid).filter((line) => line.type === "user")[1];
+  assert.ok(second?.uuid, "the second message went to claude without its uuid");
+  const lines = stdinOf(session.pid).length;
+  const record = index.getClaudeSessionRecord(session.sessionId);
+  await assert.rejects(claude.editClaudeSession(record, second.uuid, { message: "edited" }), (error) => {
+    assert.ok(error.message.includes("npm run dev"), `the refusal does not name the task's command: ${error.message}`);
+    assert.equal(error.code, "claude_restart_refused", "the refusal carries no structured restart-refused code");
+    return true;
+  });
+  assert.equal(session.isAlive(), true, "the edit ended the child");
+  assert.equal(claude.getClaudeSession(session.sessionId), session, "the edit replaced the child");
+  assert.equal(alive(session.pid), true, "the claude process exited");
+  assert.equal(alive(task.taskPid), true, "the edit killed the background task");
+  assert.equal(stdinOf(session.pid).length, lines, "the edit wrote to claude's stdin");
+  assert.equal(records().filter((entry) => entry.kind === "launch").length, launchesBefore, "the edit started a child");
+  assert.ok(!records().some((entry) => entry.kind === "signal" && entry.pid === session.pid), "claude's process group was signalled");
+  await session.shutdown();
+  await waitFor(() => !alive(task.taskPid), 5_000, "the task child outlived its claude");
 });
