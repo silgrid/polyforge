@@ -70,6 +70,43 @@
 #      line, or a restart with --restart-pi-web. Its version can no longer
 #      be read then and prints as `unknown`, from the deleted directory.
 #
+#   Opt-in --dev (polyforge#136, combinable with --with-pi-web): the LOCAL
+#      DEVELOPMENT CHANNEL — this machine tries main's improvements
+#      without a formal release. It installs ONLY what the integrate
+#      gate verified: origin's latest green tag (tools/green-tag latest),
+#      checked to be an ancestor of origin/main and a descendant of the
+#      latest release tag (and not that tag's own commit — that set
+#      already ships). The version is v<next patch of the release
+#      tag>-dev.<N>, N the first-parent commit count
+#      release-tag..green-commit (stable: re-installing the same green
+#      tag derives the same N; main only fast-forwards — the documented
+#      precondition), a SemVer pre-release of the next formal release,
+#      so the formal channel's later v<X.Y.<Z+1>> is an ordinary upgrade
+#      while everything older is still a refused downgrade; the string
+#      never carries +build metadata (it must match the release shape
+#      the downgrade guard compares) and the source commit rides its
+#      own field (make dev-build stamps internal/version.Commit;
+#      `pf --json version` and `pf doctor`'s `pf build` row report it).
+#      The green commit's diff latest-release-tag..green-commit must
+#      not touch the AIHub-side paths of tools/aihub-paths.conf (the
+#      two AIHubs do not follow dev builds: such a set needs a formal
+#      release) and the machine must carry the build tools (go, make,
+#      node of the checkout's .nvmrc major, npm — checked and reported
+#      together with the rest). prepare clones the full history, runs
+#      the checks, builds pf locally (make -C <clone> dev-build), proves
+#      the staged binary answers --version with the dev version, and
+#      exports the green commit's tree as release/<dev version> — then
+#      the ordinary switch (binary swap, release/current, daemon
+#      restart) runs unchanged. The channel writes NOTHING to GitHub:
+#      it reads the green tag, clones, builds and installs locally (no
+#      release, no asset, no push). It needs an installed pf: a first
+#      install takes the formal channel. After a dev install the formal
+#      channel is REFUSED until the next formal release ships (its
+#      latest release is older than the dev version — the downgrade
+#      guard, by design); going back before that means rebuilding the
+#      formal release from its tag and replacing the binary by hand
+#      (docs/install.md).
+#
 # Usage (new machine, or update — same command) — read the key with echo
 # off first, so it never lands in your shell history:
 #   read -rs PF_KEY
@@ -110,25 +147,27 @@ set -e
 WITH_PIWEB=""
 RESTART_PIWEB=""
 REINSTALL_PIWEB=""
+DEV=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --with-pi-web) WITH_PIWEB=1; shift ;;
     --restart-pi-web) RESTART_PIWEB=1; shift ;;
     --reinstall-pi-web) REINSTALL_PIWEB=1; shift ;;
+    --dev) DEV=1; shift ;;
     *) break ;;
   esac
 done
 if [ -n "$RESTART_PIWEB" ] && [ -z "$WITH_PIWEB" ]; then
-  echo "usage: install.sh [--with-pi-web [--restart-pi-web] [--reinstall-pi-web]] <api-key|-> [server-host]"
+  echo "usage: install.sh [--dev] [--with-pi-web [--restart-pi-web] [--reinstall-pi-web]] <api-key|-> [server-host]"
   echo "ERROR: --restart-pi-web restarts the pi-web a --with-pi-web run left serving the old install; it needs --with-pi-web. Nothing on this machine was changed."
   exit 2
 fi
 if [ -n "$REINSTALL_PIWEB" ] && [ -z "$WITH_PIWEB" ]; then
-  echo "usage: install.sh [--with-pi-web [--restart-pi-web] [--reinstall-pi-web]] <api-key|-> [server-host]"
+  echo "usage: install.sh [--dev] [--with-pi-web [--restart-pi-web] [--reinstall-pi-web]] <api-key|-> [server-host]"
   echo "ERROR: --reinstall-pi-web reinstalls the Pi Web a --with-pi-web run would keep as already installed; it needs --with-pi-web. Nothing on this machine was changed."
   exit 2
 fi
-KEY="${1:?usage: install.sh [--with-pi-web [--restart-pi-web] [--reinstall-pi-web]] <api-key|-> [server-host]}"
+KEY="${1:?usage: install.sh [--dev] [--with-pi-web [--restart-pi-web] [--reinstall-pi-web]] <api-key|-> [server-host]}"
 if [ "$KEY" = - ]; then
   KEY=""
   IFS= read -r KEY || true
@@ -153,7 +192,7 @@ any_cell_mapping() {
   return 1
 }
 if [ -z "$HOST" ] && ! has_config; then
-  echo "usage: install.sh [--with-pi-web [--restart-pi-web] [--reinstall-pi-web]] <api-key|-> <server-host>  (or PF_HOST=<server-host>)"
+  echo "usage: install.sh [--dev] [--with-pi-web [--restart-pi-web] [--reinstall-pi-web]] <api-key|-> <server-host>  (or PF_HOST=<server-host>)"
   echo "ERROR: a first install writes $CFG and needs the aihub <server-host> (argument 2 or PF_HOST); nothing on this machine was changed."
   exit 2
 fi
@@ -262,6 +301,7 @@ refuse() {
 MISSING=""
 REQUIRED="gh curl python3 git"
 [ -z "$WITH_PIWEB" ] || REQUIRED="$REQUIRED npm tar"
+[ -z "$DEV" ] || REQUIRED="$REQUIRED go make node npm tar"
 for t in $REQUIRED; do
   command -v "$t" >/dev/null 2>&1 || MISSING="$MISSING $t"
 done
@@ -273,23 +313,29 @@ if [ -n "$MISSING" ]; then
       curl)    echo "   curl    - macOS: xcode-select --install  |  Linux: apt install curl" ;;
       python3) echo "   python3 - macOS: xcode-select --install  |  Linux: apt install python3" ;;
       git)     echo "   git     - macOS: xcode-select --install  |  Linux: apt install git" ;;
-      npm)     echo "   npm     - (--with-pi-web) install Node.js >= 22.19, which ships npm" ;;
-      tar)     echo "   tar     - (--with-pi-web) Linux: apt install tar  |  macOS: ships with the OS" ;;
+      npm)     echo "   npm     - (--with-pi-web, --dev) install Node.js, which ships npm" ;;
+      tar)     echo "   tar     - (--with-pi-web, --dev) Linux: apt install tar  |  macOS: ships with the OS" ;;
+      go)      echo "   go      - (--dev) https://go.dev/dl, the major version go.mod pins" ;;
+      make)    echo "   make    - (--dev) Linux: apt install make  |  macOS: ships with the Command Line Tools" ;;
+      node)    echo "   node    - (--dev) the major version the checkout's .nvmrc pins (nvm install <that major>, or https://nodejs.org)" ;;
     esac
   done
   prep_fail "install the missing tool(s) above, then re-run this installer"
 fi
 
-# The one per-OS branch: which pf asset this machine runs. The release
-# publishes ONE pf binary per platform — linux-amd64, darwin-arm64 and
+# The one per-OS branch (the formal channel only: --dev builds from
+# source and downloads no asset): which pf asset this machine runs. The
+# release publishes ONE pf binary per platform — linux-amd64, darwin-arm64 and
 # darwin-amd64 — and the server runs it as `pf aihub` (polyforge#218); native Windows and other platforms are out of scope
 # (WSL2 is treated as Linux, and uname reports exactly that).
-case "$(uname -s):$(uname -m)" in
-  "Linux:x86_64")  PF_ASSET="pf-linux-amd64" ;;
-  "Darwin:arm64")  PF_ASSET="pf-darwin-arm64" ;;
-  "Darwin:x86_64") PF_ASSET="pf-darwin-amd64" ;;
-  *) prep_fail "no pf asset for this machine ($(uname -s):$(uname -m)); the release carries pf for linux-amd64, darwin-arm64 and darwin-amd64 only (native Windows is out of scope; WSL2 is treated as Linux)" ;;
-esac
+if [ -z "$DEV" ]; then
+  case "$(uname -s):$(uname -m)" in
+    "Linux:x86_64")  PF_ASSET="pf-linux-amd64" ;;
+    "Darwin:arm64")  PF_ASSET="pf-darwin-arm64" ;;
+    "Darwin:x86_64") PF_ASSET="pf-darwin-amd64" ;;
+    *) prep_fail "no pf asset for this machine ($(uname -s):$(uname -m)); the release carries pf for linux-amd64, darwin-arm64 and darwin-amd64 only (native Windows is out of scope; WSL2 is treated as Linux)" ;;
+  esac
+fi
 
 VER=$(gh release list --repo "$REPO" --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null) || true
 [ -n "$VER" ] || prep_fail "no release found"
@@ -342,11 +388,76 @@ version_transition_allowed() {
   case "$1:$2" in v2.20.*:v0.2.*) return 0 ;; esac
   return 1
 }
-version_transition_allowed "$RUNNING" "$VER" \
-  || prep_fail "the latest release $VER of $REPO is older than the installed pf $RUNNING, and a downgrade is refused (the one accepted older target is a v0.2.x release over a v2.20.x pf, the named version-line cutover); this machine still runs pf $RUNNING"
+DEVVER=""
+if [ -n "$DEV" ]; then
+  # --dev: the local development channel. Everything that can fail for
+  # an outside reason runs here, before anything on this machine
+  # changes; a refusal leaves pf, release/current and the running
+  # daemon as they were. The channel writes nothing to GitHub: it reads
+  # the green tag and clones, and that is all.
+  [ -x "$BIN" ] || prep_fail "--dev upgrades an installed pf; a machine without one takes the formal channel first (run this installer without --dev)"
+  [ -z "$WITH_PIWEB" ] || prep_fail "--dev --with-pi-web is not wired yet; take pf alone for now"
+  TMP=$(mktemp -d)
+  SRC="$TMP/src"
+  echo "   dev channel: the latest green tag of $REPO, built on this machine"
+  # the full history: the first-parent count and the AIHub-side diff
+  # need the release tag..green-commit range
+  gh repo clone "$REPO" "$SRC" >/dev/null 2>&1 || prep_fail "cannot clone $REPO for the dev channel (gh auth?)"
+  GREEN=$( (cd "$SRC" && sh tools/green-tag latest) 2>/dev/null) \
+    || prep_fail "no green tag on origin of $REPO: the dev channel installs only what the integrate gate verified (its latest green tag)"
+  GNAME=${GREEN%% *}
+  GCOMMIT=$(printf '%s\n' "$GREEN" | awk '{print $2}')
+  [ -n "$GCOMMIT" ] || prep_fail "the latest green tag of $REPO answered nothing usable: $GREEN"
+  TAGCOMMIT=$(git -C "$SRC" rev-parse --verify --quiet "$VER^{commit}") \
+    || prep_fail "the clone of $REPO carries no commit for the release tag $VER"
+  [ "$GCOMMIT" != "$TAGCOMMIT" ] \
+    || prep_fail "the latest green tag $GNAME points at the commit of the latest release $VER: the machine would run what $VER already ships; use the formal channel (re-run without --dev)"
+  git -C "$SRC" merge-base --is-ancestor "$GCOMMIT" origin/main \
+    || prep_fail "the latest green tag $GNAME points at a commit that is not an ancestor of origin/main: the dev channel installs only main's verified line"
+  git -C "$SRC" merge-base --is-ancestor "$TAGCOMMIT" "$GCOMMIT" \
+    || prep_fail "the latest green tag $GNAME points before the latest release $VER (not a descendant of the release tag's commit); use the formal channel"
+  N=$(git -C "$SRC" rev-list --count --first-parent "$TAGCOMMIT..$GCOMMIT") \
+    || prep_fail "cannot count the first-parent commits $VER..$GNAME in the clone"
+  case "$VER" in
+    v[0-9]*.[0-9]*.[0-9]*) ;;
+    *) prep_fail "the latest release $VER is not an unsuffixed vX.Y.Z tag; the dev channel cannot derive the next patch from it" ;;
+  esac
+  VBASE=${VER#v}
+  VMAJ=${VBASE%%.*}; VREST=${VBASE#*.}; VMIN=${VREST%%.*}; VPATCH=${VREST#*.}
+  case "$VMAJ$VMIN$VPATCH" in
+    *[!0-9]*) prep_fail "the latest release $VER is not an unsuffixed vX.Y.Z tag; the dev channel cannot derive the next patch from it" ;;
+  esac
+  # the dev version: the next patch as a SemVer pre-release —
+  # release-shaped (the downgrade guard compares it), never +metadata
+  DEVVER="v$VMAJ.$VMIN.$((VPATCH + 1))-dev.$N"
+  # the node major the checkout pins
+  NODEWANT=$(cat "$SRC/.nvmrc" 2>/dev/null) || prep_fail "the green commit's tree carries no .nvmrc to pin the node major"
+  NODEWANT=$(printf '%s' "$NODEWANT" | tr -d '[:space:]')
+  NODEGOT=$(node --version 2>/dev/null) || NODEGOT=""
+  case "$NODEGOT" in
+    "v$NODEWANT."*) ;;
+    *) prep_fail "node ${NODEGOT:-none} is not major $NODEWANT (pinned by the green commit's .nvmrc); install node $NODEWANT.x first — the dev channel builds the webui with it" ;;
+  esac
+  version_transition_allowed "$RUNNING" "$DEVVER" \
+    || prep_fail "the dev version $DEVVER (from $GNAME) is older than the installed pf $RUNNING, and a downgrade is refused; this machine still runs pf $RUNNING"
+  if [ "$RUNNING" = "$DEVVER" ]; then
+    echo "   pf $DEVVER already current (the green tag $GNAME), skipping the build"
+  else
+    STAGED="$BIN.new.$$"
+    make -C "$SRC" dev-build VERSION="$DEVVER" COMMIT="$GCOMMIT" OUT="$STAGED" >"$TMP/dev-build.log" 2>&1 \
+      || prep_fail "building pf from $GNAME failed (make dev-build): $(tail -n 3 "$TMP/dev-build.log" 2>/dev/null | tr '\n' ' ')"
+    [ -x "$STAGED" ] || prep_fail "make dev-build wrote no executable pf to $STAGED"
+    GOTV=$("$STAGED" --version 2>/dev/null) || prep_fail "the built pf does not run (--version exit non-zero)"
+    [ "$GOTV" = "$DEVVER" ] || prep_fail "the built pf reports $GOTV, not the dev version $DEVVER"
+    echo "   pf $DEVVER built from $GNAME ($GCOMMIT), staged"
+  fi
+  VER="$DEVVER"
+else
+  version_transition_allowed "$RUNNING" "$VER" \
+    || prep_fail "the latest release $VER of $REPO is older than the installed pf $RUNNING, and a downgrade is refused (the one accepted older target is a v0.2.x release over a v2.20.x pf, the named version-line cutover); this machine still runs pf $RUNNING"
 
-if [ "$RUNNING" = "$VER" ]; then
-  echo "   pf $VER already current, skipping"
+  if [ "$RUNNING" = "$VER" ]; then
+    echo "   pf $VER already current, skipping"
 else
   TMP=$(mktemp -d)
   gh release download "$VER" --repo "$REPO" --pattern "$PF_ASSET" --dir "$TMP" 2>/dev/null \
@@ -388,6 +499,7 @@ else
   esac
   rm -rf "$TMP"; TMP=""
   echo "   pf $VER downloaded, SHA-verified, staged"
+fi
 fi
 
 # --with-pi-web: the Pi Web tarball of the same release, verified now so a
@@ -433,10 +545,17 @@ if [ -f "$REL/skills/polyforge/SKILL.md" ] && [ -d "$REL/workflows" ]; then
 else
   CLONE="$REL.tmp.$$"
   rm -rf "$CLONE"
+  if [ -n "$DEV" ]; then
+    # the dev channel: the green commit's tree, exported from the clone
+    # (no tag named <dev version> exists to clone)
+    mkdir "$CLONE" && git -C "$SRC" archive "$GCOMMIT" | tar -x -C "$CLONE" \
+      || prep_fail "cannot export the green tag $GNAME's tree into $REL"
+  else
   # gh uses its own credentials (ssh or https), so a machine that only has
   # gh auth can clone the repo. The tag is cloned shallow.
   gh repo clone "$REPO" "$CLONE" -- --branch "$VER" --depth 1 >/dev/null 2>&1 \
     || prep_fail "cannot clone $REPO at $VER (gh auth?)"
+  fi
   if [ ! -f "$CLONE/skills/polyforge/SKILL.md" ] || [ ! -d "$CLONE/workflows" ]; then
     prep_fail "$VER checkout lacks skills/polyforge or workflows"
   fi
