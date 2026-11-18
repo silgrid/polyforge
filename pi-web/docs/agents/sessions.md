@@ -19,6 +19,8 @@ Never fork through `AgentSession.fork()` / `AgentSessionRuntime.fork()`: they re
 ## In-session branching waits for the run
 pi's `navigateTree()` refuses while streaming or compacting: the file has one leaf pointer that the run appends under, and navigating swaps the agent's context. So "Edit from here" is hidden while busy, the BranchNavigator renders read-only (`locked`) with a note, and `handleLeafChange` refuses (switching only the view would show the live run under another branch). To branch from a running session, fork it.
 
+A staged edit is always a visible, cancellable mode of the composer (#128): while one is pending the input box carries an edit bar with「取消编辑」, and clicking "Edit from here" over a kept draft stages nothing — the draft stays and the next send is an ordinary prompt.
+
 ## Two kinds of branching — don't confuse them
 - **Fork** ("New session" on a user message, or the sidebar's Fork): a new `.jsonl` file whose header `parentSession` names the source. It is its own row in its project group (`relation.kind: "fork"`); only subagents fold into a family, so copying a subagent session would carry its metadata and hide the copy in the parent's family. Rows sort by their last user/assistant message: a chat fork copies up to the parent of a user message, so it is older than its source and sorts below it (one made at the first message is header-only and sorts by its header time, first); a sidebar Fork of the newest branch ties with its source and sorts first (`[s, ...current]` on the client, newest-mtime-first on the server).
 - **In-session branch** ("Edit from here" / BranchNavigator): `navigate_tree` within one file; entries share a `parentId`. Switching calls `/api/sessions/[id]/context?leafId=`.
