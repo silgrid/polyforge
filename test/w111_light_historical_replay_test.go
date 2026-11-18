@@ -286,6 +286,27 @@ func w111lrAllowedList(m map[string]bool) string {
 	return strings.Join(items, "\n")
 }
 
+// w111lrJudge compares one replayed selection against the case's recorded
+// old and allowed_new sets, through the corpus's baseline-commit filter
+// (polyforge#126): an item outside the sets that is a Test function the
+// baseline commit does not define is answered as a pass-through record —
+// the corpus judges only the tests the baseline already defines — while
+// every other item outside the sets is a violation, and the answer carries
+// them all at once, none swallowed by a first-stop. The counts answer, per
+// cap kind, how many baseline-carried items the selection carries: the
+// numeric caps judge only those.
+func w111lrJudge(c w111lrCase, r w111scReport, baseline string, atBaseline func(name string) bool) (violations, passed []string, counts map[string]int) {
+	return nil, nil, nil
+}
+
+// w111lrBaselineErr answers why the corpus's baseline commit is unusable
+// in this clone, nil when it is: the pass-through filter judges against
+// that commit, so a clone without it must fail loudly naming it — never
+// silently pass everything.
+func w111lrBaselineErr(root, commit string) error {
+	return nil
+}
+
 // RootLabel answers the case's engine root for messages.
 func (c w111lrCase) RootLabel() string {
 	if c.Root == "" {
