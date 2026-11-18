@@ -78,9 +78,11 @@ func TestW136DevBuildEntry(t *testing.T) {
 			t.Fatalf("the dev-build version guard accepts %q (pattern %q): a non-release string must be refused — +build metadata would leave the installer's downgrade guard silently off (AC3)", bad, gr[1])
 		}
 	}
-	// both link-time stamps: the version and the source commit
-	if !strings.Contains(mf, "internal/version.Version=$(VERSION)") && !strings.Contains(mf, "GO_LDFLAGS") {
-		t.Fatal("make dev-build must stamp the version through GO_LDFLAGS like make release")
+	// both link-time stamps: the dev-build recipe stamps the version through
+	// GO_LDFLAGS (as make release does) and the source commit beside it,
+	// in one -ldflags invocation
+	if !strings.Contains(mf, `ldflags "$(GO_LDFLAGS) -X github.com/silgrid/polyforge/internal/version.Commit=$(COMMIT)"`) {
+		t.Fatal("make dev-build must stamp both internal/version fields at link time: the version through GO_LDFLAGS and the commit through its own -X")
 	}
 	if !strings.Contains(mf, "internal/version.Commit=$(COMMIT)") {
 		t.Fatal("make dev-build must stamp the source commit into internal/version.Commit beside the version")
