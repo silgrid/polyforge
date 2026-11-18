@@ -28,6 +28,7 @@ package test
 // carries: tools/install.sh, tools/green-tag, tools/aihub-paths.conf, Makefile, tools/package-pi-web.sh, test/w136_install_dev_test.go
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -41,15 +42,17 @@ type w136DevCfg struct {
 	green string // "" = default: green tag at main HEAD; "tag" | "base" | "none" | "offmain"
 	tools bool   // the build-tool shims (go, make, node, npm) are on PATH
 	touch string // a repo-relative path ONE commit after the release tag touches (an AIHub-side change shape)
+	piweb bool   // the origin carries an installable pi-web package and npm/node model it
 }
 
 // w136Dev is one hermetic dev-channel machine on top of w174Install.
 type w136Dev struct {
 	*w174Install
-	origin  string // the real git repository the gh stub clones
-	src     string // the repo root (for copying the real tools into the fixture)
-	tagSHA  string // the commit the v0.2.3 release tag points at
-	mainSHA string
+	origin    string // the real git repository the gh stub clones
+	src       string // the repo root (for copying the real tools into the fixture)
+	npmPrefix string // the scratch npm prefix (the piweb fixture)
+	tagSHA    string // the commit the v0.2.3 release tag points at
+	mainSHA   string
 }
 
 // w136Git runs the real git in dir (the fixture setup itself never
@@ -124,6 +127,39 @@ func w136NewDev(t *testing.T, cfg w136DevCfg) *w136Dev {
 	}
 	w136Write(t, filepath.Join(d.origin, ".nvmrc"), "24\n", 0o644)
 	w136Write(t, filepath.Join(d.origin, "internal", "polyforge", "cli", "verbs_version.go"), "package cli\n", 0o644)
+	if cfg.piweb {
+		// the green commit's pi-web tree: the repository's own installable
+		// package fixture (the lane-stubs tree: the real bin/ with the
+		// install checker, a patch-package stub and a node-pty stand-in
+		// whose native module only its install script builds)
+		nodeBin, err := exec.LookPath("node")
+		if err != nil {
+			t.Skip("node is not on the test's PATH")
+		}
+		pkgDir := filepath.Join(d.origin, "pi-web")
+		if out, err := exec.Command(nodeBin, filepath.Join(root, "pi-web", "e2e", "lane-stubs.mjs"), "piweb-package-tree", pkgDir, "--scripts=skipped").CombinedOutput(); err != nil {
+			t.Fatalf("lane-stubs piweb-package-tree: %v\n%s", err, out)
+		}
+		var repoPkg struct {
+			Scripts map[string]string `json:"scripts"`
+		}
+		if err := json.Unmarshal([]byte(w174ReadFile(t, filepath.Join(root, "pi-web", "package.json"))), &repoPkg); err != nil {
+			t.Fatal(err)
+		}
+		manifest, err := json.Marshal(map[string]any{
+			"name":    "@silgrid/pi-web",
+			"version": "0.2.0-dev.0",
+			"bin":     map[string]string{"pi-web": "bin/pi-web.js"},
+			"scripts": map[string]string{"postinstall": repoPkg.Scripts["postinstall"]},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(pkgDir, "package.json"), append(manifest, '\n'), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		d.npmPrefix = filepath.Join(shortTmp(t, "n"), "npm-prefix")
+	}
 	w136Git(t, d.origin, "add", "-A")
 	w136Git(t, d.origin, "commit", "-q", "-m", "base")
 	base := w136CommitSHA(t, d.origin, "HEAD")
@@ -233,6 +269,57 @@ echo "make: unsupported target: $*" >&2
 exit 1
 `
 	}
+	if cfg.piweb {
+		// node answers the version check itself and execs the real node
+		// for everything else (the install check and the served probe);
+		// npm models the shared script's packaging steps and the install:
+		// ci and run succeed as no-ops, version rewrites the cwd's
+		// package.json, pack tars the cwd as an npm-shaped package, root
+		// answers the scratch prefix, install -g unpacks into it, rebuild
+		// builds node-pty only when its scripts are allowed (the w344
+		// shape)
+		nodeBin, err := exec.LookPath("node")
+		if err != nil {
+			t.Skip("node is not on the test's PATH")
+		}
+		files["node"] = "#!/bin/sh\necho \"node $*\" >> \"$W174_JOURNAL\"\n[ \"$1\" = --version ] && { echo \"${W136_NODE_VER:-v24.1.0}\"; exit 0; }\nexec " + nodeBin + " \"$@\"\n"
+		files["npm"] = `#!/bin/sh
+echo "npm $*" >> "$W174_JOURNAL"
+last=
+for a; do last=$a; done
+prefix="$W136_NPM_PREFIX"
+case "$1" in
+ci|run) exit 0 ;;
+version)
+  sed -i 's/"version": *"[^"]*"/"version": "'"$2"'"/' package.json
+  exit 0 ;;
+pack)
+  dest=.
+  [ "$2" = --pack-destination ] && dest=$3
+  v=$(sed -n 's/.*"version": *"\([^"]*\)".*//p' package.json)
+  st=$(mktemp -d)
+  cp -R . "$st/package"
+  tar -czf "$dest/silgrid-pi-web-$v.tgz" -C "$st" package
+  rm -rf "$st"
+  exit 0 ;;
+root) printf '%s
+' "$prefix/lib/node_modules"; exit 0 ;;
+install)
+  pkg="$prefix/lib/node_modules/@silgrid/pi-web"
+  rm -rf "$pkg" && mkdir -p "$pkg" && tar -xzf "$last" --strip-components=1 -C "$pkg" || exit 1
+  echo 'npm warn install-scripts 3 packages have install scripts not yet covered by allowScripts: @silgrid/pi-web (postinstall), node-pty (install: node scripts/install.js)' >&2
+  exit 0 ;;
+rebuild)
+  ign=0; allow=0
+  for a; do case "$a" in --ignore-scripts=false) ign=1 ;; --dangerously-allow-all-scripts) allow=1 ;; esac; done
+  [ -d "$PWD/node_modules/node-pty" ] || exit 1
+  if [ "$ign" = 1 ] && [ "$allow" = 1 ]; then cd "$PWD/node_modules/node-pty" && exec node scripts/install.js; fi
+  echo 'npm warn install-scripts 1 package has install scripts not yet covered by allowScripts: node-pty (install: node scripts/install.js)' >&2
+  exit 0 ;;
+esac
+exit 0
+`
+	}
 	for name, body := range files {
 		if err := os.WriteFile(filepath.Join(in.shim, name), []byte(body), 0o755); err != nil {
 			t.Fatal(err)
@@ -260,6 +347,9 @@ exit 1
 		in.path = in.shim + ":" + clean
 	}
 	in.extraEnv = append(in.extraEnv, "W136_ORIGIN="+d.origin, "W136_PF="+in.pf)
+	if cfg.piweb {
+		in.extraEnv = append(in.extraEnv, "W136_NPM_PREFIX="+d.npmPrefix)
+	}
 	return d
 }
 
@@ -267,10 +357,7 @@ exit 1
 // argument shape beyond the w174 default).
 func (d *w136Dev) run(t *testing.T, args ...string) (string, int) {
 	t.Helper()
-	full := append([]string{"--dev"}, args...)
-	if len(full) == 1 {
-		full = append(full, "w136key", "127.0.0.1")
-	}
+	full := append(append([]string{"--dev"}, args...), "w136key", "127.0.0.1")
 	return d.runArgs(t, full...)
 }
 
@@ -563,5 +650,57 @@ func TestW136InstallDevReadOnlyRemote(t *testing.T) {
 		if !found {
 			t.Fatalf("the dev channel never made its read %q:\n%s", need, strings.Join(d.journalLines(), "\n"))
 		}
+	}
+}
+
+// TestW136InstallDevWithPiWeb (AC6): --dev --with-pi-web packages the
+// green commit's pi-web tree LOCALLY through the one shared packaging
+// script the formal release runs (never a gh download), stamps the dev
+// version into the package, installs it and passes the package's own
+// install check.
+func TestW136InstallDevWithPiWeb(t *testing.T) {
+	d := w136NewDev(t, w136DevCfg{green: "", tools: true, piweb: true})
+	w136InstallBin(t, d, "v0.2.3")
+	d.resetJournal(t)
+
+	out, code := d.run(t, "--with-pi-web")
+	if code != 0 {
+		t.Fatalf("install.sh --dev --with-pi-web: exit %d\n%s", code, out)
+	}
+	var versioned, packed, installed, checked bool
+	for _, l := range d.journalLines() {
+		switch {
+		case strings.HasPrefix(l, "npm version 0.2.4-dev.2 "):
+			versioned = true
+		case strings.HasPrefix(l, "npm pack --pack-destination"):
+			packed = true
+		case strings.HasPrefix(l, "npm install -g ") && strings.Contains(l, "/silgrid-pi-web-v0.2.4-dev.2.tgz"):
+			installed = true
+		case strings.Contains(l, "pi-web-install-check.js"):
+			checked = true
+		}
+	}
+	for what, ok := range map[string]bool{
+		"the shared script stamped the dev version into the package":     versioned,
+		"the shared script packed the tarball":                           packed,
+		"npm installed the packed silgrid-pi-web-v0.2.4-dev.2.tgz":       installed,
+		"the package's own install check ran over the installed package": checked,
+	} {
+		if !ok {
+			t.Fatalf("%s; journal:\n%s", what, strings.Join(d.journalLines(), "\n"))
+		}
+	}
+	// no gh download: the dev channel's Pi Web never touches the release
+	for _, l := range d.journalLines() {
+		if strings.HasPrefix(l, "gh release download") {
+			t.Fatalf("the dev channel downloaded a release asset: %s", l)
+		}
+	}
+	// the installed package carries the dev version and the run says so
+	if pkg := w174ReadFile(t, filepath.Join(d.npmPrefix, "lib", "node_modules", "@silgrid", "pi-web", "package.json")); !strings.Contains(pkg, `"version": "0.2.4-dev.2"`) {
+		t.Fatalf("the installed @silgrid/pi-web's package.json does not carry 0.2.4-dev.2: %s", pkg)
+	}
+	if !strings.Contains(out, "Pi Web installed from silgrid-pi-web-v0.2.4-dev.2.tgz") {
+		t.Fatalf("the run does not report the dev Pi Web install:\n%s", out)
 	}
 }
