@@ -485,7 +485,7 @@ func TestW80ReviewPromptShapes(t *testing.T) {
 		}
 		for _, w := range []string{
 			"When `artifacts/handoff.md` carries an earlier `review` section, this is a later round: your skill's two faces and round contract apply. Without one this is the first round — the full judgment, every checklist hit blocking.",
-			"From the second round on, a blocking finding is one of: a residual; a new defect on the fix surface; a `bug` anywhere in the change; a `project_rule` violation anywhere. Every other hit is non-blocking.",
+			"From the second round on, a blocking finding is one of: a residual; a new defect on the fix surface; a `bug` anywhere in the change; a `project_rule` violation anywhere; and — in every round, never downgraded as a hit outside the fix surface — the two static facts reds: a unit that does not resolve or whose `commits` names a test-first problem, and a carries problem. These two are the same static facts build's close runs without the replay, so a red here is a red handed off on; only an owner message that explicitly accepts the finding is an exception to them. Every other hit is non-blocking.",
 		} {
 			if !strings.Contains(p, w) {
 				t.Errorf("%s/review prompt lost %q", bundle, w)
