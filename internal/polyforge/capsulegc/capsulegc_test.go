@@ -12,6 +12,10 @@ package capsulegc
 // taken from the implementation's own output.
 
 import (
+	"bytes"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -132,4 +136,158 @@ func TestParseGCDeclaration(t *testing.T) {
 			}
 		})
 	}
+}
+
+// gcGit runs one git command in dir and fails the test on its error.
+// The fixture git is the same hardened shape the doctor's own probes
+// use elsewhere: system config ignored, an isolated HOME, no prompt.
+func gcGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	var out, errb bytes.Buffer
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0", "HOME="+t.TempDir())
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("git %v in %s: %v: %s", args, dir, err, errb.String())
+	}
+	return out.String()
+}
+
+// newGCClone answers a local clone of a fresh repository whose default
+// branch (main, the fixture's own choice) carries one commit; conf is
+// the capsule-gc declaration that commit carries ("" = none, the
+// repository declares nothing). A clone — not a plain repository — so
+// the default branch is the metadata a clone records, never a guess.
+func newGCClone(t *testing.T, conf string) string {
+	t.Helper()
+	src := t.TempDir()
+	gcGit(t, src, "-c", "init.defaultBranch=main", "init", "-q")
+	if conf != "" {
+		os.MkdirAll(filepath.Join(src, ".polyforge"), 0o755)
+		if err := os.WriteFile(filepath.Join(src, ConfPath), []byte(conf), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		gcGit(t, src, "add", ConfPath)
+	}
+	gcGit(t, src, "-c", "user.email=gc@example.com", "-c", "user.name=gc", "commit", "-q", "-m", "the declaration", "--allow-empty")
+	parent := t.TempDir()
+	gcGit(t, parent, "clone", "--quiet", src, filepath.Join(parent, "clone"))
+	return filepath.Join(parent, "clone")
+}
+
+// TestReadGCDeclarationFromCommittedRef: only committed bytes
+// authorize a removal. The declaration a repository's default branch
+// carries comes out with the ref it was read at and the commit that
+// ref resolved to (the retroactive cleanup's audit trail); a working
+// tree edited, or even emptied, after the fact changes nothing; no
+// declaration at the ref is no error and enables nothing; a committed
+// declaration that does not parse is an error — the whole thing, never
+// a silent partial; an explicit ref reads that ref; the default branch
+// is refs/remotes/origin/HEAD, the metadata a clone records, and a
+// repository without it answers an error, never a guessed branch
+// name. Expected values come from the fixture's own git (rev-parse),
+// never from the implementation (polyforge#127, u2).
+func TestReadGCDeclarationFromCommittedRef(t *testing.T) {
+	t.Run("the committed declaration, its ref and its commit", func(t *testing.T) {
+		clone := newGCClone(t, "# the rebuildable products\nrebuild_dir=build/dist\nrebuild_dir=vendor/deps\n")
+		sha := strings.TrimSpace(gcGit(t, clone, "rev-parse", "origin/main"))
+		if sha == "" {
+			t.Fatal("the fixture's own git answers no commit for origin/main")
+		}
+		d, err := ReadCommitted(clone, "")
+		if err != nil {
+			t.Fatalf("ReadCommitted(clone, \"\") = %v, %v; want the committed declaration", d, err)
+		}
+		if d == nil {
+			t.Fatal("ReadCommitted(clone, \"\") = nil, nil; want the committed declaration")
+		}
+		want := []string{"build/dist", "vendor/deps"}
+		if len(d.Dirs) != len(want) || d.Dirs[0] != want[0] || d.Dirs[1] != want[1] {
+			t.Fatalf("Dirs = %v, want %v in file order", d.Dirs, want)
+		}
+		if d.Ref != "origin/main" {
+			t.Fatalf("Ref = %q, want origin/main (the clone's recorded default branch)", d.Ref)
+		}
+		if d.SHA != sha {
+			t.Fatalf("SHA = %q, want the commit the fixture's git names: %q", d.SHA, sha)
+		}
+	})
+
+	t.Run("a working tree never authorizes", func(t *testing.T) {
+		clone := newGCClone(t, "rebuild_dir=build/dist\n")
+		committed := strings.TrimSpace(gcGit(t, clone, "rev-parse", "origin/main"))
+		// An uncommitted edit that would widen what may be removed, and
+		// then the file gone from the working tree altogether: neither
+		// may move what the committed ref answers.
+		if err := os.WriteFile(filepath.Join(clone, ConfPath), []byte("rebuild_dir=hacked\nrebuild_dir=secrets\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		d, err := ReadCommitted(clone, "")
+		if err != nil {
+			t.Fatalf("ReadCommitted after an uncommitted edit: %v", err)
+		}
+		if d == nil || len(d.Dirs) != 1 || d.Dirs[0] != "build/dist" {
+			t.Fatalf("Dirs = %v, want the committed [build/dist] — a working tree never authorizes", d)
+		}
+		if err := os.Remove(filepath.Join(clone, ConfPath)); err != nil {
+			t.Fatal(err)
+		}
+		if d, err = ReadCommitted(clone, ""); err != nil || d == nil || d.Dirs[0] != "build/dist" || d.SHA != committed {
+			t.Fatalf("after the file left the working tree: %v, %v; want the committed declaration unchanged", d, err)
+		}
+	})
+
+	t.Run("no declaration at the ref is no error and enables nothing", func(t *testing.T) {
+		clone := newGCClone(t, "")
+		d, err := ReadCommitted(clone, "")
+		if d != nil || err != nil {
+			t.Fatalf("ReadCommitted on a repository without the declaration = %v, %v; want nil, nil", d, err)
+		}
+	})
+
+	t.Run("a committed declaration that does not parse is an error", func(t *testing.T) {
+		clone := newGCClone(t, "rebuild_dir=build\nkeep_dir=secrets\n")
+		d, err := ReadCommitted(clone, "")
+		if err == nil {
+			t.Fatalf("ReadCommitted = %v, nil; want the committed declaration rejected whole", d)
+		}
+		if d != nil {
+			t.Fatalf("a rejected declaration must read to nothing, got %v", d)
+		}
+	})
+
+	t.Run("an explicit ref reads that ref", func(t *testing.T) {
+		clone := newGCClone(t, "rebuild_dir=build/dist\n")
+		head := strings.TrimSpace(gcGit(t, clone, "rev-parse", "HEAD"))
+		d, err := ReadCommitted(clone, "HEAD")
+		if err != nil || d == nil {
+			t.Fatalf("ReadCommitted(clone, \"HEAD\") = %v, %v; want the declaration at HEAD", d, err)
+		}
+		if d.Ref != "HEAD" || d.SHA != head {
+			t.Fatalf("Ref/SHA = %q/%q, want HEAD/%q", d.Ref, d.SHA, head)
+		}
+	})
+
+	t.Run("the default branch is recorded metadata, never a guess", func(t *testing.T) {
+		clone := newGCClone(t, "rebuild_dir=build/dist\n")
+		ref, err := DefaultBranch(clone)
+		if err != nil || ref != "origin/main" {
+			t.Fatalf("DefaultBranch(clone) = %q, %v; want origin/main, nil", ref, err)
+		}
+		// The bare source repository has no remote-tracking metadata: its
+		// default branch is unknown, and unknown is an error, never a
+		// guessed branch name.
+		parent := t.TempDir()
+		gcGit(t, parent, "clone", "--quiet", "--bare", strings.TrimSpace(gcGit(t, clone, "config", "--get", "remote.origin.url")), filepath.Join(parent, "src.git"))
+		if _, err := DefaultBranch(filepath.Join(parent, "src.git")); err == nil {
+			t.Fatal("DefaultBranch on a repository without remote-tracking metadata = nil error; want an error")
+		}
+	})
+
+	t.Run("an unreadable repository is an error", func(t *testing.T) {
+		if d, err := ReadCommitted(t.TempDir(), ""); d != nil || err == nil {
+			t.Fatalf("ReadCommitted on a directory without a repository = %v, %v; want nil, an error", d, err)
+		}
+	})
 }
