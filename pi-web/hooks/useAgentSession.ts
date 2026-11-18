@@ -17,6 +17,7 @@ import { isBlockingExtensionUiRequest } from "@/lib/browser-notifications";
 import {
   CLAUDE_EFFORT_DEFAULT,
   CLAUDE_HARNESS,
+  CLAUDE_RESTART_REFUSED_CODE,
   DEFAULT_CLAUDE_MODEL,
   PI_HARNESS,
   claudeFirstMessage,
@@ -1085,6 +1086,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     if (sid && !getDraft(sid)) pendingHistoryEdits.delete(sid);
     return (sid && pendingHistoryEdits.get(sid)) || null;
   });
+  // #128: the restart-refused edit's two-choice prompt — the server's refusal text,
+  // shown by the composer with「作为新消息发送」and「保留编辑，稍后再试」.
+  const [claudeEditRestartRefusal, setClaudeEditRestartRefusal] = useState<string | null>(null);
   const setEdit = useCallback((entryId: string | null) => {
     if (!session?.id) return;
     if (entryId) pendingHistoryEdits.set(session.id, entryId);
@@ -1097,7 +1101,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     if (!session?.id) return;
     if (opts.chatInputRef?.current?.replaceMessage(message)) setEdit(entryId);
   }, [opts.chatInputRef, session?.id, setEdit]);
-  const cancelEdit = useCallback(() => setEdit(null), [setEdit]);
+  const cancelEdit = useCallback(() => {
+    // #128: cancelling the staged edit closes its restart-refusal prompt with it.
+    setClaudeEditRestartRefusal(null);
+    setEdit(null);
+  }, [setEdit]);
 
   const sessionStats = useMemo(() => {
     // Active time is a monotone sum over the session's entries, so of the two
@@ -2808,7 +2816,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
    * sent with it, nothing is put back into the composer's draft, and a failure rejects
    * (after the usual notice) so the panel keeps its own text.
    */
-  const sendPrompt = useCallback(async (message: string, images?: AttachedImage[], relay = false) => {
+  const sendPrompt = useCallback(async (message: string, images?: AttachedImage[], relay = false, ignoreStagedEdit = false) => {
     const trimmedMessage = message.trim();
     if (!trimmedMessage && !images?.length) return;
     if (agentRunningRef.current || bashRunningRef.current) {
@@ -2823,15 +2831,21 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     if (relay) {
       // A relay leaves a staged edit staged.
     } else if (editEntryId && isClaudeSession) {
-      claudeEditEntryId = editEntryId;
-      setEdit(null);
-      // As pi's navigate re-reads the branch: the view ends before the edited message.
-      const cut = entryIdsRef.current.indexOf(editEntryId);
-      if (cut >= 0) {
-        messagesRef.current = messagesRef.current.slice(0, cut);
-        entryIdsRef.current = entryIdsRef.current.slice(0, cut);
-        setMessages(messagesRef.current);
-        setEntryIds(entryIdsRef.current);
+      if (ignoreStagedEdit) {
+        // #128:「作为新消息发送」over a restart-refused edit: the staged edit goes,
+        // the text is an ordinary prompt — no entryId, no view cut.
+        setEdit(null);
+      } else {
+        claudeEditEntryId = editEntryId;
+        setEdit(null);
+        // As pi's navigate re-reads the branch: the view ends before the edited message.
+        const cut = entryIdsRef.current.indexOf(editEntryId);
+        if (cut >= 0) {
+          messagesRef.current = messagesRef.current.slice(0, cut);
+          entryIdsRef.current = entryIdsRef.current.slice(0, cut);
+          setMessages(messagesRef.current);
+          setEntryIds(entryIdsRef.current);
+        }
       }
     } else if (editEntryId) {
       // Navigate and prompt are two RPCs: a prompt rejected after navigating
@@ -2991,9 +3005,15 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
       rpcPromptPendingRef.current = false;
       setMessages((prev) => withoutMessage(prev, userMsg));
+      // #128: a restart refusal (unfinished background work, the structured code) keeps
+      // the edit pending and answers with the two-choice prompt instead of an error
+      // toast — the refusal's own text is the prompt's body.
+      const restartRefused = claudeEditEntryId !== null && sentSessionId !== null
+        && e instanceof AgentCommandError && e.code === CLAUDE_RESTART_REFUSED_CODE;
       // A folder that no longer exists never reached the model: the composer's
       // banner names it (translated) instead of the server's English notice.
       if (e instanceof AgentCommandError && e.missingCwd) setPromptMissingCwd(e.missingCwd);
+      else if (restartRefused) setClaudeEditRestartRefusal(e instanceof Error ? e.message : String(e));
       else addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
       if (claudeEditEntryId && sentSessionId) {
         // A refused edit changed nothing: the edit is pending again over the whole history,
@@ -3028,6 +3048,18 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, [isNew, newSessionCwd, newSessionModel, newSessionHarness, session, ensureNewSession, ensureEventsConnected, promoteNewSession, waitForPromptSettlement, addNotice, addUnconfirmedSendNotice, notifyPromptReloadedFromDisk, releaseUnconfirmedSend, cancelEventStreamGrace, closeEvents, composerDraftKey, dispatch, reconcileAgentState, restoreSubmission, editEntryId, setEdit, isClaudeSession, loadSession, translate]);
 
   const handleSend = useCallback((message: string, images?: AttachedImage[]) => sendPrompt(message, images), [sendPrompt]);
+
+  // #128:「保留编辑，稍后再试」: the prompt closes, the edit stays staged.
+  const dismissClaudeEditRestartRefusal = useCallback(() => {
+    setClaudeEditRestartRefusal(null);
+  }, []);
+  // #128:「作为新消息发送」: the staged edit goes, the text is one ordinary prompt —
+  // sent once, without the entryId, whatever the composer held comes back on failure.
+  const handleSendClaudeEditAsNewMessage = useCallback(async (message: string, images?: AttachedImage[]) => {
+    setClaudeEditRestartRefusal(null);
+    setEdit(null);
+    await sendPrompt(message, images, false, true);
+  }, [setEdit, sendPrompt]);
 
   const executeBash = useCallback(async (command: string, excludeFromContext: boolean) => {
     if (agentRunningRef.current || bashRunningRef.current) return;
@@ -4361,6 +4393,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     handleEditContent,
     // Present only while a history edit is pending.
     cancelEdit: editEntryId ? cancelEdit : undefined,
+    // #128: the restart-refused edit's prompt and its two answers (claude sessions).
+    claudeEditRestartRefusal,
+    dismissClaudeEditRestartRefusal,
+    handleSendClaudeEditAsNewMessage,
     addNotice,
     setNoticePaused: setPausedNoticeId,
     handleToolPresetChange, handleThinkingLevelChange, handleSetDefaultModel, handleSetDefaultThinkingLevel, loadTools, loadSlashCommands, loadAllModels, setActiveLeafId, setData, setMessages, loadContext,

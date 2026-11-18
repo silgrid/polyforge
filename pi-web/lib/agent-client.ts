@@ -8,6 +8,7 @@
 // hooks/useAgentSession.ts. This helper collapses that down to one line.
 
 import { missingCwdFromBody } from "./missing-cwd";
+import { CLAUDE_RESTART_REFUSED_CODE } from "./claude-shared";
 
 export class AgentCommandError extends Error {
   constructor(
@@ -24,8 +25,10 @@ export class AgentCommandError extends Error {
 }
 
 export function isPromptRejectedError(error: unknown): error is AgentCommandError {
+  // A restart refusal (unfinished background work, #128) is as definite as the generic
+  // code: the server answered `accepted: false`, so the prompt is known not to have run.
   return error instanceof AgentCommandError
-    && error.code === "prompt_rejected"
+    && (error.code === "prompt_rejected" || error.code === CLAUDE_RESTART_REFUSED_CODE)
     && error.accepted === false;
 }
 
