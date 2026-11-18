@@ -524,7 +524,12 @@ func TestW136InstallDevRefusals(t *testing.T) {
 		{"no installed pf", w136DevCfg{green: "", tools: true}, "", true,
 			[]string{"the formal channel"}},
 		{"build tools missing", w136DevCfg{green: "", tools: false}, "", false,
-			[]string{"go", "make", "node", "npm", "missing required tools"}},
+			// the one report names every missing build tool with its own
+			// obtain hint line — a bare "go" substring would match almost
+			// any output (review r1 N5)
+			[]string{"missing required tools",
+				"go      - (--dev)", "make    - (--dev)",
+				"node    - (--dev)", "npm     - (--with-pi-web, --dev)"}},
 		{"build fails", w136DevCfg{green: "", tools: true}, "W136_MAKE_FAIL=1", false,
 			[]string{"building pf", "failed"}},
 		{"node major mismatch", w136DevCfg{green: "", tools: true}, "W136_NODE_VER=v22.0.0", false,
@@ -552,9 +557,23 @@ func TestW136InstallDevRefusals(t *testing.T) {
 					t.Fatalf("the refusal lacks %q:\n%s", want, out)
 				}
 			}
-			if !tc.noBin {
+			if tc.noBin {
+				// no pf to keep: the refusal must build and start nothing
+				if _, err := os.Stat(d.bin); !os.IsNotExist(err) {
+					t.Fatal("the refused dev run created a pf")
+				}
+				if daemons := d.daemons(); len(daemons) != 0 {
+					t.Fatalf("the refused dev run started a daemon: %v", daemons)
+				}
+				for _, l := range d.journalLines() {
+					if strings.Contains(l, " dev-build ") {
+						t.Fatalf("the refused dev run built: %s", l)
+					}
+				}
+			} else {
 				w136Unchanged(t, d, binBody, curBefore)
 			}
+			_ = binBody
 		})
 	}
 }
