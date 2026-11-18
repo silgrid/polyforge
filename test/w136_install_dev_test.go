@@ -40,6 +40,7 @@ import (
 type w136DevCfg struct {
 	green string // "" = default: green tag at main HEAD; "tag" | "base" | "none" | "offmain"
 	tools bool   // the build-tool shims (go, make, node, npm) are on PATH
+	touch string // a repo-relative path ONE commit after the release tag touches (an AIHub-side change shape)
 }
 
 // w136Dev is one hermetic dev-channel machine on top of w174Install.
@@ -131,6 +132,13 @@ func w136NewDev(t *testing.T, cfg w136DevCfg) *w136Dev {
 	w136Git(t, d.origin, "commit", "-q", "-m", "the released line")
 	w136Git(t, d.origin, "tag", "-a", "-m", "release v0.2.3", "v0.2.3")
 	d.tagSHA = w136CommitSHA(t, d.origin, "v0.2.3")
+	if cfg.touch != "" {
+		// one commit INSIDE the release-tag..green range touches the path:
+		// the AIHub-side shape AC2 refuses, whatever the client commits beside it
+		w136Write(t, filepath.Join(d.origin, filepath.FromSlash(cfg.touch)), "// w136 AIHub-side change\n", 0o644)
+		w136Git(t, d.origin, "add", "-A")
+		w136Git(t, d.origin, "commit", "-q", "-m", "a change the dev channel must refuse")
+	}
 	w136Write(t, filepath.Join(d.origin, "internal", "polyforge", "cli", "verbs_version.go"), "package cli // r2\n", 0o644)
 	w136Git(t, d.origin, "add", "-A")
 	w136Git(t, d.origin, "commit", "-q", "-m", "client change 1")
@@ -438,6 +446,83 @@ func TestW136InstallDevRefusals(t *testing.T) {
 			}
 		})
 	}
+}
+
+// w136AIHubPaths reads the repository's own AIHub-side list (the same
+// file the installer reads from the green commit's checkout) and
+// answers one representative changed path per entry: the directory
+// prefix plus a nested file (a /** entry covers any depth), the exact
+// path itself otherwise.
+func w136AIHubPaths(t *testing.T) map[string]string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(v1Root(t), "tools", "aihub-paths.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := map[string]string{}
+	for _, l := range strings.Split(string(raw), "\n") {
+		l = strings.TrimSpace(l)
+		if l == "" || strings.HasPrefix(l, "#") {
+			continue
+		}
+		if strings.HasSuffix(l, "/**") {
+			entries[l] = strings.TrimSuffix(l, "/**") + "/sql/v0.2.4/upgrade.sql"
+		} else {
+			entries[l] = l
+		}
+	}
+	if len(entries) == 0 {
+		t.Fatal("tools/aihub-paths.conf declares no entry")
+	}
+	return entries
+}
+
+// TestW136InstallDevRefusesAIHubChange (AC2): a green commit whose diff
+// latest-release-tag..green-commit touches ANY path of the repository's
+// AIHub-side list refuses the dev channel in prepare (with nothing
+// changed), naming the change; a client-only diff proceeds. The list is
+// read from the repository's own tools/aihub-paths.conf — the same file
+// the installer reads from the green commit's checkout, never a second
+// copy in the test.
+func TestW136InstallDevRefusesAIHubChange(t *testing.T) {
+	for entry, path := range w136AIHubPaths(t) {
+		t.Run(entry, func(t *testing.T) {
+			d := w136NewDev(t, w136DevCfg{green: "", tools: true, touch: path})
+			binBody := w136InstallBin(t, d, "v0.2.3")
+			curBefore := w136ReadLink(t, d)
+			d.resetJournal(t)
+			out, code := d.run(t)
+			if code == 0 {
+				t.Fatalf("a green commit touching %s must refuse the dev channel; it installed:\n%s", path, out)
+			}
+			for _, want := range []string{"AIHub-side", path, "needs a formal release"} {
+				if !strings.Contains(out, want) {
+					t.Fatalf("the refusal lacks %q:\n%s", want, out)
+				}
+			}
+			// the diff the verdict is drawn from is the read the journal records
+			found := false
+			for _, l := range d.journalLines() {
+				if strings.Contains(l, "diff --name-only") {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatal("the journal records no git diff --name-only: the AIHub-side verdict must come from the release-tag..green-commit diff")
+			}
+			w136Unchanged(t, d, binBody, curBefore)
+		})
+	}
+	// the control: a client-only diff (the default fixture) proceeds —
+	// the conservative list must not block what it does not name
+	t.Run("client-only proceeds", func(t *testing.T) {
+		d := w136NewDev(t, w136DevCfg{green: "", tools: true})
+		w136InstallBin(t, d, "v0.2.3")
+		if out, code := d.run(t); code != 0 {
+			t.Fatalf("a client-only green commit must install over the dev channel; exit %d:\n%s", code, out)
+		}
+	})
 }
 
 // TestW136InstallDevReadOnlyRemote (AC4): the channel's gh and git calls
