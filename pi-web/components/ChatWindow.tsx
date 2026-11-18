@@ -341,6 +341,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
     relayToClaudeSubagent,
     claudeBackgroundTasks, claudeForceStopWork, stopClaudeBackgroundTask, readClaudeTaskOutput, forceStopClaudeTurn, dismissClaudeForceStop,
     newSessionClaudeModel, setNewSessionClaudeModel, claudeAvailability, claudeSubagents,
+    claudeEditRestartRefusal, dismissClaudeEditRestartRefusal, handleSendClaudeEditAsNewMessage,
   } = useAgentSession({
     session, sessionRunning, newSessionCwd, newSessionDraftKey, initialNewSessionChoices, onNewSessionChoicesChange, onAgentEnd: wrappedOnAgentEnd, onToolEnd, onAttentionNeeded, onBackgroundTasksEvent, onSessionCreated, onSessionForked,
     modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsPanelOpen,
@@ -358,6 +359,12 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
   // edit only where claude can resume before the message (claudeEditEntryIds).
   const claudeActionsLocked = isClaudeSession && (agentRunning || isCompacting);
   const claudeEditable = useMemo(() => new Set(claudeEditEntryIds), [claudeEditEntryIds]);
+  // #128: background work keeps the history edit entry offered — it can still stage —
+  // but its submission must wait for the work to end (the restart refusal), so the
+  // entry says so instead of going dead.
+  const claudeBackgroundWorkRunning = isClaudeSession
+    && (Object.values(claudeBackgroundTasks).some((task) => task.status === "running")
+      || Object.values(claudeSubagents).some((run) => run.status === "running"));
   // A fresh composer picks pi or claude side by side with the model selector
   // (claude's model names when claude is chosen) and, for claude, its effort; an
   // open claude session switches its model and effort while idle, never its harness.
@@ -1227,6 +1234,8 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
     ? (modelThinkingLevelMaps[`${displayModelValue.provider}:${displayModelValue.modelId}`] ?? null)
     : null;
 
+  // #128: the staged edit is the composer's own visible mode; a restart refusal
+  // adds the two-choice prompt (the props below).
   const chatInputElement = (
     <ChatInput
       ref={chatInputRef}
@@ -1288,6 +1297,11 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
       cwd={session?.cwd ?? newSessionCwd}
       onAttachFiles={onAttachFiles}
       claude={claudeComposer}
+      editPending={editEntryId !== null}
+      onCancelEdit={cancelEdit}
+      claudeEditRestartRefusal={claudeEditRestartRefusal}
+      onSendClaudeEditAsNewMessage={handleSendClaudeEditAsNewMessage}
+      onKeepClaudeEditPending={dismissClaudeEditRestartRefusal}
     />
   );
 
@@ -1561,6 +1575,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
                     onEditContent={sessionBusy || claudeActionsLocked || (isClaudeSession && !claudeEditable.has(entryIds[idx])) ? undefined : handleEditContent}
                     onCancelEdit={cancelEdit}
                     isEditing={editEntryId === entryIds[idx]}
+                    editWaitsForBackgroundWork={claudeBackgroundWorkRunning}
                     showTimestamp={showTimestamp}
                     prevTimestamp={idx > 0 ? (messages[idx - 1] as AgentMessage & { timestamp?: number }).timestamp : undefined}
                     sessionId={session?.id ?? sessionIdRef.current ?? undefined}
