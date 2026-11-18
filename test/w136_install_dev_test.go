@@ -271,6 +271,18 @@ func (d *w136Dev) run(t *testing.T, args ...string) (string, int) {
 // (N = the first-parent count release-tag..green-commit).
 const w136DevVersion = "v0.2.4-dev.2"
 
+// w136ReadLink answers the release/current target, "" when the link is
+// absent (a fresh fixture has no release layout yet — w174NewInstall
+// removes the one w174NewEnv laid out).
+func w136ReadLink(t *testing.T, d *w136Dev) string {
+	t.Helper()
+	cur, err := os.Readlink(filepath.Join(d.data, "release", "current"))
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("readlink release/current: %v", err)
+	}
+	return cur
+}
+
 // w136Unchanged asserts the refusal invariant: the pf bytes, the
 // release/current link and the daemon population are as they were, and
 // no staged binary was left behind.
@@ -282,8 +294,8 @@ func w136Unchanged(t *testing.T, d *w136Dev, binBefore, curBefore string) {
 	if left, _ := filepath.Glob(d.bin + ".new.*"); len(left) != 0 {
 		t.Fatalf("a staged binary was left behind: %v", left)
 	}
-	if cur, err := os.Readlink(filepath.Join(d.data, "release", "current")); err != nil || cur != curBefore {
-		t.Fatalf("release/current = %q (%v), want %q", cur, err, curBefore)
+	if cur := w136ReadLink(t, d); cur != curBefore {
+		t.Fatalf("release/current = %q, want %q", cur, curBefore)
 	}
 	for _, l := range d.journalLines() {
 		if strings.Contains(l, "ops shutdown") {
@@ -316,7 +328,6 @@ func w136InstallBin(t *testing.T, d *w136Dev, ver string) string {
 func TestW136InstallDevGreenBuildsAndInstalls(t *testing.T) {
 	d := w136NewDev(t, w136DevCfg{green: "", tools: true})
 	w136InstallBin(t, d, "v0.2.3")
-	curBefore, _ := os.Readlink(filepath.Join(d.data, "release", "current"))
 	d.resetJournal(t)
 
 	out, code := d.run(t)
@@ -358,7 +369,6 @@ func TestW136InstallDevGreenBuildsAndInstalls(t *testing.T) {
 	if cur, err := os.Readlink(filepath.Join(d.data, "release", "current")); err != nil || cur != w136DevVersion {
 		t.Fatalf("release/current = %q (%v), want %s", cur, err, w136DevVersion)
 	}
-	_ = curBefore
 
 	// a second run changes nothing: the same green tag derives the same
 	// version, and no build runs
@@ -407,7 +417,7 @@ func TestW136InstallDevRefusals(t *testing.T) {
 			if !tc.noBin {
 				binBody = w136InstallBin(t, d, "v0.2.3")
 			}
-			curBefore, _ := os.Readlink(filepath.Join(d.data, "release", "current"))
+			curBefore := w136ReadLink(t, d)
 			if tc.env != "" {
 				k, v, _ := strings.Cut(tc.env, "=")
 				d.extraEnv = append(d.extraEnv, tc.env)
