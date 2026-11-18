@@ -313,7 +313,7 @@ if [ -n "$MISSING" ]; then
       curl)    echo "   curl    - macOS: xcode-select --install  |  Linux: apt install curl" ;;
       python3) echo "   python3 - macOS: xcode-select --install  |  Linux: apt install python3" ;;
       git)     echo "   git     - macOS: xcode-select --install  |  Linux: apt install git" ;;
-      npm)     echo "   npm     - (--with-pi-web, --dev) install Node.js, which ships npm" ;;
+      npm)     echo "   npm     - (--with-pi-web, --dev) install Node.js >= 22.19 (--dev needs the .nvmrc major), which ships npm" ;;
       tar)     echo "   tar     - (--with-pi-web, --dev) Linux: apt install tar  |  macOS: ships with the OS" ;;
       go)      echo "   go      - (--dev) https://go.dev/dl, the major version go.mod pins" ;;
       make)    echo "   make    - (--dev) Linux: apt install make  |  macOS: ships with the Command Line Tools" ;;
