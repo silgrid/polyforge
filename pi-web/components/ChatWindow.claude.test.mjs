@@ -1,9 +1,12 @@
+// carries: components/ChatWindow*, components/ChatInput*, components/MessageView*, hooks/useAgentSession*, lib/i18n/messages/*
 import "#test-env";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const chatWindow = await readFile(new URL("./ChatWindow.tsx", import.meta.url), "utf8");
+const chatInput = await readFile(new URL("./ChatInput.tsx", import.meta.url), "utf8");
+const messageView = await readFile(new URL("./MessageView.tsx", import.meta.url), "utf8");
 const hook = await readFile(new URL("../hooks/useAgentSession.ts", import.meta.url), "utf8");
 
 test("a claude session offers no ask-in-new-chat or compaction recovery", () => {
@@ -86,4 +89,48 @@ test("a running background Agent step renders outside the folded process details
   assert.ok(group > 0 && outside > group, "the running row follows the fold, at the turn's top level");
   assert.ok(outside < chatWindow.indexOf("const writtenFiles = keepWrittenFiles"), "before the final answer");
   assert.equal(chatWindow.split("isRunningBackgroundAgentMessage(").length - 1, 1, "one fold exception");
+});
+
+// #128 (AC3 + AC1's prompt): a staged edit is a visible, cancellable mode of the
+// composer — the edit bar with its Cancel — and a restart-refused edit adds the
+// two-choice prompt («作为新消息发送» submits the composer's own text once without
+// the entryId, «保留编辑» only closes the prompt); the history edit entry stays
+// offered while background work runs, annotated that submitting must wait for it.
+// The behaviour behind the wiring is pinned in hooks/useAgentSession.claude.test.mjs.
+test("128 u6 the composer shows the pending-edit bar and the restart-refused two-choice prompt; history edit stays offered while background work runs", () => {
+  // The composer's edit-state bar (AC3) with its Cancel.
+  assert.match(chatInput, /className="composer-edit-pending"/);
+  assert.match(chatInput, /onClick=\{onCancelEdit\}/);
+  assert.match(chatInput, /t\("chat\.editPendingBar"\)/);
+  // The restart refusal's two choices (AC1): send-as-new submits the composer's own
+  // text once (clearing it like a send); keep-pending only closes the prompt.
+  assert.match(chatInput, /className="claude-edit-restart-refusal"/);
+  assert.match(
+    chatInput,
+    /if \(!msg && !attachedImages\.length\) return;\s*\n\s*clearInput\(\);\s*\n\s*onSendClaudeEditAsNewMessage\?\.\(msg, attachedImages\.length \? attachedImages : undefined\);/,
+    "send-as-new must submit the composer's own text exactly once, clearing it like a send",
+  );
+  assert.match(chatInput, /onClick=\{onKeepClaudeEditPending\}/);
+  // ChatWindow wires the hook's edit state and both answers into the session composer.
+  assert.match(chatWindow, /editPending=\{editEntryId !== null\}/);
+  assert.match(chatWindow, /onCancelEdit=\{cancelEdit\}/);
+  assert.match(chatWindow, /claudeEditRestartRefusal=\{claudeEditRestartRefusal\}/);
+  assert.match(chatWindow, /onSendClaudeEditAsNewMessage=\{handleSendClaudeEditAsNewMessage\}/);
+  assert.match(chatWindow, /onKeepClaudeEditPending=\{dismissClaudeEditRestartRefusal\}/);
+  // The history edit entry stays offered while background work runs, annotated (AC3, Q2a).
+  assert.match(
+    chatWindow,
+    /const claudeBackgroundWorkRunning = isClaudeSession\s*\n\s*&& \(Object\.values\(claudeBackgroundTasks\)\.some\(\(task\) => task\.status === "running"\)\s*\n\s*\|\| Object\.values\(claudeSubagents\)\.some\(\(run\) => run\.status === "running"\)\);/,
+    "background work must not hide the edit entry — it annotates it instead",
+  );
+  assert.match(chatWindow, /editWaitsForBackgroundWork=\{claudeBackgroundWorkRunning\}/);
+  // MessageView annotates the edit action, never hiding it.
+  assert.match(
+    messageView,
+    /editWaitsForBackgroundWork \? `\$\{t\("i18n\.editFromHereTitle"\)\} — \$\{t\("chat\.editWaitsForBackgroundWork"\)\}` : t\("i18n\.editFromHereTitle"\)/,
+  );
+  assert.match(
+    messageView,
+    /\{t\("i18n\.editFromHere"\)\}\{editWaitsForBackgroundWork \? ` · \$\{t\("chat\.editWaitsForBackgroundWork"\)\}` : ""\}/,
+  );
 });
