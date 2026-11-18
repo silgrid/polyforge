@@ -323,7 +323,7 @@ test("an open claude session shows a switch only once claude accepted it; a refu
 // takes the message (text and images), Cancel leaves everything as it was, and Send is one
 // prompt naming the message it replaces (the server resumes the same session truncated
 // before it). "New session" still forks.
-function claudeEditHarness({ rejectPrompt = false, goneAfterReject = false, draftKept = false } = {}) {
+function claudeEditHarness({ rejectPrompt = false, goneAfterReject = false, draftKept = false, restartRefuse = false } = {}) {
   let rejected = false;
   const commands = [];
   const replaced = [];
@@ -347,6 +347,10 @@ function claudeEditHarness({ rejectPrompt = false, goneAfterReject = false, draf
       const body = JSON.parse(init.body);
       commands.push(body);
       if (body.type === "fork") return json({ success: true, data: { cancelled: false, newSessionId: "fork-7" } });
+      if (body.type === "prompt" && body.entryId && restartRefuse) {
+        rejected = true;
+        return new Response(JSON.stringify({ error: "A claude background task is still running (\"npm run dev\"). Editing a message restarts claude, which would end it; try again when it is done.", code: "claude_restart_refused", accepted: false }), { status: 500, headers: { "Content-Type": "application/json" } });
+      }
       if (body.type === "prompt" && rejectPrompt) {
         rejected = true;
         return new Response(JSON.stringify({ error: "claude cannot resume there", code: "prompt_rejected", accepted: false }), { status: 500, headers: { "Content-Type": "application/json" } });
@@ -438,6 +442,8 @@ test("a refused claude edit leaves the edit pending over the whole history and g
     assert.deepEqual(hook.result.entryIds, ["u1", "a1", "u2", "a2"]);
     assert.equal(restored.length, 1);
     assert.equal(restored[0][0], "two, edited");
+    // #128: a generic rejection is not a restart refusal — no two-choice prompt.
+    assert.equal(hook.result.claudeEditRestartRefusal, null, "a plain prompt_rejected opened the two-choice prompt");
   } finally {
     console.error = originalError;
     hook.unmount();
@@ -511,6 +517,66 @@ test("128 u4 an edit click over a kept draft stages nothing; the next send is a 
     assert.deepEqual(commands, [{ type: "prompt", message: "my precious draft" }], "the draft went out as an edit");
     assert.deepEqual(hook.result.entryIds, ["u1", "a1", "u2", "a2"], "the history was cut as an edit would");
   } finally {
+    hook.unmount();
+  }
+});
+
+// #128 AC1: an edit refused because it would restart claude over unfinished background
+// work keeps the edit pending and the composer's text, and offers the two choices on the
+// structured code alone —「保留编辑，稍后再试」 dismisses the prompt,「作为新消息发送」 is
+// exactly one plain prompt without the entryId and clears the staged edit.
+test("128 u5 a restart-refused edit stays pending with a two-choice prompt; send-as-new is one plain prompt and clears the edit", async () => {
+  const { hook, commands, restored } = claudeEditHarness({ restartRefuse: true });
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    await settle();
+    hook.flush();
+    hook.result.handleEditContent(EDITED, "u2");
+    hook.flush();
+    await hook.result.handleSend("two, edited");
+    await settle();
+    hook.flush();
+    // The refusal kept the edit pending and the composer's text, and offered the choices.
+    assert.deepEqual(commands, [{ type: "prompt", message: "two, edited", entryId: "u2" }]);
+    assert.equal(hook.result.editEntryId, "u2", "the restart-refused edit stopped being pending");
+    assert.equal(restored.length, 1);
+    assert.equal(restored[0][0], "two, edited");
+    assert.match(hook.result.claudeEditRestartRefusal ?? "", /background task is still running/, "no two-choice prompt answered the restart refusal");
+    //「保留编辑，稍后再试」 clears the prompt and keeps the staged edit.
+    hook.result.dismissClaudeEditRestartRefusal();
+    hook.flush();
+    assert.equal(hook.result.claudeEditRestartRefusal, null);
+    assert.equal(hook.result.editEntryId, "u2");
+    assert.equal(commands.length, 1);
+    // A retry is refused again; cancelling the edit clears the prompt with it.
+    await hook.result.handleSend("two, edited");
+    await settle();
+    hook.flush();
+    assert.equal(commands.length, 2);
+    assert.match(hook.result.claudeEditRestartRefusal ?? "", /background task is still running/, "the retried edit's refusal opened no prompt");
+    hook.result.cancelEdit();
+    hook.flush();
+    assert.equal(hook.result.editEntryId, null);
+    assert.equal(hook.result.claudeEditRestartRefusal, null, "cancelling the edit left the prompt up");
+    // Staged again and refused again:「作为新消息发送」 is one plain prompt, no entryId.
+    hook.result.handleEditContent(EDITED, "u2");
+    hook.flush();
+    await hook.result.handleSend("two, edited");
+    await settle();
+    hook.flush();
+    assert.equal(commands.length, 3);
+    assert.match(hook.result.claudeEditRestartRefusal ?? "", /background task is still running/);
+    await hook.result.handleSendClaudeEditAsNewMessage("two, edited");
+    await settle();
+    hook.flush();
+    assert.equal(commands.length, 4, "send-as-new sent more than once");
+    assert.deepEqual(commands.at(-1), { type: "prompt", message: "two, edited" }, "send-as-new carried the entryId");
+    assert.equal(hook.result.editEntryId, null, "send-as-new left the edit staged");
+    assert.equal(hook.result.claudeEditRestartRefusal, null, "send-as-new left the prompt up");
+    assert.equal(hook.result.cancelEdit, undefined);
+  } finally {
+    console.error = originalError;
     hook.unmount();
   }
 });
