@@ -60,7 +60,10 @@ and `artifacts/merge/landing.json`. The daemon orchestrates; it judges no conten
   flaky failure re-runs only the suite that failed, once; and a long command writes its output to
   a log file with its exit code and the log is searched after the run, never piped straight into
   grep, head or tail. Fast
-  checks plus every new test; the change analysis's close check (`facts.py analysis` — the
+  checks plus every new test; the close's facts checks — `facts.py build` without the
+  replay (each unit's static commit facts) and `carries`, the same engine review judges
+  with, a red naming the unit, or the repo, suite and reason and fixed before the
+  hand-off; the change analysis's close check (`facts.py analysis` — the
   same shared validator `verify.py --analysis` calls; a red names the entry and the rule it
   violates and must be fixed before the hand-off); a self-review against review's five
   blocking classes (`artifacts/self-review.md`). It asks the owner (`pf step ask`) only
