@@ -57,7 +57,7 @@ func TestW131BuildCloseFactsTexts(t *testing.T) {
 			"the close's facts checks — `facts.py build` without the replay (each unit's static commit facts) and `carries`, the same engine review judges with, a red naming the unit, or the repo, suite and reason and fixed before the hand-off",
 		},
 		"docs/concepts.md": {
-			"its close runs two of the same facts first — `build` without the replay (each unit's static commit facts) and `carries` — and hands off only on green",
+			"Its close runs two of the same facts first — `build` without the replay (each unit's static commit facts) and `carries` — and hands off only on green",
 		},
 		"docs/bundles.md": {
 			"its close running the static `build` (no replay) and `carries` facts first",
