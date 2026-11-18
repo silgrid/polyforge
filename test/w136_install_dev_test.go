@@ -158,7 +158,7 @@ func w136NewDev(t *testing.T, cfg w136DevCfg) *w136Dev {
 	}
 	if greenAt != "" {
 		msg := fmt.Sprintf(`{"commit":%q,"gate_id":"%064d","runner":"gate.py","runner_version":"2","plan_digest":"%064d","engine_source":"tree","gate_id_source":"tree","verified_at":"2026-11-18T00:00:00Z","summary":"w136 fixture gate"}`, greenAt, 1, 2)
-		w136Git(t, d.origin, "tag", "-a", "-m", msg, "green/20261118-1")
+		w136Git(t, d.origin, "tag", "-a", "-m", msg, "green/20261118-1", greenAt)
 	}
 
 	// the released version the gh stub serves (the formal channel's
