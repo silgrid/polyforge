@@ -146,12 +146,12 @@ func w136NewDev(t *testing.T, cfg w136DevCfg) *w136Dev {
 		if err := json.Unmarshal([]byte(w174ReadFile(t, filepath.Join(root, "pi-web", "package.json"))), &repoPkg); err != nil {
 			t.Fatal(err)
 		}
-		manifest, err := json.Marshal(map[string]any{
+		manifest, err := json.MarshalIndent(map[string]any{
 			"name":    "@silgrid/pi-web",
 			"version": "0.2.0-dev.0",
 			"bin":     map[string]string{"pi-web": "bin/pi-web.js"},
 			"scripts": map[string]string{"postinstall": repoPkg.Scripts["postinstall"]},
-		})
+		}, "", "  ")
 		if err != nil {
 			t.Fatal(err)
 		}
