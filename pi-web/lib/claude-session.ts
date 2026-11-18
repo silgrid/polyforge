@@ -62,6 +62,7 @@ import {
   CLAUDE_LAUNCH_PERMISSION_MODE_DEFAULT,
   CLAUDE_PLAN_UNAVAILABLE_REASON,
   CLAUDE_PROVIDER,
+  CLAUDE_RESTART_REFUSED_CODE,
   claudeFirstMessage,
   claudePlanModeAllowed,
   claudeSlashCommands,
@@ -1410,7 +1411,11 @@ export async function editClaudeSession(record: ClaudeSessionRecord, entryId: st
   const live = getClaudeSession(record.id);
   if (live?.isRunning()) throw new Error("A claude turn is running; edit when it ends");
   const refusal = live?.restartRefusal("Editing a message");
-  if (refusal) throw new Error(refusal);
+  if (refusal) {
+    // The structured code the page's「作为新消息发送」/「保留编辑」prompt keys on (#128):
+    // read by its `code` field across bundles, never by instanceof.
+    throw Object.assign(new Error(refusal), { code: CLAUDE_RESTART_REFUSED_CODE });
+  }
   const transcript = claudeTranscriptFile(record.id, claudeConfigDir());
   if (!transcript) throw new Error("Invalid entry ID for editing");
   const resumeAt = claudeEditResumePoint(parseClaudeTranscript(readFileSync(transcript, "utf8")), entryId);
