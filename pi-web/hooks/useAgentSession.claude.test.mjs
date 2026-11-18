@@ -1,3 +1,4 @@
+// carries: hooks/useAgentSession*, components/ChatInput*, lib/i18n/messages/*
 import "#test-env";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -322,7 +323,7 @@ test("an open claude session shows a switch only once claude accepted it; a refu
 // takes the message (text and images), Cancel leaves everything as it was, and Send is one
 // prompt naming the message it replaces (the server resumes the same session truncated
 // before it). "New session" still forks.
-function claudeEditHarness({ rejectPrompt = false, goneAfterReject = false } = {}) {
+function claudeEditHarness({ rejectPrompt = false, goneAfterReject = false, draftKept = false } = {}) {
   let rejected = false;
   const commands = [];
   const replaced = [];
@@ -361,7 +362,7 @@ function claudeEditHarness({ rejectPrompt = false, goneAfterReject = false } = {
     if (String(url).startsWith("/api/models")) return json({ models: {}, modelList: [], defaultModel: null });
     return json({});
   };
-  const chatInputRef = { current: { replaceMessage: (message) => replaced.push(message), restoreSubmission: (...args) => restored.push(args) } };
+  const chatInputRef = { current: { replaceMessage: (message) => { replaced.push(message); return !draftKept; }, restoreSubmission: (...args) => restored.push(args) } };
   const hook = renderHook(useAgentSession, {
     session: info,
     newSessionCwd: null,
@@ -486,6 +487,30 @@ test("a ! message in a claude session is a prompt, never a bash command; a stage
     assert.deepEqual(hook.result.messages.map((message) => message.role), ["user", "assistant", "user"]);
   } finally {
     console.error = originalError;
+    hook.unmount();
+  }
+});
+
+// #128 AC2: clicking「编辑」over a composer with a draft keeps the draft (pi#33) and
+// stages no edit — the click was a no-op beyond its notice, and the next send is an
+// ordinary prompt, never an edit the user never sees staged.
+test("128 u4 an edit click over a kept draft stages nothing; the next send is a plain prompt", async () => {
+  const { hook, commands, replaced } = claudeEditHarness({ draftKept: true });
+  try {
+    await settle();
+    hook.flush();
+    hook.result.handleEditContent(EDITED, "u2");
+    hook.flush();
+    assert.deepEqual(replaced, [EDITED], "the click never reached the composer");
+    assert.equal(hook.result.editEntryId, null, "the edit was staged over the kept draft");
+    assert.equal(hook.result.cancelEdit, undefined, "a staged edit appeared out of nowhere");
+    assert.deepEqual(commands, [], "staging an edit sent a command");
+    await hook.result.handleSend("my precious draft");
+    await settle();
+    hook.flush();
+    assert.deepEqual(commands, [{ type: "prompt", message: "my precious draft" }], "the draft went out as an edit");
+    assert.deepEqual(hook.result.entryIds, ["u1", "a1", "u2", "a2"], "the history was cut as an edit would");
+  } finally {
     hook.unmount();
   }
 });
