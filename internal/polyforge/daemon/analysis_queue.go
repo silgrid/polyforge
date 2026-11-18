@@ -164,8 +164,13 @@ func (d *Daemon) analysisQueuePath() string {
 
 // analysisNeeds judges one ticket's CURRENT record: an execution ticket
 // (a bundle) on a lane that requires acceptance, whose body carries no
-// analysis section, not terminal.
-func (d *Daemon) analysisNeeds(item *api.WorkItem) bool {
+// analysis section, not terminal. A re-queued entry (retries > 0,
+// polyforge#115) needs one also when the section carries the unconfirmed
+// draft an interrupted analysis left behind — the resume its re-queue
+// comment「已重新入队，接着已写的部分继续」promises; an owner-confirmed
+// or hand-written analysis (a section without the unconfirmed marker)
+// needs none, first dispatch included.
+func (d *Daemon) analysisNeeds(item *api.WorkItem, retries int) bool {
 	if item.BundleName == nil || strings.TrimSpace(*item.BundleName) == "" {
 		return false
 	}
@@ -176,7 +181,11 @@ func (d *Daemon) analysisNeeds(item *api.WorkItem) bool {
 	if item.Content != nil {
 		content = *item.Content
 	}
-	return !workflow.HasAnalysis(content) && d.laneOf(item.ProjectName, *item.BundleName).RequiresAcceptance()
+	// a re-queued entry resumes its own unconfirmed draft (AnalysisUnconfirmed
+	// implies HasAnalysis: the marker is the section's text) — the same
+	// judgment analysis_write.go and decisions.go make, nothing new invented
+	needs := !workflow.HasAnalysis(content) || (retries > 0 && workflow.AnalysisUnconfirmed(content))
+	return needs && d.laneOf(item.ProjectName, *item.BundleName).RequiresAcceptance()
 }
 
 // analysisPrompt answers the whole stdin one analysis candidate runs
@@ -224,7 +233,7 @@ func (d *Daemon) analysisPromptFor(t task.Task) string {
 // (the zero value with errNotNeeded = the ticket no longer needs one;
 // the zero value with another err = why the caller may retry).
 func (d *Daemon) analysisSpawn(item *api.WorkItem, retries int) (task.Task, error) {
-	if !d.analysisNeeds(item) {
+	if !d.analysisNeeds(item, retries) {
 		return task.Task{}, errNotNeeded
 	}
 	prompt, err := d.analysisPrompt(item)
@@ -315,7 +324,7 @@ func (d *Daemon) dispatchAnalysis() {
 			}
 			return
 		}
-		if !d.analysisNeeds(item) {
+		if !d.analysisNeeds(item, head.Retries) {
 			q.dropHead("no longer needs an analysis")
 			continue
 		}
@@ -434,7 +443,7 @@ func (d *Daemon) analysisEnqueueRoute(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"state": "failed", "detail": err.Error()})
 		return
 	}
-	if !d.analysisNeeds(item) {
+	if !d.analysisNeeds(item, 0) {
 		writeJSON(w, http.StatusOK, map[string]any{"state": "not_needed"})
 		return
 	}
