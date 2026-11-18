@@ -291,3 +291,202 @@ func TestReadGCDeclarationFromCommittedRef(t *testing.T) {
 		}
 	})
 }
+
+// newGCProbeRepo answers a local clone whose HEAD carries the given
+// .gitignore beside a tracked README: a fixture whose declared content
+// each probe case lays out itself. The ignore is what makes the
+// declared directory's content ignored — the one property every
+// removable case rests on.
+func newGCProbeRepo(t *testing.T, gitignore string) string {
+	t.Helper()
+	clone := newGCClone(t, "")
+	if err := os.WriteFile(filepath.Join(clone, ".gitignore"), []byte(gitignore), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(clone, "README.md"), []byte("tracked\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gcGit(t, clone, "add", ".gitignore", "README.md")
+	gcGit(t, clone, "-c", "user.email=gc@example.com", "-c", "user.name=gc", "commit", "-q", "-m", "the ignore")
+	return clone
+}
+
+// gcWrite lays out one regular file of n bytes.
+func gcWrite(t *testing.T, path string, n int) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, bytes.Repeat([]byte("a"), n), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestGCDeclaredDirProbe: a removal takes a declared directory only
+// when everything under it is ignored, nothing in it is tracked, it
+// hides no repository and no path component of it is a symlink; the
+// repository's own git metadata is never a target however it is spelled;
+// a declared directory that is not there is no target at all. Sizes
+// come from what the fixture wrote (100 + 50 bytes, a symlink counted
+// never), never from the implementation (polyforge#127, u3 — AC1's
+// "deleted exactly as declared", AC2's "git state untouched").
+func TestGCDeclaredDirProbe(t *testing.T) {
+	t.Run("ignored content measures and is removable", func(t *testing.T) {
+		clone := newGCProbeRepo(t, "build/\n")
+		gcWrite(t, filepath.Join(clone, "build", "dist", "app.bin"), 100)
+		gcWrite(t, filepath.Join(clone, "build", "dist", "nested", "lib.bin"), 50)
+		if err := os.Symlink(filepath.Join(clone, "README.md"), filepath.Join(clone, "build", "dist", "link")); err != nil {
+			t.Fatal(err)
+		}
+		tgt, err := Probe(clone, "build/dist")
+		if err != nil {
+			t.Fatalf("Probe: %v", err)
+		}
+		if tgt == nil {
+			t.Fatal("Probe = nil, nil; want the declared directory measured")
+		}
+		if tgt.Skip != "" {
+			t.Fatalf("Skip = %q, want a removal may take an all-ignored directory", tgt.Skip)
+		}
+		if tgt.Size != 150 {
+			t.Fatalf("Size = %d, want 150 (the two files the fixture wrote; a symlink neither followed nor counted)", tgt.Size)
+		}
+	})
+
+	t.Run("tracked content under the declared directory keeps it", func(t *testing.T) {
+		clone := newGCProbeRepo(t, "build/\n")
+		gcWrite(t, filepath.Join(clone, "build", "dist", "tracked.bin"), 10)
+		gcGit(t, clone, "add", "build/dist/tracked.bin") // staged: the index carries it
+		tgt, err := Probe(clone, "build/dist")
+		if err != nil {
+			t.Fatalf("Probe: %v", err)
+		}
+		if tgt == nil || !strings.Contains(tgt.Skip, "tracked") {
+			t.Fatalf("Probe = %v, want the directory kept for tracked content under it", tgt)
+		}
+	})
+
+	t.Run("untracked content the ignore rules do not cover keeps it", func(t *testing.T) {
+		clone := newGCProbeRepo(t, "out/ignored/\n")
+		gcWrite(t, filepath.Join(clone, "out", "loose.txt"), 10)
+		tgt, err := Probe(clone, "out")
+		if err != nil {
+			t.Fatalf("Probe: %v", err)
+		}
+		if tgt == nil || !strings.Contains(tgt.Skip, "untracked") {
+			t.Fatalf("Probe = %v, want the directory kept for untracked content the ignores do not cover", tgt)
+		}
+	})
+
+	t.Run("a nested repository keeps it", func(t *testing.T) {
+		clone := newGCProbeRepo(t, "build/\n")
+		gcGit(t, filepath.Join(clone, "build", "dist", "inner"), "-c", "init.defaultBranch=main", "init", "-q")
+		tgt, err := Probe(clone, "build/dist")
+		if err != nil {
+			t.Fatalf("Probe: %v", err)
+		}
+		if tgt == nil || !strings.Contains(tgt.Skip, "nested repository") {
+			t.Fatalf("Probe = %v, want the directory kept: the ignore hides the nested repository from git, only the walk sees it", tgt)
+		}
+	})
+
+	t.Run("a symlinked path component keeps it", func(t *testing.T) {
+		clone := newGCProbeRepo(t, "build/\n")
+		real := t.TempDir()
+		gcWrite(t, filepath.Join(real, "dist", "app.bin"), 100)
+		if err := os.Symlink(real, filepath.Join(clone, "build")); err != nil {
+			t.Fatal(err)
+		}
+		tgt, err := Probe(clone, "build/dist")
+		if err != nil {
+			t.Fatalf("Probe: %v", err)
+		}
+		if tgt == nil || !strings.Contains(tgt.Skip, "symlink") {
+			t.Fatalf("Probe = %v, want the directory kept: a removal through a symlinked component could leave the clone", tgt)
+		}
+	})
+
+	t.Run("the repository's own git metadata is never a target", func(t *testing.T) {
+		clone := newGCProbeRepo(t, "build/\n")
+		tgt, err := Probe(clone, ".git/hooks")
+		if err != nil {
+			t.Fatalf("Probe: %v", err)
+		}
+		if tgt == nil || !strings.Contains(tgt.Skip, "git metadata") {
+			t.Fatalf("Probe = %v, want the repository's own git metadata kept however it is spelled", tgt)
+		}
+	})
+
+	t.Run("a missing directory is no target", func(t *testing.T) {
+		clone := newGCProbeRepo(t, "build/\n")
+		tgt, err := Probe(clone, "build/dist")
+		if tgt != nil || err != nil {
+			t.Fatalf("Probe on a missing directory = %v, %v; want nil, nil (nothing to reclaim, nothing wrong)", tgt, err)
+		}
+	})
+
+	t.Run("a probe that cannot be made is an error", func(t *testing.T) {
+		dir := t.TempDir() // a directory, but no git repository
+		gcWrite(t, filepath.Join(dir, "build", "dist", "app.bin"), 100)
+		tgt, err := Probe(dir, "build/dist")
+		if tgt != nil || err == nil {
+			t.Fatalf("Probe outside a repository = %v, %v; want nil, an error — nothing unproven is ever removed", tgt, err)
+		}
+	})
+}
+
+// TestGCDeclaredDirRemove: the removal takes exactly the declared
+// directory — the clone's own tracked work, its git directory, its
+// local commits and its git status are byte-for-byte what they were —
+// it is idempotent, and the anchor refuses an escape out of the clone
+// (polyforge#127, u3 — AC1's "git directory and local commits stay",
+// AC2's "git status untouched").
+func TestGCDeclaredDirRemove(t *testing.T) {
+	clone := newGCProbeRepo(t, "build/\n")
+	gcWrite(t, filepath.Join(clone, "build", "dist", "app.bin"), 100)
+	gcWrite(t, filepath.Join(clone, "build", "dist", "nested", "lib.bin"), 50)
+	if err := os.Symlink(filepath.Join(clone, "README.md"), filepath.Join(clone, "build", "dist", "link")); err != nil {
+		t.Fatal(err)
+	}
+	status := gcGit(t, clone, "status", "--porcelain")
+	unpushed := gcGit(t, clone, "rev-list", "--all", "--not", "--remotes")
+	head := strings.TrimSpace(gcGit(t, clone, "rev-parse", "HEAD"))
+
+	if err := Remove(clone, "build/dist"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(clone, "build", "dist")); !os.IsNotExist(err) {
+		t.Fatalf("the declared directory survives its own removal: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(clone, "README.md")); err != nil {
+		t.Fatalf("the tracked work did not survive: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(clone, ".git")); err != nil {
+		t.Fatalf("the git directory did not survive: %v", err)
+	}
+	if after := gcGit(t, clone, "status", "--porcelain"); after != status {
+		t.Fatalf("git status moved: was %q, now %q", status, after)
+	}
+	if after := gcGit(t, clone, "rev-list", "--all", "--not", "--remotes"); after != unpushed {
+		t.Fatalf("the unpushed commits moved: was %q, now %q", unpushed, after)
+	}
+	if after := strings.TrimSpace(gcGit(t, clone, "rev-parse", "HEAD")); after != head {
+		t.Fatalf("HEAD moved: was %q, now %q", head, after)
+	}
+
+	// The second removal finds nothing and is no error.
+	if err := Remove(clone, "build/dist"); err != nil {
+		t.Fatalf("the second Remove = %v, want nil (idempotent)", err)
+	}
+
+	// The anchor: a declared path spelled to escape the clone is an
+	// error, and what it named is untouched.
+	outside := filepath.Join(filepath.Dir(clone), "outside")
+	gcWrite(t, filepath.Join(outside, "keep.txt"), 5)
+	if err := Remove(clone, "../outside"); err == nil {
+		t.Fatal("Remove through the clone's root = nil, want the anchor's refusal")
+	}
+	if _, err := os.Lstat(filepath.Join(outside, "keep.txt")); err != nil {
+		t.Fatalf("the anchor refused nothing: %v", err)
+	}
+}
