@@ -1,3 +1,4 @@
+// carries: hooks/useAgentSession*, components/ChatInput*, components/ChatWindow*
 import "#test-env";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -123,10 +124,13 @@ test("ChatWindow forwards the pane handle to ChatInput, and the hook's edit-from
   // The hook's handleEditContent is what actually calls replaceMessage, using
   // the exact opts.chatInputRef it was handed — i.e. the pane-scoped ref, not
   // some other handle — so the pi#33 per-pane guarantee survives the move.
+  // #128: the composer's replaceMessage reports whether it restored the message
+  // (false: a draft was kept), and the hook stages the edit only on a true report —
+  // a kept draft never turns the next send into an edit.
   assert.match(
     useAgentSessionSource,
-    /const handleEditContent = useCallback\(\(message: UserMessage, entryId: string\) => \{\s*\n\s*if \(!session\?\.id\) return;\s*\n\s*opts\.chatInputRef\?\.current\?\.replaceMessage\(message\);\s*\n\s*setEdit\(entryId\);/,
-    "the hook must restore the historical message into the same pane-scoped composer the click happened in",
+    /const handleEditContent = useCallback\(\(message: UserMessage, entryId: string\) => \{\s*\n\s*if \(!session\?\.id\) return;\s*\n\s*if \(opts\.chatInputRef\?\.current\?\.replaceMessage\(message\)\) setEdit\(entryId\);/,
+    "the hook must restore the historical message into the same pane-scoped composer the click happened in, and stage the edit only when it did",
   );
   assert.match(chatInput, /replaceMessage\(message: UserMessage\) \{/);
 });

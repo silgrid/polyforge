@@ -62,6 +62,7 @@ import {
   CLAUDE_LAUNCH_PERMISSION_MODE_DEFAULT,
   CLAUDE_PLAN_UNAVAILABLE_REASON,
   CLAUDE_PROVIDER,
+  CLAUDE_RESTART_REFUSED_CODE,
   claudeFirstMessage,
   claudePlanModeAllowed,
   claudeSlashCommands,
@@ -1410,7 +1411,11 @@ export async function editClaudeSession(record: ClaudeSessionRecord, entryId: st
   const live = getClaudeSession(record.id);
   if (live?.isRunning()) throw new Error("A claude turn is running; edit when it ends");
   const refusal = live?.restartRefusal("Editing a message");
-  if (refusal) throw new Error(refusal);
+  if (refusal) {
+    // The structured code the page's「作为新消息发送」/「保留编辑」prompt keys on (#128):
+    // read by its `code` field across bundles, never by instanceof.
+    throw Object.assign(new Error(refusal), { code: CLAUDE_RESTART_REFUSED_CODE });
+  }
   const transcript = claudeTranscriptFile(record.id, claudeConfigDir());
   if (!transcript) throw new Error("Invalid entry ID for editing");
   const resumeAt = claudeEditResumePoint(parseClaudeTranscript(readFileSync(transcript, "utf8")), entryId);
@@ -1473,7 +1478,11 @@ export async function setClaudePermissionOverride(id: string, mode: ClaudePermis
   if (!getClaudeSessionRecord(id)) throw new Error("Session not found");
   const live = getClaudeSession(id);
   if (live?.isRunning() || live?.isAwaitingInput()) throw new ClaudeSessionBusyError("A claude turn is running; change the permission mode when it ends");
-  if (live?.hasUnsettledSubagents()) throw new ClaudeSessionBusyError("A claude background subagent is still running; change the permission mode when its result is in");
+  // Unfinished background work ends with the child, and this override ends the idle
+  // child to apply at its next launch — the same restart refusal as the effort back
+  // to default, naming each piece (#128 AC5).
+  const restartRefusal = live?.restartRefusal("Changing the permission mode");
+  if (restartRefusal) throw new ClaudeSessionBusyError(restartRefusal);
   await updateClaudeSessionRecord(id, (record) => {
     const next = { ...record };
     if (mode === null) delete next.permissionMode;
@@ -1481,8 +1490,9 @@ export async function setClaudePermissionOverride(id: string, mode: ClaudePermis
     return next;
   });
   // A turn may have started while the index was written: the override then waits for the
-  // child's next launch rather than ending the turn.
-  if (!live || live.isRunning() || live.isAwaitingInput() || live.hasUnsettledSubagents()) return { override: mode, restarted: false };
+  // child's next launch rather than ending the turn — and so may a background task
+  // (the pre-write check above cannot see one that starts after it).
+  if (!live || live.isRunning() || live.isAwaitingInput() || live.hasUnsettledSubagents() || live.hasRunningBackgroundTasks()) return { override: mode, restarted: false };
   await live.shutdown();
   return { override: mode, restarted: true };
 }

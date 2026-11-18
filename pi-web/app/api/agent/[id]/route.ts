@@ -3,6 +3,7 @@ import { resolveSessionPath } from "@/lib/session-reader";
 import { getRpcSession, isSessionReloadedFromDiskError, setRpcSessionTools, startRpcSession } from "@/lib/rpc-manager";
 import { cwdMissingBody, missingCwdFromBody } from "@/lib/missing-cwd";
 import { getClaudeSessionRecord } from "@/lib/claude-index";
+import { CLAUDE_RESTART_REFUSED_CODE } from "@/lib/claude-shared";
 import {
   CLAUDE_SESSION_COMMANDS,
   claudeCommandEffort,
@@ -169,11 +170,17 @@ export async function POST(
   } catch (error) {
     // Read by its fields: the wrapper that threw may come from another route's bundle.
     const missingCwd = missingCwdFromBody(error);
+    // A restart refusal (unfinished background work) answers the structured code the
+    // page's「作为新消息发送」/「保留编辑」prompt keys on; every other prompt refusal
+    // keeps the generic prompt_rejected (#128).
+    const promptCode = (error as { code?: string }).code === CLAUDE_RESTART_REFUSED_CODE
+      ? CLAUDE_RESTART_REFUSED_CODE
+      : "prompt_rejected";
     return NextResponse.json({
       error: error instanceof Error ? error.message : String(error),
       ...(missingCwd ? cwdMissingBody(missingCwd) : {}),
       ...(commandType === "prompt" && !promptAccepted
-        ? { code: "prompt_rejected", accepted: false }
+        ? { code: promptCode, accepted: false }
         : {}),
     }, { status: 500 });
   }

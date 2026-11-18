@@ -8,6 +8,15 @@ export const CLAUDE_HARNESS = "claude";
 export type SessionHarness = typeof PI_HARNESS | typeof CLAUDE_HARNESS;
 
 /**
+ * The structured refusal code of an operation refused because it would restart
+ * claude and end its unfinished background work (an in-session edit, polyforge#128).
+ * The route answers it in the error body beside the generic `prompt_rejected`,
+ * so the page can offer「作为新消息发送」/「保留编辑，稍后再试」on this refusal alone.
+ * Client-safe: the hook imports the constant without the server module.
+ */
+export const CLAUDE_RESTART_REFUSED_CODE = "claude_restart_refused";
+
+/**
  * A new claude session's model: claude's own `default` alias, which the
  * CLI resolves itself (`--model default`). The list the composer offers is claude's
  * aliases from its `initialize` answer (lib/claude-probe.ts) plus Settings › Claude's

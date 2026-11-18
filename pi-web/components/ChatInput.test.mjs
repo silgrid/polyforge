@@ -1,3 +1,4 @@
+// carries: components/ChatInput*, lib/i18n/messages/*
 import "#test-env";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -1073,7 +1074,7 @@ function runReplaceMessage(initial, message) {
     setDraftKeptNoticeVisible: (v) => state.noticeCalls.push(v),
     requestAnimationFrame: () => { state.focusScheduled = true; },
   };
-  loadReplaceMessageCache.make(sandbox)(message);
+  state.returned = loadReplaceMessageCache.make(sandbox)(message);
   state.attachedImages = attachedImagesRef.current;
   return state;
 }
@@ -1109,6 +1110,19 @@ test("replaceMessage keeps a non-empty draft byte-for-byte and shows the kept-dr
   assert.equal(state.value, "my precious draft", "the draft survives byte-for-byte");
   assert.deepEqual(state.noticeCalls, [true], "the skipped restore must be visible, not a silent no-op");
   assert.equal(state.focusScheduled, false, "focus is not stolen from the kept draft");
+});
+
+// #128 AC2: the return value is the contract the hook stages an edit on — the
+// kept draft must read as "nothing was restored", so the click stages no edit
+// and the next send is an ordinary prompt.
+test("128 u4 replaceMessage reports whether it restored the message", () => {
+  const message = { role: "user", content: "historical branch text" };
+  const restored = runReplaceMessage({}, message);
+  assert.equal(restored.returned, true, "an empty composer reports the message restored");
+  const kept = runReplaceMessage({ value: "my precious draft" }, message);
+  assert.equal(kept.returned, false, "a kept draft reports no restore: no edit is staged over it");
+  const pinned = runReplaceMessage({ pendingImages: 1 }, message);
+  assert.equal(pinned.returned, false, "a pending image pins the draft exactly like text does");
 });
 
 test("replaceMessage keeps the draft when the composer state lives in the textarea DOM", () => {
