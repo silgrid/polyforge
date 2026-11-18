@@ -1,5 +1,6 @@
 {
  "counterexample": "unrelated/w111-counterexample.txt",
+ "baseline": "6c277f050b786d5e5045699e97de054669bfbcbc",
  "ac3_paths": [
   "workflows/_shared/scripts/verify-scope",
   ".polyforge/verify-scope.conf",
