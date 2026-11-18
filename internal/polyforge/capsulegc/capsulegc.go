@@ -12,9 +12,14 @@
 package capsulegc
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"path"
 	"strings"
+	"time"
+
+	"github.com/silgrid/polyforge/internal/polyforge/taskrepo"
 )
 
 // ParseDeclaration parses one repository's capsule-gc declaration: a
@@ -77,7 +82,39 @@ type Declaration struct {
 // fetch. A repository whose default branch cannot be read answers an
 // error: its declaration stays unknown, never guessed.
 func DefaultBranch(root string) (string, error) {
-	return "", nil
+	ref, err := runGit(root, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+	if err != nil {
+		return "", err
+	}
+	if ref = strings.TrimSpace(ref); ref == "" {
+		return "", fmt.Errorf("git symbolic-ref --short refs/remotes/origin/HEAD: no default branch recorded")
+	}
+	return ref, nil
+}
+
+// gcGitTimeout bounds one read-only git command of this package.
+const gcGitTimeout = 10 * time.Second
+
+// runGit runs one read-only git command in the repository at root and
+// answers its stdout: taskrepo's hardened face (no program the
+// repository's own config names runs; system config ignored,
+// inherited GIT_* stripped, no prompt), --no-optional-locks and
+// literal pathspecs, a hard timeout — the same face `pf doctor`'s own
+// git probes use. Nothing here writes the repository.
+func runGit(root string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), gcGitTimeout)
+	defer cancel()
+	cmd := taskrepo.Command(ctx, nil, root, append([]string{"--no-optional-locks", "--literal-pathspecs"}, args...)...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = fmt.Errorf("git %v: %v", args, err).Error()
+		}
+		return "", fmt.Errorf("git %v: %v", args, msg)
+	}
+	return stdout.String(), nil
 }
 
 // ReadCommitted reads the declaration committed at ref of the git
@@ -87,5 +124,42 @@ func DefaultBranch(root string) (string, error) {
 // error (nil, nil); a committed declaration that does not parse is an
 // error — the whole declaration is rejected, never a silent partial.
 func ReadCommitted(root, ref string) (*Declaration, error) {
-	return nil, nil
+	if ref == "" {
+		def, err := DefaultBranch(root)
+		if err != nil {
+			return nil, err
+		}
+		ref = def
+	}
+	// The ref must resolve: an unknown ref is an error, never a silent
+	// "no declaration" — a caller would report a clean pass it did not
+	// earn.
+	sha, err := runGit(root, "rev-parse", ref)
+	if err != nil {
+		return nil, err
+	}
+	// The declaration is read only when the ref carries the path as a
+	// blob: an absent path is the enabling silence of a repository that
+	// declares nothing, and anything else of that name (a directory, a
+	// submodule) is an error.
+	kind, err := runGit(root, "ls-tree", "--format=%(objecttype)", ref, "--", ConfPath)
+	if err != nil {
+		return nil, err
+	}
+	switch strings.TrimSpace(kind) {
+	case "":
+		return nil, nil
+	case "blob":
+	default:
+		return nil, fmt.Errorf("%s at %s is a %s, not the declaration file", ConfPath, ref, strings.TrimSpace(kind))
+	}
+	raw, err := runGit(root, "show", ref+":"+ConfPath)
+	if err != nil {
+		return nil, err
+	}
+	dirs, err := ParseDeclaration([]byte(raw))
+	if err != nil {
+		return nil, err
+	}
+	return &Declaration{Dirs: dirs, Ref: ref, SHA: strings.TrimSpace(sha)}, nil
 }
