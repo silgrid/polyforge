@@ -155,6 +155,61 @@ stopped — `pf migrate cell-layout`, then `--apply` (see the
 [upgrade guide](upgrade.md), section "v0.2.0, the first public release:
 workflow contract 1").
 
+## The development channel (`--dev`)
+
+A work machine can try main's improvements without waiting for a formal
+release: add `--dev` before the key and the installer switches from the
+GitHub-release channel to the LOCAL DEVELOPMENT CHANNEL (polyforge#136):
+
+```
+curl ... | bash -s -- --dev "$PF_KEY"
+```
+
+The channel installs ONLY what the integrate gate verified — origin's
+latest green tag (`tools/green-tag latest`), checked to be an ancestor
+of `origin/main`, a descendant of the latest release tag and not that
+tag's own commit — never an unverified HEAD. It needs an installed pf:
+a first install takes the formal channel. On the green commit it builds
+pf ON THIS MACHINE (`make -C <clone> dev-build`), so besides the
+installer's own prerequisites it checks and reports the build tools the
+same way — `go` (its presence is checked; the build itself needs the
+version `go.mod` pins), `make`, `npm`, and `node` of the major the
+checkout's `.nvmrc` pins — all missing ones in one refusal, nothing
+changed.
+
+The version is `v<next patch of the latest release tag>-dev.<N>`, with
+`N` the first-parent commit count release-tag..green-commit:
+re-installing the same green tag derives the same version, and main
+moving forward grows `N` — the precondition is that main only
+fast-forwards (the repo's branch discipline; a rewritten main makes the
+count, and with it the channel's ordering, meaningless). The string is a
+SemVer pre-release of the NEXT formal release and never carries `+build`
+metadata, so the installer's downgrade guard keeps comparing it; the
+source commit rides its own field — `pf --json version`'s `commit` and
+`pf doctor`'s new build row name it.
+
+Boundaries, by design: the channel is local-only (it writes nothing to
+GitHub — no release, no asset, no push), and the two AIHubs do not
+follow it. A green commit whose release-tag..green diff touches any
+path of `tools/aihub-paths.conf` (the deploy tree, the server and its
+SQL, the shared wire contracts, the deploy entry point) is REFUSED in
+prepare: that set changes the server, and it needs a formal release
+(the documented way to ship it).
+
+After a dev install the FORMAL channel is refused until the next formal
+release ships: the latest release is older than the installed
+development version, and the installer never downgrades — that is the
+guard working. Installing the next formal release over any development
+version of the same line is an ordinary upgrade. To go back before it
+ships, rebuild the formal release from its tag and replace the binary
+by hand (clone the tag, `make -C <clone> release VERSION=<tag>`, then
+move the built `pf` over the installed one) — the installer itself
+offers no downgrade, and the dev channel always reinstalls the newest
+green commit. `--dev` combines with `--with-pi-web`: the Pi Web package
+of the same green commit is built and packed locally through the same
+shared packaging script the release runs, then installed and checked
+exactly like the release's own.
+
 ## Optional: the web workbench (pi-web)
 
 Polyforge's recommended web UI is Pi Web (npm package `@silgrid/pi-web`,

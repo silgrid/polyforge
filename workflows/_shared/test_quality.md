@@ -31,6 +31,14 @@ Three duties follow, for every test a step writes:
   right after the action and asserting on that read is a race with the settling, and is
   `test_weakened`. Such a test is fixed by polling, never by relaxing the assertion or
   weakening an exact expectation to "at least".
+  The settle duty's common miss: the test polls one condition — call it A — until it settles,
+  then reads a second value — call it B — once and asserts on that one read. A settling does
+  not settle B (a later callback recomputes it, another stream feeds it), so the single read
+  of B races it exactly as the duty's single read does. Bad: poll A, then
+  `assert(readB() == expected)` on one read. Good: poll B directly —
+  `poll(() => readB() == expected, deadline)` — every iteration re-reads B, the deadline
+  bounding the wait; when A is itself required, A gets its own bounded poll first, and A
+  settling never stands in for B's.
 
 Every unit of the plan carries the three statements above as its test-quality record, in
 its `## Units` entry: the behaviour its test observes, how its expected values are derived

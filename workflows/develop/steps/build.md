@@ -101,16 +101,29 @@ change, run its validator and name it in its `## Coverage` row.
 
 Run the fast checks over the whole change (the written command once per touched repo) and
 every unit test targeted, then the written unit check over the whole `artifacts/build/units.json`
-(the same command with no `--unit`) (the full bar is `verification`'s). Read your full diff (per repo `git diff
-$(git merge-base HEAD origin/<base>)..HEAD`, `<base>` the step header's base branch) as `review` will, against its five blocking classes:
-`bug`, `ac_gap`, `project_rule`, `test_weakened`, `guarantee`; write each hit and its disposition
-to `artifacts/self-review.md` and fix what you can now (a new unit for a behaviour fix).
+(the same command with no `--unit`) (the full bar is `verification`'s). Then run the two
+facts lines review will judge you with — the same engine, without the replay:
+`"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" build --json --out artifacts/facts/build.json`
+`"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" carries --json --out artifacts/facts/carries.json`
+The first gives each unit's static commit facts (its ids resolving in a task repo,
+`test_commit` one ordinary commit of test paths alone and an ancestor of `impl_commit`,
+`impl_commit` in HEAD); the second the e2e carries. A red names the unit, or the repo, suite
+and reason — fix it and re-run until green, never handing off on one; exit 2 is no pass either
+(fix the input it names; a real machine blocker is `blocked`). These are the build's own static
+runs — review recomputes both facts with its replay, so this file is never replay evidence.
+Read your full diff (per repo `git diff $(git merge-base HEAD origin/<base>)..HEAD`, `<base>`
+the step header's base branch) as `review` will, against its five blocking classes: `bug`,
+`ac_gap`, `project_rule`, `test_weakened`, `guarantee`; write each hit and its disposition to
+`artifacts/self-review.md` and fix what you can now (a new unit for a behaviour fix). Then
+review's doc-impact check, item by item: each document that describes what the change altered
+(the repository's README, its reference docs, upgrade notes, skill documents, the coupled
+obligations its `AGENTS.md` names) compared with the diff, and `artifacts/self-review.md` lists
+each document compared, its conclusion, and synced or no-change-needed with the reason.
 
-Write the change analysis — `artifacts/build/change-analysis.json`, the structured file
-verification supplements the engine's own selection with (`verify.py --analysis`, add-only,
-never narrowing it), in this shape. Its keys are the machine's contract — `supplement_limit`,
-`changed`, `uncovered` and `tests`; each listed test's `why` and `evidence` are review's to
-judge:
+Write the change analysis — `artifacts/build/change-analysis.json`, the structured file verification
+supplements the engine's own selection with (`verify.py --analysis`, add-only, never narrowing
+it), in this shape. Its keys are the machine's contract — `supplement_limit`, `changed`,
+`uncovered` and `tests`; each listed test's `why` and `evidence` are review's to judge:
 
 ```json
 {"supplement_limit": <the lane's cap, {{supplement_limit}} test runs — verification's own default applies when the file names none>,
@@ -123,15 +136,14 @@ judge:
             "evidence": "<how you found it: the selector, route, copy key or test name you searched, and where it led>"}]}
 ```
 
-Find the tests that already pin what you changed — the e2e suites through the selectors, routes
-and copy keys the diff touches (a shared file the engine hands to at most 3 suites is the blind
-spot this file closes), the unit tests through the packages and names — and list every one you
-find: run each where you found it and list only a test that passes at HEAD. Take `uncovered`
-from the engine's own `--light` report of each touched repo
+Find the tests that already pin what you changed — the e2e suites through the selectors, routes and
+copy keys the diff touches (a shared file the engine hands to at most 3 suites is the blind spot this
+file closes), the unit tests through the packages and names — and list every one you find: run each
+where you found it and list only a test that passes at HEAD. Take `uncovered` from the engine's own
+`--light` report of each touched repo
 (`"$PF_PYTHON" "$PF_SHARED_DIR/scripts/verify-scope" --light --json`, or the report the
-fast-checks command logged): its `e2e_selection.uncovered_paths`, else its
-`--light: carries: changed path …` diagnostics. `review` judges the analysis for obviously
-missing tests.
+fast-checks command logged): its `e2e_selection.uncovered_paths`, else its `--light: carries: changed
+path …` diagnostics. `review` judges the analysis for obviously missing tests.
 
 Then run the change analysis's close check — the facts engine's own fact, the same validator
 `verification` calls (`verify.py --analysis`: one implementation, never a second copy):

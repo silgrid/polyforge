@@ -91,6 +91,10 @@ record exactly what ran.
    the red run also prints, never one a filter that matched no test prints (`ok  ` alone is
    not a marker: `go test -run NoSuchTest` prints it), never one the empty string matches
    (`.*`, `^`, `a*`: verification fails such a unit without running it).
+   Both commit ids are the full output of `git -C repos/<repo> rev-parse <ref>`, taken right
+   after each commit is made and saved where the unit is recorded — never hand-copied from a
+   transcript or a log (`test_commit` and `impl_commit` each resolve their own commit the
+   moment it is made; a `pre_existing_red` unit reports only `impl_commit`, taken the same way).
    A unit whose reproduction test already exists and is red before the change — an
    integration fix ticket: the test came with the batch, only the fix is this change —
    is not rewritten: it declares `"pre_existing_red": true` and reports no
@@ -113,15 +117,24 @@ record exactly what ran.
    `| AC | kind | ref |`, kind `test` (ref `<repo>/<test file>: <test name>`), `existing`
    (the test already pinning it) or `doc` (the file and the validator that shows it).
    Keep it current with every round.
-5. **The close's analysis check.** The step's close (3c) runs the change analysis's own
-   facts line, `facts.py analysis` — the same shared validator `verification` calls; its
-   red names the entry and the rule it violates, and the close check must be green before
-   the hand-off.
+5. **The close's facts checks.** The step's close (3c) runs the two facts lines review will
+   judge with —
+   `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" build --json --out artifacts/facts/build.json`
+   and `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" carries --json --out artifacts/facts/carries.json`
+   — the same engine, no replay: the first each unit's static commit facts (its ids
+   resolving in a task repo, test-first shape), the second the e2e carries. A red names the
+   unit, or the repo, suite and reason — fix it and re-run until green before the hand-off;
+   exit 2 is no pass either (fix the input it names; a real machine blocker is `blocked`).
+   They are the build's own static runs — review recomputes both with its replay and its own
+   selection, so neither file here is replay evidence. Then the change analysis's own facts
+   line, `facts.py analysis` — the same shared validator `verification` calls; its red names
+   the entry and the rule it violates, and the close check must be green before the hand-off.
 
 ## 交接要写什么 — what your hand-off carries
 
 - **Status.** `done` only on a green build: every unit red then green, the fast checks
-  green, the close analysis check green, the self-review written. A real blocker — the machine, not a choice — is
+  green, the close's facts checks (build, carries) green, the close analysis check green,
+  the self-review written. A real blocker — the machine, not a choice — is
   `blocked` with `--reason`. A choice that is the owner's is a `pf step ask`, not a
   hand-off. `cancel` only on the owner's word (`--per-owner`).
 - **回应上一轮** (a later round): each point of the FAIL or the owner's words, numbered as
@@ -138,7 +151,8 @@ record exactly what ran.
   at first.
 - **Evidence**: `artifacts/plan.md`, `artifacts/build/units.json`,
   `artifacts/build/change-analysis.json`, `artifacts/build/units-check.json`,
-  `artifacts/build/fast-checks/<repo>.json`, `artifacts/facts/analysis.json`,
+  `artifacts/build/fast-checks/<repo>.json`, `artifacts/facts/build.json`,
+  `artifacts/facts/carries.json`, `artifacts/facts/analysis.json`,
   `artifacts/self-review.md` (and `artifacts/grill-qa.md` when there is one).
 
 ## Never

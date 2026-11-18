@@ -82,16 +82,16 @@
 #      (the server runs as `pf aihub`); build the image from
 #      the LINUX pf (the image stays linux/amd64-only, entrypoint
 #      `pf aihub`) tagged ghcr.io/silgrid/polyforge-aihub:<tag>; then pack the pi-web
-#      package (one release entry for every artifact): the
-#      released commit's pi-web/ tree is exported to the staging directory
-#      (the worktree is never touched), npm ci, PI_WEB_RELEASE_VERSION=<tag>
-#      npm run build (the bundle reports the release; a release is the
-#      documented exception to pi-web's "never next build" development rule),
-#      npm version <tag without v> --no-git-tag-version (the tag's version is
-#      stamped into the packed metadata after the build, before pack; main's
-#      pi-web/package.json keeps its development value and no bump commit
-#      exists), npm pack -> silgrid-pi-web-<tag>.tgz, whose packed
-#      package.json must carry the tag's version;
+#      package (one release entry for every artifact) through the ONE shared
+#      packaging path, tools/package-pi-web.sh <commit> <tag> <dir> (the same
+#      script the installer's dev channel calls, polyforge#136; its own
+#      header carries the recipe): the released commit's pi-web/ tree is
+#      exported to a staging directory (the worktree is never touched; a
+#      release is the documented exception to pi-web's "never next build"
+#      development rule), built with the release's version and packed as
+#      silgrid-pi-web-<tag>.tgz, whose packed package.json must carry the
+#      tag's version; main's pi-web/package.json keeps its development
+#      value and no bump commit exists;
 #   4. git tag <tag> + git push origin <tag> (NO force): the atomic claim of the
 #      version. If the tag exists on origin the run stops, nothing published;
 #   5. docker push; write aihub-image.digest (the bare image digest
@@ -1278,19 +1278,12 @@ if [ -n "$NEED_IMAGE" ]; then
   docker build -f deploy/Dockerfile -t "$IMAGE:$TAG" "$WORK/ctx"
 fi
 
-# pack the pi-web package (see step 3 above) from the released commit's tree.
+# pack the pi-web package (see step 3 above) from the released commit's tree,
+# through the one shared packaging script (the same path the installer's
+# dev channel calls, polyforge#136).
 if [ -n "$NEED_PIWEB" ]; then
-  mkdir "$WORK/piweb" "$WORK/pack"
-  git archive "$COMMIT" pi-web | tar -x -C "$WORK/piweb" || die "exporting pi-web/ of $COMMIT failed; nothing published"
-  ( cd "$WORK/piweb/pi-web" \
-    && npm ci --no-audit --no-fund \
-    && PI_WEB_RELEASE_VERSION="$TAG" npm run build \
-    && npm version "${TAG#v}" --no-git-tag-version \
-    && npm pack --pack-destination "$WORK/pack" ) || die "building or packing the pi-web package failed; nothing published"
-  set -- "$WORK/pack"/*.tgz
-  [ $# -eq 1 ] && [ -f "$1" ] || die "npm pack did not produce exactly one tarball; nothing published"
-  mv "$1" "$OUT/$PIWEB_TGZ"
-  [ "$(tgz_version "$OUT/$PIWEB_TGZ")" = "${TAG#v}" ] || die "the packed pi-web package does not carry version ${TAG#v}; nothing published"
+  sh tools/package-pi-web.sh "$COMMIT" "$TAG" "$OUT" \
+    || die "building or packing the pi-web package failed; nothing published"
 fi
 
 # release notes (never committed; only a release still to create needs them):

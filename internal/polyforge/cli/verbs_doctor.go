@@ -118,6 +118,7 @@ type doctorRun struct {
 	present, missing        []string // mapped workspaces that exist as directories / do not
 	prune                   bool     // --prune-scratch
 	pruneCapsules           bool     // --prune-capsules
+	pruneRebuildables       bool     // --prune-rebuildables
 	fixPrompts              bool     // --fix-harness-prompts
 	reachOK, sockOK         bool
 	reachMsg, sockMsg       string
@@ -174,11 +175,16 @@ var doctorChecks = []doctorCheckSpec{
 		home, _ := os.UserHomeDir()
 		return capsuleRetentionCheck(r, cellcfg.CellDir(DataDir(home), r.cell), time.Now())
 	}},
+	{docChRebuildables, scopeCell, needConfig, func(r *doctorRun) (string, string) {
+		home, _ := os.UserHomeDir()
+		return rebuildablesCheck(r, cellcfg.CellDir(DataDir(home), r.cell))
+	}},
 	{docChDisk, scopeCell, needMapping, func(r *doctorRun) (string, string) { return diskCheck(r.present).row() }},
 	{docChRepoClones, scopeCell, needMapping, func(r *doctorRun) (string, string) { return repoClonesCheck(r) }},
 	{docChLightFallbacks, scopeCell, needMapping, lightFallbacksCheck},
 	{docChMemPolicy, scopeCell, needMapping, func(r *doctorRun) (string, string) { return memoryPolicyCheck(r.cfg, r.present).row() }},
 	{docChPrereqs, scopeHost, needConfig, func(r *doctorRun) (string, string) { return prerequisitesCheck(exec.LookPath).row() }},
+	{docChBuild, scopeHost, needConfig, func(r *doctorRun) (string, string) { return buildCheck().row() }},
 	{docChPython, scopeHost, needConfig, func(r *doctorRun) (string, string) {
 		return pythonCheck(r.cfg.Daemon.Python, exec.LookPath, ProbePython).row()
 	}},
@@ -325,12 +331,13 @@ var cmdDoctor = &Command{
 	Name:         "doctor",
 	Group:        GroupDiag,
 	Summary:      "Check this daemon's health: config, workspace mapping and layout, connectivity, harness setup",
-	Usage:        "pf doctor [--harness] [--prune-scratch] [--prune-capsules] [--prune-chat-state] [--fix-harness-prompts] [--fix-install-layout] [--json]",
+	Usage:        "pf doctor [--harness] [--prune-scratch] [--prune-capsules] [--prune-rebuildables] [--prune-chat-state] [--fix-harness-prompts] [--fix-install-layout] [--json]",
 	NoConfigLoad: true,
 	Setup: func(fs *flag.FlagSet) {
 		fs.Bool("harness", false, "run only the harness checks (statusLine leftover, pi package, install layout, v1 leftovers, retired chat state)")
 		fs.Bool("prune-scratch", false, "remove the mapped workspaces' stale scratch batches (raw/ past 3 days, tasks/ and sessions/ past 14 days); entries outside the categories are only ever reported (default: report only)")
 		fs.Bool("prune-capsules", false, "slim wrapped work items' capsules (live or set aside) to artifacts/ + capsule.json, and remove the external git dirs and set-aside scenes of failed/canceled ones, untouched for more than 14 days (default: report them only; never while the daemon is down)")
+		fs.Bool("prune-rebuildables", false, "remove the rebuildable build products the mapped repositories declare (.polyforge/capsule-gc.conf) from the capsules of terminal work items (wrapped, failed or canceled, live or set aside) no daemon job holds, without waiting for the 14-day retention — only all-ignored directories with no tracked or untracked-not-ignored content and no nested repository; artifacts/, capsule.json, git state and local commits are never touched (default: report them only; never while the daemon is down)")
 		fs.Bool("prune-chat-state", false, "delete the retired chat-subscription state (chats.json, chat-subs.json, chat-status/ and the old watcher's runtime files; default: report them only)")
 		fs.Bool("fix-harness-prompts", false, "append the native-SVG diagram-guidance block and the concise-output guidance block to each installed harness's existing context file that lacks them — legacy mermaid-only guidance included, left as it is (append-only, idempotent; never creates a file; default: report only)")
 		fs.Bool("fix-install-layout", false, "link ~/.claude/skills/polyforge to the installed release's skill when it is missing or links elsewhere — only that one entry; idempotent, a no-op when the link is already correct; never removes a copied directory and never installs pf or a release (no release: re-run tools/install.sh); default: report only")
@@ -348,11 +355,14 @@ var cmdDoctor = &Command{
 		if boolFlag(fs, "harness") && boolFlag(fs, "prune-chat-state") {
 			return fmt.Errorf("doctor: --prune-chat-state cannot be combined with --harness (the --harness projection tools/install.sh runs is read-only)")
 		}
+		if boolFlag(fs, "harness") && boolFlag(fs, "prune-rebuildables") {
+			return fmt.Errorf("doctor: --prune-rebuildables cannot be combined with --harness (the --harness projection tools/install.sh runs is read-only)")
+		}
 		checks := harnessDisplayChecks(boolFlag(fs, "fix-install-layout"), boolFlag(fs, "prune-chat-state"))
 		var sections []doctorSection
 		if !boolFlag(fs, "harness") {
 			var ladder []doctorCheck
-			ladder, sections = runDoctorChecks(ctx, boolFlag(fs, "prune-scratch"), boolFlag(fs, "prune-capsules"), boolFlag(fs, "fix-harness-prompts"))
+			ladder, sections = runDoctorChecks(ctx, boolFlag(fs, "prune-scratch"), boolFlag(fs, "prune-capsules"), boolFlag(fs, "prune-rebuildables"), boolFlag(fs, "fix-harness-prompts"))
 			checks = append(ladder, checks...)
 			for i := range sections {
 				checks = append(checks, sections[i].Checks...)
@@ -410,8 +420,9 @@ func countFails(rep doctorReport) int {
 // answers each named Cell's section. pruneScratch lets the scratch
 // check remove the stale entries it would otherwise report;
 // pruneCapsules does the same for the capsule retention check;
+// pruneRebuildables does the same for the rebuildable artifacts check;
 // fixPrompts lets the harness diagram guidance check append its block.
-func runDoctorChecks(ctx *Context, pruneScratch, pruneCapsules, fixPrompts bool) ([]doctorCheck, []doctorSection) {
+func runDoctorChecks(ctx *Context, pruneScratch, pruneCapsules, pruneRebuildables, fixPrompts bool) ([]doctorCheck, []doctorSection) {
 	cfg, err := LoadConfig(ctx.ConfigPath)
 	if err != nil {
 		checks := []doctorCheck{{Name: docChConfig, Status: "fail", Detail: err.Error() + " — see the install docs for the migration steps"}}
@@ -448,7 +459,7 @@ func runDoctorChecks(ctx *Context, pruneScratch, pruneCapsules, fixPrompts bool)
 	}
 	checks := []doctorCheck{{Name: docChConfig, Cell: cellcfg.DefaultProfile, Status: "pass", Detail: "loaded from " + where}}
 
-	r := &doctorRun{cell: cellcfg.DefaultProfile, cellPath: where, cfg: cfg, anyMapped: anyMapped, prune: pruneScratch, pruneCapsules: pruneCapsules, fixPrompts: fixPrompts}
+	r := &doctorRun{cell: cellcfg.DefaultProfile, cellPath: where, cfg: cfg, anyMapped: anyMapped, prune: pruneScratch, pruneCapsules: pruneCapsules, pruneRebuildables: pruneRebuildables, fixPrompts: fixPrompts}
 	for _, ws := range cfg.Mapping.Workspaces() {
 		if st, err := os.Stat(ws); err == nil && st.IsDir() {
 			r.present = append(r.present, ws)
@@ -498,7 +509,7 @@ func runDoctorChecks(ctx *Context, pruneScratch, pruneCapsules, fixPrompts bool)
 			continue
 		}
 		rr := &doctorRun{cell: cc.Profile, profile: cc.Profile, cellPath: cc.Path, cfg: cc.Cfg, anyMapped: anyMapped,
-			prune: pruneScratch, pruneCapsules: pruneCapsules, fixPrompts: fixPrompts}
+			prune: pruneScratch, pruneCapsules: pruneCapsules, pruneRebuildables: pruneRebuildables, fixPrompts: fixPrompts}
 		// the Cell file's socket is the Host file's own value (LoadCellFile
 		// copies it without the environment overlay); every read of this
 		// Cell dials the socket the invocation resolved (PF_DAEMON_SOCKET /

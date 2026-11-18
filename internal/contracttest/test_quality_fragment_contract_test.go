@@ -214,6 +214,80 @@ var asyncSettleLines = []string{
 	"Such a test is fixed by polling, never by relaxing the assertion or weakening an exact expectation to \"at least\".",
 }
 
+// w132ExampleLines are the operative lines of the settle duty's
+// bad/good example pair (polyforge#132): the bad example polls one
+// condition — call it A — until it settles and then asserts on a single
+// read of a second value, B; the good example polls B directly, every
+// iteration re-reading B under a deadline. A settling does not settle B,
+// so the one read of B races it exactly as the duty's single read does.
+// Each line lives in the fragment and renders exactly once in every step
+// that includes it, and the pair names no project, lane or concrete suite.
+var w132ExampleLines = []string{
+	"A settling does not settle B",
+	"Bad: poll A, then `assert(readB() == expected)` on one read.",
+	"Good: poll B directly — `poll(() => readB() == expected, deadline)` — every iteration re-reads B, the deadline bounding the wait",
+}
+
+// w132ExampleProjectNames is what the example pair may not name: the
+// text is project-neutral (the owner's Q4 ruling), so a project, product
+// or tool identifier in the pair is a finding.
+var w132ExampleProjectNames = regexp.MustCompile(`(?i)polyforge|pi-web|spec-superflow|npm|playwright|github`)
+
+// TestW132SettleDutyPollsTheAssertedValue: the settle duty carries the
+// bad/good example pair — poll A then one read of B against a direct
+// bounded poll of B — project-neutral, in the fragment alone, rendered
+// once per including step (polyforge#132, AC2).
+func TestW132SettleDutyPollsTheAssertedValue(t *testing.T) {
+	flat := testQualityFlat(testQualityFragment(t))
+	for _, line := range w132ExampleLines {
+		if !strings.Contains(flat, line) {
+			t.Errorf("the test_quality fragment lacks the settle duty's example line %q", line)
+		}
+	}
+	// the pair names no project, lane or concrete suite: the example block
+	// is the fragment from its framing sentence to the good example's end
+	from := strings.Index(flat, "The settle duty's common miss")
+	if from < 0 {
+		t.Fatal("the test_quality fragment lacks the example pair's framing sentence")
+	}
+	block := flat[from:]
+	if m := w132ExampleProjectNames.FindString(block); m != "" {
+		t.Errorf("the settle duty's example pair must name no project or tool, found %q", m)
+	}
+	// every step that includes the fragment renders each example line
+	// exactly once — a second copy in a step definition counts twice
+	renders := map[string]string{}
+	for _, bs := range [][2]string{{"develop", "build"}, {"micro", "fix"}} {
+		vars, params := testQualityStepVars(t, bs[0], bs[1])
+		out, err := workflow.RenderDefinition(filepath.Join(v1Root(t), "workflows", bs[0]), bs[1], vars, params)
+		if err != nil {
+			t.Fatalf("render %s/%s: %v", bs[0], bs[1], err)
+		}
+		renders["workflows/"+bs[0]+"/steps/"+bs[1]+".md"] = string(out)
+	}
+	lane, errs := workflow.Load(filepath.Join(v1Root(t), "workflows", "develop"))
+	if len(errs) > 0 || lane == nil {
+		t.Fatalf("the develop lane does not load: %v", errs)
+	}
+	s := lane.Step("review")
+	if s == nil {
+		t.Fatal("the develop lane declares no review step")
+	}
+	out, err := workflow.RenderDefinition(filepath.Join(v1Root(t), "workflows", "develop"), "review", s.Vars, s.Params)
+	if err != nil {
+		t.Fatalf("render review: %v", err)
+	}
+	renders["workflows/_shared/steps/review.md"] = string(out)
+	for rel, def := range renders {
+		f := testQualityFlat(def)
+		for _, line := range w132ExampleLines {
+			if n := strings.Count(f, line); n != 1 {
+				t.Errorf("%s renders the settle duty's example line %q %d times, want exactly 1", rel, line, n)
+			}
+		}
+	}
+}
+
 func TestAsyncSettleDutyReachesItsSteps(t *testing.T) {
 	flat := testQualityFlat(testQualityFragment(t))
 	for _, line := range asyncSettleLines {

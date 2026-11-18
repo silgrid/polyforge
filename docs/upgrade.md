@@ -642,3 +642,56 @@ and their attributed items) beside `reverts`. No action on upgrade: the
 lane and its skills ship with the release; a workspace's
 `steps.<project>.merge.by` is read through the claim's frozen step
 modes, which the first claim after the upgrade freezes.
+
+## v0.2.4, the rebuildable build products a doctor switch reclaims at once (polyforge#127)
+
+`pf doctor` gains the `rebuildable artifacts` row and the
+`--prune-rebuildables` switch: the declared rebuildable build products —
+the directories a repository lists at its root in
+`.polyforge/capsule-gc.conf`, one `rebuild_dir=` line per
+repository-root-relative directory literal — are reported per mapped
+workspace (the logical bytes inside the terminal work items' capsules,
+what a prune frees) and removed at once by
+`pf doctor --prune-rebuildables`, without waiting for the 14-day
+retention, which stays exactly as it is. A declaration is read from the
+mapped workspace's `.repo/<name>` clone's committed default branch (no
+fetch, the commit recorded in the report) — the owner's Q3=B ruling, so
+capsules cloned before a repository declared anything are cleaned too;
+a working tree is never read, and a repository that declares nothing
+changes nothing. A declared directory is removed only when everything
+under it is git-ignored and no tracked file, no untracked-not-ignored
+file and no nested repository sits under it, no path component of it is
+a symlink and none of it is the repository's own `.git`;
+`artifacts/`, `capsule.json`, the git dirs, the local commits and the
+git status are never touched (a repository with unpushed commits loses
+its ignored build products and nothing else), a capsule of a work item
+still in flight, one a daemon job holds and one whose state cannot be
+read is kept and named, and nothing is removed while the daemon is down.
+This repository's own declaration ships with the switch: `pi-web/.next`
+and `pi-web/node_modules`, the two directories that dominate a terminal
+capsule's bytes and rebuild by the fast gates. No upgrade action beyond
+taking the new `pf`; the default `pf doctor` run still writes nothing.
+Run the row report-only once before the first `--prune-rebuildables`,
+the same discipline the first `--prune-capsules` asked for.
+
+## v0.2.4, the local development channel (polyforge#136)
+
+`tools/install.sh --dev` installs, on this machine only, the latest
+green-tag commit of main — built locally through the new
+`make dev-build` entry, versioned `v<next patch of the latest release
+tag>-dev.<N>` (`N` the first-parent commit count from the release tag;
+re-installing the same green tag derives the same `N`, and main only
+fast-forwards; over the v0.2.3 line that is `v0.2.4-dev.2` two commits
+past the tag), never published anywhere and refused in prepare when the
+release-tag..green diff touches an AIHub-side path of
+`tools/aihub-paths.conf` — those sets change the server, and the two
+AIHubs do not follow dev builds; they need a formal release. The version
+string carries no `+build` metadata, so the installer's downgrade guard
+keeps comparing it: after a dev install the formal channel is refused
+until the next formal release (an ordinary upgrade then), and the
+source commit rides its own field — `pf --json version`'s `commit` and
+`pf doctor`'s new `pf build` row name it. No action on upgrade beyond
+taking the new `pf`: a machine that wants the channel re-runs its
+installer with `--dev`, and `docs/install.md` documents the
+prerequisites (go, make, npm, node of the checkout's `.nvmrc` major,
+all checked and reported together) and the way back.

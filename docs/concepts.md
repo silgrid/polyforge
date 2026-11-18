@@ -1009,7 +1009,9 @@ setting:
   integration fix ticket — declares `pre_existing_red: true` and reports no
   `test_commit`, its red evidence a replay on the tree of the change's base; the
   daemon checks only that the file parses), and the steps after it verify
-  it. Review runs four pre-written lines of the workflow's script
+  it. Its close runs two of the same facts first — `build` without the
+  replay (each unit's static commit facts) and `carries` — and hands off
+  only on green. Review runs four pre-written lines of the workflow's script
   `facts.py` as written — `plan-conformance` (the plan's two-way
   conformance with the diff), `build --replay --isolation host` (each
   unit's test commit a one-parent
