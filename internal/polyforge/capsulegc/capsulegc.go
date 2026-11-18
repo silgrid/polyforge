@@ -163,3 +163,32 @@ func ReadCommitted(root, ref string) (*Declaration, error) {
 	}
 	return &Declaration{Dirs: dirs, Ref: ref, SHA: strings.TrimSpace(sha)}, nil
 }
+
+// Target is one declared directory of one task-repo clone: what a
+// removal may do with it.
+type Target struct {
+	Rel  string // the declared directory, repo-root-relative
+	Size int64 // the regular files under it, logical bytes (a symlink is neither followed nor counted)
+	Skip string // "" = a removal may take the directory; else the exact reason it may not
+}
+
+// Probe answers what a removal may do with rel, one declared directory
+// of the task-repo clone at root. The answer is (nil, nil) when the
+// declared directory is not there (nothing to reclaim, nothing wrong);
+// a Target with a reason when it is there but a removal may not take
+// it (tracked content, untracked content the ignore rules do not cover,
+// a nested repository, a symlinked path component, the repository's own
+// git metadata); a Target with no reason and its size when a removal
+// may take it. A probe that could not be made is an error, and the
+// caller removes nothing it cannot prove clean.
+func Probe(root, rel string) (*Target, error) {
+	return nil, nil
+}
+
+// Remove removes one declared directory of the task-repo clone at
+// root, anchored: the removal is an os.Root at the clone's own root,
+// so no symlinked component can lead it outside the clone. It is the
+// caller that probes first; the removal itself judges nothing.
+func Remove(root, rel string) error {
+	return nil
+}
