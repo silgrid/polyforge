@@ -375,21 +375,23 @@ func TestLightHistoricalReplay(t *testing.T) {
 			{Name: "e2e-new", Phase: "scoped", Source: "default", Cmd: "E2E_RUN='^(TestW126NeverAddedAnywhere|not-an-identifier)$' sh test/e2e-parallel.sh"},
 			{Name: "e2e-trailing", Phase: "scoped", Source: "default", Cmd: e2eTrailing},
 		}}
+		// Every pin reports, so one run names each defect the tree carries
+		// (review r1 #1 and #3 alike), none hidden behind the first.
 		violations, passed, counts := w111lrJudge(c, rep, doc.Baseline, atBaseline)
 		if counts["conf"] != 2 || counts["suites"] != 3 {
-			t.Fatalf("the conf and suites caps must count every conf command and suite item: conf %d, suites %d", counts["conf"], counts["suites"])
+			t.Errorf("the conf and suites caps must count every conf command and suite item: conf %d, suites %d", counts["conf"], counts["suites"])
 		}
 		passedJoined := strings.Join(passed, "\n")
 		if !strings.Contains(passedJoined, "TestW126NeverAddedAnywhere") {
-			t.Fatalf("a Test function added after the baseline must pass, named:\n%s", passedJoined)
+			t.Errorf("a Test function added after the baseline must pass, named:\n%s", passedJoined)
 		}
 		violationsJoined := strings.Join(violations, "\n")
 		for _, bad := range []string{runTrailing, runUnparsed, e2eTrailing, "not-an-identifier"} {
 			if strings.Contains(passedJoined, bad) {
-				t.Fatalf("a malformed or non-identifier item must never be a pass-through: %q in:\n%s", bad, passedJoined)
+				t.Errorf("a malformed or non-identifier item must never be a pass-through: %q in:\n%s", bad, passedJoined)
 			}
 			if !strings.Contains(violationsJoined, bad) {
-				t.Fatalf("a malformed or non-identifier item must be a violation: %q missing from:\n%s", bad, violationsJoined)
+				t.Errorf("a malformed or non-identifier item must be a violation: %q missing from:\n%s", bad, violationsJoined)
 			}
 		}
 	})
