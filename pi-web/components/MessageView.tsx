@@ -146,8 +146,6 @@ interface Props {
   onEditContent?: (message: UserMessage, entryId: string) => void;
   onCancelEdit?: () => void;
   isEditing?: boolean;
-  /** #128: background work runs — the edit action stays offered, annotated that submitting waits for it to end. */
-  editWaitsForBackgroundWork?: boolean;
   showTimestamp?: boolean;
   prevTimestamp?: number;
   sessionId?: string;
@@ -230,9 +228,9 @@ function haveSameRelevantToolResults(
   return true;
 }
 
-export const MessageView = memo(function MessageView({ message, isStreaming, toolResults, modelNames, cwd, onOpenFile, onOpenSubagent, entryId, searchBlock, onFork, forking, onEditContent, onCancelEdit, isEditing, editWaitsForBackgroundWork, showTimestamp, prevTimestamp, sessionId, writtenFiles, turnDurationMs, onCompact, isCompacting, compactError }: Props) {
+export const MessageView = memo(function MessageView({ message, isStreaming, toolResults, modelNames, cwd, onOpenFile, onOpenSubagent, entryId, searchBlock, onFork, forking, onEditContent, onCancelEdit, isEditing, showTimestamp, prevTimestamp, sessionId, writtenFiles, turnDurationMs, onCompact, isCompacting, compactError }: Props) {
   if (message.role === "user") {
-    return <UserMessageView message={message as UserMessage} cwd={cwd} onOpenFile={onOpenFile} entryId={entryId} onFork={onFork} forking={forking} onEditContent={onEditContent} onCancelEdit={onCancelEdit} isEditing={isEditing} editWaitsForBackgroundWork={editWaitsForBackgroundWork} />;
+    return <UserMessageView message={message as UserMessage} cwd={cwd} onOpenFile={onOpenFile} entryId={entryId} onFork={onFork} forking={forking} onEditContent={onEditContent} onCancelEdit={onCancelEdit} isEditing={isEditing} />;
   }
   if (message.role === "assistant") {
     return <AssistantMessageView message={message as AssistantMessage} isStreaming={isStreaming} toolResults={toolResults} modelNames={modelNames} cwd={cwd} onOpenFile={onOpenFile} onOpenSubagent={onOpenSubagent} showTimestamp={showTimestamp} prevTimestamp={prevTimestamp} sessionId={sessionId} entryId={entryId} searchBlock={searchBlock} writtenFiles={writtenFiles} turnDurationMs={turnDurationMs} onCompact={onCompact} isCompacting={isCompacting} compactError={compactError} />;
@@ -266,7 +264,6 @@ export const MessageView = memo(function MessageView({ message, isStreaming, too
     && prev.onEditContent === next.onEditContent
     && prev.onCancelEdit === next.onCancelEdit
     && prev.isEditing === next.isEditing
-    && prev.editWaitsForBackgroundWork === next.editWaitsForBackgroundWork
     && prev.showTimestamp === next.showTimestamp
     && prev.prevTimestamp === next.prevTimestamp
     && prev.writtenFiles === next.writtenFiles
@@ -277,7 +274,7 @@ export const MessageView = memo(function MessageView({ message, isStreaming, too
     && prev.compactError === next.compactError;
 });
 
-function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, onEditContent, onCancelEdit, isEditing, editWaitsForBackgroundWork }: {
+function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, onEditContent, onCancelEdit, isEditing }: {
   message: UserMessage;
   cwd?: string;
   onOpenFile?: (filePath: string, page?: number) => void;
@@ -287,7 +284,6 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
   onEditContent?: (message: UserMessage, entryId: string) => void;
   onCancelEdit?: () => void;
   isEditing?: boolean;
-  editWaitsForBackgroundWork?: boolean;
 }) {
   const { t } = useI18n();
   const [hovered, setHovered] = useState(false);
@@ -506,7 +502,7 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
               {canEdit && !canCancelEdit && (
                 <button
                   onClick={() => onEditContent!(editTarget, entryId!)}
-                   title={editWaitsForBackgroundWork ? `${t("i18n.editFromHereTitle")} — ${t("chat.editWaitsForBackgroundWork")}` : t("i18n.editFromHereTitle")}
+                   title={t("i18n.editFromHereTitle")}
                   style={{
                     display: "flex", alignItems: "center", gap: 4,
                     padding: "3px 8px", height: 22,
@@ -525,7 +521,7 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
                     <polyline points="15 10 20 15 15 20" />
                     <path d="M4 4v7a4 4 0 0 0 4 4h12" />
                   </svg>
-                   <span className="message-action-label">{t("i18n.editFromHere")}{editWaitsForBackgroundWork ? ` · ${t("chat.editWaitsForBackgroundWork")}` : ""}</span>
+                   <span className="message-action-label">{t("i18n.editFromHere")}</span>
                 </button>
               )}
               {canCancelEdit && (

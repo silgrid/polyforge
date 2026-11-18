@@ -140,13 +140,6 @@ interface Props {
   onAttachFiles?: (files: File[]) => void;
   /** The harness controls: a fresh composer's pi/claude choice; claude's model / effort controls. */
   claude?: ClaudeComposerState;
-  /** A history edit is staged in this composer: the bar above the input says so and offers Cancel (#128). */
-  editPending?: boolean;
-  onCancelEdit?: () => void;
-  /** A claude edit's restart refusal (the server's own text): the bar offers「作为新消息发送」and「保留编辑，稍后再试」(#128). */
-  claudeEditRestartRefusal?: string | null;
-  onSendClaudeEditAsNewMessage?: (message: string, images?: AttachedImage[]) => void;
-  onKeepClaudeEditPending?: () => void;
 }
 
 /**
@@ -899,11 +892,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   onAttachFiles,
   compact = false,
   claude,
-  editPending,
-  onCancelEdit,
-  claudeEditRestartRefusal,
-  onSendClaudeEditAsNewMessage,
-  onKeepClaudeEditPending,
 }: Props, ref) {
   const { t } = useI18n();
   const { fontSize } = useChatAppearance();
@@ -2281,113 +2269,6 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
             body={t("chat.draftKeptBody")}
             onClose={() => setDraftKeptNoticeVisible(false)}
           />
-        )}
-        {/* #128: a staged edit is the composer's own visible mode — the bar says what Send
-            will do and offers the one-click way out. */}
-        {editPending && (
-          <div
-            role="status"
-            className="composer-edit-pending"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              marginBottom: 8,
-              padding: "5px 10px",
-              border: "1px solid color-mix(in srgb, var(--accent) 35%, var(--bg-panel))",
-              borderRadius: 6,
-              background: "color-mix(in srgb, var(--accent) 8%, var(--bg-panel))",
-              color: "var(--text)",
-              fontSize: 12,
-              lineHeight: 1.5,
-            }}
-          >
-            <span style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere" }}>{t("chat.editPendingBar")}</span>
-            {onCancelEdit && (
-              <button
-                type="button"
-                onClick={onCancelEdit}
-                title={t("chat.editPendingCancel")}
-                aria-label={t("chat.editPendingCancel")}
-                style={{
-                  background: "none",
-                  border: "1px solid var(--border)",
-                  borderRadius: 5,
-                  padding: "2px 10px",
-                  fontSize: 12,
-                  color: "var(--text)",
-                  cursor: "pointer",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {t("chat.editPendingCancel")}
-              </button>
-            )}
-          </div>
-        )}
-        {/* #128: an edit refused because it would restart claude over unfinished background
-            work — the two answers, on the structured refusal code alone. */}
-        {claudeEditRestartRefusal && (
-          <div
-            role="alert"
-            className="claude-edit-restart-refusal"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              marginBottom: 8,
-              padding: "5px 10px",
-              border: "1px solid rgba(234,179,8,0.3)",
-              borderRadius: 6,
-              background: "rgba(234,179,8,0.07)",
-              color: "var(--text)",
-              fontSize: 12,
-              lineHeight: 1.5,
-            }}
-          >
-            <span style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere" }}>{claudeEditRestartRefusal}</span>
-            {onSendClaudeEditAsNewMessage && (
-              <button
-                type="button"
-                onClick={() => {
-                  const msg = value.trim();
-                  if (!msg && !attachedImages.length) return;
-                  clearInput();
-                  onSendClaudeEditAsNewMessage?.(msg, attachedImages.length ? attachedImages : undefined);
-                }}
-                style={{
-                  background: "none",
-                  border: "1px solid var(--border)",
-                  borderRadius: 5,
-                  padding: "2px 10px",
-                  fontSize: 12,
-                  color: "var(--text)",
-                  cursor: "pointer",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {t("claude.editSendAsNew")}
-              </button>
-            )}
-            {onKeepClaudeEditPending && (
-              <button
-                type="button"
-                onClick={onKeepClaudeEditPending}
-                style={{
-                  background: "none",
-                  border: "1px solid var(--border)",
-                  borderRadius: 5,
-                  padding: "2px 10px",
-                  fontSize: 12,
-                  color: "var(--text)",
-                  cursor: "pointer",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {t("claude.editKeepPending")}
-              </button>
-            )}
-          </div>
         )}
         {showImageUnsupportedWarning && (() => {
           const entry = modelList?.find((m) => m.provider === model?.provider && m.id === model?.modelId);
