@@ -63,6 +63,18 @@ func TestW136DevChannelDocs(t *testing.T) {
 		}
 	}
 
+	// the scanned doc pages this change touched carry no `pf build` code
+	// span: the doctor row's name is not a pf verb, and the doc set's
+	// drift checker (TestDocsSetNoDrift) rejects a code span naming a
+	// verb that does not exist — verification r1's red. docs/upgrade.md
+	// is not in the drift checker's page set (w254 pins its bytes), and
+	// the row's own enumeration lives in skills/polyforge/verbs/doctor.md.
+	for _, page := range []string{"docs/install.md", "docs/reference/release.md"} {
+		if strings.Contains(read(page), "`pf build`") {
+			t.Fatalf("%s carries a `pf build` code span: the doctor row's name is not a pf verb and the doc-set drift checker rejects the span - name the row in prose or point at doctor.md", page)
+		}
+	}
+
 	// docs/upgrade.md: one appended section, heading the shared
 	// next-patch version, naming the channel
 	um := read(filepath.Join("docs", "upgrade.md"))

@@ -186,7 +186,7 @@ count, and with it the channel's ordering, meaningless). The string is a
 SemVer pre-release of the NEXT formal release and never carries `+build`
 metadata, so the installer's downgrade guard keeps comparing it; the
 source commit rides its own field — `pf --json version`'s `commit` and
-`pf doctor`'s `pf build` row name it.
+`pf doctor`'s new build row name it.
 
 Boundaries, by design: the channel is local-only (it writes nothing to
 GitHub — no release, no asset, no push), and the two AIHubs do not
