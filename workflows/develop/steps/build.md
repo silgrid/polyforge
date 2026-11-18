@@ -101,7 +101,17 @@ change, run its validator and name it in its `## Coverage` row.
 
 Run the fast checks over the whole change (the written command once per touched repo) and
 every unit test targeted, then the written unit check over the whole `artifacts/build/units.json`
-(the same command with no `--unit`) (the full bar is `verification`'s). Read your full diff (per repo `git diff
+(the same command with no `--unit`) (the full bar is `verification`'s). Then run the two
+facts lines review will judge you with — the same engine, without the replay:
+`"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" build --json --out artifacts/facts/build.json`
+`"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" carries --json --out artifacts/facts/carries.json`
+The first gives each unit's static commit facts (its ids resolving in a task repo,
+`test_commit` one ordinary commit of test paths alone and an ancestor of `impl_commit`,
+`impl_commit` in HEAD); the second the e2e carries. A red names the unit, or the repo,
+suite and reason — fix it and re-run until green, never handing off on one; exit 2 is no
+pass either (fix the input it names; a real machine blocker is `blocked`). These are the
+build's own static runs — review recomputes both facts with its replay, so this file is
+never replay evidence. Read your full diff (per repo `git diff
 $(git merge-base HEAD origin/<base>)..HEAD`, `<base>` the step header's base branch) as `review` will, against its five blocking classes:
 `bug`, `ac_gap`, `project_rule`, `test_weakened`, `guarantee`; write each hit and its disposition
 to `artifacts/self-review.md` and fix what you can now (a new unit for a behaviour fix).
