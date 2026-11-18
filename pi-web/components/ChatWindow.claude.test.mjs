@@ -135,7 +135,8 @@ test("128 u6 the composer shows the pending-edit bar and the restart-refused two
     claudeEditRestartRefusal: 'A claude background task is still running ("npm run dev"). Editing a message restarts claude, which would end it; try again when it is done.',
     onSendClaudeEditAsNewMessage() {}, onKeepClaudeEditPending() {},
   }));
-  assert.ok(refused.includes('A claude background task is still running ("npm run dev")'), "the refusal prompt shows no refusal text");
+  assert.ok(refused.includes("A claude background task is still running"), "the refusal prompt shows no refusal text");
+  assert.ok(refused.includes("npm run dev"), "the refusal prompt does not name the task's command");
   assert.ok(refused.includes(">Send as a new message</button>"), "no「作为新消息发送」on the refusal prompt");
   assert.ok(refused.includes(">Keep the edit, try later</button>"), "no「保留编辑」on the refusal prompt");
   assert.ok(!refused.includes("Editing a history message — Send replaces it"), "the refusal prompt is the edit bar");
