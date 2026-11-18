@@ -87,11 +87,12 @@ func w111lrLoad(t *testing.T) w111lrDoc {
 	return d
 }
 
-// w111lrCounts is one report's selection by kind.
+// w111lrCounts is one report's selection by kind — the command list and
+// the two commands the target kinds read. The cap counts live in the
+// judge's answer (w111lrJudge), one counting implementation, not here.
 type w111lrCounts struct {
-	pkg, run, conf, e2eNames, suites int
-	cmds                             []string // the scoped command list, in order
-	e2eCmd, suitesCmd                string
+	cmds              []string // the scoped command list, in order
+	e2eCmd, suitesCmd string
 }
 
 func (k w111lrCounts) has(kind, value string) bool {
@@ -115,22 +116,11 @@ func w111lrMeasure(t *testing.T, r w111scReport) w111lrCounts {
 	var k w111lrCounts
 	for _, c := range r.scoped() {
 		k.cmds = append(k.cmds, c.Cmd)
-		if c.Source == "conf" {
-			k.conf++
-		}
 		switch {
 		case strings.HasPrefix(c.Cmd, "E2E_RUN"):
 			k.e2eCmd = c.Cmd
-			k.e2eNames = strings.Count(c.Cmd, "|") + 1
 		case strings.HasPrefix(c.Cmd, "npm run test:e2e:all"):
 			k.suitesCmd = c.Cmd
-			k.suites = len(strings.Split(strings.SplitN(c.Cmd, "-- ", 2)[1], " "))
-		case strings.Contains(c.Cmd, "go test"):
-			if strings.Contains(c.Cmd, " -run ") {
-				k.run++
-			} else {
-				k.pkg++
-			}
 		}
 	}
 	return k
@@ -386,7 +376,10 @@ func TestLightHistoricalReplay(t *testing.T) {
 			t.Errorf("a Test function added after the baseline must pass, named:\n%s", passedJoined)
 		}
 		violationsJoined := strings.Join(violations, "\n")
-		for _, bad := range []string{runTrailing, runUnparsed, e2eTrailing, "not-an-identifier"} {
+		// The malformed E2E item keeps its prefix-stripped shape (the
+		// suffix no longer matches), so its needle is the trailing text —
+		// the judged item, not the constructed command.
+		for _, bad := range []string{runTrailing, runUnparsed, "e2e-parallel.sh --extra", "not-an-identifier"} {
 			if strings.Contains(passedJoined, bad) {
 				t.Errorf("a malformed or non-identifier item must never be a pass-through: %q in:\n%s", bad, passedJoined)
 			}
@@ -435,11 +428,9 @@ func w111lrJudge(c w111lrCase, r w111scReport, baseline string, atBaseline func(
 		"conf_cmds":     nil,
 		"npm_suites":    nil,
 	}
-	runNames := map[string][]string{} // one entry per run command: its package's selected names
-	counts = map[string]int{
-		"conf":   0,
-		"suites": 0,
-	}
+	runNames := map[string][]string{} // one entry per parsed run command: its package's selected names
+	shapedRuns := map[string]bool{}   // the run items a parsed command produced — only these may pass
+	counts = map[string]int{}
 	for _, c2 := range r.scoped() {
 		switch {
 		case strings.HasPrefix(c2.Cmd, "E2E_RUN"):
@@ -449,10 +440,14 @@ func w111lrJudge(c w111lrCase, r w111scReport, baseline string, atBaseline func(
 		case c2.Source == "conf":
 			measured["conf_cmds"] = append(measured["conf_cmds"], c2.Cmd)
 		case strings.Contains(c2.Cmd, "go test") && strings.Contains(c2.Cmd, " -run "):
-			for _, pair := range w111lrRunPairs(c2.Cmd) {
+			pairs, parsed := w111lrRunPairs(c2.Cmd)
+			for _, pair := range pairs {
 				measured["go_run_pairs"] = append(measured["go_run_pairs"], pair)
-				i := strings.LastIndex(pair, " ")
-				runNames[pair[:i]] = append(runNames[pair[:i]], pair[i+1:])
+				if parsed {
+					i := strings.LastIndex(pair, " ")
+					runNames[pair[:i]] = append(runNames[pair[:i]], pair[i+1:])
+					shapedRuns[pair] = true
+				}
 			}
 		case strings.Contains(c2.Cmd, "go test"):
 			measured["go_pkg_dirs"] = append(measured["go_pkg_dirs"], w111lrPkgDirs(c2.Cmd)...)
@@ -472,7 +467,7 @@ func w111lrJudge(c w111lrCase, r w111scReport, baseline string, atBaseline func(
 	for kind, items := range c.Old {
 		switch kind {
 		case "go_run_cmds":
-			recorded("go_run_pairs", items, w111lrRunPairs)
+			recorded("go_run_pairs", items, func(s string) []string { pairs, _ := w111lrRunPairs(s); return pairs })
 		case "go_pkg_cmds":
 			recorded("go_pkg_dirs", items, w111lrPkgDirs)
 		default:
@@ -486,7 +481,7 @@ func w111lrJudge(c w111lrCase, r w111scReport, baseline string, atBaseline func(
 		}
 		switch kind {
 		case "go_run_cmds":
-			recorded("go_run_pairs", names, w111lrRunPairs)
+			recorded("go_run_pairs", names, func(s string) []string { pairs, _ := w111lrRunPairs(s); return pairs })
 		case "go_pkg_cmds":
 			recorded("go_pkg_dirs", names, w111lrPkgDirs)
 		default:
@@ -498,17 +493,24 @@ func w111lrJudge(c w111lrCase, r w111scReport, baseline string, atBaseline func(
 			if allowed[kind][v] {
 				continue
 			}
-			// Only a Test function added after the baseline commit passes;
-			// a package directory, a conf command and a suite are not Test
-			// functions and stay judged (a growth there reds as before).
+			// Only a Test function a well-shaped command selected passes:
+			// the run items a parsed command produced, and an e2e name
+			// that is one Go Test identifier. A package directory, a conf
+			// command, a suite, a package path or command fragment a
+			// changed or unparseable shape left behind, and any non-
+			// identifier, stay judged — a growth or a shape change reds
+			// as before, never silently passes.
 			var name string
+			passable := false
 			switch kind {
 			case "go_run_pairs":
 				name = v[strings.LastIndex(v, " ")+1:]
+				passable = shapedRuns[v]
 			case "e2e_run_names":
 				name = v
+				passable = w111lrTestNameRe.MatchString(v)
 			}
-			if name != "" && !atBaseline(name) {
+			if passable && !atBaseline(name) {
 				passed = append(passed, fmt.Sprintf("%s %q — a Test function added after the corpus's baseline commit %s", kind, v, baseline))
 				continue
 			}
@@ -518,11 +520,18 @@ func w111lrJudge(c w111lrCase, r w111scReport, baseline string, atBaseline func(
 	}
 	sort.Strings(violations)
 	sort.Strings(passed)
+	// The conf and suites caps' inputs are never Test functions and never
+	// pass through: counted whole, as #111 measured them.
+	counts["conf"] = len(measured["conf_cmds"])
+	counts["suites"] = len(measured["npm_suites"])
 	for _, n := range measured["e2e_run_names"] {
 		if atBaseline(n) {
 			counts["e2e_names"]++
 		}
 	}
+	// The run cap counts commands — one per package of parsed run items,
+	// each carrying at least one baseline-carried name (the engine emits
+	// one run command per package, so package and command agree).
 	for _, names := range runNames {
 		for _, n := range names {
 			if atBaseline(n) {
@@ -535,23 +544,36 @@ func w111lrJudge(c w111lrCase, r w111scReport, baseline string, atBaseline func(
 }
 
 // w111lrRunRe parses the engine's scoped run command: the -run name list
-// and the package it selects.
-var w111lrRunRe = regexp.MustCompile(`-run '\^\((.*)\)\$' (\.[^']*)$`)
+// and the one package token it selects (no spaces — trailing text means the
+// shape changed and the command is not a Test function's selection).
+var w111lrRunRe = regexp.MustCompile(`-run '\^\((.*)\)\$' (\.\S*)$`)
+
+// w111lrTestNameRe is a Go Test function's name — the only shape the
+// pass-through filter may pass.
+var w111lrTestNameRe = regexp.MustCompile(`^Test[A-Za-z0-9_]*$`)
 
 // w111lrRunPairs splits one run command into its items, one "pkg name" per
-// selected test. Both sides of the comparison parse through this one
-// function, so a shape the engine changes stays symmetric; a command the
-// expression does not match stays one whole item.
-func w111lrRunPairs(cmd string) []string {
+// selected test, and answers whether the command parsed. Both sides of the
+// comparison parse through this one function, so a shape the engine changes
+// stays symmetric; a command the expression does not match — or whose names
+// are not Test identifiers — stays one whole item, unparsed, and an
+// unparsed item is never a pass-through.
+func w111lrRunPairs(cmd string) ([]string, bool) {
 	m := w111lrRunRe.FindStringSubmatch(cmd)
 	if m == nil {
-		return []string{cmd}
+		return []string{cmd}, false
 	}
-	out := make([]string, 0, len(strings.Split(m[1], "|")))
-	for _, n := range strings.Split(m[1], "|") {
+	names := strings.Split(m[1], "|")
+	for _, n := range names {
+		if !w111lrTestNameRe.MatchString(n) {
+			return []string{cmd}, false
+		}
+	}
+	out := make([]string, 0, len(names))
+	for _, n := range names {
 		out = append(out, m[2]+" "+n)
 	}
-	return out
+	return out, true
 }
 
 // w111lrPkgDirs splits one package command into its directory items — the
