@@ -262,13 +262,13 @@ func TestW20DoctorEveryCell(t *testing.T) {
 	hostRows := []string{"prerequisites", "python3", "null device", "audit tools", "daemon socket",
 		"daemon supervision", "retired env", "harness diagram guidance", "harness concise guidance"}
 	cellRows := []string{"workspace mapping", "workspace dirs", "workspace layout", "workspace scratch",
-		"capsule retention", "disk watermark", "workspace repo clones", "light verification fallbacks",
+		"capsule retention", "rebuildable artifacts", "disk watermark", "workspace repo clones", "light verification fallbacks",
 		"workspace memory policy", "host prerequisites", "server reach", "config reload", "model health",
 		"daemon env", "daemon command path", "workspace yaml", "harness claude", "workflow lanes",
 		"aihub projects", "auth"}
 	want := []string{"config"}
-	want = append(want, cellRows[:9]...) // mapping … workspace memory policy
-	want = append(want, hostRows[:4]...) // prerequisites … audit tools
+	want = append(want, cellRows[:10]...) // mapping … workspace memory policy
+	want = append(want, hostRows[:4]...)  // prerequisites … audit tools
 	want = append(want, "host prerequisites", "server reach", "daemon socket", "daemon supervision", "config reload", "model health")
 	want = append(want, hostRows[6]) // retired env
 	want = append(want, "daemon env", "daemon command path", "workspace yaml", "harness claude")
