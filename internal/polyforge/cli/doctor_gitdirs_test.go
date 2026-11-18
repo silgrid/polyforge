@@ -213,14 +213,17 @@ func workItemReads(rec *reqRecorder) (lists int, ids []string) {
 // the other three take ONE project list, plus a per-id read only for
 // what the list did not name — wi_ghost (no such work item) and
 // wi_active (left off the list: an owner past its page). The verdicts
-// are the ones a read per entry gives.
+// are the ones a read per entry gives. The rebuildable artifacts row
+// (polyforge#127) reads its own batch for the capsules' owners — one
+// more list, and wi_active once more (the same unlisted owner) — the
+// same per-project bound, counted in below.
 func TestDoctorGitDirsAihubReadsAreBounded(t *testing.T) {
 	f := newGitDirsFixture(t, true)
 	f.unlisted["wi_active"] = true
 	_, _, doc := doctorStatus(t, f.env, "--json", "doctor")
 	_, detail := doctorFind(t, doc, docChCapsuleRetention)
-	if lists, ids := workItemReads(f.rec); lists != 1 || !slices.Equal(ids, []string{"wi_active", "wi_ghost"}) {
-		t.Fatalf("work-item reads: %d list(s), per-id %v; want 1 list (one mapped project) and per-id [wi_active wi_ghost] (what it did not name)", lists, ids)
+	if lists, ids := workItemReads(f.rec); lists != 2 || !slices.Equal(ids, []string{"wi_active", "wi_active", "wi_ghost"}) {
+		t.Fatalf("work-item reads: %d list(s), per-id %v; want 2 lists (one per reading row) and per-id [wi_active wi_active wi_ghost] (what the lists did not name)", lists, ids)
 	}
 	for _, want := range []string{"reclaimable 1 (", "retired 2 (", "retained 4, ", "unknown 1 — "} {
 		if !strings.Contains(detail, want) {
@@ -232,16 +235,21 @@ func TestDoctorGitDirsAihubReadsAreBounded(t *testing.T) {
 // TestDoctorGitDirsLocalRetentionReadsNothing: an entry younger than the
 // retention or named by a daemon job is retained on local facts alone,
 // so with every entry so the row reads no work item; and an owner count
-// no larger than the mapped projects is read per id, never listed.
+// no larger than the mapped projects is read per id, never listed. The
+// rebuildable artifacts row (polyforge#127) has no age rule, so it
+// always reads its own one batch for the capsules' owners — the one
+// list counted in below; the retention row's own reads stay what this
+// test pins: none locally decidable, per-id-only for a sole owner.
 func TestDoctorGitDirsLocalRetentionReadsNothing(t *testing.T) {
 	cases := []struct {
 		name       string
 		oldReclaim bool // leave wi_done's git dir past the retention
+		wantLists  int
 		wantIDs    []string
 		wantClass  []string
 	}{
-		{"all local", false, nil, []string{"reclaimable 0 (0 B)", "retired 0 (0 B)", "retained 8, ", "unknown 0 — "}},
-		{"one owner", true, []string{"wi_done"}, []string{"reclaimable 1 (", "retired 0 (0 B)", "retained 7, ", "unknown 0 — "}},
+		{"all local", false, 1, nil, []string{"reclaimable 0 (0 B)", "retired 0 (0 B)", "retained 8, ", "unknown 0 — "}},
+		{"one owner", true, 1, []string{"wi_done"}, []string{"reclaimable 1 (", "retired 0 (0 B)", "retained 7, ", "unknown 0 — "}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -258,8 +266,8 @@ func TestDoctorGitDirsLocalRetentionReadsNothing(t *testing.T) {
 			}
 			_, _, doc := doctorStatus(t, f.env, "--json", "doctor")
 			_, detail := doctorFind(t, doc, docChCapsuleRetention)
-			if lists, ids := workItemReads(f.rec); lists != 0 || !slices.Equal(ids, c.wantIDs) {
-				t.Fatalf("work-item reads: %d list(s), per-id %v; want no list and per-id %v", lists, ids, c.wantIDs)
+			if lists, ids := workItemReads(f.rec); lists != c.wantLists || !slices.Equal(ids, c.wantIDs) {
+				t.Fatalf("work-item reads: %d list(s), per-id %v; want %d list(s) and per-id %v", lists, ids, c.wantLists, c.wantIDs)
 			}
 			for _, want := range c.wantClass {
 				if !strings.Contains(detail, want) {
