@@ -281,7 +281,9 @@ export interface ChatInputHandle {
   /** Insert at the caret as a paragraph of its own: a blockquote must start a line. */
   insertQuote: (text: string) => void;
   insertIfEmpty: (text: string) => void;
-  replaceMessage: (message: UserMessage) => void;
+  /** Whether the message was restored into the composer: false when a draft was kept
+   *  (pi#33) — #128: the hook stages an edit only on a true report. */
+  replaceMessage: (message: UserMessage) => boolean;
   prependText: (text: string) => void;
   /** The Messages 「@」 fill: append after the current text
    *  with one blank line (none for an empty draft); images, toolbar and
@@ -995,8 +997,10 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         // pi#33: the draft is kept byte-for-byte; the transient notice makes
         // the skipped restore visible instead of reading as a dead click (or
         // as "the click ate my input") in both split and classic layouts.
+        // #128: the false report means the click staged no edit either, so the
+        // next send is an ordinary prompt, never an edit over a kept draft.
         setDraftKeptNoticeVisible(true);
-        return;
+        return false;
       }
 
       const restoredText = getUserMessageText(message);
@@ -1015,6 +1019,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
         ta.focus();
         autoGrowTextarea(ta);
       });
+      return true;
     },
     prependText(text: string) {
       if (!text.trim()) return;

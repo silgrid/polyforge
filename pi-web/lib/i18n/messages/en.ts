@@ -953,7 +953,7 @@ export const enLocale: LocalePlugin = {
     "chat.filePickerUnsupportedTitle": "File selection unavailable",
     "chat.filePickerUnsupportedBody": "The current app shell opened no file chooser when this button was tapped. Its WebView likely lacks the native file-selection bridge — try attaching from a regular browser, or update the app shell.",
     "chat.draftKeptTitle": "Draft kept",
-    "chat.draftKeptBody": "Your current draft was kept — the historical message was not loaded into the composer.",
+    "chat.draftKeptBody": "Your current draft was kept — the historical message was not loaded, and no edit was staged; the next send is an ordinary message.",
     "chat.previewImage": "Preview image",
     "chat.filterModels": "Filter models…",
     "chat.modelScopeScoped": "scoped",

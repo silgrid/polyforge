@@ -1091,10 +1091,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     else pendingHistoryEdits.delete(session.id);
     setEditEntryId(entryId);
   }, [session?.id]);
+  // #128: the composer reports whether it took the message; a kept draft (pi#33)
+  // stages no edit, so the next send is an ordinary prompt, never a hidden one.
   const handleEditContent = useCallback((message: UserMessage, entryId: string) => {
     if (!session?.id) return;
-    opts.chatInputRef?.current?.replaceMessage(message);
-    setEdit(entryId);
+    if (opts.chatInputRef?.current?.replaceMessage(message)) setEdit(entryId);
   }, [opts.chatInputRef, session?.id, setEdit]);
   const cancelEdit = useCallback(() => setEdit(null), [setEdit]);
 

@@ -953,7 +953,7 @@ export const zhCNLocale: LocalePlugin = {
     "chat.filePickerUnsupportedTitle": "当前环境不支持文件选择",
     "chat.filePickerUnsupportedBody": "点击后没有弹出文件选择器。当前应用外壳的 WebView 很可能缺少原生文件选择桥——请改用普通浏览器附加，或更新应用外壳。",
     "chat.draftKeptTitle": "已保留当前草稿",
-    "chat.draftKeptBody": "未载入历史消息，当前草稿保持不变。",
+    "chat.draftKeptBody": "当前草稿保持不变：未载入历史消息，也未暂存编辑；随后发送的是普通消息。",
     "chat.previewImage": "预览图片",
     "chat.filterModels": "筛选模型…",
     "chat.modelScopeScoped": "已限定",
