@@ -39,10 +39,12 @@ import (
 
 // w136DevCfg shapes one dev-channel fixture world.
 type w136DevCfg struct {
-	green string // "" = default: green tag at main HEAD; "tag" | "base" | "none" | "offmain"
-	tools bool   // the build-tool shims (go, make, node, npm) are on PATH
-	touch string // a repo-relative path ONE commit after the release tag touches (an AIHub-side change shape)
-	piweb bool   // the origin carries an installable pi-web package and npm/node model it
+	green      string // "" = default: green tag at main HEAD; "tag" | "base" | "none" | "offmain"
+	tools      bool   // the build-tool shims (go, make, node, npm) are on PATH
+	touch      string // a repo-relative path ONE commit after the release tag touches (an AIHub-side change shape)
+	piweb      bool   // the origin carries an installable pi-web package and npm/node model it
+	aheadPath  string // a repo-relative path ONE commit on main AFTER the green tag touches (main ahead of the tag)
+	aheadNvmrc string // a new .nvmrc that same post-green commit writes (main's pin diverging from the green tree's)
 }
 
 // w136Dev is one hermetic dev-channel machine on top of w174Install.
@@ -52,7 +54,8 @@ type w136Dev struct {
 	src       string // the repo root (for copying the real tools into the fixture)
 	npmPrefix string // the scratch npm prefix (the piweb fixture)
 	tagSHA    string // the commit the v0.2.3 release tag points at
-	mainSHA   string
+	mainSHA   string // the green tag's commit (main's tip when nothing moves past it)
+	aheadSHA  string // the commit main added AFTER the green tag ("" when main did not move)
 }
 
 // w136Git runs the real git in dir (the fixture setup itself never
@@ -204,6 +207,20 @@ func w136NewDev(t *testing.T, cfg w136DevCfg) *w136Dev {
 		msg := fmt.Sprintf(`{"commit":%q,"gate_id":"%064d","runner":"gate.py","runner_version":"2","plan_digest":"%064d","engine_source":"tree","gate_id_source":"tree","verified_at":"2026-11-18T00:00:00Z","summary":"w136 fixture gate"}`, greenAt, 1, 2)
 		w136Git(t, d.origin, "tag", "-a", "-m", msg, "green/20261118-1", greenAt)
 	}
+	// main moving past the green tag (the normal state: the gate tags a
+	// batch, then development goes on) — whatever this commit touches must
+	// never reach the dev channel's build
+	if cfg.aheadPath != "" || cfg.aheadNvmrc != "" {
+		if cfg.aheadPath != "" {
+			w136Write(t, filepath.Join(d.origin, filepath.FromSlash(cfg.aheadPath)), "// w136 main moved on\n", 0o644)
+		}
+		if cfg.aheadNvmrc != "" {
+			w136Write(t, filepath.Join(d.origin, ".nvmrc"), cfg.aheadNvmrc, 0o644)
+		}
+		w136Git(t, d.origin, "add", "-A")
+		w136Git(t, d.origin, "commit", "-q", "-m", "main moved past the green tag")
+		d.aheadSHA = w136CommitSHA(t, d.origin, "HEAD")
+	}
 
 	// the released version the gh stub serves (the formal channel's
 	// latest release — the dev channel's base tag)
@@ -242,7 +259,14 @@ exit 0
 		files["npm"] = "#!/bin/sh\necho \"npm $*\" >> \"$W174_JOURNAL\"\nexit 0\n"
 		files["node"] = "#!/bin/sh\necho \"node $*\" >> \"$W174_JOURNAL\"\n[ \"$1\" = --version ] && { echo \"${W136_NODE_VER:-v24.1.0}\"; exit 0; }\nexit 0\n"
 		files["make"] = `#!/bin/sh
-echo "make $*" >> "$W174_JOURNAL"
+dir=.
+prev=
+for a in "$@"; do
+  case "$prev" in -C) dir=$a ;; esac
+  prev=$a
+done
+tree=$("${W136_REALGIT:-git}" -C "$dir" rev-parse HEAD 2>/dev/null)
+echo "make $* built-tree=$tree" >> "$W174_JOURNAL"
 [ "${W136_MAKE_FAIL:-}" = 1 ] && { echo "make: dev-build failed" >&2; exit 1; }
 case " $* " in
 *" dev-build "*)
@@ -703,4 +727,64 @@ func TestW136InstallDevWithPiWeb(t *testing.T) {
 	if !strings.Contains(out, "Pi Web installed from silgrid-pi-web-v0.2.4-dev.2.tgz") {
 		t.Fatalf("the run does not report the dev Pi Web install:\n%s", out)
 	}
+}
+
+// TestW136InstallDevBuildsTheGreenCommitsTree (AC1 review r1 #1/#2): the
+// channel builds THE GREEN COMMIT's tree, never main's HEAD — main sits
+// ahead of the green tag in the normal state (the gate tags a batch,
+// development goes on), and whatever landed after the tag must not reach
+// the build, the AIHub-side list, or the node pin.
+func TestW136InstallDevBuildsTheGreenCommitsTree(t *testing.T) {
+	// the make shim journals the tree its -C directory sits on
+	builtTree := func(d *w136Dev) string {
+		t.Helper()
+		for _, l := range d.journalLines() {
+			if strings.HasPrefix(l, "make -C ") && strings.Contains(l, " dev-build ") && strings.Contains(l, "built-tree=") {
+				return l[strings.LastIndex(l, "built-tree=")+len("built-tree="):]
+			}
+		}
+		return ""
+	}
+
+	t.Run("main ahead of the green tag: the build takes the green commit", func(t *testing.T) {
+		d := w136NewDev(t, w136DevCfg{green: "", tools: true,
+			aheadPath: "internal/polyforge/cli/verbs_version.go"})
+		w136InstallBin(t, d, "v0.2.3")
+		d.resetJournal(t)
+		out, code := d.run(t)
+		if code != 0 {
+			t.Fatalf("main being one commit ahead of the green tag must install; exit %d:\n%s", code, out)
+		}
+		if got := builtTree(d); got != d.mainSHA {
+			t.Fatalf("the dev build ran on tree %s, want the green commit %s (main's tip %s must not reach the build: the channel installs only what the gate verified)", got, d.mainSHA, d.aheadSHA)
+		}
+	})
+
+	t.Run("an AIHub-side change after the green tag neither refuses nor reaches the build", func(t *testing.T) {
+		d := w136NewDev(t, w136DevCfg{green: "", tools: true,
+			aheadPath: "internal/aihub/core/after-the-tag.go"})
+		w136InstallBin(t, d, "v0.2.3")
+		d.resetJournal(t)
+		out, code := d.run(t)
+		if code != 0 {
+			t.Fatalf("a change main made AFTER the green tag is not in the installed tree and must not refuse (the AIHub preflight judges the release-tag..green diff only); exit %d:\n%s", code, out)
+		}
+		if got := builtTree(d); got != d.mainSHA {
+			t.Fatalf("the dev build ran on tree %s, want the green commit %s: main's post-green AIHub-side change must not be built", got, d.mainSHA)
+		}
+	})
+
+	t.Run("the node pin comes from the green commit's tree", func(t *testing.T) {
+		d := w136NewDev(t, w136DevCfg{green: "", tools: true,
+			aheadPath: "internal/polyforge/cli/verbs_version.go", aheadNvmrc: "22\n"})
+		w136InstallBin(t, d, "v0.2.3")
+		d.resetJournal(t)
+		out, code := d.run(t)
+		if code != 0 {
+			t.Fatalf("the node major must come from the GREEN commit's .nvmrc (24), not main's diverged one (22); exit %d:\n%s", code, out)
+		}
+		if got := builtTree(d); got != d.mainSHA {
+			t.Fatalf("the dev build ran on tree %s, want the green commit %s", got, d.mainSHA)
+		}
+	})
 }
