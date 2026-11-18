@@ -42,12 +42,17 @@ var cmdVersion = &Command{
 }
 
 // versionJSON is the machine line of `pf --json version` and of the
-// `--version` flag under --json: the build string and the protocol
-// capability list (protocol.Capabilities) — local facts, no face touched.
+// `--version` flag under --json: the build string, the protocol
+// capability list (protocol.Capabilities) and — a development-channel
+// build only — the source commit the build was cut from
+// (internal/version.Commit, stamped by make dev-build; empty and
+// omitted on a release build, whose line keeps the exact bytes that
+// shipped before polyforge#136) — local facts, no face touched.
 func versionJSON() string {
 	b, _ := json.Marshal(struct {
 		Version      string   `json:"version"`
+		Commit       string   `json:"commit,omitempty"`
 		Capabilities []string `json:"capabilities"`
-	}{version.Version, protocol.Capabilities})
+	}{version.Version, version.Commit, protocol.Capabilities})
 	return string(b)
 }

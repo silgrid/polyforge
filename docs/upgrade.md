@@ -673,3 +673,25 @@ capsule's bytes and rebuild by the fast gates. No upgrade action beyond
 taking the new `pf`; the default `pf doctor` run still writes nothing.
 Run the row report-only once before the first `--prune-rebuildables`,
 the same discipline the first `--prune-capsules` asked for.
+
+## v0.2.4, the local development channel (polyforge#136)
+
+`tools/install.sh --dev` installs, on this machine only, the latest
+green-tag commit of main — built locally through the new
+`make dev-build` entry, versioned `v<next patch of the latest release
+tag>-dev.<N>` (`N` the first-parent commit count from the release tag;
+re-installing the same green tag derives the same `N`, and main only
+fast-forwards; over the v0.2.3 line that is `v0.2.4-dev.2` two commits
+past the tag), never published anywhere and refused in prepare when the
+release-tag..green diff touches an AIHub-side path of
+`tools/aihub-paths.conf` — those sets change the server, and the two
+AIHubs do not follow dev builds; they need a formal release. The version
+string carries no `+build` metadata, so the installer's downgrade guard
+keeps comparing it: after a dev install the formal channel is refused
+until the next formal release (an ordinary upgrade then), and the
+source commit rides its own field — `pf --json version`'s `commit` and
+`pf doctor`'s new `pf build` row name it. No action on upgrade beyond
+taking the new `pf`: a machine that wants the channel re-runs its
+installer with `--dev`, and `docs/install.md` documents the
+prerequisites (go, make, npm, node of the checkout's `.nvmrc` major,
+all checked and reported together) and the way back.

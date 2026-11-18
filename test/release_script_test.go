@@ -118,7 +118,7 @@ func relGateTree(t *testing.T, dir string) {
 	t.Helper()
 	relWrite(t, filepath.Join(dir, ".polyforge", "verify-scope.conf"), relGateConf, 0o644)
 	relWrite(t, filepath.Join(dir, ".polyforge", "Dockerfile.verify"), relGateDockerfile, 0o644)
-	for _, tool := range []string{"tools/gate-id", "tools/green-tag", "workflows/_shared/scripts/verify-scope", "workflows/_shared/scripts/audit-deps"} {
+	for _, tool := range []string{"tools/gate-id", "tools/green-tag", "tools/package-pi-web.sh", "workflows/_shared/scripts/verify-scope", "workflows/_shared/scripts/audit-deps"} {
 		raw, err := os.ReadFile(filepath.Join("..", filepath.FromSlash(tool)))
 		if err != nil {
 			t.Fatal(err)

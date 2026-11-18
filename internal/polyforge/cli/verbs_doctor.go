@@ -184,6 +184,7 @@ var doctorChecks = []doctorCheckSpec{
 	{docChLightFallbacks, scopeCell, needMapping, lightFallbacksCheck},
 	{docChMemPolicy, scopeCell, needMapping, func(r *doctorRun) (string, string) { return memoryPolicyCheck(r.cfg, r.present).row() }},
 	{docChPrereqs, scopeHost, needConfig, func(r *doctorRun) (string, string) { return prerequisitesCheck(exec.LookPath).row() }},
+	{docChBuild, scopeHost, needConfig, func(r *doctorRun) (string, string) { return buildCheck().row() }},
 	{docChPython, scopeHost, needConfig, func(r *doctorRun) (string, string) {
 		return pythonCheck(r.cfg.Daemon.Python, exec.LookPath, ProbePython).row()
 	}},

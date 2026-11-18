@@ -355,6 +355,16 @@ func TestInstallSuffixVersionTransitions(t *testing.T) {
 		{7, "dev", "v0.2.0-fork.1", reports("dev"), true},
 		{7, "unknown", "v0.2.0-fork.1", "[ \"$1\" = --version ] && exit 1", true},
 		{7, "none", "v0.2.0-fork.1", "", true},
+		// polyforge#136 AC3: the development channel's order — the dev
+		// pre-release sits below its core release and its identifiers
+		// compare as numbers, so the channel's upgrades chain forward and
+		// every step backwards is a refused downgrade.
+		{8, "v0.2.3", "v0.2.4-dev.1", reports("v0.2.3"), true},
+		{9, "v0.2.4-dev.1", "v0.2.4-dev.2", reports("v0.2.4-dev.1"), true},
+		{10, "v0.2.4-dev.2", "v0.2.4", reports("v0.2.4-dev.2"), true},
+		{11, "v0.2.4-dev.1", "v0.2.3", reports("v0.2.4-dev.1"), false},
+		{12, "v0.2.4-dev.2", "v0.2.4-dev.1", reports("v0.2.4-dev.2"), false},
+		{13, "v0.2.4", "v0.2.4-dev.2", reports("v0.2.4"), false},
 	} {
 		verdict := "refused"
 		if c.allowed {
