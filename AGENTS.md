@@ -55,6 +55,15 @@ below as a blocking finding.
     — with the sha256 pin and the pin's list line moved in the same
     commit, while a released section's bytes are never rewritten.
     `test/pf123_upgrade_section_version_test.go` pins the version rule.
+  - what a change alters maps to the documents that describe it, checked
+    one document at a time: a document the change affects is modified in
+    the same commit, one it does not gets an explicit none with the reason.
+    `pf` subcommands, flags and error codes → `docs/reference/commands.md`
+    and `skills/polyforge/verbs/<verb>.md`; conf and config keys →
+    `docs/reference/config.md`; a step's or skill's behavior →
+    `docs/reference/workflow-contract.md`, `docs/concepts.md` and
+    `docs/bundles.md`; a new pi-web file or route → the File Map in
+    `pi-web/AGENTS.md`.
 
   Review treats a coupled obligation named here that the plan omits, or that
   the delivered diff leaves unchanged, as a blocking finding.

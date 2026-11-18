@@ -66,7 +66,9 @@ and `artifacts/merge/landing.json`. The daemon orchestrates; it judges no conten
   hand-off; the change analysis's close check (`facts.py analysis` — the
   same shared validator `verify.py --analysis` calls; a red names the entry and the rule it
   violates and must be fixed before the hand-off); a self-review against review's five
-  blocking classes (`artifacts/self-review.md`). It asks the owner (`pf step ask`) only
+  blocking classes and its doc-impact check, item by item — each document compared, its
+  conclusion, and synced or no-change-needed with the reason — recorded
+  (`artifacts/self-review.md`). It asks the owner (`pf step ask`) only
   when the code reveals something the ticket did not decide, when the plan diverges from
   the ticket, when the ticket carries `confirm_plan: true`, or when it has no acceptance
   list or an incomplete one — right after the plan, never at the end. Its hand-off states
