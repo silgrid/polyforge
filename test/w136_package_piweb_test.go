@@ -73,7 +73,10 @@ func TestW136PiWebPackagingShared(t *testing.T) {
 	if !strings.Contains(rel, "tools/package-pi-web.sh") {
 		t.Fatal(".polyforge/release.sh does not call tools/package-pi-web.sh: the release must use the one shared packaging path")
 	}
-	for _, leftover := range []string{"npm pack", "PI_WEB_RELEASE_VERSION", "npm ci"} {
+	// the inline copy is gone: the tokens that existed ONLY in the
+	// release's pi-web packaging block (the webui console build keeps its
+	// own npm ci — a different package, untouched by this change)
+	for _, leftover := range []string{"npm pack", "PI_WEB_RELEASE_VERSION", "npm version"} {
 		if strings.Contains(rel, leftover) {
 			t.Fatalf(".polyforge/release.sh still carries the inline packaging step %q: the second copy is the drift the shared script closes", leftover)
 		}
