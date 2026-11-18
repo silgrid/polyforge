@@ -259,7 +259,7 @@ func TestW20DoctorEveryCell(t *testing.T) {
 	// ladder with the Host rows interleaved, then the harness family),
 	// then the named Cell's section; the Cell-level rows carry the cell
 	// field, the Host-level rows do not
-	hostRows := []string{"prerequisites", "python3", "null device", "audit tools", "daemon socket",
+	hostRows := []string{"prerequisites", "pf build", "python3", "null device", "audit tools", "daemon socket",
 		"daemon supervision", "retired env", "harness diagram guidance", "harness concise guidance"}
 	cellRows := []string{"workspace mapping", "workspace dirs", "workspace layout", "workspace scratch",
 		"capsule retention", "rebuildable artifacts", "disk watermark", "workspace repo clones", "light verification fallbacks",
@@ -268,12 +268,12 @@ func TestW20DoctorEveryCell(t *testing.T) {
 		"aihub projects", "auth"}
 	want := []string{"config"}
 	want = append(want, cellRows[:10]...) // mapping … workspace memory policy
-	want = append(want, hostRows[:4]...)  // prerequisites … audit tools
+	want = append(want, hostRows[:5]...)  // prerequisites … audit tools (pf build between prerequisites and python3, polyforge#136)
 	want = append(want, "host prerequisites", "server reach", "daemon socket", "daemon supervision", "config reload", "model health")
-	want = append(want, hostRows[6]) // retired env
+	want = append(want, hostRows[7]) // retired env
 	want = append(want, "daemon env", "daemon command path", "workspace yaml", "harness claude")
-	want = append(want, hostRows[7]) // harness diagram guidance
-	want = append(want, hostRows[8]) // harness concise guidance
+	want = append(want, hostRows[8]) // harness diagram guidance
+	want = append(want, hostRows[9]) // harness concise guidance
 	want = append(want, "workflow lanes", "aihub projects", "auth")
 	// the harness family belongs to the default section — today's full
 	// report — so it prints before the alpha section (Q1=A')
@@ -365,7 +365,7 @@ func TestW20DoctorEveryCell(t *testing.T) {
 	}
 	for _, line := range namedRows["alpha"] {
 		n := w20RowName(line)
-		if n == "" || n == "prerequisites" || n == "python3" || n == "null device" || n == "audit tools" ||
+		if n == "" || n == "prerequisites" || n == "pf build" || n == "python3" || n == "null device" || n == "audit tools" ||
 			n == "daemon socket" || n == "daemon supervision" || n == "retired env" || n == "harness diagram guidance" ||
 			n == "harness concise guidance" {
 			t.Errorf("Host-level row inside the alpha section: %q", line)

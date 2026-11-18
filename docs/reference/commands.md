@@ -19,7 +19,11 @@ pf [--json] [--config PATH] [--server URL] [--api-key KEY] [--socket PATH]
 Global flags come before the verb; `pf --version` prints the build
 version (`pf --json version` adds the protocol `capabilities` list:
 `cells-v1`, `config-host-cell-v1`, `cell-lifecycle-v1`,
-`cell-migration-v1` — local, answerable with the daemon down).
+`cell-migration-v1` — local, answerable with the daemon down; a
+development-channel build — `tools/install.sh --dev`, polyforge#136 —
+adds `commit`, the source commit the build was cut from, as one more
+field of the same machine line, omitted on a release build whose tag
+already names the commit).
 
 **Profile resolution.** One daemon (the Host) serves several Cells, one
 per AIHub identity domain ([config: Host and
