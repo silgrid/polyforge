@@ -9,8 +9,13 @@ package cli
 // component), reading the declaration from the mapped workspace's
 // .repo view's committed default branch (Q3=B, the owner's ruling) and
 // recording the commit it read; a capsule of a work item still in
-// flight, one a daemon job holds, and any repository whose declaration
-// cannot be proven are kept and named; a repository that declares
+// flight — every state AC2 names: running, queued, blocked, paused —
+// one a daemon job holds, and any repository whose declaration cannot
+// be proven are kept and named, each by a whole-tree byte-for-byte
+// snapshot, not an existence check; a canceled work item no job names
+// and a terminal work item's set-aside (capsules/<name>.quarantined.<ts>)
+// scene are cleaned like any other terminal capsule (the owner's ruling,
+// row 5); a repository that declares
 // nothing changes nothing (AC3); artifacts/, capsule.json, the git
 // directories, the local commits and the git status never move — a
 // repository with unpushed commits loses its ignored build products and
@@ -21,6 +26,10 @@ package cli
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"fmt"
+	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -113,6 +122,59 @@ func rgcWrite(t *testing.T, path string, n int) {
 	}
 }
 
+// rgcSetAside moves a freshly laid-out capsule aside, the runtime's
+// quarantine shape (capsules/<name>.quarantined.<ts>): a terminal work
+// item's set-aside scene, which the owner's row-5 ruling put in the
+// switch's scope (review r1 #4).
+func rgcSetAside(t *testing.T, dir string) string {
+	t.Helper()
+	aside := dir + ".quarantined.abc"
+	if err := os.Rename(dir, aside); err != nil {
+		t.Fatal(err)
+	}
+	return aside
+}
+
+// rgcTreeSnapshot answers the whole-tree fingerprint of root: every
+// path under it, relative, mapped to its kind, size and content hash —
+// so "not one byte moves" is asserted as a byte-for-byte comparison,
+// not an existence check (review r1 #3).
+func rgcTreeSnapshot(t *testing.T, root string) map[string]string {
+	t.Helper()
+	snap := map[string]string{}
+	err := filepath.WalkDir(root, func(p string, e fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			return err
+		}
+		switch {
+		case e.IsDir():
+			snap[rel] = "dir"
+		case e.Type()&fs.ModeSymlink != 0:
+			target, err := os.Readlink(p)
+			if err != nil {
+				return err
+			}
+			snap[rel] = "symlink->" + target
+		default:
+			raw, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			sum := sha256.Sum256(raw)
+			snap[rel] = fmt.Sprintf("file %d %x", len(raw), sum)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snap
+}
+
 // TestDoctorRebuildablesReportOnlyByDefault: the default run reports
 // the terminal work items' declared build products per workspace with
 // a pointer to the switch and deletes nothing; a capsule of a work
@@ -197,13 +259,30 @@ func TestDoctorRebuildablesPruneRemovesDeclaredDirs(t *testing.T) {
 	// a repository that declares nothing: today's behavior, unchanged
 	undeclared := rgcCapsule(t, f, "demo-8", "wi_done", blank, "declaredless")
 	rgcWrite(t, filepath.Join(undeclared, "repos", "declaredless", "cache", "app.bin"), 100)
+	// a canceled work item no daemon job names: terminal, so its
+	// declared build products go (AC1; wi_job in the protects test is
+	// the held canceled one — this one is free)
+	gone := rgcCapsule(t, f, "demo-12", "wi_gone", src, "demo")
+	rgcWrite(t, filepath.Join(gone, "repos", "demo", "cache", "app.bin"), 100)
+	// a terminal work item's set-aside scene
+	// (capsules/<name>.quarantined.<ts>): the owner's row-5 ruling puts
+	// it in the switch's scope — same cleanup, same keeps
+	aside := rgcCapsule(t, f, "demo-13", "wi_done", src, "demo")
+	rgcWrite(t, filepath.Join(aside, "repos", "demo", "cache", "app.bin"), 100)
+	aside = rgcSetAside(t, aside)
 
 	_, _, doc := doctorStatus(t, f.env, "--json", "doctor", "--prune-rebuildables")
 	st, detail := doctorFind(t, doc, docChRebuildables)
 	if st != "pass" {
 		t.Fatalf("status = %s (%s), want pass with the removal done", st, detail)
 	}
-	for _, want := range []string{"removed 1: ", filepath.Join(wrapped, "repos", "demo", "cache"), "declared at origin/main " + sha} {
+	for _, want := range []string{
+		"removed 3: ",
+		filepath.Join(wrapped, "repos", "demo", "cache"),
+		filepath.Join(gone, "repos", "demo", "cache"),
+		filepath.Join(aside, "repos", "demo", "cache"),
+		"declared at origin/main " + sha,
+	} {
 		if !strings.Contains(detail, want) {
 			t.Fatalf("detail lacks %q: %s", want, detail)
 		}
@@ -211,7 +290,19 @@ func TestDoctorRebuildablesPruneRemovesDeclaredDirs(t *testing.T) {
 	if !strings.Contains(detail, "the declaration could not be read") {
 		t.Fatalf("detail must name the capsule whose .repo view is missing: %s", detail)
 	}
-	assertExist(t, false, filepath.Join(wrapped, "repos", "demo", "cache"))
+	assertExist(t, false,
+		filepath.Join(wrapped, "repos", "demo", "cache"),
+		filepath.Join(gone, "repos", "demo", "cache"),
+		filepath.Join(aside, "repos", "demo", "cache"))
+	assertExist(t, true,
+		filepath.Join(gone, "repos", "demo", "README.md"),
+		filepath.Join(gone, "artifacts", "plan.md"),
+		filepath.Join(gone, "capsule.json"),
+		filepath.Join(gone, ".git"),
+		filepath.Join(aside, "repos", "demo", "README.md"),
+		filepath.Join(aside, "artifacts", "plan.md"),
+		filepath.Join(aside, "capsule.json"),
+		filepath.Join(aside, ".git"))
 	assertExist(t, true,
 		filepath.Join(clone, "README.md"),
 		filepath.Join(wrapped, "artifacts", "plan.md"),
@@ -246,10 +337,27 @@ func TestDoctorRebuildablesProtectsTheLive(t *testing.T) {
 	src := rgcSrc(t, "rebuild_dir=cache\n")
 	rgcView(t, f, src, "demo")
 
-	running := rgcCapsule(t, f, "demo-4", "wi_active", src, "demo")
-	rgcWrite(t, filepath.Join(running, "repos", "demo", "cache", "app.bin"), 50)
-	held := rgcCapsule(t, f, "demo-5", "wi_job", src, "demo")
-	rgcWrite(t, filepath.Join(held, "repos", "demo", "cache", "app.bin"), 50)
+	// one capsule per in-flight state AC2 names — running, queued,
+	// blocked, paused — and one a daemon job holds (canceled, so only
+	// the job keeps it): each carries a declared directory, and each
+	// must survive the prune byte for byte.
+	protected := []struct{ wi, name, phrase string }{
+		{"wi_active", "demo-4", "the work item is running"},
+		{"wi_queued", "demo-9", "the work item is queued"},
+		{"wi_blocked", "demo-10", "the work item is blocked"},
+		{"wi_paused", "demo-11", "the work item is paused"},
+		{"wi_job", "demo-5", "held by a daemon job"},
+	}
+	paths := map[string]string{} // capsule path -> its detail phrase
+	for _, c := range protected {
+		dir := rgcCapsule(t, f, c.name, c.wi, src, "demo")
+		rgcWrite(t, filepath.Join(dir, "repos", "demo", "cache", "app.bin"), 50)
+		paths[dir] = c.phrase
+	}
+	snapshots := map[string]map[string]string{}
+	for dir := range paths {
+		snapshots[dir] = rgcTreeSnapshot(t, dir)
+	}
 
 	// a terminal work item's repository carrying local, unpushed work
 	// beside the declared build products
@@ -268,16 +376,16 @@ func TestDoctorRebuildablesProtectsTheLive(t *testing.T) {
 	if st != "pass" {
 		t.Fatalf("status = %s (%s), want pass with the protections named", st, detail)
 	}
-	assertExist(t, true,
-		filepath.Join(running, "repos", "demo", "cache", "app.bin"),
-		filepath.Join(held, "repos", "demo", "cache", "app.bin"),
-		filepath.Join(clone, "work.txt"))
-	assertExist(t, false, filepath.Join(clone, "cache"))
-	for _, want := range []string{"the work item is running", "held by a daemon job"} {
-		if !strings.Contains(detail, want) {
-			t.Fatalf("detail lacks %q: %s", want, detail)
+	for dir, phrase := range paths {
+		if after := rgcTreeSnapshot(t, dir); !maps.Equal(after, snapshots[dir]) {
+			t.Fatalf("%s moved under the prune (want byte-for-byte identical)", dir)
+		}
+		if !strings.Contains(detail, dir+": "+phrase) {
+			t.Fatalf("detail lacks %q: %s", dir+": "+phrase, detail)
 		}
 	}
+	assertExist(t, true, filepath.Join(clone, "work.txt"))
+	assertExist(t, false, filepath.Join(clone, "cache"))
 	if after := rgcGit(t, clone, "status", "--porcelain"); after != status {
 		t.Fatalf("the unpushed repository's status moved: was %q, now %q", status, after)
 	}

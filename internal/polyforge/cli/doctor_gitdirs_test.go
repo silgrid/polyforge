@@ -37,7 +37,12 @@ type gitDirsFixture struct {
 
 func newGitDirsFixture(t *testing.T, daemonUp bool) gitDirsFixture {
 	t.Helper()
-	states := map[string]string{"wi_done": "wrapped", "wi_fresh": "failed", "wi_active": "running", "wi_job": "canceled"}
+	// wi_queued / wi_blocked / wi_paused extend AC2's in-flight states for the
+	// rebuildable artifacts row's tests (polyforge#127 review r1 #3); wi_gone
+	// is a canceled work item no daemon job names (r1 #4). No existing test
+	// lays out entries for these ids, so every count below is unchanged.
+	states := map[string]string{"wi_done": "wrapped", "wi_fresh": "failed", "wi_active": "running", "wi_job": "canceled",
+		"wi_queued": "queued", "wi_blocked": "blocked", "wi_paused": "paused", "wi_gone": "canceled"}
 	rec, unlisted := &reqRecorder{}, map[string]bool{}
 	srv := newFakeAihub(t, rec, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/work-items" {
