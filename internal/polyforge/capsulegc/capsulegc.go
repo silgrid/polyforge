@@ -14,8 +14,12 @@ package capsulegc
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -168,7 +172,7 @@ func ReadCommitted(root, ref string) (*Declaration, error) {
 // removal may do with it.
 type Target struct {
 	Rel  string // the declared directory, repo-root-relative
-	Size int64 // the regular files under it, logical bytes (a symlink is neither followed nor counted)
+	Size int64  // the regular files under it, logical bytes (a symlink is neither followed nor counted)
 	Skip string // "" = a removal may take the directory; else the exact reason it may not
 }
 
@@ -182,13 +186,91 @@ type Target struct {
 // may take it. A probe that could not be made is an error, and the
 // caller removes nothing it cannot prove clean.
 func Probe(root, rel string) (*Target, error) {
-	return nil, nil
+	// Every path component of the declared directory is walked from the
+	// clone's root: a component swapped for a symlink (or one that is
+	// not a directory at all) keeps the directory, and the repository's
+	// own git metadata is never a target however it is spelled.
+	cur := root
+	for _, c := range strings.Split(rel, "/") {
+		if c == ".git" {
+			return &Target{Rel: rel, Skip: "the repository's own git metadata"}, nil
+		}
+		cur = filepath.Join(cur, c)
+		fi, err := os.Lstat(cur)
+		switch {
+		case os.IsNotExist(err):
+			return nil, nil // the declared directory is not there
+		case err != nil:
+			return nil, err
+		case fi.Mode()&os.ModeSymlink != 0:
+			return &Target{Rel: rel, Skip: "a symlinked path component"}, nil
+		case !fi.IsDir():
+			return &Target{Rel: rel, Skip: "not a directory"}, nil
+		}
+	}
+	// Tracked content under the declared directory — staged or
+	// committed, a submodule's gitlink included — keeps it: an ignored
+	// directory may still carry force-added files.
+	out, err := runGit(root, "ls-files", "-z", "--", rel)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) > 0 {
+		return &Target{Rel: rel, Skip: "tracked files under it"}, nil
+	}
+	// Untracked content the ignore rules do not cover keeps it: ignored
+	// is the declaration's own promise about the directory, and what
+	// the rules leave visible is somebody's work.
+	out, err = runGit(root, "ls-files", "-z", "--others", "--exclude-standard", "--", rel)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) > 0 {
+		return &Target{Rel: rel, Skip: "untracked files not ignored under it"}, nil
+	}
+	// The size (and the one git can be told nothing about: a nested
+	// repository the ignore hides from every ls-files). Regular files
+	// count their logical bytes; a symlink is neither followed nor
+	// counted.
+	var size int64
+	err = filepath.WalkDir(cur, func(_ string, e fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if e.Name() == ".git" {
+			return errGCMetadata
+		}
+		if e.Type().IsRegular() {
+			info, err := e.Info()
+			if err != nil {
+				return err
+			}
+			size += info.Size()
+		}
+		return nil
+	})
+	switch {
+	case errors.Is(err, errGCMetadata):
+		return &Target{Rel: rel, Skip: "a nested repository under it"}, nil
+	case err != nil:
+		return nil, err
+	}
+	return &Target{Rel: rel, Size: size}, nil
 }
+
+// errGCMetadata is the walk's sentinel: a nested repository (anything
+// named .git) under a declared directory keeps it.
+var errGCMetadata = errors.New("git metadata under a declared directory")
 
 // Remove removes one declared directory of the task-repo clone at
 // root, anchored: the removal is an os.Root at the clone's own root,
 // so no symlinked component can lead it outside the clone. It is the
 // caller that probes first; the removal itself judges nothing.
 func Remove(root, rel string) error {
-	return nil
+	anchor, err := os.OpenRoot(root)
+	if err != nil {
+		return err
+	}
+	defer anchor.Close()
+	return anchor.RemoveAll(rel)
 }
