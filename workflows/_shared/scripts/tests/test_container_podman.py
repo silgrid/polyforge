@@ -96,27 +96,43 @@ class PodmanCLITest(unittest.TestCase):
 
     def podman(self, body: str) -> Tuple[PodmanCLI, str]:
         """A fake podman executable answering body's cases; every call's
-        argv appends to <script>.argv. Answers (cli, argv-record path)."""
+        argv appends to <script>.argv, one argument a line, a blank line
+        after each call (tabs inside an argument survive). Answers
+        (cli, argv-record path)."""
         d = tempfile.mkdtemp(prefix="pf-podman-fake-")
         self.addCleanup(shutil.rmtree, d, ignore_errors=True)
         script = os.path.join(d, "podman")
         with open(script, "w", encoding="utf-8") as f:
-            f.write('#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$0.argv"\n' + body)
+            f.write('#!/bin/sh\nfor a in "$@"; do printf \'%s\\n\' "$a" >> "$0.argv"; done\n'
+                    'printf \'\\n\' >> "$0.argv"\n' + body)
         os.chmod(script, 0o755)
         return PodmanCLI(bin=script), script + ".argv"
 
     @staticmethod
-    def recorded(path: str) -> List[str]:
+    def recorded(path: str) -> List[List[str]]:
+        """The recorded calls: one argv (its arguments, in order) per
+        call."""
+        calls: List[List[str]] = []
+        cur: List[str] = []
         with open(path, encoding="utf-8") as f:
-            return [line.rstrip("\n") for line in f if line.strip()]
+            for line in f:
+                arg = line.rstrip("\n")
+                if not arg:
+                    if cur:
+                        calls.append(cur)
+                    cur = []
+                else:
+                    cur.append(arg)
+        if cur:
+            calls.append(cur)
+        return calls
 
     @staticmethod
-    def run_lines(argv: List[str], marker: str) -> List[str]:
-        """The words of the one recorded call whose argv holds marker."""
-        for line in argv:
-            words = line.split()
-            if marker in words:
-                return words
+    def call_of(calls: List[List[str]], marker: str) -> List[str]:
+        """The one recorded call whose argv holds marker."""
+        for argv in calls:
+            if marker in argv:
+                return argv
         return []
 
     def test_a_bare_local_id_is_normalized_to_sha256(self) -> None:
@@ -126,7 +142,7 @@ class PodmanCLITest(unittest.TestCase):
         self.assertEqual(ident.repo_digests, [])
 
     def test_an_id_already_prefixed_keeps_its_one_prefix(self) -> None:
-        cli, _ = self.podman('case "$1" in image) case "$2" in inspect) echo sha256:%s; echo [\'%s\'] ;; esac ;; esac\n'
+        cli, _ = self.podman('case "$1" in image) case "$2" in inspect) echo sha256:%s; printf \'["%s"]\\n\' ;; esac ;; esac\n'
                              % (HEX, DIGEST))
         ident = cli.image_identity("registry.example/img:1")
         self.assertEqual(ident.id, "sha256:" + HEX)
@@ -152,7 +168,7 @@ class PodmanCLITest(unittest.TestCase):
         cli, rec = self.podman('case "$1" in ps) printf \'cid-1\\t1717000000\\ncid-2\\t\\n\' ;; esac\n')
         found = cli.list_labelled({container.LABEL_DAEMON: "/srv/pf"}, container.LABEL_EXPIRES)
         self.assertEqual(found, {"cid-1": "1717000000", "cid-2": ""})
-        words = self.run_lines(self.recorded(rec), "--all")
+        words = self.call_of(self.recorded(rec), "--all")
         self.assertIn("--filter", words)
         self.assertIn("label=" + container.LABEL_DAEMON + "=/srv/pf", words, "the label filter selects the owner's")
         fmt_i = words.index("--format") + 1
@@ -168,10 +184,10 @@ class PodmanCLITest(unittest.TestCase):
                                % (mine, other_repo, old_shape, mine, other_repo, old_shape))
         self.assertEqual(cli.unused_volumes(prefix), [mine, old_shape],
                          "the name's containment is this side's: another repo's volume never reaches the answer")
-        words = self.run_lines(self.recorded(rec), "volume")
+        words = self.call_of(self.recorded(rec), "volume")
         self.assertIn("dangling=true", words, "the engine answers the dangling ones")
         for bad in ("name=", "dangling=false"):
-            self.assertNotIn(bad, " ".join(words), "no second engine filter: the AND is this side's")
+            self.assertNotIn(bad, words, "no second engine filter: the AND is this side's")
 
     def test_a_build_runs_under_a_private_crun_wrapper_that_ends_with_it(self) -> None:
         cli, rec = self.podman(
@@ -193,7 +209,7 @@ class PodmanCLITest(unittest.TestCase):
         with open(log_path, "wb") as log:
             cli.build_image("pf-verify-app:tag", dockerfile, {container.LABEL_REPO: "app"}, log, 30.0)
         script = cli.bin
-        words = self.run_lines(self.recorded(rec), "build")
+        words = self.call_of(self.recorded(rec), "build")
         self.assertIn("--runtime", words, "the build's containers run under the wrapper")
         wrapper = words[words.index("--runtime") + 1]
         with open(script + ".runtime", encoding="utf-8") as f:
@@ -215,7 +231,7 @@ class PodmanCLITest(unittest.TestCase):
             with open(log_path, "wb") as log:
                 cli.build_image("pf-verify-app:tag", b"FROM x\n", {}, log, 30.0)
         self.assertIn("podman build", str(got.exception))
-        words = self.run_lines(self.recorded(rec), "build")
+        words = self.call_of(self.recorded(rec), "build")
         wrapper = words[words.index("--runtime") + 1] if "--runtime" in words else ""
         self.assertTrue(wrapper, "the wrapper was passed")
         self.assertFalse(os.path.exists(os.path.dirname(wrapper)), "a failed build leaves no wrapper behind")
