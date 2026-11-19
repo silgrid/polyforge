@@ -467,13 +467,13 @@ and the release:
   green tag names, not by the id. A tree without `tools/gate-id` is served
   by the lane's own copy (`pfstep/gateid.py`), byte-identical with this
   one by a consistency test, which the gate uses for its green tag.
-  **The known limitation:** `tools/green-tag check` never passes `--image` —
-  it computes the id of the tree alone — so a repository that gates in a
-  prepared image gets a green tag whose id it cannot reproduce on its own:
-  the image is a person's, and the host that checks may not even carry it.
-  (The release used to share this limitation; since polyforge#154 it reads
-  no green tag at all.) Nothing changes for a repository that sets no
-  `image`.
+  **The known limitation:** `tools/green-tag check` will never pass
+  `--image` — it computes the id of the tree alone — so a repository that
+  gates in a prepared image gets a green tag whose id it cannot reproduce
+  on its own: the image is a person's, and the host that checks may not
+  even carry it. Nothing changes for a repository that sets no `image`.
+  (The release shared this limitation once; since polyforge#154 it reads
+  no green tag at all.)
 - **The plan digest.** A gate run records the sha256 of the plan as
   executed (its compact JSON encoding, the keys in the order below,
   non-ASCII as UTF-8): the image's content hash

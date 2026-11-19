@@ -80,7 +80,7 @@ func TestW121ReleaseGHRepoFailLoud(t *testing.T) {
 	}
 	t.Run("release mode uses the internal repo when unset", func(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.2.0"}, nil)
-		out, err := w121RunWithoutGHRepo(t, w, nil)  // the helper pins HEAD itself
+		out, err := w121RunWithoutGHRepo(t, w, nil) // the helper pins HEAD itself
 		if err != nil {
 			t.Fatalf("release with RELEASE_GH_REPO unset must use the internal default: %v\n%s", err, out)
 		}
