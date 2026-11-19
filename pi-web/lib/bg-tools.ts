@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import { defineTool, type InlineExtension, type ToolExposure } from "@earendil-works/pi-coding-agent";
-import { BG_LOG_MAX_BYTES, BG_MAX_CONCURRENT_PER_SESSION, BG_OUTPUT_MAX_BYTES, utf8Truncate, type BgTaskInfo, type BgTaskOutput } from "./bg-protocol";
+import { BG_LOG_MAX_BYTES, BG_MAX_CONCURRENT_PER_SESSION, BG_OUTPUT_MAX_BYTES, utf8SkipLeading, type BgTaskInfo, type BgTaskOutput } from "./bg-protocol";
 import type { BgTaskController } from "./bg-runtime";
 
 /**
@@ -81,14 +81,19 @@ function statusLine(info: BgTaskInfo): string {
 function formatOutput(id: string, output: BgTaskOutput): { content: { type: "text"; text: string }[]; details: undefined } {
   const header = `Output of background task ${id}:\n`;
   let text = output.text;
-  let footer = `\n--- log: ${output.logPath} (bytes ${output.startByte}-${output.startByte + utf8Bytes(text)} of ${output.totalBytes}${output.truncated ? ", tail excerpt" : ", full log"})`;
-  // The whole answer, prompt lines included, stays within the budget (AC2);
-  // a re-cut keeps the range in the footer honest.
+  let startByte = output.startByte;
+  const footerOf = () => `\n--- log: ${output.logPath} (bytes ${startByte}-${startByte + utf8Bytes(text)} of ${output.totalBytes}${startByte > 0 || output.truncated ? ", tail excerpt" : ", full log"})`;
+  let footer = footerOf();
+  // The whole answer, prompt lines included, stays within the budget (AC2).
+  // An over-budget excerpt is cut from its front, never losing the log's
+  // latest bytes, and the range in the footer follows the cut (r1#4).
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const total = utf8Bytes(header) + utf8Bytes(text) + utf8Bytes(footer);
     if (total <= BG_OUTPUT_MAX_BYTES) break;
-    text = utf8Truncate(text, utf8Bytes(text) - (total - BG_OUTPUT_MAX_BYTES));
-    footer = `\n--- log: ${output.logPath} (bytes ${output.startByte}-${output.startByte + utf8Bytes(text)} of ${output.totalBytes}${output.truncated ? ", tail excerpt" : ", full log"})`;
+    const { text: kept, skipped } = utf8SkipLeading(text, total - BG_OUTPUT_MAX_BYTES);
+    text = kept;
+    startByte += skipped;
+    footer = footerOf();
   }
   return { content: [{ type: "text", text: `${header}${text}${footer}` }], details: undefined };
 }
@@ -174,7 +179,7 @@ export function createBgTasksExtension(controller: BgTaskController): InlineExte
           const requested = params.max_bytes;
           const maxBytes = typeof requested === "number" && Number.isInteger(requested) && requested > 0
             ? Math.min(requested, BG_OUTPUT_MAX_BYTES - BG_OUTPUT_RESERVE_BYTES)
-            : undefined;
+            : BG_OUTPUT_MAX_BYTES - BG_OUTPUT_RESERVE_BYTES;
           const output = controller.readOutput(sessionId, taskId, maxBytes);
           return formatOutput(taskId, output);
         },

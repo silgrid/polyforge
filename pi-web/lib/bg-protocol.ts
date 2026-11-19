@@ -107,6 +107,23 @@ export function utf8Truncate(text: string, maxBytes: number): string {
 }
 
 /**
+ * Drops up to `bytes` leading UTF-8 bytes of `text` without splitting a
+ * character, keeping the tail; returns how many bytes actually went.
+ */
+export function utf8SkipLeading(text: string, bytes: number): { text: string; skipped: number } {
+  if (!Number.isFinite(bytes) || bytes <= 0 || text.length === 0) return { text, skipped: 0 };
+  const encoded = utf8Encoder.encode(text);
+  if (encoded.length <= bytes) return { text: "", skipped: encoded.length };
+  let skip = bytes;
+  // A skip landing mid-character moves up to the character's start.
+  while (skip > 0 && (encoded[skip] & 0xc0) === 0x80) skip -= 1;
+  const kept = utf8Decoder.decode(encoded.subarray(skip));
+  // A cut mid-character decodes to one leading replacement character: drop it.
+  const clean = kept.startsWith("\uFFFD") ? kept.slice(1) : kept;
+  return { text: clean, skipped: skip + (kept.length - clean.length) };
+}
+
+/**
  * The one-line completion notification a session receives (AC1: exit code or
  * signal, duration, log path). Derived from the record alone, never from the
  * implementation's output.
