@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createJiti } from "jiti";
 
-const jiti = createJiti(import.meta.url, { moduleCache: false });
+const jiti = createJiti(import.meta.url, { alias: { "@": process.cwd() }, interopDefault: true, moduleCache: false });
 const { mergeUnifiedEntries, unifiedMcpRows, unifiedMcpPiFields, unifiedMcpClaudeFields } = await jiti.import("./mcp-unified.ts");
 const { createPiAdapter } = await jiti.import("./harness/pi.ts");
 const { createClaudeAdapter } = await jiti.import("./harness/claude.ts");
