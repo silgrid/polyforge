@@ -21,6 +21,9 @@ fs.mkdirSync(project);
 fs.copyFileSync(new URL("../../../../lib/__fixtures__/claude-stub/claude.mjs", import.meta.url), path.join(binDir, "claude"));
 fs.chmodSync(path.join(binDir, "claude"), 0o755);
 fs.symlinkSync(decodeURIComponent(new URL("../../../../lib/__fixtures__/claude-2.1.312", import.meta.url).pathname), path.join(scratch, "claude-2.1.312"));
+// The migration's version probe reads claude's initialize answer; the 2.1.322
+// fixture is the one that carries an initialize recording.
+fs.symlinkSync(decodeURIComponent(new URL("../../../../lib/__fixtures__/claude-2.1.322", import.meta.url).pathname), path.join(scratch, "claude-2.1.322"));
 process.env.PI_CODING_AGENT_DIR = agentDir;
 // The inherited claude config dir the stub writes its transcripts under: never the operator's.
 process.env.CLAUDE_CONFIG_DIR = path.join(scratch, "claude-config");
@@ -266,6 +269,9 @@ test("a claude create migrates the retired self-stored files first, launches wit
   fs.mkdirSync(agentDir, { recursive: true });
   fs.writeFileSync(oldSettings, JSON.stringify({ version: 1, launchPermissionMode: "acceptEdits", customModels: [], includeHookEvents: true }));
   fs.writeFileSync(oldPermissions, JSON.stringify({ version: 1, mode: "ask", push: true }));
+  // An earlier test in this process may already have written the migration
+  // marker (its create found no old files): clear it so this create migrates.
+  fs.rmSync(piWebSettings, { force: true });
   const STREAM = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--forward-subagent-text"];
   let before = launches().length;
   const created = await post({ cwd: project, type: "prompt", message: "permission words", harness: "claude", model: "claude-haiku-5-5" });
