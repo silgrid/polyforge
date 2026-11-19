@@ -95,24 +95,33 @@ export function mergeUnifiedEntries<H extends string>(
   return [...rows.values()];
 }
 
-/** pi's entry as comparable fields: command, args, env names — masked already by its reader. */
+/**
+ * pi's entry as comparable fields: command, args, url, env and header names —
+ * masked already by its reader. Every comparable field is always present
+ * (absent reads as null, a missing list as the empty list), so a field only
+ * one side holds is a difference, never a silence (r2#1: the projection is
+ * already the "fields both formats know" of the analysis's risk 8 — within
+ * it, missing and present differ).
+ */
 export function unifiedMcpPiFields(server: McpServerInfo): Record<string, unknown> {
-  const fields: Record<string, unknown> = {};
-  if (server.command !== undefined) fields.command = server.command;
-  if (server.args !== undefined) fields.args = server.args;
-  if (server.url !== undefined) fields.url = server.url;
-  if (server.envNames.length > 0) fields.envNames = server.envNames;
-  return fields;
+  return {
+    command: server.command ?? null,
+    args: server.args ?? [],
+    url: server.url ?? null,
+    envNames: [...server.envNames],
+    headerNames: [...server.headerNames],
+  };
 }
 
-/** claude's entry as comparable fields: command, args, env names — masked already by its reader. */
+/** claude's entry as comparable fields, normalized exactly as pi's are (r2#1). */
 export function unifiedMcpClaudeFields(server: ClaudeMcpServerInfo): Record<string, unknown> {
-  const fields: Record<string, unknown> = {};
-  if (server.command !== undefined) fields.command = server.command;
-  if (server.args !== undefined) fields.args = server.args;
-  if (server.url !== undefined) fields.url = server.url;
-  if (server.envNames.length > 0) fields.envNames = server.envNames;
-  return fields;
+  return {
+    command: server.command ?? null,
+    args: server.args ?? [],
+    url: server.url ?? null,
+    envNames: [...server.envNames],
+    headerNames: [...server.headerNames],
+  };
 }
 
 /** The fields of pi's raw entry claude's own config keeps: its CLI drops the rest, so the projection says what is meant to arrive. */
@@ -138,8 +147,9 @@ export function piMcpEntryFromClaude(entry: Record<string, unknown>): Record<str
   return out;
 }
 
-/** A field's value as the row's inconsistency note shows it. */
+/** A field's value as the row's inconsistency note shows it: absent reads as —. */
 function fieldText(field: string, value: unknown): string {
+  if (value === null) return "—";
   if (Array.isArray(value)) {
     return value.every((item) => typeof item === "string")
       ? (value as string[]).join(field === "args" ? " " : ", ")
