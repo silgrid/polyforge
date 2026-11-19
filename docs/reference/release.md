@@ -382,7 +382,8 @@ and the release:
   cache volume of the image's generation and the clone path —
   `pf-verify-cache-<repo>-<image hash>-<clone path hash>`, so two clones
   at different paths never share one volume's path-sensitive cache
-  contents while the same path reuses its, the environment allowlist, the
+  contents while the same path reuses its own; the environment
+  allowlist, the
   limits and the 20-minute
   per-command timeout. The container is the only isolation a gate has: a
   tree without `.polyforge/Dockerfile.verify` at HEAD — and no prepared
