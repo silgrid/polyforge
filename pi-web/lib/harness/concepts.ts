@@ -212,5 +212,14 @@ export interface HarnessCapabilities {
   /** Whether the credentials live inside the config root directory. */
   credentialsFollowConfigRoot: boolean;
   /** Native diagnostics: declared per Q5 A, executed only from 85a1b (#149). */
-  nativeDiagnostics: { declared: true; implemented: false };
+  nativeDiagnostics: { declared: true; implemented: boolean };
 }
+
+/**
+ * What an adapter's native diagnostics answer (polyforge#149, AC6): the fixed
+ * safe command's filtered output, or the visible reason it is unavailable.
+ * Client-safe: the 生效值与来源 pane renders this shape from the route.
+ */
+export type NativeDiagnosticsResult =
+  | { available: true; command: string[]; lines: string[]; truncated: boolean; timedOut: boolean }
+  | { available: false; reason: string };
