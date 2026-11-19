@@ -696,12 +696,36 @@ async function addServer(
   // The claude half, when the selection names it (AC2): pi's prepared entry
   // projected to the fields claude's own config keeps, through its CLI alone.
   // A failure here is not the whole add's failure alone (r2#3): pi's entry
-  // goes back out, so a retry meets the same refusal, never a name-taken.
+  // goes back out on every path that wrote it — the plain one through its
+  // `target`, the trustFolder step through the same project target the trust
+  // wrote through (r3#1) — so a retry meets the same refusal, never a
+  // name-taken. The folder's trust is the folder's, not the entry's: it
+  // stays, and the refusal says so (`trustKept`); a rollback that itself
+  // fails says the entry stayed.
   if (claudeTarget) {
     const outcome = await claudeMcpAddJson(scope, name, claudeMcpEntryFromPi(entry as unknown as Record<string, unknown>), claudeWriteContext(project));
     if (!outcome.ok) {
-      if (piTarget && target) await removeMcpServer(target, name).catch(() => {});
-      return claudeWriteRefusal(outcome).response();
+      let piKept = false;
+      if (piTarget) {
+        const rollbackTarget = trustFolder && project
+          ? { scope: "project" as const, cwd: project.cwd, allowedRoots: project.allowedRoots }
+          : target;
+        if (rollbackTarget) {
+          piKept = await removeMcpServer(rollbackTarget, name).then(() => false, () => true);
+        }
+      }
+      const failure = claudeWriteRefusal(outcome);
+      if (piKept) {
+        return new Refusal(failure.status, failure.reason, `${failure.error}; pi's entry could not be taken back`, { ...failure.params, name }).response();
+      }
+      if (trustFolder && project) {
+        return new Refusal(failure.status, failure.reason, failure.error, {
+          ...failure.params,
+          trustKept: true,
+          ...(piExtras.trust ? { trust: piExtras.trust } : {}),
+        }).response();
+      }
+      return failure.response();
     }
   }
 

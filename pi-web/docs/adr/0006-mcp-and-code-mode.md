@@ -465,7 +465,9 @@ through `claude mcp add-json|remove -s <scope>` — never by writing
   (it health-checks servers) and `mcp get` (it may print values) are never
   called — reads parse the files only. An add that names both harnesses runs
   this gate before any file is written, and a CLI failure after it takes
-  pi's entry back, so the add is never half-written.
+  pi's entry back on every path that wrote it — the fresh-folder step
+  included, whose granted trust stays (answered `trustKept`) — so the add is
+  never half-written.
 - **The projection speaks claude's own shape**: an http entry gains the
   `type: "http"` claude's files always write, or claude's validator reads it
   as stdio and asks for a command it does not have.
