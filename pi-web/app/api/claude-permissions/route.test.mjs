@@ -33,7 +33,7 @@ const jiti = createJiti(import.meta.url, { alias: { "@": process.cwd() }, intero
 const { GET, PUT } = await jiti.import("./route.ts");
 const index = await jiti.import("../../../lib/claude-index.ts");
 const claude = await jiti.import("../../../lib/claude-session.ts");
-const file = path.join(agentDir, "claude-permissions.json");
+const file = path.join(agentDir, "pi-web-settings.json");
 
 test.after(async () => {
   await claude.shutdownAllClaudeSessions();
@@ -84,28 +84,34 @@ test("GET reads the defaults and a claude session's override; PUT stores mode an
   fs.rmSync(file, { force: true });
   const record = await newRecord();
 
-  // Defaults: ask, push on; no session asked for, or an id that is no claude session, is null.
-  assert.deepEqual(await get(), { mode: "ask", push: true, session: null });
-  assert.deepEqual(await get(record.id), { mode: "ask", push: true, session: { override: null } });
-  assert.deepEqual(await get(randomUUID()), { mode: "ask", push: true, session: null });
+  // Defaults: ask, push on, hooks off; no session asked for, or an id that is no claude session, is null.
+  assert.deepEqual(await get(), { mode: "ask", push: true, includeHookEvents: false, session: null });
+  assert.deepEqual(await get(record.id), { mode: "ask", push: true, includeHookEvents: false, session: { override: null } });
+  assert.deepEqual(await get(randomUUID()), { mode: "ask", push: true, includeHookEvents: false, session: null });
 
-  // PUT stores either key, keeping the other.
+  // PUT stores any of the three keys, keeping the others.
   let response = await put({ mode: "deny" });
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { mode: "deny", push: true });
+  assert.deepEqual(await response.json(), { mode: "deny", push: true, includeHookEvents: false });
   response = await put({ push: false });
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { mode: "deny", push: false });
-  assert.deepEqual(await get(), { mode: "deny", push: false, session: null });
-  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { version: 1, mode: "deny", push: false });
-  response = await put({ mode: "ask", push: true });
-  assert.deepEqual(await response.json(), { mode: "ask", push: true });
+  assert.deepEqual(await response.json(), { mode: "deny", push: false, includeHookEvents: false });
+  response = await put({ includeHookEvents: true });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { mode: "deny", push: false, includeHookEvents: true });
+  assert.deepEqual(await get(), { mode: "deny", push: false, includeHookEvents: true, session: null });
+  const storedFile = JSON.parse(fs.readFileSync(file, "utf8"));
+  assert.deepEqual(storedFile.claude, { approvalChannel: "deny", pushReminders: false, includeHookEvents: true });
+  assert.equal(storedFile.claudeMigrated, true, "the route ran the one-time migration of the retired files");
+  response = await put({ mode: "ask", push: true, includeHookEvents: false });
+  assert.deepEqual(await response.json(), { mode: "ask", push: true, includeHookEvents: false });
 
   // Malformed bodies are refused before anything is written.
-  const stored = fs.readFileSync(file, "utf8");
+  const stored = JSON.stringify(JSON.parse(fs.readFileSync(file, "utf8")).claude);
   for (const [body, status, headers] of [
     [{ mode: "always" }, 400],
     [{ push: "yes" }, 400],
+    [{ includeHookEvents: "on" }, 400],
     [{}, 400],
     [{ mode: "ask", extra: 1 }, 400],
     [["ask"], 400],
@@ -118,18 +124,18 @@ test("GET reads the defaults and a claude session's override; PUT stores mode an
     assert.equal(refused.status, status, JSON.stringify(body));
     assert.equal(typeof (await refused.json()).error, "string");
   }
-  assert.equal(fs.readFileSync(file, "utf8"), stored, "a refused PUT wrote the settings file");
+  assert.equal(JSON.stringify(JSON.parse(fs.readFileSync(file, "utf8")).claude), stored, "a refused PUT wrote the settings file");
 
   // A session override: set, read back, cleared; the global settings are untouched.
   response = await put({ session: record.id, override: "deny" });
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { override: "deny", restarted: false });
   assert.equal(index.getClaudeSessionRecord(record.id).permissionMode, "deny");
-  assert.deepEqual(await get(record.id), { mode: "ask", push: true, session: { override: "deny" } });
+  assert.deepEqual(await get(record.id), { mode: "ask", push: true, includeHookEvents: false, session: { override: "deny" } });
   response = await put({ session: record.id, override: null });
   assert.deepEqual(await response.json(), { override: null, restarted: false });
   assert.equal(index.getClaudeSessionRecord(record.id).permissionMode, undefined);
-  assert.equal(fs.readFileSync(file, "utf8"), stored, "a session override wrote the global settings");
+  assert.equal(JSON.stringify(JSON.parse(fs.readFileSync(file, "utf8")).claude), stored, "a session override wrote the global settings");
 
   // A non-claude id, a bad override value or a missing one: 400, nothing written.
   for (const body of [

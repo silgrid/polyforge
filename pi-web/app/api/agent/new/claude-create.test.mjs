@@ -258,48 +258,53 @@ test("a claude create stores the server's Agent language; a 中文 record launch
   fs.rmSync(settings, { force: true });
 });
 
-test("a claude create captures the stored permission mode and hook switch and launches with them; a later settings change rewrites neither the record nor a resume's argv", async () => {
-  const settings = path.join(agentDir, "pi-web-claude-settings.json");
+test("a claude create migrates the retired self-stored files first, launches with no startup override, and a session's own switched mode survives a resume (Q7 B)", async () => {
+  const oldSettings = path.join(agentDir, "pi-web-claude-settings.json");
+  const oldPermissions = path.join(agentDir, "claude-permissions.json");
+  const nativeSettings = path.join(process.env.CLAUDE_CONFIG_DIR, "settings.json");
+  const piWebSettings = path.join(agentDir, "pi-web-settings.json");
   fs.mkdirSync(agentDir, { recursive: true });
-  fs.writeFileSync(settings, JSON.stringify({ version: 1, launchPermissionMode: "acceptEdits", customModels: [], includeHookEvents: true }));
+  fs.writeFileSync(oldSettings, JSON.stringify({ version: 1, launchPermissionMode: "acceptEdits", customModels: [], includeHookEvents: true }));
+  fs.writeFileSync(oldPermissions, JSON.stringify({ version: 1, mode: "ask", push: true }));
   const STREAM = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--forward-subagent-text"];
   let before = launches().length;
   const created = await post({ cwd: project, type: "prompt", message: "permission words", harness: "claude", model: "claude-haiku-5-5" });
   assert.equal(created.status, 200);
   const id = (await created.json()).sessionId;
   const record = index.getClaudeSessionRecord(id);
-  assert.equal(record.launchPermissionMode, "acceptEdits");
+  // The startup override is gone: a new record captures no launch permission
+  // mode (claude's native permissions.defaultMode governs), and the hook
+  // preference survives as a Pi Web preference.
+  assert.equal(record.launchPermissionMode, "default");
   assert.equal(record.includeHookEvents, true);
   const launch = await waitFor(() => launches()[before], 5_000, "no claude launch");
   assert.deepEqual(launch.argv, [
-    ...STREAM, "--model", "claude-haiku-5-5", "--permission-mode", "acceptEdits", "--include-hook-events", "--permission-prompts", "host", "--permission-prompt-tool", "stdio", "--session-id", id,
-  ]);
+    ...STREAM, "--model", "claude-haiku-5-5", "--include-hook-events", "--permission-prompts", "host", "--permission-prompt-tool", "stdio", "--session-id", id,
+  ], `the launch still carries a startup override: ${launch.argv.join(" ")}`);
+  // The migration ran first: both old files are gone, the stored mode is
+  // native now and the channel/push/hook fields are Pi Web preferences.
+  assert.equal(fs.existsSync(oldSettings), false, "pi-web-claude-settings.json survived the create");
+  assert.equal(fs.existsSync(oldPermissions), false, "claude-permissions.json survived the create");
+  assert.equal(JSON.parse(fs.readFileSync(nativeSettings, "utf8")).permissions.defaultMode, "acceptEdits");
+  const migrated = JSON.parse(fs.readFileSync(piWebSettings, "utf8"));
+  assert.deepEqual(migrated.claude, { approvalChannel: "ask", pushReminders: true, includeHookEvents: true });
+  assert.equal(migrated.claudeMigrated, true);
   // The turn's transcript makes the next child a resume.
   const transcript = path.join(process.env.CLAUDE_CONFIG_DIR, "projects", fs.realpathSync(project).replace(/[^A-Za-z0-9]/g, "-"), `${id}.jsonl`);
   await waitFor(() => fs.existsSync(transcript), 5_000, "no transcript");
   await claude.getClaudeSession(id)?.shutdown();
 
-  fs.writeFileSync(settings, JSON.stringify({ version: 1, launchPermissionMode: "default", customModels: [], includeHookEvents: false }));
-  const kept = index.getClaudeSessionRecord(id);
-  assert.equal(kept.launchPermissionMode, "acceptEdits", "the settings change rewrote nothing");
-  assert.equal(kept.includeHookEvents, true, "the settings change rewrote nothing");
+  // A session's own switched mode (set_permission_mode's record field) is the
+  // one override that stays: the resume carries it (Q7 B).
+  await index.updateClaudeSessionRecord(id, (kept) => ({ ...kept, launchPermissionMode: "acceptEdits" }));
+  const switched = index.getClaudeSessionRecord(id);
   before = launches().length;
-  const resumed = claude.startClaudeSession(kept);
+  const resumed = claude.startClaudeSession(switched);
   const again = await waitFor(() => launches()[before], 5_000, "no resume launch");
   assert.deepEqual(again.argv, [
     ...STREAM, "--model", "claude-haiku-5-5", "--permission-mode", "acceptEdits", "--include-hook-events", "--permission-prompts", "host", "--permission-prompt-tool", "stdio", "--resume", id,
   ]);
   await resumed.shutdown();
-
-  before = launches().length;
-  const plain = await post({ cwd: project, type: "ensure_session", harness: "claude", model: "claude-haiku-5-5" });
-  const plainId = (await plain.json()).sessionId;
-  assert.equal(index.getClaudeSessionRecord(plainId).launchPermissionMode, "default");
-  assert.equal(index.getClaudeSessionRecord(plainId).includeHookEvents, false);
-  assert.deepEqual((await waitFor(() => launches()[before], 5_000, "no claude launch")).argv, [
-    ...STREAM, "--model", "claude-haiku-5-5", "--permission-prompts", "host", "--permission-prompt-tool", "stdio", "--session-id", plainId,
-  ]);
-  fs.rmSync(settings, { force: true });
 });
 
 test("claude's alias or any valid full name is stored and passed to --model verbatim", async () => {

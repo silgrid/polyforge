@@ -86,17 +86,17 @@ test("the settings rail is nine new sections plus the two legacy-marked ones (85
   assert.ok(Array.isArray(SETTINGS_TABS), "SETTINGS_TABS is not exported");
   assert.deepEqual(
     SETTINGS_TABS.map((tab) => tab.id),
-    ["general", "account", "models", "permission", "skills", "mcp", "agents", "plugins", "polyforge", "legacy-models", "legacy-claude"],
+    ["general", "account", "models", "permission", "skills", "mcp", "agents", "plugins", "polyforge", "legacy-models"],
   );
   // Only the two temporary old pages are legacy-marked (删除条件见 85a3/85a4).
-  assert.deepEqual(SETTINGS_TABS.filter((tab) => tab.legacy).map((tab) => tab.id), ["legacy-models", "legacy-claude"]);
+  assert.deepEqual(SETTINGS_TABS.filter((tab) => tab.legacy).map((tab) => tab.id), ["legacy-models"]);
   assert.deepEqual(SETTINGS_SECTION_VALUES, SETTINGS_TABS.map((tab) => tab.id));
   // Every tab names a label key, once.
   const keys = SETTINGS_TABS.map((tab) => tab.labelKey);
   assert.deepEqual([...new Set(keys)], keys);
   for (const key of keys) assert.match(key, /^(settings|common|polyforge)\./, `${key} is not a locale key`);
   // The new concept pages and both legacy pages open without a project.
-  for (const section of ["general", "account", "models", "permission", "mcp", "polyforge", "legacy-models", "legacy-claude"]) {
+  for (const section of ["general", "account", "models", "permission", "mcp", "polyforge", "legacy-models"]) {
     assert.equal(settingsSectionRequiresProject(section), false, section);
   }
   for (const section of ["skills", "agents", "plugins"]) {
