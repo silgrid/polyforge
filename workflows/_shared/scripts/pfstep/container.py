@@ -618,6 +618,29 @@ class DockerCLI:
         self._run(["volume", "rm", name])
 
 
+class PodmanCLI(DockerCLI):
+    """The podman command-line client (polyforge#159): the same protocol
+    and argv shape as DockerCLI, with podman's own semantics at the
+    points the two engines differ — the missing-image answer, the bare
+    local image ID, the ps label template, the volume filter — and its
+    own build-time runtime wrapper and network setting (84-engine).
+    Selected by ``PF_CONTAINER_ENGINE=podman`` (``engine_for_env``);
+    unset, the docker client is the backend exactly as before."""
+
+    def __init__(self, bin: str = "podman", op_timeout: float = CONTAINER_OP_TIMEOUT) -> None:
+        super().__init__(bin, op_timeout)
+
+    @classmethod
+    def for_env(cls, environ: Optional[Mapping[str, str]] = None) -> "PodmanCLI":
+        """The client on environ's PATH (default the process's), else on
+        the process's PATH, else the bare name (available() then says it
+        is missing)."""
+        p = look_path_in("podman", (os.environ if environ is None else environ).get("PATH", ""))
+        if not p:
+            p = shutil.which("podman") or "podman"
+        return cls(bin=p)
+
+
 def tag_safe(s: str) -> str:
     """s lower-cased and reduced to what an image repository allows ("repo"
     when nothing is left). A non-ASCII letter whose Go lower case is ASCII
