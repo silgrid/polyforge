@@ -80,13 +80,14 @@ import {
 } from "./session-tool-selection";
 import {
   BackgroundTasksBridge,
-  createBackgroundTasksBridgeExtension,
 } from "./background-tasks-bridge";
 import {
   createBgTaskController,
   defaultSpawnTask,
   type BgTaskController,
 } from "./bg-runtime";
+import { createBgTasksExtension } from "./bg-tools";
+import { bgTaskClientSnapshot, PI_RESTART_REFUSED_CODE } from "./bg-protocol";
 
 // ============================================================================
 // Types
@@ -502,6 +503,11 @@ export class AgentSessionWrapper {
   /** Server-side background-tasks bridge for this session (null for chat-only). */
   getBackgroundTasks(): BackgroundTasksBridge | null {
     return this._alive ? this.backgroundTasks : null;
+  }
+
+  /** One client event of the built-in background tasks (BG_RUNTIME's sink): SSE-identical to the bridge's. */
+  emitBackgroundEvent(event: AgentEvent): void {
+    this.emit(event);
   }
 
   get sessionId(): string {
@@ -1584,6 +1590,10 @@ export class AgentSessionWrapper {
         if (this.isSessionRunningForReplacement()) {
           throw new Error("Cannot clone while the session is running");
         }
+        {
+          const refusal = bgWorkRefusal(this.sessionId, "clone this session");
+          if (refusal) throw refusal;
+        }
         const sessionManager = this.inner.sessionManager;
         const currentSessionFile = this.inner.sessionFile;
         const leafId = typeof command.leafId === "string" ? command.leafId : sessionManager.getLeafId();
@@ -1611,6 +1621,10 @@ export class AgentSessionWrapper {
       case "navigate_tree": {
         if (this.inner.isBashRunning) {
           throw new Error("Cannot navigate while a shell command is running");
+        }
+        {
+          const refusal = bgWorkRefusal(this.sessionId, "switch branches");
+          if (refusal) throw refusal;
         }
         return this.navigateTreeKeepingToolSelection(command.targetId as string, {});
       }
@@ -1747,6 +1761,10 @@ export class AgentSessionWrapper {
         // and the turn dies at its next extension hook (#1172). pi refuses too.
         if (this.isSessionRunningForReplacement()) {
           throw new Error("Wait for the current response to finish before reloading.");
+        }
+        {
+          const refusal = bgWorkRefusal(this.sessionId, "reload session resources");
+          if (refusal) throw refusal;
         }
         if (this.extensionUiAbortController.signal.aborted) {
           this.extensionUiAbortController = new AbortController();
@@ -2665,8 +2683,8 @@ const SUBAGENT_CONTROLLER = createSubagentController({
 });
 
 // The built-in background tasks' module-level executor (Q11 A): independent of
-// any wrapper. Skeleton: the mount, the event sink and the refusals arrive
-// with u5's implementation.
+// any wrapper, so Stop's forced idle reap can end a stuck wrapper while its
+// tasks live on; the wake reopens the wrapper through the deletion gate.
 const BG_RUNTIME: BgTaskController = createBgTaskController({
   getLogRoot: () => join(getAgentDir(), "pi-web-bg-tasks"),
   spawnTask: defaultSpawnTask,
@@ -2675,10 +2693,31 @@ const BG_RUNTIME: BgTaskController = createBgTaskController({
   reopenSession: async (sessionId, sessionFile) =>
     (await startRpcSession(sessionId, sessionFile, undefined)).session,
 });
+// The event names stay the bridge's (background_task_terminal /
+// background_tasks_update) with the bridge's payload contract, so the dock
+// keeps opening and bg-ui only swaps the HTTP interface later.
+BG_RUNTIME.setSink({
+  terminal: (sessionId, task) => {
+    getRegistry().get(sessionId)?.emitBackgroundEvent({ type: "background_task_terminal", task: bgTaskClientSnapshot(task) });
+  },
+  update: (sessionId, tasks) => {
+    getRegistry().get(sessionId)?.emitBackgroundEvent({ type: "background_tasks_update", tasks: tasks.map(bgTaskClientSnapshot) });
+  },
+});
 
 /** The process-wide background-task executor (tools, wake, limits, registry). */
 export function getBgRuntime(): BgTaskController {
   return BG_RUNTIME;
+}
+
+/** The structured refusal of a session command over unfinished background work (AC3). */
+function bgWorkRefusal(sessionId: string, action: string): Error | null {
+  if (!BG_RUNTIME.hasActiveWork(sessionId)) return null;
+  const error = new Error(
+    `Cannot ${action} while this session has unfinished background work; stop the tasks (bg_stop) or wait for their completion notifications first.`,
+  );
+  (error as { code?: string }).code = PI_RESTART_REFUSED_CODE;
+  return error;
 }
 
 export function getSubagentRun(sessionId: string) {
@@ -2869,6 +2908,13 @@ export async function setRpcSessionTools(
     ? existing.sessionFile
     : undefined;
   const sessionCwd = existing.cwd;
+  // A rebuild would swap the wrapper for a Chat-only one whose extensions (the
+  // bg tools among them) are gone: unfinished background work refuses it with
+  // the structured code (AC3).
+  {
+    const refusal = bgWorkRefusal(sessionId, "rebuild the session as Chat only");
+    if (refusal) throw refusal;
+  }
   // A rebuild keeps the session's own Agent language, never a newer setting.
   const agentLanguage = readSessionAgentLanguage(existing.inner.sessionManager.getEntries() as unknown as SessionEntry[]);
   const model = existing.inner.model;
@@ -3384,7 +3430,11 @@ export async function startRpcSession(
                 () => listSubagentProfiles(sessionCwd),
                 isBuiltInSubagentsEnabled,
               ),
-              ...(backgroundTasks ? [createBackgroundTasksBridgeExtension(backgroundTasks)] : []),
+              // The built-in background tasks (Q2 B: the old bridge extension is
+              // no longer mounted here, so a user's pi-background-tasks package
+              // cannot put a second set of bg tools beside these; the routes
+              // stay until bg-ui replaces them).
+              createBgTasksExtension(BG_RUNTIME),
               // Last, so the instruction follows every other prompt change.
               createAgentLanguageExtension(() => agentLanguage),
             ],

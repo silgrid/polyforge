@@ -7,6 +7,8 @@
  * client bundle imports this module too.
  */
 
+import type { BgTaskSnapshot } from "./types";
+
 /** The per-task log cap pi-web enforces (64 MiB, AC2 / Q7 A). */
 export const BG_LOG_MAX_BYTES = 64 * 1024 * 1024;
 
@@ -55,6 +57,37 @@ export interface BgTaskOutput {
   totalBytes: number;
   logPath: string;
   truncated: boolean;
+}
+
+/**
+ * The SSE event payload of a built-in task, in the old bridge's `BgTaskSnapshot`
+ * contract: the dock keeps opening on `background_task_terminal` unchanged and
+ * `bg-ui` later swaps only the HTTP interface, never the event names or shape.
+ */
+export function bgTaskClientSnapshot(info: BgTaskInfo): BgTaskSnapshot {
+  return {
+    id: info.id,
+    name: info.command.length > 0 ? info.command.slice(0, 60) : undefined,
+    command: info.command,
+    description: "pi-web built-in background task",
+    status: info.status === "running"
+      ? "running"
+      : info.status === "failed"
+        ? "failed"
+        : info.status === "succeeded" ? "completed" : "killed",
+    outputPath: info.logPath,
+    cwd: info.cwd,
+    startTime: info.startedAt,
+    ...(info.endedAt !== null ? { endTime: info.endedAt } : {}),
+    ...(info.exitCode !== null ? { exitCode: info.exitCode } : { exitCode: null }),
+    ...(info.signal !== null ? { signal: info.signal } : { signal: null }),
+    bytesWritten: info.bytesWritten ?? 0,
+    isAgent: true,
+    ...(info.reason === "log-limit" ? { error: `log reached the ${BG_LOG_MAX_BYTES / (1024 * 1024)} MiB cap` } : {}),
+    notified: info.notified,
+    notifyOnCompletion: true,
+    triggerOnCompletion: true,
+  };
 }
 
 const utf8Encoder = new TextEncoder();
