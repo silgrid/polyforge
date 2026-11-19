@@ -17,7 +17,7 @@ const CAPS = {
   pi: { id: "pi", credentialsFollowConfigRoot: true },
   claude: { id: "claude", credentialsFollowConfigRoot: true },
 };
-const cell = (over: Record<string, unknown>) => ({
+const cell = (over) => ({
   profile: "default",
   harnesses: {
     pi: { configRoot: "/h/default/step-agent", credential: "set", source: "/home/op/.pi/agent", sourceKind: "operator" },
