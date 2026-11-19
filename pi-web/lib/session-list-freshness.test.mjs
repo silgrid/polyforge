@@ -110,7 +110,47 @@ test("a scan that keeps being invalidated fails after bounded retries", async (t
   });
 
   await assert.rejects(listAllSessions(), /session list kept changing during the scan/);
-  assert.ok(scans <= 4, `bounded retries, not a loop (${scans} scans)`);
+  assert.equal(scans, 4, "one scan plus the retry bound of three, no more");
+});
+
+test("a request never joins a scan that started before it arrived (2-A)", async (t) => {
+  const { write } = fixture(t);
+  write("a", [message("a1", "user", "first question")]);
+  let releaseFirstScan;
+  let firstScanStarted;
+  const firstScanStartedPromise = new Promise((resolve) => {
+    firstScanStarted = resolve;
+  });
+  const firstScanGate = new Promise((resolve) => {
+    releaseFirstScan = resolve;
+  });
+  const originalListSessions = listSessions;
+  let scans = 0;
+  listSessions = async (...args) => {
+    scans += 1;
+    if (scans === 1) {
+      firstScanStarted();
+      await firstScanGate;
+    }
+    return originalListSessions(...args);
+  };
+  t.after(() => {
+    listSessions = originalListSessions;
+  });
+
+  // The first request's scan enumerates while a second file is written and
+  // finished behind the gate; the second request arrives after that write.
+  const firstCall = listAllSessions();
+  await firstScanStartedPromise;
+  write("late", [message("l1", "user", "written during the first scan")]);
+  const secondCall = listAllSessions();
+  releaseFirstScan();
+  const firstRows = await firstCall;
+  assert.deepEqual(firstRows.map((row) => row.id).sort(), ["a"], "the gated scan predates the write");
+
+  const secondRows = await secondCall;
+  assert.ok(secondRows.some((row) => row.id === "late"),
+    "a request that arrived after the write must not be served the older scan's result");
 });
 
 test("one invalidation mid-scan still settles on a consistent catalogue", async (t) => {
