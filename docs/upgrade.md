@@ -788,3 +788,47 @@ repository-wide registrations are the new `dist` component in
 `.polyforge/verify-scope.conf` and a root `.dockerignore` trimming the
 image build's repo-root context (the release and verification image
 builds use their own contexts and are unaffected).
+
+## v0.2.4, the component seed and install transaction (polyforge#162)
+
+The workstation image now carries the component seed beside the
+runtime. The final layer adds the Node runtime (the same node:24.22.2
+pin the webui build uses — Pi Web and the two harness CLIs run on it,
+so the workstation boots without installing anything) and one
+complete, read-only seed at `/opt/polyforge/seed/releases/<ver>`: the
+release checkout (package.json, skills, workflows), `bin/pf`, Pi Web
+built with its production dependencies (no dev packages, no build
+cache) and the two harness packages
+(`@earendil-works/pi-coding-agent`, `@anthropic-ai/claude-code` —
+official packages as published, version-pinned, carrying no
+credentials; each user logs in themselves). A manifest pins the whole
+seed: per-component sha256 digests, the product version, the source
+commit, the platform, the channel repository, the minimum base
+requirement and the harnesses' own package versions —
+`dist/workstation/build-seed.sh` assembles it inside the image build
+and `seedtool` (from `internal/polyforge/components/seedtool`) writes
+and verifies the manifest. The version and TARGETARCH build arguments
+are the injection points a release pipeline fills; the repository
+carries defaults for a repository-root dev build.
+
+The same `internal/polyforge/components` package ships the local
+install transaction every component switch goes through — the one the
+workstation's first boot and #92's in-container upgrade verb share. A
+components root holds one complete version directory per
+`releases/<ver>` (a version directory IS the release checkout root)
+with `current` and `previous` symlinks at the root; `current` is the
+single commit point: a staged copy is verified against the manifest's
+digests, published by one rename, and the link is swapped. A newer
+seed upgrades and keeps `previous`; an older seed never downgrades;
+the same version and digest writes nothing; the same version with a
+different digest, a bad digest, a wrong platform, a base below the
+manifest's minimum, an illegal version and a cross-channel seed are
+all refused with `current` untouched. A kill at any commit stage
+recovers on the next run — the journal completes a committed switch
+or an uncommitted one is discarded, and staging never survives — and
+the pre-#162 layout (a `release/` directory with a `current` symlink
+inside the components root) is refused with a migration note, never
+imported. The first boot's wiring, the components volume itself and
+the supervision that runs the components' pf are the later
+84-components units; nothing on a host changes — the host installer's
+own layout is untouched.
