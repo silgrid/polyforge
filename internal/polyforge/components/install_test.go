@@ -345,7 +345,7 @@ func TestInstallRefusals(t *testing.T) {
 			name: "a dangling current is refused with a recovery hint",
 			setup: func(t *testing.T) (string, string, func(Options) Options) {
 				root, _ := setup(t)
-				if err := os.Remove(filepath.Join(root, ReleasesDirname, "v0.2.4")); err != nil {
+				if err := os.RemoveAll(filepath.Join(root, ReleasesDirname, "v0.2.4")); err != nil {
 					t.Fatal(err)
 				}
 				seed := seedAt(t, seedSpec{version: "v0.2.5", minBase: "v0.2.4"})
