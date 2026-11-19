@@ -36,7 +36,7 @@ const MinStopGrace = 45 * time.Second
 // restartDelayCap caps the restart backoff growth; backoffResetUptime
 // is a run long enough to reset a child's failure count.
 const (
-	restartDelayCap  = 60 * time.Second
+	restartDelayCap    = 60 * time.Second
 	backoffResetUptime = 60 * time.Second
 )
 
