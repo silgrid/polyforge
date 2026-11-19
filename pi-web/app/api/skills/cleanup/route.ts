@@ -7,8 +7,9 @@ export const dynamic = "force-dynamic";
 
 // POST /api/skills/cleanup — the per-skill, user-confirmed legacy cleanup
 // (polyforge#146, owner Q3 B): the panel confirms each skill on its own, this
-// route writes the hidden preference first and only then removes the
-// `disable-model-invocation` line from the shared SKILL.md, so the skill never
+// route writes the hidden preference first — only when none is stored — and
+// only then removes the `disable-model-invocation` line from the shared
+// SKILL.md, so the skill never
 // flips visible mid-cleanup. The guards match PATCH /api/skills: `.md` files
 // in loader-visible roots only. Body: { filePath }.
 export async function POST(req: Request) {

@@ -75,7 +75,7 @@ app/api/
   models-config/test/route.ts     POST test a configured model/provider
   plugins/route.ts                GET/POST package plugin management
   skills/route.ts                 GET/PATCH loaded skills; PATCH switches pi-web's skillVisibility preference (never a SKILL.md)
-  skills/cleanup/route.ts         POST one confirmed legacy cleanup: hidden preference first, then the disable-model-invocation line
+  skills/cleanup/route.ts         POST one confirmed legacy cleanup: hidden preference first when none is stored, then the disable-model-invocation line
   skills/content/route.ts          GET one loaded skill's bounded Markdown source, or ?document= a Markdown file in its folder
   skills/install/route.ts         POST install skills through npx skills add
   skills/search/route.ts          GET/POST skills.sh search

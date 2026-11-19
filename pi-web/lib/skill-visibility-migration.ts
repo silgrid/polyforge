@@ -2,8 +2,9 @@
 // older Pi Web wrote them as its switch, but other harnesses read the same
 // frontmatter. Import reads them into pi-web's own preference store without
 // touching any file; the confirmed cleanup is the one remaining SKILL.md
-// edit — it writes the preference first, then removes the line, so the
-// skill never flips visible mid-cleanup (polyforge#146, owner Q3 A+B).
+// edit — it writes the preference first (only when none is stored), then
+// removes the line, so the skill never flips visible mid-cleanup
+// (polyforge#146, owner Q3 A+B).
 import { readFileSync, writeFileSync } from "fs";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { setDisableModelInvocation } from "./skill-frontmatter";
