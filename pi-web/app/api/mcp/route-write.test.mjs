@@ -577,3 +577,22 @@ test("a claude whose version the gate does not recognize is written to by nothin
   assert.equal(claude.reason, "claude-unwritable");
   assert.deepEqual(await stubSpawns(log).then((spawns) => spawns.filter((spawn) => spawn.argv[0] === "mcp")), [], "nothing spawned for a version outside the range");
 });
+
+test("a set-apply that removes a side answers with that side's undo, so it is undoable like any removal (Q1 A)", async (t) => {
+  const { log } = await withClaudeStub(t);
+  await writeFile(globalPath, JSON.stringify({ mcpServers: { "shared-entry": { command: "npx", args: ["-y", "shared-one"] } } }, null, 2));
+
+  const { status, body } = await post({ action: "set-apply", scope: "global", name: "shared-entry", harnesses: ["pi"] });
+  assert.equal(status, 200);
+  const claude = body.applied.results.find((result) => result.harness === "claude");
+  assert.ok(claude.ok, "claude's copy was removed");
+  assert.ok(claude.undo?.token, "the removal carries its undo token");
+  assert.equal(typeof claude.undo.path, "string");
+  assert.equal(claude.undo.expiresInMs > 0, true);
+
+  const undone = await post({ action: "undo", token: claude.undo.token });
+  assert.equal(undone.status, 200);
+  assert.deepEqual((await stubSpawns(log)).map((spawn) => spawn.argv).slice(-1), [
+    ["mcp", "add-json", "-s", "user", "shared-entry", JSON.stringify({ command: "npx", args: ["-y", "shared-one"], env: { A: "1", CLAUDE_ONLY_SECRET: "claude-literal-secret" } })],
+  ], "the token restores claude's raw definition through its CLI");
+});
