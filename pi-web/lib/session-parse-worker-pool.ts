@@ -9,9 +9,10 @@
 // globalThis so a Next dev reload never strands a worker with the old code.
 //
 // Tests read `globalThis.__piWebScanTaskLog` (when they set it to an array):
-// one entry per stream read a completed task opened, exactly the facts the old
+// one entry per read a completed task opened, exactly the facts the old
 // `fs.createReadStream` interception recorded — `{ path, start }` for scans,
-// and `{ path, start: 0, kind: "claude-entries" }` for transcript parses.
+// `{ path, start: 0, kind: "header" }` for summary header reads and
+// `{ path, start: 0, kind: "claude-count" }` for transcript counts.
 import { Worker } from "node:worker_threads";
 import { availableParallelism } from "node:os";
 import { SESSION_SCAN_WORKER_SOURCE } from "./session-scan-worker-source";
