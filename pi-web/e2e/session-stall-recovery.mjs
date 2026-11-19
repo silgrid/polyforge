@@ -33,10 +33,12 @@
 //   forced read after the ring rise.
 // Diagnostics (AC3): the RESULT lines carry the ring rise (with its
 // generation), the first tick, and every /api/sessions read with its source
-// (plain/force) and start time, all relative to the send; a failure line
-// says which side it is on: the recovery path never triggered (no forced
-// read between the ring rise and the first tick) or triggered but out of
-// bound.
+// (plain/force), completion and start time, all relative to the send; the
+// own-run INFO line carries every /api/agent/running response of the frozen
+// window with its time and status — a hung or failing poll chain is the
+// first thing to check on a red. A failure line says which side it is on:
+// the recovery path never triggered (no forced read between the ring rise
+// and the first tick) or triggered but out of bound.
 // The no-relaxation proof (AC2): E2E_STALL_DISABLE_RING_RECOVERY=1 makes the
 // proxy cut the page's forced session reads — the observable outcome of a
 // dead write-ring recovery path (refreshFromDisk returning early, the
@@ -325,20 +327,23 @@ try {
   page.on("response", async (response) => {
     const url = new URL(response.url());
     if (url.pathname !== "/api/agent/running") return;
+    const record = { at: Date.now(), status: response.status(), writes: [] };
+    ringEvents.push(record);
     try {
       const body = await response.json();
-      ringEvents.push({
-        at: Date.now(),
-        writes: (body.recentSessionWrites ?? []).map((write) => ({
-          sessionId: write.sessionId,
-          generation: write.generation,
-        })),
-      });
-    } catch { /* the poll response was not readable JSON */ }
+      record.writes = (body.recentSessionWrites ?? []).map((write) => ({
+        sessionId: write.sessionId,
+        generation: write.generation,
+      }));
+    } catch { /* the poll response was not readable JSON (a non-OK status) */ }
   });
 
   const shows = (text) => page.evaluate((value) => document.body.innerText.includes(value), text);
   const firstSeen = (text) => page.evaluate((value) => window.__seen?.[value] ?? null, text);
+  const firstSeenTurnAndTool = () => page.evaluate(() => [
+    window.__seen?.["FIRST-TURN-TEXT"] ?? null,
+    window.__seen?.["TOOL-OUT-MARK"] ?? null,
+  ]);
   async function waitUntil(predicate, timeoutMs) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
@@ -446,8 +451,13 @@ try {
     cutForceReads = true;
     await page.locator("textarea").first().fill("phone asks while the network stalls");
     await page.getByRole("button", { name: "Send" }).first().click();
-    await waitUntil(async () => (await firstSeen("FIRST-TURN-TEXT")) !== null
-      && (await firstSeen("TOOL-OUT-MARK")) !== null, BOUND_MS);
+    // One evaluate per iteration keeps the bounded wait's overshoot to one
+    // round-trip under a starved renderer — two separate evaluates doubled it
+    // on a loaded host and delayed the release well past the bound.
+    await waitUntil(async () => {
+      const [turn, tool] = await firstSeenTurnAndTool();
+      return turn !== null && tool !== null;
+    }, BOUND_MS);
     const releaseAt = Date.now();
     releaseFinal();
 
@@ -478,7 +488,10 @@ try {
         + `(${riseAt === null ? "never" : `${riseAt}ms`}) and the first tick (${tickAt === null ? "none" : `${tickAt}ms`})`
       : `recovery path triggered but out of bound — first completed forced read at ${firstForceRead.at}ms`;
     console.log(
-      `INFO own-run (stream frozen): final reply released ${releaseAt - sentAt}ms after send; `
+      `INFO own-run (stream frozen): poll responses ${JSON.stringify(ringEvents
+        .filter((event) => event.at >= sentAt)
+        .map((event) => ({ at: event.at - sentAt, status: event.status })))}; `
+      + `final reply released ${releaseAt - sentAt}ms after send; `
       + `first reconcile tick ${tickAt === null ? "not observed within 25000ms" : `observed at ${tickAt}ms`}`,
     );
     console.log(
@@ -548,8 +561,11 @@ try {
     const firstForceRead = readsList.find((entry) => entry.s === "force" && entry.done);
     const shown = shownAt === null ? `not within ${OBSERVE_MS}ms` : `${shownAt - promptAt}ms after the prompt`;
     const ring = ringAt === null ? "never" : `${ringAt - promptAt}ms after the prompt`;
+    const polls = ringEvents.filter((event) => event.at >= promptAt);
+    const pollsOk = polls.filter((event) => event.status === 200).length;
     console.log(
       `RESULT idle-first (stream frozen): reply ${shown}; sidebar ring entry ${ring}; `
+      + `polls ${pollsOk}/${polls.length} ok; `
       + `reads=${JSON.stringify(readsList)}`,
     );
     check(ringAt !== null, `${sid}: the sidebar never reported the first write for the selected session`);
