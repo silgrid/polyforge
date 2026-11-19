@@ -13,6 +13,7 @@ import type { ProjectTrustStatus } from "@/lib/api-types";
 import { focusModalPanel, listenForPanelEscape } from "@/lib/stacked-dialog";
 import { ConfigDetailNavigationContext, type ConfigDetailNavigation } from "./SettingsUi";
 import { HarnessGeneralSettings } from "./HarnessGeneralSettings";
+import { HarnessPermissionSettings } from "./HarnessPermissionSettings";
 import { ModelsConfig } from "./ModelsConfig";
 import { SkillsConfig } from "./SkillsConfig";
 import { AgentsConfig } from "./AgentsConfig";
@@ -159,33 +160,6 @@ function HarnessSectionPlaceholder({ titleKey, bodyKey }: { titleKey: string; bo
       <section className="settings-general-section">
         <h3 className="settings-general-heading">{t(titleKey)}</h3>
         <p className="settings-general-description">{t(bodyKey)}</p>
-      </section>
-    </div>
-  );
-}
-
-/**
- * The permission page's placeholder (85a1b): the unified permission page is
- * 85a4's, but its Claude part is the destination the old `claude` navigation
- * value migrates to (owner ruling Q2 A), so the parts are named already.
- */
-function HarnessPermissionPlaceholder() {
-  const { t } = useI18n();
-  return (
-    <div className="settings-general harness-placeholder-page">
-      <section className="settings-general-section">
-        <h3 className="settings-general-heading">{t("settings.tabPermission")}</h3>
-        <p className="settings-general-description">{t("settings.harnessPermissionPlaceholder")}</p>
-        <div className="settings-chat-options">
-          <div className="settings-general-description" data-harness="pi">
-            <h4 className="settings-general-heading">pi</h4>
-            <p className="settings-general-description">{t("settings.harnessPermissionPartPending")}</p>
-          </div>
-          <div className="settings-general-description" data-harness="claude">
-            <h4 className="settings-general-heading">Claude</h4>
-            <p className="settings-general-description">{t("settings.harnessPermissionPartPending")}</p>
-          </div>
-        </div>
       </section>
     </div>
   );
@@ -387,12 +361,13 @@ export function SettingsPanel({
           )}
           <ConfigDetailNavigationContext.Provider value={detailNavigation}>
           {sectionHost("general", <HarnessGeneralSettings cwd={cwd} sessionId={sessionId} onSessionReloaded={onSessionReloaded} quoteSelectionEnabled={quoteSelectionEnabled} onQuoteSelectionChange={onQuoteSelectionChange} />)}
-          {/* The three concept placeholders (85a1b): their content is 85a2's
-              (account), 85a3's (models) and 85a4's (permission, whose Claude
-              part is where a stored old `claude` navigation value lands). */}
+          {/* The two remaining concept placeholders (85a1b): their content is
+              85a2's (account) and 85a3's (models); the permission page is
+              85a4's, mounted above (its Claude part is where a stored old
+              `claude` navigation value lands). */}
           {sectionHost("account", <HarnessSectionPlaceholder titleKey="settings.tabAccount" bodyKey="settings.harnessAccountPlaceholder" />)}
           {sectionHost("models", <HarnessSectionPlaceholder titleKey="common.models" bodyKey="settings.harnessModelsPlaceholder" />)}
-          {sectionHost("permission", <HarnessPermissionPlaceholder />)}
+          {sectionHost("permission", <HarnessPermissionSettings cwd={cwd} sessionId={sessionId} />)}
           {/* Visited sections stay mounted, so the ones whose answer depends on trust take the page's
               status and load again in place when trusting from Settings › MCP changes it. */}
           {cwd && sectionHost("skills", <SkillsConfig embedded key={cwd} cwd={cwd} trust={projectTrust} onClose={onClose} />)}
