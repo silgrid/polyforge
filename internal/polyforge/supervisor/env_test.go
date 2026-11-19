@@ -67,3 +67,24 @@ func TestDaemonEnvCarriesTheNpmRegistryOnly(t *testing.T) {
 		t.Fatalf("DaemonEnv = %v, want only npm_config_registry", got)
 	}
 }
+
+// The workstation's entrypoint fixes BUILDAH_ISOLATION=chroot (84-image:
+// buildah's build-network setup opens a non-dumpable runtime init's
+// netns, which needs CAP_SYS_PTRACE — the workstation's minimal cap set
+// deliberately has none, and the chroot isolation builds without
+// opening any namespace). The daemon must carry that choice to every
+// step, so the workstation's builds run the way the entrypoint pinned;
+// nothing else of the BUILDAH_* family crosses.
+func TestDaemonEnvCarriesTheBuildahIsolation(t *testing.T) {
+	got := DaemonEnv([]string{"BUILDAH_ISOLATION=chroot", "BUILDAH_FAKE=junk", "BUILDAH_ISOLATION_LATER=junk"})
+	want := []string{"BUILDAH_ISOLATION=chroot"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("DaemonEnv = %v, want %v (only the isolation choice crosses)", got, want)
+	}
+	if !DaemonEnvAllowed("BUILDAH_ISOLATION") {
+		t.Fatal("BUILDAH_ISOLATION must be allowed — the workstation's build isolation reaches the steps through it")
+	}
+	if DaemonEnvAllowed("BUILDAH_ISOLATION_LATER") {
+		t.Fatal("no BUILDAH_* family crosses — only the isolation choice is allow-listed")
+	}
+}
