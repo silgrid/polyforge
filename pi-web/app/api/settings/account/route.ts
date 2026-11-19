@@ -12,7 +12,8 @@
 // no spawn argv ever carries a value; values live in the native files
 // alone. Behind the API guard like every /api route; JSON-only POST,
 // validated before any write.
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { NextResponse } from "next/server";
 import { claudeConfigDir } from "@/lib/claude-config-dir";
@@ -45,6 +46,20 @@ function interactiveEnvCredentials(configDir: string): Record<string, boolean> {
     // absent or torn: all unset, never an error
   }
   return out;
+}
+
+/**
+ * The Console profile Q3 names (the 2026-11-19 revision): a login under
+ * ~/.config/anthropic — the operator's real home, not isolated by
+ * CLAUDE_CONFIG_DIR — that a step without its own env credential may fall
+ * back to. Stat only: present/absent, never read, never a value.
+ */
+function consoleProfileFact(): "present" | "absent" {
+  try {
+    return existsSync(join(homedir(), ".config", "anthropic")) ? "present" : "absent";
+  } catch {
+    return "absent";
+  }
 }
 
 /** The adapters' capability slice the rows need. */
@@ -90,7 +105,7 @@ export async function GET(req: Request) {
     }
   }
   return NextResponse.json({
-    claude: { ...claude, envCredentials: interactiveEnvCredentials(configDir) },
+    claude: { ...claude, envCredentials: interactiveEnvCredentials(configDir), consoleProfile: consoleProfileFact() },
     cells,
     doctorError: doctor.error,
   });

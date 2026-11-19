@@ -40,6 +40,8 @@ export interface AccountRead {
     configDirectory: string | null;
     reason?: string;
     envCredentials: Record<string, boolean>;
+    /** Q3: a Console login under ~/.config/anthropic, stat only. */
+    consoleProfile?: "present" | "absent";
   } | null;
   cells: AccountCellRow[];
   doctorError: string | null;
@@ -142,6 +144,9 @@ export function AccountHarnessPane({ harness, read, capabilities, onOpenLoginTer
                   {t("settings.accountPiStepGuidanceOwn", { source: row.source })}
                 </p>
               )}
+              {harness === "claude" && row.credential === "unset" && read?.claude?.consoleProfile === "present" && (
+                <p className="settings-account-console-fallback" data-console-fallback="true">{t("settings.accountConsoleFallback")}</p>
+              )}
               {row.keychainHint && <p className="settings-account-keychain-hint" data-keychain-hint="true">{t("settings.accountKeychainHint")}</p>}
             </div>
           )
@@ -165,6 +170,9 @@ export function AccountClaudeCard({ claude }: { claude: AccountRead["claude"] })
       <div><dt>{t("settings.accountStatus")}</dt><dd>{claude.loggedIn ? t("settings.accountCredentialSet") : t("settings.accountCredentialUnset")}</dd></div>
       <div><dt>{t("settings.accountAuthMethod")}</dt><dd>{claude.authMethod ?? "—"}</dd></div>
       <div><dt>{t("settings.accountConfigRoot")}</dt><dd>{claude.configDirectory ?? "—"}</dd></div>
+      {claude.consoleProfile === "present" && (
+        <div><dt>{t("settings.accountConsoleProfile")}</dt><dd data-console-profile="present">{t("settings.accountConsolePresent")}</dd></div>
+      )}
       <div><dt>{t("settings.accountCredentialKinds")}</dt><dd data-account-field="credential-kinds">
         {["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN"]
           .filter((key) => kinds[key])

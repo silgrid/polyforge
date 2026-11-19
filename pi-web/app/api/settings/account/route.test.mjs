@@ -178,6 +178,7 @@ test("GET: the interactive claude card and the three Cell kinds, no value anywhe
   assert.deepEqual(body.claude, {
     available: true, loggedIn: true, authMethod: "api_key", configDirectory: claudeHome,
     envCredentials: { ANTHROPIC_AUTH_TOKEN: true, ANTHROPIC_BASE_URL: true, CLAUDE_CODE_OAUTH_TOKEN: true, ANTHROPIC_API_KEY: false },
+    consoleProfile: "absent",
   });
   // the Cell rows: default first, then the named Cells
   assert.deepEqual(body.cells.map((c) => c.profile), ["default", "beta", "gamma"]);
