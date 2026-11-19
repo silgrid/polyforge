@@ -40,7 +40,7 @@ func TestW85bCatalogParseAndHostOnly(t *testing.T) {
 	}{
 		{"tier name outside the lane tier grammar", "[step_tiers]\nDefault = [\"pi:x\"]\n", "Default"},
 		{"unprefixed candidate", "[step_tiers]\ndefault = [\"gpt\"]\n", "gpt"},
-		{"empty candidate list", "[step_tiers]\ndefault = []\n", "default"},
+		{"empty candidate list", "[step_tiers]\ndefault = []\n", "is empty"},
 		{"repeated candidate", "[step_tiers]\ndefault = [\"pi:a\", \"pi:a\"]\n", "repeats"},
 		{"repeated tier", "[step_tiers]\ndefault = [\"pi:a\"]\ndefault = [\"pi:b\"]\n", "duplicate key"},
 		{"repeated table", "[step_tiers]\n[step_tiers]\ndefault = [\"pi:a\"]\n", "duplicate [step_tiers]"},

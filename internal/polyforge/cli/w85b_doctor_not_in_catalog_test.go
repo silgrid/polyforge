@@ -62,13 +62,17 @@ func w85bCatalogEnv(t *testing.T, catalog, yaml, lanes string) map[string]string
 // where it is written; the effort rule holds both ways; a placeholder
 // does not count; and a catalog tier no installed lane declares is
 // information only. Expected values are the candidates this fixture
-// writes — none copied from the implementation's output.
+// writes — none copied from the implementation's output. r1#1: the
+// lane's own candidates (defaults.model_candidates, defaults.tiers via a
+// model_tier step) enter resolved chains and are in no catalog tier —
+// only the user-written candidates are judged (Q3 A), so the row must
+// not name them; a row that judged resolved chains (Q3 B) would.
 func TestW85bNotInCatalogWarns(t *testing.T) {
 	catalog := "\n[step_tiers]\ndefault = [\"pi:in-catalog\"]\ncheap = [\"pi:effort-model:high\"]\nextra = [\"pi:extra-only\"]\n" +
 		"\n[summarize]\nmodels = [\"pi:sum-model\"]\n"
 	yaml := "steps:\n  polyforge:\n    fix: { models: [pi:in-catalog:high, pi:effort-model, pi:other, pi:example-placeholder] }\n" +
 		"tiers:\n  polyforge:\n    cheap: { models: [pi:tier-cand] }\n"
-	lanes := "defaults:\n  tiers:\n    cheap: [pi:lane-cheap]\nsteps:\n  - { id: fix }\n"
+	lanes := "defaults:\n  model_candidates: [pi:lane-default]\n  tiers:\n    cheap: [pi:lane-cheap]\nsteps:\n  - { id: fix }\n  - { id: probe, model_tier: cheap }\n  - { id: bare }\n"
 	_, _, doc := doctorStatus(t, w85bCatalogEnv(t, catalog, yaml, lanes), "--json", "doctor")
 	st, detail := doctorFind(t, doc, "step tiers catalog")
 	if st != "warn" {
@@ -99,6 +103,16 @@ func TestW85bNotInCatalogWarns(t *testing.T) {
 	// a catalog tier no installed lane declares is information only
 	if !strings.Contains(detail, "extra") || !strings.Contains(detail, "no installed lane declares") {
 		t.Fatalf("the row must report the undeclared catalog tier as information: %q", detail)
+	}
+	// r1#1: the lane's own candidates are not the user's writing — probe
+	// resolves to the lane's cheap tier (pi:lane-cheap) and bare to the
+	// lane's model_candidates (pi:lane-default), neither is in the catalog,
+	// and the row must not judge them (Q3 A; a resolved-chain row, Q3 B,
+	// would name both)
+	for _, laneCand := range []string{"pi:lane-cheap", "pi:lane-default", "steps.polyforge.probe", "steps.polyforge.bare"} {
+		if strings.Contains(detail, laneCand) {
+			t.Fatalf("the lane's own candidate/step %s is not user-written and must not be judged: %q", laneCand, detail)
+		}
 	}
 }
 
