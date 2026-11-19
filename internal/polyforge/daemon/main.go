@@ -163,13 +163,18 @@ func Main(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		OperatorAgentDir:         *operatorAgentDir,
 		OperatorAgentDirExplicit: *operatorAgentDir != "",
 		Python:                   python.Path,
-		MaxConcurrent:            *maxConcurrent,
-		RecallTopK:               *recallTopK,
-		Auto:                     autoCfg,
-		HeartbeatEvery:           *heartbeatEvery,
-		Launcher:                 *launcher,
-		EnvWarnings:              envWarnings,
-		Hosted:                   true,
+		// polyforge#159 (84-engine): the resolved container backend, once —
+		// Host-only and restart-only, no auto-detection (the scripts' own
+		// default, docker, answers a step the daemon stated none to only
+		// outside a Host: a hosted daemon always injects one).
+		ContainerEngine: hostContainerEngine(host),
+		MaxConcurrent:   *maxConcurrent,
+		RecallTopK:      *recallTopK,
+		Auto:            autoCfg,
+		HeartbeatEvery:  *heartbeatEvery,
+		Launcher:        *launcher,
+		EnvWarnings:     envWarnings,
+		Hosted:          true,
 		// Zero fields fall through to the documented defaults.
 		Supervision: SupervisionConfig{
 			SilenceWindow:          *silenceWindow,
@@ -541,4 +546,14 @@ func cellFilePath(set *cli.HostSet, profile string) string {
 		return set.HostPath
 	}
 	return set.CellPath(profile)
+}
+
+// hostContainerEngine answers the container backend the Host file
+// selects, resolved once at the Host's start (review r1#4: the one-line
+// mapping cli.ResolveContainerEngine(host.Daemon.ContainerEngine) was
+// Main's own, untestable; it is this named function now — the Host→Config
+// leg of the injection chain, the same resolution every Cell's Config
+// carries and the daemon's step env injects).
+func hostContainerEngine(host cli.Config) string {
+	return cli.ResolveContainerEngine(host.Daemon.ContainerEngine)
 }
