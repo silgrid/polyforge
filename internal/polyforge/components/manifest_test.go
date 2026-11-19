@@ -130,32 +130,30 @@ func TestManifestValidate(t *testing.T) {
 // symlink change inside a component breaks the digest, and the release
 // entry covers everything the other entries do not own.
 func TestVerifyTreeCatchesTamper(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "v0.2.4")
-	writeVersionDir(t, dir, seedSpec{})
 
-	tamper := map[string]func(t *testing.T){
-		"a changed pf byte": func(t *testing.T) {
+	tamper := map[string]func(t *testing.T, dir string){
+		"a changed pf byte": func(t *testing.T, dir string) {
 			wfile(t, filepath.Join(dir, PathPF), "pf-binary-tampered\n", 0o755)
 		},
-		"a lost exec bit": func(t *testing.T) {
+		"a lost exec bit": func(t *testing.T, dir string) {
 			if err := os.Chmod(filepath.Join(dir, PathPF), 0o644); err != nil {
 				t.Fatal(err)
 			}
 		},
-		"a changed skill byte": func(t *testing.T) {
+		"a changed skill byte": func(t *testing.T, dir string) {
 			wfile(t, filepath.Join(dir, "skills/polyforge/SKILL.md"), "# the routing skill, tampered\n", 0o644)
 		},
-		"an extra release file": func(t *testing.T) {
+		"an extra release file": func(t *testing.T, dir string) {
 			wfile(t, filepath.Join(dir, "extra.sh"), "echo hi\n", 0o755)
 		},
-		"a retargeted symlink": func(t *testing.T) {
+		"a retargeted symlink": func(t *testing.T, dir string) {
 			_ = os.Remove(filepath.Join(dir, PathPiWeb, "bin/next"))
 			wlink(t, filepath.Join(dir, PathPiWeb, "bin/next"), "../app")
 		},
-		"a changed pi-web byte": func(t *testing.T) {
+		"a changed pi-web byte": func(t *testing.T, dir string) {
 			wfile(t, filepath.Join(dir, PathPiWeb, "app/page.tsx"), "export default function Page() { /* x */ }\n", 0o644)
 		},
-		"a changed harness version": func(t *testing.T) {
+		"a changed harness version": func(t *testing.T, dir string) {
 			wjson(t, filepath.Join(dir, PathHarnessPi, "node_modules/@earendil-works/pi-coding-agent/package.json"), map[string]any{
 				"name": "@earendil-works/pi-coding-agent", "version": "1.4.1",
 			})
@@ -163,10 +161,10 @@ func TestVerifyTreeCatchesTamper(t *testing.T) {
 	}
 	for name, do := range tamper {
 		t.Run(name, func(t *testing.T) {
-			// a fresh copy per case: tamper one, verify all.
+			// a fresh copy per case: tamper that copy, verify that copy.
 			fresh := filepath.Join(t.TempDir(), "v0.2.4")
 			writeVersionDir(t, fresh, seedSpec{})
-			do(t)
+			do(t, fresh)
 			m, err := ReadManifest(fresh)
 			if err != nil {
 				t.Fatalf("ReadManifest: %v", err)
@@ -174,7 +172,6 @@ func TestVerifyTreeCatchesTamper(t *testing.T) {
 			if err := m.VerifyTree(fresh); err == nil {
 				t.Fatalf("VerifyTree passed a tampered tree (%s)", name)
 			}
-			_ = dir
 		})
 	}
 }
