@@ -19,21 +19,35 @@ import (
 )
 
 // TreeDigest answers the sha256 of the tree at root (a file counts as
-// a one-entry tree). Every entry contributes its slash-normalized
-// relative path; a regular file contributes its exec bit and the
-// sha256 of its bytes, a symlink its target — never its bytes — and a
-// directory contributes nothing but its name (an empty directory is
-// still a fact of the layout). skip names top-level entries (files or
-// directories) the digest excludes; anything else in the tree is
-// covered. No other file type is accepted: a socket or a device in a
-// component tree is an error, not a digest.
+// a one-entry tree: the file itself is the whole content). Every
+// entry contributes its slash-normalized relative path; a regular file
+// contributes its exec bit and the sha256 of its bytes, a symlink its
+// target — never its bytes — and a directory contributes nothing but
+// its name (an empty directory is still a fact of the layout). skip
+// names top-level entries (files or directories) the digest excludes;
+// anything else in the tree is covered. No other file type is
+// accepted: a socket or a device in a component tree is an error,
+// not a digest.
 func TreeDigest(root string, skip []string) (string, error) {
 	skips := make(map[string]bool, len(skip))
 	for _, s := range skip {
 		skips[s] = true
 	}
 	h := sha256.New()
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+	// a file root is a one-entry tree: the root entry itself is the
+	// whole content (WalkDir would hand it rel ".", which the walk
+	// below rightly skips for a directory root).
+	fi, err := os.Lstat(root)
+	if err != nil {
+		return "", fmt.Errorf("digest %s: %w", root, err)
+	}
+	if !fi.IsDir() {
+		if err := hashEntry(h, root, ".", fi); err != nil {
+			return "", fmt.Errorf("digest %s: %w", root, err)
+		}
+		return hex.EncodeToString(h.Sum(nil)), nil
+	}
+	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -59,34 +73,41 @@ func TreeDigest(root string, skip []string) (string, error) {
 		if err != nil {
 			return err
 		}
-		switch {
-		case info.Mode().IsDir():
-			fmt.Fprintf(h, "d %s\n", rel)
-		case info.Mode().IsRegular():
-			kind := "f"
-			if info.Mode().Perm()&0o111 != 0 {
-				kind = "x"
-			}
-			sum, err := fileSHA256(p)
-			if err != nil {
-				return err
-			}
-			fmt.Fprintf(h, "%s %s %s\n", kind, rel, sum)
-		case info.Mode()&fs.ModeSymlink != 0:
-			target, err := os.Readlink(p)
-			if err != nil {
-				return err
-			}
-			fmt.Fprintf(h, "l %s -> %s\n", rel, target)
-		default:
-			return fmt.Errorf("%s: a %s entry is not part of a component tree", p, info.Mode())
-		}
-		return nil
+		return hashEntry(h, p, rel, info)
 	})
 	if err != nil {
 		return "", fmt.Errorf("digest %s: %w", root, err)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// hashEntry contributes one tree entry to the digest: its relative
+// path, and for a regular file its exec bit and bytes, for a symlink
+// its target. A directory contributes its name alone.
+func hashEntry(h io.Writer, p, rel string, info fs.FileInfo) error {
+	switch {
+	case info.Mode().IsDir():
+		fmt.Fprintf(h, "d %s\n", rel)
+	case info.Mode().IsRegular():
+		kind := "f"
+		if info.Mode().Perm()&0o111 != 0 {
+			kind = "x"
+		}
+		sum, err := fileSHA256(p)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(h, "%s %s %s\n", kind, rel, sum)
+	case info.Mode()&fs.ModeSymlink != 0:
+		target, err := os.Readlink(p)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(h, "l %s -> %s\n", rel, target)
+	default:
+		return fmt.Errorf("%s: a %s entry is not part of a component tree", p, info.Mode())
+	}
+	return nil
 }
 
 // IsDigest reports whether s is a well-formed digest (64 hex chars).
