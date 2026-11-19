@@ -437,6 +437,33 @@ test.after(() => {
   disposeSessionScanWorkerPoolForTests();
 });
 
+test("a repeated summary listing reads no header it already read", async (t) => {
+  const { write } = fixture(t);
+  const path = write("deferred-twice", [message("d1", "user", "deferred request")]);
+
+  // A cold summary reads each unknown file's 64 KiB header as a pool task;
+  // an unchanged file's second summary must come from the fingerprint cache,
+  // or a summary-only workload re-reads the whole corpus on every call
+  // (polyforge#140 review r2#8).
+  const first = await listSessionsIncremental({ deferDetails: true });
+  assert.equal(first[0].detailsPending, true);
+  assert.deepEqual(reads.filter((read) => read.kind === "header"), [{ path, start: 0, kind: "header" }],
+    "the first summary reads the file's header as a pool task");
+
+  reads.length = 0;
+  const second = await listSessionsIncremental({ deferDetails: true });
+  assert.equal(second[0].detailsPending, true);
+  assert.equal(second[0].id, "deferred-twice");
+  assert.deepEqual(reads.filter((read) => read.kind === "header"), [],
+    "an unchanged file's header summary is served from the cache, not re-read");
+
+  // A changed file (an append) re-reads its header once more.
+  fs.appendFileSync(path, line({ type: "session_info", name: "renamed" }));
+  await listSessionsIncremental({ deferDetails: true });
+  assert.deepEqual(reads.filter((read) => read.kind === "header"), [{ path, start: 0, kind: "header" }],
+    "a changed file's header is read again");
+});
+
 test("discovers sessions through project directory symlinks", { skip: process.platform === "win32" }, async (t) => {
   const { root, dir, write } = fixture(t);
   write("a", [message("a1", "user", "linked")]);
