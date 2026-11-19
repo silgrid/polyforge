@@ -127,6 +127,10 @@ test("capabilities: pi declares its concepts, scopes and config root (AC1)", () 
   assert.equal(caps.credentialsFollowConfigRoot, true);
   assert.deepEqual(caps.writableConcepts, []);
   assert.deepEqual(caps.readOnlyConcepts, ["env", "effective-config"]);
+  // pi has no terminal login command (85a2 Q4): the TUI's /login is not a
+  // whitelistable command, and the interactive session logs in through the
+  // SDK routes the account tab reuses
+  assert.deepEqual(caps.loginCommands, []);
 });
 
 test("read auth: existence and env names only, status unknown (Q4 A)", async () => {
