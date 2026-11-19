@@ -129,3 +129,27 @@ func TestUpgradeDrainRouteRefusesAgents(t *testing.T) {
 		t.Fatalf("an agent origin must be refused 403, got %d %s", code, raw)
 	}
 }
+
+// TestUpgradeDrainStopsTheAutoWave (r1#3): with the Host-wide upgrade
+// drain set, the auto-pull wave enqueues NOTHING — the automatic-claim
+// half of AC3 rides the one drainRefusal gate (daemon.go's wave check);
+// reverting that check to the rotation-only pendingChange() turns this
+// test red (that run is recorded in build's round-2 self-review).
+func TestUpgradeDrainStopsTheAutoWave(t *testing.T) {
+	td := newTestDaemon(t, func(c *Config) {
+		c.MaxConcurrent = 2
+		// the loops under test are driven by hand; keep them out
+		c.DrainInterval = time.Hour
+		c.DispatchTick = time.Hour
+	})
+	td.upgradeDrain = &upgradeDrain{}
+	if err := td.modes.SetAuto(true); err != nil {
+		t.Fatalf("enable auto: %v", err)
+	}
+	seedReadyB3(t, td, 3)
+	td.upgradeDrain.setUpgrade()
+	td.fetchAutoWave()
+	if got := td.q.LenPending(); got != 0 {
+		t.Fatalf("the auto wave under the upgrade drain enqueued %d entries, want 0 — automatic claims are refused like every other new work", got)
+	}
+}
