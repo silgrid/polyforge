@@ -99,6 +99,26 @@ class ContainerRunTest(unittest.TestCase):
         self.assertEqual((res2.exit, res2.image, len(self.fb.builds)), (0, tag, 1))
         self.assertIn("is present (built by an earlier run)", _read(os.path.join(self.capsule, "runtime-state", "run", "3", "app", "image-build.log")))
 
+    def test_a_working_directory_reached_through_a_symlink_alias(self) -> None:
+        # (r1#1): a capsule reached through a symlink alias — the way
+        # facts.py spells it — has its workdir spelled the same way; that
+        # workdir is the clone's own directory, the container mounts the
+        # clone at its canonical path and keys the cache volume on the
+        # same one, whichever spelling the caller used
+        os.makedirs(os.path.join(self.clone, "sub"))
+        alias = os.path.join(self.root, "alias")
+        os.symlink(self.capsule, alias)
+        res = runner.run_command(self.opts("pwd", capsule_dir=alias,
+                                           workdir=os.path.join(alias, "repos", "app", "sub")))
+        self.assertEqual(res.exit, 0, "the aliased workdir is the clone's own sub, not outside it")
+        st = self.fb.starts[-1]
+        self.assertEqual([b.path for b in st.binds], [self.clone], "the clone mounts at its canonical path")
+        self.assertEqual(list(st.volumes), [container.cache_volume("app", TEST_DOCKERFILE.encode(), self.clone)],
+                         "the volume keys on the canonical clone, not the alias")
+        self.assertEqual(_read(os.path.join(self.capsule, res.log)),
+                         "$ bash -c pwd\n# cwd: repos/app/sub\n%s\n" % os.path.join(self.clone, "sub"),
+                         "the cwd is recorded and run at the canonical path")
+
     def test_the_command_sees_only_the_allowlist(self) -> None:
         res = runner.run_command(self.opts("env"))
         seen = _read(os.path.join(self.capsule, res.log))
