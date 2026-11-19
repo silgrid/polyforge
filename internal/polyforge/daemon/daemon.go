@@ -139,7 +139,7 @@ type Config struct {
 	// variable is not set (the scripts' own default, docker). Restart-
 	// only: a reload moves nothing.
 	ContainerEngine string
-	APIKey string // machine credential; NEVER reaches an agent env
+	APIKey          string // machine credential; NEVER reaches an agent env
 	// Server is the Cell's AIHub base URL as configured (reported
 	// normalized on GET /profiles; the Hub client carries the connection).
 	Server string

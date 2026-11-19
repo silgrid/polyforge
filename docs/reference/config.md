@@ -294,7 +294,10 @@ resolve: with `[daemon] command_path` set, its `PATH` is the daemon's
 own `pf` directory, its harness binary's directory and the key's value,
 each entry once (unset: the daemon's own `PATH`, inherited; a reload moves
 it for the next dispatch), `PF_PYTHON` is the interpreter the daemon resolved at its
-start (`[daemon] python`, else `python3` on its `PATH`), `PF_CAPSULE`,
+start (`[daemon] python`, else `python3` on its `PATH`), and
+`PF_CONTAINER_ENGINE` is the container backend the daemon resolved at
+its start (`[daemon] container_engine`, `docker` or `podman`; unset
+outside a Host — the scripts' own docker default), `PF_CAPSULE`,
 `PF_LANE_DIR` and `PF_SHARED_DIR` are the capsule root, the lane snapshot
 the step runs (`<capsule>/workflows/<lane>`) and the shared tree beside it
 (`<capsule>/workflows/_shared`) — where a step's scripts run from

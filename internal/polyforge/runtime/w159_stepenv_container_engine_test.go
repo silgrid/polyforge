@@ -28,8 +28,12 @@ func TestStepEnvCarriesContainerEngine(t *testing.T) {
 	if got := e.Vars(); slices.Contains(got, spawn.EnvContainerEngine+"=") {
 		t.Fatalf("an unstated engine sets no variable (the scripts default to docker): %q", got)
 	}
-	if got := e.Vars(); len(got) != 1 || got[0] != spawn.EnvPython+"=/usr/bin/python3" {
-		t.Fatalf("the bare env's shape is unchanged: %q", got)
+	// the bare env's shape is unchanged: the five always-stated facts, no
+	// sixth entry for an unstated engine
+	want := []string{spawn.EnvPython + "=/usr/bin/python3", spawn.EnvCell + "=", spawn.EnvCellServer + "=",
+		spawn.EnvDeployEnv + "=", spawn.EnvCellTargets + "="}
+	if got := e.Vars(); !slices.Equal(got, want) {
+		t.Fatalf("the bare env's shape is unchanged: %q, want %q", got, want)
 	}
 }
 

@@ -162,13 +162,18 @@ func Main(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		OperatorAgentDir:         *operatorAgentDir,
 		OperatorAgentDirExplicit: *operatorAgentDir != "",
 		Python:                   python.Path,
-		MaxConcurrent:            *maxConcurrent,
-		RecallTopK:               *recallTopK,
-		Auto:                     autoCfg,
-		HeartbeatEvery:           *heartbeatEvery,
-		Launcher:                 *launcher,
-		EnvWarnings:              envWarnings,
-		Hosted:                   true,
+		// polyforge#159 (84-engine): the resolved container backend, once —
+		// Host-only and restart-only, no auto-detection (the scripts' own
+		// default, docker, answers a step the daemon stated none to only
+		// outside a Host: a hosted daemon always injects one).
+		ContainerEngine: cli.ResolveContainerEngine(host.Daemon.ContainerEngine),
+		MaxConcurrent:   *maxConcurrent,
+		RecallTopK:      *recallTopK,
+		Auto:            autoCfg,
+		HeartbeatEvery:  *heartbeatEvery,
+		Launcher:        *launcher,
+		EnvWarnings:     envWarnings,
+		Hosted:          true,
 		// Zero fields fall through to the documented defaults.
 		Supervision: SupervisionConfig{
 			SilenceWindow:          *silenceWindow,

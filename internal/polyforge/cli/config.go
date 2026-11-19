@@ -1177,5 +1177,8 @@ func (s *HostSet) DiskIndex() []cellcfg.IndexEntry {
 // without a working engine is the step's "environment not satisfied",
 // not a reason to switch.
 func ResolveContainerEngine(configured string) string {
-	return "docker"
+	if configured == "" {
+		return "docker"
+	}
+	return configured
 }
