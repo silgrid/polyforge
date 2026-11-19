@@ -412,15 +412,21 @@ test("the pane asks where the paste applies, and claude's local group is among t
   const data = { ...overview(), claude: claudeHalf() };
   const html = pane({ data, draft: { text: "claude mcp add demo npx -y server" } });
   const markup = decode(html);
-  // The apply-to sits under the scope switch, all harnesses offered for a global paste.
-  assert.match(markup, /role="radiogroup"/);
-  assert.match(markup, /All harnesses/);
-  assert.match(markup, /Specific harnesses/);
+  // The apply-to sits under the scope switch, as a target pair Add writes to:
+  // both checked for a paste that lands where both harnesses read it.
+  assert.match(markup, /Apply to:/);
+  assert.match(markup, /data-harness="pi"><input type="checkbox"[^>]*checked=""/);
+  assert.match(markup, /data-harness="claude"><input type="checkbox"[^>]*checked=""/);
+  // A claude paste without -s applies to claude alone, pi's box off with its reason.
+  const localPaste = pane({ data, draft: { text: "claude mcp add demo npx -y server", scope: undefined } });
+  assert.ok(!/data-harness="pi"><input type="checkbox"[^>]*checked=""/.test(decode(localPaste)), "a hint cannot be asserted before the analysis honours it; the local case below does");
   // The local scope is offered with its own label, claude's alone.
   assert.match(markup, /<option value="local">local<\/option>/);
   const local = pane({ data, draft: { text: "claude mcp add demo npx -y server", scope: "local" } });
-  assert.match(decode(local), /pi holds no local scope; the local group is Claude&#x27;s alone\./, "pi's target says why it cannot take a local entry");
-  assert.match(decode(local), /class="config-sidebar-group-label-text">local</, "the save target names the local group");
+  const localMarkup = decode(local);
+  assert.match(localMarkup, /pi holds no local scope; the local group is Claude&#x27;s alone\./, "pi's target says why it cannot take a local entry");
+  assert.match(localMarkup, /<option value="local" selected="">local<\/option>/, "the save target names the local group");
+  assert.ok(!/data-harness="pi"><input type="checkbox"[^>]*checked=""/.test(localMarkup), "pi's box is off in the local group");
   // Without claude's half there is no local scope to offer.
   const bare = pane({ data: { ...overview(), claude: undefined }, draft: { text: "npx -y server" } });
   assert.ok(!decode(bare).includes('<option value="local">'), "no claude, no local group");
