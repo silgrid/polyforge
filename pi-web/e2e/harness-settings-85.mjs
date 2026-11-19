@@ -121,6 +121,7 @@ const T = {
   S8: "S85-08: stored old navigation values land on the new pages",
   S9: "S85-09: a failed harness-list read is a visible reason in both panes, never a contradictory empty registry",
   S10: "S85-10: the account tab lists the harnesses, shows the interactive card and the per-Cell rows with every field, and never a credential value",
+  S11: "S85-11: pi's sign-in lives only on Account › pi — the legacy Models tab has no login, API-key entry or Add-provider picker, and the never-offered Anthropic subscription appears nowhere",
 };
 const failures = new Map(Object.values(T).map((title) => [title, []]));
 const ran = new Set();
@@ -330,13 +331,64 @@ try {
     await page.context().close();
   });
 
+  // S85-11 — polyforge#142 (85a2 AC4/AC8): pi's sign-in, API-key entry and
+  // Add-provider picker live only on Account › pi; the legacy Models tab
+  // shows a moved notice for a managed provider; and the never-offered
+  // Anthropic subscription login appears nowhere (the mocked providers answer
+  // is the filtered shape the route now returns).
+  await part("S11", "pi sign-in only on the account page", async () => {
+    const page = await newPage();
+    const PROVIDERS = {
+      providers: [
+        { id: "openai-codex", name: "ChatGPT Plus/Pro", usesCallbackServer: false, loggedIn: false, supportsApiKey: false },
+        { id: "google", name: "Google", usesCallbackServer: false, loggedIn: true, supportsApiKey: true },
+      ],
+      oauthProviders: [
+        { id: "openai-codex", name: "ChatGPT Plus/Pro", usesCallbackServer: false, loggedIn: false, supportsApiKey: false },
+        { id: "google", name: "Google", usesCallbackServer: false, loggedIn: true, supportsApiKey: true },
+      ],
+      apiKeyProviders: [
+        { id: "google", displayName: "Google", configured: true, modelCount: 8, supportsOAuth: true },
+        { id: "anthropic", displayName: "Anthropic", configured: false, modelCount: 12, supportsOAuth: true },
+      ],
+    };
+    await page.context().route(/\/api\/auth\/providers/, (route) => route.fulfill({ json: PROVIDERS }));
+    await openSettings(page);
+    // the legacy Models tab: the logged-in provider row opens the moved notice
+    await tab(page, /^Models \(legacy\)$/).click({ timeout: ACTION_MS });
+    const models = sectionHost(page, "legacy-models");
+    await models.locator(".config-sidebar-item").filter({ hasText: "Google" }).first().click({ timeout: ACTION_MS });
+    const movedText = await waitFor(async () => {
+      const text = await models.innerText();
+      return text.includes("Sign-in has moved") ? text : false;
+    }, ACTION_MS, "the legacy tab never showed the moved notice");
+    assert.ok(!movedText.includes("Log in"), "the legacy tab still offers a login");
+    assert.ok(!movedText.includes("Add provider"), "the legacy tab still offers the picker");
+    // Account › pi: the rows, the Add provider button, and no Anthropic
+    // subscription anywhere
+    await tab(page, /^Account$/).click({ timeout: ACTION_MS });
+    const account = sectionHost(page, "account");
+    await account.locator(".config-sidebar-item").filter({ hasText: /^pi$/ }).click({ timeout: ACTION_MS });
+    const piText = await waitFor(async () => {
+      const text = await account.innerText();
+      return text.includes("ChatGPT Plus/Pro") ? text : false;
+    }, ACTION_MS, "the account pi pane never listed the offered providers");
+    assert.ok(piText.includes("Add provider"), "the account pi pane lost the Add provider entry");
+    assert.ok(piText.includes("Anthropic"), "the Anthropic API-key entry is gone from the account pane");
+    assert.ok(!piText.includes("Anthropic (Claude Pro/Max)"), "the never-offered Anthropic subscription appears");
+    await page.context().close();
+  });
+
   // S85-05 — AC1: the legacy pages stay reachable and keep working.
   await part("S5", "legacy pages", async () => {
     const page = await newPage();
     await openSettings(page);
     await tab(page, /^Models \(legacy\)$/).click({ timeout: ACTION_MS });
     const models = sectionHost(page, "legacy-models");
-    await models.getByRole("button", { name: "Add provider", exact: true }).waitFor({ state: "visible", timeout: COLD_MS });
+    // 85a2 moved the Add-provider picker to Account › pi: the legacy tab
+    // renders its provider list without one
+    await models.locator(".config-sidebar-list").first().waitFor({ state: "visible", timeout: COLD_MS });
+    assert.equal(await models.getByRole("button", { name: "Add provider", exact: true }).count(), 0, "the legacy Models tab still offers Add provider");
     await tab(page, /^Claude \(legacy\)$/).click({ timeout: ACTION_MS });
     const claude = sectionHost(page, "legacy-claude");
     await claude.getByRole("radiogroup", { name: "Default permission mode" }).waitFor({ state: "visible", timeout: COLD_MS });

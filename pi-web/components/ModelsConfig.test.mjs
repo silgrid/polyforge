@@ -1,6 +1,7 @@
 import "#test-env";
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFile } from "node:fs/promises";
 import { createJiti } from "jiti";
 
 const jiti = createJiti(import.meta.url, { tsconfigPaths: true });
@@ -252,4 +253,16 @@ test("the Models sidebar labels a model by its name and falls back to the id", (
   assert.equal(modelSidebarLabel({ id: "m1" }), "m1");
   assert.equal(modelSidebarLabel({ id: "m1", name: "  " }), "m1");
   assert.equal(modelSidebarLabel({ id: "", name: "" }), "");
+});
+
+// ── 85a2 (polyforge#142, AC4): the login moved to Account › pi ─────────────────
+test("the Models tab no longer renders a sign-in, an API-key entry or an Add-provider picker (85a2)", async () => {
+  // The moved pieces are gone from the source and the tab shows where they
+  // went; the mount is pinned in the source the way the 85a1b suite pinned
+  // a pane that renders once its GET settles.
+  const source = await readFile(new URL("./ModelsConfig.tsx", import.meta.url), "utf8");
+  for (const gone of [/function OAuthDetail/, /function ApiKeyDetail/, /function AddProviderPicker/, /i18n\.addProvider/]) {
+    assert.ok(!gone.test(source), `the moved sign-in piece is still in ModelsConfig: ${gone}`);
+  }
+  assert.match(source, /data-models-auth-moved/, "a managed provider's row shows no notice naming where sign-in went");
 });

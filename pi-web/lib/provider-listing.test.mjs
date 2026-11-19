@@ -11,7 +11,7 @@ async function loadSubject() {
   }
 }
 
-const { buildApiKeyProviderList, buildOAuthProviderList } = await loadSubject();
+const { buildApiKeyProviderList, buildOAuthProviderList, offerableOAuthProviders } = await loadSubject();
 
 const provider = (overrides) => ({
   id: "anthropic",
@@ -37,12 +37,16 @@ test("lists an API-key-configured dual-auth provider in the API-key list (#309)"
     supportsOAuth: true,
   }]);
 
-  // …and only as a not-logged-in entry in the OAuth list, so it renders once.
+  // …and the raw OAuth list still knows it (the builder is the complete
+  // listing); what pi-web OFFERS drops it (85a2 AC8, owner ruling Q10:
+  // Anthropic does not permit a third-party application to offer Claude.ai
+  // login, so pi's Anthropic subscription login is never offered).
   const oauth = buildOAuthProviderList(providers);
   assert.equal(oauth.length, 1);
   assert.equal(oauth[0].loggedIn, false);
   assert.equal(oauth[0].name, "Anthropic (Claude Pro/Max)");
   assert.equal(oauth[0].supportsApiKey, true);
+  assert.deepEqual(offerableOAuthProviders(providers), [], "the never-logged-in Anthropic subscription is offered");
 });
 
 test("an OAuth-authenticated provider counts as configured only in the OAuth list", () => {
@@ -52,6 +56,9 @@ test("an OAuth-authenticated provider counts as configured only in the OAuth lis
     ["anthropic", false, undefined],
   ]);
   assert.deepEqual(buildOAuthProviderList(providers).map((p) => [p.id, p.loggedIn]), [["anthropic", true]]);
+  // a stored subscription credential keeps its status and its logout (AC8):
+  // the offering keeps the logged-in entry, the UI offers no login for it
+  assert.deepEqual(offerableOAuthProviders(providers).map((p) => [p.id, p.loggedIn]), [["anthropic", true]]);
 });
 
 test("switching auth method moves the provider between lists in both directions", () => {
@@ -112,4 +119,17 @@ test("duplicate provider ids are collapsed", () => {
 
   assert.deepEqual(buildApiKeyProviderList(providers).map((p) => [p.id, p.configured]), [["anthropic", false]]);
   assert.equal(buildOAuthProviderList(providers).length, 1);
+});
+
+test("the offering keeps every other OAuth provider and never offers an unlogged Anthropic subscription (AC8)", () => {
+  const providers = [
+    provider({ id: "openai-codex", name: "OpenAI Codex", hasApiKeyLogin: false, oauthName: "Sign in with ChatGPT" }),
+    provider({ id: "github-copilot", name: "GitHub Copilot Provider", oauthName: "Copilot" }),
+    provider({ status: { configured: false } }),
+  ];
+  const offered = offerableOAuthProviders(providers);
+  assert.deepEqual(offered.map((p) => p.id), ["openai-codex", "github-copilot"]);
+  assert.ok(!offered.some((p) => p.id === "anthropic"), "the Anthropic subscription login is offered");
+  // the API-key entry for Anthropic is unaffected
+  assert.deepEqual(buildApiKeyProviderList(providers).map((p) => p.id), ["github-copilot", "anthropic"]);
 });
