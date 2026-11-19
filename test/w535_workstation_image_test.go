@@ -284,6 +284,7 @@ type w535ComposeService struct {
 		Context    string `yaml:"context"`
 		Dockerfile string `yaml:"dockerfile"`
 	} `yaml:"build"`
+	Image       string            `yaml:"image"`
 	CapAdd      []string          `yaml:"cap_add"`
 	SecurityOpt []string          `yaml:"security_opt"`
 	Cgroup      string            `yaml:"cgroup"`
@@ -381,11 +382,13 @@ func TestWorkstationCompose(t *testing.T) {
 		}
 		// the stop grace: the daemon's shutdown can take up to 30s of WIP
 		// pushes, pf supervise's own grace defaults to 60s, and the
-		// outer container must exceed it (≥ 45s the AC demands; the
-		// margin is the #160 leftover's "grace plus a margin").
+		// outer container must sit strictly above it — ≥ 45s is the
+		// AC's floor, but a grace at or below supervise's own would cut
+		// the daemon's shutdown in half (the #160 leftover's "grace
+		// plus a margin").
 		grace, err := time.ParseDuration(s.StopGrace)
-		if err != nil || grace < 45*time.Second {
-			t.Fatalf("%s: stop_grace_period = %q, want a parseable duration of at least 45s and above pf supervise's grace", name, s.StopGrace)
+		if err != nil || grace <= 60*time.Second {
+			t.Fatalf("%s: stop_grace_period = %q, want a parseable duration strictly above pf supervise's 60s grace", name, s.StopGrace)
 		}
 		// the environment boundary: compose's explicit list and nothing
 		// wholesale; the required password is a hard error when unset
@@ -468,6 +471,48 @@ func TestWorkstationCompose(t *testing.T) {
 	}
 	if _, ok := compose.Volumes["podman-storage"]; !ok {
 		t.Fatal("polyforge#161: the compose file must declare the podman-storage named volume")
+	}
+
+	// the optional HTTPS front (settled Q7: off by default, opened by a
+	// compose profile — the ticket's "可选 AIHub 与 HTTPS 前置"). It
+	// must never ride the default boots: the two boot profiles above
+	// stay exactly [no-aihub] and [aihub].
+	front, ok := compose.Services["https-front"]
+	if !ok {
+		t.Fatal("polyforge#161: compose.yaml must carry the https-front service — the ticket's optional HTTPS front (settled Q7)")
+	}
+	if len(front.Profiles) != 1 || front.Profiles[0] != "https" {
+		t.Fatalf("polyforge#161: https-front profiles = %v, want exactly [https] — the front is opt-in, never a default boot", front.Profiles)
+	}
+	if front.Image != "docker.io/library/caddy:2.10.2-alpine" {
+		t.Fatalf("polyforge#161: https-front image = %q, want the pinned docker.io/library/caddy:2.10.2-alpine", front.Image)
+	}
+	var caddyfile string
+	for _, vol := range front.Volumes {
+		if strings.HasPrefix(vol, "./Caddyfile:/etc/caddy/Caddyfile:ro") {
+			caddyfile = vol
+		}
+	}
+	if caddyfile == "" {
+		t.Fatalf("polyforge#161: https-front must mount ./Caddyfile read-only at /etc/caddy/Caddyfile (its config), got %v", front.Volumes)
+	}
+	var httpsPort bool
+	for _, p := range front.Ports {
+		if strings.HasSuffix(p, ":443") {
+			httpsPort = true
+		}
+	}
+	if !httpsPort {
+		t.Fatalf("polyforge#161: https-front must publish the HTTPS port 443, got %v", front.Ports)
+	}
+	// the front terminates TLS with its own local CA and proxies the
+	// workstation's Pi Web port — the pinned Caddyfile says both.
+	caddy := w535Deliverable(t, "dist/workstation/Caddyfile")
+	if !strings.Contains(caddy, "reverse_proxy workstation:30141") {
+		t.Fatal("polyforge#161: the Caddyfile must reverse_proxy the workstation service's Pi Web port 30141")
+	}
+	if !strings.Contains(caddy, "tls internal") {
+		t.Fatal("polyforge#161: the Caddyfile must terminate TLS with caddy's internal CA (tls internal) — no external cert flow was asked for")
 	}
 }
 
