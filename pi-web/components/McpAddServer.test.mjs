@@ -1,3 +1,4 @@
+// carries: components/McpAddServer.tsx, components/mcp-add-helpers.ts, components/HarnessApplyTo.tsx
 import "#test-env";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -397,4 +398,43 @@ test("Settings › MCP opens the add pane from the sidebar, keeps the draft, and
   const signingOut = decode(addedView({ busy: "sign-out:project\0docs" }));
   assert.match(text(signingOut), /It asks for a sign-in\./);
   assert.doesNotMatch(signingOut.slice(signingOut.indexOf("Added docs"), signingOut.indexOf("</div>", signingOut.indexOf("Added docs"))), /Sign in</);
+});
+
+// ---------------------------------------------------------------------------
+// #85 85c (AC4): the pane asks where the paste applies — the apply-to under
+// the scope switch, and the local group among the scopes (claude's own).
+
+function claudeHalf(servers = []) {
+  return { present: true, configPath: "/Users/me/.claude.json", stateReadable: true, servers, disabledMcpServers: [] };
+}
+
+test("the pane asks where the paste applies, and claude's local group is among the scopes (AC4)", () => {
+  const data = { ...overview(), claude: claudeHalf() };
+  const html = pane({ data, draft: { text: "npx -y @scope/server" } });
+  const markup = decode(html);
+  // The apply-to sits under the scope switch, as a target pair Add writes to:
+  // both checked for a plain paste, which lands where both harnesses read it.
+  assert.match(markup, /Apply to:/);
+  assert.match(markup, /data-harness="pi"[^>]*><input type="checkbox"[^>]*checked=""/);
+  assert.match(markup, /data-harness="claude"[^>]*><input type="checkbox"[^>]*checked=""/);
+  // The local scope is offered with its own label, claude's alone.
+  assert.match(markup, /config-scope-switch-option">local</);
+  const local = pane({ data, draft: { text: "claude mcp add demo npx -y server", scope: "local" } });
+  const localMarkup = decode(local);
+  assert.match(localMarkup, /pi holds no local scope; the local group is Claude's alone\./, "pi's target says why it cannot take a local entry");
+  assert.match(localMarkup, /<button type="button" aria-pressed="true"[^>]*>local<\/button>/, "the save target names the local group");
+  assert.ok(!/data-harness="pi"[^>]*><input type="checkbox"[^>]*checked=""/.test(localMarkup), "pi's box is off in the local group");
+  // Without claude's half there is no local scope to offer.
+  const bare = pane({ data: { ...overview(), claude: undefined }, draft: { text: "npx -y server" } });
+  assert.ok(!/config-scope-switch-option">local</.test(decode(bare)), "no claude, no local group");
+});
+
+test("claude not installed: the pane offers no claude target and no local scope (r2#2)", () => {
+  const data = { ...overview(), claude: { ...claudeHalf(), present: false } };
+  const html = pane({ data, draft: { text: "npx -y @scope/server" } });
+  const markup = decode(html);
+  assert.match(markup, /Apply to:/);
+  assert.match(markup, /data-harness="pi"[^>]*><input type="checkbox"[^>]*checked=""/);
+  assert.ok(!/data-harness="claude"/.test(markup), "no claude on PATH, no claude target");
+  assert.ok(!/config-scope-switch-option">local</.test(markup), "no claude on PATH, no local scope");
 });

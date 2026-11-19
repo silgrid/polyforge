@@ -268,16 +268,17 @@ export function createClaudeAdapter(): HarnessAdapter {
     capabilities: {
       id: "claude",
       scopes: ["managed", "user", "project", "local"],
-      concepts: [
-        "auth",
-        "config-root",
-        "model",
-        "permission",
-        "skills",
-        "mcp",
-        "env",
-        "effective-config",
-      ],
+      // #85 85c (Q1 A): claude is written only through its CLI, has no
+      // enable/disable of an entry (unapplying removes it) and no tool
+      // filter; it holds the local scope and takes sse and ws entries.
+      mcp: {
+        scopes: ["user", "project", "local"],
+        transports: ["stdio", "http", "sse", "ws"],
+        cliAdd: true,
+        enableToggle: false,
+        toolFilter: false,
+      },
+      concepts: ["auth", "config-root", "model", "permission", "skills", "mcp", "env", "effective-config"],
       writableConcepts: ["auth"],
       readOnlyConcepts: ["env", "effective-config"],
       configRootEnv: "CLAUDE_CONFIG_DIR",

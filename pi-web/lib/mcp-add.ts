@@ -32,6 +32,8 @@ export interface McpAddRequest {
   /** The name to save it under; the importer's name when absent. */
   name?: string;
   scope: McpScope;
+  /** The 「应用到」 targets (#85 85c): default pi alone, the panel this flow grew from. */
+  harnesses?: ("pi" | "claude")[];
   /** Take JSON values as pi syntax (`${VAR}`, `$$`, `!command` kept as written). */
   rawPi: boolean;
   /** The host variables the user agreed to send (`host-env-confirm`). */

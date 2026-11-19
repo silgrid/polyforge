@@ -17,6 +17,8 @@ export const MCP_UNDO_MAX_RECORDS = 100;
 export interface McpRemovedEntry {
   scope: McpScope;
   name: string;
+  /** Present when the entry was claude's (#85 85c): undo re-adds it through the CLI, never pi's writer. */
+  harness?: "claude";
   /** The configured path it was removed from, as the panel shows it. */
   path: string;
   /** The project folder, for a project entry; undo checks its trust again. */
