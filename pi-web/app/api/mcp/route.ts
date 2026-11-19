@@ -33,7 +33,7 @@ import {
 } from "@/lib/mcp-add";
 import { readMcpOverview, readMcpServerConfigs, readMcpServerEntry } from "@/lib/mcp-config-read";
 import { readClaudeMcpRawEntry, readClaudeMcpServers, claudeMcpStatePath } from "@/lib/claude-mcp-read";
-import { claudeMcpAddJson, claudeMcpRemove, claudeMcpWriteEntry } from "@/lib/claude-mcp-write";
+import { claudeMcpAddJson, claudeMcpRemove, claudeMcpWriteEntry, claudeMcpWriteGate } from "@/lib/claude-mcp-write";
 import { claudeMcpEntryFromPi, piMcpEntryFromClaude, unifiedMcpRows } from "@/lib/mcp-unified";
 import { findClaudeBinary } from "@/lib/claude-session";
 import {
@@ -620,6 +620,13 @@ async function addServer(
     return refusal(409, "harness-unsupported", "pi holds no local scope: the local group is Claude's alone");
   }
   if (scope !== "global" && !project) return refusal(400, "invalid-request", "A project or local server needs the project's cwd");
+  // claude's gate runs before any file is written (r2#3): a binary missing or
+  // a version the gate does not recognize refuses the whole add, so no side
+  // is left half-written; a CLI failure after the gate takes pi's entry back.
+  if (claudeTarget) {
+    const gate = await claudeMcpWriteGate(scope, claudeWriteContext(project));
+    if (!gate.ok) return claudeWriteRefusal(gate).response();
+  }
   const trustFolder = scope === "project" && piTarget && body.trustFolder === true && project !== undefined;
   // Where it may go is said first: a confirmation asked for a server the folder then refuses would be asked for nothing.
   const target = trustFolder || !piTarget ? undefined : writeTarget(scope, project, agentDir);
@@ -688,9 +695,14 @@ async function addServer(
 
   // The claude half, when the selection names it (AC2): pi's prepared entry
   // projected to the fields claude's own config keeps, through its CLI alone.
+  // A failure here is not the whole add's failure alone (r2#3): pi's entry
+  // goes back out, so a retry meets the same refusal, never a name-taken.
   if (claudeTarget) {
     const outcome = await claudeMcpAddJson(scope, name, claudeMcpEntryFromPi(entry as unknown as Record<string, unknown>), claudeWriteContext(project));
-    if (!outcome.ok) return claudeWriteRefusal(outcome).response();
+    if (!outcome.ok) {
+      if (piTarget && target) await removeMcpServer(target, name).catch(() => {});
+      return claudeWriteRefusal(outcome).response();
+    }
   }
 
   const claudePath = scope === "project" && project

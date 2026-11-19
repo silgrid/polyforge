@@ -129,6 +129,19 @@ async function prepare(scope: McpScope, context: ClaudeMcpWriteContext): Promise
   return { binary: gated.binary, claudeScope };
 }
 
+/**
+ * The gate every claude write passes, run without writing anything: the
+ * scope/cwd rule and the version probe (r2#3 — a caller writing other
+ * harnesses first asks here, so an add to both sides meets the gate before
+ * any file is touched).
+ */
+export async function claudeMcpWriteGate(scope: McpScope, context: ClaudeMcpWriteContext = {}): Promise<ClaudeMcpWriteOutcome> {
+  const ready = await prepare(scope, context);
+  // prepare's refusal carries `ok: false`; its success shape does not.
+  if ("ok" in ready) return ready;
+  return { ok: true };
+}
+
 /** Adds `name` as `claude mcp add-json -s <scope> <name> <json>` would. */
 export async function claudeMcpAddJson(scope: McpScope, name: string, entry: Record<string, unknown>, context: ClaudeMcpWriteContext = {}): Promise<ClaudeMcpWriteOutcome> {
   const ready = await prepare(scope, context);
