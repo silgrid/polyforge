@@ -66,6 +66,15 @@ var daemonEnvNames = []string{
 	// never a credential (the TLS key is a file under DOCKER_CERT_PATH,
 	// registry auth is DOCKER_CONFIG's config.json)
 	"DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG", "DOCKER_CERT_PATH", "DOCKER_TLS_VERIFY",
+	// the workstation's build isolation (84-image): the entrypoint fixes
+	// BUILDAH_ISOLATION=chroot — buildah's build-network setup opens a
+	// non-dumpable runtime init's netns, which needs CAP_SYS_PTRACE, and
+	// the workstation's minimal capability set deliberately carries
+	// none; the chroot isolation builds without opening any namespace.
+	// The daemon carries the choice to every step, so a step's
+	// verification-image build runs the way the workstation pins. Only
+	// this one name crosses — no BUILDAH_* family.
+	"BUILDAH_ISOLATION",
 }
 
 // daemonEnvPrefixes are the variable families the daemon carries.
