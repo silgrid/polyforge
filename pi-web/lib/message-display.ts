@@ -1,4 +1,5 @@
 import { CLAUDE_TASK_NOTIFICATION_TYPE } from "./claude-subagent-view.ts";
+import { BG_TASK_NOTIFICATION_TYPE } from "./bg-protocol.ts";
 import type { AgentMessage, AssistantContentBlock, AssistantMessage, ThinkingContent, ToolCallContent } from "./types";
 
 interface DisplayOptions {
@@ -81,6 +82,8 @@ export function isMessageGroupAnchor(message: { role?: AgentMessage["role"]; cus
       message.customType === "compaction"
       || message.customType === "pi-web:subagent-notification"
       || message.customType === "subagent-notification"
+      // A background task's completion starts its own displayed turn (AC1).
+      || message.customType === BG_TASK_NOTIFICATION_TYPE
     ));
 }
 

@@ -27,6 +27,7 @@ import {
   type SessionHarness,
   CLAUDE_SESSION_BUILTIN_COMMANDS,
 } from "@/lib/claude-shared";
+import { PI_RESTART_REFUSED_CODE } from "@/lib/bg-protocol";
 import { normalizeToolCalls } from "@/lib/normalize";
 import { claudeSubagentRelayText, mergeClaudeSubagentHistory, mergeClaudeSubagentRuns, type ClaudeSubagentRun, type ClaudeSubagentRuns } from "@/lib/claude-subagent-view";
 import { CLAUDE_BACKGROUND_TASK_EVENT, CLAUDE_BACKGROUND_TASKS_EVENT, CLAUDE_FORCE_STOP_EVENT, mergeClaudeBackgroundTask, replaceClaudeBackgroundTasks, type ClaudeBackgroundTask, type ClaudeBackgroundTasks, type ClaudeBackgroundWork } from "@/lib/claude-background-task-view";
@@ -3197,14 +3198,21 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     // appends to. Switching only the view would render the live run under
     // another branch, so the switch waits for the run like the server does.
     if (bashRunningRef.current || agentRunningRef.current || isCompacting) return;
+    const previousLeafId = activeLeafId;
     setActiveLeafId(leafId);
     const sid = sessionIdRef.current;
     if (!sid) return;
     await loadContext(sid, leafId);
     if (leafId) {
-      sendAgentCommand(sid, { type: "navigate_tree", targetId: leafId }).catch(() => {});
+      sendAgentCommand(sid, { type: "navigate_tree", targetId: leafId }).catch((error) => {
+        // A branch switch refused over unfinished background work (AC3) rolls
+        // the view back; the draft never left the composer.
+        if (error instanceof AgentCommandError && error.code === PI_RESTART_REFUSED_CODE) {
+          setActiveLeafId(previousLeafId);
+        }
+      });
     }
-  }, [isCompacting, loadContext]);
+  }, [activeLeafId, isCompacting, loadContext]);
 
   // a fresh composer's harness switch resets the destination harness's model —
   // claude to its default full name, pi to no override (pi's default model again).
@@ -3832,6 +3840,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   const handleToolPresetChange = useCallback(async (preset: ToolPreset) => {
     const toolNames = getToolNamesForPreset(preset);
+    const previousPreset = toolPreset;
     setPreferredToolPreset(preset);
     setToolPresetState(preset);
     const sid = sessionIdRef.current ?? await ensuringNewSessionRef.current;
@@ -3873,9 +3882,17 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         syncLiveModel(state);
       }
     } catch (e) {
+      // A rebuild refused over unfinished background work (AC3) rolls the
+      // composer's preset back; the draft never left the input.
+      if (e instanceof AgentCommandError && e.code === PI_RESTART_REFUSED_CODE) {
+        setPreferredToolPreset(previousPreset);
+        setToolPresetState(previousPreset);
+        addNotice({ type: "error", message: e.message });
+        return;
+      }
       console.error("Failed to set tools:", e);
     }
-  }, [cancelEventStreamGrace, clearSlashCommands, closeEvents, loadTools, maintainEventsConnected, setToolPresetState, syncLiveModel]);
+  }, [addNotice, cancelEventStreamGrace, clearSlashCommands, closeEvents, loadTools, maintainEventsConnected, setToolPresetState, syncLiveModel, toolPreset]);
 
   const scrollToMessage = useCallback((element: HTMLElement, viewportOffset = 16) => {
     const container = scrollContainerRef.current;
