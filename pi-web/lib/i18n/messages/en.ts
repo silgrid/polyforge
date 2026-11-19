@@ -1190,6 +1190,7 @@ export const enLocale: LocalePlugin = {
     "mcp.groupSwitchPiSuffix": " (pi)",
     "mcp.rowLabel.claude": "{name} (claude)",
     "mcp.rowLabel.claudeOff": "{name} (claude, off)",
+    "mcp.rowBadge.otherScope": "+{scope}",
     "mcp.rowBadge.claude": "claude",
     "mcp.applyTo.title": "Apply to",
     "mcp.applyTo.all": "All harnesses",

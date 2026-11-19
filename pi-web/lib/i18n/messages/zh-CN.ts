@@ -1190,6 +1190,7 @@ export const zhCNLocale: LocalePlugin = {
     "mcp.groupSwitchPiSuffix": " (pi)",
     "mcp.rowLabel.claude": "{name}（claude）",
     "mcp.rowLabel.claudeOff": "{name}（claude，关闭）",
+    "mcp.rowBadge.otherScope": "+{scope}",
     "mcp.rowBadge.claude": "claude",
     "mcp.applyTo.title": "应用到",
     "mcp.applyTo.all": "全部",

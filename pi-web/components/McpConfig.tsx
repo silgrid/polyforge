@@ -1186,6 +1186,7 @@ export function McpConfigView({
                     <McpServerGroupList
                       key={group.scope}
                       group={group}
+                      unifiedRows={data.unified ?? []}
                       context={context}
                       selected={adding ? null : selected}
                       selectedRowRef={selectedRowRef}
@@ -1425,6 +1426,7 @@ function groupStatusText(status: McpGroupStatus, t: Translate): { note?: string;
 
 function McpServerGroupList({
   group,
+  unifiedRows,
   context,
   selected,
   selectedRowRef,
@@ -1437,6 +1439,8 @@ function McpServerGroupList({
   onGroupSwitch,
 }: {
   group: McpServerGroup;
+  /** The overview's unified rows: a name living in another group says so on its row (Q2 A). */
+  unifiedRows: readonly McpUnifiedRow[];
   context: McpRowContext;
   selected: string | null;
   /** Set to the selected row's button, when it is in this group. */
@@ -1458,6 +1462,10 @@ function McpServerGroupList({
   const checked = mcpGroupSwitchChecked(group.servers);
   const emptyKey = mcpGroupEmptyKey(group);
   const statusText = status ? groupStatusText(status, t) : undefined;
+  // A name living in another group says so on its row (Q2 A): one badge per
+  // other group, pi rows and claude-only rows alike.
+  const otherScopesOf = (name: string): McpScope[] =>
+    unifiedRows.find((row) => row.scope === group.scope && row.name === name)?.otherScopes ?? [];
   // The group switch is pi's alone (Q3 A): it turns pi's own entries, so it
   // says so, and the local group — claude's alone — never shows one.
   const switchLabel = (on: boolean) => `${t(on ? "mcp.groupSwitchOn" : "mcp.groupSwitchOff", { group: scopeLabel(group.scope, t) })}${t("mcp.groupSwitchPiSuffix")}`;
@@ -1500,6 +1508,9 @@ function McpServerGroupList({
             <ConfigStatusDot {...mcpStatusDot(tone)} />
             <ConfigSidebarText className={`is-grow${tone === "on" ? "" : " is-muted"}`}>{name}</ConfigSidebarText>
             {badgeKey && <span className={`mcp-sidebar-badge is-${tone}`}>{t(badgeKey)}</span>}
+            {otherScopesOf(server.name).map((other) => (
+              <span key={`other-${other}`} className="mcp-sidebar-badge is-muted">{t("mcp.rowBadge.otherScope", { scope: scopeLabel(other, t) })}</span>
+            ))}
           </ConfigSidebarItem>
         );
       })}
@@ -1517,6 +1528,9 @@ function McpServerGroupList({
             <ConfigStatusDot {...mcpStatusDot(entry.disabled ? "off" : "on")} />
             <ConfigSidebarText className="is-grow">{name}</ConfigSidebarText>
             <span className="mcp-sidebar-badge is-muted">{t("mcp.rowBadge.claude")}</span>
+            {otherScopesOf(entry.name).map((other) => (
+              <span key={`other-${other}`} className="mcp-sidebar-badge is-muted">{t("mcp.rowBadge.otherScope", { scope: scopeLabel(other, t) })}</span>
+            ))}
           </ConfigSidebarItem>
         );
       })}
