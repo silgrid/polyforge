@@ -109,7 +109,7 @@ integration_batch`). What a later step's command needs travels in files, never i
   writes each reverted item's move to `reverted` (`artifacts/integrate/revert-ops.json`),
   which the step registers. A revert the forge refuses is put to the owner.
 - **full-gate** (the script `gate.py --isolation container --capsule --pins`, no tier;
-  heavy admission; a gate; hub `get list batch file`, attrs `integration, integration_fix`) — runs the release's test gate
+  heavy admission; a gate; hub `get list batch file`, attrs `integration, integration_fix`) — runs the full gate
   once on every gated repo's pinned head, inside its verification container, with
   `--mark-green` and `--keep-going` (the gate runs every command, never
   stopping at the first failing one, so one red batch records every failing

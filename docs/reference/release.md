@@ -606,7 +606,7 @@ classes.
 ```
 make check     # build + vet + fmt + xrefs + test, all packages, + pi-web lint/test
 make test      # unit packages, then the e2e suite in parallel (a developer subset)
-python3 workflows/_shared/scripts/gate.py --isolation container  # the full verification = the release's test gate, in its container
+python3 workflows/_shared/scripts/gate.py --isolation container  # the full verification (the integrate gate; the release runs none)
 make xrefs     # design-doc cross-references only
 make pi-web-build  # the pi-web package's production build (pi-web/)
 make pi-web-lint   # pi-web: npm run lint + tsc --noEmit
