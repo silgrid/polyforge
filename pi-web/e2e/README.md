@@ -68,6 +68,30 @@ Failures save a screenshot, Playwright trace, and server log under
 `test-results/e2e/`; CI uploads that directory. Open a trace with
 `npx playwright show-trace test-results/e2e/trace.zip`.
 
+## Network-change tolerance
+
+The build and e2e lanes run in the host's network namespace: a sibling
+container starting or stopping adds or removes a veth/bridge interface, and
+Chromium then fails an in-flight request — even one to 127.0.0.1 — with
+`net::ERR_NETWORK_CHANGED`; the page logs one console error about it
+(`Failed to load resource: net::ERR_NETWORK_CHANGED`). That is host noise,
+not a product defect (polyforge#128: three false reds in one build, each
+green on a targeted re-run).
+
+`e2e/run.mjs` collects browser errors through `e2e/console-errors.mjs`
+(`trackBrowserErrors(page, { base })`, one collector per viewport pass).
+A console error is dropped only when it is paired
+one-to-one with a `requestfailed(errorText=net::ERR_NETWORK_CHANGED)`
+event, at most 3 per collector, and each dropped error is logged
+`INFO tolerated network-change: <url>` (the failed request's URL). The
+pairing runs when the flow settles, so the order of the requestfailed and
+console events cannot matter. Everything else stays red: an unpaired
+console error with the same text, an application catch text
+(`Failed to fetch`), `ERR_CONNECTION_REFUSED`, `pageerror`, any 5xx from
+the test server, and the tolerated pair past the cap of 3. The rules are
+pinned by `lib/e2e-console-errors.test.mjs` (`node --test
+lib/e2e-console-errors.test.mjs`).
+
 ## Running every suite in parallel
 
 `npm run test:e2e:all` (`e2e/all.mjs`) runs every standalone `e2e/*.mjs` suite
@@ -209,7 +233,17 @@ root's `.polyforge/` scripts, tested there).
 - A suite that asserts a wall-clock responsiveness bound, or whose scenarios
   are proven load-sensitive on a shared host, opts in with the
   `e2e/all: isolated` marker in its source: `session-stall-recovery.mjs` (its
-  10s bound is the acceptance), `polyforge-work-tab-163.mjs`
+  10s bound is the acceptance criterion; since polyforge#137 its own-run
+  scenario also asserts the write-ring recovery's event order — turn-1 and
+  the tool result on screen before the final reply is released, their forced
+  session reads starting after the ring rise and before the first 15s
+  reconcile tick — and its RESULT lines carry staged timestamps: the ring
+  rise with its generation, the first tick, every session read with its
+  source and start time, a failure line saying whether the recovery path was
+  never triggered or triggered but out of bound;
+  `E2E_STALL_DISABLE_RING_RECOVERY=1` cuts those forced reads — the
+  no-relaxation proof — and the suite must exit non-zero with the
+  recovery-path-not-triggered lines), `polyforge-work-tab-163.mjs`
   (8 s click timeouts in the parallel bar) and
   `polyforge-panel-213.mjs` (a precaution: named earlier and sharing
   work-tab-163's dock click path, `openPolyforgeDock()` in

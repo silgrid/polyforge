@@ -20,7 +20,7 @@ from pfstep import container, proc, runner
 from pfstep.container import ContainerOptions, ContainerSpec, DockerCLI
 from pfstep.runner import CommandOptions, ExecSpec, Runner
 
-from .capsuleutil import HAVE_GIT, make_capsule
+from .capsuleutil import HAVE_GIT, make_capsule, path_id
 
 PROBE_IMAGE = "busybox:1.37"
 # busybox has no bash: the image gives it one that is sh
@@ -111,7 +111,7 @@ class RealDockerTest(unittest.TestCase):
         repo = "pfstep-real-" + secrets.token_hex(4)
         capsule = make_capsule(root, repo, {"a.txt": "a\n", container.DOCKERFILE_VERIFY: REAL_DOCKERFILE})
         self.tags.append(container.image_tag(repo, REAL_DOCKERFILE.encode()))
-        self.volumes.append(container.cache_volume(repo, REAL_DOCKERFILE.encode()))
+        self.volumes.append(container.cache_volume(repo, REAL_DOCKERFILE.encode(), os.path.join(capsule, "repos", repo)))
         results = {}
         for i, (cmd, seconds) in enumerate((("test -f .polyforge/Dockerfile.verify", 240.0), ("false", 240.0),
                                             ("sleep 300 & sleep 301", 8.0)), start=1):
@@ -233,7 +233,7 @@ class PreparedImageDockerTest(unittest.TestCase):
         # the tags and volumes of both modes: the red run of this test on the
         # pre-change tree builds the Dockerfile's image instead
         self.tags.append(container.image_tag(repo, REAL_DOCKERFILE.encode()))
-        self.volumes.append(container.cache_volume(repo, REAL_DOCKERFILE.encode()))
+        self.volumes.append(container.cache_volume(repo, REAL_DOCKERFILE.encode(), clone))
         return capsule, clone, log_dir
 
     def co(self) -> ContainerOptions:
@@ -248,7 +248,7 @@ class PreparedImageDockerTest(unittest.TestCase):
         c = proc.run([self.d.bin, "image", "inspect", PROBE_IMAGE, "--format", "{{.Id}}"], timeout=60)
         self.assertEqual(c.exit_code, 0, "busybox:1.37 must be inspectable")
         want_id = c.stdout.decode("utf-8", "replace").strip()
-        self.volumes.append("pf-verify-cache-" + repo + "-" + want_id[len("sha256:"):][:32])
+        self.volumes.append(container.image_cache_volume(repo, want_id, clone))
         box = container.start_box(self.co(), repo, clone, log_dir, time.time() + 240.0, 1, lambda p: p, image=PROBE_IMAGE)
         try:
             self.assertEqual((box.report.image, box.report.built, box.report.build_log), (PROBE_IMAGE, False, ""))
@@ -267,7 +267,7 @@ class PreparedImageDockerTest(unittest.TestCase):
         repo = "pfstep-real-" + secrets.token_hex(4)
         _, clone, log_dir = self.opts(self.visible_dir(), repo)
         missing = "registry.example/pf-no-such-image-64:1"
-        self.volumes.append("pf-verify-cache-" + repo + "-" + "ab" * 16)
+        self.volumes.append(container.image_cache_volume(repo, "sha256:" + "ab" * 32, clone))
         with self.assertRaises(container.ImageMissing) as got:
             container.start_box(self.co(), repo, clone, log_dir, time.time() + 60.0, 1, lambda p: p, image=missing)
         self.assertEqual(got.exception.ref, missing)

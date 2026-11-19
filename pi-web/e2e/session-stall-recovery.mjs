@@ -20,6 +20,36 @@
 // OpenAI-compatible model makes runs append real entries through the wrapper,
 // the same way another device on the same pi-web does.
 //
+// Asserted (polyforge#137, plan A′ — event order plus staged timestamps; the
+// 10s wall-clock bound is unchanged and stays the acceptance criterion):
+// - the page's own run: turn-1 text and the tool result must be on screen
+//   BEFORE the final reply is released — the release is anchored to the first
+//   15s reconcile tick plus 1s (the late-final interleaving the SWE recorded),
+//   so the recovery has the whole tick-free window to deliver while the run
+//   is busy — and the forced /api/sessions reads that carried them start
+//   after the write-ring rise (the sidebar poll's first recentSessionWrites
+//   sighting of the selected session) and before that first tick: the
+//   write-ring recovery path delivered them, not the tick fallback. BOUND_MS
+//   still bounds every mark.
+// - an idle page whose selected session has no watcher-ring entry at
+//   selection: another client's quick run shows within BOUND_MS through a
+//   forced read after the ring rise.
+// Diagnostics (AC3): the RESULT lines carry the ring rise (with its
+// generation), the first tick, and every /api/sessions read with its source
+// (plain/force), completion and start time, all relative to the send; the
+// own-run INFO line carries every /api/agent/running response of the frozen
+// window with its time and status — a hung or failing poll chain is the
+// first thing to check on a red. A failure line says which side it is on:
+// the recovery path never triggered (no forced read between the ring rise
+// and the first tick) or triggered but out of bound.
+// The no-relaxation proof (AC2): E2E_STALL_DISABLE_RING_RECOVERY=1 makes the
+// proxy cut the page's forced session reads — the observable outcome of a
+// dead write-ring recovery path (refreshFromDisk returning early, the
+// sidebar ignoring the selected session's rise) — while the 15s tick's
+// plain read still lands the content late, the #128 signature (all three
+// marks at once ≈ tick + 1s). The suite must then exit non-zero with the
+// recovery-path-not-triggered lines.
+//
 // Reproduced failures (bound 10s, the WI's acceptance example):
 // - the page's own run: turn-1 text and the tool result never show while the
 //   run lasts, and the final reply shows well after 10s (observed 30.5s after
@@ -29,6 +59,7 @@
 //   all in the 30s observation window).
 //
 //   node e2e/session-stall-recovery.mjs
+//   E2E_STALL_DISABLE_RING_RECOVERY=1 node e2e/session-stall-recovery.mjs   (must exit non-zero)
 //   npm run test:e2e:all -- session-stall-recovery.mjs
 //
 // e2e/all: isolated — BOUND_MS is a wall-clock responsiveness assertion, so
@@ -50,6 +81,19 @@ import { launchBrowser, softCheck } from "./harness.mjs";
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const BOUND_MS = 10_000;
 const OBSERVE_MS = 30_000;
+// How long the own-run block waits for the first reconcile tick's status read
+// (a diagnostic anchor for the RESULT line, never an outcome): the interval
+// is armed at send, so it cannot fire before ~15s, and page-render churn has
+// been observed delaying the first fire to ~27.8s.
+const TICK_WAIT_MS = 40_000;
+// AC2's no-relaxation mutation, materialized as a switch so the proof reruns
+// without touching the tree: with it on, the proxy cuts the page's forced
+// session reads (the write-ring recovery path's own reads), leaving the 15s
+// reconcile tick's plain read to land the content late — the #128 signature.
+// The unit's test commits ship it ON by default (the committed mutation,
+// red); the implementation commits turn the default off (green) and leave
+// the env for the proof's rerun.
+const disableRingRecovery = process.env.E2E_STALL_DISABLE_RING_RECOVERY === "1";
 const distDir = process.env.PI_WEB_DIST_DIR || ".next/e2e/session-stall-recovery";
 const artifacts = join(root, "test-results/e2e");
 mkdirSync(artifacts, { recursive: true });
@@ -188,8 +232,13 @@ let context;
 let page;
 const conns = new Set();
 let frozen = false;
+// The mutation's cut is armed only inside the frozen windows the scenarios
+// define (right before their prompts), so a scenario's initial mount reads —
+// which legitimately carry force=1 — still pass.
+let cutForceReads = false;
 const ringEvents = [];
 const pageRequests = [];
+const pageReads = new Map();
 
 try {
   started = await startNextServer({
@@ -213,6 +262,11 @@ try {
     client.on("data", (data) => {
       const head = data.toString("latin1");
       if (/GET \/api\/agent\/[^ ]+\/events/.test(head)) connection.isEvents = true;
+      if (disableRingRecovery && cutForceReads && /GET \/api\/sessions\/[^ ]*force=1/.test(head)) {
+        // The mutation: the write-ring recovery path's read never completes.
+        end();
+        return;
+      }
       upstream.write(data);
     });
     upstream.on("data", (data) => {
@@ -264,21 +318,32 @@ try {
   page.setDefaultTimeout(120_000);
   page.on("request", (request) => {
     const url = new URL(request.url());
-    if (url.pathname.startsWith("/api/")) pageRequests.push({ at: Date.now(), path: url.pathname + url.search });
+    if (!url.pathname.startsWith("/api/")) return;
+    const entry = { at: Date.now(), path: url.pathname + url.search, done: false };
+    pageRequests.push(entry);
+    if (url.pathname.startsWith("/api/sessions/")) pageReads.set(request, entry);
+  });
+  page.on("response", (response) => {
+    const url = new URL(response.url());
+    if (!url.pathname.startsWith("/api/sessions/")) return;
+    const entry = pageReads.get(response.request());
+    if (entry) {
+      entry.done = true;
+      entry.doneAt = Date.now();
+    }
   });
   page.on("response", async (response) => {
     const url = new URL(response.url());
     if (url.pathname !== "/api/agent/running") return;
+    const record = { at: Date.now(), status: response.status(), writes: [] };
+    ringEvents.push(record);
     try {
       const body = await response.json();
-      ringEvents.push({
-        at: Date.now(),
-        writes: (body.recentSessionWrites ?? []).map((write) => ({
-          sessionId: write.sessionId,
-          generation: write.generation,
-        })),
-      });
-    } catch { /* the poll response was not readable JSON */ }
+      record.writes = (body.recentSessionWrites ?? []).map((write) => ({
+        sessionId: write.sessionId,
+        generation: write.generation,
+      }));
+    } catch { /* the poll response was not readable JSON (a non-OK status) */ }
   });
 
   const shows = (text) => page.evaluate((value) => document.body.innerText.includes(value), text);
@@ -311,6 +376,7 @@ try {
   }
   async function loadSession(sid) {
     frozen = false;
+    cutForceReads = false;
     const loadedAt = Date.now();
     await page.goto(`${base}/?session=${sid}`, { waitUntil: "domcontentloaded" });
     assert.ok(await waitUntil(() => shows(`initial answer of ${sid.slice("stall-".length)}`), 60_000),
@@ -326,9 +392,35 @@ try {
       15_000,
     ), `${sid}: the sidebar never polled /api/agent/running after load`);
   }
-  const reads = (sid, since) => pageRequests
+  // Every /api/sessions read of one session since a moment, with its source
+  // (the recovery path reads carry force=1) and its start time relative to it.
+  const readEvents = (sid, since) => pageRequests
     .filter((request) => request.at >= since && request.path.startsWith(`/api/sessions/${sid}?`))
-    .map((request) => request.path.includes("force=1") ? "force" : "plain");
+    .map((request) => ({
+      s: request.path.includes("force=1") ? "force" : "plain",
+      at: request.at - since,
+      done: request.done === true,
+    }));
+  // The first 15s reconcile tick's status read (or any other status read)
+  // after a moment, relative to it — the fallback that must not be the one
+  // carrying the recovery.
+  const firstTickAt = (sid, since) => {
+    const tick = pageRequests.find((request) => request.at >= since
+      && request.path === `/api/agent/${sid}?systemPrompt=0`);
+    return tick ? tick.at - since : null;
+  };
+  // The write-ring rise the sidebar polls report: the first poll response at
+  // or after a moment that carries a watcher-ring entry for the session.
+  const ringRiseEntry = (sid, since) => ringEvents.find((event) => event.at >= since
+    && event.writes.some((write) => write.sessionId === sid));
+  const ringRiseAt = (sid, since) => {
+    const seen = ringRiseEntry(sid, since);
+    return seen ? seen.at - since : null;
+  };
+  const ringRiseGeneration = (sid, since) => {
+    const seen = ringRiseEntry(sid, since);
+    return seen ? (seen.writes.find((write) => write.sessionId === sid)?.generation ?? null) : null;
+  };
 
   // The page's own run: establish a watcher-ring baseline first (so the run's
   // writes are rises above it), then freeze the stream and send from the page.
@@ -352,49 +444,89 @@ try {
     frozen = true;
     finalWrittenAt = null;
     modelCalls = 0;
-    // Hold the final reply until the page's run-time reconcile has ticked once.
-    // Then the run ends just after a tick, so a missed end is not shown until
-    // the next 15s tick — the late-final failure the SWE recorded.
+    // Hold the final reply until the page's run-time reconcile has ticked once,
+    // then another second (the base choreography, restored per review r1#3):
+    // the run ends just after a tick, so a missed end is not shown until the
+    // next 15s tick — the late-final failure the SWE recorded. Against this
+    // tick-anchored release the A′ order assertion keeps its teeth: the
+    // write-ring recovery must show turn-1 and the tool result while the run
+    // is still busy, well before a release that never precedes the first tick.
     let releaseFinal;
     const finalGate = new Promise((resolve) => { releaseFinal = resolve; });
     plan = { toolFirst: true, final: { text: "REPLY-RUN-FINAL", delayMs: 0, gate: finalGate } };
     const sentAt = Date.now();
+    cutForceReads = true;
     await page.locator("textarea").first().fill("phone asks while the network stalls");
     await page.getByRole("button", { name: "Send" }).first().click();
-    const tickObserved = await waitUntil(
-      () => pageRequests.some((request) => request.at >= sentAt
-        && request.path === `/api/agent/${sid}?systemPrompt=0`),
-      20_000,
-    );
+    // A tick is a mechanism, not a user-visible outcome: none can fire before
+    // ~15s after send, and page-render churn has delayed the first fire to
+    // ~27.8s, so the wait runs to TICK_WAIT_MS and the release falls to the
+    // deadline when no tick came (the RESULT line says which).
+    const tickObserved = await waitUntil(() => firstTickAt(sid, sentAt) !== null, TICK_WAIT_MS);
+    const tickAt = firstTickAt(sid, sentAt);
     // Let that tick's status read finish while the run is still busy, then end
     // the run. The next tick is a full interval away, which is the late case.
-    // A tick is a mechanism, not a user-visible outcome: when none happens the
-    // final reply is released at the 20s deadline instead of failing the suite.
     if (tickObserved) await delay(1_000);
+    const releaseAt = Date.now();
     releaseFinal();
 
     // The recorder times first appearance from its own sampling, so turn-1 and
-    // tool content shown before the tick wait above is not mistaken for late.
+    // tool content shown while the tick was awaited is not mistaken for late.
     await waitUntil(async () => (await firstSeen("REPLY-RUN-FINAL")) !== null, 60_000);
     await waitIdle(sid);
     const firstTurnAt = await firstSeen("FIRST-TURN-TEXT");
     const toolAt = await firstSeen("TOOL-OUT-MARK");
     const finalAt = await firstSeen("REPLY-RUN-FINAL");
-    console.log(
-      `INFO own-run (stream frozen): reconcile tick ${tickObserved ? "observed" : "not observed within 20000ms"}`,
-    );
+    const riseAt = ringRiseAt(sid, sentAt);
+    const riseGeneration = ringRiseGeneration(sid, sentAt);
+    const readsList = readEvents(sid, sentAt);
+    const firstForceRead = readsList.find((entry) => entry.s === "force" && entry.done);
     const ms = (value) => value === null ? "never" : `${value - sentAt}ms`;
     const finalLate = finalAt === null || finalWrittenAt === null ? "never" : `${finalAt - finalWrittenAt}ms`;
+    // Which side of the AC3 taxonomy a failure is on: no forced read inside
+    // the ring-rise→first-tick window is an untriggered recovery path; one
+    // there with late content is a triggered-but-out-of-bound one.
+    const recoveryState = firstForceRead === undefined || (tickAt !== null && firstForceRead.at >= tickAt)
+      ? `recovery path not triggered — no forced read completed between the ring rise `
+        + `(${riseAt === null ? "never" : `${riseAt}ms`}) and the first tick (${tickAt === null ? "none" : `${tickAt}ms`})`
+      : `recovery path triggered but out of bound — first completed forced read at ${firstForceRead.at}ms`;
+    console.log(
+      `INFO own-run (stream frozen): poll responses ${JSON.stringify(ringEvents
+        .filter((event) => event.at >= sentAt)
+        .map((event) => ({ at: event.at - sentAt, status: event.status })))}; `
+      + `final reply released ${releaseAt - sentAt}ms after send; `
+      + `first reconcile tick ${tickAt === null ? `not observed within ${TICK_WAIT_MS}ms` : `observed at ${tickAt}ms`}`,
+    );
     console.log(
       `RESULT own-run (stream frozen): turn-1 text ${ms(firstTurnAt)}, tool output ${ms(toolAt)}, `
-      + `final reply ${ms(finalAt)} (${finalLate} after it was written); reads=${JSON.stringify(reads(sid, sentAt))}`,
+      + `final reply ${ms(finalAt)} (${finalLate} after it was written); `
+      + `ring rise ${riseAt === null ? "never" : `${riseAt}ms (generation ${riseGeneration})`}; `
+      + `first tick ${tickAt === null ? `none within ${TICK_WAIT_MS}ms` : `${tickAt}ms`}; `
+      + `reads=${JSON.stringify(readsList)}`,
     );
     check(firstTurnAt !== null && firstTurnAt - sentAt <= BOUND_MS,
-      `${sid}: turn-1 content was not shown within ${BOUND_MS}ms of send (observed ${ms(firstTurnAt)})`);
+      `${sid}: turn-1 content was not shown within ${BOUND_MS}ms of send (observed ${ms(firstTurnAt)}; ${recoveryState})`);
     check(toolAt !== null && toolAt - sentAt <= BOUND_MS,
-      `${sid}: the tool result was not shown within ${BOUND_MS}ms of send (observed ${ms(toolAt)})`);
+      `${sid}: the tool result was not shown within ${BOUND_MS}ms of send (observed ${ms(toolAt)}; ${recoveryState})`);
     check(finalAt !== null && finalWrittenAt !== null && finalAt - finalWrittenAt <= BOUND_MS,
-      `${sid}: the final reply was not shown within ${BOUND_MS}ms of being written (observed ${finalLate})`);
+      `${sid}: the final reply was not shown within ${BOUND_MS}ms of being written (observed ${finalLate}; ${recoveryState})`);
+    // A′ order: the recovery must show turn-1 and the tool result before the
+    // final reply is released — while the run is still busy.
+    check(firstTurnAt !== null && toolAt !== null && firstTurnAt < releaseAt && toolAt < releaseAt,
+      `${sid}: turn-1/tool content did not appear before the final reply was released `
+      + `(turn-1 ${ms(firstTurnAt)}, tool ${ms(toolAt)}, released ${releaseAt - sentAt}ms; ${recoveryState})`);
+    // A′ order: the read that carried them runs after the ring rise and
+    // before the first 15s tick — the write-ring recovery path, not the tick
+    // fallback. The 250ms slack is Playwright's cross-object event-delivery
+    // jitter (the poll's response event and the read's request event reach
+    // this process in either order), not a behavioural tolerance: a read not
+    // triggered by the rise precedes it by a poll round-trip or more.
+    check(riseAt !== null && firstForceRead !== undefined && firstForceRead.at >= riseAt - 250
+        && (tickAt === null || firstForceRead.at < tickAt),
+      `${sid}: the recovery read did not run between the write-ring rise and the first tick `
+      + `(ring rise ${riseAt === null ? "never" : `${riseAt}ms`}, `
+      + `first completed forced read ${firstForceRead === undefined ? "never" : `${firstForceRead.at}ms`}, `
+      + `first tick ${tickAt === null ? "none" : `${tickAt}ms`}; recovery path not triggered)`);
   }
 
   // Idle first sighting: the selected session has no ring entry at selection;
@@ -412,6 +544,7 @@ try {
     check(!entryAtSelection, `${sid}: precondition failed — the ring already held an entry at selection`);
 
     frozen = true;
+    cutForceReads = true;
     plan = { single: { text: "REPLY-IDLE-FIRST", delayMs: 200 } };
     modelCalls = 0;
     const promptAt = Date.now();
@@ -430,15 +563,30 @@ try {
       await delay(250);
     }
     await waitIdle(sid);
+    const readsList = readEvents(sid, promptAt);
+    const firstForceRead = readsList.find((entry) => entry.s === "force" && entry.done);
     const shown = shownAt === null ? `not within ${OBSERVE_MS}ms` : `${shownAt - promptAt}ms after the prompt`;
     const ring = ringAt === null ? "never" : `${ringAt - promptAt}ms after the prompt`;
+    const polls = ringEvents.filter((event) => event.at >= promptAt);
+    const pollsOk = polls.filter((event) => event.status === 200).length;
     console.log(
       `RESULT idle-first (stream frozen): reply ${shown}; sidebar ring entry ${ring}; `
-      + `reads=${JSON.stringify(reads(sid, promptAt))}`,
+      + `polls ${pollsOk}/${polls.length} ok; `
+      + `reads=${JSON.stringify(readsList)}`,
     );
     check(ringAt !== null, `${sid}: the sidebar never reported the first write for the selected session`);
     check(shownAt !== null && shownAt - promptAt <= BOUND_MS,
-      `${sid}: the first external write was not shown within ${BOUND_MS}ms of the prompt (observed ${shown})`);
+      `${sid}: the first external write was not shown within ${BOUND_MS}ms of the prompt (observed ${shown}; `
+      + `${firstForceRead === undefined
+        ? "recovery path not triggered — no forced read completed after the ring rise"
+        : `recovery path triggered but out of bound — first completed forced read at ${firstForceRead.at}ms`})`);
+    // A′ order carried to the idle-first sighting: the reply is shown by a
+    // forced read that starts after the ring rise — the write-ring recovery
+    // path, not an accident of timing.
+    check(shownAt !== null && ringAt !== null && firstForceRead !== undefined
+        && firstForceRead.at >= ringAt - promptAt - 250 && firstForceRead.at <= shownAt - promptAt,
+      `${sid}: the reply was not carried by a forced read after the ring rise `
+      + `(ring entry ${ring}, first completed forced read ${firstForceRead === undefined ? "never" : `${firstForceRead.at}ms`}, shown ${shown})`);
   }
 } catch (error) {
   failures.push(`suite error: ${error?.stack ?? String(error)}`);

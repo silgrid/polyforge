@@ -696,6 +696,33 @@ installer with `--dev`, and `docs/install.md` documents the
 prerequisites (go, make, npm, node of the checkout's `.nvmrc` major,
 all checked and reported together) and the way back.
 
+## v0.2.4, the per-clone-path cache volume (polyforge#153)
+
+The verification containers' named cache volume is keyed by the clone's
+path beside the image's generation:
+`pf-verify-cache-<repo>-<image hash>-<clone path hash>`, and the clone is
+mounted at its canonical path — two clones of one repo at different
+paths never share one volume, so a path-sensitive cache tool
+(golangci-lint's result cache) no longer reads another clone's cached
+results, while the same path keeps reusing its own volume. Volumes of
+the pre-#153 shared shape — `pf-verify-cache-<repo>-<32 hex>`, one field,
+no path hash — are neither read nor removed by the new scripts: the
+pruning rule recognizes only the two-field shape, so old and new
+scripts may run beside each other, each pruning its own shape. To
+reclaim the old shared volumes once no old script runs any more: list
+them (`docker volume ls --quiet | grep -E '^pf-verify-cache-.+-[0-9a-f]{32}$'
+| grep -Ev -- '-[0-9a-f]{32}-[0-9a-f]{32}$'` — a name ending in one
+32-hex field, not the new shape's two; a repo name may itself carry a
+dash),
+confirm no container references one (`docker ps --all --filter
+volume=<name>` answers empty — a stopped container still counts), then
+remove them by hand with `docker volume rm`; nothing else is removed
+automatically. The new shape accumulates one volume per clone path per
+image generation — every capsule and every integrate batch has its own
+path — and each start still prunes only its own repo's older
+generations; the disk cost is the price of the isolation, and no time-
+or count-based reclamation ships with it.
+
 ## v0.2.4, the release lane ships the green integrate batch (polyforge#154)
 
 The release lane no longer releases a branch head: its object is the

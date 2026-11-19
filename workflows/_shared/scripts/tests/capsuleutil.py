@@ -1,5 +1,6 @@
 """Test helpers: a capsule whose repos/<name> is a git clone with files."""
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -47,3 +48,10 @@ def commit(clone: str, home: str, msg: str) -> str:
 
 def head(clone: str) -> str:
     return _git(clone, os.path.dirname(clone), "rev-parse", "HEAD")
+
+
+def path_id(p: str) -> str:
+    """A clone path's identity as polyforge#153's ruling defines it,
+    derived here independently of the module under test: the first 32
+    hex of the sha256 of the canonical absolute path (realpath(abspath))."""
+    return hashlib.sha256(os.fsencode(os.path.realpath(os.path.abspath(p)))).hexdigest()[:32]

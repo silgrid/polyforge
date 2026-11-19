@@ -87,10 +87,26 @@ const KeepAliveGrace = 5 * time.Minute
 const DefaultDeadline = 25 * time.Minute
 
 // cacheVolume is a repo's named cache volume for the image of dockerfile
-// (repo already tag-safe): the image tag's hash is the volume's.
-func cacheVolume(repo, dockerfile string) string {
+// at the clone dir (repo already tag-safe): the image tag's hash and the
+// clone path's identity are the volume's two fields (polyforge#153).
+func cacheVolume(repo, dockerfile, cloneDir string) string {
 	sum := sha256.Sum256([]byte(dockerfile))
-	return "pf-verify-cache-" + repo + "-" + hex.EncodeToString(sum[:16])
+	return "pf-verify-cache-" + repo + "-" + hex.EncodeToString(sum[:16]) + "-" + pathIdentity(cloneDir)
+}
+
+// pathIdentity mirrors pfstep.container's clone path identity
+// (polyforge#153): the first 32 hex of the sha256 of the clone's
+// canonical absolute path.
+func pathIdentity(dir string) string {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		abs = dir
+	}
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = real
+	}
+	sum := sha256.Sum256([]byte(abs))
+	return hex.EncodeToString(sum[:16])
 }
 
 // containerSpec is one container a script started, as the fake docker's

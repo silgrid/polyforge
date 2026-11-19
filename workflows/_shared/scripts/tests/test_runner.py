@@ -118,6 +118,22 @@ class HostRunTest(unittest.TestCase):
                 runner.run_command(self.opts("pwd", workdir=outside))
             self.assertIn("lies outside the clone", str(cm.exception))
 
+    def test_a_working_directory_reached_through_a_symlink_alias(self) -> None:
+        # (r1#1): a capsule reached through a symlink alias — the way
+        # facts.py spells it, abspath keeping the alias — has its workdir
+        # spelled the same way; that workdir is the same directory as the
+        # canonical one, so it runs, and both the recorded cwd and the
+        # directory the command runs in are the canonical paths
+        alias = os.path.join(self.root, "alias")
+        os.symlink(self.capsule, alias)
+        sub = os.path.join(self.clone, "sub")
+        res = runner.run_command(self.opts("pwd", capsule_dir=alias,
+                                           workdir=os.path.join(alias, "repos", "app", "sub")))
+        self.assertEqual(res.exit, 0, "the aliased workdir is the clone's own sub, not outside it")
+        self.assertEqual(_read(os.path.join(self.capsule, res.log)),
+                         "$ bash -c pwd\n# cwd: repos/app/sub\n%s\n" % sub,
+                         "the cwd is recorded and run at the canonical path")
+
     def test_a_private_tmpdir_removed_after(self) -> None:
         res = runner.run_command(self.opts('test -d "$TMPDIR" && echo "TMP=$TMPDIR"'))
         self.assertEqual(res.exit, 0)
