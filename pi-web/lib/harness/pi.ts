@@ -8,12 +8,11 @@
 // (85a4, polyforge#150) — approval and sandbox are refused as pi's own absences.
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
 import { defaultAgentDir } from "../http-dispatcher";
 import { readModelsConfig } from "../models-config-store";
 import { readMcpServerConfigs } from "../mcp-config-read";
 import { loadSkillsWithInstallInfo } from "../skills-service";
-import { getProjectTrustStatus, mayReadProjectConfigNow } from "../project-trust";
+import { getProjectTrustStatus, mayReadProjectConfigNow, writeProjectTrustDecision } from "../project-trust";
 import {
   gatedWrite,
   writeGate,
@@ -275,11 +274,11 @@ export function createPiAdapter(): HarnessAdapter {
       }
       const cwd = ctx?.cwd;
       if (!cwd) return { status: "refused", reason: "a project trust write needs the project folder (cwd)" };
-      const agentDir = agentDirOf(ctx);
-      if (!getProjectTrustStatus(cwd, agentDir).requiresTrust) {
-        return { status: "refused", reason: "the project requires no trust decision (no .pi/mcp.json), so none is recorded" };
-      }
-      new ProjectTrustStore(agentDir).set(cwd, trusted);
+      // The shared gate (review r1#2): a busy session refuses before anything
+      // is written, a landed decision rebuilds the cwd's sessions — exactly
+      // what POST /api/project-trust does, because both call the same function.
+      const outcome = await writeProjectTrustDecision(cwd, trusted, agentDirOf(ctx));
+      if (!outcome.ok) return { status: "refused", reason: outcome.message };
       return { status: "written", summary: `trust.json decision for ${cwd}: ${String(trusted)} (pi ${probe.version})` };
     },
     // pi's CLI declares no fixed safe diagnostic command yet (its doctor joins
