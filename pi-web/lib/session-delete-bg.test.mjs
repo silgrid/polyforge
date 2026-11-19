@@ -11,7 +11,10 @@ const agentDir = join(tmpdir(), "bg-delete-" + Math.random().toString(36).slice(
 mkdirSync(agentDir, { recursive: true });
 process.env.PI_CODING_AGENT_DIR = agentDir;
 
-const jiti = createJiti(import.meta.url, { interopDefault: true, moduleCache: false });
+// moduleCache on: deleteSessions (session-delete.ts) and this test must see
+// ONE BG_RUNTIME — a fresh rpc-manager per import would give the gate and the
+// assertions two different executors.
+const jiti = createJiti(import.meta.url, { interopDefault: true, moduleCache: true });
 const { deleteSessions } = await jiti.import("./session-delete.ts");
 const { getBgRuntime } = await jiti.import("./rpc-manager.ts");
 
@@ -58,8 +61,8 @@ test("deleting a session gates new tasks, stops its running task, clears the log
   const result = await deleteSessions([sessionId]);
   assert.deepEqual(result.missing, [sessionId], "the session itself reads as missing (it never had a file)");
 
-  // The task's whole process group is gone.
-  assert.equal(groupAlive(info.pgid ?? 0), false, "deleting the session stopped the task's process group");
+  // The task's whole process group is gone (the stop's signals settle first).
+  await pollUntil(() => !groupAlive(info.pgid ?? 0), 5_000, "the deleted session's task group to disappear");
   await pollUntil(() => runtime.status(sessionId).length === 0, 5_000, "the registry to clear");
   assert.equal(existsSync(logDir), false, "the session's log directory is cleaned");
   // The gate holds: no new task starts for a deleted session.
