@@ -35,7 +35,24 @@ rewind):
 - the run never stops at a failure: every command runs, and each one's
   exit code, its log and its skip reason land in the result file's
   ``details.commands[]`` — any non-zero exit (or a command killed at its
-  timeout) makes the whole run red.
+  timeout) makes the whole run red, unless the failing units it located
+  re-ran flaky and the command was confirmed (below).
+
+The flaky re-run phase (polyforge#157): a red command's failing units are
+located from its output and each re-run **once** by its derived targeted
+re-run — verification's own rules and implementation (``pfstep/rerun`` +
+``pfstep/flaky``, never a second copy) — under the run's deadline. One
+passing re-run records the unit ``flaky`` in ``details.commands[].units[]``
+beside the first failure's log, and a unit still red after its one re-run
+keeps the check red. A red command every failing unit of which re-ran
+flaky is then confirmed the way verification confirms its bar: by its
+first-run output's completion proof (the declared Go harness's trailer,
+an aggregate e2e runner's closing summary — ``pfstep/completion``, the one
+implementation) or by one whole re-run exiting 0 — recorded
+``confirmed``; a re-run that still exits non-zero, or a deadline that
+cannot fit it, leaves the command red (``not_confirmed``). No re-run ever
+happens by hand: the check already contains it, and its result is the
+record.
 
 Its logs go to ``<log-dir>/<repo>/<seq>/command.log``, the log dir being
 --log-dir, else ``logs/`` beside --out, else the capsule's next
@@ -60,12 +77,12 @@ mismatch) the closest output line, so build fixes the record before review
 or verification ever reads it. ``--unit <id>`` checks only that unit.
 The result carries the repo HEADs the units ran at.
 
-Exit 0: every command that ran exited 0 (skips cost nothing), or every
-checked unit passed. Exit 1: a command exited non-zero or was killed at
-its timeout, or a unit is red. Exit 2: not judged — no such repo, the
-engine missing or failing, an unreadable report, a repo the engine planned
-no command for, an unusable units.json, the deadline, an interrupt — or
-the invocation unusable.
+Exit 0: every command that ran exited 0 (skips cost nothing) or turned
+green through its flaky re-runs and confirmation, or every checked unit
+passed. Exit 1: a command stayed red after the flaky phase, or a unit is
+red. Exit 2: not judged — no such repo, the engine missing or failing, an
+unreadable report, a repo the engine planned no command for, an unusable
+units.json, the deadline, an interrupt — or the invocation unusable.
 """
 
 import os
@@ -78,22 +95,30 @@ import argparse  # noqa: E402
 import difflib  # noqa: E402
 import time  # noqa: E402
 import traceback  # noqa: E402
-from typing import Any, Dict, List, Optional, Sequence, Tuple  # noqa: E402
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple  # noqa: E402
 
 from pfstep import duration, git, gostr, runner  # noqa: E402
+from pfstep.completion import completion_proof, harness_command, read_go_harness  # noqa: E402
 from pfstep.engine import EngineCommand, EngineReport, ReportError, decode_report  # noqa: E402
 from pfstep.engine import argv_of as engine_argv_of  # noqa: E402
 from pfstep.engine import default_engine, nested_roots, reached_roots  # noqa: E402
+from pfstep.flaky import RerunRun, rerun_flaky  # noqa: E402
 from pfstep.invoke import Invocation, duration_flag  # noqa: E402
+from pfstep.rerun import CommandSpec, UnitState, locate, whole_command  # noqa: E402
 from pfstep.runner import Runner, bash_argv, raise_on_termination  # noqa: E402
+from pfstep.shellwords import has_flag, has_go_test, shell_quote, shell_words  # noqa: E402
 from pfstep.unitruns import UnitRunDecl, clean_cwd, marker_matches, marker_problem, read_unit_runs  # noqa: E402
-from pfstep.units import output_lines  # noqa: E402
+from pfstep.units import normalize_output, output_lines, parse_units, race_seen  # noqa: E402
 
 NAME = "fast_checks.py"
 
 # A command that declares no timeout runs under the run's own bound (s).
 COMMAND_TIMEOUT = 20 * duration.MINUTE / duration.SECOND
 GIT_TIMEOUT = 600.0
+
+# The one targeted re-run a failing unit gets — verification's own count
+# (verify.py's RERUNS), the same rules rerun_flaky enforces.
+RERUNS = 1
 
 # A log directory's .gitignore: logs are local, never capsule chain content.
 LOGS_GITIGNORE = "# pf step command logs are local, never capsule chain content\n*\n"
@@ -156,6 +181,16 @@ def timeout_of(c: EngineCommand) -> float:
     except ValueError:
         return COMMAND_TIMEOUT
     return d / duration.SECOND if d > 0 else COMMAND_TIMEOUT
+
+
+def timeout_ns(c: EngineCommand) -> int:
+    """The command's declared timeout in nanoseconds — the form a derived
+    re-run carries (`go test -timeout`)."""
+    try:
+        d = duration.parse(gostr.trim_space(c.timeout))
+    except ValueError:
+        d = 0
+    return d if d > 0 else int(COMMAND_TIMEOUT * duration.SECOND)
 
 
 def nested_command(root: str, c: EngineCommand) -> EngineCommand:
@@ -282,6 +317,9 @@ class CheckRun:
         self.seq = 0
         self.details: Dict[str, Any] = {"repo": repo, "reports": [], "commands": []}
         self.head = ""
+        # the repo conf's go_harness= declaration: a harness command's
+        # trailer is a completion proof
+        self.go_harness = ""
 
     def cwd_rel(self, directory: str) -> str:
         """The directory as the record names it: capsule-relative inside the
@@ -314,15 +352,16 @@ class CheckRun:
         except ReportError as err:
             return None, ref, "the engine's report is unreadable: %s" % err
 
-    def run_command(self, c: EngineCommand, directory: str, root_rel: str) -> Dict[str, Any]:
+    def run_command(self, c: EngineCommand, directory: str, root_rel: str) -> Tuple[Dict[str, Any], str, str]:
         """One planned command in its report's root, skipped when its
-        declared prerequisites are unmet."""
+        declared prerequisites are unmet: (its entry, its log's absolute
+        path, its private TMPDIR)."""
         entry: Dict[str, Any] = {"name": c.name, "phase": c.phase, "root": root_rel, "cmd": c.cmd}
         unmet = self.r.unmet(c.requires_env, c.requires_cmd, directory, None)
         if unmet:
             entry["skipped"] = True
             entry["skip_reason"] = unmet
-            return entry
+            return entry, "", ""
         self.seq += 1
         log_path = os.path.join(self.log_dir, self.repo, str(self.seq), "command.log")
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
@@ -337,7 +376,143 @@ class CheckRun:
         if er.log_path:
             entry["log"] = self.r.rel(er.log_path)
             self.inv.logs.append(entry["log"])
-        return entry
+        return entry, er.log_path, er.tmp_dir
+
+    # -- the flaky re-run phase (the one targeted re-run a failing unit
+    #    gets, verification's own rules — then the whole-command confirm)
+
+    def unit_spec(self, c: EngineCommand, d: str) -> CommandSpec:
+        """The CommandSpec a failing unit of c derives its re-run from —
+        verify's own shape: a nested root's command carries its cd, and
+        its declared re-run template behind the same cd."""
+        cd = "cd " + shell_quote(d) + " && " if d else ""
+        return CommandSpec(cmd=cd + c.cmd, timeout=timeout_ns(c),
+                           rerun_tmpl=(cd + c.rerun) if c.rerun else "",
+                           dir=d, inner=c.cmd if d else "")
+
+    def rerun_runner(self, timeout: float) -> "Callable[[str], RerunRun]":
+        """One derived re-run's runner: bash in the clone's root, the
+        command's own timeout, its log in the run's log dir."""
+        clone = os.path.join(self.capsule, "repos", self.repo)
+
+        def run(cmd: str) -> RerunRun:
+            self.seq += 1
+            log_path = os.path.join(self.log_dir, self.repo, str(self.seq), "command.log")
+            os.makedirs(os.path.dirname(log_path), exist_ok=True)
+            er = self.r.exec_to(runner.ExecSpec(argv=bash_argv(cmd), dir=clone, cwd="repos/" + self.repo,
+                                                 timeout=timeout, private_tmp=True), log_path)
+            return RerunRun(not_started=er.not_started, exit=er.exit, log_path=er.log_path,
+                            tmp_dir=er.tmp_dir,
+                            duration=(er.evidence.duration_ms / 1000.0) if er.evidence is not None else 0.0)
+
+        return run
+
+    def unit_entry(self, us: UnitState) -> Dict[str, Any]:
+        """One unit of the result's details — verify's own statuses, a
+        flaky carrying its re-run's log beside the first failure's."""
+        out: Dict[str, Any] = {"kind": us.kind, "name": us.name, "file": us.file,
+                               "status": "flaky" if us.flaky else ("fail" if us.failed else "pass")}
+        if us.flaky:
+            out["flaky"] = us.flaky
+            out["detail"] = "passed on a re-run at HEAD"
+            if us.pass_logs:
+                out["rerun_log"] = self.r.rel(us.pass_logs[0])
+                self.inv.logs.append(out["rerun_log"])
+        elif us.failed:
+            out["detail"] = us.note
+        if us.not_rerun:
+            out["not_rerun"] = True
+        return out
+
+    def rerun_units(self, entry: Dict[str, Any], c: EngineCommand, d: str,
+                    log_abs: str, tmp_dir: str) -> List[UnitState]:
+        """A red command's failing units, each re-run once by its derived
+        targeted re-run (verification's own locate + rerun_flaky, the one
+        implementation); a pass records the unit flaky. The command's
+        entry carries every unit, a still-failing one its note."""
+        clone = os.path.join(self.capsule, "repos", self.repo)
+        lines = normalize_output(output_lines(log_abs), clone, tmp_dir)
+        words, _ = shell_words(c.cmd)
+        parsed = parse_units(lines, failfast=has_go_test(words) and has_flag(words, "-failfast"))
+        race = race_seen(lines)
+        spec = self.unit_spec(c, d)
+        us_list: List[UnitState] = []
+        for u in parsed:
+            us = UnitState(unit=u)
+            locate(clone, spec, us, race)
+            us_list.append(us)
+        if not any(us.failed for us in us_list):
+            # the exit is non-zero but no unit of the output failed: the
+            # whole command is the unit — never re-runnable
+            w = whole_command(c.name, entry["exit_code"])
+            locate(clone, spec, w, race)
+            us_list.append(w)
+        for us in [x for x in us_list if x.failed]:
+            rerun_flaky(us, RERUNS, clone, self.rerun_runner(timeout_of(c)),
+                        lambda: self.r.remaining() > 1.0, "the fast checks' deadline",
+                        "the fast checks' deadline")
+        entry["units"] = [self.unit_entry(us) for us in us_list]
+        return us_list
+
+    def confirm(self, entry: Dict[str, Any], c: EngineCommand, directory: str, root_rel: str,
+                log_abs: str, us_list: List[UnitState]) -> None:
+        """Verification's whole-command confirmation, the one policy: a
+        red command every failing unit of which re-ran flaky is proven
+        whole — by its first-run output's completion proof, or by one whole
+        re-run exiting 0; anything else leaves it red, named. A command the
+        deadline cannot fit is not confirmed: it stays red."""
+        if entry.get("timed_out") or entry.get("not_started"):
+            return
+        if any(us.failing() for us in us_list):
+            return  # a failure no re-run explained: nothing to confirm
+        proof = completion_proof(harness_command(self.go_harness, c.cmd), False, log_abs, us_list)
+        if proof:
+            entry["complete"] = proof
+            return
+        if self.r.remaining() < 1.0:
+            entry["not_confirmed"] = ("not confirmed: the fast checks' deadline was spent before `%s`"
+                                      " could be re-run whole to show nothing else failed" % c.cmd)
+            return
+        dur = entry.get("duration_ms", 0) / 1000.0
+        if self.r.remaining() < dur:
+            entry["not_confirmed"] = ("not confirmed: the fast checks' deadline leaves less than the command's"
+                                       " first-run time (%s) to re-run `%s` whole"
+                                       % (duration.format(int(dur * duration.SECOND)), c.cmd))
+            return
+        self.seq += 1
+        log_path = os.path.join(self.log_dir, self.repo, str(self.seq), "command.log")
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        er = self.r.exec_to(runner.ExecSpec(argv=bash_argv(c.cmd), dir=directory, cwd=root_rel,
+                                             timeout=timeout_of(c), private_tmp=True), log_path)
+        entry["confirm_exit_code"] = er.exit
+        if er.timed_out:
+            entry["confirm_timed_out"] = True
+        if er.log_path:
+            entry["confirm_log"] = self.r.rel(er.log_path)
+            self.inv.logs.append(entry["confirm_log"])
+        if er.exit == 0:
+            entry["confirmed"] = c.cmd
+        elif er.not_started:
+            entry["not_confirmed"] = "not confirmed: the fast checks' deadline had passed before the re-run could start"
+        else:
+            entry["not_confirmed"] = ("after its located failures were explained (flaky), `%s` still exits %d:"
+                                      " a failure no unit locates (log %s)"
+                                      % (c.cmd, er.exit, entry.get("confirm_log", "")))
+
+    def flaky_phase(self, runs: List[Tuple[Dict[str, Any], EngineCommand, str, str, str, str, str]]) -> None:
+        """Every red command's failing units re-run once, then the whole
+        command confirmed — the entry carries the units, the flaky notes
+        and the confirmation."""
+        for entry, c, directory, root_rel, d, log_abs, tmp_dir in runs:
+            # a command its own timeout killed is red on its own — its
+            # confirm never runs either — and re-running units out of its
+            # partial output would only cost time and name flaky units
+            # beside a command that stays red (r1#N5)
+            if (entry.get("skipped") or entry.get("not_started") or entry.get("timed_out")
+                    or entry.get("exit_code") == 0 or not log_abs):
+                continue
+            us_list = self.rerun_units(entry, c, d, log_abs, tmp_dir)
+            self.confirm(entry, c, directory, root_rel, log_abs, us_list)
 
     def run(self) -> int:
         """The repo's whole check: the report's fast and scoped commands, in
@@ -353,10 +528,12 @@ class CheckRun:
             return self.inv.usage("repos/%s: HEAD unreadable: %s" % (self.repo, err))
         self.head = head.strip()
         self.inv.heads[self.repo] = self.head
+        self.go_harness = read_go_harness(clone)
 
         # every planned command: (the command, the directory it runs in —
-        # its report's root —, that root as the record names it)
-        commands: List[Tuple[EngineCommand, str, str]] = []
+        # its report's root —, that root as the record names it, the
+        # nested root it belongs to ("" = the repository root))
+        commands: List[Tuple[EngineCommand, str, str, str]] = []
         rep, ref, why = self.ask_engine(clone)
         self.details["engine"] = ref
         if rep is None:
@@ -369,7 +546,7 @@ class CheckRun:
         chosen = [c for c in rep.commands if c.phase in ("fast", "scoped")]
         self.details["reports"].append({"root": self.cwd_rel(clone), "mode": rep.mode,
                                         "commands": len(chosen)})
-        commands += [(c, clone, self.cwd_rel(clone)) for c in chosen]
+        commands += [(c, clone, self.cwd_rel(clone), "") for c in chosen]
         # every nested engine root the changed paths reach is a repository
         # of its own whatever the root report answered — the #24 shape has
         # the root conf force the full tier for the nested root's paths, and
@@ -385,19 +562,37 @@ class CheckRun:
             nchosen = [c for c in nrep.commands if c.phase in ("fast", "scoped")]
             self.details["reports"].append({"root": root_rel, "mode": nrep.mode,
                                             "commands": len(nchosen)})
-            commands += [(nested_command(d, c), directory, root_rel) for c in nchosen]
+            commands += [(nested_command(d, c), directory, root_rel, d) for c in nchosen]
         if not commands:
             self.inv.summary = ("repos/%s: the engine planned no command (stack %s, conf %s)"
                                 % (self.repo, gostr.quote(rep.stack), rep.conf))
             return 2
-        for c, directory, root_rel in commands:
+        # (the entry, its command, its directory, its root, its nested
+        # root, its log's absolute path, its private TMPDIR)
+        runs: List[Tuple[Dict[str, Any], EngineCommand, str, str, str, str, str]] = []
+        for c, directory, root_rel, d in commands:
             self.inv.say("repos/%s: `%s` (%s)" % (self.repo, c.cmd, c.phase))
-            entry = self.run_command(c, directory, root_rel)
+            entry, log_abs, tmp_dir = self.run_command(c, directory, root_rel)
             self.details["commands"].append(entry)
+            if not entry.get("skipped"):
+                runs.append((entry, c, directory, root_rel, d, log_abs, tmp_dir))
+        # the flaky phase: every red command's located failing units re-run
+        # once, then the whole command confirmed — a check green through a
+        # flaky re-run names it in its summary
+        self.flaky_phase(runs)
         red = [e for e in self.details["commands"]
-               if not e.get("skipped") and (e.get("timed_out") or e.get("exit_code") != 0)]
+               if not e.get("skipped") and (e.get("timed_out") or e.get("exit_code") != 0)
+               and not (e.get("confirmed") or e.get("complete"))]
         skipped = len([e for e in self.details["commands"] if e.get("skipped")])
         ran = len(self.details["commands"]) - skipped
+        flaky_notes: List[str] = []
+        for e in self.details["commands"]:
+            for u in e.get("units", []):
+                if u["status"] == "flaky":
+                    flaky_notes.append("%s (%s, first failure log %s)" % (u["name"], u["flaky"], e.get("log", "")))
+        flaky_note = ""
+        if flaky_notes:
+            flaky_note = ", %d unit(s) flaky on their one re-run: %s" % (len(flaky_notes), "; ".join(flaky_notes))
         if red:
             e = red[0]
             what = "was killed at its timeout" if e.get("timed_out") else "exited %d" % e["exit_code"]
@@ -406,9 +601,11 @@ class CheckRun:
                 self.inv.summary += " (log %s)" % e["log"]
             if len(red) > 1:
                 self.inv.summary += "; %d command(s) red in all" % len(red)
+            if flaky_note:
+                self.inv.summary += flaky_note
             return 1
-        self.inv.summary = "repos/%s: %d command(s) ran and exited 0%s" % (
-            self.repo, ran, (", %d skipped" % skipped) if skipped else "")
+        self.inv.summary = "repos/%s: %d command(s) ran and exited 0%s%s" % (
+            self.repo, ran, (", %d skipped" % skipped) if skipped else "", flaky_note)
         return 0
 
 

@@ -128,6 +128,7 @@ from pfstep import progress  # noqa: E402
 from pfstep import targetbranch  # noqa: E402
 from pfstep.analysis import Analysis, AnalysisDecl, read_analysis, static_problem  # noqa: E402
 from pfstep.carries import file_carries, glob_match  # noqa: E402
+from pfstep.completion import completion_proof, harness_command, read_go_harness  # noqa: E402
 from pfstep.deadline import default_deadline_for  # noqa: E402
 from pfstep.engine import TIER_FULL, TIER_LIGHT, EngineCommand, EngineReport, ReportError, choose, decode_report  # noqa: E402
 from pfstep.engine import default_engine, nested_roots, reached_roots  # noqa: E402
@@ -197,11 +198,6 @@ BROWSER_CRASH_NOTE = "browser crash"
 GENERIC_TEST_BASE = ("*_test.go", "*.test.*", "*.spec.*", "test_*.py", "*_test.py")
 
 _S = gostr.SPACE
-_HARNESS_RAN = re.compile(r"FAIL\te2e\t(\d+)/(\d+) tests ran(?:, (\d+) excluded by E2E_SKIP)?,", re.ASCII)
-_SUMMARY_LINE = re.compile(r"(PASS|FAIL) ([^\t\n\f\r ]+) [^\t\n\f\r ]+s\Z", re.ASCII)
-_SUMMARY_TALLY = re.compile(r"(\d+)/(\d+) passed\b", re.ASCII)
-_SUMMARY_HEADER = re.compile(r"===== summary =====\Z", re.ASCII)
-_SUITES_HEADER = re.compile(r"e2e/all: (\d+) suite\(s\)", re.ASCII)
 
 
 class Usage(Exception):
@@ -343,13 +339,9 @@ class RepoRun:
     box: Optional[container.Box] = None
 
     def is_harness(self, cmd: str) -> bool:
-        """Whether cmd runs the declared Go harness directly: assignments,
-        then sh or bash, then exactly the harness path."""
-        if self.go_harness == "":
-            return False
-        words, simple = shell_words(cmd)
-        cw, ci = command_word(words)
-        return simple and cw in ("sh", "bash") and len(words) == ci + 2 and gostr.clean_rel(words[ci + 1]) == self.go_harness
+        """Whether cmd runs the declared Go harness directly (the one
+        implementation, pfstep.completion)."""
+        return harness_command(self.go_harness, cmd)
 
 
 # ---- helpers ---------------------------------------------------------------
@@ -383,21 +375,6 @@ def is_test_file(p: str, globs: Sequence[str]) -> bool:
     if any(d in ("test", "tests") for d in parts[:-1]):
         return True
     return any(glob_match(g, p) or glob_match(g, base) for g in globs)
-
-
-def read_go_harness(repo_dir: str) -> str:
-    """The repo conf's ``go_harness=`` declaration (the last one wins)."""
-    try:
-        with open(os.path.join(repo_dir, ".polyforge", "verify-scope.conf"), encoding="utf-8", errors="replace") as f:
-            raw = f.read()
-    except OSError:
-        return ""
-    h = ""
-    for line in raw.split("\n"):
-        t = gostr.trim_space(line)
-        if t.startswith("go_harness="):
-            h = gostr.clean_rel(gostr.trim_space(t[len("go_harness="):]))
-    return h
 
 
 # ---- the run ---------------------------------------------------------------
@@ -1135,7 +1112,7 @@ class Verification:
             if pre:
                 form, note = skip_form(cr)
                 if note:
-                    proof = completion_proof(cr)
+                    proof = completion_proof(cr.harness, cr.timed_out, cr.log_path, cr.units)
                     if proof:
                         cr.completion = proof + " (the light tier carries no bar to a re-run, so its pre-existing failure needs no skip form)"
                         continue
@@ -1145,7 +1122,7 @@ class Verification:
                     cr.units.append(residual)
                     continue
                 cmd = form
-            proof = completion_proof(cr)
+            proof = completion_proof(cr.harness, cr.timed_out, cr.log_path, cr.units)
             if proof:
                 cr.completion = proof
                 continue
@@ -1576,74 +1553,6 @@ def skip_form(cr: CmdRun) -> Tuple[str, str]:
         return cr.cmd + "".join(" --deselect " + shell_quote(n) for n in names), ""
     return cr.cmd, ("repos/%s `%s` carries the pre-existing failure(s) %s but has no skip switch verify-run can apply: it"
                     " is listed as run, its failure(s) named here" % (cr.repo, cr.cmd, ", ".join(names)))
-
-
-def last_line(lines: Sequence[str]) -> str:
-    """The last non-empty output line (the run's own `# pf verify-run:`
-    notes skipped)."""
-    for ln in reversed(lines):
-        if gostr.trim_space(ln) != "" and not ln.startswith("# pf verify-run:"):
-            return ln
-    return ""
-
-
-def completion_proof(cr: CmdRun) -> str:
-    """How cr's first-run output proves its suite ran to completion ("" =
-    it does not): the declared Go harness's trailer, or an aggregate e2e
-    runner's closing summary."""
-    if cr.timed_out or cr.log_path == "":
-        return ""
-    lines = output_lines(cr.log_path)
-    if not cr.harness:
-        return aggregate_completion(cr, lines)
-    m = _HARNESS_RAN.match(last_line(lines))
-    if m is None:
-        return ""
-    ran, listed = int(m.group(1)), int(m.group(2))
-    excluded = int(m.group(3)) if m.group(3) else 0
-    if ran + excluded != listed:
-        return ""
-    return "the harness trailer shows all %d listed tests ran or were excluded" % listed
-
-
-def aggregate_completion(cr: CmdRun, lines: Sequence[str]) -> str:
-    """How an aggregate e2e runner's summary proves every suite it announced
-    settled, each failed one a located failing unit of cr ("" = no proof)."""
-    at, announced = -1, -1
-    for i, ln in enumerate(lines):
-        if _SUMMARY_HEADER.match(ln):
-            at = i
-    if at < 0:
-        return ""
-    for ln in lines[:at]:
-        m = _SUITES_HEADER.match(ln)
-        if m:
-            announced = int(m.group(1))
-    if announced < 0:
-        return ""
-    failed = {u.name for u in cr.units if u.kind == KIND_E2E_SUITE and u.failed}
-    suites = passed = 0
-    for ln in lines[at + 1:]:
-        m = _SUMMARY_LINE.match(ln)
-        if m:
-            suites += 1
-            if m.group(1) == "PASS":
-                passed += 1
-            else:
-                s = m.group(2)
-                if s.startswith("e2e/"):
-                    s = s[len("e2e/"):]
-                if "e2e/" + s not in failed:
-                    return ""  # a failed suite the output did not locate
-            continue
-        m = _SUMMARY_TALLY.match(ln)
-        if m is None:
-            continue
-        p, n = int(m.group(1)), int(m.group(2))
-        if n == 0 or n != suites or n != announced or p != passed:
-            return ""
-        return "the runner's summary shows all %d suites it announced settled (%d passed)" % (n, p)
-    return ""
 
 
 def command_check(cr: CmdRun) -> Dict[str, Any]:
