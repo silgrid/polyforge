@@ -179,7 +179,7 @@ func TestReleaseBundleShape(t *testing.T) {
 	}{
 		{"release", []string{"You are the lane's first step: no upstream hand-off precedes you."}},
 		{"verify", []string{"`artifacts/release-record.json` (the release step's record)",
-			"the record must parse as JSON and name `version` and `commit`; one that does not is a `fail` naming what is missing"}},
+			"the record must parse as JSON and name `version`, `commit`, `batch` and `pins`, and `pins` must name the record's `repo`; one that does not is a `fail` naming what is missing"}},
 		{"deploy", []string{"Read `artifacts/verified-version.json`", "If the file is missing, unreadable or empty, hand off `fail`.",
 			"`V` must equal the `version` of the release step's record, `artifacts/release-record.json`. That value is a check, never a source.",
 			"is a `fail` (production `not_changed`) naming both values: nothing is deployed"}},
@@ -217,7 +217,7 @@ func TestReleaseBundleShape(t *testing.T) {
 	for _, needle := range []string{
 		"`.polyforge/release.sh`", "PF-RELEASE-AMBIGUOUS_OWNER", "--verify", "git fetch origin",
 		"git ls-remote --tags origin", "verbatim", "artifacts/release-record.json",
-		`set -o pipefail; cd repos/<owner> && .polyforge/release.sh [<bump>] 2>&1 | tee ../../artifacts/release.log`,
+		`set -o pipefail; cd repos/<owner> && .polyforge/release.sh [<bump>] --pins ../../artifacts/release-pins.json 2>&1 | tee ../../artifacts/release.log`,
 		"120 minutes", "heavy-run admission",
 		// the preflight runs under the same PATH (the resume-path audit's
 		// and the already-released guard's text is

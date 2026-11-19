@@ -165,7 +165,7 @@ func TestW111ReleaseStepsAwaitInsideOneCall(t *testing.T) {
 		// pipefail first: `&&` binds tighter than `;`, so a failed cd must
 		// not run the pipeline from the capsule root without it
 		{"deploy", `set -o pipefail; cd repos/<owner> && .polyforge/deploy.sh V --confirm V 2>&1 | tee ../../artifacts/deploy.log`, "60 minutes"},
-		{"release", `set -o pipefail; cd repos/<owner> && .polyforge/release.sh [<bump>] 2>&1 | tee ../../artifacts/release.log`, "120 minutes"},
+		{"release", `set -o pipefail; cd repos/<owner> && .polyforge/release.sh [<bump>] --pins ../../artifacts/release-pins.json 2>&1 | tee ../../artifacts/release.log`, "120 minutes"},
 	} {
 		bundle := filepath.Join(shippedWorkflowsDir, "release")
 		def, err := readShippedDefinition(t, bundle, c.step)

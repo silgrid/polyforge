@@ -722,3 +722,64 @@ image generation — every capsule and every integrate batch has its own
 path — and each start still prunes only its own repo's older
 generations; the disk cost is the price of the isolation, and no time-
 or count-based reclamation ships with it.
+
+## v0.2.4, the release lane ships the green integrate batch (polyforge#154)
+
+The release lane no longer releases a branch head: its object is the
+project's most recent green integrate batch, resolved by the lane's own
+command (`workflows/_shared/scripts/release.py`, reading the project's
+batches through the step's hub) and refused — before any version is
+claimed, with a named code — when there is no green batch
+(`PF-RELEASE-NO_GREEN_BATCH`), when the owner repo's pinned commit
+carries two or more release tags or a release tag appeared elsewhere
+after the pre-release list was recorded (`PF-RELEASE-ALREADY_RELEASED`),
+when a batch pin left the default branch (`PF-RELEASE-PIN_OFF_DEFAULT`),
+when the batch names no commit for the owner repo
+(`PF-RELEASE-UNPINNED_OWNER`) or when two repos both carry the release
+procedure (`PF-RELEASE-AMBIGUOUS_OWNER`).
+
+What a project must change — its own `.polyforge/release.sh`:
+
+- Accept `[bump] --pins <file>`: the pins file is the batch's whole
+  group, `{"batch": "<id>", "repos": {"<repo>": "<sha>", ...}}` (plus
+  `"red_batches_after": [...]` when red batches closed after it). The
+  script releases ITS repo's pinned commit: require the clone to sit at
+  it (HEAD is one of the pins' shas) and require it on the origin
+  default branch's history — a pinned commit the branch has moved past
+  still releases, exactly the shape the old origin-head release could
+  not. A run without `--pins` must refuse, never fall back to a head.
+- Declare the convention: the script's `--help` output must contain
+  `--pins`. The lane probes it and refuses a script that does not
+  declare it with `PF-RELEASE-PROCEDURE_CONTRACT`, before the script
+  runs — an old-convention script would read the pins file as a bump
+  argument or ignore it and release a branch head, so it is never
+  handed one.
+- Stop running a test gate: the batch's own full-gate run is the test
+  evidence, and the release notes name the batch (polyforge's own script
+  dropped its green-tag check and its containerized gate; what it kept
+  is the machine preflight, the design-doc cross-reference gate, the
+  PR-only and workflow-contract checks and the dependency audit after
+  the build).
+- The resume contract keeps its shape: a pinned commit that already
+  carries exactly one release tag resumes that version, whoever claimed
+  it — the lane adopts a complete one and finishes a partial one, and the
+  release record carries the batch's id and its whole pins for `verify`.
+
+A project that does not change its script cannot release after the
+daemon upgrade that ships this: the resolver still finds the green
+batch, but the procedure-contract probe (`--help` lacking `--pins`)
+refuses with `PF-RELEASE-PROCEDURE_CONTRACT`, nothing built or published.
+Make the four changes above and file the release again.
+
+The order cuts both ways, and the first release across it is always a
+hand run. A daemon still on the pre-#154 release lane calls the
+procedure without `--pins` (from the origin head, per its old step
+text), so a script changed first refuses it (`--pins <file> is
+required`) until the daemon's lane text carries the resolver — which
+arrives with the polyforge release that ships this change, installed by
+`pf daemon ensure`. In that window no release goes through the lane, by
+design; cut the release by hand: take the latest green batch's pins
+(`{"batch": "<id>", "repos": {"<repo>": "<sha>", ...}}`), sit the owner
+repo at its pin and run `.polyforge/release.sh [patch] --pins <file>`
+yourself (the same way polyforge's own first release across this change
+is cut — the reference page's "Two halves" paragraph says so).

@@ -1162,6 +1162,37 @@ hold no credential.
   thresholds with their sources, and a per-repository error entry when a
   clone cannot be read. Exit 0 whatever an entry says (each named), 2
   when no `--repo` is named.
+- `release.py --capsule DIR [--batches FILE] [--pre-release FILE]
+  [--pins-out FILE]` (the release lane's script, polyforge#154) is the
+  release step's green-batch resolver: the release object is the
+  project's most recent green integrate batch — its pinned commits,
+  never a branch head. It resolves the owner (the one repo of the
+  capsule carrying `.polyforge/release.sh`), reads every wrapped batch
+  of the integrate lane through the step's hub (`pf --json step hub
+  list`, held to the release step's `hub` verbs; `--batches` names a
+  snapshot file instead), picks the green batch with the newest
+  `closed_at` and answers what the lane does: exit 0, verdict pass and
+  decision `fresh` (the owner pin carries no release tag) or `resume`
+  with its `version` (the owner pin carries exactly one `v*` tag — the
+  same release resumed, whoever claimed it, never a second version of
+  one commit), writing the pins file `--pins-out` names —
+  `{batch, repos: {<repo>: <sha>}}, red_batches_after` when red batches
+  closed after the green one (the release notes name them) — the
+  procedure's whole input (`--pins`); exit 1, verdict fail, a named
+  refusal whose summary begins with the code: `PF-RELEASE-NO_GREEN_BATCH`
+  (nothing green to release), `PF-RELEASE-ALREADY_RELEASED` (two or
+  more release tags on the owner pin, or a release tag the recorded
+  pre-release list lacks on a commit that is not the owner pin),
+  `PF-RELEASE-PIN_OFF_DEFAULT` (a batch pin no longer on its repo's
+  origin default branch), `PF-RELEASE-UNPINNED_OWNER` (the batch's main
+  names no commit for the owner), `PF-RELEASE-AMBIGUOUS_OWNER` (two or
+  more owner candidates); exit 2, not judged: an unreadable input — the
+  hub, a batch record whose `main` names a repo no clone is of or whose
+  shas are not full commit ids, a fetch, an origin default branch that
+  cannot be resolved. A capsule repo the batch does not cover is not
+  part of the release (named in the details), and the pre-release list
+  (`--pre-release`, default `<capsule>/artifacts/pre-release-tags.txt`)
+  is only read, for its guard; `verify`'s immutability check keeps it.
 
 The verification-scope engine is the workflow's too:
 `workflows/_shared/scripts/verify-scope`, with its dependency-audit helper

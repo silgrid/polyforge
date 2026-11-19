@@ -409,18 +409,20 @@ items that merged.
   change runs the subtree conf's light report (its fast gates and the suites
   whose `carries:` meet it), and the rest of the package's bar is the
   integration run's.
-- **The release gate.** This conf's full tier, run inside the image built
-  from `.polyforge/Dockerfile.verify` — or, when the step's `image`
-  parameter names one, inside that prepared image — is also the release's test gate: one
-  definition, run by the workflow script `gate.py` (`python3
+- **The integrate gate and the release.** This conf's full tier, run inside
+  the image built from `.polyforge/Dockerfile.verify` — or, when the step's
+  `image` parameter names one, inside that prepared image — is the one
+  gate definition, run by the workflow script `gate.py` (`python3
   workflows/_shared/scripts/gate.py --isolation container` from the
-  clone's root), reused by the release when the released commit
-  carries a green tag — written only by `gate.py --mark-green` after a
-  pass — for the same gate id and plan digest (`tools/gate-id`,
-  `tools/green-tag check`). This repository gates itself: its tree
+  clone's root), whose pass writes the green tag — written only by
+  `gate.py --mark-green`, for the gate id and plan digest
+  (`tools/gate-id`, `tools/green-tag check`). The release no longer runs
+  it (polyforge#154): a green batch's own gate run is the test evidence
+  its pins ship with, and the release reads no green tag. This repository
+  gates itself: its tree
   carries the engine and the gate id the gate falls back to for a
   repository that carries neither. A change to a gate line of this conf or to the
-  Dockerfile is a change to the release gate. `make test` is a developer
+  Dockerfile is a change to what a green tag means. `make test` is a developer
   subset and gates nothing. The contract is in
   [docs/reference/release.md](reference/release.md#the-test-gate).
 - **CI.** Two GitHub workflows, reachable by any push to `main` and any

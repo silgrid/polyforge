@@ -1,3 +1,5 @@
+// carries: .polyforge/release.sh, test/w121_release_gh_repo_repro_test.go
+
 package test
 
 // w121_release_gh_repo_repro_test.go: a bug repro.
@@ -56,7 +58,12 @@ func w121RunWithoutGHRepo(t *testing.T, w *relWorld, extra []string, args ...str
 		}
 		kept = append(kept, kv)
 	}
-	c := exec.Command("sh", append([]string{w.script}, args...)...)
+	argv := append([]string{w.script}, args...)
+	pinned := len(args) == 0 || (args[0] != "--verify" && args[0] != "--help" && args[0] != "-h")
+	if pinned {
+		argv = append(argv, "--pins", w.relPins(relGit(t, w.work, "rev-parse", "HEAD"), nil, nil))
+	}
+	c := exec.Command("sh", argv...)
 	c.Dir = w.work
 	c.Env = kept
 	out, err := c.CombinedOutput()
@@ -73,7 +80,7 @@ func TestW121ReleaseGHRepoFailLoud(t *testing.T) {
 	}
 	t.Run("release mode uses the internal repo when unset", func(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.2.0"}, nil)
-		out, err := w121RunWithoutGHRepo(t, w, nil)
+		out, err := w121RunWithoutGHRepo(t, w, nil) // the helper pins HEAD itself
 		if err != nil {
 			t.Fatalf("release with RELEASE_GH_REPO unset must use the internal default: %v\n%s", err, out)
 		}
@@ -90,7 +97,7 @@ func TestW121ReleaseGHRepoFailLoud(t *testing.T) {
 
 	t.Run("verify mode uses the internal repo when unset", func(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.2.0"}, nil)
-		if out, err := w.run(nil); err != nil {
+		if out, err := w.runPinned(nil); err != nil {
 			t.Fatalf("release: %v\n%s", err, out)
 		}
 		_ = os.Remove(filepath.Join(w.fakeRel, "repos.log"))
