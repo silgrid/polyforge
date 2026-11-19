@@ -59,6 +59,84 @@ export function applyToCanSubmit(value: HarnessApplyToSelection, targets: readon
   return applyToTargets(value, targets).length > 0;
 }
 
-export function HarnessApplyTo(_props: HarnessApplyToProps): null {
-  return null;
+/**
+ * The 「应用到」 component (AC3): all harnesses, or the specific selection.
+ * A target change calls `onChange` alone — never a save (Q6 A: choosing all
+ * or specific only changes the target); `onSubmit` is the user's one click,
+ * offered only while the selection names at least one target; the parent
+ * owns the selection and answers per target, whose last round renders as
+ * rows — so a failure keeps the draft and is never folded into a success.
+ * Presentational like SettingsUi.tsx: every word a prop, no state of its own.
+ */
+export function HarnessApplyTo({
+  texts,
+  targets,
+  value,
+  busy = false,
+  results = null,
+  onChange,
+  onSubmit,
+}: HarnessApplyToProps) {
+  const canSubmit = applyToCanSubmit(value, targets);
+  const name = `harness-apply-to-${texts.title.replace(/\W+/g, "-")}`;
+  return (
+    <div className="harness-apply-to" data-mode={value.mode}>
+      <h3 className="settings-general-heading">{texts.title}</h3>
+      <div role="radiogroup" aria-label={texts.title} className="harness-apply-to-modes">
+        <label className="harness-apply-to-mode">
+          <input
+            type="radio"
+            name={name}
+            checked={value.mode === "all"}
+            onChange={() => onChange({ mode: "all", selected: [...value.selected] })}
+          />
+          <span>{texts.all}</span>
+        </label>
+        <label className="harness-apply-to-mode">
+          <input
+            type="radio"
+            name={name}
+            checked={value.mode === "specific"}
+            onChange={() => onChange({ mode: "specific", selected: [...value.selected] })}
+          />
+          <span>{texts.specific}</span>
+        </label>
+      </div>
+      {value.mode === "specific" && (
+        <ul className="harness-apply-to-targets">
+          {targets.map((target) => (
+            <li key={target.harness} data-harness={target.harness}>
+              <label className={target.disabled ? "harness-apply-to-target is-disabled" : "harness-apply-to-target"}>
+                <input
+                  type="checkbox"
+                  checked={value.selected.includes(target.harness)}
+                  disabled={target.disabled}
+                  onChange={(event) => onChange({
+                    mode: "specific",
+                    selected: event.target.checked
+                      ? [...value.selected, target.harness]
+                      : value.selected.filter((harness) => harness !== target.harness),
+                  })}
+                />
+                <span>{target.label}</span>
+              </label>
+              {target.disabled && target.disabledReason && (
+                <span className="harness-apply-to-target-reason">{target.disabledReason}</span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      <button type="button" className="config-button" onClick={onSubmit} disabled={busy || !canSubmit}>
+        {texts.submit}
+      </button>
+      {results !== null && results.length > 0 && (
+        <ul className="harness-apply-to-results">
+          {results.map((result) => (
+            <li key={result.harness} data-harness={result.harness} data-ok={result.ok}>{result.text}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
