@@ -2,7 +2,8 @@
 //
 //	dist/workstation/containers/*, dist/workstation/seccomp.json,
 //	dist/workstation/seccomp.json.sha256, dist/workstation/README.md,
-//	dist/workstation/compose.yaml, .dockerignore, .polyforge/verify-scope.conf
+//	dist/workstation/compose.yaml, dist/workstation/smoke.sh, .dockerignore,
+//	.polyforge/verify-scope.conf
 package test
 
 // w535_workstation_image_test.go — polyforge#161 (84-image): the
@@ -470,74 +471,143 @@ func TestWorkstationCompose(t *testing.T) {
 	}
 }
 
-// TestWorkstationSmoke — the smoke script's static shape: the three
-// subcommands the acceptance proofs name, the parameter checks AC1
-// demands, and the bounded-poll discipline (never a fixed delay).
-// The script's behaviour is driven for real by
-// TestWorkstationImageEngine below on a machine with an engine, and by
-// the verification gate through the same script.
+// TestWorkstationSmoke — the smoke script's boot behaviour, driven
+// through a stub docker CLI (review round 2: the first cut asserted
+// source text, which its own test-quality record did not claim and
+// review judged weakened; this run is what u3's units.json record now
+// names). The stub answers version/inspect/exec/compose from a
+// scenario directory, and enforces compose's required-interpolation
+// contract at `compose up` — a missing PI_WEB_PASSWORD refuses the way
+// the compose file's ${PI_WEB_PASSWORD:?…} does. Every scenario runs
+// WITHOUT PI_WEB_PASSWORD in the environment, so the pass case also
+// proves the smoke carries its own fixed default (settled Q5).
 func TestWorkstationSmoke(t *testing.T) {
 	root := w535Root(t)
 	script := filepath.Join(root, "dist/workstation/smoke.sh")
-	body := w535Deliverable(t, "dist/workstation/smoke.sh")
 	if err := exec.Command("sh", "-n", script).Run(); err != nil {
 		t.Fatalf("polyforge#161: smoke.sh must parse as POSIX sh: %v", err)
 	}
-	// the dispatch: every acceptance proof's entry point.
-	for _, sub := range []string{"boot", "podman-verify", "env"} {
-		if !strings.Contains(body, sub) {
-			t.Fatalf("polyforge#161: smoke.sh must dispatch the %q subcommand", sub)
+
+	// w535SmokeBoot runs `boot --no-aihub` against one scenario and
+	// answers its combined output and exit status. The scenario mutates
+	// the stub's answers; PI_WEB_PASSWORD is never set, so the boot
+	// must supply the default itself.
+	w535SmokeBoot := func(mutate func(scenario map[string]any)) (string, error) {
+		scenario := map[string]any{
+			"caps":     []string{"CAP_SYS_ADMIN", "CAP_NET_ADMIN"},
+			"seccomp":  w535JSONAny(t, w535Deliverable(t, "dist/workstation/seccomp.json")),
+			"cgroupns": "private",
+			"pid1":     "catatonit\n",
+			"subtree":  "cpu io memory pids\n",
 		}
-	}
-	if !strings.Contains(body, "set -eu") {
-		t.Fatal("polyforge#161: smoke.sh must run under set -eu — a missed check must fail the run, not continue")
-	}
-	if !strings.Contains(body, "poll_until") {
-		t.Fatal("polyforge#161: smoke.sh must poll with a deadline (poll_until), never a fixed delay before asserting a settling state")
-	}
-	// the fixed smoke test password (settled Q5).
-	if !strings.Contains(body, "pf-workstation-smoke-test-password") {
-		t.Fatal("polyforge#161: smoke.sh must default PI_WEB_PASSWORD to the fixed test password (settled Q5)")
-	}
-	// AC1's parameter checks: the cap set as a set, the seccomp compare
-	// by content, the cgroup namespace, and the forbidden mounts.
-	for _, pin := range []string{
-		"CapAdd", "SecurityOpt", "CgroupnsMode", "Privileged",
-		"docker.sock", "/proc/1/comm", "catatonit",
-	} {
-		if !strings.Contains(body, pin) {
-			t.Fatalf("polyforge#161: smoke.sh must check %s — an AC1 parameter the boot must measure", pin)
+		if mutate != nil {
+			mutate(scenario)
 		}
-	}
-	// the boot modes and their halves.
-	for _, pin := range []string{
-		"--no-aihub", "--with-aihub", "pf aihub", "/login", "--json queue",
-	} {
-		if !strings.Contains(body, pin) {
-			t.Fatalf("polyforge#161: smoke.sh must carry %q — a boot check the acceptance names", pin)
+		dir := t.TempDir()
+		seccompInline, err := json.Marshal(scenario["seccomp"])
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	// AC3's env half: the PI_TEST_* exclusion, the pass-through probe,
-	// the non-inheritance sentinel and the anonymous /api answer.
-	for _, pin := range []string{
-		"PI_TEST_", "PI_WEB_APP_NAME", "SENTINEL", "/api", "401", "environ",
-	} {
-		if !strings.Contains(body, pin) {
-			t.Fatalf("polyforge#161: smoke.sh's env subcommand must check %q", pin)
+		inspect, err := json.Marshal(map[string]any{
+			"HostConfig": map[string]any{
+				"CapAdd":       scenario["caps"],
+				"SecurityOpt":  []string{"seccomp=" + string(seccompInline)},
+				"CgroupnsMode": scenario["cgroupns"],
+				"Privileged":   false,
+				"Devices":      []any{},
+				"Binds":        []string{"workstation_polyforge-data:/root/.local/share/polyforge:rw", "workstation_podman-storage:/var/lib/containers/storage:rw"},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	// AC2's podman-verify half: both image paths, the limits, the three
-	// modules, the cleanliness.
-	for _, pin := range []string{
-		"Dockerfile.verify", "build_image", "--pull=never",
-		"memory.max", "pids.max", "tests.test_container_docker",
-		"tests.test_gate_docker", "tests.test_cache_volume",
-		"PF_CONTAINER_ENGINE", "conmon", "skipped",
-	} {
-		if !strings.Contains(body, pin) {
-			t.Fatalf("polyforge#161: smoke.sh's podman-verify subcommand must carry %q", pin)
+		if err := os.WriteFile(filepath.Join(dir, "inspect.json"), inspect, 0o644); err != nil {
+			t.Fatal(err)
 		}
+		if err := os.WriteFile(filepath.Join(dir, "pid1.txt"), []byte(scenario["pid1"].(string)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "subtree.txt"), []byte(scenario["subtree"].(string)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		bin := t.TempDir()
+		if err := os.Symlink(filepath.Join(root, "test", "testdata", "workstation-smoke-stub", "docker"), filepath.Join(bin, "docker")); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("sh", script, "boot", "--no-aihub")
+		cmd.Env = []string{
+			"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"),
+			"HOME=" + os.Getenv("HOME"),
+			"W535_SMOKE_SCENARIO=" + dir,
+		}
+		out, err := cmd.CombinedOutput()
+		return string(out), err
 	}
+
+	t.Run("the measured parameters pass, without a PI_WEB_PASSWORD set", func(t *testing.T) {
+		out, err := w535SmokeBoot(nil)
+		if err != nil {
+			t.Fatalf("the boot of the measured minimal parameters must pass (the smoke supplies its own default password): %v:\n%s", err, out)
+		}
+		if !strings.Contains(out, "boot --no-aihub: PASS") {
+			t.Fatalf("the passing boot must print its PASS line:\n%s", out)
+		}
+	})
+	t.Run("one extra capability fails the boot", func(t *testing.T) {
+		out, err := w535SmokeBoot(func(scenario map[string]any) {
+			scenario["caps"] = []string{"CAP_SYS_ADMIN", "CAP_NET_ADMIN", "CAP_SYS_PTRACE"}
+		})
+		if err == nil {
+			t.Fatalf("a boot with a third capability must fail — the cap set is a set, never a containment:\n%s", out)
+		}
+		if !strings.Contains(out, "CAP_SYS_PTRACE") {
+			t.Fatalf("the failure must name the extra capability:\n%s", out)
+		}
+	})
+	t.Run("a drifted seccomp profile fails the boot", func(t *testing.T) {
+		out, err := w535SmokeBoot(func(scenario map[string]any) {
+			scenario["seccomp"] = w535JSONAny(t, `{"defaultAction":"SCMP_ACT_ERRNO","syscalls":[]}`)
+		})
+		if err == nil {
+			t.Fatalf("a boot with a seccomp profile that is not the pinned file must fail:\n%s", out)
+		}
+		if !strings.Contains(out, "seccomp content hash") {
+			t.Fatalf("the failure must name the seccomp content mismatch:\n%s", out)
+		}
+	})
+	t.Run("a wrong PID 1 fails the boot", func(t *testing.T) {
+		out, err := w535SmokeBoot(func(scenario map[string]any) {
+			scenario["pid1"] = "sh\n"
+		})
+		if err == nil {
+			t.Fatalf("a boot whose PID 1 is not catatonit must fail:\n%s", out)
+		}
+		if !strings.Contains(out, "PID 1 is sh") {
+			t.Fatalf("the failure must name what PID 1 is:\n%s", out)
+		}
+	})
+	t.Run("a missing memory controller fails the boot", func(t *testing.T) {
+		out, err := w535SmokeBoot(func(scenario map[string]any) {
+			scenario["subtree"] = "cpu io pids\n"
+		})
+		if err == nil {
+			t.Fatalf("a boot without the memory controller must fail — the verification limits need it:\n%s", out)
+		}
+		if !strings.Contains(out, "memory controller") {
+			t.Fatalf("the failure must name the missing controller:\n%s", out)
+		}
+	})
+}
+
+// w535JSONAny answers one JSON document as a plain any (the scenario
+// map carries it; json.Marshal compacts it again on the way out).
+func w535JSONAny(t *testing.T, doc string) any {
+	t.Helper()
+	var out any
+	if err := json.Unmarshal([]byte(doc), &out); err != nil {
+		t.Fatalf("polyforge#161: the document must be JSON: %v", err)
+	}
+	return out
 }
 
 // TestWorkstationImageEngine — the real-engine half of the owner's

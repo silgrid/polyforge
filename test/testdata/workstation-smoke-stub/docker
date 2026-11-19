@@ -1,0 +1,82 @@
+#!/bin/sh
+# test/testdata/workstation-smoke-stub/docker — the stub docker CLI
+# TestWorkstationSmoke drives dist/workstation/smoke.sh with
+# (polyforge#161, review round 2). It answers every command the smoke's
+# boot path makes from the scenario directory $W535_SMOKE_SCENARIO
+# (inspect.json, pid1.txt, subtree.txt), and enforces compose's
+# required-interpolation contract at `compose up`: a missing
+# PI_WEB_PASSWORD refuses exactly the way the compose file's
+# ${PI_WEB_PASSWORD:?…} does — the default the smoke itself must carry.
+set -eu
+
+dir=${W535_SMOKE_SCENARIO:?the scenario directory is required}
+
+if [ "${1:-}" = version ]; then
+	echo 29.9.2-stub
+	exit 0
+fi
+if [ "${1:-}" = inspect ]; then
+	shift
+	case "${1:-}" in
+	-f)
+		if [ "$2" = "{{.State.Running}}" ]; then
+			if [ -f "$dir/not-running" ]; then
+				echo false
+			else
+				echo true
+			fi
+			exit 0
+		fi
+		exit 0
+		;;
+	esac
+	# the full inspect: the scenario's parameters
+	cat "$dir/inspect.json"
+	exit 0
+fi
+if [ "${1:-}" = exec ]; then
+	args="$*"
+	case "$args" in
+	*"/proc/1/comm"*)
+		cat "$dir/pid1.txt"
+		;;
+	*"/sys/fs/cgroup/cgroup.subtree_control"*)
+		cat "$dir/subtree.txt"
+		;;
+	*"[p]f supervise"*)
+		exit 0
+		;;
+	*"[p]f aihub"*)
+		if [ -f "$dir/aihub-running" ]; then
+			exit 0
+		fi
+		exit 1
+		;;
+	esac
+	exit 0
+fi
+if [ "${1:-}" = compose ]; then
+	verb=""
+	# shellcheck disable=SC2124
+	for a in "$@"; do
+		case "$a" in
+		up | ps | down) verb=$a ;;
+		esac
+	done
+	case "$verb" in
+	up)
+		# compose's own refusal shape: the required variable is missing
+		if [ -z "${PI_WEB_PASSWORD:-}" ]; then
+			echo "stub docker: required variable PI_WEB_PASSWORD is missing" >&2
+			exit 1
+		fi
+		;;
+	ps)
+		echo stub-workstation-container-id
+		exit 0
+		;;
+	esac
+	exit 0
+fi
+echo "stub docker: unsupported command: $*" >&2
+exit 1
