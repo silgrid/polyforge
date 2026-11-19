@@ -112,8 +112,12 @@ func TestInstallEmptyVolume(t *testing.T) {
 	if fi.Mode().Perm()&0o111 == 0 {
 		t.Errorf("the installed pf is not executable (mode %s)", fi.Mode().Perm())
 	}
-	if state := rootState(t, root); strings.Contains(state, StagingDirname+":") && !strings.HasSuffix(state, StagingDirname+":\n") {
-		t.Errorf("staging keeps entries after the install:\n%s", state)
+	if entries, err := os.ReadDir(filepath.Join(root, StagingDirname)); err == nil && len(entries) > 0 {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("staging keeps entries after the install: %s", strings.Join(names, ","))
 	}
 }
 
