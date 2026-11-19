@@ -143,6 +143,8 @@ export interface SkillRef {
 /** The skills concept. */
 export interface SkillsPayload {
   entries: SkillRef[];
+  /** claude's native skillOverrides (settings layers): name → the harness's own state word, never a value. */
+  overrides?: Record<string, string>;
 }
 
 /** One MCP server as the mcp concept lists it — masked (lib/mcp-secrets.ts), url and args only as maskUrl/maskArgs give them, header/env names without values. */
