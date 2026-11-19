@@ -176,8 +176,9 @@ test("a field only one side holds is a difference — env, transport, args, head
   );
   assert.deepEqual(transport[0].inconsistent, [
     { field: "command", values: { pi: "node", claude: "—" } },
+    { field: "args", values: { pi: "s.js", claude: "" } },
     { field: "url", values: { pi: "—", claude: "https://x.example/mcp" } },
-  ]);
+  ], "the stdio side's own args count too");
 
   // args held by one side only.
   const args = unifiedMcpRows(
