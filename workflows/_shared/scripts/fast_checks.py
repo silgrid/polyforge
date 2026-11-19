@@ -111,7 +111,7 @@ from pfstep.invoke import Invocation, duration_flag  # noqa: E402
 from pfstep.rerun import CommandSpec, UnitState, locate, whole_command  # noqa: E402
 from pfstep.runner import Runner, bash_argv, raise_on_termination  # noqa: E402
 from pfstep.shellwords import has_flag, has_go_test, shell_quote, shell_words  # noqa: E402
-from pfstep.unitruns import UnitRunDecl, clean_cwd, marker_matches, marker_problem, read_unit_runs  # noqa: E402
+from pfstep.unitruns import UnitRunDecl, clean_cwd, limit_note, marker_matches, marker_problem, read_unit_runs, unit_limit_ns  # noqa: E402
 from pfstep.units import normalize_output, output_lines, parse_units, race_seen  # noqa: E402
 
 NAME = "fast_checks.py"
@@ -256,8 +256,12 @@ class UnitCheck:
         self.seq += 1
         log_path = os.path.join(self.log_dir, d.repo, "unit-%d" % self.seq, "command.log")
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        # the run's limit: the unit's self-reported `timeout`, else the
+        # shared default (never the report commands' own bound) — a run
+        # killed at it is an evidence problem, named with the limit
+        limit = unit_limit_ns(d.timeout)[0]
         er = self.r.exec_to(runner.ExecSpec(argv=list(d.argv), dir=directory, cwd=prepared or "",
-                                             timeout=COMMAND_TIMEOUT, private_tmp=True), log_path)
+                                             timeout=limit / duration.SECOND, private_tmp=True), log_path)
         entry["exit_code"] = er.exit
         if er.timed_out:
             entry["timed_out"] = True
@@ -268,7 +272,7 @@ class UnitCheck:
             self.inv.logs.append(entry["log"])
         if er.timed_out:
             entry["passed"] = False
-            entry["why"] = "exit %d: killed at its timeout" % er.exit
+            entry["why"] = limit_note(limit)
         elif er.exit != 0:
             entry["passed"] = False
             entry["why"] = "exit %d" % er.exit
@@ -293,7 +297,7 @@ class UnitCheck:
             return entry
         rerun_path = os.path.join(os.path.dirname(log_path), "rerun.log")
         er2 = self.r.exec_to(runner.ExecSpec(argv=list(d.argv), dir=directory, cwd=prepared or "",
-                                             timeout=COMMAND_TIMEOUT, private_tmp=True), rerun_path)
+                                             timeout=limit / duration.SECOND, private_tmp=True), rerun_path)
         if er2.log_path:
             entry["rerun_log"] = self.r.rel(er2.log_path)
             self.inv.logs.append(entry["rerun_log"])

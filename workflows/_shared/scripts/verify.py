@@ -157,9 +157,11 @@ from pfstep.units import (  # noqa: E402
 from pfstep.unitruns import (  # noqa: E402
     UnitRunDecl,
     argv_line,
+    limit_note,
     marker_matches,
     read_unit_runs,
     run_shape_problem,
+    unit_limit_ns,
     unknown_repo_problem,
 )
 
@@ -909,7 +911,7 @@ class Verification:
                 return ""
         return body_of
 
-    def recorded_reruns(self, rr: RepoRun, s: UnitRunState) -> None:
+    def recorded_reruns(self, rr: RepoRun, s: UnitRunState, timeout: float) -> None:
         """A failed recorded run is re-run once at HEAD (RERUNS): a pass on
         the re-run is flaky; a re-run the budget never started leaves it a
         failure with not_rerun."""
@@ -917,7 +919,7 @@ class Verification:
         while not s.passed and s.ran and i <= RERUNS:
             runs = s.runs
             if self.budget_left():
-                self.exec_unit_run(rr, s)
+                self.exec_unit_run(rr, s, timeout)
             if s.runs == runs:
                 # not started: the budget spent or the deadline passed
                 s.not_rerun = i == 1
@@ -937,8 +939,14 @@ class Verification:
             s.problem = self.prepare_unit_run(s, rr)
             if s.problem:
                 continue
-            self.exec_unit_run(rr, s)
-            self.recorded_reruns(rr, s)
+            self.exec_unit_run(rr, s, self.unit_run_limit(d))
+            self.recorded_reruns(rr, s, self.unit_run_limit(d))
+
+    def unit_run_limit(self, d: UnitRunDecl) -> float:
+        """A recorded unit run's limit: its self-reported `timeout`, else
+        the shared default (pfstep/unitruns) — never the bar commands'
+        own bound."""
+        return unit_limit_ns(d.timeout)[0] / duration.SECOND
 
     def run_analysis_runs(self, rr: RepoRun) -> None:
         """The analysis's taken entries of rr: each runs beside the plan,
@@ -954,12 +962,12 @@ class Verification:
             self.prepare_analysis_run(s, rr)
             if s.problem:
                 continue
-            self.exec_unit_run(rr, s)
-            self.recorded_reruns(rr, s)
+            self.exec_unit_run(rr, s, COMMAND_TIMEOUT / duration.SECOND)
+            self.recorded_reruns(rr, s, COMMAND_TIMEOUT / duration.SECOND)
 
-    def exec_unit_run(self, rr: RepoRun, s: UnitRunState) -> None:
+    def exec_unit_run(self, rr: RepoRun, s: UnitRunState, timeout: float) -> None:
         er = self.exec(rr, list(s.decl.argv), os.path.join(rr.dir, s.cwd), gostr.path_join(rr.cwd_rel, s.cwd),
-                       COMMAND_TIMEOUT / duration.SECOND, private_tmp=True, boxed=True)
+                       timeout, private_tmp=True, boxed=True)
         if er.not_started:
             if not s.ran:
                 s.why = "not started: " + self.r.deadline_note() + " had passed"
@@ -967,7 +975,7 @@ class Verification:
         s.ran, s.runs = True, s.runs + 1
         s.exit, s.timed_out, s.log_path = er.exit, er.timed_out, er.log_path
         if er.timed_out:
-            s.passed, s.why = False, "exit %d: killed at its timeout" % er.exit
+            s.passed, s.why = False, limit_note(int(timeout * duration.SECOND))
         elif er.exit != 0:
             s.passed, s.why = False, "exit %d" % er.exit
         elif not marker_matches(s.decl.marker, output_lines(er.log_path)):
