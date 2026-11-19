@@ -129,8 +129,11 @@ test("a request never joins a scan that started before it arrived (2-A)", async 
   listSessions = async (...args) => {
     scans += 1;
     if (scans === 1) {
+      // The pre-write scan: it enumerated the sessions dir before the write,
+      // so its result is whatever existed then — here, only "a".
       firstScanStarted();
       await firstScanGate;
+      return (await originalListSessions()).filter((row) => row.id === "a");
     }
     return originalListSessions(...args);
   };
