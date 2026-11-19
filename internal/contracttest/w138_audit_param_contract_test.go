@@ -87,24 +87,48 @@ func TestW138AuditParamDocs(t *testing.T) {
 			}
 		}
 	})
-	t.Run("commands.md documents both steps' new exit and record", func(t *testing.T) {
+	t.Run("commands.md documents both steps' new exit and record, section by section", func(t *testing.T) {
 		flat := w68Flat(t, "docs/reference/commands.md")
 		for _, marker := range []string{
-			"PF_PARAM_AUDIT", "pf-audit-param-invalid", "audit_disabled", "audit_off",
-			"--audit off",
+			"PF_PARAM_AUDIT", "audit_disabled", "audit_off", "--audit off",
 		} {
 			if !strings.Contains(flat, marker) {
 				t.Errorf("docs/reference/commands.md must document the audit parameter's behavior: %q", marker)
 			}
 		}
+		// each step's own section keeps its prepared-image error AND gains
+		// the audit one — a whole-file Contains would let one section lose
+		// a mark while the other still carries it (review r2 #1)
+		sections := []struct{ name, head string }{
+			{"verify.py", "The verification bar — verify.py"},
+			{"gate.py", "The full test gate — gate.py"},
+		}
+		for _, sec := range sections {
+			i := strings.Index(flat, sec.head)
+			if i < 0 {
+				t.Fatalf("docs/reference/commands.md has no %s section", sec.name)
+			}
+			rest := flat[i:]
+			if j := strings.Index(rest[1:], sec.head); j >= 0 {
+				rest = rest[:j+1]
+			}
+			for _, marker := range []string{"pf-verify-image-missing", "pf-audit-param-invalid"} {
+				if !strings.Contains(rest, marker) {
+					t.Errorf("docs/reference/commands.md's %s section must carry both the image and the audit error marks, lacks %q",
+						sec.name, marker)
+				}
+			}
+		}
 	})
 	t.Run("the skills route the fixed mark, blocked at once", func(t *testing.T) {
+		// one marker across both halves of the route: the mark AND the
+		// no-retry hand-off in one sentence, so a skill that names the mark
+		// but still lets it retry stays red (review r2 N10)
+		route := "`pf-audit-param-invalid`: the `audit` parameter's value is neither `on` nor `off` — hand off `blocked` at once, no retry"
 		for _, rel := range []string{"workflows/_shared/skills/verify.md", "workflows/integrate/skills/full-gate.md"} {
 			flat := w68Flat(t, rel)
-			for _, marker := range []string{"pf-audit-param-invalid", "blocked` at once, no retry"} {
-				if !strings.Contains(flat, marker) {
-					t.Errorf("%s must route pf-audit-param-invalid without a retry: %q", rel, marker)
-				}
+			if !strings.Contains(flat, route) {
+				t.Errorf("%s must route pf-audit-param-invalid without a retry: %q", rel, route)
 			}
 		}
 	})
