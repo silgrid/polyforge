@@ -208,7 +208,7 @@ func fileCreate(ctx *Context, args []string) error {
 	f.Var(&content, "content", "markdown background; '-' reads stdin, '@file' reads a file")
 	f.Var(&labels, "label", "label (repeatable)")
 	f.Var(&milestone, "milestone", "milestone name")
-	f.Var(&attrs, "attr", "business attr key=json-value (repeatable)")
+	f.Var(&attrs, "attr", "business attr path=json-value (repeatable; a dotted path nests — split.origin=X stores {\"split\":{\"origin\":\"X\"}}}, the same dot path pf queue's --attr filters on)")
 	rest, err := parseCommandArgs(f, args)
 	if err != nil {
 		return err
@@ -303,14 +303,11 @@ func fileCreate(ctx *Context, args []string) error {
 	// the create transaction, so a bad blocker creates nothing.
 	req.After = append(req.After, after...)
 	if len(attrs) > 0 {
-		req.Attrs = map[string]any{}
-		for _, kv := range attrs {
-			v, err := parseAttrValue(kv.Value)
-			if err != nil {
-				return fmt.Errorf("--attr %s: %w", kv.Key, err)
-			}
-			req.Attrs[kv.Key] = v
+		built, err := attrsFromFlags(attrs)
+		if err != nil {
+			return err
 		}
+		req.Attrs = built
 	}
 
 	warnAcceptanceCarrier(ctx, req)
@@ -781,6 +778,58 @@ func parseAttrValue(v string) (any, error) {
 		return out, nil
 	}
 	return v, nil
+}
+
+// attrsFromFlags builds one attrs object from a create's --attr flags
+// (polyforge#174): a key is an attrs path — a key with dots nests as
+// the path it names (split.origin=X stores {"split":{"origin":"X"}}),
+// the same dot path `pf queue --attr` filters on, and a key without
+// dots stays one top-level key. Paths that share only a prefix merge;
+// a path assigned twice (even with the same value), a path and its
+// sub-path both assigned (an object value beside its sub-path
+// included), or an empty segment (a..b, a leading or trailing dot)
+// refuse the whole create, independent of flag order.
+func attrsFromFlags(attrs kvList) (map[string]any, error) {
+	root := map[string]any{}
+	for _, kv := range attrs {
+		v, err := parseAttrValue(kv.Value)
+		if err != nil {
+			return nil, fmt.Errorf("--attr %s: %w", kv.Key, err)
+		}
+		segs := strings.Split(kv.Key, ".")
+		for _, seg := range segs {
+			if seg == "" {
+				return nil, fmt.Errorf("--attr %s: %q is not an attrs path (empty segment)", kv.Key, kv.Key)
+			}
+		}
+		cur := root
+		for i, seg := range segs {
+			last := i == len(segs)-1
+			existing, ok := cur[seg]
+			if !ok {
+				if last {
+					cur[seg] = v
+					break
+				}
+				nxt := map[string]any{}
+				cur[seg] = nxt
+				cur = nxt
+				continue
+			}
+			if last {
+				if _, isObj := existing.(map[string]any); isObj {
+					return nil, fmt.Errorf("--attr %s: the path %q is assigned a value and a sub-path too", kv.Key, kv.Key)
+				}
+				return nil, fmt.Errorf("--attr %s: the path %q is assigned twice", kv.Key, kv.Key)
+			}
+			nxt, isObj := existing.(map[string]any)
+			if !isObj {
+				return nil, fmt.Errorf("--attr %s: the path %q is assigned a value and a sub-path too", kv.Key, kv.Key)
+			}
+			cur = nxt
+		}
+	}
+	return root, nil
 }
 
 // ---------------------------------------------------------------------------
