@@ -119,10 +119,33 @@ function append(chunk) {
 child.stdout.on("data", append);
 child.stderr.on("data", append);
 child.on("exit", (code, signal) => {
-  // Report first: the group kill below includes this wrapper.
-  writeResult({ exitCode: code, signal: signal == null ? null : String(signal), bytesWritten: bytes, reason: null });
-  killGroup();
-  process.exit(0);
+  // The child's stdio may still hold the command's last bytes when the shell
+  // exits, and a straggler may still be writing through the inherited pipe:
+  // drain both pipes (bounded — a straggler that never ends cannot hold the
+  // task) before reporting, so the log keeps the whole output.
+  let pendingPipes = 2;
+  let finished = false;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    // Report first: the group kill below includes this wrapper.
+    writeResult({ exitCode: code, signal: signal == null ? null : String(signal), bytesWritten: bytes, reason: null });
+    killGroup();
+    process.exit(0);
+  };
+  const settle = () => {
+    pendingPipes -= 1;
+    if (pendingPipes <= 0) finish();
+  };
+  const drain = (stream) => {
+    // The end event may already have fired before this handler registered.
+    if (stream.readableEnded) settle();
+    else stream.once("end", settle);
+  };
+  drain(child.stdout);
+  drain(child.stderr);
+  // Ref'd: the report must land even when nothing else holds the loop.
+  setTimeout(finish, 2000);
 });
 child.on("error", (error) => {
   writeResult({ exitCode: null, signal: null, bytesWritten: bytes, reason: null, error: String((error && error.message) || error) });
