@@ -1243,6 +1243,6 @@ test("`claude mcp add` without -s, and with -s local, reads as claude's local sc
   const project = importOne("claude mcp add --scope project demo npx -y server");
   assert.equal(project.scopeHint, "project");
   // pi's own grammar is untouched: -l stays the project hint, no flag the global one.
-  assert.equal(importOne("pi mcp add demo npx -y server").scopeHint, undefined);
+  assert.equal(importOne("pi mcp add demo npx -y server").scopeHint, "global");
   assert.equal(importOne("pi mcp add -l demo npx -y server").scopeHint, "project");
 });
