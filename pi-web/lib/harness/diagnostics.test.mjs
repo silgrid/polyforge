@@ -38,7 +38,7 @@ const {
 } = await jiti.import("./diagnostics.ts");
 const { createClaudeAdapter } = await jiti.import("./claude.ts");
 const { createPiAdapter } = await jiti.import("./pi.ts");
-const diagnoseRoute = await jiti.import("../app/api/harness/[harness]/diagnose/route.ts");
+const diagnoseRoute = await jiti.import("@/app/api/harness/[harness]/diagnose/route.ts");
 const { allowFileRoot } = await jiti.import("../file-access.ts");
 
 // The credential-style outputs a stub command might print: every shape the
