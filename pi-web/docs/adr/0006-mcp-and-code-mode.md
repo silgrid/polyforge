@@ -437,6 +437,33 @@ restores the branch's tool set from its transcript.
   Tests of such entries run one at a time, and the panel labels them.
 - On Windows, a hard exit can leave stdio servers running: the transport's exit
   hook that kills the process group exists only on POSIX.
+## Claude's side goes through its own CLI (#85 85c)
+
+The unified MCP list reads both harnesses, but writes claude's side only
+through `claude mcp add-json|remove -s <scope>` — never by writing
+`~/.claude.json` or `.mcp.json` ourselves:
+
+- **The file is claude's.** It rewrites `.claude.json` constantly (and keeps
+  backups under `~/.claude/backups/`); a hand-written copy would race it and
+  guess its format. The CLI is the only writer that shares its intent.
+- **「应用到」 is having it or not.** claude has no enable/disable of an MCP
+  entry, so unapplying one from claude is removing it; the panel words it
+  「从 Claude 移除」, the removal is undoable for 60 seconds like pi's own
+  (the raw entry held server-side), and the group switches never touch
+  claude's side. claude's own `disabledMcpServers` is read-only display.
+- **Unknown keys do not survive.** `add-json` drops keys it does not know, so
+  a claude entry changed through Pi Web loses hand-added unknown keys — the
+  「unknown keys kept」 rule holds for pi's side only. The projection
+  (`claudeMcpEntryFromPi`) names the fields meant to arrive; the rest was
+  claude's to drop anyway.
+- **A modification is remove + add-json** (`add-json` refuses an existing
+  name), with the old definition staged server-side and written back when the
+  add-json half fails.
+- **The version is probed before any spawn** and refused outside the
+  recognized range with nothing run; `mcp list` (it health-checks servers)
+  and `mcp get` (it may print values) are never called — reads parse the
+  files only.
+
 - Upstream requests that would remove Pi Web code: export the built-in list,
   the MCP config editor (with a lock and an atomic write),
   `McpServerConnection`, `signInMcpServer` (with an abort signal), and the
