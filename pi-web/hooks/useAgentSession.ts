@@ -179,7 +179,7 @@ export function foldClaudeSubagents(state: ClaudeSubagentState, sessionId: strin
 /**
  * What GET /api/claude reports that the composer uses: whether claude is on PATH and the
  * names its model list offers — claude's aliases from its initialize answer, then
- * Settings › Claude's custom names.
+ * claude's native modelPicker custom names.
  */
 export interface ClaudeAvailability {
   available: boolean;

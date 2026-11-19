@@ -1,18 +1,22 @@
 // carries: components/HarnessGeneralSettings*, components/GeneralSettings*, components/HarnessEnvironmentSettings*, components/HarnessEffectiveSettings*, components/UnifiedSetting*, components/HarnessApplyTo*
-// carries: lib/harness-settings-view*, lib/claude-settings-store*, lib/harness/diagnostics*, hooks/useClaudeSettings.ts, app/api/harness/*
-// — polyforge#149 (#85 85a1b, the settings skeleton): the 9+2 tab rail
-// (九个新 tab 加两个标「旧版」的原「模型」「Claude」tab), General's left
-// column (界面与对话 / 环境 / 生效值与来源), the account / models / permission
-// placeholders, and the migrated old navigation values (claude → 权限,
-// models → 新「模型」页). The harness adapter APIs are mocked at the browser
-// (context.route): this suite pins the UI contract and never runs a real
-// native diagnostic command; the adapter and route behavior is pinned by
-// lib/harness/*.test.mjs and app/api/harness/route.test.mjs.
+// carries: components/HarnessPermissionSettings*, components/ClaudePermissionSettings*, lib/harness-permissions-view*, lib/harness-settings-view*, lib/harness/diagnostics*, app/api/harness/*
+// — polyforge#149 (#85 85a1b, the settings skeleton) and polyforge#150
+// (#85 85a4, the permission page): the 10-tab rail (九个新 tab 加标「旧版」的
+// 原「模型」tab；原「Claude」tab 已删), General's left column (界面与对话 /
+// 环境 / 生效值与来源), the account / models placeholders, the permission
+// page (审批模式 / 沙箱 / 项目信任 / 规则: the unified blocks' one-write-many-reads,
+// pi's 不做审批 / 无沙箱 notes, claude's own sections, the Pi Web approval
+// channel and the rules editor) and the stored old navigation values
+// (models → 新「模型」页; the deleted claude key → 常规, review r1#7). The harness adapter APIs are mocked
+// at the browser (context.route): this suite pins the UI contract and never
+// runs a real native diagnostic command or write; the adapter, the write
+// route and the migration are pinned by lib/harness/*.test.mjs,
+// app/api/harness/route.test.mjs, lib/claude-migration.test.mjs and
+// e2e/claude-permission-442.mjs (the real routes).
 //
 // Not declared, though exercised: components/SettingsPanel.tsx and
-// lib/settings-navigation.ts (already declared by 3 suites),
-// components/ClaudeSettings.tsx and lib/claude-settings.ts
-// (e2e/claude-settings-445.mjs) — lib/e2e-carries.test.mjs.
+// lib/settings-navigation.ts (already declared by 3 suites) —
+// lib/e2e-carries.test.mjs.
 //
 // Each scenario prints one `PASS S85-nn` marker; the suite ends with
 // `PASS harness-settings-85` only when every scenario passed. Every wait
@@ -71,8 +75,41 @@ const DIAG_PI = {
   harness: "pi",
   diagnostics: { available: false, reason: "pi has no fixed safe diagnostic command yet" },
 };
-const CLAUDE_SETTINGS = { launchPermissionMode: "default", customModels: [], includeHookEvents: false, planAvailable: true };
-const CLAUDE_REPORT = { available: true, models: [{ value: "default", displayName: "Default", source: "alias" }], version: "2.1.322", versionRecorded: true, recordedVersions: ["2.1.322"], capabilities: ["hooks"], features: [] };
+const CLAUDE_REPORT = { available: true, models: [{ value: "default", displayName: "Default", source: "alias" }], version: "2.1.322", versionRecorded: true, recordedVersions: ["2.1.322"], capabilities: ["hooks", "ui_surface_v1"], features: [
+  { id: "approvals", available: true, basis: "host-prompts" },
+  { id: "backgroundTasks", available: true, basis: "recorded" },
+  { id: "subagentText", available: true, basis: "recorded" },
+] };
+
+// The permission page's reads (85a4): the compare's four fields and the two
+// harnesses' permission payloads. The trust field answers as a project would
+// (pi trusted, claude not) so the unify flow is pinnable without a project.
+const NULL_SOURCES = { defaultMode: null, sandbox: null, rules: null, denyInsteadOfPrompting: null };
+const COMPARE = {
+  results: [
+    { field: "reasoning-effort", status: "consistent", values: { pi: { supported: true, neutral: "low", raw: "low" }, claude: { supported: true, neutral: "low", raw: "low" } } },
+    { field: "approval-mode", status: "unsupported", values: { pi: { supported: false, neutral: null, raw: null }, claude: { supported: true, neutral: "ask", raw: "default" } } },
+    { field: "sandbox", status: "unsupported", values: { pi: { supported: false, neutral: null, raw: null }, claude: { supported: true, neutral: "on", raw: "on" } } },
+    { field: "project-trust", status: "inconsistent", values: { pi: { supported: true, neutral: "trusted", raw: "trusted" }, claude: { supported: true, neutral: "untrusted", raw: "untrusted" } } },
+  ],
+};
+const PERMISSION_PI = {
+  harness: "pi", concept: "permission",
+  data: { approvalMode: { supported: false, neutral: null, raw: null }, projectTrust: { trusted: true }, sandbox: { supported: false, enabled: null, autoAllowBashIfSandboxed: null, otherKeys: [] }, rules: null, denyInsteadOfPrompting: null, sources: NULL_SOURCES },
+};
+const PERMISSION_CLAUDE = {
+  harness: "claude", concept: "permission",
+  data: {
+    approvalMode: { supported: true, neutral: "ask", raw: "default" },
+    projectTrust: { trusted: false },
+    sandbox: { supported: true, enabled: true, autoAllowBashIfSandboxed: false, otherKeys: ["failIfUnavailable"] },
+    rules: { allow: ["WebSearch"], ask: [], deny: ["Bash(rm:*)"] },
+    denyInsteadOfPrompting: false,
+    sources: { defaultMode: { scope: "user", path: join(agentDir, "claude-user-settings.json") }, sandbox: { scope: "user", path: join(agentDir, "claude-user-settings.json") }, rules: null, denyInsteadOfPrompting: null },
+  },
+};
+/** The permission PUTs the browser sent (each scenario clears and reads it). */
+const permissionPuts = [];
 
 /** Answers the harness/claude adapter routes the settings skeleton reads; everything else hits the server. */
 async function mockAdapterApis(context) {
@@ -82,9 +119,22 @@ async function mockAdapterApis(context) {
   // no-project assertion (v1 round 1: S85-09's alert was cleared by exactly
   // that). The suite is a no-project suite; the flow answers no cwd.
   await context.route("**/api/default-cwd", (route) => route.fulfill({ status: 200, json: {} }));
-  await context.route(/\/api\/harness(?:\/|\?|$)/, (route) => {
+  await context.route(/\/api\/harness(?:\/|\?|$)/, async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (route.request().method() === "PUT") {
+      // The permission page's one write path: recorded, answered as written.
+      if (path === "/api/harness/pi/permission" || path === "/api/harness/claude/permission") {
+        permissionPuts.push({ path, body: route.request().postDataJSON() });
+        await route.fulfill({ status: 200, json: { harness: path.split("/")[3], concept: "permission", result: { status: "written", summary: "mocked" } } });
+        return;
+      }
+      await route.fulfill({ status: 400, json: { error: "write-refused", message: "not a permission write path" } });
+      return;
+    }
     const body = path === "/api/harness" ? HARNESS_LIST
+      : path === "/api/harness/compare" ? COMPARE
+      : path === "/api/harness/pi/permission" ? PERMISSION_PI
+      : path === "/api/harness/claude/permission" ? PERMISSION_CLAUDE
       : path === "/api/harness/pi/env" ? ENV_PI
       : path === "/api/harness/claude/env" ? ENV_CLAUDE
       : path === "/api/harness/pi/effective-config" ? EFFECTIVE_PI
@@ -92,33 +142,38 @@ async function mockAdapterApis(context) {
       : path === "/api/harness/pi/diagnose" ? DIAG_PI
       : path === "/api/harness/claude/diagnose" ? DIAG_CLAUDE
       : null;
-    if (body === null) route.fulfill({ status: 404, json: { error: "unknown-harness-path" } });
-    else route.fulfill({ status: 200, json: body });
+    if (body === null) await route.fulfill({ status: 404, json: { error: "unknown-harness-path" } });
+    else await route.fulfill({ status: 200, json: body });
   });
   await context.route("**/api/models-config", (route) => route.fulfill({ status: 200, json: { providers: {} } }));
-  await context.route("**/api/claude-settings", (route) => route.fulfill({ status: 200, json: CLAUDE_SETTINGS }));
   await context.route("**/api/claude", (route) => route.fulfill({ status: 200, json: CLAUDE_REPORT }));
-  await context.route("**/api/claude-permissions", (route) => route.fulfill({ status: 200, json: { mode: "ask", push: true, session: null } }));
+  await context.route("**/api/claude-permissions", (route) => route.fulfill({ status: 200, json: { mode: "ask", push: true, includeHookEvents: false, session: null } }));
 }
 
 const TABS = [
   "General", "Account", "Models", "Permissions", "Skills", "MCP",
-  "Sub-agents", "Plugins", "Polyforge", "Models (legacy)", "Claude (legacy)",
+  "Sub-agents", "Plugins", "Polyforge", "Models (legacy)",
 ];
 
 /** A label as an anchored regex, its punctuation escaped (the legacy labels carry parens). */
 const labelRe = (label) => new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
 
 const T = {
-  S1: "S85-01: Settings shows 9 new tabs plus the two legacy-marked ones, in the settled order",
+  S1: "S85-01: Settings shows 9 new tabs plus the legacy-marked Models one, in the settled order",
   S2: "S85-02: General is a left-column layout whose three items switch the detail pane",
   S3: "S85-03: a phone walks General as list → detail → back",
-  S4: "S85-04: the account / models / permission placeholders open, permission naming its Claude part",
-  S5: "S85-05: the legacy Models and Claude pages stay reachable and working",
+  S4: "S85-04: the account / models placeholders open; the permission page is real",
+  S5: "S85-05: the legacy Models page stays reachable and working",
   S6: "S85-06: the environment pane lists only variable names, grouped per harness",
   S7: "S85-07: effective values carry the Inferred mark and their source; native diagnostics are a collapsed block per harness",
   S8: "S85-08: stored old navigation values land on the new pages",
   S9: "S85-09: a failed harness-list read is a visible reason in both panes, never a contradictory empty registry",
+  S10: "S85-10: the permission page's left column is 审批模式 / 沙箱 / 项目信任 / 规则, its approval pane unified and claude-sectioned",
+  S11: "S85-11: the unified approval write reaches claude's native mode (Q1 A), the extra values its own radio",
+  S12: "S85-12: the sandbox pane writes claude's sandbox keys, pi answering 无沙箱",
+  S13: "S85-13: the trust pane shows each harness's own decision and 统一成当前值 writes the differing one",
+  S14: "S85-14: the rules pane edits claude's allow / ask / deny lists with no unified block",
+  S15: "S85-15: General has no claude permission controls; its hook switch stays",
 };
 const failures = new Map(Object.values(T).map((title) => [title, []]));
 const ran = new Set();
@@ -195,12 +250,13 @@ try {
     for (const name of ["Skills", "Sub-agents", "Plugins"]) {
       assert.ok(await tab(page, name).isDisabled(), `${name} should need a project`);
     }
-    for (const name of ["General", "Account", "Models", "Permissions", "MCP", "Polyforge", "Models (legacy)", "Claude (legacy)"]) {
+    for (const name of ["General", "Account", "Models", "Permissions", "MCP", "Polyforge", "Models (legacy)"]) {
       assert.ok(!(await tab(page, name).isDisabled()), `${name} should open without a project`);
     }
-    // The legacy tabs are marked as such in their own label.
+    // The one legacy tab is marked as such in its own label; the old Claude
+    // tab is gone (85a4), its values living on the permission page.
     assert.match(labels[9], /\(legacy\)/, "the old Models tab is not marked legacy");
-    assert.match(labels[10], /\(legacy\)/, "the old Claude tab is not marked legacy");
+    assert.ok(!labels.some((label) => /Claude \(legacy\)/.test(label)), "the old Claude tab is still in the rail");
     await page.context().close();
   });
 
@@ -256,33 +312,33 @@ try {
     await page.context().close();
   });
 
-  // S85-04 — AC1: the three placeholders open; permission names its Claude part.
+  // S85-04 — AC1: the account / models placeholders open; the permission page is real (85a4).
   await part("S4", "placeholders", async () => {
     const page = await newPage();
     await openSettings(page);
-    for (const [name, id] of [["Account", "account"], ["Models", "models"], ["Permissions", "permission"]]) {
+    for (const [name, id] of [["Account", "account"], ["Models", "models"]]) {
       await tab(page, new RegExp(`^${name}$`)).click({ timeout: ACTION_MS });
       const host = sectionHost(page, id);
       await host.waitFor({ state: "visible", timeout: ACTION_MS });
       assert.match(await host.innerText(), /Placeholder/i, `the ${name} page shows no placeholder text`);
     }
-    // The permission page names the Claude part the old `claude` value lands on.
-    assert.match(await sectionHost(page, "permission").innerText(), /Claude/, "the permission placeholder does not name its Claude part");
+    // The permission page is 85a4's: its left column is the settled four.
+    await tab(page, /^Permissions$/).click({ timeout: ACTION_MS });
+    const permission = sectionHost(page, "permission");
+    await permission.locator(".config-sidebar-item").first().waitFor({ state: "visible", timeout: ACTION_MS });
+    assert.deepEqual((await permission.locator(".config-sidebar-item").allInnerTexts()).map((text) => text.trim()),
+      ["Approval mode", "Sandbox", "Project trust", "Rules"], "the permission page's left column");
     await page.context().close();
   });
 
-  // S85-05 — AC1: the legacy pages stay reachable and keep working.
+  // S85-05 — AC1: the legacy Models page stays reachable and working (the
+  // legacy Claude page is deleted by 85a4; S1 pins its absence from the rail).
   await part("S5", "legacy pages", async () => {
     const page = await newPage();
     await openSettings(page);
     await tab(page, /^Models \(legacy\)$/).click({ timeout: ACTION_MS });
     const models = sectionHost(page, "legacy-models");
     await models.getByRole("button", { name: "Add provider", exact: true }).waitFor({ state: "visible", timeout: COLD_MS });
-    await tab(page, /^Claude \(legacy\)$/).click({ timeout: ACTION_MS });
-    const claude = sectionHost(page, "legacy-claude");
-    await claude.getByRole("radiogroup", { name: "Default permission mode" }).waitFor({ state: "visible", timeout: COLD_MS });
-    // The hook switch stays on the legacy page too (one shared state holder).
-    await claude.getByRole("switch", { name: "Show hook activity" }).waitFor({ state: "visible", timeout: ACTION_MS });
     await page.context().close();
   });
 
@@ -354,11 +410,13 @@ try {
     await page.context().close();
   });
 
-  // S85-08 — AC4: stored old values land on the new pages.
+  // S85-08 — AC4: the stored models value lands on the new page; the deleted
+  // Claude page's `claude` key reads as unknown and lands on General (the
+  // migration map went with the page, review r1#7).
   await part("S8", "navigation migration", async () => {
     for (const [stored, expectedTab, expectedHost] of [
-      ["claude", /^Permissions$/, "permission"],
       ["models", /^Models$/, "models"],
+      ["claude", /^General$/, "general"],
     ]) {
       const page = await newPage(undefined, { "pi-web:settings-navigation": JSON.stringify({ section: stored }) });
       await openSettings(page);
@@ -368,6 +426,162 @@ try {
       await sectionHost(page, expectedHost).waitFor({ state: "visible", timeout: ACTION_MS });
       await page.context().close();
     }
+  });
+
+  // S85-10 — 85a4 AC1/AC4: the approval pane's unified block and claude's own sections.
+  await part("S10", "approval pane", async () => {
+    const page = await newPage();
+    permissionPuts.length = 0;
+    await openSettings(page);
+    await tab(page, /^Permissions$/).click({ timeout: ACTION_MS });
+    const permission = sectionHost(page, "permission");
+    await permission.locator(".config-sidebar-item").first().waitFor({ state: "visible", timeout: ACTION_MS });
+    const pane = permission.locator('[data-permission-pane="approval"]');
+    await pane.waitFor({ state: "visible", timeout: ACTION_MS });
+    // The unified block: the current value, pi's own 不做审批 note, claude's value.
+    const unified = pane.locator(".unified-setting").first();
+    await unified.waitFor({ state: "visible", timeout: ACTION_MS });
+    const text = await waitFor(async () => {
+      const body = await unified.innerText();
+      return body.includes("pi does no approval prompting") ? body : false;
+    }, ACTION_MS, "the unified block never showed pi's own note");
+    assert.ok(text.includes("default"), `the unified block does not show the current mode: ${text}`);
+    // claude's own sections: the extra values' radio, denyInsteadOfPrompting,
+    // and the Pi Web approval channel (the moved claude tool permissions).
+    await pane.getByRole("radio", { name: /bypassPermissions/ }).waitFor({ state: "visible", timeout: ACTION_MS });
+    await pane.getByRole("switch", { name: "denyInsteadOfPrompting" }).waitFor({ state: "visible", timeout: ACTION_MS });
+    await pane.getByRole("radiogroup", { name: "Permission mode", exact: true }).waitFor({ state: "visible", timeout: ACTION_MS });
+    await pane.getByRole("switch", { name: "Push a reminder when a permission waits" }).waitFor({ state: "visible", timeout: ACTION_MS });
+    // The retired page's Claude Code report block renders again (owner
+    // ruling: taken over): version, claude's own capabilities, the features.
+    const reportText = await waitFor(async () => {
+      const body = await pane.innerText();
+      return body.includes("2.1.322") && body.includes("Subagent text forwarding") ? body : false;
+    }, ACTION_MS, "the Claude Code report block never showed its mocked answer");
+    assert.ok(reportText.includes("ui_surface_v1"), "claude's own capabilities are not listed");
+    assert.ok(reportText.includes("Background tasks"), "the feature table is missing");
+    assert.equal(permissionPuts.length, 0, "opening the page wrote something");
+    await page.context().close();
+  });
+
+  // S85-11 — 85a4 AC1/AC2 (Q1 A): the unified three write claude's native mode;
+  // the extra values are claude's own radio.
+  await part("S11", "unified approval write", async () => {
+    const page = await newPage();
+    permissionPuts.length = 0;
+    await openSettings(page);
+    await tab(page, /^Permissions$/).click({ timeout: ACTION_MS });
+    const pane = sectionHost(page, "permission").locator('[data-permission-pane="approval"]');
+    await pane.waitFor({ state: "visible", timeout: ACTION_MS });
+    // 不询问即拒绝 writes claude's native dontAsk (Q1 A).
+    await pane.getByRole("radio", { name: "Deny without asking" }).click({ timeout: ACTION_MS });
+    await waitFor(() => permissionPuts.some((put) => put.path === "/api/harness/claude/permission" && put.body?.approvalMode === "dontAsk"),
+      ACTION_MS, `the unified deny write never reached claude: ${JSON.stringify(permissionPuts)}`);
+    // An extra value is claude's own, written from its radio.
+    await pane.getByRole("radio", { name: /acceptEdits/ }).click({ timeout: ACTION_MS });
+    await waitFor(() => permissionPuts.some((put) => put.body?.approvalMode === "acceptEdits"),
+      ACTION_MS, `the extra value write never reached claude: ${JSON.stringify(permissionPuts)}`);
+    await page.context().close();
+  });
+
+  // S85-12 — 85a4 AC1/AC2: the sandbox pane writes claude's sandbox keys; pi answers 无沙箱.
+  await part("S12", "sandbox pane", async () => {
+    const page = await newPage();
+    permissionPuts.length = 0;
+    await openSettings(page);
+    await tab(page, /^Permissions$/).click({ timeout: ACTION_MS });
+    const permission = sectionHost(page, "permission");
+    await permission.locator(".config-sidebar-item").filter({ hasText: "Sandbox" }).click({ timeout: ACTION_MS });
+    const pane = permission.locator('[data-permission-pane="sandbox"]');
+    await pane.waitFor({ state: "visible", timeout: ACTION_MS });
+    await waitFor(async () => (await pane.locator(".unified-setting").first().innerText()).includes("pi has no sandbox"),
+      ACTION_MS, "the sandbox block never showed pi's own note");
+    const enabled = pane.getByRole("switch", { name: "Bash sandbox" });
+    await enabled.waitFor({ state: "visible", timeout: ACTION_MS });
+    assert.equal(await enabled.getAttribute("aria-checked"), "true", "the mocked enabled switch is off");
+    await enabled.click({ timeout: ACTION_MS });
+    await waitFor(() => permissionPuts.some((put) => put.body?.sandboxEnabled === false),
+      ACTION_MS, `the sandbox write never reached claude: ${JSON.stringify(permissionPuts)}`);
+    const autoAllow = pane.getByRole("switch", { name: "Auto-allow Bash if sandboxed" });
+    await autoAllow.click({ timeout: ACTION_MS });
+    await waitFor(() => permissionPuts.some((put) => put.body?.autoAllowBashIfSandboxed === true),
+      ACTION_MS, `the auto-allow write never reached claude: ${JSON.stringify(permissionPuts)}`);
+    // claude's other sandbox keys show by name only.
+    assert.match(await pane.innerText(), /failIfUnavailable/, "the other sandbox keys are missing");
+    await page.context().close();
+  });
+
+  // S85-13 — 85a4 AC1: the trust pane shows each harness's own decision, and
+  // 统一成当前值 writes the differing harness with the current value.
+  await part("S13", "trust unify", async () => {
+    const page = await newPage();
+    permissionPuts.length = 0;
+    await openSettings(page);
+    await tab(page, /^Permissions$/).click({ timeout: ACTION_MS });
+    const permission = sectionHost(page, "permission");
+    await permission.locator(".config-sidebar-item").filter({ hasText: "Project trust" }).click({ timeout: ACTION_MS });
+    const pane = permission.locator('[data-permission-pane="trust"]');
+    await pane.waitFor({ state: "visible", timeout: ACTION_MS });
+    const unified = pane.locator(".unified-setting").first();
+    await waitFor(async () => {
+      const body = await unified.innerText();
+      return body.includes("trusted") && body.includes("untrusted") ? body : false;
+    }, ACTION_MS, "the trust block never showed both harnesses' decisions");
+    const unify = pane.getByRole("button", { name: "Unify to the current value" });
+    await unify.waitFor({ state: "visible", timeout: ACTION_MS });
+    await unify.click({ timeout: ACTION_MS });
+    // pi is the current value (trusted); claude differs, so claude is written.
+    await waitFor(() => permissionPuts.some((put) => put.path === "/api/harness/claude/permission" && put.body?.projectTrust?.trusted === true),
+      ACTION_MS, `the trust unify never reached claude: ${JSON.stringify(permissionPuts)}`);
+    // The unify writes its targets in order, so a pi write would have landed
+    // before the claude one that was just observed: the negative is settled.
+    assert.ok(!permissionPuts.some((put) => put.path === "/api/harness/pi/permission"), "the unify rewrote the harness that already agreed");
+    await page.context().close();
+  });
+
+  // S85-14 — 85a4 AC2: the rules pane edits claude's allow / ask / deny lists,
+  // with no unified block (规则没有统一块).
+  await part("S14", "rules editor", async () => {
+    const page = await newPage();
+    permissionPuts.length = 0;
+    await openSettings(page);
+    await tab(page, /^Permissions$/).click({ timeout: ACTION_MS });
+    const permission = sectionHost(page, "permission");
+    await permission.locator(".config-sidebar-item").filter({ hasText: "Rules" }).click({ timeout: ACTION_MS });
+    const pane = permission.locator('[data-permission-pane="rules"]');
+    await pane.waitFor({ state: "visible", timeout: ACTION_MS });
+    // No unified block on the rules pane.
+    assert.equal(await pane.locator(".unified-setting").count(), 0, "the rules pane shows a unified block");
+    // The textareas render empty until the page's read fills them: poll the
+    // values themselves, never one read after visibility (r1#6).
+    const allow = pane.locator("#permission-rules-allow");
+    await allow.waitFor({ state: "visible", timeout: ACTION_MS });
+    await waitFor(async () => (await allow.inputValue()) === "WebSearch", ACTION_MS, "the mocked allow rules never arrived");
+    await waitFor(async () => (await pane.locator("#permission-rules-deny").inputValue()) === "Bash(rm:*)", ACTION_MS, "the mocked deny rules never arrived");
+    await allow.fill("WebSearch\nWebFetch(domain:example.com)");
+    await pane.getByRole("button", { name: "Save", exact: true }).click({ timeout: ACTION_MS });
+    await waitFor(() => permissionPuts.some((put) => put.body?.rules?.allow?.length === 2 && put.body.rules.allow.includes("WebFetch(domain:example.com)")
+      && put.body.rules.deny?.length === 1),
+      ACTION_MS, `the rules write never reached claude: ${JSON.stringify(permissionPuts)}`);
+    await page.context().close();
+  });
+
+  // S85-15 — 85a4 AC4: General has no claude permission controls; the hook
+  // switch (a Pi Web preference now) stays.
+  await part("S15", "general cleanup", async () => {
+    const page = await newPage();
+    await openSettings(page);
+    const conversation = generalPane(page, "conversation");
+    await conversation.waitFor({ state: "visible", timeout: ACTION_MS });
+    // Settle on the hook switch first (it renders only once its read landed),
+    // then read the pane once for the negatives (r1#15).
+    const text = await waitFor(async () => {
+      const body = await conversation.innerText();
+      return body.includes("Show hook activity") ? body : false;
+    }, ACTION_MS, "the conversation pane never settled");
+    assert.ok(!text.includes("claude tool permissions"), `General still shows the claude permission block: ${text.slice(0, 200)}`);
+    assert.ok(!text.includes("Ask in a dialog"), `General still shows the approval channel radios: ${text.slice(0, 200)}`);
+    await page.context().close();
   });
 } finally {
   await h.close();

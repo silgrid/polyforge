@@ -3,18 +3,19 @@
 // busy-waits (lib/transcript-notices-server.ts) — and declares pi's
 // capabilities. The version of an interactive session is the installed SDK
 // package's version (owner ruling Q2 C); the Cell CLI version joins in 85a2
-// once doctor provides it. Writes all pass the shared gate: pi 1.5.x is the
-// known range, and no concept has an implemented write yet, so a known
-// version answers not-implemented.
+// once doctor provides it. Writes all pass the shared gate (pi 1.5.x is the
+// known range); the permission concept's write is the project trust decision
+// (85a4, polyforge#150) — approval and sandbox are refused as pi's own absences.
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { defaultAgentDir } from "../http-dispatcher";
 import { readModelsConfig } from "../models-config-store";
 import { readMcpServerConfigs } from "../mcp-config-read";
 import { loadSkillsWithInstallInfo } from "../skills-service";
-import { getProjectTrustStatus, mayReadProjectConfigNow } from "../project-trust";
+import { getProjectTrustStatus, mayReadProjectConfigNow, writeProjectTrustDecision } from "../project-trust";
 import {
   gatedWrite,
+  writeGate,
   PI_KNOWN_RANGE,
   versionInKnownRange,
   type HarnessAdapter,
@@ -148,7 +149,7 @@ export function createPiAdapter(): HarnessAdapter {
         toolFilter: true,
       },
       concepts: ["auth", "config-root", "model", "permission", "skills", "mcp", "env", "effective-config"],
-      writableConcepts: [],
+      writableConcepts: ["permission"],
       readOnlyConcepts: ["env", "effective-config"],
       configRootEnv: "PI_CODING_AGENT_DIR",
       credentialsFollowConfigRoot: true,
@@ -196,11 +197,17 @@ export function createPiAdapter(): HarnessAdapter {
           return payload;
         }
         case "permission": {
+          // pi does no approval prompting and has no sandbox (AC1's 不做审批 /
+          // 无沙箱); its one permission fact is the project trust decision.
           const payload: PermissionPayload = {
             approvalMode: { supported: false, neutral: null, raw: null },
             projectTrust: ctx?.cwd
               ? { trusted: getProjectTrustStatus(ctx.cwd, agentDir).trusted }
               : null,
+            sandbox: { supported: false, enabled: null, autoAllowBashIfSandboxed: null, otherKeys: [] },
+            rules: null,
+            denyInsteadOfPrompting: null,
+            sources: { defaultMode: null, sandbox: null, rules: null, denyInsteadOfPrompting: null },
           };
           return payload;
         }
@@ -250,7 +257,39 @@ export function createPiAdapter(): HarnessAdapter {
       }
     },
     async write(concept: ConceptId, change: WriteChange, ctx): Promise<WriteResult> {
-      return gatedWrite(this, concept, change, ctx);
+      // The shared gate first (adapter.ts). pi's permission write is the
+      // project trust decision alone: pi does no approval and has no sandbox,
+      // so those answer refused with pi's own reason, never not-implemented —
+      // the absence is a property of pi, not a TODO.
+      if (concept !== "permission") return gatedWrite(this, concept, change, ctx);
+      const probe = await probeVersion(ctx);
+      const gate = writeGate(probe);
+      if (!gate.allowed) return { status: "refused", reason: gate.reason };
+      const keys = Object.keys(change);
+      if (keys.includes("approvalMode")) {
+        return { status: "refused", reason: "pi does no approval prompting (不做审批)" };
+      }
+      if (keys.includes("sandboxEnabled") || keys.includes("autoAllowBashIfSandboxed")) {
+        return { status: "refused", reason: "pi has no sandbox (无沙箱)" };
+      }
+      if (keys.length !== 1 || keys[0] !== "projectTrust") {
+        return { status: "refused", reason: `pi writes no ${keys.join(", ") || "empty change"} on permission` };
+      }
+      const raw = change.projectTrust;
+      const trusted = typeof raw === "object" && raw !== null && !Array.isArray(raw)
+        ? (raw as Record<string, unknown>).trusted
+        : undefined;
+      if (trusted !== true && trusted !== false) {
+        return { status: "refused", reason: "projectTrust must be { trusted: boolean }" };
+      }
+      const cwd = ctx?.cwd;
+      if (!cwd) return { status: "refused", reason: "a project trust write needs the project folder (cwd)" };
+      // The shared gate (review r1#2): a busy session refuses before anything
+      // is written, a landed decision rebuilds the cwd's sessions — exactly
+      // what POST /api/project-trust does, because both call the same function.
+      const outcome = await writeProjectTrustDecision(cwd, trusted, agentDirOf(ctx));
+      if (!outcome.ok) return { status: "refused", reason: outcome.message };
+      return { status: "written", summary: `trust.json decision for ${cwd}: ${String(trusted)} (pi ${probe.version})` };
     },
     // pi's CLI declares no fixed safe diagnostic command yet (its doctor joins
     // with a later update): the visible reason, never a guessed command.

@@ -1,10 +1,9 @@
 /**
- * The settings rail (85a1b AC1): nine new sections plus the two legacy-marked
- * old pages, in their settled order. `legacy` marks the temporary Models and
- * Claude pages (owner ruling Q1 A): 85a3 deletes `legacy-models` and 85a4
- * deletes `legacy-claude`, and everything that names them — this table, the
- * migration below, the `legacy-models` selection key and SettingsPanel's
- * mounts — goes with them.
+ * The settings rail (85a1b AC1; 85a4 removed the legacy Claude page): nine
+ * new sections plus the one legacy-marked old Models page, in their settled
+ * order. `legacy` marks the temporary Models page (owner ruling Q1 A): 85a3
+ * deletes `legacy-models`, and everything that names it — this table, the
+ * `legacy-models` selection key and SettingsPanel's mount — goes with it.
  */
 export const SETTINGS_TABS = [
   { id: "general", labelKey: "settings.general" },
@@ -17,7 +16,6 @@ export const SETTINGS_TABS = [
   { id: "plugins", labelKey: "common.plugins" },
   { id: "polyforge", labelKey: "polyforge.title" },
   { id: "legacy-models", labelKey: "settings.tabLegacyModels", legacy: true },
-  { id: "legacy-claude", labelKey: "settings.tabLegacyClaude", legacy: true },
 ] as const;
 
 export const SETTINGS_SECTION_VALUES = [
@@ -31,7 +29,6 @@ export const SETTINGS_SECTION_VALUES = [
   "plugins",
   "polyforge",
   "legacy-models",
-  "legacy-claude",
 ] as const;
 
 export type SettingsSection = (typeof SETTINGS_SECTION_VALUES)[number];
@@ -43,14 +40,11 @@ const STORAGE_KEY = "pi-web:settings-navigation";
 const PROJECT_SECTIONS = new Set<SettingsSection>(["skills", "agents", "plugins"]);
 
 /**
- * Where a stored old section value lands (owner ruling Q2 A): `claude` — the
- * old Claude page's key — goes to the permission page's Claude part. `models`
- * keeps its spelling: it is the new Models concept page's id now, and the old
- * Models page lives under `legacy-models`. Removed with 85a4, when the legacy
- * Claude page goes (删除旧版 Claude 页时一并移除本表) — it exists only at
- * this read boundary, never as a general alias layer.
+ * `models` keeps its spelling: it is the new Models concept page's id now,
+ * and the old Models page lives under `legacy-models`. The `claude` key of
+ * the deleted Claude page is gone with the page (85a4, as the 85a1b comment
+ * promised): a stored value it leaves reads as unknown and lands on 常规.
  */
-const LEGACY_SECTION_MIGRATION: Readonly<Record<string, SettingsSection>> = { claude: "permission" };
 
 /** Whether a section is unavailable until a project is open. */
 export function settingsSectionRequiresProject(section: SettingsSection): boolean {
@@ -118,10 +112,7 @@ export function getLastSettingsSection(
 ): SettingsSection {
   if (!storage) return "general";
   try {
-    let section = readState(storage).section;
-    if (typeof section === "string" && section in LEGACY_SECTION_MIGRATION) {
-      section = LEGACY_SECTION_MIGRATION[section];
-    }
+    const section = readState(storage).section;
     if (!isSettingsSection(section)) return "general";
     return settingsSectionRequiresProject(section) && !cwd ? "general" : section;
   } catch {

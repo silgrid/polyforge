@@ -1,15 +1,15 @@
 // Per-layer effective values for the unified fields (polyforge#85 85a1, unit
 // u4). Every value is computed, never observed: claude applies its settings
 // `env` only after spawn (workbench#397) and each harness merges its layers
-// its own way, so each value carries `inferred: true` (#85 d-5). Until the
-// Pi Web-stored claude settings migrate back to native files (#147, #150),
-// the claude side also lists the Pi Web layer (pi-web-claude-settings.json,
-// claude-permissions.json) under the `pi-web` scope.
+// its own way, so each value carries `inferred: true` (#85 d-5). Since the
+// retired self-stored claude files migrated back (#150 85a4), the claude
+// side lists the Pi Web preference layer (pi-web-settings.json's claude
+// object) under the `pi-web` scope.
 import { join } from "node:path";
 import { claudeConfigDir } from "../claude-config-dir";
-import { claudePermissionConfigPath, readClaudePermissionConfig } from "../claude-permission-config";
-import { claudeSettingsPath, readClaudeSettings } from "../claude-settings";
+import { readClaudePreferences } from "../claude-preferences";
 import { defaultAgentDir } from "../http-dispatcher";
+import { piWebSettingsPath } from "../pi-web-settings";
 import type { HarnessReadContext } from "./adapter";
 import { claudeSettingsLayers } from "./claude-layers";
 import type { EffectiveConfigPayload, EffectiveValue } from "./concepts";
@@ -67,17 +67,13 @@ export function claudeEffectiveConfig(ctx?: HarnessReadContext): EffectiveConfig
       break;
     }
   }
-  // The Pi Web-stored layer, until #147/#150 migrate it back to native files.
-  fields["pi-web:launch-permission-mode"] = {
-    value: readClaudeSettings(agentDir).launchPermissionMode,
+  // The Pi Web preference layer (85a4): the approval channel decides a claude
+  // child's permission words; the retired launch-permission-mode layer is
+  // gone (claude's native permissions.defaultMode owns that field now).
+  fields["pi-web:approval-channel"] = {
+    value: readClaudePreferences(agentDir).approvalChannel,
     sourceScope: "pi-web",
-    sourcePath: claudeSettingsPath(agentDir),
-    inferred: true,
-  };
-  fields["pi-web:tool-permissions"] = {
-    value: readClaudePermissionConfig(agentDir).mode,
-    sourceScope: "pi-web",
-    sourcePath: claudePermissionConfigPath(agentDir),
+    sourcePath: piWebSettingsPath(agentDir),
     inferred: true,
   };
   return { fields };

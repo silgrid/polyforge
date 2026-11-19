@@ -8,13 +8,15 @@ import { invalidateSessionListCache } from "@/lib/session-reader";
 import { startRpcSession } from "@/lib/rpc-manager";
 import { cwdMissingBody } from "@/lib/missing-cwd";
 import { readStoredAgentLanguage } from "@/lib/agent-language-config";
-import { readClaudeSettings } from "@/lib/claude-settings";
+import { ensureClaudeSelfStoredMigration } from "@/lib/claude-migration";
+import { readClaudePreferences } from "@/lib/claude-preferences";
 import { EMPTY_CLAUDE_USAGE, removeClaudeSessionRecord, upsertClaudeSessionRecord } from "@/lib/claude-index";
 import { findClaudeBinary, startClaudeSession } from "@/lib/claude-session";
 import { validateClaudeImages } from "@/lib/image-attachments";
 import {
   CLAUDE_PROVIDER,
   CLAUDE_EFFORT_DEFAULT,
+  CLAUDE_LAUNCH_PERMISSION_MODE_DEFAULT,
   claudeFirstMessage,
   isClaudeEffort,
   isClaudeHarness,
@@ -41,10 +43,13 @@ function rejected(commandType: string | undefined, body: Record<string, unknown>
 
 /**
  * A new claude session (#250), after the cwd guard: claude must be on PATH,
- * then the index entry (the model name as given, effort, no preset; the Agent language and
- * Settings › Claude's permission mode and hook switch as they are now,
- * #445) and the first child
- * (`--session-id <new id>`, `--effort` for a non-default level).
+ * then the index entry (the model name as given, effort, no preset; the Agent
+ * language and the Pi Web hook-activity preference as they are now) and the
+ * first child (`--session-id <new id>`, `--effort` for a non-default level).
+ * The retired startup override is gone (85a4, Q7 B): a new session captures
+ * no launch permission mode — claude's own native permissions.defaultMode
+ * applies — and the one-time migration of the retired self-stored files runs
+ * first, so the user's stored mode has already reached the native file.
  * The child is spawned before the reply; a prompt goes to its stdin.
  */
 async function createClaudeSession(
@@ -58,7 +63,8 @@ async function createClaudeSession(
     return rejected(commandType, { error: "claude was not found on PATH" }, 400);
   }
   const now = new Date().toISOString();
-  const claudeSettings = readClaudeSettings();
+  await ensureClaudeSelfStoredMigration();
+  const claudePreferences = readClaudePreferences();
   const record = {
     id: randomUUID(),
     cwd,
@@ -66,9 +72,10 @@ async function createClaudeSession(
     effort,
     // The server setting at creation; later launches read this record.
     agentLanguage: readStoredAgentLanguage(),
-    // Settings › Claude at creation: a later change reaches new sessions only.
-    launchPermissionMode: claudeSettings.launchPermissionMode,
-    includeHookEvents: claudeSettings.includeHookEvents,
+    // No startup override (85a4): the record's mode starts at default — the
+    // field stays for a session's own set_permission_mode switch and resume.
+    launchPermissionMode: CLAUDE_LAUNCH_PERMISSION_MODE_DEFAULT,
+    includeHookEvents: claudePreferences.includeHookEvents,
     created: now,
     modified: now,
     firstMessage: commandType === "prompt"
