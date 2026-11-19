@@ -936,12 +936,12 @@ test("a group holding a server the switch never turns on can still be switched o
   // docs is on and pw, the only server off, references PI_WEB_PASSWORD: the switch reads on and
   // offers to turn the group off. Reading "every row on" kept it off for good, and each click
   // asked to turn on again and sent nothing.
-  assert.match(groupSwitch(writeView(), "1/2"), /aria-checked="true" aria-label="Turn off every global server"/);
+  assert.match(groupSwitch(writeView(), "1/2"), /aria-checked="true" aria-label="Turn off every global server \(pi\)"/);
   // The count still says what the file says.
   const pwOff = server({ name: "pw", transport: "http", url: "https://pw/mcp", enabled: false, webPasswordField: { kind: "header", name: "Authorization" } });
   assert.match(
     groupSwitch(writeView({ data: { servers: [server({ name: "docs", enabled: false, transport: "http", url: "https://docs/mcp" }), pwOff] } }), "0/2"),
-    /aria-checked="false" aria-label="Turn on every global server"/,
+    /aria-checked="false" aria-label="Turn on every global server \(pi\)"/,
   );
   // The shared switch's click asks for the opposite of what it shows.
   const asked = [];
@@ -1471,12 +1471,13 @@ function unifiedData(overrides = {}) {
     files: [globalFile, projectFile],
     servers: [
       server({ name: "shared", transport: "stdio", command: "npx", args: ["-y", "v1"] }),
+      server({ name: "repo-tool", scope: "project", sourcePath: projectFile.path, transport: "stdio", command: "node", enabled: false }),
     ],
     project: { cwd: "/Users/me/repo", trust: trusted },
     claude: claudeHalf({
       servers: [
         claudeEntry({ name: "shared", command: "npx", args: ["-y", "v2"] }),
-        claudeEntry({ name: "claude-own", command: "npx", args: ["-y", "c"] }),
+        claudeEntry({ name: "claude-own", command: "npx", args: ["-y", "c"], type: "sse", url: "https://own.example/sse" }),
         claudeEntry({ name: "claude-local", scope: "local", type: "http", url: "https://local.example/mcp" }),
       ],
     }),
@@ -1493,7 +1494,8 @@ test("three groups: claude's rows beside pi's, the local one Claude's own, the s
   const html = view({ cwd: "/Users/me/repo", load: { state: "loaded", data: unifiedData() } });
   const markup = decode(html);
   const order = ["project", "global", "local"].map((label) => markup.indexOf(`>${label}<`));
-  assert.deepEqual(order, [...order].sort(), "project, global, then local");
+  assert.ok(order.every((index) => index >= 0), "all three group headings render");
+  assert.deepEqual(order, [...order].sort((a, b) => a - b), "project, global, then local");
   // The local group is marked Claude's own, and shows no switch at all.
   const localGroup = markup.slice(markup.indexOf(">local<"));
   assert.match(localGroup, new RegExp(messages["mcp.group.claudeOnly"]), "the local group says Claude only");
