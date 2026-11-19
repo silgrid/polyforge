@@ -262,22 +262,41 @@ export function createBgTaskController(deps: BgRuntimeDeps): BgTaskController {
    */
   async function deliverCompletion(task: InternalTask): Promise<void> {
     const info = task.info;
+    /** The deletion gate is re-read after every await (r1#5): a session deleted at any point wakes nothing. */
+    const gated = (): boolean => deletedSessions.has(info.sessionId);
     try {
-      if (deletedSessions.has(info.sessionId)) return;
+      if (gated()) return;
       let wrapper = deps.getSession(info.sessionId);
       if (!wrapper?.isAlive()) {
         const sessionFile = await deps.resolveSessionPath(info.sessionId);
+        if (gated()) return;
         if (!sessionFile) return; // the session is gone: nothing to wake
         wrapper = await deps.reopenSession(info.sessionId, sessionFile);
+        if (gated()) return;
       }
       await wrapper.waitUntilReady?.();
+      if (gated()) return;
       // A session mid-turn (a reply streaming, a compaction running) gets the
       // notification after its turn ends, never inside it (AC1); a turn that
       // outlasts the deadline still gets it, queued as a follow-up.
       const pollMs = deps.wakeIdlePollMs ?? WAKE_IDLE_POLL_MS;
       const deadline = Date.now() + (deps.wakeIdleTimeoutMs ?? WAKE_IDLE_TIMEOUT_MS);
-      while (wrapper.isAlive() && wrapper.isRunning() && Date.now() < deadline) {
+      while (wrapper.isAlive() && wrapper.isRunning() && !gated() && Date.now() < deadline) {
         await sleep(pollMs);
+      }
+      if (gated()) return;
+      // The wrapper the wait watched may be gone (Stop's forced cleanup ran
+      // mid-wait): send to a live one, or reopen when none is (r1#5).
+      const live = deps.getSession(info.sessionId);
+      if (live?.isAlive()) {
+        wrapper = live;
+      } else if (!wrapper.isAlive()) {
+        const sessionFile = await deps.resolveSessionPath(info.sessionId);
+        if (gated()) return;
+        if (!sessionFile) return;
+        wrapper = await deps.reopenSession(info.sessionId, sessionFile);
+        if (gated()) return;
+        await wrapper.waitUntilReady?.();
       }
       await wrapper.inner.sendCustomMessage({
         customType: BG_TASK_NOTIFICATION_TYPE,
