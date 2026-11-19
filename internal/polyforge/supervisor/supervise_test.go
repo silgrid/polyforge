@@ -278,23 +278,23 @@ func (p *supProc) supStopping() bool {
 	return p.stop
 }
 
-// TestSuperviseStopInTheStartWindowStillForwardsOnce (r1#1): a stop
-// signal landing inside a child's start window — after the loop's stop
-// check, before the process exists — still reaches the child exactly
-// once: the start counts as unsettled while it is in flight and the
-// one forwarded TERM is delivered after the start, so the daemon
-// finishes its shutdown inside the grace and the run answers 0.
-func TestSuperviseStopInTheStartWindowStillForwardsOnce(t *testing.T) {
+// TestSuperviseStopInTheStartWindowSkipsTheStart (r1#1): a stop signal
+// landing inside a child's start window — after the loop's stop check,
+// before the process exists — leaves NOTHING behind: the start counts
+// as unsettled while it is in flight (the run waits it out), the child
+// is not started at all (a TERM delivered to a process that has not
+// installed its handlers would kill it without its shutdown), and the
+// run answers 0 well inside the grace.
+func TestSuperviseStopInTheStartWindowSkipsTheStart(t *testing.T) {
 	dir := t.TempDir()
 	pidF := filepath.Join(dir, "daemon.pid")
 	termF := filepath.Join(dir, "term.log")
-	doneF := filepath.Join(dir, "done.log")
 	enter, release := make(chan *supProc), make(chan struct{})
 	oldHold := supPreStartHold
 	supPreStartHold = func(p *supProc) { enter <- p; <-release }
 	t.Cleanup(func() { supPreStartHold = oldHold })
 
-	rs := RunSpec{Daemon: supTrapDaemon(pidF, termF, doneF, true),
+	rs := RunSpec{Daemon: supTrapDaemon(pidF, termF, "", false),
 		Grace: 3 * time.Second, RestartDelay: 100 * time.Millisecond}
 	code := supRun(rs)
 	p := <-enter
@@ -306,19 +306,29 @@ func TestSuperviseStopInTheStartWindowStillForwardsOnce(t *testing.T) {
 	supPoll(t, "the stop to be recorded on the starting child", func() bool {
 		return p.supStopping()
 	})
+	started := time.Now()
 	close(release)
 	select {
 	case c := <-code:
 		if c != 0 {
-			t.Fatalf("a stop in the start window: exit %d, want 0 (the child must get its one TERM and finish inside the grace)", c)
+			t.Fatalf("a stop in the start window: exit %d, want 0", c)
 		}
 	case <-time.After(supDeadline):
 		t.Fatal("the run did not end after the in-window stop")
 	}
-	if n := supLineCount(termF); n != 1 {
-		t.Fatalf("the daemon saw %d TERM lines, want exactly 1", n)
+	if waited := time.Since(started); waited > rs.Grace {
+		t.Fatalf("the run waited %s, past its %s grace", waited, rs.Grace)
 	}
-	if raw, err := os.ReadFile(doneF); err != nil || !strings.Contains(string(raw), "done") {
-		t.Fatalf("the daemon did not complete its shutdown inside the grace (done file: %v)", err)
+	// the child was never started: no pid, no signal delivered to a
+	// process that does not exist, nothing left running
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(pidF); err == nil {
+			t.Fatal("the child started although the stop landed in its start window")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if n := supLineCount(termF); n != 0 {
+		t.Fatalf("a child that never ran saw %d TERM lines, want 0", n)
 	}
 }
