@@ -32,7 +32,10 @@ test.after(() => {
 
 const jiti = createJiti(import.meta.url, { alias: { "@": process.cwd() }, interopDefault: true, moduleCache: false });
 const route = await jiti.import("./route.ts");
-const terminalManager = await jiti.import("../../lib/terminal-manager.ts");
+const terminalManager = await jiti.import("../../../lib/terminal-manager.ts");
+const { allowFileRoot } = await jiti.import("../../../lib/file-access.ts");
+globalThis.__piAllowedRootsCache = undefined;
+allowFileRoot(scratch);
 
 const post = (body) => route.POST(new Request("http://localhost/api/terminal", {
   method: "POST",
@@ -88,7 +91,8 @@ test("a body the client shaped beyond {harness, id, cell} is refused — no comm
     const refused = await post(body);
     assert.equal(refused.status, 400, JSON.stringify(body));
   }
-  assert.equal(fs.readFileSync(claudeLog, "utf8").trim().split("\n").length, 2, "a refused body started a terminal");
+  const calls = fs.existsSync(claudeLog) ? fs.readFileSync(claudeLog, "utf8").trim().split("\n").filter(Boolean).length : 0;
+  assert.equal(calls, 2, "a refused body started a terminal");
 });
 
 test("the workspace shell mode is unchanged: cwd required, id optional", async () => {
@@ -96,6 +100,6 @@ test("the workspace shell mode is unchanged: cwd required, id optional", async (
   assert.equal(refused.status, 400);
   const response = await post({ cwd: scratch, id: "a".repeat(32) });
   assert.equal(response.status, 200);
-  assert.equal(await response.json(), { id: "a".repeat(32) });
+  assert.deepEqual(await response.json(), { id: "a".repeat(32) });
   terminalManager.killTerminal("a".repeat(32));
 });
