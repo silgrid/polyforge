@@ -325,6 +325,28 @@ try {
     await page.context().close();
   });
 
+  // S85-09 — AC2/Q4A (r2#3): a failed harness-list read is a visible reason in both
+  // panes — never silence, and never the contradictory「No harnesses registered.」.
+  await part("S9", "a failed harness list says why", async () => {
+    const page = await newPage();
+    // The later registration wins over the shared adapter mocks: the list itself 500s.
+    await page.context().route(/\/api\/harness(?:\/|$)/, (route) => route.fulfill({ status: 500, json: { error: "internal" } }));
+    await openSettings(page);
+    await generalSidebarItems(page).filter({ hasText: "Effective values & sources" }).click({ timeout: ACTION_MS });
+    const effectivePane = generalPane(page, "effective");
+    await effectivePane.waitFor({ state: "visible", timeout: ACTION_MS });
+    const effectiveText = await waitFor(async () => {
+      const body = await effectivePane.innerText();
+      return body.includes("The harness list could not be read: HTTP 500") ? body : false;
+    }, ACTION_MS, "the effective pane never showed the list read's failure");
+    assert.ok(!effectiveText.includes("No harnesses registered."), `the failed read masquerades as an empty registry: ${effectiveText.slice(0, 200)}`);
+    await generalSidebarItems(page).filter({ hasText: "Environment" }).click({ timeout: ACTION_MS });
+    const envPane = generalPane(page, "environment");
+    await envPane.waitFor({ state: "visible", timeout: ACTION_MS });
+    await waitFor(async () => (await envPane.innerText()).includes("The harness list could not be read: HTTP 500"), ACTION_MS, "the environment pane never showed the list read's failure");
+    await page.context().close();
+  });
+
   // S85-08 — AC4: stored old values land on the new pages.
   await part("S8", "navigation migration", async () => {
     for (const [stored, expectedTab, expectedHost] of [
