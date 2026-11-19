@@ -19,9 +19,9 @@ const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "pi-web-harness-compare-")
 const agentDir = path.join(scratch, "agent");
 const project = path.join(scratch, "project");
 const claudeConfigDir = path.join(scratch, "claude-config");
-fs.mkdirSync(path.join(project, ".pi"));
-fs.mkdirSync(path.join(project, ".claude"));
-fs.mkdirSync(claudeConfigDir);
+fs.mkdirSync(path.join(project, ".pi"), { recursive: true });
+fs.mkdirSync(path.join(project, ".claude"), { recursive: true });
+fs.mkdirSync(claudeConfigDir, { recursive: true });
 fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({
   defaultProvider: "anthropic",
   defaultModel: "claude-opus-4",
