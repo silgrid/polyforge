@@ -62,7 +62,17 @@ steps:
     # Dockerfile or not. The project sets
     # steps.<project>.verification.params.image, a ticket overrides it
     # with `pf override`; the value reaches verify.py as PF_PARAM_IMAGE.
-    params: { image: "" }
+    # The step's `audit` parameter (polyforge#138), default "on": the
+    # lane's own dependency audit, the `audit` command the scope engine
+    # appends to every full report. A project whose owner decides
+    # against the audit sets
+    # steps.<project>.verification.params.audit to "off" (or a ticket
+    # override): the step then plans without the `audit` command and
+    # records the closure in its result. The switch is the project
+    # owner's alone — no key of a repository's verify-scope.conf can
+    # turn the audit off or loosen it; the value reaches verify.py as
+    # PF_PARAM_AUDIT.
+    params: { image: "", audit: "on" }
   - id: publish
     gate: true
     on_fail: { target: build }
