@@ -150,7 +150,10 @@ function plan(mode, options) {
     // Only an HTTP 200 is a timed sample; anything else is a failed probe at
     // the timeout bound (the ticket's §2 requires 200; review r3 N4).
     details.probe200Only = true;
-    details.hotIterations = 200;
+    // The hot runaway guard is a DURATION budget, not a call count (review
+    // r4#1): fast calls must loop until the sample bound, and the budget only
+    // bounds a runaway.
+    details.hotDurationBudgetMs = 300_000;
     // Cold starts repeat UNTIL the sample bound — a fixed count made a
     // compliant summary cold start fail AC1 at ~90 samples, a faster server
     // collecting fewer samples per start than a slow one (review r3 #1). The

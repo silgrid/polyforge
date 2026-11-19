@@ -66,7 +66,9 @@ test("each mode's dry run resolves the plan from the ticket's arguments", (t) =>
       assert.equal(plan.probe, "open-loop");
       assert.equal(plan.overlapOnly, true);
       assert.equal(plan.probe200Only, true);
-      assert.ok(Number.isInteger(plan.hotIterations) && plan.hotIterations > 0, "hot repeats measured calls on one warmed server");
+      // A duration runaway guard, never a call count (review r4#1: a fixed
+      // call cap made fast hot calls collect fewer samples than the bound).
+      assert.ok(Number.isInteger(plan.hotDurationBudgetMs) && plan.hotDurationBudgetMs >= 60_000, "hot loops until the sample bound, bounded by time");
       assert.equal(plan.coldStarts, "until-min-samples");
       assert.ok(Number.isInteger(plan.coldStartSafetyCap) && plan.coldStartSafetyCap >= 100,
         "the safety cap is a runaway bound, not a sample bound");

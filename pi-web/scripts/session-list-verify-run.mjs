@@ -266,16 +266,21 @@ async function withProbeStream(server, details, collector, measured) {
  * One probe stream over back-to-back measured hot calls (exported for its
  * behaviour test): the calls run one after another with no idle gap, and only
  * probes issued inside a call's window count, so the sample count follows the
- * calls' cumulative duration. Terminates on the sample bound or the call
- * budget `details.hotIterations` allows.
+ * calls' cumulative duration. Terminates ONLY on the sample bound, with
+ * `details.hotDurationBudgetMs` as a runaway guard — never on a call count
+ * (review r4#1: a fixed call cap made fast hot calls collect fewer samples
+ * than the bound, a compliant server failing AC1). The budget's expiry and
+ * the call count are reported so a failure says what happened.
  */
 export async function measureHotCalls(server, details) {
   const collector = newCollector();
   const calls = [];
-  const firstStart = performance.now();
+  const budgetStartedAt = performance.now();
+  const firstStart = budgetStartedAt;
   await withProbeStream(server, details, collector, async () => {
     let start = firstStart;
-    for (let iteration = 0; iteration < details.hotIterations && overlappingSamples(collector).length < details.minSamples; iteration += 1) {
+    while (overlappingSamples(collector).length < details.minSamples
+      && performance.now() - budgetStartedAt < details.hotDurationBudgetMs) {
       const call = await server.call(details.mode);
       const end = performance.now();
       collector.windows.push({ start, end });
@@ -283,7 +288,13 @@ export async function measureHotCalls(server, details) {
       start = end;
     }
   });
-  return { samples: overlappingSamples(collector), calls };
+  const durationMs = performance.now() - budgetStartedAt;
+  return {
+    samples: overlappingSamples(collector),
+    calls,
+    durationMs,
+    hitBudget: durationMs >= details.hotDurationBudgetMs,
+  };
 }
 
 async function responsiveness(details, fixture) {
@@ -297,6 +308,8 @@ async function responsiveness(details, fixture) {
       const calls = [];
       let readBytes = 0;
       let attempts = 0;
+      let hotDurationMs = 0;
+      let hotHitBudget = false;
       if (shape === "hot") {
         // One warmed server, ONE probe stream across back-to-back measured
         // calls (measureHotCalls): the calls run one after another with no
@@ -310,6 +323,8 @@ async function responsiveness(details, fixture) {
           readBytes += rcharOf(server.pid) - rcharBefore;
           samples.push(...measured.samples);
           calls.push(...measured.calls);
+          hotDurationMs += measured.durationMs;
+          hotHitBudget = measured.hitBudget;
         });
         attempts = calls.length;
       } else {
@@ -346,6 +361,7 @@ async function responsiveness(details, fixture) {
         max,
         calls,
         readBytes,
+        ...(shape === "hot" ? { hotDurationMs, hotHitBudget } : {}),
         ok,
       };
     }
