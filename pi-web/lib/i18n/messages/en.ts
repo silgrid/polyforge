@@ -86,6 +86,11 @@ export const enLocale: LocalePlugin = {
 
     "settings.backTo": "Back to {name}",
     "settings.mcp": "MCP",
+    "settings.harnessEnvTitle": "Environment",
+    "settings.harnessEnvNote": "Only variable names are shown, never values: the adapters answer names, and a value never reaches this page.",
+    "settings.harnessEnvEmpty": "No variables set.",
+    "settings.harnessEnvReading": "Reading the harnesses…",
+    "settings.harnessEnvFailed": "{harness} could not be read: {error}",
     "settings.generalPaneConversation": "Interface & conversation",
     "settings.generalPaneEnvironment": "Environment",
     "settings.generalPaneEffective": "Effective values & sources",

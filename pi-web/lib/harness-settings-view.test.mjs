@@ -91,6 +91,7 @@ test("a null payload or malformed keys never reach the view as rows", () => {
 test("the environment pane renders the groups, names only, with its note and empty state", () => {
   const groups = [
     { harness: "pi", target: "pi", keys: ["ANTHROPIC_AUTH_TOKEN", "GEMINI_API_KEY"], error: null },
+    { harness: "codex", target: "codex", keys: [], error: null },
     { harness: "claude", target: "claude", keys: [], error: "HTTP 500" },
   ];
   const html = renderToStaticMarkup(h(I18nProvider, null, h(HarnessEnvironmentGroups, { groups })));
@@ -102,6 +103,8 @@ test("the environment pane renders the groups, names only, with its note and emp
   assert.match(html, /data-harness="claude"/, "the groups are not marked per harness");
   assert.match(html, /No variables set/, "the empty state is missing");
   assert.match(html, /HTTP 500/, "a failed harness read hides its error");
+  // The failure is that harness's alone; the empty group beside it still shows.
+  assert.match(html, /data-harness="codex"[\s\S]*?No variables set/, "an empty group beside a failed one lost its empty state");
   // A group's failure and its emptiness are per-harness, never the whole pane's.
   assert.ok(!/E2E-ENV/.test(html), "a value reached the pane's markup");
 });

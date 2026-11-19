@@ -12,8 +12,12 @@ export interface HarnessEnvGroup {
   keys: string[];
 }
 
-export function envGroup(_harness: string, _payload: EnvPayload | null): HarnessEnvGroup | null {
-  return null;
+export function envGroup(harness: string, payload: EnvPayload | null): HarnessEnvGroup | null {
+  if (!payload) return null;
+  // Names only, deduped and sorted — the payload already carries no value;
+  // the view keeps it that way by construction.
+  const keys = [...new Set(payload.setKeys.filter((key): key is string => typeof key === "string" && key !== ""))].sort();
+  return { harness, target: payload.target, keys };
 }
 
 /** One effective value row: the field, its display value, and its source. */

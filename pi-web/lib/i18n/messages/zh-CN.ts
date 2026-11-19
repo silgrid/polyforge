@@ -86,6 +86,11 @@ export const zhCNLocale: LocalePlugin = {
 
     "settings.backTo": "返回{name}",
     "settings.mcp": "MCP",
+    "settings.harnessEnvTitle": "环境",
+    "settings.harnessEnvNote": "只显示变量名，不显示值：适配器只回答名称，任何值都不进入本页。",
+    "settings.harnessEnvEmpty": "未设置变量。",
+    "settings.harnessEnvReading": "正在读取各 harness…",
+    "settings.harnessEnvFailed": "{harness} 读取失败：{error}",
     "settings.generalPaneConversation": "界面与对话",
     "settings.generalPaneEnvironment": "环境",
     "settings.generalPaneEffective": "生效值与来源",
