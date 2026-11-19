@@ -1029,7 +1029,10 @@ setting:
   daemon checks only that the file parses), and the steps after it verify
   it. Its close runs two of the same facts first — `build` without the
   replay (each unit's static commit facts) and `carries` — and hands off
-  only on green. Review runs four pre-written lines of the workflow's script
+  only on green. Before them its close runs the scoped selection
+  verification plans — `fast_checks.py --close-scoped`, one shared
+  implementation — and merges its record into the change analysis's
+  `selected`. Review runs four pre-written lines of the workflow's script
   `facts.py` as written — `plan-conformance` (the plan's two-way
   conformance with the diff), `build --replay --isolation host` (each
   unit's test commit a one-parent

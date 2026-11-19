@@ -1243,6 +1243,29 @@ full reference.
   was killed at its timeout; 2: not judged (no such repo, the
   engine missing or failing, an unreadable report, a repo the engine
   planned no command for).
+- `--repo <name> --close-scoped` (with `--reuse <file>`, repeatable) is
+  the build close's own mode: it plans the same light-tier selection verification's light tier
+  plans (one shared implementation — the same engine
+  `--json --light --base <merge-base>` request, the same choice, the same
+  nested roots) over the repo's final tree and executes it on the host,
+  once per touched repo, after its fast checks; a command the same tree
+  already ran green (the same root and command, its evidence in a
+  `--reuse` result file of this repo — the close's fast-checks run) is
+  reused, not re-run, and a red command keeps the per-unit bar's one
+  targeted re-run and whole-command confirmation; a selection the engine
+  answers with the full tier, or a selected command that cannot run,
+  records `incomplete` with the reason kept and exits non-zero, claiming
+  nothing (the full bar stays `verification`'s; the owner decides a
+  full-tier fallback). The result's `details.selected` is the change
+  analysis's machine selection record — the repo's head, tree, base and
+  default branch, the engine invocations, the conf's identity, the
+  selection's paths and suites, every command with its evidence (or its
+  reuse source), and the status: `green`, `red` or `incomplete` with its
+  reason. Exit 0: every selected command green (reused or run); 1: a
+  command stayed red after the flaky phase, or the selection is red or
+  incomplete; 2: not judged (no such repo, the engine missing or failing,
+  an unreadable report, a repo the engine planned no command for, an
+  unusable `--reuse` file).
 - `--check-units <units.json> [--unit <id>]` is the on-the-spot unit
   check at record time: it re-runs the build's recorded unit runs as
   written (each unit's own `argv` in its own `cwd` of its own

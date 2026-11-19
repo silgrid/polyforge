@@ -148,7 +148,11 @@ sweep runs.
 `code` commits run the fast gates of the packages they touch, and each build
 step (`code`, `fix`) also runs the `fast`- and `scoped`-phase commands of the
 engine's `--json` report below before it calls a unit green (never its
-`full`-phase ones); the full bar belongs to the `verification` step. A lane's
+`full`-phase ones); the full bar belongs to the `verification` step. The
+develop lane's build close runs the same light selection before its
+hand-off (`fast_checks.py --close-scoped`): the existing tests the engine
+selects run there, not first at verification, and a full-tier fallback
+records `incomplete` and is the owner's to settle. A lane's
 verification step runs the tier it declares (`with: { tier: light }`, else
 `full`); a work item chooses no tier (workflow contract 1). The
 scope comes from the engine `workflows/_shared/scripts/verify-scope` (with

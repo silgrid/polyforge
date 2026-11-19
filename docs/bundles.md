@@ -102,7 +102,9 @@ every lane is an agent step (the daemon runs no step
 itself); develop's verification runs `verify.py --tier auto --unit-runs artifacts/build/units.json --analysis artifacts/build/change-analysis.json` through its skill (the build's recorded unit runs ride along; the tier is the work item's own — an integration batch's fix ticket runs the full bar, every other ticket the light one). The change analysis's listed tests run beside the plan, add-only, under its supplement cap. develop's `build` and `review`
 follow skills too: build records each unit's red-then-green run in
 `artifacts/build/units.json` (its close running the static `build` (no
-replay) and `carries` facts first), and review runs the workflow's `facts.py` (the units' red runs
+replay) and `carries` facts first, the scoped selection
+`fast_checks.py --close-scoped` before them — its record the change
+analysis's `selected`), and review runs the workflow's `facts.py` (the units' red runs
 replayed at their test commits, or at the change's base for a unit declared
 `pre_existing_red`) under the heavy-run admission.
 
