@@ -16,8 +16,11 @@ release ...`, or ask the routing skill: "release" / "deploy" /
 `patch`) it is passed verbatim to the repo's procedure; otherwise the
 repo default applies.
 
-The bundle runs three gate steps — `release`
-(`.polyforge/release.sh [bump]`, after the deploy procedure's read-only
+The bundle runs three gate steps — `release` (the project's most recent
+green integrate batch resolved by the lane's own command and refused with
+named codes before any version is claimed when there is none —
+`PF-RELEASE-NO_GREEN_BATCH`; the procedure runs as `.polyforge/release.sh
+[bump] --pins <file>`, after the deploy procedure's read-only
 `.polyforge/deploy.sh --preflight` when the project has one and, on a first
 run, a read of the README, install and upgrade docs against the changes since
 the previous release tag — a mismatch is a question to the owner, never an
@@ -27,20 +30,27 @@ edit), an independent `verify`
 <version>`; a project without `deploy.sh` releases without deploying).
 A failure terminates the work item: published tags, releases and images
 are immutable, so there is no rewind into a re-release. A claimed version
-is never burned, though: when `origin_head` already carries exactly one
-release tag `V` - an earlier attempt or work item that died after its
-claim, a release whose deploy failed, a hand release - the `release` step
-resumes `V` instead of refusing it. A complete `V` (`release.sh --verify V`
-passes) is adopted without running the procedure: the release record
-carries `resumed: true` and `notes=<location>` = the published release
-page URL, which `verify` checks, and `verify` audits it again. A partial
-`V` runs the procedure, which resumes it (`release.sh`: what is published
-is checked and kept, only what is missing is published - no second
-version of the commit is ever cut). `verify` accepts `V` in the
-pre-release tag list only for a resumed release. Two release tags on
-`origin_head`, or a tag an earlier attempt of the same work item left on
-another commit, still refuse with `PF-RELEASE-ALREADY_RELEASED`; a
-procedure that cannot resume ends `PF-RELEASE-INCOMPLETE`. Two halves
+is never burned, though: when the green batch's pinned commit already
+carries exactly one release tag `V` - an earlier attempt or work item that
+died after its claim, a release whose deploy failed, a hand release,
+whoever claimed it - the `release` step resumes `V` instead of refusing
+it. A complete `V` (`release.sh --verify V` passes) is adopted without
+running the procedure: the release record carries `resumed: true` and
+`notes=<location>` = the published release page URL, which `verify`
+checks, and `verify` audits it again. A partial `V` runs the procedure,
+which resumes it (`release.sh`: what is published is checked and kept,
+only what is missing is published - no second version of one pinned commit
+is ever cut). `verify` accepts `V` in the pre-release tag list only for a
+resumed release. Two release tags on the owner pin, a release tag that
+appeared on another commit after the pre-release list was recorded, a
+batch pin no longer on the default branch or a batch that names no commit
+for the owner repo refuse at the lane's own resolver, before the
+procedure runs - `PF-RELEASE-ALREADY_RELEASED`,
+`PF-RELEASE-PIN_OFF_DEFAULT`, `PF-RELEASE-UNPINNED_OWNER` - and a
+procedure that cannot resume ends `PF-RELEASE-INCOMPLETE`. A project whose
+procedure declares no `--pins` in its `--help` is refused
+`PF-RELEASE-PROCEDURE_CONTRACT` before it runs (see
+[upgrade](../upgrade.md)). Two halves
 take effect at different times: `release.sh`/`deploy.sh` act from the
 merge on (the step runs the procedure from origin's head), while the step
 text (resume or adopt, the deploy preflight, `verify`'s check (b)) reaches
@@ -68,8 +78,10 @@ until the process is gone: **a release waits for running verifications**
 (the work item shows `verify_queued`, "heavy-run slots full", like a queued
 verification) and no verification starts beside the procedure; and it runs
 under a 120-minute tool window (`PF_TOOL_WINDOW_MS`; a claude step's Bash
-default timeout equals it), sized for a procedure that runs the full gate
-itself, inside a 135-minute wall (T = 405 minutes across its dispatches).
+default timeout equals it), sized for a procedure that builds, audits and
+publishes (the batch's own full-gate run is the test evidence; the
+procedure runs none), inside a 135-minute wall (T = 405 minutes across
+its dispatches).
 `deploy` likewise holds the heavy admission under a 60-minute window (one run may deploy several targets);
 `verify` declares a 30-minute wall and no resources. Downstream verifies
 upstream: `verify` first checks that `release-record.json` parses and names

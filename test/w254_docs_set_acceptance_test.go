@@ -460,13 +460,14 @@ func TestW254QuickstartsMovedIntact(t *testing.T) {
 // - the v0.2.3 section appended with the integration batch's in-batch repair (the lane's two rewind_only steps, repair and review: a red gate whose every unit is attributed and fixable by tests or documentation hands the batch back charged over the one max_rewinds budget, the fix lands as a PR onto the default branch by the revert step so the green tag lands there; a person-merged project (steps.<project>.merge.by: human, frozen into the claim's step modes) gets none of it, an owner's revert rewinds to revert by name, the batch record gaining fixes; no action on upgrade)
 // - the v0.2.4 section appended with the rebuildable build products a doctor switch reclaims at once (polyforge#127: the rebuildable artifacts row reports, --prune-rebuildables removes the directories a repository declares in .polyforge/capsule-gc.conf from the terminal work items' capsule clones without waiting for the 14-day retention, the declaration read from the mapped workspace's .repo clone's committed default branch so the backlog predating it is cleaned too, probe-passing all-ignored directories only with artifacts/, capsule.json, the git dirs, the local commits and the git status never touched, nothing removed while the daemon is down, this repository's own declaration shipping pi-web/.next and pi-web/node_modules; no upgrade action beyond taking the new pf, the default doctor run still writes nothing)
 // - the v0.2.4 section appended with the local development channel (polyforge#136: install.sh --dev takes origin's latest green tag, builds v<next patch>-dev.<first-parent count> locally through make dev-build, refuses AIHub-side sets from tools/aihub-paths.conf in prepare, writes nothing to GitHub, stamps the source commit into --json version's commit field and pf doctor's new pf build row, and the formal channel stays refused until the next formal release)
+// - the v0.2.4 section appended with the release lane shipping the green integrate batch (release.sh takes --pins and its --help must declare it, an old-convention script is refused PF-RELEASE-PROCEDURE_CONTRACT, no green batch is refused before any version is claimed, and the batch is the test evidence the release runs no gate of its own)
 // upgrade-sections:end
 // The file is only routed to, from the install ops page and the README
 // landing page.
 func TestW254UpgradeByteIdentical(t *testing.T) {
 	raw := []byte(w254Read(t, "docs/upgrade.md"))
 	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != "9d034c44f3d85117457ef4d4f0f7f68a0ba063527eb1a5177670c3430d27de8e" {
+	if got := hex.EncodeToString(sum[:]); got != "7817c1c8380dea7187e29aa0a49b17a635ae199131603cd4effbcc516993b7a1" {
 		t.Fatalf("docs/upgrade.md must stay byte-identical (only routed to, never rewritten): sha256 %s != the pinned pre-move sha256", got)
 	}
 	// the list beside the pin: one whole `// - ` line per appended section

@@ -790,9 +790,10 @@ with its own credentials (a step agent holds none) once the step hands off
   owner fixes it and the agent retries, or rewinds, or cancels.
 - `full-gate` (the script `gate.py --isolation container --capsule --pins`,
   no tier — its step key, else
-  the project default; heavy admission; the lane's gate) — runs the release's test gate once on every
-  gated repo's pinned head — never the live tip, which keeps moving (what
-  `.polyforge/release.sh` runs; never the daemon's
+  the project default; heavy admission; the lane's gate) — runs the full gate once on every
+  gated repo's pinned head — never the live tip, which keeps moving (the
+  batch's pins are the release lane's release object, polyforge#154; never
+  the daemon's
   verification run) — with the repo's own scope engine, else the lane's
   copy (a repo that provides only `.polyforge/verify-scope.conf` and
   `.polyforge/Dockerfile.verify` is gated too) — and on a pass writes the green tag itself

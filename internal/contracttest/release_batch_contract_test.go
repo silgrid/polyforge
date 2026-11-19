@@ -63,7 +63,7 @@ func TestReleaseBatchContract(t *testing.T) {
 		"`git checkout --detach <pin>`",
 		"`git rev-parse HEAD` equal to the pin",
 		"a pinned commit the default branch has moved past still releases",
-		"`set -o pipefail; cd repos/<owner> && .polyforge/release.sh [<bump>] --pins ../../artifacts/release-pins.json 2>&1 | tee ../../artifacts/release.log`",
+		"set -o pipefail; cd repos/<owner> && .polyforge/release.sh [<bump>] --pins ../../artifacts/release-pins.json 2>&1 | tee ../../artifacts/release.log",
 		"the reported commit is not equal to the owner pin",
 	} {
 		if !strings.Contains(rel, want) {
