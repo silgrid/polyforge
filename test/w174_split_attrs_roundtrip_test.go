@@ -82,6 +82,12 @@ func w174AttrsOf(t *testing.T, inst *v1Install, jsonEnv w113Env, id string) map[
 	return doc.Attrs
 }
 
+// w174SortedIDs answers the ids sorted (the queue helper sorts too).
+func w174SortedIDs(ids ...string) []string {
+	sort.Strings(ids)
+	return ids
+}
+
 // TestW174SplitAttrsRoundTrip: file create's --attr pair and queue's
 // --attr filter share one shape — the ticket the pair filed is the one
 // (and only the ones) the same pair filters back, and the stored attrs
@@ -117,11 +123,11 @@ func TestW174SplitAttrsRoundTrip(t *testing.T) {
 	// each condition alone narrows to its own matches, never the bare
 	// ticket and never another project's.
 	if got, want := w174QueueIDs(t, inst, jsonEnv, w174Project, "split.origin=wi_O"),
-		[]string{otherUnit, target}; !reflect.DeepEqual(got, want) {
+		w174SortedIDs(otherUnit, target); !reflect.DeepEqual(got, want) {
 		t.Fatalf("queue --attr split.origin=wi_O listed %v, want %v (both wi_O children, nothing else)", got, want)
 	}
 	if got, want := w174QueueIDs(t, inst, jsonEnv, w174Project, "split.unit=bg-ui"),
-		[]string{otherOrigin, target}; !reflect.DeepEqual(got, want) {
+		w174SortedIDs(otherOrigin, target); !reflect.DeepEqual(got, want) {
 		t.Fatalf("queue --attr split.unit=bg-ui listed %v, want %v (both bg-ui children, nothing else)", got, want)
 	}
 	if got, want := w174QueueIDs(t, inst, jsonEnv, w174Other, "split.origin=wi_O", "split.unit=bg-ui"),
