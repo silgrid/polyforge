@@ -128,120 +128,18 @@ function writeJsonl(path, lines) {
   writeFileSync(path, lines.map((line) => `${line}\n`).join(""));
 }
 
+// Skeleton state (polyforge#140 r2 u4): the CLI and its argument contract
+// only. The corpus generation lands in the unit's impl commit.
 const root = arg("root");
 const manifestPath = arg("manifest");
-const piFiles = Number(arg("pi-files", 1000));
-const piBytes = Number(arg("pi-bytes", 734003200));
-const claudeFiles = Number(arg("claude-files", 50));
-const claudeBytes = Number(arg("claude-bytes", 314572800));
-const largeFileMinBytes = Number(arg("large-file-min-bytes", 22020096));
-const projectDirs = Number(arg("project-dirs", 16));
 const seed = Number(arg("seed", 140));
-if (![piFiles, piBytes, claudeFiles, claudeBytes].every((n) => Number.isInteger(n) && n >= 0) || piFiles === 0) usage("counts and byte totals must be non-negative integers");
-if (claudeBytes > 0 && claudeFiles === 0) usage("--claude-bytes without --claude-files");
-const random = prng(seed);
-
-const baseMs = Date.now() - 30 * DAY_MS;
-const agentDir = join(root, "agent");
-const claudeConfigDir = join(root, "claude-config");
-
-// ---- pi sessions -----------------------------------------------------------
-const largePiFiles = piFiles >= 8 ? 6 : 1;
-const bigLineBytes = Math.max(largeFileMinBytes + 1024 * 1024, Math.floor(piBytes / Math.max(1, piFiles) / 2));
-const piPerFile = piFiles > 0 ? Math.max(1, Math.floor((piBytes - largePiFiles * bigLineBytes) / piFiles)) : 0;
-
-const piManifest = [];
-let previousPiPath = null;
-for (let index = 0; index < piFiles; index += 1) {
-  const id = `f${String(index).padStart(6, "0")}-${seed}`;
-  const dirName = `project-${index % projectDirs}`;
-  const path = join(agentDir, "sessions", dirName, `2026-${String(index % 30).padStart(2, "0")}.jsonl`);
-  const createdMs = baseMs + Math.floor((index / piFiles) * 25 * DAY_MS);
-  // Every 7th file is a fork of the previous one (parentSession), as a
-  // fork's relation row is part of the golden list.
-  const parentSession = index > 0 && index % 7 === 0 ? previousPiPath : undefined;
-  const lines = piSessionLines({
-    id, cwd: join(root, dirName), createdMs, parentSession,
-    bigLineBytes: index < largePiFiles ? bigLineBytes : 0,
-    targetBytes: piPerFile, random,
-  });
-  writeJsonl(path, lines);
-  const mtimeMs = createdMs + 3600_000;
-  utimesSync(path, new Date(mtimeMs), new Date(mtimeMs));
-  const content = lines.map((line) => `${line}\n`).join("");
-  piManifest.push({
-    path: relative(root, path),
-    bytes: Buffer.byteLength(content, "utf8"),
-    mtimeMs,
-    sha256: sha256OfFile(content),
-    singleLineMax: Math.max(...lines.map((line) => Buffer.byteLength(line, "utf8"))),
-  });
-  previousPiPath = path;
-}
-
-// ---- claude sessions --------------------------------------------------------
-const claudeLarge = claudeFiles >= 6 ? 4 : 1;
-const claudeBigLineBytes = Math.max(largeFileMinBytes + 1024 * 1024, Math.floor(claudeBytes / Math.max(1, claudeFiles) / 2));
-const claudePerFile = claudeFiles > 0 ? Math.max(1, Math.floor((claudeBytes - claudeLarge * claudeBigLineBytes) / claudeFiles)) : 0;
-
-const claudeRecords = [];
-const claudeManifest = [];
-for (let index = 0; index < claudeFiles; index += 1) {
-  const id = `c${String(index).padStart(4, "0")}-${seed}-1111-4222-8333-444444444444`;
-  const dirName = index % 4 === 0 ? "-tmp-fixture-a" : "-tmp-fixture-b";
-  const path = join(claudeConfigDir, "projects", dirName, `${id}.jsonl`);
-  const createdMs = baseMs + 26 * DAY_MS + Math.floor((index / Math.max(1, claudeFiles)) * 3 * DAY_MS);
-  const lines = claudeTranscriptLines({
-    id, createdMs,
-    bigLineBytes: index < claudeLarge ? claudeBigLineBytes : 0,
-    targetBytes: claudePerFile, random,
-  });
-  writeJsonl(path, lines);
-  const mtimeMs = createdMs + 7200_000;
-  utimesSync(path, new Date(mtimeMs), new Date(mtimeMs));
-  const content = lines.map((line) => `${line}\n`).join("");
-  claudeManifest.push({
-    path: relative(root, path),
-    bytes: Buffer.byteLength(content, "utf8"),
-    mtimeMs,
-    sha256: sha256OfFile(content),
-    singleLineMax: Math.max(...lines.map((line) => Buffer.byteLength(line, "utf8"))),
-  });
-  claudeRecords.push({
-    id,
-    cwd: join(root, `claude-project-${index % 6}`),
-    name: `claude fixture ${index}`,
-    model: "claude-sonnet-5-5",
-    effort: "default",
-    agentLanguage: "en",
-    launchPermissionMode: "default",
-    includeHookEvents: false,
-    created: new Date(createdMs).toISOString(),
-    modified: new Date(mtimeMs).toISOString(),
-    firstMessage: `claude fixture prompt ${index}`,
-    usage: { input: 10, output: 20, cacheRead: 30, cacheWrite: 40, cost: 0.001 },
-  });
-}
-
-// Registered in the synthetic index, exactly the way pi-web's own records read.
-mkdirSync(agentDir, { recursive: true });
-writeFileSync(join(agentDir, "claude-sessions.json"), `${JSON.stringify({ version: 1, sessions: claudeRecords }, null, 2)}\n`);
-
-// ---- manifest ---------------------------------------------------------------
 const manifest = {
   schema: "session-list-fixture/1",
   seed,
-  params: { piFiles, piBytes, claudeFiles, claudeBytes, largeFileMinBytes, projectDirs },
-  pi: piManifest,
-  claude: claudeManifest,
-  totals: {
-    piFiles: piManifest.length,
-    piBytes: piManifest.reduce((sum, entry) => sum + entry.bytes, 0),
-    claudeFiles: claudeManifest.length,
-    claudeBytes: claudeManifest.reduce((sum, entry) => sum + entry.bytes, 0),
-    largeFiles: [...piManifest, ...claudeManifest].filter((entry) => entry.singleLineMax >= largeFileMinBytes).length,
-    projectDirs: Math.min(projectDirs, piFiles),
-  },
+  params: {},
+  pi: [],
+  claude: [],
+  totals: { piFiles: 0, piBytes: 0, claudeFiles: 0, claudeBytes: 0, largeFiles: 0, projectDirs: 0 },
 };
 mkdirSync(dirname(manifestPath), { recursive: true });
 writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
