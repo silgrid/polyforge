@@ -80,7 +80,7 @@ test("a removed entry keeps the rest of its harness dimension", async () => {
 });
 
 test("a file that is not a JSON object is refused, never overwritten", async () => {
-  for (const [name, content] of [["array", "[1, 2]\n"], ["broken", "{oops\n"]] as const) {
+  for (const [name, content] of [["array", "[1, 2]\n"], ["broken", "{oops\n"]]) {
     const agentDir = await makeAgentDir(name, content);
     await assert.rejects(
       writeSkillVisibility([{ filePath: "/pi/a/SKILL.md", visibility: "hidden" }], agentDir),
