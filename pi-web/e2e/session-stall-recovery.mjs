@@ -90,10 +90,10 @@ const TICK_WAIT_MS = 40_000;
 // without touching the tree: with it on, the proxy cuts the page's forced
 // session reads (the write-ring recovery path's own reads), leaving the 15s
 // reconcile tick's plain read to land the content late — the #128 signature.
-// The test commit of polyforge#137's unit shipped it ON by default (the
-// committed mutation, red); this tree turns the default off (green) and
-// leaves the env for the proof's rerun.
-const disableRingRecovery = process.env.E2E_STALL_DISABLE_RING_RECOVERY !== "0";
+// The unit's test commits ship it ON by default (the committed mutation,
+// red); the implementation commits turn the default off (green) and leave
+// the env for the proof's rerun.
+const disableRingRecovery = process.env.E2E_STALL_DISABLE_RING_RECOVERY === "1";
 const distDir = process.env.PI_WEB_DIST_DIR || ".next/e2e/session-stall-recovery";
 const artifacts = join(root, "test-results/e2e");
 mkdirSync(artifacts, { recursive: true });
