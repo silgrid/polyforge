@@ -28,6 +28,16 @@ export interface HarnessEffectiveRow {
   sourcePath: string;
 }
 
-export function effectiveRows(_payload: EffectiveConfigPayload | null): HarnessEffectiveRow[] {
-  return [];
+export function effectiveRows(payload: EffectiveConfigPayload | null): HarnessEffectiveRow[] {
+  if (!payload) return [];
+  // A stable order (by field name); every row keeps its winning source, and
+  // the 推算 mark is the pane's, from the payload's own inferred contract.
+  return Object.entries(payload.fields)
+    .map(([field, entry]) => ({
+      field,
+      value: typeof entry.value === "string" ? entry.value : JSON.stringify(entry.value),
+      sourceScope: entry.sourceScope,
+      sourcePath: entry.sourcePath,
+    }))
+    .sort((a, b) => (a.field < b.field ? -1 : a.field > b.field ? 1 : 0));
 }

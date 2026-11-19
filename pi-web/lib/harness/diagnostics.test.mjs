@@ -67,7 +67,7 @@ test("a hanging command is cut at its deadline, keeping the lines it printed", a
 
 test("an interactive prompt cannot block: stdin is closed at once, and the deadline bounds the rest", async () => {
   // A prompt that reads stdin gets EOF at once (stdio ignore, never a TTY) and exits.
-  const eof = stubBinary("prompt-exits", `process.stdin.once("end", () => { console.log("doctor: done after EOF"); process.exit(0); });`);
+  const eof = stubBinary("prompt-exits", `process.stdin.resume(); process.stdin.once("end", () => { console.log("doctor: done after EOF"); process.exit(0); });`);
   const quick = await claudeDiagnose({ claudeBinary: eof }, { timeoutMs: 2_000 });
   assert.ok(quick.available === true);
   assert.equal(quick.timedOut, false, "an EOF-answered prompt was not left alone");

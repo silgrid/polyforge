@@ -242,5 +242,8 @@ export function createPiAdapter(): HarnessAdapter {
     async write(concept: ConceptId, change: WriteChange, ctx): Promise<WriteResult> {
       return gatedWrite(this, concept, change, ctx);
     },
+    // pi's CLI declares no fixed safe diagnostic command yet (its doctor joins
+    // with a later update): the visible reason, never a guessed command.
+    diagnose: async () => ({ available: false, reason: "pi has no fixed safe diagnostic command yet" }),
   };
 }

@@ -31,7 +31,7 @@ const agentDir = path.join(scratch, "agent");
 const project = path.join(scratch, "project");
 fs.mkdirSync(claudeConfigDir, { recursive: true });
 fs.mkdirSync(agentDir, { recursive: true });
-fs.mkdirSync(project, { recursive: true });
+fs.mkdirSync(path.join(project, ".claude"), { recursive: true });
 
 // The multi-layer fixture: a project layer over a user layer, each naming a
 // different model; the project layer wins, and the row must say so.

@@ -39,6 +39,7 @@ import {
   type SkillRef,
   type SkillsPayload,
 } from "./concepts";
+import { claudeDiagnose } from "./diagnostics";
 import { claudeEffectiveConfig } from "./effective";
 import { automationEnvStatus, credentialRef, maskedMcpServer, readJsonRecord } from "./redact";
 
@@ -147,7 +148,9 @@ export function createClaudeAdapter(): HarnessAdapter {
       readOnlyConcepts: ["env", "effective-config"],
       configRootEnv: "CLAUDE_CONFIG_DIR",
       credentialsFollowConfigRoot: true,
-      nativeDiagnostics: { declared: true, implemented: false },
+      // 85a1b (AC6): the fixed safe `claude doctor` runs, with its deadline
+      // and the credential filter (lib/harness/diagnostics.ts).
+      nativeDiagnostics: { declared: true, implemented: true },
     },
     probeVersion,
     async read(concept: ConceptId, ctx): Promise<ConceptPayload | null> {
@@ -258,5 +261,6 @@ export function createClaudeAdapter(): HarnessAdapter {
     async write(concept: ConceptId, change: WriteChange, ctx): Promise<WriteResult> {
       return gatedWrite(this, concept, change, ctx);
     },
+    diagnose: (ctx) => claudeDiagnose(ctx),
   };
 }
