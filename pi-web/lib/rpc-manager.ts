@@ -2720,6 +2720,16 @@ function bgWorkRefusal(sessionId: string, action: string): Error | null {
   return error;
 }
 
+/**
+ * A Chat-only rebuild over unfinished background work, refused with the
+ * structured code before anything is written (r1#3): the rebuilt wrapper
+ * would carry no bg tools while the executor still holds the session's tasks.
+ */
+function chatOnlyRebuildRefusal(sessionId: string, toolNames: string[] | undefined): Error | null {
+  if (toolNames === undefined || toolNames.length !== 0) return null;
+  return bgWorkRefusal(sessionId, "rebuild the session as Chat only");
+}
+
 export function getSubagentRun(sessionId: string) {
   return SUBAGENT_CONTROLLER.get(sessionId);
 }
@@ -2865,6 +2875,10 @@ export async function setRpcSessionTools(
   const existing = getRpcSession(sessionId);
 
   if (!existing?.isAlive()) {
+    {
+      const refusal = chatOnlyRebuildRefusal(sessionId, toolNames);
+      if (refusal) throw refusal;
+    }
     if (!sessionFile) throw new Error("Session not found");
     // A wrapper still closing, or a start already under way, owns the file: wait for it and
     // apply the selection to whatever it left, or a start that opened the file first would
@@ -2895,6 +2909,12 @@ export async function setRpcSessionTools(
   const crossesChatOnlyBoundary = toolNames === undefined
     || !hasCurrentResourcePolicy
     || existing.isChatOnly() !== (toolNames.length === 0);
+  // The refusal lands before anything is written: a refused switch must leave
+  // no selection entry behind (r1#3).
+  {
+    const refusal = chatOnlyRebuildRefusal(sessionId, toolNames);
+    if (refusal) throw refusal;
+  }
   if (toolNames === undefined) appendClearedSessionToolSelection(existing.inner.sessionManager);
   else appendSessionToolSelection(existing.inner.sessionManager, toolNames);
   invalidateSessionListCache();
@@ -2908,13 +2928,6 @@ export async function setRpcSessionTools(
     ? existing.sessionFile
     : undefined;
   const sessionCwd = existing.cwd;
-  // A rebuild would swap the wrapper for a Chat-only one whose extensions (the
-  // bg tools among them) are gone: unfinished background work refuses it with
-  // the structured code (AC3).
-  {
-    const refusal = bgWorkRefusal(sessionId, "rebuild the session as Chat only");
-    if (refusal) throw refusal;
-  }
   // A rebuild keeps the session's own Agent language, never a newer setting.
   const agentLanguage = readSessionAgentLanguage(existing.inner.sessionManager.getEntries() as unknown as SessionEntry[]);
   const model = existing.inner.model;
