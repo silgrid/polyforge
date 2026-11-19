@@ -20,5 +20,6 @@
 | 编写自定义 workflow bundle | [docs/bundles.md](bundles.md) |
 | 参与贡献、建立工作项、变更覆盖 | [docs/contributing.md](contributing.md) |
 | 日常使用 | [docs/user-guide.md](user-guide.md) |
+| 工作站容器（内含 podman 的整机） | [docs/workstation.md](workstation.md) |
 
 设计文档（`docs/design/polyforge-vnext/`）经由 [docs/architecture.md](architecture.md) 一行进入，此处不再逐篇列出。

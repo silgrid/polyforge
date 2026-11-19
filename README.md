@@ -142,6 +142,7 @@ The three pillars, in features:
 - Authoring a custom workflow bundle: [bundles](docs/bundles.md)
 - Contributing, filing work items, change coverage: [contributing](docs/contributing.md)
 - Daily use, including the recommended pi-web UI: [user guide](docs/user-guide.md)
+- The workstation container — a whole machine with podman inside: [workstation](docs/workstation.md)
 
 ## Commercial licensing
 
