@@ -50,7 +50,6 @@ import gate
 from .fakebox import FakeRuntime
 from .gatefix import (HAVE_BASH, HAVE_GIT, HAVE_PY, IDENT, commit_all, gate_clone, git_t, green_clone,
                       run_gate, run_main, write_files)
-from .verifyfix import HAVE_BASH, HAVE_GIT
 from .gitworld import GitCase, Repo
 from .verifyfix import Fixture, Run, cmd_of, engine_args, fake_engine, report, run_verify
 

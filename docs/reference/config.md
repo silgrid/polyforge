@@ -1047,8 +1047,8 @@ it — see the "dependency-audit gate" section below; the switch lives on
 the owner's side alone. A green tag written with the audit off hashes a
 plan without the audit command, so the release's green-tag check (which
 recomputes the plan with the audit on) does not accept it as a
-full-audit credential — the gate is simply run again where an audit is
-required.
+full-audit credential on a repo the audit covers — the gate is simply run
+again where an audit is required.
 
 #### Queued work items — params before the claim (polyforge#79)
 
