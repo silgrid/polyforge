@@ -154,13 +154,17 @@ class VerifyAuditParamTest(unittest.TestCase):
         self.root = os.path.realpath(td.name)
 
     def fixture(self) -> Any:
-        fx = Fixture(self.root, {"app": {"lib/a.txt": "a\n"}})
+        root = tempfile.mkdtemp(prefix="fx-", dir=self.root)
+        fx = Fixture(root, {"app": {"lib/a.txt": "a\n"}})
         fx.commit_in_repo("app", {"lib/a.txt": "a b\n"}, "feature")
-        return fake_engine(self.root, {
+        return fake_engine(root, {
             "app": report("scoped", cmd_of("gate", "fast", "echo plan-ok")),
             "app.full": report("full", cmd_of("gate", "fast", "echo plan-ok"),
                                cmd_of("tail", "full", "echo full-ok")),
         })
+
+    def capsule(self, eng: str) -> str:
+        return os.path.join(os.path.dirname(os.path.dirname(eng)), "capsule")
 
     def doc(self, r: Run) -> Dict[str, Any]:
         self.assertIsNotNone(r.doc, "no result.json: %s\n%s" % (json.dumps(r.result, indent=1), r.stderr))
@@ -169,7 +173,7 @@ class VerifyAuditParamTest(unittest.TestCase):
 
     def test_off_hands_the_engine_the_option_and_records_the_closure(self) -> None:
         eng = self.fixture()
-        r = run_verify(os.path.join(self.root, "capsule"), eng, tier="full",
+        r = run_verify(self.capsule(eng), eng, tier="full",
                        env={"PF_PARAM_AUDIT": "off"})
         self.assertEqual(r.exit, 0, r.result.get("summary"))
         self.assertTrue(engine_args(eng), "the engine was never asked")
@@ -184,7 +188,7 @@ class VerifyAuditParamTest(unittest.TestCase):
         for value in ("on", "", None):
             eng = self.fixture()
             env = {} if value is None else {"PF_PARAM_AUDIT": value}
-            r = run_verify(os.path.join(self.root, "capsule"), eng, tier="full", env=env)
+            r = run_verify(self.capsule(eng), eng, tier="full", env=env)
             self.assertEqual(r.exit, 0, r.result.get("summary"))
             for line in engine_args(eng):
                 self.assertNotIn("--audit", line, "on must hand the engine no audit option: %s" % line)
@@ -194,7 +198,7 @@ class VerifyAuditParamTest(unittest.TestCase):
     def test_every_other_value_is_a_named_error_before_any_check(self) -> None:
         for value in ("ON", "false", " off", "0"):
             eng = self.fixture()
-            r = run_verify(os.path.join(self.root, "capsule"), eng, tier="full",
+            r = run_verify(self.capsule(eng), eng, tier="full",
                            env={"PF_PARAM_AUDIT": value})
             self.assertEqual(r.exit, 2, "%r must be a named error, not a silent on or off" % value)
             self.assertIn("pf-audit-param-invalid", r.result.get("summary", ""),
