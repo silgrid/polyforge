@@ -37,7 +37,7 @@ test.afterEach(() => {
 
 function openSession(id) {
   const refusals = [];
-  let branchCallback = null;
+  const branchSnapshots = [];
   globalThis.EventSource = class {
     readyState = 0;
     constructor() {
@@ -80,7 +80,7 @@ function openSession(id) {
     newSessionDraftKey: null,
     t: (key) => key,
     onBranchDataChange: (tree, activeLeafId, onLeafChange, locked) => {
-      branchCallback = { tree, activeLeafId, onLeafChange, locked };
+      branchSnapshots.push({ tree, activeLeafId, onLeafChange, locked });
     },
   });
   const hook = {
@@ -88,7 +88,8 @@ function openSession(id) {
     flush: () => rendered.flush(),
     unmount: () => { if (mounted.delete(hook)) rendered.unmount(); },
     refusals: () => refusals,
-    branch: () => branchCallback,
+    branch: () => branchSnapshots.at(-1) ?? null,
+    branchHistory: () => branchSnapshots.map((entry) => entry.activeLeafId),
   };
   mounted.add(hook);
   return hook;
@@ -114,10 +115,9 @@ test("a branch switch refused over background work rolls the view back", async (
   const before = hook.branch().activeLeafId;
 
   hook.branch().onLeafChange("leaf-2");
-  // The refusal answers at once, so the observable end state is the pinned
-  // one: the view never settles on the refused leaf.
+  // The refusal answers at once; the observable end state is the pinned one.
   await pollUntil(hook, () => hook.refusals().some((type) => type === "navigate_tree"), 5_000, "the refused navigate_tree");
-  await settle();
-  hook.flush();
-  assert.equal(hook.branch().activeLeafId, before, "the leaf rolls back to the branch it was refused from");
+  await pollUntil(hook, () => hook.branchHistory().includes("leaf-2"), 5_000, "the branch callback to see the switched leaf");
+  await pollUntil(hook, () => hook.branch().activeLeafId === before, 5_000, "the leaf to roll back");
+  assert.ok(hook.branchHistory().includes("leaf-2"), "the optimistic switch did happen");
 });
