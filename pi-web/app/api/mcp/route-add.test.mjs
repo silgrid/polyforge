@@ -350,6 +350,8 @@ async function withClaudeStub(t, { version = "2.1.326" } = {}) {
   process.env.CLAUDE_CONFIG_DIR = claudeConfigDir;
   process.env.CLAUDE_MCP_STUB_LOG = log;
   process.env.CLAUDE_MCP_STUB_VERSION = version;
+  // A failure mode set by one test never leaks into the next.
+  delete process.env.CLAUDE_MCP_STUB_FAIL;
   await writeFile(join(claudeConfigDir, ".claude.json"), JSON.stringify({
     mcpServers: { existing: { command: "x" } },
   }, null, 2));
@@ -441,6 +443,6 @@ test("an http entry reaches claude with the type its own config writes (r2#4)", 
   assert.equal(status, 200);
   const mcpSpawns = (await stubSpawns(log)).filter((spawn) => spawn.argv[0] === "mcp");
   assert.deepEqual(mcpSpawns.map((spawn) => spawn.argv), [
-    ["mcp", "add-json", "-s", "user", "docs", JSON.stringify({ type: "http", url: "https://docs.example.com/mcp" })],
+    ["mcp", "add-json", "-s", "user", "docs", JSON.stringify({ url: "https://docs.example.com/mcp", type: "http" })],
   ], "pi's http entry carries no type; claude's own files always write one, and its validator asks for it");
 });
