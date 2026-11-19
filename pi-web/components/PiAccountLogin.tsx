@@ -12,6 +12,7 @@
 // logout alone.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
+import { SUBSCRIPTION_LOGIN_HIDDEN_PROVIDER } from "@/lib/provider-listing";
 import { providerMatchesSearch } from "./models-config-helpers";
 import { OAuthPastePanel } from "./OAuthPastePanel";
 import { ProviderIcon } from "./ProviderIcon";
@@ -299,13 +300,18 @@ export function OAuthDetail({ provider, onRefresh }: {
             </ConfigButton>
           ) : (
             <>
-              <ConfigButton
-                variant="primary"
-                size="small"
-                onClick={handleLogin}
-              >
-                 {provider.loggedIn ? t("i18n.relogin") : t("i18n.login")}
-              </ConfigButton>
+              {/* pi's Anthropic subscription is never offered (owner ruling
+                  Q10, 85a2 AC8): a stored credential shows its status and a
+                  logout alone — no login, no re-login, the flow unreachable */}
+              {provider.id !== SUBSCRIPTION_LOGIN_HIDDEN_PROVIDER && (
+                <ConfigButton
+                  variant="primary"
+                  size="small"
+                  onClick={handleLogin}
+                >
+                   {provider.loggedIn ? t("i18n.relogin") : t("i18n.login")}
+                </ConfigButton>
+              )}
               {provider.loggedIn && (
                 <ConfigButton
                   variant="danger"
