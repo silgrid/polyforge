@@ -1,3 +1,4 @@
+// carries: lib/bg-runtime.ts, lib/bg-protocol.ts
 import "#test-env";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";

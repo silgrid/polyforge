@@ -1,3 +1,4 @@
+// carries: lib/bg-supervisor.ts
 import "#test-env";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
