@@ -536,7 +536,11 @@ class CommandResult:
 
 def run_command(o: CommandOptions) -> CommandResult:
     """Run o.command in repo o.repo, as the module's doc says."""
-    clone = os.path.join(o.capsule_dir, "repos", o.repo)
+    # the clone's canonical absolute path (polyforge#153): the container
+    # mounts it at exactly this path and the cache volume keys on it, so
+    # the bind, the working directory and the volume's path identity are
+    # one path however the caller spelled it
+    clone = os.path.realpath(os.path.abspath(os.path.join(o.capsule_dir, "repos", o.repo)))
     if not os.path.isdir(clone):
         raise ExecutorError("repos/%s is not a task repo clone of the capsule" % o.repo)
     if o.isolation not in (ISOLATION_CONTAINER, ISOLATION_HOST):

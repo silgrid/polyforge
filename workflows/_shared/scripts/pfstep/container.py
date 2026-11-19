@@ -21,8 +21,9 @@ started is found and removed by the next.
   ``pf.verify.daemon`` (the owner), ``.boot``, ``.wi``, ``.run``,
   ``.repo`` and, when it has a deadline, ``.expires`` (unix seconds). It
   mounts the clone read-write at its own path, the repo's named cache
-  volume of the image's generation ``pf-verify-cache-<repo>-<the image
-  tag's hash>`` at ``/cache`` and nothing else of the host; no docker
+  volume of the image's generation and the clone path's identity
+  ``pf-verify-cache-<repo>-<the image tag's hash>-<the clone path's
+  hash>`` at ``/cache`` and nothing else of the host; no docker
   socket. Its environment is the image's own plus an
   allowlist (``CONTAINER_ENV_ALLOW``): never PATH, HOME, ``TMUX*``,
   ``PF_*`` or a credential.
@@ -38,19 +39,26 @@ started is found and removed by the next.
 - The cache volume holds what the image's toolchain caches (Go's module
   and build caches, npm's cache; never ``node_modules``, which each
   ``npm ci`` installs into the clone) and lives as long as the image's
-  generation: any byte changed in the Dockerfile gives a new, empty
-  volume. Within a generation its contents check themselves (modules
+  generation at one clone path: any byte changed in the Dockerfile
+  gives a new, empty volume, and two clones at different paths never
+  share one (a tool whose cached results embed absolute paths —
+  golangci-lint's result cache — would else read another clone's),
+  while the same path, however it is spelled (a trailing slash, a dot,
+  a relative path, a symlink alias), reuses its own. Within a
+  generation its contents check themselves (modules
   against go.sum, build actions keyed by the toolchain, npm's cache by
   integrity): a lockfile change only misses and downloads.
   ``prune_cache_volumes`` (each start) removes the repo's older
   generations no container references — a volume named exactly
-  ``pf-verify-cache-<repo>-<32 hex>``, not the current one, that the
-  engine lists as unused; another repo's volume or one of another shape is
-  never touched. One a running verification on an older image still uses
-  is not listed, and the engine refuses to remove it; it goes at a later
-  start. Removed in the window between that verification's image and its
-  container start, its ``docker run`` creates an empty volume of the same
-  name: a cold cache, never wrong contents.
+  ``pf-verify-cache-<repo>-<32 hex generation>-<32 hex path identity>``,
+  not the current one, that the engine lists as unused; another repo's
+  volume, one of another shape (the pre-path shared shape included,
+  which the upgrade notes hand to a person) is never touched. One a
+  running verification on an older image still uses is not listed, and
+  the engine refuses to remove it; it goes at a later start. Removed in
+  the window between that verification's image and its container start,
+  its ``docker run`` creates an empty volume of the same name: a cold
+  cache, never wrong contents.
 
 The engine is the docker CLI (``DockerCLI``); a test hands in a fake with
 the same methods (``ContainerRuntime``). An engine call that fails raises
@@ -629,33 +637,46 @@ def _cache_volume_prefix(repo: str) -> str:
     return "pf-verify-cache-" + tag_safe(repo) + "-"
 
 
-def cache_volume(repo: str, dockerfile: bytes, repo_dir: str = "") -> str:
-    """The repo's named cache volume for the image of dockerfile:
-    pf-verify-cache-<repo>-<generation>, the image tag's own hash. The
-    clone path repo_dir names arrives with this signature; the volume's
-    path field is the next change's (polyforge#153)."""
-    return _cache_volume_prefix(repo) + _generation(dockerfile)
+def _clone_path_id(repo_dir: str) -> str:
+    """The clone path's identity (polyforge#153): the first 16 bytes (32
+    hex) of the sha256 of its canonical absolute path —
+    realpath(abspath(...)), so a trailing slash, a dot, a relative path
+    and a symlink alias all key the same clone, and a different path is
+    a different volume. The hash names the identity only; it is not a
+    privacy or permission boundary."""
+    return hashlib.sha256(os.fsencode(os.path.realpath(os.path.abspath(repo_dir)))).digest()[:16].hex()
 
 
-def image_cache_volume(repo: str, digest: str, repo_dir: str = "") -> str:
-    """The repo's named cache volume of a prepared image:
-    pf-verify-cache-<repo>-<the digest's first 32 hex> — the generation
-    shape of the built volumes (prune_cache_volumes' rule), so a new
-    image gives a new, empty volume and the older one is pruned. The
-    clone path repo_dir arrives with this signature; the volume's path
-    field is the next change's (polyforge#153)."""
-    return _cache_volume_prefix(repo) + digest[digest.rfind(":") + 1:][:32]
+def cache_volume(repo: str, dockerfile: bytes, repo_dir: str) -> str:
+    """The repo's named cache volume for the image of dockerfile at the
+    clone repo_dir: pf-verify-cache-<repo>-<generation>-<the clone path's
+    identity>, the image tag's own hash and the clone's canonical path's
+    — two clones at different paths never share one volume's
+    path-sensitive caches (a later clone's tool never reads an earlier
+    one's results), the same path always reuses its own."""
+    return _cache_volume_prefix(repo) + _generation(dockerfile) + "-" + _clone_path_id(repo_dir)
+
+
+def image_cache_volume(repo: str, digest: str, repo_dir: str) -> str:
+    """The repo's named cache volume of a prepared image at the clone
+    repo_dir: pf-verify-cache-<repo>-<the digest's first 32 hex>-<the
+    clone path's identity> — the generation shape of the built volumes
+    (prune_cache_volumes' rule), so a new image gives a new, empty volume
+    and the older one is pruned, and two clone paths never share one."""
+    return _cache_volume_prefix(repo) + digest[digest.rfind(":") + 1:][:32] + "-" + _clone_path_id(repo_dir)
 
 
 def prune_cache_volumes(rt: ContainerRuntime, repo: str, keep: str, say: Say) -> List[str]:
     """Remove repo's cache volumes of older image generations that no
     container references (keep is the current one); answer the removed
-    names. Only a name of exactly the generation shape counts: another
-    repo's volume (one whose name starts with this repo's) or one of
-    another shape is never touched. A failing listing or removal costs
-    only the pruning."""
+    names. Only a name of exactly the two-field shape counts —
+    ``pf-verify-cache-<repo>-<32 hex generation>-<32 hex path identity>``:
+    another repo's volume (one whose name starts with this repo's), one
+    of another shape — the pre-path shared shape included, which the
+    upgrade notes hand to a person — or the current one is never
+    touched. A failing listing or removal costs only the pruning."""
     prefix = _cache_volume_prefix(repo)
-    shape = re.compile(re.escape(prefix) + r"[0-9a-f]{32}", re.ASCII)
+    shape = re.compile(re.escape(prefix) + r"[0-9a-f]{32}-[0-9a-f]{32}", re.ASCII)
     removed: List[str] = []
     try:
         found = rt.unused_volumes(prefix)
@@ -963,7 +984,7 @@ def start_box(
         except ContainerError as err:
             raise BoxError("image %s: %s" % (image, err)) from None
         started, digest, repo_digests = identity.id, identity.id, identity.repo_digests
-        volume = image_cache_volume(repo, identity.id)
+        volume = image_cache_volume(repo, identity.id, repo_dir)
     else:
         try:
             dockerfile = read_dockerfile(repo_dir)
@@ -980,7 +1001,7 @@ def start_box(
         except (ContainerError, OSError) as err:
             raise BoxError("image %s from %s: %s (build log %s)" % (tag, DOCKERFILE_VERIFY, err, rel(build_log))) from None
         started = tag
-        volume = cache_volume(repo, dockerfile)
+        volume = cache_volume(repo, dockerfile, repo_dir)
     try:
         env = rt.image_env(started)
     except ContainerError as err:

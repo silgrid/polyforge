@@ -707,6 +707,11 @@ class Gate:
         if not self.swept:
             self.swept = True
             container.sweep_run(self.co, self.say)
+        # the clone's canonical absolute path (polyforge#153): the container
+        # mounts it at exactly this path and the cache volume keys on it, so
+        # the bind, the working directory and the volume's path identity are
+        # one path however the caller spelled it
+        directory = os.path.realpath(os.path.abspath(directory))
         r = self.runner_for(directory)
         engine, _, lane_dir = select_engine(directory)
         if self.image:
