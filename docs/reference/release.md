@@ -377,9 +377,14 @@ and the release:
   before), the integrate lane its lane snapshot's — through the workflow scripts'
   container executor (`pfstep.container`): the image tag
   `pf-verify-<clone name>:<hash>` (an image a verification built is
-  reused), the clone mounted at its own path (on that fallback, the lane's
-  engine directory mounted read-only beside it), the repository's cache
-  volume, the environment allowlist, the limits and the 20-minute
+  reused), the clone mounted at its own canonical path (on that fallback, the
+  lane's engine directory mounted read-only beside it), the repository's
+  cache volume of the image's generation and the clone path —
+  `pf-verify-cache-<repo>-<image hash>-<clone path hash>`, so two clones
+  at different paths never share one volume's path-sensitive cache
+  contents while the same path reuses its own; the environment
+  allowlist, the
+  limits and the 20-minute
   per-command timeout. The container is the only isolation a gate has: a
   tree without `.polyforge/Dockerfile.verify` at HEAD — and no prepared
   image named — is not judged (exit 2), never run on the host. A prepared

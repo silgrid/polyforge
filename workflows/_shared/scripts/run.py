@@ -12,7 +12,8 @@ Usage (from the capsule root, or with --capsule)::
 ``--isolation`` is required: where the lines run is the step's to say,
 never the script's guess. ``container``: each line runs in its repo's
 verification container (the image of its .polyforge/Dockerfile.verify at
-HEAD, the clone mounted at its own path, the named cache volume, the
+HEAD, the clone mounted at its own canonical path, the named cache
+volume of the image's generation and the clone path, the
 allowlisted environment, no credential), one container per line, removed
 when the line ends; a repo without the Dockerfile is not judged (exit 2),
 never run on the host instead. ``host``: each line runs on the host under

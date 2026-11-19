@@ -99,6 +99,27 @@ func w405GateID(t *testing.T, dir string) string {
 // container built from .polyforge/Dockerfile.verify — never on the host,
 // never `make test`. Changing the release's gate to anything else, or the
 // runner to anything but the conf's plan, turns this red.
+
+// w405CanonicalPath mirrors gate.py's canonicalization of the clone's
+// path (polyforge#153): the absolute path with its symlinks resolved.
+func w405CanonicalPath(dir string) string {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		abs = dir
+	}
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		return real
+	}
+	return abs
+}
+
+// w405PathIdentity mirrors pfstep.container's clone path identity
+// (polyforge#153): the first 32 hex of the sha256 of the canonical path.
+func w405PathIdentity(dir string) string {
+	sum := sha256.Sum256([]byte(w405CanonicalPath(dir)))
+	return hex.EncodeToString(sum[:16])
+}
+
 func TestW405ReleaseGateIsTheConfPlanInTheContainer(t *testing.T) {
 	w := w405GateWorld(t)
 	out, err := w.run([]string{"RELEASE_TEST_CMD="})
@@ -149,9 +170,12 @@ func TestW405ReleaseGateIsTheConfPlanInTheContainer(t *testing.T) {
 	if df, _ := os.ReadFile(w.log + ".gatedockerfile"); string(df) != relGateDockerfile {
 		t.Fatalf("the image was built from %q, want the tree's Dockerfile.verify", df)
 	}
-	// the container: a gate's, mounting the clone alone, no docker socket
+	// the container: a gate's, mounting the clone alone, no docker socket.
+	// The gate canonicalizes the clone's path (polyforge#153): the bind and
+	// the volume's path field both key on that canonical path.
 	run := calls[relIndex(calls, "docker run ")]
-	for _, want := range []string{"--label pf.verify.daemon=pf-gate", "--mount type=bind,source=" + w.work + ",target=" + w.work + " ", "--mount type=volume,source=pf-verify-cache-work-" + hex.EncodeToString(sum[:16]) + ",target=/cache", " " + tag + " "} {
+	work := w405CanonicalPath(w.work)
+	for _, want := range []string{"--label pf.verify.daemon=pf-gate", "--mount type=bind,source=" + work + ",target=" + work + " ", "--mount type=volume,source=pf-verify-cache-work-" + hex.EncodeToString(sum[:16]) + "-" + w405PathIdentity(work) + ",target=/cache", " " + tag + " "} {
 		if !strings.Contains(run+" ", want) {
 			t.Errorf("container start lacks %q: %s", want, run)
 		}

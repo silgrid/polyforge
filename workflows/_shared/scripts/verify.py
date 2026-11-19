@@ -591,7 +591,9 @@ class Verification:
         return self.assemble(repos, incomplete)
 
     def new_repo_run(self, name: str) -> RepoRun:
-        d = os.path.join(self.capsule, "repos", name)
+        # the clone's canonical absolute path (polyforge#153): the container
+        # mounts it at exactly this path and the cache volume keys on it
+        d = os.path.realpath(os.path.abspath(os.path.join(self.capsule, "repos", name)))
         return RepoRun(name=name, dir=d, cwd_rel="repos/" + name, log_dir=os.path.join(self.run_dir, name),
                        go_harness=read_go_harness(d))
 
