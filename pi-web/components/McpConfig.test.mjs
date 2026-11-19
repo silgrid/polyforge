@@ -1574,3 +1574,24 @@ test("claude's disabledMcpServers entries read as off, read-only (Q1 A)", () => 
   assert.match(markup, new RegExp(messages["mcp.claude.disabled"]));
   assert.match(row(html, "claude-proj"), /aria-label="claude-proj \(claude, off\)"/);
 });
+
+test("a name that lives in another group says so on its row (Q2 A)", () => {
+  const data = unifiedData({
+    servers: [
+      server({ name: "shared", transport: "stdio", command: "npx", args: ["-y", "v1"] }),
+      server({ name: "shared", scope: "project", sourcePath: projectFile.path, transport: "stdio", command: "npx", args: ["-y", "p"] }),
+    ],
+    unified: [
+      unifiedRow({ inconsistent: [{ field: "args", values: { pi: "-y v1", claude: "-y v2" } }], otherScopes: ["project"] }),
+      unifiedRow({ name: "shared", scope: "project", pi: true, claude: false, missing: ["claude"], otherScopes: ["global"] }),
+      unifiedRow({ name: "claude-own", pi: false, claude: true, missing: ["pi"], otherScopes: ["local"] }),
+      unifiedRow({ name: "claude-local", scope: "local", pi: false, claude: true, missing: [], otherScopes: ["global"] }),
+    ],
+  });
+  const html = view({ cwd: "/Users/me/repo", load: { state: "loaded", data }, selected: "global\0shared" });
+  const markup = decode(html);
+  // The row itself carries the hint, one badge per other group, on pi rows and claude-only rows alike.
+  assert.match(markup, /class="mcp-sidebar-badge is-muted">\+project</, "the global shared row hints at its project twin");
+  assert.match(markup, /class="mcp-sidebar-badge is-muted">\+global</, "the project and local rows hint back");
+  assert.match(markup, /class="mcp-sidebar-badge is-muted">\+local</, "a claude-only row hints at its local twin");
+});
