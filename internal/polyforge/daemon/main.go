@@ -544,3 +544,13 @@ func cellFilePath(set *cli.HostSet, profile string) string {
 	}
 	return set.CellPath(profile)
 }
+
+// hostContainerEngine answers the container backend the Host file
+// selects, resolved once at the Host's start (review r1#4: the one-line
+// mapping cli.ResolveContainerEngine(host.Daemon.ContainerEngine) was
+// Main's own, untestable; it is this named function now — the Host→Config
+// leg of the injection chain, the same resolution every Cell's Config
+// carries and the daemon's step env injects).
+func hostContainerEngine(host cli.Config) string {
+	return "docker"
+}
