@@ -1495,7 +1495,15 @@ inherited `ANTHROPIC_*` (their credential and endpoint come only from
 `<harness-root>/claude-config/settings.json`); pi steps need their
 provider keys in `auth.json` or as literals in `models.json` — a
 `$NAME` there, or a provider `*_API_KEY`, that is not on the list never
-reaches them. `GET /status` reports the daemon's environment variable
+reaches them. The `[step_tiers]` catalog (cli.toml's step tier list,
+polyforge#143) is a recommendation, never an admission rule: it names
+which candidates each step tier should run — doctor's `step tiers
+catalog` row warns when a user-written candidate (a workspace yaml
+`steps.*.models` or `tiers.*.models` list, or the `[summarize]` models)
+sits outside it — while a pi candidate's admission stays the Cell's
+`step-agent/models.json` hard check (`pf override --models` answers
+`DAEMON-400` for a model it does not declare, catalog or no catalog;
+claude candidates are not file-checked). `GET /status` reports the daemon's environment variable
 names (never values), and `pf doctor`'s `daemon env` row warns when a
 running daemon carries `ANTHROPIC_*` or another credential-looking
 name, or when the pi step agent's `models.json` references a variable
