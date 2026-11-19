@@ -116,7 +116,8 @@ test("a modification is remove then add-json; a failed add-json rolls the staged
   const failing = {
     ...env,
     CLAUDE_MCP_STUB_LOG: rollbackLog,
-    CLAUDE_MCP_STUB_FAIL: "add",
+    CLAUDE_MCP_STUB_STATE: join(rollbackRoot, "state"),
+    CLAUDE_MCP_STUB_FAIL: "add-first",
   };
   const failed = await claudeMcpWriteEntry("global", "demo", next, {
     binary: stubBinary,
