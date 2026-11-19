@@ -32,7 +32,7 @@ export interface BgWrapperLike {
   readonly sessionFile?: string;
   inner: {
     sendCustomMessage(
-      message: { customType: string; content: string; display?: boolean; details?: unknown },
+      message: { customType: string; content: string | unknown[]; display: boolean; details?: unknown },
       options?: { deliverAs?: string; triggerTurn?: boolean },
     ): Promise<unknown>;
   };

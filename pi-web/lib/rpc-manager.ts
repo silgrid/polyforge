@@ -4,6 +4,7 @@ import { KeybindingsManager as TuiKeybindingsManager, TUI_KEYBINDINGS } from "@e
 import { randomUUID } from "crypto";
 import { existsSync, realpathSync, writeFileSync } from "fs";
 import { resolve } from "path";
+import { join } from "path";
 import { isDeepStrictEqual } from "util";
 import { validateAgentImages } from "./image-attachments";
 import { cwdMissingError } from "./missing-cwd";
@@ -81,6 +82,11 @@ import {
   BackgroundTasksBridge,
   createBackgroundTasksBridgeExtension,
 } from "./background-tasks-bridge";
+import {
+  createBgTaskController,
+  defaultSpawnTask,
+  type BgTaskController,
+} from "./bg-runtime";
 
 // ============================================================================
 // Types
@@ -2657,6 +2663,23 @@ const SUBAGENT_CONTROLLER = createSubagentController({
   invalidateSessionList: invalidateSessionListCache,
   isBuiltInSubagentsEnabled,
 });
+
+// The built-in background tasks' module-level executor (Q11 A): independent of
+// any wrapper. Skeleton: the mount, the event sink and the refusals arrive
+// with u5's implementation.
+const BG_RUNTIME: BgTaskController = createBgTaskController({
+  getLogRoot: () => join(getAgentDir(), "pi-web-bg-tasks"),
+  spawnTask: defaultSpawnTask,
+  getSession: (sessionId) => getRegistry().get(sessionId),
+  resolveSessionPath: async (sessionId) => resolveSessionPath(sessionId),
+  reopenSession: async (sessionId, sessionFile) =>
+    (await startRpcSession(sessionId, sessionFile, undefined)).session,
+});
+
+/** The process-wide background-task executor (tools, wake, limits, registry). */
+export function getBgRuntime(): BgTaskController {
+  return BG_RUNTIME;
+}
 
 export function getSubagentRun(sessionId: string) {
   return SUBAGENT_CONTROLLER.get(sessionId);
