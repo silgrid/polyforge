@@ -22,6 +22,7 @@ process.env.CLAUDE_CONFIG_DIR = configDir;
 
 const jiti = createJiti(import.meta.url, { alias: { "@": process.cwd() }, interopDefault: true });
 const { getClaudeSessionInfos, resetClaudeSessionListCachesForTests } = await jiti.import("./claude-session.ts");
+const { runSessionScanTask } = await jiti.import("./session-parse-worker-pool.ts");
 const { readClaudeHistory } = await jiti.import("./claude-session.ts");
 const { claudeTranscriptToMessages, parseClaudeTranscript } = await jiti.import("./claude-adapter.ts");
 const index = await jiti.import("./claude-index.ts");
@@ -58,7 +59,7 @@ async function registerSession(id, { firstMessage = `first of ${id}` } = {}) {
 }
 
 const readTasks = () => (globalThis.__piWebScanTaskLog ??= []);
-const claudeParseTasks = () => readTasks().filter((entry) => entry.kind === "claude-entries");
+const claudeParseTasks = () => readTasks().filter((entry) => entry.kind === "claude-count");
 
 test("a normal list parses each transcript once on the pool and carries the adapter's count", async () => {
   resetClaudeSessionListCachesForTests();
@@ -116,6 +117,37 @@ test("the projected count equals the full history's, sidecars included", async (
   const rows = await getClaudeSessionInfos();
   assert.equal(rows.find((session) => session.id === SUB).messageCount, history.messages.length,
     "skipping the sidecars for the list costs no messages: they feed subagents, not the count");
+});
+
+test("the projected count is computed in the worker and only the count crosses the thread", async (t) => {
+  // The count is claudeTranscriptToMessages()'s own: the worker source ports the
+  // adapter's branch and emission rules, and this cross-check runs both over
+  // every claude transcript fixture the repo holds (compaction, model switches,
+  // subagents and their sidecars, absorbed and queued prompts, task notes,
+  // edits, relays) plus generated corpus transcripts with huge single lines.
+  const { execFileSync } = await import("node:child_process");
+  const corpus = fs.mkdtempSync(path.join(os.tmpdir(), "pi-web-count-check-"));
+  t.after(() => fs.rmSync(corpus, { recursive: true, force: true }));
+  execFileSync(process.execPath, [
+    path.join(process.cwd(), "scripts", "session-list-fixture.mjs"),
+    "--root", corpus, "--pi-files", "1", "--pi-bytes", "10000",
+    "--claude-files", "3", "--claude-bytes", "120000",
+    "--large-file-min-bytes", "30000", "--manifest", path.join(corpus, "manifest.json"),
+  ], { encoding: "utf8" });
+  const fixtureRoot = new URL("./__fixtures__/", import.meta.url);
+  const transcripts = fs.readdirSync(fixtureRoot, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile() && (entry.name === "transcript.jsonl" || /^agent-.*[.]jsonl$/.test(entry.name)))
+    .map((entry) => path.join(entry.parentPath ?? fixtureRoot.pathname, entry.name));
+  const corpusFiles = JSON.parse(fs.readFileSync(path.join(corpus, "manifest.json"), "utf8")).claude
+    .map((entry) => path.join(corpus, entry.path));
+  assert.ok(transcripts.length >= 15, `the repo's claude transcript fixtures (${transcripts.length})`);
+  for (const file of [...transcripts, ...corpusFiles]) {
+    const text = fs.readFileSync(file, "utf8");
+    const expected = claudeTranscriptToMessages(parseClaudeTranscript(text), {}).messages.length;
+    const result = await runSessionScanTask({ kind: "claude-count", path: file }).catch((error) => error);
+    assert.equal(typeof result, "number", `${file}: the pool task answers a count, not entries`);
+    assert.equal(result, expected, `${file}: the worker's count is the adapter's own projection`);
+  }
 });
 
 test("an appended, deleted and recreated transcript is followed without force", async () => {
