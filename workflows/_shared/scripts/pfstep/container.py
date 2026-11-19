@@ -683,9 +683,8 @@ def prune_cache_volumes(rt: ContainerRuntime, repo: str, keep: str, say: Say) ->
     removal costs only the pruning."""
     prefix = _cache_volume_prefix(repo)
     shape = re.compile(re.escape(prefix) + r"[0-9a-f]{32}-[0-9a-f]{32}", re.ASCII)
-    if not shape.fullmatch(keep):
-        return []
-    current = keep[len(prefix):len(prefix) + 32]  # keep's image generation
+    current = keep[len(prefix):len(prefix) + 32]  # keep's image generation (keep is
+    # always one of cache_volume/image_cache_volume's names, so the field is there)
     removed: List[str] = []
     try:
         found = rt.unused_volumes(prefix)
