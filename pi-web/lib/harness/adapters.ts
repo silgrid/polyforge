@@ -5,12 +5,15 @@ import { listHarnessAdapters, registerHarness, type HarnessAdapter } from "./ada
 import { createPiAdapter } from "./pi";
 import { createClaudeAdapter } from "./claude";
 
-/** The default adapters, registered once per process. */
+const registered = new Set<string>();
+
+/** The default adapters, each registered once per process (a later registration replaces an earlier one). */
 export function ensureDefaultHarnesses(): HarnessAdapter[] {
-  // stub (85a1 u4): zero-value body, the red run's target
-  void listHarnessAdapters;
-  void registerHarness;
-  void createPiAdapter;
-  void createClaudeAdapter;
-  return [];
+  for (const adapter of [createPiAdapter(), createClaudeAdapter()]) {
+    if (!registered.has(adapter.id)) {
+      registerHarness(adapter);
+      registered.add(adapter.id);
+    }
+  }
+  return listHarnessAdapters();
 }

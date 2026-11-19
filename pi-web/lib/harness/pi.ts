@@ -29,7 +29,6 @@ import {
   type ConceptId,
   type ConceptPayload,
   type ConfigRootPayload,
-  type EffectiveConfigPayload,
   type EnvPayload,
   type McpPayload,
   type ModelPayload,
@@ -37,6 +36,7 @@ import {
   type SkillRef,
   type SkillsPayload,
 } from "./concepts";
+import { piEffectiveConfig } from "./effective";
 import {
   automationEnvStatus,
   credentialRef,
@@ -233,11 +233,8 @@ export function createPiAdapter(): HarnessAdapter {
           const payload: EnvPayload = { target: "pi", setKeys: set };
           return payload;
         }
-        case "effective-config": {
-          // The per-layer effective values land with the compare unit (u4).
-          const payload: EffectiveConfigPayload = { fields: {} };
-          return payload;
-        }
+        case "effective-config":
+          return piEffectiveConfig(ctx);
         default:
           return null;
       }

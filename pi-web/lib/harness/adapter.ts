@@ -92,10 +92,10 @@ export type WriteResult =
 export interface HarnessAdapter {
   id: HarnessId;
   capabilities: HarnessCapabilities;
-  probeVersion(ctx: HarnessReadContext): Promise<VersionProbeResult>;
-  read(concept: ConceptId, ctx: HarnessReadContext): Promise<ConceptPayload | null>;
-  write(concept: ConceptId, change: WriteChange, ctx: HarnessReadContext): Promise<WriteResult>;
-  diagnose?(ctx: HarnessReadContext): Promise<unknown>;
+  probeVersion(ctx?: HarnessReadContext): Promise<VersionProbeResult>;
+  read(concept: ConceptId, ctx?: HarnessReadContext): Promise<ConceptPayload | null>;
+  write(concept: ConceptId, change: WriteChange, ctx?: HarnessReadContext): Promise<WriteResult>;
+  diagnose?(ctx?: HarnessReadContext): Promise<unknown>;
 }
 
 /**
@@ -122,7 +122,7 @@ export async function gatedWrite(
   adapter: Pick<HarnessAdapter, "id" | "capabilities" | "probeVersion">,
   concept: ConceptId,
   _change: WriteChange,
-  ctx: HarnessReadContext,
+  ctx?: HarnessReadContext,
 ): Promise<WriteResult> {
   const probe = await adapter.probeVersion(ctx);
   const gate = writeGate(probe);

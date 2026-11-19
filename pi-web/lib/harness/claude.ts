@@ -6,7 +6,6 @@
 // (lib/claude-probe.ts), the one probe implementation; CLAUDE_RECORDED_VERSIONS
 // keeps its fixture semantics and the write gate uses its own range (Q2 C).
 import { existsSync, readdirSync } from "node:fs";
-import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { claudeConfigDir } from "../claude-config-dir";
 import { probeClaude } from "../claude-probe";
@@ -23,6 +22,7 @@ import {
   type WriteChange,
   type WriteResult,
 } from "./adapter";
+import { claudeSettingsLayers, claudeStateFilePath, managedSettingsPath, type ClaudeSettingsLayer } from "./claude-layers";
 import {
   neutralApprovalMode,
   neutralReasoningEffort,
@@ -30,7 +30,6 @@ import {
   type ConceptId,
   type ConceptPayload,
   type ConfigRootPayload,
-  type EffectiveConfigPayload,
   type EnvPayload,
   type MaskedMcpServer,
   type McpPayload,
@@ -40,7 +39,10 @@ import {
   type SkillRef,
   type SkillsPayload,
 } from "./concepts";
+import { claudeEffectiveConfig } from "./effective";
 import { automationEnvStatus, credentialRef, maskedMcpServer, readJsonRecord } from "./redact";
+
+export { managedSettingsPath };
 
 /** The credential environment variables claude answers, names only. */
 export const CLAUDE_AUTOMATION_ENV_KEYS = [
@@ -49,47 +51,7 @@ export const CLAUDE_AUTOMATION_ENV_KEYS = [
   "CLAUDE_CODE_OAUTH_TOKEN",
 ] as const;
 
-/** The managed settings file of the platform (claude's own policy layer). */
-export function managedSettingsPath(): string {
-  if (process.platform === "darwin") return join("/Library/Application Support/ClaudeCode", "managed-settings.json");
-  if (process.platform === "win32") return "C:\\ProgramData\\ClaudeCode\\managed-settings.json";
-  return join("/etc/claude-code", "managed-settings.json");
-}
-
-/**
- * The state file: inside $CLAUDE_CONFIG_DIR when it is set, else ~/.claude.json
- * (claude's own placement). Read-only display either way; a wrong guess cannot
- * write anything.
- */
-export function claudeStateFilePath(ctx?: HarnessReadContext): string {
-  if (ctx?.claudeConfigDir !== undefined) return join(ctx.claudeConfigDir, ".claude.json");
-  const env = ctx?.env ?? process.env;
-  const inherited = env.CLAUDE_CONFIG_DIR?.trim();
-  return inherited ? join(claudeConfigDir(env), ".claude.json") : join(homedir(), ".claude.json");
-}
-
-/** One settings layer, in claude's priority order (highest first). */
-interface SettingsLayer {
-  scope: Exclude<ScopeId, "session" | "pi-web">;
-  path: string;
-  record: Record<string, unknown> | null;
-}
-
-/** claude's settings layers for `configDir` and an optional project `cwd`, highest priority first. */
-function settingsLayers(configDir: string, cwd: string | undefined): SettingsLayer[] {
-  const paths: { scope: SettingsLayer["scope"]; path: string }[] = [
-    { scope: "managed", path: managedSettingsPath() },
-  ];
-  if (cwd) {
-    paths.push({ scope: "local", path: join(cwd, ".claude", "settings.local.json") });
-    paths.push({ scope: "project", path: join(cwd, ".claude", "settings.json") });
-  }
-  paths.push({ scope: "user", path: join(configDir, "settings.json") });
-  return paths.map((layer) => ({
-    ...layer,
-    record: existsSync(layer.path) ? readJsonRecord(layer.path) : null,
-  }));
-}
+type SettingsLayer = ClaudeSettingsLayer;
 
 /** The first layer whose record holds `key` (the effective value), highest priority first. */
 function effectiveLayer(layers: SettingsLayer[], key: string): { layer: SettingsLayer; value: unknown } | null {
@@ -163,7 +125,7 @@ export function createClaudeAdapter(): HarnessAdapter {
     }
     // The structure probe of the write gate (Q2 C): a settings layer or the
     // state file that exists but is not a JSON object refuses the write.
-    for (const layer of settingsLayers(configDir, ctx?.cwd)) {
+    for (const layer of claudeSettingsLayers(configDir, ctx?.cwd)) {
       if (existsSync(layer.path) && layer.record === null) {
         return { version, known: false, knownRange: CLAUDE_KNOWN_RANGE.label, source, reason: `${basename(layer.path)} has an unrecognized top-level structure (expected a JSON object)` };
       }
@@ -192,7 +154,7 @@ export function createClaudeAdapter(): HarnessAdapter {
       const configDir = configDirOf(ctx);
       const env = envOf(ctx);
       const cwd = ctx?.cwd;
-      const layers = settingsLayers(configDir, cwd);
+      const layers = claudeSettingsLayers(configDir, cwd);
       switch (concept) {
         case "auth": {
           const payload: AuthPayload = {
@@ -281,11 +243,8 @@ export function createClaudeAdapter(): HarnessAdapter {
           const payload: EnvPayload = { target: "claude", setKeys: [...keys].sort() };
           return payload;
         }
-        case "effective-config": {
-          // The per-layer effective values land with the compare unit (u4).
-          const payload: EffectiveConfigPayload = { fields: {} };
-          return payload;
-        }
+        case "effective-config":
+          return claudeEffectiveConfig(ctx);
         default:
           return null;
       }
