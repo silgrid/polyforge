@@ -785,51 +785,86 @@ func parseAttrValue(v string) (any, error) {
 // the path it names (split.origin=X stores {"split":{"origin":"X"}}),
 // the same dot path `pf queue --attr` filters on, and a key without
 // dots stays one top-level key. Paths that share only a prefix merge;
-// a path assigned twice (even with the same value), a path and its
-// sub-path both assigned (an object value beside its sub-path
-// included), or an empty segment (a..b, a leading or trailing dot)
-// refuse the whole create, independent of flag order.
+// a path assigned twice (even with the same value), a path assigned
+// beside its sub-path (an object VALUE beside its sub-path included:
+// a flag's JSON value is never a container to descend into), or an
+// empty segment (a..b, a leading or trailing dot) refuse the whole
+// create. The collisions are decided on the declared paths alone,
+// before anything is built, so the refusal never depends on flag
+// order (review r1#1).
 func attrsFromFlags(attrs kvList) (map[string]any, error) {
-	root := map[string]any{}
-	for _, kv := range attrs {
-		v, err := parseAttrValue(kv.Value)
-		if err != nil {
-			return nil, fmt.Errorf("--attr %s: %w", kv.Key, err)
-		}
+	segsOf := make([][]string, len(attrs))
+	for i, kv := range attrs {
 		segs := strings.Split(kv.Key, ".")
 		for _, seg := range segs {
 			if seg == "" {
 				return nil, fmt.Errorf("--attr %s: %q is not an attrs path (empty segment)", kv.Key, kv.Key)
 			}
 		}
+		segsOf[i] = segs
+	}
+	for i := 0; i < len(segsOf); i++ {
+		for j := i + 1; j < len(segsOf); j++ {
+			if pathSegmentsEqual(segsOf[i], segsOf[j]) {
+				return nil, fmt.Errorf("--attr %s: the path %q is assigned twice", attrs[i].Key, attrs[i].Key)
+			}
+			if pathOverlaps(segsOf[i], segsOf[j]) {
+				return nil, fmt.Errorf("--attr %s: the path %q is assigned beside its sub-path %q — a parent and its sub-path cannot both be assigned", attrs[i].Key, attrs[i].Key, attrs[j].Key)
+			}
+		}
+	}
+	root := map[string]any{}
+	for i, kv := range attrs {
+		v, err := parseAttrValue(kv.Value)
+		if err != nil {
+			return nil, fmt.Errorf("--attr %s: %w", kv.Key, err)
+		}
 		cur := root
-		for i, seg := range segs {
-			last := i == len(segs)-1
-			existing, ok := cur[seg]
+		for k, seg := range segsOf[i] {
+			if k == len(segsOf[i])-1 {
+				cur[seg] = v
+				break
+			}
+			nxt, ok := cur[seg].(map[string]any)
 			if !ok {
-				if last {
-					cur[seg] = v
-					break
-				}
-				nxt := map[string]any{}
+				nxt = map[string]any{}
 				cur[seg] = nxt
-				cur = nxt
-				continue
-			}
-			if last {
-				if _, isObj := existing.(map[string]any); isObj {
-					return nil, fmt.Errorf("--attr %s: the path %q is assigned a value and a sub-path too", kv.Key, kv.Key)
-				}
-				return nil, fmt.Errorf("--attr %s: the path %q is assigned twice", kv.Key, kv.Key)
-			}
-			nxt, isObj := existing.(map[string]any)
-			if !isObj {
-				return nil, fmt.Errorf("--attr %s: the path %q is assigned a value and a sub-path too", kv.Key, kv.Key)
 			}
 			cur = nxt
 		}
 	}
 	return root, nil
+}
+
+// pathSegmentsEqual answers whether two paths are the same segments.
+func pathSegmentsEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// pathOverlaps answers whether one path is a strict segment-prefix of
+// the other (equal paths are pathSegmentsEqual's own case).
+func pathOverlaps(a, b []string) bool {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	if n == len(a) && n == len(b) {
+		return false
+	}
+	for i := 0; i < n; i++ {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // ---------------------------------------------------------------------------
