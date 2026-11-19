@@ -27,7 +27,8 @@ export async function checkModelDiscovery(page) {
   try {
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     const settings = page.getByRole("dialog", { name: "Settings", exact: true });
-    await settings.getByRole("button", { name: "Models", exact: true }).click();
+    // 85a1b: the models.json editor is the legacy-marked page now.
+    await settings.getByRole("button", { name: "Models (legacy)", exact: true }).click();
     const modelRows = settings.locator(".models-sidebar-indented-item");
     await modelRows.filter({ hasText: /^claude-existing$/ }).waitFor(); // a model without a name is listed by its id
     assert.equal(await modelRows.filter({ hasText: /^Relay Existing$/ }).count(), 1, "A model is listed by its models.json name");

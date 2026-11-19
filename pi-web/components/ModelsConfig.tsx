@@ -151,7 +151,7 @@ type Selection =
   | { type: "apikey"; providerId: string };
 
 function readRememberedSelection(): Selection | null {
-  const raw = getLastSettingsSelection("models");
+  const raw = getLastSettingsSelection("legacy-models");
   if (!raw) return null;
   try {
     const value: unknown = JSON.parse(raw);
@@ -1979,7 +1979,7 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null }: {
   }, [refreshAuthProviders]);
 
   useEffect(() => {
-    if (selection) setLastSettingsSelection("models", JSON.stringify(selection));
+    if (selection) setLastSettingsSelection("legacy-models", JSON.stringify(selection));
   }, [selection]);
 
   // An overrides-only entry belongs to its managed provider, not a duplicate custom provider.

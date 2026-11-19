@@ -34,8 +34,10 @@ export async function checkModelContext(page) {
     if (await sidebar.isVisible()) await sidebar.click();
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     const section = settings.getByRole("combobox", { name: "Settings", exact: true });
-    if (await section.isVisible()) await section.selectOption("models");
-    else await settings.getByRole("button", { name: "Models", exact: true }).click();
+    // 85a1b: the models.json editor lives under the legacy-marked tab now
+    // (`models` is the new concept page's id); its content is 85a3's.
+    if (await section.isVisible()) await section.selectOption("legacy-models");
+    else await settings.getByRole("button", { name: "Models (legacy)", exact: true }).click();
     await settings.locator(".config-sidebar-item").filter({ hasText: "OpenAI Codex" }).click();
   };
   const input = settings.getByRole("textbox", { name: "Context window for GPT-6 Astra", exact: true });

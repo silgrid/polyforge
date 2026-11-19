@@ -21,6 +21,7 @@ import { AGENT_LANGUAGE_DEFAULT, isAgentLanguage, type AgentLanguage } from "@/l
 import { AgentLanguagePfStatus, requestAgentLanguageSync } from "@/components/AgentLanguagePfStatus";
 import {
   setLastSettingsSection,
+  SETTINGS_TABS,
   settingsSectionRequiresProject,
   type SettingsSection,
 } from "@/lib/settings-navigation";
@@ -89,12 +90,14 @@ export function SettingsSectionIcon({ section, size = 16, strokeWidth = 1.8 }: {
   };
 
   if (section === "general") return <svg {...common}><path d="M20 7h-9M14 17H5" /><circle cx="7" cy="7" r="3" /><circle cx="17" cy="17" r="3" /></svg>;
-  if (section === "models") return <svg {...common}><rect x="4" y="4" width="16" height="16" rx="2" /><rect x="9" y="9" width="6" height="6" /><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 15h3M1 9h3M1 15h3" /></svg>;
+  if (section === "account") return <svg {...common}><circle cx="12" cy="8" r="4" /><path d="M4 20c1.5-3.5 4.5-5.5 8-5.5s6.5 2 8 5.5" /></svg>;
+  if (section === "models" || section === "legacy-models") return <svg {...common}><rect x="4" y="4" width="16" height="16" rx="2" /><rect x="9" y="9" width="6" height="6" /><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 15h3M1 9h3M1 15h3" /></svg>;
+  if (section === "permission") return <svg {...common}><path d="M12 2l8 3v6c0 5-3.5 8.5-8 11-4.5-2.5-8-6-8-11V5l8-3Z" /><path d="m9 12 2 2 4-4" /></svg>;
   if (section === "skills") return <svg {...common}><path d="m12 2-10 5 10 5 10-5-10-5Z" /><path d="m2 12 10 5 10-5M2 17l10 5 10-5" /></svg>;
   if (section === "agents") return <svg {...common} className="settings-section-icon is-agent"><rect x="5" y="7" width="14" height="11" rx="2" /><path d="M9 11h.01M15 11h.01M9 15h6M12 7V4M10 4h4" /></svg>;
   if (section === "plugins") return <svg {...common}><path d="M9 7V2M15 7V2M6 13V8a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v5a6 6 0 0 1-12 0ZM12 19v3" /></svg>;
   if (section === "mcp") return <svg {...common}><rect x="3" y="3" width="18" height="7" rx="2" /><rect x="3" y="14" width="18" height="7" rx="2" /><path d="M7 6.5h.01M7 17.5h.01M11 6.5h6M11 17.5h6" /></svg>;
-  if (section === "claude") return <svg {...common}><path d="M12 3v18M4.2 7.5l15.6 9M4.2 16.5l15.6-9" /></svg>;
+  if (section === "legacy-claude") return <svg {...common}><path d="M12 3v18M4.2 7.5l15.6 9M4.2 16.5l15.6-9" /></svg>;
   return <svg {...common}><circle cx="6" cy="18" r="3" /><circle cx="18" cy="6" r="3" /><path d="M6 15V3M18 9a9 9 0 0 1-9 9" /></svg>;
 }
 
@@ -819,6 +822,51 @@ function usePhoneSettingsLevel(isPhone: boolean, openAtHome: boolean) {
   return { level, levelRef, enter, goUp, dropHistory };
 }
 
+/**
+ * One concept page's placeholder (85a1b): the page exists in the rail — its
+ * content is a later split unit's (85a2 account, 85a3 models, 85a4
+ * permission), so the tab is real and the old navigation values have somewhere
+ * to land, but nothing is configurable here yet.
+ */
+function HarnessSectionPlaceholder({ titleKey, bodyKey }: { titleKey: string; bodyKey: string }) {
+  const { t } = useI18n();
+  return (
+    <div className="settings-general harness-placeholder-page">
+      <section className="settings-general-section">
+        <h3 className="settings-general-heading">{t(titleKey)}</h3>
+        <p className="settings-general-description">{t(bodyKey)}</p>
+      </section>
+    </div>
+  );
+}
+
+/**
+ * The permission page's placeholder (85a1b): the unified permission page is
+ * 85a4's, but its Claude part is the destination the old `claude` navigation
+ * value migrates to (owner ruling Q2 A), so the parts are named already.
+ */
+function HarnessPermissionPlaceholder() {
+  const { t } = useI18n();
+  return (
+    <div className="settings-general harness-placeholder-page">
+      <section className="settings-general-section">
+        <h3 className="settings-general-heading">{t("settings.tabPermission")}</h3>
+        <p className="settings-general-description">{t("settings.harnessPermissionPlaceholder")}</p>
+        <div className="settings-chat-options">
+          <div className="settings-general-description" data-harness="pi">
+            <h4 className="settings-general-heading">pi</h4>
+            <p className="settings-general-description">{t("settings.harnessPermissionPartPending")}</p>
+          </div>
+          <div className="settings-general-description" data-harness="claude">
+            <h4 className="settings-general-heading">Claude</h4>
+            <p className="settings-general-description">{t("settings.harnessPermissionPartPending")}</p>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 export function SettingsPanel({
   cwd,
   sessionId,
@@ -837,18 +885,15 @@ export function SettingsPanel({
   const [mountedSections, setMountedSections] = useState<ReadonlySet<SettingsSection>>(
     () => new Set([section]),
   );
-  // Which sections need a project is decided once, in lib/settings-navigation.ts.
-  const sections: { id: SettingsSection; label: string; requiresProject: boolean }[] = ([
-    { id: "general", label: t("settings.general") },
-    { id: "models", label: t("common.models") },
-    { id: "skills", label: t("common.skills") },
-    { id: "agents", label: t("common.agents") },
-    { id: "plugins", label: t("common.plugins") },
-    { id: "mcp", label: t("settings.mcp") },
-    // Settings › Claude: claude sessions' own settings, apart from pi's sections.
-    { id: "claude", label: t("settings.claude") },
-    { id: "polyforge", label: t("polyforge.title") },
-  ] as const).map((item) => ({ ...item, requiresProject: settingsSectionRequiresProject(item.id) }));
+  // The rail is one fact in lib/settings-navigation.ts (SETTINGS_TABS): nine
+  // new sections plus the two legacy-marked old pages (85a1b AC1).
+  const sections: { id: SettingsSection; label: string; legacy: boolean; requiresProject: boolean }[] = SETTINGS_TABS
+    .map((item) => ({
+      id: item.id,
+      label: t(item.labelKey),
+      legacy: "legacy" in item && item.legacy === true,
+      requiresProject: settingsSectionRequiresProject(item.id),
+    }));
   const sectionRequiresProject = settingsSectionRequiresProject(section);
   const isPhone = useIsMobile();
   const phone = usePhoneSettingsLevel(isPhone, openAtHome);
@@ -921,6 +966,7 @@ export function SettingsPanel({
       key={id}
       hidden={section !== id || phone.level === "home"}
       data-phone-level={isPhone ? phone.level : undefined}
+      data-settings-section={id}
       className="settings-section-host"
     >
       {content}
@@ -969,7 +1015,7 @@ export function SettingsPanel({
                 <button
                   key={item.id}
                   type="button"
-                  className="settings-section-tab"
+                  className={item.legacy ? "settings-section-tab is-legacy" : "settings-section-tab"}
                   disabled={disabled}
                   title={disabled ? t("settings.projectRequired") : item.label}
                   aria-current={selected ? "page" : undefined}
@@ -1017,7 +1063,12 @@ export function SettingsPanel({
           )}
           <ConfigDetailNavigationContext.Provider value={detailNavigation}>
           {sectionHost("general", <GeneralSettings sessionId={sessionId} onSessionReloaded={onSessionReloaded} quoteSelectionEnabled={quoteSelectionEnabled} onQuoteSelectionChange={onQuoteSelectionChange} />)}
-          {sectionHost("models", <ModelsConfig embedded cwd={cwd} onClose={onClose} />)}
+          {/* The three concept placeholders (85a1b): their content is 85a2's
+              (account), 85a3's (models) and 85a4's (permission, whose Claude
+              part is where a stored old `claude` navigation value lands). */}
+          {sectionHost("account", <HarnessSectionPlaceholder titleKey="settings.tabAccount" bodyKey="settings.harnessAccountPlaceholder" />)}
+          {sectionHost("models", <HarnessSectionPlaceholder titleKey="common.models" bodyKey="settings.harnessModelsPlaceholder" />)}
+          {sectionHost("permission", <HarnessPermissionPlaceholder />)}
           {/* Visited sections stay mounted, so the ones whose answer depends on trust take the page's
               status and load again in place when trusting from Settings › MCP changes it. */}
           {cwd && sectionHost("skills", <SkillsConfig embedded key={cwd} cwd={cwd} trust={projectTrust} onClose={onClose} />)}
@@ -1025,7 +1076,10 @@ export function SettingsPanel({
           {cwd && sectionHost("plugins", <PluginsConfig embedded key={cwd} cwd={cwd} sessionId={sessionId} trust={projectTrust} onClose={onClose} onReloaded={onSessionReloaded} />)}
           {/* No project needed: the global mcp.json is listed alone, and a project adds its group. */}
           {sectionHost("mcp", <McpConfig embedded key={cwd ?? ""} cwd={cwd} trust={projectTrust} onTrustProject={onOpenTrustDialog} onProjectTrustChanged={onProjectTrustChanged} onClose={onClose} />)}
-          {sectionHost("claude", <ClaudeSettings />)}
+          {/* The legacy-marked old pages (85a1b, owner ruling Q1 A): 85a3 deletes
+              legacy-models, 85a4 deletes legacy-claude — with their mounts here. */}
+          {sectionHost("legacy-models", <ModelsConfig embedded cwd={cwd} onClose={onClose} />)}
+          {sectionHost("legacy-claude", <ClaudeSettings />)}
           {sectionHost("polyforge", <PolyforgeConfig cwd={cwd} active={section === "polyforge"} />)}
           </ConfigDetailNavigationContext.Provider>
         </main>

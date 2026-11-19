@@ -151,7 +151,7 @@ async function openSettings() {
 
 async function openClaudeSection() {
   await openSettings();
-  const tab = sectionTabs().filter({ hasText: /^Claude$/ });
+  const tab = sectionTabs().filter({ hasText: /^Claude \(legacy\)$/ });
   await waitFor(async () => (await tab.count()) === 1, 30_000, async () => `Settings has no Claude section tab (tabs: ${(await sectionTabs().allInnerTexts()).join(", ")})`);
   if ((await tab.getAttribute("aria-current")) !== "page") await tab.click({ timeout: ACTION_MS });
   await claudeHeading().waitFor({ state: "visible", timeout: NAV_MS });
@@ -249,15 +249,17 @@ try {
     await goto("/");
     await openSettings();
     const tabs = (await sectionTabs().allInnerTexts()).map((text) => text.trim());
-    assert.ok(tabs.includes("Claude"), `Settings has no Claude section (tabs: ${tabs.join(", ")})`);
-    assert.equal(tabs.indexOf("Claude"), tabs.indexOf("Polyforge") - 1, `the Claude section is not right before Polyforge (tabs: ${tabs.join(", ")})`);
+    assert.ok(tabs.includes("Claude (legacy)"), `Settings has no legacy Claude section (tabs: ${tabs.join(", ")})`);
+    // 85a1b: the old Claude page is the last, legacy-marked tab (until 85a4 deletes it).
+    assert.equal(tabs.indexOf("Claude (legacy)"), tabs.length - 1, `the legacy Claude section is not the last tab (tabs: ${tabs.join(", ")})`);
+    assert.match(tabs[tabs.length - 1] ?? "", /\(legacy\)/, "the old Claude tab is not marked legacy");
     const skills = sectionTabs().filter({ hasText: /^Skills$/ });
     assert.ok(await skills.isDisabled(), "the page has a project open: Skills is enabled, so this is not the no-project case");
-    const tab = sectionTabs().filter({ hasText: /^Claude$/ });
-    assert.ok(!(await tab.isDisabled()), "the Claude section needs a project");
+    const tab = sectionTabs().filter({ hasText: /^Claude \(legacy\)$/ });
+    assert.ok(!(await tab.isDisabled()), "the legacy Claude section needs a project");
     await tab.click({ timeout: ACTION_MS });
     await claudeHeading().waitFor({ state: "visible", timeout: NAV_MS });
-    assert.equal(await tab.getAttribute("aria-current"), "page", "the Claude tab is not the current section");
+    assert.equal(await tab.getAttribute("aria-current"), "page", "the legacy Claude tab is not the current section");
     assert.equal(await shownSection().count(), 1, "more than one section shows beside Claude");
     const text = await shownSection().innerText();
     for (const piText of ["Appearance", "Agent language"]) assert.ok(!text.includes(piText), `the Claude section shows General's "${piText}"`);
