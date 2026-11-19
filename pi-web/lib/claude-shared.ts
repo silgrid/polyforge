@@ -221,17 +221,9 @@ export function compareClaudeVersions(a: unknown, b: unknown): number | null {
   return 0;
 }
 
-/** How many custom model names Settings › Claude keeps. */
+/** How many custom model names the retired pi-web store kept; the migration
+ * caps the names it moves into claude's native modelPicker the same way. */
 export const CLAUDE_CUSTOM_MODELS_MAX = 50;
-
-/** Settings › Claude: what a new claude session starts with. */
-export interface ClaudeSettings {
-  launchPermissionMode: ClaudeLaunchPermissionMode;
-  /** Model names offered beside claude's aliases, valid (`isClaudeModelName`) and distinct. */
-  customModels: string[];
-  /** `--include-hook-events`: hook activity shown in the session. */
-  includeHookEvents: boolean;
-}
 
 /**
  * The pi built-in slash commands a claude session's server answers (polyforge#71,

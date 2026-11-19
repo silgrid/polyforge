@@ -47,7 +47,7 @@ import { buildClaudeArgv, buildClaudeEnv } from "./claude-argv";
 import { CLAUDE_BACKGROUND_TASK_EVENT, CLAUDE_BACKGROUND_TASKS_EVENT, CLAUDE_FORCE_STOP_EVENT, claudeBackgroundTaskLabel, type ClaudeBackgroundWork } from "./claude-background-task-view";
 import { claudeConfigDir, claudeSidecarFiles, claudeTranscriptFile } from "./claude-config-dir";
 import { ClaudePermissionBroker, claudePermissionDeniedNotice } from "./claude-permission";
-import { readClaudePermissionConfig } from "./claude-permission-config";
+import { readClaudePreferences } from "./claude-preferences";
 import {
   EMPTY_CLAUDE_USAGE,
   getClaudeSessionRecord,
@@ -253,7 +253,7 @@ export function claudeSessionStats(record: ClaudeSessionRecord, messages: readon
 export function claudeSessionInfo(
   record: ClaudeSessionRecord,
   history = readClaudeHistory(record.id),
-  globalApprovalMode: ClaudePermissionMode = readClaudePermissionConfig().mode,
+  globalApprovalMode: ClaudePermissionMode = readClaudePreferences().approvalChannel,
 ): SessionInfo {
   return {
     path: history.file ?? "",
@@ -279,7 +279,7 @@ export function claudeSessionInfo(
 
 /** Every claude session pi-web created, as list rows. Only the index: no claude projects dir is scanned. */
 export function getClaudeSessionInfos(): SessionInfo[] {
-  const globalApprovalMode = readClaudePermissionConfig().mode;
+  const globalApprovalMode = readClaudePreferences().approvalChannel;
   return readClaudeIndex().map((record) => claudeSessionInfo(record, undefined, globalApprovalMode));
 }
 
@@ -353,7 +353,7 @@ export function claudeCommandEffort(command: Record<string, unknown>): ClaudeEff
  * launch would take — the record's override, else the global mode.
  */
 export function claudeSessionApprovalMode(record: ClaudeSessionRecord, globalApprovalMode?: ClaudePermissionMode): ClaudePermissionMode {
-  return getClaudeSession(record.id)?.permissionMode ?? record.permissionMode ?? globalApprovalMode ?? readClaudePermissionConfig().mode;
+  return getClaudeSession(record.id)?.permissionMode ?? record.permissionMode ?? globalApprovalMode ?? readClaudePreferences().approvalChannel;
 }
 
 /**
@@ -416,7 +416,7 @@ export async function setIdleClaudeSetting(
 ): Promise<ClaudeModelSwitch | ClaudeEffortSwitch | ClaudeLaunchPermissionModeSwitch> {
   if (command.type === "set_permission_mode") {
     const record = getClaudeSessionRecord(id);
-    const approvalMode = record ? claudeSessionApprovalMode(record) : readClaudePermissionConfig().mode;
+    const approvalMode = record ? claudeSessionApprovalMode(record) : readClaudePreferences().approvalChannel;
     const launchPermissionMode = claudeCommandLaunchPermissionMode(command, approvalMode);
     await updateClaudeSessionRecord(id, (record) => ({ ...record, launchPermissionMode }));
     return { launchPermissionMode, pending: true };
@@ -601,7 +601,7 @@ export class ClaudeSession {
     this.configDir = options.configDir;
     this.resumeAt = options.resume && options.resumeAt ? options.resumeAt : null;
     this.tasksOwed = options.resume;
-    this.permissionMode = record.permissionMode ?? readClaudePermissionConfig().mode;
+    this.permissionMode = record.permissionMode ?? readClaudePreferences().approvalChannel;
     this.argv = buildClaudeArgv({
       sessionId: record.id,
       resume: options.resume,
@@ -621,7 +621,7 @@ export class ClaudeSession {
       language: record.agentLanguage,
       onOpen: (_requestId, request) => {
         // The switch is read per request: a change in Settings applies to the next prompt.
-        if (!readClaudePermissionConfig().push) return;
+        if (!readClaudePreferences().pushReminders) return;
         const name = typeof request.display_name === "string" && request.display_name ? request.display_name : request.tool_name;
         void notifyClaudePermissionPending(this.sessionId, this.currentRecord().name, name)
           .catch((error) => console.error("[pi-web] failed to send permission push:", error instanceof Error ? error.message : error));

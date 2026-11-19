@@ -109,7 +109,6 @@ export const zhTWLocale: LocalePlugin = {
     "settings.tabAccount": "帳號",
     "settings.tabPermission": "權限",
     "settings.tabLegacyModels": "模型（舊版）",
-    "settings.tabLegacyClaude": "Claude（舊版）",
     "settings.harnessAccountPlaceholder": "佔位：各 harness 的帳號與登入狀態頁由後續版本填充。",
     "settings.harnessModelsPlaceholder": "佔位：統一模型設定頁由後續版本填充。",
     "settings.harnessPermissionPlaceholder": "佔位：統一權限設定頁由後續版本填充。",

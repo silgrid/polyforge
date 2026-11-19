@@ -10,7 +10,6 @@
 
 import { useEffect, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
-import { useClaudeSettings } from "@/hooks/useClaudeSettings";
 import { useTheme } from "@/hooks/useTheme";
 import { THEME_OPTIONS } from "@/lib/theme";
 import {
@@ -49,7 +48,6 @@ import {
 } from "@/lib/thinking-expansion-preference";
 import { ConfigButton, ConfigSwitch } from "./SettingsUi";
 import { FontSettings } from "./FontSettings";
-import { ClaudePermissionSettings } from "./ClaudePermissionSettings";
 
 /** The props the pane takes from the settings panel. */
 export interface GeneralSettingsProps {
@@ -192,13 +190,26 @@ function AgentLanguageSettings() {
 
 export function GeneralSettings({ sessionId, onSessionReloaded, quoteSelectionEnabled, onQuoteSelectionChange }: GeneralSettingsProps) {
   const { locale, setLocale, supportedLocales, t } = useI18n();
-  // The claude hook-activity preference (owner ruling Q5 A): it moved here from
-  // the legacy Claude page, sharing the one store with it — a save from either
-  // page shows at once in the other, and neither PUTs a stale whole package.
-  const { snapshot: claudeSettings, refresh: refreshClaudeSettings, save: saveClaudeSettings } = useClaudeSettings();
+  // The claude hook-activity preference (85a4): a Pi Web preference with no
+  // claude-native home, read and written through /api/claude-permissions'
+  // includeHookEvents key — the same store the permission page's Claude
+  // section shows. A value shows only after the PUT succeeded.
+  const [claudeHookEvents, setClaudeHookEvents] = useState<boolean | null>(null);
   const [claudeSettingsSaving, setClaudeSettingsSaving] = useState(false);
   const [claudeSettingsError, setClaudeSettingsError] = useState<string | null>(null);
-  useEffect(() => { void refreshClaudeSettings(); }, [refreshClaudeSettings]);
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/claude-permissions")
+      .then(async (response) => {
+        const data = await response.json() as { includeHookEvents?: unknown };
+        if (!response.ok || typeof data.includeHookEvents !== "boolean") throw new Error(`HTTP ${response.status}`);
+        if (!cancelled) setClaudeHookEvents(data.includeHookEvents);
+      })
+      .catch(() => {
+        if (!cancelled) setClaudeSettingsError("unreadable");
+      });
+    return () => { cancelled = true; };
+  }, []);
   const { preference, setThemePreference } = useTheme();
   const { width: chatContentWidth, setWidth: setChatContentWidth, fontSize, setFontSize } = useChatAppearance();
   const enterSendMode = useEnterSendMode();
@@ -248,8 +259,16 @@ export function GeneralSettings({ sessionId, onSessionReloaded, quoteSelectionEn
     setClaudeSettingsSaving(true);
     setClaudeSettingsError(null);
     try {
-      const result = await saveClaudeSettings({ includeHookEvents: enabled });
-      if (!result.ok) throw new Error(result.error);
+      const response = await fetch("/api/claude-permissions", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ includeHookEvents: enabled }),
+      });
+      const data = await response.json().catch(() => ({})) as { error?: unknown; includeHookEvents?: unknown };
+      if (!response.ok || data.includeHookEvents !== enabled) {
+        throw new Error(typeof data.error === "string" && data.error ? data.error : `HTTP ${response.status}`);
+      }
+      setClaudeHookEvents(enabled);
     } catch (cause) {
       setClaudeSettingsError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -551,13 +570,13 @@ export function GeneralSettings({ sessionId, onSessionReloaded, quoteSelectionEn
         {cacheMissNoticesError && <p role="alert" className="settings-general-error">{cacheMissNoticesError}</p>}
       </section>
 
-      {claudeSettings.settings && (
+      {claudeHookEvents !== null && (
         <section className="settings-general-section">
           <h3 className="settings-general-heading">{t("settings.claudeHookEvents")}</h3>
           <div className="settings-shell-option">
             <span>{t("settings.claudeHookEvents")}</span>
             <ConfigSwitch
-              checked={claudeSettings.settings.includeHookEvents}
+              checked={claudeHookEvents}
               loading={claudeSettingsSaving}
               label={t("settings.claudeHookEvents")}
               describedBy="settings-general-hook-events-description"
@@ -717,8 +736,6 @@ export function GeneralSettings({ sessionId, onSessionReloaded, quoteSelectionEn
       </section>
 
       <AgentLanguageSettings />
-
-      <ClaudePermissionSettings sessionId={sessionId} />
 
       {webAuthEnabled && (
         <section className="settings-general-section">

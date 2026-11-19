@@ -2,10 +2,17 @@ import { configureHttpDispatcher, readHttpIdleTimeoutMs } from "@/lib/http-dispa
 import { closeAllAgentEventStreams } from "@/lib/agent-event-stream";
 import { ensureSessionWatcher } from "@/lib/session-watcher";
 import { applyCodemodeWorkerDefault } from "@/lib/codemode-workers";
+import { ensureClaudeSelfStoredMigration } from "@/lib/claude-migration";
 
 export function registerNodeInstrumentation(): void {
   // Before any session can run a codemode script (lib/codemode-workers.ts).
   applyCodemodeWorkerDefault();
+
+  // The one-time migration of the retired self-stored claude files
+  // (polyforge#150 85a4) runs at start, in the background and never awaited:
+  // a deferred run (claude's version unknown) retries on the next start and
+  // at the routes that read the preferences; a failure reports nothing.
+  void ensureClaudeSelfStoredMigration().catch(() => {});
 
   // The pi CLI applies settings' `httpIdleTimeoutMs` to the same undici
   // body/header timeouts, so a Web UI session gets the timeout the user

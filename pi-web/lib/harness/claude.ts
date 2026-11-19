@@ -10,8 +10,6 @@ import { basename, join } from "node:path";
 import { claudeConfigDir } from "../claude-config-dir";
 import { probeClaude } from "../claude-probe";
 import { findClaudeBinary } from "../claude-session";
-import { readClaudeSettings } from "../claude-settings";
-import { defaultAgentDir } from "../http-dispatcher";
 import {
   gatedWrite,
   CLAUDE_KNOWN_RANGE,
@@ -24,7 +22,7 @@ import {
   type WriteResult,
 } from "./adapter";
 import { applyClaudePermissionChange, parseClaudePermissionChange } from "./claude-native-write";
-import { claudeSettingsLayers, claudeStateFilePath, type ClaudeSettingsLayer } from "./claude-layers";
+import { claudeSettingsLayers, claudeStateFilePath, modelPickerOptions, type ClaudeSettingsLayer } from "./claude-layers";
 import {
   neutralApprovalMode,
   neutralReasoningEffort,
@@ -115,7 +113,6 @@ export function createClaudeAdapter(): HarnessAdapter {
   // so a read and the state-file resolution cannot disagree.
   const configDirOf = (ctx?: HarnessReadContext): string => ctx?.claudeConfigDir ?? claudeConfigDir(ctx?.env ?? process.env);
   const envOf = (ctx?: HarnessReadContext): NodeJS.ProcessEnv => ctx?.env ?? process.env;
-  const agentDirOf = (ctx?: HarnessReadContext): string => ctx?.agentDir ?? defaultAgentDir();
 
   async function probeVersion(ctx?: HarnessReadContext): Promise<VersionProbeResult> {
     const configDir = configDirOf(ctx);
@@ -186,7 +183,9 @@ export function createClaudeAdapter(): HarnessAdapter {
             defaultModel: model && typeof model.value === "string" ? model.value : null,
             reasoningEffort: rawEffort === null ? null : { neutral: neutralReasoningEffort(rawEffort), raw: rawEffort },
             providers: [],
-            customModels: [...readClaudeSettings(agentDirOf(ctx)).customModels],
+            // 85a4: the custom names are claude's own modelPicker.options
+            // (claude-layers' one merge of them).
+            customModels: modelPickerOptions(layers),
           };
           return payload;
         }

@@ -109,7 +109,6 @@ export const enLocale: LocalePlugin = {
     "settings.tabAccount": "Account",
     "settings.tabPermission": "Permissions",
     "settings.tabLegacyModels": "Models (legacy)",
-    "settings.tabLegacyClaude": "Claude (legacy)",
     "settings.harnessAccountPlaceholder": "Placeholder — the per-harness account and sign-in page arrives with a later update.",
     "settings.harnessModelsPlaceholder": "Placeholder — the unified model settings page arrives with a later update.",
     "settings.harnessPermissionPlaceholder": "Placeholder — the unified permission settings page arrives with a later update.",

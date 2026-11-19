@@ -102,7 +102,7 @@ export function parseClaudePermissionChange(
  * is refused, never overwritten; a write whose read-back check fails is
  * reported as an error, never as written.
  */
-async function patchUserSettings(
+export async function patchClaudeUserSettings(
   configDir: string,
   merge: (record: Record<string, unknown>) => Record<string, unknown>,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
@@ -154,7 +154,7 @@ export async function applyClaudePermissionChange(
   switch (change.kind) {
     case "approvalMode": {
       const mode = change.mode;
-      const result = await patchUserSettings(configDir, (record) => ({
+      const result = await patchClaudeUserSettings(configDir, (record) => ({
         ...record,
         permissions: { ...(isRecord(record.permissions) ? record.permissions : {}), defaultMode: mode },
       }));
@@ -165,11 +165,11 @@ export async function applyClaudePermissionChange(
     case "autoAllowBashIfSandboxed": {
       const value = change.value;
       const result = change.kind === "sandboxEnabled" || change.kind === "autoAllowBashIfSandboxed"
-        ? await patchUserSettings(configDir, (record) => ({
+        ? await patchClaudeUserSettings(configDir, (record) => ({
           ...record,
           sandbox: { ...(isRecord(record.sandbox) ? record.sandbox : {}), [change.kind === "sandboxEnabled" ? "enabled" : "autoAllowBashIfSandboxed"]: value },
         }))
-        : await patchUserSettings(configDir, (record) => ({
+        : await patchClaudeUserSettings(configDir, (record) => ({
           ...record,
           permissions: { ...(isRecord(record.permissions) ? record.permissions : {}), denyInsteadOfPrompting: value },
         }));
@@ -177,7 +177,7 @@ export async function applyClaudePermissionChange(
     }
     case "rules": {
       const lists = change.rules;
-      const result = await patchUserSettings(configDir, (record) => ({
+      const result = await patchClaudeUserSettings(configDir, (record) => ({
         ...record,
         permissions: mergePermissionsList(isRecord(record.permissions) ? record.permissions : {}, lists),
       }));

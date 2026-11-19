@@ -1,6 +1,5 @@
 import type { McpExposure, ResourceDiagnostic } from "@earendil-works/pi-coding-agent";
 import type { AgentLanguage } from "./agent-language";
-import type { ClaudeSettings } from "./claude-shared";
 import type { McpImportNote } from "./mcp-import-core";
 import type { PolyforgeAgentLanguage } from "./polyforge-config-write";
 import type { SubagentProfile } from "./subagents";
@@ -51,8 +50,6 @@ export interface AgentLanguageResponse {
   polyforge?: PolyforgeAgentLanguage | null;
 }
 
-/** GET/PUT /api/claude-settings: Settings › Claude as stored (a PUT's body too). */
-export type ClaudeSettingsResponse = ClaudeSettings;
 
 export interface ToolSettingsResponse {
   isWindows: boolean;
