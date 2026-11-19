@@ -20,7 +20,7 @@ const jiti = createJiti(import.meta.url, {
 });
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
-const { AccountClaudeCard, AccountHarnessPane, ClaudeCredentialForm } = await jiti.import("./AccountSettings.tsx");
+const { AccountClaudeCard, AccountHarnessPane, ClaudeCredentialForm, CredentialWriteResults } = await jiti.import("./AccountSettings.tsx");
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
 
 const h = React.createElement;
@@ -138,6 +138,34 @@ test("the credential form: three kinds, the gateway base URL, targets defaulting
     assert.match(html, new RegExp(`data-account-target="${target}" [^>]*checked`), `the ${target} target is not checked by default`);
   }
   assert.match(html, /next Cell build/, "the shared-default note is missing");
+});
+
+test("the pi pane renders the per-Cell step guidance of Q4: shared operator directory or the Cell's own source (review r1#5)", () => {
+  const html = renderPane("pi", { id: "pi", loginCommands: [], credentialsFollowConfigRoot: true });
+  const def = html.slice(html.indexOf('data-account-cell="default"'), html.indexOf('data-account-cell="beta"'));
+  assert.match(def, /data-pi-step-guidance="operator"/);
+  assert.match(def, /Steps of this Cell run against the shared operator directory \/home\/op\/\.pi\/agent/);
+  const beta = html.slice(html.indexOf('data-account-cell="beta"'), html.indexOf('data-account-cell="gamma"'));
+  assert.match(beta, /data-pi-step-guidance="shared-default"/);
+  assert.match(beta, /shared operator directory \/home\/op\/\.pi\/agent/);
+  const gamma = html.slice(html.indexOf('data-account-cell="gamma"'));
+  assert.match(gamma, /data-pi-step-guidance="directory"/);
+  assert.match(gamma, /its own source directory \/srv\/own/);
+});
+
+test("a refused write shows its target and its reason — the reason reaches the user (review r1#10)", () => {
+  const html = renderToStaticMarkup(h(I18nProvider, null, h(CredentialWriteResults, {
+    results: [
+      { target: "interactive", status: "written" },
+      { target: "gamma", status: "refused", reason: "settings.json has an unrecognized format (not JSON) — refusing to overwrite it" },
+    ],
+  })));
+  assert.match(html, /interactive/);
+  assert.match(html, /gamma/);
+  assert.match(html, /unrecognized format/);
+  assert.ok(!html.includes("SENTINEL"));
+  // the refused target is distinguishable from the written one
+  assert.match(html, /data-write-target="gamma"[^>]*data-write-status="refused"/);
 });
 
 test("an unavailable claude status degrades with its reason, and the doctor error shows (AC1)", () => {
