@@ -1,6 +1,8 @@
 import "#test-env";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
@@ -110,4 +112,55 @@ test("loading the extensions would list exactly the same skills", async () => {
   assert.deepEqual(paths(listed.skills), paths(withExtensions.getSkills().skills));
   // `resources_discover` runs only at session_start, which neither loader reaches.
   assert.ok(!names(listed.skills).includes("discovered-skill"));
+});
+
+const hash = (file) => createHash("sha256").update(readFileSync(file)).digest("hex");
+const settingsFile = join(agentDir, "pi-web-settings.json");
+
+async function writeAgentSkill(name, frontmatter = "") {
+  const filePath = join(agentDir, "skills", name, "SKILL.md");
+  await mkdir(join(agentDir, "skills", name), { recursive: true });
+  await writeFile(filePath, `---\nname: ${name}\n${frontmatter}description: ${name} skill\n---\nbody\n`);
+  return filePath;
+}
+
+async function storePreference(entries) {
+  const store = JSON.parse(await readFile(settingsFile, "utf8"));
+  store.skillVisibility ??= {};
+  store.skillVisibility.pi ??= {};
+  Object.assign(store.skillVisibility.pi, entries);
+  await writeFile(settingsFile, JSON.stringify(store, null, 2));
+}
+
+test("the listing imports an author-hidden skill as a hidden preference and never edits the file", async () => {
+  const legacy = await writeAgentSkill("legacy-author-hidden", "disable-model-invocation: true\n");
+  await writeFile(settingsFile, `${JSON.stringify({ version: 1, agentLanguage: "zh-CN" }, null, 2)}\n`);
+  const before = hash(legacy);
+
+  const listed = await loadSkillsWithInstallInfo(trustedProject);
+  const entry = listed.skills.find((skill) => skill.name === "legacy-author-hidden");
+
+  assert.ok(entry, "the imported skill stays listed");
+  assert.equal(entry.declaredDisableModelInvocation, true);
+  assert.equal(entry.disableModelInvocation, true, "the import hides it, as its legacy line did");
+  const store = JSON.parse(await readFile(settingsFile, "utf8"));
+  assert.equal(store.skillVisibility.pi[legacy], "hidden");
+  assert.equal(store.agentLanguage, "zh-CN", "the store keeps its other keys");
+  assert.equal(hash(legacy), before, "the SKILL.md is never edited");
+});
+
+test("a stored preference wins: shown overrides the author, hidden hides an author-visible skill", async () => {
+  const authorHidden = await writeAgentSkill("author-hidden-shown", "disable-model-invocation: true\n");
+  const plain = await writeAgentSkill("pref-hidden");
+  await storePreference({ [authorHidden]: "shown", [plain]: "hidden" });
+
+  const listed = await loadSkillsWithInstallInfo(trustedProject);
+  const byName = new Map(listed.skills.map((skill) => [skill.name, skill]));
+
+  assert.equal(byName.get("author-hidden-shown").declaredDisableModelInvocation, true);
+  assert.equal(byName.get("author-hidden-shown").disableModelInvocation, false, "shown overrides the author's line");
+  assert.equal(byName.get("pref-hidden").declaredDisableModelInvocation, false);
+  assert.equal(byName.get("pref-hidden").disableModelInvocation, true, "hidden hides an author-visible skill");
+  assert.equal(byName.get("legacy-author-hidden").disableModelInvocation, true, "the earlier import still holds");
+  assert.equal(byName.get("global-skill").disableModelInvocation, false, "an untouched skill keeps the author's value");
 });

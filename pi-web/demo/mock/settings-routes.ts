@@ -236,6 +236,14 @@ async function skillsRoute(request: MockRequest): Promise<Response> {
     const results = SKILL_SEARCH_RESULTS.filter((result) => !query || result.package.toLowerCase().includes(query) || query.split(/\s+/).some((word) => result.package.toLowerCase().includes(word)));
     return json({ results: results.length ? results : SKILL_SEARCH_RESULTS.slice(0, 4) });
   }
+  if (sub === "cleanup") {
+    const body = await request.json<{ filePath?: string }>();
+    const skill = skillsState.skills.find((candidate) => candidate.filePath === body.filePath);
+    if (!skill) return error("file not found", 404);
+    const removed = skill.declaredDisableModelInvocation === true;
+    skill.declaredDisableModelInvocation = false;
+    return json({ success: true, removed });
+  }
   if (sub === "check") return json({ results: [] });
   return error(demoOnlyMessage(), 501);
 }

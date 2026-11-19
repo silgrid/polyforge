@@ -1,6 +1,9 @@
 // The server-side Agent language: `<pi agent dir>/pi-web-settings.json`,
 // `{ "version": 1, "agentLanguage": "en" | "zh-CN" }`. pi-web's own file, never pi's
-// settings.json, cli.toml or browser storage. `app/api/agent-language` is its one writer.
+// settings.json, cli.toml or browser storage. Every key in this file has exactly one
+// writer: `agentLanguage`'s is `app/api/agent-language`, `skillVisibility`'s is
+// `app/api/skills/**` (lib/skill-visibility-config.ts); all of them share
+// PI_WEB_SETTINGS_WRITE_CHAIN below, so their read-modify-writes never interleave.
 import { mkdirSync, readFileSync } from "fs";
 import { dirname, join } from "path";
 import { writePrivateFileAtomicSync } from "./atomic-file";
@@ -8,7 +11,8 @@ import { defaultAgentDir } from "./http-dispatcher";
 import { serializeByKey } from "./key-serializer";
 import { normalizeAgentLanguage, type AgentLanguage } from "./agent-language";
 
-const WRITE_CHAIN = Symbol.for("pi-web.agentLanguageWrites");
+/** The one write chain for pi-web-settings.json: one write at a time per file, every writer. */
+export const PI_WEB_SETTINGS_WRITE_CHAIN = Symbol.for("pi-web.settingsWrites");
 
 export function agentLanguageConfigPath(agentDir: string = defaultAgentDir()): string {
   return join(agentDir, "pi-web-settings.json");
@@ -31,7 +35,7 @@ export function readStoredAgentLanguage(agentDir?: string): AgentLanguage {
  */
 export function writeStoredAgentLanguage(language: AgentLanguage, agentDir?: string): Promise<AgentLanguage> {
   const path = agentLanguageConfigPath(agentDir);
-  return serializeByKey(WRITE_CHAIN, path, async () => {
+  return serializeByKey(PI_WEB_SETTINGS_WRITE_CHAIN, path, async () => {
     let current: Record<string, unknown> = {};
     let text: string | undefined;
     try {
