@@ -92,6 +92,19 @@ class ReadUnitRunsTest(unittest.TestCase):
         p = self.path("norun.json", [{"id": "u2", "marker": "^PASS "}])
         self.assertEqual(unitruns.read_unit_runs(p), [unitruns.UnitRunDecl(id="u2", marker="^PASS ")])
 
+    def test_a_self_reported_timeout_is_read(self) -> None:
+        """polyforge#157: a unit's self-reported `timeout` (a Go duration) —
+        the limit its recorded run and its red-state replay are bounded
+        by — is part of the one declaration, and an invalid one makes the
+        file unusable (never silently the default)."""
+        p = self.path("timeout.json", [{"id": "u1", "timeout": "12m", "marker": "^PASS "}])
+        self.assertEqual(unitruns.read_unit_runs(p), [unitruns.UnitRunDecl(id="u1", marker="^PASS ", timeout="12m")])
+        for bad in ("abc", "12x", "0s"):
+            with self.subTest(bad=bad):
+                p = self.path("bad-timeout-%s.json" % bad, [{"id": "u1", "timeout": bad, "marker": "^PASS "}])
+                with self.assertRaises(ValueError):
+                    unitruns.read_unit_runs(p)
+
     def test_the_check_name(self) -> None:
         self.assertEqual(unitruns.UnitRunDecl(id="u1", repo="demo").check(), "demo:unit-run:u1")
 

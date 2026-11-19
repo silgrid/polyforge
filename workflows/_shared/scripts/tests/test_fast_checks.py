@@ -528,6 +528,48 @@ class FlakyCheckUnitsTest(CheckUnitsTest):
         self.assertEqual(self.run_count(), 2, "the first run plus exactly one re-run")
 
 
+class UnitLimitTest(CheckUnitsTest):
+    """AC2's --check-units half: a recorded unit's run is bounded by its
+    self-reported `timeout` (a Go duration), else the 10m default; a run
+    killed at its limit is an evidence problem naming the limit — a
+    red-state run must exit non-zero within its limit, never hang.
+    Expected values come from the fixtures' own exit behaviour and the
+    literal limits, never the implementation."""
+
+    def test_a_run_killed_at_its_self_reported_limit_is_an_evidence_problem(self) -> None:
+        unit = self.unit("u3a", "^NEVERU3$", ["bash", "-c", "sleep 30"])
+        unit["timeout"] = "2s"
+        code, res = self.run_units([unit])
+        self.assertEqual(code, 1, res)
+        u = res["details"]["units"][0]
+        self.assertTrue(u["timed_out"])
+        self.assertIn("killed at its time limit (2s)", u["why"])
+        self.assertIn("did not exit non-zero within the limit", u["why"])
+
+    def test_a_self_reported_limit_below_the_default_kills_the_run(self) -> None:
+        unit = self.unit("u3b", "^U3PASS$", ["bash", "-c", "sleep 1; echo U3PASS"])
+        unit["timeout"] = "1ms"
+        code, res = self.run_units([unit])
+        self.assertEqual(code, 1, res)
+        u = res["details"]["units"][0]
+        self.assertTrue(u["timed_out"])
+        self.assertIn("killed at its time limit (1ms)", u["why"])
+
+    def test_an_invalid_self_reported_timeout_makes_the_file_unusable(self) -> None:
+        # a usage error's message names the timeout and its rule on stderr,
+        # never the result's summary (r1#N2)
+        self.go_repo()
+        unit = self.unit("u3c", "^X$", ["true"])
+        unit["timeout"] = "abc"
+        p = self.units_file([unit])
+        argv = [sys.executable, FAST_CHECKS, "--capsule", self.capsule, "--engine", ENGINE,
+                "--deadline", "10m", "--out", self.out, "--check-units", p]
+        c = subprocess.run(argv, capture_output=True, text=True)
+        self.assertEqual(c.returncode, 2)
+        self.assertIn("timeout", c.stderr)
+        self.assertIn("Go duration", c.stderr)
+
+
 class FullPhaseNeverRunsTest(FastChecksCase):
     """AC2 (review r1 #1): a report that falls back to the full tier — a
     stack config file changed — never has its full-phase commands run:
