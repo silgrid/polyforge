@@ -5,8 +5,7 @@
 // never triggers a save; an empty specific selection cannot submit; the
 // parent owns the selection and answers per target, so a failure keeps the
 // draft and is never reported as a total success. Presentational like
-// SettingsUi.tsx. Placeholder signature; the body arrives with its unit and
-// replaces this stub.
+// SettingsUi.tsx.
 
 export type HarnessApplyToMode = "all" | "specific";
 

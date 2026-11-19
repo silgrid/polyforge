@@ -245,7 +245,7 @@ try {
     await back.waitFor({ state: "visible", timeout: ACTION_MS });
     await back.click({ timeout: ACTION_MS });
     await items.first().waitFor({ state: "visible", timeout: ACTION_MS });
-    assert.ok(!(await generalPane(page, "conversation").isVisible()), "Back did not return to the list");
+    await generalPane(page, "conversation").waitFor({ state: "hidden", timeout: ACTION_MS });
     await page.context().close();
   });
 

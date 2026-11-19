@@ -4,8 +4,7 @@
 // explicitly provides the current value, each harness's read state and
 // capability, and the submit callback; only a user click submits, once, to
 // the applicable and writable harnesses. Presentational like SettingsUi.tsx
-// (every word a prop, no state of its own). Placeholder signature; the body
-// arrives with its unit and replaces this stub.
+// (every word a prop, no state of its own).
 
 /** One harness's read of the unified value. */
 export interface UnifiedSettingHarnessValue {
