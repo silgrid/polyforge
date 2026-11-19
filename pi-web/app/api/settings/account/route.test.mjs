@@ -23,7 +23,7 @@ const opDir = path.join(home, ".pi", "agent");
 const ownDir = path.join(scratch, "own-agent");
 const claudeHome = path.join(home, ".claude");
 const binDir = path.join(scratch, "bin");
-for (const dir of [path.join(home, ".pi"), claudeHome, binDir, data,
+for (const dir of [opDir, claudeHome, binDir, data,
   path.join(data, "cells", "default", "claude-config"),
   path.join(data, "cells", "beta", "claude-config"),
   path.join(data, "cells", "gamma", "claude-config"),
@@ -136,16 +136,21 @@ const noSentinel = (text) => {
   for (const sentinel of SENTINELS) assert.ok(!text.includes(sentinel), `the response leaks ${sentinel}`);
 };
 
+const request = (init) => new Request("http://localhost/api/settings/account", {
+  headers: { host: "localhost" },
+  ...init,
+});
 async function get() {
-  const response = await route.GET(new Request("http://x/api/settings/account", { headers: { origin: "http://x" } }));
+  const response = await route.GET(request({}));
   return { status: response.status, body: await response.json() };
 }
 async function post(body) {
-  const response = await route.POST(new Request("http://x/api/settings/account", {
-    method: "POST", headers: { "content-type": "application/json", origin: "http://x" },
+  const response = await route.POST(request({
+    method: "POST",
+    headers: { host: "localhost", "content-type": "application/json" },
     body: JSON.stringify(body),
   }));
-  return { status: response.status, text: await response.text(), body: null };
+  return { status: response.status, text: await response.text() };
 }
 
 test("GET: the interactive claude card and the three Cell kinds, no value anywhere (AC1)", async () => {
