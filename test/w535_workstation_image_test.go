@@ -2,7 +2,9 @@
 //
 //	dist/workstation/containers/*, dist/workstation/seccomp.json,
 //	dist/workstation/seccomp.json.sha256, dist/workstation/README.md,
-//	dist/workstation/compose.yaml, dist/workstation/smoke.sh, .dockerignore,
+//	dist/workstation/compose.yaml, dist/workstation/smoke.sh,
+//	dist/workstation/env-whitelist.sh, dist/workstation/Caddyfile,
+//	test/testdata/workstation-smoke-stub/docker, .dockerignore,
 //	.polyforge/verify-scope.conf
 package test
 
@@ -35,6 +37,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -706,6 +711,67 @@ func TestWorkstationSmoke(t *testing.T) {
 		}
 		if !strings.Contains(out, "memory controller") {
 			t.Fatalf("the failure must name the missing controller:\n%s", out)
+		}
+	})
+
+	t.Run("env: the sentinel rides the up that creates the container, /api answers 401", func(t *testing.T) {
+		// the non-inheritance sentinel must be in the environment of the
+		// `compose up` that CREATES the container — review r2#2 found it
+		// riding only the build call, which made the "the host
+		// environment did not leak in" check vacuously green. The stub
+		// dumps its own environment on build and up; this subtest reads
+		// both back. The /api check talks to a local stub server
+		// answering the anonymous 401 Pi Web answers with a password.
+		api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+		}))
+		defer api.Close()
+		apiURL, err := url.Parse(api.URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		dir := t.TempDir()
+		// the Pi Web process's environment as compose delivered it: the
+		// explicit list plus the override's probe variables — never the
+		// sentinel, never PI_TEST_* (the entrypoint whitelist drops it).
+		environ := strings.Join([]string{
+			"PORT=30141",
+			"PI_WEB_APP_NAME=pf-workstation-smoke-app",
+			"PI_SMOKE_PROBE=passed-through",
+			"PI_WEB_PASSWORD=pf-workstation-smoke-test-password",
+			"BUILDAH_ISOLATION=chroot",
+		}, "\x00") + "\x00"
+		if err := os.WriteFile(filepath.Join(dir, "environ.txt"), []byte(environ), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		bin := t.TempDir()
+		if err := os.Symlink(filepath.Join(root, "test", "testdata", "workstation-smoke-stub", "docker"), filepath.Join(bin, "docker")); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("sh", script, "env")
+		cmd.Env = []string{
+			"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"),
+			"HOME=" + os.Getenv("HOME"),
+			"W535_SMOKE_SCENARIO=" + dir,
+			"WORKSTATION_WEB_PORT=" + apiURL.Port(),
+		}
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("the env subcommand must pass against the stub:\n%s", out)
+		}
+		if !strings.Contains(string(out), "env: PASS") {
+			t.Fatalf("the passing env run must print its PASS line:\n%s", out)
+		}
+		upEnv, err := os.ReadFile(filepath.Join(dir, "compose-up-env.txt"))
+		if err != nil {
+			t.Fatalf("the stub must record the environment of the up that creates the container: %v", err)
+		}
+		if !strings.Contains(string(upEnv), "SENTINEL_WORKSTATION_SMOKE=yes") {
+			t.Fatalf("the non-inheritance sentinel must ride the `up` that creates the container — only then can the environ check mean anything:\n%s", upEnv)
+		}
+		if !strings.Contains(string(upEnv), "PI_WEB_PASSWORD=") {
+			t.Fatalf("the smoke's own default password must reach the up call too:\n%s", upEnv)
 		}
 	})
 }

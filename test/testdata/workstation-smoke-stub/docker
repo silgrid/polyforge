@@ -52,6 +52,17 @@ if [ "${1:-}" = exec ]; then
 		fi
 		exit 1
 		;;
+	*"[s]tart:lan"*)
+		# the pi-web process: the listing pipeline asks for a pid, the
+		# poll only asks whether one exists
+		case "$args" in
+		*awk*) echo 4242 ;;
+		*) exit 0 ;;
+		esac
+		;;
+	*"/proc/"*"environ"*)
+		cat "$dir/environ.txt"
+		;;
 	esac
 	exit 0
 fi
@@ -63,6 +74,14 @@ if [ "${1:-}" = compose ]; then
 		up | ps | down) verb=$a ;;
 		esac
 	done
+	case "$verb" in
+	up | build)
+		# the smoke's own shell environment, as compose received it —
+		# the env behaviour test reads it back (review r2#2: the sentinel
+		# must be present at the up that creates the container)
+		env > "$dir/compose-$verb-env.txt"
+		;;
+	esac
 	case "$verb" in
 	up)
 		# compose's own refusal shape: the required variable is missing
