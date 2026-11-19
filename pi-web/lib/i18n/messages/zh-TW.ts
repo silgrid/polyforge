@@ -97,6 +97,7 @@ export const zhTWLocale: LocalePlugin = {
     "settings.harnessDiagnosticsUnavailable": "不可用：{reason}",
     "settings.harnessDiagnosticsTimedOut": "執行在限期內被終止（逾時）。",
     "settings.harnessDiagnosticsTruncated": "輸出已截斷。",
+    "settings.harnessListFailed": "harness 清單讀取失敗：{error}",
     "settings.harnessEnvTitle": "環境",
     "settings.harnessEnvNote": "只顯示變數名稱，不顯示值：配接器只回答名稱，任何值都不進入本頁。",
     "settings.harnessEnvEmpty": "未設定變數。",

@@ -16,12 +16,13 @@ export interface HarnessEnvGroupView extends HarnessEnvGroup {
 }
 
 /** The pane's loaded look: one group per harness, names only. */
-export function HarnessEnvironmentGroups({ groups }: { groups: HarnessEnvGroupView[] }) {
+export function HarnessEnvironmentGroups({ groups, listError }: { groups: HarnessEnvGroupView[]; listError?: string | null }) {
   const { t } = useI18n();
   return (
     <section className="settings-general-section">
       <h3 className="settings-general-heading">{t("settings.harnessEnvTitle")}</h3>
       <p className="settings-general-description">{t("settings.harnessEnvNote")}</p>
+      {listError && <p role="alert" className="settings-general-error">{t("settings.harnessListFailed", { error: listError })}</p>}
       <div className="settings-harness-env-groups">
         {groups.map((group) => (
           <div key={group.harness} data-harness={group.harness} className="settings-harness-env-group">
@@ -50,6 +51,7 @@ interface HarnessListEntry {
 export function HarnessEnvironmentSettings({ cwd }: { cwd: string | null }) {
   const { t } = useI18n();
   const [groups, setGroups] = useState<HarnessEnvGroupView[] | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
 
   // One read per mount (the pane unmounts on switch, so each activation
   // reads once — the settings pages' cadence, never a poll).
@@ -57,6 +59,7 @@ export function HarnessEnvironmentSettings({ cwd }: { cwd: string | null }) {
     let cancelled = false;
     const read = async () => {
       const next: HarnessEnvGroupView[] = [];
+      setListError(null);
       try {
         const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : "";
         const listResponse = await fetch(`/api/harness${query}`);
@@ -73,8 +76,13 @@ export function HarnessEnvironmentSettings({ cwd }: { cwd: string | null }) {
             next.push({ harness: entry.id, target: entry.id, keys: [], error: cause instanceof Error ? cause.message : String(cause) });
           }
         }
-      } catch {
-        // The list itself refused: one visible line, no groups.
+      } catch (cause) {
+        // The list itself refused: its visible reason, no groups (r1#8).
+        if (!cancelled) {
+          setListError(cause instanceof Error ? cause.message : String(cause));
+          setGroups([]);
+          return;
+        }
       }
       if (!cancelled) setGroups(next);
     };
@@ -90,5 +98,5 @@ export function HarnessEnvironmentSettings({ cwd }: { cwd: string | null }) {
       </section>
     );
   }
-  return <HarnessEnvironmentGroups groups={groups} />;
+  return <HarnessEnvironmentGroups groups={groups} listError={listError} />;
 }

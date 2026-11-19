@@ -97,6 +97,7 @@ export const zhCNLocale: LocalePlugin = {
     "settings.harnessDiagnosticsUnavailable": "不可用：{reason}",
     "settings.harnessDiagnosticsTimedOut": "运行在限期内被终止（超时）。",
     "settings.harnessDiagnosticsTruncated": "输出已截断。",
+    "settings.harnessListFailed": "harness 列表读取失败：{error}",
     "settings.harnessEnvTitle": "环境",
     "settings.harnessEnvNote": "只显示变量名，不显示值：适配器只回答名称，任何值都不进入本页。",
     "settings.harnessEnvEmpty": "未设置变量。",

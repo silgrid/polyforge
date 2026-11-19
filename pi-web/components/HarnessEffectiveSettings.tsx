@@ -101,6 +101,7 @@ interface HarnessListEntry {
 export function HarnessEffectiveSettings({ cwd }: { cwd: string | null }) {
   const { t } = useI18n();
   const [groups, setGroups] = useState<HarnessEffectiveGroupView[] | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<Record<string, HarnessDiagnosticsState>>({});
   const loadedRef = useRef<Set<string>>(new Set());
 
@@ -126,8 +127,13 @@ export function HarnessEffectiveSettings({ cwd }: { cwd: string | null }) {
             next.push({ harness: entry.id, rows: [], error: cause instanceof Error ? cause.message : String(cause) });
           }
         }
-      } catch {
-        // The list itself refused: one visible line below, no groups.
+      } catch (cause) {
+        // The list itself refused: its visible reason, no groups (r1#8).
+        if (!cancelled) {
+          setListError(cause instanceof Error ? cause.message : String(cause));
+          setGroups([]);
+          return;
+        }
       }
       if (!cancelled) setGroups(next);
     };
@@ -158,6 +164,7 @@ export function HarnessEffectiveSettings({ cwd }: { cwd: string | null }) {
     <section className="settings-general-section">
       <h3 className="settings-general-heading">{t("settings.harnessEffectiveTitle")}</h3>
       <p className="settings-general-description">{t("settings.harnessEffectiveNote")}</p>
+      {listError && <p role="alert" className="settings-general-error">{t("settings.harnessListFailed", { error: listError })}</p>}
       {groups === null && <p className="settings-general-description">{t("settings.harnessEnvReading")}</p>}
       {groups !== null && groups.length === 0 && (
         <p className="settings-general-description">{t("settings.harnessEffectiveNoHarnesses")}</p>

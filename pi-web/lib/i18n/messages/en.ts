@@ -97,6 +97,7 @@ export const enLocale: LocalePlugin = {
     "settings.harnessDiagnosticsUnavailable": "Unavailable: {reason}",
     "settings.harnessDiagnosticsTimedOut": "The run was cut at its deadline (timed out).",
     "settings.harnessDiagnosticsTruncated": "Output truncated.",
+    "settings.harnessListFailed": "The harness list could not be read: {error}",
     "settings.harnessEnvTitle": "Environment",
     "settings.harnessEnvNote": "Only variable names are shown, never values: the adapters answer names, and a value never reaches this page.",
     "settings.harnessEnvEmpty": "No variables set.",
