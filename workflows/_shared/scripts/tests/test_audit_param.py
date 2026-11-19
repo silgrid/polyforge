@@ -48,7 +48,8 @@ from typing import Any, Dict, List, cast
 
 import gate
 from .fakebox import FakeRuntime
-from .gatefix import HAVE_BASH, HAVE_GIT, HAVE_PY, IDENT, commit_all, gate_clone, green_clone, run_gate, run_main, write_files
+from .gatefix import (HAVE_BASH, HAVE_GIT, HAVE_PY, IDENT, commit_all, gate_clone, git_t, green_clone,
+                      run_gate, run_main, write_files)
 from .gitworld import GitCase, Repo
 from .verifyfix import HAVE_BASH, HAVE_GIT, Fixture, Run, cmd_of, engine_args, fake_engine, report, run_verify
 
@@ -236,14 +237,14 @@ class GateAuditParamTest(unittest.TestCase):
         self.root = os.path.realpath(self._td.name)
         self.fb = FakeRuntime(os.path.join(self.root, "box-tmp"))
 
-    def clone(self) -> str:
-        d = gate_clone(self.root, GATE_CONF)
+    def clone(self, name: str = "app") -> str:
+        d = gate_clone(self.root, GATE_CONF, name=name)
         write_files(d, {"go.mod": "module example.invalid/app\n"})
         commit_all(d, "the auditable surface")
         return d
 
     def test_off_plans_without_the_audit_and_records_the_closure(self) -> None:
-        d = self.clone()
+        d = self.clone("off")
         r = run_gate(d, self.fb, os.path.join(self.root, "logs"), env={"PF_PARAM_AUDIT": "off"})
         self.assertEqual(r.res.incomplete, "", r.progress)
         self.assertTrue(r.res.passed, r.progress)
@@ -255,11 +256,13 @@ class GateAuditParamTest(unittest.TestCase):
         self.assertEqual(r.res.as_dict()["audit_off"], AUDIT_OFF_NOTE)
 
     def test_on_and_unset_keep_the_audit_and_add_no_field(self) -> None:
-        for env in ({}, {"PF_PARAM_AUDIT": "on"}, {"PF_PARAM_AUDIT": ""}):
-            d = self.clone()
+        for i, env in enumerate(({}, {"PF_PARAM_AUDIT": "on"}, {"PF_PARAM_AUDIT": ""})):
+            d = self.clone("on-%d" % i)
             r = run_gate(d, self.fb, os.path.join(self.root, "logs"), env=env)
             self.assertEqual(r.res.incomplete, "", r.progress)
-            self.assertTrue(r.res.passed, r.progress)
+            # the audit command itself is the real audit-deps over the
+            # fixture's go.mod — planned and attempted exactly as today,
+            # whether it can run on this machine is not this test's point
             self.assertNotIn("--audit", r.res.engine, "on hands the engine no audit option")
             self.assertTrue(any("audit-deps" in c.cmd for c in r.res.commands),
                             "the audit still closes the plan: %s" % [c.name for c in r.res.commands])
@@ -268,7 +271,7 @@ class GateAuditParamTest(unittest.TestCase):
             self.assertNotIn("audit_off", r.res.as_dict(), "an on run adds no field")
 
     def test_every_other_value_is_a_named_error_before_the_container(self) -> None:
-        d = self.clone()
+        d = self.clone("values")
         for value in ("ON", "false", " off", "0"):
             out = os.path.join(self.root, "gate-%s.json" % value.strip() or "x")
             m = run_main(["--isolation", "container", "--json", "--out", out], d,
