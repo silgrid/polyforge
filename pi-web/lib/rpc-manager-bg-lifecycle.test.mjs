@@ -28,12 +28,31 @@ const flush = async () => { for (let i = 0; i < 6; i += 1) await new Promise((re
 
 const startedWrappers = [];
 const startedTasks = [];
+const usedSessionIds = new Set();
 
 async function openSession(cwd, options = {}) {
   const id = `bg-lifecycle-${Math.random().toString(36).slice(2)}`;
   const started = await startRpcSession(id, "", cwd, options);
   startedWrappers.push(started.session);
+  usedSessionIds.add(started.session.sessionId);
   return started;
+}
+
+/**
+ * The wake path reopens a wrapper whose session a completed task belongs to
+ * (Q11 A); the reopened wrapper's idle timer would otherwise hold the test
+ * process for its full idle timeout, so every used session is reaped here.
+ */
+async function reapReopenedSessions() {
+  for (const sessionId of usedSessionIds) {
+    try {
+      const reopened = await startRpcSession(sessionId, "", agentDir);
+      reopened.session.destroy();
+    } catch {
+      // A session that cannot start again has nothing to reap.
+    }
+  }
+  usedSessionIds.clear();
 }
 
 test.afterEach(async () => {
@@ -44,6 +63,7 @@ test.afterEach(async () => {
   for (const wrapper of startedWrappers.splice(0)) {
     try { await wrapper.destroy(); } catch { /* already gone */ }
   }
+  await reapReopenedSessions();
 });
 
 test.after(() => rm(agentDir, { recursive: true, force: true }));
@@ -91,6 +111,7 @@ test("reload, clone, navigate and the Chat-only rebuild are refused with the str
   const runtime = getBgRuntime();
   const started = await openSession(agentDir);
   const sessionId = started.session.sessionId;
+  usedSessionIds.add(sessionId);
   await started.session.waitUntilReady();
 
   const info = runtime.run(sessionId, agentDir, "sleep 2");
@@ -118,6 +139,7 @@ test("ending the wrapper (Stop's forced idle reap) leaves the background task ru
   const runtime = getBgRuntime();
   const started = await openSession(agentDir);
   const sessionId = started.session.sessionId;
+  usedSessionIds.add(sessionId);
   await started.session.waitUntilReady();
 
   const info = runtime.run(sessionId, agentDir, "sleep 2");
