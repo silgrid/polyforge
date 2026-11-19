@@ -137,9 +137,18 @@ function plan(mode, options) {
     // The measurement window is the call itself, cold and hot apart: a cold
     // run never warms the route first, and its samples come only from windows
     // overlapping a call, accumulated across independent cold starts until the
-    // sample bound is met (review r2#7).
+    // sample bound is met (review r2#7). The probe is open-loop — scheduled
+    // every interval, never waiting for the previous one — because a stalled
+    // main thread must surface as many slow samples, not the one a
+    // request-response loop can squeeze in (review r3#6); only probes issued
+    // inside a measured call's window count, so idle samples never dilute the
+    // p99 (review r3#5).
     details.shapes = ["cold", "hot"];
     details.warmCalls = 0;
+    details.probe = "open-loop";
+    details.overlapOnly = true;
+    details.hotIterations = 200;
+    details.coldStartsMax = 10;
   } else if (mode === "read-volume") {
     details.modes = listArg(options, "modes", CALL_MODES);
     details.calls = numberArg(options, "calls", { min: 2 }) ?? 2;
@@ -152,8 +161,13 @@ function plan(mode, options) {
     details.maxMs = numberArg(options, "max-ms", { min: 1 }) ?? 1000;
     details.maxReadRatio = numberArg(options, "max-read-ratio", { min: 0, max: 1 }) ?? 0.10;
     // The warm-index shape's persisted index is built by a prior run of this
-    // same oracle, never assumed (review r2 N12).
+    // same oracle, never assumed (review r2 N12) — and the build round waits,
+    // bounded, for the index file to appear on disk before its server stops:
+    // a SIGTERM before the scanner's trailing 5 s persist timer fired measured
+    // an empty index (review r3#7).
     details.buildsWarmIndex = true;
+    details.warmIndexPersisted = true;
+    details.warmIndexPersistTimeoutMs = 20_000;
   } else if (mode === "golden") {
     details.baseline = resolveRevision(String(options.baseline ?? "bdbbd6e9"));
     details.candidate = String(options.candidate ?? "HEAD");

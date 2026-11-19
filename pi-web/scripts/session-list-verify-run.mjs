@@ -5,7 +5,7 @@
 // next-server process's own /proc counters, and writes that finish (fsync)
 // before the measured request starts.
 import { spawn, spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { createServer } from "node:net";
 import { join, resolve } from "node:path";
@@ -191,37 +191,53 @@ async function flushWrites(dir) {
 
 // ---- responsiveness ---------------------------------------------------------
 // Each mode is measured cold and hot apart (review r2#7): a cold run starts a
-// fresh process against a dropped index and its FIRST list call is the measured
-// one — no warm call, ever; a hot run makes exactly one unmeasured call first
-// (that is what hot means). Samples count only while they overlap a measured
-// call; a cold start that cannot reach the sample bound is repeated
-// independently and the overlapping samples accumulate.
-const MAX_COLD_STARTS = 10;
+// fresh process against a dropped index and its FIRST list call is the
+// measured one — no warm call, ever; a hot run warms once, then repeats
+// measured calls on the same server until the sample bound.
+//
+// The probe is OPEN-LOOP (review r3#6): one probe is issued every
+// intervalMs regardless of when (or whether) the previous one answered, so a
+// stalled main thread surfaces as the many slow samples it really causes — a
+// request-response loop would squeeze the whole stall into one sample and
+// understate the p99 (coordinated omission). Each probe is timed from its own
+// issue and bounded by a timeout; only probes ISSUED inside a measured call's
+// window count (review r3#5): a probe sent while no call runs is idle time,
+// never evidence.
+const PROBE_TIMEOUT_MS = 120_000;
 
 async function measureWindow(server, details) {
   const rcharBefore = rcharOf(server.pid);
   const samples = [];
-  let probing = true;
-  const probeLoop = (async () => {
-    while (probing) {
-      const started = performance.now();
-      try {
-        const response = await fetch(`${server.base}${details.staticPath}`);
-        // A slow or failing probe is a sample, never a dropped one.
-        samples.push(response.status === 200 ? performance.now() - started : READY_TIMEOUT_MS);
-        await response.arrayBuffer();
-      } catch {
-        samples.push(READY_TIMEOUT_MS);
-      }
+  const probes = new Set();
+  let issuing = true;
+  const issueLoop = (async () => {
+    while (issuing) {
+      const issuedAt = performance.now();
+      probes.add(issuedAt);
+      const started = issuedAt;
+      fetch(`${server.base}${details.staticPath}`, { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) })
+        .then(async (response) => { await response.arrayBuffer(); samples.push({ issuedAt, ms: performance.now() - started }); })
+        .catch(() => samples.push({ issuedAt, ms: PROBE_TIMEOUT_MS }))
+        .finally(() => probes.delete(issuedAt));
       await new Promise((resolveSleep) => setTimeout(resolveSleep, details.intervalMs));
     }
   })();
+  const callStart = performance.now();
   const call = await server.call(details.mode);
-  // Let trailing probes drain so the window covers the call's tail.
-  await new Promise((resolveSleep) => setTimeout(resolveSleep, Math.max(200, details.intervalMs * 2)));
-  probing = false;
-  await probeLoop;
-  return { call, samples, readBytes: rcharOf(server.pid) - rcharBefore };
+  const callEnd = performance.now();
+  issuing = false;
+  await issueLoop;
+  // In-flight probes settle on their own timeout; the window filter already
+  // excludes any issued after the call ended.
+  await new Promise((resolveSettle) => {
+    const deadline = Date.now() + PROBE_TIMEOUT_MS + 1_000;
+    const check = () => (probes.size === 0 || Date.now() > deadline ? resolveSettle() : setTimeout(check, 50));
+    check();
+  });
+  const overlapping = samples
+    .filter((sample) => sample.issuedAt >= callStart && sample.issuedAt <= callEnd)
+    .map((sample) => sample.ms);
+  return { call, samples: overlapping, issued: samples.length, readBytes: rcharOf(server.pid) - rcharBefore };
 }
 
 async function responsiveness(details, fixture) {
@@ -234,28 +250,39 @@ async function responsiveness(details, fixture) {
       const samples = [];
       const calls = [];
       let readBytes = 0;
-      let attempt = 0;
-      while (samples.length < details.minSamples && attempt < MAX_COLD_STARTS) {
-        attempt += 1;
+      if (shape === "hot") {
+        // One warmed server, many measured calls, until the sample bound (or
+        // the iteration cap): a hot call is short, so its samples accumulate
+        // across calls — each probe still counted only inside a call window.
         await withServer(modeDetails, fixture, async (server) => {
-          if (shape === "hot") {
-            // Hot means warmed: exactly one unmeasured call first.
-            const warm = await server.call(mode);
-            if (warm.status !== 200) throw new Error(`hot warm-up ${mode} call: HTTP ${warm.status}`);
+          const warm = await server.call(mode);
+          if (warm.status !== 200) throw new Error(`hot warm-up ${mode} call: HTTP ${warm.status}`);
+          for (let iteration = 0; iteration < details.hotIterations && samples.length < details.minSamples; iteration += 1) {
+            const measured = await measureWindow(server, modeDetails);
+            samples.push(...measured.samples);
+            calls.push({ status: measured.call.status, ms: measured.call.ms });
+            readBytes += measured.readBytes;
           }
-          const measured = await measureWindow(server, modeDetails);
-          samples.push(...measured.samples);
-          calls.push({ status: measured.call.status, ms: measured.call.ms });
-          readBytes += measured.readBytes;
-        }, { dropIndex: shape === "cold" });
+        });
+      } else {
+        let attempt = 0;
+        while (samples.length < details.minSamples && attempt < details.coldStartsMax) {
+          attempt += 1;
+          await withServer(modeDetails, fixture, async (server) => {
+            const measured = await measureWindow(server, modeDetails);
+            samples.push(...measured.samples);
+            calls.push({ status: measured.call.status, ms: measured.call.ms });
+            readBytes += measured.readBytes;
+          }, { dropIndex: true });
+        }
       }
       const p99 = percentile(samples, 0.99);
-      const max = samples.length > 0 ? Math.max(...samples) : READY_TIMEOUT_MS;
+      const max = samples.length > 0 ? Math.max(...samples) : PROBE_TIMEOUT_MS;
       const ok = calls.length > 0 && calls.every((call) => call.status === 200)
         && samples.length >= details.minSamples && p99 < details.p99Ms;
       if (!ok) failures += 1;
       results[mode][shape] = {
-        coldStarts: shape === "cold" ? attempt : 1,
+        attempts: shape === "hot" ? calls.length : attempt,
         samples: samples.length,
         p99,
         max,
@@ -299,18 +326,42 @@ async function readVolume(details, fixture) {
 // built on a prior server (never assumed, review r2 N12), and a cold process
 // with an empty one. Neither may pre-warm the list — readiness is the static
 // asset and the first session-list request is the measured one.
+//
+// The warm-index build round waits, bounded, for the index file to appear on
+// disk BEFORE its server stops (review r3#7): the scanner persists on a
+// trailing 5 s unref'd timer, so a server stopped right after its call never
+// writes the index and the "warm" measurement would run against an empty one.
 async function coldSummary(details, fixture) {
   const runs = details.emptyIndex === false ? ["warm-index"] : ["warm-index", "empty-index"];
   const totalBytes = details.manifestTotals.piBytes + details.manifestTotals.claudeBytes;
   const results = {};
   let failures = 0;
+  const indexFile = join(fixture, "agent", "pi-web-session-index.json");
   for (const shape of runs) {
+    let warmIndexBytes = 0;
     if (shape === "warm-index") {
-      // Build the persisted index with a prior run: one ordinary call on its
-      // own server; the measured cold start inherits what it wrote.
+      const buildStartedAt = Date.now();
       await withServer(details, fixture, async (server) => {
         const warm = await server.call("normal");
         if (warm.status !== 200) throw new Error(`warm-index build call: HTTP ${warm.status}`);
+        // Wait for the persisted index while the server is still alive: the
+        // scanner writes it on a trailing 5 s unref'd timer, and a server
+        // stopped before that never writes anything.
+        const deadline = Date.now() + details.warmIndexPersistTimeoutMs;
+        for (;;) {
+          let stats;
+          try {
+            stats = statSync(indexFile);
+          } catch {
+            stats = undefined;
+          }
+          if (stats && stats.mtimeMs >= buildStartedAt) {
+            warmIndexBytes = stats.size;
+            return;
+          }
+          if (Date.now() > deadline) throw new Error(`the warm-index build never persisted ${indexFile} within ${details.warmIndexPersistTimeoutMs} ms`);
+          await new Promise((resolveSleep) => setTimeout(resolveSleep, 250));
+        }
       });
     }
     await withServer(details, fixture, async (server) => {
@@ -319,7 +370,7 @@ async function coldSummary(details, fixture) {
       const readBytes = rcharOf(server.pid) - before;
       const ok = answer.status === 200 && answer.ms <= details.maxMs && readBytes <= details.maxReadRatio * totalBytes;
       if (!ok) failures += 1;
-      results[shape] = { ms: answer.ms, status: answer.status, readBytes, maxReadBytes: details.maxReadRatio * totalBytes, totalBytes, ok };
+      results[shape] = { ms: answer.ms, status: answer.status, readBytes, maxReadBytes: details.maxReadRatio * totalBytes, totalBytes, warmIndexBytes, ok };
     }, { dropIndex: shape === "empty-index" });
   }
   return { ok: failures === 0, results };
