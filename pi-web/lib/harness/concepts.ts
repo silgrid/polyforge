@@ -298,6 +298,25 @@ export interface HarnessCapabilities {
   credentialsFollowConfigRoot: boolean;
   /** Native diagnostics: declared per Q5 A, executed only from 85a1b (#149). */
   nativeDiagnostics: { declared: true; implemented: boolean };
+  /** The terminal login commands the account page may run (85a2 AC3);
+   * empty = this harness logs in another way (pi: the SDK routes, Q4). */
+  loginCommands: readonly HarnessLoginCommand[];
+}
+
+/**
+ * A login command the account page may run in its one-shot terminal
+ * (polyforge#142, 85a2 AC3): the adapter's own declaration — the terminal
+ * runs exactly this argv, never anything a client sends. `cell` marks a
+ * command that may run against a Cell's own config root (the terminal route
+ * then injects the server-computed config-root env); false keeps it on the
+ * operator's interactive environment (claude's `claude auth login` and
+ * `claude setup-token`: the interactive session's own credentials are the
+ * source, the 2026-11-19 Q3 revision).
+ */
+export interface HarnessLoginCommand {
+  id: string;
+  argv: string[];
+  cell: boolean;
 }
 
 /**

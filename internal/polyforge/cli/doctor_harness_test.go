@@ -46,7 +46,7 @@ func TestClaudeHarnessCheck(t *testing.T) {
 			h.SettingsEnv = map[string]string{"ANTHROPIC_AUTH_TOKEN": "unset", "ANTHROPIC_API_KEY": "set"}
 			return h
 		}()}, "pass", "ANTHROPIC_API_KEY set"},
-		{"no settings credential", steps, true, map[string]HarnessStatus{"claude": func() HarnessStatus { h := ok; h.SettingsEnv = nil; return h }()}, "warn", "must live under the claude-config dir"},
+		{"no settings credential", steps, true, map[string]HarnessStatus{"claude": func() HarnessStatus { h := ok; h.SettingsEnv = nil; return h }()}, "warn", "no credential (ANTHROPIC_AUTH_TOKEN, ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN) in the claude-config settings.json env block"},
 		// env hygiene: the daemon's own ANTHROPIC_* never reach a claude
 		// step — a daemon-env token is no credential, a daemon-env
 		// BASE_URL no hazard; both are reported only
@@ -202,5 +202,36 @@ func TestDoctorCandidatePrefixAndClaudeTrigger(t *testing.T) {
 	_, _, doc = doctorStatus(t, env, "--json", "doctor")
 	if st, detail := doctorFind(t, doc, "workspace yaml"); st != "fail" || !strings.Contains(detail, "bundle bug-fix: ") || !strings.Contains(detail, "WFC-198 "+filepath.Join(wf, "bug-fix", workflow.WorkflowFile)+`:6 steps[1](review).model_candidates[0]: "claude-opus-5-5" needs a harness prefix`) {
 		t.Fatalf("bad bundle: %s %q", st, detail)
+	}
+}
+
+// TestW85DoctorClaudeOauthTokenCredential (polyforge#142, 85a2, review
+// r1#7): the setup-token credential the account page writes —
+// CLAUDE_CODE_OAUTH_TOKEN in the claude-config settings.json env block —
+// counts as the step's credential: a Cell configured only through the
+// account page's setup-token form must not be warned "no credential",
+// and the detail lists the key's fact. Expected from the ticket's Q3
+// (the 2026-11-19 revision: the subscription account lands as
+// CLAUDE_CODE_OAUTH_TOKEN), never from the implementation's own output.
+func TestW85DoctorClaudeOauthTokenCredential(t *testing.T) {
+	steps := []workspace.StepResolution{{Project: "p", Bundle: "bug-fix", Step: "review",
+		Models: []string{"claude:claude-opus-5-5"}, ModelsFrom: "steps.p.review.models"}}
+	base := HarnessStatus{Bin: "claude", Found: true, Path: "/bin/claude", Version: "2.1.296", Verified: true,
+		AuthTokenEnv: "unset", APIKeyEnv: "unset", BaseURLEnv: "unset", BackgroundTasks: "disabled"}
+	onlyToken := base
+	onlyToken.SettingsEnv = map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "set", "ANTHROPIC_AUTH_TOKEN": "unset", "ANTHROPIC_API_KEY": "unset", "ANTHROPIC_BASE_URL": "unset", "CLAUDE_CONFIG_DIR": "unset"}
+	status, detail := claudeHarnessCheck(steps, "/wf", true, map[string]HarnessStatus{"claude": onlyToken})
+	if status != "pass" {
+		t.Fatalf("a Cell configured with only CLAUDE_CODE_OAUTH_TOKEN answers %q (%s)", status, detail)
+	}
+	if !strings.Contains(detail, "CLAUDE_CODE_OAUTH_TOKEN set") {
+		t.Fatalf("the detail does not list the token's fact: %s", detail)
+	}
+	// and only a base URL is still no credential
+	baseURLOnly := base
+	baseURLOnly.SettingsEnv = map[string]string{"ANTHROPIC_BASE_URL": "set", "ANTHROPIC_AUTH_TOKEN": "unset", "ANTHROPIC_API_KEY": "unset", "CLAUDE_CONFIG_DIR": "unset"}
+	status, detail = claudeHarnessCheck(steps, "/wf", true, map[string]HarnessStatus{"claude": baseURLOnly})
+	if status != "warn" || !strings.Contains(detail, "no credential") {
+		t.Fatalf("a base URL alone must keep the no-credential warning: %q (%s)", status, detail)
 	}
 }

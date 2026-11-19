@@ -153,13 +153,75 @@ test("write: an out-of-range version is refused with a reason; a known one answe
   assert.ok(notImplemented.reason.includes("model"));
 });
 
-test("capabilities: claude declares its concepts, scopes and config root (AC1)", () => {
+test("capabilities: claude declares its concepts, scopes, config root, login commands and the auth write (85a2)", () => {
   const caps = adapter.capabilities;
   assert.deepEqual(caps.concepts, ["auth", "config-root", "model", "permission", "skills", "mcp", "env", "effective-config"]);
   assert.deepEqual(caps.scopes, ["managed", "user", "project", "local"]);
   assert.equal(caps.configRootEnv, "CLAUDE_CONFIG_DIR");
-  assert.equal(caps.credentialsFollowConfigRoot, true);
-  assert.deepEqual(caps.writableConcepts, ["permission"]);
+  // credentialsFollowConfigRoot is platform-derived (AC7): darwin's Keychain
+  // does not follow; the account tests pin the function, this pins the
+  // declared value on the test platform (linux)
+  assert.equal(caps.credentialsFollowConfigRoot, process.platform !== "darwin");
+  assert.deepEqual(caps.writableConcepts, ["auth", "permission"]);
+  // the terminal login whitelist's data source (85a2 AC3): the interactive
+  // session's two commands, none Cell-scoped (the 2026-11-19 Q3 revision)
+  assert.deepEqual(caps.loginCommands, [
+    { id: "auth-login", argv: ["claude", "auth", "login"], cell: false },
+    { id: "setup-token", argv: ["claude", "setup-token"], cell: false },
+  ]);
+});
+
+// ── the auth write (85a2 AC6): the credential lands in the native env
+// block of the target's settings.json, the file's other keys kept, an
+// unrecognized format refused, the value never echoed ──────────────────
+const writeDir = path.join(scratch, "write-config");
+fs.mkdirSync(writeDir);
+fs.writeFileSync(path.join(writeDir, "settings.json"), JSON.stringify({
+  model: "opus",
+  env: { OTHER_FLAG: "kept-value" },
+  permissions: { defaultMode: "default" },
+}));
+
+test("write auth: the credential lands in the env block, the file's other keys kept, the value never echoed", async () => {
+  const result = await adapter.write("auth", { kind: "gateway", value: "CL-SENTINEL-WRITE-TOKEN", baseUrl: "https://gw.example" }, fixtureCtx({ claudeConfigDir: writeDir }));
+  assert.equal(result.status, "written");
+  assert.ok(!JSON.stringify(result).includes("CL-SENTINEL-WRITE-TOKEN"), "the write result echoes the value");
+  assert.ok(result.summary && result.summary.includes("ANTHROPIC_AUTH_TOKEN"), result.summary);
+  const written = JSON.parse(fs.readFileSync(path.join(writeDir, "settings.json"), "utf8"));
+  assert.equal(written.model, "opus");
+  assert.equal(written.permissions.defaultMode, "default");
+  assert.equal(written.env.OTHER_FLAG, "kept-value");
+  assert.equal(written.env.ANTHROPIC_BASE_URL, "https://gw.example");
+  assert.equal(written.env.ANTHROPIC_AUTH_TOKEN, "CL-SENTINEL-WRITE-TOKEN");
+  // the oauth-token and api-key kinds write their own key
+  await adapter.write("auth", { kind: "oauth-token", value: "sk-ant-oat01-CL-SENTINEL" }, fixtureCtx({ claudeConfigDir: writeDir }));
+  const after = JSON.parse(fs.readFileSync(path.join(writeDir, "settings.json"), "utf8"));
+  assert.equal(after.env.CLAUDE_CODE_OAUTH_TOKEN, "sk-ant-oat01-CL-SENTINEL");
+  assert.equal(after.env.ANTHROPIC_AUTH_TOKEN, "CL-SENTINEL-WRITE-TOKEN");
+  await adapter.write("auth", { kind: "api-key", value: "sk-CL-SENTINEL-KEY" }, fixtureCtx({ claudeConfigDir: writeDir }));
+  const last = JSON.parse(fs.readFileSync(path.join(writeDir, "settings.json"), "utf8"));
+  assert.equal(last.env.ANTHROPIC_API_KEY, "sk-CL-SENTINEL-KEY");
+});
+
+test("write auth: a malformed change and an unrecognized settings format are refused, nothing written", async () => {
+  for (const change of [{}, { kind: "no-such-kind", value: "x" }, { kind: "api-key" }, { kind: "gateway", value: "x" }]) {
+    const refused = await adapter.write("auth", change, fixtureCtx({ claudeConfigDir: writeDir }));
+    assert.equal(refused.status, "refused", JSON.stringify(change));
+    assert.ok(refused.reason && !refused.reason.includes("SENTINEL"), refused.reason);
+  }
+  const tornDir = path.join(scratch, "torn-config");
+  fs.mkdirSync(tornDir);
+  fs.writeFileSync(path.join(tornDir, "settings.json"), "{not json");
+  const before = fs.readFileSync(path.join(tornDir, "settings.json"), "utf8");
+  const refused = await adapter.write("auth", { kind: "api-key", value: "CL-SENTINEL-TORN" }, fixtureCtx({ claudeConfigDir: tornDir }));
+  assert.equal(refused.status, "refused");
+  assert.ok(refused.reason?.includes("unrecognized"), refused.reason);
+  assert.ok(!refused.reason?.includes("SENTINEL"));
+  assert.equal(fs.readFileSync(path.join(tornDir, "settings.json"), "utf8"), before);
+  // the write gate still refuses an unknown version first
+  const gated = await adapter.write("auth", { kind: "api-key", value: "x" }, fixtureCtx({ claudeBinary: unknownBinary, claudeConfigDir: writeDir }));
+  assert.equal(gated.status, "refused");
+  assert.ok(gated.reason.includes("3.0.0"));
 });
 
 test("read auth: the credentials file as existence only, env names only, status unknown (Q4 A)", async () => {

@@ -153,6 +153,10 @@ export function createPiAdapter(): HarnessAdapter {
       readOnlyConcepts: ["env", "effective-config"],
       configRootEnv: "PI_CODING_AGENT_DIR",
       credentialsFollowConfigRoot: true,
+      // pi has no terminal login command (85a2 Q4): the TUI's /login is a
+      // full agent, not a whitelistable command; the interactive session
+      // logs in through the SDK routes the account tab reuses
+      loginCommands: [],
       nativeDiagnostics: { declared: true, implemented: false },
     },
     probeVersion,

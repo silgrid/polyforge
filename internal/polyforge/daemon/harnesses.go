@@ -71,7 +71,10 @@ type (
 )
 
 // settingsEnvKeys are the env block keys the doctor reports facts about.
-var settingsEnvKeys = []string{"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_CONFIG_DIR"}
+// CLAUDE_CODE_OAUTH_TOKEN joined with 85a2 (polyforge#142): a setup-token
+// mint is one of the three credential kinds the account page writes and
+// shows; still set/unset only, never a value.
+var settingsEnvKeys = []string{"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR"}
 
 // settingsTokenPrefix is the OAuth setup-token prefix Claude Code mints
 // (`claude setup-token`).
@@ -92,12 +95,52 @@ func setOrUnset(v string) string {
 	return "unset"
 }
 
+// filePresence answers "present"/"absent" for one path's existence — the
+// doctor's shape for a credential file the daemon does not read.
+func filePresence(path string) string {
+	if _, err := os.Stat(path); err == nil {
+		return "present"
+	}
+	return "absent"
+}
+
+// modelSourceFacts answers the Cell's model-credential source directory and
+// its kind (polyforge#142, 85a2 AC2): the default Cell's source is the
+// operator agent dir ("operator"); a named Cell's is its declared [model]
+// source — "shared-default" (the default Cell's source, marked as shared)
+// or an absolute directory ("directory"); no declaration is "none" (the
+// execution plane is closed, the execution_disabled reason says so).
+func (d *Daemon) modelSourceFacts() (string, string) {
+	src := d.cfg.OperatorAgentDir
+	if d.cfg.Profile == "" {
+		return src, "operator"
+	}
+	switch d.cfg.StartupFile.ModelSource {
+	case "":
+		return src, "none"
+	case cli.ModelSourceShared:
+		return src, "shared-default"
+	default:
+		return src, "directory"
+	}
+}
+
 // harnessStatuses answers the /status harnesses section.
 func (d *Daemon) harnessStatuses() map[string]harnessStatus {
 	pi := harnessStatus{Bin: cmp.Or(d.cfg.PiBin, "pi")}
 	if p, err := exec.LookPath(pi.Bin); err == nil {
 		pi.Found, pi.Path = true, p
 	}
+	// the per-Cell credential facts (85a2 AC2): set/unset and provenance,
+	// never a value. The step-agent auth.json is stat'ed, never read.
+	root := d.cfg.HarnessRoot
+	pi.ConfigRoot = filepath.Join(root, "step-agent")
+	if filePresence(filepath.Join(root, "step-agent", "auth.json")) == "present" {
+		pi.Credential = "set"
+	} else {
+		pi.Credential = "unset"
+	}
+	pi.Source, pi.SourceKind = d.modelSourceFacts()
 	cl := harnessStatus{
 		// the live value, never the startup copy: a reloaded claude_bin is
 		// what the daemon spawns with and what doctor/ops status judge
@@ -109,6 +152,13 @@ func (d *Daemon) harnessStatuses() map[string]harnessStatus {
 		BackgroundTasks: "disabled by the adapter (CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1, --tools allowlist)",
 	}
 	cl.SettingsEnv, cl.HarnessDirs, cl.SettingsWarning = d.claudeConfigFacts()
+	// claude's per-Cell facts (85a2): the claude-config dir is the config
+	// root; a residual OAuth login (.credentials.json) is marked present —
+	// the daemon still uses it, the account page does not guide it. The
+	// file is stat'ed, never read.
+	cl.ConfigRoot = filepath.Join(root, runtime.ClaudeConfigDirName)
+	cl.CredentialsFile = filePresence(filepath.Join(root, runtime.ClaudeConfigDirName, ".credentials.json"))
+	cl.Source, cl.SourceKind = pi.Source, pi.SourceKind
 	if p, err := exec.LookPath(cl.Bin); err == nil {
 		cl.Found, cl.Path = true, p
 		cl.Version, cl.VersionError = d.claudeVersion(p)

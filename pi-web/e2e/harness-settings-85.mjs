@@ -1,10 +1,11 @@
 // carries: components/HarnessGeneralSettings*, components/GeneralSettings*, components/HarnessEnvironmentSettings*, components/HarnessEffectiveSettings*, components/UnifiedSetting*, components/HarnessApplyTo*
 // carries: components/HarnessPermissionSettings*, components/ClaudePermissionSettings*, lib/harness-permissions-view*, lib/harness-settings-view*, lib/harness/diagnostics*, app/api/harness/*
+// carries: components/AccountSettings*, components/PiAccountLogin*, components/ModelsConfig*, app/api/settings/account/*, lib/provider-listing*, lib/harness/account*, lib/polyforge-doctor*
 // — polyforge#149 (#85 85a1b, the settings skeleton) and polyforge#150
 // (#85 85a4, the permission page): the 10-tab rail (九个新 tab 加标「旧版」的
 // 原「模型」tab；原「Claude」tab 已删), General's left column (界面与对话 /
-// 环境 / 生效值与来源), the account / models placeholders, the permission
-// page (审批模式 / 沙箱 / 项目信任 / 规则: the unified blocks' one-write-many-reads,
+// 环境 / 生效值与来源), the account page (#85 85a2, polyforge#142), the models
+// placeholder, the permission page (审批模式 / 沙箱 / 项目信任 / 规则: the unified blocks' one-write-many-reads,
 // pi's 不做审批 / 无沙箱 notes, claude's own sections, the Pi Web approval
 // channel and the rules editor) and the stored old navigation values
 // (models → 新「模型」页; the deleted claude key → 常规, review r1#7). The harness adapter APIs are mocked
@@ -22,9 +23,9 @@
 // `PASS harness-settings-85` only when every scenario passed. Every wait
 // polls its condition to a bounded deadline; no fixed sleep.
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { chromium } from "playwright";
 import { ACTION_MS, COLD_MS, NAV_MS } from "./timeouts.mjs";
 import { assertNoDevServer, createHarness, createWaitUntil, seedStorage } from "./harness.mjs";
@@ -35,12 +36,30 @@ const home = join(work, "home");
 const agentDir = join(home, ".pi", "agent");
 mkdirSync(agentDir, { recursive: true });
 
+// A stub `claude` for the one-shot login terminal (S85-12): `auth login`
+// prints its ready line and waits — a real claude prints the authorization
+// URL and waits for the pasted code. Anything else delegates to the
+// recorded unit stub (the initialize probe). Only S85-12's terminal runs
+// it; every other claude face is mocked at the browser.
+const stubBin = join(work, "stub-bin");
+mkdirSync(stubBin, { recursive: true });
+const stubClaude = join(stubBin, "claude");
+writeFileSync(stubClaude, `#!/bin/sh
+if [ "$1" = "auth" ] && [ "$2" = "login" ]; then
+  printf '%s\r\n' "85 STUB LOGIN READY - open the URL and paste the code"
+  sleep 60
+  exit 0
+fi
+exec node ${join(dirname(new URL(import.meta.url).pathname), "..", "lib", "__fixtures__", "claude-stub", "claude.mjs")} "$@"
+`);
+chmodSync(stubClaude, 0o755);
+
 const h = createHarness({
   timeout: 30_000,
   coldFirst: true,
   errors: ["pageerror", "console", "5xx"],
   server(name) {
-    return { name, logFile: join(work, `server-${name}.log`), env: { HOME: home, PI_CODING_AGENT_DIR: agentDir } };
+    return { name, logFile: join(work, `server-${name}.log`), env: { HOME: home, PI_CODING_AGENT_DIR: agentDir, PATH: `${stubBin}:${process.env.PATH}` } };
   },
 });
 
@@ -168,12 +187,15 @@ const T = {
   S7: "S85-07: effective values carry the Inferred mark and their source; native diagnostics are a collapsed block per harness",
   S8: "S85-08: stored old navigation values land on the new pages",
   S9: "S85-09: a failed harness-list read is a visible reason in both panes, never a contradictory empty registry",
-  S10: "S85-10: the permission page's left column is 审批模式 / 沙箱 / 项目信任 / 规则, its approval pane unified and claude-sectioned",
-  S11: "S85-11: the unified approval write reaches claude's native mode (Q1 A), the extra values its own radio",
-  S12: "S85-12: the sandbox pane writes claude's sandbox keys, pi answering 无沙箱",
-  S13: "S85-13: the trust pane shows each harness's own decision and 统一成当前值 writes the differing one",
-  S14: "S85-14: the rules pane edits claude's allow / ask / deny lists with no unified block",
-  S15: "S85-15: General has no claude permission controls; its hook switch stays",
+  S10: "S85-10: the account tab lists the harnesses, shows the interactive card and the per-Cell rows with every field, and never a credential value",
+  S11: "S85-11: pi's sign-in lives only on Account › pi — the legacy Models tab has no login, API-key entry or Add-provider picker, and the never-offered Anthropic subscription appears nowhere",
+  S12: "S85-12: the account page's one-shot login terminal attaches and streams the declared command's output — the real login path a human would walk (review r1#1)",
+  S16: "S85-16: the permission page's left column is 审批模式 / 沙箱 / 项目信任 / 规则, its approval pane unified and claude-sectioned",
+  S17: "S85-17: the unified approval write reaches claude's native mode (Q1 A), the extra values its own radio",
+  S18: "S85-18: the sandbox pane writes claude's sandbox keys, pi answering 无沙箱",
+  S19: "S85-19: the trust pane shows each harness's own decision and 统一成当前值 writes the differing one",
+  S20: "S85-20: the rules pane edits claude's allow / ask / deny lists with no unified block",
+  S21: "S85-21: General has no claude permission controls; its hook switch stays",
 };
 const failures = new Map(Object.values(T).map((title) => [title, []]));
 const ran = new Set();
@@ -312,11 +334,13 @@ try {
     await page.context().close();
   });
 
-  // S85-04 — AC1: the account / models placeholders open; the permission page is real (85a4).
+  // S85-04 — AC1: the models placeholder opens (85a2 filled the account
+  // tab in, 85a4 the permission page); the permission page is real, its left
+  // column the settled four.
   await part("S4", "placeholders", async () => {
     const page = await newPage();
     await openSettings(page);
-    for (const [name, id] of [["Account", "account"], ["Models", "models"]]) {
+    for (const [name, id] of [["Models", "models"]]) {
       await tab(page, new RegExp(`^${name}$`)).click({ timeout: ACTION_MS });
       const host = sectionHost(page, id);
       await host.waitFor({ state: "visible", timeout: ACTION_MS });
@@ -331,6 +355,160 @@ try {
     await page.context().close();
   });
 
+  // S85-10 — polyforge#142 (85a2 AC1/AC7): the account tab — the two harness
+  // panes, the interactive claude card, the per-Cell rows with the ticket's
+  // field list (来源含 shared default, the keychain hint, 步骤能否使用及原因),
+  // the credential form, and no credential value anywhere. The account and
+  // harness answers are mocked at the browser; the S85-09 pattern (a later
+  // route registration wins) carries the richer capability declaration.
+  await part("S10", "the account tab", async () => {
+    const page = await newPage();
+    const ACCOUNT = {
+      claude: { available: true, loggedIn: true, authMethod: "oauth_token", configDirectory: "/home/op/.claude", reason: null,
+        envCredentials: { ANTHROPIC_AUTH_TOKEN: true, ANTHROPIC_BASE_URL: true, ANTHROPIC_API_KEY: false, CLAUDE_CODE_OAUTH_TOKEN: false } },
+      cells: [
+        { profile: "default", executionDisabled: null, probeError: null, harnessOrder: ["pi", "claude"], harnesses: {
+          pi: { id: "pi", configRoot: "/h/default/step-agent", credential: "set", status: "ready", authType: "api_key", checkReason: null, source: "/home/op/.pi/agent", sourceKind: "operator", credentialsFollow: true, keychainHint: false, credentialKinds: null, credentialsFile: null, usable: true, reason: null },
+          claude: { id: "claude", configRoot: "/h/default/claude-config", credential: "set", status: "ready", authType: null, checkReason: null, source: "/home/op/.pi/agent", sourceKind: "operator", credentialsFollow: true, keychainHint: false, credentialKinds: { oauthToken: false, apiKey: false, gateway: true }, credentialsFile: "absent", usable: true, reason: null } } },
+        { profile: "beta", executionDisabled: null, probeError: null, harnessOrder: ["pi", "claude"], harnesses: {
+          pi: { id: "pi", configRoot: "/h/beta/step-agent", credential: "unset", status: "not_ready", authType: null, checkReason: "credentials_not_configured", source: "/home/op/.pi/agent", sourceKind: "shared-default", credentialsFollow: true, keychainHint: false, credentialKinds: null, credentialsFile: null, usable: false, reason: "credentials_not_configured" },
+          claude: { id: "claude", configRoot: "/h/beta/claude-config", credential: "unset", status: "not_ready", authType: null, checkReason: null, source: "/home/op/.pi/agent", sourceKind: "shared-default", credentialsFollow: false, keychainHint: true, credentialKinds: null, credentialsFile: "present", usable: true, reason: null } } },
+      ],
+      doctorError: null,
+    };
+    await page.context().route(/\/api\/settings\/account/, (route) => route.fulfill({ json: ACCOUNT }));
+    await page.context().route(/\/api\/harness(?:\/|\?|$)/, (route) => route.fulfill({ json: { harnesses: [
+      { id: "pi", version: "1.5.0", versionKnown: true, knownRange: null, versionReason: null, writable: true, capabilities: { id: "pi", loginCommands: [], credentialsFollowConfigRoot: true } },
+      { id: "claude", version: "2.1.322", versionKnown: true, knownRange: null, versionReason: null, writable: true, capabilities: { id: "claude", loginCommands: [
+        { id: "auth-login", argv: ["claude", "auth", "login"], cell: false },
+        { id: "setup-token", argv: ["claude", "setup-token"], cell: false },
+      ], credentialsFollowConfigRoot: false } },
+    ] } }));
+    await openSettings(page);
+    await tab(page, /^Account$/).click({ timeout: ACTION_MS });
+    const host = sectionHost(page, "account");
+    await host.waitFor({ state: "visible", timeout: ACTION_MS });
+    // the left column: the two harnesses
+    const claudeItem = host.locator(".config-sidebar-item").filter({ hasText: "Claude" });
+    await claudeItem.click({ timeout: ACTION_MS });
+    // the settle duty (review r1#4): the asserted data items are polled
+    // directly — every expected string is part of the polled condition,
+    // never a heading read once and a second value asserted on one read
+    const CLAUDE_EXPECTED = ["oauth_token", "/home/op/.claude", "Log in with Claude (OAuth)", "Mint a setup token",
+      "/h/default/claude-config", "shared default", "/home/op/.pi/agent", "Keychain", "Residual OAuth login",
+      "Write a credential", "copied server-side"];
+    const claudeText = await waitFor(async () => {
+      const text = await host.innerText();
+      return CLAUDE_EXPECTED.every((expected) => text.includes(expected)) ? text : false;
+    }, ACTION_MS, "the claude pane never showed every card and row field");
+    assert.ok(!claudeText.includes("sk-SENTINEL"), "a credential value rendered");
+    // the pi pane: its own rows, no claude form
+    await host.locator(".config-sidebar-item").filter({ hasText: /^pi$/ }).click({ timeout: ACTION_MS });
+    const piText = await waitFor(async () => {
+      const text = await host.innerText();
+      return text.includes("api_key") && text.includes("/h/beta/step-agent") ? text : false;
+    }, ACTION_MS, "the pi pane never showed its rows");
+    assert.ok(!piText.includes("Write a credential"), "the pi pane carries the claude form");
+    await page.context().close();
+  });
+
+  // S85-11 — polyforge#142 (85a2 AC4/AC8): pi's sign-in, API-key entry and
+  // Add-provider picker live only on Account › pi; the legacy Models tab
+  // shows a moved notice for a managed provider; and the never-offered
+  // Anthropic subscription login appears nowhere (the mocked providers answer
+  // is the filtered shape the route now returns).
+  await part("S11", "pi sign-in only on the account page", async () => {
+    const page = await newPage();
+    const PROVIDERS = {
+      providers: [
+        { id: "openai-codex", name: "ChatGPT Plus/Pro", usesCallbackServer: false, loggedIn: false, supportsApiKey: false },
+        { id: "google", name: "Google", usesCallbackServer: false, loggedIn: true, supportsApiKey: true },
+      ],
+      oauthProviders: [
+        { id: "openai-codex", name: "ChatGPT Plus/Pro", usesCallbackServer: false, loggedIn: false, supportsApiKey: false },
+        { id: "google", name: "Google", usesCallbackServer: false, loggedIn: true, supportsApiKey: true },
+      ],
+      apiKeyProviders: [
+        { id: "google", displayName: "Google", configured: true, modelCount: 8, supportsOAuth: true },
+        { id: "anthropic", displayName: "Anthropic", configured: false, modelCount: 12, supportsOAuth: true },
+      ],
+    };
+    await page.context().route(/\/api\/auth\/providers/, (route) => route.fulfill({ json: PROVIDERS }));
+    await openSettings(page);
+    // the legacy Models tab: the logged-in provider row opens the moved notice
+    await tab(page, /^Models \(legacy\)$/).click({ timeout: ACTION_MS });
+    const models = sectionHost(page, "legacy-models");
+    await models.locator(".config-sidebar-item").filter({ hasText: "Google" }).first().click({ timeout: ACTION_MS });
+    // the heading renders in the detail header's uppercase style
+    const movedText = await waitFor(async () => {
+      const text = await models.innerText();
+      return /sign-in has moved/i.test(text) ? text : false;
+    }, ACTION_MS, "the legacy tab never showed the moved notice");
+    // the real UI words (review r1#3): the button says Login / Re-login —
+    // "Log in" never appears, an assertion on it pinned nothing
+    assert.ok(!movedText.includes("Login") && !movedText.includes("Re-login"), "the legacy tab still offers a login");
+    assert.ok(!movedText.includes("Add provider"), "the legacy tab still offers the picker");
+    assert.equal(await models.locator('input[type="password"]').count(), 0, "the legacy tab still offers the API-key entry");
+    // Account › pi: the rows, the Add provider button, and no Anthropic
+    // subscription anywhere
+    await tab(page, /^Account$/).click({ timeout: ACTION_MS });
+    const account = sectionHost(page, "account");
+    await account.locator(".config-sidebar-item").filter({ hasText: /^pi$/ }).click({ timeout: ACTION_MS });
+    const piText = await waitFor(async () => {
+      const text = await account.innerText();
+      return text.includes("ChatGPT Plus/Pro") ? text : false;
+    }, ACTION_MS, "the account pi pane never listed the offered providers");
+    assert.ok(piText.includes("Add provider"), "the account pi pane lost the Add provider entry");
+    assert.ok(piText.includes("Anthropic"), "the Anthropic API-key entry is gone from the account pane");
+    assert.ok(!piText.includes("Anthropic (Claude Pro/Max)"), "the never-offered Anthropic subscription appears");
+    await page.context().close();
+  });
+
+  // S85-12 — polyforge#142 (85a2 AC3, review r1#1): the account page's
+  // 「打开终端」 runs the declared login command in the one-shot terminal, and
+  // the embedded panel ATTACHES to it — the terminal's output reaches the
+  // page (the stub claude prints its ready line and waits, exactly where a
+  // real claude auth login prints its URL and waits for the code). Closing
+  // the terminal tears it down. The red of the round-1 defect under review
+  // was exactly here: the panel's start request failed, the stream never
+  // opened, and this poll never settled.
+  await part("S12", "the one-shot login terminal attaches", async () => {
+    const page = await newPage();
+    const ACCOUNT = {
+      claude: { available: true, loggedIn: false, authMethod: "none", configDirectory: join(home, ".claude"), reason: null,
+        envCredentials: { ANTHROPIC_AUTH_TOKEN: false, ANTHROPIC_BASE_URL: false, ANTHROPIC_API_KEY: false, CLAUDE_CODE_OAUTH_TOKEN: false }, consoleProfile: "absent" },
+      cells: [],
+      doctorError: null,
+    };
+    await page.context().route(/\/api\/settings\/account/, (route) => route.fulfill({ json: ACCOUNT }));
+    await page.context().route(/\/api\/harness(?:\/|\?|$)/, (route) => route.fulfill({ json: { harnesses: [
+      { id: "pi", version: "1.5.0", versionKnown: true, knownRange: null, versionReason: null, writable: true, capabilities: { id: "pi", loginCommands: [], credentialsFollowConfigRoot: true } },
+      { id: "claude", version: "2.1.322", versionKnown: true, knownRange: null, versionReason: null, writable: true, capabilities: { id: "claude", loginCommands: [
+        { id: "auth-login", argv: ["claude", "auth", "login"], cell: false },
+      ], credentialsFollowConfigRoot: true } },
+    ] } }));
+    await openSettings(page);
+    await tab(page, /^Account$/).click({ timeout: ACTION_MS });
+    const account = sectionHost(page, "account");
+    await account.locator(".config-sidebar-item").filter({ hasText: "Claude" }).click({ timeout: ACTION_MS });
+    const loginButton = account.locator('[data-login-command="auth-login"]');
+    await loginButton.waitFor({ state: "visible", timeout: ACTION_MS });
+    await loginButton.click({ timeout: ACTION_MS });
+    // the panel attaches and the command's output streams: poll the
+    // terminal's own text, not a static heading
+    const terminal = account.locator("[data-account-login-terminal]");
+    await terminal.waitFor({ state: "visible", timeout: ACTION_MS });
+    const termText = await waitFor(async () => {
+      const text = await terminal.innerText();
+      return text.includes("85 STUB LOGIN READY") ? text : false;
+    }, ACTION_MS, "the login terminal never showed the command's output");
+    assert.ok(!termText.includes("SENTINEL"), "a value leaked into the terminal");
+    // closing tears it down: the panel goes and the terminal with it
+    await account.getByRole("button", { name: "Close terminal" }).click({ timeout: ACTION_MS });
+    await waitFor(async () => !(await terminal.count()), ACTION_MS, "the closed login terminal stayed mounted");
+    await page.context().close();
+  });
+
   // S85-05 — AC1: the legacy Models page stays reachable and working (the
   // legacy Claude page is deleted by 85a4; S1 pins its absence from the rail).
   await part("S5", "legacy pages", async () => {
@@ -338,7 +516,10 @@ try {
     await openSettings(page);
     await tab(page, /^Models \(legacy\)$/).click({ timeout: ACTION_MS });
     const models = sectionHost(page, "legacy-models");
-    await models.getByRole("button", { name: "Add provider", exact: true }).waitFor({ state: "visible", timeout: COLD_MS });
+    // 85a2 moved the Add-provider picker to Account › pi: the legacy tab
+    // renders its provider list without one
+    await models.locator(".config-sidebar-list").first().waitFor({ state: "visible", timeout: COLD_MS });
+    assert.equal(await models.getByRole("button", { name: "Add provider", exact: true }).count(), 0, "the legacy Models tab still offers Add provider");
     await page.context().close();
   });
 
@@ -428,8 +609,8 @@ try {
     }
   });
 
-  // S85-10 — 85a4 AC1/AC4: the approval pane's unified block and claude's own sections.
-  await part("S10", "approval pane", async () => {
+  // S85-16 — 85a4 AC1/AC4: the approval pane's unified block and claude's own sections.
+  await part("S16", "approval pane", async () => {
     const page = await newPage();
     permissionPuts.length = 0;
     await openSettings(page);
@@ -464,9 +645,9 @@ try {
     await page.context().close();
   });
 
-  // S85-11 — 85a4 AC1/AC2 (Q1 A): the unified three write claude's native mode;
+  // S85-17 — 85a4 AC1/AC2 (Q1 A): the unified three write claude's native mode;
   // the extra values are claude's own radio.
-  await part("S11", "unified approval write", async () => {
+  await part("S17", "unified approval write", async () => {
     const page = await newPage();
     permissionPuts.length = 0;
     await openSettings(page);
@@ -484,8 +665,8 @@ try {
     await page.context().close();
   });
 
-  // S85-12 — 85a4 AC1/AC2: the sandbox pane writes claude's sandbox keys; pi answers 无沙箱.
-  await part("S12", "sandbox pane", async () => {
+  // S85-18 — 85a4 AC1/AC2: the sandbox pane writes claude's sandbox keys; pi answers 无沙箱.
+  await part("S18", "sandbox pane", async () => {
     const page = await newPage();
     permissionPuts.length = 0;
     await openSettings(page);
@@ -511,9 +692,9 @@ try {
     await page.context().close();
   });
 
-  // S85-13 — 85a4 AC1: the trust pane shows each harness's own decision, and
+  // S85-19 — 85a4 AC1: the trust pane shows each harness's own decision, and
   // 统一成当前值 writes the differing harness with the current value.
-  await part("S13", "trust unify", async () => {
+  await part("S19", "trust unify", async () => {
     const page = await newPage();
     permissionPuts.length = 0;
     await openSettings(page);
@@ -539,9 +720,9 @@ try {
     await page.context().close();
   });
 
-  // S85-14 — 85a4 AC2: the rules pane edits claude's allow / ask / deny lists,
+  // S85-20 — 85a4 AC2: the rules pane edits claude's allow / ask / deny lists,
   // with no unified block (规则没有统一块).
-  await part("S14", "rules editor", async () => {
+  await part("S20", "rules editor", async () => {
     const page = await newPage();
     permissionPuts.length = 0;
     await openSettings(page);
@@ -566,9 +747,9 @@ try {
     await page.context().close();
   });
 
-  // S85-15 — 85a4 AC4: General has no claude permission controls; the hook
+  // S85-21 — 85a4 AC4: General has no claude permission controls; the hook
   // switch (a Pi Web preference now) stays.
-  await part("S15", "general cleanup", async () => {
+  await part("S21", "general cleanup", async () => {
     const page = await newPage();
     await openSettings(page);
     const conversation = generalPane(page, "conversation");

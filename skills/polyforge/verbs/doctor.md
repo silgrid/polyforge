@@ -73,7 +73,20 @@ Exit codes follow the repo convention: 0 every check passes, 1 any check
 fails, 2 usage errors. `--json` emits one machine document:
 `{"ok": <bool>, "checks": [{"name", "status": "pass"|"fail"|"skip"|"warn",
 "detail", "cell"}]}` — the `cell` field names the Cell a Cell-level row
-examined and is absent on the Host-level rows.
+examined and is absent on the Host-level rows — plus, additively
+(polyforge#142, 85a2), a top-level `cells` object: one entry per Cell of
+the disk set (the default Cell and every named one, an invalid Cell
+included with its parse refusal as the probe error), each carrying that
+Cell's structured `harnesses` facts from the daemon's
+`GET /status?harnesses=1` — the step harnesses' config roots, pi's
+step-agent `auth.json` as `"credential": "set"|"unset"`, the
+model-credential source and its kind (`operator`, `shared-default`,
+`directory`, `none`), claude's env-block facts as set/unset and its
+residual OAuth login as `"credentials_file": "present"|"absent"` — and
+the Cell's `execution_disabled` reason. A daemon that does not answer (or
+is too old for `?harnesses=1`) answers `probe_error`, never a faked fact.
+Values never appear: set/unset, names and paths only. The human report
+does not print the object.
 
 To judge workflow lanes alone — a workspace's lane set (the installed lanes
 and the workspace's own user lanes under `.polyforge/workflows/<lane>/`), or
@@ -315,13 +328,16 @@ only matters when some resolved candidate is `claude:…` (otherwise it
 passes: nothing needs the CLI). The daemon reports its own view on
 `GET /status?harnesses=1` (the doctor runs CLI-side and cannot see the
 daemon's environment); the daemon runs `claude --version` but never logs
-in, never calls a model and never reports a credential value.
+in, never calls a model and never reports a credential value. The
+`--json` `cells` object (above) probes every Cell the same way, claude
+steps or none — the row above is the judgement, the cells object is the
+per-Cell facts (polyforge#142, 85a2: the account page reads it).
 
 | Result | When | What to tell the user |
 |---|---|---|
 | `pass` | the binary resolves, the version is a verified one, the claude-config `settings.json` `env` block sets `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_API_KEY` | — (the detail lists every step with a claude candidate: its whole chain, each candidate's harness shown by its prefix, and the level the chain came from) |
 | `fail` | the claude binary does not resolve on the daemon's PATH | Install Claude Code and log it in (a human does this), or set `claude_bin` in cli.toml (docs/extending.md › Claude binary; `pf help extensions`). |
-| `warn` | version older than the verified minimum (2.1.296) or unparsable; neither `ANTHROPIC_AUTH_TOKEN` nor `ANTHROPIC_API_KEY` in the `<harness-root>/claude-config/settings.json` `env` block (the steps' only credential source); a rejected token / gateway pairing or a `CLAUDE_CONFIG_DIR` in that `env` block | Relay the note. The claude-config `settings.json` `env` block is the single credential authority (polyforge#171; the daemon reports its keys as set/unset, never values): put ONE `ANTHROPIC_AUTH_TOKEN` (+ optional `ANTHROPIC_BASE_URL`) there, never `CLAUDE_CONFIG_DIR` — see docs/upgrade.md. |
+| `warn` | version older than the verified minimum (2.1.296) or unparsable; neither `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY` nor `CLAUDE_CODE_OAUTH_TOKEN` in the `<harness-root>/claude-config/settings.json` `env` block (the steps' only credential source); a rejected token / gateway pairing or a `CLAUDE_CONFIG_DIR` in that `env` block | Relay the note. The claude-config `settings.json` `env` block is the single credential authority (polyforge#171; the daemon reports its keys as set/unset, never values): set it through Pi Web's account page (85a2, polyforge#142: the setup-token / API-key / gateway forms write exactly this block, keeping the file's other keys) or by hand — ONE `ANTHROPIC_AUTH_TOKEN` (+ optional `ANTHROPIC_BASE_URL`), or a `CLAUDE_CODE_OAUTH_TOKEN` minted by `claude setup-token`, never `CLAUDE_CONFIG_DIR` — see docs/upgrade.md. |
 | `skip` | claude steps exist but the daemon is unreachable | Start the daemon and re-run. |
 
 Note (env hygiene, superseding V-11): claude steps strip every inherited
@@ -329,7 +345,11 @@ Note (env hygiene, superseding V-11): claude steps strip every inherited
 credential / endpoint source; the daemon env's `ANTHROPIC_*` are reported
 as facts in the detail but neither count as a credential nor reach a step.
 `pf daemon ensure` gives the daemon no `ANTHROPIC_*` anyway (an allow-listed
-environment, see `daemon env`).
+environment, see `daemon env`). A residual OAuth login in the claude-config
+(`.credentials.json`, from before the env block was the guided way) is
+marked `credentials_file: present` in the `cells` object — the daemon still
+uses it; Pi Web's account page shows it but does not guide it (85a2, the
+2026-11-19 Q3 revision).
 
 ## Harness diagram guidance (`warn` at most, out of `--harness`)
 

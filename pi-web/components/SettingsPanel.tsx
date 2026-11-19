@@ -20,6 +20,7 @@ import { AgentsConfig } from "./AgentsConfig";
 import { PluginsConfig } from "./PluginsConfig";
 import { PolyforgeConfig } from "./PolyforgeConfig";
 import { McpConfig } from "./McpConfig";
+import { AccountSettings } from "./AccountSettings";
 
 interface Props {
   cwd: string | null;
@@ -361,11 +362,11 @@ export function SettingsPanel({
           )}
           <ConfigDetailNavigationContext.Provider value={detailNavigation}>
           {sectionHost("general", <HarnessGeneralSettings cwd={cwd} sessionId={sessionId} onSessionReloaded={onSessionReloaded} quoteSelectionEnabled={quoteSelectionEnabled} onQuoteSelectionChange={onQuoteSelectionChange} />)}
-          {/* The two remaining concept placeholders (85a1b): their content is
-              85a2's (account) and 85a3's (models); the permission page is
-              85a4's, mounted above (its Claude part is where a stored old
-              `claude` navigation value lands). */}
-          {sectionHost("account", <HarnessSectionPlaceholder titleKey="settings.tabAccount" bodyKey="settings.harnessAccountPlaceholder" />)}
+          {/* 85a2's account tab replaced the 85a1b placeholder; the models
+              placeholder is 85a3's; the permission page is 85a4's, mounted
+              above (its Claude part is where a stored old `claude` navigation
+              value lands). */}
+          {sectionHost("account", <AccountSettings />)}
           {sectionHost("models", <HarnessSectionPlaceholder titleKey="common.models" bodyKey="settings.harnessModelsPlaceholder" />)}
           {sectionHost("permission", <HarnessPermissionSettings cwd={cwd} sessionId={sessionId} />)}
           {/* Visited sections stay mounted, so the ones whose answer depends on trust take the page's
