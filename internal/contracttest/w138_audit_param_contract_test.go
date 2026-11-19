@@ -98,10 +98,15 @@ func TestW138AuditParamDocs(t *testing.T) {
 		}
 		// each step's own section keeps its prepared-image error AND gains
 		// the audit one — a whole-file Contains would let one section lose
-		// a mark while the other still carries it (review r2 #1)
-		sections := []struct{ name, head string }{
-			{"verify.py", "## The verification bar — `verify.py`'s mechanical run"},
-			{"gate.py", "## The full test gate — `gate.py`"},
+		// a mark while the other still carries it (review r2 #1). A section
+		// must END at the next top-level heading (review r3 #1): a check
+		// whose span reaches into the next section lets that next section's
+		// marks stand in for this one's, and a section that is the last of
+		// the two is unbounded only to the file's end.
+		sections := []struct{ name, head, next string }{
+			{"verify.py", "## The verification bar — `verify.py`'s mechanical run",
+				"## The full test gate — `gate.py`"},
+			{"gate.py", "## The full test gate — `gate.py`", ""},
 		}
 		for _, sec := range sections {
 			i := strings.Index(flat, sec.head)
@@ -111,6 +116,10 @@ func TestW138AuditParamDocs(t *testing.T) {
 			rest := flat[i:]
 			if j := strings.Index(rest[1:], sec.head); j >= 0 {
 				rest = rest[:j+1]
+			}
+			if sec.next != "" && strings.Contains(rest, sec.next) {
+				t.Errorf("docs/reference/commands.md's %s section must end at the next top-level heading; it spans into %q, so its own marks are pinned by the wrong section",
+					sec.name, sec.next)
 			}
 			for _, marker := range []string{"pf-verify-image-missing", "pf-audit-param-invalid"} {
 				if !strings.Contains(rest, marker) {
