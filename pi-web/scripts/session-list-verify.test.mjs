@@ -51,6 +51,7 @@ test("each mode's dry run resolves the plan from the ticket's arguments", (t) =>
       // accumulate overlapping samples (review r2#7).
       assert.deepEqual(plan.shapes, ["cold", "hot"]);
       assert.equal(plan.warmCalls, 0);
+      assert.equal(plan.staticPath, "/icons/icon-192.png", "the probe target defaults to the icon");
     }],
     ["read-volume", ["--modes", "normal,summary", "--calls", "2", "--max-second-read-ratio", "0.05"], (plan) => {
       assert.deepEqual(plan.modes, ["normal", "summary"]);
