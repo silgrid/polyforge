@@ -12,9 +12,14 @@ import { createJiti } from "jiti";
 // a target the guards refuse is never edited, and every SKILL.md byte outside
 // the removed line survives.
 const root = await mkdtemp(join(tmpdir(), "pi-web-skills-cleanup-"));
-const agentDir = join(root, "agent");
 const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-process.env.PI_CODING_AGENT_DIR = agentDir;
+
+async function freshAgentDir(name) {
+  const agentDir = join(root, `agent-${name}`);
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  await mkdir(join(agentDir, "skills"), { recursive: true });
+  return agentDir;
+}
 
 const jiti = createJiti(import.meta.url, { alias: { "@": process.cwd() } });
 const { POST } = await jiti.import("./route.ts");
@@ -32,7 +37,7 @@ async function writeSkill(dir, name, frontmatter = "") {
   return filePath;
 }
 
-const readPreference = async () => {
+const readPreference = async (agentDir) => {
   try {
     return JSON.parse(await readFile(join(agentDir, "pi-web-settings.json"), "utf8")).skillVisibility?.pi ?? {};
   } catch {
@@ -50,21 +55,21 @@ function cleanup(body) {
 }
 
 test("the confirmed cleanup writes the preference, then removes the line", async () => {
-  await mkdir(join(agentDir, "skills"), { recursive: true });
+  const agentDir = await freshAgentDir("cleanup");
   const skill = await writeSkill(join(agentDir, "skills"), "legacy", "disable-model-invocation: true\n");
 
   const response = await cleanup({ filePath: skill });
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { success: true, removed: true });
-  assert.deepEqual(await readPreference(), { [skill]: "hidden" });
+  assert.deepEqual(await readPreference(agentDir), { [skill]: "hidden" });
   const content = await readFile(skill, "utf8");
   assert.doesNotMatch(content, /disable-model-invocation/);
   assert.equal(content, "---\nname: legacy\ndescription: legacy skill\n---\n\n# legacy\n");
 });
 
 test("refused targets are never edited and get no preference", async () => {
-  await mkdir(join(agentDir, "skills"), { recursive: true });
+  const agentDir = await freshAgentDir("refused");
   const skill = await writeSkill(join(agentDir, "skills"), "legacy", "disable-model-invocation: true\n");
   const outside = await writeSkill(join(root, "outside"), "outside", "disable-model-invocation: true\n");
   const before = hash(await readFile(outside, "utf8"));
@@ -75,11 +80,12 @@ test("refused targets are never edited and get no preference", async () => {
   assert.equal((await cleanup({})).status, 400);
 
   assert.equal(hash(await readFile(outside, "utf8")), before);
-  assert.deepEqual(await readPreference(), {});
+  assert.deepEqual(await readPreference(agentDir), {});
   assert.match(await readFile(skill, "utf8"), /disable-model-invocation: true/);
 });
 
 test("a line the surgical editor refuses still leaves the preference written first", async () => {
+  const agentDir = await freshAgentDir("flow");
   const flow = join(agentDir, "skills", "flow", "SKILL.md");
   await mkdir(join(agentDir, "skills", "flow"), { recursive: true });
   await writeFile(flow, "---\n{ name: flow, disable-model-invocation: true }\n---\nbody\n");
@@ -90,6 +96,6 @@ test("a line the surgical editor refuses still leaves the preference written fir
 
   assert.equal(response.status, 500);
   assert.match(body.error, /unsupported frontmatter formatting/);
-  assert.deepEqual(await readPreference(), { [flow]: "hidden" }, "the preference went in before the edit");
+  assert.deepEqual(await readPreference(agentDir), { [flow]: "hidden" }, "the preference went in before the edit");
   assert.equal(hash(await readFile(flow, "utf8")), before);
 });
