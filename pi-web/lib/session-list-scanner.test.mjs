@@ -465,6 +465,22 @@ test("a repeated summary listing reads no header it already read", async (t) => 
     "a changed file's header is read again");
 });
 
+test("a deferred summary skips a leading non-object line and still finds the header", async (t) => {
+  const { write } = fixture(t);
+  // A leading line that parses as a JSON primitive (a torn write, a writer's
+  // stray line) is skipped, not fatal: the old main-thread reader went on to
+  // the next line, and so must the worker's header summary (review r2 N1).
+  const path = write("after-null", [message("a1", "user", "first question")]);
+  fs.writeFileSync(path, "null\n" + fs.readFileSync(path, "utf8"));
+
+  const summary = await listSessionsIncremental({ deferDetails: true });
+  const row = summary.find((session) => session.id === "after-null");
+  assert.ok(row, "the file is listed");
+  assert.equal(row.detailsPending, true);
+  assert.equal(row.messageCount, 0);
+  assert.equal(reads.filter((read) => read.kind === "header"), [{ path, start: 0, kind: "header" }]);
+});
+
 test("discovers sessions through project directory symlinks", { skip: process.platform === "win32" }, async (t) => {
   const { root, dir, write } = fixture(t);
   write("a", [message("a1", "user", "linked")]);

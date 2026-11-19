@@ -140,8 +140,25 @@ test("the projected count is computed in the worker and only the count crosses t
     .map((entry) => path.join(entry.parentPath ?? fixtureRoot.pathname, entry.name));
   const corpusFiles = JSON.parse(fs.readFileSync(path.join(corpus, "manifest.json"), "utf8")).claude
     .map((entry) => path.join(corpus, entry.path));
+  // Synthetic edge shapes the fixtures lack (review r2 N1): an assistant
+  // message whose content is only an image block (the adapter's
+  // toAssistantBlocks has no image branch, so it emits nothing) and a
+  // tool_use whose id is the empty string (the adapter requires only a
+  // string id). The worker port must count exactly what the adapter emits.
+  const id = "synthetic-port-edge-1";
+  const edgeDir = path.join(configDir, "projects", "-edge");
+  fs.mkdirSync(edgeDir, { recursive: true });
+  const edgeTranscript = path.join(edgeDir, `${id}.jsonl`);
+  const entry = (row) => `${JSON.stringify({ isSidechain: false, timestamp: "2026-11-01T00:00:00.000Z", sessionId: id, cwd: "/tmp", version: "2.1.312", ...row })}
+`;
+  fs.writeFileSync(edgeTranscript,
+    entry({ parentUuid: null, type: "user", message: { role: "user", content: "one question" }, uuid: "e1" })
+    + entry({ parentUuid: "e1", type: "assistant", message: { role: "assistant", content: [{ type: "image", source: { type: "base64", data: "aGk=", media_type: "image/png" } }] }, uuid: "e2" })
+    + entry({ parentUuid: "e2", type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "", name: "Read", input: {} }] }, uuid: "e3" })
+    + `${JSON.stringify({ type: "last-prompt", leafUuid: "e3", sessionId: id })}
+`);
   assert.ok(transcripts.length >= 15, `the repo's claude transcript fixtures (${transcripts.length})`);
-  for (const file of [...transcripts, ...corpusFiles]) {
+  for (const file of [...transcripts, ...corpusFiles, edgeTranscript]) {
     const text = fs.readFileSync(file, "utf8");
     const expected = claudeTranscriptToMessages(parseClaudeTranscript(text), {}).messages.length;
     const result = await runSessionScanTask({ kind: "claude-count", path: file }).catch((error) => error);
