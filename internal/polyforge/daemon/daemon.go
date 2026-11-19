@@ -131,6 +131,14 @@ type Config struct {
 	// start when it is missing or older than cli.MinPython. "" (a test's
 	// bare Config) = PF_PYTHON is set empty.
 	Python string
+	// ContainerEngine is the container backend a verification container
+	// runs on (polyforge#159, 84-engine): Main resolves it once at the
+	// start (cli.ResolveContainerEngine of the Host's [daemon]
+	// container_engine — "docker" or "podman") and every step's step env
+	// carries it as PF_CONTAINER_ENGINE; "" (a test's bare Config) = the
+	// variable is not set (the scripts' own default, docker). Restart-
+	// only: a reload moves nothing.
+	ContainerEngine string
 	APIKey string // machine credential; NEVER reaches an agent env
 	// Server is the Cell's AIHub base URL as configured (reported
 	// normalized on GET /profiles; the Hub client carries the connection).

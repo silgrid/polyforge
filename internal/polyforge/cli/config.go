@@ -1168,3 +1168,14 @@ func (s *HostSet) DiskIndex() []cellcfg.IndexEntry {
 	}
 	return out
 }
+
+// ResolveContainerEngine answers the container backend a verification
+// container runs on (polyforge#159, 84-engine): the configured value —
+// validated by the [daemon] table's parse, so exactly "docker" or
+// "podman" — with the documented default for an unset key: docker. The
+// daemon resolves it once at its start and never auto-detects: a machine
+// without a working engine is the step's "environment not satisfied",
+// not a reason to switch.
+func ResolveContainerEngine(configured string) string {
+	return "docker"
+}

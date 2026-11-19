@@ -77,6 +77,14 @@ type StepEnv struct {
 	// step derivation with it); a bare Config names no source and answers
 	// none.
 	CellTargets []CellTarget
+	// ContainerEngine is the container backend a verification container
+	// runs on (polyforge#159, 84-engine): the daemon-resolved [daemon]
+	// container_engine — "docker" or "podman". Empty = the daemon stated
+	// none (a hand run, a bare test Config): the variable is then absent
+	// and the scripts' own default, docker, applies — an empty value is
+	// never injected (the selection refuses one). Host-only, read once at
+	// the daemon's start (never a live reload).
+	ContainerEngine string
 }
 
 // Vars answers the harness-neutral entries of the step env: PF_PYTHON (an
