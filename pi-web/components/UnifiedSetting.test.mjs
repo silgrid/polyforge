@@ -20,6 +20,7 @@ const { renderToStaticMarkup } = await jiti.import("react-dom/server");
 const { UnifiedSetting, unifiedStatus } = await jiti.import("./UnifiedSetting.tsx");
 
 const h = React.createElement;
+const noop = () => {};
 const TEXTS = {
   title: "Default model",
   currentValue: "Current value",
@@ -56,13 +57,13 @@ test("the unified setting shows all four situations correctly", () => {
   assert.ok(!consistent.includes("Unify to the current value"), "a consistent state offers the unify button");
 
   // 不一致: the differing values listed, and the unify button.
-  const inconsistent = render({ values: [ready("pi", "claude-opus-5-5"), ready("claude", "claude-sonnet-5-5")] });
+  const inconsistent = render({ values: [ready("pi", "claude-opus-5-5"), ready("claude", "claude-sonnet-5-5")], onUnify: noop });
   assert.ok(inconsistent.includes("claude-sonnet-5-5"), "the differing value is not listed");
   assert.match(inconsistent, /Unify to the current value/);
   assert.match(inconsistent, /data-harness="pi"/);
 
   // 点「统一成当前值」: the click's own in-flight state — the saving word, the button disabled.
-  const clicked = render({ values: [ready("pi", "claude-opus-5-5"), ready("claude", "claude-sonnet-5-5")], busy: true });
+  const clicked = render({ values: [ready("pi", "claude-opus-5-5"), ready("claude", "claude-sonnet-5-5")], busy: true, onUnify: noop });
   assert.match(clicked, /Saving…/);
   assert.match(clicked, /disabled/, "the unify button is not disabled while its one submission runs");
 

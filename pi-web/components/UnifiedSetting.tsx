@@ -50,6 +50,39 @@ export function unifiedStatus(values: readonly UnifiedSettingHarnessValue[]): "c
   return "inconsistent";
 }
 
-export function UnifiedSetting(_props: UnifiedSettingProps): null {
-  return null;
+/**
+ * The 统一设置 component (AC3): one concept's values across the harnesses,
+ * every word a prop. The status line comes from `unifiedStatus`; the unify
+ * button appears only while harnesses differ — and `onUnify` is the user's
+ * one click (the parent submits once, to the applicable and writable
+ * harnesses; the component itself never fetches, never writes, never
+ * supposes a write happened that the parent did not report).
+ */
+export function UnifiedSetting({ texts, current, values, busy = false, onUnify }: UnifiedSettingProps) {
+  const status = unifiedStatus(values);
+  return (
+    <section className="unified-setting" data-status={status}>
+      <h3 className="settings-general-heading">{texts.title}</h3>
+      <p className="settings-general-description">
+        {texts.currentValue}: {current === null ? <code>—</code> : <code>{current}</code>}
+      </p>
+      <ul className="unified-setting-values">
+        {values.map((entry) => (
+          <li key={entry.harness} data-harness={entry.harness} data-status={entry.status}>
+            <span>{entry.harness}</span>
+            {entry.status === "ready" && typeof entry.value === "string"
+              ? <code>{entry.value}</code>
+              : <span className="unified-setting-reason">{entry.reason ?? ""}</span>}
+          </li>
+        ))}
+      </ul>
+      {status === "consistent" && <p role="status" className="settings-general-description">{texts.consistent}</p>}
+      {status === "unsupported" && <p role="status" className="settings-general-description">{texts.unsupported}</p>}
+      {status === "inconsistent" && onUnify && (
+        <button type="button" className="config-button" onClick={onUnify} disabled={busy}>
+          {busy ? texts.saving : texts.unify}
+        </button>
+      )}
+    </section>
+  );
 }
