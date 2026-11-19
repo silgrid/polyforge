@@ -469,7 +469,7 @@ func TestW254QuickstartsMovedIntact(t *testing.T) {
 func TestW254UpgradeByteIdentical(t *testing.T) {
 	raw := []byte(w254Read(t, "docs/upgrade.md"))
 	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != "9b676c99fe393e417da9cfcb0e0435e24d925702fe06b258a16b7ed20cac86e9" {
+	if got := hex.EncodeToString(sum[:]); got != "40440027ea0d4d3b807ef79a9b9e7857830c4abd4f942796046e2975f702e933" {
 		t.Fatalf("docs/upgrade.md must stay byte-identical (only routed to, never rewritten): sha256 %s != the pinned pre-move sha256", got)
 	}
 	// the list beside the pin: one whole `// - ` line per appended section

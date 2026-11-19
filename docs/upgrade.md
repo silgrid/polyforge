@@ -766,7 +766,11 @@ template plus `pivot_root`, its SHA recorded beside it), a private
 cgroup namespace, AppArmor and system paths unconfined — no
 `privileged`, no devices, no docker socket. Boot modes are compose
 profiles, one per smoke flag (`--profile no-aihub`, `--profile aihub`
-adds `pf supervise --with-aihub`); `PI_WEB_PASSWORD` is required by the
+adds `pf supervise --with-aihub`), and the optional HTTPS front is a
+third profile (`--profile https`: a pinned caddy terminates TLS with its
+own local CA at `WORKSTATION_HTTPS_HOST` — the same name belongs in
+`PI_WEB_ALLOWED_HOSTS` — and reverse-proxies the `workstation` network
+alias both boot modes answer); `PI_WEB_PASSWORD` is required by the
 compose interpolation, the container's environment is its explicit list
 plus the `PI_*` families the entrypoint whitelists (`PI_TEST_*` never
 crosses). `dist/workstation/smoke.sh` (`boot`, `env`, `podman-verify`)
