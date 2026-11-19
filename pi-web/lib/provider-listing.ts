@@ -99,6 +99,21 @@ export function buildApiKeyProviderList(
   return result;
 }
 
+/**
+ * The provider whose subscription login pi-web never offers (polyforge#142,
+ * 85a2 AC8, owner ruling Q10) — placeholder: the test-first commit passes
+ * the raw list through so the suite's assertions run red; the filter lands
+ * with the unit.
+ */
+export const SUBSCRIPTION_LOGIN_HIDDEN_PROVIDER = "anthropic";
+
+/** Providers whose OAuth login pi-web offers (AC8). Placeholder. */
+export function offerableOAuthProviders(
+  providers: readonly ProviderListingInput[],
+): OAuthProviderListing[] {
+  return buildOAuthProviderList(providers);
+}
+
 /** Providers that can be authenticated with OAuth. */
 export function buildOAuthProviderList(
   providers: readonly ProviderListingInput[],
