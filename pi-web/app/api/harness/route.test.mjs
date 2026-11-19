@@ -176,7 +176,7 @@ test("the compare route answers both fields, one field, and refuses an unknown o
   });
   assert.equal(body.results[1].status, "unsupported");
   assert.equal(body.results[2].status, "unsupported");
-  assert.equal(body.results[3].status, "consistent");
+  assert.equal(body.results[3].status, "inconsistent");
   noSentinel(JSON.stringify(body), "the compare route");
   const one = await compareRoute.GET(request(`/api/harness/compare?cwd=${encodeURIComponent(project)}&field=approval-mode`));
   const oneBody = await one.json();

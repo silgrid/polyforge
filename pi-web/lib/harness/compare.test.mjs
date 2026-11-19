@@ -153,7 +153,9 @@ test("compareAll walks COMPARE_FIELDS in order", async () => {
   assert.equal(results[0].status, "consistent");
   assert.equal(results[1].status, "unsupported");
   assert.equal(results[2].status, "unsupported");
-  assert.equal(results[3].status, "inconsistent");
+  // both harnesss answer untrusted here: pi has no decision in trust.json
+  // and claude's state file has no entry, so the trust field agrees.
+  assert.equal(results[3].status, "consistent");
 });
 
 test("compare sandbox: claude's enabled switch listed, unsupported on pi (85a4)", async () => {
@@ -164,6 +166,11 @@ test("compare sandbox: claude's enabled switch listed, unsupported on pi (85a4)"
 });
 
 test("compare project trust: each harness's own decision, consistent once they agree (85a4)", async () => {
+  // The fixture project requires trust (its .pi/settings.json) and has no
+  // decision yet, so pi answers untrusted; pi's own decision is what a
+  // comparison can differ from claude's accepted state.
+  const { ProjectTrustStore } = await import("@earendil-works/pi-coding-agent");
+  new ProjectTrustStore(agentDir).set(project, true);
   const inconsistent = await compare.compareField("project-trust", fixtureCtx());
   assert.equal(inconsistent.status, "inconsistent");
   assert.deepEqual(inconsistent.values.pi, { supported: true, neutral: "trusted", raw: "trusted" });
