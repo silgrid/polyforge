@@ -1,4 +1,5 @@
 import type {
+  ClaudeMcpServerInfo,
   CodemodeInlineBudgetSetting,
   CodemodeMode,
   CodemodeModeSetting,
@@ -24,9 +25,11 @@ import type {
   McpSessionStatus,
   McpTestResponse,
   McpTestResult,
+  McpUnifiedRow,
   ProjectTrustStatus,
 } from "@/lib/api-types";
 import type { McpImportFieldValue, McpImportNote } from "@/lib/mcp-import";
+import type { HarnessApplyToSelection, HarnessApplyToTarget } from "./HarnessApplyTo";
 import { itemsToSwitch } from "./settings-ui-helpers";
 
 // Pure helpers for Settings › MCP (components/McpConfig.tsx): what each row
@@ -325,6 +328,12 @@ export interface McpServerGroup {
   /** Absent when the file was not read: a project the route refused (see the load's `projectError`). */
   file?: McpConfigFileInfo;
   servers: McpServerInfo[];
+  /**
+   * claude's entries of this scope no pi server of the same name shares
+   * (#85 85c): the rows the unified list adds beside pi's own. The local
+   * group holds claude's alone — pi has no local scope.
+   */
+  claudeOnly?: ClaudeMcpServerInfo[];
 }
 
 /**
@@ -332,16 +341,63 @@ export interface McpServerGroup {
  * project; Global always. The project group stays when its file is missing or
  * was not read, so the panel says so instead of hiding where project servers go.
  */
-export function mcpServerGroups(data: Pick<McpResponse, "files" | "servers">, hasProject: boolean): McpServerGroup[] {
-  const scopes: McpScope[] = hasProject ? ["project", "global"] : ["global"];
-  return scopes.map((scope) => {
-    const file = data.files.find((info) => info.scope === scope);
-    return {
-      scope,
-      ...(file ? { file } : {}),
-      servers: data.servers.filter((server) => server.scope === scope),
-    };
-  });
+export function mcpServerGroups(data: Pick<McpResponse, "files" | "servers" | "claude" | "unified">, hasProject: boolean): McpServerGroup[] {
+  const claude = (data as Pick<McpResponse, "claude">).claude;
+  // The local group is claude's own and is keyed by the project folder, so it
+  // appears only with both (Q2/Q3); without claude's half the groups stay
+  // what they were.
+  const scopes: McpScope[] = hasProject ? ["project", "global", "local"] : ["global"];
+  return scopes
+    .filter((scope) => scope !== "local" || claude !== undefined)
+    .map((scope) => {
+      const file = data.files.find((info) => info.scope === scope);
+      const servers = data.servers.filter((server) => server.scope === scope);
+      const piNames = new Set(servers.map((server) => server.name));
+      const claudeOnly = claude === undefined
+        ? []
+        : claude.servers.filter((server) => server.scope === scope && !piNames.has(server.name));
+      return {
+        scope,
+        ...(file ? { file } : {}),
+        servers,
+        ...(claude !== undefined && claudeOnly.length > 0 ? { claudeOnly } : {}),
+      };
+    });
+}
+
+/**
+ * A claude-only row's key (#85 85c): the same (scope, name) a pi row would
+ * take, apart in the last field, so the two never collide.
+ */
+export function mcpClaudeRowKey(server: Pick<ClaudeMcpServerInfo, "scope" | "name">): string {
+  return `${server.scope}\0${server.name}\0claude`;
+}
+
+/** The unified row of (scope, name), when the overview carries one. */
+export function mcpUnifiedRowOf(data: Pick<McpResponse, "unified">, scope: McpScope, name: string): McpUnifiedRow | undefined {
+  return (data.unified ?? []).find((row) => row.scope === scope && row.name === name);
+}
+
+/** The 「应用到」 selection a unified row currently says: all while every harness holds it. */
+export function mcpApplyToSelection(row: McpUnifiedRow): HarnessApplyToSelection {
+  if (row.pi && row.claude) return { mode: "all", selected: [] };
+  return {
+    mode: "specific",
+    selected: row.pi ? ["pi"] : row.claude ? ["claude"] : [],
+  };
+}
+
+/**
+ * The 「应用到」 targets of one row (#85 85c, Q1 A/Q5): pi disabled with its
+ * reason where it takes no such entry — claude's local scope, or an sse/ws
+ * claude entry pi does not load.
+ */
+export function mcpApplyToTargetsView(scope: McpScope, claudeEntry: ClaudeMcpServerInfo | undefined, piUnsupportedReason: string | undefined): HarnessApplyToTarget[] {
+  const piUnsupported = scope === "local" || claudeEntry?.type === "sse" || claudeEntry?.type === "ws";
+  return [
+    { harness: "pi", label: "pi", ...(piUnsupported ? { disabled: true, disabledReason: piUnsupportedReason ?? undefined } : {}) },
+    { harness: "claude", label: "claude" },
+  ];
 }
 
 /** Turned-on and total entries, the `n/m` a group heading shows. */
@@ -351,7 +407,9 @@ export function mcpGroupCounts(servers: readonly Pick<McpServerInfo, "enabled">[
 
 /** Why a group lists nothing, when it lists nothing. */
 export function mcpGroupEmptyKey(group: McpServerGroup): string | undefined {
-  if (group.servers.length > 0) return undefined;
+  if (group.servers.length > 0 || (group.claudeOnly ?? []).length > 0) return undefined;
+  // The local group has no file of pi's to read: it is never "not listed".
+  if (group.scope === "local") return "mcp.group.empty";
   if (!group.file) return "mcp.group.notListed";
   if (group.file.problems.some(isBlockingFileProblem)) return "mcp.group.fileProblem";
   return "mcp.group.empty";
@@ -372,7 +430,10 @@ export function mcpEmptyDetailKey(serverCount: number, files: readonly McpConfig
  * empty state. Code mode is always there.
  */
 export function pickMcpSelection(groups: readonly McpServerGroup[], current: string | null): string | null {
-  const keys = groups.flatMap((group) => group.servers.map(mcpServerKey));
+  const keys = groups.flatMap((group) => [
+    ...group.servers.map(mcpServerKey),
+    ...(group.claudeOnly ?? []).map(mcpClaudeRowKey),
+  ]);
   if (current === MCP_CODEMODE_SELECTION || (current !== null && keys.includes(current))) return current;
   return keys[0] ?? null;
 }
@@ -1159,6 +1220,9 @@ export function mcpGroupSwitchChecked(servers: readonly McpSwitchable[]): boolea
 /** What the panel asks `POST /api/mcp` to do. */
 export type McpActionRequest =
   | { action: "enable" | "disable" | "remove" | "sign-out"; scope: McpScope; name: string }
+  | { action: "remove"; scope: McpScope; name: string; harness: "claude" }
+  | { action: "set-apply"; scope: McpScope; name: string; harnesses: ("pi" | "claude")[] }
+  | { action: "unify"; scope: McpScope; name: string; from: "pi" | "claude" }
   | { action: "set-exposure"; scope: McpScope; name: string; exposure: NonNullable<McpServerInfo["exposure"]> }
   | { action: "set-in-project"; name: string; enabled: boolean }
   | { action: "set-enabled"; enabled: boolean; servers: McpServerRef[] }

@@ -26,9 +26,10 @@ export interface McpEntryRefusal {
 
 export type McpRequestProject = { cwd: string; allowedRoots: Set<string> };
 
-/** An entry a route may connect, as its file holds it. */
+/** An entry a route may connect, as its file holds it. A pi entry: Test and
+ * sign-in never touch Claude's side (#85 85c), so its scope is pi's own. */
 export interface McpConnectableEntry {
-  scope: McpScope;
+  scope: Exclude<McpScope, "local">;
   name: string;
   /** The panel's project, checked like any cwd. */
   project?: McpRequestProject;
@@ -82,7 +83,7 @@ export function readMcpServerConfig(options: {
   agentDir: string;
   project?: McpRequestProject;
   internals: PiSdkInternals;
-  scope: McpScope;
+  scope: Exclude<McpScope, "local">;
   name: string;
 }): { config: McpServerConfig; configKey: string } | string {
   const { agentDir, project, internals, scope, name } = options;
@@ -133,7 +134,7 @@ export async function mcpInternalsOrRefusal(doing: string): Promise<PiSdkInterna
   return internals;
 }
 
-function readScope(value: unknown): McpScope | undefined {
+function readScope(value: unknown): Exclude<McpScope, "local"> | undefined {
   return value === "global" || value === "project" ? value : undefined;
 }
 

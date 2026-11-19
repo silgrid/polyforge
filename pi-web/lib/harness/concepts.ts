@@ -255,11 +255,37 @@ export type ConceptPayload =
   | EnvPayload
   | EffectiveConfigPayload;
 
+/** The transports an MCP entry can use; pi holds no sse or ws (#85 85c, Q4 A). */
+export const MCP_TRANSPORTS = ["stdio", "http", "sse", "ws"] as const;
+export type McpTransport = (typeof MCP_TRANSPORTS)[number];
+
+/**
+ * The mcp concept's capability declaration (#85 c2, 85c): what a harness's
+ * MCP support is. `enableToggle` false means the harness has no native
+ * enable/disable of an entry — claude's apply-to is having it or not, so
+ * unapplying removes it (owner ruling Q1 A) — and `cliAdd` true means every
+ * write goes through the harness's own CLI, never a file Pi Web wrote.
+ */
+export interface McpCapability {
+  /** The harness scopes this harness holds MCP entries in (claude adds local). */
+  scopes: ScopeId[];
+  /** The transports this harness accepts in an MCP entry. */
+  transports: readonly McpTransport[];
+  /** Writes go through the harness's own CLI (claude mcp add-json); false writes the native file itself. */
+  cliAdd: boolean;
+  /** The harness has a native enable/disable of an MCP entry (pi only, Q1 A). */
+  enableToggle: boolean;
+  /** The harness can filter which tools a server exposes (pi's exposure and toolExposure). */
+  toolFilter: boolean;
+}
+
 /** The capability declaration each adapter makes (AC1). */
 export interface HarnessCapabilities {
   id: HarnessId;
   /** The scopes this harness's config layers use. */
   scopes: ScopeId[];
+  /** The mcp concept's own capabilities (#85 c2, declared from 85c on). */
+  mcp?: McpCapability;
   /** The concepts this adapter reads. */
   concepts: ConceptId[];
   /** The concepts this adapter writes; 85a4 (polyforge#150) lands the permission write. */

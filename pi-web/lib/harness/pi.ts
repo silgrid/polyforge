@@ -138,6 +138,16 @@ export function createPiAdapter(): HarnessAdapter {
     capabilities: {
       id: "pi",
       scopes: ["user", "project"],
+      // #85 85c: pi writes its mcp.json itself (Q4 A), toggles an entry's
+      // enabled and filters its tools; it takes no sse or ws entry and holds
+      // no local scope.
+      mcp: {
+        scopes: ["user", "project"],
+        transports: ["stdio", "http"],
+        cliAdd: false,
+        enableToggle: true,
+        toolFilter: true,
+      },
       concepts: ["auth", "config-root", "model", "permission", "skills", "mcp", "env", "effective-config"],
       writableConcepts: ["permission"],
       readOnlyConcepts: ["env", "effective-config"],

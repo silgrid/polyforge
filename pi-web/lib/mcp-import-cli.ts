@@ -462,10 +462,12 @@ function addHeaderPairs(draft: ServerDraft, words: ShellWord[] | undefined, gram
   return undefined;
 }
 
-function scopeHint(value: ShellWord | true | undefined): "global" | "project" | undefined {
+function scopeHint(value: ShellWord | true | undefined): "global" | "project" | "local" | undefined {
   if (value === undefined || value === true) return undefined;
   if (value.text === "user") return "global";
   if (value.text === "project") return "project";
+  // claude's own local scope (#85 85c, Q5): its state file's projects[cwd] group.
+  if (value.text === "local") return "local";
   return undefined;
 }
 
@@ -545,7 +547,9 @@ function readClaudeMcpAdd(words: ShellWord[]): EntryOutcome | { error: McpImport
   const transport = remoteOrLocal(draft, "claude", parsed.values.get("transport"), [...parsed.positional, ...parsed.afterDashDash], UNION_GRAMMAR);
   if (typeof transport !== "string") return transport.code === "cli-usage" ? { error: transport } : { note: transport };
   noteArgOptions(draft, parsed, "claude");
-  draft.scopeHint = scopeHint(parsed.values.get("scope"));
+  // claude's own default is local (#85 85c, Q5): a paste without -s goes to
+  // the local group, so the pane offers claude alone for it.
+  draft.scopeHint = parsed.values.has("scope") ? scopeHint(parsed.values.get("scope")) : "local";
   if (transport === "http") {
     if (parsed.lists.has("env")) draft.note("cli-option-wrong-transport", { cli: "claude", option: "--env", transport: "http" });
     const problem = addHeaderPairs(draft, parsed.lists.get("header"), UNION_GRAMMAR, "claude");
