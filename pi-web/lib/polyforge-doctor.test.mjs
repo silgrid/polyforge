@@ -67,7 +67,7 @@ test("readDoctorCells: one pf --json doctor read answers the sanitized Cell rows
     source: "/home/op/.pi/agent", sourceKind: "operator",
   });
   const beta = read.cells[1];
-  assert.equal(beta.executionDisabled, null);
+  assert.equal(beta.executionDisabled, undefined);
   assert.equal(beta.harnesses?.claude.credentialsFile, "present");
   assert.equal(beta.harnesses?.claude.credentialKinds ?? undefined, undefined);
   assert.equal(beta.harnesses?.pi.sourceKind, "shared-default");
@@ -112,11 +112,9 @@ test("sanitizeDoctorCells: only the closed vocabularies pass, everything else is
   });
   assert.deepEqual(rows, [{
     profile: "default",
-    executionDisabled: null,
-    probeError: null,
     harnesses: {
-      pi: { configRoot: "/r", credential: null, source: "/s", sourceKind: null },
-      claude: { settingsEnv: { ANTHROPIC_API_KEY: "set" }, credentialsFile: null },
+      pi: { configRoot: "/r", source: "/s" },
+      claude: { settingsEnv: { ANTHROPIC_API_KEY: "set" } },
     },
   }]);
   assert.equal(sanitizeDoctorCells(null), null);
