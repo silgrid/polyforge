@@ -114,8 +114,11 @@ func TestW138AuditParamDocs(t *testing.T) {
 				t.Fatalf("docs/reference/commands.md has no %s section", sec.name)
 			}
 			rest := flat[i:]
-			if j := strings.Index(rest[1:], sec.head); j >= 0 {
-				rest = rest[:j+1]
+			// the section ends at the next top-level heading: w68Flat
+			// flattens whitespace to single spaces, so one reads " ## "
+			// (a " ### " subheading never matches)
+			if j := strings.Index(rest[len(sec.head):], " ## "); j >= 0 {
+				rest = rest[:len(sec.head)+j]
 			}
 			if sec.next != "" && strings.Contains(rest, sec.next) {
 				t.Errorf("docs/reference/commands.md's %s section must end at the next top-level heading; it spans into %q, so its own marks are pinned by the wrong section",
