@@ -57,11 +57,18 @@ export interface BgTaskOutput {
   truncated: boolean;
 }
 
+const utf8Encoder = new TextEncoder();
+const utf8Decoder = new TextDecoder("utf-8", { fatal: false });
+
 /** Cuts `text` to at most `maxBytes` UTF-8 bytes without splitting a character. */
 export function utf8Truncate(text: string, maxBytes: number): string {
-  void text;
-  void maxBytes;
-  return "";
+  if (!Number.isFinite(maxBytes) || maxBytes <= 0) return "";
+  const bytes = utf8Encoder.encode(text);
+  if (bytes.length <= maxBytes) return text;
+  // A cut mid-character decodes to one trailing replacement character: drop it.
+  let cut = utf8Decoder.decode(bytes.subarray(0, maxBytes));
+  if (cut.endsWith("\uFFFD")) cut = cut.slice(0, -1);
+  return cut;
 }
 
 /**
