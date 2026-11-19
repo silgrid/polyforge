@@ -166,7 +166,7 @@ func Main(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		// Host-only and restart-only, no auto-detection (the scripts' own
 		// default, docker, answers a step the daemon stated none to only
 		// outside a Host: a hosted daemon always injects one).
-		ContainerEngine: cli.ResolveContainerEngine(host.Daemon.ContainerEngine),
+		ContainerEngine: hostContainerEngine(host),
 		MaxConcurrent:   *maxConcurrent,
 		RecallTopK:      *recallTopK,
 		Auto:            autoCfg,
@@ -552,5 +552,5 @@ func cellFilePath(set *cli.HostSet, profile string) string {
 // leg of the injection chain, the same resolution every Cell's Config
 // carries and the daemon's step env injects).
 func hostContainerEngine(host cli.Config) string {
-	return "docker"
+	return cli.ResolveContainerEngine(host.Daemon.ContainerEngine)
 }
