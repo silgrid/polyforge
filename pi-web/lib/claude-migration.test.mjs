@@ -78,7 +78,7 @@ test("the full migration: every field lands where it now lives, both old files a
   reset();
   seedOld();
   const result = await migration.ensureClaudeSelfStoredMigration(opts());
-  assert.deepEqual(result, { ran: true, summary: "migrated launchPermissionMode, customModels, includeHookEvents, mode, push" });
+  assert.deepEqual(result, { ran: true, summary: "migrated includeHookEvents, mode, push, launchPermissionMode, customModels" });
   // The native user settings.json owns the launch permission mode and the custom names.
   const native = JSON.parse(fs.readFileSync(nativeSettingsPath, "utf8"));
   assert.equal(native.permissions.defaultMode, "acceptEdits");
@@ -133,20 +133,27 @@ test("native wins: an existing native defaultMode or modelPicker is never overwr
   assert.deepEqual(preferences.readClaudePreferences(agentDir), { approvalChannel: "deny", pushReminders: false, includeHookEvents: true });
 });
 
-test("the write gate defers the migration on an unknown claude version — nothing written, old files intact, a later known version completes it (Q2 C)", async () => {
+test("the write gate defers only the native writes — the preference fields migrate first, and a preference changed meanwhile survives the completing run (review r1#3, Q2 C)", async () => {
   reset();
   seedOld();
   const deferred = await migration.ensureClaudeSelfStoredMigration(opts({ claudeBinary: unknownBinary }));
   assert.equal(deferred.ran, false);
   assert.ok(deferred.reason.includes("3.0.0"), deferred.reason);
+  // The preference fields have no claude-native home, so no version gate
+  // applies: they already migrated while the native writes defer.
+  assert.deepEqual(preferences.readClaudePreferences(agentDir), { approvalChannel: "deny", pushReminders: false, includeHookEvents: true });
   assert.equal(fs.existsSync(oldSettingsPath), true, "a deferred migration deleted an old file");
   assert.equal(fs.existsSync(oldPermissionsPath), true);
-  assert.equal(fs.existsSync(piWebSettingsPath), false, "a deferred migration wrote the marker");
+  assert.equal(JSON.parse(fs.readFileSync(piWebSettingsPath, "utf8")).claudeMigrated, undefined, "a deferred migration wrote the marker");
   assert.equal(fs.existsSync(nativeSettingsPath), false, "a deferred migration wrote the native settings");
+  // A preference the user changes during the deferral is the user's: the
+  // completing run keeps it and never overwrites it with the old file's value.
+  await preferences.writeClaudePreferences({ pushReminders: true }, agentDir);
   const done = await migration.ensureClaudeSelfStoredMigration(opts());
   assert.equal(done.ran, true);
   assert.equal(fs.existsSync(oldSettingsPath), false);
   assert.equal(JSON.parse(fs.readFileSync(nativeSettingsPath, "utf8")).permissions.defaultMode, "acceptEdits");
+  assert.deepEqual(preferences.readClaudePreferences(agentDir), { approvalChannel: "deny", pushReminders: true, includeHookEvents: true });
 });
 
 test("a malformed old file blocks none of its own and none of the rest (Q4 B)", async () => {
@@ -192,4 +199,17 @@ test("the preferences default to ask, push on, hooks off; a patch keeps the file
   assert.deepEqual(preferences.readClaudePreferences(agentDir), { approvalChannel: "deny", pushReminders: true, includeHookEvents: false });
   await preferences.writeClaudePreferences({ includeHookEvents: true, pushReminders: false }, agentDir);
   assert.deepEqual(preferences.readClaudePreferences(agentDir), { approvalChannel: "deny", pushReminders: false, includeHookEvents: true });
+});
+
+
+test("a preference key the claude object already holds is never overwritten by a later migration pass (review r1#3)", async () => {
+  reset();
+  seedOld({ channel: "ask", push: true, hooks: false });
+  // A first deferral migrated the preference fields; the user then changed
+  // the channel before any native write could run.
+  await migration.ensureClaudeSelfStoredMigration(opts({ claudeBinary: unknownBinary }));
+  await preferences.writeClaudePreferences({ approvalChannel: "deny" }, agentDir);
+  await migration.ensureClaudeSelfStoredMigration(opts());
+  assert.deepEqual(preferences.readClaudePreferences(agentDir), { approvalChannel: "deny", pushReminders: true, includeHookEvents: false });
+  assert.equal(JSON.parse(fs.readFileSync(piWebSettingsPath, "utf8")).claudeMigrated, true);
 });
