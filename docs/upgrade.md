@@ -710,7 +710,10 @@ no path hash — are neither read nor removed by the new scripts: the
 pruning rule recognizes only the two-field shape, so old and new
 scripts may run beside each other, each pruning its own shape. To
 reclaim the old shared volumes once no old script runs any more: list
-them (`docker volume ls --quiet | grep -E '^pf-verify-cache-[^-]+-[0-9a-f]{32}$'`),
+them (`docker volume ls --quiet | grep -E '^pf-verify-cache-.+-[0-9a-f]{32}$'
+| grep -Ev -- '-[0-9a-f]{32}-[0-9a-f]{32}$'` — a name ending in one
+32-hex field, not the new shape's two; a repo name may itself carry a
+dash),
 confirm no container references one (`docker ps --all --filter
 volume=<name>` answers empty — a stopped container still counts), then
 remove them by hand with `docker volume rm`; nothing else is removed
