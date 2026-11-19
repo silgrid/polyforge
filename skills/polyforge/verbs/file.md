@@ -37,7 +37,10 @@ no mapping there fails loudly naming the Cell's mapped projects, as
 `--content` (markdown background; `-` reads stdin, `@file` reads a file),
 `--label` (repeatable), `--priority low|normal|high|urgent`, `--milestone`,
 `--bundle NAME` (non-empty makes an execution ticket; omit it for a
-registry ticket), `--parent ID`, `--attr key=json-value` (repeatable),
+registry ticket), `--parent ID`, `--attr <path>=json-value` (repeatable;
+a dotted path nests: `split.origin=X` stores `{"split":{"origin":"X"}}` —
+the same dot path `pf queue --attr` filters on; colliding paths or an
+empty segment refuse the whole create),
 `--repo NAME` (repeatable), `--after ID` (repeatable; see Dependencies),
 `--stdin`.
 
@@ -366,6 +369,13 @@ re-filed.
      --parent <original> --attr split.origin=<id> --attr split.unit=<key>
    ```
 
+   The create stores the markers as the nested dot paths they name —
+   `split.origin=<id>` lands in `attrs` as `{"split":{"origin":"<id>"}}`,
+   with `split.unit` its sibling — the exact shape the check's
+   `pf queue --attr` walks: one shape, write and read, so a re-run's
+   duplicate check reads what this create wrote (aihub refuses a create
+   that plants a flat dotted key).
+
    From this create the original is held: a bundle-bound parent waits
    for its children — out of the ready queue, its claim refused
    `DEPENDENCY_BLOCKED` — so no machine can claim it until every child
@@ -428,7 +438,7 @@ it never changes the request, the exit code or the `--json` stdout.
 | Code | When | What to tell the user |
 |---|---|---|
 | `AUTH-401` | api key missing or invalid | The AIHub credential is rejected — check the Cell's `api_key` (`pf [--profile NAME] config set api_key`). |
-| `CORE-400` | Invalid field or type; a lane (workflow.yaml) rule failed at create (`detail` names the rule); an `--attr` key hit the execution-state blacklist | The request body is wrong — read `detail` for the exact field/rule and fix the flags. |
+| `CORE-400` | Invalid field or type; a lane (workflow.yaml) rule failed at create (`detail` names the rule); an `--attr` key hit the execution-state blacklist; a create's top-level attrs key carries a dot (the CLI nests dotted paths — a `--stdin` body must carry the nested object; `detail` shows it) | The request body is wrong — read `detail` for the exact field/rule and fix the flags. |
 | `CORE-400` `PARENT_DEPTH` | `--parent` names a work item that is itself a child — work items nest one level only | Use the top-level work item (the parent) as the parent instead. |
 | `CORE-400` `REPO_NOT_IN_PROJECT` | A `--repo` name is not one of the project's repos | Name a repo the project has (`pf projects get <project>` lists them); a maintainer adds new repos to the project. |
 | `CORE-400` `INVENTORY_DUPLICATE_NAME` / `INVENTORY_URL_NOT_ALLOWED` / `INVENTORY_SUBDIR_UNSUPPORTED` / `INVENTORY_BASE_UNSUPPORTED` | The same repo named twice; a `--stdin` entry carrying `url`, `subdir` or any key other than `name`; a `--stdin` body carrying the removed `repo_inventory_base` array | Drop the duplicate; give names only. |

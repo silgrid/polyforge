@@ -175,6 +175,21 @@ detaching the child, `pf file edit <child> --parent ""` (a running child is
 refused `CHILD_RUNNING`); a refused `pf submit` of such a parent names the
 same command beside `pf file dep rm` for an edge.
 
+## `pf file create` / `pf queue` — one `--attr` shape
+
+`pf file create --attr <path>=json-value` writes a dotted path nested
+— `--attr split.origin=X` stores `attrs` `{"split":{"origin":"X"}}`
+— and `pf queue --attr <path>=<value>` filters on the same dot path
+(`?attr=<path>:<value>`, repeatable, all must hold). One shape, write
+and read: a create never stores a flat dotted key — aihub refuses it
+`CORE-400`, and the `detail` spells the nested object to send (the CLI
+nests dotted `--attr` paths itself; a `--stdin` body carries the
+nested object). The flag texts, the epic-split procedure that files
+`split.origin`/`split.unit` markers and the error table live in the
+skills: [verbs/file.md](../skills/polyforge/verbs/file.md) (create,
+the split), [verbs/queue.md](../skills/polyforge/verbs/queue.md)
+(the filter).
+
 ## `pf msg` — user-to-user messages
 
 `pf msg send --to <user> --text <text> [--about-wi <wi>] [--reply-to <msg>]`
