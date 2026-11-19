@@ -61,7 +61,7 @@ func TestW372ReleaseRefusesATagReleaseRepoSplit(t *testing.T) {
 			if env == nil {
 				out, err = w121RunWithoutGHRepo(t, w, nil)
 			} else {
-				out, err = w.run(env)
+				out, err = w.runPinned(env)
 			}
 			if err == nil {
 				t.Fatalf("a release whose tag goes to example-org/polyforge and whose release goes to silgrid/polyforge must refuse:\n%s", out)
@@ -95,7 +95,7 @@ func TestW372ReleaseRefusesATagReleaseRepoSplit(t *testing.T) {
 	t.Run("matching repo releases (case-insensitive)", func(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.2.0"}, nil)
 		w372NameOrigin(t, w, "https://github.com/acme/WIDGET.git/")
-		out, err := w.run([]string{"RELEASE_GH_REPO=Acme/widget"})
+		out, err := w.runPinned([]string{"RELEASE_GH_REPO=Acme/widget"})
 		if err != nil {
 			t.Fatalf("a gh repo naming origin's GitHub repo must release: %v\n%s", err, out)
 		}
@@ -162,14 +162,14 @@ func TestW372PROnlyLookupFailureIsRetryableNotAMissingPR(t *testing.T) {
 	t.Run("the merged-PR list read fails", func(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.2.0"}, nil)
 		head := relGit(t, w.work, "rev-parse", "HEAD")
-		out, err := w.run([]string{"FAKE_GH_API_FAIL=1"})
+		out, err := w.runPinned([]string{"FAKE_GH_API_FAIL=1"})
 		check(t, w, out, err, head)
 	})
 	t.Run("the merge subject's own PR read fails", func(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.2.0"}, nil)
 		sha := w372MergeAsPR(t, w, "42", "lagging")
 		w372SetPull(t, w, "42", "merged "+sha)
-		out, err := w.run([]string{"FAKE_GH_PULL_FAIL=1"})
+		out, err := w.runPinned([]string{"FAKE_GH_PULL_FAIL=1"})
 		check(t, w, out, err, sha)
 	})
 	t.Run("--verify reports the failed lookup as such", func(t *testing.T) {
@@ -204,7 +204,7 @@ func TestW372PROnlyConfirmsAMergeCommitThroughItsOwnPR(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.2.0"}, nil)
 		sha := w372MergeAsPR(t, w, "42", "lagging")
 		w372SetPull(t, w, "42", "merged "+sha)
-		out, err := w.run(nil)
+		out, err := w.runPinned(nil)
 		if err != nil || !strings.Contains(out, "version=v1.2.1\n") {
 			t.Fatalf("PR #42 is merged with merge_commit_sha %s: the release must pass: %v\n%s", sha, err, out)
 		}
@@ -220,7 +220,7 @@ func TestW372PROnlyConfirmsAMergeCommitThroughItsOwnPR(t *testing.T) {
 			if pull != nil {
 				w372SetPull(t, w, "42", pull(sha))
 			}
-			out, err := w.run(nil)
+			out, err := w.runPinned(nil)
 			if err == nil {
 				t.Fatalf("expected a refusal:\n%s", out)
 			}
@@ -262,7 +262,7 @@ func TestW372ReleasePreflightReportsEveryMissingPrerequisiteFirst(t *testing.T) 
 	}
 	w := newRelWorld(t, []string{"v1.2.0"}, nil)
 	w.mergeOnMain(".nvmrc", "999\n", "pin node 999", true)
-	out, err := w.run([]string{w372EmptyDockerConfig(t, w), "FAKE_GH_SCOPES=gist, read:org, repo"})
+	out, err := w.runPinned([]string{w372EmptyDockerConfig(t, w), "FAKE_GH_SCOPES=gist, read:org, repo"})
 	if err == nil {
 		t.Fatalf("a release with a wrong node major and no ghcr.io push credential must refuse:\n%s", out)
 	}
@@ -333,7 +333,7 @@ func TestW113ReleasePreflightReportsTheAuditTools(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		out, err := w.run([]string{
+		out, err := w.runPinned([]string{
 			"RELEASE_AUDIT_CMD=",
 			"PATH=" + w.bin + string(os.PathListSeparator) + tools,
 		})
@@ -371,7 +371,7 @@ func TestW113ReleasePreflightReportsTheAuditTools(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		out, err := w.run([]string{
+		out, err := w.runPinned([]string{
 			"RELEASE_AUDIT_CMD=",
 			"PATH=" + w.bin + string(os.PathListSeparator) + tools,
 		})
@@ -402,14 +402,14 @@ func TestW113ReleasePreflightReportsTheAuditTools(t *testing.T) {
 func TestW372ReleasePreflightRefreshesAStoredGhcrLogin(t *testing.T) {
 	t.Run("a stored login that cannot read is replaced before the gates", func(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.2.0"}, nil)
-		out, err := w.run([]string{"FAKE_GH_SCOPES=gist, read:org, repo, write:packages", "FAKE_REGISTRY_NEEDS_LOGIN=1"})
+		out, err := w.runPinned([]string{"FAKE_GH_SCOPES=gist, read:org, repo, write:packages", "FAKE_REGISTRY_NEEDS_LOGIN=1"})
 		if err != nil {
 			t.Fatalf("release: %v\n%s", err, out)
 		}
 		calls := w.calls()
-		login, tests, push := relIndex(calls, "docker login"), relIndex(calls, "tests"), relIndex(calls, "git push")
-		if login < 0 || tests < 0 || push < 0 || login > tests || login > push {
-			t.Fatalf("want docker login (gh's token) before the test gate and the tag push: %v", calls)
+		login, xrefs, push := relIndex(calls, "docker login"), relIndex(calls, "xrefs"), relIndex(calls, "git push")
+		if login < 0 || xrefs < 0 || push < 0 || login > xrefs || login > push {
+			t.Fatalf("want docker login (gh's token) before the xrefs gate and the tag push: %v", calls)
 		}
 		if !strings.Contains(out, "replacing the stored ghcr.io login, which cannot read ghcr.io/silgrid/polyforge-aihub:v1.2.0") {
 			t.Fatalf("the replacement must say why:\n%s", out)
@@ -417,7 +417,7 @@ func TestW372ReleasePreflightRefreshesAStoredGhcrLogin(t *testing.T) {
 	})
 	t.Run("a stored login that reads is kept", func(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.2.0"}, nil)
-		out, err := w.run([]string{"FAKE_GH_SCOPES=gist, read:org, repo, write:packages"})
+		out, err := w.runPinned([]string{"FAKE_GH_SCOPES=gist, read:org, repo, write:packages"})
 		if err != nil {
 			t.Fatalf("release: %v\n%s", err, out)
 		}
@@ -430,7 +430,7 @@ func TestW372ReleasePreflightRefreshesAStoredGhcrLogin(t *testing.T) {
 	})
 	t.Run("a stored login that cannot read, gh without write:packages", func(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.2.0"}, nil)
-		out, err := w.run([]string{"FAKE_GH_SCOPES=repo", "FAKE_REGISTRY_NEEDS_LOGIN=1"})
+		out, err := w.runPinned([]string{"FAKE_GH_SCOPES=repo", "FAKE_REGISTRY_NEEDS_LOGIN=1"})
 		if err == nil || !strings.Contains(out, "cannot read ghcr.io/silgrid/polyforge-aihub:v1.2.0") || !strings.Contains(out, "preflight failed") {
 			t.Fatalf("want a preflight problem: %v\n%s", err, out)
 		}
@@ -457,7 +457,7 @@ func TestW372ReleasePreflightPassesAReadyMachine(t *testing.T) {
 	major := strings.SplitN(strings.TrimPrefix(strings.TrimSpace(string(v)), "v"), ".", 2)[0]
 	w := newRelWorld(t, []string{"v1.2.0"}, nil)
 	w.mergeOnMain(".nvmrc", major+"\n", "pin node", true)
-	out, err := w.run([]string{"FAKE_GH_SCOPES=repo"})
+	out, err := w.runPinned([]string{"FAKE_GH_SCOPES=repo"})
 	if err != nil {
 		t.Fatalf("a ready machine must release: %v\n%s", err, out)
 	}
@@ -605,16 +605,16 @@ func w372AssertResumedOnce(t *testing.T, w *relWorld, out string) {
 func TestW372ReleaseResumesAfterAFailureAfterTheClaim(t *testing.T) {
 	t.Run("docker push denied (#265)", func(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.2.0"}, nil)
-		if out, err := w.run([]string{"FAKE_PUSH_FAIL=1"}); err == nil || !strings.Contains(out, "FAILED AFTER v1.2.1 WAS CLAIMED") {
+		if out, err := w.runPinned([]string{"FAKE_PUSH_FAIL=1"}); err == nil || !strings.Contains(out, "FAILED AFTER v1.2.1 WAS CLAIMED") {
 			t.Fatalf("setup: the first run must fail after the claim: %v\n%s", err, out)
 		}
 		w372ResetCalls(t, w)
-		out, err := w.run([]string{"FAKE_REGISTRY_MISSING=1"})
+		out, err := w.runPinned([]string{"FAKE_REGISTRY_MISSING=1"})
 		if err != nil {
 			t.Fatalf("the re-run must resume v1.2.1: %v\n%s", err, out)
 		}
 		calls := w.calls()
-		for _, want := range []string{"tests", "build", "docker build", "docker push", "npm pack", "gh release create v1.2.1"} {
+		for _, want := range []string{"xrefs", "build", "audit", "docker build", "docker push", "npm pack", "gh release create v1.2.1"} {
 			if relIndex(calls, want) < 0 {
 				t.Fatalf("the resume lacks %q (nothing was published before): %v", want, calls)
 			}
@@ -624,11 +624,11 @@ func TestW372ReleaseResumesAfterAFailureAfterTheClaim(t *testing.T) {
 
 	t.Run("gh release create failed (#120)", func(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.2.0"}, nil)
-		if out, err := w.run([]string{"FAKE_GH_CREATE_FAIL=1"}); err == nil || !strings.Contains(out, "failing step: gh release create") {
+		if out, err := w.runPinned([]string{"FAKE_GH_CREATE_FAIL=1"}); err == nil || !strings.Contains(out, "failing step: gh release create") {
 			t.Fatalf("setup: the first run must fail at gh release create: %v\n%s", err, out)
 		}
 		w372ResetCalls(t, w)
-		out, err := w.run(nil) // the image the first run pushed is in the registry
+		out, err := w.runPinned(nil) // the image the first run pushed is in the registry
 		if err != nil {
 			t.Fatalf("the re-run must resume v1.2.1: %v\n%s", err, out)
 		}
@@ -656,11 +656,11 @@ func TestW372ReleaseResumesAfterAFailureAfterTheClaim(t *testing.T) {
 // the release page. Red on origin/main: "HEAD ... is already released".
 func TestW372ReleaseAdoptsACompleteRelease(t *testing.T) {
 	w := newRelWorld(t, []string{"v1.2.0"}, nil)
-	if out, err := w.run(nil); err != nil {
+	if out, err := w.runPinned(nil); err != nil {
 		t.Fatalf("setup release: %v\n%s", err, out)
 	}
 	w372ResetCalls(t, w)
-	out, err := w.run(nil)
+	out, err := w.runPinned(nil)
 	if err != nil {
 		t.Fatalf("a complete release on HEAD must be adopted, not refused: %v\n%s", err, out)
 	}
@@ -688,7 +688,7 @@ func TestW372ReleaseAdoptsACompleteRelease(t *testing.T) {
 // --clobber), and the draft is published.
 func TestW372ReleaseResumeUploadsOnlyMissingAssets(t *testing.T) {
 	w := newRelWorld(t, []string{"v1.2.0"}, nil)
-	if out, err := w.run(nil); err != nil {
+	if out, err := w.runPinned(nil); err != nil {
 		t.Fatalf("setup release: %v\n%s", err, out)
 	}
 	rel := filepath.Join(w.fakeRel, "v1.2.1")
@@ -700,7 +700,7 @@ func TestW372ReleaseResumeUploadsOnlyMissingAssets(t *testing.T) {
 	relWrite(t, filepath.Join(rel, "pf-linux-amd64"), "pf-bin-as-published\n", 0o644)
 	relWrite(t, filepath.Join(rel, ".draft"), "true\n", 0o644)
 	w372ResetCalls(t, w)
-	out, err := w.run(nil)
+	out, err := w.runPinned(nil)
 	if err != nil {
 		t.Fatalf("resume: %v\n%s", err, out)
 	}
@@ -771,7 +771,7 @@ func TestW372ReleaseResumeRefusesContradictions(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			w := newRelWorld(t, []string{"v1.2.0"}, nil)
-			if out, err := w.run(nil); err != nil {
+			if out, err := w.runPinned(nil); err != nil {
 				t.Fatalf("setup release: %v\n%s", err, out)
 			}
 			rel := filepath.Join(w.fakeRel, "v1.2.1")
@@ -780,14 +780,14 @@ func TestW372ReleaseResumeRefusesContradictions(t *testing.T) {
 			}
 			before := w372ReleaseFiles(t, w, "v1.2.1")
 			w372ResetCalls(t, w)
-			out, err := w.run(c.env)
+			out, err := w.runPinned(c.env)
 			if err == nil {
 				t.Fatalf("expected a refusal:\n%s", out)
 			}
 			if !strings.Contains(out, c.want) || !strings.Contains(out, "nothing published") {
 				t.Fatalf("refusal lacks %q / \"nothing published\":\n%s", c.want, out)
 			}
-			for _, no := range []string{"docker push", "gh release", "git push", "tests"} {
+			for _, no := range []string{"docker push", "gh release", "git push", "npm pack"} {
 				if relIndex(w.calls(), no) >= 0 {
 					t.Fatalf("%q ran despite the refusal: %v", no, w.calls())
 				}
@@ -804,68 +804,70 @@ func TestW372ReleaseResumeRefusesContradictions(t *testing.T) {
 		relGit(t, w.work, "push", "-q", "origin", "v1.3.0")
 		relGit(t, w.work, "tag", "-a", "-m", "v1.4.0", "v1.4.0", "HEAD~1")
 		relGit(t, w.work, "push", "-q", "origin", "v1.4.0")
-		out, err := w.run(nil)
+		out, err := w.runPinned(nil)
 		if err == nil || !strings.Contains(out, "not below it: v1.4.0") || len(w.calls()) != 0 {
 			t.Fatalf("want a refusal naming v1.4.0 before any work: %v %v\n%s", err, w.calls(), out)
 		}
 	})
 }
 
-// ---- class F: a red test gate (#155 a deterministic test bug, #184 and #353
-// flakes; #144's node major is class D). The gate always ran before the
-// claim; what was missing is a run that SAYS so and a pin that a red gate
-// consumes no version - the flaky tests themselves are not this ticket's.
+// ---- class F (polyforge#154): the release runs no test gate any more —
+// the green integrate batch's own full-gate run is the test evidence. The
+// class's guarantees — a red pre-claim check consumes no version, and a red
+// check on a resume keeps the claimed version resumable — are pinned on the
+// checks the procedure still runs itself (the dependency audit; the xrefs
+// check's pre-build half is TestReleaseScriptXrefsGateFailsBeforeTests).
 
-// TestW372FailingTestGateConsumesNoVersion: a failing test gate stops before
-// the build and the claim, leaves no tag on origin or in the clone, and says
-// the version is still free; the next run (a flake retried) releases the
-// same version. Red on origin/main: the gate exited without a word (set -e),
-// so the run never said that nothing was published or claimed.
-func TestW372FailingTestGateConsumesNoVersion(t *testing.T) {
+// TestW372FailingAuditGateConsumesNoVersion: a failing dependency audit
+// stops the release before any publish and the claim, leaves no tag on
+// origin or in the clone, and says the version is still free; the next run
+// (the advisory feed's flake retried) releases the same version.
+func TestW372FailingAuditGateConsumesNoVersion(t *testing.T) {
 	w := newRelWorld(t, []string{"v1.2.0"}, nil)
-	out, err := w.run([]string{`RELEASE_TEST_CMD=echo tests >> "$CALLLOG"; echo "--- FAIL: TestFlaky (90s)"; exit 2`})
+	out, err := w.runPinned([]string{`RELEASE_AUDIT_CMD=echo audit >> "$CALLLOG"; echo "finding: CVE-2026-99999 high in this-tree"; exit 1`})
 	if err == nil {
-		t.Fatalf("a failing test gate must fail the release:\n%s", out)
+		t.Fatalf("a failing dependency audit must fail the release:\n%s", out)
 	}
-	for _, want := range []string{"test gate failed", "exited 2", "nothing built or published", "no version claimed (v1.2.1 is still free)", "run the release again"} {
+	for _, want := range []string{"dependency-audit gate failed", "nothing published", "no version claimed (v1.2.1 is still free)", "run the release again"} {
 		if !strings.Contains(out, want) {
-			t.Errorf("the test-gate failure lacks %q:\n%s", want, out)
+			t.Errorf("the audit failure lacks %q:\n%s", want, out)
 		}
 	}
-	for _, p := range []string{"build", "docker", "npm", "git push", "gh release"} {
+	for _, p := range []string{"docker push", "npm pack", "git push", "gh release"} {
 		if i := relIndex(w.calls(), p); i >= 0 {
-			t.Fatalf("%q ran after the failing test gate: %v", p, w.calls())
+			t.Fatalf("%q ran after the failing audit: %v", p, w.calls())
 		}
 	}
 	if got := w.originTags(); strings.Contains(got, "v1.2.1") {
-		t.Fatalf("a failing test gate left a tag on origin: %q", got)
+		t.Fatalf("a failing audit left a tag on origin: %q", got)
 	}
 	if got := relGit(t, w.work, "tag", "-l", "v1.2.1"); got != "" {
-		t.Fatalf("a failing test gate left a local tag: %q", got)
+		t.Fatalf("a failing audit left a local tag: %q", got)
 	}
-	// the retry (a flake that passes now) releases the very same version
+	// the retry (a feed that answers green now) releases the very same version
 	w372ResetCalls(t, w)
-	out, err = w.run(nil)
+	out, err = w.runPinned(nil)
 	if err != nil || !strings.Contains(out, "version=v1.2.1\n") {
-		t.Fatalf("the retry must release v1.2.1 - the failed gate consumed no version: %v\n%s", err, out)
+		t.Fatalf("the retry must release v1.2.1 - the failed audit consumed no version: %v\n%s", err, out)
 	}
 }
 
-// TestW372FailingTestGateKeepsAResumedVersionResumable: on a resume, a red
-// test gate publishes nothing new and the claimed version stays resumable.
-func TestW372FailingTestGateKeepsAResumedVersionResumable(t *testing.T) {
+// TestW372FailingAuditGateKeepsAResumedVersionResumable: on a resume, a red
+// dependency audit publishes nothing new and the claimed version stays
+// resumable.
+func TestW372FailingAuditGateKeepsAResumedVersionResumable(t *testing.T) {
 	w := newRelWorld(t, []string{"v1.2.0"}, nil)
-	if out, err := w.run([]string{"FAKE_PUSH_FAIL=1"}); err == nil {
+	if out, err := w.runPinned([]string{"FAKE_PUSH_FAIL=1"}); err == nil {
 		t.Fatalf("setup: the first run must fail after the claim:\n%s", out)
 	}
-	out, err := w.run([]string{"FAKE_REGISTRY_MISSING=1", `RELEASE_TEST_CMD=exit 1`})
+	out, err := w.runPinned([]string{"FAKE_REGISTRY_MISSING=1", `RELEASE_AUDIT_CMD=exit 1`})
 	if err == nil || !strings.Contains(out, "v1.2.1 stays claimed and resumable") {
-		t.Fatalf("want a red gate that keeps v1.2.1 resumable: %v\n%s", err, out)
+		t.Fatalf("want a red audit that keeps v1.2.1 resumable: %v\n%s", err, out)
 	}
 	if _, serr := os.Stat(filepath.Join(w.fakeRel, "v1.2.1")); serr == nil {
-		t.Fatal("a release was created despite the red gate")
+		t.Fatal("a release was created despite the red audit")
 	}
-	if out, err := w.run([]string{"FAKE_REGISTRY_MISSING=1"}); err != nil || !strings.Contains(out, "version=v1.2.1\n") {
+	if out, err := w.runPinned([]string{"FAKE_REGISTRY_MISSING=1"}); err != nil || !strings.Contains(out, "version=v1.2.1\n") {
 		t.Fatalf("the next run must resume v1.2.1: %v\n%s", err, out)
 	}
 }
@@ -882,12 +884,12 @@ func TestW372FailingTestGateKeepsAResumedVersionResumable(t *testing.T) {
 func TestW372ResumeRereadsBeforeEachPublishAction(t *testing.T) {
 	t.Run("the image appears during the gates: no docker push", func(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.2.0"}, nil)
-		if out, err := w.run([]string{"FAKE_PUSH_FAIL=1"}); err == nil {
+		if out, err := w.runPinned([]string{"FAKE_PUSH_FAIL=1"}); err == nil {
 			t.Fatalf("setup: the first run must fail after the claim:\n%s", out)
 		}
 		w372ResetCalls(t, w)
 		flag := filepath.Join(w.root, "other-run-pushed")
-		out, err := w.run([]string{"FAKE_REGISTRY_APPEARS_ON=" + flag, `RELEASE_TEST_CMD=echo tests >> "$CALLLOG"; touch ` + flag})
+		out, err := w.runPinned([]string{"FAKE_REGISTRY_APPEARS_ON=" + flag, `RELEASE_XREFS_CMD=echo xrefs >> "$CALLLOG"; touch ` + flag})
 		if err == nil {
 			t.Fatalf("the resume must refuse when the image appeared after its first read:\n%s", out)
 		}
@@ -904,12 +906,12 @@ func TestW372ResumeRereadsBeforeEachPublishAction(t *testing.T) {
 	})
 	t.Run("the release appears during the gates: no release update", func(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.2.0"}, nil)
-		if out, err := w.run([]string{"FAKE_GH_CREATE_FAIL=1"}); err == nil {
+		if out, err := w.runPinned([]string{"FAKE_GH_CREATE_FAIL=1"}); err == nil {
 			t.Fatalf("setup: the first run must fail at gh release create:\n%s", out)
 		}
 		w372ResetCalls(t, w)
 		rel := filepath.Join(w.fakeRel, "v1.2.1")
-		out, err := w.run([]string{`RELEASE_TEST_CMD=echo tests >> "$CALLLOG"; mkdir -p ` + rel + ` && echo x > ` + rel + `/pf-linux-amd64`})
+		out, err := w.runPinned([]string{`RELEASE_XREFS_CMD=echo xrefs >> "$CALLLOG"; mkdir -p ` + rel + ` && echo x > ` + rel + `/pf-linux-amd64`})
 		if err == nil {
 			t.Fatalf("the resume must refuse when the release appeared after its first read:\n%s", out)
 		}
@@ -924,10 +926,10 @@ func TestW372ResumeRereadsBeforeEachPublishAction(t *testing.T) {
 	})
 	t.Run("an unchanged state is re-read and passes", func(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.2.0"}, nil)
-		if out, err := w.run([]string{"FAKE_PUSH_FAIL=1"}); err == nil {
+		if out, err := w.runPinned([]string{"FAKE_PUSH_FAIL=1"}); err == nil {
 			t.Fatalf("setup:\n%s", out)
 		}
-		out, err := w.run([]string{"FAKE_REGISTRY_MISSING=1"})
+		out, err := w.runPinned([]string{"FAKE_REGISTRY_MISSING=1"})
 		if err != nil {
 			t.Fatalf("resume: %v\n%s", err, out)
 		}
@@ -945,11 +947,11 @@ func TestW372ResumeRereadsBeforeEachPublishAction(t *testing.T) {
 // before the login every such resume died "cannot read the registry state".
 func TestW372ResumeReadsTheRegistryAfterTheLogin(t *testing.T) {
 	w := newRelWorld(t, []string{"v1.2.0"}, nil)
-	if out, err := w.run([]string{"FAKE_PUSH_FAIL=1"}); err == nil {
+	if out, err := w.runPinned([]string{"FAKE_PUSH_FAIL=1"}); err == nil {
 		t.Fatalf("setup:\n%s", out)
 	}
 	w372ResetCalls(t, w)
-	out, err := w.run([]string{"FAKE_REGISTRY_NEEDS_LOGIN=1", "FAKE_REGISTRY_MISSING=1", "FAKE_GH_SCOPES=repo, write:packages"})
+	out, err := w.runPinned([]string{"FAKE_REGISTRY_NEEDS_LOGIN=1", "FAKE_REGISTRY_MISSING=1", "FAKE_GH_SCOPES=repo, write:packages"})
 	if err != nil {
 		t.Fatalf("the resume must log in, then read the registry, then publish: %v\n%s", err, out)
 	}
@@ -975,7 +977,7 @@ func TestW372RepoGuardReadsPushURLAndFailsClosed(t *testing.T) {
 		return kept
 	}
 	run := func(w *relWorld, extra ...string) (string, error) {
-		c := exec.Command("sh", w.script)
+		c := exec.Command("sh", w.script, "--pins", w.relPins(relGit(t, w.work, "rev-parse", "HEAD"), nil, nil))
 		c.Dir = w.work
 		c.Env = append(without(w.env(), "RELEASE_REMOTE_IS"), extra...)
 		out, err := c.CombinedOutput()

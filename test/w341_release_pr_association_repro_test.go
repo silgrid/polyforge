@@ -159,7 +159,7 @@ func TestW341ReleasePROnlyReliableAssociation(t *testing.T) {
 				{number: 797, mergeCommit: flaky, flaky: true},
 			})
 
-			out, err := w.run(nil)
+			out, err := w.runPinned(nil)
 			if err != nil {
 				t.Fatalf("release must pass when %s is the merge_commit_sha of a merged PR; the commits/<sha>/pulls endpoint is unreliable for it: %v\n%s",
 					flaky, err, out)

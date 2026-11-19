@@ -122,7 +122,7 @@ func TestW520ReleaseContractCheck(t *testing.T) {
 	t.Run("registered change without a bump refuses with the way out", func(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.2.0"}, nil)
 		w520Register(w)
-		out, err := w.run(nil)
+		out, err := w.runPinned(nil)
 		w520Refused(t, w, out, err,
 			"1 incompatible", "ContractVersion", "still 1", "to 2", "docs/upgrade.md", "empt")
 	})
@@ -130,7 +130,7 @@ func TestW520ReleaseContractCheck(t *testing.T) {
 	t.Run("empty list needs no bump and releases", func(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.2.0"}, nil)
 		w.landPR("unrelated", "an unrelated change")
-		out, err := w.run(nil)
+		out, err := w.runPinned(nil)
 		w520Released(t, w, out, err, "release: contract: 1 (previous release 1), no incompatible change registered")
 	})
 
@@ -141,7 +141,7 @@ func TestW520ReleaseContractCheck(t *testing.T) {
 			relContractGo:      relContractGoAt(2),
 			relContractPending: relContractPendingEmpty,
 		})
-		out, err := w.run(nil)
+		out, err := w.runPinned(nil)
 		w520Released(t, w, out, err, "release: contract: 2 (previous release 1), no incompatible change registered")
 	})
 
@@ -151,7 +151,7 @@ func TestW520ReleaseContractCheck(t *testing.T) {
 		w520Land(w, "topic-bump", "bump the contract version only", map[string]string{
 			relContractGo: relContractGoAt(2),
 		})
-		out, err := w.run(nil)
+		out, err := w.runPinned(nil)
 		w520Refused(t, w, out, err, "ContractVersion", "2", "still holds 1", "empty")
 	})
 
@@ -162,7 +162,7 @@ func TestW520ReleaseContractCheck(t *testing.T) {
 			relContractGo:      relContractGoAt(3),
 			relContractPending: relContractPendingEmpty,
 		})
-		out, err := w.run(nil)
+		out, err := w.runPinned(nil)
 		w520Refused(t, w, out, err, "ContractVersion", "3", "at most once")
 	})
 
@@ -173,14 +173,14 @@ func TestW520ReleaseContractCheck(t *testing.T) {
 	t.Run("previous release without contract.go: contract 1 releases", func(t *testing.T) {
 		w := newRelWorld(t, nil, nil)
 		w520PrevWithout(w, "", 1, relContractPendingEmpty)
-		out, err := w.run(nil)
+		out, err := w.runPinned(nil)
 		w520Released(t, w, out, err, first)
 	})
 
 	t.Run("previous release whose contract.go has no ContractVersion line: contract 1 releases", func(t *testing.T) {
 		w := newRelWorld(t, nil, nil)
 		w520PrevWithout(w, "package workflow\n", 1, relContractPendingEmpty)
-		out, err := w.run(nil)
+		out, err := w.runPinned(nil)
 		w520Released(t, w, out, err, first)
 	})
 
@@ -188,7 +188,7 @@ func TestW520ReleaseContractCheck(t *testing.T) {
 		for _, v := range []int{2, 5} {
 			w := newRelWorld(t, nil, nil)
 			w520PrevWithout(w, "", v, relContractPendingEmpty)
-			out, err := w.run(nil)
+			out, err := w.runPinned(nil)
 			w520RefusedNaming(t, w, out, err, "v1.2.0 carries no workflow contract", "first release with one", "starts at contract 1",
 				fmt.Sprintf("ContractVersion is %d", v), "set it to 1")
 		}
@@ -197,14 +197,14 @@ func TestW520ReleaseContractCheck(t *testing.T) {
 	t.Run("previous release without a contract: a registered entry refuses", func(t *testing.T) {
 		w := newRelWorld(t, nil, nil)
 		w520PrevWithout(w, "", 1, w520Pending)
-		out, err := w.run(nil)
+		out, err := w.runPinned(nil)
 		w520Refused(t, w, out, err, "first release with a workflow contract", "nothing pending", "holds 1 entry", "empty the list")
 	})
 
 	t.Run("a previous contract.go whose ContractVersion cannot be read still refuses", func(t *testing.T) {
 		w := newRelWorld(t, nil, nil)
 		w520PrevWithout(w, "package workflow\n\nconst ContractVersion = 1\nconst ContractVersion = 2\n", 1, relContractPendingEmpty)
-		out, err := w.run(nil)
+		out, err := w.runPinned(nil)
 		w520RefusedNaming(t, w, out, err, "cannot read ContractVersion of the previous release v1.2.0")
 	})
 }

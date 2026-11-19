@@ -167,6 +167,32 @@ func w405Tool(t *testing.T, w *relWorld, env []string, args ...string) (string, 
 	return strings.TrimSpace(out.String()), errb.String(), code
 }
 
+// w405GateID answers the tree's gate id (tools/gate-id at dir).
+func w405GateID(t *testing.T, dir string) string {
+	t.Helper()
+	c := exec.Command("sh", "tools/gate-id")
+	c.Dir = dir
+	out, err := c.Output()
+	if err != nil {
+		t.Fatalf("tools/gate-id: %v", err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// w405PlantTag pushes a hand-made annotated tag named name on commit with
+// message msg (lightweight when msg is empty); push=false keeps it local.
+func w405PlantTag(t *testing.T, dir, name, commit, msg string, push bool) {
+	t.Helper()
+	if msg == "" {
+		relGit(t, dir, "tag", name, commit)
+	} else {
+		relGit(t, dir, "tag", "-a", "-m", msg, name, commit)
+	}
+	if push {
+		relGit(t, dir, "push", "-q", "origin", "refs/tags/"+name)
+	}
+}
+
 // w405Record is a green tag's message.
 type w405Record struct {
 	Commit        string `json:"commit"`
