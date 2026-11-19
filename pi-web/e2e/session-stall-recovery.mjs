@@ -23,11 +23,14 @@
 // Asserted (polyforge#137, plan A′ — event order plus staged timestamps; the
 // 10s wall-clock bound is unchanged and stays the acceptance criterion):
 // - the page's own run: turn-1 text and the tool result must be on screen
-//   BEFORE the final reply is released, and the forced /api/sessions reads
-//   that carried them start after the write-ring rise (the sidebar poll's
-//   first recentSessionWrites sighting of the selected session) and before
-//   the first 15s reconcile tick — the write-ring recovery path delivered
-//   them, not the tick fallback. BOUND_MS still bounds every mark.
+//   BEFORE the final reply is released — the release is anchored to the first
+//   15s reconcile tick plus 1s (the late-final interleaving the SWE recorded),
+//   so the recovery has the whole tick-free window to deliver while the run
+//   is busy — and the forced /api/sessions reads that carried them start
+//   after the write-ring rise (the sidebar poll's first recentSessionWrites
+//   sighting of the selected session) and before that first tick: the
+//   write-ring recovery path delivered them, not the tick fallback. BOUND_MS
+//   still bounds every mark.
 // - an idle page whose selected session has no watcher-ring entry at
 //   selection: another client's quick run shows within BOUND_MS through a
 //   forced read after the ring rise.
@@ -90,7 +93,7 @@ const TICK_WAIT_MS = 40_000;
 // The test commit of polyforge#137's unit shipped it ON by default (the
 // committed mutation, red); this tree turns the default off (green) and
 // leaves the env for the proof's rerun.
-const disableRingRecovery = process.env.E2E_STALL_DISABLE_RING_RECOVERY === "1";
+const disableRingRecovery = process.env.E2E_STALL_DISABLE_RING_RECOVERY !== "0";
 const distDir = process.env.PI_WEB_DIST_DIR || ".next/e2e/session-stall-recovery";
 const artifacts = join(root, "test-results/e2e");
 mkdirSync(artifacts, { recursive: true });
@@ -345,10 +348,6 @@ try {
 
   const shows = (text) => page.evaluate((value) => document.body.innerText.includes(value), text);
   const firstSeen = (text) => page.evaluate((value) => window.__seen?.[value] ?? null, text);
-  const firstSeenTurnAndTool = () => page.evaluate(() => [
-    window.__seen?.["FIRST-TURN-TEXT"] ?? null,
-    window.__seen?.["TOOL-OUT-MARK"] ?? null,
-  ]);
   async function waitUntil(predicate, timeoutMs) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
@@ -445,10 +444,13 @@ try {
     frozen = true;
     finalWrittenAt = null;
     modelCalls = 0;
-    // Hold the final reply until turn-1 and the tool result have been shown
-    // (A′: they must appear before the final is released) or the acceptance
-    // bound has elapsed — releasing then anyway lets the run end and the staged
-    // diagnostics complete; the bound failure is already recorded.
+    // Hold the final reply until the page's run-time reconcile has ticked once,
+    // then another second (the base choreography, restored per review r1#3):
+    // the run ends just after a tick, so a missed end is not shown until the
+    // next 15s tick — the late-final failure the SWE recorded. Against this
+    // tick-anchored release the A′ order assertion keeps its teeth: the
+    // write-ring recovery must show turn-1 and the tool result while the run
+    // is still busy, well before a release that never precedes the first tick.
     let releaseFinal;
     const finalGate = new Promise((resolve) => { releaseFinal = resolve; });
     plan = { toolFirst: true, final: { text: "REPLY-RUN-FINAL", delayMs: 0, gate: finalGate } };
@@ -456,26 +458,22 @@ try {
     cutForceReads = true;
     await page.locator("textarea").first().fill("phone asks while the network stalls");
     await page.getByRole("button", { name: "Send" }).first().click();
-    // One evaluate per iteration keeps the bounded wait's overshoot to one
-    // round-trip under a starved renderer — two separate evaluates doubled it
-    // on a loaded host and delayed the release well past the bound.
-    await waitUntil(async () => {
-      const [turn, tool] = await firstSeenTurnAndTool();
-      return turn !== null && tool !== null;
-    }, BOUND_MS);
+    // A tick is a mechanism, not a user-visible outcome: none can fire before
+    // ~15s after send, and page-render churn has delayed the first fire to
+    // ~27.8s, so the wait runs to TICK_WAIT_MS and the release falls to the
+    // deadline when no tick came (the RESULT line says which).
+    const tickObserved = await waitUntil(() => firstTickAt(sid, sentAt) !== null, TICK_WAIT_MS);
+    const tickAt = firstTickAt(sid, sentAt);
+    // Let that tick's status read finish while the run is still busy, then end
+    // the run. The next tick is a full interval away, which is the late case.
+    if (tickObserved) await delay(1_000);
     const releaseAt = Date.now();
     releaseFinal();
 
     // The recorder times first appearance from its own sampling, so turn-1 and
-    // tool content shown during the bounded wait above is not mistaken for late.
+    // tool content shown while the tick was awaited is not mistaken for late.
     await waitUntil(async () => (await firstSeen("REPLY-RUN-FINAL")) !== null, 60_000);
     await waitIdle(sid);
-    // The first 15s reconcile tick is a diagnostic anchor, not a user-visible
-    // outcome: the frozen stream never settles the run for the page, so the
-    // interval still fires. Its timestamp bounds the window the recovery
-    // reads must precede; when none comes within the wait the RESULT line says so.
-    await waitUntil(() => firstTickAt(sid, sentAt) !== null, TICK_WAIT_MS);
-    const tickAt = firstTickAt(sid, sentAt);
     const firstTurnAt = await firstSeen("FIRST-TURN-TEXT");
     const toolAt = await firstSeen("TOOL-OUT-MARK");
     const finalAt = await firstSeen("REPLY-RUN-FINAL");
