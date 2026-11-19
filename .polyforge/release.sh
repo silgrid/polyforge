@@ -792,8 +792,11 @@ cd "$(git rev-parse --show-toplevel)"
 
 # 1. clean tree, the pins, HEAD on the pins' commit and on the default branch.
 [ -z "$(git status --porcelain)" ] || die "worktree is dirty; commit or stash first"
-# The pins file is parsed and validated with python3 (one hard dependency of
-# the release, checked by the preflight below too): batch a non-empty
+# python3 is a hard prerequisite BEFORE the preflight: the pins file is parsed
+# with it, so a machine without it refuses here, naming it (the preflight
+# reports every tool together, but this one is needed before it can run).
+command -v python3 >/dev/null 2>&1 || die "python3 is not on PATH: the green batch's pins file (--pins) is parsed with it, and so are the default xrefs gate and the dependency audit's scope engine - install it and run again; nothing built or published, no version claimed"
+# The pins file is parsed and validated with python3: batch a non-empty
 # string, repos a non-empty map of full commit ids, red_batches_after (when
 # present) a list of ids. PINS_SHAS carries the shas one per line for the
 # HEAD membership check; BATCH the batch's id; RED_AFTER the after-batches.

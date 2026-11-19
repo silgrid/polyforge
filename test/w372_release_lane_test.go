@@ -357,12 +357,13 @@ func TestW113ReleasePreflightReportsTheAuditTools(t *testing.T) {
 			t.Fatalf("a version was claimed: %q", got)
 		}
 	})
-	t.Run("the audit's python3 (the engine)", func(t *testing.T) {
+	t.Run("python3 absent refuses before the preflight", func(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.2.0"}, nil)
-		// no go.mod, no lockfile: the audit still runs the engine to learn
-		// there is no audit command, so the engine's python3 is a
-		// prerequisite of the default audit path alone here (the xrefs and
-		// test gates are overridden in this fake env)
+		// no go.mod, no lockfile, and no python3 at all: the green batch's
+		// pins file is parsed with python3 (polyforge#154), so a machine
+		// without it refuses at step 1, before the preflight could collect
+		// its one-message report - the refusal names the tool, and nothing
+		// runs, nothing is published, no version claimed
 		tools := t.TempDir()
 		for _, name := range w113HostTools {
 			p, err := exec.LookPath(name)
@@ -381,15 +382,16 @@ func TestW113ReleasePreflightReportsTheAuditTools(t *testing.T) {
 			t.Fatalf("a release whose audit runs the scope engine must refuse without python3:\n%s", out)
 		}
 		for _, want := range []string{
-			"preflight failed", "nothing built or published, no version claimed",
-			"tool(s) not on PATH: python3",
+			"python3 is not on PATH",
+			"pins file (--pins) is parsed with it",
+			"nothing built or published, no version claimed",
 		} {
 			if !strings.Contains(out, want) {
-				t.Errorf("preflight message lacks %q:\n%s", want, out)
+				t.Errorf("the python3 refusal lacks %q:\n%s", want, out)
 			}
 		}
 		if c := w.calls(); len(c) != 0 {
-			t.Fatalf("work ran before the preflight refusal: %v", c)
+			t.Fatalf("work ran before the python3 refusal: %v", c)
 		}
 	})
 }
