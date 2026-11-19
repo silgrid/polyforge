@@ -88,6 +88,15 @@ test("a null payload or malformed keys never reach the view as rows", () => {
   assert.deepEqual(envGroup("claude", { target: "claude", setKeys: ["B", "A", "A"] })?.keys, ["A", "B"]);
 });
 
+test("a failed harness-list read is a visible reason, not silence or a wrong empty state (r1#8)", () => {
+  // 列表本身读失败时必须说明原因（Q4A），不能渲染成空组，也不能说「没有注册」。
+  const html = renderToStaticMarkup(h(I18nProvider, null,
+    h(HarnessEnvironmentGroups, { groups: [], listError: "HTTP 500" })));
+  assert.match(html, /The harness list could not be read: HTTP 500/, "the list read's failure is not visible text");
+  assert.match(html, /role="alert"/, "the failure is not an alert");
+  assert.ok(!html.includes("No variables set."), "a failed read masquerades as an empty group");
+});
+
 test("the environment pane renders the groups, names only, with its note and empty state", () => {
   const groups = [
     { harness: "pi", target: "pi", keys: ["ANTHROPIC_AUTH_TOKEN", "GEMINI_API_KEY"], error: null },
