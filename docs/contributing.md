@@ -96,10 +96,12 @@ owner answers in free text that `build` reads — its summary states each
 decision, the owner's words and its reading, which review checks against the
 words. No daemon check settles `build`: it runs each unit red
 then green itself and records the unit in `artifacts/build/units.json` — `[{id,
-pre_existing_red?, test_commit?, impl_commit, run{repo, cwd, argv}, marker}]`, the run
+pre_existing_red?, timeout?, test_commit?, impl_commit, run{repo, cwd, argv}, marker}]`, the run
 exactly as it ran (a unit whose reproduction test already exists and is red before
 the change declares `pre_existing_red: true` and reports no `test_commit`, its red
-evidence a replay on the tree of the change's base) —
+evidence a replay on the tree of the change's base; a unit self-reports `timeout`
+(a Go duration) to raise the limit its run and its red-state replay are bounded by,
+the default 10m) —
 and the steps after it verify that record. Review runs the workflow's `facts.py
 plan-conformance`, `build --replay --isolation host`, `carries` and `analysis` (the change
 analysis's own close check) and judges their facts: each unit's test

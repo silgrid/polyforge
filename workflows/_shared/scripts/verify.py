@@ -63,7 +63,7 @@ judged by its marker under ``--unit-runs``' own rules;
 a listed test that does not exist fails its check naming it. A missing or
 malformed analysis file is the invocation's (exit 2).
 
-``--unit-runs`` names the build's units.json (``[{id, [pre_existing_red,]
+``--unit-runs`` names the build's units.json (``[{id, [pre_existing_red,] [timeout,]
 [test_commit,] impl_commit, run{repo, cwd, argv}, marker}]``): every unit's green run is run
 again as written beside the plan, each its own check
 ``<repo>:unit-run:<id>``. It passes when it exits 0 and one output line
@@ -71,8 +71,12 @@ matches its marker — a Python regular expression (``re.ASCII``, searched in
 each line) that must not be empty, blank or able to match the empty string;
 a run that cannot run as written fails its check without running. A unit
 run is never pre-existing (it pins this change), and its test commit's files
-are protected for the plan's units too. An unreadable or malformed file is
-the invocation's (exit 2).
+are protected for the plan's units too. A unit's run is bounded by its
+self-reported ``timeout``, else the shared 10m default (``pfstep/unitruns``):
+a run its limit kills is an evidence problem, the why naming the limit — a
+red-state run must exit non-zero within its limit, never hang. An unreadable
+or malformed file (an invalid ``timeout`` included) is the invocation's
+(exit 2).
 
 The scope engine: ``--engine``, else the shared tree's
 ``$PF_SHARED_DIR/scripts/verify-scope``.
