@@ -19,7 +19,7 @@ once."""
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from . import gostr
 from .unitruns import run_shape_problem
@@ -97,12 +97,49 @@ def static_problem(d: AnalysisDecl, repo_name: str, is_dir: Callable[[str], bool
 
 
 @dataclass
+class SelectedCommand:
+    """One command of a repo's machine selection record (skeleton)."""
+
+    name: str = ""
+    cmd: str = ""
+    phase: str = ""
+    reused: str = ""
+    exit_code: Optional[int] = None
+    timed_out: bool = False
+    skipped: bool = False
+    skip_reason: str = ""
+
+
+@dataclass
+class SelectedDecl:
+    """One task repo's machine selection record (skeleton)."""
+
+    head: str = ""
+    engine: str = ""
+    mode: str = ""
+    status: str = ""
+    reason: str = ""
+    commands: List[SelectedCommand] = field(default_factory=list)
+
+
+def selected_problem(d: SelectedDecl, head: str) -> str:
+    """Why a repo's machine selection record cannot stand (skeleton)."""
+    return ""
+
+
+def missing_selected_problem(repo: str) -> str:
+    """Why a touched repo's analysis carries no machine selection record (skeleton)."""
+    return ""
+
+
+@dataclass
 class Analysis:
     """The analysis as the machine consumes it: the cap and the listed
     tests in their order (the order is the cut's)."""
 
     limit: int = DEFAULT_SUPPLEMENT_LIMIT
     decls: List[AnalysisDecl] = field(default_factory=list)
+    selected: Dict[str, SelectedDecl] = field(default_factory=dict)
 
     def taken(self) -> Tuple[List[AnalysisDecl], List[AnalysisDecl]]:
         """The entries the supplement cap takes (the first ones in listed
