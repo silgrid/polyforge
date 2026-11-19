@@ -154,6 +154,8 @@ test("a request never joins a scan that started before it arrived (2-A)", async 
   const secondRows = await secondCall;
   assert.ok(secondRows.some((row) => row.id === "late"),
     "a request that arrived after the write must not be served the older scan's result");
+  assert.equal(secondRows.find((row) => row.id === "late").messageCount, 1,
+    "the late row is whole, not just present: its one message was counted");
 });
 
 test("one invalidation mid-scan still settles on a consistent catalogue", async (t) => {
