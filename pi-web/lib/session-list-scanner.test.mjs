@@ -479,7 +479,7 @@ test("a deferred summary skips a leading non-object line and still finds the hea
   assert.ok(row, "the file is listed");
   assert.equal(row.detailsPending, true);
   assert.equal(row.messageCount, 0);
-  assert.equal(reads.filter((read) => read.kind === "header"), [{ path, start: 0, kind: "header" }]);
+  assert.deepEqual(reads.filter((read) => read.kind === "header"), [{ path, start: 0, kind: "header" }]);
 });
 
 test("discovers sessions through project directory symlinks", { skip: process.platform === "win32" }, async (t) => {
