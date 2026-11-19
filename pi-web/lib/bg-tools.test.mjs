@@ -122,23 +122,52 @@ test("bg_status lists the session's tasks, or one when a task id names it", asyn
   assert.deepEqual(controller.calls.status.at(-1), { sessionId: "sess-1", taskId: "01234567" });
 });
 
-test("bg_output answers with the byte range and the full log path, within the 8192-byte budget", async () => {
-  // 15,000 bytes of 3-byte characters: the budget must cut on a character boundary.
-  const huge = "世".repeat(5_000);
+test("bg_output answers with the byte range and the full log path, within the 8192-byte budget, keeping the log's last bytes", async () => {
+  // 15,000 bytes of 3-byte characters. The default read asks for the budget
+  // minus the answer's own prompt lines, and the excerpt is the log's TAIL: it
+  // ends with the log's last character and the range ends at the log's end.
+  const totalBytes = 15_000;
+  const tail = "世".repeat(2_000); // the last 6,000 bytes, as the fake read returns them
+  const readCalls = [];
   const controller = makeController({
-    readOutput: () => ({
-      text: huge, startByte: 15_000 - huge.length * 0, endByte: 15_000,
-      totalBytes: 15_000, logPath: "/tmp/bg/0123456789abcdef0123456789abcdef/log", truncated: true,
-    }),
+    readOutput: ({ maxBytes }) => {
+      readCalls.push(maxBytes);
+      const budget = maxBytes ?? 8192;
+      const startByte = totalBytes - Math.min(budget, 6_000);
+      return {
+        text: "世".repeat((6_000 - 0) / 3 - 0) && tail, startByte, endByte: totalBytes,
+        totalBytes, logPath: "/tmp/bg/0123456789abcdef0123456789abcdef/log", truncated: startByte > 0,
+      };
+    },
   });
   const registered = mountExtension(controller);
   const result = await runTool(registered, "bg_output", { task_id: "0123456789abcdef" });
   const text = textOf(result);
   assert.ok(Buffer.byteLength(text, "utf8") <= BG_OUTPUT_MAX_BYTES, `the whole answer must stay within ${BG_OUTPUT_MAX_BYTES} bytes`);
   assert.ok(!text.includes("\uFFFD"), "the cut must not split a multi-byte character");
-  assert.ok(/bytes \d+-\d+ of 15000/.test(text), "the answer names the byte range");
+  assert.ok(/bytes \d+-15000 of 15000/.test(text), "the range ends at the log's end");
+  assert.ok(text.endsWith(tail), "the excerpt ends with the log's last bytes");
   assert.ok(text.includes("/tmp/bg/0123456789abcdef0123456789abcdef/log"), "the answer names the full log path");
-  assert.deepEqual(controller.calls.readOutput.at(-1), { sessionId: "sess-1", taskId: "0123456789abcdef", maxBytes: undefined });
+  assert.equal(readCalls.at(-1), BG_OUTPUT_MAX_BYTES - 256, "the default read reserves the answer's own prompt lines");
+});
+
+test("an oversized excerpt is cut from the front, never losing the log's latest bytes", async () => {
+  // The controller violating its own budget: the tool must still fit the
+  // answer and still end at the log's end.
+  const totalBytes = 30_000;
+  const tail = "END九九九";
+  const controller = makeController({
+    readOutput: () => ({
+      text: "x".repeat(8_100) + tail, startByte: 30_000 - 8_100 - Buffer.byteLength(tail), endByte: 30_000,
+      totalBytes, logPath: "/tmp/bg/x/log", truncated: true,
+    }),
+  });
+  const registered = mountExtension(controller);
+  const result = await runTool(registered, "bg_output", { task_id: "0123456789abcdef" });
+  const text = textOf(result);
+  assert.ok(Buffer.byteLength(text, "utf8") <= BG_OUTPUT_MAX_BYTES, "the whole answer still fits");
+  assert.ok(text.includes(tail), "the log's latest bytes survive the cut");
+  assert.ok(/bytes \d+-30000 of 30000/.test(text), "the range still ends at the log's end");
 });
 
 test("bg_output passes a smaller max_bytes through as the excerpt's cap", async () => {
