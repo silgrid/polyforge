@@ -50,8 +50,9 @@ import gate
 from .fakebox import FakeRuntime
 from .gatefix import (HAVE_BASH, HAVE_GIT, HAVE_PY, IDENT, commit_all, gate_clone, git_t, green_clone,
                       run_gate, run_main, write_files)
+from .verifyfix import HAVE_BASH, HAVE_GIT
 from .gitworld import GitCase, Repo
-from .verifyfix import HAVE_BASH, HAVE_GIT, Fixture, Run, cmd_of, engine_args, fake_engine, report, run_verify
+from .verifyfix import Fixture, Run, cmd_of, engine_args, fake_engine, report, run_verify
 
 SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENGINE = os.path.join(SCRIPTS, "verify-scope")
@@ -140,10 +141,6 @@ class EngineAuditTest(GitCase):
         self.assertEqual(audits(engine_cmds(c)), [])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class VerifyAuditParamTest(unittest.TestCase):
     """verify.py's side of the audit parameter (PF_PARAM_AUDIT): the four
     values of the matrix — on, unset (and empty, its equal), off, and
@@ -188,6 +185,15 @@ class VerifyAuditParamTest(unittest.TestCase):
         self.assertEqual(d.get("audit_disabled"), AUDIT_OFF_NOTE,
                          "the result must record the closure with the merged source hint")
         self.assertEqual([c["name"] for c in d["checks"] if c["status"] == "fail"], [])
+        # AC3: the STEP's result file (the pf-step-result the lane reads,
+        # not the run-dir document alone) names the closure in its details
+        # and its summary — a reviewer sees it without opening result.json
+        self.assertEqual(r.details.get("audit_disabled"), AUDIT_OFF_NOTE,
+                         json.dumps(r.result, indent=1))
+        self.assertIn("dependency audit off", r.result.get("summary", ""),
+                      "the summary names the closed audit: %s" % r.result.get("summary"))
+        self.assertIn(AUDIT_OFF_NOTE, r.result.get("summary", ""))
+        self.assertIn("dependency audit disabled", r.report)
 
     def test_on_empty_and_unset_change_nothing(self) -> None:
         for value in ("on", "", None):
@@ -199,6 +205,10 @@ class VerifyAuditParamTest(unittest.TestCase):
                 self.assertNotIn("--audit", line, "on must hand the engine no audit option: %s" % line)
             d = self.doc(r)
             self.assertNotIn("audit_disabled", d, "an on run records no closure")
+            self.assertNotIn("audit_disabled", r.details, "an on run's step result adds no field")
+            self.assertNotIn("dependency audit", r.result.get("summary", ""),
+                             "an on run's summary is today's, byte for byte: %s" % r.result.get("summary"))
+            self.assertNotIn("dependency audit", r.report)
 
     def test_every_other_value_is_a_named_error_before_any_check(self) -> None:
         for value in ("ON", "false", " off", "0"):
@@ -211,10 +221,6 @@ class VerifyAuditParamTest(unittest.TestCase):
             self.assertIn("PF_PARAM_AUDIT", r.result.get("summary", ""))
             self.assertIsNone(r.doc, "%r: no result.json — nothing ran" % value)
             self.assertEqual(engine_args(eng), [], "%r: the engine was never asked" % value)
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 NOW = datetime.datetime(2026, 11, 8, 9, 30, 0, tzinfo=datetime.timezone.utc)
