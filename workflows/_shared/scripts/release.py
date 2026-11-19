@@ -267,7 +267,6 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--batches", default="")
     p.add_argument("--pre-release", default="")
     p.add_argument("--pins-out", default="")
-    p.add_argument("--deadline", type=invoke.duration_flag, default=0)
     p.add_argument("--json", action="store_true")
     p.add_argument("--out", default="")
     return p

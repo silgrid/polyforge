@@ -822,7 +822,7 @@ if not isinstance(red, list) or any(not isinstance(x, str) or not x for x in red
 print(b)
 print("RED_AFTER=" + ",".join(red))
 print("\n".join(shas))
-' "$PINS" 2>&1) || die "$PINS_EVAL - the release object is the green batch's pins and nothing else may be invented; nothing built or published"
+' "$PINS" 2>&1) || die "${PINS_EVAL:-the pins file could not be read (is python3 on PATH? the preflight checks it too)} - the release object is the green batch's pins and nothing else may be invented; nothing built or published"
 BATCH=$(printf '%s\n' "$PINS_EVAL" | sed -n 1p)
 RED_AFTER=$(printf '%s\n' "$PINS_EVAL" | sed -n 's/^RED_AFTER=//p')
 PINS_SHAS=$(printf '%s\n' "$PINS_EVAL" | sed -n '3,$p')

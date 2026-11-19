@@ -31,7 +31,8 @@ The version is `V`, the claimed release commit is `C`, the default branch is `<d
 
 - **(a) release commit and the batch pin.** `git fetch --tags origin` (`release.sh --verify`
   needs the previous release tag's commit locally). `C` must equal the owner repo's pin
-  of the recorded `pins` (the entry whose repo is the record's `repo`), and `C` must be an
+  of the recorded `pins` (the map's entry named by the record's `repo` - the repo's
+  directory name under `repos/`), and `C` must be an
   ancestor-or-equal of the current `origin/<default>`
   (`git merge-base --is-ancestor C origin/<default>`) - the default branch may have moved
   past the pin; the release is the batch, not the head.

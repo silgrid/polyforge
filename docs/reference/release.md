@@ -50,14 +50,26 @@ procedure runs - `PF-RELEASE-ALREADY_RELEASED`,
 procedure that cannot resume ends `PF-RELEASE-INCOMPLETE`. A project whose
 procedure declares no `--pins` in its `--help` is refused
 `PF-RELEASE-PROCEDURE_CONTRACT` before it runs (see
-[upgrade](../upgrade.md)). Two halves
-take effect at different times: `release.sh`/`deploy.sh` act from the
-merge on (the step runs the procedure from origin's head), while the step
-text (resume or adopt, the deploy preflight, `verify`'s check (b)) reaches
-a work machine only with its next daemon install; until then a re-filed
-release work item still refuses a tagged head with
-`PF-RELEASE-ALREADY_RELEASED` before calling the procedure - run
-`release.sh` from the same commit by hand to resume. The
+[upgrade](../upgrade.md)). Two halves take effect at
+different times, and the change carries its own transition: the procedure
+contract (`--pins`) acts from the merge on — a script that requires
+`--pins` refuses a run without it immediately — while the step text that
+HANDS the pins (the resolver, the pinned checkout, the refusals) reaches a
+work machine only with its next daemon install (`pf daemon ensure` sets a
+daemon's lanes from `<data-dir>/release/current/workflows`, the installed
+release's copy). Between the merge and the first release cut with the new
+script, a daemon still running the old lane text calls the procedure
+without `--pins` — from the origin head, per its old text — and the new
+script refuses (`--pins <file> is required`), nothing built or published:
+the lane cannot cut that first version, by design (never a silent branch-head
+release). The release that ships the new convention is therefore cut by
+hand: take the project's most recent green integrate batch (its record's
+`main`, through the aihub), write the pins file
+`{"batch": "<id>", "repos": {"<repo>": "<sha>", ...}}`, sit the owner repo
+at its pinned commit and run
+`.polyforge/release.sh [patch] --pins <pins file>` yourself; once that
+release is installed on the daemon, its lane text runs the resolver and
+the lane releases on its own. The
 step-by-step checks and failure codes are in
 [workflows/release/README.md](../../workflows/release/README.md)
 and its steps.

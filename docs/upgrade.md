@@ -743,3 +743,16 @@ daemon upgrade that ships this: the resolver still finds the green
 batch, but the procedure-contract probe (`--help` lacking `--pins`)
 refuses with `PF-RELEASE-PROCEDURE_CONTRACT`, nothing built or published.
 Make the four changes above and file the release again.
+
+The order cuts both ways, and the first release across it is always a
+hand run. A daemon still on the pre-#154 release lane calls the
+procedure without `--pins` (from the origin head, per its old step
+text), so a script changed first refuses it (`--pins <file> is
+required`) until the daemon's lane text carries the resolver — which
+arrives with the polyforge release that ships this change, installed by
+`pf daemon ensure`. In that window no release goes through the lane, by
+design; cut the release by hand: take the latest green batch's pins
+(`{"batch": "<id>", "repos": {"<repo>": "<sha>", ...}}`), sit the owner
+repo at its pin and run `.polyforge/release.sh [patch] --pins <file>`
+yourself (the same way polyforge's own first release across this change
+is cut — the reference page's "Two halves" paragraph says so).

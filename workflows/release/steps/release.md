@@ -160,8 +160,10 @@ Then:
    document. On any mismatch, `pf step ask` the owner once — per mismatch the document,
    the line and the change it contradicts — offering to release as is or calling
    the release off (`cancel`, citing the reply; the documents are then fixed by a work item of
-   their own and the release filed again). On the owner's go-ahead, start again at item 1
-   (the batch may have moved while you waited) and ask only about a mismatch the owner has
+   their own and the release filed again). On the owner's go-ahead, start again at the resolver's
+   command above (the batch may have moved while you waited: its result and
+   `artifacts/release-pins.json` are re-derived, then item 3's checkout) and
+   ask only about a mismatch the owner has
    not answered. No mismatch: go on.
 
 ## 4. Run the procedure
@@ -215,9 +217,10 @@ Write `artifacts/release-record.json` with exactly:
  "resumed": false}
 ```
 
-`batch` is the green batch's id and `pins` its whole pinned group, both exactly as the
-resolver wrote them (`artifacts/release-pins.json`) - the next step checks the release
-commit against the pins. `origin_head_at_release` is `origin/<default>`'s head observed
+`batch` is the green batch's id and `pins` its whole pinned group - the pins file's
+`repos` map alone, `{"<repo>": "<sha>", ...}` (`batch` beside it carries the id; the
+after-batches stay in the resolver's result) - the next step checks the release commit
+against the pins. `origin_head_at_release` is `origin/<default>`'s head observed
 at release time (item 4), a record of the branch the release did NOT take: the release
 object is the batch, never this head.
 
