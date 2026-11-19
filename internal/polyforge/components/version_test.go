@@ -61,6 +61,13 @@ func TestVersionFormsAndChannels(t *testing.T) {
 		"v0.2.4 ",        // padding
 		"vx.y.z",         // letters
 		"dev",            // an unstamped build's raw version
+		// leading zeros are not SemVer (review r1#N5): two spellings of
+		// one number would compare equal while naming two different
+		// releases/<ver> directories.
+		"v0.02.4",
+		"v0.2.04",
+		"v0.2.4-gmi.01",
+		"v0.2.4-dev.00",
 	}
 	for _, in := range illegal {
 		if _, err := ParseVersion(in); err == nil {
