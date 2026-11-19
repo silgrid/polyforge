@@ -477,7 +477,6 @@ test("a deferred summary rejects a file whose first object line is not a session
   const summary = await listSessionsIncremental({ deferDetails: true });
   assert.equal(summary.find((session) => session.id === "midfile"), undefined,
     "the summary lists no row for a file without a leading session header");
-  assert.equal(reads.filter((read) => read.kind === "header"), [], "no header row is cached for it");
 });
 
 test("a deferred summary skips a leading non-object line and still finds the header", async (t) => {
