@@ -446,3 +446,21 @@ test("an http entry reaches claude with the type its own config writes (r2#4)", 
     ["mcp", "add-json", "-s", "user", "docs", JSON.stringify({ url: "https://docs.example.com/mcp", type: "http" })],
   ], "pi's http entry carries no type; claude's own files always write one, and its validator asks for it");
 });
+
+test("a fresh folder's trusted add rolls pi's entry back too when the claude half fails (r3#1)", async (t) => {
+  const { log } = await withClaudeStub(t);
+  process.env.CLAUDE_MCP_STUB_FAIL = "add";
+  const before = await trustFile();
+  const { status, body } = await add({ text: "npx -y @scope/lint-mcp", scope: "project", cwd: fresh, trustFolder: true, harnesses: ["pi", "claude"] });
+  assert.equal(status, 409);
+  assert.equal(body.reason, "claude-unwritable");
+  // The trustFolder path has no `target` of its own: the rollback must use the
+  // same project target the trust step wrote through.
+  assert.deepEqual((await readJson(projectPath(fresh))).mcpServers, {}, "pi's entry is rolled back");
+  assert.equal(body.trustKept, true, "the folder's trust is kept and said so");
+  assert.deepEqual(body.trust, { requiresTrust: true, trusted: true, decision: true, decisionPath: fresh, inherited: false });
+  assert.deepEqual(await trustFile(), { ...before, [fresh]: true }, "the trust itself stays");
+  // A retry meets the same refusal, never a name-taken from a half-written add.
+  const retry = await add({ text: "npx -y @scope/lint-mcp", scope: "project", cwd: fresh, trustFolder: true, harnesses: ["pi", "claude"] });
+  assert.deepEqual([retry.status, retry.body.reason], [409, "claude-unwritable"]);
+});
