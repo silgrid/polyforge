@@ -77,6 +77,7 @@ import re
 import secrets
 import shutil
 import signal
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
@@ -161,6 +162,8 @@ _NAME_UNSAFE = re.compile(r"[^a-zA-Z0-9_.-]+", re.ASCII)
 _INT = re.compile(r"[+-]?[0-9]+", re.ASCII)
 # a docker image ID as the engine answers it ({{.Id}})
 _IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}", re.ASCII)
+# a podman image ID as the engine answers it: the same digest, bare
+_BARE_IMAGE_ID = re.compile(r"[0-9a-f]{64}", re.ASCII)
 # a prepared image reference that can never be one: an option (a leading
 # -) or whitespace, which docker's reference grammar forbids — refused
 # before the engine is asked
@@ -415,12 +418,48 @@ def look_path_in(name: str, path: str) -> str:
     return ""
 
 
+def _image_identity(out: str, ref: str, engine: str) -> ImageIdentity:
+    """One ``image inspect`` answer's identity: the local ID line and the
+    RepoDigests JSON line, checked (the ID's exact shape is the engine's
+    own — docker answers ``sha256:<64 hex>``, the podman backend
+    normalizes its bare digest before this; engine names its failures)."""
+    lines = out.split("\n")
+    if not lines or not _IMAGE_ID.fullmatch(lines[0].strip()):
+        raise ContainerError("%s image inspect: %s answered no readable local image ID (%s)"
+                             % (engine, ref, json.dumps(out.strip())))
+    try:
+        digests = json.loads(lines[1].strip()) if len(lines) > 1 and lines[1].strip() else []
+    except ValueError as err:
+        raise ContainerError("%s image inspect: %s's RepoDigests are unreadable: %s" % (engine, ref, err)) from None
+    if digests is None:
+        digests = []
+    if not isinstance(digests, list) or not all(isinstance(d, str) for d in digests):
+        raise ContainerError("%s image inspect: %s's RepoDigests are unreadable" % (engine, ref))
+    return ImageIdentity(id=lines[0].strip(), repo_digests=list(digests))
+
+
+def _parse_labelled(out: str) -> Dict[str, str]:
+    """A ``ps --format '<id>\t<label>'`` answer: the container ids to the
+    named label's value."""
+    found: Dict[str, str] = {}
+    for line in out.split("\n"):
+        cid, _, val = line.rstrip("\r").partition("\t")
+        cid = cid.strip()
+        if cid:
+            found[cid] = val.strip()
+    return found
+
+
 class DockerCLI:
     """The docker command-line client. Every call is one ``docker`` process
     in its own process group (pfstep.proc) under the process's own
     environment (DOCKER_HOST and friends apply), bounded by op_timeout —
     but a build (the run's deadline) and a command's ``docker exec`` (its
     timeout)."""
+
+    # The engine's own name in its failures' texts ("docker build: …"):
+    # the backend a subclass names is the name its errors carry.
+    name = "docker"
 
     def __init__(self, bin: str = "docker", op_timeout: float = CONTAINER_OP_TIMEOUT) -> None:
         self.bin = bin or "docker"
@@ -458,25 +497,30 @@ class DockerCLI:
         if "\n" in msg:
             msg = msg[msg.rfind("\n") + 1:]
         if not msg:
-            raise ContainerError("docker %s: %s" % (args[0], why))
-        raise ContainerError("docker %s: %s: %s" % (args[0], why, msg))
+            raise ContainerError("%s %s: %s" % (self.name, args[0], why))
+        raise ContainerError("%s %s: %s: %s" % (self.name, args[0], why, msg))
 
     def available(self) -> None:
         if shutil.which(self.bin) is None:
-            raise ContainerError('the docker client "%s" is not found' % self.bin)
+            raise ContainerError('the %s client "%s" is not found' % (self.name, self.bin))
         out = self._run(["version", "--format", "{{.Server.Version}}"])
         if not out.strip():
-            raise ContainerError("docker version: the daemon reported no server version")
+            raise ContainerError("%s version: the daemon reported no server version" % self.name)
 
     def image_exists(self, tag: str) -> bool:
         return self._run(["image", "ls", "--quiet", "--filter", "reference=" + tag]).strip() != ""
 
-    def build_image(self, tag: str, dockerfile: bytes, labels: Mapping[str, str], log: IO[bytes], timeout: float) -> None:
-        """``docker build -``: the Dockerfile on stdin, no build context."""
-        args = ["build", "--tag", tag]
+    def _build_args(self, tag: str, labels: Mapping[str, str], extra: Sequence[str] = ()) -> List[str]:
+        """The build's argv beside the Dockerfile on stdin: the tags and
+        labels; extra splices in after ``build`` (a backend's own runtime
+        flags)."""
+        args = ["build", *extra, "--tag", tag]
         for k in sorted(labels):
             args += ["--label", k + "=" + labels[k]]
         args.append("-")
+        return args
+
+    def _run_build(self, args: Sequence[str], dockerfile: bytes, log: IO[bytes], timeout: float) -> None:
         log.flush()
         c = proc.run(
             [self.bin, *args],
@@ -487,18 +531,22 @@ class DockerCLI:
             merge_stderr=True,
         )
         if c.exit_code != 0 or c.error:
-            raise ContainerError("docker build: %s" % _failure(c))
+            raise ContainerError("%s build: %s" % (self.name, _failure(c)))
+
+    def build_image(self, tag: str, dockerfile: bytes, labels: Mapping[str, str], log: IO[bytes], timeout: float) -> None:
+        """``docker build -``: the Dockerfile on stdin, no build context."""
+        self._run_build(self._build_args(tag, labels), dockerfile, log, timeout)
 
     def image_env(self, tag: str) -> List[str]:
         out = self._run(["image", "inspect", "--format", "{{json .Config.Env}}", tag])
         try:
             env = json.loads(out.strip())
         except ValueError as err:
-            raise ContainerError("docker image inspect: unreadable environment: %s" % err) from None
+            raise ContainerError("%s image inspect: unreadable environment: %s" % (self.name, err)) from None
         if env is None:
             return []
         if not isinstance(env, list) or not all(isinstance(e, str) for e in env):
-            raise ContainerError("docker image inspect: unreadable environment: %s" % json.dumps(out.strip()))
+            raise ContainerError("%s image inspect: unreadable environment: %s" % (self.name, json.dumps(out.strip())))
         return list(env)
 
     def image_identity(self, ref: str) -> ImageIdentity:
@@ -511,19 +559,7 @@ class DockerCLI:
             if "No such image" in str(err):
                 raise ImageMissing(ref) from None
             raise
-        lines = out.split("\n")
-        if not lines or not _IMAGE_ID.fullmatch(lines[0].strip()):
-            raise ContainerError("docker image inspect: %s answered no readable local image ID (%s)"
-                                 % (ref, json.dumps(out.strip())))
-        try:
-            digests = json.loads(lines[1].strip()) if len(lines) > 1 and lines[1].strip() else []
-        except ValueError as err:
-            raise ContainerError("docker image inspect: %s's RepoDigests are unreadable: %s" % (ref, err)) from None
-        if digests is None:
-            digests = []
-        if not isinstance(digests, list) or not all(isinstance(d, str) for d in digests):
-            raise ContainerError("docker image inspect: %s's RepoDigests are unreadable" % ref)
-        return ImageIdentity(id=lines[0].strip(), repo_digests=list(digests))
+        return _image_identity(out, ref, self.name)
 
     def start_args(self, spec: ContainerSpec) -> List[str]:
         """The ``docker run`` arguments of spec (Go's DockerCLI.StartArgs)."""
@@ -566,7 +602,7 @@ class DockerCLI:
             raise
         cid = out.strip()
         if not cid:
-            raise ContainerError("docker run answered no container id")
+            raise ContainerError("%s run answered no container id" % self.name)
         # the keep-alive's pid file is what reap spares: wait until it exists
         try:
             self._run(["exec", cid, "sh", "-c", _WAIT_KEEP_ALIVE])
@@ -600,13 +636,7 @@ class DockerCLI:
         args = ["ps", "--all", "--no-trunc", "--format", "{{.ID}}\\t{{.Label \"" + key + "\"}}"]
         for k in sorted(labels):
             args += ["--filter", "label=" + k + "=" + labels[k]]
-        found: Dict[str, str] = {}
-        for line in self._run(args).split("\n"):
-            cid, _, val = line.rstrip("\r").partition("\t")
-            cid = cid.strip()
-            if cid:
-                found[cid] = val.strip()
-        return found
+        return _parse_labelled(self._run(args))
 
     def unused_volumes(self, name: str) -> List[str]:
         out = self._run(["volume", "ls", "--quiet", "--filter", "dangling=true", "--filter", "name=" + name])
@@ -619,13 +649,36 @@ class DockerCLI:
 
 
 class PodmanCLI(DockerCLI):
-    """The podman command-line client (polyforge#159): the same protocol
-    and argv shape as DockerCLI, with podman's own semantics at the
-    points the two engines differ — the missing-image answer, the bare
-    local image ID, the ps label template, the volume filter — and its
-    own build-time runtime wrapper and network setting (84-engine).
+    """The podman command-line client (polyforge#159, 84-engine): the same
+    protocol and argv shape as DockerCLI, with podman's own semantics at
+    the points the two engines differ —
+
+    - its missing-image answer is ``image not known`` (ImageMissing, the
+      same never-pulled contract as docker's "No such image");
+    - its ``image inspect`` answers the bare 64-hex digest, normalized
+      here to the ``sha256:<64 hex>`` every caller and the cache volume's
+      generation speaks (an already-prefixed one keeps its one prefix);
+    - its ``ps`` label placeholder is ``{{.Labels "…"}}``, not docker's
+      ``{{.Label "…"}}``;
+    - a volume listing cannot carry the dangling and the name filter to
+      the engine as one AND: the engine answers the dangling ones only
+      and the name's containment is this side's — an in-use volume
+      never reaches the answer whatever the engine's multi-filter
+      semantics (prune_cache_volumes' second guard stands);
+
+    - a build's containers run under a private crun wrapper
+      (``--no-new-keyring``, 84's rootful choice): generated per build,
+      passed as ``--runtime``, removed when the build ends however it
+      ended — never a configured runtime path, never one an image
+      pre-installed; and
+    - a verification container starts on the default bridge network,
+      pinned by ``--network bridge`` so a machine whose containers.conf
+      moved the default does not drift.
+
     Selected by ``PF_CONTAINER_ENGINE=podman`` (``engine_for_env``);
     unset, the docker client is the backend exactly as before."""
+
+    name = "podman"
 
     def __init__(self, bin: str = "podman", op_timeout: float = CONTAINER_OP_TIMEOUT) -> None:
         super().__init__(bin, op_timeout)
@@ -639,6 +692,58 @@ class PodmanCLI(DockerCLI):
         if not p:
             p = shutil.which("podman") or "podman"
         return cls(bin=p)
+
+    def image_identity(self, ref: str) -> ImageIdentity:
+        try:
+            out = self._run(["image", "inspect", "--format", "{{.Id}}\n{{json .RepoDigests}}", ref])
+        except ContainerError as err:
+            # podman's own missing-image answer, not an engine failure —
+            # the same contract as docker's "No such image": never pulled,
+            # the run that asked is not judged (ImageMissing's)
+            if "image not known" in str(err):
+                raise ImageMissing(ref) from None
+            raise
+        lines = out.split("\n")
+        if lines and _BARE_IMAGE_ID.fullmatch(lines[0].strip()):
+            lines[0] = "sha256:" + lines[0].strip()
+        return _image_identity("\n".join(lines), ref, self.name)
+
+    def build_image(self, tag: str, dockerfile: bytes, labels: Mapping[str, str], log: IO[bytes], timeout: float) -> None:
+        """``podman build -`` under the private crun wrapper: generated
+        here, executable, removed when the build ends however it ended."""
+        runtime_dir = tempfile.mkdtemp(prefix="pf-podman-runtime-")
+        wrapper = os.path.join(runtime_dir, "crun-wrapper")
+        try:
+            with open(wrapper, "w", encoding="utf-8") as f:
+                f.write('#!/bin/sh\nexec crun --no-new-keyring "$@"\n')
+            os.chmod(wrapper, 0o755)
+            self._run_build(self._build_args(tag, labels, ("--runtime", wrapper)), dockerfile, log, timeout)
+        finally:
+            shutil.rmtree(runtime_dir, ignore_errors=True)
+
+    def start_args(self, spec: ContainerSpec) -> List[str]:
+        # rootful podman's default network is the bridge (84's choice); the
+        # flag pins it, so a machine whose containers.conf moved the
+        # default does not drift — docker's args carry no network flag
+        args = super().start_args(spec)
+        at = args.index("--log-driver") + 2
+        return args[:at] + ["--network", "bridge"] + args[at:]
+
+    def list_labelled(self, labels: Mapping[str, str], key: str) -> Dict[str, str]:
+        # docker's {{.Label "…"}} is not a template podman answers; its
+        # own label value placeholder is {{.Labels "…"}}
+        args = ["ps", "--all", "--no-trunc", "--format", '{{.ID}}\t{{.Labels "%s"}}' % key]
+        for k in sorted(labels):
+            args += ["--filter", "label=" + k + "=" + labels[k]]
+        return _parse_labelled(self._run(args))
+
+    def unused_volumes(self, name: str) -> List[str]:
+        # the AND is this side's: the engine answers the dangling ones
+        # only (docker's own name= filter is a containment; the same rule
+        # here), so a multi-filter semantics change in the engine cannot
+        # hand an in-use volume to the caller
+        out = self._run(["volume", "ls", "--quiet", "--filter", "dangling=true"])
+        return sorted(v.strip() for v in out.split("\n") if v.strip() and name in v)
 
 
 def engine_for_env(environ: Optional[Mapping[str, str]] = None) -> DockerCLI:
