@@ -155,10 +155,13 @@ test("a cwd outside the allowed roots answers 403, a relative one 400", async ()
 });
 
 test("a cross-site request is refused by the API guard", async () => {
-  const response = await listRoute.GET(new Request("http://localhost/api/harness", { headers: { host: "localhost", "sec-fetch-site": "cross-site" } }));
+  const crossSite = (url) => new Request(`http://localhost${url}`, { headers: { host: "localhost", "sec-fetch-site": "cross-site" } });
+  const response = await listRoute.GET(crossSite("/api/harness"));
   assert.equal(response.status, 403);
-  const concept = await conceptRoute.GET(request("/api/harness/pi/auth"), { params: Promise.resolve({ harness: "pi", concept: "auth" }) });
-  assert.notEqual(concept.status, 200);
+  const concept = await conceptRoute.GET(crossSite("/api/harness/pi/auth"), { params: Promise.resolve({ harness: "pi", concept: "auth" }) });
+  assert.equal(concept.status, 403);
+  const comparison = await compareRoute.GET(crossSite("/api/harness/compare"));
+  assert.equal(comparison.status, 403);
 });
 
 test("the compare route answers both fields, one field, and refuses an unknown one", async () => {
