@@ -99,6 +99,7 @@ one partition; `internal/polyforge/cellcfg/schema.go` owns it):
 | `[workspace."<path>"]` | table | Cell | next-claim | the Cell's repo mapping |
 | `summarize.models` / `.language` / `.interval_sec` | `[summarize]` | Cell | live | summarize lane |
 | `[memory_policy."<path>"."<entry>"]` | table family | Cell | next-claim | wrap-summary policy |
+| `step_tiers.<tier>` | `[step_tiers]` | Host-only | live | the step tier catalog (polyforge#143): one row per tier, its recommended `<harness>:<model>[:<effort>]` candidates — the machine-level list doctor checks a workspace's user-written candidates against, and the source Pi Web's 步骤能力档 page edits (85b2). Tier names follow the lane tier grammar and are not limited to a lane's `tiers`; the conventional `default` tier carries the mainline models. [Section](#step_tiers--the-step-tier-catalog) |
 
 The CLI resolves a Cell-scoped command's Cell from `--profile`, then
 `PF_PROFILE`, then the cwd matched against the Host's effective workspace
@@ -340,6 +341,7 @@ concurrent writers serialize on a file lock.
 ```
 pf config get <key>              # effective value + source (flag|env|file|default)
 pf config set <key> <value>      # set a flat key, a [daemon] key, a [summarize] key or a whole [workspace] section
+pf config set step_tiers.<tier> '["pi:prov/model", …]' --host   # one step tier's recommended candidates (the [step_tiers] catalog)
 pf config set '[workspace."/path"]' projects=a,b,c
 pf config set summarize.language English
 pf config set memory_policy.<default|project>.record|skip '["a", "b"]' --workspace /path   # or --cwd <dir>
@@ -353,12 +355,17 @@ pf config migrate                # move retired .polyforge.yaml summarize:/memor
 Keys are addressed by their flat name (`server`), their `[daemon]` key
 name (`max_concurrent_jobs`), their `[summarize]` key name
 (`summarize.models`, `summarize.language`, `summarize.interval_sec`), a
+step_tiers catalog tier (`step_tiers.<tier>` — flat, machine-level and
+Host-only: `--host` or the default Cell writes it, a named Cell's scope
+refuses it; the value is a JSON list of `<harness>:<model>[:<effort>]`
+candidates, normalized as written), a
 memory_policy list (`memory_policy.<default|project>.record|skip`) or as a
-whole `[workspace."<path>"]` section. The `summarize.*` keys are flat
+whole `[workspace."<path>"]` section. The `summarize.*` and `step_tiers.*`
+keys are flat
 machine-level keys and refuse `--workspace`/`--cwd`; a memory_policy key
 needs exactly one of them (`--workspace` a mapped path, `--cwd` resolved
 through the mapping) and writes only that path's entry, taking its value as
-a JSON list of strings. `pf config get` refuses both families and points at
+a JSON list of strings. `pf config get` refuses all three families and points at
 `pf config list`, their one read face. `api_key` is write-only: pass it on stdin
 (`printf '%s\n' "$KEY" | pf config set api_key`; a tty prompts with echo
 off), never on argv, and no `get`/`list`/error/event ever emits the
@@ -374,7 +381,7 @@ Reload classes (one class per key):
 
 | Class | Keys | What a reload does |
 | --- | --- | --- |
-| live | `max_concurrent_jobs`, `max_concurrent_tasks`, `max_concurrent_bars`, `bar_load_threshold`, `command_path`, `step_timeout`, `stall_window`, `agent_language`, `claude_bin`, `transient_error_patterns`, `model_error_patterns`, `slow_model_median_latency`, `slow_model_p90_latency`, `summarize.models`, `summarize.language`, `summarize.interval_sec` | applied in the running daemon (the summarize lane's next call uses the new table; the failure-classification lists reach the next text classification and the slow-model bounds reach the next tick's judgement) |
+| live | `max_concurrent_jobs`, `max_concurrent_tasks`, `max_concurrent_bars`, `bar_load_threshold`, `command_path`, `step_timeout`, `stall_window`, `agent_language`, `claude_bin`, `transient_error_patterns`, `model_error_patterns`, `slow_model_median_latency`, `slow_model_p90_latency`, `summarize.models`, `summarize.language`, `summarize.interval_sec`, the whole `[step_tiers]` catalog | applied in the running daemon (the summarize lane's next call uses the new table; the failure-classification lists reach the next text classification and the slow-model bounds reach the next tick's judgement; the catalog has no daemon consumer — the reload classifies it `applied` live and the readers (`pf doctor`, `pf config list`) take the new value with no restart) |
 | next-claim | the `[workspace]` mapping; the whole `[memory_policy]` family | mapping additions usable at the next dispatch (a removal/re-route with an in-flight job is refused and the work items are listed); the claim that follows writes the new effective memory policy into its capsule, a running job keeps the one its claim wrote |
 | connection-change | `server`, `api_key` | identity-stable: a changed `server` is refused ("create a new profile"; nothing applied); a changed `api_key` is verified with one heartbeat first — a different Hub user is refused, an unverifiable key is not taken for the same user (refused, retry later); a verified same-identity rotation is reported `pending-drain`: the Cell refuses new submits, automatic claims **and task spawns** (`DAEMON-409` naming the pending connection rotation; nothing is queued) until it is safe-idle (no job record of any state, nothing queued or in flight, no running one-off task), then switches by itself with no second reload. Each admission's pending check and its enqueue or slot reservation are one step against the switch's idle decision, so an admission is either refused or seen by the switch, which then waits. The effective and pending credential are persisted in the Cell's `effective-connection.json` (0600, never echoed); the record is written at the Cell's first start. Every assembly (Host start, `pf cell add`/`repair`) checks the file's normalized `server` against the Cell's recorded identity (`identity.json`): another server refuses the Cell with the new-profile route (an invalid default Cell blocks the Host start). A Host restart starts on the effective key and treats a differing file `api_key` as a pending change through the same identity check — a newer file value never switches the Cell's user nor bypasses the idle gate; one that is not adopted is reported on `GET /profiles`. An `api_key` removed from the file (`pf config unset api_key`, or a hand edit) is never shadowed by the persisted copy: a reload reports it `pending-restart` and on `GET /profiles`, drops a pending rotation, and the running Cell keeps its effective key until the Host restarts; the next start deletes the record and the Cell holds no credential — a named Cell is invalid (`api_key is not set`), the default Cell reads degraded naming the missing key, claims nothing and the proxy refuses its business (`DAEMON-409`); a key of the same Hub user set later is taken at once on reload (`applied`: nothing on the Hub to drain). A heartbeat answered for another Hub user than the recorded one degrades the Cell (claims stop) and the data-plane proxy refuses business on it (`DAEMON-409`) |
 | restart-only | `daemon_socket`, `harness_root`, `operator_agent_dir`, `python` | reported pending; the running daemon keeps its value and a restart applies it |
@@ -412,7 +419,11 @@ effective value — `summarize.models` a list (absent with no `[summarize]`
 table: the lane is off), `summarize.language` / `summarize.interval_sec` the
 declared value or the documented default (`中文` / `60`, `source:
 "default"`) — with schemas `{kind:"model-list"}`, `{kind:"string"}` and
-`{kind:"int",min:10,max:3600}`. The document also carries
+`{kind:"int",min:10,max:3600}`. Every `[step_tiers]` tier answers one item
+`step_tiers.<tier>` too — its candidate list, `class: "live"`, schema
+`{kind:"model-list"}`, `source: "file"` (absent tiers are not listed; the
+`--host` scope and the default Cell's list carry them, a named Cell's does
+not — the catalog is a Host-only family). The document also carries
 `file:{path,sha256,exists}` for the CAS precondition and one top-level
 `memory_policy` object keyed by mapped workspace path: per path the
 `default` entry's effective lists (declared, else built-in) and every
@@ -558,6 +569,49 @@ The daemon serves the table from its loaded cli.toml snapshot (class
 uses the new value; a hand edit needs `pf config reload`. No per-request
 file read happens. No table leaves the lane silently off — no call, no
 error, no doctor row.
+
+### `[step_tiers]` — the step tier catalog
+
+The step tiers' model-candidate catalog (polyforge#143, 85b): the one
+machine-level list of which models each step tier should run, defined
+once in the Host file so daemon-side checkers, `pf doctor` and Pi Web's
+step-tier page (85b2) all read the same answer. Host-only and `live`:
+the table lives in `cli.toml`, a named Cell's file refuses it, and
+`pf config set step_tiers.*` needs no daemon restart.
+
+```toml
+[step_tiers]
+default = ["pi:prov/main-model", "claude:claude-sonnet-5-5"]  # the mainline tier
+cheap   = ["pi:prov/flash-model"]
+```
+
+One table, at most once per file. Every row is one tier — the key is the
+tier name (`^[a-z][a-z0-9-]{0,39}$`, the lane tier grammar, so a catalog
+tier and a lane `defaults.tiers` tier of the same name are the same
+tier) — and the value a non-empty array of unique
+`<harness>:<model>[:<effort>]` candidates, as strict as a `[summarize]`
+`models` list. The tier names are NOT limited to a lane's `tiers`: a
+catalog tier no installed lane declares is fine (doctor reports it as
+information), and the conventional `default` tier is where the mainline
+models go — the default model chain has no tier name of its own. The
+candidates are stored per harness: a model's id differs between
+harnesses, and pf cannot express "apply to every harness" — Pi Web (85b2)
+expands that per harness before it writes, and reads the per-harness
+entries back as a set.
+
+The catalog is a recommendation, never an admission rule: a candidate
+outside it still runs (`pf override` does not read the catalog; a pi
+candidate's admission stays the Cell's `step-agent/models.json` hard
+check, `DAEMON-400` — the [daemon section](commands.md#the-daemon-pf-daemon)).
+`pf doctor`'s `step tiers catalog` row warns when a user-written
+candidate (a workspace yaml `steps.*.models` or `tiers.*.models` list, or
+the `[summarize]` models) is not in the catalog, and skips while the
+catalog is empty. A table with no rows is an empty catalog; no table at
+all is the same state.
+
+An old `pf` (before this release) refuses the whole `cli.toml` on the
+unknown section — see the upgrade notes ([../upgrade.md](../upgrade.md))
+before downgrading or running mixed versions.
 
 ### `[memory_policy]` — the wrap-summary policy
 

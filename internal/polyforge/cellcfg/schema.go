@@ -38,6 +38,9 @@ var Keys = []Key{
 	{"max_concurrent_tasks", "daemon", ScopeHost, ClassLive},
 	{"max_concurrent_bars", "daemon", ScopeHost, ClassLive},
 	{"bar_load_threshold", "daemon", ScopeHost, ClassLive},
+	// polyforge#143 (85b): the [step_tiers] model-candidate catalog — one
+	// row per tier name, looked up by its section like [workspace].
+	{"step_tiers", "step_tiers", ScopeHost, ClassLive},
 	// polyforge#51: the additional failure-classification pattern lists and
 	// the slow-model latency thresholds — Host-configured so a gateway's
 	// new error phrasing or a slower model is adopted without a release.
@@ -70,13 +73,16 @@ var Keys = []Key{
 }
 
 // Lookup answers the row of (section, name); ok=false for an unknown key.
-// A [workspace] or [memory_policy] table row is looked up by its section.
+// A [workspace] or [memory_policy] table row is looked up by its section,
+// and so is a [step_tiers] row: its tier names are not a fixed set (a
+// catalog tier needs only the lane tier grammar, Q1 A), so the section
+// alone identifies the family.
 func Lookup(section, name string) (Key, bool) {
 	for _, k := range Keys {
 		if k.Section != section {
 			continue
 		}
-		if k.Name == name || section == "workspace" || section == "memory_policy" {
+		if k.Name == name || section == "workspace" || section == "memory_policy" || section == "step_tiers" {
 			return k, true
 		}
 	}
