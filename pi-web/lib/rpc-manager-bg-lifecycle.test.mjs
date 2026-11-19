@@ -156,13 +156,19 @@ test("ending the wrapper (Stop's forced idle reap) leaves the background task ru
   usedSessionIds.add(sessionId);
   await started.session.waitUntilReady();
 
-  const info = runtime.run(sessionId, agentDir, "sleep 2");
+  const info = runtime.run(sessionId, agentDir, "echo survived");
   startedTasks.push(info);
   await started.session.destroy();
-  // The wrapper is gone; the task it started is not.
-  assert.equal(runtime.status(sessionId, info.id)[0].status, "running");
-  runtime.stop(sessionId, info.id);
-  await pollUntil(() => runtime.status(sessionId, info.id)[0].status === "stopped", 5_000, "the orphaned task to stop");
+  // The wrapper is gone; the task it started is not: it runs to its natural
+  // end and succeeds, which no collateral kill could let it do.
+  const deadline = Date.now() + 15_000;
+  let task = runtime.status(sessionId, info.id)[0];
+  while (task.status !== "succeeded" && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    task = runtime.status(sessionId, info.id)[0];
+  }
+  assert.equal(task.status, "succeeded", "the orphaned task runs to its natural end");
+  assert.equal(task.exitCode, 0);
 });
 
 test("a wrapper that is no longer alive is refused a Chat-only rebuild under running work", async (t) => {
