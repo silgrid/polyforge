@@ -35,6 +35,9 @@ import { applyClaudePermissionChange, claudeUserSettingsPath, patchClaudeUserSet
 import { readJsonRecord } from "./harness/redact";
 import { patchPiWebSettings, readPiWebSettingsRecord } from "./pi-web-settings";
 import { writeClaudePreferences, type ClaudePreferences } from "./claude-preferences";
+
+/** The preference keys the claude object can hold (its no-native-home fields). */
+const PREFERENCE_KEYS = ["approvalChannel", "pushReminders", "includeHookEvents"] as const;
 import type { HarnessReadContext } from "./harness/adapter";
 
 /** The migration's outcome: it ran (with its summary), or it did not (with the reason). */
@@ -121,6 +124,38 @@ async function runMigration(options: ClaudeMigrationOptions, agentDir: string): 
   const retired = retiredClaudeSelfStoredPaths(agentDir);
   const oldSettings = readOldRecord(retired.settings);
   const oldPermissions = readOldRecord(retired.permissions);
+  const migrated: string[] = [];
+
+  // The preference fields migrate FIRST, ungated (review r1#3): they have no
+  // claude-native home, so no version gate applies — deferring them would
+  // silently reset a user's channel, push and hook settings to the defaults
+  // for as long as the native writes defer. A key the claude object already
+  // holds is never overwritten, so a preference changed during a deferral
+  // survives the completing run.
+  const storedClaude = readPiWebSettingsRecord(agentDir).claude;
+  const storedPreferenceKeys = isRecord(storedClaude)
+    ? new Set(PREFERENCE_KEYS.filter((key) => typeof storedClaude[key] !== "undefined"))
+    : new Set<string>();
+  const preferences: Partial<ClaudePreferences> = {};
+  if (oldSettings !== null && typeof oldSettings.includeHookEvents === "boolean" && !storedPreferenceKeys.has("includeHookEvents")) {
+    preferences.includeHookEvents = oldSettings.includeHookEvents;
+    migrated.push("includeHookEvents");
+  }
+  if (oldPermissions !== null) {
+    const channel: ClaudePermissionMode = oldPermissions.mode === "ask" || oldPermissions.mode === "deny"
+      ? oldPermissions.mode
+      : "ask";
+    if (!storedPreferenceKeys.has("approvalChannel")) {
+      preferences.approvalChannel = channel;
+      migrated.push("mode");
+    }
+    if (typeof oldPermissions.push === "boolean" && !storedPreferenceKeys.has("pushReminders")) {
+      preferences.pushReminders = oldPermissions.push;
+      migrated.push("push");
+    }
+  }
+  if (Object.keys(preferences).length > 0) await writeClaudePreferences(preferences, agentDir);
+
   if (!existsSync(retired.settings) && !existsSync(retired.permissions)) {
     // Nothing to migrate: only the marker is missing (an interrupted replay,
     // or a machine that never had the old files).
@@ -129,7 +164,8 @@ async function runMigration(options: ClaudeMigrationOptions, agentDir: string): 
   }
 
   // The write gate: claude's version must be detected and known before any
-  // native write (Q2 C). Unknown or absent: defer, keep everything, retry later.
+  // NATIVE write (Q2 C). Unknown or absent: defer those — the old files stay
+  // and the next run retries (the preference fields above already moved).
   const binary = options.claudeBinary ?? findClaudeBinary();
   const ctx: HarnessReadContext = {
     claudeConfigDir: configDir,
@@ -139,19 +175,18 @@ async function runMigration(options: ClaudeMigrationOptions, agentDir: string): 
   };
   const probe = await createClaudeAdapter().probeVersion(ctx);
   if (probe.version === null || !probe.known) {
-    return { ran: false, reason: `deferred: ${probe.reason ?? `claude version ${probe.version ?? "unknown"} is not known`}` };
+    return { ran: false, reason: `deferred (the preference fields already moved): ${probe.reason ?? `claude version ${probe.version ?? "unknown"} is not known`}` };
   }
 
   // Which fields still need their native write: a native value that already
   // exists wins and is never overwritten (the single source of truth).
   const nativeRecord = readJsonRecord(claudeUserSettingsPath(configDir)) ?? {};
-  const migrated: string[] = [];
-  const channel: ClaudePermissionMode = oldPermissions !== null && (oldPermissions.mode === "ask" || oldPermissions.mode === "deny")
-    ? oldPermissions.mode
-    : "ask";
   const nativeHasDefaultMode = isRecord((nativeRecord as Record<string, unknown>).permissions)
     && (nativeRecord as { permissions?: Record<string, unknown> }).permissions?.defaultMode !== undefined;
   if (!nativeHasDefaultMode) {
+    const channel: ClaudePermissionMode = oldPermissions !== null && (oldPermissions.mode === "ask" || oldPermissions.mode === "deny")
+      ? oldPermissions.mode
+      : "ask";
     const launch = storedLaunchMode(oldSettings, channel);
     if (launch !== null) {
       const change: ClaudePermissionChange = { kind: "approvalMode", mode: launch };
@@ -167,22 +202,6 @@ async function runMigration(options: ClaudeMigrationOptions, agentDir: string): 
     if (!applied.ok) return { ran: false, reason: `deferred: ${applied.reason}` };
     migrated.push("customModels");
   }
-
-  // The preference fields always migrate (they have no native home to conflict with).
-  const preferences: Partial<ClaudePreferences> = {};
-  if (oldSettings !== null && typeof oldSettings.includeHookEvents === "boolean") {
-    preferences.includeHookEvents = oldSettings.includeHookEvents;
-    migrated.push("includeHookEvents");
-  }
-  if (oldPermissions !== null) {
-    preferences.approvalChannel = channel;
-    migrated.push("mode");
-    if (typeof oldPermissions.push === "boolean") {
-      preferences.pushReminders = oldPermissions.push;
-      migrated.push("push");
-    }
-  }
-  if (Object.keys(preferences).length > 0) await writeClaudePreferences(preferences, agentDir);
 
   // The fields landed and verified: delete both old files, then mark. A crash
   // between the two replays as the "nothing to migrate" path above.
