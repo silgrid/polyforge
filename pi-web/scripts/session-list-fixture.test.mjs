@@ -101,6 +101,28 @@ test("every claude session is registered in the synthetic index", (t) => {
   }
 });
 
+test("the corpus is reproducible per seed and differs across seeds", (t) => {
+  const first = generate(t, ["--seed", "7"]);
+  const secondRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pi-web-fixture-seed-"));
+  t.after(() => fs.rmSync(secondRoot, { recursive: true, force: true }));
+  execFileSync(process.execPath, [
+    script, "--root", secondRoot,
+    "--pi-files", "9", "--pi-bytes", "400000",
+    "--claude-files", "4", "--claude-bytes", "200000",
+    "--large-file-min-bytes", "30000", "--project-dirs", "3",
+    "--seed", "7", "--manifest", path.join(secondRoot, "manifest.json"),
+  ], { encoding: "utf8" });
+  const same = JSON.parse(fs.readFileSync(path.join(secondRoot, "manifest.json"), "utf8"));
+  assert.deepEqual(same.pi.map((entry) => entry.sha256), JSON.parse(fs.readFileSync(path.join(first, "manifest.json"), "utf8")).pi.map((entry) => entry.sha256),
+    "the same seed regenerates the same corpus");
+
+  const other = generate(t, ["--seed", "8"]);
+  const otherManifest = JSON.parse(fs.readFileSync(path.join(other, "manifest.json"), "utf8"));
+  const firstManifest = JSON.parse(fs.readFileSync(path.join(first, "manifest.json"), "utf8"));
+  assert.notDeepEqual(otherManifest.pi.map((entry) => entry.sha256), firstManifest.pi.map((entry) => entry.sha256),
+    "a different seed generates a different corpus");
+});
+
 test("the generator refuses nonsense arguments", () => {
   assert.throws(() => execFileSync(process.execPath, [script, "--root", "/tmp", "--manifest", "/tmp/m.json", "--pi-files", "0"], { encoding: "utf8" }));
   assert.throws(() => execFileSync(process.execPath, [script, "--manifest", "/tmp/m.json"], { encoding: "utf8" }));
