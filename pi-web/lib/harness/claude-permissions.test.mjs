@@ -234,7 +234,7 @@ test("write(permission) the gate: an unknown version, no claude on PATH and a ma
   const unknown = await claudeAdapter.write("permission", { approvalMode: "auto" }, fixtureCtx({ claudeBinary: unknownBinary }));
   assert.equal(unknown.status, "refused");
   assert.ok(unknown.reason.includes("3.0.0"), unknown.reason);
-  const noBinary = await claudeAdapter.write("permission", { approvalMode: "auto" }, fixtureCtx({ claudeBinary: undefined }));
+  const noBinary = await claudeAdapter.write("permission", { approvalMode: "auto" }, fixtureCtx({ claudeBinary: path.join(scratch, "no-such-bin", "claude") }));
   assert.equal(noBinary.status, "refused");
   fs.writeFileSync(path.join(configDir, "settings.json"), "[1, 2]");
   const malformed = await claudeAdapter.write("permission", { approvalMode: "auto" }, fixtureCtx());
