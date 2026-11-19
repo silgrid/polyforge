@@ -324,7 +324,13 @@ export function createBgTaskController(deps: BgRuntimeDeps): BgTaskController {
         pgid: supervisor.pgid,
       };
       const task: InternalTask = { info, supervisor, wakePending: false };
-      persist(root, info);
+      try {
+        persist(root, info);
+      } catch (error) {
+        // A registry that cannot be written must not leak a running group.
+        void supervisor.stop().catch(() => undefined);
+        throw error;
+      }
       tasks.set(id, task);
       void supervisor.done.then((end) => settleTerminal(task, end));
       emitUpdate(sessionId);
