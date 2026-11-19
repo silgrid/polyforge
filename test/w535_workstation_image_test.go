@@ -337,6 +337,9 @@ type w535ComposeService struct {
 	Privileged  bool              `yaml:"privileged"`
 	Devices     []string          `yaml:"devices"`
 	Pid         string            `yaml:"pid"`
+	Networks    map[string]struct {
+		Aliases []string `yaml:"aliases"`
+	} `yaml:"networks"`
 }
 
 // w535Compose is the compose file's pinned shape.
@@ -545,13 +548,35 @@ func TestWorkstationCompose(t *testing.T) {
 		t.Fatalf("polyforge#161: https-front must publish the HTTPS port 443, got %v", front.Ports)
 	}
 	// the front terminates TLS with its own local CA and proxies the
-	// workstation's Pi Web port — the pinned Caddyfile says both.
+	// workstation's Pi Web port. The SITE ADDRESS must be configurable:
+	// a hostname in caddy's site address serves only requests whose
+	// Host/SNI matches it (review r2#1 — the first cut hardcoded
+	// `workstation:443`, which serves no request the documentation's
+	// `https://<host>:8443` shape ever makes), and the proxy target must
+	// resolve under BOTH boot modes.
 	caddy := w535Deliverable(t, "dist/workstation/Caddyfile")
+	if !strings.Contains(caddy, "{$WORKSTATION_HTTPS_HOST:localhost} {") {
+		t.Fatal("polyforge#161: the Caddyfile's site address must be the configurable {$WORKSTATION_HTTPS_HOST:localhost} — caddy serves only the hostname the site address names")
+	}
+	if strings.Contains(caddy, "workstation:443 {") {
+		t.Fatal("polyforge#161: the Caddyfile must not hardcode workstation:443 as its site address — the operator accesses the front by their own hostname")
+	}
 	if !strings.Contains(caddy, "reverse_proxy workstation:30141") {
 		t.Fatal("polyforge#161: the Caddyfile must reverse_proxy the workstation service's Pi Web port 30141")
 	}
 	if !strings.Contains(caddy, "tls internal") {
 		t.Fatal("polyforge#161: the Caddyfile must terminate TLS with caddy's internal CA (tls internal) — no external cert flow was asked for")
+	}
+	if front.Environment["WORKSTATION_HTTPS_HOST"] != "${WORKSTATION_HTTPS_HOST:-localhost}" {
+		t.Fatalf("polyforge#161: https-front must carry WORKSTATION_HTTPS_HOST=${WORKSTATION_HTTPS_HOST:-localhost} so the site address follows the operator's hostname, got %q", front.Environment["WORKSTATION_HTTPS_HOST"])
+	}
+	// the proxy target resolves under both boot modes: every workstation
+	// service carries the `workstation` network alias (the aihub variant
+	// has no container_name of that name).
+	for name, s := range map[string]w535ComposeService{"workstation": svc, "workstation-aihub": aihub} {
+		if !contains(s.Networks["default"].Aliases, "workstation") {
+			t.Fatalf("%s: the boot service must carry the `workstation` network alias — the https front reverse-proxies that name (review r2#1)", name)
+		}
 	}
 }
 
