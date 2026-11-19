@@ -132,7 +132,7 @@ from pfstep import progress  # noqa: E402
 from pfstep import scoped_plan  # noqa: E402
 from pfstep.scoped_plan import append_new, base_branch_of, engine_argv, fallback_reasons, plan_light  # noqa: E402
 from pfstep import targetbranch  # noqa: E402
-from pfstep.analysis import Analysis, AnalysisDecl, missing_selected_problem, read_analysis, selected_problem, static_problem  # noqa: E402
+from pfstep.analysis import Analysis, AnalysisDecl, read_analysis, selected_problem, static_problem  # noqa: E402
 from pfstep.carries import file_carries, glob_match  # noqa: E402
 from pfstep.completion import completion_proof, harness_command, read_go_harness  # noqa: E402
 from pfstep.deadline import default_deadline_for  # noqa: E402
@@ -440,9 +440,7 @@ class Verification:
         # the analysis's listed tests: the first `limit` run beside the
         # plan, the tail cut and named (the union is add-only); its machine
         # selection records are judged by the same shared validator the
-        # build close's own check runs (pfstep/analysis.selected_problem) —
-        # but only a run given the analysis demands them: without
-        # --analysis no missing record is this run's to report
+        # build close's own check runs (pfstep/analysis.selected_problem)
         an = analysis or Analysis()
         self.analysis_given = analysis is not None
         self.analysis_taken, self.analysis_cut = an.taken()
@@ -1248,15 +1246,16 @@ class Verification:
                     analysis_runs.append(rec)
                     commands.append(crep)
                 checks.extend(test_file_checks(rr))
-                # the analysis's machine selection record of rr: the one
-                # shared validator (pfstep/analysis), the head it is judged
-                # at being the tree this run verifies
+                # the analysis's machine selection record of rr, when it
+                # carries one: the one shared validator (pfstep/analysis),
+                # the head it is judged at being the tree this run
+                # verifies. Whether a touched repo carries one at all is
+                # no machine question (the owner's Q1 ruling: the build
+                # step's own text demands the record, review judges its
+                # absence; a full-only repo has none to carry)
                 sel = self.analysis_selected.get(rr.name)
-                head = rr.merge.head if rr.merge is not None else ""
-                if sel is None:
-                    if rr.touched and self.analysis_given:
-                        checks.append(check(rr.name + ":selected", "fail", missing_selected_problem(rr.name)))
-                else:
+                if sel is not None:
+                    head = rr.merge.head if rr.merge is not None else ""
                     problem = selected_problem(sel, head)
                     checks.append(check(rr.name + ":selected", "fail" if problem else "pass",
                                         problem or ("the selection record of " + short(sel.head))))

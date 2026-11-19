@@ -273,16 +273,16 @@ class AnalysisTest(unittest.TestCase):
     # validator the close check runs, judged against the tree this run
     # verifies
 
-    def test_a_touched_repo_without_a_selected_record_fails_its_check(self) -> None:
+    def test_a_missing_selected_section_adds_no_check(self) -> None:
+        """The record's presence is the build step's own rule and review's
+        judgment (the owner's Q1 ruling), never the gate's: no check
+        appears for a repo whose analysis carries no record."""
         fx, eng = analysis_fixture(self.root)
         path = analysis_file(fx, {"tests": []}, selected=False)
         r = self.run_analysis(fx, eng, path)
-        self.assertEqual(r.exit, 1, r.result.get("summary"))
-        ck = self.doc(r).get("checks", [])
-        sel = [c for c in ck if c["name"] == "app:selected"]
-        self.assertEqual(len(sel), 1, ck)
-        self.assertEqual(sel[0]["status"], "fail", sel[0])
-        self.assertIn("carries no selected record", sel[0].get("detail", ""))
+        self.assertEqual(r.exit, 0, r.result.get("summary"))
+        sel = [c for c in self.doc(r).get("checks", []) if c["name"] == "app:selected"]
+        self.assertEqual(sel, [])
 
     def test_a_stale_selected_head_fails_its_check(self) -> None:
         fx, eng = analysis_fixture(self.root)

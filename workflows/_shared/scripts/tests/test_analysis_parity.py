@@ -151,17 +151,14 @@ class AnalysisParityTest(unittest.TestCase):
 
     # -- the machine selection records' parity (polyforge#164)
 
-    def test_a_missing_selected_record_is_red_on_both_sides(self) -> None:
+    def test_a_missing_selected_section_is_no_machines_red_on_either_side(self) -> None:
+        """The record's presence is the build step's own rule and review's
+        judgment (the owner's Q1 ruling), so neither caller reports one:
+        no selected entries, no app:selected check."""
         fcode, fres, vcode, vdoc = self.both({"tests": []}, selected=False)
-        self.assertEqual((fcode, vcode), (1, 1))
-        sel = ((fres.get("details") or {}).get("selected") or [])[0]
-        self.assertEqual(sel["status"], "fail")
-        self.assertIn("carries no selected record", sel["problem"])
-        vchecks = self.verify_checks(vdoc)
-        self.assertEqual(vchecks["app:selected"]["status"], "fail", vchecks["app:selected"])
-        self.assertIn("carries no selected record", vchecks["app:selected"]["detail"])
-        self.assertIn(sel["problem"], vchecks["app:selected"]["detail"],
-                      "one implementation: the close check's problem text sits verbatim in the gate's detail")
+        self.assertEqual((fcode, vcode), (0, 0))
+        self.assertEqual((fres.get("details") or {}).get("selected") or [], [])
+        self.assertNotIn("app:selected", self.verify_checks(vdoc))
 
     def test_a_stale_selected_head_is_red_on_both_sides(self) -> None:
         doc = {"tests": [], "selected": {"app": selected_record(self.fx, head="0" * 40)}}

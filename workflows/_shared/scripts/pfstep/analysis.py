@@ -174,15 +174,6 @@ def selected_problem(d: SelectedDecl, head: str) -> str:
     return ""
 
 
-def missing_selected_problem(repo: str) -> str:
-    """Why a touched repo's analysis carries no machine selection record —
-    the one message both callers report (the build close's own check and
-    verification's --analysis check): the record is the build close's
-    scoped run to write."""
-    return ("repos/%s is touched and its analysis carries no selected record: the build close's scoped"
-            " run (--close-scoped) writes it" % repo)
-
-
 @dataclass
 class Analysis:
     """The analysis as the machine consumes it: the cap, the listed

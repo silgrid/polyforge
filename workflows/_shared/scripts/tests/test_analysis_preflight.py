@@ -20,11 +20,14 @@ named; a compliant fixture passes; over the supplement cap the tail is
 cut and named, never run; an unusable analysis file is not judged (exit
 2, verification's own treatment of the same file).
 
-polyforge#164 adds the machine selection records (``selected``): every
-touched repo carries one — a green record passes, a missing one is red,
-a record of another tree (a stale head), an incomplete selection or a
-command without green evidence is red — and the records are judged
-statically (never re-run) and never subject to the supplement cap."""
+polyforge#164 adds the machine selection records (``selected``): a
+green record passes; a record of another tree (a stale head), an
+incomplete selection or a command without green evidence is red — and
+the records are judged statically (never re-run) and never subject to
+the supplement cap. Whether a touched repo carries one at all is no
+machine question (the owner's Q1 ruling: the build step's own text
+demands the record, review judges its absence — a full-only repo has
+none to carry)."""
 
 import io
 import json
@@ -220,13 +223,14 @@ class AnalysisCloseCheckTest(unittest.TestCase):
         self.assertEqual([e["repo"] for e in entries], ["app"], entries)
         return dict(entries[0])
 
-    def test_a_touched_repo_without_a_selected_record_is_red(self) -> None:
+    def test_a_missing_selected_section_is_no_machines_red(self) -> None:
+        """The record's presence is the build step's own rule and review's
+        judgment, never a machine red (the owner's Q1 ruling: a full-only
+        repo — its light selection falls back to the full tier — has no
+        record to carry and no red to answer for)."""
         code, res = self.check({"tests": [entry(name="test_ok")]}, selected=False)
-        self.assertEqual(code, 1, res.get("summary"))
-        rec = self.selected_of(res)
-        self.assertEqual(rec["status"], "fail")
-        self.assertIn("touched and its analysis carries no selected record", rec["problem"])
-        self.assertIn("--close-scoped", rec["problem"])
+        self.assertEqual(code, 0, res.get("summary"))
+        self.assertEqual(self.details(res)["selected"], [])
 
     def test_an_untouched_repo_needs_no_selected_record(self) -> None:
         os.makedirs(os.path.join(self.root, "flat"), exist_ok=True)
