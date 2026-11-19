@@ -641,6 +641,14 @@ class PodmanCLI(DockerCLI):
         return cls(bin=p)
 
 
+def engine_for_env(environ: Optional[Mapping[str, str]] = None) -> DockerCLI:
+    """The container backend environ selects (polyforge#159): the docker
+    client unless PF_CONTAINER_ENGINE says podman. An empty or unknown
+    value is refused — never a silent fallback (the two engines' images
+    and volumes are not interchangeable)."""
+    return DockerCLI.for_env(environ)
+
+
 def tag_safe(s: str) -> str:
     """s lower-cased and reduced to what an image repository allows ("repo"
     when nothing is left). A non-ASCII letter whose Go lower case is ASCII
