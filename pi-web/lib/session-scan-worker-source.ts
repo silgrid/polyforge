@@ -16,7 +16,7 @@ export const SESSION_SCAN_WORKER_SOURCE = String.raw`
 "use strict";
 const { parentPort } = require("node:worker_threads");
 const { createHash } = require("node:crypto");
-const { createReadStream } = require("node:fs");
+const { createReadStream, readFileSync } = require("node:fs");
 const { open, stat } = require("node:fs/promises");
 
 const RESUME_SAMPLE_BYTES = 512;
@@ -288,6 +288,29 @@ parentPort.on("message", function (task) {
 		if (task.kind === "scan") {
 			const result = await scanSessionFile(task.path, task.previous);
 			parentPort.postMessage({ id: task.id, ok: true, result });
+			return;
+		}
+		if (task.kind === "claude-entries") {
+			// A claude transcript's entries, parsed exactly as the adapter's
+			// parseClaudeTranscript() splits them: whole lines, blanks skipped,
+			// unreadable lines left out. The main thread never reads the text.
+			const entries = [];
+			let text = "";
+			try {
+				text = readFileSync(task.path, "utf8");
+			} catch {
+				parentPort.postMessage({ id: task.id, ok: true, result: entries });
+				return;
+			}
+			for (const line of text.split("\n")) {
+				if (!line.trim()) continue;
+				try {
+					entries.push(JSON.parse(line));
+				} catch {
+					// A line claude is still writing.
+				}
+			}
+			parentPort.postMessage({ id: task.id, ok: true, result: entries });
 			return;
 		}
 		parentPort.postMessage({ id: task.id, ok: false, error: "unknown task kind: " + String(task.kind) });

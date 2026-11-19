@@ -327,7 +327,7 @@ test("forkClaudeSession writes the copy beside the source, its linked sidecars a
   assert.ok(forked.created >= startedAt && forked.modified === forked.created, "the copy is a session created now");
 
   // A first-class session: listed, its history the source's before the message, its subagent run whole.
-  assert.ok(claude.getClaudeSessionInfos().some((row) => row.id === forkId && row.harness === "claude"));
+  assert.ok((await claude.getClaudeSessionInfos()).some((row) => row.id === forkId && row.harness === "claude"));
   const sourceHistory = claude.readClaudeHistory(id);
   const forkHistory = claude.readClaudeHistory(forkId);
   assert.equal(forkHistory.file, copy);
