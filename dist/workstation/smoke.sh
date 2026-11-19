@@ -81,7 +81,12 @@ service_of() {
 # supervise tree, answer nothing; the caller resolves cid afterwards.
 boot_up() {
 	say "boot: building the image and starting the $profile profile"
-	compose --profile "$profile" up -d --build >/dev/null
+	# build is an explicit step, never `up --build`: measured once on
+	# compose v5, `up --build` left a stale image tagged when the
+	# Containerfile had changed, and the boot then proved the wrong
+	# tree. The build is layer-cached, so the explicit step is cheap.
+	compose --profile "$profile" build >/dev/null
+	compose --profile "$profile" up -d >/dev/null
 	cid=$(compose --profile "$profile" ps -q "$(service_of "$profile")")
 	[ -n "$cid" ] || die "no workstation container was created for profile $profile"
 	poll_until "the workstation container to run" 120 \
@@ -227,7 +232,8 @@ YEOF
 	# compose interpolates nothing unlisted, so its absence inside is
 	# the proof the container inherits no host environment.
 	SENTINEL_WORKSTATION_SMOKE=yes \
-		docker compose -f "$compose_file" -f "$override" --profile "$profile" up -d --build >/dev/null
+		docker compose -f "$compose_file" -f "$override" --profile "$profile" build >/dev/null
+	docker compose -f "$compose_file" -f "$override" --profile "$profile" up -d >/dev/null
 	cid=$(docker compose -f "$compose_file" -f "$override" --profile "$profile" ps -q "$(service_of "$profile")")
 	[ -n "$cid" ] || die "no workstation container"
 	poll_until "pf supervise to run inside" 120 \
@@ -272,7 +278,8 @@ services:
       - "@ROOT@:/workspace:ro"
 YEOF
 	say "podman-verify: booting with the repository mounted at /workspace"
-	docker compose -f "$compose_file" -f "$override" --profile "$profile" up -d --build >/dev/null
+	docker compose -f "$compose_file" -f "$override" --profile "$profile" build >/dev/null
+	docker compose -f "$compose_file" -f "$override" --profile "$profile" up -d >/dev/null
 	cid=$(docker compose -f "$compose_file" -f "$override" --profile "$profile" ps -q "$(service_of "$profile")")
 	[ -n "$cid" ] || die "no workstation container"
 	poll_until "pf supervise to run inside" 120 \
