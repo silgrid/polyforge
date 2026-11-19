@@ -5,113 +5,105 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
 import { fauxAssistantMessage, fauxProvider, fauxText } from "@earendil-works/pi-ai";
-import {
-  createAgentSession,
-  DefaultResourceLoader,
-  ModelRuntime,
-  SessionManager,
-  SettingsManager,
-} from "@earendil-works/pi-coding-agent";
+import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { createJiti } from "jiti";
 
-// A session built the way rpc-manager builds one: pi-web's skill visibility
-// preference (sessionSkillsOverride) hides a skill from the system prompt while
-// /skill:name keeps working, a "shown" preference overrides the author's
-// frontmatter, a later switch reaches the next session, and the subagent
-// named-skills projection still loads the hidden skill by name.
-const agentDir = await mkdtemp(join(tmpdir(), "pi-web-skill-visibility-agent-"));
-process.env.PI_CODING_AGENT_DIR = agentDir;
+// AC2's session behavior through the real session path: startRpcSession (the
+// one every browser session goes through) must hide a preference-hidden skill
+// from the system prompt while /skill:name keeps working, a「shown」preference
+// must override the author's frontmatter line, and a later switch must reach
+// the next session. The named-skills projection composition stays pinned at
+// the loader level beside it.
+const root = await mkdtemp(join(tmpdir(), "pi-web-skill-visibility-rpc-"));
+const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+after(async () => {
+  if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+  await rm(root, { recursive: true, force: true });
+});
 
 const jiti = createJiti(import.meta.url, { interopDefault: true, moduleCache: false });
-const { sessionSkillsOverride } = await jiti.import("./rpc-manager.ts");
+const { startRpcSession } = await jiti.import("./rpc-manager.ts");
 const { writeSkillVisibility } = await jiti.import("./skill-visibility-config.ts");
 const { createSubagentSkillsBinding } = await jiti.import("./subagent-skills.ts");
 
-const hiddenSkill = join(agentDir, "skills", "hidden-skill", "SKILL.md");
-const authorSkill = join(agentDir, "skills", "author-skill", "SKILL.md");
-const visibleSkill = join(agentDir, "skills", "visible-skill", "SKILL.md");
-for (const [filePath, frontmatter, name, body] of [
-  [hiddenSkill, "", "hidden-skill", "HIDDEN_SKILL_BODY"],
-  [authorSkill, "disable-model-invocation: true\n", "author-skill", "AUTHOR_SKILL_BODY"],
-  [visibleSkill, "", "visible-skill", "VISIBLE_SKILL_BODY"],
-]) {
-  await mkdir(join(agentDir, "skills", name), { recursive: true });
-  await writeFile(filePath, `---\nname: ${name}\n${frontmatter}description: ${name}\n---\n\n${body}\n`);
-}
-await writeSkillVisibility([
-  { filePath: hiddenSkill, visibility: "hidden" },
-  { filePath: authorSkill, visibility: "shown" },
-], agentDir);
-
-after(async () => {
-  await rm(agentDir, { recursive: true, force: true });
-});
-
-const faux = fauxProvider({ models: [{ id: "faux-skill-visibility" }] });
-let modelRuntime;
-
-test.before(async () => {
-  modelRuntime = await ModelRuntime.create({
-    authPath: join(agentDir, "auth.json"),
-    modelsPath: null,
-    refreshOnCreate: false,
-  });
-  modelRuntime.registerNativeProvider(faux.provider);
-});
-
-async function startSession(t) {
-  const cwd = await mkdtemp(join(tmpdir(), "pi-web-skill-visibility-cwd-"));
-  t.after(() => rm(cwd, { recursive: true, force: true }));
-  const override = sessionSkillsOverride(agentDir);
-  const resourceLoader = new DefaultResourceLoader({
-    cwd,
-    agentDir,
-    settingsManager: SettingsManager.inMemory(),
-    ...(override ? { skillsOverride: override } : {}),
-  });
-  await resourceLoader.reload();
-  const { session } = await createAgentSession({
-    cwd,
-    agentDir,
-    modelRuntime,
-    model: faux.getModel("faux-skill-visibility"),
-    sessionManager: SessionManager.inMemory(cwd),
-    settingsManager: SettingsManager.inMemory(),
-    resourceLoader,
-  });
-  return { session, resourceLoader };
+/** One fixture: hidden-skill (preference hidden), author-skill (author line, preference shown), visible-skill. */
+async function freshFixture(name) {
+  const agentDir = join(root, `agent-${name}`);
+  const cwd = join(root, `cwd-${name}`);
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  await mkdir(join(cwd), { recursive: true });
+  const paths = {};
+  for (const [skill, frontmatter, body] of [
+    ["hidden-skill", "", "HIDDEN_SKILL_BODY"],
+    ["author-skill", "disable-model-invocation: true\n", "AUTHOR_SKILL_BODY"],
+    ["visible-skill", "", "VISIBLE_SKILL_BODY"],
+  ]) {
+    paths[skill] = join(agentDir, "skills", skill, "SKILL.md");
+    await mkdir(join(agentDir, "skills", skill), { recursive: true });
+    await writeFile(paths[skill], `---\nname: ${skill}\n${frontmatter}description: ${skill}\n---\n\n${body}\n`);
+  }
+  await writeSkillVisibility([
+    { filePath: paths["hidden-skill"], visibility: "hidden" },
+    { filePath: paths["author-skill"], visibility: "shown" },
+  ], agentDir);
+  return { agentDir, cwd, paths };
 }
 
 const messageText = (message) =>
   typeof message.content === "string" ? message.content : JSON.stringify(message.content ?? "");
 
-test("a hidden skill stays out of the prompt while /skill:name still invokes it", async (t) => {
-  const { session, resourceLoader } = await startSession(t);
+test("a startRpcSession session hides a preference-hidden skill while /skill:name keeps working", async (t) => {
+  const { cwd, paths } = await freshFixture("prompt");
+  const { session } = await startRpcSession("skill-visibility-rpc-prompt", "", cwd, {});
+  t.after(() => void session.shutdown());
 
-  const prompt = session.systemPrompt;
-  assert.match(prompt, /<available_skills>/);
-  assert.match(prompt, /visible-skill/);
-  assert.doesNotMatch(prompt, /hidden-skill/, "a hidden preference keeps the skill out of the prompt");
-  assert.match(prompt, /author-skill/, "a shown preference overrides the author's hidden line");
+  const state = await session.send({ type: "get_state" });
+  assert.match(state.systemPrompt, /<available_skills>/);
+  assert.match(state.systemPrompt, /visible-skill/);
+  assert.match(state.systemPrompt, /author-skill/, "a shown preference overrides the author's hidden line");
+  assert.doesNotMatch(state.systemPrompt, /hidden-skill/, "a hidden preference keeps the skill out of the prompt");
 
-  // Still manually invocable: the loader's table — the source of the skill:
-  // command list — keeps the skill, and the command expands its body.
-  const listed = resourceLoader.getSkills().skills.find((skill) => skill.name === "hidden-skill");
-  assert.equal(listed.disableModelInvocation, true);
+  // Manually invocable: the command list (the browser palette's source) keeps it.
+  const commands = await session.send({ type: "get_commands" });
+  assert.ok(commands.commands.some((command) => command.name === "skill:hidden-skill"));
+
+  // And the command expands: a faux model receives the skill's body.
+  const faux = fauxProvider({ models: [{ id: "faux-skill-visibility" }] });
+  session.inner.modelRuntime.registerNativeProvider(faux.provider);
+  await session.send({ type: "set_model", provider: faux.provider.id, modelId: "faux-skill-visibility" });
   faux.setResponses([fauxAssistantMessage([fauxText("done")])]);
-  await session.prompt("/skill:hidden-skill");
-  const userMessages = session.messages.filter((message) => message.role === "user");
-  assert.match(
-    messageText(userMessages.at(-1)),
-    /HIDDEN_SKILL_BODY/,
-    "the skill command expanded to the skill's body",
-  );
+  await session.send({ type: "prompt", message: "/skill:hidden-skill" });
+  // The run settles asynchronously: poll the transcript, never read it once.
+  for (let i = 0; i < 200 && session.inner.messages.length === 0; i += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  const lastUser = [...session.inner.messages].reverse().find((message) => message.role === "user");
+  assert.ok(lastUser, "the prompt produced a user message");
+  assert.match(messageText(lastUser), /HIDDEN_SKILL_BODY/, "the skill command expanded to the skill's body");
+  assert.ok(paths["hidden-skill"].length > 0);
 });
 
-test("the named-skills subagent projection is unaffected, and the hidden skill is still nameable", async (t) => {
-  const cwd = await mkdtemp(join(tmpdir(), "pi-web-skill-visibility-named-"));
-  t.after(() => rm(cwd, { recursive: true, force: true }));
+test("switching the preference back shows the skill in the next startRpcSession session", async (t) => {
+  const { cwd, paths } = await freshFixture("restore");
+
+  const before = await startRpcSession("skill-visibility-rpc-before", "", cwd, {});
+  t.after(() => void before.session.shutdown());
+  const beforeState = await before.session.send({ type: "get_state" });
+  assert.doesNotMatch(beforeState.systemPrompt, /hidden-skill/, "the hidden preference hides it");
+
+  await writeSkillVisibility([{ filePath: paths["hidden-skill"], visibility: "shown" }]);
+
+  const after = await startRpcSession("skill-visibility-rpc-after", "", cwd, {});
+  t.after(() => void after.session.shutdown());
+  const afterState = await after.session.send({ type: "get_state" });
+  assert.match(afterState.systemPrompt, /hidden-skill/);
+});
+
+test("the named-skills projection composes after the preference at the loader level", async (t) => {
+  const { agentDir, cwd, paths } = await freshFixture("named");
   const binding = createSubagentSkillsBinding({ loadSkills: true, skills: ["hidden-skill"] });
+  const { sessionSkillsOverride } = await jiti.import("./rpc-manager.ts");
   const composed = sessionSkillsOverride(agentDir, binding.loaderOptions.skillsOverride);
   const resourceLoader = new DefaultResourceLoader({
     cwd,
@@ -134,14 +126,4 @@ test("the named-skills subagent projection is unaffected, and the hidden skill i
     results.some((result) => /HIDDEN_SKILL_BODY/.test(result?.systemPrompt ?? "")),
     "a preference-hidden skill still loads by name",
   );
-});
-
-test("switching the preference back shows the skill in the next session", async (t) => {
-  const before = await startSession(t);
-  assert.doesNotMatch(before.session.systemPrompt, /hidden-skill/);
-
-  await writeSkillVisibility([{ filePath: hiddenSkill, visibility: "shown" }], agentDir);
-
-  const after = await startSession(t);
-  assert.match(after.session.systemPrompt, /hidden-skill/);
 });
