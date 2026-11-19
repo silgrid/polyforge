@@ -1,0 +1,51 @@
+# dist/workstation/Containerfile — the workstation base image
+# (polyforge#161, 84-image). The image is the machine the daemon runs
+# on inside the workstation container: podman (rootful, crun) for the
+# verification containers, catatonit as PID 1 (it reaps the conmon
+# children, so no zombies survive), the pf binary (with `pf supervise`,
+# #160), and the entrypoint that initializes the private cgroup
+# namespace. Every versioned component — the workflows tree, Pi Web,
+# the release layout — lives in the data volume
+# (<data-dir>/release/current, 84-components), never in the image.
+#
+# The build context is the repository root (compose builds with
+# context: ../..; the root .dockerignore trims it), because the pf
+# binary is built from this tree and webui's go:embed tree must exist
+# before any go build (the repo's own fast gate's rule). No podman-docker
+# ever: the gate probe asserts a verification container sees no docker
+# client and no /var/run/docker.sock.
+FROM node:24.22.2-bookworm AS node
+# webui's embedded dist tree (webui/embed.go: go:embed all:dist) — the
+# node pin matches .polyforge/Dockerfile.verify's stage.
+WORKDIR /src/webui
+COPY webui/package.json webui/package-lock.json ./
+RUN npm ci
+COPY webui/ ./
+RUN npm run build
+
+FROM golang:1.26.11-bookworm AS go
+# the pinned toolchain (go.mod's toolchain line); modernc sqlite is pure
+# Go, so the binary is static.
+WORKDIR /src
+COPY go.mod go.sum ./
+COPY cmd ./cmd
+COPY internal ./internal
+COPY --from=node /src/webui ./webui
+RUN CGO_ENABLED=0 go build -trimpath -o /out/pf ./cmd/pf
+
+FROM ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      podman crun catatonit git curl ca-certificates python3 \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=go /out/pf /usr/local/bin/pf
+COPY dist/workstation/entrypoint.sh /usr/local/bin/workstation-entrypoint.sh
+COPY dist/workstation/env-whitelist.sh /usr/local/bin/workstation-env-whitelist.sh
+COPY dist/workstation/containers/storage.conf /etc/containers/storage.conf
+COPY dist/workstation/containers/containers.conf /etc/containers/containers.conf
+COPY dist/workstation/containers/registries.conf /etc/containers/registries.conf
+RUN chmod 0755 /usr/local/bin/workstation-entrypoint.sh
+# PID 1 is catatonit (the settled decision): it forwards nothing but the
+# signals and reaps every orphaned conmon; the entrypoint it runs
+# initializes the private cgroup namespace and execs `pf supervise`.
+ENTRYPOINT ["catatonit", "--", "/usr/local/bin/workstation-entrypoint.sh"]

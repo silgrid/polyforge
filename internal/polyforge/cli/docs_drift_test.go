@@ -39,6 +39,7 @@ var docsSetPages = []string{
 	"docs/bundles.md",
 	"docs/architecture.md",
 	"docs/contributing.md",
+	"docs/workstation.md",
 	"docs/reference/commands.md",
 	"docs/reference/config.md",
 	"docs/reference/uds-routes.md",

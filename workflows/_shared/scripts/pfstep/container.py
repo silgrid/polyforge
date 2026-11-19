@@ -670,7 +670,10 @@ class PodmanCLI(DockerCLI):
       (``--no-new-keyring``, 84's rootful choice): generated per build,
       passed as ``--runtime``, removed when the build ends however it
       ended — never a configured runtime path, never one an image
-      pre-installed; and
+      pre-installed. The option rides after the ``create``/``run``
+      subcommand (crun 1.14.1, measured by 84-image, rejects it in the
+      global position); every other runtime call passes straight
+      through; and
     - a verification container starts on the default bridge network,
       pinned by ``--network bridge`` so a machine whose containers.conf
       moved the default does not drift.
@@ -710,12 +713,26 @@ class PodmanCLI(DockerCLI):
 
     def build_image(self, tag: str, dockerfile: bytes, labels: Mapping[str, str], log: IO[bytes], timeout: float) -> None:
         """``podman build -`` under the private crun wrapper: generated
-        here, executable, removed when the build ends however it ended."""
+        here, executable, removed when the build ends however it ended.
+        The wrapper splices ``--no-new-keyring`` in after the create/run
+        subcommand — crun (1.14.1, measured by 84-image) rejects it in
+        the global position — and passes every other runtime call
+        straight to crun."""
         runtime_dir = tempfile.mkdtemp(prefix="pf-podman-runtime-")
         wrapper = os.path.join(runtime_dir, "crun-wrapper")
         try:
             with open(wrapper, "w", encoding="utf-8") as f:
-                f.write('#!/bin/sh\nexec crun --no-new-keyring "$@"\n')
+                f.write(
+                    '#!/bin/sh\n'
+                    'case "$1" in\n'
+                    "  create|run)\n"
+                    '    sub="$1"\n'
+                    "    shift\n"
+                    '    exec crun "$sub" --no-new-keyring "$@"\n'
+                    "    ;;\n"
+                    '  *) exec crun "$@" ;;\n'
+                    "esac\n"
+                )
             os.chmod(wrapper, 0o755)
             self._run_build(self._build_args(tag, labels, ("--runtime", wrapper)), dockerfile, log, timeout)
         finally:

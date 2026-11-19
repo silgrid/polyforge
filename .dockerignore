@@ -1,0 +1,23 @@
+# The workstation image's build context is the repository root (compose
+# builds with context: ../..), trimmed to what the Containerfile COPYs:
+# the Go module (go.mod, go.sum, cmd, internal), webui (its dist tree is
+# built in the image; node_modules and the e2e suites are not build
+# inputs) and dist/workstation. Everything else only bloats the context
+# the daemon receives. .polyforge/release.sh builds from its own temp
+# context and .polyforge/Dockerfile.verify from an empty one — neither
+# is affected by this file.
+.git
+.github
+.pi
+.polyforge
+docs
+test
+tools
+workflows
+skills
+deploy
+pi-web
+NOTICE
+webui/node_modules
+webui/e2e
+webui/dist

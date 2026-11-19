@@ -205,7 +205,7 @@ class PodmanCLITest(unittest.TestCase):
             '    done\n'
             '    if [ -n "$rt" ]; then\n'
             '      if [ -x "$rt" ]; then echo executable > "$0.runtime"; else echo missing > "$0.runtime"; fi\n'
-            '      sed -n "1,2p" "$rt" >> "$0.runtime"\n'
+            '      cat "$rt" >> "$0.runtime"\n'
             '    fi\n'
             '    cat > "$0.stdin" ;;\n'
             'esac\n')
@@ -220,8 +220,17 @@ class PodmanCLITest(unittest.TestCase):
         with open(script + ".runtime", encoding="utf-8") as f:
             wrapper_record = [line.rstrip("\n") for line in f]
         self.assertEqual(wrapper_record[0], "executable", "the wrapper is an executable the engine can run")
-        self.assertEqual(wrapper_record[1:], ["#!/bin/sh", 'exec crun --no-new-keyring "$@"'],
-                         "the wrapper is crun with --no-new-keyring, nothing else")
+        self.assertEqual(wrapper_record[1:], [
+            "#!/bin/sh",
+            'case "$1" in',
+            "  create|run)",
+            '    sub="$1"',
+            "    shift",
+            '    exec crun "$sub" --no-new-keyring "$@"',
+            "    ;;",
+            '  *) exec crun "$@" ;;',
+            "esac",
+        ], "the wrapper adds --no-new-keyring after the create/run subcommand — crun 1.14 rejects it as a global option (84-image measured) — and passes everything else straight to crun")
         with open(script + ".stdin", "rb") as f:
             self.assertEqual(f.read(), dockerfile, "the Dockerfile rides stdin, the empty build context as ever")
         self.assertIn("--tag", words)

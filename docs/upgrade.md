@@ -751,3 +751,40 @@ then `pf ops shutdown` and install. The refusal of new work ends only
 with the daemon restart; an upgrade called off is unwound by restarting
 the daemon (`pf ops shutdown` then `pf daemon ensure`, or the container
 supervisor restarting it).
+
+## v0.2.4, the workstation image and compose (polyforge#161)
+
+The workstation container ships: a whole polyforge machine in one
+container, its base image and outer parameter set in the new top-level
+`dist/workstation/` — podman (rootful, crun) runs the verification
+containers inside, catatonit is PID 1, the entrypoint initializes a
+private writable cgroup namespace as root and hands the machine to
+`pf supervise`, and two named volumes persist the data dir and podman's
+storage. The outer container carries exactly the measured minimal set:
+`SYS_ADMIN` and `NET_ADMIN`, the pinned seccomp file (moby's default
+template plus `pivot_root`, its SHA recorded beside it), a private
+cgroup namespace, AppArmor and system paths unconfined — no
+`privileged`, no devices, no docker socket. Boot modes are compose
+profiles, one per smoke flag (`--profile no-aihub`, `--profile aihub`
+adds `pf supervise --with-aihub`), and the optional HTTPS front is a
+third profile (`--profile https`: a pinned caddy terminates TLS with its
+own local CA at `WORKSTATION_HTTPS_HOST` — the same name belongs in
+`PI_WEB_ALLOWED_HOSTS` — and reverse-proxies the `workstation` network
+alias both boot modes answer); `PI_WEB_PASSWORD` is required by the
+compose interpolation, the container's environment is its explicit list
+plus the `PI_*` families the entrypoint whitelists (`PI_TEST_*` never
+crosses). `dist/workstation/smoke.sh` (`boot`, `env`, `podman-verify`)
+is the acceptance driver: it prints every measured value and fails on
+the first miss; `boot --with-aihub` and `env` need the data volume to
+carry the release layout's Pi Web component (84-components). Inside the
+workstation, podman needs two measured accommodations the minimal cap
+set forces, both shipped in the image and the entrypoint: no container
+keyrings (`keyring = false`; the pinned profile blocks `add_key`) and
+`BUILDAH_ISOLATION=chroot` for build steps (buildah's build-network
+setup would need `CAP_SYS_PTRACE`; the daemon's environment allow-list
+now carries that one name to every step). A host is untouched — the
+workstation is opt-in, nothing existing changes shape; the only
+repository-wide registrations are the new `dist` component in
+`.polyforge/verify-scope.conf` and a root `.dockerignore` trimming the
+image build's repo-root context (the release and verification image
+builds use their own contexts and are unaffected).

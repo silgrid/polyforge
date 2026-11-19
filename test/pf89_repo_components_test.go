@@ -29,7 +29,10 @@ import (
 // 2026-11-17: it is where the cross-component contracts live, so a
 // change there counts as cross-component) and test/ and deploy/ left to
 // the generic division. The CLI's range is the longer prefix that
-// carves it out of the daemon's.
+// carves it out of the daemon's. dist/ is its own component too
+// (polyforge#161, the owner's settled Q8: the workstation image lives
+// in a new top-level dist/ and is registered in the component
+// declaration, not folded into the generic division).
 var pf89Declared = map[string][]string{
 	"hub":       {"internal/aihub"},
 	"daemon":    {"internal/polyforge"},
@@ -39,6 +42,7 @@ var pf89Declared = map[string][]string{
 	"webui":     {"webui"},
 	"workflows": {"workflows"},
 	"skills":    {"skills"},
+	"dist":      {"dist"},
 }
 
 func TestPF89RepoDeclaresItsComponents(t *testing.T) {
