@@ -75,6 +75,9 @@ function spawnWorker(state: PoolState): PoolWorker {
   worker.unref();
   const entry: PoolWorker = { worker };
   worker.on("message", (message: { id: number; ok: boolean; result?: unknown; error?: string }) => {
+    // A busy round-trip re-refs the worker; re-unref so an idle worker never
+    // holds the process (a pending task still does, through its promise).
+    worker.unref();
     const owed = entry.pending;
     entry.pending = undefined;
     if (owed && message.id === owed.id) {
