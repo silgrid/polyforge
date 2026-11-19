@@ -131,7 +131,9 @@ class CacheVolumeTest(unittest.TestCase):
         unused_old_other_path = volume_of(old(1), other_clone)  # the same older generation, another path's
         in_use_old = volume_of(old(2), self.clone)
         kept = [
-            "pf-verify-cache-web-" + old(3) + "-" + path_id(self.clone),  # another repo whose name starts with this one's
+            "pf-verify-cache-app-web-" + old(3) + "-" + path_id(self.clone),
+            # ^ another repo (app-web) whose name starts with this one's prefix: listed by the
+            # unused_volumes("pf-verify-cache-app-") substring, kept by the shape rule alone
             "pf-verify-cache-other-" + old(4) + "-" + path_id(self.clone),
             "pf-verify-cache-app-" + old(5),  # the pre-path shared shape: never touched, left to the upgrade's manual step
             "pf-verify-cache-app",  # the name before generations
@@ -146,13 +148,18 @@ class CacheVolumeTest(unittest.TestCase):
         self.run_once()
         self.assertEqual(self.fb.volume_removes, sorted([unused_old, unused_old_other_path]))
         self.assertEqual(sorted(self.fb.volumes), sorted([current, in_use_old, *kept]))
+        lines = [s for s in self.said if "volume" in s]
+        self.assertEqual(len(lines), 2, "exactly the two removals are said, nothing else: %s" % self.said)
         for v in (unused_old, unused_old_other_path):
-            self.assertEqual(len([s for s in self.said if "removed" in s and v in s]), 1, self.said)
+            self.assertEqual(len([s for s in lines if "removed" in s and v in s]), 1, self.said)
         # once that verification's container is gone, its volume goes too
         del self.fb.containers["other-run"]
         self.run_once()
         self.assertEqual(self.fb.volume_removes, sorted([unused_old, unused_old_other_path, in_use_old]))
         self.assertEqual(sorted(self.fb.volumes), sorted([current, *kept]))
+        lines = [s for s in self.said if "volume" in s and in_use_old in s]
+        self.assertEqual(len(lines), 1, "exactly one line names the newly unused volume, its removal: %s" % self.said)
+        self.assertIn("removed", lines[0])
 
     def test_a_start_keeps_the_current_generations_other_clone_paths(self) -> None:
         """A start keeps every clone path's volume of the running image
