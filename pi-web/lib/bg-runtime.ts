@@ -297,6 +297,7 @@ export function createBgTaskController(deps: BgRuntimeDeps): BgTaskController {
         wrapper = await deps.reopenSession(info.sessionId, sessionFile);
         if (gated()) return;
         await wrapper.waitUntilReady?.();
+        if (gated()) return; // a deletion can land while the reopened wrapper gets ready (r2#3)
       }
       await wrapper.inner.sendCustomMessage({
         customType: BG_TASK_NOTIFICATION_TYPE,
