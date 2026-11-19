@@ -918,7 +918,10 @@ hand (keep one value, drop the other shape) and re-deploy. The
 automatic rollback of the same window restores exactly the changed
 rows from the `split_attrs_before_w174` before-image table the upgrade
 writes, then drops it — a row the migration never moved is never
-flattened.
+flattened. After a successful deploy the before-image table stays as
+the durable record of what moved: the post-deploy comparison reads
+it, and once that comparison is signed off a person may DROP it — no
+code reads it, and it serves nothing else.
 
 Before authorizing the deploy, review the blast radius read-only (the
 probe counts only the split pair) and keep the list for the
