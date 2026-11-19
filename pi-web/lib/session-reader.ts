@@ -345,33 +345,22 @@ export async function listAllSessions(options: { force?: boolean; allowStale?: b
     return cache.data;
   }
 
-  // Coalescing dedup (2-A): a caller shares an in-flight scan only when that
-  // scan began enumerating at or after the caller arrived — a scan from
-  // before a write finished can miss it, so joining it would serve this
-  // caller a list that predates a write it must see. A caller that arrives
-  // during an older scan waits it out (its result is discarded) and takes the
-  // next one, which starts after its own arrival; later callers join that.
-  // Ordering is a monotonic ticket, not a clock: a scan and a request can
-  // land in the same millisecond.
-  const arrivalTicket = (globalThis.__piSessionListScanTickets = (globalThis.__piSessionListScanTickets ?? 0) + 1);
-  for (let waits = 0; waits < SESSION_LIST_MAX_SCAN_RETRIES + 1; waits += 1) {
-    const inflight = globalThis.__piSessionListPromise;
-    if (!inflight) break;
-    if ((globalThis.__piSessionListScanTicket ?? 0) > arrivalTicket) return inflight;
-    await inflight.catch(() => undefined);
+  // Stub state (polyforge#140 r3 u7): the r1 generation-based join, restored
+  // so the corrected 2-A test's red on this tree is the evidence review r2#3
+  // asked for. The ticket-based join returns in the unit's impl commit.
+  if (globalThis.__piSessionListPromise && globalThis.__piSessionListPromiseGeneration === generation) {
+    return globalThis.__piSessionListPromise;
   }
 
   const trackedPromise = rebuildSessionList().finally(() => {
     if (globalThis.__piSessionListPromise === trackedPromise) {
       globalThis.__piSessionListPromise = undefined;
       globalThis.__piSessionListPromiseGeneration = undefined;
-      globalThis.__piSessionListScanTicket = undefined;
     }
   });
 
   globalThis.__piSessionListPromise = trackedPromise;
   globalThis.__piSessionListPromiseGeneration = generation;
-  globalThis.__piSessionListScanTicket = (globalThis.__piSessionListScanTickets = (globalThis.__piSessionListScanTickets ?? 0) + 1);
   return trackedPromise;
 }
 
