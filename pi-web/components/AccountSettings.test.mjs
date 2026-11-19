@@ -28,7 +28,7 @@ const noop = () => {};
 
 const READ = {
   claude: {
-    available: true, loggedIn: true, authMethod: "oauth_token", configDirectory: "/home/op/.claude",
+    available: true, loggedIn: true, authMethod: "oauth_token", configDirectory: "/home/op/.claude", consoleProfile: "absent",
     envCredentials: { ANTHROPIC_AUTH_TOKEN: true, ANTHROPIC_BASE_URL: true, ANTHROPIC_API_KEY: false, CLAUDE_CODE_OAUTH_TOKEN: true },
   },
   cells: [
@@ -174,6 +174,34 @@ test("a refused write shows its target and its reason — the reason reaches the
   assert.ok(!html.includes("SENTINEL"));
   // the refused target is distinguishable from the written one
   assert.match(html, /data-write-target="gamma"[^>]*data-write-status="refused"/);
+});
+
+test("a present Console profile is marked on the card, and a claude row without env credentials carries the fallback hint (review r1#6)", () => {
+  const card = renderToStaticMarkup(h(I18nProvider, null, h(AccountClaudeCard, {
+    claude: { available: true, loggedIn: true, authMethod: "oauth_token", configDirectory: "/home/op/.claude",
+      envCredentials: {}, consoleProfile: "present" },
+  })));
+  assert.match(card, /Console profile/);
+  assert.match(card, /not isolated by CLAUDE_CONFIG_DIR/);
+  const absent = renderToStaticMarkup(h(I18nProvider, null, h(AccountClaudeCard, {
+    claude: { available: true, loggedIn: true, authMethod: "oauth_token", configDirectory: "/home/op/.claude",
+      envCredentials: {}, consoleProfile: "absent" },
+  })));
+  assert.ok(!absent.includes("Console profile"), "an absent Console profile is not a mark");
+  // the claude pane's rows: a row without env credentials carries the
+  // fallback hint when the profile is present
+  const withProfile = renderToStaticMarkup(h(I18nProvider, null, h(AccountHarnessPane, {
+    harness: "claude", capabilities: null, onOpenLoginTerminal: noop, onSaveCredentials: noop,
+    read: { ...READ, claude: { ...READ.claude, consoleProfile: "present" } },
+  })));
+  const beta = withProfile.slice(withProfile.indexOf('data-account-cell="beta"'));
+  assert.match(beta, /data-console-fallback="true"/);
+  assert.match(beta, /may fall back to it/);
+  const withoutProfile = renderToStaticMarkup(h(I18nProvider, null, h(AccountHarnessPane, {
+    harness: "claude", capabilities: null, onOpenLoginTerminal: noop, onSaveCredentials: noop,
+    read: READ,
+  })));
+  assert.ok(!withoutProfile.includes("data-console-fallback"), "no hint without the Console profile");
 });
 
 test("an unavailable claude status degrades with its reason, and the doctor error shows (AC1)", () => {

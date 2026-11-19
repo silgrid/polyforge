@@ -153,6 +153,23 @@ async function post(body) {
   return { status: response.status, text: await response.text() };
 }
 
+test("GET: the interactive card marks the Console profile Q3 names — present only as a fact, never read (review r1#6)", async () => {
+  // absent in the throwaway home
+  const bare = await get();
+  assert.equal(bare.body.claude.consoleProfile, "absent", "no ~/.config/anthropic in the fixture home");
+  // present once the directory exists — the route stats it, never reads it
+  fs.mkdirSync(path.join(home, ".config", "anthropic"), { recursive: true });
+  const marked = await get();
+  assert.equal(marked.body.claude.consoleProfile, "present");
+  noSentinel(JSON.stringify(marked.body));
+  // and a marker file inside it never reaches the answer
+  fs.writeFileSync(path.join(home, ".config", "anthropic", "keep"), "RT-SENTINEL-CONSOLE");
+  const after = await get();
+  noSentinel(JSON.stringify(after.body));
+  assert.equal(after.body.claude.consoleProfile, "present");
+  fs.rmSync(path.join(home, ".config", "anthropic"), { recursive: true, force: true });
+});
+
 test("GET: the interactive claude card and the three Cell kinds, no value anywhere (AC1)", async () => {
   const { status, body } = await get();
   assert.equal(status, 200);
