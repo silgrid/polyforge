@@ -7,7 +7,7 @@ const jiti = createJiti(import.meta.url, {
   jsx: { runtime: "automatic" },
   tsconfigPaths: true,
 });
-const { orderSkillsByDormancy } = await jiti.import("./SkillsConfig.tsx");
+const { orderSkillsByDormancy, skillAuthorDeclaredHidden } = await jiti.import("./SkillsConfig.tsx");
 
 test("lists active skills before dormant skills while preserving their order", () => {
   const skills = [
@@ -21,4 +21,11 @@ test("lists active skills before dormant skills while preserving their order", (
     orderSkillsByDormancy(skills).map((skill) => skill.name),
     ["active-a", "active-b", "dormant-a", "dormant-b"],
   );
+});
+
+test("the author-hidden badge keys on the declared frontmatter, not the effective switch", () => {
+  assert.equal(skillAuthorDeclaredHidden({ declaredDisableModelInvocation: true }), true);
+  assert.equal(skillAuthorDeclaredHidden({ declaredDisableModelInvocation: true, disableModelInvocation: false }), true);
+  assert.equal(skillAuthorDeclaredHidden({ declaredDisableModelInvocation: false }), false);
+  assert.equal(skillAuthorDeclaredHidden({}), false, "a skill the loader never annotated has no author line");
 });
