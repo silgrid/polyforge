@@ -264,14 +264,14 @@ func TestW20DoctorEveryCell(t *testing.T) {
 	cellRows := []string{"workspace mapping", "workspace dirs", "workspace layout", "workspace scratch",
 		"capsule retention", "rebuildable artifacts", "disk watermark", "workspace repo clones", "light verification fallbacks",
 		"workspace memory policy", "host prerequisites", "server reach", "config reload", "model health",
-		"daemon env", "daemon command path", "workspace yaml", "harness claude", "workflow lanes",
+		"daemon env", "daemon command path", "workspace yaml", "step tiers catalog", "harness claude", "workflow lanes",
 		"aihub projects", "auth"}
 	want := []string{"config"}
 	want = append(want, cellRows[:10]...) // mapping … workspace memory policy
 	want = append(want, hostRows[:5]...)  // prerequisites … audit tools (pf build between prerequisites and python3, polyforge#136)
 	want = append(want, "host prerequisites", "server reach", "daemon socket", "daemon supervision", "config reload", "model health")
 	want = append(want, hostRows[7]) // retired env
-	want = append(want, "daemon env", "daemon command path", "workspace yaml", "harness claude")
+	want = append(want, "daemon env", "daemon command path", "workspace yaml", "step tiers catalog", "harness claude")
 	want = append(want, hostRows[8]) // harness diagram guidance
 	want = append(want, hostRows[9]) // harness concise guidance
 	want = append(want, "workflow lanes", "aihub projects", "auth")

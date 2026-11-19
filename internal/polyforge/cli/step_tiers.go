@@ -15,6 +15,13 @@ package cli
 import (
 	"fmt"
 	"regexp"
+	"slices"
+	"sort"
+	"strings"
+
+	"github.com/silgrid/polyforge/internal/common/harness"
+	"github.com/silgrid/polyforge/internal/common/workflow"
+	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
 
 // StepTiersSection is the catalog's section name: `[step_tiers]`, its
@@ -75,4 +82,114 @@ func parseStepTiersTable(file string, t *tableBlock) (map[string][]string, error
 		out[kv.key] = list
 	}
 	return out, nil
+}
+
+// stepTierCatalogCovers reports whether candidate is in the catalog,
+// by Q3's strength rule: a catalog entry without an effort covers the
+// candidate's model at any effort; an entry with an effort requires the
+// candidate's to be the same. The catalog spans every tier (the
+// candidate's own tier is a lane concern, not a catalog one).
+func stepTierCatalogCovers(catalog map[string][]string, candidate string) bool {
+	c, err := harness.ParseCandidate(candidate)
+	if err != nil {
+		return true // a malformed candidate is the load-time validators' refusal, never this row's
+	}
+	for _, list := range catalog {
+		for _, entry := range list {
+			e, err := harness.ParseCandidate(entry)
+			if err != nil {
+				continue
+			}
+			if e.Harness == c.Harness && e.Model == c.Model && (e.Effort == "" || e.Effort == c.Effort) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// stepTiersCatalogCheck is doctor's `step tiers catalog` row
+// (polyforge#143, 85b): every candidate the user wrote — the workspace
+// yaml's steps.<project>.<step>.models and tiers.<project>.<tier>.models
+// lists, and the [summarize] table's models (Q3's scope; a resolved
+// chain's lane defaults are not the user's writing) — is named in the
+// Host's catalog. A candidate outside it warns, never fails: the catalog
+// is a recommendation, not an admission rule. An empty catalog skips the
+// row; a placeholder candidate does not count (the workspace yaml row's
+// finding); a catalog tier no installed lane declares is information
+// only (Q1 A), judged when the daemon reports its workflows dir.
+func stepTiersCatalogCheck(r *doctorRun) (string, string) {
+	catalog := r.cfg.StepTiers
+	if len(catalog) == 0 {
+		return "skip", "not run: the [step_tiers] catalog is empty — fill it with `pf config set step_tiers.<tier> '[\"pi:…\"]' --host` (it is a recommendation; this row only checks candidates against it)"
+	}
+	checked := 0
+	var warns []string
+	note := func(where, candidate string) {
+		checked++
+		if workspace.IsPlaceholder(candidate) {
+			return
+		}
+		if !stepTierCatalogCovers(catalog, candidate) {
+			warns = append(warns, fmt.Sprintf("%s → %s", where, candidate))
+		}
+	}
+	for _, ws := range r.cfg.Mapping.Workspaces() {
+		cfg, err := workspace.Load(ws, r.cfg.Mapping.ProjectsOf(ws))
+		if err != nil || cfg == nil {
+			continue // the workspace yaml row fails on it already
+		}
+		for project, keys := range cfg.Models {
+			for step, list := range keys {
+				for _, cand := range list {
+					note(fmt.Sprintf("steps.%s.%s", project, step), cand)
+				}
+			}
+		}
+		for project, tiers := range cfg.Tiers {
+			for tier, list := range tiers {
+				for _, cand := range list {
+					note(fmt.Sprintf("tiers.%s.%s", project, tier), cand)
+				}
+			}
+		}
+	}
+	if r.cfg.Summarize != nil {
+		for _, cand := range r.cfg.Summarize.Models {
+			note("summarize.models", cand)
+		}
+	}
+	// a catalog tier no installed lane declares is information only
+	info := ""
+	if r.status.WorkflowsDir != "" {
+		var laneTiers []string
+		for _, ws := range r.cfg.Mapping.Workspaces() {
+			set := workflow.ForWorkspace(r.status.WorkflowsDir, ws)
+			bundles, _, _ := workspace.Bundles(set, "")
+			for _, lane := range bundles {
+				if lane.Defaults == nil {
+					continue
+				}
+				for tier := range lane.Defaults.Tiers {
+					laneTiers = append(laneTiers, tier)
+				}
+			}
+		}
+		var extra []string
+		for tier := range catalog {
+			if !slices.Contains(laneTiers, tier) {
+				extra = append(extra, tier)
+			}
+		}
+		if len(extra) > 0 {
+			sort.Strings(extra)
+			info = fmt.Sprintf("; catalog tier(s) no installed lane declares (information only, never a warn): %s", strings.Join(extra, ", "))
+		}
+	}
+	if len(warns) > 0 {
+		sort.Strings(warns)
+		return "warn", fmt.Sprintf("%d of %d user-written candidate(s) are not in the [step_tiers] catalog: %s — a warn, never a fail (the catalog is a recommendation, not an admission rule; `pf override` does not read it): add each with `pf config set step_tiers.<tier> '[\"…\"]' --host` or drop the yaml entry%s",
+			len(warns), checked, strings.Join(capRows(warns), ", "), info)
+	}
+	return "pass", fmt.Sprintf("all %d user-written candidate(s) are in the [step_tiers] catalog's %d tier(s)%s", checked, len(catalog), info)
 }
