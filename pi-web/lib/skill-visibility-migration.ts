@@ -4,7 +4,14 @@
 // touching any file; the confirmed cleanup is the one remaining SKILL.md
 // edit — it writes the preference first, then removes the line, so the
 // skill never flips visible mid-cleanup (polyforge#146, owner Q3 A+B).
-import type { SkillVisibility } from "./skill-visibility-config";
+import { readFileSync, writeFileSync } from "fs";
+import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import { setDisableModelInvocation } from "./skill-frontmatter";
+import {
+  readSkillVisibility,
+  writeSkillVisibility,
+  type SkillVisibility,
+} from "./skill-visibility-config";
 
 /** The loader-shaped skill fields the import reads. */
 export interface LegacyVisibilitySkill {
@@ -15,25 +22,50 @@ export interface LegacyVisibilitySkill {
 /**
  * Imports every author-hidden skill (declared `disable-model-invocation: true`)
  * that has no stored preference as a `hidden` preference, without touching any
- * file. Returns the merged visibility (the stored preferences plus the import).
+ * file. Returns the merged visibility (the stored preferences plus the import),
+ * so a listing that runs the import applies the result in the same breath.
  */
 export async function importLegacySkillVisibility(
-  _skills: LegacyVisibilitySkill[],
-  _agentDir?: string,
+  skills: LegacyVisibilitySkill[],
+  agentDir?: string,
 ): Promise<Map<string, SkillVisibility>> {
-  return new Map();
+  const visibility = new Map(readSkillVisibility(agentDir));
+  const imports = skills
+    .filter((skill) => skill.disableModelInvocation && !visibility.has(skill.filePath))
+    .map((skill) => ({ filePath: skill.filePath, visibility: "hidden" as const }));
+  if (imports.length > 0) {
+    await writeSkillVisibility(imports, agentDir);
+    for (const entry of imports) visibility.set(entry.filePath, "hidden");
+  }
+  return visibility;
 }
 
 /**
  * Removes the legacy `disable-model-invocation` line from one SKILL.md. The
  * hidden preference is written first, so a skill the line was hiding stays
  * hidden when the line goes; the edit itself reuses the surgical line editor
- * (`skill-frontmatter.ts`) so the file's other formatting survives. Throws
- * when the line cannot be edited surgically — after the preference is in.
+ * (`skill-frontmatter.ts`) so the file's other formatting survives. A file
+ * without the line is left alone and gets no preference. Throws when the
+ * line cannot be edited surgically — after the preference is in.
  */
 export async function cleanupLegacyDisableModelInvocation(
-  _filePath: string,
-  _agentDir?: string,
+  filePath: string,
+  agentDir?: string,
 ): Promise<{ removed: boolean }> {
-  return { removed: false };
+  const content = readFileSync(filePath, "utf8");
+  const { frontmatter } = parseFrontmatter<Record<string, unknown>>(content);
+  const declared = frontmatter["disable-model-invocation"] === true;
+  // The preference first: once the line is gone the author's `true` no longer
+  // hides the skill, so the switch must already say hidden before the edit.
+  if (declared) {
+    const visibility = readSkillVisibility(agentDir);
+    if (visibility.get(filePath) !== "hidden") {
+      await writeSkillVisibility([{ filePath, visibility: "hidden" }], agentDir);
+    }
+  }
+  const updated = setDisableModelInvocation(content, false);
+  // A skill already without the line keeps its file and its mtime.
+  if (updated === content) return { removed: false };
+  writeFileSync(filePath, updated, "utf8");
+  return { removed: true };
 }
