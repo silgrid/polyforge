@@ -147,8 +147,16 @@ function plan(mode, options) {
     details.warmCalls = 0;
     details.probe = "open-loop";
     details.overlapOnly = true;
+    // Only an HTTP 200 is a timed sample; anything else is a failed probe at
+    // the timeout bound (the ticket's §2 requires 200; review r3 N4).
+    details.probe200Only = true;
     details.hotIterations = 200;
-    details.coldStartsMax = 10;
+    // Cold starts repeat UNTIL the sample bound — a fixed count made a
+    // compliant summary cold start fail AC1 at ~90 samples, a faster server
+    // collecting fewer samples per start than a slow one (review r3 #1). The
+    // safety cap is a runaway bound far above any expected yield.
+    details.coldStarts = "until-min-samples";
+    details.coldStartSafetyCap = 120;
   } else if (mode === "read-volume") {
     details.modes = listArg(options, "modes", CALL_MODES);
     details.calls = numberArg(options, "calls", { min: 2 }) ?? 2;
@@ -166,6 +174,10 @@ function plan(mode, options) {
     // a SIGTERM before the scanner's trailing 5 s persist timer fired measured
     // an empty index (review r3#7).
     details.buildsWarmIndex = true;
+    // The build round drops any existing index first, so it always rewrites
+    // one — a stale-but-current index would never persist and the wait would
+    // time out (review r3 N2).
+    details.warmIndexRebuild = true;
     details.warmIndexPersisted = true;
     details.warmIndexPersistTimeoutMs = 20_000;
   } else if (mode === "golden") {

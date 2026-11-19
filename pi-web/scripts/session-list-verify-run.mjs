@@ -205,39 +205,61 @@ async function flushWrites(dir) {
 // never evidence.
 const PROBE_TIMEOUT_MS = 120_000;
 
-async function measureWindow(server, details) {
-  const rcharBefore = rcharOf(server.pid);
-  const samples = [];
-  const probes = new Set();
+/** A probe stream's live state: every sample, and the measured calls' windows. */
+function newCollector() {
+  return { samples: [], windows: [] };
+}
+
+/** Samples whose issue time falls inside any measured call window. */
+function overlappingSamples(collector) {
+  return collector.samples
+    .filter((sample) => collector.windows.some((window) => sample.issuedAt >= window.start && sample.issuedAt <= window.end))
+    .map((sample) => sample.ms);
+}
+
+/**
+ * One continuous open-loop probe stream, started before the first measured
+ * call and stopped when `measured` returns. `measured` records each call's
+ * [start, end] window into `collector.windows`; only probes issued inside a
+ * window count, so the sample count follows the calls' CUMULATIVE duration —
+ * a hot run of fast back-to-back calls collects samples across all of them,
+ * never per call (review r3 #1: a per-call stream made a sub-interval call
+ * collect zero samples, so a compliant server failed AC1). The first window's
+ * start is taken before the stream issues its first probe, so the window's
+ * opening probe counts too. Only an HTTP 200 is a timed sample (review r3 N4).
+ */
+async function withProbeStream(server, details, collector, measured) {
+  const inFlight = new Set();
   let issuing = true;
   const issueLoop = (async () => {
     while (issuing) {
       const issuedAt = performance.now();
-      probes.add(issuedAt);
-      const started = issuedAt;
+      inFlight.add(issuedAt);
       fetch(`${server.base}${details.staticPath}`, { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) })
-        .then(async (response) => { await response.arrayBuffer(); samples.push({ issuedAt, ms: performance.now() - started }); })
-        .catch(() => samples.push({ issuedAt, ms: PROBE_TIMEOUT_MS }))
-        .finally(() => probes.delete(issuedAt));
+        .then(async (response) => {
+          if (response.status !== 200) throw new Error(`probe answered HTTP ${response.status}`);
+          await response.arrayBuffer();
+          collector.samples.push({ issuedAt, ms: performance.now() - issuedAt });
+        })
+        .catch(() => collector.samples.push({ issuedAt, ms: PROBE_TIMEOUT_MS }))
+        .finally(() => inFlight.delete(issuedAt));
       await new Promise((resolveSleep) => setTimeout(resolveSleep, details.intervalMs));
     }
   })();
-  const callStart = performance.now();
-  const call = await server.call(details.mode);
-  const callEnd = performance.now();
-  issuing = false;
-  await issueLoop;
-  // In-flight probes settle on their own timeout; the window filter already
-  // excludes any issued after the call ended.
-  await new Promise((resolveSettle) => {
-    const deadline = Date.now() + PROBE_TIMEOUT_MS + 1_000;
-    const check = () => (probes.size === 0 || Date.now() > deadline ? resolveSettle() : setTimeout(check, 50));
-    check();
-  });
-  const overlapping = samples
-    .filter((sample) => sample.issuedAt >= callStart && sample.issuedAt <= callEnd)
-    .map((sample) => sample.ms);
-  return { call, samples: overlapping, issued: samples.length, readBytes: rcharOf(server.pid) - rcharBefore };
+  try {
+    await measured();
+  } finally {
+    issuing = false;
+    await issueLoop;
+    // In-flight probes settle on their own timeout; the window filter already
+    // excludes any probe issued after the last call ended.
+    await new Promise((resolveSettle) => {
+      const deadline = Date.now() + PROBE_TIMEOUT_MS + 1_000;
+      const check = () => (inFlight.size === 0 || Date.now() > deadline ? resolveSettle() : setTimeout(check, 50));
+      check();
+    });
+  }
+  return overlappingSamples(collector);
 }
 
 async function responsiveness(details, fixture) {
@@ -250,29 +272,51 @@ async function responsiveness(details, fixture) {
       const samples = [];
       const calls = [];
       let readBytes = 0;
+      let attempts = 0;
       if (shape === "hot") {
-        // One warmed server, many measured calls, until the sample bound (or
-        // the iteration cap): a hot call is short, so its samples accumulate
-        // across calls — each probe still counted only inside a call window.
+        // One warmed server, ONE probe stream across back-to-back measured
+        // calls, until the sample bound (or the iteration cap): the calls run
+        // one after another with no idle gap, so nearly every probe the
+        // stream issues after the first call begins lands in a window.
         await withServer(modeDetails, fixture, async (server) => {
           const warm = await server.call(mode);
           if (warm.status !== 200) throw new Error(`hot warm-up ${mode} call: HTTP ${warm.status}`);
-          for (let iteration = 0; iteration < details.hotIterations && samples.length < details.minSamples; iteration += 1) {
-            const measured = await measureWindow(server, modeDetails);
-            samples.push(...measured.samples);
-            calls.push({ status: measured.call.status, ms: measured.call.ms });
-            readBytes += measured.readBytes;
-          }
+          const collector = newCollector();
+          const rcharBefore = rcharOf(server.pid);
+          const firstStart = performance.now();
+          await withProbeStream(server, modeDetails, collector, async () => {
+            let start = firstStart;
+            for (let iteration = 0; iteration < details.hotIterations && overlappingSamples(collector).length < details.minSamples; iteration += 1) {
+              const call = await server.call(mode);
+              const end = performance.now();
+              collector.windows.push({ start, end });
+              calls.push({ status: call.status, ms: call.ms });
+              start = end;
+            }
+          });
+          readBytes += rcharOf(server.pid) - rcharBefore;
+          samples.push(...overlappingSamples(collector));
         });
+        attempts = calls.length;
       } else {
-        let attempt = 0;
-        while (samples.length < details.minSamples && attempt < details.coldStartsMax) {
-          attempt += 1;
+        // Independent cold starts, repeated UNTIL the sample bound (the safety
+        // cap is a runaway bound, not a sample bound: review r3 #1 — a fixed
+        // 10-start cap capped a compliant summary cold start at ~90 samples).
+        while (samples.length < details.minSamples && attempts < details.coldStartSafetyCap) {
+          attempts += 1;
           await withServer(modeDetails, fixture, async (server) => {
-            const measured = await measureWindow(server, modeDetails);
-            samples.push(...measured.samples);
-            calls.push({ status: measured.call.status, ms: measured.call.ms });
-            readBytes += measured.readBytes;
+            const collector = newCollector();
+            const rcharBefore = rcharOf(server.pid);
+            // No warm call: the first list call is the measured one, and its
+            // window opens before the stream issues the first probe.
+            const start = performance.now();
+            await withProbeStream(server, modeDetails, collector, async () => {
+              const call = await server.call(mode);
+              collector.windows.push({ start, end: performance.now() });
+              calls.push({ status: call.status, ms: call.ms });
+            });
+            readBytes += rcharOf(server.pid) - rcharBefore;
+            samples.push(...overlappingSamples(collector));
           }, { dropIndex: true });
         }
       }
@@ -282,7 +326,7 @@ async function responsiveness(details, fixture) {
         && samples.length >= details.minSamples && p99 < details.p99Ms;
       if (!ok) failures += 1;
       results[mode][shape] = {
-        attempts: shape === "hot" ? calls.length : attempt,
+        attempts,
         samples: samples.length,
         p99,
         max,
@@ -341,6 +385,9 @@ async function coldSummary(details, fixture) {
     let warmIndexBytes = 0;
     if (shape === "warm-index") {
       const buildStartedAt = Date.now();
+      // dropIndex: the build round starts from no index, so it always rewrites
+      // one — a stale-but-current index never persists and the wait below would
+      // time out (review r3 N2).
       await withServer(details, fixture, async (server) => {
         const warm = await server.call("normal");
         if (warm.status !== 200) throw new Error(`warm-index build call: HTTP ${warm.status}`);
@@ -362,7 +409,7 @@ async function coldSummary(details, fixture) {
           if (Date.now() > deadline) throw new Error(`the warm-index build never persisted ${indexFile} within ${details.warmIndexPersistTimeoutMs} ms`);
           await new Promise((resolveSleep) => setTimeout(resolveSleep, 250));
         }
-      });
+      }, { dropIndex: true });
     }
     await withServer(details, fixture, async (server) => {
       const before = rcharOf(server.pid);
