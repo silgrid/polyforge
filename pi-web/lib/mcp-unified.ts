@@ -124,12 +124,20 @@ export function unifiedMcpClaudeFields(server: ClaudeMcpServerInfo): Record<stri
   };
 }
 
-/** The fields of pi's raw entry claude's own config keeps: its CLI drops the rest, so the projection says what is meant to arrive. */
+/**
+ * The fields of pi's raw entry claude's own config keeps: its CLI drops the
+ * rest, so the projection says what is meant to arrive. An http entry gains
+ * the `type: "http"` claude's own files always write (r2#4): pi's http
+ * entries carry no type — the transport comes from the url — while claude's
+ * schema asks http entries for the literal, and `add-json` without it reads
+ * as stdio (a command it then requires).
+ */
 export function claudeMcpEntryFromPi(entry: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const key of ["command", "args", "env", "url", "headers", "cwd", "type"]) {
     if (entry[key] !== undefined) out[key] = entry[key];
   }
+  if (out.url !== undefined && out.type === undefined) out.type = "http";
   return out;
 }
 
