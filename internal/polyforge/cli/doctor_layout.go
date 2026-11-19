@@ -532,17 +532,22 @@ func supervisionCheck(daemonUp bool, daemonEnvNames []string) (c doctorCheck) {
 	// polyforge#160: a daemon the container supervisor started — its
 	// environment carries the supervision marker, checked inside a
 	// container — is supervised: the container's `pf supervise` restarts
-	// a crash and forwards the stop. No tmux or systemd is involved, so
-	// this is judged BEFORE them; a host's tmux/systemd answers stay
-	// exactly as they were (the marker variable there says tmux:, not
-	// container:).
-	if supervisor.InContainer() && envNamesCarry(daemonEnvNames) {
+	// a crash and forwards the stop. Judged only when no tmux loop and
+	// no systemd unit answers first: GET /status reports environment
+	// NAMES only, so a tmux-started daemon inside a container (its
+	// marker says tmux:, which the names cannot tell apart) keeps its
+	// own, correct pass verdict and detail.
+	loop, err := supervisor.LoopRunning()
+	tmux, systemd := loop, false
+	if !loop {
+		systemd = supervisor.SystemdActive()
+	}
+	if !tmux && !systemd && supervisor.InContainer() && envNamesCarry(daemonEnvNames) {
 		c.Status, c.Detail = "pass", "the daemon runs under the container supervisor (`pf supervise`: a crash is restarted, a stop signal is forwarded and the daemon shuts down within the container's grace)"
 		return c
 	}
-	loop, err := supervisor.LoopRunning()
 	switch {
-	case loop:
+	case tmux:
 		c.Status, c.Detail = "pass", "the daemon runs under the restart loop in tmux session "+supervisor.SessionName+" (a crash is restarted within ~5s; after a reboot the next harness session runs pf daemon ensure)"
 	case supervisor.SystemdActive():
 		c.Status, c.Detail = "pass", "systemd unit "+supervisor.SystemdUnit+" is active"
