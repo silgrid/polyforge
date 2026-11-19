@@ -235,6 +235,15 @@ export function ClaudeCredentialForm({ cells, onSave }: {
   );
 }
 
+/** One write outcome per target, with its reason (the reason carries no
+ * value — file names and refusal words only). Placeholder: the test-first
+ * commit carries only the signature; the implementation lands with the
+ * unit.
+ */
+export function CredentialWriteResults(_props: { results: { target: string; status: string; reason?: string }[] }) {
+  return null;
+}
+
 /** The shell: the two panes over the route's read, plus the one-shot login
  * terminal (Q5) a declared login command opens. */
 export function AccountSettings({ embedded = true }: { embedded?: boolean }) {
