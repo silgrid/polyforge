@@ -3,10 +3,10 @@
 // list's transcript parsing — a 20 MiB single JSON line included — happens off
 // the server's main thread, so a scan never blocks other requests (polyforge#140).
 //
-// The pool holds at most a few workers (PI_WEB_SESSION_WORKERS, else
-// min(4, cpus-1)); tasks beyond that wait in one queue, so the scanner's own
-// concurrency limit stays the outer bound. State lives on globalThis so a Next
-// dev reload never strands a worker with the old code.
+// The pool holds at most a few workers (min(4, cpus-1), fixed: the acceptance
+// measures the machine, no runtime knob); tasks beyond that wait in one queue,
+// so the scanner's own concurrency limit stays the outer bound. State lives on
+// globalThis so a Next dev reload never strands a worker with the old code.
 //
 // Tests read `globalThis.__piWebScanTaskLog` (when they set it to an array):
 // one entry per stream read a completed task opened, exactly the facts the old
@@ -56,8 +56,6 @@ interface PoolState {
 }
 
 function workerLimit(): number {
-  const parsed = Number(process.env.PI_WEB_SESSION_WORKERS);
-  if (Number.isInteger(parsed) && parsed > 0) return parsed;
   return Math.max(1, Math.min(4, availableParallelism() - 1));
 }
 
@@ -70,8 +68,9 @@ function getPoolState(): PoolState {
 
 function spawnWorker(state: PoolState): PoolWorker {
   const worker = new Worker(SESSION_SCAN_WORKER_SOURCE, { eval: true });
-  // A pool never holds the process open: an unanswered task keeps it alive,
-  // because the caller's promise is still pending.
+  // A pool never holds the process open: unref'd workers let it exit once no
+  // request is pending (a task in flight is awaited by its caller, whose
+  // request keeps the server — and so this process — alive on its own).
   worker.unref();
   const entry: PoolWorker = { worker };
   worker.on("message", (message: { id: number; ok: boolean; result?: unknown; error?: string }) => {
@@ -87,6 +86,10 @@ function spawnWorker(state: PoolState): PoolWorker {
     pump(state);
   });
   worker.on("error", (error: Error) => {
+    // A failed worker leaves the pool at once, so no queued task is handed to
+    // a worker that is about to die (its exit would reject that innocent task).
+    const index = state.workers.indexOf(entry);
+    if (index !== -1) state.workers.splice(index, 1);
     const owed = entry.pending;
     entry.pending = undefined;
     owed?.reject(error);
@@ -138,7 +141,8 @@ function logTaskReads(task: Record<string, unknown>, result: unknown): void {
 
 /**
  * Run one task on the pool and return its result. A worker that fails rejects;
- * the scanner treats that as it treated a thrown read: the file's row is null.
+ * each caller decides what a rejection means (the scanner: a null row; the
+ * claude list: a zero count, as a failed history read produced).
  */
 export function runSessionScanTask(task: Record<string, unknown>): Promise<unknown> {
   const state = getPoolState();
