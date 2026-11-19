@@ -227,7 +227,7 @@ defaults:
 | `step_timeout` | `--step-timeout` | `90m` | T: the cumulative step runtime bound across a step's dispatches. |
 | `stall_window` | `--stall-window` | `10m` | N: the driver between steps (not waiting on a human) for longer than this is judged stalled; a negative value disables it. |
 | `ask_warm_window` | `--ask-warm-window` | `15m` | How long a step process that asked the owner (`pf step ask`, docs/reference/commands.md) is kept resident for the reply before the daemon ends it (stdin closed, then the signal); the step stays awaiting the owner either way and the reply resumes the session. While it waits the job holds no running slot and nothing of the dispatch is judged. Restart-only. |
-| `harness_root` | `--harness-root` | `<data-dir>` | Parent root of the step harness dirs: `<root>/step-agent` (the dedicated step agent dir), `/step-agent-sessions` (pi sessions) `/claude-config` (claude's config dir; its settings.json env block is the credential authority layer) and `/summarize-cwd` (the working directory of the summarize lane's one-shot dispatches, never the daemon's `$HOME` cwd). Replaces the former `--harness-sessions-root`, which is refused. |
+| `harness_root` | `--harness-root` | `<data-dir>` | Parent root of the step harness dirs: `<root>/step-agent` (the dedicated step agent dir), `/step-agent-sessions` (pi sessions) `/claude-config` (claude's config dir; its settings.json env block is the credential authority layer) and `/summarize-cwd` (the working directory of the summarize lane's one-shot dispatches, never the daemon's `$HOME` cwd). Host-only: every Cell, the default one included, keeps its own harness dirs under `<harness_root>/cells/<profile>/` (the `[model] source` row), so the doctor's `cells` object answers each Cell's own config roots (85a2, polyforge#142). Replaces the former `--harness-sessions-root`, which is refused. |
 | `operator_agent_dir` | `--operator-agent-dir` | `~/.pi/agent` | SOURCE of the dedicated step agent dir — a credential surface: the daemon copies the minimal set (`auth.json`, `models.json`, `agents/`, `extensions/subagent/`) from here into `<harness-root>/step-agent`, and every pi step runs against that copy. A configured source without a readable `auth.json` refuses the daemon start. |
 | `python` | — | `python3` on the daemon's `PATH` | The interpreter a workflow's step scripts run under — every step process gets it as `PF_PYTHON`, and a skill runs a script as `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/<name>.py"` (docs/reference/workflow-contract.md, "Scripts"). The daemon resolves it once at its start — this key, else `python3` on its own `PATH` (under `pf daemon ensure` not an interactive shell's) — and asks the interpreter for its version: a missing interpreter, one that does not answer, or one older than 3.9 refuses the start (exit 78) naming the source, the path, the version and this key; a set value is never replaced by the `PATH`'s. A quoted absolute path. `pf doctor`'s `python3` row judges the same rule from the shell it runs in. Host-only, restart-only. |
 | `max_concurrent_jobs` | `--max-concurrent-jobs` | `4` | The configured cap on concurrently running jobs; `pf ops max N` overrides it until the daemon restarts, and a reload that **changes** `max_concurrent_jobs` overrides `pf ops max` too (last action wins). |
@@ -261,7 +261,11 @@ PATH. How the binary is invoked and where its credentials live: the
 cross-session messaging inbox, for a token in
 the claude-config settings.json env block and for an OAuth login alike;
 the daemon never manages credentials —
-`<harness-root>/claude-config/settings.json` is the authority layer).
+`<harness-root>/claude-config/settings.json` is the authority layer; the
+guided writer is Pi Web's account page, which puts the credential into
+that file's env block through the adapter's gated write — the interactive
+session's `~/.claude/settings.json` or the checked Cells' claude-config,
+other keys kept — polyforge#142, 85a2).
 The running daemon applies a changed `claude_bin` on the reload
 (`pf config` notifies it); no restart is needed unless the daemon was
 started with an explicit `--claude-bin` flag, which pins the value and is
@@ -275,8 +279,9 @@ with the default 30-minute window), so a long `make test` runs in the
 foreground instead of hitting Claude Code's 2-minute default. The default
 never exceeds the max: a tool window of 11 minutes or less gives
 default = max. A key the claude-config settings.json env block carries
-itself wins: the daemon adds neither key that block sets (it never writes
-the file), and a default it adds next to an operator's own
+itself wins: the daemon adds neither key that block sets (the daemon never
+writes the file; the account page's forms are the guided writer, 85a2),
+and a default it adds next to an operator's own
 `BASH_MAX_TIMEOUT_MS` is clamped to that max. pi steps get neither Bash
 variable.
 

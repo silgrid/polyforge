@@ -24,6 +24,7 @@ The harness adapters here are configuration adapters under `lib/harness/`.
 | `lib/harness/compare.ts` | The read-back comparison: `consistent` / `inconsistent` (each harness's value listed) / `unsupported`. |
 | `lib/harness/redact.ts` | The allow-list: credential files as existence+path, env blocks as key names, MCP entries masked through `lib/mcp-secrets.ts` (the one masking implementation). |
 | `lib/harness/diagnostics.ts` | Native diagnostics executed (85a1b, AC6): the capability table's **fixed safe command only** — claude's `claude doctor`, pi answering its visible reason until it has one — run without a terminal (stdin closed at once, so an interactive prompt reads EOF and cannot block), bounded by a deadline that SIGTERM then SIGKILL enforces, capped in lines and bytes, and filtered so no credential or environment variable value is ever echoed — three rules: an environment-variable-shaped pair (`^[A-Z][A-Z0-9_]*$` before `=` or `:`, credential-named or not) masks its whole value; a URL's `user:pass@` userinfo is masked wherever it sits, its host kept; a set secret-named variable's value (at least 8 characters, no whitespace) is masked even bare through the run's env — beside which secret-named pairs and key-looking tokens (`looksLikeSecretValue`) are masked as before, and non-secret-named bare values are left alone. A command that could print a secret is never started at all; the filter is the second layer, not the safety. |
+| `lib/harness/account.ts` / `account-rows.ts` / `account-rows-facts.ts` | The account layer (85a2): the two safe status runs (claude `auth status`, pi `auth check --provider --json --no-refresh` per source dir) and the client-safe Cell-row model the account page renders — see 「The account layer」 below. |
 | `app/api/harness/**` | The read routes: the harness list, one concept's read, the comparison, and one harness's native diagnostics (85a1b: `GET /api/harness/[harness]/diagnose`, the adapter's fixed safe command executed with its deadline and through the credential filter). All behind the API guard; `?cwd=` goes through the file-access check. |
 
 ## The write gate (owner ruling 2026-11-19, Q1 A + Q2 C)
@@ -104,6 +105,41 @@ claude side also lists that layer (`pi-web:launch-permission-mode` from
 - **Skill state is not read** (the #146 conflict): the skills concept lists
   name/path/source only; claude's native `skillOverrides` pass through as the
   harness's own words, and pi's frontmatter state is never read.
+
+## The account layer (85a2, polyforge#142)
+
+- **`capabilities.loginCommands`** is the terminal whitelist's data source
+  (AC3): each entry declares an id, the argv the one-shot terminal runs
+  verbatim, and whether it may run against a Cell's own config root. claude
+  declares `auth-login` and `setup-token`, both on the operator's
+  interactive environment (the 2026-11-19 Q3 revision); pi declares none
+  (Q4: its interactive session logs in through the SDK routes the account
+  tab reuses). `lib/harness-login-commands.ts` resolves `{harness, id,
+  cell}` onto the argv, env and cwd — a Cell-scoped command's config root
+  comes from the server's own doctor read, never from the client.
+- **`lib/harness/account.ts`** holds the two safe status runs: claude's
+  `auth status` (JSON, exit 1 when signed out) and pi's
+  `auth check --provider <p> --json --no-refresh` against a
+  model-credential source dir (the provider is the dir's `defaultProvider`,
+  else the first credential key of its auth.json — names only). The pi run
+  always passes `--no-refresh` (a refresh would write auth.json) and never
+  `--credentials` or a print-* subcommand; only the parsed closed-set
+  fields leave the module.
+- **The auth write (AC6)**: claude's `write("auth")` lands the credential
+  in the native env block of the target's settings.json through the shared
+  gate — kind `oauth-token` → `CLAUDE_CODE_OAUTH_TOKEN`, `api-key` →
+  `ANTHROPIC_API_KEY`, `gateway` → `ANTHROPIC_BASE_URL` +
+  `ANTHROPIC_AUTH_TOKEN` — keeping the file's other keys, refusing an
+  unrecognized format, writing atomically 0600, never echoing the value.
+  `POST /api/settings/account` is its caller: it resolves the interactive
+  session's `~/.claude` and the checked Cells' claude-config roots
+  server-side (the client names profiles only), and 沿用交互会话的值
+  copies the interactive env block without the value passing through the
+  browser.
+- **`capabilities.credentialsFollowConfigRoot`** is platform-derived for
+  claude (`claudeCredentialsFollowConfigRoot`): darwin's Keychain does not
+  follow the config dir, and the account page's Cell rows show the hint
+  (AC7). pi's credentials always follow.
 
 ## Adding a harness
 
