@@ -169,7 +169,7 @@ h.trapInterrupt();
 
 try {
   await h.startServer("settings-85");
-  h.browser = await chromium.launch();
+  h.browser = await h.launchBrowser(() => chromium.launch());
 
   // S85-01 — AC1: 9 new tabs + 2 legacy-marked, order and no-project behaviour.
   await part("S1", "tabs", async () => {
