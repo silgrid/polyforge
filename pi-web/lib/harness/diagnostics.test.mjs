@@ -98,6 +98,43 @@ test("the diagnostics output never echoes a credential value", async () => {
   assert.match(maskDiagnosticLine("ANTHROPIC_API_KEY=a-plain-little-value"), /ANTHROPIC_API_KEY=•••/);
 });
 
+test("the filter masks every environment-variable-shaped value and URL userinfo (r1#2)", async () => {
+  // AC6: 不回显凭据或环境变量值——变量的值与名字是否像凭据无关。
+  const masked = (line) => maskDiagnosticLine(line);
+  assert.equal(masked("ANTHROPIC_BASE_URL=https://proxy.corp/nonsecret"), "ANTHROPIC_BASE_URL=\u2022\u2022\u2022", "a non-credential variable's value echoed");
+  assert.equal(masked("CLAUDE_CODE_USE_BEDROCK: 1"), "CLAUDE_CODE_USE_BEDROCK: \u2022\u2022\u2022", "a colon-spelled variable's value echoed");
+  // A proxy URL's userinfo (user:pass@) is a credential wherever it sits.
+  const proxy = masked("HTTPS_PROXY=http://user:p4ss@proxy.internal:8080");
+  assert.ok(!proxy.includes("user:p4ss"), `the proxy URL's userinfo echoed: ${proxy}`);
+  assert.ok(proxy.includes("\u2022\u2022\u2022@"), `the masked proxy URL lost its marker: ${proxy}`);
+  assert.ok(proxy.includes("proxy.internal:8080"), `the masked proxy URL lost its host: ${proxy}`);
+  // A bare occurrence of a set variable's value is masked through the run's env.
+  const planted = "E2E-DIAG-ENV-VALUE-987654321";
+  const env = { E2E_DIAG_SECRET_TOKEN: planted, E2E_DIAG_SHORT: "short" };
+  const line = masked(`configuration notes: ${planted} and E2E_DIAG_SHORT stays`, env);
+  assert.ok(!line.includes(planted), `a set variable's value echoed: ${line}`);
+  assert.ok(line.includes("E2E_DIAG_SHORT stays"), `a short value was masked anyway: ${line}`);
+  // Ordinary words, paths and versions still pass through untouched.
+  assert.equal(masked("doctor: installation healthy, claude 2.1.322 at /usr/local/bin"), "doctor: installation healthy, claude 2.1.322 at /usr/local/bin");
+});
+
+test("a run's output masks the three shapes a stub might print (r1#2)", async () => {
+  const planted = "E2E-DIAG-ENV-VALUE-987654321";
+  const stub = stubBinary("prints-env", [
+    `console.log("ANTHROPIC_BASE_URL=https://proxy.corp/nonsecret");`,
+    `console.log("HTTPS_PROXY=http://user:p4ss@proxy.internal:8080");`,
+    `console.log("note " + process.env.E2E_DIAG_SECRET_TOKEN);`,
+    `console.log("doctor: ordinary line 2.1.322");`,
+  ].join("\n"));
+  const result = await claudeDiagnose({ claudeBinary: stub, env: { E2E_DIAG_SECRET_TOKEN: planted } }, { timeoutMs: 5_000 });
+  assert.ok(result.available === true);
+  const text = result.lines.join("\n");
+  for (const raw of ["https://proxy.corp/nonsecret", "user:p4ss", planted]) {
+    assert.ok(!text.includes(raw), `the run's output echoes ${raw}: ${text}`);
+  }
+  assert.ok(result.lines.includes("doctor: ordinary line 2.1.322"), "an ordinary line was dropped or masked");
+});
+
 test("a run's whole filtered output, the caps, and the unavailable answers", async () => {
   const printing = stubBinary("prints", [
     `console.log("ANTHROPIC_API_KEY=${RAW_SECRETS[0]}");`,
