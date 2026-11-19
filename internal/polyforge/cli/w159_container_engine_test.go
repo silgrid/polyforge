@@ -10,6 +10,7 @@ package cli
 // naming the key — never a silent fallback to the other engine's storage.
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -112,5 +113,93 @@ func TestContainerEngineIsRefusedInANamedCellFile(t *testing.T) {
 	_, err := LoadCellFile(Config{Mapping: &mapping.Plan{}}, cell)
 	if err == nil || !strings.Contains(err.Error(), "container_engine") {
 		t.Fatalf("a named Cell file must refuse the Host-only key naming it: %v", err)
+	}
+}
+
+// TestContainerEngineConfigFace (review r1#1): the key's read faces know
+// it like its siblings — `pf config get` answers the file's podman, the
+// documented default docker when unset, `pf config list` carries the set
+// value, and the CAS snapshot records it (a write's precondition compares
+// against exactly this value).
+func TestContainerEngineConfigFace(t *testing.T) {
+	clearEnv(t)
+	s := DaemonSettings{ContainerEngine: "podman"}
+	if got := daemonValue(s, "container_engine"); got != "podman" {
+		t.Fatalf("daemonValue(container_engine) = %q, want podman", got)
+	}
+	if got := daemonValue(DaemonSettings{}, "container_engine"); got != "" {
+		t.Fatalf("an unset key renders empty, got %q", got)
+	}
+	if got := daemonDefault("container_engine"); got != "docker" {
+		t.Fatalf("daemonDefault(container_engine) = %q, want the documented default docker", got)
+	}
+	// the CAS snapshot: the file's value reaches it verbatim
+	raw := []byte("[daemon]\ncontainer_engine = \"podman\"\n")
+	snap := configSnapshotValues(raw, true)
+	if snap["container_engine"] != "podman" {
+		t.Fatalf("the CAS snapshot carries the set value: %v", snap)
+	}
+	empty := configSnapshotValues([]byte("server = \"http://hub.example:1\"\n"), true)
+	if _, ok := empty["container_engine"]; ok {
+		t.Fatalf("an unset key stays out of the snapshot (its comparison value is the default's): %v", empty)
+	}
+
+	// the verb faces, over the real file: get reads the set value back
+	xdg := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(xdg, "polyforge"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(xdg, "polyforge", "cli.toml"),
+		[]byte("[daemon]\ncontainer_engine = \"podman\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{"XDG_CONFIG_HOME": xdg}
+	code, stdout, stderr := runPf(t, env, "config", "get", "container_engine")
+	if code != 0 {
+		t.Fatalf("config get exited %d: %s", code, stderr)
+	}
+	if want := "container_engine = podman (source: file)\n"; stdout != want {
+		t.Fatalf("config get = %q, want %q", stdout, want)
+	}
+	code, stdout, stderr = runPf(t, env, "--json", "config", "get", "container_engine")
+	if code != 0 {
+		t.Fatalf("config get --json exited %d: %s", code, stderr)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatalf("config get --json did not print JSON: %v\n%s", err, stdout)
+	}
+	if doc["value"] != "podman" || doc["source"] != "file" {
+		t.Fatalf("config get --json = %v, want podman from source file", doc)
+	}
+	// the list carries the set value
+	code, stdout, stderr = runPf(t, env, "--json", "config", "list")
+	if code != 0 {
+		t.Fatalf("config list exited %d: %s", code, stderr)
+	}
+	var listed []map[string]any
+	if err := json.Unmarshal([]byte(stdout), &listed); err != nil {
+		t.Fatalf("config list --json did not print JSON: %v\n%s", err, stdout)
+	}
+	found := false
+	for _, it := range listed {
+		if it["key"] == "container_engine" {
+			found = true
+			if it["value"] != "podman" || it["source"] != "file" {
+				t.Fatalf("config list item = %v, want podman from source file", it)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("config list must carry container_engine")
+	}
+	// unset: get answers the documented default, not <unset>
+	fresh := map[string]string{"XDG_CONFIG_HOME": t.TempDir()}
+	code, stdout, stderr = runPf(t, fresh, "config", "get", "container_engine")
+	if code != 0 {
+		t.Fatalf("config get (unset) exited %d: %s", code, stderr)
+	}
+	if want := "container_engine = docker (source: default)\n"; stdout != want {
+		t.Fatalf("config get (unset) = %q, want %q (docs/reference/config.md's defaults table)", stdout, want)
 	}
 }
