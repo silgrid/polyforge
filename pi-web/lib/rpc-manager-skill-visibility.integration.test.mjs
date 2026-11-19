@@ -30,13 +30,13 @@ const { createSubagentSkillsBinding } = await jiti.import("./subagent-skills.ts"
 const hiddenSkill = join(agentDir, "skills", "hidden-skill", "SKILL.md");
 const authorSkill = join(agentDir, "skills", "author-skill", "SKILL.md");
 const visibleSkill = join(agentDir, "skills", "visible-skill", "SKILL.md");
-for (const [filePath, frontmatter, name] of [
-  [hiddenSkill, "", "hidden-skill"],
-  [authorSkill, "disable-model-invocation: true\n", "author-skill"],
-  [visibleSkill, "", "visible-skill"],
+for (const [filePath, frontmatter, name, body] of [
+  [hiddenSkill, "", "hidden-skill", "HIDDEN_SKILL_BODY"],
+  [authorSkill, "disable-model-invocation: true\n", "author-skill", "AUTHOR_SKILL_BODY"],
+  [visibleSkill, "", "visible-skill", "VISIBLE_SKILL_BODY"],
 ]) {
   await mkdir(join(agentDir, "skills", name), { recursive: true });
-  await writeFile(filePath, `---\nname: ${name}\n${frontmatter}description: ${name}\n---\n\n${name.toUpperCase()}_BODY\n`);
+  await writeFile(filePath, `---\nname: ${name}\n${frontmatter}description: ${name}\n---\n\n${body}\n`);
 }
 await writeSkillVisibility([
   { filePath: hiddenSkill, visibility: "hidden" },

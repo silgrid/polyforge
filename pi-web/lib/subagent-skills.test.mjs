@@ -73,9 +73,12 @@ test("a visibility-hidden skill hides from the catalog and is still nameable", a
   t.after(() => rm(dir, { recursive: true, force: true }));
   const hidden = join(dir, "skills", "pref-hidden", "SKILL.md");
   const plain = join(dir, "skills", "plain", "SKILL.md");
-  for (const [filePath, name] of [[hidden, "pref-hidden"], [plain, "plain"]]) {
+  for (const [filePath, name, body] of [
+    [hidden, "pref-hidden", "PREF_HIDDEN_BODY"],
+    [plain, "plain", "PLAIN_BODY"],
+  ]) {
     await mkdir(join(dir, "skills", name), { recursive: true });
-    await writeFile(filePath, `---\nname: ${name}\ndescription: routing\n---\n${name.toUpperCase()}_BODY`);
+    await writeFile(filePath, `---\nname: ${name}\ndescription: routing\n---\n${body}`);
   }
   await writeFile(join(dir, "pi-web-settings.json"), JSON.stringify({
     skillVisibility: { pi: { [hidden]: "hidden" } },
