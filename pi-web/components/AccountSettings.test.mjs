@@ -88,10 +88,12 @@ test("the Cell rows carry every field of the ticket's list, per Cell (AC1)", () 
   assert.match(beta, /data-source-kind="shared-default"/);
   assert.match(beta, /shared default/);
   assert.match(beta, /\/home\/op\/\.pi\/agent/);
-  // 状态 / 配置根 / 步骤能否使用及原因
+  // 状态 / 配置根 / 步骤能否使用：the beta claude row is usable through its
+  // residual OAuth login (the daemon still uses it) although no env credential
+  // is set — and the row says so
   assert.match(beta, /data-account-field="config-root">\/h\/beta\/claude-config</);
-  assert.match(beta, /data-account-field="usable">no</);
-  assert.match(beta, /credentials_not_configured/);
+  assert.match(beta, /data-account-field="status">not set</);
+  assert.match(beta, /data-account-field="usable">yes</);
   // the keychain hint (AC7): the beta row's capability says the credentials
   // do not follow the config root, so the row shows the hint
   assert.match(beta, /data-keychain-hint="true"/);
@@ -110,6 +112,10 @@ test("the pi pane shows its rows without the claude-only parts", () => {
   assert.ok(!html.includes("data-login-command"), "pi declares no terminal login (Q4)");
   assert.match(html, /data-account-cell="default"/);
   assert.match(html, /api_key/);
+  // the beta pi row carries the unusable verdict and its reason
+  const beta = html.slice(html.indexOf('data-account-cell="beta"'));
+  assert.match(beta, /data-account-field="usable">no</);
+  assert.match(beta, /credentials_not_configured/);
   assert.ok(!html.includes("data-account-card=" + "credential-form"), "the pi pane has no claude form");
 });
 
@@ -122,7 +128,9 @@ test("the credential form: three kinds, the gateway base URL, targets defaulting
   for (const kind of ["oauth-token", "api-key", "gateway"]) {
     assert.match(html, new RegExp(`value="${kind}"`), `the ${kind} kind is missing`);
   }
-  assert.match(html, /data-account-field="base-url"/);
+  // the gateway kind names its base URL in its label (the field itself renders
+  // only once the kind is chosen)
+  assert.match(html, /ANTHROPIC_BASE_URL/);
   assert.match(html, /data-account-field="use-interactive"/);
   assert.match(html, /copied server-side/);
   // every target checkbox is on by default: interactive + both Cells
@@ -137,11 +145,16 @@ test("an unavailable claude status degrades with its reason, and the doctor erro
     claude: { available: false, loggedIn: null, authMethod: null, configDirectory: null, reason: "claude was not found on PATH SENTINEL-FREE" },
   })));
   assert.match(card, /data-claude-status="unavailable"/);
-  assert.match(card, /claude's status is unavailable/);
+  assert.match(card, /claude(?:&#x27;|')s status is unavailable/);
   const withError = renderToStaticMarkup(h(I18nProvider, null, h(AccountHarnessPane, {
     harness: "pi", capabilities: null, onOpenLoginTerminal: noop,
     read: { claude: null, cells: [], doctorError: "pf doctor did not answer in time" },
   })));
   assert.match(withError, /The Cell facts could not be read: pf doctor did not answer in time/);
-  assert.match(withError, /No Cell is configured on this machine/);
+  assert.ok(!withError.includes("No Cell is configured"), "a failed read masquerades as an empty Cell list");
+  const empty = renderToStaticMarkup(h(I18nProvider, null, h(AccountHarnessPane, {
+    harness: "pi", capabilities: null, onOpenLoginTerminal: noop,
+    read: { claude: null, cells: [], doctorError: null },
+  })));
+  assert.match(empty, /No Cell is configured on this machine/);
 });
