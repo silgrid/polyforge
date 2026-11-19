@@ -21,11 +21,13 @@ import (
 func TestW174AttrShapeDocsContract(t *testing.T) {
 	fileRaw := w68Raw(t, "skills/polyforge/verbs/file.md")
 
-	// file.md — the create flag: the path form and the nesting it means.
-	flags := pf118Bullet(t, fileRaw, "`--attr <path>=json-value`")
-	for _, want := range []string{"a dotted path nests", "pf queue --attr"} {
-		if !strings.Contains(flags, want) {
-			t.Errorf("the file create --attr flag line must state %q (the path form and the filter that reads it back): %s", want, flags)
+	// file.md — the create flag: the path form and the nesting it means
+	// (the flag text wraps over lines, so the pins are the flattened
+	// file's unique phrases, not one line).
+	fileFlat := w68Flat(t, "skills/polyforge/verbs/file.md")
+	for _, want := range []string{"a dotted path nests", "the same dot path `pf queue --attr` filters on"} {
+		if !strings.Contains(fileFlat, want) {
+			t.Errorf("the file create --attr flag text must state %q (the path form and the filter that reads it back): %s", want, fileFlat)
 		}
 	}
 
