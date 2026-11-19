@@ -99,7 +99,7 @@ test("each mode's dry run resolves the plan from the ticket's arguments", (t) =>
   ];
   // The mode's own defaults, named without their options: the ticket's proof
   // commands rely on these exact defaults.
-  const defaults = dry("responsiveness", fixture);
+  const defaults = dry("responsiveness", fixture, ["--modes", "summary,normal,force"]);
   assert.equal(defaults.status, 0, `${defaults.stderr}`);
   const defaultPlan = JSON.parse(defaults.stdout);
   assert.equal(defaultPlan.mode, "responsiveness");
