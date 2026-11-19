@@ -405,13 +405,18 @@ func rewriteManifestVersion(t *testing.T, dir, version string) {
 	}
 }
 
-// TestInstallLegacyLayoutRefused pins AC2's legacy clause: a
-// components root in the #161 shape (release/<ver> with a current
-// symlink inside) is refused — never imported, never bridged — and the
-// error tells how to migrate.
+// TestInstallLegacyLayoutRefused pins AC2's legacy clause where the
+// old layout actually lives: the #161 image and the host installer put
+// their components in the DATA directory — <data-dir>/release/<ver>
+// with a current symlink inside — and the components root is a new
+// volume that era did not have. An install on a machine whose data
+// volume still carries that shape is refused with a migration note,
+// never imported, never bridged — and both the old layout and the
+// components volume are left untouched.
 func TestInstallLegacyLayoutRefused(t *testing.T) {
 	root := t.TempDir()
-	legacy := filepath.Join(root, LegacyReleaseDirname)
+	data := t.TempDir()
+	legacy := filepath.Join(data, LegacyReleaseDirname)
 	if err := os.MkdirAll(filepath.Join(legacy, "v0.2.3"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -419,13 +424,13 @@ func TestInstallLegacyLayoutRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := Install(Options{Root: root, Seed: installSeed(t, seedSpec{}), BaseVersion: "v0.2.4", Platform: "linux/amd64"})
+	_, err := Install(Options{Root: root, DataDir: data, Seed: installSeed(t, seedSpec{}), BaseVersion: "v0.2.4", Platform: "linux/amd64"})
 	if !errors.Is(err, ErrLegacyLayout) {
-		t.Fatalf("Install on the #161 layout = %v, want the ErrLegacyLayout refusal", err)
+		t.Fatalf("Install with a #161-era data volume = %v, want the ErrLegacyLayout refusal", err)
 	}
 	msg := err.Error()
 	for _, want := range []string{
-		filepath.Join(LegacyReleaseDirname, CurrentLinkname), // names the old shape
+		filepath.Join(LegacyReleaseDirname, CurrentLinkname), // names the old shape where it lives
 		ReleasesDirname, // names the new layout
 		"migrat",        // tells how to migrate
 	} {
@@ -433,9 +438,13 @@ func TestInstallLegacyLayoutRefused(t *testing.T) {
 			t.Errorf("the legacy refusal's migration note lacks %q:\n%s", want, msg)
 		}
 	}
-	// and the old layout is left untouched.
-	if _, err := os.Readlink(filepath.Join(legacy, CurrentLinkname)); err != nil {
-		t.Errorf("the refusal touched the legacy layout: %v", err)
+	// the old layout is left untouched, and the components volume got
+	// nothing.
+	if target, err := os.Readlink(filepath.Join(legacy, CurrentLinkname)); err != nil || target != "v0.2.3" {
+		t.Errorf("the refusal touched the legacy layout: %v (current -> %q)", err, target)
+	}
+	if state := rootState(t, root); strings.Contains(state, "v0.2.4") {
+		t.Errorf("the refused install wrote into the components volume:\n%s", state)
 	}
 }
 
