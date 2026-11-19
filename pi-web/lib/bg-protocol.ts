@@ -64,8 +64,35 @@ export function utf8Truncate(text: string, maxBytes: number): string {
   return "";
 }
 
-/** The one-line completion notification a session receives (AC1: exit code or signal, duration, log path). */
+/**
+ * The one-line completion notification a session receives (AC1: exit code or
+ * signal, duration, log path). Derived from the record alone, never from the
+ * implementation's output.
+ */
 export function bgTaskNotificationText(info: BgTaskInfo): string {
-  void info;
-  return "";
+  const id = info.id.slice(0, 8);
+  const head = info.status === "stopped"
+    ? `Background task \`${id}\` was stopped`
+    : info.status === "failed"
+      ? info.reason === "log-limit"
+        ? `Background task \`${id}\` failed: its log reached the ${BG_LOG_MAX_BYTES / (1024 * 1024)} MiB cap and the task was stopped`
+        : `Background task \`${id}\` failed`
+      : info.status === "interrupted"
+        ? `Background task \`${id}\` was interrupted by a restart`
+        : `Background task \`${id}\` succeeded`;
+  const outcome = info.exitCode !== null
+    ? `exit code ${info.exitCode}`
+    : info.signal !== null
+      ? `signal ${info.signal}`
+      : "";
+  const duration = info.endedAt !== null
+    ? `duration ${((info.endedAt - info.startedAt) / 1000).toFixed(1)}s`
+    : "";
+  const details = [
+    `command: ${info.command}`,
+    outcome,
+    duration,
+    `log: ${info.logPath}`,
+  ].filter(Boolean).join(" · ");
+  return `${head}\n${details}`;
 }
