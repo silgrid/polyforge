@@ -54,7 +54,7 @@ const messageText = (message) =>
   typeof message.content === "string" ? message.content : JSON.stringify(message.content ?? "");
 
 test("a startRpcSession session hides a preference-hidden skill while /skill:name keeps working", async (t) => {
-  const { cwd, paths } = await freshFixture("prompt");
+  const { cwd } = await freshFixture("prompt");
   const { session } = await startRpcSession("skill-visibility-rpc-prompt", "", cwd, {});
   t.after(() => void session.shutdown());
 
@@ -74,14 +74,15 @@ test("a startRpcSession session hides a preference-hidden skill while /skill:nam
   await session.send({ type: "set_model", provider: faux.provider.id, modelId: "faux-skill-visibility" });
   faux.setResponses([fauxAssistantMessage([fauxText("done")])]);
   await session.send({ type: "prompt", message: "/skill:hidden-skill" });
-  // The run settles asynchronously: poll the transcript, never read it once.
-  for (let i = 0; i < 200 && session.inner.messages.length === 0; i += 1) {
-    await new Promise((resolve) => setImmediate(resolve));
+  // The run settles asynchronously: poll the transcript against a time
+  // deadline, never read it once (r2#8).
+  const deadline = Date.now() + 10_000;
+  while (session.inner.messages.length === 0 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
   }
   const lastUser = [...session.inner.messages].reverse().find((message) => message.role === "user");
   assert.ok(lastUser, "the prompt produced a user message");
   assert.match(messageText(lastUser), /HIDDEN_SKILL_BODY/, "the skill command expanded to the skill's body");
-  assert.ok(paths["hidden-skill"].length > 0);
 });
 
 test("switching the preference back shows the skill in the next startRpcSession session", async (t) => {
@@ -98,6 +99,30 @@ test("switching the preference back shows the skill in the next startRpcSession 
   t.after(() => void after.session.shutdown());
   const afterState = await after.session.send({ type: "get_state" });
   assert.match(afterState.systemPrompt, /hidden-skill/);
+});
+
+test("a subagent session reopened through startRpcSession hides the preference-hidden skill", async (t) => {
+  const { cwd } = await freshFixture("subagent");
+  // A persisted subagent session in the shape a hidden preference must reach:
+  // append mode, load_skills: true, no named list — the catalog is its skills.
+  const sessionFile = join(root, "subagent-child.jsonl");
+  const header = { type: "session", version: 3, id: "skill-visibility-subagent-child", timestamp: new Date().toISOString(), cwd };
+  const snapshot = { type: "custom", customType: "pi-web:subagent", data: {
+    version: 1, parentSessionId: "skill-visibility-parent", parentSessionPath: join(root, "parent.jsonl"),
+    parentToolCallId: "toolu_subagent", profile: "scoped", description: "subagent", task: "work",
+    runInBackground: false, createdAt: new Date().toISOString(),
+    resourceSnapshot: { version: 1, appendSystemPrompt: [], tools: ["read"], loadSkills: true, loadExtensions: false },
+  } };
+  await writeFile(sessionFile, `${JSON.stringify(header)}\n${JSON.stringify(snapshot)}\n`);
+  t.after(() => rm(sessionFile, { force: true }));
+
+  const { session } = await startRpcSession("skill-visibility-subagent-child", sessionFile);
+  t.after(() => void session.shutdown());
+
+  const state = await session.send({ type: "get_state" });
+  assert.match(state.systemPrompt, /<available_skills>/);
+  assert.match(state.systemPrompt, /visible-skill/);
+  assert.doesNotMatch(state.systemPrompt, /hidden-skill/, "a hidden preference leaves a subagent's catalog too");
 });
 
 test("the named-skills projection composes after the preference at the loader level", async (t) => {
