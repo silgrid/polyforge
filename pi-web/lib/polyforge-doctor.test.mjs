@@ -21,7 +21,7 @@ const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "pi-web-pf-doctor-"));
 test.after(() => { fs.rmSync(scratch, { recursive: true, force: true }); });
 
 /** A stub `pf` recording its argv and answering `body` with `code`. */
-function stubPf(name, body, code = 0) {
+function stubPf(name, body, code = 0, stderr = "") {
   const dir = path.join(scratch, name);
   fs.mkdirSync(dir, { recursive: true });
   const log = path.join(scratch, `${name}-calls.jsonl`);
@@ -29,6 +29,7 @@ function stubPf(name, body, code = 0) {
   fs.writeFileSync(binary, `#!/usr/bin/env node
 const fs = require("node:fs");
 fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)) + "\\n");
+process.stderr.write(${JSON.stringify(stderr)});
 process.stdout.write(${JSON.stringify(body)});
 process.exit(${code});
 `);
@@ -96,6 +97,11 @@ test("readDoctorCells: a failing or unparsable pf degrades to cells null with th
   const old = await readDoctorCells({ binary: stubPf("old", JSON.stringify({ ok: true, checks: [] })).binary });
   assert.equal(old.cells, null);
   assert.ok(old.error);
+  // a pf that exits 0 with empty stdout and a long stderr keeps the reason
+  // bounded (no stderr dump)
+  const long = await readDoctorCells({ binary: stubPf("empty", "", 0, "x".repeat(5000)).binary });
+  assert.equal(long.cells, null);
+  assert.ok(long.error && long.error.length < 500, "the degradation reason is unbounded");
 });
 
 test("sanitizeDoctorCells: only the closed vocabularies pass, everything else is dropped", () => {
