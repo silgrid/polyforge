@@ -51,6 +51,10 @@ export interface BgRuntimeDeps {
   reopenSession(sessionId: string, sessionFile: string): Promise<BgWrapperLike>;
   /** The per-task log cap; defaults to the ticket's 64 MiB. */
   logMaxBytes?: number;
+  /** The wake's idle-wait poll interval (default 500 ms). */
+  wakeIdlePollMs?: number;
+  /** The wake's idle-wait deadline (default 10 min): past it the notification is sent anyway, queued as a follow-up. */
+  wakeIdleTimeoutMs?: number;
 }
 
 export interface BgRuntimeSink {
@@ -86,6 +90,11 @@ interface InternalTask {
 }
 
 const TERMINAL_STATUSES: ReadonlySet<BgTaskStatus> = new Set(["succeeded", "failed", "stopped", "interrupted"]);
+
+const WAKE_IDLE_POLL_MS = 500;
+const WAKE_IDLE_TIMEOUT_MS = 10 * 60_000;
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => { setTimeout(resolve, ms); });
 
 function taskDir(root: string, sessionId: string, taskId: string): string {
   return join(root, sessionId, taskId);
@@ -227,6 +236,14 @@ export function createBgTaskController(deps: BgRuntimeDeps): BgTaskController {
         wrapper = await deps.reopenSession(info.sessionId, sessionFile);
       }
       await wrapper.waitUntilReady?.();
+      // A session mid-turn (a reply streaming, a compaction running) gets the
+      // notification after its turn ends, never inside it (AC1); a turn that
+      // outlasts the deadline still gets it, queued as a follow-up.
+      const pollMs = deps.wakeIdlePollMs ?? WAKE_IDLE_POLL_MS;
+      const deadline = Date.now() + (deps.wakeIdleTimeoutMs ?? WAKE_IDLE_TIMEOUT_MS);
+      while (wrapper.isAlive() && wrapper.isRunning() && Date.now() < deadline) {
+        await sleep(pollMs);
+      }
       await wrapper.inner.sendCustomMessage({
         customType: BG_TASK_NOTIFICATION_TYPE,
         content: bgTaskNotificationText(info),
