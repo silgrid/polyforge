@@ -1,8 +1,11 @@
+import { join } from "node:path";
 import { NextResponse } from "next/server";
 import { getAgentDir, type McpExposure } from "@earendil-works/pi-coding-agent";
 import type {
+  ClaudeMcpFileInfo,
   McpActionItemResult,
   McpActionResponse,
+  McpApplyResult,
   McpErrorResponse,
   McpRefusalReason,
   McpResponse,
@@ -29,6 +32,10 @@ import {
   type McpAddRequest,
 } from "@/lib/mcp-add";
 import { readMcpOverview, readMcpServerConfigs, readMcpServerEntry } from "@/lib/mcp-config-read";
+import { readClaudeMcpRawEntry, readClaudeMcpServers, claudeMcpStatePath } from "@/lib/claude-mcp-read";
+import { claudeMcpAddJson, claudeMcpRemove, claudeMcpWriteEntry, claudeMcpWriteGate } from "@/lib/claude-mcp-write";
+import { claudeMcpEntryFromPi, piMcpEntryFromClaude, unifiedMcpRows } from "@/lib/mcp-unified";
+import { findClaudeBinary } from "@/lib/claude-session";
 import {
   isMcpEntryRefusal,
   mcpInternalsOrRefusal,
@@ -119,7 +126,13 @@ export async function GET(req: Request) {
   }
 
   try {
-    return NextResponse.json((await readMcpOverview({ agentDir: getAgentDir(), project })) satisfies McpResponse);
+    const overview = await readMcpOverview({ agentDir: getAgentDir(), project });
+    const claude = claudeMcpSection(project?.cwd);
+    return NextResponse.json({
+      ...overview,
+      claude,
+      unified: unifiedMcpRows(overview.servers, claude.servers),
+    } satisfies McpResponse);
   } catch (error) {
     return refusal(500, "internal", errorMessage(error));
   }
@@ -161,7 +174,8 @@ async function mcpWritable(): Promise<PiSdkInternals | Refusal> {
   return isMcpEntryRefusal(internals) ? asRefusal(internals) : internals;
 }
 
-function readScope(value: unknown): McpScope | undefined {
+/** The scope of a pi entry: pi never lists or writes a `local` one (#85 85c). */
+function readScope(value: unknown): Exclude<McpScope, "local"> | undefined {
   return value === "global" || value === "project" ? value : undefined;
 }
 
@@ -183,10 +197,69 @@ function readServerList(value: unknown): McpServerRef[] | undefined {
   return [...servers.values()];
 }
 
+/**
+ * claude's half of the unified list (#85 85c, AC1): its files only — the
+ * state file and the project's .mcp.json — plus a PATH lookup for `present`,
+ * which says a write could reach a CLI. Nothing here spawns, exactly like
+ * GET's pi half.
+ */
+function claudeMcpSection(cwd: string | undefined): ClaudeMcpFileInfo {
+  const read = readClaudeMcpServers({ ...(cwd !== undefined ? { cwd } : {}), env: process.env });
+  return {
+    present: findClaudeBinary() !== null,
+    configPath: read.configPath,
+    stateReadable: read.stateReadable,
+    servers: read.servers,
+    disabledMcpServers: read.disabledMcpServers,
+  };
+}
+
+/** The unified scopes of the MCP list (#85 85c): `local` is claude's own group. */
+const UNIFIED_SCOPES: readonly McpScope[] = ["global", "project", "local"];
+
+function readUnifiedScope(value: unknown): McpScope | undefined {
+  return UNIFIED_SCOPES.includes(value as McpScope) ? (value as McpScope) : undefined;
+}
+
+/** The 「应用到」 targets of an add or a set-apply: default pi alone (the panel it grew from), never empty. */
+function readHarnesses(value: unknown): ("pi" | "claude")[] | undefined {
+  if (value === undefined || value === null) return ["pi"];
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const out: ("pi" | "claude")[] = [];
+  for (const item of value) {
+    if (item !== "pi" && item !== "claude") return undefined;
+    if (!out.includes(item)) out.push(item);
+  }
+  return out;
+}
+
+/** A claude-mcp-write outcome as this route answers it: a write the CLI refused or could not make. */
+function claudeWriteRefusal(outcome: { ok: false; reason: string; error: string }): Refusal {
+  if (outcome.reason === "invalid-request") return new Refusal(400, "invalid-request", outcome.error);
+  return new Refusal(409, "claude-unwritable", outcome.error);
+}
+
+/** claude's write context: the panel's project folder and the env claude resolves its own files by. */
+function claudeWriteContext(project: Project | undefined) {
+  return { ...(project !== undefined ? { cwd: project.cwd } : {}), env: process.env };
+}
+
+/** The names claude defines in `scope` right now, for a name an add must not take. */
+function claudeNamesInScope(scope: McpScope, cwd: string | undefined): string[] {
+  const read = readClaudeMcpServers({ ...(cwd !== undefined ? { cwd } : {}), env: process.env });
+  return read.servers.filter((server) => server.scope === scope).map((server) => server.name);
+}
+
 async function overviewResponse(agentDir: string, project: Project | undefined, extra: Omit<McpActionResponse, keyof McpResponse> = {}) {
   try {
     const overview = await readMcpOverview({ agentDir, project });
-    return NextResponse.json({ ...overview, ...extra } satisfies McpActionResponse);
+    const claude = claudeMcpSection(project?.cwd);
+    return NextResponse.json({
+      ...overview,
+      claude,
+      unified: unifiedMcpRows(overview.servers, claude.servers),
+      ...extra,
+    } satisfies McpActionResponse);
   } catch (error) {
     return refusal(500, "internal", errorMessage(error));
   }
@@ -372,6 +445,23 @@ async function undoRemoval(agentDir: string, project: Project | undefined, token
   const held = takeRemovedEntry(token);
   if (!held) return refusal(410, "undo-unavailable", "Nothing to undo: the removal is unknown, already undone, or older than 60 seconds");
   const server = { scope: held.scope, name: held.name };
+  // A claude removal comes back through claude's own CLI (AC2), under the
+  // same version gate as the write that removed it.
+  if (held.harness === "claude") {
+    if (held.scope !== "global" && held.cwd === undefined) {
+      returnRemovedEntry(held);
+      return refusal(410, "undo-unavailable", "The project folder this claude entry lived in is gone, so the removal is not undone");
+    }
+    const outcome = await claudeMcpAddJson(held.scope, held.name, held.entry as Record<string, unknown>, {
+      ...(held.cwd !== undefined ? { cwd: held.cwd } : {}),
+      env: process.env,
+    });
+    if (!outcome.ok) {
+      returnRemovedEntry(held);
+      return claudeWriteRefusal(outcome).response();
+    }
+    return overviewResponse(agentDir, project, { restored: server });
+  }
   let failure: Refusal | undefined;
   try {
     let heldProject: Project | undefined;
@@ -411,7 +501,7 @@ async function undoRemoval(agentDir: string, project: Project | undefined, token
  * connections found before is forgotten, since signed-out ones no longer see
  * it; open sessions lose access at their next request to the server.
  */
-async function signOutServer(agentDir: string, project: Project | undefined, internals: PiSdkInternals, server: McpServerRef) {
+async function signOutServer(agentDir: string, project: Project | undefined, internals: PiSdkInternals, server: McpServerRef & { scope: Exclude<McpScope, "local"> }) {
   const target = writeTarget(server.scope, project, agentDir);
   if (target instanceof Refusal) return target.response();
   const { name } = server;
@@ -466,13 +556,15 @@ function insertRefusal(error: unknown, agentDir: string, project: Project | unde
 }
 
 function readAddRequest(body: Record<string, unknown>): McpAddRequest | Refusal {
-  const scope = readScope(body.scope);
+  const scope = readUnifiedScope(body.scope);
+  const harnesses = readHarnesses(body.harnesses);
   const values = readMcpAddValues(body.values);
   const secretReferences = readMcpAddSecretReferences(body.secretReferences);
   const server = body.server === undefined ? 0 : body.server;
   const confirm = body.confirmHostEnv === undefined ? [] : body.confirmHostEnv;
   if (
     typeof body.text !== "string" || body.text.length > MCP_ADD_MAX_TEXT || !scope || !values || !secretReferences
+    || !harnesses
     || typeof server !== "number" || !Number.isInteger(server) || server < 0
     || (body.name !== undefined && readName(body.name) === undefined)
     || (body.rawPi !== undefined && typeof body.rawPi !== "boolean")
@@ -488,6 +580,7 @@ function readAddRequest(body: Record<string, unknown>): McpAddRequest | Refusal 
     server,
     ...(typeof body.name === "string" ? { name: body.name } : {}),
     scope,
+    harnesses,
     rawPi: body.rawPi === true,
     confirmHostEnv: confirm as string[],
   };
@@ -520,73 +613,336 @@ async function addServer(
   const request = readAddRequest(body);
   if (request instanceof Refusal) return request.response();
   const { scope } = request;
-  if (scope === "project" && !project) return refusal(400, "invalid-request", "A project server needs the project's cwd");
-  const trustFolder = scope === "project" && body.trustFolder === true && project !== undefined;
+  const harnesses = request.harnesses ?? ["pi"];
+  const piTarget = harnesses.includes("pi");
+  const claudeTarget = harnesses.includes("claude");
+  if (scope === "local" && piTarget) {
+    return refusal(409, "harness-unsupported", "pi holds no local scope: the local group is Claude's alone");
+  }
+  if (scope !== "global" && !project) return refusal(400, "invalid-request", "A project or local server needs the project's cwd");
+  // claude's gate runs before any file is written (r2#3): a binary missing or
+  // a version the gate does not recognize refuses the whole add, so no side
+  // is left half-written; a CLI failure after the gate takes pi's entry back.
+  if (claudeTarget) {
+    const gate = await claudeMcpWriteGate(scope, claudeWriteContext(project));
+    if (!gate.ok) return claudeWriteRefusal(gate).response();
+  }
+  const trustFolder = scope === "project" && piTarget && body.trustFolder === true && project !== undefined;
   // Where it may go is said first: a confirmation asked for a server the folder then refuses would be asked for nothing.
-  const target = trustFolder ? undefined : writeTarget(scope, project, agentDir);
+  const target = trustFolder || !piTarget ? undefined : writeTarget(scope, project, agentDir);
   if (target instanceof Refusal) return target.response();
   if (trustFolder && project) {
     const breadth = freshFolderTrustBreadth(project.cwd, { agentDir, knownFolders: project.allowedRoots });
     if (breadth) return refusal(409, "trust-too-broad", `Trusting ${project.cwd} would also trust ${breadth.path}`, { breadth });
   }
-  const prepared = prepareMcpAdd(request, { takenNames: namesInFile(agentDir, project, scope, internals), internals });
+  // A name either side's file already defines is refused, exactly as pi's own file is checked.
+  const takenNames = [
+    ...(piTarget && scope !== "local" ? namesInFile(agentDir, project, scope, internals) : []),
+    ...(claudeTarget ? claudeNamesInScope(scope, project?.cwd) : []),
+  ];
+  const prepared = prepareMcpAdd(request, { takenNames, internals });
   if (!prepared.ok) return addRefusal(prepared).response();
   const { name, entry } = prepared;
 
-  if (trustFolder && project) {
-    const target = { scope: "project" as const, cwd: project.cwd, allowedRoots: project.allowedRoots };
-    const result = await trustFreshFolderAndWrite(
-      project.cwd,
-      agentDir,
-      () => insertMcpServer(target, name, entry),
-      { knownFolders: project.allowedRoots },
-    );
-    if (!result.ok) {
-      switch (result.reason) {
-        case "trust-too-broad":
-          return refusal(409, "trust-too-broad", result.error, { breadth: result.breadth });
-        case "folder-not-fresh":
-          return refusal(409, "folder-not-fresh", result.error, result.status ? { trust: result.status } : {});
-        case "trust-unreadable":
-          return refusal(409, "trust-unreadable", result.error);
-        case "write-failed": {
-          const failure = insertRefusal(result.writeError, agentDir, project, scope, internals);
-          if (result.rollbackError === undefined) return failure.response();
-          // The write's own reason still says why nothing was added; `trustKept` says the folder stays trusted.
-          return refusal(failure.status, failure.reason, `${failure.error}; the folder stays trusted, since taking the trust back failed: ${result.rollbackError}`, {
-            ...failure.params,
-            trustKept: true,
-            ...(result.status ? { trust: result.status } : {}),
-          });
+  // The pi half, when the selection names it.
+  let piPath: string | undefined;
+  let piExtras: Omit<McpActionResponse, keyof McpResponse> = {};
+  if (piTarget) {
+    if (trustFolder && project) {
+      const trustTarget = { scope: "project" as const, cwd: project.cwd, allowedRoots: project.allowedRoots };
+      const result = await trustFreshFolderAndWrite(
+        project.cwd,
+        agentDir,
+        () => insertMcpServer(trustTarget, name, entry),
+        { knownFolders: project.allowedRoots },
+      );
+      if (!result.ok) {
+        switch (result.reason) {
+          case "trust-too-broad":
+            return refusal(409, "trust-too-broad", result.error, { breadth: result.breadth });
+          case "folder-not-fresh":
+            return refusal(409, "folder-not-fresh", result.error, result.status ? { trust: result.status } : {});
+          case "trust-unreadable":
+            return refusal(409, "trust-unreadable", result.error);
+          case "write-failed": {
+            const failure = insertRefusal(result.writeError, agentDir, project, scope, internals);
+            if (result.rollbackError === undefined) return failure.response();
+            // The write's own reason still says why nothing was added; `trustKept` says the folder stays trusted.
+            return refusal(failure.status, failure.reason, `${failure.error}; the folder stays trusted, since taking the trust back failed: ${result.rollbackError}`, {
+              ...failure.params,
+              trustKept: true,
+              ...(result.status ? { trust: result.status } : {}),
+            });
+          }
         }
       }
+      invalidateModelsCache();
+      piPath = result.value.path;
+      piExtras = { trust: result.status, trustedFolder: true };
+    } else {
+      if (!target) return refusal(500, "internal", "No file to write to");
+      try {
+        ({ path: piPath } = await insertMcpServer(target, name, entry));
+      } catch (error) {
+        return insertRefusal(error, agentDir, project, scope, internals).response();
+      }
+      if (scope === "project" && project) {
+        const trust = trustAfterWrite(project.cwd, agentDir);
+        if (trust) piExtras = { trust };
+      }
     }
-    invalidateModelsCache();
-    return overviewResponse(agentDir, project, {
-      added: { scope, name, path: result.value.path },
-      trust: result.status,
-      trustedFolder: true,
-    });
   }
 
-  if (!target) return refusal(500, "internal", "No file to write to");
-  let path: string;
-  try {
-    ({ path } = await insertMcpServer(target, name, entry));
-  } catch (error) {
-    return insertRefusal(error, agentDir, project, scope, internals).response();
+  // The claude half, when the selection names it (AC2): pi's prepared entry
+  // projected to the fields claude's own config keeps, through its CLI alone.
+  // A failure here is not the whole add's failure alone (r2#3): pi's entry
+  // goes back out on every path that wrote it — the plain one through its
+  // `target`, the trustFolder step through the same project target the trust
+  // wrote through (r3#1) — so a retry meets the same refusal, never a
+  // name-taken. The folder's trust is the folder's, not the entry's: it
+  // stays, and the refusal says so (`trustKept`); a rollback that itself
+  // fails says the entry stayed.
+  if (claudeTarget) {
+    const outcome = await claudeMcpAddJson(scope, name, claudeMcpEntryFromPi(entry as unknown as Record<string, unknown>), claudeWriteContext(project));
+    if (!outcome.ok) {
+      let piKept = false;
+      if (piTarget) {
+        const rollbackTarget = trustFolder && project
+          ? { scope: "project" as const, cwd: project.cwd, allowedRoots: project.allowedRoots }
+          : target;
+        if (rollbackTarget) {
+          piKept = await removeMcpServer(rollbackTarget, name).then(() => false, () => true);
+        }
+      }
+      const failure = claudeWriteRefusal(outcome);
+      if (piKept) {
+        return new Refusal(failure.status, failure.reason, `${failure.error}; pi's entry could not be taken back`, { ...failure.params, name }).response();
+      }
+      if (trustFolder && project) {
+        return new Refusal(failure.status, failure.reason, failure.error, {
+          ...failure.params,
+          trustKept: true,
+          ...(piExtras.trust ? { trust: piExtras.trust } : {}),
+        }).response();
+      }
+      return failure.response();
+    }
   }
-  const trust = scope === "project" && project ? trustAfterWrite(project.cwd, agentDir) : undefined;
-  return overviewResponse(agentDir, project, { added: { scope, name, path }, ...(trust ? { trust } : {}) });
+
+  const claudePath = scope === "project" && project
+    ? join(project.cwd, ".mcp.json")
+    : claudeMcpStatePath({ env: process.env });
+  return overviewResponse(agentDir, project, {
+    ...piExtras,
+    added: { scope, name, path: piTarget ? (piPath as string) : claudePath, ...(claudeTarget ? { harness: "claude" as const } : {}) },
+  });
+}
+
+/**
+ * Removes a claude entry through its CLI only (AC2, Q1 A — the panel words it
+ * 「从 Claude 移除」): the raw entry is read first and held server-side for
+ * the 60-second undo, exactly as pi's removal holds its own, so taking a
+ * claude entry away can be put back through `claude mcp add-json`.
+ */
+async function removeClaudeServer(agentDir: string, project: Project | undefined, scope: McpScope, name: string) {
+  if (scope !== "global" && !project) {
+    return refusal(400, "invalid-request", `claude's ${scope} scope needs the project's cwd`);
+  }
+  const raw = readClaudeMcpRawEntry({ scope, name, ...(project !== undefined ? { cwd: project.cwd } : {}), env: process.env });
+  if (!raw.ok) return refusal(409, "server-missing", raw.error, { path: raw.path, name });
+  const outcome = await claudeMcpRemove(scope, name, claudeWriteContext(project));
+  if (!outcome.ok) return claudeWriteRefusal(outcome).response();
+  const { token, expiresAt } = holdRemovedEntry({
+    scope,
+    name,
+    ...(project !== undefined ? { cwd: project.cwd } : {}),
+    harness: "claude",
+    path: raw.sourcePath,
+    entry: raw.entry,
+    index: 0,
+  });
+  return overviewResponse(agentDir, project, {
+    undo: { scope, name, harness: "claude", token, path: raw.sourcePath, expiresInMs: Math.max(0, expiresAt - Date.now()) },
+  });
+}
+
+/**
+ * The 「应用到」 change (AC3): the row's chosen harnesses hold the entry
+ * afterwards, and nothing else moves — a harness that just lost its copy is
+ * removed from (pi's writer, claude's CLI, either way undoable), a chosen
+ * harness that lacks it gets the other side's native definition projected.
+ * The answer carries one result per harness, so a failure on one side never
+ * reads as a total success.
+ */
+async function applyToChange(
+  agentDir: string,
+  project: Project | undefined,
+  scope: McpScope,
+  name: string,
+  harnesses: ("pi" | "claude")[],
+) {
+  if (harnesses.includes("pi") && scope === "local") {
+    return refusal(409, "harness-unsupported", `pi holds no local scope: "${name}" in the local group is Claude's alone`, { name });
+  }
+  const piRaw = scope === "local" ? undefined : readMcpServerEntry({ agentDir, scope, name, project });
+  const claudeRaw = readClaudeMcpRawEntry({ scope, name, ...(project !== undefined ? { cwd: project.cwd } : {}), env: process.env });
+  const piHas = piRaw?.ok === true;
+  const claudeHas = claudeRaw.ok;
+  if (!piHas && !claudeHas) {
+    const path = piRaw && !piRaw.ok ? piRaw.path : claudeRaw.path;
+    return refusal(409, "server-missing", `No harness defines MCP server "${name}" in the ${scope} group`, { path, name });
+  }
+  const targets = new Set(harnesses);
+  const results: McpApplyResult[] = [];
+  for (const harness of ["pi", "claude"] as const) {
+    if (harness === "pi" && scope === "local") continue;
+    const want = targets.has(harness);
+    const has = harness === "pi" ? piHas : claudeHas;
+    if (want === has) {
+      results.push({ harness, ok: true });
+      continue;
+    }
+    if (want) {
+      // Add the missing harness's copy from the other side's native definition.
+      if (harness === "claude") {
+        if (!piRaw?.ok) {
+          results.push({ harness, ok: false, reason: "server-missing", error: `pi does not define "${name}", so there is nothing to apply to claude` });
+          continue;
+        }
+        const outcome = await claudeMcpAddJson(scope, name, claudeMcpEntryFromPi(piRaw.value as unknown as Record<string, unknown>), claudeWriteContext(project));
+        results.push(outcome.ok ? { harness, ok: true } : { harness, ok: false, reason: "claude-unwritable", error: outcome.error });
+      } else {
+        if (!claudeRaw.ok) {
+          results.push({ harness, ok: false, reason: "server-missing", error: `claude does not define "${name}", so there is nothing to apply to pi` });
+          continue;
+        }
+        const projected = piMcpEntryFromClaude(claudeRaw.entry);
+        if (projected === undefined) {
+          results.push({ harness, ok: false, reason: "harness-unsupported", error: `pi loads no sse or ws entry: "${name}"` });
+          continue;
+        }
+        const target = writeTarget(scope, project, agentDir);
+        if (target instanceof Refusal) {
+          results.push({ harness, ok: false, reason: target.reason, error: target.error });
+          continue;
+        }
+        try {
+          await insertMcpServer(target, name, projected);
+          results.push({ harness, ok: true });
+        } catch (error) {
+          const failure = writeRefusal(error);
+          results.push({ harness, ok: false, reason: failure.reason, error: failure.error });
+        }
+      }
+      continue;
+    }
+    // The harness holds a copy the selection no longer names: remove it, undoably.
+    if (harness === "claude") {
+      if (!claudeRaw.ok) {
+        results.push({ harness, ok: false, reason: "server-missing", error: `claude does not define "${name}" anymore` });
+        continue;
+      }
+      const removal = await claudeMcpRemove(scope, name, claudeWriteContext(project));
+      if (removal.ok) {
+        const { token, expiresAt } = holdRemovedEntry({
+          scope,
+          name,
+          ...(project !== undefined ? { cwd: project.cwd } : {}),
+          harness: "claude",
+          path: claudeRaw.sourcePath,
+          entry: claudeRaw.entry,
+          index: 0,
+        });
+        results.push({ harness, ok: true, undo: { token, path: claudeRaw.sourcePath, expiresInMs: Math.max(0, expiresAt - Date.now()) } });
+      } else {
+        results.push({ harness, ok: false, reason: "claude-unwritable", error: removal.error });
+      }
+    } else {
+      const target = writeTarget(scope, project, agentDir);
+      if (target instanceof Refusal) {
+        results.push({ harness, ok: false, reason: target.reason, error: target.error });
+        continue;
+      }
+      try {
+        const removed = await removeMcpServer(target, name);
+        const { token, expiresAt } = holdRemovedEntry({
+          scope,
+          name,
+          path: removed.path,
+          ...(target.scope === "project" ? { cwd: target.cwd } : {}),
+          entry: removed.value.entry,
+          index: removed.value.index,
+        });
+        results.push({ harness, ok: true, undo: { token, path: removed.path, expiresInMs: Math.max(0, expiresAt - Date.now()) } });
+      } catch (error) {
+        const failure = writeRefusal(error);
+        results.push({ harness, ok: false, reason: failure.reason, error: failure.error });
+      }
+    }
+  }
+  return overviewResponse(agentDir, project, { applied: { scope, name, results } });
+}
+
+/**
+ * 「统一成当前值」 (AC3): one side's definition wins and only the other side
+ * is written — claude's as remove + add-json of the projected entry with the
+ * staged old definition rolled back on failure, pi's as remove + insert
+ * under its own writer, put back if the insert fails.
+ */
+async function unifyServer(
+  agentDir: string,
+  project: Project | undefined,
+  scope: McpScope,
+  name: string,
+  from: "pi" | "claude",
+) {
+  if (scope === "local") {
+    return refusal(409, "harness-unsupported", "The local group is Claude's alone; there is no other side to unify");
+  }
+  const piRaw = readMcpServerEntry({ agentDir, scope, name, project });
+  const claudeRaw = readClaudeMcpRawEntry({ scope, name, ...(project !== undefined ? { cwd: project.cwd } : {}), env: process.env });
+  if (!piRaw.ok) return refusal(409, "server-missing", `Both harnesses must define "${name}" to unify it`, { path: piRaw.path, name });
+  if (!claudeRaw.ok) return refusal(409, "server-missing", `Both harnesses must define "${name}" to unify it`, { path: claudeRaw.path, name });
+  if (from === "pi") {
+    const outcome = await claudeMcpWriteEntry(scope, name, claudeMcpEntryFromPi(piRaw.value as unknown as Record<string, unknown>), {
+      ...claudeWriteContext(project),
+      previous: claudeRaw.entry,
+    });
+    if (!outcome.ok) return claudeWriteRefusal(outcome).response();
+  } else {
+    const projected = piMcpEntryFromClaude(claudeRaw.entry);
+    if (projected === undefined) {
+      return refusal(409, "harness-unsupported", `pi loads no sse or ws entry: "${name}"`, { name });
+    }
+    const target = writeTarget(scope, project, agentDir);
+    if (target instanceof Refusal) return target.response();
+    try {
+      const removed = await removeMcpServer(target, name);
+      try {
+        await insertMcpServer(target, name, projected);
+      } catch (error) {
+        // Put the old entry back where it stood; a failure to do so is the
+        // write's own failure, already on its way out.
+        await insertMcpServer(target, name, removed.value.entry, removed.value.index).catch(() => {});
+        throw error;
+      }
+    } catch (error) {
+      return writeRefusal(error).response();
+    }
+  }
+  return overviewResponse(agentDir, project);
 }
 
 // POST /api/mcp body: { action, cwd?, ... }
-//   enable | disable | remove | sign-out: { scope, name }
+//   enable | disable | remove | sign-out: { scope, name } (pi's own scopes)
+//   remove: { scope, name, harness: "claude" } → claude's copy, through its CLI, undoably (#85 85c)
+//   set-apply: { scope, name, harnesses } → the row's 「应用到」, per-harness `applied.results` (#85 85c)
+//   unify: { scope, name, from } → 「统一成当前值」, only the other side written (#85 85c)
 //   set-enabled: { enabled, servers: [{ scope, name }] } → per-server `results`
 //   set-exposure: { scope, name, exposure }
 //   set-in-project: { name, enabled } → a global server on or off in `cwd`'s project alone
-//   undo: { token } (from a remove's `undo`)
-//   add: { text, scope, values?, secretReferences?, server?, name?, rawPi?, trustFolder?, confirmHostEnv? }
+//   undo: { token } (from a remove's `undo`, pi's or claude's)
+//   add: { text, scope, harnesses?, values?, secretReferences?, server?, name?, rawPi?, trustFolder?, confirmHostEnv? }
 // `cwd` is the panel's project: required for a project server, and the
 // overview in the answer covers it.
 export async function POST(req: Request) {
@@ -617,12 +973,37 @@ export async function POST(req: Request) {
       case "disable":
       case "remove":
       case "sign-out": {
-        const scope = readScope(body.scope);
         const name = readName(body.name);
-        if (!scope || name === undefined) return refusal(400, "invalid-request", "scope must be \"global\" or \"project\", and name a server name");
+        if (name === undefined) return refusal(400, "invalid-request", "name must be a server name");
+        if (body.action === "remove" && body.harness === "claude") {
+          const scope = readUnifiedScope(body.scope);
+          if (!scope) return refusal(400, "invalid-request", "scope must be \"global\", \"project\" or \"local\" for a claude removal");
+          return await removeClaudeServer(agentDir, project, scope, name);
+        }
+        const scope = readScope(body.scope);
+        if (!scope) return refusal(400, "invalid-request", "scope must be \"global\" or \"project\", and name a server name");
         if (body.action === "remove") return await removeServer(agentDir, project, { scope, name });
         if (body.action === "sign-out") return await signOutServer(agentDir, project, internals, { scope, name });
         return await switchServer(agentDir, project, internals, { scope, name }, body.action === "enable");
+      }
+      case "set-apply": {
+        const scope = readUnifiedScope(body.scope);
+        const name = readName(body.name);
+        const harnesses = readHarnesses(body.harnesses);
+        if (!scope || name === undefined || !harnesses) {
+          return refusal(400, "invalid-request", "set-apply needs scope (global, project or local), name, and a non-empty harnesses list");
+        }
+        if (scope !== "global" && !project) return refusal(400, "invalid-request", "A project or local row needs the project's cwd");
+        return await applyToChange(agentDir, project, scope, name, harnesses);
+      }
+      case "unify": {
+        const scope = readUnifiedScope(body.scope);
+        const name = readName(body.name);
+        if (!scope || name === undefined || (body.from !== "pi" && body.from !== "claude")) {
+          return refusal(400, "invalid-request", "unify needs scope, name, and from (\"pi\" or \"claude\")");
+        }
+        if (scope !== "global" && !project) return refusal(400, "invalid-request", "A project row needs the project's cwd");
+        return await unifyServer(agentDir, project, scope, name, body.from);
       }
       case "set-enabled": {
         const servers = readServerList(body.servers);
