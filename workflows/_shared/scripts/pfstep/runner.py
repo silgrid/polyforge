@@ -570,13 +570,18 @@ def run_command(o: CommandOptions) -> CommandResult:
         return res
     workdir, cwd_rel = clone, "repos/" + o.repo
     if o.workdir:
-        if not os.path.isabs(o.workdir) or not container.within(clone, o.workdir):
+        # the workdir's canonical absolute path (r1#1): the clone is
+        # canonical, and a workdir reached through a symlink alias of it —
+        # the capsule spelled the way the caller got it — is the same
+        # directory; spelled the alias it would fail the lexical within()
+        check = os.path.isabs(o.workdir)
+        workdir = os.path.realpath(os.path.abspath(o.workdir))
+        if not check or not container.within(clone, workdir):
             raise ExecutorError(
                 "repos/%s: the working directory %s lies outside the clone, which is all the container mounts"
                 % (o.repo, o.workdir)
             )
-        workdir = o.workdir
-        rel = os.path.relpath(o.workdir, clone)
+        rel = os.path.relpath(workdir, clone)
         if rel != ".":
             cwd_rel = posixpath.join(cwd_rel, rel.replace(os.sep, "/"))
     log_path = os.path.join(o.log_dir, COMMAND_LOG)
