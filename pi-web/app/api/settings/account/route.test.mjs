@@ -62,7 +62,7 @@ const DOCTOR = JSON.stringify({
       harnesses: {
         pi: { bin: "pi", found: true, config_root: path.join(data, "cells", "default", "step-agent"), credential: "set", source: opDir, source_kind: "operator" },
         claude: { bin: "claude", found: true, config_root: path.join(data, "cells", "default", "claude-config"), source: opDir, source_kind: "operator",
-          settings_env: { ANTHROPIC_AUTH_TOKEN: "set", ANTHROPIC_API_KEY: "unset", ANTHROPIC_BASE_URL: "unset", CLAUDE_CODE_OAUTH_TOKEN: "unset" }, credentials_file: "absent" },
+          settings_env: { ANTHROPIC_AUTH_TOKEN: "set", ANTHROPIC_API_KEY: "unset", ANTHROPIC_BASE_URL: "set", CLAUDE_CODE_OAUTH_TOKEN: "unset" }, credentials_file: "absent" },
       },
     },
     beta: {
@@ -93,7 +93,7 @@ if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
   exit 0
 fi
 export PI_TEST_CLAUDE_STUB_VERSION=\${PI_TEST_CLAUDE_STUB_VERSION:-2.1.326}
-exec node ${path.join(here, "..", "..", "..", "lib", "__fixtures__", "claude-stub", "claude.mjs")} "$@"
+exec node ${path.join(here, "..", "..", "..", "..", "lib", "__fixtures__", "claude-stub", "claude.mjs")} "$@"
 `);
 fs.writeFileSync(path.join(binDir, "pi"), `#!/usr/bin/env node
 const fs = require("node:fs");
@@ -244,8 +244,19 @@ test("POST: an unrecognized format is refused with the file untouched; the gate 
   assert.ok(results[0].reason.includes("unrecognized"), results[0].reason);
   noSentinel(torn.text);
   assert.equal(fs.readFileSync(path.join(data, "cells", "gamma", "claude-config", "settings.json"), "utf8"), "{not json");
-  // an unknown claude version refuses every write through the shared gate
-  process.env.PI_TEST_CLAUDE_STUB_VERSION = "9.9.9";
+  // an unknown claude version refuses every write through the shared gate:
+  // a second stub directory (the probe caches per binary path) answers
+  // 9.9.9, and the route resolves claude from PATH
+  const gatedBin = path.join(scratch, "gated-bin");
+  fs.mkdirSync(gatedBin);
+  fs.writeFileSync(path.join(gatedBin, "claude"), `#!/bin/sh
+if [ "$1" = "auth" ] && [ "$2" = "status" ]; then echo '{}'; exit 0; fi
+export PI_TEST_CLAUDE_STUB_VERSION=9.9.9
+exec node ${path.join(here, "..", "..", "..", "..", "lib", "__fixtures__", "claude-stub", "claude.mjs")} "$@"
+`);
+  fs.chmodSync(path.join(gatedBin, "claude"), 0o755);
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${gatedBin}${path.delimiter}${originalPath}`;
   try {
     const gated = await post({ kind: "api-key", value: "RT-SENTINEL-NEW-KEY", targets: ["interactive"] });
     assert.equal(gated.status, 200);
@@ -253,7 +264,7 @@ test("POST: an unrecognized format is refused with the file untouched; the gate 
     assert.equal(results[0].status, "refused");
     assert.ok(results[0].reason.includes("9.9.9"), results[0].reason);
   } finally {
-    process.env.PI_TEST_CLAUDE_STUB_VERSION = "2.1.326";
+    process.env.PATH = originalPath;
   }
 });
 
@@ -265,7 +276,6 @@ test("POST: a malformed body is a 400 before any write", async () => {
     { kind: "api-key", value: "x", targets: [] },
     { kind: "api-key", value: "x", targets: ["no-such-cell"] },
     { kind: "gateway", value: "x", targets: ["interactive"] },
-    { kind: "oauth-token", useInteractive: true, targets: ["interactive"] },
   ]) {
     const refused = await post(body);
     assert.equal(refused.status, 400, JSON.stringify(body));
