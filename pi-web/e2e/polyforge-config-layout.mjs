@@ -380,7 +380,9 @@ try {
   // the whole segment between separators is itself wider than its box. At the
   // same time every card/zone must stay within its client width.
   const assertNoMidWordBreaks = async (dialog, width, locale) => {
-    const result = await dialog.locator(".config-detail").first().evaluate((root) => {
+    // 85a1b: General owns a hidden .config-detail of its own now; scope to the
+    // Polyforge section's host so the oracle scans the page it was written for.
+    const result = await dialog.locator('.settings-section-host[data-settings-section="polyforge"] .config-detail').first().evaluate((root) => {
       const SEPARATORS = new Set(["-", "_", "/", ".", ":", ",", ";", "|"]);
       const CJK = /[\u2E80-\u2FFF\u3000-\u303F\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF\uFF00-\uFFEF]/;
       const isSpace = (ch) => /\s/.test(ch);
