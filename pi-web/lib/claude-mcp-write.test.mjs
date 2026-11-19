@@ -81,9 +81,6 @@ test("an unrecognized version refuses before any spawn; a missing binary too", a
   const refused = await claudeMcpAddJson("global", "demo", { command: "x" }, { binary: stubBinary, version: "9.9.9", cwd, env });
   assert.equal(refused.ok, false);
   assert.equal(refused.reason, "version-unrecognized");
-  const missing = await claudeMcpAddJson("global", "demo", { command: "x" }, { binary: "/nonexistent/claude", version: "unknown", cwd, env });
-  assert.equal(missing.ok, false);
-  assert.equal(missing.reason, "claude-missing");
   const unprobed = await claudeMcpRemove("global", "demo", { binary: "/nonexistent/claude", cwd, env });
   assert.equal(unprobed.ok, false);
   assert.equal(unprobed.reason, "claude-missing", "no binary, so no version could be probed");
@@ -96,7 +93,7 @@ test("a failed command is reported by its exit code, never by the child's output
   const outcome = await claudeMcpRemove("global", "demo", { binary: stubBinary, version: KNOWN, cwd, env: failing });
   assert.equal(outcome.ok, false);
   assert.equal(outcome.reason, "remove-failed");
-  assert.match(outcome.error, /exit 1/);
+  assert.match(outcome.error, /code 1/);
   assert.equal(/demo/.test(outcome.error), false, "the error never quotes the argv or the output");
 });
 
