@@ -240,21 +240,60 @@ func TestWorkstationImage(t *testing.T) {
 		if !strings.Contains(body, `mount -o remount,rw "$CG"`) {
 			t.Fatal("polyforge#161: entrypoint.sh must remount /sys/fs/cgroup read-write before initializing it (docker mounts it read-only)")
 		}
-		if !strings.Contains(body, "PI_TEST_") {
-			t.Fatal("polyforge#161: entrypoint.sh's environment whitelist must exclude PI_TEST_* — AC3's carve-out")
+		// the environment boundary is sourced, not inlined: the filter
+		// lives in env-whitelist.sh so the test below executes the real
+		// one instead of matching prose (review r1#5 — the first cut
+		// pinned "PI_TEST_" as text, which the header comment carries
+		// all by itself).
+		if !strings.Contains(body, ". /usr/local/bin/workstation-env-whitelist.sh") {
+			t.Fatal("polyforge#161: entrypoint.sh must source /usr/local/bin/workstation-env-whitelist.sh — the boundary filter is executable, not prose")
 		}
-		// the boundary is a whitelist, not a blacklist: the script
-		// unsets everything that is not the fixed set or a PI_* family
-		// member (AC3: the container never inherits the host's
-		// environment wholesale).
-		if !strings.Contains(body, "unset ") || !strings.Contains(body, "PI_*)") {
-			t.Fatal("polyforge#161: entrypoint.sh must carry the whitelist loop — unset every name that is not the fixed set or PI_*")
-		}
-		if !strings.Contains(body, "BUILDAH_ISOLATION=chroot") {
-			t.Fatal("polyforge#161: entrypoint.sh must set BUILDAH_ISOLATION=chroot — buildah's build-network ns open needs CAP_SYS_PTRACE on a non-dumpable runtime init, and AC1's minimal cap set must not grow (measured)")
+		if !strings.Contains(body, "workstation_env_whitelist") {
+			t.Fatal("polyforge#161: entrypoint.sh must call the sourced whitelist before handing over")
 		}
 		if !strings.Contains(body, `exec pf supervise "$@"`) {
 			t.Fatal("polyforge#161: entrypoint.sh must end by exec'ing pf supervise with the caller's flags (compose passes only the flags)")
+		}
+	})
+
+	t.Run("the environment whitelist executes: PI_* passes, PI_TEST_* never", func(t *testing.T) {
+		script := w535Deliverable(t, "dist/workstation/env-whitelist.sh")
+		if !strings.Contains(script, "workstation_env_whitelist()") {
+			t.Fatal("polyforge#161: env-whitelist.sh must define the workstation_env_whitelist function the entrypoint sources")
+		}
+		// run the REAL filter in a controlled environment — the
+		// expected set comes from AC3 and settled Q6 (PI_* and
+		// PI_WEB_* pass, PI_TEST_* never, nothing else does, the one
+		// fixed value and PORT's default are the image's own).
+		cmd := exec.Command("sh", "-c",
+			`. "`+filepath.Join(w535Root(t), "dist/workstation/env-whitelist.sh")+`" && workstation_env_whitelist && env`)
+		cmd.Env = []string{
+			"PATH=" + os.Getenv("PATH"),
+			"HOME=/root",
+			"TERM=dumb",
+			"PORT=30141",
+			"PI_WEB_APP_NAME=probe",
+			"PI_SMOKE_PROBE=passed",
+			"PI_WEB_PASSWORD=x",
+			"PI_TEST_PROBE=must-not-cross",
+			"SENTINEL_WORKSTATION=leak",
+			"PF_OUTER=leak",
+			"http_proxy=leak",
+		}
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("polyforge#161: the whitelist must run: %v:\n%s", err, out)
+		}
+		env := string(out)
+		for _, keep := range []string{"PORT=30141", "PI_WEB_APP_NAME=probe", "PI_SMOKE_PROBE=passed", "PI_WEB_PASSWORD=x", "BUILDAH_ISOLATION=chroot"} {
+			if !strings.Contains(env, "\n"+keep) && !strings.HasPrefix(env, keep) {
+				t.Fatalf("polyforge#161: the whitelist must keep %s — the PI_* families and PORT pass (AC3):\n%s", keep, env)
+			}
+		}
+		for _, drop := range []string{"PI_TEST_PROBE", "SENTINEL_WORKSTATION", "PF_OUTER", "http_proxy"} {
+			if strings.Contains(env, drop) {
+				t.Fatalf("polyforge#161: the whitelist must drop %s — PI_TEST_* never crosses and the container inherits nothing else (AC3):\n%s", drop, env)
+			}
 		}
 	})
 
