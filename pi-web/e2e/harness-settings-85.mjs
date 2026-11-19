@@ -6,8 +6,8 @@
 // 环境 / 生效值与来源), the account / models placeholders, the permission
 // page (审批模式 / 沙箱 / 项目信任 / 规则: the unified blocks' one-write-many-reads,
 // pi's 不做审批 / 无沙箱 notes, claude's own sections, the Pi Web approval
-// channel and the rules editor) and the migrated old navigation values
-// (claude → 权限, models → 新「模型」页). The harness adapter APIs are mocked
+// channel and the rules editor) and the stored old navigation values
+// (models → 新「模型」页; the deleted claude key → 常规, review r1#7). The harness adapter APIs are mocked
 // at the browser (context.route): this suite pins the UI contract and never
 // runs a real native diagnostic command or write; the adapter, the write
 // route and the migration are pinned by lib/harness/*.test.mjs,
@@ -410,11 +410,13 @@ try {
     await page.context().close();
   });
 
-  // S85-08 — AC4: stored old values land on the new pages.
+  // S85-08 — AC4: the stored models value lands on the new page; the deleted
+  // Claude page's `claude` key reads as unknown and lands on General (the
+  // migration map went with the page, review r1#7).
   await part("S8", "navigation migration", async () => {
     for (const [stored, expectedTab, expectedHost] of [
-      ["claude", /^Permissions$/, "permission"],
       ["models", /^Models$/, "models"],
+      ["claude", /^General$/, "general"],
     ]) {
       const page = await newPage(undefined, { "pi-web:settings-navigation": JSON.stringify({ section: stored }) });
       await openSettings(page);

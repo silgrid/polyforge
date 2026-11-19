@@ -40,15 +40,11 @@ const STORAGE_KEY = "pi-web:settings-navigation";
 const PROJECT_SECTIONS = new Set<SettingsSection>(["skills", "agents", "plugins"]);
 
 /**
- * Where a stored old section value lands (owner ruling Q2 A): `claude` — the
- * old Claude page's key — goes to the permission page's Claude part. `models`
- * keeps its spelling: it is the new Models concept page's id now, and the old
- * Models page lives under `legacy-models`. The legacy Claude page is gone
- * (85a4) and the map stays: a browser that still holds the old `claude` key
- * keeps landing on the permission page, which is where the ruling put it —
- * it exists only at this read boundary, never as a general alias layer.
+ * `models` keeps its spelling: it is the new Models concept page's id now,
+ * and the old Models page lives under `legacy-models`. The `claude` key of
+ * the deleted Claude page is gone with the page (85a4, as the 85a1b comment
+ * promised): a stored value it leaves reads as unknown and lands on 常规.
  */
-const LEGACY_SECTION_MIGRATION: Readonly<Record<string, SettingsSection>> = { claude: "permission" };
 
 /** Whether a section is unavailable until a project is open. */
 export function settingsSectionRequiresProject(section: SettingsSection): boolean {
@@ -116,10 +112,7 @@ export function getLastSettingsSection(
 ): SettingsSection {
   if (!storage) return "general";
   try {
-    let section = readState(storage).section;
-    if (typeof section === "string" && section in LEGACY_SECTION_MIGRATION) {
-      section = LEGACY_SECTION_MIGRATION[section];
-    }
+    const section = readState(storage).section;
     if (!isSettingsSection(section)) return "general";
     return settingsSectionRequiresProject(section) && !cwd ? "general" : section;
   } catch {

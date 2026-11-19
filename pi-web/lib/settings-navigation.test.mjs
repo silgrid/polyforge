@@ -104,21 +104,17 @@ test("the settings rail is nine new sections plus the two legacy-marked ones (85
   }
 });
 
-test("migrates the legacy claude section value to the permission page (85a1b AC4)", () => {
+test("the deleted Claude page's stored `claude` value reads as unknown and lands on general (review r1#7: the migration map went with the page)", () => {
   const storage = createStorage({ "pi-web:settings-navigation": JSON.stringify({ section: "claude" }) });
-  assert.equal(getLastSettingsSection("/project", storage), "permission");
-  // Idempotent: a second read of the same raw value migrates the same way.
-  assert.equal(getLastSettingsSection("/project", storage), "permission");
-  // The permission page needs no project, so the migration holds without one.
-  assert.equal(getLastSettingsSection(null, storage), "permission");
-  // Other selections survive the migration untouched.
+  assert.equal(getLastSettingsSection("/project", storage), "general");
+  // Other selections survive the unknown value untouched.
   const both = createStorage({
     "pi-web:settings-navigation": JSON.stringify({
       section: "claude",
       selections: { [JSON.stringify(["skills", "/p"])]: "/skill.md", models: "{}" },
     }),
   });
-  assert.equal(getLastSettingsSection("/p", both), "permission");
+  assert.equal(getLastSettingsSection("/p", both), "general");
   assert.equal(getLastSettingsSelection("skills", "/p", both), "/skill.md");
   assert.equal(getLastSettingsSelection("legacy-models", null, both), "{}");
 });
