@@ -161,6 +161,47 @@ func TestInstallSameVersionNoop(t *testing.T) {
 	}
 }
 
+// TestInstallSameVersionReorderedNoop pins that the same-version
+// comparison is order-independent (review r1#N6): Validate does not
+// order the manifest's components, so a seed whose manifest lists them
+// in another order — the same names, the same digests — is the same
+// content, a noop, not a "different digest" refusal.
+func TestInstallSameVersionReorderedNoop(t *testing.T) {
+	root := t.TempDir()
+	seed := installSeed(t, seedSpec{})
+	if _, err := Install(Options{Root: root, DataDir: dataDir(t), Seed: seed, BaseVersion: "v0.2.4", Platform: "linux/amd64"}); err != nil {
+		t.Fatalf("first install: %v", err)
+	}
+	before := rootState(t, root)
+
+	// the same seed, its manifest's components listed backwards: the
+	// bytes the digest covers are unchanged, only the manifest's list
+	// order differs.
+	reordered := filepath.Join(t.TempDir(), "seed")
+	assembleTree(t, reordered, seedSpec{})
+	m := manifestOf(seedSpec{})
+	if err := m.FillDigests(reordered); err != nil {
+		t.Fatal(err)
+	}
+	for i, j := 0, len(m.Components)-1; i < j; i, j = i+1, j-1 {
+		m.Components[i], m.Components[j] = m.Components[j], m.Components[i]
+	}
+	if err := WriteManifest(reordered, m); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := Install(Options{Root: root, DataDir: dataDir(t), Seed: reordered, BaseVersion: "v0.2.4", Platform: "linux/amd64"})
+	if err != nil {
+		t.Fatalf("the reordered same-version seed: %v (want the noop: the content is the same)", err)
+	}
+	if res.Action != ActionNoop {
+		t.Errorf("Action = %q, want %q", res.Action, ActionNoop)
+	}
+	if after := rootState(t, root); after != before {
+		t.Errorf("the noop install wrote something:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
+
 // TestInstallUpgradeKeepsPrevious pins the upgrade: a newer seed
 // switches current, previous names the version it replaced, and the
 // old version's directory stays complete (never deleted, never
