@@ -65,7 +65,10 @@ and `artifacts/merge/landing.json`. The daemon orchestrates; it judges no conten
   assertion failure exits at once; and a long command writes its output to
   a log file with its exit code and the log is searched after the run, never piped straight into
   grep, head or tail. Fast
-  checks plus every new test; the close's facts checks — `facts.py build` without the
+  checks plus every new test; the close's scoped selection — `fast_checks.py --close-scoped`,
+  the same light-tier selection verification plans, its red or `incomplete` result fixed before
+  the hand-off and its `details.selected` merged into the change analysis — before the close's
+  facts checks — `facts.py build` without the
   replay (each unit's static commit facts) and `carries`, the same engine review judges
   with, a red naming the unit, or the repo, suite and reason and fixed before the
   hand-off; the change analysis's close check (`facts.py analysis` — the
