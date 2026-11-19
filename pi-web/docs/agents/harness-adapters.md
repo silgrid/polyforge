@@ -23,7 +23,8 @@ The harness adapters here are configuration adapters under `lib/harness/`.
 | `lib/harness/effective.ts` | Per-layer effective values, each `{value, sourceScope, sourcePath, inferred: true}`. |
 | `lib/harness/compare.ts` | The read-back comparison: `consistent` / `inconsistent` (each harness's value listed) / `unsupported`. |
 | `lib/harness/redact.ts` | The allow-list: credential files as existence+path, env blocks as key names, MCP entries masked through `lib/mcp-secrets.ts` (the one masking implementation). |
-| `app/api/harness/**` | The three read routes: the harness list, one concept's read, the comparison. All behind the API guard; `?cwd=` goes through the file-access check. |
+| `lib/harness/diagnostics.ts` | Native diagnostics executed (85a1b, AC6): the capability table's **fixed safe command only** — claude's `claude doctor`, pi answering its visible reason until it has one — run without a terminal (stdin closed at once, so an interactive prompt reads EOF and cannot block), bounded by a deadline that SIGTERM then SIGKILL enforces, capped in lines and bytes, and filtered so no credential or environment variable value is ever echoed (secret-named pairs masked whatever their value looks like, key-looking tokens through `looksLikeSecretValue`). A command that could print a secret is never started at all; the filter is the second layer, not the safety. |
+| `app/api/harness/**` | The read routes: the harness list, one concept's read, the comparison, and one harness's native diagnostics (85a1b: `GET /api/harness/[harness]/diagnose`, the adapter's fixed safe command executed with its deadline and through the credential filter). All behind the API guard; `?cwd=` goes through the file-access check. |
 
 ## The write gate (owner ruling 2026-11-19, Q1 A + Q2 C)
 
@@ -70,9 +71,11 @@ claude side also lists that layer (`pi-web:launch-permission-mode` from
 
 ## Known gaps (deliberate)
 
-- **`diagnose()` is a signature only** (Q5 A): the capability table declares
-  native diagnostics, the execution lands in 85a1b (#149) with timeout,
-  filtering and display.
+- **pi has no native diagnostic command yet** (85a2's doctor joins later):
+  pi's `diagnose` answers `{available: false, reason: "pi has no fixed safe
+  diagnostic command yet"}` — the visible reason, never a guessed command.
+  claude's is implemented (85a1b): `claude doctor` through
+  `lib/harness/diagnostics.ts`, `nativeDiagnostics.implemented: true`.
 - **Account status is `unknown`** (Q4 A): `claude auth status` / `pi auth
   check` are 85a2's; the auth read answers only the credential store's
   existence, the automation env variable *names* set, and whether
@@ -109,4 +112,4 @@ claude side also lists that layer (`pi-web:launch-permission-mode` from
    `redact.ts`), and `write` composed of `gatedWrite()`.
 2. Register it in `lib/harness/adapters.ts` and extend `HarnessId` in
    `concepts.ts`.
-3. The three routes, the comparison and the capability table need no change.
+3. The routes, the comparison and the capability table need no change; a harness with a fixed safe diagnostic adds its command to `lib/harness/diagnostics.ts` and flips its capability's `implemented`.
