@@ -599,3 +599,18 @@ test("a plain paste applies to every harness by default, and without claude's ha
   // No project folder: claude's local scope is keyed by one, so the hint falls back to global.
   assert.equal(mcpAddAnalysis(claudePaste, addData(), null).scope, "global");
 });
+
+test("claude not installed changes nothing for the user: present false means pi alone, no local group (r2#2)", () => {
+  const absent = addData({ claude: claudeHalf() });
+  absent.claude.present = false;
+  const plain = { ...EMPTY_MCP_ADD_DRAFT, text: "npx -y @scope/lint-mcp" };
+  const plainAnalysis = mcpAddAnalysis(plain, absent, "/Users/me/repo");
+  assert.deepEqual(plainAnalysis.harnesses, ["pi"], "no claude on PATH: the paste applies to pi alone, no half-written add");
+  // claude's own default scope cannot be honoured without its CLI: the paste stays global.
+  const claudePaste = { ...EMPTY_MCP_ADD_DRAFT, text: "claude mcp add demo npx -y server" };
+  assert.equal(mcpAddAnalysis(claudePaste, absent, "/Users/me/repo").scope, "global");
+  assert.deepEqual(mcpAddAnalysis(claudePaste, absent, "/Users/me/repo").harnesses, ["pi"]);
+  // present true keeps the round-1 behaviour.
+  assert.deepEqual(mcpAddAnalysis(plain, addData(), "/Users/me/repo").harnesses, ["pi", "claude"]);
+  assert.equal(mcpAddAnalysis(claudePaste, addData(), "/Users/me/repo").scope, "local");
+});

@@ -428,3 +428,13 @@ test("the pane asks where the paste applies, and claude's local group is among t
   const bare = pane({ data: { ...overview(), claude: undefined }, draft: { text: "npx -y server" } });
   assert.ok(!/config-scope-switch-option">local</.test(decode(bare)), "no claude, no local group");
 });
+
+test("claude not installed: the pane offers no claude target and no local scope (r2#2)", () => {
+  const data = { ...overview(), claude: { ...claudeHalf(), present: false } };
+  const html = pane({ data, draft: { text: "npx -y @scope/server" } });
+  const markup = decode(html);
+  assert.match(markup, /Apply to:/);
+  assert.match(markup, /data-harness="pi"[^>]*><input type="checkbox"[^>]*checked=""/);
+  assert.ok(!/data-harness="claude"/.test(markup), "no claude on PATH, no claude target");
+  assert.ok(!/config-scope-switch-option">local</.test(markup), "no claude on PATH, no local scope");
+});
