@@ -18,7 +18,7 @@ from pfstep import scoped_plan
 from pfstep.engine import EngineReport, ReportError, decode_report
 
 from .gitworld import HAVE_GIT, Repo, git, write
-from .test_fast_checks import FastChecksCase
+from .test_fast_checks import APP, FLAKY_GATE_TEST, GO_MOD, FastChecksCase
 from .verifyfix import HAVE_BASH, HAVE_GO, Fixture, cmd_of, fake_engine, report, run_verify
 
 FAST_CHECKS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "fast_checks.py")
@@ -474,6 +474,32 @@ class ExecutionTest(FastChecksCase):
         self.assertEqual(sel["status"], "red")
         slow = [c for c in sel["commands"] if c["name"] == "slow"][0]
         self.assertTrue(slow["timed_out"])
+
+    @unittest.skipUnless(HAVE_GO, "go is required for the real engine's flaky re-run")
+    def test_a_flaky_selected_command_passes_on_its_one_rerun(self) -> None:
+        """A red selected command gets the per-unit bar's own one targeted
+        re-run and whole-command confirmation (the real engine's Go
+        selection, the same fixture the fast-checks flaky tests use): a
+        command red on its first run and green on its re-run turns the
+        close green, its flaky unit and first-red log named in the result."""
+        clone = self.task_repo("app", {
+            "go.mod": GO_MOD,
+            ".polyforge/verify-scope.conf": "stack=go\nfast_gate=echo fast-one\nfull_command=echo full-ran > full.txt\n",
+            "app/app.go": APP,
+            "app/app_test.go": FLAKY_GATE_TEST,
+        }, {"app/app.go": APP.replace("// Answer is the answer.\n", "// Answer is the answer. (changed)\n")})
+        code, res = run_close(self.capsule, "app", ENGINE, os.path.join(self.capsule, "close.json"))
+        self.assertEqual(code, 0, res.get("summary"))
+        sel = res["details"]["selected"]["app"]
+        self.assertEqual(sel["status"], "green")
+        scoped = [c for c in sel["commands"] if c["phase"] == "scoped"][0]
+        self.assertNotEqual(scoped["exit_code"], 0, "the first run failed on its assertion")
+        self.assertEqual([u["name"] for u in scoped["units"]], ["TestFlakyGate"])
+        self.assertEqual(scoped["units"][0]["status"], "flaky")
+        self.assertTrue(scoped["units"][0]["rerun_log"], "the passing re-run's log is recorded")
+        self.assertTrue(scoped["confirmed"], "the whole command was re-run once and exited 0")
+        self.assertTrue(os.path.exists(os.path.join(clone, "app", "flaky-marker")))
+        self.assertIn("flaky on their one re-run", res["summary"])
 
     def test_engine_failure_is_not_judged(self) -> None:
         self.task_repo("app", {"a.txt": "base\n"}, {"c.txt": "mine\n"})
