@@ -2,10 +2,13 @@
 # builds with context: ../..), trimmed to what the Containerfile COPYs:
 # the Go module (go.mod, go.sum, cmd, internal), webui (its dist tree is
 # built in the image; node_modules and the e2e suites are not build
-# inputs) and dist/workstation. Everything else only bloats the context
-# the daemon receives. .polyforge/release.sh builds from its own temp
-# context and .polyforge/Dockerfile.verify from an empty one — neither
-# is affected by this file.
+# inputs), the seed's inputs (the root package.json, skills, workflows
+# and pi-web — the seed is the release checkout plus Pi Web, built in
+# the image; pi-web's node_modules, its .next build cache, its e2e
+# suites and its engine config are not) and dist/workstation. Everything
+# else only bloats the context the daemon receives. .polyforge/release.sh
+# builds from its own temp context and .polyforge/Dockerfile.verify from
+# an empty one — neither is affected by this file.
 .git
 .github
 .pi
@@ -13,11 +16,12 @@
 docs
 test
 tools
-workflows
-skills
 deploy
-pi-web
 NOTICE
 webui/node_modules
 webui/e2e
 webui/dist
+pi-web/node_modules
+pi-web/.next
+pi-web/e2e
+pi-web/.polyforge

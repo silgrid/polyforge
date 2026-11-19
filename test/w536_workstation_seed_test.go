@@ -57,7 +57,7 @@ func w536Stage(t *testing.T, stage string) string {
 // with no engine.
 func TestWorkstationSeed(t *testing.T) {
 	t.Run("the final layer carries the Node runtime beside podman", func(t *testing.T) {
-		final := w536Stage(t, "ubuntu") // the last stage: FROM ubuntu:24.04
+		final := w536Stage(t, "final") // the last stage: FROM ubuntu:24.04
 		if !regexp.MustCompile(`(?m)^COPY --from=node /usr/local/ /usr/local/$`).MatchString(final) {
 			t.Fatal("polyforge#162: the final layer must carry Node (COPY --from=node /usr/local/ /usr/local/): Pi Web and the two harness CLIs run on it, and the workstation boots without installing anything")
 		}
@@ -97,7 +97,7 @@ func TestWorkstationSeed(t *testing.T) {
 	})
 
 	t.Run("the seed lands read-only at /opt/polyforge/seed/releases/<ver>", func(t *testing.T) {
-		final := w536Stage(t, "ubuntu")
+		final := w536Stage(t, "final")
 		if !regexp.MustCompile(`(?m)^COPY --from=seed /seed /opt/polyforge/seed/releases/\$\{SEED_VERSION\}$`).MatchString(final) {
 			t.Fatal("polyforge#162: the final layer must place the seed at /opt/polyforge/seed/releases/${SEED_VERSION} — the settled read-only seed path the first boot installs from")
 		}
@@ -163,8 +163,12 @@ func TestWorkstationSeed(t *testing.T) {
 	t.Run("the docs state the seed fact, not the old never-in-the-image claim", func(t *testing.T) {
 		for _, doc := range []string{"dist/workstation/README.md", "docs/workstation.md"} {
 			body := w535Deliverable(t, doc)
-			if regexp.MustCompile(`(?i)never in the\s+image`).MatchString(body) {
-				t.Errorf("polyforge#162: %s still claims the components never ship in the image — the image now carries the read-only seed (the 84-components-A change)", doc)
+			// the OLD claim is "the image is only the base / carries only
+			// the runtime": pin its absence, not the "never in the image"
+			// phrase — the corrected docs may still say the RUNNING
+			// versions never live in the image (which is the new fact).
+			if regexp.MustCompile(`(?i)(is only the base|carries only the runtime)`).MatchString(body) {
+				t.Errorf("polyforge#162: %s still claims the image is only the runtime — the image now carries the read-only seed (the 84-components-A change)", doc)
 			}
 			if !strings.Contains(body, "/opt/polyforge/seed") {
 				t.Errorf("polyforge#162: %s must name the seed's settled path /opt/polyforge/seed", doc)

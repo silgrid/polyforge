@@ -1,12 +1,24 @@
 # dist/workstation/Containerfile — the workstation base image
-# (polyforge#161, 84-image). The image is the machine the daemon runs
+# (polyforge#161, 84-image; the seed layer is polyforge#162,
+# 84-components-A). The image is the machine the daemon runs
 # on inside the workstation container: podman (rootful, crun) for the
 # verification containers, catatonit as PID 1 (it reaps the conmon
-# children, so no zombies survive), the pf binary (with `pf supervise`,
+# children, so no zombies survive), the Node runtime (Pi Web and the
+# two harness CLIs run on it — the workstation boots without
+# installing anything), the bootstrap pf binary (with `pf supervise`,
 # #160), and the entrypoint that initializes the private cgroup
-# namespace. Every versioned component — the workflows tree, Pi Web,
-# the release layout — lives in the data volume
-# (<data-dir>/release/current, 84-components), never in the image.
+# namespace.
+#
+# The image also carries ONE COMPLETE COMPONENT SEED, read-only at
+# /opt/polyforge/seed/releases/<ver>: the release checkout
+# (package.json, skills, workflows), bin/pf, Pi Web (built, with its
+# production dependencies) and the two harness packages — the four
+# categories the seed's manifest pins with digests. The versions that
+# RUN live in the components volume (/components: releases/<ver> with
+# current and previous at the root, 84-components); the seed is what
+# the first boot installs into it, so a new image upgrades the volume
+# and an old volume never downgrades the image. The first-boot wiring
+# and the volume itself are the later 84-components units.
 #
 # The build context is the repository root (compose builds with
 # context: ../..; the root .dockerignore trims it), because the pf
@@ -14,6 +26,25 @@
 # before any go build (the repo's own fast gate's rule). No podman-docker
 # ever: the gate probe asserts a verification container sees no docker
 # client and no /var/run/docker.sock.
+#
+# The injection points the #86 release pipeline fills (the defaults
+# serve a repository-root dev build):
+#   SEED_VERSION      the seed's product version (must be of the
+#                     accepted forms vX.Y.Z / -gmi.N / -dev.N; the pf
+#                     binary and the seed carry the same one)
+#   SEED_COMMIT       the source commit (a repo-root context carries no
+#                     .git, so the dev default is "unknown"; the
+#                     release pipeline injects the real commit)
+#   SEED_CHANNEL_REPO the channel repository (owner/name)
+#   PI_HARNESS_VERSION / CLAUDE_HARNESS_VERSION
+#                     the two harness packages' pinned versions
+#   TARGETARCH        BuildKit's automatic arch (the seed's platform)
+ARG SEED_VERSION=v0.2.4-dev.1
+ARG SEED_COMMIT=unknown
+ARG SEED_CHANNEL_REPO=silgrid/polyforge
+ARG PI_HARNESS_VERSION=1.4.0
+ARG CLAUDE_HARNESS_VERSION=2.1.326
+
 FROM node:24.22.2-bookworm AS node
 # webui's embedded dist tree (webui/embed.go: go:embed all:dist) — the
 # node pin matches .polyforge/Dockerfile.verify's stage.
@@ -25,20 +56,56 @@ RUN npm run build
 
 FROM golang:1.26.11-bookworm AS go
 # the pinned toolchain (go.mod's toolchain line); modernc sqlite is pure
-# Go, so the binary is static.
+# Go, so the binary is static. The one pf build stamps the version the
+# seed carries: the base's version is what answers the seed's minBase
+# check at install time, and internal/version.Commit is the same
+# provenance the manifest names.
+ARG SEED_VERSION
+ARG SEED_COMMIT
 WORKDIR /src
 COPY go.mod go.sum ./
 COPY cmd ./cmd
 COPY internal ./internal
 COPY --from=node /src/webui ./webui
-RUN CGO_ENABLED=0 go build -trimpath -o /out/pf ./cmd/pf
+RUN CGO_ENABLED=0 go build -trimpath -o /out/seedtool ./internal/polyforge/components/seedtool \
+ && CGO_ENABLED=0 go build -trimpath \
+      -ldflags "-X github.com/silgrid/polyforge/internal/version.Version=${SEED_VERSION} -X github.com/silgrid/polyforge/internal/version.Commit=${SEED_COMMIT}" \
+      -o /out/pf ./cmd/pf
 
-FROM ubuntu:24.04
+# The seed assembly stage: one complete version directory (the four
+# component categories and their manifest), built on the node image
+# because Pi Web's dependencies and the two harness packages install
+# with npm here — at BUILD time, never at boot.
+FROM node:24.22.2-bookworm AS seed
+ARG SEED_VERSION
+ARG SEED_COMMIT
+ARG SEED_CHANNEL_REPO
+ARG PI_HARNESS_VERSION
+ARG CLAUDE_HARNESS_VERSION
+ARG TARGETARCH
+WORKDIR /seed
+COPY dist/workstation/build-seed.sh /usr/local/bin/workstation-build-seed.sh
+COPY --from=go /out/seedtool /usr/local/bin/seedtool
+COPY --from=go /out/pf ./bin/pf
+COPY package.json ./
+COPY skills ./skills/
+COPY workflows ./workflows/
+COPY pi-web ./pi-web/
+RUN /usr/local/bin/workstation-build-seed.sh "$SEED_VERSION" "$SEED_COMMIT" "$SEED_CHANNEL_REPO" "$PI_HARNESS_VERSION" "$CLAUDE_HARNESS_VERSION" "$TARGETARCH"
+
+FROM ubuntu:24.04 AS final
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
       podman crun catatonit git curl ca-certificates python3 \
  && rm -rf /var/lib/apt/lists/*
+# the Node runtime Pi Web and the harness CLIs run on (the same node
+# pin the webui build used; the same copy .polyforge/Dockerfile.verify
+# makes, node lives under /usr/local).
+COPY --from=node /usr/local/ /usr/local/
 COPY --from=go /out/pf /usr/local/bin/pf
+# the component seed: read-only in the image, the first boot installs
+# it into the components volume (84-components).
+COPY --from=seed /seed /opt/polyforge/seed/releases/${SEED_VERSION}
 COPY dist/workstation/entrypoint.sh /usr/local/bin/workstation-entrypoint.sh
 COPY dist/workstation/env-whitelist.sh /usr/local/bin/workstation-env-whitelist.sh
 COPY dist/workstation/containers/storage.conf /etc/containers/storage.conf

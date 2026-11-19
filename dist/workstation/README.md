@@ -5,16 +5,25 @@ podman (rootful, crun) runs the verification containers, `pf supervise`
 (#160) keeps the daemon, Pi Web and — with `--with-aihub` — the aihub
 server alive, and the named volumes carry everything that persists (the
 data dir with the release layout, and podman's storage). The base image
-carries only the runtime: podman, crun, catatonit (PID 1), the pf binary
-and the container configs. Every versioned component lives in the data
-volume (`<data-dir>/release/current/…`, 84-components), never in the
-image.
+carries the runtime and one complete component seed: podman, crun,
+catatonit (PID 1), the pf binary, the container configs, the Node
+runtime (Pi Web and the two harness CLIs run on it — nothing installs
+at boot), and — read-only, at `/opt/polyforge/seed/releases/<ver>` —
+the seed the first boot installs (#162, 84-components-A): the release
+checkout, `bin/pf`, Pi Web with its production build and the two
+pinned harness packages, pinned by a manifest the install verifies.
+The versions that RUN live in the components volume
+(`releases/<ver>` there, with `current` and `previous` at the volume
+root — the volume itself and the first-boot wiring are the later
+84-components units), never in the image: a newer seed upgrades the
+volume, an older volume never downgrades it.
 
 ## Files
 
 | File | What it is |
 | --- | --- |
-| `Containerfile` | the base image: webui dist + pf built from this repository (context: the repo root), ubuntu:24.04 with podman/crun/catatonit/git/curl/python3 |
+| `Containerfile` | the base image: webui dist + pf built from this repository (context: the repo root), ubuntu:24.04 with podman/crun/catatonit/git/curl/python3, the Node runtime and the seed stage |
+| `build-seed.sh` | the seed assembly, run inside the image build: Pi Web's `npm ci` + production build + prune, the two pinned harness packages, `bin/pf`, then seedtool writes and verifies the seed's manifest (never on a host) |
 | `entrypoint.sh` | cgroup-namespace init (as root, before `pf supervise`), then the environment boundary whitelist |
 | `env-whitelist.sh` | the environment boundary itself, sourced: PI_*/PI_WEB_* pass, PI_TEST_* never, the fixed `BUILDAH_ISOLATION=chroot` and PORT's default |
 | `containers/storage.conf` | native overlay on the `podman-storage` volume |

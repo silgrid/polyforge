@@ -304,14 +304,22 @@ func TestWorkstationImage(t *testing.T) {
 
 	t.Run("the build context is trimmed and dist is a declared component", func(t *testing.T) {
 		ignore := w535Deliverable(t, ".dockerignore")
-		for _, heavy := range []string{".git", "pi-web", "webui/node_modules", "docs", "test", "workflows", "skills", "deploy", "tools"} {
-			if !regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(heavy) + `$`).MatchString(ignore) {
-				t.Fatalf("polyforge#161: .dockerignore must exclude %s from the repo-root build context", heavy)
+		// The seed's inputs (polyforge#162, 84-components-A) widened the
+		// context: skills, workflows and pi-web are IN it now, so what
+		// stays out is their dependency caches and test trees, never the
+		// trees themselves.
+		for _, heavy := range []string{
+			".git", ".github", ".pi", ".polyforge", "docs", "test", "deploy", "tools",
+			"webui/node_modules", "webui/e2e", "webui/dist",
+			"pi-web/node_modules", "pi-web/.next", "pi-web/e2e", "pi-web/.polyforge",
+		} {
+			if !regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(heavy) + `(/|)?$`).MatchString(ignore) {
+				t.Fatalf("the .dockerignore must exclude %s from the repo-root build context (no dependency caches, no test trees, no credentials)", heavy)
 			}
 		}
-		for _, needed := range []string{"cmd", "internal", "webui", "dist"} {
+		for _, needed := range []string{"cmd", "internal", "webui", "dist", "package.json", "skills", "workflows", "pi-web"} {
 			if regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(needed) + `(\*|/)?$`).MatchString(ignore) {
-				t.Fatalf("polyforge#161: .dockerignore must NOT exclude %s — the image build needs it", needed)
+				t.Fatalf("the .dockerignore must NOT exclude %s — the image build needs it (the base and, since polyforge#162, the seed's release checkout)", needed)
 			}
 		}
 		conf := w535Deliverable(t, ".polyforge/verify-scope.conf")

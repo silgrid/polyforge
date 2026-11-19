@@ -3,19 +3,25 @@
 The workstation is a whole polyforge machine inside one container: the
 daemon runs there, `pf supervise` keeps it (and, in the AIHub boot
 mode, the aihub server) alive, and podman — rootful, with crun — runs
-the verification containers. The image is only the base: podman, crun,
-catatonit as PID 1, the pf binary and the container configs. Every
-versioned component (the workflows tree, Pi Web, the release layout)
-lives in the data volume under `<data-dir>/release/current`
-([bundles](bundles.md) carry them; the component volume's first boot is
-the 84-components work item), so the image never needs rebuilding when a
-component version moves.
+the verification containers. The image is the base plus the component
+seed: podman, crun, catatonit as PID 1, the pf binary, the container
+configs and the Node runtime, plus one complete seed of the versioned
+components — the release checkout, `bin/pf`, Pi Web built with its
+production dependencies and the two pinned harness packages —
+read-only at `/opt/polyforge/seed/releases/<ver>` and pinned by the
+manifest the install verifies (#162, 84-components-A). The versions
+that RUN live in the components volume — `releases/<ver>` there, with
+`current` and `previous` at the volume root — which the first boot
+populates from the seed (the components volume and the first-boot
+wiring are the later 84-components units): a newer seed upgrades the
+volume, an older volume never downgrades it.
 
 Everything the workstation needs lives in `dist/workstation/`:
 
 | File | What it is |
 |---|---|
-| `Containerfile` | the base image: webui's dist tree and the pf binary built from this repository, on ubuntu with podman, crun, catatonit |
+| `Containerfile` | the base image: webui's dist tree and the pf binary built from this repository, on ubuntu with podman, crun, catatonit, plus the Node runtime and the seed stage |
+| `build-seed.sh` | the seed assembly, run inside the image build (Pi Web's build and prune, the two pinned harness packages, `bin/pf`, the manifest seedtool writes and verifies) |
 | `entrypoint.sh` | cgroup-namespace init as root, then the environment boundary, then `pf supervise` |
 | `compose.yaml` | the outer container's minimal parameter set and the two boot modes |
 | `containers/` | podman's storage, containers and registries configuration |
