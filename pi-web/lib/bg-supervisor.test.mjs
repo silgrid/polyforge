@@ -60,7 +60,14 @@ test("a background task runs in its own process group and writes its output to t
   assert.notEqual(task.pgid, process.pid, "the task must not share pi-web's own process");
   assert.ok(groupAlive(task.pgid), "the task's process group must exist");
 
-  await pollUntil(async () => (await readFile(task.logPath, "utf8")) === "hello\n", 5_000, "the log to hold the command's output");
+  await pollUntil(async () => {
+    try {
+      return (await readFile(task.logPath, "utf8")) === "hello\n";
+    } catch (error) {
+      if (error.code === "ENOENT") return false; // the wrapper has not created the log yet
+      throw error;
+    }
+  }, 5_000, "the log to hold the command's output");
   const result = await task.done;
   assert.equal(result.exitCode, 0);
   assert.equal(result.reason, null);
@@ -78,17 +85,17 @@ test("the task's done promise reports the shell's exit code and signal", async (
   await rm(task.dir, { recursive: true, force: true });
 });
 
-test("stopBgTaskGroup kills the whole process group, grandchildren included, and is idempotent", async (t) => {
+test("task.stop() kills the whole process group, grandchildren included, and is idempotent", async (t) => {
   const task = await spawnTask("sleep 300 & sleep 300");
   t.after(() => cleanup(task));
   assert.ok(groupAlive(task.pgid), "the task's process group must exist before the stop");
 
-  await stopBgTaskGroup(task.pgid);
+  await task.stop();
   await pollUntil(() => !groupAlive(task.pgid), STOP_DEADLINE_MS, "the stopped group to disappear");
   const result = await task.done;
   assert.equal(result.reason, "stopped");
   // A second stop of the same (gone) group must not throw.
-  await stopBgTaskGroup(task.pgid);
+  await task.stop();
   await rm(task.dir, { recursive: true, force: true });
 });
 
