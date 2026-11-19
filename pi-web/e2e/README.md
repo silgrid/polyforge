@@ -233,7 +233,17 @@ root's `.polyforge/` scripts, tested there).
 - A suite that asserts a wall-clock responsiveness bound, or whose scenarios
   are proven load-sensitive on a shared host, opts in with the
   `e2e/all: isolated` marker in its source: `session-stall-recovery.mjs` (its
-  10s bound is the acceptance), `polyforge-work-tab-163.mjs`
+  10s bound is the acceptance criterion; since polyforge#137 its own-run
+  scenario also asserts the write-ring recovery's event order — turn-1 and
+  the tool result on screen before the final reply is released, their forced
+  session reads starting after the ring rise and before the first 15s
+  reconcile tick — and its RESULT lines carry staged timestamps: the ring
+  rise with its generation, the first tick, every session read with its
+  source and start time, a failure line saying whether the recovery path was
+  never triggered or triggered but out of bound;
+  `E2E_STALL_DISABLE_RING_RECOVERY=1` cuts those forced reads — the
+  no-relaxation proof — and the suite must exit non-zero with the
+  recovery-path-not-triggered lines), `polyforge-work-tab-163.mjs`
   (8 s click timeouts in the parallel bar) and
   `polyforge-panel-213.mjs` (a precaution: named earlier and sharing
   work-tab-163's dock click path, `openPolyforgeDock()` in
