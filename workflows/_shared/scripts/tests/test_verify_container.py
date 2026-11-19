@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 import verify
 from pfstep import container, runner
 
-from .capsuleutil import TEST_DOCKERFILE
+from .capsuleutil import TEST_DOCKERFILE, path_id
 from .fakebox import FakeRuntime
 from .verifyfix import HAVE_BASH, HAVE_GIT, Fixture, Run, cmd_of, fake_engine, report, step_env
 
@@ -154,7 +154,8 @@ class ContainerRunTest(unittest.TestCase):
             [(f.repo("app"), False), (os.path.join(f.capsule, "runtime-state/verify/1/base/app"), False),
              (os.path.dirname(resolved), True)],
         )
-        self.assertEqual(s.volumes, {"pf-verify-cache-app-" + hashlib.sha256(TEST_DOCKERFILE.encode()).hexdigest()[:32]: "/cache"})
+        self.assertEqual(s.volumes, {"pf-verify-cache-app-" + hashlib.sha256(TEST_DOCKERFILE.encode()).hexdigest()[:32]
+                                      + "-" + path_id(f.repo("app")): "/cache"})
         self.assertEqual((s.image, s.cpus, s.memory, s.pids),
                          (tag, container.default_cpus(), container.DEFAULT_CONTAINER_MEMORY, container.DEFAULT_CONTAINER_PIDS))
         # every engine and bar command ran in it, in the repo's own path; git did not
@@ -496,7 +497,7 @@ class PreparedImageVerifyTest(unittest.TestCase):
         self.assertEqual(sorted(by_repo), ["app", "bare"])
         for name, s in by_repo.items():
             self.assertEqual((s.image, s.pull_never), (IMAGE_ID, True), name)
-            self.assertEqual(s.volumes, {"pf-verify-cache-%s-%s" % (name, IMAGE_ID[len("sha256:"):][:32]): "/cache"}, name)
+            self.assertEqual(s.volumes, {"pf-verify-cache-%s-%s-%s" % (name, IMAGE_ID[len("sha256:"):][:32], path_id(f.repo(name))): "/cache"}, name)
             self.assertIn(f.repo(name), [b.path for b in s.binds], "the clone alone is mounted, as in the default mode")
         for _, _, xenv, _ in fb.execs:
             for kv in xenv:

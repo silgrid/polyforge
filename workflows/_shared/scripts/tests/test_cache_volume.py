@@ -1,11 +1,17 @@
-# carries: workflows/_shared/scripts/pfstep/container.py
-"""A repo's cache volume follows its image's generation: the volume
-mounted at /cache is pf-verify-cache-<repo>-<the image tag's hash>, so a
-change to any byte of the Dockerfile gives a new, empty volume, and a
-start removes the repo's older generations no container references — never
-another repo's volume, one of another shape, or one in use. Over the fake
-engine (tests/fakebox.py), and the engine's own "unused" and "in use"
-answers over a real docker (skipped without one)."""
+# carries: workflows/_shared/scripts/pfstep/container.py, workflows/_shared/scripts/pfstep/runner.py
+"""A repo's cache volume follows its image's generation and its clone
+path (polyforge#153): the volume mounted at /cache is
+pf-verify-cache-<repo>-<the image tag's hash>-<the clone path's identity>,
+so a change to any byte of the Dockerfile gives a new, empty volume, and
+two clones at different paths never share one volume's path-sensitive
+caches while the same path always reuses its own — however the path is
+spelled (a trailing slash, a dot, a relative path, a symlink alias). A
+start removes the repo's older generations no container references —
+never another generation's volume, another repo's, one of another shape
+(including the pre-path shared shape, left to the upgrade's manual
+step), or one in use. Over the fake engine (tests/fakebox.py), and the
+engine's own "unused" and "in use" answers over a real docker (skipped
+without one)."""
 
 import hashlib
 import os
@@ -19,7 +25,7 @@ from pfstep import container, proc, runner
 from pfstep.container import Bind, ContainerOptions, ContainerSpec
 from pfstep.runner import CommandOptions
 
-from .capsuleutil import HAVE_GIT, TEST_DOCKERFILE, commit, make_capsule, write_files
+from .capsuleutil import HAVE_GIT, TEST_DOCKERFILE, commit, make_capsule, path_id, write_files
 from .fakebox import FakeRuntime
 from .test_container_docker import ENGINE, PROBE_IMAGE
 
@@ -28,6 +34,13 @@ OTHER_DOCKERFILE = "FROM scratch-test-image\nRUN echo another pin\n"
 
 def generation(dockerfile: str) -> str:
     return hashlib.sha256(dockerfile.encode()).hexdigest()[:32]
+
+
+def volume_of(image_generation: str, clone_path: str) -> str:
+    """A cache volume name, derived from the ruling's formula (never from
+    the module under test): the image generation and the clone path's
+    identity as two fields."""
+    return "pf-verify-cache-app-" + image_generation + "-" + path_id(clone_path)
 
 
 def old(n: int) -> str:
@@ -51,62 +64,100 @@ class CacheVolumeTest(unittest.TestCase):
     def tearDown(self) -> None:
         self._td.cleanup()
 
-    def run_once(self) -> runner.CommandResult:
+    def run_in(self, capsule: str) -> runner.CommandResult:
         self.runs += 1
         res = runner.run_command(CommandOptions(
-            capsule_dir=self.capsule, repo="app", command="true", deadline=time.time() + 60, timeout=60.0,
-            log_dir=os.path.join(self.capsule, "runtime-state", "run", str(self.runs), "app"), run=self.runs,
+            capsule_dir=capsule, repo="app", command="true", deadline=time.time() + 60, timeout=60.0,
+            log_dir=os.path.join(capsule, "runtime-state", "run", str(self.runs), "app"), run=self.runs,
             container=ContainerOptions(runtime=self.fb, owner="/srv/pf-data", boot="boot-1", wi="wi_x", say=self.said.append),
         ))
         self.assertEqual(res.exit, 0, "the run's verdict does not change")
         return res
 
-    def test_the_volume_is_the_image_generation(self) -> None:
-        a = "pf-verify-cache-app-" + generation(TEST_DOCKERFILE)
+    def run_once(self) -> runner.CommandResult:
+        return self.run_in(self.capsule)
+
+    def test_the_volume_is_the_image_generation_and_the_clone_path(self) -> None:
+        a = volume_of(generation(TEST_DOCKERFILE), self.clone)
+        self.assertEqual(container.cache_volume("app", TEST_DOCKERFILE.encode(), self.clone), a)
         self.run_once()
         self.run_once()
         for st in self.fb.starts:
-            self.assertEqual(st.volumes, {a: "/cache"}, "one volume, the image's generation, and nothing else cached")
-            self.assertEqual(a.rsplit("-", 1)[1], st.image.split(":", 1)[1], "the volume's hash is the image tag's")
+            self.assertEqual(st.volumes, {a: "/cache"}, "one volume, the image's generation and this clone path's")
+            self.assertEqual(st.image.split(":", 1)[1], generation(TEST_DOCKERFILE),
+                             "the volume's generation field is the image tag's")
             self.assertEqual(st.binds, [Bind(self.clone)], "no node_modules or other directory is mounted beside the clone")
         write_files(self.clone, {container.DOCKERFILE_VERIFY: OTHER_DOCKERFILE})
         commit(self.clone, self.root, "move a pin")
         self.run_once()
-        b = "pf-verify-cache-app-" + generation(OTHER_DOCKERFILE)
+        b = volume_of(generation(OTHER_DOCKERFILE), self.clone)
         self.assertNotEqual(a, b)
         self.assertEqual(self.fb.starts[2].volumes, {b: "/cache"}, "a changed Dockerfile gets a new volume")
         self.assertEqual(self.fb.starts[2].image.split(":", 1)[1], generation(OTHER_DOCKERFILE))
 
+    def test_two_clone_paths_never_share_one_cache_volume(self) -> None:
+        second = os.path.join(self.root, "second")
+        capsule = make_capsule(second, "app", {"a.txt": "a\n", container.DOCKERFILE_VERIFY: TEST_DOCKERFILE})
+        other_clone = os.path.join(capsule, "repos", "app")
+        self.run_once()
+        self.run_in(capsule)
+        gen = generation(TEST_DOCKERFILE)
+        self.assertEqual([st.volumes for st in self.fb.starts],
+                         [{volume_of(gen, self.clone): "/cache"}, {volume_of(gen, other_clone): "/cache"}],
+                         "the same repo and image at two paths mount two volumes")
+        self.assertNotEqual(self.fb.starts[0].volumes, self.fb.starts[1].volumes,
+                            "another path's clone never shares this one's cache volume")
+
+    def test_the_volume_key_is_the_canonical_clone_path(self) -> None:
+        real = os.path.join(self.root, "real-clone")
+        os.mkdir(real)
+        alias = os.path.join(self.root, "alias")
+        os.symlink(real, alias)
+        a = container.cache_volume("app", TEST_DOCKERFILE.encode(), real)
+        for spelling in (real + "/", os.path.join(self.root, ".", "real-clone"), alias,
+                         os.path.relpath(real, os.getcwd())):
+            self.assertEqual(container.cache_volume("app", TEST_DOCKERFILE.encode(), spelling), a,
+                             "the spelling %r is the same clone path" % spelling)
+        other = os.path.join(self.root, "other-clone")
+        os.mkdir(other)
+        self.assertNotEqual(container.cache_volume("app", TEST_DOCKERFILE.encode(), other), a,
+                            "a different clone path is a different volume")
+
     def test_a_start_removes_the_repos_unused_older_generations(self) -> None:
-        current = "pf-verify-cache-app-" + generation(TEST_DOCKERFILE)
-        unused_old = "pf-verify-cache-app-" + old(1)
-        in_use_old = "pf-verify-cache-app-" + old(2)
+        other_clone = os.path.join(self.root, "other-clone")
+        os.mkdir(other_clone)
+        current = volume_of(generation(TEST_DOCKERFILE), self.clone)
+        unused_old = volume_of(old(1), self.clone)
+        unused_old_other_path = volume_of(old(1), other_clone)  # the same older generation, another path's
+        in_use_old = volume_of(old(2), self.clone)
         kept = [
-            "pf-verify-cache-app-web-" + old(3),  # another repo whose name starts with this one's
-            "pf-verify-cache-other-" + old(4),
-            "pf-verify-cache-app",  # the name before generations: left to the upgrade's manual step
-            "pf-verify-cache-app-" + old(5)[:16],  # not a generation's shape
+            "pf-verify-cache-web-" + old(3) + "-" + path_id(self.clone),  # another repo whose name starts with this one's
+            "pf-verify-cache-other-" + old(4) + "-" + path_id(self.clone),
+            "pf-verify-cache-app-" + old(5),  # the pre-path shared shape: never touched, left to the upgrade's manual step
+            "pf-verify-cache-app",  # the name before generations
+            "pf-verify-cache-app-" + old(6)[:16],  # not a generation's shape
+            "pf-verify-cache-app-" + old(7) + "-" + old(7)[:16],  # a path field of the wrong length
             "unrelated",
         ]
-        self.fb.volumes.update([unused_old, in_use_old, *kept])
+        self.fb.volumes.update([unused_old, unused_old_other_path, in_use_old, *kept])
         # another verification, still running on the older image
         self.fb.containers["other-run"] = {container.LABEL_DAEMON: "/srv/other-daemon"}
         self.fb.mounts["other-run"] = [in_use_old]
         self.run_once()
-        self.assertEqual(self.fb.volume_removes, [unused_old])
+        self.assertEqual(self.fb.volume_removes, sorted([unused_old, unused_old_other_path]))
         self.assertEqual(sorted(self.fb.volumes), sorted([current, in_use_old, *kept]))
-        lines = [s for s in self.said if "volume" in s]
-        self.assertEqual(len(lines), 1, self.said)
-        self.assertIn("removed", lines[0])
-        self.assertIn(unused_old, lines[0], "the line names the removed volume")
+        for v in (unused_old, unused_old_other_path):
+            self.assertEqual(len([s for s in self.said if "removed" in s and v in s]), 1, self.said)
         # once that verification's container is gone, its volume goes too
         del self.fb.containers["other-run"]
         self.run_once()
-        self.assertEqual(self.fb.volume_removes, [unused_old, in_use_old])
+        self.assertEqual(self.fb.volume_removes, sorted([unused_old, unused_old_other_path, in_use_old]))
         self.assertEqual(sorted(self.fb.volumes), sorted([current, *kept]))
 
     def test_a_failing_listing_or_removal_costs_only_a_message(self) -> None:
-        olds = ["pf-verify-cache-app-" + old(1), "pf-verify-cache-app-" + old(2)]
+        other_clone = os.path.join(self.root, "other-clone")
+        os.mkdir(other_clone)
+        olds = [volume_of(old(1), self.clone), volume_of(old(2), other_clone)]
         self.fb.volumes.update(olds)
         self.fb.volume_list_err = "engine hung"
         self.run_once()
@@ -117,7 +168,7 @@ class CacheVolumeTest(unittest.TestCase):
         self.fb.volume_list_err, self.fb.volume_remove_err = "", "volume busy"
         self.run_once()
         self.assertEqual(len(self.fb.starts), 2, "the container starts")
-        self.assertEqual(self.fb.volume_removes, olds, "every older generation is still tried")
+        self.assertEqual(self.fb.volume_removes, sorted(olds), "every older generation is still tried")
         for v in olds:
             self.assertEqual(len([s for s in self.said if "could not remove" in s and v in s and "volume busy" in s]), 1, self.said)
         self.assertTrue(set(olds) <= self.fb.volumes)

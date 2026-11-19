@@ -390,7 +390,7 @@ func realCapsule(t *testing.T, dir string) (capsuleDir, repo string) {
 				_ = exec.CommandContext(c, "docker", "rmi", "--force", id).Run()
 			}
 		}
-		_ = exec.CommandContext(c, "docker", "volume", "rm", "--force", cacheVolume(repo, realDockerfile)).Run()
+		_ = exec.CommandContext(c, "docker", "volume", "rm", "--force", cacheVolume(repo, realDockerfile, clone)).Run()
 	})
 	if err := os.MkdirAll(clone, 0o755); err != nil {
 		t.Fatal(err)

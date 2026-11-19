@@ -20,7 +20,7 @@ from pfstep import container, proc, runner, tmpdir
 from pfstep.container import Bind, ContainerOptions, ContainerSpec, DockerCLI
 from pfstep.runner import CommandOptions, EnvironmentNotSatisfied, ExecutorError
 
-from .capsuleutil import HAVE_GIT, TEST_DOCKERFILE, commit, head, make_capsule
+from .capsuleutil import HAVE_GIT, TEST_DOCKERFILE, commit, head, make_capsule, path_id
 from .fakebox import FakeRuntime
 
 # The daemon's credentials (one sentinel each) beside the network setting a
@@ -83,7 +83,8 @@ class ContainerRunTest(unittest.TestCase):
             container.LABEL_RUN: "2", container.LABEL_REPO: "app", container.LABEL_EXPIRES: str(int(o.deadline)),
         })
         self.assertEqual(st.binds, [Bind(self.clone)], "the container mounts the clone alone")
-        self.assertEqual(st.volumes, {"pf-verify-cache-app-" + hashlib.sha256(TEST_DOCKERFILE.encode()).hexdigest()[:32]: "/cache"})
+        self.assertEqual(st.volumes, {"pf-verify-cache-app-" + hashlib.sha256(TEST_DOCKERFILE.encode()).hexdigest()[:32]
+                                      + "-" + path_id(self.clone): "/cache"})
         self.assertEqual(self.fb.builds, [(tag, TEST_DOCKERFILE.encode(), {container.LABEL_REPO: "app"})])
         cmd = self.fb.command_execs("echo smoke-out")
         self.assertEqual(len(cmd), 1)
@@ -301,7 +302,8 @@ class NamesAndLimitsTest(unittest.TestCase):
         self.assertEqual(container.image_tag("App", df), "pf-verify-app:" + hashlib.sha256(df).hexdigest()[:32])
         for raw, want in (("My Repo!", "my-repo"), ("..x..", "x"), ("", "repo"), ("___", "repo"), ("a.b_c-d", "a.b_c-d")):
             self.assertEqual(container.tag_safe(raw), want, raw)
-        self.assertEqual(container.cache_volume("My Repo", df), "pf-verify-cache-my-repo-" + hashlib.sha256(df).hexdigest()[:32])
+        self.assertEqual(container.cache_volume("My Repo", df, "/srv/work/my repo"),
+                         "pf-verify-cache-my-repo-" + hashlib.sha256(df).hexdigest()[:32] + "-" + path_id("/srv/work/my repo"))
         self.assertRegex(container.container_name("wi_x", 2, "App"), r"^pf-verify-wi_x-2-app-[0-9a-f]{8}$")
         self.assertRegex(container.container_name("", 1, "a"), r"^pf-verify-manual-1-a-[0-9a-f]{8}$")
         self.assertRegex(container.container_name("-a/b c.", 1, "a"), r"^pf-verify-a-b-c-1-a-[0-9a-f]{8}$")
@@ -414,7 +416,8 @@ class PreparedImageTest(unittest.TestCase):
         self.assertTrue(spec.pull_never, "a prepared image is never pulled")
         self.assertEqual(self.fb.builds, [], "a prepared image is never built")
         self.assertEqual(spec.volumes,
-                         {"pf-verify-cache-app-" + self.IMAGE_ID[len("sha256:"):][:32]: container.CONTAINER_CACHE_DIR})
+                         {"pf-verify-cache-app-" + self.IMAGE_ID[len("sha256:"):][:32] + "-" + path_id(self.clone):
+                          container.CONTAINER_CACHE_DIR})
         self.assertEqual([(b.path, b.read_only) for b in spec.binds], [(self.clone, False)],
                          "the clone alone is mounted, as in the default mode")
         self.assertEqual(spec.labels, {
@@ -444,7 +447,7 @@ class PreparedImageTest(unittest.TestCase):
         spec = self.fb.starts[0]
         self.assertEqual((self.fb.builds, spec.image, spec.pull_never), ([], self.IMAGE_ID, True))
         self.assertEqual(spec.volumes,
-                         {"pf-verify-cache-bare-" + self.IMAGE_ID[len("sha256:"):][:32]: "/cache"})
+                         {"pf-verify-cache-bare-" + self.IMAGE_ID[len("sha256:"):][:32] + "-" + path_id(clone): "/cache"})
         box.remove()
         # the default mode still needs the Dockerfile: unchanged
         with self.assertRaises(container.BoxError) as got:
