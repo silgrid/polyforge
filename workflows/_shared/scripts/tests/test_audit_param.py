@@ -38,6 +38,7 @@ on/off, empty or unset reads as on, everything else a named error before
 any check runs; 3-A: an old tree engine is blocked by name), never from
 this implementation's own output."""
 
+import datetime
 import json
 import os
 import subprocess
@@ -45,6 +46,9 @@ import tempfile
 import unittest
 from typing import Any, Dict, List, cast
 
+import gate
+from .fakebox import FakeRuntime
+from .gatefix import HAVE_BASH, HAVE_GIT, HAVE_PY, IDENT, commit_all, gate_clone, green_clone, run_gate, run_main, write_files
 from .gitworld import GitCase, Repo
 from .verifyfix import HAVE_BASH, HAVE_GIT, Fixture, Run, cmd_of, engine_args, fake_engine, report, run_verify
 
@@ -206,6 +210,164 @@ class VerifyAuditParamTest(unittest.TestCase):
             self.assertIn("PF_PARAM_AUDIT", r.result.get("summary", ""))
             self.assertIsNone(r.doc, "%r: no result.json — nothing ran" % value)
             self.assertEqual(engine_args(eng), [], "%r: the engine was never asked" % value)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+NOW = datetime.datetime(2026, 11, 8, 9, 30, 0, tzinfo=datetime.timezone.utc)
+
+# The gate fixtures' conf: a go stack (an analyzer, so the engine appends
+# the audit over the root go.mod) with the commands the fake container
+# runs as plain echoes.
+GATE_CONF = "stack=go\nfast_gate=echo one\nfull_command=echo full-ok\n"
+
+
+@unittest.skipUnless(HAVE_GIT and HAVE_BASH and HAVE_PY, "git, bash and python3 needed")
+class GateAuditParamTest(unittest.TestCase):
+    """gate.py's side of the audit parameter: the four values of the
+    matrix over the tree's own real scope engine (gatefix's clone carries
+    it), the plan and the result judged through the fake container."""
+
+    def setUp(self) -> None:
+        self._td = tempfile.TemporaryDirectory()
+        self.addCleanup(self._td.cleanup)
+        self.root = os.path.realpath(self._td.name)
+        self.fb = FakeRuntime(os.path.join(self.root, "box-tmp"))
+
+    def clone(self) -> str:
+        d = gate_clone(self.root, GATE_CONF)
+        write_files(d, {"go.mod": "module example.invalid/app\n"})
+        commit_all(d, "the auditable surface")
+        return d
+
+    def test_off_plans_without_the_audit_and_records_the_closure(self) -> None:
+        d = self.clone()
+        r = run_gate(d, self.fb, os.path.join(self.root, "logs"), env={"PF_PARAM_AUDIT": "off"})
+        self.assertEqual(r.res.incomplete, "", r.progress)
+        self.assertTrue(r.res.passed, r.progress)
+        self.assertIn("--audit off", r.res.engine, "the engine invocation carries the option")
+        for c in r.res.plan["commands"] if r.res.plan else []:
+            self.assertNotIn("audit-deps", c["cmd"], "off plans no audit command: %s" % c["cmd"])
+        self.assertEqual([c.name for c in r.res.commands], ["fast-1", "full-1"], r.progress)
+        self.assertEqual(r.res.audit_off, AUDIT_OFF_NOTE)
+        self.assertEqual(r.res.as_dict()["audit_off"], AUDIT_OFF_NOTE)
+
+    def test_on_and_unset_keep_the_audit_and_add_no_field(self) -> None:
+        for env in ({}, {"PF_PARAM_AUDIT": "on"}, {"PF_PARAM_AUDIT": ""}):
+            d = self.clone()
+            r = run_gate(d, self.fb, os.path.join(self.root, "logs"), env=env)
+            self.assertEqual(r.res.incomplete, "", r.progress)
+            self.assertTrue(r.res.passed, r.progress)
+            self.assertNotIn("--audit", r.res.engine, "on hands the engine no audit option")
+            self.assertTrue(any("audit-deps" in c.cmd for c in r.res.commands),
+                            "the audit still closes the plan: %s" % [c.name for c in r.res.commands])
+            self.assertEqual([c.name for c in r.res.commands], ["fast-1", "full-1", "audit"], r.progress)
+            self.assertEqual(r.res.audit_off, "")
+            self.assertNotIn("audit_off", r.res.as_dict(), "an on run adds no field")
+
+    def test_every_other_value_is_a_named_error_before_the_container(self) -> None:
+        d = self.clone()
+        for value in ("ON", "false", " off", "0"):
+            out = os.path.join(self.root, "gate-%s.json" % value.strip() or "x")
+            m = run_main(["--isolation", "container", "--json", "--out", out], d,
+                         env={"PF_PARAM_AUDIT": value}, runtime=self.fb)
+            self.assertEqual(m.exit, 2, "%r must be a named error, not a silent on or off" % value)
+            self.assertIn("pf-audit-param-invalid", m.stdout + m.stderr, "%r: the fixed mark names the error" % value)
+            self.assertIn("PF_PARAM_AUDIT", m.stdout + m.stderr)
+            self.assertEqual(self.fb.starts, [], "%r: no container was ever started" % value)
+
+
+@unittest.skipUnless(HAVE_GIT and HAVE_BASH and HAVE_PY, "git, bash and python3 needed")
+class AuditEvidenceTest(unittest.TestCase):
+    """The closure's evidence chain: a green tag of an off run carries the
+    note, an on tag never lends itself to an off run (a tree without an
+    auditable surface plans the same either way, so only the note keeps
+    the two states' tags apart), and a tree engine predating --audit is
+    blocked by name, never silently audited nor switched to the lane's."""
+
+    def setUp(self) -> None:
+        self._td = tempfile.TemporaryDirectory()
+        self.addCleanup(self._td.cleanup)
+        self.root = os.path.realpath(self._td.name)
+        self.fb = FakeRuntime(os.path.join(self.root, "box-tmp"))
+        self.g = gate.Git(dict(os.environ, **IDENT))
+
+    def record(self, origin: str, name: str) -> Dict[str, str]:
+        body = git_t(origin, "for-each-ref", "--format=%(contents)", "refs/tags/" + name)
+        return cast(Dict[str, str], json.loads(body))
+
+    def test_a_green_tag_of_an_off_run_carries_the_closure_note(self) -> None:
+        d = green_clone(self.root, GATE_CONF)
+        write_files(d, {"go.mod": "module example.invalid/app\n"})
+        commit_all(d, "the auditable surface")
+        r = run_gate(d, self.fb, os.path.join(self.root, "logs"), env={"PF_PARAM_AUDIT": "off"})
+        self.assertTrue(r.res.passed, r.progress)
+        self.assertEqual([c.name for c in r.res.commands], ["fast-1", "full-1"], r.progress)
+        name, created = gate.mark_green(self.g, d, "origin", "s", r.res, now=NOW)
+        self.assertEqual((name, created), ("green/20261108-1", True))
+        rec = self.record(os.path.join(self.root, "origin.git"), name)
+        self.assertEqual(rec.get("audit_off"), AUDIT_OFF_NOTE, "the tag's record carries the closure note")
+        # the same off record twice: the tag is reused, nothing pushed
+        again, created = gate.mark_green(self.g, d, "origin", "s", r.res, now=NOW)
+        self.assertEqual((again, created), (name, False))
+
+    def test_an_on_tag_is_never_reused_for_an_off_run(self) -> None:
+        # stack=none: no analyzer, no audit surface — on and off plan the
+        # very same commands and the same digest; only the audit note
+        # keeps the two states' evidence apart
+        d = green_clone(self.root, "stack=none\nfast_gate=echo one\n")
+        on = run_gate(d, self.fb, os.path.join(self.root, "logs"))
+        self.assertTrue(on.res.passed, on.progress)
+        name, created = gate.mark_green(self.g, d, "origin", "s", on.res, now=NOW)
+        self.assertEqual((name, created), ("green/20261108-1", True))
+        off = run_gate(d, self.fb, os.path.join(self.root, "logs"), env={"PF_PARAM_AUDIT": "off"})
+        self.assertTrue(off.res.passed, off.progress)
+        self.assertEqual(off.res.plan_digest, on.res.plan_digest, "the fixture's plan carries no audit surface")
+        name2, created2 = gate.mark_green(self.g, d, "origin", "s", off.res, now=NOW)
+        self.assertEqual((name2, created2), ("green/20261108-2", True),
+                         "the on tag never lends itself to the off run")
+        self.assertEqual(self.record(os.path.join(self.root, "origin.git"), name2).get("audit_off"), AUDIT_OFF_NOTE)
+        # and the other way round: an off tag is not the on run's either
+        on_again = run_gate(d, self.fb, os.path.join(self.root, "logs"))
+        name3, created3 = gate.mark_green(self.g, d, "origin", "s", on_again.res, now=NOW)
+        self.assertEqual((name3, created3), ("green/20261108-1", False), "the on record's own tag, reused")
+
+    def test_a_tree_engine_predating_audit_is_blocked_by_name(self) -> None:
+        d = gate_clone(self.root, GATE_CONF)
+        # the tree's engine is a stub of the era before polyforge#138:
+        # its --help answers a usage that names no --audit option
+        with open(os.path.join(d, gate.GATE_ENGINE_REL), "w", encoding="utf-8") as f:
+            f.write("#!/usr/bin/env python3\n"
+                    "import sys\n"
+                    "if \"--help\" in sys.argv:\n"
+                    "    print(\"usage: verify-scope [--json] [--full | --micro | --light] [--base <rev>]\","
+                    " file=sys.stderr)\n"
+                    "    sys.exit(0)\n"
+                    "sys.stderr.write(\"the stub plans nothing\\n\")\n"
+                    "sys.exit(3)\n")
+        os.chmod(os.path.join(d, gate.GATE_ENGINE_REL), 0o755)
+        write_files(d, {"go.mod": "module example.invalid/app\n"})
+        commit_all(d, "the auditable surface")
+        r = run_gate(d, self.fb, os.path.join(self.root, "logs"), env={"PF_PARAM_AUDIT": "off"})
+        self.assertFalse(r.res.passed)
+        self.assertIn("PF_PARAM_AUDIT=off", r.res.incomplete)
+        self.assertIn("predates the --audit option", r.res.incomplete)
+        self.assertIn("not judged", r.res.incomplete)
+        self.assertEqual(self.fb.starts, [], "no container was started for a blocked gate")
+        self.assertEqual(r.res.audit_off, AUDIT_OFF_NOTE)
+
+    def test_the_lanes_engine_serves_an_off_gate_of_a_tree_without_one(self) -> None:
+        d = green_clone(self.root, GATE_CONF, engine=False)
+        write_files(d, {"go.mod": "module example.invalid/app\n"})
+        commit_all(d, "the auditable surface")
+        r = run_gate(d, self.fb, os.path.join(self.root, "logs"), env={"PF_PARAM_AUDIT": "off"})
+        self.assertEqual(r.res.incomplete, "", r.progress)
+        self.assertTrue(r.res.passed, r.progress)
+        self.assertEqual(r.res.engine_source, "lane")
+        self.assertIn("--audit off", r.res.engine)
+        self.assertEqual([c.name for c in r.res.commands], ["fast-1", "full-1"], r.progress)
 
 
 if __name__ == "__main__":
