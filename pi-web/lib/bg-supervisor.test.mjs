@@ -16,7 +16,7 @@ const POLL_STEP_MS = 25;
 const HOST_DEATH_DEADLINE_MS = 10_000;
 const STOP_DEADLINE_MS = 5_000;
 
-async function pollUntil(condition: () => boolean | Promise<boolean>, deadlineMs: number, what: string): Promise<void> {
+async function pollUntil(condition, deadlineMs, what) {
   const deadline = Date.now() + deadlineMs;
   for (;;) {
     if (await condition()) return;
@@ -26,34 +26,24 @@ async function pollUntil(condition: () => boolean | Promise<boolean>, deadlineMs
 }
 
 /** A group exists while kill(-pgid, 0) finds it (EPERM still means it exists). */
-function groupAlive(pgid: number): boolean {
+function groupAlive(pgid) {
   if (!Number.isInteger(pgid) || pgid <= 0) return false;
   try {
     process.kill(-pgid, 0);
     return true;
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
+    return error.code === "EPERM";
   }
 }
 
-async function makeTaskDir(): Promise<string> {
+async function spawnTask(command, options = {}) {
   const dir = await mkdtemp(join(tmpdir(), "bg-supervisor-"));
-  return dir;
-}
-
-interface SpawnedForTest {
-  dir: string;
-  logPath: string;
-}
-
-async function spawnTask(command: string, options: { logMaxBytes?: number } = {}): Promise<SpawnedForTest & ReturnType<typeof spawnBgSupervisedTask>> {
-  const dir = await makeTaskDir();
   const logPath = join(dir, "log");
   const task = spawnBgSupervisedTask({ command, cwd: dir, env: process.env, logPath, ...(options.logMaxBytes !== undefined ? { logMaxBytes: options.logMaxBytes } : {}) });
   return { dir, logPath, ...task };
 }
 
-function cleanup(task: { pgid: number }): void {
+function cleanup(task) {
   // Best-effort, bounded by the supervisor's own escalation; ESRCH is success.
   void stopBgTaskGroup(task.pgid).catch(() => undefined);
 }
@@ -120,9 +110,9 @@ setInterval(() => {}, 1000);
   t.after(() => { try { host.kill("SIGKILL"); } catch { /* already gone */ } });
   let pgid = 0;
   let ready = "";
-  await new Promise<void>((resolve, reject) => {
+  await new Promise((resolve, reject) => {
     const deadline = setTimeout(() => reject(new Error(`host never reported its task; got: ${ready}`)), 10_000);
-    host.stdout!.on("data", (chunk: Buffer) => {
+    host.stdout.on("data", (chunk) => {
       ready += chunk.toString("utf8");
       const match = /^READY (\d+)\s*$/.exec(ready.trim());
       if (match) {
