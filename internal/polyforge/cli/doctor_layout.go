@@ -60,10 +60,12 @@ var prerequisiteHints = map[string]string{
 // prerequisiteOrder keeps the report's tool list stable.
 var prerequisiteOrder = []string{"gh", "curl", "python3", "tmux", "git"}
 
-// prerequisitesCheck reports the five setup tools' presence on PATH —
+// prerequisitesCheck reports the setup tools' presence on PATH —
 // warn-only: every missing one is named with what to obtain, never a
-// fail, and the doctor never installs anything.
-func prerequisitesCheck(lookPath func(string) (string, error)) doctorCheck {
+// fail, and the doctor never installs anything. Under the container
+// supervisor tmux is not required (polyforge#160, Q7): `pf supervise`
+// watches the daemon, and the container image carries no tmux.
+func prerequisitesCheck(lookPath func(string) (string, error), containerSupervised bool) doctorCheck {
 	var missing []string
 	for _, tool := range prerequisiteOrder {
 		if _, err := lookPath(tool); err != nil {
@@ -494,7 +496,10 @@ func ensureFixCommand(home string) string {
 }
 
 // supervisionCheck judges whether a live daemon is supervised.
-func supervisionCheck(daemonUp bool) (c doctorCheck) {
+// daemonEnvNames are the daemon's environment variable names (GET
+// /status reports names only) — a daemon the container supervisor
+// started carries the supervision marker among them.
+func supervisionCheck(daemonUp bool, daemonEnvNames []string) (c doctorCheck) {
 	c = doctorCheck{Name: docChSupervision}
 	home, _ := os.UserHomeDir()
 	fix := ensureFixCommand(home)
@@ -546,4 +551,16 @@ func cellLayoutNote(dataDir string) (bool, string) {
 		return false, "" // inside the rollback window the copy is the rollback source
 	}
 	return true, fmt.Sprintf("the pre-migration copy (%s in %s) is stale: the Host served the cell layout, so `pf migrate cell-layout --rollback` is refused — keep a backup of it if you want one, then remove those root items", strings.Join(old, ", "), dataDir)
+}
+
+// envNamesCarry answers whether the daemon's environment variable names
+// (GET /status reports names only) include the supervision marker — the
+// one fact both the tmux loop and `pf supervise` stamp on the daemon.
+func envNamesCarry(names []string) bool {
+	for _, n := range names {
+		if n == supervisor.MarkerEnv {
+			return true
+		}
+	}
+	return false
 }

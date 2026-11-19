@@ -123,8 +123,12 @@ type doctorRun struct {
 	reachOK, sockOK         bool
 	reachMsg, sockMsg       string
 	status                  StatusResponse
-	claudeSteps             []workspace.StepResolution // set by the workspace yaml check
-	auth                    doctorCheck                // set by the aihub projects check
+	// containerSupervised: a live daemon under the container supervisor
+	// (polyforge#160) — its environment carries the supervision marker and
+	// this is a container; the supervision and prerequisites rows read it.
+	containerSupervised bool
+	claudeSteps         []workspace.StepResolution // set by the workspace yaml check
+	auth                doctorCheck                // set by the aihub projects check
 }
 
 // doctorNeed is a check's prerequisite beyond a loadable config.
@@ -183,7 +187,9 @@ var doctorChecks = []doctorCheckSpec{
 	{docChRepoClones, scopeCell, needMapping, func(r *doctorRun) (string, string) { return repoClonesCheck(r) }},
 	{docChLightFallbacks, scopeCell, needMapping, lightFallbacksCheck},
 	{docChMemPolicy, scopeCell, needMapping, func(r *doctorRun) (string, string) { return memoryPolicyCheck(r.cfg, r.present).row() }},
-	{docChPrereqs, scopeHost, needConfig, func(r *doctorRun) (string, string) { return prerequisitesCheck(exec.LookPath).row() }},
+	{docChPrereqs, scopeHost, needConfig, func(r *doctorRun) (string, string) {
+		return prerequisitesCheck(exec.LookPath, r.containerSupervised).row()
+	}},
 	{docChBuild, scopeHost, needConfig, func(r *doctorRun) (string, string) { return buildCheck().row() }},
 	{docChPython, scopeHost, needConfig, func(r *doctorRun) (string, string) {
 		return pythonCheck(r.cfg.Daemon.Python, exec.LookPath, ProbePython).row()
@@ -198,7 +204,7 @@ var doctorChecks = []doctorCheckSpec{
 		return passOrFail(r.reachOK), r.reachMsg
 	}},
 	{docChSocket, scopeHost, needConfig, func(r *doctorRun) (string, string) { return passOrFail(r.sockOK), r.sockMsg }},
-	{docChSupervision, scopeHost, needConfig, func(r *doctorRun) (string, string) { return supervisionCheck(r.sockOK).row() }},
+	{docChSupervision, scopeHost, needConfig, func(r *doctorRun) (string, string) { return supervisionCheck(r.sockOK, r.status.EnvNames).row() }},
 	{docChReload, scopeCell, needConfig, reloadCheck},
 	{docChModelHealth, scopeCell, needConfig, func(r *doctorRun) (string, string) { return modelHealthCheck(r) }},
 	{docChEnv, scopeHost, needConfig, func(r *doctorRun) (string, string) { return retiredEnvCheck(os.Getenv, r.status.EnvWarnings).row() }},
@@ -468,6 +474,7 @@ func runDoctorChecks(ctx *Context, pruneScratch, pruneCapsules, pruneRebuildable
 		}
 	}
 	r.sockOK, r.sockMsg, r.status = probeDaemonSocket(cfg.DaemonSocket)
+	r.containerSupervised = r.sockOK && supervisor.InContainer() && envNamesCarry(r.status.EnvNames)
 	r.reachOK, r.reachMsg = probeServerReach(cfg.DaemonSocket, r.sockOK, r.profile)
 
 	for _, d := range doctorChecks {
