@@ -1,3 +1,4 @@
+// carries: lib/mcp-import-cli.ts, lib/mcp-import-core.ts, lib/mcp-import.ts
 import "#test-env";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -1225,4 +1226,23 @@ test("a pasted literal secret where pi resolves values can be stored as a refere
   assert.deepEqual(fillMcpImportFields(server, { "headers.X-Api-Key": "k" }, { "oauth.clientSecret": " " }).notes, [
     { code: "field-reference-invalid", params: { field: "oauth.clientSecret", problem: "missing" } },
   ]);
+});
+
+// ---------------------------------------------------------------------------
+// #85 85c (AC4, Q5 A): `claude mcp add`'s own scope — `-s local`, and no `-s`
+// at all, is claude's local group (its default), so the paste goes there and
+// the pane offers only claude for it.
+
+test("`claude mcp add` without -s, and with -s local, reads as claude's local scope (Q5)", () => {
+  const bare = importOne("claude mcp add demo npx -y server");
+  assert.equal(bare.scopeHint, "local", "claude's own default scope is local");
+  const explicit = importOne("claude mcp add -s local demo npx -y server");
+  assert.equal(explicit.scopeHint, "local");
+  const user = importOne("claude mcp add -s user demo npx -y server");
+  assert.equal(user.scopeHint, "global");
+  const project = importOne("claude mcp add --scope project demo npx -y server");
+  assert.equal(project.scopeHint, "project");
+  // pi's own grammar is untouched: -l stays the project hint, no flag the global one.
+  assert.equal(importOne("pi mcp add demo npx -y server").scopeHint, undefined);
+  assert.equal(importOne("pi mcp add -l demo npx -y server").scopeHint, "project");
 });
