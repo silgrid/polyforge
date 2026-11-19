@@ -1018,11 +1018,14 @@ setting:
   e2e scenario is a unit, red before its implementation like any other.
   No daemon check judges what `build` reports: it
   runs each unit red then green itself and records it in
-  `artifacts/build/units.json` (`[{id, pre_existing_red?, test_commit?, impl_commit,
+  `artifacts/build/units.json` (`[{id, pre_existing_red?, timeout?, test_commit?, impl_commit,
   run{repo, cwd, argv}, marker}]`, the run exactly as it ran red and green; a unit
   whose reproduction test already exists and is red before the change — an
   integration fix ticket — declares `pre_existing_red: true` and reports no
-  `test_commit`, its red evidence a replay on the tree of the change's base; the
+  `test_commit`, its red evidence a replay on the tree of the change's base; a unit
+  self-reports `timeout` (a Go duration) to raise the limit its run and its red-state
+  replay are bounded by (the default is 10m, and a run its limit kills is an evidence
+  problem, never a pass); the
   daemon checks only that the file parses), and the steps after it verify
   it. Its close runs two of the same facts first — `build` without the
   replay (each unit's static commit facts) and `carries` — and hands off

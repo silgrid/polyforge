@@ -1,3 +1,4 @@
+# carries: workflows/_shared/scripts/fast_checks.py
 """fast_checks.py — build's written fast/scoped check: the scope engine's
 light reports for one task repo, their fast- and scoped-phase commands run
 in order, each in its report's root, the full phase never run, the result
@@ -19,6 +20,7 @@ import unittest
 from typing import Any, Dict, List, Optional, Tuple
 
 from .gitworld import GitCase, Repo, git, write
+from .test_verify_light import w403_repo
 from .schemacheck import errors as schema_errors
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -151,6 +153,145 @@ class RedCheckTest(FastChecksCase):
         slow = [c for c in self.commands_of(res) if c["name"] == "slow"][0]
         self.assertTrue(slow["timed_out"])
         self.assertNotEqual(slow["exit_code"], 0)
+
+
+# A test that fails on its first run only (the marker file its failure
+# writes) and one that always fails, counting its own runs: the fixtures
+# the flaky re-run tests derive every expected value from — the counter
+# files' contents and the exit codes, never the implementation.
+FLAKY_GATE_TEST = ("package app\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\n"
+                  "// TestFlakyGate fails on its first run only: the marker its\n"
+                  "// failure writes turns the one targeted re-run green.\n"
+                  "func TestFlakyGate(t *testing.T) {\n"
+                  "\tif _, err := os.Stat(\"flaky-marker\"); err != nil {\n"
+                  "\t\tos.WriteFile(\"flaky-marker\", []byte(\"1\"), 0o644)\n"
+                  "\t\tt.Fatal(\"the first run fails: the marker now exists\")\n"
+                  "\t}\n}\n")
+ALWAYS_RED_TEST = ("package app\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\n"
+                   "// TestAlwaysRed fails and counts its own runs: one first\n"
+                   "// run plus exactly one re-run writes two marks.\n"
+                   "func TestAlwaysRed(t *testing.T) {\n"
+                   "\tf, err := os.OpenFile(\"always-red-runs\", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)\n"
+                   "\tif err != nil {\n"
+                   "\t\tt.Fatal(err)\n"
+                   "\t}\n"
+                   "\tf.WriteString(\"x\")\n"
+                   "\t\tf.Close()\n"
+                   "\t\tt.Fatal(\"always failing\")\n"
+                   "}\n")
+
+
+class FlakyRerunTest(FastChecksCase):
+    """AC1 of the flaky re-run ticket: a failing unit the command's output
+    locates is re-run once by the check itself, through verification's own
+    rules (`pfstep/rerun` + `pfstep/flaky`, the one implementation); a pass
+    is recorded flaky beside the first failure's log, and the command turns
+    green only when every failing unit is flaky and the whole command is
+    then confirmed — its whole re-run exits 0. A unit still red after its
+    one re-run keeps the check red, and a command whose output locates no
+    unit is never re-run. Expected values come from the fixtures' own
+    marker and counter files, never from the implementation."""
+
+    FLAKY_CONF = "stack=go\nfast_gate=echo fast-one\nfull_command=echo full-ran > full.txt\n"
+
+    def flaky_repo(self, test: str) -> str:
+        return self.task_repo("app", {
+            "go.mod": GO_MOD,
+            ".polyforge/verify-scope.conf": self.FLAKY_CONF,
+            "app/app.go": APP,
+            "app/app_test.go": test,
+        }, {"app/app.go": APP.replace("// Answer is the answer.\n", "// Answer is the answer. (changed)\n")})
+
+    def scoped_of(self, res: Dict[str, Any]) -> Dict[str, Any]:
+        scoped = [c for c in self.commands_of(res) if c["phase"] == "scoped"]
+        self.assertTrue(scoped, res)
+        return scoped[0]
+
+    def test_a_flaky_unit_is_rerun_once_and_the_check_stays_green(self) -> None:
+        clone = self.flaky_repo(FLAKY_GATE_TEST)
+        code, res = self.run_checks("app")
+        self.assertEqual(code, 0, res)
+        scoped = self.scoped_of(res)
+        self.assertNotEqual(scoped["exit_code"], 0, "the first run failed on its assertion")
+        self.assertEqual([u["name"] for u in scoped["units"]], ["TestFlakyGate"])
+        u = scoped["units"][0]
+        self.assertEqual(u["status"], "flaky")
+        self.assertEqual(u["flaky"], "flaky 1/2")
+        self.assertTrue(u["rerun_log"], "the passing re-run's log is recorded")
+        # the whole command was re-run once and exited 0: the confirmation
+        self.assertEqual(scoped["confirmed"], scoped["cmd"])
+        # the marker exists: the re-run ran the unit's own test, in the repo
+        self.assertTrue(os.path.exists(os.path.join(clone, "app", "flaky-marker")))
+        # the flaky unit and its first failure's log are visible in the summary
+        self.assertIn("flaky", res["summary"])
+        self.assertIn("TestFlakyGate", res["summary"])
+        self.assertIn(scoped["log"], res["summary"])
+
+    def test_a_unit_still_red_after_its_one_rerun_keeps_the_check_red(self) -> None:
+        clone = self.flaky_repo(ALWAYS_RED_TEST)
+        code, res = self.run_checks("app")
+        self.assertEqual(code, 1, res)
+        scoped = self.scoped_of(res)
+        u = scoped["units"][0]
+        self.assertEqual(u["status"], "fail")
+        self.assertIn("still failing on 1 re-run", u["detail"])
+        self.assertNotIn("confirmed", scoped, "an unexplained command is never confirmed")
+        with open(os.path.join(clone, "app", "always-red-runs"), encoding="utf-8") as f:
+            self.assertEqual(len(f.read()), 2, "the first run plus exactly one re-run")
+
+    def test_a_flaky_e2e_suite_rerun_and_the_runners_summary_confirms(self) -> None:
+        """AC1's e2e half: an aggregate e2e runner's failing suite re-runs
+        once by the runner's own re-run template, a pass records it flaky
+        (kind e2e-suite, its first-red log kept), and the runner's closing
+        summary proves completion — the command turns green with `complete`,
+        never a whole re-run (r1#2)."""
+        web = w403_repo({
+            "web/package.json": '{"name": "web", "version": "1.0.0", "scripts": {"test:e2e:all": "sh e2e/all.sh"}}\n',
+            "web/package-lock.json": '{"name": "web", "lockfileVersion": 3}\n',
+            "web/.polyforge/verify-scope.conf":
+                "stack=npm\n"
+                "e2e_runner=FLAKY_STATE=.flaky-state sh e2e/all.sh --\n"
+                "rerun=scoped-1|FLAKY_STATE=.flaky-state sh e2e/all.sh -- {unit}\n"
+                "full_command=echo nested-full > nested-full.txt\n",
+        })
+        files = {
+            "go.mod": GO_MOD,
+            ".polyforge/verify-scope.conf": self.FLAKY_CONF,
+            "app/app.go": APP,
+            "app/app_test.go": APP_TEST,
+        }
+        files.update(web)
+        # the change reaches the nested root, and s1's carries: cover it
+        clone = self.task_repo("app", files, {"web/lib/a.ts": "export const a = 2;\n"})
+        # S1 fails its first run only (the marker file the runner reads)
+        with open(os.path.join(clone, "web", "S1_FLAKY"), "w", encoding="utf-8") as f:
+            f.write("1")
+        code, res = self.run_checks("app")
+        self.assertEqual(code, 0, res)
+        scoped = [c for c in self.commands_of(res) if c["name"] == "web/scoped-1"][0]
+        self.assertNotEqual(scoped["exit_code"], 0, "the first run failed")
+        u = scoped["units"][0]
+        self.assertEqual(u["kind"], "e2e-suite")
+        self.assertEqual(u["name"], "e2e/s1.mjs")
+        self.assertEqual(u["status"], "flaky")
+        self.assertEqual(u["flaky"], "flaky 1/2")
+        self.assertTrue(u["rerun_log"], "the passing re-run's log is recorded")
+        # the runner's closing summary is the completion proof: no whole re-run
+        self.assertIn("the runner's summary shows all 1 suites it announced settled", scoped["complete"])
+        self.assertNotIn("confirmed", scoped)
+        self.assertIn("e2e/s1.mjs", res["summary"])
+        self.assertIn(scoped["log"], res["summary"])
+
+    def test_a_command_no_unit_locates_is_never_rerun(self) -> None:
+        self.go_repo(conf="stack=go\nfast_gate=exit 3\nfast_gate=echo after\n"
+                          "full_command=echo full-ran > full.txt\n")
+        code, res = self.run_checks("app")
+        self.assertEqual(code, 1)
+        gate = [c for c in self.commands_of(res) if c["name"] == "fast-1"][0]
+        self.assertEqual(gate["exit_code"], 3)
+        self.assertEqual([u["kind"] for u in gate["units"]], ["command"])
+        self.assertIn("no failure unit could be located", gate["units"][0]["detail"])
+        self.assertNotIn("confirmed", gate)
 
 
 class SkipTest(FastChecksCase):
@@ -317,6 +458,116 @@ class CheckUnitsTest(FastChecksCase):
             f.write("not json")
         code, res = self.run_checks("", extra=("--check-units", p))
         self.assertEqual(code, 2)
+
+
+# A recorded run that counts itself in ./ucount and is red until its
+# counter reaches the given mark (or always red, still counting): the
+# fixture the --check-units flaky policy tests derive every expected value
+# from — the counter file's own contents.
+def counting_argv(mark: int, always: bool = False) -> List[str]:
+    if always:
+        return ["bash", "-c",
+                "n=$(cat ucount 2>/dev/null || echo 0); n=$((n+1)); echo $n > ucount; exit 1"]
+    return ["bash", "-c",
+            "n=$(cat ucount 2>/dev/null || echo 0); n=$((n+1)); echo $n > ucount; "
+            "test \"$n\" -ge %d && echo U2PASS || exit 1" % mark]
+
+
+class FlakyCheckUnitsTest(CheckUnitsTest):
+    """AC1's --check-units half, as the owner's ruling scopes it: a red
+    unit declared pre_existing_red (its test predates the lane) is re-run
+    once, verification's own recorded-run policy — a pass records it flaky
+    and passes; a unit this lane just wrote is never re-run here: red it
+    stays, a pass on a re-run would not count. Expected values come from
+    the fixtures' own counter files and exit codes, never the
+    implementation."""
+
+    def pre_existing(self, id: str, marker: str, argv: List[str]) -> Dict[str, Any]:
+        unit = self.unit(id, marker, argv)
+        unit["pre_existing_red"] = True
+        return unit
+
+    def run_count(self) -> int:
+        clone = os.path.join(self.capsule, "repos", "app")
+        try:
+            with open(os.path.join(clone, "ucount"), encoding="utf-8") as f:
+                return int(f.read().strip())
+        except OSError:
+            return 0
+
+    def test_a_pre_existing_red_unit_rerun_pass_is_flaky(self) -> None:
+        code, res = self.run_units([self.pre_existing("u2a", "^U2PASS$", counting_argv(2))])
+        self.assertEqual(code, 0, res)
+        u = res["details"]["units"][0]
+        self.assertTrue(u["passed"])
+        self.assertTrue(u["flaky"], "the pass came on the re-run: flaky")
+        self.assertTrue(u["log"], "the first failure's log stays")
+        self.assertTrue(u["rerun_log"], "the passing re-run's log is recorded")
+        self.assertEqual(self.run_count(), 2, "the first run plus exactly one re-run")
+        self.assertIn("flaky", res["summary"])
+        self.assertIn("u2a", res["summary"])
+        self.assertIn(u["log"], res["summary"])
+
+    def test_a_unit_this_lane_just_wrote_is_never_rerun(self) -> None:
+        code, res = self.run_units([self.unit("u2b", "^NEVERU2B$", counting_argv(2, always=True))])
+        self.assertEqual(code, 1, res)
+        u = res["details"]["units"][0]
+        self.assertFalse(u["passed"])
+        self.assertNotIn("flaky", u)
+        self.assertNotIn("rerun_log", u, "no re-run ever happened")
+        self.assertIn("not re-run", u["why"], "the why names the policy")
+        self.assertEqual(self.run_count(), 1, "exactly one run: never re-run")
+
+    def test_a_pre_existing_red_unit_still_red_after_its_one_rerun(self) -> None:
+        code, res = self.run_units([self.pre_existing("u2c", "^U2PASS$", counting_argv(2, always=True))])
+        self.assertEqual(code, 1, res)
+        u = res["details"]["units"][0]
+        self.assertFalse(u["passed"])
+        self.assertNotIn("flaky", u)
+        self.assertTrue(u["rerun_log"], "the re-run happened and its log is recorded")
+        self.assertEqual(self.run_count(), 2, "the first run plus exactly one re-run")
+
+
+class UnitLimitTest(CheckUnitsTest):
+    """AC2's --check-units half: a recorded unit's run is bounded by its
+    self-reported `timeout` (a Go duration), else the 10m default; a run
+    killed at its limit is an evidence problem naming the limit — a
+    red-state run must exit non-zero within its limit, never hang.
+    Expected values come from the fixtures' own exit behaviour and the
+    literal limits, never the implementation."""
+
+    def test_a_run_killed_at_its_self_reported_limit_is_an_evidence_problem(self) -> None:
+        unit = self.unit("u3a", "^NEVERU3$", ["bash", "-c", "sleep 30"])
+        unit["timeout"] = "2s"
+        code, res = self.run_units([unit])
+        self.assertEqual(code, 1, res)
+        u = res["details"]["units"][0]
+        self.assertTrue(u["timed_out"])
+        self.assertIn("killed at its time limit (2s)", u["why"])
+        self.assertIn("did not exit non-zero within the limit", u["why"])
+
+    def test_a_self_reported_limit_below_the_default_kills_the_run(self) -> None:
+        unit = self.unit("u3b", "^U3PASS$", ["bash", "-c", "sleep 1; echo U3PASS"])
+        unit["timeout"] = "1ms"
+        code, res = self.run_units([unit])
+        self.assertEqual(code, 1, res)
+        u = res["details"]["units"][0]
+        self.assertTrue(u["timed_out"])
+        self.assertIn("killed at its time limit (1ms)", u["why"])
+
+    def test_an_invalid_self_reported_timeout_makes_the_file_unusable(self) -> None:
+        # a usage error's message names the timeout and its rule on stderr,
+        # never the result's summary (r1#N2)
+        self.go_repo()
+        unit = self.unit("u3c", "^X$", ["true"])
+        unit["timeout"] = "abc"
+        p = self.units_file([unit])
+        argv = [sys.executable, FAST_CHECKS, "--capsule", self.capsule, "--engine", ENGINE,
+                "--deadline", "10m", "--out", self.out, "--check-units", p]
+        c = subprocess.run(argv, capture_output=True, text=True)
+        self.assertEqual(c.returncode, 2)
+        self.assertIn("timeout", c.stderr)
+        self.assertIn("Go duration", c.stderr)
 
 
 class FullPhaseNeverRunsTest(FastChecksCase):
