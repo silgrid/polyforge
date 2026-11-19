@@ -2,7 +2,7 @@
 //
 //	dist/workstation/containers/*, dist/workstation/seccomp.json,
 //	dist/workstation/seccomp.json.sha256, dist/workstation/README.md,
-//	.dockerignore, .polyforge/verify-scope.conf
+//	dist/workstation/compose.yaml, .dockerignore, .polyforge/verify-scope.conf
 package test
 
 // w535_workstation_image_test.go — polyforge#161 (84-image): the
@@ -38,6 +38,9 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // w535Root answers the repo root (this package's cwd is the repo's
@@ -269,4 +272,198 @@ func TestWorkstationImage(t *testing.T) {
 			t.Fatal("polyforge#161: .polyforge/verify-scope.conf must register the dist component (settled Q8)")
 		}
 	})
+}
+
+// w535ComposeService is one compose service's surface the workstation
+// pins (the shared anchor the two profile services expand to).
+type w535ComposeService struct {
+	Build struct {
+		Context    string `yaml:"context"`
+		Dockerfile string `yaml:"dockerfile"`
+	} `yaml:"build"`
+	CapAdd      []string          `yaml:"cap_add"`
+	SecurityOpt []string          `yaml:"security_opt"`
+	Cgroup      string            `yaml:"cgroup"`
+	StopGrace   string            `yaml:"stop_grace_period"`
+	Volumes     []string          `yaml:"volumes"`
+	Environment map[string]string `yaml:"environment"`
+	EnvFile     []string          `yaml:"env_file"`
+	Ports       []string          `yaml:"ports"`
+	Profiles    []string          `yaml:"profiles"`
+	Command     []string          `yaml:"command"`
+	Privileged  bool              `yaml:"privileged"`
+	Devices     []string          `yaml:"devices"`
+	Pid         string            `yaml:"pid"`
+}
+
+// w535Compose is the compose file's pinned shape.
+type w535Compose struct {
+	Name     string                        `yaml:"name"`
+	Services map[string]w535ComposeService `yaml:"services"`
+	Volumes  map[string]struct{}           `yaml:"volumes"`
+}
+
+// TestWorkstationCompose — the outer container's minimal parameter set
+// (AC1) and its environment boundary (AC3), as compose declares them.
+// Every parameter assertion is a SET equality or an exact value, never
+// a containment: the ticket's own risk is that one extra cap or a
+// relaxed security opt turns the smoke green while the workstation
+// quietly stopped being the minimal machine.
+func TestWorkstationCompose(t *testing.T) {
+	body := w535Deliverable(t, "dist/workstation/compose.yaml")
+	var compose w535Compose
+	if err := yaml.Unmarshal([]byte(body), &compose); err != nil {
+		t.Fatalf("polyforge#161: compose.yaml must parse: %v", err)
+	}
+	if len(compose.Services) != 2 {
+		names := make([]string, 0, len(compose.Services))
+		for name := range compose.Services {
+			names = append(names, name)
+		}
+		t.Fatalf("polyforge#161: compose.yaml declares %v, want exactly the no-aihub and aihub profile variants", names)
+	}
+	svc, ok := compose.Services["workstation"]
+	if !ok {
+		t.Fatal("polyforge#161: compose.yaml must carry the workstation service (the no-aihub default)")
+	}
+	aihub, ok := compose.Services["workstation-aihub"]
+	if !ok {
+		t.Fatal("polyforge#161: compose.yaml must carry the workstation-aihub service (the --with-aihub variant)")
+	}
+	for name, s := range map[string]w535ComposeService{"workstation": svc, "workstation-aihub": aihub} {
+		// AC1's minimal set, as a set: exactly SYS_ADMIN and NET_ADMIN.
+		if len(s.CapAdd) != 2 {
+			t.Fatalf("%s: cap_add = %v, want exactly the two measured capabilities", name, s.CapAdd)
+		}
+		caps := map[string]bool{}
+		for _, c := range s.CapAdd {
+			caps[c] = true
+		}
+		if !caps["CAP_SYS_ADMIN"] || !caps["CAP_NET_ADMIN"] {
+			t.Fatalf("%s: cap_add = %v, want {CAP_SYS_ADMIN, CAP_NET_ADMIN} and nothing else", name, s.CapAdd)
+		}
+		var seccomp, apparmor, systempaths bool
+		for _, opt := range s.SecurityOpt {
+			switch {
+			case opt == "seccomp:./seccomp.json":
+				seccomp = true
+			case opt == "apparmor=unconfined":
+				apparmor = true
+			case opt == "systempaths=unconfined":
+				systempaths = true
+			}
+		}
+		if !seccomp {
+			t.Fatalf("%s: security_opt must apply the pinned dist/workstation/seccomp.json (seccomp:./seccomp.json, relative to the compose file)", name)
+		}
+		if !apparmor || !systempaths {
+			t.Fatalf("%s: security_opt must carry apparmor=unconfined and systempaths=unconfined (the measured outer set)", name)
+		}
+		if s.Cgroup != "private" {
+			t.Fatalf("%s: cgroup = %q, want private (the entrypoint initializes a private cgroup namespace)", name, s.Cgroup)
+		}
+		if s.Privileged {
+			t.Fatalf("%s: privileged must never be true", name)
+		}
+		if len(s.Devices) != 0 {
+			t.Fatalf("%s: devices = %v, want none", name, s.Devices)
+		}
+		if s.Pid == "host" {
+			t.Fatalf("%s: pid host is not the workstation's shape", name)
+		}
+		for _, vol := range s.Volumes {
+			if strings.Contains(vol, "docker.sock") {
+				t.Fatalf("%s: the volume list must not mount a docker socket: %s", name, vol)
+			}
+		}
+		// the stop grace: the daemon's shutdown can take up to 30s of WIP
+		// pushes, pf supervise's own grace defaults to 60s, and the
+		// outer container must exceed it (≥ 45s the AC demands; the
+		// margin is the #160 leftover's "grace plus a margin").
+		grace, err := time.ParseDuration(s.StopGrace)
+		if err != nil || grace < 45*time.Second {
+			t.Fatalf("%s: stop_grace_period = %q, want a parseable duration of at least 45s and above pf supervise's grace", name, s.StopGrace)
+		}
+		// the environment boundary: compose's explicit list and nothing
+		// wholesale; the required password is a hard error when unset
+		// (pi-web's proxy lets /api through and redirects /login when
+		// no password is set — the AC's 200/401 pair only holds with
+		// one, so compose must refuse to start without it).
+		if len(s.EnvFile) != 0 {
+			t.Fatalf("%s: env_file must never carry a wholesale environment list", name)
+		}
+		for key, value := range s.Environment {
+			if strings.HasPrefix(key, "PI_TEST_") {
+				t.Fatalf("%s: %s must never be listed — PI_TEST_* never crosses the boundary", name, key)
+			}
+			if strings.Contains(value, "PI_WEB_PASSWORD:?") && key == "PI_WEB_PASSWORD" {
+				if !strings.HasPrefix(value, "${PI_WEB_PASSWORD:?") {
+					t.Fatalf("%s: PI_WEB_PASSWORD must be the required interpolation form, got %q", name, value)
+				}
+			}
+		}
+		if !strings.HasPrefix(s.Environment["PI_WEB_PASSWORD"], "${PI_WEB_PASSWORD:?") {
+			t.Fatalf("%s: PI_WEB_PASSWORD must be ${PI_WEB_PASSWORD:?…} — the compose interpolation refuses an unset password (settled Q5)", name)
+		}
+		if s.Environment["PORT"] == "" {
+			t.Fatalf("%s: PORT must be declared (AC3: PORT passes through to Pi Web)", name)
+		}
+		if s.Environment["PI_WEB_HOSTNAME"] != "0.0.0.0" {
+			t.Fatalf("%s: PI_WEB_HOSTNAME must be 0.0.0.0 — a container must bind all interfaces to be reachable (pi-web's own compose precedent)", name)
+		}
+		// both persistent boundaries: the data dir (the release layout
+		// and the daemon's state) and podman's storage, each its own
+		// named volume so a reset never crosses (84-components mounts
+		// its component volumes under the data dir's release layout).
+		var data, storage bool
+		for _, vol := range s.Volumes {
+			switch {
+			case strings.HasPrefix(vol, "polyforge-data:/root/.local/share/polyforge"):
+				data = true
+			case strings.HasPrefix(vol, "podman-storage:/var/lib/containers/storage"):
+				storage = true
+			}
+		}
+		if !data || !storage {
+			t.Fatalf("%s: volumes = %v, want the polyforge-data and podman-storage named volumes at their canonical paths", name, s.Volumes)
+		}
+		if s.Build.Context != "../.." || s.Build.Dockerfile != "dist/workstation/Containerfile" {
+			t.Fatalf("%s: build must use the repository root context and the dist/workstation/Containerfile (the pf binary builds from this tree)", name)
+		}
+		var port bool
+		for _, p := range s.Ports {
+			if strings.HasSuffix(p, ":30141") {
+				port = true
+			}
+		}
+		if !port {
+			t.Fatalf("%s: ports must publish Pi Web's 30141", name)
+		}
+	}
+	// the profiles carry the smoke's two boot modes one-to-one (settled
+	// Q7: default without AIHub, --with-aihub by profile) — and the
+	// --with-aihub flag reaches pf supervise only in the aihub variant.
+	if !contains(svc.Profiles, "no-aihub") {
+		t.Fatalf("workstation: profiles = %v, want [no-aihub]", svc.Profiles)
+	}
+	if !contains(aihub.Profiles, "aihub") || contains(aihub.Profiles, "no-aihub") {
+		t.Fatalf("workstation-aihub: profiles = %v, want [aihub] only", aihub.Profiles)
+	}
+	if contains(svc.Command, "--with-aihub") {
+		t.Fatal("workstation: the default boot must not pass --with-aihub")
+	}
+	if !contains(aihub.Command, "--with-aihub") {
+		t.Fatal("workstation-aihub: the aihub profile must pass --with-aihub to pf supervise")
+	}
+	for name, s := range map[string]w535ComposeService{"workstation": svc, "workstation-aihub": aihub} {
+		if !contains(s.Command, "--grace") {
+			t.Fatalf("%s: command must pin pf supervise's stop grace (the outer grace must exceed the daemon's shutdown)", name)
+		}
+	}
+	if _, ok := compose.Volumes["polyforge-data"]; !ok {
+		t.Fatal("polyforge#161: the compose file must declare the polyforge-data named volume")
+	}
+	if _, ok := compose.Volumes["podman-storage"]; !ok {
+		t.Fatal("polyforge#161: the compose file must declare the podman-storage named volume")
+	}
 }
