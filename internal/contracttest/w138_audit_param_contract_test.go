@@ -100,8 +100,8 @@ func TestW138AuditParamDocs(t *testing.T) {
 		// the audit one — a whole-file Contains would let one section lose
 		// a mark while the other still carries it (review r2 #1)
 		sections := []struct{ name, head string }{
-			{"verify.py", "The verification bar — verify.py"},
-			{"gate.py", "The full test gate — gate.py"},
+			{"verify.py", "## The verification bar — `verify.py`'s mechanical run"},
+			{"gate.py", "## The full test gate — `gate.py`"},
 		}
 		for _, sec := range sections {
 			i := strings.Index(flat, sec.head)
