@@ -283,6 +283,274 @@ async function scanSessionFile(filePath, previous) {
 	}
 }
 
+
+// ---------------------------------------------------------------------------
+// A claude transcript's projected message count (the adapter's
+// claudeTranscriptToMessages(entries, {}).messages.length), ported for the
+// worker: the active branch (claudeActiveBranch()), then one count per row the
+// walk would emit. Only the rules that change HOW MANY messages a row emits are
+// ported; delivery decorations (queued / absorbed markers) and the run/note
+// bookkeeping do not change the count. lib/claude-session-list.test.mjs
+// cross-checks this port against the adapter over every transcript fixture.
+
+function isObjectCount(value) {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// A row of claude's conversation tree: a main-conversation entry of a chained type with its own uuid.
+function treeRow(entry) {
+	if (!isObjectCount(entry) || typeof entry.uuid !== "string" || !entry.uuid || entry.isSidechain === true) return null;
+	const type = entry.type;
+	return type === "user" || type === "assistant" || type === "system" || type === "attachment" ? entry : null;
+}
+
+function isCompactBoundary(entry) {
+	return entry.type === "system" && entry.subtype === "compact_boundary";
+}
+
+function chainParentOf(entry) {
+	return entry && typeof entry.parentUuid === "string" && entry.parentUuid ? entry.parentUuid : undefined;
+}
+
+function treeParentOf(entry) {
+	return chainParentOf(entry)
+		?? (isCompactBoundary(entry) && typeof entry.logicalParentUuid === "string" && entry.logicalParentUuid ? entry.logicalParentUuid : undefined);
+}
+
+// A user entry that starts a turn (a prompt, claude's follow-up anchor or its
+// command bookkeeping); never a tool result or a hidden companion.
+function startsTurn(entry) {
+	return entry.type === "user" && entry.isMeta !== true && entry.isCompactSummary !== true
+		&& isObjectCount(entry.message) && toolResultBlocks(entry.message.content).length === 0;
+}
+
+// claudeActiveBranch(), ported verbatim from lib/claude-adapter.ts.
+function claudeActiveBranch(entries) {
+	const rows = new Map();
+	let checkpoint = undefined;
+	let checkpointExplicit = false;
+	let checkpointKeyed = false;
+	let lastRow = undefined;
+	let lastMessage = undefined;
+	let newestRow = undefined;
+	let newestAt = "";
+	for (const raw of entries) {
+		const row = treeRow(raw);
+		if (row) {
+			rows.set(row.uuid, row);
+			const forkBriefing = row.type === "attachment" && isObjectCount(row.attachment) && row.attachment.type === "fork_briefing";
+			if (!forkBriefing) {
+				lastRow = row.uuid;
+				checkpointExplicit = false;
+				if (typeof row.timestamp === "string" && row.timestamp > newestAt) {
+					newestRow = row.uuid;
+					newestAt = row.timestamp;
+				}
+			}
+			if (row.type === "user" || row.type === "assistant") lastMessage = row.uuid;
+			if (isCompactBoundary(row)) {
+				checkpoint = undefined;
+				checkpointExplicit = false;
+			}
+			continue;
+		}
+		if (isObjectCount(raw) && raw.type === "last-prompt") {
+			if ("leafUuid" in raw) checkpointKeyed = true;
+			if (typeof raw.leafUuid === "string" && raw.leafUuid) {
+				checkpointExplicit = raw.explicit === true || (checkpointExplicit && raw.leafUuid === checkpoint);
+				checkpoint = raw.leafUuid;
+			}
+		}
+	}
+
+	let anchor = lastRow;
+	if (checkpoint && checkpointExplicit && rows.has(checkpoint)) {
+		anchor = checkpoint;
+	} else if (!checkpointKeyed && lastRow && newestRow && newestRow !== lastRow) {
+		const target = lastRow;
+		const under = new Map([[target, true]]);
+		const isUnder = (from) => {
+			const walked = new Set();
+			let found = false;
+			for (let at = from; at !== undefined; at = chainParentOf(rows.get(at))) {
+				const known = under.get(at);
+				if (known !== undefined) {
+					found = known;
+					break;
+				}
+				if (walked.has(at)) break;
+				walked.add(at);
+			}
+			for (const at of walked) under.set(at, found);
+			return found;
+		};
+		let bestAt = "";
+		for (const row of rows.values()) {
+			if (row.uuid === target || typeof row.timestamp !== "string" || row.timestamp < bestAt || !isUnder(row.uuid)) continue;
+			anchor = row.uuid;
+			bestAt = row.timestamp;
+		}
+	}
+
+	let leaf = null;
+	const seen = new Set();
+	for (let at = anchor; at && rows.has(at) && !seen.has(at); at = chainParentOf(rows.get(at))) {
+		seen.add(at);
+		const row = rows.get(at);
+		if (row.type === "user" || row.type === "assistant") {
+			leaf = at;
+			break;
+		}
+	}
+	if (leaf === null) leaf = lastMessage ?? null;
+
+	const path = [];
+	const onPath = new Set();
+	const resumable = new Set();
+	let crossedBoundary = false;
+	for (let at = leaf ?? undefined; at && rows.has(at) && !onPath.has(at);) {
+		const row = rows.get(at);
+		path.push(at);
+		onPath.add(at);
+		if (!crossedBoundary) resumable.add(at);
+		if (isCompactBoundary(row)) crossedBoundary = true;
+		at = treeParentOf(row);
+	}
+
+	const children = new Map();
+	for (const row of rows.values()) {
+		const parent = treeParentOf(row);
+		if (!parent) continue;
+		const list = children.get(parent);
+		if (list) list.push(row.uuid);
+		else children.set(parent, [row.uuid]);
+	}
+	const subtree = (root) => {
+		const found = [];
+		const reached = new Set();
+		for (const pending = [root]; pending.length > 0;) {
+			const next = pending.pop();
+			if (reached.has(next) || onPath.has(next)) continue;
+			reached.add(next);
+			found.push(next);
+			pending.push(...(children.get(next) ?? []));
+		}
+		return found;
+	};
+	const hidden = new Set();
+	for (const at of path) {
+		for (const child of children.get(at) ?? []) {
+			if (onPath.has(child) || hidden.has(child)) continue;
+			const row = rows.get(child);
+			if (startsTurn(row)) {
+				for (const id of subtree(child)) hidden.add(id);
+			} else if (row.type === "attachment" || row.type === "system") {
+				const under = subtree(child);
+				if (under.some((id) => startsTurn(rows.get(id)))) for (const id of under) hidden.add(id);
+			}
+		}
+	}
+	return { leaf, path, resumable, hidden };
+}
+
+// The entry predicates the walk's emission count depends on.
+function toolResultBlocks(content) {
+	return Array.isArray(content) ? content.filter((block) => isObjectCount(block) && block.type === "tool_result") : [];
+}
+
+function textOfCount(content) {
+	if (typeof content === "string") return content;
+	let out = "";
+	if (!Array.isArray(content)) return out;
+	for (const block of content) {
+		if (!isObjectCount(block)) continue;
+		if (block.type === "text" && typeof block.text === "string") out += (out ? "\n" : "") + block.text;
+	}
+	return out;
+}
+
+// claude's bookkeeping of a command it ran itself: no user typed it, no bubble.
+function isCommandBookkeeping(entry, message) {
+	if (entry.type !== "user") return false;
+	if (entry.isCompactSummary === true || entry.isVisibleInTranscriptOnly === true) return true;
+	return entry.promptSource !== "sdk"
+		&& typeof message.content === "string"
+		&& /^<(command-name|local-command-stdout|local-command-stderr|local-command-caveat)>/.test(message.content);
+}
+
+// How many messages subagentEntries() emits for one conversation row.
+function emitCount(type, message) {
+	if (type === "assistant") {
+		// toAssistantBlocks(): a plain string is one block when non-empty; an
+		// array keeps text/thinking/tool_use blocks. Only emptiness matters.
+		if (typeof message.content === "string") return message.content ? 1 : 0;
+		if (!Array.isArray(message.content)) return 0;
+		for (const block of message.content) {
+			if (!isObjectCount(block)) continue;
+			if (block.type === "text" && typeof block.text === "string") return 1;
+			if (block.type === "thinking" && typeof block.thinking === "string" && block.thinking) return 1;
+			if (block.type === "tool_use" && typeof block.id === "string" && block.id) return 1;
+			if (block.type === "image" && isObjectCount(block.source)) return 1;
+		}
+		return 0;
+	}
+	const results = toolResultBlocks(message.content);
+	if (results.length > 0) return results.length;
+	if (typeof message.content === "string") return message.content ? 1 : 0;
+	if (!Array.isArray(message.content)) return 0;
+	for (const block of message.content) {
+		if (!isObjectCount(block)) continue;
+		if (block.type === "text" && typeof block.text === "string") return 1;
+		if (block.type === "image" && isObjectCount(block.source) && typeof block.source.data === "string") return 1;
+	}
+	return 0;
+}
+
+// The transcript's projected message count: what
+// claudeTranscriptToMessages(entries, {}).messages.length is on the main thread.
+function countTranscript(entries) {
+	const branch = claudeActiveBranch(entries);
+	const hidden = branch.hidden;
+	let count = 0;
+	for (const raw of entries) {
+		if (hidden.size > 0 && isObjectCount(raw) && raw.isSidechain !== true && typeof raw.uuid === "string" && hidden.has(raw.uuid)) continue;
+		if (!isObjectCount(raw)) continue;
+		if (raw.type === "system" && raw.subtype === "compact_boundary") {
+			count += 1;
+			continue;
+		}
+		if (raw.type === "queue-operation") continue;
+		if (raw.type === "attachment" && isObjectCount(raw.attachment) && raw.isSidechain !== true) {
+			const attachment = raw.attachment;
+			if (attachment.type !== "queued_command") continue;
+			if (attachment.isMeta === true) continue;
+			const prompt = attachment.prompt;
+			if (typeof prompt === "string" && prompt.trimStart().startsWith("<task-notification>")) continue;
+			if (typeof prompt === "string" || Array.isArray(prompt)) {
+				if (attachment.commandMode !== undefined && attachment.commandMode !== "prompt") continue;
+				count += emitCount("user", { content: prompt });
+			}
+			continue;
+		}
+		if (raw.type !== "user" && raw.type !== "assistant") continue;
+		if (raw.isSidechain === true) continue;
+		// On the main walk a meta entry is never a coordinator message (that
+		// needs isSidechain), so isMeta excludes the row outright.
+		if (raw.isMeta === true) continue;
+		if (!isObjectCount(raw.message)) continue;
+		if (isCommandBookkeeping(raw, raw.message)) continue;
+		if (raw.type === "user") {
+			const text = typeof raw.message.content === "string" ? raw.message.content : textOfCount(raw.message.content);
+			if (raw.turnOrigin === "task_notification" || text.trimStart().startsWith("<task-notification>")) {
+				count += 1;
+				continue;
+			}
+		}
+		count += emitCount(raw.type, raw.message);
+	}
+	return count;
+}
+
 parentPort.on("message", function (task) {
 	(async function () {
 		if (task.kind === "scan") {
@@ -290,18 +558,21 @@ parentPort.on("message", function (task) {
 			parentPort.postMessage({ id: task.id, ok: true, result });
 			return;
 		}
-		if (task.kind === "claude-entries") {
-			// A claude transcript's entries, parsed exactly as the adapter's
-			// parseClaudeTranscript() splits them: whole lines, blanks skipped,
-			// unreadable lines left out. The main thread never reads the text.
-			const entries = [];
+		if (task.kind === "claude-count") {
+			// A claude transcript's projected message count, computed here so
+			// only the number crosses the thread: the main thread never holds
+			// the text or the parsed entries (polyforge#140 review r2#5). The
+			// parse follows the adapter's parseClaudeTranscript(); the count
+			// ports claudeTranscriptToMessages()'s emission rules, cross-checked
+			// against the adapter over every transcript fixture the repo holds.
 			let text = "";
 			try {
 				text = readFileSync(task.path, "utf8");
 			} catch {
-				parentPort.postMessage({ id: task.id, ok: true, result: entries });
+				parentPort.postMessage({ id: task.id, ok: true, result: 0 });
 				return;
 			}
+			const entries = [];
 			for (const line of text.split("\n")) {
 				if (!line.trim()) continue;
 				try {
@@ -310,7 +581,7 @@ parentPort.on("message", function (task) {
 					// A line claude is still writing.
 				}
 			}
-			parentPort.postMessage({ id: task.id, ok: true, result: entries });
+			parentPort.postMessage({ id: task.id, ok: true, result: countTranscript(entries) });
 			return;
 		}
 		parentPort.postMessage({ id: task.id, ok: false, error: "unknown task kind: " + String(task.kind) });

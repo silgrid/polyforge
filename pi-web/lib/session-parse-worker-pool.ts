@@ -129,8 +129,8 @@ function logTaskReads(task: Record<string, unknown>, result: unknown): void {
   if (!Array.isArray(log)) return;
   const path = task.path;
   if (typeof path !== "string") return;
-  if (task.kind === "claude-entries") {
-    log.push({ path, start: 0, kind: "claude-entries" });
+  if (task.kind === "claude-count" || task.kind === "header") {
+    log.push({ path, start: 0, kind: task.kind });
     return;
   }
   const starts = (result as SessionScanTaskResult | undefined | null)?.readStarts;
