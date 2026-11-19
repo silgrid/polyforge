@@ -551,11 +551,63 @@ function countTranscript(entries) {
 	return count;
 }
 
+
+const SUMMARY_HEADER_MAX_BYTES = 64 * 1024;
+
+// A session row from the header line and stat alone (deferredSessionInfo()).
+async function headerSummary(filePath, fp) {
+	let handle;
+	try {
+		handle = await open(filePath, "r");
+		const buffer = Buffer.alloc(SUMMARY_HEADER_MAX_BYTES);
+		const read = await handle.read(buffer, 0, buffer.length, 0);
+		if (read.bytesRead <= 0) return null;
+		const source = buffer.subarray(0, read.bytesRead).toString("utf8");
+		for (const raw of source.split("\n")) {
+			const line = raw.replace(/\r$/, "");
+			if (!line.trim()) continue;
+			let entry;
+			try {
+				entry = JSON.parse(line);
+			} catch {
+				continue;
+			}
+			if (!entry || typeof entry !== "object" || entry.type !== "session") return null;
+			if (typeof entry.id !== "string" || typeof entry.cwd !== "string" || typeof entry.timestamp !== "string") return null;
+			const created = new Date(entry.timestamp);
+			if (!Number.isFinite(created.getTime())) return null;
+			return {
+				path: filePath,
+				id: entry.id,
+				cwd: entry.cwd,
+				...(typeof entry.parentSession === "string" ? { parentSessionPath: entry.parentSession } : {}),
+				created,
+				modified: new Date(fp.mtimeMs),
+				messageCount: 0,
+				firstMessage: "",
+				detailsPending: true,
+			};
+		}
+		return null;
+	} catch {
+		return null;
+	} finally {
+		if (handle) await handle.close().catch(() => undefined);
+	}
+}
+
 parentPort.on("message", function (task) {
 	(async function () {
 		if (task.kind === "scan") {
 			const result = await scanSessionFile(task.path, task.previous);
 			parentPort.postMessage({ id: task.id, ok: true, result });
+			return;
+		}
+		if (task.kind === "header") {
+			// A summary listing's deferred row: the file's identity from its
+			// first 64 KiB alone, no transcript parse. The main thread caches it
+			// by fingerprint, so an unchanged file is never re-read (review r2#8).
+			parentPort.postMessage({ id: task.id, ok: true, result: await headerSummary(task.path, task.fp) });
 			return;
 		}
 		if (task.kind === "claude-count") {

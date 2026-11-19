@@ -13,8 +13,7 @@
 // it, forces a full read. Use content hashes if detecting those edits becomes
 // necessary.
 import { existsSync, readFileSync } from "node:fs";
-import { open, readdir, stat } from "node:fs/promises";
-import type { FileHandle } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import { basename, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -41,7 +40,6 @@ interface Fingerprint {
 	mtimeMs: number;
 }
 
-const SUMMARY_HEADER_MAX_BYTES = 64 * 1024;
 
 /**
  * Where the next scan of a file that only grew picks up. `offset` is just past
@@ -68,7 +66,6 @@ interface IndexEntry {
 	resume?: ResumePoint;
 }
 
-type RawEntry = Record<string, unknown>;
 
 // Bump on any change to what the worker source's foldEntry() counts
 // (lib/session-scan-worker-source.ts): a resumed scan adds to totals
@@ -79,6 +76,8 @@ const INDEX_PERSIST_DELAY_MS = 5_000;
 
 declare global {
 	var __piWebScanIndex: Map<string, IndexEntry> | undefined;
+	/** A summary listing's deferred header rows, keyed by path with the fingerprint they were read at. */
+	var __piWebDeferredSummaries: Map<string, { fp: Fingerprint; info: ScannedSessionInfo }> | undefined;
 	var __piWebScanIndexLoaded: boolean | undefined;
 	var __piWebScanIndexSave: PendingIndexSave | undefined;
 }
@@ -90,37 +89,7 @@ interface PendingIndexSave {
 	timer: NodeJS.Timeout;
 }
 
-function parseLine(line: string): RawEntry | null {
-	if (!line.trim()) return null;
-	try {
-		const entry = JSON.parse(line) as RawEntry;
-		return entry && typeof entry === "object" ? entry : null;
-	} catch {
-		return null;
-	}
-}
 
-/** Read only the first physical line needed to identify a session file. */
-async function readSessionHeaderSummary(filePath: string): Promise<RawEntry | null> {
-	let handle: FileHandle | undefined;
-	try {
-		handle = await open(filePath, "r");
-		const buffer = Buffer.allocUnsafe(SUMMARY_HEADER_MAX_BYTES);
-		const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-		if (bytesRead <= 0) return null;
-		const source = buffer.subarray(0, bytesRead).toString("utf8");
-		for (const line of source.split("\n")) {
-			const entry = parseLine(line.replace(/\r$/, ""));
-			if (!entry) continue;
-			return entry.type === "session" ? entry : null;
-		}
-		return null;
-	} catch {
-		return null;
-	} finally {
-		await handle?.close().catch(() => undefined);
-	}
-}
 
 function hasMatchingFingerprint(
 	cached: IndexEntry | undefined,
@@ -142,33 +111,25 @@ function hasGrown(cached: IndexEntry | undefined, fingerprint: Fingerprint): cac
 	);
 }
 
-/** Build a session row from the header alone, without parsing the transcript. */
+// A summary listing's deferred rows, cached by the fingerprint they were read
+// at: an unchanged file's second summary costs no read at all (review r2#8 —
+// a summary-only workload must not re-read the whole corpus per call).
+function deferredSummaryCache(): Map<string, { fp: Fingerprint; info: ScannedSessionInfo }> {
+	if (!globalThis.__piWebDeferredSummaries) globalThis.__piWebDeferredSummaries = new Map();
+	return globalThis.__piWebDeferredSummaries;
+}
+
+/** A session row from the header alone, read on the worker pool, without parsing the transcript. */
 async function deferredSessionInfo(
 	filePath: string,
 	fingerprint: Fingerprint,
 ): Promise<ScannedSessionInfo | null> {
-	const header = await readSessionHeaderSummary(filePath);
-	if (
-		!header
-		|| typeof header.id !== "string"
-		|| typeof header.cwd !== "string"
-		|| typeof header.timestamp !== "string"
-	) return null;
-
-	const created = new Date(header.timestamp);
-	if (!Number.isFinite(created.getTime())) return null;
-
-	return {
-		path: filePath,
-		id: header.id,
-		cwd: header.cwd,
-		created,
-		modified: new Date(fingerprint.mtimeMs),
-		messageCount: 0,
-		firstMessage: "",
-		...(typeof header.parentSession === "string" ? { parentSessionPath: header.parentSession } : {}),
-		detailsPending: true,
-	};
+	const cached = deferredSummaryCache().get(filePath);
+	if (cached && cached.fp.size === fingerprint.size && cached.fp.mtimeMs === fingerprint.mtimeMs) return cached.info;
+	const info = (await runSessionScanTask({ kind: "header", path: filePath, fp: fingerprint })) as ScannedSessionInfo | null;
+	if (info) deferredSummaryCache().set(filePath, { fp: fingerprint, info });
+	else deferredSummaryCache().delete(filePath);
+	return info;
 }
 
 // The parse itself runs on the worker pool (lib/session-parse-worker-pool.ts,
@@ -484,6 +445,7 @@ export function resetSessionScanIndexForTests(): void {
 	globalThis.__piWebScanIndexSave = undefined;
 	globalThis.__piSessionMembership = undefined;
 	globalThis.__piSessionMembershipCheck = undefined;
+	globalThis.__piWebDeferredSummaries = undefined;
 }
 
 // ============================================================================
