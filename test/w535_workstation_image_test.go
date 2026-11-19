@@ -508,14 +508,16 @@ func TestWorkstationSmoke(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		inspect, err := json.Marshal(map[string]any{
-			"HostConfig": map[string]any{
-				"CapAdd":       scenario["caps"],
-				"SecurityOpt":  []string{"seccomp=" + string(seccompInline)},
-				"CgroupnsMode": scenario["cgroupns"],
-				"Privileged":   false,
-				"Devices":      []any{},
-				"Binds":        []string{"workstation_polyforge-data:/root/.local/share/polyforge:rw", "workstation_podman-storage:/var/lib/containers/storage:rw"},
+		inspect, err := json.Marshal([]any{ // docker inspect answers a list of one object
+			map[string]any{
+				"HostConfig": map[string]any{
+					"CapAdd":       scenario["caps"],
+					"SecurityOpt":  []string{"seccomp=" + string(seccompInline)},
+					"CgroupnsMode": scenario["cgroupns"],
+					"Privileged":   false,
+					"Devices":      []any{},
+					"Binds":        []string{"workstation_polyforge-data:/root/.local/share/polyforge:rw", "workstation_podman-storage:/var/lib/containers/storage:rw"},
+				},
 			},
 		})
 		if err != nil {
@@ -627,7 +629,9 @@ func TestWorkstationImageEngine(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sh", filepath.Join(root, "dist/workstation/smoke.sh"), "boot", "--no-aihub")
-	cmd.Env = append(os.Environ(), "PI_WEB_PASSWORD=pf-workstation-smoke-test-password")
+	// no PI_WEB_PASSWORD is injected: the engine run exercises the
+	// smoke's own default export too (review r1#2 — the first cut
+	// masked the missing export by injecting one here).
 	cmd.Dir = root
 	out, err := cmd.CombinedOutput()
 	if err != nil {

@@ -26,6 +26,10 @@ root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 compose_file="$script_dir/compose.yaml"
 web_host_port="${WORKSTATION_WEB_PORT:-30141}"
 password="${PI_WEB_PASSWORD:-pf-workstation-smoke-test-password}"
+# the compose file's ${PI_WEB_PASSWORD:?…} refuses without one, so every
+# compose call this script makes carries the default (or the operator's
+# own value) — exported once here, not per subcommand.
+export PI_WEB_PASSWORD="$password"
 
 say() { printf 'smoke: %s\n' "$*"; }
 die() { printf 'smoke: FAIL: %s\n' "$*" >&2; exit 1; }
@@ -222,7 +226,7 @@ YEOF
 	# the sentinel travels only in the smoke's own shell environment:
 	# compose interpolates nothing unlisted, so its absence inside is
 	# the proof the container inherits no host environment.
-	SENTINEL_WORKSTATION_SMOKE=yes PI_WEB_PASSWORD="$password" \
+	SENTINEL_WORKSTATION_SMOKE=yes \
 		docker compose -f "$compose_file" -f "$override" --profile "$profile" up -d --build >/dev/null
 	cid=$(docker compose -f "$compose_file" -f "$override" --profile "$profile" ps -q "$(service_of "$profile")")
 	[ -n "$cid" ] || die "no workstation container"
@@ -268,8 +272,7 @@ services:
       - "@ROOT@:/workspace:ro"
 YEOF
 	say "podman-verify: booting with the repository mounted at /workspace"
-	PI_WEB_PASSWORD="$password" \
-		docker compose -f "$compose_file" -f "$override" --profile "$profile" up -d --build >/dev/null
+	docker compose -f "$compose_file" -f "$override" --profile "$profile" up -d --build >/dev/null
 	cid=$(docker compose -f "$compose_file" -f "$override" --profile "$profile" ps -q "$(service_of "$profile")")
 	[ -n "$cid" ] || die "no workstation container"
 	poll_until "pf supervise to run inside" 120 \
