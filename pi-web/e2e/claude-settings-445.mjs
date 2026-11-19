@@ -1,6 +1,9 @@
-// carries: components/ClaudeSettings*, app/api/claude-settings/*, lib/claude-settings*, lib/claude-probe*, lib/__fixtures__/claude-2.1.322/initialize/*, lib/__fixtures__/claude-2.1.322/hooks/*, lib/__fixtures__/claude-2.1.322/permission-mode/*, docs/agents/settings-ui.md
-// — Settings › Claude: browser e2e of the page's basic operations, that they
-// persist and reach new claude sessions, and the user-visible parts of AC2–AC5.
+// carries: components/ClaudeSettings*, components/GeneralSettings*, app/api/claude-settings/*, lib/claude-settings*, lib/claude-settings-store*, hooks/useClaudeSettings.ts, lib/claude-probe*, lib/__fixtures__/claude-2.1.322/initialize/*, lib/__fixtures__/claude-2.1.322/hooks/*, lib/__fixtures__/claude-2.1.322/permission-mode/*, docs/agents/settings-ui.md
+// — Settings › Claude (85a1b: the legacy-marked page): browser e2e of the
+// page's basic operations, that they persist and reach new claude sessions,
+// and the user-visible parts of AC2–AC5. The hook-activity switch lives in
+// General's 界面与对话 pane now, on the store both pages share (S445-05,
+// S445-10).
 //
 // Not declared, though exercised: components/SettingsPanel.tsx and lib/settings-navigation.ts
 // (already declared by 3 suites), the locale tables (already 2 declarers), and
@@ -151,10 +154,23 @@ async function openSettings() {
 
 async function openClaudeSection() {
   await openSettings();
-  const tab = sectionTabs().filter({ hasText: /^Claude$/ });
+  const tab = sectionTabs().filter({ hasText: /^Claude \(legacy\)$/ });
   await waitFor(async () => (await tab.count()) === 1, 30_000, async () => `Settings has no Claude section tab (tabs: ${(await sectionTabs().allInnerTexts()).join(", ")})`);
   if ((await tab.getAttribute("aria-current")) !== "page") await tab.click({ timeout: ACTION_MS });
   await claudeHeading().waitFor({ state: "visible", timeout: NAV_MS });
+}
+
+/**
+ * General's 界面与对话 pane (85a1b): the hook-activity switch moved here, on
+ * the store it shares with the legacy Claude page.
+ */
+async function openGeneralConversation() {
+  await openSettings();
+  const tab = sectionTabs().filter({ hasText: /^General$/ });
+  if ((await tab.getAttribute("aria-current")) !== "page") await tab.click({ timeout: ACTION_MS });
+  const items = shownSection().locator(".config-sidebar-item");
+  await items.filter({ hasText: "Interface & conversation" }).click({ timeout: ACTION_MS });
+  await hookSwitch().waitFor({ state: "visible", timeout: NAV_MS });
 }
 
 /** The page once its GETs settled: the mode radios and the Claude Code block's version. */
@@ -249,15 +265,17 @@ try {
     await goto("/");
     await openSettings();
     const tabs = (await sectionTabs().allInnerTexts()).map((text) => text.trim());
-    assert.ok(tabs.includes("Claude"), `Settings has no Claude section (tabs: ${tabs.join(", ")})`);
-    assert.equal(tabs.indexOf("Claude"), tabs.indexOf("Polyforge") - 1, `the Claude section is not right before Polyforge (tabs: ${tabs.join(", ")})`);
+    assert.ok(tabs.includes("Claude (legacy)"), `Settings has no legacy Claude section (tabs: ${tabs.join(", ")})`);
+    // 85a1b: the old Claude page is the last, legacy-marked tab (until 85a4 deletes it).
+    assert.equal(tabs.indexOf("Claude (legacy)"), tabs.length - 1, `the legacy Claude section is not the last tab (tabs: ${tabs.join(", ")})`);
+    assert.match(tabs[tabs.length - 1] ?? "", /\(legacy\)/, "the old Claude tab is not marked legacy");
     const skills = sectionTabs().filter({ hasText: /^Skills$/ });
     assert.ok(await skills.isDisabled(), "the page has a project open: Skills is enabled, so this is not the no-project case");
-    const tab = sectionTabs().filter({ hasText: /^Claude$/ });
-    assert.ok(!(await tab.isDisabled()), "the Claude section needs a project");
+    const tab = sectionTabs().filter({ hasText: /^Claude \(legacy\)$/ });
+    assert.ok(!(await tab.isDisabled()), "the legacy Claude section needs a project");
     await tab.click({ timeout: ACTION_MS });
     await claudeHeading().waitFor({ state: "visible", timeout: NAV_MS });
-    assert.equal(await tab.getAttribute("aria-current"), "page", "the Claude tab is not the current section");
+    assert.equal(await tab.getAttribute("aria-current"), "page", "the legacy Claude tab is not the current section");
     assert.equal(await shownSection().count(), 1, "more than one section shows beside Claude");
     const text = await shownSection().innerText();
     for (const piText of ["Appearance", "Agent language"]) assert.ok(!text.includes(piText), `the Claude section shows General's "${piText}"`);
@@ -385,8 +403,9 @@ try {
   // launches with the stored mode and the hook flag; once the settings are back, a new one has neither.
   await part("S445-05", "a new session launches with acceptEdits and --include-hook-events", async () => {
     await goto("/");
-    await openClaudeSection();
-    await waitForClaudePage("2.1.322");
+    // 85a1b: the hook switch lives in General's 界面与对话 pane now, on the
+    // store it shares with the legacy Claude page.
+    await openGeneralConversation();
     assert.ok(!(await checked(hookSwitch())), "hook activity is on before any save");
     await saveBy(() => hookSwitch().click({ timeout: ACTION_MS }));
     await waitFor(() => checked(hookSwitch()), 10_000, "the hook switch is not shown on after its save");
@@ -434,6 +453,43 @@ try {
     const launch = await createFromComposer("E2E 445 plain one");
     assert.equal(at(launch.argv, "--permission-mode"), -1, `a default session carries --permission-mode: ${launch.argv.join(" ")}`);
     assert.equal(at(launch.argv, "--include-hook-events"), -1, `a session made with hook activity off carries --include-hook-events: ${launch.argv.join(" ")}`);
+  });
+
+  // S445-10 (first server) — 85a1b Q5 A: the hook switch and the legacy page's
+  // edits share one holder, so neither page's save can overwrite the other's.
+  await part("S445-10", "General's hook save survives the legacy page's model edit, and the reverse", async () => {
+    const INTERLEAVE_MODEL = "claude-interleave-445";
+    const generalHook = async () => {
+      await openGeneralConversation();
+      return checked(hookSwitch());
+    };
+    await goto("/");
+    // 常规开 hook → 旧页改模型 → 回常规: the hook save must survive the old page's own PUT.
+    assert.ok(!(await generalHook()), "hook activity is on before the interleave");
+    await saveBy(() => hookSwitch().click({ timeout: ACTION_MS }));
+    await waitFor(() => checked(hookSwitch()), 10_000, "the hook switch is not shown on after its save");
+    await openClaudeSection();
+    await waitForClaudePage("2.1.322");
+    const input = shownSection().getByRole("textbox", { name: "Custom model name" });
+    await input.fill(INTERLEAVE_MODEL);
+    await saveBy(() => shownSection().getByRole("button", { name: "Add", exact: true }).click({ timeout: ACTION_MS }));
+    const stored = JSON.parse(readSettingsFile() ?? "{}");
+    assert.equal(stored.includeHookEvents, true, "the legacy page's model PUT dropped the hook switch");
+    assert.ok(stored.customModels.includes(INTERLEAVE_MODEL), "the legacy page's own save did not land");
+    assert.ok(await generalHook(), "back on General the hook switch lost its save");
+
+    // 反向: 旧页关 hook → 回常规, the old page's save shows on General at once.
+    await openClaudeSection();
+    await waitForClaudePage("2.1.322");
+    await saveBy(() => hookSwitch().click({ timeout: ACTION_MS }));
+    await waitFor(async () => !(await checked(hookSwitch())), 10_000, "the legacy page's hook switch is not shown off after its save");
+    assert.ok(!(await generalHook()), "General still shows hook activity after the legacy page turned it off");
+
+    // Back where the earlier scenarios left the file: hook off, the interleave name removed.
+    await openClaudeSection();
+    await waitForClaudePage("2.1.322");
+    await saveBy(() => shownSection().getByRole("button", { name: `Remove ${INTERLEAVE_MODEL}` }).click({ timeout: ACTION_MS }));
+    assert.ok(!(JSON.parse(readSettingsFile() ?? "{}").customModels).includes(INTERLEAVE_MODEL), "the interleave name stayed");
   });
 
   // The second server: claude reports 9.9.9. Every child of the first is gone with it.

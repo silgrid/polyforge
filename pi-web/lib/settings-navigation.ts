@@ -1,12 +1,37 @@
+/**
+ * The settings rail (85a1b AC1): nine new sections plus the two legacy-marked
+ * old pages, in their settled order. `legacy` marks the temporary Models and
+ * Claude pages (owner ruling Q1 A): 85a3 deletes `legacy-models` and 85a4
+ * deletes `legacy-claude`, and everything that names them — this table, the
+ * migration below, the `legacy-models` selection key and SettingsPanel's
+ * mounts — goes with them.
+ */
+export const SETTINGS_TABS = [
+  { id: "general", labelKey: "settings.general" },
+  { id: "account", labelKey: "settings.tabAccount" },
+  { id: "models", labelKey: "common.models" },
+  { id: "permission", labelKey: "settings.tabPermission" },
+  { id: "skills", labelKey: "common.skills" },
+  { id: "mcp", labelKey: "settings.mcp" },
+  { id: "agents", labelKey: "common.agents" },
+  { id: "plugins", labelKey: "common.plugins" },
+  { id: "polyforge", labelKey: "polyforge.title" },
+  { id: "legacy-models", labelKey: "settings.tabLegacyModels", legacy: true },
+  { id: "legacy-claude", labelKey: "settings.tabLegacyClaude", legacy: true },
+] as const;
+
 export const SETTINGS_SECTION_VALUES = [
   "general",
+  "account",
   "models",
+  "permission",
   "skills",
+  "mcp",
   "agents",
   "plugins",
-  "mcp",
-  "claude",
   "polyforge",
+  "legacy-models",
+  "legacy-claude",
 ] as const;
 
 export type SettingsSection = (typeof SETTINGS_SECTION_VALUES)[number];
@@ -16,6 +41,16 @@ const STORAGE_KEY = "pi-web:settings-navigation";
 // Sections that need a project to show anything. Settings › MCP is not one: it
 // lists the global mcp.json without a project and adds a Project group with one.
 const PROJECT_SECTIONS = new Set<SettingsSection>(["skills", "agents", "plugins"]);
+
+/**
+ * Where a stored old section value lands (owner ruling Q2 A): `claude` — the
+ * old Claude page's key — goes to the permission page's Claude part. `models`
+ * keeps its spelling: it is the new Models concept page's id now, and the old
+ * Models page lives under `legacy-models`. Removed with 85a4, when the legacy
+ * Claude page goes (删除旧版 Claude 页时一并移除本表) — it exists only at
+ * this read boundary, never as a general alias layer.
+ */
+const LEGACY_SECTION_MIGRATION: Readonly<Record<string, SettingsSection>> = { claude: "permission" };
 
 /** Whether a section is unavailable until a project is open. */
 export function settingsSectionRequiresProject(section: SettingsSection): boolean {
@@ -67,7 +102,10 @@ function readState(storage: StorageLike): SettingsNavigationState {
 }
 
 function selectionKey(section: SettingsDetailSection, cwd?: string | null): string | null {
-  if (section === "models") return section;
+  // The legacy Models page (85a1b) keeps the historical global "models"
+  // selection key, so a stored provider/model selection survives the temporary
+  // id; removed with 85a3 (删除旧版模型页时一并移除).
+  if (section === "legacy-models") return "models";
   if (cwd) return JSON.stringify([section, cwd]);
   // MCP works without a project; its selection then lives under the bare name,
   // which no project key (always an array) can collide with.
@@ -80,7 +118,10 @@ export function getLastSettingsSection(
 ): SettingsSection {
   if (!storage) return "general";
   try {
-    const section = readState(storage).section;
+    let section = readState(storage).section;
+    if (typeof section === "string" && section in LEGACY_SECTION_MIGRATION) {
+      section = LEGACY_SECTION_MIGRATION[section];
+    }
     if (!isSettingsSection(section)) return "general";
     return settingsSectionRequiresProject(section) && !cwd ? "general" : section;
   } catch {

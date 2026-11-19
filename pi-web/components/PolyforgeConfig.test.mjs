@@ -94,9 +94,12 @@ test("the section reuses the shared SettingsUi blocks and every word is a prop",
 });
 
 test("the panel hosts the section without a project and re-detects on every open", async () => {
-  assert.match(panelSource, /\{ id: "polyforge", label: t\("polyforge\.title"\) \}/);
+  // The rail is one fact in lib/settings-navigation.ts (SETTINGS_TABS, 85a1b):
+  // the section's label renders through the model's label key.
+  assert.match(panelSource, /label: t\(item\.labelKey\)/);
   // Which sections need a project is decided in lib/settings-navigation.ts; polyforge is not one.
-  const { settingsSectionRequiresProject } = await import("../lib/settings-navigation.ts");
+  const { settingsSectionRequiresProject, SETTINGS_TABS } = await import("../lib/settings-navigation.ts");
+  assert.equal(SETTINGS_TABS.find((entry) => entry.id === "polyforge")?.labelKey, "polyforge.title");
   assert.equal(settingsSectionRequiresProject("polyforge"), false);
   assert.match(panelSource, /<PolyforgeConfig cwd=\{cwd\} active=\{section === "polyforge"\} \/>/);
   // Not cwd-gated: the section host renders without a selected project.

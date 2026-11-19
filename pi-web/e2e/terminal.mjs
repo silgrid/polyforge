@@ -143,7 +143,11 @@ try {
       await showSidebar();
       await page.getByRole("button", { name: "Settings", exact: true }).click();
       // A phone's plain Settings button opens on the list of sections (PR #8 replay).
-      if (viewport.width <= 640) await page.locator(".settings-phone-home").getByRole("button", { name: "General", exact: true }).click();
+      if (viewport.width <= 640) {
+        await page.locator(".settings-phone-home").getByRole("button", { name: "General", exact: true }).click();
+        // 85a1b: General is a left-column layout; the fonts live in 界面与对话.
+        await page.locator('.settings-section-host[data-settings-section="general"] .config-sidebar-item').filter({ hasText: "Interface & conversation" }).click();
+      }
       await page.getByRole("textbox", { name: "Monospace font", exact: true }).fill("monospace");
       await page.getByRole("slider", { name: "Monospace font weight", exact: true }).fill("600");
       await page.keyboard.press("Escape");

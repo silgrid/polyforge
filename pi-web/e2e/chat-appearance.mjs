@@ -86,15 +86,23 @@ export async function checkChatAppearance(page) {
   await checkFontPreferences(page);
   for (const viewport of [{ width: 1280, height: 600 }, { width: 320, height: 568 }]) {
     await page.setViewportSize(viewport);
+    // 85a1b: a phone back at the pane list re-enters 界面与对话 (a desktop's
+    // click on the already-open pane changes nothing).
+    const conversation = page.locator('.settings-section-host[data-settings-section="general"] .config-sidebar-item').filter({ hasText: "Interface & conversation" });
+    if (await conversation.isVisible().catch(() => false)) await conversation.click();
     // The panel's own end stays reachable by scrolling, and so does every
-    // language option (no longer the panel's last block).
-    await page.locator(".settings-general").evaluate((el) => { el.scrollTop = el.scrollHeight; });
-    assert.equal(await page.locator(".settings-general").evaluate((panel) => {
-      const controls = panel.querySelectorAll("button, input, select");
-      const el = controls[controls.length - 1];
-      if (!el) return false;
+    // language option (no longer the panel's last block); the detail pane is
+    // the one scroll region of General's left column (85a1b). The pane can
+    // still be settling into the new width here, so the last control is
+    // scrolled with actionability (visible and stable) rather than a raw
+    // one-shot geometry read.
+    const detail = page.locator('.settings-section-host[data-settings-section="general"] .config-detail');
+    const last = detail.locator("button, input, select").last();
+    await last.scrollIntoViewIfNeeded();
+    assert.equal(await last.evaluate((el) => {
       const rect = el.getBoundingClientRect();
-      return el.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+      const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+      return el.contains(hit) ? true : `last=${el.outerHTML.slice(0, 80)} rect=${JSON.stringify(rect)} hit=${hit ? hit.outerHTML.slice(0, 80) : "none"} inner=${innerWidth}x${innerHeight}`;
     }), true, "The end of a short settings panel must remain reachable");
     assert.equal(await page.locator(".settings-language-options button:last-child").evaluate((el) => {
       el.scrollIntoView({ block: "nearest" });

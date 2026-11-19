@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { useI18n } from "@/hooks/useI18n";
+import { useClaudeSettings } from "@/hooks/useClaudeSettings";
 import type { ClaudeSettingsResponse } from "@/lib/api-types";
 import {
   CLAUDE_FEATURE_MIN_VERSION,
@@ -13,6 +14,9 @@ import {
   type ClaudeLaunchPermissionMode,
 } from "@/lib/claude-shared";
 import { ConfigButton, ConfigDetailGrid, ConfigDetailGridRow, ConfigNotice, ConfigSwitch } from "./SettingsUi";
+
+/** The settings values this page saves; the shared holder answers them. */
+type ClaudeSettingsValues = Pick<ClaudeSettingsResponse, "launchPermissionMode" | "customModels" | "includeHookEvents">;
 
 /** What Settings › Claude reads of GET /api/claude: the claude on PATH as it reports itself. */
 interface ClaudeReport {
@@ -27,14 +31,6 @@ interface ClaudeReport {
 }
 
 type Translate = (key: string, params?: Record<string, string | number>) => string;
-
-function isClaudeSettingsResponse(value: unknown): value is ClaudeSettingsResponse {
-  if (typeof value !== "object" || value === null) return false;
-  const settings = value as Partial<ClaudeSettingsResponse>;
-  return typeof settings.launchPermissionMode === "string"
-    && Array.isArray(settings.customModels)
-    && typeof settings.includeHookEvents === "boolean";
-}
 
 /** The answer's `error`, else its status. */
 async function responseError(response: Response): Promise<string> {
@@ -87,10 +83,14 @@ const cellStyle = { padding: "6px 8px", textAlign: "left", verticalAlign: "top",
  */
 export function ClaudeSettings() {
   const { t } = useI18n();
-  const [settings, setSettings] = useState<ClaudeSettingsResponse | null>(null);
+  // The shared holder (85a1b, owner ruling Q5 A): General's 界面与对话 pane
+  // and this legacy page read and write the same store, so neither can
+  // overwrite the other with a stale whole-package PUT.
+  const { snapshot, refresh, save: savePatch } = useClaudeSettings();
+  const settings = snapshot.settings;
   // GET's planAvailable (r3): the global claude tool permissions are ask.
-  const [planAvailable, setPlanAvailable] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const planAvailable = snapshot.planAvailable;
+  const loadError = snapshot.status === "error" ? (snapshot.loadError ?? "unreadable") : null;
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [report, setReport] = useState<ClaudeReport | null>(null);
@@ -99,19 +99,8 @@ export function ClaudeSettings() {
   const [modelError, setModelError] = useState<string | null>(null);
 
   useEffect(() => {
+    void refresh();
     let cancelled = false;
-    void fetch("/api/claude-settings")
-      .then(async (response) => {
-        if (!response.ok) throw new Error(await responseError(response));
-        const data: unknown = await response.json();
-        if (!isClaudeSettingsResponse(data)) throw new Error("unexpected answer");
-        if (cancelled) return;
-        setPlanAvailable((data as { planAvailable?: unknown }).planAvailable === true);
-        setSettings(data);
-      })
-      .catch((cause) => {
-        if (!cancelled) setLoadError(cause instanceof Error ? cause.message : String(cause));
-      });
     void fetch("/api/claude")
       .then(async (response) => {
         if (!response.ok) throw new Error(await responseError(response));
@@ -124,24 +113,12 @@ export function ClaudeSettings() {
     return () => { cancelled = true; };
   }, []);
 
-  const save = async (next: ClaudeSettingsResponse): Promise<boolean> => {
+  const save = async (patch: Partial<ClaudeSettingsValues>): Promise<boolean> => {
     setSaving(true);
     setSaveError(null);
     try {
-      const response = await fetch("/api/claude-settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          launchPermissionMode: next.launchPermissionMode,
-          customModels: next.customModels,
-          includeHookEvents: next.includeHookEvents,
-        }),
-      });
-      if (!response.ok) throw new Error(await responseError(response));
-      const data: unknown = await response.json();
-      if (!isClaudeSettingsResponse(data)) throw new Error("unexpected answer");
-      setSettings(data);
-      setLoadError(null);
+      const result = await savePatch(patch);
+      if (!result.ok) throw new Error(result.error);
       return true;
     } catch (cause) {
       setSaveError(cause instanceof Error ? cause.message : String(cause));
@@ -167,18 +144,18 @@ export function ClaudeSettings() {
       return;
     }
     setModelError(null);
-    if (await save({ ...settings, customModels: [...settings.customModels, name] })) setModelInput("");
+    if (await save({ customModels: [...settings.customModels, name] })) setModelInput("");
   };
 
   const removeModel = (name: string) => {
     if (!settings || saving) return;
     setModelError(null);
-    void save({ ...settings, customModels: settings.customModels.filter((entry) => entry !== name) });
+    void save({ customModels: settings.customModels.filter((entry) => entry !== name) });
   };
 
   const setMode = (mode: ClaudeLaunchPermissionMode) => {
     if (!settings || saving || mode === settings.launchPermissionMode) return;
-    void save({ ...settings, launchPermissionMode: mode });
+    void save({ launchPermissionMode: mode });
   };
 
   return (
@@ -295,7 +272,7 @@ export function ClaudeSettings() {
                 loading={saving}
                 label={t("settings.claudeHookEvents")}
                 describedBy="settings-claude-hook-events-description"
-                onChange={(enabled) => void save({ ...settings, includeHookEvents: enabled })}
+                onChange={(enabled) => void save({ includeHookEvents: enabled })}
               />
             </div>
             <p id="settings-claude-hook-events-description" className="settings-general-description">{t("settings.claudeHookEventsDescription")}</p>

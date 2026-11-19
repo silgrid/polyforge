@@ -1648,6 +1648,101 @@
   overflow-y: auto;
 }
 
+/* General as a left-column pane (85a1b): the detail pane (.config-detail) is
+   the one scroll region, so the page itself neither scrolls nor pads. */
+.settings-general.is-pane {
+  height: auto;
+  padding: 0;
+  overflow: visible;
+}
+
+/* General's 环境 and 生效值与来源 panes (85a1b): per-harness groups, name-only
+   key lists, and value rows with their Inferred mark and source. */
+.settings-harness-env-groups,
+.settings-harness-effective {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.settings-harness-env-keys {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.settings-harness-effective-rows {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-harness-effective-row {
+  display: grid;
+  grid-template-columns: minmax(120px, auto) 1fr auto;
+  gap: 4px 10px;
+  align-items: baseline;
+}
+
+.settings-harness-effective-row .settings-harness-effective-source {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.settings-harness-effective-field {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.settings-harness-inferred {
+  justify-self: end;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+/* The collapsed native-diagnostics block (AC6): one per harness. */
+.settings-harness-diagnostics {
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.settings-harness-diagnostics > summary {
+  padding: 6px 10px;
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+.settings-harness-diagnostics-body {
+  padding: 2px 10px 8px;
+}
+
+.settings-harness-diagnostics-output {
+  margin: 6px 0 0;
+  padding: 8px;
+  background: var(--bg-panel);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
 .settings-general > * {
   max-width: 600px;
   margin-inline: auto;

@@ -455,7 +455,9 @@ try {
     try {
       for (const profile of ["default", "public"]) {
         await select(narrow.dialog, profile);
-        const detail = narrow.dialog.locator(".config-detail").first();
+        // 85a1b: General owns a hidden .config-detail of its own now; scope to
+        // the Polyforge section's host so the overflow check measures the pane.
+        const detail = narrow.dialog.locator('.settings-section-host[data-settings-section="polyforge"] .config-detail').first();
         const overflow = await detail.evaluate((node) => ({ scrollWidth: node.scrollWidth, clientWidth: node.clientWidth }));
         assert.ok(overflow.scrollWidth <= overflow.clientWidth + 1, `the narrow ${profile} pane overflows (${overflow.scrollWidth} > ${overflow.clientWidth})`);
         assert.ok(await workspaceCard(pane(narrow.dialog, profile)).locator("[data-pf-workspace-add]").first().isVisible(), `the narrow ${profile} pane has no add row`);
