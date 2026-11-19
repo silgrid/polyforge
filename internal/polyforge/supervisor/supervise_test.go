@@ -337,3 +337,52 @@ func TestSuperviseStopInTheStartWindowSkipsTheStart(t *testing.T) {
 		t.Fatalf("a child that never ran saw %d TERM lines, want 0", n)
 	}
 }
+
+// TestSuperviseStopEndsEvenWhenAChildCannotStart (r2#1): a child whose
+// log cannot be opened never leaves the run hanging — every failed
+// start clears the start marker, so a stop ends the run (and the
+// daemon's own 78 ends it with the needs-operator signal, AC1: the
+// container must stop, not sit there past its grace).
+func TestSuperviseStopEndsEvenWhenAChildCannotStart(t *testing.T) {
+	dir := t.TempDir()
+	// a regular file where a log path is needed: OpenFile fails, always
+	blocker := filepath.Join(dir, "blocker")
+	if err := os.WriteFile(blocker, []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	badLog := ChildSpec{Name: "pi-web",
+		Argv: []string{"/bin/sh", "-c", "exec sleep 300"},
+		Log:  filepath.Join(blocker, "pi-web.log")}
+
+	// a stop must end the run although the other child cannot start
+	pidF := filepath.Join(dir, "daemon.pid")
+	rs := RunSpec{Daemon: supPidChild("daemon", pidF), Others: []ChildSpec{badLog},
+		Grace: 2 * time.Second, RestartDelay: 100 * time.Millisecond}
+	code := supRun(rs)
+	supPoll(t, "the daemon's pid", func() bool { return pidAlive(supReadPid(pidF)) })
+	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case c := <-code:
+		if c != 0 {
+			t.Fatalf("a stop with a child that cannot start: exit %d, want 0", c)
+		}
+	case <-time.After(supDeadline):
+		t.Fatal("the run hung after the stop: a child that cannot start must not hold it open")
+	}
+
+	// the daemon's own 78 must end the run the same way, carrying the
+	// needs-operator signal out
+	rs = RunSpec{Daemon: supSh("daemon", "sleep 0.2; exit 78"), Others: []ChildSpec{badLog},
+		Grace: 2 * time.Second, RestartDelay: 100 * time.Millisecond}
+	code = supRun(rs)
+	select {
+	case c := <-code:
+		if c != 78 {
+			t.Fatalf("the daemon's 78 with a child that cannot start: exit %d, want 78", c)
+		}
+	case <-time.After(supDeadline):
+		t.Fatal("the run hung on the daemon's 78: a child that cannot start must not hold it open")
+	}
+}
