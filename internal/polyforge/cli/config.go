@@ -117,6 +117,12 @@ type Config struct {
 	// The default Cell takes its credentials from [daemon]
 	// operator_agent_dir and carries no [model] table.
 	ModelSource string
+	// StepTiers is the Host-only [step_tiers] model-candidate catalog
+	// (polyforge#143, 85b): tier name → its recommended candidate list,
+	// every candidate in canonical `<harness>:<model>[:<effort>]` form
+	// (nil = no catalog: `pf doctor`'s catalog row skips). A named Cell
+	// inherits the Host's catalog like every Host-only value.
+	StepTiers map[string][]string
 }
 
 // DaemonSettings is the cli.toml [daemon] table. A zero field is unset
