@@ -123,22 +123,24 @@ test("a refresh that started before a save never rolls the save back (r1#3)", as
   // 答复——陈旧的读取不得把快照退回旧值，下一次整包 PUT 也不得把它写回去。
   let releaseGet;
   const held = new Promise((resolve) => { releaseGet = resolve; });
-  const started = [];
+  let gets = 0;
   const impl = async (url, init = {}) => {
-    started.push(init.method ?? "GET");
     if (init.method !== "PUT") {
-      await held;
-      // The read predates the save: it still carries hook off.
+      gets += 1;
+      if (gets === 2) await held;
+      // Every read predates the save: it carries hook off.
       return new Response(JSON.stringify({ ...BASE, includeHookEvents: false, planAvailable: true }), { status: 200, headers: { "Content-Type": "application/json" } });
     }
     return new Response(JSON.stringify({ ...JSON.parse(String(init.body)), planAvailable: true }), { status: 200, headers: { "Content-Type": "application/json" } });
   };
   const store = createClaudeSettingsStore(impl);
+  await store.refresh();
+  assert.ok(gets >= 1, "the pane never loaded its first read");
+  // A remount's GET is now in flight while the user saves.
   const refreshing = store.refresh();
-  // 等真条件：GET 确已发出。
   const deadline = Date.now() + 5_000;
-  while (!started.includes("GET") && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
-  assert.ok(started.includes("GET"), "the refresh never started its GET");
+  while (gets < 2 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(gets, 2, "the remount's GET never started");
   const saved = await store.save({ includeHookEvents: true });
   assert.equal(saved.ok, true);
   assert.equal(store.getSnapshot().settings.includeHookEvents, true, "the save's answer is not the snapshot");
