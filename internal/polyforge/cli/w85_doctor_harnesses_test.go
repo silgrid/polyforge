@@ -126,7 +126,7 @@ func w85HostFixture(t *testing.T) (env map[string]string, gammaSource string) {
 	if err := os.WriteFile(filepath.Join(gammaSource, "auth.json"), []byte(`{}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, d := range []string{cfgDir, filepath.Join(data, "cells", "default", "step-agent")} {
+	for _, d := range []string{cfgDir, filepath.Join(data, "cells", "default", "step-agent"), filepath.Join(ws, "beta"), filepath.Join(ws, "gamma")} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
