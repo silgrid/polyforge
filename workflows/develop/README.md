@@ -50,14 +50,19 @@ and `artifacts/merge/landing.json`. The daemon orchestrates; it judges no conten
   catches (`workflows/_shared/test_quality.md`)); per unit, a test — a
   unit-level test, or an e2e scenario whose suite declares `carries:` — committed red
   before the implementation that turns it green, both runs the session's own, recorded in
-  `artifacts/build/units.json` (`[{id, pre_existing_red?, test_commit?, impl_commit,
+  `artifacts/build/units.json` (`[{id, pre_existing_red?, timeout?, test_commit?, impl_commit,
   run{repo, cwd, argv}, marker}]`; a unit whose reproduction test already exists red
   before the change declares `pre_existing_red: true` and carries no `test_commit`). Each
   unit's targeted command runs only that unit's test (the test runner's own name filter; a suite
   that offers no filter is named in the hand-off and runs once, in the scoped command); a result
   already in hand on one tree is not re-proven — a bare commit changes no tree, and beside the
   test-first red no manual worktree replay is made (the facts engine's replay is the record); a
-  flaky failure re-runs only the suite that failed, once; and a long command writes its output to
+  flaky failure is re-run only in the suite that failed, once, by the written fast-check command
+  itself — the same rules verification runs — never by hand: the check already contains that
+  one re-run, and a failure still red after it is red; a red-state run must exit non-zero within
+  its limit — a unit self-reports `timeout` in units.json, else the default — and a run its
+  limit kills is an evidence problem, never a pass: the waiting inside it is bounded and an
+  assertion failure exits at once; and a long command writes its output to
   a log file with its exit code and the log is searched after the run, never piped straight into
   grep, head or tail. Fast
   checks plus every new test; the close's facts checks — `facts.py build` without the
