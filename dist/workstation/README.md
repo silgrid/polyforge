@@ -16,6 +16,7 @@ image.
 | --- | --- |
 | `Containerfile` | the base image: webui dist + pf built from this repository (context: the repo root), ubuntu:24.04 with podman/crun/catatonit/git/curl/python3 |
 | `entrypoint.sh` | cgroup-namespace init (as root, before `pf supervise`), then the environment boundary whitelist |
+| `env-whitelist.sh` | the environment boundary itself, sourced: PI_*/PI_WEB_* pass, PI_TEST_* never, the fixed `BUILDAH_ISOLATION=chroot` and PORT's default |
 | `containers/storage.conf` | native overlay on the `podman-storage` volume |
 | `containers/containers.conf` | cgroupfs, file events, no container keyrings |
 | `containers/registries.conf` | short names resolve to docker.io |
