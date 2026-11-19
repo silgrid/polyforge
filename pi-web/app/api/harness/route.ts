@@ -2,7 +2,7 @@
 // adapter with its probed version, whether the write gate knows that version
 // (是否可写: a known version is what the gate admits; no concept write is
 // implemented yet), and its capability declaration. Behind the API guard like
-// every /api route; reads only.
+// every /api route; reads only, never a credential value.
 import { NextResponse } from "next/server";
 import { ensureDefaultHarnesses } from "@/lib/harness/adapters";
 import { isApiRequestAllowed } from "@/lib/request-security";
@@ -13,7 +13,25 @@ export async function GET(req: Request) {
   if (!isApiRequestAllowed(req)) {
     return NextResponse.json({ error: "request-denied", message: "Untrusted API request" }, { status: 403 });
   }
-  // stub (85a1 u5): zero-value body, the red run's target
-  void ensureDefaultHarnesses;
-  return NextResponse.json({});
+  try {
+    const harnesses = [];
+    for (const adapter of ensureDefaultHarnesses()) {
+      const probe = await adapter.probeVersion();
+      harnesses.push({
+        id: adapter.id,
+        version: probe.version,
+        versionKnown: probe.known,
+        knownRange: probe.knownRange ?? null,
+        versionReason: probe.reason ?? null,
+        writable: probe.known,
+        capabilities: adapter.capabilities,
+      });
+    }
+    return NextResponse.json({ harnesses });
+  } catch (error) {
+    return NextResponse.json(
+      { error: "internal", message: error instanceof Error ? error.message : String(error) },
+      { status: 500 },
+    );
+  }
 }

@@ -15,13 +15,24 @@ export interface HarnessRouteRefusal {
 
 /** The ?cwd= of a harness route, as the adapters' read context. */
 export async function harnessRouteContext(url: string): Promise<{ ctx: HarnessReadContext } | HarnessRouteRefusal> {
-  // stub (85a1 u5): zero-value body, the red run's target
-  void getAllowedFileRoots;
-  void isExistingFilePathAllowed;
-  void isAbsolute;
-  void resolve;
-  void statSync;
-  return { ctx: {} };
+  const value = new URL(url).searchParams.get("cwd");
+  if (value === null) return { ctx: {} };
+  if (!value.trim() || !isAbsolute(value)) {
+    return { status: 400, code: "cwd-invalid", message: "cwd must be an absolute path" };
+  }
+  const allowedRoots = await getAllowedFileRoots();
+  if (!isExistingFilePathAllowed(value, allowedRoots)) {
+    return { status: 403, code: "cwd-denied", message: "Access denied" };
+  }
+  const cwd = resolve(value);
+  try {
+    if (!statSync(cwd).isDirectory()) {
+      return { status: 400, code: "cwd-not-directory", message: "cwd must be a directory" };
+    }
+  } catch {
+    return { status: 400, code: "cwd-not-directory", message: "cwd must be a directory" };
+  }
+  return { ctx: { cwd } };
 }
 
 /** The refusal as a JSON error body's shape. */
