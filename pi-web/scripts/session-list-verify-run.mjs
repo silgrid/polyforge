@@ -262,6 +262,30 @@ async function withProbeStream(server, details, collector, measured) {
   return overlappingSamples(collector);
 }
 
+/**
+ * One probe stream over back-to-back measured hot calls (exported for its
+ * behaviour test): the calls run one after another with no idle gap, and only
+ * probes issued inside a call's window count, so the sample count follows the
+ * calls' cumulative duration. Terminates on the sample bound or the call
+ * budget `details.hotIterations` allows.
+ */
+export async function measureHotCalls(server, details) {
+  const collector = newCollector();
+  const calls = [];
+  const firstStart = performance.now();
+  await withProbeStream(server, details, collector, async () => {
+    let start = firstStart;
+    for (let iteration = 0; iteration < details.hotIterations && overlappingSamples(collector).length < details.minSamples; iteration += 1) {
+      const call = await server.call(details.mode);
+      const end = performance.now();
+      collector.windows.push({ start, end });
+      calls.push({ status: call.status, ms: call.ms });
+      start = end;
+    }
+  });
+  return { samples: overlappingSamples(collector), calls };
+}
+
 async function responsiveness(details, fixture) {
   const results = {};
   let failures = 0;
@@ -275,27 +299,17 @@ async function responsiveness(details, fixture) {
       let attempts = 0;
       if (shape === "hot") {
         // One warmed server, ONE probe stream across back-to-back measured
-        // calls, until the sample bound (or the iteration cap): the calls run
-        // one after another with no idle gap, so nearly every probe the
-        // stream issues after the first call begins lands in a window.
+        // calls (measureHotCalls): the calls run one after another with no
+        // idle gap, so nearly every probe the stream issues after the first
+        // call begins lands in a window.
         await withServer(modeDetails, fixture, async (server) => {
           const warm = await server.call(mode);
           if (warm.status !== 200) throw new Error(`hot warm-up ${mode} call: HTTP ${warm.status}`);
-          const collector = newCollector();
           const rcharBefore = rcharOf(server.pid);
-          const firstStart = performance.now();
-          await withProbeStream(server, modeDetails, collector, async () => {
-            let start = firstStart;
-            for (let iteration = 0; iteration < details.hotIterations && overlappingSamples(collector).length < details.minSamples; iteration += 1) {
-              const call = await server.call(mode);
-              const end = performance.now();
-              collector.windows.push({ start, end });
-              calls.push({ status: call.status, ms: call.ms });
-              start = end;
-            }
-          });
+          const measured = await measureHotCalls(server, modeDetails);
           readBytes += rcharOf(server.pid) - rcharBefore;
-          samples.push(...overlappingSamples(collector));
+          samples.push(...measured.samples);
+          calls.push(...measured.calls);
         });
         attempts = calls.length;
       } else {
