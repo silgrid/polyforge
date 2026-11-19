@@ -393,7 +393,15 @@ it cannot place.
 
 A repository whose tree carries `.polyforge/Dockerfile.verify` runs
 that bar in a container of its own; one without it runs on
-the host as above. The image is built from that file alone — an empty build
+the host as above. The container runs on the backend the Host selected —
+`[daemon] container_engine` ([config.md](reference/config.md)), `docker`
+(the CLI client exactly as always) or `podman` (polyforge#159, 84-engine:
+the same container convention under podman's own semantics, a prepared
+image started by its normalized local ID, `image not known` the
+missing-image answer, a build under a private crun `--no-new-keyring`
+wrapper, the default bridge network); the daemon hands the resolved
+value to every step as `PF_CONTAINER_ENGINE`, and a script's own run
+without one keeps the docker client. The image is built from that file alone — an empty build
 context, so the file must be self-contained: public base images, every tool
 at an exact pinned version — and must carry what the scope engine itself
 runs as well as the bar: `python3` (the engine is a python3 program), `sh`,
@@ -492,7 +500,7 @@ the pre-path shared shape `pf-verify-cache-<repo>-<32 hex>` is left to a
 person (docs/upgrade.md); the base-worktree directory a run mounts beside
 the clone shares the clone's volume, one path the naming scheme does not
 separate. A cache suspected corrupt is removed with
-`docker volume rm` of the current volume: the next run starts cold. It has its own pid and network
+the selected backend's `volume rm` of the current volume: the next run starts cold. It has its own pid and network
 namespaces, no docker socket, no `pf` binary, no operator configuration, and
 an environment that is the image's own plus, when the daemon's environment
 sets them, `LANG`, `LC_ALL`, `TZ`, the proxies (`HTTP_PROXY`, `HTTPS_PROXY`,
@@ -507,9 +515,9 @@ directory; git (the base worktree, the scans) stays on the host.
 After each command every process it left in the container is killed — a
 timed-out command's whole tree included, which killing the `docker exec`
 client alone would not do — and the container is removed at the run's end,
-at the run's deadline and on a pause or shutdown. Every docker call but the
-image build (bounded by the run's deadline) and a command's own `docker
-exec` (bounded by its timeout) gets at most 2 minutes, so a docker engine
+at the run's deadline and on a pause or shutdown. Every engine call but the
+image build (bounded by the run's deadline) and a command's own
+exec (bounded by its timeout) gets at most 2 minutes, so a container engine
 that stops answering cannot hold a run; a removal that fails is logged
 once on the script's stderr (and noted as `left` in the repo's `container`
 record when the run completes); the container ends by itself five minutes

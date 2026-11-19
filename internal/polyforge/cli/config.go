@@ -171,6 +171,11 @@ type DaemonSettings struct {
 	// commands the daemon runs in-process start with: every entry an
 	// absolute directory; "" = unset, the daemon process's own PATH. Live.
 	CommandPath string
+	// ContainerEngine is the backend a verification container runs on
+	// (polyforge#159, 84-engine): "docker" or "podman"; "" = unset, the
+	// daemon resolves docker. Host-only, restart-only — one engine per
+	// Host, injected into every step as PF_CONTAINER_ENGINE.
+	ContainerEngine string
 	// CellMaxConcurrentJobs is the Cell's optional ceiling under the Host
 	// ceiling (>= 1; 0 = unset: no extra limit).
 	CellMaxConcurrentJobs int
@@ -283,6 +288,20 @@ func parseDaemonTable(file string, kvs []daemonKV) (DaemonSettings, error) {
 			} else {
 				s.OperatorAgentDir = v
 			}
+		case "container_engine":
+			// polyforge#159 (84-engine): the backend a verification container
+			// runs on. Exactly "docker" or "podman", quoted — an explicit
+			// empty string and any other spelling is refused: a typo must
+			// cost a refusal, never a silent run on the other engine's
+			// images and volumes. Host-only, restart-only (config_keys.go).
+			v, err := parseQuotedValue(kv.val, kv.line)
+			if err != nil {
+				return s, refuse(`must be "docker" or "podman" (quoted)`)
+			}
+			if v != "docker" && v != "podman" {
+				return s, refuse(fmt.Sprintf(`must be "docker" or "podman" (quoted), got %s`, kv.val))
+			}
+			s.ContainerEngine = v
 		case "python":
 			v, err := parseQuotedValue(kv.val, kv.line)
 			if err != nil {
@@ -1148,4 +1167,18 @@ func (s *HostSet) DiskIndex() []cellcfg.IndexEntry {
 		}
 	}
 	return out
+}
+
+// ResolveContainerEngine answers the container backend a verification
+// container runs on (polyforge#159, 84-engine): the configured value —
+// validated by the [daemon] table's parse, so exactly "docker" or
+// "podman" — with the documented default for an unset key: docker. The
+// daemon resolves it once at its start and never auto-detects: a machine
+// without a working engine is the step's "environment not satisfied",
+// not a reason to switch.
+func ResolveContainerEngine(configured string) string {
+	if configured == "" {
+		return "docker"
+	}
+	return configured
 }

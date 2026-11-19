@@ -608,7 +608,8 @@ triage, and the regate a fully flaky one triggers, the same); `.polyforge/releas
 `python3` (docs/reference/release.md, "The test gate"; `--help` is the
 script's full reference). `--isolation container` is required and the only
 isolation a gate has: a tree without the Dockerfile at HEAD — and no
-prepared image named — or a machine whose docker engine does not answer,
+prepared image named — or a machine whose container engine does not answer
+(the selected backend, `[daemon] container_engine`),
 is not judged (exit 2, the reason said). The step's `image` parameter (a
 dispatch's `PF_PARAM_IMAGE`, else `--image`, which wins and is recorded as
 the value's source) names a prepared image every gated repo runs in — one
@@ -1469,10 +1470,13 @@ the XDG base dirs, the Go toolchain variables (`GOPATH`, `GOROOT`,
 `GONOSUMDB`, `GONOPROXY`, `GOFLAGS`, `GOTOOLCHAIN`, `GO111MODULE`,
 `GOCACHE`, `GOMODCACHE`), the task-repo Git low-speed thresholds
 (`GIT_HTTP_LOW_SPEED_LIMIT`, `GIT_HTTP_LOW_SPEED_TIME`), the docker
-client's engine selection (`DOCKER_HOST`, `DOCKER_CONTEXT`,
-`DOCKER_CONFIG`, `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY`: a step
-command's verification container runs on the engine the operator's shell, and
-`pf doctor`, reaches), `POLYFORGE_DATA_DIR`, `GOCOVERDIR` and the
+client's own routing variables (`DOCKER_HOST`, `DOCKER_CONTEXT`,
+`DOCKER_CONFIG`, `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY`): wherever a
+docker client runs — a step command's own docker calls, and the
+verification container's engine when the daemon selected the docker
+backend (`[daemon] container_engine`; the rootful podman backend needs
+none of them) — it reaches the same engine the operator's shell, and
+`pf doctor`, do), `POLYFORGE_DATA_DIR`, `GOCOVERDIR` and the
 `POLYFORGE_SUPERVISOR` marker, with the values of the shell that ran
 ensure (the tmux server's environment — whatever shell first started it
 — never reaches the daemon: the loop runs `env -i <allow-list> sh -c

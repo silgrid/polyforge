@@ -320,6 +320,7 @@ and `--help` is its full reference: a skill does not repeat it.
 | `PF_LANE_DIR` | `<capsule>/workflows/<lane>`: the lane snapshot the step runs |
 | `PF_SHARED_DIR` | `<capsule>/workflows/_shared`: the shared tree beside it |
 | `PF_PYTHON` | the interpreter's absolute path: `[daemon] python` ([config.md](config.md)), else `python3` on the daemon's `PATH`, resolved once at the daemon's start; a missing one or one older than 3.9 refuses the start, naming why (`pf doctor`'s `python3` row judges the same rule) |
+| `PF_CONTAINER_ENGINE` | the container backend a verification container runs on: the daemon-resolved `[daemon] container_engine` ([config.md](config.md)), `docker` or `podman`; a step's scripts pick their container backend by it, an unset variable meaning their docker default (polyforge#159) |
 | `PF_PARAM_<NAME>` | one per parameter the step declares (`params`, [Step keys](#step-keys)): its final value of this dispatch, the name upper-cased (`image` → `PF_PARAM_IMAGE`) |
 | `PF_CELL` | the Cell the work item belongs to: `default`, else the named Cell's profile |
 | `PF_CELL_SERVER` | that Cell's server as configured |
@@ -461,8 +462,9 @@ The daemon never reads a result file: the hand-off's status and its
   One killed outright cannot: its container ends by itself five minutes
   after its deadline, and the next run's start removes every container of
   its owner whose `pf.verify.expires` has passed (`container.sweep_expired`).
-- A command that could not run as asked — docker missing or not answering
-  (`runner.EnvironmentNotSatisfied`), no Dockerfile in a container run, an
+- A command that could not run as asked — the container engine missing or
+  not answering (`runner.EnvironmentNotSatisfied`; the selected backend,
+  `[daemon] container_engine`), no Dockerfile in a container run, an
   image or container not had, a container lost mid-command
   (`runner.ExecutorError`) — is never an exit code or a verdict: the
   script exits 2 and its summary says why.
@@ -485,7 +487,10 @@ harness binary's directory and that command PATH — the one the daemon's
 own git and gh run under — each entry once, so a script's commands
 resolve what the daemon's resolve and neither `pf step` nor the harness's
 interpreter is lost; unset, it inherits the daemon's own `PATH`
-([config.md](config.md), `command_path`). A step's own copy of any of them
+([config.md](config.md), `command_path`), and with the daemon-resolved
+container backend `PF_CONTAINER_ENGINE` (`[daemon] container_engine`,
+[config.md](config.md); unset outside a Host — the scripts' own docker
+default). A step's own copy of any of them
 never reaches it.
 
 ### The prompt
