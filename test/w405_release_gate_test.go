@@ -1,3 +1,5 @@
+// carries: .polyforge/release.sh, test/w405_release_gate_test.go
+
 package test
 
 // w405_release_gate_test.go (polyforge#154): the release procedure runs NO

@@ -1,3 +1,5 @@
+// carries: .polyforge/release.sh, .polyforge/deploy.sh, workflows/release/steps/*.md, workflows/release/README.md, test/w372_release_lane_test.go
+
 package test
 
 // w372_release_lane_test.go: one regression test per release-lane failure

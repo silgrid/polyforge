@@ -1,3 +1,5 @@
+// carries: .polyforge/release.sh, test/w341_release_pr_association_repro_test.go
+
 package test
 
 // w341_release_pr_association_repro_test.go: a bug repro.

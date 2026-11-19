@@ -1,3 +1,5 @@
+// carries: .polyforge/release.sh, test/release_bump_guard_repro_test.go
+
 package test
 
 // repro: the canonical .polyforge/release.sh defaults its bump

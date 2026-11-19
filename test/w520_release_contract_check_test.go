@@ -1,3 +1,5 @@
+// carries: .polyforge/release.sh, test/w520_release_contract_check_test.go
+
 package test
 
 // w520_release_contract_check_test.go: the release's

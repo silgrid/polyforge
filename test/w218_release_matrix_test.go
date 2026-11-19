@@ -1,3 +1,5 @@
+// carries: .polyforge/release.sh, test/w218_release_matrix_test.go
+
 package test
 
 // polyforge#218 e2e: the release matrix carries the darwin assets; since
