@@ -169,8 +169,8 @@ func TestSeedToolWriteRefusesIncomplete(t *testing.T) {
 			name: "the harness package flags are required",
 			dir:  fresh,
 			args: func(dir string, argv []string) []string {
-				out := make([]string, 0, len(argv))
-				for i := 0; i < len(argv); i += 2 {
+				out := []string{argv[0]}
+				for i := 1; i+1 < len(argv); i += 2 {
 					if argv[i] == "--harness-pi-package" || argv[i] == "--harness-claude-package" {
 						continue
 					}
