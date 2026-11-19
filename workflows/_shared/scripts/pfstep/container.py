@@ -50,8 +50,11 @@ started is found and removed by the next.
   integrity): a lockfile change only misses and downloads.
   ``prune_cache_volumes`` (each start) removes the repo's older
   generations no container references — a volume named exactly
-  ``pf-verify-cache-<repo>-<32 hex generation>-<32 hex path identity>``,
-  not the current one, that the engine lists as unused; another repo's
+  ``pf-verify-cache-<repo>-<32 hex generation>-<32 hex path
+  identity>`` of an older generation than the started one's, that the
+  engine lists as unused; every clone path's volume of the running
+  generation stays (another clone's cache is not this start's to
+  reap); another repo's
   volume, one of another shape (the pre-path shared shape included,
   which the upgrade notes hand to a person) is never touched. One a
   running verification on an older image still uses is not listed, and
@@ -668,15 +671,21 @@ def image_cache_volume(repo: str, digest: str, repo_dir: str) -> str:
 
 def prune_cache_volumes(rt: ContainerRuntime, repo: str, keep: str, say: Say) -> List[str]:
     """Remove repo's cache volumes of older image generations that no
-    container references (keep is the current one); answer the removed
-    names. Only a name of exactly the two-field shape counts —
-    ``pf-verify-cache-<repo>-<32 hex generation>-<32 hex path identity>``:
-    another repo's volume (one whose name starts with this repo's), one
-    of another shape — the pre-path shared shape included, which the
-    upgrade notes hand to a person — or the current one is never
-    touched. A failing listing or removal costs only the pruning."""
+    container references (keep is the volume this start mounts); answer
+    the removed names. Only a name of exactly the two-field shape counts
+    — ``pf-verify-cache-<repo>-<32 hex generation>-<32 hex path
+    identity>`` — and only one of an older generation than keep's goes:
+    every clone path's volume of the running generation stays (another
+    clone's cache is not this start's to reap), and another repo's volume
+    (one whose name starts with this repo's), one of another shape — the
+    pre-path shared shape included, which the upgrade notes hand to a
+    person — or the current one is never touched. A failing listing or
+    removal costs only the pruning."""
     prefix = _cache_volume_prefix(repo)
     shape = re.compile(re.escape(prefix) + r"[0-9a-f]{32}-[0-9a-f]{32}", re.ASCII)
+    if not shape.fullmatch(keep):
+        return []
+    current = keep[len(prefix):len(prefix) + 32]  # keep's image generation
     removed: List[str] = []
     try:
         found = rt.unused_volumes(prefix)
@@ -684,7 +693,7 @@ def prune_cache_volumes(rt: ContainerRuntime, repo: str, keep: str, say: Say) ->
         say("could not list older cache volumes (%s): none removed" % err)
         return removed
     for name in found:
-        if name == keep or not shape.fullmatch(name):
+        if name[len(prefix):len(prefix) + 32] == current or not shape.fullmatch(name):
             continue
         try:
             rt.remove_volume(name)
