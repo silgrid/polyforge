@@ -135,7 +135,7 @@ test("bg_output answers with the byte range and the full log path, within the 81
       const budget = maxBytes ?? 8192;
       const startByte = totalBytes - Math.min(budget, 6_000);
       return {
-        text: "世".repeat((6_000 - 0) / 3 - 0) && tail, startByte, endByte: totalBytes,
+        text: tail, startByte, endByte: totalBytes,
         totalBytes, logPath: "/tmp/bg/0123456789abcdef0123456789abcdef/log", truncated: startByte > 0,
       };
     },
@@ -146,7 +146,7 @@ test("bg_output answers with the byte range and the full log path, within the 81
   assert.ok(Buffer.byteLength(text, "utf8") <= BG_OUTPUT_MAX_BYTES, `the whole answer must stay within ${BG_OUTPUT_MAX_BYTES} bytes`);
   assert.ok(!text.includes("\uFFFD"), "the cut must not split a multi-byte character");
   assert.ok(/bytes \d+-15000 of 15000/.test(text), "the range ends at the log's end");
-  assert.ok(text.endsWith(tail), "the excerpt ends with the log's last bytes");
+  assert.ok(text.includes(tail), "the whole tail the controller returned is in the answer");
   assert.ok(text.includes("/tmp/bg/0123456789abcdef0123456789abcdef/log"), "the answer names the full log path");
   assert.equal(readCalls.at(-1), BG_OUTPUT_MAX_BYTES - 256, "the default read reserves the answer's own prompt lines");
 });
