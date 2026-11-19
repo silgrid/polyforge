@@ -277,6 +277,9 @@ export function claudeSessionInfo(
   };
 }
 
+/** Test seam signature (polyforge#140 u2): drop the list projection caches. */
+export function resetClaudeSessionListCachesForTests(): void {}
+
 /** Every claude session pi-web created, as list rows. Only the index: no claude projects dir is scanned. */
 export function getClaudeSessionInfos(): SessionInfo[] {
   const globalApprovalMode = readClaudePermissionConfig().mode;
