@@ -16,16 +16,19 @@ import {
   gatedWrite,
   CLAUDE_KNOWN_RANGE,
   versionInKnownRange,
+  writeGate,
   type HarnessAdapter,
   type HarnessReadContext,
   type VersionProbeResult,
   type WriteChange,
   type WriteResult,
 } from "./adapter";
+import { applyClaudePermissionChange, parseClaudePermissionChange } from "./claude-native-write";
 import { claudeSettingsLayers, claudeStateFilePath, type ClaudeSettingsLayer } from "./claude-layers";
 import {
   neutralApprovalMode,
   neutralReasoningEffort,
+  type PermissionFieldSource,
   type AuthPayload,
   type ConceptId,
   type ConceptPayload,
@@ -35,6 +38,8 @@ import {
   type McpPayload,
   type ModelPayload,
   type PermissionPayload,
+  type PermissionRules,
+  type PermissionSandbox,
   type ScopeId,
   type SkillRef,
   type SkillsPayload,
@@ -144,7 +149,7 @@ export function createClaudeAdapter(): HarnessAdapter {
       id: "claude",
       scopes: ["managed", "user", "project", "local"],
       concepts: ["auth", "config-root", "model", "permission", "skills", "mcp", "env", "effective-config"],
-      writableConcepts: [],
+      writableConcepts: ["permission"],
       readOnlyConcepts: ["env", "effective-config"],
       configRootEnv: "CLAUDE_CONFIG_DIR",
       credentialsFollowConfigRoot: true,
@@ -189,11 +194,58 @@ export function createClaudeAdapter(): HarnessAdapter {
           // The first layer whose permissions record names a defaultMode, so a
           // higher layer with permissions but no defaultMode does not shadow it.
           let raw: string | null = null;
+          let defaultModeSource: PermissionFieldSource | null = null;
           for (const layer of layers) {
             const permissions = layer.record?.permissions;
             if (isRecord(permissions) && typeof permissions.defaultMode === "string") {
               raw = permissions.defaultMode;
+              defaultModeSource = { scope: layer.scope, path: layer.path };
               break;
+            }
+          }
+          // denyInsteadOfPrompting: claude's own boolean key (v2.1.319+), the
+          // first layer that names it.
+          let denyInsteadOfPrompting: boolean | null = null;
+          let denySource: PermissionFieldSource | null = null;
+          for (const layer of layers) {
+            const permissions = layer.record?.permissions;
+            if (isRecord(permissions) && typeof permissions.denyInsteadOfPrompting === "boolean") {
+              denyInsteadOfPrompting = permissions.denyInsteadOfPrompting;
+              denySource = { scope: layer.scope, path: layer.path };
+              break;
+            }
+          }
+          // The sandbox object: enabled / autoAllowBashIfSandboxed as booleans,
+          // claude's other sandbox keys by name only (they are claude's detail).
+          const sandboxLayer = effectiveLayer(layers, "sandbox");
+          const sandboxRecord = sandboxLayer && isRecord(sandboxLayer.value) ? sandboxLayer.value : null;
+          const booleanOf = (key: string): boolean | null =>
+            sandboxRecord && typeof sandboxRecord[key] === "boolean" ? sandboxRecord[key] as boolean : null;
+          const sandbox: PermissionSandbox = {
+            supported: true,
+            enabled: booleanOf("enabled"),
+            autoAllowBashIfSandboxed: booleanOf("autoAllowBashIfSandboxed"),
+            otherKeys: sandboxRecord
+              ? Object.keys(sandboxRecord).filter((key) => key !== "enabled" && key !== "autoAllowBashIfSandboxed").sort()
+              : [],
+          };
+          // The rules: claude merges its permission lists across layers, so the
+          // read merges them the same way (deduped, first occurrence wins the
+          // order); the source is the highest layer that names any list.
+          const rules: PermissionRules = { allow: [], ask: [], deny: [] };
+          let rulesSource: PermissionFieldSource | null = null;
+          for (const layer of layers) {
+            const permissions = layer.record?.permissions;
+            if (!isRecord(permissions)) continue;
+            if (rulesSource === null && (["allow", "ask", "deny"] as const).some((list) => Array.isArray(permissions[list]))) {
+              rulesSource = { scope: layer.scope, path: layer.path };
+            }
+            for (const list of ["allow", "ask", "deny"] as const) {
+              const entries = permissions[list];
+              if (!Array.isArray(entries)) continue;
+              for (const entry of entries) {
+                if (typeof entry === "string" && !rules[list].includes(entry)) rules[list].push(entry);
+              }
             }
           }
           let projectTrust: PermissionPayload["projectTrust"] = null;
@@ -206,6 +258,15 @@ export function createClaudeAdapter(): HarnessAdapter {
           const payload: PermissionPayload = {
             approvalMode: { supported: true, neutral: raw === null ? null : neutralApprovalMode(raw), raw },
             projectTrust,
+            sandbox,
+            rules,
+            denyInsteadOfPrompting,
+            sources: {
+              defaultMode: defaultModeSource,
+              sandbox: sandboxLayer ? { scope: sandboxLayer.layer.scope, path: sandboxLayer.layer.path } : null,
+              rules: rulesSource,
+              denyInsteadOfPrompting: denySource,
+            },
           };
           return payload;
         }
@@ -259,7 +320,18 @@ export function createClaudeAdapter(): HarnessAdapter {
       }
     },
     async write(concept: ConceptId, change: WriteChange, ctx): Promise<WriteResult> {
-      return gatedWrite(this, concept, change, ctx);
+      // The shared gate first (adapter.ts): an undetected or unrecognized
+      // version never reaches a write. Only the permission concept has a
+      // write (85a4); every other concept keeps gatedWrite's not-implemented.
+      if (concept !== "permission") return gatedWrite(this, concept, change, ctx);
+      const probe = await probeVersion(ctx);
+      const gate = writeGate(probe);
+      if (!gate.allowed) return { status: "refused", reason: gate.reason };
+      const parsed = parseClaudePermissionChange(change, ctx?.cwd);
+      if ("reason" in parsed) return { status: "refused", reason: parsed.reason };
+      const applied = await applyClaudePermissionChange(parsed.change, configDirOf(ctx), claudeStateFilePath(ctx));
+      if (!applied.ok) return { status: "refused", reason: applied.reason };
+      return { status: "written", summary: `${applied.summary} (claude ${probe.version}, user-level settings.json)` };
     },
     diagnose: (ctx) => claudeDiagnose(ctx),
   };

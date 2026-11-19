@@ -161,7 +161,7 @@ test("capabilities: claude declares its concepts, scopes and config root (AC1)",
   assert.deepEqual(caps.scopes, ["managed", "user", "project", "local"]);
   assert.equal(caps.configRootEnv, "CLAUDE_CONFIG_DIR");
   assert.equal(caps.credentialsFollowConfigRoot, true);
-  assert.deepEqual(caps.writableConcepts, []);
+  assert.deepEqual(caps.writableConcepts, ["permission"]);
 });
 
 test("read auth: the credentials file as existence only, env names only, status unknown (Q4 A)", async () => {
