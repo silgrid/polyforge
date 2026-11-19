@@ -115,9 +115,9 @@ export function skillInstructionsBody(content: string): string {
  * never on the effective switch, which the preference also drives. Skeleton.
  */
 export function skillAuthorDeclaredHidden(
-  _skill: Pick<Skill, "declaredDisableModelInvocation">,
+  skill: Pick<Skill, "declaredDisableModelInvocation">,
 ): boolean {
-  return false;
+  return skill.declaredDisableModelInvocation === true;
 }
 
 /**
@@ -151,6 +151,8 @@ function SkillDetail({
   updateError,
   onCheckUpdate,
   onUpdate,
+  onCleanupLegacy,
+  cleaningLegacy,
 }: {
   skill: Skill;
   cwd: string;
@@ -163,6 +165,8 @@ function SkillDetail({
   updateError: string | null;
   onCheckUpdate: () => void;
   onUpdate: () => void;
+  onCleanupLegacy: (skill: Skill) => void;
+  cleaningLegacy: boolean;
 }) {
   const { t } = useI18n();
   const label = sourceLabel(skill);
@@ -245,6 +249,11 @@ function SkillDetail({
               {t("i18n.hiddenButInvocable")}
             </span>
           )}
+          {skillAuthorDeclaredHidden(skill) && enabled && (
+            <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
+              {t("skills.authorHiddenDefault")}
+            </span>
+          )}
           {saveError && (
             <span style={{ fontSize: 12, color: "#f87171", overflowWrap: "anywhere" }}>
               {saveError}
@@ -252,6 +261,21 @@ function SkillDetail({
           )}
         </div>
       </div>
+
+      {skillAuthorDeclaredHidden(skill) && (
+        <ConfigField label={t("skills.legacyField")}>
+          <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
+            {t("skills.legacyFieldHint")}
+          </span>
+          <ConfigButton
+            size="small"
+            onClick={() => onCleanupLegacy(skill)}
+            disabled={cleaningLegacy || toggling}
+          >
+            {t("skills.cleanupLegacy")}
+          </ConfigButton>
+        </ConfigField>
+      )}
 
       {skill.install?.skillsShUrl && (
         <ConfigField label={t("config.source")}>
@@ -881,6 +905,29 @@ export function SkillsConfig({
     }
   }, [t]);
 
+  const [cleaningLegacy, setCleaningLegacy] = useState<string | null>(null);
+  const cleanupLegacy = useCallback(async (skill: Skill) => {
+    // One confirmed skill at a time (owner Q3 B): the dialog names what the
+    // route does — the hidden preference first, then the line's removal.
+    if (!window.confirm(t("skills.cleanupLegacyConfirm", { name: skill.name }))) return;
+    setCleaningLegacy(skill.filePath);
+    setSaveError(null);
+    try {
+      const res = await fetch("/api/skills/cleanup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filePath: skill.filePath }),
+      });
+      const d = (await res.json()) as { success?: boolean; error?: string };
+      if (!res.ok || d.error) throw new Error(d.error ?? `HTTP ${res.status}`);
+      await loadSkills();
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCleaningLegacy(null);
+    }
+  }, [t, loadSkills]);
+
   const selectedSkill = skills.find((s) => s.filePath === selected) ?? null;
   const bulkBusy = loading || toggling.size > 0 || updatingSkill !== null;
 
@@ -1062,6 +1109,8 @@ export function SkillsConfig({
                 updateError={updateError}
                 onCheckUpdate={() => void checkForUpdates(selectedSkill)}
                 onUpdate={() => void updateInstalledSkill(selectedSkill)}
+                onCleanupLegacy={(skill) => void cleanupLegacy(skill)}
+                cleaningLegacy={cleaningLegacy === selectedSkill.filePath}
               />
               ) : (
                 <ConfigEmptyState>{t("i18n.selectSkill")}</ConfigEmptyState>
