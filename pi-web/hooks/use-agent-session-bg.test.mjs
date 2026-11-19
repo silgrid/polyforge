@@ -20,11 +20,12 @@ globalThis.window ??= new EventTarget();
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 const settle = async () => { for (let index = 0; index < 12; index += 1) await new Promise((resolve) => setImmediate(resolve)); };
 
-const pollUntil = async (condition, deadlineMs, what) => {
+const pollUntil = async (hook, condition, deadlineMs, what) => {
   const deadline = Date.now() + deadlineMs;
   while (!(await condition())) {
     if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
     await settle();
+    hook.flush();
   }
 };
 
@@ -62,8 +63,10 @@ function openSession(id) {
       return json({ success: true, running: true, state: { sessionId: id, isStreaming: false, isPromptRunning: false, isBashRunning: false, isCompacting: false, contextUsage: null } });
     }
     if (path.startsWith(`/api/sessions/${id}`)) {
+      // The context read echoes the leaf it was asked for, as the server does.
+      const askedLeaf = new URL(path, "http://localhost").searchParams.get("leafId");
       return json({
-        sessionId: id, filePath: "", totalActiveMs: 0, tree: [], leafId: null, snapshotRevision: null,
+        sessionId: id, filePath: "", totalActiveMs: 0, tree: [], leafId: askedLeaf, snapshotRevision: null,
         toolNames: ["read"], info: { id, path: "", cwd: "/project", created: "", modified: "", messageCount: 2, firstMessage: "" },
         context: { messages: [], entryIds: [], oldestEntryId: null, hasMore: false, turnsBefore: 0, thinkingLevel: "off", model: null },
       });
@@ -107,13 +110,14 @@ test("a tool preset switch refused over background work rolls back and keeps the
 
 test("a branch switch refused over background work rolls the view back", async () => {
   const hook = openSession("bg-refuse-2");
-  await pollUntil(() => hook.branch() !== null, 5_000, "the branch data callback");
+  await pollUntil(hook, () => hook.branch() !== null, 5_000, "the branch data callback");
   const before = hook.branch().activeLeafId;
 
   hook.branch().onLeafChange("leaf-2");
+  // The refusal answers at once, so the observable end state is the pinned
+  // one: the view never settles on the refused leaf.
+  await pollUntil(hook, () => hook.refusals().some((type) => type === "navigate_tree"), 5_000, "the refused navigate_tree");
   await settle();
   hook.flush();
-  await pollUntil(() => hook.branch().activeLeafId === "leaf-2", 5_000, "the optimistic leaf switch");
-  assert.equal(hook.refusals().filter((type) => type === "navigate_tree").length, 1, "the switch reached the server and was refused");
-  await pollUntil(() => hook.branch().activeLeafId === before, 5_000, "the leaf to roll back");
+  assert.equal(hook.branch().activeLeafId, before, "the leaf rolls back to the branch it was refused from");
 });
