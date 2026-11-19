@@ -1,11 +1,17 @@
 import "#test-env";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
 import { createJiti } from "jiti";
 
+// The skill switch writes pi-web's own preference store
+// (`<agentDir>/pi-web-settings.json`, `skillVisibility.pi`), never a SKILL.md:
+// every `*.md` in the fixture tree must stay byte-identical (SHA-256) across
+// single and batch toggles, while out-of-bounds paths stay 403, non-skill or
+// malformed input stays 400, and each batch item is reported on its own.
 const root = await mkdtemp(join(tmpdir(), "pi-web-skills-route-"));
 const agentDir = join(root, "agent");
 const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -27,6 +33,30 @@ async function writeSkill(dir, name, frontmatter = "") {
   return filePath;
 }
 
+async function mdHashes(dir) {
+  const hashes = new Map();
+  const walk = async (current) => {
+    for (const entry of await readdir(current, { withFileTypes: true })) {
+      const target = join(current, entry.name);
+      if (entry.isDirectory()) await walk(target);
+      else if (entry.isFile() && entry.name.endsWith(".md")) {
+        hashes.set(target, createHash("sha256").update(await readFile(target)).digest("hex"));
+      }
+    }
+  };
+  await walk(dir);
+  return hashes;
+}
+
+const settingsFile = join(agentDir, "pi-web-settings.json");
+const readPreference = async () => {
+  try {
+    return JSON.parse(await readFile(settingsFile, "utf8")).skillVisibility?.pi ?? {};
+  } catch {
+    return {};
+  }
+};
+
 function patchSkills(body) {
   return PATCH(new Request("http://localhost/api/skills", {
     method: "PATCH",
@@ -35,14 +65,13 @@ function patchSkills(body) {
   }));
 }
 
-test("a batch hides every listed skill and reports each file on its own", async () => {
+test("a batch switches every listed skill by preference and keeps every SKILL.md byte-identical", async () => {
   const skillsDir = join(agentDir, "skills");
   const visible = await writeSkill(skillsDir, "visible");
   const hidden = await writeSkill(skillsDir, "hidden", "disable-model-invocation: true\n");
   const outside = await writeSkill(join(root, "outside"), "outside");
   const missing = join(skillsDir, "missing", "SKILL.md");
-  const hiddenBefore = await stat(hidden);
-  const outsideBefore = await readFile(outside, "utf8");
+  const before = await mdHashes(root);
 
   const response = await patchSkills({
     filePaths: [visible, hidden, outside, missing, visible],
@@ -58,58 +87,60 @@ test("a batch hides every listed skill and reports each file on its own", async 
       { filePath: missing, error: "file not found" },
     ],
   });
-  assert.equal(
-    await readFile(visible, "utf8"),
-    "---\ndisable-model-invocation: true\nname: visible\ndescription: visible skill\n---\n\n# visible\n",
-  );
-  // A skill already hidden is not rewritten, and a refused one is untouched.
-  assert.equal((await stat(hidden)).mtimeMs, hiddenBefore.mtimeMs);
-  assert.equal(await readFile(outside, "utf8"), outsideBefore);
+  assert.deepEqual(await mdHashes(root), before, "no SKILL.md may change by a single byte");
+  assert.deepEqual(await readPreference(), {
+    [visible]: "hidden",
+    [hidden]: "hidden",
+  });
 });
 
-test("a batch keeps going past a skill whose frontmatter cannot be edited", async () => {
-  const skillsDir = join(agentDir, "skills");
-  const hidden = await writeSkill(skillsDir, "to-show", "disable-model-invocation: true\n");
-  const unsupported = join(skillsDir, "unsupported", "SKILL.md");
-  await mkdir(join(skillsDir, "unsupported"), { recursive: true });
-  // Parsed as frontmatter, but the key sits on a flow-mapping line the surgical
-  // editor refuses to rewrite.
-  await writeFile(unsupported, "---\n{ name: unsupported, disable-model-invocation: true }\n---\nbody\n");
-
-  const response = await patchSkills({ filePaths: [unsupported, hidden], disableModelInvocation: false });
-  const { results } = await response.json();
-
-  assert.equal(response.status, 200);
-  assert.match(results[0].error, /unsupported frontmatter formatting/);
-  assert.deepEqual(results[1], { filePath: hidden });
-  assert.doesNotMatch(await readFile(hidden, "utf8"), /disable-model-invocation/);
-});
-
-test("a single-skill toggle keeps its original response shape", async () => {
-  const skill = await writeSkill(join(agentDir, "skills"), "single");
+test("a single toggle writes the preference, shows override the author's frontmatter", async () => {
+  const skill = await writeSkill(join(agentDir, "skills"), "single", "disable-model-invocation: true\n");
+  const before = await mdHashes(root);
 
   const response = await patchSkills({ filePath: skill, disableModelInvocation: true });
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { success: true });
-  assert.match(await readFile(skill, "utf8"), /disable-model-invocation: true/);
+  assert.deepEqual(await readPreference(), { [skill]: "hidden" });
+
+  const shown = await patchSkills({ filePath: skill, disableModelInvocation: false });
+  assert.equal(shown.status, 200);
+  assert.deepEqual(await mdHashes(root), before, "the author's frontmatter line stays in the file");
+  assert.deepEqual(await readPreference(), { [skill]: "shown" });
 
   const refused = await patchSkills({ filePath: join(root, "outside", "outside", "SKILL.md"), disableModelInvocation: true });
   assert.equal(refused.status, 403);
 });
 
-test("a malformed batch is rejected before any file is edited", async () => {
+test("any frontmatter formatting toggles, because the file is never parsed or edited", async () => {
+  const unsupported = join(agentDir, "skills", "flow", "SKILL.md");
+  await mkdir(join(agentDir, "skills", "flow"), { recursive: true });
+  await writeFile(unsupported, "---\n{ name: flow, disable-model-invocation: true }\n---\nbody\n");
+  const before = await mdHashes(root);
+
+  const response = await patchSkills({ filePaths: [unsupported], disableModelInvocation: false });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { results: [{ filePath: unsupported }] });
+  assert.deepEqual(await mdHashes(root), before);
+  assert.deepEqual(await readPreference(), { [unsupported]: "shown" });
+});
+
+test("malformed input is rejected before any preference is written", async () => {
   const skill = await writeSkill(join(agentDir, "skills"), "untouched");
-  const before = await readFile(skill, "utf8");
+  const before = await mdHashes(root);
 
   assert.equal((await patchSkills({ filePaths: [skill, 42], disableModelInvocation: true })).status, 400);
   assert.equal((await patchSkills({ filePaths: skill, disableModelInvocation: true })).status, 400);
   assert.equal((await patchSkills({ filePaths: [skill], disableModelInvocation: "yes" })).status, 400);
-  assert.equal(await readFile(skill, "utf8"), before);
+  assert.equal((await patchSkills({ filePaths: [skill] })).status, 400);
+  assert.equal((await patchSkills({ filePath: skill })).status, 400);
+  assert.deepEqual(await mdHashes(root), before);
+  assert.deepEqual(await readPreference(), {});
 });
 
-test("only markdown files are edited, however they are named in the request", async () => {
+test("only markdown files get a preference, however they are named in the request", async () => {
   // auth.json and settings.json sit inside the agent dir, which the route
-  // allows; a frontmatter block at their top would break them.
+  // allows; a preference keyed by them would be nonsense.
   const authPath = join(agentDir, "auth.json");
   const auth = JSON.stringify({ provider: { type: "api_key", key: "test" } });
   await mkdir(agentDir, { recursive: true });
@@ -120,4 +151,5 @@ test("only markdown files are edited, however they are named in the request", as
   const batch = await patchSkills({ filePaths: [authPath], disableModelInvocation: true });
   assert.deepEqual(await batch.json(), { results: [{ filePath: authPath, error: "Not a skill file" }] });
   assert.equal(await readFile(authPath, "utf8"), auth);
+  assert.deepEqual(await readPreference(), {});
 });
