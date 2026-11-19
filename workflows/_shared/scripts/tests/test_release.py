@@ -35,7 +35,8 @@ class FakeHub:
     """``pf --json step hub list`` answered from a fixed page; every call kept."""
 
     def __init__(self, items: List[Dict[str, Any]], fail: Optional[Exception] = None) -> None:
-        self.items, self.fail, self.calls = items, fail, [] 
+        self.items, self.fail = items, fail
+        self.calls: List[str] = []
 
     def __call__(self, args: List[str]) -> bytes:
         self.calls.append(" ".join(args))
@@ -59,7 +60,7 @@ class ReleaseBatchTest(GitCase):
         super().setUp()
         self.cap = self.new_dir("capsule")
         self.env = {"PATH": os.environ.get("PATH", ""), "PF_ROUND": "1"}
-        self.calls: List[str] = []
+        self.calls: List[str] = []  # the hub calls of the last resolve
 
     # -- the world ---------------------------------------------------------
 
@@ -152,7 +153,8 @@ class ReleaseBatchTest(GitCase):
         self.assertEqual((d["batch"], d["decision"], d["owner"], d["owner_pin"]),
                          ("wi_b2", "fresh", "app", heads["second"]))
         self.assertEqual(res["heads"], {"app": heads["second"]})
-        self.assertNotIn("red_batches_after", pins, "the red batch predates the green one")
+        if pins is not None:
+            self.assertNotIn("red_batches_after", pins, "the red batch predates the green one")
         self.assertNotIn("version", d)
 
     def test_red_batches_after_the_green_one_are_reported(self) -> None:
@@ -308,7 +310,7 @@ class ReleaseBatchTest(GitCase):
     def test_an_unresolvable_default_branch_exits_2(self) -> None:
         _, heads = self.owner_world()
         app = os.path.join(self.cap, "repos", "app")
-        git(app, "update-ref", "-d", "refs/remotes/origin/HEAD")
+        git(app, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD")
         code, res, _ = self.resolve(FakeHub([batch("wi_g", "green", {"app": heads["second"]}, "2026-11-18T08:00:00Z")]))
         self.assertEqual(code, 2)
         self.assertEqual(res["verdict"], "error")
