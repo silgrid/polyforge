@@ -134,6 +134,7 @@ async function storePreference(entries) {
 
 test("the listing imports an author-hidden skill as a hidden preference and never edits the file", async () => {
   const legacy = await writeAgentSkill("legacy-author-hidden", "disable-model-invocation: true\n");
+  await writeFile(settingsFile, `${JSON.stringify({ version: 1, agentLanguage: "zh-CN" }, null, 2)}\n`);
   const before = hash(legacy);
 
   const listed = await loadSkillsWithInstallInfo(trustedProject);
@@ -144,7 +145,7 @@ test("the listing imports an author-hidden skill as a hidden preference and neve
   assert.equal(entry.disableModelInvocation, true, "the import hides it, as its legacy line did");
   const store = JSON.parse(await readFile(settingsFile, "utf8"));
   assert.equal(store.skillVisibility.pi[legacy], "hidden");
-  assert.ok(Array.isArray(store.packages), "the store keeps its other keys");
+  assert.equal(store.agentLanguage, "zh-CN", "the store keeps its other keys");
   assert.equal(hash(legacy), before, "the SKILL.md is never edited");
 });
 
