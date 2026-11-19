@@ -74,9 +74,10 @@ RUN npx --yes --package=playwright@1.63.0 playwright install --with-deps chromiu
 # user: git must not refuse it as a dubious owner.
 RUN git config --system --add safe.directory '*'
 
-# The caches live on the named volume mounted at /cache, one per repository
-# and image generation (this file's hash): changing any byte of this file
-# starts them empty.
+# The caches live on the named volume mounted at /cache, one per repository,
+# image generation and clone path (this file's hash is the generation):
+# changing any byte of this file starts them empty, and two clones of one
+# repository at different paths never share one.
 ENV GOPATH=/cache/go \
     GOCACHE=/cache/go-build \
     npm_config_cache=/cache/npm \

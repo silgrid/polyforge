@@ -464,20 +464,34 @@ and `pf.verify.expires`, the run's deadline) that
 mounts, each at its own host path, only the repo's clone and the run's
 base-worktree directory (read-write) and the release's
 `tools/` directory (read-only), plus the repo's named volume of the image's
-generation, `pf-verify-cache-<repo>-<the image's hash>`, at `/cache` (point
-the toolchain caches there, e.g. `GOCACHE`, `GOPATH`, `npm_config_cache`).
-The volume lives as long as the image: the same Dockerfile reuses it, any
-byte changed in the Dockerfile (a toolchain or browser pin) gives a new,
-empty one. Within a generation its contents check themselves — Go's modules
+generation and the clone path,
+`pf-verify-cache-<repo>-<the image's hash>-<the clone path's hash>`, at
+`/cache` (point the toolchain caches there, e.g. `GOCACHE`, `GOPATH`,
+`npm_config_cache`). The volume lives as long as the image at one clone
+path: the same Dockerfile reuses it, any byte changed in the Dockerfile
+(a toolchain or browser pin) gives a new, empty one, and two clones at
+different paths never share one — a tool whose cached results embed
+absolute paths (golangci-lint's result cache) would else read another
+clone's — while the same path, however it is spelled (a trailing slash,
+a dot, a relative path, a symlink alias), reuses its own: the clone is
+mounted at its canonical path and the volume keys on the same one.
+Within a generation its contents check themselves — Go's modules
 against `go.sum`, its build cache keyed by the toolchain, npm's cache by
 integrity — so a lockfile change only misses and downloads; the browsers
 live in the image, and `node_modules` is never cached (each `npm ci`
 installs it into the clone). Each container start removes the repo's older
 generations no container references (a volume named exactly
-`pf-verify-cache-<repo>-<32 hex>`, not the current one, that docker lists as
-unused; never another repo's volume, and docker refuses to remove one in
+`pf-verify-cache-<repo>-<32 hex generation>-<32 hex path identity>` of
+an older generation than the started one's, that docker lists as unused;
+every clone path's volume of the running generation stays, and never
+another repo's volume; docker refuses to remove one in
 use, so a verification still running on an older image keeps its volume
-until a later start). A cache suspected corrupt is removed with
+until a later start). Volumes accumulate one per clone path per image
+generation — every capsule, every integrate batch has its own path — and
+the pre-path shared shape `pf-verify-cache-<repo>-<32 hex>` is left to a
+person (docs/upgrade.md); the base-worktree directory a run mounts beside
+the clone shares the clone's volume, one path the naming scheme does not
+separate. A cache suspected corrupt is removed with
 `docker volume rm` of the current volume: the next run starts cold. It has its own pid and network
 namespaces, no docker socket, no `pf` binary, no operator configuration, and
 an environment that is the image's own plus, when the daemon's environment

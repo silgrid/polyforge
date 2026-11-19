@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional, Sequence
 import gate
 from pfstep import container, duration
 
+from .capsuleutil import path_id
 from .fakebox import FakeRuntime
 from .gatefix import (
     GATE_DOCKERFILE,
@@ -91,7 +92,8 @@ class GateRunTest(unittest.TestCase):
         self.assertNotEqual(s.labels[container.LABEL_BOOT], "")
         self.assertEqual(s.labels[container.LABEL_REPO], "app")
         self.assertEqual(s.labels[container.LABEL_WI], gate.GATE_WI)
-        self.assertEqual(s.volumes, {"pf-verify-cache-app-" + hashlib.sha256(GATE_DOCKERFILE.encode()).hexdigest()[:32]: "/cache"})
+        self.assertEqual(s.volumes, {"pf-verify-cache-app-" + hashlib.sha256(GATE_DOCKERFILE.encode()).hexdigest()[:32]
+                                      + "-" + path_id(d): "/cache"})
         self.assertEqual((s.cpus, s.memory, s.pids), (container.default_cpus(), "16g", 4096))
         self.assertEqual(self.fb.removes, ["cid-1"], "the gate removes its container")
         self.assertEqual([n for n in os.listdir(os.path.join(d, ".git")) if n.startswith("pf-gate-probe-")], [])
