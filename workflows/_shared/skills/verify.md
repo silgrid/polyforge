@@ -84,7 +84,11 @@ call, and a pass is the command's, not yours.
    - **2** — not judged (the environment, the scope engine, a container) — unless the result's `summary`
      carries `pf-verify-image-missing`: the image the step's `image` parameter names is not present
      on this machine and is never pulled — hand off `blocked` at once, no retry (a person prepares
-     the image or clears the parameter; the summary names the image). Otherwise: wait one
+     the image or clears the parameter; the summary names the image) — or carries
+     `pf-audit-param-invalid`: the `audit` parameter's value is neither `on` nor `off` —
+     hand off `blocked` at once, no retry (the owner fixes
+     `steps.<project>.verification.params.audit` or the override; the summary names the
+     value). Otherwise: wait one
      minute and run 2 again, at most twice more; still 2: hand off `blocked`, the result's
      `summary` and the last log's tail in the body, what the machine needs as `--reason`.
 

@@ -1024,6 +1024,32 @@ is, who prepares it and what a missing one means:
 [concepts.md](../concepts.md)'s verification-container section and
 [release.md](release.md)'s test gate.
 
+The second lane-declared parameter is `audit` (polyforge#138): the same two
+steps (`verification`, `full-gate`) declare it, default `"on"` — the lane's
+own dependency audit, the `audit` command the scope engine appends to every
+full report. Turning it off is **the project owner's decision, not the
+repository's**: a project whose owner decides against the audit sets
+`pf config set steps.<project>.verification.params.audit off` (and
+`steps.<project>.full-gate.params.audit off`), and a ticket overrides it
+per work item with
+`pf override <id> --step <step-id> --param audit=off`. Only the lower-case
+`on` and `off` are values — an unset or empty value reads as `on`, and any
+other value is a named error before any check or container starts
+(exit 2, the fixed mark `pf-audit-param-invalid` in the summary), never a
+silent on or off. With `off` the step asks the scope engine with
+`--audit off`, so no full report plans the dependency audit, and the
+results say so — the verification's result file and the full gate's
+gate.json and green-tag record carry the merged source hint
+`PF_PARAM_AUDIT=off，来自项目配置或 pf override` (which layer turned it
+off, the project's config or a `pf override`, is not distinguished). No
+key of a repository's `verify-scope.conf` can turn the audit off or loosen
+it — see the "dependency-audit gate" section below; the switch lives on
+the owner's side alone. A green tag written with the audit off hashes a
+plan without the audit command, so the release's green-tag check (which
+recomputes the plan with the audit on) does not accept it as a
+full-audit credential — the gate is simply run again where an audit is
+required.
+
 #### Queued work items — params before the claim (polyforge#79)
 
 A queued work item's per-ticket params ride the reserved `step_params`
