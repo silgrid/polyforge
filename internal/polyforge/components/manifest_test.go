@@ -21,7 +21,7 @@ import (
 // categories.
 func TestManifestRoundTrip(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "v0.2.4")
-	want := writeVersionDir(t, dir, seedSpec{})
+	writeVersionDir(t, dir, seedSpec{})
 
 	m, err := ReadManifest(dir)
 	if err != nil {
