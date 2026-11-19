@@ -529,27 +529,20 @@ func supervisionCheck(daemonUp bool, daemonEnvNames []string) (c doctorCheck) {
 			c.Status, c.Detail = "warn", c.Detail+" — "+layoutNote
 		}
 	}()
-	// polyforge#160: a daemon the container supervisor started — its
-	// environment carries the supervision marker, checked inside a
-	// container — is supervised: the container's `pf supervise` restarts
-	// a crash and forwards the stop. Judged only when no tmux loop and
-	// no systemd unit answers first: GET /status reports environment
-	// NAMES only, so a tmux-started daemon inside a container (its
-	// marker says tmux:, which the names cannot tell apart) keeps its
+	// polyforge#160: a daemon the container supervisor started is
+	// supervised — the container's `pf supervise` restarts a crash and
+	// forwards the stop. The judgment is the one helper both rows share
+	// (r1#2), so a tmux-started daemon inside a container keeps its
 	// own, correct pass verdict and detail.
-	loop, err := supervisor.LoopRunning()
-	tmux, systemd := loop, false
-	if !loop {
-		systemd = supervisor.SystemdActive()
-	}
-	if !tmux && !systemd && supervisor.InContainer() && envNamesCarry(daemonEnvNames) {
+	if containerSupervisedDaemon(daemonUp, daemonEnvNames) {
 		c.Status, c.Detail = "pass", "the daemon runs under the container supervisor (`pf supervise`: a crash is restarted, a stop signal is forwarded and the daemon shuts down within the container's grace)"
 		return c
 	}
+	loop, err := supervisor.LoopRunning()
 	switch {
-	case tmux:
+	case loop:
 		c.Status, c.Detail = "pass", "the daemon runs under the restart loop in tmux session "+supervisor.SessionName+" (a crash is restarted within ~5s; after a reboot the next harness session runs pf daemon ensure)"
-	case systemd:
+	case supervisor.SystemdActive():
 		c.Status, c.Detail = "pass", "systemd unit "+supervisor.SystemdUnit+" is active"
 	case errors.Is(err, supervisor.ErrNoTmux):
 		c.Status, c.Detail = "warn", "the daemon runs without supervision and tmux is not installed: a crash is not restarted — install tmux, then: "+fix
@@ -579,9 +572,20 @@ func cellLayoutNote(dataDir string) (bool, string) {
 }
 
 // containerSupervisedDaemon answers the one judgment both the
-// supervision row and the prerequisites row make (polyforge#160).
+// supervision row and the prerequisites row make (polyforge#160): a
+// live daemon, inside a container, whose environment carries the
+// supervision marker, and NO tmux loop or systemd unit answering first
+// (GET /status reports environment NAMES only, so a tmux-started daemon
+// inside a container keeps its own verdict and is never read as
+// container-supervised).
 func containerSupervisedDaemon(daemonUp bool, daemonEnvNames []string) bool {
-	return false
+	if !daemonUp || !supervisor.InContainer() || !envNamesCarry(daemonEnvNames) {
+		return false
+	}
+	if loop, _ := supervisor.LoopRunning(); loop {
+		return false
+	}
+	return !supervisor.SystemdActive()
 }
 
 // envNamesCarry answers whether the daemon's environment variable names

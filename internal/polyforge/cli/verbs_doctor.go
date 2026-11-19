@@ -474,7 +474,7 @@ func runDoctorChecks(ctx *Context, pruneScratch, pruneCapsules, pruneRebuildable
 		}
 	}
 	r.sockOK, r.sockMsg, r.status = probeDaemonSocket(cfg.DaemonSocket)
-	r.containerSupervised = r.sockOK && supervisor.InContainer() && envNamesCarry(r.status.EnvNames)
+	r.containerSupervised = containerSupervisedDaemon(r.sockOK, r.status.EnvNames)
 	r.reachOK, r.reachMsg = probeServerReach(cfg.DaemonSocket, r.sockOK, r.profile)
 
 	for _, d := range doctorChecks {
