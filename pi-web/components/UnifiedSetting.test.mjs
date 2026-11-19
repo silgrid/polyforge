@@ -77,6 +77,48 @@ test("the unified setting shows all four situations correctly", () => {
   assert.ok(!unsupported.includes("Unify to the current value"), "an unsupported state offers the unify button");
 });
 
+/** Every element of a rendered tree, in order (React elements are plain objects). */
+function collect(node, out = []) {
+  if (Array.isArray(node)) {
+    for (const child of node) collect(child, out);
+  } else if (node && typeof node === "object" && typeof node.type !== "undefined" && node.props) {
+    out.push(node);
+    collect(node.props.children, out);
+  }
+  return out;
+}
+
+/** An element subtree's visible text (strings and nested children joined). */
+function textOf(node) {
+  if (Array.isArray(node)) return node.map(textOf).join("");
+  if (node === null || node === undefined || typeof node !== "object") return typeof node === "string" ? node : "";
+  return textOf(node.props?.children);
+}
+
+/** The button whose visible text is exactly `label` (r1#1's wiring checks walk the tree). */
+function buttonByText(root, label) {
+  return collect(root).find((element) => element.type === "button" && textOf(element.props.children) === label);
+}
+
+test("the unify button submits exactly once per user click, never by rendering (r1#1)", () => {
+  const values = [ready("pi", "claude-opus-5-5"), ready("claude", "claude-sonnet-5-5")];
+  let calls = 0;
+  const tree = UnifiedSetting({ texts: TEXTS, current: "claude-opus-5-5", values, onUnify: () => { calls += 1; } });
+  const button = buttonByText(tree, "Unify to the current value");
+  assert.ok(button, "the inconsistent state renders no unify button");
+  assert.notEqual(button.props.onClick, undefined, "the unify button is not wired to onUnify");
+  button.props.onClick();
+  assert.equal(calls, 1, "one user click must submit exactly once");
+  // Rendering alone never submits (Q6 A: only a user click submits).
+  let renders = 0;
+  UnifiedSetting({ texts: TEXTS, current: "claude-opus-5-5", values, onUnify: () => { renders += 1; } });
+  assert.equal(renders, 0, "rendering alone submitted");
+  // A consistent state renders no button to click at all.
+  const consistent = UnifiedSetting({ texts: TEXTS, current: "a", values: [ready("pi", "a"), ready("claude", "a")], onUnify: () => { calls += 1; } });
+  assert.equal(buttonByText(consistent, "Unify to the current value"), undefined, "a consistent state offers a unify button");
+  assert.equal(calls, 1, "the consistent render submitted");
+});
+
 test("the component is presentational: every word is a prop, no i18n provider needed", () => {
   // Like SettingsUi.tsx: it renders outside the i18n provider, so every word
   // it shows came in as a prop (and no state of its own exists to fetch with).
