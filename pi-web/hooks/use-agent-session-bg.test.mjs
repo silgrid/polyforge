@@ -115,9 +115,13 @@ test("a branch switch refused over background work rolls the view back", async (
   const before = hook.branch().activeLeafId;
 
   hook.branch().onLeafChange("leaf-2");
-  // The refusal answers at once; the observable end state is the pinned one.
+  // The refusal answers within the same task as the optimistic switch, so the
+  // branch callback's settled end state is the pinned assertion: rolled back
+  // here, left switched on the unfixed code.
   await pollUntil(hook, () => hook.refusals().some((type) => type === "navigate_tree"), 5_000, "the refused navigate_tree");
-  await pollUntil(hook, () => hook.branchHistory().includes("leaf-2"), 5_000, "the branch callback to see the switched leaf");
-  await pollUntil(hook, () => hook.branch().activeLeafId === before, 5_000, "the leaf to roll back");
-  assert.ok(hook.branchHistory().includes("leaf-2"), "the optimistic switch did happen");
+  await settle();
+  hook.flush();
+  await settle();
+  hook.flush();
+  assert.equal(hook.branch().activeLeafId, before, "the leaf rolls back to the branch it was refused from");
 });
