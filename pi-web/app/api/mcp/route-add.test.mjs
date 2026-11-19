@@ -460,7 +460,9 @@ test("a fresh folder's trusted add rolls pi's entry back too when the claude hal
   assert.equal(body.trustKept, true, "the folder's trust is kept and said so");
   assert.deepEqual(body.trust, { requiresTrust: true, trusted: true, decision: true, decisionPath: fresh, inherited: false });
   assert.deepEqual(await trustFile(), { ...before, [fresh]: true }, "the trust itself stays");
-  // A retry meets the same refusal, never a name-taken from a half-written add.
-  const retry = await add({ text: "npx -y @scope/lint-mcp", scope: "project", cwd: fresh, trustFolder: true, harnesses: ["pi", "claude"] });
+  // A retry meets the same refusal, never a name-taken from a half-written
+  // add: the folder is trusted now, so it goes as a plain project add.
+  const retry = await add({ text: "npx -y @scope/lint-mcp", scope: "project", cwd: fresh, harnesses: ["pi", "claude"] });
   assert.deepEqual([retry.status, retry.body.reason], [409, "claude-unwritable"]);
+  assert.deepEqual((await readJson(projectPath(fresh))).mcpServers, {}, "still no half-written entry");
 });
