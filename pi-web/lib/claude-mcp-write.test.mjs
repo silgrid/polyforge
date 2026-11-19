@@ -10,7 +10,7 @@ import "#test-env";
 import assert from "node:assert/strict";
 import { chmodSync } from "node:fs";
 import { realpathSync } from "node:fs";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -27,6 +27,7 @@ async function stub(t) {
   t.after(() => rm(root, { recursive: true, force: true }));
   const log = join(root, "spawns.jsonl");
   const cwd = join(root, "proj");
+  await mkdir(cwd, { recursive: true });
   const env = {
     ...process.env,
     CLAUDE_MCP_STUB_LOG: log,
@@ -141,6 +142,7 @@ test("a modification whose rollback also fails says so, and never reports succes
   t.after(() => rm(root, { recursive: true, force: true }));
   const log = join(root, "spawns.jsonl");
   const cwd = join(root, "proj");
+  await mkdir(cwd, { recursive: true });
   const failing = {
     ...process.env,
     CLAUDE_MCP_STUB_LOG: log,
