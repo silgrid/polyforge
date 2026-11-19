@@ -71,7 +71,10 @@ type (
 )
 
 // settingsEnvKeys are the env block keys the doctor reports facts about.
-var settingsEnvKeys = []string{"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_CONFIG_DIR"}
+// CLAUDE_CODE_OAUTH_TOKEN joined with 85a2 (polyforge#142): a setup-token
+// mint is one of the three credential kinds the account page writes and
+// shows; still set/unset only, never a value.
+var settingsEnvKeys = []string{"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR"}
 
 // settingsTokenPrefix is the OAuth setup-token prefix Claude Code mints
 // (`claude setup-token`).
