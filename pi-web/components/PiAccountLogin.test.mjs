@@ -28,14 +28,19 @@ test("the pi pane is the one place to sign in: the rows and the Add provider but
   assert.match(html, /Add provider/, "the Add provider entry is missing from the account pane");
 });
 
-test("a stored Anthropic subscription shows status and logout alone — never a login (AC8)", () => {
+test("a stored Anthropic subscription shows status and logout alone — never a login or a re-login (AC8)", () => {
   const html = renderToStaticMarkup(h(I18nProvider, null, h(OAuthDetail, {
     provider: { id: "anthropic", name: "Anthropic (Claude Pro/Max)", usesCallbackServer: false, loggedIn: true },
     onRefresh: noop,
   })));
   assert.match(html, /Connected/, "the stored credential's status is missing");
   assert.match(html, /Disconnect/, "the logout is missing");
-  assert.ok(!html.includes(">Login<"), "a login is offered for the stored subscription");
+  // no login-class button of any label: the buttons are counted, and the
+  // only one may be Disconnect (the login button's label is "Re-login"
+  // once logged in — the old assertion on "Login" never saw it)
+  const buttons = [...html.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((m) => m[1]);
+  assert.deepEqual(buttons.filter((label) => label !== "Disconnect"), [], `a login-class button is offered for the stored subscription: ${JSON.stringify(buttons)}`);
+  assert.ok(buttons.includes("Disconnect"), "the logout is missing");
 });
 
 test("an offered provider keeps its login button; the API-key entry stays for Anthropic (AC4/AC8)", () => {
