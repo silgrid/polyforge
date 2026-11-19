@@ -153,6 +153,15 @@ export function createTerminal(cwd: string, cols: number, rows: number, id: stri
   return id;
 }
 
+/**
+ * A one-shot login terminal (polyforge#142, 85a2 AC3/Q5) — placeholder: the
+ * test-first commit carries only the signature so the suite's assertions
+ * run red; the implementation lands with the unit.
+ */
+export function createLoginTerminal(_argv: string[], _env: Record<string, string>, _cwd: string, _cols: number, _rows: number, _id?: string): string {
+  return "";
+}
+
 export function hasTerminal(id: string): boolean {
   return registry().has(id);
 }
