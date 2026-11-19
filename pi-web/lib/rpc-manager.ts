@@ -3304,13 +3304,11 @@ export async function startRpcSession(
     // pi-web's visibility preference runs in front of the binding's named projection,
     // so a hidden skill leaves the catalog while staying nameable.
     const skillsExtensionFactories = skillsBinding?.loaderOptions.extensionFactories;
-    const sessionSkillsOverrideFn = sessionSkillsOverride(agentDir);
+    const sessionSkillsOverrideFn = sessionSkillsOverride(agentDir, skillsBinding?.loaderOptions.skillsOverride);
     const skillsLoaderOptions = skillsBinding
       ? {
           noSkills: skillsBinding.loaderOptions.noSkills,
-          ...(skillsBinding.loaderOptions.skillsOverride
-            ? { skillsOverride: skillsBinding.loaderOptions.skillsOverride }
-            : {}),
+          ...(sessionSkillsOverrideFn ? { skillsOverride: sessionSkillsOverrideFn } : {}),
         }
       : sessionSkillsOverrideFn
         ? { skillsOverride: sessionSkillsOverrideFn }
