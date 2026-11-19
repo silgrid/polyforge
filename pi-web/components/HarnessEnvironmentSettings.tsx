@@ -63,8 +63,9 @@ export function HarnessEnvironmentSettings({ cwd }: { cwd: string | null }) {
       try {
         const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : "";
         const listResponse = await fetch(`/api/harness${query}`);
+        if (!listResponse.ok) throw new Error(`HTTP ${listResponse.status}`);
         const list = await listResponse.json() as { harnesses?: HarnessListEntry[] } | null;
-        const entries = listResponse.ok && Array.isArray(list?.harnesses) ? list!.harnesses! : [];
+        const entries = Array.isArray(list?.harnesses) ? list!.harnesses! : [];
         for (const entry of entries) {
           try {
             const response = await fetch(`/api/harness/${encodeURIComponent(entry.id)}/env${query}`);

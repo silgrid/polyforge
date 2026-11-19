@@ -111,11 +111,13 @@ export function HarnessEffectiveSettings({ cwd }: { cwd: string | null }) {
     let cancelled = false;
     const read = async () => {
       const next: HarnessEffectiveGroupView[] = [];
+      setListError(null);
       try {
         const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : "";
         const listResponse = await fetch(`/api/harness${query}`);
+        if (!listResponse.ok) throw new Error(`HTTP ${listResponse.status}`);
         const list = await listResponse.json() as { harnesses?: HarnessListEntry[] } | null;
-        const entries = listResponse.ok && Array.isArray(list?.harnesses) ? list!.harnesses! : [];
+        const entries = Array.isArray(list?.harnesses) ? list!.harnesses! : [];
         for (const entry of entries) {
           try {
             const response = await fetch(`/api/harness/${encodeURIComponent(entry.id)}/effective-config${query}`);
@@ -166,7 +168,7 @@ export function HarnessEffectiveSettings({ cwd }: { cwd: string | null }) {
       <p className="settings-general-description">{t("settings.harnessEffectiveNote")}</p>
       {listError && <p role="alert" className="settings-general-error">{t("settings.harnessListFailed", { error: listError })}</p>}
       {groups === null && <p className="settings-general-description">{t("settings.harnessEnvReading")}</p>}
-      {groups !== null && groups.length === 0 && (
+      {groups !== null && groups.length === 0 && !listError && (
         <p className="settings-general-description">{t("settings.harnessEffectiveNoHarnesses")}</p>
       )}
       {groups?.map((group) => (
