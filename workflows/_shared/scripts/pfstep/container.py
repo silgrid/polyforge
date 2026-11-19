@@ -629,17 +629,21 @@ def _cache_volume_prefix(repo: str) -> str:
     return "pf-verify-cache-" + tag_safe(repo) + "-"
 
 
-def cache_volume(repo: str, dockerfile: bytes) -> str:
+def cache_volume(repo: str, dockerfile: bytes, repo_dir: str = "") -> str:
     """The repo's named cache volume for the image of dockerfile:
-    pf-verify-cache-<repo>-<generation>, the image tag's own hash."""
+    pf-verify-cache-<repo>-<generation>, the image tag's own hash. The
+    clone path repo_dir names arrives with this signature; the volume's
+    path field is the next change's (polyforge#153)."""
     return _cache_volume_prefix(repo) + _generation(dockerfile)
 
 
-def image_cache_volume(repo: str, digest: str) -> str:
+def image_cache_volume(repo: str, digest: str, repo_dir: str = "") -> str:
     """The repo's named cache volume of a prepared image:
     pf-verify-cache-<repo>-<the digest's first 32 hex> — the generation
     shape of the built volumes (prune_cache_volumes' rule), so a new
-    image gives a new, empty volume and the older one is pruned."""
+    image gives a new, empty volume and the older one is pruned. The
+    clone path repo_dir arrives with this signature; the volume's path
+    field is the next change's (polyforge#153)."""
     return _cache_volume_prefix(repo) + digest[digest.rfind(":") + 1:][:32]
 
 
