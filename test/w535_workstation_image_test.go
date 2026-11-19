@@ -125,7 +125,16 @@ func TestWorkstationImage(t *testing.T) {
 
 	t.Run("the Containerfile builds the base and nothing docker-shaped creeps in", func(t *testing.T) {
 		body := w535Deliverable(t, "dist/workstation/Containerfile")
-		norm := regexp.MustCompile(`\s+`).ReplaceAllString(body, " ")
+		// judge the recipe's commands, never its prose: comments are
+		// dropped before any content assertion (r1#2 — the first cut
+		// matched the recipe's own explanation of what it refuses).
+		var cmds []string
+		for _, line := range strings.Split(body, "\n") {
+			if trimmed := strings.TrimSpace(line); !strings.HasPrefix(trimmed, "#") {
+				cmds = append(cmds, line)
+			}
+		}
+		norm := regexp.MustCompile(`\s+`).ReplaceAllString(strings.Join(cmds, "\n"), " ")
 		// the toolchain pins agree with the repo's own pins:
 		// go.mod's toolchain (toolchain_pin_test's bar) and
 		// Dockerfile.verify's node stage.
