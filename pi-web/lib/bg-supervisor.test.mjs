@@ -150,9 +150,10 @@ test("a log past its byte cap stops the process group with a log-limit reason", 
 });
 
 test("the wrapper drains the pipes before killing the group, so the log keeps the command's last bytes", async (t) => {
-  // Past the 64 KiB pipe capacity: when the shell exits, the command's tail is
-  // still in flight inside the pipe, and only a drained shutdown keeps it.
-  const total = 70_000;
+  // A 1 MiB burst outruns the wrapper's reader: when the shell exits, a pipe
+  // worth of the command's output is still in flight, and only a shutdown that
+  // drains the pipes before killing the group keeps it.
+  const total = 1_048_576;
   const task = await spawnTask(`head -c ${total} /dev/zero | tr '\\0' x`);
   t.after(() => cleanup(task));
   const result = await task.done;
@@ -161,5 +162,17 @@ test("the wrapper drains the pipes before killing the group, so the log keeps th
   await pollUntil(() => !groupAlive(task.pgid), 5_000, "the ended group to disappear");
   const size = (await stat(task.logPath)).size;
   assert.equal(size, total, "the log holds the whole output, last bytes included");
+  await rm(task.dir, { recursive: true, force: true });
+});
+
+test("output a straggler writes after the shell exits still lands in the log (bounded drain)", async (t) => {
+  // The shell exits at once and leaves a grandchild holding the pipe: the
+  // wrapper must not kill the group before the straggler's bytes are read.
+  const task = await spawnTask("echo head; { sleep 0.5; echo tail; } & exit 0");
+  t.after(() => cleanup(task));
+  const result = await task.done;
+  assert.equal(result.exitCode, 0);
+  await pollUntil(async () => (await readFile(task.logPath, "utf8").catch(() => "")) === "head\ntail\n", 5_000, "the straggler's tail to land in the log");
+  await pollUntil(() => !groupAlive(task.pgid), 5_000, "the drained group to disappear");
   await rm(task.dir, { recursive: true, force: true });
 });
