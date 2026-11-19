@@ -19,9 +19,9 @@
 // `PASS harness-settings-85` only when every scenario passed. Every wait
 // polls its condition to a bounded deadline; no fixed sleep.
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { chromium } from "playwright";
 import { ACTION_MS, COLD_MS, NAV_MS } from "./timeouts.mjs";
 import { assertNoDevServer, createHarness, createWaitUntil, seedStorage } from "./harness.mjs";
@@ -32,12 +32,30 @@ const home = join(work, "home");
 const agentDir = join(home, ".pi", "agent");
 mkdirSync(agentDir, { recursive: true });
 
+// A stub `claude` for the one-shot login terminal (S85-12): `auth login`
+// prints its ready line and waits — a real claude prints the authorization
+// URL and waits for the pasted code. Anything else delegates to the
+// recorded unit stub (the initialize probe). Only S85-12's terminal runs
+// it; every other claude face is mocked at the browser.
+const stubBin = join(work, "stub-bin");
+mkdirSync(stubBin, { recursive: true });
+const stubClaude = join(stubBin, "claude");
+writeFileSync(stubClaude, `#!/bin/sh
+if [ "$1" = "auth" ] && [ "$2" = "login" ]; then
+  printf '%s\r\n' "85 STUB LOGIN READY - open the URL and paste the code"
+  sleep 60
+  exit 0
+fi
+exec node ${join(dirname(new URL(import.meta.url).pathname), "..", "lib", "__fixtures__", "claude-stub", "claude.mjs")} "$@"
+`);
+chmodSync(stubClaude, 0o755);
+
 const h = createHarness({
   timeout: 30_000,
   coldFirst: true,
   errors: ["pageerror", "console", "5xx"],
   server(name) {
-    return { name, logFile: join(work, `server-${name}.log`), env: { HOME: home, PI_CODING_AGENT_DIR: agentDir } };
+    return { name, logFile: join(work, `server-${name}.log`), env: { HOME: home, PI_CODING_AGENT_DIR: agentDir, PATH: `${stubBin}:${process.env.PATH}` } };
   },
 });
 
@@ -122,6 +140,7 @@ const T = {
   S9: "S85-09: a failed harness-list read is a visible reason in both panes, never a contradictory empty registry",
   S10: "S85-10: the account tab lists the harnesses, shows the interactive card and the per-Cell rows with every field, and never a credential value",
   S11: "S85-11: pi's sign-in lives only on Account › pi — the legacy Models tab has no login, API-key entry or Add-provider picker, and the never-offered Anthropic subscription appears nowhere",
+  S12: "S85-12: the account page's one-shot login terminal attaches and streams the declared command's output — the real login path a human would walk (review r1#1)",
 };
 const failures = new Map(Object.values(T).map((title) => [title, []]));
 const ran = new Set();
@@ -377,6 +396,51 @@ try {
     assert.ok(piText.includes("Add provider"), "the account pi pane lost the Add provider entry");
     assert.ok(piText.includes("Anthropic"), "the Anthropic API-key entry is gone from the account pane");
     assert.ok(!piText.includes("Anthropic (Claude Pro/Max)"), "the never-offered Anthropic subscription appears");
+    await page.context().close();
+  });
+
+  // S85-12 — polyforge#142 (85a2 AC3, review r1#1): the account page's
+  // 「打开终端」 runs the declared login command in the one-shot terminal, and
+  // the embedded panel ATTACHES to it — the terminal's output reaches the
+  // page (the stub claude prints its ready line and waits, exactly where a
+  // real claude auth login prints its URL and waits for the code). Closing
+  // the terminal tears it down. The red of the round-1 defect under review
+  // was exactly here: the panel's start request failed, the stream never
+  // opened, and this poll never settled.
+  await part("S12", "the one-shot login terminal attaches", async () => {
+    const page = await newPage();
+    const ACCOUNT = {
+      claude: { available: true, loggedIn: false, authMethod: "none", configDirectory: join(home, ".claude"), reason: null,
+        envCredentials: { ANTHROPIC_AUTH_TOKEN: false, ANTHROPIC_BASE_URL: false, ANTHROPIC_API_KEY: false, CLAUDE_CODE_OAUTH_TOKEN: false }, consoleProfile: "absent" },
+      cells: [],
+      doctorError: null,
+    };
+    await page.context().route(/\/api\/settings\/account/, (route) => route.fulfill({ json: ACCOUNT }));
+    await page.context().route(/\/api\/harness(?:\/|\?|$)/, (route) => route.fulfill({ json: { harnesses: [
+      { id: "pi", version: "1.5.0", versionKnown: true, knownRange: null, versionReason: null, writable: true, capabilities: { id: "pi", loginCommands: [], credentialsFollowConfigRoot: true } },
+      { id: "claude", version: "2.1.322", versionKnown: true, knownRange: null, versionReason: null, writable: true, capabilities: { id: "claude", loginCommands: [
+        { id: "auth-login", argv: ["claude", "auth", "login"], cell: false },
+      ], credentialsFollowConfigRoot: true } },
+    ] } }));
+    await openSettings(page);
+    await tab(page, /^Account$/).click({ timeout: ACTION_MS });
+    const account = sectionHost(page, "account");
+    await account.locator(".config-sidebar-item").filter({ hasText: "Claude" }).click({ timeout: ACTION_MS });
+    const loginButton = account.locator('[data-login-command="auth-login"]');
+    await loginButton.waitFor({ state: "visible", timeout: ACTION_MS });
+    await loginButton.click({ timeout: ACTION_MS });
+    // the panel attaches and the command's output streams: poll the
+    // terminal's own text, not a static heading
+    const terminal = account.locator("[data-account-login-terminal]");
+    await terminal.waitFor({ state: "visible", timeout: ACTION_MS });
+    const termText = await waitFor(async () => {
+      const text = await terminal.innerText();
+      return text.includes("85 STUB LOGIN READY") ? text : false;
+    }, ACTION_MS, "the login terminal never showed the command's output");
+    assert.ok(!termText.includes("SENTINEL"), "a value leaked into the terminal");
+    // closing tears it down: the panel goes and the terminal with it
+    await account.getByRole("button", { name: "Close terminal" }).click({ timeout: ACTION_MS });
+    await waitFor(async () => !(await terminal.count()), ACTION_MS, "the closed login terminal stayed mounted");
     await page.context().close();
   });
 
