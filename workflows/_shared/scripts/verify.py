@@ -49,6 +49,16 @@ Dockerfile or not; an image the machine does not carry is `not judged`
 (exit 2, the fixed mark ``pf-verify-image-missing`` in the summary: a
 person prepares it, a retry cannot).
 
+The step's ``audit`` parameter (``PF_PARAM_AUDIT``, polyforge#138):
+``on``, empty and unset keep today's behavior byte for byte; ``off`` —
+the project owner's decision, set per project in the workspace config
+or by a ticket override, never by a repository's own conf — hands every
+scope-engine invocation ``--audit off``, so no full report plans the
+engine-appended dependency audit, and the result records the closure
+(the merged source hint, the two layers not distinguished); any other
+value is a named error before any check or container starts (exit 2,
+the fixed mark ``pf-audit-param-invalid`` in the summary).
+
 ``--analysis`` names the build's change analysis
 (``artifacts/build/change-analysis.json``): the tests it lists run beside
 the plan — the union is add-only, the engine's selection never narrowed.
@@ -131,6 +141,7 @@ from pfstep import container, duration, git, gostr, jsonout, result, runner, ste
 from pfstep import progress  # noqa: E402
 from pfstep import targetbranch  # noqa: E402
 from pfstep.analysis import Analysis, AnalysisDecl, read_analysis, static_problem  # noqa: E402
+from pfstep.audit import AUDIT_OFF_NOTE, AUDIT_INVALID_MARK, AuditParamError, read_audit  # noqa: E402
 from pfstep.carries import file_carries, glob_match  # noqa: E402
 from pfstep.completion import completion_proof, harness_command, read_go_harness  # noqa: E402
 from pfstep.deadline import default_deadline_for  # noqa: E402
@@ -420,6 +431,7 @@ class Verification:
         tier_reason: str = "",
         image: str = "",
         image_source: str = "",
+        audit: str = "on",
     ) -> None:
         self.capsule = capsule
         self.engine = engine
@@ -445,6 +457,10 @@ class Verification:
         # "flag" (--image) or "param" (PF_PARAM_IMAGE)
         self.image = image
         self.image_source = image_source
+        # polyforge#138: the audit step parameter — "off" hands every
+        # engine invocation --audit off (the project owner's switch; on,
+        # empty and unset hand nothing, today's argv byte for byte)
+        self.audit = audit
         self.n, self.run_dir = self._run_dir(run_dir)
         start = time.time()
         # the light tier's rerun budget is its own knob; a full run is
@@ -686,6 +702,8 @@ class Verification:
         the invocation, why there is none)."""
         engine = rr.box.engine if rr.box is not None else self.engine
         argv = engine_argv_of(engine) + ["--json", "--light" if light else "--full"]
+        if self.audit == "off":
+            argv += ["--audit", "off"]
         if base:
             argv += ["--base", base]
         ref = " ".join(argv)
@@ -1682,6 +1700,8 @@ def _code_list(xs: Optional[Sequence[str]]) -> str:
 def render_report(res: Dict[str, Any]) -> str:
     """report-mechanical.md: the mechanical section of the verification report."""
     b: List[str] = ["## Mechanical run (run %d)\n\n" % res["run"]]
+    if res.get("audit_disabled"):
+        b.append("Dependency audit disabled: %s.\n\n" % res["audit_disabled"])
     if res.get("incomplete"):
         b.append("**Incomplete — no merged-tree proof could be made:** %s\n\n" % res["incomplete"])
     else:
@@ -1789,6 +1809,8 @@ def details_of(res: Dict[str, Any]) -> Dict[str, Any]:
     d: Dict[str, Any] = {"tier": res["tier"]}
     if res.get("image"):
         d["image"] = res["image"]
+    if res.get("audit_disabled"):
+        d["audit_disabled"] = res["audit_disabled"]
     if res["mechanical_verdict"]:
         d["mechanical_verdict"] = res["mechanical_verdict"]
     if res.get("fail_reason"):
@@ -1960,6 +1982,13 @@ def run(
     if not os.path.isfile(eng):
         raise Usage("no scope engine at %s (--engine names it; the shared tree's is <PF_SHARED_DIR>/scripts/verify-scope)"
                     % eng)
+    # polyforge#138: the audit step parameter, validated before any check
+    # or container starts — any other value a named error, never a silent
+    # on or off.
+    try:
+        audit = read_audit(env)
+    except AuditParamError as err:
+        raise Usage("%s (%s)" % (err, AUDIT_INVALID_MARK)) from None
     decls: List[UnitRunDecl] = []
     if a.unit_runs:
         try:
@@ -2004,7 +2033,7 @@ def run(
         tier, tier_reason = resolve_tier(capsule, a.tier)
         v = Verification(capsule, eng, window, logs, decls, cmd_env, say, co, analysis=analysis,
                          tier=tier, tier_requested=a.tier, tier_reason=tier_reason,
-                         image=image, image_source=image_source)
+                         image=image, image_source=image_source, audit=audit)
     except OSError as err:
         res.summary = "the verification could not run: %s" % err
         return 2
@@ -2013,6 +2042,10 @@ def run(
     doc = v.run()
     if image:
         doc["image"] = {"value": image, "source": image_source}
+    if audit == "off":
+        # the closure note AC3 demands: the merged source hint, the two
+        # layers not distinguished (the owner's 1-B ruling)
+        doc["audit_disabled"] = AUDIT_OFF_NOTE
     try:
         with open(os.path.join(v.run_dir, "result.json"), "w", encoding="utf-8") as f:
             f.write(json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
@@ -2027,16 +2060,19 @@ def run(
     for name, m in doc["merge_outcomes"].items():
         if m["head"]:
             res.heads[name] = m["head"]
+    # the closure rides every summary (AC3: a reviewer sees the audit was
+    # off without opening result.json); an on run's summary stays as today
+    audit_note = "; dependency audit off (%s)" % doc["audit_disabled"] if doc.get("audit_disabled") else ""
     if doc.get("incomplete"):
-        res.summary = "not judged: " + doc["incomplete"]
+        res.summary = "not judged: " + doc["incomplete"] + audit_note
         return 2
     if doc["mechanical_verdict"] != "pass":
         fails = sum(1 for c in doc["checks"] if c["status"] == "fail")
-        res.summary = "%d check(s) failed: %s" % (fails, doc.get("fail_reason", "").split("\n", 1)[0])
+        res.summary = "%d check(s) failed: %s%s" % (fails, doc.get("fail_reason", "").split("\n", 1)[0], audit_note)
         return 1
     over = ", ".join("repos/" + r["name"] for r in doc["repos"] or [])
-    res.summary = "%s verification passed: %d check(s) over %s (tier %s)" % (
-        doc["tier"]["effective"], len(doc["checks"]), over, doc["tier"]["effective"])
+    res.summary = "%s verification passed: %d check(s) over %s (tier %s)%s" % (
+        doc["tier"]["effective"], len(doc["checks"]), over, doc["tier"]["effective"], audit_note)
     return 0
 
 

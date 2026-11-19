@@ -445,7 +445,18 @@ step's `image` parameter (or `--image`; the flag wins and the result's
 `image` record names the value and where it came from) names a prepared
 image every touched repo's bar then runs in, Dockerfile or not — never
 built, never pulled; a machine without it is not judged (exit 2, the
-fixed mark `pf-verify-image-missing` in the summary, the image named). The union
+fixed mark `pf-verify-image-missing` in the summary, the
+image named). The step's `audit`
+parameter (the dispatch's `PF_PARAM_AUDIT`, default `on`; only the
+lower-case `on` and `off`, empty or unset reads as `on`) turns the
+dependency audit off: with `off` every scope-engine invocation is handed
+`--audit off`, no full report plans the `audit` command, and the step's
+result names the closure — the run's document and the result file's
+details carry `audit_disabled` with the merged source hint
+(`PF_PARAM_AUDIT=off，来自项目配置或 pf override`), the summary and the
+mechanical report say the audit was off. Any other value is a named error
+before any check or container starts (exit 2, the fixed mark
+`pf-audit-param-invalid` in the summary, the value named). The union
 with the build's change analysis is add-only: the change analysis's listed
 tests run beside the plan, add-only, under the analysis's supplement cap —
 a listed test that does not exist fails its check naming it, and the
@@ -616,7 +627,18 @@ dispatch's `PF_PARAM_IMAGE`, else `--image`, which wins and is recorded as
 the value's source) names a prepared image every gated repo runs in — one
 image for the project, Dockerfile or not, resolved to its local ID, never
 built, never pulled; a machine without it is not judged either (exit 2,
-the fixed mark `pf-verify-image-missing` in the summary). The container's
+the fixed mark `pf-verify-image-missing` in the summary). The step's
+`audit` parameter (the dispatch's
+`PF_PARAM_AUDIT`, default `on`; only the lower-case `on` and `off`, empty
+or unset reads as `on`) turns the dependency audit off: with `off` the
+engine is handed `--audit off`, no full report plans the `audit` command,
+the result (gate.json) carries `audit_off` with the merged source hint
+(`PF_PARAM_AUDIT=off，来自项目配置或 pf override`) and so does a green
+tag's record — a tag of the other audit state is never reused, and a tree
+whose own scope engine predates the `--audit` option is blocked by name
+before any container starts. Any other value is a named error before any
+container or check starts (exit 2, the fixed mark `pf-audit-param-invalid`
+in the summary). The container's
 limits are the script's flags (`--cpus` / `--memory` / `--pids`, default
 min(8, cores) / `16g` / 4096; design r2 D7).
 
