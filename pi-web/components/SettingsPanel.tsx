@@ -20,6 +20,7 @@ import { PluginsConfig } from "./PluginsConfig";
 import { PolyforgeConfig } from "./PolyforgeConfig";
 import { McpConfig } from "./McpConfig";
 import { ClaudeSettings } from "./ClaudeSettings";
+import { AccountSettings } from "./AccountSettings";
 
 interface Props {
   cwd: string | null;
@@ -389,10 +390,10 @@ export function SettingsPanel({
           )}
           <ConfigDetailNavigationContext.Provider value={detailNavigation}>
           {sectionHost("general", <HarnessGeneralSettings cwd={cwd} sessionId={sessionId} onSessionReloaded={onSessionReloaded} quoteSelectionEnabled={quoteSelectionEnabled} onQuoteSelectionChange={onQuoteSelectionChange} />)}
-          {/* The three concept placeholders (85a1b): their content is 85a2's
-              (account), 85a3's (models) and 85a4's (permission, whose Claude
-              part is where a stored old `claude` navigation value lands). */}
-          {sectionHost("account", <HarnessSectionPlaceholder titleKey="settings.tabAccount" bodyKey="settings.harnessAccountPlaceholder" />)}
+          {/* 85a2's account tab replaced the 85a1b placeholder; the models and
+              permission placeholders are 85a3's and 85a4's (permission's
+              Claude part is where a stored old `claude` navigation value lands). */}
+          {sectionHost("account", <AccountSettings />)}
           {sectionHost("models", <HarnessSectionPlaceholder titleKey="common.models" bodyKey="settings.harnessModelsPlaceholder" />)}
           {sectionHost("permission", <HarnessPermissionPlaceholder />)}
           {/* Visited sections stay mounted, so the ones whose answer depends on trust take the page's
