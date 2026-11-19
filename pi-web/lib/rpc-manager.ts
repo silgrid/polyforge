@@ -1103,7 +1103,7 @@ export class AgentSessionWrapper {
       this.idleDeadlineAt = null;
       // Running background tasks keep the wrapper alive: killing the session
       // would kill the tasks (pi-background-tasks kills on session_shutdown).
-      if (!this.forceShutdownOnIdle && (this.isRunning() || (this.backgroundTasks?.hasRunningTasks() ?? false) || hasActiveSessionLivenessProvider({
+      if (!this.forceShutdownOnIdle && (this.isRunning() || (this.backgroundTasks?.hasRunningTasks() ?? false) || hasUnsettledSubagentRun(this.sessionId) || hasActiveSessionLivenessProvider({
         sessionId: this.sessionId,
         sessionFile: this.sessionFile || undefined,
       }))) {
