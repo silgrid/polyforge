@@ -21,6 +21,16 @@ import (
 // keys `step_tiers.<tier>` (the interface's 步骤能力档 wording, Q2 A).
 const StepTiersSection = "step_tiers"
 
+// StepTiersLabel is the catalog's name in reload outcomes (the whole
+// table is one family, like "[memory_policy]").
+const StepTiersLabel = "[step_tiers]"
+
+// StepTiersClass is the catalog's reload class: live — the catalog has no
+// daemon consumer (Q5 B), so a reload only reports it applied; the
+// readers (`pf doctor`, `pf config list`) take the new value with no
+// restart.
+const StepTiersClass = ConfigLive
+
 // stepTierName is the grammar of a catalog tier name — the same one a
 // lane's defaults.tiers tier names follow, so a catalog tier and a lane
 // tier of the same name are the same tier.

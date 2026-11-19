@@ -341,6 +341,7 @@ concurrent writers serialize on a file lock.
 ```
 pf config get <key>              # effective value + source (flag|env|file|default)
 pf config set <key> <value>      # set a flat key, a [daemon] key, a [summarize] key or a whole [workspace] section
+pf config set step_tiers.<tier> '["pi:prov/model", …]' --host   # one step tier's recommended candidates (the [step_tiers] catalog)
 pf config set '[workspace."/path"]' projects=a,b,c
 pf config set summarize.language English
 pf config set memory_policy.<default|project>.record|skip '["a", "b"]' --workspace /path   # or --cwd <dir>
@@ -354,12 +355,17 @@ pf config migrate                # move retired .polyforge.yaml summarize:/memor
 Keys are addressed by their flat name (`server`), their `[daemon]` key
 name (`max_concurrent_jobs`), their `[summarize]` key name
 (`summarize.models`, `summarize.language`, `summarize.interval_sec`), a
+step_tiers catalog tier (`step_tiers.<tier>` — flat, machine-level and
+Host-only: `--host` or the default Cell writes it, a named Cell's scope
+refuses it; the value is a JSON list of `<harness>:<model>[:<effort>]`
+candidates, normalized as written), a
 memory_policy list (`memory_policy.<default|project>.record|skip`) or as a
-whole `[workspace."<path>"]` section. The `summarize.*` keys are flat
+whole `[workspace."<path>"]` section. The `summarize.*` and `step_tiers.*`
+keys are flat
 machine-level keys and refuse `--workspace`/`--cwd`; a memory_policy key
 needs exactly one of them (`--workspace` a mapped path, `--cwd` resolved
 through the mapping) and writes only that path's entry, taking its value as
-a JSON list of strings. `pf config get` refuses both families and points at
+a JSON list of strings. `pf config get` refuses all three families and points at
 `pf config list`, their one read face. `api_key` is write-only: pass it on stdin
 (`printf '%s\n' "$KEY" | pf config set api_key`; a tty prompts with echo
 off), never on argv, and no `get`/`list`/error/event ever emits the
@@ -413,7 +419,11 @@ effective value — `summarize.models` a list (absent with no `[summarize]`
 table: the lane is off), `summarize.language` / `summarize.interval_sec` the
 declared value or the documented default (`中文` / `60`, `source:
 "default"`) — with schemas `{kind:"model-list"}`, `{kind:"string"}` and
-`{kind:"int",min:10,max:3600}`. The document also carries
+`{kind:"int",min:10,max:3600}`. Every `[step_tiers]` tier answers one item
+`step_tiers.<tier>` too — its candidate list, `class: "live"`, schema
+`{kind:"model-list"}`, `source: "file"` (absent tiers are not listed; the
+`--host` scope and the default Cell's list carry them, a named Cell's does
+not — the catalog is a Host-only family). The document also carries
 `file:{path,sha256,exists}` for the CAS precondition and one top-level
 `memory_policy` object keyed by mapped workspace path: per path the
 `default` entry's effective lists (declared, else built-in) and every

@@ -259,15 +259,29 @@ func quoteList(items []string) string {
 // refused (write the quote as \x27 or \x22 in the regex), and a line
 // break never fits the one-line syntax.
 func quoteRegexList(key string, items []string) (string, error) {
+	return quoteLiteralList(key, "pattern", `write the quote as \x27 (or the " as \x22) in the regex`, items)
+}
+
+// quoteCandidateList renders the inner body of one [step_tiers] tier's
+// candidate array (polyforge#143): the same one-line TOML quoting, with
+// the refusals naming candidates.
+func quoteCandidateList(key string, items []string) (string, error) {
+	return quoteLiteralList(key, "candidate", `write the quote as \x27 (or the " as \x22) in the candidate`, items)
+}
+
+// quoteLiteralList is the one writer of a one-line TOML array of quoted
+// strings (its callers above): noun names the items in the refusals,
+// escapeHint how an item that fits neither quote form can be rewritten.
+func quoteLiteralList(key, noun, escapeHint string, items []string) (string, error) {
 	parts := make([]string, len(items))
 	for i, s := range items {
 		switch {
 		case strings.ContainsAny(s, "\n\r"):
-			return "", fmt.Errorf("config set %s: pattern %q holds a line break — the cli.toml syntax is one line", key, s)
+			return "", fmt.Errorf("config set %s: %s %q holds a line break — the cli.toml syntax is one line", key, noun, s)
 		case strconv.Quote(s) == `"`+s+`"`:
 			parts[i] = `"` + s + `"`
 		case strings.ContainsRune(s, '\''):
-			return "", fmt.Errorf("config set %s: pattern %q holds ' beside a backslash, a \" or a non-printable character, which the cli.toml syntax cannot express — write the quote as \\x27 (or the \" as \\x22) in the regex", key, s)
+			return "", fmt.Errorf("config set %s: %s %q holds ' beside a backslash, a \" or a non-printable character, which the cli.toml syntax cannot express — %s", key, noun, s, escapeHint)
 		default:
 			parts[i] = "'" + s + "'"
 		}
@@ -421,6 +435,33 @@ func (c *configLines) setModel(name, value string) {
 }
 func (c *configLines) unsetModel(name string) {
 	c.unsetTableKey(c.findModelHeader(), name)
+}
+
+// stepTiersHeader is the [step_tiers] catalog's header line.
+const stepTiersHeader = "[" + StepTiersSection + "]"
+
+// findStepTiersHeader locates the [step_tiers] header (-1 = absent).
+func (c *configLines) findStepTiersHeader() int {
+	for i := range c.lines {
+		if c.isHeader(i) {
+			if kind, _, _, err := parseTableHeader(c.trimmed(i), i+1); err == nil && kind == tableStepTiers {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// setStepTiers sets one tier's candidate list (creating the table when
+// absent).
+func (c *configLines) setStepTiers(tier, value string) {
+	c.setTableKey(c.findStepTiersHeader(), stepTiersHeader, tier, value)
+}
+
+// unsetStepTiers removes one tier's row (and the emptied table, with
+// its header).
+func (c *configLines) unsetStepTiers(tier string) {
+	c.unsetTableKey(c.findStepTiersHeader(), tier)
 }
 
 func (c *configLines) setSummarize(name, value string) {

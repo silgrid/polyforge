@@ -1239,12 +1239,16 @@ one is invalid); a same-user key set later is `applied` at once. The verbs:
 write), `reload` (apply a hand edit) and `migrate`. A key is a flat name
 (`server`, `claude_bin`, …), a `[daemon]` key (`max_concurrent_jobs`, …), a
 `[summarize]` key (`summarize.models|language|interval_sec` — flat and
-machine-level, refusing `--workspace`/`--cwd`), a memory_policy list
+machine-level, refusing `--workspace`/`--cwd`), a step_tiers catalog tier
+(`step_tiers.<tier> '<JSON list of <harness>:<model>[:<effort>] candidates>'`
+— flat, machine-level and Host-only: `--host` or the default Cell writes
+it, a named Cell's scope refuses it), a memory_policy list
 (`memory_policy.<default|project>.record|skip '<JSON list>'`, which needs
 `--workspace <mapped path>` or `--cwd <dir>` and writes only that path's
 entry) or a whole `[workspace."<path>"]` section (`projects=a,b,c`).
-`pf config list` is the one read face of the summarize keys and of the
-per-path memory_policy blocks; `get` refuses them pointing at it. Writes preserve every
+`pf config list` is the one read face of the summarize keys, the
+per-path memory_policy blocks and the `[step_tiers]` catalog; `get` refuses
+them pointing at it. Writes preserve every
 other byte, are crash-atomic, keep the mode (a new file is `0600`) and
 pass the same validator the loader, daemon and doctor use; a refused
 write leaves the file untouched. `api_key` is write-only: stdin only,
