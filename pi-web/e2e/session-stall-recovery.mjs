@@ -78,6 +78,11 @@ import { launchBrowser, softCheck } from "./harness.mjs";
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const BOUND_MS = 10_000;
 const OBSERVE_MS = 30_000;
+// How long the own-run block waits for the first reconcile tick's status read
+// (a diagnostic anchor for the RESULT line, never an outcome): the interval
+// is armed at send, so it cannot fire before ~15s, and page-render churn has
+// been observed delaying the first fire to ~27.8s.
+const TICK_WAIT_MS = 40_000;
 // AC2's no-relaxation mutation, materialized as a switch so the proof reruns
 // without touching the tree: with it on, the proxy cuts the page's forced
 // session reads (the write-ring recovery path's own reads), leaving the 15s
@@ -468,8 +473,8 @@ try {
     // The first 15s reconcile tick is a diagnostic anchor, not a user-visible
     // outcome: the frozen stream never settles the run for the page, so the
     // interval still fires. Its timestamp bounds the window the recovery
-    // reads must precede; when none comes within 25s the RESULT line says so.
-    await waitUntil(() => firstTickAt(sid, sentAt) !== null, 25_000);
+    // reads must precede; when none comes within the wait the RESULT line says so.
+    await waitUntil(() => firstTickAt(sid, sentAt) !== null, TICK_WAIT_MS);
     const tickAt = firstTickAt(sid, sentAt);
     const firstTurnAt = await firstSeen("FIRST-TURN-TEXT");
     const toolAt = await firstSeen("TOOL-OUT-MARK");
@@ -492,13 +497,13 @@ try {
         .filter((event) => event.at >= sentAt)
         .map((event) => ({ at: event.at - sentAt, status: event.status })))}; `
       + `final reply released ${releaseAt - sentAt}ms after send; `
-      + `first reconcile tick ${tickAt === null ? "not observed within 25000ms" : `observed at ${tickAt}ms`}`,
+      + `first reconcile tick ${tickAt === null ? `not observed within ${TICK_WAIT_MS}ms` : `observed at ${tickAt}ms`}`,
     );
     console.log(
       `RESULT own-run (stream frozen): turn-1 text ${ms(firstTurnAt)}, tool output ${ms(toolAt)}, `
       + `final reply ${ms(finalAt)} (${finalLate} after it was written); `
       + `ring rise ${riseAt === null ? "never" : `${riseAt}ms (generation ${riseGeneration})`}; `
-      + `first tick ${tickAt === null ? "none within 25000ms" : `${tickAt}ms`}; `
+      + `first tick ${tickAt === null ? `none within ${TICK_WAIT_MS}ms` : `${tickAt}ms`}; `
       + `reads=${JSON.stringify(readsList)}`,
     );
     check(firstTurnAt !== null && firstTurnAt - sentAt <= BOUND_MS,
@@ -514,8 +519,11 @@ try {
       + `(turn-1 ${ms(firstTurnAt)}, tool ${ms(toolAt)}, released ${releaseAt - sentAt}ms; ${recoveryState})`);
     // A′ order: the read that carried them runs after the ring rise and
     // before the first 15s tick — the write-ring recovery path, not the tick
-    // fallback.
-    check(riseAt !== null && firstForceRead !== undefined && firstForceRead.at >= riseAt
+    // fallback. The 250ms slack is Playwright's cross-object event-delivery
+    // jitter (the poll's response event and the read's request event reach
+    // this process in either order), not a behavioural tolerance: a read not
+    // triggered by the rise precedes it by a poll round-trip or more.
+    check(riseAt !== null && firstForceRead !== undefined && firstForceRead.at >= riseAt - 250
         && (tickAt === null || firstForceRead.at < tickAt),
       `${sid}: the recovery read did not run between the write-ring rise and the first tick `
       + `(ring rise ${riseAt === null ? "never" : `${riseAt}ms`}, `
@@ -578,7 +586,7 @@ try {
     // forced read that starts after the ring rise — the write-ring recovery
     // path, not an accident of timing.
     check(shownAt !== null && ringAt !== null && firstForceRead !== undefined
-        && firstForceRead.at >= ringAt - promptAt && firstForceRead.at <= shownAt - promptAt,
+        && firstForceRead.at >= ringAt - promptAt - 250 && firstForceRead.at <= shownAt - promptAt,
       `${sid}: the reply was not carried by a forced read after the ring rise `
       + `(ring entry ${ring}, first completed forced read ${firstForceRead === undefined ? "never" : `${firstForceRead.at}ms`}, shown ${shown})`);
   }
