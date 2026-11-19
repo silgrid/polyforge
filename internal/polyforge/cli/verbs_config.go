@@ -127,7 +127,12 @@ func selectConfigScope(ctx *Context, args []string) ([]string, error) {
 // written on a refusal.
 func checkKeyScope(ctx *Context, verb string, k configKey) error {
 	section, name := keySection(k)
-	hostOnly := cellcfg.HostOnly(section, name)
+	if k.kind == keyStepTiers {
+		// the refusal names the family key (step_tiers.<tier>), not the
+		// tier alone — a tier can spell almost any word (r1#N4)
+		name = StepTiersSection + "." + name
+	}
+	hostOnly := cellcfg.HostOnly(section, k.name)
 	sc := ctx.cfgScope
 	switch {
 	case sc.host && !hostOnly:

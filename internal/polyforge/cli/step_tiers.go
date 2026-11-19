@@ -126,10 +126,10 @@ func stepTiersCatalogCheck(r *doctorRun) (string, string) {
 	checked := 0
 	var warns []string
 	note := func(where, candidate string) {
-		checked++
 		if workspace.IsPlaceholder(candidate) {
-			return
+			return // a shipped placeholder is the workspace yaml row's finding, never counted here
 		}
+		checked++
 		if !stepTierCatalogCovers(catalog, candidate) {
 			warns = append(warns, fmt.Sprintf("%s → %s", where, candidate))
 		}

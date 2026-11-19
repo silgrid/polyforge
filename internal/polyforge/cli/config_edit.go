@@ -264,9 +264,10 @@ func quoteRegexList(key string, items []string) (string, error) {
 
 // quoteCandidateList renders the inner body of one [step_tiers] tier's
 // candidate array (polyforge#143): the same one-line TOML quoting, with
-// the refusals naming candidates.
+// the refusals naming candidates — and the rewrite advice phrased for a
+// model id, not a regex (r1#N5).
 func quoteCandidateList(key string, items []string) (string, error) {
-	return quoteLiteralList(key, "candidate", `write the quote as \x27 (or the " as \x22) in the candidate`, items)
+	return quoteLiteralList(key, "candidate", "a model id cannot hold ' beside a backslash or a \" — rewrite the id", items)
 }
 
 // quoteLiteralList is the one writer of a one-line TOML array of quoted
