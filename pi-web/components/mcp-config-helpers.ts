@@ -342,8 +342,17 @@ export interface McpServerGroup {
  * was not read, so the panel says so instead of hiding where project servers go.
  */
 export function mcpServerGroups(data: Pick<McpResponse, "files" | "servers" | "claude" | "unified">, hasProject: boolean): McpServerGroup[] {
-  void data; void hasProject;
-  return [];
+  // The skeleton keeps the 85a behaviour: no claude half yet, so no local
+  // group and no claude-only row; the unified tests take it red first.
+  const scopes: McpScope[] = hasProject ? ["project", "global"] : ["global"];
+  return scopes.map((scope) => {
+    const file = data.files.find((info) => info.scope === scope);
+    return {
+      scope,
+      ...(file ? { file } : {}),
+      servers: data.servers.filter((server) => server.scope === scope),
+    };
+  });
 }
 
 /**
