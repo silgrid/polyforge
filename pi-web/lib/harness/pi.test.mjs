@@ -59,7 +59,10 @@ const adapter = pi.createPiAdapter();
 const fixtureCtx = (extra = {}) => ({
   agentDir,
   cwd: project,
-  env: { ...process.env, GROQ_API_KEY: "PI-SENTINEL-GROQ" },
+  // Explicit, not the runner's environment: the automation-env and setKeys
+  // assertions must not depend on which credential variables the machine sets
+  // (r1#1).
+  env: { PI_CODING_AGENT_DIR: agentDir, GROQ_API_KEY: "PI-SENTINEL-GROQ" },
   ...extra,
 });
 const noSentinel = (payload) => {

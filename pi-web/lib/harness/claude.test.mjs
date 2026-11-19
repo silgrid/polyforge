@@ -70,8 +70,10 @@ fs.writeFileSync(statePath, JSON.stringify(state));
 const stubLog = path.join(scratch, "stub.jsonl");
 process.env.PI_TEST_CLAUDE_STUB_LOG = stubLog;
 process.env.PI_CODING_AGENT_DIR = agentDir;
-process.env.CLAUDE_CODE_OAUTH_TOKEN = "CL-SENTINEL-OAUTH";
 delete process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS;
+// The managed settings path is injected per ctx (r1#5): the real system path
+// must not leak a machine's managed layer into these expectations.
+const managedSettings = path.join(scratch, "managed-settings.json");
 const SENTINELS = [
   "CL-SENTINEL-CRED", "CL-SENTINEL-ENV-VALUE", "CL-SENTINEL-LOCAL-VALUE", "CL-SENTINEL-MCP-URL",
   "CL-SENTINEL-MCP-HEADER", "CL-SENTINEL-MCP-ARG", "CL-SENTINEL-DOTMCP", "CL-SENTINEL-KEY-HELPER",
@@ -79,7 +81,6 @@ const SENTINELS = [
 ];
 test.after(() => {
   fs.rmSync(scratch, { recursive: true, force: true });
-  delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
 });
 
 /** A stub `claude` that answers initialize with the given claude_code_version, through the unit stub. */
@@ -102,7 +103,10 @@ const fixtureCtx = (extra = {}) => ({
   agentDir,
   cwd: project,
   claudeBinary: okBinary,
-  env: process.env,
+  // Explicit, not the runner's environment: the automation-env assertion must
+  // not depend on which credential variables the machine sets (r1#1).
+  env: { CLAUDE_CODE_OAUTH_TOKEN: "CL-SENTINEL-OAUTH" },
+  managedSettingsPath: managedSettings,
   ...extra,
 });
 const noSentinel = (payload) => {
@@ -191,7 +195,7 @@ test("read permission: the effective defaultMode and the state file's project tr
   const payload = await adapter.read("permission", fixtureCtx());
   assert.deepEqual(payload.approvalMode, { supported: true, neutral: "accept-edits", raw: "acceptEdits" });
   assert.equal(payload.projectTrust?.trusted, true);
-  const noCwd = await adapter.read("permission", { claudeConfigDir: configDir, agentDir, claudeBinary: okBinary, env: process.env });
+  const noCwd = await adapter.read("permission", { claudeConfigDir: configDir, agentDir, claudeBinary: okBinary, env: {}, managedSettingsPath: managedSettings });
   assert.equal(noCwd.projectTrust, null);
 });
 
@@ -240,13 +244,46 @@ test("read of an unknown concept answers null", async () => {
 test("the state file follows $CLAUDE_CONFIG_DIR and otherwise lives at ~/.claude.json (self-review finding: the reads must resolve it the same way the probe does)", async () => {
   assert.equal(claudeLayers.claudeStateFilePath({ env: { CLAUDE_CONFIG_DIR: "/tmp/x" } }), "/tmp/x/.claude.json");
   assert.equal(claudeLayers.claudeStateFilePath({ env: {} }), path.join(os.homedir(), ".claude.json"));
-  // A permission read without the claudeConfigDir override resolves the state
-  // file through the environment, like the probe does.
-  process.env.CLAUDE_CONFIG_DIR = configDir;
+  // A permission read without the claudeConfigDir override resolves both the
+  // config root and the state file through ctx.env, like the probe does.
+  const payload = await adapter.read("permission", { agentDir, cwd: project, claudeBinary: okBinary, env: { CLAUDE_CONFIG_DIR: configDir }, managedSettingsPath: managedSettings });
+  assert.equal(payload.projectTrust?.trusted, true);
+});
+
+test("with CLAUDE_CONFIG_DIR unset the reads still find the state file at ~/.claude.json (pins the 308c6020 fix; r1#2)", async () => {
+  // #test-env isolates HOME to a private directory, so ~/.claude.json is ours to write.
+  const homeStatePath = path.join(os.homedir(), ".claude.json");
+  assert.ok(!fs.existsSync(path.join(os.homedir(), ".claude", ".claude.json")), "the old code read <config dir>/.claude.json; it must not exist here");
+  fs.writeFileSync(homeStatePath, JSON.stringify({
+    mcpServers: { homestate: { command: "node", args: ["home-server.js"] } },
+    projects: { [project]: { hasTrustDialogAccepted: true } },
+  }));
   try {
-    const payload = await adapter.read("permission", { agentDir, cwd: project, claudeBinary: okBinary, env: process.env });
-    assert.equal(payload.projectTrust?.trusted, true);
+    const ctx = { agentDir, cwd: project, claudeBinary: okBinary, env: {}, managedSettingsPath: managedSettings };
+    const permission = await adapter.read("permission", ctx);
+    // Red on 308c6020^: the old read resolved the state file as
+    // <config dir>/.claude.json (~/.claude/.claude.json, absent), so the state
+    // entry was never found and trusted read false.
+    assert.equal(permission.projectTrust?.trusted, true);
+    const mcp = await adapter.read("mcp", ctx);
+    // Red on 308c6020^ for the same reason: the homestate server was absent.
+    assert.ok(mcp.servers.some((server) => server.name === "homestate"), `homestate missing: ${JSON.stringify(mcp)}`);
   } finally {
-    delete process.env.CLAUDE_CONFIG_DIR;
+    fs.rmSync(homeStatePath, { force: true });
+  }
+});
+
+test("a higher layer with permissions but no defaultMode does not shadow a lower layer's defaultMode (pins the 308c6020 fix; r1#2)", async () => {
+  const localPath = path.join(project, ".claude", "settings.local.json");
+  const original = fs.readFileSync(localPath, "utf8");
+  try {
+    fs.writeFileSync(localPath, JSON.stringify({ permissions: { allow: ["Bash"] } }));
+    const payload = await adapter.read("permission", fixtureCtx());
+    // Red on 308c6020^: the old read took the first layer holding a
+    // `permissions` key — the local layer, whose permissions has no
+    // defaultMode — so raw read null instead of the user layer's acceptEdits.
+    assert.deepEqual(payload.approvalMode, { supported: true, neutral: "accept-edits", raw: "acceptEdits" });
+  } finally {
+    fs.writeFileSync(localPath, original);
   }
 });

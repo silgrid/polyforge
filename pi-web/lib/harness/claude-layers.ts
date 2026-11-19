@@ -36,10 +36,10 @@ export interface ClaudeSettingsLayer {
   record: Record<string, unknown> | null;
 }
 
-/** claude's settings layers for `configDir` and an optional project `cwd`, highest priority first. */
-export function claudeSettingsLayers(configDir: string, cwd: string | undefined): ClaudeSettingsLayer[] {
+/** claude's settings layers for `configDir` and an optional project `cwd`, highest priority first. `managedPath` is the managed settings file (tests override it; default managedSettingsPath()). */
+export function claudeSettingsLayers(configDir: string, cwd: string | undefined, managedPath: string = managedSettingsPath()): ClaudeSettingsLayer[] {
   const paths: { scope: ClaudeSettingsLayer["scope"]; path: string }[] = [
-    { scope: "managed", path: managedSettingsPath() },
+    { scope: "managed", path: managedPath },
   ];
   if (cwd) {
     paths.push({ scope: "local", path: join(cwd, ".claude", "settings.local.json") });

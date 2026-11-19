@@ -9,11 +9,13 @@ const registered = new Set<string>();
 
 /** The default adapters, each registered once per process (a later registration replaces an earlier one). */
 export function ensureDefaultHarnesses(): HarnessAdapter[] {
-  for (const adapter of [createPiAdapter(), createClaudeAdapter()]) {
-    if (!registered.has(adapter.id)) {
-      registerHarness(adapter);
-      registered.add(adapter.id);
-    }
+  if (!registered.has("pi")) {
+    registerHarness(createPiAdapter());
+    registered.add("pi");
+  }
+  if (!registered.has("claude")) {
+    registerHarness(createClaudeAdapter());
+    registered.add("claude");
   }
   return listHarnessAdapters();
 }

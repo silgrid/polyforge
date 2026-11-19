@@ -82,6 +82,22 @@ claude side also lists that layer (`pi-web:launch-permission-mode` from
   (else `~/.claude.json`), and project trust reads the projects entry's
   `hasTrustDialogAccepted`. A wrong guess can only mislabel a display; the
   write gate never writes to the state file.
+- **claude's settings layers' `mcpServers` is listed unverified**: claude's
+  own MCP config is believed to live in `.claude.json` and `.mcp.json`;
+  whether a settings layer's `mcpServers` is also a source has not been
+  checked against claude itself. Listing it is read-only — a wrong listing
+  shows a server claude would not load, never writes anything. 85a2
+  verifies this against the real claude.
+- **The `model` concept reads the user layer's defaults** (`defaultProvider`/
+  `defaultModel`/`defaultThinkingLevel` of the agent settings), while the
+  `effective-config` concept walks the project-over-user layers — so the two
+  can differ on the same cwd. The effective view is the merged one; 85a3,
+  which writes these keys, settles the display semantics.
+- **`GET /api/harness` probes claude on its first call**: the list route asks
+  the claude adapter for its version, which goes through `probeClaude`'s
+  per-binary cache (one child process per binary per server life, up to 15 s
+  when no cached claude answers); later calls read the cache. A UI that
+  polls this route (85a1b) rides that cache.
 - **Skill state is not read** (the #146 conflict): the skills concept lists
   name/path/source only; claude's native `skillOverrides` pass through as the
   harness's own words, and pi's frontmatter state is never read.

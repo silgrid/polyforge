@@ -77,6 +77,8 @@ export interface HarnessReadContext {
   piVersion?: string;
   /** claude's binary override (tests; default: findClaudeBinary()). */
   claudeBinary?: string;
+  /** claude's managed settings path override (tests; default: managedSettingsPath()). */
+  managedSettingsPath?: string;
 }
 
 /** A write request's change payload; opaque to the gate, interpreted per concept from 85a2 on. */

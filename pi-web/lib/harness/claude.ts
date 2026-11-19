@@ -105,7 +105,9 @@ function skillDirEntries(dir: string, source: ScopeId): SkillRef[] {
 }
 
 export function createClaudeAdapter(): HarnessAdapter {
-  const configDirOf = (ctx?: HarnessReadContext): string => ctx?.claudeConfigDir ?? claudeConfigDir();
+  // ctx.env is authoritative for the config root when the caller gives one,
+  // so a read and the state-file resolution cannot disagree.
+  const configDirOf = (ctx?: HarnessReadContext): string => ctx?.claudeConfigDir ?? claudeConfigDir(ctx?.env ?? process.env);
   const envOf = (ctx?: HarnessReadContext): NodeJS.ProcessEnv => ctx?.env ?? process.env;
   const agentDirOf = (ctx?: HarnessReadContext): string => ctx?.agentDir ?? defaultAgentDir();
 
@@ -123,7 +125,7 @@ export function createClaudeAdapter(): HarnessAdapter {
     }
     // The structure probe of the write gate (Q2 C): a settings layer or the
     // state file that exists but is not a JSON object refuses the write.
-    for (const layer of claudeSettingsLayers(configDir, ctx?.cwd)) {
+    for (const layer of claudeSettingsLayers(configDir, ctx?.cwd, ctx?.managedSettingsPath)) {
       if (existsSync(layer.path) && layer.record === null) {
         return { version, known: false, knownRange: CLAUDE_KNOWN_RANGE.label, source, reason: `${basename(layer.path)} has an unrecognized top-level structure (expected a JSON object)` };
       }
@@ -152,7 +154,7 @@ export function createClaudeAdapter(): HarnessAdapter {
       const configDir = configDirOf(ctx);
       const env = envOf(ctx);
       const cwd = ctx?.cwd;
-      const layers = claudeSettingsLayers(configDir, cwd);
+      const layers = claudeSettingsLayers(configDir, cwd, ctx?.managedSettingsPath);
       switch (concept) {
         case "auth": {
           const payload: AuthPayload = {

@@ -52,7 +52,7 @@ const effective = await jiti.import("./effective.ts");
 const compare = await jiti.import("./compare.ts");
 const pi = await jiti.import("./pi.ts");
 const claude = await jiti.import("./claude.ts");
-const fixtureCtx = () => ({ agentDir, cwd: project, claudeConfigDir, piVersion: "1.5.0", env: {} });
+const fixtureCtx = () => ({ agentDir, cwd: project, claudeConfigDir, piVersion: "1.5.0", env: {}, managedSettingsPath: path.join(scratch, "managed-settings.json") });
 
 test("pi effective values: the project layer overrides the user layer, every value inferred", () => {
   const payload = effective.piEffectiveConfig(fixtureCtx());

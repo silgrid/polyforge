@@ -54,7 +54,7 @@ export function piEffectiveConfig(ctx?: HarnessReadContext): EffectiveConfigPayl
 export function claudeEffectiveConfig(ctx?: HarnessReadContext): EffectiveConfigPayload {
   const configDir = ctx?.claudeConfigDir ?? claudeConfigDir();
   const agentDir = ctx?.agentDir ?? defaultAgentDir();
-  const layers = claudeSettingsLayers(configDir, ctx?.cwd);
+  const layers = claudeSettingsLayers(configDir, ctx?.cwd, ctx?.managedSettingsPath);
   const fields: Record<string, EffectiveValue> = {};
   const model = effectiveString(layers, "model");
   if (model) fields["model"] = model;
