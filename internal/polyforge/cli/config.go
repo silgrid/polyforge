@@ -18,7 +18,7 @@
 //
 // Configuration precedence: command-line flags > PF_* environment >
 // ~/.config/polyforge/cli.toml (flat string keys, [workspace."<path>"]
-// sections, the [daemon] and [summarize] tables and the
+// sections, the [daemon], [summarize] and [step_tiers] tables and the
 // [memory_policy."<path>".<entry>] family) > defaults. There is NO default project (polyforge#113): the
 // [workspace] mapping decides capsule placement, and project scoping is
 // per-invocation --project.
@@ -514,6 +514,9 @@ type parsedConfig struct {
 	policy []tableBlock
 	// model is the [model] table (nil = absent).
 	model *tableBlock
+	// stepTiers is the [step_tiers] model-candidate catalog (nil = absent;
+	// a table with no rows = an empty catalog).
+	stepTiers *tableBlock
 }
 
 // tableBlock is one parsed [summarize] or [memory_policy...] table: its
@@ -534,6 +537,7 @@ const (
 	tableSummarize
 	tablePolicy
 	tableModel
+	tableStepTiers
 )
 
 // parseConfigTOML parses the TOML subset documented for cli.toml:
@@ -553,7 +557,10 @@ const (
 //     the entry `default` or a project name, bare or quoted): their raw
 //     rows are validated by config_tables.go. Every key after one of these
 //     table headers belongs to the table (TOML semantics), so the flat keys
-//     must come before it.
+//     must come before it;
+//   - one `[step_tiers]` table (at most once): the model-candidate
+//     catalog, one `<tier> = ["<harness>:<model>…", …]` row per tier,
+//     validated by step_tiers.go.
 //
 // An array value may span several lines until its closing `]`; inside it
 // every item is a quoted string, a comma inside quotes is data, and one
@@ -597,6 +604,12 @@ func parseConfigTOML(file, text string) (*parsedConfig, error) {
 				}
 				p.summarize = &tableBlock{line: ln}
 				curTable = &p.summarize.rows
+			case tableStepTiers:
+				if p.stepTiers != nil {
+					return nil, fmt.Errorf("line %d: duplicate [step_tiers] table (first at line %d)", ln, p.stepTiers.line)
+				}
+				p.stepTiers = &tableBlock{line: ln}
+				curTable = &p.stepTiers.rows
 			case tableModel:
 				if p.model != nil {
 					return nil, fmt.Errorf("line %d: duplicate [model] table (first at line %d)", ln, p.model.line)
@@ -762,6 +775,8 @@ func parseTableHeader(line string, ln int) (tableKind, string, string, error) {
 		return tableSummarize, "", "", nil
 	case "model":
 		return tableModel, "", "", nil
+	case StepTiersSection:
+		return tableStepTiers, "", "", nil
 	}
 	const policyPrefix = "memory_policy."
 	if strings.HasPrefix(inner, policyPrefix) {
@@ -840,7 +855,7 @@ func parseSectionHeader(line string, ln int) (string, error) {
 	inner := strings.TrimSpace(line[1 : len(line)-1])
 	const wsPrefix = `workspace.`
 	if !strings.HasPrefix(inner, wsPrefix) {
-		return "", fmt.Errorf("line %d: unknown section %q — only [workspace.\"<path>\"] sections, [memory_policy.\"<path>\".<entry>] tables and the [daemon], [summarize] and [model] tables are supported", ln, line)
+		return "", fmt.Errorf("line %d: unknown section %q — only [workspace.\"<path>\"] sections, [memory_policy.\"<path>\".<entry>] tables and the [daemon], [summarize], [model] and [step_tiers] tables are supported", ln, line)
 	}
 	keyExpr := strings.TrimSpace(inner[len(wsPrefix):])
 	if len(keyExpr) < 2 {
@@ -1073,6 +1088,10 @@ func LoadCellFile(host Config, path string) (Config, error) {
 	cfg.Daemon.ModelErrorPatterns = host.Daemon.ModelErrorPatterns
 	cfg.Daemon.SlowModelMedianLatency = host.Daemon.SlowModelMedianLatency
 	cfg.Daemon.SlowModelP90Latency = host.Daemon.SlowModelP90Latency
+	// the Host's [step_tiers] model-candidate catalog is a Host-only
+	// value a named Cell inherits (polyforge#143, 85b): doctor judges every
+	// Cell's candidates against the one machine-level catalog
+	cfg.StepTiers = host.StepTiers
 	return cfg, nil
 }
 
