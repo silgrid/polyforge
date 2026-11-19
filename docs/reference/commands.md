@@ -186,8 +186,8 @@ and read: a create never stores a flat dotted key — aihub refuses it
 nests dotted `--attr` paths itself; a `--stdin` body carries the
 nested object). The flag texts, the epic-split procedure that files
 `split.origin`/`split.unit` markers and the error table live in the
-skills: [verbs/file.md](../skills/polyforge/verbs/file.md) (create,
-the split), [verbs/queue.md](../skills/polyforge/verbs/queue.md)
+skills: [verbs/file.md](../../skills/polyforge/verbs/file.md) (create,
+the split), [verbs/queue.md](../../skills/polyforge/verbs/queue.md)
 (the filter).
 
 ## `pf msg` — user-to-user messages
