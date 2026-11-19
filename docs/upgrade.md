@@ -826,9 +826,10 @@ manifest's minimum, an illegal version and a cross-channel seed are
 all refused with `current` untouched. A kill at any commit stage
 recovers on the next run — the journal completes a committed switch
 or an uncommitted one is discarded, and staging never survives — and
-the pre-#162 layout (a `release/` directory with a `current` symlink
-inside the components root) is refused with a migration note, never
-imported. The first boot's wiring, the components volume itself and
+the pre-#162 layout the #161 image and the host installer leave in the
+data directory (`<data-dir>/release/<ver>` with a `current` symlink
+inside) is refused, through the install's data-directory input, with
+a migration note, never imported. The first boot's wiring, the components volume itself and
 the supervision that runs the components' pf are the later
 84-components units; nothing on a host changes — the host installer's
 own layout is untouched.
