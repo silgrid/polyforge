@@ -46,15 +46,26 @@ test("each mode's dry run resolves the plan from the ticket's arguments", (t) =>
       assert.deepEqual(plan.modes, ["summary", "normal", "force"]);
       assert.equal(plan.p99Ms, 200);
       assert.equal(plan.minSamples, 100);
+      // The measured window is the call itself, cold and hot apart: no warm
+      // call before a cold measurement, repeated independent cold starts
+      // accumulate overlapping samples (review r2#7).
+      assert.deepEqual(plan.shapes, ["cold", "hot"]);
+      assert.equal(plan.warmCalls, 0);
     }],
     ["read-volume", ["--modes", "normal,summary", "--calls", "2", "--max-second-read-ratio", "0.05"], (plan) => {
       assert.deepEqual(plan.modes, ["normal", "summary"]);
       assert.equal(plan.maxSecondReadRatio, 0.05);
+      // Each mode measures on its own server from a cold index, so no mode's
+      // run can warm another's (review r2#8).
+      assert.equal(plan.independentServers, true);
     }],
     ["cold-summary", ["--empty-index", "--max-ms", "1000", "--max-read-ratio", "0.10"], (plan) => {
       assert.equal(plan.maxMs, 1000);
       assert.equal(plan.maxReadRatio, 0.10);
       assert.equal(plan.emptyIndex, true);
+      // The warm-index shape is measured behind a persisted index a prior run
+      // of this same oracle built (review r2 N12), never assumed.
+      assert.equal(plan.buildsWarmIndex, true);
     }],
     ["golden", ["--baseline", "HEAD", "--candidate", "HEAD"], (plan) => {
       assert.match(plan.baseline, /^[0-9a-f]{40}$/);
