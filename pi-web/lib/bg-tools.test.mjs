@@ -189,8 +189,9 @@ test("a task of another session reads as not found through every tool", async ()
 test("utf8Truncate cuts on a character boundary (hand-computed table)", () => {
   assert.equal(utf8Truncate("hello", 100), "hello");
   assert.equal(utf8Truncate("hello", 3), "hel");
-  // "é" is two bytes: h + é fits exactly.
-  assert.equal(utf8Truncate("héllo", 3), "hél");
+  // "é" is two bytes: h + é fills the three-byte budget exactly, "hél" needs four.
+  assert.equal(utf8Truncate("héllo", 3), "hé");
+  assert.equal(utf8Truncate("héllo", 4), "hél");
   // "世" is three bytes: four bytes hold one character, not one and a third.
   assert.equal(utf8Truncate("世界", 4), "世");
   assert.equal(utf8Truncate("世界", 2), "");
