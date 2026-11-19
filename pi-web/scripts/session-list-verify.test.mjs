@@ -97,6 +97,18 @@ test("each mode's dry run resolves the plan from the ticket's arguments", (t) =>
       assert.deepEqual(plan.changes, ["create", "append", "delete"]);
     }],
   ];
+  // The mode's own defaults, named without their options: the ticket's proof
+  // commands rely on these exact defaults.
+  const defaults = dry("responsiveness", fixture);
+  assert.equal(defaults.status, 0, `${defaults.stderr}`);
+  const defaultPlan = JSON.parse(defaults.stdout);
+  assert.equal(defaultPlan.mode, "responsiveness");
+  assert.deepEqual(defaultPlan.modes, ["summary", "normal", "force"]);
+  assert.deepEqual(defaultPlan.shapes, ["cold", "hot"]);
+  assert.equal(defaultPlan.intervalMs, 100);
+  assert.equal(defaultPlan.minSamples, 100);
+  assert.equal(defaultPlan.p99Ms, 200);
+
   for (const [mode, extra, check] of cases) {
     const result = dry(mode, fixture, extra);
     assert.equal(result.status, 0, `${mode}: ${result.stdout}\n${result.stderr}`);
