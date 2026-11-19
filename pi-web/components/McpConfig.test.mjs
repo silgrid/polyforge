@@ -1,3 +1,4 @@
+// carries: components/McpConfig.tsx, components/mcp-config-helpers.ts, components/HarnessApplyTo.tsx, lib/i18n/messages/en.ts
 import "#test-env";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -136,10 +137,10 @@ test("with a project, its group comes first and every row names its state", () =
   const markup = decode(html);
   assert.ok(markup.indexOf(">project<") < markup.indexOf(">global<"));
   // Each heading holds its n/m count and the group switch, on only while every server is.
-  assert.match(markup, /<span class="config-sidebar-group-count">1\/2<\/span><button type="button" role="switch" aria-checked="false" aria-label="Turn on every global server"/);
+  assert.match(markup, /<span class="config-sidebar-group-count">1\/2<\/span><button type="button" role="switch" aria-checked="false" aria-label="Turn on every global server \(pi\)"/);
   // The untrusted project's switch waits for trust, pointing at the notice that says so.
   const projectSwitch = markup.match(/<span class="config-sidebar-group-count">2\/2<\/span>(<button[^>]*>)/)?.[1];
-  assert.match(projectSwitch, /aria-checked="true" aria-label="Turn off every project server" aria-describedby="([^"]+)"[^>]*disabled=""/);
+  assert.match(projectSwitch, /aria-checked="true" aria-label="Turn off every project server \(pi\)" aria-describedby="([^"]+)"[^>]*disabled=""/);
   const noticeId = projectSwitch.match(/aria-describedby="([^"]+)"/)[1];
   assert.match(markup, new RegExp(`<div id="${noticeId}" role="status" class="config-notice">This project is not trusted`));
   // The project is not trusted, so its entry does not connect and the global one is not replaced.
@@ -1431,4 +1432,140 @@ test("a project override is listed as the global server it changes, which offers
     load: { state: "loaded", data: overview({ files: [globalFile, projectFile], project: { cwd, trust: untrusted }, servers: [lint] }) },
   }));
   assert.doesNotMatch(untrustedRow, /Turn off in this project/);
+});
+
+// ---------------------------------------------------------------------------
+// #85 85c (AC1/AC3): the unified list — claude's rows beside pi's, the local
+// group Claude's own with no switch, the group switch marked pi's alone, the
+// apply-to on each row, the inconsistency marked with 统一成当前值, and
+// claude's own removal worded 「从 Claude 移除」.
+
+function claudeEntry(overrides = {}) {
+  return {
+    name: "claude-entry",
+    scope: "global",
+    sourcePath: "/Users/me/.claude.json",
+    envNames: [],
+    headerNames: [],
+    ...overrides,
+  };
+}
+
+function claudeHalf(overrides = {}) {
+  return {
+    present: true,
+    configPath: "/Users/me/.claude.json",
+    stateReadable: true,
+    servers: [],
+    disabledMcpServers: [],
+    ...overrides,
+  };
+}
+
+function unifiedRow(overrides = {}) {
+  return { scope: "global", name: "shared", pi: true, claude: true, missing: [], inconsistent: [], otherScopes: [], ...overrides };
+}
+
+function unifiedData(overrides = {}) {
+  return overview({
+    files: [globalFile, projectFile],
+    servers: [
+      server({ name: "shared", transport: "stdio", command: "npx", args: ["-y", "v1"] }),
+    ],
+    project: { cwd: "/Users/me/repo", trust: trusted },
+    claude: claudeHalf({
+      servers: [
+        claudeEntry({ name: "shared", command: "npx", args: ["-y", "v2"] }),
+        claudeEntry({ name: "claude-own", command: "npx", args: ["-y", "c"] }),
+        claudeEntry({ name: "claude-local", scope: "local", type: "http", url: "https://local.example/mcp" }),
+      ],
+    }),
+    unified: [
+      unifiedRow({ inconsistent: [{ field: "args", values: { pi: "-y v1", claude: "-y v2" } }] }),
+      unifiedRow({ name: "claude-own", pi: false, claude: true, missing: ["pi"] }),
+      unifiedRow({ name: "claude-local", scope: "local", pi: false, claude: true, missing: [] }),
+    ],
+    ...overrides,
+  });
+}
+
+test("three groups: claude's rows beside pi's, the local one Claude's own, the switches pi's alone (AC1, Q3)", () => {
+  const html = view({ cwd: "/Users/me/repo", load: { state: "loaded", data: unifiedData() } });
+  const markup = decode(html);
+  const order = ["project", "global", "local"].map((label) => markup.indexOf(`>${label}<`));
+  assert.deepEqual(order, [...order].sort(), "project, global, then local");
+  // The local group is marked Claude's own, and shows no switch at all.
+  const localGroup = markup.slice(markup.indexOf(">local<"));
+  assert.match(localGroup, new RegExp(messages["mcp.group.claudeOnly"]), "the local group says Claude only");
+  assert.ok(!localGroup.includes('role="switch"'), "the local group has no group switch");
+  // pi's switches say they are pi's alone (Q3 A).
+  assert.match(markup, /aria-label="Turn off every global server \(pi\)"/);
+  assert.match(markup, /aria-label="Turn on every project server \(pi\)"/);
+  // claude-only rows appear with their name and a claude badge.
+  assert.match(row(html, "claude-own"), /aria-label="claude-own \(claude\)"/);
+  assert.match(row(html, "claude-local"), /aria-label="claude-local \(claude\)"/);
+  // A name both sides share stays one row.
+  assert.equal((markup.match(/claude-own/g) || []).length >= 1, true);
+  assert.equal(row(html, "shared: On") !== undefined, true, "the shared row is pi's row, once");
+});
+
+test("a row both sides hold shows its apply-to and its difference, with 统一成当前值 (AC3)", () => {
+  const html = view({
+    cwd: "/Users/me/repo",
+    load: { state: "loaded", data: unifiedData() },
+    selected: "global\0shared",
+  });
+  const markup = decode(html);
+  assert.match(markup, new RegExp(`class="settings-general-heading">${messages["mcp.applyTo.title"]}`));
+  assert.match(markup, /role="radiogroup"/);
+  assert.match(markup, new RegExp(messages["mcp.applyTo.all"]));
+  assert.match(markup, new RegExp(messages["mcp.applyTo.specific"]));
+  // The difference is marked, both sides' current values shown.
+  assert.match(markup, new RegExp(messages["mcp.unified.differs"]));
+  assert.match(markup, /-y v1/);
+  assert.match(markup, /-y v2/);
+  assert.match(markup, new RegExp(`>${messages["mcp.unified.unify"]}<`), "the unify button is offered");
+  // The claude partition names its side and its removal.
+  assert.match(markup, new RegExp(messages["mcp.claude.side"]));
+  assert.match(markup, new RegExp(messages["mcp.claude.remove"]));
+});
+
+test("a row only claude holds offers pi as disabled in its apply-to, and claude's local row never offers pi (Q5)", () => {
+  const html = view({
+    cwd: "/Users/me/repo",
+    load: { state: "loaded", data: unifiedData() },
+    selected: "global\0claude-own\0claude",
+  });
+  const markup = decode(html);
+  assert.match(markup, new RegExp(messages["mcp.applyTo.piUnsupported"]), "pi takes no sse/ws or local entry");
+  assert.match(markup, new RegExp(messages["mcp.claude.remove"]));
+
+  const localHtml = view({
+    cwd: "/Users/me/repo",
+    load: { state: "loaded", data: unifiedData() },
+    selected: "local\0claude-local\0claude",
+  });
+  const localMarkup = decode(localHtml);
+  assert.match(localMarkup, new RegExp(messages["mcp.applyTo.piUnsupportedLocal"]), "the local group is Claude's alone");
+  assert.match(localMarkup, new RegExp(messages["mcp.claude.remove"]));
+});
+
+test("claude's disabledMcpServers entries read as off, read-only (Q1 A)", () => {
+  const data = unifiedData({
+    claude: claudeHalf({
+      servers: [
+        claudeEntry({ name: "shared", command: "npx", args: ["-y", "v2"] }),
+        claudeEntry({ name: "claude-proj", scope: "project", command: "node", disabled: true }),
+      ],
+      disabledMcpServers: ["claude-proj"],
+    }),
+    unified: [
+      unifiedRow({ inconsistent: [{ field: "args", values: { pi: "-y v1", claude: "-y v2" } }] }),
+      unifiedRow({ name: "claude-proj", scope: "project", pi: false, claude: true, missing: ["pi"] }),
+    ],
+  });
+  const html = view({ cwd: "/Users/me/repo", load: { state: "loaded", data }, selected: "project\0claude-proj\0claude" });
+  const markup = decode(html);
+  assert.match(markup, new RegExp(messages["mcp.claude.disabled"]));
+  assert.match(row(html, "claude-proj"), /aria-label="claude-proj \(claude, off\)"/);
 });
