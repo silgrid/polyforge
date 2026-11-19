@@ -230,9 +230,11 @@ YEOF
 	say "env: booting with the probe variables"
 	# the sentinel travels only in the smoke's own shell environment:
 	# compose interpolates nothing unlisted, so its absence inside is
-	# the proof the container inherits no host environment.
-	SENTINEL_WORKSTATION_SMOKE=yes \
-		docker compose -f "$compose_file" -f "$override" --profile "$profile" build >/dev/null
+	# the proof the container inherits no host environment. Exported, not
+	# prefixed per command — it must ride the `up` that CREATES the
+	# container, not just the build (review r2#2).
+	export SENTINEL_WORKSTATION_SMOKE=yes
+	docker compose -f "$compose_file" -f "$override" --profile "$profile" build >/dev/null
 	docker compose -f "$compose_file" -f "$override" --profile "$profile" up -d >/dev/null
 	cid=$(docker compose -f "$compose_file" -f "$override" --profile "$profile" ps -q "$(service_of "$profile")")
 	[ -n "$cid" ] || die "no workstation container"
