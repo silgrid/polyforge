@@ -297,101 +297,14 @@ export function claudeSessionInfoFromProjection(
   };
 }
 
-// ============================================================================
-// The session list's claude rows (polyforge#140): the row needs its transcript
-// only for the adapter's projected message count, so the transcript is parsed
-// once per (path, size, mtime) on the scan worker pool and the count is cached;
-// a cold summary lists the index's identity fields with `detailsPending` (owner
-// ruling 1-A) and reads no transcript at all. The old path re-read and re-parsed
-// every registered transcript synchronously on each list request.
-// ============================================================================
+// Stub state (polyforge#140 r2): the list projection's signature seam only —
+// the sync rows the implementation replaces land in the unit's impl commit.
+export function resetClaudeSessionListCachesForTests(): void {}
 
-declare global {
-  /** Transcript path lookups that succeeded, keyed `${configDir}\0${sessionId}`. */
-  var __piWebClaudeTranscriptPaths: Map<string, string> | undefined;
-  /** Projected message counts by transcript path, keyed by the stat they were parsed at. */
-  var __piWebClaudeRowCounts: Map<string, { size: number; mtimeMs: number; count: number }> | undefined;
-}
-
-function claudeTranscriptPaths(): Map<string, string> {
-  if (!globalThis.__piWebClaudeTranscriptPaths) globalThis.__piWebClaudeTranscriptPaths = new Map();
-  return globalThis.__piWebClaudeTranscriptPaths;
-}
-
-function claudeRowCounts(): Map<string, { size: number; mtimeMs: number; count: number }> {
-  if (!globalThis.__piWebClaudeRowCounts) globalThis.__piWebClaudeRowCounts = new Map();
-  return globalThis.__piWebClaudeRowCounts;
-}
-
-/** The session's transcript, re-looked-up only until a lookup succeeds; a hit costs no directory read. */
-function cachedClaudeTranscriptFile(sessionId: string): string | null {
-  const configDir = claudeConfigDir();
-  const key = `${configDir}\0${sessionId}`;
-  const cached = claudeTranscriptPaths().get(key);
-  if (cached) return cached;
-  const file = claudeTranscriptFile(sessionId, configDir);
-  if (file) claudeTranscriptPaths().set(key, file);
-  return file;
-}
-
-/**
- * One record's list projection. An unchanged transcript costs one stat; a
- * changed one is parsed on the worker pool and projected here once. A deleted
- * or unreadable transcript keeps the index row with an empty path and a zero
- * count (3-A), exactly what reading a missing history produced.
- */
-async function claudeListProjection(
-  record: ClaudeSessionRecord,
-  summary: boolean,
-): Promise<ClaudeListProjection> {
-  const file = cachedClaudeTranscriptFile(record.id);
-  if (!file) return { file: null, messageCount: 0 };
-  let stats;
-  try {
-    stats = await stat(file);
-  } catch {
-    // Gone (or unreadable): forget the lookup so a recreated transcript is found again.
-    claudeTranscriptPaths().delete(`${claudeConfigDir()}\0${record.id}`);
-    return { file: null, messageCount: 0 };
-  }
-  const cached = claudeRowCounts().get(file);
-  if (cached && cached.size === stats.size && cached.mtimeMs === stats.mtimeMs) {
-    return { file, messageCount: cached.count };
-  }
-  if (summary) return { file, messageCount: 0, detailsPending: true };
-  let entries: unknown;
-  try {
-    entries = await runSessionScanTask({ kind: "claude-entries", path: file });
-  } catch {
-    // A read that failed costs the row its count, as a failed history read did.
-    return { file, messageCount: 0 };
-  }
-  // The adapter's own projection is the count the list shows; the sidecars feed
-  // subagent rows, never the main conversation's count.
-  const count = claudeTranscriptToMessages(Array.isArray(entries) ? entries : [], {}).messages.length;
-  claudeRowCounts().set(file, { size: stats.size, mtimeMs: stats.mtimeMs, count });
-  return { file, messageCount: count };
-}
-
-/** Test seam: drop the list projection caches. */
-export function resetClaudeSessionListCachesForTests(): void {
-  globalThis.__piWebClaudeTranscriptPaths = undefined;
-  globalThis.__piWebClaudeRowCounts = undefined;
-}
-
-/**
- * Every claude session pi-web created, as list rows. Only the index: no claude
- * projects dir is scanned. With `summary`, a row whose transcript is not yet
- * parsed defers its count (`detailsPending`) instead of reading it.
- */
-export async function getClaudeSessionInfos(options: { summary?: boolean } = {}): Promise<SessionInfo[]> {
+/** Every claude session pi-web created, as list rows. Only the index: no claude projects dir is scanned. */
+export function getClaudeSessionInfos(): SessionInfo[] {
   const globalApprovalMode = readClaudePermissionConfig().mode;
-  const summary = options.summary === true;
-  const rows: SessionInfo[] = [];
-  for (const record of readClaudeIndex()) {
-    rows.push(claudeSessionInfoFromProjection(record, await claudeListProjection(record, summary), globalApprovalMode));
-  }
-  return rows;
+  return readClaudeIndex().map((record) => claudeSessionInfo(record, undefined, globalApprovalMode));
 }
 
 type Listener = (event: AgentEventLike) => void;
