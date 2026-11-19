@@ -109,6 +109,18 @@ export function skillInstructionsBody(content: string): string {
 }
 
 /**
+ * True when the skill's author declared it hidden in the SKILL.md frontmatter
+ * (`disable-model-invocation: true`): the「作者默认隐藏」badge (when the shown
+ * preference overrides it) and the confirmed legacy cleanup entry key on it —
+ * never on the effective switch, which the preference also drives. Skeleton.
+ */
+export function skillAuthorDeclaredHidden(
+  _skill: Pick<Skill, "declaredDisableModelInvocation">,
+): boolean {
+  return false;
+}
+
+/**
  * A link in a skill document: a path in the skill folder, from the linking
  * document's folder as pi resolves a skill's relative paths, and a heading.
  * An absolute path or a `..` past the folder stays, for the route to refuse.
