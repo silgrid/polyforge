@@ -8,6 +8,7 @@
 // includeHookEvents}), never this implementation's internals.
 import "#test-env";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { createJiti } from "jiti";
 
@@ -123,7 +124,7 @@ test("the singleton and the hook face are the shared store both pages use", asyn
   }
   // The hook wraps the store: its module exists and names the singleton's face.
   assert.equal(typeof useClaudeSettings, "function");
-  const source = await jiti.import("../hooks/useClaudeSettings.ts", { source: true }) ?? "";
-  assert.match(String(source), /useSyncExternalStore/, "the hook must subscribe through useSyncExternalStore");
-  assert.match(String(source), /claudeSettingsStore/, "the hook must default to the shared singleton");
+  const source = await readFile(new URL("../hooks/useClaudeSettings.ts", import.meta.url), "utf8");
+  assert.match(source, /useSyncExternalStore/, "the hook must subscribe through useSyncExternalStore");
+  assert.match(source, /claudeSettingsStore/, "the hook must default to the shared singleton");
 });
