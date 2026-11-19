@@ -281,9 +281,12 @@ func TestWorkstationSeedEngine(t *testing.T) {
 }
 
 // dockerRun answers one command's output inside the built seed image.
-func dockerRun(t *testing.T, args ...string) (string, error) {
+// The entrypoint is overridden: the image's own PID 1 chain initializes
+// the cgroup namespace and hands the machine to `pf supervise`, which
+// is not what an inspection run wants.
+func dockerRun(t *testing.T, name string, args ...string) (string, error) {
 	t.Helper()
-	full := append([]string{"run", "--rm", "polyforge-162-seed-test"}, args...)
+	full := append([]string{"run", "--rm", "--entrypoint", name, "polyforge-162-seed-test"}, args...)
 	cmd := exec.Command("docker", full...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
