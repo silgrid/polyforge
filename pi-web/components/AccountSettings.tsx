@@ -132,6 +132,16 @@ export function AccountHarnessPane({ harness, read, capabilities, onOpenLoginTer
                   <div><dt>{t("settings.accountResidualOauthTitle")}</dt><dd>{t("settings.accountResidualOauth")}</dd></div>
                 )}
               </dl>
+              {harness === "pi" && row.source && (row.sourceKind === "operator" || row.sourceKind === "shared-default") && (
+                <p className="settings-account-pi-guidance" data-pi-step-guidance={row.sourceKind}>
+                  {t("settings.accountPiStepGuidanceShared", { source: row.source })}
+                </p>
+              )}
+              {harness === "pi" && row.source && row.sourceKind === "directory" && (
+                <p className="settings-account-pi-guidance" data-pi-step-guidance="directory">
+                  {t("settings.accountPiStepGuidanceOwn", { source: row.source })}
+                </p>
+              )}
               {row.keychainHint && <p className="settings-account-keychain-hint" data-keychain-hint="true">{t("settings.accountKeychainHint")}</p>}
             </div>
           )
@@ -176,7 +186,6 @@ export function ClaudeCredentialForm({ cells, onSave }: {
   const [baseUrl, setBaseUrl] = useState("");
   const [useInteractive, setUseInteractive] = useState(false);
   const [targets, setTargets] = useState<string[]>([]);
-  const [result, setResult] = useState<string | null>(null);
   const allTargets = useMemo(() => ["interactive", ...cells.map((cell) => cell.profile)], [cells]);
   const effective = targets.length > 0 ? targets : allTargets;
   const save = useCallback(() => {
@@ -184,7 +193,6 @@ export function ClaudeCredentialForm({ cells, onSave }: {
     if (useInteractive) body.useInteractive = true;
     else body.value = value;
     if (kind === "gateway") body.baseUrl = baseUrl;
-    setResult(null);
     onSave?.(body);
   }, [kind, effective, useInteractive, value, baseUrl, onSave]);
   return (
@@ -229,7 +237,6 @@ export function ClaudeCredentialForm({ cells, onSave }: {
         <ConfigDetailActions>
           <button type="button" className="config-button" data-account-action="save" onClick={save}>{t("settings.accountSaveCredential")}</button>
         </ConfigDetailActions>
-        {result && <p className="settings-general-description" data-account-field="write-result">{result}</p>}
       </div>
     </section>
   );
@@ -240,8 +247,20 @@ export function ClaudeCredentialForm({ cells, onSave }: {
  * commit carries only the signature; the implementation lands with the
  * unit.
  */
-export function CredentialWriteResults(_props: { results: { target: string; status: string; reason?: string }[] }) {
-  return null;
+export function CredentialWriteResults({ results }: { results: { target: string; status: string; reason?: string }[] }) {
+  const { t } = useI18n();
+  if (results.length === 0) return null;
+  return (
+    <ul className="settings-account-write-results">
+      {results.map((entry) => (
+        <li key={entry.target} data-write-target={entry.target} data-write-status={entry.status}>
+          <strong>{entry.target}</strong>
+          <span>{entry.status === "written" ? t("settings.accountWriteOk") : t("settings.accountWriteNo")}</span>
+          {entry.status !== "written" && entry.reason && <span>{entry.reason}</span>}
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 /** The shell: the two panes over the route's read, plus the one-shot login
@@ -294,6 +313,7 @@ export function AccountSettings({ embedded = true }: { embedded?: boolean }) {
     })();
   }, [pane]);
 
+  const [writeResults, setWriteResults] = useState<{ target: string; status: string; reason?: string }[] | null>(null);
   const [writeNote, setWriteNote] = useState<string | null>(null);
   const saveCredentials = useCallback((body: Record<string, unknown>) => {
     void (async () => {
@@ -305,18 +325,20 @@ export function AccountSettings({ embedded = true }: { embedded?: boolean }) {
         });
         const answer = await response.json() as { results?: { target: string; status: string; reason?: string }[]; message?: string };
         if (response.ok && answer.results) {
-          const refused = answer.results.filter((entry) => entry.status !== "written");
-          setWriteNote(t(refused.length > 0 ? "settings.accountWriteRefused" : "settings.accountWriteWritten", {
-            count: String(answer.results.length - refused.length),
-          }));
+          setWriteResults(answer.results);
+          setWriteNote(null);
+          // the rows and the card read again: what was just written shows now
+          load();
         } else {
+          setWriteResults(null);
           setWriteNote(answer.message ?? t("settings.accountWriteFailed"));
         }
       } catch {
+        setWriteResults(null);
         setWriteNote(t("settings.accountWriteFailed"));
       }
     })();
-  }, [t]);
+  }, [t, load]);
 
   const panes = [
     { id: "pi" as const, labelKey: "settings.accountHarnessPi" },
@@ -350,6 +372,7 @@ export function AccountSettings({ embedded = true }: { embedded?: boolean }) {
             onOpenLoginTerminal={openLoginTerminal}
             onSaveCredentials={pane === "claude" ? saveCredentials : undefined}
           />
+          {writeResults && <CredentialWriteResults results={writeResults} />}
           {writeNote && <p data-account-field="write-note">{writeNote}</p>}
           {loginTerminal && (
             <div data-account-login-terminal className="settings-account-login-terminal">

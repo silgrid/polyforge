@@ -305,7 +305,7 @@ export function createClaudeAdapter(): HarnessAdapter {
               join(configDir, ".credentials.json"),
             ),
             automationEnv: automationEnvStatus(env, CLAUDE_AUTOMATION_ENV_KEYS),
-            credentialsFollow: true,
+            credentialsFollow: claudeCredentialsFollowConfigRoot(),
           };
           return payload;
         }
@@ -313,7 +313,7 @@ export function createClaudeAdapter(): HarnessAdapter {
           const payload: ConfigRootPayload = {
             path: configDir,
             env: "CLAUDE_CONFIG_DIR",
-            credentialsFollow: true,
+            credentialsFollow: claudeCredentialsFollowConfigRoot(),
           };
           return payload;
         }

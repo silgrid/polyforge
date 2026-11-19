@@ -48,6 +48,14 @@ const READ = {
         claude: { id: "claude", configRoot: "/h/beta/claude-config", credential: "unset", status: "not_ready", authType: null, checkReason: null, source: "/home/op/.pi/agent", sourceKind: "shared-default", credentialsFollow: false, keychainHint: true, credentialKinds: null, credentialsFile: "present", usable: true, reason: null },
       },
     },
+    {
+      profile: "gamma", executionDisabled: null, probeError: null,
+      harnessOrder: ["pi", "claude"],
+      harnesses: {
+        pi: { id: "pi", configRoot: "/h/gamma/step-agent", credential: "set", status: "ready", authType: "api_key", checkReason: null, source: "/srv/own", sourceKind: "directory", credentialsFollow: true, keychainHint: false, credentialKinds: null, credentialsFile: null, usable: true, reason: null },
+        claude: { id: "claude", configRoot: "/h/gamma/claude-config", credential: "set", status: "ready", authType: null, checkReason: null, source: "/srv/own", sourceKind: "directory", credentialsFollow: true, keychainHint: false, credentialKinds: { oauthToken: true, apiKey: false, gateway: false }, credentialsFile: "absent", usable: true, reason: null },
+      },
+    },
   ],
   doctorError: null,
 };
@@ -144,13 +152,13 @@ test("the pi pane renders the per-Cell step guidance of Q4: shared operator dire
   const html = renderPane("pi", { id: "pi", loginCommands: [], credentialsFollowConfigRoot: true });
   const def = html.slice(html.indexOf('data-account-cell="default"'), html.indexOf('data-account-cell="beta"'));
   assert.match(def, /data-pi-step-guidance="operator"/);
-  assert.match(def, /Steps of this Cell run against the shared operator directory \/home\/op\/\.pi\/agent/);
+  assert.match(def, /Steps of this Cell run against the shared operator directory \(\/home\/op\/\.pi\/agent/);
   const beta = html.slice(html.indexOf('data-account-cell="beta"'), html.indexOf('data-account-cell="gamma"'));
   assert.match(beta, /data-pi-step-guidance="shared-default"/);
-  assert.match(beta, /shared operator directory \/home\/op\/\.pi\/agent/);
+  assert.match(beta, /shared operator directory \(\/home\/op\/\.pi\/agent/);
   const gamma = html.slice(html.indexOf('data-account-cell="gamma"'));
   assert.match(gamma, /data-pi-step-guidance="directory"/);
-  assert.match(gamma, /its own source directory \/srv\/own/);
+  assert.match(gamma, /its own source directory \(\/srv\/own/);
 });
 
 test("a refused write shows its target and its reason — the reason reaches the user (review r1#10)", () => {
