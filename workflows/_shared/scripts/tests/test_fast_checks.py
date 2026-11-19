@@ -69,13 +69,19 @@ class FastChecksCase(GitCase):
         return clone.dir
 
     def run_checks(self, repo: str, env: Optional[Dict[str, str]] = None, extra: Tuple[str, ...] = ()) -> Tuple[int, Dict[str, Any]]:
-        """fast_checks.py on the capsule's repo, as a skill runs it."""
+        """fast_checks.py on the capsule's repo, as a skill runs it. The
+        fixture is not a step context: the engine would read an inherited
+        PF_CAPSULE (this suite's own run inside a step) and redirect the
+        fixture's diff base to that step's fixed target branch — a branch
+        the fixture's origin does not carry, so the report falls back to
+        the full tier and the scoped phase never runs. The default child
+        environment drops it; a caller's env is taken as given."""
         argv = [sys.executable, FAST_CHECKS, "--capsule", self.capsule,
                 "--engine", ENGINE, "--deadline", "10m", "--out", self.out]
         if repo:
             argv += ["--repo", repo]
         argv += list(extra)
-        c = subprocess.run(argv, capture_output=True, text=True, env=env if env is not None else os.environ)
+        c = subprocess.run(argv, capture_output=True, text=True, env=env if env is not None else env_without("PF_CAPSULE"))
         if not os.path.exists(self.out):
             raise AssertionError("fast_checks.py wrote no result file (exit %d): %s" % (c.returncode, c.stderr[-500:]))
         with open(self.out, encoding="utf-8") as f:
