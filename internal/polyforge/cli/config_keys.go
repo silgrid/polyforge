@@ -56,6 +56,7 @@ var configKeyDefs = []configKeyDef{
 	{"harness_root", keyDaemon, ConfigRestartOnly},
 	{"operator_agent_dir", keyDaemon, ConfigRestartOnly},
 	{"python", keyDaemon, ConfigRestartOnly},
+	{"container_engine", keyDaemon, ConfigRestartOnly},
 	{"max_concurrent_jobs", keyDaemon, ConfigLive},
 	{"max_concurrent_tasks", keyDaemon, ConfigLive},
 	{"max_concurrent_bars", keyDaemon, ConfigLive},
@@ -96,6 +97,8 @@ func ConfigSchema(name string) map[string]any {
 		return map[string]any{"kind": "secret"}
 	case "daemon_socket", "harness_root", "operator_agent_dir", "python":
 		return map[string]any{"kind": "path"}
+	case "container_engine":
+		return map[string]any{"kind": "enum", "values": []string{"docker", "podman"}}
 	case "step_timeout", "ask_warm_window":
 		return map[string]any{"kind": "duration", "min_exclusive": 0}
 	case "stall_window":

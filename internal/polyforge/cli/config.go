@@ -288,6 +288,20 @@ func parseDaemonTable(file string, kvs []daemonKV) (DaemonSettings, error) {
 			} else {
 				s.OperatorAgentDir = v
 			}
+		case "container_engine":
+			// polyforge#159 (84-engine): the backend a verification container
+			// runs on. Exactly "docker" or "podman", quoted — an explicit
+			// empty string and any other spelling is refused: a typo must
+			// cost a refusal, never a silent run on the other engine's
+			// images and volumes. Host-only, restart-only (config_keys.go).
+			v, err := parseQuotedValue(kv.val, kv.line)
+			if err != nil {
+				return s, refuse(`must be "docker" or "podman" (quoted)`)
+			}
+			if v != "docker" && v != "podman" {
+				return s, refuse(fmt.Sprintf(`must be "docker" or "podman" (quoted), got %s`, kv.val))
+			}
+			s.ContainerEngine = v
 		case "python":
 			v, err := parseQuotedValue(kv.val, kv.line)
 			if err != nil {

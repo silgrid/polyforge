@@ -48,6 +48,10 @@ var Keys = []Key{
 	{"harness_root", "daemon", ScopeHost, ClassRestartOnly},
 	{"operator_agent_dir", "daemon", ScopeHost, ClassRestartOnly},
 	{"python", "daemon", ScopeHost, ClassRestartOnly},
+	// polyforge#159 (84-engine): the backend a verification container
+	// runs on — one engine per Host (its images and volumes are not
+	// interchangeable between Cells), applied by a Host restart.
+	{"container_engine", "daemon", ScopeHost, ClassRestartOnly},
 	{"layout_version", "", ScopeHost, ClassReadOnly},
 	{"server", "", ScopeCell, ClassConnection},
 	{"api_key", "", ScopeCell, ClassConnection},
