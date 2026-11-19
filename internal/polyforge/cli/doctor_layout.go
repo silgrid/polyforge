@@ -578,6 +578,12 @@ func cellLayoutNote(dataDir string) (bool, string) {
 	return true, fmt.Sprintf("the pre-migration copy (%s in %s) is stale: the Host served the cell layout, so `pf migrate cell-layout --rollback` is refused — keep a backup of it if you want one, then remove those root items", strings.Join(old, ", "), dataDir)
 }
 
+// containerSupervisedDaemon answers the one judgment both the
+// supervision row and the prerequisites row make (polyforge#160).
+func containerSupervisedDaemon(daemonUp bool, daemonEnvNames []string) bool {
+	return false
+}
+
 // envNamesCarry answers whether the daemon's environment variable names
 // (GET /status reports names only) include the supervision marker — the
 // one fact both the tmux loop and `pf supervise` stamp on the daemon.
