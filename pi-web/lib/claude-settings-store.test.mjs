@@ -118,6 +118,50 @@ test("a failed save keeps the last snapshot and answers its error", async () => 
   assert.equal(store.getSnapshot().settings.includeHookEvents, true);
 });
 
+test("a refresh that started before a save never rolls the save back (r1#3)", async () => {
+  // Q5A 的另一条来路：pane 重挂载的 GET 在途时用户保存，PUT 先落盘、GET 后
+  // 答复——陈旧的读取不得把快照退回旧值，下一次整包 PUT 也不得把它写回去。
+  let releaseGet;
+  const held = new Promise((resolve) => { releaseGet = resolve; });
+  const started = [];
+  const impl = async (url, init = {}) => {
+    started.push(init.method ?? "GET");
+    if (init.method !== "PUT") {
+      await held;
+      // The read predates the save: it still carries hook off.
+      return new Response(JSON.stringify({ ...BASE, includeHookEvents: false, planAvailable: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    return new Response(JSON.stringify({ ...JSON.parse(String(init.body)), planAvailable: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  const store = createClaudeSettingsStore(impl);
+  const refreshing = store.refresh();
+  // 等真条件：GET 确已发出。
+  const deadline = Date.now() + 5_000;
+  while (!started.includes("GET") && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.ok(started.includes("GET"), "the refresh never started its GET");
+  const saved = await store.save({ includeHookEvents: true });
+  assert.equal(saved.ok, true);
+  assert.equal(store.getSnapshot().settings.includeHookEvents, true, "the save's answer is not the snapshot");
+  releaseGet();
+  await refreshing;
+  assert.equal(store.getSnapshot().settings.includeHookEvents, true, "the stale read rolled the save back (r1#3)");
+  // The next whole-package PUT must carry the saved value, not the stale one.
+  const bodies = [];
+  const follow = createClaudeSettingsStore(async (url, init = {}) => {
+    if (init.method === "PUT") bodies.push(JSON.parse(String(init.body)));
+    return new Response(JSON.stringify({ ...BASE, planAvailable: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+  });
+  await follow.refresh();
+  // Simulate the same race through the public API is the first store's job;
+  // here we assert the surviving snapshot feeds the next PUT: reopen via the
+  // same store — the snapshot is still the save's.
+  const next = await store.save({ customModels: ["claude-race-1"] });
+  assert.equal(next.ok, true);
+  const probe = await store.save({ launchPermissionMode: "default" });
+  assert.equal(probe.ok, true);
+  assert.equal(store.getSnapshot().settings.includeHookEvents, true, "the next save lost the hook switch to the stale read");
+});
+
 test("the singleton and the hook face are the shared store both pages use", async () => {
   const { claudeSettingsStore } = await jiti.import("./claude-settings-store.ts");
   for (const key of ["subscribe", "getSnapshot", "refresh", "save"]) {
