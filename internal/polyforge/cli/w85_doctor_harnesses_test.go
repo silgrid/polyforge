@@ -20,6 +20,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
 	"os"
@@ -33,7 +34,7 @@ import (
 // w85CellsDoc decodes the cells object of the --json report: the shape
 // the account page reads (85a2), not the checks rows.
 type w85CellsDoc struct {
-	OK    bool                     `json:"ok"`
+	OK    bool                      `json:"ok"`
 	Cells map[string]map[string]any `json:"cells"`
 }
 
@@ -98,26 +99,43 @@ func w85HarnessFacts(stepAgent, claudeConfig, source, sourceKind, piCredential, 
 // gamma (cli-gamma.toml, [model] source an absolute directory), and
 // delta (cli-delta.toml, a parse refusal). The fake Host socket answers
 // GET /status per profile header with that Cell's harnesses facts and
-// execution_disabled, and /aihub/* through to the one fake aihub.
+// execution_disabled, and /aihub/* through to that Cell's own fake aihub
+// (one shared server would conflict: Cells are per-identity).
 func w85HostFixture(t *testing.T) (env map[string]string, gammaSource string) {
 	t.Helper()
-	hub := newFakeAihub(t, &reqRecorder{}, func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/api/v1/projects":
-			io.WriteString(w, `{"items":[]}`)
-		case strings.HasPrefix(r.URL.Path, "/api/v1/projects/") && strings.HasSuffix(r.URL.Path, "/ready-queue"):
-			io.WriteString(w, `{"project":"p","items":[],"running":[],"paused":[]}`)
-		case r.URL.Path == "/api/v1/work-items":
-			io.WriteString(w, `{"items":[]}`)
-		default:
-			io.WriteString(w, `{}`)
-		}
-	})
-	hubURL, err := url.Parse(hub.URL)
-	if err != nil {
-		t.Fatalf("hub URL %s: %v", hub.URL, err)
+	hubs := map[string]*httptest.Server{}
+	for _, profile := range []string{"default", "beta", "gamma"} {
+		hubs[profile] = newFakeAihub(t, &reqRecorder{}, func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.URL.Path == "/api/v1/projects":
+				io.WriteString(w, `{"items":[]}`)
+			case strings.HasPrefix(r.URL.Path, "/api/v1/projects/") && strings.HasSuffix(r.URL.Path, "/ready-queue"):
+				io.WriteString(w, `{"project":"p","items":[],"running":[],"paused":[]}`)
+			case r.URL.Path == "/api/v1/work-items":
+				io.WriteString(w, `{"items":[]}`)
+			default:
+				io.WriteString(w, `{}`)
+			}
+		})
+		t.Cleanup(func() { hubs[profile].Close() })
 	}
-	ws := t.TempDir()
+	proxies := map[string]*httputil.ReverseProxy{}
+	for profile, hub := range hubs {
+		hubURL, err := url.Parse(hub.URL)
+		if err != nil {
+			t.Fatalf("hub URL %s: %v", hub.URL, err)
+		}
+		p := httputil.NewSingleHostReverseProxy(hubURL)
+		base := p.Director
+		p.Director = func(r *http.Request) {
+			base(r)
+			r.URL.Path = strings.TrimPrefix(r.URL.Path, "/aihub")
+			r.URL.RawPath = ""
+			r.Header.Del(protocol.ProfileHeader)
+		}
+		proxies[profile] = p
+	}
+	wsD, wsB, wsG := t.TempDir(), t.TempDir(), t.TempDir()
 	dir := t.TempDir()
 	xdg := filepath.Join(dir, "xdg")
 	cfgDir := filepath.Join(xdg, "polyforge")
@@ -126,7 +144,7 @@ func w85HostFixture(t *testing.T) (env map[string]string, gammaSource string) {
 	if err := os.WriteFile(filepath.Join(gammaSource, "auth.json"), []byte(`{}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, d := range []string{cfgDir, filepath.Join(data, "cells", "default", "step-agent"), filepath.Join(ws, "beta"), filepath.Join(ws, "gamma")} {
+	for _, d := range []string{cfgDir, filepath.Join(data, "cells", "default", "step-agent"), wsB, wsG} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -156,14 +174,6 @@ func w85HostFixture(t *testing.T) (env map[string]string, gammaSource string) {
 		// an independent-source Cell names its own directory
 		"gamma": statusBody("gamma", gammaSource, "directory", "set", "unset", "absent"),
 	}
-	toHub := httputil.NewSingleHostReverseProxy(hubURL)
-	hubDirector := toHub.Director
-	toHub.Director = func(r *http.Request) {
-		hubDirector(r)
-		r.URL.Path = strings.TrimPrefix(r.URL.Path, "/aihub")
-		r.URL.RawPath = ""
-		r.Header.Del(protocol.ProfileHeader)
-	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
 		profile := r.Header.Get(protocol.ProfileHeader)
@@ -178,9 +188,15 @@ func w85HostFixture(t *testing.T) (env map[string]string, gammaSource string) {
 		io.WriteString(w, body)
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		profile := r.Header.Get(protocol.ProfileHeader)
+		if profile == "" {
+			profile = "default"
+		}
 		if strings.HasPrefix(r.URL.Path, "/aihub/") {
-			toHub.ServeHTTP(w, r)
-			return
+			if p, ok := proxies[profile]; ok {
+				p.ServeHTTP(w, r)
+				return
+			}
 		}
 		http.NotFound(w, r)
 	})
@@ -193,12 +209,12 @@ func w85HostFixture(t *testing.T) (env map[string]string, gammaSource string) {
 	go func() { _ = srv.Serve(l) }()
 	t.Cleanup(func() { _ = srv.Close() })
 
-	host := "server = " + jsonBody(hub.URL) + "\napi_key = \"k\"\ndaemon_socket = " + jsonBody(sock) + "\n\n" +
-		"[workspace.\"" + ws + "\"]\nprojects = [\"dproj\"]\n"
-	beta := "server = " + jsonBody(hub.URL) + "\napi_key = \"kb\"\n\n[model]\nsource = \"shared-default\"\n\n" +
-		"[workspace.\"" + filepath.Join(ws, "beta") + "\"]\nprojects = [\"bproj\"]\n"
-	gamma := "server = " + jsonBody(hub.URL) + "\napi_key = \"kg\"\n\n[model]\nsource = " + jsonBody(gammaSource) + "\n\n" +
-		"[workspace.\"" + filepath.Join(ws, "gamma") + "\"]\nprojects = [\"gproj\"]\n"
+	host := "server = " + jsonBody(hubs["default"].URL) + "\napi_key = \"k\"\ndaemon_socket = " + jsonBody(sock) + "\n\n" +
+		"[workspace.\"" + wsD + "\"]\nprojects = [\"dproj\"]\n"
+	beta := "server = " + jsonBody(hubs["beta"].URL) + "\napi_key = \"kb\"\n\n[model]\nsource = \"shared-default\"\n\n" +
+		"[workspace.\"" + wsB + "\"]\nprojects = [\"bproj\"]\n"
+	gamma := "server = " + jsonBody(hubs["gamma"].URL) + "\napi_key = \"kg\"\n\n[model]\nsource = " + jsonBody(gammaSource) + "\n\n" +
+		"[workspace.\"" + wsG + "\"]\nprojects = [\"gproj\"]\n"
 	delta := "server = \n"
 	for name, body := range map[string]string{"cli.toml": host, "cli-beta.toml": beta, "cli-gamma.toml": gamma, "cli-delta.toml": delta} {
 		if err := os.WriteFile(filepath.Join(cfgDir, name), []byte(body), 0o600); err != nil {
@@ -217,15 +233,23 @@ func w85HostFixture(t *testing.T) (env map[string]string, gammaSource string) {
 func TestW85DoctorHarnessesCells(t *testing.T) {
 	env, gammaSource := w85HostFixture(t)
 	code, stdout, stderr := runPf(t, env, "--json", "doctor")
-	if code != 0 {
-		t.Fatalf("doctor: exit %d (stdout %s stderr %s)", code, stdout, stderr)
+	// the invalid delta Cell fails its config row, so the run exits 1 —
+	// every OTHER failing row would be a fixture defect
+	var rows w20Doc
+	if err := json.Unmarshal([]byte(stdout), &rows); err != nil {
+		t.Fatalf("doctor --json: %v (%s)", err, stdout)
+	}
+	for _, c := range rows.Checks {
+		if c.Status == "fail" && c.Cell != "delta" {
+			t.Fatalf("an unexpected failing row: %+v (stderr %s)", c, stderr)
+		}
+	}
+	if code != 1 {
+		t.Fatalf("doctor: exit %d, want 1 (the invalid Cell's config row)", code)
 	}
 	var doc w85CellsDoc
 	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
 		t.Fatalf("doctor --json: %v (%s)", err, stdout)
-	}
-	if !doc.OK {
-		t.Fatal("the fixture doctor run is not ok")
 	}
 	for _, profile := range []string{"default", "beta", "gamma", "delta"} {
 		if _, ok := doc.Cells[profile]; !ok {
