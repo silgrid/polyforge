@@ -22,7 +22,9 @@ func TestW174UpgradeSectionContract(t *testing.T) {
 	upgrade := w68Raw(t, "docs/upgrade.md")
 	heading := "## v0.2.4, the split attrs one shape and the data migration (polyforge#174)"
 	if !strings.Contains(upgrade, heading) {
-		t.Errorf("docs/upgrade.md must carry the appended section %q (polyforge#174: docs/upgrade.md 末尾追加一节同步更新)", heading)
+		// red-state safety (review r1#3): the slicing below would panic
+		// on a missing heading — stop here instead.
+		t.Fatalf("docs/upgrade.md must carry the appended section %q (polyforge#174: docs/upgrade.md 末尾追加一节同步更新)", heading)
 	}
 	// append-only: the new section lands at the END, after the batch's
 	// previous last one.
