@@ -101,6 +101,19 @@ test("every claude session is registered in the synthetic index", (t) => {
   }
 });
 
+test("the manifest's totals are the files' own arithmetic", (t) => {
+  const { root, manifestPath } = generate(t);
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  for (const group of ["pi", "claude"]) {
+    assert.equal(manifest.totals[`${group}Files`], manifest[group].length, `${group}: file count`);
+    assert.equal(manifest.totals[`${group}Bytes`], manifest[group].reduce((sum, entry) => sum + entry.bytes, 0), `${group}: byte total`);
+  }
+  assert.equal(manifest.totals.projectDirs, new Set(manifest.pi.map((entry) => path.dirname(path.join(root, entry.path)))).size,
+    "projectDirs is the number of distinct session dirs actually written");
+  const onDisk = fs.readdirSync(path.join(root, "agent", "sessions"), { withFileTypes: true }).length;
+  assert.equal(onDisk, Math.min(3, manifest.totals.projectDirs), "the session dirs exist under the agent dir");
+});
+
 test("the corpus is reproducible per seed and differs across seeds", (t) => {
   const first = generate(t, ["--seed", "7"]);
   const secondRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pi-web-fixture-seed-"));
