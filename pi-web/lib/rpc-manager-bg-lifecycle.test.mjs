@@ -128,9 +128,12 @@ test("reload, clone, navigate and the Chat-only rebuild are refused with the str
   await refusesCoded(() => started.session.send({ type: "navigate_tree", targetId: "whatever" }));
   await refusesCoded(() => setRpcSessionTools(sessionId, started.session.sessionFile, []));
 
-  // Once the work ends, the same commands go through again.
+  // Once the work ends, the same commands go through again. The stop also
+  // delivers the task's notification (AC1), whose turn must settle first —
+  // a reload mid-turn is refused by the ordinary running check.
   await runtime.stop(sessionId, info.id);
   await pollUntil(() => runtime.status(sessionId, info.id)[0].status === "stopped", 5_000, "the task to stop");
+  await pollUntil(() => !started.session.isRunning(), 15_000, "the notification turn to settle");
   const reloaded = await started.session.send({ type: "reload" });
   assert.equal(reloaded.success, true);
 });
