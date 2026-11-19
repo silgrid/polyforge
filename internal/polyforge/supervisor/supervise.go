@@ -248,8 +248,16 @@ func (p *supProc) manage(exits chan<- supExit, runDone <-chan struct{}) {
 		p.mu.Unlock()
 		code, ran := p.runOnce()
 		if !ran {
-			// nothing started (bad argv, unopenable log): the backoff
-			// below retries; the main loop learns nothing to wait for
+			// nothing started (an unopenable log, a missing binary): the
+			// start marker goes with it — ONE place clears it, every
+			// failed start (the start-window skip clears it in runOnce
+			// itself, its run "ended" with an event), or a stop would
+			// leave the run waiting on a start that never comes
+			// (r2#1). The backoff below retries; the main loop learns
+			// nothing to wait for.
+			p.mu.Lock()
+			p.starting = false
+			p.mu.Unlock()
 			if p.retrySleep() {
 				continue
 			}
@@ -332,18 +340,16 @@ func (p *supProc) runOnce() (code int, ran bool) {
 	p.mu.Unlock()
 	if err := cmd.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "pf supervise: child %s: start: %v\n", p.spec.Name, err)
-		p.mu.Lock()
-		p.starting = false
-		p.mu.Unlock()
 		return 0, false
 	}
 	started := time.Now()
 	p.mu.Lock()
 	p.cmd, p.alive, p.starting, p.termed = cmd, true, false, false
-	if p.stop && !p.termed {
+	if p.stop {
 		// the stop landed in the instant between the check above and
 		// this start — its term() found no process yet, so the one
-		// forwarded signal is delivered here
+		// forwarded signal is delivered here (termed was just reset:
+		// this IS its first delivery of this run)
 		p.termed = true
 		_ = cmd.Process.Signal(syscall.SIGTERM)
 	}
