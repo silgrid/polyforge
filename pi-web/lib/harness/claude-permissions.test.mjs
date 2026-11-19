@@ -54,7 +54,7 @@ delete process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS;
 const managedSettings = path.join(scratch, "managed-settings.json");
 
 /** A stub `claude` answering initialize with the given version (85a1's harness). */
-function installVersionedStub(name: string, version: string) {
+function installVersionedStub(name, version) {
   const dir = path.join(scratch, name);
   fs.mkdirSync(dir);
   const binary = path.join(dir, "claude");
