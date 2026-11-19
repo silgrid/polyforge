@@ -13,11 +13,20 @@ import (
 
 func TestContainerEngineReloadIsPendingRestart(t *testing.T) {
 	td := newTestDaemon(t, nil)
+	ws, err := td.cfg.Mapping.WorkspaceFor("proj")
+	if err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(t.TempDir(), "cli.toml")
 	td.cfg.ConfigPath = path
+	base := "[workspace.\"" + ws + "\"]\nprojects = [\"proj\"]\n"
 	write := func(v string) {
 		t.Helper()
-		if err := os.WriteFile(path, []byte("[daemon]\ncontainer_engine = \""+v+"\"\n"), 0o600); err != nil {
+		extra := ""
+		if v != "" {
+			extra = "[daemon]\ncontainer_engine = \"" + v + "\"\n"
+		}
+		if err := os.WriteFile(path, []byte(base+extra), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
