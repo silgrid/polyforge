@@ -311,14 +311,21 @@ func Install(opts Options) (*Result, error) {
 }
 
 // sameContent reports whether two manifests of the same version carry
-// the same digests (and component versions) — the noop test.
+// the same content — the noop test. The comparison is BY NAME
+// (review r1#N6): Validate does not order the manifest's components,
+// so a seed listing them in another order is the same content, not a
+// "different digest" refusal.
 func sameContent(a, b *Manifest) bool {
 	if len(a.Components) != len(b.Components) {
 		return false
 	}
 	for i := range a.Components {
-		ca, cb := &a.Components[i], &b.Components[i]
-		if ca.Name != cb.Name || ca.Digest != cb.Digest || ca.Version != cb.Version {
+		cb := b.Component(a.Components[i].Name)
+		if cb == nil {
+			return false
+		}
+		ca := &a.Components[i]
+		if ca.Digest != cb.Digest || ca.Version != cb.Version || ca.Path != cb.Path {
 			return false
 		}
 	}

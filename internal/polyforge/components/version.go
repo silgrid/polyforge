@@ -26,8 +26,12 @@ const (
 
 // versionRe is the one accepted shape: v, three decimal fields, and
 // either no suffix (public) or one of the two settled suffixed
-// channels with its decimal number.
-var versionRe = regexp.MustCompile(`^v(\d+)\.(\d+)\.(\d+)(?:-(gmi|dev)\.(\d+))?$`)
+// channels with its decimal number. Every numeric field is the strict
+// SemVer spelling (review r1#N5): 0 alone, or a nonzero leading digit
+// — a leading zero is not a version, so two spellings of one number
+// can never both name versions (and never name two different
+// releases/<ver> directories that compare equal).
+var versionRe = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-(gmi|dev)\.(0|[1-9][0-9]*))?$`)
 
 // Version is one parsed version of the accepted forms.
 type Version struct {
