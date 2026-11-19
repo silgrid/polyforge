@@ -460,6 +460,74 @@ class CheckUnitsTest(FastChecksCase):
         self.assertEqual(code, 2)
 
 
+# A recorded run that counts itself in ./ucount and is red until its
+# counter reaches the given mark (or always red, still counting): the
+# fixture the --check-units flaky policy tests derive every expected value
+# from — the counter file's own contents.
+def counting_argv(mark: int, always: bool = False) -> List[str]:
+    if always:
+        return ["bash", "-c",
+                "n=$(cat ucount 2>/dev/null || echo 0); n=$((n+1)); echo $n > ucount; exit 1"]
+    return ["bash", "-c",
+            "n=$(cat ucount 2>/dev/null || echo 0); n=$((n+1)); echo $n > ucount; "
+            "test \"$n\" -ge %d && echo U2PASS || exit 1" % mark]
+
+
+class FlakyCheckUnitsTest(CheckUnitsTest):
+    """AC1's --check-units half, as the owner's ruling scopes it: a red
+    unit declared pre_existing_red (its test predates the lane) is re-run
+    once, verification's own recorded-run policy — a pass records it flaky
+    and passes; a unit this lane just wrote is never re-run here: red it
+    stays, a pass on a re-run would not count. Expected values come from
+    the fixtures' own counter files and exit codes, never the
+    implementation."""
+
+    def pre_existing(self, id: str, marker: str, argv: List[str]) -> Dict[str, Any]:
+        unit = self.unit(id, marker, argv)
+        unit["pre_existing_red"] = True
+        return unit
+
+    def run_count(self) -> int:
+        clone = os.path.join(self.capsule, "repos", "app")
+        try:
+            with open(os.path.join(clone, "ucount"), encoding="utf-8") as f:
+                return int(f.read().strip())
+        except OSError:
+            return 0
+
+    def test_a_pre_existing_red_unit_rerun_pass_is_flaky(self) -> None:
+        code, res = self.run_units([self.pre_existing("u2a", "^U2PASS$", counting_argv(2))])
+        self.assertEqual(code, 0, res)
+        u = res["details"]["units"][0]
+        self.assertTrue(u["passed"])
+        self.assertTrue(u["flaky"], "the pass came on the re-run: flaky")
+        self.assertTrue(u["log"], "the first failure's log stays")
+        self.assertTrue(u["rerun_log"], "the passing re-run's log is recorded")
+        self.assertEqual(self.run_count(), 2, "the first run plus exactly one re-run")
+        self.assertIn("flaky", res["summary"])
+        self.assertIn("u2a", res["summary"])
+        self.assertIn(u["log"], res["summary"])
+
+    def test_a_unit_this_lane_just_wrote_is_never_rerun(self) -> None:
+        code, res = self.run_units([self.unit("u2b", "^NEVERU2B$", counting_argv(2, always=True))])
+        self.assertEqual(code, 1, res)
+        u = res["details"]["units"][0]
+        self.assertFalse(u["passed"])
+        self.assertNotIn("flaky", u)
+        self.assertNotIn("rerun_log", u, "no re-run ever happened")
+        self.assertIn("not re-run", u["why"], "the why names the policy")
+        self.assertEqual(self.run_count(), 1, "exactly one run: never re-run")
+
+    def test_a_pre_existing_red_unit_still_red_after_its_one_rerun(self) -> None:
+        code, res = self.run_units([self.pre_existing("u2c", "^U2PASS$", counting_argv(2, always=True))])
+        self.assertEqual(code, 1, res)
+        u = res["details"]["units"][0]
+        self.assertFalse(u["passed"])
+        self.assertNotIn("flaky", u)
+        self.assertTrue(u["rerun_log"], "the re-run happened and its log is recorded")
+        self.assertEqual(self.run_count(), 2, "the first run plus exactly one re-run")
+
+
 class FullPhaseNeverRunsTest(FastChecksCase):
     """AC2 (review r1 #1): a report that falls back to the full tier — a
     stack config file changed — never has its full-phase commands run:
