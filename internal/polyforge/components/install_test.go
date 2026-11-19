@@ -20,6 +20,13 @@ import (
 	"testing"
 )
 
+// dataDir answers one fresh data directory for an install's options
+// (the pre-#162 layout would live there; a fresh one carries none).
+func dataDir(t *testing.T) string {
+	t.Helper()
+	return t.TempDir()
+}
+
 // installSeed writes one synthetic seed (in its own temp directory) and
 // answers its path.
 func installSeed(t *testing.T, spec seedSpec) string {
@@ -77,7 +84,7 @@ func TestInstallEmptyVolume(t *testing.T) {
 	root := t.TempDir()
 	seed := installSeed(t, seedSpec{})
 
-	res, err := Install(Options{Root: root, Seed: seed, BaseVersion: "v0.2.4", Platform: "linux/amd64"})
+	res, err := Install(Options{Root: root, DataDir: dataDir(t), Seed: seed, BaseVersion: "v0.2.4", Platform: "linux/amd64"})
 	if err != nil {
 		t.Fatalf("Install on an empty volume: %v", err)
 	}
@@ -126,7 +133,7 @@ func TestInstallEmptyVolume(t *testing.T) {
 func TestInstallSameVersionNoop(t *testing.T) {
 	root := t.TempDir()
 	seed := installSeed(t, seedSpec{})
-	if _, err := Install(Options{Root: root, Seed: seed, BaseVersion: "v0.2.4", Platform: "linux/amd64"}); err != nil {
+	if _, err := Install(Options{Root: root, DataDir: dataDir(t), Seed: seed, BaseVersion: "v0.2.4", Platform: "linux/amd64"}); err != nil {
 		t.Fatalf("first install: %v", err)
 	}
 	before := rootState(t, root)
@@ -135,7 +142,7 @@ func TestInstallSameVersionNoop(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := Install(Options{Root: root, Seed: seed, BaseVersion: "v0.2.4", Platform: "linux/amd64"})
+	res, err := Install(Options{Root: root, DataDir: dataDir(t), Seed: seed, BaseVersion: "v0.2.4", Platform: "linux/amd64"})
 	if err != nil {
 		t.Fatalf("second install of the same seed: %v", err)
 	}
@@ -161,12 +168,12 @@ func TestInstallSameVersionNoop(t *testing.T) {
 func TestInstallUpgradeKeepsPrevious(t *testing.T) {
 	root := t.TempDir()
 	old := installSeed(t, seedSpec{})
-	if _, err := Install(Options{Root: root, Seed: old, BaseVersion: "v0.2.4", Platform: "linux/amd64"}); err != nil {
+	if _, err := Install(Options{Root: root, DataDir: dataDir(t), Seed: old, BaseVersion: "v0.2.4", Platform: "linux/amd64"}); err != nil {
 		t.Fatalf("first install: %v", err)
 	}
 	newer := installSeed(t, seedSpec{version: "v0.2.5", minBase: "v0.2.4"})
 
-	res, err := Install(Options{Root: root, Seed: newer, BaseVersion: "v0.2.5", Platform: "linux/amd64"})
+	res, err := Install(Options{Root: root, DataDir: dataDir(t), Seed: newer, BaseVersion: "v0.2.5", Platform: "linux/amd64"})
 	if err != nil {
 		t.Fatalf("upgrade install: %v", err)
 	}
@@ -205,7 +212,7 @@ func TestInstallRefusals(t *testing.T) {
 	// a root with v0.2.4 current, the state every refusal must keep.
 	setup := func(t *testing.T) (root string, before string) {
 		root = t.TempDir()
-		if _, err := Install(Options{Root: root, Seed: installSeed(t, seedSpec{}), BaseVersion: "v0.2.4", Platform: "linux/amd64"}); err != nil {
+		if _, err := Install(Options{Root: root, DataDir: dataDir(t), Seed: installSeed(t, seedSpec{}), BaseVersion: "v0.2.4", Platform: "linux/amd64"}); err != nil {
 			t.Fatalf("setup install: %v", err)
 		}
 		return root, rootState(t, root)
@@ -364,7 +371,7 @@ func TestInstallRefusals(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			root, before, setSeed := c.setup(t)
-			opts := setSeed(Options{Root: root, BaseVersion: "v0.2.5", Platform: "linux/amd64"})
+			opts := setSeed(Options{Root: root, DataDir: dataDir(t), BaseVersion: "v0.2.5", Platform: "linux/amd64"})
 			res, err := Install(opts)
 			if err == nil {
 				t.Fatalf("Install answered %+v, want a refusal", res)
@@ -465,7 +472,7 @@ func TestInstallLockHeld(t *testing.T) {
 		t.Fatalf("taking the lock in the test: %v", err)
 	}
 
-	_, err = Install(Options{Root: root, Seed: installSeed(t, seedSpec{}), BaseVersion: "v0.2.4", Platform: "linux/amd64"})
+	_, err = Install(Options{Root: root, DataDir: dataDir(t), Seed: installSeed(t, seedSpec{}), BaseVersion: "v0.2.4", Platform: "linux/amd64"})
 	if !errors.Is(err, ErrLockHeld) {
 		t.Fatalf("Install under a held lock = %v, want the ErrLockHeld refusal", err)
 	}
@@ -476,7 +483,7 @@ func TestInstallLockHeld(t *testing.T) {
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_UN); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Install(Options{Root: root, Seed: installSeed(t, seedSpec{}), BaseVersion: "v0.2.4", Platform: "linux/amd64"}); err != nil {
+	if _, err := Install(Options{Root: root, DataDir: dataDir(t), Seed: installSeed(t, seedSpec{}), BaseVersion: "v0.2.4", Platform: "linux/amd64"}); err != nil {
 		t.Fatalf("Install after the lock's release: %v", err)
 	}
 	if target, _ := CurrentTarget(root); target != filepath.Join(ReleasesDirname, "v0.2.4") {

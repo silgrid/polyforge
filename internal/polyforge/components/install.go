@@ -144,17 +144,25 @@ func Install(opts Options) (*Result, error) {
 	if opts.Seed == "" {
 		return nil, fmt.Errorf("components install: Seed is required")
 	}
+	if opts.DataDir == "" {
+		return nil, fmt.Errorf("components install: DataDir is required (the data directory is where the pre-#162 layout would live, so the install refuses to run without it)")
+	}
 	if err := os.MkdirAll(opts.Root, 0o755); err != nil {
 		return nil, fmt.Errorf("components root %s: %w", opts.Root, err)
 	}
 
-	// the #161-era shape is refused before anything else: it carries
-	// no manifests and no digests, and it is never imported.
-	if _, err := os.Lstat(filepath.Join(opts.Root, LegacyReleaseDirname)); err == nil {
-		return nil, fmt.Errorf("%w: %s carries a %s/ directory (the pre-#162 data-dir layout, %s). This layout has no manifests and is not imported automatically: migrate by hand — move or copy each complete version into %s/<ver> of a fresh components root (the #162 layout keeps every version in %s/<ver> with the %s and %s symlinks beside them at the root) — or start the volume empty and let the seed install",
-			ErrLegacyLayout, opts.Root, LegacyReleaseDirname,
+	// the #161-era layout is refused before anything else, in the data
+	// directory where it actually lives: the #161 image and the host
+	// installer keep their components in <data-dir>/release/<ver> with
+	// a current symlink inside — a shape with no manifests and no
+	// digests, on a volume the components root does not shadow. It is
+	// never imported and never bridged.
+	if _, err := os.Lstat(filepath.Join(opts.DataDir, LegacyReleaseDirname)); err == nil {
+		return nil, fmt.Errorf("%w: the data directory %s carries a %s/ directory — the pre-#162 component layout, %s. It has no manifests and is not imported automatically: migrate by hand — move or copy each complete version from %s/<ver> into the components root's %s/<ver> (the #162 layout: one releases/<ver> directory per version with the %s and %s symlinks beside them at the root, e.g. /components/releases/<ver>) — or start the components volume empty and let the seed install",
+			ErrLegacyLayout, opts.DataDir, LegacyReleaseDirname,
 			filepath.Join(LegacyReleaseDirname, CurrentLinkname),
-			ReleasesDirname, ReleasesDirname, CurrentLinkname, PreviousLinkname)
+			filepath.Join(opts.DataDir, LegacyReleaseDirname),
+			ReleasesDirname, CurrentLinkname, PreviousLinkname)
 	}
 
 	lock, err := holdLock(opts.Root)
@@ -183,8 +191,11 @@ func Install(opts Options) (*Result, error) {
 		return nil, fmt.Errorf("%w: the base runs %s, the seed requires %s",
 			ErrBaseTooOld, opts.BaseVersion, seedManifest.MinBase)
 	}
-	// the seed is judged in place before anything is staged: a bad
-	// digest never reaches the volume.
+	// the seed is judged in place before anything is staged, on every
+	// run including a noop: a bad digest never reaches the volume, and
+	// the cost is deliberate — one full walk of the seed per install
+	// call, so a corrupt seed is caught even when the volume is already
+	// current (fail-closed beats a few seconds of hashing at boot).
 	if err := seedManifest.VerifyTree(opts.Seed); err != nil {
 		return nil, fmt.Errorf("%w: the seed at %s: %w", ErrDigestMismatch, opts.Seed, err)
 	}

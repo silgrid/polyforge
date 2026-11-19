@@ -31,7 +31,7 @@ func TestInstallCrashMatrix(t *testing.T) {
 		t.Run(point, func(t *testing.T) {
 			root := t.TempDir()
 			older := installSeed(t, seedSpec{})
-			if _, err := Install(Options{Root: root, Seed: older, BaseVersion: "v0.2.4", Platform: "linux/amd64"}); err != nil {
+			if _, err := Install(Options{Root: root, DataDir: dataDir(t), Seed: older, BaseVersion: "v0.2.4", Platform: "linux/amd64"}); err != nil {
 				t.Fatalf("the v0.2.4 install before the crash: %v", err)
 			}
 			newer := installSeed(t, seedSpec{version: "v0.2.5", minBase: "v0.2.4"})
@@ -41,6 +41,7 @@ func TestInstallCrashMatrix(t *testing.T) {
 			cmd.Env = append(os.Environ(),
 				"PF_COMPONENTS_CHILD=1",
 				"PF_COMPONENTS_ROOT="+root,
+				"PF_COMPONENTS_DATA="+t.TempDir(),
 				"PF_COMPONENTS_SEED="+newer,
 				crashpoint.EnvVar+"="+point,
 			)
@@ -54,7 +55,7 @@ func TestInstallCrashMatrix(t *testing.T) {
 
 			// the reboot: the same install again, in the parent, with
 			// no crash point configured.
-			if _, err := Install(Options{Root: root, Seed: newer, BaseVersion: "v0.2.5", Platform: "linux/amd64"}); err != nil {
+			if _, err := Install(Options{Root: root, DataDir: dataDir(t), Seed: newer, BaseVersion: "v0.2.5", Platform: "linux/amd64"}); err != nil {
 				t.Fatalf("the reboot's install after the crash at %s: %v", point, err)
 			}
 
@@ -97,6 +98,7 @@ func TestInstallCrashChild(t *testing.T) {
 	}
 	_, err := Install(Options{
 		Root:        root,
+		DataDir:     os.Getenv("PF_COMPONENTS_DATA"),
 		Seed:        os.Getenv("PF_COMPONENTS_SEED"),
 		BaseVersion: "v0.2.5",
 		Platform:    "linux/amd64",
@@ -117,7 +119,7 @@ func TestRecoverJournalCompletion(t *testing.T) {
 			spec seedSpec
 			base string
 		}{{seedSpec{}, "v0.2.4"}, {seedSpec{version: "v0.2.5", minBase: "v0.2.4"}, "v0.2.5"}} {
-			if _, err := Install(Options{Root: root, Seed: installSeed(t, step.spec), BaseVersion: step.base, Platform: "linux/amd64"}); err != nil {
+			if _, err := Install(Options{Root: root, DataDir: dataDir(t), Seed: installSeed(t, step.spec), BaseVersion: step.base, Platform: "linux/amd64"}); err != nil {
 				t.Fatalf("setup install: %v", err)
 			}
 		}
