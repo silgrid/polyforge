@@ -68,13 +68,22 @@ var prerequisiteOrder = []string{"gh", "curl", "python3", "tmux", "git"}
 func prerequisitesCheck(lookPath func(string) (string, error), containerSupervised bool) doctorCheck {
 	var missing []string
 	for _, tool := range prerequisiteOrder {
+		// polyforge#160, Q7: the container supervisor replaces the tmux
+		// loop, and the container image carries no tmux — under it tmux is
+		// not a required tool.
+		if tool == "tmux" && containerSupervised {
+			continue
+		}
 		if _, err := lookPath(tool); err != nil {
 			missing = append(missing, tool+" — "+prerequisiteHints[tool])
 		}
 	}
 	if len(missing) == 0 {
-		return doctorCheck{Name: docChPrereqs, Status: "pass",
-			Detail: "all five setup tools on PATH: " + strings.Join(prerequisiteOrder, ", ")}
+		detail := "all five setup tools on PATH: " + strings.Join(prerequisiteOrder, ", ")
+		if containerSupervised {
+			detail = "every required setup tool on PATH — tmux is not required under the container supervisor (`pf supervise`): " + strings.Join([]string{"gh", "curl", "python3", "git"}, ", ")
+		}
+		return doctorCheck{Name: docChPrereqs, Status: "pass", Detail: detail}
 	}
 	return doctorCheck{Name: docChPrereqs, Status: "warn",
 		Detail: "missing (checked and reported; the doctor never installs anything): " + strings.Join(missing, "; ")}
@@ -520,6 +529,17 @@ func supervisionCheck(daemonUp bool, daemonEnvNames []string) (c doctorCheck) {
 			c.Status, c.Detail = "warn", c.Detail+" — "+layoutNote
 		}
 	}()
+	// polyforge#160: a daemon the container supervisor started — its
+	// environment carries the supervision marker, checked inside a
+	// container — is supervised: the container's `pf supervise` restarts
+	// a crash and forwards the stop. No tmux or systemd is involved, so
+	// this is judged BEFORE them; a host's tmux/systemd answers stay
+	// exactly as they were (the marker variable there says tmux:, not
+	// container:).
+	if supervisor.InContainer() && envNamesCarry(daemonEnvNames) {
+		c.Status, c.Detail = "pass", "the daemon runs under the container supervisor (`pf supervise`: a crash is restarted, a stop signal is forwarded and the daemon shuts down within the container's grace)"
+		return c
+	}
 	loop, err := supervisor.LoopRunning()
 	switch {
 	case loop:
