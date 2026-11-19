@@ -76,7 +76,13 @@ const CLAUDE_REPORT = { available: true, models: [{ value: "default", displayNam
 
 /** Answers the harness/claude adapter routes the settings skeleton reads; everything else hits the server. */
 async function mockAdapterApis(context) {
-  await context.route(/\/api\/harness(?:\/|$)/, (route) => {
+  // The app's fresh-page flow would otherwise select a default project
+  // asynchronously (POST /api/default-cwd → POST /api/cwd/validate): a cwd
+  // landing mid-scenario re-fires the panes' reads with ?cwd=, racing every
+  // no-project assertion (v1 round 1: S85-09's alert was cleared by exactly
+  // that). The suite is a no-project suite; the flow answers no cwd.
+  await context.route("**/api/default-cwd", (route) => route.fulfill({ status: 200, json: {} }));
+  await context.route(/\/api\/harness(?:\/|\?|$)/, (route) => {
     const path = new URL(route.request().url()).pathname;
     const body = path === "/api/harness" ? HARNESS_LIST
       : path === "/api/harness/pi/env" ? ENV_PI
@@ -331,7 +337,7 @@ try {
   await part("S9", "a failed harness list says why", async () => {
     const page = await newPage();
     // The later registration wins over the shared adapter mocks: the list itself 500s.
-    await page.context().route(/\/api\/harness(?:\/|$)/, (route) => route.fulfill({ status: 500, json: { error: "internal" } }));
+    await page.context().route(/\/api\/harness(?:\/|\?|$)/, (route) => route.fulfill({ status: 500, json: { error: "internal" } }));
     await openSettings(page);
     await generalSidebarItems(page).filter({ hasText: "Effective values & sources" }).click({ timeout: ACTION_MS });
     const effectivePane = generalPane(page, "effective");
