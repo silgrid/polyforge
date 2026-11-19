@@ -1,4 +1,4 @@
-# carries: workflows/_shared/scripts/verify.py, workflows/_shared/scripts/pfstep/scoped_plan.py
+# carries: workflows/_shared/scripts/fast_checks.py, workflows/_shared/scripts/verify.py, workflows/_shared/scripts/pfstep/scoped_plan.py
 """The build close's scoped selection (polyforge#164): the one light-tier
 planning implementation shared by verification and the close
 (SharedPlanTest), the close's own run and its parity with verification's
@@ -7,15 +7,66 @@ machine selection record (AnalysisRecordTest)."""
 
 import json
 import os
-import sys  # noqa: F401  (ExecutionTest, added with u2)
+import shutil
+import subprocess
+import sys
+import tempfile
 import unittest
-from typing import Any, Callable, Dict, List, Optional, Tuple  # noqa: F401  (u2/u3)
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from pfstep import scoped_plan
 from pfstep.engine import EngineReport, ReportError, decode_report
 
-from .gitworld import HAVE_GIT, Repo, write
-from .verifyfix import HAVE_BASH, Fixture, cmd_of, report, run_verify
+from .gitworld import HAVE_GIT, Repo, git, write
+from .test_fast_checks import FastChecksCase
+from .verifyfix import HAVE_BASH, HAVE_GO, Fixture, cmd_of, fake_engine, report, run_verify
+
+FAST_CHECKS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "fast_checks.py")
+ENGINE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "verify-scope")
+
+
+def light_engine(root: str, default: Dict[str, Any], light: Dict[str, Any]) -> str:
+    """A fake scope engine answering default without --light and light
+    with it (the shape of #136/#143/#154: a forced-full path makes the
+    default report full — the per-unit fast checks never see the pinned
+    test — while the light report stays scoped and selects it), logging
+    its arguments to args.log beside it."""
+    d = tempfile.mkdtemp(prefix="light-engine-", dir=root)
+    for name, rep in (("default.json", default), ("light.json", light)):
+        with open(os.path.join(d, name), "w", encoding="utf-8") as f:
+            json.dump(rep, f)
+    script = """#!/bin/bash
+dir=$(cd "$(dirname "$0")" && pwd)
+echo "$(basename "$PWD") $*" >>"$dir/args.log"
+for a in "$@"; do if [ "$a" = "--light" ]; then cat "$dir/light.json"; exit 0; fi; done
+cat "$dir/default.json"
+"""
+    p = os.path.join(d, "verify-scope")
+    with open(p, "w", encoding="utf-8") as f:
+        f.write(script)
+    os.chmod(p, 0o755)
+    return p
+
+
+def engine_args_of(engine: str) -> List[str]:
+    """The lines the fake engine logged ("<dir> <args>")."""
+    try:
+        with open(os.path.join(os.path.dirname(engine), "args.log"), encoding="utf-8") as f:
+            return f.read().splitlines()
+    except OSError:
+        return []
+
+
+def run_close(capsule: str, repo: str, engine: str, out: str, *extra: str) -> Tuple[int, Dict[str, Any]]:
+    """fast_checks.py --close-scoped on the capsule's repo, as a skill runs
+    it; its exit and its result file."""
+    argv = [sys.executable, FAST_CHECKS, "--capsule", capsule, "--repo", repo, "--close-scoped",
+            "--engine", engine, "--deadline", "10m", "--out", out, *extra]
+    c = subprocess.run(argv, capture_output=True, text=True)
+    if not os.path.exists(out):
+        raise AssertionError("fast_checks.py wrote no result file (exit %d): %s" % (c.returncode, (c.stderr or c.stdout)[-500:]))
+    with open(out, encoding="utf-8") as f:
+        return c.returncode, json.load(f)
 
 
 Ask = Callable[[str, str, str], Tuple[Optional[EngineReport], str, str]]
@@ -203,6 +254,252 @@ class SharedPlanTest(unittest.TestCase):
         self.assertEqual(plan.status, scoped_plan.PLAN_PLANNED, plan.reason)
         self.assertEqual([(c.name, c.phase) for c in plan.commands],
                          [(c["name"], c["phase"]) for c in ran])
+
+
+@unittest.skipUnless(HAVE_GIT and HAVE_BASH, "git and bash are required")
+class SelectionParityTest(unittest.TestCase):
+    """AC1: the same fixture, both entries — verification's light plan and
+    the build close's --close-scoped selection — answer the same set of
+    existing tests, planned by the one shared implementation: the same
+    commands (name, phase, cmd), the same mode, the same engine request,
+    and a full answer leaves the close incomplete with the same reasons
+    verification names."""
+
+    def setUp(self) -> None:
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        self.root = os.path.realpath(td.name)
+
+    def selection_of_close(self, res: Dict[str, Any]) -> List[Tuple[str, str, str]]:
+        sel = res["details"]["selected"]["app"]
+        self.assertEqual(sel["status"], "green", sel.get("reason", ""))
+        return [(c["name"], c["phase"], c["cmd"]) for c in sel["commands"]]
+
+    def test_the_same_fixture_selects_the_same_commands(self) -> None:
+        fx = Fixture(self.root, {"app": {"a.txt": "base\n"}})
+        fx.commit_in_repo("app", {"c.txt": "mine\n"})
+        eng = fake_engine(self.root, {"app": report(
+            "scoped", cmd_of("fast-1", "fast", "true"),
+            cmd_of("scoped-1", "scoped", "echo s"), cmd_of("full-1", "full", "echo never"))})
+        r = run_verify(fx.capsule, eng)
+        self.assertEqual(r.exit, 0, r.stderr)
+        assert r.doc is not None
+        base = r.doc["merge_outcomes"]["app"]["base"]
+        code, res = run_close(fx.capsule, "app", eng, os.path.join(fx.capsule, "close.json"))
+        self.assertEqual(code, 0, res.get("summary"))
+        # the same commands, the same mode, the same base — and the engine
+        # was asked exactly alike
+        self.assertEqual(self.selection_of_close(res),
+                         [(c["name"], c["phase"], c["command"]) for c in r.doc["repos"][0]["commands"]])
+        self.assertEqual(res["details"]["selected"]["app"]["mode"], "light")
+        self.assertEqual(res["details"]["selected"]["app"]["base"], base)
+        args = engine_args_of(eng)
+        self.assertEqual(args[-1], "app --json --light --base " + base, args)
+        self.assertIn("app --json --light --base " + base, "\n".join(args[:-1]))
+
+    def test_a_nested_root_selects_the_same_on_both_sides(self) -> None:
+        files = {".polyforge/verify-scope.conf": "stack=go\n",
+                 "web/.polyforge/verify-scope.conf": "stack=npm\n",
+                 "web/lib/a.ts": "export const a = 1;\n"}
+        fx = Fixture(self.root, {"app": files})
+        fx.commit_in_repo("app", {"web/lib/a.ts": "export const a = 2;\n"})
+        eng = fake_engine(self.root, {
+            "app": report("scoped", cmd_of("fast-1", "fast", "true"), paths=["web/lib/a.ts"]),
+            "web": report("scoped", cmd_of("n-fast", "fast", "true"),
+                          cmd_of("n-scoped", "scoped", "echo n"), base_setup=["npm ci"]),
+        })
+        r = run_verify(fx.capsule, eng)
+        self.assertEqual(r.exit, 0, r.stderr)
+        assert r.doc is not None
+        code, res = run_close(fx.capsule, "app", eng, os.path.join(fx.capsule, "close.json"))
+        self.assertEqual(code, 0, res.get("summary"))
+        self.assertEqual(self.selection_of_close(res),
+                         [(c["name"], c["phase"], c["command"]) for c in r.doc["repos"][0]["commands"]])
+        sel = res["details"]["selected"]["app"]
+        self.assertEqual([c["name"] for c in sel["commands"]],
+                         ["fast-1", "web/n-fast", "web/n-scoped"])
+        self.assertIn("cd web && ", sel["commands"][2]["cmd"])
+
+    def test_a_full_answer_is_incomplete_with_the_same_reasons(self) -> None:
+        fx = Fixture(self.root, {"app": {"go.mod": "module a\n\ngo 1.21\n"}})
+        fx.commit_in_repo("app", {"go.mod": "module a\n\ngo 1.22\n"})
+        eng = fake_engine(self.root, {"app": report(
+            "full", cmd_of("fast-1", "fast", "true"), cmd_of("full-1", "full", "echo f"),
+            diagnostics=["go.mod: a stack config file changed, falling back to the full tier"])})
+        r = run_verify(fx.capsule, eng)
+        assert r.doc is not None
+        self.assertEqual(r.doc["tier"]["effective"], "full", r.doc["tier"])
+        reasons = r.doc["tier"].get("reasons") or [""]
+        self.assertTrue(reasons[0].startswith("repos/app: "), r.doc["tier"])
+        code, res = run_close(fx.capsule, "app", eng, os.path.join(fx.capsule, "close.json"))
+        self.assertEqual(code, 1, res.get("summary"))
+        sel = res["details"]["selected"]["app"]
+        self.assertEqual(sel["status"], "incomplete")
+        self.assertEqual(sel["reason"], "go.mod: a stack config file changed, falling back to the full tier")
+        self.assertEqual(sel["commands"], [], "a full answer runs nothing: the full bar is verification's")
+        self.assertIn("falling back to the full tier", res["summary"])
+
+    @unittest.skipUnless(HAVE_GO, "go is required for the real engine's parity")
+    def test_the_real_engine_selects_the_same_commands(self) -> None:
+        files = {"go.mod": "module a\n\ngo 1.21\n",
+                 ".polyforge/verify-scope.conf": "stack=go\nfast_gate=echo gate-ok\n",
+                 "app/app.go": "package app\n\n// Answer is the answer.\nfunc Answer() int { return 42 }\n",
+                 "app/app_test.go": "package app\n\nimport \"testing\"\n\nfunc TestAnswer(t *testing.T) {\n\tif Answer() != 42 {\n\t\tt.Fatal(\"not 42\")\n\t}\n}\n"}
+        fx = Fixture(self.root, {"app": files})
+        fx.commit_in_repo("app", {"app/app.go": "package app\n\n// Answer is the answer. (changed)\nfunc Answer() int { return 42 }\n"})
+        r = run_verify(fx.capsule, ENGINE)
+        self.assertEqual(r.exit, 0, r.stderr)
+        assert r.doc is not None
+        code, res = run_close(fx.capsule, "app", ENGINE, os.path.join(fx.capsule, "close.json"))
+        self.assertEqual(code, 0, res.get("summary"))
+        self.assertEqual(self.selection_of_close(res),
+                         [(c["name"], c["phase"], c["command"]) for c in r.doc["repos"][0]["commands"]])
+
+
+@unittest.skipUnless(HAVE_GIT and HAVE_BASH, "git and bash are required")
+class ExecutionTest(FastChecksCase):
+    """AC2: the selected existing tests actually run at the close — the
+    #136/#143/#154 shape (a change touches text an existing test pins: the
+    default report is full, the per-unit fast checks stay green, the light
+    selection runs the pinned test and it is red; the fix turns it green),
+    a full fallback is incomplete with its reason kept, a selected command
+    that cannot run is never a skip-as-green, a timeout is red, engine
+    failure is not judged, and a --reuse file of another tree reuses
+    nothing."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.n = 0
+        if not (shutil.which("python3") and os.path.exists(ENGINE)):
+            self.skipTest("python3 or the engine missing")
+
+    def pin_repo(self) -> Tuple[str, str]:
+        """A repo whose change breaks text an existing test pins, with the
+        light-aware engine that makes the default report full (fast checks
+        green) and the light report scoped (the pinned test selected)."""
+        clone = self.task_repo("app", {"pin/note.txt": "the answer is 42\n"},
+                               {"pin/note.txt": "the answer is 43\n"})
+        eng = light_engine(
+            self.tmp,
+            report("full", cmd_of("gate-1", "fast", "echo gate-ok")),
+            report("scoped", cmd_of("gate-1", "fast", "echo gate-ok"),
+                   cmd_of("pin", "scoped", "test \"$(cat pin/note.txt)\" = \"the answer is 42\"")))
+        return clone, eng
+
+    def run_mode(self, repo: str, engine: str, *extra: str) -> Tuple[int, Dict[str, Any], str]:
+        """fast_checks.py --repo (the per-unit bar) on the capsule's repo;
+        its exit, its result file and the file's path."""
+        self.n += 1
+        out = os.path.join(self.capsule, "fast-%d.json" % self.n)
+        argv = [sys.executable, FAST_CHECKS, "--capsule", self.capsule, "--repo", repo,
+                "--engine", engine, "--deadline", "10m", "--out", out, *extra]
+        c = subprocess.run(argv, capture_output=True, text=True)
+        if not os.path.exists(out):
+            raise AssertionError("fast_checks.py wrote no result file (exit %d): %s" % (c.returncode, (c.stderr or c.stdout)[-500:]))
+        with open(out, encoding="utf-8") as f:
+            return c.returncode, json.load(f), out
+
+    def test_fast_checks_green_close_scoped_red_then_green(self) -> None:
+        clone, eng = self.pin_repo()
+        # the per-unit bar: the default report is full, its fast gate runs,
+        # the pinned test is never selected — green
+        code, _res, _out = self.run_mode("app", eng)
+        self.assertEqual(code, 0, "the per-unit fast check must stay green")
+        # the close: the light selection runs the pinned test — red
+        code, res = run_close(self.capsule, "app", eng, os.path.join(self.capsule, "close.json"))
+        self.assertEqual(code, 1, res.get("summary"))
+        sel = res["details"]["selected"]["app"]
+        self.assertEqual(sel["status"], "red")
+        pin = [c for c in sel["commands"] if c["name"] == "pin"][0]
+        self.assertNotEqual(pin["exit_code"], 0)
+        # the fix turns it green, and the close reuses the fast checks'
+        # green run of the same tree instead of re-running it
+        write(clone, {"pin/note.txt": "the answer is 42\n"})
+        git(clone, "add", "-A")
+        git(clone, "commit", "-q", "-m", "fix the pinned text")
+        code, _res, fast_out = self.run_mode("app", eng)
+        self.assertEqual(code, 0)
+        code, res = run_close(self.capsule, "app", eng, os.path.join(self.capsule, "close.json"),
+                              "--reuse", fast_out)
+        self.assertEqual(code, 0, res.get("summary"))
+        sel = res["details"]["selected"]["app"]
+        self.assertEqual(sel["status"], "green")
+        gate = [c for c in sel["commands"] if c["name"] == "gate-1"][0]
+        self.assertIn("reused", gate, "a green same-tree run is not re-run")
+        self.assertNotIn("exit_code", gate)
+        pin = [c for c in sel["commands"] if c["name"] == "pin"][0]
+        self.assertEqual(pin["exit_code"], 0)
+
+    def test_full_fallback_is_incomplete(self) -> None:
+        self.task_repo("app", {"a.txt": "base\n"}, {"go.mod": "module a\n\ngo 1.21\n"})
+        eng = light_engine(
+            self.tmp,
+            report("full", cmd_of("gate-1", "fast", "echo gate-ok")),
+            report("full", cmd_of("gate-1", "fast", "echo gate-ok"),
+                   diagnostics=["go.sum: a lockfile changed, falling back to the full tier"]))
+        # the per-unit bar behaves exactly as before on a forced-full path
+        code, _res, _out = self.run_mode("app", eng)
+        self.assertEqual(code, 0)
+        code, res = run_close(self.capsule, "app", eng, os.path.join(self.capsule, "close.json"))
+        self.assertEqual(code, 1, res.get("summary"))
+        sel = res["details"]["selected"]["app"]
+        self.assertEqual(sel["status"], "incomplete")
+        self.assertIn("a lockfile changed, falling back to the full tier", sel["reason"])
+        self.assertEqual(sel["commands"], [], "an incomplete selection runs nothing")
+
+    def test_an_unmet_precondition_is_incomplete(self) -> None:
+        self.task_repo("app", {"a.txt": "base\n"}, {"c.txt": "mine\n"})
+        eng = light_engine(
+            self.tmp,
+            report("full", cmd_of("gate-1", "fast", "echo gate-ok")),
+            report("scoped", cmd_of("gate-1", "fast", "echo gate-ok"),
+                   cmd_of("pin", "scoped", "echo pinned", requires_env=["PF_CLOSE_NO_SUCH_VAR"])))
+        code, res = run_close(self.capsule, "app", eng, os.path.join(self.capsule, "close.json"))
+        self.assertEqual(code, 1, res.get("summary"))
+        sel = res["details"]["selected"]["app"]
+        self.assertEqual(sel["status"], "incomplete")
+        self.assertIn("cannot run", sel["reason"])
+        self.assertIn("PF_CLOSE_NO_SUCH_VAR", sel["reason"])
+
+    def test_a_timeout_is_red(self) -> None:
+        self.task_repo("app", {"a.txt": "base\n"}, {"c.txt": "mine\n"})
+        eng = light_engine(
+            self.tmp,
+            report("full", cmd_of("gate-1", "fast", "echo gate-ok")),
+            report("scoped", cmd_of("gate-1", "fast", "echo gate-ok"),
+                   cmd_of("slow", "scoped", "sleep 5", timeout="2s")))
+        code, res = run_close(self.capsule, "app", eng, os.path.join(self.capsule, "close.json"))
+        self.assertEqual(code, 1, res.get("summary"))
+        sel = res["details"]["selected"]["app"]
+        self.assertEqual(sel["status"], "red")
+        slow = [c for c in sel["commands"] if c["name"] == "slow"][0]
+        self.assertTrue(slow["timed_out"])
+
+    def test_engine_failure_is_not_judged(self) -> None:
+        self.task_repo("app", {"a.txt": "base\n"}, {"c.txt": "mine\n"})
+        eng = fake_engine(self.tmp, {})  # no report: exits 3
+        argv = [sys.executable, FAST_CHECKS, "--capsule", self.capsule, "--repo", "app",
+                "--close-scoped", "--engine", eng, "--deadline", "10m",
+                "--out", os.path.join(self.capsule, "close.json")]
+        c = subprocess.run(argv, capture_output=True, text=True)
+        self.assertEqual(c.returncode, 2)
+        self.assertIn("no report for app", c.stdout + c.stderr)
+
+    def test_a_stale_reuse_file_reuses_nothing(self) -> None:
+        clone, eng = self.pin_repo()
+        code, _res, fast_out = self.run_mode("app", eng)
+        self.assertEqual(code, 0)
+        write(clone, {"pin/note.txt": "the answer is 42\n"})
+        git(clone, "add", "-A")
+        git(clone, "commit", "-q", "-m", "fix the pinned text")
+        code, res = run_close(self.capsule, "app", eng, os.path.join(self.capsule, "close.json"),
+                              "--reuse", fast_out)
+        self.assertEqual(code, 0, res.get("summary"))
+        sel = res["details"]["selected"]["app"]
+        self.assertEqual(sel["status"], "green")
+        self.assertEqual([c for c in sel["commands"] if "reused" in c], [],
+                         "a result file of another tree is not reuse evidence")
+
 
 
 if __name__ == "__main__":
