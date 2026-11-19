@@ -1,9 +1,10 @@
+// carries: app/api/mcp/route.ts, lib/api-types.ts, lib/mcp-unified.ts, lib/claude-mcp-read.ts, lib/__fixtures__/claude-2.1.326-mcp/mcp/*
 import "#test-env";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { delimiter, tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
 import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
@@ -370,4 +371,93 @@ test("what an open session reported is listed with its entry, and a session whos
   const { body: cleared } = await get();
   assert.equal(cleared.hostInactive, undefined);
   assert.equal(cleared.servers.find((server) => server.name === "docs").status, undefined);
+});
+
+// ---------------------------------------------------------------------------
+// #85 85c (AC1): GET lists claude's side from its files — the user entries,
+// the local group (claude's own), the project's .mcp.json — and merges both
+// sides into unified rows, never spawning anything: a PATH without claude
+// answers the same files, only `present` reads false.
+
+const claudeConfigDir = join(root, "claude-cfg");
+const claudeStatePath = join(claudeConfigDir, ".claude.json");
+const dotMcpPath = join(cwd, ".mcp.json");
+const previousPath = process.env.PATH;
+const previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+
+async function withClaudeFiles(t, { onPath = false } = {}) {
+  await mkdir(claudeConfigDir, { recursive: true });
+  await writeFile(claudeStatePath, JSON.stringify({
+    mcpServers: {
+      // A manual entry claude's own `add-json` wrote, plus one Pi Web never saw.
+      "claude-user": { command: "npx", args: ["-y", "c"], env: { TOKEN: "claude-secret-value" } },
+    },
+    projects: {
+      [cwd]: { mcpServers: { "claude-local": { type: "http", url: "https://local.example/mcp" } }, hasTrustDialogAccepted: false },
+    },
+    disabledMcpServers: ["claude-proj"],
+  }, null, 2));
+  await writeFile(dotMcpPath, JSON.stringify({ mcpServers: { "claude-proj": { command: "node", args: ["cp.js"] } } }, null, 2));
+  process.env.CLAUDE_CONFIG_DIR = claudeConfigDir;
+  // A PATH with no claude on it pins `present` without a binary to find.
+  process.env.PATH = onPath ? `${join(root, "claude-bin")}${delimiter}${previousPath ?? ""}` : join(root, "empty-bin");
+  await mkdir(join(root, "empty-bin"), { recursive: true });
+  t.after(() => {
+    process.env.PATH = previousPath;
+    if (previousClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = previousClaudeConfigDir;
+  });
+}
+
+const claudeEntry = (body, scope, name) => body.claude?.servers.find((entry) => entry.scope === scope && entry.name === name);
+const unifiedRow = (body, scope, name) => body.unified?.find((row) => row.scope === scope && row.name === name);
+
+test("claude's entries are listed from its files and merged into unified rows (AC1)", async (t) => {
+  await withClaudeFiles(t);
+  const { status, body } = await get(forCwd());
+  assert.equal(status, 200);
+  assert.equal(body.claude.present, false, "no claude on PATH, and the files still list");
+  assert.equal(body.claude.configPath, claudeStatePath);
+  assert.deepEqual(body.claude.disabledMcpServers, ["claude-proj"]);
+  assert.equal(claudeEntry(body, "global", "claude-user").command, "npx");
+  assert.deepEqual(claudeEntry(body, "global", "claude-user").envNames, ["TOKEN"]);
+  assert.equal(claudeEntry(body, "local", "claude-local").url, "https://local.example/mcp");
+  assert.equal(claudeEntry(body, "project", "claude-proj").disabled, true, "disabledMcpServers marks it, read-only");
+  assert.equal(JSON.stringify(body).includes("claude-secret-value"), false, "env values never leave");
+
+  const user = unifiedRow(body, "global", "claude-user");
+  assert.deepEqual(user, { scope: "global", name: "claude-user", pi: false, claude: true, missing: ["pi"], inconsistent: [], otherScopes: [] });
+  const local = unifiedRow(body, "local", "claude-local");
+  assert.equal(local.pi, false);
+  assert.deepEqual(local.missing, [], "pi holds no local scope, so nothing is missing there");
+  const both = unifiedRow(body, "project", "shared");
+  assert.equal(both.pi, true);
+  assert.equal(both.claude, false);
+  assert.deepEqual(both.missing, ["claude"]);
+  // The same name in another scope is hinted, never merged away (Q2 A).
+  assert.deepEqual(unifiedRow(body, "global", "shared").otherScopes, ["project"]);
+});
+
+test("a shared name both sides hold in one scope merges into one row, its differences on shared fields only", async (t) => {
+  await withClaudeFiles(t);
+  await writeFile(join(claudeConfigDir, ".claude.json"), JSON.stringify({
+    mcpServers: { shared: { command: "npx", args: ["-y", "claude-side"] } },
+  }, null, 2));
+  const { body } = await get(forCwd());
+  const row = unifiedRow(body, "global", "shared");
+  assert.equal(row.pi, true);
+  assert.equal(row.claude, true);
+  assert.deepEqual(row.missing, []);
+  assert.deepEqual(row.inconsistent, [
+    { field: "args", values: { pi: "global-shared", claude: "-y claude-side" } },
+  ], "the pi entry has no args, claude has some: the shared field differs");
+  assert.deepEqual(row.otherScopes, ["project"]);
+});
+
+test("the unified answer of a write covers claude too, so the panel replaces its listing in place", async (t) => {
+  await withClaudeFiles(t);
+  await writeFile(globalPath, JSON.stringify({ mcpServers: { shared: { command: "global-shared" } } }, null, 2));
+  const { body } = await get(forCwd());
+  assert.ok(body.claude && body.unified, "GET answers both halves");
+  assert.equal(body.unified.every((row) => typeof row.pi === "boolean" && typeof row.claude === "boolean"), true);
 });

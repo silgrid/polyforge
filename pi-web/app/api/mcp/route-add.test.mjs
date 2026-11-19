@@ -1,8 +1,9 @@
+// carries: app/api/mcp/route.ts, lib/api-types.ts, lib/mcp-add.ts, lib/claude-mcp-write.ts, lib/__fixtures__/claude-2.1.326-mcp/mcp/*
 import "#test-env";
 import assert from "node:assert/strict";
-import { existsSync, realpathSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, realpathSync } from "node:fs";
+import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { delimiter, tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after, beforeEach } from "node:test";
 import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
@@ -321,4 +322,85 @@ test("MCP off leaves every file as it is", async () => {
   assert.deepEqual([status, body.reason], [409, "mcp-off"]);
   assert.equal(await readFile(globalPath, "utf8"), globalText);
   assert.deepEqual(await trustFile(), { [trusted]: true });
+});
+
+// ---------------------------------------------------------------------------
+// #85 85c (AC4): an add carries its 「应用到」 targets — the harnesses it
+// writes — and the local scope, claude's own, writes only claude. Claude is
+// the stub recording its argv (AC2).
+
+const stubSource = new URL("../../../lib/__fixtures__/claude-2.1.326-mcp/mcp/stub-claude.mjs", import.meta.url).pathname;
+const claudeConfigDir = join(root, "claude-cfg");
+const previousPath = process.env.PATH;
+const previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+const previousStubLog = process.env.CLAUDE_MCP_STUB_LOG;
+
+async function withClaudeStub(t) {
+  const binDir = join(root, "claude-bin");
+  await mkdir(binDir, { recursive: true });
+  const binary = join(binDir, "claude");
+  if (!existsSync(binary)) {
+    await copyFile(stubSource, binary);
+    chmodSync(binary, 0o755);
+  }
+  await mkdir(claudeConfigDir, { recursive: true });
+  const log = join(root, `spawns-${t.name.replace(/\W+/g, "-")}.jsonl`);
+  process.env.PATH = `${binDir}${delimiter}${previousPath ?? ""}`;
+  process.env.CLAUDE_CONFIG_DIR = claudeConfigDir;
+  process.env.CLAUDE_MCP_STUB_LOG = log;
+  await writeFile(join(claudeConfigDir, ".claude.json"), JSON.stringify({
+    mcpServers: { existing: { command: "x" } },
+  }, null, 2));
+  t.after(() => {
+    process.env.PATH = previousPath;
+    if (previousClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = previousClaudeConfigDir;
+    if (previousStubLog === undefined) delete process.env.CLAUDE_MCP_STUB_LOG;
+    else process.env.CLAUDE_MCP_STUB_LOG = previousStubLog;
+  });
+  return { log };
+}
+
+async function stubSpawns(log) {
+  const text = await readFile(log, "utf8").catch(() => "");
+  return text.split("\n").filter((line) => line !== "").map((line) => JSON.parse(line));
+}
+
+test("an add with both harnesses writes pi's file and claude's CLI, once each (AC4)", async (t) => {
+  const { log } = await withClaudeStub(t);
+  const { status, body } = await add({ text: "npx -y @scope/lint-mcp", harnesses: ["pi", "claude"] });
+  assert.equal(status, 200);
+  assert.deepEqual((await readJson(globalPath)).mcpServers.lint, { command: "npx", args: ["-y", "@scope/lint-mcp"] });
+  const mcpSpawns = (await stubSpawns(log)).filter((spawn) => spawn.argv[0] === "mcp");
+  assert.deepEqual(mcpSpawns.map((spawn) => spawn.argv), [
+    ["mcp", "add-json", "-s", "user", "lint", JSON.stringify({ command: "npx", args: ["-y", "@scope/lint-mcp"] })],
+  ]);
+  assert.equal(body.applied === undefined || body.applied === null, true, "an add answers `added`, not per-harness results");
+});
+
+test("an add to claude alone never opens pi's file (AC4)", async (t) => {
+  const { log } = await withClaudeStub(t);
+  const before = await readFile(globalPath, "utf8");
+  const { status } = await add({ text: "npx -y @scope/lint-mcp", harnesses: ["claude"] });
+  assert.equal(status, 200);
+  assert.equal(await readFile(globalPath, "utf8"), before);
+  assert.deepEqual((await stubSpawns(log)).filter((spawn) => spawn.argv[0] === "mcp").map((spawn) => spawn.argv), [
+    ["mcp", "add-json", "-s", "user", "lint", JSON.stringify({ command: "npx", args: ["-y", "@scope/lint-mcp"] })],
+  ]);
+});
+
+test("the local scope is claude's own: an add there needs the project and refuses pi (Q5)", async (t) => {
+  const { log } = await withClaudeStub(t);
+  const toPi = await post({ action: "add", text: "npx -y @scope/lint-mcp", scope: "local", harnesses: ["pi"], cwd: trusted });
+  assert.equal(toPi.status, 409);
+  assert.equal(toPi.body.reason, "harness-unsupported");
+
+  const { status, body } = await post({ action: "add", text: "npx -y @scope/lint-mcp", scope: "local", harnesses: ["claude"], cwd: trusted });
+  assert.equal(status, 200);
+  assert.deepEqual(body.added, { scope: "local", name: "lint", harness: "claude", path: join(claudeConfigDir, ".claude.json") });
+  const mcpSpawns = (await stubSpawns(log)).filter((spawn) => spawn.argv[0] === "mcp");
+  assert.deepEqual(mcpSpawns.map((spawn) => [spawn.argv, spawn.cwd]), [
+    [["mcp", "add-json", "-s", "local", "lint", JSON.stringify({ command: "npx", args: ["-y", "@scope/lint-mcp"] })], trusted],
+  ]);
+  assert.equal((await post({ action: "add", text: "npx -y x", scope: "local", harnesses: ["claude"] })).status, 400, "no project, no local scope");
 });
