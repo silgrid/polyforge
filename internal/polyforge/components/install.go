@@ -477,10 +477,6 @@ func removeJournal(root string) error {
 	return dirSync(root)
 }
 
-// recoverPending brings a root an interrupted run left behind back to a
-// defined state. The full rules are recover.go's.
-func recoverPending(root string) error { return cleanStaging(root) }
-
 // cleanStaging removes every staging entry — an entry there was never
 // published and never will be (the caller holds the lock).
 func cleanStaging(root string) error {
