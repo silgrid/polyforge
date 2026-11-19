@@ -8,6 +8,7 @@ package daemon
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/silgrid/polyforge/internal/common/spawn"
@@ -32,7 +33,9 @@ func TestStepEnvWithoutAStatedEngineSetsNoVariable(t *testing.T) {
 	if env.ContainerEngine != "" {
 		t.Fatalf("a bare Config states no engine: %+v", env)
 	}
-	if slices.Contains(env.Vars(), spawn.EnvContainerEngine) {
+	// the entries are "<name>=<value>": a whole-element test on the bare
+	// name would never match, so the guard is by prefix (r1#5)
+	if slices.ContainsFunc(env.Vars(), func(kv string) bool { return strings.HasPrefix(kv, spawn.EnvContainerEngine+"=") }) {
 		t.Fatalf("no variable is set for an unstated engine (the scripts default to docker): %q", env.Vars())
 	}
 }
