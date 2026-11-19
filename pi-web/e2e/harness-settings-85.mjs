@@ -112,6 +112,7 @@ const T = {
   S6: "S85-06: the environment pane lists only variable names, grouped per harness",
   S7: "S85-07: effective values carry the Inferred mark and their source; native diagnostics are a collapsed block per harness",
   S8: "S85-08: stored old navigation values land on the new pages",
+  S9: "S85-09: a failed harness-list read is a visible reason in both panes, never a contradictory empty registry",
 };
 const failures = new Map(Object.values(T).map((title) => [title, []]));
 const ran = new Set();
