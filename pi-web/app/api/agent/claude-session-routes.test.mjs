@@ -548,9 +548,9 @@ test("a running claude turn, or an unsettled background subagent, refuses an edi
 
 test("set_permission_mode: an unknown mode is 400 and plan is 400 while host approvals are not ready, before any child is touched", async () => {
   // r3: host approvals not ready is the global mode on deny.
-  const permissionConfig = path.join(agentDir, "claude-permissions.json");
+  const permissionConfig = path.join(agentDir, "pi-web-settings.json");
   fs.mkdirSync(agentDir, { recursive: true });
-  fs.writeFileSync(permissionConfig, JSON.stringify({ version: 1, mode: "deny", push: false }));
+  fs.writeFileSync(permissionConfig, JSON.stringify({ version: 1, claude: { approvalChannel: "deny", pushReminders: false, includeHookEvents: false } }));
   try {
     const record = await newRecord();
     const before = launches().length;
@@ -590,8 +590,8 @@ test("set_permission_mode: an unknown mode is 400 and plan is 400 while host app
 });
 
 test("set_permission_mode plan is 200 for a session whose permission prompts come to Pi Web and 400, naming the reason, for one on deny ( r3)", async () => {
-  // No claude-permissions.json: the default, ask.
-  fs.rmSync(path.join(agentDir, "claude-permissions.json"), { force: true });
+  // No stored preferences: the default, ask.
+  fs.rmSync(path.join(agentDir, "pi-web-settings.json"), { force: true });
   const before = launches().length;
   const asked = await newRecord();
   const idle = await send(asked.id, { type: "set_permission_mode", mode: "plan" });
@@ -630,9 +630,9 @@ test("set_permission_mode plan is 200 for a session whose permission prompts com
 test("a pending claude permission: lease, running and the session list report it awaiting; extension_ui_response answers it; with no live child the response is refused and spawns nothing", async () => {
   process.env.PI_TEST_CLAUDE_STUB_MODE = "permission";
   // Ask (the default) with the push switch off: no notifier is reached from a unit test.
-  const permissionConfig = path.join(agentDir, "claude-permissions.json");
+  const permissionConfig = path.join(agentDir, "pi-web-settings.json");
   fs.mkdirSync(agentDir, { recursive: true });
-  fs.writeFileSync(permissionConfig, JSON.stringify({ version: 1, mode: "ask", push: false }));
+  fs.writeFileSync(permissionConfig, JSON.stringify({ version: 1, claude: { approvalChannel: "ask", pushReminders: false, includeHookEvents: false } }));
   const sessions = await jiti.import("../sessions/route.ts");
   const awaitingIn = async (reply) => (await reply.json()).awaitingSessionIds.includes(record.id);
   const record = await newRecord();

@@ -1,5 +1,5 @@
 // carries: components/HarnessGeneralSettings*, components/GeneralSettings*, components/HarnessEnvironmentSettings*, components/HarnessEffectiveSettings*, components/UnifiedSetting*, components/HarnessApplyTo*
-// carries: lib/harness-settings-view*, lib/claude-settings-store*, lib/harness/diagnostics*, hooks/useClaudeSettings.ts, app/api/harness/*
+// carries: lib/harness-settings-view*, lib/claude-preferences*, lib/harness/diagnostics*, app/api/harness/*
 // — polyforge#149 (#85 85a1b, the settings skeleton): the 9+2 tab rail
 // (九个新 tab 加两个标「旧版」的原「模型」「Claude」tab), General's left
 // column (界面与对话 / 环境 / 生效值与来源), the account / models / permission

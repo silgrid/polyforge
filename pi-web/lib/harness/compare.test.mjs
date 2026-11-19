@@ -28,13 +28,10 @@ fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({
   defaultModel: "claude-opus-4",
   defaultThinkingLevel: "medium",
 }));
-fs.writeFileSync(path.join(agentDir, "pi-web-claude-settings.json"), JSON.stringify({
+fs.writeFileSync(path.join(agentDir, "pi-web-settings.json"), JSON.stringify({
   version: 1,
-  launchPermissionMode: "acceptEdits",
-  customModels: [],
-  includeHookEvents: false,
+  claude: { approvalChannel: "deny", pushReminders: true, includeHookEvents: false },
 }));
-fs.writeFileSync(path.join(agentDir, "claude-permissions.json"), JSON.stringify({ mode: "deny", push: true }));
 fs.writeFileSync(path.join(project, ".pi", "settings.json"), JSON.stringify({ defaultThinkingLevel: "low" }));
 fs.writeFileSync(path.join(project, ".claude", "settings.json"), JSON.stringify({ model: "haiku" }));
 fs.writeFileSync(path.join(project, ".claude", "settings.local.json"), JSON.stringify({ effortLevel: "low" }));
@@ -77,7 +74,7 @@ test("pi effective values: the project layer overrides the user layer, every val
   });
 });
 
-test("claude effective values: layers in claude's order, plus the Pi Web-stored layer", () => {
+test("claude effective values: layers in claude's order, plus the Pi Web preference layer", () => {
   const payload = effective.claudeEffectiveConfig(fixtureCtx());
   assert.deepEqual(payload.fields["model"], {
     value: "haiku",
@@ -97,16 +94,10 @@ test("claude effective values: layers in claude's order, plus the Pi Web-stored 
     sourcePath: path.join(claudeConfigDir, "settings.json"),
     inferred: true,
   });
-  assert.deepEqual(payload.fields["pi-web:launch-permission-mode"], {
-    value: "acceptEdits",
-    sourceScope: "pi-web",
-    sourcePath: path.join(agentDir, "pi-web-claude-settings.json"),
-    inferred: true,
-  });
-  assert.deepEqual(payload.fields["pi-web:tool-permissions"], {
+  assert.deepEqual(payload.fields["pi-web:approval-channel"], {
     value: "deny",
     sourceScope: "pi-web",
-    sourcePath: path.join(agentDir, "claude-permissions.json"),
+    sourcePath: path.join(agentDir, "pi-web-settings.json"),
     inferred: true,
   });
 });
