@@ -610,7 +610,7 @@ func (w *relWorld) relPins(pin string, extra map[string]string, redAfter []strin
 // the pins file is the procedure's whole input.
 func (w *relWorld) runPinned(extra []string, args ...string) (string, error) {
 	p := w.relPins(relGit(w.t, w.work, "rev-parse", "HEAD"), nil, nil)
-	return w.runPinned(extra, append(args, "--pins", p)...)
+	return w.run(extra, append(args, "--pins", p)...)
 }
 
 func (w *relWorld) calls() []string {
