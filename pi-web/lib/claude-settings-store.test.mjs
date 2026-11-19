@@ -29,7 +29,8 @@ function fakeFetch({ get = { ...BASE, planAvailable: true }, puts = [] } = {}) {
     bodies.push(JSON.parse(String(init.body)));
     const gate = puts[bodies.length - 1] ?? {};
     if (gate.hold) await gate.hold;
-    const answer = gate.answer ?? { ...(gate.base ? bodies.at(-1) : get), ...(gate.patch ?? {}), planAvailable: true };
+    // The route answers the saved values, so an unscripted turn echoes the body.
+    const answer = gate.answer ?? { ...bodies.at(-1), ...(gate.patch ?? {}), planAvailable: true };
     return new Response(JSON.stringify(answer), {
       status: gate.status ?? 200,
       headers: { "Content-Type": "application/json" },
@@ -60,15 +61,15 @@ test("save puts the whole package of the newest snapshot and applies the answer"
   const { impl, bodies } = fakeFetch({ puts: [{ patch: { includeHookEvents: true } }] });
   const store = createClaudeSettingsStore(impl);
   await store.refresh();
+  // The snapshot object only changes when the state does.
+  const before = store.getSnapshot();
+  await store.refresh();
+  assert.equal(store.getSnapshot(), before, "an unchanged refresh keeps the snapshot identity");
   const result = await store.save({ includeHookEvents: true });
   assert.equal(result.ok, true);
   assert.equal(bodies.length, 1, "one save is one PUT");
   assert.deepEqual(bodies[0], { launchPermissionMode: "default", customModels: [], includeHookEvents: true }, "the PUT must carry the whole package");
   assert.equal(store.getSnapshot().settings.includeHookEvents, true, "the answer is the new snapshot");
-  // The snapshot object only changes when the state does.
-  const before = store.getSnapshot();
-  await store.refresh();
-  assert.equal(store.getSnapshot(), before, "an unchanged refresh keeps the snapshot identity");
 });
 
 test("serialized saves share the latest result across pages", async () => {
@@ -76,7 +77,7 @@ test("serialized saves share the latest result across pages", async () => {
   // first save's result — the queue merges onto the newest snapshot at its turn.
   let releaseFirst;
   const hold = new Promise((resolve) => { releaseFirst = resolve; });
-  const { impl, bodies } = fakeFetch({ puts: [{ hold, patch: { includeHookEvents: true } }, { base: true, patch: { customModels: ["claude-custom-1"] } }] });
+  const { impl, bodies } = fakeFetch({ puts: [{ hold, patch: { includeHookEvents: true } }, { patch: { customModels: ["claude-custom-1"] } }] });
   const store = createClaudeSettingsStore(impl);
   await store.refresh();
   const hookSave = store.save({ includeHookEvents: true });
@@ -92,7 +93,7 @@ test("serialized saves share the latest result across pages", async () => {
   assert.equal(store.getSnapshot().settings.includeHookEvents, true);
 
   // The reverse order carries the other way around.
-  const reverse = fakeFetch({ puts: [{ patch: { customModels: ["claude-custom-2"] } }, { base: true, patch: { includeHookEvents: true } }] });
+  const reverse = fakeFetch({ puts: [{ patch: { customModels: ["claude-custom-2"] } }, { patch: { includeHookEvents: true } }] });
   const second = createClaudeSettingsStore(reverse.impl);
   await second.refresh();
   await Promise.all([

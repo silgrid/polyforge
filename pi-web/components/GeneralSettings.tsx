@@ -10,6 +10,7 @@
 
 import { useEffect, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
+import { useClaudeSettings } from "@/hooks/useClaudeSettings";
 import { useTheme } from "@/hooks/useTheme";
 import { THEME_OPTIONS } from "@/lib/theme";
 import {
@@ -191,6 +192,13 @@ function AgentLanguageSettings() {
 
 export function GeneralSettings({ sessionId, onSessionReloaded, quoteSelectionEnabled, onQuoteSelectionChange }: GeneralSettingsProps) {
   const { locale, setLocale, supportedLocales, t } = useI18n();
+  // The claude hook-activity preference (owner ruling Q5 A): it moved here from
+  // the legacy Claude page, sharing the one store with it — a save from either
+  // page shows at once in the other, and neither PUTs a stale whole package.
+  const { snapshot: claudeSettings, refresh: refreshClaudeSettings, save: saveClaudeSettings } = useClaudeSettings();
+  const [claudeSettingsSaving, setClaudeSettingsSaving] = useState(false);
+  const [claudeSettingsError, setClaudeSettingsError] = useState<string | null>(null);
+  useEffect(() => { void refreshClaudeSettings(); }, [refreshClaudeSettings]);
   const { preference, setThemePreference } = useTheme();
   const { width: chatContentWidth, setWidth: setChatContentWidth, fontSize, setFontSize } = useChatAppearance();
   const enterSendMode = useEnterSendMode();
@@ -235,6 +243,19 @@ export function GeneralSettings({ sessionId, onSessionReloaded, quoteSelectionEn
       .then((data: { enabled?: boolean } | null) => setWebAuthEnabled(data?.enabled === true))
       .catch(() => {});
   }, []);
+
+  const saveHookEvents = async (enabled: boolean) => {
+    setClaudeSettingsSaving(true);
+    setClaudeSettingsError(null);
+    try {
+      const result = await saveClaudeSettings({ includeHookEvents: enabled });
+      if (!result.ok) throw new Error(result.error);
+    } catch (cause) {
+      setClaudeSettingsError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setClaudeSettingsSaving(false);
+    }
+  };
 
   const logOut = async () => {
     setLoggingOut(true);
@@ -529,6 +550,24 @@ export function GeneralSettings({ sessionId, onSessionReloaded, quoteSelectionEn
         <p id="settings-cache-miss-notices-description" className="settings-general-description">{t("settings.cacheMissNoticesDescription")}</p>
         {cacheMissNoticesError && <p role="alert" className="settings-general-error">{cacheMissNoticesError}</p>}
       </section>
+
+      {claudeSettings.settings && (
+        <section className="settings-general-section">
+          <h3 className="settings-general-heading">{t("settings.claudeHookEvents")}</h3>
+          <div className="settings-shell-option">
+            <span>{t("settings.claudeHookEvents")}</span>
+            <ConfigSwitch
+              checked={claudeSettings.settings.includeHookEvents}
+              loading={claudeSettingsSaving}
+              label={t("settings.claudeHookEvents")}
+              describedBy="settings-general-hook-events-description"
+              onChange={(enabled) => void saveHookEvents(enabled)}
+            />
+          </div>
+          <p id="settings-general-hook-events-description" className="settings-general-description">{t("settings.claudeHookEventsDescription")}</p>
+          {claudeSettingsError && <p role="alert" className="settings-general-error">{t("settings.claudeSaveError", { error: claudeSettingsError })}</p>}
+        </section>
+      )}
 
       <section className="settings-general-section">
         <h3 className="settings-general-heading">{t("settings.sessionFilter")}</h3>

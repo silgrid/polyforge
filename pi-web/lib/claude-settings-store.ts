@@ -4,9 +4,9 @@
 // overwrite the other's with a stale snapshot — every save merges its patch
 // onto the newest snapshot and PUTs the whole package, one save at a time.
 // The API and the file are unchanged (`/api/claude-settings`,
-// `pi-web-claude-settings.json`); this holder only shares the state.
-// Placeholder signature; the body arrives with its unit and replaces this
-// stub.
+// `pi-web-claude-settings.json`); this holder only shares the state. It
+// solves this batch's two editors on one page; it does not claim to solve
+// cross-device concurrency.
 import type { ClaudeSettings } from "./claude-shared";
 
 export interface ClaudeSettingsSnapshot {
@@ -28,22 +28,106 @@ export interface ClaudeSettingsStore {
   save(patch: Partial<ClaudeSettings>): Promise<ClaudeSettingsSaveResult>;
 }
 
-export function createClaudeSettingsStore(_fetchImpl: typeof fetch): ClaudeSettingsStore {
+function isClaudeSettings(value: unknown): value is ClaudeSettings {
+  if (typeof value !== "object" || value === null) return false;
+  const settings = value as Partial<ClaudeSettings>;
+  return typeof settings.launchPermissionMode === "string"
+    && Array.isArray(settings.customModels)
+    && typeof settings.includeHookEvents === "boolean";
+}
+
+const snapshotOf = (settings: ClaudeSettings): ClaudeSettings => ({
+  launchPermissionMode: settings.launchPermissionMode,
+  customModels: [...settings.customModels],
+  includeHookEvents: settings.includeHookEvents,
+});
+
+export function createClaudeSettingsStore(fetchImpl: typeof fetch = fetch): ClaudeSettingsStore {
+  let snapshot: ClaudeSettingsSnapshot = { status: "loading", settings: null, planAvailable: false, loadError: null };
   const listeners = new Set<() => void>();
+  // One save at a time: each save runs after the previous one settled, and
+  // reads the snapshot at its own turn — the newest shared result (Q5 A).
+  let saveChain: Promise<unknown> = Promise.resolve();
+
+  const set = (next: ClaudeSettingsSnapshot) => {
+    if (next === snapshot) return;
+    snapshot = next;
+    for (const listener of listeners) listener();
+  };
+
   return {
-    subscribe(listener) {
+    subscribe(listener: () => void) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    getSnapshot() {
-      return { status: "loading", settings: null, planAvailable: false, loadError: null };
+    getSnapshot(): ClaudeSettingsSnapshot {
+      return snapshot;
     },
-    async refresh() {},
-    async save() {
-      return { ok: false, error: "not implemented yet" };
+    async refresh() {
+      try {
+        const response = await fetchImpl("/api/claude-settings", { method: "GET" });
+        const data: unknown = await response.json();
+        if (!response.ok || !isClaudeSettings(data)) throw new Error(`HTTP ${response.status}`);
+        const planAvailable = (data as ClaudeSettings & { planAvailable?: unknown }).planAvailable === true;
+        const previous = snapshot.settings;
+        if (previous
+          && previous.launchPermissionMode === data.launchPermissionMode
+          && previous.includeHookEvents === data.includeHookEvents
+          && previous.customModels.length === data.customModels.length
+          && previous.customModels.every((name, index) => name === data.customModels[index])
+          && snapshot.planAvailable === planAvailable) {
+          // An unchanged read keeps the snapshot identity (a re-render trigger only).
+          return;
+        }
+        set({ status: "ready", settings: snapshotOf(data), planAvailable, loadError: null });
+      } catch (cause) {
+        set({ ...snapshot, status: "error", loadError: cause instanceof Error ? cause.message : String(cause) });
+      }
+    },
+    save(patch: Partial<ClaudeSettings>): Promise<ClaudeSettingsSaveResult> {
+      const run = saveChain.then(async (): Promise<ClaudeSettingsSaveResult> => {
+        const current = snapshot.settings;
+        if (!current) return { ok: false, error: "the settings have not been read yet" };
+        const next: ClaudeSettings = {
+          launchPermissionMode: patch.launchPermissionMode ?? current.launchPermissionMode,
+          customModels: patch.customModels ?? current.customModels,
+          includeHookEvents: patch.includeHookEvents ?? current.includeHookEvents,
+        };
+        try {
+          const response = await fetchImpl("/api/claude-settings", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(next),
+          });
+          const data: unknown = await response.json();
+          if (!response.ok) {
+            const body = data as { error?: unknown } | null;
+            throw new Error(typeof body?.error === "string" && body.error ? body.error : `HTTP ${response.status}`);
+          }
+          if (!isClaudeSettings(data)) throw new Error("unexpected answer");
+          set({ ...snapshot, status: "ready", settings: snapshotOf(data), loadError: null });
+          return { ok: true, settings: snapshotOf(data) };
+        } catch (cause) {
+          return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
+        }
+      });
+      // The chain continues past a failure; only this save's caller sees it.
+      saveChain = run.then(() => undefined, () => undefined);
+      return run;
     },
   };
 }
 
-/** The singleton both pages share. */
+/**
+ * The server snapshot (a fresh store's loading state): hydration agrees, since
+ * a server render has read nothing.
+ */
+export const CLAUDE_SETTINGS_SERVER_SNAPSHOT: ClaudeSettingsSnapshot = Object.freeze({
+  status: "loading",
+  settings: null,
+  planAvailable: false,
+  loadError: null,
+});
+
+/** The singleton both pages share: the 界面与对话 pane and the legacy Claude page. */
 export const claudeSettingsStore: ClaudeSettingsStore = createClaudeSettingsStore(fetch);
