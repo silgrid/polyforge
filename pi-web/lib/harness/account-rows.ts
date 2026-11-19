@@ -6,7 +6,14 @@
 // default」(source + sourceKind), 配置根 (configRoot), 凭据是否跟随配置目录
 // (credentialsFollow, with the keychain hint when it does not — AC7),
 // 步骤能否使用及原因 (usable + reason). No value ever flows through here.
-import type { DoctorCellFacts, DoctorHarnessFacts, HarnessCapabilityFacts, PiStepCheck } from "./account-rows-facts";
+import type {
+  AccountCellRow,
+  AccountHarnessRow,
+  DoctorCellFacts,
+  DoctorHarnessFacts,
+  HarnessCapabilityFacts,
+  PiStepCheck,
+} from "./account-rows-facts";
 
 export type {
   AccountCellRow,

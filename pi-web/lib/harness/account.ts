@@ -65,17 +65,12 @@ function runBounded(argv: string[], options: { env?: NodeJS.ProcessEnv; cwd?: st
       clearTimeout(deadline);
       resolve(outcome);
     };
-    let child;
-    try {
-      child = spawn(argv[0], argv.slice(1), {
-        stdio: ["ignore", "pipe", "ignore"],
-        env: options.env,
-        cwd: options.cwd,
-      });
-    } catch (error) {
-      finish({ ok: false, stdout: "", reason: error instanceof Error ? error.message : "the command could not be started" });
-      return;
-    }
+    // a missing binary answers through the error event, never a throw
+    const child = spawn(argv[0], argv.slice(1), {
+      stdio: ["ignore", "pipe", "ignore"],
+      env: options.env as NodeJS.ProcessEnv | undefined,
+      cwd: options.cwd,
+    });
     child.stdout?.setEncoding("utf8");
     child.stdout?.on("data", (chunk: string) => { stdout += chunk; });
     child.on("error", (error) => finish({ ok: false, stdout: "", reason: error instanceof Error ? error.message : "the command could not be started" }));
@@ -91,11 +86,11 @@ function runBounded(argv: string[], options: { env?: NodeJS.ProcessEnv; cwd?: st
 /** The environment a status command runs under: the caller's minus the
  * browser password. */
 function statusEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const out: NodeJS.ProcessEnv = {};
+  const out: Record<string, string | undefined> = {};
   for (const [key, value] of Object.entries(env)) {
     if (value !== undefined && key !== "PI_WEB_PASSWORD") out[key] = value;
   }
-  return out;
+  return out as NodeJS.ProcessEnv;
 }
 
 /**
