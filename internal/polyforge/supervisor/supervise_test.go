@@ -109,15 +109,17 @@ func supLineCount(path string) int {
 	return len(strings.Fields(string(raw)))
 }
 
-// TestSuperviseRestartsAKilledChild: a child that dies on it — a
-// kill -9 — is restarted (AC1), and the restart honours the restart
+// TestSuperviseRestartsAKilledChild: each child that dies on it — a
+// kill -9, once for the daemon's role and once for a Pi-Web/AIHub-role
+// other — is restarted (AC1), and the restart honours the restart
 // delay: the killed pid comes back as a new pid no sooner than the
 // configured delay. The run still answers a later stop with 0.
 func TestSuperviseRestartsAKilledChild(t *testing.T) {
 	dir := t.TempDir()
 	pidF := filepath.Join(dir, "daemon.pid")
+	otherF := filepath.Join(dir, "other.pid")
 	rs := RunSpec{Daemon: supPidChild("daemon", pidF),
-		Others: []ChildSpec{supPidChild("other", filepath.Join(dir, "other.pid"))},
+		Others: []ChildSpec{supPidChild("other", otherF)},
 		Grace:  5 * time.Second, RestartDelay: 300 * time.Millisecond}
 	code := supRun(rs)
 
@@ -139,6 +141,20 @@ func TestSuperviseRestartsAKilledChild(t *testing.T) {
 	if waited := time.Since(killedAt); waited < 300*time.Millisecond {
 		t.Fatalf("the restart came after %s, faster than the configured delay", waited)
 	}
+	// the same watch restarts a killed other child too (Pi Web and the
+	// aihub server are children of this same loop)
+	other := 0
+	supPoll(t, "the other child's pid", func() bool {
+		other = supReadPid(otherF)
+		return pidAlive(other)
+	})
+	if err := syscall.Kill(other, syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	supPoll(t, "the restarted other child", func() bool {
+		again := supReadPid(otherF)
+		return again != 0 && again != other && pidAlive(again)
+	})
 	if c := supStop(t, code); c != 0 {
 		t.Fatalf("stop after a restart: exit %d, want 0", c)
 	}
