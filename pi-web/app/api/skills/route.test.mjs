@@ -123,6 +123,7 @@ test("a single toggle writes the preference, shows override the author's frontma
 test("any frontmatter formatting toggles, because the file is never parsed or edited", async () => {
   const agentDir = await freshAgentDir("flow");
   const unsupported = join(agentDir, "skills", "flow", "SKILL.md");
+  await mkdir(join(agentDir, "skills", "flow"), { recursive: true });
   await writeFile(unsupported, "---\n{ name: flow, disable-model-invocation: true }\n---\nbody\n");
   const before = await mdHashes(root);
 
