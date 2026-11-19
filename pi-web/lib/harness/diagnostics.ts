@@ -23,23 +23,41 @@ const DIAGNOSTIC_EXIT_GRACE_MS = 2_000;
 const MAX_LINES = 400;
 const MAX_BYTES = 64 * 1024;
 
-/** A credential-named variable, header or flag — the pair rule's name test. */
-const isCredentialName = (name: string): boolean => isSecretName(name);
+/** An environment-variable-shaped name: the pair rule masks its value whatever the name says (r1#2). */
+const ENV_SHAPED_NAME = /^[A-Z][A-Z0-9_]*$/;
+const isCredentialName = (name: string): boolean => isSecretName(name) || ENV_SHAPED_NAME.test(name);
+
+/** A URL's userinfo (scheme://user:pass@host) — a credential wherever it sits. */
+const URL_USERINFO = /([A-Za-z][A-Za-z0-9+.-]*:\/\/)([^\s/@]+)@/g;
 
 /**
  * One output line with every credential or environment variable value masked:
- * `NAME=value` / `NAME: value` pairs under a credential name lose their value
- * whatever it looks like, and any remaining bare token that looks like a key
- * or token is masked. Ordinary words, paths and versions pass through.
+ * `NAME=value` / `NAME: value` pairs under a credential name or an
+ * environment-variable-shaped name lose their value whatever it looks like,
+ * a URL's `user:pass@` is masked wherever it sits, any remaining bare token
+ * that looks like a key or token is masked, and a bare occurrence of a set
+ * secret-named variable's value (when the run's env is given) is masked too.
+ * Ordinary words, paths and versions pass through.
  */
-export function maskDiagnosticLine(line: string): string {
+export function maskDiagnosticLine(line: string, env?: NodeJS.ProcessEnv): string {
   const pairsMasked = line.replace(
     /([A-Za-z0-9_.\-]+)(\s*[:=]\s*)("[^"]*"|\S+)/g,
     (whole: string, name: string, separator: string) => (
       isCredentialName(name) ? `${name}${separator}${SECRET_MASK}` : whole
     ),
   );
-  return pairsMasked.replace(/\S+/g, (token) => (looksLikeSecretValue(token) ? SECRET_MASK : token));
+  const userinfoMasked = pairsMasked.replace(URL_USERINFO, (_whole: string, scheme: string) => `${scheme}${SECRET_MASK}@`);
+  const tokensMasked = userinfoMasked.replace(/\S+/g, (token) => (looksLikeSecretValue(token) ? SECRET_MASK : token));
+  if (!env) return tokensMasked;
+  // A value the caller's environment holds under a credential-named variable
+  // never echoes, even bare: mask each occurrence. Short or whitespace-bearing
+  // values are left alone — masking them would eat ordinary output.
+  let masked = tokensMasked;
+  for (const [name, value] of Object.entries(env)) {
+    if (!isSecretName(name) || typeof value !== "string" || value.length < 8 || /\s/.test(value)) continue;
+    masked = masked.split(value).join(SECRET_MASK);
+  }
+  return masked;
 }
 
 /** The bounded run's outcome; `ok:false` means the command could not be started. */
@@ -84,7 +102,7 @@ export async function runDiagnosticCommand(
         truncated = true;
         return;
       }
-      const masked = maskDiagnosticLine(line);
+      const masked = maskDiagnosticLine(line, options.env);
       if (masked.length > MAX_BYTES || bytes + masked.length > MAX_BYTES) {
         truncated = true;
         return;

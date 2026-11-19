@@ -103,15 +103,18 @@ test("the filter masks every environment-variable-shaped value and URL userinfo 
   const masked = (line) => maskDiagnosticLine(line);
   assert.equal(masked("ANTHROPIC_BASE_URL=https://proxy.corp/nonsecret"), "ANTHROPIC_BASE_URL=\u2022\u2022\u2022", "a non-credential variable's value echoed");
   assert.equal(masked("CLAUDE_CODE_USE_BEDROCK: 1"), "CLAUDE_CODE_USE_BEDROCK: \u2022\u2022\u2022", "a colon-spelled variable's value echoed");
-  // A proxy URL's userinfo (user:pass@) is a credential wherever it sits.
-  const proxy = masked("HTTPS_PROXY=http://user:p4ss@proxy.internal:8080");
-  assert.ok(!proxy.includes("user:p4ss"), `the proxy URL's userinfo echoed: ${proxy}`);
-  assert.ok(proxy.includes("\u2022\u2022\u2022@"), `the masked proxy URL lost its marker: ${proxy}`);
-  assert.ok(proxy.includes("proxy.internal:8080"), `the masked proxy URL lost its host: ${proxy}`);
+  // An env-shaped pair masks its whole value — a proxy URL that IS the value
+  // of HTTPS_PROXY never echoes, userinfo or not.
+  assert.equal(masked("HTTPS_PROXY=http://user:p4ss@proxy.internal:8080"), "HTTPS_PROXY=\u2022\u2022\u2022", "the proxy URL echoed as a variable's value");
+  // A bare URL's userinfo (user:pass@) is a credential wherever it sits; its host stays.
+  const proxy = masked("connect through http://user:p4ss@proxy.internal:8080 now");
+  assert.ok(!proxy.includes("user:p4ss"), `the bare proxy URL's userinfo echoed: ${proxy}`);
+  assert.ok(proxy.includes("\u2022\u2022\u2022@"), `the masked bare URL lost its marker: ${proxy}`);
+  assert.ok(proxy.includes("proxy.internal:8080"), `the masked bare URL lost its host: ${proxy}`);
   // A bare occurrence of a set variable's value is masked through the run's env.
   const planted = "E2E-DIAG-ENV-VALUE-987654321";
   const env = { E2E_DIAG_SECRET_TOKEN: planted, E2E_DIAG_SHORT: "short" };
-  const line = masked(`configuration notes: ${planted} and E2E_DIAG_SHORT stays`, env);
+  const line = maskDiagnosticLine(`configuration notes: ${planted} and E2E_DIAG_SHORT stays`, env);
   assert.ok(!line.includes(planted), `a set variable's value echoed: ${line}`);
   assert.ok(line.includes("E2E_DIAG_SHORT stays"), `a short value was masked anyway: ${line}`);
   // Ordinary words, paths and versions still pass through untouched.
