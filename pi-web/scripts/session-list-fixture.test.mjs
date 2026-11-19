@@ -110,8 +110,10 @@ test("the manifest's totals are the files' own arithmetic", (t) => {
   }
   assert.equal(manifest.totals.projectDirs, new Set(manifest.pi.map((entry) => path.dirname(path.join(root, entry.path)))).size,
     "projectDirs is the number of distinct session dirs actually written");
-  const onDisk = fs.readdirSync(path.join(root, "agent", "sessions"), { withFileTypes: true }).length;
-  assert.equal(onDisk, Math.min(3, manifest.totals.projectDirs), "the session dirs exist under the agent dir");
+  if (manifest.totals.projectDirs > 0) {
+    const onDisk = fs.readdirSync(path.join(root, "agent", "sessions"), { withFileTypes: true }).length;
+    assert.equal(onDisk, Math.min(3, manifest.totals.projectDirs), "the session dirs exist under the agent dir");
+  }
 });
 
 test("the corpus is reproducible per seed and differs across seeds", (t) => {
@@ -126,12 +128,12 @@ test("the corpus is reproducible per seed and differs across seeds", (t) => {
     "--seed", "7", "--manifest", path.join(secondRoot, "manifest.json"),
   ], { encoding: "utf8" });
   const same = JSON.parse(fs.readFileSync(path.join(secondRoot, "manifest.json"), "utf8"));
-  assert.deepEqual(same.pi.map((entry) => entry.sha256), JSON.parse(fs.readFileSync(path.join(first, "manifest.json"), "utf8")).pi.map((entry) => entry.sha256),
+  assert.deepEqual(same.pi.map((entry) => entry.sha256), JSON.parse(fs.readFileSync(first.manifestPath, "utf8")).pi.map((entry) => entry.sha256),
     "the same seed regenerates the same corpus");
 
   const other = generate(t, ["--seed", "8"]);
-  const otherManifest = JSON.parse(fs.readFileSync(path.join(other, "manifest.json"), "utf8"));
-  const firstManifest = JSON.parse(fs.readFileSync(path.join(first, "manifest.json"), "utf8"));
+  const otherManifest = JSON.parse(fs.readFileSync(other.manifestPath, "utf8"));
+  const firstManifest = JSON.parse(fs.readFileSync(first.manifestPath, "utf8"));
   assert.notDeepEqual(otherManifest.pi.map((entry) => entry.sha256), firstManifest.pi.map((entry) => entry.sha256),
     "a different seed generates a different corpus");
 });
