@@ -277,3 +277,37 @@ test("renewIdleTimer() keeps idle reaping disabled under PI_WEB_IDLE_TIMEOUT_MS=
     assert.equal(wrapper.isAlive(), true);
   });
 });
+
+
+test("an unsettled background subagent holds the session past the idle timeout", async (t) => {
+  await withIdleTimeoutEnv("", async (AgentSessionWrapper) => {
+    // A subagent run under this session whose completion can still start a
+    // turn here: the idle reaper must not end the session while it exists.
+    globalThis.__piSubagentRuns ??= new Map();
+    globalThis.__piSubagentRuns.set("child-1", {
+      run: {
+        sessionId: "child-1", parentSessionId: "session-1", status: "running",
+        profile: "general-purpose", description: "a background run", startedAt: new Date().toISOString(),
+      },
+    });
+    t.after(() => { globalThis.__piSubagentRuns.delete("child-1"); });
+
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const wrapper = new AgentSessionWrapper(makeIdleInner());
+    t.after(() => wrapper.destroy());
+    wrapper.start();
+
+    t.mock.timers.tick(60 * 60 * 1000);
+    await nextTurn();
+    assert.equal(wrapper.isAlive(), true, "the session is held while the subagent run is unsettled");
+
+    // The run settles: the next idle check reaps the session as before.
+    globalThis.__piSubagentRuns.delete("child-1");
+    t.mock.timers.tick(10 * 60 * 1000 - 1);
+    await nextTurn();
+    assert.equal(wrapper.isAlive(), true);
+    t.mock.timers.tick(1);
+    await nextTurn();
+    assert.equal(wrapper.isAlive(), false, "the session reaps once no work holds it");
+  });
+});
