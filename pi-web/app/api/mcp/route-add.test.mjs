@@ -434,3 +434,13 @@ test("an add whose claude half fails after the gate takes pi's entry back, so a 
   assert.equal(retry.status, 409);
   assert.equal(retry.body.reason, "claude-unwritable");
 });
+
+test("an http entry reaches claude with the type its own config writes (r2#4)", async (t) => {
+  const { log } = await withClaudeStub(t);
+  const { status } = await post({ action: "add", text: "https://docs.example.com/mcp", scope: "global", harnesses: ["claude"], name: "docs" });
+  assert.equal(status, 200);
+  const mcpSpawns = (await stubSpawns(log)).filter((spawn) => spawn.argv[0] === "mcp");
+  assert.deepEqual(mcpSpawns.map((spawn) => spawn.argv), [
+    ["mcp", "add-json", "-s", "user", "docs", JSON.stringify({ type: "http", url: "https://docs.example.com/mcp" })],
+  ], "pi's http entry carries no type; claude's own files always write one, and its validator asks for it");
+});
