@@ -1531,6 +1531,9 @@ test("a row both sides hold shows its apply-to and its difference, with 统一�
 });
 
 test("a row only claude holds offers pi as disabled in its apply-to, and claude's local row never offers pi (Q5)", () => {
+  for (const key of ["mcp.applyTo.piUnsupported", "mcp.applyTo.piUnsupportedLocal", "mcp.claude.remove", "mcp.group.claudeOnly", "mcp.applyTo.title", "mcp.unified.differs", "mcp.unified.unify", "mcp.claude.side", "mcp.claude.disabled"]) {
+    assert.equal(typeof messages[key], "string", `${key} is translated`);
+  }
   const html = view({
     cwd: "/Users/me/repo",
     load: { state: "loaded", data: unifiedData() },
