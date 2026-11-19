@@ -43,7 +43,21 @@ PI_WEB_PASSWORD='<a long, unique secret>' docker compose --profile aihub     up 
 
 The `aihub` profile passes `--with-aihub` to `pf supervise`: the aihub
 server starts as another watched child, and Pi Web (once the component
-volume carries it) answers on the published port. The password is
+volume carries it) answers on the published port.
+
+Remote access rides the optional HTTPS front — a Caddy sibling service
+in its own `https` profile, off by default (the settled Q7 shape). It
+terminates TLS with its own local CA and reverse-proxies the
+workstation's Pi Web:
+
+```sh
+docker compose --profile no-aihub --profile https up -d --build
+```
+
+Point the browser at `https://<host>:8443` (`WORKSTATION_HTTPS_PORT`
+moves the published port) and import Caddy's root certificate — printed
+by `docker compose exec https-front cat /data/caddy/pki/authorities/local/root.crt` —
+for a trusted local CA; no external certificate flow is involved. The password is
 required — without one, Pi Web's proxy lets `/api` through and
 redirects `/login`, and the container refuses to start instead of
 exposing the high-privilege UI bare. The container's environment is the

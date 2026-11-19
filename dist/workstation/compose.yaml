@@ -65,7 +65,7 @@ x-workstation: &workstation
     PI_WEB_SKIP_VERSION_CHECK: "1"
   ports:
     # Pi Web, bound to the host's loopback by default; remote access is
-    # the https profile's reverse proxy or an operator override.
+    # the https profile's front below (or an operator override).
     - "127.0.0.1:${WORKSTATION_WEB_PORT:-30141}:30141"
 
 services:
@@ -78,7 +78,22 @@ services:
     <<: *workstation
     profiles: [aihub]
     command: ["--grace", "60s", "--with-aihub"]
+  # The optional HTTPS front (settled Q7: default off, opened by the
+  # https profile). Caddy terminates TLS with its own local CA (tls
+  # internal — the browser trusts it after importing Caddy's root
+  # cert, printed by `docker compose exec https-front cat /data/caddy/pki/authorities/local/root.crt`)
+  # and reverse-proxies the workstation's Pi Web. Start it beside a boot
+  # mode: docker compose --profile no-aihub --profile https up -d
+  https-front:
+    image: docker.io/library/caddy:2.10.2-alpine
+    profiles: [https]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    ports:
+      - "${WORKSTATION_HTTPS_PORT:-8443}:443"
 
 volumes:
   polyforge-data:
   podman-storage:
+  caddy-data:

@@ -1,0 +1,11 @@
+# dist/workstation/Caddyfile — the optional HTTPS front's config
+# (polyforge#161, 84-image). Mounted read-only into the https-front
+# service (compose --profile https): Caddy terminates TLS with its own
+# local CA — no external certificate flow, no ACME account — and proxies
+# the workstation service's Pi Web port. The workstation container
+# itself never changes shape: the front is a sibling service, one
+# compose profile away, and the default boots never start it.
+workstation:443 {
+	tls internal
+	reverse_proxy workstation:30141
+}

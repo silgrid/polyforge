@@ -319,12 +319,12 @@ func TestWorkstationCompose(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(body), &compose); err != nil {
 		t.Fatalf("polyforge#161: compose.yaml must parse: %v", err)
 	}
-	if len(compose.Services) != 2 {
+	if len(compose.Services) != 3 {
 		names := make([]string, 0, len(compose.Services))
 		for name := range compose.Services {
 			names = append(names, name)
 		}
-		t.Fatalf("polyforge#161: compose.yaml declares %v, want exactly the no-aihub and aihub profile variants", names)
+		t.Fatalf("polyforge#161: compose.yaml declares %v, want exactly the no-aihub and aihub boot variants plus the opt-in https front", names)
 	}
 	svc, ok := compose.Services["workstation"]
 	if !ok {

@@ -21,6 +21,7 @@ image.
 | `containers/registries.conf` | short names resolve to docker.io |
 | `seccomp.json` + `seccomp.json.sha256` | the pinned seccomp profile the outer engine applies (below) |
 | `compose.yaml` | the outer container's minimal parameter set |
+| `Caddyfile` | the optional HTTPS front's config (`--profile https`): local-CA TLS in front of Pi Web |
 | `smoke.sh` | `boot` / `podman-verify` / `env` — the acceptance driver |
 
 ## The pinned seccomp profile
