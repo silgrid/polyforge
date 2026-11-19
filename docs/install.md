@@ -64,8 +64,13 @@ installs, and refuses with nothing changed if it cannot. The binary default inst
 `/usr/local/bin` — override with `PF_BIN=…` on a macOS without sudo — and
 the host (second argument or `PF_HOST`) decides what a new config points at;
 for a machine running its own aihub use `127.0.0.1`. tmux is the
-daemon's supervision: without it `pf daemon ensure` still starts the daemon,
+daemon's supervision on a host: without it `pf daemon ensure` still starts the daemon,
 unsupervised with a WARNING (`pf doctor`'s "daemon supervision" row says so).
+The workstation container (epic #84) is the one exception: its image
+entry point is `pf supervise`, which watches the daemon (and Pi Web, and
+`--with-aihub` the aihub server) itself — no tmux there, `pf daemon
+ensure` inside that container is a successful no-op and `pf doctor`'s
+supervision row passes on the container marker.
 A Mac that only ever talks to the central Linux aihub stays exactly where the
 bare one-liner above lands it; the single-machine form is the
 [macOS Quickstart](quickstart-macos.md).

@@ -18,19 +18,6 @@ import (
 	"github.com/silgrid/polyforge/internal/polyforge/supervisor"
 )
 
-// superviseChild answers rs's child by name (nil when absent).
-func superviseChild(rs supervisor.RunSpec, name string) *supervisor.ChildSpec {
-	if rs.Daemon.Name == name {
-		return &rs.Daemon
-	}
-	for i := range rs.Others {
-		if rs.Others[i].Name == name {
-			return &rs.Others[i]
-		}
-	}
-	return nil
-}
-
 func TestSuperviseVerbPlan(t *testing.T) {
 	dir := t.TempDir()
 	cfg := filepath.Join(dir, "cli.toml")

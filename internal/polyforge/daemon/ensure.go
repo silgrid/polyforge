@@ -300,20 +300,16 @@ func (p *ensurePlan) startDetached() error {
 }
 
 // daemonEnv is the daemon's whole environment: the supervisor allow-list
-// filtered from the ENSURE CALLER's environment (never the tmux server's),
-// HOME pinned, plus the supervision marker when the loop starts it.
+// filtered from the ENSURE CALLER's environment (never the tmux
+// server's), HOME pinned, plus the supervision marker when the loop
+// starts it. The composition lives once, in supervisor.DaemonLaunchEnv
+// (`pf supervise` launches the daemon the same way).
 func (p *ensurePlan) daemonEnv(marker bool) []string {
-	env := []string{"HOME=" + p.home}
-	for _, kv := range supervisor.DaemonEnv(os.Environ()) {
-		// PWD is the loop shell's own cwd, never the caller's
-		if !strings.HasPrefix(kv, "HOME=") && !strings.HasPrefix(kv, "PWD=") {
-			env = append(env, kv)
-		}
-	}
+	value := ""
 	if marker {
-		env = append(env, supervisor.MarkerEnv+"=tmux:"+supervisor.SessionName)
+		value = "tmux:" + supervisor.SessionName
 	}
-	return env
+	return supervisor.DaemonLaunchEnv(p.home, os.Environ(), value)
 }
 
 // loopTmpl renders what tmux runs ("script") and the restart loop

@@ -27,6 +27,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/silgrid/polyforge/internal/polyforge/supervisor"
@@ -95,18 +98,121 @@ type superviseOpts struct {
 // supervisor marker), the Pi Web child when its checkout exists, and
 // the aihub child when --with-aihub asked for it.
 func planSupervise(o superviseOpts) (supervisor.RunSpec, error) {
-	return supervisor.RunSpec{}, nil
+	if o.grace < supervisor.MinStopGrace {
+		return supervisor.RunSpec{}, fmt.Errorf("the stop grace %s is below the %s minimum — the daemon's shutdown can take up to 30s of WIP pushes, a shorter grace would cut a checkpoint in half", o.grace, supervisor.MinStopGrace)
+	}
+	daemon := supervisor.ChildSpec{
+		Name: "daemon",
+		// the canonical launch: --config, -data-dir, -workflows-dir. The
+		// socket and the machine id resolve inside the daemon exactly as
+		// `pf daemon ensure`'s own launch would (the recorded daemon-id and
+		// the Host file's daemon_socket).
+		Argv: []string{o.pfBin, "daemon", "--config", o.configPath, "-data-dir", o.dataDir, "-workflows-dir", o.workflowsDir},
+		Dir:  o.home,
+		Env:  supervisor.DaemonLaunchEnv(o.home, o.environ, supervisor.MarkerContainerValue),
+		Log:  filepath.Join(o.dataDir, "daemon.log"),
+	}
+	rs := supervisor.RunSpec{Daemon: daemon, Grace: o.grace}
+	// Pi Web is started from its checkout when there is one: a container
+	// must bind 0.0.0.0 to be reachable, so start:lan, not the loopback
+	// form. An image that ships no Pi Web simply runs without it.
+	if st, err := os.Stat(o.piWebDir); err == nil && st.IsDir() {
+		rs.Others = append(rs.Others, supervisor.ChildSpec{
+			Name: "pi-web", Argv: []string{"npm", "run", "start:lan"}, Dir: o.piWebDir,
+			Env: superviseChildEnv(o.environ), Log: filepath.Join(o.dataDir, "pi-web.log"),
+		})
+	}
+	if o.withAIHub {
+		rs.Others = append(rs.Others, supervisor.ChildSpec{
+			Name: "aihub", Argv: []string{o.pfBin, "aihub"}, Dir: o.home,
+			Env: superviseChildEnv(o.environ), Log: filepath.Join(o.dataDir, "aihub.log"),
+		})
+	}
+	return rs, nil
 }
 
 // SuperviseMain executes `pf supervise <flags>` and answers the process
-// exit code (the container stops with it).
+// exit code the container stops with (the daemon's own 0/78, a clean
+// forwarded stop's 0, a grace-exceeded SIGKILL's 1, usage's 2).
 func SuperviseMain(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	return 0
+	fs := flag.NewFlagSet("pf supervise", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	cfgPath := fs.String("config", "", "shared config file (default ~/.config/polyforge/cli.toml)")
+	dataDir := fs.String("data-dir", "", "the Host data dir (default ~/.local/share/polyforge)")
+	wfDir := fs.String("workflows-dir", "", "the daemon's workflows dir (default <data-dir>/release/current/workflows)")
+	piWebDir := fs.String("pi-web-dir", "", "the Pi Web checkout (default <data-dir>/release/current/pi-web)")
+	grace := fs.Duration("grace", 60*time.Second, "the stop grace for the daemon's shutdown (>= 45s)")
+	withAIHub := fs.Bool("with-aihub", false, "start and watch the aihub server too")
+	if err := fs.Parse(argv); err != nil {
+		return 2
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(stderr, "pf supervise: unexpected arguments %v\n", fs.Args())
+		return 2
+	}
+	home, _ := os.UserHomeDir()
+	if *cfgPath == "" {
+		*cfgPath = DefaultConfigPath()
+	}
+	if *dataDir == "" {
+		*dataDir = DataDir(home)
+	}
+	if *wfDir == "" {
+		*wfDir = filepath.Join(*dataDir, "release", "current", "workflows")
+	}
+	if *piWebDir == "" {
+		*piWebDir = filepath.Join(*dataDir, "release", "current", "pi-web")
+	}
+	pfBin, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(stderr, "pf supervise: cannot locate the pf binary: %v\n", err)
+		return 1
+	}
+	rs, err := planSupervise(superviseOpts{
+		pfBin: pfBin, home: home, configPath: *cfgPath, dataDir: *dataDir,
+		workflowsDir: *wfDir, piWebDir: *piWebDir, withAIHub: *withAIHub,
+		grace: *grace, environ: os.Environ(),
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "pf supervise: %v\n", err)
+		return 2
+	}
+	// the children's log files live under the data dir
+	if err := os.MkdirAll(*dataDir, 0o755); err != nil {
+		fmt.Fprintf(stderr, "pf supervise: %v\n", err)
+		return 1
+	}
+	if superviseChild(rs, "pi-web") == nil {
+		fmt.Fprintf(stderr, "pf supervise: the pi-web dir %s is missing: running without Pi Web\n", *piWebDir)
+	}
+	return supervisor.RunSupervise(rs)
+}
+
+// superviseChild answers rs's child by name (nil when absent).
+func superviseChild(rs supervisor.RunSpec, name string) *supervisor.ChildSpec {
+	if rs.Daemon.Name == name {
+		return &rs.Daemon
+	}
+	for i := range rs.Others {
+		if rs.Others[i].Name == name {
+			return &rs.Others[i]
+		}
+	}
+	return nil
 }
 
 // superviseChildEnv answers the environment a non-daemon child (Pi Web,
 // the aihub server) runs with: the caller's environment with the
-// supervision marker REPLACED by the container supervisor's own.
+// supervision marker REPLACED by the container supervisor's own (these
+// children read their own credentials from their own files; only the
+// daemon sits behind the environment allow-list).
 func superviseChildEnv(environ []string) []string {
-	return nil
+	var out []string
+	for _, kv := range environ {
+		if name, _, _ := strings.Cut(kv, "="); name == supervisor.MarkerEnv {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return append(out, supervisor.MarkerEnv+"="+supervisor.MarkerContainerValue)
 }

@@ -159,3 +159,22 @@ func credentialLooking(up string) bool {
 	}
 	return strings.Contains(up, "PASSWORD") || strings.Contains(up, "PASSWD")
 }
+
+// DaemonLaunchEnv answers the environment a supervised launcher — the
+// tmux loop (`pf daemon ensure`) or `pf supervise` — starts the daemon
+// with: the launcher caller's allow-listed variables, HOME pinned (PWD
+// never: it is the launcher shell's own, never the caller's), and the
+// given supervision marker value ("" = none).
+func DaemonLaunchEnv(home string, environ []string, marker string) []string {
+	env := []string{"HOME=" + home}
+	for _, kv := range DaemonEnv(environ) {
+		if strings.HasPrefix(kv, "HOME=") || strings.HasPrefix(kv, "PWD=") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	if marker != "" {
+		env = append(env, MarkerEnv+"="+marker)
+	}
+	return env
+}

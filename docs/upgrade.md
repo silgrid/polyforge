@@ -722,3 +722,32 @@ image generation — every capsule and every integrate batch has its own
 path — and each start still prunes only its own repo's older
 generations; the disk cost is the price of the isolation, and no time-
 or count-based reclamation ships with it.
+
+## v0.2.4, the container supervisor and the upgrade drain (polyforge#160)
+
+The workstation container's supervision ships: `pf supervise` is the
+image entry point (84-image runs it as catatonit's direct child) — it
+starts and watches the daemon, Pi Web and, with `--with-aihub`, the
+aihub server as its own children, restarts a dead child with a growing
+delay, ends with the daemon's own 0/78 exit, and forwards a stop signal
+once with a `--grace` (floor 45s) for the daemon's shutdown before a
+SIGKILL. Under it `pf daemon ensure` is a successful no-op (the machine
+mapping check still runs; only the starting is skipped) and `pf doctor`'s
+supervision row passes on the `POLYFORGE_SUPERVISOR=container:pf-supervise`
+marker, with tmux no longer a required prerequisite there. A host is
+untouched: the tmux loop keeps its behavior.
+
+The upgrade drain ships with it: `pf ops drain --upgrade [--force]`
+(Host-level, `POST /ops/drain`, human-only) sets a Host-wide refusal of
+new work — every Cell refuses new submits, automatic claims and task
+spawns `DAEMON-409` while running work goes on — then judges idleness;
+an idle Host answers (safe to upgrade), a busy one refuses with 409
+naming the busy Cells until `--force` accepts the in-flight sessions
+(interrupted by the shutdown that follows, resumed after the restart).
+No upgrade action beyond taking the new pf: `tools/install.sh` does not
+use the gate yet (that integration is its own ticket), but a manual
+upgrade now has the gate available — run it, wait for the idle answer,
+then `pf ops shutdown` and install. The refusal of new work ends only
+with the daemon restart; an upgrade called off is unwound by restarting
+the daemon (`pf ops shutdown` then `pf daemon ensure`, or the container
+supervisor restarting it).
