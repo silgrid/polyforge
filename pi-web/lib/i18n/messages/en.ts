@@ -86,6 +86,9 @@ export const enLocale: LocalePlugin = {
 
     "settings.backTo": "Back to {name}",
     "settings.mcp": "MCP",
+    "settings.generalPaneConversation": "Interface & conversation",
+    "settings.generalPaneEnvironment": "Environment",
+    "settings.generalPaneEffective": "Effective values & sources",
     "settings.tabAccount": "Account",
     "settings.tabPermission": "Permissions",
     "settings.tabLegacyModels": "Models (legacy)",

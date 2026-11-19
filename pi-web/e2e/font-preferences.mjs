@@ -14,6 +14,16 @@ export async function checkFontPreferences(page) {
     const sidebar = page.getByRole("button", { name: "Show sidebar", exact: true });
     if (await sidebar.isVisible()) await sidebar.click();
     await page.getByRole("button", { name: "Settings", exact: true }).click();
+    // 85a1b: General is a left-column layout — a phone opens the sections home
+    // and then the pane list, so walk to 界面与对话 before touching its controls.
+    const home = page.locator(".settings-phone-home");
+    if (await home.isVisible().catch(() => false)) {
+      await home.getByRole("button", { name: "General", exact: true }).click();
+    } else {
+      await page.locator("nav.settings-section-tabs").getByRole("button", { name: "General", exact: true }).click().catch(() => {});
+    }
+    const items = page.locator('.settings-section-host[data-settings-section="general"] .config-sidebar-item');
+    await items.filter({ hasText: "Interface & conversation" }).first().click().catch(() => {});
   };
   assert.equal(await ui.inputValue(), "");
   assert.equal(await mono.inputValue(), "");

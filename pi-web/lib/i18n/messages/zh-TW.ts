@@ -86,6 +86,9 @@ export const zhTWLocale: LocalePlugin = {
 
     "settings.backTo": "返回{name}",
     "settings.mcp": "MCP",
+    "settings.generalPaneConversation": "介面與對話",
+    "settings.generalPaneEnvironment": "環境",
+    "settings.generalPaneEffective": "生效值與來源",
     "settings.tabAccount": "帳號",
     "settings.tabPermission": "權限",
     "settings.tabLegacyModels": "模型（舊版）",

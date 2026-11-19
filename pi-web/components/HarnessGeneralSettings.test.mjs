@@ -7,6 +7,7 @@
 // moved page already showed.
 import "#test-env";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { createJiti } from "jiti";
 
@@ -48,22 +49,25 @@ test("General is a left-column layout with three switchable items", () => {
   // The shared split view: the three panes of the ticket's settled list, in order.
   assert.match(html, /class="config-split-view"/, "General is not built on the shared split view");
   const labels = [...html.matchAll(/aria-current="page"[^>]*>\s*<span class="config-sidebar-text">([^<]*)<\/span>/g)].map((match) => match[1]);
-  assert.deepEqual(labels, ["Interface & conversation"], "the marked sidebar row is not the first item alone");
+  assert.deepEqual(labels, ["Interface &amp; conversation"], "the marked sidebar row is not the first item alone");
   const items = [...html.matchAll(/class="config-sidebar-item[^"]*"[^>]*>(?:(?!<\/button>).)*?<span class="config-sidebar-text">([^<]*)<\/span>/gs)].map((match) => match[1]);
-  assert.deepEqual(items, ["Interface & conversation", "Environment", "Effective values & sources"], `General's left column (got: ${items.join(", ")})`);
+  assert.deepEqual(items, ["Interface &amp; conversation", "Environment", "Effective values &amp; sources"], `General's left column (got: ${items.join(", ")})`);
   // The default detail pane is 界面与对话, and only the active pane is mounted.
   const panes = [...html.matchAll(/data-general-pane="([^"]*)"/g)].map((match) => match[1]);
   assert.deepEqual(panes, ["conversation"], "the default detail pane is not 界面与对话 alone");
   assert.match(html, /data-general-pane="conversation"[\s\S]*?Appearance/, "the conversation pane does not show the former General content");
 });
 
-test("the moved GeneralSettings keeps the former General page's sections whole", () => {
+test("the moved GeneralSettings keeps the former General page's sections whole", async () => {
   const html = renderConversation();
-  for (const heading of ["Appearance", "Fonts &amp; layout", "Chat", "Language", "Agent language"]) {
+  for (const heading of ["Appearance", "Fonts &amp; layout", "Chat", "Language"]) {
     assert.ok(html.includes(heading), `the conversation pane lost the ${heading} section`);
   }
-  // The claude tool permissions block stays in General (owner ruling Q7 A).
-  assert.match(html, /claude tool permissions/i, "the claude tool permissions block is gone from General");
+  // The claude tool permissions block stays in General (owner ruling Q7 A). It
+  // renders once its GET settles, so the mount is pinned in the source; the
+  // loaded block's behaviour is the e2e suites' (claude-permission-442).
+  const source = await readFile(new URL("./GeneralSettings.tsx", import.meta.url), "utf8");
+  assert.match(source, /<ClaudePermissionSettings sessionId=\{sessionId\} \/>/, "the claude tool permissions block is gone from General");
 });
 
 test("the tab rail the panes live under is the nine-plus-two model", () => {

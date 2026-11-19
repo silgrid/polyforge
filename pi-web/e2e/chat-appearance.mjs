@@ -86,10 +86,16 @@ export async function checkChatAppearance(page) {
   await checkFontPreferences(page);
   for (const viewport of [{ width: 1280, height: 600 }, { width: 320, height: 568 }]) {
     await page.setViewportSize(viewport);
+    // 85a1b: a phone back at the pane list re-enters 界面与对话 (a desktop's
+    // click on the already-open pane changes nothing).
+    const conversation = page.locator('.settings-section-host[data-settings-section="general"] .config-sidebar-item').filter({ hasText: "Interface & conversation" });
+    if (await conversation.isVisible().catch(() => false)) await conversation.click();
     // The panel's own end stays reachable by scrolling, and so does every
-    // language option (no longer the panel's last block).
-    await page.locator(".settings-general").evaluate((el) => { el.scrollTop = el.scrollHeight; });
-    assert.equal(await page.locator(".settings-general").evaluate((panel) => {
+    // language option (no longer the panel's last block); the detail pane is
+    // the one scroll region of General's left column (85a1b).
+    const detail = page.locator('.settings-section-host[data-settings-section="general"] .config-detail');
+    await detail.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+    assert.equal(await detail.evaluate((panel) => {
       const controls = panel.querySelectorAll("button, input, select");
       const el = controls[controls.length - 1];
       if (!el) return false;

@@ -1648,6 +1648,14 @@
   overflow-y: auto;
 }
 
+/* General as a left-column pane (85a1b): the detail pane (.config-detail) is
+   the one scroll region, so the page itself neither scrolls nor pads. */
+.settings-general.is-pane {
+  height: auto;
+  padding: 0;
+  overflow: visible;
+}
+
 .settings-general > * {
   max-width: 600px;
   margin-inline: auto;
