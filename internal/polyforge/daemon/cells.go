@@ -114,13 +114,16 @@ type Host struct {
 	// admission is the Host's heavy-run admission every Cell's daemon-run
 	// verification shares (verifyqueue.go).
 	admission *verifyQueue
+	// drain is the Host-wide upgrade drain state (upgradedrain.go):
+	// `pf ops drain --upgrade` sets it and every Cell refuses new work.
+	drain *upgradeDrain
 }
 
 // NewHost assembles every Cell of the set. A default Cell that cannot be
 // assembled refuses the Host (the error names it); a named Cell that cannot
 // is recorded invalid.
 func NewHost(hc HostConfig) (*Host, error) {
-	h := &Host{cfg: hc, cells: map[string]*cell{}, shutDone: make(chan struct{})}
+	h := &Host{cfg: hc, cells: map[string]*cell{}, shutDone: make(chan struct{}), drain: &upgradeDrain{}}
 	h.slots = &hostSlots{max: hc.MaxConcurrent, tasks: &task.Slots{}, cells: h.servingDaemons}
 	if h.slots.max <= 0 {
 		h.slots.max = cli.DefaultMaxConcurrentJobs
@@ -211,6 +214,7 @@ func (h *Host) build(profile string, c cli.Config) (Config, error) {
 	cfg.Profile, cfg.SharedFeed = profile, h.feed
 	cfg.HostSlots = h.slots
 	cfg.SharedAdmission = h.admission
+	cfg.UpgradeDrain = h.drain
 	hostPath := h.cfg.Set.HostPath
 	if profile != cellcfg.DefaultProfile {
 		// Resolve the default Cell at read time so a live reload is visible

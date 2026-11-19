@@ -86,12 +86,17 @@ func (d *Daemon) pendingChange() string {
 	return "api_key rotation (same identity) waits for the Cell to go idle"
 }
 
-// drainRefusal answers the one refusal of new work while a change drains:
-// a submit, an automatic claim and a task spawn. Nothing refused is
-// queued. Callers that admit on a nil answer hold drainGate.
+// drainRefusal answers the one refusal of new work while a change
+// drains: a submit, an automatic claim and a task spawn. Nothing
+// refused is queued. Callers that admit on a nil answer hold drainGate.
+// A Cell-scoped connection rotation and the Host-wide upgrade drain
+// (upgradedrain.go) share this one gate: whichever is set refuses.
 func (d *Daemon) drainRefusal() error {
 	if p := d.pendingChange(); p != "" {
 		return &api.Error{Code: api.ErrDaemonConflict, Detail: "this Cell is draining for a pending connection rotation (" + p + "): new submits, automatic claims and task spawns are refused and nothing is queued — retry once the Cell switched; queries, answers, resume and cancel of existing work go on"}
+	}
+	if d.upgradeDrain != nil {
+		return d.upgradeDrain.refusal()
 	}
 	return nil
 }

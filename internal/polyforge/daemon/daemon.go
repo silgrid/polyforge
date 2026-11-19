@@ -174,6 +174,10 @@ type Config struct {
 	// HostSlots is the Host's ceiling over every Cell (nil = this Cell's
 	// own queue ceiling only: the unhosted test seam).
 	HostSlots *hostSlots
+	// UpgradeDrain is the Host-wide upgrade drain state (upgradedrain.go;
+	// nil = the unhosted test seam: new work is never refused for an
+	// upgrade).
+	UpgradeDrain *upgradeDrain
 	// PendingAPIKey is a verified rotation the Cell drains toward (restored
 	// from its effective-connection record at a Host restart; "" = none).
 	PendingAPIKey string
@@ -519,6 +523,9 @@ type Daemon struct {
 	// and persists its queue entry after releasing it; it is taken before
 	// reloadMu, the queue lock and the Host slot lock, never after them.
 	drainGate sync.Mutex
+	// upgradeDrain is the Host-wide upgrade drain state (nil: the
+	// unhosted test seam — the Cell never refuses for an upgrade).
+	upgradeDrain *upgradeDrain
 	// admitting counts admissions that passed their pending check under
 	// drainGate and are persisting their queue entry outside it; an open
 	// reservation keeps the Cell from being safe-idle until the entry is
@@ -792,6 +799,7 @@ func New(cfg Config) (*Daemon, error) {
 		sup:          supervise.NewRegistry(),
 		merges:       newMergeLocks(),
 		verifyQ:      cfg.SharedAdmission,
+		upgradeDrain: cfg.UpgradeDrain,
 		// the Cell's own command_path (a reload moves it)
 		commandPath: cfg.StartupFile.Daemon.CommandPath,
 		pfDir:       selfDir(),
