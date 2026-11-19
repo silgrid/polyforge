@@ -42,16 +42,20 @@ tag that file lacks, on a commit that is not the owner pin, is someone
 else's new claim — the guard that refuses it lives here.
 """
 
-import argparse
-import datetime
-import json
 import os
-import re
 import sys
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from pfstep import atomic, hub, invoke
-from pfstep.git import GitError, git as ggit, run as grun
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import argparse  # noqa: E402
+import datetime  # noqa: E402
+import json  # noqa: E402
+import re  # noqa: E402
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple  # noqa: E402
+
+from pfstep import atomic, hub, invoke  # noqa: E402
+from pfstep.git import GitError, git as ggit, run as grun  # noqa: E402
 
 COMMAND = "release.py"
 
