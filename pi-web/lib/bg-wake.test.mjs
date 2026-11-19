@@ -209,3 +209,36 @@ test("the once flag is on disk before the first byte of the delivery", async (t)
   await pollUntil(() => wrapper.sent.length === 1, 2_000, "the held delivery to land");
   assert.equal(controller.hasActiveWork("sess-1"), false);
 });
+
+test("a deletion that begins while the wake waits for a busy session lands silently", async (t) => {
+  const wrapper = makeWrapper({ running: true });
+  const { deps, supervisor, root, calls } = makeDeps({ wrapper, wakeIdlePollMs: 10, wakeIdleTimeoutMs: 30_000 });
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const controller = createBgTaskController(deps);
+  controller.run("sess-gated", "/tmp/w", "make test");
+  supervisor.spawned[0].resolveDone({ exitCode: 0, signal: null, bytesWritten: 0, reason: null });
+  await flush();
+  // Mid-wait (the session is busy), the session is deleted.
+  controller.beginSessionDeletion(["sess-gated"]);
+  wrapper.running = false;
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(wrapper.sent.length, 0, "nothing is delivered to a session deleted mid-wait");
+  assert.deepEqual(calls.reopenSession, [], "nothing is reopened for a session deleted mid-wait");
+  assert.equal(controller.hasActiveWork("sess-gated"), false, "the wake settles silently");
+});
+
+test("a wrapper that dies while the wake waits is not sent the message", async (t) => {
+  const wrapper = makeWrapper({ running: true });
+  const { deps, supervisor, root } = makeDeps({ wrapper, wakeIdlePollMs: 10, wakeIdleTimeoutMs: 30_000, resolveSessionPath: async () => null });
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const controller = createBgTaskController(deps);
+  controller.run("sess-dying", "/tmp/w", "make test");
+  supervisor.spawned[0].resolveDone({ exitCode: 0, signal: null, bytesWritten: 0, reason: null });
+  await flush();
+  // The wrapper dies mid-wait; its session has no file left.
+  wrapper.alive = false;
+  wrapper.running = false;
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(wrapper.sent.length, 0, "no message goes to the wrapper that died mid-wait");
+  assert.equal(controller.hasActiveWork("sess-dying"), false, "the wake settles");
+});
