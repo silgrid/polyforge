@@ -99,3 +99,18 @@ test("a line the surgical editor refuses still leaves the preference written fir
   assert.deepEqual(await readPreference(agentDir), { [flow]: "hidden" }, "the preference went in before the edit");
   assert.equal(hash(await readFile(flow, "utf8")), before);
 });
+
+test("a stored shown preference survives the cleanup", async () => {
+  const agentDir = await freshAgentDir("shown");
+  const skill = await writeSkill(join(agentDir, "skills"), "author-shown", "disable-model-invocation: true\n");
+  await writeFile(join(agentDir, "pi-web-settings.json"), JSON.stringify({
+    skillVisibility: { pi: { [skill]: "shown" } },
+  }));
+
+  const response = await cleanup({ filePath: skill });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { success: true, removed: true });
+  assert.deepEqual(await readPreference(agentDir), { [skill]: "shown" }, "the user's shown preference survives the cleanup");
+  assert.doesNotMatch(await readFile(skill, "utf8"), /disable-model-invocation/);
+});

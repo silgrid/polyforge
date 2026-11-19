@@ -125,3 +125,17 @@ test("a file without the legacy line is left alone and gets no preference", asyn
   assert.equal(await hash(skill), before);
   assert.deepEqual(await readPreference(agentDir), {});
 });
+
+test("the cleanup keeps a stored shown preference", async () => {
+  const agentDir = await freshAgentDir("shown");
+  const skill = await writeSkill(agentDir, "author-shown", "disable-model-invocation: true\n");
+  await writeFile(join(agentDir, "pi-web-settings.json"), JSON.stringify({
+    skillVisibility: { pi: { [skill]: "shown" } },
+  }));
+
+  const result = await cleanupLegacyDisableModelInvocation(skill, agentDir);
+
+  assert.deepEqual(result, { removed: true });
+  assert.deepEqual(await readPreference(agentDir), { [skill]: "shown" }, "the user's shown preference survives the cleanup");
+  assert.doesNotMatch(await readFile(skill, "utf8"), /disable-model-invocation/);
+});
