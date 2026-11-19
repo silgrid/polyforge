@@ -52,14 +52,16 @@ export const PI_KNOWN_RANGE: KnownVersionRange = {
 
 /** `major.minor.patch` of a version string, null when it does not parse. */
 export function parseVersion(version: string): [number, number, number] | null {
-  // stub (85a1 u1): zero-value body, the red run's target
-  return null;
+  const match = /^(\d+)\.(\d+)\.(\d+)/.exec(version.trim());
+  if (!match) return null;
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
 }
 
-/** Whether `version` falls inside `range` (major.minor equal, patch at the minimum). */
 export function versionInKnownRange(version: string, range: KnownVersionRange): boolean {
-  // stub (85a1 u1): zero-value body, the red run's target
-  return false;
+  const parsed = parseVersion(version);
+  if (!parsed) return false;
+  const [major, minor, patch] = parsed;
+  return major === range.major && minor === range.minor && patch >= range.minPatch;
 }
 
 /** The context every adapter method takes; the routes fill it in, tests inject fixture paths. */
@@ -101,7 +103,12 @@ export interface HarnessAdapter {
  * undetected or unrecognized version with its reason; allows a known one.
  */
 export function writeGate(probe: VersionProbeResult): { allowed: true } | { allowed: false; reason: string } {
-  // stub (85a1 u1): zero-value body, the red run's target
+  if (probe.version === null) {
+    return { allowed: false, reason: probe.reason ?? "the harness version could not be detected" };
+  }
+  if (!probe.known) {
+    return { allowed: false, reason: probe.reason ?? `version ${probe.version} is not recognized` };
+  }
   return { allowed: true };
 }
 
@@ -117,25 +124,28 @@ export async function gatedWrite(
   _change: WriteChange,
   ctx: HarnessReadContext,
 ): Promise<WriteResult> {
-  // stub (85a1 u1): zero-value body, the red run's target
-  return { status: "not-implemented", reason: "" };
+  const probe = await adapter.probeVersion(ctx);
+  const gate = writeGate(probe);
+  if (!gate.allowed) return { status: "refused", reason: gate.reason };
+  return {
+    status: "not-implemented",
+    reason: `writing ${concept} on ${adapter.id} is not implemented yet (known version ${probe.version})`,
+  };
 }
 
 const adapters = new Map<HarnessId, HarnessAdapter>();
 
 /** Registers `adapter` under its id; a second registration of the same id replaces the first. */
 export function registerHarness(adapter: HarnessAdapter): void {
-  // stub (85a1 u1): zero-value body, the red run's target
+  adapters.set(adapter.id, adapter);
 }
 
 /** The adapter registered under `id`, undefined when none is. */
 export function getHarnessAdapter(id: HarnessId): HarnessAdapter | undefined {
-  // stub (85a1 u1): zero-value body, the red run's target
-  return undefined;
+  return adapters.get(id);
 }
 
 /** Every registered adapter, in registration order. */
 export function listHarnessAdapters(): HarnessAdapter[] {
-  // stub (85a1 u1): zero-value body, the red run's target
-  return [];
+  return [...adapters.values()];
 }

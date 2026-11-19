@@ -58,15 +58,27 @@ export type ApprovalMode = (typeof APPROVAL_MODES)[number];
  * `defaultThinkingLevel` and claude's `effortLevel` both use these spellings
  * verbatim. An unknown spelling maps to null (callers show the raw value).
  */
+const REASONING_EFFORT_SET: ReadonlySet<string> = new Set(REASONING_EFFORT_LEVELS);
+
 export function neutralReasoningEffort(raw: unknown): ReasoningEffort | null {
-  // stub (85a1 u1): zero-value body, the red run's target
-  return null;
+  return typeof raw === "string" && REASONING_EFFORT_SET.has(raw) ? (raw as ReasoningEffort) : null;
 }
 
-/** A harness spelling of an approval mode onto the neutral enum; unknown → null. */
+/** claude's permissions.defaultMode spellings onto the neutral enum. */
+const APPROVAL_MODE_SPELLINGS: Readonly<Record<string, ApprovalMode>> = {
+  default: "ask",
+  acceptEdits: "accept-edits",
+  "accept-edits": "accept-edits",
+  plan: "plan",
+  auto: "auto",
+  deny: "deny-unprompted",
+  "deny-unprompted": "deny-unprompted",
+  bypassPermissions: "full",
+  full: "full",
+};
+
 export function neutralApprovalMode(raw: unknown): ApprovalMode | null {
-  // stub (85a1 u1): zero-value body, the red run's target
-  return null;
+  return typeof raw === "string" ? APPROVAL_MODE_SPELLINGS[raw] ?? null : null;
 }
 
 /** A credential file's existence, never its contents. */
