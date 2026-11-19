@@ -44,8 +44,10 @@ class EngineSelectionTest(unittest.TestCase):
 
     def test_podman_is_selected_when_the_variable_says_so(self) -> None:
         o = ContainerOptions().with_defaults({"PATH": "/usr/bin:/bin", stepenv.ENV_CONTAINER_ENGINE: "podman"})
-        self.assertIsInstance(o.runtime, PodmanCLI, "podman is PodmanCLI")
-        self.assertEqual(o.runtime.bin, "podman", "no podman on the test PATH: the bare name, available() says it is missing")
+        rt = o.runtime
+        assert rt is not None
+        assert isinstance(rt, PodmanCLI), "podman is PodmanCLI"
+        self.assertEqual(rt.bin, "podman", "no podman on the test PATH: the bare name, available() says it is missing")
 
     def test_an_empty_value_is_refused(self) -> None:
         with self.assertRaises(container.ContainerError) as got:
@@ -64,7 +66,8 @@ class EngineSelectionTest(unittest.TestCase):
     def test_an_explicit_engine_is_never_replaced(self) -> None:
         fb = FakeRuntime(tempfile.gettempdir())
         o = ContainerOptions(runtime=fb).with_defaults({"PATH": "/usr/bin:/bin", stepenv.ENV_CONTAINER_ENGINE: "podman"})
-        self.assertIs(o.runtime, fb, "a caller's own runtime (a test's fake, verify.py's --image) keeps its place")
+        assert o.runtime is fb, "a caller's own runtime (a test's fake, verify.py's --image) keeps its place"
+        self.assertIs(o.runtime, fb)
 
     def test_engine_for_env_selects_without_the_options(self) -> None:
         self.assertIsInstance(container.engine_for_env({"PATH": "/usr/bin:/bin"}), DockerCLI)
