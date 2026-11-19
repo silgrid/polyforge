@@ -115,6 +115,29 @@ export function unifiedMcpClaudeFields(server: ClaudeMcpServerInfo): Record<stri
   return fields;
 }
 
+/** The fields of pi's raw entry claude's own config keeps: its CLI drops the rest, so the projection says what is meant to arrive. */
+export function claudeMcpEntryFromPi(entry: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of ["command", "args", "env", "url", "headers", "cwd", "type"]) {
+    if (entry[key] !== undefined) out[key] = entry[key];
+  }
+  return out;
+}
+
+/**
+ * claude's raw entry as pi's mcp.json would hold it: pi derives the transport
+ * from the url, so claude's `type` goes; undefined when pi takes none of it —
+ * an sse or ws entry, which pi does not load.
+ */
+export function piMcpEntryFromClaude(entry: Record<string, unknown>): Record<string, unknown> | undefined {
+  if (entry.type === "sse" || entry.type === "ws") return undefined;
+  const out: Record<string, unknown> = {};
+  for (const key of ["command", "args", "env", "url", "headers", "cwd"]) {
+    if (entry[key] !== undefined) out[key] = entry[key];
+  }
+  return out;
+}
+
 /** A field's value as the row's inconsistency note shows it. */
 function fieldText(field: string, value: unknown): string {
   if (Array.isArray(value)) {

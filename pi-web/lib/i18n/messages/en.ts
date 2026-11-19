@@ -1185,6 +1185,8 @@ export const enLocale: LocalePlugin = {
     "mcp.reason.trust-unreadable": "Pi Web cannot read the trust store (trust.json), or another program has it locked.",
     "mcp.reason.trust-not-required": "This project has no resources that need trust anymore.",
     "mcp.reason.session-busy": "Wait for the running session in this folder to finish, then trust the project.",
+    "mcp.reason.harness-unsupported": "That harness does not take this entry: the local group is Claude's own, and pi loads no sse or ws entry.",
+    "mcp.reason.claude-unwritable": "Claude's side could not be written: its CLI is missing, or its version is one Pi Web does not recognize.",
     "mcp.reason.invalid-request": "Pi Web refused the request because it does not ask for a change Pi Web can make.",
     "mcp.reason.mcp-off": "MCP is off on this Pi Web server, so it changes no server.",
     "mcp.reason.project-untrusted": "This project is not trusted, so Pi Web does not change its .pi/mcp.json.",

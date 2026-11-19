@@ -4,8 +4,8 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
-import { delimiter, tmpdir } from "node:os";
-import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 import test, { after } from "node:test";
 import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
 import { createJiti } from "jiti";
@@ -449,8 +449,8 @@ test("a shared name both sides hold in one scope merges into one row, its differ
   assert.equal(row.claude, true);
   assert.deepEqual(row.missing, []);
   assert.deepEqual(row.inconsistent, [
-    { field: "args", values: { pi: "global-shared", claude: "-y claude-side" } },
-  ], "the pi entry has no args, claude has some: the shared field differs");
+    { field: "command", values: { pi: "global-shared", claude: "npx" } },
+  ], "command is the one field both sides define, and they differ; claude's args alone are no difference");
   assert.deepEqual(row.otherScopes, ["project"]);
 });
 

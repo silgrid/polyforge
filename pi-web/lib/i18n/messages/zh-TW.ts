@@ -1185,6 +1185,8 @@ export const zhTWLocale: LocalePlugin = {
     "mcp.reason.trust-unreadable": "Pi Web 無法讀取信任記錄（trust.json），或它正被其他程式鎖定。",
     "mcp.reason.trust-not-required": "此專案已沒有需要信任的資源。",
     "mcp.reason.session-busy": "請等此資料夾中正在執行的工作階段結束後，再信任此專案。",
+    "mcp.reason.harness-unsupported": "該 harness 不接受此條目：本地群組是 Claude 專屬的，pi 也不載入 sse / ws 條目。",
+    "mcp.reason.claude-unwritable": "Claude 一側無法寫入：找不到它的 CLI，或它的版本不在 Pi Web 認識的範圍內。",
     "mcp.reason.invalid-request": "此要求並未要求 Pi Web 能夠進行的變更，Pi Web 已拒絕。",
     "mcp.reason.mcp-off": "此 Pi Web 伺服器上的 MCP 已關閉，因此不會變更任何伺服器。",
     "mcp.reason.project-untrusted": "此專案未受信任，Pi Web 不會變更它的 .pi/mcp.json。",

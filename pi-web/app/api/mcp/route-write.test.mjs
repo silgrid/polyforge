@@ -3,8 +3,8 @@ import "#test-env";
 import assert from "node:assert/strict";
 import { chmodSync, existsSync, realpathSync } from "node:fs";
 import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
-import { delimiter, tmpdir } from "node:os";
-import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 import test, { after, beforeEach } from "node:test";
 import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
 import { createJiti } from "jiti";
@@ -432,10 +432,11 @@ const previousStubVersion = process.env.CLAUDE_MCP_STUB_VERSION;
 /** The stub claude on PATH, its log and its config dir, for this one test. */
 async function withClaudeStub(t, { version = "2.1.326" } = {}) {
   await mkdir(claudeConfigDir, { recursive: true });
-  const binDir = join(root, "claude-bin");
+  // One dir per version: the binary must be named `claude` (what
+  // findClaudeBinary looks for), and probeClaude caches by its realpath.
+  const binDir = join(root, `claude-bin-${version}`);
   await mkdir(binDir, { recursive: true });
-  // A copy per version: probeClaude caches by the binary's realpath.
-  const binary = join(binDir, `claude-${version}`);
+  const binary = join(binDir, "claude");
   if (!existsSync(binary)) await copyFile(stubSource, binary);
   chmodSync(binary, 0o755);
   const log = join(root, `spawns-${version}-${t.name.replace(/\W+/g, "-")}.jsonl`);
@@ -491,17 +492,19 @@ test("set-apply to pi alone removes only claude's copy; pi's files keep their by
   assert.deepEqual(body.applied.results.map((result) => [result.harness, result.ok]), [["pi", true], ["claude", true]]);
 });
 
-test("set-apply to claude alone touches nothing at all: no spawn, no byte moves (AC3)", async (t) => {
+test("set-apply to claude alone removes pi's copy only: no spawn, claude's files keep their bytes (AC3)", async (t) => {
   const { log } = await withClaudeStub(t);
   await writeFile(globalPath, JSON.stringify({ mcpServers: { "shared-entry": { command: "npx", args: ["-y", "shared-one"] } } }, null, 2));
-  const globalBefore = await readFile(globalPath, "utf8");
   const stateBefore = await readFile(claudeStatePath, "utf8");
+  const dotMcpBefore = await readFile(dotMcpPath, "utf8");
 
-  const { status } = await post({ action: "set-apply", scope: "global", name: "shared-entry", harnesses: ["claude"] });
+  const { status, body } = await post({ action: "set-apply", scope: "global", name: "shared-entry", harnesses: ["claude"] });
   assert.equal(status, 200);
   assert.deepEqual(await stubSpawns(log), [], "claude holds it, so keeping it there spawns nothing");
-  assert.equal(await readFile(globalPath, "utf8"), globalBefore);
   assert.equal(await readFile(claudeStatePath, "utf8"), stateBefore);
+  assert.equal(await readFile(dotMcpPath, "utf8"), dotMcpBefore);
+  assert.deepEqual((await readJson(globalPath)).mcpServers, {}, "pi's copy is the one the change removes");
+  assert.deepEqual(body.applied.results.map((result) => [result.harness, result.ok]), [["pi", true], ["claude", true]]);
 });
 
 test("set-apply adds a missing side from the other's native definition (AC3)", async (t) => {

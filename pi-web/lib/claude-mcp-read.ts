@@ -105,6 +105,57 @@ function serverEntries(
     .map((name) => entryInfo(name, scope, sourcePath, servers[name], disabledNames.has(name)));
 }
 
+/** One raw claude entry as its own file holds it — values included, so it never leaves the server (#85 85c: the undo hold and the apply-to projection read it). */
+export type ClaudeMcpRawEntryRead =
+  | { ok: true; entry: Record<string, unknown>; sourcePath: string }
+  | { ok: false; reason: "server-missing"; error: string; path: string };
+
+/**
+ * The raw entry `name` defines in claude's `scope`, values unmasked: it stays
+ * server-side (the undo hold, the entry projected to the other harness).
+ * Spawns nothing, like every read here.
+ */
+export function readClaudeMcpRawEntry(
+  options: { scope: McpScope; name: string } & ClaudeMcpReadOptions,
+): ClaudeMcpRawEntryRead {
+  const { scope, name } = options;
+  const configPath = claudeMcpStatePath(options);
+  const missing = (path: string): ClaudeMcpRawEntryRead => ({ ok: false, reason: "server-missing", error: `${path} does not define MCP server "${name}"`, path });
+  const entryOf = (servers: Record<string, unknown> | undefined, path: string): ClaudeMcpRawEntryRead =>
+    servers !== undefined && Object.hasOwn(servers, name) && isRecord(servers[name])
+      ? { ok: true, entry: servers[name], sourcePath: path }
+      : missing(path);
+  if (scope === "project") {
+    if (options.cwd === undefined) return missing(join(".", ".mcp.json"));
+    const dotMcpPath = join(options.cwd, ".mcp.json");
+    const dotMcp = readJsonObject(dotMcpPath);
+    return dotMcp && isRecord(dotMcp.mcpServers) ? entryOf(dotMcp.mcpServers, dotMcpPath) : missing(dotMcpPath);
+  }
+  const state = readJsonObject(configPath);
+  if (state === null) return missing(configPath);
+  if (scope === "global") {
+    return isRecord(state.mcpServers) ? entryOf(state.mcpServers, configPath) : missing(configPath);
+  }
+  if (options.cwd === undefined) return missing(configPath);
+  const keys = new Set([options.cwd]);
+  try {
+    const real = realpathSync(options.cwd);
+    if (real !== options.cwd) keys.add(real);
+  } catch {
+    // A cwd that resolves to nothing has no local entries.
+  }
+  const projects = isRecord(state.projects) ? state.projects : undefined;
+  if (projects) {
+    for (const key of keys) {
+      const project = projects[key];
+      if (isRecord(project) && isRecord(project.mcpServers) && Object.hasOwn(project.mcpServers, name)) {
+        return entryOf(project.mcpServers, configPath);
+      }
+    }
+  }
+  return missing(configPath);
+}
+
 /** Reads claude's MCP entries from its files; spawns nothing. */
 export function readClaudeMcpServers(options: ClaudeMcpReadOptions = {}): ClaudeMcpReadResult {
   const configPath = claudeMcpStatePath(options);

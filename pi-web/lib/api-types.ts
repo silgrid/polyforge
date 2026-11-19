@@ -740,6 +740,10 @@ export type McpRefusalReason =
   | "folder-not-fresh"
   /** `add` with `trustFolder`: trusting the folder would trust more than it (`breadth`), so Pi Web does not do it by itself. */
   | "trust-too-broad"
+  /** A harness the request named cannot take this entry or scope (#85 85c): pi at claude's local scope, or an sse/ws entry pi does not load. */
+  | "harness-unsupported"
+  /** A write to claude its own CLI refused or could not make: no binary, or a version the write gate does not recognize (#85 85c). */
+  | "claude-unwritable"
   /** Reading failed unexpectedly; `error` says how. */
   | "internal";
 
@@ -783,6 +787,8 @@ export interface McpServerRef {
  * which stays on the server and may hold literal secrets.
  */
 export interface McpUndoInfo extends McpServerRef {
+  /** Present when the removal took a claude entry (#85 85c): undo re-adds it through the CLI. */
+  harness?: "claude";
   token: string;
   /** The configured path it was removed from. */
   path: string;
@@ -807,11 +813,29 @@ export interface McpActionResponse extends McpResponse {
   /** `sign-out`: the server signed out of, and whether `mcp-auth.json` held anything for its URL. */
   signedOut?: McpServerRef & { removed: boolean };
   /** `add`: the server written, and the configured path of its file. */
-  added?: McpServerRef & { path: string };
+  added?: McpServerRef & { path: string; harness?: "claude" };
+  /** `set-apply` (#85 85c): one result per harness the row could reach, in [pi, claude] order. */
+  applied?: {
+    scope: McpScope;
+    name: string;
+    results: McpApplyResult[];
+  };
   /** `add` to a project: the folder's trust after the write (it requires trust once `.pi/mcp.json` exists), for the page's trust status. */
   trust?: ProjectTrustStatus;
   /** `add` with `trustFolder`: the folder was trusted in the same request. */
   trustedFolder?: true;
+}
+
+/**
+ * One harness's outcome of a `set-apply` (#85 85c, AC3): the row now says
+ * what was asked of that harness, or why its write refused — the reason a
+ * failure carries is a `McpRefusalReason` the panel translates.
+ */
+export interface McpApplyResult {
+  harness: "pi" | "claude";
+  ok: boolean;
+  error?: string;
+  reason?: McpRefusalReason;
 }
 
 /**
