@@ -1595,3 +1595,20 @@ test("a name that lives in another group says so on its row (Q2 A)", () => {
   assert.match(markup, /class="mcp-sidebar-badge is-muted">\+global</, "the project and local rows hint back");
   assert.match(markup, /class="mcp-sidebar-badge is-muted">\+local</, "a claude-only row hints at its local twin");
 });
+
+test("a pi row claude does not hold says so, never the local-scope sentence (r2#5)", () => {
+  const data = unifiedData({
+    servers: [
+      server({ name: "shared", transport: "stdio", command: "npx", args: ["-y", "v1"] }),
+      server({ name: "pi-own", transport: "stdio", command: "node", args: ["pi.js"] }),
+    ],
+    unified: [
+      unifiedRow({ inconsistent: [{ field: "args", values: { pi: "-y v1", claude: "-y v2" } }] }),
+      unifiedRow({ name: "pi-own", pi: true, claude: false, missing: ["claude"] }),
+    ],
+  });
+  const html = view({ cwd: "/Users/me/repo", load: { state: "loaded", data }, selected: "global\0pi-own" });
+  const markup = decode(html);
+  assert.match(markup, new RegExp(messages["mcp.claude.notHeld"]), "the claude partition says claude does not hold this entry");
+  assert.ok(!markup.includes(messages["mcp.applyTo.piUnsupportedLocal"]), "the local-scope sentence stays in the local group where it is true");
+});
