@@ -41,13 +41,21 @@ this implementation's own output."""
 import json
 import os
 import subprocess
+import tempfile
 import unittest
 from typing import Any, Dict, List, cast
 
 from .gitworld import GitCase, Repo
+from .verifyfix import HAVE_BASH, HAVE_GIT, Fixture, Run, cmd_of, engine_args, fake_engine, report, run_verify
 
 SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENGINE = os.path.join(SCRIPTS, "verify-scope")
+
+# The closure note AC3 demands, the owner's 1-B ruling verbatim: the merged
+# source hint, no distinction between the project's config and a pf
+# override. Pinned as a literal here — the ticket's words, never this
+# implementation's own output.
+AUDIT_OFF_NOTE = "PF_PARAM_AUDIT=off，来自项目配置或 pf override"
 
 
 def run_engine(d: str, *flags: str) -> "subprocess.CompletedProcess[str]":
@@ -125,6 +133,75 @@ class EngineAuditTest(GitCase):
                            capture_output=True, text=True, stdin=subprocess.DEVNULL)
         self.assertEqual(c.returncode, 0, c.stderr)
         self.assertEqual(audits(engine_cmds(c)), [])
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class VerifyAuditParamTest(unittest.TestCase):
+    """verify.py's side of the audit parameter (PF_PARAM_AUDIT): the four
+    values of the matrix — on, unset (and empty, its equal), off, and
+    every other value a named error before any check runs. The fake scope
+    engine (tests/verifyfix.py) logs its argv, so the option handed to
+    the engine is asserted, not inferred."""
+
+    def setUp(self) -> None:
+        if not HAVE_GIT or not HAVE_BASH:
+            self.skipTest("git and bash are required")
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        self.root = os.path.realpath(td.name)
+
+    def fixture(self) -> Any:
+        fx = Fixture(self.root, {"app": {"lib/a.txt": "a\n"}})
+        fx.commit_in_repo("app", {"lib/a.txt": "a b\n"}, "feature")
+        return fake_engine(self.root, {
+            "app": report("scoped", cmd_of("gate", "fast", "echo plan-ok")),
+            "app.full": report("full", cmd_of("gate", "fast", "echo plan-ok"),
+                               cmd_of("tail", "full", "echo full-ok")),
+        })
+
+    def doc(self, r: Run) -> Dict[str, Any]:
+        self.assertIsNotNone(r.doc, "no result.json: %s\n%s" % (json.dumps(r.result, indent=1), r.stderr))
+        assert r.doc is not None
+        return r.doc
+
+    def test_off_hands_the_engine_the_option_and_records_the_closure(self) -> None:
+        eng = self.fixture()
+        r = run_verify(os.path.join(self.root, "capsule"), eng, tier="full",
+                       env={"PF_PARAM_AUDIT": "off"})
+        self.assertEqual(r.exit, 0, r.result.get("summary"))
+        self.assertTrue(engine_args(eng), "the engine was never asked")
+        for line in engine_args(eng):
+            self.assertIn("--audit off", line, "every engine invocation carries the option: %s" % line)
+        d = self.doc(r)
+        self.assertEqual(d.get("audit_disabled"), AUDIT_OFF_NOTE,
+                         "the result must record the closure with the merged source hint")
+        self.assertEqual([c["name"] for c in d["checks"] if c["status"] == "fail"], [])
+
+    def test_on_empty_and_unset_change_nothing(self) -> None:
+        for value in ("on", "", None):
+            eng = self.fixture()
+            env = {} if value is None else {"PF_PARAM_AUDIT": value}
+            r = run_verify(os.path.join(self.root, "capsule"), eng, tier="full", env=env)
+            self.assertEqual(r.exit, 0, r.result.get("summary"))
+            for line in engine_args(eng):
+                self.assertNotIn("--audit", line, "on must hand the engine no audit option: %s" % line)
+            d = self.doc(r)
+            self.assertNotIn("audit_disabled", d, "an on run records no closure")
+
+    def test_every_other_value_is_a_named_error_before_any_check(self) -> None:
+        for value in ("ON", "false", " off", "0"):
+            eng = self.fixture()
+            r = run_verify(os.path.join(self.root, "capsule"), eng, tier="full",
+                           env={"PF_PARAM_AUDIT": value})
+            self.assertEqual(r.exit, 2, "%r must be a named error, not a silent on or off" % value)
+            self.assertIn("pf-audit-param-invalid", r.result.get("summary", ""),
+                          "%r: the fixed mark names the error" % value)
+            self.assertIn("PF_PARAM_AUDIT", r.result.get("summary", ""))
+            self.assertIsNone(r.doc, "%r: no result.json — nothing ran" % value)
+            self.assertEqual(engine_args(eng), [], "%r: the engine was never asked" % value)
 
 
 if __name__ == "__main__":
