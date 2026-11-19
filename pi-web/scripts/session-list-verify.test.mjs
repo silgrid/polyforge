@@ -71,6 +71,10 @@ test("each mode's dry run resolves the plan from the ticket's arguments", (t) =>
       assert.match(plan.baseline, /^[0-9a-f]{40}$/);
       assert.deepEqual(plan.transientFields, ["sessionListVersion"]);
     }],
+    ["golden", ["--baseline", "HEAD", "--candidate", "HEAD", "--transient-fields", "sessionListVersion,extraField"], (plan) => {
+      assert.deepEqual(plan.transientFields, ["sessionListVersion", "extraField"],
+        "the golden diff's transient envelope fields are named, never silently dropped");
+    }],
     ["mutations", ["--harnesses", "pi,claude", "--changes", "create,append,delete"], (plan) => {
       assert.deepEqual(plan.harnesses, ["pi", "claude"]);
       assert.deepEqual(plan.changes, ["create", "append", "delete"]);

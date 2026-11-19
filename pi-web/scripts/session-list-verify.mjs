@@ -16,7 +16,8 @@ const argv = process.argv.slice(2);
 const mode = argv.find((arg) => !arg.startsWith("--"));
 if (!mode || !MODES.has(mode)) usage(mode ? `unknown mode "${mode}"` : "missing mode");
 if (argv.includes("--dry-run")) {
-  console.log(JSON.stringify({ ok: true, dryRun: true, mode }, null, 2));
+  const option = (name) => (argv.includes(`--${name}`) ? argv[argv.indexOf(`--${name}`) + 1] : undefined);
+  console.log(JSON.stringify({ ok: true, dryRun: true, mode, fixture: option("fixture") ?? "", out: option("out") ?? "" }, null, 2));
 } else {
   console.error("session-list-verify: the runner is not implemented in this state");
   process.exit(1);
