@@ -76,6 +76,13 @@ type Options struct {
 	// /opt/polyforge/seed/releases/<ver>, or any directory of the same
 	// shape).
 	Seed string
+	// DataDir is the machine's data directory (the polyforge-data
+	// volume in the workstation, <data-dir>): the pre-#162 component
+	// layout the #161 image and the host installer leave there —
+	// <data-dir>/release/<ver> with a current symlink inside — is
+	// checked THERE, never inside the components root (a volume the
+	// #161 era did not have), and is refused with a migration note.
+	DataDir string
 	// BaseVersion is the running base's (bootstrap pf's) version, for
 	// the manifest's minimum base requirement.
 	BaseVersion string
