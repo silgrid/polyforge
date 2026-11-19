@@ -549,7 +549,7 @@ func supervisionCheck(daemonUp bool, daemonEnvNames []string) (c doctorCheck) {
 	switch {
 	case tmux:
 		c.Status, c.Detail = "pass", "the daemon runs under the restart loop in tmux session "+supervisor.SessionName+" (a crash is restarted within ~5s; after a reboot the next harness session runs pf daemon ensure)"
-	case supervisor.SystemdActive():
+	case systemd:
 		c.Status, c.Detail = "pass", "systemd unit "+supervisor.SystemdUnit+" is active"
 	case errors.Is(err, supervisor.ErrNoTmux):
 		c.Status, c.Detail = "warn", "the daemon runs without supervision and tmux is not installed: a crash is not restarted — install tmux, then: "+fix
