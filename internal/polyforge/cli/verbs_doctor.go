@@ -897,9 +897,12 @@ func claudeHarnessCheck(steps []workspace.StepResolution, workflowsDir string, d
 	}
 	// claude steps strip every inherited ANTHROPIC_*, so only the
 	// settings.json env block can carry the step's credential; the
-	// daemon's own variables are reported, never counted.
-	if h.SettingsEnv["ANTHROPIC_AUTH_TOKEN"] != "set" && h.SettingsEnv["ANTHROPIC_API_KEY"] != "set" {
-		warn("no credential (ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY) in the claude-config settings.json env block — the steps' only credential source (claude steps do not inherit the daemon's ANTHROPIC_*); the settings.json env pair (ANTHROPIC_AUTH_TOKEN + optional ANTHROPIC_BASE_URL) must live under the claude-config dir (env block: ANTHROPIC_AUTH_TOKEN required, ANTHROPIC_BASE_URL optional — paired, never a project-level settings file)")
+	// daemon's own variables are reported, never counted. The three
+	// credential keys are the account page's three write kinds (85a2,
+	// the 2026-11-19 Q3 revision): the setup-token mint
+	// (CLAUDE_CODE_OAUTH_TOKEN), the API key and the gateway pair.
+	if h.SettingsEnv["ANTHROPIC_AUTH_TOKEN"] != "set" && h.SettingsEnv["ANTHROPIC_API_KEY"] != "set" && h.SettingsEnv["CLAUDE_CODE_OAUTH_TOKEN"] != "set" {
+		warn("no credential (ANTHROPIC_AUTH_TOKEN, ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN) in the claude-config settings.json env block — the steps' only credential source (claude steps do not inherit the daemon's ANTHROPIC_*); set it through Pi Web's account page or by hand (env block: ANTHROPIC_AUTH_TOKEN + optional ANTHROPIC_BASE_URL as the gateway pair, ANTHROPIC_API_KEY, or a CLAUDE_CODE_OAUTH_TOKEN minted by `claude setup-token` — paired, never a project-level settings file)")
 	}
 	if h.SettingsWarning != "" {
 		warn(h.SettingsWarning)
@@ -931,7 +934,7 @@ func settingsFacts(h HarnessStatus) string {
 	}
 	if len(h.SettingsEnv) > 0 {
 		var rows []string
-		for _, k := range []string{"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_CONFIG_DIR"} {
+		for _, k := range []string{"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR"} {
 			if v, ok := h.SettingsEnv[k]; ok {
 				rows = append(rows, k+" "+v)
 			}

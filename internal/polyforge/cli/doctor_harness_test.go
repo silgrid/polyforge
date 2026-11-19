@@ -46,7 +46,7 @@ func TestClaudeHarnessCheck(t *testing.T) {
 			h.SettingsEnv = map[string]string{"ANTHROPIC_AUTH_TOKEN": "unset", "ANTHROPIC_API_KEY": "set"}
 			return h
 		}()}, "pass", "ANTHROPIC_API_KEY set"},
-		{"no settings credential", steps, true, map[string]HarnessStatus{"claude": func() HarnessStatus { h := ok; h.SettingsEnv = nil; return h }()}, "warn", "must live under the claude-config dir"},
+		{"no settings credential", steps, true, map[string]HarnessStatus{"claude": func() HarnessStatus { h := ok; h.SettingsEnv = nil; return h }()}, "warn", "no credential (ANTHROPIC_AUTH_TOKEN, ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN) in the claude-config settings.json env block"},
 		// env hygiene: the daemon's own ANTHROPIC_* never reach a claude
 		// step — a daemon-env token is no credential, a daemon-env
 		// BASE_URL no hazard; both are reported only
