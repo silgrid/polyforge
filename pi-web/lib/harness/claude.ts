@@ -22,7 +22,7 @@ import {
   type WriteChange,
   type WriteResult,
 } from "./adapter";
-import { claudeSettingsLayers, claudeStateFilePath, managedSettingsPath, type ClaudeSettingsLayer } from "./claude-layers";
+import { claudeSettingsLayers, claudeStateFilePath, type ClaudeSettingsLayer } from "./claude-layers";
 import {
   neutralApprovalMode,
   neutralReasoningEffort,
@@ -42,8 +42,6 @@ import {
 import { claudeEffectiveConfig } from "./effective";
 import { automationEnvStatus, credentialRef, maskedMcpServer, readJsonRecord } from "./redact";
 
-export { managedSettingsPath };
-
 /** The credential environment variables claude answers, names only. */
 export const CLAUDE_AUTOMATION_ENV_KEYS = [
   "ANTHROPIC_API_KEY",
@@ -62,9 +60,9 @@ function effectiveLayer(layers: SettingsLayer[], key: string): { layer: Settings
 }
 
 /** The `mcpServers` records of every source, in the order they are listed. */
-function mcpSources(configDir: string, cwd: string | undefined, layers: SettingsLayer[]): { scope: ScopeId; servers: Record<string, unknown> }[] {
+function mcpSources(ctx: HarnessReadContext | undefined, cwd: string | undefined, layers: SettingsLayer[]): { scope: ScopeId; servers: Record<string, unknown> }[] {
   const sources: { scope: ScopeId; servers: Record<string, unknown> }[] = [];
-  const state = readJsonRecord(claudeStateFilePath({ claudeConfigDir: configDir }));
+  const state = readJsonRecord(claudeStateFilePath(ctx));
   if (state && isRecord(state.mcpServers)) sources.push({ scope: "user", servers: state.mcpServers });
   const projectState = cwd && state && isRecord(state.projects)
     ? (state.projects as Record<string, unknown>)[cwd]
@@ -183,15 +181,21 @@ export function createClaudeAdapter(): HarnessAdapter {
           return payload;
         }
         case "permission": {
-          const mode = effectiveLayer(layers, "permissions");
-          const raw = mode && isRecord(mode.value) && typeof (mode.value as Record<string, unknown>).defaultMode === "string"
-            ? (mode.value as Record<string, unknown>).defaultMode as string
-            : null;
+          // The first layer whose permissions record names a defaultMode, so a
+          // higher layer with permissions but no defaultMode does not shadow it.
+          let raw: string | null = null;
+          for (const layer of layers) {
+            const permissions = layer.record?.permissions;
+            if (isRecord(permissions) && typeof permissions.defaultMode === "string") {
+              raw = permissions.defaultMode;
+              break;
+            }
+          }
           let projectTrust: PermissionPayload["projectTrust"] = null;
           if (cwd) {
-            const state = readJsonRecord(claudeStateFilePath({ ...ctx, claudeConfigDir: configDir }));
+            const state = readJsonRecord(claudeStateFilePath(ctx));
             const entry = state && isRecord(state.projects) ? (state.projects as Record<string, unknown>)[cwd] : undefined;
-            const accepted = isRecord(entry) && (entry as Record<string, unknown>).hasTrustDialogAccepted === true;
+            const accepted = isRecord(entry) && entry.hasTrustDialogAccepted === true;
             projectTrust = { trusted: accepted };
           }
           const payload: PermissionPayload = {
@@ -217,7 +221,7 @@ export function createClaudeAdapter(): HarnessAdapter {
         }
         case "mcp": {
           const servers: MaskedMcpServer[] = [];
-          for (const { scope, servers: entries } of mcpSources(configDir, cwd, layers)) {
+          for (const { scope, servers: entries } of mcpSources(ctx, cwd, layers)) {
             for (const [name, entry] of Object.entries(entries)) {
               if (!isRecord(entry)) continue;
               servers.push(maskedMcpServer(scope, {

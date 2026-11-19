@@ -95,6 +95,7 @@ const unknownBinary = installVersionedStub("unknown-bin", "3.0.0");
 
 const jiti = createJiti(import.meta.url, { alias: { "@": process.cwd() }, interopDefault: true, moduleCache: false });
 const claude = await jiti.import("./claude.ts");
+const claudeLayers = await jiti.import("./claude-layers.ts");
 const adapter = claude.createClaudeAdapter();
 const fixtureCtx = (extra = {}) => ({
   claudeConfigDir: configDir,
@@ -234,4 +235,18 @@ test("read effective-config answers a payload (values land with the compare unit
 
 test("read of an unknown concept answers null", async () => {
   assert.equal(await adapter.read("no-such-concept", fixtureCtx()), null);
+});
+
+test("the state file follows $CLAUDE_CONFIG_DIR and otherwise lives at ~/.claude.json (self-review finding: the reads must resolve it the same way the probe does)", async () => {
+  assert.equal(claudeLayers.claudeStateFilePath({ env: { CLAUDE_CONFIG_DIR: "/tmp/x" } }), "/tmp/x/.claude.json");
+  assert.equal(claudeLayers.claudeStateFilePath({ env: {} }), path.join(os.homedir(), ".claude.json"));
+  // A permission read without the claudeConfigDir override resolves the state
+  // file through the environment, like the probe does.
+  process.env.CLAUDE_CONFIG_DIR = configDir;
+  try {
+    const payload = await adapter.read("permission", { agentDir, cwd: project, claudeBinary: okBinary, env: process.env });
+    assert.equal(payload.projectTrust?.trusted, true);
+  } finally {
+    delete process.env.CLAUDE_CONFIG_DIR;
+  }
 });
