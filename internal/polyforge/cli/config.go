@@ -171,6 +171,11 @@ type DaemonSettings struct {
 	// commands the daemon runs in-process start with: every entry an
 	// absolute directory; "" = unset, the daemon process's own PATH. Live.
 	CommandPath string
+	// ContainerEngine is the backend a verification container runs on
+	// (polyforge#159, 84-engine): "docker" or "podman"; "" = unset, the
+	// daemon resolves docker. Host-only, restart-only — one engine per
+	// Host, injected into every step as PF_CONTAINER_ENGINE.
+	ContainerEngine string
 	// CellMaxConcurrentJobs is the Cell's optional ceiling under the Host
 	// ceiling (>= 1; 0 = unset: no extra limit).
 	CellMaxConcurrentJobs int
