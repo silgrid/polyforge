@@ -1,0 +1,341 @@
+// carries: components/HarnessGeneralSettings*, components/GeneralSettings*, components/HarnessEnvironmentSettings*, components/HarnessEffectiveSettings*, components/UnifiedSetting*, components/HarnessApplyTo*
+// carries: lib/harness-settings-view*, lib/claude-settings-store*, lib/harness/diagnostics*, hooks/useClaudeSettings.ts, app/api/harness/*
+// — polyforge#149 (#85 85a1b, the settings skeleton): the 9+2 tab rail
+// (九个新 tab 加两个标「旧版」的原「模型」「Claude」tab), General's left
+// column (界面与对话 / 环境 / 生效值与来源), the account / models / permission
+// placeholders, and the migrated old navigation values (claude → 权限,
+// models → 新「模型」页). The harness adapter APIs are mocked at the browser
+// (context.route): this suite pins the UI contract and never runs a real
+// native diagnostic command; the adapter and route behavior is pinned by
+// lib/harness/*.test.mjs and app/api/harness/route.test.mjs.
+//
+// Not declared, though exercised: components/SettingsPanel.tsx and
+// lib/settings-navigation.ts (already declared by 3 suites),
+// components/ClaudeSettings.tsx and lib/claude-settings.ts
+// (e2e/claude-settings-445.mjs) — lib/e2e-carries.test.mjs.
+//
+// Each scenario prints one `PASS S85-nn` marker; the suite ends with
+// `PASS harness-settings-85` only when every scenario passed. Every wait
+// polls its condition to a bounded deadline; no fixed sleep.
+import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { chromium } from "playwright";
+import { ACTION_MS, COLD_MS, NAV_MS } from "./timeouts.mjs";
+import { assertNoDevServer, createHarness, seedStorage } from "./harness.mjs";
+
+assertNoDevServer();
+const work = mkdtempSync(join(tmpdir(), "pi-web-harness-settings-85-"));
+const home = join(work, "home");
+const agentDir = join(home, ".pi", "agent");
+mkdirSync(agentDir, { recursive: true });
+
+const h = createHarness({
+  timeout: 30_000,
+  coldFirst: true,
+  errors: ["pageerror", "console", "5xx"],
+  server(name) {
+    return { name, logFile: join(work, `server-${name}.log`), env: { HOME: home, PI_CODING_AGENT_DIR: agentDir } };
+  },
+});
+
+// ---- the mocked adapter contract (the shapes 85a1's routes answer) ----
+const HARNESS_LIST = {
+  harnesses: [
+    { id: "pi", version: "1.5.0", versionKnown: true, knownRange: null, versionReason: null, writable: true, capabilities: { id: "pi" } },
+    { id: "claude", version: "2.1.322", versionKnown: true, knownRange: null, versionReason: null, writable: true, capabilities: { id: "claude" } },
+  ],
+};
+const ENV_PI = { harness: "pi", concept: "env", data: { target: "pi", setKeys: ["ANTHROPIC_API_KEY", "GEMINI_API_KEY"] } };
+const ENV_CLAUDE = { harness: "claude", concept: "env", data: { target: "claude", setKeys: ["ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_EXTRA_BODY"] } };
+const EFFECTIVE_PI = {
+  harness: "pi", concept: "effective-config",
+  data: { fields: {
+    model: { value: "route-model-85", sourceScope: "user", sourcePath: join(agentDir, "settings.json"), inferred: true },
+    "reasoning-effort": { value: "low", sourceScope: "project", sourcePath: join(work, "project", ".pi", "settings.json"), inferred: true },
+  } },
+};
+const EFFECTIVE_CLAUDE = {
+  harness: "claude", concept: "effective-config",
+  data: { fields: {
+    model: { value: "claude-sonnet-5-5", sourceScope: "project", sourcePath: join(work, "project", ".claude", "settings.json"), inferred: true },
+    "pi-web:launch-permission-mode": { value: "acceptEdits", sourceScope: "pi-web", sourcePath: join(agentDir, "pi-web-claude-settings.json"), inferred: true },
+  } },
+};
+const DIAG_CLAUDE = {
+  harness: "claude",
+  diagnostics: { available: true, command: ["claude", "doctor"], lines: ["claude doctor: installation healthy"], truncated: false, timedOut: false },
+};
+const DIAG_PI = {
+  harness: "pi",
+  diagnostics: { available: false, reason: "pi has no fixed safe diagnostic command yet" },
+};
+const CLAUDE_SETTINGS = { launchPermissionMode: "default", customModels: [], includeHookEvents: false, planAvailable: true };
+const CLAUDE_REPORT = { available: true, models: [{ value: "default", displayName: "Default", source: "alias" }], version: "2.1.322", versionRecorded: true, recordedVersions: ["2.1.322"], capabilities: ["hooks"], features: [] };
+
+/** Answers the harness/claude adapter routes the settings skeleton reads; everything else hits the server. */
+async function mockAdapterApis(context) {
+  await context.route(/\/api\/harness(?:\/|$)/, (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const body = path === "/api/harness" ? HARNESS_LIST
+      : path === "/api/harness/pi/env" ? ENV_PI
+      : path === "/api/harness/claude/env" ? ENV_CLAUDE
+      : path === "/api/harness/pi/effective-config" ? EFFECTIVE_PI
+      : path === "/api/harness/claude/effective-config" ? EFFECTIVE_CLAUDE
+      : path === "/api/harness/pi/diagnose" ? DIAG_PI
+      : path === "/api/harness/claude/diagnose" ? DIAG_CLAUDE
+      : null;
+    if (body === null) route.fulfill({ status: 404, json: { error: "unknown-harness-path" } });
+    else route.fulfill({ status: 200, json: body });
+  });
+  await context.route("**/api/models-config", (route) => route.fulfill({ status: 200, json: { providers: {} } }));
+  await context.route("**/api/claude-settings", (route) => route.fulfill({ status: 200, json: CLAUDE_SETTINGS }));
+  await context.route("**/api/claude", (route) => route.fulfill({ status: 200, json: CLAUDE_REPORT }));
+  await context.route("**/api/claude-permissions", (route) => route.fulfill({ status: 200, json: { mode: "ask", push: true, session: null } }));
+}
+
+const TABS = [
+  "General", "Account", "Models", "Permissions", "Skills", "MCP",
+  "Sub-agents", "Plugins", "Polyforge", "Models (legacy)", "Claude (legacy)",
+];
+
+const T = {
+  S1: "S85-01: Settings shows 9 new tabs plus the two legacy-marked ones, in the settled order",
+  S2: "S85-02: General is a left-column layout whose three items switch the detail pane",
+  S3: "S85-03: a phone walks General as list → detail → back",
+  S4: "S85-04: the account / models / permission placeholders open, permission naming its Claude part",
+  S5: "S85-05: the legacy Models and Claude pages stay reachable and working",
+  S6: "S85-06: the environment pane lists only variable names, grouped per harness",
+  S7: "S85-07: effective values carry the Inferred mark and their source; native diagnostics are a collapsed block per harness",
+  S8: "S85-08: stored old navigation values land on the new pages",
+};
+const failures = new Map(Object.values(T).map((title) => [title, []]));
+const ran = new Set();
+
+async function part(id, label, fn) {
+  const title = T[id];
+  ran.add(title);
+  try {
+    await fn();
+    console.log(`PASS ${id}`);
+  } catch (error) {
+    failures.get(title).push(`${label}: ${String(error?.message ?? error).split("\n")[0]}`);
+    console.log(`FAIL ${id} ${label}: ${error?.message ?? error}`);
+  }
+}
+
+const dialog = (page) => page.getByRole("dialog", { name: "Settings", exact: true });
+const sectionTabs = (page) => dialog(page).locator("nav.settings-section-tabs button.settings-section-tab");
+const sectionHost = (page, id) => dialog(page).locator(`.settings-section-host[data-settings-section="${id}"]:not([hidden])`);
+const tab = (page, label) => sectionTabs(page).filter({ hasText: label });
+
+let coldSettings = true;
+
+async function newPage(viewport = { width: 1280, height: 900 }, storage = null) {
+  const context = await h.browser.newContext({ viewport, locale: "en-US" });
+  await seedStorage(context, storage ?? {});
+  await mockAdapterApis(context);
+  const page = await context.newPage();
+  page.setDefaultTimeout(30_000);
+  return page;
+}
+
+async function goto(page, path = "/") {
+  await page.goto(`${h.base}${path}`, { waitUntil: "domcontentloaded", timeout: coldSettings ? COLD_MS : NAV_MS });
+  coldSettings = false;
+}
+
+async function openSettings(page) {
+  await goto(page);
+  // The Settings button is server-rendered; a click before hydration is
+  // dropped, so wait for React's own props on the node before the one click.
+  const button = page.getByRole("button", { name: "Settings", exact: true }).first();
+  await button.waitFor({ state: "visible", timeout: COLD_MS });
+  await page.waitForFunction(() => {
+    const candidate = [...document.querySelectorAll("button")]
+      .find((entry) => entry.getAttribute("aria-label") === "Settings" || entry.textContent.trim() === "Settings");
+    return !!candidate && Object.keys(candidate).some((key) => key.startsWith("__reactFiber$") || key.startsWith("__reactProps$"));
+  }, null, { timeout: COLD_MS });
+  await button.click({ timeout: ACTION_MS });
+  await dialog(page).waitFor({ state: "visible", timeout: COLD_MS });
+  return dialog(page);
+}
+
+const generalSidebarItems = (page) => sectionHost(page, "general").locator(".config-sidebar-item");
+const generalPane = (page, pane) => sectionHost(page, "general").locator(`[data-general-pane="${pane}"]`);
+
+h.trapInterrupt();
+
+try {
+  await h.startServer("settings-85");
+  h.browser = await chromium.launch();
+
+  // S85-01 — AC1: 9 new tabs + 2 legacy-marked, order and no-project behaviour.
+  await part("S1", "tabs", async () => {
+    const page = await newPage();
+    await openSettings(page);
+    const labels = (await sectionTabs(page).allInnerTexts()).map((text) => text.trim());
+    assert.deepEqual(labels, TABS, `tabs (got: ${labels.join(", ")})`);
+    // Skills/Agents/Plugins need a project; the rest open without one.
+    for (const name of ["Skills", "Sub-agents", "Plugins"]) {
+      assert.ok(await tab(page, new RegExp(`^${name}$`)).isDisabled(), `${name} should need a project`);
+    }
+    for (const name of ["General", "Account", "Models", "Permissions", "MCP", "Polyforge", "Models (legacy)", "Claude (legacy)"]) {
+      assert.ok(!(await tab(page, new RegExp(`^${name}$`)).isDisabled()), `${name} should open without a project`);
+    }
+    // The legacy tabs are marked as such in their own label.
+    assert.match(labels[9], /\(legacy\)/, "the old Models tab is not marked legacy");
+    assert.match(labels[10], /\(legacy\)/, "the old Claude tab is not marked legacy");
+    await page.context().close();
+  });
+
+  // S85-02 — AC1: General's left column and its three switchable items.
+  await part("S2", "general left column", async () => {
+    const page = await newPage();
+    const opened = await openSettings(page);
+    const items = generalSidebarItems(page);
+    await items.first().waitFor({ state: "visible", timeout: ACTION_MS });
+    const labels = (await items.allInnerTexts()).map((text) => text.trim());
+    assert.deepEqual(labels, ["Interface & conversation", "Environment", "Effective values & sources"], `General's left column (got: ${labels.join(", ")})`);
+    assert.equal(await items.first().getAttribute("aria-current"), "page", "the first item is not the default pane");
+    // The default detail is the old General content.
+    await generalPane(page, "conversation").getByRole("heading", { name: "Appearance", exact: true }).waitFor({ state: "visible", timeout: ACTION_MS });
+    // Switching panes swaps the detail.
+    await items.filter({ hasText: "Environment" }).click({ timeout: ACTION_MS });
+    await generalPane(page, "environment").waitFor({ state: "visible", timeout: ACTION_MS });
+    await generalPane(page, "conversation").waitFor({ state: "hidden", timeout: ACTION_MS });
+    await items.filter({ hasText: "Effective values & sources" }).click({ timeout: ACTION_MS });
+    await generalPane(page, "effective").waitFor({ state: "visible", timeout: ACTION_MS });
+    await items.filter({ hasText: "Interface & conversation" }).click({ timeout: ACTION_MS });
+    await generalPane(page, "conversation").getByRole("heading", { name: "Appearance", exact: true }).waitFor({ state: "visible", timeout: ACTION_MS });
+    assert.equal(await opened.count(), 1);
+    await page.context().close();
+  });
+
+  // S85-03 — AC1: the phone walks General as list → detail → back (the shared split view).
+  await part("S3", "phone levels", async () => {
+    const page = await newPage({ width: 375, height: 667 });
+    await goto(page);
+    const button = page.getByRole("button", { name: "Settings", exact: true }).first();
+    await button.click({ timeout: ACTION_MS });
+    const home = page.locator(".settings-phone-home");
+    await home.waitFor({ state: "visible", timeout: COLD_MS });
+    await home.getByRole("button", { name: "General", exact: true }).click({ timeout: ACTION_MS });
+    // The section level shows the three-item list, not the detail.
+    const items = generalSidebarItems(page);
+    await items.first().waitFor({ state: "visible", timeout: ACTION_MS });
+    assert.ok(!(await generalPane(page, "conversation").isVisible()), "the phone's section level shows the detail pane");
+    await items.filter({ hasText: "Interface & conversation" }).click({ timeout: ACTION_MS });
+    await generalPane(page, "conversation").getByRole("heading", { name: "Appearance", exact: true }).waitFor({ state: "visible", timeout: ACTION_MS });
+    const back = page.locator(".settings-phone-back");
+    await back.waitFor({ state: "visible", timeout: ACTION_MS });
+    await back.click({ timeout: ACTION_MS });
+    await items.first().waitFor({ state: "visible", timeout: ACTION_MS });
+    assert.ok(!(await generalPane(page, "conversation").isVisible()), "Back did not return to the list");
+    await page.context().close();
+  });
+
+  // S85-04 — AC1: the three placeholders open; permission names its Claude part.
+  await part("S4", "placeholders", async () => {
+    const page = await newPage();
+    await openSettings(page);
+    for (const [name, id] of [["Account", "account"], ["Models", "models"], ["Permissions", "permission"]]) {
+      await tab(page, new RegExp(`^${name}$`)).click({ timeout: ACTION_MS });
+      const host = sectionHost(page, id);
+      await host.waitFor({ state: "visible", timeout: ACTION_MS });
+      assert.match(await host.innerText(), /Placeholder/i, `the ${name} page shows no placeholder text`);
+    }
+    // The permission page names the Claude part the old `claude` value lands on.
+    assert.match(await sectionHost(page, "permission").innerText(), /Claude/, "the permission placeholder does not name its Claude part");
+    await page.context().close();
+  });
+
+  // S85-05 — AC1: the legacy pages stay reachable and keep working.
+  await part("S5", "legacy pages", async () => {
+    const page = await newPage();
+    await openSettings(page);
+    await tab(page, /^Models \(legacy\)$/).click({ timeout: ACTION_MS });
+    const models = sectionHost(page, "legacy-models");
+    await models.getByRole("button", { name: "Add provider", exact: true }).waitFor({ state: "visible", timeout: COLD_MS });
+    await tab(page, /^Claude \(legacy\)$/).click({ timeout: ACTION_MS });
+    const claude = sectionHost(page, "legacy-claude");
+    await claude.getByRole("radiogroup", { name: "Default permission mode" }).waitFor({ state: "visible", timeout: COLD_MS });
+    // The hook switch stays on the legacy page too (one shared state holder).
+    await claude.getByRole("switch", { name: "Show hook activity" }).waitFor({ state: "visible", timeout: ACTION_MS });
+    await page.context().close();
+  });
+
+  // S85-06 — AC2: the environment pane lists only variable names, per harness.
+  await part("S6", "environment names only", async () => {
+    const page = await newPage();
+    await openSettings(page);
+    await generalSidebarItems(page).filter({ hasText: "Environment" }).click({ timeout: ACTION_MS });
+    const pane = generalPane(page, "environment");
+    await pane.waitFor({ state: "visible", timeout: ACTION_MS });
+    const text = await pane.innerText();
+    for (const name of ["ANTHROPIC_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_EXTRA_BODY"]) {
+      assert.ok(text.includes(name), `the environment pane does not list ${name}`);
+    }
+    for (const harness of ["pi", "claude"]) {
+      await pane.locator(`[data-harness="${harness}"]`).waitFor({ state: "visible", timeout: ACTION_MS });
+    }
+    assert.match(text, /Only variable names are shown/, "the names-only note is missing");
+    await page.context().close();
+  });
+
+  // S85-07 — AC2/AC6: Inferred marks and sources; native diagnostics as a collapsed block.
+  await part("S7", "effective values and diagnostics", async () => {
+    const page = await newPage();
+    await openSettings(page);
+    await generalSidebarItems(page).filter({ hasText: "Effective values & sources" }).click({ timeout: ACTION_MS });
+    const pane = generalPane(page, "effective");
+    await pane.waitFor({ state: "visible", timeout: ACTION_MS });
+    const text = await pane.innerText();
+    assert.ok(text.includes("route-model-85"), "the pane does not show an effective value");
+    assert.match(text, /Inferred/, "the Inferred mark is missing");
+    assert.ok(text.includes(join(agentDir, "settings.json")), "the value's source path is missing");
+    // Diagnostics: one collapsed block per harness; expanding loads the output once.
+    const claudeBlock = pane.locator("details.settings-harness-diagnostics[data-harness=\"claude\"]");
+    await claudeBlock.waitFor({ state: "visible", timeout: ACTION_MS });
+    assert.equal(await claudeBlock.getAttribute("open"), null, "the diagnostics block starts open");
+    await claudeBlock.locator("summary").click({ timeout: ACTION_MS });
+    await claudeBlock.getByText("claude doctor: installation healthy").waitFor({ state: "visible", timeout: ACTION_MS });
+    const piBlock = pane.locator("details.settings-harness-diagnostics[data-harness=\"pi\"]");
+    await piBlock.locator("summary").click({ timeout: ACTION_MS });
+    await piBlock.getByText(/no fixed safe diagnostic command/).waitFor({ state: "visible", timeout: ACTION_MS });
+    await page.context().close();
+  });
+
+  // S85-08 — AC4: stored old values land on the new pages.
+  await part("S8", "navigation migration", async () => {
+    for (const [stored, expectedTab, expectedHost] of [
+      ["claude", /^Permissions$/, "permission"],
+      ["models", /^Models$/, "models"],
+    ]) {
+      const page = await newPage(undefined, { "pi-web:settings-navigation": JSON.stringify({ section: stored }) });
+      await goto(page);
+      await page.getByRole("button", { name: "Settings", exact: true }).first().click({ timeout: ACTION_MS });
+      await dialog(page).waitFor({ state: "visible", timeout: COLD_MS });
+      const current = sectionTabs(page).filter({ hasText: expectedTab }).first();
+      await current.waitFor({ state: "visible", timeout: COLD_MS });
+      assert.equal(await current.getAttribute("aria-current"), "page", `stored ${stored} did not land on ${expectedHost}`);
+      await sectionHost(page, expectedHost).waitFor({ state: "visible", timeout: ACTION_MS });
+      await page.context().close();
+    }
+  });
+} finally {
+  await h.close();
+}
+
+const failed = [...failures].filter(([, list]) => list.length > 0);
+if (failed.length > 0 || ran.size < Object.keys(T).length) {
+  for (const [title, list] of failed) {
+    console.log(`FAIL harness-settings-85: ${title}`);
+    for (const entry of list) console.log(`  ${entry}`);
+  }
+  for (const title of Object.values(T)) if (!ran.has(title)) console.log(`FAIL harness-settings-85: never ran: ${title}`);
+  process.exitCode = 1;
+} else {
+  console.log("PASS harness-settings-85");
+}
