@@ -187,7 +187,12 @@ class PodmanCLITest(unittest.TestCase):
         words = self.call_of(self.recorded(rec), "volume")
         self.assertIn("dangling=true", words, "the engine answers the dangling ones")
         for bad in ("name=", "dangling=false"):
-            self.assertNotIn(bad, words, "no second engine filter: the AND is this side's")
+            # the recorded argv is one argument a line: a membership test
+            # would never match (the real argument is name=<prefix>), so
+            # the guard is by prefix — it catches a second engine filter
+            # handed over with the name in it (r1#2)
+            self.assertFalse([w for w in words if w.startswith(bad)],
+                             "no second engine filter: the AND is this side's (%s)" % bad)
 
     def test_a_build_runs_under_a_private_crun_wrapper_that_ends_with_it(self) -> None:
         cli, rec = self.podman(
