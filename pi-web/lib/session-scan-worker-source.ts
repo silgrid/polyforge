@@ -575,8 +575,11 @@ async function headerSummary(filePath, fp) {
 				continue;
 			}
 			// A line that parses to a JSON primitive is not a header: skip it
-			// and keep looking, as the old main-thread reader did (r2 N1).
-			if (!entry || typeof entry !== "object" || entry.type !== "session") continue;
+			// and keep looking, as the old main-thread reader did (r2 N1). An
+			// object row that is not a session header rejects the file, as the
+			// old reader and the full scan both do (r3 N1).
+			if (!entry || typeof entry !== "object") continue;
+			if (entry.type !== "session") return null;
 			if (typeof entry.id !== "string" || typeof entry.cwd !== "string" || typeof entry.timestamp !== "string") return null;
 			const created = new Date(entry.timestamp);
 			if (!Number.isFinite(created.getTime())) return null;
