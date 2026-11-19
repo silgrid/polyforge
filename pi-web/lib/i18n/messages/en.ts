@@ -1204,6 +1204,7 @@ export const enLocale: LocalePlugin = {
     "mcp.claude.side": "claude",
     "mcp.claude.remove": "Remove from Claude",
     "mcp.claude.disabled": "Turned off in claude's own disabledMcpServers; Pi Web shows it read-only.",
+    "mcp.claude.notHeld": "Claude does not hold this entry; its apply-to would add it there.",
     "mcp.reason.harness-unsupported": "That harness does not take this entry: the local group is Claude's own, and pi loads no sse or ws entry.",
     "mcp.reason.claude-unwritable": "Claude's side could not be written: its CLI is missing, or its version is one Pi Web does not recognize.",
     "mcp.reason.invalid-request": "Pi Web refused the request because it does not ask for a change Pi Web can make.",

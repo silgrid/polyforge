@@ -1204,6 +1204,7 @@ export const zhTWLocale: LocalePlugin = {
     "mcp.claude.side": "claude",
     "mcp.claude.remove": "從 Claude 移除",
     "mcp.claude.disabled": "已在 claude 自己的 disabledMcpServers 裡關掉；Pi Web 唯讀顯示。",
+    "mcp.claude.notHeld": "Claude 未持有此條目；「套用到」會在那一側補上它。",
     "mcp.reason.harness-unsupported": "該 harness 不接受此條目：本地群組是 Claude 專屬的，pi 也不載入 sse / ws 條目。",
     "mcp.reason.claude-unwritable": "Claude 一側無法寫入：找不到它的 CLI，或它的版本不在 Pi Web 認識的範圍內。",
     "mcp.reason.invalid-request": "此要求並未要求 Pi Web 能夠進行的變更，Pi Web 已拒絕。",

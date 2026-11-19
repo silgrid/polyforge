@@ -2516,7 +2516,9 @@ function McpUnifiedSection({
       )}
       <h4 className="settings-general-heading">{t("mcp.claude.side")}</h4>
       {claudeSide === undefined ? (
-        <p className="mcp-config-line is-dim">{t("mcp.applyTo.piUnsupportedLocal")}</p>
+        // This row is a pi row claude holds nothing of (r2#5): the local-scope
+        // sentence belongs to the local group alone, never here.
+        <p className="mcp-config-line is-dim">{t("mcp.claude.notHeld")}</p>
       ) : (
         <>
           {line !== undefined && <p className="mcp-config-line"><code className="mcp-config-code">{revealHiddenCharacters(line)}</code></p>}
