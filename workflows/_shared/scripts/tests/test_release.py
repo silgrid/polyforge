@@ -101,7 +101,7 @@ class ReleaseBatchTest(GitCase):
         if push:
             git(clone, "push", "-q", "origin", "refs/tags/" + name)
 
-    def run(self, hub: Optional[FakeHub], batches_file: str = "", pre_release: str = "",
+    def resolve(self, hub: Optional[FakeHub], batches_file: str = "", pre_release: str = "",
             args: Optional[List[str]] = None) -> Tuple[int, Dict[str, Any], Optional[Dict[str, Any]]]:
         """release.py over this capsule; answers (exit code, the result file,
         the pins file when written)."""
@@ -143,7 +143,7 @@ class ReleaseBatchTest(GitCase):
             batch("wi_r0", "red", {"app": heads["second"]}, "2026-11-17T12:00:00Z", seq=2),
             batch("wi_b2", "green", {"app": heads["second"]}, "2026-11-18T08:00:00Z", seq=3),
         ])
-        code, res, pins = self.run(hub)
+        code, res, pins = self.resolve(hub)
         self.assertEqual(code, 0, res["summary"])
         self.assertEqual(res["verdict"], "pass")
         self.assertEqual(self.calls, ["list --status wrapped --bundle integrate --limit 1000"])
@@ -162,7 +162,7 @@ class ReleaseBatchTest(GitCase):
             batch("wi_g", "green", {"app": heads["second"]}, "2026-11-18T08:00:00Z", seq=1),
             batch("wi_r1", "red", {"app": heads["first"]}, "2026-11-17T08:00:00Z", seq=2),
         ])
-        code, res, pins = self.run(hub)
+        code, res, pins = self.resolve(hub)
         self.assertEqual(code, 0, res["summary"])
         self.assertEqual(pins, {"batch": "wi_g", "repos": {"app": heads["second"]},
                                 "red_batches_after": ["wi_r2"]})
@@ -177,7 +177,7 @@ class ReleaseBatchTest(GitCase):
             ("nothing at all", []),
         ):
             with self.subTest(name):
-                code, res, pins = self.run(FakeHub(items))
+                code, res, pins = self.resolve(FakeHub(items))
                 self.assertEqual(code, 1)
                 self.assertEqual(res["verdict"], "fail")
                 self.assertTrue(res["summary"].startswith("PF-RELEASE-NO_GREEN_BATCH"), res["summary"])
@@ -193,7 +193,7 @@ class ReleaseBatchTest(GitCase):
         pre = os.path.join(self.cap, "pre.txt")
         write(os.path.dirname(pre), {"pre.txt": ""})
         hub = FakeHub([batch("wi_g", "green", {"app": heads["second"]}, "2026-11-18T08:00:00Z")])
-        code, res, pins = self.run(hub, pre_release=pre)
+        code, res, pins = self.resolve(hub, pre_release=pre)
         self.assertEqual(code, 0, res["summary"])
         self.assertEqual(res["verdict"], "pass")
         d = res["details"]
@@ -206,7 +206,7 @@ class ReleaseBatchTest(GitCase):
         self.tag(app, "v1.2.3", heads["second"])
         self.tag(app, "v1.2.4", heads["second"])
         hub = FakeHub([batch("wi_g", "green", {"app": heads["second"]}, "2026-11-18T08:00:00Z")])
-        code, res, pins = self.run(hub)
+        code, res, pins = self.resolve(hub)
         self.assertEqual(code, 1)
         self.assertEqual(res["verdict"], "fail")
         self.assertTrue(res["summary"].startswith("PF-RELEASE-ALREADY_RELEASED"), res["summary"])
@@ -220,7 +220,7 @@ class ReleaseBatchTest(GitCase):
         pre = os.path.join(self.cap, "pre.txt")
         write(os.path.dirname(pre), {"pre.txt": ""})  # recorded before v0.9.0 existed
         hub = FakeHub([batch("wi_g", "green", {"app": heads["second"]}, "2026-11-18T08:00:00Z")])
-        code, res, pins = self.run(hub, pre_release=pre)
+        code, res, pins = self.resolve(hub, pre_release=pre)
         self.assertEqual(code, 1)
         self.assertEqual(res["verdict"], "fail")
         self.assertTrue(res["summary"].startswith("PF-RELEASE-ALREADY_RELEASED"), res["summary"])
@@ -235,7 +235,7 @@ class ReleaseBatchTest(GitCase):
         off = self.side(app, "off the branch")
         for name, pin in (("a side-branch commit", off), ("a commit the clone does not know", "0" * 39 + "1")):
             with self.subTest(name):
-                code, res, pins = self.run(FakeHub([batch("wi_g", "green", {"app": pin}, "2026-11-18T08:00:00Z")]))
+                code, res, pins = self.resolve(FakeHub([batch("wi_g", "green", {"app": pin}, "2026-11-18T08:00:00Z")]))
                 self.assertEqual(code, 1)
                 self.assertEqual(res["verdict"], "fail")
                 self.assertTrue(res["summary"].startswith("PF-RELEASE-PIN_OFF_DEFAULT"), res["summary"])
@@ -249,7 +249,7 @@ class ReleaseBatchTest(GitCase):
         lib = os.path.join(self.cap, "repos", "lib")
         libhead = self.commit(lib, "lib change", {"lib2.txt": "2\n"})
         hub = FakeHub([batch("wi_g", "green", {"app": heads["second"], "lib": libhead}, "2026-11-18T08:00:00Z")])
-        code, res, pins = self.run(hub)
+        code, res, pins = self.resolve(hub)
         self.assertEqual(code, 0, res["summary"])
         self.assertEqual(pins, {"batch": "wi_g", "repos": {"app": heads["second"], "lib": libhead}})
         self.assertEqual(res["details"]["excluded_repos"], ["extra"])
@@ -260,7 +260,7 @@ class ReleaseBatchTest(GitCase):
         lib = os.path.join(self.cap, "repos", "lib")
         libhead = self.commit(lib, "lib change", {"lib2.txt": "2\n"})
         hub = FakeHub([batch("wi_g", "green", {"lib": libhead}, "2026-11-18T08:00:00Z")])
-        code, res, pins = self.run(hub)
+        code, res, pins = self.resolve(hub)
         self.assertEqual(code, 1)
         self.assertEqual(res["verdict"], "fail")
         self.assertTrue(res["summary"].startswith("PF-RELEASE-UNPINNED_OWNER"), res["summary"])
@@ -271,7 +271,7 @@ class ReleaseBatchTest(GitCase):
         # two owners: a loud failure naming every candidate
         self.repo("app", owner=True)
         self.repo("other", owner=True)
-        code, res, pins = self.run(FakeHub([]))
+        code, res, pins = self.resolve(FakeHub([]))
         self.assertEqual(code, 1)
         self.assertTrue(res["summary"].startswith("PF-RELEASE-AMBIGUOUS_OWNER"), res["summary"])
         for n in ("app", "other"):
@@ -280,7 +280,7 @@ class ReleaseBatchTest(GitCase):
         # zero owners: a release work item without a procedure is an error
         self.cap = self.new_dir("capsule2")
         os.makedirs(os.path.join(self.cap, "repos", "lib"), exist_ok=True)
-        code, res, _ = self.run(FakeHub([]))
+        code, res, _ = self.resolve(FakeHub([]))
         self.assertEqual(code, 1)
         self.assertIn("no repo in the capsule carries .polyforge/release.sh", res["summary"])
 
@@ -299,7 +299,7 @@ class ReleaseBatchTest(GitCase):
         ]
         for name, hub, want in cases:
             with self.subTest(name):
-                code, res, pins = self.run(hub)
+                code, res, pins = self.resolve(hub)
                 self.assertEqual(code, 2, res["summary"])
                 self.assertEqual(res["verdict"], "error")
                 self.assertIn(want, res["summary"])
@@ -309,7 +309,7 @@ class ReleaseBatchTest(GitCase):
         _, heads = self.owner_world()
         app = os.path.join(self.cap, "repos", "app")
         git(app, "update-ref", "-d", "refs/remotes/origin/HEAD")
-        code, res, _ = self.run(FakeHub([batch("wi_g", "green", {"app": heads["second"]}, "2026-11-18T08:00:00Z")]))
+        code, res, _ = self.resolve(FakeHub([batch("wi_g", "green", {"app": heads["second"]}, "2026-11-18T08:00:00Z")]))
         self.assertEqual(code, 2)
         self.assertEqual(res["verdict"], "error")
         self.assertIn("default branch", res["summary"])
@@ -321,7 +321,7 @@ class ReleaseBatchTest(GitCase):
         snap = os.path.join(self.cap, "batches.json")
         write(os.path.dirname(snap), {"batches.json": json.dumps(
             {"items": [batch("wi_g", "green", {"app": heads["second"]}, "2026-11-18T08:00:00Z")]})})
-        code, res, pins = self.run(None, batches_file=snap)
+        code, res, pins = self.resolve(None, batches_file=snap)
         self.assertEqual(code, 0, res["summary"])
         self.assertEqual(pins, {"batch": "wi_g", "repos": {"app": heads["second"]}})
         self.assertEqual(res["command"], "release.py")
@@ -334,7 +334,7 @@ class ReleaseBatchTest(GitCase):
         # the snapshot file may also be a bare array
         write(os.path.dirname(snap), {"batches.json": json.dumps(
             [batch("wi_g", "green", {"app": heads["second"]}, "2026-11-18T08:00:00Z")])})
-        code, res, pins = self.run(None, batches_file=snap)
+        code, res, pins = self.resolve(None, batches_file=snap)
         self.assertEqual(code, 0, res["summary"])
         self.assertEqual(pins, {"batch": "wi_g", "repos": {"app": heads["second"]}})
 
