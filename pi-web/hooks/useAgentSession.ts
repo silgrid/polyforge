@@ -3202,17 +3202,28 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     setActiveLeafId(leafId);
     const sid = sessionIdRef.current;
     if (!sid) return;
-    await loadContext(sid, leafId);
-    if (leafId) {
-      sendAgentCommand(sid, { type: "navigate_tree", targetId: leafId }).catch((error) => {
-        // A branch switch refused over unfinished background work (AC3) rolls
-        // the view back; the draft never left the composer.
-        if (error instanceof AgentCommandError && error.code === PI_RESTART_REFUSED_CODE) {
-          setActiveLeafId(previousLeafId);
-        }
-      });
+    if (!leafId) {
+      await loadContext(sid, null);
+      return;
     }
-  }, [activeLeafId, isCompacting, loadContext]);
+    // The server moves first; the branch's context loads once it did, so a
+    // switch refused over unfinished background work (AC3) never shows the
+    // refused branch — the selection rolls back with a visible notice, and the
+    // composer's draft never moved.
+    try {
+      await sendAgentCommand(sid, { type: "navigate_tree", targetId: leafId });
+      await loadContext(sid, leafId);
+    } catch (error) {
+      if (error instanceof AgentCommandError && error.code === PI_RESTART_REFUSED_CODE) {
+        setActiveLeafId(previousLeafId);
+        addNotice({ type: "error", message: error.message });
+        return;
+      }
+      // Any other failure keeps the optimistic switch: the local view follows
+      // the leaf the server still holds until a later read or command.
+      await loadContext(sid, leafId);
+    }
+  }, [activeLeafId, addNotice, isCompacting, loadContext]);
 
   // a fresh composer's harness switch resets the destination harness's model —
   // claude to its default full name, pi to no override (pi's default model again).

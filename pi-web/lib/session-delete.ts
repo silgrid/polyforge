@@ -6,6 +6,11 @@
  * display metadata only, so the rewrite is safe). Open wrappers are shut down,
  * subagents before their parents, before the files go.
  *
+ * The background-tasks gate goes first (#172, Q8): from the first line the
+ * deleted sessions start no task and deliver no completion wake, and their
+ * running task groups are stopped with their log directories cleared on every
+ * path — a late completion cannot revive a deleted session.
+ *
  * One call lists the catalogue and reads each folder once, however many
  * sessions it deletes.
  */
