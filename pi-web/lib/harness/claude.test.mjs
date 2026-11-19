@@ -29,7 +29,7 @@ fs.writeFileSync(path.join(configDir, "settings.json"), JSON.stringify({
   effortLevel: "high",
   env: { ANTHROPIC_CUSTOM_HEADER: "CL-SENTINEL-ENV-VALUE", OTHER_FLAG: "plain-value" },
   mcpServers: {
-    global-mcp: { url: "https://mcp.example/?key=CL-SENTINEL-MCP-URL", headers: { "X-Secret": "CL-SENTINEL-MCP-HEADER" } },
+    "global-mcp": { url: "https://mcp.example/?key=CL-SENTINEL-MCP-URL", headers: { "X-Secret": "CL-SENTINEL-MCP-HEADER" } },
   },
   permissions: { defaultMode: "acceptEdits" },
   skillOverrides: { "disabled-skill": "disabled" },
