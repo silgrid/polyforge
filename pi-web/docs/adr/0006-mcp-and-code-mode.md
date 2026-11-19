@@ -459,10 +459,16 @@ through `claude mcp add-json|remove -s <scope>` — never by writing
 - **A modification is remove + add-json** (`add-json` refuses an existing
   name), with the old definition staged server-side and written back when the
   add-json half fails.
-- **The version is probed before any spawn** and refused outside the
-  recognized range with nothing run; `mcp list` (it health-checks servers)
-  and `mcp get` (it may print values) are never called — reads parse the
-  files only.
+- **The version is probed before any write** — the probe (claude's
+  `initialize`) is the only spawn that precedes an MCP write — and a version
+  outside the recognized range refuses with no MCP command run; `mcp list`
+  (it health-checks servers) and `mcp get` (it may print values) are never
+  called — reads parse the files only. An add that names both harnesses runs
+  this gate before any file is written, and a CLI failure after it takes
+  pi's entry back, so the add is never half-written.
+- **The projection speaks claude's own shape**: an http entry gains the
+  `type: "http"` claude's files always write, or claude's validator reads it
+  as stdio and asks for a command it does not have.
 
 - Upstream requests that would remove Pi Web code: export the built-in list,
   the MCP config editor (with a lock and an atomic write),

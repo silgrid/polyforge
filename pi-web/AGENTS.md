@@ -205,6 +205,9 @@ lib/
   mcp-config-values.ts      client-safe: the values pi resolves and the PI_WEB_PASSWORD rule
   mcp-config-read.ts        Settings › MCP reads of both mcp.json files; nothing resolved or run
   mcp-config-file.ts        the mcp.json writer: SDK editor's bytes, lock, atomic write, typed refusals
+  claude-mcp-read.ts         claude's MCP entries read from its files only (state file + .mcp.json, local keyed by real path, masked, disabledMcpServers read-only); never a spawn
+  claude-mcp-write.ts        claude's MCP entries written only through mcp add-json|remove -s <scope> (version-gated before any file, claudeMcpWriteGate for callers writing other sides first, remove+add-json rollback)
+  mcp-unified.ts            both sides merged by (scope, name) — a generic core (85d reuses) over projections whose every comparable field is always present, so a field one side alone holds is a difference; the pi↔claude entry projections
   mcp-override.ts           project overrides of global servers: the SDK's isOverride() and loader refusals
   mcp-json-error.ts         JSON.parse error messages that never quote the source
   mcp-undo.ts               removed mcp.json entries kept 60 s for undo; only a token reaches the browser
