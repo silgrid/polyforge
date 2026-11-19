@@ -78,7 +78,7 @@ function statusLine(info: BgTaskInfo): string {
 }
 
 /** bg_output's answer: the excerpt, then the byte range and the full log path, all within the budget. */
-function formatOutput(id: string, output: BgTaskOutput): { content: { type: "text"; text: string }[] } {
+function formatOutput(id: string, output: BgTaskOutput): { content: { type: "text"; text: string }[]; details: undefined } {
   const header = `Output of background task ${id}:\n`;
   let text = output.text;
   let footer = `\n--- log: ${output.logPath} (bytes ${output.startByte}-${output.startByte + utf8Bytes(text)} of ${output.totalBytes}${output.truncated ? ", tail excerpt" : ", full log"})`;
@@ -90,7 +90,7 @@ function formatOutput(id: string, output: BgTaskOutput): { content: { type: "tex
     text = utf8Truncate(text, utf8Bytes(text) - (total - BG_OUTPUT_MAX_BYTES));
     footer = `\n--- log: ${output.logPath} (bytes ${output.startByte}-${output.startByte + utf8Bytes(text)} of ${output.totalBytes}${output.truncated ? ", tail excerpt" : ", full log"})`;
   }
-  return { content: [{ type: "text", text: `${header}${text}${footer}` }] };
+  return { content: [{ type: "text", text: `${header}${text}${footer}` }], details: undefined };
 }
 
 export function createBgTasksExtension(controller: BgTaskController): InlineExtension {
@@ -143,7 +143,7 @@ export function createBgTasksExtension(controller: BgTaskController): InlineExte
           const taskId = params.task_id?.trim() || undefined;
           const tasks = controller.status(sessionId, taskId);
           if (tasks.length === 0) {
-            return { content: [{ type: "text", text: taskId ? `No background task ${taskId} in this session.` : "This session runs no background tasks." }] };
+            return { content: [{ type: "text", text: taskId ? `No background task ${taskId} in this session.` : "This session runs no background tasks." }], details: undefined };
           }
           const lines = tasks.map(statusLine);
           return {
@@ -172,7 +172,7 @@ export function createBgTasksExtension(controller: BgTaskController): InlineExte
           const taskId = params.task_id?.trim();
           if (!taskId) throw new Error("bg_output: task_id must be a non-empty string");
           const requested = params.max_bytes;
-          const maxBytes = Number.isInteger(requested) && requested > 0
+          const maxBytes = typeof requested === "number" && Number.isInteger(requested) && requested > 0
             ? Math.min(requested, BG_OUTPUT_MAX_BYTES - BG_OUTPUT_RESERVE_BYTES)
             : undefined;
           const output = controller.readOutput(sessionId, taskId, maxBytes);
@@ -195,7 +195,7 @@ export function createBgTasksExtension(controller: BgTaskController): InlineExte
           if (!taskId) throw new Error("bg_stop: task_id must be a non-empty string");
           const [current] = controller.status(sessionId, taskId);
           if (current && current.status !== "running") {
-            return { content: [{ type: "text", text: `Background task ${taskId} already ${current.status}; nothing to stop.` }] };
+            return { content: [{ type: "text", text: `Background task ${taskId} already ${current.status}; nothing to stop.` }], details: undefined };
           }
           const stopped = controller.stop(sessionId, taskId);
           return {
