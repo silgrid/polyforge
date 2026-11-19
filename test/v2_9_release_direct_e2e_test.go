@@ -62,7 +62,9 @@ import (
 // one line per call in the capsule's artifacts, nothing else.
 const v29ReleaseScript = `#!/usr/bin/env bash
 # fake release procedure (e2e): records each call with the environment the
-# step ran it under; publishes nothing.
+# step ran it under; publishes nothing. It declares the --pins convention
+# in its --help (the lane probes it) and records the pins file it was
+# handed (polyforge#154).
 set -eu
 log=../../artifacts/fake-release-calls.log
 printf 'argv=%s|cwd=%s|path=%s|command_path=%s|tool_window_ms=%s|step=%s|spawn=%s\n' \
@@ -71,7 +73,15 @@ if [ "${1-}" = "--verify" ]; then
   echo "fake release: verified ${2-}"
   exit 0
 fi
-echo "fake release: releasing the head"
+if [ "${1-}" = "--help" ] || [ "${1-}" = "-h" ]; then
+  echo "usage: release.sh [bump] --pins <file>   cut a release (the green batch's pins)"
+  exit 0
+fi
+pins=""
+while [ $# -gt 0 ]; do
+  if [ "$1" = "--pins" ]; then pins="$2"; shift 2; else shift; fi
+done
+echo "fake release: releasing the pinned commit (pins file: ${pins:-none})"
 echo "version=v0.9.1"
 echo "commit=$(git rev-parse HEAD)"
 echo "notes=RELEASE-NOTES.md"
@@ -88,8 +98,10 @@ const (
 
 // v29ReleaseLine is the release step's own command (steps/release.md §4),
 // as a fakepi Run line: the fake runs it with `sh -c` from the capsule
-// root, so the step text's line is wrapped in a bash call.
-var v29ReleaseLine = `bash -c 'set -o pipefail; cd repos/` + v29Repo + ` && .polyforge/release.sh 2>&1 | tee ../../artifacts/release.log'`
+// root, so the step text's line is wrapped in a bash call. The line hands
+// the procedure the green batch's pins (polyforge#154: the release object
+// is the batch, and the fake procedure records the pins file it gets).
+var v29ReleaseLine = `bash -c 'set -o pipefail; cd repos/` + v29Repo + ` && .polyforge/release.sh --pins ../../artifacts/release-pins.json 2>&1 | tee ../../artifacts/release.log'`
 
 // v29VerifyLine is verify's check (e): the repo's own verifier on the
 // released tree, under the step's PATH.
@@ -122,12 +134,13 @@ func v29ReleaseActions(releaseDelay time.Duration, extraDeploy []map[string]any,
 	if len(verifiedVersion) > 0 {
 		vv = verifiedVersion[0]
 	}
-	record := `{"version":"` + v29Version + `","commit":"` + v29Commit + `","default_branch":"main","origin_head_at_release":"` + v29Commit + `",` +
+	record := `{"version":"` + v29Version + `","commit":"` + v29Commit + `","default_branch":"main","batch":"wi_b29","pins":{"` + v29Repo + `":"` + v29Commit + `"},"origin_head_at_release":"` + v29Commit + `",` +
 		`"notes":"RELEASE-NOTES.md","repo":"repos/` + v29Repo + `","pre_release_tags_file":"artifacts/pre-release-tags.txt","resumed":false}` + "\n"
 	actions := []map[string]any{
 		{"do": "envelope", "id": "release", "outcome": "completed", "ms": int(releaseDelay / time.Millisecond),
 			"run":   []string{v29ReleaseLine},
-			"files": map[string]string{"artifacts/release-record.json": record, "artifacts/pre-release-tags.txt": ""},
+			"files": map[string]string{"artifacts/release-record.json": record, "artifacts/pre-release-tags.txt": "",
+				"artifacts/release-pins.json": `{"batch":"wi_b29","repos":{"` + v29Repo + `":"` + v29Commit + `"}}` + "\n"},
 			"output": map[string]any{"verdict": "pass", "version": v29Version, "commit": v29Commit, "notes": "RELEASE-NOTES.md",
 				"artifacts_published": []string{v29Version}, "resumed": false}},
 		{"do": "envelope", "id": "verify", "outcome": "completed",
@@ -135,7 +148,7 @@ func v29ReleaseActions(releaseDelay time.Duration, extraDeploy []map[string]any,
 			"files": map[string]string{"artifacts/verified-version.json": `{"version":"` + vv + `","commit":"` + v29Commit + `"}` + "\n"},
 			"output": map[string]any{"verdict": "pass", "version": vv, "commit": v29Commit,
 				"checks": []map[string]any{
-					{"name": "release commit and origin head", "status": "pass"},
+					{"name": "release commit and the batch pin", "status": "pass"},
 					{"name": "the tag", "status": "pass"},
 					{"name": "immutability", "status": "pass"},
 					{"name": "release notes", "status": "pass"},
@@ -349,8 +362,8 @@ func TestV29ReleaseLaneRunsTheProceduresItself(t *testing.T) {
 	if len(calls) != 2 {
 		t.Fatalf("the fake procedure recorded %d calls, want 2 (release, --verify): %v", len(calls), calls)
 	}
-	if calls[0]["argv"] != "" || calls[0]["step"] != "release" || calls[0]["spawn"] != "1" {
-		t.Errorf("the first call is not the release step's bare run: %v", calls[0])
+	if calls[0]["argv"] != "--pins ../../artifacts/release-pins.json" || calls[0]["step"] != "release" || calls[0]["spawn"] != "1" {
+		t.Errorf("the first call is not the release step's pinned run: %v", calls[0])
 	}
 	if calls[1]["argv"] != "--verify "+v29Version || calls[1]["step"] != "verify" {
 		t.Errorf("the second call is not verify's `--verify V`: %v", calls[1])
