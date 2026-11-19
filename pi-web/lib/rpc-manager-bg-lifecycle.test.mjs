@@ -139,17 +139,6 @@ test("reload, clone, navigate and the Chat-only rebuild are refused with the str
   ).length;
   assert.equal(entriesAfter, entriesBefore, "a refused Chat-only switch writes no selection entry");
 
-  // A wrapper that is no longer alive (Stop's forced cleanup) is refused the
-  // same way instead of being rebuilt Chat-only under running work.
-  const dead = await openSession(agentDir);
-  const deadSid = dead.session.sessionId;
-  const deadInfo = runtime.run(deadSid, agentDir, "sleep 2");
-  startedTasks.push(deadInfo);
-  await pollUntil(() => runtime.status(deadSid, deadInfo.id)[0].status === "running", 5_000, "the second task to run");
-  await dead.session.destroy();
-  await refusesCoded(() => setRpcSessionTools(deadSid, "", []));
-  assert.equal(getRpcSession(deadSid) !== undefined, false, "no wrapper is rebuilt for the refused switch");
-
   // Once the work ends, the same commands go through again. The stop also
   // delivers the task's notification (AC1), whose turn must settle first —
   // a reload mid-turn is refused by the ordinary running check.
@@ -174,4 +163,37 @@ test("ending the wrapper (Stop's forced idle reap) leaves the background task ru
   assert.equal(runtime.status(sessionId, info.id)[0].status, "running");
   runtime.stop(sessionId, info.id);
   await pollUntil(() => runtime.status(sessionId, info.id)[0].status === "stopped", 5_000, "the orphaned task to stop");
+});
+
+test("a wrapper that is no longer alive is refused a Chat-only rebuild under running work", async (t) => {
+  const runtime = getBgRuntime();
+  const started = await openSession(agentDir);
+  const sessionId = started.session.sessionId;
+  usedSessionIds.add(sessionId);
+  await started.session.waitUntilReady();
+  const info = runtime.run(sessionId, agentDir, "sleep 2");
+  startedTasks.push(info);
+  await pollUntil(() => runtime.status(sessionId, info.id)[0].status === "running", 5_000, "the task to run");
+  await started.session.destroy();
+  // The closing wrapper leaves the registry on its own clock; wait it out so
+  // the assertion sees a rebuild, not a disposal still in flight.
+  await pollUntil(() => {
+    const wrapper = getRpcSession(sessionId);
+    return wrapper === undefined || !wrapper.isAlive();
+  }, 10_000, "the destroyed wrapper to leave the registry");
+
+  await assert.rejects(
+    () => setRpcSessionTools(sessionId, "", []),
+    (error) => {
+      assert.equal(error.code, PI_RESTART_REFUSED_CODE, "the dead-wrapper branch refuses with the structured code");
+      return true;
+    },
+  );
+  assert.ok(getRpcSession(sessionId) === undefined || !getRpcSession(sessionId).isAlive(), "no wrapper is rebuilt for the refused switch");
+
+  // The task still runs (Stop's cleanup took the wrapper, not the task) and
+  // is stopped here; its wake finds no session file and settles at once.
+  runtime.stop(sessionId, info.id);
+  await pollUntil(() => runtime.status(sessionId, info.id)[0].status === "stopped", 5_000, "the task to stop");
+  void t;
 });
