@@ -40,6 +40,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=go /out/pf /usr/local/bin/pf
 COPY dist/workstation/entrypoint.sh /usr/local/bin/workstation-entrypoint.sh
+COPY dist/workstation/env-whitelist.sh /usr/local/bin/workstation-env-whitelist.sh
 COPY dist/workstation/containers/storage.conf /etc/containers/storage.conf
 COPY dist/workstation/containers/containers.conf /etc/containers/containers.conf
 COPY dist/workstation/containers/registries.conf /etc/containers/registries.conf
