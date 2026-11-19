@@ -836,6 +836,15 @@ export interface McpApplyResult {
   ok: boolean;
   error?: string;
   reason?: McpRefusalReason;
+  /**
+   * A removal this result made (#85 85c, Q1 A): the 60-second undo the remove
+   * action gives, so an apply-to that takes a side away can put it back.
+   */
+  undo?: {
+    token: string;
+    path: string;
+    expiresInMs: number;
+  };
 }
 
 /**

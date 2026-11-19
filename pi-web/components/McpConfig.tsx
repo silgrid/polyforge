@@ -675,6 +675,20 @@ export function McpConfig({
           },
         });
       }
+      // A side the change removed carries its undo, so the notice offers it
+      // as the remove action's does (Q1 A).
+      const removed = (result.data.applied?.results ?? []).find((item) => item.ok && item.undo);
+      if (removed?.undo) {
+        setUndo({
+          scope: row.scope,
+          name: row.name,
+          ...(removed.harness === "claude" ? { harness: "claude" } : {}),
+          token: removed.undo.token,
+          path: removed.undo.path,
+          expiresInMs: removed.undo.expiresInMs,
+          undoing: false,
+        });
+      }
     } else {
       setActionError({ key, failure: result.error });
     }

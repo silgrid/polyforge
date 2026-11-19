@@ -808,7 +808,7 @@ async function applyToChange(
       }
       const removal = await claudeMcpRemove(scope, name, claudeWriteContext(project));
       if (removal.ok) {
-        holdRemovedEntry({
+        const { token, expiresAt } = holdRemovedEntry({
           scope,
           name,
           ...(project !== undefined ? { cwd: project.cwd } : {}),
@@ -817,7 +817,7 @@ async function applyToChange(
           entry: claudeRaw.entry,
           index: 0,
         });
-        results.push({ harness, ok: true });
+        results.push({ harness, ok: true, undo: { token, path: claudeRaw.sourcePath, expiresInMs: Math.max(0, expiresAt - Date.now()) } });
       } else {
         results.push({ harness, ok: false, reason: "claude-unwritable", error: removal.error });
       }
@@ -829,7 +829,7 @@ async function applyToChange(
       }
       try {
         const removed = await removeMcpServer(target, name);
-        holdRemovedEntry({
+        const { token, expiresAt } = holdRemovedEntry({
           scope,
           name,
           path: removed.path,
@@ -837,7 +837,7 @@ async function applyToChange(
           entry: removed.value.entry,
           index: removed.value.index,
         });
-        results.push({ harness, ok: true });
+        results.push({ harness, ok: true, undo: { token, path: removed.path, expiresInMs: Math.max(0, expiresAt - Date.now()) } });
       } catch (error) {
         const failure = writeRefusal(error);
         results.push({ harness, ok: false, reason: failure.reason, error: failure.error });
