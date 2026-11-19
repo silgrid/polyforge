@@ -12,7 +12,7 @@ process.env.PI_CODING_AGENT_DIR = agentDir;
 await mkdir(join(agentDir, "sessions"), { recursive: true });
 
 const jiti = createJiti(import.meta.url, { interopDefault: true, moduleCache: false });
-const { startRpcSession, setRpcSessionTools, getBgRuntime } = await jiti.import("./rpc-manager.ts");
+const { startRpcSession, setRpcSessionTools, getBgRuntime, getRpcSession } = await jiti.import("./rpc-manager.ts");
 const { PI_RESTART_REFUSED_CODE } = await jiti.import("./bg-protocol.ts");
 
 const pollUntil = async (condition, deadlineMs, what) => {
@@ -127,6 +127,28 @@ test("reload, clone, navigate and the Chat-only rebuild are refused with the str
   await refusesCoded(() => started.session.send({ type: "clone" }));
   await refusesCoded(() => started.session.send({ type: "navigate_tree", targetId: "whatever" }));
   await refusesCoded(() => setRpcSessionTools(sessionId, started.session.sessionFile, []));
+
+  // The refusal lands before anything is written: the session's entries hold
+  // no new tool selection from the refused switch.
+  const entriesBefore = started.session.inner.sessionManager.getEntries().filter(
+    (entry) => entry.type === "custom" && entry.customType === "pi-web:tool-selection",
+  ).length;
+  await refusesCoded(() => setRpcSessionTools(sessionId, started.session.sessionFile, []));
+  const entriesAfter = started.session.inner.sessionManager.getEntries().filter(
+    (entry) => entry.type === "custom" && entry.customType === "pi-web:tool-selection",
+  ).length;
+  assert.equal(entriesAfter, entriesBefore, "a refused Chat-only switch writes no selection entry");
+
+  // A wrapper that is no longer alive (Stop's forced cleanup) is refused the
+  // same way instead of being rebuilt Chat-only under running work.
+  const dead = await openSession(agentDir);
+  const deadSid = dead.session.sessionId;
+  const deadInfo = runtime.run(deadSid, agentDir, "sleep 2");
+  startedTasks.push(deadInfo);
+  await pollUntil(() => runtime.status(deadSid, deadInfo.id)[0].status === "running", 5_000, "the second task to run");
+  await dead.session.destroy();
+  await refusesCoded(() => setRpcSessionTools(deadSid, "", []));
+  assert.equal(getRpcSession(deadSid) !== undefined, false, "no wrapper is rebuilt for the refused switch");
 
   // Once the work ends, the same commands go through again. The stop also
   // delivers the task's notification (AC1), whose turn must settle first —
