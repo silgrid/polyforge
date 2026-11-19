@@ -217,6 +217,12 @@ func RunSupervise(rs RunSpec) int {
 	}
 }
 
+// supPreStartHold, when non-nil, runs inside every child start, after
+// the loop's stop check and before exec.Start — the test seam that pins
+// a stop signal into the start window (polyforge#160 r1#1); it gets the
+// proc whose start is in flight. nil in production.
+var supPreStartHold func(p *supProc)
+
 // newSupProc answers one managed child.
 func newSupProc(spec ChildSpec, daemon bool, baseDelay time.Duration) *supProc {
 	return &supProc{spec: spec, daemon: daemon, baseDelay: baseDelay, done: make(chan struct{})}
@@ -298,6 +304,9 @@ func (p *supProc) runOnce() (code int, ran bool) {
 		cmd.Stdout, cmd.Stderr = f, f
 	} else {
 		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	}
+	if supPreStartHold != nil {
+		supPreStartHold(p)
 	}
 	if err := cmd.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "pf supervise: child %s: start: %v\n", p.spec.Name, err)
