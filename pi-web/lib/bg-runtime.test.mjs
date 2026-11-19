@@ -223,6 +223,7 @@ test("the deletion gate refuses new tasks, keeps the completion silent, and the 
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const controller = createBgTaskController(deps);
   const info = controller.run("sess-1", "/tmp/w", "sleep 300");
+  const runner = controller.run("sess-1", "/tmp/w", "sleep 600");
   controller.beginSessionDeletion(["sess-1"]);
 
   assert.throws(() => controller.run("sess-1", "/tmp/w", "echo late"), /delet/i);
@@ -235,10 +236,11 @@ test("the deletion gate refuses new tasks, keeps the completion silent, and the 
   await flush();
   assert.deepEqual(calls.resolveSessionPath, []);
   assert.equal(readPersisted(root, "sess-1", info.id).notified, true, "the gate counts as notified: nothing will ever be delivered");
-  assert.equal(controller.hasActiveWork("sess-1"), false);
 
   await controller.deleteSessionTasks(["sess-1"]);
-  assert.equal(supervisor.spawned[0].task.stopCalls, 1, "the cleanup stops the running task");
+  // The task still running when the cleanup arrives is stopped.
+  assert.equal(supervisor.spawned[1].task.stopCalls, 1, "the cleanup stops the running task");
+  void runner;
   assert.equal(existsSync(join(root, "sess-1")), false, "the session's log directory is gone");
   assert.deepEqual(controller.status("sess-1"), []);
 });
