@@ -129,7 +129,8 @@ function isTaskInfo(value: unknown): value is BgTaskInfo {
     && (info.reason === null || info.reason === "log-limit" || info.reason === "stopped")
     && (info.bytesWritten === null || typeof info.bytesWritten === "number")
     && typeof info.logPath === "string"
-    && typeof info.notified === "boolean";
+    && typeof info.notified === "boolean"
+    && (info.pgid === undefined || info.pgid === null || typeof info.pgid === "number");
 }
 
 /**
@@ -298,6 +299,14 @@ export function createBgTaskController(deps: BgRuntimeDeps): BgTaskController {
         );
       }
       const id = randomUUID();
+      const logPath = join(taskDir(root, sessionId, id), "log");
+      const supervisor = deps.spawnTask({
+        command,
+        cwd,
+        env: sanitizeProjectCommandEnvironment(deps.baseEnv ?? process.env),
+        logPath,
+        logMaxBytes,
+      });
       const info: BgTaskInfo = {
         id,
         sessionId,
@@ -310,19 +319,12 @@ export function createBgTaskController(deps: BgRuntimeDeps): BgTaskController {
         signal: null,
         reason: null,
         bytesWritten: null,
-        logPath: join(taskDir(root, sessionId, id), "log"),
+        logPath,
         notified: false,
+        pgid: supervisor.pgid,
       };
-      const task: InternalTask = { info, supervisor: null, wakePending: false };
+      const task: InternalTask = { info, supervisor, wakePending: false };
       persist(root, info);
-      const supervisor = deps.spawnTask({
-        command,
-        cwd,
-        env: sanitizeProjectCommandEnvironment(deps.baseEnv ?? process.env),
-        logPath: info.logPath,
-        logMaxBytes,
-      });
-      task.supervisor = supervisor;
       tasks.set(id, task);
       void supervisor.done.then((end) => settleTerminal(task, end));
       emitUpdate(sessionId);

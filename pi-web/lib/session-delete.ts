@@ -12,7 +12,7 @@
 
 import { readdirSync, readFileSync, unlinkSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
-import { abortSubagent, getRpcSession, getRpcSessionInfos } from "./rpc-manager";
+import { abortSubagent, getBgRuntime, getRpcSession, getRpcSessionInfos } from "./rpc-manager";
 import {
   invalidateSessionListCache,
   invalidateSessionManagerCache,
@@ -41,6 +41,19 @@ function addChild(childrenByParent: Map<string, string[]>, parentId: string, chi
 
 /** Deletes `ids` and their subagent sessions. */
 export async function deleteSessions(ids: readonly string[]): Promise<SessionDeleteResult> {
+  // The background-tasks gate first (Q8): from here on the deleted sessions
+  // start no task and deliver no completion wake, so nothing can revive them.
+  const bgRuntime = getBgRuntime();
+  bgRuntime.beginSessionDeletion(ids);
+  try {
+    return await deleteSessionsInner(ids);
+  } finally {
+    // Stop the sessions' tasks and clear their log directories on every path.
+    await bgRuntime.deleteSessionTasks(ids);
+  }
+}
+
+async function deleteSessionsInner(ids: readonly string[]): Promise<SessionDeleteResult> {
   const targets = new Map<string, string>();
   const missing: string[] = [];
   for (const id of new Set(ids)) {

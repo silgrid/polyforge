@@ -47,6 +47,8 @@ export interface BgTaskInfo {
   logPath: string;
   /** Whether the completion notification was already delivered (AC1's once rule). */
   notified: boolean;
+  /** The task's process group id while it ran. Recorded for display only: after a restart nobody signals it (AC4). */
+  pgid?: number | null;
 }
 
 /** A `bg_output` read: the excerpt, its byte range in the full log, and the log's size. */
