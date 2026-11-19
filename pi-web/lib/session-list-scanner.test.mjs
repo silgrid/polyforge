@@ -15,18 +15,15 @@ const {
   resetSessionScanIndexForTests,
   scanSessionFileInfo,
 } = await jiti.import("./session-list-scanner.ts");
+const { disposeSessionScanWorkerPoolForTests } = await jiti.import("./session-parse-worker-pool.ts");
 const { listAllSessions, invalidateSessionListCache } = await jiti.import("./session-reader.ts");
 const timestamp = "2026-01-01T00:00:00.000Z";
-// Every read stream a scan opens and where it starts: a full scan reads from
-// byte 0, a resumed one from where the previous scan stopped. Mocked before the
-// first scan: through jiti the scanner keeps the function its first call found.
+// Every stream read a scan opens and where it starts: a full scan reads from
+// byte 0, a resumed one from where the previous scan stopped. The scan runs on
+// the worker pool (lib/session-parse-worker-pool.ts), which records each
+// completed read here — the same facts the old fs.createReadStream mock did.
 const reads = [];
-const createReadStream = fs.createReadStream;
-mock.method(fs, "createReadStream", (path, options, ...rest) => {
-  reads.push({ path, start: options?.start ?? 0 });
-  return createReadStream(path, options, ...rest);
-});
-syncBuiltinESMExports();
+globalThis.__piWebScanTaskLog = reads;
 const line = (entry) => JSON.stringify(entry) + "\n";
 const message = (id, role, content, time = timestamp) => ({
   type: "message", id, parentId: null, timestamp: time, message: { role, content },
@@ -40,11 +37,13 @@ function fixture(t) {
   process.env.PI_CODING_AGENT_DIR = root;
   resetSessionScanIndexForTests();
   invalidateSessionListCache();
+  globalThis.__piWebScanTaskLog = reads;
   t.after(() => {
     resetSessionScanIndexForTests();
     invalidateSessionListCache();
     globalThis.__piSessionPathCache = undefined;
     globalThis.__piPathToSessionIdCache = undefined;
+    globalThis.__piWebScanTaskLog = undefined;
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
     fs.rmSync(root, { recursive: true, force: true });
@@ -433,6 +432,10 @@ test("a summary listing defers only the files the index has not scanned", async 
   assert.equal(byId.cached.messageCount, 1);
   assert.equal(byId.fresh.detailsPending, true);
   assert.equal(byId.fresh.messageCount, 0);
+});
+
+test.after(() => {
+  disposeSessionScanWorkerPoolForTests();
 });
 
 test("discovers sessions through project directory symlinks", { skip: process.platform === "win32" }, async (t) => {
