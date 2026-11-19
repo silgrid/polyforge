@@ -145,20 +145,26 @@ test("the projected count is computed in the worker and only the count crosses t
   // toAssistantBlocks has no image branch, so it emits nothing) and a
   // tool_use whose id is the empty string (the adapter requires only a
   // string id). The worker port must count exactly what the adapter emits.
-  const id = "synthetic-port-edge-1";
+  // Each edge shape in its own transcript: one file per divergence, so one
+  // cannot cancel the other out (the first red run taught us they do).
   const edgeDir = path.join(configDir, "projects", "-edge");
   fs.mkdirSync(edgeDir, { recursive: true });
-  const edgeTranscript = path.join(edgeDir, `${id}.jsonl`);
-  const entry = (row) => `${JSON.stringify({ isSidechain: false, timestamp: "2026-11-01T00:00:00.000Z", sessionId: id, cwd: "/tmp", version: "2.1.312", ...row })}
-`;
-  fs.writeFileSync(edgeTranscript,
-    entry({ parentUuid: null, type: "user", message: { role: "user", content: "one question" }, uuid: "e1" })
-    + entry({ parentUuid: "e1", type: "assistant", message: { role: "assistant", content: [{ type: "image", source: { type: "base64", data: "aGk=", media_type: "image/png" } }] }, uuid: "e2" })
-    + entry({ parentUuid: "e2", type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "", name: "Read", input: {} }] }, uuid: "e3" })
-    + `${JSON.stringify({ type: "last-prompt", leafUuid: "e3", sessionId: id })}
-`);
+  const edgeTranscripts = [];
+  for (const [suffix, content] of [
+    ["image", [{ type: "image", source: { type: "base64", data: "aGk=", media_type: "image/png" } }]],
+    ["empty-tool-id", [{ type: "tool_use", id: "", name: "Read", input: {} }]],
+  ]) {
+    const id = `synthetic-port-edge-${suffix}`;
+    const file = path.join(edgeDir, `${id}.jsonl`);
+    const entry = (row) => `${JSON.stringify({ isSidechain: false, timestamp: "2026-11-01T00:00:00.000Z", sessionId: id, cwd: "/tmp", version: "2.1.312", ...row })}\n`;
+    fs.writeFileSync(file,
+      entry({ parentUuid: null, type: "user", message: { role: "user", content: "one question" }, uuid: "e1" })
+      + entry({ parentUuid: "e1", type: "assistant", message: { role: "assistant", content }, uuid: "e2" })
+      + `${JSON.stringify({ type: "last-prompt", leafUuid: "e2", sessionId: id })}\n`);
+    edgeTranscripts.push(file);
+  }
   assert.ok(transcripts.length >= 15, `the repo's claude transcript fixtures (${transcripts.length})`);
-  for (const file of [...transcripts, ...corpusFiles, edgeTranscript]) {
+  for (const file of [...transcripts, ...corpusFiles, ...edgeTranscripts]) {
     const text = fs.readFileSync(file, "utf8");
     const expected = claudeTranscriptToMessages(parseClaudeTranscript(text), {}).messages.length;
     const result = await runSessionScanTask({ kind: "claude-count", path: file }).catch((error) => error);
