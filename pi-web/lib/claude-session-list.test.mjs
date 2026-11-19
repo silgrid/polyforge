@@ -164,13 +164,17 @@ test("the projected count is computed in the worker and only the count crosses t
     edgeTranscripts.push(file);
   }
   assert.ok(transcripts.length >= 15, `the repo's claude transcript fixtures (${transcripts.length})`);
+  // Collect every divergence, not just the first: an early assert would hide
+  // the rest of the corpus behind whichever file happens to differ first
+  // (review r3 N5).
+  const diverged = [];
   for (const file of [...transcripts, ...corpusFiles, ...edgeTranscripts]) {
     const text = fs.readFileSync(file, "utf8");
     const expected = claudeTranscriptToMessages(parseClaudeTranscript(text), {}).messages.length;
     const result = await runSessionScanTask({ kind: "claude-count", path: file }).catch((error) => error);
-    assert.equal(typeof result, "number", `${file}: the pool task answers a count, not entries`);
-    assert.equal(result, expected, `${file}: the worker's count is the adapter's own projection`);
+    if (typeof result !== "number" || result !== expected) diverged.push({ file, expected, result });
   }
+  assert.deepEqual(diverged, [], "the worker's count is the adapter's own projection for every fixture");
 });
 
 test("an appended, deleted and recreated transcript is followed without force", async () => {

@@ -465,6 +465,21 @@ test("a repeated summary listing reads no header it already read", async (t) => 
     "a changed file's header is read again");
 });
 
+test("a deferred summary rejects a file whose first object line is not a session header", async (t) => {
+  const { write } = fixture(t);
+  // A file that opens with a non-session object row has no usable header
+  // within the summary budget: the old main-thread reader and the worker's
+  // full scan both reject it, so the summary must too — continuing past the
+  // row would list a session the ordinary listing drops (review r3 N1).
+  const path = write("midfile", [message("m1", "user", "first question")]);
+  fs.writeFileSync(path, line(message("stray", "user", "not a header")) + fs.readFileSync(path, "utf8"));
+
+  const summary = await listSessionsIncremental({ deferDetails: true });
+  assert.equal(summary.find((session) => session.id === "midfile"), undefined,
+    "the summary lists no row for a file without a leading session header");
+  assert.equal(reads.filter((read) => read.kind === "header"), [], "no header row is cached for it");
+});
+
 test("a deferred summary skips a leading non-object line and still finds the header", async (t) => {
   const { write } = fixture(t);
   // A leading line that parses as a JSON primitive (a torn write, a writer's
