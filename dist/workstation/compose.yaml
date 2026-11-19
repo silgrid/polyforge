@@ -19,10 +19,11 @@
 # the image: `--with-aihub` additionally starts and watches `pf aihub`.
 name: workstation
 
-# the shared machine: one anchor, two profile variants. NOTE: compose
-# merges maps but APPENDS lists on `<<`, so a variant re-declaring a
-# list would inherit both — the two services below re-declare nothing
-# but command and profiles.
+# the shared machine: one anchor, two profile variants. With a YAML
+# merge key (`<<`) a service's own key REPLACES the anchor's (lists are
+# never merged), so a variant could narrow the machine by re-declaring
+# any parameter — the compose test pins both variants to the full
+# parameter set, so nothing narrows silently.
 x-workstation: &workstation
   build:
     context: ../..
