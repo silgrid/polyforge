@@ -1593,11 +1593,12 @@ func (d *Daemon) fetchAutoWave() {
 		// the auto-off purge takes, so an entry either sees auto off or
 		// lands before the purge and is dropped by it (audit B3 race,
 		// wi_seWTgHeKtaa8).
-		// A rotation that became pending during the fetch stops the wave:
+		// A rotation that became pending during the fetch stops the wave,
+		// and so does the Host-wide upgrade drain (upgradedrain.go):
 		// the check and the enqueue are one step under drainGate.
 		// The persist runs outside the gate under an admitting reservation.
 		d.drainGate.Lock()
-		if d.pendingChange() != "" {
+		if d.drainRefusal() != nil {
 			d.drainGate.Unlock()
 			return
 		}
