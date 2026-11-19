@@ -121,16 +121,22 @@ test("a shared field that differs is marked with each side's current value as te
     { field: "args", values: { pi: "-y v1", claude: "-y v2" } },
     { field: "envNames", values: { pi: "A, B", claude: "A" } },
   ]);
-  // The field projections the comparison runs on.
+  // The field projections the comparison runs on: every comparable field
+  // always present, so a field only one side holds is a difference, never
+  // a silence (r2#1).
   assert.deepEqual(unifiedMcpPiFields(piServer({ command: "npx", args: ["-y", "v1"], envNames: ["A", "B"] })), {
     command: "npx",
     args: ["-y", "v1"],
+    url: null,
     envNames: ["A", "B"],
+    headerNames: [],
   });
   assert.deepEqual(unifiedMcpClaudeFields(claudeServer({ command: "npx", args: ["-y", "v2"], envNames: ["A"] })), {
     command: "npx",
     args: ["-y", "v2"],
+    url: null,
     envNames: ["A"],
+    headerNames: [],
   });
 });
 
@@ -153,4 +159,37 @@ test("claude declares its mcp capabilities: local scope, sse and ws, CLI adds, n
   assert.equal(caps.mcp?.cliAdd, true, "claude is written only through its CLI (AC2)");
   assert.equal(caps.mcp?.enableToggle, false, "claude has no enable/disable command (Q1 A)");
   assert.equal(caps.mcp?.toolFilter, false);
+});
+
+test("a field only one side holds is a difference — env, transport, args, headers (r2#1)", () => {
+  // pi has env, claude none: the empty set and the names differ.
+  const env = unifiedMcpRows(
+    [piServer({ name: "a", command: "npx", args: ["-y", "one"] })],
+    [claudeServer({ name: "a", command: "npx", args: ["-y", "one"], envNames: ["A"] })],
+  );
+  assert.deepEqual(env[0].inconsistent, [{ field: "envNames", values: { pi: "", claude: "A" } }]);
+
+  // stdio against http: no field both sides name with a value, and they still differ.
+  const transport = unifiedMcpRows(
+    [piServer({ name: "b", command: "node", args: ["s.js"] })],
+    [claudeServer({ name: "b", url: "https://x.example/mcp" })],
+  );
+  assert.deepEqual(transport[0].inconsistent, [
+    { field: "command", values: { pi: "node", claude: "—" } },
+    { field: "url", values: { pi: "—", claude: "https://x.example/mcp" } },
+  ]);
+
+  // args held by one side only.
+  const args = unifiedMcpRows(
+    [piServer({ name: "c", command: "npx" })],
+    [claudeServer({ name: "c", command: "npx", args: ["-y", "one"] })],
+  );
+  assert.deepEqual(args[0].inconsistent, [{ field: "args", values: { pi: "", claude: "-y one" } }]);
+
+  // header names differ.
+  const headers = unifiedMcpRows(
+    [piServer({ name: "d", command: "npx", headerNames: ["Authorization"] })],
+    [claudeServer({ name: "d", command: "npx" })],
+  );
+  assert.deepEqual(headers[0].inconsistent, [{ field: "headerNames", values: { pi: "Authorization", claude: "" } }]);
 });

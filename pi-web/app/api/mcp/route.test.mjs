@@ -450,7 +450,8 @@ test("a shared name both sides hold in one scope merges into one row, its differ
   assert.deepEqual(row.missing, []);
   assert.deepEqual(row.inconsistent, [
     { field: "command", values: { pi: "global-shared", claude: "npx" } },
-  ], "command is the one field both sides define, and they differ; claude's args alone are no difference");
+    { field: "args", values: { pi: "", claude: "-y claude-side" } },
+  ], "command differs and claude alone has args: both are differences now — a field only one side holds is one too");
   assert.deepEqual(row.otherScopes, ["project"]);
 });
 
