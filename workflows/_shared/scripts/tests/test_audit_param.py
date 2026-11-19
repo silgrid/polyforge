@@ -193,7 +193,8 @@ class VerifyAuditParamTest(unittest.TestCase):
         self.assertIn("dependency audit off", r.result.get("summary", ""),
                       "the summary names the closed audit: %s" % r.result.get("summary"))
         self.assertIn(AUDIT_OFF_NOTE, r.result.get("summary", ""))
-        self.assertIn("dependency audit disabled", r.report)
+        self.assertIn("Dependency audit disabled", r.report)
+        self.assertIn(AUDIT_OFF_NOTE, r.report)
 
     def test_on_empty_and_unset_change_nothing(self) -> None:
         for value in ("on", "", None):
@@ -208,7 +209,7 @@ class VerifyAuditParamTest(unittest.TestCase):
             self.assertNotIn("audit_disabled", r.details, "an on run's step result adds no field")
             self.assertNotIn("dependency audit", r.result.get("summary", ""),
                              "an on run's summary is today's, byte for byte: %s" % r.result.get("summary"))
-            self.assertNotIn("dependency audit", r.report)
+            self.assertNotIn("ependency audit", r.report)
 
     def test_every_other_value_is_a_named_error_before_any_check(self) -> None:
         for value in ("ON", "false", " off", "0"):
