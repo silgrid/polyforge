@@ -161,7 +161,8 @@ async function mcpWritable(): Promise<PiSdkInternals | Refusal> {
   return isMcpEntryRefusal(internals) ? asRefusal(internals) : internals;
 }
 
-function readScope(value: unknown): McpScope | undefined {
+/** The scope of a pi entry: pi never lists or writes a `local` one (#85 85c). */
+function readScope(value: unknown): Exclude<McpScope, "local"> | undefined {
   return value === "global" || value === "project" ? value : undefined;
 }
 
@@ -411,7 +412,7 @@ async function undoRemoval(agentDir: string, project: Project | undefined, token
  * connections found before is forgotten, since signed-out ones no longer see
  * it; open sessions lose access at their next request to the server.
  */
-async function signOutServer(agentDir: string, project: Project | undefined, internals: PiSdkInternals, server: McpServerRef) {
+async function signOutServer(agentDir: string, project: Project | undefined, internals: PiSdkInternals, server: McpServerRef & { scope: Exclude<McpScope, "local"> }) {
   const target = writeTarget(server.scope, project, agentDir);
   if (target instanceof Refusal) return target.response();
   const { name } = server;

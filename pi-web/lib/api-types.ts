@@ -189,7 +189,10 @@ export type McpTrustFolderInfo =
 // is an English diagnostic, `reason` a code the panel translates.
 // ---------------------------------------------------------------------------
 
-export type McpScope = "global" | "project";
+/** The unified scopes of the MCP list (ADR 0006; #85 85c): `local` is Claude's own — its
+ * `projects[<cwd>].mcpServers` — and pi has no place for it, so the local group is
+ * Claude-only and pi never lists or takes one. */
+export type McpScope = "global" | "project" | "local";
 export type McpTransportKind = "stdio" | "http";
 /** What a project entry may change of the global server of its name (the SDK's `OVERRIDE_KEYS`). */
 export type McpOverrideKey = "enabled" | "exposure" | "toolExposure";
