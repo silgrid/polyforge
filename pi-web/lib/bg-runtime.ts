@@ -89,6 +89,35 @@ interface InternalTask {
   wakePending: boolean;
 }
 
+/** One registry root's process-wide state (r1#1): tasks, its gate, its providers. */
+interface BgRuntimeRootState {
+  tasks: Map<string, InternalTask>;
+  deletedSessions: Set<string>;
+  livenessDisposers: Map<string, () => void>;
+  recovered: boolean;
+}
+
+/**
+ * The executor's state lives on globalThis, keyed by registry root, so a
+ * Next.js hot reload — a second rpc-manager module instance — shares the one
+ * registry and the one deletion gate instead of splitting them; `globalThis`
+ * survives the reload, a module-level closure does not (sessions.md's rule,
+ * as SUBAGENT_CONTROLLER follows it). Recovery runs once per root per process.
+ */
+const BG_RUNTIME_STATE_KEY = Symbol.for("pi-web:bg-runtime/v1");
+
+function bgRuntimeRootState(root: string): BgRuntimeRootState {
+  const store = globalThis as Record<PropertyKey, unknown>;
+  const byRoot = (store[BG_RUNTIME_STATE_KEY] as Map<string, BgRuntimeRootState> | undefined) ?? new Map<string, BgRuntimeRootState>();
+  store[BG_RUNTIME_STATE_KEY] = byRoot;
+  let state = byRoot.get(root);
+  if (!state) {
+    state = { tasks: new Map(), deletedSessions: new Set(), livenessDisposers: new Map(), recovered: false };
+    byRoot.set(root, state);
+  }
+  return state;
+}
+
 const TERMINAL_STATUSES: ReadonlySet<BgTaskStatus> = new Set(["succeeded", "failed", "stopped", "interrupted"]);
 
 const WAKE_IDLE_POLL_MS = 500;
@@ -177,9 +206,14 @@ export function createBgTaskController(deps: BgRuntimeDeps): BgTaskController {
   const root = deps.getLogRoot();
   const now = deps.now ?? (() => Date.now());
   const logMaxBytes = deps.logMaxBytes ?? BG_LOG_MAX_BYTES;
-  const tasks = recoverInterrupted(root, now);
-  const deletedSessions = new Set<string>();
-  const livenessDisposers = new Map<string, () => void>();
+  const state = bgRuntimeRootState(root);
+  const tasks = state.tasks;
+  const deletedSessions = state.deletedSessions;
+  const livenessDisposers = state.livenessDisposers;
+  if (!state.recovered) {
+    state.recovered = true;
+    for (const [id, task] of recoverInterrupted(root, now)) tasks.set(id, task);
+  }
   let sink: BgRuntimeSink | null = null;
 
   const infosOf = (sessionId: string): BgTaskInfo[] =>
@@ -300,6 +334,7 @@ export function createBgTaskController(deps: BgRuntimeDeps): BgTaskController {
       }
       const id = randomUUID();
       const logPath = join(taskDir(root, sessionId, id), "log");
+      mkdirSync(taskDir(root, sessionId, id), { recursive: true });
       const supervisor = deps.spawnTask({
         command,
         cwd,

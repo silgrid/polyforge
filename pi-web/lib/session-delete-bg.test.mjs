@@ -11,10 +11,10 @@ const agentDir = join(tmpdir(), "bg-delete-" + Math.random().toString(36).slice(
 mkdirSync(agentDir, { recursive: true });
 process.env.PI_CODING_AGENT_DIR = agentDir;
 
-// moduleCache on: deleteSessions (session-delete.ts) and this test must see
-// ONE BG_RUNTIME — a fresh rpc-manager per import would give the gate and the
-// assertions two different executors.
-const jiti = createJiti(import.meta.url, { interopDefault: true, moduleCache: true });
+// r1#1 put the executor's state on globalThis, so this test keeps the
+// repo-standard moduleCache: false: deleteSessions (session-delete.ts) and
+// this test hold two rpc-manager module instances over one shared executor.
+const jiti = createJiti(import.meta.url, { interopDefault: true, moduleCache: false });
 const { deleteSessions } = await jiti.import("./session-delete.ts");
 const { getBgRuntime } = await jiti.import("./rpc-manager.ts");
 
