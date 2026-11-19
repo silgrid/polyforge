@@ -97,7 +97,7 @@ func TestW121ReleaseGHRepoFailLoud(t *testing.T) {
 
 	t.Run("verify mode uses the internal repo when unset", func(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.2.0"}, nil)
-		if out, err := w.run(nil); err != nil {
+		if out, err := w.runPinned(nil); err != nil {
 			t.Fatalf("release: %v\n%s", err, out)
 		}
 		_ = os.Remove(filepath.Join(w.fakeRel, "repos.log"))

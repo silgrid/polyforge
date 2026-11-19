@@ -1424,6 +1424,7 @@ func TestReleaseScriptReleasesThePinnedCommitBehindTheHead(t *testing.T) {
 	w := newRelWorld(t, []string{"v1.2.0"}, nil)
 	pin := w.landPR("pinned-change", "the batch's pinned commit")
 	head := w.landPR("after-the-batch", "landed after the batch closed")
+	relGit(t, w.work, "checkout", "-q", "--detach", pin) // the step sits the owner repo at its pin
 	p := w.relPins(pin, nil, nil)
 	out, err := w.run(nil, "--pins", p)
 	if err != nil {
@@ -1474,7 +1475,7 @@ func TestReleaseScriptRefusesAPinOffTheDefaultBranch(t *testing.T) {
 	relGit(t, w.work, "add", "-A")
 	relGit(t, w.work, "commit", "-q", "-m", "a commit no default branch carries")
 	off := relGit(t, w.work, "rev-parse", "HEAD")
-	relGit(t, w.work, "checkout", "-q", "main")
+	relGit(t, w.work, "checkout", "-q", "--detach", off)
 	p := w.relPins(off, nil, nil)
 	out, err := w.run(nil, "--pins", p)
 	if err == nil || !strings.Contains(out, "not on the history of origin/main") || !strings.Contains(out, "nothing built or published") {
