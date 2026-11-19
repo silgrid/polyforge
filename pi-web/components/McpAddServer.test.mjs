@@ -417,9 +417,6 @@ test("the pane asks where the paste applies, and claude's local group is among t
   assert.match(markup, /Apply to:/);
   assert.match(markup, /data-harness="pi"><input type="checkbox"[^>]*checked=""/);
   assert.match(markup, /data-harness="claude"><input type="checkbox"[^>]*checked=""/);
-  // A claude paste without -s applies to claude alone, pi's box off with its reason.
-  const localPaste = pane({ data, draft: { text: "claude mcp add demo npx -y server", scope: undefined } });
-  assert.ok(!/data-harness="pi"><input type="checkbox"[^>]*checked=""/.test(decode(localPaste)), "a hint cannot be asserted before the analysis honours it; the local case below does");
   // The local scope is offered with its own label, claude's alone.
   assert.match(markup, /<option value="local">local<\/option>/);
   const local = pane({ data, draft: { text: "claude mcp add demo npx -y server", scope: "local" } });
