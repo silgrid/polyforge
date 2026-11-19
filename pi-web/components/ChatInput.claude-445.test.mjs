@@ -31,9 +31,9 @@ const DEFAULT_LABEL = {
 };
 // r3 (D11): plan needs the claude tool permissions on 「Ask in a dialog」.
 const PLAN_UNAVAILABLE = {
-  en: "Not available: plan mode needs claude tool permissions set to Ask in a dialog (Settings › General) — on Deny silently claude would refuse to leave plan mode",
-  "zh-CN": "暂不可用：plan 模式需要 claude 工具授权为「弹窗询问」（设置 › 常规）——在「静默拒绝」下 claude 会拒绝退出 plan 模式",
-  "zh-TW": "暫不可用：plan 模式需要 claude 工具授權為「彈窗詢問」（設定 › 一般）——在「靜默拒絕」下 claude 會拒絕退出 plan 模式",
+  en: "Not available: plan mode needs claude tool permissions set to Ask in a dialog (Settings › Permissions) — on Deny silently claude would refuse to leave plan mode",
+  "zh-CN": "暂不可用：plan 模式需要 claude 工具授权为「弹窗询问」（设置 › 权限）——在「静默拒绝」下 claude 会拒绝退出 plan 模式",
+  "zh-TW": "暫不可用：plan 模式需要 claude 工具授權為「彈窗詢問」（設定 › 權限）——在「靜默拒絕」下 claude 會拒絕退出 plan 模式",
 };
 const KEYS = [
   "claude.permissionModeLabel",
@@ -90,7 +90,7 @@ test("an open claude session shows the permission-mode control with default and 
 
 test("a fresh claude composer shows no permission-mode control, and every label exists in en, zh-CN and zh-TW", () => {
   assert.equal(typeof ClaudeLaunchPermissionModeMenu, "function");
-  assert.equal(control(composer({ ...base, choosing: true, onHarnessChange() {} })), null, "a fresh claude composer: Settings › Claude decides");
+  assert.equal(control(composer({ ...base, choosing: true, onHarnessChange() {} })), null, "a fresh claude composer: claude's own native default decides");
   assert.equal(control(composer({ ...base, choosing: true, harness: "pi" })), null, "pi");
   assert.equal(control(composer({ ...base, choosing: false, harness: "pi" })), null, "a pi session");
 

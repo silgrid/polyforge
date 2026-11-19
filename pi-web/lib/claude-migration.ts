@@ -15,8 +15,15 @@
 // safely: every write is idempotent, the old files are deleted only after the
 // fields landed, and a replay with the files gone but no marker only writes
 // the marker. The claude version gate (adapter.ts) applies to the native
-// writes: an unknown or undetected version defers the whole migration —
-// nothing is written, the old files stay, the next run retries.
+// writes: an unknown or undetected version defers those — the old files stay
+// and the next run retries.
+//
+// Deletion condition (the root AGENTS.md no-compat rule): this whole module
+// is transitional code — remove it, its route and instrumentation calls and
+// the claudeMigrated marker once every supported deployment has run it (the
+// next minor version's upgrade floor, i.e. no install this version replaces
+// can still hold the retired files), leaving lib/claude-preferences.ts as
+// the only reader of the preference fields.
 import { existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { claudeConfigDir } from "./claude-config-dir";

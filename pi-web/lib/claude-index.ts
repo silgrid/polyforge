@@ -48,11 +48,13 @@ export interface ClaudeSessionRecord {
    */
   agentLanguage: AgentLanguage;
   /**
-   * Settings › Claude's permission mode when the session was created:
+   * The permission mode the session's own set_permission_mode last set (default for
+   * records created after 85a4 removed the pi-web startup override; a pre-85a4 record
+   * captured the retired Settings › Claude's value at creation):
    * every launch passes it (default passes no flag). A pre-feature record reads as default.
    */
   launchPermissionMode: ClaudeLaunchPermissionMode;
-  /** Settings › Claude's hook switch at creation; a pre-feature record reads as off. */
+  /** The Pi Web hook preference at creation; a pre-feature record reads as off. */
   includeHookEvents: boolean;
   /**
    * The session's permission-mode override; absent = the global mode in

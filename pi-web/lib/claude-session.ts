@@ -1001,7 +1001,7 @@ export class ClaudeSession {
    * The in-session permission-mode switch: claude's own
    * `set_permission_mode` on the live child, not idle-guarded (claude takes it mid-turn).
    * Accepted: the index records it and every later child starts with it; it is the
-   * session's own, Settings › Claude is not changed. Refused by claude: its text comes
+   * session's own, claude's native default in ~/.claude is not changed. Refused by claude: its text comes
    * back and nothing changes. No live child (or one that exits before answering): the
    * index alone. Plan is refused before anything is sent unless this child was launched
    * with ask mode (r3, plan D11); with no live child, the next launch's mode decides.
