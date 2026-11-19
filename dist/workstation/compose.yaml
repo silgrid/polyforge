@@ -1,0 +1,83 @@
+# dist/workstation/compose.yaml — the workstation container's outer
+# parameter set (polyforge#161, 84-image). Everything here is the
+# measured minimal machine: exactly SYS_ADMIN + NET_ADMIN, the pinned
+# seccomp file, a private cgroup namespace, no privileged, no devices,
+# no docker socket, and a stop grace above `pf supervise`'s own.
+#
+# The two services are the same machine under the two boot modes
+# (settled Q7): `--no-aihub` (the default) and `--with-aihub`. Compose
+# activates profiles only when named — there is no implicit default —
+# so every start names one, one-to-one with the smoke script's flags:
+#
+#   docker compose --profile no-aihub up -d     # smoke.sh boot --no-aihub
+#   docker compose --profile aihub     up -d    # smoke.sh boot --with-aihub
+#
+# The service `command` carries only pf supervise's flags: the image's
+# entrypoint ends by exec'ing `pf supervise "$@"`, so this list is the
+# argument list of that call. Pi Web and the aihub server are versioned
+# components in the data volume (<data-dir>/release/current), never in
+# the image: `--with-aihub` additionally starts and watches `pf aihub`.
+name: workstation
+
+# the shared machine: one anchor, two profile variants. NOTE: compose
+# merges maps but APPENDS lists on `<<`, so a variant re-declaring a
+# list would inherit both — the two services below re-declare nothing
+# but command and profiles.
+x-workstation: &workstation
+  build:
+    context: ../..
+    dockerfile: dist/workstation/Containerfile
+  image: polyforge-workstation:local
+  # AC1's minimal set — set equality, nothing else may appear here.
+  cap_add: [CAP_SYS_ADMIN, CAP_NET_ADMIN]
+  security_opt:
+    # the pinned profile beside this file (compose reads it and hands
+    # the content to the engine; the smoke compares content hashes).
+    - seccomp:./seccomp.json
+    - apparmor=unconfined
+    - systempaths=unconfined
+  # the entrypoint initializes a private, writable cgroup namespace.
+  cgroup: private
+  # pf supervise's own stop grace defaults to 60s (the daemon's shutdown
+  # can take up to 30s of WIP pushes); the outer SIGKILL deadline must
+  # sit above it — the grace plus a margin.
+  stop_grace_period: 90s
+  volumes:
+    # the data dir: the release layout, the daemon's state, the
+    # workspaces; 84-components mounts its component volumes under
+    # <data-dir>/release/current.
+    - polyforge-data:/root/.local/share/polyforge
+    # podman's storage on its own volume: native overlay refuses
+    # overlay-on-overlay, so the graphroot must be a real filesystem.
+    - podman-storage:/var/lib/containers/storage
+  environment:
+    # AC3: the container's explicit list — never env_file, never the
+    # host's wholesale environment. The entrypoint's whitelist keeps
+    # these and any compose-added PI_* variable (minus PI_TEST_*).
+    PORT: "30141"
+    PI_WEB_HOSTNAME: "0.0.0.0"
+    PI_WEB_NO_OPEN: "1"
+    # required (settled Q5): without a password pi-web's proxy lets /api
+    # through and redirects /login, and AC1's 200/401 pair cannot hold.
+    PI_WEB_PASSWORD: "${PI_WEB_PASSWORD:?set PI_WEB_PASSWORD to a long, unique secret}"
+    PI_WEB_ALLOWED_HOSTS: "${PI_WEB_ALLOWED_HOSTS:-}"
+    PI_WEB_SKIP_VERSION_CHECK: "1"
+  ports:
+    # Pi Web, bound to the host's loopback by default; remote access is
+    # the https profile's reverse proxy or an operator override.
+    - "127.0.0.1:${WORKSTATION_WEB_PORT:-30141}:30141"
+
+services:
+  workstation:
+    <<: *workstation
+    profiles: [no-aihub]
+    container_name: workstation
+    command: ["--grace", "60s"]
+  workstation-aihub:
+    <<: *workstation
+    profiles: [aihub]
+    command: ["--grace", "60s", "--with-aihub"]
+
+volumes:
+  polyforge-data:
+  podman-storage:
