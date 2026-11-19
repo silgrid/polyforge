@@ -94,6 +94,9 @@ COPY pi-web ./pi-web/
 RUN /usr/local/bin/workstation-build-seed.sh "$SEED_VERSION" "$SEED_COMMIT" "$SEED_CHANNEL_REPO" "$PI_HARNESS_VERSION" "$CLAUDE_HARNESS_VERSION" "$TARGETARCH"
 
 FROM ubuntu:24.04 AS final
+# re-declared for the seed COPY below: a global ARG reaches a stage
+# only through its own ARG line.
+ARG SEED_VERSION
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
       podman crun catatonit git curl ca-certificates python3 \
