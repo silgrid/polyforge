@@ -45,7 +45,11 @@ test("user entries read back from the state file, masked, with claude's own plac
   const read = readClaudeMcpServers({ env });
   assert.equal(read.configPath, join(configDir, ".claude.json"));
   assert.equal(read.stateReadable, true);
-  const { demoUser, manualHttp } = byName(read.servers, "global");
+  const named = byName(read.servers, "global");
+  const demoUser = named["demo-user"];
+  const manualHttp = named["manual-http"];
+  assert.ok(demoUser, "the fixture's demo-user entry reads back");
+  assert.ok(manualHttp, "the fixture's manual-http entry reads back");
   // The fixture is claude's own output; these are its bytes, not the reader's.
   assert.equal(demoUser.name, "demo-user");
   assert.equal(demoUser.scope, "global");
@@ -117,7 +121,8 @@ test("project entries come from <cwd>/.mcp.json; a disabled name is marked, read
     mcpServers: { "demo-proj": { command: "node", args: ["s.js"] } },
   }, null, 2));
   const read = readClaudeMcpServers({ cwd: proj, env: { CLAUDE_CONFIG_DIR: configDir } });
-  const { demoProj } = byName(read.servers, "project");
+  const demoProj = byName(read.servers, "project")["demo-proj"];
+  assert.ok(demoProj, "the project entry reads back");
   assert.equal(demoProj.name, "demo-proj");
   assert.equal(demoProj.sourcePath, join(proj, ".mcp.json"));
   assert.equal(demoProj.disabled, true, "disabledMcpServers names it, so the row shows it read-only");
