@@ -1,4 +1,4 @@
-# carries: workflows/_shared/scripts/fast_checks.py, workflows/_shared/scripts/verify.py, workflows/_shared/scripts/pfstep/scoped_plan.py
+# carries: workflows/_shared/scripts/fast_checks.py, workflows/_shared/scripts/verify.py, workflows/_shared/scripts/facts.py, workflows/_shared/scripts/pfstep/scoped_plan.py, workflows/_shared/scripts/pfstep/analysis.py
 """The build close's scoped selection (polyforge#164): the one light-tier
 planning implementation shared by verification and the close
 (SharedPlanTest), the close's own run and its parity with verification's
@@ -500,6 +500,95 @@ class ExecutionTest(FastChecksCase):
         self.assertEqual([c for c in sel["commands"] if "reused" in c], [],
                          "a result file of another tree is not reuse evidence")
 
+
+
+@unittest.skipUnless(HAVE_GIT and HAVE_BASH, "git and bash are required")
+class AnalysisRecordTest(unittest.TestCase):
+    """AC3's machine part: the close's selection record lands in the change
+    analysis whole (a close-scoped run's details.selected, merged verbatim,
+    passes the close check), the engine's items are never subject to the
+    supplement cap, and the record shows its own selection sources — on
+    project-neutral fixtures (a repo named app, a nested pin file)."""
+
+    def setUp(self) -> None:
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        self.root = os.path.realpath(td.name)
+        self.out = os.path.join(self.root, "analysis-out.json")
+
+    def analysis_file(self, capsule: str, doc: Dict[str, Any]) -> str:
+        path = os.path.join(capsule, "artifacts", "build", "change-analysis.json")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(doc, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+        return path
+
+    def run_facts(self, capsule: str, path: str) -> Tuple[int, Dict[str, Any]]:
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+        import facts
+        from .verifyfix import step_env
+        so, se = io.StringIO(), io.StringIO()
+        with redirect_stdout(so), redirect_stderr(se):
+            code = facts.main(["analysis", "--capsule", capsule, "--analysis", path,
+                               "--unit-timeout", "1m", "--json", "--out", self.out], step_env())
+        with open(self.out, encoding="utf-8") as f:
+            return code, json.load(f)
+
+    def closed_repo(self) -> Tuple[Fixture, str]:
+        """A repo whose close-scoped selection is green: the change touches
+        the pin file's neighbourhood, the pinned test still passes, and the
+        light selection runs it."""
+        fx = Fixture(self.root, {"app": {"pin/note.txt": "the answer is 42\n"}})
+        fx.commit_in_repo("app", {"pin/note.txt": "the answer is 42\n", "lib/x.py": "x = 2\n"})
+        eng = light_engine(
+            self.root,
+            report("full", cmd_of("gate-1", "fast", "echo gate-ok")),
+            report("scoped", cmd_of("gate-1", "fast", "echo gate-ok"),
+                   cmd_of("pin", "scoped", "test \"$(cat pin/note.txt)\" = \"the answer is 42\"")))
+        return fx, eng
+
+    def test_the_closes_record_lands_in_the_analysis_whole(self) -> None:
+        fx, eng = self.closed_repo()
+        code, res = run_close(fx.capsule, "app", eng, os.path.join(fx.capsule, "close.json"))
+        self.assertEqual(code, 0, res.get("summary"))
+        sel = res["details"]["selected"]["app"]
+        self.assertEqual(sel["status"], "green")
+        # the record states its own identity and every command its source
+        self.assertTrue(sel["engine"], sel)
+        self.assertEqual(sel["default_branch"], "main")
+        for c in sel["commands"]:
+            self.assertTrue(c["source"], c)
+        # merged verbatim, the close check passes on it
+        path = self.analysis_file(fx.capsule, {"changed": ["the pin file"], "uncovered": {"app": []},
+                                               "tests": [], "selected": {"app": sel}})
+        code, fres = self.run_facts(fx.capsule, path)
+        self.assertEqual(code, 0, fres.get("summary"))
+        entries = (fres.get("details") or {}).get("selected") or []
+        self.assertEqual([(e["repo"], e["status"]) for e in entries], [("app", "pass")])
+
+    def test_engine_items_survive_the_supplement_cap(self) -> None:
+        """The cap cuts the tests[] tail only: the engine's selected items
+        are the machine's own record, never a supplement, so no cap drops
+        one (the ticket's AC3)."""
+        fx, eng = self.closed_repo()
+        code, res = run_close(fx.capsule, "app", eng, os.path.join(fx.capsule, "close.json"))
+        self.assertEqual(code, 0, res.get("summary"))
+        sel = res["details"]["selected"]["app"]
+        tests = [{"id": "a1", "repo": "app", "file": "pin/note.txt", "cwd": ".",
+                  "argv": ["bash", "-c", "echo ANALYSIS-PASS"], "marker": "^ANALYSIS-PASS$",
+                  "why": "pins the pinned text"},
+                 {"id": "a2", "repo": "app", "file": "pin/note.txt", "cwd": ".",
+                  "argv": ["bash", "-c", "echo ANALYSIS-PASS"], "marker": "^ANALYSIS-PASS$",
+                  "why": "pins the pinned text"}]
+        path = self.analysis_file(fx.capsule, {"supplement_limit": 1, "changed": [], "uncovered": {"app": []},
+                                               "tests": tests, "selected": {"app": sel}})
+        code, fres = self.run_facts(fx.capsule, path)
+        self.assertEqual(code, 0, fres.get("summary"))
+        d = fres.get("details") or {}
+        self.assertEqual([c["id"] for c in d.get("cut") or []], ["a2"], "the cap cuts the tests tail only")
+        self.assertEqual([e["status"] for e in d.get("selected") or []], ["pass"])
 
 
 if __name__ == "__main__":

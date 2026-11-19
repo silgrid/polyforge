@@ -17,7 +17,7 @@ import tempfile
 import unittest
 from typing import Any, Dict, List, Optional, Tuple
 
-from .test_analysis_preflight import analysis_file, entry, run_facts
+from .test_analysis_preflight import analysis_file, entry, run_facts, selected_record
 from .verifyfix import HAVE_BASH, HAVE_GIT, Fixture, cmd_of, fake_engine, report, run_verify
 
 # one supplement's run: a name that exists passes, the double cd fails
@@ -45,9 +45,13 @@ class AnalysisParityTest(unittest.TestCase):
         self.fx, self.eng = world(self.root)
         self.out = os.path.join(self.fx.capsule, "artifacts", "facts", "analysis.json")
 
-    def both(self, doc: Dict[str, Any]) -> Tuple[int, Dict[str, Any], int, Optional[Any]]:
+    def both(self, doc: Dict[str, Any], selected: bool = True) -> Tuple[int, Dict[str, Any], int, Optional[Any]]:
         """The same analysis through both callers: (facts exit, facts
-        result, verify exit, verify result doc)."""
+        result, verify exit, verify result doc). A doc without its own
+        selected section carries the default green record of the touched
+        repo (the new section's own parity is the tests below)."""
+        if selected and "selected" not in doc:
+            doc = dict(doc, selected={"app": selected_record(self.fx)})
         path = analysis_file(self.fx, doc)
         fcode, fres = run_facts(self.fx.capsule, path, self.out)
         r = run_verify(self.fx.capsule, self.eng, "--analysis", path)
@@ -144,6 +148,39 @@ class AnalysisParityTest(unittest.TestCase):
         self.assertEqual(fcode, 2)
         self.assertIn("is unusable", fres.get("summary", ""), fres)
         self.assertEqual(r.exit, 2, "verification's own treatment of the same file")
+
+    # -- the machine selection records' parity (polyforge#164)
+
+    def test_a_missing_selected_record_is_red_on_both_sides(self) -> None:
+        fcode, fres, vcode, vdoc = self.both({"tests": []}, selected=False)
+        self.assertEqual((fcode, vcode), (1, 1))
+        sel = ((fres.get("details") or {}).get("selected") or [])[0]
+        self.assertEqual(sel["status"], "fail")
+        self.assertIn("carries no selected record", sel["problem"])
+        vchecks = self.verify_checks(vdoc)
+        self.assertEqual(vchecks["app:selected"]["status"], "fail", vchecks["app:selected"])
+        self.assertIn("carries no selected record", vchecks["app:selected"]["detail"])
+        self.assertIn(sel["problem"], vchecks["app:selected"]["detail"],
+                      "one implementation: the close check's problem text sits verbatim in the gate's detail")
+
+    def test_a_stale_selected_head_is_red_on_both_sides(self) -> None:
+        doc = {"tests": [], "selected": {"app": selected_record(self.fx, head="0" * 40)}}
+        fcode, fres, vcode, vdoc = self.both(doc)
+        self.assertEqual((fcode, vcode), (1, 1))
+        sel = ((fres.get("details") or {}).get("selected") or [])[0]
+        self.assertEqual(sel["status"], "fail")
+        self.assertIn("is not the tree it is judged at", sel["problem"])
+        vchecks = self.verify_checks(vdoc)
+        self.assertEqual(vchecks["app:selected"]["status"], "fail")
+        self.assertIn("is not the tree it is judged at", vchecks["app:selected"]["detail"])
+
+    def test_a_green_selected_record_passes_on_both_sides(self) -> None:
+        fcode, fres, vcode, vdoc = self.both({"tests": []})
+        self.assertEqual((fcode, vcode), (0, 0))
+        sel = ((fres.get("details") or {}).get("selected") or [])[0]
+        self.assertEqual(sel["status"], "pass")
+        vchecks = self.verify_checks(vdoc)
+        self.assertEqual(vchecks["app:selected"]["status"], "pass", vchecks["app:selected"])
 
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@ import tempfile
 import unittest
 from typing import Any, Dict, List, Optional, Tuple
 
+from .test_analysis_preflight import selected_record
 from .verifyfix import (
     HAVE_BASH,
     HAVE_GIT,
@@ -54,7 +55,12 @@ def entry(
     return e
 
 
-def analysis_file(fixture: Fixture, doc: Dict[str, Any]) -> str:
+def analysis_file(fixture: Fixture, doc: Dict[str, Any], selected: bool = True) -> str:
+    """The analysis file of doc under the fixture's capsule; a doc without
+    its own selected section carries the default green record of the
+    touched repo (the new section's own checks are the tests below)."""
+    if selected and "selected" not in doc:
+        doc = dict(doc, selected={"app": selected_record(fixture)})
     path = os.path.join(fixture.capsule, "artifacts", "build", "change-analysis.json")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
@@ -262,6 +268,39 @@ class AnalysisTest(unittest.TestCase):
             with self.subTest(name):
                 r = self.run_analysis(fx, eng, path)
                 self.assertEqual(r.exit, 2, "%s: %s" % (name, r.result.get("summary")))
+
+    # -- the machine selection records (polyforge#164): the same shared
+    # validator the close check runs, judged against the tree this run
+    # verifies
+
+    def test_a_touched_repo_without_a_selected_record_fails_its_check(self) -> None:
+        fx, eng = analysis_fixture(self.root)
+        path = analysis_file(fx, {"tests": []}, selected=False)
+        r = self.run_analysis(fx, eng, path)
+        self.assertEqual(r.exit, 1, r.result.get("summary"))
+        ck = self.doc(r).get("checks", [])
+        sel = [c for c in ck if c["name"] == "app:selected"]
+        self.assertEqual(len(sel), 1, ck)
+        self.assertEqual(sel[0]["status"], "fail", sel[0])
+        self.assertIn("carries no selected record", sel[0].get("detail", ""))
+
+    def test_a_stale_selected_head_fails_its_check(self) -> None:
+        fx, eng = analysis_fixture(self.root)
+        path = analysis_file(fx, {"tests": [], "selected": {"app": selected_record(fx, head="1" * 40)}})
+        r = self.run_analysis(fx, eng, path)
+        self.assertEqual(r.exit, 1, r.result.get("summary"))
+        sel = [c for c in self.doc(r).get("checks", []) if c["name"] == "app:selected"]
+        self.assertEqual(sel[0]["status"], "fail")
+        self.assertIn("is not the tree it is judged at", sel[0].get("detail", ""))
+
+    def test_a_green_selected_record_passes_its_check(self) -> None:
+        fx, eng = analysis_fixture(self.root)
+        path = analysis_file(fx, {"tests": []})
+        r = self.run_analysis(fx, eng, path)
+        self.assertEqual(r.exit, 0, r.result.get("summary"))
+        sel = [c for c in self.doc(r).get("checks", []) if c["name"] == "app:selected"]
+        self.assertEqual(len(sel), 1)
+        self.assertEqual(sel[0]["status"], "pass", sel[0])
 
 
 if __name__ == "__main__":
