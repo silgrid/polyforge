@@ -361,6 +361,28 @@ type HarnessStatus struct {
 	HarnessDirs     map[string]HarnessDir `json:"harness_dirs,omitempty"`
 	SettingsWarning string                `json:"settings_warning,omitempty"`
 	BackgroundTasks string                `json:"background_tasks,omitempty"`
+	// ConfigRoot is this harness's step config dir of THIS Cell (pi: the
+	// step-agent dir; claude: the claude-config dir) — the account page's
+	// 配置根 (polyforge#142, 85a2 AC2). The daemon fills it; a value
+	// never appears.
+	ConfigRoot string `json:"config_root,omitempty"`
+	// Credential is pi's step-agent auth.json fact ("set"/"unset");
+	// claude's credential facts stay SettingsEnv (the env block).
+	Credential string `json:"credential,omitempty"`
+	// Source is the Cell's model-credential source directory (the
+	// operator agent dir the step-agent dir is synced from; a named
+	// Cell's declared directory, or the default Cell's for shared-default).
+	Source string `json:"source,omitempty"`
+	// SourceKind is the source's kind: "operator" (the default Cell),
+	// "shared-default", "directory" (a named Cell's declared absolute
+	// dir) or "none" (no declaration — the Cell's execution plane is
+	// closed).
+	SourceKind string `json:"source_kind,omitempty"`
+	// CredentialsFile is claude's residual OAuth login fact of the Cell's
+	// claude-config dir ("present"/"absent"): a login the daemon still
+	// uses but the account page does not guide (85a2, the 2026-11-19 Q3
+	// revision). The file's contents are never read here.
+	CredentialsFile string `json:"credentials_file,omitempty"`
 }
 
 // HarnessDir is one harness dir's existence fact under the harness root

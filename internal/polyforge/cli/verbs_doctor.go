@@ -67,8 +67,11 @@ func (c doctorCheck) row() (string, string) { return c.Status, c.Detail }
 // never marshaled) carries the named Cells' section metadata for the
 // human renderer.
 type doctorReport struct {
-	OK       bool          `json:"ok"`
-	Checks   []doctorCheck `json:"checks"`
+	OK     bool          `json:"ok"`
+	Checks []doctorCheck `json:"checks"`
+	// Cells is the per-Cell structured harnesses facts (polyforge#142,
+	// 85a2 AC2): additive, JSON-only — the human renderer never prints it.
+	Cells    map[string]doctorCellHarnesses `json:"cells,omitempty"`
 	sections []doctorSection
 }
 
@@ -365,15 +368,16 @@ var cmdDoctor = &Command{
 		}
 		checks := harnessDisplayChecks(boolFlag(fs, "fix-install-layout"), boolFlag(fs, "prune-chat-state"))
 		var sections []doctorSection
+		var cells map[string]doctorCellHarnesses
 		if !boolFlag(fs, "harness") {
 			var ladder []doctorCheck
-			ladder, sections = runDoctorChecks(ctx, boolFlag(fs, "prune-scratch"), boolFlag(fs, "prune-capsules"), boolFlag(fs, "prune-rebuildables"), boolFlag(fs, "fix-harness-prompts"))
+			ladder, sections, cells = runDoctorChecks(ctx, boolFlag(fs, "prune-scratch"), boolFlag(fs, "prune-capsules"), boolFlag(fs, "prune-rebuildables"), boolFlag(fs, "fix-harness-prompts"))
 			checks = append(ladder, checks...)
 			for i := range sections {
 				checks = append(checks, sections[i].Checks...)
 			}
 		}
-		rep := doctorReport{Checks: checks, sections: sections}
+		rep := doctorReport{Checks: checks, sections: sections, Cells: cells}
 		fails := countFails(rep)
 		rep.OK = fails == 0
 		if ctx.JSON {
@@ -427,14 +431,14 @@ func countFails(rep doctorReport) int {
 // pruneCapsules does the same for the capsule retention check;
 // pruneRebuildables does the same for the rebuildable artifacts check;
 // fixPrompts lets the harness diagram guidance check append its block.
-func runDoctorChecks(ctx *Context, pruneScratch, pruneCapsules, pruneRebuildables, fixPrompts bool) ([]doctorCheck, []doctorSection) {
+func runDoctorChecks(ctx *Context, pruneScratch, pruneCapsules, pruneRebuildables, fixPrompts bool) ([]doctorCheck, []doctorSection, map[string]doctorCellHarnesses) {
 	cfg, err := LoadConfig(ctx.ConfigPath)
 	if err != nil {
 		checks := []doctorCheck{{Name: docChConfig, Status: "fail", Detail: err.Error() + " — see the install docs for the migration steps"}}
 		for _, d := range doctorChecks {
 			checks = append(checks, doctorCheck{Name: d.name, Status: "skip", Detail: "config-dependent check not run: the config could not be loaded"})
 		}
-		return checks, nil
+		return checks, nil, nil
 	}
 	// the named Cells come from the disk set (LoadHostSet: no environment
 	// overlay — a Cell's connection lives in its file), so the doctor
@@ -447,7 +451,7 @@ func runDoctorChecks(ctx *Context, pruneScratch, pruneCapsules, pruneRebuildable
 		for _, d := range doctorChecks {
 			checks = append(checks, doctorCheck{Name: d.name, Status: "skip", Detail: "config-dependent check not run: the config could not be loaded"})
 		}
-		return checks, nil
+		return checks, nil, nil
 	}
 	where := ctx.ConfigPath
 	if where == "" {
@@ -554,7 +558,10 @@ func runDoctorChecks(ctx *Context, pruneScratch, pruneCapsules, pruneRebuildable
 		}
 		sections = append(sections, sec)
 	}
-	return checks, sections
+	// the per-Cell structured harnesses facts (85a2 AC2): every Cell is
+	// probed the same way, claude steps or none, the daemon's own view
+	// through that Cell's profile header
+	return checks, sections, doctorCellsHarnessFacts(cfg, set)
 }
 
 // mappingCheck runs the SHARED mapping/workspace validator (the same one

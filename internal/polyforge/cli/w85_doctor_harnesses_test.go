@@ -171,8 +171,10 @@ func w85HostFixture(t *testing.T) (env map[string]string, gammaSource string) {
 		"default": statusBody("default", operatorSource, "operator", "set", "set", "absent"),
 		// a shared-default Cell shares the default Cell's source
 		"beta": statusBody("beta", operatorSource, "shared-default", "unset", "unset", "present"),
-		// an independent-source Cell names its own directory
-		"gamma": statusBody("gamma", gammaSource, "directory", "set", "unset", "absent"),
+		// an independent-source Cell names its own directory; its
+		// execution plane is closed, and the reason is relayed whole
+		"gamma": strings.TrimSuffix(statusBody("gamma", gammaSource, "directory", "set", "unset", "absent"), `}`) +
+			`,"execution_disabled":"no workspace configured — add a [workspace.\"<path>\"] mapping to this Cell's file and reload"}`,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
@@ -275,18 +277,24 @@ func TestW85DoctorHarnessesCells(t *testing.T) {
 	if w85Str(t, betaPi["credential"]) != "unset" || w85Str(t, betaPi["source_kind"]) != "shared-default" {
 		t.Fatalf("beta (shared-default) pi facts: %v", betaPi)
 	}
-	if _, ok := beta["execution_disabled"]; !ok {
-		t.Fatal("the beta entry carries no execution_disabled key")
+	// an open Cell's execution_disabled is empty, so the additive key is
+	// absent (never a faked empty reason)
+	if v, ok := beta["execution_disabled"]; ok && w85Str(t, v) != "" {
+		t.Fatalf("the open beta entry carries an execution_disabled reason: %q", v)
 	}
 	betaClaude := w85CellField(t, w85CellField(t, beta, "harnesses"), "claude")
 	if w85Str(t, betaClaude["credentials_file"]) != "present" {
 		t.Fatalf("beta claude credentials_file: %v", betaClaude["credentials_file"])
 	}
-	// an independent-source Cell names its own directory
+	// an independent-source Cell names its own directory, and its
+	// execution-disabled reason is relayed whole
 	gamma := w85Cell(t, doc, "gamma")
 	gammaPi := w85CellField(t, w85CellField(t, gamma, "harnesses"), "pi")
 	if w85Str(t, gammaPi["source"]) != gammaSource || w85Str(t, gammaPi["source_kind"]) != "directory" {
 		t.Fatalf("gamma (directory source) pi facts: %v", gammaPi)
+	}
+	if got := w85Str(t, gamma["execution_disabled"]); !strings.Contains(got, "no workspace configured") {
+		t.Fatalf("the disabled gamma entry's execution_disabled: %q", got)
 	}
 	// an invalid Cell: no faked facts, the probe error says why
 	delta := w85Cell(t, doc, "delta")
