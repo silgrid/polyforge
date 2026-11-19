@@ -24,7 +24,9 @@ import (
 // answers its path.
 func installSeed(t *testing.T, spec seedSpec) string {
 	t.Helper()
-	return writeVersionDir(t, filepath.Join(t.TempDir(), "seed"), spec)
+	dir := filepath.Join(t.TempDir(), "seed")
+	writeVersionDir(t, dir, spec)
+	return dir
 }
 
 // rootState answers a fingerprint of the root's pointers: where
