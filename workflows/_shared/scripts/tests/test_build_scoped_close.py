@@ -74,17 +74,19 @@ class SharedPlanTest(unittest.TestCase):
         """A scoped report contributes its fast gates plus its scoped
         selection, never its full tail; the ask sees the repository's own
         directory, its record name and the base."""
+        repo = os.path.join(self.root, "app")
+        os.makedirs(repo, exist_ok=True)
         asked: List[Tuple[str, str, str]] = []
         rep = report("scoped", cmd_of("fast-1", "fast", "true"),
                      cmd_of("fast-2", "fast", "true"),
                      cmd_of("scoped-1", "scoped", "echo s"),
                      cmd_of("full-1", "full", "echo never"))
-        plan = scoped_plan.plan_light(self.root, "repos/app", "b0", ask_of({"app": rep}, asked))
+        plan = scoped_plan.plan_light(repo, "repos/app", "b0", ask_of({"app": rep}, asked))
         self.assertEqual(plan.status, scoped_plan.PLAN_PLANNED, plan.reason)
         self.assertEqual(plan.mode, "light")
         self.assertEqual([c.name for c in plan.commands], ["fast-1", "fast-2", "scoped-1"])
         self.assertEqual([c.phase for c in plan.commands], ["fast", "fast", "scoped"])
-        self.assertEqual(asked, [(self.root, "repos/app", "b0")])
+        self.assertEqual(asked, [(repo, "repos/app", "b0")])
 
     def test_plan_light_wraps_nested_roots(self) -> None:
         """Every nested engine root the changed paths reach is a
@@ -117,14 +119,17 @@ class SharedPlanTest(unittest.TestCase):
         """A report that answers full makes the plan full — its fast gates
         plus its full tail, the scoped selection gone — and the reason is
         its own fallback diagnostic; no nested root is asked."""
+        repo = os.path.join(self.root, "app")
+        os.makedirs(repo, exist_ok=True)
         asked: List[Tuple[str, str, str]] = []
         rep = report("full", cmd_of("fast-1", "fast", "true"), cmd_of("full-1", "full", "echo f"),
                      diagnostics=["go.mod changed: falling back to the full tier"])
-        plan = scoped_plan.plan_light(self.root, "repos/app", "b0", ask_of({"app": rep}, asked))
+        plan = scoped_plan.plan_light(repo, "repos/app", "b0", ask_of({"app": rep}, asked))
         self.assertEqual(plan.status, scoped_plan.PLAN_PLANNED, plan.reason)
         self.assertEqual(plan.mode, "full")
         self.assertEqual([c.name for c in plan.commands], ["fast-1", "full-1"])
-        self.assertEqual(scoped_plan.fallback_reasons(rep), ["go.mod changed: falling back to the full tier"])
+        decoded = decode_report(json.dumps(rep).encode())
+        self.assertEqual(scoped_plan.fallback_reasons(decoded), ["go.mod changed: falling back to the full tier"])
         self.assertEqual(len(asked), 1, "a full root answer asks no nested root")
 
     def test_plan_light_names_a_nested_full_fallback(self) -> None:
@@ -154,11 +159,13 @@ class SharedPlanTest(unittest.TestCase):
         """An engine that answers nothing leaves the repo unplanned with
         its why; a report that plans no command is empty, its reason
         naming the stack and the conf."""
-        plan = scoped_plan.plan_light(self.root, "repos/app", "b0", ask_of({}, []))
+        repo = os.path.join(self.root, "app")
+        os.makedirs(repo, exist_ok=True)
+        plan = scoped_plan.plan_light(repo, "repos/app", "b0", ask_of({}, []))
         self.assertEqual(plan.status, scoped_plan.PLAN_ENGINE_FAILED)
         self.assertEqual(plan.reason, "the engine exited 3: no report")
         rep = report("scoped")
-        plan = scoped_plan.plan_light(self.root, "repos/app", "b0", ask_of({"app": rep}, []))
+        plan = scoped_plan.plan_light(repo, "repos/app", "b0", ask_of({"app": rep}, []))
         self.assertEqual(plan.status, scoped_plan.PLAN_EMPTY)
         self.assertEqual(plan.reason, "the engine planned no command (stack \"none\", conf present)")
 

@@ -129,14 +129,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pfstep  # noqa: E402
 from pfstep import container, duration, git, gostr, jsonout, result, runner, stepenv, tmpdir  # noqa: E402
 from pfstep import progress  # noqa: E402
+from pfstep import scoped_plan  # noqa: E402
+from pfstep.scoped_plan import append_new, base_branch_of, engine_argv, fallback_reasons, plan_light  # noqa: E402
 from pfstep import targetbranch  # noqa: E402
 from pfstep.analysis import Analysis, AnalysisDecl, read_analysis, static_problem  # noqa: E402
 from pfstep.carries import file_carries, glob_match  # noqa: E402
 from pfstep.completion import completion_proof, harness_command, read_go_harness  # noqa: E402
 from pfstep.deadline import default_deadline_for  # noqa: E402
 from pfstep.engine import TIER_FULL, TIER_LIGHT, EngineCommand, EngineReport, ReportError, choose, decode_report  # noqa: E402
-from pfstep.engine import default_engine, nested_roots, reached_roots  # noqa: E402
-from pfstep.engine import argv_of as engine_argv_of  # noqa: E402
+from pfstep.engine import default_engine  # noqa: E402
 from pfstep.flaky import RerunRun, rerun_flaky  # noqa: E402
 from pfstep.junit import ReportRead, merge_reported, read_declared_report, snapshot_report  # noqa: E402
 from pfstep.preexisting import PRESENT, BaseObservation, classify_base, short, unit_presence  # noqa: E402
@@ -187,9 +188,13 @@ KIND_UNIT_RUN = "unit_run"
 ORIGIN_ANALYSIS = "analysis"
 KIND_ANALYSIS = "analysis"
 
-PLAN_PLANNED = "planned"
-PLAN_EMPTY = "empty"
-PLAN_ENGINE_FAILED = "engine-failed"
+# the plan's statuses, the fallback reasons and the measured branch: the
+# one shared planning implementation's (pfstep/scoped_plan.py), the words
+# verify.py's own records keep (polyforge#164)
+PLAN_PLANNED = scoped_plan.PLAN_PLANNED
+PLAN_EMPTY = scoped_plan.PLAN_EMPTY
+PLAN_ENGINE_FAILED = scoped_plan.PLAN_ENGINE_FAILED
+NO_FALLBACK_DIAGNOSTIC = scoped_plan.NO_FALLBACK_DIAGNOSTIC
 
 MERGE_NONE = "none"
 BASELINE_MERGE_BASE = "merge-base"
@@ -685,9 +690,10 @@ class Verification:
         under the light tier, the full one under the full tier): (report,
         the invocation, why there is none)."""
         engine = rr.box.engine if rr.box is not None else self.engine
-        argv = engine_argv_of(engine) + ["--json", "--light" if light else "--full"]
-        if base:
-            argv += ["--base", base]
+        # the invocation itself is the one shared planning implementation's
+        # (pfstep/scoped_plan.py: engine_argv), so verification's light
+        # request and the build close's ask the engine exactly alike
+        argv = engine_argv(engine, base, light=light)
         ref = " ".join(argv)
         er = self.exec(rr, argv, directory, cwd, GIT_TIMEOUT, boxed=True, capture=True)
         if er.error:
@@ -721,61 +727,15 @@ class Verification:
                 return
             p.status, p.commands = PLAN_PLANNED, chosen
             return
-        rep, ref, why = self.ask_engine(rr, rr.dir, rr.cwd_rel, base)
-        p = RepoPlan(engine_ref=ref, report=rep)
+        # the light plan itself is the one shared planning
+        # implementation's (pfstep/scoped_plan.py: plan_light) — the build
+        # close's scoped selection plans through it too, so the two cannot
+        # drift (tests/test_build_scoped_close.py's SelectionParityTest)
+        lp = plan_light(rr.dir, rr.cwd_rel, base, lambda d, rel, b: self.ask_engine(rr, d, rel, b))
+        p = RepoPlan(status=lp.status, reason=lp.reason, mode=lp.mode, commands=lp.commands,
+                     engine_ref=lp.engine_ref, report=lp.report, base_setup=lp.base_setup,
+                     nested_full=lp.nested_full)
         rr.plan = p
-        if rep is None:
-            p.status, p.reason = PLAN_ENGINE_FAILED, why
-            return
-        chosen, mode = choose(rep, TIER_LIGHT)
-        p.mode = mode
-        p.base_setup = append_new([], rep.base_setup)
-        if mode == TIER_LIGHT:
-            nested, setup, refs, nested_full, why = self.plan_nested(rr, base, rep.paths or [])
-            if why:
-                p.status, p.reason = PLAN_ENGINE_FAILED, why
-                return
-            chosen += nested
-            p.base_setup = append_new(p.base_setup, setup)
-            p.engine_ref += "".join("; " + ref for ref in refs)
-            p.nested_full = nested_full
-        if not chosen:
-            p.status = PLAN_EMPTY
-            p.reason = "the engine planned no command (stack %s, conf %s)" % (gostr.quote(rep.stack), rep.conf)
-            return
-        p.status, p.commands = PLAN_PLANNED, chosen
-
-    def plan_nested(
-        self, rr: RepoRun, base: str, paths: List[str]
-    ) -> Tuple[List[EngineCommand], List[str], List[str], List[str], str]:
-        """The nested engine roots the changed paths reach (each path owned
-        by its deepest root): their commands behind ``cd <root> &&`` (named
-        ``<root>/<name>``), their base setup likewise, the engine
-        invocations, and — for a nested root whose own light report fell
-        back to the full tier, whose full plan then runs — why the run is
-        full; the last answer is why a nested engine failed ("" = none did).
-        """
-        cmds: List[EngineCommand] = []
-        setup: List[str] = []
-        refs: List[str] = []
-        nested_full: List[str] = []
-        for d in reached_roots(nested_roots(rr.dir), paths):
-            rep, ref, why = self.ask_engine(rr, os.path.join(rr.dir, d), rr.cwd_rel + "/" + d, base)
-            if rep is None:
-                return [], [], [], [], "the nested engine root %s: %s" % (d, why)
-            refs.append(ref + " (in " + d + ")")
-            chosen, mode = choose(rep, TIER_LIGHT)
-            if mode != TIER_LIGHT:
-                nested_full.extend(nested_full_reasons(d, rep))
-            cd = "cd " + shell_quote(d) + " && "
-            for c in chosen:
-                cmds.append(EngineCommand(
-                    name=d + "/" + c.name, phase=c.phase, cmd=cd + c.cmd, requires_env=c.requires_env,
-                    requires_cmd=c.requires_cmd, timeout=c.timeout, report=c.report,
-                    rerun=cd + c.rerun if c.rerun else "", source=c.source, dir=d, inner=c.cmd,
-                ))
-            setup += [cd + s for s in rep.base_setup]
-        return cmds, setup, refs, nested_full, ""
 
     # -- the bar
 
@@ -1459,77 +1419,6 @@ def check(name: str, status: str, detail: str = "") -> Dict[str, Any]:
 def omit_empty(d: Dict[str, Any], keep: Sequence[str] = ()) -> Dict[str, Any]:
     """d without its empty values (Go's omitempty), the keep keys kept."""
     return {k: v for k, v in d.items() if k in keep or (v is not None and v != "" and v is not False and v != [] and v != {})}
-
-
-def append_new(lst: List[str], vals: Sequence[str]) -> List[str]:
-    out = list(lst)
-    for v in vals:
-        if v not in out:
-            out.append(v)
-    return out
-
-
-def resolve_default(repo_dir: str) -> str:
-    """The origin default branch name: what refs/remotes/origin/HEAD names,
-    else main, else master ("" = none)."""
-    c = git.run(repo_dir, "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD", timeout=GIT_TIMEOUT)
-    if c.exit_code == 0:
-        b = gostr.trim_space(c.stdout.decode("utf-8", "replace"))
-        if b.startswith("origin/"):
-            b = b[len("origin/"):]
-        if b:
-            return b
-    for b in ("main", "master"):
-        if git.run(repo_dir, "rev-parse", "-q", "--verify", "refs/remotes/origin/" + b, timeout=GIT_TIMEOUT).exit_code == 0:
-            return b
-    return ""
-
-
-def base_branch_of(capsule: str, repo_dir: str) -> Tuple[str, str]:
-    """The branch the change is measured against: the capsule's fixed
-    target branch when it carries one (runtime-state/target-branch.json,
-    read strictly, the origin ref checked to exist), else the origin
-    default branch; ("", why) when neither can be named. The branch lands
-    in the record's default_branch field, which keeps its name and carries
-    either branch (the diff base and the baseline follow it)."""
-    try:
-        target = targetbranch.read(capsule)
-    except targetbranch.TargetBranchError as err:
-        return "", str(err)
-    if target:
-        if git.run(repo_dir, "rev-parse", "-q", "--verify", "refs/remotes/origin/" + target,
-                   timeout=GIT_TIMEOUT).exit_code != 0:
-            return "", ("origin has no branch %s — the capsule's fixed target branch is missing on origin; never a"
-                        " fall-back to the default branch" % target)
-        return target, ""
-    default = resolve_default(repo_dir)
-    if default == "":
-        return "", ("the origin default branch is unresolvable (no refs/remotes/origin/HEAD, origin/main or"
-                    " origin/master in the clone): nothing to measure the change against")
-    return default, ""
-
-
-NO_FALLBACK_DIAGNOSTIC = "the engine answered mode full with no fallback diagnostic (a forced-full path or a full-only declaration)"
-
-# The phrase every engine diagnostic of a full-tier fallback carries; the
-# engine's informational --light diagnostics are not reasons.
-FALLBACK_PHRASE = "falling back to the full tier"
-
-
-def fallback_reasons(rep: EngineReport) -> List[str]:
-    """Why one engine report is full, one entry per reason: its own
-    full-tier fallback diagnostics, else the bare fact."""
-    why = [d for d in (rep.diagnostics or []) if FALLBACK_PHRASE in d]
-    return why or [NO_FALLBACK_DIAGNOSTIC]
-
-
-def nested_full_reasons(root: str, rep: EngineReport) -> List[str]:
-    """Why a nested engine root's light report made the run full."""
-    why = [d for d in (rep.diagnostics or []) if FALLBACK_PHRASE in d]
-    if not why:
-        return ["the nested engine root %s answered mode full with no fallback diagnostic (a forced-full path or a"
-                " full-only declaration)" % root]
-    return ["the nested engine root %s fell back to the full tier: %s" % (root, d) for d in why]
 
 
 def full_tier_reasons(p: RepoPlan) -> List[str]:
