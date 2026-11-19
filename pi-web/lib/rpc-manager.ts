@@ -4,6 +4,7 @@ import { KeybindingsManager as TuiKeybindingsManager, TUI_KEYBINDINGS } from "@e
 import { randomUUID } from "crypto";
 import { existsSync, realpathSync, writeFileSync } from "fs";
 import { resolve } from "path";
+import { join } from "path";
 import { isDeepStrictEqual } from "util";
 import { validateAgentImages } from "./image-attachments";
 import { cwdMissingError } from "./missing-cwd";
@@ -79,8 +80,14 @@ import {
 } from "./session-tool-selection";
 import {
   BackgroundTasksBridge,
-  createBackgroundTasksBridgeExtension,
 } from "./background-tasks-bridge";
+import {
+  createBgTaskController,
+  defaultSpawnTask,
+  type BgTaskController,
+} from "./bg-runtime";
+import { createBgTasksExtension } from "./bg-tools";
+import { bgTaskClientSnapshot, PI_RESTART_REFUSED_CODE } from "./bg-protocol";
 
 // ============================================================================
 // Types
@@ -496,6 +503,11 @@ export class AgentSessionWrapper {
   /** Server-side background-tasks bridge for this session (null for chat-only). */
   getBackgroundTasks(): BackgroundTasksBridge | null {
     return this._alive ? this.backgroundTasks : null;
+  }
+
+  /** One client event of the built-in background tasks (BG_RUNTIME's sink): SSE-identical to the bridge's. */
+  emitBackgroundEvent(event: AgentEvent): void {
+    this.emit(event);
   }
 
   get sessionId(): string {
@@ -1091,7 +1103,7 @@ export class AgentSessionWrapper {
       this.idleDeadlineAt = null;
       // Running background tasks keep the wrapper alive: killing the session
       // would kill the tasks (pi-background-tasks kills on session_shutdown).
-      if (!this.forceShutdownOnIdle && (this.isRunning() || (this.backgroundTasks?.hasRunningTasks() ?? false) || hasActiveSessionLivenessProvider({
+      if (!this.forceShutdownOnIdle && (this.isRunning() || (this.backgroundTasks?.hasRunningTasks() ?? false) || hasUnsettledSubagentRun(this.sessionId) || hasActiveSessionLivenessProvider({
         sessionId: this.sessionId,
         sessionFile: this.sessionFile || undefined,
       }))) {
@@ -1578,6 +1590,10 @@ export class AgentSessionWrapper {
         if (this.isSessionRunningForReplacement()) {
           throw new Error("Cannot clone while the session is running");
         }
+        {
+          const refusal = bgWorkRefusal(this.sessionId, "clone this session");
+          if (refusal) throw refusal;
+        }
         const sessionManager = this.inner.sessionManager;
         const currentSessionFile = this.inner.sessionFile;
         const leafId = typeof command.leafId === "string" ? command.leafId : sessionManager.getLeafId();
@@ -1605,6 +1621,10 @@ export class AgentSessionWrapper {
       case "navigate_tree": {
         if (this.inner.isBashRunning) {
           throw new Error("Cannot navigate while a shell command is running");
+        }
+        {
+          const refusal = bgWorkRefusal(this.sessionId, "switch branches");
+          if (refusal) throw refusal;
         }
         return this.navigateTreeKeepingToolSelection(command.targetId as string, {});
       }
@@ -1741,6 +1761,10 @@ export class AgentSessionWrapper {
         // and the turn dies at its next extension hook (#1172). pi refuses too.
         if (this.isSessionRunningForReplacement()) {
           throw new Error("Wait for the current response to finish before reloading.");
+        }
+        {
+          const refusal = bgWorkRefusal(this.sessionId, "reload session resources");
+          if (refusal) throw refusal;
         }
         if (this.extensionUiAbortController.signal.aborted) {
           this.extensionUiAbortController = new AbortController();
@@ -2658,6 +2682,54 @@ const SUBAGENT_CONTROLLER = createSubagentController({
   isBuiltInSubagentsEnabled,
 });
 
+// The built-in background tasks' module-level executor (Q11 A): independent of
+// any wrapper, so Stop's forced idle reap can end a stuck wrapper while its
+// tasks live on; the wake reopens the wrapper through the deletion gate.
+const BG_RUNTIME: BgTaskController = createBgTaskController({
+  getLogRoot: () => join(getAgentDir(), "pi-web-bg-tasks"),
+  spawnTask: defaultSpawnTask,
+  getSession: (sessionId) => getRegistry().get(sessionId),
+  resolveSessionPath: async (sessionId) => resolveSessionPath(sessionId),
+  reopenSession: async (sessionId, sessionFile) =>
+    (await startRpcSession(sessionId, sessionFile, undefined)).session,
+});
+// The event names stay the bridge's (background_task_terminal /
+// background_tasks_update) with the bridge's payload contract, so the dock
+// keeps opening and bg-ui only swaps the HTTP interface later.
+BG_RUNTIME.setSink({
+  terminal: (sessionId, task) => {
+    getRegistry().get(sessionId)?.emitBackgroundEvent({ type: "background_task_terminal", task: bgTaskClientSnapshot(task) });
+  },
+  update: (sessionId, tasks) => {
+    getRegistry().get(sessionId)?.emitBackgroundEvent({ type: "background_tasks_update", tasks: tasks.map(bgTaskClientSnapshot) });
+  },
+});
+
+/** The process-wide background-task executor (tools, wake, limits, registry). */
+export function getBgRuntime(): BgTaskController {
+  return BG_RUNTIME;
+}
+
+/** The structured refusal of a session command over unfinished background work (AC3). */
+function bgWorkRefusal(sessionId: string, action: string): Error | null {
+  if (!BG_RUNTIME.hasActiveWork(sessionId)) return null;
+  const error = new Error(
+    `Cannot ${action} while this session has unfinished background work; stop the tasks (bg_stop) or wait for their completion notifications first.`,
+  );
+  (error as { code?: string }).code = PI_RESTART_REFUSED_CODE;
+  return error;
+}
+
+/**
+ * A Chat-only rebuild over unfinished background work, refused with the
+ * structured code before anything is written (r1#3): the rebuilt wrapper
+ * would carry no bg tools while the executor still holds the session's tasks.
+ */
+function chatOnlyRebuildRefusal(sessionId: string, toolNames: string[] | undefined): Error | null {
+  if (toolNames === undefined || toolNames.length !== 0) return null;
+  return bgWorkRefusal(sessionId, "rebuild the session as Chat only");
+}
+
 export function getSubagentRun(sessionId: string) {
   return SUBAGENT_CONTROLLER.get(sessionId);
 }
@@ -2803,6 +2875,10 @@ export async function setRpcSessionTools(
   const existing = getRpcSession(sessionId);
 
   if (!existing?.isAlive()) {
+    {
+      const refusal = chatOnlyRebuildRefusal(sessionId, toolNames);
+      if (refusal) throw refusal;
+    }
     if (!sessionFile) throw new Error("Session not found");
     // A wrapper still closing, or a start already under way, owns the file: wait for it and
     // apply the selection to whatever it left, or a start that opened the file first would
@@ -2833,6 +2909,12 @@ export async function setRpcSessionTools(
   const crossesChatOnlyBoundary = toolNames === undefined
     || !hasCurrentResourcePolicy
     || existing.isChatOnly() !== (toolNames.length === 0);
+  // The refusal lands before anything is written: a refused switch must leave
+  // no selection entry behind (r1#3).
+  {
+    const refusal = chatOnlyRebuildRefusal(sessionId, toolNames);
+    if (refusal) throw refusal;
+  }
   if (toolNames === undefined) appendClearedSessionToolSelection(existing.inner.sessionManager);
   else appendSessionToolSelection(existing.inner.sessionManager, toolNames);
   invalidateSessionListCache();
@@ -3361,7 +3443,11 @@ export async function startRpcSession(
                 () => listSubagentProfiles(sessionCwd),
                 isBuiltInSubagentsEnabled,
               ),
-              ...(backgroundTasks ? [createBackgroundTasksBridgeExtension(backgroundTasks)] : []),
+              // The built-in background tasks (Q2 B: the old bridge extension is
+              // no longer mounted here, so a user's pi-background-tasks package
+              // cannot put a second set of bg tools beside these; the routes
+              // stay until bg-ui replaces them).
+              createBgTasksExtension(BG_RUNTIME),
               // Last, so the instruction follows every other prompt change.
               createAgentLanguageExtension(() => agentLanguage),
             ],

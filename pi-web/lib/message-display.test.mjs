@@ -238,6 +238,23 @@ test("treats compaction summaries as turn anchors", async () => {
   assert.equal(isMessageGroupAnchor(assistant([])), false);
 });
 
+test("treats a built-in background task's completion as a turn anchor", async () => {
+  const { isMessageGroupAnchor } = await loadSubject();
+
+  assert.equal(isMessageGroupAnchor({
+    role: "custom",
+    customType: "pi-web:bg-task-notification",
+    content: "Background task `ab12cd34` succeeded",
+    display: true,
+  }), true, "the task notification starts its own displayed turn (AC1)");
+  assert.equal(isMessageGroupAnchor({
+    role: "custom",
+    customType: "pi-web:bg-task-notification",
+    content: "hidden",
+    display: false,
+  }), false, "a hidden variant anchors nothing, as every hidden custom message");
+});
+
 test("treats a background subagent completion as a turn anchor", async () => {
   const { isMessageGroupAnchor } = await loadSubject();
 
