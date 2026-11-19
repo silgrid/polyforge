@@ -9,6 +9,7 @@ import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { trackBrowserErrors } from "./console-errors.mjs";
 import { launchBrowser } from "./harness.mjs";
 import { startNextServer } from "./next-server.mjs";
 import { checkFilePanel, checkLargeHtmlStorage, filePanelFixture, largeStorageFixture } from "./file-panel.mjs";
@@ -580,12 +581,13 @@ try {
     await context.tracing.start({ screenshots: true, snapshots: true });
     page = await context.newPage();
     page.setDefaultTimeout(30_000);
-    const errors = [];
+    // polyforge#156: browser errors go through the console-errors collector;
+    // the only ones it drops are requestfailed-paired net::ERR_NETWORK_CHANGED
+    // console errors, capped and logged (e2e/README.md "Network-change
+    // tolerance"). The pagination probe below stays a plain listener.
+    const errors = trackBrowserErrors(page, { base });
     const olderResponses = [];
-    page.on("pageerror", (error) => errors.push(error.message));
-    page.on("console", (event) => { if (event.type() === "error") errors.push(event.text()); });
     page.on("response", (response) => {
-      if (response.url().startsWith(base) && response.status() >= 500) errors.push(`${response.status()} ${response.url()}`);
       const url = new URL(response.url());
       if (url.pathname === `/api/sessions/${LONG}/context` && url.searchParams.has("before")) olderResponses.push(response);
     });
@@ -952,7 +954,7 @@ try {
         probeTitle: "Render **E2E markdown**",
       });
     }
-    assert.deepEqual(errors, [], `Browser errors at width ${viewport.width}`);
+    assert.deepEqual(errors.settle(), [], `Browser errors at width ${viewport.width}`);
     console.log(`PASS: ${viewport.width}px browser pagination, branch, markdown, code, tool call, and compaction navigation`);
     await context.tracing.stop();
     await context.close();
