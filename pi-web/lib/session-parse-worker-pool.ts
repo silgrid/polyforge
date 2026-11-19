@@ -92,6 +92,16 @@ function spawnWorker(state: PoolState): PoolWorker {
     owed?.reject(error);
     pump(state);
   });
+  // A worker that dies without an error event (a hard crash) must reject its
+  // task and leave the pool, never leave a caller waiting forever.
+  worker.on("exit", () => {
+    const index = state.workers.indexOf(entry);
+    if (index !== -1) state.workers.splice(index, 1);
+    const owed = entry.pending;
+    entry.pending = undefined;
+    owed?.reject(new Error("session scan worker exited before answering"));
+    pump(state);
+  });
   state.workers.push(entry);
   return entry;
 }
