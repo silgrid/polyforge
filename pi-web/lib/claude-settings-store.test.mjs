@@ -147,16 +147,9 @@ test("a refresh that started before a save never rolls the save back (r1#3)", as
   releaseGet();
   await refreshing;
   assert.equal(store.getSnapshot().settings.includeHookEvents, true, "the stale read rolled the save back (r1#3)");
-  // The next whole-package PUT must carry the saved value, not the stale one.
-  const bodies = [];
-  const follow = createClaudeSettingsStore(async (url, init = {}) => {
-    if (init.method === "PUT") bodies.push(JSON.parse(String(init.body)));
-    return new Response(JSON.stringify({ ...BASE, planAvailable: true }), { status: 200, headers: { "Content-Type": "application/json" } });
-  });
-  await follow.refresh();
-  // Simulate the same race through the public API is the first store's job;
-  // here we assert the surviving snapshot feeds the next PUT: reopen via the
-  // same store — the snapshot is still the save's.
+  // The surviving snapshot feeds the next whole-package PUT: two more saves
+  // through the same store (whose fake echoes each PUT body) keep the saved
+  // hook switch — the stale read never reaches a later PUT through the snapshot.
   const next = await store.save({ customModels: ["claude-race-1"] });
   assert.equal(next.ok, true);
   const probe = await store.save({ launchPermissionMode: "default" });
