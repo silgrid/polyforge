@@ -26,6 +26,11 @@ interface TerminalRecord {
    * (a stream is attached). A record created before a hot reload has none.
    */
   cleanupAt?: number | null;
+  /**
+   * A one-shot login terminal (polyforge#142, 85a2): the record dies with
+   * its command — no reconnect window, no replay buffer after the exit.
+   */
+  ephemeral?: boolean;
 }
 
 declare global {
@@ -83,6 +88,7 @@ function emit(record: TerminalRecord, event: TerminalEvent): void {
 
 function scheduleCleanup(id: string, record: TerminalRecord): void {
   if (record.cleanupTimer || record.listeners.size || registry().get(id) !== record) return;
+  if (record.ephemeral && record.exited) return;
   record.cleanupAt = Date.now() + TERMINAL_RECONNECT_MS;
   record.cleanupTimer = setTimeout(() => killTerminal(id), TERMINAL_RECONNECT_MS);
   record.cleanupTimer.unref?.();
@@ -154,12 +160,74 @@ export function createTerminal(cwd: string, cols: number, rows: number, id: stri
 }
 
 /**
- * A one-shot login terminal (polyforge#142, 85a2 AC3/Q5) — placeholder: the
- * test-first commit carries only the signature so the suite's assertions
- * run red; the implementation lands with the unit.
+ * A one-shot login terminal (polyforge#142, 85a2 AC3/Q5): the account
+ * page's 「打开终端」 runs one adapter-declared login command — argv
+ * directly, never through a shell, with the server-resolved extra env —
+ * in a terminal that is not a workspace shell: it never enters the
+ * restore list, and the moment the command exits the record is destroyed
+ * and its replay buffer discarded (a `claude setup-token` output holds a
+ * token; nothing of it stays server-side).
  */
-export function createLoginTerminal(_argv: string[], _env: Record<string, string>, _cwd: string, _cols: number, _rows: number, _id?: string): string {
-  return "";
+export function createLoginTerminal(argv: string[], extraEnv: Record<string, string>, cwd: string, cols: number, rows: number, id: string = randomUUID()): string {
+  if (registry().has(id)) throw new Error("Terminal id already in use");
+  if (argv.length === 0 || !argv[0]) throw new Error("login command is empty");
+  let spawn: typeof import("node-pty").spawn;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    ({ spawn } = require("node-pty") as typeof import("node-pty"));
+  } catch (error) {
+    throw new Error(
+      `Cannot load the node-pty native terminal module for ${process.platform}-${process.arch}. ` +
+      "The binary may be missing or incompatible. In the pi-web installation directory " +
+      "(the npx cache directory when using npx), run: npm rebuild node-pty --build-from-source --ignore-scripts=false --foreground-scripts. " +
+      "On Debian/Ubuntu, install build tools first: sudo apt-get install -y python3 build-essential. " +
+      `Then restart pi-web. Original error: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
+  const env = shellEnvironment();
+  for (const [key, value] of Object.entries(extraEnv)) env[key] = value;
+  const pty = spawn(argv[0], argv.slice(1), {
+    name: "xterm-256color",
+    cols: dimension(cols, 80),
+    rows: dimension(rows, 24),
+    cwd: cwd || homedir(),
+    env,
+  });
+  const record: TerminalRecord = {
+    pty,
+    cwd,
+    listeners: new Set(),
+    backlog: "",
+    offset: 0,
+    exited: false,
+    exitCode: null,
+    cleanupTimer: null,
+    cleanupAt: null,
+    ephemeral: true,
+  };
+  registry().set(id, record);
+  scheduleCleanup(id, record);
+  pty.onData((data) => {
+    record.backlog = (record.backlog + data).slice(-MAX_BACKLOG);
+    record.offset += data.length;
+    emit(record, { type: "output", data, offset: record.offset });
+  });
+  pty.onExit(({ exitCode }) => {
+    // the one-shot dies with its command: the record, the replay buffer and
+    // the reconnect window all go at once
+    if (record.cleanupTimer) clearTimeout(record.cleanupTimer);
+    record.cleanupTimer = null;
+    record.cleanupAt = null;
+    record.exited = true;
+    record.exitCode = exitCode;
+    record.backlog = "";
+    emit(record, { type: "exit", exitCode });
+    registry().delete(id);
+    emit(record, { type: "closed" });
+    record.listeners.clear();
+  });
+  return id;
 }
 
 export function hasTerminal(id: string): boolean {
