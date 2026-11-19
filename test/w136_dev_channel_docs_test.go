@@ -76,7 +76,9 @@ func TestW136DevChannelDocs(t *testing.T) {
 	}
 
 	// docs/upgrade.md: one appended section, heading the shared
-	// next-patch version, naming the channel
+	// next-patch version, naming the channel. A later ticket may append
+	// after this one (polyforge#153 did): the channel's section is found
+	// by its heading's tokens, not by position.
 	um := read(filepath.Join("docs", "upgrade.md"))
 	heads := regexp.MustCompile(`(?m)^## .+$`).FindAllString(um, -1)
 	if len(heads) == 0 {
@@ -86,13 +88,24 @@ func TestW136DevChannelDocs(t *testing.T) {
 	if !strings.HasPrefix(last, "## v0.2.4, ") {
 		t.Fatalf("the appended section's heading %q must take the next patch of the latest tag (v0.2.4), like every section appended after one tag", last)
 	}
-	if !strings.Contains(last, "development channel") || !strings.Contains(last, "polyforge#136") {
-		t.Fatalf("the appended section's heading %q must name the development channel and its ticket", last)
+	mine := -1
+	for i, h := range heads {
+		if strings.Contains(h, "development channel") && strings.Contains(h, "polyforge#136") {
+			mine = i
+			break
+		}
 	}
-	body := um[strings.LastIndex(um, "## v0.2.4, "):]
+	if mine < 0 {
+		t.Fatal("docs/upgrade.md carries no section whose heading names the development channel and its ticket")
+	}
+	start := strings.Index(um, heads[mine])
+	body := um[start:]
+	if end := strings.Index(body[len(heads[mine]):], "\n## "); end >= 0 {
+		body = body[:len(heads[mine])+end]
+	}
 	for _, want := range []string{"--dev", "green tag", "AIHub", "v0.2.4-dev."} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("the appended upgrade section lacks %q", want)
+			t.Fatalf("the development channel's upgrade section lacks %q", want)
 		}
 	}
 }
