@@ -242,3 +242,34 @@ test("a wrapper that dies while the wake waits is not sent the message", async (
   assert.equal(wrapper.sent.length, 0, "no message goes to the wrapper that died mid-wait");
   assert.equal(controller.hasActiveWork("sess-dying"), false, "the wake settles");
 });
+
+test("a deletion that begins while the reopened wrapper gets ready lands silently (r2#3)", async (t) => {
+  // The wrapper dies mid-wait; its session has a file, so the wake reopens a
+  // new wrapper — and the deletion begins while that one gets ready.
+  let releaseReady = () => {};
+  const first = makeWrapper({ running: true });
+  const reopened = makeWrapper();
+  reopened.waitUntilReady = () => new Promise((resolve) => { releaseReady = resolve; });
+  const { deps, supervisor, root, calls } = makeDeps({
+    getSession: () => (first.alive ? first : undefined),
+    reopened,
+    sessionFile: "/tmp/sess-file.jsonl",
+    wakeIdlePollMs: 10,
+    wakeIdleTimeoutMs: 30_000,
+  });
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const controller = createBgTaskController(deps);
+  controller.run("sess-ready-gate", "/tmp/w", "make test");
+  supervisor.spawned[0].resolveDone({ exitCode: 0, signal: null, bytesWritten: 0, reason: null });
+  await flush();
+  // The mid-turn wait begins; the wrapper dies, so the wake reopens.
+  first.alive = false;
+  first.running = false;
+  await pollUntil(() => calls.reopenSession.length === 1, 5_000, "the wake to reopen the wrapper");
+  // The deletion lands while the reopened wrapper is still getting ready.
+  controller.beginSessionDeletion(["sess-ready-gate"]);
+  releaseReady();
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(reopened.sent.length, 0, "nothing is delivered once the deletion landed mid-ready");
+  assert.equal(controller.hasActiveWork("sess-ready-gate"), false, "the wake settles silently");
+});
