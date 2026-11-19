@@ -278,7 +278,7 @@ export function AccountSettings({ embedded = true }: { embedded?: boolean }) {
   const [read, setRead] = useState<AccountRead | null>(null);
   const [capabilities, setCapabilities] = useState<Record<string, AccountHarnessCap>>({});
   const [pane, setPane] = useState<"pi" | "claude">("pi");
-  const [loginTerminal, setLoginTerminal] = useState<{ id: string } | null>(null);
+  const [loginTerminal, setLoginTerminal] = useState<{ id: string; commandId: string; closing?: "close" } | null>(null);
 
   const load = useCallback(() => {
     void (async () => {
@@ -315,7 +315,7 @@ export function AccountSettings({ embedded = true }: { embedded?: boolean }) {
         });
         if (response.ok) {
           const { id } = await response.json() as { id: string };
-          setLoginTerminal({ id });
+          setLoginTerminal({ id, commandId });
         }
       } catch { /* a failed open leaves the button as the retry */ }
     })();
@@ -384,14 +384,24 @@ export function AccountSettings({ embedded = true }: { embedded?: boolean }) {
           {writeNote && <p data-account-field="write-note">{writeNote}</p>}
           {loginTerminal && (
             <div data-account-login-terminal className="settings-account-login-terminal">
+              {/* Attach, never create: the server already started this
+                  one-shot terminal when the button was clicked, so the
+                  panel connects to it (restored: true) — a create would be
+                  refused by the route (the login terminal's id is not a
+                  workspace id, and its cwd is the server's choice) and the
+                  stream would never open (review r1#1) */}
               <TerminalPanel
-                tab={{ id: loginTerminal.id, cwd: "" }}
+                tab={{ id: loginTerminal.id, cwd: "", restored: true, ...(loginTerminal.closing ? { closing: loginTerminal.closing } : {}) }}
                 active
-                onRestart={() => { /* a login command is one-shot: restart is the button above */ }}
+                onRestart={() => {
+                  // a one-shot login command: start a fresh one
+                  setLoginTerminal(null);
+                  openLoginTerminal(loginTerminal.commandId);
+                }}
                 onClosed={() => setLoginTerminal(null)}
                 onCloseError={() => setLoginTerminal(null)}
               />
-              <button type="button" className="config-button" onClick={() => setLoginTerminal(null)}>{t("settings.accountCloseTerminal")}</button>
+              <button type="button" className="config-button" onClick={() => setLoginTerminal((current) => current ? { ...current, closing: "close" } : current)}>{t("settings.accountCloseTerminal")}</button>
             </div>
           )}
         </ConfigDetail>
