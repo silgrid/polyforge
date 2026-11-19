@@ -342,17 +342,27 @@ export interface McpServerGroup {
  * was not read, so the panel says so instead of hiding where project servers go.
  */
 export function mcpServerGroups(data: Pick<McpResponse, "files" | "servers" | "claude" | "unified">, hasProject: boolean): McpServerGroup[] {
-  // The skeleton keeps the 85a behaviour: no claude half yet, so no local
-  // group and no claude-only row; the unified tests take it red first.
-  const scopes: McpScope[] = hasProject ? ["project", "global"] : ["global"];
-  return scopes.map((scope) => {
-    const file = data.files.find((info) => info.scope === scope);
-    return {
-      scope,
-      ...(file ? { file } : {}),
-      servers: data.servers.filter((server) => server.scope === scope),
-    };
-  });
+  const claude = (data as Pick<McpResponse, "claude">).claude;
+  // The local group is claude's own and is keyed by the project folder, so it
+  // appears only with both (Q2/Q3); without claude's half the groups stay
+  // what they were.
+  const scopes: McpScope[] = hasProject ? ["project", "global", "local"] : ["global"];
+  return scopes
+    .filter((scope) => scope !== "local" || claude !== undefined)
+    .map((scope) => {
+      const file = data.files.find((info) => info.scope === scope);
+      const servers = data.servers.filter((server) => server.scope === scope);
+      const piNames = new Set(servers.map((server) => server.name));
+      const claudeOnly = claude === undefined
+        ? []
+        : claude.servers.filter((server) => server.scope === scope && !piNames.has(server.name));
+      return {
+        scope,
+        ...(file ? { file } : {}),
+        servers,
+        ...(claude !== undefined && claudeOnly.length > 0 ? { claudeOnly } : {}),
+      };
+    });
 }
 
 /**
@@ -365,14 +375,16 @@ export function mcpClaudeRowKey(server: Pick<ClaudeMcpServerInfo, "scope" | "nam
 
 /** The unified row of (scope, name), when the overview carries one. */
 export function mcpUnifiedRowOf(data: Pick<McpResponse, "unified">, scope: McpScope, name: string): McpUnifiedRow | undefined {
-  void data; void scope; void name;
-  return undefined;
+  return (data.unified ?? []).find((row) => row.scope === scope && row.name === name);
 }
 
 /** The 「应用到」 selection a unified row currently says: all while every harness holds it. */
 export function mcpApplyToSelection(row: McpUnifiedRow): HarnessApplyToSelection {
-  void row;
-  return { mode: "all", selected: [] };
+  if (row.pi && row.claude) return { mode: "all", selected: [] };
+  return {
+    mode: "specific",
+    selected: row.pi ? ["pi"] : row.claude ? ["claude"] : [],
+  };
 }
 
 /**
@@ -381,8 +393,11 @@ export function mcpApplyToSelection(row: McpUnifiedRow): HarnessApplyToSelection
  * claude entry pi does not load.
  */
 export function mcpApplyToTargetsView(scope: McpScope, claudeEntry: ClaudeMcpServerInfo | undefined, piUnsupportedReason: string | undefined): HarnessApplyToTarget[] {
-  void scope; void claudeEntry; void piUnsupportedReason;
-  return [];
+  const piUnsupported = scope === "local" || claudeEntry?.type === "sse" || claudeEntry?.type === "ws";
+  return [
+    { harness: "pi", label: "pi", ...(piUnsupported ? { disabled: true, disabledReason: piUnsupportedReason ?? undefined } : {}) },
+    { harness: "claude", label: "claude" },
+  ];
 }
 
 /** Turned-on and total entries, the `n/m` a group heading shows. */
@@ -392,7 +407,9 @@ export function mcpGroupCounts(servers: readonly Pick<McpServerInfo, "enabled">[
 
 /** Why a group lists nothing, when it lists nothing. */
 export function mcpGroupEmptyKey(group: McpServerGroup): string | undefined {
-  if (group.servers.length > 0) return undefined;
+  if (group.servers.length > 0 || (group.claudeOnly ?? []).length > 0) return undefined;
+  // The local group has no file of pi's to read: it is never "not listed".
+  if (group.scope === "local") return "mcp.group.empty";
   if (!group.file) return "mcp.group.notListed";
   if (group.file.problems.some(isBlockingFileProblem)) return "mcp.group.fileProblem";
   return "mcp.group.empty";
@@ -1203,6 +1220,9 @@ export function mcpGroupSwitchChecked(servers: readonly McpSwitchable[]): boolea
 /** What the panel asks `POST /api/mcp` to do. */
 export type McpActionRequest =
   | { action: "enable" | "disable" | "remove" | "sign-out"; scope: McpScope; name: string }
+  | { action: "remove"; scope: McpScope; name: string; harness: "claude" }
+  | { action: "set-apply"; scope: McpScope; name: string; harnesses: ("pi" | "claude")[] }
+  | { action: "unify"; scope: McpScope; name: string; from: "pi" | "claude" }
   | { action: "set-exposure"; scope: McpScope; name: string; exposure: NonNullable<McpServerInfo["exposure"]> }
   | { action: "set-in-project"; name: string; enabled: boolean }
   | { action: "set-enabled"; enabled: boolean; servers: McpServerRef[] }

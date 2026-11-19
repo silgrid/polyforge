@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState, type Ref } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type Ref } from "react";
 import type { McpExposure } from "@earendil-works/pi-coding-agent";
 import type {
+  ClaudeMcpServerInfo,
   CodemodeMode,
   McpActionResponse,
   McpCodemodeInfo,
@@ -15,8 +16,10 @@ import type {
   McpServerInfo,
   McpServerStatus,
   McpSessionStatus,
+  McpUnifiedRow,
   ProjectTrustStatus,
 } from "@/lib/api-types";
+import { HarnessApplyTo, applyToCanSubmit, type HarnessApplyToSelection, type HarnessApplyToTarget } from "./HarnessApplyTo";
 import { useI18n } from "@/hooks/useI18n";
 import { displayPathWithin, shortenPath } from "@/lib/display-path";
 import {
@@ -95,6 +98,9 @@ import {
   mcpGroupCounts,
   mcpGroupEmptyKey,
   mcpGroupSwitchChecked,
+  mcpApplyToSelection,
+  mcpApplyToTargetsView,
+  mcpClaudeRowKey,
   mcpGroupSwitchTargets,
   mcpInProjectView,
   mcpProjectTrustable,
@@ -108,6 +114,7 @@ import {
   mcpServerRowState,
   mcpSessionStateView,
   mcpSessionSummaryKey,
+  mcpUnifiedRowOf,
   mcpStatusDot,
   mcpStatusRowState,
   mcpStatusTimeText,
@@ -180,7 +187,9 @@ export type McpConfigLoad =
   | { state: "loaded"; data: McpResponse; projectError?: McpLoadFailure };
 
 function scopeLabel(scope: McpScope, t: Translate): string {
-  return scope === "project" ? t("skills.scope.project") : t("skills.scope.global");
+  if (scope === "project") return t("skills.scope.project");
+  if (scope === "local") return t("mcp.scope.local");
+  return t("skills.scope.global");
 }
 
 /** A path as the panel shows it: the home folder as `~`, hidden characters escaped. */
@@ -234,6 +243,8 @@ export interface McpUndoNotice {
   token: string;
   scope: McpScope;
   name: string;
+  /** The removal took a claude entry (#85 85c): the notice words it Claude's own. */
+  harness?: "claude";
   path: string;
   /** How long the route holds it, from when the notice appeared. */
   expiresInMs: number;
@@ -644,6 +655,65 @@ export function McpConfig({
     if (removed) setUndo({ ...removed, undoing: false });
   }, [runAction]);
 
+  // The row's 「应用到」 (AC3): one change for the chosen harnesses; a per-harness
+  // failure shows on the row, never as a total success.
+  const applyToChange = useCallback(async (row: Pick<McpUnifiedRow, "scope" | "name">, harnesses: ("pi" | "claude")[]) => {
+    const key = `${row.scope}\0${row.name}`;
+    const pressed = pressedButton();
+    setActionError(null);
+    setGroupStatus(null);
+    const result = await runAction({ action: "set-apply", scope: row.scope, name: row.name, harnesses }, `apply:${key}`);
+    if (!result) return;
+    if (result.ok) {
+      const failures = (result.data.applied?.results ?? []).filter((item) => !item.ok);
+      if (failures.length > 0) {
+        setActionError({
+          key,
+          failure: {
+            error: failures.map((item) => `${item.harness}: ${item.error ?? item.reason ?? ""}`).join("; "),
+            ...(failures[0].reason !== undefined ? { reason: failures[0].reason } : {}),
+          },
+        });
+      }
+    } else {
+      setActionError({ key, failure: result.error });
+    }
+    setFocusBack({ control: pressed });
+  }, [runAction]);
+
+  // 「统一成当前值」 (AC3): the chosen side wins, only the other is written.
+  const unifyRow = useCallback(async (row: Pick<McpUnifiedRow, "scope" | "name">, from: "pi" | "claude") => {
+    const key = `${row.scope}\0${row.name}`;
+    const pressed = pressedButton();
+    setActionError(null);
+    setGroupStatus(null);
+    const result = await runAction({ action: "unify", scope: row.scope, name: row.name, from }, `unify:${key}`);
+    if (!result) return;
+    if (!result.ok) setActionError({ key, failure: result.error });
+    setFocusBack({ control: pressed });
+  }, [runAction]);
+
+  // Claude's own removal (Q1 A): the entry goes through its CLI, and comes
+  // back through Undo like pi's own.
+  const removeClaudeEntry = useCallback(async (entry: ClaudeMcpServerInfo) => {
+    const key = mcpClaudeRowKey(entry);
+    const pressed = pressedButton();
+    setActionError(null);
+    setGroupStatus(null);
+    const result = await runAction(
+      { action: "remove", scope: entry.scope, name: entry.name, harness: "claude" },
+      `remove-claude:${key}`,
+    );
+    if (!result) return;
+    if (!result.ok) {
+      setActionError({ key, failure: result.error });
+      setFocusBack({ control: pressed });
+      return;
+    }
+    const removed = result.data.undo;
+    if (removed) setUndo({ ...removed, undoing: false });
+  }, [runAction]);
+
   const undoRemoval = useCallback(async () => {
     const notice = undo;
     if (!notice) return;
@@ -815,6 +885,9 @@ export function McpConfig({
       onExposureChange={(server, exposure) => void setServerExposure(server, exposure)}
       onGroupSwitch={(scope, servers, enabled) => void switchGroup(scope, servers, enabled)}
       onRemove={(server) => void removeServer(server)}
+      onApplyTo={(row, harnesses) => void applyToChange(row, harnesses)}
+      onUnify={(row, from) => void unifyRow(row, from)}
+      onRemoveClaude={(entry) => void removeClaudeEntry(entry)}
       onUndo={() => void undoRemoval()}
       onTrustProject={onTrustProject}
       onClose={onClose}
@@ -860,6 +933,9 @@ export function McpConfigView({
   onExposureChange = () => {},
   onGroupSwitch = () => {},
   onRemove = () => {},
+  onApplyTo = () => {},
+  onUnify = () => {},
+  onRemoveClaude = () => {},
   onUndo = () => {},
   onTest = () => {},
   onSignIn = () => {},
@@ -909,6 +985,12 @@ export function McpConfigView({
   onExposureChange?: (server: McpServerInfo, exposure: McpExposure) => void;
   onGroupSwitch?: (scope: McpScope, servers: McpServerInfo[], enabled: boolean) => void;
   onRemove?: (server: McpServerInfo) => void;
+  /** The row's 「应用到」 submission (#85 85c). */
+  onApplyTo?: (row: Pick<McpUnifiedRow, "scope" | "name">, harnesses: ("pi" | "claude")[]) => void;
+  /** 「统一成当前值」: the side `from` wins, the other is written (#85 85c). */
+  onUnify?: (row: Pick<McpUnifiedRow, "scope" | "name">, from: "pi" | "claude") => void;
+  /** Claude's own removal, through its CLI (#85 85c, Q1 A). */
+  onRemoveClaude?: (entry: ClaudeMcpServerInfo) => void;
   onUndo?: () => void;
   onTest?: (server: McpServerInfo) => void;
   onSignIn?: (server: McpServerInfo) => void;
@@ -927,6 +1009,13 @@ export function McpConfigView({
   const context = data ? mcpRowContext(data) : undefined;
   const servers = groups.flatMap((group) => group.servers);
   const selectedServer = servers.find((server) => mcpServerKey(server) === selected);
+  const claudeEntries = data?.claude?.servers ?? [];
+  // A claude-only row (#85 85c): no pi server of its (scope, name), so it is claude's alone.
+  const selectedClaudeOnly = groups.flatMap((group) => group.claudeOnly ?? []).find((entry) => mcpClaudeRowKey(entry) === selected);
+  const selectedUnified = selectedServer && data ? mcpUnifiedRowOf(data, selectedServer.scope, selectedServer.name) : undefined;
+  const selectedClaudeSide = selectedServer
+    ? claudeEntries.find((entry) => entry.scope === selectedServer.scope && entry.name === selectedServer.name)
+    : undefined;
   const addedServer = added ? servers.find((server) => mcpServerKey(server) === added.key) : undefined;
   const unavailable = data ? mcpUnavailableNotice(data.mcp) : undefined;
   // MCP off says more: no session connects anything then.
@@ -1135,6 +1224,12 @@ export function McpConfigView({
                 key={mcpServerKey(selectedServer)}
                 server={selectedServer}
                 context={context}
+                claudeSide={selectedClaudeSide}
+                unifiedRow={selectedUnified}
+                onApplyTo={onApplyTo}
+                onUnify={onUnify}
+                onRemoveClaude={onRemoveClaude}
+                applyBusy={busy === `apply:${selectedServer.scope}\0${selectedServer.name}` || busy === `unify:${selectedServer.scope}\0${selectedServer.name}`}
                 codemode={data.codemode}
                 toolSearchDisabled={data.toolSearchDisabled}
                 autoEnable={autoEnable}
@@ -1164,6 +1259,17 @@ export function McpConfigView({
                 onSignOut={onSignOut}
                 onSignInPaste={onSignInPaste}
                 onSignInCancel={onSignInCancel}
+              />
+            ) : selectedClaudeOnly ? (
+              <McpClaudeServerDetail
+                key={mcpClaudeRowKey(selectedClaudeOnly)}
+                entry={selectedClaudeOnly}
+                unifiedRow={data && selectedClaudeOnly ? mcpUnifiedRowOf(data, selectedClaudeOnly.scope, selectedClaudeOnly.name) : undefined}
+                controlsBusy={controlsBusy}
+                removeBusy={busy === `remove-claude:${mcpClaudeRowKey(selectedClaudeOnly)}`}
+                applyBusy={busy === `apply:${selectedClaudeOnly.scope}\0${selectedClaudeOnly.name}`}
+                onApplyTo={onApplyTo}
+                onRemoveClaude={onRemoveClaude}
               />
             ) : (
               <ConfigEmptyState>
@@ -1338,6 +1444,9 @@ function McpServerGroupList({
   const checked = mcpGroupSwitchChecked(group.servers);
   const emptyKey = mcpGroupEmptyKey(group);
   const statusText = status ? groupStatusText(status, t) : undefined;
+  // The group switch is pi's alone (Q3 A): it turns pi's own entries, so it
+  // says so, and the local group — claude's alone — never shows one.
+  const switchLabel = (on: boolean) => `${t(on ? "mcp.groupSwitchOn" : "mcp.groupSwitchOff", { group: scopeLabel(group.scope, t) })}${t("mcp.groupSwitchPiSuffix")}`;
   return (
     <div className="config-sidebar-group">
       <ConfigSidebarGroupLabel
@@ -1349,12 +1458,13 @@ function McpServerGroupList({
             disabled={controlsBusy || block !== undefined}
             loading={busy === `group:${group.scope}`}
             describedBy={block ? blockNoticeId : undefined}
-            label={t(checked ? "mcp.groupSwitchOn" : "mcp.groupSwitchOff", { group: scopeLabel(group.scope, t) })}
+            label={switchLabel(checked)}
             onChange={(next) => onGroupSwitch(group.scope, group.servers, next)}
           />
         ) : undefined}
       >
         {scopeLabel(group.scope, t)}
+        {group.scope === "local" && <span className="mcp-sidebar-badge is-muted">{t("mcp.group.claudeOnly")}</span>}
       </ConfigSidebarGroupLabel>
       {statusText && <ConfigSidebarGroupStatus note={statusText.note} error={statusText.error} />}
       {emptyKey && <div className="mcp-sidebar-group-empty">{t(emptyKey)}</div>}
@@ -1376,6 +1486,23 @@ function McpServerGroupList({
             <ConfigStatusDot {...mcpStatusDot(tone)} />
             <ConfigSidebarText className={`is-grow${tone === "on" ? "" : " is-muted"}`}>{name}</ConfigSidebarText>
             {badgeKey && <span className={`mcp-sidebar-badge is-${tone}`}>{t(badgeKey)}</span>}
+          </ConfigSidebarItem>
+        );
+      })}
+      {(group.claudeOnly ?? []).map((entry) => {
+        const key = mcpClaudeRowKey(entry);
+        const name = revealHiddenCharacters(entry.name);
+        return (
+          <ConfigSidebarItem
+            key={key}
+            ref={selected === key ? selectedRowRef : undefined}
+            active={selected === key}
+            aria-label={t(entry.disabled ? "mcp.rowLabel.claudeOff" : "mcp.rowLabel.claude", { name })}
+            onClick={() => onSelect(key)}
+          >
+            <ConfigStatusDot {...mcpStatusDot(entry.disabled ? "off" : "on")} />
+            <ConfigSidebarText className="is-grow">{name}</ConfigSidebarText>
+            <span className="mcp-sidebar-badge is-muted">{t("mcp.rowBadge.claude")}</span>
           </ConfigSidebarItem>
         );
       })}
@@ -1411,6 +1538,12 @@ function McpNameList({ names }: { names: readonly string[] }) {
 function McpServerDetail({
   server,
   context,
+  claudeSide,
+  unifiedRow,
+  onApplyTo,
+  onUnify,
+  onRemoveClaude,
+  applyBusy = false,
   codemode,
   toolSearchDisabled,
   autoEnable,
@@ -1439,6 +1572,15 @@ function McpServerDetail({
 }: {
   server: McpServerInfo;
   context: McpRowContext;
+  /** claude's entry of the same (scope, name), when it holds one (#85 85c). */
+  claudeSide?: ClaudeMcpServerInfo;
+  /** The unified row of this (scope, name), when the overview carries one (#85 85c). */
+  unifiedRow?: McpUnifiedRow;
+  onApplyTo?: (row: Pick<McpUnifiedRow, "scope" | "name">, harnesses: ("pi" | "claude")[]) => void;
+  onUnify?: (row: Pick<McpUnifiedRow, "scope" | "name">, from: "pi" | "claude") => void;
+  onRemoveClaude?: (entry: ClaudeMcpServerInfo) => void;
+  /** An apply-to or unify change of this row is on its way. */
+  applyBusy?: boolean;
   codemode: McpCodemodeInfo;
   toolSearchDisabled: McpResponse["toolSearchDisabled"];
   autoEnable: McpAutoEnableCodemode;
@@ -1704,6 +1846,18 @@ function McpServerDetail({
         )}
         {server.masked && <p className="mcp-config-line is-dim">{t("mcp.server.masked")}</p>}
       </div>
+
+      {unifiedRow && (
+        <McpUnifiedSection
+          row={unifiedRow}
+          claudeSide={claudeSide}
+          controlsBusy={controlsBusy}
+          applyBusy={applyBusy}
+          onApplyTo={onApplyTo}
+          onUnify={onUnify}
+          onRemoveClaude={onRemoveClaude}
+        />
+      )}
     </ConfigDetailStack>
   );
 }
@@ -2254,5 +2408,233 @@ function McpCodemodeInlineBudgetRow({
         )}
       </div>
     </ConfigDetailGridRow>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// #85 85c: the unified half of a row's detail — claude's own partition, the
+// 「应用到」, and the inconsistency with its 「统一成当前值」.
+
+/** The harnesses a submission reaches: the selection's, minus every disabled target. */
+function applyToChosen(selection: HarnessApplyToSelection, targets: readonly HarnessApplyToTarget[]): ("pi" | "claude")[] {
+  const enabled = targets.filter((target) => !target.disabled).map((target) => target.harness as "pi" | "claude");
+  if (selection.mode === "all") return enabled;
+  return enabled.filter((harness) => selection.selected.includes(harness));
+}
+
+/** claude's entry as one display line, masked as its reader already masked it. */
+function claudeEntryTarget(entry: ClaudeMcpServerInfo): string | undefined {
+  if (entry.url !== undefined) return entry.url;
+  if (entry.command !== undefined) return [entry.command, ...(entry.args ?? [])].join(" ");
+  return undefined;
+}
+
+/**
+ * The claude partition of a unified row (AC3): what claude holds of this
+ * (scope, name) — its masked line, its read-only off when its own
+ * `disabledMcpServers` names it — with its own removal (Q1 A) and, under it,
+ * the 「应用到」 and the two sides' difference.
+ */
+function McpUnifiedSection({
+  row,
+  claudeSide,
+  controlsBusy,
+  applyBusy,
+  onApplyTo,
+  onUnify,
+  onRemoveClaude,
+}: {
+  row: McpUnifiedRow;
+  claudeSide: ClaudeMcpServerInfo | undefined;
+  controlsBusy: boolean;
+  applyBusy: boolean;
+  onApplyTo?: (row: Pick<McpUnifiedRow, "scope" | "name">, harnesses: ("pi" | "claude")[]) => void;
+  onUnify?: (row: Pick<McpUnifiedRow, "scope" | "name">, from: "pi" | "claude") => void;
+  onRemoveClaude?: (entry: ClaudeMcpServerInfo) => void;
+}) {
+  const { t } = useI18n();
+  const [selection, setSelection] = useState(() => mcpApplyToSelection(row));
+  useEffect(() => {
+    setSelection(mcpApplyToSelection(row));
+  }, [row]);
+  const piUnsupported = row.scope === "local"
+    ? t("mcp.applyTo.piUnsupportedLocal")
+    : t("mcp.applyTo.piUnsupported");
+  const targets = mcpApplyToTargetsView(row.scope, claudeSide, piUnsupported);
+  const line = claudeSide ? claudeEntryTarget(claudeSide) : undefined;
+  return (
+    <div className="mcp-config-lines">
+      {row.inconsistent.length > 0 && (
+        <section className="unified-setting" data-status="inconsistent">
+          <h3 className="settings-general-heading">{t("mcp.unified.differs")}</h3>
+          <ul className="unified-setting-values">
+            {row.inconsistent.map((diff) => (
+              <li key={diff.field}>
+                <code>{revealHiddenCharacters(diff.field)}</code>
+                <span>{t("mcp.unified.diff", {
+                  field: revealHiddenCharacters(diff.field),
+                  pi: String(diff.values.pi ?? "—"),
+                  claude: String(diff.values.claude ?? "—"),
+                })}</span>
+              </li>
+            ))}
+          </ul>
+          {claudeSide !== undefined && onUnify && (
+            <button type="button" className="config-button" disabled={controlsBusy || applyBusy} onClick={() => onUnify(row, "pi")}>
+              {t("mcp.unified.unify")}
+            </button>
+          )}
+        </section>
+      )}
+      <h4 className="settings-general-heading">{t("mcp.claude.side")}</h4>
+      {claudeSide === undefined ? (
+        <p className="mcp-config-line is-dim">{t("mcp.applyTo.piUnsupportedLocal")}</p>
+      ) : (
+        <>
+          {line !== undefined && <p className="mcp-config-line"><code className="mcp-config-code">{revealHiddenCharacters(line)}</code></p>}
+          {claudeSide.disabled === true && <p className="mcp-config-line is-warning">{t("mcp.claude.disabled")}</p>}
+          {claudeSide.envNames.length > 0 && (
+            <p className="mcp-config-line">{t("mcp.detail.env")} <McpNameList names={claudeSide.envNames} /></p>
+          )}
+          {claudeSide.headerNames.length > 0 && (
+            <p className="mcp-config-line">{t("mcp.detail.headers")} <McpNameList names={claudeSide.headerNames} /></p>
+          )}
+          {onRemoveClaude && (
+            <p className="mcp-config-line">
+              <ConfigButton variant="danger" size="small" disabled={controlsBusy} onClick={() => onRemoveClaude(claudeSide)}>
+                {t("mcp.claude.remove")}
+              </ConfigButton>
+            </p>
+          )}
+        </>
+      )}
+      {onApplyTo && (
+        <HarnessApplyTo
+          texts={{
+            title: t("mcp.applyTo.title"),
+            all: t("mcp.applyTo.all"),
+            specific: t("mcp.applyTo.specific"),
+            submit: t("mcp.applyTo.submit"),
+          }}
+          targets={targets}
+          value={selection}
+          busy={controlsBusy || applyBusy}
+          onChange={setSelection}
+          onSubmit={() => {
+            if (!applyToCanSubmit(selection, targets)) return;
+            onApplyTo(row, applyToChosen(selection, targets));
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * The detail of a row only claude holds (#85 85c): its masked line, its
+ * read-only off, its own removal, and the 「应用到」 that could bring pi in —
+ * pi disabled with its reason where it takes no such entry.
+ */
+function McpClaudeServerDetail({
+  entry,
+  unifiedRow,
+  controlsBusy,
+  removeBusy,
+  applyBusy,
+  onApplyTo,
+  onRemoveClaude,
+}: {
+  entry: ClaudeMcpServerInfo;
+  unifiedRow: McpUnifiedRow | undefined;
+  controlsBusy: boolean;
+  removeBusy: boolean;
+  applyBusy: boolean;
+  onApplyTo?: (row: Pick<McpUnifiedRow, "scope" | "name">, harnesses: ("pi" | "claude")[]) => void;
+  onRemoveClaude?: (entry: ClaudeMcpServerInfo) => void;
+}) {
+  const { t } = useI18n();
+  const name = revealHiddenCharacters(entry.name);
+  const row = useMemo<McpUnifiedRow>(() => unifiedRow ?? {
+    scope: entry.scope,
+    name: entry.name,
+    pi: false,
+    claude: true,
+    missing: entry.scope === "local" ? [] : ["pi"],
+    inconsistent: [],
+    otherScopes: [],
+  }, [entry.scope, entry.name, unifiedRow]);
+  const [selection, setSelection] = useState(() => mcpApplyToSelection(row));
+  useEffect(() => {
+    setSelection(mcpApplyToSelection(row));
+  }, [row]);
+  const piUnsupported = entry.scope === "local"
+    ? t("mcp.applyTo.piUnsupportedLocal")
+    : entry.type === "sse" || entry.type === "ws"
+      ? t("mcp.applyTo.piUnsupported")
+      : undefined;
+  const targets = mcpApplyToTargetsView(entry.scope, entry, piUnsupported);
+  const line = claudeEntryTarget(entry);
+  return (
+    <ConfigDetailStack>
+      <div className="config-detail-heading">
+        <ConfigDetailHeader>
+          <ConfigDetailHeaderInfo>
+            <ConfigScopeTag scope={entry.scope}>{scopeLabel(entry.scope, t)}</ConfigScopeTag>
+            <ConfigDetailTitle>{name}</ConfigDetailTitle>
+          </ConfigDetailHeaderInfo>
+          <ConfigDetailActions>
+            {onRemoveClaude && (
+              <ConfigButton
+                variant="danger"
+                size="small"
+                disabled={controlsBusy}
+                onClick={() => onRemoveClaude(entry)}
+              >
+                {removeBusy ? t("i18n.removing") : t("mcp.claude.remove")}
+              </ConfigButton>
+            )}
+          </ConfigDetailActions>
+        </ConfigDetailHeader>
+      </div>
+      <ConfigDetailGrid>
+        {line !== undefined && (
+          <ConfigDetailGridRow label={entry.url !== undefined ? t("mcp.detail.url") : t("mcp.detail.command")} tone="plain" mono className="mcp-config-code">
+            {revealHiddenCharacters(line)}
+          </ConfigDetailGridRow>
+        )}
+        {entry.envNames.length > 0 && (
+          <ConfigDetailGridRow label={t("mcp.detail.env")}>
+            <McpNameList names={entry.envNames} />
+          </ConfigDetailGridRow>
+        )}
+        {entry.headerNames.length > 0 && (
+          <ConfigDetailGridRow label={t("mcp.detail.headers")}>
+            <McpNameList names={entry.headerNames} />
+          </ConfigDetailGridRow>
+        )}
+        <ConfigDetailGridRow label={t("mcp.detail.file")} tone="dim" mono className="mcp-config-code">
+          {displayPath(entry.sourcePath)}
+        </ConfigDetailGridRow>
+      </ConfigDetailGrid>
+      {entry.disabled === true && <p className="mcp-config-line is-warning">{t("mcp.claude.disabled")}</p>}
+      {onApplyTo && (
+        <HarnessApplyTo
+          texts={{
+            title: t("mcp.applyTo.title"),
+            all: t("mcp.applyTo.all"),
+            specific: t("mcp.applyTo.specific"),
+            submit: t("mcp.applyTo.submit"),
+          }}
+          targets={targets}
+          value={selection}
+          busy={controlsBusy || applyBusy}
+          onChange={setSelection}
+          onSubmit={() => {
+            if (!applyToCanSubmit(selection, targets)) return;
+            onApplyTo(row, applyToChosen(selection, targets));
+          }}
+        />
+      )}
+    </ConfigDetailStack>
   );
 }
