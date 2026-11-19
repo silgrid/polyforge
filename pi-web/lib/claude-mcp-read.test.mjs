@@ -1,4 +1,4 @@
-// carries: lib/claude-mcp-read.ts, lib/__fixtures__/claude-2.1.326/mcp/*
+// carries: lib/claude-mcp-read.ts, lib/__fixtures__/claude-2.1.326-mcp/mcp/*
 // polyforge#144 (#85 85c, AC1, Q6 B): claude's MCP entries are read from the
 // native files only — user from the state file's top-level mcpServers, local
 // from its projects[<cwd>].mcpServers (matched by real path too), project from
@@ -18,7 +18,7 @@ import { createJiti } from "jiti";
 const jiti = createJiti(import.meta.url, { moduleCache: false });
 const { readClaudeMcpServers, claudeMcpStatePath } = await jiti.import("./claude-mcp-read.ts");
 
-const fixtureDir = new URL("./__fixtures__/claude-2.1.326/mcp/", import.meta.url).pathname;
+const fixtureDir = new URL("./__fixtures__/claude-2.1.326-mcp/mcp/", import.meta.url).pathname;
 
 async function temp(t) {
   // Real paths, so the paths reported compare equal on a host whose temp folder is a link.
