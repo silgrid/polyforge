@@ -613,7 +613,10 @@ function referencesWebPassword(config: McpServerConfig): boolean {
  */
 export function mcpAddAnalysis(draft: McpAddDraft, data: McpResponse, cwd: string | null): McpAddAnalysis {
   const projectMode = mcpAddProjectMode(data, cwd);
-  const claudePresent = (data as Pick<McpResponse, "claude">).claude !== undefined;
+  // claude counts as a target only when its CLI is on PATH (`present`, r2#2):
+  // GET always answers the claude section — the files read without a binary —
+  // so "listed" alone would half-write an add and answer 409.
+  const claudePresent = (data as Pick<McpResponse, "claude">).claude?.present === true;
   const parseFor = (scope: McpScope) => parseMcpImport(draft.text, { rawPi: draft.rawPi, takenNames: namesIn(data, scope) });
   let parsed = parseFor(draft.scope ?? "global");
   let server = parsed.ok ? parsed.servers[Math.min(draft.server, parsed.servers.length - 1)] : undefined;
@@ -730,10 +733,11 @@ export function mcpAddAnalysis(draft: McpAddDraft, data: McpResponse, cwd: strin
  * The add pane's 「应用到」 targets (#85 85c, Q5): both harnesses, pi disabled
  * with its reason's key where it takes no such entry — claude's local group.
  */
-export function mcpAddApplyToTargets(scope: McpScope): { harness: "pi" | "claude"; label: string; disabled?: true; reasonKey?: string }[] {
+export function mcpAddApplyToTargets(scope: McpScope, claudePresent: boolean): { harness: "pi" | "claude"; label: string; disabled?: true; reasonKey?: string }[] {
   return [
     { harness: "pi", label: "pi", ...(scope === "local" ? { disabled: true as const, reasonKey: "mcp.applyTo.piUnsupportedLocal" } : {}) },
-    { harness: "claude", label: "claude" },
+    // claude's target is offered only while its CLI could take the write (r2#2).
+    ...(claudePresent ? [{ harness: "claude" as const, label: "claude" }] : []),
   ];
 }
 

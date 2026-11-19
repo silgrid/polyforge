@@ -220,8 +220,8 @@ export function McpAddServer({
             { value: "global", label: scopeLabel("global", t) },
             { value: "project", label: scopeLabel("project", t), disabled: projectBlock !== undefined && analysis.scope !== "project" },
             // claude's own group (Q5), offered only while the pane can write it:
-            // never without claude's half, and only with a project folder to key it by.
-            ...(data.claude !== undefined ? [{ value: "local" as const, label: scopeLabel("local", t), disabled: cwd === null }] : []),
+            // claude's CLI on PATH, and a project folder to key it by (r2#2).
+            ...(data.claude?.present === true ? [{ value: "local" as const, label: scopeLabel("local", t), disabled: cwd === null }] : []),
           ]}
           path={displayPath(targetFile)}
           disabledReason={projectBlock ? mcpAddProjectBlockText(projectBlock, t, displayPath) : null}
@@ -264,7 +264,7 @@ export function McpAddServer({
       {data.claude !== undefined && server && (
         <p className="mcp-config-line">
           <span>{t("mcp.applyTo.title")}:</span>
-          {mcpAddApplyToTargets(analysis.scope).map((target) => (
+          {mcpAddApplyToTargets(analysis.scope, data.claude?.present === true).map((target) => (
             <label key={target.harness} data-harness={target.harness} className={target.disabled ? "harness-apply-to-target is-disabled" : "harness-apply-to-target"}>
               <input
                 type="checkbox"
