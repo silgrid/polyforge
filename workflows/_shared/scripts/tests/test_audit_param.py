@@ -42,7 +42,7 @@ import json
 import os
 import subprocess
 import unittest
-from typing import Any, Dict, List
+from typing import Any, Dict, List, cast
 
 from .gitworld import GitCase, Repo
 
@@ -56,7 +56,7 @@ def run_engine(d: str, *flags: str) -> "subprocess.CompletedProcess[str]":
 
 
 def engine_cmds(c: "subprocess.CompletedProcess[str]") -> List[Dict[str, Any]]:
-    return json.loads(c.stdout)["commands"]
+    return cast(List[Dict[str, Any]], json.loads(c.stdout)["commands"])
 
 
 def audits(cmds: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
