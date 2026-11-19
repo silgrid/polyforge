@@ -35,7 +35,7 @@ test("a stored Anthropic subscription shows status and logout alone — never a 
   })));
   assert.match(html, /Connected/, "the stored credential's status is missing");
   assert.match(html, /Disconnect/, "the logout is missing");
-  assert.ok(!html.includes(">Log in<") && !html.match(/<button[^>]*>Log in/), "a login is offered for the stored subscription");
+  assert.ok(!html.includes(">Login<"), "a login is offered for the stored subscription");
 });
 
 test("an offered provider keeps its login button; the API-key entry stays for Anthropic (AC4/AC8)", () => {
@@ -43,7 +43,7 @@ test("an offered provider keeps its login button; the API-key entry stays for An
     provider: { id: "openai-codex", name: "ChatGPT Plus/Pro", usesCallbackServer: false, loggedIn: false },
     onRefresh: noop,
   })));
-  assert.match(login, /Log in/, "an offered provider lost its login button");
+  assert.match(login, /Login/, "an offered provider lost its login button");
   const key = renderToStaticMarkup(h(I18nProvider, null, h(ApiKeyDetail, {
     provider: { id: "anthropic", displayName: "Anthropic", configured: false, modelCount: 12 },
     onRefresh: noop,

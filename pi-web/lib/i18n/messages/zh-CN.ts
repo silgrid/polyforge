@@ -160,6 +160,8 @@ export const zhCNLocale: LocalePlugin = {
     "settings.accountHarnessClaude": "Claude",
     "settings.accountRefresh": "刷新",
     "settings.accountCloseTerminal": "关闭终端",
+    "settings.modelsAuthMovedTitle": "登录已挪走",
+    "settings.modelsAuthMoved": "pi 的订阅登录、登出与 API key 录入现在在账号 › pi；本页保留模型与聊天可用（统一模型页是后续更新）。",
     "settings.harnessModelsPlaceholder": "占位：统一模型设置页由后续版本填充。",
     "settings.harnessPermissionPlaceholder": "占位：统一权限设置页由后续版本填充。",
     "settings.harnessPermissionPartPending": "待后续版本在此配置。",

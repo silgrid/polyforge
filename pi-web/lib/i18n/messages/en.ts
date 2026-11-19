@@ -160,6 +160,8 @@ export const enLocale: LocalePlugin = {
     "settings.accountHarnessClaude": "Claude",
     "settings.accountRefresh": "Refresh",
     "settings.accountCloseTerminal": "Close terminal",
+    "settings.modelsAuthMovedTitle": "Sign-in has moved",
+    "settings.modelsAuthMoved": "pi's sign-in, sign-out and API-key entry now live on Account › pi; this page keeps the models and the chat switches (the unified models page is a later update).",
     "settings.harnessModelsPlaceholder": "Placeholder — the unified model settings page arrives with a later update.",
     "settings.harnessPermissionPlaceholder": "Placeholder — the unified permission settings page arrives with a later update.",
     "settings.harnessPermissionPartPending": "Pending — configured here by a later update.",

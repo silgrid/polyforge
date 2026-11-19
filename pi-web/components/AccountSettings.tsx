@@ -29,6 +29,7 @@ import {
   ConfigSplitView,
 } from "./SettingsUi";
 import { TerminalPanel } from "./TerminalPanel";
+import { PiAccountLogin } from "./PiAccountLogin";
 
 /** What GET /api/settings/account answers (the route's own shape). */
 export interface AccountRead {
@@ -92,9 +93,7 @@ export function AccountHarnessPane({ harness, read, capabilities, onOpenLoginTer
     <div data-account-pane={harness} className="settings-general-pane-host">
       <section className="settings-general-section" data-account-card="interactive">
         <h3 className="settings-general-heading">{t("settings.accountInteractiveSession")}</h3>
-        {harness === "claude" ? <AccountClaudeCard claude={read?.claude ?? null} /> : (
-          <p className="settings-general-description">{t("settings.accountPiInteractiveHint")}</p>
-        )}
+        {harness === "claude" ? <AccountClaudeCard claude={read?.claude ?? null} /> : <PiAccountLogin />}
         {commands.length > 0 && (
           <ConfigDetailActions>
             {commands.map((command) => (

@@ -101,17 +101,27 @@ export function buildApiKeyProviderList(
 
 /**
  * The provider whose subscription login pi-web never offers (polyforge#142,
- * 85a2 AC8, owner ruling Q10) — placeholder: the test-first commit passes
- * the raw list through so the suite's assertions run red; the filter lands
- * with the unit.
+ * 85a2 AC8, owner ruling Q10): Anthropic does not permit third-party
+ * developers to offer Claude.ai login in their own applications, so pi's
+ * Anthropic subscription (Claude Pro/Max) login is filtered from every
+ * offering — the OAuth list, the account page, the Add-provider picker. The
+ * login code stays in the repository, unreachable (no reopen switch); a
+ * stored subscription credential keeps its status and a logout; the
+ * API-key entry for Anthropic is unaffected (Claude models go through the
+ * claude harness).
  */
 export const SUBSCRIPTION_LOGIN_HIDDEN_PROVIDER = "anthropic";
 
-/** Providers whose OAuth login pi-web offers (AC8). Placeholder. */
+/** Providers whose OAuth login pi-web offers (AC8): the raw list minus the
+ * never-offered subscription login — unless a credential already exists
+ * (then the entry stays for its status and its logout, with no login
+ * offered by the UI). */
 export function offerableOAuthProviders(
   providers: readonly ProviderListingInput[],
 ): OAuthProviderListing[] {
-  return buildOAuthProviderList(providers);
+  return buildOAuthProviderList(providers).filter(
+    (provider) => !(provider.id === SUBSCRIPTION_LOGIN_HIDDEN_PROVIDER && !provider.loggedIn),
+  );
 }
 
 /** Providers that can be authenticated with OAuth. */
