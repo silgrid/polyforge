@@ -7,6 +7,15 @@
 // The switch keeps pi's semantics — hidden from the model prompt, still
 // manually invocable — by rewriting `disableModelInvocation` in memory through
 // `DefaultResourceLoader.skillsOverride`; running pi in a terminal ignores it.
+import { mkdirSync, readFileSync } from "fs";
+import { dirname } from "path";
+import { writePrivateFileAtomicSync } from "./atomic-file";
+import {
+  agentLanguageConfigPath as piWebSettingsPath,
+  PI_WEB_SETTINGS_WRITE_CHAIN,
+} from "./agent-language-config";
+import { defaultAgentDir } from "./http-dispatcher";
+import { serializeByKey } from "./key-serializer";
 import type { ResourceDiagnostic, Skill } from "@earendil-works/pi-coding-agent";
 
 /** A visibility preference: `hidden` (out of the prompt, still invocable) or `shown`. */
@@ -27,9 +36,29 @@ export type SkillsOverride = (base: {
   diagnostics: ResourceDiagnostic[];
 };
 
+function plainObject(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
+}
+
 /** The stored preferences; a missing, malformed or unknown value reads as none (never throws). */
-export function readSkillVisibility(_agentDir?: string): Map<string, SkillVisibility> {
-  return new Map();
+export function readSkillVisibility(agentDir?: string): Map<string, SkillVisibility> {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(piWebSettingsPath(agentDir), "utf8"));
+    const pi = plainObject(plainObject(parsed)?.skillVisibility)?.pi;
+    const entries = Object.entries(plainObject(pi) ?? {});
+    const result = new Map<string, SkillVisibility>();
+    for (const [filePath, value] of entries) {
+      // A key without any path separator cannot name a skill file; a value
+      // other than the two preferences is history this build never wrote.
+      if ((filePath.includes("/") || filePath.includes("\\")) && (value === "hidden" || value === "shown")) {
+        result.set(filePath, value);
+      }
+    }
+    return result;
+  } catch {
+    return new Map();
+  }
 }
 
 /**
@@ -38,10 +67,49 @@ export function readSkillVisibility(_agentDir?: string): Map<string, SkillVisibi
  * time per file, replaced atomically with mode 0600. A file that exists but is
  * not a JSON object is refused (thrown), never overwritten.
  */
-export async function writeSkillVisibility(
-  _changes: SkillVisibilityChange[],
-  _agentDir?: string,
-): Promise<void> {}
+export function writeSkillVisibility(
+  changes: SkillVisibilityChange[],
+  agentDir?: string,
+): Promise<void> {
+  if (changes.length === 0) return Promise.resolve();
+  const path = piWebSettingsPath(agentDir);
+  return serializeByKey(PI_WEB_SETTINGS_WRITE_CHAIN, path, async () => {
+    let current: Record<string, unknown> = {};
+    let text: string | undefined;
+    try {
+      text = readFileSync(path, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (text !== undefined) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        throw new Error(`${path} is not valid JSON; refusing to overwrite it`);
+      }
+      const object = plainObject(parsed);
+      if (object === undefined) {
+        throw new Error(`${path} is not a JSON object; refusing to overwrite it`);
+      }
+      current = object;
+    }
+    const skillVisibility = { ...plainObject(current.skillVisibility) };
+    const pi = { ...plainObject(skillVisibility.pi) };
+    for (const { filePath, visibility } of changes) {
+      if (typeof filePath !== "string" || !filePath) throw new Error("filePath must be a non-empty string");
+      if (visibility === null) delete pi[filePath];
+      else if (visibility === "hidden" || visibility === "shown") pi[filePath] = visibility;
+      else throw new Error(`visibility must be "hidden", "shown" or null`);
+    }
+    if (Object.keys(pi).length === 0) delete skillVisibility.pi;
+    else skillVisibility.pi = pi;
+    const next: Record<string, unknown> = { ...current, version: 1, skillVisibility };
+    if (Object.keys(skillVisibility).length === 0) delete next.skillVisibility;
+    mkdirSync(dirname(path), { recursive: true });
+    writePrivateFileAtomicSync(path, `${JSON.stringify(next, null, 2)}\n`);
+  });
+}
 
 /**
  * The tri-state rule: `hidden` hides the skill, `shown` shows it even over the
@@ -49,17 +117,35 @@ export async function writeSkillVisibility(
  */
 export function effectiveDisableModelInvocation(
   declared: boolean,
-  _visibility: ReadonlyMap<string, SkillVisibility>,
-  _filePath: string,
+  visibility: ReadonlyMap<string, SkillVisibility>,
+  filePath: string,
 ): boolean {
+  const preference = visibility.get(filePath);
+  if (preference === "hidden") return true;
+  if (preference === "shown") return false;
   return declared;
 }
 
 /** A `skillsOverride` that applies the preferences, or undefined when none are stored. */
 export function skillVisibilityOverride(
-  _visibility: ReadonlyMap<string, SkillVisibility>,
+  visibility: ReadonlyMap<string, SkillVisibility>,
 ): SkillsOverride | undefined {
-  return undefined;
+  if (visibility.size === 0) return undefined;
+  return (base) => ({
+    diagnostics: base.diagnostics,
+    skills: base.skills.map((skill) =>
+      visibility.has(skill.filePath)
+        ? {
+            ...skill,
+            disableModelInvocation: effectiveDisableModelInvocation(
+              skill.disableModelInvocation,
+              visibility,
+              skill.filePath,
+            ),
+          }
+        : skill,
+    ),
+  });
 }
 
 /** Applies `first`, then `second` on its result; undefined when both are. */
@@ -67,5 +153,7 @@ export function composeSkillsOverrides(
   first?: SkillsOverride,
   second?: SkillsOverride,
 ): SkillsOverride | undefined {
-  return first ?? second;
+  if (first === undefined) return second;
+  if (second === undefined) return first;
+  return (base) => second(first(base));
 }
