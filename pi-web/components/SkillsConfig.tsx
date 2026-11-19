@@ -112,7 +112,7 @@ export function skillInstructionsBody(content: string): string {
  * True when the skill's author declared it hidden in the SKILL.md frontmatter
  * (`disable-model-invocation: true`): the「作者默认隐藏」badge (when the shown
  * preference overrides it) and the confirmed legacy cleanup entry key on it —
- * never on the effective switch, which the preference also drives. Skeleton.
+ * never on the effective switch, which the preference also drives.
  */
 export function skillAuthorDeclaredHidden(
   skill: Pick<Skill, "declaredDisableModelInvocation">,

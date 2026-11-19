@@ -25,6 +25,13 @@ export type SkillVisibility = "hidden" | "shown";
 export interface SkillVisibilityChange {
   filePath: string;
   visibility: SkillVisibility | null;
+  /**
+   * Write only when no preference is stored for the path yet. The check runs
+   * inside the file's write chain, so a preference a concurrent request
+   * stored between the caller's read and this write is never overwritten
+   * (r1#1, r1#5).
+   */
+  onlyIfUnset?: boolean;
 }
 
 /** The shape `DefaultResourceLoader` accepts as `skillsOverride`. */
@@ -96,18 +103,25 @@ export function writeSkillVisibility(
     }
     const skillVisibility = { ...plainObject(current.skillVisibility) };
     const pi = { ...plainObject(skillVisibility.pi) };
-    for (const { filePath, visibility } of changes) {
+    for (const { filePath, visibility, onlyIfUnset } of changes) {
       if (typeof filePath !== "string" || !filePath) throw new Error("filePath must be a non-empty string");
       if (visibility === null) delete pi[filePath];
-      else if (visibility === "hidden" || visibility === "shown") pi[filePath] = visibility;
+      else if (visibility === "hidden" || visibility === "shown") {
+        if (onlyIfUnset && Object.prototype.hasOwnProperty.call(pi, filePath)) continue;
+        pi[filePath] = visibility;
+      }
       else throw new Error(`visibility must be "hidden", "shown" or null`);
     }
     if (Object.keys(pi).length === 0) delete skillVisibility.pi;
     else skillVisibility.pi = pi;
     const next: Record<string, unknown> = { ...current, version: 1, skillVisibility };
     if (Object.keys(skillVisibility).length === 0) delete next.skillVisibility;
+    const nextText = `${JSON.stringify(next, null, 2)}\n`;
+    // An unchanged store keeps its file and its mtime: an onlyIfUnset write
+    // that found every entry already set writes nothing at all.
+    if (nextText === text) return;
     mkdirSync(dirname(path), { recursive: true });
-    writePrivateFileAtomicSync(path, `${JSON.stringify(next, null, 2)}\n`);
+    writePrivateFileAtomicSync(path, nextText);
   });
 }
 
