@@ -37,8 +37,7 @@ fs.mkdirSync(path.join(project, ".claude"), { recursive: true });
 // different model; the project layer wins, and the row must say so.
 fs.writeFileSync(path.join(claudeConfigDir, "settings.json"), JSON.stringify({ model: "claude-user-model" }));
 fs.writeFileSync(path.join(project, ".claude", "settings.json"), JSON.stringify({ model: "claude-project-model", effortLevel: "low" }));
-fs.writeFileSync(path.join(agentDir, "pi-web-claude-settings.json"), JSON.stringify({ version: 1, launchPermissionMode: "acceptEdits", customModels: [], includeHookEvents: false }));
-fs.writeFileSync(path.join(agentDir, "claude-permissions.json"), JSON.stringify({ mode: "ask", push: true }));
+fs.writeFileSync(path.join(agentDir, "pi-web-settings.json"), JSON.stringify({ version: 1, claude: { approvalChannel: "ask", pushReminders: true, includeHookEvents: false } }));
 
 test.after(() => fs.rmSync(scratch, { recursive: true, force: true }));
 
@@ -60,12 +59,12 @@ test("the effective rows carry the value, the inferred mark's data, and the winn
 test("the effective pane shows every value with its Inferred mark and its source", () => {
   const rows = [
     { field: "model", value: "claude-project-model", sourceScope: "project", sourcePath: "/project/.claude/settings.json" },
-    { field: "pi-web:launch-permission-mode", value: "acceptEdits", sourceScope: "pi-web", sourcePath: "/agent/pi-web-claude-settings.json" },
+    { field: "pi-web:approval-channel", value: "ask", sourceScope: "pi-web", sourcePath: "/agent/pi-web-settings.json" },
   ];
   const html = renderToStaticMarkup(h(I18nProvider, null, h(HarnessEffectiveValues, { harness: "claude", rows })));
   assert.ok(html.includes("claude-project-model"), "the value is missing");
   assert.match(html, /Inferred/, "the Inferred mark is missing");
-  assert.ok(html.includes("/agent/pi-web-claude-settings.json"), "the source path is missing");
+  assert.ok(html.includes("/agent/pi-web-settings.json"), "the source path is missing");
   assert.match(html, /data-harness="claude"/, "the group is not marked per harness");
   assert.match(html, /Computed from the config layers/, "the pane's inferred note is missing");
 });

@@ -125,7 +125,7 @@ test("capabilities: pi declares its concepts, scopes and config root (AC1)", () 
   assert.deepEqual(caps.scopes, ["user", "project"]);
   assert.equal(caps.configRootEnv, "PI_CODING_AGENT_DIR");
   assert.equal(caps.credentialsFollowConfigRoot, true);
-  assert.deepEqual(caps.writableConcepts, []);
+  assert.deepEqual(caps.writableConcepts, ["permission"]);
   assert.deepEqual(caps.readOnlyConcepts, ["env", "effective-config"]);
   // pi has no terminal login command (85a2 Q4): the TUI's /login is not a
   // whitelistable command, and the interactive session logs in through the

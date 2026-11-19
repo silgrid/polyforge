@@ -28,13 +28,10 @@ fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({
   defaultModel: "claude-opus-4",
   defaultThinkingLevel: "medium",
 }));
-fs.writeFileSync(path.join(agentDir, "pi-web-claude-settings.json"), JSON.stringify({
+fs.writeFileSync(path.join(agentDir, "pi-web-settings.json"), JSON.stringify({
   version: 1,
-  launchPermissionMode: "acceptEdits",
-  customModels: [],
-  includeHookEvents: false,
+  claude: { approvalChannel: "deny", pushReminders: true, includeHookEvents: false },
 }));
-fs.writeFileSync(path.join(agentDir, "claude-permissions.json"), JSON.stringify({ mode: "deny", push: true }));
 fs.writeFileSync(path.join(project, ".pi", "settings.json"), JSON.stringify({ defaultThinkingLevel: "low" }));
 fs.writeFileSync(path.join(project, ".claude", "settings.json"), JSON.stringify({ model: "haiku" }));
 fs.writeFileSync(path.join(project, ".claude", "settings.local.json"), JSON.stringify({ effortLevel: "low" }));
@@ -42,6 +39,7 @@ fs.writeFileSync(path.join(claudeConfigDir, "settings.json"), JSON.stringify({
   model: "sonnet",
   effortLevel: "medium",
   permissions: { defaultMode: "acceptEdits" },
+  sandbox: { enabled: true },
 }));
 test.after(() => {
   fs.rmSync(scratch, { recursive: true, force: true });
@@ -76,7 +74,7 @@ test("pi effective values: the project layer overrides the user layer, every val
   });
 });
 
-test("claude effective values: layers in claude's order, plus the Pi Web-stored layer", () => {
+test("claude effective values: layers in claude's order, plus the Pi Web preference layer", () => {
   const payload = effective.claudeEffectiveConfig(fixtureCtx());
   assert.deepEqual(payload.fields["model"], {
     value: "haiku",
@@ -96,16 +94,10 @@ test("claude effective values: layers in claude's order, plus the Pi Web-stored 
     sourcePath: path.join(claudeConfigDir, "settings.json"),
     inferred: true,
   });
-  assert.deepEqual(payload.fields["pi-web:launch-permission-mode"], {
-    value: "acceptEdits",
-    sourceScope: "pi-web",
-    sourcePath: path.join(agentDir, "pi-web-claude-settings.json"),
-    inferred: true,
-  });
-  assert.deepEqual(payload.fields["pi-web:tool-permissions"], {
+  assert.deepEqual(payload.fields["pi-web:approval-channel"], {
     value: "deny",
     sourceScope: "pi-web",
-    sourcePath: path.join(agentDir, "claude-permissions.json"),
+    sourcePath: path.join(agentDir, "pi-web-settings.json"),
     inferred: true,
   });
 });
@@ -148,7 +140,41 @@ test("compare approval mode: unsupported on pi, the claude value listed (Q3 B)",
 
 test("compareAll walks COMPARE_FIELDS in order", async () => {
   const results = await compare.compareAll(fixtureCtx());
-  assert.deepEqual(results.map((entry) => entry.field), ["reasoning-effort", "approval-mode"]);
+  assert.deepEqual(results.map((entry) => entry.field), ["reasoning-effort", "approval-mode", "sandbox", "project-trust"]);
   assert.equal(results[0].status, "consistent");
   assert.equal(results[1].status, "unsupported");
+  assert.equal(results[2].status, "unsupported");
+  // both harnesss answer untrusted here: pi has no decision in trust.json
+  // and claude's state file has no entry, so the trust field agrees.
+  assert.equal(results[3].status, "consistent");
+});
+
+test("compare sandbox: claude's enabled switch listed, unsupported on pi (85a4)", async () => {
+  const result = await compare.compareField("sandbox", fixtureCtx());
+  assert.equal(result.status, "unsupported");
+  assert.deepEqual(result.values.pi, { supported: false, neutral: null, raw: null });
+  assert.deepEqual(result.values.claude, { supported: true, neutral: "on", raw: "on" });
+});
+
+test("compare project trust: each harness's own decision, consistent once they agree (85a4)", async () => {
+  // The fixture project requires trust (its .pi/settings.json) and has no
+  // decision yet, so pi answers untrusted; pi's own decision is what a
+  // comparison can differ from claude's accepted state.
+  const { ProjectTrustStore } = await import("@earendil-works/pi-coding-agent");
+  new ProjectTrustStore(agentDir).set(project, true);
+  const inconsistent = await compare.compareField("project-trust", fixtureCtx());
+  assert.equal(inconsistent.status, "inconsistent");
+  assert.deepEqual(inconsistent.values.pi, { supported: true, neutral: "trusted", raw: "trusted" });
+  assert.deepEqual(inconsistent.values.claude, { supported: true, neutral: "untrusted", raw: "untrusted" });
+  // claude accepts the project in its state file: both agree
+  const statePath = path.join(claudeConfigDir, ".claude.json");
+  fs.writeFileSync(statePath, JSON.stringify({ projects: { [project]: { hasTrustDialogAccepted: true } } }));
+  const consistent = await compare.compareField("project-trust", fixtureCtx());
+  assert.equal(consistent.status, "consistent");
+  assert.deepEqual(consistent.values.claude, { supported: true, neutral: "trusted", raw: "trusted" });
+  // without a project selected there is no trust answer to compare
+  const noProject = await compare.compareField("project-trust", { agentDir, claudeConfigDir, piVersion: "1.5.0", env: {}, managedSettingsPath: path.join(scratch, "managed-settings.json") });
+  assert.equal(noProject.status, "unsupported");
+  assert.deepEqual(noProject.values.pi, { supported: false, neutral: null, raw: null });
+  assert.deepEqual(noProject.values.claude, { supported: false, neutral: null, raw: null });
 });

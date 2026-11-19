@@ -44,7 +44,9 @@ Every write goes through `writeGate()` before anything is touched:
 - **Refusal answers** `{status:"refused", reason}`; a known version with a
   concept whose write is not implemented answers
   `{status:"not-implemented", reason}`. In 85a1 no concept write is
-  implemented (`writableConcepts` is empty), so the gate is the whole write
+  implemented (85a4, polyforge#150, made `permission` writable on both
+  adapters — claude's native user-level settings.json and state file, pi's
+  trust store — through `PUT /api/harness/<h>/<concept>`), so the gate is the whole write
   path; 85a2–85a3–85a4, 85c and 85d add the concept writes on top of it, and
   85c's claude side lands through the official command, so the write result
   type carries both a file write and a command run.
@@ -64,11 +66,12 @@ sentinel strings planted in exactly those files.
 
 Each effective value carries `inferred: true` (#85 d-5): claude applies its
 settings `env` only after the child is spawned, and every harness merges its
-layers its own way, so the layer walk is pi-web's own computation. Until the
-Pi Web-stored claude settings migrate back to native files (#147, #150), the
-claude side also lists that layer (`pi-web:launch-permission-mode` from
-`pi-web-claude-settings.json`, `pi-web:tool-permissions` from
-`claude-permissions.json`) under the `pi-web` scope.
+layers its own way, so the layer walk is pi-web's own computation. Since the
+retired self-stored claude files migrated back (#150 85a4), the claude side
+lists the Pi Web preference layer (`pi-web:approval-channel` from
+`pi-web-settings.json`'s `claude` object) under the `pi-web` scope; the
+launch-permission-mode layer is gone (claude's native
+`permissions.defaultMode` owns that field).
 
 ## Known gaps (deliberate)
 

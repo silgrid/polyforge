@@ -13,13 +13,13 @@ import type { ProjectTrustStatus } from "@/lib/api-types";
 import { focusModalPanel, listenForPanelEscape } from "@/lib/stacked-dialog";
 import { ConfigDetailNavigationContext, type ConfigDetailNavigation } from "./SettingsUi";
 import { HarnessGeneralSettings } from "./HarnessGeneralSettings";
+import { HarnessPermissionSettings } from "./HarnessPermissionSettings";
 import { ModelsConfig } from "./ModelsConfig";
 import { SkillsConfig } from "./SkillsConfig";
 import { AgentsConfig } from "./AgentsConfig";
 import { PluginsConfig } from "./PluginsConfig";
 import { PolyforgeConfig } from "./PolyforgeConfig";
 import { McpConfig } from "./McpConfig";
-import { ClaudeSettings } from "./ClaudeSettings";
 import { AccountSettings } from "./AccountSettings";
 
 interface Props {
@@ -62,7 +62,6 @@ export function SettingsSectionIcon({ section, size = 16, strokeWidth = 1.8 }: {
   if (section === "agents") return <svg {...common} className="settings-section-icon is-agent"><rect x="5" y="7" width="14" height="11" rx="2" /><path d="M9 11h.01M15 11h.01M9 15h6M12 7V4M10 4h4" /></svg>;
   if (section === "plugins") return <svg {...common}><path d="M9 7V2M15 7V2M6 13V8a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v5a6 6 0 0 1-12 0ZM12 19v3" /></svg>;
   if (section === "mcp") return <svg {...common}><rect x="3" y="3" width="18" height="7" rx="2" /><rect x="3" y="14" width="18" height="7" rx="2" /><path d="M7 6.5h.01M7 17.5h.01M11 6.5h6M11 17.5h6" /></svg>;
-  if (section === "legacy-claude") return <svg {...common}><path d="M12 3v18M4.2 7.5l15.6 9M4.2 16.5l15.6-9" /></svg>;
   return <svg {...common}><circle cx="6" cy="18" r="3" /><circle cx="18" cy="6" r="3" /><path d="M6 15V3M18 9a9 9 0 0 1-9 9" /></svg>;
 }
 
@@ -162,33 +161,6 @@ function HarnessSectionPlaceholder({ titleKey, bodyKey }: { titleKey: string; bo
       <section className="settings-general-section">
         <h3 className="settings-general-heading">{t(titleKey)}</h3>
         <p className="settings-general-description">{t(bodyKey)}</p>
-      </section>
-    </div>
-  );
-}
-
-/**
- * The permission page's placeholder (85a1b): the unified permission page is
- * 85a4's, but its Claude part is the destination the old `claude` navigation
- * value migrates to (owner ruling Q2 A), so the parts are named already.
- */
-function HarnessPermissionPlaceholder() {
-  const { t } = useI18n();
-  return (
-    <div className="settings-general harness-placeholder-page">
-      <section className="settings-general-section">
-        <h3 className="settings-general-heading">{t("settings.tabPermission")}</h3>
-        <p className="settings-general-description">{t("settings.harnessPermissionPlaceholder")}</p>
-        <div className="settings-chat-options">
-          <div className="settings-general-description" data-harness="pi">
-            <h4 className="settings-general-heading">pi</h4>
-            <p className="settings-general-description">{t("settings.harnessPermissionPartPending")}</p>
-          </div>
-          <div className="settings-general-description" data-harness="claude">
-            <h4 className="settings-general-heading">Claude</h4>
-            <p className="settings-general-description">{t("settings.harnessPermissionPartPending")}</p>
-          </div>
-        </div>
       </section>
     </div>
   );
@@ -390,12 +362,13 @@ export function SettingsPanel({
           )}
           <ConfigDetailNavigationContext.Provider value={detailNavigation}>
           {sectionHost("general", <HarnessGeneralSettings cwd={cwd} sessionId={sessionId} onSessionReloaded={onSessionReloaded} quoteSelectionEnabled={quoteSelectionEnabled} onQuoteSelectionChange={onQuoteSelectionChange} />)}
-          {/* 85a2's account tab replaced the 85a1b placeholder; the models and
-              permission placeholders are 85a3's and 85a4's (permission's
-              Claude part is where a stored old `claude` navigation value lands). */}
+          {/* 85a2's account tab replaced the 85a1b placeholder; the models
+              placeholder is 85a3's; the permission page is 85a4's, mounted
+              above (its Claude part is where a stored old `claude` navigation
+              value lands). */}
           {sectionHost("account", <AccountSettings />)}
           {sectionHost("models", <HarnessSectionPlaceholder titleKey="common.models" bodyKey="settings.harnessModelsPlaceholder" />)}
-          {sectionHost("permission", <HarnessPermissionPlaceholder />)}
+          {sectionHost("permission", <HarnessPermissionSettings cwd={cwd} sessionId={sessionId} />)}
           {/* Visited sections stay mounted, so the ones whose answer depends on trust take the page's
               status and load again in place when trusting from Settings › MCP changes it. */}
           {cwd && sectionHost("skills", <SkillsConfig embedded key={cwd} cwd={cwd} trust={projectTrust} onClose={onClose} />)}
@@ -403,10 +376,11 @@ export function SettingsPanel({
           {cwd && sectionHost("plugins", <PluginsConfig embedded key={cwd} cwd={cwd} sessionId={sessionId} trust={projectTrust} onClose={onClose} onReloaded={onSessionReloaded} />)}
           {/* No project needed: the global mcp.json is listed alone, and a project adds its group. */}
           {sectionHost("mcp", <McpConfig embedded key={cwd ?? ""} cwd={cwd} trust={projectTrust} onTrustProject={onOpenTrustDialog} onProjectTrustChanged={onProjectTrustChanged} onClose={onClose} />)}
-          {/* The legacy-marked old pages (85a1b, owner ruling Q1 A): 85a3 deletes
-              legacy-models, 85a4 deletes legacy-claude — with their mounts here. */}
+          {/* The legacy-marked old Models page (85a1b, owner ruling Q1 A): 85a3
+              deletes legacy-models with its mount here. The legacy Claude page is
+              gone (85a4): its values are the native claude config and Pi Web
+              preferences now, edited on the permission page. */}
           {sectionHost("legacy-models", <ModelsConfig embedded cwd={cwd} onClose={onClose} />)}
-          {sectionHost("legacy-claude", <ClaudeSettings />)}
           {sectionHost("polyforge", <PolyforgeConfig cwd={cwd} active={section === "polyforge"} />)}
           </ConfigDetailNavigationContext.Provider>
         </main>

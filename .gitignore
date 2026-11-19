@@ -14,3 +14,9 @@ webui/node_modules/
 # clean run (entry scripts set sys.dont_write_bytecode), but a hand run of
 # the shared library may; nothing under __pycache__ is ever tracked.
 __pycache__/
+
+# A process core dump (a root shell's `core` landed in the tree once, review
+# r1#1 of polyforge#150): never tracked — anchored to the one place it
+# appeared (r2#1: an unanchored `core` would also ignore the tracked
+# internal/aihub/core/ package).
+/pi-web/core

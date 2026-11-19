@@ -33,6 +33,9 @@ fs.writeFileSync(path.join(configDir, "settings.json"), JSON.stringify({
   },
   permissions: { defaultMode: "acceptEdits" },
   skillOverrides: { "disabled-skill": "disabled" },
+  // 85a4: the custom names are claude's own native modelPicker.options (the
+  // retired pi-web-stored list migrated into the user layer).
+  modelPicker: { options: [{ model: "claude-custom-1" }] },
 }));
 fs.writeFileSync(path.join(configDir, ".credentials.json"), JSON.stringify({ claudeAiOauth: { accessToken: "CL-SENTINEL-CRED" } }));
 fs.writeFileSync(path.join(configDir, ".claude.json"), JSON.stringify({
@@ -55,12 +58,7 @@ fs.writeFileSync(path.join(project, ".claude", "skills", "proj-cl-skill", "SKILL
 fs.writeFileSync(path.join(project, ".mcp.json"), JSON.stringify({
   mcpServers: { dotmcp: { url: "https://dotmcp.example/?token=CL-SENTINEL-DOTMCP" } },
 }));
-fs.writeFileSync(path.join(agentDir, "pi-web-claude-settings.json"), JSON.stringify({
-  version: 1,
-  launchPermissionMode: "default",
-  customModels: ["claude-custom-1"],
-  includeHookEvents: false,
-}));
+
 // Project trust: the state file's projects entry.
 const statePath = path.join(configDir, ".claude.json");
 const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
@@ -164,7 +162,7 @@ test("capabilities: claude declares its concepts, scopes, config root, login com
   // does not follow; the account tests pin the function, this pins the
   // declared value on the test platform (linux)
   assert.equal(caps.credentialsFollowConfigRoot, process.platform !== "darwin");
-  assert.deepEqual(caps.writableConcepts, ["auth"]);
+  assert.deepEqual(caps.writableConcepts, ["auth", "permission"]);
   // the terminal login whitelist's data source (85a2 AC3): the interactive
   // session's two commands, none Cell-scoped (the 2026-11-19 Q3 revision)
   assert.deepEqual(caps.loginCommands, [

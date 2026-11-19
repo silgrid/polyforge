@@ -36,6 +36,28 @@ export interface ClaudeSettingsLayer {
   record: Record<string, unknown> | null;
 }
 
+/**
+ * The custom model names of claude's own native modelPicker, merged across
+ * the settings layers (deduped, user layer first; 85a4 — the retired
+ * pi-web-stored list migrated into the user layer's options).
+ */
+export function modelPickerOptions(layers: ClaudeSettingsLayer[]): string[] {
+  const names: string[] = [];
+  for (const layer of [...layers].reverse()) {
+    const picker = layer.record?.modelPicker;
+    if (typeof picker !== "object" || picker === null || Array.isArray(picker)) continue;
+    const options = (picker as { options?: unknown }).options;
+    if (!Array.isArray(options)) continue;
+    for (const option of options) {
+      const model = typeof option === "object" && option !== null && !Array.isArray(option)
+        ? (option as { model?: unknown }).model
+        : undefined;
+      if (typeof model === "string" && !names.includes(model)) names.push(model);
+    }
+  }
+  return names;
+}
+
 /** claude's settings layers for `configDir` and an optional project `cwd`, highest priority first. `managedPath` is the managed settings file (tests override it; default managedSettingsPath()). */
 export function claudeSettingsLayers(configDir: string, cwd: string | undefined, managedPath: string = managedSettingsPath()): ClaudeSettingsLayer[] {
   const paths: { scope: ClaudeSettingsLayer["scope"]; path: string }[] = [

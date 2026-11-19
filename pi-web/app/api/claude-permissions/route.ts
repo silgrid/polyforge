@@ -1,38 +1,46 @@
 import { NextResponse } from "next/server";
+import { ensureClaudeSelfStoredMigration } from "@/lib/claude-migration";
 import { getClaudeSessionRecord } from "@/lib/claude-index";
-import { readClaudePermissionConfig, writeClaudePermissionConfig, type ClaudePermissionConfig } from "@/lib/claude-permission-config";
+import { readClaudePreferences, writeClaudePreferences, type ClaudePreferences } from "@/lib/claude-preferences";
 import { ClaudeSessionBusyError, setClaudePermissionOverride } from "@/lib/claude-session";
 import { isClaudePermissionMode, type ClaudePermissionMode } from "@/lib/claude-shared";
 import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 
 export const dynamic = "force-dynamic";
 
-// GET/PUT /api/claude-permissions: the claude permission settings.
-// GET ?session=<id> → { mode, push, session: { override } | null } — the global default
-//   mode ("ask" | "deny"), the pending-permission push switch, and that claude session's
-//   override (null: follows the default); session is null with no id or a non-claude id.
-// PUT { mode?, push? } → { mode, push }: stores the global settings (`claude-permissions.json`);
-//   a running child keeps its mode until its next start.
+// GET/PUT /api/claude-permissions: the Pi Web claude preferences and one
+// claude session's override (85a4 re-backs the store: the retired
+// claude-permissions.json migrated into pi-web-settings.json's `claude`
+// object, and the route answers the same API shape plus includeHookEvents).
+// GET ?session=<id> → { mode, push, includeHookEvents, session: { override } | null } —
+//   the global approval channel ("ask" | "deny"), the pending-permission push switch,
+//   the hook-activity switch, and that claude session's override (null: follows
+//   the default); session is null with no id or a non-claude id.
+// PUT { mode?, push?, includeHookEvents? } → { mode, push, includeHookEvents }: stores the
+//   preferences (pi-web-settings.json); a running child keeps its channel until its next start.
 // PUT { session, override: "ask" | "deny" | null } → { override, restarted }: a session's
 //   override in the claude index; an idle live child is ended so the next start carries it.
 //   A non-claude id or a bad value is 400; a busy child (turn, pending prompt, unsettled
 //   background subagent) is 409 and nothing changes.
-// The body is checked whole before anything is written. Reached through the proxy's `/api/*`
-// authentication (PI_WEB_PASSWORD when set) like every other route; no aihub, no step agent.
-// The PUT also refuses an untrusted (cross-site / foreign host) request itself.
+// Both handlers run the one-time migration of the retired self-stored files first, so a
+// page that reads the preferences never sees the old files outlive them. The body is
+// checked whole before anything is written. Reached through the proxy's `/api/*`
+// authentication (PI_WEB_PASSWORD when set) like every other route; no aihub, no step
+// agent. The PUT also refuses an untrusted (cross-site / foreign host) request itself.
 
 function failure(status: number, error: string) {
   return NextResponse.json({ error }, { status });
 }
 
 export async function GET(req: Request) {
-  const { mode, push } = readClaudePermissionConfig();
+  await ensureClaudeSelfStoredMigration();
+  const { approvalChannel: mode, pushReminders: push, includeHookEvents } = readClaudePreferences();
   const id = new URL(req.url).searchParams.get("session");
   const record = id ? getClaudeSessionRecord(id) : undefined;
-  return NextResponse.json({ mode, push, session: record ? { override: record.permissionMode ?? null } : null });
+  return NextResponse.json({ mode, push, includeHookEvents, session: record ? { override: record.permissionMode ?? null } : null });
 }
 
-const BODY_SHAPE = "Expected { mode?: \"ask\" | \"deny\", push?: boolean } or { session: <claude session id>, override: \"ask\" | \"deny\" | null }";
+const BODY_SHAPE = "Expected { mode?: \"ask\" | \"deny\", push?: boolean, includeHookEvents?: boolean } or { session: <claude session id>, override: \"ask\" | \"deny\" | null }";
 
 export async function PUT(req: Request) {
   if (!isApiRequestAllowed(req)) return failure(403, "Untrusted API request");
@@ -64,19 +72,24 @@ export async function PUT(req: Request) {
     }
   }
 
-  if (keys.length === 0 || keys.some((key) => key !== "mode" && key !== "push")) return failure(400, BODY_SHAPE);
-  const patch: Partial<ClaudePermissionConfig> = {};
+  if (keys.length === 0 || keys.some((key) => key !== "mode" && key !== "push" && key !== "includeHookEvents")) return failure(400, BODY_SHAPE);
+  const patch: Partial<ClaudePreferences> = {};
   if ("mode" in fields) {
     if (!isClaudePermissionMode(fields.mode)) return failure(400, BODY_SHAPE);
-    patch.mode = fields.mode;
+    patch.approvalChannel = fields.mode;
   }
   if ("push" in fields) {
     if (typeof fields.push !== "boolean") return failure(400, BODY_SHAPE);
-    patch.push = fields.push;
+    patch.pushReminders = fields.push;
+  }
+  if ("includeHookEvents" in fields) {
+    if (typeof fields.includeHookEvents !== "boolean") return failure(400, BODY_SHAPE);
+    patch.includeHookEvents = fields.includeHookEvents;
   }
   try {
-    const { mode, push } = await writeClaudePermissionConfig(patch);
-    return NextResponse.json({ mode, push });
+    await ensureClaudeSelfStoredMigration();
+    const { approvalChannel: mode, pushReminders: push, includeHookEvents } = await writeClaudePreferences(patch);
+    return NextResponse.json({ mode, push, includeHookEvents });
   } catch (error) {
     return failure(500, error instanceof Error ? error.message : String(error));
   }

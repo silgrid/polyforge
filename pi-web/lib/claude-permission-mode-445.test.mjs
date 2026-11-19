@@ -36,10 +36,10 @@ process.env.PI_WEB_IDLE_TIMEOUT_MS = "0";
 const jiti = createJiti(import.meta.url, { alias: { "@": process.cwd() }, interopDefault: true });
 const claude = await jiti.import("./claude-session.ts");
 const index = await jiti.import("./claude-index.ts");
-const permissionConfig = path.join(agentDir, "claude-permissions.json");
-/** the global permission mode for the duration of `fn` (absent file: its default, ask). */
+const permissionConfig = path.join(agentDir, "pi-web-settings.json");
+/** the Pi Web approval channel for the duration of `fn` (absent file: its default, ask). */
 async function withGlobalMode(mode, fn) {
-  fs.writeFileSync(permissionConfig, JSON.stringify({ version: 1, mode, push: false }));
+  fs.writeFileSync(permissionConfig, JSON.stringify({ version: 1, claude: { approvalChannel: mode, pushReminders: false, includeHookEvents: false } }));
   try {
     return await fn();
   } finally {

@@ -172,7 +172,7 @@ export interface ClaudeComposerState {
   /**
    * An open session's permission mode and its in-session switch: with both,
    * the composer shows the permission-mode control. A fresh composer has none (new sessions
-   * take Settings › Claude's mode).
+   * take the session record's mode).
    */
   launchPermissionMode?: ClaudeLaunchPermissionMode;
   onLaunchPermissionModeChange?: (mode: ClaudeLaunchPermissionMode) => void;

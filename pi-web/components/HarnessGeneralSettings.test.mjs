@@ -63,17 +63,19 @@ test("the moved GeneralSettings keeps the former General page's sections whole",
   for (const heading of ["Appearance", "Fonts &amp; layout", "Chat", "Language"]) {
     assert.ok(html.includes(heading), `the conversation pane lost the ${heading} section`);
   }
-  // The claude tool permissions block stays in General (owner ruling Q7 A). It
-  // renders once its GET settles, so the mount is pinned in the source; the
-  // loaded block's behaviour is the e2e suites' (claude-permission-442).
+  // The claude tool permissions block no longer lives in General (85a4: it
+  // moved to the permission page's Claude section); the hook-activity switch
+  // stays and reads the Pi Web preference store (/api/claude-permissions).
   const source = await readFile(new URL("./GeneralSettings.tsx", import.meta.url), "utf8");
-  assert.match(source, /<ClaudePermissionSettings sessionId=\{sessionId\} \/>/, "the claude tool permissions block is gone from General");
+  assert.ok(!source.includes("ClaudePermissionSettings"), "the claude tool permissions block is still mounted in General");
+  assert.ok(!source.includes("useClaudeSettings"), "the retired claude-settings store is still used in General");
+  assert.match(source, /claude-permissions/, "the hook-activity switch does not read the Pi Web preference route");
 });
 
 test("the tab rail the panes live under is the nine-plus-two model", () => {
   // One fact, one place: the shell's section ids are SETTINGS_TABS' ids.
   assert.deepEqual(
     [...new Set(SETTINGS_TABS.map((tab) => tab.id))],
-    ["general", "account", "models", "permission", "skills", "mcp", "agents", "plugins", "polyforge", "legacy-models", "legacy-claude"],
+    ["general", "account", "models", "permission", "skills", "mcp", "agents", "plugins", "polyforge", "legacy-models"],
   );
 });

@@ -72,6 +72,7 @@ const APPROVAL_MODE_SPELLINGS: Readonly<Record<string, ApprovalMode>> = {
   plan: "plan",
   auto: "auto",
   deny: "deny-unprompted",
+  dontAsk: "deny-unprompted",
   "deny-unprompted": "deny-unprompted",
   bypassPermissions: "full",
   full: "full",
@@ -79,6 +80,26 @@ const APPROVAL_MODE_SPELLINGS: Readonly<Record<string, ApprovalMode>> = {
 
 export function neutralApprovalMode(raw: unknown): ApprovalMode | null {
   return typeof raw === "string" ? APPROVAL_MODE_SPELLINGS[raw] ?? null : null;
+}
+
+/**
+ * claude's own `permissions.defaultMode` values (polyforge#150 85a4): the
+ * unified three (询问 default / 自动审查 auto / 不询问即拒绝 dontAsk, Q1 A)
+ * plus the claude-specific extra values (acceptEdits, plan, bypassPermissions)
+ * that only the claude section of the permission page offers.
+ */
+export const CLAUDE_APPROVAL_MODES = [
+  "default",
+  "acceptEdits",
+  "plan",
+  "auto",
+  "dontAsk",
+  "bypassPermissions",
+] as const;
+export type ClaudeApprovalMode = (typeof CLAUDE_APPROVAL_MODES)[number];
+
+export function isClaudeApprovalMode(value: unknown): value is ClaudeApprovalMode {
+  return typeof value === "string" && (CLAUDE_APPROVAL_MODES as readonly string[]).includes(value);
 }
 
 /** A credential file's existence, never its contents. */
@@ -118,8 +139,34 @@ export interface ModelPayload {
   /** The default reasoning effort, neutral plus the harness's raw spelling. */
   reasoningEffort: { neutral: ReasoningEffort | null; raw: string | null } | null;
   providers: ProviderRef[];
-  /** pi-web-stored custom model names (claude only, until #147/#150 migrate them). */
+  /** claude's own native modelPicker custom names (claude only; migrated there by #150). */
   customModels: string[];
+}
+
+/** One permission field's provenance (85a4): the native layer holding the
+ * value, so the page can show when a user-level write would not take effect
+ * (Q3 B: managed and command-line sources display read-only). */
+export interface PermissionFieldSource {
+  scope: ScopeId;
+  path: string;
+}
+
+/** The sandbox field of the unified permission page (85a4): a boolean switch;
+ * pi has none (无沙箱), claude's is `sandbox.enabled` with its own details. */
+export interface PermissionSandbox {
+  supported: boolean;
+  enabled: boolean | null;
+  autoAllowBashIfSandboxed: boolean | null;
+  /** The other keys the native sandbox object holds, names only. */
+  otherKeys: string[];
+}
+
+/** The permission rules the page shows per harness (85a4): claude's native
+ * allow / ask / deny lists; no unified block (the ticket: 规则没有统一块). */
+export interface PermissionRules {
+  allow: string[];
+  ask: string[];
+  deny: string[];
 }
 
 /** The permission concept. */
@@ -130,6 +177,18 @@ export interface PermissionPayload {
     raw: string | null;
   };
   projectTrust: { trusted: boolean | null; note?: string } | null;
+  /** 85a4 (polyforge#150): the sandbox, rules and claude's own extra keys. */
+  sandbox: PermissionSandbox;
+  rules: PermissionRules | null;
+  /** claude's `permissions.denyInsteadOfPrompting` (v2.1.319+), or null when unset. */
+  denyInsteadOfPrompting: boolean | null;
+  /** Which native layer holds each writable field's value, null when no layer sets it. */
+  sources: {
+    defaultMode: PermissionFieldSource | null;
+    sandbox: PermissionFieldSource | null;
+    rules: PermissionFieldSource | null;
+    denyInsteadOfPrompting: PermissionFieldSource | null;
+  };
 }
 
 /** One skill as the skills concept lists it: name/path/source only (#146: state
@@ -229,7 +288,7 @@ export interface HarnessCapabilities {
   mcp?: McpCapability;
   /** The concepts this adapter reads. */
   concepts: ConceptId[];
-  /** The concepts this adapter writes; empty in 85a1 (the writes land in 85a2–85d). */
+  /** The concepts this adapter writes; 85a4 (polyforge#150) lands the permission write. */
   writableConcepts: readonly ConceptId[];
   /** Read-only concepts a caller must never be offered a write for. */
   readOnlyConcepts: readonly ConceptId[];

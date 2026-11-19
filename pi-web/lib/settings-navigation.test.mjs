@@ -86,17 +86,17 @@ test("the settings rail is nine new sections plus the two legacy-marked ones (85
   assert.ok(Array.isArray(SETTINGS_TABS), "SETTINGS_TABS is not exported");
   assert.deepEqual(
     SETTINGS_TABS.map((tab) => tab.id),
-    ["general", "account", "models", "permission", "skills", "mcp", "agents", "plugins", "polyforge", "legacy-models", "legacy-claude"],
+    ["general", "account", "models", "permission", "skills", "mcp", "agents", "plugins", "polyforge", "legacy-models"],
   );
   // Only the two temporary old pages are legacy-marked (删除条件见 85a3/85a4).
-  assert.deepEqual(SETTINGS_TABS.filter((tab) => tab.legacy).map((tab) => tab.id), ["legacy-models", "legacy-claude"]);
+  assert.deepEqual(SETTINGS_TABS.filter((tab) => tab.legacy).map((tab) => tab.id), ["legacy-models"]);
   assert.deepEqual(SETTINGS_SECTION_VALUES, SETTINGS_TABS.map((tab) => tab.id));
   // Every tab names a label key, once.
   const keys = SETTINGS_TABS.map((tab) => tab.labelKey);
   assert.deepEqual([...new Set(keys)], keys);
   for (const key of keys) assert.match(key, /^(settings|common|polyforge)\./, `${key} is not a locale key`);
   // The new concept pages and both legacy pages open without a project.
-  for (const section of ["general", "account", "models", "permission", "mcp", "polyforge", "legacy-models", "legacy-claude"]) {
+  for (const section of ["general", "account", "models", "permission", "mcp", "polyforge", "legacy-models"]) {
     assert.equal(settingsSectionRequiresProject(section), false, section);
   }
   for (const section of ["skills", "agents", "plugins"]) {
@@ -104,21 +104,17 @@ test("the settings rail is nine new sections plus the two legacy-marked ones (85
   }
 });
 
-test("migrates the legacy claude section value to the permission page (85a1b AC4)", () => {
+test("the deleted Claude page's stored `claude` value reads as unknown and lands on general (review r1#7: the migration map went with the page)", () => {
   const storage = createStorage({ "pi-web:settings-navigation": JSON.stringify({ section: "claude" }) });
-  assert.equal(getLastSettingsSection("/project", storage), "permission");
-  // Idempotent: a second read of the same raw value migrates the same way.
-  assert.equal(getLastSettingsSection("/project", storage), "permission");
-  // The permission page needs no project, so the migration holds without one.
-  assert.equal(getLastSettingsSection(null, storage), "permission");
-  // Other selections survive the migration untouched.
+  assert.equal(getLastSettingsSection("/project", storage), "general");
+  // Other selections survive the unknown value untouched.
   const both = createStorage({
     "pi-web:settings-navigation": JSON.stringify({
       section: "claude",
       selections: { [JSON.stringify(["skills", "/p"])]: "/skill.md", models: "{}" },
     }),
   });
-  assert.equal(getLastSettingsSection("/p", both), "permission");
+  assert.equal(getLastSettingsSection("/p", both), "general");
   assert.equal(getLastSettingsSelection("skills", "/p", both), "/skill.md");
   assert.equal(getLastSettingsSelection("legacy-models", null, both), "{}");
 });

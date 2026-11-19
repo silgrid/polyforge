@@ -136,10 +136,10 @@ test("capabilities: claude declares loginCommands and writes auth; pi declares n
   const claude = createClaudeAdapter();
   assert.deepEqual(claude.capabilities.loginCommands.map((c) => c.id), ["auth-login", "setup-token"]);
   assert.deepEqual(claude.capabilities.loginCommands.map((c) => c.argv), [["claude", "auth", "login"], ["claude", "setup-token"]]);
-  assert.deepEqual(claude.capabilities.writableConcepts, ["auth"]);
+  assert.deepEqual(claude.capabilities.writableConcepts, ["auth", "permission"]);
   const pi = createPiAdapter();
   assert.deepEqual(pi.capabilities.loginCommands, []);
-  assert.deepEqual(pi.capabilities.writableConcepts, []);
+  assert.deepEqual(pi.capabilities.writableConcepts, ["permission"]);
 });
 
 test("claude's credentials follow the config dir except on darwin's Keychain (AC7)", () => {

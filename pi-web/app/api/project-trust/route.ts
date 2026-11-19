@@ -9,10 +9,8 @@ import type {
 } from "@/lib/api-types";
 import { readProjectMcpServers } from "@/lib/mcp-config-read";
 import { isMcpEntryRefusal, validateMcpProject } from "@/lib/mcp-entry-request";
-import { invalidateModelsCache } from "@/lib/models-cache";
-import { getProjectTrustStatus, trustProject } from "@/lib/project-trust";
+import { getProjectTrustStatus, writeProjectTrustDecision } from "@/lib/project-trust";
 import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
-import { destroyRpcSessionsForCwd, hasBusyRpcSessionForCwd } from "@/lib/rpc-manager";
 
 export const dynamic = "force-dynamic";
 
@@ -82,18 +80,15 @@ export async function POST(req: Request) {
     if ("response" in result) return result.response;
 
     const agentDir = getAgentDir();
-    const current = getProjectTrustStatus(result.cwd, agentDir);
-    if (!current.requiresTrust) {
-      return refusal(409, "trust-not-required", "This project has no resources that require trust");
+    // The one gated trust path (85a4, review r1#2/r2#3): the same function the
+    // permission page's pi write passes through — busy refuses before any
+    // write, a landed decision rebuilds the cwd's sessions.
+    const decision = await writeProjectTrustDecision(result.cwd, true, agentDir);
+    if (!decision.ok) {
+      // The gate's own reasons, in the route's wire spellings.
+      return refusal(409, decision.reason === "session-busy" ? "session-busy" : "trust-not-required", decision.message);
     }
-    if (hasBusyRpcSessionForCwd(result.cwd)) {
-      return refusal(409, "session-busy", "Wait for the active session to finish before trusting this project");
-    }
-
-    const status = trustProject(result.cwd, agentDir);
-    invalidateModelsCache();
-    await destroyRpcSessionsForCwd(result.cwd);
-    return NextResponse.json(status);
+    return NextResponse.json(decision.status);
   } catch (error) {
     return refusal(500, "internal", errorMessage(error));
   }
