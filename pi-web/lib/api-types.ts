@@ -555,6 +555,65 @@ export interface McpCodemodeProjectOverride {
   preference: McpCodemodePreference;
 }
 
+/**
+ * One of claude's MCP entries as the unified list shows it (#85 85c, AC1):
+ * read from claude's native files only, masked like pi's entries — env and
+ * header names without values, url and args through `lib/mcp-secrets.ts`.
+ */
+export interface ClaudeMcpServerInfo {
+  name: string;
+  /** The unified scope: claude's user is the global group, its local is Claude-only. */
+  scope: McpScope;
+  /** The native file the entry was read from. */
+  sourcePath: string;
+  command?: string;
+  args?: string[];
+  url?: string;
+  /** claude's own `type` as written, when the entry carries one. */
+  type?: string;
+  envNames: string[];
+  headerNames: string[];
+  /** Named in the state file's `disabledMcpServers`; read-only display (Q1 A). */
+  disabled?: boolean;
+}
+
+/** What reading claude's native MCP files found (#85 85c; `present` is a PATH lookup, never a spawn). */
+export interface ClaudeMcpFileInfo {
+  present: boolean;
+  /** The state file's path: `$CLAUDE_CONFIG_DIR/.claude.json`, else `~/.claude.json`. */
+  configPath: string;
+  /** False when the state file exists but is not a JSON object. */
+  stateReadable: boolean;
+  servers: ClaudeMcpServerInfo[];
+  /** The state file's top-level `disabledMcpServers`, read-only (Q1 A). */
+  disabledMcpServers: string[];
+}
+
+/** One shared field whose values differ between the harnesses that hold the row (#85 85c, AC3). */
+export interface McpUnifiedFieldDiff {
+  field: string;
+  /** Each present harness's current value as display text (masked), by harness id. */
+  values: Partial<Record<"pi" | "claude", string>>;
+}
+
+/**
+ * One row of the unified MCP list (#85 85c, Q2 A): the (scope, name) both
+ * sides merge on — same name, same unified scope, one row whatever each side
+ * holds; `missing` names the harnesses that support the scope but hold no
+ * entry, so the row's 「应用到」 shows what a change would reach.
+ */
+export interface McpUnifiedRow {
+  scope: McpScope;
+  name: string;
+  pi: boolean;
+  claude: boolean;
+  missing: ("pi" | "claude")[];
+  /** Shared fields whose values differ (Q1: only fields both sides define). */
+  inconsistent: McpUnifiedFieldDiff[];
+  /** Other unified scopes holding the same name (「另在 X 组」). */
+  otherScopes: McpScope[];
+}
+
 export interface McpProjectInfo {
   cwd: string;
   /** Absent when `trust.json` cannot be read; the project then counts as untrusted. */
@@ -570,6 +629,10 @@ export interface McpProjectInfo {
 
 export interface McpResponse {
   mcp: McpAvailability;
+  /** claude's side of the unified list (#85 85c): read from files only, never a spawn. */
+  claude?: ClaudeMcpFileInfo;
+  /** The unified rows: pi's and claude's entries merged by (scope, name). */
+  unified?: McpUnifiedRow[];
   codemode: McpCodemodeInfo;
   /**
    * Present when `-builtin:tool-search` (or a pattern matching it), in the

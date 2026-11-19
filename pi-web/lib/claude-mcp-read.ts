@@ -16,26 +16,12 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { McpScope } from "./api-types";
 import { maskArgs, maskCommand, maskUrl } from "./mcp-secrets";
+import type { ClaudeMcpServerInfo, McpScope } from "./api-types";
 
-/** One of claude's MCP entries as the unified model lists it (masked). */
-export interface ClaudeMcpServerInfo {
-  name: string;
-  /** The unified scope: claude's user is the global group, its local is Claude-only. */
-  scope: McpScope;
-  /** The native file the entry was read from. */
-  sourcePath: string;
-  command?: string;
-  args?: string[];
-  url?: string;
-  /** claude's own `type` as written, when the entry carries one. */
-  type?: string;
-  envNames: string[];
-  headerNames: string[];
-  /** Named in the state file's `disabledMcpServers`; read-only display (Q1 A). */
-  disabled?: boolean;
-}
+// The entry type is client-safe and lives once, in api-types: the unified
+// rows and the panel read it, this module fills it.
+export type { ClaudeMcpServerInfo } from "./api-types";
 
 /** What reading claude's native MCP files found. */
 export interface ClaudeMcpReadResult {
