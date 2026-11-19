@@ -150,9 +150,13 @@ func TestWorkstationSeed(t *testing.T) {
 				t.Errorf("polyforge#162: .dockerignore must NOT exclude %s — the seed's release checkout needs it", needed)
 			}
 		}
-		// node_modules, build caches and the test trees stay OUT.
+		// node_modules, build caches, the test trees and the credential
+		// paths pi-web's own .dockerignore keeps out (review r1#N3) stay
+		// OUT: a developer's local pi-web/.env.local must never ride
+		// the context into the seed or the image.
 		for _, heavy := range []string{
 			"pi-web/node_modules", "pi-web/.next", "pi-web/e2e", "pi-web/.polyforge",
+			"pi-web/.env", "pi-web/.env.*", "pi-web/.claude", "pi-web/workspace", "pi-web/coverage",
 			"webui/node_modules", "webui/e2e", "webui/dist",
 			".git", ".github", ".pi", ".polyforge", "docs", "test", "tools", "deploy",
 		} {
