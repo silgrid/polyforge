@@ -138,7 +138,7 @@ func v29ReleaseActions(releaseDelay time.Duration, extraDeploy []map[string]any,
 		`"notes":"RELEASE-NOTES.md","repo":"repos/` + v29Repo + `","pre_release_tags_file":"artifacts/pre-release-tags.txt","resumed":false}` + "\n"
 	actions := []map[string]any{
 		{"do": "envelope", "id": "release", "outcome": "completed", "ms": int(releaseDelay / time.Millisecond),
-			"run":   []string{v29ReleaseLine},
+			"run": []string{v29ReleaseLine},
 			"files": map[string]string{"artifacts/release-record.json": record, "artifacts/pre-release-tags.txt": "",
 				"artifacts/release-pins.json": `{"batch":"wi_b29","repos":{"` + v29Repo + `":"` + v29Commit + `"}}` + "\n"},
 			"output": map[string]any{"verdict": "pass", "version": v29Version, "commit": v29Commit, "notes": "RELEASE-NOTES.md",
