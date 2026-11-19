@@ -1,11 +1,18 @@
 # dist/workstation/Caddyfile — the optional HTTPS front's config
 # (polyforge#161, 84-image). Mounted read-only into the https-front
-# service (compose --profile https): Caddy terminates TLS with its own
-# local CA — no external certificate flow, no ACME account — and proxies
-# the workstation service's Pi Web port. The workstation container
-# itself never changes shape: the front is a sibling service, one
-# compose profile away, and the default boots never start it.
-workstation:443 {
+# service (docker compose --profile <boot> --profile https up -d).
+#
+# The site address is the operator's hostname (WORKSTATION_HTTPS_HOST,
+# localhost by default): caddy serves ONLY the hostname the site
+# address names and signs the internal-CA certificate for it, so a
+# hardcoded service name would answer no request the browser makes.
+# The same hostname must ride PI_WEB_ALLOWED_HOSTS — Pi Web trusts only
+# loopback names, IP literals and the names that variable lists.
+#
+# The proxy target is the `workstation` network alias, which compose
+# puts on BOTH boot services (the aihub variant carries no
+# container_name of that name).
+{$WORKSTATION_HTTPS_HOST:localhost} {
 	tls internal
 	reverse_proxy workstation:30141
 }

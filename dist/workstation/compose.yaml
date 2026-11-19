@@ -67,6 +67,12 @@ x-workstation: &workstation
     # Pi Web, bound to the host's loopback by default; remote access is
     # the https profile's front below (or an operator override).
     - "127.0.0.1:${WORKSTATION_WEB_PORT:-30141}:30141"
+  networks:
+    # the `workstation` name answers under BOTH boot services — the
+    # https front reverse-proxies it, and the aihub variant carries no
+    # container_name of that name.
+    default:
+      aliases: [workstation]
 
 services:
   workstation:
@@ -87,6 +93,10 @@ services:
   https-front:
     image: docker.io/library/caddy:2.10.2-alpine
     profiles: [https]
+    environment:
+      # the Caddyfile's site address: the hostname the operator reaches
+      # the front by — the same name belongs in PI_WEB_ALLOWED_HOSTS.
+      WORKSTATION_HTTPS_HOST: "${WORKSTATION_HTTPS_HOST:-localhost}"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data

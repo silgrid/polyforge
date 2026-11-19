@@ -37,9 +37,14 @@ profile only when named, so every start names one):
 
 ```sh
 cd dist/workstation
-PI_WEB_PASSWORD='<a long, unique secret>' docker compose --profile no-aihub up -d --build
-PI_WEB_PASSWORD='<a long, unique secret>' docker compose --profile aihub     up -d --build
+PI_WEB_PASSWORD='<a long, unique secret>' docker compose --profile no-aihub build
+PI_WEB_PASSWORD='<a long, unique secret>' docker compose --profile no-aihub up -d
+# the aihub boot mode, same two steps with --profile aihub
 ```
+
+Build and start are two explicit steps, never `up --build`: measured
+once on compose v5, `up --build` left a stale image tagged when the
+Containerfile had changed, and the boot then proved the wrong tree.
 
 The `aihub` profile passes `--with-aihub` to `pf supervise`: the aihub
 server starts as another watched child, and Pi Web (once the component
@@ -51,10 +56,18 @@ terminates TLS with its own local CA and reverse-proxies the
 workstation's Pi Web:
 
 ```sh
-docker compose --profile no-aihub --profile https up -d --build
+PI_WEB_PASSWORD='<a long, unique secret>' \
+WORKSTATION_HTTPS_HOST=<the hostname the browser will use> \
+PI_WEB_ALLOWED_HOSTS=<the same hostname> \
+docker compose --profile no-aihub --profile https up -d
 ```
 
-Point the browser at `https://<host>:8443` (`WORKSTATION_HTTPS_PORT`
+`WORKSTATION_HTTPS_HOST` names the hostname caddy serves and signs its
+certificate for (`localhost` by default — a hostname caddy does not
+know is refused with no matching certificate); the same name belongs in
+`PI_WEB_ALLOWED_HOSTS`, because Pi Web trusts only loopback names, IP
+literals and the names that variable lists. Point the browser at
+`https://<WORKSTATION_HTTPS_HOST>:8443` (`WORKSTATION_HTTPS_PORT`
 moves the published port) and import Caddy's root certificate — printed
 by `docker compose exec https-front cat /data/caddy/pki/authorities/local/root.crt` —
 for a trusted local CA; no external certificate flow is involved. The password is
