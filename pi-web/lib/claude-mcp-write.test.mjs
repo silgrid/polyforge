@@ -88,7 +88,7 @@ test("an unrecognized version refuses before any spawn; a missing binary too", a
 });
 
 test("a failed command is reported by its exit code, never by the child's output", async (t) => {
-  const { log, cwd, env } = await stub(t);
+  const { cwd, env } = await stub(t);
   const failing = { ...env, CLAUDE_MCP_STUB_FAIL: "remove" };
   const outcome = await claudeMcpRemove("global", "demo", { binary: stubBinary, version: KNOWN, cwd, env: failing });
   assert.equal(outcome.ok, false);
