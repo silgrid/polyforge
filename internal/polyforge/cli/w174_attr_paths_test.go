@@ -66,7 +66,10 @@ func TestW174FileCreateAttrPathsNest(t *testing.T) {
 
 // TestW174FileCreateAttrPathConflicts: one create whose paths collide
 // or carry an empty segment is refused whole, nothing is sent, and the
-// refusal does not depend on flag order.
+// refusal does not depend on flag order — every case runs as given AND
+// reversed (an object VALUE beside its sub-path must refuse in both
+// directions: the value object is never a container to descend into,
+// polyforge#174 review r1#1).
 func TestW174FileCreateAttrPathConflicts(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -77,32 +80,47 @@ func TestW174FileCreateAttrPathConflicts(t *testing.T) {
 		{"parent beside its sub-path", []string{"a=1", "a.b=2"}},
 		{"sub-path beside its parent", []string{"a.b.c=1", "a.b=2"}},
 		{"object value beside its sub-path", []string{`a={"b":"x"}`, "a.b=y"}},
+		// the two below are the ones the walk used to let through in one
+		// order: the JSON value object was descended into as a container
+		{"object value beside another sub-path", []string{`a={"b":"x"}`, "a.c=y"}},
+		{"empty object value beside its sub-path", []string{`a={}`, "a.b=1"}},
+		{"split object beside its marker sibling", []string{`split={"origin":"X"}`, "split.unit=Y"}},
 		{"empty inner segment", []string{"a..b=1"}},
 		{"leading dot", []string{".a=1"}},
 		{"trailing dot", []string{"a.=1"}},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			var rec reqRecorder
-			srv := newFakeAihub(t, &rec, w174Answer)
-			env := withMappingConfig(t)
-			env["PF_SERVER"] = srv.URL
-			env["PF_API_KEY"] = "k_cli"
-			args := []string{"file", "create", "--project", "polyforge", "--goal", "conflict"}
-			for _, f := range tc.flags {
-				args = append(args, "--attr", f)
+		for _, reverse := range []bool{false, true} {
+			name := tc.name
+			flags := append([]string{}, tc.flags...)
+			if reverse {
+				name += " (flags reversed)"
+				for i, j := 0, len(flags)-1; i < j; i, j = i+1, j-1 {
+					flags[i], flags[j] = flags[j], flags[i]
+				}
 			}
-			code, _, stderr := runPf(t, env, args...)
-			if code != 1 {
-				t.Fatalf("code=%d, want 1 (stderr %s)", code, stderr)
-			}
-			if n := len(rec.all()); n != 0 {
-				t.Fatalf("%d request(s) reached aihub — a refused create sends nothing", n)
-			}
-			if !strings.Contains(stderr, "--attr") {
-				t.Fatalf("the refusal must name the --attr flag: %s", stderr)
-			}
-		})
+			t.Run(name, func(t *testing.T) {
+				var rec reqRecorder
+				srv := newFakeAihub(t, &rec, w174Answer)
+				env := withMappingConfig(t)
+				env["PF_SERVER"] = srv.URL
+				env["PF_API_KEY"] = "k_cli"
+				args := []string{"file", "create", "--project", "polyforge", "--goal", "conflict"}
+				for _, f := range flags {
+					args = append(args, "--attr", f)
+				}
+				code, _, stderr := runPf(t, env, args...)
+				if code != 1 {
+					t.Fatalf("code=%d, want 1 (stderr %s)", code, stderr)
+				}
+				if n := len(rec.all()); n != 0 {
+					t.Fatalf("%d request(s) reached aihub — a refused create sends nothing", n)
+				}
+				if !strings.Contains(stderr, "--attr") {
+					t.Fatalf("the refusal must name the --attr flag: %s", stderr)
+				}
+			})
+		}
 	}
 	// non-conflicting paths sharing a root keep merging (the split pair).
 	t.Run("sibling paths merge", func(t *testing.T) {
