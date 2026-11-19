@@ -160,7 +160,8 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from pfstep import container, deadline, duration, git, goglob, gotext, runner, secretpat  # noqa: E402
 from pfstep import targetbranch  # noqa: E402
-from pfstep.analysis import read_analysis, static_problem  # noqa: E402
+from pfstep.analysis import missing_selected_problem, read_analysis, selected_problem, static_problem  # noqa: E402
+from pfstep import scoped_plan  # noqa: E402
 from pfstep import godecode as gd  # noqa: E402
 from pfstep.gotext import clip_list, clip_runes, clip_text, fields, quote, short_sha, trim_space  # noqa: E402
 from pfstep.invoke import Invocation, Parser  # noqa: E402
@@ -2388,6 +2389,21 @@ def carries(inv: Invocation, args: List[str]) -> int:
     return 0
 
 
+def _repo_touched(capsule: str, repo_dir: str) -> bool:
+    """Whether the repo carries commits beyond its base branch — the same
+    measure verification uses (the branch pfstep.scoped_plan.base_branch_of
+    names, the count origin/<branch>..HEAD); a base that cannot be named
+    answers false (the requirement cannot apply)."""
+    branch, _why = scoped_plan.base_branch_of(capsule, repo_dir)
+    if branch == "":
+        return False
+    out, err = run_git(repo_dir, "rev-list", "--count", "origin/" + branch + "..HEAD")
+    if err is not None:
+        return False
+    n = trim_space(out)
+    return n.isdigit() and int(n) > 0
+
+
 def _is_dir_of(repo_dir: str) -> Callable[[str], bool]:
     """Whether a cwd is a directory of repo_dir's working tree (the
     shared validator's is_dir plumbing)."""
@@ -2433,7 +2449,7 @@ def analysis(inv: Invocation, args: List[str], environ: Mapping[str, str],
     path = c.path(ns.analysis, DEFAULT_ANALYSIS)
     rel = rel_to(c.dir, path)
     entries: List[Dict[str, Any]] = []
-    d: Dict[str, Any] = {"analysis_file": rel, "entries": entries, "cut": []}
+    d: Dict[str, Any] = {"analysis_file": rel, "entries": entries, "cut": [], "selected": []}
     inv.details = d
     try:
         an = read_analysis(path)
@@ -2446,6 +2462,27 @@ def analysis(inv: Invocation, args: List[str], environ: Mapping[str, str],
                  "note": "listed after the analysis's first %d (its supplement cap): not run" % an.limit}
                 for ad in cut]
     problems: List[str] = []
+    # the machine selection records: the one shared validator (the same
+    # rules verification's --analysis check runs), judged statically — the
+    # record's own evidence is its run's (pfstep/analysis.selected_problem)
+    have = set(c.repos)
+    for name in sorted(set(list(an.selected) + [n for n in c.repos if _repo_touched(c.dir, os.path.join(c.repos_dir, n))])):
+        sel = an.selected.get(name)
+        srec: Dict[str, Any] = {"repo": name}
+        if name not in have:
+            srec["status"], srec["problem"] = "fail", unknown_repo_problem(name)
+        elif sel is None:
+            srec["status"], srec["problem"] = "fail", missing_selected_problem(name)
+        else:
+            srec["head"], srec["selection"] = sel.head, sel.status
+            problem = selected_problem(sel, repo_head(os.path.join(c.repos_dir, name)))
+            if problem:
+                srec["status"], srec["problem"] = "fail", problem
+            else:
+                srec["status"] = "pass"
+        d["selected"].append(srec)
+        if srec["status"] == "fail":
+            problems.append("%s:selected: %s" % (name, srec["problem"]))
     # the logs, the deadline and the runs — only when an entry will run
     runs = [ad for ad in taken if ad.repo in c.repos]
     logs = ns.log_dir
@@ -2536,7 +2573,7 @@ def analysis(inv: Invocation, args: List[str], environ: Mapping[str, str],
             continue
         rec["status"] = "pass"
     if problems:
-        inv.summary = "%d of %d listed test(s) fail the close check: %s" % (
+        inv.summary = "%d of the analysis's %d listed test(s) and selection record(s) fail the close check: %s" % (
             len(problems), len(taken), "; ".join(clip_list(problems, 3)))
         return 1
     tail = ""
