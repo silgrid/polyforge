@@ -358,9 +358,10 @@ try {
     await tab(page, /^Models \(legacy\)$/).click({ timeout: ACTION_MS });
     const models = sectionHost(page, "legacy-models");
     await models.locator(".config-sidebar-item").filter({ hasText: "Google" }).first().click({ timeout: ACTION_MS });
+    // the heading renders in the detail header's uppercase style
     const movedText = await waitFor(async () => {
       const text = await models.innerText();
-      return text.includes("Sign-in has moved") ? text : false;
+      return /sign-in has moved/i.test(text) ? text : false;
     }, ACTION_MS, "the legacy tab never showed the moved notice");
     assert.ok(!movedText.includes("Log in"), "the legacy tab still offers a login");
     assert.ok(!movedText.includes("Add provider"), "the legacy tab still offers the picker");
