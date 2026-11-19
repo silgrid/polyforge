@@ -6,7 +6,7 @@ package cli
 // doctor and Pi Web all read it: the Host file. One table, one row per
 // tier, the value a list of `<harness>:<model>[:<effort>]` candidates
 // (stored per harness — a model's id differs between harnesses, so
-// \"apply to every harness\" is Pi Web's to expand, 85b2). The tier
+// "apply to every harness" is Pi Web's to expand, 85b2). The tier
 // names are not a fixed set: a name needs only the lane tier grammar,
 // the conventional `default` tier carries the mainline models, and a
 // catalog tier a lane does not declare is information, never a defect
