@@ -487,10 +487,12 @@ function emitCount(type, message) {
 		if (!Array.isArray(message.content)) return 0;
 		for (const block of message.content) {
 			if (!isObjectCount(block)) continue;
+			// toAssistantBlocks() has no image branch: an image-only assistant
+			// content emits nothing (review r2 N1); a tool_use needs only a
+			// string id, the empty string included.
 			if (block.type === "text" && typeof block.text === "string") return 1;
 			if (block.type === "thinking" && typeof block.thinking === "string" && block.thinking) return 1;
-			if (block.type === "tool_use" && typeof block.id === "string" && block.id) return 1;
-			if (block.type === "image" && isObjectCount(block.source)) return 1;
+			if (block.type === "tool_use" && typeof block.id === "string") return 1;
 		}
 		return 0;
 	}
@@ -572,7 +574,9 @@ async function headerSummary(filePath, fp) {
 			} catch {
 				continue;
 			}
-			if (!entry || typeof entry !== "object" || entry.type !== "session") return null;
+			// A line that parses to a JSON primitive is not a header: skip it
+			// and keep looking, as the old main-thread reader did (r2 N1).
+			if (!entry || typeof entry !== "object" || entry.type !== "session") continue;
 			if (typeof entry.id !== "string" || typeof entry.cwd !== "string" || typeof entry.timestamp !== "string") return null;
 			const created = new Date(entry.timestamp);
 			if (!Number.isFinite(created.getTime())) return null;

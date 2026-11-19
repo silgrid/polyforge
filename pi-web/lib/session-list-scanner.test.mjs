@@ -472,6 +472,7 @@ test("a deferred summary skips a leading non-object line and still finds the hea
   // the next line, and so must the worker's header summary (review r2 N1).
   const path = write("after-null", [message("a1", "user", "first question")]);
   fs.writeFileSync(path, "null\n" + fs.readFileSync(path, "utf8"));
+  reads.length = 0;
 
   const summary = await listSessionsIncremental({ deferDetails: true });
   const row = summary.find((session) => session.id === "after-null");
