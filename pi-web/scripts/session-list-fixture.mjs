@@ -141,6 +141,8 @@ const manifest = {
   claude: [],
   totals: { piFiles: 0, piBytes: 0, claudeFiles: 0, claudeBytes: 0, largeFiles: 0, projectDirs: 0 },
 };
+mkdirSync(join(root, "agent"), { recursive: true });
+writeFileSync(join(root, "agent", "claude-sessions.json"), `${JSON.stringify({ version: 1, sessions: [] }, null, 2)}\n`);
 mkdirSync(dirname(manifestPath), { recursive: true });
 writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 console.log(JSON.stringify({ ok: true, manifest: manifestPath, totals: manifest.totals }));
