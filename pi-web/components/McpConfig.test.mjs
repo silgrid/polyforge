@@ -1609,6 +1609,7 @@ test("a pi row claude does not hold says so, never the local-scope sentence (r2#
   });
   const html = view({ cwd: "/Users/me/repo", load: { state: "loaded", data }, selected: "global\0pi-own" });
   const markup = decode(html);
-  assert.match(markup, new RegExp(messages["mcp.claude.notHeld"]), "the claude partition says claude does not hold this entry");
+  assert.equal(typeof messages["mcp.claude.notHeld"], "string", "the key is translated");
+  assert.ok(markup.includes(messages["mcp.claude.notHeld"]), "the claude partition says claude does not hold this entry");
   assert.ok(!markup.includes(messages["mcp.applyTo.piUnsupportedLocal"]), "the local-scope sentence stays in the local group where it is true");
 });
