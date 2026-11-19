@@ -654,3 +654,39 @@ func TestDoctorPrerequisitesInContainer(t *testing.T) {
 		t.Fatalf("under the container supervisor a missing tmux must pass naming the exemption: %+v", c)
 	}
 }
+
+// TestDoctorContainerJudgmentIsTheOneHelper (r1#2): the judgment both
+// doctor rows share — a tmux loop or a systemd unit answering first
+// keeps its own verdict (the daemon's environment reports NAMES only,
+// so a tmux-started daemon inside a container cannot be told apart by
+// the marker name and must not read as container-supervised); only the
+// pure container case judges container-supervised.
+func TestDoctorContainerJudgmentIsTheOneHelper(t *testing.T) {
+	supervised := []string{"HOME", "PATH", supervisor.MarkerEnv}
+	t.Setenv("PATH", t.TempDir()) // no tmux, no systemctl
+	containerFiles(t, true)
+	if !containerSupervisedDaemon(true, supervised) {
+		t.Fatal("a container daemon with the marker and no tmux/systemd is container-supervised")
+	}
+	// a tmux loop answering: NOT container-supervised — the daemon is
+	// the tmux loop's, whatever the marker name alone could suggest
+	t.Setenv("PATH", fakeTmuxPath(t, 0))
+	if containerSupervisedDaemon(true, supervised) {
+		t.Fatal("a tmux-supervised daemon inside a container must keep the tmux verdict")
+	}
+	// no marker in the daemon's environment: never
+	t.Setenv("PATH", t.TempDir())
+	if containerSupervisedDaemon(true, []string{"HOME", "PATH"}) {
+		t.Fatal("a hand-started daemon is never container-supervised")
+	}
+	// the daemon down: never
+	if containerSupervisedDaemon(false, supervised) {
+		t.Fatal("a daemon that does not answer is never container-supervised")
+	}
+	// the container file alone (a host that inherited the marker):
+	// never
+	containerFiles(t, false)
+	if containerSupervisedDaemon(true, supervised) {
+		t.Fatal("the marker without the container file is never container-supervised")
+	}
+}
