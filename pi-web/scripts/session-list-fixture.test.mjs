@@ -117,24 +117,31 @@ test("the manifest's totals are the files' own arithmetic", (t) => {
 });
 
 test("the corpus is reproducible per seed and differs across seeds", (t) => {
-  const first = generate(t, ["--seed", "7"]);
-  const secondRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pi-web-fixture-seed-"));
-  t.after(() => fs.rmSync(secondRoot, { recursive: true, force: true }));
+  // The corpus is a function of --seed and the root alone (a session header
+  // carries its cwd, so hashes compare within one root): regenerating into the
+  // same root reproduces the manifest byte for byte, and a different seed does not.
+  const { root, manifestPath } = generate(t, ["--seed", "7"]);
+  const first = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
   execFileSync(process.execPath, [
-    script, "--root", secondRoot,
+    script, "--root", root,
     "--pi-files", "9", "--pi-bytes", "400000",
     "--claude-files", "4", "--claude-bytes", "200000",
     "--large-file-min-bytes", "30000", "--project-dirs", "3",
-    "--seed", "7", "--manifest", path.join(secondRoot, "manifest.json"),
+    "--seed", "7", "--manifest", manifestPath,
   ], { encoding: "utf8" });
-  const same = JSON.parse(fs.readFileSync(path.join(secondRoot, "manifest.json"), "utf8"));
-  assert.deepEqual(same.pi.map((entry) => entry.sha256), JSON.parse(fs.readFileSync(first.manifestPath, "utf8")).pi.map((entry) => entry.sha256),
+  const same = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  assert.deepEqual(same.pi.map((entry) => entry.sha256), first.pi.map((entry) => entry.sha256),
     "the same seed regenerates the same corpus");
 
-  const other = generate(t, ["--seed", "8"]);
-  const otherManifest = JSON.parse(fs.readFileSync(other.manifestPath, "utf8"));
-  const firstManifest = JSON.parse(fs.readFileSync(first.manifestPath, "utf8"));
-  assert.notDeepEqual(otherManifest.pi.map((entry) => entry.sha256), firstManifest.pi.map((entry) => entry.sha256),
+  execFileSync(process.execPath, [
+    script, "--root", root,
+    "--pi-files", "9", "--pi-bytes", "400000",
+    "--claude-files", "4", "--claude-bytes", "200000",
+    "--large-file-min-bytes", "30000", "--project-dirs", "3",
+    "--seed", "8", "--manifest", manifestPath,
+  ], { encoding: "utf8" });
+  const other = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  assert.notDeepEqual(other.pi.map((entry) => entry.sha256), first.pi.map((entry) => entry.sha256),
     "a different seed generates a different corpus");
 });
 
