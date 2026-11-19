@@ -68,6 +68,30 @@ Failures save a screenshot, Playwright trace, and server log under
 `test-results/e2e/`; CI uploads that directory. Open a trace with
 `npx playwright show-trace test-results/e2e/trace.zip`.
 
+## Network-change tolerance
+
+The build and e2e lanes run in the host's network namespace: a sibling
+container starting or stopping adds or removes a veth/bridge interface, and
+Chromium then fails an in-flight request — even one to 127.0.0.1 — with
+`net::ERR_NETWORK_CHANGED`; the page logs one console error about it
+(`Failed to load resource: net::ERR_NETWORK_CHANGED`). That is host noise,
+not a product defect (polyforge#128: three false reds in one build, each
+green on a targeted re-run).
+
+`e2e/run.mjs` collects browser errors through `e2e/console-errors.mjs`
+(`trackBrowserErrors(page, { base })`, one collector per viewport pass).
+A console error is dropped only when it is paired
+one-to-one with a `requestfailed(errorText=net::ERR_NETWORK_CHANGED)`
+event, at most 3 per collector, and each dropped error is logged
+`INFO tolerated network-change: <url>` (the failed request's URL). The
+pairing runs when the flow settles, so the order of the requestfailed and
+console events cannot matter. Everything else stays red: an unpaired
+console error with the same text, an application catch text
+(`Failed to fetch`), `ERR_CONNECTION_REFUSED`, `pageerror`, any 5xx from
+the test server, and the tolerated pair past the cap of 3. The rules are
+pinned by `lib/e2e-console-errors.test.mjs` (`node --test
+lib/e2e-console-errors.test.mjs`).
+
 ## Running every suite in parallel
 
 `npm run test:e2e:all` (`e2e/all.mjs`) runs every standalone `e2e/*.mjs` suite
