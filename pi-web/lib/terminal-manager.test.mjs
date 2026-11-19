@@ -356,3 +356,17 @@ sleep 0.1
     killTerminal(id);
   }
 });
+
+test("a login terminal id cannot be reused while its command runs", async (t) => {
+  const scratch = mkdtempSync(join(tmpdir(), "pi-web-login-terminal-id-"));
+  t.after(() => rmSync(scratch, { recursive: true, force: true }));
+  const stub = join(scratch, "login-cmd");
+  writeFileSync(stub, `#!/bin/sh\nsleep 1\n`);
+  chmodSync(stub, 0o755);
+  const id = createLoginTerminal([stub], {}, homedir(), 80, 24, "b".repeat(32));
+  try {
+    assert.throws(() => createLoginTerminal([stub], {}, homedir(), 80, 24, id), /already in use/);
+  } finally {
+    killTerminal(id);
+  }
+});
