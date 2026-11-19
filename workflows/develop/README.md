@@ -118,7 +118,16 @@ and `artifacts/merge/landing.json`. The daemon orchestrates; it judges no conten
   runs and the rest, the whole tool window its budget; every other ticket runs the light
   tier. Exit 0 passes; a red it can place on the change FAILs to `build`; a red it
   cannot place is the owner's call — run again, have it fixed, or accept it (`waive`,
-  citing the owner's message). Exit 2 is retried, then `blocked`. The heavy-run admission
+  citing the owner's message). The step's `audit` parameter (the dispatch's
+  `PF_PARAM_AUDIT`, default `on`) turns the lane's dependency audit off
+  when the project's owner sets it to `off`
+  (`steps.<project>.verification.params.audit` in the workspace config, or
+  a ticket's `pf override` — a repository's own conf key can never do it):
+  the engine is then asked `--audit off`, no full report plans the `audit`
+  command, and the result files record the closure. Any other value is a
+  named error before any check runs (exit 2, the fixed mark
+  `pf-audit-param-invalid` in the summary) — the owner fixes the config; a
+  retry cannot. Exit 2 is retried, then `blocked`. The heavy-run admission
   is the daemon's: a denied dispatch waits in the daemon's queue, no process, no budget.
 - **publish** (gate; skill `publish`) — checks that the verification's result names every
   repo's HEAD and passed (or that the owner's waiver of that same round is quoted on the

@@ -42,7 +42,16 @@ steps:
     # container repo, Dockerfile or not. The project sets
     # steps.<project>.full-gate.params.image, a ticket overrides it with
     # `pf override`; the value reaches gate.py as PF_PARAM_IMAGE.
-    params: { image: "" }
+    # The step's `audit` parameter (polyforge#138), default "on": the
+    # lane's own dependency audit, the `audit` command the scope engine
+    # appends to every full report. A project whose owner decides
+    # against the audit sets steps.<project>.full-gate.params.audit to
+    # "off" (or a ticket override): the gate then plans without the
+    # `audit` command and records the closure in its result and green
+    # tags. The switch is the project owner's alone — no key of a
+    # repository's verify-scope.conf can turn the audit off or loosen
+    # it; the value reaches gate.py as PF_PARAM_AUDIT.
+    params: { image: "", audit: "on" }
     hub: { verbs: [get, list, batch, file], attrs: [integration, integration_fix] }
   - id: close
     skill: close

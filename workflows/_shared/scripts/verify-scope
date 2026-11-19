@@ -213,6 +213,18 @@ root (one ``../`` per segment); at the top the helper's default already is
 that file. Scoped, --micro and no-analyzer reports carry none. The gate's
 own contract is in audit-deps (beside it).
 
+The one caller-side switch is ``--audit <on|off>`` (polyforge#138): the
+default (and ``--audit on``) keep the gate exactly as above — no option,
+no byte changes; ``--audit off`` drops the ``audit`` command from the
+full tail (and out of e2e_selection.full_commands) and changes nothing
+else. The option is the project owner's decision alone, handed in by the
+steps that run this engine (a step's PF_PARAM_AUDIT): no key of a
+repository's conf turns the audit off or loosens it — only the
+tightening ``audit_prod_level=`` above ever reaches the gate — and an
+engine invoked without the option answers today's report byte for byte.
+Any other value of the option is a usage error (exit 2), never a silent
+on or off.
+
 Zero-config defaults are stack-generic. A Go repo's top-level test/
 directory is an ordinary package unless the conf declares
 ``go_harness=<path>`` (for example ``go_harness=test/e2e-parallel.sh``): the
@@ -306,6 +318,11 @@ USAGE = """usage: workflows/_shared/scripts/verify-scope [--base <rev>] [--full 
   --full         force the full tier whatever the diff
   --micro        micro-lane evidence: the base conf, fast phase + micro_check
   --light        the light tier: the conf's forced-full triggers do not apply
+  --audit <on|off>  the dependency-audit gate: on (the default, and no
+                 option at all) keeps it; off drops the audit command from
+                 the full tail — the project owner's switch, handed in by
+                 the steps as PF_PARAM_AUDIT; any other value is a usage
+                 error
   --json         print the report as one JSON object (needs python3)
   --run          print the report, then run the reported commands in order
   --since <rev>  also report whether <rev>..HEAD touches this diff's affected set
@@ -372,6 +389,11 @@ class Engine:
         self.force_full = False
         self.micro = False
         self.light = False
+        # polyforge#138: the dependency-audit gate's caller-side switch —
+        # "on" (the default, no option) keeps the gate; "off" drops the
+        # audit command from the full tail; any other value is a usage
+        # error. No conf key reaches this (parse_args only).
+        self.audit = "on"
         self.parse_args(argv)
         self.diag_lines: List[str] = []
         # One command record: [name, phase, source, cmd] (name "" = an
@@ -510,6 +532,16 @@ class Engine:
                 i += 1
             elif a == "--light":
                 self.light = True
+                i += 1
+            elif a == "--audit":
+                if i + 1 >= len(argv) or argv[i + 1] not in ("on", "off"):
+                    self.usage_err("--audit needs on or off")
+                self.audit = argv[i + 1]
+                i += 2
+            elif a.startswith("--audit="):
+                self.audit = a[len("--audit="):]
+                if self.audit not in ("on", "off"):
+                    self.usage_err("--audit needs on or off")
                 i += 1
             elif a in ("-h", "--help"):
                 sys.stderr.write(USAGE)
@@ -2762,11 +2794,14 @@ class Engine:
                 # The dependency-audit gate closes every full-tier report of
                 # a repository with an analyzer: after the conf's or
                 # analyzer's full tail and after the carries selection, so
-                # no conf key reaches it but the tightening audit_prod_level.
-                audit_cmd = self.audit_command()
-                if audit_cmd != "" and self.analyzer != "":
-                    self.commands.append(["audit", "full", "default", audit_cmd])
-                    self.sel_full.append(audit_cmd)
+                # no conf key reaches it but the tightening audit_prod_level
+                # — unless the caller's --audit is off (polyforge#138), the
+                # project owner's switch, which drops the command alone.
+                if self.audit != "off":
+                    audit_cmd = self.audit_command()
+                    if audit_cmd != "" and self.analyzer != "":
+                        self.commands.append(["audit", "full", "default", audit_cmd])
+                        self.sel_full.append(audit_cmd)
             else:
                 for c in self.scoped_cmds:
                     self.add_cmd("scoped", c)
