@@ -10,7 +10,6 @@ import test from "node:test";
 import {
   BG_LOG_MAX_BYTES_DEFAULT,
   spawnBgSupervisedTask,
-  stopBgTaskGroup,
 } from "./bg-supervisor.ts";
 
 const POLL_STEP_MS = 25;
@@ -45,8 +44,8 @@ async function spawnTask(command, options = {}) {
 }
 
 function cleanup(task) {
-  // Best-effort, bounded by the supervisor's own escalation; ESRCH is success.
-  void stopBgTaskGroup(task.pgid).catch(() => undefined);
+  // Best-effort, bounded by the supervisor's own escalation; a gone group is success.
+  void task.stop().catch(() => undefined);
 }
 
 test("the default log cap is the ticket's 64 MiB", () => {
@@ -145,7 +144,22 @@ test("a log past its byte cap stops the process group with a log-limit reason", 
   const result = await task.done;
   assert.equal(result.reason, "log-limit");
   const size = (await stat(task.logPath)).size;
-  assert.ok(size <= 8 * 1024, `the log must be capped at 8 KiB, got ${size} bytes`);
+  assert.equal(size, 8 * 1024, "the log fills the cap exactly, to the byte");
   await pollUntil(() => !groupAlive(task.pgid), 5_000, "the capped group to disappear");
+  await rm(task.dir, { recursive: true, force: true });
+});
+
+test("the wrapper drains the pipes before killing the group, so the log keeps the command's last bytes", async (t) => {
+  // Past the 64 KiB pipe capacity: when the shell exits, the command's tail is
+  // still in flight inside the pipe, and only a drained shutdown keeps it.
+  const total = 70_000;
+  const task = await spawnTask(`head -c ${total} /dev/zero | tr '\\0' x`);
+  t.after(() => cleanup(task));
+  const result = await task.done;
+  assert.equal(result.exitCode, 0);
+  assert.equal((result.bytesWritten ?? 0), total, "the report counts every byte the command wrote");
+  await pollUntil(() => !groupAlive(task.pgid), 5_000, "the ended group to disappear");
+  const size = (await stat(task.logPath)).size;
+  assert.equal(size, total, "the log holds the whole output, last bytes included");
   await rm(task.dir, { recursive: true, force: true });
 });
