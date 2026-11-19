@@ -212,11 +212,16 @@ func TestSuperviseStopForwardsOnceAndWaitsWithinGrace(t *testing.T) {
 	supPoll(t, "the daemon child to start", func() bool {
 		return pidAlive(supReadPid(pidF))
 	})
-	// two stop signals: the second must not reach the children
+	// two stop signals: the second must not reach the children. The
+	// first is OBSERVED delivered (the daemon's term line) before the
+	// second is sent — a fixed delay could let the two merge into one
+	// delivery and the exactly-once assertion pass vacuously (r1#n2).
 	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(50 * time.Millisecond)
+	supPoll(t, "the first TERM to be delivered", func() bool {
+		return supLineCount(termF) == 1
+	})
 	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
 		t.Fatal(err)
 	}
