@@ -177,12 +177,14 @@ func TestContainerEngineConfigFace(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("config list exited %d: %s", code, stderr)
 	}
-	var listed []map[string]any
+	var listed struct {
+		Items []map[string]any `json:"items"`
+	}
 	if err := json.Unmarshal([]byte(stdout), &listed); err != nil {
 		t.Fatalf("config list --json did not print JSON: %v\n%s", err, stdout)
 	}
 	found := false
-	for _, it := range listed {
+	for _, it := range listed.Items {
 		if it["key"] == "container_engine" {
 			found = true
 			if it["value"] != "podman" || it["source"] != "file" {
