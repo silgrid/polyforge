@@ -23,7 +23,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright";
 import { ACTION_MS, COLD_MS, NAV_MS } from "./timeouts.mjs";
-import { assertNoDevServer, createHarness, seedStorage } from "./harness.mjs";
+import { assertNoDevServer, createHarness, createWaitUntil, seedStorage } from "./harness.mjs";
 
 assertNoDevServer();
 const work = mkdtempSync(join(tmpdir(), "pi-web-harness-settings-85-"));
@@ -100,6 +100,9 @@ const TABS = [
   "Sub-agents", "Plugins", "Polyforge", "Models (legacy)", "Claude (legacy)",
 ];
 
+/** A label as an anchored regex, its punctuation escaped (the legacy labels carry parens). */
+const labelRe = (label) => new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
+
 const T = {
   S1: "S85-01: Settings shows 9 new tabs plus the two legacy-marked ones, in the settled order",
   S2: "S85-02: General is a left-column layout whose three items switch the detail pane",
@@ -125,10 +128,11 @@ async function part(id, label, fn) {
   }
 }
 
+const waitFor = createWaitUntil({ every: 250 });
 const dialog = (page) => page.getByRole("dialog", { name: "Settings", exact: true });
 const sectionTabs = (page) => dialog(page).locator("nav.settings-section-tabs button.settings-section-tab");
 const sectionHost = (page, id) => dialog(page).locator(`.settings-section-host[data-settings-section="${id}"]:not([hidden])`);
-const tab = (page, label) => sectionTabs(page).filter({ hasText: label });
+const tab = (page, label) => sectionTabs(page).filter({ hasText: typeof label === "string" ? labelRe(label) : label });
 
 let coldSettings = true;
 
@@ -146,10 +150,8 @@ async function goto(page, path = "/") {
   coldSettings = false;
 }
 
-async function openSettings(page) {
-  await goto(page);
-  // The Settings button is server-rendered; a click before hydration is
-  // dropped, so wait for React's own props on the node before the one click.
+/** The Settings button is server-rendered; a click before hydration is dropped, so wait for React's own props first. */
+async function clickSettingsButton(page) {
   const button = page.getByRole("button", { name: "Settings", exact: true }).first();
   await button.waitFor({ state: "visible", timeout: COLD_MS });
   await page.waitForFunction(() => {
@@ -158,6 +160,11 @@ async function openSettings(page) {
     return !!candidate && Object.keys(candidate).some((key) => key.startsWith("__reactFiber$") || key.startsWith("__reactProps$"));
   }, null, { timeout: COLD_MS });
   await button.click({ timeout: ACTION_MS });
+}
+
+async function openSettings(page) {
+  await goto(page);
+  await clickSettingsButton(page);
   await dialog(page).waitFor({ state: "visible", timeout: COLD_MS });
   return dialog(page);
 }
@@ -179,10 +186,10 @@ try {
     assert.deepEqual(labels, TABS, `tabs (got: ${labels.join(", ")})`);
     // Skills/Agents/Plugins need a project; the rest open without one.
     for (const name of ["Skills", "Sub-agents", "Plugins"]) {
-      assert.ok(await tab(page, new RegExp(`^${name}$`)).isDisabled(), `${name} should need a project`);
+      assert.ok(await tab(page, name).isDisabled(), `${name} should need a project`);
     }
     for (const name of ["General", "Account", "Models", "Permissions", "MCP", "Polyforge", "Models (legacy)", "Claude (legacy)"]) {
-      assert.ok(!(await tab(page, new RegExp(`^${name}$`)).isDisabled()), `${name} should open without a project`);
+      assert.ok(!(await tab(page, name).isDisabled()), `${name} should open without a project`);
     }
     // The legacy tabs are marked as such in their own label.
     assert.match(labels[9], /\(legacy\)/, "the old Models tab is not marked legacy");
@@ -215,10 +222,16 @@ try {
 
   // S85-03 — AC1: the phone walks General as list → detail → back (the shared split view).
   await part("S3", "phone levels", async () => {
-    const page = await newPage({ width: 375, height: 667 });
+    const page = await newPage({ width: 320, height: 568 });
     await goto(page);
-    const button = page.getByRole("button", { name: "Settings", exact: true }).first();
-    await button.click({ timeout: ACTION_MS });
+    // The phone's sidebar starts folded; its toggle and the Settings button
+    // both need hydration first (a pre-hydration click is swallowed).
+    const sidebar = page.getByRole("button", { name: "Show sidebar", exact: true });
+    await page.waitForFunction(() => [...document.querySelectorAll("button")]
+      .some((entry) => (entry.getAttribute("aria-label") ?? entry.textContent.trim()) === "Show sidebar"
+        && Object.keys(entry).some((key) => key.startsWith("__reactFiber$") || key.startsWith("__reactProps$"))), null, { timeout: COLD_MS });
+    if (await sidebar.count()) await sidebar.click({ timeout: ACTION_MS });
+    await clickSettingsButton(page);
     const home = page.locator(".settings-phone-home");
     await home.waitFor({ state: "visible", timeout: COLD_MS });
     await home.getByRole("button", { name: "General", exact: true }).click({ timeout: ACTION_MS });
@@ -273,7 +286,10 @@ try {
     await generalSidebarItems(page).filter({ hasText: "Environment" }).click({ timeout: ACTION_MS });
     const pane = generalPane(page, "environment");
     await pane.waitFor({ state: "visible", timeout: ACTION_MS });
-    const text = await pane.innerText();
+    const text = await waitFor(async () => {
+      const body = await pane.innerText();
+      return body.includes("ANTHROPIC_API_KEY") && body.includes("CLAUDE_CODE_EXTRA_BODY") ? body : false;
+    }, ACTION_MS, "the environment pane never listed the mocked names");
     for (const name of ["ANTHROPIC_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_EXTRA_BODY"]) {
       assert.ok(text.includes(name), `the environment pane does not list ${name}`);
     }
@@ -291,8 +307,10 @@ try {
     await generalSidebarItems(page).filter({ hasText: "Effective values & sources" }).click({ timeout: ACTION_MS });
     const pane = generalPane(page, "effective");
     await pane.waitFor({ state: "visible", timeout: ACTION_MS });
-    const text = await pane.innerText();
-    assert.ok(text.includes("route-model-85"), "the pane does not show an effective value");
+    const text = await waitFor(async () => {
+      const body = await pane.innerText();
+      return body.includes("route-model-85") ? body : false;
+    }, ACTION_MS, "the effective pane never showed a mocked value");
     assert.match(text, /Inferred/, "the Inferred mark is missing");
     assert.ok(text.includes(join(agentDir, "settings.json")), "the value's source path is missing");
     // Diagnostics: one collapsed block per harness; expanding loads the output once.
@@ -314,9 +332,7 @@ try {
       ["models", /^Models$/, "models"],
     ]) {
       const page = await newPage(undefined, { "pi-web:settings-navigation": JSON.stringify({ section: stored }) });
-      await goto(page);
-      await page.getByRole("button", { name: "Settings", exact: true }).first().click({ timeout: ACTION_MS });
-      await dialog(page).waitFor({ state: "visible", timeout: COLD_MS });
+      await openSettings(page);
       const current = sectionTabs(page).filter({ hasText: expectedTab }).first();
       await current.waitFor({ state: "visible", timeout: COLD_MS });
       assert.equal(await current.getAttribute("aria-current"), "page", `stored ${stored} did not land on ${expectedHost}`);
