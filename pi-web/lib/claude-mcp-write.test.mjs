@@ -9,7 +9,8 @@
 import "#test-env";
 import assert from "node:assert/strict";
 import { chmodSync } from "node:fs";
-import { mkdtemp, readFile, realpathSync, rm } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
