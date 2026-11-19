@@ -25,3 +25,8 @@ pi-web/node_modules
 pi-web/.next
 pi-web/e2e
 pi-web/.polyforge
+pi-web/.env
+pi-web/.env.*
+pi-web/.claude
+pi-web/workspace
+pi-web/coverage
