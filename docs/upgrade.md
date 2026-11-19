@@ -783,3 +783,39 @@ design; cut the release by hand: take the latest green batch's pins
 repo at its pin and run `.polyforge/release.sh [patch] --pins <file>`
 yourself (the same way polyforge's own first release across this change
 is cut — the reference page's "Two halves" paragraph says so).
+
+## v0.2.4, the build fast check's flaky re-run and the red-state limit (polyforge#157)
+
+The workflow's own scripts changed, and a lane claimed before this keeps
+running its claim-time snapshot: the new rules reach a work item through
+the workflow version its lane snapshot carries, never a `pf` release.
+What changed under `workflows/_shared/scripts`:
+
+- `fast_checks.py --repo` re-runs a red command's located failing units
+  once each, by their derived targeted re-run (the same rules
+  verification's bar runs), and a pass is recorded flaky beside the
+  first-red log; a red command every failing unit of which re-ran flaky
+  is confirmed — by its first-run output's completion proof (the
+  declared Go harness's trailer, an aggregate e2e runner's closing
+  summary) or by one whole re-run exiting 0 — and only such a command
+  turns green. A command its own timeout killed skips the re-run phase
+  and stays red.
+- `fast_checks.py --check-units` re-runs a red unit declared
+  `pre_existing_red` once (a pass records it flaky with both logs); a
+  unit the lane just wrote is never re-run there — red it stays. A
+  unit's self-reported `timeout` in `artifacts/build/units.json` (a Go
+  duration; an invalid or non-positive one makes the file unusable)
+  bounds its recorded run, else a shared 10m default — the bar
+  commands' own 20m bound no longer applies to a recorded unit run.
+- `facts.py build --replay` bounds each replay the same way — the
+  unit's self-reported `timeout`, else `--unit-timeout` — and a
+  red-state run its own limit kills is an evidence problem: exit 1, the
+  problem naming the unit and its limit (a red-state run must exit
+  non-zero within its limit, never hang), no longer the old "not
+  judged" retried. Only a kill by the whole run's deadline stays not
+  judged. `verify.py --unit-runs` reads the same self-report with the
+  same default.
+
+What a project must change — nothing: the rules are the workflow's own,
+project-neutral, and the slow red run of a project that needs longer
+self-reports a higher `timeout` in its `units.json`.
