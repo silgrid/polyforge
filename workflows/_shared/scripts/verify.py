@@ -1779,6 +1779,8 @@ def _code_list(xs: Optional[Sequence[str]]) -> str:
 def render_report(res: Dict[str, Any]) -> str:
     """report-mechanical.md: the mechanical section of the verification report."""
     b: List[str] = ["## Mechanical run (run %d)\n\n" % res["run"]]
+    if res.get("audit_disabled"):
+        b.append("Dependency audit disabled: %s.\n\n" % res["audit_disabled"])
     if res.get("incomplete"):
         b.append("**Incomplete — no merged-tree proof could be made:** %s\n\n" % res["incomplete"])
     else:
@@ -1886,6 +1888,8 @@ def details_of(res: Dict[str, Any]) -> Dict[str, Any]:
     d: Dict[str, Any] = {"tier": res["tier"]}
     if res.get("image"):
         d["image"] = res["image"]
+    if res.get("audit_disabled"):
+        d["audit_disabled"] = res["audit_disabled"]
     if res["mechanical_verdict"]:
         d["mechanical_verdict"] = res["mechanical_verdict"]
     if res.get("fail_reason"):
@@ -2135,16 +2139,19 @@ def run(
     for name, m in doc["merge_outcomes"].items():
         if m["head"]:
             res.heads[name] = m["head"]
+    # the closure rides every summary (AC3: a reviewer sees the audit was
+    # off without opening result.json); an on run's summary stays as today
+    audit_note = "; dependency audit off (%s)" % doc["audit_disabled"] if doc.get("audit_disabled") else ""
     if doc.get("incomplete"):
-        res.summary = "not judged: " + doc["incomplete"]
+        res.summary = "not judged: " + doc["incomplete"] + audit_note
         return 2
     if doc["mechanical_verdict"] != "pass":
         fails = sum(1 for c in doc["checks"] if c["status"] == "fail")
-        res.summary = "%d check(s) failed: %s" % (fails, doc.get("fail_reason", "").split("\n", 1)[0])
+        res.summary = "%d check(s) failed: %s%s" % (fails, doc.get("fail_reason", "").split("\n", 1)[0], audit_note)
         return 1
     over = ", ".join("repos/" + r["name"] for r in doc["repos"] or [])
-    res.summary = "%s verification passed: %d check(s) over %s (tier %s)" % (
-        doc["tier"]["effective"], len(doc["checks"]), over, doc["tier"]["effective"])
+    res.summary = "%s verification passed: %d check(s) over %s (tier %s)%s" % (
+        doc["tier"]["effective"], len(doc["checks"]), over, doc["tier"]["effective"], audit_note)
     return 0
 
 
