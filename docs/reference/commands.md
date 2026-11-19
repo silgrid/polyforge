@@ -1239,19 +1239,26 @@ one is invalid); a same-user key set later is `applied` at once. The verbs:
 write), `reload` (apply a hand edit) and `migrate`. A key is a flat name
 (`server`, `claude_bin`, …), a `[daemon]` key (`max_concurrent_jobs`, …), a
 `[summarize]` key (`summarize.models|language|interval_sec` — flat and
-machine-level, refusing `--workspace`/`--cwd`), a memory_policy list
+machine-level, refusing `--workspace`/`--cwd`), a step_tiers catalog tier
+(`step_tiers.<tier> '<JSON list of <harness>:<model>[:<effort>] candidates>'`
+— flat, machine-level and Host-only: `--host` or the default Cell writes
+it, a named Cell's scope refuses it), a memory_policy list
 (`memory_policy.<default|project>.record|skip '<JSON list>'`, which needs
 `--workspace <mapped path>` or `--cwd <dir>` and writes only that path's
 entry) or a whole `[workspace."<path>"]` section (`projects=a,b,c`).
-`pf config list` is the one read face of the summarize keys and of the
-per-path memory_policy blocks; `get` refuses them pointing at it. Writes preserve every
+`pf config list` is the one read face of the summarize keys, the
+per-path memory_policy blocks and the `[step_tiers]` catalog; `get` refuses
+them pointing at it. Writes preserve every
 other byte, are crash-atomic, keep the mode (a new file is `0600`) and
 pass the same validator the loader, daemon and doctor use; a refused
 write leaves the file untouched. `api_key` is write-only: stdin only,
 never argv, never emitted.
 
 The running daemon applies live keys on the write (`max_concurrent_jobs`,
-`cell_max_concurrent_jobs`, `step_timeout`, `stall_window`, `agent_language`, `claude_bin`, `summarize.*`), takes the
+`cell_max_concurrent_jobs`, `step_timeout`, `stall_window`, `agent_language`, `claude_bin`, `summarize.*`,
+the `[step_tiers]` catalog — reported `applied` as one `[step_tiers]`
+outcome; it has no daemon consumer, the classification itself says no
+restart is needed), takes the
 `[memory_policy]` family at the next claim, takes a `[workspace]`
 mapping addition at the next claim (a removal/re-route with an in-flight
 job is refused and the work items are listed) and reports `server`,
@@ -1488,7 +1495,15 @@ inherited `ANTHROPIC_*` (their credential and endpoint come only from
 `<harness-root>/claude-config/settings.json`); pi steps need their
 provider keys in `auth.json` or as literals in `models.json` — a
 `$NAME` there, or a provider `*_API_KEY`, that is not on the list never
-reaches them. `GET /status` reports the daemon's environment variable
+reaches them. The `[step_tiers]` catalog (cli.toml's step tier list,
+polyforge#143) is a recommendation, never an admission rule: it names
+which candidates each step tier should run — doctor's `step tiers
+catalog` row warns when a user-written candidate (a workspace yaml
+`steps.*.models` or `tiers.*.models` list, or the `[summarize]` models)
+sits outside it — while a pi candidate's admission stays the Cell's
+`step-agent/models.json` hard check (`pf override --models` answers
+`DAEMON-400` for a model it does not declare, catalog or no catalog;
+claude candidates are not file-checked). `GET /status` reports the daemon's environment variable
 names (never values), and `pf doctor`'s `daemon env` row warns when a
 running daemon carries `ANTHROPIC_*` or another credential-looking
 name, or when the pi step agent's `models.json` references a variable

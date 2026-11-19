@@ -29,7 +29,11 @@ or duplicate candidates, else a local bad-input refusal. Every candidate is
 `<harness>:<model>[:<effort>]` (e.g. `--models
 claude:claude-opus-5-5:high,pi:example-gateway/model-a`); a candidate without a
 prefix, with an unknown prefix, an empty model or an effort the harness does
-not take is refused up front, naming it. Syntax and precedence (`--models`
+not take is refused up front, naming it. The recommended candidates live in
+cli.toml's `[step_tiers]` catalog (the step tier list, `pf config list --host`;
+doctor's `step tiers catalog` row warns when a written candidate sits outside
+it) — the catalog recommends, it never gates: a candidate it does not name
+still submits. Syntax and precedence (`--models`
 is the highest level): the "Model candidates" subsection of
 docs/extending.md (routing to docs/reference/config.md's `steps:`
 section, the one authority). Before the daemon is

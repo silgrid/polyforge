@@ -103,6 +103,10 @@ const (
 	// daemon's lane set loads, and no queued work item waits on a lane the
 	// set does not carry (WFC-123).
 	docChLanes = "workflow lanes"
+	// docChStepTiers is the [step_tiers] catalog row (polyforge#143,
+	// 85b): the user-written candidates against the machine-level
+	// recommendation list — warn at most, skip on an empty catalog.
+	docChStepTiers = "step tiers catalog"
 )
 
 // doctorRun is what one Cell's run loaded and probed once; the checks
@@ -211,6 +215,7 @@ var doctorChecks = []doctorCheckSpec{
 		r.claudeSteps = steps
 		return st, detail
 	}},
+	{docChStepTiers, scopeCell, needMapping, func(r *doctorRun) (string, string) { return stepTiersCatalogCheck(r) }},
 	{docChClaude, scopeCell, needMapping, func(r *doctorRun) (string, string) {
 		// the daemon's harness view (it may run `claude --version`) is
 		// asked for only when some step actually runs on claude
