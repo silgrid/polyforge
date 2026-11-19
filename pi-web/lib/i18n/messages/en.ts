@@ -149,7 +149,6 @@ export const enLocale: LocalePlugin = {
     "settings.permissionSaved": "Saved.",
     "settings.permissionSaveError": "Saving failed: {error}",
     "settings.permissionLoadError": "Reading the permission settings failed: {error}",
-    "settings.claude": "Claude",
     "settings.claudeSaveError": "Could not save: {error}",
     "settings.claudeHookEvents": "Show hook activity",
     "settings.claudeHookEventsDescription": "New claude sessions start with --include-hook-events: each finished hook shows as one status line above the composer, never as a message.",

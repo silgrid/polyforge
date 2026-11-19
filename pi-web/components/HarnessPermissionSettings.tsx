@@ -92,15 +92,16 @@ export function HarnessPermissionSettings({ cwd, sessionId }: HarnessPermissionS
   const [savedNote, setSavedNote] = useState<string | null>(null);
   const [rulesDraft, setRulesDraft] = useState<{ allow: string; ask: string; deny: string } | null>(null);
   // The retired Claude page's read-only report (owner ruling: taken over):
-  // one fetch of GET /api/claude on the approval pane's mount.
+  // one fetch of GET /api/claude on the page's mount, shown on the approval pane.
   const [claudeReport, setClaudeReport] = useState<ClaudeReport | null>(null);
   const [claudeReportError, setClaudeReportError] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     void fetch("/api/claude")
       .then(async (response) => {
-        const data = await response.json() as ClaudeReport;
+        // ok first (r2#8): a non-JSON error body shows the status, not a parse error.
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json() as ClaudeReport;
         if (!cancelled) setClaudeReport(data);
       })
       .catch((cause) => {

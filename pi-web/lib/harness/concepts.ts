@@ -139,7 +139,7 @@ export interface ModelPayload {
   /** The default reasoning effort, neutral plus the harness's raw spelling. */
   reasoningEffort: { neutral: ReasoningEffort | null; raw: string | null } | null;
   providers: ProviderRef[];
-  /** pi-web-stored custom model names (claude only, until #147/#150 migrate them). */
+  /** claude's own native modelPicker custom names (claude only; migrated there by #150). */
   customModels: string[];
 }
 

@@ -149,7 +149,6 @@ export const zhCNLocale: LocalePlugin = {
     "settings.permissionSaved": "已保存。",
     "settings.permissionSaveError": "保存失败：{error}",
     "settings.permissionLoadError": "读取权限设置失败：{error}",
-    "settings.claude": "Claude",
     "settings.claudeSaveError": "保存失败：{error}",
     "settings.claudeHookEvents": "显示 hook 活动",
     "settings.claudeHookEventsDescription": "新建 claude 会话带 --include-hook-events 启动：每个结束的 hook 显示为输入框上方的一行状态，不作为消息出现。",

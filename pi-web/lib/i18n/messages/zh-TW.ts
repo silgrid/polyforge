@@ -149,7 +149,6 @@ export const zhTWLocale: LocalePlugin = {
     "settings.permissionSaved": "已儲存。",
     "settings.permissionSaveError": "儲存失敗：{error}",
     "settings.permissionLoadError": "讀取權限設定失敗：{error}",
-    "settings.claude": "Claude",
     "settings.claudeSaveError": "儲存失敗：{error}",
     "settings.claudeHookEvents": "顯示 hook 活動",
     "settings.claudeHookEventsDescription": "新建 claude 工作階段帶 --include-hook-events 啟動：每個結束的 hook 顯示為輸入框上方的一行狀態，不作為訊息出現。",

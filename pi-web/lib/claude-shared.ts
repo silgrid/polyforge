@@ -19,8 +19,8 @@ export const CLAUDE_RESTART_REFUSED_CODE = "claude_restart_refused";
 /**
  * A new claude session's model: claude's own `default` alias, which the
  * CLI resolves itself (`--model default`). The list the composer offers is claude's
- * aliases from its `initialize` answer (lib/claude-probe.ts) plus the custom names of
- * custom names; nothing is pinned here.
+ * aliases from its `initialize` answer (lib/claude-probe.ts) plus the custom
+ * names of claude's own native modelPicker; nothing is pinned here.
  */
 export const DEFAULT_CLAUDE_MODEL = "default";
 
