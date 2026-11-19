@@ -56,6 +56,8 @@ export interface McpAddDraft {
   secretReferences: Record<string, string>;
   /** The scope picked, or undefined for the default (the paste's own hint where it may go, else global). */
   scope?: McpScope;
+  /** The 「应用到」 targets picked (#85 85c), or undefined for the scope's default (Q5: local is claude's alone, else all). */
+  harnesses?: ("pi" | "claude")[];
 }
 
 export const EMPTY_MCP_ADD_DRAFT: McpAddDraft = { text: "", rawPi: false, server: 0, values: {}, references: {}, secretReferences: {} };
@@ -574,6 +576,8 @@ export interface McpAddAnalysis {
   /** The name Add would save it under. */
   name: string;
   scope: McpScope;
+  /** The 「应用到」 targets the Add writes (#85 85c, Q5). */
+  harnesses: ("pi" | "claude")[];
   projectMode: McpAddProjectMode;
   /** Why the Project option is unavailable, shown under the scope switch. */
   projectBlock?: McpAddProjectBlock;
@@ -609,20 +613,31 @@ function referencesWebPassword(config: McpServerConfig): boolean {
  */
 export function mcpAddAnalysis(draft: McpAddDraft, data: McpResponse, cwd: string | null): McpAddAnalysis {
   const projectMode = mcpAddProjectMode(data, cwd);
+  const claudePresent = (data as Pick<McpResponse, "claude">).claude !== undefined;
   const parseFor = (scope: McpScope) => parseMcpImport(draft.text, { rawPi: draft.rawPi, takenNames: namesIn(data, scope) });
   let parsed = parseFor(draft.scope ?? "global");
   let server = parsed.ok ? parsed.servers[Math.min(draft.server, parsed.servers.length - 1)] : undefined;
   // The paste's own hint (`pi mcp add -l`, `--scope project`) picks a project only where a decision
   // already trusts it: pasted text never preselects trusting a folder, which every folder inside inherits.
-  const scope: McpScope = draft.scope ?? (server?.scopeHint === "project" && projectMode.kind === "write" ? "project" : "global");
+  // claude's own default, local (Q5), is honoured only where the pane can write it: claude's half
+  // listed and a project folder to key it by — without either the paste stays global, as before.
+  const hintedLocal = server?.scopeHint === "local" && claudePresent && cwd !== null;
+  const scope: McpScope = draft.scope
+    ?? (hintedLocal ? "local" : server?.scopeHint === "project" && projectMode.kind === "write" ? "project" : "global");
   if (scope !== (draft.scope ?? "global")) {
     parsed = parseFor(scope);
     server = parsed.ok ? parsed.servers[Math.min(draft.server, parsed.servers.length - 1)] : undefined;
   }
+  // The paste's 「应用到」 (Q5): claude's local group applies to claude alone
+  // (pi holds no such scope); anywhere else the default is every harness
+  // that reads the paste — pi alone when claude's half is not listed.
+  const harnesses: ("pi" | "claude")[] = draft.harnesses
+    ?? (scope === "local" ? ["claude"] : claudePresent ? ["pi", "claude"] : ["pi"]);
   const empty: McpAddAnalysis = {
     parsed,
     name: draft.name ?? "",
     scope,
+    harnesses,
     projectMode,
     ...(projectMode.kind === "blocked" ? { projectBlock: projectMode.block } : {}),
     values: {},
@@ -635,7 +650,6 @@ export function mcpAddAnalysis(draft: McpAddDraft, data: McpResponse, cwd: strin
   // MCP off keeps the preview: the user can still read what the paste holds.
   const writesOff = mcpWritesOff(data.mcp);
   if (!server) return { ...empty, submitBlock: { kind: writesOff ? "mcp-off" : "nothing" } };
-
   const name = draft.name ?? server.name;
   const values = mcpAddFieldValues(server, draft);
   const pasteSecrets = referenceableLiteralSecrets(server);
@@ -697,6 +711,7 @@ export function mcpAddAnalysis(draft: McpAddDraft, data: McpResponse, cwd: strin
     server,
     name,
     scope,
+    harnesses,
     projectMode,
     ...(projectBlock ? { projectBlock } : {}),
     values,
@@ -711,6 +726,17 @@ export function mcpAddAnalysis(draft: McpAddDraft, data: McpResponse, cwd: strin
   };
 }
 
+/**
+ * The add pane's 「应用到」 targets (#85 85c, Q5): both harnesses, pi disabled
+ * with its reason's key where it takes no such entry — claude's local group.
+ */
+export function mcpAddApplyToTargets(scope: McpScope): { harness: "pi" | "claude"; label: string; disabled?: true; reasonKey?: string }[] {
+  return [
+    { harness: "pi", label: "pi", ...(scope === "local" ? { disabled: true as const, reasonKey: "mcp.applyTo.piUnsupportedLocal" } : {}) },
+    { harness: "claude", label: "claude" },
+  ];
+}
+
 /** The body of `POST /api/mcp { action: "add" }` for an analysis Add may send; the route parses the text again. */
 export function mcpAddRequest(draft: McpAddDraft, analysis: McpAddAnalysis, confirmHostEnv?: readonly string[]) {
   return {
@@ -721,6 +747,7 @@ export function mcpAddRequest(draft: McpAddDraft, analysis: McpAddAnalysis, conf
     server: analysis.server && analysis.parsed.ok ? analysis.parsed.servers.indexOf(analysis.server) : 0,
     name: analysis.name,
     scope: analysis.scope,
+    harnesses: analysis.harnesses,
     rawPi: draft.rawPi,
     ...(analysis.trustFolder ? { trustFolder: true } : {}),
     ...(confirmHostEnv && confirmHostEnv.length > 0 ? { confirmHostEnv: [...confirmHostEnv] } : {}),

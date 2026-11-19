@@ -24,6 +24,7 @@ import {
   MCP_IMPORT_FIELD_REASON_KEYS,
   MCP_IMPORT_SOURCE_KEYS,
   mcpAddAnalysis,
+  mcpAddApplyToTargets,
   mcpAddDraftWithPaste,
   mcpAddOffersRawPi,
   mcpAddProjectBlockText,
@@ -49,7 +50,9 @@ function displayPath(path: string): string {
 }
 
 function scopeLabel(scope: McpScope, t: Translate): string {
-  return scope === "project" ? t("skills.scope.project") : t("skills.scope.global");
+  if (scope === "project") return t("skills.scope.project");
+  if (scope === "local") return t("mcp.scope.local");
+  return t("skills.scope.global");
 }
 
 /** MCP server catalogs to browse, linked at the right of the pane's title. */
@@ -193,7 +196,9 @@ export function McpAddServer({
   };
   const change = (patch: Partial<McpAddDraft>) => onDraftChange({ ...draft, ...patch });
   const targetFile = data.files.find((file) => file.scope === analysis.scope)?.path
-    ?? (analysis.scope === "project" && cwd ? `${cwd.replace(/[\\/]+$/, "")}/.pi/mcp.json` : "mcp.json");
+    ?? (analysis.scope === "local"
+      ? (data.claude?.configPath ?? "~/.claude.json")
+      : analysis.scope === "project" && cwd ? `${cwd.replace(/[\\/]+$/, "")}/.pi/mcp.json` : "mcp.json");
   // Why Add waits, under it. Project picked, then blocked (a secret typed since) is said here too:
   // the switch at the top explains only a disabled option, and the way out is often in the fields above Add.
   const ownBlockLine = submitBlock && (draft.text.trim() !== "" || submitBlock.kind === "mcp-off")
@@ -214,10 +219,13 @@ export function McpAddServer({
           options={[
             { value: "global", label: scopeLabel("global", t) },
             { value: "project", label: scopeLabel("project", t), disabled: projectBlock !== undefined && analysis.scope !== "project" },
+            // claude's own group (Q5), offered only while the pane can write it:
+            // never without claude's half, and only with a project folder to key it by.
+            ...(data.claude !== undefined ? [{ value: "local" as const, label: scopeLabel("local", t), disabled: cwd === null }] : []),
           ]}
           path={displayPath(targetFile)}
           disabledReason={projectBlock ? mcpAddProjectBlockText(projectBlock, t, displayPath) : null}
-          onChange={(scope) => change({ scope })}
+          onChange={(scope) => change({ scope, harnesses: undefined })}
         >
           {trustable && (
             <span className="mcp-config-line">
@@ -249,6 +257,30 @@ export function McpAddServer({
             {draft.rawPi && <span className="mcp-config-line is-dim">{t("mcp.add.rawPiOn")}</span>}
           </span>
         </label>
+      )}
+
+      {/* The paste's 「应用到」 (#85 85c, Q5): the harnesses Add writes to, a
+          target pair whose unsupported side says why; Add stays the one submit. */}
+      {data.claude !== undefined && server && (
+        <p className="mcp-config-line">
+          <span>{t("mcp.applyTo.title")}:</span>
+          {mcpAddApplyToTargets(analysis.scope).map((target) => (
+            <label key={target.harness} data-harness={target.harness} className={target.disabled ? "harness-apply-to-target is-disabled" : "harness-apply-to-target"}>
+              <input
+                type="checkbox"
+                checked={analysis.harnesses.includes(target.harness)}
+                disabled={target.disabled || busy || controlsBusy}
+                onChange={(event) => change({
+                  harnesses: event.target.checked
+                    ? [...analysis.harnesses, target.harness]
+                    : analysis.harnesses.filter((harness) => harness !== target.harness),
+                })}
+              />
+              <span>{target.label}</span>
+              {target.disabled && target.reasonKey && <span className="harness-apply-to-target-reason">{t(target.reasonKey)}</span>}
+            </label>
+          ))}
+        </p>
       )}
 
       {!parsed.ok && draft.text.trim() !== "" && <McpImportNotes notes={parsed.notes} />}
