@@ -1255,7 +1255,10 @@ write leaves the file untouched. `api_key` is write-only: stdin only,
 never argv, never emitted.
 
 The running daemon applies live keys on the write (`max_concurrent_jobs`,
-`cell_max_concurrent_jobs`, `step_timeout`, `stall_window`, `agent_language`, `claude_bin`, `summarize.*`), takes the
+`cell_max_concurrent_jobs`, `step_timeout`, `stall_window`, `agent_language`, `claude_bin`, `summarize.*`,
+the `[step_tiers]` catalog — reported `applied` as one `[step_tiers]`
+outcome; it has no daemon consumer, the classification itself says no
+restart is needed), takes the
 `[memory_policy]` family at the next claim, takes a `[workspace]`
 mapping addition at the next claim (a removal/re-route with an in-flight
 job is refused and the work items are listed) and reports `server`,
