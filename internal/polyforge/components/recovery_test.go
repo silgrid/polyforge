@@ -28,7 +28,7 @@ func TestInstallCrashMatrix(t *testing.T) {
 	}
 	points := []string{crashStaged, crashPublished, crashJournaled, crashCurrentSwapped}
 	for _, point := range points {
-		t.Run(point, func(t *testing.T) {
+		t.Run("upgrade/"+point, func(t *testing.T) {
 			root := t.TempDir()
 			older := installSeed(t, seedSpec{})
 			if _, err := Install(Options{Root: root, DataDir: dataDir(t), Seed: older, BaseVersion: "v0.2.4", Platform: "linux/amd64"}); err != nil {
@@ -86,6 +86,59 @@ func TestInstallCrashMatrix(t *testing.T) {
 			}
 		})
 	}
+
+	// the first-install half (review r1#N8): the same crash points on
+	// an EMPTY volume — there is no current to keep, so the converged
+	// state is the seed installed and previous absent. crashJournaled
+	// does not exist here: the journal is an upgrade's record (a first
+	// install has no old version to journal).
+	seed := installSeed(t, seedSpec{})
+	for _, point := range []string{crashStaged, crashPublished, crashCurrentSwapped} {
+		t.Run("first/"+point, func(t *testing.T) {
+			root := t.TempDir()
+			cmd := exec.Command(os.Args[0], "-test.run=^TestInstallCrashChild$", "-test.count=1")
+			cmd.Env = append(os.Environ(),
+				"PF_COMPONENTS_CHILD=1",
+				"PF_COMPONENTS_MODE=first",
+				"PF_COMPONENTS_ROOT="+root,
+				"PF_COMPONENTS_DATA="+t.TempDir(),
+				"PF_COMPONENTS_SEED="+seed,
+				crashpoint.EnvVar+"="+point,
+			)
+			out, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatalf("the child completed instead of crashing at %s:\n%s", point, out)
+			}
+			if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); !ok || !ws.Signaled() || ws.Signal() != syscall.SIGKILL {
+				t.Fatalf("the child did not die of the crash point %s: %v\n%s", point, err, out)
+			}
+
+			// the reboot: the same first install again.
+			if _, err := Install(Options{Root: root, DataDir: dataDir(t), Seed: seed, BaseVersion: "v0.2.4", Platform: "linux/amd64"}); err != nil {
+				t.Fatalf("the reboot's install after the crash at %s: %v", point, err)
+			}
+			if target, _ := CurrentTarget(root); target != filepath.Join(ReleasesDirname, "v0.2.4") {
+				t.Errorf("after the crash at %s, current -> %q, want releases/v0.2.4", point, target)
+			}
+			dir := filepath.Join(root, ReleasesDirname, "v0.2.4")
+			m, err := ReadManifest(dir)
+			if err != nil {
+				t.Fatalf("the converged current's manifest: %v", err)
+			}
+			if err := m.VerifyTree(dir); err != nil {
+				t.Errorf("after the crash at %s, current is not complete: %v", point, err)
+			}
+			if prev, err := os.Readlink(filepath.Join(root, PreviousLinkname)); err == nil {
+				t.Errorf("after the first-install crash at %s, previous -> %q; a first install has no previous", point, prev)
+			}
+			if _, err := os.Lstat(filepath.Join(root, JournalFilename)); err == nil {
+				t.Errorf("after the crash at %s, the journal survived the reboot's install", point)
+			}
+			if entries, err := os.ReadDir(filepath.Join(root, StagingDirname)); err == nil && len(entries) > 0 {
+				t.Errorf("after the crash at %s, staging keeps entries: %d", point, len(entries))
+			}
+		})
+	}
 }
 
 // TestInstallCrashChild is the child half of the matrix: it runs the
@@ -96,11 +149,16 @@ func TestInstallCrashChild(t *testing.T) {
 	if root == "" {
 		t.Skip("not the crash child")
 	}
+	mode := os.Getenv("PF_COMPONENTS_MODE")
+	base := "v0.2.5"
+	if mode == "first" {
+		base = "v0.2.4"
+	}
 	_, err := Install(Options{
 		Root:        root,
 		DataDir:     os.Getenv("PF_COMPONENTS_DATA"),
 		Seed:        os.Getenv("PF_COMPONENTS_SEED"),
-		BaseVersion: "v0.2.5",
+		BaseVersion: base,
 		Platform:    "linux/amd64",
 	})
 	t.Fatalf("the crash child completed the install (no crash at %s): %v", os.Getenv(crashpoint.EnvVar), err)

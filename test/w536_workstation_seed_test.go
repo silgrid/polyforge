@@ -128,6 +128,8 @@ func TestWorkstationSeed(t *testing.T) {
 			`@anthropic-ai/claude-code@`,       // the claude harness pin
 			`seedtool write`,                   // the manifest: digests, versions, provenance
 			`seedtool verify`,                  // the build's own check of the assembled seed
+			`--commit "${commit}"`,             // the source commit rides the manifest (r1#2)
+			`--channel-repo "${channel_repo}"`, // and so does the channel repository (r1#2)
 			`dpkg --print-architecture`,        // the platform fallback when TARGETARCH is unset
 		} {
 			if !strings.Contains(body, need) {
@@ -197,10 +199,24 @@ func TestWorkstationSeedEngine(t *testing.T) {
 	if out, err := exec.Command("docker", "version", "--format", "{{.Server.Version}}").CombinedOutput(); err != nil {
 		t.Skipf("no docker engine (%v: %s), skipping the built-seed inspection", err, strings.TrimSpace(string(out)))
 	}
-	version := w536SeedArg(t, "SEED_VERSION")
+	// the injected values are derived independently of the image's
+	// defaults (review r1#2): the source commit is this tree's HEAD,
+	// the version and the channel repository are legal non-defaults —
+	// so a broken injection chain (a defaulted commit, an unwired
+	// channel) cannot pass as a green build.
+	version := "v0.2.5-dev.7"
+	commitOut, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("git rev-parse HEAD: %v", err)
+	}
+	commit := strings.TrimSpace(string(commitOut))
+	channelRepo := "example/seed-test"
 
 	build := exec.Command("docker", "build",
 		"-f", "dist/workstation/Containerfile",
+		"--build-arg", "SEED_VERSION="+version,
+		"--build-arg", "SEED_COMMIT="+commit,
+		"--build-arg", "SEED_CHANNEL_REPO="+channelRepo,
 		"-t", "polyforge-162-seed-test",
 		".")
 	build.Dir = root
@@ -226,13 +242,20 @@ func TestWorkstationSeedEngine(t *testing.T) {
 		t.Fatalf("the built seed's manifest does not satisfy the install's contract: %v", err)
 	}
 	if m.Version != version {
-		t.Errorf("the manifest's version = %q, want the injected %q", m.Version, version)
+		t.Errorf("the manifest's version = %q, want the injected %q verbatim", m.Version, version)
 	}
-	if m.Platform == "" || !strings.Contains(m.Platform, "/") {
-		t.Errorf("the manifest's platform = %q, want the os/arch shape", m.Platform)
+	if m.Commit != commit {
+		t.Errorf("the manifest's commit = %q, want the injected source commit %q verbatim", m.Commit, commit)
 	}
-	if m.ChannelRepo == "" {
-		t.Error("the manifest's channelRepo is empty")
+	if m.ChannelRepo != channelRepo {
+		t.Errorf("the manifest's channelRepo = %q, want the injected %q verbatim", m.ChannelRepo, channelRepo)
+	}
+	archOut, err := exec.Command("docker", "version", "--format", "{{.Server.Arch}}").Output()
+	if err != nil {
+		t.Fatalf("the engine's architecture: %v", err)
+	}
+	if want := "linux/" + strings.TrimSpace(string(archOut)); m.Platform != want {
+		t.Errorf("the manifest's platform = %q, want the engine's own %q", m.Platform, want)
 	}
 	for _, name := range components.ComponentNames {
 		if m.Component(name) == nil {
@@ -274,7 +297,11 @@ func TestWorkstationSeedEngine(t *testing.T) {
 			t.Fatalf("the %s package.json is not JSON: %v", name, err)
 		}
 		c := m.Component(name)
-		if c == nil || c.Version != pkg.Version {
+		if c == nil {
+			t.Errorf("the manifest lacks the %s component", name)
+			continue
+		}
+		if c.Version != pkg.Version {
 			t.Errorf("the manifest's %s version (%s) is not the package's own (%s)", name, c.Version, pkg.Version)
 		}
 	}
