@@ -208,7 +208,7 @@ func fileCreate(ctx *Context, args []string) error {
 	f.Var(&content, "content", "markdown background; '-' reads stdin, '@file' reads a file")
 	f.Var(&labels, "label", "label (repeatable)")
 	f.Var(&milestone, "milestone", "milestone name")
-	f.Var(&attrs, "attr", "business attr path=json-value (repeatable; a dotted path nests — split.origin=X stores {\"split\":{\"origin\":\"X\"}}}, the same dot path pf queue's --attr filters on)")
+	f.Var(&attrs, "attr", "business attr path=json-value (repeatable; a dotted path nests — split.origin=X stores {\"split\":{\"origin\":\"X\"}}, the same dot path pf queue's --attr filters on)")
 	rest, err := parseCommandArgs(f, args)
 	if err != nil {
 		return err
