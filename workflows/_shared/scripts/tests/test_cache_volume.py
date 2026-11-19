@@ -154,6 +154,25 @@ class CacheVolumeTest(unittest.TestCase):
         self.assertEqual(self.fb.volume_removes, sorted([unused_old, unused_old_other_path, in_use_old]))
         self.assertEqual(sorted(self.fb.volumes), sorted([current, *kept]))
 
+    def test_a_start_keeps_the_current_generations_other_clone_paths(self) -> None:
+        """A start keeps every clone path's volume of the running image
+        generation (another clone's cache is not this start's to reap) and
+        removes only the older generations': the pruning rule reads the
+        name's generation field, not the whole name."""
+        other_clone = os.path.join(self.root, "other-clone")
+        os.mkdir(other_clone)
+        same_gen_other = volume_of(generation(TEST_DOCKERFILE), other_clone)  # this generation, another path, unused
+        older_other = volume_of(old(9), other_clone)
+        older_here = volume_of(old(9), self.clone)
+        self.fb.volumes.update([same_gen_other, older_other, older_here])
+        self.run_once()
+        self.assertEqual(self.fb.volume_removes, sorted([older_other, older_here]),
+                         "only the older generation's volumes go")
+        self.assertTrue(same_gen_other in self.fb.volumes,
+                        "another clone path's volume of the running image generation stays")
+        self.assertEqual([s.volumes for s in self.fb.starts],
+                         [{volume_of(generation(TEST_DOCKERFILE), self.clone): "/cache"}] * len(self.fb.starts))
+
     def test_a_failing_listing_or_removal_costs_only_a_message(self) -> None:
         other_clone = os.path.join(self.root, "other-clone")
         os.mkdir(other_clone)

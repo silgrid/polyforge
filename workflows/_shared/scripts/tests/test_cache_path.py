@@ -165,5 +165,22 @@ class RealDockerCachePathTest(unittest.TestCase):
                       "the second clone at another path must not read the first one's cache: " + second)
         self.assertNotIn(clone_a, second, "no result may point at the other clone's path: " + second)
 
+    @unittest.skipUnless(HAVE_GIT, "git is not on PATH")
+    def test_same_clone_path_reuses_cache(self) -> None:
+        clone_a, clone_b = self.two_clones(dockerfile=True)
+        want = ["MISS " + clone_a, "MISS " + clone_b, "HIT " + clone_a, "HIT " + clone_b]
+        for i, clone in enumerate((clone_a, clone_b, clone_a, clone_b), start=1):
+            out = self.run_in(clone, i)
+            self.assertIn(want[i - 1], out, "run %d answered: %s" % (i, out))
+            # a HIT is a reuse, never a rewrite: the MISS branch is the only one that writes
+
+    @unittest.skipUnless(HAVE_GIT, "git is not on PATH")
+    def test_same_clone_path_reuses_cache_prepared_image(self) -> None:
+        clone_a, clone_b = self.two_clones(dockerfile=False)
+        want = ["MISS " + clone_a, "MISS " + clone_b, "HIT " + clone_a, "HIT " + clone_b]
+        for i, clone in enumerate((clone_a, clone_b, clone_a, clone_b), start=1):
+            out = self.exec_in(clone, i)
+            self.assertIn(want[i - 1], out, "run %d answered: %s" % (i, out))
+
 if __name__ == "__main__":
     unittest.main()
