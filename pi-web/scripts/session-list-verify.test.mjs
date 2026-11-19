@@ -55,13 +55,21 @@ test("each mode's dry run resolves the plan from the ticket's arguments", (t) =>
       // The probe is open-loop (scheduled every interval, never waiting for
       // the previous one: a stalled main thread must show up as many slow
       // samples, not one), only probes issued inside a measured call's window
-      // count (no idle-sample dilution), a hot run iterates measured calls on
-      // one warmed server until the sample bound, and a cold run repeats
-      // independent cold starts (review r3 #5/#6).
+      // count (no idle-sample dilution), only an HTTP 200 is a timed sample
+      // (review r3 N4), a hot run keeps ONE probe stream running across
+      // back-to-back measured calls on one warmed server — so the sample count
+      // follows the calls' cumulative duration, not any single call's length —
+      // and a cold run repeats independent cold starts UNTIL the sample bound,
+      // with a safety cap far above the expected yield (review r3 #1: a fixed
+      // 10-start cap made a compliant summary cold start fail AC1 at ~90
+      // samples, faster servers collecting fewer samples than slow ones).
       assert.equal(plan.probe, "open-loop");
       assert.equal(plan.overlapOnly, true);
+      assert.equal(plan.probe200Only, true);
       assert.ok(Number.isInteger(plan.hotIterations) && plan.hotIterations > 0, "hot repeats measured calls on one warmed server");
-      assert.equal(plan.coldStartsMax, 10);
+      assert.equal(plan.coldStarts, "until-min-samples");
+      assert.ok(Number.isInteger(plan.coldStartSafetyCap) && plan.coldStartSafetyCap >= 100,
+        "the safety cap is a runaway bound, not a sample bound");
     }],
     ["read-volume", ["--modes", "normal,summary", "--calls", "2", "--max-second-read-ratio", "0.05"], (plan) => {
       assert.deepEqual(plan.modes, ["normal", "summary"]);
@@ -80,6 +88,7 @@ test("each mode's dry run resolves the plan from the ticket's arguments", (t) =>
       // server stops (review r3 #7 — a SIGTERM before the 5 s persist timer
       // fired measured an empty index).
       assert.equal(plan.buildsWarmIndex, true);
+      assert.equal(plan.warmIndexRebuild, true, "the build round drops any existing index first, so it always rewrites one (review r3 N2)");
       assert.equal(plan.warmIndexPersisted, true);
       assert.ok(Number.isInteger(plan.warmIndexPersistTimeoutMs) && plan.warmIndexPersistTimeoutMs > 5_000,
         "the persist wait covers the scanner's trailing 5 s index write");
