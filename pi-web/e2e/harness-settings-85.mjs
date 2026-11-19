@@ -448,7 +448,7 @@ try {
     // and the Pi Web approval channel (the moved claude tool permissions).
     await pane.getByRole("radio", { name: /bypassPermissions/ }).waitFor({ state: "visible", timeout: ACTION_MS });
     await pane.getByRole("switch", { name: "denyInsteadOfPrompting" }).waitFor({ state: "visible", timeout: ACTION_MS });
-    await pane.getByRole("radiogroup", { name: "Permission mode" }).waitFor({ state: "visible", timeout: ACTION_MS });
+    await pane.getByRole("radiogroup", { name: "Permission mode", exact: true }).waitFor({ state: "visible", timeout: ACTION_MS });
     await pane.getByRole("switch", { name: "Push a reminder when a permission waits" }).waitFor({ state: "visible", timeout: ACTION_MS });
     // The retired page's Claude Code report block renders again (owner
     // ruling: taken over): version, claude's own capabilities, the features.
@@ -531,6 +531,8 @@ try {
     // pi is the current value (trusted); claude differs, so claude is written.
     await waitFor(() => permissionPuts.some((put) => put.path === "/api/harness/claude/permission" && put.body?.projectTrust?.trusted === true),
       ACTION_MS, `the trust unify never reached claude: ${JSON.stringify(permissionPuts)}`);
+    // The unify writes its targets in order, so a pi write would have landed
+    // before the claude one that was just observed: the negative is settled.
     assert.ok(!permissionPuts.some((put) => put.path === "/api/harness/pi/permission"), "the unify rewrote the harness that already agreed");
     await page.context().close();
   });
@@ -548,10 +550,12 @@ try {
     await pane.waitFor({ state: "visible", timeout: ACTION_MS });
     // No unified block on the rules pane.
     assert.equal(await pane.locator(".unified-setting").count(), 0, "the rules pane shows a unified block");
+    // The textareas render empty until the page's read fills them: poll the
+    // values themselves, never one read after visibility (r1#6).
     const allow = pane.locator("#permission-rules-allow");
     await allow.waitFor({ state: "visible", timeout: ACTION_MS });
-    assert.equal(await allow.inputValue(), "WebSearch", "the mocked allow rules are missing");
-    assert.equal(await pane.locator("#permission-rules-deny").inputValue(), "Bash(rm:*)", "the mocked deny rules are missing");
+    await waitFor(async () => (await allow.inputValue()) === "WebSearch", ACTION_MS, "the mocked allow rules never arrived");
+    await waitFor(async () => (await pane.locator("#permission-rules-deny").inputValue()) === "Bash(rm:*)", ACTION_MS, "the mocked deny rules never arrived");
     await allow.fill("WebSearch\nWebFetch(domain:example.com)");
     await pane.getByRole("button", { name: "Save", exact: true }).click({ timeout: ACTION_MS });
     await waitFor(() => permissionPuts.some((put) => put.body?.rules?.allow?.length === 2 && put.body.rules.allow.includes("WebFetch(domain:example.com)")
@@ -567,8 +571,12 @@ try {
     await openSettings(page);
     const conversation = generalPane(page, "conversation");
     await conversation.waitFor({ state: "visible", timeout: ACTION_MS });
-    await conversation.getByRole("switch", { name: "Show hook activity" }).waitFor({ state: "visible", timeout: ACTION_MS });
-    const text = await conversation.innerText();
+    // Settle on the hook switch first (it renders only once its read landed),
+    // then read the pane once for the negatives (r1#15).
+    const text = await waitFor(async () => {
+      const body = await conversation.innerText();
+      return body.includes("Show hook activity") ? body : false;
+    }, ACTION_MS, "the conversation pane never settled");
     assert.ok(!text.includes("claude tool permissions"), `General still shows the claude permission block: ${text.slice(0, 200)}`);
     assert.ok(!text.includes("Ask in a dialog"), `General still shows the approval channel radios: ${text.slice(0, 200)}`);
     await page.context().close();
