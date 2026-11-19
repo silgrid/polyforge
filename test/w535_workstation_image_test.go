@@ -30,10 +30,12 @@ package test
 // implementation's own output.
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -465,5 +467,103 @@ func TestWorkstationCompose(t *testing.T) {
 	}
 	if _, ok := compose.Volumes["podman-storage"]; !ok {
 		t.Fatal("polyforge#161: the compose file must declare the podman-storage named volume")
+	}
+}
+
+// TestWorkstationSmoke — the smoke script's static shape: the three
+// subcommands the acceptance proofs name, the parameter checks AC1
+// demands, and the bounded-poll discipline (never a fixed delay).
+// The script's behaviour is driven for real by
+// TestWorkstationImageEngine below on a machine with an engine, and by
+// the verification gate through the same script.
+func TestWorkstationSmoke(t *testing.T) {
+	root := w535Root(t)
+	script := filepath.Join(root, "dist/workstation/smoke.sh")
+	body := w535Deliverable(t, "dist/workstation/smoke.sh")
+	if err := exec.Command("sh", "-n", script).Run(); err != nil {
+		t.Fatalf("polyforge#161: smoke.sh must parse as POSIX sh: %v", err)
+	}
+	// the dispatch: every acceptance proof's entry point.
+	for _, sub := range []string{"boot", "podman-verify", "env"} {
+		if !strings.Contains(body, sub) {
+			t.Fatalf("polyforge#161: smoke.sh must dispatch the %q subcommand", sub)
+		}
+	}
+	if !strings.Contains(body, "set -eu") {
+		t.Fatal("polyforge#161: smoke.sh must run under set -eu — a missed check must fail the run, not continue")
+	}
+	if !strings.Contains(body, "poll_until") {
+		t.Fatal("polyforge#161: smoke.sh must poll with a deadline (poll_until), never a fixed delay before asserting a settling state")
+	}
+	// the fixed smoke test password (settled Q5).
+	if !strings.Contains(body, "pf-workstation-smoke-test-password") {
+		t.Fatal("polyforge#161: smoke.sh must default PI_WEB_PASSWORD to the fixed test password (settled Q5)")
+	}
+	// AC1's parameter checks: the cap set as a set, the seccomp compare
+	// by content, the cgroup namespace, and the forbidden mounts.
+	for _, pin := range []string{
+		"CapAdd", "SecurityOpt", "CgroupnsMode", "Privileged",
+		"docker.sock", "/proc/1/comm", "catatonit",
+	} {
+		if !strings.Contains(body, pin) {
+			t.Fatalf("polyforge#161: smoke.sh must check %s — an AC1 parameter the boot must measure", pin)
+		}
+	}
+	// the boot modes and their halves.
+	for _, pin := range []string{
+		"--no-aihub", "--with-aihub", "pf aihub", "/login", "--json queue",
+	} {
+		if !strings.Contains(body, pin) {
+			t.Fatalf("polyforge#161: smoke.sh must carry %q — a boot check the acceptance names", pin)
+		}
+	}
+	// AC3's env half: the PI_TEST_* exclusion, the pass-through probe,
+	// the non-inheritance sentinel and the anonymous /api answer.
+	for _, pin := range []string{
+		"PI_TEST_", "PI_WEB_APP_NAME", "SENTINEL", "/api", "401", "environ",
+	} {
+		if !strings.Contains(body, pin) {
+			t.Fatalf("polyforge#161: smoke.sh's env subcommand must check %q", pin)
+		}
+	}
+	// AC2's podman-verify half: both image paths, the limits, the three
+	// modules, the cleanliness.
+	for _, pin := range []string{
+		"Dockerfile.verify", "build_image", "--pull=never",
+		"memory.max", "pids.max", "tests.test_container_docker",
+		"tests.test_gate_docker", "tests.test_cache_volume",
+		"PF_CONTAINER_ENGINE", "conmon", "skipped",
+	} {
+		if !strings.Contains(body, pin) {
+			t.Fatalf("polyforge#161: smoke.sh's podman-verify subcommand must carry %q", pin)
+		}
+	}
+}
+
+// TestWorkstationImageEngine — the real-engine half of the owner's
+// split (settled Q3 C): with a reachable docker engine and compose it
+// drives the smoke script's --no-aihub boot end to end (the image
+// builds, the container starts under compose, and every AC1 parameter
+// inspects as pinned); without an engine it skips, exactly like the
+// real-container suites' engine gates.
+func TestWorkstationImageEngine(t *testing.T) {
+	root := w535Root(t)
+	if out, err := exec.Command("docker", "version", "--format", "{{.Server.Version}}").CombinedOutput(); err != nil {
+		t.Skipf("no docker engine (%v: %s), skipping the real-engine workstation boot", err, strings.TrimSpace(string(out)))
+	}
+	if err := exec.Command("docker", "compose", "version").Run(); err != nil {
+		t.Skipf("no docker compose (%v), skipping the real-engine workstation boot", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sh", filepath.Join(root, "dist/workstation/smoke.sh"), "boot", "--no-aihub")
+	cmd.Env = append(os.Environ(), "PI_WEB_PASSWORD=pf-workstation-smoke-test-password")
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("polyforge#161: smoke boot --no-aihub failed: %v:\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "boot --no-aihub: PASS") {
+		t.Fatalf("polyforge#161: the smoke run never printed its PASS line:\n%s", out)
 	}
 }
