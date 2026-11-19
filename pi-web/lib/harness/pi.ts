@@ -6,8 +6,13 @@
 // once doctor provides it. Writes all pass the shared gate: pi 1.5.x is the
 // known range, and no concept has an implemented write yet, so a known
 // version answers not-implemented.
+import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { defaultAgentDir } from "../http-dispatcher";
+import { readModelsConfig } from "../models-config-store";
+import { readMcpServerConfigs } from "../mcp-config-read";
+import { loadSkillsWithInstallInfo } from "../skills-service";
+import { getProjectTrustStatus, mayReadProjectConfigNow } from "../project-trust";
 import {
   gatedWrite,
   PI_KNOWN_RANGE,
@@ -18,10 +23,24 @@ import {
   type WriteChange,
   type WriteResult,
 } from "./adapter";
-import type { ConceptId, ConceptPayload, ModelPayload } from "./concepts";
+import {
+  neutralReasoningEffort,
+  type AuthPayload,
+  type ConceptId,
+  type ConceptPayload,
+  type ConfigRootPayload,
+  type EffectiveConfigPayload,
+  type EnvPayload,
+  type McpPayload,
+  type ModelPayload,
+  type PermissionPayload,
+  type SkillRef,
+  type SkillsPayload,
+} from "./concepts";
 import {
   automationEnvStatus,
   credentialRef,
+  maskedMcpServer,
   readJsonRecord,
 } from "./redact";
 
@@ -56,8 +75,12 @@ export const PI_STEERING_ENV_KEYS = ["PI_CODING_AGENT_DIR"] as const;
 
 /** The installed pi SDK package's version, as next.config.ts reads it at build time. */
 export function readPiSdkVersion(): string | null {
-  // stub (85a1 u2): zero-value body, the red run's target
-  return null;
+  try {
+    const pkg = JSON.parse(readFileSync(join(process.cwd(), "node_modules", "@earendil-works", "pi-coding-agent", "package.json"), "utf8")) as { version?: unknown };
+    return typeof pkg.version === "string" ? pkg.version : null;
+  } catch {
+    return null;
+  }
 }
 
 /** pi's settings.json in `agentDir`, read without pi's file lock. */
@@ -65,45 +88,162 @@ export function piSettingsPath(agentDir: string): string {
   return join(agentDir, "settings.json");
 }
 
+/** Whether `value` is a string, narrowed. */
+const isString = (value: unknown): value is string => typeof value === "string";
+
 /**
  * The structure probe of the write gate (Q2 C): the files a pi write would
  * touch must have a recognizable top-level structure. Null when recognized,
  * else the reason a write is refused.
  */
 export function probePiStructure(agentDir: string): string | null {
-  // stub (85a1 u2): zero-value body, the red run's target
-  return "stub";
+  const settingsPath = piSettingsPath(agentDir);
+  if (existsSync(settingsPath) && readJsonRecord(settingsPath) === null) {
+    return "settings.json has an unrecognized top-level structure (expected a JSON object)";
+  }
+  try {
+    const models = readModelsConfig(join(agentDir, "models.json"));
+    if (models.providers !== undefined && (typeof models.providers !== "object" || models.providers === null || Array.isArray(models.providers))) {
+      return "models.json providers is not an object";
+    }
+  } catch {
+    return "models.json could not be read as pi reads it";
+  }
+  return null;
 }
 
 export function createPiAdapter(): HarnessAdapter {
   const agentDirOf = (ctx?: HarnessReadContext): string => ctx?.agentDir ?? defaultAgentDir();
+  const envOf = (ctx?: HarnessReadContext): NodeJS.ProcessEnv => ctx?.env ?? process.env;
+
+  async function probeVersion(ctx?: HarnessReadContext): Promise<VersionProbeResult> {
+    const version = ctx?.piVersion ?? readPiSdkVersion();
+    const source = "pi SDK package";
+    if (version === null) {
+      return { version, known: false, source, reason: "the pi SDK package's version could not be read" };
+    }
+    if (!versionInKnownRange(version, PI_KNOWN_RANGE)) {
+      return { version, known: false, knownRange: PI_KNOWN_RANGE.label, source, reason: `version ${version} is outside the known range ${PI_KNOWN_RANGE.label}` };
+    }
+    const structureReason = probePiStructure(agentDirOf(ctx));
+    if (structureReason !== null) {
+      return { version, known: false, knownRange: PI_KNOWN_RANGE.label, source, reason: structureReason };
+    }
+    return { version, known: true, knownRange: PI_KNOWN_RANGE.label, source };
+  }
+
   return {
     id: "pi",
     capabilities: {
-      // stub (85a1 u2): zero-value declaration, the red run's target
       id: "pi",
-      scopes: [],
-      concepts: [],
+      scopes: ["user", "project"],
+      concepts: ["auth", "config-root", "model", "permission", "skills", "mcp", "env", "effective-config"],
       writableConcepts: [],
-      readOnlyConcepts: [],
-      configRootEnv: null,
-      credentialsFollowConfigRoot: false,
+      readOnlyConcepts: ["env", "effective-config"],
+      configRootEnv: "PI_CODING_AGENT_DIR",
+      credentialsFollowConfigRoot: true,
       nativeDiagnostics: { declared: true, implemented: false },
     },
-    async probeVersion(ctx): Promise<VersionProbeResult> {
-      // stub (85a1 u2): zero-value body, the red run's target
-      return { version: null, known: false, source: "pi SDK package" };
-    },
+    probeVersion,
     async read(concept: ConceptId, ctx): Promise<ConceptPayload | null> {
-      // stub (85a1 u2): zero-value body, the red run's target
-      void agentDirOf(ctx);
-      void concept;
-      return null;
+      const agentDir = agentDirOf(ctx);
+      const env = envOf(ctx);
+      switch (concept) {
+        case "auth": {
+          const payload: AuthPayload = {
+            status: "unknown",
+            credentialStore: credentialRef(join(agentDir, "auth.json")),
+            automationEnv: automationEnvStatus(env, PI_AUTOMATION_ENV_KEYS),
+            credentialsFollow: true,
+          };
+          return payload;
+        }
+        case "config-root": {
+          const payload: ConfigRootPayload = { path: agentDir, env: "PI_CODING_AGENT_DIR", credentialsFollow: true };
+          return payload;
+        }
+        case "model": {
+          const settings = readJsonRecord(piSettingsPath(agentDir)) ?? {};
+          let providers: ModelPayload["providers"] = [];
+          try {
+            const models = readModelsConfig(join(agentDir, "models.json")) as { providers?: unknown };
+            if (models.providers !== null && typeof models.providers === "object" && !Array.isArray(models.providers)) {
+              providers = Object.entries(models.providers as Record<string, unknown>)
+                .filter(([, value]) => typeof value === "object" && value !== null && !Array.isArray(value))
+                .map(([name, value]) => ({ name, hasApiKey: isString((value as Record<string, unknown>).apiKey) && (value as Record<string, unknown>).apiKey !== "" }));
+            }
+          } catch {
+            providers = [];
+          }
+          const rawEffort = isString(settings.defaultThinkingLevel) ? settings.defaultThinkingLevel : null;
+          const payload: ModelPayload = {
+            defaultProvider: isString(settings.defaultProvider) ? settings.defaultProvider : null,
+            defaultModel: isString(settings.defaultModel) ? settings.defaultModel : null,
+            reasoningEffort: rawEffort === null ? null : { neutral: neutralReasoningEffort(rawEffort), raw: rawEffort },
+            providers,
+            customModels: [],
+          };
+          return payload;
+        }
+        case "permission": {
+          const payload: PermissionPayload = {
+            approvalMode: { supported: false, neutral: null, raw: null },
+            projectTrust: ctx?.cwd
+              ? { trusted: getProjectTrustStatus(ctx.cwd, agentDir).trusted }
+              : null,
+          };
+          return payload;
+        }
+        case "skills": {
+          // #146: name/path/source only; the state comes from the native
+          // config (never frontmatter), and its read lands with that change.
+          const listing = await loadSkillsWithInstallInfo(ctx?.cwd ?? agentDir);
+          const entries: SkillRef[] = listing.skills.map((skill) => ({
+            name: skill.name,
+            path: skill.filePath,
+            source: skill.sourceInfo.scope === "project" ? "project" : "user",
+          }));
+          const payload: SkillsPayload = { entries };
+          return payload;
+        }
+        case "mcp": {
+          const read = readMcpServerConfigs({
+            agentDir,
+            project: ctx?.cwd && mayReadProjectConfigNow(ctx.cwd, agentDir)
+              ? { cwd: ctx.cwd, allowedRoots: new Set([ctx.cwd]) }
+              : undefined,
+          });
+          const payload: McpPayload = {
+            servers: read.servers.map((info) => maskedMcpServer(info.scope === "project" ? "project" : "user", {
+              name: info.name,
+              enabled: info.enabled,
+              url: info.url,
+              command: info.command,
+              args: info.args,
+              headerNames: info.headerNames,
+              envNames: info.envNames,
+            })),
+          };
+          return payload;
+        }
+        case "env": {
+          const set = [...PI_AUTOMATION_ENV_KEYS, ...PI_STEERING_ENV_KEYS]
+            .filter((name) => typeof env[name] === "string" && (env[name] as string) !== "")
+            .sort();
+          const payload: EnvPayload = { target: "pi", setKeys: set };
+          return payload;
+        }
+        case "effective-config": {
+          // The per-layer effective values land with the compare unit (u4).
+          const payload: EffectiveConfigPayload = { fields: {} };
+          return payload;
+        }
+        default:
+          return null;
+      }
     },
     async write(concept: ConceptId, change: WriteChange, ctx): Promise<WriteResult> {
       return gatedWrite(this, concept, change, ctx);
     },
   };
 }
-
-export type { ModelPayload };
