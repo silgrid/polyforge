@@ -52,6 +52,16 @@ test("each mode's dry run resolves the plan from the ticket's arguments", (t) =>
       assert.deepEqual(plan.shapes, ["cold", "hot"]);
       assert.equal(plan.warmCalls, 0);
       assert.equal(plan.staticPath, "/icons/icon-192.png", "the probe target defaults to the icon");
+      // The probe is open-loop (scheduled every interval, never waiting for
+      // the previous one: a stalled main thread must show up as many slow
+      // samples, not one), only probes issued inside a measured call's window
+      // count (no idle-sample dilution), a hot run iterates measured calls on
+      // one warmed server until the sample bound, and a cold run repeats
+      // independent cold starts (review r3 #5/#6).
+      assert.equal(plan.probe, "open-loop");
+      assert.equal(plan.overlapOnly, true);
+      assert.ok(Number.isInteger(plan.hotIterations) && plan.hotIterations > 0, "hot repeats measured calls on one warmed server");
+      assert.equal(plan.coldStartsMax, 10);
     }],
     ["read-volume", ["--modes", "normal,summary", "--calls", "2", "--max-second-read-ratio", "0.05"], (plan) => {
       assert.deepEqual(plan.modes, ["normal", "summary"]);
@@ -65,8 +75,14 @@ test("each mode's dry run resolves the plan from the ticket's arguments", (t) =>
       assert.equal(plan.maxReadRatio, 0.10);
       assert.equal(plan.emptyIndex, true);
       // The warm-index shape is measured behind a persisted index a prior run
-      // of this same oracle built (review r2 N12), never assumed.
+      // of this same oracle built (review r2 N12), never assumed: the build
+      // round waits, bounded, for the index file to appear on disk before its
+      // server stops (review r3 #7 — a SIGTERM before the 5 s persist timer
+      // fired measured an empty index).
       assert.equal(plan.buildsWarmIndex, true);
+      assert.equal(plan.warmIndexPersisted, true);
+      assert.ok(Number.isInteger(plan.warmIndexPersistTimeoutMs) && plan.warmIndexPersistTimeoutMs > 5_000,
+        "the persist wait covers the scanner's trailing 5 s index write");
     }],
     ["golden", ["--baseline", "HEAD", "--candidate", "HEAD"], (plan) => {
       assert.match(plan.baseline, /^[0-9a-f]{40}$/);
