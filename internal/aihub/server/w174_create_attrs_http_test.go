@@ -16,12 +16,18 @@ import (
 func TestW174CreateRejectsFlatDottedAttrsOverHTTP(t *testing.T) {
 	e := newSrvEnv(t)
 
+	// the typed answer: the raw body is JSON-escaped, so the refusal is
+	// judged on the decoded envelope (code + detail), not on raw bytes.
+	var refuse struct {
+		Code   string `json:"code"`
+		Detail string `json:"detail"`
+	}
 	if code, raw := e.do(t, "POST", "/api/v1/work-items", e.key, map[string]any{
 		"project": "alpha", "goal": "flat over http",
 		"attrs": map[string]any{"split.origin": "wi_O", "split.unit": "bg-ui"},
-	}, nil); code != 400 || !strings.Contains(string(raw), "CORE-400") ||
-		!strings.Contains(string(raw), `"split.origin"`) {
-		t.Fatalf("create with flat dotted attrs over HTTP: %d %s, want 400 CORE-400 naming the key", code, raw)
+	}, &refuse); code != 400 || refuse.Code != "CORE-400" ||
+		!strings.Contains(refuse.Detail, `"split.origin"`) {
+		t.Fatalf("create with flat dotted attrs over HTTP: %d %s (code %q detail %q), want 400 CORE-400 naming the key", code, raw, refuse.Code, refuse.Detail)
 	}
 
 	var wi struct {
