@@ -63,6 +63,7 @@ import type { DebugMcpHost, DebugSessionLifecycle, DebugWrapperSnapshot } from "
 import { mcpPromptPreparation, type McpCommandCandidate } from "./mcp-command";
 import { createReadOnlyMcpPolicyExtension, createSubagentMcpPolicyExtension } from "./mcp-read-only-policy";
 import { createSubagentSkillsBinding } from "./subagent-skills";
+import type { SkillsOverride } from "./skill-visibility-config";
 import { isNestedToolExecutionEvent } from "./agent-event-wire";
 import { collectLiveAssistantNotices, readShowCacheMissNotices, withSessionPrices } from "./transcript-notices-server";
 import {
@@ -249,6 +250,19 @@ export function resolveSessionIdleTimeoutMs(
 
 /** Resolved once: the debug panel reads it rather than resolving the variable again, which warns. */
 export const SESSION_IDLE_TIMEOUT_MS = resolveSessionIdleTimeoutMs();
+
+/**
+ * The session's skills override: pi-web's visibility preference
+ * (`skillVisibility.pi` in pi-web-settings.json), composed in front of the
+ * subagent binding's projection when there is one. Read once per session; a
+ * later switch needs a reload or a new session, exactly as before.
+ */
+export function sessionSkillsOverride(
+  _agentDir: string,
+  subagentSkillsOverride?: SkillsOverride,
+): SkillsOverride | undefined {
+  return subagentSkillsOverride;
+}
 
 const DEFAULT_SESSION_SHUTDOWN_DEADLINE_MS = 5_000;
 
