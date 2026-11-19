@@ -257,12 +257,29 @@ test("the Models sidebar labels a model by its name and falls back to the id", (
 
 // ── 85a2 (polyforge#142, AC4): the login moved to Account › pi ─────────────────
 test("the Models tab no longer renders a sign-in, an API-key entry or an Add-provider picker (85a2)", async () => {
-  // The moved pieces are gone from the source and the tab shows where they
-  // went; the mount is pinned in the source the way the 85a1b suite pinned
-  // a pane that renders once its GET settles.
+  // The moved pieces are gone from the source (a regression guard against
+  // re-adding them) and the notice the managed provider's row opens is a
+  // rendered component, not a source match: it names where the sign-in
+  // went (review r1#3 — the source regex alone pinned no behaviour).
   const source = await readFile(new URL("./ModelsConfig.tsx", import.meta.url), "utf8");
   for (const gone of [/function OAuthDetail/, /function ApiKeyDetail/, /function AddProviderPicker/, /i18n\.addProvider/]) {
     assert.ok(!gone.test(source), `the moved sign-in piece is still in ModelsConfig: ${gone}`);
   }
-  assert.match(source, /data-models-auth-moved/, "a managed provider's row shows no notice naming where sign-in went");
+});
+
+// ── 85a2 r2 (review r1#3): the moved notice is pinned by its rendering ──────────
+test("a managed provider's detail renders the moved notice — where the sign-in went (85a2)", async () => {
+  // the jsx runtime option belongs to the instance that transforms the
+  // component file itself
+  const jsxJiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
+  const React = await jsxJiti.import("react");
+  const { renderToStaticMarkup } = await jsxJiti.import("react-dom/server");
+  const { ProviderAuthMovedNotice } = await jsxJiti.import("./ModelsConfig.tsx");
+  const { I18nProvider } = await jsxJiti.import("@/hooks/useI18n");
+  const html = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(ProviderAuthMovedNotice)));
+  assert.match(html, /data-models-auth-moved="true"/, "the notice is not the rendered detail");
+  assert.match(html, /Sign-in has moved/i, "the notice's title is missing");
+  assert.match(html, /Account › pi/, "the notice does not name where the sign-in went");
+  assert.ok(!html.match(/<button/), "the notice offers a button");
+  assert.ok(!html.includes('type="password"'), "the notice offers the API-key entry");
 });

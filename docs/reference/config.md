@@ -279,8 +279,10 @@ with the default 30-minute window), so a long `make test` runs in the
 foreground instead of hitting Claude Code's 2-minute default. The default
 never exceeds the max: a tool window of 11 minutes or less gives
 default = max. A key the claude-config settings.json env block carries
-itself wins: the daemon adds neither key that block sets (the daemon never
-writes the file; the account page's forms are the guided writer, 85a2),
+itself wins: the daemon adds neither key that block sets (the daemon writes
+that file only as the shared-default Cell build's env-block copy — `[model]`
+source's row — never otherwise; the account page's forms are the guided
+writer, 85a2),
 and a default it adds next to an operator's own
 `BASH_MAX_TIMEOUT_MS` is clamped to that max. pi steps get neither Bash
 variable.

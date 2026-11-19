@@ -1355,7 +1355,7 @@ function ModelDetail({
 /** pi's sign-in, sign-out and API-key entry live on Account › pi now
  * (polyforge#142, owner ruling Q7 A); a managed provider's row here shows
  * where they went — nothing of a credential is entered or displayed here. */
-function ProviderAuthMovedNotice() {
+export function ProviderAuthMovedNotice() {
   const { t } = useI18n();
   return (
     <div className="models-auth-moved" data-models-auth-moved="true">

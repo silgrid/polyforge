@@ -330,15 +330,16 @@ try {
     // the left column: the two harnesses
     const claudeItem = host.locator(".config-sidebar-item").filter({ hasText: "Claude" });
     await claudeItem.click({ timeout: ACTION_MS });
+    // the settle duty (review r1#4): the asserted data items are polled
+    // directly — every expected string is part of the polled condition,
+    // never a heading read once and a second value asserted on one read
+    const CLAUDE_EXPECTED = ["oauth_token", "/home/op/.claude", "Log in with Claude (OAuth)", "Mint a setup token",
+      "/h/default/claude-config", "shared default", "/home/op/.pi/agent", "Keychain", "Residual OAuth login",
+      "Write a credential", "copied server-side"];
     const claudeText = await waitFor(async () => {
       const text = await host.innerText();
-      return text.includes("Interactive session") && text.includes("Daemon steps") ? text : false;
-    }, ACTION_MS, "the claude pane never showed its cards");
-    for (const expected of ["oauth_token", "/home/op/.claude", "Log in with Claude (OAuth)", "Mint a setup token",
-      "/h/default/claude-config", "shared default", "/home/op/.pi/agent", "Keychain", "Residual OAuth login",
-      "Write a credential", "copied server-side"]) {
-      assert.ok(claudeText.includes(expected), `the claude pane misses ${expected}`);
-    }
+      return CLAUDE_EXPECTED.every((expected) => text.includes(expected)) ? text : false;
+    }, ACTION_MS, "the claude pane never showed every card and row field");
     assert.ok(!claudeText.includes("sk-SENTINEL"), "a credential value rendered");
     // the pi pane: its own rows, no claude form
     await host.locator(".config-sidebar-item").filter({ hasText: /^pi$/ }).click({ timeout: ACTION_MS });
@@ -382,8 +383,11 @@ try {
       const text = await models.innerText();
       return /sign-in has moved/i.test(text) ? text : false;
     }, ACTION_MS, "the legacy tab never showed the moved notice");
-    assert.ok(!movedText.includes("Log in"), "the legacy tab still offers a login");
+    // the real UI words (review r1#3): the button says Login / Re-login —
+    // "Log in" never appears, an assertion on it pinned nothing
+    assert.ok(!movedText.includes("Login") && !movedText.includes("Re-login"), "the legacy tab still offers a login");
     assert.ok(!movedText.includes("Add provider"), "the legacy tab still offers the picker");
+    assert.equal(await models.locator('input[type="password"]').count(), 0, "the legacy tab still offers the API-key entry");
     // Account › pi: the rows, the Add provider button, and no Anthropic
     // subscription anywhere
     await tab(page, /^Account$/).click({ timeout: ACTION_MS });
