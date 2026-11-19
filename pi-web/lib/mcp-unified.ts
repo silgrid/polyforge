@@ -46,28 +46,126 @@ export interface UnifiedMergeRow<H extends string> {
   otherScopes: string[];
 }
 
-/** The generic core (Q8 A): merges `entries` by (scope, name) over `harnesses`. */
+/**
+ * The generic core (Q8 A): merges `entries` by (scope, name) over
+ * `harnesses`. A harness that supports a scope but holds no entry of a name
+ * the other side holds is named in that row's `missing`; a field both sides
+ * define whose values differ is the row's one inconsistency (risk 8: fields
+ * one side alone defines are never differences); the same name in another
+ * scope stays its own row, hinted in `otherScopes` (Q2 A).
+ */
 export function mergeUnifiedEntries<H extends string>(
-  _harnesses: readonly UnifiedMergeHarness<H>[],
-  _entries: readonly UnifiedMergeEntry<H>[],
+  harnesses: readonly UnifiedMergeHarness<H>[],
+  entries: readonly UnifiedMergeEntry<H>[],
 ): UnifiedMergeRow<H>[] {
-  return [];
+  const rows = new Map<string, UnifiedMergeRow<H>>();
+  const rowKey = (scope: string, name: string) => `${scope}\0${name}`;
+  for (const entry of entries) {
+    const key = rowKey(entry.scope, entry.name);
+    let row = rows.get(key);
+    if (!row) {
+      row = { scope: entry.scope, name: entry.name, entries: {}, missing: [], inconsistent: [], otherScopes: [] };
+      rows.set(key, row);
+    }
+    row.entries[entry.harness] = entry;
+  }
+  for (const row of rows.values()) {
+    for (const harness of harnesses) {
+      if (row.entries[harness.harness] === undefined && harness.scopes.includes(row.scope)) {
+        row.missing.push(harness.harness);
+      }
+    }
+    const present = harnesses.filter((harness) => row.entries[harness.harness] !== undefined);
+    const fieldNames = [...new Set(present.flatMap((harness) => Object.keys(row.entries[harness.harness]!.fields)))];
+    for (const field of fieldNames) {
+      if (present.some((harness) => !(field in row.entries[harness.harness]!.fields))) continue;
+      const values: Partial<Record<H, unknown>> = {};
+      for (const harness of present) values[harness.harness] = row.entries[harness.harness]!.fields[field];
+      const distinct = [...present.map((harness) => JSON.stringify(values[harness.harness]))];
+      if (new Set(distinct).size > 1) row.inconsistent.push({ field, values });
+    }
+  }
+  for (const row of rows.values()) {
+    for (const other of rows.values()) {
+      if (other !== row && other.name === row.name && !row.otherScopes.includes(other.scope)) {
+        row.otherScopes.push(other.scope);
+      }
+    }
+  }
+  return [...rows.values()];
 }
 
-/** pi's entry as comparable fields: command, args, url, env names (masked already). */
-export function unifiedMcpPiFields(_server: McpServerInfo): Record<string, unknown> {
-  return {};
+/** pi's entry as comparable fields: command, args, env names — masked already by its reader. */
+export function unifiedMcpPiFields(server: McpServerInfo): Record<string, unknown> {
+  const fields: Record<string, unknown> = {};
+  if (server.command !== undefined) fields.command = server.command;
+  if (server.args !== undefined) fields.args = server.args;
+  if (server.url !== undefined) fields.url = server.url;
+  if (server.envNames.length > 0) fields.envNames = server.envNames;
+  return fields;
 }
 
-/** claude's entry as comparable fields: command, args, url, env names (masked already). */
-export function unifiedMcpClaudeFields(_server: ClaudeMcpServerInfo): Record<string, unknown> {
-  return {};
+/** claude's entry as comparable fields: command, args, env names — masked already by its reader. */
+export function unifiedMcpClaudeFields(server: ClaudeMcpServerInfo): Record<string, unknown> {
+  const fields: Record<string, unknown> = {};
+  if (server.command !== undefined) fields.command = server.command;
+  if (server.args !== undefined) fields.args = server.args;
+  if (server.url !== undefined) fields.url = server.url;
+  if (server.envNames.length > 0) fields.envNames = server.envNames;
+  return fields;
 }
 
-/** The unified rows of the MCP list: pi's and claude's entries merged (Q2 A). */
+/** A field's value as the row's inconsistency note shows it. */
+function fieldText(field: string, value: unknown): string {
+  if (Array.isArray(value)) {
+    return value.every((item) => typeof item === "string")
+      ? (value as string[]).join(field === "args" ? " " : ", ")
+      : JSON.stringify(value);
+  }
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+/** The harnesses of the unified MCP list: pi holds no local scope (Q2/Q3). */
+const MCP_HARNESSES = [
+  { harness: "pi" as const, scopes: ["global", "project"] as const },
+  { harness: "claude" as const, scopes: ["global", "project", "local"] as const },
+];
+
+/**
+ * The unified rows of the MCP list: pi's and claude's entries merged by
+ * (scope, name) (Q2 A), each row's `missing` naming the harness a change
+ * would newly reach, its `inconsistent` the shared fields that differ (the
+ * row the panel marks and offers to 统一成当前值), and `otherScopes` the
+ * same name's other groups (「另在 X 组」).
+ */
 export function unifiedMcpRows(
-  _piServers: readonly McpServerInfo[],
-  _claudeServers: readonly ClaudeMcpServerInfo[],
+  piServers: readonly McpServerInfo[],
+  claudeServers: readonly ClaudeMcpServerInfo[],
 ): McpUnifiedRow[] {
-  return [];
+  const entries = [
+    ...piServers.map((server) => ({
+      harness: "pi" as const,
+      scope: server.scope,
+      name: server.name,
+      fields: unifiedMcpPiFields(server),
+    })),
+    ...claudeServers.map((server) => ({
+      harness: "claude" as const,
+      scope: server.scope,
+      name: server.name,
+      fields: unifiedMcpClaudeFields(server),
+    })),
+  ];
+  return mergeUnifiedEntries(MCP_HARNESSES, entries).map((row) => ({
+    scope: row.scope as McpUnifiedRow["scope"],
+    name: row.name,
+    pi: row.entries.pi !== undefined,
+    claude: row.entries.claude !== undefined,
+    missing: row.missing,
+    inconsistent: row.inconsistent.map((diff) => ({
+      field: diff.field,
+      values: Object.fromEntries(Object.entries(diff.values).map(([harness, value]) => [harness, fieldText(diff.field, value)])),
+    })),
+    otherScopes: row.otherScopes as McpUnifiedRow["otherScopes"],
+  }));
 }
