@@ -642,11 +642,24 @@ class PodmanCLI(DockerCLI):
 
 
 def engine_for_env(environ: Optional[Mapping[str, str]] = None) -> DockerCLI:
-    """The container backend environ selects (polyforge#159): the docker
-    client unless PF_CONTAINER_ENGINE says podman. An empty or unknown
-    value is refused — never a silent fallback (the two engines' images
-    and volumes are not interchangeable)."""
-    return DockerCLI.for_env(environ)
+    """The container backend environ selects (polyforge#159):
+    ``PF_CONTAINER_ENGINE`` (``stepenv.ENV_CONTAINER_ENGINE``, the
+    daemon-injected [daemon] container_engine) picks the backend —
+    unset, and "docker", is the docker client exactly as before,
+    "podman" the PodmanCLI backend. An empty or unknown value is
+    refused, never silently defaulted (the two engines' images and
+    volumes are not interchangeable; a typo must cost a refusal, not a
+    run on the other engine's storage)."""
+    env = os.environ if environ is None else environ
+    if stepenv.ENV_CONTAINER_ENGINE not in env or env[stepenv.ENV_CONTAINER_ENGINE] == "docker":
+        return DockerCLI.for_env(env)
+    v = env[stepenv.ENV_CONTAINER_ENGINE]
+    if v == "podman":
+        return PodmanCLI.for_env(env)
+    raise ContainerError(
+        "%s is %s, not a container engine (docker or podman); unset it or set it to one of those"
+        % (stepenv.ENV_CONTAINER_ENGINE, json.dumps(v))
+    )
 
 
 def tag_safe(s: str) -> str:
@@ -782,7 +795,7 @@ class ContainerOptions:
         if not c.wi:
             c.wi = env.get(stepenv.ENV_WI_ID, "")
         if c.runtime is None:
-            c.runtime = DockerCLI.for_env(env)
+            c.runtime = engine_for_env(env)
         return c
 
     def engine(self) -> ContainerRuntime:
