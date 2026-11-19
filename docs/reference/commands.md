@@ -81,7 +81,10 @@ block per Cell; the aggregate's `tasks` counts — running, completed and the
 terminal states — sum every Cell with a running daemon, so the Tasks badge
 and re-read trigger cover all of them); `PF_PROFILE` and the cwd never change their scope — only
 an explicit `--profile NAME` targets one Cell. `pf ops shutdown` is always
-Host-level: it stops every Cell and refuses `--profile`. `pf ops
+Host-level: it stops every Cell and refuses `--profile`; so is `pf ops
+drain --upgrade [--force]` (polyforge#160): it sets the Host-wide upgrade
+drain — new work is refused on every Cell until the daemon restarts —
+and takes no `--profile`. `pf ops
 unclassified` is always Host-level too: it lists the last 7 days'
 fallback-classified error texts of every Cell, deduplicated with counts,
 and refuses `--profile`.
@@ -93,10 +96,10 @@ One row per group, exactly as `pf help` prints it:
 | `pf help` group | Verbs |
 | --- | --- |
 | Data-plane verbs (via the daemon to the Cell's aihub) | `file`, `queue`, `cancel`, `recall`, `remember`, `memory`, `msg` (`send`, `list`, `ack`, `show`, `analyze`, `contacts`) |
-| Execution-plane verbs (local daemon UDS face) | `submit`, `watch` (snapshot, `decisions` — the machine's decision feed —, `dismiss`), `answer` (your words to the current step's agent — a reply to its question, an interjection while it runs, or a message that wakes a parked work item; no question id), `pause`, `resume`, `wrap`, `override` (a work item's per-step overlay: the view; `--step` with `--models`, `--clear-models`, `--skip`, `--unskip`, `--param <name>=<value>` or `--clear-param <name>`, one per call — the model chain over every source, the skip switch of a lane-declared skippable step, a step param the lane declares over its project and lane values; the parked (paused/blocked) ticket accepts chains too, holding on this machine only — not published until this machine's resume or claim publishes the capsule chain; a queued work item's params included, riding the reserved `step_params` attrs key until its claim; a terminal ticket refuses), `params` (a work item's composed params read: every declared step param's final value and the layer it comes from — the per-ticket layer, the project's yaml or the lane default; a queued work item's per-ticket layer is its `step_params` attrs key), `ops` (`status`, `models`, `auto`, `max`, `role` — the interactive/runner machine role, `--force` takes interactive over —, `shutdown`, and `end-session` — aihub-direct, admin/maintainer), `task` (`spawn`, `list`, `show`, `cancel`), `step` (inside a workflow step only: `handoff`, its one result-delivery path; `ask`, its question to the owner; `recall`, `memory show`, `remember`; `hub`, its aihub reads and pending writes — below) |
+| Execution-plane verbs (local daemon UDS face) | `submit`, `watch` (snapshot, `decisions` — the machine's decision feed —, `dismiss`), `answer` (your words to the current step's agent — a reply to its question, an interjection while it runs, or a message that wakes a parked work item; no question id), `pause`, `resume`, `wrap`, `override` (a work item's per-step overlay: the view; `--step` with `--models`, `--clear-models`, `--skip`, `--unskip`, `--param <name>=<value>` or `--clear-param <name>`, one per call — the model chain over every source, the skip switch of a lane-declared skippable step, a step param the lane declares over its project and lane values; the parked (paused/blocked) ticket accepts chains too, holding on this machine only — not published until this machine's resume or claim publishes the capsule chain; a queued work item's params included, riding the reserved `step_params` attrs key until its claim; a terminal ticket refuses), `params` (a work item's composed params read: every declared step param's final value and the layer it comes from — the per-ticket layer, the project's yaml or the lane default; a queued work item's per-ticket layer is its `step_params` attrs key), `ops` (`status`, `models`, `auto`, `max`, `role` — the interactive/runner machine role, `--force` takes interactive over —, `drain` — `drain --upgrade [--force]`, the Host-level upgrade drain: new submits, automatic claims and task spawns are refused `DAEMON-409` while running work goes on; an idle Host answers and it is safe to upgrade, a busy one refuses until `--force`; the refusal ends with the daemon restart —, `shutdown`, and `end-session` — aihub-direct, admin/maintainer), `task` (`spawn`, `list`, `show`, `cancel`), `step` (inside a workflow step only: `handoff`, its one result-delivery path; `ask`, its question to the owner; `recall`, `memory show`, `remember`; `hub`, its aihub reads and pending writes — below) |
 | Management face (M1–M5) | `users`, `api-keys`, `projects`, `machines` (`list`, `rekey`), `backup` (database snapshot, see below), `cell` (the Host's Cells: `list`, `add`, `update`, `repair`, `remove`, `cleanup`; owner-only, below), `config` (the one `cli.toml` writer and the daemon reload entry), `workflows` (the read-only workflow face, below) |
 | Diagnostics | `doctor` (examines every Cell — the default Cell's full report, then one section per named Cell, each Cell-level read carrying its `X-PF-Profile`; `--prune-scratch` removes the stale scratch batches inside the fixed categories (`raw/` past 3 days, `tasks/` and `sessions/` past 14 days, whole run directories; entries outside the categories are only ever reported); `--prune-chat-state` deletes the retired chat-subscription files the `retired chat state` row lists (`chats.json`, `chat-subs.json`, `chat-status/` and `migration/chat-subs.json.pre-migration` in the data dir, and the runtime dir's `chat-*` and `session-*.chat` files); `--prune-capsules` acts on the entries the `capsule retention` row calls reclaimable or retired — past the 14-day retention, holding no uncommitted or unpushed task-repo work: a wrapped work item's capsule, live or set aside, is slimmed to `artifacts/` + `capsule.json`, and terminal work items' external git dirs and failed or canceled ones' set-aside scenes are removed — a commit counts as pushed when either the task clone's own or the mapped workspace's `.repo/<name>` clone's remote-tracking refs reach it; a capsule holding such work, and the work item's git dirs, are kept and named; `--prune-rebuildables` removes the rebuildable build products the `rebuildable artifacts` row counted — the directories a repository declares at its root (`.polyforge/capsule-gc.conf`, one `rebuild_dir=` line per repo-root-relative literal; read from the mapped workspace's `.repo/<name>` clone's committed default branch, the commit recorded in the report) from the `repos/*` task clones of terminal work items' capsules (wrapped, failed or canceled, live or set aside) no daemon job holds, without waiting for the 14-day retention — only all-ignored directories with no tracked or untracked-not-ignored content and no nested repository, anchored to their clones, never touching `artifacts/`, `capsule.json`, the git directories, the local commits or the git status (a repository with unpushed commits loses its ignored build products and nothing else; a repository that declares nothing changes nothing; never while the daemon is down); its `disk watermark` row reports each mapped workspace's filesystem use and `capsules/` bytes and warns above 70% used; `--fix-harness-prompts` appends the native-SVG diagram-guidance block to each installed harness's existing context file that lacks that block — legacy mermaid-only guidance, which the `harness diagram guidance` row warns as `legacy`, included and left as it is — append-only and idempotent, never creating a file; it appends the concise-output guidance block too (the `harness concise guidance` row); `--fix-install-layout` links `~/.claude/skills/polyforge` to `<data-dir>/release/current/skills/polyforge` when the `claude install layout` row finds it missing or linked elsewhere — only that entry, idempotent, a no-op on a correct link; a copied directory or a missing release is left to `tools/install.sh`, and it never installs `pf` or a release), `version` (the verb form of `pf --version`), `profile` (the resolved Cell and its source), `init` (a workspace's local layout) |
-| Process | `daemon` (run the work machine; `pf daemon ensure` starts it), `aihub` (run the aihub server on the service host; `main.go` intercepts `pf aihub`, this verb serves `pf help aihub` only) |
+| Process | `daemon` (run the work machine; `pf daemon ensure` starts it), `supervise` (run the container process supervisor — the workstation container's entry point, below), `aihub` (run the aihub server on the service host; `main.go` intercepts `pf aihub`, this verb serves `pf help aihub` only) |
 
 ## `pf submit` — the prechecks; `pf queue` — the interaction marks
 
@@ -1424,6 +1427,49 @@ doctor`'s `workflow lanes` row runs the same judgement over every mapped
 workspace and lists the queued work items bound to a lane their
 workspace's lane set does not carry (`WFC-123`).
 
+## `pf supervise` — the container process supervisor (polyforge#160)
+
+`pf supervise` is the workstation container's entry point (the local
+run image, epic #84): the image's PID 1 (catatonit) runs it as its
+direct child, and it starts and watches the machine's three long-running
+processes as its own children — the daemon, Pi Web and, with
+`--with-aihub`, the aihub server. It exists because a container has no
+tmux and no systemd: `catatonit` forwards a stop signal only to its
+direct child, so `pf supervise` is what forwards it to every child.
+
+- **The children**: the daemon runs the canonical launch argv
+  (`--config`, `-data-dir`, `-workflows-dir`; the socket and the machine
+  id resolve inside the daemon exactly as `pf daemon ensure`'s own
+  launch would), with the same environment allow-list `pf daemon ensure`
+  launches it under — plus the marker
+  `POLYFORGE_SUPERVISOR=container:pf-supervise`, the one fact that tells
+  `pf daemon ensure` (a successful no-op: nothing to start — the
+  supervisor owns the daemon) and `pf doctor` (the supervision row
+  passes) that this is the container supervision. Pi Web runs
+  `npm run start:lan` in its checkout (a container must bind 0.0.0.0 to
+  be reachable; no checkout → Pi Web is not started, a line says so);
+  the aihub server runs `pf aihub`. Logs: `<data-dir>/daemon.log`,
+  `pi-web.log`, `aihub.log`.
+- **The watch**: a child that dies on it — a crash, a `kill -9` — is
+  restarted with a growing delay (5s, doubling per consecutive failure,
+  capped at 60s, reset after a run that lasted 60s).
+- **The end**: the daemon exiting 0 or 78 is NOT restarted; the run
+  stops the other children and exits with that code, so the container
+  stops with it (the 78 reason is in `<data-dir>/daemon.log`).
+- **A stop** (SIGTERM/SIGINT, what `docker stop`/`podman stop` sends): the
+  signal is forwarded ONCE to every child (a second daemon signal would
+  hard-abort its shutdown and lose the checkpoint), and the daemon gets
+  the `--grace` (default 60s, floor 45s) to finish its shutdown — its
+  WIP pushes can take up to 30s — before anything still running is
+  SIGKILLed. The outer container's stop timeout must be that grace plus
+  a margin. Exit status: the daemon's own when it ended the run (0/78);
+  0 when a forwarded stop finished inside the grace; 1 when the grace
+  ran out; 2 usage.
+
+On a host nothing changes: the daemon's supervision stays the tmux loop
+(`pf daemon ensure`), and running `pf supervise` there is not what any
+documented flow does.
+
 ## The daemon (`pf daemon`)
 
 `pf daemon` runs the local work machine (runtime, driver and supervisor
@@ -1440,6 +1486,16 @@ ends`) instead of restarting into the same failure every 5s; any other
 non-zero exit is still restarted after 5s. To recover: read
 `<data-dir>/daemon.log`, fix the cause, then run `pf daemon ensure`
 (the next harness session start also runs it).
+
+**In the container (`pf supervise`)** none of this tmux machinery runs:
+the workstation container's entry point is `pf supervise` (above), which
+starts the daemon as its own child and restarts a crash itself. Under
+that supervision `pf daemon ensure` is a successful no-op that starts
+nothing (the machine-wide mapping check still runs — the no-op skips
+only the starting), and `pf doctor`'s supervision row passes on the
+daemon's `POLYFORGE_SUPERVISOR=container:pf-supervise` marker. A shell
+opened with `docker exec` carries no marker and keeps the host
+behavior.
 
 **Git on the work machine.** The daemon's git calls that talk to aihub
 with the session credential — the capsule chain push, the capsule clone

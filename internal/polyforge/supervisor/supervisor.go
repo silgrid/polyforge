@@ -1,14 +1,19 @@
 // Package supervisor names the daemon's supervision on a work machine
 // (polyforge#174) and answers whether it is in place. It is the leaf both
 // `pf daemon ensure` (which creates the supervision) and `pf doctor`
-// (which reports it) share, so the two can never disagree on the name.
+// (which reports it) share, so the two can never disagree on the name,
+// and it is where `pf supervise` — the container process supervisor
+// (polyforge#160) — lives, beside its host-side counterpart.
 //
-// The supervision is a tmux session running a restart loop around
-// `pf daemon` (crashes are restarted within ~5s). tmux does not survive a
-// container or machine restart; the harness adapters run
+// On a host the supervision is a tmux session running a restart loop
+// around `pf daemon` (crashes are restarted within ~5s). tmux does not
+// survive a container or machine restart; the harness adapters run
 // `pf daemon ensure` at session start, which recreates the loop. An
 // operator who prefers systemd may run the daemon from a unit named
-// SystemdUnit instead; doctor accepts either.
+// SystemdUnit instead; doctor accepts either. In the workstation
+// container the supervision is `pf supervise` (supervise.go): the
+// container's entry point runs it and it starts and watches the
+// daemon, Pi Web and the aihub server as its own children.
 //
 // Every tmux call runs with TMUX and TMUX_PANE removed from the
 // environment, so it always talks to the user's default tmux server

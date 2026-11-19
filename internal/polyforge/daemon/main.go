@@ -43,6 +43,7 @@ import (
 	"github.com/silgrid/polyforge/internal/polyforge/cellcfg"
 	"github.com/silgrid/polyforge/internal/polyforge/cli"
 	"github.com/silgrid/polyforge/internal/polyforge/runtime"
+	"github.com/silgrid/polyforge/internal/polyforge/supervisor"
 )
 
 // Main executes `pf daemon <flags>` and returns the process exit code.
@@ -236,10 +237,12 @@ func Main(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 // ExitNeedsOperator is the daemon's exit status for a startup failure
 // only an operator can fix — configuration, identity, workspace, on-disk
 // state, a failed restart reconciliation (EX_CONFIG). The ensure
-// supervision loop ends on it instead of restarting into the same
-// failure every few seconds; the next
-// `pf daemon ensure` starts a fresh loop once the cause is fixed.
-const ExitNeedsOperator = 78
+// supervision loop and the container supervisor (pf supervise) both end
+// on it instead of restarting into the same failure every few seconds;
+// the next `pf daemon ensure` (or the next container start) starts fresh
+// once the cause is fixed. The value is stated once, in the supervisor
+// package, which this package imports.
+const ExitNeedsOperator = supervisor.NeedsOperatorExit
 
 // needsOperatorError marks a Run error as ExitNeedsOperator-class.
 type needsOperatorError struct{ err error }

@@ -114,13 +114,16 @@ type Host struct {
 	// admission is the Host's heavy-run admission every Cell's daemon-run
 	// verification shares (verifyqueue.go).
 	admission *verifyQueue
+	// drain is the Host-wide upgrade drain state (upgradedrain.go):
+	// `pf ops drain --upgrade` sets it and every Cell refuses new work.
+	drain *upgradeDrain
 }
 
 // NewHost assembles every Cell of the set. A default Cell that cannot be
 // assembled refuses the Host (the error names it); a named Cell that cannot
 // is recorded invalid.
 func NewHost(hc HostConfig) (*Host, error) {
-	h := &Host{cfg: hc, cells: map[string]*cell{}, shutDone: make(chan struct{})}
+	h := &Host{cfg: hc, cells: map[string]*cell{}, shutDone: make(chan struct{}), drain: &upgradeDrain{}}
 	h.slots = &hostSlots{max: hc.MaxConcurrent, tasks: &task.Slots{}, cells: h.servingDaemons}
 	if h.slots.max <= 0 {
 		h.slots.max = cli.DefaultMaxConcurrentJobs
@@ -211,6 +214,7 @@ func (h *Host) build(profile string, c cli.Config) (Config, error) {
 	cfg.Profile, cfg.SharedFeed = profile, h.feed
 	cfg.HostSlots = h.slots
 	cfg.SharedAdmission = h.admission
+	cfg.UpgradeDrain = h.drain
 	hostPath := h.cfg.Set.HostPath
 	if profile != cellcfg.DefaultProfile {
 		// Resolve the default Cell at read time so a live reload is visible
@@ -558,6 +562,7 @@ func (h *Host) handler() http.Handler {
 	mux.HandleFunc("GET /ops/unclassified", h.unclassifiedRoute)
 	mux.HandleFunc("GET /status", h.statusRoute)
 	mux.HandleFunc("POST /ops/config", h.opsConfigRoute)
+	mux.HandleFunc("POST /ops/drain", h.opsDrainRoute)
 	mux.HandleFunc("POST /shutdown", h.shutdownRoute)
 	mux.HandleFunc("/aihub/{path...}", h.proxyRoute)
 	h.lifecycleRoutes(mux)
@@ -571,13 +576,16 @@ func (h *Host) handler() http.Handler {
 }
 
 // guardHostWrites refuses a mutating Host-level request (POST /shutdown,
-// a profile-less POST /ops/config) from a step or task agent of any Cell, or
-// from an unidentifiable peer — the same fail-closed accident guard every
-// Cell's own routes keep (refuseStepOrigin). Cell-scoped requests pass
-// through to forward, where the owning Cell's guard applies.
+// a profile-less POST /ops/config, a POST /ops/drain) from a step or
+// task agent of any Cell, or from an unidentifiable peer — the same
+// fail-closed accident guard every Cell's own routes keep
+// (refuseStepOrigin). Cell-scoped requests pass through to forward,
+// where the owning Cell's guard applies (a profiled /ops/drain reaches
+// the Host route, which refuses the profile explicitly).
 func (h *Host) guardHostWrites(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hostWrite := r.Method == http.MethodPost && (r.URL.Path == "/shutdown" ||
+			r.URL.Path == "/ops/drain" ||
 			(r.URL.Path == "/ops/config" && r.Header.Get(protocol.ProfileHeader) == ""))
 		if hostWrite {
 			if _, ok := requestPeerCred(r.Context()); !ok {

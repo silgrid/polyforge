@@ -184,6 +184,19 @@ func hostMachineID() string {
 }
 
 func (p *ensurePlan) run(stdout, stderr io.Writer) error {
+	// Under the container supervisor (polyforge#160) the daemon is a
+	// child of `pf supervise`, which restarts it on a crash: starting
+	// anything here would race that supervision. The no-op skips only
+	// the STARTING — the checks above (config load, the machine-wide
+	// mapping gate) still run, so a machine nothing could execute on is
+	// refused here too.
+	if supervisor.ContainerSupervisedEnv(os.Environ()) {
+		if p.refuse != nil {
+			return p.refuse
+		}
+		fmt.Fprintln(stdout, "the daemon is kept by the container supervisor (`pf supervise`): nothing to start — a crash is restarted by it; check `pf doctor`")
+		return nil
+	}
 	if p.answers(stdout) {
 		return nil
 	}
@@ -287,20 +300,16 @@ func (p *ensurePlan) startDetached() error {
 }
 
 // daemonEnv is the daemon's whole environment: the supervisor allow-list
-// filtered from the ENSURE CALLER's environment (never the tmux server's),
-// HOME pinned, plus the supervision marker when the loop starts it.
+// filtered from the ENSURE CALLER's environment (never the tmux
+// server's), HOME pinned, plus the supervision marker when the loop
+// starts it. The composition lives once, in supervisor.DaemonLaunchEnv
+// (`pf supervise` launches the daemon the same way).
 func (p *ensurePlan) daemonEnv(marker bool) []string {
-	env := []string{"HOME=" + p.home}
-	for _, kv := range supervisor.DaemonEnv(os.Environ()) {
-		// PWD is the loop shell's own cwd, never the caller's
-		if !strings.HasPrefix(kv, "HOME=") && !strings.HasPrefix(kv, "PWD=") {
-			env = append(env, kv)
-		}
-	}
+	value := ""
 	if marker {
-		env = append(env, supervisor.MarkerEnv+"=tmux:"+supervisor.SessionName)
+		value = "tmux:" + supervisor.SessionName
 	}
-	return env
+	return supervisor.DaemonLaunchEnv(p.home, os.Environ(), value)
 }
 
 // loopTmpl renders what tmux runs ("script") and the restart loop

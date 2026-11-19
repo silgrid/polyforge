@@ -60,19 +60,30 @@ var prerequisiteHints = map[string]string{
 // prerequisiteOrder keeps the report's tool list stable.
 var prerequisiteOrder = []string{"gh", "curl", "python3", "tmux", "git"}
 
-// prerequisitesCheck reports the five setup tools' presence on PATH —
+// prerequisitesCheck reports the setup tools' presence on PATH —
 // warn-only: every missing one is named with what to obtain, never a
-// fail, and the doctor never installs anything.
-func prerequisitesCheck(lookPath func(string) (string, error)) doctorCheck {
+// fail, and the doctor never installs anything. Under the container
+// supervisor tmux is not required (polyforge#160, Q7): `pf supervise`
+// watches the daemon, and the container image carries no tmux.
+func prerequisitesCheck(lookPath func(string) (string, error), containerSupervised bool) doctorCheck {
 	var missing []string
 	for _, tool := range prerequisiteOrder {
+		// polyforge#160, Q7: the container supervisor replaces the tmux
+		// loop, and the container image carries no tmux — under it tmux is
+		// not a required tool.
+		if tool == "tmux" && containerSupervised {
+			continue
+		}
 		if _, err := lookPath(tool); err != nil {
 			missing = append(missing, tool+" — "+prerequisiteHints[tool])
 		}
 	}
 	if len(missing) == 0 {
-		return doctorCheck{Name: docChPrereqs, Status: "pass",
-			Detail: "all five setup tools on PATH: " + strings.Join(prerequisiteOrder, ", ")}
+		detail := "all five setup tools on PATH: " + strings.Join(prerequisiteOrder, ", ")
+		if containerSupervised {
+			detail = "every required setup tool on PATH — tmux is not required under the container supervisor (`pf supervise`): " + strings.Join([]string{"gh", "curl", "python3", "git"}, ", ")
+		}
+		return doctorCheck{Name: docChPrereqs, Status: "pass", Detail: detail}
 	}
 	return doctorCheck{Name: docChPrereqs, Status: "warn",
 		Detail: "missing (checked and reported; the doctor never installs anything): " + strings.Join(missing, "; ")}
@@ -494,7 +505,10 @@ func ensureFixCommand(home string) string {
 }
 
 // supervisionCheck judges whether a live daemon is supervised.
-func supervisionCheck(daemonUp bool) (c doctorCheck) {
+// daemonEnvNames are the daemon's environment variable names (GET
+// /status reports names only) — a daemon the container supervisor
+// started carries the supervision marker among them.
+func supervisionCheck(daemonUp bool, daemonEnvNames []string) (c doctorCheck) {
 	c = doctorCheck{Name: docChSupervision}
 	home, _ := os.UserHomeDir()
 	fix := ensureFixCommand(home)
@@ -515,6 +529,15 @@ func supervisionCheck(daemonUp bool) (c doctorCheck) {
 			c.Status, c.Detail = "warn", c.Detail+" — "+layoutNote
 		}
 	}()
+	// polyforge#160: a daemon the container supervisor started is
+	// supervised — the container's `pf supervise` restarts a crash and
+	// forwards the stop. The judgment is the one helper both rows share
+	// (r1#2), so a tmux-started daemon inside a container keeps its
+	// own, correct pass verdict and detail.
+	if containerSupervisedDaemon(daemonUp, daemonEnvNames) {
+		c.Status, c.Detail = "pass", "the daemon runs under the container supervisor (`pf supervise`: a crash is restarted, a stop signal is forwarded and the daemon shuts down within the container's grace)"
+		return c
+	}
 	loop, err := supervisor.LoopRunning()
 	switch {
 	case loop:
@@ -546,4 +569,33 @@ func cellLayoutNote(dataDir string) (bool, string) {
 		return false, "" // inside the rollback window the copy is the rollback source
 	}
 	return true, fmt.Sprintf("the pre-migration copy (%s in %s) is stale: the Host served the cell layout, so `pf migrate cell-layout --rollback` is refused — keep a backup of it if you want one, then remove those root items", strings.Join(old, ", "), dataDir)
+}
+
+// containerSupervisedDaemon answers the one judgment both the
+// supervision row and the prerequisites row make (polyforge#160): a
+// live daemon, inside a container, whose environment carries the
+// supervision marker, and NO tmux loop or systemd unit answering first
+// (GET /status reports environment NAMES only, so a tmux-started daemon
+// inside a container keeps its own verdict and is never read as
+// container-supervised).
+func containerSupervisedDaemon(daemonUp bool, daemonEnvNames []string) bool {
+	if !daemonUp || !supervisor.InContainer() || !envNamesCarry(daemonEnvNames) {
+		return false
+	}
+	if loop, _ := supervisor.LoopRunning(); loop {
+		return false
+	}
+	return !supervisor.SystemdActive()
+}
+
+// envNamesCarry answers whether the daemon's environment variable names
+// (GET /status reports names only) include the supervision marker — the
+// one fact both the tmux loop and `pf supervise` stamp on the daemon.
+func envNamesCarry(names []string) bool {
+	for _, n := range names {
+		if n == supervisor.MarkerEnv {
+			return true
+		}
+	}
+	return false
 }

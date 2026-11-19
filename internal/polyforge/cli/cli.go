@@ -216,6 +216,7 @@ var commands = []*Command{
 	cmdConfig,
 	cmdWorkflows,
 	cmdDaemon,
+	cmdSupervise,
 	cmdAihubServer,
 }
 

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"github.com/silgrid/polyforge/internal/polyforge/cellcfg"
+	"github.com/silgrid/polyforge/internal/polyforge/supervisor"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -577,5 +578,115 @@ func TestCellLayoutNote(t *testing.T) {
 	}
 	if warn, _ := cellLayoutNote(dir); warn {
 		t.Fatal("with the copy removed nothing is left to say")
+	}
+}
+
+// containerFiles points the container probe at a test-owned marker file
+// (exists) and answers its path; the package variable is the seam, so
+// the machine the test runs in — a dev container with a real
+// /.dockerenv — cannot flip a case.
+func containerFiles(t *testing.T, exists bool) string {
+	t.Helper()
+	marker := filepath.Join(t.TempDir(), ".containerenv")
+	old := supervisor.ContainerMarkerFiles
+	if exists {
+		if err := os.WriteFile(marker, []byte(""), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		supervisor.ContainerMarkerFiles = []string{marker}
+	} else {
+		supervisor.ContainerMarkerFiles = []string{marker}
+	}
+	t.Cleanup(func() { supervisor.ContainerMarkerFiles = old })
+	return marker
+}
+
+// TestDoctorSupervisionContainerPass (polyforge#160, AC1): a live daemon
+// whose environment carries the supervision marker, checked inside a
+// container, is supervised — pass, naming the container supervisor —
+// with no tmux or systemd involved. Each failing combination stays a
+// warn: the marker alone (no container file, a host that inherited the
+// variable), the container alone (a daemon started by hand), an empty
+// environment.
+func TestDoctorSupervisionContainerPass(t *testing.T) {
+	// no tmux and no systemctl reachable: every non-container branch is a
+	// deterministic warn, whatever the host running the test carries
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv(supervisor.MarkerEnv, "") // the CALLER's env plays no part
+	supervised := []string{"HOME", "PATH", supervisor.MarkerEnv}
+
+	// the container supervisor: the daemon's env carries the marker and
+	// the container file exists
+	containerFiles(t, true)
+	c := supervisionCheck(true, supervised)
+	if c.Status != "pass" || !strings.Contains(c.Detail, "container supervisor") {
+		t.Fatalf("a container-supervised daemon must pass naming the container supervisor: %+v", c)
+	}
+	// a daemon WITHOUT the marker in a container is unsupervised: warn
+	if c := supervisionCheck(true, []string{"HOME", "PATH"}); c.Status != "warn" {
+		t.Fatalf("a hand-started daemon in a container must stay a warn: %+v", c)
+	}
+	// the daemon's marker without the container file (a host shell that
+	// inherited the variable): warn, never a container pass
+	containerFiles(t, false)
+	if c := supervisionCheck(true, supervised); c.Status != "warn" {
+		t.Fatalf("the marker without the container file must stay a warn: %+v", c)
+	}
+}
+
+// TestDoctorPrerequisitesInContainer (polyforge#160, Q7 B): under the
+// container supervisor tmux is not required — a PATH whose only gap is
+// tmux passes with the exemption named; on the host the same PATH warns
+// naming tmux.
+func TestDoctorPrerequisitesInContainer(t *testing.T) {
+	look := func(tool string) (string, error) {
+		if tool == "tmux" {
+			return "", exec.ErrNotFound
+		}
+		return "/usr/bin/" + tool, nil
+	}
+	c := prerequisitesCheck(look, false)
+	if c.Status != "warn" || !strings.Contains(c.Detail, "tmux") {
+		t.Fatalf("on the host a missing tmux must warn: %+v", c)
+	}
+	c = prerequisitesCheck(look, true)
+	if c.Status != "pass" || !strings.Contains(c.Detail, "container supervisor") {
+		t.Fatalf("under the container supervisor a missing tmux must pass naming the exemption: %+v", c)
+	}
+}
+
+// TestDoctorContainerJudgmentIsTheOneHelper (r1#2): the judgment both
+// doctor rows share — a tmux loop or a systemd unit answering first
+// keeps its own verdict (the daemon's environment reports NAMES only,
+// so a tmux-started daemon inside a container cannot be told apart by
+// the marker name and must not read as container-supervised); only the
+// pure container case judges container-supervised.
+func TestDoctorContainerJudgmentIsTheOneHelper(t *testing.T) {
+	supervised := []string{"HOME", "PATH", supervisor.MarkerEnv}
+	t.Setenv("PATH", t.TempDir()) // no tmux, no systemctl
+	containerFiles(t, true)
+	if !containerSupervisedDaemon(true, supervised) {
+		t.Fatal("a container daemon with the marker and no tmux/systemd is container-supervised")
+	}
+	// a tmux loop answering: NOT container-supervised — the daemon is
+	// the tmux loop's, whatever the marker name alone could suggest
+	t.Setenv("PATH", fakeTmuxPath(t, 0))
+	if containerSupervisedDaemon(true, supervised) {
+		t.Fatal("a tmux-supervised daemon inside a container must keep the tmux verdict")
+	}
+	// no marker in the daemon's environment: never
+	t.Setenv("PATH", t.TempDir())
+	if containerSupervisedDaemon(true, []string{"HOME", "PATH"}) {
+		t.Fatal("a hand-started daemon is never container-supervised")
+	}
+	// the daemon down: never
+	if containerSupervisedDaemon(false, supervised) {
+		t.Fatal("a daemon that does not answer is never container-supervised")
+	}
+	// the container file alone (a host that inherited the marker):
+	// never
+	containerFiles(t, false)
+	if containerSupervisedDaemon(true, supervised) {
+		t.Fatal("the marker without the container file is never container-supervised")
 	}
 }

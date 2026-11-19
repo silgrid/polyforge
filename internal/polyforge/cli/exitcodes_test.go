@@ -337,19 +337,20 @@ func TestDaemonVerbHelpOnlyExitGoldens(t *testing.T) {
 		t.Errorf("flag parse: exit = %d, want 2", code)
 	}
 	// Sanity: the registry really is the full verb set (12 routing, +
-	// 5 admin + doctor + version + init + daemon + aihub (the server
-	// entry, help-only like daemon) + watch + step (a
+	// 5 admin + doctor + version + init + daemon + supervise + aihub (the
+	// server entry, help-only like daemon and supervise) + watch + step (a
 	// step's one entry point, workflow contract 4, which
 	// replaced contract 3's result and ask); watch replaced the
 	// retired watch-probe; doctor is the #113 machine health face; version
 	// the #196 build string (the `--version` flag's verb form); init
-	// the #177 workspace layout; chat was retired).
+	// the #177 workspace layout; supervise is the container process
+	// supervisor of polyforge#160; chat was retired).
 	want := []string{
 		"file", "queue", "cancel", "recall", "remember", "memory",
 		"submit", "answer", "pause", "resume",
 		"wrap", "override", "params", "ops", "watch", "task", "step", "msg", "users", "api-keys", "machines", "projects",
 		"backup", "cell", "migrate",
-		"doctor", "version", "profile", "init", "config", "workflows", "daemon", "aihub",
+		"doctor", "version", "profile", "init", "config", "workflows", "daemon", "supervise", "aihub",
 	}
 	if len(commands) != len(want) {
 		t.Fatalf("registry has %d commands, want %d", len(commands), len(want))
