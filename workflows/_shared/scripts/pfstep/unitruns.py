@@ -24,6 +24,9 @@ class UnitRunDecl:
     argv: List[str] = field(default_factory=list)
     marker: str = ""
     test_commit: str = ""
+    # pre_existing_red: its reproduction test predates the change (the
+    # on-the-spot check's flaky policy re-runs such a unit once)
+    pre_existing_red: bool = False
 
     def check(self) -> str:
         return self.repo + ":unit-run:" + self.id
@@ -63,6 +66,11 @@ def read_unit_runs(path: str) -> List[UnitRunDecl]:
         d = UnitRunDecl(id=text(u.get("id"), "id"), marker=text(u.get("marker"), "marker"),
                         test_commit=text(u.get("test_commit"), "test_commit"))
         text(u.get("impl_commit"), "impl_commit")
+        pre = u.get("pre_existing_red")
+        if pre is not None:
+            if not isinstance(pre, bool):
+                raise ValueError("%s is not %s: entry %d's pre_existing_red is not a boolean" % (path, shape, i))
+            d.pre_existing_red = pre
         r = u.get("run")
         if r is not None:
             if not isinstance(r, dict):

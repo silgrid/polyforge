@@ -74,7 +74,11 @@ cannot run as written, or no matching line — the #23 shape, a marker
 anchored ``$`` against a line carrying a suffix — is red on the spot, and
 the result's ``details.units[]`` names the unit, its marker and (on a
 mismatch) the closest output line, so build fixes the record before review
-or verification ever reads it. ``--unit <id>`` checks only that unit.
+or verification ever reads it. A red unit declared ``pre_existing_red``
+(its reproduction test predates the lane) is re-run once, verification's
+own recorded-run policy: a pass records it ``flaky`` with both logs; a
+unit this lane just wrote is never re-run here — a test just written must
+be stable, so red it stays. ``--unit <id>`` checks only that unit.
 The result carries the repo HEADs the units ran at.
 
 Exit 0: every command that ran exited 0 (skips cost nothing) or turned
@@ -276,6 +280,27 @@ class UnitCheck:
         else:
             entry["passed"] = True
             entry["why"] = ""
+        if entry["passed"]:
+            return entry
+        # the flaky policy (polyforge#157, the owner's ruling): a unit this
+        # lane just wrote is never re-run here — a test just written must
+        # be stable, so red it stays; a unit declared pre_existing_red (its
+        # test predates the lane) gets verification's own recorded-run
+        # policy: one re-run, and a pass records it flaky and passes
+        if not d.pre_existing_red:
+            entry["why"] += ("; a unit this lane just wrote is not re-run here: a test just written"
+                             " must be stable, so red it stays")
+            return entry
+        rerun_path = os.path.join(os.path.dirname(log_path), "rerun.log")
+        er2 = self.r.exec_to(runner.ExecSpec(argv=list(d.argv), dir=directory, cwd=prepared or "",
+                                             timeout=COMMAND_TIMEOUT, private_tmp=True), rerun_path)
+        if er2.log_path:
+            entry["rerun_log"] = self.r.rel(er2.log_path)
+            self.inv.logs.append(entry["rerun_log"])
+        if not er2.timed_out and er2.exit == 0 and marker_matches(d.marker, output_lines(er2.log_path)):
+            entry["passed"] = True
+            entry["flaky"] = True
+            entry["why"] = ""
         return entry
 
     def run(self, decls: List[UnitRunDecl]) -> int:
@@ -290,14 +315,20 @@ class UnitCheck:
                     pass
             self.details["units"].append(self.check(d))
         red = [u for u in self.details["units"] if not u["passed"]]
+        flaky = [u for u in self.details["units"] if u.get("flaky")]
+        flaky_note = ""
+        if flaky:
+            flaky_note = ", %d flaky on their one re-run: %s" % (
+                len(flaky), "; ".join("%s (first failure log %s)" % (u["id"], u.get("log", "")) for u in flaky))
         if red:
             u = red[0]
             self.inv.summary = "%s: %s%s" % (u["check"], u["why"],
                                              (" (closest output line: %s)" % u["closest_line"]) if u.get("closest_line") else "")
             if len(red) > 1:
                 self.inv.summary += "; %d unit(s) red in all" % len(red)
+            self.inv.summary += flaky_note
             return 1
-        self.inv.summary = "%d unit(s) checked, every marker matched" % len(self.details["units"])
+        self.inv.summary = "%d unit(s) checked, every marker matched%s" % (len(self.details["units"]), flaky_note)
         return 0
 
 
