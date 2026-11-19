@@ -329,7 +329,7 @@ func TestInstallRefusals(t *testing.T) {
 		{
 			name: "a corrupt current is refused with a recovery hint",
 			setup: func(t *testing.T) (string, string, func(Options) Options) {
-				root, before := setup(t)
+				root, _ := setup(t)
 				if err := os.Remove(filepath.Join(root, ReleasesDirname, "v0.2.4", ManifestFilename)); err != nil {
 					t.Fatal(err)
 				}
