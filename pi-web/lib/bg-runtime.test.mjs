@@ -208,20 +208,24 @@ test("a restart recovers registered running tasks as interrupted, without signal
   };
   writeFileSync(join(root, "sess-old", "task-1", "task.json"), JSON.stringify(prior));
 
-  const controller = createBgTaskController(deps);
-  const recovered = controller.status("sess-old");
-  assert.equal(recovered.length, 1);
-  assert.equal(recovered[0].status, "interrupted", "a registered task no process owns reads as interrupted");
-  assert.equal(readPersisted(root, "sess-old", "task-1").status, "interrupted");
-  // No signal to any old pid (there is one to point at) and no wake.
+  // The monitor goes up before the recovery it watches (r2#1): the first
+  // construction over this root is the real recovery pass.
   const killMonitor = t.mock.method(process, "kill");
+  let controller;
   try {
-    const freshController = createBgTaskController(deps);
-    assert.equal(freshController.status("sess-old")[0].status, "interrupted", "a second controller over the same root recovers once and signals nothing");
+    controller = createBgTaskController(deps);
+    const recovered = controller.status("sess-old");
+    assert.equal(recovered.length, 1);
+    assert.equal(recovered[0].status, "interrupted", "a registered task no process owns reads as interrupted");
+    assert.equal(readPersisted(root, "sess-old", "task-1").status, "interrupted");
   } finally {
     killMonitor.mock.restore();
   }
   assert.equal(killMonitor.mock.callCount(), 0, `recovery sends no signal to any old pgid (AC4): ${JSON.stringify(killMonitor.mock.calls.map((c) => c.arguments))}`);
+  {
+    const freshController = createBgTaskController(deps);
+    assert.equal(freshController.status("sess-old")[0].status, "interrupted", "a second controller over the same root recovers once");
+  }
   assert.equal(supervisor.spawned.length, 0);
   assert.deepEqual(calls.resolveSessionPath, []);
   assert.deepEqual(calls.reopenSession, []);

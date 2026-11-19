@@ -102,12 +102,14 @@ test("a branch switch refused over background work never loads the refused branc
   const hook = openSession("bg-refuse-3");
   await pollUntil(hook, () => hook.branch() !== null, 5_000, "the branch data callback");
 
+  const before = hook.branch().activeLeafId;
   hook.branch().onLeafChange("leaf-2");
   await pollUntil(hook, () => hook.refusals().some((type) => type === "navigate_tree"), 5_000, "the refused navigate_tree");
-  await settle();
-  hook.flush();
+  // The notice is the settled effect: poll it directly, never read it once (r2#4).
+  await pollUntil(hook, () => hook.result.notices.some((notice) => notice.type === "error"), 5_000, "the refusal notice");
   assert.equal(hook.contextFetches().some((url) => url.includes("leafId=leaf-2")), false, "the refused branch's context is never loaded");
-  assert.ok(hook.result.notices.some((notice) => notice.type === "error"), "the refusal surfaces as a visible notice");
+  // The selection rolls back to the branch it was refused from (N5).
+  await pollUntil(hook, () => hook.branch().activeLeafId === before, 5_000, "the leaf selection to roll back");
 });
 
 test("a tool preset switch refused over background work rolls back and keeps the composer", async () => {

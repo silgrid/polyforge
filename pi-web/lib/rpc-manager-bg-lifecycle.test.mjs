@@ -1,7 +1,7 @@
 // carries: lib/rpc-manager.ts, lib/bg-protocol.ts, lib/bg-tools.ts, lib/bg-runtime.ts, app/api/agent/[id]/route.ts
 import "#test-env";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -144,7 +144,7 @@ test("reload, clone, navigate and the Chat-only rebuild are refused with the str
   // a reload mid-turn is refused by the ordinary running check.
   await runtime.stop(sessionId, info.id);
   await pollUntil(() => runtime.status(sessionId, info.id)[0].status === "stopped", 5_000, "the task to stop");
-  await pollUntil(() => !started.session.isRunning(), 15_000, "the notification turn to settle");
+  await pollUntil(() => !started.session.isRunning() && !runtime.hasActiveWork(sessionId), 15_000, "the notification turn and the wake to settle");
   const reloaded = await started.session.send({ type: "reload" });
   assert.equal(reloaded.success, true);
 });
@@ -156,7 +156,7 @@ test("ending the wrapper (Stop's forced idle reap) leaves the background task ru
   usedSessionIds.add(sessionId);
   await started.session.waitUntilReady();
 
-  const info = runtime.run(sessionId, agentDir, "echo survived");
+  const info = runtime.run(sessionId, agentDir, "sleep 1; echo survived");
   startedTasks.push(info);
   await started.session.destroy();
   // The wrapper is gone; the task it started is not: it runs to its natural
@@ -180,6 +180,9 @@ test("a wrapper that is no longer alive is refused a Chat-only rebuild under run
   const info = runtime.run(sessionId, agentDir, "sleep 2");
   startedTasks.push(info);
   await pollUntil(() => runtime.status(sessionId, info.id)[0].status === "running", 5_000, "the task to run");
+  // A real session file, so the refused branch would truly rebuild on the old code (N1).
+  const deadFile = join(agentDir, "sessions", `${sessionId}.jsonl`);
+  await writeFile(deadFile, `${JSON.stringify({ type: "session", version: 3, id: sessionId, timestamp: new Date().toISOString(), cwd: agentDir })}\n`);
   await started.session.destroy();
   // The closing wrapper leaves the registry on its own clock; wait it out so
   // the assertion sees a rebuild, not a disposal still in flight.
@@ -189,7 +192,7 @@ test("a wrapper that is no longer alive is refused a Chat-only rebuild under run
   }, 10_000, "the destroyed wrapper to leave the registry");
 
   await assert.rejects(
-    () => setRpcSessionTools(sessionId, "", []),
+    () => setRpcSessionTools(sessionId, deadFile, []),
     (error) => {
       assert.equal(error.code, PI_RESTART_REFUSED_CODE, "the dead-wrapper branch refuses with the structured code");
       return true;

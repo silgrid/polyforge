@@ -221,7 +221,12 @@ test("a deletion that begins while the wake waits for a busy session lands silen
   // Mid-wait (the session is busy), the session is deleted.
   controller.beginSessionDeletion(["sess-gated"]);
   wrapper.running = false;
-  await new Promise((resolve) => setTimeout(resolve, 200));
+  // Wait for the wake to settle, then assert nothing went out (N3: never a fixed wait).
+  const gatedDeadline = Date.now() + 5_000;
+  while (controller.hasActiveWork("sess-gated") && Date.now() < gatedDeadline) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.equal(controller.hasActiveWork("sess-gated"), false, "the wake settles");
   assert.equal(wrapper.sent.length, 0, "nothing is delivered to a session deleted mid-wait");
   assert.deepEqual(calls.reopenSession, [], "nothing is reopened for a session deleted mid-wait");
   assert.equal(controller.hasActiveWork("sess-gated"), false, "the wake settles silently");
@@ -238,9 +243,12 @@ test("a wrapper that dies while the wake waits is not sent the message", async (
   // The wrapper dies mid-wait; its session has no file left.
   wrapper.alive = false;
   wrapper.running = false;
-  await new Promise((resolve) => setTimeout(resolve, 200));
-  assert.equal(wrapper.sent.length, 0, "no message goes to the wrapper that died mid-wait");
+  const dyingDeadline = Date.now() + 5_000;
+  while (controller.hasActiveWork("sess-dying") && Date.now() < dyingDeadline) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
   assert.equal(controller.hasActiveWork("sess-dying"), false, "the wake settles");
+  assert.equal(wrapper.sent.length, 0, "no message goes to the wrapper that died mid-wait");
 });
 
 test("a deletion that begins while the reopened wrapper gets ready lands silently (r2#3)", async (t) => {
@@ -269,7 +277,10 @@ test("a deletion that begins while the reopened wrapper gets ready lands silentl
   // The deletion lands while the reopened wrapper is still getting ready.
   controller.beginSessionDeletion(["sess-ready-gate"]);
   releaseReady();
-  await new Promise((resolve) => setTimeout(resolve, 200));
-  assert.equal(reopened.sent.length, 0, "nothing is delivered once the deletion landed mid-ready");
+  const readyDeadline = Date.now() + 5_000;
+  while (controller.hasActiveWork("sess-ready-gate") && Date.now() < readyDeadline) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
   assert.equal(controller.hasActiveWork("sess-ready-gate"), false, "the wake settles silently");
+  assert.equal(reopened.sent.length, 0, "nothing is delivered once the deletion landed mid-ready");
 });
