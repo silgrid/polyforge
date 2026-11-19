@@ -226,7 +226,7 @@ test("the analysis previews the paste, and Add trusts a fresh folder only for a 
   assert.equal(global.submitBlock, undefined);
   assert.equal(global.trustFolder, false);
   assert.deepEqual(mcpAddRequest(draft({ text: "npx -y @scope/lint-mcp" }), global), {
-    action: "add", text: "npx -y @scope/lint-mcp", values: {}, server: 0, name: "lint", scope: "global", rawPi: false,
+    action: "add", text: "npx -y @scope/lint-mcp", values: {}, server: 0, name: "lint", scope: "global", harnesses: ["pi"], rawPi: false,
   });
   const project = analyse({ text: "npx -y @scope/lint-mcp", scope: "project" });
   assert.equal(project.trustFolder, true);
