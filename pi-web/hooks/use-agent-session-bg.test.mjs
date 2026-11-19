@@ -38,6 +38,7 @@ test.afterEach(() => {
 function openSession(id) {
   const refusals = [];
   const branchSnapshots = [];
+  const contextFetches = [];
   globalThis.EventSource = class {
     readyState = 0;
     constructor() {
@@ -62,7 +63,8 @@ function openSession(id) {
     if (path === `/api/sessions/${id}/state` || path === `/api/agent/${id}?systemPrompt=0` || path === `/api/agent/${id}`) {
       return json({ success: true, running: true, state: { sessionId: id, isStreaming: false, isPromptRunning: false, isBashRunning: false, isCompacting: false, contextUsage: null } });
     }
-    if (path.startsWith(`/api/sessions/${id}`)) {
+    if (path.startsWith(`/api/sessions/${id}`) && path.includes("/context")) {
+      contextFetches.push(path);
       // The context read echoes the leaf it was asked for, as the server does.
       const askedLeaf = new URL(path, "http://localhost").searchParams.get("leafId");
       return json({
@@ -88,12 +90,25 @@ function openSession(id) {
     flush: () => rendered.flush(),
     unmount: () => { if (mounted.delete(hook)) rendered.unmount(); },
     refusals: () => refusals,
+    contextFetches: () => contextFetches,
     branch: () => branchSnapshots.at(-1) ?? null,
     branchHistory: () => branchSnapshots.map((entry) => entry.activeLeafId),
   };
   mounted.add(hook);
   return hook;
 }
+
+test("a branch switch refused over background work never loads the refused branch", async () => {
+  const hook = openSession("bg-refuse-3");
+  await pollUntil(hook, () => hook.branch() !== null, 5_000, "the branch data callback");
+
+  hook.branch().onLeafChange("leaf-2");
+  await pollUntil(hook, () => hook.refusals().some((type) => type === "navigate_tree"), 5_000, "the refused navigate_tree");
+  await settle();
+  hook.flush();
+  assert.equal(hook.contextFetches().some((url) => url.includes("leafId=leaf-2")), false, "the refused branch's context is never loaded");
+  assert.ok(hook.result.notices.some((notice) => notice.type === "error"), "the refusal surfaces as a visible notice");
+});
 
 test("a tool preset switch refused over background work rolls back and keeps the composer", async () => {
   const hook = openSession("bg-refuse-1");
