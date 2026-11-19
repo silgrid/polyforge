@@ -84,8 +84,21 @@ func TestContainerEngineValueRules(t *testing.T) {
 	}
 }
 
-// TestContainerEngineResolveDefaultIsDocker lives in u4's tests (the
-// resolution is the daemon-start half of the chain).
+// TestContainerEngineResolveDefaultIsDocker: the resolution the daemon's
+// start applies — an unset key is docker, a stated key is itself; the
+// value is validated before this (the parse refuses everything else),
+// so the resolution never sees a third spelling.
+func TestContainerEngineResolveDefaultIsDocker(t *testing.T) {
+	for _, tc := range []struct{ v, want string }{
+		{"", "docker"},
+		{"docker", "docker"},
+		{"podman", "podman"},
+	} {
+		if got := ResolveContainerEngine(tc.v); got != tc.want {
+			t.Errorf("ResolveContainerEngine(%q) = %q, want %q", tc.v, got, tc.want)
+		}
+	}
+}
 
 // TestContainerEngineIsRefusedInANamedCellFile: container_engine is a
 // Host-only key — a named Cell's file never carries it (the Host file
