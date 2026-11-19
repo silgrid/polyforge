@@ -1,4 +1,6 @@
 // Cache session-list metadata without building the SDK's unused allMessagesText.
+// The transcript parse runs on the worker pool (lib/session-scan-worker-source.ts
+// through lib/session-parse-worker-pool.ts), off the main thread (polyforge#140).
 // Normal listings rescan only new/changed files; summary listings reuse whatever
 // the index already holds and fall back to header/stat metadata for the files
 // that changed, which a later normal listing hydrates. A file that only grew
@@ -10,14 +12,14 @@
 // across later appends until a change that does not grow the file, or replaces
 // it, forces a full read. Use content hashes if detecting those edits becomes
 // necessary.
-import { createHash } from "node:crypto";
-import { createReadStream, existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { open, readdir, stat } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import { basename, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { writePrivateFileAtomicSync } from "./atomic-file";
+import { runSessionScanTask, type SessionScanTaskResult } from "./session-parse-worker-pool";
 import { isRecord } from "./type-guards";
 
 export interface ScannedSessionInfo {
@@ -68,13 +70,12 @@ interface IndexEntry {
 
 type RawEntry = Record<string, unknown>;
 
-// Bump on any change to what foldEntry() counts: a resumed scan adds to totals
+// Bump on any change to what the worker source's foldEntry() counts
+// (lib/session-scan-worker-source.ts): a resumed scan adds to totals
 // counted under the rules its prefix was scanned with.
 const INDEX_FORMAT_VERSION = 1;
 /** A trailing throttle: a run's rescans rewrite the index once per window. */
 const INDEX_PERSIST_DELAY_MS = 5_000;
-const RESUME_SAMPLE_BYTES = 512;
-const NEWLINE = Buffer.from("\n");
 
 declare global {
 	var __piWebScanIndex: Map<string, IndexEntry> | undefined;
@@ -170,296 +171,44 @@ async function deferredSessionInfo(
 	};
 }
 
-function extractTextContent(message: RawEntry): string {
-	const content = message.content;
-	if (typeof content === "string") return content;
-	if (!Array.isArray(content)) return "";
-	return content
-		.filter(
-			(block): block is { type: string; text: string } =>
-				!!block &&
-				typeof block === "object" &&
-				(block as RawEntry).type === "text" &&
-				typeof (block as RawEntry).text === "string",
-		)
-		.map((block) => block.text)
-		.join(" ");
-}
-
-function activityTimeOf(entry: RawEntry): number | undefined {
-	const message = entry.message as RawEntry | undefined;
-	if (
-		!message ||
-		typeof message.role !== "string" ||
-		!("content" in message) ||
-		(message.role !== "user" && message.role !== "assistant")
-	) {
-		return undefined;
-	}
-	if (typeof message.timestamp === "number") return message.timestamp;
-	const t = new Date(entry.timestamp as string).getTime();
-	return Number.isNaN(t) ? undefined : t;
-}
-
-interface SessionHeader {
-	id: string;
-	cwd: string;
-	created: Date;
-	parentSessionPath?: string;
-	/** NaN unless the header's timestamp is a string. */
-	time: number;
-	/** The header line and its newline, kept when a later scan may resume. */
-	head?: Buffer;
-}
-
-interface ScanTotals {
-	name?: string;
-	messageCount: number;
-	firstMessage: string;
-	lastActivityTime?: number;
-}
-
-function readHeader(entry: RawEntry, head: Buffer | undefined): SessionHeader {
-	return {
-		id: entry.id as string,
-		cwd: typeof entry.cwd === "string" ? entry.cwd : "",
-		created: new Date(entry.timestamp as string),
-		parentSessionPath: typeof entry.parentSession === "string" ? entry.parentSession : undefined,
-		time: typeof entry.timestamp === "string" ? new Date(entry.timestamp).getTime() : NaN,
-		// A resumed scan rebuilds the header from the row, which holds it
-		// faithfully only for a string id and timestamp.
-		head: typeof entry.id === "string" && typeof entry.timestamp === "string" ? head : undefined,
-	};
-}
-
-// Uses the SDK's buildSessionInfo() semantics for displayed metadata. A change
-// to these rules must bump INDEX_FORMAT_VERSION (resumed totals keep the old ones).
-function foldEntry(totals: ScanTotals, entry: RawEntry): void {
-	if (entry.type === "session_info") {
-		totals.name =
-			typeof entry.name === "string" && entry.name.trim()
-				? entry.name.trim()
-				: undefined;
-	}
-	if (entry.type !== "message") return;
-	totals.messageCount++;
-
-	const activityTime = activityTimeOf(entry);
-	if (typeof activityTime === "number") {
-		totals.lastActivityTime = Math.max(totals.lastActivityTime ?? 0, activityTime);
-	}
-
-	if (totals.firstMessage) return;
-	const message = entry.message as RawEntry | undefined;
-	if (
-		!message ||
-		typeof message.role !== "string" ||
-		!("content" in message)
-	)
-		return;
-	if (message.role !== "user") return;
-	totals.firstMessage = extractTextContent(message);
-}
-
-function sampleCheck(head: Buffer, tail: Buffer): string {
-	return createHash("sha1").update(head).update(tail).digest("base64");
-}
-
-/** Drop leading parts not needed for the last RESUME_SAMPLE_BYTES of `parts`. */
-function keepLastBytes(parts: Buffer[]): Buffer[] {
-	let total = 0;
-	for (const part of parts) total += part.length;
-	let first = 0;
-	while (first < parts.length - 1 && total - parts[first].length >= RESUME_SAMPLE_BYTES) {
-		total -= parts[first].length;
-		first++;
-	}
-	return first > 0 ? parts.slice(first) : parts;
-}
-
-/**
- * One newline-free run of bytes split into lines as the scan's readline read
- * did on Node 22: \r\n and a lone \r end a line. U+2028 and U+2029, which
- * JSON.stringify leaves raw and Node 24's readline splits on, stay inside the
- * line, as pi's own loader keeps them.
- */
-function linesOf(bytes: Buffer): string[] {
-	const text = bytes.toString("utf8");
-	return text.includes("\r") ? text.split("\r") : [text];
-}
-
-interface LineScan {
-	/** Just past the last newline read. */
-	offset: number;
-	/** The RESUME_SAMPLE_BYTES before `offset` (fewer near the start). */
-	sample: Buffer;
-	/** The bytes after the last newline: a line its writer may still be appending. */
-	rest: Buffer;
-}
-
-/**
- * Hand each newline-terminated line from `start` on to `onLine`, with the
- * offset just past its newline. Returns null when `onLine` returns false.
- */
-async function readLines(
-	filePath: string,
-	start: number,
-	sample: Buffer,
-	onLine: (bytes: Buffer, end: number) => boolean,
-): Promise<LineScan | null> {
-	let offset = start;
-	let pending: Buffer[] = [];
-	// The bytes read up to `offset`, as views, trimmed to what the sample needs
-	// once per chunk (not per line: a full scan of short lines stays as fast).
-	let read = [sample];
-	for await (const chunk of createReadStream(filePath, { start }) as AsyncIterable<Buffer>) {
-		let newline = chunk.indexOf(0x0a);
-		if (newline === -1) {
-			pending.push(chunk);
-			continue;
-		}
-		const carried = pending;
-		let lineStart = 0;
-		while (newline !== -1) {
-			const piece = chunk.subarray(lineStart, newline);
-			const bytes = pending.length > 0 ? Buffer.concat([...pending, piece]) : piece;
-			pending = [];
-			offset += bytes.length + 1;
-			if (!onLine(bytes, offset)) return null;
-			lineStart = newline + 1;
-			newline = chunk.indexOf(0x0a, lineStart);
-		}
-		read = keepLastBytes([...read, ...carried, chunk.subarray(0, lineStart)]);
-		if (lineStart < chunk.length) pending.push(chunk.subarray(lineStart));
-	}
-	const joined = Buffer.concat(read);
-	return {
-		offset,
-		sample: joined.subarray(Math.max(0, joined.length - RESUME_SAMPLE_BYTES)),
-		rest: Buffer.concat(pending),
-	};
-}
-
-/**
- * The header line and the bytes before the resume offset, when they still hash
- * to the resume point's check; null sends the caller to a full scan.
- */
-async function readResumeSample(
-	filePath: string,
-	resume: ResumePoint,
-): Promise<{ head: Buffer; tail: Buffer } | null> {
-	const handle = await open(filePath, "r");
-	try {
-		const tailStart = Math.max(0, resume.offset - RESUME_SAMPLE_BYTES);
-		const head = Buffer.alloc(resume.headerEnd);
-		const tail = Buffer.alloc(resume.offset - tailStart);
-		const headRead = await handle.read(head, 0, head.length, 0);
-		const tailRead = await handle.read(tail, 0, tail.length, tailStart);
-		if (headRead.bytesRead !== head.length || tailRead.bytesRead !== tail.length) return null;
-		return sampleCheck(head, tail) === resume.check ? { head, tail } : null;
-	} finally {
-		await handle.close();
-	}
-}
-
-/**
- * Scan a session file for its row, from where `previous` stopped when the
- * file only grew since and its sampled prefix is unchanged, else from byte 0.
- * Either way the row is the one a full read of the file gives.
- */
+// The parse itself runs on the worker pool (lib/session-parse-worker-pool.ts,
+// executing lib/session-scan-worker-source.ts): a 20 MiB single JSON line
+// never occupies the server's main thread (polyforge#140). This side keeps the
+// index, fingerprints and ordering, and hands the file's full or resumed scan
+// to the pool.
 async function scanSessionFile(
 	filePath: string,
 	previous?: IndexEntry,
 ): Promise<Omit<IndexEntry, "fp"> | null> {
-	try {
-		const stats = await stat(filePath);
-		const resumed = previous?.resume && previous.resume.ino === stats.ino
-			? await readResumeSample(filePath, previous.resume)
-			: null;
-		let header: SessionHeader | null = null;
-		let headerEnd = 0;
-		let start = 0;
-		let sample: Buffer = Buffer.alloc(0);
-		const totals: ScanTotals = { messageCount: 0, firstMessage: "" };
-		if (previous?.resume && resumed) {
-			const { info, resume } = previous;
-			start = resume.offset;
-			sample = resumed.tail;
-			header = {
-				id: info.id,
-				cwd: info.cwd,
-				created: new Date(info.created.getTime()),
-				parentSessionPath: info.parentSessionPath,
-				time: info.created.getTime(),
-				head: resumed.head,
-			};
-			headerEnd = resume.headerEnd;
-			totals.name = info.name;
-			totals.messageCount = info.messageCount;
-			totals.firstMessage = resume.hasFirstMessage ? info.firstMessage : "";
-			totals.lastActivityTime = resume.lastActivityTime;
-		}
-
-		let restCounted = false;
-		const parseLines = (bytes: Buffer, end: number | null): boolean => {
-			for (const line of linesOf(bytes)) {
-				const entry = parseLine(line);
-				if (!entry) continue;
-				if (end === null) restCounted = true;
-				if (!header) {
-					if (entry.type !== "session") return false;
-					// Only a header on the file's first line is sampled for resuming.
-					const firstLine = end !== null && end === bytes.length + 1;
-					header = readHeader(entry, firstLine ? Buffer.concat([bytes, NEWLINE]) : undefined);
-					headerEnd = firstLine ? end : 0;
-					continue;
-				}
-				foldEntry(totals, entry);
+	const result = await runSessionScanTask({
+		kind: "scan",
+		path: filePath,
+		// Only a file the caller judged grown carries a resume point; anything
+		// else scans from byte 0.
+		...(previous?.resume
+			? {
+				previous: {
+					info: {
+						id: previous.info.id,
+						cwd: previous.info.cwd,
+						created: previous.info.created.toISOString(),
+						...(previous.info.name !== undefined ? { name: previous.info.name } : {}),
+						...(previous.info.parentSessionPath !== undefined
+							? { parentSessionPath: previous.info.parentSessionPath }
+							: {}),
+						firstMessage: previous.info.firstMessage,
+						messageCount: previous.info.messageCount,
+					},
+					resume: previous.resume,
+				},
 			}
-			return true;
-		};
-
-		const scan = await readLines(filePath, start, sample, parseLines);
-		// The unterminated rest counts for this listing, as it did when the scan
-		// read lines with readline; a resume point is kept only when it changed nothing.
-		if (!scan || (scan.rest.length > 0 && !parseLines(scan.rest, null))) return null;
-		if (!header) return null;
-		const { id, cwd, created, parentSessionPath, time, head } = header;
-
-		const modified =
-			typeof totals.lastActivityTime === "number" && totals.lastActivityTime > 0
-				? new Date(totals.lastActivityTime)
-				: !Number.isNaN(time)
-					? new Date(time)
-					: stats.mtime;
-
-		return {
-			info: {
-				path: filePath,
-				id,
-				cwd,
-				name: totals.name,
-				parentSessionPath,
-				created,
-				modified,
-				messageCount: totals.messageCount,
-				firstMessage: totals.firstMessage || "(no messages)",
-			},
-			// An inode of 0 (no stable one on this filesystem) never resumes.
-			resume: head && headerEnd > 0 && !restCounted && stats.ino > 0
-				? {
-					ino: stats.ino,
-					offset: scan.offset,
-					headerEnd,
-					check: sampleCheck(head, scan.sample),
-					hasFirstMessage: totals.firstMessage !== "",
-					...(totals.lastActivityTime !== undefined ? { lastActivityTime: totals.lastActivityTime } : {}),
-				}
-				: undefined,
-		};
-	} catch {
-		return null;
-	}
+			: {}),
+	}) as SessionScanTaskResult | null;
+	if (!result?.info) return null;
+	return {
+		info: result.info,
+		...(result.resume ? { resume: result.resume } : {}),
+	};
 }
 
 export async function scanSessionFileInfo(
