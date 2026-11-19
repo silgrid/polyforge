@@ -28,10 +28,10 @@ const TEXTS = {
   unsupported: "No harness can be read.",
   saving: "Saving…",
 };
-const ready = (harness: string, value: string) => ({ harness, status: "ready" as const, value });
-const reason = (harness: string, status: string, why: string) => ({ harness, status, value: null, reason: why });
+const ready = (harness, value) => ({ harness, status: "ready", value });
+const reason = (harness, status, why) => ({ harness, status, value: null, reason: why });
 
-function render(props: Partial<Parameters<typeof UnifiedSetting>[0]> = {}) {
+function render(props = {}) {
   return renderToStaticMarkup(h(UnifiedSetting, {
     texts: TEXTS,
     current: "claude-opus-5-5",
