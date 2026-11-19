@@ -99,6 +99,14 @@ type supProc struct {
 	mu        sync.Mutex
 	cmd       *exec.Cmd
 	alive     bool
+	// starting marks a start in flight (the loop's stop check passed,
+	// the process does not exist yet): the run is not settled while one
+	// is open, and the stop that lands inside the window is delivered
+	// once the process exists.
+	starting bool
+	// termed records that this run's one forwarded stop signal was
+	// delivered (the window's make-up and a later term() never both).
+	termed bool
 	// inflight marks a run that ended whose exit event is still on its
 	// way to the main loop (allDead waits for it, so no manager is left
 	// blocked on a channel nobody reads).
@@ -168,9 +176,9 @@ func RunSupervise(rs RunSpec) int {
 	allSettled := func() bool {
 		for _, p := range procs {
 			p.mu.Lock()
-			a, inflight := p.alive, p.inflight
+			a, inflight, starting := p.alive, p.inflight, p.starting
 			p.mu.Unlock()
-			if a || inflight {
+			if a || inflight || starting {
 				return false
 			}
 		}
@@ -236,6 +244,7 @@ func (p *supProc) manage(exits chan<- supExit, runDone <-chan struct{}) {
 			p.mu.Unlock()
 			return
 		}
+		p.starting = true
 		p.mu.Unlock()
 		code, ran := p.runOnce()
 		if !ran {
@@ -308,13 +317,36 @@ func (p *supProc) runOnce() (code int, ran bool) {
 	if supPreStartHold != nil {
 		supPreStartHold(p)
 	}
+	p.mu.Lock()
+	if p.stop {
+		// the stop landed inside this start's window: the child is not
+		// started at all — a signal delivered to a process that has not
+		// installed its handlers would kill it without its shutdown,
+		// and nothing that never ran needs a TERM. The ended run wakes
+		// the loop with its exit event (the run is stopping, so the
+		// daemon-final branch never sees it).
+		p.starting = false
+		p.mu.Unlock()
+		return 0, true
+	}
+	p.mu.Unlock()
 	if err := cmd.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "pf supervise: child %s: start: %v\n", p.spec.Name, err)
+		p.mu.Lock()
+		p.starting = false
+		p.mu.Unlock()
 		return 0, false
 	}
 	started := time.Now()
 	p.mu.Lock()
-	p.cmd, p.alive = cmd, true
+	p.cmd, p.alive, p.starting, p.termed = cmd, true, false, false
+	if p.stop && !p.termed {
+		// the stop landed in the instant between the check above and
+		// this start — its term() found no process yet, so the one
+		// forwarded signal is delivered here
+		p.termed = true
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+	}
 	p.mu.Unlock()
 	err := cmd.Wait()
 	p.mu.Lock()
@@ -350,7 +382,8 @@ func (p *supProc) beginStop() {
 func (p *supProc) term() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.cmd != nil && p.cmd.Process != nil {
+	if p.cmd != nil && p.cmd.Process != nil && !p.termed {
+		p.termed = true
 		_ = p.cmd.Process.Signal(syscall.SIGTERM)
 	}
 }
