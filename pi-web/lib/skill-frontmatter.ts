@@ -34,6 +34,9 @@ function startsWithFrontmatterFence(content: string): boolean {
 /**
  * Toggle the `disable-model-invocation` frontmatter key with a surgical line
  * edit that preserves the original YAML formatting of every other field.
+ * Not the skill switch's writer (that is the visibility preference,
+ * lib/skill-visibility-config.ts) — the confirmed legacy cleanup
+ * (lib/skill-visibility-migration.ts) is the one caller that removes the line.
  *
  * The key is detected by presence rather than truthiness: an explicit
  * `disable-model-invocation: false` must be updated in place. Prepending a
