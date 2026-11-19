@@ -48,6 +48,11 @@ export function createClaudeSettingsStore(fetchImpl: typeof fetch = fetch): Clau
   // One save at a time: each save runs after the previous one settled, and
   // reads the snapshot at its own turn — the newest shared result (Q5 A).
   let saveChain: Promise<unknown> = Promise.resolve();
+  // Bumped every time a save's answer lands. A refresh that began before a
+  // save holds an older generation, so its answer — which predates the save —
+  // is dropped instead of rolling the save back (the Q5 A overwrite, coming
+  // in through a remount's in-flight GET; r1#3).
+  let generation = 0;
 
   const set = (next: ClaudeSettingsSnapshot) => {
     if (next === snapshot) return;
@@ -64,10 +69,13 @@ export function createClaudeSettingsStore(fetchImpl: typeof fetch = fetch): Clau
       return snapshot;
     },
     async refresh() {
+      const readAt = generation;
       try {
         const response = await fetchImpl("/api/claude-settings", { method: "GET" });
         const data: unknown = await response.json();
         if (!response.ok || !isClaudeSettings(data)) throw new Error(`HTTP ${response.status}`);
+        // A save landed while this read was in flight: the answer predates it.
+        if (readAt !== generation) return;
         const planAvailable = (data as ClaudeSettings & { planAvailable?: unknown }).planAvailable === true;
         const previous = snapshot.settings;
         if (previous
@@ -81,6 +89,7 @@ export function createClaudeSettingsStore(fetchImpl: typeof fetch = fetch): Clau
         }
         set({ status: "ready", settings: snapshotOf(data), planAvailable, loadError: null });
       } catch (cause) {
+        if (readAt !== generation) return;
         set({ ...snapshot, status: "error", loadError: cause instanceof Error ? cause.message : String(cause) });
       }
     },
@@ -105,6 +114,7 @@ export function createClaudeSettingsStore(fetchImpl: typeof fetch = fetch): Clau
             throw new Error(typeof body?.error === "string" && body.error ? body.error : `HTTP ${response.status}`);
           }
           if (!isClaudeSettings(data)) throw new Error("unexpected answer");
+          generation += 1;
           set({ ...snapshot, status: "ready", settings: snapshotOf(data), loadError: null });
           return { ok: true, settings: snapshotOf(data) };
         } catch (cause) {
