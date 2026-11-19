@@ -22,7 +22,7 @@ const { createPiAdapter } = await jiti.import("./pi.ts");
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "pi-web-harness-account-"));
 /** One stub binary: records its argv (word by word) and env NAMES to a log,
  * then answers `body` with `code`. Never touches a network. */
-function stubBinary(name: string, body: string, code = 0): string {
+function stubBinary(name, body, code = 0) {
   const dir = path.join(scratch, "bin");
   fs.mkdirSync(dir, { recursive: true });
   const log = path.join(scratch, `${name}-calls.jsonl`);
@@ -105,11 +105,11 @@ test("pi step status: every run passes --no-refresh and never --credentials or p
   assert.equal(argv[argv.length - 2], "--json");
   assert.equal(argv[argv.length - 1], "--no-refresh", "the check must never refresh OAuth (it would write auth.json)");
   assert.ok(!argv.includes("--credentials"), "--credentials would print the credential");
-  assert.ok(argv.every((word: string) => !word.startsWith("print-")), "no print-* subcommand may run");
+  assert.ok(argv.every((word) => !word.startsWith("print-")), "no print-* subcommand may run");
   assert.deepEqual(PI_AUTH_CHECK_ARGV.slice(-1), ["--no-refresh"]);
   // PI_CODING_AGENT_DIR names the source dir, and the step-agent env never
   // carries the browser password
-  const names = recorded[0].envNames as string[];
+  const names = recorded[0].envNames;
   assert.ok(!names.includes("PI_WEB_PASSWORD"));
 });
 
@@ -134,8 +134,8 @@ test("pi step status: no declared provider answers unknown with the reason, a mi
 
 test("capabilities: claude declares loginCommands and writes auth; pi declares none", async () => {
   const claude = createClaudeAdapter();
-  assert.deepEqual(claude.capabilities.loginCommands.map((c: { id: string }) => c.id), ["auth-login", "setup-token"]);
-  assert.deepEqual(claude.capabilities.loginCommands.map((c: { argv: string[] }) => c.argv), [["claude", "auth", "login"], ["claude", "setup-token"]]);
+  assert.deepEqual(claude.capabilities.loginCommands.map((c) => c.id), ["auth-login", "setup-token"]);
+  assert.deepEqual(claude.capabilities.loginCommands.map((c) => c.argv), [["claude", "auth", "login"], ["claude", "setup-token"]]);
   assert.deepEqual(claude.capabilities.writableConcepts, ["auth"]);
   const pi = createPiAdapter();
   assert.deepEqual(pi.capabilities.loginCommands, []);
