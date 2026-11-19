@@ -14,7 +14,7 @@ that RUN live in the components volume — `releases/<ver>` there, with
 `current` and `previous` at the volume root — which the first boot
 populates from the seed (the components volume and the first-boot
 wiring are the later 84-components units): a newer seed upgrades the
-volume, an older volume never downgrades it.
+volume, an older seed never downgrades it.
 
 Everything the workstation needs lives in `dist/workstation/`:
 

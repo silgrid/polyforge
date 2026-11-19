@@ -16,7 +16,7 @@ The versions that RUN live in the components volume
 (`releases/<ver>` there, with `current` and `previous` at the volume
 root — the volume itself and the first-boot wiring are the later
 84-components units), never in the image: a newer seed upgrades the
-volume, an older volume never downgrades it.
+volume, an older seed never downgrades it.
 
 ## Files
 

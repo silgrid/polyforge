@@ -17,7 +17,7 @@
 # RUN live in the components volume (/components: releases/<ver> with
 # current and previous at the root, 84-components); the seed is what
 # the first boot installs into it, so a new image upgrades the volume
-# and an old volume never downgrades the image. The first-boot wiring
+# and an older image's seed never downgrades it. The first-boot wiring
 # and the volume itself are the later 84-components units.
 #
 # The build context is the repository root (compose builds with
