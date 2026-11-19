@@ -204,3 +204,34 @@ func TestDoctorCandidatePrefixAndClaudeTrigger(t *testing.T) {
 		t.Fatalf("bad bundle: %s %q", st, detail)
 	}
 }
+
+// TestW85DoctorClaudeOauthTokenCredential (polyforge#142, 85a2, review
+// r1#7): the setup-token credential the account page writes —
+// CLAUDE_CODE_OAUTH_TOKEN in the claude-config settings.json env block —
+// counts as the step's credential: a Cell configured only through the
+// account page's setup-token form must not be warned "no credential",
+// and the detail lists the key's fact. Expected from the ticket's Q3
+// (the 2026-11-19 revision: the subscription account lands as
+// CLAUDE_CODE_OAUTH_TOKEN), never from the implementation's own output.
+func TestW85DoctorClaudeOauthTokenCredential(t *testing.T) {
+	steps := []workspace.StepResolution{{Project: "p", Bundle: "bug-fix", Step: "review",
+		Models: []string{"claude:claude-opus-5-5"}, ModelsFrom: "steps.p.review.models"}}
+	base := HarnessStatus{Bin: "claude", Found: true, Path: "/bin/claude", Version: "2.1.296", Verified: true,
+		AuthTokenEnv: "unset", APIKeyEnv: "unset", BaseURLEnv: "unset", BackgroundTasks: "disabled"}
+	onlyToken := base
+	onlyToken.SettingsEnv = map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "set", "ANTHROPIC_AUTH_TOKEN": "unset", "ANTHROPIC_API_KEY": "unset", "ANTHROPIC_BASE_URL": "unset", "CLAUDE_CONFIG_DIR": "unset"}
+	status, detail := claudeHarnessCheck(steps, "/wf", true, map[string]HarnessStatus{"claude": onlyToken})
+	if status != "pass" {
+		t.Fatalf("a Cell configured with only CLAUDE_CODE_OAUTH_TOKEN answers %q (%s)", status, detail)
+	}
+	if !strings.Contains(detail, "CLAUDE_CODE_OAUTH_TOKEN set") {
+		t.Fatalf("the detail does not list the token's fact: %s", detail)
+	}
+	// and only a base URL is still no credential
+	baseURLOnly := base
+	baseURLOnly.SettingsEnv = map[string]string{"ANTHROPIC_BASE_URL": "set", "ANTHROPIC_AUTH_TOKEN": "unset", "ANTHROPIC_API_KEY": "unset", "CLAUDE_CONFIG_DIR": "unset"}
+	status, detail = claudeHarnessCheck(steps, "/wf", true, map[string]HarnessStatus{"claude": baseURLOnly})
+	if status != "warn" || !strings.Contains(detail, "no credential") {
+		t.Fatalf("a base URL alone must keep the no-credential warning: %q (%s)", status, detail)
+	}
+}
