@@ -1,5 +1,6 @@
 // carries: components/HarnessGeneralSettings*, components/GeneralSettings*, components/HarnessEnvironmentSettings*, components/HarnessEffectiveSettings*, components/UnifiedSetting*, components/HarnessApplyTo*
 // carries: lib/harness-settings-view*, lib/claude-settings-store*, lib/harness/diagnostics*, hooks/useClaudeSettings.ts, app/api/harness/*
+// carries: components/AccountSettings*, components/PiAccountLogin*, components/ModelsConfig*, app/api/settings/account/*, lib/provider-listing*, lib/harness/account*, lib/polyforge-doctor*
 // — polyforge#149 (#85 85a1b, the settings skeleton): the 9+2 tab rail
 // (九个新 tab 加两个标「旧版」的原「模型」「Claude」tab), General's left
 // column (界面与对话 / 环境 / 生效值与来源), the account / models / permission
@@ -119,6 +120,7 @@ const T = {
   S7: "S85-07: effective values carry the Inferred mark and their source; native diagnostics are a collapsed block per harness",
   S8: "S85-08: stored old navigation values land on the new pages",
   S9: "S85-09: a failed harness-list read is a visible reason in both panes, never a contradictory empty registry",
+  S10: "S85-10: the account tab lists the harnesses, shows the interactive card and the per-Cell rows with every field, and never a credential value",
 };
 const failures = new Map(Object.values(T).map((title) => [title, []]));
 const ran = new Set();
@@ -256,11 +258,12 @@ try {
     await page.context().close();
   });
 
-  // S85-04 — AC1: the three placeholders open; permission names its Claude part.
+  // S85-04 — AC1: the models and permission placeholders open (85a2 filled the
+  // account tab in); permission names its Claude part.
   await part("S4", "placeholders", async () => {
     const page = await newPage();
     await openSettings(page);
-    for (const [name, id] of [["Account", "account"], ["Models", "models"], ["Permissions", "permission"]]) {
+    for (const [name, id] of [["Models", "models"], ["Permissions", "permission"]]) {
       await tab(page, new RegExp(`^${name}$`)).click({ timeout: ACTION_MS });
       const host = sectionHost(page, id);
       await host.waitFor({ state: "visible", timeout: ACTION_MS });
@@ -268,6 +271,62 @@ try {
     }
     // The permission page names the Claude part the old `claude` value lands on.
     assert.match(await sectionHost(page, "permission").innerText(), /Claude/, "the permission placeholder does not name its Claude part");
+    await page.context().close();
+  });
+
+  // S85-10 — polyforge#142 (85a2 AC1/AC7): the account tab — the two harness
+  // panes, the interactive claude card, the per-Cell rows with the ticket's
+  // field list (来源含 shared default, the keychain hint, 步骤能否使用及原因),
+  // the credential form, and no credential value anywhere. The account and
+  // harness answers are mocked at the browser; the S85-09 pattern (a later
+  // route registration wins) carries the richer capability declaration.
+  await part("S10", "the account tab", async () => {
+    const page = await newPage();
+    const ACCOUNT = {
+      claude: { available: true, loggedIn: true, authMethod: "oauth_token", configDirectory: "/home/op/.claude", reason: null,
+        envCredentials: { ANTHROPIC_AUTH_TOKEN: true, ANTHROPIC_BASE_URL: true, ANTHROPIC_API_KEY: false, CLAUDE_CODE_OAUTH_TOKEN: false } },
+      cells: [
+        { profile: "default", executionDisabled: null, probeError: null, harnessOrder: ["pi", "claude"], harnesses: {
+          pi: { id: "pi", configRoot: "/h/default/step-agent", credential: "set", status: "ready", authType: "api_key", checkReason: null, source: "/home/op/.pi/agent", sourceKind: "operator", credentialsFollow: true, keychainHint: false, credentialKinds: null, credentialsFile: null, usable: true, reason: null },
+          claude: { id: "claude", configRoot: "/h/default/claude-config", credential: "set", status: "ready", authType: null, checkReason: null, source: "/home/op/.pi/agent", sourceKind: "operator", credentialsFollow: true, keychainHint: false, credentialKinds: { oauthToken: false, apiKey: false, gateway: true }, credentialsFile: "absent", usable: true, reason: null } } },
+        { profile: "beta", executionDisabled: null, probeError: null, harnessOrder: ["pi", "claude"], harnesses: {
+          pi: { id: "pi", configRoot: "/h/beta/step-agent", credential: "unset", status: "not_ready", authType: null, checkReason: "credentials_not_configured", source: "/home/op/.pi/agent", sourceKind: "shared-default", credentialsFollow: true, keychainHint: false, credentialKinds: null, credentialsFile: null, usable: false, reason: "credentials_not_configured" },
+          claude: { id: "claude", configRoot: "/h/beta/claude-config", credential: "unset", status: "not_ready", authType: null, checkReason: null, source: "/home/op/.pi/agent", sourceKind: "shared-default", credentialsFollow: false, keychainHint: true, credentialKinds: null, credentialsFile: "present", usable: true, reason: null } } },
+      ],
+      doctorError: null,
+    };
+    await page.context().route(/\/api\/settings\/account/, (route) => route.fulfill({ json: ACCOUNT }));
+    await page.context().route(/\/api\/harness(?:\/|\?|$)/, (route) => route.fulfill({ json: { harnesses: [
+      { id: "pi", version: "1.5.0", versionKnown: true, knownRange: null, versionReason: null, writable: true, capabilities: { id: "pi", loginCommands: [], credentialsFollowConfigRoot: true } },
+      { id: "claude", version: "2.1.322", versionKnown: true, knownRange: null, versionReason: null, writable: true, capabilities: { id: "claude", loginCommands: [
+        { id: "auth-login", argv: ["claude", "auth", "login"], cell: false },
+        { id: "setup-token", argv: ["claude", "setup-token"], cell: false },
+      ], credentialsFollowConfigRoot: false } },
+    ] } }));
+    await openSettings(page);
+    await tab(page, /^Account$/).click({ timeout: ACTION_MS });
+    const host = sectionHost(page, "account");
+    await host.waitFor({ state: "visible", timeout: ACTION_MS });
+    // the left column: the two harnesses
+    const claudeItem = host.locator(".config-sidebar-item").filter({ hasText: "Claude" });
+    await claudeItem.click({ timeout: ACTION_MS });
+    const claudeText = await waitFor(async () => {
+      const text = await host.innerText();
+      return text.includes("Interactive session") && text.includes("Daemon steps") ? text : false;
+    }, ACTION_MS, "the claude pane never showed its cards");
+    for (const expected of ["oauth_token", "/home/op/.claude", "Log in with Claude (OAuth)", "Mint a setup token",
+      "/h/default/claude-config", "shared default", "/home/op/.pi/agent", "Keychain", "Residual OAuth login",
+      "Write a credential", "copied server-side"]) {
+      assert.ok(claudeText.includes(expected), `the claude pane misses ${expected}`);
+    }
+    assert.ok(!claudeText.includes("sk-SENTINEL"), "a credential value rendered");
+    // the pi pane: its own rows, no claude form
+    await host.locator(".config-sidebar-item").filter({ hasText: /^pi$/ }).click({ timeout: ACTION_MS });
+    const piText = await waitFor(async () => {
+      const text = await host.innerText();
+      return text.includes("api_key") && text.includes("/h/beta/step-agent") ? text : false;
+    }, ACTION_MS, "the pi pane never showed its rows");
+    assert.ok(!piText.includes("Write a credential"), "the pi pane carries the claude form");
     await page.context().close();
   });
 
