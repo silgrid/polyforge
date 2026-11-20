@@ -762,6 +762,188 @@ class RepoReuseTest(FastChecksCase):
             self.assertNotIn("carried", c)
 
 
+class RepoReuseBoundaryTest(FastChecksCase):
+    """AC1's boundaries: any change of the key's dimensions — the root
+    subtree, the command text, the declared prerequisites — re-runs, and
+    so does a previous red, timed-out or never-started result; uncommitted
+    edits move the key like committed ones; a nested root's green run
+    survives a change outside it, while the repository root's key counts
+    the whole tree (the owner's Q2: never a missed re-run); a green entry
+    of a root or command this run never planned is carried. Expected
+    values come from the counting fixtures' own files and the previous
+    result file the test rewrites itself, never the implementation."""
+
+    def plain_repo(self, conf: str, change: Optional[Dict[str, str]] = None) -> Tuple[str, str]:
+        """A repo whose gates count into one file outside the clone, the
+        change at notes/ (no package test is selected: the gates are the
+        whole plan)."""
+        self.counts = os.path.join(self.tmp, "gate-runs")
+        counts = self.counts
+        files = {
+            "go.mod": GO_MOD,
+            ".polyforge/verify-scope.conf": conf % {"counts": counts},
+            "notes/x.txt": "x\n",
+        }
+        clone = self.task_repo("app", files, change if change is not None else {"notes/x.txt": "x (changed)\n"})
+        return clone, counts
+
+    def runs_of(self, counts: str) -> List[str]:
+        try:
+            with open(counts, encoding="utf-8") as f:
+                return f.read().splitlines()
+        except OSError:
+            return []
+
+    def rewrite_previous(self, name: str, field: str, value: Any) -> None:
+        """One field of one command's entry in the previous result file —
+        the key dimension the test varies, the tree untouched."""
+        with open(self.out, encoding="utf-8") as f:
+            doc = json.load(f)
+        for e in doc["details"]["commands"]:
+            if e.get("name") == name:
+                e[field] = value
+        with open(self.out, "w", encoding="utf-8") as f:
+            json.dump(doc, f)
+
+    def gate_conf(self, *gates: str) -> str:
+        return "stack=go\n" + "".join("fast_gate=%s\n" % g for g in gates)
+
+    def test_a_prereq_declaration_change_reruns(self) -> None:
+        clone, counts = self.plain_repo(
+            self.gate_conf("echo g1 >> %(counts)s", "echo g2 >> %(counts)s"))
+        del clone
+        code, first = self.run_checks("app")
+        self.assertEqual(code, 0, first)
+        self.assertEqual(len(self.runs_of(counts)), 2)
+        # the same tree, a differently declared prerequisite: the key
+        # changed, the command runs again (the declarations are the key,
+        # never the values they name)
+        self.rewrite_previous("fast-1", "prereq_key", '{"cmd": [], "env": ["CHANGED_VAR"]}')
+        code, second = self.run_checks("app")
+        self.assertEqual(code, 0, second)
+        by_name = {c["name"]: c for c in self.commands_of(second)}
+        self.assertNotIn("reused", by_name["fast-1"], "a changed declaration must re-run")
+        self.assertTrue(by_name["fast-2"].get("reused"))
+        self.assertEqual(self.runs_of(counts).count("g1"), 2)
+        self.assertEqual(self.runs_of(counts).count("g2"), 1)
+
+    def test_a_command_text_change_reruns(self) -> None:
+        clone, counts = self.plain_repo(
+            self.gate_conf("echo g1 >> %(counts)s", "echo g2 >> %(counts)s"))
+        del clone
+        code, first = self.run_checks("app")
+        self.assertEqual(code, 0, first)
+        # the same tree, a differently spelled command: the key changed
+        self.rewrite_previous("fast-1", "cmd", "echo g1-renamed >> somewhere")
+        code, second = self.run_checks("app")
+        self.assertEqual(code, 0, second)
+        by_name = {c["name"]: c for c in self.commands_of(second)}
+        self.assertNotIn("reused", by_name["fast-1"], "a changed command text must re-run")
+        self.assertTrue(by_name["fast-2"].get("reused"))
+        self.assertEqual(self.runs_of(counts).count("g1"), 2)
+
+    def test_a_previous_red_result_reruns(self) -> None:
+        clone, counts = self.plain_repo(
+            self.gate_conf("echo r1 >> %(counts)s; exit 3", "echo r2 >> %(counts)s"))
+        del clone
+        code, first = self.run_checks("app")
+        self.assertEqual(code, 1, first)
+        code, second = self.run_checks("app")
+        self.assertEqual(code, 1, second)
+        by_name = {c["name"]: c for c in self.commands_of(second)}
+        self.assertEqual(by_name["fast-1"]["exit_code"], 3)
+        self.assertNotIn("reused", by_name["fast-1"], "a red result is never reuse evidence")
+        self.assertEqual(self.runs_of(counts).count("r1"), 2, "the red command ran again")
+
+    def test_a_previous_timeout_reruns(self) -> None:
+        clone, counts = self.plain_repo(
+            "stack=go\ncheck=slow|fast|sleep 5\ncheck_timeout=slow|2s\n")
+        del clone
+        code, first = self.run_checks("app")
+        self.assertEqual(code, 1, first)
+        code, second = self.run_checks("app")
+        self.assertEqual(code, 1, second)
+        slow = [c for c in self.commands_of(second) if c["name"] == "slow"][0]
+        self.assertTrue(slow["timed_out"])
+        self.assertNotIn("reused", slow, "a killed result is never reuse evidence")
+
+    def test_uncommitted_edits_move_the_key(self) -> None:
+        clone, counts = self.plain_repo(self.gate_conf("echo u1 >> %(counts)s"))
+        code, first = self.run_checks("app")
+        self.assertEqual(code, 0, first)
+        self.assertEqual(len(self.runs_of(counts)), 1)
+        # an untracked, unignored file is part of the working tree: the
+        # key moves without any commit
+        write(clone, {"notes/uncommitted.txt": "new\n"})
+        code, second = self.run_checks("app")
+        self.assertEqual(code, 0, second)
+        self.assertEqual(len(self.runs_of(counts)), 2, "an uncommitted edit must re-run")
+        self.assertNotIn("reused", self.commands_of(second)[0])
+
+    def test_unselected_green_entries_are_carried(self) -> None:
+        clone, counts = self.plain_repo(
+            self.gate_conf("echo g1 >> %(counts)s", "echo g2 >> %(counts)s"))
+        code, first = self.run_checks("app")
+        self.assertEqual(code, 0, first)
+        g2_log = [c["log"] for c in self.commands_of(first) if c["name"] == "fast-2"][0]
+        # the conf drops the second gate and adds a third: g1 re-runs (the
+        # tree moved), g3 runs, g2's green record is carried — not dropped
+        write(clone, {".polyforge/verify-scope.conf":
+                      self.gate_conf("echo g1 >> %(counts)s", "echo g3 >> %(counts)s") % {"counts": counts}})
+        git(clone, "add", "-A")
+        git(clone, "commit", "-q", "-m", "swap the second gate for a third")
+        code, second = self.run_checks("app")
+        self.assertEqual(code, 0, second)
+        by_cmd = {c["cmd"]: c for c in self.commands_of(second)}
+        self.assertNotIn("reused", by_cmd["echo g1 >> %s" % counts])
+        self.assertIn("echo g2 >> %s" % counts, by_cmd,
+                      "the unselected green entry stays in the file")
+        carried = by_cmd["echo g2 >> %s" % counts]
+        self.assertTrue(carried.get("carried"), "the unselected green entry stays in the file")
+        self.assertEqual(carried["exit_code"], 0)
+        self.assertEqual(carried["log"], g2_log, "the carried entry keeps its original log path")
+        self.assertNotIn("carried", by_cmd["echo g3 >> %s" % counts])
+        self.assertEqual(self.runs_of(counts).count("g1"), 2)
+        self.assertEqual(self.runs_of(counts).count("g3"), 1)
+
+    def test_a_nested_root_survives_a_change_outside_it(self) -> None:
+        counts = os.path.join(self.tmp, "gate-runs")
+        files = {
+            "go.mod": GO_MOD,
+            ".polyforge/verify-scope.conf":
+                "stack=go\nfast_gate=echo root-one >> %s\n" % counts,
+            "app/app.go": APP,
+            "app/app_test.go": APP_TEST,
+            "webapp/.polyforge/verify-scope.conf":
+                "stack=npm\nfast_gate=echo nested-one >> %s\n" % counts,
+            "webapp/package.json": '{"name": "webapp", "version": "1.0.0"}\n',
+            "webapp/package-lock.json": '{"name": "webapp", "lockfileVersion": 3}\n',
+            "webapp/src/x.js": "1\n",
+        }
+        clone = self.task_repo("app", files, {
+            "app/app.go": APP.replace("// Answer is the answer.\n", "// Answer is the answer. (changed)\n"),
+            "webapp/src/x.js": "2\n"})
+        code, first = self.run_checks("app")
+        self.assertEqual(code, 0, first)
+        self.assertEqual(self.runs_of(counts).count("root-one"), 1)
+        self.assertEqual(self.runs_of(counts).count("nested-one"), 1)
+        # a change outside the nested root: the nested subtree is
+        # unchanged (its green run is reused), the repository root's key
+        # counts the whole tree (Q2) and re-runs
+        write(clone, {"notes/root-only.txt": "edit\n"})
+        git(clone, "add", "-A")
+        git(clone, "commit", "-q", "-m", "a root-only change")
+        code, second = self.run_checks("app")
+        self.assertEqual(code, 0, second)
+        by_name = {c["name"]: c for c in self.commands_of(second)}
+        self.assertNotIn("reused", by_name["fast-1"],
+                         "the repository root's key counts the whole tree, nested roots included")
+        self.assertTrue(by_name["webapp/fast-1"].get("reused"),
+                        "a change outside the nested root keeps its green run")
+        self.assertEqual(self.runs_of(counts).count("root-one"), 2)
+        self.assertEqual(self.runs_of(counts).count("nested-one"), 1)
+
+
 class UsageTest(FastChecksCase):
 
     def test_no_repo_is_a_usage_error(self) -> None:
