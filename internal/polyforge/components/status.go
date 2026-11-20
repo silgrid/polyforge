@@ -9,7 +9,13 @@ package components
 // survives every restart in the workstation.
 
 import (
-	"errors"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+
+	"github.com/silgrid/polyforge/internal/common/atomicfile"
 )
 
 // The root's upgrade-transaction file names.
@@ -29,13 +35,12 @@ const (
 
 // The operations and states an UpgradeStatus names.
 const (
-	OperationUpgrade  = "upgrade"
-	OperationRollback = "rollback"
-
-	UpgradeStateRunning = "running"
-	UpgradeStateWaiting = "waiting-drain"
-	UpgradeStateDone    = "done"
-	UpgradeStateFailed  = "failed"
+	OperationUpgrade      = "upgrade"
+	OperationRollback     = "rollback"
+	UpgradeStateRunning   = "running"
+	UpgradeStateWaiting   = "waiting-drain"
+	UpgradeStateDone      = "done"
+	UpgradeStateFailed    = "failed"
 	UpgradeStateCancelled = "cancelled"
 )
 
@@ -59,32 +64,47 @@ type UpgradeStatus struct {
 // ReadUpgradeStatus answers the root's recorded status, or nil with no
 // error when none is recorded.
 func ReadUpgradeStatus(root string) (*UpgradeStatus, error) {
-	_ = root
-	return nil, errors.New("ReadUpgradeStatus: not implemented")
+	raw, err := os.ReadFile(filepath.Join(root, UpgradeStatusFilename))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var s UpgradeStatus
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return nil, fmt.Errorf("%s: %w", filepath.Join(root, UpgradeStatusFilename), err)
+	}
+	return &s, nil
 }
 
 // WriteUpgradeStatus crash-atomically records s, filling the schema
 // version and the write's own timestamp.
 func WriteUpgradeStatus(root string, s *UpgradeStatus) error {
-	_ = root
-	_ = s
-	return errors.New("WriteUpgradeStatus: not implemented")
+	s.SchemaVersion = upgradeStatusSchemaVersion
+	s.At = time.Now().UTC().Format(time.RFC3339)
+	body, err := json.Marshal(s)
+	if err != nil {
+		return err
+	}
+	return atomicfile.Write(filepath.Join(root, UpgradeStatusFilename), body, 0o644)
 }
 
 // RequestUpgradeCancel lays the cancel marker (idempotent).
 func RequestUpgradeCancel(root string) error {
-	_ = root
-	return errors.New("RequestUpgradeCancel: not implemented")
+	return atomicfile.Write(filepath.Join(root, UpgradeCancelFilename), []byte{}, 0o644)
 }
 
 // UpgradeCancelRequested answers whether the marker is laid.
 func UpgradeCancelRequested(root string) bool {
-	_ = root
-	return false
+	_, err := os.Stat(filepath.Join(root, UpgradeCancelFilename))
+	return err == nil
 }
 
 // ClearUpgradeCancel removes the marker (the run consumed it).
 func ClearUpgradeCancel(root string) error {
-	_ = root
-	return errors.New("ClearUpgradeCancel: not implemented")
+	if err := os.Remove(filepath.Join(root, UpgradeCancelFilename)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }

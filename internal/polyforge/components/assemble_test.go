@@ -1,4 +1,5 @@
 // carries: internal/polyforge/components/status.go,
+//
 //	internal/polyforge/components/fetch.go,
 //	internal/polyforge/components/assemble.go
 package components
@@ -27,6 +28,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -52,10 +54,9 @@ type fakeRelease struct {
 	checkoutFiles map[string]string
 }
 
-// pfAssetName is the platform's pf payload as release.sh publishes it.
+// pfAssetName is the platform's pf payload as release.sh publishes it
+// (the pi-web payload's name comes from the package's own helper).
 func pfAssetName(goarch string) string { return "pf-linux-" + goarch }
-
-func piWebAssetName(tag string) string { return "silgrid-pi-web-" + tag + ".tgz" }
 
 // serveRelease stands the stub GitHub up and points the package's URL
 // seams at it; the returned stop restores them.
@@ -99,6 +100,17 @@ func serveRelease(t *testing.T, rel fakeRelease) *httptest.Server {
 	return srv
 }
 
+// sortedKeys answers the map's keys in order, so the stub archives are
+// byte-stable (a checksummed body must not depend on map order).
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // fakeSHA answers the sha256 hex of a body (the test's own derivation,
 // never the implementation's).
 func fakeSHA(t *testing.T, body any) string {
@@ -123,7 +135,8 @@ func tgzOf(t *testing.T, files map[string]string) []byte {
 	var buf bytes.Buffer
 	gw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gw)
-	for path, body := range files {
+	for _, path := range sortedKeys(files) {
+		body := files[path]
 		name := "package/" + strings.TrimPrefix(path, "package/") + "\x00"
 		name = strings.TrimSuffix(name, "\x00")
 		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(body))}); err != nil {
@@ -149,7 +162,8 @@ func tarballOf(t *testing.T, tag string, files map[string]string) []byte {
 	var buf bytes.Buffer
 	gw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gw)
-	for path, body := range files {
+	for _, path := range sortedKeys(files) {
+		body := files[path]
 		name := "polyforge-" + tag + "/" + strings.TrimPrefix(path, "/")
 		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(body))}); err != nil {
 			t.Fatalf("tarball header %s: %v", path, err)
@@ -175,9 +189,9 @@ func releaseFixture(tag, commit string) fakeRelease {
 		commit: commit,
 		pfBody: "#!/bin/sh\ncase \"$1\" in --version) echo " + tag + " ;; esac\n",
 		piWebFiles: map[string]string{
-			"package.json":  `{"name": "@silgrid/pi-web", "version": "` + strings.TrimPrefix(tag, "v") + `"}` + "\n",
-			"app/page.js":   "export default function Page() {}\n",
-			"bin/probe.js":  "// the packed package's bin\n",
+			"package.json": `{"name": "@silgrid/pi-web", "version": "` + strings.TrimPrefix(tag, "v") + `"}` + "\n",
+			"app/page.js":  "export default function Page() {}\n",
+			"bin/probe.js": "// the packed package's bin\n",
 		},
 		checkoutFiles: map[string]string{
 			"package.json":                `{"name": "polyforge", "version": "` + tag + `"}` + "\n",
