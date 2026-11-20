@@ -25,8 +25,10 @@ import (
 var workstationSeedRoot = "/opt/polyforge/seed"
 
 // componentsVolumeRoot is the workstation's components volume: the root
-// whose current/ symlink every consumer in the image resolves.
-const componentsVolumeRoot = "/components"
+// whose current/ symlink every consumer in the image resolves. A
+// package var so the tests inject a scratch volume; production never
+// changes it.
+var componentsVolumeRoot = "/components"
 
 // workstationImage answers whether this machine is the workstation
 // image: the seed (with its manifest) that the image's final layer
