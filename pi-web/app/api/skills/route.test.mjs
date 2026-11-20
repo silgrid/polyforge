@@ -146,6 +146,8 @@ test("a pi item writes the preference alone; every SKILL.md stays byte-identical
   await writeFile(userSettings, JSON.stringify({ effortLevel: "low", skillOverrides: { "cl-skill": "name-only" } }));
   const piProject = join(root, "pi-item-project");
   await mkdir(join(piProject, ".claude", "skills", "cl-skill"), { recursive: true });
+  const { allowFileRoot } = await jiti.import("../../../../lib/file-access.ts");
+  allowFileRoot(piProject);
   const localSettings = join(piProject, ".claude", "settings.local.json");
   await writeFile(localSettings, JSON.stringify({ effortLevel: "low" }));
   const userSettingsBefore = await readFile(userSettings, "utf8");
