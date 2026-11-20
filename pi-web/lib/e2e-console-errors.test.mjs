@@ -43,7 +43,8 @@ const requestFailed = (url, errorText = NETWORK_CHANGE) => ({
 });
 // A console event carries the resource's address in location().url
 // (polyforge#180): Chromium's resource-load text has no URL in it. An empty
-// url keeps the raw text — nothing is guessed.
+// url keeps the raw text with an explicit `[url unavailable]` marker —
+// nothing is guessed (owner decision Q2; review r1 #1).
 const consoleError = (text, url = "") => ({ type: () => "error", text: () => text, location: () => ({ url }) });
 const response = (url, status) => ({ url: () => url, status: () => status });
 
@@ -67,7 +68,7 @@ test("an unpaired network-change console error stays red", () => {
   const page = fakePage();
   const { errors, lines } = collector(page);
   page.emit("console", consoleError(CONSOLE_TEXT));
-  assert.deepEqual(errors.settle(), [CONSOLE_TEXT]);
+  assert.deepEqual(errors.settle(), [`${CONSOLE_TEXT} [url unavailable]`]);
   assert.deepEqual(lines, []);
 });
 
@@ -85,7 +86,7 @@ test("an ERR_CONNECTION_REFUSED failure stays red", () => {
   const { errors, lines } = collector(page);
   page.emit("requestfailed", requestFailed(`${BASE}/api/agent/e2e-x`, "net::ERR_CONNECTION_REFUSED"));
   page.emit("console", consoleError("Failed to load resource: net::ERR_CONNECTION_REFUSED"));
-  assert.deepEqual(errors.settle(), ["Failed to load resource: net::ERR_CONNECTION_REFUSED"]);
+  assert.deepEqual(errors.settle(), ["Failed to load resource: net::ERR_CONNECTION_REFUSED [url unavailable]"]);
   assert.deepEqual(lines, []);
 });
 
@@ -107,7 +108,7 @@ test("a 5xx response stays red and other responses and console types are not col
   page.emit("console", consoleError("Failed to load resource: net::ERR_CONNECTION_REFUSED"));
   page.emit("console", { type: () => "warning", text: () => CONSOLE_TEXT });
   page.emit("console", { type: () => "log", text: () => CONSOLE_TEXT });
-  assert.deepEqual(errors.settle(), [`500 ${BASE}/api/sessions`, "Failed to load resource: net::ERR_CONNECTION_REFUSED"]);
+  assert.deepEqual(errors.settle(), [`500 ${BASE}/api/sessions`, "Failed to load resource: net::ERR_CONNECTION_REFUSED [url unavailable]"]);
   assert.deepEqual(lines, []);
 });
 
@@ -117,7 +118,7 @@ test("pairing is one-to-one: a second console error with no second requestfailed
   page.emit("requestfailed", requestFailed(`${BASE}/api/sessions/a`));
   page.emit("console", consoleError(CONSOLE_TEXT));
   page.emit("console", consoleError(CONSOLE_TEXT));
-  assert.deepEqual(errors.settle(), [CONSOLE_TEXT]);
+  assert.deepEqual(errors.settle(), [`${CONSOLE_TEXT} [url unavailable]`]);
   assert.deepEqual(lines, [`INFO tolerated network-change: ${BASE}/api/sessions/a`]);
 });
 
@@ -128,7 +129,7 @@ test("at most three network changes are tolerated per flow, the fourth pair stay
     page.emit("requestfailed", requestFailed(`${BASE}/api/sessions/${suffix}`));
     page.emit("console", consoleError(CONSOLE_TEXT));
   }
-  assert.deepEqual(errors.settle(), [CONSOLE_TEXT]);
+  assert.deepEqual(errors.settle(), [`${CONSOLE_TEXT} [url unavailable]`]);
   assert.deepEqual(lines, [
     `INFO tolerated network-change: ${BASE}/api/sessions/a`,
     `INFO tolerated network-change: ${BASE}/api/sessions/b`,
@@ -158,15 +159,26 @@ test("each collector is one flow: a second page gets its own cap", () => {
 // carries no resource address in its text — #179's full-8 red was a bare 403
 // nobody could attribute. The console event's location().url names the
 // resource; the red text appends it in brackets after Chromium's text, which
-// already carries the status for HTTP failures. The pairing token check reads
-// only the raw console text, so a token that appears merely in the appended
-// URL never pairs (owner decision Q2).
+// already carries the status for HTTP failures. Without a location URL the
+// raw text gets an explicit `[url unavailable]` marker — the owner decision
+// Q2 “保留原文并标明不可用”: a reader can tell the collector could not get the
+// URL apart from an older collector that never tried. The pairing token check
+// reads only the raw console text, so a token that appears merely in the
+// appended URL never pairs (owner decision Q2).
 test("a 4xx resource-load console error's red text carries the resource url", () => {
   const page = fakePage();
   const { errors, lines } = collector(page);
   const url = `${BASE}/static/avatar.png`;
   page.emit("console", consoleError(FORBIDDEN_TEXT, url));
   assert.deepEqual(errors.settle(), [`${FORBIDDEN_TEXT} [${url}]`]);
+  assert.deepEqual(lines, []);
+});
+
+test("a resource-load console error without a location url keeps its text and marks the url unavailable", () => {
+  const page = fakePage();
+  const { errors, lines } = collector(page);
+  page.emit("console", consoleError(FORBIDDEN_TEXT, ""));
+  assert.deepEqual(errors.settle(), [`${FORBIDDEN_TEXT} [url unavailable]`]);
   assert.deepEqual(lines, []);
 });
 
@@ -207,6 +219,6 @@ test("a custom maxToleratedNetworkChanges cap holds", () => {
     page.emit("requestfailed", requestFailed(`${BASE}/api/sessions/${suffix}`));
     page.emit("console", consoleError(CONSOLE_TEXT));
   }
-  assert.deepEqual(errors.settle(), [CONSOLE_TEXT]);
+  assert.deepEqual(errors.settle(), [`${CONSOLE_TEXT} [url unavailable]`]);
   assert.deepEqual(lines, [`INFO tolerated network-change: ${BASE}/api/sessions/a`]);
 });
