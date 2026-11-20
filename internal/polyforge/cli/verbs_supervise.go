@@ -131,6 +131,15 @@ func planSupervise(o superviseOpts) (supervisor.RunSpec, error) {
 	return rs, nil
 }
 
+// superviseDefaultDirs answers the --workflows-dir and --pi-web-dir
+// defaults for this machine's layout: the image's components current,
+// or the host's <data-dir>/release/current (both under the root
+// currentRoot resolves).
+func superviseDefaultDirs(dataDir string) (workflowsDir, piWebDir string) {
+	root := currentRoot(dataDir)
+	return filepath.Join(root, "workflows"), filepath.Join(root, "pi-web")
+}
+
 // SuperviseMain executes `pf supervise <flags>` and answers the process
 // exit code the container stops with (the daemon's own 0/78, a clean
 // forwarded stop's 0, a grace-exceeded SIGKILL's 1, usage's 2).
@@ -157,16 +166,15 @@ func SuperviseMain(argv []string, stdin io.Reader, stdout, stderr io.Writer) int
 	if *dataDir == "" {
 		*dataDir = DataDir(home)
 	}
-	if *wfDir == "" {
-		*wfDir = filepath.Join(*dataDir, "release", "current", "workflows")
-	}
-	if *piWebDir == "" {
-		*piWebDir = filepath.Join(*dataDir, "release", "current", "pi-web")
-	}
-	pfBin, err := os.Executable()
+	pfBin, err := currentPfBin()
 	if err != nil {
 		fmt.Fprintf(stderr, "pf supervise: cannot locate the pf binary: %v\n", err)
 		return 1
+	}
+	if *wfDir == "" {
+		*wfDir, *piWebDir = superviseDefaultDirs(*dataDir)
+	} else if *piWebDir == "" {
+		_, *piWebDir = superviseDefaultDirs(*dataDir)
 	}
 	rs, err := planSupervise(superviseOpts{
 		pfBin: pfBin, home: home, configPath: *cfgPath, dataDir: *dataDir,
