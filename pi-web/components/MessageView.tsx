@@ -139,6 +139,8 @@ interface Props {
   cwd?: string;
   onOpenFile?: (filePath: string, page?: number) => void;
   onOpenSubagent?: (sessionId: string, label: string) => void;
+  /** Opens one of this session's built-in background tasks' detail panel by task id (#189: the bg_run card's button). */
+  onOpenPiTask?: (taskId: string) => void;
   entryId?: string;
   searchBlock?: AssistantContentBlock;
   onFork?: (entryId: string) => void;
@@ -230,12 +232,12 @@ function haveSameRelevantToolResults(
   return true;
 }
 
-export const MessageView = memo(function MessageView({ message, isStreaming, toolResults, modelNames, cwd, onOpenFile, onOpenSubagent, entryId, searchBlock, onFork, forking, onEditContent, onCancelEdit, isEditing, editWaitsForBackgroundWork, showTimestamp, prevTimestamp, sessionId, writtenFiles, turnDurationMs, onCompact, isCompacting, compactError }: Props) {
+export const MessageView = memo(function MessageView({ message, isStreaming, toolResults, modelNames, cwd, onOpenFile, onOpenSubagent, onOpenPiTask, entryId, searchBlock, onFork, forking, onEditContent, onCancelEdit, isEditing, editWaitsForBackgroundWork, showTimestamp, prevTimestamp, sessionId, writtenFiles, turnDurationMs, onCompact, isCompacting, compactError }: Props) {
   if (message.role === "user") {
     return <UserMessageView message={message as UserMessage} cwd={cwd} onOpenFile={onOpenFile} entryId={entryId} onFork={onFork} forking={forking} onEditContent={onEditContent} onCancelEdit={onCancelEdit} isEditing={isEditing} editWaitsForBackgroundWork={editWaitsForBackgroundWork} />;
   }
   if (message.role === "assistant") {
-    return <AssistantMessageView message={message as AssistantMessage} isStreaming={isStreaming} toolResults={toolResults} modelNames={modelNames} cwd={cwd} onOpenFile={onOpenFile} onOpenSubagent={onOpenSubagent} showTimestamp={showTimestamp} prevTimestamp={prevTimestamp} sessionId={sessionId} entryId={entryId} searchBlock={searchBlock} writtenFiles={writtenFiles} turnDurationMs={turnDurationMs} onCompact={onCompact} isCompacting={isCompacting} compactError={compactError} />;
+    return <AssistantMessageView message={message as AssistantMessage} isStreaming={isStreaming} toolResults={toolResults} modelNames={modelNames} cwd={cwd} onOpenFile={onOpenFile} onOpenSubagent={onOpenSubagent} onOpenPiTask={onOpenPiTask} showTimestamp={showTimestamp} prevTimestamp={prevTimestamp} sessionId={sessionId} entryId={entryId} searchBlock={searchBlock} writtenFiles={writtenFiles} turnDurationMs={turnDurationMs} onCompact={onCompact} isCompacting={isCompacting} compactError={compactError} />;
   }
   if (message.role === "toolResult") {
     // Rendered inline under its toolCall — skip standalone rendering if paired
@@ -259,6 +261,7 @@ export const MessageView = memo(function MessageView({ message, isStreaming, too
     && prev.cwd === next.cwd
     && prev.onOpenFile === next.onOpenFile
     && prev.onOpenSubagent === next.onOpenSubagent
+    && prev.onOpenPiTask === next.onOpenPiTask
     && prev.entryId === next.entryId
     && prev.searchBlock === next.searchBlock
     && prev.onFork === next.onFork
@@ -602,6 +605,7 @@ function AssistantMessageView({
   cwd,
   onOpenFile,
   onOpenSubagent,
+  onOpenPiTask,
   showTimestamp,
   prevTimestamp,
   sessionId,
@@ -620,6 +624,7 @@ function AssistantMessageView({
   cwd?: string;
   onOpenFile?: (filePath: string, page?: number) => void;
   onOpenSubagent?: (sessionId: string, label: string) => void;
+  onOpenPiTask?: (taskId: string) => void;
   showTimestamp?: boolean;
   prevTimestamp?: number;
   sessionId?: string;
@@ -825,7 +830,7 @@ function AssistantMessageView({
         {/* Not keyed by the entry id: a message of this run gets one when the file is
             read again, and its blocks keep their state across that read (#1184). */}
         {blockItems.map(({ block, originalIndex }) => (
-          <BlockView key={originalIndex} block={block} searchTarget={block === searchBlock} toolResults={toolResults} isStreaming={isStreaming} streamingDuration={streamingDurations.get(originalIndex) ?? (block.type === "thinking" ? thinkingDurationFromFile : undefined)} toolCallDurations={toolCallDurations} cwd={cwd} onOpenFile={onOpenFile} onOpenSubagent={onOpenSubagent} sessionId={sessionId} entryId={entryId} blockIndex={originalIndex} />
+          <BlockView key={originalIndex} block={block} searchTarget={block === searchBlock} toolResults={toolResults} isStreaming={isStreaming} streamingDuration={streamingDurations.get(originalIndex) ?? (block.type === "thinking" ? thinkingDurationFromFile : undefined)} toolCallDurations={toolCallDurations} cwd={cwd} onOpenFile={onOpenFile} onOpenSubagent={onOpenSubagent} onOpenPiTask={onOpenPiTask} sessionId={sessionId} entryId={entryId} blockIndex={originalIndex} />
         ))}
       </div>
 
@@ -951,7 +956,7 @@ function AssistantMessageView({
   );
 }
 
-function BlockView({ block, searchTarget, toolResults, isStreaming, streamingDuration, toolCallDurations, cwd, onOpenFile, onOpenSubagent, sessionId, entryId, blockIndex }: { block: AssistantContentBlock; searchTarget?: boolean; toolResults?: Map<string, ToolResultMessage>; isStreaming?: boolean; streamingDuration?: number; toolCallDurations?: Map<string, number>; cwd?: string; onOpenFile?: (filePath: string, page?: number) => void; onOpenSubagent?: (sessionId: string, label: string) => void; sessionId?: string; entryId?: string; blockIndex: number }) {
+function BlockView({ block, searchTarget, toolResults, isStreaming, streamingDuration, toolCallDurations, cwd, onOpenFile, onOpenSubagent, onOpenPiTask, sessionId, entryId, blockIndex }: { block: AssistantContentBlock; searchTarget?: boolean; toolResults?: Map<string, ToolResultMessage>; isStreaming?: boolean; streamingDuration?: number; toolCallDurations?: Map<string, number>; cwd?: string; onOpenFile?: (filePath: string, page?: number) => void; onOpenSubagent?: (sessionId: string, label: string) => void; onOpenPiTask?: (taskId: string) => void; sessionId?: string; entryId?: string; blockIndex: number }) {
   // A claude session's runs; empty elsewhere, so every other card is unchanged.
   const claudeSubagents = useContext(ClaudeSubagentContext);
   if (block.type === "text") {
@@ -971,7 +976,7 @@ function BlockView({ block, searchTarget, toolResults, isStreaming, streamingDur
     }
     const result = toolResults?.get(tc.toolCallId);
     const duration = toolCallDurations?.get(tc.toolCallId);
-    return <ToolCallBlock block={tc} result={result} duration={duration} onOpenSubagent={onOpenSubagent} />;
+    return <ToolCallBlock block={tc} result={result} duration={duration} onOpenSubagent={onOpenSubagent} onOpenPiTask={onOpenPiTask} />;
   }
   return null;
 }
@@ -1076,11 +1081,21 @@ function recordedDurationMs(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
+/** A bg_run result's `details.task.id` — the registry record #172's tool
+ * returns at start; the card's open-task button binds to it (#189). */
+function bgRunTaskIdFromDetails(value: unknown): string | null {
+  if (typeof value !== "object" || value === null) return null;
+  const task = (value as { task?: unknown }).task;
+  if (typeof task !== "object" || task === null) return null;
+  const id = (task as { id?: unknown }).id;
+  return typeof id === "string" && id.length > 0 ? id : null;
+}
+
 // The card shell, the duration format and its 100 ms floor are shared with the
 // Polyforge progress cards (components/ToolCallCard.tsx).
 export { formatToolDuration };
 
-function ToolCallBlock({ block, result, duration, onOpenSubagent }: { block: ToolCallContent; result?: ToolResultMessage; duration?: number; onOpenSubagent?: (sessionId: string, label: string) => void }) {
+function ToolCallBlock({ block, result, duration, onOpenSubagent, onOpenPiTask }: { block: ToolCallContent; result?: ToolResultMessage; duration?: number; onOpenSubagent?: (sessionId: string, label: string) => void; onOpenPiTask?: (taskId: string) => void }) {
   const { t } = useI18n();
   const [expanded, setExpanded] = useState(() => isToolCallExpanded(block.toolCallId));
   const toggleExpanded = () => {
@@ -1131,6 +1146,9 @@ function ToolCallBlock({ block, result, duration, onOpenSubagent }: { block: Too
   const isError = (result?.isError ?? false)
     || (isApplyPatchToolName(block.toolName) && applyPatchResultHasFailures(result?.details));
   const subagent = isSubagentToolDetails(result?.details) ? result.details : null;
+  // The bg_run card's open-task button (#189): only a bg_run call with a
+  // started task gets one, and only when a caller can open the panel.
+  const bgTaskId = block.toolName === "bg_run" ? bgRunTaskIdFromDetails(result?.details) : null;
   const codemodeCallCount = codemode ? codemode.calls.length + codemode.omitted : 0;
 
   return (
@@ -1166,7 +1184,18 @@ function ToolCallBlock({ block, result, duration, onOpenSubagent }: { block: Too
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="5" y="7" width="14" height="11" rx="2" /><path d="M9 11h.01M15 11h.01M9 15h6M12 7V4M10 4h4" /></svg>
         </button>
-      )}
+      ) || (bgTaskId && onOpenPiTask && (
+        <button
+          type="button"
+          onClick={() => onOpenPiTask(bgTaskId)}
+          data-pi-open-task={bgTaskId}
+          aria-label={t("bgTasks.openTask")}
+          title={t("bgTasks.openTask")}
+          style={{ flexShrink: 0, display: "flex", alignItems: "center", padding: "0 10px", border: "none", borderLeft: "1px solid var(--border)", background: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 11 }}
+        >
+          {t("bgTasks.openTask")}
+        </button>
+      ))}
     >
       {/* ── Expanded: input args (only when no richer view exists); a codemode script in place of its JSON.
            An edit's flat input (claude's Edit) shows its rows above the diff; a nested one (pi's `edits[]`)

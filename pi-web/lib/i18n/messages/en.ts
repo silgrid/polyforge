@@ -1929,7 +1929,7 @@ export const enLocale: LocalePlugin = {
     "bgTasks.kindShort": "Task",
     "bgTasks.queued": "Queued",
     "bgTasks.agent": "Agent",
-    "bgTasks.history": "Finished",
+    "bgTasks.openTask": "Open task",
     "bgTasks.runningList": "Running agents and background tasks",
     "bgTasks.kindTask": "Background task",
     "bgTasks.close": "Close",

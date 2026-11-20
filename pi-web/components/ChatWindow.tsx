@@ -1086,7 +1086,8 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
   const openChoice = openPanelChoice && openPanelChoice.sessionId === session?.id ? openPanelChoice : null;
   const openSubagentRun = openChoice?.kind === "subagent" ? claudeSubagents[openChoice.id] : undefined;
   const openTask = openChoice?.kind === "task" ? claudeBackgroundTasks[openChoice.id] : undefined;
-  // A pi session's task panel and its 「已结束」 history take the same slot.
+  // A pi session's task panel and its settled history take the same slot
+  // (#189: the history opens from the detail panel's header button).
   const piTasks = piBackgroundTasks.state.kind === "ready" ? piBackgroundTasks.state.tasks : [];
   const openPiTask = openChoice?.kind === "piTask" ? piTasks.find((task) => task.id === openChoice.id) : undefined;
   const openClaudeSubagentPanel = useCallback((toolCallId: string) => {
@@ -1519,7 +1520,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
             </div>
           </div>
         )}
-        {/* a pi session's built-in task panel and its 「已结束」 history, in
+        {/* a pi session's built-in task panel and its settled history, in
             the same slot (one panel at a time); an open panel stays open after
             its task ends, showing the final status. */}
         {piTaskPanelOpen && openPiTask && (
@@ -1530,6 +1531,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
                 task={openPiTask}
                 onStop={() => piBackgroundTasks.killTask(openPiTask.id)}
                 onReadOutput={() => piBackgroundTasks.readOutput(openPiTask.id)}
+                onOpenHistory={openPiHistoryPanel}
                 onClose={closeClaudeSubagentPanel}
               />
             </div>
@@ -1629,6 +1631,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
                     cwd={messageCwd}
                     onOpenFile={onOpenFile}
                     onOpenSubagent={onOpenSubagent}
+                    onOpenPiTask={openPiTaskPanel}
                     entryId={entryIds[idx]}
                     searchBlock={entryIds[idx] === pendingSearchScroll?.entryId ? searchBlock : undefined}
                     onFork={bashRunning || isNew || claudeActionsLocked ? undefined : handleFork}
@@ -1827,7 +1830,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
               );
             })()}
             {isStreaming && hasStreamingContent && (
-              <StreamingReply store={streamingStore} onCommit={updatePromptAnchor} toolResults={toolResultsMap} modelNames={modelNames} cwd={messageCwd} onOpenFile={onOpenFile} onOpenSubagent={onOpenSubagent} />
+              <StreamingReply store={streamingStore} onCommit={updatePromptAnchor} toolResults={toolResultsMap} modelNames={modelNames} cwd={messageCwd} onOpenFile={onOpenFile} onOpenSubagent={onOpenSubagent} onOpenPiTask={openPiTaskPanel} />
             )}
 
             {(agentRunning || isCompacting) && !hasStreamingContent && (agentPhase || isCompacting) && (
@@ -2041,8 +2044,8 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
             </div>
           )}
           {/* a pi session's running built-in subagents and background tasks
-              in the same slot (polyforge#173): the merged list, and the
-              「已结束」 entry once anything settled. */}
+              in the same slot (polyforge#173, #189): the merged list — settled
+              tasks never occupy it, their detail opens from the bg_run card. */}
           {!isClaudeSession && !isNew && (
             <div style={{ width: "100%", maxWidth: "var(--chat-content-max-width, 820px)", margin: "0 auto" }}>
               <PiRunningList
@@ -2050,7 +2053,6 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
                 tasks={piTasks}
                 onOpenSubagent={(subagentSessionId, label) => onOpenSubagent?.(subagentSessionId, label)}
                 onOpenTask={openPiTaskPanel}
-                onOpenHistory={openPiHistoryPanel}
               />
             </div>
           )}
@@ -2079,7 +2081,7 @@ const NOTICE_MIN_HEIGHT_PX = 60;
 const NOTICE_LINE_BOX_PX = 21;
 const NOTICE_TEXT_PADDING_Y_PX = (NOTICE_MIN_HEIGHT_PX - 2 - NOTICE_LINE_BOX_PX) / 2;
 // The reply being streamed: the one part of the chat a chunk re-renders.
-const StreamingReply = memo(function StreamingReply({ store, onCommit, toolResults, modelNames, cwd, onOpenFile, onOpenSubagent }: {
+const StreamingReply = memo(function StreamingReply({ store, onCommit, toolResults, modelNames, cwd, onOpenFile, onOpenSubagent, onOpenPiTask }: {
   store: StreamingStore;
   /** Runs after each chunk is in the DOM. */
   onCommit: () => void;
@@ -2088,11 +2090,12 @@ const StreamingReply = memo(function StreamingReply({ store, onCommit, toolResul
   cwd?: string;
   onOpenFile?: (filePath: string, page?: number) => void;
   onOpenSubagent?: (sessionId: string, label: string) => void;
+  onOpenPiTask?: (taskId: string) => void;
 }) {
   const message = useStreamingSelector(store, selectStreamingMessage);
   useLayoutEffect(onCommit, [message, onCommit]);
   if (!message) return null;
-  return <MessageView message={message} toolResults={toolResults} isStreaming modelNames={modelNames} cwd={cwd} onOpenFile={onOpenFile} onOpenSubagent={onOpenSubagent} />;
+  return <MessageView message={message} toolResults={toolResults} isStreaming modelNames={modelNames} cwd={cwd} onOpenFile={onOpenFile} onOpenSubagent={onOpenSubagent} onOpenPiTask={onOpenPiTask} />;
 });
 
 // Toast 整体高度上限；文本区高度上限 = 整体上限 - 上下边框（全局 box-sizing: border-box，

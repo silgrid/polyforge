@@ -35,7 +35,7 @@ function task(fields = {}) {
   };
 }
 
-function renderPanel(fields = {}) {
+function renderPanel(fields = {}, props = {}) {
   return renderToStaticMarkup(
     React.createElement(
       I18nProvider,
@@ -46,6 +46,7 @@ function renderPanel(fields = {}) {
         onReadOutput: async () => ({ text: "", startByte: 0, endByte: 0, totalBytes: 0, logPath: "/tmp/log", truncated: false, tail: true }),
         onClose: () => {},
         now: NOW,
+        ...props,
       }),
     ),
   );
@@ -136,6 +137,21 @@ test("an empty history states it and renders no rows", () => {
   assert.match(html, /data-pi-bg-history-panel/);
   assert.doesNotMatch(html, /data-pi-history-task/, "empty history renders rows");
   assert.match(html, /No finished background tasks/, "the empty state is missing");
+});
+
+test("the detail panel offers the settled history from its header", () => {
+  // polyforge#189: the running area no longer carries the history entry; the
+  // detail panel's header button is the settled history's entry (the owner's
+  // B ruling on Q2's kept piHistory state).
+  const withEntry = renderPanel({}, { onOpenHistory() {} });
+  assert.match(withEntry, /<button[^>]*data-pi-bg-history-open=""/, "the header's history button is missing");
+  const side = sideColumn(withEntry);
+  const close = side.indexOf('aria-label="Close"');
+  const history = side.indexOf('data-pi-bg-history-open=""');
+  assert.ok(close >= 0 && history > close, "the history button does not sit in the right column beside Close");
+  assert.match(side.slice(history, history + 300), /aria-label="Finished background tasks"/, "the history button is not named");
+  // A caller that passes no callback gets no button.
+  assert.doesNotMatch(renderPanel(), /data-pi-bg-history-open/, "the panel shows a history button with no callback");
 });
 
 test("a settled task's panel keeps reading its output once it ends, and a truncated tail says so", () => {
