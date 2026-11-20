@@ -67,6 +67,11 @@ test("the poll falls silent on an idle session with nothing live (G11: the graph
   // a reply (a run is dispatched there) or the last answer held a live row;
   // the mount discovery read (and the page's return to visibility) still
   // runs, so a reload that lands on a live run finds it.
+  //
+  // The reply's end re-reads at once (review r2 #2): a background subagent
+  // dispatched in the reply's last seconds — the dispatch tool returns at
+  // once — would otherwise wait for a tick the gate silences with the
+  // reply's end.
   const shim = fileURLToPath(new URL("./__fixtures__/react-hook-shim.mjs", import.meta.url));
   const hookJiti = createJiti(import.meta.url, { tsconfigPaths: true, alias: { react: shim } });
   const { renderHook } = await import(pathToFileURL(shim).href);
@@ -93,14 +98,18 @@ test("the poll falls silent on an idle session with nothing live (G11: the graph
     hook.rerender(["s1", true]);
     await tick(2_000);
     assert.equal(reads.length, 2, "a running session polls");
-    // A live row keeps the tick reading after the reply ends…
+    // A run dispatched in the reply's last moments: the answer turns live
+    // after the running poll's last read, and the reply ends — the flip
+    // re-read must find it at once, not at the next (now gated) tick.
     answer = { runs: [row()] };
-    await tick(2_000);
-    assert.equal(reads.length, 3, "the running poll re-read");
     hook.rerender(["s1", false]);
+    await settle();
+    hook.flush();
+    assert.equal(reads.length, 3, "the reply's end re-reads at once, so a run dispatched in its last seconds is found (AC3)");
+    // …and the rows it found keep the tick reading while the session is idle.
     await tick(2_000);
     assert.equal(reads.length, 4, "a live run keeps the poll on while the session is idle");
-    // …and the read that sees it settled is the last one.
+    // The read that sees it settled is the last one.
     answer = { runs: [] };
     await tick(2_000);
     assert.equal(reads.length, 5, "the settling read");
