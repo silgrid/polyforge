@@ -37,7 +37,9 @@ echo "== seed ${version}: platform ${platform}, channel ${channel_repo}, commit 
 echo "== pi-web: npm ci + production build"
 cd pi-web
 NEXT_TELEMETRY_DISABLED=1 npm ci --no-audit --no-fund
-NEXT_TELEMETRY_DISABLED=1 npm run build
+# 产品版本同时写入包与 Next 的构建常量，页面重连后报告同一版本。
+npm pkg set "version=${version#v}"
+NEXT_PUBLIC_APP_VERSION="${version#v}" NEXT_TELEMETRY_DISABLED=1 npm run build
 rm -rf .next/cache
 npm prune --omit=dev
 cd "$here"

@@ -358,6 +358,7 @@ PYEOF
 }
 
 case "${1:-}" in
+upgrade) exec sh "$script_dir/upgrade-smoke.sh" ;;
 boot) shift; cmd_boot "$@" ;;
 env) shift; cmd_env "$@" ;;
 podman-verify) shift; cmd_podman_verify "$@" ;;
