@@ -41,7 +41,24 @@ export function projectSettingsPath(cwd: string): string {
   return displaySettingsPath(join(cwd, ".pi", "settings.json"));
 }
 
-// The global defaults' native write is the pi adapter's model write
-// (lib/harness/pi-native-write.ts, 85a3-1): the same locked read-merge-write
-// this module's SettingsManager flows take, behind the adapter's version gate.
-// The star's route (app/api/models/default) composes the two.
+/**
+ * Persist the global defaults new sessions start with, like the TUI's Ctrl+S
+ * in `/model` and `/thinking`.
+ *
+ * `SettingsManager` skips the write when it could not load the settings file
+ * and collects storage failures instead of throwing, so the queue is drained
+ * here: a default that did not reach disk must not report success.
+ */
+export async function writeDefaultPreferences(
+  settingsManager: SettingsManager,
+  edit: DefaultPreferencesEdit,
+): Promise<void> {
+  const loadErrors = settingsManager.drainErrors();
+  const globalLoadError = loadErrors.find((entry) => entry.scope === "global");
+  if (globalLoadError) throw globalLoadError.error;
+  if (edit.model) settingsManager.setDefaultModelAndProvider(edit.model.provider, edit.model.modelId);
+  if (edit.thinkingLevel) settingsManager.setDefaultThinkingLevel(edit.thinkingLevel);
+  await settingsManager.flush();
+  const errors = settingsManager.drainErrors();
+  if (errors.length > 0) throw errors[0].error;
+}
