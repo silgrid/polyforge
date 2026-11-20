@@ -561,7 +561,6 @@ export function createClaudeAdapter(): HarnessAdapter {
         if (!applied.ok) return { status: "refused", reason: applied.reason };
         return { status: "written", summary: `${applied.summary} (claude ${probe.version})` };
       }
-      }
       if (concept === "permission") {
         const parsed = parseClaudePermissionChange(change, ctx?.cwd);
         if ("reason" in parsed) return { status: "refused", reason: parsed.reason };
