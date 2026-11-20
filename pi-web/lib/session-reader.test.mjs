@@ -875,7 +875,10 @@ test("falls back to the catalogue when a targeted lookup finds duplicate IDs", a
   assert.equal(scans, 1);
 });
 
-test("forced session listing bypasses the fresh server cache", async (t) => {
+test("an ordinary listing revalidates the file set; force still bumps the version", async (t) => {
+  // polyforge#140 (owner 2-A): the old 30 s result cache served external writes
+  // stale, so an ordinary listing now always revalidates the catalogue's file
+  // set and fingerprints (a stat pass; unchanged files re-read nothing).
   const originalListSessions = listSessions;
   let scans = 0;
   listSessions = async () => {
@@ -891,11 +894,11 @@ test("forced session listing bypasses the fresh server cache", async (t) => {
   await listAllSessions({ force: true });
   const version = getSessionListVersion();
   await listAllSessions();
-  assert.equal(scans, 1);
-  assert.equal(getSessionListVersion(), version, "cached sync reads must not notify other windows again");
+  assert.equal(scans, 2, "a fresh cache no longer exempts the next ordinary call");
+  assert.equal(getSessionListVersion(), version, "an unchanged revalidation must not notify other windows again");
 
   await listAllSessions({ force: true });
-  assert.equal(scans, 2);
+  assert.equal(scans, 3, "force skips nothing else");
   assert.ok(getSessionListVersion() > version);
   const refreshedVersion = getSessionListVersion();
   invalidateSessionListCache();
