@@ -90,7 +90,6 @@ console error with the same text, an application catch text
 (`Failed to fetch`), `ERR_CONNECTION_REFUSED`, `pageerror`, any 5xx from
 the test server, and the tolerated pair past the cap of 3. The rules are
 pinned by `lib/e2e-console-errors.test.mjs` (`node --test
-lib/e2e-console-errors.test.mjs` (`node --test
 lib/e2e-console-errors.test.mjs`).
 
 ## Resource-load error attribution
