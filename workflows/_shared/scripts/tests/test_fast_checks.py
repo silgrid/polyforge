@@ -944,6 +944,153 @@ class RepoReuseBoundaryTest(FastChecksCase):
         self.assertEqual(self.runs_of(counts).count("nested-one"), 1)
 
 
+class PhaseRootTest(FastChecksCase):
+    """AC2's entry point: `--phase fast` narrows the per-unit bar to the
+    fast commands and a repeatable `--root <dir>` to the named engine
+    roots (. is the repository's own root, a nested root its directory);
+    the roots a narrowed run never asks keep their green entries carried;
+    without the flags the default report's fast and scoped commands of
+    every reached root run, and the close modes and --check-units refuse
+    the new flags. Expected values come from the counting fixtures' own
+    files, never the implementation."""
+
+    def phase_repo(self) -> Tuple[str, str]:
+        """A plain repo whose two fast gates and one scoped command count
+        into one file outside the clone (u1's counting shape)."""
+        self.counts = os.path.join(self.tmp, "gate-runs")
+        clone = self.task_repo("app", {
+            "go.mod": GO_MOD,
+            ".polyforge/verify-scope.conf": counting_conf(self.counts),
+            "app/app.go": APP,
+            "app/app_test.go": APP_TEST,
+        }, APP_CHANGE)
+        return clone, self.counts
+
+    def nested_repo(self) -> Tuple[str, str]:
+        """One repository root (a counting fast gate) and one nested root
+        (a counting fast gate); the change reaches both, and the root
+        report answers full for the nested root's paths (the #24 shape),
+        so each root contributes its fast gate."""
+        self.counts = os.path.join(self.tmp, "gate-runs")
+        counts = self.counts
+        files = {
+            "go.mod": GO_MOD,
+            ".polyforge/verify-scope.conf":
+                "stack=go\nfast_gate=echo root-one >> %s\n" % counts,
+            "app/app.go": APP,
+            "app/app_test.go": APP_TEST,
+            "webapp/.polyforge/verify-scope.conf":
+                "stack=npm\nfast_gate=echo nested-one >> %s\n" % counts,
+            "webapp/package.json": '{"name": "webapp", "version": "1.0.0"}\n',
+            "webapp/package-lock.json": '{"name": "webapp", "lockfileVersion": 3}\n',
+            "webapp/src/x.js": "1\n",
+        }
+        clone = self.task_repo("app", files, {
+            "app/app.go": APP.replace("// Answer is the answer.\n", "// Answer is the answer. (changed)\n"),
+            "webapp/src/x.js": "2\n"})
+        return clone, counts
+
+    def runs_of(self, counts: str) -> List[str]:
+        try:
+            with open(counts, encoding="utf-8") as f:
+                return f.read().splitlines()
+        except OSError:
+            return []
+
+    def test_phase_fast_runs_no_scoped_command(self) -> None:
+        clone, counts = self.phase_repo()
+        del clone
+        code, res = self.run_checks("app", extra=("--phase", "fast"))
+        self.assertEqual(code, 0, res)
+        cmds = self.commands_of(res)
+        self.assertTrue(cmds)
+        for c in cmds:
+            self.assertEqual(c["phase"], "fast", "the per-unit bar runs no scoped command: %s" % c)
+        self.assertNotIn("scoped", self.runs_of(counts), "a scoped command executed")
+
+    def test_root_dot_runs_only_the_repository_root(self) -> None:
+        clone, counts = self.nested_repo()
+        del clone
+        code, res = self.run_checks("app", extra=("--root", "."))
+        self.assertEqual(code, 0, res)
+        cmds = self.commands_of(res)
+        self.assertTrue(cmds)
+        for c in cmds:
+            self.assertEqual(c["root"], "repos/app", c)
+        self.assertNotIn("nested-one", self.runs_of(counts), "a nested root's command executed")
+
+    def test_root_nested_runs_only_the_named_root(self) -> None:
+        clone, counts = self.nested_repo()
+        del clone
+        code, res = self.run_checks("app", extra=("--root", "webapp"))
+        self.assertEqual(code, 0, res)
+        cmds = self.commands_of(res)
+        self.assertTrue(cmds)
+        for c in cmds:
+            self.assertEqual(c["root"], "repos/app/webapp", c)
+        self.assertEqual([r["root"] for r in res["details"]["reports"]], ["repos/app/webapp"])
+        self.assertNotIn("root-one", self.runs_of(counts), "the repository root's command executed")
+
+    def test_a_narrowed_run_carries_the_other_roots_green(self) -> None:
+        clone, counts = self.nested_repo()
+        code, first = self.run_checks("app")
+        self.assertEqual(code, 0, first)
+        root_log = {c["log"] for c in self.commands_of(first) if c["root"] == "repos/app"}
+        self.assertTrue(root_log)
+        # the per-unit shape: only the touched nested root, fast only — the
+        # repository root's green entry stays in the file, carried
+        code, second = self.run_checks("app", extra=("--phase", "fast", "--root", "webapp"))
+        self.assertEqual(code, 0, second)
+        by_root: Dict[str, List[Dict[str, Any]]] = {}
+        for c in self.commands_of(second):
+            by_root.setdefault(c["root"], []).append(c)
+        self.assertEqual(list(by_root), ["repos/app", "repos/app/webapp"])
+        self.assertTrue(by_root["repos/app/webapp"][0].get("reused"))
+        carried = by_root["repos/app"]
+        for c in carried:
+            self.assertTrue(c.get("carried"), "the root this run never asked keeps its green entry: %s" % c)
+            self.assertEqual(c["exit_code"], 0)
+            self.assertIn(c["log"], root_log, "the carried entry keeps its original log path")
+        # nothing executed: the counting files hold the first run's runs only
+        self.assertEqual(self.runs_of(counts).count("root-one"), 1)
+        self.assertEqual(self.runs_of(counts).count("nested-one"), 1)
+
+    def test_an_unknown_root_is_a_usage_error(self) -> None:
+        self.nested_repo()
+        argv = [sys.executable, FAST_CHECKS, "--capsule", self.capsule, "--repo", "app",
+                "--engine", ENGINE, "--deadline", "10m", "--out", self.out,
+                "--root", "no-such-dir"]
+        c = subprocess.run(argv, capture_output=True, text=True)
+        self.assertEqual(c.returncode, 2)
+        self.assertIn("no-such-dir", c.stderr)
+        self.assertIn("webapp", c.stderr, "the message names the roots there are")
+
+    def test_the_close_modes_and_check_units_refuse_the_flags(self) -> None:
+        self.nested_repo()
+        for extra in (("--close-scoped", "--phase", "fast"),
+                      ("--close-scoped", "--root", ".")):
+            with self.subTest(close=" ".join(extra)):
+                argv = [sys.executable, FAST_CHECKS, "--capsule", self.capsule, "--repo", "app",
+                        "--engine", ENGINE, "--deadline", "10m", "--out", self.out, *extra]
+                c = subprocess.run(argv, capture_output=True, text=True)
+                self.assertEqual(c.returncode, 2, c.stderr)
+        units = os.path.join(self.capsule, "units.json")
+        with open(units, "w", encoding="utf-8") as f:
+            f.write("[]")
+        argv = [sys.executable, FAST_CHECKS, "--capsule", self.capsule, "--check-units", units,
+                "--engine", ENGINE, "--deadline", "10m", "--out", self.out, "--root", "."]
+        c = subprocess.run(argv, capture_output=True, text=True)
+        self.assertEqual(c.returncode, 2, c.stderr)
+
+    def test_without_the_flags_the_default_report_runs_fast_and_scoped(self) -> None:
+        clone, counts = self.phase_repo()
+        del clone
+        code, res = self.run_checks("app")
+        self.assertEqual(code, 0, res)
+        phases = {c["phase"] for c in self.commands_of(res)}
+        self.assertEqual(phases, {"fast", "scoped"}, "the default run keeps its current shape")
+
+
 class UsageTest(FastChecksCase):
 
     def test_no_repo_is_a_usage_error(self) -> None:
