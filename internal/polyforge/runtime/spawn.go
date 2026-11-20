@@ -58,6 +58,7 @@ var piIsolationFlags = []string{
 	"--no-skills",
 	"--no-context-files",
 	"--no-prompt-templates",
+	"--no-approve",
 }
 
 // piCommand is one stdin command of the real pi RPC protocol. Every

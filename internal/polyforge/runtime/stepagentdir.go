@@ -85,10 +85,12 @@ package runtime
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
 	"github.com/silgrid/polyforge/internal/common/atomicfile"
+	"github.com/silgrid/polyforge/internal/polyforge/runtime/stepagentassets"
 )
 
 // The dedicated directories' names under the harness root.
@@ -203,14 +205,12 @@ func refreshStepAgentMinimalSet(src, dst string) error {
 	} else if err := os.Remove(dstModels); err != nil && !os.IsNotExist(err) {
 		return &StepAgentDirError{Dir: dst, Err: err}
 	}
-	// agents/ and extensions/subagent/: recursive per-file copies;
-	// absent source dir ⇒ absent destination dir.
-	if err := mirrorStepAgentTree(filepath.Join(src, stepAgentAgentsDir), filepath.Join(dst, stepAgentAgentsDir)); err != nil {
+	// agents and the subagent extension are daemon-owned embedded assets;
+	// operator content is never used for either resource family.
+	if err := installEmbeddedTree(stepagentassets.FS, "agents", filepath.Join(dst, stepAgentAgentsDir)); err != nil {
 		return err
 	}
-	return mirrorStepAgentTree(
-		filepath.Join(src, stepAgentExtDir, stepAgentSubagent),
-		filepath.Join(dst, stepAgentExtDir, stepAgentSubagent))
+	return installEmbeddedTree(stepagentassets.FS, "extensions/subagent", filepath.Join(dst, stepAgentExtDir, stepAgentSubagent))
 }
 
 // pruneStepAgentDir removes everything under dst that is not in the
@@ -254,6 +254,34 @@ func pruneStepAgentDir(dst string) error {
 		}
 	}
 	return nil
+}
+
+// installEmbeddedTree installs a daemon-owned resource tree atomically per file.
+func installEmbeddedTree(fsys fs.FS, source, dst string) error {
+	if err := os.RemoveAll(dst); err != nil {
+		return &StepAgentDirError{Dir: dst, Err: err}
+	}
+	return fs.WalkDir(fsys, source, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return &StepAgentDirError{Dir: dst, Err: err}
+		}
+		rel, err := filepath.Rel(source, path)
+		if err != nil {
+			return &StepAgentDirError{Dir: dst, Err: err}
+		}
+		target := filepath.Join(dst, rel)
+		if entry.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		data, err := fs.ReadFile(fsys, path)
+		if err != nil {
+			return &StepAgentDirError{Dir: dst, Err: err}
+		}
+		if err := atomicfile.Write(target, data, 0o644); err != nil {
+			return &StepAgentDirError{Dir: dst, Err: err}
+		}
+		return nil
+	})
 }
 
 // mirrorStepAgentTree copies the tree at src to dst when src exists and
