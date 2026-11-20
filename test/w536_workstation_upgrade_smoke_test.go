@@ -1,4 +1,4 @@
-// carries: dist/workstation/smoke.sh, dist/workstation/build-seed.sh
+// carries: dist/workstation/smoke.sh, dist/workstation/build-seed.sh, dist/workstation/upgrade-smoke.sh
 package test
 
 import (
