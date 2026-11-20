@@ -94,13 +94,12 @@ func TestShippedPrinciplesRenderedOnce(t *testing.T) {
 		if i < 0 || len(strings.TrimSpace(usage[:i])) < 40 {
 			t.Errorf("%s: no step-specific usage paragraph before the principles", key)
 		}
-		// the prompt budget: the whole section stays within 3534 bytes.
-		// Raised from 3397 by exactly 137 bytes for polyforge#183's one
-		// new principle (the quoted shell-separator rule, zsh's `=`
-		// word expansion audit F10), preserving the existing headroom
-		// and preventing unrelated growth of the shared text.
-		if n := len("\n## Principles\n") + i + len(text); n > 3534 {
-			t.Errorf("%s: `## Principles` section is %d bytes, budget 3534", key, n)
+		// the prompt budget: the whole section stays within 3824 bytes.
+		// Raised from 3534 by exactly 290 bytes for polyforge#191's
+		// capsule shell lifetime, temporary-path and command-evidence rules,
+		// preserving the existing headroom and preventing unrelated growth of shared text.
+		if n := len("\n## Principles\n") + i + len(text); n > 3824 {
+			t.Errorf("%s: `## Principles` section is %d bytes, budget 3824", key, n)
 		}
 	}
 	if seen != len(want) {
