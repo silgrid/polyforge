@@ -656,7 +656,7 @@ func assembleStepPrompt(p promptParts) string {
 		return renderOwnerMessages(p.OwnerMessages) + "\n" + strings.Join(parts, "\n")
 	}
 	if p.ShortEwrResume {
-		return ewrResumeReminder(p) + continuationPart(promptParts{OwnerMessages: p.OwnerMessages, ParamsChanged: p.ParamsChanged})
+		return ewrResumeReminder(p) + continuationPart(promptParts{OwnerMessages: p.OwnerMessages, ParamsChanged: p.ParamsChanged}) + piCapabilityChange(p.ParamsChanged, p.Harness)
 	}
 	var b strings.Builder
 	// 1. the dispatch
