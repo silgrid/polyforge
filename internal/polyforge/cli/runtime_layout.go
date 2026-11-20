@@ -33,13 +33,17 @@ const componentsVolumeRoot = "/components"
 // carries is there. The one fact CLI, doctor and Pi Web judge the mode
 // by — a components directory alone never does.
 func workstationImage() bool {
-	return false
+	matches, err := filepath.Glob(filepath.Join(workstationSeedRoot, components.ReleasesDirname, "*", components.ManifestFilename))
+	return err == nil && len(matches) > 0
 }
 
 // currentRoot answers the root every consumer resolves current
 // through: the image's components volume (/components/current), or the
 // host installer's release checkout (<data-dir>/release/current).
 func currentRoot(dataDir string) string {
+	if workstationImage() {
+		return filepath.Join(componentsVolumeRoot, components.CurrentLinkname)
+	}
 	return filepath.Join(dataDir, "release", components.CurrentLinkname)
 }
 
@@ -51,5 +55,8 @@ func currentRoot(dataDir string) string {
 // old version after the switch). On a host (where no documented flow
 // runs `pf supervise`) the answer is the running binary.
 func currentPfBin() (string, error) {
+	if workstationImage() {
+		return filepath.Join(componentsVolumeRoot, components.CurrentLinkname, components.PathPF), nil
+	}
 	return os.Executable()
 }

@@ -43,17 +43,33 @@ watches the daemon, Pi Web and — with --with-aihub — the aihub server as
 its own children. A child that dies on it (a crash, a kill -9) is
 restarted with a growing delay; the daemon exiting 0 or 78 ends the
 whole run with that code (the container stops with it; the 78 reason is
-in <data-dir>/daemon.log); a stop signal (SIGTERM/SIGINT, what
-docker/podman stop sends) is forwarded ONCE to every child and the daemon
-gets the --grace to finish its shutdown (its WIP pushes can take up to
-30s) before anything still running is SIGKILLed — the outer container's
-stop timeout must be the grace plus a margin.
+in <data-dir>/daemon.log); the daemon exiting 75 (the
+restart-for-an-upgrade: an upgrade switched the components volume's
+current) is relaunched AT ONCE from the same current-resolved argv, with
+no failure backoff — the run never ends on it, and a start that then
+cannot run (a missing current) backs off like any failure; a stop signal
+(SIGTERM/SIGINT, what docker/podman stop sends) is forwarded ONCE to
+every child and the daemon gets the --grace to finish its shutdown (its
+WIP pushes can take up to 30s) before anything still running is
+SIGKILLed — the outer container's stop timeout must be the grace plus a
+margin.
+
+In the workstation image the supervised daemon and the aihub server
+launch the components volume's current pf (/components/current/bin/pf,
+resolved afresh at every start — an upgrade that switches current is
+live at the next launch), Pi Web runs with PF_BIN pinned to it, and the
+--workflows-dir / --pi-web-dir defaults sit under /components/current.
+On a host (where no documented flow runs pf supervise) the defaults
+stay <data-dir>/release/current's.
 
 Flags:
   --config P          shared config file (default ~/.config/polyforge/cli.toml)
   --data-dir D        the Host data dir (default ~/.local/share/polyforge)
-  --workflows-dir D   the daemon's workflows dir (default <data-dir>/release/current/workflows)
-  --pi-web-dir D      the Pi Web checkout (default <data-dir>/release/current/pi-web);
+  --workflows-dir D   the daemon's workflows dir (default <current>/workflows:
+                      /components/current in the image,
+                      <data-dir>/release/current on a host)
+  --pi-web-dir D      the Pi Web checkout (default <current>/pi-web, same
+                      roots as --workflows-dir);
                       absent → Pi Web is not started (a line says so)
   --grace D           the stop grace, >= 45s (default 60s)
   --with-aihub        start and watch the aihub server too ("pf aihub")
@@ -63,7 +79,8 @@ replaces: "pf daemon ensure" there behaves exactly as before.
 
 Exit status: the daemon's own exit code when it ended the run (0 or 78);
 0 when a forwarded stop let the daemon finish inside the grace; 1 when
-the daemon had to be SIGKILLed at the grace's end; 2 usage.`
+the daemon had to be SIGKILLed at the grace's end; 2 usage. The daemon
+exiting 75 never ends the run — the relaunch is immediate.`
 
 // cmdSupervise serves `pf help supervise` (and the command registry's
 // Process group): cmd/pf/main.go intercepts `pf supervise` before CLI
@@ -119,7 +136,7 @@ func planSupervise(o superviseOpts) (supervisor.RunSpec, error) {
 	if st, err := os.Stat(o.piWebDir); err == nil && st.IsDir() {
 		rs.Others = append(rs.Others, supervisor.ChildSpec{
 			Name: "pi-web", Argv: []string{"npm", "run", "start:lan"}, Dir: o.piWebDir,
-			Env: superviseChildEnv(o.environ), Log: filepath.Join(o.dataDir, "pi-web.log"),
+			Env: supervisePiWebEnv(o.environ, o.pfBin), Log: filepath.Join(o.dataDir, "pi-web.log"),
 		})
 	}
 	if o.withAIHub {
@@ -207,6 +224,24 @@ func superviseChild(rs supervisor.RunSpec, name string) *supervisor.ChildSpec {
 		}
 	}
 	return nil
+}
+
+// supervisePiWebEnv answers the Pi Web child's environment: the shared
+// child environment with PF_BIN pinned to the pf the supervisor itself
+// launches (polyforge#175) — in the image that is the components
+// volume's current pf, so every pf Pi Web spawns (the presence probe,
+// the spawn sites polyforge-pf-bin resolves) runs the current one after
+// an upgrade, never a PATH lookup and never a stale value the
+// container's environment whitelist already drops.
+func supervisePiWebEnv(environ []string, pfBin string) []string {
+	env := superviseChildEnv(environ)
+	for i, kv := range env {
+		if name, _, _ := strings.Cut(kv, "="); name == "PF_BIN" {
+			env = append(env[:i], env[i+1:]...)
+			break
+		}
+	}
+	return append(env, "PF_BIN="+pfBin)
 }
 
 // superviseChildEnv answers the environment a non-daemon child (Pi Web,
