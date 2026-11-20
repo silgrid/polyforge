@@ -867,6 +867,15 @@ func TestWorkstationImageEngine(t *testing.T) {
 	if err := exec.Command("docker", "compose", "version").Run(); err != nil {
 		t.Skipf("no docker compose (%v), skipping the real-engine workstation boot", err)
 	}
+	// the workstation is a first-boot machine now (polyforge#176): the
+	// boot is judged on a fresh state, and a dev host's leftover
+	// workstation volumes carry pre-#176 state the boot would
+	// legitimately refuse to serve beside (a cells/default/identity.json
+	// recorded against another AIHub identity domain is the daemon's own
+	// 78). Reset the compose project's volumes first — the operator's
+	// own `smoke.sh boot` run never does this, only the engine
+	// acceptance does.
+	_ = exec.Command("docker", "compose", "-f", filepath.Join(root, "dist/workstation/compose.yaml"), "--profile", "no-aihub", "down", "-v").Run()
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sh", filepath.Join(root, "dist/workstation/smoke.sh"), "boot", "--no-aihub")
