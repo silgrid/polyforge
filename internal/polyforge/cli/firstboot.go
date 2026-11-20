@@ -22,13 +22,25 @@ package cli
 //
 // The settled Q6 gate runs first: a first boot whose record says done
 // AND whose cli.toml carries the default Cell is skipped — the first
-// choice (local or external) is made exactly once; either half alone is
-// an inconsistency the boot refuses to start on, with the recovery
-// hint naming both files.
+// choice (local or external) is made exactly once. A cell with no
+// record at all, or a done record without the cell, is an inconsistency
+// the boot refuses to start on, with the recovery hint naming both
+// files; a cell with an IN-PROGRESS record is this boot's own
+// interruption and is resumed (AC1: a retry never needs a person).
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"strconv"
+	"time"
+
+	"github.com/silgrid/polyforge/internal/aihub"
+	"github.com/silgrid/polyforge/internal/common/atomicfile"
+	"github.com/silgrid/polyforge/internal/polyforge/components"
 )
 
 // The first-boot record's phases, in order.
@@ -118,7 +130,302 @@ func firstBootPath(dataDir string) string {
 // the components, identity, config and harness stages, publishing the
 // record at every phase transition and at a failure.
 func runFirstBoot(o firstBootOpts, stdout io.Writer) error {
-	_ = o
-	_ = stdout
-	return errors.New("first boot: not implemented yet")
+	// the Q6 gate: the first choice is made exactly once — done plus the
+	// default Cell skips; a cell with NO record at all, or a done record
+	// without the cell, is an inconsistency the boot refuses to start
+	// on, naming both files. A cell with an IN-PROGRESS record is none
+	// of those: it is this boot's own interruption (a crash between the
+	// config write and the done record), and AC1's retry must resume it
+	// — never require a person to first delete the cell by hand.
+	rec, recExists, err := readFirstBootRecord(o.DataDir)
+	if err != nil {
+		return err
+	}
+	done := recExists && rec.Phase == firstBootPhaseDone
+	hasCell, err := configHasDefaultCell(o.ConfigPath)
+	if err != nil {
+		return err
+	}
+	record, config := firstBootPath(o.DataDir), o.ConfigPath
+	switch {
+	case done && hasCell:
+		fmt.Fprintf(stdout, "first boot: already done (%s says done and %s carries the default Cell) — nothing to do\n", record, config)
+		return nil
+	case done && !hasCell:
+		return fmt.Errorf("first boot: %s says done but %s carries no default Cell — refusing to start on the inconsistency; recovery: complete the default Cell (server and api_key) in %s by hand, or remove %s and redo the first boot from scratch", record, config, config, record)
+	case hasCell && !recExists:
+		return fmt.Errorf("first boot: %s carries a default Cell but %s records no first boot at all — refusing to start on the inconsistency; recovery: remove the default Cell from %s and run the first boot again, or complete the first boot by hand and write the done record %s", config, record, config, record)
+	}
+
+	// the mode (Q4): a server means external (its key with it, an
+	// optional already-existing project for the mapping); no server
+	// means local — the identity transaction and the loopback Cell.
+	st := firstBootState{
+		Mode:        "local",
+		DefaultCell: firstBootDefaultCell,
+		Server:      firstBootLocalServer,
+		UpdatedAt:   time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	switch {
+	case o.ExtServer == "" && o.ExtKey == "":
+	case o.ExtServer == "":
+		return fmt.Errorf("first boot: %s is set without %s — a key with no server to point at is not a mode; set both or neither", EnvWorkstationAihubKey, EnvWorkstationAihubServer)
+	case o.ExtKey == "":
+		return fmt.Errorf("first boot: %s is set without %s — the external mode needs the key that goes with the server; set both or neither (the local mode needs nothing)", EnvWorkstationAihubServer, EnvWorkstationAihubKey)
+	default:
+		st.Mode, st.Server = "external", o.ExtServer
+		if o.ExtProject != "" {
+			st.Project = o.ExtProject
+		}
+	}
+
+	var (
+		apiKey, userID string
+		identityDone   bool
+	)
+	stages := []struct {
+		name string
+		run  func() error
+	}{
+		{
+			name: firstBootPhaseComponents,
+			run: func() error {
+				managed, err := firstBootInstallSeed(o, stdout)
+				if err != nil {
+					return err
+				}
+				st.ImageManaged = managed
+				return nil
+			},
+		},
+		{
+			name: firstBootPhaseIdentity,
+			run: func() error {
+				if st.Mode == "external" {
+					// nothing is created anywhere: the identity stays the
+					// remote's own (userReady stays false — no local user
+					// was verified), the key is the one the operator gave
+					apiKey = o.ExtKey
+					return nil
+				}
+				res, err := aihub.InitLocal(aihub.InitOptions{DataDir: o.AihubDataDir})
+				if err != nil {
+					return err
+				}
+				apiKey, userID = res.PlainKey, res.UserID
+				identityDone = true
+				return nil
+			},
+		},
+		{
+			name: firstBootPhaseConfig,
+			run: func() error {
+				if err := firstBootWriteConfig(o, st.Mode, apiKey, userID, st.Project, o.WorkspaceDir); err != nil {
+					return err
+				}
+				// keyReady only after the fact is verified (Q7): the
+				// written file loads and carries exactly this boot's key
+				cfg, err := LoadFileConfig(o.ConfigPath)
+				if err != nil {
+					return err
+				}
+				if cfg.APIKey != apiKey {
+					return fmt.Errorf("the written default Cell does not carry this boot's key — refusing to record keyReady")
+				}
+				st.KeyReady = true
+				if identityDone {
+					st.UserReady = true
+				}
+				return nil
+			},
+		},
+		{
+			name: firstBootPhaseHarness,
+			run: func() error {
+				rep, err := mergeHarness(harnessMergeOpts{
+					Home: o.Home, AgentDir: o.AgentDir,
+					ComponentsRoot: o.ComponentsRoot, RepoSlug: o.RepoSlug,
+				})
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(stdout, "first boot: harness references: pi packages %s; %d skill link(s) newly, %d already, %d the user's own untouched\n",
+					rep.PiPackages, len(rep.SkillsLinked), len(rep.SkillsKept), len(rep.SkillsUntouched))
+				return nil
+			},
+		},
+	}
+	for _, stage := range stages {
+		st.Phase = stage.name
+		st.Error = ""
+		if err := publishFirstBoot(o.DataDir, &st); err != nil {
+			return err
+		}
+		if err := stage.run(); err != nil {
+			// the record names the stage and the reason — never a
+			// credential (none of the stage errors carries one)
+			st.Phase = stage.name + firstBootPhaseFailed
+			st.Error = err.Error()
+			if perr := publishFirstBoot(o.DataDir, &st); perr != nil {
+				return fmt.Errorf("%v (and publishing the failure record: %v)", err, perr)
+			}
+			return fmt.Errorf("first boot: the %s stage: %w", stage.name, err)
+		}
+	}
+	st.Phase = firstBootPhaseDone
+	if err := publishFirstBoot(o.DataDir, &st); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "first boot: done (%s, %s)\n", st.Mode, st.Server)
+	return nil
+}
+
+// readFirstBootRecord reads the boot's record (exists=false when
+// absent or unparsable — a corrupt record is recreated by the run).
+func readFirstBootRecord(dataDir string) (firstBootState, bool, error) {
+	raw, err := os.ReadFile(firstBootPath(dataDir))
+	if errors.Is(err, os.ErrNotExist) {
+		return firstBootState{}, false, nil
+	}
+	if err != nil {
+		return firstBootState{}, false, err
+	}
+	var st firstBootState
+	if err := json.Unmarshal(raw, &st); err != nil {
+		return firstBootState{}, false, nil
+	}
+	return st, true, nil
+}
+
+// configHasDefaultCell answers whether cli.toml already carries the
+// default Cell's connection (server and api_key).
+func configHasDefaultCell(path string) (bool, error) {
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	parsed, err := parseConfigTOML(path, string(raw))
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", path, err)
+	}
+	return parsed.flat["server"] != "" && parsed.flat["api_key"] != "", nil
+}
+
+// firstBootInstallSeed installs the image's seed into the components
+// volume when there is one (the image-managed fact is exactly the
+// seed's presence); without a seed the boot is not image-managed and
+// the install is skipped — the harness stage will refuse on a volume
+// with no current rather than leave dangling references.
+func firstBootInstallSeed(o firstBootOpts, stdout io.Writer) (bool, error) {
+	releases := filepath.Join(o.SeedRoot, components.ReleasesDirname)
+	entries, err := os.ReadDir(releases)
+	if errors.Is(err, os.ErrNotExist) {
+		fmt.Fprintf(stdout, "first boot: no seed under %s — not image-managed, the seed install is skipped\n", o.SeedRoot)
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	// the seed with the highest version wins (the image carries one;
+	// a future image may stage the newer beside the older)
+	best, bestVer := "", (components.Version{})
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dir := filepath.Join(releases, e.Name())
+		if _, err := os.Stat(filepath.Join(dir, components.ManifestFilename)); err != nil {
+			continue
+		}
+		v, err := components.ParseVersion(e.Name())
+		if err != nil {
+			return false, fmt.Errorf("the seed %s: %w", dir, err)
+		}
+		if best == "" {
+			best, bestVer = dir, v
+			continue
+		}
+		c, err := bestVer.Compare(v)
+		if err != nil {
+			return false, err
+		}
+		if c < 0 {
+			best, bestVer = dir, v
+		}
+	}
+	if best == "" {
+		fmt.Fprintf(stdout, "first boot: no seed under %s — not image-managed, the seed install is skipped\n", releases)
+		return false, nil
+	}
+	if _, err := components.Install(components.Options{
+		Root:        o.ComponentsRoot,
+		Seed:        best,
+		DataDir:     o.DataDir,
+		BaseVersion: o.BaseVersion,
+		Platform:    o.Platform,
+	}); err != nil {
+		return false, err
+	}
+	fmt.Fprintf(stdout, "first boot: the seed %s is installed\n", best)
+	return true, nil
+}
+
+// firstBootWriteConfig writes the default Cell into cli.toml, under
+// the config writer's own flock and atomic write, preserving every
+// other row the file carries (the editor replaces only its own keys).
+func firstBootWriteConfig(o firstBootOpts, mode, apiKey, userID, project, workspaceDir string) error {
+	lock, err := lockConfigFile(o.ConfigPath)
+	if err != nil {
+		return err
+	}
+	defer unlockConfigFile(lock)
+	raw, err := os.ReadFile(o.ConfigPath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	c := newConfigLines(string(raw))
+	if mode == "external" {
+		c.setFlat("server", o.ExtServer)
+	} else {
+		c.setFlat("server", firstBootLocalServer)
+	}
+	c.setFlat("api_key", apiKey)
+	if mode == "local" && userID != "" {
+		c.setFlat("user_id", userID)
+	}
+	c.setDaemon("container_engine", strconv.Quote("podman"))
+	if mode == "local" || project != "" {
+		name := project
+		if mode == "local" {
+			name = aihub.InitProjectName
+		}
+		c.setWorkspace(workspaceDir, []string{name})
+	}
+	proposed := []byte(c.String())
+	// the proposed bytes parse before they land: the boot never writes
+	// a file the shared loader would refuse
+	if _, err := parseConfigTOML(o.ConfigPath, string(proposed)); err != nil {
+		return fmt.Errorf("the proposed cli.toml does not parse: %w", err)
+	}
+	return writeConfigAtomic(o.ConfigPath, proposed)
+}
+
+// publishFirstBoot lands the record atomically (Q7: each phase's
+// publish is one atomic write; the record never carries a
+// credential).
+func publishFirstBoot(dataDir string, st *firstBootState) error {
+	st.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	raw, err := json.MarshalIndent(st, "", "  ")
+	if err != nil {
+		return err
+	}
+	raw = append(raw, '\n')
+	dir := filepath.Dir(firstBootPath(dataDir))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return atomicfile.Write(firstBootPath(dataDir), raw, 0o600)
 }
