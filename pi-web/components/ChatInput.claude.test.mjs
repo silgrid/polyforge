@@ -1,3 +1,4 @@
+// carries: components/ChatInput.tsx, components/ChatWindow.tsx, lib/default-model-client.ts
 import "#test-env";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -415,4 +416,28 @@ test("a claude composer never enters Bash mode: a leading ! shows the no-shell h
   for (const [locale, messages] of [["en", enLocale], ["zh-CN", zhCNLocale], ["zh-TW", zhTWLocale]]) {
     assert.equal(messages.messages["chat.claudeNoShell"], NO_SHELL[locale], locale);
   }
+});
+
+// ── 85a3 u4 (AC2): the claude model selector's 「设为默认」 star ────────────
+test("the claude model selector shows the default star only when the save handler is passed, marking the stored default", () => {
+  // without the handler (the subagent profile form, say) no star renders
+  const withoutHandler = composer({ ...base, harness: "claude" });
+  assert.ok(!withoutHandler.includes("Use and save as default for new chats"), "no star without the handler");
+  // with it: the native default's row carries the filled star (the model
+  // list above lists default/opus/fable/sonnet/haiku; opus is the default)
+  const withHandler = composer({
+    ...base, harness: "claude", model: "sonnet",
+    defaultModel: "opus", onSetDefaultModel() {},
+  });
+  assert.ok(withHandler.includes("Use and save as default for new chats"), "the star's save label");
+  const starAt = withHandler.indexOf('aria-label="Default model for new chats"');
+  assert.ok(starAt > 0, "the filled default star");
+  // the star sits in the selector's list, not in the composer's bottom bar
+  assert.ok(starAt > withHandler.indexOf('class="model-selector'), "the star belongs to the model selector");
+});
+
+test("the claude star's save passes the row's model name, not the provider (the adapter the selector calls)", () => {
+  const saved = [];
+  claudeInputCallback("claudeSaveDefault", { claude: { onSetDefaultModel: (model) => saved.push(model) } })(undefined, "claude-row-model");
+  assert.deepEqual(saved, ["claude-row-model"]);
 });

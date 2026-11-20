@@ -1,4 +1,4 @@
-// carries: lib/default-model-preference.ts
+// carries: lib/default-model-preference.ts, lib/default-model-client.ts
 import "#test-env";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -69,4 +69,58 @@ test("a preference file that is not a JSON object refuses the write, never overw
     /refusing to overwrite/,
   );
   assert.equal(fs.readFileSync(settingsPath, "utf8"), broken);
+});
+
+// ── the client half (85a3 u4): the composer's apply rules ────────────────
+const client = await jiti.import("./default-model-client.ts");
+
+test("parseDefaultModelFetch: a valid body parses, a partial one fills the route's defaults, garbage answers null", () => {
+  assert.deepEqual(client.parseDefaultModelFetch({ defaultHarness: "claude", claudeDefaultModel: "opus", claudeDefaultEffort: "high" }), {
+    defaultHarness: "claude",
+    claudeDefaultModel: "opus",
+    claudeDefaultEffort: "high",
+  });
+  assert.deepEqual(client.parseDefaultModelFetch({}), {
+    defaultHarness: "pi",
+    claudeDefaultModel: "default",
+    claudeDefaultEffort: "default",
+  });
+  assert.deepEqual(client.parseDefaultModelFetch({ defaultHarness: "bogus", claudeDefaultModel: "-bad", claudeDefaultEffort: "nope" }), {
+    defaultHarness: "pi",
+    claudeDefaultModel: "default",
+    claudeDefaultEffort: "default",
+  });
+  for (const garbage of [null, 7, "text", []]) assert.equal(client.parseDefaultModelFetch(garbage), null);
+});
+
+test("resolveFetchedComposerDefaults: an untouched composer takes all three fetched values", () => {
+  const fetched = { defaultHarness: "claude", claudeDefaultModel: "opus", claudeDefaultEffort: "high" };
+  const untouched = {
+    carriedHarness: false, carriedClaudeModel: false, carriedClaudeEffort: false,
+    pickedHarness: false, pickedClaudeModel: false, pickedClaudeEffort: false,
+  };
+  assert.deepEqual(client.resolveFetchedComposerDefaults(fetched, untouched), {
+    harness: "claude",
+    claudeModel: "opus",
+    claudeEffort: "high",
+  });
+});
+
+test("resolveFetchedComposerDefaults: a carried choice or the user's own pick always wins", () => {
+  const fetched = { defaultHarness: "claude", claudeDefaultModel: "opus", claudeDefaultEffort: "high" };
+  // the carried draft chose claude's model: the fetch fills the rest only
+  assert.deepEqual(client.resolveFetchedComposerDefaults(fetched, {
+    carriedHarness: false, carriedClaudeModel: true, carriedClaudeEffort: false,
+    pickedHarness: false, pickedClaudeModel: false, pickedClaudeEffort: false,
+  }), { harness: "claude", claudeEffort: "high" });
+  // the user already switched the harness and picked an effort
+  assert.deepEqual(client.resolveFetchedComposerDefaults(fetched, {
+    carriedHarness: false, carriedClaudeModel: false, carriedClaudeEffort: false,
+    pickedHarness: true, pickedClaudeModel: false, pickedClaudeEffort: true,
+  }), { claudeModel: "opus" });
+  // a carried harness and a picked claude model: only the effort is left
+  assert.deepEqual(client.resolveFetchedComposerDefaults(fetched, {
+    carriedHarness: true, carriedClaudeModel: false, carriedClaudeEffort: false,
+    pickedHarness: false, pickedClaudeModel: true, pickedClaudeEffort: false,
+  }), { claudeEffort: "high" });
 });
