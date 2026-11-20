@@ -1027,8 +1027,8 @@ setting:
   replay are bounded by (the default is 10m, and a run its limit kills is an evidence
   problem, never a pass); the
   daemon checks only that the file parses), and the steps after it verify
-  it. Its close runs two of the same facts first — `build` without the
-  replay (each unit's static commit facts) and `carries` — and hands off
+  it. Its close runs the same facts first — `plan-conformance`, `build`
+  with the replay (each unit's run red at its test commit) and `carries` — and hands off
   only on green. Before them its close runs the scoped selection
   verification plans — `fast_checks.py --close-scoped`, one shared
   implementation, for a work item whose verification runs the light tier

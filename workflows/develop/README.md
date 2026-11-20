@@ -70,10 +70,13 @@ and `artifacts/merge/landing.json`. The daemon orchestrates; it judges no conten
   light tier (an integration batch's fix ticket closes without one), its red or `incomplete`
   result fixed or owner-ruled before the hand-off and a green result's `details.selected` merged
   into the change analysis — before the close's
-  facts checks — `facts.py build` without the
-  replay (each unit's static commit facts) and `carries`, the same engine review judges
-  with, a red naming the unit, or the repo, suite and reason and fixed before the
-  hand-off; the change analysis's close check (`facts.py analysis` — the
+  facts checks — `facts.py build --replay --isolation host` (each
+  unit's run replayed red at its test commit), `plan-conformance` and
+  `carries`, the same engine and the same lines review judges with, a
+  red naming the unit, the plan's undeclared or lapsed obligation, or
+  the repo, suite and reason and fixed before the hand-off (an exit 2
+  that stays 2 after its retries is disclosed in the hand-off, for
+  review to re-run); the change analysis's close check (`facts.py analysis` — the
   same shared validator `verify.py --analysis` calls; a red names the entry and the rule it
   violates and must be fixed before the hand-off); a self-review against review's five
   blocking classes and its doc-impact check, item by item — each document compared, its
