@@ -21,15 +21,42 @@
 // stays red. A helper module imported by e2e/run.mjs, not a suite: it
 // declares no `// carries:` header. The rules are pinned by
 // lib/e2e-console-errors.test.mjs; e2e/README.md "Network-change tolerance"
-// documents them.
+// and "Resource-load error attribution" document them.
+//
+// Resource-load attribution (polyforge#180): Chromium's resource-load text
+// ("Failed to load resource: …") carries the status for HTTP failures but
+// never the resource's address — #179's full-8 red was a bare 403 nobody
+// could attribute. Each resource-load console error appends the console
+// event's location().url in brackets after the raw text
+// ("… status of 403 (Forbidden) [http://…]"); a console event without a
+// location URL keeps its raw text with an explicit `[url unavailable]`
+// marker — nothing is guessed, and network failures keep their net:: error
+// code. The red paths are unchanged: 4xx
+// responses alone collect nothing, and the network-change pairing above
+// reads only the raw console text, so a token that appears merely in the
+// appended URL never pairs.
 const NETWORK_CHANGE_ERROR_TEXT = "net::ERR_NETWORK_CHANGED";
+const RESOURCE_LOAD_PREFIX = "Failed to load resource:";
+
+// The red text for one console error: the raw text, plus the resource URL
+// (the console event's location) appended for resource-load errors — the
+// only kind whose subject the text itself never names. Without a location
+// URL the raw text gets an explicit `[url unavailable]` marker (owner
+// decision Q2): a reader can tell the collector could not get the URL apart
+// from an older collector that never tried.
+function reportText(event) {
+  const text = event.text();
+  if (!text.startsWith(RESOURCE_LOAD_PREFIX)) return text;
+  const url = event.location()?.url;
+  return url ? `${text} [${url}]` : `${text} [url unavailable]`;
+}
 
 export function trackBrowserErrors(page, { base, log = console.log, maxToleratedNetworkChanges = 3 } = {}) {
   const errors = [];
   const networkChangeUrls = [];
   page.on("pageerror", (error) => { errors.push({ text: error.message, tolerable: false }); });
   page.on("console", (event) => {
-    if (event.type() === "error") errors.push({ text: event.text(), tolerable: true });
+    if (event.type() === "error") errors.push({ text: event.text(), tolerable: true, report: reportText(event) });
   });
   page.on("requestfailed", (request) => {
     if (request.failure()?.errorText === NETWORK_CHANGE_ERROR_TEXT) networkChangeUrls.push(request.url());
@@ -54,7 +81,7 @@ export function trackBrowserErrors(page, { base, log = console.log, maxTolerated
           paired += 1;
           tolerated += 1;
         } else {
-          remaining.push(error.text);
+          remaining.push(error.report ?? error.text);
         }
       }
       return remaining;
