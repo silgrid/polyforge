@@ -833,3 +833,48 @@ a migration note, never imported. The first boot's wiring, the components volume
 the supervision that runs the components' pf are the later
 84-components units; nothing on a host changes — the host installer's
 own layout is untouched.
+
+## v0.2.4, the first boot: identity, config and the persistent volumes (polyforge#176)
+
+The workstation container now persists everything in six independent
+named volumes — `pf-home` (the whole `/root`: cli.toml, the pi agent
+dir `PI_CODING_AGENT_DIR=/root/.pi/agent`, every login), the existing
+`polyforge-data` (nested inside pf-home at its canonical path), the
+components volume the seed installs into, the local AIHub's store at
+`/var/lib/polyforge/aihub`, the `/workspace` working tree and the
+existing `podman-storage`. The DEFAULT boot is the aihub one: the
+service `workstation` carries profile `aihub` and starts the local
+AIHub as a watched child, and running without an AIHub is the explicit
+opt-out — the service `workstation-noaihub`, profile `no-aihub`
+(#161's no-aihub default is flipped; a deployment that ran
+`--profile no-aihub` keeps working, and a bare `docker compose up`
+still starts nothing until a profile is named). Both profiles point
+supervise's component paths at `/components/current`.
+
+The entrypoint runs `pf first-boot` before supervise, and the boot is
+idempotent per stage: the seed install (a same-version noop), the AIHub
+identity — a daily user, its key and the local `workstation` project,
+established in one in-process transaction through the new local
+initialization entry `pf aihub init` (no network listener, refused
+inside a step or task environment and beside a running server) —
+cli.toml's default Cell (the local `http://127.0.0.1:8420` or the
+external server, `container_engine = "podman"`, the `/workspace`
+mapping), and the harness references toward `/components/current` (the
+pi packages entry and the claude skill symlinks; the host installer's
+own merge is untouched and the two are documented as independent). A
+fresh store initialized this way never gets the server's own bootstrap
+admin (usr_root / bootstrap-admin.key); the default Cell's key is a
+daily key by construction. The result record
+`<data-dir>/workstation/first-boot.json` publishes the phase (done, or
+`<stage>/failed` with the reason — never a credential) and is a
+published contract for the later management units. A completed boot
+skips itself (the first choice — local or the external mode whose
+`WORKSTATION_AIHUB_SERVER`/`KEY`/`PROJECT` inputs ride the container
+environment — is made exactly once); an interrupted boot resumes
+without duplicating the user (the same-named key is revoked and
+reissued); done without the default Cell, or a Cell with no record, is
+an inconsistency the container refuses to start on. The smoke gains
+`first-boot` (and `first-boot --external`, whose counting stub asserts
+zero remote writes). No action on upgrade beyond taking the new image
+and compose; existing two-volume deployments keep their volumes (the
+new volumes start empty and the first boot fills them).

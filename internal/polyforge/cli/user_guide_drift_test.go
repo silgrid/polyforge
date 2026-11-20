@@ -245,6 +245,12 @@ func docDriftCheck(t *testing.T, name, dir, body string) (checkedVerbs, checkedF
 				if verb == "daemon" {
 					known = known || strings.Contains(daemonUsage, f+" ") || strings.Contains(daemonUsage, f+"\n") || strings.Contains(daemonUsage, f+"]")
 				}
+				// the aihub entry's init subcommand (polyforge#176) names
+				// its flags in the same launch-surface text the daemon
+				// does — the same precedent, the same allowance.
+				if verb == "aihub" {
+					known = known || strings.Contains(aihubServerUsage, f+" ") || strings.Contains(aihubServerUsage, f+"\n") || strings.Contains(aihubServerUsage, f+"]")
+				}
 				if !known {
 					bad = append(bad, name+":"+lineNo+": pf "+verb+" "+f+" is not a flag of that verb (not in `pf help "+verb+"`) — the page names a flag that does not exist")
 				}

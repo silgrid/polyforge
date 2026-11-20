@@ -2,21 +2,33 @@
 
 The workstation container is a whole polyforge machine in one container:
 podman (rootful, crun) runs the verification containers, `pf supervise`
-(#160) keeps the daemon, Pi Web and — with `--with-aihub` — the aihub
-server alive, and the named volumes carry everything that persists (the
-data dir with the release layout, and podman's storage). The base image
-carries the runtime and one complete component seed: podman, crun,
-catatonit (PID 1), the pf binary, the container configs, the Node
-runtime (Pi Web and the two harness CLIs run on it — nothing installs
-at boot), and — read-only, at `/opt/polyforge/seed/releases/<ver>` —
-the seed the first boot installs (#162, 84-components-A): the release
-checkout, `bin/pf`, Pi Web with its production build and the two
-pinned harness packages, pinned by a manifest the install verifies.
-The versions that RUN live in the components volume
-(`releases/<ver>` there, with `current` and `previous` at the volume
-root — the volume itself and the first-boot wiring are the later
-84-components units), never in the image: a newer seed upgrades the
-volume, an older seed never downgrades it.
+(#160) keeps the daemon, Pi Web and — in the default boot, with
+`--with-aihub` — the aihub server alive, and six named volumes carry
+everything that persists: pf-home (the whole `/root`: cli.toml, the pi
+agent dir, the logins), the data dir (the daemon's state, the workspaces,
+`workstation/first-boot.json`), the components volume (the versioned
+components run from there), the AIHub store, the `/workspace` working
+tree and podman's storage. The base image carries the runtime and one
+complete component seed: podman, crun, catatonit (PID 1), the pf
+binary, the container configs, the Node runtime (Pi Web and the two
+harness CLIs run on it — nothing installs at boot), and — read-only, at
+`/opt/polyforge/seed/releases/<ver>` — the seed the first boot installs
+(#162, 84-components-A): the release checkout, `bin/pf`, Pi Web with
+its production build and the two pinned harness packages, pinned by a
+manifest the install verifies. The versions that RUN live in the
+components volume (`releases/<ver>` there, with `current` and
+`previous` at the volume root), never in the image: a newer seed
+upgrades the volume, an older seed never downgrades it.
+
+The first boot (#176, 84-components-C) runs before supervise: the seed
+install, the AIHub identity (a daily user, its key, the local project —
+never the bootstrap admin), cli.toml's default Cell, the harness
+references toward `/components/current`, and the phase record at
+`<data-dir>/workstation/first-boot.json` (never a credential). A
+completed boot skips itself; an interrupted one resumes without
+duplicating the user. The external mode's inputs
+(`WORKSTATION_AIHUB_SERVER`/`KEY`/`PROJECT`) ride the container
+environment. Full reference: docs/workstation.md, "The first boot".
 
 ## Files
 
@@ -24,15 +36,15 @@ volume, an older seed never downgrades it.
 | --- | --- |
 | `Containerfile` | the base image: webui dist + pf built from this repository (context: the repo root), ubuntu:24.04 with podman/crun/catatonit/git/curl/python3, the Node runtime and the seed stage |
 | `build-seed.sh` | the seed assembly, run inside the image build: Pi Web's `npm ci` + production build + prune, the two pinned harness packages, `bin/pf`, then seedtool writes and verifies the seed's manifest (never on a host) |
-| `entrypoint.sh` | cgroup-namespace init (as root, before `pf supervise`), then the environment boundary whitelist |
-| `env-whitelist.sh` | the environment boundary itself, sourced: PI_*/PI_WEB_* pass, PI_TEST_* never, the fixed `BUILDAH_ISOLATION=chroot` and PORT's default |
+| `entrypoint.sh` | cgroup-namespace init (as root), then the environment boundary whitelist, then `pf first-boot`, then `pf supervise` |
+| `env-whitelist.sh` | the environment boundary itself, sourced: PI_*/PI_WEB_* pass, PI_TEST_* never, the first boot's WORKSTATION_AIHUB_* pass, the fixed `BUILDAH_ISOLATION=chroot` and PORT's default |
 | `containers/storage.conf` | native overlay on the `podman-storage` volume |
 | `containers/containers.conf` | cgroupfs, file events, no container keyrings |
 | `containers/registries.conf` | short names resolve to docker.io |
 | `seccomp.json` + `seccomp.json.sha256` | the pinned seccomp profile the outer engine applies (below) |
-| `compose.yaml` | the outer container's minimal parameter set |
+| `compose.yaml` | the outer container's minimal parameter set, the six persistent volumes and the two boot modes (the aihub boot is the default; `workstation-noaihub` the explicit opt-out) |
 | `Caddyfile` | the optional HTTPS front's config (`--profile https`): local-CA TLS in front of Pi Web |
-| `smoke.sh` | `boot` / `podman-verify` / `env` — the acceptance driver |
+| `smoke.sh` | `boot` / `first-boot [--external]` / `env` / `podman-verify` — the acceptance driver |
 
 ## The pinned seccomp profile
 
