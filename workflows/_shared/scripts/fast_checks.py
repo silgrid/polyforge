@@ -6,6 +6,7 @@ as written (the full phase is never run), each command in its report's
 Usage (from the capsule root, or with --capsule)::
 
     "$PF_PYTHON" "$PF_SHARED_DIR/scripts/fast_checks.py" --repo <name> \\
+        [--phase fast] [--root <dir>]... \\
         [--capsule DIR] [--engine PATH] [--deadline D] [--log-dir DIR] [--json] [--out PATH]
     "$PF_PYTHON" "$PF_SHARED_DIR/scripts/fast_checks.py" --repo <name> --close-scoped [--reuse FILE]... \\
         [--capsule DIR] [--engine PATH] [--deadline D] [--log-dir DIR] [--json] [--out PATH]
@@ -26,7 +27,14 @@ rewind):
   change on a forced-full path behaves exactly as before (its fast gates
   and nothing more) — decodes the report and takes the commands whose
   ``phase`` is ``fast`` or ``scoped``, never one whose ``phase`` is
-  ``full``, in the report's order;
+  ``full``, in the report's order. ``--phase fast`` narrows that to the
+  fast commands alone (the per-unit bar's own shape: the scoped
+  selection is the close's, never the per-unit's), and a repeatable
+  ``--root <dir>`` to the named engine roots — ``.`` the repository's own
+  root, a nested root its directory, a name that is neither a usage
+  error — the roots the run never asks keeping their green entries
+  carried in the result file; without the flags every root the change
+  reaches runs, exactly as before (the close's own shape);
 - every command runs as ``bash -c <cmd>`` **in the report's ``root``**, the
   directory the engine itself names, with the command's own declared
   ``timeout`` (a command declaring none gets the run's default, 20m) and a
@@ -432,7 +440,8 @@ class CheckRun:
     they contribute, run in their report's root."""
 
     def __init__(self, inv: Invocation, capsule: str, repo: str, engine: str,
-                 deadline: float, log_dir: str, r: Runner) -> None:
+                 deadline: float, log_dir: str, r: Runner,
+                 phase: str = "", roots: Optional[Sequence[str]] = None) -> None:
         self.inv = inv
         self.capsule = capsule
         self.repo = repo
@@ -440,6 +449,10 @@ class CheckRun:
         self.deadline = deadline
         self.log_dir = log_dir
         self.r = r
+        # the per-unit narrowing (polyforge#182): --phase fast runs only
+        # the fast commands, a --root name only its engine root's
+        self.phase = phase
+        self.roots: List[str] = list(roots or [])
         self.seq = 0
         self.details: Dict[str, Any] = {"repo": repo, "reports": [], "commands": []}
         self.head = ""
@@ -711,38 +724,65 @@ class CheckRun:
         # its report's root —, that root as the record names it, the
         # nested root it belongs to ("" = the repository root))
         commands: List[Tuple[EngineCommand, str, str, str]] = []
-        rep, ref, why = self.ask_engine(clone)
-        self.details["engine"] = ref
-        if rep is None:
-            self.inv.summary = "repos/%s: %s" % (self.repo, why)
-            return 2
-        # AC2/AC5: the report is the default one — the report the model
-        # ran by hand — and only its fast and scoped phases ever run: a
-        # change on a forced-full path behaves exactly as before (its fast
-        # gates and nothing more)
-        chosen = [c for c in rep.commands if c.phase in ("fast", "scoped")]
-        self.details["reports"].append({"root": self.cwd_rel(clone), "mode": rep.mode,
-                                        "commands": len(chosen)})
-        commands += [(c, clone, self.cwd_rel(clone), "") for c in chosen]
+        # the roots a --root name narrows the run to (the per-unit bar,
+        # polyforge#182): "." or "" is the repository's own root, a nested
+        # root its directory — a name that is neither is a usage error
+        # naming the roots there are; without --root every root the change
+        # reaches runs (the default, the close's own shape)
+        nested = nested_roots(clone)
+        named: List[str] = []
+        for r in self.roots:
+            d = "" if r == "." else r.strip("/")
+            if d != "" and d not in nested:
+                return self.inv.usage("--root %s names no engine root of repos/%s: the roots are . (the repository's own) and %s"
+                                      % (gostr.quote(r), self.repo, ", ".join(nested) if nested else "none"))
+            if d not in named:
+                named.append(d)
+        # --phase fast narrows the run to the fast commands (the scoped
+        # selection is the close's own, never the per-unit's)
+        phases: Tuple[str, ...] = ("fast",) if self.phase == "fast" else ("fast", "scoped")
+        root_rep: Optional[EngineReport] = None
+        if not named or "" in named:
+            rep, ref, why = self.ask_engine(clone)
+            self.details["engine"] = ref
+            if rep is None:
+                self.inv.summary = "repos/%s: %s" % (self.repo, why)
+                return 2
+            root_rep = rep
+            # AC2/AC5: the report is the default one — the report the model
+            # ran by hand — and only its fast and scoped phases ever run: a
+            # change on a forced-full path behaves exactly as before (its
+            # fast gates and nothing more)
+            chosen = [c for c in rep.commands if c.phase in phases]
+            self.details["reports"].append({"root": self.cwd_rel(clone), "mode": rep.mode,
+                                            "commands": len(chosen)})
+            commands += [(c, clone, self.cwd_rel(clone), "") for c in chosen]
         # every nested engine root the changed paths reach is a repository
         # of its own whatever the root report answered — the #24 shape has
         # the root conf force the full tier for the nested root's paths, and
         # the nested root's own report still runs there, in its root, not
-        # behind a cd the model writes
-        for d in reached_roots(nested_roots(clone), rep.paths or []):
+        # behind a cd the model writes — a --root that names one asks it
+        # whether or not the root report's paths reach it
+        reached = ([d for d in nested if d in named] if named
+                    else reached_roots(nested, (root_rep.paths if root_rep is not None else []) or []))
+        for d in reached:
             directory = os.path.join(clone, d)
             root_rel = self.cwd_rel(directory)
             nrep, nref, nwhy = self.ask_engine(directory)
+            if "engine" not in self.details:
+                self.details["engine"] = nref
             if nrep is None:
                 self.inv.summary = "repos/%s: the nested engine root %s: %s" % (self.repo, d, nwhy)
                 return 2
-            nchosen = [c for c in nrep.commands if c.phase in ("fast", "scoped")]
+            nchosen = [c for c in nrep.commands if c.phase in phases]
             self.details["reports"].append({"root": root_rel, "mode": nrep.mode,
                                             "commands": len(nchosen)})
             commands += [(nested_command(d, c), directory, root_rel, d) for c in nchosen]
         if not commands:
             self.inv.summary = ("repos/%s: the engine planned no command (stack %s, conf %s)"
-                                % (self.repo, gostr.quote(rep.stack), rep.conf))
+                                % (self.repo,
+                                   gostr.quote(root_rep.stack if root_rep is not None else ""),
+                                   (root_rep.conf if root_rep is not None else "the named root")))
             return 2
         # every root's subtree hash, before any command runs: one snapshot
         # of the working tree keys the whole run's reuse
@@ -1033,6 +1073,8 @@ def run(inv: Invocation) -> int:
         return inv.usage("--close-scoped and --check-units are two runs: name one")
     if a.reuse and not a.close_scoped:
         return inv.usage("--reuse names a result file of --close-scoped, which is missing")
+    if (a.phase or a.root) and (a.close_scoped or a.check_units):
+        return inv.usage("--phase and --root narrow a --repo run: they name no --close-scoped or --check-units run")
     capsule = os.path.abspath(a.capsule)
     engine = a.engine or default_engine(inv.env)
     logs = a.log_dir
@@ -1073,7 +1115,7 @@ def run(inv: Invocation) -> int:
     if a.close_scoped:
         cr: CheckRun = CloseRun(inv, capsule, a.repo, engine, a.reuse, logs, r)
     else:
-        cr = CheckRun(inv, capsule, a.repo, engine, r.deadline, logs, r)
+        cr = CheckRun(inv, capsule, a.repo, engine, r.deadline, logs, r, phase=a.phase, roots=a.root)
     inv.details = cr.details
     try:
         return cr.run()
