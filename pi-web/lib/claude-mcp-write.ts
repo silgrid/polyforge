@@ -7,8 +7,8 @@
 // then add-json (add-json refuses an existing name), and when the add-json
 // half fails the previous definition — staged server-side by the caller — is
 // written back. The version is probed before any spawn: a version outside the
-// recognized range (lib/harness/adapter.ts's CLAUDE_KNOWN_RANGE, claude
-// 2.1.x) refuses without spawning. `mcp list` and `mcp get` are never called
+// recognized range (lib/harness/adapter.ts's CLAUDE_KNOWN_RANGE — any 2.x,
+// 85a3-1's same-major gate) refuses without spawning. `mcp list` and `mcp get` are never called
 // (list health-checks servers, get may print values). The child's output is
 // never quoted in an error: the argv carries the entry's literal values, so
 // an error says the exit code, never what the child printed.

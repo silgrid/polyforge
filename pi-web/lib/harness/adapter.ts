@@ -18,7 +18,7 @@ export interface VersionProbeResult {
   version: string | null;
   /** Whether this is a version the adapter recognizes for writes. */
   known: boolean;
-  /** The recognized range's label, e.g. "claude 2.1.x (>=2.1.312)". */
+  /** The recognized range's label, e.g. "claude 2.x". */
   knownRange?: string;
   /** Why the version is not known: outside the range, or an unrecognized file structure. */
   reason?: string;
