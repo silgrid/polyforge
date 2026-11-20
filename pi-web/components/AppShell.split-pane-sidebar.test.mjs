@@ -5,9 +5,9 @@ import test from "node:test";
 
 // This wi (split-view sidebar follow): focusing a split-view tab must move
 // the sidebar highlight (and scroll it into view) without pane focus ever
-// writing selectedSession (pi#33 isolation). The derivation must sit beside
-// the background-tasks memo with identical inputs so the two surfaces never
-// disagree about which session is "current".
+// writing selectedSession (pi#33 isolation). The derivation is the focused
+// pane's own now that the bg-tasks memo retired with the dock (#173); its
+// inputs stay the pane-focus ones, pinned below.
 const source = await readFile(new URL("./AppShell.tsx", import.meta.url), "utf8");
 
 const memoStart = source.indexOf("const sidebarSessionId = useMemo(");
@@ -16,7 +16,7 @@ const memoDepsAt = source.indexOf(
   "[splitPaneEnabled, isMobile, focusedPaneId, selectedSession?.id, paneTabs]",
   memoStart,
 );
-assert.ok(memoDepsAt > memoStart, "the sidebar memo must use the same deps as the bg-tasks memo");
+assert.ok(memoDepsAt > memoStart, "the sidebar memo must pin its deps");
 const sidebarMemo = source.slice(memoStart, source.indexOf(");", memoDepsAt));
 
 const focusStart = source.indexOf("onFocusPane={(sid) => {");
@@ -53,20 +53,9 @@ test("the SessionSidebar call site carries the derived highlight and the split-o
   assert.match(source, /selectedSessionId=\{selectedSession\?\.id \?\? null\}/);
 });
 
-test("the sidebar memo sits beside the background-tasks memo with identical inputs", () => {
-  // pi#28's memo stays the reference derivation; the sidebar reuses the same
-  // focus inputs, so the highlight and the tasks panel can never disagree.
-  const bgStart = source.indexOf("const activeBgSessionId = useMemo(");
-  assert.ok(bgStart >= 0, "AppShell must keep the background-tasks derivation");
-  const bgDepsAt = source.indexOf(
-    "[splitPaneEnabled, isMobile, focusedPaneId, selectedSession?.id, paneTabs]",
-    bgStart,
-  );
-  assert.ok(bgDepsAt > bgStart);
-  const bgMemo = source.slice(bgStart, source.indexOf(");", bgDepsAt));
-  assert.match(bgMemo, /resolveBackgroundTasksSessionId\(\{/);
-  assert.match(bgMemo, /splitPaneEnabled: splitPaneEnabled && !isMobile/);
-  assert.match(bgMemo, /lastSessionPaneId: lastSessionPaneIdRef\.current/);
-  // Both memos read the same ref (declared once, shared).
+test("the sidebar memo reads the one shared focus ref, declared once", () => {
+  // The bg-tasks memo is gone with the dock; the sidebar derivation is the
+  // only reader left of the last-focused-session ref.
   assert.equal(source.match(/const lastSessionPaneIdRef = useRef/g)?.length, 1);
+  assert.match(sidebarMemo, /lastSessionPaneId: lastSessionPaneIdRef\.current/);
 });

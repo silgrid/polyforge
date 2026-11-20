@@ -29,45 +29,22 @@ test("the badge shows the queue running count and nothing while the daemon is do
   assert.match(hookSource, /const runningCount = opsStatus \? opsStatus\.queue\.running : null;/);
 });
 
-test("the dock slot is mutually exclusive in both directions", () => {
-  // Opening Polyforge closes bg-tasks…
-  assert.match(source, /setPfPanelOpen\(\(open\) => \{\s*const next = !open;\s*if \(next\) setBgPanelOpen\(false\);\s*return next;\s*\}\);/);
-  // …and opening bg-tasks closes Polyforge. owner-intended change:
-  // the pi top bar's bg-tasks toggle is gone, so the terminal notification's
-  // jump (pinned by the next test) is the only bg-tasks-opening path; no
-  // toolbar toggle-shaped opener may remain.
-  assert.doesNotMatch(source, /setBgPanelOpen\(\(open\) => \{/,
-    "a toolbar toggle-shaped bg-tasks opener remains although the top-bar toggle is gone");
-  assert.doesNotMatch(source, /setBgPanelOpen\(\(open\) => !open\)/);
-  assert.doesNotMatch(source, /translate\("bgTasks\.open"\)/,
-    "the top bar still renders a bg-tasks toggle");
+test("the bg-tasks dock is retired: the Polyforge dock is the slot's only panel (#173)", () => {
+  // owner ruling: the old dock goes with the built-in running list taking
+  // over, so no bg-tasks dock path, sheet or toggle remains.
+  assert.doesNotMatch(source, /bgPanelOpen|setBgPanelOpen|setBgSelectedTaskId|BackgroundTasksPanel|bgSheetResizer/,
+    "a bg-tasks dock path remains although the dock is retired");
+  assert.doesNotMatch(source, /bg-tasks-sheet|pi-web:bg-tasks-sheet-height/,
+    "the bg-tasks mobile sheet remains although the dock is retired");
+  assert.doesNotMatch(source, /translate\("bgTasks\.(open|close|refresh|loading|unavailable|empty|kill|killConfirm|agentTask|exitCode|output|outputTruncated|selectTask|resizeSheet)"\)/,
+    "a retired dock string is still read");
+  // The Polyforge toggle is a plain toggle now: no other panel to close.
+  assert.match(source, /setPfPanelOpen\(\(open\) => !open\)/);
 });
 
-test("every path that opens bg-tasks closes the Polyforge panel (notification jump, B-2)", () => {
-  // The bg-task terminal notification's onClick is the only bg-tasks-opening
-  // path now that removed the top-bar toggle; it must not leave
-  // the pf dock covering the panel the jump was meant to show (AC9 / AC12).
-  const jumps = [];
-  let index = source.indexOf("setBgPanelOpen(true)");
-  while (index !== -1) {
-    jumps.push(index);
-    index = source.indexOf("setBgPanelOpen(true)", index + 1);
-  }
-  assert.ok(jumps.length > 0, "expected at least one direct setBgPanelOpen(true) (the notification jump)");
-  for (const jump of jumps) {
-    const context = source.slice(jump, jump + 90);
-    assert.match(
-      context,
-      /setBgPanelOpen\(true\);\s*setPfPanelOpen\(false\);/,
-      "a setBgPanelOpen(true) path does not close the Polyforge panel",
-    );
-  }
-});
-
-test("the panel mounts in the shared dock slot: resizable desktop right dock, drag-resizable mobile sheet; bg-tasks keeps 340", () => {
+test("the panel mounts in the dock slot: resizable desktop right dock, drag-resizable mobile sheet", () => {
   const pfDockStart = source.indexOf("{pfPanelOpen && (");
-  const bgDockStart = source.indexOf("{bgPanelOpen && (");
-  assert.ok(pfDockStart > bgDockStart, "the pf panel mounts in the same container as bg-tasks");
+  assert.ok(pfDockStart >= 0, "the pf panel mounts its dock");
   const pfBlockEnd = source.indexOf("\n        </div>", pfDockStart);
   assert.ok(pfBlockEnd > pfDockStart, "pf dock block end");
   const pfBlock = source.slice(pfDockStart, pfBlockEnd);
@@ -78,11 +55,6 @@ test("the panel mounts in the shared dock slot: resizable desktop right dock, dr
   assert.match(pfBlock, /<PolyforgePanel/);
   assert.match(pfBlock, /onClose=\{\(\) => setPfPanelOpen\(false\)\}/);
   assert.doesNotMatch(pfBlock, /width: 340/, "the pf dock is no longer fixed at 340 (pi#117: 460 default, resizable)");
-  // The bg-tasks dock in the same slot stays fixed at 340, not coupled to the
-  // Polyforge width.
-  const bgBlock = source.slice(bgDockStart, pfDockStart);
-  assert.match(bgBlock, /width: 340/, "the bg-tasks dock keeps its fixed 340px width");
-  assert.doesNotMatch(bgBlock, /pf-dock|pfDockResizer/, "the bg dock is not coupled to the Polyforge width");
   // The resize handle renders in the desktop branch only (after the mobile
   // sheet in the source), so the mobile sheet never grows a resize handle.
   const handleIndex = source.indexOf('data-resize-handle="polyforge-dock"');
@@ -178,38 +150,32 @@ test("pi#113: a pointer press outside the desktop dock dismisses it, without eat
   assert.ok(attrUses("data-pf-toggle") >= 1, "the topbar Polyforge toggle is marked");
   // The toggle keeps its functional-update semantics: press-then-click on it
   // ends closed, never a close-then-reopen.
-  assert.match(source, /setPfPanelOpen\(\(open\) => \{\s*const next = !open;\s*if \(next\) setBgPanelOpen\(false\);\s*return next;\s*\}\);/);
+  assert.match(source, /setPfPanelOpen\(\(open\) => !open\)/, "the toggle is a plain toggle (nothing else occupies the slot)");
 });
 
-test("pi#120: both mobile sheets drag-resize through one shared mechanism; each height persists independently", () => {
-  // One shared hook, two consumers, two independent storage keys — the
-  // pi#117 uncoupled dock widths mirrored for the sheet heights.
+test("pi#120: the mobile sheet drag-resizes through the shared mechanism, its height persisting alone (#173)", () => {
+  // One shared hook, one consumer left: the bg-tasks sheet retired with the
+  // dock, so only the Polyforge sheet and its own storage key remain.
   const resizers = [...source.matchAll(
-    /const (pfSheetResizer|bgSheetResizer) = useResizableSheet\(\{\s*ariaLabel: translate\("(polyforge|bgTasks)\.resizeSheet"\),\s*storageKey: "(pi-web:[a-z-]+-sheet-height)",\s*\}\);/g,
+    /const (\w+Resizer) = useResizableSheet\(\{\s*ariaLabel: translate\("(\w+)\.resizeSheet"\),\s*storageKey: "(pi-web:[a-z-]+-sheet-height)",\s*\}\);/g,
   )].map((m) => [m[1], m[2], m[3]]);
   assert.deepEqual(resizers, [
     ["pfSheetResizer", "polyforge", "pi-web:polyforge-sheet-height"],
-    ["bgSheetResizer", "bgTasks", "pi-web:bg-tasks-sheet-height"],
-  ], "two sheet resizers with distinct keys");
-  // Both mobile sheets render the top-edge handle as a DOM child (inside the
-  // sheet, above the backdrop), so dragging resizes and never dismisses; the
-  // handle carries no dismissal of its own — the backdrop tap stays the
-  // only dismiss gesture.
-  for (const [resizer, handle, panel] of [["bgSheetResizer", "bg-tasks-sheet", "<BackgroundTasksPanel"], ["pfSheetResizer", "polyforge-sheet", "<PolyforgePanel"]]) {
-    const sheetIndex = source.indexOf(`ref={${resizer}.sheetRef}`);
-    assert.ok(sheetIndex >= 0, `${resizer} renders a mobile sheet`);
-    const handleIndex = source.indexOf(`data-resize-handle="${handle}"`);
-    assert.ok(handleIndex > sheetIndex, `the ${handle} handle renders inside its sheet`);
-    const panelIndex = source.indexOf(panel, sheetIndex);
-    assert.ok(handleIndex < panelIndex, "the handle precedes the panel content (a DOM child of the sheet)");
-    const sheetBlock = source.slice(sheetIndex, panelIndex);
-    assert.ok(sheetBlock.includes("height: `" + "${" + resizer + ".heightPct}%`"), "the sheet height is the resizer state");
-    assert.ok(sheetBlock.includes(`{...${resizer}.separatorProps}`), "the handle carries the separator props");
-    assert.doesNotMatch(sheetBlock, /onClick/, "the handle never dismisses the sheet");
-  }
-  // Exactly two sheet handles exist (the mobile branches); the desktop
-  // branches keep no height resize (the pi#117 dock resizer is width-only).
-  assert.equal((source.match(/pf-sheet-resize-handle/g) ?? []).length, 2, "only the two mobile sheets carry a sheet handle");
+  ], "only the Polyforge sheet resizer remains");
+  const [resizer, handle, panel] = ["pfSheetResizer", "polyforge-sheet", "<PolyforgePanel"];
+  const sheetIndex = source.indexOf(`ref={${resizer}.sheetRef}`);
+  assert.ok(sheetIndex >= 0, `${resizer} renders a mobile sheet`);
+  const handleIndex = source.indexOf(`data-resize-handle="${handle}"`);
+  assert.ok(handleIndex > sheetIndex, `the ${handle} handle renders inside its sheet`);
+  const panelIndex = source.indexOf(panel, sheetIndex);
+  assert.ok(handleIndex < panelIndex, "the handle precedes the panel content (a DOM child of the sheet)");
+  const sheetBlock = source.slice(sheetIndex, panelIndex);
+  assert.ok(sheetBlock.includes("height: `" + "${" + resizer + ".heightPct}%`"), "the sheet height is the resizer state");
+  assert.ok(sheetBlock.includes(`{...${resizer}.separatorProps}`), "the handle carries the separator props");
+  assert.doesNotMatch(sheetBlock, /onClick/, "the handle never dismisses the sheet");
+  // Exactly one sheet handle remains (the mobile branch); the desktop branch
+  // keeps no height resize (the pi#117 dock resizer is width-only).
+  assert.equal((source.match(/pf-sheet-resize-handle/g) ?? []).length, 1, "only the Polyforge mobile sheet carries a sheet handle");
 });
 
 test("the unread dot is its own element beside the running-count badge", () => {
@@ -250,8 +216,8 @@ test("the desktop dock pin persists globally, suppresses only the outside-press 
   // Guarded reads and writes, like the other pi-web:polyforge-* keys.
   const mount = source.slice(source.indexOf("let pinned = false;"), source.indexOf("const togglePfDockPin"));
   assert.match(mount, /try \{\s*pinned = window\.localStorage\.getItem\(PF_DOCK_PINNED_KEY\) === "1";\s*\} catch/, "a guarded read; only \"1\" pins");
-  assert.match(mount, /if \(window\.matchMedia\(MOBILE_MEDIA_QUERY\)\.matches\) return;\s*setBgPanelOpen\(false\);\s*setPfPanelOpen\(true\);/,
-    "a pinned load reopens the dock on desktop only, closing bg-tasks first (shared slot)");
+  assert.match(mount, /if \(window\.matchMedia\(MOBILE_MEDIA_QUERY\)\.matches\) return;\s*setPfPanelOpen\(true\);/,
+    "a pinned load reopens the dock on desktop only");
   assert.match(source, /\}, \[\]\);\s*\n\s*const togglePfDockPin/, "the reopen is a one-shot mount effect");
   const toggle = source.slice(source.indexOf("const togglePfDockPin"), source.indexOf("}, [pfDockPinned]);"));
   assert.match(toggle, /try \{\s*if \(next\) window\.localStorage\.setItem\(PF_DOCK_PINNED_KEY, "1"\);\s*else window\.localStorage\.removeItem\(PF_DOCK_PINNED_KEY\);\s*\} catch/, "a guarded write");
@@ -264,4 +230,33 @@ test("the desktop dock pin persists globally, suppresses only the outside-press 
   // The dock stays an absolute overlay (no chat resize).
   const dock = source.slice(source.indexOf('id="polyforge-dock"'), source.indexOf('id="polyforge-dock"') + 400);
   assert.match(dock, /position: "absolute", top: 0, right: 0, bottom: 0/, "the dock stays an overlay");
+});
+
+test("the v1 bridge, its package probe and the old dock leave no reference behind (AC2)", async () => {
+  // The removal is the criterion (the ticket's own proof command reads the
+  // same roots): no source under app/, components/, hooks/ or lib/ names the
+  // third-party package, the bridge module or the retired panel.
+  const { readdirSync, readFileSync, statSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const files = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir)) {
+      const full = join(dir, entry);
+      if (statSync(full).isDirectory()) walk(full);
+      else if (/\.(ts|tsx|mjs)$/.test(entry)) files.push(full);
+    }
+  };
+  for (const rootDir of ["app", "components", "hooks", "lib"]) walk(join(process.cwd(), rootDir));
+  const banned = /pi-background-tasks|background-tasks-bridge|BackgroundTasksPanel/;
+  const hits = files.filter((file) => banned.test(readFileSync(file, "utf8")));
+  assert.deepEqual(hits, [], `old-bridge references remain: ${hits.map((f) => f.replace(process.cwd() + "/", "")).join(", ")}`);
+
+  // The retired dock's strings are gone from every locale (the notification's
+  // keys stay: AppShell's terminal notification keeps using them).
+  const retired = ["open", "close", "refresh", "loading", "unavailable", "empty", "kill", "killConfirm", "agentTask", "exitCode", "output", "outputTruncated", "selectTask", "resizeSheet"];
+  for (const [name, locale] of [["en", enLocale], ["zh-CN", zhCNLocale], ["zh-TW", zhTWLocale]]) {
+    for (const key of retired) {
+      assert.equal(Object.hasOwn(locale.messages, `bgTasks.${key}`), false, `${name} still carries the retired key bgTasks.${key}`);
+    }
+  }
 });
