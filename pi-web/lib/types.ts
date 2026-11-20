@@ -434,12 +434,14 @@ export interface SessionContext {
 }
 
 // ---------------------------------------------------------------------------
-// Background tasks (pi-background-tasks bridge)
+// Background tasks (the built-in executor's SSE payload; #172 kept the old
+// bridge's event names and snapshot shape, #173's client reads them as
+// change signals beside its own HTTP reads)
 // ---------------------------------------------------------------------------
 
 export type BgTaskStatus = "running" | "completed" | "failed" | "killed";
 
-/** Structural mirror of pi-background-tasks' BgTaskSnapshot (EventBus v1). */
+/** The SSE event payload of a built-in background task (the old bridge's shape). */
 export interface BgTaskSnapshot {
   id: string;
   name?: string;
@@ -475,11 +477,3 @@ export interface BackgroundTasksUpdateEvent {
 
 export type BackgroundTasksClientEvent = BackgroundTaskTerminalEvent | BackgroundTasksUpdateEvent;
 
-/** Bounded log tail returned by the logs route. */
-export interface BgTaskLogsResult {
-  text: string;
-  bytesRead: number;
-  truncated: boolean;
-  tail: boolean;
-  path?: string;
-}

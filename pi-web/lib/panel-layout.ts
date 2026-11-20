@@ -63,7 +63,8 @@ export function getPolyforgeMessagesListDefaultWidth(panelWidth: number): number
   );
 }
 
-// Mobile sheet heights (pi#120): the bottom sheets (Polyforge, bg-tasks)
+// Mobile sheet heights (pi#120): the bottom sheet (the Polyforge dock's; the
+// bg-tasks sheet retired with its dock, #173)
 // open at 62% of their container and resize by dragging the top edge,
 // clamped to [30%, 90%]. The dragged height persists as an integer
 // percentage; an absent, unparsable or out-of-range stored value reads as

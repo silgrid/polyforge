@@ -59,6 +59,8 @@ export interface BgTaskOutput {
   totalBytes: number;
   logPath: string;
   truncated: boolean;
+  /** Always true: the answer is a tail (the owner's ruling names the field). */
+  tail: true;
 }
 
 /**

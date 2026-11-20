@@ -67,8 +67,10 @@ export interface BgRuntimeSink {
 export interface BgTaskController {
   /** Starts a task; returns its id at once. Refused past the per-session cap or over the deletion gate. */
   run(sessionId: string, cwd: string, command: string): BgTaskInfo;
-  /** The session's tasks, one task when `taskId` names it; a task of another session reads as not found. */
+  /** The session's tasks in the live map, one task when `taskId` names it; a task of another session reads as not found. */
   status(sessionId: string, taskId?: string): BgTaskInfo[];
+  /** The session's every record, live map and persisted registry alike (the UI's list and history read; #173). Another session's tasks never appear. */
+  listAll(sessionId: string): BgTaskInfo[];
   /** The tail of a task's log with its byte range (AC2). */
   readOutput(sessionId: string, taskId: string, maxBytes?: number): BgTaskOutput;
   /** Stops the task's process group; idempotent (AC2). */
@@ -131,6 +133,37 @@ function taskDir(root: string, sessionId: string, taskId: string): string {
 
 function taskJsonPath(root: string, sessionId: string, taskId: string): string {
   return join(taskDir(root, sessionId, taskId), "task.json");
+}
+
+/**
+ * One persisted record, read session-scoped by construction (the path names the
+ * session): the registry is the single authority, so the reads a restart's UI
+ * needs fall back to it (#173). A record still saying `running` belongs to a
+ * process group nobody owns any more and reads as interrupted — exactly what
+ * recovery rewrites it to, applied on the read so a record recovery could not
+ * rewrite still presents the same truth.
+ */
+function readPersistedInfo(root: string, sessionId: string, taskId: string): BgTaskInfo | null {
+  let info: unknown;
+  try {
+    info = JSON.parse(readFileSync(taskJsonPath(root, sessionId, taskId), "utf8"));
+  } catch {
+    return null;
+  }
+  if (!isTaskInfo(info)) return null;
+  // The registry is the authority, but a record is only this session's own
+  // task when it says so: a record whose session or id is not exactly the
+  // one the URL named — a path that escaped its directory, a record another
+  // session owns — reads as not found (AC2; ownership before state, the
+  // same rule #172's cross-session probe taught).
+  if (info.sessionId !== sessionId || info.id !== taskId) return null;
+  if (info.status !== "running") return { ...info };
+  return { ...info, status: "interrupted", notified: true };
+}
+
+/** A task id the URL may name: one plain path segment, nothing that escapes. */
+function isSinglePathSegment(id: string): boolean {
+  return id.length > 0 && !id.includes("/") && !id.includes("\\") && id !== "." && id !== "..";
 }
 
 /** Atomic per-task record write: a temp file beside the target, renamed into place. */
@@ -221,10 +254,15 @@ export function createBgTaskController(deps: BgRuntimeDeps): BgTaskController {
 
   const find = (sessionId: string, taskId: string): InternalTask => {
     const task = tasks.get(taskId);
-    if (!task || task.info.sessionId !== sessionId) {
-      throw new Error(`Background task not found: ${taskId}`);
-    }
-    return task;
+    if (task && task.info.sessionId === sessionId) return task;
+    if (task) throw new Error(`Background task not found: ${taskId}`); // another session's id never falls through to a disk read
+    // The URL's task id is untrusted input: a decoded traversal
+    // (`..%2F…`) never reaches the disk (the trusted-boundary check; the
+    // record read below re-checks ownership beside it).
+    if (!isSinglePathSegment(taskId)) throw new Error(`Background task not found: ${taskId}`);
+    const persisted = readPersistedInfo(root, sessionId, taskId);
+    if (!persisted) throw new Error(`Background task not found: ${taskId}`);
+    return { info: persisted, supervisor: null, wakePending: false };
   };
 
   function emitUpdate(sessionId: string): void {
@@ -398,6 +436,24 @@ export function createBgTaskController(deps: BgRuntimeDeps): BgTaskController {
       return [{ ...find(sessionId, taskId).info }];
     },
 
+    listAll(sessionId) {
+      const byId = new Map<string, BgTaskInfo>();
+      let taskIds: string[];
+      try {
+        taskIds = readdirSync(join(root, sessionId));
+      } catch {
+        taskIds = [];
+      }
+      for (const taskId of taskIds) {
+        const persisted = readPersistedInfo(root, sessionId, taskId);
+        if (persisted) byId.set(persisted.id, persisted);
+      }
+      for (const task of tasks.values()) {
+        if (task.info.sessionId === sessionId) byId.set(task.info.id, { ...task.info });
+      }
+      return [...byId.values()].sort((a, b) => a.startedAt - b.startedAt);
+    },
+
     readOutput(sessionId, taskId, maxBytes) {
       const task = find(sessionId, taskId);
       let totalBytes = 0;
@@ -436,6 +492,7 @@ export function createBgTaskController(deps: BgRuntimeDeps): BgTaskController {
         totalBytes,
         logPath: task.info.logPath,
         truncated: startByte > 0,
+        tail: true,
       };
     },
 
