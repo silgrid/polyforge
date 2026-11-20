@@ -1,9 +1,5 @@
 /**
- * The settings rail (85a1b AC1; 85a4 removed the legacy Claude page): nine
- * new sections plus the one legacy-marked old Models page, in their settled
- * order. `legacy` marks the temporary Models page (owner ruling Q1 A): 85a3
- * deletes `legacy-models`, and everything that names it — this table, the
- * `legacy-models` selection key and SettingsPanel's mount — goes with it.
+ * The settings rail contains the unified model page; the former legacy Models page is removed.
  */
 export const SETTINGS_TABS = [
   { id: "general", labelKey: "settings.general" },
@@ -15,7 +11,6 @@ export const SETTINGS_TABS = [
   { id: "agents", labelKey: "common.agents" },
   { id: "plugins", labelKey: "common.plugins" },
   { id: "polyforge", labelKey: "polyforge.title" },
-  { id: "legacy-models", labelKey: "settings.tabLegacyModels", legacy: true },
 ] as const;
 
 export const SETTINGS_SECTION_VALUES = [
@@ -28,7 +23,6 @@ export const SETTINGS_SECTION_VALUES = [
   "agents",
   "plugins",
   "polyforge",
-  "legacy-models",
 ] as const;
 
 export type SettingsSection = (typeof SETTINGS_SECTION_VALUES)[number];
@@ -42,10 +36,8 @@ const STORAGE_KEY = "pi-web:settings-navigation";
 const PROJECT_SECTIONS = new Set<SettingsSection>(["agents", "plugins"]);
 
 /**
- * `models` keeps its spelling: it is the new Models concept page's id now,
- * and the old Models page lives under `legacy-models`. The `claude` key of
- * the deleted Claude page is gone with the page (85a4, as the 85a1b comment
- * promised): a stored value it leaves reads as unknown and lands on 常规.
+ * `models` is the unified model page. A historical `models` selection is
+ * read once and then saved under the same page key.
  */
 
 /** Whether a section is unavailable until a project is open. */
@@ -98,10 +90,7 @@ function readState(storage: StorageLike): SettingsNavigationState {
 }
 
 function selectionKey(section: SettingsDetailSection, cwd?: string | null): string | null {
-  // The legacy Models page (85a1b) keeps the historical global "models"
-  // selection key, so a stored provider/model selection survives the temporary
-  // id; removed with 85a3 (删除旧版模型页时一并移除).
-  if (section === "legacy-models") return "models";
+  if (section === "models") return "models";
   if (cwd) return JSON.stringify([section, cwd]);
   // MCP works without a project; its selection then lives under the bare name,
   // which no project key (always an array) can collide with. Skills likewise

@@ -2155,10 +2155,8 @@ export function AppShell() {
       />
       <div style={{ padding: "8px", flexShrink: 0, display: "flex", justifyContent: "space-between", gap: 4 }}>
         {([
-          // The sidebar's Models entry keeps opening the models.json editor, the
-          // legacy-marked page (85a1b): the section id `models` is the new
-          // concept page's now, and its content is 85a3's.
-          ["legacy-models", translate("common.models")],
+          // The sidebar opens the unified Models page.
+          ["models", translate("common.models")],
           ["skills", translate("common.skills")],
         ] as const).map(([section, label]) => {
           const disabled = settingsSectionRequiresProject(section) && !projectTrustCwd;

@@ -310,7 +310,8 @@ components/
   ChatMinimap.tsx     scroll minimap alongside the message list
   MarkdownBody.tsx    markdown renderer
   SvgBlock.tsx             a ```svg fence in chat and the markdown file preview: preview only as an <img> data URL, source toggle, zoom, download (MermaidBlock's pieces)
-  ModelsConfig.tsx    modal for editing models.json (opened from sidebar bottom); 85a2 (polyforge#142) removed the sign-in, the API-key entry and the Add-provider picker (they live on Account › pi now — a managed provider's detail shows the moved notice), keeping the models, the chat switches and the custom provider rows until 85a3
+  HarnessModelSettings.tsx new unified Models page: default model, provider-grouped capability table, and the Pi provider/editor area
+  ModelsConfig.tsx    provider definition editor used inside HarnessModelSettings
   AccountSettings.tsx the Settings › 账号 page (85a2, polyforge#142): the left column's harness list over the account route's read — the interactive claude card, the per-Cell daemon-step rows (状态、来源含「共享 default」、配置根、凭据是否跟随配置目录、步骤能否使用及原因; the keychain hint when the capability says the credentials do not follow), the credential form and the one-shot login terminals of the declared login commands
   PiAccountLogin.tsx pi's sign-in on Account › pi (85a2): the moved OAuth login/logout flows, the API-key form and the Add-provider picker (built-in providers only; a custom models.json definition stays on the legacy Models tab until 85a3)
   EnabledModelsSection.tsx  model switches inside ModelsConfig, backed by enabledModels
