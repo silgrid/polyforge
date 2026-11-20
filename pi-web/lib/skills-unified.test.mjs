@@ -117,6 +117,23 @@ test("pi's global and path scopes are the user group; project scope is the proje
   assert.deepEqual(projectNames, ["claude-proj-skill", "shared-proj-skill"]);
 });
 
+test("the same real file in different scopes stays two rows, each keeping its own scope (Q2 B, review r1#3)", () => {
+  // pi lists the file from a user-declared settings path, claude lists the
+  // same file as a project skill: Q2 B merges only within one scope, so the
+  // claude side must keep the project layer its switch writes to.
+  const rows = mergeSkillListings(
+    [piSide("shared-skill", sharedUser, "user")],
+    { entries: [{ name: "shared-skill", path: sharedUser, source: "project" }] },
+  );
+  assert.equal(rows.length, 2, "cross-scope listings never merge into one row");
+  assert.deepEqual(rows.map((row) => row.scope).sort(), ["project", "user"]);
+  const claudeRow = rows.find((row) => row.claude);
+  assert.equal(claudeRow.scope, "project", "the claude row keeps its own layer, so its switch writes .claude/settings.local.json");
+  assert.deepEqual(claudeRow.harnesses, ["claude"]);
+  assert.deepEqual(rows.find((row) => row.pi).harnesses, ["pi"]);
+  assert.notEqual(claudeRow.key, rows.find((row) => row.pi).key, "the two rows keep distinct keys");
+});
+
 test("claude's stored override state rides its side as the native word; a pi-only row carries none", () => {
   const rows = mergeSkillListings(
     [piSide("shared-skill", sharedUser, "user"), piSide("pi-only-skill", piOnly, "user")],
