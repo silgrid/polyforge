@@ -169,7 +169,7 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount }: { cwd: str
       </section>
       <section aria-label="pi">
         <h3>pi</h3>
-        <ModelsConfig embedded cwd={cwd} onClose={onClose ?? (() => {})} onOpenAccount={onOpenAccount} />
+        <ModelsConfig embedded cwd={cwd} onClose={onClose ?? (() => {})} onOpenAccount={onOpenAccount} enabledModels={enabled} />
       </section>
       </ConfigDetail>
       </div>

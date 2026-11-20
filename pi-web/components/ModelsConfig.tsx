@@ -53,7 +53,6 @@ import {
   EnabledModelsBanner,
   EnabledModelsProviderSwitch,
   EnabledModelsProviderSwitchNote,
-  useEnabledModels,
   type EnabledModelsController,
 } from "./EnabledModelsSection";
 import { providerBadgeLabel } from "./enabled-models-helpers";
@@ -1387,14 +1386,17 @@ export function ProviderAuthMovedNotice() {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAccount }: {
+export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAccount, enabledModels }: {
   onClose: () => void; embedded?: boolean; cwd?: string | null; onOpenAccount?: () => void;
+  /** The page's one shared controller — the table and this editor must never
+ * hold two views of pi's enabledModels, or a Save's resync would re-enable
+ * what the table just switched off (review r1#1). */
+  enabledModels: EnabledModelsController;
 }) {
   const { t } = useI18n();
   const { closeDetail, openDetail } = useConfigDetailNavigation();
   // `enabledModels` lives in pi's settings, not models.json, so these switches
   // apply immediately instead of waiting for this panel's Save button.
-  const enabledModels = useEnabledModels(cwd);
   const [config, setConfig] = useState<ModelsJson>({ providers: {} });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
