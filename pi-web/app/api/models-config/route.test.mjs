@@ -1,3 +1,4 @@
+// carries: app/api/models-config/*
 import "#test-env";
 import assert from "node:assert/strict";
 import { lstat, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
@@ -103,6 +104,31 @@ test("PUT type-checks provider/model fields like the SDK's own loader (review r1
   }
   // An invalid payload never replaces the file on disk.
   assert.deepEqual(JSON.parse(await readFile(modelsPath, "utf8")), { providers: {} });
+});
+
+test("a save through the adapter gate lands in native models.json and keeps settings.json untouched (85a3-2 r1#2)", async () => {
+  await writeFile(modelsPath, JSON.stringify({ providers: { keep: { baseUrl: "https://keep.example/v1", models: [{ id: "a" }] } } }));
+  const settingsPath = join(testAgentDir, "settings.json");
+  await writeFile(settingsPath, JSON.stringify({ defaultModel: "keep-default" }));
+  const body = { providers: { gateway: { baseUrl: "https://gw.example/v1", models: [{ id: "m1" }] } } };
+  const response = await PUT(put(body));
+  assert.equal(response.status, 200, JSON.stringify(await response.json()));
+  assert.deepEqual(JSON.parse(await readFile(modelsPath, "utf8")), body);
+  assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), { defaultModel: "keep-default" });
+});
+
+test("an adapter refusal answers 409 and keeps the file bytes (85a3-2 r1#2)", async () => {
+  // pi cannot read this file (providers is not an object), so the adapter's
+  // version gate refuses before anything is written.
+  const original = '{ "providers": [1, 2] }';
+  await writeFile(modelsPath, original);
+  const response = await PUT(put({ providers: {} }));
+  assert.equal(response.status, 409);
+  const body = await response.json();
+  assert.match(body.error, /models\.json/, JSON.stringify(body));
+  assert.equal(await readFile(modelsPath, "utf8"), original);
+  // The next tests write their own drafts; leave a file pi can read.
+  await writeFile(modelsPath, JSON.stringify({ providers: {} }));
 });
 
 test("PUT accepts a provider shaped like the SDK's supported configuration (review r1)", async () => {
