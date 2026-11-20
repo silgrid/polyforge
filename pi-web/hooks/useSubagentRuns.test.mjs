@@ -1,4 +1,4 @@
-// carries: hooks/useSubagentRuns.ts, app/api/agent/*/subagent-runs/*
+// carries: hooks/useSubagentRuns.ts, lib/subagent-runs-view.ts
 import "#test-env";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";

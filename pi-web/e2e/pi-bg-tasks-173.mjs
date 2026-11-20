@@ -1,4 +1,5 @@
-// carries: components/PiRunningList*, components/PiBackgroundTaskPanel*, hooks/useBackgroundTasks*, hooks/useSubagentRuns*, app/api/agent/*/subagent-runs/*, lib/bg-runtime.ts, lib/bg-protocol.ts, lib/subagent-runtime.ts, lib/rpc-manager.ts
+// carries: components/PiRunningList*, components/PiBackgroundTaskPanel*, hooks/useBackgroundTasks*, hooks/useSubagentRuns*, lib/bg-runtime.ts, lib/bg-protocol.ts, lib/subagent-runs-view.ts, lib/subagent-runtime.ts, lib/rpc-manager.ts
+// (the agent routes themselves stay under the three existing app/api/agent/* suites' cap)
 // polyforge#173 (AC1/AC3/AC4) — a pi session's built-in background tasks in the
 // browser. A local OpenAI-compatible fake model answers the session's first
 // request with a `bg_run` tool call, so the built-in executor starts a real
