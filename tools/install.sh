@@ -88,9 +88,13 @@
 #      own field (make dev-build stamps internal/version.Commit;
 #      `pf --json version` and `pf doctor`'s `pf build` row report it).
 #      The green commit's diff latest-release-tag..green-commit must
-#      not touch the AIHub-side paths of tools/aihub-paths.conf (the
-#      two AIHubs do not follow dev builds: such a set needs a formal
-#      release) and the machine must carry the build tools (go, make,
+#      not touch the client-server interface paths of
+#      tools/aihub-interface-paths.conf (the two AIHubs do not follow
+#      dev builds: a changed wire contract needs a formal release);
+#      the other AIHub-side paths of tools/aihub-paths.conf (the
+#      server's insides, its SQL, the deploy tree) pass with ONE WARN
+#      naming every hit — those changes are not deployed and wait for
+#      a formal release. The machine must carry the build tools (go, make,
 #      node of the checkout's .nvmrc major, npm — checked and reported
 #      together with the rest). prepare clones the full history, runs
 #      the checks, builds pf locally (make -C <clone> dev-build), proves
@@ -437,11 +441,17 @@ if [ -n "$DEV" ]; then
   # the dev version: the next patch as a SemVer pre-release —
   # release-shaped (the downgrade guard compares it), never +metadata
   DEVVER="v$VMAJ.$VMIN.$((VPATCH + 1))-dev.$N"
-  # the AIHub-side preflight: the two AIHubs do not follow dev builds,
-  # so a green commit whose release-tag..green diff touches any path of
-  # the list needs a formal release. The list is the repository's own
-  # file, read from the green commit's tree (the same file the tests
-  # read — one list, never a second copy).
+  # the AIHub-side preflight, graded (polyforge#188): the two AIHubs do
+  # not follow dev builds. The client-server interface list
+  # (tools/aihub-interface-paths.conf) refuses on its own — a new local
+  # pf must never talk to the old server over a changed wire contract;
+  # every other AIHub-side path of the total list
+  # (tools/aihub-paths.conf) — the server's insides, its SQL, the
+  # deploy tree — passes with ONE WARN naming every hit: those changes
+  # are the two AIHubs' own business, they stay undeployed and wait
+  # for a formal release. Both lists are the repository's own files,
+  # read from the green commit's tree (the same files the tests read —
+  # one list each, never a second copy).
   aihub_side_path() {
     # <conf> <changed path>: an entry ending in /** covers the directory
     # recursively; any other entry is one exact path
@@ -459,15 +469,23 @@ if [ -n "$DEV" ]; then
   # closed), not hand an empty list to the loop
   git -C "$SRC" diff --name-only "$TAGCOMMIT" "$GCOMMIT" > "$TMP/aihub-changed" \
     || prep_fail "cannot diff $VER..$GNAME in the clone for the AIHub-side preflight"
+  IFACE_HIT=""
   AIHUB_HIT=""
   while IFS= read -r ch; do
     [ -n "$ch" ] || continue
+    if aihub_side_path "$SRC/tools/aihub-interface-paths.conf" "$ch"; then
+      IFACE_HIT="$IFACE_HIT $ch"
+      continue
+    fi
     if aihub_side_path "$SRC/tools/aihub-paths.conf" "$ch"; then
-      AIHUB_HIT="$ch"
-      break
+      AIHUB_HIT="$AIHUB_HIT $ch"
     fi
   done < "$TMP/aihub-changed"
-  [ -z "$AIHUB_HIT" ] || prep_fail "the green tag $GNAME carries AIHub-side changes ($AIHUB_HIT, matched against tools/aihub-paths.conf): the two AIHubs do not follow dev builds — this set needs a formal release"
+  [ -z "$IFACE_HIT" ] \
+    || prep_fail "the green tag $GNAME carries client-server interface changes ($IFACE_HIT, matched against tools/aihub-interface-paths.conf): the two AIHubs do not follow dev builds — this set needs a formal release"
+  if [ -n "$AIHUB_HIT" ]; then
+    echo "   WARN: the green tag $GNAME carries AIHub-side changes this machine's pf does not need ($AIHUB_HIT, matched against tools/aihub-paths.conf): the two AIHubs stay on their current formal release (the newest this installer knows is $VER) — these server-side changes and migrations are not deployed, they wait for the next formal release, and no effect of them is usable from this machine."
+  fi
   # the node major the checkout pins
   NODEWANT=$(cat "$SRC/.nvmrc" 2>/dev/null) || prep_fail "the green commit's tree carries no .nvmrc to pin the node major"
   NODEWANT=$(printf '%s' "$NODEWANT" | tr -d '[:space:]')
