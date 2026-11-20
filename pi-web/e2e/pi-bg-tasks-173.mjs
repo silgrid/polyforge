@@ -42,6 +42,7 @@ const home = join(scratch, "home");
 const agentDir = join(home, ".pi", "agent");
 const project = join(scratch, "project");
 mkdirSync(project, { recursive: true });
+mkdirSync(agentDir, { recursive: true });
 
 // ---- fake model ------------------------------------------------------------
 // `scripted` holds one reply per model request, in order (the session's own
