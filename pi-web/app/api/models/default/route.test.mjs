@@ -71,7 +71,7 @@ const { PUT, GET } = await jiti.import("./route.ts");
 // /api/models's allowed roots come from sessions and explicit additions
 // (PI_WEB_ALLOWED_ROOT_PREFIXES is the agent-new guard's own prefix list),
 // so the fixture project joins them the way the models route's tests do.
-const { allowFileRoot } = await jiti.import("../../../lib/file-access.ts");
+const { allowFileRoot } = await jiti.import("../../../../lib/file-access.ts");
 allowFileRoot(project);
 
 function call(body, method = "PUT") {
