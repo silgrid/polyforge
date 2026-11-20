@@ -61,8 +61,8 @@ func TestWorkstationSeed(t *testing.T) {
 		if !regexp.MustCompile(`(?m)^COPY --from=node /usr/local/ /usr/local/$`).MatchString(final) {
 			t.Fatal("polyforge#162: the final layer must carry Node (COPY --from=node /usr/local/ /usr/local/): Pi Web and the two harness CLIs run on it, and the workstation boots without installing anything")
 		}
-		if !regexp.MustCompile(`(?m)^COPY --from=go /out/pf /usr/local/bin/pf$`).MatchString(final) {
-			t.Fatal("polyforge#162: the base pf must still be /usr/local/bin/pf (the bootstrap that runs supervise)")
+		if !regexp.MustCompile(`(?m)^COPY --from=go /out/pf /usr/local/libexec/polyforge/pf$`).MatchString(final) {
+			t.Fatal("polyforge#175: the base pf lives at /usr/local/libexec/polyforge/pf — the bootstrap the entry point execs by absolute path, never a PATH lookup")
 		}
 	})
 
