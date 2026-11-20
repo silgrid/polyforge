@@ -32,6 +32,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/api"
@@ -117,6 +118,13 @@ type Host struct {
 	// drain is the Host-wide upgrade drain state (upgradedrain.go):
 	// `pf ops drain --upgrade` sets it and every Cell refuses new work.
 	drain *upgradeDrain
+
+	// restartForUpgrade records the restart-for-an-upgrade ask
+	// (polyforge#190): POST /ops/restart sets it and Run ends in
+	// errRestartForUpgrade — the exit 75 the container supervisor
+	// relaunches AT ONCE (polyforge#175). Process-local by design: a
+	// fresh daemon never carries it over.
+	restartForUpgrade atomic.Bool
 }
 
 // NewHost assembles every Cell of the set. A default Cell that cannot be
@@ -563,6 +571,10 @@ func (h *Host) handler() http.Handler {
 	mux.HandleFunc("GET /status", h.statusRoute)
 	mux.HandleFunc("POST /ops/config", h.opsConfigRoute)
 	mux.HandleFunc("POST /ops/drain", h.opsDrainRoute)
+	// the restart-for-an-upgrade ask (polyforge#190): the upgrade
+	// orchestration's trigger — the same graceful shutdown /shutdown
+	// runs, ending in the exit 75 the supervisor relaunches AT ONCE.
+	mux.HandleFunc("POST /ops/restart", h.opsRestartRoute)
 	mux.HandleFunc("POST /shutdown", h.shutdownRoute)
 	mux.HandleFunc("/aihub/{path...}", h.proxyRoute)
 	h.lifecycleRoutes(mux)
