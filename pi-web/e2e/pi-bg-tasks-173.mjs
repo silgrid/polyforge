@@ -293,11 +293,16 @@ try {
   await h.close().catch(() => {});
   rmSync(join(root, distDir, "dev/lock"), { force: true });
   if (failures.length > 0) {
-    process.exitCode = 1;
     console.log(`${failures.length} scenario(s) failed`);
   } else {
     // The suite's own marker: only a run with no failures and no browser
     // errors reaches it.
     console.log(`PASS ${SUITE}`);
   }
+  // The fake model's listening socket holds the process open; the suite ends here.
+  process.off("SIGINT", interrupt);
+  process.off("SIGTERM", interrupt);
+  model.closeAllConnections?.();
+  await new Promise((resolve) => model.close(resolve));
+  process.exit(failures.length > 0 || process.exitCode ? 1 : 0);
 }
