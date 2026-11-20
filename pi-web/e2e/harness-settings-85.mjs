@@ -171,24 +171,23 @@ async function mockAdapterApis(context) {
 
 const TABS = [
   "General", "Account", "Models", "Permissions", "Skills", "MCP",
-  "Sub-agents", "Plugins", "Polyforge", "Models (legacy)",
+  "Sub-agents", "Plugins", "Polyforge",
 ];
 
-/** A label as an anchored regex, its punctuation escaped (the legacy labels carry parens). */
 const labelRe = (label) => new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
 
 const T = {
-  S1: "S85-01: Settings shows 9 new tabs plus the legacy-marked Models one, in the settled order",
+  S1: "S85-01: Settings shows the unified model page in the settled order",
   S2: "S85-02: General is a left-column layout whose three items switch the detail pane",
   S3: "S85-03: a phone walks General as list → detail → back",
-  S4: "S85-04: the account / models placeholders open; the permission page is real",
-  S5: "S85-05: the legacy Models page stays reachable and working",
+  S4: "S85-04: the account / unified model pages open; the permission page is real",
+  S5: "S85-05: the unified Models page shows the model table and Pi editor",
   S6: "S85-06: the environment pane lists only variable names, grouped per harness",
   S7: "S85-07: effective values carry the Inferred mark and their source; native diagnostics are a collapsed block per harness",
   S8: "S85-08: stored old navigation values land on the new pages",
   S9: "S85-09: a failed harness-list read is a visible reason in both panes, never a contradictory empty registry",
   S10: "S85-10: the account tab lists the harnesses, shows the interactive card and the per-Cell rows with every field, and never a credential value",
-  S11: "S85-11: pi's sign-in lives only on Account › pi — the legacy Models tab has no login, API-key entry or Add-provider picker, and the never-offered Anthropic subscription appears nowhere",
+  S11: "S85-11: pi sign-in lives on Account › pi and the unified Models page has no duplicate login form",
   S12: "S85-12: the account page's one-shot login terminal attaches and streams the declared command's output — the real login path a human would walk (review r1#1)",
   S16: "S85-16: the permission page's left column is 审批模式 / 沙箱 / 项目信任 / 规则, its approval pane unified and claude-sectioned",
   S17: "S85-17: the unified approval write reaches claude's native mode (Q1 A), the extra values its own radio",
@@ -277,13 +276,11 @@ try {
       }
       assert.ok(await tab(page, name).isDisabled(), `${name} should need a project`);
     }
-    for (const name of ["General", "Account", "Models", "Permissions", "MCP", "Polyforge", "Models (legacy)"]) {
+    for (const name of ["General", "Account", "Models", "Permissions", "MCP", "Polyforge"]) {
       assert.ok(!(await tab(page, name).isDisabled()), `${name} should open without a project`);
     }
-    // The one legacy tab is marked as such in its own label; the old Claude
-    // tab is gone (85a4), its values living on the permission page.
-    assert.match(labels[9], /\(legacy\)/, "the old Models tab is not marked legacy");
-    assert.ok(!labels.some((label) => /Claude \(legacy\)/.test(label)), "the old Claude tab is still in the rail");
+    assert.equal(labels.length, 9, "the unified model page is duplicated in the rail");
+    assert.ok(!labels.some((label) => /legacy/i.test(label)), "a legacy Models tab remains in the rail");
     await page.context().close();
   });
 
@@ -339,19 +336,18 @@ try {
     await page.context().close();
   });
 
-  // S85-04 — AC1: the models placeholder opens (85a2 filled the account
-  // tab in, 85a4 the permission page); the permission page is real, its left
-  // column the settled four.
-  await part("S4", "placeholders", async () => {
+  // S85-04 — AC1: the unified Models page is real; the permission page is real.
+  await part("S4", "model page", async () => {
     const page = await newPage();
     await openSettings(page);
-    for (const [name, id] of [["Models", "models"]]) {
-      await tab(page, new RegExp(`^${name}$`)).click({ timeout: ACTION_MS });
-      const host = sectionHost(page, id);
-      await host.waitFor({ state: "visible", timeout: ACTION_MS });
-      assert.match(await host.innerText(), /Placeholder/i, `the ${name} page shows no placeholder text`);
-    }
-    // The permission page is 85a4's: its left column is the settled four.
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    const host = sectionHost(page, "models");
+    await host.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
+    const modelText = await host.innerText();
+    assert.ok(modelText.includes("默认模型"), "the unified model page lacks the default model");
+    assert.ok(modelText.includes("模型清单"), "the unified model page lacks the model list");
+    assert.ok(modelText.includes("聊天可用"), "the unified model page lacks the chat availability column");
+    assert.ok(modelText.includes("pi"), "the unified model page lacks the pi editor");
     await tab(page, /^Permissions$/).click({ timeout: ACTION_MS });
     const permission = sectionHost(page, "permission");
     await permission.locator(".config-sidebar-item").first().waitFor({ state: "visible", timeout: ACTION_MS });
@@ -440,20 +436,13 @@ try {
     };
     await page.context().route(/\/api\/auth\/providers/, (route) => route.fulfill({ json: PROVIDERS }));
     await openSettings(page);
-    // the legacy Models tab: the logged-in provider row opens the moved notice
-    await tab(page, /^Models \(legacy\)$/).click({ timeout: ACTION_MS });
-    const models = sectionHost(page, "legacy-models");
-    await models.locator(".config-sidebar-item").filter({ hasText: "Google" }).first().click({ timeout: ACTION_MS });
-    // the heading renders in the detail header's uppercase style
-    const movedText = await waitFor(async () => {
-      const text = await models.innerText();
-      return /sign-in has moved/i.test(text) ? text : false;
-    }, ACTION_MS, "the legacy tab never showed the moved notice");
-    // the real UI words (review r1#3): the button says Login / Re-login —
-    // "Log in" never appears, an assertion on it pinned nothing
-    assert.ok(!movedText.includes("Login") && !movedText.includes("Re-login"), "the legacy tab still offers a login");
-    assert.ok(!movedText.includes("Add provider"), "the legacy tab still offers the picker");
-    assert.equal(await models.locator('input[type="password"]').count(), 0, "the legacy tab still offers the API-key entry");
+    // The unified Models page owns the model table and Pi editor, while login
+    // remains on Account › pi; no duplicate legacy page exists.
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    const models = sectionHost(page, "models");
+    await models.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
+    assert.equal(await models.locator('input[type="password"]').count(), 0, "the Models page exposes a duplicate API-key form");
+    assert.equal(await models.getByRole("button", { name: "Add provider", exact: true }).count(), 0, "the Models page exposes a duplicate Add provider action");
     // Account › pi: the rows, the Add provider button, and no Anthropic
     // subscription anywhere
     await tab(page, /^Account$/).click({ timeout: ACTION_MS });
@@ -514,17 +503,16 @@ try {
     await page.context().close();
   });
 
-  // S85-05 — AC1: the legacy Models page stays reachable and working (the
-  // legacy Claude page is deleted by 85a4; S1 pins its absence from the rail).
-  await part("S5", "legacy pages", async () => {
+  // S85-05 — AC1: the unified Models page keeps the provider editor and table together.
+  await part("S5", "unified model page", async () => {
     const page = await newPage();
     await openSettings(page);
-    await tab(page, /^Models \(legacy\)$/).click({ timeout: ACTION_MS });
-    const models = sectionHost(page, "legacy-models");
-    // 85a2 moved the Add-provider picker to Account › pi: the legacy tab
-    // renders its provider list without one
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    const models = sectionHost(page, "models");
+    await models.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
     await models.locator(".config-sidebar-list").first().waitFor({ state: "visible", timeout: COLD_MS });
-    assert.equal(await models.getByRole("button", { name: "Add provider", exact: true }).count(), 0, "the legacy Models tab still offers Add provider");
+    assert.ok((await models.innerText()).includes("模型清单"), "the unified model table is missing");
+    assert.equal(await models.getByRole("button", { name: "Add provider", exact: true }).count(), 0, "the unified page exposes a duplicate Add provider action");
     await page.context().close();
   });
 
