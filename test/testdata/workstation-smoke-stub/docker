@@ -52,6 +52,31 @@ if [ "${1:-}" = exec ]; then
 		fi
 		exit 1
 		;;
+	# the first-boot pass (polyforge#176): the record, the default
+	# Cell's server, the key's authentication, the bootstrap key's
+	# absence and the local AIHub's answer — each answered from the
+	# scenario, each fail-flag its own file
+	*first-boot.json*)
+		cat "$dir/first-boot.json"
+		;;
+	*"config get server"*)
+		cat "$dir/cell-server.txt"
+		;;
+	*"pf recall"*)
+		if [ -f "$dir/recall-fails" ]; then
+			exit 1
+		fi
+		exit 0
+		;;
+	*bootstrap-admin.key*)
+		if [ -f "$dir/bootstrap-key-exists" ]; then
+			exit 0
+		fi
+		exit 1
+		;;
+	*127.0.0.1:8420*)
+		exit 0
+		;;
 	*"[s]tart:lan"*)
 		# the pi-web process: the listing pipeline asks for a pid, the
 		# poll only asks whether one exists

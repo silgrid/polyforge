@@ -1,10 +1,13 @@
 #!/bin/sh
 # dist/workstation/smoke.sh — the workstation acceptance driver
-# (polyforge#161, 84-image). Three subcommands, each printing every
+# (polyforge#161, 84-image). Four subcommands, each printing every
 # measured value and exiting non-zero on the first miss:
 #
 #   sh dist/workstation/smoke.sh boot --no-aihub    # the minimal boot (AC1)
 #   sh dist/workstation/smoke.sh boot --with-aihub  # + AIHub/Pi Web checks (AC1)
+#   sh dist/workstation/smoke.sh first-boot         # the 84-components-C boot: identity,
+#                                                   #   default Cell, real auth, restart (AC1)
+#   sh dist/workstation/smoke.sh first-boot --external  # + zero remote writes
 #   sh dist/workstation/smoke.sh env                # Pi Web parameters (AC3)
 #   sh dist/workstation/smoke.sh podman-verify      # verification via podman (AC2)
 #
@@ -357,13 +360,190 @@ PYEOF
 	say "podman-verify: PASS"
 }
 
+# cmd_first_boot [--external] — the 84-components-C acceptance
+# (polyforge#176): a first boot on EMPTY volumes (the project's volumes
+# are reset first — this subcommand owns its run), then the record, the
+# default Cell, the key's REAL authentication (Q3: keyReady only says
+# issued-and-written; the proof is `pf recall` inside the container,
+# against the local AIHub the default profile runs), the absence of a
+# bootstrap-admin key (the identity predates the server, so the
+# server's own bootstrap has nothing left to seed), and — after a
+# restart with the volumes intact — the first choice stands: the
+# record is byte-identical and the same key still authenticates (no
+# reissue). The --external pass points the default Cell at a counting
+# stub server instead: the record says external, the stub stays at
+# zero requests (nothing is created on the remote), and a restart with
+# a DIFFERENT server env changes nothing (the choice is made once).
+cmd_first_boot() {
+	case "${1:-}" in
+	"") external=no ;;
+	--external) external=yes ;;
+	*) die "first-boot takes no flags (or --external)" ;;
+	esac
+	require_engine
+	profile=aihub
+	if [ "$external" = yes ]; then
+		stub_port="${WORKSTATION_SMOKE_STUB_PORT:-38421}"
+		hits=$(mktemp)
+		stub_script=$(mktemp)
+		cat >"$stub_script" <<'PYEOF'
+import http.server, sys
+port, hits = int(sys.argv[1]), sys.argv[2]
+class Count(http.server.BaseHTTPRequestHandler):
+    def note(self):
+        with open(hits, "a") as f:
+            f.write(self.command + " " + self.path + "\n")
+        self.send_response(401)
+        self.end_headers()
+    do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = note
+http.server.HTTPServer(("0.0.0.0", port), Count).serve_forever()
+PYEOF
+		python3 "$stub_script" "$stub_port" "$hits" &
+		stub_pid=$!
+		trap 'kill "$stub_pid" 2>/dev/null' EXIT
+		poll_until "the stub server to listen" 30 \
+			sh -c "curl -s -o /dev/null http://127.0.0.1:$stub_port/" || {
+			kill "$stub_pid" 2>/dev/null
+			die "the stub server never listened on $stub_port (set WORKSTATION_SMOKE_STUB_PORT to a free port)"
+		}
+		: >"$hits"  # the listen probe was ours, not the container's
+		override=$(mktemp)
+		cat >"$override" <<'YEOF'
+services:
+  workstation:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+YEOF
+		export WORKSTATION_AIHUB_SERVER="http://host.docker.internal:$stub_port"
+		export WORKSTATION_AIHUB_KEY="smoke-external-key"
+		compose_up="docker compose -f $compose_file -f $override --profile $profile"
+	else
+		compose_up="compose --profile $profile"
+	fi
+
+	say "first-boot: resetting the volumes and starting the $profile profile"
+	compose --profile "$profile" down -v >/dev/null 2>&1 || true
+	$compose_up build >/dev/null
+	$compose_up up -d >/dev/null
+	cid=$($compose_up ps -q workstation)
+	[ -n "$cid" ] || die "no workstation container was created for profile $profile"
+	poll_until "the workstation container to run" 120 \
+		sh -c "docker inspect -f '{{.State.Running}}' '$cid' | grep -q true"
+	poll_until "pf supervise to run inside" 120 \
+		docker exec "$cid" sh -c 'ps -e -o args= | grep -q "[p]f supervise"'
+
+	record_of() {
+		docker exec "$cid" cat /root/.local/share/polyforge/workstation/first-boot.json
+	}
+	cell_server() {
+		docker exec "$cid" pf config get server 2>/dev/null || true
+	}
+	check_record() {
+		what=$1
+		fbj=$(record_of)
+		printf 'smoke: first-boot.json (%s) = %s\n' "$what" "$fbj"
+		printf '%s' "$fbj" | python3 -c 'import json,sys
+wants = {"local": ("local", True), "external": ("external", False)}
+mode, want_user_ready = wants[sys.argv[1]]
+d = json.load(sys.stdin)
+assert d.get("phase") == "done", "the phase is %r, want done" % d.get("phase")
+assert d.get("mode") == mode, "the mode is %r, want %s" % (d.get("mode"), mode)
+assert d.get("keyReady") is True, "keyReady must be true after the boot"
+assert d.get("userReady") is want_user_ready, "userReady must be %s in %s mode" % (want_user_ready, mode)
+assert d.get("defaultCell") == "default", "defaultCell must be default"
+' "$mode" || die "the first-boot record is not a completed $mode boot (see the record above)"
+	}
+
+	if [ "$external" = yes ]; then
+		mode=external
+	else
+		mode=local
+		# the local AIHub answers before the key's proof runs
+		poll_until "the local AIHub to answer inside" 300 \
+			docker exec "$cid" sh -c 'curl -s -o /dev/null http://127.0.0.1:8420/api/v1/memories'
+	fi
+	check_record "$mode boot"
+
+	cell=$(cell_server)
+	printf 'smoke: default Cell server = %s\n' "${cell:-<unset>}"
+	case "$cell" in
+	*127.0.0.1:8420*)
+		[ "$external" = no ] || die "the external boot's default Cell must point at the given server, not the local one"
+		;;
+	*host.docker.internal:$stub_port*)
+		[ "$external" = yes ] || die "the local boot's default Cell must point at the local AIHub"
+		;;
+	*) die "the default Cell does not point where the boot decided: $cell" ;;
+	esac
+
+	if [ "$external" = no ]; then
+		# Q3: the key's REAL authentication is the proof — keyReady only
+		# says issued-and-written. The recall also exercises the
+		# /workspace mapping (the project is validated against it).
+		docker exec -w /workspace "$cid" pf recall --project workstation first-boot-probe >/dev/null 2>&1 ||
+			die "the default Cell's key does not authenticate against the local AIHub (pf recall inside failed) — the workstation project or the /workspace mapping is not usable"
+		say "the first-boot key authenticates (pf recall inside, via /workspace)"
+		# the key is the daily user's, never the bootstrap admin's: the
+		# identity predates the server, so the server's own fresh-install
+		# bootstrap (usr_root + bootstrap-admin.key) has nothing to seed
+		if docker exec "$cid" test -e /var/lib/polyforge/aihub/bootstrap-admin.key; then
+			die "bootstrap-admin.key exists — the identity must be established before the server starts, leaving the server's bootstrap nothing to seed"
+		fi
+		say "no bootstrap-admin key (the identity predates the server)"
+	else
+		n=$(wc -l <"$hits" | tr -d ' ')
+		[ "$n" = 0 ] || die "the external mode made $n remote request(s) — it must create nothing on the remote"
+		say "the stub server saw 0 requests (nothing created on the remote)"
+	fi
+
+	# the restart, volumes intact: the first choice stands — the record
+	# is byte-identical (a completed boot skips itself) and the same
+	# key still authenticates (no reissue). The external restart passes
+	# a DIFFERENT server env: the choice was made once.
+	say "first-boot: restarting with the volumes intact"
+	first_record=$(record_of)
+	first_cell=$(cell_server)
+	$compose_up down >/dev/null
+	if [ "$external" = yes ]; then
+		export WORKSTATION_AIHUB_SERVER="http://host.docker.internal:1/other-choice"
+	fi
+	$compose_up up -d >/dev/null
+	cid=$($compose_up ps -q workstation)
+	[ -n "$cid" ] || die "no workstation container was created for the restart"
+	poll_until "pf supervise to run inside (restart)" 120 \
+		docker exec "$cid" sh -c 'ps -e -o args= | grep -q "[p]f supervise"'
+	[ "$(record_of)" = "$first_record" ] ||
+		die "the record changed after the restart — the completed first boot must skip itself (the choice is made exactly once)"
+	say "the record is byte-identical after the restart"
+	[ "$(cell_server)" = "$first_cell" ] ||
+		die "the default Cell changed after the restart: $(cell_server) (was $first_cell)"
+	if [ "$external" = no ]; then
+		docker exec -w /workspace "$cid" pf recall --project workstation first-boot-probe >/dev/null 2>&1 ||
+			die "the same key no longer authenticates after the restart — the first boot must not have reissued it"
+		say "the same key still authenticates after the restart (no reissue)"
+	else
+		n=$(wc -l <"$hits" | tr -d ' ')
+		[ "$n" = 0 ] || die "the external restart made $n remote request(s)"
+	fi
+
+	$compose_up down -v >/dev/null 2>&1 || true
+	if [ "$external" = yes ]; then
+		kill "$stub_pid" 2>/dev/null
+		trap - EXIT
+		rm -f "$override" "$hits" "$stub_script"
+	fi
+	say "first-boot: PASS"
+}
+
 case "${1:-}" in
 boot) shift; cmd_boot "$@" ;;
 env) shift; cmd_env "$@" ;;
+first-boot) shift; cmd_first_boot "$@" ;;
 podman-verify) shift; cmd_podman_verify "$@" ;;
 *)
 	cat >&2 <<'USAGE'
 usage: sh dist/workstation/smoke.sh boot --no-aihub|--with-aihub
+       sh dist/workstation/smoke.sh first-boot [--external]
        sh dist/workstation/smoke.sh env
        sh dist/workstation/smoke.sh podman-verify
 USAGE
