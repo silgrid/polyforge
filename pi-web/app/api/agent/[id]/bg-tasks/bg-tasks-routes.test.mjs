@@ -118,11 +118,15 @@ test("logs route returns the registered tail within the 8 KiB cap with truncated
   assert.equal(capped.body.truncated, true, "a tail short of the whole log names it");
   assert.equal(capped.body.tail, true, "the answer is a tail and says so");
 
-  const whole = await logs(SESSION_A, "task-logs");
+  // A log inside the cap reads whole: a 400-byte tail, uncut and unmarked.
+  const line400 = "x".repeat(400);
+  seedRecord(SESSION_A, "task-logs-small", { status: "succeeded", log: line400, startedAt: 1_700_000_006_000 });
+  const whole = await logs(SESSION_A, "task-logs-small");
   assert.equal(whole.status, 200);
-  assert.equal(whole.body.text, big, "the whole 20 000-byte log fits the 8 KiB cap untouched");
+  assert.equal(whole.body.text, line400, "a log inside the cap reads whole by default");
   assert.equal(whole.body.truncated, false);
   assert.equal(whole.body.tail, true);
+  assert.equal(whole.body.startByte, 0);
 
   // A client asking past the cap gets the cap, not more (AC2: the result stays ≤ 8 KiB).
   const greedy = await logs(SESSION_A, "task-logs", "?maxBytes=999999");
