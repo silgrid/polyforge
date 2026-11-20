@@ -130,16 +130,29 @@ test("GET without a cwd answers the user scope alone, both harnesses listed (AC3
   assert.equal(denied.status, 403);
 });
 
-test("a pi item writes the preference alone; every SKILL.md stays byte-identical (AC2)", async () => {
+test("a pi item writes the preference alone; every SKILL.md stays byte-identical, claude's two settings layers untouched (AC2, review r1#4)", async () => {
   const agentDir = await freshAgentDir("pi-item");
   const skillsDir = join(agentDir, "skills");
   const visible = await writeSkill(skillsDir, "visible");
   const hidden = await writeSkill(skillsDir, "hidden", "disable-model-invocation: true\n");
   const outside = await writeSkill(join(root, "outside"), "outside");
   const missing = join(skillsDir, "missing", "SKILL.md");
+  // claude's own two layers a pi item must never touch (review r1#4): the
+  // user settings with an existing override, and a project's settings.local.
+  const claudeConfig = join(root, "pi-item-claude-config");
+  process.env.CLAUDE_CONFIG_DIR = claudeConfig;
+  await mkdir(join(claudeConfig, "skills", "cl-skill"), { recursive: true });
+  const userSettings = join(claudeConfig, "settings.json");
+  await writeFile(userSettings, JSON.stringify({ effortLevel: "low", skillOverrides: { "cl-skill": "name-only" } }));
+  const piProject = join(root, "pi-item-project");
+  await mkdir(join(piProject, ".claude", "skills", "cl-skill"), { recursive: true });
+  const localSettings = join(piProject, ".claude", "settings.local.json");
+  await writeFile(localSettings, JSON.stringify({ effortLevel: "low" }));
+  const userSettingsBefore = await readFile(userSettings, "utf8");
+  const localSettingsBefore = await readFile(localSettings, "utf8");
   const before = await mdHashes(root);
 
-  const single = await patchSkills({ skill: visible, harness: "pi", state: "disabled" });
+  const single = await patchSkills({ skill: visible, harness: "pi", state: "disabled" }, { cwd: piProject });
   assert.equal(single.status, 200);
   assert.deepEqual(await single.json(), { success: true });
   assert.deepEqual(await readPreference(agentDir), { [visible]: "hidden" });
@@ -165,15 +178,19 @@ test("a pi item writes the preference alone; every SKILL.md stays byte-identical
     [visible]: "shown",
     [hidden]: "hidden",
   });
+  assert.equal(await readFile(userSettings, "utf8"), userSettingsBefore, "a pi item never writes claude's user settings.json");
+  assert.equal(await readFile(localSettings, "utf8"), localSettingsBefore, "a pi item never writes the project's .claude/settings.local.json");
 
   // shown over the author's frontmatter, the file never parsed or edited
-  const shown = await patchSkills({ skill: hidden, harness: "pi", state: "enabled" });
+  const shown = await patchSkills({ skill: hidden, harness: "pi", state: "enabled" }, { cwd: piProject });
   assert.equal(shown.status, 200);
   assert.deepEqual(await readPreference(agentDir), {
     [visible]: "shown",
     [hidden]: "shown",
   });
   assert.deepEqual(await mdHashes(root), before);
+  assert.equal(await readFile(userSettings, "utf8"), userSettingsBefore);
+  assert.equal(await readFile(localSettings, "utf8"), localSettingsBefore);
 });
 
 test("a claude item writes only claude's own settings.json, the pi store untouched (AC2)", async () => {
