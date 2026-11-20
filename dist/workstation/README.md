@@ -6,7 +6,9 @@ podman (rootful, crun) runs the verification containers, `pf supervise`
 server alive, and the named volumes carry everything that persists (the
 data dir with the release layout, and podman's storage). The base image
 carries the runtime and one complete component seed: podman, crun,
-catatonit (PID 1), the pf binary, the container configs, the Node
+catatonit (PID 1), the base pf (/usr/local/libexec/polyforge/pf, the
+bootstrap the entry point execs by absolute path — polyforge#175), the
+container configs, the Node
 runtime (Pi Web and the two harness CLIs run on it — nothing installs
 at boot), and — read-only, at `/opt/polyforge/seed/releases/<ver>` —
 the seed the first boot installs (#162, 84-components-A): the release
@@ -24,7 +26,7 @@ volume, an older seed never downgrades it.
 | --- | --- |
 | `Containerfile` | the base image: webui dist + pf built from this repository (context: the repo root), ubuntu:24.04 with podman/crun/catatonit/git/curl/python3, the Node runtime and the seed stage |
 | `build-seed.sh` | the seed assembly, run inside the image build: Pi Web's `npm ci` + production build + prune, the two pinned harness packages, `bin/pf`, then seedtool writes and verifies the seed's manifest (never on a host) |
-| `entrypoint.sh` | cgroup-namespace init (as root, before `pf supervise`), then the environment boundary whitelist |
+| `entrypoint.sh` | cgroup-namespace init (as root), then the environment boundary whitelist, then the base pf's absolute path running `pf supervise` |
 | `env-whitelist.sh` | the environment boundary itself, sourced: PI_*/PI_WEB_* pass, PI_TEST_* never, the fixed `BUILDAH_ISOLATION=chroot` and PORT's default |
 | `containers/storage.conf` | native overlay on the `podman-storage` volume |
 | `containers/containers.conf` | cgroupfs, file events, no container keyrings |

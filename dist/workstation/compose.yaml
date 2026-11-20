@@ -13,10 +13,12 @@
 #   docker compose --profile aihub     up -d    # smoke.sh boot --with-aihub
 #
 # The service `command` carries only pf supervise's flags: the image's
-# entrypoint ends by exec'ing `pf supervise "$@"`, so this list is the
-# argument list of that call. Pi Web and the aihub server are versioned
-# components in the data volume (<data-dir>/release/current), never in
-# the image: `--with-aihub` additionally starts and watches `pf aihub`.
+# entrypoint ends by exec'ing the base pf
+# (/usr/local/libexec/polyforge/pf supervise "$@", polyforge#175), so
+# this list is the argument list of that call. Pi Web and the aihub
+# server are versioned components in the components volume
+# (/components/current), never in the image: `--with-aihub` additionally
+# starts and watches `pf aihub`.
 name: workstation
 
 # the shared machine: one anchor, two profile variants. With a YAML
@@ -44,9 +46,10 @@ x-workstation: &workstation
   # sit above it — the grace plus a margin.
   stop_grace_period: 90s
   volumes:
-    # the data dir: the release layout, the daemon's state, the
-    # workspaces; 84-components mounts its component volumes under
-    # <data-dir>/release/current.
+    # the data dir: the daemon's state, the workspaces. The versioned
+    # components live in the components volume (releases/<ver> with
+    # current at its root) — the first-boot wiring mounts it at
+    # /components (84-components-C).
     - polyforge-data:/root/.local/share/polyforge
     # podman's storage on its own volume: native overlay refuses
     # overlay-on-overlay, so the graphroot must be a real filesystem.
