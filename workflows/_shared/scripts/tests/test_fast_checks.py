@@ -715,13 +715,16 @@ class RepoReuseTest(FastChecksCase):
         path = entry["log"]
         return path if os.path.isabs(path) else os.path.join(self.capsule, path)
 
+    def log_bytes(self, res: Dict[str, Any], entry: Dict[str, Any]) -> str:
+        with open(self.log_abs(res, entry), encoding="utf-8") as f:
+            return f.read()
+
     def test_an_unchanged_root_reuses_the_green_run(self) -> None:
         clone, counts = self.counting_repo()
         code, first = self.run_checks("app")
         self.assertEqual(code, 0, first)
         self.assertEqual(len(self.runs_of(counts)), 3, "the first run executed every command")
-        first_logs = {c["name"]: open(self.log_abs(first, c), encoding="utf-8").read()
-                      for c in self.commands_of(first)}
+        first_logs = {c["name"]: self.log_bytes(first, c) for c in self.commands_of(first)}
         code, second = self.run_checks("app")
         self.assertEqual(code, 0, second)
         # the recorded first red: a command whose key did not change is
@@ -735,9 +738,8 @@ class RepoReuseTest(FastChecksCase):
             self.assertEqual(c.get("exit_code"), 0, c)
             # the original log path is kept, and its content was not overwritten
             self.assertEqual(c["log"], [f["log"] for f in self.commands_of(first) if f["name"] == c["name"]][0])
-            with open(self.log_abs(second, c), encoding="utf-8") as f:
-                self.assertEqual(f.read(), first_logs[c["name"]],
-                                 "the reused entry's original log was overwritten")
+            self.assertEqual(self.log_bytes(second, c), first_logs[c["name"]],
+                             "the reused entry's original log was overwritten")
 
     def test_a_changed_root_subtree_reruns(self) -> None:
         clone, counts = self.counting_repo()
