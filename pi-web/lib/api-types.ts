@@ -177,6 +177,15 @@ export interface SkillToggleResult {
   error?: string;
 }
 
+/** One item of a bulk `PATCH /api/skills` (85d): which harness's store a
+ * skill's state was written to; `error` means it was left as it was. */
+export interface SkillApplyResult {
+  /** The item's skill as the request named it: a pi skill file path or a claude entry name. */
+  skill: string;
+  harness: "pi" | "claude";
+  error?: string;
+}
+
 export interface ProjectTrustStatus {
   requiresTrust: boolean;
   trusted: boolean;
