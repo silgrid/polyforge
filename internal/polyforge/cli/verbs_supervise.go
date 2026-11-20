@@ -158,12 +158,17 @@ func superviseDefaultDirs(dataDir string) (workflowsDir, piWebDir string) {
 }
 
 // superviseResolveDirs answers the two directory flags with this
-// machine's defaults applied (polyforge#175).
+// machine's defaults applied INDEPENDENTLY (review r1#1): a flag the
+// caller set is kept, each unset one takes the layout's default — the
+// two are never resolved as a pair (a given --pi-web-dir used to be
+// silently replaced by the default when --workflows-dir was not given).
 func superviseResolveDirs(workflows, piWeb, dataDir string) (string, string) {
+	wfDefault, webDefault := superviseDefaultDirs(dataDir)
 	if workflows == "" {
-		workflows, piWeb = superviseDefaultDirs(dataDir)
-	} else if piWeb == "" {
-		_, piWeb = superviseDefaultDirs(dataDir)
+		workflows = wfDefault
+	}
+	if piWeb == "" {
+		piWeb = webDefault
 	}
 	return workflows, piWeb
 }
@@ -176,8 +181,8 @@ func SuperviseMain(argv []string, stdin io.Reader, stdout, stderr io.Writer) int
 	fs.SetOutput(stderr)
 	cfgPath := fs.String("config", "", "shared config file (default ~/.config/polyforge/cli.toml)")
 	dataDir := fs.String("data-dir", "", "the Host data dir (default ~/.local/share/polyforge)")
-	wfDir := fs.String("workflows-dir", "", "the daemon's workflows dir (default <data-dir>/release/current/workflows)")
-	piWebDir := fs.String("pi-web-dir", "", "the Pi Web checkout (default <data-dir>/release/current/pi-web)")
+	wfDir := fs.String("workflows-dir", "", "the daemon's workflows dir (default <current>/workflows: /components/current in the image, <data-dir>/release/current on a host)")
+	piWebDir := fs.String("pi-web-dir", "", "the Pi Web checkout (default <current>/pi-web, the same roots as --workflows-dir; absent → Pi Web is not started)")
 	grace := fs.Duration("grace", 60*time.Second, "the stop grace for the daemon's shutdown (>= 45s)")
 	withAIHub := fs.Bool("with-aihub", false, "start and watch the aihub server too")
 	if err := fs.Parse(argv); err != nil {
