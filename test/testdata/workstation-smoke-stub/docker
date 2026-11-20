@@ -67,6 +67,12 @@ if [ "${1:-}" = exec ]; then
 		fi
 		exit 0
 		;;
+	*SKILLS_PROBE*)
+		if [ -f "$dir/skills-wrong" ]; then
+			echo 'SKILLS_PROBE: wrong skill symlink' >&2
+			exit 1
+		fi
+		exit 0 ;;
 	*CREDENTIAL_PROBE*)
 		if [ -f "$dir/credential-in-record" ]; then
 			exit 1

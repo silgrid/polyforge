@@ -1069,6 +1069,24 @@ func TestWorkstationSmokeFirstBoot(t *testing.T) {
 	})
 }
 
+func TestWorkstationSmokeFirstBootSkills(t *testing.T) {
+	out, err := w535SmokeFirstBoot(t, func(dir string) {
+		if err := os.WriteFile(filepath.Join(dir, "skills-wrong"), []byte("1"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if err == nil {
+		t.Fatalf("错误技能软链必须使首启 smoke 失败：\n%s", out)
+	}
+	if !strings.Contains(out, "skill") {
+		t.Fatalf("失败必须点名技能软链：\n%s", out)
+	}
+	out, err = w535SmokeFirstBoot(t, nil)
+	if err != nil || !strings.Contains(out, "first-boot: PASS") {
+		t.Fatalf("有效布局必须通过首启 smoke：%v\n%s", err, out)
+	}
+}
+
 // TestWorkstationSmokeProjectIsolation — review r1#4: the smoke owns
 // its runs, never an operator's deployment. The compose project is
 // fixed (`name: workstation` in compose.yaml) and the six volumes are
