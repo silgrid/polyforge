@@ -6,11 +6,8 @@
 // one shared writer (lib/pi-web-settings.ts). The model snapshot is what the
 // native write landed; behaviour always reads the native files as the truth
 // (pi's settings.json, claude's settings.json), the snapshot serves display.
-//
-// Skeleton (85a3 u3): every signature with zero-value behaviour — the read
-// answers the default and the write persists nothing — so the suite's red is
-// its assertions, never a missing symbol.
-import type { SessionHarness } from "./claude-shared";
+import { isSessionHarness, type SessionHarness } from "./claude-shared";
+import { patchPiWebSettings, readPiWebSettingsRecord } from "./pi-web-settings";
 
 /** The stored combined default (the shape of pi-web-settings.json's `defaultModel` key). */
 export interface DefaultModelPreference {
@@ -27,22 +24,54 @@ export const DEFAULT_MODEL_PREFERENCE: Readonly<Pick<DefaultModelPreference, "ha
   harness: "pi",
 });
 
+/** Whether `value` is a plain record. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** One stored record onto the preference, tolerantly; malformed parts read as
+ * absent, and a snapshot only follows its own harness (pi's model, claude's
+ * claudeModel) — a stale snapshot of the other harness is not a default. */
+function parsePreference(raw: unknown): DefaultModelPreference {
+  if (!isRecord(raw)) return { harness: DEFAULT_MODEL_PREFERENCE.harness };
+  const harness = isSessionHarness(raw.harness) ? raw.harness : DEFAULT_MODEL_PREFERENCE.harness;
+  const preference: DefaultModelPreference = { harness };
+  const model = raw.model;
+  if (harness === "pi" && isRecord(model) && typeof model.provider === "string" && model.provider
+    && typeof model.modelId === "string" && model.modelId) {
+    preference.model = { provider: model.provider, modelId: model.modelId };
+  }
+  if (harness === "claude" && typeof raw.claudeModel === "string" && raw.claudeModel) {
+    preference.claudeModel = raw.claudeModel;
+  }
+  return preference;
+}
+
 /**
  * The stored combined default; a missing, malformed or partial record reads as
  * the default (pi). Never throws.
  */
-export function readDefaultModelPreference(_agentDir?: string): DefaultModelPreference {
-  return { harness: DEFAULT_MODEL_PREFERENCE.harness };
+export function readDefaultModelPreference(agentDir?: string): DefaultModelPreference {
+  return parsePreference(readPiWebSettingsRecord(agentDir).defaultModel);
 }
 
 /**
  * Stores the combined default under the file's `defaultModel` key, keeping
- * every other key; one write at a time, atomic, unknown keys kept.
+ * every other key (the Agent language's, the claude preferences', the
+ * migration marker's); one write at a time, atomic, unknown keys kept.
  * Resolves to the preference as stored.
  */
 export async function writeDefaultModelPreference(
   preference: DefaultModelPreference,
-  _agentDir?: string,
+  agentDir?: string,
 ): Promise<DefaultModelPreference> {
-  return { harness: DEFAULT_MODEL_PREFERENCE.harness };
+  await patchPiWebSettings((record) => ({
+    ...record,
+    defaultModel: {
+      harness: preference.harness,
+      ...(preference.model ? { model: { ...preference.model } } : {}),
+      ...(preference.claudeModel !== undefined ? { claudeModel: preference.claudeModel } : {}),
+    },
+  }), agentDir);
+  return parsePreference(preference);
 }
