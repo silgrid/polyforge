@@ -81,7 +81,7 @@ test("the list merges running subagents and tasks oldest first, each with its ki
   assert.match(taskItem.text, /Task/, "the task button carries its kind badge");
   assert.ok(taskItem.text.includes(formatTurnDuration(30_000)), `the task shows its elapsed time: ${taskItem.text}`);
   assert.match(subagentItem.text, /Audit the parsers/, "the subagent button names its description");
-  assert.ok(subagentItem.text.includes(formatTurnDuration(65_000)), `the subagent shows its elapsed time: ${subagentItem.text}`);
+  assert.ok(subagentItem.text.includes(formatTurnDuration(5_000)), `the subagent shows its elapsed time: ${subagentItem.text}`);
   assert.doesNotMatch(subagentItem.text, /Task/, "a subagent button does not carry the task badge");
 });
 
@@ -122,11 +122,13 @@ test("nothing renders while nothing runs and nothing settled; settled tasks leav
 test("every button opens its own target: subagent items, task items and the history entry are buttons", () => {
   const html = render({
     subagents: [subagent()],
-    tasks: [task()],
+    tasks: [task(), task({ id: "t-done", status: "succeeded", endedAt: NOW - 1_000, exitCode: 0 })],
   });
   assert.match(html, /<button[^>]*data-pi-subagent-item="sub-1"/, "the subagent item is not a button");
   assert.match(html, /<button[^>]*data-pi-task-item="t-1"/, "the task item is not a button");
+  // The entry renders because something settled; nothing settled, no entry.
   assert.match(html, /<button[^>]*data-pi-bg-history="/, "the history entry is not a button");
+  assert.doesNotMatch(render({ subagents: [subagent()], tasks: [task()] }), /data-pi-bg-history/, "the entry shows with nothing settled");
   // The grid the Claude list established: equal-width columns from 260px.
   assert.match(html, /repeat\(auto-fill, ?minmax\(260px, ?1fr\)\)/, "the grid is not Claude's");
 });

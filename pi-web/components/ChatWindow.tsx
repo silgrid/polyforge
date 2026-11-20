@@ -27,6 +27,7 @@ import { useI18n } from "@/hooks/useI18n";
 import { phaseLabel } from "@/lib/chat-phase-label";
 import { useAgentSession, type AgentEndInfo, type NewSessionChoices, type NoticeItem } from "@/hooks/useAgentSession";
 import { useBackgroundTasks } from "@/hooks/useBackgroundTasks";
+import { useSubagentRuns } from "@/hooks/useSubagentRuns";
 import { selectHasStreamingContent, selectIsStreaming, selectStreamingMessage, useStreamingSelector } from "@/hooks/useStreamingSelector";
 import type { StreamingStore } from "@/lib/streaming-message";
 import { useDragDrop } from "@/hooks/useDragDrop";
@@ -58,6 +59,7 @@ import { ClaudeForceStopNotice, ClaudeSubagentRunningList } from "./ClaudeSubage
 import { ClaudeSubagentPanel, isClaudeSubagentPanelEscape } from "./ClaudeSubagentPanel";
 import { ClaudeBackgroundTaskPanel } from "./ClaudeBackgroundTaskPanel";
 import { PiBackgroundTaskHistory, PiBackgroundTaskPanel } from "./PiBackgroundTaskPanel";
+import { PiRunningList } from "./PiRunningList";
 import { claudeSubagentLaunchEntryId, isRunningBackgroundAgentMessage, isSubagentJumpTarget } from "@/lib/claude-subagent-view";
 
 interface Props {
@@ -311,6 +313,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
   // claude's background work is claude's own, above its composer.
   const piBackgroundTasksSessionId = session && session.harness !== "claude" ? session.id : null;
   const piBackgroundTasks = useBackgroundTasks(piBackgroundTasksSessionId);
+  const piSubagentRuns = useSubagentRuns(piBackgroundTasksSessionId);
   // The session's SSE events feed both this pane's running list (through the
   // hook) and the shell's terminal notification (the prop).
   const handlePaneBackgroundTasksEvent = useCallback((event: BackgroundTasksClientEvent) => {
@@ -2029,6 +2032,20 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
                 <ClaudeForceStopNotice work={claudeForceStopWork} onForceStop={() => void forceStopClaudeTurn()} onKeepWaiting={dismissClaudeForceStop} />
               )}
               <ClaudeSubagentRunningList runs={claudeSubagents} onOpen={openClaudeSubagentPanel} tasks={claudeBackgroundTasks} onOpenTask={openClaudeTaskPanel} />
+            </div>
+          )}
+          {/* a pi session's running built-in subagents and background tasks
+              in the same slot (polyforge#173): the merged list, and the
+              「已结束」 entry once anything settled. */}
+          {!isClaudeSession && !isNew && (
+            <div style={{ width: "100%", maxWidth: "var(--chat-content-max-width, 820px)", margin: "0 auto" }}>
+              <PiRunningList
+                subagents={piSubagentRuns.runs}
+                tasks={piTasks}
+                onOpenSubagent={(subagentSessionId, label) => onOpenSubagent?.(subagentSessionId, label)}
+                onOpenTask={openPiTaskPanel}
+                onOpenHistory={openPiHistoryPanel}
+              />
             </div>
           )}
           {chatInputElement}

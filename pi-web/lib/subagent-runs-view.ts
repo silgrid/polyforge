@@ -25,7 +25,7 @@ export interface PiSubagentRunSummary {
  */
 export function projectRunningSubagentRuns(runs: readonly SubagentRunInfo[]): PiSubagentRunSummary[] {
   return runs
-    .filter((run) => run.status === "running" || run.status === "queued")
+    .filter((run): run is SubagentRunInfo & { status: "running" | "queued" } => run.status === "running" || run.status === "queued")
     .map((run) => ({
       sessionId: run.sessionId,
       parentSessionId: run.parentSessionId,
@@ -35,17 +35,4 @@ export function projectRunningSubagentRuns(runs: readonly SubagentRunInfo[]): Pi
       createdAt: run.createdAt,
     }))
     .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
-}
-
-/** Stops one of this session's built-in subagent runs (the controller's abort: queued included). */
-export async function abortSubagentRun(subagentSessionId: string): Promise<void> {
-  const response = await fetch(`/api/subagents/${encodeURIComponent(subagentSessionId)}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "abort" }),
-  });
-  if (!response.ok) {
-    const body = await response.json().catch(() => null) as { error?: string } | null;
-    throw new Error(body?.error ?? `HTTP ${response.status}`);
-  }
 }

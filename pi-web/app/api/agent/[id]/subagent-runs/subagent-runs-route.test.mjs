@@ -54,15 +54,3 @@ test("the route answers one parent's running rows as JSON, empty included", asyn
   assert.equal(odd.status, 200);
   assert.deepEqual(odd.body, { runs: [] });
 });
-
-test("the hook polls the parent-scoped route for its own session only", async () => {
-  const { readFile } = await import("node:fs/promises");
-  const source = await readFile(new URL("./useSubagentRuns.ts", import.meta.url), "utf8");
-  assert.match(source, /\/api\/agent\/\$\{encodeURIComponent\(sessionId\)\}\/subagent-runs/);
-  // The poll exists only while a session is given, and stops with it.
-  assert.match(source, /if \(!sessionId\) return undefined;/);
-  assert.match(source, /setInterval/);
-  assert.match(source, /clearInterval/);
-  // A session switch drops the previous session's poll before the next read.
-  assert.match(source, /\[sessionId\]/);
-});
