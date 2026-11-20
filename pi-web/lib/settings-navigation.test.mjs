@@ -95,11 +95,12 @@ test("the settings rail is nine new sections plus the two legacy-marked ones (85
   const keys = SETTINGS_TABS.map((tab) => tab.labelKey);
   assert.deepEqual([...new Set(keys)], keys);
   for (const key of keys) assert.match(key, /^(settings|common|polyforge)\./, `${key} is not a locale key`);
-  // The new concept pages and both legacy pages open without a project.
-  for (const section of ["general", "account", "models", "permission", "mcp", "polyforge", "legacy-models"]) {
+  // The new concept pages and both legacy pages open without a project; the
+  // skills page too (85d AC3: it shows the user scope without a project).
+  for (const section of ["general", "account", "models", "permission", "skills", "mcp", "polyforge", "legacy-models"]) {
     assert.equal(settingsSectionRequiresProject(section), false, section);
   }
-  for (const section of ["skills", "agents", "plugins"]) {
+  for (const section of ["agents", "plugins"]) {
     assert.equal(settingsSectionRequiresProject(section), true, section);
   }
 });
@@ -173,4 +174,23 @@ test("ignores malformed and unavailable browser storage", () => {
   assert.equal(getLastSettingsSection("/project", unavailable), "general");
   assert.doesNotThrow(() => setLastSettingsSection("plugins", unavailable));
   assert.doesNotThrow(() => setLastSettingsSelection("plugins", "key", "/project", unavailable));
+});
+
+test("the skills section works without a project: no redirect, and its selection lives under the bare name (85d AC3)", () => {
+  // A stored skills section survives a null cwd instead of falling back to general.
+  const stored = createStorage({ "pi-web:settings-navigation": JSON.stringify({ section: "skills" }) });
+  assert.equal(getLastSettingsSection(null, stored), "skills");
+  assert.equal(getLastSettingsSection("/project", stored), "skills");
+
+  // The no-project selection is its own key, like MCP's: no project key
+  // (always an array) can collide with it, and each side keeps its own.
+  const storage = createStorage();
+  setLastSettingsSelection("skills", "/agent/skills/a/SKILL.md", null, storage);
+  setLastSettingsSelection("skills", "/agent/skills/b/SKILL.md", "/project", storage);
+  assert.equal(getLastSettingsSelection("skills", null, storage), "/agent/skills/a/SKILL.md");
+  assert.equal(getLastSettingsSelection("skills", "/project", storage), "/agent/skills/b/SKILL.md");
+  // A remembered project selection never leaks into the no-project listing.
+  const projectOnly = createStorage();
+  setLastSettingsSelection("skills", "/project/.pi/skills/x/SKILL.md", "/project", projectOnly);
+  assert.equal(getLastSettingsSelection("skills", null, projectOnly), null);
 });
