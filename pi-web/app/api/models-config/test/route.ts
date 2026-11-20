@@ -155,7 +155,9 @@ export async function POST(req: Request) {
             timeoutMs: TEST_TIMEOUT_MS,
             maxRetries: 0,
             cacheRetention: "none",
-            ...(resolvedModel.compat?.forceAdaptiveThinking ? { reasoning: false } : {}),
+            ...(resolvedModel.compat && (resolvedModel.compat as Record<string, unknown>).forceAdaptiveThinking
+              ? { reasoning: "minimal" as const }
+              : {}),
             signal: controller.signal,
             fetch: redirectRefusingFetch,
             onResponse: (response) => { status = response.status; },
