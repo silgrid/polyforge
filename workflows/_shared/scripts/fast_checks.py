@@ -250,6 +250,10 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--repo", default="", help="the task repo (repos/<name>) whose fast/scoped checks run")
     ap.add_argument("--close-scoped", action="store_true",
                     help="with --repo: the build close's own mode — the same light-tier selection verification runs, executed over the final tree, its record in details.selected")
+    ap.add_argument("--phase", default="", choices=["fast"],
+                    help="with --repo: run only that phase's commands (fast is the per-unit bar's own narrowing; default: fast and scoped)")
+    ap.add_argument("--root", action="append", default=[], metavar="DIR",
+                    help="with --repo: only the named engine root's commands run — . is the repository's own root, a nested root its directory (repeatable; default: every root the change reaches)")
     ap.add_argument("--reuse", action="append", default=[], metavar="FILE",
                     help="with --close-scoped: a fast-checks result file whose green same-tree runs are reused, not re-run (repeatable)")
     ap.add_argument("--check-units", default="", metavar="FILE",
