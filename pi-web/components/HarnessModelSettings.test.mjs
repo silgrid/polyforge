@@ -13,8 +13,8 @@ const { HarnessModelSettings, HarnessModelTable } = await jiti.import("./Harness
 test("模型页包含默认模型、三列清单和 pi 编辑区", () => {
   const html = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(HarnessModelSettings, { cwd: null })));
   assert.match(html, /data-model-page="unified"/);
-  assert.match(html, /默认模型/);
-  assert.match(html, /模型清单/);
+  assert.match(html, /Default model/);
+  assert.match(html, /Model list/);
   assert.match(html, /Chat availability/);
   assert.match(html, /pi/);
 });
