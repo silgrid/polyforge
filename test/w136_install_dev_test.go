@@ -911,6 +911,143 @@ func TestW136InstallDevWarnsOnAIHubInternalChange(t *testing.T) {
 	})
 }
 
+// TestW136InstallDevPreflightListBoundaries (AC1, polyforge#188): the
+// preflight fails closed on its input — a green tree whose interface
+// list or total list is missing, carries no entry, or an entry of an
+// unsupported shape refuses in prepare with nothing on the machine
+// changed, and a changed path git cannot print unambiguously (a name
+// it quotes) is refused too, never silently unmatched. The lists and
+// the diff are read from the green commit's tree — the same files the
+// tests read from the repository.
+func TestW136InstallDevPreflightListBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  w136DevCfg
+		want []string
+	}{
+		{"the interface list is missing", w136DevCfg{green: "", tools: true, ifaceMissing: true},
+			[]string{"carries no readable", "tools/aihub-interface-paths.conf"}},
+		{"the interface list is empty", w136DevCfg{green: "", tools: true, ifaceConf: "# polyforge#188: a list with no entry\n"},
+			[]string{"declares no entry", "tools/aihub-interface-paths.conf"}},
+		{"the interface list carries an unsupported entry", w136DevCfg{green: "", tools: true, ifaceConf: "internal/common/api/**\ninternal /bad/**\n"},
+			[]string{"unsupported entry"}},
+		{"the total list is missing", w136DevCfg{green: "", tools: true, totalMissing: true},
+			[]string{"carries no readable", "tools/aihub-paths.conf"}},
+		{"a changed path git quotes is refused", w136DevCfg{green: "", tools: true, touch: []string{`internal/aihub/core/we"ird.go`}},
+			[]string{"cannot print unambiguously"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := w136NewDev(t, tc.cfg)
+			binBody := w136InstallBin(t, d, "v0.2.3")
+			curBefore := w136InstallCurrent(t, d, "v0.2.3")
+			d.resetJournal(t)
+			out, code := d.run(t)
+			if code == 0 {
+				t.Fatalf("the dev channel must refuse %s; it installed:\n%s", tc.name, out)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(out, want) {
+					t.Fatalf("the refusal lacks %q:\n%s", want, out)
+				}
+			}
+			w136Unchanged(t, d, binBody, curBefore)
+		})
+	}
+}
+
+// TestW136InstallDevJudgesTheGreenCommitLists (AC2, polyforge#188): the
+// preflight judges the diff against the GREEN COMMIT's lists — never
+// this repository's product paths (a green tree whose interface list
+// names a path of its own refuses on it, independently of the total
+// list) and never main's diverged lists (a hit only a post-green
+// commit's list names passes) — and a rename is judged on both its
+// ends: a file moved out of a judged directory stays visible as its
+// old path too.
+func TestW136InstallDevJudgesTheGreenCommitLists(t *testing.T) {
+	// a green tree whose interface list names a path of its own, outside
+	// this repository's lists: the refusal follows the list the green
+	// commit carries — no product path is hardcoded into the installer,
+	// and custom/wire being no total-list entry changes nothing (the
+	// interface list judges independently)
+	t.Run("the green commit's interface list names its own path", func(t *testing.T) {
+		d := w136NewDev(t, w136DevCfg{green: "", tools: true,
+			ifaceConf: "custom/wire/**\n",
+			touch:     []string{"custom/wire/x.go"}})
+		binBody := w136InstallBin(t, d, "v0.2.3")
+		curBefore := w136InstallCurrent(t, d, "v0.2.3")
+		d.resetJournal(t)
+		out, code := d.run(t)
+		if code == 0 {
+			t.Fatalf("a green commit whose interface list names custom/wire/x.go must refuse; it installed:\n%s", out)
+		}
+		for _, want := range []string{"interface changes", "custom/wire/x.go", "tools/aihub-interface-paths.conf"} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("the refusal lacks %q:\n%s", want, out)
+			}
+		}
+		w136Unchanged(t, d, binBody, curBefore)
+	})
+
+	// main sits one commit past the green tag and rewrites the interface
+	// list to name a new interface path; the diff touches exactly that
+	// path. The green commit's list is the judge: the run installs — a
+	// preflight reading main's tree would refuse
+	t.Run("a hit only main's diverged list names passes", func(t *testing.T) {
+		d := w136NewDev(t, w136DevCfg{green: "", tools: true,
+			ifaceConf:      "custom/wire/**\n",
+			touch:          []string{"internal/polyforge/ahead.go"},
+			aheadIfaceConf: "internal/polyforge/ahead.go\n"})
+		w136InstallBin(t, d, "v0.2.3")
+		out, code := d.run(t)
+		if code != 0 {
+			t.Fatalf("the preflight must judge the diff against the green commit's list, not main's diverged one; exit %d:\n%s", code, out)
+		}
+		if strings.Contains(out, "interface changes") {
+			t.Fatalf("a path the green commit's interface list does not name must not refuse:\n%s", out)
+		}
+	})
+
+	// a rename moving a file OUT of an interface directory: both ends
+	// stay visible — the old path is the interface hit that refuses
+	t.Run("a rename out of an interface directory refuses", func(t *testing.T) {
+		d := w136NewDev(t, w136DevCfg{green: "", tools: true,
+			renameFrom: "internal/common/api/handler.go",
+			renameTo:   "internal/polyforge/handler.go"})
+		binBody := w136InstallBin(t, d, "v0.2.3")
+		curBefore := w136InstallCurrent(t, d, "v0.2.3")
+		d.resetJournal(t)
+		out, code := d.run(t)
+		if code == 0 {
+			t.Fatalf("a rename moving internal/common/api/handler.go out of the interface directory must refuse on its old path; it installed:\n%s", out)
+		}
+		for _, want := range []string{"interface changes", "internal/common/api/handler.go", "needs a formal release"} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("the refusal lacks %q:\n%s", want, out)
+			}
+		}
+		w136Unchanged(t, d, binBody, curBefore)
+	})
+
+	// the same shape over a server-side directory passes with a WARN
+	// naming the old path — a server-side hit never silently disappears
+	// into a rename either
+	t.Run("a rename out of a server-side directory warns on the old path", func(t *testing.T) {
+		d := w136NewDev(t, w136DevCfg{green: "", tools: true,
+			renameFrom: "internal/aihub/core/old.go",
+			renameTo:   "internal/polyforge/old.go"})
+		w136InstallBin(t, d, "v0.2.3")
+		out, code := d.run(t)
+		if code != 0 {
+			t.Fatalf("a rename the interface list does not judge must pass with a WARN; exit %d:\n%s", code, out)
+		}
+		for _, want := range []string{"WARN:", "internal/aihub/core/old.go", "formal release"} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("the WARN lacks %q:\n%s", want, out)
+			}
+		}
+	})
+}
+
 // TestW136InstallDevReadOnlyRemote (AC4): the channel's gh and git calls
 // are reads — no release is created, no asset uploaded, no tag or branch
 // pushed, no write method called.
