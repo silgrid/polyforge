@@ -217,12 +217,17 @@ test("claude writes and removes the native effortLevel", async () => {
   assert.equal("effortLevel" in readJson(claudeSettings), false);
 });
 
-test("claude does not write the unverified per-model settings shape", async () => {
+test("claude refuses unverified per-model and ultracode settings writes without changing native bytes", async () => {
   const before = fs.readFileSync(claudeSettings, "utf8");
-  const refused = await claudeAdapter.write("model", { modelEffort: { model: "claude-opus-5-5", effort: "low" } }, claudeCtx());
-  assert.equal(refused.status, "refused");
-  assert.match(refused.reason, /modelEffort|not supported|unknown model change/);
-  assert.equal(fs.readFileSync(claudeSettings, "utf8"), before);
+  for (const change of [
+    { modelEffort: { model: "claude-opus-5-5", effort: "low" } },
+    { modelEffort: { model: "claude-opus-5-5", effort: null } },
+    { effortLevel: "ultracode" },
+  ]) {
+    const refused = await claudeAdapter.write("model", change, claudeCtx());
+    assert.equal(refused.status, "refused", JSON.stringify(change));
+    assert.equal(fs.readFileSync(claudeSettings, "utf8"), before);
+  }
 });
 
 test("claude refuses an unknown-major version, keeping settings.json untouched", async () => {
@@ -263,13 +268,13 @@ test("claude refuses a settings.json whose top level is not a JSON object, never
   }
 });
 
-test("claude refuses an unrecognized modelSettings shape and unknown or invalid changes", async () => {
+test("claude refuses unknown or invalid changes", async () => {
   const before = fs.readFileSync(claudeSettings, "utf8");
   fs.writeFileSync(claudeSettings, JSON.stringify({ ...readJson(claudeSettings), modelSettings: "text" }));
   try {
     const refused = await claudeAdapter.write("model", { modelEffort: { model: "opus", effort: "low" } }, claudeCtx());
     assert.equal(refused.status, "refused");
-    assert.ok(refused.reason.includes("modelEffort") || refused.reason.includes("unknown model change"), refused.reason);
+    assert.ok(refused.reason.includes("modelSettings") || refused.reason.includes("modelEffort"), refused.reason);
   } finally {
     fs.writeFileSync(claudeSettings, before);
   }
