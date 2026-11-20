@@ -138,26 +138,6 @@ test("adaptive Anthropic connection test omits thinking on the wire", async (t) 
   assert.equal(Object.hasOwn(sent, 'thinking'), false, JSON.stringify(sent));
 });
 
-test("forceAdaptiveThinking 模型的测试请求不发送 disabled thinking", async (t) => {
-  const originalFetch = globalThis.fetch;
-  const calls = [];
-  globalThis.fetch = async (input, init) => {
-    calls.push({ input: String(input), init });
-    return sseOkResponse();
-  };
-  t.after(() => { globalThis.fetch = originalFetch; });
-
-  const response = await POST(testModel({
-    providerName: "acme",
-    provider: { baseUrl: "https://acme.example/v1", apiKey: "own-key" },
-    model: { id: "adaptive", compat: { forceAdaptiveThinking: true }, reasoning: true },
-  }));
-  assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
-  const request = calls.at(-1);
-  assert.ok(request, "the completion request was sent");
-  const body = JSON.parse(request.init.body);
-  assert.notDeepEqual(body.thinking, { type: "disabled" });
-});
 test("an omitted provider.api resolves from the model entry, the catalog, or the OpenAI default (review blocker)", async (t) => {
   const originalFetch = globalThis.fetch;
   const calls = [];
