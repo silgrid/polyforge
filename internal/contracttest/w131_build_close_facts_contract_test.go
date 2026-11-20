@@ -56,7 +56,7 @@ func TestW131BuildCloseFactsTexts(t *testing.T) {
 			replayLine,
 			carriesLine,
 			// an inherited plan (a fix build that never re-plans) runs only the replay
-			"(a plan the lane inherited, not one it wrote this round, skips this line and runs only the replay)",
+			"(a plan the lane inherited skips this line and runs only the replay)",
 			"is fixed before the hand-off, never handed off on",
 			"wait one minute and run that line again, at most twice",
 			"never `blocked` for it",

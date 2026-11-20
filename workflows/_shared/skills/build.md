@@ -150,7 +150,7 @@ record exactly what ran.
    verbatim. Then the step's close runs the facts lines review judges with, the same
    engine and the same replay —
    `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" plan-conformance --json --out artifacts/facts/plan-conformance.json`
-   (a plan the lane inherited, not one it wrote this round, skips this line and runs only the
+   (a plan the lane inherited skips this line and runs only the
    replay) and
    `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" build --replay --isolation host --json --out artifacts/facts/build.json`
    and `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" carries --json --out artifacts/facts/carries.json`
