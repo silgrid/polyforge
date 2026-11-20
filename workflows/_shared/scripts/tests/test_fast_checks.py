@@ -988,7 +988,8 @@ class RepoReuseCarrySummaryTest(FastChecksCase):
         self.assertIn("0 command(s) ran", narrowed["summary"],
                       "保留的旧复用条目不能同时计作本次复用，造成负执行数")
         self.assertIn("2 reused", narrowed["summary"])
-        self.assertIn("1 carried over", narrowed["summary"])
+        # 两条 scoped：配置的计数命令，以及 Go 分析器选出的 app 包测试。
+        self.assertIn("2 carried over", narrowed["summary"])
         with open(counts, encoding="utf-8") as f:
             self.assertEqual(len(f.read().splitlines()), 3)
 
