@@ -259,6 +259,19 @@ func TestWorkstationImage(t *testing.T) {
 		if !strings.Contains(body, `exec pf supervise "$@"`) {
 			t.Fatal("polyforge#161: entrypoint.sh must end by exec'ing pf supervise with the caller's flags (compose passes only the flags)")
 		}
+		// the first boot runs BETWEEN the boundary and supervise
+		// (84-components-C): the identity must exist before the server
+		// starts — the aihub server's own fresh-install bootstrap
+		// (usr_root) never fires on a first-boot-initialized store
+		whitelist := strings.Index(body, "workstation_env_whitelist")
+		firstBoot := strings.Index(body, "pf first-boot")
+		supervise := strings.Index(body, `exec pf supervise "$@"`)
+		if firstBoot < 0 {
+			t.Fatal("polyforge#176: entrypoint.sh must run `pf first-boot` before handing over to pf supervise")
+		}
+		if !(whitelist < firstBoot && firstBoot < supervise) {
+			t.Fatal("polyforge#176: entrypoint.sh's order is the environment boundary, then the first boot, then exec pf supervise — the first boot initializes the identity before the server starts")
+		}
 	})
 
 	t.Run("the environment whitelist executes: PI_* passes, PI_TEST_* never", func(t *testing.T) {
@@ -281,6 +294,10 @@ func TestWorkstationImage(t *testing.T) {
 			"PI_SMOKE_PROBE=passed",
 			"PI_WEB_PASSWORD=x",
 			"PI_TEST_PROBE=must-not-cross",
+			"WORKSTATION_AIHUB_SERVER=https://hub.example.invalid",
+			"WORKSTATION_AIHUB_KEY=probe-key",
+			"WORKSTATION_AIHUB_PROJECT=probe-project",
+			"WORKSTATION_OTHER=leak",
 			"SENTINEL_WORKSTATION=leak",
 			"PF_OUTER=leak",
 			"http_proxy=leak",
@@ -290,14 +307,18 @@ func TestWorkstationImage(t *testing.T) {
 			t.Fatalf("polyforge#161: the whitelist must run: %v:\n%s", err, out)
 		}
 		env := string(out)
-		for _, keep := range []string{"PORT=30141", "PI_WEB_APP_NAME=probe", "PI_SMOKE_PROBE=passed", "PI_WEB_PASSWORD=x", "BUILDAH_ISOLATION=chroot"} {
+		for _, keep := range []string{
+			"PORT=30141", "PI_WEB_APP_NAME=probe", "PI_SMOKE_PROBE=passed", "PI_WEB_PASSWORD=x", "BUILDAH_ISOLATION=chroot",
+			// the first boot's external-mode inputs cross (84-components-C)
+			"WORKSTATION_AIHUB_SERVER=https://hub.example.invalid", "WORKSTATION_AIHUB_KEY=probe-key", "WORKSTATION_AIHUB_PROJECT=probe-project",
+		} {
 			if !strings.Contains(env, "\n"+keep) && !strings.HasPrefix(env, keep) {
-				t.Fatalf("polyforge#161: the whitelist must keep %s — the PI_* families and PORT pass (AC3):\n%s", keep, env)
+				t.Fatalf("the whitelist must keep %s — the PI_* families, PORT and the first boot's inputs pass (AC3 + 84-components-C):\n%s", keep, env)
 			}
 		}
-		for _, drop := range []string{"PI_TEST_PROBE", "SENTINEL_WORKSTATION", "PF_OUTER", "http_proxy"} {
+		for _, drop := range []string{"PI_TEST_PROBE", "WORKSTATION_OTHER", "SENTINEL_WORKSTATION", "PF_OUTER", "http_proxy"} {
 			if strings.Contains(env, drop) {
-				t.Fatalf("polyforge#161: the whitelist must drop %s — PI_TEST_* never crosses and the container inherits nothing else (AC3):\n%s", drop, env)
+				t.Fatalf("the whitelist must drop %s — PI_TEST_* never crosses, only the three named WORKSTATION_AIHUB_* inputs pass, and the container inherits nothing else (AC3):\n%s", drop, env)
 			}
 		}
 	})
@@ -383,13 +404,13 @@ func TestWorkstationCompose(t *testing.T) {
 	}
 	svc, ok := compose.Services["workstation"]
 	if !ok {
-		t.Fatal("polyforge#161: compose.yaml must carry the workstation service (the no-aihub default)")
+		t.Fatal("polyforge#176: compose.yaml must carry the workstation service (the aihub default boot)")
 	}
-	aihub, ok := compose.Services["workstation-aihub"]
+	noaihub, ok := compose.Services["workstation-noaihub"]
 	if !ok {
-		t.Fatal("polyforge#161: compose.yaml must carry the workstation-aihub service (the --with-aihub variant)")
+		t.Fatal("polyforge#176: compose.yaml must carry the workstation-noaihub service (the explicit without-AIHub opt-out)")
 	}
-	for name, s := range map[string]w535ComposeService{"workstation": svc, "workstation-aihub": aihub} {
+	for name, s := range map[string]w535ComposeService{"workstation": svc, "workstation-noaihub": noaihub} {
 		// AC1's minimal set, as a set: exactly SYS_ADMIN and NET_ADMIN.
 		if len(s.CapAdd) != 2 {
 			t.Fatalf("%s: cap_add = %v, want exactly the two measured capabilities", name, s.CapAdd)
@@ -472,21 +493,49 @@ func TestWorkstationCompose(t *testing.T) {
 		if s.Environment["PI_WEB_HOSTNAME"] != "0.0.0.0" {
 			t.Fatalf("%s: PI_WEB_HOSTNAME must be 0.0.0.0 — a container must bind all interfaces to be reachable (pi-web's own compose precedent)", name)
 		}
-		// both persistent boundaries: the data dir (the release layout
-		// and the daemon's state) and podman's storage, each its own
-		// named volume so a reset never crosses (84-components mounts
-		// its component volumes under the data dir's release layout).
-		var data, storage bool
-		for _, vol := range s.Volumes {
-			switch {
-			case strings.HasPrefix(vol, "polyforge-data:/root/.local/share/polyforge"):
-				data = true
-			case strings.HasPrefix(vol, "podman-storage:/var/lib/containers/storage"):
-				storage = true
+		// the step agents' harness home (84-components-C): inside
+		// pf-home, so a login and the harness references survive a
+		// re-create of the container
+		if s.Environment["PI_CODING_AGENT_DIR"] != "/root/.pi/agent" {
+			t.Fatalf("%s: PI_CODING_AGENT_DIR = %q, want /root/.pi/agent (the agent dir lives in the pf-home volume)", name, s.Environment["PI_CODING_AGENT_DIR"])
+		}
+		// the first boot's external-mode inputs (84-components-C):
+		// optional interpolations, empty by default (the local mode)
+		for key, want := range map[string]string{
+			"WORKSTATION_AIHUB_SERVER":  "${WORKSTATION_AIHUB_SERVER:-}",
+			"WORKSTATION_AIHUB_KEY":     "${WORKSTATION_AIHUB_KEY:-}",
+			"WORKSTATION_AIHUB_PROJECT": "${WORKSTATION_AIHUB_PROJECT:-}",
+		} {
+			if s.Environment[key] != want {
+				t.Fatalf("%s: %s = %q, want the optional interpolation %q", name, key, s.Environment[key], want)
 			}
 		}
-		if !data || !storage {
-			t.Fatalf("%s: volumes = %v, want the polyforge-data and podman-storage named volumes at their canonical paths", name, s.Volumes)
+		// the six persistent volumes (84-components-C), each its own
+		// named volume at its canonical path: pf-home owns /root whole
+		// (cli.toml, the agent dir, the logins) with the data dir
+		// nested inside it, the components volume carries the
+		// versioned components, the aihub volume the local AIHub's
+		// store, the workspace volume the working tree.
+		volAt := map[string]string{}
+		for _, vol := range s.Volumes {
+			if name, target, found := strings.Cut(vol, ":"); found {
+				volAt[name] = target
+			}
+		}
+		for vol, target := range map[string]string{
+			"pf-home":        "/root",
+			"polyforge-data": "/root/.local/share/polyforge",
+			"components":     "/components",
+			"aihub":          "/var/lib/polyforge/aihub",
+			"workspace":      "/workspace",
+			"podman-storage": "/var/lib/containers/storage",
+		} {
+			if volAt[vol] != target {
+				t.Fatalf("%s: volume %s mounted at %q, want %q (the six persistent volumes, each at its canonical path): %v", name, vol, volAt[vol], target, s.Volumes)
+			}
+		}
+		if len(s.Volumes) != 6 {
+			t.Fatalf("%s: volumes = %v, want exactly the six persistent volumes (caddy rides the https front only)", name, s.Volumes)
 		}
 		if s.Build.Context != "../.." || s.Build.Dockerfile != "dist/workstation/Containerfile" {
 			t.Fatalf("%s: build must use the repository root context and the dist/workstation/Containerfile (the pf binary builds from this tree)", name)
@@ -501,37 +550,47 @@ func TestWorkstationCompose(t *testing.T) {
 			t.Fatalf("%s: ports must publish Pi Web's 30141", name)
 		}
 	}
-	// the profiles carry the smoke's two boot modes one-to-one (settled
-	// Q7: default without AIHub, --with-aihub by profile) — and the
-	// --with-aihub flag reaches pf supervise only in the aihub variant.
-	if !contains(svc.Profiles, "no-aihub") {
-		t.Fatalf("workstation: profiles = %v, want [no-aihub]", svc.Profiles)
+	// the profiles carry the smoke's two boot modes one-to-one
+	// (the #176 default flip: the aihub boot is THE workstation, and
+	// running without an AIHub is the explicit opt-out) — and the
+	// --with-aihub flag reaches pf supervise only in the default
+	// variant. Both carry an explicit profile: compose's --profile can
+	// only add, never subtract, so two explicit profiles are the only
+	// shape that keeps the modes mutually exclusive (#161's measured
+	// lesson).
+	if len(svc.Profiles) != 1 || svc.Profiles[0] != "aihub" {
+		t.Fatalf("workstation: profiles = %v, want exactly [aihub] (the default boot)", svc.Profiles)
 	}
-	if !contains(aihub.Profiles, "aihub") || contains(aihub.Profiles, "no-aihub") {
-		t.Fatalf("workstation-aihub: profiles = %v, want [aihub] only", aihub.Profiles)
+	if len(noaihub.Profiles) != 1 || noaihub.Profiles[0] != "no-aihub" {
+		t.Fatalf("workstation-noaihub: profiles = %v, want exactly [no-aihub] (the explicit opt-out)", noaihub.Profiles)
 	}
-	if contains(svc.Command, "--with-aihub") {
-		t.Fatal("workstation: the default boot must not pass --with-aihub")
+	if !contains(svc.Command, "--with-aihub") {
+		t.Fatal("workstation: the default boot must pass --with-aihub to pf supervise (the local AIHub is a watched child)")
 	}
-	if !contains(aihub.Command, "--with-aihub") {
-		t.Fatal("workstation-aihub: the aihub profile must pass --with-aihub to pf supervise")
+	if contains(noaihub.Command, "--with-aihub") {
+		t.Fatal("workstation-noaihub: the opt-out must not pass --with-aihub")
 	}
-	for name, s := range map[string]w535ComposeService{"workstation": svc, "workstation-aihub": aihub} {
+	// the versioned components run from the components volume, so
+	// both variants point supervise's component paths there (the
+	// #161-era <data-dir>/release/current layout is gone)
+	for name, s := range map[string]w535ComposeService{"workstation": svc, "workstation-noaihub": noaihub} {
+		if !contains(s.Command, "/components/current/workflows") || !contains(s.Command, "/components/current/pi-web") {
+			t.Fatalf("%s: command = %v, must point --workflows-dir and --pi-web-dir at /components/current (the components volume is where the versions run)", name, s.Command)
+		}
 		if !contains(s.Command, "--grace") {
 			t.Fatalf("%s: command must pin pf supervise's stop grace (the outer grace must exceed the daemon's shutdown)", name)
 		}
 	}
-	if _, ok := compose.Volumes["polyforge-data"]; !ok {
-		t.Fatal("polyforge#161: the compose file must declare the polyforge-data named volume")
-	}
-	if _, ok := compose.Volumes["podman-storage"]; !ok {
-		t.Fatal("polyforge#161: the compose file must declare the podman-storage named volume")
+	for _, vol := range []string{"pf-home", "polyforge-data", "components", "aihub", "workspace", "podman-storage", "caddy-data"} {
+		if _, ok := compose.Volumes[vol]; !ok {
+			t.Fatalf("polyforge#176: the compose file must declare the %s named volume", vol)
+		}
 	}
 
 	// the optional HTTPS front (settled Q7: off by default, opened by a
 	// compose profile — the ticket's "可选 AIHub 与 HTTPS 前置"). It
 	// must never ride the default boots: the two boot profiles above
-	// stay exactly [no-aihub] and [aihub].
+	// stay exactly [aihub] and [no-aihub].
 	front, ok := compose.Services["https-front"]
 	if !ok {
 		t.Fatal("polyforge#161: compose.yaml must carry the https-front service — the ticket's optional HTTPS front (settled Q7)")
@@ -584,9 +643,8 @@ func TestWorkstationCompose(t *testing.T) {
 		t.Fatalf("polyforge#161: https-front must carry WORKSTATION_HTTPS_HOST=${WORKSTATION_HTTPS_HOST:-localhost} so the site address follows the operator's hostname, got %q", front.Environment["WORKSTATION_HTTPS_HOST"])
 	}
 	// the proxy target resolves under both boot modes: every workstation
-	// service carries the `workstation` network alias (the aihub variant
-	// has no container_name of that name).
-	for name, s := range map[string]w535ComposeService{"workstation": svc, "workstation-aihub": aihub} {
+	// boot service carries the `workstation` network alias.
+	for name, s := range map[string]w535ComposeService{"workstation": svc, "workstation-noaihub": noaihub} {
 		if !contains(s.Networks["default"].Aliases, "workstation") {
 			t.Fatalf("%s: the boot service must carry the `workstation` network alias — the https front reverse-proxies that name (review r2#1)", name)
 		}
@@ -638,7 +696,7 @@ func TestWorkstationSmoke(t *testing.T) {
 					"CgroupnsMode": scenario["cgroupns"],
 					"Privileged":   false,
 					"Devices":      []any{},
-					"Binds":        []string{"workstation_polyforge-data:/root/.local/share/polyforge:rw", "workstation_podman-storage:/var/lib/containers/storage:rw"},
+					"Binds":        []string{"workstation_pf-home:/root:rw", "workstation_polyforge-data:/root/.local/share/polyforge:rw", "workstation_components:/components:rw", "workstation_aihub:/var/lib/polyforge/aihub:rw", "workstation_workspace:/workspace:rw", "workstation_podman-storage:/var/lib/containers/storage:rw"},
 				},
 			},
 		})
