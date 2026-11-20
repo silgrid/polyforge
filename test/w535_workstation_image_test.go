@@ -1029,3 +1029,31 @@ func TestWorkstationSmokeFirstBoot(t *testing.T) {
 		}
 	})
 }
+
+// TestWorkstationSmokeProjectIsolation — review r1#4: the smoke owns
+// its runs, never an operator's deployment. The compose project is
+// fixed (`name: workstation` in compose.yaml) and the six volumes are
+// a real deployment's persistent home, so the smoke (whose first-boot
+// pass resets volumes) runs every compose call under its own project
+// name: `down -v` then only ever touches workstation-smoke_*, never
+// the operator's volumes. A collision with a concurrently running
+// deployment's fixed container_name fails the up explicitly instead.
+func TestWorkstationSmokeProjectIsolation(t *testing.T) {
+	body := w535Deliverable(t, "dist/workstation/smoke.sh")
+	// the compose() helper carries the project name
+	helper := body[strings.Index(body, "compose() {"):]
+	if !strings.Contains(helper, "-p workstation-smoke") {
+		t.Fatal("polyforge#176 (review r1#4): the smoke's compose() helper must run under its own project (-p workstation-smoke) — its down -v may never touch the operator's workstation volumes")
+	}
+	// every raw docker compose invocation carries it too (the env and
+	// podman-verify passes and the first-boot pass's override calls)
+	for i, line := range strings.Split(body, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "docker compose") {
+			continue
+		}
+		if !strings.Contains(trimmed, "-p workstation-smoke") {
+			t.Fatalf("polyforge#176 (review r1#4): smoke.sh line %d invokes docker compose without -p workstation-smoke: %q", i+1, trimmed)
+		}
+	}
+}
