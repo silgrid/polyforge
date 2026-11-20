@@ -303,6 +303,7 @@ class AnalysisTest(unittest.TestCase):
         fx, eng = analysis_fixture(self.root)
         sel = selected_record(fx)  # the record of the tree as build closed it
         fx.advance_origin("app", {"up.txt": "upstream\n"})
+        git_t(fx.repo("app"), "fetch", "-q", "origin")
         git_t(fx.repo("app"), "merge", "--no-ff", "-m", "sync: merge origin/main", "origin/main")
         self.assertNotEqual(fx.head("app"), sel["head"])
         path = analysis_file(fx, {"tests": [], "selected": {"app": sel}})
