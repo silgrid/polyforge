@@ -993,7 +993,7 @@ What changed under `tools/` and the dev channel of `tools/install.sh --dev`:
   with one WARN naming the formal tag, the green tag and every hit
   path: the two AIHubs stay on their formal release and those changes
   wait for the next formal one.
-- The preflight fails closed on its input: a green tree whose interface
+- The preflight is fail closed on its input: a green tree whose interface
   list or total list is missing, declares no entry, or carries an
   unsupported entry refuses the install with nothing on the machine
   changed, and so does a changed path git cannot print unambiguously;

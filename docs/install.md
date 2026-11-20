@@ -202,8 +202,8 @@ deploy tree, the deploy entry point) passes with one WARN naming the
 formal tag, the green tag and every hit path: the two AIHubs stay on
 their current formal release, the changes are not deployed, and their
 effects wait for the next formal release. A green tag whose lists are
-missing, empty or of an unsupported shape is refused too — fail
-closed: the installer waits for a green tag that carries the lists.
+missing, empty or of an unsupported shape is refused too (fail closed):
+the installer waits for a green tag that carries the lists.
 
 After a dev install the FORMAL channel is refused until the next formal
 release ships: the latest release is older than the installed
