@@ -1031,7 +1031,9 @@ setting:
   replay (each unit's static commit facts) and `carries` — and hands off
   only on green. Before them its close runs the scoped selection
   verification plans — `fast_checks.py --close-scoped`, one shared
-  implementation — and merges its record into the change analysis's
+  implementation, for a work item whose verification runs the light tier
+  (an integration batch's fix ticket runs the full bar and closes without
+  one) — and merges a green record into the change analysis's
   `selected`. Review runs four pre-written lines of the workflow's script
   `facts.py` as written — `plan-conformance` (the plan's two-way
   conformance with the diff), `build --replay --isolation host` (each

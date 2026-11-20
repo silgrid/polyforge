@@ -95,7 +95,9 @@
    gate's verification twin plans — is part of the same judgment, read with the
    close-scoped results that wrote it (`artifacts/build/scoped-close/<repo>.json`): a
    touched repo with no record and no result explaining its absence (an `incomplete`
-   close-scoped, or a red the owner ruled a residual, cited in the hand-off), a record
+   close-scoped, or a red the owner ruled a residual, cited in the hand-off — a work
+   item whose verification runs the full bar (an integration batch's fix ticket) closes
+   without a close-scoped run and owes no record), a record
    whose head is not the judged head, or a selected command without green evidence is a
    blocking `test_weakened` finding naming the repo. The machine selection never removes the manual
    duty above: it lists what the engine selected, not every test that matters.

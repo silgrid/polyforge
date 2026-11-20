@@ -103,8 +103,9 @@ itself); develop's verification runs `verify.py --tier auto --unit-runs artifact
 follow skills too: build records each unit's red-then-green run in
 `artifacts/build/units.json` (its close running the static `build` (no
 replay) and `carries` facts first, the scoped selection
-`fast_checks.py --close-scoped` before them — its record the change
-analysis's `selected`), and review runs the workflow's `facts.py` (the units' red runs
+`fast_checks.py --close-scoped` before them for a work item whose
+verification runs the light tier (an integration batch's fix ticket closes
+without one) — a green record the change analysis's `selected`), and review runs the workflow's `facts.py` (the units' red runs
 replayed at their test commits, or at the change's base for a unit declared
 `pre_existing_red`) under the heavy-run admission.
 
