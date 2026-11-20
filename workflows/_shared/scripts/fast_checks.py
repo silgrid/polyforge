@@ -472,9 +472,7 @@ class CheckRun:
             if reusable_entry(e):
                 key = entry_key(e)
                 if key is not None:
-                    # scaffold (polyforge#182 u2): the prerequisite dimension
-                    # is blank on both sides — reverted; u2 re-applies it
-                    prev[(key[0], key[1], key[2], "")] = e
+                    prev[key] = e
         return prev
 
     def tree_of(self, d: str) -> str:
@@ -748,18 +746,18 @@ class CheckRun:
             self.tree_of(d)
         self.previous = self.load_previous()
         consumed: Set[ReuseKey] = set()
-        # scaffold (polyforge#182 u2): the prerequisite dimension of the
-        # reuse key and the carried mechanism are reverted — the zero-
-        # behaviour skeleton u2's test commit needs, so its red falls on
-        # the judged assertions, not on a missing dimension; u2's
-        # implementation re-applies both
+        # the (root, cmd) pairs this run plans: a previous green entry of a
+        # pair this run re-ran is superseded (dropped), one of a pair it
+        # never planned — another root, a removed gate — is carried
+        planned: Set[Tuple[str, str]] = set()
         # (the entry, its command, its directory, its root, its nested
         # root, its log's absolute path, its private TMPDIR)
         runs: List[Tuple[Dict[str, Any], EngineCommand, str, str, str, str, str]] = []
         for c, directory, root_rel, d in commands:
             self.inv.say("repos/%s: `%s` (%s)" % (self.repo, c.cmd, c.phase))
+            planned.add((root_rel, c.cmd))
             subtree = self.trees.get(d, "")
-            key: Optional[ReuseKey] = (root_rel, c.cmd, subtree, "") if subtree else None
+            key: Optional[ReuseKey] = (root_rel, c.cmd, subtree, prereq_key(c)) if subtree else None
             prev = self.previous.get(key) if key is not None else None
             if key is not None and prev is not None \
                     and not self.r.unmet(c.requires_env, c.requires_cmd, directory, None):
@@ -767,7 +765,7 @@ class CheckRun:
                 # original log path and exit code 0 are its evidence
                 entry: Dict[str, Any] = {"name": c.name, "phase": c.phase, "root": root_rel,
                                          "cmd": c.cmd, "exit_code": 0, "log": prev.get("log", ""),
-                                         "tree": subtree, "prereq_key": prereq_key(c), "reused": True}
+                                         "tree": subtree, "prereq_key": key[3], "reused": True}
                 self.details["commands"].append(entry)
                 consumed.add(key)
                 continue
@@ -778,6 +776,15 @@ class CheckRun:
             self.details["commands"].append(entry)
             if not entry.get("skipped"):
                 runs.append((entry, c, directory, root_rel, d, log_abs, tmp_dir))
+        # a green entry of a (root, cmd) this run did not plan stays in the
+        # file (carried): the close — or the next unit's run — can still
+        # reuse it
+        for key, prev in self.previous.items():
+            if key in consumed or (prev.get("root", ""), prev.get("cmd", "")) in planned:
+                continue
+            carried = dict(prev)
+            carried["carried"] = True
+            self.details["commands"].append(carried)
         # the flaky phase: every red command's located failing units re-run
         # once, then the whole command confirmed — a check green through a
         # flaky re-run names it in its summary
