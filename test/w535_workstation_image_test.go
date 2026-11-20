@@ -882,3 +882,104 @@ func TestWorkstationImageEngine(t *testing.T) {
 		t.Fatalf("polyforge#161: the smoke run never printed its PASS line:\n%s", out)
 	}
 }
+
+// w535SmokeFirstBoot runs `smoke.sh first-boot` (the default local pass)
+// against one stub scenario and answers its combined output and exit
+// status. The scenario carries the record the container's exec reads
+// back (first-boot.json), the default Cell's server as `pf config get
+// server` answers it, and the two failure flags: recall-fails (the key
+// does not authenticate) and bootstrap-key-exists (the server's own
+// bootstrap fired anyway).
+func w535SmokeFirstBoot(t *testing.T, mutate func(dir string)) (string, error) {
+	t.Helper()
+	root := w535Root(t)
+	script := filepath.Join(root, "dist/workstation/smoke.sh")
+	dir := t.TempDir()
+	record := `{"phase":"done","mode":"local","defaultCell":"default","server":"http://127.0.0.1:8420","userReady":true,"keyReady":true,"imageManaged":true,"updatedAt":"2026-11-20T00:00:00Z"}`
+	if err := os.WriteFile(filepath.Join(dir, "first-boot.json"), []byte(record), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cell-server.txt"), []byte("http://127.0.0.1:8420\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if mutate != nil {
+		mutate(dir)
+	}
+	bin := t.TempDir()
+	if err := os.Symlink(filepath.Join(root, "test", "testdata", "workstation-smoke-stub", "docker"), filepath.Join(bin, "docker")); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", script, "first-boot")
+	cmd.Env = []string{
+		"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"HOME=" + os.Getenv("HOME"),
+		"W535_SMOKE_SCENARIO=" + dir,
+		"WORKSTATION_SMOKE_STUB_PORT=38421",
+	}
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// TestWorkstationSmokeFirstBoot — the smoke script's first-boot pass
+// (polyforge#176): the record's phase gates the pass (anything but a
+// completed local boot fails naming the phase), the key's real
+// authentication is the proof (a failing pf recall fails the run naming
+// it), and a bootstrap-admin key existing is a failure by itself (the
+// identity must predate the server, so the server's own bootstrap has
+// nothing left to seed).
+func TestWorkstationSmokeFirstBoot(t *testing.T) {
+	root := w535Root(t)
+	script := filepath.Join(root, "dist/workstation/smoke.sh")
+	if err := exec.Command("sh", "-n", script).Run(); err != nil {
+		t.Fatalf("polyforge#176: smoke.sh must parse as POSIX sh: %v", err)
+	}
+	t.Run("the passing local first boot", func(t *testing.T) {
+		out, err := w535SmokeFirstBoot(t, nil)
+		if err != nil {
+			t.Fatalf("the first-boot pass must pass against a completed local record:\n%s", out)
+		}
+		if !strings.Contains(out, "first-boot: PASS") {
+			t.Fatalf("the passing first boot must print its PASS line:\n%s", out)
+		}
+	})
+	t.Run("an incomplete record fails naming the phase", func(t *testing.T) {
+		out, err := w535SmokeFirstBoot(t, func(dir string) {
+			record := `{"phase":"config/failed","mode":"local","error":"x","updatedAt":"2026-11-20T00:00:00Z"}`
+			if err := os.WriteFile(filepath.Join(dir, "first-boot.json"), []byte(record), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if err == nil {
+			t.Fatalf("a first boot whose record is not done must fail:\n%s", out)
+		}
+		if !strings.Contains(out, "phase") {
+			t.Fatalf("the failure must name the phase:\n%s", out)
+		}
+	})
+	t.Run("a key that does not authenticate fails the run", func(t *testing.T) {
+		out, err := w535SmokeFirstBoot(t, func(dir string) {
+			if err := os.WriteFile(filepath.Join(dir, "recall-fails"), []byte("1"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if err == nil {
+			t.Fatalf("a default Cell whose key cannot authenticate must fail the run:\n%s", out)
+		}
+		if !strings.Contains(out, "authenticate") {
+			t.Fatalf("the failure must name the authentication proof:\n%s", out)
+		}
+	})
+	t.Run("a bootstrap-admin key fails the run", func(t *testing.T) {
+		out, err := w535SmokeFirstBoot(t, func(dir string) {
+			if err := os.WriteFile(filepath.Join(dir, "bootstrap-key-exists"), []byte("1"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if err == nil {
+			t.Fatalf("a bootstrap-admin key in the aihub volume means the identity did not predate the server — the run must fail:\n%s", out)
+		}
+		if !strings.Contains(out, "bootstrap") {
+			t.Fatalf("the failure must name the bootstrap key:\n%s", out)
+		}
+	})
+}
