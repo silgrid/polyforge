@@ -244,6 +244,14 @@ func Main(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 // package, which this package imports.
 const ExitNeedsOperator = supervisor.NeedsOperatorExit
 
+// ExitUpgradeRestart is the restart-for-an-upgrade convention
+// (polyforge#175): a daemon exit with it asks the container supervisor
+// to relaunch at once on the new current — no failure, no backoff. The
+// trigger that ends a run in this exit code is #92's upgrade
+// orchestration; the value is stated once, in the supervisor package,
+// which this package imports.
+const ExitUpgradeRestart = supervisor.UpgradeRestartExit
+
 // needsOperatorError marks a Run error as ExitNeedsOperator-class.
 type needsOperatorError struct{ err error }
 

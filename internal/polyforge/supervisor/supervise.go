@@ -33,6 +33,16 @@ import (
 // (it imports this package), so the convention is stated once, here.
 const NeedsOperatorExit = 78
 
+// UpgradeRestartExit is the restart-for-an-upgrade convention
+// (polyforge#175, 84-components-B): the daemon exits with it once an
+// upgrade switched the components volume's current — the supervisor
+// relaunches it AT ONCE from the same current-resolved argv, with no
+// failure backoff, and the run never ends on it. The trigger itself
+// (the drain and the current switch) is #92's upgrade orchestration;
+// the daemon package aliases this constant for its own
+// ExitUpgradeRestart, so the convention is stated once, here.
+const UpgradeRestartExit = 75
+
 // MinStopGrace is the smallest stop grace `pf supervise` accepts (the
 // daemon's shutdown can take up to 30s of WIP pushes plus agent-tree
 // teardown, so a shorter grace would cut a checkpoint in half).
