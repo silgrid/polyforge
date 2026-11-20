@@ -860,7 +860,7 @@ host changes: `tools/install.sh`'s `/usr/local/bin/pf` and
 `<data-dir>/release/current` are untouched. No action on upgrade beyond
 taking the new image.
 
-## v0.2.4，容器内组件更新（polyforge#190）
+## v0.2.4, 容器内组件更新（polyforge#190）
 
 工作站镜像内可通过 Pi Web 的「容器组件更新」卡片或 `pf components`
 升级 pf（含 daemon 与 AIHub）、车道与 skill、Pi Web。harness 仍使用原有

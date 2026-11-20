@@ -350,7 +350,7 @@ func TestDaemonVerbHelpOnlyExitGoldens(t *testing.T) {
 		"submit", "answer", "pause", "resume",
 		"wrap", "override", "params", "ops", "watch", "task", "step", "msg", "users", "api-keys", "machines", "projects",
 		"backup", "cell", "migrate",
-		"doctor", "version", "profile", "init", "config", "workflows", "daemon", "supervise", "aihub",
+		"doctor", "version", "profile", "init", "config", "workflows", "daemon", "supervise", "components", "aihub",
 	}
 	if len(commands) != len(want) {
 		t.Fatalf("registry has %d commands, want %d", len(commands), len(want))

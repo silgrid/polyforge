@@ -479,7 +479,9 @@ try {
     for (const dir of ["app", "lib", "components", "hooks"]) {
       for (const file of walk(join(root, dir))) {
         if (!/\.(ts|tsx)$/.test(file) || file === join(root, "lib", "polyforge-status.ts")) continue;
-        assert.ok(!readFileSync(file, "utf8").includes('"--version"'), `${file} spawns pf --version itself (one detection implementation)`);
+        // components upgrade 的 --version 是目标版本参数，不是新的 pf 身份探测。
+        const source = readFileSync(file, "utf8").replace('args.push("--version",input.version as string)', "");
+        assert.ok(!source.includes('"--version"'), `${file} spawns pf --version itself (one detection implementation)`);
       }
     }
   });
