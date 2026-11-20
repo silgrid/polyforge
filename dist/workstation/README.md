@@ -7,7 +7,10 @@ server alive, and the named volumes carry everything that persists (the
 data dir with the release layout, and podman's storage). The base image
 carries the runtime and one complete component seed: podman, crun,
 catatonit (PID 1), the base pf (/usr/local/libexec/polyforge/pf, the
-bootstrap the entry point execs by absolute path — polyforge#175), the
+bootstrap the entry point execs by absolute path — polyforge#175; the
+image's PATH `pf` links to the components volume's
+/components/current/bin/pf, live on the current version after an
+upgrade), the
 container configs, the Node
 runtime (Pi Web and the two harness CLIs run on it — nothing installs
 at boot), and — read-only, at `/opt/polyforge/seed/releases/<ver>` —

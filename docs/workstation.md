@@ -7,7 +7,10 @@ the verification containers. The image is the base plus the component
 seed: podman, crun, catatonit as PID 1, the base pf
 (`/usr/local/libexec/polyforge/pf` — the bootstrap the entry point execs
 by absolute path, polyforge#175), the container configs and the Node
-runtime, plus one complete seed of the versioned
+runtime, while the image's PATH `pf` is a link to the components
+volume's `/components/current/bin/pf` (an upgrade that switches current
+is live on PATH too; dangling until the first boot installs the
+volume), plus one complete seed of the versioned
 components — the release checkout, `bin/pf`, Pi Web built with its
 production dependencies and the two pinned harness packages —
 read-only at `/opt/polyforge/seed/releases/<ver>` and pinned by the
