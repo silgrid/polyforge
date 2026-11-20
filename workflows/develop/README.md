@@ -40,6 +40,12 @@ needs travels in result files, never in a body: `artifacts/plan.md`,
 `artifacts/verify/result.json`, `artifacts/publish.json`, `artifacts/merge/result.json`
 and `artifacts/merge/landing.json`. The daemon orchestrates; it judges no content.
 
+## Step process environment
+
+The daemon gives every pi and Claude step process its capsule facts and a capsule private temporary directory. `TMPDIR` is `<capsule>/artifacts/downloads/tmp/`; the daemon creates it before spawning the harness, and the value is different for concurrent capsules. A harness configuration or tool that deliberately overwrites `TMPDIR` is outside this guarantee. A background process started by a step shell ends with that tool call, so a later call must not wait for it; run long commands in the foreground and put temporary files under `$TMPDIR` or `artifacts/downloads/`, never a fixed `/tmp/<name>`.
+
+The complete variable table is in [the workflow contract's Scripts environment section](../../docs/reference/workflow-contract.md#scripts). Its Environment section describes inheritance and `PATH`; the lane's step processes are resident across turns, but a shell tool invocation does not provide cross-invocation process lifetime.
+
 ## What each step owes
 
 - **build** (fresh session; skill `build`) — one session, four segments
