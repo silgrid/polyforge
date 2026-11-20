@@ -91,6 +91,16 @@ test("a result without error is the only one that changes its row; pi and claude
   assert.equal(next[0], rows[0], "the row whose item failed keeps its identity");
 });
 
+test("both sides of one row update independently when both succeed (review r1#2)", () => {
+  const rows = [bothRow];
+  const next = applyRowSwitchResults(rows, [
+    { skill: "/a/SKILL.md", harness: "pi" },
+    { skill: "both", harness: "claude" },
+  ], { pi: "disabled", claude: "user-invocable-only" });
+  assert.equal(next[0].pi.disableModelInvocation, true, "the pi side takes the sent state");
+  assert.equal(next[0].claude.state, "user-invocable-only", "the claude side takes its own sent word, not lost behind the pi result");
+});
+
 test("the group switch acts on the rows whose pi side would change, pi alone (85c's conclusion, Q6)", () => {
   const rows = [bothRow, piOnlyRow, claudeOnlyRow];
   assert.deepEqual(rowsToSwitch(rows, true).map((row) => row.key), ["/b/SKILL.md"]);
