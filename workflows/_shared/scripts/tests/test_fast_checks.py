@@ -1,4 +1,4 @@
-# carries: workflows/_shared/scripts/fast_checks.py
+# carries: workflows/_shared/scripts/fast_checks.py, workflows/_shared/scripts/pfstep/git.py
 """fast_checks.py — build's written fast/scoped check: the scope engine's
 light reports for one task repo, their fast- and scoped-phase commands run
 in order, each in its report's root, the full phase never run, the result
@@ -942,6 +942,31 @@ class RepoReuseBoundaryTest(FastChecksCase):
                         "a change outside the nested root keeps its green run")
         self.assertEqual(self.runs_of(counts).count("root-one"), 2)
         self.assertEqual(self.runs_of(counts).count("nested-one"), 1)
+
+
+class RepoReuseTrackedIgnoredTest(FastChecksCase):
+    """已跟踪文件即使匹配忽略规则，其修改也必须使旧绿结果失效。"""
+
+    def test_tracked_ignored_file_changes_invalidate_reuse(self) -> None:
+        counts = os.path.join(self.tmp, "tracked-ignored-runs")
+        clone = self.task_repo("app", {
+            "go.mod": GO_MOD,
+            ".polyforge/verify-scope.conf": "stack=go\nfast_gate=echo ran >> %s\n" % counts,
+            "notes/input.txt": "before\n",
+        }, {".gitignore": "notes/input.txt\n"})
+        code, first = self.run_checks("app")
+        self.assertEqual(code, 0, first)
+        # 期望来自命令自己的执行计数；索引不应被快检改写。
+        index_before = git(clone, "write-tree")
+        write(clone, {"notes/input.txt": "after\n"})
+        code, second = self.run_checks("app")
+        self.assertEqual(code, 0, second)
+        with open(counts, encoding="utf-8") as f:
+            self.assertEqual(len(f.read().splitlines()), 2,
+                             "已跟踪但匹配忽略规则的文件变化后，命令必须重新执行")
+        self.assertNotIn("reused", self.commands_of(second)[0])
+        self.assertEqual(git(clone, "write-tree"), index_before,
+                         "快检不得改写仓库自己的索引")
 
 
 class PhaseRootTest(FastChecksCase):
