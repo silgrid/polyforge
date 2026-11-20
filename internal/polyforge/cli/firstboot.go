@@ -191,6 +191,9 @@ func runFirstBoot(o firstBootOpts, stdout io.Writer) error {
 		case st.Mode == "local" || o.ExtServer != st.Server:
 			return fmt.Errorf("first boot: the environment names %s but the in-progress record already chose %s — the first choice is made exactly once; unset %s and %s to resume as recorded, or remove %s and the default Cell in %s to redo the first boot", o.ExtServer, st.Server, EnvWorkstationAihubServer, EnvWorkstationAihubKey, record, config)
 		}
+		if o.ExtProject != "" && o.ExtProject != st.Project {
+			return fmt.Errorf("first boot: %s conflicts with the in-progress record's project — unset it to resume as recorded, or restore the original project choice", EnvWorkstationAihubProject)
+		}
 		if st.Mode == "external" && o.ExtKey == "" {
 			return fmt.Errorf("first boot: the in-progress record is an external boot but %s is unset — the record never carries the key; set it back (its value is already in %s) or remove %s and the default Cell to redo the first boot", EnvWorkstationAihubKey, config, record)
 		}
