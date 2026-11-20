@@ -184,7 +184,7 @@ try {
     const { sessionId, taskId } = await newSessionWithTask("sleep 20");
     const page = await openSession(sessionId);
     const item = taskItem(page, taskId);
-    await item.waitFor({ state: "visible", timeout: NAV_MS });
+    await waitFor(async () => (await item.count()) === 1, 45_000, "the running task never appeared in the running list");
     const text = await item.innerText();
     assert.match(text, /sleep 20/, `the task button names its command: ${JSON.stringify(text)}`);
     assert.match(text, /Running/, `the task button shows it running: ${JSON.stringify(text)}`);
@@ -199,7 +199,7 @@ try {
     // A narrow viewport keeps the same grid and the same facts.
     const narrow = await openSession(sessionId, { width: 375, height: 667 });
     const narrowItem = taskItem(narrow, taskId);
-    await narrowItem.waitFor({ state: "visible", timeout: NAV_MS });
+    await waitFor(async () => (await narrowItem.count()) === 1, 45_000, "the running task never appeared in the narrow viewport");
     assert.match(await narrowItem.innerText(), /Running/);
     const narrowBox = await narrowItem.boundingBox();
     assert.ok(narrowBox, "the narrow layout lays the item out");
@@ -222,17 +222,17 @@ try {
     // The list collapsed: no task item, and the 「已结束」 entry took over.
     await waitFor(async () => (await taskItem(page, taskId).count()) === 0, 45_000, "the settled task never left the running list");
     const entry = historyEntry(page);
-    await entry.waitFor({ state: "visible", timeout: NAV_MS });
+    await waitFor(async () => (await entry.count()) === 1, 45_000, "the 「已结束」 entry never appeared");
     await entry.click();
     const panel = historyPanel(page);
-    await panel.waitFor({ state: "visible", timeout: NAV_MS });
+    await waitFor(async () => (await panel.count()) === 1, 45_000, "the history panel never opened");
     const row = panel.locator(`[data-pi-history-task="${taskId}"]`);
-    await row.waitFor({ state: "visible", timeout: NAV_MS });
+    await waitFor(async () => (await row.count()) === 1, 45_000, "the settled task never appeared in the history panel");
     assert.match(await row.innerText(), /Completed/, `the history row shows the final status: ${JSON.stringify(await row.innerText())}`);
     await shot("R173b-history")(page);
     await row.click();
     const detail = taskPanel(page, taskId);
-    await detail.waitFor({ state: "visible", timeout: NAV_MS });
+    await waitFor(async () => (await detail.count()) === 1, 45_000, "the task's detail never opened from the history row");
     await waitFor(async () => (await detail.innerText()).includes("BG-E2E-DONE"), 20_000, "the detail never showed the task's output tail");
     await closeOpened();
   });
@@ -242,10 +242,10 @@ try {
     const { sessionId, taskId } = await newSessionWithTask("sleep 30");
     const page = await openSession(sessionId);
     const item = taskItem(page, taskId);
-    await item.waitFor({ state: "visible", timeout: NAV_MS });
+    await waitFor(async () => (await item.count()) === 1, 45_000, "the running task never appeared in the running list");
     await item.click();
     const detail = taskPanel(page, taskId);
-    await detail.waitFor({ state: "visible", timeout: NAV_MS });
+    await waitFor(async () => (await detail.count()) === 1, 45_000, "the task panel never opened");
     const stop = detail.getByRole("button", { name: "Stop task", exact: true });
     await stop.click();
     await waitFor(async () => (await taskItem(page, taskId).count()) === 0, 45_000, "the stopped task never left the running list");
@@ -257,7 +257,7 @@ try {
   await scenario("R173d", async () => {
     const { sessionId, taskId } = await newSessionWithTask("sleep 30");
     const page = await openSession(sessionId);
-    await taskItem(page, taskId).waitFor({ state: "visible", timeout: NAV_MS });
+    await waitFor(async () => (await taskItem(page, taskId).count()) === 1, 45_000, "the running task never appeared in the running list");
     // The server dies with the task running; a fresh server opens the same
     // registry and recovers the record as interrupted (#172's semantics).
     await closeOpened();
@@ -266,22 +266,21 @@ try {
     const reloaded = await openSession(sessionId);
     await waitFor(async () => (await taskItem(reloaded, taskId).count()) === 0, 45_000, "the interrupted task still shows in the running list after the restart");
     const entry = historyEntry(reloaded);
-    await entry.waitFor({ state: "visible", timeout: NAV_MS });
+    await waitFor(async () => (await entry.count()) === 1, 45_000, "the 「已结束」 entry never appeared after the restart");
     await entry.click();
     const panel = historyPanel(reloaded);
-    await panel.waitFor({ state: "visible", timeout: NAV_MS });
+    await waitFor(async () => (await panel.count()) === 1, 45_000, "the history panel never opened after the restart");
     const row = panel.locator(`[data-pi-history-task="${taskId}"]`);
-    await row.waitFor({ state: "visible", timeout: NAV_MS });
+    await waitFor(async () => (await row.count()) === 1, 45_000, "the interrupted task never appeared in the history panel");
     assert.match(await row.innerText(), /Interrupted/, `the history row shows interrupted: ${JSON.stringify(await row.innerText())}`);
     await row.click();
     const detail = taskPanel(reloaded, taskId);
-    await detail.waitFor({ state: "visible", timeout: NAV_MS });
+    await waitFor(async () => (await detail.count()) === 1, 45_000, "the interrupted task's detail never opened");
     await shot("R173d-interrupted")(reloaded);
     await closeOpened();
   });
 
   assert.equal(h.errors.length, 0, `browser errors: ${JSON.stringify(h.errors.slice(0, 5))}`);
-  console.log(`PASS ${SUITE}`);
 } catch (error) {
   process.exitCode = 1;
   console.log(errorText(error));
@@ -292,5 +291,9 @@ try {
   if (failures.length > 0) {
     process.exitCode = 1;
     console.log(`${failures.length} scenario(s) failed`);
+  } else {
+    // The suite's own marker: only a run with no failures and no browser
+    // errors reaches it.
+    console.log(`PASS ${SUITE}`);
   }
 }
