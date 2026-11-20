@@ -127,9 +127,9 @@ record exactly what ran.
    `| AC | kind | ref |`, kind `test` (ref `<repo>/<test file>: <test name>`), `existing`
    (the test already pinning it) or `doc` (the file and the validator that shows it).
    Keep it current with every round.
-   A round that wrote the plan adds its `## 分析对照` section beside `## Units` when the
-   ticket's content carries a `## 分析` section — its own `##` heading, never inside it (the
-   plan-conformance scan reads `## Units` up to the next `##` heading): each item the analysis
+   A round that wrote the plan adds its `## 分析对照` section beside `## Units` — its own `##`
+   heading, never inside it (the plan-conformance scan reads `## Units` up to the next `##`
+   heading): on a ticket whose content carries a `## 分析` section, each item the analysis
    lists — each old test and document obligation, each risk, each decided point (`已定`) —
    mapped to the unit that carries it, or the stated reason it is not taken; a decided point
    takes precedence over the analysis's recommendation; an analysis written against a base that

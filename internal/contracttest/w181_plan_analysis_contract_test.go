@@ -40,7 +40,7 @@ func TestW181PlanMapsTheAnalysis(t *testing.T) {
 		},
 		"workflows/_shared/skills/build.md": {
 			// the shared skill's condition: a round that wrote the plan adds the section
-			"A round that wrote the plan adds its `## 分析对照` section beside `## Units` when the ticket's content carries a `## 分析` section",
+			"A round that wrote the plan adds its `## 分析对照` section beside `## Units`",
 			"each item the analysis lists — each old test and document obligation, each risk, each decided point (`已定`) — mapped to the unit that carries it, or the stated reason it is not taken",
 			"a decided point takes precedence over the analysis's recommendation",
 			"re-checked against the current base before the work starts",
