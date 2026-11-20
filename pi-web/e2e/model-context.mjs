@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 // Keep account credentials and upstream services outside this UI boundary.
 // The route tests separately exercise the real writer and SDK model resolution.
 export async function checkModelContext(page) {
-  let saved = { providers: { relay: { models: [{ id: "keep-me" }] } } };
+  let saved = { providers: {
+    relay: { models: [{ id: "keep-me" }] },
+    "openai-codex": { models: [{ id: "gpt-6-astra", name: "GPT-6 Astra" }] },
+  } };
   let rejectSave = false;
   let writes = 0;
   const routes = ["**/api/models-config", "**/api/auth/providers", "**/api/models/enabled*", "**/api/provider-usage/query"];
