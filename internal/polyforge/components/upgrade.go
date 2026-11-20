@@ -188,36 +188,15 @@ func Upgrade(ctx context.Context, opts UpgradeOptions) (*UpgradeResult, error) {
 	// that follows re-asks until the work ends, and a cancel marker
 	// stands the run down.
 	record(UpgradeStateRunning, "drain", seedManifest.Version, "")
-	busy, err := opts.Face.Drain(ctx, opts.Force)
+	cancelled, err := drainAndWait(ctx, &drainWait{
+		root: opts.Root, face: opts.Face, poll: opts.Poll, force: opts.Force,
+		operation: OperationUpgrade, from: cur.Version, to: seedManifest.Version,
+	})
 	if err != nil {
 		return failed("drain", err)
 	}
-	for len(busy) > 0 && !opts.Force {
-		record(UpgradeStateWaiting, "drain", seedManifest.Version,
-			fmt.Sprintf("waiting for the running work of Cell(s) %s to end; new work is refused while the drain is set", strings.Join(busy, ", ")))
-		select {
-		case <-ctx.Done():
-			// the caller went away: the drain stays set (the documented
-			// recovery is the daemon restart), and the run records
-			// where it stood.
-			record(UpgradeStateFailed, "drain", seedManifest.Version, ctx.Err().Error())
-			return nil, ctx.Err()
-		case <-time.After(opts.Poll):
-		}
-		if UpgradeCancelRequested(opts.Root) {
-			if err := ClearUpgradeCancel(opts.Root); err != nil {
-				return failed("drain", err)
-			}
-			if err := opts.Face.Restart(ctx); err != nil {
-				return failed("drain", fmt.Errorf("standing the upgrade down asks the daemon to restart (the drain ends with that restart): %w", err))
-			}
-			record(UpgradeStateCancelled, "drain", seedManifest.Version, "")
-			return &UpgradeResult{From: cur.Version, To: cur.Version}, nil
-		}
-		busy, err = opts.Face.Drain(ctx, opts.Force)
-		if err != nil {
-			return failed("drain", err)
-		}
+	if cancelled {
+		return &UpgradeResult{From: cur.Version, To: cur.Version}, nil
 	}
 
 	// ---- switch: the install transaction's own commit point.
@@ -324,4 +303,62 @@ func parsePid(name string) (int, error) {
 		return 0, fmt.Errorf("not a pid: %s", name)
 	}
 	return pid, nil
+}
+
+// drainWait is the drain-and-wait half the upgrade and the rollback
+// share (the ticket's Q6 ruling: the rollback goes through the same
+// drain).
+type drainWait struct {
+	root      string
+	face      DaemonFace
+	poll      time.Duration
+	force     bool
+	operation string
+	from, to  string
+}
+
+// drainAndWait sets the Host's upgrade drain, waits out the running
+// work (re-asking until it ends; --force skips the wait) and answers
+// whether the run was stood down by the cancel marker: the daemon was
+// asked to restart (the drain ends with that restart), the marker was
+// consumed and the status file carries the cancelled record. A caller
+// that went away leaves the drain set (the documented recovery is the
+// daemon restart) and answers its own context's error.
+func drainAndWait(ctx context.Context, d *drainWait) (bool, error) {
+	if d.poll <= 0 {
+		d.poll = drainPollDefault
+	}
+	record := func(state, errText string) {
+		_ = WriteUpgradeStatus(d.root, &UpgradeStatus{Operation: d.operation, State: state,
+			Phase: "drain", From: d.from, To: d.to, Error: errText})
+	}
+	busy, err := d.face.Drain(ctx, d.force)
+	if err != nil {
+		return false, err
+	}
+	for len(busy) > 0 && !d.force {
+		record(UpgradeStateWaiting,
+			fmt.Sprintf("waiting for the running work of Cell(s) %s to end; new work is refused while the drain is set", strings.Join(busy, ", ")))
+		select {
+		case <-ctx.Done():
+			record(UpgradeStateFailed, ctx.Err().Error())
+			return false, ctx.Err()
+		case <-time.After(d.poll):
+		}
+		if UpgradeCancelRequested(d.root) {
+			if err := ClearUpgradeCancel(d.root); err != nil {
+				return false, err
+			}
+			if err := d.face.Restart(ctx); err != nil {
+				return false, fmt.Errorf("standing the run down asks the daemon to restart (the drain ends with that restart): %w", err)
+			}
+			record(UpgradeStateCancelled, "")
+			return true, nil
+		}
+		busy, err = d.face.Drain(ctx, d.force)
+		if err != nil {
+			return false, err
+		}
+	}
+	return false, nil
 }
