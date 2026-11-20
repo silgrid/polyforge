@@ -85,10 +85,12 @@ package runtime
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
 	"github.com/silgrid/polyforge/internal/common/atomicfile"
+	"github.com/silgrid/polyforge/internal/polyforge/runtime/stepagentassets"
 )
 
 // The dedicated directories' names under the harness root.
@@ -203,14 +205,12 @@ func refreshStepAgentMinimalSet(src, dst string) error {
 	} else if err := os.Remove(dstModels); err != nil && !os.IsNotExist(err) {
 		return &StepAgentDirError{Dir: dst, Err: err}
 	}
-	// agents/ and extensions/subagent/: recursive per-file copies;
-	// absent source dir ⇒ absent destination dir.
-	if err := mirrorStepAgentTree(filepath.Join(src, stepAgentAgentsDir), filepath.Join(dst, stepAgentAgentsDir)); err != nil {
+	// agents and the subagent extension are daemon-owned embedded assets;
+	// operator content is never used for either resource family.
+	if err := installEmbeddedTree(stepagentassets.FS, "agents", filepath.Join(dst, stepAgentAgentsDir)); err != nil {
 		return err
 	}
-	return mirrorStepAgentTree(
-		filepath.Join(src, stepAgentExtDir, stepAgentSubagent),
-		filepath.Join(dst, stepAgentExtDir, stepAgentSubagent))
+	return installEmbeddedTree(stepagentassets.FS, "extensions/subagent", filepath.Join(dst, stepAgentExtDir, stepAgentSubagent))
 }
 
 // pruneStepAgentDir removes everything under dst that is not in the
@@ -254,6 +254,40 @@ func pruneStepAgentDir(dst string) error {
 		}
 	}
 	return nil
+}
+
+// installEmbeddedTree installs a daemon-owned resource tree atomically per file.
+func installEmbeddedTree(fsys fs.FS, source, dst string) error {
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return &StepAgentDirError{Dir: dst, Err: err}
+	}
+	return fs.WalkDir(fsys, source, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return &StepAgentDirError{Dir: dst, Err: err}
+		}
+		rel, err := filepath.Rel(source, path)
+		if err != nil {
+			return &StepAgentDirError{Dir: dst, Err: err}
+		}
+		target := filepath.Join(dst, rel)
+		if entry.IsDir() {
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return &StepAgentDirError{Dir: dst, Err: err}
+			}
+			return nil
+		}
+		data, err := fs.ReadFile(fsys, path)
+		if err != nil {
+			return &StepAgentDirError{Dir: dst, Err: err}
+		}
+		if old, err := os.ReadFile(target); err == nil && string(old) == string(data) {
+			return nil
+		}
+		if err := atomicfile.Write(target, data, 0o644); err != nil {
+			return &StepAgentDirError{Dir: dst, Err: err}
+		}
+		return nil
+	})
 }
 
 // mirrorStepAgentTree copies the tree at src to dst when src exists and
@@ -366,7 +400,24 @@ func copyStepAgentTree(src, dst string) error {
 	return nil
 }
 
-// warnStepAgentDirNoCredentials is the carried-on notice for a source
+func validateEmbeddedStepAgentDir(dir string) error {
+	for _, item := range []struct{ rel, asset string }{
+		{"agents/worker.md", "agents/worker.md"},
+		{"extensions/subagent/index.ts", "extensions/subagent/index.ts"},
+		{"extensions/subagent/agents.ts", "extensions/subagent/agents.ts"},
+	} {
+		got, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(item.rel)))
+		if err != nil {
+			return fmt.Errorf("runtime: embedded step-agent resource %s is unavailable: %w", item.rel, err)
+		}
+		want, err := fs.ReadFile(stepagentassets.FS, item.asset)
+		if err != nil || string(got) != string(want) {
+			return fmt.Errorf("runtime: embedded step-agent resource %s failed content validation", item.rel)
+		}
+	}
+	return nil
+}
+
 // without auth.json (the harness adapter may hold credentials elsewhere).
 func warnStepAgentDirNoCredentials(src string) {
 	fmt.Fprintf(os.Stderr, "runtime: the operator agent dir %s carries no auth.json — the dedicated step agent directory is synced without model service credentials (the harness adapter may hold them elsewhere)\n", src)

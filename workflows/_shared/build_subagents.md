@@ -42,6 +42,7 @@ what it claims before you build on it or report it.
   the diff stays inside the write set before the next unit builds on them; a unit that fails the
   check goes back once, then you build it. You write `artifacts/build/units.json` from what the
   tasks return (a task never writes it).
+- **Pi 派发。** 当 `pi_subagents` 为 `on` 时，使用 pi 的 `subagent` 工具、`agent: "worker"`，一次只发一个任务，完成后再发下一个；不要使用 `parallel` 或 `chain`。daemon 内置扩展会串行处理并用完整隔离参数启动 worker。当它为 `off`（默认）时保持主 agent 路径，并记录 `implemented_by: main`。
 - **`implemented_by`.** A unit is `subagent` when an implementer sub-agent made both its commits,
   else `main`; your hand-off's 做了什么 says which each unit is, and why a big plan's unit is
   `main`.

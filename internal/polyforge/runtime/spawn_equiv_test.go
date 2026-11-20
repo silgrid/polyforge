@@ -58,7 +58,7 @@ func TestSpawnStartedCmdMatchesBuilder(t *testing.T) {
 		harness string // the harness the handle frames later messages for
 	}{
 		{"pi", piP, []string{"--mode", "rpc", "--no-skills", "--no-context-files",
-			"--no-prompt-templates", "--model", "x/y"},
+			"--no-prompt-templates", "--no-approve", "--model", "x/y"},
 			newPiSpawner(cfg).buildCmd(piP).Env, harness.Pi},
 		{"claude", clP, clWant.Args[1:], clWant.Env, harness.Claude},
 	}
