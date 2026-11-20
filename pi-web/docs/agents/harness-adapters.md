@@ -1,4 +1,8 @@
-# Harness adapters (统一 harness 配置层 · #85 85a1)
+# Harness adapters（统一 harness 配置层 · #85 85a1）
+
+## 模型页写入补充（85a3-2）
+
+pi 的模型适配器新增 `modelsConfig` 与 `enabledModels` 两种互斥写请求：provider 定义和上下文编辑经原有 models.json schema 与文件写保护保存，聊天开关先由既有最小编辑引擎计算 patterns，再经适配器的共享版本闸门及 settings.json 锁写入。旧 /api/models-config 与 /api/models/enabled 路由均转交适配器，不形成绕过写闸门的入口。Claude 按模型推理强度仍只读，写入由后续 #178 负责。
 
 The harness configuration layer of parent ticket #85: one **unified concept**
 vocabulary, one **capability table** per harness, and one **adapter** per

@@ -66,31 +66,40 @@ test("keeps project settings selections isolated by cwd", () => {
   assert.equal(getLastSettingsSelection("skills", "/project-three", storage), null);
 });
 
-test("shares the legacy Models page's selection globally, under the historical key", () => {
+test("legacy model navigation migrates once to the unified pi selection", () => {
+  const selection = JSON.stringify({ type: "provider", name: "gateway" });
+  const storage = createStorage({ "pi-web:settings-navigation": JSON.stringify({ section: "legacy-models", selections: { models: selection } }) });
+  assert.equal(getLastSettingsSection(null, storage), "models");
+  assert.equal(getLastSettingsSelection("models", null, storage), selection);
+  const stored = JSON.parse(storage.values.get("pi-web:settings-navigation"));
+  assert.equal(stored.section, "models");
+  assert.equal(Object.hasOwn(stored.selections, "models"), false);
+  assert.equal(stored.selections[JSON.stringify(["models", "pi"])], selection);
+  setLastSettingsSelection("models", JSON.stringify({ type: "provider", name: "new" }), null, storage);
+  assert.equal(Object.hasOwn(JSON.parse(storage.values.get("pi-web:settings-navigation")).selections, "models"), false);
+});
+
+test("shares the Models page selection globally under the historical key", () => {
   const storage = createStorage();
   const selection = JSON.stringify({ type: "provider", name: "custom" });
 
-  // The legacy Models page (its temporary id, Q2 A) keeps the global models
-  // selection: the storage key stays the historical "models" one.
-  setLastSettingsSelection("legacy-models", selection, "/project-one", storage);
+  setLastSettingsSelection("models", selection, "/project-one", storage);
 
-  assert.equal(getLastSettingsSelection("legacy-models", "/project-two", storage), selection);
-  assert.equal(getLastSettingsSelection("legacy-models", null, storage), selection);
+  assert.equal(getLastSettingsSelection("models", "/project-two", storage), selection);
+  assert.equal(getLastSettingsSelection("models", null, storage), selection);
   // A selection stored before the rename still reads.
   const old = createStorage({ "pi-web:settings-navigation": JSON.stringify({ selections: { models: selection } }) });
-  assert.equal(getLastSettingsSelection("legacy-models", null, old), selection);
-  // The new Models concept page (85a3's) has no selection of its own yet.
-  assert.equal(getLastSettingsSelection("models", null, storage), null);
+  assert.equal(getLastSettingsSelection("models", null, old), selection);
+  assert.equal(getLastSettingsSelection("models", null, storage), selection);
 });
 
-test("the settings rail is nine new sections plus the two legacy-marked ones (85a1b AC1)", () => {
+test("the settings rail contains the unified model page", () => {
   assert.ok(Array.isArray(SETTINGS_TABS), "SETTINGS_TABS is not exported");
   assert.deepEqual(
     SETTINGS_TABS.map((tab) => tab.id),
-    ["general", "account", "models", "permission", "skills", "mcp", "agents", "plugins", "polyforge", "legacy-models"],
+    ["general", "account", "models", "permission", "skills", "mcp", "agents", "plugins", "polyforge"],
   );
-  // Only the two temporary old pages are legacy-marked (删除条件见 85a3/85a4).
-  assert.deepEqual(SETTINGS_TABS.filter((tab) => tab.legacy).map((tab) => tab.id), ["legacy-models"]);
+  assert.deepEqual(SETTINGS_TABS.filter((tab) => tab.legacy).map((tab) => tab.id), []);
   assert.deepEqual(SETTINGS_SECTION_VALUES, SETTINGS_TABS.map((tab) => tab.id));
   // Every tab names a label key, once.
   const keys = SETTINGS_TABS.map((tab) => tab.labelKey);
@@ -98,7 +107,7 @@ test("the settings rail is nine new sections plus the two legacy-marked ones (85
   for (const key of keys) assert.match(key, /^(settings|common|polyforge)\./, `${key} is not a locale key`);
   // The new concept pages and both legacy pages open without a project; the
   // skills page too (85d AC3: it shows the user scope without a project).
-  for (const section of ["general", "account", "models", "permission", "skills", "mcp", "polyforge", "legacy-models"]) {
+  for (const section of ["general", "account", "models", "permission", "skills", "mcp", "polyforge"]) {
     assert.equal(settingsSectionRequiresProject(section), false, section);
   }
   for (const section of ["agents", "plugins"]) {
@@ -118,7 +127,7 @@ test("the deleted Claude page's stored `claude` value reads as unknown and lands
   });
   assert.equal(getLastSettingsSection("/p", both), "general");
   assert.equal(getLastSettingsSelection("skills", "/p", both), "/skill.md");
-  assert.equal(getLastSettingsSelection("legacy-models", null, both), "{}");
+  assert.equal(getLastSettingsSelection("models", null, both), "{}");
 });
 
 test("a stored models section value lands on the new Models concept page (85a1b AC4)", () => {

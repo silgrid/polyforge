@@ -1,9 +1,9 @@
+import { createPiAdapter } from "@/lib/harness/pi";
 import { NextResponse } from "next/server";
 import {
   ModelsConfigReadError,
   readModelsConfig,
   validateModelsConfigPayload,
-  writeModelsConfig,
 } from "@/lib/models-config-store";
 import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 import { ContextWindowError, normalizeContextWindowOverrides } from "@/lib/model-context";
@@ -44,7 +44,10 @@ export async function PUT(req: Request) {
     }
     checkProviderEntries(validated.data);
     checkImageMaxBytes(validated.data);
-    writeModelsConfig(validated.data);
+    const result = await createPiAdapter().write("model", { modelsConfig: validated.data });
+    if (result.status !== "written") {
+      return NextResponse.json({ error: result.reason }, { status: 409 });
+    }
     return NextResponse.json({ success: true });
   } catch (error) {
     if (error instanceof ContextWindowError || error instanceof ProviderEntryError || error instanceof ImageMaxBytesError) {

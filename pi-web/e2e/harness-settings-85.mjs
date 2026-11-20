@@ -1,11 +1,10 @@
+// carries: components/HarnessModelSettings*, lib/harness/model-view*
 // carries: components/HarnessGeneralSettings*, components/GeneralSettings*, components/HarnessEnvironmentSettings*, components/HarnessEffectiveSettings*, components/UnifiedSetting*, components/HarnessApplyTo*
 // carries: components/HarnessPermissionSettings*, components/ClaudePermissionSettings*, lib/harness-permissions-view*, lib/harness-settings-view*, lib/harness/diagnostics*, app/api/harness/*
 // carries: components/AccountSettings*, components/PiAccountLogin*, components/ModelsConfig*, app/api/settings/account/*, lib/provider-listing*, lib/harness/account*, lib/polyforge-doctor*
-// — polyforge#149 (#85 85a1b, the settings skeleton) and polyforge#150
-// (#85 85a4, the permission page): the 10-tab rail (九个新 tab 加标「旧版」的
-// 原「模型」tab；原「Claude」tab 已删), General's left column (界面与对话 /
-// 环境 / 生效值与来源), the account page (#85 85a2, polyforge#142), the models
-// placeholder, the permission page (审批模式 / 沙箱 / 项目信任 / 规则: the unified blocks' one-write-many-reads,
+// #85 设置页、账号页、统一模型页和权限页：九个导航分区，旧模型页已移除。
+// 模型页场景保留 provider 编辑、账号跳转与三列清单的行为校验。
+//
 // pi's 不做审批 / 无沙箱 notes, claude's own sections, the Pi Web approval
 // channel and the rules editor) and the stored old navigation values
 // (models → 新「模型」页; the deleted claude key → 常规, review r1#7). The harness adapter APIs are mocked
@@ -171,24 +170,23 @@ async function mockAdapterApis(context) {
 
 const TABS = [
   "General", "Account", "Models", "Permissions", "Skills", "MCP",
-  "Sub-agents", "Plugins", "Polyforge", "Models (legacy)",
+  "Sub-agents", "Plugins", "Polyforge",
 ];
 
-/** A label as an anchored regex, its punctuation escaped (the legacy labels carry parens). */
 const labelRe = (label) => new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
 
 const T = {
-  S1: "S85-01: Settings shows 9 new tabs plus the legacy-marked Models one, in the settled order",
+  S1: "S85-01: Settings shows the unified model page in the settled order",
   S2: "S85-02: General is a left-column layout whose three items switch the detail pane",
   S3: "S85-03: a phone walks General as list → detail → back",
-  S4: "S85-04: the account / models placeholders open; the permission page is real",
-  S5: "S85-05: the legacy Models page stays reachable and working",
+  S4: "S85-04: the account / unified model pages open; the permission page is real",
+  S5: "S85-05: the unified Models page shows the model table and Pi editor",
   S6: "S85-06: the environment pane lists only variable names, grouped per harness",
   S7: "S85-07: effective values carry the Inferred mark and their source; native diagnostics are a collapsed block per harness",
   S8: "S85-08: stored old navigation values land on the new pages",
   S9: "S85-09: a failed harness-list read is a visible reason in both panes, never a contradictory empty registry",
   S10: "S85-10: the account tab lists the harnesses, shows the interactive card and the per-Cell rows with every field, and never a credential value",
-  S11: "S85-11: pi's sign-in lives only on Account › pi — the legacy Models tab has no login, API-key entry or Add-provider picker, and the never-offered Anthropic subscription appears nowhere",
+  S11: "S85-11: pi sign-in lives on Account › pi and the unified Models page has no duplicate login form",
   S12: "S85-12: the account page's one-shot login terminal attaches and streams the declared command's output — the real login path a human would walk (review r1#1)",
   S16: "S85-16: the permission page's left column is 审批模式 / 沙箱 / 项目信任 / 规则, its approval pane unified and claude-sectioned",
   S17: "S85-17: the unified approval write reaches claude's native mode (Q1 A), the extra values its own radio",
@@ -196,6 +194,7 @@ const T = {
   S19: "S85-19: the trust pane shows each harness's own decision and 统一成当前值 writes the differing one",
   S20: "S85-20: the rules pane edits claude's allow / ask / deny lists with no unified block",
   S21: "S85-21: General has no claude permission controls; its hook switch stays",
+  S22: "S85-22: the table and the editor share one enabledModels controller — a Save never re-enables a model the table just disabled (review r1#1)",
 };
 const failures = new Map(Object.values(T).map((title) => [title, []]));
 const ran = new Set();
@@ -277,13 +276,11 @@ try {
       }
       assert.ok(await tab(page, name).isDisabled(), `${name} should need a project`);
     }
-    for (const name of ["General", "Account", "Models", "Permissions", "MCP", "Polyforge", "Models (legacy)"]) {
+    for (const name of ["General", "Account", "Models", "Permissions", "MCP", "Polyforge"]) {
       assert.ok(!(await tab(page, name).isDisabled()), `${name} should open without a project`);
     }
-    // The one legacy tab is marked as such in its own label; the old Claude
-    // tab is gone (85a4), its values living on the permission page.
-    assert.match(labels[9], /\(legacy\)/, "the old Models tab is not marked legacy");
-    assert.ok(!labels.some((label) => /Claude \(legacy\)/.test(label)), "the old Claude tab is still in the rail");
+    assert.equal(labels.length, 9, "the unified model page is duplicated in the rail");
+    assert.ok(!labels.some((label) => /legacy/i.test(label)), "a legacy Models tab remains in the rail");
     await page.context().close();
   });
 
@@ -339,19 +336,18 @@ try {
     await page.context().close();
   });
 
-  // S85-04 — AC1: the models placeholder opens (85a2 filled the account
-  // tab in, 85a4 the permission page); the permission page is real, its left
-  // column the settled four.
-  await part("S4", "placeholders", async () => {
+  // S85-04 — AC1: the unified Models page is real; the permission page is real.
+  await part("S4", "model page", async () => {
     const page = await newPage();
     await openSettings(page);
-    for (const [name, id] of [["Models", "models"]]) {
-      await tab(page, new RegExp(`^${name}$`)).click({ timeout: ACTION_MS });
-      const host = sectionHost(page, id);
-      await host.waitFor({ state: "visible", timeout: ACTION_MS });
-      assert.match(await host.innerText(), /Placeholder/i, `the ${name} page shows no placeholder text`);
-    }
-    // The permission page is 85a4's: its left column is the settled four.
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    const host = sectionHost(page, "models");
+    await host.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
+    const modelText = await host.innerText();
+    assert.ok(modelText.includes("Default model"), "the unified model page lacks the default model");
+    assert.ok(modelText.includes("Model list"), "the unified model page lacks the model list");
+    assert.ok(modelText.includes("Chat availability"), "the unified model page lacks the chat availability column");
+    assert.ok(modelText.includes("pi"), "the unified model page lacks the pi editor");
     await tab(page, /^Permissions$/).click({ timeout: ACTION_MS });
     const permission = sectionHost(page, "permission");
     await permission.locator(".config-sidebar-item").first().waitFor({ state: "visible", timeout: ACTION_MS });
@@ -440,20 +436,27 @@ try {
     };
     await page.context().route(/\/api\/auth\/providers/, (route) => route.fulfill({ json: PROVIDERS }));
     await openSettings(page);
-    // the legacy Models tab: the logged-in provider row opens the moved notice
-    await tab(page, /^Models \(legacy\)$/).click({ timeout: ACTION_MS });
-    const models = sectionHost(page, "legacy-models");
+    // The unified Models page owns the model table and Pi editor, while login
+    // remains on Account › pi; no duplicate legacy page exists. The managed
+    // provider's detail must settle before the no-login assertions read it
+    // (review r1#3: reading a single count over a still-loading list pinned
+    // nothing).
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    const models = sectionHost(page, "models");
+    await models.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
     await models.locator(".config-sidebar-item").filter({ hasText: "Google" }).first().click({ timeout: ACTION_MS });
-    // the heading renders in the detail header's uppercase style
-    const movedText = await waitFor(async () => {
+    const detailText = await waitFor(async () => {
+      const detail = models.locator(".enabled-models-section, .enabled-models-empty, .enabled-models-error").first();
+      if (!(await detail.count())) return false;
       const text = await models.innerText();
-      return /sign-in has moved/i.test(text) ? text : false;
-    }, ACTION_MS, "the legacy tab never showed the moved notice");
-    // the real UI words (review r1#3): the button says Login / Re-login —
-    // "Log in" never appears, an assertion on it pinned nothing
-    assert.ok(!movedText.includes("Login") && !movedText.includes("Re-login"), "the legacy tab still offers a login");
-    assert.ok(!movedText.includes("Add provider"), "the legacy tab still offers the picker");
-    assert.equal(await models.locator('input[type="password"]').count(), 0, "the legacy tab still offers the API-key entry");
+      if (/Loading/i.test(text)) return false;
+      if (text.includes("Login") || text.includes("Re-login")) return false;
+      if ((await models.locator('input[type="password"]').count()) !== 0) return false;
+      return text;
+    }, ACTION_MS, "the managed provider detail still offers a login");
+    assert.ok(!detailText.includes("Login") && !detailText.includes("Re-login"), "the Models page exposes a duplicate login form");
+    assert.equal(await models.locator('input[type="password"]').count(), 0, "the Models page exposes a duplicate API-key form");
+    await models.getByRole("button", { name: "Account", exact: true }).waitFor({ state: "visible", timeout: ACTION_MS });
     // Account › pi: the rows, the Add provider button, and no Anthropic
     // subscription anywhere
     await tab(page, /^Account$/).click({ timeout: ACTION_MS });
@@ -514,17 +517,95 @@ try {
     await page.context().close();
   });
 
-  // S85-05 — AC1: the legacy Models page stays reachable and working (the
-  // legacy Claude page is deleted by 85a4; S1 pins its absence from the rail).
-  await part("S5", "legacy pages", async () => {
+  // S85-05 — AC1: the unified Models page keeps the provider editor and table together.
+  await part("S5", "unified model page", async () => {
     const page = await newPage();
     await openSettings(page);
-    await tab(page, /^Models \(legacy\)$/).click({ timeout: ACTION_MS });
-    const models = sectionHost(page, "legacy-models");
-    // 85a2 moved the Add-provider picker to Account › pi: the legacy tab
-    // renders its provider list without one
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    const models = sectionHost(page, "models");
+    await models.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
     await models.locator(".config-sidebar-list").first().waitFor({ state: "visible", timeout: COLD_MS });
-    assert.equal(await models.getByRole("button", { name: "Add provider", exact: true }).count(), 0, "the legacy Models tab still offers Add provider");
+    assert.ok((await models.innerText()).includes("Model list"), "the unified model table is missing");
+    await models.getByRole("button", { name: "Add provider", exact: true }).waitFor({ state: "visible", timeout: ACTION_MS });
+    await models.getByRole("button", { name: "Add provider", exact: true }).click({ timeout: ACTION_MS });
+    await models.getByPlaceholder("provider-name", { exact: true }).waitFor({ state: "visible", timeout: ACTION_MS });
+    await page.context().close();
+  });
+
+  // S85-22 — review r1#1: the model table and the embedded models.json editor
+  // share one enabledModels controller. The Save's resync declares the
+  // providers that are fully enabled *right now*; with two controllers the
+  // editor's stale view would list a provider the table just partially
+  // disabled, and the server would re-enable what the user switched off.
+  await part("S22", "shared enabledModels controller", async () => {
+    const page = await newPage();
+    const CONFIG = { providers: { gateway: {
+      baseUrl: "https://gw.example/v1", apiKey: "fixture-key", api: "openai-completions",
+      models: [{ id: "m1", name: "Gateway One" }, { id: "m2", name: "Gateway Two" }],
+    } } };
+    let m1Enabled = true;
+    const enabledView = () => ({
+      allEnabled: false, patterns: ["gateway/*"], stalePatterns: [],
+      enabledTotal: m1Enabled ? 2 : 1, availableTotal: 2, scope: "global",
+      settingsPath: "fixture/settings.json", editable: true,
+      providers: [{ id: "gateway", name: "Gateway", kind: "custom", enabledCount: m1Enabled ? 2 : 1, models: [
+        { id: "m1", name: "Gateway One", ref: "gateway/m1", enabled: m1Enabled, contextWindow: 2048 },
+        { id: "m2", name: "Gateway Two", ref: "gateway/m2", enabled: true, contextWindow: 2048 },
+      ] }],
+    });
+    const puts = [];
+    await page.route("**/api/models/enabled*", (route) => {
+      const request = route.request();
+      if (request.method() === "PUT") {
+        const body = request.postDataJSON();
+        puts.push(body);
+        if (body.op === "models" && body.enabled === false && body.refs.includes("gateway/m1")) m1Enabled = false;
+        if (body.op === "resync" && (body.fullyEnabled ?? []).includes("gateway")) m1Enabled = true;
+      }
+      return route.fulfill({ json: enabledView() });
+    });
+    await page.route("**/api/models-config", (route) => {
+      if (route.request().method() === "PUT") return route.fulfill({ json: { success: true } });
+      return route.fulfill({ json: CONFIG });
+    });
+    await page.route(/\/api\/models\?/, (route) => route.fulfill({ json: {
+      models: {}, modelList: [
+        { id: "m1", name: "Gateway One", provider: "gateway" },
+        { id: "m2", name: "Gateway Two", provider: "gateway" },
+      ], defaultModel: { provider: "gateway", modelId: "m1" }, thinkingLevels: {}, thinkingLevelMaps: {}, thinkingLevelPins: {}, isScoped: false,
+    } }));
+    await page.route("**/api/models/default", (route) => route.fulfill({ json: {
+      defaultHarness: "pi", claudeDefaultModel: "default", claudeDefaultEffort: "default",
+    } }));
+    await page.route("**/api/claude", (route) => route.fulfill({ json: { models: [] } }));
+    await page.route("**/api/harness/pi/model", (route) => route.fulfill({ json: { harness: "pi", concept: "model", data: {
+      defaultProvider: "gateway", defaultModel: "m1", reasoningEffort: null,
+      perModelReasoningEffort: {}, providers: [], customModels: [],
+    } } }));
+    await page.route("**/api/harness/claude/model", (route) => route.fulfill({ json: { harness: "claude", concept: "model", data: {
+      defaultProvider: null, defaultModel: null, reasoningEffort: null,
+      perModelReasoningEffort: {}, providers: [], customModels: [],
+    } } }));
+    await page.route(/\/api\/auth\/providers/, (route) => route.fulfill({ json: {
+      providers: [], oauthProviders: [], apiKeyProviders: [],
+    } }));
+    await page.route("**/api/provider-usage/query", (route) => route.fulfill({ json: { providers: [] } }));
+    await openSettings(page);
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    const models = sectionHost(page, "models");
+    await models.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
+    const m1Row = models.getByRole("row").filter({ hasText: "gateway/m1" });
+    const m1Toggle = m1Row.getByRole("checkbox");
+    await m1Toggle.waitFor({ state: "visible", timeout: ACTION_MS });
+    await m1Toggle.click();
+    await waitFor(async () => puts.some((body) => body.op === "models" && body.refs.includes("gateway/m1"))
+      && !(await m1Toggle.isChecked()),
+      ACTION_MS, "the table toggle never reached the writer");
+    await models.getByRole("button", { name: "Save", exact: true }).click({ timeout: ACTION_MS });
+    const resync = await waitFor(() => puts.find((body) => body.op === "resync") ?? false,
+      ACTION_MS, "the Save never re-verified the stored patterns");
+    assert.ok(!(resync.fullyEnabled ?? []).includes("gateway"),
+      `the resync re-enabled the model the table just disabled: ${JSON.stringify(resync)}`);
     await page.context().close();
   });
 

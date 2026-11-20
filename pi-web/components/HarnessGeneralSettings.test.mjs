@@ -76,6 +76,6 @@ test("the tab rail the panes live under is the nine-plus-two model", () => {
   // One fact, one place: the shell's section ids are SETTINGS_TABS' ids.
   assert.deepEqual(
     [...new Set(SETTINGS_TABS.map((tab) => tab.id))],
-    ["general", "account", "models", "permission", "skills", "mcp", "agents", "plugins", "polyforge", "legacy-models"],
+    ["general", "account", "models", "permission", "skills", "mcp", "agents", "plugins", "polyforge"],
   );
 });

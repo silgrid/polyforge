@@ -582,6 +582,10 @@ try {
     page.setDefaultTimeout(30_000);
     const errors = [];
     const olderResponses = [];
+    page.on("requestfailed", (request) => {
+      const url = new URL(request.url());
+      console.log(`REQUEST_FAILED ${url.pathname}: ${request.failure()?.errorText}`);
+    });
     page.on("pageerror", (error) => errors.push(error.message));
     page.on("console", (event) => { if (event.type() === "error") errors.push(event.text()); });
     page.on("response", (response) => {

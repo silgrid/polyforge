@@ -355,7 +355,7 @@ export interface McpServerInfo {
   headerNames: string[];
   /** An HTTP server without an `Authorization` header or `auth` signs in with OAuth when it answers 401. */
   usesOAuth: boolean;
-  /** An HTTP server's `auth.provider`: it sends that pi provider's token (signed in under Settings › Models) instead of using OAuth. */
+  /** An HTTP server's `auth.provider`: it sends that pi provider's token (signed in under Settings › Account › pi) instead of using OAuth. */
   authProvider?: string;
   /**
    * Whether `mcp-auth.json` holds an access token for the server (by its name

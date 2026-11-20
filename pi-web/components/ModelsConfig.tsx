@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useId, useRef } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import type { ModelCatalogPreset, ModelCatalogRecommendation } from "@/lib/model-catalog";
 import type { DiscoveredModel } from "@/lib/model-discovery";
-import { ContextWindowError, normalizeContextWindowOverrides } from "@/lib/model-context";
+import { ContextWindowError, normalizeContextWindowOverrides, withContextWindowOverride } from "@/lib/model-context";
 import { checkProviderEntries, ProviderEntryError, type ProviderEntryProblem } from "@/lib/model-provider-check";
 import { checkImageMaxBytes, DEFAULT_IMAGE_MAX_BYTES, formatImageBytes, ImageMaxBytesError, imageMaxBytes, parseImageMaxBytes, withImageMaxBytes } from "@/lib/model-image-limits";
 import {
@@ -49,10 +49,10 @@ import {
   useConfigDetailNavigation,
 } from "./SettingsUi";
 import {
+  EnabledModelsSection,
   EnabledModelsBanner,
   EnabledModelsProviderSwitch,
   EnabledModelsProviderSwitchNote,
-  useEnabledModels,
   type EnabledModelsController,
 } from "./EnabledModelsSection";
 import { providerBadgeLabel } from "./enabled-models-helpers";
@@ -134,7 +134,7 @@ type Selection =
   | { type: "apikey"; providerId: string };
 
 function readRememberedSelection(): Selection | null {
-  const raw = getLastSettingsSelection("legacy-models");
+  const raw = getLastSettingsSelection("models");
   if (!raw) return null;
   try {
     const value: unknown = JSON.parse(raw);
@@ -549,6 +549,18 @@ function ProviderDetail({ name, editingName, provider, onChange, onEditingNameCh
           </>
         )}
       </div>
+      <EnabledModelsSection
+        providerId={name}
+        controller={enabledModels}
+        contextSettings={{
+          overrides: provider.modelOverrides,
+          disabled: false,
+          onChange: (modelId, value) => {
+            const updated = withContextWindowOverride({ providers: { [name]: provider } }, name, modelId, value);
+            onChange(updated.providers?.[name] ?? {});
+          },
+        }}
+      />
 
     </div>
   );
@@ -1350,38 +1362,19 @@ function ModelDetail({
   );
 }
 
-// ── The moved sign-in (85a2) ────────────────────────────────────────────────────
-
-/** pi's sign-in, sign-out and API-key entry live on Account › pi now
- * (polyforge#142, owner ruling Q7 A); a managed provider's row here shows
- * where they went — nothing of a credential is entered or displayed here. */
-export function ProviderAuthMovedNotice() {
-  const { t } = useI18n();
-  return (
-    <div className="models-auth-moved" data-models-auth-moved="true">
-      <ConfigDetailHeader>
-        <ConfigDetailHeaderInfo>
-          <SectionTitle>{t("settings.modelsAuthMovedTitle")}</SectionTitle>
-        </ConfigDetailHeaderInfo>
-      </ConfigDetailHeader>
-      <p style={{ margin: 0, fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5 }}>
-        {t("settings.modelsAuthMoved")}
-      </p>
-    </div>
-  );
-}
-
-
 // ── Main component ────────────────────────────────────────────────────────────
 
-export function ModelsConfig({ onClose, embedded = false, cwd = null }: {
-  onClose: () => void; embedded?: boolean; cwd?: string | null;
+export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAccount, enabledModels }: {
+  onClose: () => void; embedded?: boolean; cwd?: string | null; onOpenAccount?: () => void;
+  /** The page's one shared controller — the table and this editor must never
+ * hold two views of pi's enabledModels, or a Save's resync would re-enable
+ * what the table just switched off (review r1#1). */
+  enabledModels: EnabledModelsController;
 }) {
   const { t } = useI18n();
-  const { closeDetail } = useConfigDetailNavigation();
+  const { closeDetail, openDetail } = useConfigDetailNavigation();
   // `enabledModels` lives in pi's settings, not models.json, so these switches
   // apply immediately instead of waiting for this panel's Save button.
-  const enabledModels = useEnabledModels(cwd);
   const [config, setConfig] = useState<ModelsJson>({ providers: {} });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -1446,7 +1439,7 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null }: {
   }, [refreshAuthProviders]);
 
   useEffect(() => {
-    if (selection) setLastSettingsSelection("legacy-models", JSON.stringify(selection));
+    if (selection) setLastSettingsSelection("models", JSON.stringify(selection));
   }, [selection]);
 
   // An overrides-only entry belongs to its managed provider, not a duplicate custom provider.
@@ -1632,7 +1625,17 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null }: {
   const detailContent = (() => {
     if (!selection) return null;
     if (selection.type === "oauth" || selection.type === "apikey") {
-      return <ProviderAuthMovedNotice key={selection.providerId} />;
+      return <EnabledModelsSection
+        key={selection.providerId}
+        providerId={selection.providerId}
+        controller={enabledModels}
+        contextSettings={{
+          overrides: config.providers?.[selection.providerId]?.modelOverrides,
+          disabled: loadError !== null,
+          onChange: (modelId, value) => setConfig((previous) =>
+            withContextWindowOverride(previous, selection.providerId, modelId, value)),
+        }}
+      />;
     }
     if (selection.type === "provider") {
       const provider = config.providers?.[selection.name];
@@ -1680,6 +1683,15 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null }: {
           {/* Left: tree */}
           <ConfigSidebar>
             <ConfigSidebarList>
+              <ConfigButton disabled={loading || loadError !== null} onClick={() => {
+                let name = "custom";
+                let suffix = 1;
+                while (Object.hasOwn(config.providers ?? {}, name)) name = `custom-${suffix++}`;
+                setConfig((previous) => ({ ...previous, providers: { ...previous.providers, [name]: { api: "openai-completions" } } }));
+                setSelection({ type: "provider", name });
+                openDetail();
+              }}>{t("i18n.addProvider")}</ConfigButton>
+              {onOpenAccount && <ConfigButton onClick={onOpenAccount}>{t("settings.tabAccount")}</ConfigButton>}
               {/* Active OAuth subscriptions */}
               {activeOAuth.map((p) => {
                 const isSelected = selection?.type === "oauth" && selection.providerId === p.id;

@@ -1,3 +1,4 @@
+// carries: app/api/models-config/test/*
 import "#test-env";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
@@ -109,6 +110,33 @@ function sseOkResponse() {
     headers: { "Content-Type": "text/event-stream" },
   });
 }
+
+test("adaptive Anthropic connection test omits thinking on the wire", async (t) => {
+  const originalFetch = globalThis.fetch;
+  let sent;
+  globalThis.fetch = async (_input, init) => {
+    sent = JSON.parse(init.body);
+    const events = [
+      ['message_start', { type: 'message_start', message: { id: 'msg_fixture', type: 'message', role: 'assistant', model: 'adaptive', content: [], stop_reason: null, usage: { input_tokens: 1, output_tokens: 0 } } }],
+      ['content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }],
+      ['content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'OK' } }],
+      ['content_block_stop', { type: 'content_block_stop', index: 0 }],
+      ['message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 1 } }],
+      ['message_stop', { type: 'message_stop' }],
+    ].map(([name, data]) => `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`).join('');
+    return new Response(events, { headers: { 'Content-Type': 'text/event-stream' } });
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const response = await POST(testModel({
+    providerName: 'adaptive-gateway',
+    provider: { baseUrl: 'https://adaptive.example', api: 'anthropic-messages', apiKey: 'fixture-key' },
+    model: { id: 'adaptive', reasoning: true, compat: { forceAdaptiveThinking: true } },
+  }));
+  const result = await response.json();
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.ok(sent, 'the Anthropic request was sent');
+  assert.equal(Object.hasOwn(sent, 'thinking'), false, JSON.stringify(sent));
+});
 
 test("an omitted provider.api resolves from the model entry, the catalog, or the OpenAI default (review blocker)", async (t) => {
   const originalFetch = globalThis.fetch;
