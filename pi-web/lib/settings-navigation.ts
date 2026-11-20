@@ -90,7 +90,7 @@ function readState(storage: StorageLike): SettingsNavigationState {
 }
 
 function selectionKey(section: SettingsDetailSection, cwd?: string | null): string | null {
-  if (section === "models") return "models";
+  if (section === "models") return JSON.stringify(["models", "pi"]);
   if (cwd) return JSON.stringify([section, cwd]);
   // MCP works without a project; its selection then lives under the bare name,
   // which no project key (always an array) can collide with. Skills likewise
@@ -105,7 +105,12 @@ export function getLastSettingsSection(
 ): SettingsSection {
   if (!storage) return "general";
   try {
-    const section = readState(storage).section;
+    const state = readState(storage);
+    if (state.section === "legacy-models") {
+      state.section = "models";
+      storage.setItem(STORAGE_KEY, JSON.stringify(state));
+    }
+    const section = state.section;
     if (!isSettingsSection(section)) return "general";
     return settingsSectionRequiresProject(section) && !cwd ? "general" : section;
   } catch {
@@ -136,7 +141,14 @@ export function getLastSettingsSelection(
   const key = selectionKey(section, cwd);
   if (!key) return null;
   try {
-    const value = readState(storage).selections?.[key];
+    const state = readState(storage);
+    if (section === "models" && typeof state.selections?.models === "string") {
+      state.selections = { ...state.selections };
+      if (!(key in state.selections)) state.selections[key] = state.selections.models;
+      delete state.selections.models;
+      storage.setItem(STORAGE_KEY, JSON.stringify(state));
+    }
+    const value = state.selections?.[key];
     return typeof value === "string" && value.length > 0 ? value : null;
   } catch {
     return null;
@@ -155,6 +167,7 @@ export function setLastSettingsSelection(
   try {
     const state = readState(storage);
     state.selections = { ...state.selections, [key]: value };
+    if (section === "models") delete state.selections.models;
     storage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch {
     // Browser storage is best-effort.
