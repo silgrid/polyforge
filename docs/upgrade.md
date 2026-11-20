@@ -976,3 +976,30 @@ What a project must change — nothing: the close runs the same
 project-neutral selection verification runs, and a repository whose
 light selection answers the full tier sees the same stop at the owner
 that its verification's own full bar always was.
+
+## v0.2.4, the development channel's graded AIHub-side preflight (polyforge#188)
+
+What changed under `tools/` and the dev channel of `tools/install.sh --dev`:
+
+- `tools/aihub-interface-paths.conf` is the new client-server interface
+  list, read from the green commit's tree beside the total list
+  `tools/aihub-paths.conf` (one list each, both readers: the tests
+  generate their fixture paths from the same files). A
+  release-tag..green diff touching an interface path
+  (`internal/common/api/**`, `internal/common/protocol/**` — a
+  conservative path rule, not a compatibility proof) still refuses the
+  dev install in prepare; touching only the total list's other paths —
+  the server's insides, the SQL migrations, the deploy tree — passes
+  with one WARN naming the formal tag, the green tag and every hit
+  path: the two AIHubs stay on their formal release and those changes
+  wait for the next formal one.
+- The preflight is fail closed on its input: a green tree whose interface
+  list or total list is missing, declares no entry, or carries an
+  unsupported entry refuses the install with nothing on the machine
+  changed, and so does a changed path git cannot print unambiguously;
+  renames are judged on both their ends (no rename folding).
+- No action on upgrade beyond taking the new pf: the change is
+  installer logic and repository declarations. A dev install over a
+  green tag that predates the interface list now refuses by design —
+  wait for the next green tag; the one-time bypass copy that installed
+  v0.2.4-dev.19 over green/20261120-1 is retired with this change.

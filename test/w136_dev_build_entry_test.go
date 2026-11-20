@@ -14,16 +14,23 @@ package test
 //     binary-producing target;
 //   - tools/aihub-paths.conf, the one AIHub-side path list the installer
 //     and the tests both read (the ticket's first-version scope): a
-//     diff of «latest formal tag..green commit» hitting it refuses the
-//     dev channel in prepare.
+//     diff of «latest formal tag..green commit» hitting a path OUTSIDE
+//     the interface list warns the dev channel's run (since
+//     polyforge#188; the interface subset refuses — see below);
+//   - tools/aihub-interface-paths.conf (polyforge#188), the one
+//     client-server interface list the installer and the tests both
+//     read: a diff of «latest formal tag..green commit» hitting it
+//     refuses the dev channel in prepare, judged independently of the
+//     total list.
 //
 // The Makefile recipe is the interface here (the installer calls it with
 // named facts and asserts on the built binary); its behavioural pins —
 // the exact argv install.sh passes and the version it stamps — live in
-// w136_install_dev_test.go over the make shim's journal. The conf's
-// matching behaviour is pinned by TestW136InstallDevRefusesAIHubChange.
+// w136_install_dev_test.go over the make shim's journal. The confs'
+// matching behaviour is pinned by TestW136InstallDevRefusesInterfaceChange
+// and TestW136InstallDevWarnsOnAIHubInternalChange.
 //
-// carries: Makefile, tools/aihub-paths.conf, test/w136_dev_build_entry_test.go
+// carries: Makefile, tools/aihub-paths.conf, tools/aihub-interface-paths.conf, test/w136_dev_build_entry_test.go
 
 import (
 	"os"
@@ -89,13 +96,13 @@ func TestW136DevBuildEntry(t *testing.T) {
 	}
 }
 
-// TestW136AIHubPathsConf: the AIHub-side path list is the ticket's
-// first-version scope, one entry per line, and the installer and the
-// tests read this one file (AC2's 安装器与测试读同一份清单).
-func TestW136AIHubPathsConf(t *testing.T) {
-	b, err := os.ReadFile(filepath.Join(w136Root(t), "tools", "aihub-paths.conf"))
+// w136ConfLines answers one repository path list's entries: the
+// non-blank, non-comment lines of its own file.
+func w136ConfLines(t *testing.T, rel string) ([]string, string) {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(w136Root(t), filepath.FromSlash(rel)))
 	if err != nil {
-		t.Fatalf("tools/aihub-paths.conf is missing: the AIHub-side scope must live in one repository file the installer and the tests both read: %v", err)
+		t.Fatalf("%s is missing: the path scope must live in one repository file the installer and the tests both read: %v", rel, err)
 	}
 	var lines []string
 	for _, l := range strings.Split(string(b), "\n") {
@@ -105,6 +112,14 @@ func TestW136AIHubPathsConf(t *testing.T) {
 		}
 		lines = append(lines, l)
 	}
+	return lines, string(b)
+}
+
+// TestW136AIHubPathsConf: the AIHub-side path list is the ticket's
+// first-version scope, one entry per line, and the installer and the
+// tests read this one file (AC2's 安装器与测试读同一份清单).
+func TestW136AIHubPathsConf(t *testing.T) {
+	lines, raw := w136ConfLines(t, "tools/aihub-paths.conf")
 	// the ticket's first version, verbatim
 	want := []string{"deploy/**", "internal/aihub/**", "internal/common/api/**", "internal/common/protocol/**", ".polyforge/deploy.sh"}
 	if strings.Join(lines, "\n") != strings.Join(want, "\n") {
@@ -113,8 +128,43 @@ func TestW136AIHubPathsConf(t *testing.T) {
 	// the documented semantics: a /** entry is the directory prefix, an
 	// exact entry matches one path — the semantics install.sh and the
 	// tests implement
-	head := strings.ToLower(string(b))
+	head := strings.ToLower(raw)
 	if !strings.Contains(head, "**") || !strings.Contains(head, "prefix") {
 		t.Fatal("tools/aihub-paths.conf must document its two shapes: a trailing /** covers the directory recursively, anything else is one exact path")
+	}
+}
+
+// TestW136AIHubInterfacePathsConf (polyforge#188): the client-server
+// interface list is the ticket's first-version scope — the two shared
+// wire-contract packages — one entry per line, read by the installer
+// from the green commit's tree and by the tests from the repository
+// (one list, both readers). The two lists' first-version shape: every
+// interface entry is also a total-list entry, the refuse-grade subset
+// of the AIHub-side set (the installer's independence — an interface
+// hit outside the total list still refuses — is pinned by
+// TestW136InstallDevJudgesTheGreenCommitLists).
+func TestW136AIHubInterfacePathsConf(t *testing.T) {
+	lines, raw := w136ConfLines(t, "tools/aihub-interface-paths.conf")
+	// the ticket's first version, verbatim
+	want := []string{"internal/common/api/**", "internal/common/protocol/**"}
+	if strings.Join(lines, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("tools/aihub-interface-paths.conf = %q, want exactly the ticket's first-version list %v", lines, want)
+	}
+	// the documented semantics, the same two shapes the total list documents
+	head := strings.ToLower(raw)
+	if !strings.Contains(head, "**") || !strings.Contains(head, "prefix") {
+		t.Fatal("tools/aihub-interface-paths.conf must document its two shapes: a trailing /** covers the directory recursively, anything else is one exact path")
+	}
+	// the first-version relationship: every interface entry is also a
+	// total-list entry (the refuse-grade subset of the AIHub-side set)
+	total, _ := w136ConfLines(t, "tools/aihub-paths.conf")
+	set := map[string]bool{}
+	for _, l := range total {
+		set[l] = true
+	}
+	for _, e := range want {
+		if !set[e] {
+			t.Fatalf("the interface entry %s is not a total-list entry: the first-version shape keeps the interface set inside tools/aihub-paths.conf's AIHub-side set", e)
+		}
 	}
 }
