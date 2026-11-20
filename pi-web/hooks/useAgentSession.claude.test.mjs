@@ -718,13 +718,25 @@ test("a fresh composer takes the combined default's harness and claude's native 
   assert.equal(hook.result.claudeDefaultModel, "opus", "the star's filled marker is the native default");
   hook.unmount();
 
-  // the user's own pick wins over a late answer
+  // the user's own pick wins over a late answer: the fetch's reply is held
+  // back until after the pick, so the lateness itself is pinned
+  let releaseAnswer;
+  const held = new Promise((resolve) => { releaseAnswer = resolve; });
+  globalThis.fetch = async (url) => {
+    if (url === "/api/models/default") return held.then((body) => json(body));
+    if (url === "/api/claude") return json({ available: true });
+    return json({});
+  };
   const picked = renderHook(useAgentSession, { session: null, newSessionCwd: "/project", newSessionDraftKey: "new:picked", t: (key) => key });
   await settle();
   picked.flush();
   picked.result.chooseNewSessionHarness("pi");
   picked.flush();
+  releaseAnswer({ defaultHarness: "claude", claudeDefaultModel: "opus", claudeDefaultEffort: "high" });
+  await settle();
+  picked.flush();
   assert.equal(picked.result.newSessionHarness, "pi", "the user's harness choice stays");
+  assert.equal(picked.result.newSessionClaudeModel, "opus", "an unpicked field still takes the fetched value");
   picked.unmount();
 
   // a carried draft choice wins too
@@ -764,5 +776,31 @@ test("the claude star saves the combined default and an untouched fresh composer
   assert.equal(save?.body?.model, "sonnet", "the star posts the model name alone");
   assert.equal(hook.result.claudeDefaultModel, "sonnet", "the star's filled marker follows the save");
   assert.equal(hook.result.newSessionClaudeModel, "sonnet", "an untouched fresh composer follows the new default");
+  hook.unmount();
+});
+
+// ── 85a3 r2 (review r1#4): an open claude session's star marker ──────────
+test("an open claude session's star marker reads claude's native default, not the built-in alias", async () => {
+  globalThis.EventSource = class {
+    readyState = 0;
+    constructor() { queueMicrotask(() => { this.readyState = 1; this.onmessage?.({ data: JSON.stringify({ type: "connected", isStreaming: false }) }); }); }
+    close() { this.readyState = 2; }
+  };
+  globalThis.fetch = async (url) => {
+    if (url === "/api/models/default") return json({ defaultHarness: "pi", claudeDefaultModel: "opus", claudeDefaultEffort: "high" });
+    if (String(url).startsWith("/api/sessions/c9")) {
+      const info = { id: "c9", path: "", cwd: "/project", created: "", modified: "", messageCount: 0, firstMessage: "", harness: "claude", claude: { model: "claude-opus-5-5", effort: "default" } };
+      return json({ sessionId: "c9", filePath: "", totalActiveMs: 0, tree: [], leafId: null, snapshotRevision: null, toolNames: [], info, context: { messages: [], entryIds: [], oldestEntryId: null, hasMore: false, turnsBefore: 0, thinkingLevel: "off", model: null } });
+    }
+    if (String(url).startsWith("/api/models")) return json({ models: {}, modelList: [], defaultModel: null });
+    return json({});
+  };
+  const info = { id: "c9", path: "", cwd: "/project", created: "", modified: "", messageCount: 0, firstMessage: "", harness: "claude", claude: { model: "claude-opus-5-5", effort: "default" } };
+  const hook = renderHook(useAgentSession, { session: info, newSessionCwd: null, newSessionDraftKey: null, t: (key) => key });
+  await settle();
+  hook.flush();
+  assert.equal(hook.result.claudeDefaultModel, "opus", "the star's filled marker is the native default");
+  assert.equal(hook.result.newSessionHarness, "pi", "an open session takes no new-session default");
+  assert.equal(hook.result.newSessionClaudeModel, "default", "an open session's composer state is untouched");
   hook.unmount();
 });
