@@ -1097,3 +1097,100 @@ func TestWorkstationSmokeProjectIsolation(t *testing.T) {
 		}
 	}
 }
+
+// w535SmokeFirstBootExternal runs `smoke.sh first-boot --external`
+// against one stub scenario: the record the container reads back says
+// an external boot, the default Cell names the counting stub, and the
+// stub itself runs for real on the host (no container ever reaches it
+// under the stub engine).
+func w535SmokeFirstBootExternal(t *testing.T, mutate func(dir string)) (string, error) {
+	t.Helper()
+	root := w535Root(t)
+	script := filepath.Join(root, "dist/workstation/smoke.sh")
+	dir := t.TempDir()
+	record := `{"phase":"done","mode":"external","defaultCell":"default","server":"http://host.docker.internal:38421","userReady":false,"keyReady":true,"imageManaged":true,"updatedAt":"2026-11-20T00:00:00Z"}`
+	if err := os.WriteFile(filepath.Join(dir, "first-boot.json"), []byte(record), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cell-server.txt"), []byte("http://host.docker.internal:38421\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if mutate != nil {
+		mutate(dir)
+	}
+	bin := t.TempDir()
+	if err := os.Symlink(filepath.Join(root, "test", "testdata", "workstation-smoke-stub", "docker"), filepath.Join(bin, "docker")); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", script, "first-boot", "--external")
+	cmd.Env = []string{
+		"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"HOME=" + os.Getenv("HOME"),
+		"W535_SMOKE_SCENARIO=" + dir,
+		"WORKSTATION_SMOKE_STUB_PORT=38421",
+	}
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// TestWorkstationSmokeFirstBootExternal — the smoke's external pass
+// under the stub engine: the record gate names the mode, and a record
+// that is not a completed external boot fails the run naming it.
+func TestWorkstationSmokeFirstBootExternal(t *testing.T) {
+	t.Run("the passing external pass", func(t *testing.T) {
+		out, err := w535SmokeFirstBootExternal(t, nil)
+		if err != nil {
+			t.Fatalf("the external pass must pass against a completed external record:\n%s", out)
+		}
+		if !strings.Contains(out, "first-boot: PASS") {
+			t.Fatalf("the passing external run must print its PASS line:\n%s", out)
+		}
+		if !strings.Contains(out, "the stub server saw 0 requests") {
+			t.Fatalf("the external pass must assert the zero-remote fact:\n%s", out)
+		}
+	})
+	t.Run("a record of the wrong mode fails the run", func(t *testing.T) {
+		out, err := w535SmokeFirstBootExternal(t, func(dir string) {
+			record := `{"phase":"done","mode":"local","defaultCell":"default","server":"http://127.0.0.1:8420","userReady":true,"keyReady":true,"imageManaged":true,"updatedAt":"2026-11-20T00:00:00Z"}`
+			if err := os.WriteFile(filepath.Join(dir, "first-boot.json"), []byte(record), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if err == nil {
+			t.Fatalf("a record whose mode is not external must fail the external pass:\n%s", out)
+		}
+		if !strings.Contains(out, "record") {
+			t.Fatalf("the failure must name the record:\n%s", out)
+		}
+	})
+}
+
+// TestWorkstationSmokeFirstBootEngine — the real-engine external pass
+// (polyforge#176, the round-2 real-machine finding): the counting stub
+// sits on the host and the smoke must prove the FIRST BOOT itself makes
+// no remote request — the zero-remote window is the boot (up to the
+// record saying done), because the daemon's heartbeat to the Cell's
+// server afterwards is the machine's normal connection, never an
+// object the boot creates. Without an engine it skips, exactly like
+// the other real-container engine gates.
+func TestWorkstationSmokeFirstBootEngine(t *testing.T) {
+	root := w535Root(t)
+	if out, err := exec.Command("docker", "version", "--format", "{{.Server.Version}}").CombinedOutput(); err != nil {
+		t.Skipf("no docker engine (%v: %s), skipping the real-engine external first boot", err, strings.TrimSpace(string(out)))
+	}
+	if err := exec.Command("docker", "compose", "version").Run(); err != nil {
+		t.Skipf("no docker compose (%v), skipping the real-engine external first boot", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sh", filepath.Join(root, "dist/workstation/smoke.sh"), "first-boot", "--external")
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "WORKSTATION_SMOKE_STUB_PORT=38421")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("polyforge#176: smoke first-boot --external failed on the real engine: %v:\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "first-boot: PASS") {
+		t.Fatalf("polyforge#176: the external run never printed its PASS line:\n%s", out)
+	}
+}
