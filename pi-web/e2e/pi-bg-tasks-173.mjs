@@ -194,6 +194,16 @@ async function openSession(sessionId, viewport) {
 
 const shot = (name) => async (page) => { await page.screenshot({ path: join(shots, `${name}.png`), fullPage: false }); };
 
+/** The turn's Process details fold starts collapsed when its answer has text
+ *  (lib/message-display's collapsesProcessDetails), so the bg_run card and
+ *  its open-task button mount only once the fold opens: expand every fold
+ *  before the scenarios interact with the card (#189). */
+async function revealToolCards(page) {
+  for (const fold of await page.getByRole("button", { name: /^Process details/ }).all()) {
+    if ((await fold.getAttribute("aria-expanded")) !== "true") await fold.click();
+  }
+}
+
 /** Every page this suite opened; closed after each scenario, so a stopped server's dead EventSources log no browser errors. */
 const opened = [];
 const closeOpened = async () => {
@@ -257,6 +267,7 @@ try {
     await page.evaluate(() => { window.__pf189NoReload = "kept"; });
     // The browser sees the task running first: the item and its card's button.
     await waitFor(async () => (await taskItem(page, taskId).count()) === 1, 25_000, "the running task never appeared in the running list");
+    await revealToolCards(page);
     const card = cardButton(page, taskId);
     await waitFor(async () => (await card.count()) >= 1, 25_000, "the bg_run tool card's open-task button never showed");
     // The completion notification shows as its own message and the model answers it.
@@ -329,6 +340,7 @@ try {
     await waitFor(async () => (await list(reloaded).count()) === 0, 25_000, "the running area still renders after the restart");
     assert.equal(await historyEntry(reloaded).count(), 0, "a settled entry renders in the running area after the restart");
     // The card button opens the interrupted task's detail.
+    await revealToolCards(reloaded);
     const card = cardButton(reloaded, taskId);
     await waitFor(async () => (await card.count()) === 1, 25_000, "the bg_run card's open-task button never showed after the restart");
     await card.click();
@@ -359,6 +371,7 @@ try {
     const page = await openSession(sessionId);
     await waitFor(async () => (await taskItem(page, shortId).count()) === 1 && (await taskItem(page, longId).count()) === 1, 25_000, "the two running tasks never both appeared in the running list");
     // Open the long task's detail from its card while it still runs.
+    await revealToolCards(page);
     await cardButton(page, longId).first().click();
     const detail = taskPanel(page, longId);
     await waitFor(async () => (await detail.count()) === 1, 25_000, "the long task's detail never opened from the card button");
