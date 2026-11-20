@@ -256,8 +256,13 @@ func TestWorkstationImage(t *testing.T) {
 		if !strings.Contains(body, "workstation_env_whitelist") {
 			t.Fatal("polyforge#161: entrypoint.sh must call the sourced whitelist before handing over")
 		}
-		if !strings.Contains(body, `exec pf supervise "$@"`) {
-			t.Fatal("polyforge#161: entrypoint.sh must end by exec'ing pf supervise with the caller's flags (compose passes only the flags)")
+		if !strings.Contains(body, `exec /usr/local/libexec/polyforge/pf supervise "$@"`) {
+			t.Fatal("polyforge#175: entrypoint.sh must end by exec'ing the base pf's absolute path with the caller's flags (compose passes only the flags)")
+		}
+		// the absolute path is the point (Q5): a PATH lookup would find
+		// whatever a later layer or mount left in /usr/local/bin
+		if strings.Contains(body, `exec pf supervise`) {
+			t.Fatal("polyforge#175: entrypoint.sh must not exec pf by a PATH lookup — the base pf lives at /usr/local/libexec/polyforge/pf")
 		}
 		// the first boot runs BETWEEN the boundary and supervise
 		// (84-components-C): the identity must exist before the server

@@ -20,6 +20,7 @@
 #
 # The service `command` carries only pf supervise's flags: the image's
 # entrypoint first-boot-initializes the machine and ends by exec'ing
+# the base pf at /usr/local/libexec/polyforge/pf with
 # `pf supervise "$@"`, so this list is the argument list of that call.
 # The versioned components run from the components volume
 # (/components/current — the release checkout, Pi Web, the workflows),

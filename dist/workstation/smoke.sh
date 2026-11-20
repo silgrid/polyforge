@@ -15,11 +15,11 @@
 # Prerequisites: a reachable docker engine with compose (the outer
 # engine's CLI shape; podman-compose hosts are a follow-up), curl, and
 # python3 on the host. `boot --with-aihub` and `env` additionally need
-# the data volume to carry the release layout's components
-# (<data-dir>/release/current/pi-web — 84-components); on an empty
-# volume they fail naming that, which is the honest answer: the AIHub
-# and env halves of the acceptance cannot hold without the components
-# the workstation is designed to run.
+# the components volume to carry Pi Web (/components/current/pi-web —
+# 84-components, installed by the first boot from the image's seed); on
+# an empty volume they fail naming that, which is the honest answer: the
+# AIHub and env halves of the acceptance cannot hold without the
+# components the workstation is designed to run.
 #
 # PI_WEB_PASSWORD defaults to the fixed smoke test password (settled
 # Q5); every poll below is bounded (poll_until), never a fixed delay.
@@ -207,7 +207,7 @@ cmd_boot() {
 		# an empty data volume cannot boot it.
 		poll_until "Pi Web /login to answer 200" 300 \
 			sh -c "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$web_host_port/login | grep -q 200" ||
-			die "Pi Web never answered 200 on /login — the data volume must carry <data-dir>/release/current/pi-web (84-components)"
+			die "Pi Web never answered 200 on /login — the components volume must carry /components/current/pi-web (84-components)"
 		code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$web_host_port/login")
 		printf 'smoke: Pi Web /login = %s\n' "$code"
 		docker exec "$cid" pf --json queue >/dev/null ||
@@ -252,7 +252,7 @@ YEOF
 		docker exec "$cid" sh -c 'ps -e -o args= | grep -q "[p]f supervise"'
 	poll_until "the Pi Web component to run" 300 \
 		docker exec "$cid" sh -c 'ps -e -o args= | grep -q "[s]tart:lan"' ||
-		die "Pi Web never started — the data volume must carry <data-dir>/release/current/pi-web (84-components)"
+		die "Pi Web never started — the components volume must carry /components/current/pi-web (84-components)"
 	webpid=$(docker exec "$cid" sh -c "ps -e -o pid=,args= | grep '[s]tart:lan' | awk '{print \$1}' | head -1")
 	environ=$(docker exec "$cid" sh -c "cat /proc/$webpid/environ" | tr '\0' '\n')
 	printf '%s\n' "$environ" | grep -qx 'PORT=30141' ||

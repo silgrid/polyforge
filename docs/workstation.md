@@ -1,11 +1,13 @@
 # The workstation image
 
 The workstation is a whole polyforge machine inside one container: the
+
 daemon runs there, `pf supervise` keeps it (and, in the default boot,
 the aihub server) alive, and podman — rootful, with crun — runs the
 verification containers. The image is the base plus the component
-seed: podman, crun, catatonit as PID 1, the pf binary, the container
-configs and the Node runtime, plus one complete seed of the versioned
+seed: podman, crun, catatonit as PID 1, the base pf (`/usr/local/libexec/polyforge/pf`, the bootstrap the
+entry point runs by absolute path), the container configs and the Node
+runtime, plus one complete seed of the versioned
 components — the release checkout, `bin/pf`, Pi Web built with its
 production dependencies and the two pinned harness packages —
 read-only at `/opt/polyforge/seed/releases/<ver>` and pinned by the
@@ -21,6 +23,7 @@ Everything the workstation needs lives in `dist/workstation/`:
 |---|---|
 | `Containerfile` | the base image: webui's dist tree and the pf binary built from this repository, on ubuntu with podman, crun, catatonit, plus the Node runtime and the seed stage |
 | `build-seed.sh` | the seed assembly, run inside the image build (Pi Web's build and prune, the two pinned harness packages, `bin/pf`, the manifest seedtool writes and verifies) |
+
 | `entrypoint.sh` | cgroup-namespace init as root, then the environment boundary, then the first boot (`pf first-boot`), then `pf supervise` |
 | `compose.yaml` | the outer container's minimal parameter set, the six persistent volumes and the two boot modes |
 | `containers/` | podman's storage, containers and registries configuration |

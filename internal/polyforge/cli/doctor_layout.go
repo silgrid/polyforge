@@ -13,16 +13,21 @@ import (
 	"strings"
 
 	"github.com/silgrid/polyforge/internal/polyforge/cellcfg"
+	"github.com/silgrid/polyforge/internal/polyforge/components"
 	"github.com/silgrid/polyforge/internal/polyforge/supervisor"
 )
 
 // doctor_layout.go: the install-layout half of the harness family plus
 // the daemon supervision and prerequisites checks.
 //
-//   - pi / claude install layout: pi references the local release
-//     checkout (<data-dir>/release/current) as a package, and
-//     ~/.claude/skills/polyforge is a symlink into it — the layout
-//     tools/install.sh sets up; anything else warns with the fix.
+//   - pi / claude install layout: pi references the machine's current
+//     release root as a package — the image's components volume
+//     (/components/current, polyforge#175) or tools/install.sh's
+//     <data-dir>/release/current on a host — and ~/.claude/skills/polyforge
+//     is a symlink into it; anything else warns with the fix. Inside
+//     the image the pre-#162 data-dir release layout is refused with a
+//     migration note (never bridged), and no fix names tools/install.sh
+//     — no image runs it.
 //   - v1 harness leftovers: v1 polyforge artifacts still hooked into pi
 //     or Claude Code warn with backup-first cleanup commands; the doctor
 //     never removes anything. Migration hygiene only: removed at v3.0
@@ -98,9 +103,23 @@ var v1ClaudeSkills = []string{
 // v1ExtFileRe matches a settings-listed v1 bridge extension file.
 var v1ExtFileRe = regexp.MustCompile(`(^|/)polyforge/index\.(js|ts)$`)
 
-// releaseCurrent is the stable release checkout link.
+// releaseCurrent is the root every consumer resolves current through
+// (polyforge#175's one component-root convention): the workstation
+// image's components volume (/components/current), or the host
+// installer's release checkout (<data-dir>/release/current).
 func releaseCurrent(home string) string {
-	return filepath.Join(DataDir(home), "release", "current")
+	return currentRoot(DataDir(home))
+}
+
+// legacyDataRelease answers whether dataDir still carries the pre-#162
+// component layout (#161's data-volume shape: release/<ver> with a
+// current symlink inside) — the layout the install transaction refuses
+// (fail-closed) and no doctor row ever bridges. Inside the image it is
+// the machine's real finding, so the layout rows report it with the
+// migration note instead of their generic hint.
+func legacyDataRelease(dataDir string) bool {
+	_, err := os.Lstat(filepath.Join(dataDir, components.LegacyReleaseDirname))
+	return err == nil
 }
 
 // v1PkgOwnerRepoHashes pins the pi package sources that shipped the v1
@@ -244,9 +263,10 @@ func piLocalPath(src, agentDir, home string) string {
 	return filepath.Join(agentDir, s)
 }
 
-// piLayoutCheck judges whether pi references polyforge the way
-// tools/install.sh sets it up: one local package entry naming
-// <data-dir>/release/current.
+// piLayoutCheck judges whether pi references polyforge the way the
+// machine's layout installs it: on a host one local package entry
+// naming tools/install.sh's <data-dir>/release/current, inside the
+// image the components volume's current (polyforge#175).
 func piLayoutCheck(agentDir, home string) doctorCheck {
 	c := doctorCheck{Name: docChPiLayout}
 	if skip, ok := notSetUp(agentDir, "pi"); ok {
@@ -254,7 +274,20 @@ func piLayoutCheck(agentDir, home string) doctorCheck {
 		return c
 	}
 	rel := releaseCurrent(home)
+	image := workstationImage()
+	managed := "the release tools/install.sh manages"
 	fix := "re-run tools/install.sh (it writes the local package entry \"" + rel + "\" in place of a git entry)"
+	if image {
+		if legacyDataRelease(DataDir(home)) {
+			// the #161-era data-volume layout: the install transaction
+			// refuses it fail-closed (84-components-A), and no row bridges
+			// it — the migration note is the machine's real answer
+			c.Status, c.Detail = "warn", "the data dir "+DataDir(home)+" still carries a release/ directory — the pre-#162 layout (polyforge#161's data-volume components), refused with no bridge: migrate by hand — move or copy each complete version from <data-dir>/release/<ver> into the components volume's releases/<ver> (one current symlink at its root) — or start the components volume empty and let the first boot install the image's seed"
+			return c
+		}
+		managed = "the components volume's current"
+		fix = "the first boot installs the components volume's current from the image's seed — check " + rel
+	}
 	cfg, exists, err := readPiSettings(agentDir)
 	if err != nil {
 		c.Status, c.Detail = "warn", "cannot tell: "+err.Error()
@@ -284,17 +317,21 @@ func piLayoutCheck(agentDir, home string) doctorCheck {
 	}
 	switch {
 	case len(git) > 0:
-		c.Status, c.Detail = "warn", "pi loads polyforge from a git clone ("+strings.Join(git, ", ")+"), not the local release — "+fix
+		c.Status, c.Detail = "warn", "pi loads polyforge from a git clone ("+strings.Join(git, ", ")+"), not "+managed+" — "+fix
 	case len(other) > 0:
-		c.Status, c.Detail = "warn", "pi loads polyforge from "+strings.Join(other, ", ")+", not the release tools/install.sh manages ("+rel+") — "+fix
+		c.Status, c.Detail = "warn", "pi loads polyforge from "+strings.Join(other, ", ")+", not "+managed+" ("+rel+") — "+fix
 	case !current:
 		c.Status, c.Detail = "warn", "no polyforge pi package in "+filepath.Join(agentDir, "settings.json")+" — "+fix
 	default:
 		if _, serr := os.Stat(filepath.Join(rel, "package.json")); serr != nil {
-			c.Status, c.Detail = "warn", "the pi package entry names "+rel+", but no release is checked out there — re-run tools/install.sh"
+			c.Status, c.Detail = "warn", "the pi package entry names "+rel+", but no release is checked out there — "+fix
 			return c
 		}
-		c.Status, c.Detail = "pass", "pi package "+rel+" (the local release checkout; a release switch takes effect at the next pi session)"
+		what := "the local release checkout; a release switch takes effect at the next pi session"
+		if image {
+			what = "the components volume's current; an upgrade switch takes effect at the next pi session"
+		}
+		c.Status, c.Detail = "pass", "pi package "+rel+" ("+what+")"
 	}
 	return c
 }
@@ -316,7 +353,13 @@ func claudeLayoutCheck(home string, fix bool) doctorCheck {
 	want := filepath.Join(releaseCurrent(home), "skills", "polyforge")
 	skill := filepath.Join(dir, "skills", "polyforge")
 	_, relErr := os.Stat(filepath.Join(want, "SKILL.md"))
+	image := workstationImage()
+	managed := "the release tools/install.sh manages"
 	install := "re-run tools/install.sh (it links " + skill + " -> " + want + ")"
+	if image {
+		managed = "the components volume's current"
+		install = "link it to the components volume's current skill (" + want + ") — the first boot installs the volume from the image's seed"
+	}
 	hint := install
 	if relErr == nil {
 		hint += ", or run `pf doctor --fix-install-layout`"
@@ -343,14 +386,18 @@ func claudeLayoutCheck(home string, fix bool) doctorCheck {
 		case filepath.Clean(target) != filepath.Clean(want) && fix && relErr == nil:
 			return linkClaudeSkill(c, skill, want, "repaired (it linked to "+target+")")
 		case filepath.Clean(target) != filepath.Clean(want):
-			c.Status, c.Detail = "warn", skill+" links to "+target+", not the release tools/install.sh manages — "+hint
+			c.Status, c.Detail = "warn", skill+" links to "+target+", not "+managed+" — "+hint
 		case relErr != nil:
-			c.Status, c.Detail = "warn", skill+" links to "+want+", but no release is checked out there — re-run tools/install.sh"
+			c.Status, c.Detail = "warn", skill+" links to "+want+", but no release is checked out there — "+install
 		default:
 			c.Status, c.Detail = "pass", skill+" -> "+want
 		}
 	default:
-		c.Status, c.Detail = "warn", skill+" is a copied directory (the layout before polyforge#174), not a link to the release — "+install
+		what := "not a link to the release"
+		if image {
+			what = "not a link to the components current"
+		}
+		c.Status, c.Detail = "warn", skill+" is a copied directory (the layout before polyforge#174), "+what+" — "+install
 	}
 	return c
 }
