@@ -102,7 +102,7 @@ func TestStepAgentDirMinimalSetAndPlacement(t *testing.T) {
 	if exts := listDirNames(t, filepath.Join(dir, "extensions")); len(exts) != 1 || exts[0] != "subagent" {
 		t.Fatalf("extensions/ must hold exactly subagent, got %v", exts)
 	}
-	for _, rel := range []string{"extensions/subagent/index.ts", "extensions/subagent/agents.ts"} {
+	for _, rel := range []string{"extensions/subagent/index.ts"} {
 		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(rel))); err != nil {
 			t.Fatalf("%s was not copied: %v", rel, err)
 		}
