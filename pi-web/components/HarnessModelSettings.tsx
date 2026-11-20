@@ -6,7 +6,7 @@ import { buildModelRows, type ModelViewInput, type ModelViewRow } from "@/lib/ha
 import type { ModelPayload } from "@/lib/harness/concepts";
 import { useEnabledModels, type EnabledModelsController } from "./EnabledModelsSection";
 import { ModelsConfig } from "./ModelsConfig";
-import { ConfigSplitView, ConfigSidebar, ConfigSidebarList, ConfigSidebarItem, ConfigDetail } from "./SettingsUi";
+import { ConfigSidebar, ConfigSidebarList, ConfigSidebarItem, ConfigDetail } from "./SettingsUi";
 
 type ModelIdentity = { harness: string; provider: string; id: string };
 
@@ -132,7 +132,7 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount }: { cwd: str
     <div className="settings-section settings-models" data-model-page="unified">
       <h2>{t("common.models")}</h2>
       {(error || enabled.failure) && <div role="alert">{error ?? enabled.failure?.message ?? (enabled.failure?.messageKey ? t(enabled.failure.messageKey) : "")}</div>}
-      <ConfigSplitView>
+      <div className="config-split-view">
       <ConfigSidebar><ConfigSidebarList>
         <ConfigSidebarItem active={selectedProvider === null} onClick={() => setSelectedProvider(null)}>{t("models.defaultHeading")}</ConfigSidebarItem>
         {[...new Set(rows.map((row) => row.provider))].map((provider) => <div key={provider}>
@@ -172,7 +172,7 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount }: { cwd: str
         <ModelsConfig embedded cwd={cwd} onClose={onClose ?? (() => {})} onOpenAccount={onOpenAccount} />
       </section>
       </ConfigDetail>
-      </ConfigSplitView>
+      </div>
     </div>
   );
 }
