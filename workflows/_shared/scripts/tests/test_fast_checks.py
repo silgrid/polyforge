@@ -670,7 +670,98 @@ class DefaultTierTest(FastChecksCase):
         self.assertFalse(os.path.exists(os.path.join(clone, "full.txt")), "the full phase ran")
 
 
+# The reuse fixtures (polyforge#182): gates that count their own runs in
+# one file OUTSIDE the clone — a counter inside the repository would change
+# the working tree and the reuse key with it. The counts are the tests'
+# own expected values, never the implementation's output.
+def counting_conf(counts: str) -> str:
+    return ("stack=go\n"
+            "fast_gate=echo fast-one >> %s\n"
+            "fast_gate=echo fast-two >> %s\n"
+            "scoped_command=app/*|echo scoped >> %s\n" % (counts, counts, counts))
+
+
+class RepoReuseTest(FastChecksCase):
+    """AC1's core: the --repo run reuses the previous run's green command
+    when its key — the command text, its root's subtree tree hash of the
+    working tree, its declared prerequisites — is unchanged: the entry is
+    recorded `reused` and not executed, its evidence (the original log
+    path, exit code 0) kept; a changed root subtree runs the command
+    again. Expected values come from the counting fixtures' own files and
+    the logs' own bytes, never the implementation."""
+
+    def counting_repo(self, conf: Optional[str] = None) -> Tuple[str, str]:
+        """A repo whose two fast gates and one scoped command append to one
+        counting file outside the clone; the change keeps the scoped
+        command selected."""
+        self.counts = os.path.join(self.tmp, "gate-runs")
+        files = {
+            "go.mod": GO_MOD,
+            ".polyforge/verify-scope.conf": conf if conf is not None else counting_conf(self.counts),
+            "app/app.go": APP,
+            "app/app_test.go": APP_TEST,
+        }
+        clone = self.task_repo("app", files, APP_CHANGE)
+        return clone, self.counts
+
+    def runs_of(self, counts: str) -> List[str]:
+        try:
+            with open(counts, encoding="utf-8") as f:
+                return f.read().splitlines()
+        except OSError:
+            return []
+
+    def log_abs(self, res: Dict[str, Any], entry: Dict[str, Any]) -> str:
+        path = entry["log"]
+        return path if os.path.isabs(path) else os.path.join(self.capsule, path)
+
+    def test_an_unchanged_root_reuses_the_green_run(self) -> None:
+        clone, counts = self.counting_repo()
+        code, first = self.run_checks("app")
+        self.assertEqual(code, 0, first)
+        self.assertEqual(len(self.runs_of(counts)), 3, "the first run executed every command")
+        first_logs = {c["name"]: open(self.log_abs(first, c), encoding="utf-8").read()
+                      for c in self.commands_of(first)}
+        code, second = self.run_checks("app")
+        self.assertEqual(code, 0, second)
+        # the recorded first red: a command whose key did not change is
+        # reused, not executed — the counting file still holds three runs
+        self.assertEqual(len(self.runs_of(counts)), 3,
+                         "the second run executed a command whose key did not change")
+        self.assertEqual([c["name"] for c in self.commands_of(second)],
+                         [c["name"] for c in self.commands_of(first)])
+        for c in self.commands_of(second):
+            self.assertTrue(c.get("reused"), "%s must be recorded reused" % c["name"])
+            self.assertEqual(c.get("exit_code"), 0, c)
+            # the original log path is kept, and its content was not overwritten
+            self.assertEqual(c["log"], [f["log"] for f in self.commands_of(first) if f["name"] == c["name"]][0])
+            with open(self.log_abs(second, c), encoding="utf-8") as f:
+                self.assertEqual(f.read(), first_logs[c["name"]],
+                                 "the reused entry's original log was overwritten")
+
+    def test_a_changed_root_subtree_reruns(self) -> None:
+        clone, counts = self.counting_repo()
+        code, first = self.run_checks("app")
+        self.assertEqual(code, 0, first)
+        self.assertEqual(len(self.runs_of(counts)), 3)
+        # a committed change in the repository moves the whole-tree hash
+        # (the repo root's key counts every nested root too, the owner's
+        # Q2): every command runs again — a comment change keeps the
+        # scoped go test green
+        write(clone, {"app/app.go": APP.replace("// Answer is the answer.", "// Answer is the answer. (twice)")})
+        git(clone, "add", "-A")
+        git(clone, "commit", "-q", "-m", "change the tree")
+        code, second = self.run_checks("app")
+        self.assertEqual(code, 0, second)
+        self.assertEqual(len(self.runs_of(counts)), 6,
+                         "a changed root subtree must re-run, not reuse")
+        for c in self.commands_of(second):
+            self.assertFalse(c.get("reused"), c)
+            self.assertNotIn("carried", c)
+
+
 class UsageTest(FastChecksCase):
+
     def test_no_repo_is_a_usage_error(self) -> None:
         argv = [sys.executable, FAST_CHECKS, "--capsule", self.capsule, "--engine", ENGINE, "--out", self.out]
         c = subprocess.run(argv, capture_output=True, text=True)
