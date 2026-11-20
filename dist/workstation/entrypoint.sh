@@ -56,4 +56,10 @@ workstation_env_whitelist
 #    inconsistent machine is never better.
 pf first-boot
 
+# 4. the first boot's inputs are consumed (84-components-C, review
+#    r1#2): the external-mode key is a credential, and the supervise
+#    children (Pi Web's agent sessions inherit the environment) must
+#    never see it — the three names go before the handover.
+unset WORKSTATION_AIHUB_SERVER WORKSTATION_AIHUB_KEY WORKSTATION_AIHUB_PROJECT
+
 exec pf supervise "$@"

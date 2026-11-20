@@ -92,7 +92,9 @@ x-workstation: &workstation
     # on it; the optional project names an already-existing project for
     # the /workspace mapping. Unset = the local mode. The key rides the
     # environment exactly once, at first boot (operator-supplied, the
-    # same trust as PI_WEB_PASSWORD), and lands in cli.toml (0600).
+    # same trust as PI_WEB_PASSWORD), lands in cli.toml (0600) — and
+    # the entrypoint unsets all three names after the boot, so the
+    # credential never reaches the supervise children.
     WORKSTATION_AIHUB_SERVER: "${WORKSTATION_AIHUB_SERVER:-}"
     WORKSTATION_AIHUB_KEY: "${WORKSTATION_AIHUB_KEY:-}"
     WORKSTATION_AIHUB_PROJECT: "${WORKSTATION_AIHUB_PROJECT:-}"
