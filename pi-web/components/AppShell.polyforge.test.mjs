@@ -2,6 +2,12 @@ import "#test-env";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { createJiti } from "jiti";
+
+const jiti = createJiti(import.meta.url, { tsconfigPaths: true, interopDefault: true });
+const { enLocale } = await jiti.import("@/lib/i18n/messages/en");
+const { zhCNLocale } = await jiti.import("@/lib/i18n/messages/zh-CN");
+const { zhTWLocale } = await jiti.import("@/lib/i18n/messages/zh-TW");
 
 const source = await readFile(new URL("./AppShell.tsx", import.meta.url), "utf8");
 const panelSource = await readFile(new URL("./PolyforgePanel.tsx", import.meta.url), "utf8");
@@ -235,7 +241,8 @@ test("the desktop dock pin persists globally, suppresses only the outside-press 
 test("the v1 bridge, its package probe and the old dock leave no reference behind (AC2)", async () => {
   // The removal is the criterion (the ticket's own proof command reads the
   // same roots): no source under app/, components/, hooks/ or lib/ names the
-  // third-party package, the bridge module or the retired panel.
+  // third-party package, the bridge module or the retired panel. Test files
+  // are excluded: this very test names the patterns to pin their absence.
   const { readdirSync, readFileSync, statSync } = await import("node:fs");
   const { join } = await import("node:path");
   const files = [];
@@ -243,7 +250,7 @@ test("the v1 bridge, its package probe and the old dock leave no reference behin
     for (const entry of readdirSync(dir)) {
       const full = join(dir, entry);
       if (statSync(full).isDirectory()) walk(full);
-      else if (/\.(ts|tsx|mjs)$/.test(entry)) files.push(full);
+      else if (/\.(ts|tsx|mjs)$/.test(entry) && !/\.test\.mjs$/.test(entry)) files.push(full);
     }
   };
   for (const rootDir of ["app", "components", "hooks", "lib"]) walk(join(process.cwd(), rootDir));
