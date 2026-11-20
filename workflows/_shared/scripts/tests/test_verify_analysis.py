@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .test_analysis_preflight import selected_record
 from .verifyfix import (
+    git_t,
     HAVE_BASH,
     HAVE_GIT,
     Fixture,
@@ -292,6 +293,38 @@ class AnalysisTest(unittest.TestCase):
         sel = [c for c in self.doc(r).get("checks", []) if c["name"] == "app:selected"]
         self.assertEqual(sel[0]["status"], "fail")
         self.assertIn("is not the tree it is judged at", sel[0].get("detail", ""))
+
+    def test_a_sync_merge_between_keeps_the_record_valid(self) -> None:
+        """The lane's order is build → review → sync → verification: when
+        sync merges origin's movement in (--no-ff), the record's head is an
+        ancestor of the verified HEAD with only merge commits between —
+        the change's own tree is what the record was computed at, and the
+        check passes."""
+        fx, eng = analysis_fixture(self.root)
+        sel = selected_record(fx)  # the record of the tree as build closed it
+        fx.advance_origin("app", {"up.txt": "upstream\n"})
+        git_t(fx.repo("app"), "merge", "--no-ff", "-m", "sync: merge origin/main", "origin/main")
+        self.assertNotEqual(fx.head("app"), sel["head"])
+        path = analysis_file(fx, {"tests": [], "selected": {"app": sel}})
+        r = self.run_analysis(fx, eng, path)
+        self.assertEqual(r.exit, 0, r.result.get("summary"))
+        selck = [c for c in self.doc(r).get("checks", []) if c["name"] == "app:selected"]
+        self.assertEqual(len(selck), 1)
+        self.assertEqual(selck[0]["status"], "pass", selck[0])
+
+    def test_a_plain_commit_between_still_fails_the_check(self) -> None:
+        """The tolerance is the sync merge's alone: a plain commit between
+        the record's head and the verified HEAD is a change the record was
+        not computed at — stale, red."""
+        fx, eng = analysis_fixture(self.root)
+        sel = selected_record(fx)
+        fx.commit_in_repo("app", {"later.txt": "mine\n"}, "a later commit")
+        path = analysis_file(fx, {"tests": [], "selected": {"app": sel}})
+        r = self.run_analysis(fx, eng, path)
+        self.assertEqual(r.exit, 1, r.result.get("summary"))
+        selck = [c for c in self.doc(r).get("checks", []) if c["name"] == "app:selected"]
+        self.assertEqual(selck[0]["status"], "fail")
+        self.assertIn("is not the tree it is judged at", selck[0].get("detail", ""))
 
     def test_a_green_selected_record_passes_its_check(self) -> None:
         fx, eng = analysis_fixture(self.root)
