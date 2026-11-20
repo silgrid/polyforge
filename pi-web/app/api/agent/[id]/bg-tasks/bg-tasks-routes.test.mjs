@@ -1,45 +1,171 @@
+// carries: app/api/agent/[id]/bg-tasks/*, lib/bg-runtime.ts, lib/bg-protocol.ts, lib/rpc-manager.ts
 import "#test-env";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
-import test from "node:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import test, { after } from "node:test";
+import { createJiti } from "jiti";
 
-const listSource = await readFile(new URL("./route.ts", import.meta.url), "utf8");
-const logsSource = await readFile(new URL("./[taskId]/logs/route.ts", import.meta.url), "utf8");
-const killSource = await readFile(new URL("./[taskId]/kill/route.ts", import.meta.url), "utf8");
-
-test("bg-tasks list route degrades explicitly when the bridge is not attached", () => {
-  assert.match(listSource, /getRpcSession\(id\)/);
-  assert.match(listSource, /getBackgroundTasks\(\) \?\? null/);
-  assert.match(listSource, /pi-background-tasks bridge is not attached/);
-  assert.match(listSource, /status: 404/);
-  assert.match(listSource, /probeCapabilities\(\)/);
-  assert.match(listSource, /pi-background-tasks is unavailable/);
-  assert.match(listSource, /NextResponse\.json\(\{ tasks: result\.result \}\)/);
-  // No 500 path: every failure is a decodable JSON body with a status.
-  assert.doesNotMatch(listSource, /throw new Error/);
+// The three bg-tasks routes answer from the built-in executor's registry
+// (polyforge#173, AC2): every read is scoped to the session the URL names, the
+// logs answer is a tail capped at 8 KiB naming truncated/tail, and kill is the
+// executor's idempotent stop. The routes are exercised as handlers over a
+// private agent dir whose registry is seeded with persisted records — the
+// shape a restart leaves behind — and one real task started through the
+// controller, so the running → stopped transition runs through the route too.
+const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-web-bg-routes-"));
+const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-web-bg-routes-project-"));
+process.env.PI_CODING_AGENT_DIR = agentDir;
+after(() => {
+  fs.rmSync(agentDir, { recursive: true, force: true });
+  fs.rmSync(projectDir, { recursive: true, force: true });
 });
 
-test("bg-tasks logs route clamps input and maps package errors onto HTTP statuses", () => {
-  assert.match(logsSource, /bgOperationFailureStatus\(result\.error\)/);
-  assert.match(logsSource, /searchParams\.get\("maxBytes"\)/);
-  assert.match(logsSource, /Number\.isFinite\(maxBytes\) \? maxBytes : undefined/);
-  assert.match(logsSource, /searchParams\.get\("tail"\) !== "false"/);
-  assert.match(logsSource, /bridge\.logs\(taskId/);
-  // The bridge itself clamps; the route must not reimplement the cap.
-  assert.doesNotMatch(logsSource, /50 \* 1024/);
+const jiti = createJiti(import.meta.url, { tsconfigPaths: true, interopDefault: true, moduleCache: false });
+const { GET: listTasks } = await jiti.import("./route.ts");
+const { GET: readLogs } = await jiti.import("./[taskId]/logs/route.ts");
+const { POST: killTask } = await jiti.import("./[taskId]/kill/route.ts");
+const { getBgRuntime } = await jiti.import("@/lib/rpc-manager");
+
+const registryRoot = path.join(agentDir, "pi-web-bg-tasks");
+const SESSION_A = "11111111-111-4111-8111-111111111111";
+const SESSION_B = "22222222-222-4222-8222-222222222222";
+
+/** A persisted record the way a previous process left it (the registry's own shape). */
+function seedRecord(sessionId, taskId, fields) {
+  const dir = path.join(registryRoot, sessionId, taskId);
+  fs.mkdirSync(dir, { recursive: true });
+  const logPath = path.join(dir, "log");
+  const info = {
+    id: taskId,
+    sessionId,
+    command: fields.command ?? `echo ${taskId}`,
+    cwd: fields.cwd ?? projectDir,
+    status: fields.status ?? "succeeded",
+    startedAt: fields.startedAt ?? 1_700_000_000_000,
+    endedAt: fields.endedAt ?? null,
+    exitCode: fields.exitCode ?? null,
+    signal: fields.signal ?? null,
+    reason: fields.reason ?? null,
+    bytesWritten: fields.bytesWritten ?? null,
+    logPath,
+    notified: fields.notified ?? true,
+    ...(fields.pgid === undefined ? {} : { pgid: fields.pgid }),
+  };
+  fs.writeFileSync(path.join(dir, "task.json"), JSON.stringify(info));
+  if (fields.log !== undefined) fs.writeFileSync(logPath, fields.log);
+  return info;
+}
+
+function taskDir(sessionId, taskId) {
+  return path.join(registryRoot, sessionId, taskId);
+}
+
+const list = async (sessionId) => {
+  const response = await listTasks(new Request(`http://localhost/api/agent/${sessionId}/bg-tasks`), { params: Promise.resolve({ id: sessionId }) });
+  const body = await response.json();
+  return { status: response.status, body };
+};
+const logs = async (sessionId, taskId, query = "") => {
+  const response = await readLogs(new Request(`http://localhost/api/agent/${sessionId}/bg-tasks/${taskId}/logs${query}`), { params: Promise.resolve({ id: sessionId, taskId }) });
+  const body = await response.json();
+  return { status: response.status, body };
+};
+const kill = async (sessionId, taskId) => {
+  const response = await killTask(new Request(`http://localhost/api/agent/${sessionId}/bg-tasks/${taskId}/kill`, { method: "POST" }), { params: Promise.resolve({ id: sessionId, taskId }) });
+  const body = await response.json();
+  return { status: response.status, body };
+};
+
+test("the list answers only this session's records, live map and disk alike", async () => {
+  // A settled record from a previous process (in the registry, not the live map)
+  // and a record still marked running on disk (a restart nobody recovered yet):
+  // both belong to A and read through A's own id only.
+  seedRecord(SESSION_A, "task-settled", { status: "succeeded", endedAt: 1_700_000_030_000, exitCode: 0, startedAt: 1_700_000_000_000, log: "done\n" });
+  seedRecord(SESSION_A, "task-orphan", { status: "running", startedAt: 1_700_000_010_000 });
+
+  const a = await list(SESSION_A);
+  assert.equal(a.status, 200, `list A -> ${a.status} ${JSON.stringify(a.body)}`);
+  const ids = a.body.tasks.map((task) => task.id);
+  assert.deepEqual(ids, ["task-settled", "task-orphan"], `oldest start first, both records present: ${JSON.stringify(ids)}`);
+  const settled = a.body.tasks.find((task) => task.id === "task-settled");
+  assert.equal(settled.status, "succeeded");
+  assert.equal(settled.exitCode, 0);
+  const orphan = a.body.tasks.find((task) => task.id === "task-orphan");
+  // A persisted running record belongs to no live process group: it reads as
+  // interrupted, exactly what a restart's recovery writes (#172's semantics).
+  assert.equal(orphan.status, "interrupted", JSON.stringify(orphan));
+
+  const b = await list(SESSION_B);
+  assert.equal(b.status, 200);
+  assert.deepEqual(b.body.tasks, [], "another session's list stays empty: no cross-session leak");
 });
 
-test("bg-tasks kill route is a POST and maps package errors onto HTTP statuses", () => {
-  assert.match(killSource, /export async function POST/);
-  assert.match(killSource, /bgOperationFailureStatus\(result\.error\)/);
-  assert.match(killSource, /bridge\.kill\(taskId\)/);
-  assert.match(killSource, /pi-background-tasks bridge is not attached/);
-  assert.doesNotMatch(killSource, /export async function GET/);
+test("logs route returns the registered tail within the 8 KiB cap with truncated and tail fields", async () => {
+  // 20 000 bytes of two-byte lines: the expected tail is hand-computed from
+  // the seeded bytes, never from the implementation's own answer.
+  const line = "0123456789";
+  const big = line.repeat(2_000);
+  seedRecord(SESSION_A, "task-logs", { status: "succeeded", log: big, startedAt: 1_700_000_005_000 });
+
+  const capped = await logs(SESSION_A, "task-logs", "?maxBytes=100");
+  assert.equal(capped.status, 200, JSON.stringify(capped.body));
+  assert.equal(capped.body.text, big.slice(-50), "the last 100 bytes, kept to character boundaries");
+  assert.equal(capped.body.startByte, 19_900);
+  assert.equal(capped.body.endByte, 20_000);
+  assert.equal(capped.body.totalBytes, 20_000);
+  assert.equal(capped.body.truncated, true, "a tail short of the whole log names it");
+  assert.equal(capped.body.tail, true, "the answer is a tail and says so");
+
+  const whole = await logs(SESSION_A, "task-logs");
+  assert.equal(whole.status, 200);
+  assert.equal(whole.body.text, big, "the whole 20 000-byte log fits the 8 KiB cap untouched");
+  assert.equal(whole.body.truncated, false);
+  assert.equal(whole.body.tail, true);
+
+  // A client asking past the cap gets the cap, not more (AC2: the result stays ≤ 8 KiB).
+  const greedy = await logs(SESSION_A, "task-logs", "?maxBytes=999999");
+  assert.equal(greedy.status, 200);
+  assert.equal(Buffer.byteLength(greedy.body.text), 8_192, "clamped to the 8 KiB cap");
+  assert.equal(greedy.body.startByte, 20_000 - 8_192);
+  assert.equal(greedy.body.truncated, true);
 });
 
-test("every bg-tasks route answers unavailable JSON instead of erroring without the package", () => {
-  for (const [name, source] of [["list", listSource], ["logs", logsSource], ["kill", killSource]]) {
-    assert.match(source, /status: 404/, `${name} route must degrade with 404 (capability absent, not a server error; the e2e suite treats any 5xx as a browser error)`);
-    assert.match(source, /NextResponse\.json\(\s*\{ error:/, `${name} route must return a JSON error body`);
+test("a running task stops through the kill route, once and idempotently", async () => {
+  const started = getBgRuntime().run(SESSION_A, projectDir, "sleep 30");
+  assert.equal(started.status, "running");
+
+  const listed = await list(SESSION_A);
+  const live = listed.body.tasks.find((task) => task.id === started.id);
+  assert.ok(live, "the just-started task is listed for its own session");
+  assert.equal(live.status, "running");
+
+  const stopped = await kill(SESSION_A, started.id);
+  assert.equal(stopped.status, 200, JSON.stringify(stopped.body));
+  assert.equal(stopped.body.task.status, "stopped", "the executor's stop settles the task at once");
+  assert.equal(typeof stopped.body.message, "string");
+
+  // The route waits for nobody: a repeat answers the same settled record.
+  const again = await kill(SESSION_A, started.id);
+  assert.equal(again.status, 200);
+  assert.equal(again.body.task.status, "stopped");
+  assert.equal(again.body.task.id, started.id);
+
+  // The stop is real: the record on disk says stopped, the task is out of the live map's running set.
+  const persisted = JSON.parse(fs.readFileSync(path.join(taskDir(SESSION_A, started.id), "task.json"), "utf8"));
+  assert.equal(persisted.status, "stopped");
+});
+
+test("another session's task id reads as not found through every route, as JSON", async () => {
+  for (const attempt of [
+    () => logs(SESSION_B, "task-settled"),
+    () => kill(SESSION_B, "task-settled"),
+    () => logs(SESSION_B, "no-such-task"),
+    () => kill(SESSION_A, "no-such-task"),
+  ]) {
+    const { status, body } = await attempt();
+    assert.equal(status, 404, `expected 404, got ${status} ${JSON.stringify(body)}`);
+    assert.equal(typeof body.error, "string", "every refusal is a decodable JSON body");
   }
 });
