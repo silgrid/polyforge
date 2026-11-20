@@ -37,6 +37,10 @@ assertNoDevServer();
 const distDir = process.env.PI_WEB_DIST_DIR || `.next/e2e/${SUITE}`;
 const shots = join(root, "test-results/e2e", SUITE);
 mkdirSync(shots, { recursive: true });
+// A leftover dev lock from a killed run would fail the server start; the dist
+// dir itself is kept, so a re-run of this suite (and the verification gate's)
+// starts warm.
+rmSync(join(root, distDir, "dev/lock"), { force: true });
 const scratch = mkdtempSync(join(tmpdir(), `${SUITE}-`));
 const home = join(scratch, "home");
 const agentDir = join(home, ".pi", "agent");
@@ -176,7 +180,7 @@ process.once("SIGINT", interrupt);
 process.once("SIGTERM", interrupt);
 
 try {
-  ({ base: h.base } = await h.startServer({ name: SUITE, logFile: join(scratch, "server.log"), distDir, env: serverEnv() }));
+  ({ base: h.base } = await h.startServer({ name: SUITE, logFile: join(scratch, "server.log"), env: serverEnv() }));
   h.browser = await launchBrowser(() => chromium.launch());
 
   // R173a — the running list shows the task, desktop and narrow.
@@ -184,7 +188,7 @@ try {
     const { sessionId, taskId } = await newSessionWithTask("sleep 20");
     const page = await openSession(sessionId);
     const item = taskItem(page, taskId);
-    await waitFor(async () => (await item.count()) === 1, 45_000, "the running task never appeared in the running list");
+    await waitFor(async () => (await item.count()) === 1, 25_000, "the running task never appeared in the running list");
     const text = await item.innerText();
     assert.match(text, /sleep 20/, `the task button names its command: ${JSON.stringify(text)}`);
     assert.match(text, /Running/, `the task button shows it running: ${JSON.stringify(text)}`);
@@ -199,7 +203,7 @@ try {
     // A narrow viewport keeps the same grid and the same facts.
     const narrow = await openSession(sessionId, { width: 375, height: 667 });
     const narrowItem = taskItem(narrow, taskId);
-    await waitFor(async () => (await narrowItem.count()) === 1, 45_000, "the running task never appeared in the narrow viewport");
+    await waitFor(async () => (await narrowItem.count()) === 1, 25_000, "the running task never appeared in the narrow viewport");
     assert.match(await narrowItem.innerText(), /Running/);
     const narrowBox = await narrowItem.boundingBox();
     assert.ok(narrowBox, "the narrow layout lays the item out");
@@ -217,22 +221,22 @@ try {
     const { sessionId, taskId } = await newSessionWithTask("echo BG-E2E-DONE; sleep 1", [{ kind: "text", text: "WAKE-ANSWER" }]);
     const page = await openSession(sessionId);
     // The completion notification shows as its own message and the model answers it.
-    await waitFor(async () => (await page.locator("body").innerText()).includes("Background task"), 45_000, "the completion notification never showed in the message list");
-    await waitFor(async () => (await page.locator("body").innerText()).includes("WAKE-ANSWER"), 45_000, "the session was never woken (no answer to the notification)");
+    await waitFor(async () => (await page.locator("body").innerText()).includes("Background task"), 25_000, "the completion notification never showed in the message list");
+    await waitFor(async () => (await page.locator("body").innerText()).includes("WAKE-ANSWER"), 25_000, "the session was never woken (no answer to the notification)");
     // The list collapsed: no task item, and the 「已结束」 entry took over.
-    await waitFor(async () => (await taskItem(page, taskId).count()) === 0, 45_000, "the settled task never left the running list");
+    await waitFor(async () => (await taskItem(page, taskId).count()) === 0, 25_000, "the settled task never left the running list");
     const entry = historyEntry(page);
-    await waitFor(async () => (await entry.count()) === 1, 45_000, "the 「已结束」 entry never appeared");
+    await waitFor(async () => (await entry.count()) === 1, 25_000, "the 「已结束」 entry never appeared");
     await entry.click();
     const panel = historyPanel(page);
-    await waitFor(async () => (await panel.count()) === 1, 45_000, "the history panel never opened");
+    await waitFor(async () => (await panel.count()) === 1, 25_000, "the history panel never opened");
     const row = panel.locator(`[data-pi-history-task="${taskId}"]`);
-    await waitFor(async () => (await row.count()) === 1, 45_000, "the settled task never appeared in the history panel");
+    await waitFor(async () => (await row.count()) === 1, 25_000, "the settled task never appeared in the history panel");
     assert.match(await row.innerText(), /Completed/, `the history row shows the final status: ${JSON.stringify(await row.innerText())}`);
     await shot("R173b-history")(page);
     await row.click();
     const detail = taskPanel(page, taskId);
-    await waitFor(async () => (await detail.count()) === 1, 45_000, "the task's detail never opened from the history row");
+    await waitFor(async () => (await detail.count()) === 1, 25_000, "the task's detail never opened from the history row");
     await waitFor(async () => (await detail.innerText()).includes("BG-E2E-DONE"), 20_000, "the detail never showed the task's output tail");
     await closeOpened();
   });
@@ -242,13 +246,13 @@ try {
     const { sessionId, taskId } = await newSessionWithTask("sleep 30");
     const page = await openSession(sessionId);
     const item = taskItem(page, taskId);
-    await waitFor(async () => (await item.count()) === 1, 45_000, "the running task never appeared in the running list");
+    await waitFor(async () => (await item.count()) === 1, 25_000, "the running task never appeared in the running list");
     await item.click();
     const detail = taskPanel(page, taskId);
-    await waitFor(async () => (await detail.count()) === 1, 45_000, "the task panel never opened");
+    await waitFor(async () => (await detail.count()) === 1, 25_000, "the task panel never opened");
     const stop = detail.getByRole("button", { name: "Stop task", exact: true });
     await stop.click();
-    await waitFor(async () => (await taskItem(page, taskId).count()) === 0, 45_000, "the stopped task never left the running list");
+    await waitFor(async () => (await taskItem(page, taskId).count()) === 0, 25_000, "the stopped task never left the running list");
     await waitFor(async () => (await detail.innerText()).includes("Stopped"), 20_000, "the open panel never showed the task stopped");
     await closeOpened();
   });
@@ -257,25 +261,25 @@ try {
   await scenario("R173d", async () => {
     const { sessionId, taskId } = await newSessionWithTask("sleep 30");
     const page = await openSession(sessionId);
-    await waitFor(async () => (await taskItem(page, taskId).count()) === 1, 45_000, "the running task never appeared in the running list");
+    await waitFor(async () => (await taskItem(page, taskId).count()) === 1, 25_000, "the running task never appeared in the running list");
     // The server dies with the task running; a fresh server opens the same
     // registry and recovers the record as interrupted (#172's semantics).
     await closeOpened();
     await h.stop();
-    ({ base: h.base } = await h.startServer({ name: `${SUITE}-restart`, logFile: join(scratch, "server-restart.log"), distDir, env: serverEnv() }));
+    ({ base: h.base } = await h.startServer({ name: `${SUITE}-restart`, logFile: join(scratch, "server-restart.log"), env: serverEnv() }));
     const reloaded = await openSession(sessionId);
-    await waitFor(async () => (await taskItem(reloaded, taskId).count()) === 0, 45_000, "the interrupted task still shows in the running list after the restart");
+    await waitFor(async () => (await taskItem(reloaded, taskId).count()) === 0, 25_000, "the interrupted task still shows in the running list after the restart");
     const entry = historyEntry(reloaded);
-    await waitFor(async () => (await entry.count()) === 1, 45_000, "the 「已结束」 entry never appeared after the restart");
+    await waitFor(async () => (await entry.count()) === 1, 25_000, "the 「已结束」 entry never appeared after the restart");
     await entry.click();
     const panel = historyPanel(reloaded);
-    await waitFor(async () => (await panel.count()) === 1, 45_000, "the history panel never opened after the restart");
+    await waitFor(async () => (await panel.count()) === 1, 25_000, "the history panel never opened after the restart");
     const row = panel.locator(`[data-pi-history-task="${taskId}"]`);
-    await waitFor(async () => (await row.count()) === 1, 45_000, "the interrupted task never appeared in the history panel");
+    await waitFor(async () => (await row.count()) === 1, 25_000, "the interrupted task never appeared in the history panel");
     assert.match(await row.innerText(), /Interrupted/, `the history row shows interrupted: ${JSON.stringify(await row.innerText())}`);
     await row.click();
     const detail = taskPanel(reloaded, taskId);
-    await waitFor(async () => (await detail.count()) === 1, 45_000, "the interrupted task's detail never opened");
+    await waitFor(async () => (await detail.count()) === 1, 25_000, "the interrupted task's detail never opened");
     await shot("R173d-interrupted")(reloaded);
     await closeOpened();
   });
