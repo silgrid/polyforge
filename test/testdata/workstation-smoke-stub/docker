@@ -52,6 +52,27 @@ if [ "${1:-}" = exec ]; then
 		fi
 		exit 1
 		;;
+	# the first-boot pass's AC2 probes (polyforge#176, review r1#5),
+	# answered before the record's case below (the probe commands name
+	# the record file too): each fail-flag its own injected failure
+	*PI_CODING_AGENT_DIR*)
+		if [ -f "$dir/agentdir-wrong" ]; then
+			exit 1
+		fi
+		exit 0
+		;;
+	*PACKAGES_PROBE*)
+		if [ -f "$dir/packages-wrong" ]; then
+			exit 1
+		fi
+		exit 0
+		;;
+	*CREDENTIAL_PROBE*)
+		if [ -f "$dir/credential-in-record" ]; then
+			exit 1
+		fi
+		exit 0
+		;;
 	# the first-boot pass (polyforge#176): the record, the default
 	# Cell's server, the key's authentication, the bootstrap key's
 	# absence and the local AIHub's answer — each answered from the

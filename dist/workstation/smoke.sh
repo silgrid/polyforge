@@ -6,7 +6,8 @@
 #   sh dist/workstation/smoke.sh boot --no-aihub    # the minimal boot (AC1)
 #   sh dist/workstation/smoke.sh boot --with-aihub  # + AIHub/Pi Web checks (AC1)
 #   sh dist/workstation/smoke.sh first-boot         # the 84-components-C boot: identity,
-#                                                   #   default Cell, real auth, restart (AC1)
+#                                                   #   default Cell, real auth, the AC2 layout,
+#                                                   #   restart (AC1+AC2)
 #   sh dist/workstation/smoke.sh first-boot --external  # + zero remote writes
 #   sh dist/workstation/smoke.sh env                # Pi Web parameters (AC3)
 #   sh dist/workstation/smoke.sh podman-verify      # verification via podman (AC2)
@@ -496,6 +497,27 @@ assert d.get("defaultCell") == "default", "defaultCell must be default"
 			die "bootstrap-admin.key exists — the identity must be established before the server starts, leaving the server's bootstrap nothing to seed"
 		fi
 		say "no bootstrap-admin key (the identity predates the server)"
+		# AC2's layout half, asserted inside the container: the agent
+		# dir sits in pf-home, the pi packages entry points at
+		# /components/current, and the record carries no credential
+		docker exec "$cid" sh -c 'test "$PI_CODING_AGENT_DIR" = /root/.pi/agent' ||
+			die "the step agent dir is not /root/.pi/agent inside pf-home (AC2)"
+		say "the step agent dir is /root/.pi/agent (pf-home)"
+		docker exec "$cid" python3 -c 'import json
+pk = (json.load(open("/root/.pi/agent/settings.json")).get("packages") or [])
+ok = any(p == "/components/current" or (isinstance(p, dict) and p.get("source") == "/components/current") for p in pk)
+assert ok, "PACKAGES_PROBE: no entry points at /components/current"
+' || die "no pi packages entry points at /components/current (AC2 — the harness references must follow the components volume)"
+		say "the pi packages entry points at /components/current"
+		docker exec "$cid" python3 -c 'import re
+key = re.search(r"^api_key = \"(.*)\"", open("/root/.config/polyforge/cli.toml").read(), re.M)
+assert key, "CREDENTIAL_PROBE: cli.toml carries no api_key"
+rec = open("/root/.local/share/polyforge/workstation/first-boot.json").read()
+assert key.group(1) not in rec, "CREDENTIAL_PROBE: the record carries the key"
+for name in ("api_key", "key_hash", "token"):
+    assert name not in rec.lower(), "CREDENTIAL_PROBE: the record names a credential field"
+' || die "the first-boot record carries a credential (AC2) — the key belongs in cli.toml only"
+		say "the record carries no credential"
 	else
 		n=$(wc -l <"$hits" | tr -d ' ')
 		[ "$n" = 0 ] || die "the external mode made $n remote request(s) — it must create nothing on the remote"

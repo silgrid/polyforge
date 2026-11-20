@@ -209,6 +209,11 @@ authenticates (`pf recall` inside the container, through the
 with the volumes intact changes nothing — the same key still
 authenticates (no reissue).
 
+The first-boot pass also asserts AC2's layout half inside the container:
+the step agent dir is `/root/.pi/agent` (pf-home), the pi packages entry
+points at `/components/current`, and the record carries no credential
+(the cli.toml key is compared against the record byte for byte).
+
 `podman-verify` mounts the repository read-only at `/workspace` inside
 the workstation and runs, through the engine's own client, the real
 `Dockerfile.verify` build, the prepared-image path, and the three
