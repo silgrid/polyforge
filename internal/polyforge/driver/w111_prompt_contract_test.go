@@ -193,14 +193,17 @@ func TestW111ReleaseStepsAwaitInsideOneCall(t *testing.T) {
 	}
 }
 
-// w111ScopedReport is the scoped-report duty the build steps carry
+// w111ScopedReport is the fast-check duty the build steps carry
 // in their per-unit bar, phrase by phrase: the written fast_checks.py
-// command (polyforge#26) — which runs the engine's JSON report itself and
-// executes its fast and scoped phases in their report's root — never a
-// command line the model copies out of the report by hand.
+// command (polyforge#26, narrowed to the touched roots by polyforge#182)
+// — which runs the engine's JSON report itself and executes the named
+// roots' fast commands in their report's root — never a command line the
+// model copies out of the report by hand, and the reuse of a green run
+// whose key is unchanged.
 var w111ScopedReport = []string{
-	"Before reporting a unit green, also run the written fast/scoped check in each repo the unit touched: `\"$PF_PYTHON\" \"$PF_SHARED_DIR/scripts/fast_checks.py\" --repo <name> --json --out artifacts/build/fast-checks/<repo>.json` (the engine in this lane's snapshot; the command runs the engine itself — no command line of the report is ever copied out by hand).",
-	"It runs the report's fast and scoped commands in order — never one whose `phase` is `full` (scoped is not full) — each in the report's `root`, with each entry's own `timeout`; a command missing its `requires_env` or `requires_cmd` prerequisite is skipped and its reason recorded.",
+	"Before reporting a unit green, also run the written fast check in each repo the unit touched, narrowed to the roots its written `Touched files` reach: `\"$PF_PYTHON\" \"$PF_SHARED_DIR/scripts/fast_checks.py\" --repo <name> --phase fast --root <dir> [--root <dir> …] --json --out artifacts/build/fast-checks/<repo>.json` (the engine in this lane's snapshot; the command runs the engine itself — no command line of the report is ever copied out by hand; `--root .` names the repository's own root, a nested root its directory, and a name that is neither is a usage error).",
+	"It runs the named roots' fast commands in order — never one whose `phase` is `full` or `scoped` (the scoped selection is the close's own, never the per-unit's) — each in the report's `root`, with each entry's own `timeout`; a command missing its `requires_env` or `requires_cmd` prerequisite is skipped and its reason recorded.",
+	"A green command whose key — its text, its root's subtree tree hash of the working tree, its sorted `requires_env`/`requires_cmd` declarations — the previous run in the same result file already proved is recorded `reused` and not executed, its evidence (the original log path, `exit_code: 0`) kept; a red, timed-out or flaky-confirmed result, or any changed key dimension, runs again, and a green entry of a root or command the run never plans is carried in the file for a later run or the close to reuse.",
 	"The result file is the artifact: every command's exit code, log and skip reason land in `artifacts/build/fast-checks/<repo>.json`, and any non-zero exit (or a command killed at its own timeout) is a red fast check — unless every failing unit its output locates passed the one targeted re-run the command itself now makes (recorded flaky, its first-red log kept) and the command is confirmed — read its summary, never re-derive the commands by hand.",
 	"A failure confined to tests an earlier step committed red on purpose (this lane's authored or repro tests) is the work still to do, not a red fast check.",
 	"A run that is not judged (the engine missing or failing: exit 2) is stated in your artifact and leaves the checks above as the bar.",
