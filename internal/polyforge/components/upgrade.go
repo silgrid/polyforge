@@ -262,6 +262,16 @@ func termPiWebUnder(root string) error {
 		if err != nil || pid == self {
 			continue
 		}
+		exe, exeErr := os.Readlink(filepath.Join("/proc", e.Name(), "exe"))
+		if exeErr == nil && strings.HasPrefix(exe, releasePrefix) {
+			argv, readErr := os.ReadFile(filepath.Join("/proc", e.Name(), "cmdline"))
+			if readErr == nil && strings.Contains(string(argv), "\x00aihub\x00") {
+				if err := syscall.Kill(pid, syscall.SIGTERM); err != nil && err != syscall.ESRCH {
+					return fmt.Errorf("restart AIHub %d: %w", pid, err)
+				}
+				continue
+			}
+		}
 		cwd, err := os.Readlink(filepath.Join("/proc", e.Name(), "cwd"))
 		if err != nil {
 			continue // a process whose cwd cannot be read is not ours to judge
