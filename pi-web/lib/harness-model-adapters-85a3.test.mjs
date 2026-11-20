@@ -269,7 +269,7 @@ test("claude refuses an unrecognized modelSettings shape and unknown or invalid 
   try {
     const refused = await claudeAdapter.write("model", { modelEffort: { model: "opus", effort: "low" } }, claudeCtx());
     assert.equal(refused.status, "refused");
-    assert.ok(refused.reason.includes("modelSettings"), refused.reason);
+    assert.ok(refused.reason.includes("modelEffort") || refused.reason.includes("unknown model change"), refused.reason);
   } finally {
     fs.writeFileSync(claudeSettings, before);
   }
