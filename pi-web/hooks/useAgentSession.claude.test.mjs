@@ -730,14 +730,17 @@ test("a fresh composer takes the combined default's harness and claude's native 
   const picked = renderHook(useAgentSession, { session: null, newSessionCwd: "/project", newSessionDraftKey: "new:picked", t: (key) => key });
   await settle();
   picked.flush();
-  picked.result.chooseNewSessionHarness("pi");
+  picked.result.chooseNewSessionHarness("claude");
   picked.flush();
-  releaseAnswer({ defaultHarness: "claude", claudeDefaultModel: "opus", claudeDefaultEffort: "high" });
-  await settle();
-  picked.flush();
-  assert.equal(picked.result.newSessionHarness, "pi", "the user's harness choice stays");
-  assert.equal(picked.result.newSessionClaudeModel, "opus", "an unpicked field still takes the fetched value");
-  picked.unmount();
+  releaseAnswer({ defaultHarness: "pi", claudeDefaultModel: "opus", claudeDefaultEffort: "high" });
+  try {
+    await settle();
+    picked.flush();
+    assert.equal(picked.result.newSessionHarness, "claude", "the user's harness choice stays");
+    assert.equal(picked.result.newSessionClaudeModel, "opus", "an unpicked field still takes the fetched value");
+  } finally {
+    picked.unmount();
+  }
 
   // a carried draft choice wins too
   const carried = renderHook(useAgentSession, {
@@ -797,10 +800,13 @@ test("an open claude session's star marker reads claude's native default, not th
   };
   const info = { id: "c9", path: "", cwd: "/project", created: "", modified: "", messageCount: 0, firstMessage: "", harness: "claude", claude: { model: "claude-opus-5-5", effort: "default" } };
   const hook = renderHook(useAgentSession, { session: info, newSessionCwd: null, newSessionDraftKey: null, t: (key) => key });
-  await settle();
-  hook.flush();
-  assert.equal(hook.result.claudeDefaultModel, "opus", "the star's filled marker is the native default");
-  assert.equal(hook.result.newSessionHarness, "pi", "an open session takes no new-session default");
-  assert.equal(hook.result.newSessionClaudeModel, "default", "an open session's composer state is untouched");
-  hook.unmount();
+  try {
+    await settle();
+    hook.flush();
+    assert.equal(hook.result.claudeDefaultModel, "opus", "the star's filled marker is the native default");
+    assert.equal(hook.result.newSessionHarness, "pi", "an open session takes no new-session default");
+    assert.equal(hook.result.newSessionClaudeModel, "default", "an open session's composer state is untouched");
+  } finally {
+    hook.unmount();
+  }
 });
