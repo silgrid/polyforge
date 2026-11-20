@@ -268,8 +268,13 @@ try {
     await openSettings(page);
     const labels = (await sectionTabs(page).allInnerTexts()).map((text) => text.trim());
     assert.deepEqual(labels, TABS, `tabs (got: ${labels.join(", ")})`);
-    // Skills/Agents/Plugins need a project; the rest open without one.
+    // Skills opens without a project too (85d AC3: it shows the user scope
+    // alone); Agents/Plugins still need one; the rest open without one.
     for (const name of ["Skills", "Sub-agents", "Plugins"]) {
+      if (name === "Skills") {
+        assert.ok(!(await tab(page, name).isDisabled()), `${name} should open without a project (85d AC3)`);
+        continue;
+      }
       assert.ok(await tab(page, name).isDisabled(), `${name} should need a project`);
     }
     for (const name of ["General", "Account", "Models", "Permissions", "MCP", "Polyforge", "Models (legacy)"]) {
