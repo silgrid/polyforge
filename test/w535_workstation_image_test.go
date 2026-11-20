@@ -1015,6 +1015,45 @@ func TestWorkstationSmokeFirstBoot(t *testing.T) {
 			t.Fatalf("the failure must name the authentication proof:\n%s", out)
 		}
 	})
+	t.Run("a wrong agent dir fails the run", func(t *testing.T) {
+		out, err := w535SmokeFirstBoot(t, func(dir string) {
+			if err := os.WriteFile(filepath.Join(dir, "agentdir-wrong"), []byte("1"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if err == nil {
+			t.Fatalf("an agent dir outside pf-home is the AC2 layout broken — the run must fail:\n%s", out)
+		}
+		if !strings.Contains(out, "agent dir") {
+			t.Fatalf("the failure must name the agent dir:\n%s", out)
+		}
+	})
+	t.Run("a pi packages entry off /components/current fails the run", func(t *testing.T) {
+		out, err := w535SmokeFirstBoot(t, func(dir string) {
+			if err := os.WriteFile(filepath.Join(dir, "packages-wrong"), []byte("1"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if err == nil {
+			t.Fatalf("a pi packages entry that does not point at /components/current is the AC2 harness half broken:\n%s", out)
+		}
+		if !strings.Contains(out, "packages") {
+			t.Fatalf("the failure must name the packages entry:\n%s", out)
+		}
+	})
+	t.Run("a credential in the record fails the run", func(t *testing.T) {
+		out, err := w535SmokeFirstBoot(t, func(dir string) {
+			if err := os.WriteFile(filepath.Join(dir, "credential-in-record"), []byte("1"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if err == nil {
+			t.Fatalf("a record that carries a credential is the AC2 leak — the run must fail:\n%s", out)
+		}
+		if !strings.Contains(out, "credential") {
+			t.Fatalf("the failure must name the credential leak:\n%s", out)
+		}
+	})
 	t.Run("a bootstrap-admin key fails the run", func(t *testing.T) {
 		out, err := w535SmokeFirstBoot(t, func(dir string) {
 			if err := os.WriteFile(filepath.Join(dir, "bootstrap-key-exists"), []byte("1"), 0o644); err != nil {
