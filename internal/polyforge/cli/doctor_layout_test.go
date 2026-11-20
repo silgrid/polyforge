@@ -189,6 +189,155 @@ func TestClaudeLayoutCheck(t *testing.T) {
 	})
 }
 
+// layoutComponents plants a scratch components volume (the test
+// stand-in for /components): releases/v9 carrying the release
+// checkout shape, current -> releases/v9, answering the volume's root.
+func layoutComponents(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	rel := filepath.Join(root, "releases", "v9")
+	for name, body := range map[string]string{
+		"package.json":              `{"pi":{"skills":["./skills/polyforge"],"extensions":["./skills/polyforge/extensions/pf-chat.ts"]}}`,
+		"skills/polyforge/SKILL.md": "# polyforge\n",
+	} {
+		p := filepath.Join(rel, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink("releases/v9", filepath.Join(root, "current")); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+// layoutImage swaps both seams to a scratch machine judged as the
+// workstation image — a seed with its manifest and a scratch components
+// volume — answering the volume root (the /components stand-in).
+func layoutImage(t *testing.T) string {
+	t.Helper()
+	t.Setenv("POLYFORGE_DATA_DIR", "")
+	vol := layoutComponents(t)
+	seed := t.TempDir()
+	ver := filepath.Join(seed, "releases", "v0.2.4")
+	if err := os.MkdirAll(ver, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ver, "manifest.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldSeed, oldVol := workstationSeedRoot, componentsVolumeRoot
+	workstationSeedRoot, componentsVolumeRoot = seed, vol
+	t.Cleanup(func() { workstationSeedRoot, componentsVolumeRoot = oldSeed, oldVol })
+	return vol
+}
+
+// TestPiLayoutCheckImageCurrent (polyforge#175, AC2): inside the image
+// the pi package check wants the components volume's current, warns
+// with the image's fix (never tools/install.sh, which no image runs),
+// and the pre-#162 data-dir release layout is refused with a migration
+// note — never bridged.
+func TestPiLayoutCheckImageCurrent(t *testing.T) {
+	t.Run("the components volume's current passes", func(t *testing.T) {
+		vol := layoutImage(t)
+		cur := filepath.Join(vol, "current")
+		home := displayHome(t, "", `{"packages":["`+cur+`"]}`)
+		c := piLayoutCheck(filepath.Join(home, ".pi", "agent"), home)
+		if c.Status != "pass" || !strings.Contains(c.Detail, cur) {
+			t.Fatalf("got %s %q, want pass naming the components current %s", c.Status, c.Detail, cur)
+		}
+		if !workstationImage() {
+			t.Fatal("the fixture must judge the machine as the image")
+		}
+	})
+	t.Run("a checkout elsewhere warns with the image's fix, never install.sh", func(t *testing.T) {
+		vol := layoutImage(t)
+		// a local checkout that is NOT the components current (the
+		//// relative form pi install writes would resolve to home — an
+		// absolute scratch checkout exercises the same branch)
+		elsewhere := filepath.Join(t.TempDir(), "checkout")
+		if err := os.MkdirAll(filepath.Join(elsewhere, "skills", "polyforge"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(elsewhere, "skills", "polyforge", "SKILL.md"), []byte("# polyforge\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		home := displayHome(t, "", `{"packages":["`+elsewhere+`"]}`)
+		c := piLayoutCheck(filepath.Join(home, ".pi", "agent"), home)
+		if c.Status != "warn" || !strings.Contains(c.Detail, elsewhere) {
+			t.Fatalf("got %s %q, want warn naming the other checkout", c.Status, c.Detail)
+		}
+		if strings.Contains(c.Detail, "tools/install.sh") {
+			t.Fatalf("the image's fix must not point at tools/install.sh (no image runs it): %s", c.Detail)
+		}
+		if !strings.Contains(c.Detail, filepath.Join(vol, "current")) {
+			t.Fatalf("the image's fix must name the components current: %s", c.Detail)
+		}
+	})
+	t.Run("the pre-#162 data-dir release layout is refused with a migration note", func(t *testing.T) {
+		layoutImage(t)
+		home := displayHome(t, "", "-")
+		// the #161-era volume: <data-dir>/release/<ver> with a current
+		// inside — the layout the install transaction refuses
+		legacy := filepath.Join(home, ".local", "share", "polyforge", "release")
+		if err := os.MkdirAll(filepath.Join(legacy, "v0.1.0"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		c := piLayoutCheck(filepath.Join(home, ".pi", "agent"), home)
+		if c.Status != "warn" {
+			t.Fatalf("got %s %q, want the legacy layout refused", c.Status, c.Detail)
+		}
+		for _, want := range []string{"pre-#162", "migrate"} {
+			if !strings.Contains(c.Detail, want) {
+				t.Fatalf("the legacy-layout detail must carry %q: %s", want, c.Detail)
+			}
+		}
+		if strings.Contains(c.Detail, "tools/install.sh") {
+			t.Fatalf("the image's refusal must not point at tools/install.sh: %s", c.Detail)
+		}
+	})
+}
+
+// TestClaudeLayoutCheckImageCurrent (polyforge#175, AC2): inside the
+// image the Claude skill check wants the components current's skill —
+// a correct link passes, a copied directory warns with the image's
+// fix (never tools/install.sh).
+func TestClaudeLayoutCheckImageCurrent(t *testing.T) {
+	t.Run("a link to the components current's skill passes", func(t *testing.T) {
+		vol := layoutImage(t)
+		home := displayHome(t, "-", "")
+		dir := filepath.Join(home, ".claude", "skills")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		want := filepath.Join(vol, "current", "skills", "polyforge")
+		if err := os.Symlink(want, filepath.Join(dir, "polyforge")); err != nil {
+			t.Fatal(err)
+		}
+		c := claudeLayoutCheck(home, false)
+		if c.Status != "pass" || !strings.Contains(c.Detail, want) {
+			t.Fatalf("got %s %q, want pass naming the components current's skill", c.Status, c.Detail)
+		}
+	})
+	t.Run("a copied directory warns with the image's fix, never install.sh", func(t *testing.T) {
+		layoutImage(t)
+		home := displayHome(t, "-", "")
+		if err := os.MkdirAll(filepath.Join(home, ".claude", "skills", "polyforge"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		c := claudeLayoutCheck(home, false)
+		if c.Status != "warn" || !strings.Contains(c.Detail, "copied directory") {
+			t.Fatalf("got %s %q, want the copied-directory warn", c.Status, c.Detail)
+		}
+		if strings.Contains(c.Detail, "tools/install.sh") {
+			t.Fatalf("the image's fix must not point at tools/install.sh: %s", c.Detail)
+		}
+	})
+}
+
 // pinV1Source registers src's owner/repo hash as a v1 source for one
 // test (so a fixture without the polyforge name still exercises the
 // hashed rule) and restores the pin list afterwards.
