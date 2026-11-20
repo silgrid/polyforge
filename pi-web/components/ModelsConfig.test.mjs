@@ -256,13 +256,11 @@ test("the Models sidebar labels a model by its name and falls back to the id", (
 });
 
 // ── 85a2 (polyforge#142, AC4): the login moved to Account › pi ─────────────────
-test("the Models tab no longer renders a sign-in, an API-key entry or an Add-provider picker (85a2)", async () => {
-  // The moved pieces are gone from the source (a regression guard against
-  // re-adding them) and the notice the managed provider's row opens is a
-  // rendered component, not a source match: it names where the sign-in
-  // went (review r1#3 — the source regex alone pinned no behaviour).
+test("Models keeps credential login on Account while allowing native provider definitions (85a3-2 r1#1)", async () => {
+  // 85a3-2 restores native provider definition creation here; authentication
+  // forms remain on Account. The e2e scenario exercises the restored action.
   const source = await readFile(new URL("./ModelsConfig.tsx", import.meta.url), "utf8");
-  for (const gone of [/function OAuthDetail/, /function ApiKeyDetail/, /function AddProviderPicker/, /i18n\.addProvider/]) {
+  for (const gone of [/function OAuthDetail/, /function ApiKeyDetail/]) {
     assert.ok(!gone.test(source), `the moved sign-in piece is still in ModelsConfig: ${gone}`);
   }
 });
