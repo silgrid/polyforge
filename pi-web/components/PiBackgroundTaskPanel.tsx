@@ -190,7 +190,7 @@ export function PiBackgroundTaskPanel({ task, onStop, onReadOutput, onOpenHistor
   );
 }
 
-/** The session's settled tasks, newest end first: the 「已结束」 entry's rows. */
+/** The session's settled tasks, newest end first: the detail panel's header history button's rows. */
 export function PiBackgroundTaskHistory({ tasks, onOpenTask, onClose, now: fixedNow }: {
   tasks: BgTaskInfo[];
   onOpenTask: (taskId: string) => void;

@@ -1520,7 +1520,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
             </div>
           </div>
         )}
-        {/* a pi session's built-in task panel and its 「已结束」 history, in
+        {/* a pi session's built-in task panel and its settled history, in
             the same slot (one panel at a time); an open panel stays open after
             its task ends, showing the final status. */}
         {piTaskPanelOpen && openPiTask && (
