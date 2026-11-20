@@ -221,9 +221,14 @@ func TestFirstBoot(t *testing.T) {
 	t.Run("an interrupted boot retries without duplicating the user", func(t *testing.T) {
 		o, aihubDir := fbOpts(t)
 		fbSeed(t, o)
-		// the config stage fails: the config path is a directory, so
-		// the read inside the writer fails after identity committed
-		if err := os.MkdirAll(o.ConfigPath, 0o755); err != nil {
+		// the config stage fails AFTER its write: a pre-existing bogus
+		// daemon row survives the edit and fails the written file's
+		// shared validation, the way a crash between the write and the
+		// done record would leave the cell without a done record
+		if err := os.MkdirAll(filepath.Dir(o.ConfigPath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(o.ConfigPath, []byte("[daemon]\nstep_timeout = \"bogus\"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		var out strings.Builder
@@ -240,8 +245,15 @@ func TestFirstBoot(t *testing.T) {
 		if n := fbUsers(t, aihubDir); n != 1 {
 			t.Fatalf("users = %d after the interrupted boot, want 1", n)
 		}
-		// the retry: the same volume, the config path fixed
-		if err := os.Remove(o.ConfigPath); err != nil {
+		// the retry: the same volumes, the bogus row fixed — the boot
+		// resumes (a cell with an in-progress record is an interrupted
+		// boot, not an inconsistency), reissues the key and completes
+		raw, err := os.ReadFile(o.ConfigPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fixed := strings.Replace(string(raw), "step_timeout = \"bogus\"\n", "", 1)
+		if err := os.WriteFile(o.ConfigPath, []byte(fixed), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		out.Reset()
