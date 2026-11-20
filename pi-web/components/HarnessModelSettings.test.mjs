@@ -6,7 +6,7 @@ import { createJiti } from "jiti";
 const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
-const { I18nProvider } = await jiti.import("../hooks/useI18n.tsx");
+const { I18nProvider } = await jiti.import("@/hooks/useI18n");
 const { HarnessModelSettings } = await jiti.import("./HarnessModelSettings.tsx");
 
 test("模型页包含默认模型、三列清单和 pi 编辑区", () => {
