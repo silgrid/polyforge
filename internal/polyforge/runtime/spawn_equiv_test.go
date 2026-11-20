@@ -131,17 +131,28 @@ func TestStepTMPDIRProductionSpawn(t *testing.T) {
 	cfgB := &Config{PiBin: binB, ClaudeBin: binB, MachineID: "m-tmp-b", HarnessRoot: t.TempDir()}
 	readTMPDIR := func(t *testing.T, cfg *Config, capsule string, h string) string {
 		t.Helper()
-		env := spawnedEnv(t, cfg, SpawnParams{
+		report := filepath.Join(capsule, "tmp-report")
+		script := "printf '%s|%s|%s\\n' \"$TMPDIR\" \"$(test -d \\\"$TMPDIR\\\" && echo true || echo false)\" \"$(test -w \\\"$TMPDIR\\\" && echo true || echo false)\" > " + report + "\ncat >/dev/null\\n"
+		if cfg.PiBin == cfg.ClaudeBin {
+			bin := standIn(t, capsule, script)
+			cfg.PiBin, cfg.ClaudeBin = bin, bin
+		}
+		spawnedEnv(t, cfg, SpawnParams{
 			WorkItemID: "wi-tmp", CapsuleDir: capsule, InitialPrompt: "p",
 			Harness: h, HarnessSession: testSession,
 		})
-		for _, kv := range env {
-			if strings.HasPrefix(kv, "TMPDIR=") {
-				return strings.TrimPrefix(kv, "TMPDIR=")
+		want := filepath.Join(capsule, "artifacts", "downloads", "tmp")
+		deadline := time.Now().Add(time.Second)
+		var got []byte
+		for time.Now().Before(deadline) {
+			got, _ = os.ReadFile(report)
+			if string(got) == want+"|true|true\\n" {
+				return want
 			}
+			time.Sleep(10 * time.Millisecond)
 		}
-		t.Fatal("production spawn did not set TMPDIR")
-		return ""
+		t.Fatalf("child report %q, want %q", strings.TrimSpace(string(got)), want+"|true|true")
+		return want
 	}
 	gotA := readTMPDIR(t, cfgA, rootA, harness.Pi)
 	gotB := readTMPDIR(t, cfgB, rootB, harness.Claude)
