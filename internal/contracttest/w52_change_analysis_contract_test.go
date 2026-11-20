@@ -119,6 +119,9 @@ func TestW52ReviewChecksTheChangeAnalysis(t *testing.T) {
 		"an `uncovered` list that does not match that report",
 		"a listed test that does not exist (its file or name)",
 		"each finding names the missing or wrong entry",
+		// review r2 #2: the selected records' judgment carries the same
+		// light-tier scope the build side states
+		"a work item whose verification runs the full bar (an integration batch's fix ticket) closes without a close-scoped run and owes no record",
 	})
 }
 
@@ -147,8 +150,9 @@ func TestW52TheReferencesStateTheTierAndTheUnion(t *testing.T) {
 		"`verify.py --tier auto --unit-runs artifacts/build/units.json --analysis artifacts/build/change-analysis.json --json --out artifacts/verify/result.json`",
 		"then runs the tier the work item's attrs decide over the tree as it stands",
 		"the change analysis's listed tests run beside the plan, add-only",
-		// the build close's scoped selection (polyforge#164)
-		"its close runs the scoped selection verification plans — `fast_checks.py --close-scoped`, one shared implementation — and merges its record into the change analysis's `selected`",
+		// the build close's scoped selection (polyforge#164), scoped to the
+		// light tier (review r2 #3)
+		"its close runs the scoped selection verification plans — `fast_checks.py --close-scoped`, one shared implementation, for a work item whose verification runs the light tier (an integration batch's fix ticket runs the full bar and closes without one) — and merges a green record into the change analysis's `selected`",
 		// the integrate lane's collect: a stuck hold's fix ticket carries the marker
 		"a `file` write on the develop lane, with its acceptance, registered on the held item by an `attrs` write",
 		"carries the `integration_fix` attr that makes its own verification run the full bar",
@@ -159,8 +163,9 @@ func TestW52TheReferencesStateTheTierAndTheUnion(t *testing.T) {
 	w52Wants(t, "docs/bundles.md", []string{
 		"develop's verification runs `verify.py --tier auto --unit-runs artifacts/build/units.json --analysis artifacts/build/change-analysis.json` through its skill (the build's recorded unit runs ride along; the tier is the work item's own — an integration batch's fix ticket runs the full bar, every other ticket the light one)",
 		"→ `verification` (`verify.py`, the tier the work item's attrs decide: the light tier, or the full bar on an integration batch's fix ticket; the lane's one waivable gate)",
-		// the build close's scoped selection (polyforge#164)
-		"the scoped selection `fast_checks.py --close-scoped` before them — its record the change analysis's `selected`",
+		// the build close's scoped selection (polyforge#164), scoped to the
+		// light tier (review r2 #3)
+		"the scoped selection `fast_checks.py --close-scoped` before them for a work item whose verification runs the light tier (an integration batch's fix ticket closes without one) — a green record the change analysis's `selected`",
 	})
 	w52Stale(t, "docs/bundles.md", []string{"there is no per-work-item tier", "`verify.py`, the light tier"})
 	w52Wants(t, "docs/reference/commands.md", []string{
