@@ -26,7 +26,8 @@
     "origin": "top-level",
     "baseDir": "/Users/demo/.pi/agent"
    },
-   "disableModelInvocation": true
+   "disableModelInvocation": true,
+   "declaredDisableModelInvocation": true
   }
  ],
  "diagnostics": [],

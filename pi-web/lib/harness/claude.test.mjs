@@ -1,4 +1,4 @@
-// carries: lib/harness/claude.ts, lib/harness/claude-native-write.ts
+// carries: lib/harness/claude.ts, lib/harness/claude-native-write.ts, lib/claude-shared.ts
 import "#test-env";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -162,7 +162,7 @@ test("capabilities: claude declares its concepts, scopes, config root, login com
   // does not follow; the account tests pin the function, this pins the
   // declared value on the test platform (linux)
   assert.equal(caps.credentialsFollowConfigRoot, process.platform !== "darwin");
-  assert.deepEqual(caps.writableConcepts, ["auth", "permission", "model"]);
+  assert.deepEqual(caps.writableConcepts, ["auth", "permission", "model", "skills"]);
   // the terminal login whitelist's data source (85a2 AC3): the interactive
   // session's two commands, none Cell-scoped (the 2026-11-19 Q3 revision)
   assert.deepEqual(caps.loginCommands, [
@@ -347,4 +347,91 @@ test("a higher layer with permissions but no defaultMode does not shadow a lower
   } finally {
     fs.writeFileSync(localPath, original);
   }
+});
+
+// ---- 85d u1: the skills write (AC2's claude half) ----
+// Expected values are claude's native words, verified in the 2.1.319/2.1.322/
+// 2.1.326 binaries (enabled | disabled | name-only | user-invocable-only);
+// the layer each scope writes is owner ruling Q3 (user → $CLAUDE_CONFIG_DIR/
+// settings.json, project → .claude/settings.local.json), never the shared SKILL.md.
+
+test("write skills: a user skill's state lands in the user settings.json's skillOverrides, other keys kept (85d u1)", async () => {
+  const writeDir = path.join(scratch, "skills-write-user");
+  fs.mkdirSync(path.join(writeDir, "skills", "some-skill"), { recursive: true });
+  fs.writeFileSync(path.join(writeDir, "settings.json"), JSON.stringify({
+    effortLevel: "low",
+    skillOverrides: { "other-skill": "disabled" },
+  }));
+  const written = await adapter.write(
+    "skills",
+    { name: "some-skill", state: "user-invocable-only", scope: "user" },
+    fixtureCtx({ claudeConfigDir: writeDir }),
+  );
+  assert.equal(written.status, "written");
+  assert.ok(written.summary.includes("skillOverrides[some-skill]"));
+  const settings = JSON.parse(fs.readFileSync(path.join(writeDir, "settings.json"), "utf8"));
+  assert.equal(settings.effortLevel, "low");
+  assert.equal(settings.skillOverrides["other-skill"], "disabled");
+  assert.equal(settings.skillOverrides["some-skill"], "user-invocable-only");
+});
+
+test("write skills: a project skill's state lands in .claude/settings.local.json, the user layer untouched (Q3 B)", async () => {
+  const projDir = path.join(scratch, "skills-write-project");
+  fs.mkdirSync(path.join(projDir, ".claude", "skills", "proj-target"), { recursive: true });
+  fs.writeFileSync(path.join(projDir, ".claude", "skills", "proj-target", "SKILL.md"), "body\n");
+  const userSettingsBefore = fs.readFileSync(path.join(configDir, "settings.json"), "utf8");
+  const written = await adapter.write(
+    "skills",
+    { name: "proj-target", state: "name-only", scope: "project" },
+    fixtureCtx({ cwd: projDir }),
+  );
+  assert.equal(written.status, "written");
+  const local = JSON.parse(fs.readFileSync(path.join(projDir, ".claude", "settings.local.json"), "utf8"));
+  assert.equal(local.skillOverrides["proj-target"], "name-only");
+  assert.equal(fs.readFileSync(path.join(configDir, "settings.json"), "utf8"), userSettingsBefore);
+  assert.equal(fs.readFileSync(path.join(projDir, ".claude", "skills", "proj-target", "SKILL.md"), "utf8"), "body\n");
+});
+
+test("write skills: versions below the feature floor and unknown ones refuse, nothing written (风险4)", async () => {
+  const floorBin = installVersionedStub("floor-bin", "2.1.312");
+  const writeDir = path.join(scratch, "skills-write-floor");
+  fs.mkdirSync(writeDir);
+  const before = JSON.stringify(fs.readdirSync(writeDir));
+  const floor = await adapter.write(
+    "skills",
+    { name: "some-skill", state: "enabled", scope: "user" },
+    fixtureCtx({ claudeConfigDir: writeDir, claudeBinary: floorBin }),
+  );
+  assert.equal(floor.status, "refused");
+  assert.ok(floor.reason.includes("2.1.319"), floor.reason);
+  const unknown = await adapter.write(
+    "skills",
+    { name: "some-skill", state: "enabled", scope: "user" },
+    fixtureCtx({ claudeConfigDir: writeDir, claudeBinary: unknownBinary }),
+  );
+  assert.equal(unknown.status, "refused");
+  assert.equal(JSON.stringify(fs.readdirSync(writeDir)), before);
+});
+
+test("write skills: malformed changes and a project write without cwd are refused (85d u1)", async () => {
+  for (const change of [
+    { name: "", state: "enabled", scope: "user" },
+    { name: "some-skill", state: "loud", scope: "user" },
+    { name: "some-skill", scope: "user" },
+    { name: "some-skill", state: "enabled", scope: "team" },
+    { state: "enabled", scope: "user" },
+  ]) {
+    const refused = await adapter.write("skills", change, fixtureCtx());
+    assert.equal(refused.status, "refused", JSON.stringify(change));
+  }
+  // the no-cwd project case must actually omit cwd (u1 test fix: the first
+  // draft kept fixtureCtx's cwd, so the write succeeded)
+  const refusedNoCwd = await adapter.write(
+    "skills",
+    { name: "some-skill", state: "enabled", scope: "project" },
+    fixtureCtx({ cwd: undefined }),
+  );
+  assert.equal(refusedNoCwd.status, "refused");
+  assert.ok(refusedNoCwd.reason.includes("cwd"));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(configDir, "settings.json"), "utf8")).skillOverrides["some-skill"], undefined);
 });

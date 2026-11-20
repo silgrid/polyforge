@@ -43,8 +43,9 @@ export interface HarnessApplyToProps {
   results?: HarnessApplyToResult[] | null;
   /** A target change only; it never submits. */
   onChange: (next: HarnessApplyToSelection) => void;
-  /** The user's submit click; the parent writes each chosen target. */
-  onSubmit: () => void;
+  /** The user's submit click; the parent writes each chosen target. Omitted
+   * when the parent renders its own actions beside the target choice (85d). */
+  onSubmit?: () => void;
 }
 
 /** The harnesses a submission would reach: every target, or the specific selection. */
@@ -62,9 +63,11 @@ export function applyToCanSubmit(value: HarnessApplyToSelection, targets: readon
  * The 「应用到」 component (AC3): all harnesses, or the specific selection.
  * A target change calls `onChange` alone — never a save (Q6 A: choosing all
  * or specific only changes the target); `onSubmit` is the user's one click,
- * offered only while the selection names at least one target; the parent
- * owns the selection and answers per target, whose last round renders as
- * rows — so a failure keeps the draft and is never folded into a success.
+ * offered only while the selection names at least one target — a parent that
+ * renders its own actions beside the choice may omit it, and then no submit
+ * button shows; the parent owns the selection and answers per target, whose
+ * last round renders as rows — so a failure keeps the draft and is never
+ * folded into a success.
  * Presentational like SettingsUi.tsx: every word a prop, no state of its own.
  */
 export function HarnessApplyTo({
@@ -126,9 +129,11 @@ export function HarnessApplyTo({
           ))}
         </ul>
       )}
-      <button type="button" className="config-button" onClick={onSubmit} disabled={busy || !canSubmit}>
-        {texts.submit}
-      </button>
+      {onSubmit && (
+        <button type="button" className="config-button" onClick={onSubmit} disabled={busy || !canSubmit}>
+          {texts.submit}
+        </button>
+      )}
       {results !== null && results.length > 0 && (
         <ul className="harness-apply-to-results">
           {results.map((result) => (

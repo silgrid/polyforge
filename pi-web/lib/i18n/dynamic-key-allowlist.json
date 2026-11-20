@@ -203,5 +203,15 @@
     "file": "components/mcp-add-helpers.ts",
     "argument": "`mcp.transport.${raw.transport}`",
     "reason": "the MCP server transport comes from the server's config entry at run time; the keys are mcp.transport.<value>"
+  },
+  {
+    "file": "components/SkillsConfig.tsx",
+    "argument": "`skills.claudeState.${state}`",
+    "reason": "claude's native skillOverrides word is known only at run time; the keys are skills.claudeState.<value> (85d)"
+  },
+  {
+    "file": "components/SkillsConfig.tsx",
+    "argument": "`skills.claudeState.${row.claude.state}`",
+    "reason": "the row's stored claude skillOverrides word is known only at run time; the keys are skills.claudeState.<value> (85d)"
   }
 ]

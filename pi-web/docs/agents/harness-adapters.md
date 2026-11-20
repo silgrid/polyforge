@@ -115,7 +115,16 @@ launch-permission-mode layer is gone (claude's native
   polls this route (85a1b) rides that cache.
 - **Skill state is not read** (the #146 conflict): the skills concept lists
   name/path/source only; claude's native `skillOverrides` pass through as the
-  harness's own words, and pi's frontmatter state is never read.
+  harness's own words, and pi's frontmatter state is never read. The concept
+  is writable for claude since 85d (polyforge#148): `write("skills",
+  {name, state, scope})` lands in the native `skillOverrides` — scope `user`
+  in `$CLAUDE_CONFIG_DIR/settings.json`, scope `project` in the project's
+  `.claude/settings.local.json` (owner Q3 B) — through the shared write gate
+  plus a feature floor at 2.1.319, the first claude binary that proves the
+  four native words (`enabled`, `disabled`, `name-only`,
+  `user-invocable-only`); an unknown word or a project write without the cwd
+  is refused. pi keeps the concept read-only here: its skills switch is
+  pi-web's own preference (`skillVisibility.pi`, #146), not a native write.
 
 ## The account layer (85a2, polyforge#142)
 

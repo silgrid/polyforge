@@ -1,3 +1,4 @@
+// carries: app/api/skills/content/route.ts, lib/skills-service.ts, lib/skills-unified.ts, lib/api-types.ts, lib/skill-file-access.ts
 import "#test-env";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -189,10 +190,35 @@ test("filePath must identify an exact runtime-loaded skill, even with document",
   }
 });
 
-test("requires cwd and filePath and retains cwd authorization", async () => {
-  const withoutCwd = await GET(new Request(`http://localhost/api/skills/content?filePath=${encodeURIComponent(skillPath)}`));
+test("requires filePath and retains cwd authorization; a missing cwd is the user-scope mode (85d AC3)", async () => {
   const withoutFile = await GET(new Request(`http://localhost/api/skills/content?cwd=${encodeURIComponent(process.cwd())}&document=SKILL.md`));
-  await assertError(withoutCwd, 400);
   await assertError(withoutFile, 400);
   await assertError(await getContent(skillPath, { cwd: outsideDir, document: "SKILL.md" }), 403);
+
+  // The no-project mode (85d): the user scope is readable without a cwd.
+  const noCwd = await GET(new Request(`http://localhost/api/skills/content?filePath=${encodeURIComponent(skillPath)}`));
+  assert.equal(noCwd.status, 200);
+  assert.equal((await noCwd.json()).content, skillContent);
+  // A file the user scope never lists stays out, cwd or not.
+  await assertError(await getContent(join(outsideDir, "secret.md")), 404);
+});
+
+// ── 85d: the no-project mode reads the user scope, claude's half included ──
+const claudeConfig = join(root, "claude-config");
+await mkdir(join(claudeConfig, "skills", "cl-user-skill"), { recursive: true });
+await writeFile(join(claudeConfig, "skills", "cl-user-skill", "SKILL.md"), "---\nname: cl-user-skill\ndescription: claude user skill\n---\n# Claude user skill\n");
+const previousClaudeConfig = process.env.CLAUDE_CONFIG_DIR;
+
+test("without a project a claude user skill's content is readable, its folder bounds the documents", async () => {
+  process.env.CLAUDE_CONFIG_DIR = claudeConfig;
+  try {
+    const response = await GET(new Request(`http://localhost/api/skills/content?filePath=${encodeURIComponent(join(claudeConfig, "skills", "cl-user-skill", "SKILL.md"))}`));
+    assert.equal(response.status, 200);
+    assert.ok((await response.json()).content.includes("# Claude user skill"));
+    await assertError(await GET(new Request(`http://localhost/api/skills/content?filePath=${encodeURIComponent(join(claudeConfig, "settings.json"))}`)), 404);
+    await assertError(await getContent(join(claudeConfig, "skills", "cl-user-skill", "SKILL.md"), { document: "../cl-user-skill/SKILL.md" }), 400);
+  } finally {
+    if (previousClaudeConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = previousClaudeConfig;
+  }
 });

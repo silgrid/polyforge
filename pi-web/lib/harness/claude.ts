@@ -13,8 +13,29 @@ import { serializeByKey } from "../key-serializer";
 import { claudeConfigDir } from "../claude-config-dir";
 import { probeClaude } from "../claude-probe";
 import { findClaudeBinary } from "../claude-session";
-import { CLAUDE_KNOWN_RANGE, versionAtLeast, versionInKnownRange, writeGate, gatedWrite, type HarnessAdapter, type HarnessReadContext, type VersionProbeResult, type WriteChange, type WriteResult } from "./adapter";
-import { applyClaudeModelChange, applyClaudePermissionChange, claudeModelChangeKeys, CLAUDE_MODEL_KEY_MIN_VERSIONS, parseClaudeModelChange, parseClaudePermissionChange } from "./claude-native-write";
+import {
+  CLAUDE_KNOWN_RANGE,
+  versionAtLeast,
+  versionInKnownRange,
+  writeGate,
+  gatedWrite,
+  type HarnessAdapter,
+  type HarnessReadContext,
+  type VersionProbeResult,
+  type WriteChange,
+  type WriteResult,
+} from "./adapter";
+import {
+  applyClaudeModelChange,
+  applyClaudePermissionChange,
+  applyClaudeSkillsChange,
+  claudeModelChangeKeys,
+  CLAUDE_MODEL_KEY_MIN_VERSIONS,
+  parseClaudeModelChange,
+  parseClaudePermissionChange,
+  parseClaudeSkillsChange,
+  skillOverridesVersionAllowed,
+} from "./claude-native-write";
 import { claudeSettingsLayers, claudeStateFilePath, modelPickerOptions, type ClaudeSettingsLayer } from "./claude-layers";
 import {
   neutralApprovalMode,
@@ -265,7 +286,7 @@ export function createClaudeAdapter(): HarnessAdapter {
         toolFilter: false,
       },
       concepts: ["auth", "config-root", "model", "permission", "skills", "mcp", "env", "effective-config"],
-      writableConcepts: ["auth", "permission", "model"],
+      writableConcepts: ["auth", "permission", "model", "skills"],
       readOnlyConcepts: ["env", "effective-config"],
       configRootEnv: "CLAUDE_CONFIG_DIR",
       credentialsFollowConfigRoot: claudeCredentialsFollowConfigRoot(),
@@ -509,10 +530,10 @@ export function createClaudeAdapter(): HarnessAdapter {
     async write(concept: ConceptId, change: WriteChange, ctx): Promise<WriteResult> {
       // The shared gate first (adapter.ts): an undetected or unrecognized
       // version never reaches a write. auth has 85a2's write (the credential
-      // into the native env block), the permission concept 85a4's and the
-      // model 概念只写 model / effortLevel，按模型 modelSettings 待格式
-      // 核实后在 85a3-2 实现；其他概念沿用 gatedWrite 的 not-implemented。
-      if (concept !== "permission" && concept !== "auth" && concept !== "model") return gatedWrite(this, concept, change, ctx);
+      // into the native env block), the permission concept 85a4's, the model
+      // concept 85a3's, and the skills concept 85d's (the native skillOverrides,
+      // feature-floored); every other concept keeps gatedWrite's not-implemented.
+      if (concept !== "permission" && concept !== "auth" && concept !== "model" && concept !== "skills") return gatedWrite(this, concept, change, ctx);
       const probe = await probeVersion(ctx);
       const gate = writeGate(probe);
       if (!gate.allowed) return { status: "refused", reason: gate.reason };
@@ -530,6 +551,16 @@ export function createClaudeAdapter(): HarnessAdapter {
         const applied = await applyClaudeModelChange(parsed.change, configDirOf(ctx));
         if (!applied.ok) return { status: "refused", reason: applied.reason };
         return { status: "written", summary: `${applied.summary} (claude ${probe.version}, user-level settings.json)` };
+      }
+      if (concept === "skills") {
+        const floor = skillOverridesVersionAllowed(probe.version);
+        if (!floor.allowed) return { status: "refused", reason: floor.reason };
+        const parsed = parseClaudeSkillsChange(change, ctx?.cwd);
+        if ("reason" in parsed) return { status: "refused", reason: parsed.reason };
+        const applied = await applyClaudeSkillsChange(parsed.change, configDirOf(ctx));
+        if (!applied.ok) return { status: "refused", reason: applied.reason };
+        return { status: "written", summary: `${applied.summary} (claude ${probe.version})` };
+      }
       }
       if (concept === "permission") {
         const parsed = parseClaudePermissionChange(change, ctx?.cwd);

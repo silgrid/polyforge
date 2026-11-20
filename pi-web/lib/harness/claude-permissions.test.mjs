@@ -261,7 +261,7 @@ test("pi write(permission): approval and sandbox are refused with pi's own reaso
   assert.equal(new ProjectTrustStore(agentDir).getEntry(project).decision, false);
 });
 
-test("the adapters declare permission and model writable (the harness list's 可写; 85a3 adds model)", () => {
-  assert.deepEqual(claudeAdapter.capabilities.writableConcepts, ["auth", "permission", "model"]);
+test("the adapters declare permission, model and skills writable (the harness list's 可写)", () => {
+  assert.deepEqual(claudeAdapter.capabilities.writableConcepts, ["auth", "permission", "model", "skills"]);
   assert.deepEqual(piAdapter.capabilities.writableConcepts, ["permission", "model"]);
 });
