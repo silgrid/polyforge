@@ -262,6 +262,6 @@ test("pi write(permission): approval and sandbox are refused with pi's own reaso
 });
 
 test("the adapters declare permission writable (the harness list's 可写)", () => {
-  assert.deepEqual(claudeAdapter.capabilities.writableConcepts, ["auth", "permission"]);
+  assert.deepEqual(claudeAdapter.capabilities.writableConcepts, ["auth", "permission", "skills"]);
   assert.deepEqual(piAdapter.capabilities.writableConcepts, ["permission"]);
 });

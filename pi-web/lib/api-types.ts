@@ -103,6 +103,8 @@ export interface SkillInfo {
   filePath: string;
   baseDir: string;
   disableModelInvocation: boolean;
+  /** The author's frontmatter value; the switch's preference is applied on top of it. */
+  declaredDisableModelInvocation?: boolean;
   sourceInfo: {
     source?: string;
     scope?: string;
@@ -116,6 +118,56 @@ export interface SkillsResponse {
   projectResourcesLoaded: boolean;
 }
 
+/** The pi half of a unified row: the loader's own view of the file (#85 85d). */
+export interface UnifiedSkillPiSide {
+  /** The loader's skill name. */
+  name: string;
+  /** The loader-reported skill file path — the skillVisibility preference's key (#146). */
+  filePath: string;
+  /** The effective value: the stored preference applied over the author's frontmatter. */
+  disableModelInvocation: boolean;
+  /** The author's frontmatter value, when the loader reported one. */
+  declaredDisableModelInvocation?: boolean;
+  sourceInfo: {
+    source?: string;
+    scope?: string;
+  };
+  install?: SkillInstallInfo;
+}
+
+/** The claude half of a unified row: the adapter's own view of the file (#85 85d). */
+export interface UnifiedSkillClaudeSide {
+  /** claude's entry name — the native `skillOverrides` key. */
+  name: string;
+  filePath: string;
+  /** The native `skillOverrides` word stored for the name, when one is. */
+  state?: string;
+}
+
+/** One merged row of the unified skills listing (#85 85d, AC1): one real
+ * SKILL.md as every harness that lists it sees it, in one scope group. */
+export interface UnifiedSkillRow {
+  /** Stable row key: the scope-prefixed real file path (review r1#3: two
+   * scopes' rows of one file never share a key and never merge). */
+  key: string;
+  /** The scope group the row renders under: 用户 / 项目. */
+  scope: "user" | "project";
+  /** Display name: the pi loader's name, else claude's entry name. */
+  name: string;
+  /** Every harness that lists this file, pi first. */
+  harnesses: ("pi" | "claude")[];
+  pi?: UnifiedSkillPiSide;
+  claude?: UnifiedSkillClaudeSide;
+  /** The same scope's other rows sharing this display name (同名不同文件，遮蔽注明，Q2 B). */
+  sameName: string[];
+}
+
+/** GET /api/skills with the merged view (85d): the pi listing as before, plus
+ * the unified rows the Skills panel renders. */
+export interface UnifiedSkillsResponse extends SkillsResponse {
+  rows: UnifiedSkillRow[];
+}
+
 export interface SkillContentResponse {
   content: string;
 }
@@ -123,6 +175,15 @@ export interface SkillContentResponse {
 /** One file of a bulk `PATCH /api/skills`; `error` means it was left as it was. */
 export interface SkillToggleResult {
   filePath: string;
+  error?: string;
+}
+
+/** One item of a bulk `PATCH /api/skills` (85d): which harness's store a
+ * skill's state was written to; `error` means it was left as it was. */
+export interface SkillApplyResult {
+  /** The item's skill as the request named it: a pi skill file path or a claude entry name. */
+  skill: string;
+  harness: "pi" | "claude";
   error?: string;
 }
 

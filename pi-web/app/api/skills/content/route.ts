@@ -4,7 +4,7 @@ import path from "node:path";
 import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
 import { isExistingPathWithinRoots } from "@/lib/path-security";
 import { readRegularFileText } from "@/lib/regular-file";
-import { loadSkillsWithInstallInfo } from "@/lib/skills-service";
+import { loadUnifiedSkills } from "@/lib/skills-service";
 
 export const dynamic = "force-dynamic";
 
@@ -13,31 +13,51 @@ const SKILL_CONTENT_MAX_BYTES = 1024 * 1024;
 const MARKDOWN_FILE = /\.(md|markdown)$/i;
 
 // GET /api/skills/content?cwd=<path>&filePath=<loaded skill path>[&document=<path in the skill folder>]
-// The resource loader is the allow-list: accepting any readable Markdown path
-// here would turn the Skills panel into a general filesystem reader. `document`
-// is another Markdown file under that skill's folder, where pi resolves the
-// skill's relative links; its refusals name no filesystem path.
+// The listing is the allow-list: accepting any readable Markdown path here
+// would turn the Skills panel into a general filesystem reader. 85d: the
+// listing is the unified one — a claude-listed skill file resolves through
+// its own row — and `cwd` is optional: without it the user scope alone
+// answers (AC3), pi's loader half and claude's directory half alike.
+// `document` is another Markdown file under that skill's folder, where the
+// harness resolves the skill's relative links; its refusals name no path.
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
-  const cwd = searchParams.get("cwd");
+  const cwdParam = searchParams.get("cwd");
   const filePath = searchParams.get("filePath");
   const document = searchParams.get("document");
-  if (!cwd) return NextResponse.json({ error: "cwd required" }, { status: 400 });
   if (!filePath) return NextResponse.json({ error: "filePath required" }, { status: 400 });
 
   try {
-    const allowedRoots = await getAllowedFileRoots();
-    if (!isExistingFilePathAllowed(cwd, allowedRoots)) {
-      return NextResponse.json({ error: "Access denied" }, { status: 403 });
+    const cwd = cwdParam && cwdParam.trim() ? path.resolve(cwdParam) : null;
+    if (cwd) {
+      const allowedRoots = await getAllowedFileRoots();
+      if (!isExistingFilePathAllowed(cwd, allowedRoots)) {
+        return NextResponse.json({ error: "Access denied" }, { status: 403 });
+      }
     }
 
-    const { skills } = await loadSkillsWithInstallInfo(cwd);
-    const skill = skills.find((item) => item.filePath === filePath);
-    if (!skill) {
-      return NextResponse.json({ error: "Skill not found" }, { status: 404 });
+    const unified = await loadUnifiedSkills(cwd);
+    // pi's own listing first (it carries the loader's baseDir); a
+    // claude-listed file resolves through its row, its folder as the base.
+    const piSkill = unified.skills.find((item) => item.filePath === filePath);
+    let target: string;
+    let baseDir: string;
+    if (piSkill && (cwd !== null || unified.rows.some((row) => row.scope === "user" && row.pi?.filePath === filePath))) {
+      target = piSkill.filePath;
+      baseDir = piSkill.baseDir;
+    } else {
+      const row = unified.rows.find(
+        (entry) => (cwd !== null || entry.scope === "user")
+          && ((entry.pi && entry.pi.filePath === filePath) || (entry.claude && entry.claude.filePath === filePath)),
+      );
+      if (!row) {
+        return NextResponse.json({ error: "Skill not found" }, { status: 404 });
+      }
+      target = row.pi?.filePath ?? row.claude!.filePath;
+      baseDir = row.pi
+        ? piSkill?.baseDir ?? path.dirname(row.pi.filePath)
+        : path.dirname(row.claude!.filePath);
     }
-
-    let target = skill.filePath;
     if (document !== null) {
       const refuse = (status: number, error: string) => NextResponse.json({ error }, { status });
       // The client sends a normalized path. A `..` after a link names one file
@@ -46,9 +66,9 @@ export async function GET(req: Request) {
         return refuse(400, "Document path must stay inside the skill folder");
       }
       if (!MARKDOWN_FILE.test(document)) return refuse(415, "Only Markdown documents can be opened");
-      target = path.join(skill.baseDir, document);
+      target = path.join(baseDir, document);
       if (!existsSync(target)) return refuse(404, "Skill document not found");
-      if (!isExistingPathWithinRoots(target, new Set([skill.baseDir]))) return refuse(403, "Document is outside the skill folder");
+      if (!isExistingPathWithinRoots(target, new Set([baseDir]))) return refuse(403, "Document is outside the skill folder");
       if (!MARKDOWN_FILE.test(realpathSync(target))) return refuse(415, "Only Markdown documents can be opened");
       const stats = statSync(target);
       if (!stats.isFile()) return refuse(400, "Skill document is not a regular file");

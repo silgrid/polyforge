@@ -371,7 +371,9 @@ export function SettingsPanel({
           {sectionHost("permission", <HarnessPermissionSettings cwd={cwd} sessionId={sessionId} />)}
           {/* Visited sections stay mounted, so the ones whose answer depends on trust take the page's
               status and load again in place when trusting from Settings › MCP changes it. */}
-          {cwd && sectionHost("skills", <SkillsConfig embedded key={cwd} cwd={cwd} trust={projectTrust} onClose={onClose} />)}
+          {/* No project needed either (85d AC3): the user scope lists alone, a
+              project adds its group. */}
+          {sectionHost("skills", <SkillsConfig embedded key={cwd ?? ""} cwd={cwd} trust={projectTrust} onClose={onClose} />)}
           {cwd && sectionHost("agents", <AgentsConfig embedded key={cwd} cwd={cwd} sessionId={sessionId} trust={projectTrust} onClose={onClose} onReloaded={onSessionReloaded} />)}
           {cwd && sectionHost("plugins", <PluginsConfig embedded key={cwd} cwd={cwd} sessionId={sessionId} trust={projectTrust} onClose={onClose} onReloaded={onSessionReloaded} />)}
           {/* No project needed: the global mcp.json is listed alone, and a project adds its group. */}

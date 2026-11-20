@@ -1,22 +1,31 @@
 // The claude adapter's native writes (polyforge#150 85a4): the user-level
-// `$CLAUDE_CONFIG_DIR/settings.json` — the only layer a write may touch (Q3 B:
-// project / shared layers need the user's own explicit choice, managed and
-// command-line sources display read-only) — and claude's state file for a
-// project trust decision. Every write reads, merges its patch (unknown keys
-// stay), replaces atomically with mode 0600, then reads back and verifies the
-// merged record landed; anything else is refused. The version gate is the
-// adapter's (writeGate in adapter.ts): this module never writes on a version
-// the probe refused, and a file that exists but is not a JSON object is
-// refused, never overwritten.
-import { existsSync } from "node:fs";
+// `$CLAUDE_CONFIG_DIR/settings.json` — the only layer a permission write may
+// touch (Q3 B: project / shared layers need the user's own explicit choice,
+// managed and command-line sources display read-only) — and claude's state file
+// for a project trust decision. 85d (polyforge#148) adds the skills writes:
+// a user skill's state in the user-level settings.json and a project skill's
+// state in that project's `.claude/settings.local.json` (owner Q3 B). Every
+// write reads, merges its patch (unknown keys stay), replaces atomically with
+// mode 0600, then reads back and verifies the merged record landed; anything
+// else is refused. The version gate is the adapter's (writeGate in adapter.ts):
+// this module never writes on a version the probe refused, and a file that
+// exists but is not a JSON object is refused, never overwritten.
+import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { writePrivateFileAtomicSync } from "../atomic-file";
 import { serializeByKey } from "../key-serializer";
+import {
+  CLAUDE_SKILL_OVERRIDES_MIN_VERSION,
+  compareClaudeVersions,
+  isClaudeSkillOverrideState,
+  type ClaudeSkillOverrideState,
+} from "../claude-shared";
 import { isClaudeApprovalMode, type PermissionRules } from "./concepts";
 import { readJsonRecord } from "./redact";
 
 const USER_SETTINGS_WRITE_CHAIN = Symbol.for("pi-web.claudeUserSettingsWrites");
 const STATE_FILE_WRITE_CHAIN = Symbol.for("pi-web.claudeStateFileWrites");
+const PROJECT_LOCAL_SETTINGS_WRITE_CHAIN = Symbol.for("pi-web.claudeProjectLocalSettingsWrites");
 
 /** The user-level settings.json path for a config dir. */
 export function claudeUserSettingsPath(configDir: string): string {
@@ -123,6 +132,123 @@ export async function patchClaudeUserSettings(
       return { ok: false, reason: "the written settings.json did not read back as written; refusing to report success" };
     }
     return { ok: true };
+  });
+}
+
+/** A validated skills change for the claude adapter's write() (85d): one
+ * skill's native `skillOverrides` state on one declared layer. */
+export type ClaudeSkillsChange =
+  | { kind: "skillOverride"; name: string; state: ClaudeSkillOverrideState; scope: "user" | "project"; cwd?: string };
+
+/**
+ * Parses the opaque skills change (85d): exactly { name, state, scope }, one
+ * skill per write. `scope: "user"` goes to `$CLAUDE_CONFIG_DIR/settings.json`;
+ * `scope: "project"` additionally needs the project folder (cwd) and goes to
+ * that project's `.claude/settings.local.json` (owner Q3 B) — the personal,
+ * not-committed layer; the shared SKILL.md is never a target. Malformed shapes
+ * answer with a reason, as parseClaudePermissionChange does.
+ */
+export function parseClaudeSkillsChange(
+  change: Record<string, unknown>,
+  cwd: string | undefined,
+): { change: ClaudeSkillsChange } | { reason: string } {
+  const keys = Object.keys(change);
+  for (const key of ["name", "state", "scope"]) {
+    if (!keys.includes(key)) return { reason: `the skills change needs ${key}` };
+  }
+  if (keys.length > 3) return { reason: `one skill per write; got ${keys.join(", ")}` };
+  if (typeof change.name !== "string" || change.name.trim() === "") {
+    return { reason: "name must be a non-empty string" };
+  }
+  if (!isClaudeSkillOverrideState(change.state)) {
+    return { reason: `unknown skillOverrides state: ${String(change.state)}` };
+  }
+  if (change.scope !== "user" && change.scope !== "project") {
+    return { reason: `unknown skills scope: ${String(change.scope)}` };
+  }
+  if (change.scope === "project" && !cwd) {
+    return { reason: "a project skills write needs the project folder (cwd)" };
+  }
+  return {
+    change: {
+      kind: "skillOverride",
+      name: change.name,
+      state: change.state,
+      scope: change.scope,
+      cwd,
+    },
+  };
+}
+
+/**
+ * Whether `version` may write `skillOverrides` (85d 风险4: the floor is the
+ * first binary that proves the values): the adapter's write gate owns the
+ * known-range check; this is the feature floor inside it.
+ */
+export function skillOverridesVersionAllowed(version: string | null): { allowed: true } | { allowed: false; reason: string } {
+  const comparison = compareClaudeVersions(version, CLAUDE_SKILL_OVERRIDES_MIN_VERSION);
+  if (comparison === null || comparison < 0) {
+    return {
+      allowed: false,
+      reason: `skillOverrides writes need claude >= ${CLAUDE_SKILL_OVERRIDES_MIN_VERSION} (found ${version ?? "no version"})`,
+    };
+  }
+  return { allowed: true };
+}
+
+/**
+ * Applies one validated skills change (85d): the state lands in the target
+ * layer's `skillOverrides`, the file's other keys kept.
+ */
+export async function applyClaudeSkillsChange(
+  change: Extract<ClaudeSkillsChange, { kind: "skillOverride" }>,
+  configDir: string,
+): Promise<{ ok: true; summary: string } | { ok: false; reason: string }> {
+  const merge = (record: Record<string, unknown>): Record<string, unknown> => {
+    const overrides = { ...(isRecord(record.skillOverrides) ? record.skillOverrides : {}) };
+    overrides[change.name] = change.state;
+    return { ...record, skillOverrides: overrides };
+  };
+  const outcome = change.scope === "project"
+    ? await patchClaudeProjectLocalSettings(change.cwd ?? "", merge)
+    : await patchClaudeUserSettings(configDir, merge);
+  const target = change.scope === "project"
+    ? join(change.cwd ?? "", ".claude", "settings.local.json")
+    : claudeUserSettingsPath(configDir);
+  return outcome.ok
+    ? { ok: true, summary: `skillOverrides[${change.name}] = ${change.state} (${target})` }
+    : outcome;
+}
+
+/**
+ * One serialized read-merge-write-verify on a project's
+ * `.claude/settings.local.json` (85d, owner Q3 B): same refusal semantics as
+ * the user settings patch; the `.claude` folder is created only when the
+ * write itself is accepted.
+ */
+export async function patchClaudeProjectLocalSettings(
+  cwd: string,
+  merge: (record: Record<string, unknown>) => Record<string, unknown>,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const dir = join(cwd, ".claude");
+  const path = join(dir, "settings.local.json");
+  return serializeByKey(PROJECT_LOCAL_SETTINGS_WRITE_CHAIN, path, async () => {
+    let current: Record<string, unknown> = {};
+    if (existsSync(path)) {
+      const record = readJsonRecord(path);
+      if (record === null) {
+        return { ok: false as const, reason: "settings.local.json has an unrecognized top-level structure (expected a JSON object)" };
+      }
+      current = record;
+    }
+    const next = merge(current);
+    mkdirSync(dir, { recursive: true });
+    writePrivateFileAtomicSync(path, `${JSON.stringify(next, null, 2)}\n`);
+    const back = readJsonRecord(path);
+    if (back === null || !jsonEqual(back, next)) {
+      return { ok: false as const, reason: "the written settings.local.json did not read back as written; refusing to report success" };
+    }
+    return { ok: true as const };
   });
 }
 

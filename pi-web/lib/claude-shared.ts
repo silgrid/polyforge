@@ -206,6 +206,29 @@ export interface ClaudeFeature {
 export const CLAUDE_FEATURE_MIN_VERSION = { backgroundTasks: "2.1.322", subagentText: "2.1.322" } as const;
 
 /**
+ * claude's native `skillOverrides` values, verified in the 2.1.319, 2.1.322 and
+ * 2.1.326 binaries (`strings` carries the four words together; the settings key
+ * appears in the same binaries). 2.1.312 cannot be verified here, so writes
+ * refuse below the floor (never write what you cannot recognize).
+ */
+export const CLAUDE_SKILL_OVERRIDE_STATES = ["enabled", "disabled", "name-only", "user-invocable-only"] as const;
+
+/** One value of claude's native `skillOverrides`. */
+export type ClaudeSkillOverrideState = (typeof CLAUDE_SKILL_OVERRIDE_STATES)[number];
+
+/** Whether `value` is one of claude's own skillOverrides words. */
+export function isClaudeSkillOverrideState(value: unknown): value is ClaudeSkillOverrideState {
+  return typeof value === "string" && (CLAUDE_SKILL_OVERRIDE_STATES as readonly string[]).includes(value);
+}
+
+/**
+ * The first claude version whose binary proves the `skillOverrides` values above
+ * (85d 风险4: 查清再加). A claude older than this refuses the skills write, even
+ * inside the write gate's known range.
+ */
+export const CLAUDE_SKILL_OVERRIDES_MIN_VERSION = "2.1.319";
+
+/**
  * `a` against `b`, segment by segment as numbers (a missing segment is 0): negative,
  * 0 or positive; null when either is not dot-separated digits.
  */
