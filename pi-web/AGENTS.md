@@ -39,6 +39,10 @@ pi's packages depend on each other with `^` ranges, and the published pi-web's d
 
 ```
 app/api/
+  components/status/route.ts       GET 读取卷上的版本与最终升级状态；check=1 查询渠道最新版
+  components/upgrade/route.ts      POST 登录与同源检查后独立启动升级编排
+  components/rollback/route.ts     POST 登录与同源检查后启动回退
+  components/cancel/route.ts       POST 取消等待并恢复 daemon 接收新作业
   sessions/route.ts               GET  list all sessions (pi files, live pi wrappers, and pi-web's claude index rows with `harness: "claude"`); awaitingSessionIds include claude sessions with a pending permission prompt
   sessions/[id]/route.ts          GET/PATCH/DELETE session (claude: history from claude's transcript plus `claudeSubagents`, the subagent runs rebuilt from its sidecars, and `claudeEditEntryIds`, the user messages an in-session edit can start from; the history is the transcript's active branch, PATCH { name } / { archived } in the index, DELETE its transcript + entry)
   sessions/[id]/context/route.ts   GET ?leafId=&tail=&before= a page of a leaf's context (tail defaults to 50; before pages upward)
@@ -145,6 +149,8 @@ app/api/
   machine-load/route.ts           GET  host CPU %, cores, loadavg 1/5/15, memory used/total for the Debug panel (#168, #198; whitelist only, 2 s shared sample, 200 { metrics: null } on failure, no 5xx)
 
 lib/
+  components-upgrade.ts            从组件卷读状态，以独立进程启动 CLI 升级、回退、取消
+  workstation-mode.ts              通过只读种子 manifest 判断工作站镜像身份
   agent-client.ts      typed fetch helper for /api/agent commands
   missing-cwd.ts            client-safe `reason: "cwd-missing"` refusal of a folder that no longer exists: error class, body fields, parsing
   debug-types.ts            client-safe shapes of the Debug panel: GET /api/agent/debug and the page's own snapshot
