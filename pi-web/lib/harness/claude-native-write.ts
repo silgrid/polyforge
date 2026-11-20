@@ -229,19 +229,19 @@ export async function applyClaudePermissionChange(
 /**
  * The model keys' registered minimum versions (owner ruling Q4: the ticket
  * registers the model keys' minimums; the gate itself recognizes the major):
- * 2.1.312 is the first recorded version that establishes the model and
- * global effort keys. Per-model modelSettings writes remain unsupported until
- * their native settings format is verified in 85a3-2.
+ * 2.1.312, the first recorded version, is where each key is evidenced.
  */
 export const CLAUDE_MODEL_KEY_MIN_VERSIONS: Readonly<Record<string, string>> = {
   model: "2.1.312",
   effortLevel: "2.1.312",
+  modelSettings: "2.1.312",
 };
 
 /** A validated model change for the claude adapter's write(). One field per write. */
 export type ClaudeModelChange =
   | { kind: "model"; model: string | null }
-  | { kind: "effortLevel"; level: string | null };
+  | { kind: "effortLevel"; level: string | null }
+  | { kind: "modelEffort"; model: string; effort: string | null };
 
 /** The native keys one change kind touches, for the key-floor check. */
 export function claudeModelChangeKeys(change: ClaudeModelChange): readonly string[] {
@@ -250,12 +250,15 @@ export function claudeModelChangeKeys(change: ClaudeModelChange): readonly strin
       return ["model"];
     case "effortLevel":
       return ["effortLevel"];
+    case "modelEffort":
+      return ["modelSettings"];
   }
 }
 
-/** A claude effort spelling accepted by the settings layer for reads. */
+/** A claude effort spelling the settings layer may hold: the five levels
+ * plus claude's own ultracode (85a3's mapping lists it apart); null removes. */
 function isClaudeEffortSettingValue(value: unknown): boolean {
-  return isClaudeEffortLevel(value);
+  return isClaudeEffortLevel(value) || value === "ultracode";
 }
 
 /**
@@ -286,12 +289,36 @@ export function parseClaudeModelChange(
     }
     return { change: { kind: "effortLevel", level: raw as string | null } };
   }
+  if (key === "modelEffort") {
+    const raw = change.modelEffort;
+    if (!isRecord(raw) || !isClaudeModelName(raw.model)) {
+      return { reason: "modelEffort must be { model: <name>, effort: <level|null> }" };
+    }
+    if (raw.effort !== null && raw.effort !== undefined && !isClaudeEffortSettingValue(raw.effort)) {
+      return { reason: `unknown effort level: ${String(raw.effort)}` };
+    }
+    return { change: { kind: "modelEffort", model: raw.model, effort: (raw.effort ?? null) as string | null } };
+  }
   return { reason: `unknown model change: ${key}` };
 }
 
+/** The user-level settings.json's modelSettings shape guard (85a3). */
+function requireModelSettingsShape(record: Record<string, unknown>): string | null {
+  const value = record.modelSettings;
+  if (value === undefined) return null;
+  if (!isRecord(value)) return "modelSettings has an unrecognized shape (expected an object of model entries)";
+  for (const entry of Object.values(value)) {
+    if (!isRecord(entry)) return "modelSettings holds an entry that is not an object";
+  }
+  return null;
+}
+
 /**
- * Applies one validated model change to the user-level settings.json.
- * The caller has already passed the version gate and key floors.
+ * Applies one validated model change to the user-level settings.json. The
+ * caller has already passed the version gate and the key floors; a merge
+ * that finds an unrecognized shape refuses, writing nothing. An entry whose
+ * effort is removed keeps its other keys, and modelSettings itself is
+ * dropped when it holds nothing.
  */
 export async function applyClaudeModelChange(
   change: ClaudeModelChange,
@@ -322,16 +349,28 @@ export async function applyClaudeModelChange(
         ? { ok: true, summary: level === null ? "effortLevel removed" : `effortLevel = ${level}` }
         : result;
     }
-    case "effortLevel": {
-      const level = change.level;
+    case "modelEffort": {
+      const model = change.model;
+      const effort = change.effort;
       const result = await patchClaudeUserSettings(configDir, (record) => {
+        const shape = requireModelSettingsShape(record);
+        if (shape !== null) return { refuse: shape };
+        const settings = isRecord(record.modelSettings) ? { ...record.modelSettings } : {};
+        if (model in settings && !isRecord(settings[model])) {
+          return { refuse: `modelSettings[${model}] has an unrecognized shape (expected an object)` };
+        }
+        const entry = isRecord(settings[model]) ? { ...settings[model] } : {};
+        if (effort === null) delete entry.effort;
+        else entry.effort = effort;
+        if (Object.keys(entry).length === 0) delete settings[model];
+        else settings[model] = entry;
         const next: Record<string, unknown> = { ...record };
-        if (level === null) delete next.effortLevel;
-        else next.effortLevel = level;
+        if (Object.keys(settings).length === 0) delete next.modelSettings;
+        else next.modelSettings = settings;
         return next;
       });
       return result.ok
-        ? { ok: true, summary: level === null ? "effortLevel removed" : `effortLevel = ${level}` }
+        ? { ok: true, summary: effort === null ? `modelSettings[${model}].effort removed` : `modelSettings[${model}].effort = ${effort}` }
         : result;
     }
   }
