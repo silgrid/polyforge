@@ -378,9 +378,9 @@ PYEOF
 # restart with the volumes intact — the first choice stands: the
 # record is byte-identical and the same key still authenticates (no
 # reissue). The --external pass points the default Cell at a counting
-# stub server instead: the record says external, the stub stays at
-# zero requests (nothing is created on the remote), and a restart with
-# a DIFFERENT server env changes nothing (the choice is made once).
+# stub server instead: the record says external, no creation-path
+# request reaches the remote, and a restart with a DIFFERENT server env
+# changes nothing (the choice is made once).
 cmd_first_boot() {
 	case "${1:-}" in
 	"") external=no ;;
@@ -527,6 +527,14 @@ ok = any(p == "/components/current" or (isinstance(p, dict) and p.get("source") 
 assert ok, "PACKAGES_PROBE: no entry points at /components/current"
 ' || die "no pi packages entry points at /components/current (AC2 — the harness references must follow the components volume)"
 		say "the pi packages entry points at /components/current"
+		docker exec "$cid" python3 -c 'import os
+from pathlib import Path
+if Path("/root/.claude").is_dir():
+    skill = Path("/root/.claude/skills/polyforge")
+    assert skill.is_symlink(), "SKILLS_PROBE: routing skill is not a symlink"
+    assert os.readlink(skill) == "/components/current/skills/polyforge", "SKILLS_PROBE: routing skill does not follow current"
+' || die "the Claude routing skill does not link to /components/current/skills/polyforge (AC2)"
+		say "the Claude skill link follows /components/current when Claude HOME exists"
 		docker exec "$cid" python3 -c 'import re
 key = re.search(r"^api_key = \"(.*)\"", open("/root/.config/polyforge/cli.toml").read(), re.M)
 assert key, "CREDENTIAL_PROBE: cli.toml carries no api_key"

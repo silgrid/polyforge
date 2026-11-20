@@ -213,7 +213,9 @@ authenticates (no reissue).
 The first-boot pass also asserts AC2's layout half inside the container:
 the step agent dir is `/root/.pi/agent` (pf-home), the pi packages entry
 points at `/components/current`, and the record carries no credential
-(the cli.toml key is compared against the record byte for byte).
+（逐字节比较 cli.toml 中的 key 与记录）。已有 `/root/.claude` 时，还断言路由
+技能 `/root/.claude/skills/polyforge` 是指向
+`/components/current/skills/polyforge` 的软链；用户自有的其他技能不受影响。
 
 `podman-verify` mounts the repository read-only at `/workspace` inside
 the workstation and runs, through the engine's own client, the real
