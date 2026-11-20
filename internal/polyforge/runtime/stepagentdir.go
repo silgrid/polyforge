@@ -400,7 +400,24 @@ func copyStepAgentTree(src, dst string) error {
 	return nil
 }
 
-// warnStepAgentDirNoCredentials is the carried-on notice for a source
+func validateEmbeddedStepAgentDir(dir string) error {
+	for _, item := range []struct{ rel, asset string }{
+		{"agents/worker.md", "agents/worker.md"},
+		{"extensions/subagent/index.ts", "extensions/subagent/index.ts"},
+		{"extensions/subagent/agents.ts", "extensions/subagent/agents.ts"},
+	} {
+		got, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(item.rel)))
+		if err != nil {
+			return fmt.Errorf("runtime: embedded step-agent resource %s is unavailable: %w", item.rel, err)
+		}
+		want, err := fs.ReadFile(stepagentassets.FS, item.asset)
+		if err != nil || string(got) != string(want) {
+			return fmt.Errorf("runtime: embedded step-agent resource %s failed content validation", item.rel)
+		}
+	}
+	return nil
+}
+
 // without auth.json (the harness adapter may hold credentials elsewhere).
 func warnStepAgentDirNoCredentials(src string) {
 	fmt.Fprintf(os.Stderr, "runtime: the operator agent dir %s carries no auth.json — the dedicated step agent directory is synced without model service credentials (the harness adapter may hold them elsewhere)\n", src)

@@ -315,11 +315,18 @@ func (s *piSpawner) Spawn(ctx context.Context, p SpawnParams) (AgentHandle, erro
 		return nil, fmt.Errorf("runtime: spawn without an initial prompt")
 	}
 	if s.cfg.DataDir != "" {
-		if err := validatePiCompatibility(ctx, s.bin()); err != nil {
-			return nil, err
+		if strings.EqualFold(strings.TrimSpace(p.Params["pi_subagents"]), "on") {
+			if err := validatePiCompatibility(ctx, s.bin()); err != nil {
+				return nil, err
+			}
 		}
 		if err := s.cfg.refreshStepAgentDir(); err != nil {
 			return nil, err
+		}
+		if strings.EqualFold(strings.TrimSpace(p.Params["pi_subagents"]), "on") {
+			if err := validateEmbeddedStepAgentDir(s.cfg.StepAgentDir()); err != nil {
+				return nil, err
+			}
 		}
 	}
 	proc, err := startHarness(s.buildCmd(p), p)

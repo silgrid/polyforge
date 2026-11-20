@@ -610,7 +610,17 @@ const (
 	continuationHeading = "# Continuing this step"
 )
 
-// assembleStepPrompt builds the step process's one instruction of record
+func piCapabilityChange(changed map[string]string) string {
+	value, ok := changed["pi_subagents"]
+	if !ok {
+		return ""
+	}
+	if strings.EqualFold(strings.TrimSpace(value), "on") {
+		return "\nPi subagents are enabled for this dispatch: use the daemon `subagent` tool with `agent: \"worker\"`, one task at a time."
+	}
+	return "\nPi subagents are disabled for this dispatch; keep `implemented_by: main` and do not dispatch a worker."
+}
+
 // from the six fixed parts of workflow contract 4 (design #483 §8), in
 // order: (1) the dispatch — its identity, the language it works in, the
 // capsule root and this dispatch's facts (a pi dispatch runs no sub-agent;
@@ -628,13 +638,17 @@ func assembleStepPrompt(p promptParts) string {
 		// the owner's words continue the conversation they were written
 		// to (relay.go): exactly what a live delivery sends — and the
 		// params that changed since, when any did
+		var parts []string
 		if s := paramsChangedSection(p.ParamsChanged); s != "" {
-			return renderOwnerMessages(p.OwnerMessages) + "\n" + s
+			parts = append(parts, s)
 		}
-		return renderOwnerMessages(p.OwnerMessages)
+		if s := piCapabilityChange(p.ParamsChanged); s != "" {
+			parts = append(parts, s)
+		}
+		return renderOwnerMessages(p.OwnerMessages) + "\n" + strings.Join(parts, "\n")
 	}
 	if p.ShortEwrResume {
-		return ewrResumeReminder(p) + continuationPart(promptParts{OwnerMessages: p.OwnerMessages, ParamsChanged: p.ParamsChanged})
+		return ewrResumeReminder(p) + continuationPart(promptParts{OwnerMessages: p.OwnerMessages, ParamsChanged: p.ParamsChanged}) + piCapabilityChange(p.ParamsChanged)
 	}
 	var b strings.Builder
 	// 1. the dispatch
