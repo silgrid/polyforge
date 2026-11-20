@@ -158,8 +158,6 @@ export const zhCNLocale: LocalePlugin = {
     "settings.accountHarnessClaude": "Claude",
     "settings.accountRefresh": "刷新",
     "settings.accountCloseTerminal": "关闭终端",
-    "settings.modelsAuthMovedTitle": "登录已挪走",
-    "settings.modelsAuthMoved": "pi 的订阅登录、登出与 API key 录入现在在账号 › pi；本页保留模型与聊天可用（统一模型页是后续更新）。",
     "settings.accountPiStepGuidanceShared": "此 Cell 的步骤共用 operator 目录（{source}）；要为它们登录，到该目录登录。",
     "settings.accountPiStepGuidanceOwn": "此 Cell 的步骤用其独立来源目录（{source}）；要为它们登录，到该目录登录。",
     "settings.accountWriteOk": "已写入",

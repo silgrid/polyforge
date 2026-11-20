@@ -158,8 +158,6 @@ export const enLocale: LocalePlugin = {
     "settings.accountHarnessClaude": "Claude",
     "settings.accountRefresh": "Refresh",
     "settings.accountCloseTerminal": "Close terminal",
-    "settings.modelsAuthMovedTitle": "Sign-in has moved",
-    "settings.modelsAuthMoved": "pi's sign-in, sign-out and API-key entry now live on Account › pi; this page keeps the models and the chat switches (the unified models page is a later update).",
     "settings.accountPiStepGuidanceShared": "Steps of this Cell run against the shared operator directory ({source}); to sign in for them, log in there.",
     "settings.accountPiStepGuidanceOwn": "Steps of this Cell run against its own source directory ({source}); to sign in for them, log in there.",
     "settings.accountWriteOk": "written",
