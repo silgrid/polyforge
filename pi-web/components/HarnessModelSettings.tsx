@@ -144,7 +144,7 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount }: { cwd: str
         </div>)}
       </ConfigSidebarList></ConfigSidebar>
       <ConfigDetail>
-      <section aria-label="默认模型">
+      <section aria-label={t("models.defaultHeading")}>
         <h3>{t("models.defaultHeading")}</h3>
         <select aria-label={t("models.defaultHeading")} disabled={saving} value={selected}
           onChange={(event) => {
@@ -162,7 +162,7 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount }: { cwd: str
           </option>)}
         </select>
       </section>
-      <section aria-label="模型清单">
+      <section aria-label={t("models.listHeading")}>
         <h3>{t("models.listHeading")}</h3>
         <HarnessModelTable rows={selectedProvider ? rows.filter((row) => row.provider === selectedProvider) : rows} enabled={enabled} levels={levels} piSettings={piSettings}
           onEffort={(provider, id, level) => { void write(`/api/harness/pi/model${query}`, { modelThinkingLevel: { key: `${provider}/${id}`, level: level || null } }); }} />
