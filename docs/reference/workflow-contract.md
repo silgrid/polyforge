@@ -489,7 +489,7 @@ own git and gh run under — each entry once, so a script's commands
 resolve what the daemon's resolve and neither `pf step` nor the harness's
 interpreter is lost; unset, it inherits the daemon's own `PATH`
 ([config.md](config.md), `command_path`). A step's own copy of any of them
-never reaches it.
+never reaches it. `TMPDIR` is `<capsule>/artifacts/downloads/tmp/`, created before the harness starts; failure to create it rejects the spawn rather than falling back to shared `/tmp`. A tool or configuration that explicitly overwrites `TMPDIR` is outside this daemon guarantee. The complete variable table is in [Scripts](#scripts), while this section describes process inheritance and `PATH`.
 
 ### The prompt
 

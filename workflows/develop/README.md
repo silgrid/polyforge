@@ -44,7 +44,7 @@ and `artifacts/merge/landing.json`. The daemon orchestrates; it judges no conten
 
 The daemon gives every pi and Claude step process its capsule facts and a capsule private temporary directory. `TMPDIR` is `<capsule>/artifacts/downloads/tmp/`; the daemon creates it before spawning the harness, and the value is different for concurrent capsules. A harness configuration or tool that deliberately overwrites `TMPDIR` is outside this guarantee. A background process started by a step shell ends with that tool call, so a later call must not wait for it; run long commands in the foreground and put temporary files under `$TMPDIR` or `artifacts/downloads/`, never a fixed `/tmp/<name>`.
 
-The complete variable table and inheritance rules are in [the workflow contract's Environment section](../../docs/reference/workflow-contract.md#environment). The lane's step processes are resident across turns, but a shell tool invocation does not provide cross-invocation process lifetime.
+The complete variable table is in [the workflow contract's Scripts environment section](../../docs/reference/workflow-contract.md#scripts). Its Environment section describes inheritance and `PATH`; the lane's step processes are resident across turns, but a shell tool invocation does not provide cross-invocation process lifetime.
 
 ## What each step owes
 
