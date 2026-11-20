@@ -108,7 +108,6 @@ export const enLocale: LocalePlugin = {
     "settings.generalPaneEffective": "Effective values & sources",
     "settings.tabAccount": "Account",
     "settings.tabPermission": "Permissions",
-    "settings.tabLegacyModels": "Models (legacy)",
 
     "settings.accountInteractiveSession": "Interactive session",
     "settings.accountPiInteractiveHint": "pi's interactive session signs in through the providers below (账号 › pi); a step Cell shares the operator's directory or the source its profile declares.",
@@ -169,7 +168,6 @@ export const enLocale: LocalePlugin = {
     "settings.accountConsolePresent": "present — a Console login exists under ~/.config/anthropic (not isolated by CLAUDE_CONFIG_DIR)",
     "settings.accountConsoleFallback": "A Console login exists on this machine (~/.config/anthropic, not isolated by CLAUDE_CONFIG_DIR) — a step without its own env credential may fall back to it.",
 
-    "settings.harnessModelsPlaceholder": "Placeholder — the unified model settings page arrives with a later update.",
     "settings.permissionPaneApproval": "Approval mode",
     "settings.permissionPaneSandbox": "Sandbox",
     "settings.permissionPaneTrust": "Project trust",
@@ -1397,7 +1395,7 @@ export const enLocale: LocalePlugin = {
     "mcp.signIn.registrationOnly": "Not signed in, but a client registration or an unfinished sign-in is stored for this server.",
     "mcp.signIn.unknown": "Unknown: mcp-auth.json cannot be read.",
     "mcp.signIn.header": "Authorization header",
-    "mcp.signIn.provider": "Sends the token of the pi provider {provider}: sign in to it under Settings › Models.",
+    "mcp.signIn.provider": "Sends the token of the pi provider {provider}: sign in to it under Settings › Account › pi.",
     "mcp.exposure.codemode": "Only the server's name and summary are listed; Code mode scripts search for its tools.",
     "mcp.exposure.deferred": "Declared once tool search loads them; needs no Code mode.",
     "mcp.exposure.direct": "Every tool's full declaration goes with every request: the most tokens.",

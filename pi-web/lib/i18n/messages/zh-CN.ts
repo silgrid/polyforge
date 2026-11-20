@@ -108,7 +108,6 @@ export const zhCNLocale: LocalePlugin = {
     "settings.generalPaneEffective": "生效值与来源",
     "settings.tabAccount": "账号",
     "settings.tabPermission": "权限",
-    "settings.tabLegacyModels": "模型（旧版）",
 
     "settings.accountInteractiveSession": "交互会话",
     "settings.accountPiInteractiveHint": "pi 的交互会话经下方 provider 登录（账号 › pi）；步骤 Cell 共用 operator 目录或其 profile 声明的来源。",
@@ -169,7 +168,6 @@ export const zhCNLocale: LocalePlugin = {
     "settings.accountConsolePresent": "存在——~/.config/anthropic 下有 Console 登录（不随 CLAUDE_CONFIG_DIR 隔离）",
     "settings.accountConsoleFallback": "本机存在 Console 登录（~/.config/anthropic，不随 CLAUDE_CONFIG_DIR 隔离）——步骤未设自己的 env 凭据时可能被它兜住。",
 
-    "settings.harnessModelsPlaceholder": "占位：统一模型设置页由后续版本填充。",
     "settings.permissionPaneApproval": "审批模式",
     "settings.permissionPaneSandbox": "沙箱",
     "settings.permissionPaneTrust": "项目信任",
@@ -1397,7 +1395,7 @@ export const zhCNLocale: LocalePlugin = {
     "mcp.signIn.registrationOnly": "未登录，但保存了此服务器的客户端注册信息或未完成的登录。",
     "mcp.signIn.unknown": "未知：无法读取 mcp-auth.json。",
     "mcp.signIn.header": "Authorization 请求头",
-    "mcp.signIn.provider": "发送 pi 提供商 {provider} 的令牌：在“设置 › 模型”中登录它。",
+    "mcp.signIn.provider": "发送 pi 提供商 {provider} 的令牌：在“设置 › 账号 › pi”中登录它。",
     "mcp.exposure.codemode": "只列出服务器名称和简介，代码模式脚本按需搜索它的工具。",
     "mcp.exposure.deferred": "工具搜索加载后才声明，不需要代码模式。",
     "mcp.exposure.direct": "每次请求都带全部工具的完整声明，最占 token。",

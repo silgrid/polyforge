@@ -108,7 +108,6 @@ export const zhTWLocale: LocalePlugin = {
     "settings.generalPaneEffective": "生效值與來源",
     "settings.tabAccount": "帳號",
     "settings.tabPermission": "權限",
-    "settings.tabLegacyModels": "模型（舊版）",
 
     "settings.accountInteractiveSession": "互動會話",
     "settings.accountPiInteractiveHint": "pi 的互動會話經下方 provider 登入（帳號 › pi）；步驟 Cell 共用 operator 目錄或其 profile 宣告的來源。",
@@ -169,7 +168,6 @@ export const zhTWLocale: LocalePlugin = {
     "settings.accountConsolePresent": "存在——~/.config/anthropic 下有 Console 登入（不隨 CLAUDE_CONFIG_DIR 隔離）",
     "settings.accountConsoleFallback": "本機存在 Console 登入（~/.config/anthropic，不隨 CLAUDE_CONFIG_DIR 隔離）——步驟未設自己的 env 憑據時可能被它兜住。",
 
-    "settings.harnessModelsPlaceholder": "佔位：統一模型設定頁由後續版本填充。",
     "settings.permissionPaneApproval": "審批模式",
     "settings.permissionPaneSandbox": "沙箱",
     "settings.permissionPaneTrust": "專案信任",
@@ -1397,7 +1395,7 @@ export const zhTWLocale: LocalePlugin = {
     "mcp.signIn.registrationOnly": "未登入，但儲存了此伺服器的用戶端註冊資訊或未完成的登入。",
     "mcp.signIn.unknown": "未知：無法讀取 mcp-auth.json。",
     "mcp.signIn.header": "Authorization 標頭",
-    "mcp.signIn.provider": "傳送 pi 提供者 {provider} 的權杖：在「設定 › 模型」中登入它。",
+    "mcp.signIn.provider": "傳送 pi 提供者 {provider} 的權杖：在「設定 › 帳號 › pi」中登入它。",
     "mcp.exposure.codemode": "只列出伺服器名稱和簡介，程式碼模式指令碼按需搜尋它的工具。",
     "mcp.exposure.deferred": "工具搜尋載入後才宣告，不需要程式碼模式。",
     "mcp.exposure.direct": "每次請求都帶全部工具的完整宣告，最占 token。",
