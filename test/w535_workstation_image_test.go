@@ -261,8 +261,62 @@ func TestWorkstationImage(t *testing.T) {
 		}
 		// the absolute path is the point (Q5): a PATH lookup would find
 		// whatever a later layer or mount left in /usr/local/bin
-		if strings.Contains(body, `exec pf supervise`) {
+		if regexp.MustCompile(`(?m)^exec pf supervise(?:[ \t]|$)`).MatchString(body) {
 			t.Fatal("polyforge#175: entrypoint.sh must not exec pf by a PATH lookup — the base pf lives at /usr/local/libexec/polyforge/pf")
+		}
+		// the first boot runs BETWEEN the boundary and supervise
+		// (84-components-C): the identity must exist before the server
+		// starts — the aihub server's own fresh-install bootstrap
+		// (usr_root) never fires on a first-boot-initialized store
+		// 只定位真实命令行，注释不能替代绝对 bootstrap 调用。
+		commandAt := func(command string) int {
+			at := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(command) + `[ \t]*$`).FindStringIndex(body)
+			if at == nil {
+				return -1
+			}
+			return at[0]
+		}
+		whitelist := commandAt("workstation_env_whitelist")
+		firstBoot := commandAt("/usr/local/libexec/polyforge/pf first-boot")
+		supervise := commandAt(`exec /usr/local/libexec/polyforge/pf supervise "$@"`)
+		if firstBoot < 0 {
+			t.Fatal("polyforge#176: entrypoint.sh must run `pf first-boot` before handing over to pf supervise")
+		}
+		if !(whitelist < firstBoot && firstBoot < supervise) {
+			t.Fatal("polyforge#176: entrypoint.sh's order is the environment boundary, then the first boot, then exec pf supervise — the first boot initializes the identity before the server starts")
+		}
+		// review r1#2: the first boot's inputs are consumed by the
+		// boot itself — the external-mode key must never ride the
+		// environment into the supervise children (Pi Web's agent
+		// sessions inherit it otherwise). The unset line runs AFTER
+		// the boot and BEFORE the exec, and it is executed for real
+		// here: a probe environment carrying the three names comes out
+		// without them.
+		unsetRe := regexp.MustCompile(`(?m)^unset WORKSTATION_AIHUB_[A-Z_]+( WORKSTATION_AIHUB_[A-Z_]+)*$`)
+		unsetLine := unsetRe.FindString(body)
+		if unsetLine == "" {
+			t.Fatal("polyforge#176 (review r1#2): entrypoint.sh must unset WORKSTATION_AIHUB_SERVER/KEY/PROJECT between the first boot and the exec — the key is a credential and never reaches the supervise children")
+		}
+		unsetAt := strings.Index(body, unsetLine)
+		if !(firstBoot < unsetAt && unsetAt < supervise) {
+			t.Fatal("polyforge#176 (review r1#2): the unset must sit between `pf first-boot` and `exec pf supervise` — before the boot it would eat the inputs, after the exec it never runs")
+		}
+		for _, name := range []string{"WORKSTATION_AIHUB_SERVER", "WORKSTATION_AIHUB_KEY", "WORKSTATION_AIHUB_PROJECT"} {
+			if !strings.Contains(unsetLine, name) {
+				t.Fatalf("polyforge#176 (review r1#2): the unset line must name %s: %q", name, unsetLine)
+			}
+		}
+		probe := exec.Command("sh", "-c",
+			`export WORKSTATION_AIHUB_SERVER=s WORKSTATION_AIHUB_KEY=k WORKSTATION_AIHUB_PROJECT=p PI_KEEP=1; `+unsetLine+`; env`)
+		probe.Env = []string{"PATH=" + os.Getenv("PATH")}
+		out, err := probe.CombinedOutput()
+		if err != nil {
+			t.Fatalf("the unset line must run: %v:\n%s", err, out)
+		}
+		for _, name := range []string{"WORKSTATION_AIHUB_SERVER", "WORKSTATION_AIHUB_KEY", "WORKSTATION_AIHUB_PROJECT"} {
+			if strings.Contains(string(out), name+"=") {
+				t.Fatalf("the executed unset must remove %s from the environment:\n%s", name, out)
+			}
 		}
 	})
 
@@ -286,6 +340,10 @@ func TestWorkstationImage(t *testing.T) {
 			"PI_SMOKE_PROBE=passed",
 			"PI_WEB_PASSWORD=x",
 			"PI_TEST_PROBE=must-not-cross",
+			"WORKSTATION_AIHUB_SERVER=https://hub.example.invalid",
+			"WORKSTATION_AIHUB_KEY=probe-key",
+			"WORKSTATION_AIHUB_PROJECT=probe-project",
+			"WORKSTATION_OTHER=leak",
 			"SENTINEL_WORKSTATION=leak",
 			"PF_OUTER=leak",
 			"http_proxy=leak",
@@ -295,14 +353,18 @@ func TestWorkstationImage(t *testing.T) {
 			t.Fatalf("polyforge#161: the whitelist must run: %v:\n%s", err, out)
 		}
 		env := string(out)
-		for _, keep := range []string{"PORT=30141", "PI_WEB_APP_NAME=probe", "PI_SMOKE_PROBE=passed", "PI_WEB_PASSWORD=x", "BUILDAH_ISOLATION=chroot"} {
+		for _, keep := range []string{
+			"PORT=30141", "PI_WEB_APP_NAME=probe", "PI_SMOKE_PROBE=passed", "PI_WEB_PASSWORD=x", "BUILDAH_ISOLATION=chroot",
+			// the first boot's external-mode inputs cross (84-components-C)
+			"WORKSTATION_AIHUB_SERVER=https://hub.example.invalid", "WORKSTATION_AIHUB_KEY=probe-key", "WORKSTATION_AIHUB_PROJECT=probe-project",
+		} {
 			if !strings.Contains(env, "\n"+keep) && !strings.HasPrefix(env, keep) {
-				t.Fatalf("polyforge#161: the whitelist must keep %s — the PI_* families and PORT pass (AC3):\n%s", keep, env)
+				t.Fatalf("the whitelist must keep %s — the PI_* families, PORT and the first boot's inputs pass (AC3 + 84-components-C):\n%s", keep, env)
 			}
 		}
-		for _, drop := range []string{"PI_TEST_PROBE", "SENTINEL_WORKSTATION", "PF_OUTER", "http_proxy"} {
+		for _, drop := range []string{"PI_TEST_PROBE", "WORKSTATION_OTHER", "SENTINEL_WORKSTATION", "PF_OUTER", "http_proxy"} {
 			if strings.Contains(env, drop) {
-				t.Fatalf("polyforge#161: the whitelist must drop %s — PI_TEST_* never crosses and the container inherits nothing else (AC3):\n%s", drop, env)
+				t.Fatalf("the whitelist must drop %s — PI_TEST_* never crosses, only the three named WORKSTATION_AIHUB_* inputs pass, and the container inherits nothing else (AC3):\n%s", drop, env)
 			}
 		}
 	})
@@ -388,13 +450,13 @@ func TestWorkstationCompose(t *testing.T) {
 	}
 	svc, ok := compose.Services["workstation"]
 	if !ok {
-		t.Fatal("polyforge#161: compose.yaml must carry the workstation service (the no-aihub default)")
+		t.Fatal("polyforge#176: compose.yaml must carry the workstation service (the aihub default boot)")
 	}
-	aihub, ok := compose.Services["workstation-aihub"]
+	noaihub, ok := compose.Services["workstation-noaihub"]
 	if !ok {
-		t.Fatal("polyforge#161: compose.yaml must carry the workstation-aihub service (the --with-aihub variant)")
+		t.Fatal("polyforge#176: compose.yaml must carry the workstation-noaihub service (the explicit without-AIHub opt-out)")
 	}
-	for name, s := range map[string]w535ComposeService{"workstation": svc, "workstation-aihub": aihub} {
+	for name, s := range map[string]w535ComposeService{"workstation": svc, "workstation-noaihub": noaihub} {
 		// AC1's minimal set, as a set: exactly SYS_ADMIN and NET_ADMIN.
 		if len(s.CapAdd) != 2 {
 			t.Fatalf("%s: cap_add = %v, want exactly the two measured capabilities", name, s.CapAdd)
@@ -477,21 +539,49 @@ func TestWorkstationCompose(t *testing.T) {
 		if s.Environment["PI_WEB_HOSTNAME"] != "0.0.0.0" {
 			t.Fatalf("%s: PI_WEB_HOSTNAME must be 0.0.0.0 — a container must bind all interfaces to be reachable (pi-web's own compose precedent)", name)
 		}
-		// both persistent boundaries: the data dir (the release layout
-		// and the daemon's state) and podman's storage, each its own
-		// named volume so a reset never crosses (84-components mounts
-		// its component volumes under the data dir's release layout).
-		var data, storage bool
-		for _, vol := range s.Volumes {
-			switch {
-			case strings.HasPrefix(vol, "polyforge-data:/root/.local/share/polyforge"):
-				data = true
-			case strings.HasPrefix(vol, "podman-storage:/var/lib/containers/storage"):
-				storage = true
+		// the step agents' harness home (84-components-C): inside
+		// pf-home, so a login and the harness references survive a
+		// re-create of the container
+		if s.Environment["PI_CODING_AGENT_DIR"] != "/root/.pi/agent" {
+			t.Fatalf("%s: PI_CODING_AGENT_DIR = %q, want /root/.pi/agent (the agent dir lives in the pf-home volume)", name, s.Environment["PI_CODING_AGENT_DIR"])
+		}
+		// the first boot's external-mode inputs (84-components-C):
+		// optional interpolations, empty by default (the local mode)
+		for key, want := range map[string]string{
+			"WORKSTATION_AIHUB_SERVER":  "${WORKSTATION_AIHUB_SERVER:-}",
+			"WORKSTATION_AIHUB_KEY":     "${WORKSTATION_AIHUB_KEY:-}",
+			"WORKSTATION_AIHUB_PROJECT": "${WORKSTATION_AIHUB_PROJECT:-}",
+		} {
+			if s.Environment[key] != want {
+				t.Fatalf("%s: %s = %q, want the optional interpolation %q", name, key, s.Environment[key], want)
 			}
 		}
-		if !data || !storage {
-			t.Fatalf("%s: volumes = %v, want the polyforge-data and podman-storage named volumes at their canonical paths", name, s.Volumes)
+		// the six persistent volumes (84-components-C), each its own
+		// named volume at its canonical path: pf-home owns /root whole
+		// (cli.toml, the agent dir, the logins) with the data dir
+		// nested inside it, the components volume carries the
+		// versioned components, the aihub volume the local AIHub's
+		// store, the workspace volume the working tree.
+		volAt := map[string]string{}
+		for _, vol := range s.Volumes {
+			if name, target, found := strings.Cut(vol, ":"); found {
+				volAt[name] = target
+			}
+		}
+		for vol, target := range map[string]string{
+			"pf-home":        "/root",
+			"polyforge-data": "/root/.local/share/polyforge",
+			"components":     "/components",
+			"aihub":          "/var/lib/polyforge/aihub",
+			"workspace":      "/workspace",
+			"podman-storage": "/var/lib/containers/storage",
+		} {
+			if volAt[vol] != target {
+				t.Fatalf("%s: volume %s mounted at %q, want %q (the six persistent volumes, each at its canonical path): %v", name, vol, volAt[vol], target, s.Volumes)
+			}
+		}
+		if len(s.Volumes) != 6 {
+			t.Fatalf("%s: volumes = %v, want exactly the six persistent volumes (caddy rides the https front only)", name, s.Volumes)
 		}
 		if s.Build.Context != "../.." || s.Build.Dockerfile != "dist/workstation/Containerfile" {
 			t.Fatalf("%s: build must use the repository root context and the dist/workstation/Containerfile (the pf binary builds from this tree)", name)
@@ -506,37 +596,47 @@ func TestWorkstationCompose(t *testing.T) {
 			t.Fatalf("%s: ports must publish Pi Web's 30141", name)
 		}
 	}
-	// the profiles carry the smoke's two boot modes one-to-one (settled
-	// Q7: default without AIHub, --with-aihub by profile) — and the
-	// --with-aihub flag reaches pf supervise only in the aihub variant.
-	if !contains(svc.Profiles, "no-aihub") {
-		t.Fatalf("workstation: profiles = %v, want [no-aihub]", svc.Profiles)
+	// the profiles carry the smoke's two boot modes one-to-one
+	// (the #176 default flip: the aihub boot is THE workstation, and
+	// running without an AIHub is the explicit opt-out) — and the
+	// --with-aihub flag reaches pf supervise only in the default
+	// variant. Both carry an explicit profile: compose's --profile can
+	// only add, never subtract, so two explicit profiles are the only
+	// shape that keeps the modes mutually exclusive (#161's measured
+	// lesson).
+	if len(svc.Profiles) != 1 || svc.Profiles[0] != "aihub" {
+		t.Fatalf("workstation: profiles = %v, want exactly [aihub] (the default boot)", svc.Profiles)
 	}
-	if !contains(aihub.Profiles, "aihub") || contains(aihub.Profiles, "no-aihub") {
-		t.Fatalf("workstation-aihub: profiles = %v, want [aihub] only", aihub.Profiles)
+	if len(noaihub.Profiles) != 1 || noaihub.Profiles[0] != "no-aihub" {
+		t.Fatalf("workstation-noaihub: profiles = %v, want exactly [no-aihub] (the explicit opt-out)", noaihub.Profiles)
 	}
-	if contains(svc.Command, "--with-aihub") {
-		t.Fatal("workstation: the default boot must not pass --with-aihub")
+	if !contains(svc.Command, "--with-aihub") {
+		t.Fatal("workstation: the default boot must pass --with-aihub to pf supervise (the local AIHub is a watched child)")
 	}
-	if !contains(aihub.Command, "--with-aihub") {
-		t.Fatal("workstation-aihub: the aihub profile must pass --with-aihub to pf supervise")
+	if contains(noaihub.Command, "--with-aihub") {
+		t.Fatal("workstation-noaihub: the opt-out must not pass --with-aihub")
 	}
-	for name, s := range map[string]w535ComposeService{"workstation": svc, "workstation-aihub": aihub} {
+	// the versioned components run from the components volume, so
+	// both variants point supervise's component paths there (the
+	// #161-era <data-dir>/release/current layout is gone)
+	for name, s := range map[string]w535ComposeService{"workstation": svc, "workstation-noaihub": noaihub} {
+		if !contains(s.Command, "/components/current/workflows") || !contains(s.Command, "/components/current/pi-web") {
+			t.Fatalf("%s: command = %v, must point --workflows-dir and --pi-web-dir at /components/current (the components volume is where the versions run)", name, s.Command)
+		}
 		if !contains(s.Command, "--grace") {
 			t.Fatalf("%s: command must pin pf supervise's stop grace (the outer grace must exceed the daemon's shutdown)", name)
 		}
 	}
-	if _, ok := compose.Volumes["polyforge-data"]; !ok {
-		t.Fatal("polyforge#161: the compose file must declare the polyforge-data named volume")
-	}
-	if _, ok := compose.Volumes["podman-storage"]; !ok {
-		t.Fatal("polyforge#161: the compose file must declare the podman-storage named volume")
+	for _, vol := range []string{"pf-home", "polyforge-data", "components", "aihub", "workspace", "podman-storage", "caddy-data"} {
+		if _, ok := compose.Volumes[vol]; !ok {
+			t.Fatalf("polyforge#176: the compose file must declare the %s named volume", vol)
+		}
 	}
 
 	// the optional HTTPS front (settled Q7: off by default, opened by a
 	// compose profile — the ticket's "可选 AIHub 与 HTTPS 前置"). It
 	// must never ride the default boots: the two boot profiles above
-	// stay exactly [no-aihub] and [aihub].
+	// stay exactly [aihub] and [no-aihub].
 	front, ok := compose.Services["https-front"]
 	if !ok {
 		t.Fatal("polyforge#161: compose.yaml must carry the https-front service — the ticket's optional HTTPS front (settled Q7)")
@@ -589,9 +689,8 @@ func TestWorkstationCompose(t *testing.T) {
 		t.Fatalf("polyforge#161: https-front must carry WORKSTATION_HTTPS_HOST=${WORKSTATION_HTTPS_HOST:-localhost} so the site address follows the operator's hostname, got %q", front.Environment["WORKSTATION_HTTPS_HOST"])
 	}
 	// the proxy target resolves under both boot modes: every workstation
-	// service carries the `workstation` network alias (the aihub variant
-	// has no container_name of that name).
-	for name, s := range map[string]w535ComposeService{"workstation": svc, "workstation-aihub": aihub} {
+	// boot service carries the `workstation` network alias.
+	for name, s := range map[string]w535ComposeService{"workstation": svc, "workstation-noaihub": noaihub} {
 		if !contains(s.Networks["default"].Aliases, "workstation") {
 			t.Fatalf("%s: the boot service must carry the `workstation` network alias — the https front reverse-proxies that name (review r2#1)", name)
 		}
@@ -643,7 +742,7 @@ func TestWorkstationSmoke(t *testing.T) {
 					"CgroupnsMode": scenario["cgroupns"],
 					"Privileged":   false,
 					"Devices":      []any{},
-					"Binds":        []string{"workstation_polyforge-data:/root/.local/share/polyforge:rw", "workstation_podman-storage:/var/lib/containers/storage:rw"},
+					"Binds":        []string{"workstation_pf-home:/root:rw", "workstation_polyforge-data:/root/.local/share/polyforge:rw", "workstation_components:/components:rw", "workstation_aihub:/var/lib/polyforge/aihub:rw", "workstation_workspace:/workspace:rw", "workstation_podman-storage:/var/lib/containers/storage:rw"},
 				},
 			},
 		})
@@ -807,6 +906,7 @@ func w535JSONAny(t *testing.T, doc string) any {
 // inspects as pinned); without an engine it skips, exactly like the
 // real-container suites' engine gates.
 func TestWorkstationImageEngine(t *testing.T) {
+	defer w535LockSmoke(t)()
 	root := w535Root(t)
 	if out, err := exec.Command("docker", "version", "--format", "{{.Server.Version}}").CombinedOutput(); err != nil {
 		t.Skipf("no docker engine (%v: %s), skipping the real-engine workstation boot", err, strings.TrimSpace(string(out)))
@@ -814,6 +914,19 @@ func TestWorkstationImageEngine(t *testing.T) {
 	if err := exec.Command("docker", "compose", "version").Run(); err != nil {
 		t.Skipf("no docker compose (%v), skipping the real-engine workstation boot", err)
 	}
+	// the workstation is a first-boot machine now (polyforge#176): the
+	// boot is judged on a fresh state, and a dev host's leftover
+	// workstation volumes carry pre-#176 state the boot would
+	// legitimately refuse to serve beside (a cells/default/identity.json
+	// recorded against another AIHub identity domain is the daemon's own
+	// 78). Reset the compose project's volumes first — the operator's
+	// own `smoke.sh boot` run never does this, only the engine
+	// acceptance does. (The compose file's required interpolation
+	// refuses even a `down` without the password, so it carries one
+	// here too.)
+	down := exec.Command("docker", "compose", "-p", "workstation-smoke", "-f", filepath.Join(root, "dist/workstation/compose.yaml"), "--profile", "no-aihub", "down", "-v")
+	down.Env = append(os.Environ(), "PI_WEB_PASSWORD=x")
+	_ = down.Run()
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sh", filepath.Join(root, "dist/workstation/smoke.sh"), "boot", "--no-aihub")
@@ -827,5 +940,327 @@ func TestWorkstationImageEngine(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "boot --no-aihub: PASS") {
 		t.Fatalf("polyforge#161: the smoke run never printed its PASS line:\n%s", out)
+	}
+}
+
+// w535SmokeFirstBoot runs `smoke.sh first-boot` (the default local pass)
+// against one stub scenario and answers its combined output and exit
+// status. The scenario carries the record the container's exec reads
+// back (first-boot.json), the default Cell's server as `pf config get
+// server` answers it, and the two failure flags: recall-fails (the key
+// does not authenticate) and bootstrap-key-exists (the server's own
+// bootstrap fired anyway).
+func w535SmokeFirstBoot(t *testing.T, mutate func(dir string)) (string, error) {
+	t.Helper()
+	root := w535Root(t)
+	script := filepath.Join(root, "dist/workstation/smoke.sh")
+	dir := t.TempDir()
+	record := `{"phase":"done","mode":"local","defaultCell":"default","server":"http://127.0.0.1:8420","userReady":true,"keyReady":true,"imageManaged":true,"updatedAt":"2026-11-20T00:00:00Z"}`
+	if err := os.WriteFile(filepath.Join(dir, "first-boot.json"), []byte(record), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cell-server.txt"), []byte("http://127.0.0.1:8420\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if mutate != nil {
+		mutate(dir)
+	}
+	bin := t.TempDir()
+	if err := os.Symlink(filepath.Join(root, "test", "testdata", "workstation-smoke-stub", "docker"), filepath.Join(bin, "docker")); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", script, "first-boot")
+	cmd.Env = []string{
+		"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"HOME=" + os.Getenv("HOME"),
+		"W535_SMOKE_SCENARIO=" + dir,
+		"WORKSTATION_SMOKE_STUB_PORT=38421",
+	}
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// TestWorkstationSmokeFirstBoot — the smoke script's first-boot pass
+// (polyforge#176): the record's phase gates the pass (anything but a
+// completed local boot fails naming the phase), the key's real
+// authentication is the proof (a failing pf recall fails the run naming
+// it), and a bootstrap-admin key existing is a failure by itself (the
+// identity must predate the server, so the server's own bootstrap has
+// nothing left to seed).
+func TestWorkstationSmokeFirstBoot(t *testing.T) {
+	root := w535Root(t)
+	script := filepath.Join(root, "dist/workstation/smoke.sh")
+	if err := exec.Command("sh", "-n", script).Run(); err != nil {
+		t.Fatalf("polyforge#176: smoke.sh must parse as POSIX sh: %v", err)
+	}
+	t.Run("the passing local first boot", func(t *testing.T) {
+		out, err := w535SmokeFirstBoot(t, nil)
+		if err != nil {
+			t.Fatalf("the first-boot pass must pass against a completed local record:\n%s", out)
+		}
+		if !strings.Contains(out, "first-boot: PASS") {
+			t.Fatalf("the passing first boot must print its PASS line:\n%s", out)
+		}
+	})
+	t.Run("an incomplete record fails naming the phase", func(t *testing.T) {
+		out, err := w535SmokeFirstBoot(t, func(dir string) {
+			record := `{"phase":"config/failed","mode":"local","error":"x","updatedAt":"2026-11-20T00:00:00Z"}`
+			if err := os.WriteFile(filepath.Join(dir, "first-boot.json"), []byte(record), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if err == nil {
+			t.Fatalf("a first boot whose record is not done must fail:\n%s", out)
+		}
+		if !strings.Contains(out, "phase") {
+			t.Fatalf("the failure must name the phase:\n%s", out)
+		}
+	})
+	t.Run("a key that does not authenticate fails the run", func(t *testing.T) {
+		out, err := w535SmokeFirstBoot(t, func(dir string) {
+			if err := os.WriteFile(filepath.Join(dir, "recall-fails"), []byte("1"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if err == nil {
+			t.Fatalf("a default Cell whose key cannot authenticate must fail the run:\n%s", out)
+		}
+		if !strings.Contains(out, "authenticate") {
+			t.Fatalf("the failure must name the authentication proof:\n%s", out)
+		}
+	})
+	t.Run("a wrong agent dir fails the run", func(t *testing.T) {
+		out, err := w535SmokeFirstBoot(t, func(dir string) {
+			if err := os.WriteFile(filepath.Join(dir, "agentdir-wrong"), []byte("1"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if err == nil {
+			t.Fatalf("an agent dir outside pf-home is the AC2 layout broken — the run must fail:\n%s", out)
+		}
+		if !strings.Contains(out, "agent dir") {
+			t.Fatalf("the failure must name the agent dir:\n%s", out)
+		}
+	})
+	t.Run("a pi packages entry off /components/current fails the run", func(t *testing.T) {
+		out, err := w535SmokeFirstBoot(t, func(dir string) {
+			if err := os.WriteFile(filepath.Join(dir, "packages-wrong"), []byte("1"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if err == nil {
+			t.Fatalf("a pi packages entry that does not point at /components/current is the AC2 harness half broken:\n%s", out)
+		}
+		if !strings.Contains(out, "packages") {
+			t.Fatalf("the failure must name the packages entry:\n%s", out)
+		}
+	})
+	t.Run("a credential in the record fails the run", func(t *testing.T) {
+		out, err := w535SmokeFirstBoot(t, func(dir string) {
+			if err := os.WriteFile(filepath.Join(dir, "credential-in-record"), []byte("1"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if err == nil {
+			t.Fatalf("a record that carries a credential is the AC2 leak — the run must fail:\n%s", out)
+		}
+		if !strings.Contains(out, "credential") {
+			t.Fatalf("the failure must name the credential leak:\n%s", out)
+		}
+	})
+	t.Run("a bootstrap-admin key fails the run", func(t *testing.T) {
+		out, err := w535SmokeFirstBoot(t, func(dir string) {
+			if err := os.WriteFile(filepath.Join(dir, "bootstrap-key-exists"), []byte("1"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if err == nil {
+			t.Fatalf("a bootstrap-admin key in the aihub volume means the identity did not predate the server — the run must fail:\n%s", out)
+		}
+		if !strings.Contains(out, "bootstrap") {
+			t.Fatalf("the failure must name the bootstrap key:\n%s", out)
+		}
+	})
+}
+
+func TestWorkstationSmokeFirstBootSkills(t *testing.T) {
+	out, err := w535SmokeFirstBoot(t, func(dir string) {
+		if err := os.WriteFile(filepath.Join(dir, "skills-wrong"), []byte("1"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if err == nil {
+		t.Fatalf("错误技能软链必须使首启 smoke 失败：\n%s", out)
+	}
+	if !strings.Contains(out, "skill") {
+		t.Fatalf("失败必须点名技能软链：\n%s", out)
+	}
+	out, err = w535SmokeFirstBoot(t, nil)
+	if err != nil || !strings.Contains(out, "first-boot: PASS") {
+		t.Fatalf("有效布局必须通过首启 smoke：%v\n%s", err, out)
+	}
+}
+
+// TestWorkstationSmokeProjectIsolation — review r1#4: the smoke owns
+// its runs, never an operator's deployment. The compose project is
+// fixed (`name: workstation` in compose.yaml) and the six volumes are
+// a real deployment's persistent home, so the smoke (whose first-boot
+// pass resets volumes) runs every compose call under its own project
+// name: `down -v` then only ever touches workstation-smoke_*, never
+// the operator's volumes. A collision with a concurrently running
+// deployment's fixed container_name fails the up explicitly instead.
+func TestWorkstationSmokeProjectIsolation(t *testing.T) {
+	body := w535Deliverable(t, "dist/workstation/smoke.sh")
+	// the compose() helper carries the project name
+	helper := body[strings.Index(body, "compose() {"):]
+	if !strings.Contains(helper, "-p workstation-smoke") {
+		t.Fatal("polyforge#176 (review r1#4): the smoke's compose() helper must run under its own project (-p workstation-smoke) — its down -v may never touch the operator's workstation volumes")
+	}
+	// every raw docker compose invocation carries it too (the env and
+	// podman-verify passes and the first-boot pass's override calls);
+	// the bare `docker compose version` probes touch no project
+	for i, line := range strings.Split(body, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "docker compose") || strings.HasPrefix(trimmed, "docker compose version") {
+			continue
+		}
+		if !strings.Contains(trimmed, "-p workstation-smoke") {
+			t.Fatalf("polyforge#176 (review r1#4): smoke.sh line %d invokes docker compose without -p workstation-smoke: %q", i+1, trimmed)
+		}
+	}
+}
+
+// w535SmokeFirstBootExternal runs `smoke.sh first-boot --external`
+// against one stub scenario: the record the container reads back says
+// an external boot, the default Cell names the counting stub, and the
+// stub itself runs for real on the host (no container ever reaches it
+// under the stub engine).
+func w535SmokeFirstBootExternal(t *testing.T, mutate func(dir string)) (string, error) {
+	t.Helper()
+	defer w535LockSmoke(t)()
+	root := w535Root(t)
+	script := filepath.Join(root, "dist/workstation/smoke.sh")
+	dir := t.TempDir()
+	record := `{"phase":"done","mode":"external","defaultCell":"default","server":"http://host.docker.internal:38422","userReady":false,"keyReady":true,"imageManaged":true,"updatedAt":"2026-11-20T00:00:00Z"}`
+	if err := os.WriteFile(filepath.Join(dir, "first-boot.json"), []byte(record), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cell-server.txt"), []byte("http://host.docker.internal:38422\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if mutate != nil {
+		mutate(dir)
+	}
+	bin := t.TempDir()
+	if err := os.Symlink(filepath.Join(root, "test", "testdata", "workstation-smoke-stub", "docker"), filepath.Join(bin, "docker")); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", script, "first-boot", "--external")
+	cmd.Env = []string{
+		"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"HOME=" + os.Getenv("HOME"),
+		"W535_SMOKE_SCENARIO=" + dir,
+		"WORKSTATION_SMOKE_STUB_PORT=38422",
+	}
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// TestWorkstationSmokeFirstBootExternal — the smoke's external pass
+// under the stub engine: the record gate names the mode, and a record
+// that is not a completed external boot fails the run naming it.
+func TestWorkstationSmokeFirstBootExternal(t *testing.T) {
+	t.Run("the passing external pass", func(t *testing.T) {
+		out, err := w535SmokeFirstBootExternal(t, nil)
+		if err != nil {
+			t.Fatalf("the external pass must pass against a completed external record:\n%s", out)
+		}
+		if !strings.Contains(out, "first-boot: PASS") {
+			t.Fatalf("the passing external run must print its PASS line:\n%s", out)
+		}
+		if !strings.Contains(out, "the stub server saw 0 requests") {
+			t.Fatalf("the external pass must assert the zero-remote fact:\n%s", out)
+		}
+	})
+	t.Run("a record of the wrong mode fails the run", func(t *testing.T) {
+		out, err := w535SmokeFirstBootExternal(t, func(dir string) {
+			record := `{"phase":"done","mode":"local","defaultCell":"default","server":"http://127.0.0.1:8420","userReady":true,"keyReady":true,"imageManaged":true,"updatedAt":"2026-11-20T00:00:00Z"}`
+			if err := os.WriteFile(filepath.Join(dir, "first-boot.json"), []byte(record), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if err == nil {
+			t.Fatalf("a record whose mode is not external must fail the external pass:\n%s", out)
+		}
+		if !strings.Contains(out, "record") {
+			t.Fatalf("the failure must name the record:\n%s", out)
+		}
+	})
+}
+
+func TestWorkstationSmokeExternalRejectsRemoteWrites(t *testing.T) {
+	for _, request := range []string{
+		"POST /api/v1/users",
+		"POST /api/v1/api-keys",
+		"POST /api/v1/projects",
+		"PATCH /api/v1/users/usr_test",
+		"DELETE /api/v1/api-keys/key_test",
+		"DELETE /api/v1/projects/prj_test",
+		"GET /api/v1/unexpected",
+	} {
+		t.Run(request, func(t *testing.T) {
+			out, err := w535SmokeFirstBootExternal(t, func(dir string) {
+				if err := os.WriteFile(filepath.Join(dir, "remote-request"), []byte(request+"\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			})
+			if err == nil {
+				t.Fatalf("远端写请求必须拒绝：%s\n%s", request, out)
+			}
+			if !strings.Contains(out, request) {
+				t.Fatalf("拒绝必须点名请求：%s\n%s", request, out)
+			}
+		})
+	}
+	t.Run("heartbeat", func(t *testing.T) {
+		out, err := w535SmokeFirstBootExternal(t, func(dir string) {
+			if err := os.WriteFile(filepath.Join(dir, "remote-request"), []byte("POST /api/v1/machines/heartbeat\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if err != nil || !strings.Contains(out, "first-boot: PASS") {
+			t.Fatalf("运行期心跳必须允许：%v\n%s", err, out)
+		}
+	})
+}
+
+// TestWorkstationSmokeFirstBootEngine — the real-engine external pass
+// (polyforge#176, the round-2 real-machine finding): the counting stub
+// sits on the host and the smoke must prove the FIRST BOOT itself makes
+// no remote request — the zero-remote window is the boot (up to the
+// record saying done), because the daemon's heartbeat to the Cell's
+// server afterwards is the machine's normal connection, never an
+// object the boot creates. Without an engine it skips, exactly like
+// the other real-container engine gates.
+func TestWorkstationSmokeFirstBootEngine(t *testing.T) {
+	defer w535LockSmoke(t)()
+	root := w535Root(t)
+	if out, err := exec.Command("docker", "version", "--format", "{{.Server.Version}}").CombinedOutput(); err != nil {
+		t.Skipf("no docker engine (%v: %s), skipping the real-engine external first boot", err, strings.TrimSpace(string(out)))
+	}
+	if err := exec.Command("docker", "compose", "version").Run(); err != nil {
+		t.Skipf("no docker compose (%v), skipping the real-engine external first boot", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sh", filepath.Join(root, "dist/workstation/smoke.sh"), "first-boot", "--external")
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "WORKSTATION_SMOKE_STUB_PORT=38421")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("polyforge#176: smoke first-boot --external failed on the real engine: %v:\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "first-boot: PASS") {
+		t.Fatalf("polyforge#176: the external run never printed its PASS line:\n%s", out)
 	}
 }

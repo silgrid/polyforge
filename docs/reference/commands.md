@@ -99,7 +99,7 @@ One row per group, exactly as `pf help` prints it:
 | Execution-plane verbs (local daemon UDS face) | `submit`, `watch` (snapshot, `decisions` — the machine's decision feed —, `dismiss`), `answer` (your words to the current step's agent — a reply to its question, an interjection while it runs, or a message that wakes a parked work item; no question id), `pause`, `resume`, `wrap`, `override` (a work item's per-step overlay: the view; `--step` with `--models`, `--clear-models`, `--skip`, `--unskip`, `--param <name>=<value>` or `--clear-param <name>`, one per call — the model chain over every source, the skip switch of a lane-declared skippable step, a step param the lane declares over its project and lane values; the parked (paused/blocked) ticket accepts chains too, holding on this machine only — not published until this machine's resume or claim publishes the capsule chain; a queued work item's params included, riding the reserved `step_params` attrs key until its claim; a terminal ticket refuses), `params` (a work item's composed params read: every declared step param's final value and the layer it comes from — the per-ticket layer, the project's yaml or the lane default; a queued work item's per-ticket layer is its `step_params` attrs key), `ops` (`status`, `models`, `auto`, `max`, `role` — the interactive/runner machine role, `--force` takes interactive over —, `drain` — `drain --upgrade [--force]`, the Host-level upgrade drain: new submits, automatic claims and task spawns are refused `DAEMON-409` while running work goes on; an idle Host answers and it is safe to upgrade, a busy one refuses until `--force`; the refusal ends with the daemon restart —, `shutdown`, and `end-session` — aihub-direct, admin/maintainer), `task` (`spawn`, `list`, `show`, `cancel`), `step` (inside a workflow step only: `handoff`, its one result-delivery path; `ask`, its question to the owner; `recall`, `memory show`, `remember`; `hub`, its aihub reads and pending writes — below) |
 | Management face (M1–M5) | `users`, `api-keys`, `projects`, `machines` (`list`, `rekey`), `backup` (database snapshot, see below), `cell` (the Host's Cells: `list`, `add`, `update`, `repair`, `remove`, `cleanup`; owner-only, below), `config` (the one `cli.toml` writer and the daemon reload entry), `workflows` (the read-only workflow face, below) |
 | Diagnostics | `doctor` (examines every Cell — the default Cell's full report, then one section per named Cell, each Cell-level read carrying its `X-PF-Profile`; `--prune-scratch` removes the stale scratch batches inside the fixed categories (`raw/` past 3 days, `tasks/` and `sessions/` past 14 days, whole run directories; entries outside the categories are only ever reported); `--prune-chat-state` deletes the retired chat-subscription files the `retired chat state` row lists (`chats.json`, `chat-subs.json`, `chat-status/` and `migration/chat-subs.json.pre-migration` in the data dir, and the runtime dir's `chat-*` and `session-*.chat` files); `--prune-capsules` acts on the entries the `capsule retention` row calls reclaimable or retired — past the 14-day retention, holding no uncommitted or unpushed task-repo work: a wrapped work item's capsule, live or set aside, is slimmed to `artifacts/` + `capsule.json`, and terminal work items' external git dirs and failed or canceled ones' set-aside scenes are removed — a commit counts as pushed when either the task clone's own or the mapped workspace's `.repo/<name>` clone's remote-tracking refs reach it; a capsule holding such work, and the work item's git dirs, are kept and named; `--prune-rebuildables` removes the rebuildable build products the `rebuildable artifacts` row counted — the directories a repository declares at its root (`.polyforge/capsule-gc.conf`, one `rebuild_dir=` line per repo-root-relative literal; read from the mapped workspace's `.repo/<name>` clone's committed default branch, the commit recorded in the report) from the `repos/*` task clones of terminal work items' capsules (wrapped, failed or canceled, live or set aside) no daemon job holds, without waiting for the 14-day retention — only all-ignored directories with no tracked or untracked-not-ignored content and no nested repository, anchored to their clones, never touching `artifacts/`, `capsule.json`, the git directories, the local commits or the git status (a repository with unpushed commits loses its ignored build products and nothing else; a repository that declares nothing changes nothing; never while the daemon is down); its `disk watermark` row reports each mapped workspace's filesystem use and `capsules/` bytes and warns above 70% used; `--fix-harness-prompts` appends the native-SVG diagram-guidance block to each installed harness's existing context file that lacks that block — legacy mermaid-only guidance, which the `harness diagram guidance` row warns as `legacy`, included and left as it is — append-only and idempotent, never creating a file; it appends the concise-output guidance block too (the `harness concise guidance` row); `--fix-install-layout` links `~/.claude/skills/polyforge` to the machine's current skill (`<data-dir>/release/current/skills/polyforge` on a host, `/components/current/skills/polyforge` in the workstation image, polyforge#175) when the `claude install layout` row finds it missing or linked elsewhere — only that entry, idempotent, a no-op on a correct link; a copied directory or a missing release is left to the layout's installer (`tools/install.sh` on a host; in the image the row's fix names the components volume, never `tools/install.sh`), and it never installs `pf` or a release), `version` (the verb form of `pf --version`), `profile` (the resolved Cell and its source), `init` (a workspace's local layout) |
-| Process | `daemon` (run the work machine; `pf daemon ensure` starts it), `supervise` (run the container process supervisor — the workstation container's entry point, below), `aihub` (run the aihub server on the service host; `main.go` intercepts `pf aihub`, this verb serves `pf help aihub` only) |
+| Process | `daemon` (run the work machine; `pf daemon ensure` starts it), `supervise` (run the container process supervisor — the workstation container's entry point, below), `first-boot` (run the workstation container's one-time initialization — below), `aihub` (run the aihub server on the service host, and `pf aihub init` its local first-boot initialization entry; `main.go` intercepts `pf aihub`, this verb serves `pf help aihub` only) |
 
 ## `pf submit` — the prechecks; `pf queue` — the interaction marks
 
@@ -1484,6 +1484,82 @@ direct child, so `pf supervise` is what forwards it to every child.
 On a host nothing changes: the daemon's supervision stays the tmux loop
 (`pf daemon ensure`), and running `pf supervise` there is not what any
 documented flow does.
+
+## `pf first-boot` — the workstation container's first boot (polyforge#176)
+
+`pf first-boot` is the workstation container's one-time initialization,
+run by the image's entrypoint exactly once per container start, BEFORE
+`pf supervise` (the identity must exist before the server starts, so
+the server's own fresh-install bootstrap — usr_root and
+bootstrap-admin.key — never fires on a first-boot-initialized store).
+On a host it is never part of an install (tools/install.sh owns the
+host path).
+
+The stages, each published atomically to
+`<data-dir>/workstation/first-boot.json` (the phase record; on failure
+the phase is `<stage>/failed` with the reason — never a credential):
+
+1. **components** — the image's seed (`/opt/polyforge/seed`) installs
+   into the components volume (`/components`) through the seed
+   transaction; no seed means a not-image-managed run and the install is
+   skipped (`imageManaged` records which).
+2. **identity** — the local mode (the default) runs the local
+   initialization entry (`pf aihub init`, in process): the daily user,
+   its API key and the local `workstation` project (the user its
+   maintainer) in one transaction. The external mode takes the
+   operator-given server and key instead and creates nothing anywhere.
+3. **config** — cli.toml gains the default Cell: `server` (the local
+   `http://127.0.0.1:8420`, or the external server), `api_key`, `user_id`
+   (local), `[daemon] container_engine = "podman"` and the
+   `[workspace."/workspace"]` mapping (the local project, or the
+   operator-given existing project; absent in the external mode means
+   no mapping). The write rides the config writer's own flock and
+   atomic write, preserving every other row.
+4. **harness** — the harness references point at `/components/current`:
+   the pi agent dir's packages entry and the claude skill symlinks (a
+   login, other packages and the user's own skill entries are never
+   touched). The host installer (tools/install.sh) keeps its own merge
+   toward `<data-dir>/release/current`; the two are independent and
+   neither calls the other.
+5. **done** — the record lands `phase: done` with the mode, the default
+   Cell's name and server, `userReady`/`keyReady` (true only after the
+   facts are verified — `keyReady` says issued-and-written, never
+   authenticated) and `imageManaged`.
+
+The gate (the settled Q6 plus the owner's ruling of 2026-11-20 on
+review r1#1): a record saying done AND a cli.toml carrying the default
+Cell skips the boot (the first choice — local or external — is made
+exactly once); a cell with no record at all, or a done record without
+the cell, is an inconsistency the boot refuses to start on, naming both
+files; a default Cell with an IN-PROGRESS record is this boot's own
+interruption and resumes — with the RECORD as the authority for the
+choice: the mode, server and project come from the record, environment
+inputs that disagree with it refuse the start, and the external
+record's key input must be set again (a record never carries a
+credential). Every stage is idempotent: an interrupted first boot is
+retried by running the verb again — the user is found by its fixed
+email (never duplicated) and the same-named key is revoked and
+reissued.
+
+The external mode's inputs ride the container environment (compose's
+`WORKSTATION_AIHUB_SERVER`, `WORKSTATION_AIHUB_KEY` and the optional
+`WORKSTATION_AIHUB_PROJECT`; the entrypoint's whitelist passes exactly
+these three): a server means external, neither means the local mode,
+one without the other is refused before anything runs.
+
+## `pf aihub init` — the local first-boot initialization entry
+
+A subcommand of `pf aihub` (not a CLI verb of its own): it opens the
+aihub data dir's SQLite store in process — no network listener, no
+HTTP route — and establishes the daily identity in one transaction.
+It refuses to run inside a step or task environment and beside a
+running server (the single-active lock), and the issued key's
+plaintext lands only in the 0600 file its `--key-out` flag names —
+never on stdout. `--data-dir` names the store (the server's own
+default). On an initialized store the identity is verified, never
+duplicated, and the same-named key is revoked and reissued. The
+workstation's `pf first-boot` reaches it in process; a human never
+needs it by hand.
 
 ## The daemon (`pf daemon`)
 

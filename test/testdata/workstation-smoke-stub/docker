@@ -52,6 +52,64 @@ if [ "${1:-}" = exec ]; then
 		fi
 		exit 1
 		;;
+	# the first-boot pass's AC2 probes (polyforge#176, review r1#5),
+	# answered before the record's case below (the probe commands name
+	# the record file too): each fail-flag its own injected failure
+	*PI_CODING_AGENT_DIR*)
+		if [ -f "$dir/agentdir-wrong" ]; then
+			exit 1
+		fi
+		exit 0
+		;;
+	*PACKAGES_PROBE*)
+		if [ -f "$dir/packages-wrong" ]; then
+			exit 1
+		fi
+		exit 0
+		;;
+	*SKILLS_PROBE*)
+		if [ -f "$dir/skills-wrong" ]; then
+			echo 'SKILLS_PROBE: wrong skill symlink' >&2
+			exit 1
+		fi
+		exit 0 ;;
+	*CREDENTIAL_PROBE*)
+		if [ -f "$dir/credential-in-record" ]; then
+			exit 1
+		fi
+		exit 0
+		;;
+	# the first-boot pass (polyforge#176): the record, the default
+	# Cell's server, the key's authentication, the bootstrap key's
+	# absence and the local AIHub's answer — each answered from the
+	# scenario, each fail-flag its own file
+	*first-boot.json*)
+		# 用真实 HTTP 请求验证外部 smoke 的远端写入门。
+		if [ -f "$dir/remote-request" ]; then
+			read -r method path < "$dir/remote-request"
+			curl -s -X "$method" "http://127.0.0.1:${WORKSTATION_SMOKE_STUB_PORT:-38421}$path" >/dev/null
+			rm "$dir/remote-request"
+		fi
+		cat "$dir/first-boot.json"
+		;;
+	*"config get server"*)
+		cat "$dir/cell-server.txt"
+		;;
+	*"pf recall"*)
+		if [ -f "$dir/recall-fails" ]; then
+			exit 1
+		fi
+		exit 0
+		;;
+	*bootstrap-admin.key*)
+		if [ -f "$dir/bootstrap-key-exists" ]; then
+			exit 0
+		fi
+		exit 1
+		;;
+	*127.0.0.1:8420*)
+		exit 0
+		;;
 	*"[s]tart:lan"*)
 		# the pi-web process: the listing pipeline asks for a pid, the
 		# poll only asks whether one exists
