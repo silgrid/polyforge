@@ -31,7 +31,7 @@ export function HarnessModelSettings({ cwd, onClose }: { cwd: string | null; onC
 
   const rows = useMemo(() => buildModelRows(models, defaultModel), [models, defaultModel]);
   return (
-    <div className="settings-section settings-models" data-settings-section="models">
+    <div className="settings-section settings-models" data-settings-section="models" data-model-page="unified">
       <h2>{t("common.models")}</h2>
       <p className="settings-description">模型默认值、provider 清单与 pi 专属编辑。</p>
       {error && <div className="settings-error">{error}</div>}
