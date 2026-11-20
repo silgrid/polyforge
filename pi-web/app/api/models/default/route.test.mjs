@@ -42,12 +42,13 @@ fs.writeFileSync(path.join(claudeConfigDir, "settings.json"), JSON.stringify({
 }));
 fs.copyFileSync(path.join(here, "..", "..", "..", "..", "lib", "__fixtures__", "claude-stub", "claude.mjs"), path.join(binDir, "claude"));
 fs.chmodSync(path.join(binDir, "claude"), 0o755);
+// the stub's initialize answer comes from the 2.1.322 recording beside it
+fs.symlinkSync(path.join(here, "..", "..", "..", "..", "lib", "__fixtures__", "claude-2.1.322"), path.join(scratch, "claude-2.1.322"));
 const stubLog = path.join(scratch, "stub.jsonl");
 process.env.PI_TEST_CLAUDE_STUB_LOG = stubLog;
 process.env.PI_TEST_CLAUDE_STUB_VERSION = "2.1.326";
 process.env.PI_CODING_AGENT_DIR = agentDir;
 process.env.CLAUDE_CONFIG_DIR = claudeConfigDir;
-process.env.PI_WEB_ALLOWED_ROOT_PREFIXES = os.tmpdir();
 process.env.PI_OFFLINE = "1";
 // Ambient provider auth must not add models to the scope check's answer.
 for (const key of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "DEEPSEEK_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"]) {
@@ -67,6 +68,11 @@ const jiti = createJiti(import.meta.url, {
   moduleCache: false,
 });
 const { PUT, GET } = await jiti.import("./route.ts");
+// /api/models's allowed roots come from sessions and explicit additions
+// (PI_WEB_ALLOWED_ROOT_PREFIXES is the agent-new guard's own prefix list),
+// so the fixture project joins them the way the models route's tests do.
+const { allowFileRoot } = await jiti.import("../../../lib/file-access.ts");
+allowFileRoot(project);
 
 function call(body, method = "PUT") {
   const handler = method === "PUT" ? PUT : GET;
