@@ -472,7 +472,9 @@ class CheckRun:
             if reusable_entry(e):
                 key = entry_key(e)
                 if key is not None:
-                    prev[key] = e
+                    # scaffold (polyforge#182 u2): the prerequisite dimension
+                    # is blank on both sides — reverted; u2 re-applies it
+                    prev[(key[0], key[1], key[2], "")] = e
         return prev
 
     def tree_of(self, d: str) -> str:
