@@ -275,6 +275,116 @@ func TestFirstBoot(t *testing.T) {
 		}
 	})
 
+	t.Run("a resumed boot keeps the record's choice, never the environment's (owner ruling B)", func(t *testing.T) {
+		o, _ := fbOpts(t)
+		fbSeed(t, o)
+		// the external boot reaches config (the cell is written), then
+		// dies at harness: the agent dir is a file, so the merge's
+		// settings write fails
+		if err := os.RemoveAll(o.AgentDir); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(o.AgentDir, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		o.ExtServer = "https://first.example.invalid"
+		o.ExtKey = "first-key"
+		var out strings.Builder
+		if err := runFirstBoot(o, &out); err == nil {
+			t.Fatal("the harness-stage failure must fail the boot")
+		}
+		rec := fbRecord(t, o)
+		if rec.Phase != "harness/failed" || rec.Mode != "external" || rec.Server != "https://first.example.invalid" {
+			t.Fatalf("the interrupted record = %+v", rec)
+		}
+		cfg, err := LoadFileConfig(o.ConfigPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Server != "https://first.example.invalid" {
+			t.Fatalf("the interrupted boot's cell = %s, want the first server", cfg.Server)
+		}
+		// fix the harness failure, then resume against DIFFERENT inputs:
+		// the record is the authority — a disagreeing environment is
+		// refused, never silently applied
+		if err := os.Remove(o.AgentDir); err != nil {
+			t.Fatal(err)
+		}
+		o.ExtServer = "https://second.example.invalid"
+		out.Reset()
+		if err := runFirstBoot(o, &out); err == nil {
+			t.Fatal("a resume whose environment disagrees with the record must refuse (the first choice is made exactly once)")
+		}
+		// no external inputs at all: the external record still needs
+		// its key — refused, never silently turned local
+		o.ExtServer, o.ExtKey = "", ""
+		out.Reset()
+		if err := runFirstBoot(o, &out); err == nil {
+			t.Fatal("an external resume without the key input must refuse (the record never carries the key)")
+		}
+		// the original inputs: the resume completes and the choice
+		// stays the FIRST server
+		o.ExtServer, o.ExtKey = "https://first.example.invalid", "first-key"
+		out.Reset()
+		if err := runFirstBoot(o, &out); err != nil {
+			t.Fatalf("the resume with the original inputs must succeed:\n%v\n%s", err, out.String())
+		}
+		rec = fbRecord(t, o)
+		if rec.Phase != "done" || rec.Mode != "external" || rec.Server != "https://first.example.invalid" {
+			t.Fatalf("the resumed record = %+v, want the FIRST choice kept", rec)
+		}
+		cfg, err = LoadFileConfig(o.ConfigPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Server != "https://first.example.invalid" || cfg.APIKey != "first-key" {
+			t.Fatalf("the resumed default Cell = %s/%s, want the first choice kept", cfg.Server, cfg.APIKey)
+		}
+	})
+
+	t.Run("a local resume refuses a conflicting external environment (owner ruling B)", func(t *testing.T) {
+		o, aihubDir := fbOpts(t)
+		fbSeed(t, o)
+		// interrupt the LOCAL boot at config, then fix the file and
+		// try to resume with an external env set
+		if err := os.MkdirAll(filepath.Dir(o.ConfigPath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(o.ConfigPath, []byte("[daemon]\nstep_timeout = \"bogus\"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var out strings.Builder
+		if err := runFirstBoot(o, &out); err == nil {
+			t.Fatal("the config-stage failure must fail the boot")
+		}
+		raw, err := os.ReadFile(o.ConfigPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fixed := strings.Replace(string(raw), "step_timeout = \"bogus\"\n", "", 1)
+		if err := os.WriteFile(o.ConfigPath, []byte(fixed), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		o.ExtServer = "https://conflicting.example.invalid"
+		o.ExtKey = "k"
+		out.Reset()
+		if err := runFirstBoot(o, &out); err == nil {
+			t.Fatal("a local resume must refuse an environment that names a remote — the record is the authority")
+		}
+		if n := fbUsers(t, aihubDir); n != 1 {
+			t.Fatalf("users = %d — the refusal must not create anything", n)
+		}
+		// without the conflicting inputs the resume completes locally
+		o.ExtServer, o.ExtKey = "", ""
+		out.Reset()
+		if err := runFirstBoot(o, &out); err != nil {
+			t.Fatalf("the local resume must complete:\n%v\n%s", err, out.String())
+		}
+		if rec := fbRecord(t, o); rec.Phase != "done" || rec.Mode != "local" {
+			t.Fatalf("the resumed record = %+v, want a completed local boot", rec)
+		}
+	})
+
 	t.Run("the external mode takes the given server and key and writes nothing remote", func(t *testing.T) {
 		o, aihubDir := fbOpts(t)
 		fbSeed(t, o)
