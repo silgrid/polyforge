@@ -116,6 +116,11 @@ func TestDoctorDaemonSupervision(t *testing.T) {
 
 func TestPiLayoutCheck(t *testing.T) {
 	t.Setenv("POLYFORGE_DATA_DIR", "")
+	// never this machine's real seed root (review N2): an injected empty
+	// root reads as a host wherever no fixture swaps it
+	oldSeed := workstationSeedRoot
+	workstationSeedRoot = t.TempDir()
+	t.Cleanup(func() { workstationSeedRoot = oldSeed })
 	cases := []struct {
 		name, settings, status, detail string
 		release                        bool
@@ -146,6 +151,11 @@ func TestPiLayoutCheck(t *testing.T) {
 
 func TestClaudeLayoutCheck(t *testing.T) {
 	t.Setenv("POLYFORGE_DATA_DIR", "")
+	// never this machine's real seed root (review N2): an injected empty
+	// root reads as a host wherever no fixture swaps it
+	oldSeed := workstationSeedRoot
+	workstationSeedRoot = t.TempDir()
+	t.Cleanup(func() { workstationSeedRoot = oldSeed })
 	t.Run("no claude", func(t *testing.T) {
 		if c := claudeLayoutCheck(t.TempDir(), false); c.Status != "skip" {
 			t.Fatalf("got %s %q", c.Status, c.Detail)
@@ -378,6 +388,11 @@ func TestOwnerRepoKey(t *testing.T) {
 // first and then remove exactly the v1 artifacts; a clean HOME passes.
 func TestV1LeftoversCheck(t *testing.T) {
 	t.Setenv("POLYFORGE_DATA_DIR", "")
+	// never this machine's real seed root (review N2): an injected empty
+	// root reads as a host wherever no fixture swaps it
+	oldSeed := workstationSeedRoot
+	workstationSeedRoot = t.TempDir()
+	t.Cleanup(func() { workstationSeedRoot = oldSeed })
 	t.Run("clean home passes", func(t *testing.T) {
 		home := displayHome(t, "{}", `{"packages":["~/.local/share/polyforge/release/current"]}`)
 		layoutRelease(t, home)

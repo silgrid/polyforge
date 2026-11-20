@@ -10,6 +10,7 @@ package cli
 // the layout.
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,6 +48,12 @@ func layoutSeedFixture(t *testing.T, withManifest bool) string {
 // volume, the host installer's release checkout).
 func TestSuperviseCurrentRoots(t *testing.T) {
 	t.Setenv("POLYFORGE_DATA_DIR", "")
+	// a host: an injected EMPTY seed root (review N2 — never this
+	// machine's real /opt/polyforge/seed), so the host half holds inside
+	// an image too
+	oldSeed := workstationSeedRoot
+	workstationSeedRoot = t.TempDir()
+	t.Cleanup(func() { workstationSeedRoot = oldSeed })
 	// a host: no seed manifest anywhere — the release checkout root
 	if workstationImage() {
 		t.Fatal("a machine without the image's seed manifest must not be judged the workstation image")
@@ -150,6 +157,38 @@ func TestSuperviseDefaultDirsCurrent(t *testing.T) {
 	}
 }
 
+// TestSuperviseResolveDirsKeepsEachGivenFlag (review r1#1): the two
+// directory flags take their defaults INDEPENDENTLY — a --pi-web-dir
+// the caller set is never replaced because --workflows-dir was not
+// given, and the same the other way round.
+func TestSuperviseResolveDirsKeepsEachGivenFlag(t *testing.T) {
+	t.Setenv("POLYFORGE_DATA_DIR", "")
+	layoutSeedFixture(t, true) // the image: the defaults come from the components current
+	const given = "/an/operator/checkout"
+	wf, web := superviseResolveDirs("", given, "/root/.local/share/polyforge")
+	if web != given {
+		t.Fatalf("a given --pi-web-dir must be kept, got %q", web)
+	}
+	if wf != "/components/current/workflows" {
+		t.Fatalf("the unset --workflows-dir takes the layout default, got %q", wf)
+	}
+	wf, web = superviseResolveDirs(given, "", "/root/.local/share/polyforge")
+	if wf != given {
+		t.Fatalf("a given --workflows-dir must be kept, got %q", wf)
+	}
+	if web != "/components/current/pi-web" {
+		t.Fatalf("the unset --pi-web-dir takes the layout default, got %q", web)
+	}
+	wf, web = superviseResolveDirs("a", "b", "/root")
+	if wf != "a" || web != "b" {
+		t.Fatalf("two given flags must both be kept, got (%q, %q)", wf, web)
+	}
+	wf, web = superviseResolveDirs("", "", "/root/.local/share/polyforge")
+	if wf != "/components/current/workflows" || web != "/components/current/pi-web" {
+		t.Fatalf("no flag given must take both defaults, got (%q, %q)", wf, web)
+	}
+}
+
 // TestSuperviseUsageNamesUpgradeRestartExit: the usage states the 75
 // semantics — an upgrade-restart relaunch at once, no failure backoff.
 func TestSuperviseUsageNamesUpgradeRestartExit(t *testing.T) {
@@ -159,6 +198,25 @@ func TestSuperviseUsageNamesUpgradeRestartExit(t *testing.T) {
 	} {
 		if !strings.Contains(superviseUsage, want) {
 			t.Fatalf("the supervise usage must state the 75 semantics (%q):\n%s", want, superviseUsage)
+		}
+	}
+}
+
+// TestSuperviseFlagHelpNamesTheCurrentDefaults (review r1#3): the flag
+// help `pf supervise -h` and a parse error print states the same current
+// default as the usage — never the stale host-only path.
+func TestSuperviseFlagHelpNamesTheCurrentDefaults(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := SuperviseMain([]string{"--no-such-flag"}, nil, &out, &errb); code != 2 {
+		t.Fatalf("an unknown flag: exit %d, want 2 (the help rides the usage it prints)", code)
+	}
+	help := errb.String()
+	for _, want := range []string{
+		"default <current>/workflows",
+		"default <current>/pi-web",
+	} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("the flag help must state the current-root default (%q):\n%s", want, help)
 		}
 	}
 }
