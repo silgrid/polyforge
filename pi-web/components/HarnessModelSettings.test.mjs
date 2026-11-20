@@ -1,3 +1,4 @@
+// carries: components/HarnessModelSettings*, lib/harness/model-view*
 import "#test-env";
 import test from "node:test";
 import assert from "node:assert/strict";

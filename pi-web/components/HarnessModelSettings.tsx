@@ -6,6 +6,7 @@ import { buildModelRows, type ModelViewInput, type ModelViewRow } from "@/lib/ha
 import type { ModelPayload } from "@/lib/harness/concepts";
 import { useEnabledModels, type EnabledModelsController } from "./EnabledModelsSection";
 import { ModelsConfig } from "./ModelsConfig";
+import { ConfigSplitView, ConfigSidebar, ConfigSidebarList, ConfigSidebarItem, ConfigDetail } from "./SettingsUi";
 
 type ModelIdentity = { harness: string; provider: string; id: string };
 
@@ -58,6 +59,7 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount }: { cwd: str
   const [error, setError] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
   const [saving, setSaving] = useState(false);
+  const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
   const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : "";
 
   useEffect(() => {
@@ -130,6 +132,18 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount }: { cwd: str
     <div className="settings-section settings-models" data-model-page="unified">
       <h2>{t("common.models")}</h2>
       {(error || enabled.failure) && <div role="alert">{error ?? enabled.failure?.message ?? (enabled.failure?.messageKey ? t(enabled.failure.messageKey) : "")}</div>}
+      <ConfigSplitView>
+      <ConfigSidebar><ConfigSidebarList>
+        <ConfigSidebarItem active={selectedProvider === null} onClick={() => setSelectedProvider(null)}>{t("models.defaultHeading")}</ConfigSidebarItem>
+        {[...new Set(rows.map((row) => row.provider))].map((provider) => <div key={provider}>
+          <strong>{provider}</strong>
+          {rows.filter((row) => row.provider === provider).map((row) => <ConfigSidebarItem
+            key={row.id} active={selectedProvider === provider} onClick={() => setSelectedProvider(provider)}>
+            {row.name} · {row.harnesses.join(", ")}
+          </ConfigSidebarItem>)}
+        </div>)}
+      </ConfigSidebarList></ConfigSidebar>
+      <ConfigDetail>
       <section aria-label="默认模型">
         <h3>{t("models.defaultHeading")}</h3>
         <select aria-label={t("models.defaultHeading")} disabled={saving} value={selected}
@@ -150,13 +164,15 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount }: { cwd: str
       </section>
       <section aria-label="模型清单">
         <h3>{t("models.listHeading")}</h3>
-        <HarnessModelTable rows={rows} enabled={enabled} levels={levels} piSettings={piSettings}
+        <HarnessModelTable rows={selectedProvider ? rows.filter((row) => row.provider === selectedProvider) : rows} enabled={enabled} levels={levels} piSettings={piSettings}
           onEffort={(provider, id, level) => { void write(`/api/harness/pi/model${query}`, { modelThinkingLevel: { key: `${provider}/${id}`, level: level || null } }); }} />
       </section>
       <section aria-label="pi">
         <h3>pi</h3>
         <ModelsConfig embedded cwd={cwd} onClose={onClose ?? (() => {})} onOpenAccount={onOpenAccount} />
       </section>
+      </ConfigDetail>
+      </ConfigSplitView>
     </div>
   );
 }

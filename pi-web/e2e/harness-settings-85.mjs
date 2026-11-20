@@ -1,11 +1,10 @@
+// carries: components/HarnessModelSettings*, lib/harness/model-view*
 // carries: components/HarnessGeneralSettings*, components/GeneralSettings*, components/HarnessEnvironmentSettings*, components/HarnessEffectiveSettings*, components/UnifiedSetting*, components/HarnessApplyTo*
 // carries: components/HarnessPermissionSettings*, components/ClaudePermissionSettings*, lib/harness-permissions-view*, lib/harness-settings-view*, lib/harness/diagnostics*, app/api/harness/*
 // carries: components/AccountSettings*, components/PiAccountLogin*, components/ModelsConfig*, app/api/settings/account/*, lib/provider-listing*, lib/harness/account*, lib/polyforge-doctor*
-// — polyforge#149 (#85 85a1b, the settings skeleton) and polyforge#150
-// (#85 85a4, the permission page): the 10-tab rail (九个新 tab 加标「旧版」的
-// 原「模型」tab；原「Claude」tab 已删), General's left column (界面与对话 /
-// 环境 / 生效值与来源), the account page (#85 85a2, polyforge#142), the models
-// placeholder, the permission page (审批模式 / 沙箱 / 项目信任 / 规则: the unified blocks' one-write-many-reads,
+// #85 设置页、账号页、统一模型页和权限页：九个导航分区，旧模型页已移除。
+// 模型页场景保留 provider 编辑、账号跳转与三列清单的行为校验。
+//
 // pi's 不做审批 / 无沙箱 notes, claude's own sections, the Pi Web approval
 // channel and the rules editor) and the stored old navigation values
 // (models → 新「模型」页; the deleted claude key → 常规, review r1#7). The harness adapter APIs are mocked
