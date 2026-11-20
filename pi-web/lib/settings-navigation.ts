@@ -37,7 +37,9 @@ export type SettingsDetailSection = Exclude<SettingsSection, "general">;
 const STORAGE_KEY = "pi-web:settings-navigation";
 // Sections that need a project to show anything. Settings › MCP is not one: it
 // lists the global mcp.json without a project and adds a Project group with one.
-const PROJECT_SECTIONS = new Set<SettingsSection>(["skills", "agents", "plugins"]);
+// Settings › Skills is not one either (85d AC3): without a project it shows the
+// user scope alone — both harnesses' user halves, no project group.
+const PROJECT_SECTIONS = new Set<SettingsSection>(["agents", "plugins"]);
 
 /**
  * `models` keeps its spelling: it is the new Models concept page's id now,
@@ -102,8 +104,10 @@ function selectionKey(section: SettingsDetailSection, cwd?: string | null): stri
   if (section === "legacy-models") return "models";
   if (cwd) return JSON.stringify([section, cwd]);
   // MCP works without a project; its selection then lives under the bare name,
-  // which no project key (always an array) can collide with.
-  return section === "mcp" ? section : null;
+  // which no project key (always an array) can collide with. Skills likewise
+  // (85d): the no-project listing keeps its own selection, separate from any
+  // project's.
+  return section === "mcp" || section === "skills" ? section : null;
 }
 
 export function getLastSettingsSection(

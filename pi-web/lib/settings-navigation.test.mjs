@@ -36,7 +36,8 @@ test("restores the last settings section and falls back without a project", () =
 
   setLastSettingsSection("skills", storage);
   assert.equal(getLastSettingsSection("/project", storage), "skills");
-  assert.equal(getLastSettingsSection(null, storage), "general");
+  // 85d AC3: skills opens without a project too (the user scope alone).
+  assert.equal(getLastSettingsSection(null, storage), "skills");
 
   setLastSettingsSection("agents", storage);
   assert.equal(getLastSettingsSection("/project", storage), "agents");
@@ -138,7 +139,8 @@ test("restores Settings › MCP without a project, since it lists the global fil
   assert.equal(settingsSectionRequiresProject("mcp"), false);
   assert.equal(settingsSectionRequiresProject("models"), false);
   assert.equal(settingsSectionRequiresProject("general"), false);
-  for (const section of ["skills", "agents", "plugins"]) {
+  assert.equal(settingsSectionRequiresProject("skills"), false, "85d AC3: skills opens without a project");
+  for (const section of ["agents", "plugins"]) {
     assert.equal(settingsSectionRequiresProject(section), true, section);
   }
 });
