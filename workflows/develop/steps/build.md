@@ -89,7 +89,8 @@ wrote is never re-run there — a test just written must be stable, so red it st
 bounded by its self-reported `timeout` in units.json, else the default (10m).
 
 Four rules hold over the whole session, the close included, each command alike. A command's result
-already in hand on one tree (the same tree hash) is not re-run: a bare commit changes no tree, and a
+already in hand for its key — the same command text, the same working-tree hash of the root it
+runs in, the same declared prerequisites — is not re-run: a bare commit changes no tree, and a
 differently spelled command proves nothing new on it. The test-first red run is the build's own red
 evidence — beside it no manual worktree replay is made, the facts engine's replay is the record. A
 flaky failure is re-run only in the suite that failed, once, by the written fast-check command
@@ -118,7 +119,8 @@ for a work item whose verification runs the light tier (an integration batch's f
 runs the full bar and closes without one): `"$PF_PYTHON"
 "$PF_SHARED_DIR/scripts/fast_checks.py" --repo <name> --close-scoped --reuse
 artifacts/build/fast-checks/<repo>.json --json --out artifacts/build/scoped-close/<repo>.json` once per
-touched repo, after its fast checks (a green same-tree run in the reuse file is evidence, not a re-run);
+touched repo, after its fast checks (a green run in the reuse file whose key — the command text,
+the root's subtree tree hash, the declared prerequisites — matches is evidence, not a re-run);
 the existing tests it selects are the ones verification will select, a red one getting the one targeted
 re-run the per-unit bar gives. A red or `incomplete` result (the engine answered full, or a selected
 command cannot run) never hands off `done` without the owner's ruling: fix the change and re-run it —
