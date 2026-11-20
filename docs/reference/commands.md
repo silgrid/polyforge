@@ -175,6 +175,21 @@ detaching the child, `pf file edit <child> --parent ""` (a running child is
 refused `CHILD_RUNNING`); a refused `pf submit` of such a parent names the
 same command beside `pf file dep rm` for an edge.
 
+## `pf file create` / `pf queue` — one `--attr` shape
+
+`pf file create --attr <path>=json-value` writes a dotted path nested
+— `--attr split.origin=X` stores `attrs` `{"split":{"origin":"X"}}`
+— and `pf queue --attr <path>=<value>` filters on the same dot path
+(`?attr=<path>:<value>`, repeatable, all must hold). One shape, write
+and read: a create never stores a flat dotted key — aihub refuses it
+`CORE-400`, and the `detail` spells the nested object to send (the CLI
+nests dotted `--attr` paths itself; a `--stdin` body carries the
+nested object). The flag texts, the epic-split procedure that files
+`split.origin`/`split.unit` markers and the error table live in the
+skills: [verbs/file.md](../../skills/polyforge/verbs/file.md) (create,
+the split), [verbs/queue.md](../../skills/polyforge/verbs/queue.md)
+(the filter).
+
 ## `pf msg` — user-to-user messages
 
 `pf msg send --to <user> --text <text> [--about-wi <wi>] [--reply-to <msg>]`
@@ -445,7 +460,18 @@ step's `image` parameter (or `--image`; the flag wins and the result's
 `image` record names the value and where it came from) names a prepared
 image every touched repo's bar then runs in, Dockerfile or not — never
 built, never pulled; a machine without it is not judged (exit 2, the
-fixed mark `pf-verify-image-missing` in the summary, the image named). The union
+fixed mark `pf-verify-image-missing` in the summary, the
+image named). The step's `audit`
+parameter (the dispatch's `PF_PARAM_AUDIT`, default `on`; only the
+lower-case `on` and `off`, empty or unset reads as `on`) turns the
+dependency audit off: with `off` every scope-engine invocation is handed
+`--audit off`, no full report plans the `audit` command, and the step's
+result names the closure — the run's document and the result file's
+details carry `audit_disabled` with the merged source hint
+(`PF_PARAM_AUDIT=off，来自项目配置或 pf override`), the summary and the
+mechanical report say the audit was off. Any other value is a named error
+before any check or container starts (exit 2, the fixed mark
+`pf-audit-param-invalid` in the summary, the value named). The union
 with the build's change analysis is add-only: the change analysis's listed
 tests run beside the plan, add-only, under the analysis's supplement cap —
 a listed test that does not exist fails its check naming it, and the
@@ -554,7 +580,9 @@ repo's bar runs — beside the plan, one check `<repo>:unit-run:<id>` each
 `unit_run`): it passes on exit 0 with an output line its `marker`
 matches — a Python regular expression (`re.ASCII`, searched in each line)
 — a failing first run is re-run once (a pass records it flaky), and it is
-never pre-existing. A run naming a repo the capsule does not carry, an
+never pre-existing. A unit's run is bounded by its self-reported `timeout`
+in units.json, else the shared 10m default — a run its limit kills is an
+evidence problem, the why naming the limit. A run naming a repo the capsule does not carry, an
 empty argv, a cwd outside the repo or missing at HEAD, an empty or blank
 marker, or one that is no regular expression or matches the empty string
 (`.*`, `^`, `a*`) fails its check unrun; an unreadable or malformed file
@@ -614,7 +642,18 @@ dispatch's `PF_PARAM_IMAGE`, else `--image`, which wins and is recorded as
 the value's source) names a prepared image every gated repo runs in — one
 image for the project, Dockerfile or not, resolved to its local ID, never
 built, never pulled; a machine without it is not judged either (exit 2,
-the fixed mark `pf-verify-image-missing` in the summary). The container's
+the fixed mark `pf-verify-image-missing` in the summary). The step's
+`audit` parameter (the dispatch's
+`PF_PARAM_AUDIT`, default `on`; only the lower-case `on` and `off`, empty
+or unset reads as `on`) turns the dependency audit off: with `off` the
+engine is handed `--audit off`, no full report plans the `audit` command,
+the result (gate.json) carries `audit_off` with the merged source hint
+(`PF_PARAM_AUDIT=off，来自项目配置或 pf override`) and so does a green
+tag's record — a tag of the other audit state is never reused, and a tree
+whose own scope engine predates the `--audit` option is blocked by name
+before any container starts. Any other value is a named error before any
+container or check starts (exit 2, the fixed mark `pf-audit-param-invalid`
+in the summary). The container's
 limits are the script's flags (`--cpus` / `--memory` / `--pids`, default
 min(8, cores) / `16g` / 4096; design r2 D7).
 
@@ -1091,7 +1130,13 @@ hold no credential.
   replayed on the tree of its test commit — a unit declared `pre_existing_red`
   (its reproduction test already exists and is red before the change, so it
   reports no `test_commit`) replays on the tree of the change's base: red
-  there is its red evidence, and a run that exited 0 there fails the unit —
+  there is its red evidence, and a run that exited 0 there fails the unit;
+  each replay is bounded by its own limit — the unit's self-reported
+  `timeout` in units.json, else `--unit-timeout` (10m) — and a run its own
+  limit kills carries no red evidence: an evidence problem, exit 1, the
+  problem naming the unit and its limit (a red-state run must exit
+  non-zero within its limit, never hang), while only a kill by the whole
+  run's deadline stays not judged —
   where it replays: `--isolation host` on the
   host under the step's `PATH`, `--isolation container` in the
   repo's verification container (exit 2 when its HEAD carries no
@@ -1218,11 +1263,21 @@ full reference.
   runs in that subdirectory), with each entry's own declared `timeout`;
   a command missing a declared `requires_env`/`requires_cmd`
   prerequisite is skipped and its reason recorded; the full phase never
-  runs, and the run never stops at a failure. Details: `repo, engine,
+  runs, and the run never stops at a failure. A red command's failing
+  units are located from its output and each re-run once by its derived
+  targeted re-run (verification's own rules, `pfstep/rerun` and
+  `pfstep/flaky`), and a pass is recorded flaky; a red command every
+  failing unit of which re-ran flaky is then confirmed the way
+  verification confirms its bar — by its first-run output's completion
+  proof (`pfstep/completion`) or by one whole re-run exiting 0 — and
+  only such a command turns green. Details: `repo, engine,
   reports[{root, mode, commands}], commands[{name, phase, root, cmd,
   exit_code, timed_out, not_started, duration_ms, log, skipped,
-  skip_reason}]`. Exit 0: every command that ran exited 0; 1: a command
-  failed or was killed at its timeout; 2: not judged (no such repo, the
+  skip_reason, units[{kind, name, file, status, flaky, detail, rerun_log,
+  not_rerun}], confirmed, complete, not_confirmed}]`. Exit 0: every
+  command that ran exited 0 or turned green through its flaky re-runs
+  and confirmation; 1: a command stayed red after the flaky phase or
+  was killed at its timeout; 2: not judged (no such repo, the
   engine missing or failing, an unreadable report, a repo the engine
   planned no command for).
 - `--check-units <units.json> [--unit <id>]` is the on-the-spot unit
@@ -1233,10 +1288,17 @@ full reference.
   exits 0 and one output line matches its marker; a marker problem, a
   red run or no matching line — a marker wrong by one `$` against a
   suffixed output line — is red on the spot, the result naming the unit,
-  its marker and the closest output line. Details: `units_file, units[{id,
-  check, repo, cwd, argv, marker, passed, why, exit_code, log,
-  closest_line}]`. Exit 0: every checked unit passed; 1: a unit is red;
-  2: not judged (an unusable units.json, `--unit` naming no unit, a file
+  its marker and the closest output line. A unit's run is bounded by its
+  self-reported `timeout` in units.json, else the shared 10m default —
+  a run its limit kills is an evidence problem, the why naming the
+  limit (a red-state run must exit non-zero within its limit, never
+  hang). A red unit declared `pre_existing_red` is re-run once, and a
+  pass records it flaky with both logs; a unit the lane just wrote is
+  never re-run — red it stays. Details: `units_file, units[{id,
+  check, repo, cwd, argv, marker, passed, flaky, why, exit_code, log,
+  rerun_log, closest_line}]`. Exit 0: every checked unit passed; 1: a
+  unit is red; 2: not judged (an unusable units.json — an invalid
+  self-reported `timeout` included — `--unit` naming no unit, a file
   naming no unit).
 
 The logs of both modes go to `<log-dir>/<repo>/<seq>/command.log`, the

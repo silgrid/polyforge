@@ -783,3 +783,158 @@ design; cut the release by hand: take the latest green batch's pins
 repo at its pin and run `.polyforge/release.sh [patch] --pins <file>`
 yourself (the same way polyforge's own first release across this change
 is cut — the reference page's "Two halves" paragraph says so).
+
+## v0.2.4, the build fast check's flaky re-run and the red-state limit (polyforge#157)
+
+The workflow's own scripts changed, and a lane claimed before this keeps
+running its claim-time snapshot: the new rules reach a work item through
+the workflow version its lane snapshot carries, never a `pf` release.
+What changed under `workflows/_shared/scripts`:
+
+- `fast_checks.py --repo` re-runs a red command's located failing units
+  once each, by their derived targeted re-run (the same rules
+  verification's bar runs), and a pass is recorded flaky beside the
+  first-red log; a red command every failing unit of which re-ran flaky
+  is confirmed — by its first-run output's completion proof (the
+  declared Go harness's trailer, an aggregate e2e runner's closing
+  summary) or by one whole re-run exiting 0 — and only such a command
+  turns green. A command its own timeout killed skips the re-run phase
+  and stays red.
+- `fast_checks.py --check-units` re-runs a red unit declared
+  `pre_existing_red` once (a pass records it flaky with both logs); a
+  unit the lane just wrote is never re-run there — red it stays. A
+  unit's self-reported `timeout` in `artifacts/build/units.json` (a Go
+  duration; an invalid or non-positive one makes the file unusable)
+  bounds its recorded run, else a shared 10m default — the bar
+  commands' own 20m bound no longer applies to a recorded unit run.
+- `facts.py build --replay` bounds each replay the same way — the
+  unit's self-reported `timeout`, else `--unit-timeout` — and a
+  red-state run its own limit kills is an evidence problem: exit 1, the
+  problem naming the unit and its limit (a red-state run must exit
+  non-zero within its limit, never hang), no longer the old "not
+  judged" retried. Only a kill by the whole run's deadline stays not
+  judged. `verify.py --unit-runs` reads the same self-report with the
+  same default.
+
+What a project must change — nothing: the rules are the workflow's own,
+project-neutral, and the slow red run of a project that needs longer
+self-reports a higher `timeout` in its `units.json`.
+
+## v0.2.4, the split attrs one shape and the data migration (polyforge#174)
+
+`pf file create --attr <path>=json-value` writes a dotted path nested —
+`--attr split.origin=X --attr split.unit=Y` stores `attrs` as
+`{"split":{"origin":"X","unit":"Y"}}` — the same dot path `pf queue
+--attr` filters on, and the aihub create boundary refuses a top-level
+attrs key that carries a dot (`CORE-400`; the CLI nests dotted paths
+itself, a `--stdin` body must carry the nested object — the `detail`
+spells it). One shape, write and read: the epic split's duplicate
+check, which the flat-key defect had never let match, works from this
+release on. Deploy the aihub server first, as ever: an old CLI's
+dotted `--attr` create fails loudly on the new server until the work
+machine takes the new `pf` — an explicit failure instead of the old
+success whose ticket no query could ever find (a new `pf` keeps
+working against an old server: the nested shape is plain attrs to
+it).
+
+The v0.2.4 window also moves the OLD rows: `deploy/sql/v0.2.4`
+(applied by `.polyforge/deploy.sh` inside the switch window, run-once
+by its probe) migrates the flat `split.origin` / `split.unit` attrs
+keys of every project and every status to the nested dot paths — other
+attrs, other dotted keys and statuses stay, the ticket ids stay, and
+after the deploy the split check's own query (`pf queue --project P
+--attr split.origin=… --attr split.unit=…`) lists the old sub-tickets
+again:
+
+```sql
+-- deploy/sql/v0.2.4/upgrade.sql — the split attrs migration
+-- (polyforge#174): the one-time move of the flat `split.origin` /
+-- `split.unit` attrs keys to the nested dot paths every reader walks
+-- (the list filter's json_extract, the attrs write's `if`), so the
+-- tickets the pre-fix `pf file create --attr` filed become listable by
+-- the split check's own query again. Scope: the WHOLE database, every
+-- project and every status, exactly these two keys — other attrs,
+-- other dotted keys and statuses are not touched. Refusal: a row whose
+-- nested `split` shape conflicts (a same-key different value, or a
+-- `split` parent that is no object) refuses the WHOLE batch — one
+-- transaction, nothing applied; resolve the row by hand and re-deploy.
+-- Rollback reads the before-image table split_attrs_before_w174, which
+-- holds exactly the rows this migration changes.
+
+-- 1. the whole-batch refusal, first: one conflict aborts the
+--    transaction (the CHECK fires on the inserted 'refuse' row).
+CREATE TABLE w174_refuse(x TEXT CHECK (x <> 'refuse'));
+INSERT INTO w174_refuse (x)
+  SELECT CASE WHEN
+         (json_type(w.attrs, '$.split') IS NOT NULL
+          AND json_type(w.attrs, '$.split') <> 'object')
+      OR (json_type(w.attrs, '$."split.origin"') IS NOT NULL
+          AND json_type(w.attrs, '$.split.origin') IS NOT NULL
+          AND json_extract(w.attrs, '$."split.origin"')
+              IS NOT json_extract(w.attrs, '$.split.origin'))
+      OR (json_type(w.attrs, '$."split.unit"') IS NOT NULL
+          AND json_type(w.attrs, '$.split.unit') IS NOT NULL
+          AND json_extract(w.attrs, '$."split.unit"')
+              IS NOT json_extract(w.attrs, '$.split.unit'))
+       THEN 'refuse' ELSE 'ok' END
+    FROM work_items w
+   WHERE json_type(w.attrs, '$."split.origin"') IS NOT NULL
+      OR json_type(w.attrs, '$."split.unit"') IS NOT NULL;
+DROP TABLE w174_refuse;
+
+-- 2. the before-image: exactly the rows this migration changes, their
+--    pre-migration attrs whole (the rollback's whole input).
+CREATE TABLE IF NOT EXISTS split_attrs_before_w174 (
+  id    TEXT PRIMARY KEY,
+  attrs TEXT NOT NULL
+);
+INSERT OR REPLACE INTO split_attrs_before_w174 (id, attrs)
+  SELECT id, attrs FROM work_items
+   WHERE json_type(attrs, '$."split.origin"') IS NOT NULL
+      OR json_type(attrs, '$."split.unit"') IS NOT NULL;
+
+-- 3. the move: each flat key becomes the nested dot path it names
+--    (json_set creates the missing `split` object, or writes into the
+--    existing one — the guard already refused every conflicting
+--    shape, so a same-key double shape keeps one nested copy), and the
+--    flat key goes.
+UPDATE work_items
+   SET attrs = json_remove(json_set(attrs, '$.split.origin',
+                        json_extract(attrs, '$."split.origin"')),
+                           '$."split.origin"')
+ WHERE json_type(attrs, '$."split.origin"') IS NOT NULL;
+UPDATE work_items
+   SET attrs = json_remove(json_set(attrs, '$.split.unit',
+                        json_extract(attrs, '$."split.unit"')),
+                           '$."split.unit"')
+ WHERE json_type(attrs, '$."split.unit"') IS NOT NULL;
+```
+
+A row whose nested `split` shape conflicts — a `split` parent that is
+no object, or a nested `split.origin` / `split.unit` of another value
+than the flat key — refuses the whole batch: the window's one
+transaction applies nothing and the deploy aborts; resolve the row by
+hand (keep one value, drop the other shape) and re-deploy. The
+automatic rollback of the same window restores exactly the changed
+rows from the `split_attrs_before_w174` before-image table the upgrade
+writes, then drops it — a row the migration never moved is never
+flattened. After a successful deploy the before-image table stays as
+the durable record of what moved: the post-deploy comparison reads
+it, and once that comparison is signed off a person may DROP it — no
+code reads it, and it serves nothing else.
+
+Before authorizing the deploy, review the blast radius read-only (the
+probe counts only the split pair) and keep the list for the
+post-deploy comparison — the accepted delivery's last half re-runs the
+split check's query per original id and expects exactly the old ids:
+
+```sql
+-- the tickets the migration moves (whole database, every project and status)
+SELECT id, project_id, status, attrs FROM work_items
+ WHERE json_type(attrs, '$."split.origin"') IS NOT NULL
+    OR json_type(attrs, '$."split.unit"') IS NOT NULL;
+-- the inventory of OTHER dotted top-level keys (reported only — NOT migrated)
+SELECT w.id, je.key, w.project_id FROM work_items w, json_each(w.attrs) je
+ WHERE je.key LIKE '%.%'
+   AND je.key NOT IN ('split.origin', 'split.unit');
+```

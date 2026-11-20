@@ -9,6 +9,7 @@ import unittest
 from typing import List, Optional
 
 import verify
+from pfstep import completion as _completion
 from pfstep import duration
 from pfstep.rerun import UnitState
 from pfstep.units import (
@@ -117,7 +118,8 @@ class CompletionTest(unittest.TestCase):
         """Go's proofOf: completionProof over a command and its output."""
         d = tempfile.mkdtemp(dir=self.dir)
         log = write_log(d, "$ header\n# cwd: x\n", output)
-        return verify.completion_proof(cmd_run(cmd, harness=harness_repo().is_harness(cmd), log_path=log, exit_code=1))
+        return _completion.completion_proof(harness=harness_repo().is_harness(cmd), timed_out=False,
+                                             log_path=log, units=[])
 
     def test_completion_proof_only_the_declared_harness(self) -> None:
         """Port of TestCompletionProofOnlyTheDeclaredHarness (completion_test.go)."""
@@ -197,7 +199,7 @@ class AggregateCompletionTest(unittest.TestCase):
         """Port of TestW403AggregateSummaryMustCountTheAnnouncedSuites (w403_review_test.go)."""
         cr = cmd_run("", [UnitState(unit=Unit(kind=KIND_E2E_SUITE, name="e2e/b.mjs", failed=True))])
         full = ("PASS a.mjs 3s", "FAIL b.mjs 9s", "1/2 passed in 12s")
-        self.assertIn("all 2 suites", verify.aggregate_completion(cr, aggregate_summary("2", *full)),
+        self.assertIn("all 2 suites", _completion.aggregate_completion(cr.units, aggregate_summary("2", *full)),
                       "the announced 2 suites, all settled: proof expected")
         for name, ls in {
             "no header": aggregate_summary("", *full),
@@ -205,7 +207,7 @@ class AggregateCompletionTest(unittest.TestCase):
             "more than announced": aggregate_summary("1", *full),
         }.items():
             with self.subTest(name):
-                self.assertEqual(verify.aggregate_completion(cr, ls), "")
+                self.assertEqual(_completion.aggregate_completion(cr.units, ls), "")
 
 
 if __name__ == "__main__":

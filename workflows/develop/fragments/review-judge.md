@@ -45,7 +45,10 @@
    unit whose `replay` carries `not_runnable` has no red
    evidence (its run could not run there: a build, setup, compile or import error, a
    missing module) — neither red nor a pass: blocking `test_weakened`, naming the unit and
-   its `rule`, never made up for by reading the code. So is a deleted or relaxed assertion, a new skip, a
+   its `rule`, never made up for by reading the code. So does a unit whose `replay` was
+   killed at its own limit (`limit_kill`): its red-state run did not exit non-zero within
+   its limit, so no red evidence — the fix is build's (a bounded wait, an assertion that
+   fails at once, or the unit self-reports a higher `timeout` in units.json). So is a deleted or relaxed assertion, a new skip, a
    changed `carries:` header, a changed helper or fixture the test relies on, or an
    input changed so the assertion holds trivially, with no finding cited for it in
    build's 关键决定和理由.

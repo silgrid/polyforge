@@ -69,6 +69,10 @@ definition's judgment.
      fix is build's: a test that runs on the replay tree (a project declares the preparation
      such a tree needs as `base_setup=` in `.polyforge/verify-scope.conf`, and the replay
      runs it). It is the result's exit 1, a fact to class, never the exit 2 retried above.
+     A unit whose `replay` was killed at its own limit (`limit_kill`) has no red evidence
+     either — its red-state run did not exit non-zero within its limit — and is blocking
+     `test_weakened` the same way: the fix is build's (a bounded wait, an assertion that
+     fails at once, or the unit self-reports a higher `timeout` in units.json).
    - `carries.json`: each `problems` entry is blocking `test_weakened`, in every round
      (the same conclusion build's close reached) — an owner message that explicitly
      accepts the finding excepted.

@@ -49,6 +49,16 @@ Dockerfile or not; an image the machine does not carry is `not judged`
 (exit 2, the fixed mark ``pf-verify-image-missing`` in the summary: a
 person prepares it, a retry cannot).
 
+The step's ``audit`` parameter (``PF_PARAM_AUDIT``, polyforge#138):
+``on``, empty and unset keep today's behavior byte for byte; ``off`` —
+the project owner's decision, set per project in the workspace config
+or by a ticket override, never by a repository's own conf — hands every
+scope-engine invocation ``--audit off``, so no full report plans the
+engine-appended dependency audit, and the result records the closure
+(the merged source hint, the two layers not distinguished); any other
+value is a named error before any check or container starts (exit 2,
+the fixed mark ``pf-audit-param-invalid`` in the summary).
+
 ``--analysis`` names the build's change analysis
 (``artifacts/build/change-analysis.json``): the tests it lists run beside
 the plan — the union is add-only, the engine's selection never narrowed.
@@ -63,7 +73,7 @@ judged by its marker under ``--unit-runs``' own rules;
 a listed test that does not exist fails its check naming it. A missing or
 malformed analysis file is the invocation's (exit 2).
 
-``--unit-runs`` names the build's units.json (``[{id, [pre_existing_red,]
+``--unit-runs`` names the build's units.json (``[{id, [pre_existing_red,] [timeout,]
 [test_commit,] impl_commit, run{repo, cwd, argv}, marker}]``): every unit's green run is run
 again as written beside the plan, each its own check
 ``<repo>:unit-run:<id>``. It passes when it exits 0 and one output line
@@ -71,8 +81,12 @@ matches its marker — a Python regular expression (``re.ASCII``, searched in
 each line) that must not be empty, blank or able to match the empty string;
 a run that cannot run as written fails its check without running. A unit
 run is never pre-existing (it pins this change), and its test commit's files
-are protected for the plan's units too. An unreadable or malformed file is
-the invocation's (exit 2).
+are protected for the plan's units too. A unit's run is bounded by its
+self-reported ``timeout``, else the shared 10m default (``pfstep/unitruns``):
+a run its limit kills is an evidence problem, the why naming the limit — a
+red-state run must exit non-zero within its limit, never hang. An unreadable
+or malformed file (an invalid ``timeout`` included) is the invocation's
+(exit 2).
 
 The scope engine: ``--engine``, else the shared tree's
 ``$PF_SHARED_DIR/scripts/verify-scope``.
@@ -127,7 +141,9 @@ from pfstep import container, duration, git, gostr, jsonout, result, runner, ste
 from pfstep import progress  # noqa: E402
 from pfstep import targetbranch  # noqa: E402
 from pfstep.analysis import Analysis, AnalysisDecl, read_analysis, static_problem  # noqa: E402
+from pfstep.audit import AUDIT_OFF_NOTE, AUDIT_INVALID_MARK, AuditParamError, read_audit  # noqa: E402
 from pfstep.carries import file_carries, glob_match  # noqa: E402
+from pfstep.completion import completion_proof, harness_command, read_go_harness  # noqa: E402
 from pfstep.deadline import default_deadline_for  # noqa: E402
 from pfstep.engine import TIER_FULL, TIER_LIGHT, EngineCommand, EngineReport, ReportError, choose, decode_report  # noqa: E402
 from pfstep.engine import default_engine, nested_roots, reached_roots  # noqa: E402
@@ -156,9 +172,11 @@ from pfstep.units import (  # noqa: E402
 from pfstep.unitruns import (  # noqa: E402
     UnitRunDecl,
     argv_line,
+    limit_note,
     marker_matches,
     read_unit_runs,
     run_shape_problem,
+    unit_limit_ns,
     unknown_repo_problem,
 )
 
@@ -197,11 +215,6 @@ BROWSER_CRASH_NOTE = "browser crash"
 GENERIC_TEST_BASE = ("*_test.go", "*.test.*", "*.spec.*", "test_*.py", "*_test.py")
 
 _S = gostr.SPACE
-_HARNESS_RAN = re.compile(r"FAIL\te2e\t(\d+)/(\d+) tests ran(?:, (\d+) excluded by E2E_SKIP)?,", re.ASCII)
-_SUMMARY_LINE = re.compile(r"(PASS|FAIL) ([^\t\n\f\r ]+) [^\t\n\f\r ]+s\Z", re.ASCII)
-_SUMMARY_TALLY = re.compile(r"(\d+)/(\d+) passed\b", re.ASCII)
-_SUMMARY_HEADER = re.compile(r"===== summary =====\Z", re.ASCII)
-_SUITES_HEADER = re.compile(r"e2e/all: (\d+) suite\(s\)", re.ASCII)
 
 
 class Usage(Exception):
@@ -343,13 +356,9 @@ class RepoRun:
     box: Optional[container.Box] = None
 
     def is_harness(self, cmd: str) -> bool:
-        """Whether cmd runs the declared Go harness directly: assignments,
-        then sh or bash, then exactly the harness path."""
-        if self.go_harness == "":
-            return False
-        words, simple = shell_words(cmd)
-        cw, ci = command_word(words)
-        return simple and cw in ("sh", "bash") and len(words) == ci + 2 and gostr.clean_rel(words[ci + 1]) == self.go_harness
+        """Whether cmd runs the declared Go harness directly (the one
+        implementation, pfstep.completion)."""
+        return harness_command(self.go_harness, cmd)
 
 
 # ---- helpers ---------------------------------------------------------------
@@ -383,21 +392,6 @@ def is_test_file(p: str, globs: Sequence[str]) -> bool:
     if any(d in ("test", "tests") for d in parts[:-1]):
         return True
     return any(glob_match(g, p) or glob_match(g, base) for g in globs)
-
-
-def read_go_harness(repo_dir: str) -> str:
-    """The repo conf's ``go_harness=`` declaration (the last one wins)."""
-    try:
-        with open(os.path.join(repo_dir, ".polyforge", "verify-scope.conf"), encoding="utf-8", errors="replace") as f:
-            raw = f.read()
-    except OSError:
-        return ""
-    h = ""
-    for line in raw.split("\n"):
-        t = gostr.trim_space(line)
-        if t.startswith("go_harness="):
-            h = gostr.clean_rel(gostr.trim_space(t[len("go_harness="):]))
-    return h
 
 
 # ---- the run ---------------------------------------------------------------
@@ -437,6 +431,7 @@ class Verification:
         tier_reason: str = "",
         image: str = "",
         image_source: str = "",
+        audit: str = "on",
     ) -> None:
         self.capsule = capsule
         self.engine = engine
@@ -462,6 +457,10 @@ class Verification:
         # "flag" (--image) or "param" (PF_PARAM_IMAGE)
         self.image = image
         self.image_source = image_source
+        # polyforge#138: the audit step parameter — "off" hands every
+        # engine invocation --audit off (the project owner's switch; on,
+        # empty and unset hand nothing, today's argv byte for byte)
+        self.audit = audit
         self.n, self.run_dir = self._run_dir(run_dir)
         start = time.time()
         # the light tier's rerun budget is its own knob; a full run is
@@ -703,6 +702,8 @@ class Verification:
         the invocation, why there is none)."""
         engine = rr.box.engine if rr.box is not None else self.engine
         argv = engine_argv_of(engine) + ["--json", "--light" if light else "--full"]
+        if self.audit == "off":
+            argv += ["--audit", "off"]
         if base:
             argv += ["--base", base]
         ref = " ".join(argv)
@@ -932,7 +933,7 @@ class Verification:
                 return ""
         return body_of
 
-    def recorded_reruns(self, rr: RepoRun, s: UnitRunState) -> None:
+    def recorded_reruns(self, rr: RepoRun, s: UnitRunState, timeout: float) -> None:
         """A failed recorded run is re-run once at HEAD (RERUNS): a pass on
         the re-run is flaky; a re-run the budget never started leaves it a
         failure with not_rerun."""
@@ -940,7 +941,7 @@ class Verification:
         while not s.passed and s.ran and i <= RERUNS:
             runs = s.runs
             if self.budget_left():
-                self.exec_unit_run(rr, s)
+                self.exec_unit_run(rr, s, timeout)
             if s.runs == runs:
                 # not started: the budget spent or the deadline passed
                 s.not_rerun = i == 1
@@ -960,8 +961,14 @@ class Verification:
             s.problem = self.prepare_unit_run(s, rr)
             if s.problem:
                 continue
-            self.exec_unit_run(rr, s)
-            self.recorded_reruns(rr, s)
+            self.exec_unit_run(rr, s, self.unit_run_limit(d))
+            self.recorded_reruns(rr, s, self.unit_run_limit(d))
+
+    def unit_run_limit(self, d: UnitRunDecl) -> float:
+        """A recorded unit run's limit: its self-reported `timeout`, else
+        the shared default (pfstep/unitruns) — never the bar commands'
+        own bound."""
+        return unit_limit_ns(d.timeout)[0] / duration.SECOND
 
     def run_analysis_runs(self, rr: RepoRun) -> None:
         """The analysis's taken entries of rr: each runs beside the plan,
@@ -977,12 +984,12 @@ class Verification:
             self.prepare_analysis_run(s, rr)
             if s.problem:
                 continue
-            self.exec_unit_run(rr, s)
-            self.recorded_reruns(rr, s)
+            self.exec_unit_run(rr, s, COMMAND_TIMEOUT / duration.SECOND)
+            self.recorded_reruns(rr, s, COMMAND_TIMEOUT / duration.SECOND)
 
-    def exec_unit_run(self, rr: RepoRun, s: UnitRunState) -> None:
+    def exec_unit_run(self, rr: RepoRun, s: UnitRunState, timeout: float) -> None:
         er = self.exec(rr, list(s.decl.argv), os.path.join(rr.dir, s.cwd), gostr.path_join(rr.cwd_rel, s.cwd),
-                       COMMAND_TIMEOUT / duration.SECOND, private_tmp=True, boxed=True)
+                       timeout, private_tmp=True, boxed=True)
         if er.not_started:
             if not s.ran:
                 s.why = "not started: " + self.r.deadline_note() + " had passed"
@@ -990,7 +997,7 @@ class Verification:
         s.ran, s.runs = True, s.runs + 1
         s.exit, s.timed_out, s.log_path = er.exit, er.timed_out, er.log_path
         if er.timed_out:
-            s.passed, s.why = False, "exit %d: killed at its timeout" % er.exit
+            s.passed, s.why = False, limit_note(int(timeout * duration.SECOND))
         elif er.exit != 0:
             s.passed, s.why = False, "exit %d" % er.exit
         elif not marker_matches(s.decl.marker, output_lines(er.log_path)):
@@ -1135,7 +1142,7 @@ class Verification:
             if pre:
                 form, note = skip_form(cr)
                 if note:
-                    proof = completion_proof(cr)
+                    proof = completion_proof(cr.harness, cr.timed_out, cr.log_path, cr.units)
                     if proof:
                         cr.completion = proof + " (the light tier carries no bar to a re-run, so its pre-existing failure needs no skip form)"
                         continue
@@ -1145,7 +1152,7 @@ class Verification:
                     cr.units.append(residual)
                     continue
                 cmd = form
-            proof = completion_proof(cr)
+            proof = completion_proof(cr.harness, cr.timed_out, cr.log_path, cr.units)
             if proof:
                 cr.completion = proof
                 continue
@@ -1578,74 +1585,6 @@ def skip_form(cr: CmdRun) -> Tuple[str, str]:
                     " is listed as run, its failure(s) named here" % (cr.repo, cr.cmd, ", ".join(names)))
 
 
-def last_line(lines: Sequence[str]) -> str:
-    """The last non-empty output line (the run's own `# pf verify-run:`
-    notes skipped)."""
-    for ln in reversed(lines):
-        if gostr.trim_space(ln) != "" and not ln.startswith("# pf verify-run:"):
-            return ln
-    return ""
-
-
-def completion_proof(cr: CmdRun) -> str:
-    """How cr's first-run output proves its suite ran to completion ("" =
-    it does not): the declared Go harness's trailer, or an aggregate e2e
-    runner's closing summary."""
-    if cr.timed_out or cr.log_path == "":
-        return ""
-    lines = output_lines(cr.log_path)
-    if not cr.harness:
-        return aggregate_completion(cr, lines)
-    m = _HARNESS_RAN.match(last_line(lines))
-    if m is None:
-        return ""
-    ran, listed = int(m.group(1)), int(m.group(2))
-    excluded = int(m.group(3)) if m.group(3) else 0
-    if ran + excluded != listed:
-        return ""
-    return "the harness trailer shows all %d listed tests ran or were excluded" % listed
-
-
-def aggregate_completion(cr: CmdRun, lines: Sequence[str]) -> str:
-    """How an aggregate e2e runner's summary proves every suite it announced
-    settled, each failed one a located failing unit of cr ("" = no proof)."""
-    at, announced = -1, -1
-    for i, ln in enumerate(lines):
-        if _SUMMARY_HEADER.match(ln):
-            at = i
-    if at < 0:
-        return ""
-    for ln in lines[:at]:
-        m = _SUITES_HEADER.match(ln)
-        if m:
-            announced = int(m.group(1))
-    if announced < 0:
-        return ""
-    failed = {u.name for u in cr.units if u.kind == KIND_E2E_SUITE and u.failed}
-    suites = passed = 0
-    for ln in lines[at + 1:]:
-        m = _SUMMARY_LINE.match(ln)
-        if m:
-            suites += 1
-            if m.group(1) == "PASS":
-                passed += 1
-            else:
-                s = m.group(2)
-                if s.startswith("e2e/"):
-                    s = s[len("e2e/"):]
-                if "e2e/" + s not in failed:
-                    return ""  # a failed suite the output did not locate
-            continue
-        m = _SUMMARY_TALLY.match(ln)
-        if m is None:
-            continue
-        p, n = int(m.group(1)), int(m.group(2))
-        if n == 0 or n != suites or n != announced or p != passed:
-            return ""
-        return "the runner's summary shows all %d suites it announced settled (%d passed)" % (n, p)
-    return ""
-
-
 def command_check(cr: CmdRun) -> Dict[str, Any]:
     """One bar command's check entry."""
     if cr.skipped:
@@ -1761,6 +1700,8 @@ def _code_list(xs: Optional[Sequence[str]]) -> str:
 def render_report(res: Dict[str, Any]) -> str:
     """report-mechanical.md: the mechanical section of the verification report."""
     b: List[str] = ["## Mechanical run (run %d)\n\n" % res["run"]]
+    if res.get("audit_disabled"):
+        b.append("Dependency audit disabled: %s.\n\n" % res["audit_disabled"])
     if res.get("incomplete"):
         b.append("**Incomplete — no merged-tree proof could be made:** %s\n\n" % res["incomplete"])
     else:
@@ -1868,6 +1809,8 @@ def details_of(res: Dict[str, Any]) -> Dict[str, Any]:
     d: Dict[str, Any] = {"tier": res["tier"]}
     if res.get("image"):
         d["image"] = res["image"]
+    if res.get("audit_disabled"):
+        d["audit_disabled"] = res["audit_disabled"]
     if res["mechanical_verdict"]:
         d["mechanical_verdict"] = res["mechanical_verdict"]
     if res.get("fail_reason"):
@@ -2039,6 +1982,13 @@ def run(
     if not os.path.isfile(eng):
         raise Usage("no scope engine at %s (--engine names it; the shared tree's is <PF_SHARED_DIR>/scripts/verify-scope)"
                     % eng)
+    # polyforge#138: the audit step parameter, validated before any check
+    # or container starts — any other value a named error, never a silent
+    # on or off.
+    try:
+        audit = read_audit(env)
+    except AuditParamError as err:
+        raise Usage("%s (%s)" % (err, AUDIT_INVALID_MARK)) from None
     decls: List[UnitRunDecl] = []
     if a.unit_runs:
         try:
@@ -2083,7 +2033,7 @@ def run(
         tier, tier_reason = resolve_tier(capsule, a.tier)
         v = Verification(capsule, eng, window, logs, decls, cmd_env, say, co, analysis=analysis,
                          tier=tier, tier_requested=a.tier, tier_reason=tier_reason,
-                         image=image, image_source=image_source)
+                         image=image, image_source=image_source, audit=audit)
     except OSError as err:
         res.summary = "the verification could not run: %s" % err
         return 2
@@ -2092,6 +2042,10 @@ def run(
     doc = v.run()
     if image:
         doc["image"] = {"value": image, "source": image_source}
+    if audit == "off":
+        # the closure note AC3 demands: the merged source hint, the two
+        # layers not distinguished (the owner's 1-B ruling)
+        doc["audit_disabled"] = AUDIT_OFF_NOTE
     try:
         with open(os.path.join(v.run_dir, "result.json"), "w", encoding="utf-8") as f:
             f.write(json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
@@ -2106,16 +2060,19 @@ def run(
     for name, m in doc["merge_outcomes"].items():
         if m["head"]:
             res.heads[name] = m["head"]
+    # the closure rides every summary (AC3: a reviewer sees the audit was
+    # off without opening result.json); an on run's summary stays as today
+    audit_note = "; dependency audit off (%s)" % doc["audit_disabled"] if doc.get("audit_disabled") else ""
     if doc.get("incomplete"):
-        res.summary = "not judged: " + doc["incomplete"]
+        res.summary = "not judged: " + doc["incomplete"] + audit_note
         return 2
     if doc["mechanical_verdict"] != "pass":
         fails = sum(1 for c in doc["checks"] if c["status"] == "fail")
-        res.summary = "%d check(s) failed: %s" % (fails, doc.get("fail_reason", "").split("\n", 1)[0])
+        res.summary = "%d check(s) failed: %s%s" % (fails, doc.get("fail_reason", "").split("\n", 1)[0], audit_note)
         return 1
     over = ", ".join("repos/" + r["name"] for r in doc["repos"] or [])
-    res.summary = "%s verification passed: %d check(s) over %s (tier %s)" % (
-        doc["tier"]["effective"], len(doc["checks"]), over, doc["tier"]["effective"])
+    res.summary = "%s verification passed: %d check(s) over %s (tier %s)%s" % (
+        doc["tier"]["effective"], len(doc["checks"]), over, doc["tier"]["effective"], audit_note)
     return 0
 
 

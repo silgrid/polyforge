@@ -41,6 +41,9 @@ or path specially; aihub checks the path. They filter the list mode only
 (with `--project`, `--status`, `--limit`; without `--project` every mapped
 project's query carries them) and are refused with `--ready`. Example:
 `pf --json queue --project P --bundle <lane> --attr x.y=z`.
+`pf file create --attr` writes a dotted key as the nested path it names
+(verbs/file.md), so the same path filters the ticket back — one shape,
+write and read.
 
 ## Success
 

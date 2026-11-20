@@ -14,6 +14,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -131,6 +132,15 @@ func checkAttrs(attrs map[string]any) error {
 // machine-signed attrs route is its one writer (validating the params
 // against a lane before they ride the key); a filer planting them at
 // create would hand a lane values no lane ever judged.
+//
+// It also refuses a top-level attrs key that carries a dot (polyforge#174):
+// every reader — the list filter's json_extract, WriteAttr's `if` — walks
+// dot paths, and the CLI writes a dotted --attr key as the nested path it
+// names, so a flat dotted key is a value no query can ever reach (the
+// defect that kept the epic split's duplicate check from ever matching).
+// The one accepted new-write shape is the nested path; the old flat rows
+// move with the v0.2.4 migration. Create-only: WriteAttr's key pattern
+// admits no dot, and the list filter's path shape is its own rule.
 func checkCreateAttrs(attrs map[string]any) error {
 	if err := checkAttrs(attrs); err != nil {
 		return err
@@ -138,6 +148,20 @@ func checkCreateAttrs(attrs map[string]any) error {
 	if _, ok := attrs[api.StepParamsKey]; ok {
 		return Fail(api.ErrCoreBadInput, "EXECUTION_STATE_REJECTED",
 			"attrs key %s carries a queued work item's step params and is written by the daemon's machine key only; a create cannot set it", api.StepParamsKey)
+	}
+	dotted := make([]string, 0, len(attrs))
+	for k := range attrs {
+		if strings.Contains(k, ".") {
+			dotted = append(dotted, k)
+		}
+	}
+	if len(dotted) > 0 {
+		sort.Strings(dotted)
+		k := dotted[0]
+		segs := strings.Split(k, ".")
+		nested := `{"` + strings.Join(segs, `":{"`) + `":<value>` + strings.Repeat("}", len(segs))
+		return Fail(api.ErrCoreBadInput, "",
+			"attrs key %q carries a dot — write it as the nested path it names: %s (the list filter and the attrs `if` walk dot paths; a flat dotted key is a value no query reaches)", k, nested)
 	}
 	return nil
 }

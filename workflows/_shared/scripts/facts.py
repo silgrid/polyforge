@@ -15,8 +15,8 @@ capsule's file, a given path is taken as given):
   facts.py micro-bounds [--capsule DIR] --plan artifacts/fix/evidence.json [--json] [--out PATH]
 
 The task repos are capsule.json's (the claim's) present under repos/;
-units.json is the build's `[{id, pre_existing_red?, test_commit?,
-impl_commit, run{repo, cwd, argv}, marker}]` (absent for plan-conformance
+units.json is the build's `[{id, pre_existing_red?, timeout?,
+test_commit?, impl_commit, run{repo, cwd, argv}, marker}]` (absent for plan-conformance
 and carries = no unit; required for build). D is a duration (10m, 90s,
 1h30m). A unit may instead declare `pre_existing_red: true` — its
 reproduction test already exists and is red before the change (an
@@ -41,9 +41,14 @@ shape (test_commit one commit of test paths alone, a proper ancestor of
 impl_commit, which HEAD holds), the `test_weakened` hunks (a unit's test
 files changed after its test commit) and, with --replay, each unit's run
 replayed on the tree of its test commit — a detached worktree under the
-clone's .git, removed afterwards — each bounded by --unit-timeout (10m)
+clone's .git, removed afterwards — each bounded by its own limit — the
+unit's self-reported `timeout` in units.json, else --unit-timeout (10m) —
 under the whole deadline (--deadline, else the step's tool window less two
-minutes); each unit's ``replaying`` start line is closed by an end line
+minutes). A run its own limit kills is an evidence problem, never a
+verdict: exit 1, the problem naming the unit and its limit (a red-state
+run did not exit non-zero within its limit) — only a kill by the whole
+run's deadline stays not judged (exit 2). Each unit's ``replaying`` start
+line is closed by an end line
 (``unit <id>: replay <verdict> (exit <n>, <duration>)``). A unit declared
 ``pre_existing_red: true`` (no test_commit, no test-first shape) resolves
 on its implementation commit alone and replays on the tree of the
@@ -112,8 +117,8 @@ hand-off, its summary naming the entry and the rule it violates. A
 missing or malformed analysis file is the invocation's (exit 2, exactly
 verification's treatment of the same file).
 Exit 0: every taken entry passes. Exit 1: an entry fails. Exit 2: not
-judged — no capsule, an unusable analysis file, a run killed at its
-time limit or not started, an infrastructure failure.
+judged — no capsule, an unusable analysis file, a run not started or
+killed by the whole run's deadline, an infrastructure failure.
 
 carries — every e2e suite the build added or changed in a task repo
 declares `carries:` in its opening comment block, and one it added or a
@@ -159,7 +164,7 @@ from pfstep.analysis import read_analysis, static_problem  # noqa: E402
 from pfstep import godecode as gd  # noqa: E402
 from pfstep.gotext import clip_list, clip_runes, clip_text, fields, quote, short_sha, trim_space  # noqa: E402
 from pfstep.invoke import Invocation, Parser  # noqa: E402
-from pfstep.unitruns import argv_line, marker_matches, unknown_repo_problem  # noqa: E402
+from pfstep.unitruns import DEFAULT_UNIT_LIMIT, argv_line, limit_note, marker_matches, unknown_repo_problem, unit_limit_ns  # noqa: E402
 
 COMMAND = "facts.py"
 
@@ -173,7 +178,7 @@ KINDS = (PLAN_CONFORMANCE, BUILD, ANALYSIS, CARRIES, MICRO_BOUNDS)
 DEFAULT_PLAN = "artifacts/plan.md"
 DEFAULT_UNITS = "artifacts/build/units.json"
 DEFAULT_ANALYSIS = "artifacts/build/change-analysis.json"
-DEFAULT_UNIT_TIMEOUT = 10 * duration.MINUTE
+DEFAULT_UNIT_TIMEOUT = DEFAULT_UNIT_LIMIT
 
 VERIFY_SCOPE_CONF = ".polyforge/verify-scope.conf"
 CAPSULE_JSON = "capsule.json"
@@ -419,7 +424,7 @@ def tail_lines(path: str, n: int) -> str:
 
 
 UNIT_RUN = gd.Struct({"repo": gd.STR, "cwd": gd.STR, "argv": gd.List(gd.STR)})
-UNIT_DECL = gd.Struct({"id": gd.STR, "pre_existing_red": gd.BOOL, "test_commit": gd.STR, "impl_commit": gd.STR, "run": gd.Ptr(UNIT_RUN), "marker": gd.STR})
+UNIT_DECL = gd.Struct({"id": gd.STR, "pre_existing_red": gd.BOOL, "timeout": gd.STR, "test_commit": gd.STR, "impl_commit": gd.STR, "run": gd.Ptr(UNIT_RUN), "marker": gd.STR})
 
 
 class UnitsError(Exception):
@@ -432,7 +437,7 @@ def read_units(path: str) -> List[Dict[str, Any]]:
         text = read_text(path)
     except OSError as err:
         raise UnitsError(gotext.os_error("open", err)) from None
-    shape = "a JSON array of {id, [pre_existing_red,] [test_commit,] impl_commit, run{repo, cwd, argv}, marker}"
+    shape = "a JSON array of {id, [pre_existing_red,] [timeout,] [test_commit,] impl_commit, run{repo, cwd, argv}, marker}"
     try:
         doc = loads(text)
     except ValueError as err:
@@ -440,6 +445,12 @@ def read_units(path: str) -> List[Dict[str, Any]]:
     units, derr = gd.decode(doc, gd.List(UNIT_DECL))
     if derr is not None:
         raise UnitsError("%s is not %s: %s" % (path, shape, derr))
+    for i, u in enumerate(units or []):
+        t = trim_space(u.get("timeout", ""))
+        if t != "":
+            _, why = unit_limit_ns(t)
+            if why:
+                raise UnitsError("%s is not %s: unit %d: %s" % (path, shape, i, why)) from None
     return list(units or [])
 
 
@@ -1972,6 +1983,10 @@ def replay(capsule_dir: str, unit: Unit, run: Dict[str, Any], commit: str, where
             if d < until:
                 until = d
         timeout = unit_timeout if unit_timeout > 0 else until - time.time()
+        # whether the unit's own limit (not the whole run's deadline) is
+        # the bound that kills a hanging run — the red-state limit rule
+        # judges such a kill an evidence problem (polyforge#157)
+        limit_kill = unit_timeout > 0 and (time.time() + unit_timeout) <= deadline_at
 
         def run_in(command: str, wd: str, logs: str, limit: float) -> runner.CommandResult:
             try:
@@ -2026,6 +2041,8 @@ def replay(capsule_dir: str, unit: Unit, run: Dict[str, Any], commit: str, where
         out["setup"] = setup
     if res.not_started:
         out["not_started"] = True
+    if res.timed_out and limit_kill:
+        out["limit_kill"] = True
     out["duration_ms"] = res.duration_ms
     for key, v in (("log", res.log), ("image", res.image), ("container", res.container)):
         if v:
@@ -2157,7 +2174,7 @@ def build(inv: Invocation, args: List[str], environ: Mapping[str, str], runtime:
     p.add_argument("--units", default="", help="build's units.json (default: the capsule's " + DEFAULT_UNITS + ")")
     p.add_argument("--replay", action="store_true", help="replay each unit's run on the tree of its test commit")
     p.add_argument("--isolation", default="", choices=["container", "host"], help="where a replay runs (default: the container when the repo's HEAD carries .polyforge/Dockerfile.verify, else the host)")
-    p.add_argument("--unit-timeout", type=_duration, default=DEFAULT_UNIT_TIMEOUT, help="one replay's time limit (under the whole deadline; default 10m)")
+    p.add_argument("--unit-timeout", type=_duration, default=DEFAULT_UNIT_TIMEOUT, help="one replay's time limit (under the whole deadline; default 10m) — a unit's self-reported `timeout` in units.json is its own limit instead")
     p.add_argument("--deadline", type=_duration, default=0, help="the whole run's deadline (default: the step's tool window less two minutes)")
     p.add_argument("--log-dir", default="", help="where the replays' logs go (default: logs/ beside --out, else the capsule's runtime-state/facts/<n>)")
     ns, code = _parsed(inv, p, args)
@@ -2257,9 +2274,14 @@ def build(inv: Invocation, args: List[str], environ: Mapping[str, str], runtime:
             commit, where = u.test_commit, "test commit"
             if u.pre_existing_red:
                 commit, where = bases[i], "the change's base"
+            # the replay's limit: the unit's self-reported `timeout`, else
+            # the run's --unit-timeout (polyforge#157: one limit the
+            # on-the-spot check and verify share)
+            t = trim_space(decls[i].get("timeout", "") or "")
+            limit_ns = unit_limit_ns(t, ns.unit_timeout)[0]
             inv.say("unit %s: replaying `%s` at %s %s (%d/%d)" % (u.id, gotext.shell_join(run["argv"]), where, short_sha(commit), i + 1, len(entries)))
             try:
-                rr = replay(c.dir, u, run, commit, where, deadline_at, ns.unit_timeout / duration.SECOND,
+                rr = replay(c.dir, u, run, commit, where, deadline_at, limit_ns / duration.SECOND,
                             os.path.join(logs, "replay", str(i + 1)), i + 1, env, co, ns.isolation)
             except (KeyboardInterrupt, runner.Interrupted) as err:
                 inv.summary = "interrupted while replaying unit %s (%s): nothing is proven" % (u.id, err or "interrupt")
@@ -2283,7 +2305,15 @@ def build(inv: Invocation, args: List[str], environ: Mapping[str, str], runtime:
                 inv.summary = "unit %s was not replayed: the deadline (%s) had passed" % (u.id, duration.format(window))
                 return 2
             if rr["timed_out"]:
-                inv.summary = "unit %s's replay was killed at its time limit (%s): not judged" % (u.id, duration.format(ns.unit_timeout))
+                if rr.get("limit_kill"):
+                    # the red-state limit: a run killed at its own limit
+                    # carries no red evidence — an evidence problem (exit 1),
+                    # never the old "not judged"
+                    problems.append("unit %s: %s, so no red evidence (log %s)"
+                                    % (quote(clip_text(u.id)), limit_note(limit_ns), rr.get("log", "")))
+                    continue
+                inv.summary = ("unit %s's replay was killed with the run's window (%s) still open at its limit (%s):"
+                               " the window ran out first — not judged" % (u.id, duration.format(window), duration.format(limit_ns)))
                 return 2
             if not_run(rr["exit_code"]):
                 inv.summary = "unit %s's run `%s` could not run at %s (exit %d: the command is missing or not executable there): not judged" % (

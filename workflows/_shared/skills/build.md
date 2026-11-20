@@ -70,9 +70,14 @@ record exactly what ran.
    over it; a fix is a new commit. The red run just made is the build's own red evidence —
    beside it no manual worktree replay is made (the facts engine's replay is the record),
    and a command's result already in hand on one tree (the same tree hash) is not re-run: a
-   differently spelled command proves nothing new on it. A flaky failure re-runs only the
-   suite that failed, once. A long command writes its output to a log file and records its
-   exit code (`> log 2>&1; echo exit=$?`), and the log is searched after the run; a long
+   differently spelled command proves nothing new on it. A flaky failure is re-run only in
+   the suite that failed, once, by the written fast-check command itself — the same rules
+   verification runs — never by hand: the check already contains that one re-run, and a
+   failure still red after it is red. A red-state run must exit non-zero within its limit
+   — a unit self-reports `timeout` in units.json, else the default — and a run its limit
+   kills is an evidence problem, never a pass: the waiting inside it is bounded and an
+   assertion failure exits at once. A long command writes its output to a log file and records
+   its exit code (`> log 2>&1; echo exit=$?`), and the log is searched after the run; a long
    command is never piped straight into grep, head or tail — the pipe eats the failure
    detail and the exit code. Then add the unit to `artifacts/build/units.json` — a JSON
    array, one object per unit in commit order, cumulative across rounds:
@@ -91,6 +96,9 @@ record exactly what ran.
    the red run also prints, never one a filter that matched no test prints (`ok  ` alone is
    not a marker: `go test -run NoSuchTest` prints it), never one the empty string matches
    (`.*`, `^`, `a*`: verification fails such a unit without running it).
+   A unit may self-report `timeout` (a Go duration) — the limit its recorded run and the
+   facts engine's red-state replay are bounded by (the default is 10m): a red run that
+   needs longer raises it, and one that hangs is an evidence problem, never a pass.
    Both commit ids are the full output of `git -C repos/<repo> rev-parse <ref>`, taken right
    after each commit is made and saved where the unit is recorded — never hand-copied from a
    transcript or a log (`test_commit` and `impl_commit` each resolve their own commit the
@@ -111,7 +119,9 @@ record exactly what ran.
    output by `verify.py`'s own rules (`pfstep/unitruns`: the one implementation, never a second
    copy). A red names the unit, its marker and the closest output line: fix the record (the
    marker, or the recorded run) and re-check; at the close (3c) run the same command over the
-   whole file with no `--unit`.
+   whole file with no `--unit`. A red unit declared `pre_existing_red` is re-run once by the
+   check, and a pass records it flaky; a unit this lane just wrote is never re-run there — a
+   test just written must be stable, so red it stays.
 4. **Coverage stays in the plan.** `artifacts/plan.md`'s `## Coverage` is the table review
    and publish read — one row per criterion of the judged list, every id once:
    `| AC | kind | ref |`, kind `test` (ref `<repo>/<test file>: <test name>`), `existing`
@@ -134,7 +144,8 @@ record exactly what ran.
 
 - **Status.** `done` only on a green build: every unit red then green, the fast checks
   green, the close's facts checks (build, carries) green, the close analysis check green,
-  the self-review written. A real blocker — the machine, not a choice — is
+  the self-review written; a fast check that turned green through a flaky re-run has its
+  flaky units (with their first-red logs) listed in Status. A real blocker — the machine, not a choice — is
   `blocked` with `--reason`. A choice that is the owner's is a `pf step ask`, not a
   hand-off. `cancel` only on the owner's word (`--per-owner`).
 - **回应上一轮** (a later round): each point of the FAIL or the owner's words, numbered as

@@ -208,7 +208,7 @@ func fileCreate(ctx *Context, args []string) error {
 	f.Var(&content, "content", "markdown background; '-' reads stdin, '@file' reads a file")
 	f.Var(&labels, "label", "label (repeatable)")
 	f.Var(&milestone, "milestone", "milestone name")
-	f.Var(&attrs, "attr", "business attr key=json-value (repeatable)")
+	f.Var(&attrs, "attr", "business attr path=json-value (repeatable; a dotted path nests — split.origin=X stores {\"split\":{\"origin\":\"X\"}}, the same dot path pf queue's --attr filters on)")
 	rest, err := parseCommandArgs(f, args)
 	if err != nil {
 		return err
@@ -303,14 +303,11 @@ func fileCreate(ctx *Context, args []string) error {
 	// the create transaction, so a bad blocker creates nothing.
 	req.After = append(req.After, after...)
 	if len(attrs) > 0 {
-		req.Attrs = map[string]any{}
-		for _, kv := range attrs {
-			v, err := parseAttrValue(kv.Value)
-			if err != nil {
-				return fmt.Errorf("--attr %s: %w", kv.Key, err)
-			}
-			req.Attrs[kv.Key] = v
+		built, err := attrsFromFlags(attrs)
+		if err != nil {
+			return err
 		}
+		req.Attrs = built
 	}
 
 	warnAcceptanceCarrier(ctx, req)
@@ -781,6 +778,93 @@ func parseAttrValue(v string) (any, error) {
 		return out, nil
 	}
 	return v, nil
+}
+
+// attrsFromFlags builds one attrs object from a create's --attr flags
+// (polyforge#174): a key is an attrs path — a key with dots nests as
+// the path it names (split.origin=X stores {"split":{"origin":"X"}}),
+// the same dot path `pf queue --attr` filters on, and a key without
+// dots stays one top-level key. Paths that share only a prefix merge;
+// a path assigned twice (even with the same value), a path assigned
+// beside its sub-path (an object VALUE beside its sub-path included:
+// a flag's JSON value is never a container to descend into), or an
+// empty segment (a..b, a leading or trailing dot) refuse the whole
+// create. The collisions are decided on the declared paths alone,
+// before anything is built, so the refusal never depends on flag
+// order (review r1#1).
+func attrsFromFlags(attrs kvList) (map[string]any, error) {
+	segsOf := make([][]string, len(attrs))
+	for i, kv := range attrs {
+		segs := strings.Split(kv.Key, ".")
+		for _, seg := range segs {
+			if seg == "" {
+				return nil, fmt.Errorf("--attr %s: %q is not an attrs path (empty segment)", kv.Key, kv.Key)
+			}
+		}
+		segsOf[i] = segs
+	}
+	for i := 0; i < len(segsOf); i++ {
+		for j := i + 1; j < len(segsOf); j++ {
+			if pathSegmentsEqual(segsOf[i], segsOf[j]) {
+				return nil, fmt.Errorf("--attr %s: the path %q is assigned twice", attrs[i].Key, attrs[i].Key)
+			}
+			if pathOverlaps(segsOf[i], segsOf[j]) {
+				return nil, fmt.Errorf("--attr %s: the path %q is assigned beside its sub-path %q — a parent and its sub-path cannot both be assigned", attrs[i].Key, attrs[i].Key, attrs[j].Key)
+			}
+		}
+	}
+	root := map[string]any{}
+	for i, kv := range attrs {
+		v, err := parseAttrValue(kv.Value)
+		if err != nil {
+			return nil, fmt.Errorf("--attr %s: %w", kv.Key, err)
+		}
+		cur := root
+		for k, seg := range segsOf[i] {
+			if k == len(segsOf[i])-1 {
+				cur[seg] = v
+				break
+			}
+			nxt, ok := cur[seg].(map[string]any)
+			if !ok {
+				nxt = map[string]any{}
+				cur[seg] = nxt
+			}
+			cur = nxt
+		}
+	}
+	return root, nil
+}
+
+// pathSegmentsEqual answers whether two paths are the same segments.
+func pathSegmentsEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// pathOverlaps answers whether one path is a strict segment-prefix of
+// the other (equal paths are pathSegmentsEqual's own case).
+func pathOverlaps(a, b []string) bool {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	if n == len(a) && n == len(b) {
+		return false
+	}
+	for i := 0; i < n; i++ {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // ---------------------------------------------------------------------------

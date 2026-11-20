@@ -121,7 +121,19 @@ integration_batch`). What a later step's command needs travels in files, never i
   beside the repo's own toolchain (a Go repo also `govulncheck`, one with
   an npm lockfile also `npm`, the container reaching the vulnerability
   databases — docs/reference/release.md, "The test gate"); which source
-  served is in each repo's result and green tag. Nothing gated → result
+  served is in each repo's result and green tag. The
+  full-gate step's `audit` parameter (the dispatch's `PF_PARAM_AUDIT`,
+  default `on`) turns the lane's dependency audit off when the project's
+  owner sets it to `off` (`steps.<project>.full-gate.params.audit` in the
+  workspace config, or a ticket's `pf override` — a repository's own conf
+  key can never do it): the engine is then asked `--audit off`, no full
+  report plans the `audit` command, and each repo's gate.json and the green
+  tag's record carry the closure note (the tag of the other audit state is
+  never reused). A tree whose own scope engine predates the `--audit`
+  option is blocked by name, not silently audited and not silently
+  switched to the lane's engine; any other parameter value is a named
+  error before any container starts (exit 2, the fixed mark
+  `pf-audit-param-invalid`). Nothing gated → result
   `empty`. Green → `green`. Red → `gate.py --triage` (re-runs, the baseline, attribution,
   bisection); the agent first judges whether the batch repairs in place — every red unit
   `attributed`, no source past two fix rounds, the fix of every unit touching only tests
