@@ -1003,3 +1003,29 @@ What changed under `tools/` and the dev channel of `tools/install.sh --dev`:
   green tag that predates the interface list now refuses by design —
   wait for the next green tag; the one-time bypass copy that installed
   v0.2.4-dev.19 over green/20261120-1 is retired with this change.
+
+## v0.2.4, the build close runs review's replay and the plan maps the analysis (polyforge#181)
+
+- The develop build's close no longer stops at the static facts: before the
+  hand-off it runs the same lines review judges with — `facts.py
+  plan-conformance` and `facts.py build --replay --isolation host` — beside
+  the `carries` line it already ran, a red fixed before the hand-off; an
+  exit 2 that stays 2 after its retries (one minute apart, at most two) is
+  disclosed in the hand-off and left to review to re-run, never judged
+  blocked. The shared build skill carries the same close, conditioned: a
+  lane whose fix build inherited its plan (the epic lane's) skips the
+  plan-conformance line and runs only the replay. The develop build step's
+  line budget rises from 190 to 215 lines for the two additions, the pinning
+  contract test moved with it.
+- The plan `build` writes gains a `## 分析对照` section on a ticket that
+  carries a `## 分析` section: each item the analysis lists — each old test
+  and document obligation, each risk, each decided point (`已定`) — is
+  mapped to the unit that carries it or a stated reason it is not taken; a
+  decided point takes precedence over the analysis's recommendation, and an
+  analysis written against an older base has its file:line references
+  re-checked against the current one. A ticket without `## 分析` writes
+  `none` there.
+
+What a project must change — nothing: the close's lines and the plan's
+section are the workflow's own texts; no script, conf key or command
+surface changed.

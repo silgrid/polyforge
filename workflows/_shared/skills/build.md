@@ -127,6 +127,15 @@ record exactly what ran.
    `| AC | kind | ref |`, kind `test` (ref `<repo>/<test file>: <test name>`), `existing`
    (the test already pinning it) or `doc` (the file and the validator that shows it).
    Keep it current with every round.
+   A round that wrote the plan adds its `## 分析对照` section beside `## Units` — its own `##`
+   heading, never inside it (the plan-conformance scan reads `## Units` up to the next `##`
+   heading): on a ticket whose content carries a `## 分析` section, each item the analysis
+   lists — each old test and document obligation, each risk, each decided point (`已定`) —
+   mapped to the unit that carries it, or the stated reason it is not taken; a decided point
+   takes precedence over the analysis's recommendation; an analysis written against a base that
+   differs from the current one has its file:line references re-checked against the current
+   base before the work starts; a ticket without `## 分析` writes `none` there. A round that
+   keeps an inherited plan adds nothing to it.
 5. **The close's checks.** The step's close (3c) first runs the build close's scoped selection once
    per touched repo — for a work item whose verification runs the light tier (an integration
    batch's fix ticket runs the full bar and closes without one) — `"$PF_PYTHON"
@@ -138,16 +147,23 @@ record exactly what ran.
    fix the change and re-run it, a full-tier fallback being the owner's to settle, a residual the
    owner accepted keeping its record in the result file, cited in the hand-off — and a green
    result's `details.selected` merges into the change analysis's `selected`, keyed by the repo,
-   verbatim. Then the step's close runs the two facts lines review will
-   judge with —
-   `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" build --json --out artifacts/facts/build.json`
+   verbatim. Then the step's close runs the facts lines review judges with, the same
+   engine and the same replay —
+   `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" plan-conformance --json --out artifacts/facts/plan-conformance.json`
+   (a plan the lane inherited skips this line and runs only the
+   replay) and
+   `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" build --replay --isolation host --json --out artifacts/facts/build.json`
    and `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" carries --json --out artifacts/facts/carries.json`
-   — the same engine, no replay: the first each unit's static commit facts (its ids
-   resolving in a task repo, test-first shape), the second the e2e carries. A red names the
-   unit, or the repo, suite and reason — fix it and re-run until green before the hand-off;
-   exit 2 is no pass either (fix the input it names; a real machine blocker is `blocked`).
-   They are the build's own static runs — review recomputes both with its replay and its own
-   selection, so neither file here is replay evidence. Then the change analysis's own facts
+   — the second each unit's commit facts (its ids resolving in a task repo, test-first shape)
+   with its run replayed red on the tree of its test commit, the first the plan's two-way
+   conformance with the diff, the third the e2e carries. A red is fixed before the hand-off,
+   never handed off on. Exit 2 on the first two lines is not judged: read the result's
+   summary, wait one minute and run that line again, at most twice; still 2 — its failure
+   summary goes into the hand-off and the lane goes on to review, which re-runs the line
+   itself (never `blocked` for it); exit 2 on `carries` is no pass either (fix the input it
+   names; a real machine blocker is `blocked`).
+   They are the build's own runs — review recomputes them fresh, so no file here is review's
+   evidence. Then the change analysis's own facts
    line, `facts.py analysis` — the same shared validator `verification` calls; its red names
    the entry and the rule it violates, and the close check must be green before the hand-off.
 
@@ -155,7 +171,9 @@ record exactly what ran.
 
 - **Status.** `done` only on a green build: every unit red then green, the fast checks
   green, the close's scoped selection green (its flaky units, if any, named as the fast
-  checks name theirs), the close's facts checks (build, carries) green, the close analysis check green,
+  checks name theirs), the close's facts checks (plan-conformance, build with the replay, carries)
+  green, an exit 2 that stayed 2 after its retries disclosed in the hand-off with its summary,
+  the close analysis check green,
   the self-review written; a fast check that turned green through a flaky re-run has its
   flaky units (with their first-red logs) listed in Status. A real blocker — the machine, not a choice — is
   `blocked` with `--reason`. A choice that is the owner's is a `pf step ask`, not a
@@ -175,7 +193,8 @@ record exactly what ran.
 - **Evidence**: `artifacts/plan.md`, `artifacts/build/units.json`,
   `artifacts/build/change-analysis.json`, `artifacts/build/units-check.json`,
   `artifacts/build/fast-checks/<repo>.json`, `artifacts/build/scoped-close/<repo>.json`,
-  `artifacts/facts/build.json`, `artifacts/facts/carries.json`, `artifacts/facts/analysis.json`,
+  `artifacts/facts/plan-conformance.json`, `artifacts/facts/build.json`,
+  `artifacts/facts/carries.json`, `artifacts/facts/analysis.json`,
   `artifacts/self-review.md` (and `artifacts/grill-qa.md` when there is one).
 
 ## Never

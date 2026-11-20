@@ -85,7 +85,12 @@ without the section, the daemon schedules an analysis task that writes its
 (`pf task analysis-write`, the one write a task may make); the draft stays
 unconfirmed — auto-pull skips it, `pf queue` marks it 需要交互：分析待确认 —
 until the owner runs `pf file analysis confirm <id>`. The routing skill's
-submit fragment owns the analysis flow (polyforge#72). `build` does not grill the ticket; it asks the owner only on a
+submit fragment owns the analysis flow (polyforge#72). The plan `build`
+writes then maps that analysis — each old test and document obligation,
+each risk, each decided point it lists goes to the unit that carries it or
+a stated reason it is not taken (`## 分析对照` in `artifacts/plan.md`; a
+decided point first, an analysis written against an older base having its
+file:line references re-checked against the current one). `build` does not grill the ticket; it asks the owner only on a
 surprise, right after the plan and never at completion, with `pf step ask`. Human stops: a dead end or a
 contradiction the code reveals (a defect `build` cannot reproduce included); the plan
 diverging from the ticket; `confirm_plan` (one stop right after the plan, before the
