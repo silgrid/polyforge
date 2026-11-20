@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { hasPolyforgeCellCapabilities } from "./polyforge-cells-pure";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { type PackageSource } from "@earendil-works/pi-coding-agent";
@@ -256,9 +256,48 @@ export async function readGlobalPackageEntries(): Promise<PackageSource[]> {
   }
 }
 
+/** The workstation image's read-only seed root — the one fact the image
+ * judgment reads (polyforge#175, owner 2026-11-19: the seed manifest the
+ * image's final layer carries; the same convention the Go side states,
+ * never a probe of /components). */
+const WORKSTATION_SEED_ROOT = "/opt/polyforge/seed";
+
+/** The workstation's components volume root: the volume whose current/
+ * symlink every consumer inside the image resolves. */
+const WORKSTATION_COMPONENTS_ROOT = "/components";
+
+/** The image judgment: the seed (with its manifest) the image's final
+ * layer carries is under the seed root — one manifest under
+ * releases/<ver>/ is the fact, a bare releases/ directory is not. Every
+ * read degrades on its own (a missing or unreadable root reads as a
+ * host, never an error, never a guess). */
+function workstationImage(seedRoot: string): boolean {
+  try {
+    const releases = join(seedRoot, "releases");
+    for (const ver of readdirSync(releases)) {
+      try {
+        statSync(join(releases, ver, "manifest.json"));
+        return true;
+      } catch {
+        // this entry carries no manifest: not the fact
+      }
+    }
+  } catch {
+    // no seed root at all: a host
+  }
+  return false;
+}
+
 /** install.sh's conventional clone path (a fixed
- *  `$HOME/.local/share/polyforge` root, verified in its source). */
-export function conventionalPolyforgeRoot(home: string = homedir()): string {
+ *  `$HOME/.local/share/polyforge` root, verified in its source) on a
+ * host; inside the workstation image (judged by the seed manifest,
+ * polyforge#175) the components volume's current instead. The seed root
+ * is a parameter so the tests inject a fixture; production reads the
+ * constant. */
+export function conventionalPolyforgeRoot(home: string = homedir(), seedRoot: string = WORKSTATION_SEED_ROOT): string {
+  if (workstationImage(seedRoot)) {
+    return join(WORKSTATION_COMPONENTS_ROOT, "current");
+  }
   return join(home, ".local", "share", "polyforge", "release", "current");
 }
 
