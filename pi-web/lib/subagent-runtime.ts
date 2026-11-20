@@ -261,6 +261,18 @@ export function subagentDebugSnapshot(sessionId?: string): { runs: DebugSubagent
 }
 
 /** Every session `hasUnsettledSubagentRun()` holds for: the parents of the unsettled runs. */
+/**
+ * One parent session's live built-in subagent runs (polyforge#173): the rows
+ * the running list reads. Read-only, straight off the run map — a queued run
+ * is included (the queue entry carries the run until it is admitted), a run
+ * leaves the map when its result is recorded.
+ */
+export function listSubagentRunsOf(parentSessionId: string): SubagentRunInfo[] {
+  return [...getSubagentRuns().values()]
+    .filter((stored) => stored.run.parentSessionId === parentSessionId)
+    .map((stored) => ({ ...stored.run }));
+}
+
 export function getSessionIdsWithUnsettledSubagentRuns(): string[] {
   return [...new Set(unsettledSubagentRuns().map((run) => run.parentSessionId))];
 }
