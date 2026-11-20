@@ -306,6 +306,9 @@ class AnalysisTest(unittest.TestCase):
         git_t(fx.repo("app"), "fetch", "-q", "origin")
         git_t(fx.repo("app"), "merge", "--no-ff", "-m", "sync: merge origin/main", "origin/main")
         self.assertNotEqual(fx.head("app"), sel["head"])
+        # the merge is the sync's own shape: --no-ff, the branch's own
+        # commit the first parent
+        self.assertEqual(git_t(fx.repo("app"), "rev-parse", "HEAD^"), sel["head"])
         path = analysis_file(fx, {"tests": [], "selected": {"app": sel}})
         r = self.run_analysis(fx, eng, path)
         self.assertEqual(r.exit, 0, r.result.get("summary"))
