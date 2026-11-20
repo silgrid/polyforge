@@ -186,6 +186,15 @@ func runComponents(ctx *Context, fs *flag.FlagSet, args []string) error {
 		}
 		return emitComponents(ctx, map[string]string{"state": components.UpgradeStateCancelled}, "upgrade cancelled")
 	case "upgrade":
+		if seed := stringFlag(fs, "seed-dir"); seed != "" && stringFlag(fs, "version") != "" {
+			manifest, err := components.ReadManifest(seed)
+			if err != nil {
+				return err
+			}
+			if manifest.Version != stringFlag(fs, "version") {
+				return fmt.Errorf("requested version %s does not match seed version %s", stringFlag(fs, "version"), manifest.Version)
+			}
+		}
 		result, err := components.Upgrade(context.Background(), components.UpgradeOptions{Root: root, DataDir: componentsDataDir(), BaseVersion: base, Platform: runtime.GOOS + "/" + runtime.GOARCH, Version: stringFlag(fs, "version"), Force: boolFlag(fs, "force"), SeedDir: stringFlag(fs, "seed-dir"), Face: componentsFaceFor(ctx)})
 		if err != nil {
 			return err
