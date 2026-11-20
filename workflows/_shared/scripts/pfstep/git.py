@@ -14,6 +14,7 @@ daemon's twin is internal/polyforge/taskrepo's Git.
 """
 
 import os
+import shutil
 import tempfile
 from typing import Dict, List, Mapping, Optional
 
@@ -94,8 +95,8 @@ def worktree_tree(cwd: str, subdir: str = "", timeout: float = READ_TIMEOUT) -> 
     """The working tree's own tree hash — tracked modifications plus every
     untracked, unignored file, the state a build's uncommitted work leaves
     (Q1 of polyforge#182) — computed through a private index (``git add -A``
-    over an empty index, then ``git write-tree``; the repository's own
-    index is never touched, and a file the run writes outside the tree
+    over a copy of the repository's index, then ``git write-tree``; the
+    repository's own index is never touched, and a file outside the tree
     never moves it), or the hash of the whole tree's ``<subdir>`` subtree
     ("" = the whole tree, nested roots included). GitError when git cannot
     answer — the caller degrades to running everything, never to judging
@@ -106,6 +107,12 @@ def worktree_tree(cwd: str, subdir: str = "", timeout: float = READ_TIMEOUT) -> 
     e = env()
     e["GIT_INDEX_FILE"] = index
     try:
+        # 保留已跟踪状态，否则后来匹配忽略规则的输入会从临时索引消失。
+        source = git(cwd, "rev-parse", "--git-path", "index", timeout=timeout).strip()
+        if not os.path.isabs(source):
+            source = os.path.join(cwd, source)
+        if os.path.exists(source):
+            shutil.copyfile(source, index)
         c = proc.run(argv("add", "-A"), cwd=cwd, env=e, timeout=timeout)
         if c.exit_code != 0:
             raise GitError("git add -A (a private index of the working tree): %s"
