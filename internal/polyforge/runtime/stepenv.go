@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/silgrid/polyforge/internal/common/capsule"
 	"github.com/silgrid/polyforge/internal/common/spawn"
 	"github.com/silgrid/polyforge/internal/common/workflow"
 )
@@ -150,6 +151,10 @@ func JoinPath(paths ...string) string {
 	return strings.Join(out, string(os.PathListSeparator))
 }
 
+func stepTMPDir(capsuleDir string) string {
+	return filepath.Join(capsuleDir, capsule.DirDownloads, "tmp")
+}
+
 // stepEnvAdditions answers the step-environment entries of one derivation:
 // the daemon's step env when the runtime binds a source (Config.StepEnv;
 // a bare Config adds none) — its PATH composed for the harness binary
@@ -171,6 +176,7 @@ func stepEnvAdditions(cfg *Config, p SpawnParams, harnessBin string) []string {
 		}
 	}
 	if p.CapsuleDir != "" {
+		out = append(out, "TMPDIR="+stepTMPDir(p.CapsuleDir))
 		out = append(out, spawn.EnvCapsule+"="+p.CapsuleDir)
 	}
 	if p.LaneDir != "" {
