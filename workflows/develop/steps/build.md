@@ -106,16 +106,19 @@ doc-type criterion gets no red test and no unit: commit the change, run its vali
 Run the fast checks over the whole change (the written command once per touched repo) and every unit
 test targeted, then the written unit check over the whole `artifacts/build/units.json` (the same command
 with no `--unit`) (the full bar is `verification`'s). Then the build close's scoped selection — the same
-light-tier selection verification plans, one shared implementation, over the final tree: `"$PF_PYTHON"
+light-tier selection verification plans, one shared implementation, over the final tree —
+for a work item whose verification runs the light tier (an integration batch's fix ticket
+runs the full bar and closes without one): `"$PF_PYTHON"
 "$PF_SHARED_DIR/scripts/fast_checks.py" --repo <name> --close-scoped --reuse
 artifacts/build/fast-checks/<repo>.json --json --out artifacts/build/scoped-close/<repo>.json` once per
 touched repo, after its fast checks (a green same-tree run in the reuse file is evidence, not a re-run);
 the existing tests it selects are the ones verification will select, a red one getting the one targeted
 re-run the per-unit bar gives. A red or `incomplete` result (the engine answered full, or a selected
-command cannot run) never hands off `done`: fix the change and re-run it — a real environment blocker
-is `blocked`, and a full-tier fallback is the owner's to settle (`pf step ask`). Merge each touched
-repo's `details.selected` of its result into the change analysis's `selected` (below), keyed by the
-repo, verbatim. Then run the two facts lines review will judge you
+command cannot run) never hands off `done` without the owner's ruling: fix the change and re-run it —
+a real environment blocker is `blocked`, a full-tier fallback is the owner's to settle (`pf step
+ask`), and a residual the owner accepted keeps its record in the result file, cited in the
+hand-off. Merge each touched repo's `details.selected` of its green result into the change
+analysis's `selected` (below), keyed by the repo, verbatim. Then run the two facts lines review will judge you
 with — the same engine, without the replay: `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" build --json
 --out artifacts/facts/build.json` `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" carries --json --out
 artifacts/facts/carries.json` The first gives each unit's static commit facts (its ids resolving in a

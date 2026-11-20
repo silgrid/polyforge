@@ -449,7 +449,15 @@ fixed mark `pf-verify-image-missing` in the summary, the image named). The union
 with the build's change analysis is add-only: the change analysis's listed
 tests run beside the plan, add-only, under the analysis's supplement cap —
 a listed test that does not exist fails its check naming it, and the
-entries past the cap are cut in listed order and named in the result. (The
+entries past the cap are cut in listed order and named in the result.
+The analysis's machine selection records (`selected`, one per task repo,
+which the build close's `fast_checks.py --close-scoped` writes) are
+judged by the same shared validator: a record of another tree is stale —
+except that a sync's merge commits between its head and the verified HEAD
+leave it valid, the change's own tree being what it was computed at — and
+a record whose selection is not green or whose selected commands carry no
+green evidence fails its `<repo>:selected` check; the records are never
+subject to the supplement cap. (The
 daemon's `verify` action, which ran the same bar in-process after fetching
 and merging the default branch itself, left with the daemon actions.)
 For each touched repo it asks the
@@ -1116,7 +1124,11 @@ hold no credential.
   listed entry judged statically — its repo, its run's shape, its file at HEAD, its name
   inside it — and each taken one's run executed once at HEAD and judged by its marker,
   the cut tail named over the supplement cap; a red names the entry and the rule it
-  violates, and the build must fix it before its hand-off) and `micro-bounds
+  violates, and the build must fix it before its hand-off; the machine selection records the
+  analysis carries (`selected`) are judged statically by the same shared validator — a stale
+  head, a non-green selection or a command without green evidence is red, never under the
+  supplement cap — while a touched repo carrying none is the build step's own rule to demand
+  and review's to judge) and `micro-bounds
   --plan <evidence.json>` (every changed path inside the repo's
   `micro_path=` at the change's base; the credential plan). Exit 0: the
   facts hold; 1: a difference to class; 2: not judged.

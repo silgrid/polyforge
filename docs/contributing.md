@@ -189,7 +189,11 @@ changed or whose `carries:` meet it, plus the build's unit runs
 build writes at its close; the union is add-only — the engine's selection
 is never narrowed — under the analysis's `supplement_limit`, the lane's
 cap, cut in listed order past it and named in the result; a listed test
-that does not exist fails its check naming it). Under
+that does not exist fails its check naming it; and the analysis's
+`selected` records — the build close's scoped run writes them — are
+judged the same way on both sides: a stale head, a non-green selection or
+a command without green evidence fails its check, and a sync's merge
+commits between the record's head and the verified HEAD leave it valid). Under
 `--light` the conf's `forced_full=` globs and the `module_root=` spanning
 rule force nothing, a changed path no `carries:` declaration covers is
 diagnosed (the fast gates still cover it) instead of forcing full, and at a
