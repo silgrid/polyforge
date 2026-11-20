@@ -318,11 +318,6 @@ func (s *piSpawner) Spawn(ctx context.Context, p SpawnParams) (AgentHandle, erro
 // RPC commands, claude's stream-json user messages): the harness decides
 // how a later message is framed and acknowledged (SendMessage).
 func startHarness(cmd *exec.Cmd, p SpawnParams) (*proc, error) {
-	if p.CapsuleDir != "" {
-		if err := os.MkdirAll(stepTMPDir(p.CapsuleDir), 0o755); err != nil {
-			return nil, fmt.Errorf("runtime: create step TMPDIR: %w", err)
-		}
-	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
