@@ -161,6 +161,35 @@ test("a running task stops through the kill route, once and idempotently", async
   assert.equal(persisted.status, "stopped");
 });
 
+test("a task id that escapes its session's directory reads as not found (AC2)", async () => {
+  // The route layer decodes %2F; a traversal id would otherwise read
+  // another session's directory. The expected answer is 404 with no trace
+  // of B's log — derived from the ownership rule, not from the impl.
+  seedRecord(SESSION_B, "task-b", { status: "succeeded", log: "SECRET-OF-B", startedAt: 1_700_000_007_000 });
+  const escape = `../${SESSION_B}/task-b`;
+  for (const attempt of [
+    () => logs(SESSION_A, escape),
+    () => kill(SESSION_A, escape),
+  ]) {
+    const { status, body } = await attempt();
+    assert.equal(status, 404, `a traversal id must read as not found, got ${status} ${JSON.stringify(body)}`);
+    assert.equal(JSON.stringify(body).includes("SECRET-OF-B"), false, "the answer leaks another session's log");
+    assert.equal(typeof body.error, "string");
+  }
+  // A record sitting in A's own directory but claiming B's session reads
+  // the same way: ownership is the record's own words, not its location.
+  const lyingDir = taskDir(SESSION_A, "task-lying");
+  fs.mkdirSync(lyingDir, { recursive: true });
+  const lying = seedRecord(SESSION_B, "task-lying", { status: "succeeded", log: "SECRET-OF-B" });
+  fs.writeFileSync(`${lyingDir}/task.json`, JSON.stringify({ ...lying, id: "task-lying" }));
+  fs.writeFileSync(`${lyingDir}/log`, "SECRET-OF-B");
+  const smuggled = await logs(SESSION_A, "task-lying");
+  assert.equal(smuggled.status, 404, `a record claiming another session reads as found: ${smuggled.status}`);
+  assert.equal(JSON.stringify(smuggled.body).includes("SECRET-OF-B"), false);
+  const listed = await list(SESSION_A);
+  assert.equal(listed.body.tasks.some((task) => task.id === "task-lying"), false, "the list shows a record that claims another session");
+});
+
 test("another session's task id reads as not found through every route, as JSON", async () => {
   for (const attempt of [
     () => logs(SESSION_B, "task-settled"),

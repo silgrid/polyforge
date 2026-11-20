@@ -151,8 +151,19 @@ function readPersistedInfo(root: string, sessionId: string, taskId: string): BgT
     return null;
   }
   if (!isTaskInfo(info)) return null;
+  // The registry is the authority, but a record is only this session's own
+  // task when it says so: a record whose session or id is not exactly the
+  // one the URL named — a path that escaped its directory, a record another
+  // session owns — reads as not found (AC2; ownership before state, the
+  // same rule #172's cross-session probe taught).
+  if (info.sessionId !== sessionId || info.id !== taskId) return null;
   if (info.status !== "running") return { ...info };
   return { ...info, status: "interrupted", notified: true };
+}
+
+/** A task id the URL may name: one plain path segment, nothing that escapes. */
+function isSinglePathSegment(id: string): boolean {
+  return id.length > 0 && !id.includes("/") && !id.includes("\\") && id !== "." && id !== "..";
 }
 
 /** Atomic per-task record write: a temp file beside the target, renamed into place. */
@@ -245,6 +256,10 @@ export function createBgTaskController(deps: BgRuntimeDeps): BgTaskController {
     const task = tasks.get(taskId);
     if (task && task.info.sessionId === sessionId) return task;
     if (task) throw new Error(`Background task not found: ${taskId}`); // another session's id never falls through to a disk read
+    // The URL's task id is untrusted input: a decoded traversal
+    // (`..%2F…`) never reaches the disk (the trusted-boundary check; the
+    // record read below re-checks ownership beside it).
+    if (!isSinglePathSegment(taskId)) throw new Error(`Background task not found: ${taskId}`);
     const persisted = readPersistedInfo(root, sessionId, taskId);
     if (!persisted) throw new Error(`Background task not found: ${taskId}`);
     return { info: persisted, supervisor: null, wakePending: false };
