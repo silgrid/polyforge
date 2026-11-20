@@ -64,7 +64,7 @@ test("a fresh composer set to claude creates a claude session, sends no set_mode
   hook.result.chooseNewSessionHarness("claude");
   hook.flush();
   assert.equal(hook.result.newSessionClaudeModel, "default", "claude starts at claude's own default alias");
-  hook.result.setNewSessionClaudeModel("claude-haiku-5-5");
+  hook.result.pickNewSessionClaudeModel("claude-haiku-5-5");
   hook.flush();
   await settle();
   assert.equal(hook.result.isClaudeSession, true);
@@ -127,7 +127,7 @@ test("an image-only claude send reports [Image] as the new session's first messa
   hook.unmount();
 });
 
-test("switching the harness resets the destination's model: claude to default, pi to its default (no override); the claude list is GET /api/claude's model names", async () => {
+test("switching the harness resets the destination's model: claude to its native default (85a3-1), pi to its default (no override); the claude list is GET /api/claude's model names", async () => {
   globalThis.EventSource = class {
     readyState = 0;
     constructor() { queueMicrotask(() => { this.readyState = 1; this.onmessage?.({ data: JSON.stringify({ type: "connected", isStreaming: false }) }); }); }
@@ -142,6 +142,10 @@ test("switching the harness resets the destination's model: claude to default, p
         defaultModel: "default",
       });
     }
+    if (url === "/api/models/default") {
+      // 85a3-1: the combined default's claude half — claude's native defaults
+      return json({ defaultHarness: "pi", claudeDefaultModel: "opus", claudeDefaultEffort: "high" });
+    }
     if (url.startsWith("/api/models")) return json({ models: { "p/m0": "Model 0", "p/m1": "Model 1" }, modelList, defaultModel: { provider: "p", modelId: "m0" } });
     return json({});
   };
@@ -153,7 +157,9 @@ test("switching the harness resets the destination's model: claude to default, p
   assert.deepEqual(hook.result.displayModel, { provider: "p", modelId: "m1" });
   hook.result.chooseNewSessionHarness("claude");
   hook.flush();
-  hook.result.setNewSessionClaudeModel("claude-haiku-5-5");
+  assert.equal(hook.result.newSessionClaudeModel, "opus", "claude resets to its own native default, not the built-in alias");
+  assert.equal(hook.result.newSessionClaudeEffort, "high", "the reset effort is the native one");
+  hook.result.pickNewSessionClaudeModel("claude-haiku-5-5");
   hook.flush();
   assert.equal(hook.result.newSessionClaudeModel, "claude-haiku-5-5");
   hook.result.chooseNewSessionHarness("pi");
@@ -164,7 +170,7 @@ test("switching the harness resets the destination's model: claude to default, p
   assert.deepEqual(hook.result.displayModel, { provider: "p", modelId: "m0" }, "pi's default model again");
   hook.result.chooseNewSessionHarness("claude");
   hook.flush();
-  assert.equal(hook.result.newSessionClaudeModel, "default", "claude resets to claude's default alias");
+  assert.equal(hook.result.newSessionClaudeModel, "opus", "claude resets to its own native default again");
   assert.deepEqual(hook.result.claudeAvailability, { available: true, models: ["default", "haiku", "claude-custom-1"] }, "the listed names, an invalid one dropped");
   hook.unmount();
 });
@@ -688,4 +694,75 @@ test("a relay that claude or the server refuses rejects, sends nothing after the
     refused.hook.unmount();
     console.error = originalError;
   }
+});
+
+// ── 85a3-1 (AC2): the combined default a fresh composer starts from ──────
+test("a fresh composer takes the combined default's harness and claude's native defaults where nothing was carried or picked", async () => {
+  globalThis.EventSource = class {
+    readyState = 0;
+    constructor() { queueMicrotask(() => { this.readyState = 1; this.onmessage?.({ data: JSON.stringify({ type: "connected", isStreaming: false }) }); }); }
+    close() { this.readyState = 2; }
+  };
+  globalThis.fetch = async (url) => {
+    if (url === "/api/claude") return json({ available: true });
+    if (url === "/api/models/default") return json({ defaultHarness: "claude", claudeDefaultModel: "opus", claudeDefaultEffort: "high" });
+    if (url.startsWith("/api/models")) return json({ models: {}, modelList: [], defaultModel: null });
+    return json({});
+  };
+  const hook = renderHook(useAgentSession, { session: null, newSessionCwd: "/project", newSessionDraftKey: "new:combined", t: (key) => key });
+  await settle();
+  hook.flush();
+  assert.equal(hook.result.newSessionHarness, "claude", "the stored default harness decides");
+  assert.equal(hook.result.newSessionClaudeModel, "opus", "the native model is the initial value");
+  assert.equal(hook.result.newSessionClaudeEffort, "high", "the native effort is the initial value");
+  assert.equal(hook.result.claudeDefaultModel, "opus", "the star's filled marker is the native default");
+  hook.unmount();
+
+  // the user's own pick wins over a late answer
+  const picked = renderHook(useAgentSession, { session: null, newSessionCwd: "/project", newSessionDraftKey: "new:picked", t: (key) => key });
+  await settle();
+  picked.flush();
+  picked.result.chooseNewSessionHarness("pi");
+  picked.flush();
+  assert.equal(picked.result.newSessionHarness, "pi", "the user's harness choice stays");
+  picked.unmount();
+
+  // a carried draft choice wins too
+  const carried = renderHook(useAgentSession, {
+    session: null, newSessionCwd: "/project", newSessionDraftKey: "new:carried", t: (key) => key,
+    initialNewSessionChoices: { model: null, thinkingLevel: null, harness: "pi", claudeModel: "haiku", claudeEffort: "low" },
+  });
+  await settle();
+  carried.flush();
+  assert.equal(carried.result.newSessionHarness, "pi", "the carried harness stays");
+  assert.equal(carried.result.newSessionClaudeModel, "haiku", "the carried model stays");
+  assert.equal(carried.result.newSessionClaudeEffort, "low", "the carried effort stays");
+  carried.unmount();
+});
+
+test("the claude star saves the combined default and an untouched fresh composer follows it", async () => {
+  const requests = [];
+  globalThis.EventSource = class {
+    readyState = 0;
+    constructor() { queueMicrotask(() => { this.readyState = 1; this.onmessage?.({ data: JSON.stringify({ type: "connected", isStreaming: false }) }); }); }
+    close() { this.readyState = 2; }
+  };
+  globalThis.fetch = async (url, init = {}) => {
+    requests.push({ url, body: init.body ? JSON.parse(init.body) : null });
+    if (url === "/api/claude") return json({ available: true });
+    if (url === "/api/models/default") return json({ defaultHarness: "claude", claudeDefaultModel: "opus", claudeDefaultEffort: "high" });
+    if (url.startsWith("/api/models")) return json({ models: {}, modelList: [], defaultModel: null });
+    return json({});
+  };
+  const hook = renderHook(useAgentSession, { session: null, newSessionCwd: "/project", newSessionDraftKey: "new:star", t: (key) => key });
+  await settle();
+  hook.flush();
+  await hook.result.handleSetDefaultClaudeModel("sonnet");
+  hook.flush();
+  const save = requests.find((request) => request.url === "/api/models/default" && request.body?.harness === "claude");
+  assert.equal(save?.body?.harness, "claude", "the star posts the claude branch");
+  assert.equal(save?.body?.model, "sonnet", "the star posts the model name alone");
+  assert.equal(hook.result.claudeDefaultModel, "sonnet", "the star's filled marker follows the save");
+  assert.equal(hook.result.newSessionClaudeModel, "sonnet", "an untouched fresh composer follows the new default");
+  hook.unmount();
 });

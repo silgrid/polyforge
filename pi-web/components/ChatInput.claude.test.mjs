@@ -419,21 +419,39 @@ test("a claude composer never enters Bash mode: a leading ! shows the no-shell h
 });
 
 // ── 85a3 u4 (AC2): the claude model selector's 「设为默认」 star ────────────
-test("the claude model selector shows the default star only when the save handler is passed, marking the stored default", () => {
-  // without the handler (the subagent profile form, say) no star renders
-  const withoutHandler = composer({ ...base, harness: "claude" });
-  assert.ok(!withoutHandler.includes("Use and save as default for new chats"), "no star without the handler");
-  // with it: the native default's row carries the filled star (the model
-  // list above lists default/opus/fable/sonnet/haiku; opus is the default)
-  const withHandler = composer({
-    ...base, harness: "claude", model: "sonnet",
-    defaultModel: "opus", onSetDefaultModel() {},
+test("the claude model selector receives the star only when the save handler is passed, marking the stored default", async () => {
+  // ModelSelector renders its rows only while the popup is open (a measured
+  // anchor), so the wiring is pinned at the props the selector receives: a
+  // spy module captures them.
+  let captured = null;
+  const spyJiti = createJiti(import.meta.url, {
+    jsx: { runtime: "automatic" },
+    tsconfigPaths: true,
+    // the main jiti instance's ChatInput already sits in Node's require cache
+    // under its absolute path; a private module cache re-evaluates it here so
+    // the spy module the selector receives is this instance's
+    moduleCache: false,
+    virtualModules: {
+      "./ModelSelector": {
+        ModelSelector: function ModelSelectorSpy(props) { captured = props; return null; },
+      },
+      // the re-evaluated ChatInput must read the same i18n context the test
+      // provides, so useI18n stays the main instance's module
+      "@/hooks/useI18n": await jiti.import("@/hooks/useI18n"),
+    },
   });
-  assert.ok(withHandler.includes("Use and save as default for new chats"), "the star's save label");
-  const starAt = withHandler.indexOf('aria-label="Default model for new chats"');
-  assert.ok(starAt > 0, "the filled default star");
-  // the star sits in the selector's list, not in the composer's bottom bar
-  assert.ok(starAt > withHandler.indexOf('class="model-selector'), "the star belongs to the model selector");
+  const { ChatInput: ChatInputSpy } = await spyJiti.import("./ChatInput.tsx");
+  const renderSpy = (claude) => renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(ChatInputSpy, {
+    onSend() {}, onAbort() {}, claude,
+  })));
+  // without the handler (the subagent profile form, say) the selector gets no star
+  renderSpy({ ...base, harness: "claude" });
+  assert.equal(captured.onSetDefault, undefined, "no save handler without the star");
+  assert.equal(captured.defaultValue, undefined, "no filled marker without the star");
+  // with it: the stored default marks the row (the native default, here opus)
+  renderSpy({ ...base, harness: "claude", model: "sonnet", defaultModel: "opus", onSetDefaultModel() {} });
+  assert.deepEqual(captured.defaultValue, { provider: "claude", modelId: "opus" });
+  assert.equal(typeof captured.onSetDefault, "function", "the star's save handler");
 });
 
 test("the claude star's save passes the row's model name, not the provider (the adapter the selector calls)", () => {

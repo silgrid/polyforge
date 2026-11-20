@@ -88,14 +88,14 @@ test("an unregistrable cwd is refused with the pi route's reason before any side
 
 test("the model must be a valid claude model name (no fixed list); other commands are refused for claude", async () => {
   // an absent model is no longer a refusal (85a3 u4: the server resolves the
-  // native default); every invalid model still is
+  // native default), and the retired modelAlias alone is not one either —
+  // dropped unread, the native default applies; every invalid model still is
   for (const body of [
     { harness: "claude", model: "" },
     { harness: "claude", model: "-bad" },
     { harness: "claude", model: "has space" },
     { harness: "claude", model: "x".repeat(129) },
     { harness: "claude", model: 5 },
-    { harness: "claude", modelAlias: "sonnet" },
     { harness: "codex", model: "claude-sonnet-5-5" },
     { harness: "claude", model: "claude-sonnet-5-5", type: "bash", command: "ls" },
   ]) {

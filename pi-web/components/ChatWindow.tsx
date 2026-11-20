@@ -340,7 +340,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
     newSessionClaudeEffort, handleClaudeModelChange, handleClaudeEffortChange, handleClaudeLaunchPermissionModeChange, claudeSwitchError, claudeStateKnown,
     relayToClaudeSubagent,
     claudeBackgroundTasks, claudeForceStopWork, stopClaudeBackgroundTask, readClaudeTaskOutput, forceStopClaudeTurn, dismissClaudeForceStop,
-    newSessionClaudeModel, setNewSessionClaudeModel, claudeAvailability, claudeSubagents,
+    newSessionClaudeModel, pickNewSessionClaudeModel, claudeDefaultModel, handleSetDefaultClaudeModel, claudeAvailability, claudeSubagents,
     claudeEditRestartRefusal, dismissClaudeEditRestartRefusal, handleSendClaudeEditAsNewMessage,
   } = useAgentSession({
     session, sessionRunning, newSessionCwd, newSessionDraftKey, initialNewSessionChoices, onNewSessionChoicesChange, onAgentEnd: wrappedOnAgentEnd, onToolEnd, onAttentionNeeded, onBackgroundTasksEvent, onSessionCreated, onSessionForked,
@@ -377,7 +377,10 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
         effort: newSessionClaudeEffort,
         availability: claudeAvailability,
         onHarnessChange: chooseNewSessionHarness,
-        onModelChange: setNewSessionClaudeModel,
+        onModelChange: pickNewSessionClaudeModel,
+        // 85a3-1: the star's filled marker (claude's native default) and its save handler.
+        defaultModel: claudeDefaultModel,
+        onSetDefaultModel: handleSetDefaultClaudeModel,
         onEffortChange: handleClaudeEffortChange,
       };
     }
@@ -400,8 +403,11 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
       modelSwitching: claudeModelSwitching,
       switchError: claudeSwitchError,
       stateKnown: claudeStateKnown,
+      // 85a3-1: an open session's selector offers the star beside its own model.
+      defaultModel: claudeDefaultModel,
+      onSetDefaultModel: handleSetDefaultClaudeModel,
     };
-  }, [isNew, isClaudeSession, claudeSessionChoices, claudeModelSwitching, newSessionHarness, newSessionClaudeModel, newSessionClaudeEffort, claudeAvailability, chooseNewSessionHarness, setNewSessionClaudeModel, handleClaudeModelChange, handleClaudeEffortChange, handleClaudeLaunchPermissionModeChange, claudeSwitchError, claudeStateKnown]);
+  }, [isNew, isClaudeSession, claudeSessionChoices, claudeModelSwitching, newSessionHarness, newSessionClaudeModel, newSessionClaudeEffort, claudeAvailability, chooseNewSessionHarness, pickNewSessionClaudeModel, claudeDefaultModel, handleSetDefaultClaudeModel, handleClaudeModelChange, handleClaudeEffortChange, handleClaudeLaunchPermissionModeChange, claudeSwitchError, claudeStateKnown]);
   // External-write signal: each new key reloads the mounted session from disk
   // exactly once, and only when it targets the session this window shows.
   const externalSessionChangeKeyRef = useRef<number | null>(null);
