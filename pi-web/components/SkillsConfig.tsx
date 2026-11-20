@@ -121,8 +121,10 @@ export function rowSwitchItems(
 
 /**
  * After one round's results: the rows whose items succeeded take the state
- * that was sent, each on its own side; a refused item keeps its row as it
- * was. `sent` carries what the round asked of each harness.
+ * that was sent, each on its own side — a row listing both harnesses updates
+ * pi and claude independently (review r1#2: an early return on the pi hit
+ * used to drop the claude result of the same row); a refused item keeps its
+ * row as it was. `sent` carries what the round asked of each harness.
  */
 export function applyRowSwitchResults(
   rows: UnifiedSkillRow[],
@@ -131,13 +133,14 @@ export function applyRowSwitchResults(
 ): UnifiedSkillRow[] {
   const succeeded = new Set(results.filter((result) => !result.error).map((result) => `${result.harness}\0${result.skill}`));
   return rows.map((row) => {
+    let next = row;
     if (row.pi && sent.pi !== undefined && succeeded.has(`pi\0${row.pi.filePath}`)) {
-      return { ...row, pi: { ...row.pi, disableModelInvocation: sent.pi === "disabled" } };
+      next = { ...next, pi: { ...next.pi!, disableModelInvocation: sent.pi === "disabled" } };
     }
     if (row.claude && sent.claude !== undefined && succeeded.has(`claude\0${row.claude.name}`)) {
-      return { ...row, claude: { ...row.claude, ...(sent.claude ? { state: sent.claude } : {}) } };
+      next = { ...next, claude: { ...next.claude!, state: sent.claude } };
     }
-    return row;
+    return next;
   });
 }
 
@@ -1107,12 +1110,11 @@ export function SkillsConfig({
       setRows((prev) => applyRowSwitchResults(prev, results, { pi: enabled ? "enabled" : "disabled" }));
       const failures = results.filter((result) => result.error);
       if (failures.length > 0) {
-        const names = new Map(items.map((item) => [item.skill, item.skill]));
         setGroupStatus({
           group,
           error: [
             t("skills.bulkFailed", { count: failures.length, total: results.length }),
-            ...failures.map((failure) => `${names.get(failure.skill) ?? failure.skill}: ${failure.error}`),
+            ...failures.map((failure) => `${failure.skill}: ${failure.error}`),
           ].join("\n"),
         });
       }
