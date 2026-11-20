@@ -335,11 +335,13 @@ try {
       const found = (body.tasks ?? []).find((task) => task.id === taskId);
       return found && found.status === "interrupted" ? found : null;
     }, 45_000, "the running task never read as interrupted after the restart");
-    // The running area is gone entirely: no item, no node, no settled entry.
-    await waitFor(async () => (await taskItem(reloaded, taskId).count()) === 0, 25_000, "the interrupted task still shows in the running list after the restart");
-    await waitFor(async () => (await list(reloaded).count()) === 0, 25_000, "the running area still renders after the restart");
-    assert.equal(await historyEntry(reloaded).count(), 0, "a settled entry renders in the running area after the restart");
-    // The card button opens the interrupted task's detail.
+    // The bg_run card's button opens the interrupted task's detail FIRST: the
+    // panel renders only from the ready bg-tasks state's own record
+    // (openPiTask), so its appearing and showing Interrupted is the anchor
+    // that proves the reloaded page's bg-tasks state has loaded (r1#1: while
+    // it is still loading, the running area is empty because nothing has
+    // been read yet, not because no task runs — its absence means nothing
+    // until this anchor holds).
     await revealToolCards(reloaded);
     const card = cardButton(reloaded, taskId);
     await waitFor(async () => (await card.count()) === 1, 25_000, "the bg_run card's open-task button never showed after the restart");
@@ -347,6 +349,11 @@ try {
     const detail = taskPanel(reloaded, taskId);
     await waitFor(async () => (await detail.count()) === 1, 25_000, "the interrupted task's detail never opened");
     assert.match(await detail.innerText(), /Interrupted/, `the detail shows interrupted: ${JSON.stringify(await detail.innerText())}`);
+    // The running area is gone entirely — no item, no node, no settled entry —
+    // read on the state the anchor above proved loaded.
+    await waitFor(async () => (await taskItem(reloaded, taskId).count()) === 0, 25_000, "the interrupted task still shows in the running list after the restart");
+    await waitFor(async () => (await list(reloaded).count()) === 0, 25_000, "the running area still renders after the restart");
+    assert.equal(await historyEntry(reloaded).count(), 0, "a settled entry renders in the running area after the restart");
     await shot("R173d-interrupted")(reloaded);
     // The settled history stays reachable through the detail's history button
     // (#189: the history's entry is the detail panel's, never the running area's).
