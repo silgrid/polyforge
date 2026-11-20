@@ -13,7 +13,7 @@ import (
 // the shell boundary in the shared rule and in every prompt that carries it.
 func TestW191TemporaryPathAndBackgroundRule(t *testing.T) {
 	phrases := []string{
-		"background processes do not survive this tool call",
+		"Background processes do not survive this tool call",
 		"never start one in one call and wait for it in a later call",
 		"Temporary files belong under `$TMPDIR` or `artifacts/downloads/`, never a fixed `/tmp/` name",
 	}
