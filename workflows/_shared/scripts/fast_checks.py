@@ -828,6 +828,7 @@ class CheckRun:
             if key in consumed or (prev.get("root", ""), prev.get("cmd", "")) in planned:
                 continue
             carried = dict(prev)
+            carried.pop("reused", None)
             carried["carried"] = True
             self.details["commands"].append(carried)
         # the flaky phase: every red command's located failing units re-run
