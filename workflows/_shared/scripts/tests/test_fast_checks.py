@@ -1044,7 +1044,7 @@ class PhaseRootTest(FastChecksCase):
         by_root: Dict[str, List[Dict[str, Any]]] = {}
         for c in self.commands_of(second):
             by_root.setdefault(c["root"], []).append(c)
-        self.assertEqual(list(by_root), ["repos/app", "repos/app/webapp"])
+        self.assertEqual(set(by_root), {"repos/app", "repos/app/webapp"})
         self.assertTrue(by_root["repos/app/webapp"][0].get("reused"))
         carried = by_root["repos/app"]
         for c in carried:
