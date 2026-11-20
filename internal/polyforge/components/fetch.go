@@ -24,6 +24,14 @@ import (
 // checksum file refuses it.
 var ErrReleaseAssetMismatch = errors.New("a release payload does not match its SHA256SUMS line")
 
+// The URL seams: the API and download faces of the channel
+// repository's GitHub. Package vars so the tests point them at a
+// stub server; production never changes them.
+var (
+	githubAPIBase      = "https://api.github.com"
+	githubDownloadBase = "https://github.com"
+)
+
 // ReleaseInfo is one release of the channel repository as the upgrade
 // reads it: the tag and the source commit its manifest names.
 type ReleaseInfo struct {
