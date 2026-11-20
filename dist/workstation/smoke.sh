@@ -407,13 +407,6 @@ http.server.HTTPServer(("0.0.0.0", port), Count).serve_forever()
 PYEOF
 		python3 "$stub_script" "$stub_port" "$hits" &
 		stub_pid=$!
-		trap 'kill "$stub_pid" 2>/dev/null' EXIT
-		poll_until "the stub server to listen" 30 \
-			sh -c "curl -s -o /dev/null http://127.0.0.1:$stub_port/" || {
-			kill "$stub_pid" 2>/dev/null
-			die "the stub server never listened on $stub_port (set WORKSTATION_SMOKE_STUB_PORT to a free port)"
-		}
-		: >"$hits"  # the listen probe was ours, not the container's
 		override=$(mktemp)
 		cat >"$override" <<'YEOF'
 services:
@@ -421,6 +414,14 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 YEOF
+		# the EXIT trap is the whole cleanup: a die anywhere below
+		# leaves no temp file behind (the test env checks for them)
+		trap 'kill "$stub_pid" 2>/dev/null; rm -f "$hits" "$stub_script" "$override" 2>/dev/null' EXIT
+		poll_until "the stub server to listen" 30 \
+			sh -c "curl -s -o /dev/null http://127.0.0.1:$stub_port/" || {
+			die "the stub server never listened on $stub_port (set WORKSTATION_SMOKE_STUB_PORT to a free port)"
+		}
+		: >"$hits"  # the listen probe was ours, not the container's
 		export WORKSTATION_AIHUB_SERVER="http://host.docker.internal:$stub_port"
 		export WORKSTATION_AIHUB_KEY="smoke-external-key"
 		compose_up="docker compose -p workstation-smoke -f $compose_file -f $override --profile $profile"
@@ -436,6 +437,23 @@ YEOF
 	[ -n "$cid" ] || die "no workstation container was created for profile $profile"
 	poll_until "the workstation container to run" 120 \
 		sh -c "docker inspect -f '{{.State.Running}}' '$cid' | grep -q true"
+	if [ "$external" = yes ]; then
+		# the boot's window ends the moment the record says done: the
+		# counting stub is read right then. What the boot must never do
+		# is CREATE anything on the remote — no request on the remote's
+		# admin face (the identity/creation paths: users, keys,
+		# projects) may reach it in that window. The machine's own
+		# runtime traffic afterwards (the daemon's heartbeat to its
+		# Cell) is how the workstation serves at all and is expected —
+		# the round-2 real-machine finding.
+		poll_until "the first-boot record to say done" 120 \
+			sh -c "docker exec '$cid' cat /root/.local/share/polyforge/workstation/first-boot.json 2>/dev/null | grep -q '\"phase\": *\"done\"'"
+		if grep -q " /api/v1/admin" "$hits"; then
+			die "the external boot made a request on the remote's admin face — it must create nothing on the remote"
+		fi
+		n=$(wc -l <"$hits" | tr -d ' ')
+		printf 'smoke: the stub server saw %s requests, none on a creation path (nothing built on the remote)\n' "$n"
+	fi
 	poll_until "pf supervise to run inside" 120 \
 		docker exec "$cid" sh -c 'ps -e -o args= | grep -q "[p]f supervise"'
 
@@ -518,10 +536,6 @@ for name in ("api_key", "key_hash", "token"):
     assert name not in rec.lower(), "CREDENTIAL_PROBE: the record names a credential field"
 ' || die "the first-boot record carries a credential (AC2) — the key belongs in cli.toml only"
 		say "the record carries no credential"
-	else
-		n=$(wc -l <"$hits" | tr -d ' ')
-		[ "$n" = 0 ] || die "the external mode made $n remote request(s) — it must create nothing on the remote"
-		say "the stub server saw 0 requests (nothing created on the remote)"
 	fi
 
 	# the restart, volumes intact: the first choice stands — the record
@@ -549,17 +563,9 @@ for name in ("api_key", "key_hash", "token"):
 		docker exec -w /workspace "$cid" pf recall --project workstation first-boot-probe >/dev/null 2>&1 ||
 			die "the same key no longer authenticates after the restart — the first boot must not have reissued it"
 		say "the same key still authenticates after the restart (no reissue)"
-	else
-		n=$(wc -l <"$hits" | tr -d ' ')
-		[ "$n" = 0 ] || die "the external restart made $n remote request(s)"
 	fi
 
 	$compose_up down -v >/dev/null 2>&1 || true
-	if [ "$external" = yes ]; then
-		kill "$stub_pid" 2>/dev/null
-		trap - EXIT
-		rm -f "$override" "$hits" "$stub_script"
-	fi
 	say "first-boot: PASS"
 }
 
