@@ -378,9 +378,9 @@ PYEOF
 # restart with the volumes intact — the first choice stands: the
 # record is byte-identical and the same key still authenticates (no
 # reissue). The --external pass points the default Cell at a counting
-# stub server instead: the record says external, no creation-path
-# request reaches the remote, and a restart with a DIFFERENT server env
-# changes nothing (the choice is made once).
+# stub server instead: only POST /api/v1/machines/heartbeat is allowed
+# throughout the run; creation and unknown requests fail. A restart with
+# a DIFFERENT server env changes nothing (the choice is made once).
 cmd_first_boot() {
 	case "${1:-}" in
 	"") external=no ;;
@@ -438,21 +438,21 @@ YEOF
 	poll_until "the workstation container to run" 120 \
 		sh -c "docker inspect -f '{{.State.Running}}' '$cid' | grep -q true"
 	if [ "$external" = yes ]; then
-		# the boot's window ends the moment the record says done: the
-		# counting stub is read right then. What the boot must never do
-		# is CREATE anything on the remote — no request on the remote's
-		# admin face (the identity/creation paths: users, keys,
-		# projects) may reach it in that window. The machine's own
-		# runtime traffic afterwards (the daemon's heartbeat to its
-		# Cell) is how the workstation serves at all and is expected —
-		# the round-2 real-machine finding.
+		check_external_requests() {
+			python3 - "$hits" <<'PYEOF' || die "the external boot made an unexpected remote request (only runtime heartbeat is allowed)"
+import sys
+requests = open(sys.argv[1]).read().splitlines()
+for request in requests:
+    if request != "POST /api/v1/machines/heartbeat":
+        print("unexpected remote request: " + request, file=sys.stderr)
+        sys.exit(1)
+print("smoke: the stub server saw %s requests, only runtime heartbeats allowed" % len(requests))
+PYEOF
+		}
+		# 只允许已知运行期心跳；真实创建路由与未知请求均拒绝。
 		poll_until "the first-boot record to say done" 120 \
 			sh -c "docker exec '$cid' cat /root/.local/share/polyforge/workstation/first-boot.json 2>/dev/null | grep -q '\"phase\": *\"done\"'"
-		if grep -q " /api/v1/admin" "$hits"; then
-			die "the external boot made a request on the remote's admin face — it must create nothing on the remote"
-		fi
-		n=$(wc -l <"$hits" | tr -d ' ')
-		printf 'smoke: the stub server saw %s requests, none on a creation path (nothing built on the remote)\n' "$n"
+		check_external_requests
 	fi
 	poll_until "pf supervise to run inside" 120 \
 		docker exec "$cid" sh -c 'ps -e -o args= | grep -q "[p]f supervise"'
@@ -574,6 +574,10 @@ for name in ("api_key", "key_hash", "token"):
 	fi
 
 	$compose_up down -v >/dev/null 2>&1 || true
+	if [ "$external" = yes ]; then
+		# 停机后再核对全部请求，覆盖首启与重启的完整运行期。
+		check_external_requests
+	fi
 	say "first-boot: PASS"
 }
 

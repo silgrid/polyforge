@@ -190,8 +190,8 @@ sh dist/workstation/smoke.sh boot --no-aihub    # the minimal boot: parameters, 
 sh dist/workstation/smoke.sh boot --with-aihub  # + Pi Web /login, the daemon queue, the default Cell
 sh dist/workstation/smoke.sh first-boot         # the empty-volume first boot: identity, default Cell,
                                                 #   real key authentication, no bootstrap key, restart
-sh dist/workstation/smoke.sh first-boot --external  # + the external mode: a counting stub asserts no creation-path request
-                                                #   reaches the remote (the daemon's own heartbeat to its Cell is expected)
+sh dist/workstation/smoke.sh first-boot --external  # 外部模式：全过程只允许 POST /api/v1/machines/heartbeat
+                                                # 创建路由与其他未知请求均失败，并输出方法和路径
 sh dist/workstation/smoke.sh env                # Pi Web parameters, PI_TEST_* excluded, /api 401
 sh dist/workstation/smoke.sh podman-verify      # verification via podman end to end
 ```

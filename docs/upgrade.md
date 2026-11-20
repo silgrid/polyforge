@@ -878,10 +878,9 @@ r1#1: environment inputs that disagree with the record refuse the
 start, and an external record's key input must be set again); done
 without the default Cell, or a Cell with no record, is an
 inconsistency the container refuses to start on. The smoke gains
-`first-boot` (and `first-boot --external`, whose counting stub asserts
-no creation-path request reaches the remote — the daemon's own heartbeat
-to its Cell is the machine's normal connection and is expected). No
-action on upgrade beyond taking the new image
+`first-boot`；`first-boot --external` 的计数桩在首启和重启全过程中只允许
+`POST /api/v1/machines/heartbeat`，创建用户、key、项目以及任何其他请求均令
+验收失败并点名方法与路径。No action on upgrade beyond taking the new image
 and compose. The image has not shipped in a release, so no real
 deployment exists to migrate; a dev host's leftover volumes are the
 only pre-#176 state, and one honest leftover comes with them: such a
