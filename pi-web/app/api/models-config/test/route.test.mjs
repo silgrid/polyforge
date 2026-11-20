@@ -130,8 +130,7 @@ test("forceAdaptiveThinking 模型的测试请求不发送 disabled thinking", a
   const body = JSON.parse(request.init.body);
   assert.notDeepEqual(body.thinking, { type: "disabled" });
 });
-
-
+test("an omitted provider.api resolves from the model entry, the catalog, or the OpenAI default (review blocker)", async (t) => {
   const originalFetch = globalThis.fetch;
   const calls = [];
   globalThis.fetch = async (input, init) => {
