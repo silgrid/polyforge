@@ -205,18 +205,18 @@ class HelperTest(unittest.TestCase):
 
     def test_a_command_green_through_its_flaky_rerun_is_evidence(self) -> None:
         """The per-unit bar's own green: a red first run whose failing units
-        re-ran flaky and whose whole command was then confirmed (its
-        completion proof, or one whole re-run exiting 0) is green evidence
-        — the record states it with `confirmed`/`complete`."""
+        re-ran flaky and whose whole command was then confirmed — one whole
+        re-run exiting 0 (`confirmed`), or its completion proof
+        (`complete`, the entry keeping the first run's red exit beside it)
+        — is green evidence, the record stating it with either."""
         head = "b" * 40
         confirmed = SelectedCommand(name="pin", cmd="go test ./...", phase="scoped", exit_code=1,
                                     confirmed="go test ./...")
         complete = SelectedCommand(name="pin", cmd="sh e2e.sh", phase="scoped", exit_code=1,
-                                   timed_out=False)
-        # a completion proof carries no exit code at all
-        d = self.sel(commands=[confirmed])
+                                   complete="PASS S1; PASS S2; 2 suites")
+        d = self.sel(commands=[confirmed, complete])
         self.assertEqual(selected_problem(d, head), "")
-        # still red without the proof
+        # still red without either proof
         c = SelectedCommand(name="pin", cmd="go test ./...", phase="scoped", exit_code=1)
         self.assertIn("exited 1", selected_problem(self.sel(commands=[c]), head))
 
@@ -248,7 +248,9 @@ class HelperTest(unittest.TestCase):
                              {"name": "fast", "root": "repos/app", "cmd": "echo f", "phase": "fast",
                               "reused": "fast-checks.json#fast"},
                              {"name": "flaky", "root": "repos/app", "cmd": "go test ./...", "phase": "scoped",
-                              "exit_code": 1, "confirmed": "go test ./..."}]}}}
+                              "exit_code": 1, "confirmed": "go test ./..."},
+                             {"name": "suites", "root": "repos/app", "cmd": "sh e2e.sh", "phase": "scoped",
+                              "exit_code": 1, "complete": "PASS S1; PASS S2; 2 suites"}]}}}
             with open(path, "w", encoding="utf-8") as f:
                 _json.dump(doc, f)
             an = read_analysis(path)
@@ -257,10 +259,11 @@ class HelperTest(unittest.TestCase):
             self.assertEqual((d.head, d.engine, d.mode, d.status), ("b" * 40, "the engine --json --light", "light", "green"))
             self.assertEqual((d.conf, d.conf_changed_in_diff, d.paths, d.suites, d.test_glob),
                              (".polyforge/verify-scope.conf", True, ["lib/x.py"], ["e2e/s1.mjs"], ["*_test.go"]))
-            self.assertEqual([(c.name, c.cmd, c.phase, c.exit_code, c.reused, c.confirmed) for c in d.commands],
-                             [("gate", "echo ok", "scoped", 0, "", ""),
-                              ("fast", "echo f", "fast", None, "fast-checks.json#fast", ""),
-                              ("flaky", "go test ./...", "scoped", 1, "", "go test ./...")])
+            self.assertEqual([(c.name, c.cmd, c.phase, c.exit_code, c.reused, c.confirmed, c.complete) for c in d.commands],
+                             [("gate", "echo ok", "scoped", 0, "", "", ""),
+                              ("fast", "echo f", "fast", None, "fast-checks.json#fast", "", ""),
+                              ("flaky", "go test ./...", "scoped", 1, "", "go test ./...", ""),
+                              ("suites", "sh e2e.sh", "scoped", 1, "", "", "PASS S1; PASS S2; 2 suites")])
 
     def test_the_file_rejects_a_bad_selected_shape(self) -> None:
         import json as _json
