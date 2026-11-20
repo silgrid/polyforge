@@ -187,16 +187,18 @@ the `--harness` family (its check reads no config and no network).
 | Check | `pass` | `warn` (detail carries the fix) | `skip` |
 |---|---|---|---|
 | `claude install layout` | `~/.claude/skills/polyforge` is a symlink to `<data-dir>/release/current/skills/polyforge` (inside the workstation image, polyforge#175: to `/components/current/skills/polyforge`) | a copied directory (the pre-#174 layout), a link elsewhere, no skill, or a link with no release behind it → re-run `tools/install.sh`; no skill or a link elsewhere, with a release skill behind the target, is also fixed by `pf doctor --fix-install-layout` (a copied directory and a missing release are not) — inside the image the fix names the components volume, never `tools/install.sh` | no `~/.claude` |
-| `pi install layout` | pi's settings `packages` hold the local release `<data-dir>/release/current` (inside the image, polyforge#175: the components volume's `/components/current`, and the pre-#162 `<data-dir>/release` layout refused with a migration note) | a `git:…silgrid/polyforge.git@<ver>` entry (the old clone), another polyforge checkout, no entry, or no release behind it → re-run `tools/install.sh` | no pi agent dir |
+| `pi install layout` | pi's settings `packages` hold the local release `<data-dir>/release/current` (inside the image, polyforge#175: the components volume's `/components/current`, and the pre-#162 `<data-dir>/release` layout refused with a migration note) | a `git:…silgrid/polyforge.git@<ver>` entry (the old clone), another polyforge checkout, no entry, or no release behind it → re-run `tools/install.sh`; inside the image the fix is the first boot's seed install into the components volume — never `tools/install.sh` | no pi agent dir |
 | `v1 harness leftovers` | no v1 artifact | any of: a pi `packages` entry whose source pins to a known v1 source (sha256 of its lower-cased owner/repo — the literal is not in the tree) or whose source names polyforge (other than the release `<data-dir>/release/current` entry `tools/install.sh` manages and the `silgrid/polyforge.git` v2 clone the `pi install layout` row already reports); a pi settings `extensions` entry that pins to a known v1 source or names the v1 bridge file `…/polyforge/index.(js|ts)` (the v2 `…/skills/polyforge/extensions/pf-chat.ts` entry is not a v1 leftover — the `pi package` row passes it); the v1 auto-loaded extension at `~/.pi/agent/extensions/polyforge`; a v1 Claude skill (`using-polyforge`, `pf-*`); a v1 Claude plugin named `polyforge` (`polyforge@…`, from any marketplace) — the detail lists each and one copy-paste command line that first backs everything up into `~/polyforge-v1-backup-<timestamp>/`, then removes them (`pi remove`, `mv`, `claude plugin uninstall`) | — |
 
 `pf doctor --fix-install-layout` repairs the `claude install layout` row's
 one entry, `~/.claude/skills/polyforge`, and nothing else under `~/.claude`
 (settings, projects and other skills are never touched):
 
-- no skill → it creates the link to `<data-dir>/release/current/skills/polyforge`
-  (creating `~/.claude/skills` if needed), and the row reports `pass … (created
-  by --fix-install-layout)`;
+- no skill → it creates the link to the machine's current skill
+  (`<data-dir>/release/current/skills/polyforge` on a host,
+  `/components/current/skills/polyforge` in the workstation image,
+  polyforge#175), creating `~/.claude/skills` if needed, and the row
+  reports `pass … (created by --fix-install-layout)`;
 - a link elsewhere, dangling or not → it replaces only that link (a temp link
   renamed over it, so an interrupted run leaves the old or the new link), and
   the row reports `pass … (repaired …)`; the old target is not touched;
