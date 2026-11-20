@@ -281,7 +281,7 @@ func TestFirstBoot(t *testing.T) {
 		// the external boot reaches config (the cell is written), then
 		// dies at harness: the agent dir is a file, so the merge's
 		// settings write fails
-		if err := os.RemoveAll(o.AgentDir); err != nil {
+		if err := os.MkdirAll(filepath.Dir(o.AgentDir), 0o755); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(o.AgentDir, []byte("x"), 0o644); err != nil {
