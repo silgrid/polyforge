@@ -32,11 +32,8 @@ import (
 // injected at derivation; a capsule's materialized step-agent definitions
 // are a different resource family and stay reachable.
 //
-// --no-extensions is DELIBERATELY ABSENT and must stay absent: the
-// subagent tool is not a pi builtin but an EXTENSION — on the operator's
-// machine the one at <operator agent dir>/extensions/subagent/ — and
-// --no-extensions would drop it, and with it the whole step-agent
-// dispatch path.
+// --no-extensions is DELIBERATELY ABSENT for the parent: the daemon-owned
+// extension remains available there. Child workers receive --no-extensions.
 //
 // The residual exposure this profile could never close — extension-
 // registered HARNESS BACKGROUND TASKS (the operator's user-level
