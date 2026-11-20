@@ -90,6 +90,11 @@ func WriteUpgradeStatus(root string, s *UpgradeStatus) error {
 	return atomicfile.Write(filepath.Join(root, UpgradeStatusFilename), body, 0o644)
 }
 
+// RequestUpgradeForce 请求正在等待的事务立即继续，避免另启一次并发切换。
+func RequestUpgradeForce(root string) error {
+	return atomicfile.Write(filepath.Join(root, "upgrade-force"), nil, 0o600)
+}
+
 // RequestUpgradeCancel lays the cancel marker (idempotent).
 func RequestUpgradeCancel(root string) error {
 	return atomicfile.Write(filepath.Join(root, UpgradeCancelFilename), []byte{}, 0o644)

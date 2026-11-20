@@ -15,7 +15,7 @@ export function ComponentsUpdateView({snapshot,error,onAction}:{snapshot:Compone
   {error && <p role="alert">{error}</p>}
   <button type="button" disabled={busy} onClick={()=>onAction("upgrade")}>更新</button>
   <button type="button" disabled={busy || !snapshot.previous} onClick={()=>onAction("rollback")}>回到上一版</button>
-  {state==="waiting-drain" && <><button type="button" onClick={()=>onAction("cancel")}>取消并重启 daemon</button><button type="button" onClick={()=>onAction("cancel",true)}>强制更新</button></>}
+  {state==="waiting-drain" && <><button type="button" onClick={()=>onAction("cancel")}>取消并重启 daemon</button><button type="button" onClick={()=>onAction(snapshot.status?.operation ?? "upgrade",true)}>强制更新</button></>}
  </section>;
 }
 
@@ -34,12 +34,6 @@ export function ComponentsUpdateCard({active}:{active:boolean}) {
  },[active]);
  const action=async(operation:string,force=false)=> {
   try {
-   // 等待中的编排由取消路径退出，再由新操作携带 --force 接替。
-   if(force) {
-    const cancel=await fetch("/api/components/cancel",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
-    if(!cancel.ok) throw Error("无法取消等待");
-    operation="upgrade";
-   }
    const response=await fetch(`/api/components/${operation}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({force})});
    if(!response.ok) {const body=await response.json();throw Error(body.error ?? "无法启动更新");}
   } catch(error) {setError(error instanceof Error?error.message:"无法启动更新");}

@@ -151,6 +151,21 @@ func runComponents(ctx *Context, fs *flag.FlagSet, args []string) error {
 	}
 	sub := args[0]
 	root := componentsVolumeRoot
+	if (sub == "upgrade" || sub == "rollback") && boolFlag(fs, "force") {
+		status, err := components.ReadUpgradeStatus(root)
+		if err != nil {
+			return err
+		}
+		if status != nil && status.State == components.UpgradeStateWaiting {
+			if status.Operation != sub {
+				return fmt.Errorf("a %s is waiting; force that operation instead", status.Operation)
+			}
+			if err := components.RequestUpgradeForce(root); err != nil {
+				return err
+			}
+			return emitComponents(ctx, status, "已请求正在等待的事务强制继续")
+		}
+	}
 	base, err := componentsBaseVersion()
 	if err != nil && sub != "check" && sub != "status" && sub != "cancel" {
 		return err
@@ -181,10 +196,7 @@ func runComponents(ctx *Context, fs *flag.FlagSet, args []string) error {
 		if err := components.RequestUpgradeCancel(root); err != nil {
 			return err
 		}
-		if err := componentsFaceFor(ctx).Restart(context.Background()); err != nil {
-			return err
-		}
-		return emitComponents(ctx, map[string]string{"state": components.UpgradeStateCancelled}, "upgrade cancelled")
+		return emitComponents(ctx, map[string]string{"state": components.UpgradeStateCancelled}, "已请求取消，等待编排重启 daemon")
 	case "upgrade":
 		if seed := stringFlag(fs, "seed-dir"); seed != "" && stringFlag(fs, "version") != "" {
 			manifest, err := components.ReadManifest(seed)

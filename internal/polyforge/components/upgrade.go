@@ -365,6 +365,13 @@ func drainAndWait(ctx context.Context, d *drainWait) (bool, error) {
 			record(UpgradeStateCancelled, "")
 			return true, nil
 		}
+		if _, err := os.Stat(filepath.Join(d.root, "upgrade-force")); err == nil {
+			if err := os.Remove(filepath.Join(d.root, "upgrade-force")); err != nil {
+				return false, err
+			}
+			_, err := d.face.Drain(ctx, true)
+			return false, err
+		}
 		busy, err = d.face.Drain(ctx, d.force)
 		if err != nil {
 			return false, err
