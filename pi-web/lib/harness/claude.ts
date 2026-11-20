@@ -510,9 +510,8 @@ export function createClaudeAdapter(): HarnessAdapter {
       // The shared gate first (adapter.ts): an undetected or unrecognized
       // version never reaches a write. auth has 85a2's write (the credential
       // into the native env block), the permission concept 85a4's and the
-      // model concept 85a3's (model / effortLevel / the per-model modelSettings,
-      // one field per write); every other concept keeps gatedWrite's
-      // not-implemented.
+      // model 概念只写 model / effortLevel，按模型 modelSettings 待格式
+      // 核实后在 85a3-2 实现；其他概念沿用 gatedWrite 的 not-implemented。
       if (concept !== "permission" && concept !== "auth" && concept !== "model") return gatedWrite(this, concept, change, ctx);
       const probe = await probeVersion(ctx);
       const gate = writeGate(probe);
