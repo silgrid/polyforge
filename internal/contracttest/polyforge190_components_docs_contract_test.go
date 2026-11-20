@@ -1,5 +1,5 @@
 // carries: docs/upgrade.md, docs/reference/commands.md, docs/workstation.md, skills/polyforge/verbs/components.md, skills/polyforge/verbs/ops.md
-package contracttest
+package test
 
 import (
 	"os"
