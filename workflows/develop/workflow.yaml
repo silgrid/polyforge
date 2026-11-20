@@ -27,6 +27,7 @@ steps:
     # analysis; verify.py's built-in default (10) applies when the file
     # names none
     vars: { supplement_limit: "10" }
+    params: { pi_subagents: "off" }
   - id: review
     gate: true
     on_fail: { target: build }

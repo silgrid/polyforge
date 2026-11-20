@@ -164,7 +164,7 @@ func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun
 		parts.Skill = renderSkill(sk)
 	}
 	h := harness.Of(sp.Harness)
-	parts.NoSubagents = subagentsFact(a.BundleDir, sp.StepID, h)
+	parts.NoSubagents = subagentsFact(a.BundleDir, sp.StepID, h, sp.Params)
 	var transcript, hsession string
 	resume := sp.Resume
 	// degraded names why a resume the driver ordered became a new
@@ -318,12 +318,15 @@ const piNoSubagents = "This dispatch runs on pi, whose sub-agents do not run wit
 // subagentsFact answers the sub-agent fact of one dispatch: piNoSubagents
 // on a pi dispatch of a step whose definition includes the sub-agent
 // rules, else "".
-func subagentsFact(bundleDir, stepID, h string) string {
+func subagentsFact(bundleDir, stepID, h string, params map[string]string) string {
 	if h != harness.Pi {
 		return ""
 	}
 	raw, err := os.ReadFile(workflow.StepDefinitionPath(bundleDir, stepID))
 	if err != nil || !strings.Contains(string(raw), "{{"+subagentsRulesVar+"}}") {
+		return ""
+	}
+	if strings.EqualFold(strings.TrimSpace(params["pi_subagents"]), "on") {
 		return ""
 	}
 	return piNoSubagents
