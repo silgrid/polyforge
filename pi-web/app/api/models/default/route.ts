@@ -79,11 +79,12 @@ async function putClaudeDefault(model: unknown): Promise<Response> {
  */
 export async function GET() {
   const preference = readDefaultModelPreference();
-  const payload = await createClaudeAdapter().read("model", {});
+  const read = await createClaudeAdapter().read("model", {});
+  const payload = read !== null && "defaultModel" in read ? read : null;
   const claudeDefaultModel = payload !== null && isClaudeModelName(payload.defaultModel)
     ? payload.defaultModel
     : DEFAULT_CLAUDE_MODEL;
-  const claudeDefaultEffort: ClaudeEffort = normalizeClaudeEffort(payload?.reasoningEffort?.raw);
+  const claudeDefaultEffort: ClaudeEffort = normalizeClaudeEffort(payload?.reasoningEffort?.raw ?? null);
   return Response.json({
     defaultHarness: preference.harness,
     claudeDefaultModel,
