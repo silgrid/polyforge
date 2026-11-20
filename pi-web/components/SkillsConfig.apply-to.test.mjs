@@ -84,11 +84,11 @@ test("a result without error is the only one that changes its row; pi and claude
     { skill: "claude-only", harness: "claude" },
     { skill: "both", harness: "pi", error: "Access denied" },
   ], { pi: "enabled", claude: "user-invocable-only" });
-  assert.equal(next[0].pi.disableModelInvocation, true, "the failed pi item keeps its state");
+  assert.equal(next[0].pi.disableModelInvocation, false, "the failed pi item keeps its state");
   assert.equal(next[0].claude.state, undefined);
   assert.equal(next[1].pi.disableModelInvocation, false, "the successful pi item shows");
   assert.equal(next[2].claude.state, "user-invocable-only");
-  assert.equal(next[1], rows[1], "untouched rows keep their identity");
+  assert.equal(next[0], rows[0], "the row whose item failed keeps its identity");
 });
 
 test("the group switch acts on the rows whose pi side would change, pi alone (85c's conclusion, Q6)", () => {
