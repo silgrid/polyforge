@@ -298,25 +298,6 @@ func TestComponentsVerbCancelAndStatus(t *testing.T) {
 	}
 }
 
-func busyCellsOf(detail string) []string {
-	const prefix = "Cell(s) "
-	start := strings.Index(detail, prefix)
-	if start < 0 {
-		return nil
-	}
-	text := detail[start+len(prefix):]
-	if end := strings.Index(text, " still hold work"); end >= 0 {
-		text = text[:end]
-	}
-	var cells []string
-	for _, cell := range strings.Split(text, ",") {
-		if cell = strings.TrimSpace(cell); cell != "" {
-			cells = append(cells, cell)
-		}
-	}
-	return cells
-}
-
 // TestComponentsVerbFaceParsesBusyCells pins the busy answer's reading:
 // a 409's own words name the Cells that hold work, and the waiting
 // record shows exactly them.
