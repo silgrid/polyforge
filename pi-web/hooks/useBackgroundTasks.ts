@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { BackgroundTasksClientEvent } from "@/lib/types";
-import type { BgTaskInfo, BgTaskOutput } from "@/lib/bg-protocol";
+import type { BgTaskOutput } from "@/lib/bg-protocol";
+import { isBackgroundTasksChangeSignal, nextBackgroundTasksListState } from "@/lib/background-tasks-client";
 
 /**
  * Terminal-notification dedupe: one browser notification per task id, even
@@ -28,10 +29,7 @@ export function markTerminalNotified(taskId: string): boolean {
  * reads the richer registry answer. A null session (a claude session, the
  * fresh composer) keeps its state untouched.
  */
-export type BackgroundTasksFetchState =
-  | { kind: "loading" }
-  | { kind: "ready"; tasks: BgTaskInfo[] }
-  | { kind: "error"; error: string };
+export type BackgroundTasksFetchState = import("@/lib/background-tasks-client").BackgroundTasksListState;
 
 export function useBackgroundTasks(sessionId: string | null) {
   const [state, setState] = useState<BackgroundTasksFetchState>({ kind: "loading" });
@@ -40,20 +38,14 @@ export function useBackgroundTasks(sessionId: string | null) {
   const refresh = useCallback(() => {
     if (!sessionId) return;
     const seq = ++fetchSeq.current;
+    // The pure machine owns the sequencing rules: a late answer of a
+    // session the hook has already left never lands in the state.
+    const settle = (status: number, body: unknown) => {
+      setState((prev) => nextBackgroundTasksListState(prev, fetchSeq.current, { seq, status, body }));
+    };
     fetch(`/api/agent/${encodeURIComponent(sessionId)}/bg-tasks`)
-      .then(async (response) => {
-        const body = await response.json() as { tasks?: BgTaskInfo[]; error?: string };
-        if (seq !== fetchSeq.current) return;
-        if (!response.ok || !Array.isArray(body.tasks)) {
-          setState({ kind: "error", error: body.error ?? `HTTP ${response.status}` });
-          return;
-        }
-        setState({ kind: "ready", tasks: body.tasks.filter((task) => typeof task?.id === "string") });
-      })
-      .catch((error: unknown) => {
-        if (seq !== fetchSeq.current) return;
-        setState({ kind: "error", error: error instanceof Error ? error.message : String(error) });
-      });
+      .then(async (response) => settle(response.status, await response.json().catch(() => null)))
+      .catch(() => settle(0, null));
   }, [sessionId]);
 
   useEffect(() => {
@@ -67,7 +59,7 @@ export function useBackgroundTasks(sessionId: string | null) {
 
   /** A live event from this session's SSE stream: a change signal — re-read. */
   const applyEvent = useCallback((event: BackgroundTasksClientEvent) => {
-    if (event.type === "background_task_terminal" || event.type === "background_tasks_update") refresh();
+    if (isBackgroundTasksChangeSignal(event)) refresh();
   }, [refresh]);
 
   /** One task's output tail, straight from the registry (≤ 8 KiB, `tail: true`). */
