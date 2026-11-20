@@ -1028,8 +1028,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // always wins, so a late answer never overrides the user. An open claude
   // session asks for the same fetch — its star's filled marker shows the
   // native default (review r1#4), while its own model stays the session's.
+  const wantsComposerDefaults = isNew || isClaudeSession;
   useEffect(() => {
-    if (!isNew && !isClaudeSession) return;
+    if (!wantsComposerDefaults) return;
     let current = true;
     void (async () => {
       try {
@@ -1057,7 +1058,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
     })();
     return () => { current = false; };
-  }, [isNew, isClaudeSession, initialChoices]);
+  }, [isNew, wantsComposerDefaults, initialChoices]);
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
     const container = scrollContainerRef.current;
