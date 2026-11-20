@@ -20,6 +20,11 @@ import type { PiSubagentRunSummary } from "@/lib/subagent-runs-view";
  * the mount read, and one when the page becomes visible again (a hidden
  * page's mount read is skipped, so its return re-reads once; a reload that
  * lands on a live run still finds it).
+ *
+ * The reply's end re-reads once more: a background subagent dispatched in
+ * the reply's last seconds (the dispatch tool returns at once) would
+ * otherwise wait for a tick the gate silences with the reply's end (AC3).
+ * The rows are not cleared — this is not a session switch.
  */
 export function useSubagentRuns(sessionId: string | null, sessionRunning: boolean): { runs: PiSubagentRunSummary[] } {
   const [runs, setRuns] = useState<PiSubagentRunSummary[]>([]);
@@ -31,6 +36,18 @@ export function useSubagentRuns(sessionId: string | null, sessionRunning: boolea
   sessionRunningRef.current = sessionRunning;
   const liveRef = useRef(false);
   liveRef.current = runs.length > 0;
+  // The current session's read, for the reply-end flip below: the main
+  // effect owns it, and a switch nulls it with its cleanup.
+  const readRef = useRef<(() => void) | null>(null);
+  const prevRunningRef = useRef(sessionRunning);
+  useEffect(() => {
+    const was = prevRunningRef.current;
+    prevRunningRef.current = sessionRunning;
+    // Only the true → false edge: the reply just ended, and a run it
+    // dispatched in its last seconds has no tick coming.
+    if (!sessionId || sessionRunning || !was) return;
+    readRef.current?.();
+  }, [sessionId, sessionRunning]);
   useEffect(() => {
     if (!sessionId) return undefined;
     setRuns([]);
@@ -52,6 +69,9 @@ export function useSubagentRuns(sessionId: string | null, sessionRunning: boolea
       }
     };
     void read();
+    readRef.current = () => {
+      void read();
+    };
     const timer = setInterval(() => {
       // An idle session with no live run cannot change: no read (G11).
       if (!sessionRunningRef.current && !liveRef.current) return;
@@ -65,6 +85,7 @@ export function useSubagentRuns(sessionId: string | null, sessionRunning: boolea
     if (typeof document !== "undefined") document.addEventListener("visibilitychange", onVisible);
     return () => {
       clearInterval(timer);
+      readRef.current = null;
       if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVisible);
       // The switch invalidates the in-flight answer: the machine drops it.
       seqRef.current += 1;
