@@ -66,6 +66,19 @@ test("keeps project settings selections isolated by cwd", () => {
   assert.equal(getLastSettingsSelection("skills", "/project-three", storage), null);
 });
 
+test("legacy model navigation migrates once to the unified pi selection", () => {
+  const selection = JSON.stringify({ type: "provider", name: "gateway" });
+  const storage = createStorage({ "pi-web:settings-navigation": JSON.stringify({ section: "legacy-models", selections: { models: selection } }) });
+  assert.equal(getLastSettingsSection(null, storage), "models");
+  assert.equal(getLastSettingsSelection("models", null, storage), selection);
+  const stored = JSON.parse(storage.values.get("pi-web:settings-navigation"));
+  assert.equal(stored.section, "models");
+  assert.equal(Object.hasOwn(stored.selections, "models"), false);
+  assert.equal(stored.selections[JSON.stringify(["models", "pi"])], selection);
+  setLastSettingsSelection("models", JSON.stringify({ type: "provider", name: "new" }), null, storage);
+  assert.equal(Object.hasOwn(JSON.parse(storage.values.get("pi-web:settings-navigation")).selections, "models"), false);
+});
+
 test("shares the Models page selection globally under the historical key", () => {
   const storage = createStorage();
   const selection = JSON.stringify({ type: "provider", name: "custom" });
