@@ -97,6 +97,13 @@ func DefineFlags(fs *flag.FlagSet) *Flags {
 // Main executes `pf aihub <flags>` and returns the process exit code.
 // Fatal start-up errors exit through log.Fatalf as before.
 func Main(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	// `pf aihub init`: the local first-boot initialization entry
+	// (polyforge#176) — a subcommand with its own flag set, dispatched
+	// before the server's own flags so DefineFlags stays exactly the
+	// server's knobs (main_test.go pins that set).
+	if len(argv) > 0 && argv[0] == "init" {
+		return initMain(argv[1:], stdin, stdout, stderr)
+	}
 	fs := flag.NewFlagSet("pf aihub", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fl := DefineFlags(fs)
