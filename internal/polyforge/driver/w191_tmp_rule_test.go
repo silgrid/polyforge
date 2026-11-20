@@ -15,7 +15,7 @@ func TestW191TemporaryPathAndBackgroundRule(t *testing.T) {
 	phrases := []string{
 		"A background process does not survive this tool call",
 		"never start one in one call and wait for it in a later call",
-		"temporary files belong under `$TMPDIR` or `artifacts/downloads/`, never a fixed `/tmp/` name",
+		"Temporary files belong under `$TMPDIR` or `artifacts/downloads/`, never a fixed `/tmp/` name",
 	}
 	raw, err := os.ReadFile(filepath.Join(shippedWorkflowsDir, workflow.SharedDir, workflow.PrinciplesFile))
 	if err != nil {
