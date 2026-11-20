@@ -23,4 +23,7 @@ tests) is the work still to do, not a red fast check. A run that is not judged
 the checks above as the bar. That is the whole per-unit bar.
 The full suite is not a per-unit bar — it belongs to `verification` (the one
 gate that runs the project's full bar); do not run the full suite (e.g. `go
-test ./...`) here, and do not proceed on top of a red fast check.
+test ./...`) here, and do not proceed on top of a red fast check. The close's
+own scoped selection is not a per-unit bar either: `--close-scoped` runs once
+per touched repo at the close (3c), after the fast checks, reusing their green
+same-tree runs — never per unit.

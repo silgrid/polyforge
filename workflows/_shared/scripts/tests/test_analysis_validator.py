@@ -12,9 +12,18 @@ derived from the implementation under test. Both callers (verify.py's
 second copy of a rule may not appear."""
 
 import unittest
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from pfstep.analysis import Analysis, AnalysisDecl, name_segments, static_problem
+from pfstep.analysis import (
+    Analysis,
+    AnalysisDecl,
+    SelectedCommand,
+    SelectedDecl,
+    name_segments,
+    read_analysis,
+    selected_problem,
+    static_problem,
+)
 from pfstep.unitruns import argv_line, run_shape_problem, unknown_repo_problem
 
 # the file the fixture entries name, and its body at HEAD
@@ -167,6 +176,117 @@ class HelperTest(unittest.TestCase):
         self.assertEqual(argv_line("", ["go", "test", "./..."]), "go test ./...")
         self.assertEqual(argv_line(".", ["go", "test"]), "go test")
         self.assertEqual(argv_line("sub", ["go", "test"]), "(cd sub) go test")
+
+    # -- the machine selection records (polyforge#164): the one shared
+    # validator's own rules, and the file's parsing of the section
+
+    def sel(self, **kw: Any) -> SelectedDecl:
+        """A green selection record with the field defaults."""
+        base = SelectedDecl(head="b" * 40, engine="the engine --json --light", mode="light", status="green")
+        for k, v in kw.items():
+            setattr(base, k, v)
+        return base
+
+    def test_a_green_record_with_evidence_passes(self) -> None:
+        d = self.sel(commands=[SelectedCommand(name="gate", cmd="echo ok", phase="scoped", exit_code=0),
+                               SelectedCommand(name="fast", cmd="echo f", phase="fast", reused="fast.json#fast")])
+        self.assertEqual(selected_problem(d, "b" * 40), "")
+
+    def test_a_head_of_another_tree_is_stale(self) -> None:
+        self.assertIn("is not the tree it is judged at", selected_problem(self.sel(), "c" * 40))
+        self.assertIn("stale", selected_problem(self.sel(), "c" * 40))
+        self.assertEqual(selected_problem(self.sel(), ""), "", "a caller that cannot read a HEAD reports it itself")
+
+    def test_a_selection_that_is_not_green_cannot_stand(self) -> None:
+        self.assertIn("its selection is incomplete: a lockfile changed",
+                      selected_problem(self.sel(status="incomplete", reason="a lockfile changed"), "b" * 40))
+        self.assertIn("its selection records no status",
+                      selected_problem(self.sel(status=""), "b" * 40))
+
+    def test_a_command_green_through_its_flaky_rerun_is_evidence(self) -> None:
+        """The per-unit bar's own green: a red first run whose failing units
+        re-ran flaky and whose whole command was then confirmed — one whole
+        re-run exiting 0 (`confirmed`), or its completion proof
+        (`complete`, the entry keeping the first run's red exit beside it)
+        — is green evidence, the record stating it with either."""
+        head = "b" * 40
+        confirmed = SelectedCommand(name="pin", cmd="go test ./...", phase="scoped", exit_code=1,
+                                    confirmed="go test ./...")
+        complete = SelectedCommand(name="pin", cmd="sh e2e.sh", phase="scoped", exit_code=1,
+                                   complete="PASS S1; PASS S2; 2 suites")
+        d = self.sel(commands=[confirmed, complete])
+        self.assertEqual(selected_problem(d, head), "")
+        # still red without either proof
+        c = SelectedCommand(name="pin", cmd="go test ./...", phase="scoped", exit_code=1)
+        self.assertIn("exited 1", selected_problem(self.sel(commands=[c]), head))
+
+    def test_a_command_without_green_evidence_cannot_stand(self) -> None:
+        head = "b" * 40
+        cases = (
+            (SelectedCommand(name="pin", cmd="pin", phase="scoped", exit_code=3), "exited 3"),
+            (SelectedCommand(name="pin", cmd="pin", phase="scoped", skipped=True, skip_reason="env NO"), "cannot run"),
+            (SelectedCommand(name="pin", cmd="pin", phase="scoped", timed_out=True), "killed at its timeout"),
+            (SelectedCommand(name="pin", cmd="pin", phase="scoped"), "carries no run"),
+        )
+        for c, want in cases:
+            with self.subTest(want):
+                self.assertIn(want, selected_problem(self.sel(commands=[c]), head))
+
+    def test_the_file_parses_the_selected_records(self) -> None:
+        import json as _json
+        import tempfile
+        import os
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "change-analysis.json")
+            doc = {"tests": [], "selected": {"app": {
+                "head": "b" * 40, "tree": "t" * 40, "base": "a" * 40, "default_branch": "main",
+                "engine": "the engine --json --light", "conf": ".polyforge/verify-scope.conf",
+                "conf_changed_in_diff": True, "mode": "light", "paths": ["lib/x.py"], "suites": ["e2e/s1.mjs"],
+                "test_glob": ["*_test.go"], "status": "green",
+                "commands": [{"name": "gate", "root": "repos/app", "cmd": "echo ok", "phase": "scoped",
+                              "source": "conf", "exit_code": 0},
+                             {"name": "fast", "root": "repos/app", "cmd": "echo f", "phase": "fast",
+                              "reused": "fast-checks.json#fast"},
+                             {"name": "flaky", "root": "repos/app", "cmd": "go test ./...", "phase": "scoped",
+                              "exit_code": 1, "confirmed": "go test ./..."},
+                             {"name": "suites", "root": "repos/app", "cmd": "sh e2e.sh", "phase": "scoped",
+                              "exit_code": 1, "complete": "PASS S1; PASS S2; 2 suites"}]}}}
+            with open(path, "w", encoding="utf-8") as f:
+                _json.dump(doc, f)
+            an = read_analysis(path)
+            self.assertEqual(list(an.selected), ["app"])
+            d = an.selected["app"]
+            self.assertEqual((d.head, d.engine, d.mode, d.status), ("b" * 40, "the engine --json --light", "light", "green"))
+            self.assertEqual((d.conf, d.conf_changed_in_diff, d.paths, d.suites, d.test_glob),
+                             (".polyforge/verify-scope.conf", True, ["lib/x.py"], ["e2e/s1.mjs"], ["*_test.go"]))
+            self.assertEqual([(c.name, c.cmd, c.phase, c.exit_code, c.reused, c.confirmed, c.complete) for c in d.commands],
+                             [("gate", "echo ok", "scoped", 0, "", "", ""),
+                              ("fast", "echo f", "fast", None, "fast-checks.json#fast", "", ""),
+                              ("flaky", "go test ./...", "scoped", 1, "", "go test ./...", ""),
+                              ("suites", "sh e2e.sh", "scoped", 1, "", "", "PASS S1; PASS S2; 2 suites")])
+
+    def test_the_file_rejects_a_bad_selected_shape(self) -> None:
+        import json as _json
+        import tempfile
+        import os
+        good = {"head": "b" * 40, "engine": "the engine", "mode": "light", "status": "green", "commands": []}
+        bad = (
+            ("no head", {k: v for k, v in good.items() if k != "head"}),
+            ("no engine", {k: v for k, v in good.items() if k != "engine"}),
+            ("status", dict(good, status="done")),
+            ("commands", dict(good, commands="nope")),
+            ("a command without a cmd", dict(good, commands=[{"name": "x"}])),
+            ("head not a string", dict(good, head=42)),
+        )
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "change-analysis.json")
+            for name, sel in bad:
+                with self.subTest(name):
+                    with open(path, "w", encoding="utf-8") as f:
+                        _json.dump({"tests": [], "selected": {"app": sel}}, f)
+                    with self.assertRaises(ValueError) as cm:
+                        read_analysis(path)
+                    self.assertIn("selected", str(cm.exception))
 
     def test_the_cap_takes_the_head_and_names_the_cut_tail(self) -> None:
         decls = [AnalysisDecl(id="a%d" % (i + 1)) for i in range(12)]

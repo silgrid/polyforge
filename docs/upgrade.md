@@ -938,3 +938,41 @@ SELECT w.id, je.key, w.project_id FROM work_items w, json_each(w.attrs) je
  WHERE je.key LIKE '%.%'
    AND je.key NOT IN ('split.origin', 'split.unit');
 ```
+
+## v0.2.4, the build close's scoped selection (polyforge#164)
+
+What changed under `workflows/_shared/scripts`:
+
+- `fast_checks.py --repo <name> --close-scoped` is the build close's own
+  mode: it plans the same light-tier selection verification's light tier
+  plans (one shared implementation, `pfstep/scoped_plan.py`, which
+  verify.py's own light tier now plans through) over the repo's final
+  tree and executes it on the host, reusing the green same-tree runs a
+  `--reuse` result file records instead of re-running them; a selection
+  the engine answers with the full tier, or a selected command that
+  cannot run, records `incomplete` with the reason kept and exits
+  non-zero, claiming nothing. The develop build step runs it once per
+  touched repo after its fast checks — for a work item whose
+  verification runs the light tier only (an integration batch's fix
+  ticket runs the full bar and closes without one) — and a red or
+  `incomplete` result never hands off `done` without the owner's
+  ruling, so a repository whose light selection falls back to the full
+  tier (a `stack=none` pin, a changed lockfile, no analyzer) stops at
+  the owner where it never did before.
+- The change analysis (`artifacts/build/change-analysis.json`) gains a
+  `selected` section — the close's machine selection record, one entry
+  per task repo (head, tree, base, default branch, the engine
+  invocations, the conf's identity, the selection's paths and suites,
+  every command with its evidence, and the status: green, red or
+  incomplete with its reason). `facts.py analysis` and `verify.py
+  --analysis` judge the records an analysis carries by the one shared
+  validator: a stale head, a non-green selection or a command without
+  green evidence is red — a sync's merge commits between the record's
+  head and the verified HEAD leave it valid — and the records are never
+  subject to the supplement cap; whether a touched repo carries one at
+  all stays the build step's own rule and review's judgment.
+
+What a project must change — nothing: the close runs the same
+project-neutral selection verification runs, and a repository whose
+light selection answers the full tier sees the same stop at the owner
+that its verification's own full bar always was.

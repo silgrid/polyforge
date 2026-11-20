@@ -105,7 +105,20 @@ doc-type criterion gets no red test and no unit: commit the change, run its vali
 
 Run the fast checks over the whole change (the written command once per touched repo) and every unit
 test targeted, then the written unit check over the whole `artifacts/build/units.json` (the same command
-with no `--unit`) (the full bar is `verification`'s). Then run the two facts lines review will judge you
+with no `--unit`) (the full bar is `verification`'s). Then the build close's scoped selection — the same
+light-tier selection verification plans, one shared implementation, over the final tree —
+for a work item whose verification runs the light tier (an integration batch's fix ticket
+runs the full bar and closes without one): `"$PF_PYTHON"
+"$PF_SHARED_DIR/scripts/fast_checks.py" --repo <name> --close-scoped --reuse
+artifacts/build/fast-checks/<repo>.json --json --out artifacts/build/scoped-close/<repo>.json` once per
+touched repo, after its fast checks (a green same-tree run in the reuse file is evidence, not a re-run);
+the existing tests it selects are the ones verification will select, a red one getting the one targeted
+re-run the per-unit bar gives. A red or `incomplete` result (the engine answered full, or a selected
+command cannot run) never hands off `done` without the owner's ruling: fix the change and re-run it —
+a real environment blocker is `blocked`, a full-tier fallback is the owner's to settle (`pf step
+ask`), and a residual the owner accepted keeps its record in the result file, cited in the
+hand-off. Merge each touched repo's `details.selected` of its green result into the change
+analysis's `selected` (below), keyed by the repo, verbatim. Then run the two facts lines review will judge you
 with — the same engine, without the replay: `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" build --json
 --out artifacts/facts/build.json` `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" carries --json --out
 artifacts/facts/carries.json` The first gives each unit's static commit facts (its ids resolving in a
@@ -125,7 +138,8 @@ each document compared, its conclusion, and synced or no-change-needed with the 
 Write the change analysis — `artifacts/build/change-analysis.json`, the structured file verification
 supplements the engine's own selection with (`verify.py --analysis`, add-only, never narrowing
 it), in this shape. Its keys are the machine's contract — `supplement_limit`, `changed`,
-`uncovered` and `tests`; each listed test's `why` and `evidence` are review's to judge:
+`uncovered`, `tests` and `selected` (the close-scoped run's machine selection record, merged verbatim);
+each listed test's `why` and `evidence` are review's to judge:
 
 ```json
 {"supplement_limit": <the lane's cap, {{supplement_limit}} test runs — verification's own default applies when the file names none>,
@@ -135,7 +149,12 @@ it), in this shape. Its keys are the machine's contract — `supplement_limit`, 
             "name": "<its test name, when one test is meant — a bare name as it appears in the file, or a qualified name whose segments, joined by `.`, `::` or `/`, each appear in the file>", "cwd": "<directory inside the repo>",
             "argv": ["<the run that shows it passing>"], "marker": "<a line only its passing run prints>",
             "why": "<what of the change it pins>",
-            "evidence": "<how you found it: the selector, route, copy key or test name you searched, and where it led>"}]}
+            "evidence": "<how you found it: the selector, route, copy key or test name you searched, and where it led>"}],
+ "selected": {"<repo>": {"head": "<sha>", "base": "<sha>", "default_branch": "<branch>", "engine": "<the engine invocations>",
+              "conf": "<the conf's path>", "mode": "light", "paths": ["<the report's affected paths>"], "suites": ["<its e2e suites>"],
+              "commands": [{"name": "<name>", "root": "<repos/<repo>[/<nested root>]>", "cmd": "<the command>", "phase": "scoped",
+                            "source": "conf|default", "exit_code": 0, "log": "<its log>", "reused": "<result file>#<name>"}],
+              "status": "green"}}}
 ```
 
 Find the tests that already pin what you changed — the e2e suites through the selectors, routes and copy
@@ -143,7 +162,7 @@ keys the diff touches (a shared file the engine hands to at most 3 suites is the
 closes), the unit tests through the packages and names — and list every one you find: run each where you
 found it and list only a test that passes at HEAD. Take `uncovered` from the engine's own `--light`
 report of each touched repo (`"$PF_PYTHON" "$PF_SHARED_DIR/scripts/verify-scope" --light --json`, or the
-report the fast-checks command logged): its `e2e_selection.uncovered_paths`, else its `--light: carries:
+close-scoped run's record): its `e2e_selection.uncovered_paths`, else its `--light: carries:
 changed path …` diagnostics. `review` judges the analysis for obviously missing tests.
 
 Then run the change analysis's close check — the facts engine's own fact, the same validator

@@ -464,13 +464,14 @@ func TestW254QuickstartsMovedIntact(t *testing.T) {
 // - the v0.2.4 section appended with the release lane shipping the green integrate batch (release.sh takes --pins and its --help must declare it, an old-convention script is refused PF-RELEASE-PROCEDURE_CONTRACT, no green batch is refused before any version is claimed, and the batch is the test evidence the release runs no gate of its own)
 // - the v0.2.4 section appended with the build fast check's flaky re-run and the red-state limit (polyforge#157: fast_checks.py --repo re-runs a located failing unit once and records a pass flaky, an all-flaky command confirmed by its completion proof or one whole re-run; --check-units re-runs only a red pre_existing_red unit while a unit the lane just wrote stays red; a unit's self-reported `timeout` in units.json — a Go duration, invalid or non-positive unusable — bounds its recorded run and its facts replay with a shared 10m default, and a red-state run its own limit kills is an exit-1 evidence problem, no longer not-judged; only a kill by the whole run's deadline stays not judged)
 // - the v0.2.4 section appended with the split attrs one shape and the data migration (polyforge#174: file create nests a dotted --attr key as the path it names and the create boundary refuses a flat dotted top-level key CORE-400; deploy/sql/v0.2.4 moves the old flat split.origin/split.unit rows of every project and status inside the window — before-image table split_attrs_before_w174, probe counting the old shape, whole-batch refusal of conflicting nested shapes, the rollback restoring exactly the changed rows — and the pre-deploy review queries plus the post-deploy old-id comparison are the operator's own)
+// - the v0.2.4 section appended with the build close's scoped selection (polyforge#164: fast_checks.py --close-scoped plans and runs verification's light selection over the final tree with --reuse evidence, a full-tier fallback or an unmet prerequisite recording incomplete and stopping at the owner; the change analysis's selected records are judged by the one shared validator in facts.py analysis and verify.py --analysis — a stale head, a non-green selection or a command without green evidence red, a sync's merge between the record's head and the verified HEAD tolerated, never under the supplement cap)
 // upgrade-sections:end
 // The file is only routed to, from the install ops page and the README
 // landing page.
 func TestW254UpgradeByteIdentical(t *testing.T) {
 	raw := []byte(w254Read(t, "docs/upgrade.md"))
 	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != "0874e8f80ad2a3abaf0214f0817dfe55fa4082825ddc5aa4f3c3d040b462a2b6" {
+	if got := hex.EncodeToString(sum[:]); got != "413cde2e9a33fc5b46c73138bb765dcba4a754cd9ebb84d7a112eb63a81f8e55" {
 		t.Fatalf("docs/upgrade.md must stay byte-identical (only routed to, never rewritten): sha256 %s != the pinned pre-move sha256", got)
 	}
 	// the list beside the pin: one whole `// - ` line per appended section

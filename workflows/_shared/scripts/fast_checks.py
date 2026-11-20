@@ -7,6 +7,8 @@ Usage (from the capsule root, or with --capsule)::
 
     "$PF_PYTHON" "$PF_SHARED_DIR/scripts/fast_checks.py" --repo <name> \\
         [--capsule DIR] [--engine PATH] [--deadline D] [--log-dir DIR] [--json] [--out PATH]
+    "$PF_PYTHON" "$PF_SHARED_DIR/scripts/fast_checks.py" --repo <name> --close-scoped [--reuse FILE]... \\
+        [--capsule DIR] [--engine PATH] [--deadline D] [--log-dir DIR] [--json] [--out PATH]
     "$PF_PYTHON" "$PF_SHARED_DIR/scripts/fast_checks.py" --check-units <units.json> [--unit <id>] \\
         [--capsule DIR] [--deadline D] [--log-dir DIR] [--json] [--out PATH]
 
@@ -63,6 +65,28 @@ and in ``details`` the engine invocation (``engine``), one entry per report
 (``commands[]``: name, phase, root, cmd, exit_code, timed_out, duration_ms,
 log — or skipped and skip_reason).
 
+``--close-scoped`` is the build close's own mode (polyforge#164): the
+same light-tier selection verification runs, planned by the one shared
+implementation (``pfstep/scoped_plan.py`` — the same engine argv
+``--json --light --base <merge-base>``, the same ``choose``, the same
+nested roots), executed on the host over the final tree so the existing
+tests the selection pins run before the hand-off, not first at
+verification. A command the same tree already ran green (the same root
+and command, its evidence in a ``--reuse`` result file of this repo —
+the close's fast-checks run) is not re-run: its evidence is reused and
+its entry names the file it came from. A red command gets the same one
+targeted re-run and whole-command confirmation the per-unit bar gives.
+A selection the engine answers with the full tier is never run — the
+run records ``incomplete`` with the engine's own fallback reasons and
+exits non-zero, claiming nothing (the owner decides; the full bar stays
+verification's); a selected command that cannot run (an unmet declared
+prerequisite) is the same incomplete, never a skip-as-green. The
+result's ``details.selected`` is the change analysis's machine
+selection record — the repo's head, tree, base and default branch, the
+engine invocations, the conf's identity, the selection's paths and
+suites, every command with its run's evidence (or its reuse source),
+and the status: ``green``, ``red`` or ``incomplete`` with its reason.
+
 ``--check-units`` is build's on-the-spot unit check: the build's
 ``artifacts/build/units.json`` re-run as written — every unit's own
 ``argv`` in its own ``cwd`` of its own ``repos/<repo>`` — each unit judged
@@ -83,10 +107,11 @@ The result carries the repo HEADs the units ran at.
 
 Exit 0: every command that ran exited 0 (skips cost nothing) or turned
 green through its flaky re-runs and confirmation, or every checked unit
-passed. Exit 1: a command stayed red after the flaky phase, or a unit is
-red. Exit 2: not judged — no such repo, the engine missing or failing, an
-unreadable report, a repo the engine planned no command for, an unusable
-units.json, the deadline, an interrupt — or the invocation unusable.
+passed. Exit 1: a command stayed red after the flaky phase, a unit is
+red, or the close-scoped selection is red or incomplete. Exit 2: not
+judged — no such repo, the engine missing or failing, an unreadable
+report, a repo the engine planned no command for, an unusable units.json,
+the deadline, an interrupt — or the invocation unusable.
 """
 
 import os
@@ -97,13 +122,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import argparse  # noqa: E402
 import difflib  # noqa: E402
+import json  # noqa: E402
 import time  # noqa: E402
 import traceback  # noqa: E402
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple  # noqa: E402
 
 from pfstep import duration, git, gostr, runner  # noqa: E402
+from pfstep import scoped_plan  # noqa: E402
 from pfstep.completion import completion_proof, harness_command, read_go_harness  # noqa: E402
-from pfstep.engine import EngineCommand, EngineReport, ReportError, decode_report  # noqa: E402
+from pfstep.engine import TIER_LIGHT, EngineCommand, EngineReport, ReportError, decode_report  # noqa: E402
 from pfstep.engine import argv_of as engine_argv_of  # noqa: E402
 from pfstep.engine import default_engine, nested_roots, reached_roots  # noqa: E402
 from pfstep.flaky import RerunRun, rerun_flaky  # noqa: E402
@@ -165,6 +192,10 @@ def next_run_dir(root: str) -> str:
 def parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog=NAME, description="Run a task repo's fast and scoped checks per the scope engine's report, or check a build's recorded unit runs.")
     ap.add_argument("--repo", default="", help="the task repo (repos/<name>) whose fast/scoped checks run")
+    ap.add_argument("--close-scoped", action="store_true",
+                    help="with --repo: the build close's own mode — the same light-tier selection verification runs, executed over the final tree, its record in details.selected")
+    ap.add_argument("--reuse", action="append", default=[], metavar="FILE",
+                    help="with --close-scoped: a fast-checks result file whose green same-tree runs are reused, not re-run (repeatable)")
     ap.add_argument("--check-units", default="", metavar="FILE",
                     help="the build's units.json: re-run its recorded unit runs as written and check each unit's marker against its run's output (verification's own rules)")
     ap.add_argument("--unit", default="", help="with --check-units: only the unit of that id")
@@ -361,11 +392,13 @@ class CheckRun:
         capsule ("repos/<repo>" at its root, plus the nested root)."""
         return self.r.rel(directory)
 
-    def ask_engine(self, directory: str) -> Tuple[Optional[EngineReport], str, str]:
+    def ask_engine(self, directory: str, argv: Optional[List[str]] = None) -> Tuple[Optional[EngineReport], str, str]:
         """The engine's report with directory as its root — the default
-        one, no tier flag, exactly the report the model ran by hand: (the
-        report, the invocation, why there is none)."""
-        argv = engine_argv_of(self.engine) + ["--json"]
+        report, no tier flag, exactly the report the model ran by hand,
+        unless a caller hands its own argv (the close mode's light
+        request): (the report, the invocation, why there is none)."""
+        if argv is None:
+            argv = engine_argv_of(self.engine) + ["--json"]
         ref = " ".join(argv)
         self.seq += 1
         log_path = os.path.join(self.log_dir, self.repo, "engine-%d" % self.seq, "command.log")
@@ -644,6 +677,197 @@ class CheckRun:
         return 0
 
 
+class CloseRun(CheckRun):
+    """The build close's scoped selection (--close-scoped, polyforge#164):
+    the same light-tier plan verification runs — one shared implementation
+    (pfstep/scoped_plan.plan_light, fed this run's own engine asks) — its
+    commands executed on the host over the final tree, a command the same
+    tree already ran green reused from a --reuse result instead of re-run.
+    A selection the engine answers with the full tier is never run: the run
+    records incomplete with the engine's own fallback reasons and exits
+    non-zero, claiming nothing. The result's details.selected is the change
+    analysis's machine selection record."""
+
+    def __init__(self, inv: Invocation, capsule: str, repo: str, engine: str,
+                 reuse: List[str], log_dir: str, r: Runner) -> None:
+        super().__init__(inv, capsule, repo, engine, r.deadline, log_dir, r)
+        self.reuse: List[str] = list(reuse)
+        self.reuse_green: Dict[Tuple[str, str], str] = {}
+        self.details: Dict[str, Any] = {"repo": repo, "mode": "close-scoped", "commands": []}
+
+    def command_root(self, c: EngineCommand) -> str:
+        """The root the record names for c: the repository's own, plus the
+        nested root a command belongs to."""
+        rel = self.cwd_rel(os.path.join(self.capsule, "repos", self.repo))
+        return rel + (("/" + c.dir) if c.dir else "")
+
+    def reuse_key(self, c: EngineCommand) -> Tuple[str, str]:
+        """What a green run in a --reuse file is matched by: the command's
+        own root and the command as its own report gave it (a nested root's
+        entry runs there, without the cd the light plan wraps it with)."""
+        return self.command_root(c), (c.inner if c.dir else c.cmd)
+
+    def load_reuse(self, head: str) -> int:
+        """The green same-tree runs of the --reuse files: (root, cmd) to the
+        entry that proved them. A file whose repo head is another tree has
+        nothing reusable (its evidence is of another tree); an unusable one
+        is the invocation's (exit 2)."""
+        for path in self.reuse:
+            try:
+                with open(path, "rb") as f:
+                    doc = json.load(f)
+            except (OSError, ValueError) as err:
+                return self.inv.usage("--reuse %s is not a usable result file: %s" % (path, err))
+            if not isinstance(doc, dict) or not isinstance(doc.get("details"), dict):
+                return self.inv.usage("--reuse %s is not a usable result file: no details" % path)
+            if (doc.get("heads") or {}).get(self.repo) != head:
+                continue
+            for e in doc["details"].get("commands") or []:
+                if not isinstance(e, dict) or e.get("skipped"):
+                    continue
+                if e.get("exit_code") == 0 or e.get("confirmed") or e.get("complete"):
+                    self.reuse_green[(e.get("root", ""), e.get("cmd", ""))] = "%s#%s" % (path, e.get("name", ""))
+        return 0
+
+    def ask(self, directory: str, cwd_rel: str, base: str) -> Tuple[Optional[EngineReport], str, str]:
+        """plan_light's ask: the engine's light report of directory, the
+        invocation the one shared implementation derives (the same argv
+        verification's light tier asks with)."""
+        return self.ask_engine(directory, scoped_plan.engine_argv(self.engine, base))
+
+    def unit_spec(self, c: EngineCommand, d: str) -> CommandSpec:
+        """The CommandSpec a failing unit of c derives its re-run from — a
+        light-plan command carries its own cd (verify's own CmdRun.spec
+        shape), so nothing is wrapped here."""
+        return CommandSpec(cmd=c.cmd, timeout=timeout_ns(c), rerun_tmpl=c.rerun, dir=c.dir, inner=c.inner)
+
+    def selected_of(self, head: str, tree: str, base: str, branch: str, plan: scoped_plan.LightPlan,
+                    status: str, reason: str) -> Dict[str, Any]:
+        """The change analysis's machine selection record: the identity the
+        selection was computed at and every command's evidence."""
+        rep = plan.report
+        sel: Dict[str, Any] = {
+            "head": head, "tree": tree, "base": base, "default_branch": branch,
+            "engine": plan.engine_ref,
+            "conf": rep.conf if rep is not None else "",
+            "conf_changed_in_diff": rep.conf_changed_in_diff if rep is not None else False,
+            "mode": plan.mode,
+            "paths": list(rep.paths or []) if rep is not None else [],
+            "suites": list(((rep.e2e_selection or {}).get("suites") or [])) if rep is not None else [],
+            "test_glob": list(rep.test_glob) if rep is not None else [],
+            "commands": self.details["commands"],
+            "status": status,
+        }
+        if reason:
+            sel["reason"] = reason
+        return sel
+
+    def run(self) -> int:
+        """The close's whole run: the shared light plan of the repo's final
+        tree, its commands run (or reused), the selection recorded. The
+        run's exit code."""
+        clone = os.path.join(self.capsule, "repos", self.repo)
+        if not os.path.isdir(clone):
+            return self.inv.usage("repos/%s is not a task repo clone of the capsule" % self.repo)
+        if not os.path.exists(self.engine):
+            return self.inv.usage("the scope engine %s does not exist" % self.engine)
+        try:
+            head = git.git(clone, "rev-parse", "--verify", "HEAD^{commit}", timeout=GIT_TIMEOUT).strip()
+            tree = git.git(clone, "rev-parse", "HEAD^{tree}", timeout=GIT_TIMEOUT).strip()
+        except git.GitError as err:
+            return self.inv.usage("repos/%s: HEAD unreadable: %s" % (self.repo, err))
+        self.head = head
+        self.inv.heads[self.repo] = head
+        self.go_harness = read_go_harness(clone)
+        code = self.load_reuse(head)
+        if code:
+            return code
+        branch, why_not = scoped_plan.base_branch_of(self.capsule, clone)
+        if branch == "":
+            self.inv.summary = "repos/%s: not judged: %s" % (self.repo, why_not)
+            return 2
+        try:
+            base = git.git(clone, "merge-base", "HEAD", "origin/" + branch, timeout=GIT_TIMEOUT).strip()
+        except git.GitError as err:
+            self.inv.summary = "repos/%s: not judged: the diff base is unreadable: %s" % (self.repo, err)
+            return 2
+        self.details["base"], self.details["default_branch"] = base, branch
+        plan = scoped_plan.plan_light(clone, self.cwd_rel(clone), base, self.ask)
+        self.details["engine"] = plan.engine_ref
+        if plan.status == scoped_plan.PLAN_ENGINE_FAILED:
+            self.inv.summary = "repos/%s: %s" % (self.repo, plan.reason)
+            return 2
+        if plan.status == scoped_plan.PLAN_EMPTY:
+            self.inv.summary = "repos/%s: %s" % (self.repo, plan.reason)
+            return 2
+        # a selection the engine answers with the full tier is never run
+        # (the full bar is verification's): the run is incomplete, the
+        # engine's own reasons kept, nothing claimed
+        reasons = (scoped_plan.fallback_reasons(plan.report) if (plan.report is not None and plan.mode != TIER_LIGHT) else []) + plan.nested_full
+        if reasons:
+            status, reason = "incomplete", "; ".join(reasons)
+            self.details["selected"] = {self.repo: self.selected_of(head, tree, base, branch, plan, status, reason)}
+            self.inv.summary = ("repos/%s: the light selection fell back to the full tier — incomplete, nothing"
+                                " ran: %s" % (self.repo, reason))
+            return 1
+        # every planned command: reused, or run in the repository's own
+        # root (a nested root's command carries its own cd), never stopped
+        # for a failure
+        runs: List[Tuple[Dict[str, Any], EngineCommand, str, str, str, str, str]] = []
+        incomplete: List[str] = []
+        for c in plan.commands:
+            self.inv.say("repos/%s: `%s` (%s)" % (self.repo, c.cmd, c.phase))
+            key = self.reuse_key(c)
+            if key in self.reuse_green:
+                entry: Dict[str, Any] = {"name": c.name, "phase": c.phase, "root": self.command_root(c),
+                                        "cmd": c.cmd, "source": c.source, "reused": self.reuse_green[key]}
+                self.details["commands"].append(entry)
+                continue
+            entry, log_abs, tmp_dir = self.run_command(c, clone, self.command_root(c))
+            entry["source"] = c.source
+            self.details["commands"].append(entry)
+            if entry.get("skipped"):
+                incomplete.append("`%s` cannot run: %s" % (c.cmd, entry.get("skip_reason", "")))
+            else:
+                runs.append((entry, c, clone, self.command_root(c), c.dir, log_abs, tmp_dir))
+        self.flaky_phase(runs)
+        red = [e for e in self.details["commands"]
+               if not e.get("skipped") and not e.get("reused")
+               and (e.get("timed_out") or e.get("exit_code") != 0)
+               and not (e.get("confirmed") or e.get("complete"))]
+        flaky_notes: List[str] = []
+        for e in self.details["commands"]:
+            for u in e.get("units", []):
+                if u["status"] == "flaky":
+                    flaky_notes.append("%s (%s, first failure log %s)" % (u["name"], u["flaky"], e.get("log", "")))
+        flaky_note = (", %d unit(s) flaky on their one re-run: %s" % (len(flaky_notes), "; ".join(flaky_notes))) if flaky_notes else ""
+        if red:
+            status, reason = "red", ""
+            e = red[0]
+            what = "was killed at its timeout" if e.get("timed_out") else "exited %d" % e["exit_code"]
+            self.inv.summary = "repos/%s: the selected `%s` (%s) %s" % (self.repo, e["cmd"], e["phase"], what)
+            if e.get("log"):
+                self.inv.summary += " (log %s)" % e["log"]
+            if len(red) > 1:
+                self.inv.summary += "; %d selected command(s) red in all" % len(red)
+            if flaky_note:
+                self.inv.summary += flaky_note
+            code = 1
+        elif incomplete:
+            status, reason = "incomplete", "; ".join(incomplete)
+            self.inv.summary = "repos/%s: the selection is incomplete — %s" % (self.repo, reason)
+            code = 1
+        else:
+            status, reason = "green", ""
+            reused = len([e for e in self.details["commands"] if e.get("reused")])
+            self.inv.summary = "repos/%s: %d selected command(s) green%s%s" % (
+                self.repo, len(self.details["commands"]),
+                (", %d reused" % reused) if reused else "", flaky_note)
+            code = 0
+        self.details["selected"] = {self.repo: self.selected_of(head, tree, base, branch, plan, status, reason)}
+        return code
+
+
 def run(inv: Invocation) -> int:
     a = parser().parse_args(inv.argv)
     inv.out, inv.json = a.out, a.json
@@ -651,6 +875,12 @@ def run(inv: Invocation) -> int:
         return inv.usage("exactly one of --repo <name> and --check-units <file> is given")
     if a.unit and not a.check_units:
         return inv.usage("--unit %s names a unit of --check-units, which is missing" % gostr.quote(a.unit))
+    if a.close_scoped and a.repo.strip() == "":
+        return inv.usage("--close-scoped names the repo it closes: --repo <name> is missing")
+    if a.close_scoped and a.check_units:
+        return inv.usage("--close-scoped and --check-units are two runs: name one")
+    if a.reuse and not a.close_scoped:
+        return inv.usage("--reuse names a result file of --close-scoped, which is missing")
     capsule = os.path.abspath(a.capsule)
     engine = a.engine or default_engine(inv.env)
     logs = a.log_dir
@@ -687,7 +917,10 @@ def run(inv: Invocation) -> int:
         except runner.ExecutorError as err:
             inv.summary = "the units could not be checked (an infrastructure failure, never a verdict): %s" % err
             return 2
-    cr = CheckRun(inv, capsule, a.repo, engine, r.deadline, logs, r)
+    if a.close_scoped:
+        cr: CheckRun = CloseRun(inv, capsule, a.repo, engine, a.reuse, logs, r)
+    else:
+        cr = CheckRun(inv, capsule, a.repo, engine, r.deadline, logs, r)
     inv.details = cr.details
     try:
         return cr.run()

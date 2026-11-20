@@ -16,7 +16,9 @@ definition's judgment.
    verbatim) and `runtime-state/work-item.json`; build's latest section — its body, and in
    its header the owner messages build received (verbatim, stamped) and each task repo's
    start → end commit; `artifacts/plan.md` (`## Acceptance`, `## Units`, `## Coverage`);
-   `artifacts/build/units.json`; `artifacts/self-review.md`; `artifacts/grill-qa.md` when
+   `artifacts/build/units.json`; the change analysis's `selected` records with the close-scoped
+   results that wrote them (`artifacts/build/scoped-close/<repo>.json`);
+   `artifacts/self-review.md`; `artifacts/grill-qa.md` when
    it is there.
 2. **build's hand-off holds.** `artifacts/plan.md` and `artifacts/build/units.json` exist and
    the units file parses; build's 关键决定和理由 records every decision it asked the owner
