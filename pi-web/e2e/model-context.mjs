@@ -3,10 +3,7 @@ import assert from "node:assert/strict";
 // Keep account credentials and upstream services outside this UI boundary.
 // The route tests separately exercise the real writer and SDK model resolution.
 export async function checkModelContext(page) {
-  let saved = { providers: {
-    relay: { models: [{ id: "keep-me" }] },
-    "openai-codex": { models: [{ id: "gpt-6-astra", name: "GPT-6 Astra" }] },
-  } };
+  let saved = { providers: { relay: { models: [{ id: "keep-me" }] } } };
   let rejectSave = false;
   let writes = 0;
   const routes = ["**/api/models-config", "**/api/auth/providers", "**/api/models/enabled*", "**/api/provider-usage/query"];
@@ -40,7 +37,7 @@ export async function checkModelContext(page) {
     // The models.json editor lives under the unified Models page.
     if (await section.isVisible()) await section.selectOption("models");
     else await settings.getByRole("button", { name: "Models", exact: true }).click();
-  const sectionHost = (id) => settings.locator(`.settings-section-host[data-settings-section="${id}"]:not([hidden])`);
+    const sectionHost = (id) => settings.locator(`.settings-section-host[data-settings-section="${id}"]:not([hidden])`);
     await sectionHost("models").locator(".config-sidebar-item").filter({ hasText: "OpenAI Codex" }).click();
   };
   const input = settings.getByRole("textbox", { name: "Context window for GPT-6 Astra", exact: true });

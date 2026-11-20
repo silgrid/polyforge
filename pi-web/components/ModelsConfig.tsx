@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useId, useRef } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import type { ModelCatalogPreset, ModelCatalogRecommendation } from "@/lib/model-catalog";
 import type { DiscoveredModel } from "@/lib/model-discovery";
-import { ContextWindowError, normalizeContextWindowOverrides } from "@/lib/model-context";
+import { ContextWindowError, normalizeContextWindowOverrides, withContextWindowOverride } from "@/lib/model-context";
 import { checkProviderEntries, ProviderEntryError, type ProviderEntryProblem } from "@/lib/model-provider-check";
 import { checkImageMaxBytes, DEFAULT_IMAGE_MAX_BYTES, formatImageBytes, ImageMaxBytesError, imageMaxBytes, parseImageMaxBytes, withImageMaxBytes } from "@/lib/model-image-limits";
 import {
@@ -49,6 +49,7 @@ import {
   useConfigDetailNavigation,
 } from "./SettingsUi";
 import {
+  EnabledModelsSection,
   EnabledModelsBanner,
   EnabledModelsProviderSwitch,
   EnabledModelsProviderSwitchNote,
@@ -549,6 +550,18 @@ function ProviderDetail({ name, editingName, provider, onChange, onEditingNameCh
           </>
         )}
       </div>
+      <EnabledModelsSection
+        providerId={name}
+        controller={enabledModels}
+        contextSettings={{
+          overrides: provider.modelOverrides,
+          disabled: false,
+          onChange: (modelId, value) => {
+            const updated = withContextWindowOverride({ providers: { [name]: provider } }, name, modelId, value);
+            onChange(updated.providers?.[name] ?? {});
+          },
+        }}
+      />
 
     </div>
   );
@@ -1632,7 +1645,17 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null }: {
   const detailContent = (() => {
     if (!selection) return null;
     if (selection.type === "oauth" || selection.type === "apikey") {
-      return <ProviderAuthMovedNotice key={selection.providerId} />;
+      return <EnabledModelsSection
+        key={selection.providerId}
+        providerId={selection.providerId}
+        controller={enabledModels}
+        contextSettings={{
+          overrides: config.providers?.[selection.providerId]?.modelOverrides,
+          disabled: loadError !== null,
+          onChange: (modelId, value) => setConfig((previous) =>
+            withContextWindowOverride(previous, selection.providerId, modelId, value)),
+        }}
+      />;
     }
     if (selection.type === "provider") {
       const provider = config.providers?.[selection.name];
