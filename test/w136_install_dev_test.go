@@ -511,6 +511,12 @@ func w136InstallCurrent(t *testing.T, d *w136Dev, ver string) string {
 	if err := os.WriteFile(filepath.Join(rel, "skills", "polyforge", "marker"), []byte(ver), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// the workflows tree the daemon needs: `pf daemon ensure` answers for
+	// release/current/workflows, so the installed layout carries the
+	// repository's own copy like a real install does
+	if out, err := exec.Command("cp", "-R", filepath.Join(d.src, "workflows"), rel+"/").CombinedOutput(); err != nil {
+		t.Fatalf("installed release workflows: %v %s", err, out)
+	}
 	if err := os.Symlink(ver, filepath.Join(d.data, "release", "current")); err != nil {
 		t.Fatal(err)
 	}
