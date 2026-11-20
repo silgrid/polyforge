@@ -1,3 +1,4 @@
+import { createPiAdapter } from "@/lib/harness/pi";
 import { stat } from "fs/promises";
 import { resolve } from "path";
 import { getAgentDir, SettingsManager, type ModelRuntime } from "@earendil-works/pi-coding-agent";
@@ -18,7 +19,6 @@ import {
   customProviderIds,
   modelRef,
   readEnabledModelsSettings,
-  writeEnabledModels,
   type EnabledModelsView,
 } from "@/lib/enabled-models-runtime";
 import type { EnabledModelsInput } from "@/lib/enabled-models";
@@ -255,7 +255,9 @@ export async function PUT(req: Request) {
       );
     }
     if (edit.changed) {
-      await writeEnabledModels(context.settingsManager, edit.patterns);
+      const result = await createPiAdapter().write("model", { enabledModels: edit.patterns ?? null }, { agentDir: context.paths.agentDir });
+      if (result.status !== "written") return Response.json({ error: result.reason }, { status: 409 });
+      await context.settingsManager.reload();
       invalidateModelsCache();
     }
 

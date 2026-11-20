@@ -19,7 +19,7 @@ import { readMcpServerConfigs } from "../mcp-config-read";
 import { loadSkillsWithInstallInfo } from "../skills-service";
 import { getProjectTrustStatus, mayReadProjectConfigNow, writeProjectTrustDecision } from "../project-trust";
 import { gatedWrite, writeGate, versionAtLeast, PI_KNOWN_RANGE, versionInKnownRange, type HarnessAdapter, type HarnessReadContext, type VersionProbeResult, type WriteChange, type WriteResult } from "./adapter";
-import { applyPiModelChange, parsePiModelChange, PI_MODEL_KEY_MIN_VERSIONS, piModelChangeKeys } from "./pi-native-write";
+import { patchPiUserSettings, applyPiModelChange, parsePiModelChange, PI_MODEL_KEY_MIN_VERSIONS, piModelChangeKeys } from "./pi-native-write";
 import {
   neutralReasoningEffort,
   type AuthPayload,
@@ -276,6 +276,20 @@ export function createPiAdapter(): HarnessAdapter {
       const gate = writeGate(probe);
       if (!gate.allowed) return { status: "refused", reason: gate.reason };
       if (concept === "model") {
+        if (Object.keys(change).length === 1 && "enabledModels" in change) {
+          const patterns = change.enabledModels;
+          if (patterns !== null && (!Array.isArray(patterns) || patterns.some((entry) => typeof entry !== "string"))) {
+            return { status: "refused", reason: "enabledModels must be strings or null" };
+          }
+          const applied = await patchPiUserSettings(agentDirOf(ctx), (previous) => {
+            const next = { ...previous };
+            if (patterns === null) delete next.enabledModels;
+            else next.enabledModels = patterns;
+            return next;
+          });
+          return applied.ok ? { status: "written", summary: "enabledModels saved in pi settings.json" }
+            : { status: "refused", reason: applied.reason };
+        }
         if (Object.keys(change).length === 1 && "modelsConfig" in change) {
           const validated = validateModelsConfigPayload(change.modelsConfig);
           if (!validated.ok) return { status: "refused", reason: validated.reason };
