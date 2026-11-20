@@ -89,6 +89,18 @@ func InitLocal(opts InitOptions) (*core.WorkstationInitResult, error) {
 	return res, nil
 }
 
+// DefineInitFlags registers the init subcommand's own flags on fs and
+// answers them. The subcommand's flag set is deliberately NOT part of
+// DefineFlags (the server's flag set is pinned by test), so this is the
+// one registration the real subcommand parses — and the one the CLI's
+// documentation-drift check builds its known-flag allowance from
+// (never a prose scan of a help text).
+func DefineInitFlags(fs *flag.FlagSet) (dataDir, keyOut *string) {
+	dataDir = fs.String("data-dir", "/var/lib/polyforge/aihub", "AIHub data directory")
+	keyOut = fs.String("key-out", "", "the 0600 file the issued key's plaintext lands in (required; the key is never printed)")
+	return dataDir, keyOut
+}
+
 // initMain executes `pf aihub init <flags>` and answers the exit code.
 // The key file is written AFTER the transaction commits, through the
 // same writeKeyFile the bootstrap uses (0600, a leftover file from an
@@ -98,8 +110,7 @@ func InitLocal(opts InitOptions) (*core.WorkstationInitResult, error) {
 func initMain(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("pf aihub init", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	dataDir := fs.String("data-dir", "/var/lib/polyforge/aihub", "AIHub data directory")
-	keyOut := fs.String("key-out", "", "the 0600 file the issued key's plaintext lands in (required; the key is never printed)")
+	dataDir, keyOut := DefineInitFlags(fs)
 	if err := fs.Parse(argv); err != nil {
 		return 2
 	}

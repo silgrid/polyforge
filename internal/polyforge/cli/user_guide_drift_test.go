@@ -22,6 +22,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/silgrid/polyforge/internal/aihub"
 )
 
 // guidePath is the guide's repo-relative path (the cli package dir sits
@@ -161,6 +163,13 @@ func docDriftSets(t *testing.T) (knownVerbs, global, pkg map[string]bool, verbFl
 		fs.VisitAll(func(f *flag.Flag) { set["--"+f.Name] = true })
 		verbFlags[c.Name] = set
 	}
+	// the aihub entry's init subcommand (polyforge#176) parses its own
+	// flag set — DefineInitFlags is the one registration the real
+	// subcommand parses, so the allowance is exactly that mechanical
+	// set, never a prose scan of a help text (review r1#6)
+	initFS := flag.NewFlagSet("pf aihub init", flag.ContinueOnError)
+	aihub.DefineInitFlags(initFS)
+	initFS.VisitAll(func(f *flag.Flag) { verbFlags["aihub"]["--"+f.Name] = true })
 	// pkg collects the flag literals this package's sub-actions define
 	// or match themselves (file create, ops end-session, ops role,
 	// watch subcommands, ...) — the same scan skill_flags_test.go runs.
@@ -244,12 +253,6 @@ func docDriftCheck(t *testing.T, name, dir, body string) (checkedVerbs, checkedF
 				known := global[f] || pkg[f] || verbFlags[verb][f]
 				if verb == "daemon" {
 					known = known || strings.Contains(daemonUsage, f+" ") || strings.Contains(daemonUsage, f+"\n") || strings.Contains(daemonUsage, f+"]")
-				}
-				// the aihub entry's init subcommand (polyforge#176) names
-				// its flags in the same launch-surface text the daemon
-				// does — the same precedent, the same allowance.
-				if verb == "aihub" {
-					known = known || strings.Contains(aihubServerUsage, f+" ") || strings.Contains(aihubServerUsage, f+"\n") || strings.Contains(aihubServerUsage, f+"]")
 				}
 				if !known {
 					bad = append(bad, name+":"+lineNo+": pf "+verb+" "+f+" is not a flag of that verb (not in `pf help "+verb+"`) — the page names a flag that does not exist")
