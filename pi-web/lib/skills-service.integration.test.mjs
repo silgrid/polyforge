@@ -1,3 +1,4 @@
+// carries: lib/skills-service.ts, lib/skills-unified.ts, lib/api-types.ts, lib/skill-lock.ts, lib/project-trust.ts, lib/skill-visibility-config.ts, lib/skill-visibility-migration.ts
 import "#test-env";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -28,6 +29,12 @@ process.env.HOME = home;
 // Windows: os.homedir() reads %USERPROFILE%, not $HOME.
 process.env.USERPROFILE = home;
 process.env.PI_OFFLINE = "1";
+// 85d u2: claude's half of the unified listing reads this config dir
+// (claudeConfigDir(env) reads it at call time), and pi lists the same
+// directory through its settings skillPaths so one real file shows on both
+// sides — the realpath merge's live case.
+const claudeConfig = join(root, "claude-config");
+process.env.CLAUDE_CONFIG_DIR = claudeConfig;
 
 const countedExtension = (name) => `
 (globalThis as any).__piWebSkillsTestImports ??= [];
@@ -56,21 +63,32 @@ await writeFile(join(pkg, "package.json"), JSON.stringify({
   version: "1.0.0",
   pi: { skills: ["./skills"], extensions: ["./extensions"] },
 }));
-await writeFile(join(agentDir, "settings.json"), JSON.stringify({ packages: [pkg] }));
+await writeFile(join(agentDir, "settings.json"), JSON.stringify({ packages: [pkg], skills: [join(claudeConfig, "skills", "shared-cl-skill")] }));
 
 for (const project of [trustedProject, untrustedProject]) {
   await mkdir(join(project, ".pi", "extensions"), { recursive: true });
   await writeFile(join(project, ".pi", "extensions", "project.ts"), countedExtension(project));
   await skill(join(project, ".pi", "skills"), "project-pi-skill");
   await skill(join(project, ".agents", "skills"), "project-agents-skill");
+  await skill(join(project, ".claude", "skills"), "project-cl-skill");
 }
+
+// 85d u2: claude's user half — a shared directory pi also lists through its
+// settings skillPaths, and a claude-only skill with a stored native override.
+await mkdir(join(claudeConfig, "skills", "shared-cl-skill"), { recursive: true });
+await writeFile(join(claudeConfig, "skills", "shared-cl-skill", "SKILL.md"), "---\nname: shared-cl-skill\ndescription: shared skill\n---\nbody\n");
+await mkdir(join(claudeConfig, "skills", "claude-only-skill"), { recursive: true });
+await writeFile(join(claudeConfig, "skills", "claude-only-skill", "SKILL.md"), "---\nname: claude-only-skill\ndescription: claude only skill\n---\nbody\n");
+await writeFile(join(claudeConfig, "settings.json"), JSON.stringify({
+  skillOverrides: { "claude-only-skill": "name-only" },
+}));
 
 const jiti = createJiti(import.meta.url, {
   alias: { "@": process.cwd() },
   interopDefault: true,
   moduleCache: false,
 });
-const { loadSkillsWithInstallInfo } = await jiti.import("./skills-service.ts");
+const { loadSkillsWithInstallInfo, loadUnifiedSkills } = await jiti.import("./skills-service.ts");
 const { projectTrustReloadOptions, trustProject } = await jiti.import("./project-trust.ts");
 const { DefaultResourceLoader } = await import("@earendil-works/pi-coding-agent");
 
@@ -92,6 +110,7 @@ test("the listing imports no extension and still lists global, package and trust
     "package-skill",
     "project-agents-skill",
     "project-pi-skill",
+    "shared-cl-skill",
   ]);
 });
 
@@ -163,4 +182,43 @@ test("a stored preference wins: shown overrides the author, hidden hides an auth
   assert.equal(byName.get("pref-hidden").disableModelInvocation, true, "hidden hides an author-visible skill");
   assert.equal(byName.get("legacy-author-hidden").disableModelInvocation, true, "the earlier import still holds");
   assert.equal(byName.get("global-skill").disableModelInvocation, false, "an untouched skill keeps the author's value");
+});
+
+// ── 85d u2: the unified listing merges both sides (AC1) and answers the
+// no-project mode with the user scope alone (AC3) ─────────────────────
+test("the unified listing merges pi and claude into user and project rows (AC1)", async () => {
+  const unified = await loadUnifiedSkills(trustedProject);
+  const rows = unified.rows;
+  const find = (name, scope) => rows.find((row) => row.name === name && row.scope === scope);
+
+  // both sides present, grouped 用户 / 项目
+  assert.ok(find("global-skill", "user"), "pi's user skill is listed");
+  assert.ok(find("claude-only-skill", "user"), "claude's user skill is listed");
+  assert.ok(find("project-cl-skill", "project"), "claude's project skill is listed");
+  assert.ok(find("project-pi-skill", "project"), "pi's project skill is listed");
+
+  // one real file both harnesses list is one row with both labels (Q2 B)
+  const shared = find("shared-cl-skill", "user");
+  assert.ok(shared, "the shared skill is listed");
+  assert.deepEqual(shared.harnesses, ["pi", "claude"]);
+  assert.equal(shared.claude.name, "shared-cl-skill");
+
+  // claude's native override state rides its side untouched
+  assert.equal(find("claude-only-skill", "user").claude.state, "name-only");
+  assert.deepEqual(find("claude-only-skill", "user").harnesses, ["claude"]);
+
+  // the untrusted-project listing keeps its shape: no claude project rows for a cwd it never saw
+  const untrusted = await loadUnifiedSkills(untrustedProject);
+  assert.ok(!untrusted.rows.some((row) => row.name === "project-cl-skill"));
+});
+
+test("without a project the unified listing answers the user scope alone (AC3)", async () => {
+  const unified = await loadUnifiedSkills(null);
+  assert.ok(unified.rows.length > 0, "the user scope has rows");
+  for (const row of unified.rows) {
+    assert.equal(row.scope, "user", `row ${row.name} must be user scope`);
+  }
+  assert.ok(unified.rows.some((row) => row.name === "shared-cl-skill" && row.harnesses.includes("claude")));
+  assert.ok(!unified.rows.some((row) => row.name === "project-pi-skill" || row.name === "project-cl-skill"));
+  assert.equal(unified.projectResourcesLoaded, true);
 });
