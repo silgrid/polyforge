@@ -1,4 +1,4 @@
-// carries: components/PiRunningList*, components/PiBackgroundTaskPanel*, hooks/useBackgroundTasks*, hooks/useSubagentRuns*, lib/bg-runtime.ts, lib/bg-protocol.ts, lib/subagent-runs-view.ts, lib/subagent-runtime.ts, lib/rpc-manager.ts
+// carries: components/PiRunningList*, components/PiBackgroundTaskPanel*, hooks/useBackgroundTasks*, hooks/useSubagentRuns*, lib/bg-runtime.ts, lib/bg-protocol.ts, lib/background-tasks-client.ts, lib/subagent-runs-view.ts, lib/subagent-runtime.ts, lib/rpc-manager.ts
 // (the agent routes themselves stay under the three existing app/api/agent/* suites' cap)
 // polyforge#173 (AC1/AC3/AC4) — a pi session's built-in background tasks in the
 // browser. A local OpenAI-compatible fake model answers the session's first
@@ -219,11 +219,23 @@ try {
   // R173b — the end wakes the session, collapses the list, and the settled
   // task opens from the 「已结束」 entry with its status and output.
   await scenario("R173b", async () => {
-    const { sessionId, taskId } = await newSessionWithTask("echo BG-E2E-DONE; sleep 1", [{ kind: "text", text: "WAKE-ANSWER" }]);
+    // Three scripted replies: the turn's own answer after the bg_run result
+    // (TURN-ONE), then the wake's answer (WAKE-ANSWER). A same-turn second
+    // request consumes TURN-ONE, so WAKE-ANSWER can only appear when the
+    // completion notification actually triggered a turn (AC4's 唤醒).
+    const { sessionId, taskId } = await newSessionWithTask("echo BG-E2E-DONE; sleep 1", [{ kind: "text", text: "TURN-ONE" }, { kind: "text", text: "WAKE-ANSWER" }]);
     const page = await openSession(sessionId);
     // The completion notification shows as its own message and the model answers it.
     await waitFor(async () => (await page.locator("body").innerText()).includes("Background task"), 25_000, "the completion notification never showed in the message list");
+    await waitFor(async () => (await page.locator("body").innerText()).includes("TURN-ONE"), 25_000, "the turn's own answer never showed");
     await waitFor(async () => (await page.locator("body").innerText()).includes("WAKE-ANSWER"), 25_000, "the session was never woken (no answer to the notification)");
+    // The wake's answer renders after the notification that triggered it
+    // (DOM order): a broken triggerTurn would leave WAKE-ANSWER unqueued.
+    const settledText = await page.locator("body").innerText();
+    assert.ok(
+      settledText.indexOf("WAKE-ANSWER") > settledText.indexOf("Background task"),
+      `the wake's answer does not follow the completion notification: notification at ${settledText.indexOf("Background task")}, answer at ${settledText.indexOf("WAKE-ANSWER")}`,
+    );
     // The list collapsed: no task item, and the 「已结束」 entry took over.
     await waitFor(async () => (await taskItem(page, taskId).count()) === 0, 25_000, "the settled task never left the running list");
     const entry = historyEntry(page);
