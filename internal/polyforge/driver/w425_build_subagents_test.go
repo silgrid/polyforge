@@ -144,4 +144,7 @@ func TestPiBuildDispatchIsToldSubagentsAreUnavailable(t *testing.T) {
 	if p := spawnStepPromptWith(t, developBundle, StepSpawn{StepID: reviewStepID, SpawnN: 1, Harness: "pi"}); strings.Contains(p, fact) {
 		t.Error("a step without the sub-agent rules carries no such fact")
 	}
+	if p := spawnStepPromptWith(t, developBundle, StepSpawn{StepID: "build", SpawnN: 1, Harness: "pi", Params: map[string]string{"pi_subagents": "on"}}); strings.Contains(p, fact) {
+		t.Error("an enabled pi build dispatch must not carry the unavailable fact")
+	}
 }
