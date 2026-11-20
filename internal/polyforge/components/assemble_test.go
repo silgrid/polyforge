@@ -208,10 +208,15 @@ func releaseFixture(tag, commit string) fakeRelease {
 func currentRoot(t *testing.T, spec seedSpec) (root string, cur *Manifest) {
 	t.Helper()
 	root = t.TempDir()
-	dir := filepath.Join(root, ReleasesDirname, spec.version)
+	// the spec's own defaults name the version (a zero spec is v0.2.4);
+	// the symlink must target exactly the directory the tree was
+	// written to (u2's red run caught the unfilled spelling pointing
+	// current at the releases directory itself).
+	s := spec.filled()
+	dir := filepath.Join(root, ReleasesDirname, s.version)
 	cur = writeVersionDir(t, dir, spec)
 	wfile(t, filepath.Join(dir, PathPiWeb, "node_modules/node-pty/build/pty.node"), "the native build\n", 0o644)
-	if err := os.Symlink(filepath.Join(ReleasesDirname, spec.version), filepath.Join(root, CurrentLinkname)); err != nil {
+	if err := os.Symlink(filepath.Join(ReleasesDirname, s.version), filepath.Join(root, CurrentLinkname)); err != nil {
 		t.Fatal(err)
 	}
 	return root, cur

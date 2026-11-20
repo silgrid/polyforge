@@ -111,7 +111,9 @@ func upgradeFixture(t *testing.T) (root, seedDir string) {
 	t.Helper()
 	root, _ = currentRoot(t, seedSpec{})
 	seedDir = filepath.Join(t.TempDir(), "v0.2.5")
-	writeVersionDir(t, seedDir, seedSpec{version: "v0.2.5"})
+	// the seed's base floor is the line the running base answers (the
+	// release publishes a floor the current images satisfy).
+	writeVersionDir(t, seedDir, seedSpec{version: "v0.2.5", minBase: "v0.2.4"})
 	return root, seedDir
 }
 
@@ -144,11 +146,10 @@ func TestComponentsUpgradeDrainWaitsForIdleThenSwitches(t *testing.T) {
 	root, seedDir := upgradeFixture(t)
 	before := rootState(t, root)
 	face := &fakeFace{busy: [][]string{{"default"}, nil}}
+	// onDrain runs inside Drain's own lock: the append needs none.
 	face.onDrain = func(n int, f *fakeFace) {
 		if s, err := ReadUpgradeStatus(root); err == nil && s != nil {
-			f.mu.Lock()
 			f.statuses = append(f.statuses, s.State)
-			f.mu.Unlock()
 		}
 	}
 	if err := runUpgrade(t, root, seedDir, face, nil); err != nil {
@@ -353,17 +354,20 @@ func TestComponentsUpgradeDrainRestartTerminatesTheOldPiWeb(t *testing.T) {
 	if err := termPiWebUnder(root); err != nil {
 		t.Fatalf("termPiWebUnder: %v", err)
 	}
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if err := inside.Process.Signal(syscall.Signal(0)); err != nil {
-			break // the process is gone
-		}
-		if time.Now().After(deadline) {
-			_ = inside.Process.Kill()
-			t.Fatal("the process inside the old pi-web tree must be terminated")
-		}
-		time.Sleep(10 * time.Millisecond)
+	// the terminated child is observed through its own exit: the
+	// command's Wait reaps it, and a bounded wait is the honest
+	// assertion (a signal-probe would see the zombie instead).
+	insideDone := make(chan error, 1)
+	go func() { insideDone <- inside.Wait() }()
+	select {
+	case <-insideDone: // the SIGTERM ended it
+	case <-time.After(10 * time.Second):
+		_ = inside.Process.Kill()
+		t.Fatal("the process inside the old pi-web tree must be terminated")
 	}
+	// the outside process must still be running: its exit is not
+	// observed (nobody terminated it), so the probe of a live process
+	// is the right check here.
 	if err := outside.Process.Signal(syscall.Signal(0)); err != nil {
 		_ = outside.Process.Kill()
 		t.Fatal("a process outside the version directories' pi-web trees must not be touched")
