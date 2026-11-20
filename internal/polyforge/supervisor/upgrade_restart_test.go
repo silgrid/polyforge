@@ -26,7 +26,7 @@ import (
 func supExit75Child(path, countFile string, count int) ChildSpec {
 	script := "n=$(cat '" + countFile + "' 2>/dev/null || echo 0); echo $((n+1)) > '" + countFile +
 		"'; echo $$ > '" + path + "'; if [ \"$n\" -lt " + strconv.Itoa(count) +
-		" ]; then sleep 0.3; exit " + strconv.Itoa(UpgradeRestartExit) + "; fi\nsleep 300 &\np=$!\nwait $p\n"
+		" ]; then sleep 0.3; exit " + strconv.Itoa(UpgradeRestartExit) + "; fi\nexec sleep 300\n"
 	return supSh("daemon", script)
 }
 
@@ -108,18 +108,13 @@ func TestSuperviseUpgradeRestartThenMissingBinaryBacksOff(t *testing.T) {
 	if err := os.WriteFile(script, []byte("#!/bin/sh\nn=$(cat '"+countF+
 		"' 2>/dev/null || echo 0); echo $((n+1)) > '"+countF+"'; echo $$ > '"+pidF+
 		"'; if [ \"$n\" -lt 2 ]; then exit "+strconv.Itoa(UpgradeRestartExit)+
-		"; fi\nsleep 300 &\np=$!\nwait $p\n"), 0o755); err != nil {
+		"; fi\nexec sleep 300\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	// the start gate: the second start (the immediate 75 relaunch) is
 	// held while the binary goes missing, the third is held until the
 	// backoff is measured — the holds make the race (the script reading
 	// on while the file is deleted) impossible.
-	type hold struct {
-		n      int
-		enter  chan struct{}
-		releas chan struct{}
-	}
 	entered, released := make(chan int, 4), make(chan struct{}, 4)
 	starts := 0
 	oldHold := supPreStartHold
@@ -160,7 +155,7 @@ func TestSuperviseUpgradeRestartThenMissingBinaryBacksOff(t *testing.T) {
 	// the binary is back: the third start runs it and stays up
 	if err := os.WriteFile(script, []byte("#!/bin/sh\nn=$(cat '"+countF+
 		"' 2>/dev/null || echo 0); echo $((n+1)) > '"+countF+"'; echo $$ > '"+pidF+
-		"'; sleep 300 &\np=$!\nwait $p\n"), 0o755); err != nil {
+		"'; exec sleep 300\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	before := supReadPid(pidF)
