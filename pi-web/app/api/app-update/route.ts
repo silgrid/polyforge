@@ -1,3 +1,4 @@
+import { workstationImage } from "@/lib/workstation-mode";
 import { NextResponse } from "next/server";
 import type { AppUpdateResponse } from "@/lib/api-types";
 import { getPiWebReleaseUrl, isNewerStableVersion } from "@/lib/app-update";
@@ -67,7 +68,7 @@ async function loadUpdateStatus(): Promise<AppUpdateResponse> {
 }
 
 export async function GET() {
-  if (SKIP_VERSION_CHECK) {
+  if (SKIP_VERSION_CHECK || workstationImage()) {
     return NextResponse.json({
       currentVersion: CURRENT_VERSION,
       latestVersion: CURRENT_VERSION,

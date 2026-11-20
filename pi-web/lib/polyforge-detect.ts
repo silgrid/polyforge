@@ -42,6 +42,8 @@ const POLYFORGE_PACKAGE_NAME = "polyforge";
 
 const GIT_TIMEOUT_MS = 3000;
 
+import { workstationImage } from "./workstation-mode";
+
 export type PolyforgeLine = "internal" | "public" | "unknown";
 
 export interface PolyforgeDaemonStatus {
@@ -51,6 +53,7 @@ export interface PolyforgeDaemonStatus {
 }
 
 export interface PolyforgeDetectStatus {
+  imageManaged?: boolean;
   pfPresent: boolean;
   pfVersion: string | null;
   pfVersionBelowMinimum: boolean;
@@ -271,22 +274,6 @@ const WORKSTATION_COMPONENTS_ROOT = "/components";
  * releases/<ver>/ is the fact, a bare releases/ directory is not. Every
  * read degrades on its own (a missing or unreadable root reads as a
  * host, never an error, never a guess). */
-function workstationImage(seedRoot: string): boolean {
-  try {
-    const releases = join(seedRoot, "releases");
-    for (const ver of readdirSync(releases)) {
-      try {
-        statSync(join(releases, ver, "manifest.json"));
-        return true;
-      } catch {
-        // this entry carries no manifest: not the fact
-      }
-    }
-  } catch {
-    // no seed root at all: a host
-  }
-  return false;
-}
 
 /** install.sh's conventional clone path (a fixed
  *  `$HOME/.local/share/polyforge` root, verified in its source) on a
@@ -379,6 +366,7 @@ export async function detectPolyforge(force = false): Promise<PolyforgeDetectSta
     }
   }
   return {
+    ...(workstationImage() ? { imageManaged: true } : {}),
     pfPresent: present,
     pfVersion,
     pfVersionBelowMinimum: isPolyforgeVersionBelowMinimum(pfVersion),
