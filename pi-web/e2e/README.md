@@ -90,7 +90,28 @@ console error with the same text, an application catch text
 (`Failed to fetch`), `ERR_CONNECTION_REFUSED`, `pageerror`, any 5xx from
 the test server, and the tolerated pair past the cap of 3. The rules are
 pinned by `lib/e2e-console-errors.test.mjs` (`node --test
+lib/e2e-console-errors.test.mjs` (`node --test
 lib/e2e-console-errors.test.mjs`).
+
+## Resource-load error attribution
+
+A `Failed to load resource: …` console error names its subject nowhere in
+Chromium's text — #179's full-8 red was a bare 403 nobody could attribute
+(polyforge#180). The collector appends the resource's URL, from the console
+event's `location()`, in brackets after the raw text, so a red assertion's
+diff names the request:
+
+```
+Failed to load resource: the server responded with a status of 403 (Forbidden) [http://127.0.0.1:30141/static/avatar.png]
+```
+
+Chromium's text already carries the status for HTTP failures; nothing is
+guessed: a console event without a location URL keeps its raw text, and
+network failures keep their `net::` error code (no HTTP status is invented
+for them). The red paths are unchanged — a 4xx response with no console
+error collects nothing, and the network-change pairing above reads only
+the raw console text: a `net::ERR_NETWORK_CHANGED` token that appears
+merely in the appended URL never pairs.
 
 ## Running every suite in parallel
 
