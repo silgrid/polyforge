@@ -3,9 +3,11 @@
 // busy-waits (lib/transcript-notices-server.ts) — and declares pi's
 // capabilities. The version of an interactive session is the installed SDK
 // package's version (owner ruling Q2 C); the Cell CLI version joins in 85a2
-// once doctor provides it. Writes all pass the shared gate (pi 1.5.x is the
-// known range); the permission concept's write is the project trust decision
-// (85a4, polyforge#150) — approval and sandbox are refused as pi's own absences.
+// once doctor provides it. Writes all pass the shared gate (any 1.x is the
+// known range, 85a3's Q4 ruling); the permission concept's write is the
+// project trust decision (85a4, polyforge#150) — approval and sandbox are
+// refused as pi's own absences — and the model concept's write (85a3) lands
+// the defaults and the per-model thinking levels in settings.json.
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { defaultAgentDir } from "../http-dispatcher";
@@ -13,17 +15,8 @@ import { readModelsConfig } from "../models-config-store";
 import { readMcpServerConfigs } from "../mcp-config-read";
 import { loadSkillsWithInstallInfo } from "../skills-service";
 import { getProjectTrustStatus, mayReadProjectConfigNow, writeProjectTrustDecision } from "../project-trust";
-import {
-  gatedWrite,
-  writeGate,
-  PI_KNOWN_RANGE,
-  versionInKnownRange,
-  type HarnessAdapter,
-  type HarnessReadContext,
-  type VersionProbeResult,
-  type WriteChange,
-  type WriteResult,
-} from "./adapter";
+import { gatedWrite, writeGate, versionAtLeast, PI_KNOWN_RANGE, versionInKnownRange, type HarnessAdapter, type HarnessReadContext, type VersionProbeResult, type WriteChange, type WriteResult } from "./adapter";
+import { applyPiModelChange, parsePiModelChange, PI_MODEL_KEY_MIN_VERSIONS, piModelChangeKeys } from "./pi-native-write";
 import {
   neutralReasoningEffort,
   type AuthPayload,
@@ -149,7 +142,7 @@ export function createPiAdapter(): HarnessAdapter {
         toolFilter: true,
       },
       concepts: ["auth", "config-root", "model", "permission", "skills", "mcp", "env", "effective-config"],
-      writableConcepts: ["permission"],
+      writableConcepts: ["permission", "model"],
       readOnlyConcepts: ["env", "effective-config"],
       configRootEnv: "PI_CODING_AGENT_DIR",
       credentialsFollowConfigRoot: true,
@@ -191,10 +184,19 @@ export function createPiAdapter(): HarnessAdapter {
             providers = [];
           }
           const rawEffort = isString(settings.defaultThinkingLevel) ? settings.defaultThinkingLevel : null;
+          // The per-model layer (85a3): modelThinkingLevels keyed "provider/modelId".
+          const perModel: ModelPayload["perModelReasoningEffort"] = {};
+          const rawLevels = settings.modelThinkingLevels;
+          if (typeof rawLevels === "object" && rawLevels !== null && !Array.isArray(rawLevels)) {
+            for (const [key, level] of Object.entries(rawLevels as Record<string, unknown>)) {
+              if (isString(level)) perModel[key] = { neutral: neutralReasoningEffort(level), raw: level };
+            }
+          }
           const payload: ModelPayload = {
             defaultProvider: isString(settings.defaultProvider) ? settings.defaultProvider : null,
             defaultModel: isString(settings.defaultModel) ? settings.defaultModel : null,
             reasoningEffort: rawEffort === null ? null : { neutral: neutralReasoningEffort(rawEffort), raw: rawEffort },
+            perModelReasoningEffort: perModel,
             providers,
             customModels: [],
           };
@@ -264,11 +266,28 @@ export function createPiAdapter(): HarnessAdapter {
       // The shared gate first (adapter.ts). pi's permission write is the
       // project trust decision alone: pi does no approval and has no sandbox,
       // so those answer refused with pi's own reason, never not-implemented —
-      // the absence is a property of pi, not a TODO.
-      if (concept !== "permission") return gatedWrite(this, concept, change, ctx);
+      // the absence is a property of pi, not a TODO. The model write (85a3)
+      // lands the defaults and the per-model thinking levels in settings.json.
+      if (concept !== "permission" && concept !== "model") return gatedWrite(this, concept, change, ctx);
       const probe = await probeVersion(ctx);
       const gate = writeGate(probe);
       if (!gate.allowed) return { status: "refused", reason: gate.reason };
+      if (concept === "model") {
+        const parsed = parsePiModelChange(change);
+        if ("reason" in parsed) return { status: "refused", reason: parsed.reason };
+        // The registered key minimums (Q4): the gate knows the major; a
+        // version below a key's floor does not write that key.
+        const keys = piModelChangeKeys(parsed.change);
+        for (const key of keys) {
+          const floor = PI_MODEL_KEY_MIN_VERSIONS[key];
+          if (probe.version !== null && !versionAtLeast(probe.version, floor)) {
+            return { status: "refused", reason: `pi ${probe.version} is below the registered minimum ${floor} for ${key}` };
+          }
+        }
+        const applied = await applyPiModelChange(parsed.change, agentDirOf(ctx));
+        if (!applied.ok) return { status: "refused", reason: applied.reason };
+        return { status: "written", summary: `${applied.summary} (pi ${probe.version}, settings.json)` };
+      }
       const keys = Object.keys(change);
       if (keys.includes("approvalMode")) {
         return { status: "refused", reason: "pi does no approval prompting (不做审批)" };

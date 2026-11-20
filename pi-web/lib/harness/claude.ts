@@ -4,7 +4,8 @@
 // .claude.json, .mcp.json and the skills directories — through the same
 // redaction allow-list as pi. The version probe reuses probeClaude()
 // (lib/claude-probe.ts), the one probe implementation; CLAUDE_RECORDED_VERSIONS
-// keeps its fixture semantics and the write gate uses its own range (Q2 C).
+// keeps its fixture semantics and the write gate uses its own range (any 2.x,
+// 85a3's Q4 ruling).
 import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { writePrivateFileAtomicSync } from "../atomic-file";
@@ -12,18 +13,8 @@ import { serializeByKey } from "../key-serializer";
 import { claudeConfigDir } from "../claude-config-dir";
 import { probeClaude } from "../claude-probe";
 import { findClaudeBinary } from "../claude-session";
-import {
-  CLAUDE_KNOWN_RANGE,
-  versionInKnownRange,
-  writeGate,
-  gatedWrite,
-  type HarnessAdapter,
-  type HarnessReadContext,
-  type VersionProbeResult,
-  type WriteChange,
-  type WriteResult,
-} from "./adapter";
-import { applyClaudePermissionChange, parseClaudePermissionChange } from "./claude-native-write";
+import { CLAUDE_KNOWN_RANGE, versionAtLeast, versionInKnownRange, writeGate, gatedWrite, type HarnessAdapter, type HarnessReadContext, type VersionProbeResult, type WriteChange, type WriteResult } from "./adapter";
+import { applyClaudeModelChange, applyClaudePermissionChange, claudeModelChangeKeys, CLAUDE_MODEL_KEY_MIN_VERSIONS, parseClaudeModelChange, parseClaudePermissionChange } from "./claude-native-write";
 import { claudeSettingsLayers, claudeStateFilePath, modelPickerOptions, type ClaudeSettingsLayer } from "./claude-layers";
 import {
   neutralApprovalMode,
@@ -274,7 +265,7 @@ export function createClaudeAdapter(): HarnessAdapter {
         toolFilter: false,
       },
       concepts: ["auth", "config-root", "model", "permission", "skills", "mcp", "env", "effective-config"],
-      writableConcepts: ["auth", "permission"],
+      writableConcepts: ["auth", "permission", "model"],
       readOnlyConcepts: ["env", "effective-config"],
       configRootEnv: "CLAUDE_CONFIG_DIR",
       credentialsFollowConfigRoot: claudeCredentialsFollowConfigRoot(),
@@ -318,6 +309,17 @@ export function createClaudeAdapter(): HarnessAdapter {
           const effort = effectiveLayer(layers, "effortLevel");
           const rawEffort =
             effort && typeof effort.value === "string" ? effort.value : null;
+          // The per-model layer (85a3): modelSettings, the first settings layer
+          // naming it, keyed by model name (an entry's effort alone is read).
+          const perModel: ModelPayload["perModelReasoningEffort"] = {};
+          const modelSettings = effectiveLayer(layers, "modelSettings");
+          if (modelSettings && isRecord(modelSettings.value)) {
+            for (const [model, entry] of Object.entries(modelSettings.value as Record<string, unknown>)) {
+              if (isRecord(entry) && typeof entry.effort === "string") {
+                perModel[model] = { neutral: neutralReasoningEffort(entry.effort), raw: entry.effort };
+              }
+            }
+          }
           const payload: ModelPayload = {
             defaultProvider: null,
             defaultModel:
@@ -329,6 +331,7 @@ export function createClaudeAdapter(): HarnessAdapter {
                     neutral: neutralReasoningEffort(rawEffort),
                     raw: rawEffort,
                   },
+            perModelReasoningEffort: perModel,
             providers: [],
             // 85a4: the custom names are claude's own modelPicker.options
             // (claude-layers' one merge of them).
@@ -506,12 +509,29 @@ export function createClaudeAdapter(): HarnessAdapter {
     async write(concept: ConceptId, change: WriteChange, ctx): Promise<WriteResult> {
       // The shared gate first (adapter.ts): an undetected or unrecognized
       // version never reaches a write. auth has 85a2's write (the credential
-      // into the native env block) and the permission concept 85a4's; every
-      // other concept keeps gatedWrite's not-implemented.
-      if (concept !== "permission" && concept !== "auth") return gatedWrite(this, concept, change, ctx);
+      // into the native env block), the permission concept 85a4's and the
+      // model concept 85a3's (model / effortLevel / the per-model modelSettings,
+      // one field per write); every other concept keeps gatedWrite's
+      // not-implemented.
+      if (concept !== "permission" && concept !== "auth" && concept !== "model") return gatedWrite(this, concept, change, ctx);
       const probe = await probeVersion(ctx);
       const gate = writeGate(probe);
       if (!gate.allowed) return { status: "refused", reason: gate.reason };
+      if (concept === "model") {
+        const parsed = parseClaudeModelChange(change);
+        if ("reason" in parsed) return { status: "refused", reason: parsed.reason };
+        // The registered key minimums (Q4): the gate knows the major; a
+        // version below a key's floor does not write that key.
+        for (const key of claudeModelChangeKeys(parsed.change)) {
+          const floor = CLAUDE_MODEL_KEY_MIN_VERSIONS[key];
+          if (probe.version !== null && !versionAtLeast(probe.version, floor)) {
+            return { status: "refused", reason: `claude ${probe.version} is below the registered minimum ${floor} for ${key}` };
+          }
+        }
+        const applied = await applyClaudeModelChange(parsed.change, configDirOf(ctx));
+        if (!applied.ok) return { status: "refused", reason: applied.reason };
+        return { status: "written", summary: `${applied.summary} (claude ${probe.version}, user-level settings.json)` };
+      }
       if (concept === "permission") {
         const parsed = parseClaudePermissionChange(change, ctx?.cwd);
         if ("reason" in parsed) return { status: "refused", reason: parsed.reason };
