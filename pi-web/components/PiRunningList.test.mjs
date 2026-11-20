@@ -95,7 +95,7 @@ test("a queued subagent is listed, named Queued, after the older running ones", 
   const listed = items(html);
   assert.deepEqual(listed.map((item) => item.id), ["sub-run", "sub-q"]);
   assert.match(listed[0].text, /Running/, "the running subagent shows it runs");
-  assert.match(listed[1].text, /Queued/, "the queued subagent is not marked");
+  assert.match(listed[1].text, /Queued/, "the queued subagent carries no Queued mark");
   // No description: the profile stands in.
   assert.match(listed[1].text, /general-purpose/, "the queued button shows no agent kind");
 });
@@ -116,7 +116,7 @@ test("nothing renders while nothing runs and nothing settled; settled tasks leav
   // A running item beside settled ones: both the item and the entry.
   const both = render({ tasks: [task({ id: "t-live" }), task({ id: "t-done", status: "stopped", endedAt: NOW - 1_000, reason: "stopped" })] });
   assert.deepEqual(items(both).map((item) => item.id), ["t-live"]);
-  assert.match(both, /data-pi-bg-history/, "the entry hides while something runs");
+  assert.match(both, /data-pi-bg-history/, "the 「已结束」 entry is missing while a task runs beside a settled one");
 });
 
 test("every button opens its own target: subagent items, task items and the history entry are buttons", () => {
