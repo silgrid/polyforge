@@ -315,11 +315,15 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
   const piBackgroundTasks = useBackgroundTasks(piBackgroundTasksSessionId);
   const piSubagentRuns = useSubagentRuns(piBackgroundTasksSessionId);
   // The session's SSE events feed both this pane's running list (through the
-  // hook) and the shell's terminal notification (the prop).
+  // hook) and the shell's terminal notification (the prop). The hook's latest
+  // state rides a ref so this callback keeps one identity across renders —
+  // useAgentSession's stream effect lists it among its deps.
+  const piBackgroundTasksRef = useRef(piBackgroundTasks);
+  piBackgroundTasksRef.current = piBackgroundTasks;
   const handlePaneBackgroundTasksEvent = useCallback((event: BackgroundTasksClientEvent) => {
-    piBackgroundTasks.applyEvent(event);
+    piBackgroundTasksRef.current.applyEvent(event);
     onBackgroundTasksEvent?.(event);
-  }, [piBackgroundTasks, onBackgroundTasksEvent]);
+  }, [onBackgroundTasksEvent]);
   const initialScrollPositionRef = useRef(searchTarget ? null : initialScrollPosition ?? null);
   const [pendingScrollRestore, setPendingScrollRestore] = useState<Extract<ChatScrollPosition, { atBottom: false }> | null>(() => {
     const position = initialScrollPositionRef.current;
