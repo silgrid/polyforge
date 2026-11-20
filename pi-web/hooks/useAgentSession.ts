@@ -1025,9 +1025,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // stored harness (Pi Web's own preference) and claude's native defaults
   // (Q2 A: the native `model`, "default" when unset). Only untouched state
   // takes the fetched values: a carried draft choice or the user's own pick
-  // always wins, so a late answer never overrides the user.
+  // always wins, so a late answer never overrides the user. An open claude
+  // session asks for the same fetch — its star's filled marker shows the
+  // native default (review r1#4), while its own model stays the session's.
   useEffect(() => {
-    if (!isNew) return;
+    if (!isNew && !isClaudeSession) return;
     let current = true;
     void (async () => {
       try {
@@ -1038,6 +1040,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         setClaudeDefaultModel(fetched.claudeDefaultModel);
         claudeDefaultModelRef.current = fetched.claudeDefaultModel;
         claudeDefaultEffortRef.current = fetched.claudeDefaultEffort;
+        if (!isNew) return; // an open session needs only the star's marker
         const apply = resolveFetchedComposerDefaults(fetched, {
           carriedHarness: initialChoices?.harness !== undefined,
           carriedClaudeModel: initialChoices?.claudeModel !== undefined,
@@ -1054,7 +1057,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
     })();
     return () => { current = false; };
-  }, [isNew, initialChoices]);
+  }, [isNew, isClaudeSession, initialChoices]);
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
     const container = scrollContainerRef.current;
