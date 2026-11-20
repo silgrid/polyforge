@@ -120,3 +120,10 @@ export async function PUT(req: Request) {
     return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }
 }
+
+// 85a3 u3 skeleton: GET's signature with zero-value behaviour, so the suite's
+// red is its assertions, never a missing export. The real read lands with the
+// unit's implementation.
+export async function GET() {
+  return Response.json({}, { status: 501 });
+}
