@@ -1449,13 +1449,28 @@ direct child, so `pf supervise` is what forwards it to every child.
   `npm run start:lan` in its checkout (a container must bind 0.0.0.0 to
   be reachable; no checkout → Pi Web is not started, a line says so);
   the aihub server runs `pf aihub`. Logs: `<data-dir>/daemon.log`,
-  `pi-web.log`, `aihub.log`.
+  `pi-web.log`, `aihub.log`. Inside the workstation image
+  (polyforge#175) the daemon and the aihub server launch the components
+  volume's current pf (`/components/current/bin/pf`, a literal path —
+  exec resolves the current symlink afresh at every start, so an
+  upgrade that switches current is live at the next relaunch), Pi Web
+  runs with `PF_BIN` pinned to it, and the `--workflows-dir` /
+  `--pi-web-dir` defaults sit under the same current root
+  (`/components/current/workflows`, `/components/current/pi-web`; a
+  host's `<data-dir>/release/current`).
 - **The watch**: a child that dies on it — a crash, a `kill -9` — is
   restarted with a growing delay (5s, doubling per consecutive failure,
   capped at 60s, reset after a run that lasted 60s).
 - **The end**: the daemon exiting 0 or 78 is NOT restarted; the run
   stops the other children and exits with that code, so the container
-  stops with it (the 78 reason is in `<data-dir>/daemon.log`).
+  stops with it (the 78 reason is in `<data-dir>/daemon.log`). The
+  daemon exiting 75 (the restart-for-an-upgrade, polyforge#175: an
+  upgrade switched the components volume's current — the trigger itself
+  is #92's upgrade orchestration, the daemon package aliasing the same
+  constant) is relaunched AT ONCE from the same current-resolved argv,
+  with no failure backoff — the run never ends on it, the failure count
+  neither grows nor resets, and a start that then cannot run (a missing
+  current) backs off like any failure.
 - **A stop** (SIGTERM/SIGINT, what `docker stop`/`podman stop` sends): the
   signal is forwarded ONCE to every child (a second daemon signal would
   hard-abort its shutdown and lose the checkpoint), and the daemon gets

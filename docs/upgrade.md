@@ -833,3 +833,29 @@ a migration note, never imported. The first boot's wiring, the components volume
 the supervision that runs the components' pf are the later
 84-components units; nothing on a host changes — the host installer's
 own layout is untouched.
+
+## v0.2.4, the runtime paths and the upgrade-restart exit (polyforge#175)
+
+The workstation's runtime paths follow one component-root convention.
+Inside the image — judged by the one fact the seed manifest at
+`/opt/polyforge/seed/releases/<ver>` exists — the supervised daemon, the
+aihub server and Pi Web's `PF_BIN` all launch the components volume's
+`/components/current/bin/pf` (a literal path: exec resolves the current
+symlink afresh at every start, so an upgrade that switches current is
+live at the next relaunch), and the `pf supervise` flag defaults
+(`--workflows-dir`, `--pi-web-dir`) sit under `/components/current`.
+`pf doctor`'s pi package and Claude skill layout rows judge the
+components current there, never name `tools/install.sh` in a fix, and
+the pre-#162 `<data-dir>/release` layout is refused with a migration
+note, never bridged. The base pf moved to
+`/usr/local/libexec/polyforge/pf` — the path the image's entry point
+execs by absolute value, never a PATH lookup. The container supervisor
+grew the restart-for-an-upgrade exit: a daemon exit 75 is relaunched AT
+ONCE — no failure count, no backoff, the run never ends on it — while
+0/78, the stop window and the failed-start backoff stay as they were;
+the constant `UpgradeRestartExit` ships in
+`internal/polyforge/supervisor` beside 78, the daemon aliasing it, and
+the trigger that exits 75 is #92's upgrade orchestration. Nothing on a
+host changes: `tools/install.sh`'s `/usr/local/bin/pf` and
+`<data-dir>/release/current` are untouched. No action on upgrade beyond
+taking the new image.

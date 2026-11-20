@@ -10,11 +10,25 @@ What it does: it starts and watches the daemon, Pi Web and — with
 `--with-aihub` — the aihub server as its own children, restarts a child
 that dies on it (a crash, a kill -9) with a growing delay, ends the
 whole run when the daemon exits 0 or 78 (the container stops with that
-code; the 78 reason is in `<data-dir>/daemon.log`), and on a stop signal
+code; the 78 reason is in `<data-dir>/daemon.log`), relaunches the
+daemon AT ONCE — no failure backoff — when it exits 75 (the
+restart-for-an-upgrade: an upgrade switched the components volume's
+current, polyforge#175; the trigger itself is #92's upgrade
+orchestration), and on a stop signal
 forwards it ONCE to every child (a second daemon signal would
 hard-abort its shutdown) and gives the daemon the `--grace` (floor 45s)
 to finish its shutdown before a SIGKILL. Full reference:
 [commands.md](../../docs/reference/commands.md), "`pf supervise`".
+
+Where the programs come from: inside the image the supervised daemon
+and the aihub server launch the components volume's current pf
+(`/components/current/bin/pf`, resolved afresh at every start — an
+upgrade that switches current is live at the next relaunch), Pi Web
+runs with `PF_BIN` pinned to it, the `--workflows-dir` /
+`--pi-web-dir` defaults sit under `/components/current`, and the base
+pf the container's entry point execs is
+`/usr/local/libexec/polyforge/pf`. On a host the daemon's supervision
+stays the tmux loop and none of this applies.
 
 What an operator in the container does instead:
 
