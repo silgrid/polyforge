@@ -15,6 +15,7 @@ import {
   withSubagentDisplayStatus,
 } from "@/lib/rpc-manager";
 import { startServerPerf } from "@/lib/perf";
+// The claude rows come from the cached, worker-parsed list projection (polyforge#140).
 import { getAwaitingClaudeSessionIds, getClaudeSessionInfos, getRunningClaudeSessionIds } from "@/lib/claude-session";
 
 export const dynamic = "force-dynamic";
@@ -36,7 +37,7 @@ export async function GET(req: Request) {
     // claude rows come from pi-web's own index, beside the live pi rows.
     const [persistedSessions, runtimeSessions] = await Promise.all([
       persistedSessionsPromise,
-      attachSessionProjectInfo([...getRpcSessionInfos(), ...getClaudeSessionInfos()]),
+      attachSessionProjectInfo([...getRpcSessionInfos(), ...await getClaudeSessionInfos({ summary })]),
     ]);
     perf?.span("scan+projects");
     // Trim at the RESPONSE layer only — the reader's view cache and the
