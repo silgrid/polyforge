@@ -134,7 +134,7 @@ func TestShippedDevelopLanePromptsRender(t *testing.T) {
 			// contract 3's declared artifact units.json: what build hands off
 			// (polyforge#112: the close analysis check adds artifacts/facts/analysis.json;
 			// polyforge#131: the close's facts checks add build.json and carries.json)
-			"**Evidence**: `artifacts/plan.md`, `artifacts/build/units.json`, `artifacts/build/change-analysis.json`, `artifacts/build/units-check.json`, `artifacts/build/fast-checks/<repo>.json`, `artifacts/facts/build.json`, `artifacts/facts/carries.json`, `artifacts/facts/analysis.json`, `artifacts/self-review.md`",
+			"**Evidence**: `artifacts/plan.md`, `artifacts/build/units.json`, `artifacts/build/change-analysis.json`, `artifacts/build/units-check.json`, `artifacts/build/fast-checks/<repo>.json`, `artifacts/build/scoped-close/<repo>.json`, `artifacts/facts/build.json`, `artifacts/facts/carries.json`, `artifacts/facts/analysis.json`, `artifacts/self-review.md`",
 			// contract 3's "never complete on the same tree … with the same
 			// units.json": since contract 4 build may hand an unchanged tree
 			// off only with a reason per point, and review judges it
@@ -143,6 +143,13 @@ func TestShippedDevelopLanePromptsRender(t *testing.T) {
 			// a FAIL naming a unit's record is fixed in units.json, outside the tree
 			"rewriting that unit in `artifacts/build/units.json` is the change",
 			"never one the empty string matches (`.*`, `^`, `a*`: verification fails such a unit without running it)",
+			// the build close's scoped selection (polyforge#164): the same
+			// light-tier selection verification plans, run over the final
+			// tree; a red or incomplete result never hands off done
+			"the build close's scoped selection — the same light-tier selection verification plans, one shared implementation, over the final tree",
+			"for a work item whose verification runs the light tier (an integration batch's fix ticket runs the full bar and closes without one)",
+			"A red or `incomplete` result (the engine answered full, or a selected command cannot run) never hands off `done` without the owner's ruling",
+			"Merge each touched repo's `details.selected` of its green result into the change analysis's `selected`",
 		},
 		reviewStepID: {
 			"## Blocking classes",

@@ -127,7 +127,18 @@ record exactly what ran.
    `| AC | kind | ref |`, kind `test` (ref `<repo>/<test file>: <test name>`), `existing`
    (the test already pinning it) or `doc` (the file and the validator that shows it).
    Keep it current with every round.
-5. **The close's facts checks.** The step's close (3c) runs the two facts lines review will
+5. **The close's checks.** The step's close (3c) first runs the build close's scoped selection once
+   per touched repo — for a work item whose verification runs the light tier (an integration
+   batch's fix ticket runs the full bar and closes without one) — `"$PF_PYTHON"
+   "$PF_SHARED_DIR/scripts/fast_checks.py" --repo <name> --close-scoped --reuse
+   artifacts/build/fast-checks/<repo>.json --json --out artifacts/build/scoped-close/<repo>.json`,
+   after that repo's fast checks (a green same-tree run in the reuse file is evidence, not a
+   re-run): the same light-tier selection verification plans, one shared implementation, over the
+   final tree. A red or `incomplete` result never hands off `done` without the owner's ruling —
+   fix the change and re-run it, a full-tier fallback being the owner's to settle, a residual the
+   owner accepted keeping its record in the result file, cited in the hand-off — and a green
+   result's `details.selected` merges into the change analysis's `selected`, keyed by the repo,
+   verbatim. Then the step's close runs the two facts lines review will
    judge with —
    `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" build --json --out artifacts/facts/build.json`
    and `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" carries --json --out artifacts/facts/carries.json`
@@ -143,7 +154,8 @@ record exactly what ran.
 ## 交接要写什么 — what your hand-off carries
 
 - **Status.** `done` only on a green build: every unit red then green, the fast checks
-  green, the close's facts checks (build, carries) green, the close analysis check green,
+  green, the close's scoped selection green (its flaky units, if any, named as the fast
+  checks name theirs), the close's facts checks (build, carries) green, the close analysis check green,
   the self-review written; a fast check that turned green through a flaky re-run has its
   flaky units (with their first-red logs) listed in Status. A real blocker — the machine, not a choice — is
   `blocked` with `--reason`. A choice that is the owner's is a `pf step ask`, not a
@@ -162,8 +174,8 @@ record exactly what ran.
   at first.
 - **Evidence**: `artifacts/plan.md`, `artifacts/build/units.json`,
   `artifacts/build/change-analysis.json`, `artifacts/build/units-check.json`,
-  `artifacts/build/fast-checks/<repo>.json`, `artifacts/facts/build.json`,
-  `artifacts/facts/carries.json`, `artifacts/facts/analysis.json`,
+  `artifacts/build/fast-checks/<repo>.json`, `artifacts/build/scoped-close/<repo>.json`,
+  `artifacts/facts/build.json`, `artifacts/facts/carries.json`, `artifacts/facts/analysis.json`,
   `artifacts/self-review.md` (and `artifacts/grill-qa.md` when there is one).
 
 ## Never

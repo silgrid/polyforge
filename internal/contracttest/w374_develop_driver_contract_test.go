@@ -15,9 +15,10 @@ package test
 // rewrap keeps them pinned; build.md stays within its line budget — 120
 // lines, raised to 145 when the grill and e2e authoring moved into build
 // (A1), to 160 when the analysis and a big plan's units
-// moved to sub-agents, and to 170 when the close's two facts lines moved
+// moved to sub-agents, to 170 when the close's two facts lines moved
 // into the step (the static checks review judges with, run by the builder
-// first; polyforge#131).
+// first; polyforge#131), and to 190 when the close's scoped selection
+// moved in (polyforge#164).
 
 import (
 	"os"
@@ -32,6 +33,15 @@ func TestW374DevelopDriverChecksContract(t *testing.T) {
 		"workflows/develop/steps/build.md": {
 			"Your skill is what you read before you start, how you ask the owner, how a round a FAIL opened must change the tree, how each unit's run is recorded in `artifacts/build/units.json`, and what your hand-off carries.",
 			"(5) record the unit in `artifacts/build/units.json` as your skill says — the run exactly as it ran red and green, and its marker.",
+			// the build close's scoped selection (polyforge#164): the same
+			// light-tier selection verification plans, run over the final
+			// tree before the hand-off; its record lands in the change
+			// analysis, and a red or incomplete result never hands off done
+			"the build close's scoped selection — the same light-tier selection verification plans, one shared implementation, over the final tree",
+			"`\"$PF_PYTHON\" \"$PF_SHARED_DIR/scripts/fast_checks.py\" --repo <name> --close-scoped --reuse artifacts/build/fast-checks/<repo>.json --json --out artifacts/build/scoped-close/<repo>.json`",
+			"A red or `incomplete` result (the engine answered full, or a selected command cannot run) never hands off `done`",
+			"for a work item whose verification runs the light tier (an integration batch's fix ticket runs the full bar and closes without one)",
+			"Merge each touched repo's `details.selected` of its green result into the change analysis's `selected`",
 		},
 		"workflows/_shared/skills/build.md": {
 			"`review` replays each unit's run on the tree of its test commit (`facts.py build --replay`: it must be red there) and `verification` runs it again on the final tree (`verify.py --unit-runs`: it must be green)",
@@ -92,7 +102,7 @@ func TestW374DevelopDriverChecksContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n := strings.Count(string(raw), "\n"); n > 170 {
-		t.Errorf("workflows/develop/steps/build.md is %d lines, over its 170-line budget", n)
+	if n := strings.Count(string(raw), "\n"); n > 190 {
+		t.Errorf("workflows/develop/steps/build.md is %d lines, over its 190-line budget", n)
 	}
 }

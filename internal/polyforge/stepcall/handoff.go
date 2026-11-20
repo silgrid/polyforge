@@ -74,7 +74,7 @@ type HandoffArgs struct {
 }
 
 // MaxBodyChars bounds a body, in characters (Unicode code points).
-const MaxBodyChars = 3000
+const MaxBodyChars = 6000
 
 // headingRe matches a Markdown ATX heading and captures its text.
 var headingRe = regexp.MustCompile(`^ {0,3}#{1,6}[ \t]+(.*?)[ \t#]*$`)

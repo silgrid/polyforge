@@ -65,7 +65,12 @@ and `artifacts/merge/landing.json`. The daemon orchestrates; it judges no conten
   assertion failure exits at once; and a long command writes its output to
   a log file with its exit code and the log is searched after the run, never piped straight into
   grep, head or tail. Fast
-  checks plus every new test; the close's facts checks — `facts.py build` without the
+  checks plus every new test; the close's scoped selection — `fast_checks.py --close-scoped`,
+  the same light-tier selection verification plans, for a work item whose verification runs the
+  light tier (an integration batch's fix ticket closes without one), its red or `incomplete`
+  result fixed or owner-ruled before the hand-off and a green result's `details.selected` merged
+  into the change analysis — before the close's
+  facts checks — `facts.py build` without the
   replay (each unit's static commit facts) and `carries`, the same engine review judges
   with, a red naming the unit, or the repo, suite and reason and fixed before the
   hand-off; the change analysis's close check (`facts.py analysis` — the
@@ -118,7 +123,16 @@ and `artifacts/merge/landing.json`. The daemon orchestrates; it judges no conten
   runs and the rest, the whole tool window its budget; every other ticket runs the light
   tier. Exit 0 passes; a red it can place on the change FAILs to `build`; a red it
   cannot place is the owner's call — run again, have it fixed, or accept it (`waive`,
-  citing the owner's message). Exit 2 is retried, then `blocked`. The heavy-run admission
+  citing the owner's message). The step's `audit` parameter (the dispatch's
+  `PF_PARAM_AUDIT`, default `on`) turns the lane's dependency audit off
+  when the project's owner sets it to `off`
+  (`steps.<project>.verification.params.audit` in the workspace config, or
+  a ticket's `pf override` — a repository's own conf key can never do it):
+  the engine is then asked `--audit off`, no full report plans the `audit`
+  command, and the result files record the closure. Any other value is a
+  named error before any check runs (exit 2, the fixed mark
+  `pf-audit-param-invalid` in the summary) — the owner fixes the config; a
+  retry cannot. Exit 2 is retried, then `blocked`. The heavy-run admission
   is the daemon's: a denied dispatch waits in the daemon's queue, no process, no budget.
 - **publish** (gate; skill `publish`) — checks that the verification's result names every
   repo's HEAD and passed (or that the owner's waiver of that same round is quoted on the

@@ -160,7 +160,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from pfstep import container, deadline, duration, git, goglob, gotext, runner, secretpat  # noqa: E402
 from pfstep import targetbranch  # noqa: E402
-from pfstep.analysis import read_analysis, static_problem  # noqa: E402
+from pfstep.analysis import read_analysis, selected_problem, static_problem  # noqa: E402
 from pfstep import godecode as gd  # noqa: E402
 from pfstep.gotext import clip_list, clip_runes, clip_text, fields, quote, short_sha, trim_space  # noqa: E402
 from pfstep.invoke import Invocation, Parser  # noqa: E402
@@ -2433,7 +2433,7 @@ def analysis(inv: Invocation, args: List[str], environ: Mapping[str, str],
     path = c.path(ns.analysis, DEFAULT_ANALYSIS)
     rel = rel_to(c.dir, path)
     entries: List[Dict[str, Any]] = []
-    d: Dict[str, Any] = {"analysis_file": rel, "entries": entries, "cut": []}
+    d: Dict[str, Any] = {"analysis_file": rel, "entries": entries, "cut": [], "selected": []}
     inv.details = d
     try:
         an = read_analysis(path)
@@ -2446,6 +2446,31 @@ def analysis(inv: Invocation, args: List[str], environ: Mapping[str, str],
                  "note": "listed after the analysis's first %d (its supplement cap): not run" % an.limit}
                 for ad in cut]
     problems: List[str] = []
+    # the machine selection records the analysis carries: the one shared
+    # validator (the same rules verification's --analysis check runs),
+    # judged statically — the record's own evidence is its run's
+    # (pfstep/analysis.selected_problem). Whether a touched repo carries
+    # one at all is no machine question here: the build step's own text
+    # demands the record and review judges its absence (the owner's Q1
+    # ruling: rule-constrained, never a hard gate) — a full-only repo
+    # (its light selection falls back to the full tier) has no record to
+    # carry and no red to answer for.
+    have = set(c.repos)
+    for name in sorted(an.selected):
+        sel = an.selected[name]
+        srec: Dict[str, Any] = {"repo": name}
+        if name not in have:
+            srec["status"], srec["problem"] = "fail", unknown_repo_problem(name)
+        else:
+            srec["head"], srec["selection"] = sel.head, sel.status
+            problem = selected_problem(sel, repo_head(os.path.join(c.repos_dir, name)))
+            if problem:
+                srec["status"], srec["problem"] = "fail", problem
+            else:
+                srec["status"] = "pass"
+        d["selected"].append(srec)
+        if srec["status"] == "fail":
+            problems.append("%s:selected: %s" % (name, srec["problem"]))
     # the logs, the deadline and the runs — only when an entry will run
     runs = [ad for ad in taken if ad.repo in c.repos]
     logs = ns.log_dir
@@ -2536,7 +2561,7 @@ def analysis(inv: Invocation, args: List[str], environ: Mapping[str, str],
             continue
         rec["status"] = "pass"
     if problems:
-        inv.summary = "%d of %d listed test(s) fail the close check: %s" % (
+        inv.summary = "%d of the analysis's %d listed test(s) and selection record(s) fail the close check: %s" % (
             len(problems), len(taken), "; ".join(clip_list(problems, 3)))
         return 1
     tail = ""

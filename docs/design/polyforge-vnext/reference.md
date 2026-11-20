@@ -72,7 +72,7 @@ work items only, and restoring it makes every door work again at once.
 
 | Transition | Door (route → function) | Guard / effect |
 |---|---|---|
-| — → queued | `POST /work-items` → `WIManager.Create` | writer on the project; `repo_inventory` frozen at create (names only, must be project repos — `core/inventory.go`); `exclusive: true` (needs `bundle_name`, else `CORE-400`) refuses the create `CORE-409 OPEN_ON_BUNDLE`, naming the open work item and its status, while another work item of the same project on the same bundle is not wrapped/failed/canceled — checked inside the create transaction, so racing creators never both commit (the integration lane's one open batch per project) |
+| — → queued | `POST /work-items` → `WIManager.Create` | writer on the project; `repo_inventory` frozen at create (names only, must be project repos — `core/inventory.go`); `attrs`: a top-level key that carries a dot is `CORE-400` (the nested path it names is the one accepted shape — the CLI nests dotted `--attr` paths, `detail` shows the object); `exclusive: true` (needs `bundle_name`, else `CORE-400`) refuses the create `CORE-409 OPEN_ON_BUNDLE`, naming the open work item and its status, while another work item of the same project on the same bundle is not wrapped/failed/canceled — checked inside the create transaction, so racing creators never both commit (the integration lane's one open batch per project) |
 | queued → running | `POST …/claim` → `core/session.go` `Claim` | §3.2 |
 | running → paused | `POST …/session-end` `status=paused` → `Pause` | must be running (`NOT_RUNNING`); session kept; `clean_pause` set atomically; event `session_paused` |
 | paused → running | `POST …/session-attach` → `Attach` | hash mismatch → `CORE-403 STALE_SESSION`; not paused or `clean_pause=true` → `CORE-409 NOT_ATTACHABLE`; event `session_attached`; operator unpause = PATCH `clean_pause:false` |
@@ -112,6 +112,12 @@ Execution state lives only in the capsule's `execution.json` (§7.3). The one re
 top-level `blocked_seal`: aihub itself writes it when a daemon's session-end reports `blocked` with a
 head (§3.5), through a direct update that bypasses the create-time check, so create refuses it with
 `CORE-400 EXECUTION_STATE_REJECTED` (`core/workitem.go` `checkAttrs`); a create cannot plant one.
+A top-level attrs key that carries a dot is refused the same way — plain `CORE-400`,
+whose `detail` spells the nested path it names: every reader (`GET /work-items`'s
+`json_extract`, the attrs write's `if`) walks dot paths, and the CLI writes a dotted
+`--attr` key as the nested path it names, so a flat dotted key would be a value no
+query reaches (polyforge#174; deploy/sql/v0.2.4 moves the old flat `split.origin`/
+`split.unit` rows of the pre-fix creates).
 
 ## 3. Sessions and fencing <!-- §3 -->
 

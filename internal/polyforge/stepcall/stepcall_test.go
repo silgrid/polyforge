@@ -64,7 +64,7 @@ func TestCheckBody(t *testing.T) {
 		"a section missing":       {strings.Replace(body(), "## 验证\n", "验证\n", 1), false, "验证"},
 		"a name only prefixed":    {strings.Replace(body(), "## 验证\n", "## 验证码\n", 1), false, "验证"},
 		"a re-entry without it":   {body(), true, ReentrySectionOf(LangZhCN)},
-		"over the bound":          {body() + strings.Repeat("字", MaxBodyChars), false, "over the 3000 bound"},
+		"over the bound":          {body() + strings.Repeat("字", 6000), false, "over the 6000 bound"},
 		"empty":                   {"  \n", false, "empty"},
 		"not UTF-8":               {body() + "\xff", false, "UTF-8"},
 		"a section only in prose": {strings.Replace(body(), "## 做了什么", "做了什么", 1), false, "做了什么"},
@@ -76,11 +76,17 @@ func TestCheckBody(t *testing.T) {
 	if err := CheckBody(body(ReentrySectionOf(LangZhCN)), true, LangZhCN); err != nil {
 		t.Fatalf("a re-entry with it = %v", err)
 	}
-	// the bound counts characters, not bytes: 3000 CJK characters pass
+	// the bound counts code points over the whole body, not bytes: a body
+	// of exactly 6,000 CJK characters passes, and 6,001 is refused naming
+	// the actual length, the 6,000 bound and the guidance.
 	exact := body()
-	exact += strings.Repeat("字", MaxBodyChars-len([]rune(exact)))
+	exact += strings.Repeat("字", 6000-len([]rune(exact)))
 	if err := CheckBody(exact, false, LangZhCN); err != nil {
-		t.Fatalf("exactly %d characters = %v", MaxBodyChars, err)
+		t.Fatalf("a body of exactly 6000 characters = %v", err)
+	}
+	if err := CheckBody(exact+"字", false, LangZhCN); err == nil ||
+		!strings.Contains(err.Error(), "the body is 6001 characters, over the 6000 bound — put the detail into files and name their paths") {
+		t.Fatalf("a body of 6001 characters = %v", err)
 	}
 }
 
