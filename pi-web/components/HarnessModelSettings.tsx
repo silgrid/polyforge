@@ -2,8 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
-import { buildModelRows, type ModelViewInput } from "@/lib/harness/model-view";
+import { buildModelRows, type ModelViewInput, type ModelViewRow } from "@/lib/harness/model-view";
 import { ModelsConfig } from "./ModelsConfig";
+
+export function HarnessModelTable({ rows }: { rows: ModelViewRow[] }) {
+  void rows;
+  return null;
+}
 
 export function HarnessModelSettings({ cwd, onClose }: { cwd: string | null; onClose?: () => void }) {
   const { t } = useI18n();
