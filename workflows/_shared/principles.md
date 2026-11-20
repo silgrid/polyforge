@@ -9,3 +9,4 @@ First read each `repos/<repo>/AGENTS.md` (else `CLAUDE.md`): its project rules b
 7. **Reuse before writing.** 先用仓里已有的函数、组件和既有写法，再用标准库或平台能力、已安装的依赖，最后才自己写；不为省几行代码新增依赖。
 8. **Trusted boundaries.** 只在可信边界（用户或 CLI 输入、网络、文件、其他进程）做校验；进程内部不为调用方不可能产生的状态写防御分支或兜底；防丢数据的错误处理和安全相关代码不受此限。
 9. **Scoped file reading.** 先用搜索定位，再按需要的行范围读；不整份读取大文件（以超过 16KB 为例），步骤指令明确要求读完整份的产物（例如 review 读 plan）除外。
+10. **Shell separators.** 在 shell 里打印分隔线写成带引号的 `echo '----'`，不要写以 `=` 开头的未加引号的词。
