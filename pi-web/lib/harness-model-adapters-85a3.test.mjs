@@ -53,6 +53,22 @@ writeJson(piModels, { providers: { anthropic: { apiKey: "PI85-SENTINEL-KEY", bas
 writeJson(path.join(piDir, "auth.json"), { apiKeys: { anthropic: "PI85-SENTINEL-AUTH" } });
 const piCtx = (extra = {}) => ({ agentDir: piDir, env: {}, ...extra });
 
+test("pi provider definitions write through the adapter gate into models.json", async () => {
+  const fixture = path.join(scratch, "provider-write");
+  fs.mkdirSync(fixture);
+  const ctx = { agentDir: fixture, env: {}, piVersion: "1.5.0" };
+  writeJson(path.join(fixture, "settings.json"), { defaultModel: "keep-default" });
+  const config = { providers: { gateway: { baseUrl: "https://gateway.example/v1", models: [{ id: "adaptive", reasoning: true, compat: { forceAdaptiveThinking: true } }] } } };
+  const result = await piAdapter.write("model", { modelsConfig: config }, ctx);
+  assert.equal(result.status, "written");
+  assert.deepEqual(readJson(path.join(fixture, "models.json")), config);
+  assert.deepEqual(readJson(path.join(fixture, "settings.json")), { defaultModel: "keep-default" });
+  const before = fs.readFileSync(path.join(fixture, "models.json"), "utf8");
+  const refused = await piAdapter.write("model", { modelsConfig: { providers: {} } }, { ...ctx, piVersion: "2.0.0" });
+  assert.equal(refused.status, "refused");
+  assert.equal(fs.readFileSync(path.join(fixture, "models.json"), "utf8"), before);
+});
+
 test("pi reads the model defaults and the per-model thinking levels from settings.json", async () => {
   const payload = await piAdapter.read("model", piCtx());
   assert.equal(payload.defaultProvider, "anthropic");
