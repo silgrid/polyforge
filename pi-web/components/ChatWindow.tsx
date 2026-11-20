@@ -1086,7 +1086,8 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
   const openChoice = openPanelChoice && openPanelChoice.sessionId === session?.id ? openPanelChoice : null;
   const openSubagentRun = openChoice?.kind === "subagent" ? claudeSubagents[openChoice.id] : undefined;
   const openTask = openChoice?.kind === "task" ? claudeBackgroundTasks[openChoice.id] : undefined;
-  // A pi session's task panel and its 「已结束」 history take the same slot.
+  // A pi session's task panel and its settled history take the same slot
+  // (#189: the history opens from the detail panel's header button).
   const piTasks = piBackgroundTasks.state.kind === "ready" ? piBackgroundTasks.state.tasks : [];
   const openPiTask = openChoice?.kind === "piTask" ? piTasks.find((task) => task.id === openChoice.id) : undefined;
   const openClaudeSubagentPanel = useCallback((toolCallId: string) => {
@@ -1530,6 +1531,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
                 task={openPiTask}
                 onStop={() => piBackgroundTasks.killTask(openPiTask.id)}
                 onReadOutput={() => piBackgroundTasks.readOutput(openPiTask.id)}
+                onOpenHistory={openPiHistoryPanel}
                 onClose={closeClaudeSubagentPanel}
               />
             </div>
@@ -2041,8 +2043,8 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
             </div>
           )}
           {/* a pi session's running built-in subagents and background tasks
-              in the same slot (polyforge#173): the merged list, and the
-              「已结束」 entry once anything settled. */}
+              in the same slot (polyforge#173, #189): the merged list — settled
+              tasks never occupy it, their detail opens from the bg_run card. */}
           {!isClaudeSession && !isNew && (
             <div style={{ width: "100%", maxWidth: "var(--chat-content-max-width, 820px)", margin: "0 auto" }}>
               <PiRunningList
@@ -2050,7 +2052,6 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
                 tasks={piTasks}
                 onOpenSubagent={(subagentSessionId, label) => onOpenSubagent?.(subagentSessionId, label)}
                 onOpenTask={openPiTaskPanel}
-                onOpenHistory={openPiHistoryPanel}
               />
             </div>
           )}

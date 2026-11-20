@@ -1,17 +1,20 @@
 "use client";
 
-// The running list above a pi session's composer (polyforge#173, AC1): one
-// compact button per running built-in subagent and per running background
-// task of THIS session, merged in one order — the owner's ruling: no
-// grouping, oldest start/queue first, the type told apart by its badge and
-// color, a queued run named and not offered a stop it cannot take (the
-// controller's stop semantics; a running subagent stops in its own chat).
-// Settled tasks never list (AC3): the 「已结束」 entry beside the running
-// items opens the history panel instead, and is the one thing that renders
-// once everything settled. Nothing renders at all while no session of this
-// page runs nothing and has nothing settled — the composer keeps its place.
-// The looks are the Claude list's (the reference this list aligns with):
-// the same grid, the same one-line buttons, a 1 s clock only while non-empty.
+// The running list above a pi session's composer (polyforge#173, AC1;
+// polyforge#189): one compact button per running built-in subagent and per
+// running background task of THIS session, merged in one order — the
+// owner's ruling: no grouping, oldest start/queue first, the type told
+// apart by its badge and color, a queued run named and not offered a stop
+// it cannot take (the controller's stop semantics; a running subagent stops
+// in its own chat).
+// Settled tasks never list and never occupy the area (#189, AC1): the
+// running list aligns with Claude's — nothing renders while no subagent
+// runs or is queued and no task runs (the node itself is gone, so the
+// composer keeps its place); a settled task's detail opens from its bg_run
+// tool card's button, and the settled history from the detail panel's
+// header button. The looks are the Claude list's (the reference this list
+// aligns with): the same grid, the same one-line buttons, a 1 s clock only
+// while non-empty.
 import { useI18n } from "@/hooks/useI18n";
 import { formatTurnDuration } from "@/lib/turn-duration";
 import { useClaudeSubagentClock } from "./ClaudeSubagentRunningList";
@@ -31,22 +34,20 @@ const ITEMS_MAX_HEIGHT_PX = MAX_ROWS * ITEM_HEIGHT_PX + (MAX_ROWS - 1) * ITEM_GA
 // Equal-width columns, as many as fit, none narrower than this.
 const ITEM_MIN_WIDTH_PX = 260;
 
-export function PiRunningList({ subagents, tasks, onOpenSubagent, onOpenTask, onOpenHistory, now: fixedNow }: {
+export function PiRunningList({ subagents, tasks, onOpenSubagent, onOpenTask, now: fixedNow }: {
   /** This session's running and queued built-in subagent runs. */
   subagents: PiSubagentRunSummary[];
-  /** This session's background-task records; the running ones list, the settled ones open the history entry. */
+  /** This session's background-task records; only the running ones list (#189: settled ones never occupy the area). */
   tasks: BgTaskInfo[];
   onOpenSubagent: (sessionId: string, label: string) => void;
   onOpenTask: (taskId: string) => void;
-  onOpenHistory: () => void;
   now?: number;
 }) {
   const { t } = useI18n();
   const runningTasks = tasks.filter((task) => task.status === "running");
-  const settledCount = tasks.length - runningTasks.length;
   const ticking = subagents.length + runningTasks.length > 0;
   const now = useClaudeSubagentClock(ticking, fixedNow);
-  if (subagents.length === 0 && runningTasks.length === 0 && settledCount === 0) return null;
+  if (subagents.length === 0 && runningTasks.length === 0) return null;
 
   const subagentLabel = (run: PiSubagentRunSummary): string => run.description || run.profile || t("bgTasks.agent");
   // One merged order (the owner's ruling): a subagent's dispatch time, a
@@ -108,19 +109,6 @@ export function PiRunningList({ subagents, tasks, onOpenSubagent, onOpenTask, on
         style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${ITEM_MIN_WIDTH_PX}px, 1fr))`, gap: ITEM_GAP_PX, flex: 1, minWidth: 0, maxHeight: ITEMS_MAX_HEIGHT_PX, overflowY: "auto", overscrollBehavior: "contain" }}
       >
         {merged.map((item) => item.node)}
-        {settledCount > 0 && (
-          <button
-            type="button"
-            data-pi-bg-history={String(settledCount)}
-            title={t("bgTasks.historyTitle")}
-            onClick={onOpenHistory}
-            onMouseDown={(event) => event.preventDefault()}
-            style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", minWidth: 0, padding: "2px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 12, lineHeight: "18px" }}
-          >
-            <span style={{ flex: 1, minWidth: 0, textAlign: "left", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--text-muted)" }}>{t("bgTasks.history")}</span>
-            <span style={{ flexShrink: 0, color: "var(--text-dim)", fontVariantNumeric: "tabular-nums" }}>{settledCount}</span>
-          </button>
-        )}
       </div>
     </div>
   );
