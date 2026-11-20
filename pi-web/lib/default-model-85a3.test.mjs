@@ -57,7 +57,7 @@ test("a malformed or partial record reads tolerantly as the default", async () =
   assert.deepEqual(preference.readDefaultModelPreference(), { harness: "pi" });
   fs.writeFileSync(settingsPath, JSON.stringify({ defaultModel: { harness: "claude", claudeModel: 7 } }));
   assert.deepEqual(preference.readDefaultModelPreference(), { harness: "claude" });
-  fs.writeFileSync(settingsPath, JSON.stringify({ defaultModel: { harness: "pi", model: { provider: "acme" } }));
+  fs.writeFileSync(settingsPath, JSON.stringify({ defaultModel: { harness: "pi", model: { provider: "acme" } } }));
   assert.deepEqual(preference.readDefaultModelPreference(), { harness: "pi" });
 });
 

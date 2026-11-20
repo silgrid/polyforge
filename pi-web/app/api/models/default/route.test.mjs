@@ -40,7 +40,7 @@ fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({}));
 fs.writeFileSync(path.join(claudeConfigDir, "settings.json"), JSON.stringify({
   env: { OTHER_FLAG: "kept" },
 }));
-fs.copyFileSync(path.join(here, "..", "..", "..", "lib", "__fixtures__", "claude-stub", "claude.mjs"), path.join(binDir, "claude"));
+fs.copyFileSync(path.join(here, "..", "..", "..", "..", "lib", "__fixtures__", "claude-stub", "claude.mjs"), path.join(binDir, "claude"));
 fs.chmodSync(path.join(binDir, "claude"), 0o755);
 const stubLog = path.join(scratch, "stub.jsonl");
 process.env.PI_TEST_CLAUDE_STUB_LOG = stubLog;
