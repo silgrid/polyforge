@@ -174,6 +174,15 @@ func TestW52TheReferencesStateTheTierAndTheUnion(t *testing.T) {
 		"the same light-tier selection verification's light tier plans",
 		"a selection the engine answers with the full tier, or a selected command that cannot run, records `incomplete` with the reason kept and exits non-zero, claiming nothing",
 		"the change analysis's machine selection record",
+		// review r1 #3: the selected records' judgment, stated where the
+		// two consumers of the analysis are documented
+		"The analysis's machine selection records (`selected`, one per task repo, which the build close's `fast_checks.py --close-scoped` writes) are judged by the same shared validator",
+		"a sync's merge commits between its head and the verified HEAD leave it valid",
+		"the machine selection records the analysis carries (`selected`) are judged statically by the same shared validator",
+	})
+	w52Wants(t, "docs/contributing.md", []string{
+		// review r1 #3: the --analysis check's selected judgment
+		"a sync's merge commits between the record's head and the verified HEAD leave it valid",
 	})
 	w52Stale(t, "docs/reference/commands.md", []string{"the only tier it runs"})
 	w52Wants(t, "workflows/_shared/scripts/verify.py", []string{

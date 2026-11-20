@@ -40,7 +40,8 @@ func TestW374DevelopDriverChecksContract(t *testing.T) {
 			"the build close's scoped selection — the same light-tier selection verification plans, one shared implementation, over the final tree",
 			"`\"$PF_PYTHON\" \"$PF_SHARED_DIR/scripts/fast_checks.py\" --repo <name> --close-scoped --reuse artifacts/build/fast-checks/<repo>.json --json --out artifacts/build/scoped-close/<repo>.json`",
 			"A red or `incomplete` result (the engine answered full, or a selected command cannot run) never hands off `done`",
-			"Merge each touched repo's `details.selected` of its result into the change analysis's `selected`",
+			"for a work item whose verification runs the light tier (an integration batch's fix ticket runs the full bar and closes without one)",
+			"Merge each touched repo's `details.selected` of its green result into the change analysis's `selected`",
 		},
 		"workflows/_shared/skills/build.md": {
 			"`review` replays each unit's run on the tree of its test commit (`facts.py build --replay`: it must be red there) and `verification` runs it again on the final tree (`verify.py --unit-runs`: it must be green)",
