@@ -56,7 +56,6 @@ function render({ subagents = [], tasks = [] } = {}) {
         tasks,
         onOpenSubagent: () => {},
         onOpenTask: () => {},
-        onOpenHistory: () => {},
         now: NOW,
       }),
     ),
@@ -100,35 +99,47 @@ test("a queued subagent is listed, named Queued, after the older running ones", 
   assert.match(listed[1].text, /general-purpose/, "the queued button shows no agent kind");
 });
 
-test("nothing renders while nothing runs and nothing settled; settled tasks leave only the 「已结束」 entry", () => {
+test("nothing renders while nothing runs; a settled task never occupies the running area", () => {
   assert.equal(render(), "", "an idle session keeps its composer unshifted");
   assert.equal(render({ subagents: [], tasks: [] }), "");
-  const settled = render({ tasks: [task({ id: "t-done", status: "succeeded", endedAt: NOW - 1_000, exitCode: 0 })] });
-  // The settled task itself never lists (AC3: interrupted and friends stay
-  // out of the running list); the entry to the history is the one thing left.
-  const listed = items(settled);
-  assert.deepEqual(listed, [], `a settled task appears as a running item: ${JSON.stringify(listed)}`);
-  const entry = settled.match(/<button[^>]*data-pi-bg-history="[^"]*"/);
-  assert.ok(entry, "the 「已结束」 entry did not render");
-  assert.match(settled, /Finished/, "the entry carries its label");
-  assert.doesNotMatch(render(), /data-pi-bg-history/, "an idle session shows the history entry");
-
-  // A running item beside settled ones: both the item and the entry.
-  const both = render({ tasks: [task({ id: "t-live" }), task({ id: "t-done", status: "stopped", endedAt: NOW - 1_000, reason: "stopped" })] });
-  assert.deepEqual(items(both).map((item) => item.id), ["t-live"]);
-  assert.match(both, /data-pi-bg-history/, "the 「已结束」 entry is missing while a task runs beside a settled one");
+  // Every terminal state alone — succeeded, failed, stopped, interrupted —
+  // leaves the running area's node nonexistent (AC1: 无运行项不渲染、不占位;
+  // a restart's interrupted reads as terminal, never as a live row).
+  for (const [status, fields] of [
+    ["succeeded", { endedAt: NOW - 1_000, exitCode: 0 }],
+    ["failed", { endedAt: NOW - 1_000, exitCode: 2 }],
+    ["stopped", { endedAt: NOW - 1_000, reason: "stopped" }],
+    ["interrupted", {}],
+  ]) {
+    const html = render({ tasks: [task({ id: `t-${status}`, status, ...fields })] });
+    assert.equal(html, "", `a ${status} task keeps the running area rendered: ${html}`);
+  }
+  // The 「已结束」 entry is retired for good (polyforge#189): no state renders it.
+  assert.doesNotMatch(
+    render({ tasks: [task({ id: "t-done", status: "succeeded", endedAt: NOW - 1_000, exitCode: 0 })] }),
+    /data-pi-bg-history/,
+    "a settled task still renders the retired history entry",
+  );
 });
 
-test("every button opens its own target: subagent items, task items and the history entry are buttons", () => {
+test("a running item beside settled ones lists alone: no settled entry, no settled row", () => {
+  const both = render({ tasks: [task({ id: "t-live" }), task({ id: "t-done", status: "stopped", endedAt: NOW - 1_000, reason: "stopped" })] });
+  assert.deepEqual(items(both).map((item) => item.id), ["t-live"], `a settled task appears as a running item: ${JSON.stringify(items(both))}`);
+  assert.doesNotMatch(both, /data-pi-bg-history/, "the retired 「已结束」 entry renders beside a running item");
+  // A queued subagent beside an interrupted task keeps the area up too.
+  const queued = render({ subagents: [subagent({ status: "queued" })], tasks: [task({ id: "t-int", status: "interrupted" })] });
+  assert.deepEqual(items(queued).map((item) => item.id), ["sub-1"]);
+  assert.doesNotMatch(queued, /data-pi-bg-history/);
+});
+
+test("the running items are buttons in Claude's grid; no history entry renders anywhere", () => {
   const html = render({
     subagents: [subagent()],
     tasks: [task(), task({ id: "t-done", status: "succeeded", endedAt: NOW - 1_000, exitCode: 0 })],
   });
   assert.match(html, /<button[^>]*data-pi-subagent-item="sub-1"/, "the subagent item is not a button");
   assert.match(html, /<button[^>]*data-pi-task-item="t-1"/, "the task item is not a button");
-  // The entry renders because something settled; nothing settled, no entry.
-  assert.match(html, /<button[^>]*data-pi-bg-history="/, "the history entry is not a button");
-  assert.doesNotMatch(render({ subagents: [subagent()], tasks: [task()] }), /data-pi-bg-history/, "the entry shows with nothing settled");
+  assert.doesNotMatch(html, /data-pi-bg-history/, "the retired history entry renders");
   // The grid the Claude list established: equal-width columns from 260px.
   assert.match(html, /repeat\(auto-fill, ?minmax\(260px, ?1fr\)\)/, "the grid is not Claude's");
 });

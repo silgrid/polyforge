@@ -17,9 +17,10 @@
 // turns a running task into — shows as its own status, never as running.
 //
 // The history panel lists the session's settled tasks, newest end first,
-// each row a button that opens that task's panel; it is the 「已结束」
-// entry's answer (the owner's A+B: a direct entry beside the completion
-// notifications the message list already anchors).
+// each row a button that opens that task's panel; its entry is the detail
+// panel's header button (polyforge#189: the running area no longer carries
+// a settled entry, so the panel's own history button opens the list — the
+// owner's B ruling on #173's settled entry).
 import { useEffect, useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { formatTurnDuration } from "@/lib/turn-duration";
@@ -38,6 +39,15 @@ const HEADER_BUTTON = { flexShrink: 0, padding: "2px 8px", borderRadius: 5, bord
 const STOP_ICON = (
   <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
     <rect x="1.5" y="1.5" width="7" height="7" rx="1.5" fill="currentColor" />
+  </svg>
+);
+
+/** The history entry's glyph: a counterclockwise arrow over a clock face. */
+const HISTORY_ICON = (
+  <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M1.8 5a3.2 3.2 0 1 1 1 2.3" />
+    <path d="M1.4 4.3 1.8 5l.8-.2" />
+    <path d="M5 3.4V5l1.2.8" />
   </svg>
 );
 
@@ -95,12 +105,14 @@ function useTaskOutput(taskId: string, running: boolean, read: () => Promise<BgT
   return state;
 }
 
-export function PiBackgroundTaskPanel({ task, onStop, onReadOutput, onClose, now: fixedNow }: {
+export function PiBackgroundTaskPanel({ task, onStop, onReadOutput, onOpenHistory, onClose, now: fixedNow }: {
   task: BgTaskInfo;
   /** Stops the task (the executor's idempotent stop); a rejection's message shows in the panel. */
   onStop: () => Promise<void>;
   /** Reads the task's output tail; a rejection's message shows in the panel. */
   onReadOutput: () => Promise<BgTaskOutput>;
+  /** Opens the session's settled history — the history panel's entry (#189); absent, no button. */
+  onOpenHistory?: () => void;
   onClose: () => void;
   now?: number;
 }) {
@@ -144,6 +156,11 @@ export function PiBackgroundTaskPanel({ task, onStop, onReadOutput, onClose, now
                 <line x1="8" y1="2" x2="2" y2="8" />
               </svg>
             </button>
+            {onOpenHistory && (
+              <button type="button" onClick={onOpenHistory} data-pi-bg-history-open="" aria-label={t("bgTasks.historyTitle")} title={t("bgTasks.historyTitle")} style={{ ...HEADER_BUTTON, padding: "2px 6px", border: "none", cursor: "pointer" }}>
+                {HISTORY_ICON}
+              </button>
+            )}
             {running ? (
               <>
                 <button type="button" onClick={() => void stop()} disabled={stopping} aria-label={t("bgTasks.stop")} title={t("bgTasks.stop")} style={{ ...HEADER_BUTTON, padding: "2px 6px", border: "none", cursor: stopping ? "default" : "pointer" }}>{STOP_ICON}</button>
@@ -173,7 +190,7 @@ export function PiBackgroundTaskPanel({ task, onStop, onReadOutput, onClose, now
   );
 }
 
-/** The session's settled tasks, newest end first: the 「已结束」 entry's rows. */
+/** The session's settled tasks, newest end first: the detail panel's header history button's rows. */
 export function PiBackgroundTaskHistory({ tasks, onOpenTask, onClose, now: fixedNow }: {
   tasks: BgTaskInfo[];
   onOpenTask: (taskId: string) => void;

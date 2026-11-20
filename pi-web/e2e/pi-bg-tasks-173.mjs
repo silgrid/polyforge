@@ -1,25 +1,35 @@
 // carries: components/PiRunningList*, components/PiBackgroundTaskPanel*, hooks/useBackgroundTasks*, hooks/useSubagentRuns*, lib/bg-runtime.ts, lib/bg-protocol.ts, lib/background-tasks-client.ts, lib/subagent-runs-view.ts, lib/subagent-runtime.ts, lib/rpc-manager.ts
-// (the agent routes themselves stay under the three existing app/api/agent/* suites' cap)
-// polyforge#173 (AC1/AC3/AC4) — a pi session's built-in background tasks in the
-// browser. A local OpenAI-compatible fake model answers the session's first
-// request with a `bg_run` tool call, so the built-in executor starts a real
-// task and every later state is the product's own: the SSE events, the
-// bg-tasks HTTP interface, the running list above the composer and the task
-// panel it opens.
+// (the agent routes themselves stay under the three existing app/api/agent/* suites' cap;
+//  components/ChatWindow* and components/MessageView* are each declared by three
+//  suites already, and locale-table globs stay out of carries as #173 ruled)
+// polyforge#173 (AC1/AC3/AC4) + polyforge#189 (AC1/AC2) — a pi session's
+// built-in background tasks in the browser. A local OpenAI-compatible fake
+// model answers the session's first request with a `bg_run` tool call, so the
+// built-in executor starts a real task and every later state is the product's
+// own: the SSE events, the bg-tasks HTTP interface, the running list above
+// the composer and the task panel it opens.
 //
-// One server runs the four scenarios in order, each in its own session:
+// One server runs the five scenarios in order, each in its own session:
 //   R173a  a started task appears in the running list's grid (command, Running,
 //          a ticking elapsed time), on desktop and at 375px; the list sits
 //          above the composer in the chat column.
 //   R173b  a short task ends: the session wakes (the completion notification
-//          shows as its own message and the model answers it), the list
-//          collapses to no task items, the 「已结束」 entry opens the task's
-//          detail with its final status and output tail.
+//          shows as its own message and the model answers it), and without any
+//          page reload the task's button leaves the running list within
+//          seconds of its end, the whole running area collapses (the node
+//          itself gone, no settled entry) and the settled task's detail opens
+//          from the bg_run tool card with its final status and output tail
+//          (#189 AC1/AC2: settled tasks never occupy the running area).
 //   R173c  the detail panel's Stop stops the task: it leaves the list and the
 //          open panel shows it stopped.
 //   R173d  a task still running through a server restart reads as interrupted
-//          afterwards: never in the running list, visible through the 「已结束」
-//          entry's detail.
+//          afterwards: never in the running list, the running area gone, its
+//          detail opened through the card button, and the settled history
+//          reachable through the detail panel's history button (#189).
+//   R173e  two tasks in one turn: only the ended one's button leaves the list
+//          while the other still runs, the list collapses when the last one
+//          ends, and a detail panel open across the task's own end survives
+//          showing its final status (#189).
 // Every wait polls the condition it asserts, with a bounded deadline. The
 // suite ends with `PASS pi-bg-tasks-173` only when every scenario passed and
 // the browser reported no errors.
@@ -52,7 +62,8 @@ mkdirSync(agentDir, { recursive: true });
 // ---- fake model ------------------------------------------------------------
 // `scripted` holds one reply per model request, in order (the session's own
 // requests are strictly ordered; a stray completion wake beyond the script
-// gets the plain OK answer). A `toolCall` reply makes the session run bg_run.
+// gets the plain OK answer). A `toolCall` reply makes the session run one
+// bg_run; a `toolCalls` reply starts several in the same turn.
 const OK = { kind: "text", text: "OK-ANSWER" };
 let scripted = [];
 const model = createHttpServer(async (request, response) => {
@@ -68,15 +79,18 @@ const model = createHttpServer(async (request, response) => {
     choices: [{ index: 0, delta, finish_reason: finish }], ...extra,
   })}\n\n`;
   response.write(chunk({ role: "assistant", content: "" }));
-  if (reply.kind === "toolCall") {
-    response.write(chunk({
-      tool_calls: [{
-        index: 0,
-        id: "call_1",
-        type: "function",
-        function: { name: "bg_run", arguments: JSON.stringify({ command: reply.command }) },
-      }],
-    }));
+  if (reply.kind === "toolCall" || reply.kind === "toolCalls") {
+    const commands = reply.kind === "toolCall" ? [reply.command] : reply.commands;
+    commands.forEach((command, index) => {
+      response.write(chunk({
+        tool_calls: [{
+          index,
+          id: `call_${index + 1}`,
+          type: "function",
+          function: { name: "bg_run", arguments: JSON.stringify({ command }) },
+        }],
+      }));
+    });
     response.write(chunk({}, "tool_calls"));
   } else {
     response.write(chunk({ content: reply.text }));
@@ -93,9 +107,10 @@ writeFileSync(join(agentDir, "models.json"), JSON.stringify({
 
 const TITLES = {
   R173a: "A started background task appears in the running list above the composer, on desktop and at 375px",
-  R173b: "A finished task wakes the session, collapses the list and opens from the 「已结束」 entry with its status and output",
+  R173b: "A finished task wakes the session, its button leaves the collapsed running list within seconds without a reload, and its detail opens from the bg_run card",
   R173c: "The detail panel's Stop stops the task: it leaves the list, the panel shows it stopped",
-  R173d: "A task still running through a server restart reads as interrupted, never in the running list",
+  R173d: "A task still running through a server restart reads as interrupted, never in the running list, its detail and the history reachable",
+  R173e: "Only an ended task's button leaves the list while another runs; the list collapses at the last end and an open detail survives it",
 };
 
 const h = createHarness();
@@ -116,7 +131,13 @@ const STORAGE = { "pi-web:split-view-enabled": "false", "pi-web:session-age-filt
 const composer = (page) => page.locator(".chat-input-textarea").first();
 const list = (page) => page.locator("[data-pi-running-list]");
 const taskItem = (page, taskId) => list(page).locator(`[data-pi-task-item="${taskId}"]`);
+// The settled entry the running list used to carry (#189 removes it); kept as
+// a locator so the scenarios can assert it never renders.
 const historyEntry = (page) => list(page).locator("[data-pi-bg-history]");
+// The bg_run tool card's open-task button (#189) and the detail panel's
+// history button (the settled history's entry).
+const cardButton = (page, taskId) => page.locator(`[data-pi-open-task="${taskId}"]`);
+const historyOpenButton = (page) => page.locator("[data-pi-bg-history-open]");
 const taskPanel = (page, taskId) => page.locator(`[data-pi-task-panel="${taskId}"]`);
 const historyPanel = (page) => page.locator("[data-pi-bg-history-panel]");
 
@@ -137,19 +158,25 @@ async function postJson(pathname, body) {
   return { status: response.status, body: await response.json().catch(() => ({})) };
 }
 
-/** Creates a pi session whose first model request starts one bg task. */
-async function newSessionWithTask(command, followUps = []) {
-  scripted = [{ kind: "toolCall", command }, ...followUps];
-  const created = await postJson("/api/agent/new", { cwd: project, type: "prompt", message: `start a background task: ${command}`, provider: "fake", modelId: "fake-model" });
+/** Creates a pi session whose first model request starts the given bg tasks. */
+async function newSessionWithTasks(commands, followUps = []) {
+  scripted = [{ kind: "toolCalls", commands }, ...followUps];
+  const created = await postJson("/api/agent/new", { cwd: project, type: "prompt", message: `start background tasks: ${commands.join(" and ")}`, provider: "fake", modelId: "fake-model" });
   assert.equal(created.status, 200, `POST /api/agent/new -> ${created.status} ${JSON.stringify(created.body).slice(0, 300)}`);
   const id = created.body.sessionId ?? created.body.data?.sessionId;
   assert.ok(typeof id === "string" && id.length > 0, "the create route returned no session id");
-  const listed = await waitFor(async () => {
+  const tasks = await waitFor(async () => {
     const body = await getJson(`/api/agent/${encodeURIComponent(id)}/bg-tasks`);
     const running = (body.tasks ?? []).filter((task) => task.status === "running");
-    return running.length === 1 ? running[0] : null;
-  }, 45_000, `the bg task never appeared in ${id}'s own list`);
-  return { sessionId: id, taskId: listed.id };
+    return running.length === commands.length ? running : null;
+  }, 45_000, `the bg tasks never appeared in ${id}'s own list`);
+  return { sessionId: id, tasks };
+}
+
+/** The one-task shape the first scenarios use. */
+async function newSessionWithTask(command, followUps = []) {
+  const { sessionId, tasks } = await newSessionWithTasks([command], followUps);
+  return { sessionId, taskId: tasks[0].id };
 }
 
 async function openSession(sessionId, viewport) {
@@ -166,6 +193,16 @@ async function openSession(sessionId, viewport) {
 }
 
 const shot = (name) => async (page) => { await page.screenshot({ path: join(shots, `${name}.png`), fullPage: false }); };
+
+/** The turn's Process details fold starts collapsed when its answer has text
+ *  (lib/message-display's collapsesProcessDetails), so the bg_run card and
+ *  its open-task button mount only once the fold opens: expand every fold
+ *  before the scenarios interact with the card (#189). */
+async function revealToolCards(page) {
+  for (const fold of await page.getByRole("button", { name: /^Process details/ }).all()) {
+    if ((await fold.getAttribute("aria-expanded")) !== "true") await fold.click();
+  }
+}
 
 /** Every page this suite opened; closed after each scenario, so a stopped server's dead EventSources log no browser errors. */
 const opened = [];
@@ -216,15 +253,23 @@ try {
     await closeOpened();
   });
 
-  // R173b — the end wakes the session, collapses the list, and the settled
-  // task opens from the 「已结束」 entry with its status and output.
+  // R173b — the end wakes the session, the button leaves the collapsed list
+  // without a reload within seconds, and the card button opens the detail.
   await scenario("R173b", async () => {
     // Three scripted replies: the turn's own answer after the bg_run result
     // (TURN-ONE), then the wake's answer (WAKE-ANSWER). A same-turn second
     // request consumes TURN-ONE, so WAKE-ANSWER can only appear when the
     // completion notification actually triggered a turn (AC4's 唤醒).
-    const { sessionId, taskId } = await newSessionWithTask("echo BG-E2E-DONE; sleep 1", [{ kind: "text", text: "TURN-ONE" }, { kind: "text", text: "WAKE-ANSWER" }]);
+    const { sessionId, taskId } = await newSessionWithTask("echo BG-E2E-DONE; sleep 5", [{ kind: "text", text: "TURN-ONE" }, { kind: "text", text: "WAKE-ANSWER" }]);
     const page = await openSession(sessionId);
+    // A page marker: still set at the end proves no reload happened across the
+    // task's end (AC2's 不刷新页面).
+    await page.evaluate(() => { window.__pf189NoReload = "kept"; });
+    // The browser sees the task running first: the item and its card's button.
+    await waitFor(async () => (await taskItem(page, taskId).count()) === 1, 25_000, "the running task never appeared in the running list");
+    await revealToolCards(page);
+    const card = cardButton(page, taskId);
+    await waitFor(async () => (await card.count()) >= 1, 25_000, "the bg_run tool card's open-task button never showed");
     // The completion notification shows as its own message and the model answers it.
     await waitFor(async () => (await page.locator("body").innerText()).includes("Background task"), 25_000, "the completion notification never showed in the message list");
     await waitFor(async () => (await page.locator("body").innerText()).includes("TURN-ONE"), 25_000, "the turn's own answer never showed");
@@ -236,21 +281,25 @@ try {
       settledText.indexOf("WAKE-ANSWER") > settledText.indexOf("Background task"),
       `the wake's answer does not follow the completion notification: notification at ${settledText.indexOf("Background task")}, answer at ${settledText.indexOf("WAKE-ANSWER")}`,
     );
-    // The list collapsed: no task item, and the 「已结束」 entry took over.
-    await waitFor(async () => (await taskItem(page, taskId).count()) === 0, 25_000, "the settled task never left the running list");
-    const entry = historyEntry(page);
-    await waitFor(async () => (await entry.count()) === 1, 25_000, "the 「已结束」 entry never appeared");
-    await entry.click();
-    const panel = historyPanel(page);
-    await waitFor(async () => (await panel.count()) === 1, 25_000, "the history panel never opened");
-    const row = panel.locator(`[data-pi-history-task="${taskId}"]`);
-    await waitFor(async () => (await row.count()) === 1, 25_000, "the settled task never appeared in the history panel");
-    assert.match(await row.innerText(), /Completed/, `the history row shows the final status: ${JSON.stringify(await row.innerText())}`);
-    await shot("R173b-history")(page);
-    await row.click();
+    // The task settles on the server; from that moment its button must leave
+    // the running list within seconds — no reload, no settled entry (#189 AC2).
+    await waitFor(async () => {
+      const body = await getJson(`/api/agent/${encodeURIComponent(sessionId)}/bg-tasks`);
+      const record = (body.tasks ?? []).find((task) => task.id === taskId);
+      return record && record.status !== "running" ? record.status : null;
+    }, 45_000, "the task never settled");
+    await waitFor(async () => (await taskItem(page, taskId).count()) === 0, 5_000, "the settled task's button did not leave the running list within 5 s of its end (no reload)");
+    // The whole running area collapses: the node itself is gone.
+    await waitFor(async () => (await list(page).count()) === 0, 5_000, "the running area did not collapse after the last task ended");
+    assert.equal(await historyEntry(page).count(), 0, "a settled entry still renders in the running area");
+    assert.equal(await page.evaluate(() => window.__pf189NoReload), "kept", "the page reloaded across the task's end");
+    // The settled task's detail opens from the bg_run tool card (#189 AC1).
+    await card.first().click();
     const detail = taskPanel(page, taskId);
-    await waitFor(async () => (await detail.count()) === 1, 25_000, "the task's detail never opened from the history row");
+    await waitFor(async () => (await detail.count()) === 1, 25_000, "the task's detail never opened from the card button");
     await waitFor(async () => (await detail.innerText()).includes("BG-E2E-DONE"), 20_000, "the detail never showed the task's output tail");
+    assert.match(await detail.innerText(), /Completed/, `the detail shows the final status: ${JSON.stringify(await detail.innerText())}`);
+    await shot("R173b-card")(page);
     await closeOpened();
   });
 
@@ -281,19 +330,68 @@ try {
     await h.stop();
     ({ base: h.base } = await h.startServer({ name: `${SUITE}-restart`, logFile: join(scratch, "server-restart.log"), env: serverEnv() }));
     const reloaded = await openSession(sessionId);
+    const record = await waitFor(async () => {
+      const body = await getJson(`/api/agent/${encodeURIComponent(sessionId)}/bg-tasks`);
+      const found = (body.tasks ?? []).find((task) => task.id === taskId);
+      return found && found.status === "interrupted" ? found : null;
+    }, 45_000, "the running task never read as interrupted after the restart");
+    // The bg_run card's button opens the interrupted task's detail FIRST: the
+    // panel renders only from the ready bg-tasks state's own record
+    // (openPiTask), so its appearing and showing Interrupted is the anchor
+    // that proves the reloaded page's bg-tasks state has loaded (r1#1: while
+    // it is still loading, the running area is empty because nothing has
+    // been read yet, not because no task runs — its absence means nothing
+    // until this anchor holds).
+    await revealToolCards(reloaded);
+    const card = cardButton(reloaded, taskId);
+    await waitFor(async () => (await card.count()) === 1, 25_000, "the bg_run card's open-task button never showed after the restart");
+    await card.click();
+    const detail = taskPanel(reloaded, taskId);
+    await waitFor(async () => (await detail.count()) === 1, 25_000, "the interrupted task's detail never opened");
+    assert.match(await detail.innerText(), /Interrupted/, `the detail shows interrupted: ${JSON.stringify(await detail.innerText())}`);
+    // The running area is gone entirely — no item, no node, no settled entry —
+    // read on the state the anchor above proved loaded.
     await waitFor(async () => (await taskItem(reloaded, taskId).count()) === 0, 25_000, "the interrupted task still shows in the running list after the restart");
-    const entry = historyEntry(reloaded);
-    await waitFor(async () => (await entry.count()) === 1, 25_000, "the 「已结束」 entry never appeared after the restart");
-    await entry.click();
+    await waitFor(async () => (await list(reloaded).count()) === 0, 25_000, "the running area still renders after the restart");
+    assert.equal(await historyEntry(reloaded).count(), 0, "a settled entry renders in the running area after the restart");
+    await shot("R173d-interrupted")(reloaded);
+    // The settled history stays reachable through the detail's history button
+    // (#189: the history's entry is the detail panel's, never the running area's).
+    await historyOpenButton(reloaded).click();
     const panel = historyPanel(reloaded);
-    await waitFor(async () => (await panel.count()) === 1, 25_000, "the history panel never opened after the restart");
+    await waitFor(async () => (await panel.count()) === 1, 25_000, "the history panel never opened from the detail's history button");
     const row = panel.locator(`[data-pi-history-task="${taskId}"]`);
     await waitFor(async () => (await row.count()) === 1, 25_000, "the interrupted task never appeared in the history panel");
     assert.match(await row.innerText(), /Interrupted/, `the history row shows interrupted: ${JSON.stringify(await row.innerText())}`);
-    await row.click();
-    const detail = taskPanel(reloaded, taskId);
-    await waitFor(async () => (await detail.count()) === 1, 25_000, "the interrupted task's detail never opened");
-    await shot("R173d-interrupted")(reloaded);
+    await closeOpened();
+  });
+
+  // R173e — only an ended task's button leaves the list while another runs;
+  // the list collapses at the last end and an open detail survives it.
+  await scenario("R173e", async () => {
+    const SHORT = "echo BG-E2E-MIX; sleep 8";
+    const LONG = "sleep 16";
+    const { sessionId, tasks } = await newSessionWithTasks([SHORT, LONG], [{ kind: "text", text: "TURN-ONE" }]);
+    const byCommand = (command) => tasks.find((task) => task.command === command);
+    const shortId = byCommand(SHORT).id;
+    const longId = byCommand(LONG).id;
+    const page = await openSession(sessionId);
+    await waitFor(async () => (await taskItem(page, shortId).count()) === 1 && (await taskItem(page, longId).count()) === 1, 25_000, "the two running tasks never both appeared in the running list");
+    // Open the long task's detail from its card while it still runs.
+    await revealToolCards(page);
+    await cardButton(page, longId).first().click();
+    const detail = taskPanel(page, longId);
+    await waitFor(async () => (await detail.count()) === 1, 25_000, "the long task's detail never opened from the card button");
+    // The short task ends: only its button leaves, the long one and the list stay.
+    await waitFor(async () => (await taskItem(page, shortId).count()) === 0, 25_000, "the short task's button never left the running list");
+    assert.equal(await taskItem(page, longId).count(), 1, "the long task's button left the list while it still runs");
+    assert.equal(await list(page).count(), 1, "the running area collapsed while a task still runs");
+    assert.equal(await historyEntry(page).count(), 0, "a settled entry rendered beside the running item");
+    // The long task ends: the list collapses, the open detail survives with its final status.
+    await waitFor(async () => (await taskItem(page, longId).count()) === 0, 30_000, "the long task's button never left the running list");
+    await waitFor(async () => (await list(page).count()) === 0, 5_000, "the running area did not collapse after the last task ended");
+    await waitFor(async () => (await detail.innerText()).includes("Completed"), 20_000, "the open detail never showed the task completed");
+    await shot("R173e-mixed")(page);
     await closeOpened();
   });
 
