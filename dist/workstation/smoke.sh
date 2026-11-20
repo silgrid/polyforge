@@ -71,9 +71,9 @@ require_engine() {
 # service_of PROFILE — the compose service name of a boot mode.
 service_of() {
 	if [ "$1" = aihub ]; then
-		echo workstation-aihub
-	else
 		echo workstation
+	else
+		echo workstation-noaihub
 	fi
 }
 

@@ -44,4 +44,16 @@ done
 . /usr/local/bin/workstation-env-whitelist.sh
 workstation_env_whitelist
 
+# 3. first boot (polyforge#176, 84-components-C): the one-time
+#    initialization — the seed install into the components volume, the
+#    AIHub identity (the daily user, its key, the local project),
+#    cli.toml's default Cell, the harness references and the phase
+#    record — before supervise starts the server, so the server's own
+#    fresh-install bootstrap never fires. Idempotent: a completed
+#    first boot skips itself, and an interrupted one resumes (the
+#    record says which phase stopped). A refusal here ends the
+#    container: starting supervise on an uninitialized or
+#    inconsistent machine is never better.
+pf first-boot
+
 exec pf supervise "$@"
