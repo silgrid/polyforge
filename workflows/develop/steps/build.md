@@ -40,7 +40,14 @@ owner only in the cases item 3 names, and judge the plan; without sub-agents, do
    obligations:` (what must change with each write — the repo's `AGENTS.md` names its known couplings —
    or `none` and why); `## Coverage` — per criterion `test` (its unit's test), `existing` (the test
    already pinning it) or `doc` (the file and its validator) — the table your skill gives — and for a
-   user-visible criterion its e2e scenario or one line why a unit test suffices.
+   user-visible criterion its e2e scenario or one line why a unit test suffices. The plan carries a
+   `## 分析对照` section beside `## Units` — its own `##` heading, never inside it (the plan-conformance
+   scan reads `## Units` up to the next `##` heading): on a ticket whose content carries a `## 分析`
+   section, each item the analysis lists — each old test and document obligation, each risk, each
+   decided point (`已定`) — is mapped to the unit that carries it, or the stated reason it is not
+   taken; a decided point takes precedence over the analysis's recommendation; an analysis written
+   against a base that differs from the current one has its file:line references re-checked against
+   the current base before the work starts; a ticket without `## 分析` writes `none` there.
 
 3. **When to ask the owner**: only in the four cases your skill names — (a) a dead end or a
    contradiction, (b) a deviation, (c) `confirm_plan: true`, (d) a missing or incomplete acceptance list

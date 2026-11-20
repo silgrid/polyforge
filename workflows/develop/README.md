@@ -44,7 +44,8 @@ and `artifacts/merge/landing.json`. The daemon orchestrates; it judges no conten
 
 - **build** (fresh session; skill `build`) — one session, four segments
   (`steps/build.md`): a plan against the work item's acceptance criteria
-  (`artifacts/plan.md`, its `## Coverage` the criterion → test table, each `## Units` entry
+  (`artifacts/plan.md`, its `## Coverage` the criterion → test table, its `## 分析对照` section
+  mapping the ticket's `## 分析` items to units or stated reasons, each `## Units` entry
   recording the behaviour its test observes, how its expected values are derived
   independently of the implementation and the change it
   catches (`workflows/_shared/test_quality.md`)); per unit, a test — a

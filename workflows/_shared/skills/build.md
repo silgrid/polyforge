@@ -127,6 +127,15 @@ record exactly what ran.
    `| AC | kind | ref |`, kind `test` (ref `<repo>/<test file>: <test name>`), `existing`
    (the test already pinning it) or `doc` (the file and the validator that shows it).
    Keep it current with every round.
+   A round that wrote the plan adds its `## 分析对照` section beside `## Units` when the
+   ticket's content carries a `## 分析` section — its own `##` heading, never inside it (the
+   plan-conformance scan reads `## Units` up to the next `##` heading): each item the analysis
+   lists — each old test and document obligation, each risk, each decided point (`已定`) —
+   mapped to the unit that carries it, or the stated reason it is not taken; a decided point
+   takes precedence over the analysis's recommendation; an analysis written against a base that
+   differs from the current one has its file:line references re-checked against the current
+   base before the work starts; a ticket without `## 分析` writes `none` there. A round that
+   keeps an inherited plan adds nothing to it.
 5. **The close's checks.** The step's close (3c) first runs the build close's scoped selection once
    per touched repo — for a work item whose verification runs the light tier (an integration
    batch's fix ticket runs the full bar and closes without one) — `"$PF_PYTHON"
