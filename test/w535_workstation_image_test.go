@@ -874,8 +874,12 @@ func TestWorkstationImageEngine(t *testing.T) {
 	// recorded against another AIHub identity domain is the daemon's own
 	// 78). Reset the compose project's volumes first — the operator's
 	// own `smoke.sh boot` run never does this, only the engine
-	// acceptance does.
-	_ = exec.Command("docker", "compose", "-f", filepath.Join(root, "dist/workstation/compose.yaml"), "--profile", "no-aihub", "down", "-v").Run()
+	// acceptance does. (The compose file's required interpolation
+	// refuses even a `down` without the password, so it carries one
+	// here too.)
+	down := exec.Command("docker", "compose", "-f", filepath.Join(root, "dist/workstation/compose.yaml"), "--profile", "no-aihub", "down", "-v")
+	down.Env = append(os.Environ(), "PI_WEB_PASSWORD=x")
+	_ = down.Run()
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sh", filepath.Join(root, "dist/workstation/smoke.sh"), "boot", "--no-aihub")
