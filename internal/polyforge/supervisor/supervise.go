@@ -7,7 +7,11 @@ package supervisor
 // child processes, restarts a child that dies on it (a crash, a kill -9)
 // with a growing delay, ends the whole run when the daemon exits 0 or
 // NeedsOperatorExit (Q3: the container stops with that code; the reason
-// is in daemon.log), and on SIGTERM/SIGINT — what `docker stop` sends,
+// is in daemon.log), relaunches the daemon AT ONCE — no failure backoff,
+// the run never ends on it — when it exits UpgradeRestartExit (75, the
+// restart-for-an-upgrade: an upgrade switched the components volume's
+// current, and the relaunch's argv resolves current afresh), and on
+// SIGTERM/SIGINT — what `docker stop` sends,
 // and catatonit forwards to its direct child only — forwards the signal
 // ONCE to every child (a second daemon signal would hard-abort its
 // shutdown and lose the checkpoint) and then waits out the stop grace
@@ -284,6 +288,19 @@ func (p *supProc) manage(exits chan<- supExit, runDone <-chan struct{}) {
 		p.mu.Lock()
 		p.inflight = false
 		p.mu.Unlock()
+		if p.daemon && code == UpgradeRestartExit {
+			// the daemon asked for the restart-for-an-upgrade
+			// (polyforge#175): relaunch AT ONCE — no failure count,
+			// no backoff sleep (the daemon's argv resolves the
+			// components volume's current, so the relaunch runs the
+			// new version). The loop's stop check above wins over this
+			// restart, and a start that then cannot run (a missing
+			// current) falls into retrySleep below like any failure —
+			// a missing current never loops at zero delay. The failure
+			// count is neither grown nor reset here: a crash loop that
+			// follows an upgrade restart keeps its own backoff.
+			continue
+		}
 		if p.retrySleep() {
 			continue
 		}
