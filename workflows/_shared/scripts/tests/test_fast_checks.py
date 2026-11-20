@@ -969,6 +969,30 @@ class RepoReuseTrackedIgnoredTest(FastChecksCase):
                          "快检不得改写仓库自己的索引")
 
 
+class RepoReuseCarrySummaryTest(FastChecksCase):
+    """收窄检查范围后，复用条目与保留条目按本次动作分别计数。"""
+
+    def test_carried_reused_entries_are_counted_once(self) -> None:
+        counts = os.path.join(self.tmp, "carry-summary-runs")
+        self.task_repo("app", {
+            "go.mod": GO_MOD,
+            ".polyforge/verify-scope.conf": counting_conf(counts),
+            "app/app.go": APP,
+            "app/app_test.go": APP_TEST,
+        }, APP_CHANGE)
+        for _ in range(2):
+            code, res = self.run_checks("app")
+            self.assertEqual(code, 0, res)
+        code, narrowed = self.run_checks("app", extra=("--phase", "fast", "--root", "."))
+        self.assertEqual(code, 0, narrowed)
+        self.assertIn("0 command(s) ran", narrowed["summary"],
+                      "保留的旧复用条目不能同时计作本次复用，造成负执行数")
+        self.assertIn("2 reused", narrowed["summary"])
+        self.assertIn("1 carried over", narrowed["summary"])
+        with open(counts, encoding="utf-8") as f:
+            self.assertEqual(len(f.read().splitlines()), 3)
+
+
 class PhaseRootTest(FastChecksCase):
     """AC2's entry point: `--phase fast` narrows the per-unit bar to the
     fast commands and a repeatable `--root <dir>` to the named engine
