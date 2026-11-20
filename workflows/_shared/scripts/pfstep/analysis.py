@@ -67,6 +67,11 @@ class SelectedCommand:
     timed_out: bool = False
     skipped: bool = False
     skip_reason: str = ""
+    # the per-unit bar's own green through a flaky re-run: the whole command
+    # re-run that exited 0, or its completion proof — evidence beside a red
+    # first run
+    confirmed: str = ""
+    complete: str = ""
 
 
 @dataclass
@@ -169,7 +174,12 @@ def selected_problem(d: SelectedDecl, head: str) -> str:
             return "its selected command `%s` was killed at its timeout — its run is no evidence" % c.cmd
         if c.exit_code is None:
             return "its selected command `%s` carries no run: no green run, no reuse source — the close never completed it" % c.cmd
-        if c.exit_code != 0:
+        if c.exit_code != 0 and not (c.confirmed or c.complete):
+            # the per-unit bar's own green through a flaky re-run: a red
+            # first run whose failing units re-ran flaky and whose whole
+            # command was then confirmed (one whole re-run exiting 0) or
+            # proven complete (its completion proof) is green evidence,
+            # the record stating it with `confirmed`/`complete`
             return "its selected command `%s` exited %d: a red selection is not evidence" % (c.cmd, c.exit_code)
     return ""
 
@@ -275,6 +285,8 @@ def read_analysis(path: str) -> Analysis:
                 source=_text(c.get("source", ""), at + ".source"), reused=_text(c.get("reused", ""), at + ".reused"),
                 exit_code=exit_code, timed_out=bool(c.get("timed_out", False)),
                 skipped=bool(c.get("skipped", False)), skip_reason=_text(c.get("skip_reason", ""), at + ".skip_reason"),
+                confirmed=_text(c.get("confirmed", ""), at + ".confirmed"),
+                complete=_text(c.get("complete", ""), at + ".complete"),
             ))
         sel = SelectedDecl(
             head=gostr.trim_space(ent.get("head", "")),
