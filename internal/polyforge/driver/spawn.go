@@ -326,10 +326,14 @@ func subagentsFact(bundleDir, stepID, h string, params map[string]string) string
 	if err != nil || !strings.Contains(string(raw), "{{"+subagentsRulesVar+"}}") {
 		return ""
 	}
-	if strings.EqualFold(strings.TrimSpace(params["pi_subagents"]), "on") {
+	if piSubagentsEnabled(params) {
 		return ""
 	}
 	return piNoSubagents
+}
+
+func piSubagentsEnabled(params map[string]string) bool {
+	return strings.EqualFold(strings.TrimSpace(params["pi_subagents"]), "on")
 }
 
 // launch derives the step process for an assembled prompt: the dispatch's
