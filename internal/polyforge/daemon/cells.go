@@ -321,21 +321,39 @@ func (h *Host) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return h.Shutdown(context.Background(), "caller-context: the Run caller's context is done")
 		case <-h.shutDone:
-			return nil
+			// a shutdown ended the run: the restart-for-an-upgrade ask
+			// (polyforge#190) is the one ending that is not a clean one
+			// — the process exits 75 and the supervisor relaunches it
+			// AT ONCE on the components volume's new current.
+			return h.runEnding()
 		case err := <-serveErr:
 			if err != nil && !errors.Is(err, http.ErrServerClosed) {
 				_ = h.Shutdown(context.Background(), fmt.Sprintf("serve-error: %v", err))
 				return err
 			}
 			<-h.shutDone
-			return nil
+			return h.runEnding()
 		case <-defCell.stopped:
 			// The default Cell ended on its own (its shutdown ran): the Host
-			// goes with it.
+			// goes with it — and a restart-for-an-upgrade ask that started
+			// that shutdown still names the ending (polyforge#190).
 			_ = h.Shutdown(context.Background(), "default Cell stopped")
+			if err := h.runEnding(); err != nil {
+				return err
+			}
 			return defCell.runErr
 		}
 	}
+}
+
+// runEnding answers the ending a completed shutdown leaves: nil for a
+// clean end, errRestartForUpgrade when a restart-for-an-upgrade ask
+// started the shutdown (polyforge#190).
+func (h *Host) runEnding() error {
+	if h.restartForUpgrade.Load() {
+		return errRestartForUpgrade
+	}
+	return nil
 }
 
 // stampServedLayout closes the cell-layout rollback window (spec: after new

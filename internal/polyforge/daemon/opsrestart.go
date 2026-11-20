@@ -11,6 +11,7 @@ package daemon
 // relaunch turns it into the version switch's second half.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -38,8 +39,11 @@ func (h *Host) opsRestartRoute(w http.ResponseWriter, r *http.Request) {
 	if cred, ok := requestPeerCred(r.Context()); ok {
 		cause = fmt.Sprintf("route: POST /ops/restart uds peer pid=%d uid=%d", cred.pid, cred.uid)
 	}
-	_ = cause // the zero-value stub answers and does nothing else
+	h.restartForUpgrade.Store(true)
+	// Answer immediately; the shutdown runs in the background and Run
+	// ends in errRestartForUpgrade once it finishes.
 	writeJSON(w, http.StatusOK, map[string]any{"restarting_for_upgrade": true})
+	go func() { _ = h.Shutdown(context.Background(), cause) }()
 }
 
 // exitOfRun maps Run's ending to the process exit status (main's own
@@ -49,7 +53,8 @@ func exitOfRun(err error) int {
 	switch {
 	case err == nil:
 		return 0
-
+	case errors.Is(err, errRestartForUpgrade):
+		return ExitUpgradeRestart
 	default:
 		var no *needsOperatorError
 		if errors.As(err, &no) {

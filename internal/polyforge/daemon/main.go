@@ -224,6 +224,10 @@ func Main(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}()
 
 	if err := h.Run(context.Background()); err != nil {
+		if errors.Is(err, errRestartForUpgrade) {
+			fmt.Fprintf(stderr, "pf daemon: %v\n", err)
+			return ExitUpgradeRestart
+		}
 		fmt.Fprintf(stderr, "pf daemon: %v\n", err)
 		var no *needsOperatorError
 		if errors.As(err, &no) {
