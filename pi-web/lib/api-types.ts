@@ -147,7 +147,8 @@ export interface UnifiedSkillClaudeSide {
 /** One merged row of the unified skills listing (#85 85d, AC1): one real
  * SKILL.md as every harness that lists it sees it, in one scope group. */
 export interface UnifiedSkillRow {
-  /** Stable row key: the row's real file path (never shared by two rows). */
+  /** Stable row key: the scope-prefixed real file path (review r1#3: two
+   * scopes' rows of one file never share a key and never merge). */
   key: string;
   /** The scope group the row renders under: 用户 / 项目. */
   scope: "user" | "project";

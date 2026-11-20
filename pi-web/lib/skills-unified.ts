@@ -38,16 +38,22 @@ export interface ClaudeSkillsListing {
 }
 
 /**
- * Merges the two listings into rows, one per real file per scope (Q2 B). The
- * caller owns the no-project filtering (a listing without a cwd keeps only the
- * user scope); this merge answers exactly what it is given.
+ * Merges the two listings into rows, one per real file per scope (Q2 B,
+ * review r1#3: the realpath merge never crosses scopes — a file pi lists as
+ * user-declared and claude lists as a project skill is two rows, so the
+ * claude side keeps the layer its own switch writes to). The caller owns
+ * the no-project filtering (a listing without a cwd keeps only the user
+ * scope); this merge answers exactly what it is given.
  */
 export function mergeSkillListings(
   piSkills: SkillInfo[],
   claude: ClaudeSkillsListing,
 ): UnifiedSkillRow[] {
   const rows = new Map<string, UnifiedSkillRow>();
-  const get = (key: string, scope: "user" | "project"): UnifiedSkillRow => {
+  // The row key prefixes the scope, so two scopes' rows of one file never
+  // share a key (React rows, the panel's selection) and never merge.
+  const get = (scope: "user" | "project", filePath: string): UnifiedSkillRow => {
+    const key = `${scope}:${realKey(filePath)}`;
     let row = rows.get(key);
     if (!row) {
       row = { key, scope, name: "", harnesses: [], sameName: [] };
@@ -58,7 +64,7 @@ export function mergeSkillListings(
 
   for (const skill of piSkills) {
     const scope = piScope(skill);
-    const row = get(realKey(skill.filePath), scope);
+    const row = get(scope, skill.filePath);
     row.pi = {
       name: skill.name,
       filePath: skill.filePath,
@@ -72,7 +78,7 @@ export function mergeSkillListings(
   }
   for (const entry of claude.entries) {
     const scope = claudeScope(entry);
-    const row = get(realKey(entry.path), scope);
+    const row = get(scope, entry.path);
     row.claude = {
       name: entry.name,
       filePath: entry.path,
