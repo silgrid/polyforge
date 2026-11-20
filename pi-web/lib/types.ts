@@ -477,11 +477,3 @@ export interface BackgroundTasksUpdateEvent {
 
 export type BackgroundTasksClientEvent = BackgroundTaskTerminalEvent | BackgroundTasksUpdateEvent;
 
-/** Bounded log tail returned by the logs route. */
-export interface BgTaskLogsResult {
-  text: string;
-  bytesRead: number;
-  truncated: boolean;
-  tail: boolean;
-  path?: string;
-}

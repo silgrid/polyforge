@@ -9,6 +9,8 @@ const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
 const { PiBackgroundTaskPanel, PiBackgroundTaskHistory } = await jiti.import("./PiBackgroundTaskPanel.tsx");
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
+// The locale modules' import registers their message tables.
+await jiti.import("@/lib/i18n/messages/en");
 const { formatTurnDuration } = await jiti.import("@/lib/turn-duration");
 
 const NOW = Date.UTC(2026, 10, 16, 12, 0, 0);
@@ -83,7 +85,7 @@ test("a running task's panel holds close, stop and the ticking time in one right
   assert.ok(close >= 0 && stop > close && elapsed > stop, `the right column is not close, stop, then time: ${side}`);
   // The time is the elapsed 9s (startedAt 9s before the fixed now).
   assert.match(side.slice(elapsed), new RegExp(`>${formatTurnDuration(9_000).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}<`), "the right column shows no elapsed time");
-  assert.match(side.slice(elapsed), /font-variant:tabular-nums/, "the elapsed time is not in tabular numerals");
+  assert.match(side.slice(elapsed), /font-variant-numeric:tabular-nums/, "the elapsed time is not in tabular numerals");
   assert.match(side.slice(0, elapsed), /align-items:flex-end/, "the right column is not right-aligned");
   // The whole command is in the header, in the mono font.
   assert.match(html.slice(command), /npm run build/, "the header lost the command");
@@ -124,7 +126,8 @@ test("the history panel lists the session's settled tasks, interrupted named and
   const earlyRow = html.slice(early);
   assert.match(earlyRow, /Completed/, "the succeeded row shows no status");
   // Every row is a button that opens that task's detail.
-  assert.match(html.slice(orphan, orphan + 200), /^.{0,40}<button|<button[^>]*data-pi-history-task="t-orphan"/, "the history row is not an opening button");
+  assert.match(html, /<button[^>]*data-pi-history-task="t-orphan"/, "the history row is not an opening button");
+  assert.match(html, /<button[^>]*data-pi-history-task="t-early"/, "the succeeded row is not an opening button");
   assert.doesNotMatch(html, /data-pi-task-panel/, "the history panel renders no task detail");
 });
 

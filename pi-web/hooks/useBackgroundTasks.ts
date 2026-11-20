@@ -1,12 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { BgTaskLogsResult, BgTaskSnapshot, BackgroundTasksClientEvent } from "@/lib/types";
+import type { BackgroundTasksClientEvent } from "@/lib/types";
+import type { BgTaskInfo, BgTaskOutput } from "@/lib/bg-protocol";
 
 /**
  * Terminal-notification dedupe: one browser notification per task id, even
  * when several panes/clients replay the same terminal event. Module-level so
- * the mark survives panel unmounts within the page lifetime.
+ * the mark survives unmounts within the page lifetime.
  */
 const notifiedTerminalTaskIds = new Set<string>();
 
@@ -17,80 +18,68 @@ export function markTerminalNotified(taskId: string): boolean {
   return true;
 }
 
+/**
+ * The running list's and the task panels' client state for one pi session's
+ * built-in background tasks (#173): the registry's own records, listed
+ * through `GET /api/agent/[id]/bg-tasks` (every record the session owns,
+ * settled ones and a restart's interrupted included) and re-read whenever the
+ * session's SSE stream reports a change — the events keep the old bridge's
+ * snapshot shape (#172's contract), so the hook treats them as signals and
+ * reads the richer registry answer. A null session (a claude session, the
+ * fresh composer) keeps its state untouched.
+ */
 export type BackgroundTasksFetchState =
   | { kind: "loading" }
-  | { kind: "ready"; tasks: BgTaskSnapshot[] }
-  | { kind: "unavailable"; error: string };
+  | { kind: "ready"; tasks: BgTaskInfo[] }
+  | { kind: "error"; error: string };
 
-/**
- * Panel-facing client state for one session's background tasks. Lists via the
- * API, refetches when the session's own SSE stream reports a change, and
- * exposes bounded log tails plus kill. Sessions without a live wrapper (new
- * sessions, chat-only) surface "unavailable" instead of erroring.
- */
-export function useBackgroundTasks(sessionId: string | null, fetchEnabled: boolean) {
+export function useBackgroundTasks(sessionId: string | null) {
   const [state, setState] = useState<BackgroundTasksFetchState>({ kind: "loading" });
-  const [logs, setLogs] = useState<Record<string, BgTaskLogsResult>>({});
   const fetchSeq = useRef(0);
 
   const refresh = useCallback(() => {
-    // No live-session HTTP while the panel is closed: the browser logs every
-    // non-2xx fetch as a console error, and a package-absent session would
-    // spam them. Live updates still arrive over SSE (applyEvent) either way.
-    if (!sessionId || !fetchEnabled) return;
+    if (!sessionId) return;
     const seq = ++fetchSeq.current;
-    setState((prev) => prev.kind === "ready" ? prev : { kind: "loading" });
     fetch(`/api/agent/${encodeURIComponent(sessionId)}/bg-tasks`)
       .then(async (response) => {
-        const body = await response.json() as { tasks?: BgTaskSnapshot[]; error?: string };
+        const body = await response.json() as { tasks?: BgTaskInfo[]; error?: string };
         if (seq !== fetchSeq.current) return;
-        if (!response.ok) {
-          setState({ kind: "unavailable", error: body.error ?? `HTTP ${response.status}` });
+        if (!response.ok || !Array.isArray(body.tasks)) {
+          setState({ kind: "error", error: body.error ?? `HTTP ${response.status}` });
           return;
         }
-        setState({ kind: "ready", tasks: (body.tasks ?? []).filter((task) => typeof task?.id === "string") });
+        setState({ kind: "ready", tasks: body.tasks.filter((task) => typeof task?.id === "string") });
       })
       .catch((error: unknown) => {
         if (seq !== fetchSeq.current) return;
-        setState({ kind: "unavailable", error: error instanceof Error ? error.message : String(error) });
+        setState({ kind: "error", error: error instanceof Error ? error.message : String(error) });
       });
-  }, [sessionId, fetchEnabled]);
+  }, [sessionId]);
 
   useEffect(() => {
     if (!sessionId) {
-      setState({ kind: "unavailable", error: "no active session" });
+      setState({ kind: "loading" });
       return;
     }
-    const seqAtMount = fetchSeq.current;
     refresh();
-    return () => { fetchSeq.current = seqAtMount + 1; };
+    return () => { fetchSeq.current += 1; };
   }, [sessionId, refresh]);
 
-  /** Apply a live event from this session's SSE stream. */
+  /** A live event from this session's SSE stream: a change signal — re-read. */
   const applyEvent = useCallback((event: BackgroundTasksClientEvent) => {
-    if (event.type === "background_tasks_update") {
-      setState({ kind: "ready", tasks: event.tasks });
-    } else if (event.type === "background_task_terminal") {
-      // The list refresh follows via the update event / manual refresh; the
-      // terminal snapshot alone is enough for the notification path.
-      refresh();
-    }
+    if (event.type === "background_task_terminal" || event.type === "background_tasks_update") refresh();
   }, [refresh]);
 
-  const fetchLogs = useCallback(async (taskId: string, maxBytes?: number) => {
-    if (!sessionId) return;
-    const params = new URLSearchParams({ ...(maxBytes !== undefined ? { maxBytes: String(maxBytes) } : {}) });
-    const response = await fetch(
-      `/api/agent/${encodeURIComponent(sessionId)}/bg-tasks/${encodeURIComponent(taskId)}/logs?${params}`,
-    );
-    const body = await response.json() as (BgTaskLogsResult & { error?: string });
-    if (!response.ok) {
-      setLogs((prev) => ({ ...prev, [taskId]: { text: body.error ?? `HTTP ${response.status}`, bytesRead: 0, truncated: false, tail: true } }));
-      return;
-    }
-    setLogs((prev) => ({ ...prev, [taskId]: body }));
+  /** One task's output tail, straight from the registry (≤ 8 KiB, `tail: true`). */
+  const readOutput = useCallback(async (taskId: string): Promise<BgTaskOutput> => {
+    if (!sessionId) throw new Error("no active session");
+    const response = await fetch(`/api/agent/${encodeURIComponent(sessionId)}/bg-tasks/${encodeURIComponent(taskId)}/logs`);
+    const body = await response.json() as (BgTaskOutput & { error?: string });
+    if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}`);
+    return body;
   }, [sessionId]);
 
+  /** Stops the task through the executor's idempotent stop. */
   const killTask = useCallback(async (taskId: string) => {
     if (!sessionId) return;
     const response = await fetch(
@@ -104,7 +93,5 @@ export function useBackgroundTasks(sessionId: string | null, fetchEnabled: boole
     refresh();
   }, [sessionId, refresh]);
 
-  const runningCount = state.kind === "ready" ? state.tasks.filter((task) => task.status === "running").length : 0;
-
-  return { state, logs, runningCount, refresh, applyEvent, fetchLogs, killTask };
+  return { state, refresh, applyEvent, readOutput, killTask };
 }
