@@ -89,6 +89,9 @@ func Rollback(ctx context.Context, opts RollbackOptions) (*UpgradeResult, error)
 	if err != nil {
 		return refuse(fmt.Errorf("components rollback: the previous version: %w", err))
 	}
+	if prevManifest.Platform != curManifest.Platform {
+		return refuse(fmt.Errorf("components rollback: platform mismatch: previous requires %s, current runs %s", prevManifest.Platform, curManifest.Platform))
+	}
 	if err := prevManifest.VerifyTree(prevDir); err != nil {
 		return refuse(fmt.Errorf("components rollback: the previous version's tree does not match its manifest (%w): refusing to roll back onto a corrupt version — re-run the install of that version, or fix the tree by hand", err))
 	}
