@@ -27,6 +27,17 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/silgrid/polyforge/internal/common/atomicfile"
+	"github.com/silgrid/polyforge/internal/polyforge/crashpoint"
+)
+
+// The settings write's crash points (PF_CRASH_AT, the config writer's
+// own discipline): a test can kill the merge between the backup and the
+// replace and assert the user's settings survive (review r1#3).
+const (
+	crashSettingsBeforeRename = "harness-settings.before-rename"
+	crashSettingsAfterRename  = "harness-settings.after-rename"
 )
 
 // harnessMergeOpts is the merge's input.
@@ -74,7 +85,7 @@ func mergeHarness(o harnessMergeOpts) (*harnessMergeReport, error) {
 		return nil, fmt.Errorf("harness merge: the components root %s carries no current — the harness references would dangle; the first boot installs the seed before this stage", o.ComponentsRoot)
 	}
 	rep := &harnessMergeReport{}
-	action, err := mergePiPackages(filepath.Join(o.AgentDir, "settings.json"), o.RepoSlug, current)
+	action, err := mergePiPackages(filepath.Join(o.AgentDir, "settings.json"), o.RepoSlug, current, o.Home)
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +148,7 @@ func piLocal(s, settingsDir, home string) (string, bool) {
 // replacing this repository's own entry (a pre-#174 git entry, or a
 // local entry already pointing at the target root) in place and
 // keeping every other entry. It answers added, replaced or already.
-func mergePiPackages(path, repoSlug, target string) (string, error) {
+func mergePiPackages(path, repoSlug, target, home string) (string, error) {
 	cfg, existed, err := loadJSONSettings(path)
 	if err != nil {
 		return "", err
@@ -148,7 +159,7 @@ func mergePiPackages(path, repoSlug, target string) (string, error) {
 		return "", fmt.Errorf("harness merge: %s: unexpected packages shape (%T)", path, raw)
 	}
 	gitRe := regexp.MustCompile(`github\.com[:/]` + regexp.QuoteMeta(repoSlug) + `(\.git)?(@|$)`)
-	settingsDir, home := filepath.Dir(path), homeOf()
+	settingsDir := filepath.Dir(path)
 	ours := []int{}
 	for i, e := range pk {
 		s := piSrc(e)
@@ -334,16 +345,29 @@ func loadJSONSettings(path string) (map[string]any, bool, error) {
 }
 
 // saveJSONSettings lands cfg atomically, the installer's own
-// discipline: a changed existing file is backed up beside it, the
-// fresh bytes go through an exclusive 0600 temp file, an existing
-// file's mode is kept, and the rename is the commit.
+// discipline with one correction (review r1#3): a changed existing file
+// is backed up beside it BY COPY — the live file is never moved aside,
+// so an interruption at any point leaves the user's settings exactly as
+// they were — and the fresh bytes land through the one atomic-file
+// primitive (an exclusive temp file, fsynced, renamed into place), an
+// existing file's mode kept. The crash points let a test kill the write
+// between the backup and the replace and assert the original survives.
 func saveJSONSettings(path string, cfg map[string]any, existed bool) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	if existed {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		mode := os.FileMode(0o600)
+		if fi, err := os.Stat(path); err == nil {
+			mode = fi.Mode().Perm()
+		}
 		backup := path + ".bak-polyforge-" + time.Now().Format("20060102150405")
-		if err := os.Rename(path, backup); err != nil {
+		if err := os.WriteFile(backup, raw, mode); err != nil {
 			return err
 		}
 	}
@@ -352,20 +376,13 @@ func saveJSONSettings(path string, cfg map[string]any, existed bool) error {
 		return err
 	}
 	raw = append(raw, '\n')
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		return err
-	}
+	mode := os.FileMode(0o600)
 	if existed {
 		if fi, err := os.Stat(path); err == nil {
-			_ = os.Chmod(tmp, fi.Mode().Perm())
+			mode = fi.Mode().Perm()
 		}
 	}
-	return os.Rename(tmp, path)
-}
-
-// homeOf answers $HOME ("" never reaches the local-path rules above —
-// an unset HOME leaves ~ unresolvable and the entry non-local).
-func homeOf() string {
-	return os.Getenv("HOME")
+	return atomicfile.WriteHooked(path, raw, mode,
+		func() { crashpoint.At(crashSettingsBeforeRename) },
+		func() { crashpoint.At(crashSettingsAfterRename) })
 }
