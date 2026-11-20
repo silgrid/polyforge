@@ -575,8 +575,9 @@ are wrong exits non-zero at once, naming why. The command's flags are
 - the body carries the template's seven sections ([handoff.md](#handoffmd))
   in the language the dispatch was told (its spawn-journal line; a line
   without one reads `en`), plus the re-entry heading (Reply to the
-  previous round / 回应上一轮) when this step handed off before, in at most 3,000
-  characters (detail goes into files; the body names their paths);
+  previous round / 回应上一轮) when this step handed off before, in at most 6,000
+  characters (Unicode code points, counted over the entire body;
+  detail goes into files; the body names their paths);
 - every `--evidence` is an existing file inside the capsule.
 
 **Hub verbs** — only aihub's generic routes, on the step's own project,
@@ -668,7 +669,8 @@ hand-off wrong says so in its own 发现的问题和风险. Facts are the stampe
 header's; whether a claim holds is checked against the evidence files and
 the code.
 
-**Length.** Only the body is bounded: 3,000 characters per section.
+**Length.** Only the body is bounded: 6,000 characters (Unicode code points)
+counted over the entire body.
 
 **A rewind keeps everything.** Commits, result files and `handoff.md` all
 stay. The rewind's target resumes its own previous session when it can,

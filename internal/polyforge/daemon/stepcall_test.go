@@ -370,10 +370,14 @@ func TestStepHandoffEachStatusAppendsAStampedSection(t *testing.T) {
 func TestStepHandoffRefusalsLeaveTheDocument(t *testing.T) {
 	f := newC4Fixture(t, "wi_c4d")
 	f.as("build", 1)
-	if code, body := c4Call(t, f.td, "handoff", map[string]any{"status": "done", "body": c4Body()}); code != 200 {
-		t.Fatalf("the first hand-off = %d %s", code, body)
+	// the bound is 6,000 code points over the whole body: a body of exactly
+	// 6,000 passes at the daemon's own check; 6,001 is refused.
+	exact := c4Body()
+	exact += strings.Repeat("字", 6000-len([]rune(exact)))
+	if code, body := c4Call(t, f.td, "handoff", map[string]any{"status": "done", "body": exact}); code != 200 {
+		t.Fatalf("the first hand-off, a body of exactly 6000 characters = %d %s", code, body)
 	}
-	long := c4Body() + strings.Repeat("字", stepcall.MaxBodyChars)
+	over := exact + "字"
 	missing := strings.Replace(c4Body(), "## 验证", "## 检查", 1)
 	for _, c := range []struct {
 		name, step string
@@ -387,7 +391,7 @@ func TestStepHandoffRefusalsLeaveTheDocument(t *testing.T) {
 		{"waive from a non-waivable gate", "review", 2, map[string]any{"status": "waive", "body": c4Body(), "per_owner": "x"}, 400, "not one"},
 		{"a section missing", "sync", 2, map[string]any{"status": "done", "body": missing}, 400, "验证"},
 		{"a re-run without 回应上一轮", "build", 2, map[string]any{"status": "done", "body": c4Body()}, 400, stepcall.ReentrySectionOf(stepcall.LangZhCN)},
-		{"a body over 3000 characters", "sync", 2, map[string]any{"status": "done", "body": long}, 400, "over the 3000 bound"},
+		{"a body over 6000 characters", "sync", 2, map[string]any{"status": "done", "body": over}, 400, "the body is 6001 characters, over the 6000 bound"},
 		{"evidence that does not exist", "sync", 2, map[string]any{"status": "done", "body": c4Body(), "evidence": []string{"artifacts/nope.json"}}, 400, "no such file"},
 		{"evidence outside the capsule", "sync", 2, map[string]any{"status": "done", "body": c4Body(), "evidence": []string{"/etc/hostname"}}, 400, ""},
 		{"an unknown status", "sync", 2, map[string]any{"status": "pass", "body": c4Body()}, 400, "none of"},

@@ -6,8 +6,9 @@ The headings come in two languages, English and Simplified Chinese: write the se
 language this dispatch was told (the first part of your prompt names it) — the command
 checks the body against that set only. A step that handed off before — a later round,
 after a rewind — adds the re-entry heading first (`### Reply to the previous round` /
-`### 回应上一轮`). The command refuses a body that lacks a heading, or one over 3,000
-characters: put the detail into files under `artifacts/` and name their paths. Never
+`### 回应上一轮`). The command refuses a body that lacks a heading, or one over 6,000
+characters (Unicode code points, counted over the entire body): put the detail
+into files under `artifacts/` and name their paths. Never
 restate what the daemon stamps in the header (the times, the model, the commits, the
 owner's messages); refer to it.
 
