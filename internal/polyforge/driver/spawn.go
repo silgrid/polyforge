@@ -154,6 +154,7 @@ func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun
 		Definition:              def,
 		PriorEndedWithoutResult: sp.PriorEndedWithoutResult,
 		Language:                a.liveLanguage(),
+		Harness:                 sp.Harness,
 	}
 	// the step's skill (the lane snapshot's markdown, the loader judged it)
 	if spec.Skill != "" {
@@ -590,6 +591,7 @@ type promptParts struct {
 	// carries its instruction (languageInstruction); "" reads as the
 	// default.
 	Language string
+	Harness  string
 	// ContinueInPlace selects the fast-path reference
 	// instruction: the tree is byte-identical to the previous attempt's
 	// death, so the new conversation continues in place instead of
@@ -610,7 +612,10 @@ const (
 	continuationHeading = "# Continuing this step"
 )
 
-func piCapabilityChange(changed map[string]string) string {
+func piCapabilityChange(changed map[string]string, h string) string {
+	if h != harness.Pi {
+		return ""
+	}
 	value, ok := changed["pi_subagents"]
 	if !ok {
 		return ""
@@ -642,7 +647,7 @@ func assembleStepPrompt(p promptParts) string {
 		if s := paramsChangedSection(p.ParamsChanged); s != "" {
 			parts = append(parts, s)
 		}
-		if s := piCapabilityChange(p.ParamsChanged); s != "" {
+		if s := piCapabilityChange(p.ParamsChanged, p.Harness); s != "" {
 			parts = append(parts, s)
 		}
 		if len(parts) == 0 {
@@ -651,7 +656,7 @@ func assembleStepPrompt(p promptParts) string {
 		return renderOwnerMessages(p.OwnerMessages) + "\n" + strings.Join(parts, "\n")
 	}
 	if p.ShortEwrResume {
-		return ewrResumeReminder(p) + continuationPart(promptParts{OwnerMessages: p.OwnerMessages, ParamsChanged: p.ParamsChanged}) + piCapabilityChange(p.ParamsChanged)
+		return ewrResumeReminder(p) + piCapabilityChange(p.ParamsChanged, p.Harness)
 	}
 	var b strings.Builder
 	// 1. the dispatch

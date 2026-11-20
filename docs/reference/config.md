@@ -80,8 +80,7 @@ one partition; `internal/polyforge/cellcfg/schema.go` owns it):
 | `slow_model_median_latency` | `[daemon]` | Host-only | live | the slow-model judgement's single-call median bound (default `60s`) |
 | `slow_model_p90_latency` | `[daemon]` | Host-only | live | the slow-model judgement's single-call p90 bound (default `180s`) |
 | `harness_root` | `[daemon]` | Host-only | restart-only | parent of the per-Cell harness roots (`<harness_root>/cells/<profile>`) |
-| `operator_agent_dir` | `[daemon]` | Host-only | restart-only | shared credential source for the default Cell; embedded worker agents and extensions are not copied from it |
-| `pi_subagents` | `steps.<project>.build.params` | Project | next-dispatch | `on` enables the daemon-owned pi worker; empty/off keeps the main-agent path; other values are invalid. |
+| `operator_agent_dir` | `[daemon]` | Host-only | restart-only | shared credential source; `auth.json` and `models.json` are copied, while embedded worker agents/extensions are not; a configured source without readable `auth.json` refuses startup. |
 | `python` | `[daemon]` | Host-only | restart-only | the interpreter the workflow step scripts run under (`PF_PYTHON`); resolved and checked at the daemon's start |
 | `layout_version` | — | Host state | read-only | reports `<data-dir>/layout-version`; never settable |
 | `server` | flat | Cell | connection-change | one normalized AIHub per Cell |
@@ -972,6 +971,8 @@ steps:
     <step-id>:
       params: { <name>: <value> }   # one value per param the step's lane declares
 ```
+
+For develop `build`, the daemon-owned pi worker switch is `pi_subagents`: `on` enables the worker path; empty or `off` keeps the main-agent path; other values are refused.
 
 A lane step may declare `params` in its workflow.yaml — each parameter
 name (`^[a-z][a-z0-9_]{0,63}$`) to its lane default
