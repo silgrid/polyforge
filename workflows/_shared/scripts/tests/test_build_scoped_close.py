@@ -19,7 +19,7 @@ from pfstep.engine import EngineReport, ReportError, decode_report
 
 from .gitworld import HAVE_GIT, Repo, git, write
 from .test_fast_checks import APP, FLAKY_GATE_TEST, GO_MOD, FastChecksCase
-from .verifyfix import HAVE_BASH, HAVE_GO, Fixture, cmd_of, fake_engine, report, run_verify
+from .verifyfix import HAVE_BASH, HAVE_GO, Fixture, cmd_of, fake_engine, report, run_verify, write_files
 
 FAST_CHECKS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "fast_checks.py")
 ENGINE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "verify-scope")
@@ -526,6 +526,132 @@ class ExecutionTest(FastChecksCase):
         self.assertEqual([c for c in sel["commands"] if "reused" in c], [],
                          "a result file of another tree is not reuse evidence")
 
+
+
+@unittest.skipUnless(HAVE_GIT and HAVE_BASH, "git and bash are required")
+class CloseReuseKeyTest(unittest.TestCase):
+    """AC1's close half (polyforge#182, Q6): the close's reuse is keyed
+    exactly like the --repo run's — the command's root, its text as its
+    own report gave it, its root's subtree tree hash of the working tree,
+    its declared prerequisites — so a commit outside the nested root
+    keeps that root's green runs reusable while the repository root's key
+    counts the whole tree and re-runs; a green-through-flaky confirmation
+    is never reuse evidence (Q4), an entry without its key fields (an
+    older run's file) re-runs, and the per-unit file's own reused entries
+    carry the green evidence the close accepts. Expected values come from
+    the fixtures' own commits and the hand-written reuse files, never the
+    implementation."""
+
+    def setUp(self) -> None:
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        self.root = os.path.realpath(td.name)
+
+    def run_per_unit(self, capsule: str, engine: str, out: str) -> int:
+        """fast_checks.py --repo (the per-unit bar) writing out."""
+        argv = [sys.executable, FAST_CHECKS, "--capsule", capsule, "--repo", "app",
+                "--engine", engine, "--deadline", "10m", "--out", out]
+        c = subprocess.run(argv, capture_output=True, text=True)
+        self.assertEqual(c.returncode, 0, c.stdout + c.stderr)
+        return c.returncode
+
+    def test_a_commit_outside_the_nested_root_keeps_its_reuse(self) -> None:
+        files = {
+            ".polyforge/verify-scope.conf": "stack=go\n",
+            "web/.polyforge/verify-scope.conf": "stack=npm\n",
+            "web/lib/a.ts": "export const a = 1;\n",
+            "notes/root.txt": "base\n",
+        }
+        fx = Fixture(self.root, {"app": files})
+        fx.commit_in_repo("app", {"web/lib/a.ts": "export const a = 2;\n"})
+        eng = fake_engine(self.root, {
+            "app": report("scoped", cmd_of("fast-1", "fast", "echo gate-ok"), paths=["web/lib/a.ts"]),
+            "web": report("scoped", cmd_of("n-fast", "fast", "echo nested-ok"),
+                          cmd_of("n-scoped", "scoped", "echo nested-pinned")),
+        })
+        fast_out = os.path.join(fx.capsule, "fast.json")
+        self.run_per_unit(fx.capsule, eng, fast_out)
+        # a commit outside the nested root: the repository's head moves,
+        # the nested subtree does not — the key, not the head, decides
+        fx.commit_in_repo("app", {"notes/root.txt": "base\n# a root-only edit\n"})
+        code, res = run_close(fx.capsule, "app", eng, os.path.join(fx.capsule, "close.json"),
+                              "--reuse", fast_out)
+        self.assertEqual(code, 0, res.get("summary"))
+        sel = res["details"]["selected"]["app"]
+        self.assertEqual(sel["status"], "green")
+        by_name = {cmd["name"]: cmd for cmd in sel["commands"]}
+        self.assertIn("reused", by_name["web/n-fast"],
+                      "a commit outside the nested root keeps its green runs")
+        self.assertIn("reused", by_name["web/n-scoped"],
+                      "the nested root's scoped run is kept too")
+        self.assertNotIn("reused", by_name["fast-1"],
+                         "the repository root's key counts the whole tree and re-runs")
+
+    def test_a_confirmed_flaky_green_is_not_reuse_evidence(self) -> None:
+        fx = Fixture(self.root, {"app": {"a.txt": "base\n"}})
+        fx.commit_in_repo("app", {"c.txt": "mine\n"})
+        eng = fake_engine(self.root, {"app": report("scoped", cmd_of("gate-1", "fast", "echo gate-ok"))})
+        # a hand-written reuse file whose only entry is green through the
+        # flaky phase (red first run, confirmed whole): the owner's Q4 —
+        # only a plain green run is cache
+        from pfstep import git as pfgit
+        head = git(fx.repo("app"), "rev-parse", "HEAD")
+        tree = pfgit.worktree_tree(fx.repo("app"))
+        entry = {"name": "gate-1", "phase": "fast", "root": "repos/app", "cmd": "echo gate-ok",
+                 "exit_code": 1, "log": "logs/1/app/2/command.log", "confirmed": "echo gate-ok",
+                 "tree": tree, "prereq_key": '{"cmd": [], "env": []}'}
+        fast_out = os.path.join(fx.capsule, "fast.json")
+        write_files(fx.capsule, {"fast.json": json.dumps(
+            {"heads": {"app": head}, "details": {"commands": [entry]}})})
+        code, res = run_close(fx.capsule, "app", eng, os.path.join(fx.capsule, "close.json"),
+                              "--reuse", fast_out)
+        self.assertEqual(code, 0, res.get("summary"))
+        sel = res["details"]["selected"]["app"]
+        self.assertEqual(sel["status"], "green")
+        gate = [cmd for cmd in sel["commands"] if cmd["name"] == "gate-1"][0]
+        self.assertNotIn("reused", gate, "a green-through-flaky confirmation is never reuse evidence")
+        self.assertEqual(gate["exit_code"], 0, "the command ran again")
+
+    def test_an_entry_without_its_key_fields_re_runs(self) -> None:
+        fx = Fixture(self.root, {"app": {"a.txt": "base\n"}})
+        fx.commit_in_repo("app", {"c.txt": "mine\n"})
+        eng = fake_engine(self.root, {"app": report("scoped", cmd_of("gate-1", "fast", "echo gate-ok"))})
+        # an older run's file: green, the same root and command, but no
+        # key fields — no cache, never an error
+        head = git(fx.repo("app"), "rev-parse", "HEAD")
+        entry = {"name": "gate-1", "phase": "fast", "root": "repos/app", "cmd": "echo gate-ok",
+                 "exit_code": 0, "log": "logs/1/app/2/command.log"}
+        fast_out = os.path.join(fx.capsule, "fast.json")
+        write_files(fx.capsule, {"fast.json": json.dumps(
+            {"heads": {"app": head}, "details": {"commands": [entry]}})})
+        code, res = run_close(fx.capsule, "app", eng, os.path.join(fx.capsule, "close.json"),
+                              "--reuse", fast_out)
+        self.assertEqual(code, 0, res.get("summary"))
+        sel = res["details"]["selected"]["app"]
+        gate = [cmd for cmd in sel["commands"] if cmd["name"] == "gate-1"][0]
+        self.assertNotIn("reused", gate, "an entry without its key fields is no cache")
+        self.assertEqual(gate["exit_code"], 0, "the command ran again")
+
+    def test_close_accepts_the_per_unit_files_own_reused_entries(self) -> None:
+        fx = Fixture(self.root, {"app": {"a.txt": "base\n"}})
+        fx.commit_in_repo("app", {"c.txt": "mine\n"})
+        eng = fake_engine(self.root, {"app": report(
+            "scoped", cmd_of("gate-1", "fast", "echo gate-ok"),
+            cmd_of("pin", "scoped", "echo pinned"))})
+        fast_out = os.path.join(fx.capsule, "fast.json")
+        self.run_per_unit(fx.capsule, eng, fast_out)
+        self.run_per_unit(fx.capsule, eng, fast_out)  # the second run marks its green runs reused
+        with open(fast_out, encoding="utf-8") as f:
+            fast = json.load(f)
+        self.assertTrue([e for e in fast["details"]["commands"] if e.get("reused")],
+                        "the second per-unit run reused its green commands")
+        code, res = run_close(fx.capsule, "app", eng, os.path.join(fx.capsule, "close.json"),
+                              "--reuse", fast_out)
+        self.assertEqual(code, 0, res.get("summary"))
+        sel = res["details"]["selected"]["app"]
+        by_name = {cmd["name"]: cmd for cmd in sel["commands"]}
+        self.assertIn("reused", by_name["gate-1"], "a reused entry carries green evidence")
+        self.assertIn("reused", by_name["pin"], "a reused scoped entry carries green evidence")
 
 
 @unittest.skipUnless(HAVE_GIT and HAVE_BASH, "git and bash are required")
