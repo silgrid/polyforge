@@ -194,6 +194,7 @@ const T = {
   S19: "S85-19: the trust pane shows each harness's own decision and 统一成当前值 writes the differing one",
   S20: "S85-20: the rules pane edits claude's allow / ask / deny lists with no unified block",
   S21: "S85-21: General has no claude permission controls; its hook switch stays",
+  S22: "S85-22: the table and the editor share one enabledModels controller — a Save never re-enables a model the table just disabled (review r1#1)",
 };
 const failures = new Map(Object.values(T).map((title) => [title, []]));
 const ran = new Set();
@@ -528,6 +529,82 @@ try {
     await models.getByRole("button", { name: "Add provider", exact: true }).waitFor({ state: "visible", timeout: ACTION_MS });
     await models.getByRole("button", { name: "Add provider", exact: true }).click({ timeout: ACTION_MS });
     await models.getByPlaceholder("provider-name", { exact: true }).waitFor({ state: "visible", timeout: ACTION_MS });
+    await page.context().close();
+  });
+
+  // S85-22 — review r1#1: the model table and the embedded models.json editor
+  // share one enabledModels controller. The Save's resync declares the
+  // providers that are fully enabled *right now*; with two controllers the
+  // editor's stale view would list a provider the table just partially
+  // disabled, and the server would re-enable what the user switched off.
+  await part("S22", "shared enabledModels controller", async () => {
+    const page = await newPage();
+    const CONFIG = { providers: { gateway: {
+      baseUrl: "https://gw.example/v1", apiKey: "fixture-key", api: "openai-completions",
+      models: [{ id: "m1", name: "Gateway One" }, { id: "m2", name: "Gateway Two" }],
+    } } };
+    let m1Enabled = true;
+    const enabledView = () => ({
+      allEnabled: false, patterns: ["gateway/*"], stalePatterns: [],
+      enabledTotal: m1Enabled ? 2 : 1, availableTotal: 2, scope: "global",
+      settingsPath: "fixture/settings.json", editable: true,
+      providers: [{ id: "gateway", name: "Gateway", kind: "custom", enabledCount: m1Enabled ? 2 : 1, models: [
+        { id: "m1", name: "Gateway One", ref: "gateway/m1", enabled: m1Enabled, contextWindow: 2048 },
+        { id: "m2", name: "Gateway Two", ref: "gateway/m2", enabled: true, contextWindow: 2048 },
+      ] }],
+    });
+    const puts = [];
+    await page.route("**/api/models/enabled*", (route) => {
+      const request = route.request();
+      if (request.method() === "PUT") {
+        const body = request.postDataJSON();
+        puts.push(body);
+        if (body.op === "models" && body.enabled === false && body.refs.includes("gateway/m1")) m1Enabled = false;
+        if (body.op === "resync" && (body.fullyEnabled ?? []).includes("gateway")) m1Enabled = true;
+      }
+      return route.fulfill({ json: enabledView() });
+    });
+    await page.route("**/api/models-config", (route) => {
+      if (route.request().method() === "PUT") return route.fulfill({ json: { success: true } });
+      return route.fulfill({ json: CONFIG });
+    });
+    await page.route(/\/api\/models\?/, (route) => route.fulfill({ json: {
+      models: {}, modelList: [
+        { id: "m1", name: "Gateway One", provider: "gateway" },
+        { id: "m2", name: "Gateway Two", provider: "gateway" },
+      ], defaultModel: { provider: "gateway", modelId: "m1" }, thinkingLevels: {}, thinkingLevelMaps: {}, thinkingLevelPins: {}, isScoped: false,
+    } }));
+    await page.route("**/api/models/default", (route) => route.fulfill({ json: {
+      defaultHarness: "pi", claudeDefaultModel: "default", claudeDefaultEffort: "default",
+    } }));
+    await page.route("**/api/claude", (route) => route.fulfill({ json: { models: [] } }));
+    await page.route("**/api/harness/pi/model", (route) => route.fulfill({ json: { harness: "pi", concept: "model", data: {
+      defaultProvider: "gateway", defaultModel: "m1", reasoningEffort: null,
+      perModelReasoningEffort: {}, providers: [], customModels: [],
+    } } }));
+    await page.route("**/api/harness/claude/model", (route) => route.fulfill({ json: { harness: "claude", concept: "model", data: {
+      defaultProvider: null, defaultModel: null, reasoningEffort: null,
+      perModelReasoningEffort: {}, providers: [], customModels: [],
+    } } }));
+    await page.route(/\/api\/auth\/providers/, (route) => route.fulfill({ json: {
+      providers: [], oauthProviders: [], apiKeyProviders: [],
+    } }));
+    await page.route("**/api/provider-usage/query", (route) => route.fulfill({ json: { providers: [] } }));
+    await openSettings(page);
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    const models = sectionHost(page, "models");
+    await models.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
+    const m1Row = models.getByRole("row").filter({ hasText: "gateway/m1" });
+    const m1Toggle = m1Row.getByRole("checkbox");
+    await m1Toggle.waitFor({ state: "visible", timeout: ACTION_MS });
+    await m1Toggle.uncheck();
+    await waitFor(() => puts.some((body) => body.op === "models" && body.refs.includes("gateway/m1")),
+      ACTION_MS, "the table toggle never reached the writer");
+    await models.getByRole("button", { name: "Save", exact: true }).click({ timeout: ACTION_MS });
+    const resync = await waitFor(() => puts.find((body) => body.op === "resync") ?? false,
+      ACTION_MS, "the Save never re-verified the stored patterns");
+    assert.ok(!(resync.fullyEnabled ?? []).includes("gateway"),
+      `the resync re-enabled the model the table just disabled: ${JSON.stringify(resync)}`);
     await page.context().close();
   });
 
