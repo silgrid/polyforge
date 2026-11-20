@@ -217,24 +217,12 @@ test("claude writes and removes the native effortLevel", async () => {
   assert.equal("effortLevel" in readJson(claudeSettings), false);
 });
 
-test("claude writes one model's effort in modelSettings, keeping the entry's other keys and pruning empty containers", async () => {
-  const set = await claudeAdapter.write("model", { modelEffort: { model: "claude-opus-5-5", effort: "low" } }, claudeCtx());
-  assert.equal(set.status, "written");
-  assert.deepEqual(readJson(claudeSettings).modelSettings, { "claude-opus-5-5": { effort: "low", adaptiveThinking: true } });
-  const other = await claudeAdapter.write("model", { modelEffort: { model: "claude-haiku-5-5", effort: "medium" } }, claudeCtx());
-  assert.equal(other.status, "written");
-  assert.deepEqual(readJson(claudeSettings).modelSettings, {
-    "claude-opus-5-5": { effort: "low", adaptiveThinking: true },
-    "claude-haiku-5-5": { effort: "medium" },
-  });
-  const removed = await claudeAdapter.write("model", { modelEffort: { model: "claude-haiku-5-5", effort: null } }, claudeCtx());
-  assert.equal(removed.status, "written");
-  // the pruned model's entry is gone; the model holding another key stays
-  assert.deepEqual(readJson(claudeSettings).modelSettings, { "claude-opus-5-5": { effort: "low", adaptiveThinking: true } });
-  const cleared = await claudeAdapter.write("model", { modelEffort: { model: "claude-opus-5-5", effort: null } }, claudeCtx());
-  assert.equal(cleared.status, "written");
-  // adaptiveThinking keeps the entry: only an entry left holding nothing is dropped
-  assert.deepEqual(readJson(claudeSettings).modelSettings, { "claude-opus-5-5": { adaptiveThinking: true } });
+test("claude does not write the unverified per-model settings shape", async () => {
+  const before = fs.readFileSync(claudeSettings, "utf8");
+  const refused = await claudeAdapter.write("model", { modelEffort: { model: "claude-opus-5-5", effort: "low" } }, claudeCtx());
+  assert.equal(refused.status, "refused");
+  assert.match(refused.reason, /modelEffort|not supported|unknown model change/);
+  assert.equal(fs.readFileSync(claudeSettings, "utf8"), before);
 });
 
 test("claude refuses an unknown-major version, keeping settings.json untouched", async () => {
@@ -288,6 +276,7 @@ test("claude refuses an unrecognized modelSettings shape and unknown or invalid 
   assert.equal((await claudeAdapter.write("model", {}, claudeCtx())).status, "refused");
   assert.equal((await claudeAdapter.write("model", { nope: 1 }, claudeCtx())).status, "refused");
   assert.equal((await claudeAdapter.write("model", { model: "-leading-dash" }, claudeCtx())).status, "refused");
+  assert.equal((await claudeAdapter.write("model", { modelEffort: { model: "opus", effort: "low" } }, claudeCtx())).status, "refused");
   assert.equal((await claudeAdapter.write("model", { effortLevel: "bogus" }, claudeCtx())).status, "refused");
 });
 
