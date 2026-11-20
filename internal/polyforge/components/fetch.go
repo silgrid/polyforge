@@ -46,6 +46,13 @@ var (
 	githubDownloadBase = "https://github.com"
 )
 
+// SetChannelBasesForTest points the channel's URL bases at a stub
+// server (the CLI verb's tests drive the same lookups through it);
+// production never calls it.
+func SetChannelBasesForTest(api, download string) {
+	githubAPIBase, githubDownloadBase = api, download
+}
+
 // ReleaseInfo is one release of the channel repository as the upgrade
 // reads it: the tag and the source commit its manifest names.
 type ReleaseInfo struct {
