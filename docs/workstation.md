@@ -124,6 +124,10 @@ the phase is `<stage>/failed` with the reason, never a credential):
    starts later finds the store already initialized and its own
    fresh-install bootstrap (usr_root, `bootstrap-admin.key`) never
    fires, so the default Cell's key is a daily key by construction.
+   One deliberate consequence to know: the local hub then carries NO
+   administrator identity at all (no one to grant other users or
+   roles) until the management units (#163/#167) build an operator
+   path — the workstation is a single-user machine by design.
    The external mode takes the operator-given server and key and
    creates nothing anywhere.
 3. **config** — cli.toml (in pf-home) gains the default Cell: the
@@ -155,11 +159,17 @@ no key, no hash, no token.
 A completed first boot is skipped (the record says done and cli.toml
 carries the default Cell — the first choice is made exactly once, and a
 restart with a different `WORKSTATION_AIHUB_*` environment changes
-nothing); either half alone is an inconsistency the container refuses
-to start on, naming both files. An interrupted first boot resumes: every
-stage is idempotent — the user is found by its fixed email (never
-duplicated) and the same-named key is revoked and reissued, so a retry
-never strands or duplicates anything.
+nothing); a cell with no record at all, or a done record without the
+cell, is an inconsistency the container refuses to start on, naming
+both files. An interrupted first boot resumes, with the record — not
+the environment — as the authority for the choice (the owner's ruling
+of 2026-11-20 on review r1#1): the mode, server and project come from
+the in-progress record, environment inputs that disagree with it refuse
+the start, and an external record's key input must be set again (a
+record never carries a credential). Every stage is idempotent — the
+user is found by its fixed email (never duplicated) and the same-named
+key is revoked and reissued, so a retry never strands or duplicates
+anything.
 
 The external mode's inputs ride the container environment (compose
 interpolates them; the entrypoint's whitelist passes exactly these

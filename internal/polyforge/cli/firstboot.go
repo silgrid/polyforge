@@ -26,7 +26,10 @@ package cli
 // record at all, or a done record without the cell, is an inconsistency
 // the boot refuses to start on, with the recovery hint naming both
 // files; a cell with an IN-PROGRESS record is this boot's own
-// interruption and is resumed (AC1: a retry never needs a person).
+// interruption and is resumed — with the RECORD as the authority for
+// the choice (owner ruling B on review r1#1): the environment only
+// ever gets to agree with the record or refuse loudly, never to
+// re-decide.
 
 import (
 	"encoding/json"
@@ -130,13 +133,23 @@ func firstBootPath(dataDir string) string {
 // the components, identity, config and harness stages, publishing the
 // record at every phase transition and at a failure.
 func runFirstBoot(o firstBootOpts, stdout io.Writer) error {
-	// the Q6 gate: the first choice is made exactly once — done plus the
-	// default Cell skips; a cell with NO record at all, or a done record
-	// without the cell, is an inconsistency the boot refuses to start
-	// on, naming both files. A cell with an IN-PROGRESS record is none
-	// of those: it is this boot's own interruption (a crash between the
-	// config write and the done record), and AC1's retry must resume it
-	// — never require a person to first delete the cell by hand.
+	// The gate is the settled Q6 with the owner's ruling of 2026-11-20
+	// (reply "b" to review r1#1) on the one shape Q6's letter left
+	// undecided — a default Cell with an IN-PROGRESS record (this
+	// boot's own interruption: a crash between the config write and the
+	// done record):
+	//   - done record + the default Cell: the boot skips (the first
+	//     choice is made exactly once);
+	//   - a cell with no record at all, or a done record without the
+	//     cell: an inconsistency the boot refuses to start on, naming
+	//     both files (a hand-deleted half never re-initializes
+	//     silently — Q6's own rationale);
+	//   - an IN-PROGRESS record: the boot RESUMES, and the record — not
+	//     the environment — is the authority for the choice: the mode,
+	//     the server and the project come from the record, environment
+	//     inputs that disagree with it refuse the start, and the
+	//     external record's key input must be set again (a record never
+	//     carries a credential).
 	rec, recExists, err := readFirstBootRecord(o.DataDir)
 	if err != nil {
 		return err
@@ -157,25 +170,46 @@ func runFirstBoot(o firstBootOpts, stdout io.Writer) error {
 		return fmt.Errorf("first boot: %s carries a default Cell but %s records no first boot at all — refusing to start on the inconsistency; recovery: remove the default Cell from %s and run the first boot again, or complete the first boot by hand and write the done record %s", config, record, config, record)
 	}
 
-	// the mode (Q4): a server means external (its key with it, an
-	// optional already-existing project for the mapping); no server
-	// means local — the identity transaction and the loopback Cell.
 	st := firstBootState{
 		Mode:        "local",
 		DefaultCell: firstBootDefaultCell,
 		Server:      firstBootLocalServer,
 		UpdatedAt:   time.Now().UTC().Format(time.RFC3339Nano),
 	}
-	switch {
-	case o.ExtServer == "" && o.ExtKey == "":
-	case o.ExtServer == "":
-		return fmt.Errorf("first boot: %s is set without %s — a key with no server to point at is not a mode; set both or neither", EnvWorkstationAihubKey, EnvWorkstationAihubServer)
-	case o.ExtKey == "":
-		return fmt.Errorf("first boot: %s is set without %s — the external mode needs the key that goes with the server; set both or neither (the local mode needs nothing)", EnvWorkstationAihubServer, EnvWorkstationAihubKey)
-	default:
-		st.Mode, st.Server = "external", o.ExtServer
-		if o.ExtProject != "" {
-			st.Project = o.ExtProject
+	if recExists {
+		// the resume: the record is the authority (ruling B)
+		st.Mode, st.Server, st.Project = rec.Mode, rec.Server, rec.Project
+		if (st.Mode != "local" && st.Mode != "external") || st.Server == "" {
+			return fmt.Errorf("first boot: the in-progress record %s names no mode and server — remove it and the default Cell in %s to redo the first boot from scratch", record, config)
+		}
+		switch {
+		case o.ExtServer == "" && o.ExtKey == "":
+			// no external inputs: consistent with a local record; an
+			// external one needs its key below
+		case o.ExtServer == "" || o.ExtKey == "":
+			return fmt.Errorf("first boot: resuming with %s set without %s (or the reverse) — set both or neither; the in-progress record already chose %s and never re-decides", EnvWorkstationAihubKey, EnvWorkstationAihubServer, st.Mode)
+		case st.Mode == "local" || o.ExtServer != st.Server:
+			return fmt.Errorf("first boot: the environment names %s but the in-progress record already chose %s — the first choice is made exactly once; unset %s and %s to resume as recorded, or remove %s and the default Cell in %s to redo the first boot", o.ExtServer, st.Server, EnvWorkstationAihubServer, EnvWorkstationAihubKey, record, config)
+		}
+		if st.Mode == "external" && o.ExtKey == "" {
+			return fmt.Errorf("first boot: the in-progress record is an external boot but %s is unset — the record never carries the key; set it back (its value is already in %s) or remove %s and the default Cell to redo the first boot", EnvWorkstationAihubKey, config, record)
+		}
+	} else {
+		// the fresh boot (Q4): a server means external (its key with
+		// it, an optional already-existing project for the mapping);
+		// no server means local — the identity transaction and the
+		// loopback Cell.
+		switch {
+		case o.ExtServer == "" && o.ExtKey == "":
+		case o.ExtServer == "":
+			return fmt.Errorf("first boot: %s is set without %s — a key with no server to point at is not a mode; set both or neither", EnvWorkstationAihubKey, EnvWorkstationAihubServer)
+		case o.ExtKey == "":
+			return fmt.Errorf("first boot: %s is set without %s — the external mode needs the key that goes with the server; set both or neither (the local mode needs nothing)", EnvWorkstationAihubServer, EnvWorkstationAihubKey)
+		default:
+			st.Mode, st.Server = "external", o.ExtServer
+			if o.ExtProject != "" {
+				st.Project = o.ExtProject
+			}
 		}
 	}
 

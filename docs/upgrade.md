@@ -872,17 +872,21 @@ skips itself (the first choice — local or the external mode whose
 `WORKSTATION_AIHUB_SERVER`/`KEY`/`PROJECT` inputs ride the container
 environment — is made exactly once); an interrupted boot resumes
 without duplicating the user (the same-named key is revoked and
-reissued); done without the default Cell, or a Cell with no record, is
-an inconsistency the container refuses to start on. The smoke gains
+reissued), with the in-progress record — not the environment — as
+the authority for the choice (owner ruling of 2026-11-20 on review
+r1#1: environment inputs that disagree with the record refuse the
+start, and an external record's key input must be set again); done
+without the default Cell, or a Cell with no record, is an
+inconsistency the container refuses to start on. The smoke gains
 `first-boot` (and `first-boot --external`, whose counting stub asserts
 zero remote writes). No action on upgrade beyond taking the new image
-and compose; existing two-volume deployments keep their volumes (the
-new volumes start empty and the first boot fills them). One honest
-leftover: a dev volume from a pre-#176 boot carries the daemon's
-recorded Cell identity against `http://localhost:8420` (the bare
-config default of that era), and the first boot's default Cell names
-`http://127.0.0.1:8420` — another identity domain, so the daemon
-refuses to start beside it (exit 78, its own message naming both).
-Recovery is the daemon's own rule: reset the old volume (the machine
-is disposable) or keep the old Cell under its recorded identity and
-let the first boot be skipped.
+and compose. The image has not shipped in a release, so no real
+deployment exists to migrate; a dev host's leftover volumes are the
+only pre-#176 state, and one honest leftover comes with them: such a
+volume carries the daemon's recorded Cell identity against
+`http://localhost:8420` (the bare config default of that era), and the
+first boot's default Cell names `http://127.0.0.1:8420` — another
+identity domain, so the daemon refuses to start beside it (exit 78,
+its own message naming both). Recovery is the daemon's own rule:
+reset the old dev volume (the machine is disposable) or keep the old
+Cell under its recorded identity and let the first boot be skipped.

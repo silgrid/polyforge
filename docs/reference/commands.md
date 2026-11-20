@@ -1511,14 +1511,20 @@ the phase is `<stage>/failed` with the reason — never a credential):
    facts are verified — `keyReady` says issued-and-written, never
    authenticated) and `imageManaged`.
 
-The gate: a record saying done AND a cli.toml carrying the default
+The gate (the settled Q6 plus the owner's ruling of 2026-11-20 on
+review r1#1): a record saying done AND a cli.toml carrying the default
 Cell skips the boot (the first choice — local or external — is made
-exactly once); either half alone is an inconsistency the boot refuses
-to start on, naming both files; a default Cell with an IN-PROGRESS
-record is this boot's own interruption and is resumed. Every stage is
-idempotent: an interrupted first boot is retried by running the verb
-again — the user is found by its fixed email (never duplicated) and the
-same-named key is revoked and reissued.
+exactly once); a cell with no record at all, or a done record without
+the cell, is an inconsistency the boot refuses to start on, naming both
+files; a default Cell with an IN-PROGRESS record is this boot's own
+interruption and resumes — with the RECORD as the authority for the
+choice: the mode, server and project come from the record, environment
+inputs that disagree with it refuse the start, and the external
+record's key input must be set again (a record never carries a
+credential). Every stage is idempotent: an interrupted first boot is
+retried by running the verb again — the user is found by its fixed
+email (never duplicated) and the same-named key is revoked and
+reissued.
 
 The external mode's inputs ride the container environment (compose's
 `WORKSTATION_AIHUB_SERVER`, `WORKSTATION_AIHUB_KEY` and the optional

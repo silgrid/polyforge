@@ -34,15 +34,20 @@ credential):
   authenticated — the real authentication proof is the smoke's
   `pf recall` inside the container) and `imageManaged`.
 
-The gate: a record saying done plus a cli.toml carrying the default
+The gate (the settled Q6 plus the owner's ruling of 2026-11-20 on
+review r1#1): a record saying done plus a cli.toml carrying the default
 Cell skips the boot — the first choice (local or external) is made
 exactly once, and a restart with different `WORKSTATION_AIHUB_*`
-environment changes nothing. Either half alone is an inconsistency the
-boot refuses to start on, naming both files; a default Cell with an
-in-progress record is this boot's own interruption and resumes. Every
-stage is idempotent: the user is found by its fixed email (never
-duplicated) and the same-named key is revoked and reissued, so a retry
-never strands anything.
+environment changes nothing. A cell with no record at all, or a done
+record without the cell, is an inconsistency the boot refuses to start
+on, naming both files. A default Cell with an in-progress record is
+this boot's own interruption and resumes — with the RECORD as the
+authority: the mode, server and project come from the record,
+environment inputs that disagree with it refuse the start, and the
+external record's key input must be set again (a record never carries a
+credential). Every stage is idempotent: the user is found by its fixed
+email (never duplicated) and the same-named key is revoked and reissued,
+so a retry never strands anything.
 
 Full reference: [commands.md](../../docs/reference/commands.md),
 "`pf first-boot`", and [workstation.md](../../docs/workstation.md),

@@ -29,10 +29,16 @@ claude skill symlinks, toward /components/current) and publishes
 <data-dir>/workstation/first-boot.json — the phase record, never a
 credential.
 
-The boot is skipped when its record says done AND cli.toml carries the
-default Cell (the first choice — local or external — is made exactly
-once); either half alone is an inconsistency the boot refuses to start
-on, naming both files.
+The gate is the settled Q6 with the owner's ruling (2026-11-20, review
+r1#1) on the one shape Q6 left undecided — a default Cell with an
+in-progress record (this boot's own interruption): a done record plus
+the default Cell skips (the first choice — local or external — is made
+exactly once); a cell with no record at all, or a done record without
+the cell, is an inconsistency the boot refuses to start on, naming both
+files; an in-progress record RESUMES — and the record, not the
+environment, is the authority for the choice: environment inputs that
+disagree with it refuse the start, and the external record's key input
+must be set again (a record never carries a credential).
 
 The mode: local by default (the AIHub volume, the identity
 transaction, the default Cell pointing at 127.0.0.1:8420); external
@@ -109,9 +115,4 @@ var cmdFirstBoot = &Command{
 		o.Platform = runtime.GOOS + "/" + runtime.GOARCH
 		return runFirstBoot(o, ctx.Stdout)
 	},
-}
-
-// runtimePlatform answers os/arch the way the seed manifests carry it.
-func runtimePlatform() string {
-	return "linux/amd64-placeholder"
 }
