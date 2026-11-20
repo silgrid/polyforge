@@ -127,9 +127,9 @@ ask`), and a residual the owner accepted keeps its record in the result file, ci
 hand-off. Merge each touched repo's `details.selected` of its green result into the change
 analysis's `selected` (below), keyed by the repo, verbatim. Then run the close's facts lines —
 review's own first, the same engine with the same replay it judges you with:
-`"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" plan-conformance --json --out
-artifacts/facts/plan-conformance.json` `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" build --replay
---isolation host --json --out artifacts/facts/build.json` The second gives each unit's commit facts
+`"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" plan-conformance --json --out artifacts/facts/plan-conformance.json`
+`"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" build --replay --isolation host --json --out artifacts/facts/build.json`
+The second gives each unit's commit facts
 (its ids resolving in a task repo, `test_commit` one ordinary commit of test paths alone and an
 ancestor of `impl_commit`, `impl_commit` in HEAD) and its run replayed on the tree of its
 `test_commit` (or of the change's base for a unit declared `pre_existing_red`) — it must be red
@@ -138,8 +138,8 @@ writes or lapsed obligations, a unit that does not resolve, whose commits name a
 problem or whose replay is not red — is fixed before the hand-off, never handed off on. Exit 2
 on either line is not judged: read the result's summary, wait one minute and run that line
 again, at most twice; still 2 — its failure summary goes into your hand-off and the lane goes
-on to `review`, which re-runs the line itself (never `blocked` for it). Then `"$PF_PYTHON"
-"$PF_SHARED_DIR/scripts/facts.py" carries --json --out artifacts/facts/carries.json` — the e2e
+on to `review`, which re-runs the line itself (never `blocked` for it). Then
+`"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" carries --json --out artifacts/facts/carries.json` — the e2e
 carries; a red names the repo, suite and reason — fix it and re-run until green, never handing
 off on one; exit 2 is no pass either (fix the input it names; a real machine blocker is
 `blocked`). These are the build's own runs — `review` recomputes every line fresh, so no file
