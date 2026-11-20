@@ -97,10 +97,11 @@ implementation (``pfstep/scoped_plan.py`` — the same engine argv
 ``--json --light --base <merge-base>``, the same ``choose``, the same
 nested roots), executed on the host over the final tree so the existing
 tests the selection pins run before the hand-off, not first at
-verification. A command the same tree already ran green (the same root
-and command, its evidence in a ``--reuse`` result file of this repo —
-the close's fast-checks run) is not re-run: its evidence is reused and
-its entry names the file it came from. A red command gets the same one
+verification. A command whose reuse key (the same key the ``--repo`` run
+reuses by, polyforge#182) a green entry in a ``--reuse`` result file of
+this repo already proved — the close's fast-checks run — is not re-run:
+its evidence is reused and its entry names the file it came from; a
+green-through-flaky confirmation is never that evidence. A red command gets the same one
 targeted re-run and whole-command confirmation the per-unit bar gives.
 A selection the engine answers with the full tier is never run — the
 run records ``incomplete`` with the engine's own fallback reasons and
@@ -263,7 +264,7 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--root", action="append", default=[], metavar="DIR",
                     help="with --repo: only the named engine root's commands run — . is the repository's own root, a nested root its directory (repeatable; default: every root the change reaches)")
     ap.add_argument("--reuse", action="append", default=[], metavar="FILE",
-                    help="with --close-scoped: a fast-checks result file whose green same-tree runs are reused, not re-run (repeatable)")
+                    help="with --close-scoped: a fast-checks result file whose green runs of an unchanged reuse key are reused, not re-run (repeatable)")
     ap.add_argument("--check-units", default="", metavar="FILE",
                     help="the build's units.json: re-run its recorded unit runs as written and check each unit's marker against its run's output (verification's own rules)")
     ap.add_argument("--unit", default="", help="with --check-units: only the unit of that id")
@@ -873,18 +874,19 @@ class CloseRun(CheckRun):
     """The build close's scoped selection (--close-scoped, polyforge#164):
     the same light-tier plan verification runs — one shared implementation
     (pfstep/scoped_plan.plan_light, fed this run's own engine asks) — its
-    commands executed on the host over the final tree, a command the same
-    tree already ran green reused from a --reuse result instead of re-run.
-    A selection the engine answers with the full tier is never run: the run
-    records incomplete with the engine's own fallback reasons and exits
-    non-zero, claiming nothing. The result's details.selected is the change
-    analysis's machine selection record."""
+    commands executed on the host over the final tree, a command whose
+    reuse key a green run in a --reuse result already proved reused instead
+    of re-run (polyforge#182: the same key the --repo run reuses by — one
+    key, two modes). A selection the engine answers with the full tier is
+    never run: the run records incomplete with the engine's own fallback
+    reasons and exits non-zero, claiming nothing. The result's
+    details.selected is the change analysis's machine selection record."""
 
     def __init__(self, inv: Invocation, capsule: str, repo: str, engine: str,
                  reuse: List[str], log_dir: str, r: Runner) -> None:
         super().__init__(inv, capsule, repo, engine, r.deadline, log_dir, r)
         self.reuse: List[str] = list(reuse)
-        self.reuse_green: Dict[Tuple[str, str], str] = {}
+        self.reuse_green: Dict[ReuseKey, str] = {}
         self.details: Dict[str, Any] = {"repo": repo, "mode": "close-scoped", "commands": []}
 
     def command_root(self, c: EngineCommand) -> str:
@@ -893,17 +895,25 @@ class CloseRun(CheckRun):
         rel = self.cwd_rel(os.path.join(self.capsule, "repos", self.repo))
         return rel + (("/" + c.dir) if c.dir else "")
 
-    def reuse_key(self, c: EngineCommand) -> Tuple[str, str]:
-        """What a green run in a --reuse file is matched by: the command's
-        own root and the command as its own report gave it (a nested root's
-        entry runs there, without the cd the light plan wraps it with)."""
-        return self.command_root(c), (c.inner if c.dir else c.cmd)
+    def reuse_key(self, c: EngineCommand) -> Optional[ReuseKey]:
+        """What a green run in a --reuse file is matched by: the same key a
+        --repo run reuses by — the command's own root, the command as its
+        own report gave it (a nested root's entry runs there, without the
+        cd the light plan wraps it with), its root's subtree tree hash of
+        the working tree and its declared prerequisites. None when the
+        hash is unreadable: nothing is reused, everything runs."""
+        subtree = self.tree_of(c.dir)
+        if not subtree:
+            return None
+        return self.command_root(c), (c.inner if c.dir else c.cmd), subtree, prereq_key(c)
 
-    def load_reuse(self, head: str) -> int:
-        """The green same-tree runs of the --reuse files: (root, cmd) to the
-        entry that proved them. A file whose repo head is another tree has
-        nothing reusable (its evidence is of another tree); an unusable one
-        is the invocation's (exit 2)."""
+    def load_reuse(self) -> int:
+        """The reusable green entries of the --reuse files, keyed by the
+        same key the --repo run reuses by: a green-in-one-run entry (never
+        a flaky-confirmed one, Q4) carrying its key fields and its log — a
+        plain green run, a reused entry or a carried one alike; an entry
+        an older run wrote without its key fields is no cache, and an
+        unusable file is the invocation's (exit 2)."""
         for path in self.reuse:
             try:
                 with open(path, "rb") as f:
@@ -912,13 +922,12 @@ class CloseRun(CheckRun):
                 return self.inv.usage("--reuse %s is not a usable result file: %s" % (path, err))
             if not isinstance(doc, dict) or not isinstance(doc.get("details"), dict):
                 return self.inv.usage("--reuse %s is not a usable result file: no details" % path)
-            if (doc.get("heads") or {}).get(self.repo) != head:
-                continue
             for e in doc["details"].get("commands") or []:
-                if not isinstance(e, dict) or e.get("skipped"):
+                if not isinstance(e, dict) or not reusable_entry(e):
                     continue
-                if e.get("exit_code") == 0 or e.get("confirmed") or e.get("complete"):
-                    self.reuse_green[(e.get("root", ""), e.get("cmd", ""))] = "%s#%s" % (path, e.get("name", ""))
+                key = entry_key(e)
+                if key is not None:
+                    self.reuse_green[key] = "%s#%s" % (path, e.get("name", ""))
         return 0
 
     def ask(self, directory: str, cwd_rel: str, base: str) -> Tuple[Optional[EngineReport], str, str]:
@@ -971,7 +980,7 @@ class CloseRun(CheckRun):
         self.head = head
         self.inv.heads[self.repo] = head
         self.go_harness = read_go_harness(clone)
-        code = self.load_reuse(head)
+        code = self.load_reuse()
         if code:
             return code
         branch, why_not = scoped_plan.base_branch_of(self.capsule, clone)
@@ -1004,13 +1013,16 @@ class CloseRun(CheckRun):
             return 1
         # every planned command: reused, or run in the repository's own
         # root (a nested root's command carries its own cd), never stopped
-        # for a failure
+        # for a failure — the subtree hashes are taken before any command
+        # runs, one snapshot of the working tree keying the whole run
         runs: List[Tuple[Dict[str, Any], EngineCommand, str, str, str, str, str]] = []
         incomplete: List[str] = []
         for c in plan.commands:
+            self.tree_of(c.dir)
+        for c in plan.commands:
             self.inv.say("repos/%s: `%s` (%s)" % (self.repo, c.cmd, c.phase))
             key = self.reuse_key(c)
-            if key in self.reuse_green:
+            if key is not None and key in self.reuse_green:
                 entry: Dict[str, Any] = {"name": c.name, "phase": c.phase, "root": self.command_root(c),
                                         "cmd": c.cmd, "source": c.source, "reused": self.reuse_green[key]}
                 self.details["commands"].append(entry)
