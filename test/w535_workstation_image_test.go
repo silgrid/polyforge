@@ -261,16 +261,24 @@ func TestWorkstationImage(t *testing.T) {
 		}
 		// the absolute path is the point (Q5): a PATH lookup would find
 		// whatever a later layer or mount left in /usr/local/bin
-		if strings.Contains(body, `exec pf supervise`) {
+		if regexp.MustCompile(`(?m)^exec pf supervise(?:[ \t]|$)`).MatchString(body) {
 			t.Fatal("polyforge#175: entrypoint.sh must not exec pf by a PATH lookup — the base pf lives at /usr/local/libexec/polyforge/pf")
 		}
 		// the first boot runs BETWEEN the boundary and supervise
 		// (84-components-C): the identity must exist before the server
 		// starts — the aihub server's own fresh-install bootstrap
 		// (usr_root) never fires on a first-boot-initialized store
-		whitelist := strings.Index(body, "workstation_env_whitelist")
-		firstBoot := strings.Index(body, "pf first-boot")
-		supervise := strings.Index(body, `exec pf supervise "$@"`)
+		// 只定位真实命令行，注释不能替代绝对 bootstrap 调用。
+		commandAt := func(command string) int {
+			at := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(command) + `[ \t]*$`).FindStringIndex(body)
+			if at == nil {
+				return -1
+			}
+			return at[0]
+		}
+		whitelist := commandAt("workstation_env_whitelist")
+		firstBoot := commandAt("/usr/local/libexec/polyforge/pf first-boot")
+		supervise := commandAt(`exec /usr/local/libexec/polyforge/pf supervise "$@"`)
 		if firstBoot < 0 {
 			t.Fatal("polyforge#176: entrypoint.sh must run `pf first-boot` before handing over to pf supervise")
 		}

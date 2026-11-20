@@ -58,9 +58,7 @@ workstation_env_whitelist
 #    record says which phase stopped). A refusal here ends the
 #    container: starting supervise on an uninitialized or
 #    inconsistent machine is never better.
-# The literal `pf first-boot` is retained in this comment for the
-# operator-facing contract; the base bootstrap is invoked absolutely
-# because the components-volume PATH link is not installed yet.
+# 种子安装前尚无 components-volume PATH 软链，首启使用绝对 bootstrap 路径。
 /usr/local/libexec/polyforge/pf first-boot
 
 # 4. the first boot's inputs are consumed (84-components-C, review
@@ -69,4 +67,4 @@ workstation_env_whitelist
 #    never see it — the three names go before the handover.
 unset WORKSTATION_AIHUB_SERVER WORKSTATION_AIHUB_KEY WORKSTATION_AIHUB_PROJECT
 
-exec /usr/local/libexec/polyforge/pf supervise "$@" # exec pf supervise "$@"
+exec /usr/local/libexec/polyforge/pf supervise "$@"
