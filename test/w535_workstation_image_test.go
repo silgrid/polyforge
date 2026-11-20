@@ -1046,10 +1046,11 @@ func TestWorkstationSmokeProjectIsolation(t *testing.T) {
 		t.Fatal("polyforge#176 (review r1#4): the smoke's compose() helper must run under its own project (-p workstation-smoke) — its down -v may never touch the operator's workstation volumes")
 	}
 	// every raw docker compose invocation carries it too (the env and
-	// podman-verify passes and the first-boot pass's override calls)
+	// podman-verify passes and the first-boot pass's override calls);
+	// the bare `docker compose version` probes touch no project
 	for i, line := range strings.Split(body, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "docker compose") {
+		if !strings.HasPrefix(trimmed, "docker compose") || strings.HasPrefix(trimmed, "docker compose version") {
 			continue
 		}
 		if !strings.Contains(trimmed, "-p workstation-smoke") {
