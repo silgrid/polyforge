@@ -436,10 +436,24 @@ try {
     await page.context().route(/\/api\/auth\/providers/, (route) => route.fulfill({ json: PROVIDERS }));
     await openSettings(page);
     // The unified Models page owns the model table and Pi editor, while login
-    // remains on Account › pi; no duplicate legacy page exists.
+    // remains on Account › pi; no duplicate legacy page exists. The managed
+    // provider's detail must settle before the no-login assertions read it
+    // (review r1#3: reading a single count over a still-loading list pinned
+    // nothing).
     await tab(page, /^Models$/).click({ timeout: ACTION_MS });
     const models = sectionHost(page, "models");
     await models.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
+    await models.locator(".config-sidebar-item").filter({ hasText: "Google" }).first().click({ timeout: ACTION_MS });
+    const detailText = await waitFor(async () => {
+      const detail = models.locator(".enabled-models-section, .enabled-models-empty, .enabled-models-error").first();
+      if (!(await detail.count())) return false;
+      const text = await models.innerText();
+      if (/Loading/i.test(text)) return false;
+      if (text.includes("Login") || text.includes("Re-login")) return false;
+      if ((await models.locator('input[type="password"]').count()) !== 0) return false;
+      return text;
+    }, ACTION_MS, "the managed provider detail still offers a login");
+    assert.ok(!detailText.includes("Login") && !detailText.includes("Re-login"), "the Models page exposes a duplicate login form");
     assert.equal(await models.locator('input[type="password"]').count(), 0, "the Models page exposes a duplicate API-key form");
     await models.getByRole("button", { name: "Account", exact: true }).waitFor({ state: "visible", timeout: ACTION_MS });
     // Account › pi: the rows, the Add provider button, and no Anthropic
