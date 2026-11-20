@@ -696,6 +696,17 @@ test("a relay that claude or the server refuses rejects, sends nothing after the
   }
 });
 
+// 轮询本次断言所观察的值；每轮刷新 hook，截止时间内未达到期望即失败。
+async function pollComposer(hook, predicate) {
+  const deadline = Date.now() + 2000;
+  do {
+    hook.flush();
+    if (predicate(hook.result)) return;
+    await new Promise((resolve) => setImmediate(resolve));
+  } while (Date.now() < deadline);
+  assert.fail("组合默认值未在截止时间内达到期望状态");
+}
+
 // ── 85a3-1 (AC2): the combined default a fresh composer starts from ──────
 test("a fresh composer takes the combined default's harness and claude's native defaults where nothing was carried or picked", async () => {
   globalThis.EventSource = class {
@@ -710,8 +721,7 @@ test("a fresh composer takes the combined default's harness and claude's native 
     return json({});
   };
   const hook = renderHook(useAgentSession, { session: null, newSessionCwd: "/project", newSessionDraftKey: "new:combined", t: (key) => key });
-  await settle();
-  hook.flush();
+  await pollComposer(hook, (state) => state.newSessionHarness === "claude" && state.newSessionClaudeModel === "opus" && state.newSessionClaudeEffort === "high" && state.claudeDefaultModel === "opus");
   assert.equal(hook.result.newSessionHarness, "claude", "the stored default harness decides");
   assert.equal(hook.result.newSessionClaudeModel, "opus", "the native model is the initial value");
   assert.equal(hook.result.newSessionClaudeEffort, "high", "the native effort is the initial value");
@@ -734,8 +744,7 @@ test("a fresh composer takes the combined default's harness and claude's native 
   picked.flush();
   releaseAnswer({ defaultHarness: "pi", claudeDefaultModel: "opus", claudeDefaultEffort: "high" });
   try {
-    await settle();
-    picked.flush();
+    await pollComposer(picked, (state) => state.newSessionClaudeModel === "opus" && state.newSessionHarness === "claude");
     assert.equal(picked.result.newSessionHarness, "claude", "the user's harness choice stays");
     assert.equal(picked.result.newSessionClaudeModel, "opus", "an unpicked field still takes the fetched value");
   } finally {
@@ -770,8 +779,7 @@ test("the claude star saves the combined default and an untouched fresh composer
     return json({});
   };
   const hook = renderHook(useAgentSession, { session: null, newSessionCwd: "/project", newSessionDraftKey: "new:star", t: (key) => key });
-  await settle();
-  hook.flush();
+  await pollComposer(hook, (state) => state.claudeDefaultModel === "opus");
   await hook.result.handleSetDefaultClaudeModel("sonnet");
   hook.flush();
   const save = requests.find((request) => request.url === "/api/models/default" && request.body?.harness === "claude");
@@ -801,8 +809,7 @@ test("an open claude session's star marker reads claude's native default, not th
   const info = { id: "c9", path: "", cwd: "/project", created: "", modified: "", messageCount: 0, firstMessage: "", harness: "claude", claude: { model: "claude-opus-5-5", effort: "default" } };
   const hook = renderHook(useAgentSession, { session: info, newSessionCwd: null, newSessionDraftKey: null, t: (key) => key });
   try {
-    await settle();
-    hook.flush();
+    await pollComposer(hook, (state) => state.claudeDefaultModel === "opus");
     assert.equal(hook.result.claudeDefaultModel, "opus", "the star's filled marker is the native default");
     assert.equal(hook.result.newSessionHarness, "pi", "an open session takes no new-session default");
     assert.equal(hook.result.newSessionClaudeModel, "default", "an open session's composer state is untouched");
