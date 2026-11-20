@@ -190,11 +190,20 @@ source commit rides its own field — `pf --json version`'s `commit` and
 
 Boundaries, by design: the channel is local-only (it writes nothing to
 GitHub — no release, no asset, no push), and the two AIHubs do not
-follow it. A green commit whose release-tag..green diff touches any
-path of `tools/aihub-paths.conf` (the deploy tree, the server and its
-SQL, the shared wire contracts, the deploy entry point) is REFUSED in
-prepare: that set changes the server, and it needs a formal release
-(the documented way to ship it).
+follow it. Its AIHub-side preflight is graded (polyforge#188): a green
+commit whose release-tag..green diff touches a path of
+`tools/aihub-interface-paths.conf` (the client-server wire contracts,
+`internal/common/api/**` and `internal/common/protocol/**` — a
+conservative path rule, not a compatibility proof) is REFUSED in
+prepare: a changed interface needs the two AIHubs deployed, which only
+a formal release does. A diff touching only the other paths of
+`tools/aihub-paths.conf` (the server's insides, its SQL migrations, the
+deploy tree, the deploy entry point) passes with one WARN naming the
+formal tag, the green tag and every hit path: the two AIHubs stay on
+their current formal release, the changes are not deployed, and their
+effects wait for the next formal release. A green tag whose lists are
+missing, empty or of an unsupported shape is refused too (fail closed):
+the installer waits for a green tag that carries the lists.
 
 After a dev install the FORMAL channel is refused until the next formal
 release ships: the latest release is older than the installed

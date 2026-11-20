@@ -374,9 +374,15 @@ installs
 `v<next patch of the latest release tag>-dev.<N>` — `N` the
 first-parent commit count release-tag..green-commit, stable because main
 only fast-forwards — and nothing is published: no release, no asset, no
-push. The two AIHubs do not follow it: a green commit whose
-release-tag..green diff touches any path of `tools/aihub-paths.conf` is
-refused in prepare, needing a formal release instead. The channel's
+push. The two AIHubs do not follow it, and the AIHub-side preflight is
+graded (polyforge#188): a green commit whose release-tag..green diff
+touches a path of `tools/aihub-interface-paths.conf` (the client-server
+wire contracts) is refused in prepare, needing a formal release
+instead, while the diff's other AIHub-side paths (`tools/aihub-paths.conf`:
+the server's insides, its SQL, the deploy tree) pass with one WARN
+naming every hit — those changes stay undeployed and wait for a formal
+release; a green tag whose lists are missing, empty or of an
+unsupported shape is refused too (fail closed). The channel's
 residual risk is the green tag's own ("The residual risk" below): the
 tag proves its record matches the commit's gate, not who wrote it. The
 development version is a SemVer pre-release of the next formal release,

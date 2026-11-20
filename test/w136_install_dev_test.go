@@ -12,6 +12,14 @@ package test
 // machine's state: the pf bytes, release/current and the daemon are as
 // they were.
 //
+// polyforge#188 grades the AIHub-side preflight: the client-server
+// interface list tools/aihub-interface-paths.conf refuses on its own;
+// the total list tools/aihub-paths.conf's remaining entries pass with
+// ONE WARN naming the formal tag, the green tag and every hit path.
+// Both lists are this repository's own files, copied into the fixture
+// origin (one list, both readers — never a second copy), and the
+// representative changed paths are generated from the lists themselves.
+//
 // Pinned (AC1): the channel takes origin's latest green tag only (its
 // commit an ancestor of origin/main and a descendant of the latest
 // release tag, and not that tag's own commit), derives
@@ -25,7 +33,7 @@ package test
 // build tools (reported all at once) or a failed build refuses with
 // nothing changed. AC4: the gh/git calls the channel makes are reads.
 //
-// carries: tools/install.sh, tools/green-tag, tools/aihub-paths.conf, Makefile, tools/package-pi-web.sh, test/w136_install_dev_test.go
+// carries: tools/install.sh, tools/green-tag, tools/aihub-paths.conf, tools/aihub-interface-paths.conf, Makefile, tools/package-pi-web.sh, test/w136_install_dev_test.go
 
 import (
 	"encoding/json"
@@ -33,18 +41,37 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 // w136DevCfg shapes one dev-channel fixture world.
 type w136DevCfg struct {
-	green      string // "" = default: green tag at main HEAD; "tag" | "base" | "none" | "offmain"
-	tools      bool   // the build-tool shims (go, make, node, npm) are on PATH
-	touch      string // a repo-relative path ONE commit after the release tag touches (an AIHub-side change shape)
-	piweb      bool   // the origin carries an installable pi-web package and npm/node model it
-	aheadPath  string // a repo-relative path ONE commit on main AFTER the green tag touches (main ahead of the tag)
-	aheadNvmrc string // a new .nvmrc that same post-green commit writes (main's pin diverging from the green tree's)
+	green      string   // "" = default: green tag at main HEAD; "tag" | "base" | "none" | "offmain"
+	tools      bool     // the build-tool shims (go, make, node, npm) are on PATH
+	touch      []string // repo-relative paths ONE commit after the release tag touches (the AIHub-side change shape, whatever the client commits beside it)
+	piweb      bool     // the origin carries an installable pi-web package and npm/node model it
+	aheadPath  string   // a repo-relative path ONE commit on main AFTER the green tag touches (main ahead of the tag)
+	aheadNvmrc string   // a new .nvmrc that same post-green commit writes (main's pin diverging from the green tree's)
+	// polyforge#188: the fixture's two path lists, committed below the
+	// release tag so the green commit's tree (and only it) carries them.
+	// "" copies the repository's own file; a *Missing flag omits the
+	// file (a green tag too old to carry the list); a custom value
+	// writes it verbatim (a fixture world of its own).
+	ifaceConf    string
+	ifaceMissing bool
+	totalConf    string
+	totalMissing bool
+	// renameFrom/renameTo: a file seeded at the base commit that the
+	// touch commit moves (the rename the preflight must judge on both
+	// its ends)
+	renameFrom string
+	renameTo   string
+	// aheadIfaceConf: the interface list a commit on main AFTER the
+	// green tag writes (main's list diverging from the green tree's)
+	aheadIfaceConf string
 }
 
 // w136Dev is one hermetic dev-channel machine on top of w174Install.
@@ -123,11 +150,12 @@ func w136NewDev(t *testing.T, cfg w136DevCfg) *w136Dev {
 		}
 		w136Write(t, filepath.Join(d.origin, filepath.FromSlash(tool)), string(raw), 0o755)
 	}
-	if raw, err := os.ReadFile(filepath.Join(root, "tools", "aihub-paths.conf")); err != nil {
-		t.Fatal(err)
-	} else {
-		w136Write(t, filepath.Join(d.origin, "tools", "aihub-paths.conf"), string(raw), 0o644)
-	}
+	// the two path lists (polyforge#188): the repository's own files —
+	// the same files the installer reads from the green commit's
+	// checkout — or the cfg's fixture worlds (a custom body, or the
+	// file's absence: a green tag too old to carry the list)
+	w136ConfFixture(t, root, d.origin, "tools/aihub-paths.conf", cfg.totalConf, cfg.totalMissing)
+	w136ConfFixture(t, root, d.origin, "tools/aihub-interface-paths.conf", cfg.ifaceConf, cfg.ifaceMissing)
 	w136Write(t, filepath.Join(d.origin, ".nvmrc"), "24\n", 0o644)
 	w136Write(t, filepath.Join(d.origin, "internal", "polyforge", "cli", "verbs_version.go"), "package cli\n", 0o644)
 	if cfg.piweb {
@@ -163,6 +191,11 @@ func w136NewDev(t *testing.T, cfg w136DevCfg) *w136Dev {
 		}
 		d.npmPrefix = filepath.Join(shortTmp(t, "n"), "npm-prefix")
 	}
+	if cfg.renameFrom != "" {
+		// the rename's source, seeded below the release tag so the
+		// touch commit's move is a real rename in the diff
+		w136Write(t, filepath.Join(d.origin, filepath.FromSlash(cfg.renameFrom)), "// w136 rename seed\n", 0o644)
+	}
 	w136Git(t, d.origin, "add", "-A")
 	w136Git(t, d.origin, "commit", "-q", "-m", "base")
 	base := w136CommitSHA(t, d.origin, "HEAD")
@@ -171,12 +204,18 @@ func w136NewDev(t *testing.T, cfg w136DevCfg) *w136Dev {
 	w136Git(t, d.origin, "commit", "-q", "-m", "the released line")
 	w136Git(t, d.origin, "tag", "-a", "-m", "release v0.2.3", "v0.2.3")
 	d.tagSHA = w136CommitSHA(t, d.origin, "v0.2.3")
-	if cfg.touch != "" {
-		// one commit INSIDE the release-tag..green range touches the path:
-		// the AIHub-side shape AC2 refuses, whatever the client commits beside it
-		w136Write(t, filepath.Join(d.origin, filepath.FromSlash(cfg.touch)), "// w136 AIHub-side change\n", 0o644)
+	if len(cfg.touch) > 0 || cfg.renameFrom != "" {
+		// one commit INSIDE the release-tag..green range touches the
+		// paths (and moves the rename): the AIHub-side change shape the
+		// preflight must judge, whatever the client commits beside it
+		for _, p := range cfg.touch {
+			w136Write(t, filepath.Join(d.origin, filepath.FromSlash(p)), "// w136 AIHub-side change\n", 0o644)
+		}
+		if cfg.renameFrom != "" {
+			w136Git(t, d.origin, "mv", cfg.renameFrom, cfg.renameTo)
+		}
 		w136Git(t, d.origin, "add", "-A")
-		w136Git(t, d.origin, "commit", "-q", "-m", "a change the dev channel must refuse")
+		w136Git(t, d.origin, "commit", "-q", "-m", "a change the dev channel must judge")
 	}
 	w136Write(t, filepath.Join(d.origin, "internal", "polyforge", "cli", "verbs_version.go"), "package cli // r2\n", 0o644)
 	w136Git(t, d.origin, "add", "-A")
@@ -210,12 +249,15 @@ func w136NewDev(t *testing.T, cfg w136DevCfg) *w136Dev {
 	// main moving past the green tag (the normal state: the gate tags a
 	// batch, then development goes on) — whatever this commit touches must
 	// never reach the dev channel's build
-	if cfg.aheadPath != "" || cfg.aheadNvmrc != "" {
+	if cfg.aheadPath != "" || cfg.aheadNvmrc != "" || cfg.aheadIfaceConf != "" {
 		if cfg.aheadPath != "" {
 			w136Write(t, filepath.Join(d.origin, filepath.FromSlash(cfg.aheadPath)), "// w136 main moved on\n", 0o644)
 		}
 		if cfg.aheadNvmrc != "" {
 			w136Write(t, filepath.Join(d.origin, ".nvmrc"), cfg.aheadNvmrc, 0o644)
+		}
+		if cfg.aheadIfaceConf != "" {
+			w136Write(t, filepath.Join(d.origin, "tools", "aihub-interface-paths.conf"), cfg.aheadIfaceConf, 0o644)
 		}
 		w136Git(t, d.origin, "add", "-A")
 		w136Git(t, d.origin, "commit", "-q", "-m", "main moved past the green tag")
@@ -404,8 +446,10 @@ func w136ReadLink(t *testing.T, d *w136Dev) string {
 
 // w136Unchanged asserts the refusal invariant: the pf bytes, the
 // release/current link and the daemon population are as they were, and
-// no staged binary was left behind.
-func w136Unchanged(t *testing.T, d *w136Dev, binBefore, curBefore string) {
+// no staged binary was left behind. daemonsBefore lists the pids of the
+// daemons the machine already ran (none when the machine carried no
+// running daemon).
+func w136Unchanged(t *testing.T, d *w136Dev, binBefore, curBefore string, daemonsBefore ...int) {
 	t.Helper()
 	if got := w174ReadFile(t, d.bin); got != binBefore {
 		t.Fatal("the refused dev run replaced the installed pf")
@@ -421,9 +465,24 @@ func w136Unchanged(t *testing.T, d *w136Dev, binBefore, curBefore string) {
 			t.Fatalf("the refused dev run stopped the daemon: %s", l)
 		}
 	}
-	if daemons := d.daemons(); len(daemons) != 0 {
-		t.Fatalf("the refused dev run started a daemon: %v", daemons)
+	if daemons := d.daemons(); !w136SamePids(daemons, daemonsBefore) {
+		t.Fatalf("the refused dev run changed the daemon population: %v, want %v", daemons, daemonsBefore)
 	}
+}
+
+// w136SamePids answers whether the two pid lists hold the same pids.
+func w136SamePids(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	sort.Ints(a)
+	sort.Ints(b)
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // w136InstallBin writes an installed pf answering --version with ver.
@@ -437,6 +496,42 @@ func w136InstallBin(t *testing.T, d *w136Dev, ver string) string {
 		t.Fatal(err)
 	}
 	return body
+}
+
+// w136InstallCurrent lays out an installed release layout —
+// release/<ver> carrying a tree, release/current pointing at it — and
+// answers the current link's target: the installed state a refusal
+// must leave untouched (an empty machine protects nothing).
+func w136InstallCurrent(t *testing.T, d *w136Dev, ver string) string {
+	t.Helper()
+	rel := filepath.Join(d.data, "release", ver)
+	if err := os.MkdirAll(filepath.Join(rel, "skills", "polyforge"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rel, "skills", "polyforge", "marker"), []byte(ver), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// the workflows tree the daemon needs: `pf daemon ensure` answers for
+	// release/current/workflows, so the installed layout carries the
+	// repository's own copy like a real install does
+	if out, err := exec.Command("cp", "-R", filepath.Join(d.src, "workflows"), rel+"/").CombinedOutput(); err != nil {
+		t.Fatalf("installed release workflows: %v %s", err, out)
+	}
+	if err := os.Symlink(ver, filepath.Join(d.data, "release", "current")); err != nil {
+		t.Fatal(err)
+	}
+	return ver
+}
+
+// w136Live starts the fixture machine's daemon — the real daemon over
+// this scratch data dir, through `pf daemon ensure` — and answers its
+// pid: the running daemon a refusal must leave serving.
+func w136Live(t *testing.T, d *w136Dev) int {
+	t.Helper()
+	if code, out, errb := d.ensure(t); code != 0 {
+		t.Fatalf("pf daemon ensure: exit %d\n%s%s", code, out, errb)
+	}
+	return d.oneDaemon(t, 30*time.Second)
 }
 
 // TestW136InstallDevGreenBuildsAndInstalls (AC1, AC3): the channel takes
@@ -578,14 +673,35 @@ func TestW136InstallDevRefusals(t *testing.T) {
 	}
 }
 
-// w136AIHubPaths reads the repository's own AIHub-side list (the same
+// w136ConfFixture lays out one path list of the fixture origin from the
+// repository's own file — the same file the installer reads from the
+// green commit's checkout, one list, never a second copy — or from the
+// cfg's fixture world: a custom body, or the file's absence (a green
+// tag too old to carry the list).
+func w136ConfFixture(t *testing.T, root, origin, rel, custom string, missing bool) {
+	t.Helper()
+	if missing {
+		return
+	}
+	body := custom
+	if body == "" {
+		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatalf("fixture origin: read %s: %v", rel, err)
+		}
+		body = string(raw)
+	}
+	w136Write(t, filepath.Join(origin, filepath.FromSlash(rel)), body, 0o644)
+}
+
+// w136ConfPaths reads one of the repository's own path lists (the same
 // file the installer reads from the green commit's checkout) and
 // answers one representative changed path per entry: the directory
 // prefix plus a nested file (a /** entry covers any depth), the exact
 // path itself otherwise.
-func w136AIHubPaths(t *testing.T) map[string]string {
+func w136ConfPaths(t *testing.T, rel string) map[string]string {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(v1Root(t), "tools", "aihub-paths.conf"))
+	raw, err := os.ReadFile(filepath.Join(v1Root(t), filepath.FromSlash(rel)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -602,55 +718,332 @@ func w136AIHubPaths(t *testing.T) map[string]string {
 		}
 	}
 	if len(entries) == 0 {
-		t.Fatal("tools/aihub-paths.conf declares no entry")
+		t.Fatal(rel + " declares no entry")
 	}
 	return entries
 }
 
-// TestW136InstallDevRefusesAIHubChange (AC2): a green commit whose diff
-// latest-release-tag..green-commit touches ANY path of the repository's
-// AIHub-side list refuses the dev channel in prepare (with nothing
-// changed), naming the change; a client-only diff proceeds. The list is
-// read from the repository's own tools/aihub-paths.conf — the same file
-// the installer reads from the green commit's checkout, never a second
-// copy in the test.
-func TestW136InstallDevRefusesAIHubChange(t *testing.T) {
-	for entry, path := range w136AIHubPaths(t) {
+// w136ServerOnlyPaths answers one representative changed path per entry
+// of the total list that is no interface entry — the AIHub-side changes
+// that pass the dev channel with a WARN since polyforge#188. The paths
+// are generated from the repository's own two lists, never a second
+// copy: an entry the interface list names is excluded whatever its
+// representative path.
+func w136ServerOnlyPaths(t *testing.T) []string {
+	t.Helper()
+	total := w136ConfPaths(t, "tools/aihub-paths.conf")
+	iface := w136ConfPaths(t, "tools/aihub-interface-paths.conf")
+	var out []string
+	for entry, path := range total {
+		if _, hit := iface[entry]; !hit {
+			out = append(out, path)
+		}
+	}
+	sort.Strings(out)
+	if len(out) == 0 {
+		t.Fatal("tools/aihub-paths.conf carries no entry outside tools/aihub-interface-paths.conf")
+	}
+	return out
+}
+
+// w136DiffJournalPinned asserts the preflight's verdict was drawn from
+// the release-tag..green-commit diff: the journal records the read.
+func w136DiffJournalPinned(t *testing.T, d *w136Dev) {
+	t.Helper()
+	for _, l := range d.journalLines() {
+		if strings.Contains(l, "diff --name-only") {
+			return
+		}
+	}
+	t.Fatal("the journal records no git diff --name-only: the AIHub-side verdict must come from the release-tag..green-commit diff")
+}
+
+// w136TouchedDevVersion is the dev version a fixture whose touch commit
+// added one commit inside the release-tag..green range derives: N = 3
+// (the touch commit beside the two client commits), the next patch of
+// the v0.2.3 release tag — the same first-parent derivation the
+// untouched fixture's v0.2.4-dev.2 pins.
+const w136TouchedDevVersion = "v0.2.4-dev.3"
+
+// TestW136InstallDevRefusesInterfaceChange (AC1, polyforge#188): a
+// green commit whose diff latest-release-tag..green-commit touches ANY
+// path of the repository's interface list refuses the dev channel in
+// prepare, naming the change and the list it matched against — alone or
+// mixed with server-side hits, whose presence never softens the
+// interface verdict — and the machine keeps its installed pf, its
+// release/current and its running daemon exactly as they were. The
+// list is read from the repository's own
+// tools/aihub-interface-paths.conf — the same file the installer reads
+// from the green commit's checkout, never a second copy in the test.
+func TestW136InstallDevRefusesInterfaceChange(t *testing.T) {
+	paths := w136ConfPaths(t, "tools/aihub-interface-paths.conf")
+	entries := make([]string, 0, len(paths))
+	for entry := range paths {
+		entries = append(entries, entry)
+	}
+	sort.Strings(entries)
+	for _, entry := range entries {
+		path := paths[entry]
 		t.Run(entry, func(t *testing.T) {
-			d := w136NewDev(t, w136DevCfg{green: "", tools: true, touch: path})
+			d := w136NewDev(t, w136DevCfg{green: "", tools: true, touch: []string{path}})
 			binBody := w136InstallBin(t, d, "v0.2.3")
-			curBefore := w136ReadLink(t, d)
+			curBefore := w136InstallCurrent(t, d, "v0.2.3")
 			d.resetJournal(t)
 			out, code := d.run(t)
 			if code == 0 {
 				t.Fatalf("a green commit touching %s must refuse the dev channel; it installed:\n%s", path, out)
 			}
-			for _, want := range []string{"AIHub-side", path, "needs a formal release"} {
+			for _, want := range []string{"interface changes", path, "tools/aihub-interface-paths.conf", "needs a formal release"} {
 				if !strings.Contains(out, want) {
 					t.Fatalf("the refusal lacks %q:\n%s", want, out)
 				}
 			}
-			// the diff the verdict is drawn from is the read the journal records
-			found := false
-			for _, l := range d.journalLines() {
-				if strings.Contains(l, "diff --name-only") {
-					found = true
-					break
+			w136DiffJournalPinned(t, d)
+			w136Unchanged(t, d, binBody, curBefore)
+		})
+	}
+
+	// mixed: interface and server-side hits in ONE diff, over a machine
+	// that carries an installed release/current AND a running daemon —
+	// the interface verdict refuses the whole set and nothing changes
+	t.Run("mixed hits over a live machine refuse and change nothing", func(t *testing.T) {
+		touch := append([]string{}, w136ServerOnlyPaths(t)...)
+		for _, entry := range entries {
+			touch = append(touch, paths[entry])
+		}
+		d := w136NewDev(t, w136DevCfg{green: "", tools: true, touch: touch})
+		binBody := w136InstallBin(t, d, "v0.2.3")
+		curBefore := w136InstallCurrent(t, d, "v0.2.3")
+		pid := w136Live(t, d)
+		d.resetJournal(t)
+		out, code := d.run(t)
+		if code == 0 {
+			t.Fatalf("a green commit touching the interface paths must refuse the dev channel; it installed:\n%s", out)
+		}
+		for _, entry := range entries {
+			if !strings.Contains(out, paths[entry]) {
+				t.Fatalf("the mixed refusal must name the interface hit %s:\n%s", paths[entry], out)
+			}
+		}
+		if strings.Contains(out, "carries AIHub-side changes") {
+			t.Fatalf("a refused run must not print the server-side WARN:\n%s", out)
+		}
+		w136DiffJournalPinned(t, d)
+		w136Unchanged(t, d, binBody, curBefore, pid)
+		if !d.answers() {
+			t.Fatal("the refused dev run left the running daemon not answering")
+		}
+	})
+}
+
+// TestW136InstallDevWarnsOnAIHubInternalChange (AC1, polyforge#188): a
+// green commit whose diff touches ONLY the AIHub-side paths OUTSIDE the
+// interface list — the server's insides, its SQL, the deploy tree —
+// passes the dev channel, and ONE WARN names the formal tag, the green
+// tag and every hit path, stating the two AIHubs stay on their formal
+// releases and the changes wait for one. The paths come from the
+// repository's own list files (one list, both readers); the version is
+// the channel's own first-parent derivation (one commit more than the
+// untouched fixture's v0.2.4-dev.2).
+func TestW136InstallDevWarnsOnAIHubInternalChange(t *testing.T) {
+	assertInstalled := func(t *testing.T, d *w136Dev) {
+		t.Helper()
+		for _, arg := range []string{"--version", "version"} {
+			got, err := exec.Command(d.bin, arg).Output()
+			if err != nil || strings.TrimSpace(string(got)) != w136TouchedDevVersion {
+				t.Fatalf("pf %s after the warned dev install = %q (%v), want %s", arg, got, err, w136TouchedDevVersion)
+			}
+		}
+		if cur, err := os.Readlink(filepath.Join(d.data, "release", "current")); err != nil || cur != w136TouchedDevVersion {
+			t.Fatalf("release/current = %q (%v), want %s", cur, err, w136TouchedDevVersion)
+		}
+	}
+	for _, path := range w136ServerOnlyPaths(t) {
+		t.Run(path, func(t *testing.T) {
+			d := w136NewDev(t, w136DevCfg{green: "", tools: true, touch: []string{path}})
+			w136InstallBin(t, d, "v0.2.3")
+			out, code := d.run(t)
+			if code != 0 {
+				t.Fatalf("a green commit touching only %s must pass the dev channel with a WARN; exit %d:\n%s", path, code, out)
+			}
+			for _, want := range []string{"WARN:", path, "v0.2.3", "green/20261118-1", "tools/aihub-paths.conf", "formal release"} {
+				if !strings.Contains(out, want) {
+					t.Fatalf("the WARN lacks %q:\n%s", want, out)
 				}
 			}
-			if !found {
-				t.Fatal("the journal records no git diff --name-only: the AIHub-side verdict must come from the release-tag..green-commit diff")
+			assertInstalled(t, d)
+		})
+	}
+
+	// every server-side hit of one diff in ONE WARN block, every path named
+	t.Run("all hits in one WARN", func(t *testing.T) {
+		all := w136ServerOnlyPaths(t)
+		d := w136NewDev(t, w136DevCfg{green: "", tools: true, touch: all})
+		w136InstallBin(t, d, "v0.2.3")
+		out, code := d.run(t)
+		if code != 0 {
+			t.Fatalf("a green commit touching only the server-side paths must pass the dev channel; exit %d:\n%s", code, out)
+		}
+		if n := strings.Count(out, "carries AIHub-side changes"); n != 1 {
+			t.Fatalf("the run printed %d AIHub-side WARN blocks, want exactly one:\n%s", n, out)
+		}
+		for _, path := range all {
+			if !strings.Contains(out, path) {
+				t.Fatalf("the WARN must name every hit path, lacks %q:\n%s", path, out)
+			}
+		}
+		assertInstalled(t, d)
+	})
+
+	// the control: a client-only diff (the default fixture) proceeds
+	// with no AIHub-side WARN — the graded lists must not warn on what
+	// they do not name
+	t.Run("client-only proceeds without the WARN", func(t *testing.T) {
+		d := w136NewDev(t, w136DevCfg{green: "", tools: true})
+		w136InstallBin(t, d, "v0.2.3")
+		out, code := d.run(t)
+		if code != 0 {
+			t.Fatalf("a client-only green commit must install over the dev channel; exit %d:\n%s", code, out)
+		}
+		if strings.Contains(out, "carries AIHub-side changes") {
+			t.Fatalf("a client-only diff must not print the AIHub-side WARN:\n%s", out)
+		}
+	})
+}
+
+// TestW136InstallDevPreflightListBoundaries (AC1, polyforge#188): the
+// preflight fails closed on its input — a green tree whose interface
+// list or total list is missing, carries no entry, or an entry of an
+// unsupported shape refuses in prepare with nothing on the machine
+// changed, and a changed path git cannot print unambiguously (a name
+// it quotes) is refused too, never silently unmatched. The lists and
+// the diff are read from the green commit's tree — the same files the
+// tests read from the repository.
+func TestW136InstallDevPreflightListBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  w136DevCfg
+		want []string
+	}{
+		{"the interface list is missing", w136DevCfg{green: "", tools: true, ifaceMissing: true},
+			[]string{"carries no readable", "tools/aihub-interface-paths.conf"}},
+		{"the interface list is empty", w136DevCfg{green: "", tools: true, ifaceConf: "# polyforge#188: a list with no entry\n"},
+			[]string{"declares no entry", "tools/aihub-interface-paths.conf"}},
+		{"the interface list carries an unsupported entry", w136DevCfg{green: "", tools: true, ifaceConf: "internal/common/api/**\ninternal /bad/**\n"},
+			[]string{"unsupported entry"}},
+		{"the total list is missing", w136DevCfg{green: "", tools: true, totalMissing: true},
+			[]string{"carries no readable", "tools/aihub-paths.conf"}},
+		{"a changed path git quotes is refused", w136DevCfg{green: "", tools: true, touch: []string{`internal/aihub/core/we"ird.go`}},
+			[]string{"cannot print unambiguously"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := w136NewDev(t, tc.cfg)
+			binBody := w136InstallBin(t, d, "v0.2.3")
+			curBefore := w136InstallCurrent(t, d, "v0.2.3")
+			d.resetJournal(t)
+			out, code := d.run(t)
+			if code == 0 {
+				t.Fatalf("the dev channel must refuse %s; it installed:\n%s", tc.name, out)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(out, want) {
+					t.Fatalf("the refusal lacks %q:\n%s", want, out)
+				}
 			}
 			w136Unchanged(t, d, binBody, curBefore)
 		})
 	}
-	// the control: a client-only diff (the default fixture) proceeds —
-	// the conservative list must not block what it does not name
-	t.Run("client-only proceeds", func(t *testing.T) {
-		d := w136NewDev(t, w136DevCfg{green: "", tools: true})
+}
+
+// TestW136InstallDevJudgesTheGreenCommitLists (AC2, polyforge#188): the
+// preflight judges the diff against the GREEN COMMIT's lists — never
+// this repository's product paths (a green tree whose interface list
+// names a path of its own refuses on it, independently of the total
+// list) and never main's diverged lists (a hit only a post-green
+// commit's list names passes) — and a rename is judged on both its
+// ends: a file moved out of a judged directory stays visible as its
+// old path too.
+func TestW136InstallDevJudgesTheGreenCommitLists(t *testing.T) {
+	// a green tree whose interface list names a path of its own, outside
+	// this repository's lists: the refusal follows the list the green
+	// commit carries — no product path is hardcoded into the installer,
+	// and custom/wire being no total-list entry changes nothing (the
+	// interface list judges independently)
+	t.Run("the green commit's interface list names its own path", func(t *testing.T) {
+		d := w136NewDev(t, w136DevCfg{green: "", tools: true,
+			ifaceConf: "custom/wire/**\n",
+			touch:     []string{"custom/wire/x.go"}})
+		binBody := w136InstallBin(t, d, "v0.2.3")
+		curBefore := w136InstallCurrent(t, d, "v0.2.3")
+		d.resetJournal(t)
+		out, code := d.run(t)
+		if code == 0 {
+			t.Fatalf("a green commit whose interface list names custom/wire/x.go must refuse; it installed:\n%s", out)
+		}
+		for _, want := range []string{"interface changes", "custom/wire/x.go", "tools/aihub-interface-paths.conf"} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("the refusal lacks %q:\n%s", want, out)
+			}
+		}
+		w136Unchanged(t, d, binBody, curBefore)
+	})
+
+	// main sits one commit past the green tag and rewrites the interface
+	// list to name a new interface path; the diff touches exactly that
+	// path. The green commit's list is the judge: the run installs — a
+	// preflight reading main's tree would refuse
+	t.Run("a hit only main's diverged list names passes", func(t *testing.T) {
+		d := w136NewDev(t, w136DevCfg{green: "", tools: true,
+			ifaceConf:      "custom/wire/**\n",
+			touch:          []string{"internal/polyforge/ahead.go"},
+			aheadIfaceConf: "internal/polyforge/ahead.go\n"})
 		w136InstallBin(t, d, "v0.2.3")
-		if out, code := d.run(t); code != 0 {
-			t.Fatalf("a client-only green commit must install over the dev channel; exit %d:\n%s", code, out)
+		out, code := d.run(t)
+		if code != 0 {
+			t.Fatalf("the preflight must judge the diff against the green commit's list, not main's diverged one; exit %d:\n%s", code, out)
+		}
+		if strings.Contains(out, "interface changes") {
+			t.Fatalf("a path the green commit's interface list does not name must not refuse:\n%s", out)
+		}
+	})
+
+	// a rename moving a file OUT of an interface directory: both ends
+	// stay visible — the old path is the interface hit that refuses
+	t.Run("a rename out of an interface directory refuses", func(t *testing.T) {
+		d := w136NewDev(t, w136DevCfg{green: "", tools: true,
+			renameFrom: "internal/common/api/handler.go",
+			renameTo:   "internal/polyforge/handler.go"})
+		binBody := w136InstallBin(t, d, "v0.2.3")
+		curBefore := w136InstallCurrent(t, d, "v0.2.3")
+		d.resetJournal(t)
+		out, code := d.run(t)
+		if code == 0 {
+			t.Fatalf("a rename moving internal/common/api/handler.go out of the interface directory must refuse on its old path; it installed:\n%s", out)
+		}
+		for _, want := range []string{"interface changes", "internal/common/api/handler.go", "needs a formal release"} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("the refusal lacks %q:\n%s", want, out)
+			}
+		}
+		w136Unchanged(t, d, binBody, curBefore)
+	})
+
+	// the same shape over a server-side directory passes with a WARN
+	// naming the old path — a server-side hit never silently disappears
+	// into a rename either
+	t.Run("a rename out of a server-side directory warns on the old path", func(t *testing.T) {
+		d := w136NewDev(t, w136DevCfg{green: "", tools: true,
+			renameFrom: "internal/aihub/core/old.go",
+			renameTo:   "internal/polyforge/old.go"})
+		w136InstallBin(t, d, "v0.2.3")
+		out, code := d.run(t)
+		if code != 0 {
+			t.Fatalf("a rename the interface list does not judge must pass with a WARN; exit %d:\n%s", code, out)
+		}
+		for _, want := range []string{"WARN:", "internal/aihub/core/old.go", "formal release"} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("the WARN lacks %q:\n%s", want, out)
+			}
 		}
 	})
 }
@@ -681,7 +1074,7 @@ func TestW136InstallDevReadOnlyRemote(t *testing.T) {
 	}
 	// and the reads it needs did happen: the green tag was consulted on
 	// the remote, the release tag resolved, the count ran (the AIHub-side
-	// diff read is pinned by TestW136InstallDevRefusesAIHubChange)
+	// diff read is pinned by TestW136InstallDevRefusesInterfaceChange)
 	for _, need := range []string{"gh release list", "ls-remote --tags", "rev-list --count --first-parent"} {
 		found := false
 		for _, l := range d.journalLines() {
