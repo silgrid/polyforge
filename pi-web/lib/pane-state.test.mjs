@@ -23,7 +23,6 @@ const {
   minPaneWidthFor,
   CHAT_COLUMN_PADDING,
   isPlainClick,
-  resolveBackgroundTasksSessionId,
   resolveSidebarSessionId,
   reorderPaneTabs,
 } = await jiti.import("./pane-state.ts");
@@ -209,95 +208,6 @@ function bgArgs(overrides = {}) {
   };
 }
 
-test("resolveBackgroundTasksSessionId follows the focused session pane in split view", () => {
-  // Focus on a session pane wins even when selectedSession is null or stale —
-  // the exact pi#28 regression (panel read selectedSession only).
-  assert.equal(
-    resolveBackgroundTasksSessionId(bgArgs({
-      focusedPaneId: "s2",
-      selectedSessionId: null,
-      paneTabs: [tab("s1"), tab("s2")],
-    })),
-    "s2",
-  );
-  assert.equal(
-    resolveBackgroundTasksSessionId(bgArgs({
-      focusedPaneId: "s2",
-      selectedSessionId: "s1", // stale selection from before the pane switch
-      paneTabs: [tab("s1"), tab("s2")],
-    })),
-    "s2",
-  );
-});
-
-test("resolveBackgroundTasksSessionId keeps the classic layout on selectedSession", () => {
-  assert.equal(
-    resolveBackgroundTasksSessionId(bgArgs({ splitPaneEnabled: false, selectedSessionId: "s1" })),
-    "s1",
-  );
-  assert.equal(
-    resolveBackgroundTasksSessionId(bgArgs({ splitPaneEnabled: false, selectedSessionId: null })),
-    null,
-  );
-  // A stale focusedPaneId must not leak into the classic/mobile layout.
-  assert.equal(
-    resolveBackgroundTasksSessionId(bgArgs({
-      splitPaneEnabled: false,
-      focusedPaneId: "s2",
-      selectedSessionId: "s1",
-    })),
-    "s1",
-  );
-});
-
-test("resolveBackgroundTasksSessionId falls back off the sentinel to the last session pane", () => {
-  const tabs = [tab("s1"), { sessionId: NEW_SESSION_TAB_ID, label: "New", projectName: "p", hasBadge: false }];
-  // Sentinel focused after focusing s1: keep following s1 (empty state, not
-  // "unavailable") while it is still open.
-  assert.equal(
-    resolveBackgroundTasksSessionId(bgArgs({
-      focusedPaneId: NEW_SESSION_TAB_ID,
-      lastSessionPaneId: "s1",
-      paneTabs: tabs,
-    })),
-    "s1",
-  );
-  // No focus yet but session panes are open: follow the first open one.
-  assert.equal(
-    resolveBackgroundTasksSessionId(bgArgs({ paneTabs: tabs })),
-    "s1",
-  );
-  // The last focused pane was closed: fall to another open session pane.
-  assert.equal(
-    resolveBackgroundTasksSessionId(bgArgs({
-      focusedPaneId: NEW_SESSION_TAB_ID,
-      lastSessionPaneId: "s-closed",
-      paneTabs: tabs,
-    })),
-    "s1",
-  );
-  // Only the sentinel exists and nothing else: unavailable (null) is honest.
-  assert.equal(
-    resolveBackgroundTasksSessionId(bgArgs({
-      focusedPaneId: NEW_SESSION_TAB_ID,
-      paneTabs: [tabs[1]],
-    })),
-    null,
-  );
-  // Sentinel focused, no open session panes, but a selected session exists
-  // (classic fallback): follow it rather than showing unavailable.
-  assert.equal(
-    resolveBackgroundTasksSessionId(bgArgs({
-      focusedPaneId: NEW_SESSION_TAB_ID,
-      selectedSessionId: "s9",
-      paneTabs: [tabs[1]],
-    })),
-    "s9",
-  );
-});
-
-// --- Sidebar highlight derivation (split-view sidebar follow) ---
-
 test("resolveSidebarSessionId follows the focused session pane in split view", () => {
   // The highlight tracks the focused pane even when selectedSession is null
   // or stale — the exact bug this wi fixes (the sidebar kept highlighting
@@ -392,35 +302,6 @@ test("resolveSidebarSessionId falls back off the sentinel and never highlights i
     resolveSidebarSessionId(bgArgs({ focusedPaneId: NEW_SESSION_TAB_ID, paneTabs: tabs })),
     NEW_SESSION_TAB_ID,
   );
-});
-
-test("resolveSidebarSessionId shares the background-tasks derivation core", () => {
-  // The two surfaces must never disagree about which session is current:
-  // every input combination yields the same id through both names.
-  const focusedIds = [null, "s1", "s2", NEW_SESSION_TAB_ID, "s-closed"];
-  const tabSets = [
-    [],
-    [tab("s1")],
-    [tab("s1"), tab("s2")],
-    [{ sessionId: NEW_SESSION_TAB_ID, label: "New", projectName: "p", hasBadge: false }],
-    [tab("s1"), { sessionId: NEW_SESSION_TAB_ID, label: "New", projectName: "p", hasBadge: false }],
-  ];
-  for (const splitPaneEnabled of [true, false]) {
-    for (const focusedPaneId of focusedIds) {
-      for (const selectedSessionId of [null, "s1"]) {
-        for (const lastSessionPaneId of [null, "s1", "s2"]) {
-          for (const paneTabs of tabSets) {
-            const args = { splitPaneEnabled, focusedPaneId, selectedSessionId, lastSessionPaneId, paneTabs };
-            assert.equal(
-              resolveSidebarSessionId(args),
-              resolveBackgroundTasksSessionId(args),
-              `derivation cores disagree on ${JSON.stringify(args)}`,
-            );
-          }
-        }
-      }
-    }
-  }
 });
 
 // --- Drag-to-reorder (pi#70) ---

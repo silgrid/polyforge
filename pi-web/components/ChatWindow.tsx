@@ -26,6 +26,8 @@ import { AnsiText } from "./AnsiText";
 import { useI18n } from "@/hooks/useI18n";
 import { phaseLabel } from "@/lib/chat-phase-label";
 import { useAgentSession, type AgentEndInfo, type NewSessionChoices, type NoticeItem } from "@/hooks/useAgentSession";
+import { useBackgroundTasks } from "@/hooks/useBackgroundTasks";
+import { useSubagentRuns } from "@/hooks/useSubagentRuns";
 import { selectHasStreamingContent, selectIsStreaming, selectStreamingMessage, useStreamingSelector } from "@/hooks/useStreamingSelector";
 import type { StreamingStore } from "@/lib/streaming-message";
 import { useDragDrop } from "@/hooks/useDragDrop";
@@ -56,6 +58,8 @@ import { ClaudeSubagentContext, ClaudeSubagentPanelContext, type ClaudeSubagentE
 import { ClaudeForceStopNotice, ClaudeSubagentRunningList } from "./ClaudeSubagentRunningList";
 import { ClaudeSubagentPanel, isClaudeSubagentPanelEscape } from "./ClaudeSubagentPanel";
 import { ClaudeBackgroundTaskPanel } from "./ClaudeBackgroundTaskPanel";
+import { PiBackgroundTaskHistory, PiBackgroundTaskPanel } from "./PiBackgroundTaskPanel";
+import { PiRunningList } from "./PiRunningList";
 import { claudeSubagentLaunchEntryId, isRunningBackgroundAgentMessage, isSubagentJumpTarget } from "@/lib/claude-subagent-view";
 
 interface Props {
@@ -303,6 +307,25 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
     onAgentEnd?.(end);
   }, [completionNotificationsEnabled, onAgentEnd]);
 
+  // polyforge#173: this pi session's built-in background tasks — the
+  // registry's records for THIS session, re-read whenever its own stream
+  // reports a change. A claude session and the fresh composer keep none:
+  // claude's background work is claude's own, above its composer.
+  const piBackgroundTasksSessionId = session && session.harness !== "claude" ? session.id : null;
+  const piBackgroundTasks = useBackgroundTasks(piBackgroundTasksSessionId);
+  // The poll's tick gate rides the shell's per-session running flag: an
+  // idle session with nothing live reads nothing (G11, above).
+  const piSubagentRuns = useSubagentRuns(piBackgroundTasksSessionId, Boolean(sessionRunning));
+  // The session's SSE events feed both this pane's running list (through the
+  // hook) and the shell's terminal notification (the prop). The hook's latest
+  // state rides a ref so this callback keeps one identity across renders —
+  // useAgentSession's stream effect lists it among its deps.
+  const piBackgroundTasksRef = useRef(piBackgroundTasks);
+  piBackgroundTasksRef.current = piBackgroundTasks;
+  const handlePaneBackgroundTasksEvent = useCallback((event: BackgroundTasksClientEvent) => {
+    piBackgroundTasksRef.current.applyEvent(event);
+    onBackgroundTasksEvent?.(event);
+  }, [onBackgroundTasksEvent]);
   const initialScrollPositionRef = useRef(searchTarget ? null : initialScrollPosition ?? null);
   const [pendingScrollRestore, setPendingScrollRestore] = useState<Extract<ChatScrollPosition, { atBottom: false }> | null>(() => {
     const position = initialScrollPositionRef.current;
@@ -343,7 +366,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
     newSessionClaudeModel, setNewSessionClaudeModel, claudeAvailability, claudeSubagents,
     claudeEditRestartRefusal, dismissClaudeEditRestartRefusal, handleSendClaudeEditAsNewMessage,
   } = useAgentSession({
-    session, sessionRunning, newSessionCwd, newSessionDraftKey, initialNewSessionChoices, onNewSessionChoicesChange, onAgentEnd: wrappedOnAgentEnd, onToolEnd, onAttentionNeeded, onBackgroundTasksEvent, onSessionCreated, onSessionForked,
+    session, sessionRunning, newSessionCwd, newSessionDraftKey, initialNewSessionChoices, onNewSessionChoicesChange, onAgentEnd: wrappedOnAgentEnd, onToolEnd, onAttentionNeeded, onBackgroundTasksEvent: handlePaneBackgroundTasksEvent, onSessionCreated, onSessionForked,
     modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsPanelOpen,
     onOpenSettings, onDebugSnapshotReaderChange, t,
     deferInitialScroll: Boolean(pendingScrollRestore),
@@ -1059,15 +1082,24 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
   // since the choice is kept with the session it was made in), and a pending jump to a
   // run's launch position when its Agent row is not mounted. a background
   // task's panel takes the same slot, so one choice holds either; opening one closes the other.
-  const [openPanelChoice, setOpenPanelChoice] = useState<{ sessionId: string | undefined; kind: "subagent" | "task"; id: string } | null>(null);
+  const [openPanelChoice, setOpenPanelChoice] = useState<{ sessionId: string | undefined; kind: "subagent" | "task" | "piTask" | "piHistory"; id: string } | null>(null);
   const openChoice = openPanelChoice && openPanelChoice.sessionId === session?.id ? openPanelChoice : null;
   const openSubagentRun = openChoice?.kind === "subagent" ? claudeSubagents[openChoice.id] : undefined;
   const openTask = openChoice?.kind === "task" ? claudeBackgroundTasks[openChoice.id] : undefined;
+  // A pi session's task panel and its 「已结束」 history take the same slot.
+  const piTasks = piBackgroundTasks.state.kind === "ready" ? piBackgroundTasks.state.tasks : [];
+  const openPiTask = openChoice?.kind === "piTask" ? piTasks.find((task) => task.id === openChoice.id) : undefined;
   const openClaudeSubagentPanel = useCallback((toolCallId: string) => {
     setOpenPanelChoice({ sessionId: session?.id, kind: "subagent", id: toolCallId });
   }, [session?.id]);
   const openClaudeTaskPanel = useCallback((taskId: string) => {
     setOpenPanelChoice({ sessionId: session?.id, kind: "task", id: taskId });
+  }, [session?.id]);
+  const openPiTaskPanel = useCallback((taskId: string) => {
+    setOpenPanelChoice({ sessionId: session?.id, kind: "piTask", id: taskId });
+  }, [session?.id]);
+  const openPiHistoryPanel = useCallback(() => {
+    setOpenPanelChoice({ sessionId: session?.id, kind: "piHistory", id: "" });
   }, [session?.id]);
   const closeClaudeSubagentPanel = useCallback(() => setOpenPanelChoice(null), []);
   // Esc closes the open panel, and only that: taken in the capture phase,
@@ -1076,7 +1108,9 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
   const chatPaneRef = useRef<HTMLDivElement | null>(null);
   const subagentPanelOpen = isClaudeSession && openSubagentRun !== undefined;
   const taskPanelOpen = isClaudeSession && openTask !== undefined;
-  const floatingPanelOpen = subagentPanelOpen || taskPanelOpen;
+  const piTaskPanelOpen = !isClaudeSession && openPiTask !== undefined;
+  const piHistoryPanelOpen = !isClaudeSession && openChoice?.kind === "piHistory";
+  const floatingPanelOpen = subagentPanelOpen || taskPanelOpen || piTaskPanelOpen || piHistoryPanelOpen;
   useEffect(() => {
     if (!floatingPanelOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1480,6 +1514,33 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
                 task={openTask}
                 onStop={() => stopClaudeBackgroundTask(openTask.taskId)}
                 onReadOutput={() => readClaudeTaskOutput(openTask.taskId)}
+                onClose={closeClaudeSubagentPanel}
+              />
+            </div>
+          </div>
+        )}
+        {/* a pi session's built-in task panel and its 「已结束」 history, in
+            the same slot (one panel at a time); an open panel stays open after
+            its task ends, showing the final status. */}
+        {piTaskPanelOpen && openPiTask && (
+          <div style={{ position: "absolute", bottom: 0, left: 0, right: isMobile ? 0 : MINIMAP_WIDTH, zIndex: 30, display: "flex", flexDirection: "column", maxHeight: "100%", boxSizing: "border-box", padding: "8px 12px 6px" }}>
+            <div style={{ display: "flex", flexDirection: "column", minHeight: 0, width: "100%", maxWidth: "var(--chat-content-max-width, 820px)", margin: "0 auto" }}>
+              <PiBackgroundTaskPanel
+                key={openPiTask.id}
+                task={openPiTask}
+                onStop={() => piBackgroundTasks.killTask(openPiTask.id)}
+                onReadOutput={() => piBackgroundTasks.readOutput(openPiTask.id)}
+                onClose={closeClaudeSubagentPanel}
+              />
+            </div>
+          </div>
+        )}
+        {piHistoryPanelOpen && (
+          <div style={{ position: "absolute", bottom: 0, left: 0, right: isMobile ? 0 : MINIMAP_WIDTH, zIndex: 30, display: "flex", flexDirection: "column", maxHeight: "100%", boxSizing: "border-box", padding: "8px 12px 6px" }}>
+            <div style={{ display: "flex", flexDirection: "column", minHeight: 0, width: "100%", maxWidth: "var(--chat-content-max-width, 820px)", margin: "0 auto" }}>
+              <PiBackgroundTaskHistory
+                tasks={piTasks}
+                onOpenTask={openPiTaskPanel}
                 onClose={closeClaudeSubagentPanel}
               />
             </div>
@@ -1977,6 +2038,20 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
                 <ClaudeForceStopNotice work={claudeForceStopWork} onForceStop={() => void forceStopClaudeTurn()} onKeepWaiting={dismissClaudeForceStop} />
               )}
               <ClaudeSubagentRunningList runs={claudeSubagents} onOpen={openClaudeSubagentPanel} tasks={claudeBackgroundTasks} onOpenTask={openClaudeTaskPanel} />
+            </div>
+          )}
+          {/* a pi session's running built-in subagents and background tasks
+              in the same slot (polyforge#173): the merged list, and the
+              「已结束」 entry once anything settled. */}
+          {!isClaudeSession && !isNew && (
+            <div style={{ width: "100%", maxWidth: "var(--chat-content-max-width, 820px)", margin: "0 auto" }}>
+              <PiRunningList
+                subagents={piSubagentRuns.runs}
+                tasks={piTasks}
+                onOpenSubagent={(subagentSessionId, label) => onOpenSubagent?.(subagentSessionId, label)}
+                onOpenTask={openPiTaskPanel}
+                onOpenHistory={openPiHistoryPanel}
+              />
             </div>
           )}
           {chatInputElement}

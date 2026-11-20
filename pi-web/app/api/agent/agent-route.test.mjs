@@ -264,3 +264,25 @@ test("an external append between two prompts reloads on the next submission", as
   assert.equal(promptCalls.length, 1, "only the first prompt was ever submitted");
   assert.equal(wrapper.isAlive(), false);
 });
+
+test("a command refused over background work answers the structured code for any command type", async (t) => {
+  // r1#7c: the route passes pi_restart_refused through as the response's
+  // code, so the client can roll its view back without guessing.
+  const wrapper = makeFakeWrapper({
+    async send(command) {
+      if (command.type === "reload") {
+        const error = new Error("Cannot reload session resources while this session has unfinished background work");
+        error.code = "pi_restart_refused";
+        throw error;
+      }
+      return "fast-path-result";
+    },
+  });
+  const previous = installFakeRegistry(wrapper);
+  t.after(() => restoreRegistry(previous));
+
+  const { status, body } = await post({ type: "reload" });
+  assert.equal(status, 500);
+  assert.equal(body.code, "pi_restart_refused", "a non-prompt refusal carries the structured code");
+  assert.ok(body.error.includes("background work"));
+});

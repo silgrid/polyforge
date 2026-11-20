@@ -4,6 +4,7 @@ import { KeybindingsManager as TuiKeybindingsManager, TUI_KEYBINDINGS } from "@e
 import { randomUUID } from "crypto";
 import { existsSync, realpathSync, writeFileSync } from "fs";
 import { resolve } from "path";
+import { join } from "path";
 import { isDeepStrictEqual } from "util";
 import { validateAgentImages } from "./image-attachments";
 import { cwdMissingError } from "./missing-cwd";
@@ -48,7 +49,7 @@ import {
   subagentToolOptions,
   SUBAGENT_CONTROL_TOOL_NAMES,
 } from "./subagents";
-import { createSubagentController, getLiveSubagentStatus, hasUnsettledSubagentRun } from "./subagent-runtime";
+import { createSubagentController, getLiveSubagentStatus, hasUnsettledSubagentRun, listSubagentRunsOf } from "./subagent-runtime";
 import { isBuiltInSubagentsEnabled } from "./subagent-settings";
 import { resolveShellTools } from "./powershell-settings";
 import { CHAT_ONLY_RESOURCE_LOADER_OPTIONS, contextFilesSystemPrompt } from "./chat-only";
@@ -78,9 +79,12 @@ import {
   validateSessionToolSelection,
 } from "./session-tool-selection";
 import {
-  BackgroundTasksBridge,
-  createBackgroundTasksBridgeExtension,
-} from "./background-tasks-bridge";
+  createBgTaskController,
+  defaultSpawnTask,
+  type BgTaskController,
+} from "./bg-runtime";
+import { createBgTasksExtension } from "./bg-tools";
+import { bgTaskClientSnapshot, PI_RESTART_REFUSED_CODE } from "./bg-protocol";
 
 // ============================================================================
 // Types
@@ -203,8 +207,6 @@ type AgentSessionWrapperOptions = {
   chatOnly?: boolean;
   onAgentRunComplete?: AgentRunCompleteListener;
   suppressCompletionNotifications?: boolean;
-  /** Server-side bridge to the session's pi-background-tasks package, if any. */
-  backgroundTasks?: BackgroundTasksBridge | null;
   /** A subagent's wrapper: a run ended and nothing is left to do. */
   onDirectTurnSettled?: (aborted: boolean) => void;
   /** Connects the session's MCP servers before a prompt starts a run, and lets go of them when it closes (lib/mcp-host.ts). */
@@ -440,7 +442,6 @@ export class AgentSessionWrapper {
   private readonly onAgentRunComplete?: AgentRunCompleteListener;
   private readonly onDirectTurnSettled?: (aborted: boolean) => void;
   private readonly suppressCompletionNotifications: boolean;
-  private readonly backgroundTasks: BackgroundTasksBridge | null;
   private readonly mcpHost?: WrapperMcpHost;
   private readonly chatOnlyExtensionModel?: { provider: string; id: string };
   private mcpHostDisposed = false;
@@ -483,19 +484,13 @@ export class AgentSessionWrapper {
     this.onAgentRunComplete = options.onAgentRunComplete;
     this.onDirectTurnSettled = options.onDirectTurnSettled;
     this.suppressCompletionNotifications = options.suppressCompletionNotifications ?? false;
-    this.backgroundTasks = options.backgroundTasks ?? null;
-    // Terminal/update events from the bridge reach every SSE listener as client events.
-    this.backgroundTasks?.setSink({
-      terminal: (task) => this.emit({ type: "background_task_terminal", task }),
-      update: (tasks) => this.emit({ type: "background_tasks_update", tasks }),
-    });
     this.mcpHost = options.mcpHost;
     this.chatOnlyExtensionModel = options.chatOnlyExtensionModel;
   }
 
-  /** Server-side background-tasks bridge for this session (null for chat-only). */
-  getBackgroundTasks(): BackgroundTasksBridge | null {
-    return this._alive ? this.backgroundTasks : null;
+  /** One client event of the built-in background tasks (BG_RUNTIME's sink): the SSE contract the client hook reads. */
+  emitBackgroundEvent(event: AgentEvent): void {
+    this.emit(event);
   }
 
   get sessionId(): string {
@@ -1089,9 +1084,11 @@ export class AgentSessionWrapper {
     this.idleDeadlineAt = this.idleLastResetAt + timeoutMs;
     this.idleTimer = setTimeout(() => {
       this.idleDeadlineAt = null;
-      // Running background tasks keep the wrapper alive: killing the session
-      // would kill the tasks (pi-background-tasks kills on session_shutdown).
-      if (!this.forceShutdownOnIdle && (this.isRunning() || (this.backgroundTasks?.hasRunningTasks() ?? false) || hasActiveSessionLivenessProvider({
+      // Unfinished background work keeps the wrapper alive: the built-in
+      // executor's tasks outlive any wrapper (Q11 A), but their completion
+      // wake needs a session to deliver to (BG_RUNTIME holds a liveness
+      // provider; a subagent's run holds its own).
+      if (!this.forceShutdownOnIdle && (this.isRunning() || hasUnsettledSubagentRun(this.sessionId) || hasActiveSessionLivenessProvider({
         sessionId: this.sessionId,
         sessionFile: this.sessionFile || undefined,
       }))) {
@@ -1578,6 +1575,10 @@ export class AgentSessionWrapper {
         if (this.isSessionRunningForReplacement()) {
           throw new Error("Cannot clone while the session is running");
         }
+        {
+          const refusal = bgWorkRefusal(this.sessionId, "clone this session");
+          if (refusal) throw refusal;
+        }
         const sessionManager = this.inner.sessionManager;
         const currentSessionFile = this.inner.sessionFile;
         const leafId = typeof command.leafId === "string" ? command.leafId : sessionManager.getLeafId();
@@ -1605,6 +1606,10 @@ export class AgentSessionWrapper {
       case "navigate_tree": {
         if (this.inner.isBashRunning) {
           throw new Error("Cannot navigate while a shell command is running");
+        }
+        {
+          const refusal = bgWorkRefusal(this.sessionId, "switch branches");
+          if (refusal) throw refusal;
         }
         return this.navigateTreeKeepingToolSelection(command.targetId as string, {});
       }
@@ -1742,6 +1747,10 @@ export class AgentSessionWrapper {
         if (this.isSessionRunningForReplacement()) {
           throw new Error("Wait for the current response to finish before reloading.");
         }
+        {
+          const refusal = bgWorkRefusal(this.sessionId, "reload session resources");
+          if (refusal) throw refusal;
+        }
         if (this.extensionUiAbortController.signal.aborted) {
           this.extensionUiAbortController = new AbortController();
         }
@@ -1846,7 +1855,6 @@ export class AgentSessionWrapper {
     // EventSource errors and reconnects instead of staying OPEN on a dead wrapper.
     this.emit({ type: "session_shutdown" });
     if (this.idleTimer) clearTimeout(this.idleTimer);
-    this.backgroundTasks?.close();
     this.idleDeadlineAt = null;
     if (this.inner.isBashRunning) this.inner.abortBash();
     this.unsubscribe?.();
@@ -2658,6 +2666,54 @@ const SUBAGENT_CONTROLLER = createSubagentController({
   isBuiltInSubagentsEnabled,
 });
 
+// The built-in background tasks' module-level executor (Q11 A): independent of
+// any wrapper, so Stop's forced idle reap can end a stuck wrapper while its
+// tasks live on; the wake reopens the wrapper through the deletion gate.
+const BG_RUNTIME: BgTaskController = createBgTaskController({
+  getLogRoot: () => join(getAgentDir(), "pi-web-bg-tasks"),
+  spawnTask: defaultSpawnTask,
+  getSession: (sessionId) => getRegistry().get(sessionId),
+  resolveSessionPath: async (sessionId) => resolveSessionPath(sessionId),
+  reopenSession: async (sessionId, sessionFile) =>
+    (await startRpcSession(sessionId, sessionFile, undefined)).session,
+});
+// The SSE events keep the old payload contract (background_task_terminal /
+// background_tasks_update over BgTaskSnapshot): the client hook treats them
+// as change signals and re-reads the built-in HTTP interface (#173).
+BG_RUNTIME.setSink({
+  terminal: (sessionId, task) => {
+    getRegistry().get(sessionId)?.emitBackgroundEvent({ type: "background_task_terminal", task: bgTaskClientSnapshot(task) });
+  },
+  update: (sessionId, tasks) => {
+    getRegistry().get(sessionId)?.emitBackgroundEvent({ type: "background_tasks_update", tasks: tasks.map(bgTaskClientSnapshot) });
+  },
+});
+
+/** The process-wide background-task executor (tools, wake, limits, registry). */
+export function getBgRuntime(): BgTaskController {
+  return BG_RUNTIME;
+}
+
+/** The structured refusal of a session command over unfinished background work (AC3). */
+function bgWorkRefusal(sessionId: string, action: string): Error | null {
+  if (!BG_RUNTIME.hasActiveWork(sessionId)) return null;
+  const error = new Error(
+    `Cannot ${action} while this session has unfinished background work; stop the tasks (bg_stop) or wait for their completion notifications first.`,
+  );
+  (error as { code?: string }).code = PI_RESTART_REFUSED_CODE;
+  return error;
+}
+
+/**
+ * A Chat-only rebuild over unfinished background work, refused with the
+ * structured code before anything is written (r1#3): the rebuilt wrapper
+ * would carry no bg tools while the executor still holds the session's tasks.
+ */
+function chatOnlyRebuildRefusal(sessionId: string, toolNames: string[] | undefined): Error | null {
+  if (toolNames === undefined || toolNames.length !== 0) return null;
+  return bgWorkRefusal(sessionId, "rebuild the session as Chat only");
+}
+
 export function getSubagentRun(sessionId: string) {
   return SUBAGENT_CONTROLLER.get(sessionId);
 }
@@ -2669,6 +2725,9 @@ export function steerSubagent(sessionId: string, message: string) {
 export function abortSubagent(sessionId: string) {
   return SUBAGENT_CONTROLLER.abort(sessionId);
 }
+
+/** The parent session's live subagent runs (the running list's rows, #173). */
+export { listSubagentRunsOf };
 
 function getLocks(): Map<string, Promise<{ session: AgentSessionWrapper; realSessionId: string }>> {
   if (!globalThis.__piStartLocks) globalThis.__piStartLocks = new Map();
@@ -2803,6 +2862,10 @@ export async function setRpcSessionTools(
   const existing = getRpcSession(sessionId);
 
   if (!existing?.isAlive()) {
+    {
+      const refusal = chatOnlyRebuildRefusal(sessionId, toolNames);
+      if (refusal) throw refusal;
+    }
     if (!sessionFile) throw new Error("Session not found");
     // A wrapper still closing, or a start already under way, owns the file: wait for it and
     // apply the selection to whatever it left, or a start that opened the file first would
@@ -2833,6 +2896,12 @@ export async function setRpcSessionTools(
   const crossesChatOnlyBoundary = toolNames === undefined
     || !hasCurrentResourcePolicy
     || existing.isChatOnly() !== (toolNames.length === 0);
+  // The refusal lands before anything is written: a refused switch must leave
+  // no selection entry behind (r1#3).
+  {
+    const refusal = chatOnlyRebuildRefusal(sessionId, toolNames);
+    if (refusal) throw refusal;
+  }
   if (toolNames === undefined) appendClearedSessionToolSelection(existing.inner.sessionManager);
   else appendSessionToolSelection(existing.inner.sessionManager, toolNames);
   invalidateSessionListCache();
@@ -3225,10 +3294,6 @@ export async function startRpcSession(
     subagentResources?.loadExtensions || subagentResources?.loadSkills || subagentResources?.codemode || subagentResources?.mcp,
   );
   const chatOnly = selectedToolNames?.length === 0 && !subagentLoadsResources;
-  // Server-side bridge to the session's pi-background-tasks package; only
-  // full sessions can host it (chat-only and subagent sessions load no
-  // extension factories, so their bridge stays unattached by design).
-  const backgroundTasks = chatOnly ? null : new BackgroundTasksBridge();
   const finishStartingSession = trackStartingSession(sessionCwd);
   const starting = (async () => {
     // Some extensions access the SDK's global theme even outside the terminal UI.
@@ -3361,7 +3426,10 @@ export async function startRpcSession(
                 () => listSubagentProfiles(sessionCwd),
                 isBuiltInSubagentsEnabled,
               ),
-              ...(backgroundTasks ? [createBackgroundTasksBridgeExtension(backgroundTasks)] : []),
+              // The built-in background tasks (Q2 B: the old v1 bridge
+              // extension is gone, so no installed package can put a second
+              // set of bg tools beside these).
+              createBgTasksExtension(BG_RUNTIME),
               // Last, so the instruction follows every other prompt change.
               createAgentLanguageExtension(() => agentLanguage),
             ],
@@ -3491,7 +3559,6 @@ export async function startRpcSession(
       exactSystemPrompt,
       agentLanguage,
       chatOnly,
-      backgroundTasks,
       onAgentRunComplete: (completedSessionId, sessionName) => {
         void notifySessionComplete(completedSessionId, sessionName).catch((error) => {
           console.error("[pi-web] failed to send completion push:", error instanceof Error ? error.message : error);
