@@ -1256,15 +1256,7 @@ class Verification:
                 sel = self.analysis_selected.get(rr.name)
                 if sel is not None:
                     head = rr.merge.head if rr.merge is not None else ""
-                    # the record is judged at the tree it was computed at:
-                    # the build close's own HEAD, which a sync's --no-ff
-                    # merge of origin's movement may sit under (only merge
-                    # commits between — the change's own tree unchanged);
-                    # anything else is a stale record
-                    judged = head
-                    if head and sel.head != head and merge_only_between(rr.dir, sel.head, head):
-                        judged = sel.head
-                    problem = selected_problem(sel, judged)
+                    problem = selected_problem(sel, head)
                     checks.append(check(rr.name + ":selected", "fail" if problem else "pass",
                                         problem or ("the selection record of " + short(sel.head))))
                 rep["commands"] = commands
@@ -1461,22 +1453,6 @@ def full_tier_reasons(p: RepoPlan) -> List[str]:
         why.extend(fallback_reasons(p.report))
     why.extend(p.nested_full)
     return why or [NO_FALLBACK_DIAGNOSTIC]
-
-
-def merge_only_between(repo_dir: str, a: str, b: str) -> bool:
-    """Whether only merge commits sit between a and b (a an ancestor of
-    b): a sync's --no-ff merge of origin's movement leaves the change's
-    own commits as they were, so a selection record of a still names the
-    change's own tree (review r1 #1)."""
-    if a == "" or b == "" or a == b:
-        return False
-    if git.run(repo_dir, "merge-base", "--is-ancestor", a, b, timeout=GIT_TIMEOUT).exit_code != 0:
-        return False
-    try:
-        out = git_quiet(repo_dir, "rev-list", "--count", "--first-parent", "--no-merges", a + ".." + b)
-    except git.GitError:
-        return False
-    return out.strip() == "0"
 
 
 def skip_form(cr: CmdRun) -> Tuple[str, str]:
