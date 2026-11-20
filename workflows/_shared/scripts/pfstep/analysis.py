@@ -174,7 +174,13 @@ def selected_problem(d: SelectedDecl, head: str) -> str:
             return "its selected command `%s` was killed at its timeout — its run is no evidence" % c.cmd
         if c.exit_code is None:
             return "its selected command `%s` carries no run: no green run, no reuse source — the close never completed it" % c.cmd
-        if c.exit_code != 0:
+        if c.exit_code != 0 and not (c.confirmed or c.complete):
+            # the per-unit bar's own green through a flaky re-run: a red
+            # first run whose failing units re-ran flaky and whose whole
+            # command was then confirmed (one whole re-run exiting 0) or
+            # proven complete (its completion proof, the entry keeping the
+            # first run's red exit beside it) is green evidence, the
+            # record stating it with `confirmed`/`complete`
             return "its selected command `%s` exited %d: a red selection is not evidence" % (c.cmd, c.exit_code)
     return ""
 
