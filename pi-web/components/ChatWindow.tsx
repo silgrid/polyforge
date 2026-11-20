@@ -313,7 +313,9 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
   // claude's background work is claude's own, above its composer.
   const piBackgroundTasksSessionId = session && session.harness !== "claude" ? session.id : null;
   const piBackgroundTasks = useBackgroundTasks(piBackgroundTasksSessionId);
-  const piSubagentRuns = useSubagentRuns(piBackgroundTasksSessionId);
+  // The poll's tick gate rides the shell's per-session running flag: an
+  // idle session with nothing live reads nothing (G11, above).
+  const piSubagentRuns = useSubagentRuns(piBackgroundTasksSessionId, Boolean(sessionRunning));
   // The session's SSE events feed both this pane's running list (through the
   // hook) and the shell's terminal notification (the prop). The hook's latest
   // state rides a ref so this callback keeps one identity across renders —
