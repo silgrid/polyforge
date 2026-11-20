@@ -1929,7 +1929,7 @@ export const zhTWLocale: LocalePlugin = {
     "bgTasks.kindShort": "任務",
     "bgTasks.queued": "佇列中",
     "bgTasks.agent": "Agent",
-    "bgTasks.history": "已結束",
+    "bgTasks.openTask": "打開任務",
     "bgTasks.runningList": "執行中的子 agent 與背景工作",
     "bgTasks.kindTask": "背景工作",
     "bgTasks.close": "關閉",
