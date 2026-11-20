@@ -80,7 +80,7 @@ one partition; `internal/polyforge/cellcfg/schema.go` owns it):
 | `slow_model_median_latency` | `[daemon]` | Host-only | live | the slow-model judgement's single-call median bound (default `60s`) |
 | `slow_model_p90_latency` | `[daemon]` | Host-only | live | the slow-model judgement's single-call p90 bound (default `180s`) |
 | `harness_root` | `[daemon]` | Host-only | restart-only | parent of the per-Cell harness roots (`<harness_root>/cells/<profile>`) |
-| `operator_agent_dir` | `[daemon]` | Host-only | restart-only | the shared model-credential source the default Cell syncs from |
+| `pi_subagents` | `steps.<project>.build.params` | Project | next-dispatch | `on` enables the daemon-owned pi worker; empty/off keeps the main-agent path; other values are invalid. |
 | `python` | `[daemon]` | Host-only | restart-only | the interpreter the workflow step scripts run under (`PF_PYTHON`); resolved and checked at the daemon's start |
 | `layout_version` | — | Host state | read-only | reports `<data-dir>/layout-version`; never settable |
 | `server` | flat | Cell | connection-change | one normalized AIHub per Cell |

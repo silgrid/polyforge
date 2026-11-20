@@ -90,8 +90,7 @@ and `artifacts/merge/landing.json`. The daemon orchestrates; it judges no conten
   list or an incomplete one — right after the plan, never at the end. Its hand-off states
   each owner decision with the owner's words and its reading. A round a FAIL opened
   changes the tree (or units.json), or states per point why not; `review` judges that.
-  The session orchestrates fresh-context sub-agents (`workflows/_shared/build_subagents.md`;
-  a pi dispatch is told, as a dispatch fact, that it dispatches none).
+  The session orchestrates fresh-context sub-agents (`workflows/_shared/build_subagents.md`; a pi build uses the daemon-owned worker when `pi_subagents` is on and records `main` when it is off).
 - **review** (fresh, gate; skill `review`, heavy-run admission, tool window 20 minutes) —
   the shared review (`workflows/_shared/steps/review.md`), on the facts of four
   pre-written lines of the workflow's script `facts.py`: `plan-conformance`, `build

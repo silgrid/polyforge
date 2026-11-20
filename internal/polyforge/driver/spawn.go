@@ -164,6 +164,9 @@ func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun
 		parts.Skill = renderSkill(sk)
 	}
 	h := harness.Of(sp.Harness)
+	if value := strings.TrimSpace(sp.Params["pi_subagents"]); value != "" && !strings.EqualFold(value, "on") && !strings.EqualFold(value, "off") {
+		return nil, fmt.Errorf("driver: invalid pi_subagents value %q (want on or off)", value)
+	}
 	parts.NoSubagents = subagentsFact(a.BundleDir, sp.StepID, h, sp.Params)
 	var transcript, hsession string
 	resume := sp.Resume
@@ -310,10 +313,9 @@ const subagentsRulesVar = "build_subagents"
 // AGENTS.md/CLAUDE.md, skills and prompt templates the step runs
 // without. Until a worker can run isolated, a pi step does the work
 // itself.
-const piNoSubagents = "This dispatch runs on pi, whose sub-agents do not run with this step's isolation: " +
-	"a worker the `subagent` tool starts loads the context files, skills and prompt templates this " +
-	"step was started without. Dispatch no sub-agent: do the analysis and build every unit yourself, " +
-	"record each unit's `implemented_by` in `artifacts/build/units.json` as `main`, and say in your hand-off that this harness offers no isolated sub-agent."
+const piNoSubagents = "This dispatch runs on pi with the daemon-owned worker available, but pi_subagents is off: " +
+	"keep the current main-agent path, do the analysis and build every unit yourself, record each unit's " +
+	"implemented_by as main, and do not dispatch a sub-agent."
 
 // subagentsFact answers the sub-agent fact of one dispatch: piNoSubagents
 // on a pi dispatch of a step whose definition includes the sub-agent
@@ -820,8 +822,8 @@ func changedParams(prev, cur map[string]string) map[string]string {
 // TestW82EwrReminderCarriesToolNameCorrection.
 const toolNameCorrection = "This environment runs no MCP server: no `mcp__…`-shaped tool name exists. " +
 	"The tools available to you are exactly the built-ins your harness opened this conversation with — " +
-	"on a pi dispatch `bash`, `read`, `edit`, `write` (plus `subagent`, when the operator's agent dir " +
-	"carries the sub-agent extension); on a claude dispatch `Bash`, `Read`, `Edit`, `Write`, `Glob`, " +
+	"on a pi dispatch `bash`, `read`, `edit`, `write` (plus `subagent`, when the daemon-owned " +
+	"worker extension is installed); on a claude dispatch `Bash`, `Read`, `Edit`, `Write`, `Glob`, " +
 	"`Grep`, `TodoWrite`, `Agent`. A `Tool … not found` reply means you wrote a wrong name: retry with " +
 	"the exact name from that list. It is not an environment fault, and never a reason to stop working " +
 	"or to end your turn without `pf step handoff`."

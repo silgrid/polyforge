@@ -272,7 +272,28 @@ func (s *piSpawner) buildCmd(p SpawnParams) *exec.Cmd {
 	return cmd
 }
 
-// Spawn derives one persistent agent process: a new session (the agent
+// validatePiCompatibility performs a bounded, model-free startup capability
+// check. It fails closed when the installed CLI does not advertise the flags
+// required by the daemon-owned extension.
+func validatePiCompatibility(ctx context.Context, bin string) error {
+	checkCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(checkCtx, bin, "--help").CombinedOutput()
+	if err != nil {
+		if errors.Is(checkCtx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("pi compatibility check timed out")
+		}
+		return fmt.Errorf("pi compatibility check failed for %s: %w", bin, err)
+	}
+	text := string(out)
+	for _, flag := range []string{"--no-skills", "--no-context-files", "--no-prompt-templates", "--no-extensions", "--no-approve"} {
+		if !strings.Contains(text, flag) {
+			return fmt.Errorf("pi compatibility check: %s does not advertise required flag %s", bin, flag)
+		}
+	}
+	return nil
+}
+
 // leads it, so it leads its own process group — the cleanup layers collect
 // step agents and command children by it — and has no controlling terminal:
 // nothing the step runs can open /dev/tty and wait on the daemon's
@@ -294,6 +315,9 @@ func (s *piSpawner) Spawn(ctx context.Context, p SpawnParams) (AgentHandle, erro
 		return nil, fmt.Errorf("runtime: spawn without an initial prompt")
 	}
 	if s.cfg.DataDir != "" {
+		if err := validatePiCompatibility(ctx, s.bin()); err != nil {
+			return nil, err
+		}
 		if err := s.cfg.refreshStepAgentDir(); err != nil {
 			return nil, err
 		}

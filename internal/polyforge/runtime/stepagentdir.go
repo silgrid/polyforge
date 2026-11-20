@@ -258,7 +258,7 @@ func pruneStepAgentDir(dst string) error {
 
 // installEmbeddedTree installs a daemon-owned resource tree atomically per file.
 func installEmbeddedTree(fsys fs.FS, source, dst string) error {
-	if err := os.RemoveAll(dst); err != nil {
+	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return &StepAgentDirError{Dir: dst, Err: err}
 	}
 	return fs.WalkDir(fsys, source, func(path string, entry fs.DirEntry, err error) error {
@@ -271,11 +271,17 @@ func installEmbeddedTree(fsys fs.FS, source, dst string) error {
 		}
 		target := filepath.Join(dst, rel)
 		if entry.IsDir() {
-			return os.MkdirAll(target, 0o755)
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return &StepAgentDirError{Dir: dst, Err: err}
+			}
+			return nil
 		}
 		data, err := fs.ReadFile(fsys, path)
 		if err != nil {
 			return &StepAgentDirError{Dir: dst, Err: err}
+		}
+		if old, err := os.ReadFile(target); err == nil && string(old) == string(data) {
+			return nil
 		}
 		if err := atomicfile.Write(target, data, 0o644); err != nil {
 			return &StepAgentDirError{Dir: dst, Err: err}

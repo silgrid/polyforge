@@ -494,7 +494,7 @@ Every dispatch's prompt is six parts, in this order, and nothing else:
 
 1. **Identity and facts**: the work item, step, round and dispatch; the
    language to work in; the capsule root; the facts of this dispatch (a
-   pi step cannot start subagents; where downloads go); the lane's step
+   pi build uses the daemon-owned worker only when `pi_subagents: on`; when off it keeps the main-agent path; where downloads go); the lane's step
    order as it stands for this dispatch, its skipped steps and the last
    step that runs marked — the opening of `artifacts/handoff.md`
    carries the claim-time copy, so a mid-run `pf override --step <s>
