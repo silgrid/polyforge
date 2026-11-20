@@ -8,7 +8,7 @@ Capsule root: `<capsule>`. Every capsule-relative path (`artifacts/…`, `runtim
 
 Raw downloads (CI artifacts, traces, screenshots and video bundles) go under `artifacts/downloads/`, which the capsule chain never commits; `artifacts/` keeps conclusions and small excerpts. A file over 16 MiB elsewhere is left out of the chain too and listed in `artifacts/oversize.json`.
 
-This dispatch runs on pi, whose sub-agents do not run with this step's isolation: a worker the `subagent` tool starts loads the context files, skills and prompt templates this step was started without. Dispatch no sub-agent: do the analysis and build every unit yourself, record each unit's `implemented_by` in `artifacts/build/units.json` as `main`, and say in your hand-off that this harness offers no isolated sub-agent.
+This dispatch runs on pi with the daemon-owned worker available, but pi_subagents is off: keep the current main-agent path, do the analysis and build every unit yourself, record each unit's implemented_by as main, and do not dispatch a sub-agent.
 
 # Prohibited actions
 

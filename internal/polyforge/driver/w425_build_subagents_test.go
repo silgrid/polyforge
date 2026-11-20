@@ -124,12 +124,12 @@ func TestBuildSubagentThresholdWrittenOnce(t *testing.T) {
 // it dispatches none and records `main`; a Claude dispatch is not.
 func TestPiBuildDispatchIsToldSubagentsAreUnavailable(t *testing.T) {
 	// workflow contract 4: the fact is one of part 1's dispatch facts
-	const fact = "This dispatch runs on pi, whose sub-agents do not run with this step's isolation"
+	const fact = "This dispatch runs on pi with the daemon-owned worker available, but pi_subagents is off"
 	pi := spawnStepPromptWith(t, developBundle, StepSpawn{StepID: "build", SpawnN: 1, Harness: "pi"})
 	flat := strings.Join(strings.Fields(pi), " ")
 	for _, w := range []string{
 		fact,
-		"Dispatch no sub-agent: do the analysis and build every unit yourself, record each unit's `implemented_by` in `artifacts/build/units.json` as `main`",
+		"implemented_by as main",
 	} {
 		if !strings.Contains(flat, w) {
 			t.Errorf("a pi build dispatch must carry %q", w)

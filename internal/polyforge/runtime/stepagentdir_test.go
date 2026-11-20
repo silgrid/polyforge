@@ -8,11 +8,14 @@ package runtime
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/silgrid/polyforge/internal/polyforge/runtime/stepagentassets"
 )
 
 // operatorDirFixture lays out a realistic operator agent directory: the
@@ -107,10 +110,27 @@ func TestStepAgentDirMinimalSetAndPlacement(t *testing.T) {
 			t.Fatalf("%s was not copied: %v", rel, err)
 		}
 	}
-	// models.json keeps the source's mode (0600 here)
+	// Embedded bytes win over operator content, including modification.
+	operatorExt := filepath.Join(src, "extensions", "subagent", "index.ts")
+	if err := os.WriteFile(operatorExt, []byte("operator replacement"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.refreshStepAgentDir(); err != nil {
+		t.Fatal(err)
+	}
+	embeddedWant, err := fs.ReadFile(stepagentassets.FS, "extensions/subagent/index.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	embeddedGot, err := os.ReadFile(filepath.Join(dir, "extensions", "subagent", "index.ts"))
+	if err != nil || string(embeddedGot) != string(embeddedWant) {
+		t.Fatalf("embedded extension was replaced: %v", err)
+	}
+	// models.json keeps the source mode (0600 here)
 	if ms, err := os.Stat(filepath.Join(dir, "models.json")); err != nil || ms.Mode().Perm() != 0o600 {
 		t.Fatalf("models.json must keep the source mode 0600: %v %v", ms, err)
 	}
+
 	// credentials land 0600 and are a COPY (no symlink into the
 	// operator's directory, which would re-open the whole dir)
 	st, err := os.Lstat(filepath.Join(dir, "auth.json"))
