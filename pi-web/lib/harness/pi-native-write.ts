@@ -1,21 +1,16 @@
 // The pi adapter's native writes (#85 85a3-1): the global `settings.json` in
-// the agent dir — the one file pi's defaults live in. Every write takes the
-// lock pi's own SettingsManager takes on the same path (lib/global-settings-file's
-// proper-lockfile call, mirrored here so neither writer overwrites the other),
-// reads, merges its patch — every key the merge does not name stays — and only
-// then writes; a merge that answers a refusal writes nothing, so a file with
-// an unrecognized shape is never touched. The version gate is the adapter's
-// (writeGate in adapter.ts); the model keys' registered minimum versions
+// the agent dir — the one file pi's defaults live in. Every write goes through
+// the repository's own global-settings writer (`updateGlobalSettings`,
+// lib/global-settings-file.ts — the same lock pi's own SettingsManager takes,
+// so neither writer overwrites the other; review r1#8: one writer, not a copy
+// of it): read, merge its patch — every key the merge does not name stays —
+// and only then write; a merge that answers a refusal throws through the
+// writer's update so nothing is written, and a file with an unrecognized shape
+// is never touched. The version gate is the adapter's (writeGate in
+// adapter.ts); the model keys' registered minimum versions
 // (PI_MODEL_KEY_MIN_VERSIONS) floor what the gate's same-major rule lets
 // through.
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import lockfile from "proper-lockfile";
-
-/** The pi settings.json path for an agent dir. */
-export function piUserSettingsPath(agentDir: string): string {
-  return join(agentDir, "settings.json");
-}
+import { getGlobalSettingsPath, updateGlobalSettings } from "../global-settings-file";
 
 /** Whether `value` is a plain record. */
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -29,46 +24,56 @@ export function isPiSettingsRefusal(value: unknown): value is PiSettingsMergeRef
   return isRecord(value) && typeof value.refuse === "string" && Object.keys(value).length === 1;
 }
 
+/** The refusal a merge answered, thrown through the shared writer so its
+ * write never happens (the lock still releases); caught right below. */
+class PiSettingsMergeRefused extends Error {
+  constructor(readonly refuse: string) {
+    super(refuse);
+  }
+}
+
+/** The writer's own refusal of a file that is not a JSON object, mapped to
+ * the reason the adapter's callers see (the path in the message names the
+ * file; the wording here is what the suites pin). */
+function settingsShapeReason(error: unknown): string | null {
+  if (error instanceof SyntaxError) return "settings.json is not valid JSON — refusing to overwrite it";
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("expected an object")) {
+    return "settings.json has an unrecognized top-level structure (expected a JSON object)";
+  }
+  return null;
+}
+
 /**
- * One locked read-merge-write on the global settings.json. `merge` receives
- * the current record (an absent file reads as `{}`) and answers the next one,
- * or a `{ refuse }` — a refusal writes nothing, so the file is left exactly
- * as it was. The write keeps the file's own formatting (2-space JSON) and
- * mode 0600, matching lib/global-settings-file's writer.
+ * One locked read-merge-write on the global settings.json, through the
+ * repository's own writer (`updateGlobalSettings`, the same lock and write
+ * `SettingsManager`'s flows take — review r1#8: one writer, not a copy of
+ * it). `merge` receives the current record (an absent file reads as `{}`)
+ * and answers the next one, or a `{ refuse }` — a refusal throws through
+ * the writer's update so nothing is written, and is caught back into the
+ * typed answer; the writer's own refusal of an unparsable or non-object
+ * file maps the same way. The write keeps the file's own formatting
+ * (2-space JSON) and mode 0600.
  */
 export async function patchPiUserSettings(
   agentDir: string,
   merge: (record: Record<string, unknown>) => Record<string, unknown> | PiSettingsMergeRefusal,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
-  const path = piUserSettingsPath(agentDir);
-  mkdirSync(dirname(path), { recursive: true });
   try {
-    writeFileSync(path, "{}", { flag: "wx", mode: 0o600 });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-  }
-  const release = await lockfile.lock(path, { realpath: false, retries: 10 });
-  try {
-    let current: Record<string, unknown> = {};
-    if (existsSync(path)) {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(readFileSync(path, "utf8"));
-      } catch {
-        return { ok: false, reason: "settings.json is not valid JSON — refusing to overwrite it" };
-      }
-      if (!isRecord(parsed)) {
-        return { ok: false, reason: "settings.json has an unrecognized top-level structure (expected a JSON object)" };
-      }
-      current = parsed;
-    }
-    const next = merge(current);
-    if (isPiSettingsRefusal(next)) return { ok: false, reason: next.refuse };
-    writeFileSync(path, JSON.stringify(next, null, 2), "utf8");
-    chmodSync(path, 0o600);
+    await updateGlobalSettings(getGlobalSettingsPath(agentDir), (record) => {
+      const next = merge(record);
+      if (isPiSettingsRefusal(next)) throw new PiSettingsMergeRefused(next.refuse);
+      // updateGlobalSettings writes the record it handed us, so next applies in place
+      for (const key of Object.keys(record)) delete record[key];
+      Object.assign(record, next);
+      return next;
+    });
     return { ok: true };
-  } finally {
-    await release();
+  } catch (error) {
+    if (error instanceof PiSettingsMergeRefused) return { ok: false, reason: error.refuse };
+    const shape = settingsShapeReason(error);
+    if (shape !== null) return { ok: false, reason: shape };
+    throw error;
   }
 }
 
