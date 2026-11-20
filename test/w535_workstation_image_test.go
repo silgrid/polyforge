@@ -272,6 +272,39 @@ func TestWorkstationImage(t *testing.T) {
 		if !(whitelist < firstBoot && firstBoot < supervise) {
 			t.Fatal("polyforge#176: entrypoint.sh's order is the environment boundary, then the first boot, then exec pf supervise — the first boot initializes the identity before the server starts")
 		}
+		// review r1#2: the first boot's inputs are consumed by the
+		// boot itself — the external-mode key must never ride the
+		// environment into the supervise children (Pi Web's agent
+		// sessions inherit it otherwise). The unset line runs AFTER
+		// the boot and BEFORE the exec, and it is executed for real
+		// here: a probe environment carrying the three names comes out
+		// without them.
+		unsetRe := regexp.MustCompile(`(?m)^unset WORKSTATION_AIHUB_[A-Z_]+( WORKSTATION_AIHUB_[A-Z_]+)*$`)
+		unsetLine := unsetRe.FindString(body)
+		if unsetLine == "" {
+			t.Fatal("polyforge#176 (review r1#2): entrypoint.sh must unset WORKSTATION_AIHUB_SERVER/KEY/PROJECT between the first boot and the exec — the key is a credential and never reaches the supervise children")
+		}
+		unsetAt := strings.Index(body, unsetLine)
+		if !(firstBoot < unsetAt && unsetAt < supervise) {
+			t.Fatal("polyforge#176 (review r1#2): the unset must sit between `pf first-boot` and `exec pf supervise` — before the boot it would eat the inputs, after the exec it never runs")
+		}
+		for _, name := range []string{"WORKSTATION_AIHUB_SERVER", "WORKSTATION_AIHUB_KEY", "WORKSTATION_AIHUB_PROJECT"} {
+			if !strings.Contains(unsetLine, name) {
+				t.Fatalf("polyforge#176 (review r1#2): the unset line must name %s: %q", name, unsetLine)
+			}
+		}
+		probe := exec.Command("sh", "-c",
+			`export WORKSTATION_AIHUB_SERVER=s WORKSTATION_AIHUB_KEY=k WORKSTATION_AIHUB_PROJECT=p PI_KEEP=1; `+unsetLine+`; env`)
+		probe.Env = []string{"PATH=" + os.Getenv("PATH")}
+		out, err := probe.CombinedOutput()
+		if err != nil {
+			t.Fatalf("the unset line must run: %v:\n%s", err, out)
+		}
+		for _, name := range []string{"WORKSTATION_AIHUB_SERVER", "WORKSTATION_AIHUB_KEY", "WORKSTATION_AIHUB_PROJECT"} {
+			if strings.Contains(string(out), name+"=") {
+				t.Fatalf("the executed unset must remove %s from the environment:\n%s", name, out)
+			}
+		}
 	})
 
 	t.Run("the environment whitelist executes: PI_* passes, PI_TEST_* never", func(t *testing.T) {
