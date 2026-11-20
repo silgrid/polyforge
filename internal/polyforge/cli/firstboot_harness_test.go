@@ -10,7 +10,9 @@ package cli
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"syscall"
 	"testing"
 )
 
@@ -271,4 +273,100 @@ func hmMap(t *testing.T, v any) map[string]any {
 		t.Fatalf("want a JSON object, got %T (%v)", v, v)
 	}
 	return m
+}
+
+// TestHarnessMergeCrashChild is the SIGKILL child of the crash test
+// below: it runs one merge over the env-named fixture and dies at the
+// crash point (the components package's own child pattern).
+func TestHarnessMergeCrashChild(t *testing.T) {
+	if os.Getenv("PF_HARNESS_CHILD") == "" {
+		t.Skip("the crash child runs only under PF_HARNESS_CHILD=1")
+	}
+	home := os.Getenv("PF_HARNESS_HOME")
+	agent := os.Getenv("PF_HARNESS_AGENT")
+	root := os.Getenv("PF_HARNESS_ROOT")
+	if _, err := mergeHarness(harnessMergeOpts{
+		Home: home, AgentDir: agent, ComponentsRoot: root, RepoSlug: "silgrid/polyforge",
+	}); err != nil {
+		t.Fatalf("child merge: %v", err)
+	}
+}
+
+// TestHarnessMergeSurvivesAnInterruptedWrite — review r1#3: a settings
+// write killed at its crash point must leave the user's settings exactly
+// as they were (the login, the other packages, everything): the merge
+// backs the original up by COPY and lands the new bytes through the one
+// atomic replace, never by moving the live file aside first.
+func TestHarnessMergeSurvivesAnInterruptedWrite(t *testing.T) {
+	home := t.TempDir()
+	root := t.TempDir()
+	hmFixture(t, root)
+	agent := filepath.Join(home, ".pi", "agent")
+	if err := os.MkdirAll(agent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	settings := filepath.Join(agent, "settings.json")
+	original := `{
+		"auth": {"piToken": "the-users-login"},
+		"packages": ["npm:foreign-one", {"source": "git:github.com/silgrid/polyforge@v0.1.0", "filters": {"foo": "bar"}}]
+	}`
+	if err := os.WriteFile(settings, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestHarnessMergeCrashChild$", "-test.count=1")
+	cmd.Env = append(os.Environ(),
+		"PF_HARNESS_CHILD=1",
+		"PF_HARNESS_HOME="+home,
+		"PF_HARNESS_AGENT="+agent,
+		"PF_HARNESS_ROOT="+root,
+		"PF_CRASH_AT=harness-settings.before-rename",
+	)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("the child completed instead of crashing mid-write:\n%s", out)
+	}
+	if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); !ok || !ws.Signaled() || ws.Signal() != syscall.SIGKILL {
+		t.Fatalf("the child did not die of the crash point: %v\n%s", err, out)
+	}
+	after, err := os.ReadFile(settings)
+	if err != nil {
+		t.Fatalf("settings.json must still exist after an interrupted write: %v", err)
+	}
+	if string(after) != original {
+		t.Fatalf("the interrupted write must leave the original intact — the user's login and packages survive (review r1#3, AC2):\n%s", after)
+	}
+}
+
+func TestHarnessMergeTildeEntryExpandsAgainstTheInjectedHome(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, "components")
+	hmFixture(t, root)
+	agent := filepath.Join(home, ".pi", "agent")
+	if err := os.MkdirAll(agent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	settings := filepath.Join(agent, "settings.json")
+	if err := os.WriteFile(settings, []byte(`{
+		"packages": ["npm:foreign-one", {"source": "~/components/current", "filters": {"foo": "bar"}}]
+	}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := mergeHarness(harnessMergeOpts{
+		Home: home, AgentDir: agent, ComponentsRoot: root, RepoSlug: "silgrid/polyforge",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.PiPackages != "replaced" {
+		t.Fatalf("a ~/components/current entry of this machine must be recognized as ours and replaced in place (got %q) — review r1#12: the ~ expansion follows the boot's own Home, not the ambient $HOME", rep.PiPackages)
+	}
+	got := hmSettings(t, settings)
+	pk := got["packages"].([]any)
+	if len(pk) != 2 || pk[0] != "npm:foreign-one" {
+		t.Fatalf("the foreign package must keep its place: %v", pk)
+	}
+	entry := hmMap(t, pk[1])
+	if entry["source"] != filepath.Join(root, "current") || hmMap(t, entry["filters"])["foo"] != "bar" {
+		t.Fatalf("the replaced entry = %v, want the absolute components current with its filters kept", entry)
+	}
 }
