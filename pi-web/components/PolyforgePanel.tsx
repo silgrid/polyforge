@@ -219,7 +219,8 @@ export function buildStepTimings(
 
 /** Live per-step timing for the current snapshot (pi#117): the
  *  in_progress age reads the clock at render — the module-level helper
- *  follows BackgroundTasksPanel.formatDuration's clock-at-render pattern —
+ *  follows the repo's clock-at-render pattern (Date.now() at render, no
+ *  timer: the watch poll re-renders every 3 s) —
  *  and the 3 s watch poll re-renders the panel, so the age stays live
  *  without a dedicated timer. */
 function liveStepTimings(steps: { name: string; status: string; startedAt?: string }[]): Map<string, StepTiming> {

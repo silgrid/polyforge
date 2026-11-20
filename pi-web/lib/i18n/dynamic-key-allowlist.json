@@ -20,11 +20,6 @@
     "reason": "the background task status comes from the pi-background-tasks API at run time; the keys are bgTasks.status.<value>"
   },
   {
-    "file": "components/BackgroundTasksPanel.tsx",
-    "argument": "`bgTasks.status.${task.status}`",
-    "reason": "the background task status comes from the pi-background-tasks API at run time; the keys are bgTasks.status.<value>"
-  },
-  {
     "file": "components/ClaudeSubagentPanel.tsx",
     "argument": "`claudeSubagent.${run.status}`",
     "reason": "the claude subagent run status comes from its sidecar at run time; the keys are claudeSubagent.<value>"

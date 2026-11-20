@@ -8,7 +8,7 @@
 // e2e/run.mjs). Standalone, like e2e/terminal.mjs: it starts its own dev server
 // twice — phase A with no `pf` reachable on PATH, phase B with a stub `pf` first
 // on PATH — and matches the new surfaces only by HTTP routes named in the spec and
-// by user-visible roles/text ("Polyforge" button/panel, mirroring bg-tasks markup).
+// by user-visible roles/text ("Polyforge" button/panel).
 // Each scenario is self-guarding: it logs PASS/FAIL and the run exits 1 on any FAIL.
 //
 // (owner-intentional change, by ruling — not a regression): the
