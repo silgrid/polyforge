@@ -893,6 +893,7 @@ func w535JSONAny(t *testing.T, doc string) any {
 // inspects as pinned); without an engine it skips, exactly like the
 // real-container suites' engine gates.
 func TestWorkstationImageEngine(t *testing.T) {
+	defer w535LockSmoke(t)()
 	root := w535Root(t)
 	if out, err := exec.Command("docker", "version", "--format", "{{.Server.Version}}").CombinedOutput(); err != nil {
 		t.Skipf("no docker engine (%v: %s), skipping the real-engine workstation boot", err, strings.TrimSpace(string(out)))
@@ -1123,14 +1124,15 @@ func TestWorkstationSmokeProjectIsolation(t *testing.T) {
 // under the stub engine).
 func w535SmokeFirstBootExternal(t *testing.T, mutate func(dir string)) (string, error) {
 	t.Helper()
+	defer w535LockSmoke(t)()
 	root := w535Root(t)
 	script := filepath.Join(root, "dist/workstation/smoke.sh")
 	dir := t.TempDir()
-	record := `{"phase":"done","mode":"external","defaultCell":"default","server":"http://host.docker.internal:38421","userReady":false,"keyReady":true,"imageManaged":true,"updatedAt":"2026-11-20T00:00:00Z"}`
+	record := `{"phase":"done","mode":"external","defaultCell":"default","server":"http://host.docker.internal:38422","userReady":false,"keyReady":true,"imageManaged":true,"updatedAt":"2026-11-20T00:00:00Z"}`
 	if err := os.WriteFile(filepath.Join(dir, "first-boot.json"), []byte(record), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "cell-server.txt"), []byte("http://host.docker.internal:38421\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "cell-server.txt"), []byte("http://host.docker.internal:38422\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if mutate != nil {
@@ -1145,7 +1147,7 @@ func w535SmokeFirstBootExternal(t *testing.T, mutate func(dir string)) (string, 
 		"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"),
 		"HOME=" + os.Getenv("HOME"),
 		"W535_SMOKE_SCENARIO=" + dir,
-		"WORKSTATION_SMOKE_STUB_PORT=38421",
+		"WORKSTATION_SMOKE_STUB_PORT=38422",
 	}
 	out, err := cmd.CombinedOutput()
 	return string(out), err
@@ -1228,6 +1230,7 @@ func TestWorkstationSmokeExternalRejectsRemoteWrites(t *testing.T) {
 // object the boot creates. Without an engine it skips, exactly like
 // the other real-container engine gates.
 func TestWorkstationSmokeFirstBootEngine(t *testing.T) {
+	defer w535LockSmoke(t)()
 	root := w535Root(t)
 	if out, err := exec.Command("docker", "version", "--format", "{{.Server.Version}}").CombinedOutput(); err != nil {
 		t.Skipf("no docker engine (%v: %s), skipping the real-engine external first boot", err, strings.TrimSpace(string(out)))

@@ -202,7 +202,9 @@ resets volumes first — its own, never an operator's: the smoke runs
 every compose call under its own project (`workstation-smoke`), so its
 resets only ever touch `workstation-smoke_*`, and a concurrently
 running deployment's fixed container name fails the smoke's up
-explicitly instead of being interfered with. The first-boot
+explicitly instead of being interfered with. 仓库的真机 smoke 与外部模式桩测试
+通过跨进程资源锁串行操作共享项目；外部模式桩另用 38422 端口，真机计数桩用
+38421。并行测试 runner 不会让一个测试清理另一个测试的容器或卷。The first-boot
 pass is the AC proof of the identity half: after the boot the record
 says done, the default Cell points at the local AIHub, the key REALLY
 authenticates (`pf recall` inside the container, through the

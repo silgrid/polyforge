@@ -60,7 +60,29 @@ func TestWorkstationSmokeResourceLock(t *testing.T) {
 	probe("free")
 }
 
-// w535LockSmoke 的实现由 u17 在红测试之后补上。
+// w535LockSmoke 在独立测试进程间保护固定 compose 项目和端口。
+// 私有 TMPDIR 每进程不同，因此使用仓库既有 OrigTempDir 公共根。
+// 不删除锁文件，避免仍在等待的进程锁住旧 inode 后出现双持有者。
 func w535LockSmoke(t *testing.T) func() {
-	return func() {}
+	t.Helper()
+	f, err := os.OpenFile(filepath.Join(testenv.OrigTempDir(), "polyforge-workstation-smoke.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Minute)
+	for {
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) || time.Now().After(deadline) {
+			f.Close()
+			t.Fatalf("无法取得工作站 smoke 资源锁：%v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return func() {
+		syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+	}
 }
