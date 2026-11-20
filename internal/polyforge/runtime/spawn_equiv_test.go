@@ -122,6 +122,54 @@ func standIn(t *testing.T, dir, script string) string {
 	return bin
 }
 
+func TestStepTMPDIRProductionSpawn(t *testing.T) {
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "inherited"))
+	rootA, rootB := t.TempDir(), t.TempDir()
+	binA := standIn(t, rootA, "cat >/dev/null\n")
+	binB := standIn(t, rootB, "cat >/dev/null\n")
+	cfgA := &Config{PiBin: binA, ClaudeBin: binA, MachineID: "m-tmp-a", HarnessRoot: t.TempDir()}
+	cfgB := &Config{PiBin: binB, ClaudeBin: binB, MachineID: "m-tmp-b", HarnessRoot: t.TempDir()}
+	readTMPDIR := func(t *testing.T, cfg *Config, capsule string, h harness.Harness) string {
+		t.Helper()
+		env := spawnedEnv(t, cfg, SpawnParams{
+			WorkItemID: "wi-tmp", CapsuleDir: capsule, InitialPrompt: "p",
+			Harness: h, HarnessSession: testSession,
+		})
+		for _, kv := range env {
+			if strings.HasPrefix(kv, "TMPDIR=") {
+				return strings.TrimPrefix(kv, "TMPDIR=")
+			}
+		}
+		t.Fatal("production spawn did not set TMPDIR")
+		return ""
+	}
+	gotA := readTMPDIR(t, cfgA, rootA, harness.Pi)
+	gotB := readTMPDIR(t, cfgB, rootB, harness.Claude)
+	for name, got := range map[string]string{"pi": gotA, "claude": gotB} {
+		if !filepath.IsAbs(got) {
+			t.Errorf("%s TMPDIR %q is not absolute", name, got)
+		}
+		wantRoot := map[string]string{"pi": rootA, "claude": rootB}[name]
+		if rel, err := filepath.Rel(wantRoot, got); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			t.Errorf("%s TMPDIR %q escaped capsule %q", name, got, wantRoot)
+		}
+		info, err := os.Stat(got)
+		if err != nil || !info.IsDir() {
+			t.Errorf("%s TMPDIR %q is not an existing directory: %v", name, got, err)
+		}
+		probe := filepath.Join(got, "write-probe")
+		if err := os.WriteFile(probe, []byte("ok"), 0o600); err != nil {
+			t.Errorf("%s TMPDIR is not writable: %v", name, err)
+		}
+	}
+	if gotA == gotB {
+		t.Fatalf("concurrent capsules share TMPDIR %q", gotA)
+	}
+	if gotA == os.Getenv("TMPDIR") || gotB == os.Getenv("TMPDIR") {
+		t.Fatalf("production spawn retained inherited TMPDIR: pi=%q claude=%q", gotA, gotB)
+	}
+}
+
 // spawnedEnv spawns p through DefaultSpawner and returns the started env.
 func spawnedEnv(t *testing.T, cfg *Config, p SpawnParams) []string {
 	t.Helper()
