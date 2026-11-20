@@ -295,9 +295,7 @@ it for the next dispatch), `PF_PYTHON` is the interpreter the daemon resolved at
 start (`[daemon] python`, else `python3` on its `PATH`), `PF_CAPSULE`,
 `PF_LANE_DIR` and `PF_SHARED_DIR` are the capsule root, the lane snapshot
 the step runs (`<capsule>/workflows/<lane>`) and the shared tree beside it
-(`<capsule>/workflows/_shared`) — where a step's scripts run from
-(docs/reference/workflow-contract.md, "Scripts") — and `PF_ROUND` is the step's round — `1` on the step's
-first entry, advanced by a rewind's re-entry (and, for the gate whose
+(`<capsule>/workflows/_shared`) — where a step's scripts run from (docs/reference/workflow-contract.md, "Scripts"). `TMPDIR` is also set by the daemon to `<capsule>/artifacts/downloads/tmp/`; it is created before pi or Claude starts and is unique per capsule. Explicit overrides by a tool or configuration are outside this guarantee. See [workflow contract Environment](workflow-contract.md#environment) for the complete step process contract. `PF_ROUND` is the step's round — `1` on the step's first entry, advanced by a rewind's re-entry (and, for the gate whose
 verdict routed the rewind, by that verdict); a resume, a crash
 re-dispatch and an owner's answer stay in the round. `PF_STEP` and
 `PF_SPAWN` name the dispatch itself — the step id and the spawn ordinal

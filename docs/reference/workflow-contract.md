@@ -325,6 +325,9 @@ and `--help` is its full reference: a skill does not repeat it.
 | `PF_CELL_SERVER` | that Cell's server as configured |
 | `PF_DEPLOY_ENV` | the deploy configuration file that Cell's deploys read |
 | `PF_CELL_TARGETS` | every serving Cell of this machine, one line each: its profile, its server and its deploy configuration file, tab-separated |
+| `TMPDIR` | `<capsule>/artifacts/downloads/tmp/`, created before the harness starts; capsule-local and distinct between capsules |
+
+A step's `TMPDIR` is daemon-owned for the process it starts. The daemon does not fall back to the host's shared `/tmp` when creation fails; spawn fails instead. A tool or configuration that explicitly overwrites `TMPDIR` is outside this guarantee. Shell background processes end with their tool call, so a later tool call must never wait for one; long commands run in the foreground and use `$TMPDIR` or `artifacts/downloads/` for temporary files.
 
 **Python.** A script is Python 3.9 or newer and the standard library
 only: no third-party package, no virtual environment. An entry script
