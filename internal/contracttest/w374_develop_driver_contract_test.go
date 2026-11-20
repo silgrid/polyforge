@@ -18,7 +18,9 @@ package test
 // moved to sub-agents, to 170 when the close's two facts lines moved
 // into the step (the static checks review judges with, run by the builder
 // first; polyforge#131), and to 190 when the close's scoped selection
-// moved in (polyforge#164).
+// moved in (polyforge#164), and to 215 when the close took review's own
+// lines — the replay and plan-conformance — and the plan gained its
+// analysis-mapping section (polyforge#181).
 
 import (
 	"os"
@@ -102,7 +104,7 @@ func TestW374DevelopDriverChecksContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n := strings.Count(string(raw), "\n"); n > 190 {
-		t.Errorf("workflows/develop/steps/build.md is %d lines, over its 190-line budget", n)
+	if n := strings.Count(string(raw), "\n"); n > 215 {
+		t.Errorf("workflows/develop/steps/build.md is %d lines, over its 215-line budget", n)
 	}
 }

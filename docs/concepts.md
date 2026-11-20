@@ -318,7 +318,13 @@ has one; develop's build writes its own
 obligations (the documents, tables and projection rules that must change with
 it, or an explicit none with a reason — a plan missing one is rejected), and
 review checks the scope both ways: changed-but-undeclared files, and
-declared obligations or writes the diff left unchanged. A review-driven
+declared obligations or writes the diff left unchanged. A plan written
+on a ticket that carries a `## 分析` section also carries a `## 分析对照`
+section mapping each item the analysis lists — each old test and document
+obligation, each risk, each decided point — to the unit that carries it,
+or the stated reason it is not taken (a decided point first; an analysis
+written against an older base has its file:line references re-checked
+against the current one). A review-driven
 fix that needs a file outside the declared set cites the review finding
 for it instead of re-planning. The plan also maps every deliverable it
 demands from a later step (a report, a proof, an owner presentation) to
@@ -1027,8 +1033,8 @@ setting:
   replay are bounded by (the default is 10m, and a run its limit kills is an evidence
   problem, never a pass); the
   daemon checks only that the file parses), and the steps after it verify
-  it. Its close runs two of the same facts first — `build` without the
-  replay (each unit's static commit facts) and `carries` — and hands off
+  it. Its close runs the same facts first — `plan-conformance`, `build`
+  with the replay (each unit's run red at its test commit) and `carries` — and hands off
   only on green. Before them its close runs the scoped selection
   verification plans — `fast_checks.py --close-scoped`, one shared
   implementation, for a work item whose verification runs the light tier

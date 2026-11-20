@@ -36,8 +36,10 @@ the change analysis (`artifacts/build/change-analysis.json`) names the
 tests the full verification runs beside the engine's own selection —
 write it, its supplement cap the lane's `vars.supplement_limit`
 ({{supplement_limit}}); the fast checks run over the whole increment;
-the close's facts checks (`facts.py build` without the replay, and
-`carries` — the skill's own lines) run over it too, a red fixed before
+the close's facts checks (`facts.py build` with the replay and
+`carries`, and `plan-conformance` beside them when the plan is this
+lane's own — an inherited plan skips that line; the skill's own lines)
+run over it too, a red fixed before
 the hand-off; the
 self-review reads the full diff review judges — the WHOLE epic against
 the default branch

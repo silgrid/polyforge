@@ -976,3 +976,56 @@ What a project must change — nothing: the close runs the same
 project-neutral selection verification runs, and a repository whose
 light selection answers the full tier sees the same stop at the owner
 that its verification's own full bar always was.
+
+## v0.2.4, the development channel's graded AIHub-side preflight (polyforge#188)
+
+What changed under `tools/` and the dev channel of `tools/install.sh --dev`:
+
+- `tools/aihub-interface-paths.conf` is the new client-server interface
+  list, read from the green commit's tree beside the total list
+  `tools/aihub-paths.conf` (one list each, both readers: the tests
+  generate their fixture paths from the same files). A
+  release-tag..green diff touching an interface path
+  (`internal/common/api/**`, `internal/common/protocol/**` — a
+  conservative path rule, not a compatibility proof) still refuses the
+  dev install in prepare; touching only the total list's other paths —
+  the server's insides, the SQL migrations, the deploy tree — passes
+  with one WARN naming the formal tag, the green tag and every hit
+  path: the two AIHubs stay on their formal release and those changes
+  wait for the next formal one.
+- The preflight is fail closed on its input: a green tree whose interface
+  list or total list is missing, declares no entry, or carries an
+  unsupported entry refuses the install with nothing on the machine
+  changed, and so does a changed path git cannot print unambiguously;
+  renames are judged on both their ends (no rename folding).
+- No action on upgrade beyond taking the new pf: the change is
+  installer logic and repository declarations. A dev install over a
+  green tag that predates the interface list now refuses by design —
+  wait for the next green tag; the one-time bypass copy that installed
+  v0.2.4-dev.19 over green/20261120-1 is retired with this change.
+
+## v0.2.4, the build close runs review's replay and the plan maps the analysis (polyforge#181)
+
+- The develop build's close no longer stops at the static facts: before the
+  hand-off it runs the same lines review judges with — `facts.py
+  plan-conformance` and `facts.py build --replay --isolation host` — beside
+  the `carries` line it already ran, a red fixed before the hand-off; an
+  exit 2 that stays 2 after its retries (one minute apart, at most two) is
+  disclosed in the hand-off and left to review to re-run, never judged
+  blocked. The shared build skill carries the same close, conditioned: a
+  lane whose fix build inherited its plan (the epic lane's) skips the
+  plan-conformance line and runs only the replay. The develop build step's
+  line budget rises from 190 to 215 lines for the two additions, the pinning
+  contract test moved with it.
+- The plan `build` writes gains a `## 分析对照` section on a ticket that
+  carries a `## 分析` section: each item the analysis lists — each old test
+  and document obligation, each risk, each decided point (`已定`) — is
+  mapped to the unit that carries it or a stated reason it is not taken; a
+  decided point takes precedence over the analysis's recommendation, and an
+  analysis written against an older base has its file:line references
+  re-checked against the current one. A ticket without `## 分析` writes
+  `none` there.
+
+What a project must change — nothing: the close's lines and the plan's
+section are the workflow's own texts; no script, conf key or command
+surface changed.
