@@ -79,9 +79,6 @@ import {
   validateSessionToolSelection,
 } from "./session-tool-selection";
 import {
-  BackgroundTasksBridge,
-} from "./background-tasks-bridge";
-import {
   createBgTaskController,
   defaultSpawnTask,
   type BgTaskController,
@@ -210,8 +207,6 @@ type AgentSessionWrapperOptions = {
   chatOnly?: boolean;
   onAgentRunComplete?: AgentRunCompleteListener;
   suppressCompletionNotifications?: boolean;
-  /** Server-side bridge to the session's pi-background-tasks package, if any. */
-  backgroundTasks?: BackgroundTasksBridge | null;
   /** A subagent's wrapper: a run ended and nothing is left to do. */
   onDirectTurnSettled?: (aborted: boolean) => void;
   /** Connects the session's MCP servers before a prompt starts a run, and lets go of them when it closes (lib/mcp-host.ts). */
@@ -447,7 +442,6 @@ export class AgentSessionWrapper {
   private readonly onAgentRunComplete?: AgentRunCompleteListener;
   private readonly onDirectTurnSettled?: (aborted: boolean) => void;
   private readonly suppressCompletionNotifications: boolean;
-  private readonly backgroundTasks: BackgroundTasksBridge | null;
   private readonly mcpHost?: WrapperMcpHost;
   private readonly chatOnlyExtensionModel?: { provider: string; id: string };
   private mcpHostDisposed = false;
@@ -490,22 +484,11 @@ export class AgentSessionWrapper {
     this.onAgentRunComplete = options.onAgentRunComplete;
     this.onDirectTurnSettled = options.onDirectTurnSettled;
     this.suppressCompletionNotifications = options.suppressCompletionNotifications ?? false;
-    this.backgroundTasks = options.backgroundTasks ?? null;
-    // Terminal/update events from the bridge reach every SSE listener as client events.
-    this.backgroundTasks?.setSink({
-      terminal: (task) => this.emit({ type: "background_task_terminal", task }),
-      update: (tasks) => this.emit({ type: "background_tasks_update", tasks }),
-    });
     this.mcpHost = options.mcpHost;
     this.chatOnlyExtensionModel = options.chatOnlyExtensionModel;
   }
 
-  /** Server-side background-tasks bridge for this session (null for chat-only). */
-  getBackgroundTasks(): BackgroundTasksBridge | null {
-    return this._alive ? this.backgroundTasks : null;
-  }
-
-  /** One client event of the built-in background tasks (BG_RUNTIME's sink): SSE-identical to the bridge's. */
+  /** One client event of the built-in background tasks (BG_RUNTIME's sink): the SSE contract the client hook reads. */
   emitBackgroundEvent(event: AgentEvent): void {
     this.emit(event);
   }
@@ -1101,9 +1084,11 @@ export class AgentSessionWrapper {
     this.idleDeadlineAt = this.idleLastResetAt + timeoutMs;
     this.idleTimer = setTimeout(() => {
       this.idleDeadlineAt = null;
-      // Running background tasks keep the wrapper alive: killing the session
-      // would kill the tasks (pi-background-tasks kills on session_shutdown).
-      if (!this.forceShutdownOnIdle && (this.isRunning() || (this.backgroundTasks?.hasRunningTasks() ?? false) || hasUnsettledSubagentRun(this.sessionId) || hasActiveSessionLivenessProvider({
+      // Unfinished background work keeps the wrapper alive: the built-in
+      // executor's tasks outlive any wrapper (Q11 A), but their completion
+      // wake needs a session to deliver to (BG_RUNTIME holds a liveness
+      // provider; a subagent's run holds its own).
+      if (!this.forceShutdownOnIdle && (this.isRunning() || hasUnsettledSubagentRun(this.sessionId) || hasActiveSessionLivenessProvider({
         sessionId: this.sessionId,
         sessionFile: this.sessionFile || undefined,
       }))) {
@@ -1870,7 +1855,6 @@ export class AgentSessionWrapper {
     // EventSource errors and reconnects instead of staying OPEN on a dead wrapper.
     this.emit({ type: "session_shutdown" });
     if (this.idleTimer) clearTimeout(this.idleTimer);
-    this.backgroundTasks?.close();
     this.idleDeadlineAt = null;
     if (this.inner.isBashRunning) this.inner.abortBash();
     this.unsubscribe?.();
@@ -2693,9 +2677,9 @@ const BG_RUNTIME: BgTaskController = createBgTaskController({
   reopenSession: async (sessionId, sessionFile) =>
     (await startRpcSession(sessionId, sessionFile, undefined)).session,
 });
-// The event names stay the bridge's (background_task_terminal /
-// background_tasks_update) with the bridge's payload contract, so the dock
-// keeps opening and bg-ui only swaps the HTTP interface later.
+// The SSE events keep the old payload contract (background_task_terminal /
+// background_tasks_update over BgTaskSnapshot): the client hook treats them
+// as change signals and re-reads the built-in HTTP interface (#173).
 BG_RUNTIME.setSink({
   terminal: (sessionId, task) => {
     getRegistry().get(sessionId)?.emitBackgroundEvent({ type: "background_task_terminal", task: bgTaskClientSnapshot(task) });
@@ -3307,10 +3291,6 @@ export async function startRpcSession(
     subagentResources?.loadExtensions || subagentResources?.loadSkills || subagentResources?.codemode || subagentResources?.mcp,
   );
   const chatOnly = selectedToolNames?.length === 0 && !subagentLoadsResources;
-  // Server-side bridge to the session's pi-background-tasks package; only
-  // full sessions can host it (chat-only and subagent sessions load no
-  // extension factories, so their bridge stays unattached by design).
-  const backgroundTasks = chatOnly ? null : new BackgroundTasksBridge();
   const finishStartingSession = trackStartingSession(sessionCwd);
   const starting = (async () => {
     // Some extensions access the SDK's global theme even outside the terminal UI.
@@ -3443,10 +3423,9 @@ export async function startRpcSession(
                 () => listSubagentProfiles(sessionCwd),
                 isBuiltInSubagentsEnabled,
               ),
-              // The built-in background tasks (Q2 B: the old bridge extension is
-              // no longer mounted here, so a user's pi-background-tasks package
-              // cannot put a second set of bg tools beside these; the routes
-              // stay until bg-ui replaces them).
+              // The built-in background tasks (Q2 B: the old v1 bridge
+              // extension is gone, so no installed package can put a second
+              // set of bg tools beside these).
               createBgTasksExtension(BG_RUNTIME),
               // Last, so the instruction follows every other prompt change.
               createAgentLanguageExtension(() => agentLanguage),
@@ -3577,7 +3556,6 @@ export async function startRpcSession(
       exactSystemPrompt,
       agentLanguage,
       chatOnly,
-      backgroundTasks,
       onAgentRunComplete: (completedSessionId, sessionName) => {
         void notifySessionComplete(completedSessionId, sessionName).catch((error) => {
           console.error("[pi-web] failed to send completion push:", error instanceof Error ? error.message : error);

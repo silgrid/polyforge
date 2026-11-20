@@ -1,26 +1,24 @@
 import { NextResponse } from "next/server";
-import { getRpcSession } from "@/lib/rpc-manager";
-import { bgOperationFailureStatus } from "@/lib/background-tasks-bridge";
+import { getBgRuntime } from "@/lib/rpc-manager";
 
 export const dynamic = "force-dynamic";
 
-// POST /api/agent/[id]/bg-tasks/[taskId]/kill - kill one background task
+// POST /api/agent/[id]/bg-tasks/[taskId]/kill — stop one of this session's
+// built-in background tasks (polyforge#173, AC2): the executor's idempotent
+// stop. A task already settled answers with its record unchanged; a task id of
+// another session (or none at all) reads as not found, as JSON.
 export async function POST(
   _req: Request,
   { params }: { params: Promise<{ id: string; taskId: string }> },
 ) {
   const { id, taskId } = await params;
-  const session = getRpcSession(id);
-  const bridge = session?.getBackgroundTasks() ?? null;
-  if (!bridge) {
+  try {
+    const task = getBgRuntime().stop(id, taskId);
+    return NextResponse.json({ task, message: `Stopped background task ${task.id}` });
+  } catch (error) {
     return NextResponse.json(
-      { error: "pi-background-tasks bridge is not attached (no live session, chat-only session, or package absent)" },
+      { error: error instanceof Error ? error.message : String(error) },
       { status: 404 },
     );
   }
-  const result = await bridge.kill(taskId);
-  if (!result.ok) {
-    return NextResponse.json({ error: result.error }, { status: bgOperationFailureStatus(result.error) });
-  }
-  return NextResponse.json({ task: result.result.task, message: result.result.message });
 }
