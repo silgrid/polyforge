@@ -105,9 +105,10 @@ Failed to load resource: the server responded with a status of 403 (Forbidden) [
 ```
 
 Chromium's text already carries the status for HTTP failures; nothing is
-guessed: a console event without a location URL keeps its raw text, and
-network failures keep their `net::` error code (no HTTP status is invented
-for them). The red paths are unchanged — a 4xx response with no console
+guessed: a console event without a location URL keeps its raw text with
+an explicit `[url unavailable]` marker, and network failures keep their
+`net::` error code (no HTTP status is invented for them). The red paths
+are unchanged — a 4xx response with no console
 error collects nothing, and the network-change pairing above reads only
 the raw console text: a `net::ERR_NETWORK_CHANGED` token that appears
 merely in the appended URL never pairs.

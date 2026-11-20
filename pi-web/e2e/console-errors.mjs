@@ -29,8 +29,9 @@
 // could attribute. Each resource-load console error appends the console
 // event's location().url in brackets after the raw text
 // ("… status of 403 (Forbidden) [http://…]"); a console event without a
-// location URL keeps its raw text — nothing is guessed, and network
-// failures keep their net:: error code. The red paths are unchanged: 4xx
+// location URL keeps its raw text with an explicit `[url unavailable]`
+// marker — nothing is guessed, and network failures keep their net:: error
+// code. The red paths are unchanged: 4xx
 // responses alone collect nothing, and the network-change pairing above
 // reads only the raw console text, so a token that appears merely in the
 // appended URL never pairs.
@@ -39,12 +40,15 @@ const RESOURCE_LOAD_PREFIX = "Failed to load resource:";
 
 // The red text for one console error: the raw text, plus the resource URL
 // (the console event's location) appended for resource-load errors — the
-// only kind whose subject the text itself never names.
+// only kind whose subject the text itself never names. Without a location
+// URL the raw text gets an explicit `[url unavailable]` marker (owner
+// decision Q2): a reader can tell the collector could not get the URL apart
+// from an older collector that never tried.
 function reportText(event) {
   const text = event.text();
   if (!text.startsWith(RESOURCE_LOAD_PREFIX)) return text;
   const url = event.location()?.url;
-  return url ? `${text} [${url}]` : text;
+  return url ? `${text} [${url}]` : `${text} [url unavailable]`;
 }
 
 export function trackBrowserErrors(page, { base, log = console.log, maxToleratedNetworkChanges = 3 } = {}) {
