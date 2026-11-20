@@ -747,7 +747,8 @@ command's face.
   open; Simplified Chinese: 结论, 这一步要回答什么, 做了什么, 关键决定和理由,
   验证, 发现的问题和风险, 给下游与未决), or on a re-run of the step Reply to
   the previous round / 回应上一轮; a
-  body over 3,000 characters; an `--evidence` path that is not an existing
+  body over 6,000 characters (Unicode code points, counted over the
+  entire body); an `--evidence` path that is not an existing
   file inside the capsule; `done` while a `wrap_attrs` name the lane
   declares for this step has no `pf step hub wrap-attrs <name>` of this
   round. Accepted, the daemon appends one section to
