@@ -1,3 +1,4 @@
+// carries: components/MessageView*, lib/i18n/messages/*
 import "#test-env";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -407,6 +408,42 @@ test("renders subagents as standard tool calls with only an extra side-panel but
     onOpenSubagent() {},
   });
   assert.doesNotMatch(ordinaryHtml, /View sub-agent work in side panel/);
+});
+
+test("a bg_run tool card carries an open-task button bound to the task its result started", () => {
+  // polyforge#189 (AC1): the running area no longer settles a task's detail;
+  // the bg_run card's own button opens it — running, settled or interrupted.
+  const block = { type: "toolCall", toolCallId: "call-bg-1", toolName: "bg_run", input: { command: "npm run build" } };
+  const result = {
+    role: "toolResult",
+    toolCallId: block.toolCallId,
+    content: [{ type: "text", text: "Started background task t-9." }],
+    // The wire shape #172's bg_run returns: details.task is the registry record at start.
+    details: { task: { id: "t-9", sessionId: "session-a", command: "npm run build", cwd: "/tmp", status: "running", startedAt: 1, endedAt: null, exitCode: null, signal: null, reason: null, bytesWritten: 0, logPath: "/tmp/log", notified: false } },
+  };
+  const html = renderMessage({ role: "assistant", content: [block] }, {
+    toolResults: new Map([[block.toolCallId, result]]),
+    onOpenPiTask() {},
+  });
+  assert.match(html, /<button[^>]*data-pi-open-task="t-9"/, "the bg_run card carries no open-task button");
+  assert.match(html, /aria-label="Open task"/, "the button is not named");
+  assert.match(html, />Open task</, "the button shows no label");
+  // No result yet (the call still streaming), a result without a task record,
+  // a non-bg_run card and a caller without the callback render no button.
+  const streaming = renderMessage({ role: "assistant", content: [block] }, { onOpenPiTask() {} });
+  assert.doesNotMatch(streaming, /data-pi-open-task/, "a call without its result yet shows the button");
+  const noTaskDetails = renderMessage({ role: "assistant", content: [block] }, {
+    toolResults: new Map([[block.toolCallId, { ...result, details: {} }]]),
+    onOpenPiTask() {},
+  });
+  assert.doesNotMatch(noTaskDetails, /data-pi-open-task/, "a result without a task record shows the button");
+  const otherTool = renderMessage({ role: "assistant", content: [{ ...block, toolCallId: "call-other", toolName: "bash" }] }, {
+    toolResults: new Map([["call-other", { ...result, toolCallId: "call-other" }]]),
+    onOpenPiTask() {},
+  });
+  assert.doesNotMatch(otherTool, /data-pi-open-task/, "a non-bg_run card shows the button");
+  const unbound = renderMessage({ role: "assistant", content: [block] }, { toolResults: new Map([[block.toolCallId, result]]) });
+  assert.doesNotMatch(unbound, /data-pi-open-task/, "a card without the callback shows the button");
 });
 
 test("a tool card shows the run time pi recorded, else the timestamps' difference, never a tiny one", () => {
