@@ -43,10 +43,11 @@ const STOP_ICON = (
 
 const RUNNING = "running";
 
-/** The record's own status word, the way the registry spells it. */
-function statusLabelKey(status: BgTaskInfo["status"]): string {
-  if (status === "succeeded") return "bgTasks.status.completed";
-  return `bgTasks.status.${status}`;
+/** The record's own status word, the way the registry spells it (succeeded reads as the completed label). */
+function statusLabel(t: ReturnType<typeof useI18n>["t"], status: BgTaskInfo["status"]): string {
+  // The registry spells success `succeeded`; its label is the completed one.
+  if (status === "succeeded") return t("bgTasks.status.completed");
+  return t(`bgTasks.status.${status}`);
 }
 
 /** Whether the panel's task still runs (the only state that may offer Stop). */
@@ -150,7 +151,7 @@ export function PiBackgroundTaskPanel({ task, onStop, onReadOutput, onClose, now
               </>
             ) : (
               <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                <span data-pi-task-status-label="" style={{ color: task.status === "failed" ? "#f87171" : "var(--text-dim)" }}>{t(statusLabelKey(task.status))}</span>
+                <span data-pi-task-status-label="" style={{ color: task.status === "failed" ? "#f87171" : "var(--text-dim)" }}>{statusLabel(t, task.status)}</span>
                 <span style={{ color: "var(--text-dim)", fontVariantNumeric: "tabular-nums" }}>{formatTurnDuration(elapsedMs(task, now))}</span>
               </div>
             )}
@@ -212,7 +213,7 @@ export function PiBackgroundTaskHistory({ tasks, onOpenTask, onClose, now: fixed
             style={{ display: "flex", alignItems: "center", gap: 7, width: "100%", minWidth: 0, padding: "4px 8px", borderRadius: 6, border: "1px solid transparent", background: "none", cursor: "pointer", fontSize: 12, lineHeight: "18px", textAlign: "left" }}
           >
             <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--text)", fontFamily: "var(--font-mono)" }}>{task.command}</span>
-            <span style={{ flexShrink: 0, color: task.status === "failed" ? "#f87171" : "var(--text-dim)" }}>{t(statusLabelKey(task.status))}</span>
+            <span style={{ flexShrink: 0, color: task.status === "failed" ? "#f87171" : "var(--text-dim)" }}>{statusLabel(t, task.status)}</span>
             <span style={{ flexShrink: 0, color: "var(--text-dim)", fontVariantNumeric: "tabular-nums" }}>{formatTurnDuration(elapsedMs(task, now))}</span>
           </button>
         ))}

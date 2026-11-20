@@ -260,7 +260,9 @@ test("the v1 bridge, its package probe and the old dock leave no reference behin
 
   // The retired dock's strings are gone from every locale (the notification's
   // keys stay: AppShell's terminal notification keeps using them).
-  const retired = ["open", "close", "refresh", "loading", "unavailable", "empty", "kill", "killConfirm", "agentTask", "exitCode", "output", "outputTruncated", "selectTask", "resizeSheet"];
+  // The dock-only keys that retired; `close` and `outputTruncated` came back
+  // with the new panel (#173) and stay out of the ban.
+  const retired = ["open", "refresh", "loading", "unavailable", "empty", "kill", "killConfirm", "agentTask", "exitCode", "output", "selectTask", "resizeSheet"];
   for (const [name, locale] of [["en", enLocale], ["zh-CN", zhCNLocale], ["zh-TW", zhTWLocale]]) {
     for (const key of retired) {
       assert.equal(Object.hasOwn(locale.messages, `bgTasks.${key}`), false, `${name} still carries the retired key bgTasks.${key}`);
