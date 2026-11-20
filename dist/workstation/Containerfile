@@ -105,7 +105,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # pin the webui build used; the same copy .polyforge/Dockerfile.verify
 # makes, node lives under /usr/local).
 COPY --from=node /usr/local/ /usr/local/
-COPY --from=go /out/pf /usr/local/bin/pf
+# the base pf (polyforge#175, Q5): /usr/local/libexec/polyforge/pf, the
+# one bootstrap the entry point execs by absolute path — it runs
+# `pf supervise` and never lands on PATH, so nothing a later layer or
+# mount leaves in /usr/local/bin can stand in for it.
+COPY --from=go /out/pf /usr/local/libexec/polyforge/pf
+# PATH keeps a pf for the in-container operator (`pf daemon ensure`,
+# `pf doctor`) and the smoke's docker exec (review r1#2): the link
+# targets the components volume's current, so an upgrade that switches
+# current is live on PATH too — dangling until the first boot installs
+# the volume (84-components-C).
+RUN ln -s /components/current/bin/pf /usr/local/bin/pf
 # the component seed: read-only in the image, the first boot installs
 # it into the components volume (84-components).
 COPY --from=seed /seed /opt/polyforge/seed/releases/${SEED_VERSION}

@@ -2,7 +2,11 @@
 # dist/workstation/entrypoint.sh — the workstation container's entry
 # point (polyforge#161, 84-image), run by catatonit as PID 1's child.
 # Everything here runs as root (the settled "first version is all
-# root"). Two jobs, then `pf supervise` (#160) owns the rest:
+# root"). Two jobs, then the base pf runs `pf supervise` (#160) and
+# owns the rest — by its absolute path /usr/local/libexec/polyforge/pf
+# (polyforge#175, Q5), never a PATH lookup: the image carries no other
+# pf, and a lookup would find whatever a later layer or mount left in
+# /usr/local/bin.
 #
 # 1. The private writable cgroup namespace. Docker mounts /sys/fs/cgroup
 #    read-only and its root still holds PID 1; on cgroup v2 a domain
@@ -44,4 +48,4 @@ done
 . /usr/local/bin/workstation-env-whitelist.sh
 workstation_env_whitelist
 
-exec pf supervise "$@"
+exec /usr/local/libexec/polyforge/pf supervise "$@"

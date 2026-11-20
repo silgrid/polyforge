@@ -4,8 +4,13 @@ The workstation is a whole polyforge machine inside one container: the
 daemon runs there, `pf supervise` keeps it (and, in the AIHub boot
 mode, the aihub server) alive, and podman — rootful, with crun — runs
 the verification containers. The image is the base plus the component
-seed: podman, crun, catatonit as PID 1, the pf binary, the container
-configs and the Node runtime, plus one complete seed of the versioned
+seed: podman, crun, catatonit as PID 1, the base pf
+(`/usr/local/libexec/polyforge/pf` — the bootstrap the entry point execs
+by absolute path, polyforge#175), the container configs and the Node
+runtime, while the image's PATH `pf` is a link to the components
+volume's `/components/current/bin/pf` (an upgrade that switches current
+is live on PATH too; dangling until the first boot installs the
+volume), plus one complete seed of the versioned
 components — the release checkout, `bin/pf`, Pi Web built with its
 production dependencies and the two pinned harness packages —
 read-only at `/opt/polyforge/seed/releases/<ver>` and pinned by the
@@ -22,7 +27,7 @@ Everything the workstation needs lives in `dist/workstation/`:
 |---|---|
 | `Containerfile` | the base image: webui's dist tree and the pf binary built from this repository, on ubuntu with podman, crun, catatonit, plus the Node runtime and the seed stage |
 | `build-seed.sh` | the seed assembly, run inside the image build (Pi Web's build and prune, the two pinned harness packages, `bin/pf`, the manifest seedtool writes and verifies) |
-| `entrypoint.sh` | cgroup-namespace init as root, then the environment boundary, then `pf supervise` |
+| `entrypoint.sh` | cgroup-namespace init as root, then the environment boundary, then the base pf's absolute path running `pf supervise` |
 | `compose.yaml` | the outer container's minimal parameter set and the two boot modes |
 | `containers/` | podman's storage, containers and registries configuration |
 | `seccomp.json` | the pinned seccomp profile the outer engine applies (origin and SHA beside it) |

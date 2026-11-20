@@ -166,6 +166,33 @@ test("the conventional clone root is install.sh's fixed path", () => {
   assert.equal(conventionalPolyforgeRoot("/home/e2e"), join("/home/e2e", ".local", "share", "polyforge", "release", "current"));
 });
 
+test("the conventional clone root follows the workstation image's components current", () => {
+  // The image judgment reads ONE fact (owner 2026-11-19, cross
+  // #175/#177): the seed manifest the image's final layer carries
+  // under the seed root. A directory without a manifest is not the
+  // fact — nothing probes /components to guess the mode.
+  const work = mkdtempSync(join(tmpdir(), "pi-web-pf-detect-"));
+  try {
+    const bare = join(work, "seed-bare", "releases", "v1");
+    mkdirSync(bare, { recursive: true });
+    assert.equal(
+      conventionalPolyforgeRoot("/home/e2e", join(work, "seed-bare")),
+      join("/home/e2e", ".local", "share", "polyforge", "release", "current"),
+      "a releases/ directory without the seed manifest is not the image",
+    );
+    const image = join(work, "seed-image", "releases", "v1");
+    mkdirSync(image, { recursive: true });
+    writeFileSync(join(image, "manifest.json"), "{}\n");
+    assert.equal(
+      conventionalPolyforgeRoot("/home/e2e", join(work, "seed-image")),
+      "/components/current",
+      "the image's conventional root is the components volume's current",
+    );
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+});
+
 // ---- assembled states (a throwaway HOME + a stub pf first on PATH) ----
 
 const work = mkdtempSync(join(tmpdir(), "pi-web-pf-detect-"));
