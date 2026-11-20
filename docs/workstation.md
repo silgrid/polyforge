@@ -197,7 +197,11 @@ sh dist/workstation/smoke.sh podman-verify      # verification via podman end to
 
 `boot --with-aihub`, `first-boot` and `env` need the components volume
 to carry the seed's Pi Web (the first boot installs it); `first-boot`
-resets the project's volumes first — it owns its run. The first-boot
+resets volumes first — its own, never an operator's: the smoke runs
+every compose call under its own project (`workstation-smoke`), so its
+resets only ever touch `workstation-smoke_*`, and a concurrently
+running deployment's fixed container name fails the smoke's up
+explicitly instead of being interfered with. The first-boot
 pass is the AC proof of the identity half: after the boot the record
 says done, the default Cell points at the local AIHub, the key REALLY
 authenticates (`pf recall` inside the container, through the

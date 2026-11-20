@@ -910,7 +910,7 @@ func TestWorkstationImageEngine(t *testing.T) {
 	// acceptance does. (The compose file's required interpolation
 	// refuses even a `down` without the password, so it carries one
 	// here too.)
-	down := exec.Command("docker", "compose", "-f", filepath.Join(root, "dist/workstation/compose.yaml"), "--profile", "no-aihub", "down", "-v")
+	down := exec.Command("docker", "compose", "-p", "workstation-smoke", "-f", filepath.Join(root, "dist/workstation/compose.yaml"), "--profile", "no-aihub", "down", "-v")
 	down.Env = append(os.Environ(), "PI_WEB_PASSWORD=x")
 	_ = down.Run()
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)

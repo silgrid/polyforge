@@ -37,10 +37,16 @@ export PI_WEB_PASSWORD="$password"
 say() { printf 'smoke: %s\n' "$*"; }
 die() { printf 'smoke: FAIL: %s\n' "$*" >&2; exit 1; }
 
-# compose runs the compose file's own project (name: workstation) and
-# resolves its relative paths (the seccomp file, the build context)
+# compose runs under the SMOKE'S OWN project (polyforge#176, review
+# r1#4): the compose file names the project `workstation` and its six
+# volumes are a real deployment's persistent home, so the smoke runs
+# every call under -p workstation-smoke — its `down -v` (the first-boot
+# pass resets volumes) then only ever touches workstation-smoke_*, never
+# an operator's. A concurrently running deployment's fixed
+# container_name fails the up explicitly instead of being interfered
+# with. Relative paths (the seccomp file, the build context) resolve
 # against the compose file's directory, so the caller's cwd is free.
-compose() { docker compose -f "$compose_file" "$@"; }
+compose() { docker compose -p workstation-smoke -f "$compose_file" "$@"; }
 
 # poll_until WHAT SECONDS CMD... — a bounded poll that re-runs CMD
 # every 2s until it succeeds or the deadline passes.
@@ -237,9 +243,9 @@ YEOF
 	# prefixed per command — it must ride the `up` that CREATES the
 	# container, not just the build (review r2#2).
 	export SENTINEL_WORKSTATION_SMOKE=yes
-	docker compose -f "$compose_file" -f "$override" --profile "$profile" build >/dev/null
-	docker compose -f "$compose_file" -f "$override" --profile "$profile" up -d >/dev/null
-	cid=$(docker compose -f "$compose_file" -f "$override" --profile "$profile" ps -q "$(service_of "$profile")")
+	docker compose -p workstation-smoke -f "$compose_file" -f "$override" --profile "$profile" build >/dev/null
+	docker compose -p workstation-smoke -f "$compose_file" -f "$override" --profile "$profile" up -d >/dev/null
+	cid=$(docker compose -p workstation-smoke -f "$compose_file" -f "$override" --profile "$profile" ps -q "$(service_of "$profile")")
 	[ -n "$cid" ] || die "no workstation container"
 	poll_until "pf supervise to run inside" 120 \
 		docker exec "$cid" sh -c 'ps -e -o args= | grep -q "[p]f supervise"'
@@ -267,7 +273,7 @@ YEOF
 	code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$web_host_port/api")
 	printf 'smoke: anonymous /api = %s\n' "$code"
 	[ "$code" = 401 ] || die "anonymous /api is $code, want 401"
-	docker compose -f "$compose_file" -f "$override" --profile "$profile" down >/dev/null
+	docker compose -p workstation-smoke -f "$compose_file" -f "$override" --profile "$profile" down >/dev/null
 	rm -f "$override"
 	say "env: PASS"
 }
@@ -283,9 +289,9 @@ services:
       - "@ROOT@:/workspace:ro"
 YEOF
 	say "podman-verify: booting with the repository mounted at /workspace"
-	docker compose -f "$compose_file" -f "$override" --profile "$profile" build >/dev/null
-	docker compose -f "$compose_file" -f "$override" --profile "$profile" up -d >/dev/null
-	cid=$(docker compose -f "$compose_file" -f "$override" --profile "$profile" ps -q "$(service_of "$profile")")
+	docker compose -p workstation-smoke -f "$compose_file" -f "$override" --profile "$profile" build >/dev/null
+	docker compose -p workstation-smoke -f "$compose_file" -f "$override" --profile "$profile" up -d >/dev/null
+	cid=$(docker compose -p workstation-smoke -f "$compose_file" -f "$override" --profile "$profile" ps -q "$(service_of "$profile")")
 	[ -n "$cid" ] || die "no workstation container"
 	poll_until "pf supervise to run inside" 120 \
 		docker exec "$cid" sh -c 'ps -e -o args= | grep -q "[p]f supervise"'
@@ -355,7 +361,7 @@ PYEOF
 	[ "$pod" = 0 ] || die "podman stays resident: $pod process(es)"
 	say "no residual containers, no zombies, no resident conmon/podman"
 
-	docker compose -f "$compose_file" -f "$override" --profile "$profile" down >/dev/null
+	docker compose -p workstation-smoke -f "$compose_file" -f "$override" --profile "$profile" down >/dev/null
 	rm -f "$override"
 	say "podman-verify: PASS"
 }
@@ -416,7 +422,7 @@ services:
 YEOF
 		export WORKSTATION_AIHUB_SERVER="http://host.docker.internal:$stub_port"
 		export WORKSTATION_AIHUB_KEY="smoke-external-key"
-		compose_up="docker compose -f $compose_file -f $override --profile $profile"
+		compose_up="docker compose -p workstation-smoke -f $compose_file -f $override --profile $profile"
 	else
 		compose_up="compose --profile $profile"
 	fi
