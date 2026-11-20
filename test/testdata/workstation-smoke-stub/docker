@@ -84,6 +84,12 @@ if [ "${1:-}" = exec ]; then
 	# absence and the local AIHub's answer — each answered from the
 	# scenario, each fail-flag its own file
 	*first-boot.json*)
+		# 用真实 HTTP 请求验证外部 smoke 的远端写入门。
+		if [ -f "$dir/remote-request" ]; then
+			read -r method path < "$dir/remote-request"
+			curl -s -X "$method" "http://127.0.0.1:${WORKSTATION_SMOKE_STUB_PORT:-38421}$path" >/dev/null
+			rm "$dir/remote-request"
+		fi
 		cat "$dir/first-boot.json"
 		;;
 	*"config get server"*)

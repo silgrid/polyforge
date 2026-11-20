@@ -1183,6 +1183,42 @@ func TestWorkstationSmokeFirstBootExternal(t *testing.T) {
 	})
 }
 
+func TestWorkstationSmokeExternalRejectsRemoteWrites(t *testing.T) {
+	for _, request := range []string{
+		"POST /api/v1/users",
+		"POST /api/v1/api-keys",
+		"POST /api/v1/projects",
+		"PATCH /api/v1/users/usr_test",
+		"DELETE /api/v1/api-keys/key_test",
+		"DELETE /api/v1/projects/prj_test",
+		"GET /api/v1/unexpected",
+	} {
+		t.Run(request, func(t *testing.T) {
+			out, err := w535SmokeFirstBootExternal(t, func(dir string) {
+				if err := os.WriteFile(filepath.Join(dir, "remote-request"), []byte(request+"\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			})
+			if err == nil {
+				t.Fatalf("远端写请求必须拒绝：%s\n%s", request, out)
+			}
+			if !strings.Contains(out, request) {
+				t.Fatalf("拒绝必须点名请求：%s\n%s", request, out)
+			}
+		})
+	}
+	t.Run("heartbeat", func(t *testing.T) {
+		out, err := w535SmokeFirstBootExternal(t, func(dir string) {
+			if err := os.WriteFile(filepath.Join(dir, "remote-request"), []byte("POST /api/v1/machines/heartbeat\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if err != nil || !strings.Contains(out, "first-boot: PASS") {
+			t.Fatalf("运行期心跳必须允许：%v\n%s", err, out)
+		}
+	})
+}
+
 // TestWorkstationSmokeFirstBootEngine — the real-engine external pass
 // (polyforge#176, the round-2 real-machine finding): the counting stub
 // sits on the host and the smoke must prove the FIRST BOOT itself makes
