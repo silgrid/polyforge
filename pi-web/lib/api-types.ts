@@ -103,6 +103,8 @@ export interface SkillInfo {
   filePath: string;
   baseDir: string;
   disableModelInvocation: boolean;
+  /** The author's frontmatter value; the switch's preference is applied on top of it. */
+  declaredDisableModelInvocation?: boolean;
   sourceInfo: {
     source?: string;
     scope?: string;

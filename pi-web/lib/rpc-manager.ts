@@ -63,6 +63,12 @@ import type { DebugMcpHost, DebugSessionLifecycle, DebugWrapperSnapshot } from "
 import { mcpPromptPreparation, type McpCommandCandidate } from "./mcp-command";
 import { createReadOnlyMcpPolicyExtension, createSubagentMcpPolicyExtension } from "./mcp-read-only-policy";
 import { createSubagentSkillsBinding } from "./subagent-skills";
+import {
+  composeSkillsOverrides,
+  readSkillVisibility,
+  skillVisibilityOverride,
+  type SkillsOverride,
+} from "./skill-visibility-config";
 import { isNestedToolExecutionEvent } from "./agent-event-wire";
 import { collectLiveAssistantNotices, readShowCacheMissNotices, withSessionPrices } from "./transcript-notices-server";
 import {
@@ -249,6 +255,19 @@ export function resolveSessionIdleTimeoutMs(
 
 /** Resolved once: the debug panel reads it rather than resolving the variable again, which warns. */
 export const SESSION_IDLE_TIMEOUT_MS = resolveSessionIdleTimeoutMs();
+
+/**
+ * The session's skills override: pi-web's visibility preference
+ * (`skillVisibility.pi` in pi-web-settings.json), composed in front of the
+ * subagent binding's projection when there is one. Read once per session; a
+ * later switch needs a reload or a new session, exactly as before.
+ */
+export function sessionSkillsOverride(
+  agentDir: string,
+  subagentSkillsOverride?: SkillsOverride,
+): SkillsOverride | undefined {
+  return composeSkillsOverrides(skillVisibilityOverride(readSkillVisibility(agentDir)), subagentSkillsOverride);
+}
 
 const DEFAULT_SESSION_SHUTDOWN_DEADLINE_MS = 5_000;
 
@@ -3282,15 +3301,18 @@ export async function startRpcSession(
     }) : undefined;
     // The binding's own compose factory is merged into the extensionFactories below; the
     // rest of its loader options (noSkills, skillsOverride) spread into resourceLoaderOptions.
+    // pi-web's visibility preference runs in front of the binding's named projection,
+    // so a hidden skill leaves the catalog while staying nameable.
     const skillsExtensionFactories = skillsBinding?.loaderOptions.extensionFactories;
+    const sessionSkillsOverrideFn = sessionSkillsOverride(agentDir, skillsBinding?.loaderOptions.skillsOverride);
     const skillsLoaderOptions = skillsBinding
       ? {
           noSkills: skillsBinding.loaderOptions.noSkills,
-          ...(skillsBinding.loaderOptions.skillsOverride
-            ? { skillsOverride: skillsBinding.loaderOptions.skillsOverride }
-            : {}),
+          ...(sessionSkillsOverrideFn ? { skillsOverride: sessionSkillsOverrideFn } : {}),
         }
-      : undefined;
+      : sessionSkillsOverrideFn
+        ? { skillsOverride: sessionSkillsOverrideFn }
+        : undefined;
     const services = await createAgentSessionServices({
       cwd: sessionCwd,
       agentDir,
@@ -3326,6 +3348,7 @@ export async function startRpcSession(
         : chatOnly
           ? { ...CHAT_ONLY_RESOURCE_LOADER_OPTIONS, extensionFactories: [exactSystemPromptExtension] }
         : {
+            ...(skillsLoaderOptions ?? {}),
             extensionFactories: [
               ...(builtins?.extensions ?? []),
               createReadOnlyMcpPolicyExtension(),
