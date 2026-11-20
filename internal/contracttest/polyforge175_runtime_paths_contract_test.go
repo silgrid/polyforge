@@ -60,6 +60,28 @@ func TestPF175RuntimePathsContract(t *testing.T) {
 		}
 	}
 
+	// the commands reference's doctor row: --fix-install-layout's
+	// image-side behavior (review r1#4)
+	for _, want := range []string{
+		"in the image the row's fix names the components volume, never `tools/install.sh`",
+		"/components/current/skills/polyforge",
+	} {
+		if !strings.Contains(commands, want) {
+			t.Errorf("docs/reference/commands.md lacks %q (the doctor --fix-install-layout image side)", want)
+		}
+	}
+
+	// the doctor verb doc: the --fix-install-layout section and the pi
+	// row's warn cell name the image side too (review r1#4)
+	for _, want := range []string{
+		"creates the link to the machine's current skill",
+		"the first boot's seed install into the components volume",
+	} {
+		if !strings.Contains(doctor, want) {
+			t.Errorf("skills/polyforge/verbs/doctor.md lacks %q (the --fix-install-layout / pi-row image side)", want)
+		}
+	}
+
 	// the workstation doc names the base pf's absolute path
 	workstation := pf101Read(t, "docs/workstation.md")
 	if !strings.Contains(workstation, "/usr/local/libexec/polyforge/pf") {
