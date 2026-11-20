@@ -1,5 +1,13 @@
 # Models and provider auth
 
+## 统一模型设置（85a3-2）
+
+设置中的「模型」页显示组合默认模型、按 provider 分组的双 harness 清单，以及 pi 的 provider 草稿编辑区。只有相同 provider 的精确 id 合并；Claude 行的聊天开关显示「不支持」，按模型强度仅显示原生读值。pi 的聊天开关沿用 enabledModels 最小编辑，模型强度经适配器写 modelThinkingLevels；组合默认模型沿用 /api/models/default。
+
+provider 添加与编辑、托管 provider 的上下文窗口在同一 models.json 草稿内，共用 Save；保存由 /api/models-config 转交 pi 适配器，沿用版本/结构闸门及既有 schema、损坏文件和符号链接保护。登录留在账号页，模型页的账号按钮跳到该页。刷新按钮改为「刷新模型列表」。旧 Models (legacy) tab 已移除。
+
+仅支持自适应思考的 Anthropic 模型在测试连接时使用原生 complete API，不传 thinking 参数；其余模型沿用 completeSimple。路由测试捕获真实 Anthropic 请求体，验证 reasoning=true、forceAdaptiveThinking=true 时 thinking 字段缺省。
+
 ## Model defaults for new sessions
 `GET /api/models` returns `defaultModel` from `~/.pi/agent/settings.json`; `ChatWindow` pre-selects it for new sessions. Browser model/thinking picks are applied atomically while the AgentSession is built and are **session-scoped**: neither startup nor a mid-session `set_model` / `set_thinking_level` writes `settings.json`, as pi's `/model` and `/thinking` persist only on Ctrl+S (otherwise a one-off pick becomes the TUI's default too).
 

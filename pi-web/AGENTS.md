@@ -73,7 +73,7 @@ app/api/
   models/enabled/route.ts         GET/PUT enabledModels switches for the Models panel
   models/default/route.ts         GET the combined default the composer starts from (the stored default harness, claude's native model/effort defaults — 85a3-1) | PUT save the default model / reasoning level for new sessions: the pi branch writes pi's native defaults through the pi adapter's gated model write and records the 「harness + 模型」 combined setting, the claude branch ({ harness: "claude", model }) writes claude's native `model` and the same setting, and a reasoning-level write reaches both natives (一写多读), a pi-specific level staying pi's alone and a refused claude half never rolling pi's back
   models/refresh/route.ts         POST fetch provider catalogs from pi.dev on demand
-  models-config/route.ts          GET/PUT — read/write ~/.pi/agent/models.json
+  models-config/route.ts          GET/PUT 原生 models.json 草稿；PUT 经 pi 适配器的版本与结构闸门，复用原有 schema、上下文和符号链接保护
   models-config/catalog/route.ts  GET models.dev pricing presets
   models-config/discover/route.ts POST fetch a configured provider's upstream model list
   models-config/test/route.ts     POST test a configured model/provider
@@ -183,6 +183,7 @@ lib/
   file-tree-expansion.ts    the file tree's open directories per cwd: page-memory LRU of 20 folders
   enabled-models.ts    pure minimal-edit engine for the `enabledModels` pattern list
   enabled-models-runtime.ts  SDK adapter: per-pattern resolution, provider kinds, settings IO
+  harness/model-view.ts  客户端模型清单投影：同 provider 精确 id 合并 harness，跨 provider 独立，保留各模型的默认身份
   model-context.ts          client-safe: managed models' contextWindow overrides in the models.json draft, the Save check
   model-provider-check.ts   client-safe: Save refuses a models.json provider entry pi rejects on its own (Add provider's empty stub, oauth without a Base URL)
   markdown.ts          shared markdown helpers
@@ -310,8 +311,8 @@ components/
   ChatMinimap.tsx     scroll minimap alongside the message list
   MarkdownBody.tsx    markdown renderer
   SvgBlock.tsx             a ```svg fence in chat and the markdown file preview: preview only as an <img> data URL, source toggle, zoom, download (MermaidBlock's pieces)
-  HarnessModelSettings.tsx new unified Models page: default model, provider-grouped capability table, and the Pi provider/editor area
-  ModelsConfig.tsx    provider definition editor used inside HarnessModelSettings
+  HarnessModelSettings.tsx 设置中的统一模型页：默认模型选择、按 provider 与精确 id 合并的双 harness 三列清单、pi 聊天开关和强度写入、pi provider 编辑与账号跳转
+  ModelsConfig.tsx    统一模型页中的 models.json 草稿编辑器；保存经 pi 适配器版本闸门，托管 provider 的模型行与上下文窗口共用 Save
   AccountSettings.tsx the Settings › 账号 page (85a2, polyforge#142): the left column's harness list over the account route's read — the interactive claude card, the per-Cell daemon-step rows (状态、来源含「共享 default」、配置根、凭据是否跟随配置目录、步骤能否使用及原因; the keychain hint when the capability says the credentials do not follow), the credential form and the one-shot login terminals of the declared login commands
   PiAccountLogin.tsx pi's sign-in on Account › pi (85a2): the moved OAuth login/logout flows, the API-key form and the Add-provider picker (built-in providers only; a custom models.json definition stays on the legacy Models tab until 85a3)
   EnabledModelsSection.tsx  model switches inside ModelsConfig, backed by enabledModels

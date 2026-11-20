@@ -1387,11 +1387,11 @@ export function ProviderAuthMovedNotice() {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export function ModelsConfig({ onClose, embedded = false, cwd = null }: {
-  onClose: () => void; embedded?: boolean; cwd?: string | null;
+export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAccount }: {
+  onClose: () => void; embedded?: boolean; cwd?: string | null; onOpenAccount?: () => void;
 }) {
   const { t } = useI18n();
-  const { closeDetail } = useConfigDetailNavigation();
+  const { closeDetail, openDetail } = useConfigDetailNavigation();
   // `enabledModels` lives in pi's settings, not models.json, so these switches
   // apply immediately instead of waiting for this panel's Save button.
   const enabledModels = useEnabledModels(cwd);
@@ -1703,6 +1703,15 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null }: {
           {/* Left: tree */}
           <ConfigSidebar>
             <ConfigSidebarList>
+              <ConfigButton disabled={loading || loadError !== null} onClick={() => {
+                let name = "custom";
+                let suffix = 1;
+                while (Object.hasOwn(config.providers ?? {}, name)) name = `custom-${suffix++}`;
+                setConfig((previous) => ({ ...previous, providers: { ...previous.providers, [name]: { api: "openai-completions" } } }));
+                setSelection({ type: "provider", name });
+                openDetail();
+              }}>{t("i18n.addProvider")}</ConfigButton>
+              {onOpenAccount && <ConfigButton onClick={onOpenAccount}>{t("settings.tabAccount")}</ConfigButton>}
               {/* Active OAuth subscriptions */}
               {activeOAuth.map((p) => {
                 const isSelected = selection?.type === "oauth" && selection.providerId === p.id;

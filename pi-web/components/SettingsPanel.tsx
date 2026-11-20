@@ -349,7 +349,7 @@ export function SettingsPanel({
               above (its Claude part is where a stored old `claude` navigation
               value lands). */}
           {sectionHost("account", <AccountSettings />)}
-          {sectionHost("models", <HarnessModelSettings cwd={cwd} onClose={onClose} />)}
+          {sectionHost("models", <HarnessModelSettings cwd={cwd} onClose={onClose} onOpenAccount={() => activateSection("account")} />)}
           {sectionHost("permission", <HarnessPermissionSettings cwd={cwd} sessionId={sessionId} />)}
           {/* Visited sections stay mounted, so the ones whose answer depends on trust take the page's
               status and load again in place when trusting from Settings › MCP changes it. */}

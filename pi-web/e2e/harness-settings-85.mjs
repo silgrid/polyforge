@@ -344,9 +344,9 @@ try {
     const host = sectionHost(page, "models");
     await host.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
     const modelText = await host.innerText();
-    assert.ok(modelText.includes("默认模型"), "the unified model page lacks the default model");
-    assert.ok(modelText.includes("模型清单"), "the unified model page lacks the model list");
-    assert.ok(modelText.includes("聊天可用"), "the unified model page lacks the chat availability column");
+    assert.ok(modelText.includes("Default model"), "the unified model page lacks the default model");
+    assert.ok(modelText.includes("Model list"), "the unified model page lacks the model list");
+    assert.ok(modelText.includes("Chat availability"), "the unified model page lacks the chat availability column");
     assert.ok(modelText.includes("pi"), "the unified model page lacks the pi editor");
     await tab(page, /^Permissions$/).click({ timeout: ACTION_MS });
     const permission = sectionHost(page, "permission");
@@ -442,7 +442,7 @@ try {
     const models = sectionHost(page, "models");
     await models.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
     assert.equal(await models.locator('input[type="password"]').count(), 0, "the Models page exposes a duplicate API-key form");
-    assert.equal(await models.getByRole("button", { name: "Add provider", exact: true }).count(), 0, "the Models page exposes a duplicate Add provider action");
+    await models.getByRole("button", { name: "Account", exact: true }).waitFor({ state: "visible", timeout: ACTION_MS });
     // Account › pi: the rows, the Add provider button, and no Anthropic
     // subscription anywhere
     await tab(page, /^Account$/).click({ timeout: ACTION_MS });
@@ -511,8 +511,10 @@ try {
     const models = sectionHost(page, "models");
     await models.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
     await models.locator(".config-sidebar-list").first().waitFor({ state: "visible", timeout: COLD_MS });
-    assert.ok((await models.innerText()).includes("模型清单"), "the unified model table is missing");
-    assert.equal(await models.getByRole("button", { name: "Add provider", exact: true }).count(), 0, "the unified page exposes a duplicate Add provider action");
+    assert.ok((await models.innerText()).includes("Model list"), "the unified model table is missing");
+    await models.getByRole("button", { name: "Add provider", exact: true }).waitFor({ state: "visible", timeout: ACTION_MS });
+    await models.getByRole("button", { name: "Add provider", exact: true }).click({ timeout: ACTION_MS });
+    await models.getByPlaceholder("provider-name", { exact: true }).waitFor({ state: "visible", timeout: ACTION_MS });
     await page.context().close();
   });
 
