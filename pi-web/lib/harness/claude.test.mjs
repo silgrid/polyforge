@@ -1,4 +1,4 @@
-// carries: lib/harness/claude.ts
+// carries: lib/harness/claude.ts, lib/harness/claude-native-write.ts
 import "#test-env";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -116,7 +116,7 @@ test("probeVersion: 2.1.326 is known, 3.0.0 is refused with its reason (Q2 C)", 
   const known = await adapter.probeVersion(fixtureCtx());
   assert.equal(known.version, "2.1.326");
   assert.equal(known.known, true);
-  assert.equal(known.knownRange, "claude 2.1.x (>=2.1.312)");
+  assert.equal(known.knownRange, "claude 2.x");
   const unknown = await adapter.probeVersion(fixtureCtx({ claudeBinary: unknownBinary }));
   assert.equal(unknown.version, "3.0.0");
   assert.equal(unknown.known, false);
@@ -144,13 +144,13 @@ test("probeVersion: an unrecognized top-level structure refuses a known-range ve
   }
 });
 
-test("write: an out-of-range version is refused with a reason; a known one answers not-implemented (Q1 A)", async () => {
+test("write: an unknown-major version is refused with a reason; the model write parses (85a3)", async () => {
   const refused = await adapter.write("model", {}, fixtureCtx({ claudeBinary: unknownBinary }));
   assert.equal(refused.status, "refused");
   assert.ok(refused.reason.includes("3.0.0"));
-  const notImplemented = await adapter.write("model", {}, fixtureCtx());
-  assert.equal(notImplemented.status, "not-implemented");
-  assert.ok(notImplemented.reason.includes("model"));
+  const empty = await adapter.write("model", {}, fixtureCtx());
+  assert.equal(empty.status, "refused");
+  assert.ok(empty.reason.includes("empty"), empty.reason);
 });
 
 test("capabilities: claude declares its concepts, scopes, config root, login commands and the auth write (85a2)", () => {
@@ -162,7 +162,7 @@ test("capabilities: claude declares its concepts, scopes, config root, login com
   // does not follow; the account tests pin the function, this pins the
   // declared value on the test platform (linux)
   assert.equal(caps.credentialsFollowConfigRoot, process.platform !== "darwin");
-  assert.deepEqual(caps.writableConcepts, ["auth", "permission"]);
+  assert.deepEqual(caps.writableConcepts, ["auth", "permission", "model"]);
   // the terminal login whitelist's data source (85a2 AC3): the interactive
   // session's two commands, none Cell-scoped (the 2026-11-19 Q3 revision)
   assert.deepEqual(caps.loginCommands, [
@@ -246,6 +246,7 @@ test("read model: layers in claude's order, local over project over user", async
     defaultProvider: null,
     defaultModel: "sonnet",
     reasoningEffort: { neutral: "low", raw: "low" },
+    perModelReasoningEffort: {},
     providers: [],
     customModels: ["claude-custom-1"],
   });

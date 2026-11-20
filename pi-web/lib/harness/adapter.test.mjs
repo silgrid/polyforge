@@ -36,34 +36,47 @@ test("neutral mappers accept the harness spellings and reject unknown ones", () 
   assert.equal(concepts.neutralApprovalMode("accept-edits"), "accept-edits");
 });
 
-test("the known ranges are claude 2.1.x from 2.1.312 and pi 1.5.x (Q2 C)", () => {
-  assert.equal(adapter.CLAUDE_KNOWN_RANGE.label, "claude 2.1.x (>=2.1.312)");
+test("the known ranges are claude 2.x and pi 1.x, the first recorded versions kept as their floors (Q2 C; 85a3 Q4: the gate recognizes the same major)", () => {
+  assert.equal(adapter.CLAUDE_KNOWN_RANGE.label, "claude 2.x");
+  assert.equal(adapter.CLAUDE_KNOWN_RANGE.major, 2);
   assert.equal(adapter.CLAUDE_KNOWN_RANGE.minPatch, 312);
+  assert.equal(adapter.PI_KNOWN_RANGE.label, "pi 1.x");
   assert.equal(adapter.PI_KNOWN_RANGE.major, 1);
   assert.equal(adapter.PI_KNOWN_RANGE.minor, 5);
 });
 
-test("versionInKnownRange: claude takes 2.1.312 and 2.1.326, refuses 2.1.311, 2.2.0, 3.0.0 and 2.0.5; pi takes 1.5.0, refuses 1.4.0 and 1.6.0", () => {
+test("versionInKnownRange: same major is recognized whatever the minor or patch, another major is not (85a3 Q4)", () => {
   const claude = adapter.CLAUDE_KNOWN_RANGE;
   assert.equal(adapter.versionInKnownRange("2.1.312", claude), true);
   assert.equal(adapter.versionInKnownRange("2.1.326", claude), true);
-  assert.equal(adapter.versionInKnownRange("2.1.311", claude), false);
-  assert.equal(adapter.versionInKnownRange("2.2.0", claude), false);
+  assert.equal(adapter.versionInKnownRange("2.1.100", claude), true);
+  assert.equal(adapter.versionInKnownRange("2.2.0", claude), true);
+  assert.equal(adapter.versionInKnownRange("2.0.5", claude), true);
   assert.equal(adapter.versionInKnownRange("3.0.0", claude), false);
-  assert.equal(adapter.versionInKnownRange("2.0.5", claude), false);
   assert.equal(adapter.versionInKnownRange("not-a-version", claude), false);
   const pi = adapter.PI_KNOWN_RANGE;
   assert.equal(adapter.versionInKnownRange("1.5.0", pi), true);
-  assert.equal(adapter.versionInKnownRange("1.4.0", pi), false);
-  assert.equal(adapter.versionInKnownRange("1.6.0", pi), false);
+  assert.equal(adapter.versionInKnownRange("1.4.0", pi), true);
+  assert.equal(adapter.versionInKnownRange("1.9.0", pi), true);
+  assert.equal(adapter.versionInKnownRange("2.0.0", pi), false);
+});
+
+test("versionAtLeast: a model key's registered minimum floors a version (85a3 Q4)", () => {
+  assert.equal(adapter.versionAtLeast("2.1.312", "2.1.312"), true);
+  assert.equal(adapter.versionAtLeast("2.1.326", "2.1.312"), true);
+  assert.equal(adapter.versionAtLeast("2.2.0", "2.1.312"), true);
+  assert.equal(adapter.versionAtLeast("2.1.100", "2.1.312"), false);
+  assert.equal(adapter.versionAtLeast("1.4.0", "1.5.0"), false);
+  assert.equal(adapter.versionAtLeast("bogus", "1.5.0"), false);
+  assert.equal(adapter.versionAtLeast("1.5.0", "bogus"), false);
 });
 
 test("writeGate refuses an out-of-range version with the probe's reason", () => {
   const gate = adapter.writeGate({
     version: "3.0.0",
     known: false,
-    knownRange: "claude 2.1.x (>=2.1.312)",
-    reason: "version 3.0.0 is outside the known range claude 2.1.x (>=2.1.312)",
+    knownRange: "claude 2.x",
+    reason: "version 3.0.0 is outside the known range claude 2.x",
     source: "claude initialize",
   });
   assert.equal(gate.allowed, false);
@@ -74,7 +87,7 @@ test("writeGate refuses an unrecognized file structure with the structure reason
   const gate = adapter.writeGate({
     version: "2.1.326",
     known: false,
-    knownRange: "claude 2.1.x (>=2.1.312)",
+    knownRange: "claude 2.x",
     reason: "settings.json has an unrecognized top-level structure",
     source: "claude initialize",
   });
@@ -89,7 +102,7 @@ test("writeGate refuses a version it could not detect", () => {
 });
 
 test("writeGate allows a known version", () => {
-  const gate = adapter.writeGate({ version: "1.5.0", known: true, knownRange: "pi 1.5.x", source: "pi SDK package" });
+  const gate = adapter.writeGate({ version: "1.5.0", known: true, knownRange: "pi 1.x", source: "pi SDK package" });
   assert.deepEqual(gate, { allowed: true });
 });
 
@@ -113,17 +126,17 @@ function fakeAdapter(id, probeResult) {
 
 test("gatedWrite: an out-of-range version is refused with a reason, a known version answers not-implemented (Q1 A)", async () => {
   const unknown = fakeAdapter("pi", {
-    version: "1.4.0",
+    version: "2.0.0",
     known: false,
-    knownRange: "pi 1.5.x",
-    reason: "version 1.4.0 is outside the known range pi 1.5.x",
+    knownRange: "pi 1.x",
+    reason: "version 2.0.0 is outside the known range pi 1.x",
     source: "pi SDK package",
   });
   const refused = await adapter.gatedWrite(unknown, "model", {}, {});
   assert.equal(refused.status, "refused");
-  assert.ok(refused.reason.includes("1.4.0"));
+  assert.ok(refused.reason.includes("2.0.0"));
 
-  const known = fakeAdapter("pi", { version: "1.5.0", known: true, knownRange: "pi 1.5.x", source: "pi SDK package" });
+  const known = fakeAdapter("pi", { version: "1.5.0", known: true, knownRange: "pi 1.x", source: "pi SDK package" });
   const notImplemented = await adapter.gatedWrite(known, "model", {}, {});
   assert.equal(notImplemented.status, "not-implemented");
   assert.ok(notImplemented.reason.includes("model"));
@@ -143,8 +156,8 @@ test("gatedWrite probes before deciding: the probe runs even for a read-only con
 });
 
 test("the registry registers, lists and looks adapters up by id", () => {
-  const pi = fakeAdapter("pi", { version: "1.5.0", known: true, knownRange: "pi 1.5.x", source: "pi SDK package" });
-  const claude = fakeAdapter("claude", { version: "2.1.326", known: true, knownRange: "claude 2.1.x (>=2.1.312)", source: "claude initialize" });
+  const pi = fakeAdapter("pi", { version: "1.5.0", known: true, knownRange: "pi 1.x", source: "pi SDK package" });
+  const claude = fakeAdapter("claude", { version: "2.1.326", known: true, knownRange: "claude 2.x", source: "claude initialize" });
   adapter.registerHarness(pi);
   adapter.registerHarness(claude);
   assert.equal(adapter.getHarnessAdapter("pi"), pi);
