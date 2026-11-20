@@ -129,7 +129,7 @@ func TestStepTMPDIRProductionSpawn(t *testing.T) {
 	binB := standIn(t, rootB, "cat >/dev/null\n")
 	cfgA := &Config{PiBin: binA, ClaudeBin: binA, MachineID: "m-tmp-a", HarnessRoot: t.TempDir()}
 	cfgB := &Config{PiBin: binB, ClaudeBin: binB, MachineID: "m-tmp-b", HarnessRoot: t.TempDir()}
-	readTMPDIR := func(t *testing.T, cfg *Config, capsule string, h harness.Harness) string {
+	readTMPDIR := func(t *testing.T, cfg *Config, capsule string, h string) string {
 		t.Helper()
 		env := spawnedEnv(t, cfg, SpawnParams{
 			WorkItemID: "wi-tmp", CapsuleDir: capsule, InitialPrompt: "p",
