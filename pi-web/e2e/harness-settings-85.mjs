@@ -597,8 +597,9 @@ try {
     const m1Row = models.getByRole("row").filter({ hasText: "gateway/m1" });
     const m1Toggle = m1Row.getByRole("checkbox");
     await m1Toggle.waitFor({ state: "visible", timeout: ACTION_MS });
-    await m1Toggle.uncheck();
-    await waitFor(() => puts.some((body) => body.op === "models" && body.refs.includes("gateway/m1")),
+    await m1Toggle.click();
+    await waitFor(async () => puts.some((body) => body.op === "models" && body.refs.includes("gateway/m1"))
+      && !(await m1Toggle.isChecked()),
       ACTION_MS, "the table toggle never reached the writer");
     await models.getByRole("button", { name: "Save", exact: true }).click({ timeout: ACTION_MS });
     const resync = await waitFor(() => puts.find((body) => body.op === "resync") ?? false,
