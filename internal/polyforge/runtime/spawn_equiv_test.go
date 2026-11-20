@@ -132,7 +132,7 @@ func TestStepTMPDIRProductionSpawn(t *testing.T) {
 	readTMPDIR := func(t *testing.T, cfg *Config, capsule string, h string) string {
 		t.Helper()
 		report := filepath.Join(capsule, "tmp-report")
-		script := "printf '%s|%s|%s\\n' \"$TMPDIR\" \"$(test -d \\\"$TMPDIR\\\" && echo true || echo false)\" \"$(test -w \\\"$TMPDIR\\\" && echo true || echo false)\" > " + report + "\ncat >/dev/null\\n"
+		script := `printf '%s|%s|%s\n' "$TMPDIR" "$(test -d "$TMPDIR" && echo true || echo false)" "$(test -w "$TMPDIR" && echo true || echo false)" > ` + report + "\ncat >/dev/null\n"
 		if cfg.PiBin == cfg.ClaudeBin {
 			bin := standIn(t, capsule, script)
 			cfg.PiBin, cfg.ClaudeBin = bin, bin
@@ -146,7 +146,7 @@ func TestStepTMPDIRProductionSpawn(t *testing.T) {
 		var got []byte
 		for time.Now().Before(deadline) {
 			got, _ = os.ReadFile(report)
-			if string(got) == want+"|true|true\\n" {
+			if string(got) == want+"|true|true\n" {
 				return want
 			}
 			time.Sleep(10 * time.Millisecond)
