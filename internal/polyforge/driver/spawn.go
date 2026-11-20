@@ -645,6 +645,9 @@ func assembleStepPrompt(p promptParts) string {
 		if s := piCapabilityChange(p.ParamsChanged); s != "" {
 			parts = append(parts, s)
 		}
+		if len(parts) == 0 {
+			return renderOwnerMessages(p.OwnerMessages)
+		}
 		return renderOwnerMessages(p.OwnerMessages) + "\n" + strings.Join(parts, "\n")
 	}
 	if p.ShortEwrResume {
