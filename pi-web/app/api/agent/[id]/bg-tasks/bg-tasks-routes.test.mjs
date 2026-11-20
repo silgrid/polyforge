@@ -111,7 +111,7 @@ test("logs route returns the registered tail within the 8 KiB cap with truncated
 
   const capped = await logs(SESSION_A, "task-logs", "?maxBytes=100");
   assert.equal(capped.status, 200, JSON.stringify(capped.body));
-  assert.equal(capped.body.text, big.slice(-50), "the last 100 bytes, kept to character boundaries");
+  assert.equal(capped.body.text, big.slice(-100), "the last 100 bytes, kept to character boundaries");
   assert.equal(capped.body.startByte, 19_900);
   assert.equal(capped.body.endByte, 20_000);
   assert.equal(capped.body.totalBytes, 20_000);
