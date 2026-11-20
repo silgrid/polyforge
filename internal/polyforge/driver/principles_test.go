@@ -99,7 +99,7 @@ func TestShippedPrinciplesRenderedOnce(t *testing.T) {
 		// capsule shell lifetime and temporary-path rules, preserving the
 		// existing headroom and preventing unrelated growth of shared text.
 		if n := len("\n## Principles\n") + i + len(text); n > 3741 {
-			t.Errorf("%s: `## Principles` section is %d bytes, budget 3534", key, n)
+			t.Errorf("%s: `## Principles` section is %d bytes, budget 3741", key, n)
 		}
 	}
 	if seen != len(want) {
