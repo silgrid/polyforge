@@ -124,3 +124,11 @@ The in-repo Go tests pin the same facts statically
 `TestWorkstationCompose`, `TestWorkstationSmoke`) and drive the
 `--no-aihub` boot for real on a machine with an engine
 (`TestWorkstationImageEngine`, skipped without one).
+
+## 容器内更新
+
+通过 Pi Web 容器组件更新卡片或 `pf components` 更新 pf（含 daemon/AIHub）、
+车道与 skill、Pi Web，无需重建容器。进度与最终结果保存在 /components/upgrade-status.json。
+页面断线后自动重连。node、python、git、Podman、supervise 与底座只能换镜像。
+harness 等 #86 钉住发版清单后再升级。更新前请备份数据；回退须遵循各版 schema 迁移说明。
+使用 `pf components rollback` 回到 previous；排空等待支持取消与强制。

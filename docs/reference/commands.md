@@ -1762,3 +1762,16 @@ check and the failure codes are in
 [skills/polyforge/verbs/recall.md](../../skills/polyforge/verbs/recall.md),
 the fragment that owns the verb's shapes. What memory is and how
 recalls reach a step: the [concepts page](../concepts.md).
+## `pf components` — 工作站容器内组件更新
+
+`pf components check` 查询当前与渠道最新版；`pf components status` 读取卷上的
+upgrade-status.json。执行 `pf components upgrade --version V`，可追加
+`--force` 或 `--seed-dir D`（完整本地版本目录）。省略版本时取渠道最新版。
+`pf components rollback` 回到 previous，也支持 `--force`；
+`pf components cancel` 请求取消等待并重启 daemon 清排空。
+所有操作是 Host 级，不传 --profile；宿主模式拒绝，使用 tools/install.sh。
+
+排空拒收新作业（DAEMON-409），等待现有作业结束后继续；下载和 staging
+在切换前完成校验。退出码 75 表示为更新重启，supervise 即刻重新拉起 daemon；
+普通成功退出 0、配置拒绝 78 的含义不变。POST /ops/restart 仅宿主操作者可用，
+step/task 进程树不可访问。失败原因与目标版本保存在 upgrade-status.json。
