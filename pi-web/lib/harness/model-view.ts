@@ -23,6 +23,8 @@ export function buildModelRows(models: readonly ModelViewInput[], defaultModel: 
     const key = `${model.provider}\u0000${model.id}`;
     const row = groups.get(key);
     if (row) {
+      row.isDefault ||= defaultModel?.harness === model.harness
+        && defaultModel.provider === model.provider && defaultModel.id === model.id;
       if (!row.harnesses.includes(model.harness)) row.harnesses.push(model.harness);
       if (model.chatAvailable) row.chatAvailable = true;
       if (model.reasoning && !row.reasoning.includes(model.reasoning)) row.reasoning.push(model.reasoning);
