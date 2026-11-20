@@ -1,3 +1,4 @@
+// carries: components/ChatInput.tsx, components/ChatWindow.tsx, lib/default-model-client.ts
 import "#test-env";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -415,4 +416,46 @@ test("a claude composer never enters Bash mode: a leading ! shows the no-shell h
   for (const [locale, messages] of [["en", enLocale], ["zh-CN", zhCNLocale], ["zh-TW", zhTWLocale]]) {
     assert.equal(messages.messages["chat.claudeNoShell"], NO_SHELL[locale], locale);
   }
+});
+
+// ── 85a3 u4 (AC2): the claude model selector's 「设为默认」 star ────────────
+test("the claude model selector receives the star only when the save handler is passed, marking the stored default", async () => {
+  // ModelSelector renders its rows only while the popup is open (a measured
+  // anchor), so the wiring is pinned at the props the selector receives: a
+  // spy module captures them.
+  let captured = null;
+  const spyJiti = createJiti(import.meta.url, {
+    jsx: { runtime: "automatic" },
+    tsconfigPaths: true,
+    // the main jiti instance's ChatInput already sits in Node's require cache
+    // under its absolute path; a private module cache re-evaluates it here so
+    // the spy module the selector receives is this instance's
+    moduleCache: false,
+    virtualModules: {
+      "./ModelSelector": {
+        ModelSelector: function ModelSelectorSpy(props) { captured = props; return null; },
+      },
+      // the re-evaluated ChatInput must read the same i18n context the test
+      // provides, so useI18n stays the main instance's module
+      "@/hooks/useI18n": await jiti.import("@/hooks/useI18n"),
+    },
+  });
+  const { ChatInput: ChatInputSpy } = await spyJiti.import("./ChatInput.tsx");
+  const renderSpy = (claude) => renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(ChatInputSpy, {
+    onSend() {}, onAbort() {}, claude,
+  })));
+  // without the handler (the subagent profile form, say) the selector gets no star
+  renderSpy({ ...base, harness: "claude" });
+  assert.equal(captured.onSetDefault, undefined, "no save handler without the star");
+  assert.equal(captured.defaultValue, undefined, "no filled marker without the star");
+  // with it: the stored default marks the row (the native default, here opus)
+  renderSpy({ ...base, harness: "claude", model: "sonnet", defaultModel: "opus", onSetDefaultModel() {} });
+  assert.deepEqual(captured.defaultValue, { provider: "claude", modelId: "opus" });
+  assert.equal(typeof captured.onSetDefault, "function", "the star's save handler");
+});
+
+test("the claude star's save passes the row's model name, not the provider (the adapter the selector calls)", () => {
+  const saved = [];
+  claudeInputCallback("claudeSaveDefault", { claude: { onSetDefaultModel: (model) => saved.push(model) } })(undefined, "claude-row-model");
+  assert.deepEqual(saved, ["claude-row-model"]);
 });

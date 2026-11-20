@@ -19,6 +19,8 @@ import {
   compareClaudeVersions,
   isClaudeSkillOverrideState,
   type ClaudeSkillOverrideState,
+  isClaudeEffortLevel,
+  isClaudeModelName,
 } from "../claude-shared";
 import { isClaudeApprovalMode, type PermissionRules } from "./concepts";
 import { readJsonRecord } from "./redact";
@@ -104,16 +106,26 @@ export function parseClaudePermissionChange(
   return { reason: `unknown permission change: ${key}` };
 }
 
+/** A merge's refusal: the reason the write does not happen, nothing written. */
+export type ClaudeSettingsMergeRefusal = { refuse: string };
+
+function isMergeRefusal(value: unknown): value is ClaudeSettingsMergeRefusal {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    && typeof (value as Record<string, unknown>).refuse === "string"
+    && Object.keys(value).length === 1;
+}
+
 /**
  * One serialized read-merge-write-verify on the user-level settings.json.
- * `merge` receives the current record and answers the next one; every key it
- * does not name stays as it was. A file that exists but is not a JSON object
- * is refused, never overwritten; a write whose read-back check fails is
- * reported as an error, never as written.
+ * `merge` receives the current record and answers the next one — or a
+ * `{ refuse }` refusal, which writes nothing; every key it does not name
+ * stays as it was. A file that exists but is not a JSON object is refused,
+ * never overwritten; a write whose read-back check fails is reported as an
+ * error, never as written.
  */
 export async function patchClaudeUserSettings(
   configDir: string,
-  merge: (record: Record<string, unknown>) => Record<string, unknown>,
+  merge: (record: Record<string, unknown>) => Record<string, unknown> | ClaudeSettingsMergeRefusal,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
   const path = claudeUserSettingsPath(configDir);
   return serializeByKey(USER_SETTINGS_WRITE_CHAIN, path, async () => {
@@ -126,6 +138,7 @@ export async function patchClaudeUserSettings(
       current = record;
     }
     const next = merge(current);
+    if (isMergeRefusal(next)) return { ok: false, reason: next.refuse };
     writePrivateFileAtomicSync(path, `${JSON.stringify(next, null, 2)}\n`);
     const back = readJsonRecord(path);
     if (back === null || !jsonEqual(back, next)) {
@@ -334,6 +347,107 @@ export async function applyClaudePermissionChange(
         return { ok: true as const };
       });
       return outcome.ok ? { ok: true, summary: `projects[${cwd}].hasTrustDialogAccepted = ${String(trusted)}` } : outcome;
+    }
+  }
+}
+
+// ── the model write (85a3) ────────────────────────────────────────────────
+
+/**
+ * The model keys' registered minimum versions (owner ruling Q4: the ticket
+ * registers the model keys' minimums; the gate itself recognizes the major):
+ * 2.1.312 is the first recorded version that establishes the model and
+ * global effort keys. Per-model modelSettings writes remain unsupported until
+ * their native settings format is verified in 85a3-2.
+ */
+export const CLAUDE_MODEL_KEY_MIN_VERSIONS: Readonly<Record<string, string>> = {
+  model: "2.1.312",
+  effortLevel: "2.1.312",
+};
+
+/** A validated model change for the claude adapter's write(). One field per write. */
+export type ClaudeModelChange =
+  | { kind: "model"; model: string | null }
+  | { kind: "effortLevel"; level: string | null };
+
+/** The native keys one change kind touches, for the key-floor check. */
+export function claudeModelChangeKeys(change: ClaudeModelChange): readonly string[] {
+  switch (change.kind) {
+    case "model":
+      return ["model"];
+    case "effortLevel":
+      return ["effortLevel"];
+  }
+}
+
+/** 已核实的 Claude 原生全局强度值；ultracode 仅供命令侧读取。 */
+function isClaudeEffortSettingValue(value: unknown): boolean {
+  return isClaudeEffortLevel(value);
+}
+
+/**
+ * Parses the opaque write change into one validated model change; a reason
+ * when the change is not one the adapter knows (an unknown key, an invalid
+ * value). `null` removes the key; the model must be a name `--model` takes.
+ */
+export function parseClaudeModelChange(
+  change: Record<string, unknown>,
+): { change: ClaudeModelChange } | { reason: string } {
+  const keys = Object.keys(change);
+  if (keys.length === 0) return { reason: "the change is empty" };
+  if (keys.length > 1) {
+    return { reason: `one field per write; got ${keys.join(", ")}` };
+  }
+  const key = keys[0];
+  if (key === "model") {
+    const raw = change.model;
+    if (raw !== null && !isClaudeModelName(raw)) {
+      return { reason: `not a claude model name: ${String(raw)}` };
+    }
+    return { change: { kind: "model", model: raw as string | null } };
+  }
+  if (key === "effortLevel") {
+    const raw = change.effortLevel;
+    if (raw !== null && !isClaudeEffortSettingValue(raw)) {
+      return { reason: `unknown effort level: ${String(raw)}` };
+    }
+    return { change: { kind: "effortLevel", level: raw as string | null } };
+  }
+  return { reason: `unknown model change: ${key}` };
+}
+
+/**
+ * Applies one validated model change to the user-level settings.json.
+ * The caller has already passed the version gate and key floors.
+ */
+export async function applyClaudeModelChange(
+  change: ClaudeModelChange,
+  configDir: string,
+): Promise<{ ok: true; summary: string } | { ok: false; reason: string }> {
+  switch (change.kind) {
+    case "model": {
+      const model = change.model;
+      const result = await patchClaudeUserSettings(configDir, (record) => {
+        const next: Record<string, unknown> = { ...record };
+        if (model === null) delete next.model;
+        else next.model = model;
+        return next;
+      });
+      return result.ok
+        ? { ok: true, summary: model === null ? "model removed" : `model = ${model}` }
+        : result;
+    }
+    case "effortLevel": {
+      const level = change.level;
+      const result = await patchClaudeUserSettings(configDir, (record) => {
+        const next: Record<string, unknown> = { ...record };
+        if (level === null) delete next.effortLevel;
+        else next.effortLevel = level;
+        return next;
+      });
+      return result.ok
+        ? { ok: true, summary: level === null ? "effortLevel removed" : `effortLevel = ${level}` }
+        : result;
     }
   }
 }

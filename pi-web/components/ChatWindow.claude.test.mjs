@@ -75,7 +75,10 @@ test("a fresh composer passes the harness switch (with its model reset), the cla
   assert.match(fresh, /choosing: true/);
   assert.match(fresh, /model: newSessionClaudeModel/);
   assert.match(fresh, /onHarnessChange: chooseNewSessionHarness/);
-  assert.match(fresh, /onModelChange: setNewSessionClaudeModel/);
+  assert.match(fresh, /onModelChange: pickNewSessionClaudeModel/);
+  // 85a3-1: the star's filled marker and its save handler ride along
+  assert.match(fresh, /defaultModel: claudeDefaultModel/);
+  assert.match(fresh, /onSetDefaultModel: handleSetDefaultClaudeModel/);
   assert.match(fresh, /effort: newSessionClaudeEffort/);
   assert.match(fresh, /onEffortChange: handleClaudeEffortChange/);
   const open = block.slice(block.indexOf("if (!isClaudeSession)"));

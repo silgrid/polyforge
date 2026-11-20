@@ -187,6 +187,10 @@ export interface ClaudeComposerState {
   stateKnown?: boolean;
   /** polyforge#71 (AC6): a live model switch is under way — the selector shows pi's spinner. */
   modelSwitching?: boolean;
+  /** 85a3-1 (AC2): the claude selector's 「设为默认」 — the stored default's
+   * model name (the star's filled marker) and the save that writes it. */
+  defaultModel?: string;
+  onSetDefaultModel?: (model: string) => void;
 }
 
 /**
@@ -2186,6 +2190,11 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   // takes set_permission_mode while a turn runs), so it is not disabled by a running turn.
   const claudeLaunchPermissionMode = claudeSession && claude?.onLaunchPermissionModeChange ? (claude.launchPermissionMode ?? CLAUDE_LAUNCH_PERMISSION_MODE_DEFAULT) : null;
   const claudeLaunchPermissionModeChange = claudeLaunchPermissionMode !== null ? claude?.onLaunchPermissionModeChange : undefined;
+  // 85a3-1 (AC2): the star's save — ModelSelector hands the row's
+  // (provider, modelId); claude's default is the model name alone.
+  const claudeSaveDefault = useCallback((_provider: string, modelId: string) => {
+    claude?.onSetDefaultModel?.(modelId);
+  }, [claude?.onSetDefaultModel]);
   const claudeModelSelector = claude && claudeComposer ? (
     <ModelSelector
       options={claudeModelOptions(claude.availability, claude.model).map((model) => ({ provider: CLAUDE_PROVIDER, modelId: model, name: model }))}
@@ -2194,6 +2203,8 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       disabled={claudeBusy}
       busy={claude?.modelSwitching === true}
       confirmSwitch={confirmModelSwitch}
+      defaultValue={claude?.onSetDefaultModel && claude.defaultModel ? { provider: CLAUDE_PROVIDER, modelId: claude.defaultModel } : undefined}
+      onSetDefault={claude?.onSetDefaultModel ? claudeSaveDefault : undefined}
     />
   ) : null;
 

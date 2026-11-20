@@ -1,4 +1,4 @@
-// carries: lib/harness/pi.ts, lib/harness/redact.ts
+// carries: lib/harness/pi.ts, lib/harness/redact.ts, lib/harness/pi-native-write.ts
 import "#test-env";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -70,14 +70,16 @@ const noSentinel = (payload) => {
   for (const sentinel of SENTINELS) assert.ok(!text.includes(sentinel), `payload leaks ${sentinel}: ${text}`);
 };
 
-test("probeVersion: the injected SDK version decides the known range (Q2 C)", async () => {
+test("probeVersion: the injected SDK version decides the known range (Q2 C; 85a3 Q4: same major)", async () => {
   const known = await adapter.probeVersion(fixtureCtx({ piVersion: "1.5.0" }));
   assert.equal(known.version, "1.5.0");
   assert.equal(known.known, true);
-  assert.equal(known.knownRange, "pi 1.5.x");
-  const unknown = await adapter.probeVersion(fixtureCtx({ piVersion: "1.4.0" }));
+  assert.equal(known.knownRange, "pi 1.x");
+  const sameMajor = await adapter.probeVersion(fixtureCtx({ piVersion: "1.9.0" }));
+  assert.equal(sameMajor.known, true);
+  const unknown = await adapter.probeVersion(fixtureCtx({ piVersion: "2.0.0" }));
   assert.equal(unknown.known, false);
-  assert.ok(unknown.reason?.includes("1.4.0"));
+  assert.ok(unknown.reason?.includes("2.0.0"));
 });
 
 test("probeVersion without an injected version reads the installed SDK package", async () => {
@@ -110,13 +112,19 @@ test("probeVersion: an unrecognized top-level structure refuses a known-range ve
   }
 });
 
-test("write: an out-of-range version is refused with a reason; a known one answers not-implemented (Q1 A)", async () => {
-  const refused = await adapter.write("model", {}, fixtureCtx({ piVersion: "1.4.0" }));
+test("write: an unknown-major version is refused; the model write is gated and floored, other concepts stay not-implemented (85a3)", async () => {
+  const refused = await adapter.write("model", {}, fixtureCtx({ piVersion: "2.0.0" }));
   assert.equal(refused.status, "refused");
-  assert.ok(refused.reason.includes("1.4.0"));
-  const notImplemented = await adapter.write("model", {}, fixtureCtx({ piVersion: "1.5.0" }));
+  assert.ok(refused.reason.includes("2.0.0"));
+  // same major but below the model keys' registered minimum (1.5.0): refused
+  const belowFloor = await adapter.write("model", { thinkingLevel: "low" }, fixtureCtx({ piVersion: "1.4.0" }));
+  assert.equal(belowFloor.status, "refused");
+  assert.ok(belowFloor.reason.includes("1.5.0"), belowFloor.reason);
+  // an empty or unknown change is refused, never written
+  assert.equal((await adapter.write("model", {}, fixtureCtx({ piVersion: "1.5.0" }))).status, "refused");
+  const notImplemented = await adapter.write("skills", {}, fixtureCtx({ piVersion: "1.5.0" }));
   assert.equal(notImplemented.status, "not-implemented");
-  assert.ok(notImplemented.reason.includes("model"));
+  assert.ok(notImplemented.reason.includes("skills"));
 });
 
 test("capabilities: pi declares its concepts, scopes and config root (AC1)", () => {
@@ -125,7 +133,7 @@ test("capabilities: pi declares its concepts, scopes and config root (AC1)", () 
   assert.deepEqual(caps.scopes, ["user", "project"]);
   assert.equal(caps.configRootEnv, "PI_CODING_AGENT_DIR");
   assert.equal(caps.credentialsFollowConfigRoot, true);
-  assert.deepEqual(caps.writableConcepts, ["permission"]);
+  assert.deepEqual(caps.writableConcepts, ["permission", "model"]);
   assert.deepEqual(caps.readOnlyConcepts, ["env", "effective-config"]);
   // pi has no terminal login command (85a2 Q4): the TUI's /login is not a
   // whitelistable command, and the interactive session logs in through the
@@ -155,6 +163,7 @@ test("read model: defaults from settings.json, providers as existence only", asy
     defaultProvider: "anthropic",
     defaultModel: "claude-opus-4",
     reasoningEffort: { neutral: "high", raw: "high" },
+    perModelReasoningEffort: {},
     providers: [
       { name: "anthropic", hasApiKey: true },
       { name: "openrouter", hasApiKey: true },

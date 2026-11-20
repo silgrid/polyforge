@@ -1,3 +1,4 @@
+// carries: app/api/agent/new/route.ts
 import "#test-env";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -86,14 +87,15 @@ test("an unregistrable cwd is refused with the pi route's reason before any side
 });
 
 test("the model must be a valid claude model name (no fixed list); other commands are refused for claude", async () => {
+  // an absent model is no longer a refusal (85a3 u4: the server resolves the
+  // native default), and the retired modelAlias alone is not one either —
+  // dropped unread, the native default applies; every invalid model still is
   for (const body of [
-    { harness: "claude" },
     { harness: "claude", model: "" },
     { harness: "claude", model: "-bad" },
     { harness: "claude", model: "has space" },
     { harness: "claude", model: "x".repeat(129) },
     { harness: "claude", model: 5 },
-    { harness: "claude", modelAlias: "sonnet" },
     { harness: "codex", model: "claude-sonnet-5-5" },
     { harness: "claude", model: "claude-sonnet-5-5", type: "bash", command: "ls" },
   ]) {
@@ -323,5 +325,62 @@ test("claude's alias or any valid full name is stored and passed to --model verb
     assert.equal(index.getClaudeSessionRecord(body.sessionId).model, model);
     const launch = await waitFor(() => launches().slice(before).find((entry) => entry.argv.includes(body.sessionId)), 5_000, `no claude launch for ${model}`);
     assert.equal(launch.argv[launch.argv.indexOf("--model") + 1], model);
+  }
+});
+
+// ── 85a3 u4 (AC2, Q2 A): a new claude session's initial model is the native
+// `model` claude's settings hold ("default" when unset), still passed
+// explicitly — the argv names it. Each case gets its own config dir so the
+// native fixture cannot leak into the suites above.
+const nativeConfig = path.join(scratch, "native-config");
+const nativeEmpty = path.join(scratch, "native-empty");
+fs.mkdirSync(nativeConfig);
+fs.mkdirSync(nativeEmpty);
+fs.writeFileSync(path.join(nativeConfig, "settings.json"), JSON.stringify({ model: "opus" }));
+const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+
+test("a claude create without a model starts from the native default and passes it explicitly", async () => {
+  process.env.CLAUDE_CONFIG_DIR = nativeConfig;
+  try {
+    const before = launches().length;
+    const response = await post({ cwd: project, type: "ensure_session", harness: "claude" });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.deepEqual(body.model, { provider: "claude", modelId: "opus" });
+    assert.equal(index.getClaudeSessionRecord(body.sessionId).model, "opus");
+    const launch = await waitFor(() => launches()[before], 5_000, "no claude launch");
+    assert.equal(launch.argv[launch.argv.indexOf("--model") + 1], "opus");
+  } finally {
+    process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
+  }
+});
+
+test("without a native model the default alias is passed explicitly", async () => {
+  process.env.CLAUDE_CONFIG_DIR = nativeEmpty;
+  try {
+    const before = launches().length;
+    const response = await post({ cwd: project, type: "ensure_session", harness: "claude" });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.deepEqual(body.model, { provider: "claude", modelId: "default" });
+    const launch = await waitFor(() => launches()[before], 5_000, "no claude launch");
+    assert.equal(launch.argv[launch.argv.indexOf("--model") + 1], "default");
+  } finally {
+    process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
+  }
+});
+
+test("an explicit model wins over the native default", async () => {
+  process.env.CLAUDE_CONFIG_DIR = nativeConfig;
+  try {
+    const before = launches().length;
+    const response = await post({ cwd: project, type: "ensure_session", harness: "claude", model: "sonnet" });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.deepEqual(body.model, { provider: "claude", modelId: "sonnet" });
+    const launch = await waitFor(() => launches()[before], 5_000, "no claude launch");
+    assert.equal(launch.argv[launch.argv.indexOf("--model") + 1], "sonnet");
+  } finally {
+    process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
   }
 });

@@ -138,6 +138,12 @@ export interface ModelPayload {
   defaultModel: string | null;
   /** The default reasoning effort, neutral plus the harness's raw spelling. */
   reasoningEffort: { neutral: ReasoningEffort | null; raw: string | null } | null;
+  /**
+   * The per-model reasoning-effort overrides (85a3's second layer): pi's
+   * `modelThinkingLevels` keyed `provider/modelId`, claude's `modelSettings`
+   * keyed by model name — each the neutral value plus the raw spelling.
+   */
+  perModelReasoningEffort: Record<string, { neutral: ReasoningEffort | null; raw: string }>;
   providers: ProviderRef[];
   /** claude's own native modelPicker custom names (claude only; migrated there by #150). */
   customModels: string[];

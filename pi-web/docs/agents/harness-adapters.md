@@ -17,8 +17,9 @@ The harness adapters here are configuration adapters under `lib/harness/`.
 | File | What it is |
 |---|---|
 | `lib/harness/concepts.ts` | The neutral vocabulary: concept ids (`auth`, `config-root`, `model`, `permission`, `skills`, `mcp`, and the read-only `env`, `effective-config`), scopes (`managed/user/project/local/session` plus the `pi-web` pseudo-scope), the neutral reasoning-effort enum (`off<minimal<low<medium<high<xhigh<max`) and approval-mode enum, the per-concept payload types, and the `HarnessCapabilities` declaration — with the mcp concept's own capability since 85c (#85 c2): `mcp: { scopes, transports, cliAdd, enableToggle, toolFilter }`, claude holding the local scope and sse/ws but no enable toggle and no tool filter (its apply-to is having an entry or not, owner ruling Q1 A), pi writing its mcp.json itself with its own toggle and tool filter. Client-safe: never imports a server-only module (85a1b's UI reuses it). |
+| `lib/harness/effort-levels.ts` | The unified reasoning-effort mapping (85a3-1, AC3): the five levels both harnesses spell the same (low, medium, high, xhigh, max), each harness's own values listed apart (pi's off and minimal, claude's ultracode; claude's "default" is unset), and `unifiedGlobalEffortWrite()` — the global default's one-write mapping onto both natives (一写多读). Client-safe. |
 | `lib/harness/adapter.ts` | The `HarnessAdapter` interface (`probeVersion`, `capabilities`, `read`, `write`, and `diagnose` as a signature only), the adapter registry, the known-version ranges and the **write gate**. |
-| `lib/harness/pi.ts` / `lib/harness/claude.ts` | The two adapters. Both read native files directly and build every payload through `lib/harness/redact.ts`'s allow-list helpers. |
+| `lib/harness/pi.ts` / `lib/harness/claude.ts` | The two adapters. Both read native files directly and build every payload through `lib/harness/redact.ts`'s allow-list helpers. 85a3-1 adds the **model** write on pi's settings.json defaults (`defaultProvider`/`defaultModel`/`defaultThinkingLevel`, the per-model `modelThinkingLevels` keyed `provider/modelId`, through `pi-native-write.ts`'s locked read-merge-write) and on claude's user-level `model`/`effortLevel`. Claude's per-model `modelSettings` remains read-only until its native format is verified in 85a3-2. |
 | `lib/harness/claude-layers.ts` | claude's settings layers (managed > `.claude/settings.local.json` > `.claude/settings.json` > `$CLAUDE_CONFIG_DIR/settings.json`), the managed-settings path and the state file's placement, shared by the adapter and the effective-value computation. |
 | `lib/harness/effective.ts` | Per-layer effective values, each `{value, sourceScope, sourcePath, inferred: true}`. |
 | `lib/harness/compare.ts` | The read-back comparison: `consistent` / `inconsistent` (each harness's value listed) / `unsupported`. |
@@ -27,7 +28,7 @@ The harness adapters here are configuration adapters under `lib/harness/`.
 | `lib/harness/account.ts` / `account-rows.ts` / `account-rows-facts.ts` | The account layer (85a2): the two safe status runs (claude `auth status`, pi `auth check --provider --json --no-refresh` per source dir) and the client-safe Cell-row model the account page renders — see 「The account layer」 below. |
 | `app/api/harness/**` | The read routes: the harness list, one concept's read, the comparison, and one harness's native diagnostics (85a1b: `GET /api/harness/[harness]/diagnose`, the adapter's fixed safe command executed with its deadline and through the credential filter). All behind the API guard; `?cwd=` goes through the file-access check. |
 
-## The write gate (owner ruling 2026-11-19, Q1 A + Q2 C)
+## The write gate (owner ruling 2026-11-19, Q1 A + Q2 C; 85a3's Q4 revision)
 
 Every write goes through `writeGate()` before anything is touched:
 
@@ -37,17 +38,22 @@ Every write goes through `writeGate()` before anything is touched:
   once doctor provides it. claude's version comes from `probeClaude()` — the
   one probe implementation (`lib/claude-probe.ts`); no second probe exists,
   and none may be added.
-- **A known version** = a major.minor range with a floor (`claude 2.1.x`,
-  ≥ 2.1.312; `pi 1.5.x`) **plus** a recognizable file structure: a settings
-  file or state file that exists but is not a JSON object refuses the write.
-  `CLAUDE_RECORDED_VERSIONS` keeps its own fixture semantics untouched.
+- **A known version** (85a3's Q4 ruling: the gate recognizes the **same
+  major** — `claude 2.x`, `pi 1.x` — whatever the minor or patch) **plus** a
+  recognizable file structure: a settings file or state file that exists but
+  is not a JSON object refuses the write. The minor/patch of the first
+  version whose recording proves a key stays recorded as that key's floor:
+  each concept's write registers its keys' minimum versions
+  (`PI_MODEL_KEY_MIN_VERSIONS`, `CLAUDE_MODEL_KEY_MIN_VERSIONS` for the model
+  keys) and refuses a version below one, so a same-major version that
+  predates a key never writes it. `CLAUDE_RECORDED_VERSIONS` keeps its own
+  fixture semantics untouched.
 - **Refusal answers** `{status:"refused", reason}`; a known version with a
   concept whose write is not implemented answers
-  `{status:"not-implemented", reason}`. In 85a1 no concept write is
-  implemented (85a4, polyforge#150, made `permission` writable on both
-  adapters — claude's native user-level settings.json and state file, pi's
-  trust store — through `PUT /api/harness/<h>/<concept>`), so the gate is the whole write
-  path; 85a2–85a3–85a4, 85c and 85d add the concept writes on top of it, and
+  `{status:"not-implemented", reason}`. 85a4 (polyforge#150) made `permission`
+  writable on both adapters — claude's native user-level settings.json and
+  state file, pi's trust store — through `PUT /api/harness/<h>/<concept>`, and
+  85a2 landed claude's `auth` write; 85a3-1 adds the `model` write on both,
   85c's claude side lands through the official command, so the write result
   type carries both a file write and a command run.
 - **Reads are open to any version.**
@@ -95,11 +101,13 @@ launch-permission-mode layer is gone (claude's native
   checked against claude itself. Listing it is read-only — a wrong listing
   shows a server claude would not load, never writes anything. 85a2
   verifies this against the real claude.
-- **The `model` concept reads the user layer's defaults** (`defaultProvider`/
-  `defaultModel`/`defaultThinkingLevel` of the agent settings), while the
+- **The `model` concept reads the user layer's defaults**
+  (`defaultProvider`/`defaultModel`/`defaultThinkingLevel` of the agent settings,
+  claude's effective `model`/`effortLevel`/`modelSettings`), while the
   `effective-config` concept walks the project-over-user layers — so the two
-  can differ on the same cwd. The effective view is the merged one; 85a3,
-  which writes these keys, settles the display semantics.
+  can differ on the same cwd. The effective view is the merged one; 85a3-1
+  landed the model writes, and the model page's display semantics settle
+  with 85a3-2.
 - **`GET /api/harness` probes claude on its first call**: the list route asks
   the claude adapter for its version, which goes through `probeClaude`'s
   per-binary cache (one child process per binary per server life, up to 15 s

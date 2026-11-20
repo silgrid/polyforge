@@ -18,7 +18,7 @@ export interface VersionProbeResult {
   version: string | null;
   /** Whether this is a version the adapter recognizes for writes. */
   known: boolean;
-  /** The recognized range's label, e.g. "claude 2.1.x (>=2.1.312)". */
+  /** The recognized range's label, e.g. "claude 2.x". */
   knownRange?: string;
   /** Why the version is not known: outside the range, or an unrecognized file structure. */
   reason?: string;
@@ -26,7 +26,9 @@ export interface VersionProbeResult {
   source: string;
 }
 
-/** A recognized version range: a major.minor pair with a minimum patch (Q2 C). */
+/** A recognized version range: its major is what the gate matches (Q4), the
+ * minor/minPatch pair keeping the first version whose recording proves the
+ * keys — the floor a concept's key registration names. */
 export interface KnownVersionRange {
   major: number;
   minor: number;
@@ -34,20 +36,25 @@ export interface KnownVersionRange {
   label: string;
 }
 
-/** claude's recognized range (2.1.x from the first recorded version on; CLAUDE_RECORDED_VERSIONS keeps its own fixture semantics). */
+/** claude's recognized range: any 2.x (85a3's Q4 ruling — the same major is
+ * recognized, an unknown major or an unrecognized shape refuses); 2.1.312 is
+ * the first recorded version, the floor the model keys register.
+ * CLAUDE_RECORDED_VERSIONS keeps its own fixture semantics. */
 export const CLAUDE_KNOWN_RANGE: KnownVersionRange = {
   major: 2,
   minor: 1,
   minPatch: 312,
-  label: "claude 2.1.x (>=2.1.312)",
+  label: "claude 2.x",
 };
 
-/** pi's recognized range for interactive sessions: the SDK package's version (Q2 C). */
+/** pi's recognized range for interactive sessions: any 1.x (Q4), the SDK
+ * package's version the probe reads; 1.5.0 is the installed schema's
+ * version, the floor the model keys register. */
 export const PI_KNOWN_RANGE: KnownVersionRange = {
   major: 1,
   minor: 5,
   minPatch: 0,
-  label: "pi 1.5.x",
+  label: "pi 1.x",
 };
 
 /** `major.minor.patch` of a version string, null when it does not parse. */
@@ -57,11 +64,33 @@ export function parseVersion(version: string): [number, number, number] | null {
   return [Number(match[1]), Number(match[2]), Number(match[3])];
 }
 
+/**
+ * The gate's recognition (85a3, owner ruling Q4): the same major is known,
+ * whatever the minor or patch — an unknown major or an unrecognized file
+ * structure is what refuses, never a newer patch or minor. The floors a
+ * concept's own key registration names are checked separately by its
+ * write (versionAtLeast).
+ */
 export function versionInKnownRange(version: string, range: KnownVersionRange): boolean {
   const parsed = parseVersion(version);
   if (!parsed) return false;
-  const [major, minor, patch] = parsed;
-  return major === range.major && minor === range.minor && patch >= range.minPatch;
+  return parsed[0] === range.major;
+}
+
+/**
+ * Whether `version` is at or above `floor` (both `major.minor.patch`), the
+ * check a registered key minimum runs against the probed version (85a3 Q4:
+ * the gate recognizes the major; the key's floor refuses what came before
+ * the version whose recording proves the key). An unparsable side is below.
+ */
+export function versionAtLeast(version: string, floor: string): boolean {
+  const parsed = parseVersion(version);
+  const minimum = parseVersion(floor);
+  if (!parsed || !minimum) return false;
+  for (let index = 0; index < 3; index++) {
+    if (parsed[index] !== minimum[index]) return parsed[index] > minimum[index];
+  }
+  return true;
 }
 
 /** The context every adapter method takes; the routes fill it in, tests inject fixture paths. */
