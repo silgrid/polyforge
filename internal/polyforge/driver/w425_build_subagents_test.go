@@ -123,6 +123,7 @@ func TestBuildSubagentThresholdWrittenOnce(t *testing.T) {
 // a step that carries the sub-agent rules is told, as a driver fact, that
 // it dispatches none and records `main`; a Claude dispatch is not.
 func TestPiBuildDispatchIsToldSubagentsAreUnavailable(t *testing.T) {
+	// The default off fact remains the backwards-compatible build behavior.
 	// workflow contract 4: the fact is one of part 1's dispatch facts
 	const fact = "This dispatch runs on pi with the daemon-owned worker available, but pi_subagents is off"
 	pi := spawnStepPromptWith(t, developBundle, StepSpawn{StepID: "build", SpawnN: 1, Harness: "pi"})

@@ -8,6 +8,7 @@ import (
 )
 
 func TestBuiltInSubagentExtensionIsSequential(t *testing.T) {
+	// The registration is exercised through the embedded resource contract.
 	data, err := stepagentassets.FS.ReadFile("extensions/subagent/index.ts")
 	if err != nil {
 		t.Fatal(err)
