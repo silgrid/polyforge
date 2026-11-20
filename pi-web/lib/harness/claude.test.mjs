@@ -162,7 +162,7 @@ test("capabilities: claude declares its concepts, scopes, config root, login com
   // does not follow; the account tests pin the function, this pins the
   // declared value on the test platform (linux)
   assert.equal(caps.credentialsFollowConfigRoot, process.platform !== "darwin");
-  assert.deepEqual(caps.writableConcepts, ["auth", "permission"]);
+  assert.deepEqual(caps.writableConcepts, ["auth", "permission", "skills"]);
   // the terminal login whitelist's data source (85a2 AC3): the interactive
   // session's two commands, none Cell-scoped (the 2026-11-19 Q3 revision)
   assert.deepEqual(caps.loginCommands, [
@@ -418,11 +418,19 @@ test("write skills: malformed changes and a project write without cwd are refuse
     { name: "some-skill", state: "loud", scope: "user" },
     { name: "some-skill", scope: "user" },
     { name: "some-skill", state: "enabled", scope: "team" },
-    { name: "some-skill", state: "enabled", scope: "project" },
     { state: "enabled", scope: "user" },
   ]) {
     const refused = await adapter.write("skills", change, fixtureCtx());
     assert.equal(refused.status, "refused", JSON.stringify(change));
   }
+  // the no-cwd project case must actually omit cwd (u1 test fix: the first
+  // draft kept fixtureCtx's cwd, so the write succeeded)
+  const refusedNoCwd = await adapter.write(
+    "skills",
+    { name: "some-skill", state: "enabled", scope: "project" },
+    fixtureCtx({ cwd: undefined }),
+  );
+  assert.equal(refusedNoCwd.status, "refused");
+  assert.ok(refusedNoCwd.reason.includes("cwd"));
   assert.equal(JSON.parse(fs.readFileSync(path.join(configDir, "settings.json"), "utf8")).skillOverrides["some-skill"], undefined);
 });

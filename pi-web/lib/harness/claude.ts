@@ -23,7 +23,13 @@ import {
   type WriteChange,
   type WriteResult,
 } from "./adapter";
-import { applyClaudePermissionChange, parseClaudePermissionChange } from "./claude-native-write";
+import {
+  applyClaudePermissionChange,
+  parseClaudePermissionChange,
+  applyClaudeSkillsChange,
+  parseClaudeSkillsChange,
+  skillOverridesVersionAllowed,
+} from "./claude-native-write";
 import { claudeSettingsLayers, claudeStateFilePath, modelPickerOptions, type ClaudeSettingsLayer } from "./claude-layers";
 import {
   neutralApprovalMode,
@@ -274,7 +280,7 @@ export function createClaudeAdapter(): HarnessAdapter {
         toolFilter: false,
       },
       concepts: ["auth", "config-root", "model", "permission", "skills", "mcp", "env", "effective-config"],
-      writableConcepts: ["auth", "permission"],
+      writableConcepts: ["auth", "permission", "skills"],
       readOnlyConcepts: ["env", "effective-config"],
       configRootEnv: "CLAUDE_CONFIG_DIR",
       credentialsFollowConfigRoot: claudeCredentialsFollowConfigRoot(),
@@ -506,12 +512,22 @@ export function createClaudeAdapter(): HarnessAdapter {
     async write(concept: ConceptId, change: WriteChange, ctx): Promise<WriteResult> {
       // The shared gate first (adapter.ts): an undetected or unrecognized
       // version never reaches a write. auth has 85a2's write (the credential
-      // into the native env block) and the permission concept 85a4's; every
-      // other concept keeps gatedWrite's not-implemented.
-      if (concept !== "permission" && concept !== "auth") return gatedWrite(this, concept, change, ctx);
+      // into the native env block), the permission concept 85a4's, and the
+      // skills concept 85d's (the native skillOverrides, feature-floored);
+      // every other concept keeps gatedWrite's not-implemented.
+      if (concept !== "permission" && concept !== "auth" && concept !== "skills") return gatedWrite(this, concept, change, ctx);
       const probe = await probeVersion(ctx);
       const gate = writeGate(probe);
       if (!gate.allowed) return { status: "refused", reason: gate.reason };
+      if (concept === "skills") {
+        const floor = skillOverridesVersionAllowed(probe.version);
+        if (!floor.allowed) return { status: "refused", reason: floor.reason };
+        const parsed = parseClaudeSkillsChange(change, ctx?.cwd);
+        if ("reason" in parsed) return { status: "refused", reason: parsed.reason };
+        const applied = await applyClaudeSkillsChange(parsed.change, configDirOf(ctx));
+        if (!applied.ok) return { status: "refused", reason: applied.reason };
+        return { status: "written", summary: `${applied.summary} (claude ${probe.version})` };
+      }
       if (concept === "permission") {
         const parsed = parseClaudePermissionChange(change, ctx?.cwd);
         if ("reason" in parsed) return { status: "refused", reason: parsed.reason };
