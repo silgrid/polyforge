@@ -1,8 +1,10 @@
 // carries: hooks/usePolyforgeProgress*, app/api/polyforge/progress/route.ts, lib/polyforge-cards*, app/api/polyforge/cards/*, app/api/polyforge/watch/*
 // carries: app/api/polyforge/decisions/*
-// carries: hooks/useSubagentRuns*, app/api/agent/*/subagent-runs/*
+// carries: hooks/useSubagentRuns*
 // (G11's click window admits no session read: the subagent-runs poll that
-// broke it is this suite's contract to re-run on)
+// broke it is this suite's contract to re-run on; the route it reads stays
+// under the three existing app/api/agent/* suites' cap, as e2e-carries
+// pins)
 // pi#114 (wi_fnV3SUypLyIN) — Polyforge step list as a flow graph. Authored
 // pre-code against artifacts/spec.md (new-behaviour acceptance criteria only);
 // standalone like e2e/polyforge.mjs (own dev server, stub `pf` on PATH). A NODE is
