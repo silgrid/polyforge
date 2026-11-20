@@ -1029,3 +1029,33 @@ What changed under `tools/` and the dev channel of `tools/install.sh --dev`:
 What a project must change — nothing: the close's lines and the plan's
 section are the workflow's own texts; no script, conf key or command
 surface changed.
+
+## v0.2.4, the build fast check reuses green runs by key and the per-unit bar narrows to the touched roots (polyforge#182)
+
+- `fast_checks.py --repo` reuses a green command instead of executing it
+  when its key — the command text, its root's subtree tree hash of the
+  working tree (a private index over tracked modifications plus
+  untracked, unignored files; the repository root's key counts the whole
+  tree, nested roots included), its sorted declared `requires_env`/
+  `requires_cmd` prerequisites — is unchanged from the previous run in
+  the same result file: the entry is recorded `reused`, not executed,
+  its original log path and `exit_code: 0` kept, and a green entry of a
+  root or command the run never plans is carried in the file for a later
+  run or the close to reuse. A red, timed-out, never-started or
+  flaky-confirmed result is never reused, and a previous file that is
+  unreadable or not a usable result is no cache — everything runs, never
+  a usage error.
+- The per-unit bar narrows: `--repo <name> --phase fast --root <dir>`
+  (repeatable; `.` the repository's own root, a nested root its
+  directory) runs only the named roots' fast commands — the scoped
+  selection still runs once per touched repo at the close — and the
+  logs move one directory per run (`<log-dir>/<n>/<repo>/<seq>/`), so a
+  later run's executions never overwrite a reused entry's original log.
+- The close's `--close-scoped` reuse is keyed the same way (one key, two
+  modes): the whole-repo head comparison is gone, a commit outside a
+  nested root keeps that root's green runs reusable, and the per-unit
+  file's own `reused` and `carried` entries are accepted evidence.
+
+What a project must change — nothing: the command's flags and result
+shape are the workflow's own; no conf key, pf subcommand or schema
+changed.

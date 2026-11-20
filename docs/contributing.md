@@ -150,10 +150,13 @@ sweep runs.
 
 ## Verification tiers
 
-`code` commits run the fast gates of the packages they touch, and each build
-step (`code`, `fix`) also runs the `fast`- and `scoped`-phase commands of the
-engine's `--json` report below before it calls a unit green (never its
-`full`-phase ones); the full bar belongs to the `verification` step. The
+`develop` 的 build 逐单元只运行本单元定向测试，以及本单元写入路径所触及
+root 的 `fast` 命令：使用 `fast_checks.py --repo <name> --phase fast`
+加可重复的 `--root <dir>`（`.` 表示仓根）。同一命令文本、root 子树的
+工作树 tree hash、声明的环境前提不变时，复用上次一次执行即成功的绿结果，
+保留原日志；未选中的绿条目继续保留，红或经 flaky 重跑确认的结果不复用。
+`scoped` 选择只在收尾对整个改动执行一次，`full` 门槛属于
+`verification` 步骤。The
 develop lane's build close runs the same light selection before its
 hand-off (`fast_checks.py --close-scoped`): the existing tests the engine
 selects run there, not first at verification, and a full-tier fallback

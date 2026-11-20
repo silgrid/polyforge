@@ -37,7 +37,7 @@ var pf62NoNames = regexp.MustCompile(`polyforge|pi-web|spec-superflow|e2e-parall
 func TestPF62BuildDedupTextContract(t *testing.T) {
 	// the three rules, stated wherever the build instructions state them
 	r1 := "The targeted command runs only that unit's test, filtered by the test runner's own name filter (`go test -run`, `pytest -k`, or the suite's own scenario whitelist); a suite that offers no filter is named in the hand-off, and the whole suite runs once, in the scoped command, and nowhere else."
-	r2 := "A command's result already in hand on one tree (the same tree hash) is not re-run: a bare commit changes no tree, and a differently spelled command proves nothing new on it. The test-first red run is the build's own red evidence — beside it no manual worktree replay is made, the facts engine's replay is the record. A flaky failure is re-run only in the suite that failed, once, by the written fast-check command itself — the same rules verification runs — never by hand: the check already contains that one re-run, and a failure still red after it is red."
+	r2 := "A command's result already in hand for its key — the same command text, the same working-tree hash of the root it runs in, the same declared prerequisites — is not re-run: a bare commit changes no tree, and a differently spelled command proves nothing new on it. The test-first red run is the build's own red evidence — beside it no manual worktree replay is made, the facts engine's replay is the record. A flaky failure is re-run only in the suite that failed, once, by the written fast-check command itself — the same rules verification runs — never by hand: the check already contains that one re-run, and a failure still red after it is red."
 	r3 := "A long command writes its output to a log file and records its exit code (`> log 2>&1; echo exit=$?`), and the log is searched after the run; a long command is never piped straight into grep, head or tail — the pipe eats the failure detail and the exit code."
 	// the red-state limit rule (polyforge#157): a red-state run must
 	// fail fast, never hang past its limit
@@ -86,7 +86,7 @@ func TestPF62BuildDedupTextContract(t *testing.T) {
 		}},
 		"workflows/develop/README.md": {wants: []string{
 			"Each unit's targeted command runs only that unit's test (the test runner's own name filter; a suite that offers no filter is named in the hand-off and runs once, in the scoped command)",
-			"a result already in hand on one tree is not re-proven — a bare commit changes no tree, and beside the test-first red no manual worktree replay is made (the facts engine's replay is the record)",
+			"a result already in hand for its key — the same command text, the same working-tree hash of the root it runs in, the same declared prerequisites — is not re-proven: a bare commit changes no tree, and beside the test-first red no manual worktree replay is made (the facts engine's replay is the record)",
 			flakyLower,
 			r4Lower,
 			"a long command writes its output to a log file with its exit code and the log is searched after the run, never piped straight into grep, head or tail",

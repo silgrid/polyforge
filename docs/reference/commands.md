@@ -1276,7 +1276,24 @@ full reference.
   runs in that subdirectory), with each entry's own declared `timeout`;
   a command missing a declared `requires_env`/`requires_cmd`
   prerequisite is skipped and its reason recorded; the full phase never
-  runs, and the run never stops at a failure. A red command's failing
+  runs, and the run never stops at a failure. `--phase fast` narrows the
+  run to the fast commands alone (the per-unit bar's own shape: the
+  scoped selection is the close's, never the per-unit's), and a
+  repeatable `--root <dir>` to the named engine roots — `.` the
+  repository's own root, a nested root its directory, a name that is
+  neither a usage error naming the roots there are — the roots a
+  narrowed run never asks keeping their green entries carried in the
+  result file; without the flags every root the change reaches runs,
+  exactly as before. A green command whose key — its text, its root's
+  subtree tree hash of the working tree (tracked modifications plus
+  untracked, unignored files; the repository root's key counts the whole
+  tree, nested roots included), its sorted declared prerequisites — the
+  previous run in the same result file already proved is recorded
+  `reused` and not executed, its evidence (the original log path,
+  `exit_code: 0`) kept; a red, timed-out or flaky-confirmed result, or
+  any changed key dimension, runs again, and a previous result file
+  that is missing, unreadable or not a usable result is no cache: every
+  command runs, never a usage error. A red command's failing
   units are located from its output and each re-run once by its derived
   targeted re-run (verification's own rules, `pfstep/rerun` and
   `pfstep/flaky`), and a pass is recorded flaky; a red command every
@@ -1286,10 +1303,12 @@ full reference.
   only such a command turns green. Details: `repo, engine,
   reports[{root, mode, commands}], commands[{name, phase, root, cmd,
   exit_code, timed_out, not_started, duration_ms, log, skipped,
-  skip_reason, units[{kind, name, file, status, flaky, detail, rerun_log,
-  not_rerun}], confirmed, complete, not_confirmed}]`. Exit 0: every
+  skip_reason, tree, prereq_key, reused, carried, units[{kind, name,
+  file, status, flaky, detail, rerun_log, not_rerun}], confirmed,
+  complete, not_confirmed}]`. Exit 0: every
   command that ran exited 0 or turned green through its flaky re-runs
-  and confirmation; 1: a command stayed red after the flaky phase or
+  and confirmation, or was reused; 1: a command stayed red after the
+  flaky phase or
   was killed at its timeout; 2: not judged (no such repo, the
   engine missing or failing, an unreadable report, a repo the engine
   planned no command for).
@@ -1298,10 +1317,14 @@ full reference.
   plans (one shared implementation — the same engine
   `--json --light --base <merge-base>` request, the same choice, the same
   nested roots) over the repo's final tree and executes it on the host,
-  once per touched repo, after its fast checks; a command the same tree
-  already ran green (the same root and command, its evidence in a
-  `--reuse` result file of this repo — the close's fast-checks run) is
-  reused, not re-run, and a red command keeps the per-unit bar's one
+  once per touched repo, after its fast checks; a command whose reuse
+  key — the same key the `--repo` run reuses by: its root, its text as
+  its own report gave it, its root's subtree tree hash of the working
+  tree, its declared prerequisites — a green-in-one-run entry in a
+  `--reuse` result file of this repo already proved (never a red or
+  flaky-confirmed one, never an entry an older run wrote without its
+  key fields) is reused, not re-run, and a red command keeps the per-unit
+  bar's one
   targeted re-run and whole-command confirmation; a selection the engine
   answers with the full tier, or a selected command that cannot run,
   records `incomplete` with the reason kept and exits non-zero, claiming
@@ -1337,10 +1360,11 @@ full reference.
   self-reported `timeout` included — `--unit` naming no unit, a file
   naming no unit).
 
-The logs of both modes go to `<log-dir>/<repo>/<seq>/command.log`, the
-log dir being `--log-dir`, else `logs/` beside `--out`, else the
-capsule's next `runtime-state/fast-checks/<n>` (a .gitignore keeps them
-out of the capsule chain).
+The logs of both modes go to `<log-dir>/<n>/<repo>/<seq>/command.log`,
+one directory `<n>` per run (a later run's executions never overwrite a
+reused entry's original log), the log dir being `--log-dir`, else `logs/`
+beside `--out`, else the capsule's next `runtime-state/fast-checks/<n>`
+(a .gitignore keeps them out of the capsule chain).
 
 ## `pf config` — cli.toml and hot reload
 

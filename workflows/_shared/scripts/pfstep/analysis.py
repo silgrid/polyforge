@@ -62,7 +62,7 @@ class SelectedCommand:
     cmd: str = ""
     phase: str = ""
     source: str = ""
-    reused: str = ""  # the result file and entry a green same-tree run came from
+    reused: str = ""  # the result file and entry a green run of an unchanged reuse key came from
     exit_code: Optional[int] = None
     timed_out: bool = False
     skipped: bool = False

@@ -69,8 +69,9 @@ record exactly what ran.
    it: the daemon backs every commit up to aihub and cannot back up a rewritten history
    over it; a fix is a new commit. The red run just made is the build's own red evidence —
    beside it no manual worktree replay is made (the facts engine's replay is the record),
-   and a command's result already in hand on one tree (the same tree hash) is not re-run: a
-   differently spelled command proves nothing new on it. A flaky failure is re-run only in
+   and a command's result already in hand for its key — the same command text, the same
+   working-tree hash of the root it runs in, the same declared prerequisites — is not
+   re-run: a differently spelled command proves nothing new on it. A flaky failure is re-run only in
    the suite that failed, once, by the written fast-check command itself — the same rules
    verification runs — never by hand: the check already contains that one re-run, and a
    failure still red after it is red. A red-state run must exit non-zero within its limit
@@ -141,7 +142,8 @@ record exactly what ran.
    batch's fix ticket runs the full bar and closes without one) — `"$PF_PYTHON"
    "$PF_SHARED_DIR/scripts/fast_checks.py" --repo <name> --close-scoped --reuse
    artifacts/build/fast-checks/<repo>.json --json --out artifacts/build/scoped-close/<repo>.json`,
-   after that repo's fast checks (a green same-tree run in the reuse file is evidence, not a
+   after that repo's fast checks (a green run in the reuse file whose key — the command text,
+   the root's subtree tree hash, the declared prerequisites — matches is evidence, not a
    re-run): the same light-tier selection verification plans, one shared implementation, over the
    final tree. A red or `incomplete` result never hands off `done` without the owner's ruling —
    fix the change and re-run it, a full-tier fallback being the owner's to settle, a residual the
