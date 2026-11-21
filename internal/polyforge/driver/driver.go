@@ -463,6 +463,14 @@ func (d *Driver) Run(ctx context.Context) error {
 		if collected != nil {
 			res := collected
 			collected = nil
+			// The step-end sequence never completed for this hand-off (a
+			// parked cleanup or a predecessor that died mid-hook): re-run
+			// it BEFORE the settle writes the outcome (polyforge#200). A
+			// sweep that still cannot prove the processes gone keeps the
+			// park; a clean one settles the kept hand-off.
+			if stop, err := d.stepEndedHook(ctx, res.StepID); stop || err != nil {
+				return err
+			}
 			// Book the dead dispatch's runtime before its envelope settles
 			// (B4): the measure ends where the dispatch actually
 			// ran — at the envelope's daemon stamp — so daemon downtime and a
@@ -593,8 +601,8 @@ func (d *Driver) Run(ctx context.Context) error {
 			// into T ends where the wait began, the step-end hook runs (the
 			// process is gone), and the plan pass parks on the ask.
 			d.addUnbookedUntil(stepID, bookedFrom, awaiting.Since)
-			if d.cfg.StepEnded != nil && ctx.Err() == nil {
-				_ = d.cfg.StepEnded(ctx)
+			if stop, err := d.stepEndedHook(ctx, stepID); stop || err != nil {
+				return err
 			}
 			d.announceEnd(stepID, n, supervise.OutcomeAwaitingOwner, 0, "")
 			// the owner's message resumes this conversation (relay.go):
@@ -602,8 +610,8 @@ func (d *Driver) Run(ctx context.Context) error {
 			d.noteMessageResume(stepID)
 			continue
 		}
-		if d.cfg.StepEnded != nil && ctx.Err() == nil {
-			_ = d.cfg.StepEnded(ctx)
+		if stop, err := d.stepEndedHook(ctx, stepID); stop || err != nil {
+			return err
 		}
 		if verdict != nil {
 			// The supervisor judged the dispatch dead. The process is

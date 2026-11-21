@@ -539,6 +539,9 @@ func watchBlocked(ex *capsule.Execution) *protocol.WatchBlocked {
 	case driver.WriteFailedBlocked(reason):
 		return &protocol.WatchBlocked{Kind: driver.BlockerKindWriteFailed, Step: ex.CurrentStep, Reason: reason,
 			RequiredAction: driver.WriteFailedRequiredAction}
+	case driver.CleanupFailedBlocked(reason):
+		return &protocol.WatchBlocked{Kind: driver.BlockerKindCleanupFailed, Step: ex.CurrentStep, Reason: reason,
+			RequiredAction: driver.CleanupFailedRequiredAction}
 	}
 	return &protocol.WatchBlocked{Kind: "driver", Step: ex.CurrentStep, Reason: ex.BlockedReason,
 		RequiredAction: "resolve the cause, then resume the work item (`pf resume`) or cancel it"}

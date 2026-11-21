@@ -61,6 +61,30 @@ func WriteFailedBlocked(reason string) bool { return strings.HasPrefix(reason, w
 // WriteFailedRequiredAction is what releases a write_failed park.
 const WriteFailedRequiredAction = "fix the cause (aihub's refusal, or its reachability), then resume the work item (`pf resume <wi>`): the daemon makes the writes not made yet before the next step, or cancel it"
 
+// BlockerKindCleanupFailed is the blocked kind of a step-end process
+// cleanup that could not prove the step's processes gone (polyforge#200
+// Q5 B): the kept hand-off stays on the call ledger and the resume re-runs
+// the sweep before settling it.
+const BlockerKindCleanupFailed = "cleanup_failed"
+
+// cleanupFailedPrefix opens the blocked reason of a cleanup_failed park.
+const cleanupFailedPrefix = "cleanup failed: "
+
+// CleanupFailedRequiredAction is what releases a cleanup_failed park.
+const CleanupFailedRequiredAction = "clear the leftover processes the reason lists (they carry this work item's PF_WI_ID), then resume the work item (`pf resume <wi>`): the daemon re-runs the step-end sweep and, once it proves clean, settles the kept hand-off without re-running the step — or cancel it"
+
+// CleanupFailedBlocked reports whether a blocked reason is a
+// cleanup_failed park.
+func CleanupFailedBlocked(reason string) bool {
+	return strings.HasPrefix(reason, cleanupFailedPrefix)
+}
+
+// cleanupFailedReason is the blocked reason of a step-end cleanup that
+// could not prove the step's processes gone.
+func cleanupFailedReason(step string, err error) string {
+	return cleanupFailedPrefix + fmt.Sprintf("step %s ended and its process cleanup could not prove the step's processes gone — %v; the step's accepted hand-off stays on the call ledger, nothing was written as its outcome and no successor ran: %s", step, err, CleanupFailedRequiredAction)
+}
+
 // BlockerKindStepBlocked is the blocked kind of a step's own `blocked`
 // hand-off (the watch's kind name since workflow contract 2).
 const BlockerKindStepBlocked = "incomplete"
@@ -223,6 +247,29 @@ func (d *Driver) settleHandoff(ctx context.Context, stepID string, n int64, res 
 	crashpoint.At("driver.settled:" + stepID)
 	d.handoffEvents(stepID, res, before, d.Snapshot())
 	return res.Outcome == OutcomeIncomplete, nil
+}
+
+// stepEndedHook runs the step-end hook after a dispatch's process is
+// gone, before the dispatch's result or failure is written — the caller
+// stops (parked cleanup_failed, Run returns nil) when the hook reports a
+// cleanup it could not prove complete: the accepted hand-off stays on the
+// ledger, the successor never starts, and the resume settles the kept
+// hand-off only after the sweep proves clean (Q5 B). A cancelled context
+// still skips the hook (Q10 A: the restart/recovery Cleanup covers it).
+func (d *Driver) stepEndedHook(ctx context.Context, stepID string) (stop bool, err error) {
+	if d.cfg.StepEnded == nil || ctx.Err() != nil {
+		return false, nil
+	}
+	serr := d.cfg.StepEnded(ctx)
+	if serr == nil {
+		return false, nil
+	}
+	reason := cleanupFailedReason(stepID, serr)
+	if stop, err := d.blockHandoff(stepID, d.currentSpawnN(), reason); err != nil {
+		return stop, err
+	}
+	d.emit("blocked", map[string]any{"step": stepID, "reason": reason, "kind": BlockerKindCleanupFailed, "report": false})
+	return true, nil
 }
 
 // blockHandoff parks the work item blocked on the driver's own authority
