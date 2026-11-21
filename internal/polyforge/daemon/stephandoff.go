@@ -260,7 +260,23 @@ func (sc *stepCall) fastCheckProblem(spec driver.StepSpec, name, head string) st
 	if r.Schema != "pf-step-result/1" {
 		return fmt.Sprintf("repos/%s: %s is not a pf-step-result/1 result (schema %q); run `%s` from the capsule root", name, rel, r.Schema, cmd)
 	}
+	if r.Verdict == nil {
+		return fmt.Sprintf("repos/%s: %s is not a pf-step-result/1 result (no verdict); run `%s` from the capsule root", name, rel, cmd)
+	}
+	if *r.Verdict != "pass" {
+		return fmt.Sprintf("repos/%s: %s has verdict %s, not pass (%s); fix it, then run `%s` from the capsule root", name, rel, *r.Verdict, resultSummary(r.Summary), cmd)
+	}
 	return ""
+}
+
+// resultSummary is the one-line part of a result's summary a refusal
+// quotes: newlines become spaces and the text stops at 200 characters.
+func resultSummary(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); len(r) > 200 {
+		return string(r[:200]) + "…"
+	}
+	return s
 }
 
 // repoHead answers a task repo's HEAD ("" when it has none or git cannot
