@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { isApiRequestAllowed } from "@/lib/request-security";
-import { detectPolyforge } from "@/lib/polyforge-detect";
+import { detectPolyforge, isImageManaged } from "@/lib/polyforge-detect";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +16,9 @@ export const dynamic = "force-dynamic";
  * and a top-level catch answers 200 with the absent states. No 5xx path
  * exists; the only non-2xx is the in-route `isApiRequestAllowed` 403 JSON.
  * `?force=1` bypasses the 60s presence cache read (the 「重新检测」 control).
+ * The top level also answers `imageManaged` (polyforge#177, owner Q2: the
+ * status, detect and install reads are the three interfaces that name the
+ * image mode, one shared judgment).
  */
 export async function GET(request: Request) {
   if (!isApiRequestAllowed(request)) {
@@ -23,11 +26,12 @@ export async function GET(request: Request) {
   }
   const force = new URL(request.url).searchParams.get("force") === "1";
   try {
-    return NextResponse.json(await detectPolyforge(force));
+    return NextResponse.json({ ...(await detectPolyforge(force)), imageManaged: isImageManaged() });
   } catch {
     // Every helper degrades on its own; this catch only guards the assembly
     // itself — absent states, never an error surface, never 5xx.
     return NextResponse.json({
+      imageManaged: isImageManaged(),
       pfPresent: false,
       pfVersion: null,
       pfVersionBelowMinimum: false,

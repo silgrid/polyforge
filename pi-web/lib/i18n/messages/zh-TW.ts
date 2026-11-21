@@ -2361,6 +2361,7 @@ export const zhTWLocale: LocalePlugin = {
     "polyforge.install.needKey": "請輸入 API key（至少 8 個字元）。",
     "polyforge.install.install": "安裝 pf",
     "polyforge.install.update": "更新 pf",
+    "polyforge.install.imageManaged": "本機由工作站映像檔管理：pf 與 Pi Web 隨新映像檔更新，不從本頁安裝或更新。",
     "polyforge.install.busyReason": "安裝正在進行。",
     "polyforge.install.startFailed": "安裝無法啟動。",
     "polyforge.install.output": "安裝輸出",

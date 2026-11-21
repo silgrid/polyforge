@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { isApiRequestAllowed } from "@/lib/request-security";
+import { isImageManaged } from "@/lib/polyforge-detect";
 import { polyforgeInstallRun, subscribePolyforgeInstall, type PolyforgeInstallEvent } from "@/lib/polyforge-install";
+import { POLYFORGE_INSTALL_IMAGE_MANAGED_MESSAGE } from "@/lib/polyforge-install-pure";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -12,10 +14,17 @@ export const runtime = "nodejs";
  * event carrying the final run, after which the stream closes. A finished
  * run replays its lines and ends at once, so a page opened later shows the
  * result. Closing the stream never touches the run. 404 before any run.
+ *
+ * The workstation image answers the fact instead (polyforge#177): one
+ * decodable JSON body, never an event stream — the gate sits before any
+ * run is consulted, so nothing is ever replayed or subscribed.
  */
 export async function GET(request: Request) {
   if (!isApiRequestAllowed(request)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+  if (isImageManaged()) {
+    return NextResponse.json({ imageManaged: true, error: POLYFORGE_INSTALL_IMAGE_MANAGED_MESSAGE });
   }
   if (!polyforgeInstallRun()) {
     return NextResponse.json({ error: "no install has run" }, { status: 404 });

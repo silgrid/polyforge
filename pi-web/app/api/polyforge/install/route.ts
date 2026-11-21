@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
+import { isImageManaged } from "@/lib/polyforge-detect";
 import {
   PolyforgeInstallError,
   polyforgeInstallRun,
@@ -7,6 +8,7 @@ import {
   startPolyforgeInstall,
   type PolyforgeInstallRequest,
 } from "@/lib/polyforge-install";
+import { POLYFORGE_INSTALL_IMAGE_MANAGED_MESSAGE } from "@/lib/polyforge-install-pure";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -28,16 +30,25 @@ export const runtime = "nodejs";
  * (409 otherwise). The run outlives the request; its output streams
  * from GET /api/polyforge/install/events. Reach: pi-web's authenticated
  * surface (the proxy's login, plus the in-route gate); JSON-only.
+ *
+ * The workstation image refuses the whole entry (polyforge#177): the GET
+ * answers the fact with no versions read, the POST answers 409 with code
+ * image_managed, and the stream answers the fact — all before any probe,
+ * download or spawn, so `force` never reaches the gate and zero downloads,
+ * zero spawns and zero writes hold on every entry.
  */
 export async function GET(request: Request) {
   if (!isApiRequestAllowed(request)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+  if (isImageManaged()) {
+    return NextResponse.json({ imageManaged: true, versions: null, run: polyforgeInstallRun(), error: POLYFORGE_INSTALL_IMAGE_MANAGED_MESSAGE });
+  }
   const force = new URL(request.url).searchParams.get("force") === "1";
   try {
-    return NextResponse.json({ versions: await readPolyforgeInstallVersions(force), run: polyforgeInstallRun() });
+    return NextResponse.json({ imageManaged: isImageManaged(), versions: await readPolyforgeInstallVersions(force), run: polyforgeInstallRun() });
   } catch (error) {
-    return NextResponse.json({ versions: null, run: polyforgeInstallRun(), error: error instanceof Error ? error.message : "polyforge is unavailable" });
+    return NextResponse.json({ imageManaged: isImageManaged(), versions: null, run: polyforgeInstallRun(), error: error instanceof Error ? error.message : "polyforge is unavailable" });
   }
 }
 
@@ -61,7 +72,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, run: await startPolyforgeInstall(body) }, { status: 202 });
   } catch (error) {
     if (error instanceof PolyforgeInstallError) {
-      return NextResponse.json({ error: error.message }, { status: error.status });
+      return NextResponse.json({ error: error.message, ...(error.code ? { code: error.code } : {}) }, { status: error.status });
     }
     return NextResponse.json({ error: "the installer could not start" });
   }

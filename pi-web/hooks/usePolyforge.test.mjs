@@ -1,3 +1,4 @@
+// carries: hooks/usePolyforge.ts
 import "#test-env";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -50,6 +51,20 @@ test("cadence: 3s while the panel is open, 30s while closed", () => {
   assert.match(source, /const OPEN_STATUS_POLL_MS = 3000;/);
   assert.match(source, /const CLOSED_STATUS_POLL_MS = 30000;/);
   assert.match(source, /panelOpen \? OPEN_STATUS_POLL_MS : CLOSED_STATUS_POLL_MS/);
+});
+
+test("polyforge#177: the status read carries the image-managed fact through to the hook's surface", () => {
+  assert.match(source, /imageManaged\?: boolean/, "StatusResponse carries the optional imageManaged field");
+  assert.match(
+    source,
+    /setImageManaged\(Boolean\(body\.imageManaged\)\)/,
+    "the status read stores the fact exactly as the route answered it",
+  );
+  assert.match(
+    source,
+    /return \{\s*pfPresent,\s*imageManaged,/,
+    "the hook's result exposes the fact beside pfPresent",
+  );
 });
 
 test("the watch poll runs every 3s while open with a selection", () => {

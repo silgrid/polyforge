@@ -860,6 +860,63 @@ host changes: `tools/install.sh`'s `/usr/local/bin/pf` and
 `<data-dir>/release/current` are untouched. No action on upgrade beyond
 taking the new image.
 
+## v0.2.4, the first boot: identity, config and the persistent volumes (polyforge#176)
+
+The workstation container now persists everything in six independent
+named volumes — `pf-home` (the whole `/root`: cli.toml, the pi agent
+dir `PI_CODING_AGENT_DIR=/root/.pi/agent`, every login), the existing
+`polyforge-data` (nested inside pf-home at its canonical path), the
+components volume the seed installs into, the local AIHub's store at
+`/var/lib/polyforge/aihub`, the `/workspace` working tree and the
+existing `podman-storage`. The DEFAULT boot is the aihub one: the
+service `workstation` carries profile `aihub` and starts the local
+AIHub as a watched child, and running without an AIHub is the explicit
+opt-out — the service `workstation-noaihub`, profile `no-aihub`
+(#161's no-aihub default is flipped; a deployment that ran
+`--profile no-aihub` keeps working, and a bare `docker compose up`
+still starts nothing until a profile is named). Both profiles point
+supervise's component paths at `/components/current`.
+
+The entrypoint runs `pf first-boot` before supervise, and the boot is
+idempotent per stage: the seed install (a same-version noop), the AIHub
+identity — a daily user, its key and the local `workstation` project,
+established in one in-process transaction through the new local
+initialization entry `pf aihub init` (no network listener, refused
+inside a step or task environment and beside a running server) —
+cli.toml's default Cell (the local `http://127.0.0.1:8420` or the
+external server, `container_engine = "podman"`, the `/workspace`
+mapping), and the harness references toward `/components/current` (the
+pi packages entry and the claude skill symlinks; the host installer's
+own merge is untouched and the two are documented as independent). A
+fresh store initialized this way never gets the server's own bootstrap
+admin (usr_root / bootstrap-admin.key); the default Cell's key is a
+daily key by construction. The result record
+`<data-dir>/workstation/first-boot.json` publishes the phase (done, or
+`<stage>/failed` with the reason — never a credential) and is a
+published contract for the later management units. A completed boot
+skips itself (the first choice — local or the external mode whose
+`WORKSTATION_AIHUB_SERVER`/`KEY`/`PROJECT` inputs ride the container
+environment — is made exactly once); an interrupted boot resumes
+without duplicating the user (the same-named key is revoked and
+reissued), with the in-progress record — not the environment — as
+the authority for the choice (owner ruling of 2026-11-20 on review
+r1#1: environment inputs that disagree with the record refuse the
+start, and an external record's key input must be set again); done
+without the default Cell, or a Cell with no record, is an
+inconsistency the container refuses to start on. The smoke gains
+`first-boot`；`first-boot --external` 的计数桩在首启和重启全过程中只允许
+`POST /api/v1/machines/heartbeat`，创建用户、key、项目以及任何其他请求均令
+验收失败并点名方法与路径。No action on upgrade beyond taking the new image
+and compose. The image has not shipped in a release, so no real
+deployment exists to migrate; a dev host's leftover volumes are the
+only pre-#176 state, and one honest leftover comes with them: such a
+volume carries the daemon's recorded Cell identity against
+`http://localhost:8420` (the bare config default of that era), and the
+first boot's default Cell names `http://127.0.0.1:8420` — another
+identity domain, so the daemon refuses to start beside it (exit 78,
+its own message naming both). Recovery is the daemon's own rule:
+reset the old dev volume (the machine is disposable) or keep the old
+Cell under its recorded identity and let the first boot be skipped.
 ## v0.2.4, 容器内组件更新（polyforge#190）
 
 工作站镜像内可通过 Pi Web 的「容器组件更新」卡片或 `pf components`

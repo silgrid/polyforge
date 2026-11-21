@@ -51,7 +51,7 @@ pi-web open [--port N]  # 在浏览器中打开正在运行的服务
 pi-web update [--check] # 从发布通道更新全局安装
 ```
 
-更新时先用 `Ctrl+C` 停止正在运行的进程，再运行 `pi-web update`。它从随包发布的 `bin/pi-web-release-channel.json`（`{ "repo": "OWNER/REPO" }`）指定的发布通道更新：该仓库是本包自己的仓库（`silgrid/pi-web`）时，从 npm 安装 `@silgrid/pi-web@latest`，与重新执行安装命令相同；其他任何仓库都是 GitHub Releases 线，从该仓库的 GitHub Releases 更新（GitHub CLI `gh` 下载发布的 `.tgz` 与 `SHA256SUMS`，校验通过后用 `npm install -g` 安装该 tarball）。`pi-web update --check` 只报告通道和最新版本，不下载也不安装任何内容。没有有效标记文件的安装树（例如上游或复制来的包）会在获取或安装任何内容之前以非零退出码拒绝。本安装树的标记文件指向 Polyforge 仓库：Pi Web 在该仓库的 `pi-web/` 目录中开发，每个 Polyforge 发布都在 `pf` 旁附带 Pi Web 的 tarball（`silgrid-pi-web-<tag>.tgz`）和 `SHA256SUMS`，因此 `pi-web update` 与 `pf` 跟随同一个 tag。卸载时运行 `npm uninstall -g @silgrid/pi-web`。
+更新时先用 `Ctrl+C` 停止正在运行的进程，再运行 `pi-web update`。它从随包发布的 `bin/pi-web-release-channel.json`（`{ "repo": "OWNER/REPO" }`）指定的发布通道更新：该仓库是本包自己的仓库（`silgrid/pi-web`）时，从 npm 安装 `@silgrid/pi-web@latest`，与重新执行安装命令相同；其他任何仓库都是 GitHub Releases 线，从该仓库的 GitHub Releases 更新（GitHub CLI `gh` 下载发布的 `.tgz` 与 `SHA256SUMS`，校验通过后用 `npm install -g` 安装该 tarball）。`pi-web update --check` 只报告通道和最新版本，不下载也不安装任何内容。没有有效标记文件的安装树（例如上游或复制来的包）会在获取或安装任何内容之前以非零退出码拒绝。本安装树的标记文件指向 Polyforge 仓库：Pi Web 在该仓库的 `pi-web/` 目录中开发，每个 Polyforge 发布都在 `pf` 旁附带 Pi Web 的 tarball（`silgrid-pi-web-<tag>.tgz`）和 `SHA256SUMS`，因此 `pi-web update` 与 `pf` 跟随同一个 tag。卸载时运行 `npm uninstall -g @silgrid/pi-web`。在工作站镜像内，`pi-web update`（含 `--check`）在获取或运行任何内容之前即被拒绝：该机器由镜像管理，更新随新镜像交付（退出码 1，固定文案）。
 
 ## 配置
 

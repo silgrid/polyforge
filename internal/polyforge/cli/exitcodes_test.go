@@ -344,13 +344,14 @@ func TestDaemonVerbHelpOnlyExitGoldens(t *testing.T) {
 	// retired watch-probe; doctor is the #113 machine health face; version
 	// the #196 build string (the `--version` flag's verb form); init
 	// the #177 workspace layout; supervise is the container process
-	// supervisor of polyforge#160; chat was retired).
+	// supervisor of polyforge#160; first-boot the workstation container's
+	// one-time initialization of polyforge#176; chat was retired).
 	want := []string{
 		"file", "queue", "cancel", "recall", "remember", "memory",
 		"submit", "answer", "pause", "resume",
 		"wrap", "override", "params", "ops", "watch", "task", "step", "msg", "users", "api-keys", "machines", "projects",
 		"backup", "cell", "migrate",
-		"doctor", "version", "profile", "init", "config", "workflows", "daemon", "supervise", "components", "aihub",
+		"doctor", "version", "profile", "init", "config", "workflows", "daemon", "supervise", "first-boot", "components", "aihub",
 	}
 	if len(commands) != len(want) {
 		t.Fatalf("registry has %d commands, want %d", len(commands), len(want))

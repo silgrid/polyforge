@@ -48,4 +48,23 @@ done
 . /usr/local/bin/workstation-env-whitelist.sh
 workstation_env_whitelist
 
+# 3. first boot (polyforge#176, 84-components-C): the one-time
+#    initialization — the seed install into the components volume, the
+#    AIHub identity (the daily user, its key, the local project),
+#    cli.toml's default Cell, the harness references and the phase
+#    record — before supervise starts the server, so the server's own
+#    fresh-install bootstrap never fires. Idempotent: a completed
+#    first boot skips itself, and an interrupted one resumes (the
+#    record says which phase stopped). A refusal here ends the
+#    container: starting supervise on an uninitialized or
+#    inconsistent machine is never better.
+# 种子安装前尚无 components-volume PATH 软链，首启使用绝对 bootstrap 路径。
+/usr/local/libexec/polyforge/pf first-boot
+
+# 4. the first boot's inputs are consumed (84-components-C, review
+#    r1#2): the external-mode key is a credential, and the supervise
+#    children (Pi Web's agent sessions inherit the environment) must
+#    never see it — the three names go before the handover.
+unset WORKSTATION_AIHUB_SERVER WORKSTATION_AIHUB_KEY WORKSTATION_AIHUB_PROJECT
+
 exec /usr/local/libexec/polyforge/pf supervise "$@"

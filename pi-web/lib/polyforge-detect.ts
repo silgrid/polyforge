@@ -275,6 +275,23 @@ const WORKSTATION_COMPONENTS_ROOT = "/components";
  * read degrades on its own (a missing or unreadable root reads as a
  * host, never an error, never a guess). */
 
+/** The one image-mode judgment every entry reads (polyforge#177, owner
+ *  2026-11-19: the seed manifest is the only fact — pf absent must still
+ *  identify the image, and nothing probes /components). The seed root
+ *  parameter is the seam: an explicit root (the tests' fixture) wins, and
+ *  the `__piWebTestSeedRoot` global points the DEFAULT read at a fixture —
+ *  a test-only global (never an environment variable: this module never
+ *  reads process.env, and the detect contract pins that), unset in
+ *  production, so the default reads the constant. */
+declare global {
+  // eslint-disable-next-line no-var
+  var __piWebTestSeedRoot: string | undefined;
+}
+
+export function isImageManaged(seedRoot: string = globalThis.__piWebTestSeedRoot ?? WORKSTATION_SEED_ROOT): boolean {
+  return workstationImage(seedRoot);
+}
+
 /** install.sh's conventional clone path (a fixed
  *  `$HOME/.local/share/polyforge` root, verified in its source) on a
  * host; inside the workstation image (judged by the seed manifest,
