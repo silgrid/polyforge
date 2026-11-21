@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -495,6 +496,20 @@ func extMarkerPids(t *testing.T, wi string) []int {
 	return out
 }
 
+// extSweepMarkerPids hard-sweeps every live process carrying
+// PF_WI_ID=<wi>: a failed earlier run of one of these tests leaves its
+// escapee sleeps behind (nothing in the failed run cleaned them), and the
+// next run's marker scan must not see them.
+func extSweepMarkerPids(t *testing.T, wi string) {
+	t.Helper()
+	for range 2 {
+		for _, pid := range extMarkerPids(t, wi) {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 // TestPiSubagentLifecycleDescendants pins the Q3B descendant identity: a
 // stopped call kills its OWN child's descendants — the detached-pgroup
 // grandchild holding stdout and the double-forked marked escapee — and
@@ -504,6 +519,8 @@ func TestPiSubagentLifecycleDescendants(t *testing.T) {
 	dir := extProject(t)
 	const wi = "wi-pf200-u2-descendants"
 	const daemon = "dm-pf200-u2"
+	extSweepMarkerPids(t, wi)
+	t.Cleanup(func() { extSweepMarkerPids(t, wi) })
 
 	// the sibling: same WI and daemon markers, a DIFFERENT call marker —
 	// it is exactly what a triple-marker match must spare.

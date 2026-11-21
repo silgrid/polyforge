@@ -14,6 +14,7 @@
 
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentToolResult, ThinkingLevel } from "@earendil-works/pi-agent-core";
@@ -45,6 +46,163 @@ function envMillis(name: string, def: number): number {
 }
 const termGraceMs = (): number => envMillis("PF_SUBAGENT_TERM_GRACE_MS", 5000);
 const killWaitMs = (): number => envMillis("PF_SUBAGENT_KILL_WAIT_MS", 5000);
+
+// ---------------------------------------------------------------------------
+// Descendant identity (owner ruling Q3 B): before a stop's FIRST signal,
+// snapshot the child's descendants with their (pid, starttime) identities
+// and stamp the call with a unique inherited marker (PF_SUBAGENT_ID). The
+// stop's kill set is the snapshot plus a marker scan that requires this
+// call's marker AND (when the step runs under the daemon) this WI's and
+// daemon's markers — so a stop never touches a sibling call, the step
+// process itself, or another work item. An identity whose starttime no
+// longer matches (pid reuse) is never signaled. Without /proc (a non-Linux
+// host) the stop degrades to the child alone.
+
+interface ProcIdent {
+	pid: number;
+	starttime: string;
+}
+
+function readProcStat(pid: number): { state: string; ppid: number; starttime: string } | undefined {
+	try {
+		const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+		const rest = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+		return { state: rest[0], ppid: Number(rest[1]), starttime: rest[19] };
+	} catch {
+		return undefined;
+	}
+}
+
+function listProcPids(): number[] {
+	try {
+		return fs
+			.readdirSync("/proc")
+			.filter((n) => /^\d+$/.test(n))
+			.map(Number);
+	} catch {
+		return [];
+	}
+}
+
+// snapshotDescendants walks /proc once and answers root's live descendants
+// (never root itself) with their identities.
+function snapshotDescendants(root: number): ProcIdent[] {
+	const byParent = new Map<number, number[]>();
+	const idents = new Map<number, ProcIdent>();
+	for (const pid of listProcPids()) {
+		const st = readProcStat(pid);
+		if (!st || st.state === "Z") continue;
+		byParent.set(st.ppid, [...(byParent.get(st.ppid) ?? []), pid]);
+		idents.set(pid, { pid, starttime: st.starttime });
+	}
+	const out: ProcIdent[] = [];
+	const queue = [root];
+	const seen = new Set<number>([root]);
+	while (queue.length > 0) {
+		const cur = queue.shift() as number;
+		for (const child of byParent.get(cur) ?? []) {
+			if (seen.has(child)) continue;
+			seen.add(child);
+			const id = idents.get(child);
+			if (id) out.push(id);
+			queue.push(child);
+		}
+	}
+	return out;
+}
+
+// scanCallEscapees answers the live pids whose environment carries this
+// call's marker — and, under the daemon, this WI's and daemon's markers
+// too (the triple match). An unreadable environment is not provably ours.
+function scanCallEscapees(callMarker: string): ProcIdent[] {
+	const wanted: Record<string, string> = { PF_SUBAGENT_ID: callMarker };
+	if (process.env.PF_WI_ID) wanted.PF_WI_ID = process.env.PF_WI_ID;
+	if (process.env.PF_DAEMON_ID) wanted.PF_DAEMON_ID = process.env.PF_DAEMON_ID;
+	const self = process.pid;
+	const out: ProcIdent[] = [];
+	for (const pid of listProcPids()) {
+		if (pid <= 1 || pid === self) continue;
+		const st = readProcStat(pid);
+		if (!st || st.state === "Z") continue;
+		let env: string;
+		try {
+			env = fs.readFileSync(`/proc/${pid}/environ`, "utf8");
+		} catch {
+			continue;
+		}
+		const tokens = env.split("\x00");
+		let all = true;
+		for (const [k, v] of Object.entries(wanted)) {
+			if (!tokens.includes(`${k}=${v}`)) {
+				all = false;
+				break;
+			}
+		}
+		if (all) out.push({ pid, starttime: st.starttime });
+	}
+	return out;
+}
+
+// identSignal signals one identity, refusing a pid whose current occupant
+// no longer matches the snapshot (the pid-reuse mis-kill guard).
+function identSignal(id: ProcIdent, sig: NodeJS.Signals): void {
+	const st = readProcStat(id.pid);
+	if (!st || st.state === "Z" || st.starttime !== id.starttime) return;
+	try {
+		process.kill(id.pid, sig);
+	} catch {
+		/* gone */
+	}
+}
+
+// waitIdentsGone waits (bounded) for the identities to leave the live
+// process list and answers the ones still there.
+async function waitIdentsGone(ids: ProcIdent[], bound: number): Promise<ProcIdent[]> {
+	const deadline = Date.now() + bound;
+	for (;;) {
+		const live = ids.filter((id) => {
+			const st = readProcStat(id.pid);
+			return st !== undefined && st.state !== "Z" && st.starttime === id.starttime;
+		});
+		if (live.length === 0 || Date.now() >= deadline) return live;
+		await new Promise((res) => setTimeout(res, 25));
+	}
+}
+
+// stopTree runs the Q4 stop sequence over the child and its whole marked
+// tree — TERM, the bounded grace, KILL, the bounded wait, then ONE more
+// bounded marker round for an escapee that appeared mid-teardown — and
+// answers the pids it could not prove dead (empty = a clean stop).
+async function stopTree(childPid: number, callMarker: string): Promise<number[]> {
+	const grace = termGraceMs();
+	const wait = killWaitMs();
+	const childStat = readProcStat(childPid);
+	let killSet: ProcIdent[] = scanCallEscapees(callMarker);
+	if (childStat) {
+		killSet = [
+			{ pid: childPid, starttime: childStat.starttime },
+			...snapshotDescendants(childPid),
+			...killSet.filter((id) => id.pid !== childPid),
+		];
+	} else {
+		// the child is already gone (its exit events race the stop): only
+		// its marked escapees remain to collect
+	}
+	const seen = new Set<number>();
+	killSet = killSet.filter((id) => (seen.has(id.pid) ? false : (seen.add(id.pid), true)));
+	for (const id of killSet) identSignal(id, "SIGTERM");
+	let live = await waitIdentsGone(killSet, grace);
+	for (const id of live) identSignal(id, "SIGKILL");
+	live = await waitIdentsGone(killSet, wait);
+	if (live.length === 0) {
+		const late = scanCallEscapees(callMarker);
+		for (const id of late) identSignal(id, "SIGTERM");
+		const lateLive = await waitIdentsGone(late, grace);
+		for (const id of lateLive) identSignal(id, "SIGKILL");
+		live = await waitIdentsGone(late, wait);
+	}
+	return live.map((id) => id.pid);
+}
 
 function formatTokens(count: number): string {
 	if (count < 1000) return count.toString();
@@ -371,7 +529,12 @@ async function runSingleAgent(
 		args.push(`Task: ${task}`);
 		let wasAborted = false;
 		let unproved = false;
+		let leftovers: number[] = [];
 		let childPid: number | undefined;
+		// the per-call inherited marker (Q3 B): every descendant of this
+		// child carries it, and only processes carrying it (plus the WI and
+		// daemon markers, when present) are this stop's to kill.
+		const callMarker = randomUUID();
 
 		// A pre-aborted call never starts a child (pi 1.5.1+ shape).
 		if (signal?.aborted) {
@@ -384,44 +547,34 @@ async function runSingleAgent(
 			let proc: ReturnType<typeof spawn>;
 			let settled = false;
 			let exited = false;
-			let escalateTimer: ReturnType<typeof setTimeout> | undefined;
-			let stopTimer: ReturnType<typeof setTimeout> | undefined;
+			let stopping = false;
 
 			function finish(code: number | null) {
 				if (settled) return;
 				settled = true;
-				if (escalateTimer) clearTimeout(escalateTimer);
-				if (stopTimer) clearTimeout(stopTimer);
 				if (signal) signal.removeEventListener("abort", abortProcess);
 				resolve(code);
 			}
 
-			// TERM, then KILL after the bounded grace, then a bounded wait for
-			// a proved exit. proc.killed only says a signal was SENT — it is
-			// no proof of anything about an ignore-TERM child, so the exit
-			// events (not the send) decide.
-			function abortProcess() {
-				if (settled || exited) return;
+			// TERM, KILL after the bounded grace, a bounded wait for a PROVED
+			// exit — over the child AND its marked descendants (stopTree).
+			// Whatever cannot be proved dead becomes the stop's leftovers;
+			// the caller turns that into a cleanup-incomplete error instead
+			// of a plain one.
+			async function abortProcess() {
+				if (stopping || settled || exited) return;
+				stopping = true;
 				wasAborted = true;
-				if (!proc.kill("SIGTERM")) return;
-				escalateTimer = setTimeout(() => {
-					if (!settled && !exited) proc.kill("SIGKILL");
-				}, termGraceMs());
-				stopTimer = setTimeout(() => {
-					// the KILL wait ran out with no proved exit: answer now with a
-					// signal-death exit code and mark the stop UNPROVED, so the
-					// caller reports the leftover instead of a plain abort.
-					if (!settled) {
-						unproved = true;
-						finish(null);
-					}
-				}, termGraceMs() + killWaitMs());
+				leftovers = await stopTree(childPid as number, callMarker);
+				if (leftovers.length > 0) unproved = true;
+				finish(null);
 			}
 
 			proc = spawn(invocation.command, invocation.args, {
 				cwd: cwd ?? defaultCwd,
 				shell: false,
 				stdio: ["ignore", "pipe", "pipe"],
+				env: { ...process.env, PF_SUBAGENT_ID: callMarker },
 			});
 			let buffer = "";
 
@@ -495,7 +648,7 @@ async function runSingleAgent(
 		currentResult.exitCode = exitCode;
 		if (wasAborted) {
 			if (unproved) {
-				throw new Error(`Subagent was aborted; cleanup incomplete: child pid ${childPid} still running`);
+				throw new Error(`Subagent was aborted; cleanup incomplete: still running ${leftovers.join(", ")}`);
 			}
 			throw new Error("Subagent was aborted");
 		}
