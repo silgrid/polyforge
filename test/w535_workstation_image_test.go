@@ -403,21 +403,22 @@ type w535ComposeService struct {
 		Context    string `yaml:"context"`
 		Dockerfile string `yaml:"dockerfile"`
 	} `yaml:"build"`
-	Image       string            `yaml:"image"`
-	CapAdd      []string          `yaml:"cap_add"`
-	SecurityOpt []string          `yaml:"security_opt"`
-	Cgroup      string            `yaml:"cgroup"`
-	StopGrace   string            `yaml:"stop_grace_period"`
-	Volumes     []string          `yaml:"volumes"`
-	Environment map[string]string `yaml:"environment"`
-	EnvFile     []string          `yaml:"env_file"`
-	Ports       []string          `yaml:"ports"`
-	Profiles    []string          `yaml:"profiles"`
-	Command     []string          `yaml:"command"`
-	Privileged  bool              `yaml:"privileged"`
-	Devices     []string          `yaml:"devices"`
-	Pid         string            `yaml:"pid"`
-	Networks    map[string]struct {
+	Image         string            `yaml:"image"`
+	ContainerName string            `yaml:"container_name"`
+	CapAdd        []string          `yaml:"cap_add"`
+	SecurityOpt   []string          `yaml:"security_opt"`
+	Cgroup        string            `yaml:"cgroup"`
+	StopGrace     string            `yaml:"stop_grace_period"`
+	Volumes       []string          `yaml:"volumes"`
+	Environment   map[string]string `yaml:"environment"`
+	EnvFile       []string          `yaml:"env_file"`
+	Ports         []string          `yaml:"ports"`
+	Profiles      []string          `yaml:"profiles"`
+	Command       []string          `yaml:"command"`
+	Privileged    bool              `yaml:"privileged"`
+	Devices       []string          `yaml:"devices"`
+	Pid           string            `yaml:"pid"`
+	Networks      map[string]struct {
 		Aliases []string `yaml:"aliases"`
 	} `yaml:"networks"`
 }
@@ -457,6 +458,16 @@ func TestWorkstationCompose(t *testing.T) {
 		t.Fatal("polyforge#176: compose.yaml must carry the workstation-noaihub service (the explicit without-AIHub opt-out)")
 	}
 	for name, s := range map[string]w535ComposeService{"workstation": svc, "workstation-noaihub": noaihub} {
+		// polyforge#177: no fixed container_name (concurrent deployments and
+		// smoke runs clash on the name; the network alias is the stable name)
+		// and the image is parameterized — WORKSTATION_IMAGE runs a published
+		// image without any build, the local build tags the default.
+		if s.ContainerName != "" {
+			t.Fatalf("%s: container_name = %q, want none (a fixed container name makes concurrent deployments clash)", name, s.ContainerName)
+		}
+		if s.Image != "${WORKSTATION_IMAGE:-polyforge-workstation:local}" {
+			t.Fatalf("%s: image = %q, want the WORKSTATION_IMAGE-parameterized default polyforge-workstation:local", name, s.Image)
+		}
 		// AC1's minimal set, as a set: exactly SYS_ADMIN and NET_ADMIN.
 		if len(s.CapAdd) != 2 {
 			t.Fatalf("%s: cap_add = %v, want exactly the two measured capabilities", name, s.CapAdd)
@@ -1101,32 +1112,34 @@ func TestWorkstationSmokeFirstBootSkills(t *testing.T) {
 	}
 }
 
-// TestWorkstationSmokeProjectIsolation — review r1#4: the smoke owns
-// its runs, never an operator's deployment. The compose project is
-// fixed (`name: workstation` in compose.yaml) and the six volumes are
-// a real deployment's persistent home, so the smoke (whose first-boot
-// pass resets volumes) runs every compose call under its own project
-// name: `down -v` then only ever touches workstation-smoke_*, never
-// the operator's volumes. A collision with a concurrently running
-// deployment's fixed container_name fails the up explicitly instead.
+// TestWorkstationSmokeProjectIsolation — review r1#4, polyforge#177: the
+// smoke owns its runs, never an operator's deployment and never another
+// run's. The compose project is derived per run (clock + pid), so its
+// `down -v` only ever touches its own volumes — and the host port is
+// derived the same way (the fixed 30141 could clash with a running
+// deployment), overridable by WORKSTATION_WEB_PORT.
 func TestWorkstationSmokeProjectIsolation(t *testing.T) {
 	body := w535Deliverable(t, "dist/workstation/smoke.sh")
-	// the compose() helper carries the project name
-	helper := body[strings.Index(body, "compose() {"):]
-	if !strings.Contains(helper, "-p workstation-smoke") {
-		t.Fatal("polyforge#176 (review r1#4): the smoke's compose() helper must run under its own project (-p workstation-smoke) — its down -v may never touch the operator's workstation volumes")
+	// the per-run project: derived from the clock and the pid
+	if !strings.Contains(body, "smoke-$(date +%s)-$$") {
+		t.Fatal("polyforge#177: the smoke must derive a per-run unique project (clock + pid) — a fixed project name lets concurrent runs down each other's volumes")
 	}
-	// every raw docker compose invocation carries it too (the env and
-	// podman-verify passes and the first-boot pass's override calls);
-	// the bare `docker compose version` probes touch no project
+	// every docker compose invocation carries the per-run project (the
+	// compose() helper, the env and podman-verify passes and the
+	// first-boot pass's override calls); the bare `docker compose
+	// version` probes touch no project
 	for i, line := range strings.Split(body, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "docker compose") || strings.HasPrefix(trimmed, "docker compose version") {
+		if !strings.Contains(trimmed, "docker compose") || strings.Contains(trimmed, "docker compose version") {
 			continue
 		}
-		if !strings.Contains(trimmed, "-p workstation-smoke") {
-			t.Fatalf("polyforge#176 (review r1#4): smoke.sh line %d invokes docker compose without -p workstation-smoke: %q", i+1, trimmed)
+		if !strings.Contains(trimmed, `"$smoke_project"`) {
+			t.Fatalf("polyforge#177: smoke.sh line %d invokes docker compose without the per-run project: %q", i+1, trimmed)
 		}
+	}
+	// the host port is derived per run unless WORKSTATION_WEB_PORT overrides
+	if !strings.Contains(body, "WORKSTATION_WEB_PORT:-$((30500") {
+		t.Fatal("polyforge#177: the smoke must derive a per-run host port (30500 + clock/pid) unless WORKSTATION_WEB_PORT overrides it")
 	}
 }
 
