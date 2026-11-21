@@ -97,8 +97,16 @@ func extProject(t *testing.T) string {
 	if err := os.MkdirAll(nm, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, m := range []string{"pi-agent-core", "pi-ai", "pi-tui", "pi-coding-agent"} {
-		if err := os.Symlink(filepath.Join(pkg, "node_modules", "@earendil-works", m), filepath.Join(nm, m)); err != nil {
+	// The pi package's own node_modules does not nest itself: the
+	// pi-coding-agent entry links to the package directory itself.
+	targets := map[string]string{
+		"pi-agent-core":   filepath.Join(pkg, "node_modules", "@earendil-works", "pi-agent-core"),
+		"pi-ai":           filepath.Join(pkg, "node_modules", "@earendil-works", "pi-ai"),
+		"pi-tui":          filepath.Join(pkg, "node_modules", "@earendil-works", "pi-tui"),
+		"pi-coding-agent": pkg,
+	}
+	for m, target := range targets {
+		if err := os.Symlink(target, filepath.Join(nm, m)); err != nil {
 			t.Fatal(err)
 		}
 	}
