@@ -260,6 +260,14 @@ func (sc *stepCall) fastCheckProblem(spec driver.StepSpec, name, head string) st
 	if r.Schema != "pf-step-result/1" {
 		return fmt.Sprintf("repos/%s: %s is not a pf-step-result/1 result (schema %q); run `%s` from the capsule root", name, rel, r.Schema, cmd)
 	}
+	if r.Heads == nil {
+		return fmt.Sprintf("repos/%s: %s is not a pf-step-result/1 result (no heads); run `%s` from the capsule root", name, rel, cmd)
+	}
+	if got, ok := (*r.Heads)[name]; !ok {
+		return fmt.Sprintf("repos/%s: %s ran at no head of repos/%s, but HEAD is %s; run `%s` from the capsule root", name, rel, name, head, cmd)
+	} else if got != head {
+		return fmt.Sprintf("repos/%s: %s ran at %s, but HEAD is %s; run `%s` from the capsule root", name, rel, got, head, cmd)
+	}
 	if r.Verdict == nil {
 		return fmt.Sprintf("repos/%s: %s is not a pf-step-result/1 result (no verdict); run `%s` from the capsule root", name, rel, cmd)
 	}
