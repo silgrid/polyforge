@@ -101,18 +101,23 @@ func writeLifecycleLane(t *testing.T, wfDir string) {
 	yaml := `# yaml-language-server: $schema=../_schema/workflow-1.schema.json
 contract: 1
 name: pflifecycle
-description: "One terminal agent step - the production subagent lifecycle proof (polyforge#200): the step calls the daemon-owned worker, hands off done and the lane completes, so the step-end process sweep is judged with no successor spawn racing the scan."
+description: "Two agent steps - the production subagent lifecycle proof (polyforge#200): the first step calls the daemon-owned worker and hands off done, the second step runs long enough that the step-end sweep of the FIRST step is judged while the lane is still mid-flight (a residue that only the WI-end cleanup would collect is caught here)."
 steps:
   - id: solo
+    skill: solo-bounds
+    model_candidates: [pi:acme/m]
+  - id: second
     skill: solo-bounds
     model_candidates: [pi:acme/m]
 `
 	if err := os.WriteFile(filepath.Join(dir, "workflow.yaml"), []byte(yaml), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	step := "---\nname: solo\ndescription: Run the production subagent lifecycle proof and hand off done.\n---\n\n# solo\n\nFollow the skill; the deterministic model service scripts the turn.\n"
-	if err := os.WriteFile(filepath.Join(dir, "steps", "solo.md"), []byte(step), 0o644); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"solo", "second"} {
+		step := "---\nname: " + name + "\ndescription: Run the production subagent lifecycle proof and hand off done.\n---\n\n# " + name + "\n\nFollow the skill; the deterministic model service scripts the turn.\n"
+		if err := os.WriteFile(filepath.Join(dir, "steps", name+".md"), []byte(step), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	skill := "---\nname: solo-bounds\ndescription: The bounds of the lifecycle proof step.\ncommands: []\n---\n\n# solo-bounds\n\nThe step runs the scripted proof and hands off done.\n"
 	if err := os.WriteFile(filepath.Join(dir, "skills", "solo-bounds.md"), []byte(skill), 0o644); err != nil {
@@ -146,32 +151,37 @@ func newLifecycleModelService(t *testing.T) *lifecycleModelService {
 	return m
 }
 
-// lastUserText digs the last user message's text out of a request.
-func lastUserText(body map[string]any) string {
+// anyUserTextStartsWith reports whether ANY user message of the
+// conversation opens with the prefix: the worker's conversation carries
+// its "Task: …" prompt in its history on EVERY request (the step's does
+// not), so the role holds for the tool-result turns too — a last-message
+// check misclassifies those and drifts the turn scripts between the two
+// conversations.
+func anyUserTextStartsWith(body map[string]any, prefix string) bool {
 	msgs, _ := body["messages"].([]any)
-	for i := len(msgs) - 1; i >= 0; i-- {
-		msg, _ := msgs[i].(map[string]any)
+	for _, m := range msgs {
+		msg, _ := m.(map[string]any)
 		if msg == nil || msg["role"] != "user" {
 			continue
 		}
 		switch c := msg["content"].(type) {
 		case string:
-			return c
+			if strings.HasPrefix(strings.TrimSpace(c), prefix) {
+				return true
+			}
 		case []any:
-			var b strings.Builder
 			for _, blk := range c {
-				m, _ := blk.(map[string]any)
-				if m == nil {
+				bm, _ := blk.(map[string]any)
+				if bm == nil {
 					continue
 				}
-				if t, ok := m["text"].(string); ok {
-					b.WriteString(t)
+				if t, ok := bm["text"].(string); ok && strings.HasPrefix(strings.TrimSpace(t), prefix) {
+					return true
 				}
 			}
-			return b.String()
 		}
 	}
-	return ""
+	return false
 }
 
 func (m *lifecycleModelService) serve(w http.ResponseWriter, r *http.Request) {
@@ -181,7 +191,7 @@ func (m *lifecycleModelService) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m.mu.Lock()
-	worker := strings.HasPrefix(strings.TrimSpace(lastUserText(body)), "Task:")
+	worker := anyUserTextStartsWith(body, "Task:")
 	if worker {
 		m.workerTurns++
 	} else {
@@ -206,9 +216,14 @@ func (m *lifecycleModelService) serve(w http.ResponseWriter, r *http.Request) {
 	case stepTurns == 1:
 		blk = block{kind: "tool_use", id: "toolu_s1", name: "subagent",
 			text: `{"agent":"worker","task":"leave a detached marked sleep behind, then finish"}`}
-	case stepTurns == 2:
-		blk = block{kind: "tool_use", id: "toolu_s2", name: "bash",
+	case stepTurns == 2, stepTurns == 5:
+		blk = block{kind: "tool_use", id: "toolu_s" + fmt.Sprint(stepTurns), name: "bash",
 			text: `{"command":"cat > handoff-body.md <<'PFEORF'\n` + lifecycleHandoffBody + `PFEORF\npf step handoff --status done --body @handoff-body.md"}`}
+	case stepTurns == 4:
+		// the successor's slow turn: the window the first step's step-end
+		// sweep is judged inside
+		blk = block{kind: "tool_use", id: "toolu_s4", name: "bash",
+			text: `{"command":"echo running > pf200-step2.running; sleep 8; echo done > pf200-step2.finished"}`}
 	default:
 		blk = block{kind: "text", text: "handed off"}
 	}
@@ -242,8 +257,13 @@ func (m *lifecycleModelService) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	flush()
 	fe("content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
+	stop := "end_turn"
+	if blk.kind == "tool_use" {
+		// the wire protocol: a tool_use answer stops FOR the tools to run
+		stop = "tool_use"
+	}
 	fe("message_delta", map[string]any{"type": "message_delta",
-		"delta": map[string]any{"stop_reason": "end_turn", "stop_sequence": nil},
+		"delta": map[string]any{"stop_reason": stop, "stop_sequence": nil},
 		"usage": map[string]any{"output_tokens": 1}})
 	fe("message_stop", map[string]any{"type": "message_stop"})
 	flush()
@@ -393,18 +413,15 @@ func TestPiSubagentProductionHandoffCleanup(t *testing.T) {
 	}
 	defer func() { _ = ctl3.Process.Kill(); _ = ctl3.Wait() }()
 
-	// the lane is one terminal step: once it wraps, the step-end sweep has
-	// run (it precedes the result write that completes the lane) and no
-	// successor agent ever spawns — the scan window is closed.
-	inst.waitWIStatus(t, wi, "wrapped", 4*time.Minute)
-	d.settleClose(wi)
-
-	// the chain really ran: the model service saw the step and its worker
-	stepCalls, workerCalls := srv.calls()
-	if stepCalls < 2 || workerCalls < 1 {
-		t.Fatalf("the scripted chain did not run: step turns %d, worker turns %d (daemon log tail below)\n%s", stepCalls, workerCalls, d.logTail())
-	}
-	// the worker really left the escapee behind (its pid was recorded)
+	// the assertion window (r1#5): the first step's step-end sweep runs
+	// before the successor dispatches; while the successor's slow turn is
+	// mid-flight — the lane NOT yet wrapped, so the WI-end cleanup has not
+	// run — the first step's escapee must already be gone. A residue that
+	// only the wrap's cleanup would collect fails HERE.
+	waitUntil(t, 3*time.Minute, "the successor step never started its slow turn", func() bool {
+		_, err := os.Stat(filepath.Join(capDir, "pf200-step2.running"))
+		return err == nil
+	})
 	rawPid, err := os.ReadFile(filepath.Join(capDir, "pf200-grandchild.pid"))
 	if err != nil {
 		t.Fatalf("the worker never recorded its detached sleep: %v (daemon log tail below)\n%s", err, d.logTail())
@@ -414,9 +431,19 @@ func TestPiSubagentProductionHandoffCleanup(t *testing.T) {
 		t.Fatalf("bad grandchild pid %q", rawPid)
 	}
 	if lifecycleProcLive(grandchild) {
-		t.Fatalf("the step's setsid'd marked sleep (pid %d) survived the normal hand-off", grandchild)
+		t.Fatalf("the first step's setsid'd marked sleep (pid %d) outlived the step's own end: the step-end sweep did not collect it (daemon log tail below)\n%s", grandchild, d.logTail())
 	}
 
+	// the lane then wraps; after it, nothing carrying the work item's
+	// markers may remain at all.
+	inst.waitWIStatus(t, wi, "wrapped", 4*time.Minute)
+	d.settleClose(wi)
+
+	// the chain really ran: the model service saw the step and its worker
+	stepCalls, workerCalls := srv.calls()
+	if stepCalls < 4 || workerCalls < 1 {
+		t.Fatalf("the scripted chain did not run: step turns %d, worker turns %d (daemon log tail below)\n%s", stepCalls, workerCalls, d.logTail())
+	}
 	// zero residue, positively: no live process carries this WI's and
 	// this daemon's markers (settle bounded for the kernel's reaping).
 	var left []int
