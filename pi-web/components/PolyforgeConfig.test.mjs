@@ -673,7 +673,10 @@ test("below the capability floor the read facts stay and every write control is 
   assert.match(workflowCard, /const disabled = !writeCapable \|\| writing !== null;/);
   assert.match(workflowCard, /\{workflows && !workflows\.write_capable && \(\s*\n\s*<p className="config-scope-switch-reason">\s*\n\s*\{t\("polyforge\.settings\.workflowCapabilityHint"\)\}/);
   const editor = workflowCard.slice(workflowCard.indexOf("const renderEditor ="), workflowCard.indexOf("return (\n    <section"));
-  const controls = (editor.match(/<input|<button|<ConfigButton/g) ?? []).length;
+  // polyforge#151: the shared picker is one gated control (its select and
+  // manual fill both take its disabled prop; the old literal input lives in
+  // the picker's own file now, and `<inputProps` must not count as one).
+  const controls = (editor.match(/<input\b|<button\b|<ConfigButton\b|<ModelCandidatePicker\b/g) ?? []).length;
   const gated = (editor.match(/disabled=\{disabled/g) ?? []).length;
   assert.equal(gated, controls, "every write control is gated on the capability");
 });

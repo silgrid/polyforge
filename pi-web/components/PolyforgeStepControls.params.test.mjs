@@ -25,6 +25,7 @@ const jiti = createJiti(import.meta.url, {
     "react/jsx-runtime": jsxRuntimePath,
     "@/hooks/useI18n": stubsPath,
     "@/lib/polyforge-status": modulePath("lib/polyforge-status.ts"),
+    "@/lib/step-tiers": modulePath("lib/step-tiers.ts"),
     type: shimPath,
   },
 });
