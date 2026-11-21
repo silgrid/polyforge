@@ -16,8 +16,8 @@ export function useRef(value) { return slot(() => ({ current: value })); }
 // (SettingsUi) renders against the shim too; the context object is inert.
 export function createContext() {
   const context = { displayName: "shim-context" };
-  context.Provider = () => null;
-  context.Consumer = () => null;
+  context.Provider = function ShimProvider() { return null; };
+  context.Consumer = function ShimConsumer() { return null; };
   return context;
 }
 export function useState(initial) {
