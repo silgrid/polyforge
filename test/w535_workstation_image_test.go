@@ -1441,3 +1441,60 @@ func TestWorkstationSmokePersist(t *testing.T) {
 		}
 	})
 }
+
+// TestWorkstationSmokeHostDependencies — polyforge#177 (Q6): the host of
+// first-boot's local pass and persist needs nothing but Docker and the
+// system sh (POSIX tools allowed; curl, python3 and jq excluded — every
+// JSON/HTTP check runs inside the container). The PATH below carries only
+// the POSIX tools and the stub docker, so any host curl/python3 call in
+// those passes fails the run.
+func TestWorkstationSmokeHostDependencies(t *testing.T) {
+	root := w535Root(t)
+	dir := t.TempDir()
+	for name, content := range map[string]string{
+		"first-boot.json":        `{"phase":"done","mode":"local","defaultCell":"default","server":"http://127.0.0.1:8420","userReady":true,"keyReady":true,"imageManaged":true,"updatedAt":"2026-11-20T00:00:00Z"}`,
+		"cell-server.txt":        "http://127.0.0.1:8420\n",
+		"aihub-user.txt":         "usr_dep_stub\n",
+		"podman-image.txt":       "sha256:dep-image-stub\n",
+		"components-current.txt": "releases/v0.2.4-dev.1\n",
+		"components-digest.txt":  "dep-digest-stub\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// the allowed host surface: POSIX tools and the stub docker — no curl,
+	// no python3 anywhere on PATH
+	bin := t.TempDir()
+	if err := os.Symlink(filepath.Join(root, "test", "testdata", "workstation-smoke-stub", "docker"), filepath.Join(bin, "docker")); err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range []string{"sh", "env", "cat", "cp", "date", "dirname", "grep", "mkdir", "mktemp", "ps", "rm", "sed", "sleep", "tr"} {
+		if err := os.Symlink(filepath.Join("/usr/bin", tool), filepath.Join(bin, tool)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("sh", append([]string{filepath.Join(root, "dist/workstation/smoke.sh")}, args...)...)
+		cmd.Env = []string{
+			"PATH=" + bin,
+			"HOME=" + os.Getenv("HOME"),
+			"W535_SMOKE_SCENARIO=" + dir,
+			"WORKSTATION_SMOKE_STUB_PORT=38421",
+		}
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v must pass with only Docker and the system sh on the host:\n%s", args, out)
+		}
+		return string(out)
+	}
+	out := run("first-boot")
+	if !strings.Contains(out, "first-boot: PASS") {
+		t.Fatalf("the local first-boot pass must run on a Docker+sh host:\n%s", out)
+	}
+	out = run("persist")
+	if !strings.Contains(out, "persist: PASS") {
+		t.Fatalf("the persist pass must run on a Docker+sh host:\n%s", out)
+	}
+}
