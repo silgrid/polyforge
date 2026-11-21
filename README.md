@@ -83,7 +83,8 @@ The three pillars, in features:
 **Coordination** — the work runs accurately and recovers:
 
 - **Durable, resumable runs** — every step's work lives in a capsule
-  committed to the git revision chain; tmux keeps the daemon alive, a
+  committed to the git revision chain; tmux keeps the daemon alive on a
+  host (inside the workstation container, `pf supervise` does), a
   crash behaves exactly like a shutdown, and the run resumes where it
   stopped.
 - **Tiered verification** — a lane's verification step runs the tier it

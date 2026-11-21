@@ -432,7 +432,9 @@ pf [global flags] <verb> [verb flags] [positional args]
 - A daemon-face failure to dial (`dial unix ...`) means the daemon is not
   running on this machine; it is not a typed verdict about any work item.
   Run `pf daemon ensure` (it starts the daemon under its tmux restart loop,
-  or does nothing when one already answers), then retry the verb ONCE; if
+  or does nothing when one already answers; inside the workstation
+  container it is always the no-op — `pf supervise` owns the daemon
+  there), then retry the verb ONCE; if
   ensure fails, relay its message and suggest `pf doctor` (or check
   `--socket`). This is the fallback: normally the harness adapter already
   ran ensure when the session started (see Session start below).

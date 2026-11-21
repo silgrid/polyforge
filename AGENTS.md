@@ -20,8 +20,9 @@ below as a blocking finding.
 - **No aihub credentials in step agents.** Memory reads and writes go through
   the daemon. A new daemon or aihub entry point states whether a step agent
   can reach it; an unstated one is a finding.
-- **Supervision.** The daemon is kept alive by tmux (containers have no
-  systemd) and inherits only allowlisted environment variables.
+- **Supervision.** The daemon is kept alive by tmux on a host (containers have no
+  systemd) and by `pf supervise` inside the workstation container
+  (docs/workstation.md), and inherits only allowlisted environment variables.
 - **No backward-compatibility code.** No compat shims, dual paths or
   legacy fallbacks: when behavior changes, the old shape is deleted. The one
   exception is transition code a safe rollback needs, and it must state the
