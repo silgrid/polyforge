@@ -1,3 +1,4 @@
+// carries: bin/pi-web-update.js, app/api/app-update/*, lib/api-types.ts
 import "#test-env";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -75,7 +76,7 @@ test("the route's gate sits before any version read, and the response type carri
     "the image gate answers the fact",
   );
   assert.ok(
-    source.indexOf("isImageManaged()") < source.indexOf("loadUpdateStatus()"),
+    source.indexOf("isImageManaged()") < source.indexOf("await loadUpdateStatus()"),
     "the gate precedes every version read — nothing is fetched inside the image",
   );
   assert.match(

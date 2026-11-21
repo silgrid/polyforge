@@ -1,3 +1,4 @@
+// carries: bin/pi-web-update.js, app/api/app-update/*, lib/api-types.ts
 import "#test-env";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";

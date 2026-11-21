@@ -96,7 +96,7 @@ app/api/
   cwd/browse/route.ts             GET browse allowed cwd directories | POST create child directory
   open-in-explorer/route.ts       GET availability | POST open a cwd in the OS file manager (loopback only)
   files/[...path]/route.ts         GET ?type=list|read|download|meta|preview|watch | POST ?type=upload|upload-check|allow-link
-  app-update/route.ts             GET current vs latest published pi-web version
+  app-update/route.ts             GET current vs latest published pi-web version; inside the workstation image the SKIP_VERSION_CHECK shape plus top-level `imageManaged: true` — no request is ever made (polyforge#177)
   file-index/route.ts             GET file list for @-mentions
   git/status/route.ts             GET changed files for a cwd
   git/diff/route.ts               GET diff for one changed file

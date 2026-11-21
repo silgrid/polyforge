@@ -834,6 +834,9 @@ export interface AppUpdateResponse {
   latestVersion: string;
   updateAvailable: boolean;
   releaseUrl: string;
+  /** The workstation image's fact (polyforge#177): true inside the image,
+   *  where no update is ever offered. */
+  imageManaged?: boolean;
 }
 
 export interface PushConfigResponse {
