@@ -246,8 +246,11 @@ probe; the section UI itself is in [settings-ui.md](settings-ui.md).
   native modelPicker names — recomputed per write, the file's own retired
   candidates preserved); every one of those refusals precedes the write
   spawn. The models page's tier column writes through this same POST, one
-  harness at a time (add-first, each step's own fresh CAS, a partial
-  failure reported per harness with the draft kept; a rollback
+  harness at a time (add-first, a partial
+  failure reported per harness with the draft kept; EVERY step re-reads the
+  Host catalog together with the file hash from the SAME GET, so the plan
+  derives from the very state the CAS guards — a concurrent external write
+  either joins the plan or refuses the write with 409; a rollback
   derives its scope from the key, so a pre-#286 entry recorded against a
   workspace yaml rolls back through the same flat path as a new entry;
   below the 2.20.21 summarize floor, or with an unknown version,
