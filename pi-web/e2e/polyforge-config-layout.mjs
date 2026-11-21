@@ -188,11 +188,11 @@ try {
     await page.route("**/api/polyforge/config?*", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(CONFIG) }));
     await page.route("**/api/polyforge/workflows?*", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(workflowsFixture(project)) }));
     await page.route("**/api/polyforge/step-tiers", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
-      // polyforge#151: the shared picker's catalog read — a failed read is
-      // this suite's fixture (the manual fill stays with the reason).
-      pfPresent: true, pfVersion: "v2.20.11", capable: false,
-      reason: "the step-tier catalog needs pf 0.2.4 or newer (found v2.20.11)",
-      tiers: [], defined: { pi: [], claude: [] },
+      // polyforge#151: the shared picker's catalog read — a small capable
+      // catalog, so the grouped select renders beside the manual fill.
+      pfPresent: true, pfVersion: "v0.2.4", capable: true,
+      tiers: [{ tier: "default", candidates: ["pi:layout-tier-model"] }],
+      defined: { pi: ["layout-tier-model"], claude: [] },
     }) }));
     await page.route("**/api/polyforge/detect*", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
       pfPresent: true, pfVersion: "v2.20.11", pfVersionBelowMinimum: false, line: "internal",

@@ -962,7 +962,7 @@ try {
       defaultModel: null, defaultThinkingLevel: null, savedDefaultThinkingLevel: null,
       thinkingLevels: {}, thinkingLevelMaps: {}, thinkingLevelPins: {}, isScoped: false } }));
     await page.route("**/api/claude", (route) => route.fulfill({ json: { ...CLAUDE_REPORT, models: [{ value: "opus", source: "alias" }] } }));
-    await page.route(/\/api\/polyforge\/config\?host=1/, async (route) => {
+    await page.route(/\/api\/polyforge\/config(?:\?|$)/, async (route) => {
       if (route.request().method() === "POST") {
         const body = route.request().postDataJSON();
         tierWrites.push(body);
@@ -1010,7 +1010,7 @@ try {
       defaultModel: null, defaultThinkingLevel: null, savedDefaultThinkingLevel: null,
       thinkingLevels: {}, thinkingLevelMaps: {}, thinkingLevelPins: {}, isScoped: false } }));
     await page.route("**/api/claude", (route) => route.fulfill({ json: { ...CLAUDE_REPORT, models: [{ value: "opus", source: "alias" }] } }));
-    await page.route(/\/api\/polyforge\/config\?host=1/, async (route) => {
+    await page.route(/\/api\/polyforge\/config(?:\?|$)/, async (route) => {
       if (route.request().method() === "POST") {
         const body = route.request().postDataJSON();
         tierWrites.push(body);
@@ -1059,6 +1059,9 @@ try {
       models: { "anthropic:opus": "Opus" }, modelList: [{ id: "opus", name: "Opus", provider: "anthropic" }],
       defaultModel: null, defaultThinkingLevel: null, savedDefaultThinkingLevel: null,
       thinkingLevels: {}, thinkingLevelMaps: {}, thinkingLevelPins: {}, isScoped: false } }));
+    // the claude row merges into the same anthropic/opus row (one row, one
+    // tier cell — the unsaved draft below adds none)
+    await page.route("**/api/claude", (route) => route.fulfill({ json: { ...CLAUDE_REPORT, models: [{ value: "opus", source: "alias" }] } }));
     await page.route(/\/api\/polyforge\/config\?host=1/, (route) => route.fulfill({ json: {
       pfPresent: true, pfVersion: "v2.20.21", capable: true,
       stepTiersReason: "the step-tier catalog needs pf 0.2.4 or newer (found v2.20.21)",
