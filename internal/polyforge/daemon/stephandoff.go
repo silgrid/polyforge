@@ -167,6 +167,9 @@ func (sc *stepCall) laneRefusal(a stepcall.HandoffArgs, lines []stepcall.Line) (
 		if len(missing) > 0 {
 			return fmt.Sprintf("step %s registers the wrap attr(s) %s before it hands off done (the lane's wrap_attrs): run `pf step hub wrap-attrs <name> @<file>` for each, then hand off again", spec.ID, strings.Join(missing, ", ")), true
 		}
+		if why := sc.fastCheckRefusal(spec); why != "" {
+			return why, true
+		}
 	case stepcall.StatusFail:
 		if !spec.Gate {
 			return fmt.Sprintf("fail is a gate's verdict and %s is no gate: a step that cannot go on hands off blocked", spec.ID), true
@@ -191,6 +194,92 @@ func (sc *stepCall) laneRefusal(a stepcall.HandoffArgs, lines []stepcall.Line) (
 		return fmt.Sprintf("--to %s names no step at or before %s in lane %s (%s)", a.To, spec.ID, wf.Name, strings.Join(ids, ", ")), true
 	}
 	return "", true
+}
+
+// fastCheckRefusal answers why a step declaring `fast_check_proof` may not
+// hand off done ("" when it may): every task repo whose round's HEAD moved
+// needs the lane's result file, a pf-step-result/1 whose verdict is pass and
+// whose heads carry the repo at its current HEAD. A repo whose round start
+// is its HEAD at hand-off is no change (polyforge#211, C3'). The text starts
+// with the step — the hand-off's refuse() adds its own prefix — and quotes
+// the lane's command, so the daemon holds no repository's command.
+func (sc *stepCall) fastCheckRefusal(spec driver.StepSpec) string {
+	if spec.FastCheckProof == nil {
+		return ""
+	}
+	reposDir := filepath.Join(sc.j.capsuleDir, capsule.DirRepos)
+	var starts map[string]string
+	if st := sc.ex.Steps[sc.j.step]; st != nil && st.StartHeads != nil && st.StartHeads.Round == stepRound(sc.ex, sc.j.step) {
+		starts = st.StartHeads.Heads
+	}
+	var problems []string
+	for _, name := range taskrepo.Names(reposDir) {
+		dir := filepath.Join(reposDir, name)
+		head := repoHead(dir)
+		if head == "" {
+			continue // no HEAD, no commit of this step's: nothing to prove (Q11)
+		}
+		if start, ok := starts[name]; ok && start == head {
+			continue
+		}
+		if problem := sc.fastCheckProblem(spec, name, head); problem != "" {
+			problems = append(problems, problem)
+		}
+	}
+	if len(problems) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("step %s hands off done only with a passing fast check of each repo it changed (the lane's fast_check_proof): %s — then hand off again", spec.ID, strings.Join(problems, "; "))
+}
+
+// fastCheckProblem answers the failing check of one changed repo ("" when
+// its result is a readable pf-step-result/1 file).
+func (sc *stepCall) fastCheckProblem(spec driver.StepSpec, name, head string) string {
+	cmd := strings.ReplaceAll(spec.FastCheckProof.Command, "{repo}", name)
+	rel := strings.ReplaceAll(spec.FastCheckProof.Result, "{repo}", name)
+	abs := filepath.Join(sc.j.capsuleDir, filepath.FromSlash(rel))
+	if !insideCapsule(sc.j.capsuleDir, abs) {
+		return fmt.Sprintf("repos/%s: %s is not a pf-step-result/1 result (the path leaves the capsule); run `%s` from the capsule root", name, rel, cmd)
+	}
+	raw, err := os.ReadFile(abs)
+	if os.IsNotExist(err) {
+		return fmt.Sprintf("repos/%s: no fast-check result at %s; run `%s` from the capsule root", name, rel, cmd)
+	}
+	if err != nil {
+		return fmt.Sprintf("repos/%s: %s is not a pf-step-result/1 result (%v); run `%s` from the capsule root", name, rel, err, cmd)
+	}
+	var r struct {
+		Schema  string             `json:"schema"`
+		Verdict *string            `json:"verdict"`
+		Heads   *map[string]string `json:"heads"`
+		Summary string             `json:"summary"`
+	}
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return fmt.Sprintf("repos/%s: %s is not a pf-step-result/1 result (%v); run `%s` from the capsule root", name, rel, err, cmd)
+	}
+	if r.Schema != "pf-step-result/1" {
+		return fmt.Sprintf("repos/%s: %s is not a pf-step-result/1 result (schema %q); run `%s` from the capsule root", name, rel, r.Schema, cmd)
+	}
+	return ""
+}
+
+// repoHead answers a task repo's HEAD ("" when it has none or git cannot
+// read it).
+func repoHead(dir string) string {
+	out, err := taskrepo.Git(dir, "rev-parse", "--verify", "--quiet", "HEAD^{commit}")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
+// insideCapsule reports whether path stays inside the capsule root.
+func insideCapsule(capsuleDir, path string) bool {
+	rel, err := filepath.Rel(capsuleDir, path)
+	if err != nil || filepath.IsAbs(rel) {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // stamp gathers the header's facts from the daemon's own records — the
