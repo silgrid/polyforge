@@ -602,6 +602,74 @@ func pf209Manifest(t *testing.T, body string) string {
 	return p
 }
 
+// TestPF209DeliveryArms pins AC2: an `arms` manifest prints the same
+// metrics per trial arm (alphabetical arm order, manifest row order),
+// keeps the missing names in the honesty line, refuses a malformed arms
+// value with the named message, and without --events keeps the size and
+// first review while the event summary lines say n/a.
+func TestPF209DeliveryArms(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Fatalf("python3 is a pf doctor prerequisite and runs this tool: %v", err)
+	}
+	caps, events := pf209Fixture(t)
+	manifest := pf209Manifest(t, `{"version":"t","arms":{"flash":["dv-a","dv-b","dv-e","gone-x"],"glm":["dv-c","dv-a2","dv-d"]}}`)
+	text, code := pf209Run(t, caps, "--events", events, "--cohort", manifest)
+	if code != 0 {
+		t.Fatalf("review-firstpass --cohort --events: exit %d\n%s", code, text)
+	}
+	for _, want := range []string{
+		"== arm flash ==",
+		"runs: develop 3, completed 2, events missing 0, not completed (excluded): dv-e (1)",
+		"<=7: n 1 (wall known 1), wall median 34.0m p90 34.0m, per-file median 11.3m pooled 11.3m, rework 0.0% (0.0m of 34.0m), first-pass 1/1",
+		">22: n 0",
+		"total: n 2 (wall known 2), wall median 87.0m p90 140.0m, per-file median 11.2m pooled 11.1m, rework 17.4% (25.0m of 144.0m), first-pass 1/2",
+		"dispatches by model: flash 8 dispatches, 0 failed (0.0%); glm 2 dispatches, 1 failed (50.0%); opus 6 dispatches, 0 failed (0.0%)",
+		"all 16 dispatches, 1 failed (6.2%)",
+		"candidate switches (model-class): 1, of which 503 text: 1",
+		"dv-b: size 10 (8-22), wall 140.0m, owner wait 30.0m, build wall 80.0m, build rounds 2, first review FAIL, review rejections 1, verification rejections 0, rework 25.0m, failed dispatches 1, output 25.0 tok/s, estimate 5 (ratio 2.00)",
+		"dv-a: size 3 (<=7), wall 34.0m, owner wait 0.0m, build wall 20.0m, build rounds 1, first review PASS, review rejections 0, verification rejections 0, rework 0.0m, failed dispatches 0, output 30.0 tok/s, estimate 3 (ratio 1.00)",
+		"missing from the input (counted, excluded): gone-x (1)",
+		"== arm glm ==",
+		"runs: develop 3, completed 2, events missing 1",
+		"<=7: n 2 (wall known 1), wall median 60.0m p90 60.0m, per-file median 10.0m pooled 10.0m, rework 0.0% (0.0m of 60.0m), first-pass 2/2",
+		"total: n 3 (wall known 2), wall median 105.0m p90 150.0m, per-file median 8.0m pooled 6.8m, rework 0.0% (0.0m of 210.0m), first-pass 3/3",
+		"dispatches by model: flash 8 dispatches, 0 failed (0.0%); glm 3 dispatches, 2 failed (66.7%); opus 3 dispatches, 0 failed (0.0%)",
+		"candidate switches (model-class): 1, of which 503 text: 0",
+		"dv-c: size 25 (>22), wall 150.0m, owner wait 0.0m, build wall 119.0m, build rounds 1, first review PASS, review rejections 0, verification rejections 0, rework 0.0m, failed dispatches 2, output unknown tok/s, estimate none",
+		"dv-d: size 4 (<=7), wall unknown, owner wait unknown, build wall unknown, build rounds 1, first review PASS, review rejections unknown, verification rejections unknown, rework unknown, failed dispatches unknown, output unknown tok/s, estimate none",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the arm block must carry %q:\n%s", want, text)
+		}
+	}
+	if strings.Index(text, "== arm flash ==") > strings.Index(text, "== arm glm ==") {
+		t.Errorf("the arms are printed in alphabetical order:\n%s", text)
+	}
+
+	// malformed arms: the named message, exit 2.
+	bad := pf209Manifest(t, `{"arms":{"flash":"dv-a"}}`)
+	text, code = pf209Run(t, caps, "--cohort", bad)
+	if code != 2 || !strings.Contains(text, "the cohort manifest’s arms must be an object of lists of capsule dir names") {
+		t.Errorf("a malformed arms value: exit %d, output %q; want exit 2 with the named message", code, text)
+	}
+
+	// arms without --events: size and first review stay, event fields are
+	// unknown, the three event summary lines say n/a.
+	noev, code := pf209Run(t, caps, "--cohort", manifest)
+	if code != 0 {
+		t.Fatalf("arms without --events: exit %d\n%s", code, noev)
+	}
+	for _, want := range []string{
+		"== arm flash ==",
+		"n/a (no events dir)",
+		"dv-a: size 3 (<=7), wall unknown, owner wait unknown, build wall unknown, build rounds 1, first review PASS",
+	} {
+		if !strings.Contains(noev, want) {
+			t.Errorf("arms without --events must carry %q:\n%s", want, noev)
+		}
+	}
+}
+
 // TestPF209EstimateParse pins AC3 on polyforge#213's shared sample file:
 // each row is read inside `## 分析` -> `### 1.`, ok rows give N+M and
 // reject rows `none`; the sample file is the only sample set. The extra
