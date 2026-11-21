@@ -27,7 +27,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS = os.path.dirname(HERE)
 ENGINE = os.path.join(SCRIPTS, "verify-scope")
 FAST_CHECKS = os.path.join(SCRIPTS, "fast_checks.py")
-SCHEMA = json.load(open(os.path.join(SCRIPTS, "schema", "pf-step-result-1.json"), encoding="utf-8"))
+with open(os.path.join(SCRIPTS, "schema", "pf-step-result-1.json"), encoding="utf-8") as _schema_file:
+    SCHEMA = json.load(_schema_file)
 
 GO_MOD = "module demo\n\ngo 1.21\n"
 APP = "package app\n\n// Answer is the answer.\nfunc Answer() int {\n\treturn 42\n}\n"
