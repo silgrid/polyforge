@@ -9,8 +9,8 @@ package workflow
 // carries now required, a value gone from a key's closed set — is
 // incompatible and must be registered in contract-pending.md, which the
 // release that follows reads to bump the version once. A required key of a
-// key set base carries at all — a set new with its (optional) parent key —
-// is no such change: no lane valid under base could use it, and a parent
+// key set base does not carry at all — a set new with its (optional) parent
+// key — is no such change: no lane valid under base could use it, and a parent
 // key that is itself new and required is caught by its own set's rule.
 // Every other change is compatible: the golden file and the baseline are
 // regenerated in place, the version stays.

@@ -253,15 +253,19 @@ func (sc *stepCall) fastCheckProblem(spec driver.StepSpec, name, head string) st
 	if !insideCapsule(sc.j.capsuleDir, abs) {
 		return fmt.Sprintf("repos/%s: %s is not a pf-step-result/1 result (the path leaves the capsule); run `%s` from the capsule root", name, rel, cmd)
 	}
-	raw, err := os.ReadFile(abs)
-	if os.IsNotExist(err) {
-		return fmt.Sprintf("repos/%s: no fast-check result at %s; run `%s` from the capsule root", name, rel, cmd)
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Sprintf("repos/%s: no fast-check result at %s; run `%s` from the capsule root", name, rel, cmd)
+		}
+		return fmt.Sprintf("repos/%s: %s is not a pf-step-result/1 result (unreadable path: %v); run `%s` from the capsule root", name, rel, err, cmd)
 	}
+	if !insideCapsule(sc.j.capsuleDir, real) {
+		return fmt.Sprintf("repos/%s: %s is not a pf-step-result/1 result (the path leaves the capsule); run `%s` from the capsule root", name, rel, cmd)
+	}
+	raw, err := os.ReadFile(real)
 	if err != nil {
 		return fmt.Sprintf("repos/%s: %s is not a pf-step-result/1 result (%v); run `%s` from the capsule root", name, rel, err, cmd)
-	}
-	if real, err := filepath.EvalSymlinks(abs); err == nil && !insideCapsule(sc.j.capsuleDir, real) {
-		return fmt.Sprintf("repos/%s: %s is not a pf-step-result/1 result (the path leaves the capsule); run `%s` from the capsule root", name, rel, cmd)
 	}
 	var r struct {
 		Schema  string             `json:"schema"`
