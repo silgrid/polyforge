@@ -41,7 +41,7 @@ func operatorDirFixture(t *testing.T) string {
 		t.Fatal(err)
 	}
 	write("agents/reviewer.md", "# reviewer subagent\n")
-	// the subagent TOOL: the one extension the snapshot carries
+	// the subagent TOOL: one of the two extensions the snapshot carries
 	write("extensions/subagent/index.ts", "// subagent tool\n")
 	write("extensions/subagent/agents.ts", "// subagent discovery\n")
 	write("agents/nested/deep.md", "# nested subagent\n")

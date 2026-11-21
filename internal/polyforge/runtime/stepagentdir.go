@@ -17,9 +17,9 @@ package runtime
 //	                     preserved), only when the source has one
 //	agents/              subagent definition files — recursive COPY of
 //	                     the source tree; absent source dir ⇒ absent here
-//	extensions/subagent/ the subagent TOOL — recursive COPY of exactly
-//	                     that one extension directory; absent source ⇒
-//	                     absent here
+//	extensions/subagent/ the subagent TOOL — daemon-owned embed
+//	                     installed into the snapshot (same mechanism as
+//	                     the guard below)
 //	extensions/guard/    the step guard — daemon-owned embed: blocks a
 //	                     bash call that leaves a background job
 //	                     unwaited or sleeps over 3 s at once, and
