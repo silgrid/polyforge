@@ -6,11 +6,14 @@
 `modelPicker.options`（官方 settings reference：`{options: [{model, label?, description?,
 behavesAs?}], replaceBuiltInOptions?}`，v2.1.242 起；隔离 2.1.329 的 initialize
 录制证明 Claude 把自定义名列进自己的模型选择器，label 显示为 displayName）。存储真相
-只有用户级 `$CLAUDE_CONFIG_DIR/settings.json`：每次增删以 `PUT /api/harness/claude/model
-{customModels}` 提交整份下一状态，经适配器的共享版本闸门与 2.1.242 键级下界——留存条目
-保留自身 label/description/behavesAs 与位置、新名以 `{model}` 追加、`replaceBuiltInOptions`
-等字段不动；坏形状（modelPicker 非对象、options 非数组、行缺字符串 model）拒写且文件
-字节不变，未知版本一律拒写。清单上限沿用 `CLAUDE_CUSTOM_MODELS_MAX`（50）。
+只有用户级 `$CLAUDE_CONFIG_DIR/settings.json`，编辑器的列表也只取该层自己的名字（model
+读载荷的 `userCustomModels`；跨层合并的 `customModels` 视图仅供展示——managed 层的名字
+不进清单，也就永远不会被抄进用户层或「删除」成假成功）：每次增删以
+`PUT /api/harness/claude/model {customModels}` 提交**用户层**的整份下一状态，经适配器的
+共享版本闸门与 2.1.242 键级下界——留存条目保留自身 label/description/behavesAs 与位置、
+新名以 `{model}` 追加、`replaceBuiltInOptions` 等字段不动；坏形状（modelPicker 非对象、
+options 非数组、行缺字符串 model）拒写且文件字节不变，未知版本一律拒写。清单上限沿用
+`CLAUDE_CUSTOM_MODELS_MAX`（50）。
 
 进入分区时发出一次受保护的 `POST /api/claude-models-migration`（Q2：页面读一律无写
 副作用；dev 模式 StrictMode 可能双发，幂等无害）：空目标（缺 key 或合法 `options: []`）

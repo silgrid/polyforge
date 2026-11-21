@@ -313,7 +313,7 @@ components/
   MarkdownBody.tsx    markdown renderer
   SvgBlock.tsx             a ```svg fence in chat and the markdown file preview: preview only as an <img> data URL, source toggle, zoom, download (MermaidBlock's pieces)
   HarnessModelSettings.tsx 设置中的统一模型页：默认模型选择、按 provider 与精确 id 合并的双 harness 三列清单、pi 聊天开关和强度写入、pi provider 编辑与账号跳转；claude 分区挂载 ClaudeCustomModels
-  ClaudeCustomModels.tsx  模型页的 claude 分区（85a3-3）：Claude 原生 modelPicker 自定义名的编辑器（整表写经适配器闸门）与旧 customModels 的一次迁移——进入分区发受保护迁移 POST，非空目标出合并预览、按 digest 确认、409 冲突重预览，坏数据/未知版本显式报阻碍，managed 遮蔽显示「已保存、未生效」
+  ClaudeCustomModels.tsx  模型页的 claude 分区（85a3-3）：Claude 原生 modelPicker 自定义名的编辑器（只列、只写用户层自己的名单——model 读载荷的 userCustomModels，r1#1；整表写经适配器闸门）与旧 customModels 的一次迁移——进入分区发受保护迁移 POST，非空目标出合并预览、按 digest 确认、409 冲突重预览，坏数据/未知版本显式报阻碍，managed 遮蔽显示「已保存、未生效」
   ModelsConfig.tsx    统一模型页中的 models.json 草稿编辑器；保存经 pi 适配器版本闸门，托管 provider 的模型行与上下文窗口共用 Save
   AccountSettings.tsx the Settings › 账号 page (85a2, polyforge#142): the left column's harness list over the account route's read — the interactive claude card, the per-Cell daemon-step rows (状态、来源含「共享 default」、配置根、凭据是否跟随配置目录、步骤能否使用及原因; the keychain hint when the capability says the credentials do not follow), the credential form and the one-shot login terminals of the declared login commands
   PiAccountLogin.tsx pi's sign-in on Account › pi (85a2): the moved OAuth login/logout flows, the API-key form and the Add-provider picker (built-in providers only; pi 专属的自定义 provider 定义在统一模型页编辑；登录继续使用账号页)
