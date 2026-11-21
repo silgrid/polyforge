@@ -147,3 +147,36 @@ async function answerRefusal(hook, posts, index) {
   await settle();
   hook.flush();
 }
+
+// polyforge#151 (85b2, u6): the override row is the shared picker — the
+// tier catalog rides the watch snapshot (G11: no read of its own), the
+// manual fill keeps its data-pf-step-controls-model hook, the write shape
+// stays { kind: "models", step, models: [candidate] }, and a failed or
+// degraded catalog leaves the manual fill with its reason.
+test("the override row is the shared picker: a tier choice posts the full candidate, argv unchanged", async () => {
+  const { hook, posts, done } = setup({ params: PARAMS_ROW, stepTiers: {
+    tiers: [{ tier: "default", candidates: ["pi:ovr/p25-model", "claude:ovr-claude"] }],
+    defined: { pi: ["ovr/p25-model"], claude: ["ovr-claude"] },
+  } });
+  const select = nodes(hook).find((n) => n.type === "select");
+  assert.ok(select, "the picker's select renders beside the manual fill");
+  assert.ok(nodes(hook).some((n) => n.type === "input" && n.props["data-pf-step-controls-model"] === ""), "the manual fill keeps its hook");
+  select.props.onChange({ target: { value: "pi:ovr/p25-model" } });
+  hook.flush();
+  assert.equal(nodes(hook).find((n) => "data-pf-step-controls-model" in (n.props ?? {})).props.value, "pi:ovr/p25-model", "the choice fills the manual draft");
+  nodes(hook).find((n) => n.type === "button" && "data-pf-step-controls-apply" in n.props).props.onClick();
+  await settle();
+  assert.equal(posts.length, 1, "one POST");
+  assert.deepEqual(JSON.parse(posts[0].init.body), {
+    wi: "wi_A1", action: { kind: "models", step: "review", models: ["pi:ovr/p25-model"] },
+  }, "the single-model override's shape is unchanged");
+  done();
+});
+
+test("a failed catalog read leaves the override's manual fill alone, with its reason", () => {
+  const { hook, done } = setup({ params: PARAMS_ROW, stepTiers: { tiers: [], defined: { pi: [], claude: [] }, reason: "the step-tier catalog needs pf 0.2.4 or newer" } });
+  assert.equal(nodes(hook).filter((n) => n.type === "select").length, 0, "no select without a catalog");
+  assert.ok(nodes(hook).some((n) => n.type === "input" && "data-pf-step-controls-model" in n.props), "the manual fill stays");
+  assert.match(nodes(hook).map(textOf).join(""), /needs pf 0\.2\.4/, "the read's reason shows beside the fill");
+  done();
+});

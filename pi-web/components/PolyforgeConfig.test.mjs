@@ -198,8 +198,11 @@ test("visible reasons: capability floor and an incomplete workflow read are text
 });
 
 test("one cli.toml card holds the top-level, [daemon] and [summarize] zones, each headed by its literal section; the 工作区 card keeps the mapping", () => {
-  // (review s17#2): restated — the card groups every key but the Host-only ones (their one surface is the Host region)
-  assert.match(source, /const cards = config\?\.capable \? configCards\(groupConfigItems\(\(config\.items \?\? \[\]\)\.filter\(\(item\) => !HOST_ONLY_KEYS\.includes\(item\.key\)\)\)\) : null;/);
+  // (review s17#2): restated — the card groups every key but the Host-only ones (their one surface is the Host region);
+  // polyforge#151: the predicate is the family-aware isHostOnlyKey, so the
+  // default Cell's list cannot leak the Host's step_tiers.* as read-only chips
+  assert.match(source, /const cards = config\?\.capable \? configCards\(groupConfigItems\(\(config\.items \?\? \[\]\)\.filter\(\(item\) => !isHostOnlyKey\(item\.key\)\)\)\) : null;/);
+  assert.doesNotMatch(source, /HOST_ONLY_KEYS\.includes/, "the fixed-array predicate is gone (the step_tiers family is a prefix, never an entry)");
   // plus a named Cell's [model] zone (pf lists model.source for named Cells only)
   assert.match(source, /cli: \(\["flat", "daemon", "model", "summarize"\] as const\)\.map\(\(id\) => \(\{ id, items: itemsOf\(id\) \}\)\)/, "the zones, top-level first");
   assert.match(source, /workspace: itemsOf\("workspace"\),/, "the 工作区 card holds the mapping rows only");
@@ -340,7 +343,7 @@ test("at <=640px the key and class badge share a row and the values span the row
   // owner-intended change P4: the label+control rows
   // stack label over a full-width control.
   assert.match(block, /\.polyforge-config-cards \.config-detail-grid \{\s*grid-template-columns: minmax\(0, 1fr\);/, "the Jobs preferences stack");
-  assert.match(block, /\.polyforge-workflow-editor > \.polyforge-config-write > input \{ flex: 1 1 100%; \}/, "the workflow chain-add control spans the row");
+  assert.match(block, /\.polyforge-workflow-editor \.model-candidate-picker > input \{ flex: 1 1 100%; \}/, "the workflow chain-add control spans the row (the shared picker's manual fill)");
 });
 
 test("the read-only declared-candidates card is gone, region and strings included", async () => {
@@ -932,7 +935,7 @@ test(" (review s17#2): a region's connection-key write waits for the confirmatio
 });
 
 test(" (review s17#2): each key has one layered surface — the cli.toml card drops the Host-only keys, the default Cell has no second region", () => {
-  assert.match(source, /groupConfigItems\(\(config\.items \?\? \[\]\)\.filter\(\(item\) => !HOST_ONLY_KEYS\.includes\(item\.key\)\)\)/, "the Host-only rows live in the Host region only");
+  assert.match(source, /groupConfigItems\(\(config\.items \?\? \[\]\)\.filter\(\(item\) => !isHostOnlyKey\(item\.key\)\)\)/, "the Host-only rows (the fixed keys and the step_tiers family alike) live in the Host region only");
   // the default Cell's pane is its file card; so is every named Cell's —
   // one component, no second Cell surface.
   const cell = source.slice(source.indexOf("function CellSettings("), source.indexOf("function HostSettingsRegion("));
@@ -1017,4 +1020,19 @@ test("polyforge#51: the Host region lists the unclassified fallback errors under
   assert.match(region, /polyforge\.settings\.unclassifiedTitle/, "the section is titled");
   assert.match(region, /polyforge\.settings\.unclassifiedEmpty/, "the empty state says so");
   assert.match(region, /\.text\}.*\.count\}|\.count.*\.text/, "a row shows the text and its count");
+});
+
+// polyforge#151 (85b2, u6): the shared candidate picker joins the two card
+// surfaces — the workflow card's step chain add row and the cli.toml
+// [summarize] chips' add row — over one catalog read, and the cli.toml card
+// drops the step_tiers family through the family-aware predicate.
+test("the step-tier picker joins the chain and summarize add rows over the one catalog read", () => {
+  assert.match(source, /from "\.\/ModelCandidatePicker"/, "the shared picker is imported");
+  assert.match(source, /\/api\/polyforge\/step-tiers/, "one catalog read per page open");
+  assert.match(source, /stepTierPickerGroups\(/, "the groups come from the pure projection");
+  const cell = source.slice(source.indexOf("function CellSettings("), source.indexOf("function HostSettingsRegion("));
+  assert.equal((cell.match(/<ModelCandidatePicker/g) ?? []).length, 1, "the summarize add row is the shared picker");
+  const workflowCard = source.slice(source.indexOf("function WorkflowCard("));
+  assert.equal((workflowCard.match(/<ModelCandidatePicker/g) ?? []).length, 1, "the chain add row is the shared picker");
+  assert.match(source, /!isHostOnlyKey\(item\.key\)/, "the Cell card's filter is the family-aware predicate");
 });
