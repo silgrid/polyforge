@@ -3,6 +3,7 @@ package driver
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -187,5 +188,82 @@ func TestStepEndedCleanupFailureParksKeepsHandoff(t *testing.T) {
 	}
 	if x := d3.Snapshot(); x.WorkflowStatus != StatusCompleted || x.Steps["collect"].Status != capsule.StepDone {
 		t.Fatalf("the lane completes: %q %+v", x.WorkflowStatus, x.Steps["collect"])
+	}
+}
+
+// r1#1 (review): on the paths with NO hand-off — a dispatch that exited
+// without a result — an incomplete step-end cleanup must not swallow the
+// dispatch's failure record: the step_failed record is written as usual,
+// THEN the lane parks cleanup_failed, with a reason that says the step
+// retries and never claims a kept hand-off. The resume retries the step
+// (there is nothing to settle).
+func TestStepEndedCleanupFailureRecordsAFailedDispatch(t *testing.T) {
+	log := &eventLog{}
+	dir := t.TempDir()
+	sp := &fakeSpawner{}
+	d, err := New(Config{
+		WI:        WIInfo{ID: "wi_cf", CapsuleDir: dir, BundleName: "b"},
+		ExecPath:  filepath.Join(dir, capsule.ExecutionJSON),
+		Workflow:  testLane(4, spec("a")),
+		Spawner:   sp,
+		Log:       log,
+		HubWrites: &hubSink{sp: sp},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp.script = []fakeEntry{
+		{err: errors.New("step process exited 1")},
+		done(`{}`), // reachable only if the lane wrongly retries inside this Run
+	}
+	d.cfg.StepEnded = func(context.Context) error {
+		return errors.New("step-end sweep incomplete: pids 4242 still running")
+	}
+	if err := d.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	x := d.Snapshot()
+	if x.WorkflowStatus != StatusBlocked || !CleanupFailedBlocked(x.BlockedReason) {
+		t.Fatalf("an incomplete step-end cleanup parks cleanup_failed: %q %q", x.WorkflowStatus, x.BlockedReason)
+	}
+	if strings.Contains(x.BlockedReason, "hand-off") {
+		t.Fatalf("a park of a dispatch WITHOUT a hand-off must not claim one: %q", x.BlockedReason)
+	}
+	if !strings.Contains(x.BlockedReason, "retries") {
+		t.Fatalf("the reason must say the step retries on resume: %q", x.BlockedReason)
+	}
+	var failed bool
+	for _, e := range log.entries {
+		if e.kind == "step_failed" && e.body["step"] == "a" {
+			failed = true
+		}
+	}
+	if !failed {
+		t.Fatalf("the dispatch's step_failed record must survive the park: %+v", log.entries)
+	}
+	if got := sp.dispatched(); len(got) != 1 {
+		t.Fatalf("no retry may dispatch before the resume: %v", got)
+	}
+
+	// the resume: the sweep proves clean, the failed step is RETRIED (it
+	// never had a hand-off to settle)
+	sp2 := &fakeSpawner{script: []fakeEntry{done(`{}`)}}
+	d2, err := New(Config{WI: d.wi, ExecPath: d.execPath, Workflow: d.workflow, Spawner: sp2,
+		Log: &eventLog{}, HubWrites: &hubSink{sp: sp2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d2.cfg.StepEnded = func(context.Context) error { return nil }
+	if err := d2.ResumeCurrent(); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if err := d2.Run(context.Background()); err != nil {
+		t.Fatalf("resumed Run: %v", err)
+	}
+	if got := sp2.dispatched(); len(got) != 1 || !strings.HasPrefix(got[0], "a@") {
+		t.Fatalf("the resume retries the failed step: %v", got)
+	}
+	if x := d2.Snapshot(); x.WorkflowStatus != StatusCompleted {
+		t.Fatalf("status %q", x.WorkflowStatus)
 	}
 }
