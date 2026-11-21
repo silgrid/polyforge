@@ -154,14 +154,20 @@ class CloseClassificationTest(unittest.TestCase):
     def env(self, name: str = "pytest", script: str = FAKE_PYTEST) -> Dict[str, str]:
         return fake_bin(self.root, name, script)
 
-    def close_units_of(self, base: Dict[str, str], feature: Dict[str, str],
+    def close_units_of(self, name: str, base: Dict[str, str], feature: Dict[str, str],
                        **report_extra: Any) -> Dict[str, Dict[str, Any]]:
         from .test_build_scoped_close import run_close
+        self.root = self.sub(name)
         fx = Fixture(self.root, {"app": base})
         fx.commit_in_repo("app", feature, "feature")
         eng = fake_engine(self.root, {"app": report("scoped", cmd_of("tests", "scoped", "pytest"), **report_extra)})
         _code, res = run_close(fx.capsule, "app", eng, os.path.join(fx.capsule, "close.json"), env=self.env())
         return close_units(res)
+
+    def sub(self, name: str) -> str:
+        d = os.path.join(self.root, name)
+        os.makedirs(d)
+        return d
 
     def test_units_of_a_close_carry_the_base_classes(self) -> None:
         cases = (
@@ -188,7 +194,7 @@ class CloseClassificationTest(unittest.TestCase):
         )
         for name, base, feature, unit, want_cls, fields, want_why in cases:
             with self.subTest(name):
-                units = self.close_units_of(base, feature)
+                units = self.close_units_of(name.replace(" ", "-"), base, feature)
                 u = units.get(unit)
                 self.assertIsNotNone(u, "%s: the close records the unit (%s)" % (unit, sorted(units)))
                 assert u is not None
@@ -215,7 +221,7 @@ class CloseClassificationTest(unittest.TestCase):
         self.assertIn("did not reach the test's own failure", u.get("detail", ""), u)
 
     def test_a_failing_base_setup_leaves_every_red_undetermined(self) -> None:
-        units = self.close_units_of({"tests/test_a.py": "def test_old(): # FAIL assert old breakage\n"},
+        units = self.close_units_of("setup-false", {"tests/test_a.py": "def test_old(): # FAIL assert old breakage\n"},
                                     {"c.txt": "mine\n"}, base_setup=["false"])
         u = units.get("tests/test_a.py::test_old")
         self.assertIsNotNone(u, u)
@@ -249,7 +255,7 @@ class CloseClassificationTest(unittest.TestCase):
         _code, res = run_close(fx.capsule, "app", eng, os.path.join(fx.capsule, "close.json"),
                                env=self.env("npm", FAKE_NPM))
         units = close_units(res)
-        self.assertEqual(units["e2e/c.mjs"]["class"], "pre_existing", units["e2e/c.mjs"])
+        self.assertEqual(units["e2e/c.mjs"].get("class"), "pre_existing", units["e2e/c.mjs"])
         residual = [u for u in units.values() if u.get("class") == "undetermined"]
         self.assertEqual(len(residual), 1, units)
         self.assertIn("no skip switch", residual[0].get("detail", ""), residual[0])
