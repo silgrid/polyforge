@@ -27,13 +27,20 @@ process.env.PI_CODING_AGENT_DIR = agentDir;
 process.env.CLAUDE_CONFIG_DIR = claudeConfigDir;
 
 /** A stub `claude` answering initialize with the given claude_code_version. */
-fs.copyFileSync(new URL("../../../lib/__fixtures__/claude-stub/claude.mjs", import.meta.url), path.join(scratch, "stub.mjs"));
+// The stub answers initialize from the 2.1.322 recording beside itself (its
+// ../claude-2.1.322), so it lives one level under scratch and the fixture
+// link sits in scratch; PI_TEST_CLAUDE_STUB_VERSION replaces the version
+// each stub reports.
+const stubDir = path.join(scratch, "stub-bin");
+fs.mkdirSync(stubDir);
+fs.copyFileSync(new URL("../../../lib/__fixtures__/claude-stub/claude.mjs", import.meta.url), path.join(stubDir, "claude.mjs"));
+fs.symlinkSync(decodeURIComponent(new URL("../../../lib/__fixtures__/claude-2.1.322", import.meta.url).pathname), path.join(scratch, "claude-2.1.322"));
 const okDir = path.join(scratch, "ok-bin");
 fs.mkdirSync(okDir);
-fs.writeFileSync(path.join(okDir, "claude"), `#!/bin/sh\nexport PI_TEST_CLAUDE_STUB_VERSION=2.1.326\nexec node ${path.join(scratch, "stub.mjs")} "$@"\n`, { mode: 0o755 });
+fs.writeFileSync(path.join(okDir, "claude"), `#!/bin/sh\nexport PI_TEST_CLAUDE_STUB_VERSION=2.1.326\nexec node ${path.join(stubDir, "claude.mjs")} "$@"\n`, { mode: 0o755 });
 const unknownDir = path.join(scratch, "unknown-bin");
 fs.mkdirSync(unknownDir);
-fs.writeFileSync(path.join(unknownDir, "claude"), `#!/bin/sh\nexport PI_TEST_CLAUDE_STUB_VERSION=3.0.0\nexec node ${path.join(scratch, "stub.mjs")} "$@"\n`, { mode: 0o755 });
+fs.writeFileSync(path.join(unknownDir, "claude"), `#!/bin/sh\nexport PI_TEST_CLAUDE_STUB_VERSION=3.0.0\nexec node ${path.join(stubDir, "claude.mjs")} "$@"\n`, { mode: 0o755 });
 process.env.PI_TEST_CLAUDE_STUB_LOG = path.join(scratch, "stub.jsonl");
 const originalPath = process.env.PATH;
 process.env.PATH = `${okDir}${path.delimiter}${originalPath}`;
