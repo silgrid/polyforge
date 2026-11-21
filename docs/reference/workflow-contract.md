@@ -1029,14 +1029,19 @@ registry's golden file (`contract.v<N>.golden`) and its baseline
 (`PF_WRITE_CONTRACT_GOLDEN=1`), the lane schema
 (`workflows/_schema/workflow-<N>.schema.json`) with `go generate`, and this
 page is kept in step. Any other change is incompatible: a key removed or
-renamed, a key's meaning or default changed, a new required key, a value
-removed, a check that refuses a lane it accepted, a capsule or hand-off
-format the work items in flight rely on. It is registered when it merges,
+renamed, a key's meaning or default changed, a new required key of a key
+set the release already carries, a value removed, a check that refuses a
+lane it accepted, a capsule or hand-off format the work items in flight
+rely on. A required key of a key set the release does not carry at all — a
+set new with its optional parent key — is no such change: no lane valid
+under the release could use it, and a parent key that is itself new and
+required is caught by its own set's rule. It is registered when it merges,
 one entry in `internal/common/workflow/contract-pending.md` (what changed,
 what the migration takes); the registry pin is red on an incompatible
 change the registry dump shows mechanically against the baseline (a
-removed key, a new required key, a removed value: the dump's `[required]`
-and `[values]` sections) while the list has no entry. The release that
+removed key, a new required key of an existing key set, a removed value:
+the dump's `[required]` and `[values]` sections) while the list has no
+entry. The release that
 follows a registration bumps the version once, in one change with the
 golden file, the baseline, the lane schema, this page, every shipped lane,
 a docs/upgrade.md section (the drain) and the emptied list; with the list
