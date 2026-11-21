@@ -111,7 +111,12 @@ doc-type criterion gets no red test and no unit: commit the change, run its vali
 
 ## 3c. Close and 3d. Self-review
 
-Run the fast checks over the whole change (the written command once per touched repo) and every unit
+After the last commit, run the fast-check proof line once per touched repo — the same fast check
+with `--phase fast`, so each result's `heads` is the HEAD the hand-off gate compares against
+(the tree is unchanged since the per-unit runs, so every green command is reused):
+`"$PF_PYTHON" "$PF_SHARED_DIR/scripts/fast_checks.py" --repo <repo> --phase fast --json --out artifacts/build/fast-checks/<repo>.json`
+The daemon reads that file for every repo build changed and refuses `done` until each is a
+`pass` at HEAD. Then run the fast checks over the whole change (the written command once per touched repo) and every unit
 test targeted, then the written unit check over the whole `artifacts/build/units.json` (the same command
 with no `--unit`) (the full bar is `verification`'s). Then the build close's scoped selection — the same
 light-tier selection verification plans, one shared implementation, over the final tree —

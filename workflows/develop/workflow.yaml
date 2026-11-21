@@ -21,6 +21,13 @@ steps:
   - id: build
     skill: build
     budget: { wall_minutes: 60 }
+    # the hand-off gate: build's done needs this result for every repo it
+    # changed, at the HEAD the last commit left (3c re-runs the line after
+    # the last commit; the tree is unchanged, so every green command is
+    # reused and only the file's heads move)
+    fast_check_proof:
+      result: artifacts/build/fast-checks/{repo}.json
+      command: '"$PF_PYTHON" "$PF_SHARED_DIR/scripts/fast_checks.py" --repo {repo} --phase fast --json --out artifacts/build/fast-checks/{repo}.json'
     # the lane's supplement cap: the change analysis's tests verification
     # runs beside the engine's own selection (verify.py's --analysis),
     # rendered into the step's text and written by the build into the
@@ -44,6 +51,11 @@ steps:
     skill: sync
     model_tier: cheap
     budget: { tool_minutes: 20 }
+    # the same gate for sync (polyforge#211): every repo the merge moved
+    # needs a passing check at the merge commit — a fast-forward needs none
+    fast_check_proof:
+      result: artifacts/sync/fast-checks/{repo}.json
+      command: '"$PF_PYTHON" "$PF_SHARED_DIR/scripts/fast_checks.py" --repo {repo} --phase fast --json --out artifacts/sync/fast-checks/{repo}.json'
     vars: { verifying_gate: verification, change_step: build }
   - id: verification
     gate: true
