@@ -43,3 +43,18 @@ test("the read assembles only the three pf reads and gates capability on the lis
   assert.match(readLib, /hasConfigListShape/);
   assert.match(readLib, /POLYFORGE_CONFIG_PANEL_MINIMUM_PF_VERSION = "2.20.6"/);
 });
+
+// polyforge#151 (85b2): the [step_tiers] family's write gate — the Host-only
+// catalog joins the panel allowlist as a prefix family, its own 0.2.4 floor
+// treats an unparseable version as below, the defined-model set is
+// recomputed per write (never trusted from the client), and every refusal
+// precedes the write spawn (the reads — the probe, the pre-read list — stay
+// reads).
+test("the step_tiers family is writable only on the Host scope, behind its own floor and the defined-models gate", async () => {
+  assert.match(writeLib, /parseStepTierKey\(key\) !== null/, "the family joins the panel's allowlist as a prefix family");
+  assert.match(writeLib, /isPolyforgeVersionBelowMinimum\(presence\.version, POLYFORGE_CONFIG_STEP_TIERS_MINIMUM_PF_VERSION, true\)/, "the family's floor counts an unparseable version below");
+  assert.match(writeLib, /await stepTierDefinedModels\(\)/, "the defined set is recomputed per write");
+  assert.match(writeLib, /is not a defined model/, "an undefined new candidate is refused");
+  assert.match(writeLib, /the Host's catalog/, "a non-Host write is refused with the Host reason");
+  assert.match(configSource, /\?host=1 reads the Host keys/, "the GET read stays the one read face (no new read route for the gate)");
+});
