@@ -606,7 +606,8 @@ func (h *Host) handler() http.Handler {
 }
 
 // guardHostWrites refuses a mutating Host-level request (POST /shutdown,
-// a profile-less POST /ops/config, a POST /ops/drain) from a step or
+// a profile-less POST /ops/config, a POST /ops/drain, a POST
+// /ops/restart — polyforge#190) from a step or
 // task agent of any Cell, or from an unidentifiable peer — the same
 // fail-closed accident guard every Cell's own routes keep
 // (refuseStepOrigin). Cell-scoped requests pass through to forward,
@@ -616,6 +617,7 @@ func (h *Host) guardHostWrites(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hostWrite := r.Method == http.MethodPost && (r.URL.Path == "/shutdown" ||
 			r.URL.Path == "/ops/drain" ||
+			r.URL.Path == "/ops/restart" ||
 			(r.URL.Path == "/ops/config" && r.Header.Get(protocol.ProfileHeader) == ""))
 		if hostWrite {
 			if _, ok := requestPeerCred(r.Context()); !ok {
