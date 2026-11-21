@@ -42,15 +42,18 @@ import (
 // (addendum 2, owner ruling A): the step process runs with
 // PI_CODING_AGENT_DIR pointing at the dedicated daemon-owned step
 // agent directory (runtime/stepagentdir.go), a minimal snapshot —
-// auth.json, models.json, agents/ and exactly ONE extension,
-// extensions/subagent/ (pi auto-loads global extensions from
-// <agent dir>/extensions/, which is how the subagent tool reaches the
-// step process) — and never settings.json, so no package loads. The
-// allowlisted members are refreshed before every spawn; a global
-// reinstall lands in the operator's directory and never reaches the
-// step process. The isolation is the harness adapter layer's guarantee
-// (see docs/design/polyforge-vnext/v2-converge.md §2.7), not an
-// instruction.
+// auth.json, models.json, agents/ and exactly the TWO allowlisted
+// daemon-owned extensions, extensions/subagent/ and extensions/guard/
+// (pi auto-loads global extensions from <agent dir>/extensions/, which
+// is how both reach the step process) — and never settings.json, so no
+// package loads. The guard (polyforge#214) enforces part of the waiting
+// rule at the tool layer from inside the same step process: it blocks a
+// bash call that leaves a background job unwaited or sleeps over 3 s at
+// once, and appends syntax-check notes after edit/write. The allowlisted
+// members are refreshed before every spawn; a global reinstall lands in
+// the operator's directory and never reaches the step process. The
+// isolation is the harness adapter layer's guarantee (see
+// docs/design/polyforge-vnext/v2-converge.md §2.7), not an instruction.
 var piIsolationFlags = []string{
 	"--no-skills",
 	"--no-context-files",

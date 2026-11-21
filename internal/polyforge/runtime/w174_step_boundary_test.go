@@ -10,7 +10,8 @@ package runtime
 //     operator's agent dir lists the polyforge package (the local release
 //     install.sh writes) and carries pf-chat / the v1 bridge in its
 //     auto-loaded extensions/, nothing of it reaches the step dir (no
-//     settings.json, no extension but subagent);
+//     settings.json, no extension but the daemon-owned subagent and
+//     guard);
 //   - a claude step runs with --safe-mode (no hooks, so no
 //     SessionStart);
 //   - both carry PF_WI_ID, the marker pf-chat and the hook check as their
@@ -73,8 +74,8 @@ func TestW174StepAgentsCannotReachTheEnsureAdapters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if exts := listDirNames(t, filepath.Join(cfg.StepAgentDir(), "extensions")); !slices.Equal(exts, []string{"subagent"}) {
-		t.Fatalf("step agent extensions = %v, want only subagent", exts)
+	if exts := listDirNames(t, filepath.Join(cfg.StepAgentDir(), "extensions")); !slices.Equal(exts, []string{"guard", "subagent"}) {
+		t.Fatalf("step agent extensions = %v, want only guard and subagent", exts)
 	}
 
 	// pi step: the dedicated dir and the step marker
