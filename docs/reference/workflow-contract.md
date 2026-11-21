@@ -505,6 +505,8 @@ interpreter is lost; unset, it inherits the daemon's own `PATH`
 ([config.md](config.md), `command_path`). A step's own copy of any of them
 never reaches it. `TMPDIR` is `<capsule>/artifacts/downloads/tmp/`, created before the harness starts; failure to create it rejects the spawn rather than falling back to shared `/tmp`. A tool or configuration that explicitly overwrites `TMPDIR` is outside this daemon guarantee. The complete variable table is in [Scripts](#scripts), while this section describes process inheritance and `PATH`.
 
+A pi step process also loads the daemon-owned step guard from its dedicated agent directory (`extensions/guard/`, polyforge#214): before a `bash` tool call runs, the guard blocks a command that starts a background job this call does not wait for (`&` with no later `wait` or `kill` in the same call, `nohup`, `setsid`, `disown`) or sleeps more than 3 s in one go — the tool result is an error whose text starts with `step guard: blocked` and names the sanctioned shape (foreground with a logged exit code, or a bounded wait inside the same call). After an `edit` or `write` of a `.go`/`.ts`/`.tsx`/`.js`/`.mjs`/`.py`/`.json` file, a fast syntax check of that file runs and its finding is appended to the tool result; the check never blocks or fails the edit, and a type without a checker is returned untouched. Claude steps run no guard (`--safe-mode` skips hooks; `claude` is out of scope).
+
 ### The prompt
 
 Every dispatch's prompt is six parts, in this order, and nothing else:

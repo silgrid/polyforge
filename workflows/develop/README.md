@@ -110,7 +110,7 @@ The complete variable table is in [the workflow contract's Scripts environment s
   list or an incomplete one — right after the plan, never at the end. Its hand-off states
   each owner decision with the owner's words and its reading. A round a FAIL opened
   changes the tree (or units.json), or states per point why not; `review` judges that.
-  The session orchestrates fresh-context sub-agents (`workflows/_shared/build_subagents.md`; a pi build uses the daemon-owned worker when `pi_subagents` is on and records `main` when it is off).
+  The session orchestrates fresh-context sub-agents (`workflows/_shared/build_subagents.md`; a pi build uses the daemon-owned worker when `pi_subagents` is on and records `main` when it is off). On pi the build session itself runs under the step guard (`docs/reference/workflow-contract.md`, "Environment"): a bash call that leaves a background job unwaited, or waits too long in one go, is blocked with the sanctioned shape.
 - **review** (fresh, gate; skill `review`, heavy-run admission, tool window 20 minutes) —
   the shared review (`workflows/_shared/steps/review.md`), on the facts of four
   pre-written lines of the workflow's script `facts.py`: `plan-conformance`, `build

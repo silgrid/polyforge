@@ -582,7 +582,7 @@ an unknown judged hash or a repos-hash error keeps the wording above).
 
 Provider errors (pi, `supervise/pi.go`): a `message_end`/`turn_end` whose message has `stopReason=="error"` is an error signal; an `agent_end` whose last assistant message ended in error and `willRetry=false` ends the turn as failed (rule ① / D7 classification in `v2-converge.md#§2.3`); `willRetry=true` means pi retries itself and the turn is not judged.
 
-`<harness-root>` = `[daemon] harness_root`, default the data dir. The pi step-agent dir is daemon-owned: `auth.json` and `models.json` come from the configured credential source, while `agents/worker.md` and `extensions/subagent/` are compiled-in resources; operator agents and extensions never replace them. The embedded extension is refreshed by content comparison and atomic replacement, and extra files are pruned only at startup. A configured operator dir without `auth.json` refuses start (`runtime/stepagentdir.go`; rationale `v2-converge.md#§2.7`).
+`<harness-root>` = `[daemon] harness_root`, default the data dir. The pi step-agent dir is daemon-owned: `auth.json` and `models.json` come from the configured credential source, while `agents/worker.md`, `extensions/subagent/` and `extensions/guard/` are compiled-in resources; operator agents and extensions never replace them. The embedded extension is refreshed by content comparison and atomic replacement, and extra files are pruned only at startup. A configured operator dir without `auth.json` refuses start (`runtime/stepagentdir.go`; rationale `v2-converge.md#§2.7`).
 
 ### 7.7 Supervision bounds <!-- §7.7 -->
 
