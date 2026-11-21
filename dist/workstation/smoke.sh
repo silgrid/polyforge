@@ -9,12 +9,19 @@
 #                                                   #   default Cell, real auth, the AC2 layout,
 #                                                   #   restart (AC1+AC2)
 #   sh dist/workstation/smoke.sh first-boot --external  # + zero remote writes
+#   sh dist/workstation/smoke.sh persist            # the 84-components-D acceptance:
+#                                                   #   down/up and a new tag keep the six
+#                                                   #   persisted facts, then the exported
+#                                                   #   copy runs (needs only Docker + sh)
 #   sh dist/workstation/smoke.sh env                # Pi Web parameters (AC3)
 #   sh dist/workstation/smoke.sh podman-verify      # verification via podman (AC2)
 #
 # Prerequisites: a reachable docker engine with compose (the outer
-# engine's CLI shape; podman-compose hosts are a follow-up), curl, and
-# python3 on the host. `boot --with-aihub` and `env` additionally need
+# engine's CLI shape; podman-compose hosts are a follow-up). first-boot's
+# local pass and persist need nothing else on the host (Q6: every JSON /
+# HTTP check runs inside the container, which carries curl and python3);
+# boot --with-aihub, env, podman-verify and first-boot --external still
+# probe from the host and need curl and python3 there. `boot --with-aihub` and `env` additionally need
 # the components volume to carry Pi Web (/components/current/pi-web —
 # 84-components, installed by the first boot from the image's seed); on
 # an empty volume they fail naming that, which is the honest answer: the
@@ -28,7 +35,6 @@ set -eu
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 compose_file="$script_dir/compose.yaml"
-web_host_port="${WORKSTATION_WEB_PORT:-30141}"
 password="${PI_WEB_PASSWORD:-pf-workstation-smoke-test-password}"
 # the compose file's ${PI_WEB_PASSWORD:?…} refuses without one, so every
 # compose call this script makes carries the default (or the operator's
@@ -38,16 +44,33 @@ export PI_WEB_PASSWORD="$password"
 say() { printf 'smoke: %s\n' "$*"; }
 die() { printf 'smoke: FAIL: %s\n' "$*" >&2; exit 1; }
 
-# compose runs under the SMOKE'S OWN project (polyforge#176, review
-# r1#4): the compose file names the project `workstation` and its six
-# volumes are a real deployment's persistent home, so the smoke runs
-# every call under -p workstation-smoke — its `down -v` (the first-boot
-# pass resets volumes) then only ever touches workstation-smoke_*, never
-# an operator's. A concurrently running deployment's fixed
-# container_name fails the up explicitly instead of being interfered
-# with. Relative paths (the seccomp file, the build context) resolve
-# against the compose file's directory, so the caller's cwd is free.
-compose() { docker compose -p workstation-smoke -f "$compose_file" "$@"; }
+# compose runs under the SMOKE'S OWN project, unique per run
+# (polyforge#176 review r1#4; polyforge#177): the compose file names the
+# project `workstation` and its six volumes are a real deployment's
+# persistent home, so every call runs under -p "$smoke_project" — a
+# name derived from the clock and the pid, so `down -v` (the first-boot
+# pass resets volumes) only ever touches THIS run's volumes, never an
+# operator's and never a concurrent run's. The host port is derived the
+# same way (the fixed 30141 would clash with a running deployment) unless
+# WORKSTATION_WEB_PORT overrides it; compose has no fixed container_name
+# any more, so nothing else can clash either. Relative paths (the
+# seccomp file, the build context) resolve against the compose file's
+# directory, so the caller's cwd is free.
+smoke_run="smoke-$(date +%s)-$$"
+smoke_project="workstation-$smoke_run"
+web_host_port="${WORKSTATION_WEB_PORT:-$((30500 + ( ($(date +%s) + $$) % 900 )))}"
+export WORKSTATION_WEB_PORT="$web_host_port"
+compose() { docker compose -p "$smoke_project" -f "$compose_file" "$@"; }
+
+# compose_down_v ARGV... — the EXIT traps' cleanup: `docker compose <args>
+# down -v` with ONE retry. A loaded engine can refuse a single down
+# (measured: an 8-way engine run's trap down failed once and `|| true`
+# swallowed it, leaving the container and the six volumes behind), and
+# dash's errexit aborts a trap body at the first failing command — so every
+# command in a trap body carries its own `|| true`, this one included.
+compose_down_v() {
+	"$@" down -v >/dev/null 2>&1 || "$@" down -v >/dev/null 2>&1 || true
+}
 
 # poll_until WHAT SECONDS CMD... — a bounded poll that re-runs CMD
 # every 2s until it succeeds or the deadline passes.
@@ -68,12 +91,22 @@ poll_until() {
 	done
 }
 
-# the smoke needs the docker CLI's inspect shape on the outer engine
+# the smoke needs the docker CLI's inspect shape on the outer engine.
+# The host needs nothing else for persist and the exported runs
+# (polyforge#177, Q6: every JSON/HTTP check runs inside the container,
+# which carries curl and python3); the passes that still probe from the
+# host demand their own tools below.
 require_engine() {
 	docker version --format '{{.Server.Version}}' >/dev/null 2>&1 ||
 		die "no reachable docker engine (docker version failed)"
 	docker compose version >/dev/null 2>&1 ||
 		die "docker compose is not available"
+}
+
+# the host-side tools of the passes that still use them (boot's HTTP
+# probe, env, podman-verify, first-boot's record check and the external
+# stub server)
+require_host_tools() {
 	command -v curl >/dev/null 2>&1 || die "curl is not on PATH"
 	command -v python3 >/dev/null 2>&1 || die "python3 is not on PATH"
 }
@@ -182,6 +215,10 @@ cmd_boot() {
 	*) die "boot needs --no-aihub or --with-aihub" ;;
 	esac
 	require_engine
+	require_host_tools
+	# the whole run's cleanup (review r1#3): this run's project is
+	# disposable, so even a die mid-run takes it down WITH VOLUMES
+	trap 'compose_down_v compose --profile "$profile"' EXIT
 	boot_up
 
 	inspect_params
@@ -221,14 +258,17 @@ cmd_boot() {
 		esac
 	fi
 
-	compose --profile "$profile" down >/dev/null
+	compose --profile "$profile" down -v >/dev/null
 	say "boot $1: PASS"
 }
 
 cmd_env() {
 	require_engine
+	require_host_tools
 	profile=no-aihub
 	override=$(mktemp)
+	# this run's project is disposable (review r1#3): the trap covers a die
+	trap 'compose_down_v docker compose -p "$smoke_project" -f "$compose_file" -f "$override"' EXIT
 	cat > "$override" <<'YEOF'
 services:
   workstation:
@@ -244,9 +284,9 @@ YEOF
 	# prefixed per command — it must ride the `up` that CREATES the
 	# container, not just the build (review r2#2).
 	export SENTINEL_WORKSTATION_SMOKE=yes
-	docker compose -p workstation-smoke -f "$compose_file" -f "$override" --profile "$profile" build >/dev/null
-	docker compose -p workstation-smoke -f "$compose_file" -f "$override" --profile "$profile" up -d >/dev/null
-	cid=$(docker compose -p workstation-smoke -f "$compose_file" -f "$override" --profile "$profile" ps -q "$(service_of "$profile")")
+	docker compose -p "$smoke_project" -f "$compose_file" -f "$override" --profile "$profile" build >/dev/null
+	docker compose -p "$smoke_project" -f "$compose_file" -f "$override" --profile "$profile" up -d >/dev/null
+	cid=$(docker compose -p "$smoke_project" -f "$compose_file" -f "$override" --profile "$profile" ps -q "$(service_of "$profile")")
 	[ -n "$cid" ] || die "no workstation container"
 	poll_until "pf supervise to run inside" 120 \
 		docker exec "$cid" sh -c 'ps -e -o args= | grep -q "[p]f supervise"'
@@ -274,15 +314,18 @@ YEOF
 	code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$web_host_port/api")
 	printf 'smoke: anonymous /api = %s\n' "$code"
 	[ "$code" = 401 ] || die "anonymous /api is $code, want 401"
-	docker compose -p workstation-smoke -f "$compose_file" -f "$override" --profile "$profile" down >/dev/null
+	docker compose -p "$smoke_project" -f "$compose_file" -f "$override" --profile "$profile" down -v >/dev/null
 	rm -f "$override"
 	say "env: PASS"
 }
 
 cmd_podman_verify() {
 	require_engine
+	require_host_tools
 	profile=no-aihub
 	override=$(mktemp)
+	# this run's project is disposable (review r1#3): the trap covers a die
+	trap 'compose_down_v docker compose -p "$smoke_project" -f "$compose_file" -f "$override"' EXIT
 	sed -e "s|@ROOT@|$root|g" > "$override" <<'YEOF'
 services:
   workstation:
@@ -290,9 +333,9 @@ services:
       - "@ROOT@:/workspace:ro"
 YEOF
 	say "podman-verify: booting with the repository mounted at /workspace"
-	docker compose -p workstation-smoke -f "$compose_file" -f "$override" --profile "$profile" build >/dev/null
-	docker compose -p workstation-smoke -f "$compose_file" -f "$override" --profile "$profile" up -d >/dev/null
-	cid=$(docker compose -p workstation-smoke -f "$compose_file" -f "$override" --profile "$profile" ps -q "$(service_of "$profile")")
+	docker compose -p "$smoke_project" -f "$compose_file" -f "$override" --profile "$profile" build >/dev/null
+	docker compose -p "$smoke_project" -f "$compose_file" -f "$override" --profile "$profile" up -d >/dev/null
+	cid=$(docker compose -p "$smoke_project" -f "$compose_file" -f "$override" --profile "$profile" ps -q "$(service_of "$profile")")
 	[ -n "$cid" ] || die "no workstation container"
 	poll_until "pf supervise to run inside" 120 \
 		docker exec "$cid" sh -c 'ps -e -o args= | grep -q "[p]f supervise"'
@@ -362,7 +405,7 @@ PYEOF
 	[ "$pod" = 0 ] || die "podman stays resident: $pod process(es)"
 	say "no residual containers, no zombies, no resident conmon/podman"
 
-	docker compose -p workstation-smoke -f "$compose_file" -f "$override" --profile "$profile" down >/dev/null
+	docker compose -p "$smoke_project" -f "$compose_file" -f "$override" --profile "$profile" down -v >/dev/null
 	rm -f "$override"
 	say "podman-verify: PASS"
 }
@@ -388,6 +431,12 @@ cmd_first_boot() {
 	*) die "first-boot takes no flags (or --external)" ;;
 	esac
 	require_engine
+	# only the external pass needs host tools (its counting stub server
+	# is a host python3 process); the local pass's every JSON/HTTP check
+	# runs inside the container (polyforge#177 Q6)
+	if [ "$external" = yes ]; then
+		require_host_tools
+	fi
 	profile=aihub
 	if [ "$external" = yes ]; then
 		stub_port="${WORKSTATION_SMOKE_STUB_PORT:-38421}"
@@ -415,8 +464,9 @@ services:
       - "host.docker.internal:host-gateway"
 YEOF
 		# the EXIT trap is the whole cleanup: a die anywhere below
-		# leaves no temp file behind (the test env checks for them)
-		trap 'kill "$stub_pid" 2>/dev/null; rm -f "$hits" "$stub_script" "$override" 2>/dev/null' EXIT
+		# leaves no temp file behind (the test env checks for them) and
+		# takes this run's project down with volumes (review r1#3)
+		trap 'kill "$stub_pid" 2>/dev/null || true; rm -f "$hits" "$stub_script" "$override" 2>/dev/null || true; compose_down_v compose_ext' EXIT
 		poll_until "the stub server to listen" 30 \
 			sh -c "curl -s -o /dev/null http://127.0.0.1:$stub_port/" || {
 			die "the stub server never listened on $stub_port (set WORKSTATION_SMOKE_STUB_PORT to a free port)"
@@ -424,16 +474,24 @@ YEOF
 		: >"$hits"  # the listen probe was ours, not the container's
 		export WORKSTATION_AIHUB_SERVER="http://host.docker.internal:$stub_port"
 		export WORKSTATION_AIHUB_KEY="smoke-external-key"
-		compose_up="docker compose -p workstation-smoke -f $compose_file -f $override --profile $profile"
+		compose_ext() {
+			docker compose -p "$smoke_project" -f "$compose_file" -f "$override" --profile "$profile" "$@"
+		}
 	else
-		compose_up="compose --profile $profile"
+		compose_ext() {
+			docker compose -p "$smoke_project" -f "$compose_file" --profile "$profile" "$@"
+		}
+		# the local run's project is disposable (review r1#3): the trap
+		# covers a die (the external branch keeps its own trap above,
+		# which also kills the counting stub and its temp files)
+		trap 'compose_down_v compose_ext' EXIT
 	fi
 
 	say "first-boot: resetting the volumes and starting the $profile profile"
 	compose --profile "$profile" down -v >/dev/null 2>&1 || true
-	$compose_up build >/dev/null
-	$compose_up up -d >/dev/null
-	cid=$($compose_up ps -q workstation)
+	ensure_image "$profile"
+	compose_ext up -d >/dev/null
+	cid=$(compose_ext ps -q workstation)
 	[ -n "$cid" ] || die "no workstation container was created for profile $profile"
 	poll_until "the workstation container to run" 120 \
 		sh -c "docker inspect -f '{{.State.Running}}' '$cid' | grep -q true"
@@ -467,16 +525,22 @@ PYEOF
 		what=$1
 		fbj=$(record_of)
 		printf 'smoke: first-boot.json (%s) = %s\n' "$what" "$fbj"
-		printf '%s' "$fbj" | python3 -c 'import json,sys
-wants = {"local": ("local", True), "external": ("external", False)}
-mode, want_user_ready = wants[sys.argv[1]]
-d = json.load(sys.stdin)
-assert d.get("phase") == "done", "the phase is %r, want done" % d.get("phase")
-assert d.get("mode") == mode, "the mode is %r, want %s" % (d.get("mode"), mode)
-assert d.get("keyReady") is True, "keyReady must be true after the boot"
-assert d.get("userReady") is want_user_ready, "userReady must be %s in %s mode" % (want_user_ready, mode)
-assert d.get("defaultCell") == "default", "defaultCell must be default"
-' "$mode" || die "the first-boot record is not a completed $mode boot (see the record above)"
+		# POSIX greps over the entrypoint's own compact JSON — no host
+		# python3 (polyforge#177 Q6: the host needs only Docker and the
+		# system sh; the record's shape is the writer's own, pinned by
+		# the record check itself)
+		record_field() {
+			printf '%s' "$fbj" | grep -q "\"$1\": *$2"
+		}
+		record_field phase '"done"' || die "the first-boot record's phase is not done (see the record above)"
+		record_field mode "\"$mode\"" || die "the first-boot record's mode is not $mode (see the record above)"
+		record_field keyReady 'true' || die "keyReady must be true after the boot"
+		if [ "$mode" = local ]; then
+			record_field userReady 'true' || die "userReady must be true in local mode"
+		else
+			record_field userReady 'false' || die "userReady must be false in external mode"
+		fi
+		record_field defaultCell '"default"' || die "defaultCell must be default"
 	}
 
 	if [ "$external" = yes ]; then
@@ -553,14 +617,17 @@ for name in ("api_key", "key_hash", "token"):
 	say "first-boot: restarting with the volumes intact"
 	first_record=$(record_of)
 	first_cell=$(cell_server)
-	$compose_up down >/dev/null
+	compose_ext down >/dev/null
 	if [ "$external" = yes ]; then
 		export WORKSTATION_AIHUB_SERVER="http://host.docker.internal:1/other-choice"
 	fi
-	$compose_up up -d >/dev/null
-	cid=$($compose_up ps -q workstation)
+	compose_ext up -d >/dev/null
+	cid=$(compose_ext ps -q workstation)
 	[ -n "$cid" ] || die "no workstation container was created for the restart"
-	poll_until "pf supervise to run inside (restart)" 120 \
+	# 240 s: the restart poll measured tight once under the harness's own
+	# 8-way engine parallelism (the machine was up — its heartbeat had
+	# answered — only the ps probe was slow); the settled state is unchanged
+	poll_until "pf supervise to run inside (restart)" 240 \
 		docker exec "$cid" sh -c 'ps -e -o args= | grep -q "[p]f supervise"'
 	[ "$(record_of)" = "$first_record" ] ||
 		die "the record changed after the restart — the completed first boot must skip itself (the choice is made exactly once)"
@@ -573,7 +640,7 @@ for name in ("api_key", "key_hash", "token"):
 		say "the same key still authenticates after the restart (no reissue)"
 	fi
 
-	$compose_up down -v >/dev/null 2>&1 || true
+	compose_ext down -v >/dev/null 2>&1 || true
 	if [ "$external" = yes ]; then
 		# 停机后再核对全部请求，覆盖首启与重启的完整运行期。
 		check_external_requests
@@ -581,15 +648,177 @@ for name in ("api_key", "key_hash", "token"):
 	say "first-boot: PASS"
 }
 
+# ensure_image PROFILE — the image this run boots: WORKSTATION_IMAGE names a
+# published image that must already be on the engine (the exported
+# delivery's path, polyforge#177 Q4 — no build, ever); without it compose
+# builds and tags the local default polyforge-workstation:local.
+ensure_image() {
+	if [ -n "${WORKSTATION_IMAGE:-}" ]; then
+		docker image inspect "$WORKSTATION_IMAGE" >/dev/null 2>&1 ||
+			die "WORKSTATION_IMAGE $WORKSTATION_IMAGE is not on the engine (docker image inspect failed) — an environment prerequisite, not a product failure"
+		say "image: $WORKSTATION_IMAGE (given, no build)"
+	else
+		compose --profile "$1" build >/dev/null
+		say "image: built and tagged polyforge-workstation:local"
+	fi
+}
+
+# cmd_persist — the AC2 acceptance (polyforge#177): two compose down/up
+# cycles and a NEW TAG of the image keep the six persisted facts BY VALUE
+# — the harness login marker, cli.toml, the workspace file, the AIHub
+# database's user row, the pulled Podman image and the components
+# volume's current — then the delivery is exported to an EMPTY directory
+# and first-boot and persist run from there on the given image (Q6: the
+# host needs only Docker and the system sh; every JSON/HTTP check runs
+# inside the container). WORKSTATION_SMOKE_EXPORTED=1 marks the exported
+# copy: its own export phase is skipped, so the recursion ends.
+cmd_persist() {
+	require_engine
+	profile=aihub
+	sp_value="sp-$(date +%s)-$$"
+	ensure_image aihub
+	primary="${WORKSTATION_IMAGE:-polyforge-workstation:local}"
+	retag="polyforge-workstation-smoke:retag-$smoke_run"
+	docker tag "$primary" "$retag"
+	say "persist: project $smoke_project, image $primary, new tag $retag"
+
+	# the trap is the whole cleanup: a die anywhere below downs only THIS
+	# run's project — its volumes are disposable, an operator's never are —
+	# and removes this run's retag (review r1 N2: tags accumulated otherwise)
+	trap 'compose_down_v compose --profile aihub; docker rmi "$retag" >/dev/null 2>&1 || true' EXIT
+	compose --profile aihub down -v >/dev/null 2>&1 || true
+
+	# up_with_image IMAGE — down, up on the image, wait for supervise
+	up_with_image() {
+		export WORKSTATION_IMAGE="$1"
+		compose --profile aihub down >/dev/null 2>&1 || true
+		compose --profile aihub up -d >/dev/null
+		cid=$(compose --profile aihub ps -q workstation)
+		[ -n "$cid" ] || die "no workstation container was created for image $1"
+		poll_until "the workstation container to run" 120 \
+			sh -c "docker inspect -f '{{.State.Running}}' '$cid' | grep -q true"
+		poll_until "pf supervise to run inside" 120 \
+			docker exec "$cid" sh -c 'ps -e -o args= | grep -q "[p]f supervise"'
+	}
+
+	# the three written sentinels ride the volumes; the podman image is
+	# pulled once (the podman-storage volume's own AC2 half)
+	persist_write_sentinels() {
+		docker exec "$cid" sh -c 'printf "%s\n" "$1" > /root/.pi/agent/workstation-smoke-persist-marker' persist "$sp_value"
+		docker exec "$cid" sh -c 'printf "# workstation-smoke-persist %s\n" "$1" >> /root/.config/polyforge/cli.toml' persist "$sp_value"
+		docker exec "$cid" sh -c 'printf "%s\n" "$1" > /workspace/workstation-smoke-persist-marker' persist "$sp_value"
+		docker exec "$cid" podman pull -q busybox:1.37 >/dev/null ||
+			die "the Podman pull failed inside the workstation (the podman-storage volume is the AC2 half)"
+	}
+
+	# all six values, read inside the container (Q6: no host curl/python3)
+	persist_read_values() {
+		harness_marker=$(docker exec "$cid" cat /root/.pi/agent/workstation-smoke-persist-marker) ||
+			die "the harness login marker is gone"
+		cli_line=$(docker exec "$cid" grep '^# workstation-smoke-persist ' /root/.config/polyforge/cli.toml) ||
+			die "the cli.toml sentinel line is gone"
+		workspace_file=$(docker exec "$cid" cat /workspace/workstation-smoke-persist-marker) ||
+			die "the workspace file is gone"
+		aihub_user=$(docker exec "$cid" python3 -c 'import sqlite3
+c = sqlite3.connect("/var/lib/polyforge/aihub/aihub.db")
+row = c.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()
+print(row[0] if row else "none")') ||
+			die "the AIHub database does not answer"
+		podman_image=$(docker exec "$cid" podman inspect --format '{{.Id}}' busybox:1.37) ||
+			die "the pulled Podman image is gone"
+		components_current=$(docker exec "$cid" readlink /components/current) ||
+			die "the components current link is gone"
+		components_digest=$(docker exec "$cid" python3 -c 'import hashlib
+print(hashlib.sha256(open("/components/current/manifest.json", "rb").read()).hexdigest())') ||
+			die "the components current manifest is unreadable"
+		# the identity a REINSTALL always changes (review r1#1): the link
+		# target and the manifest digest are seed-deterministic — a lost
+		# components volume reinstalls to byte-identical values — but the
+		# symlink swap on install recreates the object, so its mtime and
+		# inode only survive when the volume does (the noop path of
+		# components.Install writes nothing, so restarts keep them)
+		components_stat=$(docker exec "$cid" stat -c '%Y %i' /components/current) ||
+			die "the components current link is unreadable"
+	}
+
+	# persist_compare WHAT — every value must equal its first read (a
+	# down with -v, a fresh volume or a wrong bind would change them)
+	persist_compare() {
+		what=$1
+		[ "$harness_marker" = "$harness_marker_first" ] ||
+			die "the harness login marker changed after $what: $harness_marker (was $harness_marker_first)"
+		[ "$cli_line" = "$cli_line_first" ] ||
+			die "the cli.toml sentinel changed after $what: $cli_line (was $cli_line_first)"
+		[ "$workspace_file" = "$workspace_file_first" ] ||
+			die "the workspace file changed after $what: $workspace_file (was $workspace_file_first)"
+		[ "$aihub_user" = "$aihub_user_first" ] ||
+			die "the AIHub user row changed after $what: $aihub_user (was $aihub_user_first)"
+		[ "$podman_image" = "$podman_image_first" ] ||
+			die "the Podman image changed after $what: $podman_image (was $podman_image_first)"
+		[ "$components_current" = "$components_current_first" ] ||
+			die "the components current changed after $what: $components_current (was $components_current_first)"
+		[ "$components_digest" = "$components_digest_first" ] ||
+			die "the components current manifest digest changed after $what: $components_digest (was $components_digest_first)"
+		[ "$components_stat" = "$components_stat_first" ] ||
+			die "the components current mtime/inode identity changed after $what: $components_stat (was $components_stat_first)"
+		say "persist: $what kept the harness login marker, cli.toml, the workspace file, the AIHub user row, the Podman image and the components current (link, digest, mtime/inode identity)"
+	}
+
+	up_with_image "$primary"
+	persist_write_sentinels
+	persist_read_values
+	harness_marker_first=$harness_marker
+	cli_line_first=$cli_line
+	workspace_file_first=$workspace_file
+	aihub_user_first=$aihub_user
+	podman_image_first=$podman_image
+	components_current_first=$components_current
+	components_digest_first=$components_digest
+	components_stat_first=$components_stat
+	say "persist: the six values recorded (sentinel $sp_value)"
+
+	up_with_image "$primary"
+	persist_read_values
+	persist_compare "a compose down && up"
+	up_with_image "$primary"
+	persist_read_values
+	persist_compare "the second down && up"
+
+	say "persist: switching to the new tag $retag"
+	up_with_image "$retag"
+	persist_read_values
+	persist_compare "the new tag image $retag"
+
+	compose --profile aihub down -v >/dev/null 2>&1 || true
+
+	if [ "${WORKSTATION_SMOKE_EXPORTED:-}" != 1 ]; then
+		export_dir=$(mktemp -d)
+		for f in smoke.sh compose.yaml seccomp.json seccomp.json.sha256 Caddyfile; do
+			cp "$script_dir/$f" "$export_dir/$f"
+		done
+		say "persist: exported to $export_dir — running first-boot and persist from there"
+		(cd "$export_dir" && WORKSTATION_SMOKE_EXPORTED=1 WORKSTATION_IMAGE="$retag" sh ./smoke.sh first-boot) ||
+			die "first-boot failed from the exported directory"
+		(cd "$export_dir" && WORKSTATION_SMOKE_EXPORTED=1 WORKSTATION_IMAGE="$retag" sh ./smoke.sh persist) ||
+			die "persist failed from the exported directory"
+		rm -rf "$export_dir"
+		docker rmi "$retag" >/dev/null 2>&1 || true
+		say "the exported copy ran first-boot and persist (image as-is, no build)"
+	fi
+	say "persist: PASS"
+}
+
 case "${1:-}" in
 boot) shift; cmd_boot "$@" ;;
 env) shift; cmd_env "$@" ;;
 first-boot) shift; cmd_first_boot "$@" ;;
+persist) shift; cmd_persist "$@" ;;
 podman-verify) shift; cmd_podman_verify "$@" ;;
 *)
 	cat >&2 <<'USAGE'
 usage: sh dist/workstation/smoke.sh boot --no-aihub|--with-aihub
        sh dist/workstation/smoke.sh first-boot [--external]
+       sh dist/workstation/smoke.sh persist [WORKSTATION_IMAGE=<published tag>]
        sh dist/workstation/smoke.sh env
        sh dist/workstation/smoke.sh podman-verify
 USAGE

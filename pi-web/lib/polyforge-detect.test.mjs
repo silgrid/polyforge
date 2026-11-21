@@ -1,3 +1,4 @@
+// carries: lib/polyforge-detect.ts
 import "#test-env";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -15,6 +16,7 @@ const {
   claudeSkillsSymlinkExists,
   conventionalPolyforgeRoot,
   detectPolyforge,
+  isImageManaged,
   isPolyforgePackageEnabled,
   isPolyforgeVersionBelowMinimum,
   polyforgeLineFromOrigin,
@@ -189,6 +191,49 @@ test("the conventional clone root follows the workstation image's components cur
       "the image's conventional root is the components volume's current",
     );
   } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+});
+
+test("polyforge#177: isImageManaged — one fact, one place, never a pf probe", () => {
+  const work = mkdtempSync(join(tmpdir(), "pi-web-pf-detect-image-"));
+  try {
+    // a missing or unreadable root is a host, never an error, never a guess
+    assert.equal(isImageManaged(join(work, "absent")), false, "no seed root at all is a host");
+    const bare = join(work, "seed-bare", "releases", "v1");
+    mkdirSync(bare, { recursive: true });
+    assert.equal(
+      isImageManaged(join(work, "seed-bare")),
+      false,
+      "a releases/ directory without the seed manifest is not the image",
+    );
+    const image = join(work, "seed-image", "releases", "v0.2.4-dev.1");
+    mkdirSync(image, { recursive: true });
+    writeFileSync(join(image, "manifest.json"), "{}\n");
+    assert.equal(isImageManaged(join(work, "seed-image")), true, "one manifest under releases/<ver>/ is the fact");
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+});
+
+test("polyforge#177: the judgment's seam — __piWebTestSeedRoot points the DEFAULT read at a fixture", () => {
+  // A test-only global, never an environment variable (this module never
+  // reads process.env — the detect contract pins that): a test process is
+  // its own world, so route-level tests drive the image mode through the
+  // production default call, and production (the global unset) reads the
+  // constant.
+  const work = mkdtempSync(join(tmpdir(), "pi-web-pf-detect-seam-"));
+  const image = join(work, "releases", "v0.2.4");
+  mkdirSync(image, { recursive: true });
+  writeFileSync(join(image, "manifest.json"), "{}\n");
+  const previous = globalThis.__piWebTestSeedRoot;
+  try {
+    globalThis.__piWebTestSeedRoot = work;
+    assert.equal(isImageManaged(), true, "the default read follows the seam");
+    globalThis.__piWebTestSeedRoot = join(work, "absent");
+    assert.equal(isImageManaged(), false, "the seam points elsewhere — still one read, one fact");
+  } finally {
+    globalThis.__piWebTestSeedRoot = previous;
     rmSync(work, { recursive: true, force: true });
   }
 });

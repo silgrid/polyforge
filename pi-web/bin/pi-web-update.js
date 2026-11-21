@@ -20,6 +20,40 @@ const FETCH_TIMEOUT_MS = 10_000;
 const GH_TIMEOUT_MS = 30_000;
 const MANUAL_COMMAND = `npm install -g ${PACKAGE_NAME}@latest`;
 
+// The workstation image's seed root — the one fact the image judgment
+// reads (polyforge#177, owner 2026-11-19): one manifest under
+// releases/<ver>/ is the fact, a bare releases/ directory is not, a
+// missing root is a host. The CJS twin of the server's
+// lib/polyforge-detect.ts rule (a bin cannot import TypeScript), one
+// shared convention, never a probe of /components.
+const WORKSTATION_SEED_ROOT = "/opt/polyforge/seed";
+
+// The image judgment, injectable for tests (the seed root and the fs
+// functions, like the server side's seam).
+function isImageManaged(
+  seedRoot = WORKSTATION_SEED_ROOT,
+  readdir = fs.readdirSync,
+  stat = fs.statSync,
+) {
+  try {
+    for (const ver of readdir(path.join(seedRoot, "releases"))) {
+      try {
+        stat(path.join(seedRoot, "releases", ver, "manifest.json"));
+        return true;
+      } catch {
+        // this entry carries no manifest: not the fact
+      }
+    }
+  } catch {
+    // no seed root at all: a host
+  }
+  return false;
+}
+
+// The image mode's fixed refusal (owner Q3): exit code 1, this copy.
+const IMAGE_MANAGED_REFUSAL =
+  "Refusing to update: this pi-web runs inside the workstation image; updates come with a new image";
+
 // The release channel this tree is updated from, one OWNER/REPO in a shipped
 // marker. The public package's own repository (its name without "@") keeps
 // the public npm path; any other repository is an internal line delivered as
@@ -203,7 +237,14 @@ async function runUpdate({
   realpath = fs.realpathSync,
   log = console.log,
   error = console.error,
+  imageManaged = isImageManaged,
 }) {
+  // The workstation image refuses first (polyforge#177): before the channel
+  // is read, before any network, before any spawn — `--check` included.
+  if (imageManaged()) {
+    error(IMAGE_MANAGED_REFUSAL);
+    return 1;
+  }
   let channel;
   try {
     channel = readChannel();
@@ -268,6 +309,7 @@ module.exports = {
   findNpmInvocation,
   getInstallKind,
   installRelease,
+  isImageManaged,
   isNewerStableVersion,
   readReleaseChannel,
   runUpdate,

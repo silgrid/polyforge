@@ -29,7 +29,7 @@ Everything the workstation needs lives in `dist/workstation/`:
 | `compose.yaml` | the outer container's minimal parameter set, the six persistent volumes and the two boot modes |
 | `containers/` | podman's storage, containers and registries configuration |
 | `seccomp.json` | the pinned seccomp profile the outer engine applies (origin and SHA beside it) |
-| `smoke.sh` | the acceptance driver: `boot`, `first-boot`, `env`, `podman-verify` |
+| `smoke.sh` | the acceptance driver: `boot`, `first-boot`, `persist`, `env`, `podman-verify` |
 
 ## Boot modes
 
@@ -196,17 +196,24 @@ sh dist/workstation/smoke.sh first-boot         # the empty-volume first boot: i
                                                 #   real key authentication, no bootstrap key, restart
 sh dist/workstation/smoke.sh first-boot --external  # 外部模式：全过程只允许 POST /api/v1/machines/heartbeat
                                                 # 创建路由与其他未知请求均失败，并输出方法和路径
+sh dist/workstation/smoke.sh persist            # the persistence acceptance: two down/up cycles and a
+                                                #   NEW TAG of the image keep the six persisted facts by
+                                                #   value, then the exported copy runs (Docker + sh host)
 sh dist/workstation/smoke.sh env                # Pi Web parameters, PI_TEST_* excluded, /api 401
 sh dist/workstation/smoke.sh podman-verify      # verification via podman end to end
 ```
 
 `boot --with-aihub`, `first-boot` and `env` need the components volume
 to carry the seed's Pi Web (the first boot installs it); `first-boot`
-resets volumes first — its own, never an operator's: the smoke runs
-every compose call under its own project (`workstation-smoke`), so its
-resets only ever touch `workstation-smoke_*`, and a concurrently
-running deployment's fixed container name fails the smoke's up
-explicitly instead of being interfered with. 仓库的真机 smoke 与外部模式桩测试
+and `persist` reset volumes first — their own, never an operator's: the
+smoke derives its compose project and host port per run
+(clock + pid, `WORKSTATION_WEB_PORT` overrides the port), so every reset
+and cleanup only ever touches that run's own `workstation-smoke-*`
+project and volumes, and compose has no fixed `container_name` any more,
+so a concurrently running deployment never clashes with the smoke at
+all (polyforge#177). Every pass ends with a `down -v` of its own project
+and carries an EXIT trap doing the same, so a die mid-run leaves nothing
+behind either (review r1#3); `persist` also removes the retag it created. 仓库的真机 smoke 与外部模式桩测试
 通过跨进程资源锁串行操作共享项目；外部模式桩另用 38422 端口，真机计数桩用
 38421。并行测试 runner 不会让一个测试清理另一个测试的容器或卷。The first-boot
 pass is the AC proof of the identity half: after the boot the record
@@ -223,6 +230,24 @@ points at `/components/current`, and the record carries no credential
 技能 `/root/.claude/skills/polyforge` 是指向
 `/components/current/skills/polyforge` 的软链；用户自有的其他技能不受影响。
 
+`persist` (polyforge#177) is the persistence acceptance: after a first
+boot it records the six persisted facts BY VALUE — the harness login
+marker, a cli.toml sentinel line, a workspace file, the AIHub database's
+user row, a pulled Podman image and the components volume's `current`
+link plus its manifest digest (the record and every check run inside
+the container, so the host needs only Docker and the system sh) — then
+proves them unchanged through two `compose down && up` cycles and a
+NEW TAG of the image (`docker tag`, the second tag ups in
+`WORKSTATION_IMAGE`'s place). The image is the given
+`WORKSTATION_IMAGE` (it must already exist on the engine — no build);
+without one the pass builds and tags the local default and retags it
+for the new-tag phase. Finally it exports `smoke.sh`, `compose.yaml`,
+the pinned seccomp files and the `Caddyfile` to an empty directory and
+runs `first-boot` and `persist` from there on the tagged image,
+building nothing — the delivered shape an operator's empty machine
+runs. A crashed run leaves its own uniquely-named project behind; the
+next run never touches it.
+
 `podman-verify` mounts the repository read-only at `/workspace` inside
 the workstation and runs, through the engine's own client, the real
 `Dockerfile.verify` build, the prepared-image path, and the three
@@ -232,6 +257,7 @@ proves no residual container, no zombie and no resident conmon survives.
 The in-repo Go tests pin the same facts statically
 (`test/w535_workstation_image_test.go`: `TestWorkstationImage`,
 `TestWorkstationCompose`, `TestWorkstationSmoke`,
-`TestWorkstationSmokeFirstBoot`) and drive the `--no-aihub` boot for
+`TestWorkstationSmokeFirstBoot`, `TestWorkstationSmokePersist`,
+`TestWorkstationSmokeHostDependencies`) and drive the `--no-aihub` boot for
 real on a machine with an engine (`TestWorkstationImageEngine`,
 skipped without one).

@@ -30,6 +30,11 @@ import { ConfigButton, ConfigDetailGrid, ConfigDetailGridRow } from "./SettingsU
  * takes a second, separate confirmation that states what it ends. The line
  * naming tools/install.sh shows only while an install or update is relevant
  * (polyforgeInstallRelevant): a healthy, current pf shows none of it.
+ *
+ * Inside the workstation image the card is read-only (polyforge#177): the
+ * GET answers the imageManaged fact, the card shows the managed note and
+ * renders no install, force or credential control, and the start is a
+ * no-op — no POST and no stream can ever leave.
  */
 export function PolyforgeInstallCard({ active, refreshKey, onFinished }: {
   active: boolean;
@@ -39,6 +44,7 @@ export function PolyforgeInstallCard({ active, refreshKey, onFinished }: {
 }) {
   const { t } = useI18n();
   const [versions, setVersions] = useState<PolyforgeInstallVersions | null>(null);
+  const [imageManaged, setImageManaged] = useState(false);
   const [readError, setReadError] = useState<string | null>(null);
   const [run, setRun] = useState<PolyforgeInstallRun | null>(null);
   const [lines, setLines] = useState<string[]>([]);
@@ -61,7 +67,14 @@ export function PolyforgeInstallCard({ active, refreshKey, onFinished }: {
   const read = useCallback(async (force: boolean): Promise<PolyforgeInstallRun | null> => {
     try {
       const response = await fetch(`/api/polyforge/install${force ? "?force=1" : ""}`);
-      const body = await response.json() as { versions?: PolyforgeInstallVersions | null; run?: PolyforgeInstallRun | null; error?: string };
+      const body = await response.json() as { imageManaged?: boolean; versions?: PolyforgeInstallVersions | null; run?: PolyforgeInstallRun | null; error?: string };
+      // the managed machine is a state, never a read failure
+      if (body.imageManaged) {
+        setImageManaged(true);
+        setReadError(null);
+        return body.run ?? null;
+      }
+      setImageManaged(false);
       if (body.versions) {
         setVersions(body.versions);
         setReadError(null);
@@ -147,6 +160,7 @@ export function PolyforgeInstallCard({ active, refreshKey, onFinished }: {
   useEffect(() => () => { sourceRef.current?.close(); }, []);
 
   const start = async (force: boolean) => {
+    if (imageManaged) return;
     setProblem(null);
     // the key never stays in the form, whatever the outcome — a refused
     // check included
@@ -205,6 +219,7 @@ export function PolyforgeInstallCard({ active, refreshKey, onFinished }: {
   return (
     <PolyforgeInstallView
       versions={versions}
+      imageManaged={imageManaged}
       readError={readError}
       streamError={streamError}
       run={run}
@@ -226,6 +241,8 @@ export function PolyforgeInstallCard({ active, refreshKey, onFinished }: {
 
 export interface PolyforgeInstallViewProps {
   versions: PolyforgeInstallVersions | null;
+  /** The workstation image's fact: the card turns read-only. */
+  imageManaged: boolean;
   readError: string | null;
   streamError: string | null;
   run: PolyforgeInstallRun | null;
@@ -245,7 +262,7 @@ export interface PolyforgeInstallViewProps {
 
 /** The card's face, from its state alone (no effect, no fetch). */
 export function PolyforgeInstallView({
-  versions, readError, streamError, run, lines, host, apiKey, problem, posting, confirmingForce,
+  versions, imageManaged, readError, streamError, run, lines, host, apiKey, problem, posting, confirmingForce,
   onHost, onApiKey, onStart, onAskForce, onForce, onCancelForce,
 }: PolyforgeInstallViewProps) {
   const { t } = useI18n();
@@ -270,8 +287,11 @@ export function PolyforgeInstallView({
   return (
     <section className="polyforge-config-card polyforge-install-card" aria-label={t("polyforge.install.title")} data-pf-install>
       <p className="polyforge-config-card-title">{t("polyforge.install.title")}</p>
-      {polyforgeInstallRelevant(versions, run) && (
+      {polyforgeInstallRelevant(versions, run) && !imageManaged && (
         <p className="polyforge-config-card-hint" data-pf-install-hint>{t("polyforge.install.hint", { repo: versions?.repo ?? POLYFORGE_INSTALL_REPO })}</p>
+      )}
+      {imageManaged && (
+        <p className="polyforge-config-card-hint" data-pf-install-image>{t("polyforge.install.imageManaged")}</p>
       )}
       {readError && <p className="config-add-source-error" role="alert">{readError}</p>}
 
@@ -325,19 +345,21 @@ export function PolyforgeInstallView({
         </p>
       )}
 
-      {versions?.needsConfig && !running && (
+      {versions?.needsConfig && !running && !imageManaged && (
         <div className="polyforge-install-credentials" data-pf-install-credentials>
           <p className="polyforge-config-card-hint">{t("polyforge.install.firstInstallHint")}</p>
           <input aria-label={t("polyforge.install.host")} placeholder={t("polyforge.install.host")} value={host} onChange={(event) => onHost(event.target.value)} />
           <input type="password" autoComplete="off" aria-label={t("polyforge.install.apiKey")} placeholder={t("polyforge.install.apiKey")} value={apiKey} onChange={(event) => onApiKey(event.target.value)} />
         </div>
       )}
-      <div className="polyforge-install-actions">
-        <ConfigButton variant="primary" disabled={!versions || running || posting} onClick={onStart} data-pf-install-start>
-          {versions?.pfPresent ? t("polyforge.install.update") : t("polyforge.install.install")}
-        </ConfigButton>
-        {running && <span className="config-scope-switch-reason">{t("polyforge.install.busyReason")}</span>}
-      </div>
+      {!imageManaged && (
+        <div className="polyforge-install-actions">
+          <ConfigButton variant="primary" disabled={!versions || running || posting} onClick={onStart} data-pf-install-start>
+            {versions?.pfPresent ? t("polyforge.install.update") : t("polyforge.install.install")}
+          </ConfigButton>
+          {running && <span className="config-scope-switch-reason">{t("polyforge.install.busyReason")}</span>}
+        </div>
+      )}
       {problem && <p className="config-add-source-error" role="status">{problem}</p>}
 
       {run && (
