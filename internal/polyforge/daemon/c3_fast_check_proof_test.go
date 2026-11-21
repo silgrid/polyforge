@@ -221,3 +221,31 @@ func TestFastCheckProofRefusesARedResult(t *testing.T) {
 		})
 	}
 }
+
+func TestFastCheckProofRefusesAStaleHead(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		heads func(f *c4Fixture) map[string]string
+		want  func(f *c4Fixture) string
+	}{
+		{"a result from the start commit", func(f *c4Fixture) map[string]string { return map[string]string{"app": f.c1} },
+			func(f *c4Fixture) string { return "ran at " + f.c1 }},
+		{"a result with no head for the repo", func(f *c4Fixture) map[string]string { return map[string]string{"other": f.c2} },
+			func(f *c4Fixture) string { return "ran at no head of repos/app" }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newC3Fixture(t, "wi_c3h"+strings.ReplaceAll(c.name, " ", "_"))
+			f.as("build", 1)
+			writeC3Result(t, f.capDir, "artifacts/build/fast-checks/app.json", "pass", c.heads(f))
+			code, body := c4Call(t, f.td, "handoff", map[string]any{"status": "done", "body": c4Body()})
+			if code != 400 {
+				t.Fatalf("build at a stale head = %d %s, want 400", code, body)
+			}
+			for _, w := range []string{"repos/app", c.want(f), "but HEAD is " + f.c2, "run-fast-check --repo app --out artifacts/build/fast-checks/app.json"} {
+				if !strings.Contains(body, w) {
+					t.Errorf("the refusal does not carry %q:\n%s", w, body)
+				}
+			}
+		})
+	}
+}
