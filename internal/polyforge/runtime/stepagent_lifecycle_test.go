@@ -306,6 +306,13 @@ trap 'echo TERM >> "$FAKEPI_DIR/signals"' TERM
 while kill -0 "$PPID" 2>/dev/null; do sleep 0.1; done
 `
 
+// fakePiPlain announces one assistant message and exits 0.
+const fakePiPlain = `#!/bin/bash
+echo "started" >> "$FAKEPI_DIR/started"
+echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}'
+exit 0
+`
+
 // fakePiHonorTERM exits cleanly on TERM after announcing one message.
 const fakePiHonorTERM = `#!/bin/bash
 echo "started" >> "$FAKEPI_DIR/started"
@@ -626,7 +633,7 @@ func TestPiSubagentLifecycleTimeout(t *testing.T) {
 		"showSchema": true,
 		"deadlineMs": 20000,
 		"env":        map[string]any{"FAKEPI_DIR": dir},
-	}, fakePiHonorTERM)
+	}, fakePiPlain)
 	var schema map[string]any
 	if err := json.Unmarshal([]byte(res.Result["schema"].(string)), &schema); err != nil {
 		t.Fatalf("no tool schema in the driver result: %v (result=%v)", err, res.Result)
