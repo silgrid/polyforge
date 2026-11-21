@@ -16,6 +16,7 @@ const records = require("../bin/run-records.js");
 const {
   getInstallKind,
   installRelease,
+  isImageManaged,
   isNewerStableVersion,
   readReleaseChannel,
   runUpdate,
@@ -610,4 +611,43 @@ test("pi-web update refuses a fake package tree without the channel marker", (t)
     assert.doesNotMatch(result.stdout, /Update channel/);
   }
   assert.equal(fs.existsSync(ghLog), false, "no gh call on a refused tree");
+});
+
+// ---- the workstation image refuses the self-update (polyforge#177) ----
+
+test("polyforge#177: the CJS image judgment — one fact, the same convention as the server side", () => {
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), "pf-cli-image-"));
+  try {
+    assert.equal(isImageManaged(path.join(work, "absent")), false, "no seed root at all is a host");
+    fs.mkdirSync(path.join(work, "seed-bare", "releases", "v1"), { recursive: true });
+    assert.equal(isImageManaged(path.join(work, "seed-bare")), false, "a releases/ directory without the seed manifest is not the image");
+    fs.mkdirSync(path.join(work, "seed-image", "releases", "v0.2.4-dev.1"), { recursive: true });
+    fs.writeFileSync(path.join(work, "seed-image", "releases", "v0.2.4-dev.1", "manifest.json"), "{}\n");
+    assert.equal(isImageManaged(path.join(work, "seed-image")), true, "one manifest under releases/<ver>/ is the fact");
+    assert.equal(isImageManaged(), false, "the production default reads the constant — a host here");
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+});
+
+test("polyforge#177: the workstation image refuses the update before the channel is even read", async () => {
+  const refusal = [];
+  const gated = {
+    currentVersion: "0.11.0",
+    pkgDir: "/usr/lib/node_modules/@silgrid/pi-web",
+    listRecords: () => [],
+    formatRecord: (record) => record.url,
+    readChannel: () => { throw new Error("readChannel must not run inside the image"); },
+    fetchLatest: async () => { throw new Error("fetchLatest must not run inside the image"); },
+    install: () => { throw new Error("install must not run inside the image"); },
+    log: () => {},
+    error: (message) => refusal.push(message),
+    imageManaged: () => true,
+  };
+  assert.equal(await runUpdate({ ...gated }), 1, "exit code 1");
+  assert.equal(refusal.length, 1);
+  assert.match(refusal[0], /Refusing to update: this pi-web runs inside the workstation image/, "the fixed refusal copy");
+  refusal.length = 0;
+  assert.equal(await runUpdate({ ...gated, check: true }), 1, "--check is refused the same way — zero network, zero spawn");
+  assert.equal(refusal.length, 1);
 });
