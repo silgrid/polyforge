@@ -77,7 +77,9 @@ func TestStepGuardNodeSuite(t *testing.T) {
 		t.Fatal("the guard asset directory carries no node test file")
 	}
 	cmd := exec.Command(node, append([]string{"--test"}, args...)...)
-	cmd.Env = append(os.Environ(), "NO_COLOR=1")
+	// the suites' scratch files stay inside this test's own temp dir: the
+	// package's testenv guard fails on leftovers in the private TMPDIR
+	cmd.Env = append(os.Environ(), "TMPDIR="+t.TempDir(), "NO_COLOR=1")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("the guard node suite failed:\n%s", out)
