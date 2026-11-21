@@ -957,6 +957,8 @@ try {
     const page = await newPage();
     const tierWrites = [];
     let items = [{ key: "step_tiers.default", value: ["pi:other/model"], source: "file", class: "live", schema: { kind: "model-list" } }];
+    // a one-shot CAS refusal for the draft-kept check below
+    let refuseNextPost = false;
     await page.route(/\/api\/models\?scope=all/, (route) => route.fulfill({ json: {
       models: { "anthropic:opus": "Opus" }, modelList: [{ id: "opus", name: "Opus", provider: "anthropic" }],
       defaultModel: null, defaultThinkingLevel: null, savedDefaultThinkingLevel: null,
@@ -965,6 +967,11 @@ try {
     await page.route(/\/api\/polyforge\/config(?:\?|$)/, async (route) => {
       if (route.request().method() === "POST") {
         const body = route.request().postDataJSON();
+        if (refuseNextPost) {
+          refuseNextPost = false;
+          await route.fulfill({ status: 409, json: { error: "the file changed since it was read" } });
+          return;
+        }
         tierWrites.push(body);
         items = body.action === "set"
           ? [...items.filter((item) => item.key !== body.key), { key: body.key, value: body.value, source: "file", class: "live", schema: { kind: "model-list" } }]
@@ -991,6 +998,17 @@ try {
       { action: "set", key: "step_tiers.default", value: ["pi:other/model", "pi:anthropic/opus"], host: true, expect_state: { file_sha256: "e2e-sha" } },
       { action: "set", key: "step_tiers.default", value: ["pi:other/model", "pi:anthropic/opus", "claude:opus"], host: true, expect_state: { file_sha256: "e2e-sha" } },
     ], "one Host write per harness, the whole-key lists, the CAS along");
+    // A CAS conflict keeps the draft and reports per harness: the refused
+    // harness shows the conflict, the unattempted one says so, and the
+    // select keeps the choice for the user to retry.
+    refuseNextPost = true;
+    await cell.locator("[data-step-tier-select]").selectOption("");
+    await cell.getByRole("button", { name: "Save", exact: true }).click({ timeout: ACTION_MS });
+    const results = cell.locator(".harness-apply-to-results li");
+    await results.first().waitFor({ state: "visible", timeout: ACTION_MS });
+    assert.match(await cell.locator('.harness-apply-to-results [data-harness="pi"]').innerText(), /the file changed since it was read/, "the refused harness reports the conflict");
+    assert.match(await cell.locator('.harness-apply-to-results [data-harness="claude"]').innerText(), /not attempted after the earlier failure/, "the unattempted harness says so");
+    assert.equal(await cell.locator("[data-step-tier-select]").inputValue(), "", "the draft (here 未设置) is kept for the retry");
     await page.context().close();
   });
 
