@@ -228,7 +228,10 @@ class HelperTest(unittest.TestCase):
             path = os.path.join(td, "change-analysis.json")
             with open(path, "w", encoding="utf-8") as f:
                 _json.dump({"tests": [], "selected": {"app": good}}, f)
-            an = read_analysis(path)
+            try:
+                an = read_analysis(path)
+            except ValueError as err:
+                self.fail("a pre_existing record must parse: %s" % err)
             self.assertEqual(an.selected["app"].status, "pre_existing")
             self.assertEqual(selected_problem(an.selected["app"], "b" * 40), "")
             with open(path, "w", encoding="utf-8") as f:
