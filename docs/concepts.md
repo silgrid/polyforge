@@ -106,7 +106,10 @@ that a step's `done` needs proof the tree it changed still passes its own
 checks: develop's `build` and `sync` do (`fast_check_proof`), so their
 `done` is refused until every task repo the round moved has a `pass` result
 at its HEAD — the daemon reads the result file the lane's declaration names
-and never runs the check itself.
+and never runs the check itself. A red the change did not cause — the
+default branch already red, an `error`/`partial` result, or a lane that
+planned no check — is the owner's: the step asks, and on the release hands
+off `done` with `--per-owner` naming the reply, the stamp recording it.
 
 A step agent that needs the owner asks with `pf step ask` and ends its
 turn; the owner's words — `pf answer <wi> --text "<words>"` or the job
@@ -589,7 +592,10 @@ rewind — and reads no content, and no agent merges by hand:
   line over every moved repo (`artifacts/sync/fast-checks/<repo>.json`), and
   its `done` is refused until that result is a `pass` at HEAD — a structural
   break such as a stray brace stops here, not at the gate after; a
-  fast-forward needs none. No review judges that resolution: the verification
+  fast-forward needs none, and a red that is not the resolution's (the
+  default branch already red, an `error`/`partial` result, no planned check)
+  is released by the owner's word, the step then handing off `done` with
+  `--per-owner`. No review judges that resolution: the verification
   tests the resolved tree right after, publish's PR body lists the files verbatim for
   the owner ("conflict resolved in sync: <files>"), and an agent that is not
   confident — or finds the default branch changed a premise the change

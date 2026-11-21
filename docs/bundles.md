@@ -241,7 +241,9 @@ and YAML path, before a claim ever meets it. The keys:
     the repo at HEAD) for every task repo the round changed; a repo left at
     its round's start and a fast-forward need none. The daemon reads the
     file and quotes `command` in a refusal, so no repository's command is
-    in the daemon ([reference](reference/workflow-contract.md#step-keys)).
+    in the daemon; a `done` the gate would refuse is accepted when it cites
+    the owner's release with `--per-owner`, the stamp recording it
+    ([reference](reference/workflow-contract.md#step-keys)).
   - `skill:` — the skill the step follows: `<lane>/skills/<name>.md`, else
     `_shared/skills/<name>.md`, rendered after the step definition; a skill
     names the workflow scripts it runs (`commands:`, by file name), each line

@@ -123,7 +123,7 @@ process runs.
 | `resources` | `{admission, locks}`: what the daemon takes for each dispatch |
 | `hub` | `{verbs, attrs}` ([hub keys](#hub-keys)): what this step may call through `pf step hub`; default none |
 | `wrap_attrs` | the wrap attrs this step registers, a list of names (`^[a-z][a-z0-9_]{0,63}$`), each at most once; default none (`WFC-112`). Its round's `pf step handoff --status done` is refused until each was registered with `pf step hub wrap-attrs <name> @<file>`, so a record the wrap must carry cannot be forgotten; listing one grants the step `wrap-attrs`. When the steps at the lane's end are skipped (`skippable` steps a project switched off), their `wrap_attrs` pass to the last step that runs: it is granted `wrap-attrs` and its done is refused until it registered them |
-| `fast_check_proof` | `{result, command}` ([fast_check_proof keys](#fast_check_proof-keys)); default none. The step's `done` is refused unless every task repo whose HEAD it moved has a `pf-step-result/1` result at `result` (with `{repo}` replaced by the repo's name) whose `verdict` is `pass` and whose `heads` carries that repo at its current HEAD; a repo at its round's start commit, and a fast-forward (no commit on HEAD that no remote-tracking ref carries), needs none, a start commit the round did not record needs the result like a changed repo. The daemon only reads the file; the refusal names the repo, the failing check and the line `command` writes |
+| `fast_check_proof` | `{result, command}` ([fast_check_proof keys](#fast_check_proof-keys)); default none. The step's `done` is refused unless every task repo whose HEAD it moved has a `pf-step-result/1` result at `result` (with `{repo}` replaced by the repo's name) whose `verdict` is `pass` and whose `heads` carries that repo at its current HEAD; a repo at its round's start commit, and a fast-forward (no commit on HEAD that no remote-tracking ref carries), needs none, a start commit the round did not record needs the result like a changed repo. The daemon only reads the file; the refusal names the repo, the failing check and the line `command` writes. A red the change did not cause — the default branch already red, an `error`/`partial` result, or a lane that planned no check — is the owner's: `pf step ask`, and on the release hand off `done` with `--per-owner <the reply's at>`; the section's header records it (the same release a spent rewind budget gives a gate's `fail`) |
 
 ### fast_check_proof keys
 
@@ -590,7 +590,11 @@ are wrong exits non-zero at once, naming why. The command's flags are
   on HEAD that a remote-tracking ref does not carry — needs none, while a
   round start the record does not carry is no exemption. The refusal names
   every failing repo, the failing check and the declared line that writes a
-  fresh result; the daemon only reads the file (and git);
+  fresh result; the daemon only reads the file (and git). A `done` citing an
+  owner message of the round with `--per-owner` is the owner's explicit
+  release of that red (the default branch already red, an `error`/`partial`
+  result, or no planned check): the gate is skipped, the at is checked like
+  every `--per-owner`, and the section's header records it;
 - the body carries the template's seven sections ([handoff.md](#handoffmd))
   in the language the dispatch was told (its spawn-journal line; a line
   without one reads `en`), plus the re-entry heading (Reply to the

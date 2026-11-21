@@ -37,7 +37,12 @@ the merge commit's HEAD (the tree is unchanged, so every green command is reused
 non-fast-forward merge the script already committed with no conflict is checked once after
 the start line. A red check that the resolution caused is fixed in the `conflicts[]` files
 only; a red on a merge you cannot edit — no `conflicts[]`, or a real break outside them — is
-**not yours to resolve**: `pf step ask` the owner.
+**not yours to resolve**: `pf step ask` the owner. A red that is not this
+merge's at all — the default branch was already red, the result is
+`error`/`partial`, or the engine planned no check — is the owner's the same
+way: ask, and on the explicit release hand off `done` with `--per-owner
+<the reply's at>`; the daemon accepts it and the section's header records
+the cited message. Without that word the gate still refuses `done`.
 
 ## 开工前读什么、核对什么 — before you start: what you read and check
 
@@ -118,7 +123,7 @@ off `--status rewind --to <build on develop, fix on micro> --per-owner <the repl
 - **给下游与未决**: the files you resolved, verbatim — no review judges them; the gate after
   you tests them and publish lists them for the owner.
 - **Evidence**: `artifacts/sync/result.json`, and each `artifacts/sync/fast-checks/<repo>.json`
-  the gate read.
+  the gate read; on an owner's release, the message `--per-owner` cites.
 
 ## Never
 
@@ -129,6 +134,7 @@ the result lists under
 `mechanical[]` (its resolution is the conf's rule), or any repo whose `conflicts[]` is
 empty; hand off `rewind` to the step that makes the change, or `cancel`, without running
 the abort line first; hand off `done` after a merge that moved a repo without the
-fast-check line's `pass` at HEAD; pass a Bash timeout; end a turn that needs the owner without
+fast-check line's `pass` at HEAD unless the owner released it with `--per-owner`;
+pass a Bash timeout; end a turn that needs the owner without
 `pf step ask`; run a command in the background and poll it, or give it a timeout or
 deadline of your own.
