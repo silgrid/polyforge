@@ -1067,3 +1067,34 @@ changed.
 - The estimate line is read only inside `## 分析` -> `### 1.`, one `估算：<repo> 新增 N 个文件、修改 M 个文件、单元 K 个` per repository; a malformed or duplicated line voids that repository only; the summary counts `estimate unknown` apart, with its names (the shared samples are polyforge#213's `internal/contracttest/testdata/analysis_estimate_lines.tsv`).
 
 What a project must change — nothing: the tool is read-only, its new output is gated by `--events` / `arms`, and the pre-existing report and CSV stay byte-identical without them.
+
+## v0.2.4, the hand-off gate: build and sync hand off done only with a passing fast check at HEAD (polyforge#211)
+
+- The develop lane's `build` and `sync` declare the step key
+  `fast_check_proof {result, command}`. Before `done`, the daemon reads the
+  result file the declaration names — `artifacts/build/fast-checks/<repo>.json`
+  for build, `artifacts/sync/fast-checks/<repo>.json` for sync — for every task
+  repo the step's round moved: it must be a `pf-step-result/1` with `verdict`
+  `pass` and `heads` carrying that repo at its current HEAD. A missing file, an
+  unreadable result, a stale head or a non-pass verdict refuses `done` and names
+  the repo, the failing check and the line that re-runs it. A repo left at the
+  round's start commit and a fast-forward need none; a start the record does not
+  carry needs one like a changed repo.
+- A red the change did not cause — the default branch already red, an
+  `error`/`partial` result, or a lane that planned no check — is released by the
+  owner's word: the step asks, then hands off `done` with `--per-owner <the
+  reply's at>` and the section's header records the cited message (the same
+  release a spent rewind budget gives a gate's `fail`). polyforge#212 (C4) will
+  later treat a triaged known red as passing inside the gate.
+- Build's close re-runs the check with `--phase fast` after its last commit so
+  the result's `heads` are the commits the gate compares; sync's skill runs the
+  check after a merge that moved a repo (before `continue` on the working tree
+  and again after it, so the merge commit's HEAD is recorded). The daemon still
+  only reads files and git; it runs no check and knows no repository's command.
+
+What a project must change — nothing: this is a new optional lane step key and
+the develop lane's own declaration; no config key, `pf` subcommand or result
+schema changed. A work item already in flight keeps its claim-time lane snapshot,
+so it is not gated; a work item claimed after the upgrade runs the new build and
+sync texts. A project whose default branch is already red will see its build and
+sync ask the owner at hand-off instead of at verification.

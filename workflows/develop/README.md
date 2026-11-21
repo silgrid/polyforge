@@ -72,7 +72,13 @@ The complete variable table is in [the workflow contract's Scripts environment s
   limit kills is an evidence problem, never a pass: the waiting inside it is bounded and an
   assertion failure exits at once; and a long command writes its output to
   a log file with its exit code and the log is searched after the run, never piped straight into
-  grep, head or tail. Per-unit
+  grep, head or tail. After the last commit it re-runs the lane's fast-check
+  proof line with `--phase fast` per touched repo
+  (`fast_checks.py --repo <repo> --phase fast --json --out
+  artifacts/build/fast-checks/<repo>.json`): the tree is unchanged, so every
+  green command is reused and only the result's `heads` move to the commits
+  the hand-off gate compares against HEAD; a repo the change touched without
+  that pass at HEAD has its `done` refused. Per-unit
   fast checks narrowed to the roots the unit's written `Touched files` reach (`--phase fast
   --root`, the green runs whose key is unchanged reused) plus every new test; the close's scoped selection — `fast_checks.py --close-scoped`,
   the same light-tier selection verification plans, for a work item whose verification runs the
@@ -90,7 +96,10 @@ The complete variable table is in [the workflow contract's Scripts environment s
   violates and must be fixed before the hand-off); a self-review against review's five
   blocking classes and its doc-impact check, item by item — each document compared, its
   conclusion, and synced or no-change-needed with the reason — recorded
-  (`artifacts/self-review.md`). It asks the owner (`pf step ask`) only
+  (`artifacts/self-review.md`). A red the change did not cause — the default branch
+  already red, an `error`/`partial` fast check, or a lane that planned no check — is the
+  owner's: `pf step ask`, and on the release hand off `done` with `--per-owner <the reply's
+  at>`; the stamp records it. It asks the owner (`pf step ask`) only
   when the code reveals something the ticket did not decide, when the plan diverges from
   the ticket, when the ticket carries `confirm_plan: true`, or when it has no acceptance
   list or an incomplete one — right after the plan, never at the end. Its hand-off states
@@ -114,12 +123,20 @@ The complete variable table is in [the workflow contract's Scripts environment s
   the previous round's findings and, from the commits the daemon stamped, whether the build
   changed anything at all — a build that changed nothing without a reason per finding fails
   again.
-- **sync** (no gate; skill `sync`, `sync.py`, tool window 20 minutes) — checks that each
+- **sync** (no gate; skill `sync`, `sync.py`, `fast_checks.py`, tool window 20 minutes) — checks that each
   task repo stands at the heads review judged (stamped on review's section), or at its own
   earlier `after` when merge's FAIL sent the lane back here; then merges origin's default
   branch in place (never a rebase): the conflicts the default branch's
   `.polyforge/integrate.conf` makes mechanical resolved by the script, a real conflict
-  resolved by the step's own agent and committed by the skill's continue line. When the
+  resolved by the step's own agent and committed by the skill's continue line; then it runs
+  the lane's fast-check line over every repo the merge moved (`fast_checks.py --repo
+  <repo> --phase fast --json --out artifacts/sync/fast-checks/<repo>.json`). `sync`
+  declares `fast_check_proof`, so its `done` is refused until each moved repo has a `pass`
+  at HEAD (a fast-forward needs none); a red breaks the tree at sync, where the agent can
+  still fix it in the conflicted files, rather than at verification. A red that is not this
+  merge's — the default branch already red, an `error`/`partial` result, or no planned check
+  — is the owner's: `pf step ask`, and on the release hand off `done` with `--per-owner
+  <the reply's at>`, the stamp recording it. When the
   resolution is not the agent's to make, it asks the owner, and hands the work back to
   `build` (or cancels) only on the owner's word, after the skill's abort line.
 - **verification** (gate, `waivable: true`; skill `verify`, `verify.py`, heavy-run
@@ -187,7 +204,7 @@ message (`--per-owner`); the daemon checks the message exists and never reads it
    check enforces either stop: `review` judges a self-written list with no owner reply, or a
    first test commit older than the reply to a `confirm_plan` ticket, a blocking
    `guarantee`.
-2. **A machine that cannot run a step's command** — `facts.py`, `sync.py`, `verify.py` or
+2. **A machine that cannot run a step's command** — `facts.py`, `sync.py`, `fast_checks.py`, `verify.py` or
    `merge.py` exiting 2 after the skill's retries: the step hands off `blocked`; fix the
    machine, then write to the work item (or `pf resume`).
 3. **A sync that is not the agent's to resolve**, or a HEAD that is neither the reviewed

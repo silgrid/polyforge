@@ -137,7 +137,17 @@ record exactly what ran.
    differs from the current one has its file:line references re-checked against the current
    base before the work starts; a ticket without `## 分析` writes `none` there. A round that
    keeps an inherited plan adds nothing to it.
-5. **The close's checks.** The step's close (3c) first runs the build close's scoped selection once
+5. **The close's checks.** Last, after the whole-change fast check and the unit check, run
+   the fast-check proof line once per touched repo — the same fast check with `--phase
+   fast`, the final write of `artifacts/build/fast-checks/<repo>.json`, so each result's
+   `heads` is the HEAD the hand-off gate compares against (the tree is unchanged since the
+   whole-change run, so every green command is reused):
+   `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/fast_checks.py" --repo <repo> --phase fast --json --out artifacts/build/fast-checks/<repo>.json`
+   The daemon reads that file for every repo build changed and refuses `done` until each is
+   a `pass` at HEAD. A red the change did not cause — the default branch already red, an
+   `error`/`partial` result, or a lane that planned no check — is the owner's: `pf step
+   ask`, and on the release hand off `done` with `--per-owner <the reply's at>`; the stamp
+   records it. The step's close (3c) runs the build close's scoped selection once
    per touched repo — for a work item whose verification runs the light tier (an integration
    batch's fix ticket runs the full bar and closes without one) — `"$PF_PYTHON"
    "$PF_SHARED_DIR/scripts/fast_checks.py" --repo <name> --close-scoped --reuse

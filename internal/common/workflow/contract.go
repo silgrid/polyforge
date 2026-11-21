@@ -33,7 +33,8 @@ import (
 // regenerated in place, the lane schema
 // (workflows/_schema/workflow-<N>.schema.json) with go generate. Any other
 // change is incompatible (a key removed or renamed, a key's meaning or
-// default changed, a new required key, a check that refuses a lane it
+// default changed, a new required key of a key set the release already
+// carries, a check that refuses a lane it
 // accepted, a capsule or hand-off format the work items in flight rely on):
 // it is registered when it merges, one entry in contract-pending.md (what
 // changed, what the migration takes; the pin is red on one the registry

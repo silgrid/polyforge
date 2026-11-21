@@ -123,6 +123,14 @@ process runs.
 | `resources` | `{admission, locks}`: what the daemon takes for each dispatch |
 | `hub` | `{verbs, attrs}` ([hub keys](#hub-keys)): what this step may call through `pf step hub`; default none |
 | `wrap_attrs` | the wrap attrs this step registers, a list of names (`^[a-z][a-z0-9_]{0,63}$`), each at most once; default none (`WFC-112`). Its round's `pf step handoff --status done` is refused until each was registered with `pf step hub wrap-attrs <name> @<file>`, so a record the wrap must carry cannot be forgotten; listing one grants the step `wrap-attrs`. When the steps at the lane's end are skipped (`skippable` steps a project switched off), their `wrap_attrs` pass to the last step that runs: it is granted `wrap-attrs` and its done is refused until it registered them |
+| `fast_check_proof` | `{result, command}` ([fast_check_proof keys](#fast_check_proof-keys)); default none. The step's `done` is refused unless every task repo whose HEAD it moved has a `pf-step-result/1` result at `result` (with `{repo}` replaced by the repo's name) whose `verdict` is `pass` and whose `heads` carries that repo at its current HEAD; a repo at its round's start commit, and a fast-forward (no commit on HEAD that no remote-tracking ref carries), needs none, a start commit the round did not record needs the result like a changed repo. The daemon only reads the file; the refusal names the repo, the failing check and the line `command` writes. A red the change did not cause — the default branch already red, an `error`/`partial` result, or a lane that planned no check — is the owner's: `pf step ask`, and on the release hand off `done` with `--per-owner <the reply's at>`; the section's header records it (the same release a spent rewind budget gives a gate's `fail`) |
+
+### fast_check_proof keys
+
+| Key | Rule |
+|---|---|
+| `result` | string, required, the `pf-step-result/1` file's path relative to the capsule, carrying `{repo}` (`WFC-112` otherwise: absolute, a `..` segment, or no `{repo}` is refused): `<repo>` is the task repo's name under `repos/` |
+| `command` | string, required, one line carrying `{repo}` (`WFC-112` otherwise: empty, more than one line, or no `{repo}` is refused): the command a refusal quotes, so the step re-runs the check and hands off again |
 
 ### on_fail keys
 
@@ -575,6 +583,18 @@ are wrong exits non-zero at once, naming why. The command's flags are
   the reason falls in it, else `max_rewinds` — a `fail` without
   `--per-owner` is refused: ask the owner first
   (`pf step ask`) — so no work item parks on a spent budget;
+- a `done` from a step whose lane declares `fast_check_proof` is refused
+  unless every task repo its round moved has a `pf-step-result/1` result at
+  the declared path (verdict `pass`, `heads` carrying that repo at its
+  HEAD); a repo at its round's start commit, and a fast-forward — no commit
+  on HEAD that a remote-tracking ref does not carry — needs none, while a
+  round start the record does not carry is no exemption. The refusal names
+  every failing repo, the failing check and the declared line that writes a
+  fresh result; the daemon only reads the file (and git). A `done` citing an
+  owner message of the round with `--per-owner` is the owner's explicit
+  release of that red (the default branch already red, an `error`/`partial`
+  result, or no planned check): the gate is skipped, the at is checked like
+  every `--per-owner`, and the section's header records it;
 - the body carries the template's seven sections ([handoff.md](#handoffmd))
   in the language the dispatch was told (its spawn-journal line; a line
   without one reads `en`), plus the re-entry heading (Reply to the
@@ -1029,14 +1049,19 @@ registry's golden file (`contract.v<N>.golden`) and its baseline
 (`PF_WRITE_CONTRACT_GOLDEN=1`), the lane schema
 (`workflows/_schema/workflow-<N>.schema.json`) with `go generate`, and this
 page is kept in step. Any other change is incompatible: a key removed or
-renamed, a key's meaning or default changed, a new required key, a value
-removed, a check that refuses a lane it accepted, a capsule or hand-off
-format the work items in flight rely on. It is registered when it merges,
+renamed, a key's meaning or default changed, a new required key of a key
+set the release already carries, a value removed, a check that refuses a
+lane it accepted, a capsule or hand-off format the work items in flight
+rely on. A required key of a key set the release does not carry at all — a
+set new with its optional parent key — is no such change: no lane valid
+under the release could use it, and a parent key that is itself new and
+required is caught by its own set's rule. It is registered when it merges,
 one entry in `internal/common/workflow/contract-pending.md` (what changed,
 what the migration takes); the registry pin is red on an incompatible
 change the registry dump shows mechanically against the baseline (a
-removed key, a new required key, a removed value: the dump's `[required]`
-and `[values]` sections) while the list has no entry. The release that
+removed key, a new required key of an existing key set, a removed value:
+the dump's `[required]` and `[values]` sections) while the list has no
+entry. The release that
 follows a registration bumps the version once, in one change with the
 golden file, the baseline, the lane schema, this page, every shipped lane,
 a docs/upgrade.md section (the drain) and the emptied list; with the list
