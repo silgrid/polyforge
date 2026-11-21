@@ -1129,8 +1129,13 @@ test("the step-tier picker joins the chain and summarize add rows over the one c
     const findRowControls = () => {
       const all = nodes(hook);
       const input = all.find((node) => node.type === "input" && node.props["aria-label"] === rowLabel);
-      const select = all.find((node) => node.type === "select" && node.props["aria-label"] === rowLabel && JSON.stringify(node.props.children).includes("pi:tier/legacy"));
-      return { all, input, select };
+      // the picker renders the manual fill FIRST, its grouped select right
+      // after — the code row's own, never another row's
+      const inputAt = input ? all.indexOf(input) : -1;
+      const select = inputAt >= 0
+        ? all.slice(inputAt).find((node) => node.type === "select" && JSON.stringify(node.props.children).includes("pi:tier/legacy"))
+        : undefined;
+      return { all, input, inputAt, select };
     };
     const { all, input, select } = findRowControls();
     assert.ok(select, "the chain add row renders the shared picker's grouped select");
@@ -1142,8 +1147,7 @@ test("the step-tier picker joins the chain and summarize add rows over the one c
     assert.equal(findRowControls().input.props.value, "pi:tier/legacy", "the tier choice fills the manual draft");
     findRowControls().input.props.onKeyDown({ key: "Enter", preventDefault() {} });
     hook.flush();
-    const inputAt = findRowControls().all.indexOf(findRowControls().input);
-    const save = findRowControls().all.slice(inputAt).find((node) => node.type === "button" && String(node.props.children ?? "").includes("configSave"));
+    const save = findRowControls().all.slice(findRowControls().inputAt).find((node) => node.type === "button" && String(node.props.children ?? "").includes("configSave"));
     assert.ok(save, "the chain's Save renders");
     save.props.onClick();
     await settle();
