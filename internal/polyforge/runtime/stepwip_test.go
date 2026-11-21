@@ -63,7 +63,7 @@ func TestAgentStartCarriesTheStepEndHook(t *testing.T) {
 	g.r.dropJob(g.r.jobOf(g.wi))
 	g.hub.forceEnd(g.wi)
 	inner := g.r.cfg.AgentStarter
-	var got func(context.Context)
+	var got func(context.Context) error
 	g.r.cfg.AgentStarter = func(ctx context.Context, in AgentStartInput) (AgentHandle, error) {
 		got = in.StepEnded
 		return inner(ctx, in)

@@ -671,12 +671,13 @@ const stepWIPBound = 30 * time.Second
 // one step at a time per WI, so no successor exists while this runs; and
 // the dispatch's wall ends before this hook (driver.Run's endedAt), so
 // neither the sweep nor the push is booked into the step's T.
-func (r *Runtime) stepEnded(wi string) func(context.Context) {
-	return func(ctx context.Context) {
+func (r *Runtime) stepEnded(wi string) func(context.Context) error {
+	return func(ctx context.Context) error {
 		ctx, cancel := context.WithTimeout(ctx, stepWIPBound)
 		defer cancel()
 		r.sweepStepEscapees(wi)
 		r.SaveTaskWIP(ctx, wi)
+		return nil
 	}
 }
 

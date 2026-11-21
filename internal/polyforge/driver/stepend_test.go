@@ -27,10 +27,11 @@ func TestStepEndedRunsAfterEachDispatchBeforeItsWrite(t *testing.T) {
 		dispatch int64
 	}
 	var got []seen
-	d.cfg.StepEnded = func(ctx context.Context) {
+	d.cfg.StepEnded = func(ctx context.Context) error {
 		e := readExec(t, execPath)
 		st := e.Steps[e.CurrentStep]
 		got = append(got, seen{e.CurrentStep, st.Dispatch})
+		return nil
 	}
 	if err := d.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -50,7 +51,7 @@ func TestStepEndedSkippedForACancelledDispatch(t *testing.T) {
 	d, sp, _ := runEnv(t, spec("a"))
 	sp.script = []fakeEntry{{hold: true}}
 	calls := 0
-	d.cfg.StepEnded = func(context.Context) { calls++ }
+	d.cfg.StepEnded = func(context.Context) error { calls++; return nil }
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() { errCh <- d.Run(ctx) }()
@@ -76,7 +77,7 @@ func TestStepEndCleanupIsNotChargedToStepT(t *testing.T) {
 	link := supervise.NewLink("wi_run")
 	d.cfg.Link = link
 	const hook = 10 * time.Minute
-	d.cfg.StepEnded = func(context.Context) { at = at.Add(hook) }
+	d.cfg.StepEnded = func(context.Context) error { at = at.Add(hook); return nil }
 	sp.script = []fakeEntry{{err: errors.New("step process exited 1")}, done(`{"summary":"A"}`)}
 	if err := d.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)

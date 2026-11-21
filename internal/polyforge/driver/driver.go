@@ -108,9 +108,13 @@ type Config struct {
 	// Spawner derives the step processes. Required.
 	Spawner StepSpawner
 	// StepEnded runs after each dispatch's process is gone, before its
-	// result or failure is written (production: the task-repo WIP push).
-	// It never fails the step; nil = nothing to run.
-	StepEnded func(context.Context)
+	// result or failure is written (production: the step-end escapee
+	// sweep, then the task-repo WIP push). A non-nil error means the
+	// cleanup could not prove the step's processes gone: the work item
+	// parks (the hand-off stays on the ledger for the resume to settle
+	// after a re-run of the hook), it never fails the step. nil = nothing
+	// to run.
+	StepEnded func(context.Context) error
 	// SpawnN seeds the per-WI monotonic derivation counter (B2): the
 	// same sources the runtime uses — state.json's spawn_n, or the
 	// capsule spawn-journal max across a fresh clone. Each step process
@@ -590,7 +594,7 @@ func (d *Driver) Run(ctx context.Context) error {
 			// process is gone), and the plan pass parks on the ask.
 			d.addUnbookedUntil(stepID, bookedFrom, awaiting.Since)
 			if d.cfg.StepEnded != nil && ctx.Err() == nil {
-				d.cfg.StepEnded(ctx)
+				_ = d.cfg.StepEnded(ctx)
 			}
 			d.announceEnd(stepID, n, supervise.OutcomeAwaitingOwner, 0, "")
 			// the owner's message resumes this conversation (relay.go):
@@ -599,7 +603,7 @@ func (d *Driver) Run(ctx context.Context) error {
 			continue
 		}
 		if d.cfg.StepEnded != nil && ctx.Err() == nil {
-			d.cfg.StepEnded(ctx)
+			_ = d.cfg.StepEnded(ctx)
 		}
 		if verdict != nil {
 			// The supervisor judged the dispatch dead. The process is
