@@ -12,6 +12,7 @@ package daemon
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -247,5 +248,214 @@ func TestFastCheckProofRefusesAStaleHead(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestFastCheckProofSkipsAnUnchangedRepo(t *testing.T) {
+	f := newC3Fixture(t, "wi_c3u")
+	// the fixture's sync round starts at c2, and HEAD is still c2
+	f.as("sync", 1)
+	if code, body := c4Call(t, f.td, "handoff", map[string]any{"status": "done", "body": c4Body()}); code != 200 {
+		t.Fatalf("sync at its start commit = %d %s, want 200", code, body)
+	}
+}
+
+func TestFastCheckProofSkipsAFastForward(t *testing.T) {
+	for _, c := range []struct {
+		name, origin string
+		want         int
+	}{
+		{"a fast-forward", "head", 200},
+		{"a local commit no remote carries", "start", 400},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newC3Fixture(t, "wi_c3f"+strings.ReplaceAll(c.name, " ", "_"))
+			f.writeExec(t, map[string]*capsule.Step{
+				"sync": {Status: capsule.StepInProgress, Round: 1, StartHeads: &capsule.StartHeads{Round: 1, Heads: map[string]string{"app": f.c1}}},
+			})
+			ref := f.c2
+			if c.origin == "start" {
+				ref = f.c1
+			}
+			c4Git(t, filepath.Join(f.capDir, capsule.DirRepos, "app"), "update-ref", "refs/remotes/origin/main", ref)
+			f.as("sync", 1)
+			code, body := c4Call(t, f.td, "handoff", map[string]any{"status": "done", "body": c4Body()})
+			if code != c.want {
+				t.Fatalf("%s = %d %s, want %d", c.name, code, body, c.want)
+			}
+			if c.want == 400 && !strings.Contains(body, "repos/app") {
+				t.Errorf("the refusal does not name repos/app:\n%s", body)
+			}
+		})
+	}
+}
+
+func TestFastCheckProofUnknownStartNeedsAResult(t *testing.T) {
+	f := newC3Fixture(t, "wi_c3n")
+	// the round's own StartHeads are missing: the recorded ones are round 0's
+	f.writeExec(t, map[string]*capsule.Step{
+		"build": {Status: capsule.StepInProgress, Round: 1, StartHeads: &capsule.StartHeads{Round: 0, Heads: map[string]string{"app": f.c1}}},
+	})
+	f.as("build", 1)
+	code, body := c4Call(t, f.td, "handoff", map[string]any{"status": "done", "body": c4Body()})
+	if code != 400 || !strings.Contains(body, "repos/app") || !strings.Contains(body, "no fast-check result") {
+		t.Fatalf("an unknown start = %d %s, want 400 naming repos/app", code, body)
+	}
+}
+
+// c3WriteFile writes body at dir/rel, the parent created.
+func c3WriteFile(t *testing.T, dir, rel, body string) {
+	t.Helper()
+	p := filepath.Join(dir, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// c3GitAllow runs git and answers its output and exit code without failing
+// the test (a conflicting merge exits 1).
+func c3GitAllow(t *testing.T, dir string, args ...string) (string, int) {
+	t.Helper()
+	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+	if err == nil {
+		return string(out), 0
+	}
+	if ee, ok := err.(*exec.ExitError); ok {
+		return string(out), ee.ExitCode()
+	}
+	t.Fatalf("git %v: %v\n%s", args, err, out)
+	return "", -1
+}
+
+// TestFastCheckProofSyncStrayBrace is AC4: #147's shape end to end over the
+// production hand-off path. A merge whose resolution carries a stray brace
+// is red in the fast check, refused by sync's done; the fix committed but
+// the check not re-run leaves the result at the merge commit and is
+// refused; the check re-run at the fix is accepted.
+func TestFastCheckProofSyncStrayBrace(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 is not on the PATH")
+	}
+	repoRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fastChecks := filepath.Join(repoRoot, "workflows", "_shared", "scripts", "fast_checks.py")
+	if _, err := os.Stat(fastChecks); err != nil {
+		t.Fatalf("the lane's fast_checks.py: %v", err)
+	}
+	f := newC3Fixture(t, "wi_c3e")
+	app := filepath.Join(f.capDir, capsule.DirRepos, "app")
+	if err := os.RemoveAll(app); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(app, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c4Git(t, app, "init", "-q", "-b", "main")
+	c3WriteFile(t, app, "main.go", "package main\n\nfunc main(){ println(\"base\") }\n")
+	c4Git(t, app, "add", ".")
+	c4Git(t, app, "commit", "-q", "-m", "base")
+	c4Git(t, app, "checkout", "-q", "-b", "feature")
+	c3WriteFile(t, app, "main.go", "package main\n\nfunc main(){ println(\"feature\") }\n")
+	c4Git(t, app, "add", ".")
+	c4Git(t, app, "commit", "-q", "-m", "feature")
+	fHead := c4Git(t, app, "rev-parse", "HEAD")
+	c4Git(t, app, "checkout", "-q", "main")
+	c3WriteFile(t, app, "main.go", "package main\n\nfunc main(){ println(\"upstream\") }\n")
+	c4Git(t, app, "add", ".")
+	c4Git(t, app, "commit", "-q", "-m", "upstream")
+	c4Git(t, app, "checkout", "-q", "feature")
+	if out, code := c3GitAllow(t, app, "merge", "main"); code == 0 {
+		t.Fatalf("the merge must conflict:\n%s", out)
+	}
+	c3WriteFile(t, app, "main.go", "package main\n\nfunc main(){\n\tprintln(\"feature\")\n\tprintln(\"upstream\")\n}\n}\n")
+	c4Git(t, app, "add", "main.go")
+	c4Git(t, app, "commit", "-q", "--no-edit")
+	merged := c4Git(t, app, "rev-parse", "HEAD")
+
+	engineDir := t.TempDir()
+	report, err := json.Marshal(map[string]any{
+		"schema": 1, "root": "/x", "stack": "none", "analyzer": nil, "conf": "present",
+		"conf_changed_in_diff": false, "base": "b", "head": "h", "default_branch": "main",
+		"mode": "scoped", "light": true, "paths": []string{"main.go"},
+		"commands": []map[string]any{{
+			"name": "brace", "phase": "fast",
+			"cmd":          `python3 -I -c "import sys;s=open('main.go').read();sys.exit(0 if s.count('{')==s.count('}') else 1)"`,
+			"requires_env": []string{}, "requires_cmd": []string{}, "timeout": "1m", "report": nil, "source": "conf",
+		}},
+		"test_glob": []string{}, "base_setup": []string{}, "runner": nil, "diagnostics": []string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c3WriteFile(t, engineDir, "report.json", string(report))
+	engine := filepath.Join(engineDir, "verify-scope")
+	if err := os.WriteFile(engine, []byte("#!/bin/bash\ncat \"$(dirname \"$0\")/report.json\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run := func() (int, map[string]any) {
+		t.Helper()
+		cmd := exec.Command(python, "-I", fastChecks, "--repo", "app", "--phase", "fast",
+			"--capsule", f.capDir, "--engine", engine, "--json", "--out", "artifacts/sync/fast-checks/app.json")
+		cmd.Dir = f.capDir
+		out, err := cmd.CombinedOutput()
+		code := 0
+		if err != nil {
+			ee, ok := err.(*exec.ExitError)
+			if !ok {
+				t.Fatalf("fast_checks.py: %v\n%s", err, out)
+			}
+			code = ee.ExitCode()
+		}
+		raw, err := os.ReadFile(filepath.Join(f.capDir, "artifacts", "sync", "fast-checks", "app.json"))
+		if err != nil {
+			t.Fatalf("the fast check wrote no result: %v\n%s", err, out)
+		}
+		var r map[string]any
+		if err := json.Unmarshal(raw, &r); err != nil {
+			t.Fatalf("the fast check's result: %v\n%s", err, raw)
+		}
+		return code, r
+	}
+	headOf := func(r map[string]any) string {
+		heads, _ := r["heads"].(map[string]any)
+		s, _ := heads["app"].(string)
+		return s
+	}
+
+	exit, r := run()
+	if exit != 1 || r["verdict"] != "fail" || headOf(r) != merged {
+		t.Fatalf("the stray brace: exit %d verdict %v heads %s, want 1/fail/%s", exit, r["verdict"], headOf(r), merged)
+	}
+
+	f.writeExec(t, map[string]*capsule.Step{
+		"sync": {Status: capsule.StepInProgress, Round: 1, StartHeads: &capsule.StartHeads{Round: 1, Heads: map[string]string{"app": fHead}}},
+	})
+	f.as("sync", 1)
+	code, body := c4Call(t, f.td, "handoff", map[string]any{"status": "done", "body": c4Body()})
+	if code != 400 || !strings.Contains(body, "repos/app") || !strings.Contains(body, "has verdict fail, not pass") {
+		t.Fatalf("sync with the stray brace = %d %s, want 400 on the verdict", code, body)
+	}
+
+	c3WriteFile(t, app, "main.go", "package main\n\nfunc main(){\n\tprintln(\"feature\")\n\tprintln(\"upstream\")\n}\n")
+	c4Git(t, app, "add", "main.go")
+	c4Git(t, app, "commit", "-q", "-m", "drop the stray brace")
+	fixed := c4Git(t, app, "rev-parse", "HEAD")
+	code, body = c4Call(t, f.td, "handoff", map[string]any{"status": "done", "body": c4Body()})
+	if code != 400 || !strings.Contains(body, "ran at "+merged) || !strings.Contains(body, "but HEAD is "+fixed) {
+		t.Fatalf("sync after the fix without a re-run = %d %s, want 400 on the stale head", code, body)
+	}
+
+	exit, r = run()
+	if exit != 0 || r["verdict"] != "pass" || headOf(r) != fixed {
+		t.Fatalf("the re-run after the fix: exit %d verdict %v heads %s, want 0/pass/%s", exit, r["verdict"], headOf(r), fixed)
+	}
+	if code, body := c4Call(t, f.td, "handoff", map[string]any{"status": "done", "body": c4Body()}); code != 200 {
+		t.Fatalf("sync with a passing result at HEAD = %d %s, want 200", code, body)
 	}
 }
