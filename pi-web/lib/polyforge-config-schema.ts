@@ -209,14 +209,15 @@ export const POLYFORGE_CONFIG_STEP_TIERS_MINIMUM_PF_VERSION = "0.2.4";
  *  is not a catalog key with a well-formed tier name (the panel's and the
  *  write route's shared refusal — a bad name never reaches pf). */
 export function parseStepTierKey(key: string): string | null {
-  return null;
+  const tier = key.startsWith("step_tiers.") ? key.slice("step_tiers.".length) : "";
+  return /^[a-z][a-z0-9-]{0,39}$/.test(tier) ? tier : null;
 }
 
 /** Whether a key is Host-only: one of the fixed HOST_ONLY_KEYS, or a
  *  well-formed `step_tiers.<tier>` catalog key (the cli.toml card excludes
  *  both; the Host region and the models page's tier column own them). */
 export function isHostOnlyKey(key: string): boolean {
-  return false;
+  return HOST_ONLY_KEYS.includes(key) || parseStepTierKey(key) !== null;
 }
 
 const PROJECT_NAME = /^[A-Za-z0-9._-]+$/;
