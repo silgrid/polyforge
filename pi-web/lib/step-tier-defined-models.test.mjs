@@ -26,9 +26,9 @@ fs.mkdirSync(binDir);
 fs.mkdirSync(failDir);
 fs.mkdirSync(ws);
 // The unit claude stub (the 2.1.322 initialize recording) and one that cannot answer.
-fs.copyFileSync(new URL("../__fixtures__/claude-stub/claude.mjs", import.meta.url), path.join(binDir, "claude"));
+fs.copyFileSync(new URL("./__fixtures__/claude-stub/claude.mjs", import.meta.url), path.join(binDir, "claude"));
 fs.chmodSync(path.join(binDir, "claude"), 0o755);
-fs.symlinkSync(decodeURIComponent(new URL("../__fixtures__/claude-2.1.322", import.meta.url).pathname), path.join(scratch, "claude-2.1.322"));
+fs.symlinkSync(decodeURIComponent(new URL("./__fixtures__/claude-2.1.322", import.meta.url).pathname), path.join(scratch, "claude-2.1.322"));
 fs.writeFileSync(path.join(failDir, "claude"), "#!/bin/sh\necho 'claude: not logged in' >&2\nexit 1\n", { mode: 0o755 });
 process.env.PI_CODING_AGENT_DIR = agentDir;
 process.env.PI_OFFLINE = "1";
