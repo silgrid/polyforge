@@ -47,6 +47,11 @@ function envMillis(name: string, def: number): number {
 const termGraceMs = (): number => envMillis("PF_SUBAGENT_TERM_GRACE_MS", 5000);
 const killWaitMs = (): number => envMillis("PF_SUBAGENT_KILL_WAIT_MS", 5000);
 
+// The per-task wall-clock timeout default (owner ruling Q2): a positive
+// integer in seconds, measured from the child's ACTUAL start (queueing
+// never counts), each chain step and parallel task independently.
+const DEFAULT_TIMEOUT_SECONDS = 1800;
+
 // ---------------------------------------------------------------------------
 // Descendant identity (owner ruling Q3 B): before a stop's FIRST signal,
 // snapshot the child's descendants with their (pid, starttime) identities
@@ -329,6 +334,11 @@ interface SingleResult {
 	stopReason?: string;
 	errorMessage?: string;
 	step?: number;
+	// polyforge#200 Q6: the timeout is carried in the details beside the
+	// existing shape — timedOut marks the child that hit its wall clock,
+	// timeoutSeconds the effective value (the item's or the default).
+	timedOut?: boolean;
+	timeoutSeconds?: number;
 }
 
 interface SubagentDetails {
@@ -468,6 +478,7 @@ async function runSingleAgent(
 	signal: AbortSignal | undefined,
 	onUpdate: OnUpdateCallback | undefined,
 	makeDetails: (results: SingleResult[]) => SubagentDetails,
+	timeoutSeconds: number | undefined,
 ): Promise<SingleResult> {
 	const agent = agents.find((a) => a.name === agentName);
 
@@ -548,10 +559,13 @@ async function runSingleAgent(
 			let settled = false;
 			let exited = false;
 			let stopping = false;
+			const effectiveTimeout = timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS;
+			let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
 
 			function finish(code: number | null) {
 				if (settled) return;
 				settled = true;
+				if (timeoutTimer) clearTimeout(timeoutTimer);
 				if (signal) signal.removeEventListener("abort", abortProcess);
 				resolve(code);
 			}
@@ -567,6 +581,25 @@ async function runSingleAgent(
 				wasAborted = true;
 				leftovers = await stopTree(childPid as number, callMarker);
 				if (leftovers.length > 0) unproved = true;
+				finish(null);
+			}
+
+			// the per-call wall clock: measured from the child's actual
+			// start, it stops the child with the same TERM->KILL sequence
+			// (its descendants included) and is only a plain timed_out when
+			// the stop proved everything dead — otherwise the leftovers are
+			// reported (Q4).
+			async function timeoutProcess() {
+				if (stopping || settled || exited) return;
+				stopping = true;
+				leftovers = await stopTree(childPid as number, callMarker);
+				currentResult.timedOut = true;
+				currentResult.timeoutSeconds = effectiveTimeout;
+				currentResult.errorMessage =
+					leftovers.length > 0
+						? `timed out after ${effectiveTimeout}s; cleanup incomplete: still running ${leftovers.join(", ")}`
+						: `timed out after ${effectiveTimeout}s (the child and its descendants were stopped)`;
+				emitUpdate();
 				finish(null);
 			}
 
@@ -627,10 +660,18 @@ async function runSingleAgent(
 			});
 
 			childPid = proc.pid;
+			timeoutTimer = setTimeout(() => void timeoutProcess(), effectiveTimeout * 1000);
 			proc.on("exit", () => {
 				exited = true;
 			});
 			proc.on("close", (code) => {
+				// During a stop the close event only proves the PIPES
+				// drained — a grandchild's death can release them before
+				// the stop sequence has collected the rest of the tree.
+				// The stop (abortProcess/timeoutProcess) finishes the call
+				// once it proved everything dead; finishing here would cut
+				// that cleanup off mid-flight.
+				if (stopping) return;
 				if (buffer.trim()) processLine(buffer);
 				finish(code);
 			});
@@ -652,6 +693,10 @@ async function runSingleAgent(
 			}
 			throw new Error("Subagent was aborted");
 		}
+		// a timed-out child is returned, never thrown: isFailedResult (the
+		// null exit code, the timeout fields) maps it to the call's failure
+		// and the mode policies (chain stops at the failed step; parallel
+		// keeps the other started tasks) ride that.
 		return currentResult;
 	} finally {
 		if (tmpPromptPath)
@@ -669,16 +714,25 @@ async function runSingleAgent(
 	}
 }
 
+const TimeoutSchema = Type.Optional(
+	Type.Integer({
+		description:
+			"Per-task wall-clock timeout in seconds; a positive integer. Default: 1800. Measured from the child's actual start; a timeout stops the child and its descendants and is reported as a failed, timed-out result.",
+	}),
+);
+
 const TaskItem = Type.Object({
 	agent: Type.String({ description: "Name of the agent to invoke" }),
 	task: Type.String({ description: "Task to delegate to the agent" }),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
+	timeoutSeconds: TimeoutSchema,
 });
 
 const ChainItem = Type.Object({
 	agent: Type.String({ description: "Name of the agent to invoke" }),
 	task: Type.String({ description: "Task with optional {previous} placeholder for prior output" }),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
+	timeoutSeconds: TimeoutSchema,
 });
 
 const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
@@ -696,7 +750,29 @@ const SubagentParams = Type.Object({
 		Type.Boolean({ description: "Prompt before running project-local agents. Default: true.", default: true }),
 	),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process (single mode)" })),
+	timeoutSeconds: TimeoutSchema,
 });
+
+// badTimeoutValue reports a timeoutSeconds that is present but not a
+// positive integer (0, negatives, fractions — Q2's validation).
+function badTimeoutValue(v: unknown): boolean {
+	return v !== undefined && (typeof v !== "number" || !Number.isInteger(v) || v <= 0);
+}
+
+// timeoutRejected is the tool's answer to an invalid timeoutSeconds: a
+// structured error that names the parameter; nothing was spawned.
+function timeoutRejected(v: unknown): AgentToolResult<SubagentDetails> {
+	return {
+		content: [
+			{
+				type: "text",
+				text: `Invalid timeoutSeconds ${JSON.stringify(v) ?? String(v)}: it must be a positive integer number of seconds (or absent, for the 1800s default). No subagent was started.`,
+			},
+		],
+		details: { mode: "single", agentScope: "user", projectAgentsDir: undefined, results: [] },
+		isError: true,
+	};
+}
 
 export default function (pi: ExtensionAPI) {
 	pi.registerTool({
@@ -712,6 +788,12 @@ export default function (pi: ExtensionAPI) {
 		parameters: SubagentParams,
 
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+			// Q2: the timeout is a positive integer or absent — 0, negatives
+			// and fractions are rejected BEFORE anything spawns.
+			const badTimeout = badTimeoutValue(params.timeoutSeconds);
+			for (const t of params.tasks ?? []) if (badTimeoutValue(t.timeoutSeconds)) return timeoutRejected(t.timeoutSeconds);
+			for (const c of params.chain ?? []) if (badTimeoutValue(c.timeoutSeconds)) return timeoutRejected(c.timeoutSeconds);
+			if (badTimeout) return timeoutRejected(params.timeoutSeconds);
 			// The daemon fork has one fixed worker and one serial mode. Keeping
 			// the upstream result protocol lets the recorder consume updates.
 			if (params.agent !== "worker" || !params.task || params.tasks?.length || params.chain?.length || params.agentScope === "project" || params.agentScope === "both") {
@@ -822,6 +904,7 @@ export default function (pi: ExtensionAPI) {
 						signal,
 						chainUpdate,
 						makeDetails("chain"),
+						step.timeoutSeconds,
 					);
 					results.push(result);
 
@@ -901,6 +984,7 @@ export default function (pi: ExtensionAPI) {
 							}
 						},
 						makeDetails("parallel"),
+						t.timeoutSeconds,
 					);
 					allResults[index] = result;
 					emitParallelUpdate();
@@ -938,12 +1022,14 @@ export default function (pi: ExtensionAPI) {
 					signal,
 					onUpdate,
 					makeDetails("single"),
+					params.timeoutSeconds,
 				);
 				const isError = isFailedResult(result);
 				if (isError) {
 					const errorMsg = getResultOutput(result);
+					const head = result.timedOut ? `Agent timed out after ${result.timeoutSeconds}s:` : `Agent ${result.stopReason || "failed"}:`;
 					return {
-						content: [{ type: "text", text: `Agent ${result.stopReason || "failed"}: ${errorMsg}` }],
+						content: [{ type: "text", text: `${head} ${errorMsg}` }],
 						details: makeDetails("single")([result]),
 						isError: true,
 					};

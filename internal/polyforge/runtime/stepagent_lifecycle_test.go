@@ -648,8 +648,7 @@ func TestPiSubagentLifecycleTimeout(t *testing.T) {
 		t.Fatalf("timeoutSeconds must be declared with its 1800 default, got %v", p)
 	}
 	for _, mode := range []string{"tasks", "chain"} {
-		arr, _ := schema[mode].(map[string]any)
-		items, _ := arr["items"].(map[string]any)
+		items, _ := prop(schema, mode)["items"].(map[string]any)
 		if p := prop(items, "timeoutSeconds"); p == nil {
 			t.Fatalf("%s items must declare timeoutSeconds too (single/parallel/chain share the default)", mode)
 		}
