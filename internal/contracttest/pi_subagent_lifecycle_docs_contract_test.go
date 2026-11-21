@@ -11,8 +11,13 @@ package test
 // red.
 
 import (
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/silgrid/polyforge/internal/polyforge/runtime/stepagentassets"
 )
 
 // TestPiSubagentLifecycleDocs pins the docs against the delivered
@@ -61,6 +66,38 @@ func TestPiSubagentLifecycleDocs(t *testing.T) {
 	contractDoc := w68Flat(t, "docs/reference/workflow-contract.md")
 	if !strings.Contains(contractDoc, "`cleanup_failed`") {
 		t.Error("workflow-contract.md's hand-off reaction must name the cleanup_failed park (polyforge#200)")
+	}
+
+	// Cross-checks (r1#7): the docs' numbers and kinds are the source's,
+	// not free text. The embedded extension declares the timeout default;
+	// the driver declares the blocked kind.
+	ext, err := stepagentassets.FS.ReadFile("extensions/subagent/index.ts")
+	if err != nil {
+		t.Fatalf("the embedded extension: %v", err)
+	}
+	m := regexp.MustCompile(`DEFAULT_TIMEOUT_SECONDS = (\d+);`)
+	found := m.FindStringSubmatch(string(ext))
+	if found == nil {
+		t.Fatal("the embedded extension no longer declares DEFAULT_TIMEOUT_SECONDS — the cross-check must follow it")
+	}
+	def := found[1]
+	if !strings.Contains(dispatch, "默认 "+def) {
+		t.Errorf("build_subagents.md's timeout default must match the extension's DEFAULT_TIMEOUT_SECONDS = %s", def)
+	}
+	handoff, err := os.ReadFile(filepath.Join(v1Root(t), "internal", "polyforge", "driver", "handoff.go"))
+	if err != nil {
+		t.Fatalf("the driver's handoff.go: %v", err)
+	}
+	km := regexp.MustCompile(`BlockerKindCleanupFailed = "([^"]+)"`)
+	kfound := km.FindStringSubmatch(string(handoff))
+	if kfound == nil {
+		t.Fatal("the driver no longer declares BlockerKindCleanupFailed — the cross-check must follow it")
+	}
+	kind := kfound[1]
+	for _, doc := range []string{reference, contractDoc, converge} {
+		if !strings.Contains(doc, "`"+kind+"`") {
+			t.Errorf("a doc must name the driver's blocked kind %q verbatim", kind)
+		}
 	}
 
 	// unchanged: the switch stays default-off (the #193 baseline)
