@@ -130,8 +130,7 @@ the phase is `<stage>/failed` with the reason, never a credential):
    fires, so the default Cell's key is a daily key by construction.
    One deliberate consequence to know: the local hub then carries NO
    administrator identity at all (no one to grant other users or
-   roles) until the management units (#163/#167) build an operator
-   path — the workstation is a single-user machine by design.
+   roles) — the workstation is a single-user machine by design.
    The external mode takes the operator-given server and key and
    creates nothing anywhere.
 3. **config** — cli.toml (in pf-home) gains the default Cell: the
@@ -194,8 +193,9 @@ sh dist/workstation/smoke.sh boot --no-aihub    # the minimal boot: parameters, 
 sh dist/workstation/smoke.sh boot --with-aihub  # + Pi Web /login, the daemon queue, the default Cell
 sh dist/workstation/smoke.sh first-boot         # the empty-volume first boot: identity, default Cell,
                                                 #   real key authentication, no bootstrap key, restart
-sh dist/workstation/smoke.sh first-boot --external  # 外部模式：全过程只允许 POST /api/v1/machines/heartbeat
-                                                # 创建路由与其他未知请求均失败，并输出方法和路径
+sh dist/workstation/smoke.sh first-boot --external  # the external mode: only POST /api/v1/machines/heartbeat
+                                                #   crosses the whole pass; every create route and unknown
+                                                #   request fails, its method and path printed
 sh dist/workstation/smoke.sh persist            # the persistence acceptance: two down/up cycles and a
                                                 #   NEW TAG of the image keep the six persisted facts by
                                                 #   value, then the exported copy runs (Docker + sh host)
@@ -213,9 +213,11 @@ project and volumes, and compose has no fixed `container_name` any more,
 so a concurrently running deployment never clashes with the smoke at
 all (polyforge#177). Every pass ends with a `down -v` of its own project
 and carries an EXIT trap doing the same, so a die mid-run leaves nothing
-behind either (review r1#3); `persist` also removes the retag it created. 仓库的真机 smoke 与外部模式桩测试
-通过跨进程资源锁串行操作共享项目；外部模式桩另用 38422 端口，真机计数桩用
-38421。并行测试 runner 不会让一个测试清理另一个测试的容器或卷。The first-boot
+behind either (review r1#3); `persist` also removes the retag it created. The real-engine
+smoke and the external-mode stub tests serialize their shared projects through a
+cross-process resource lock (test/w535_workstation_lock_test.go); the external-mode
+stub listens on 38422 and the real-engine counter stub on 38421, so a parallel test
+runner never lets one test clean up another's containers or volumes. The first-boot
 pass is the AC proof of the identity half: after the boot the record
 says done, the default Cell points at the local AIHub, the key REALLY
 authenticates (`pf recall` inside the container, through the
@@ -226,9 +228,11 @@ authenticates (no reissue).
 The first-boot pass also asserts AC2's layout half inside the container:
 the step agent dir is `/root/.pi/agent` (pf-home), the pi packages entry
 points at `/components/current`, and the record carries no credential
-（逐字节比较 cli.toml 中的 key 与记录）。已有 `/root/.claude` 时，还断言路由
-技能 `/root/.claude/skills/polyforge` 是指向
-`/components/current/skills/polyforge` 的软链；用户自有的其他技能不受影响。
+— the key in cli.toml compared byte-for-byte with the record's.
+When `/root/.claude` already exists, it also asserts the routing
+skill `/root/.claude/skills/polyforge` is a symlink to
+`/components/current/skills/polyforge`; the user's own other skills
+are untouched.
 
 `persist` (polyforge#177) is the persistence acceptance: after a first
 boot it records the six persisted facts BY VALUE — the harness login
