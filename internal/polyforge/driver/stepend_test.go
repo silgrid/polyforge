@@ -3,9 +3,12 @@ package driver
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/silgrid/polyforge/internal/common/capsule"
+	"github.com/silgrid/polyforge/internal/polyforge/stepcall"
 	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 )
 
@@ -96,5 +99,90 @@ func TestStepEndCleanupIsNotChargedToStepT(t *testing.T) {
 	}
 	if got := readExec(t, execPath).Steps["a"].BudgetConsumed.WallMs; got > time.Minute.Milliseconds() {
 		t.Fatalf("step booked %dms: the step-end hooks are not dispatch runtime", got)
+	}
+}
+
+// polyforge#200 (Q5 B): a step-end cleanup that cannot prove the step's
+// processes gone parks the work item — the accepted hand-off stays on the
+// call ledger, nothing is written as the step's outcome, no successor
+// dispatches — and the resume re-runs the hook before settling that kept
+// hand-off: it parks again while the sweep still fails and advances
+// without re-dispatching the step once it proves clean.
+func TestStepEndedCleanupFailureParksKeepsHandoff(t *testing.T) {
+	d, sp, _, dir := handoffEnv(t, 4, spec("collect"), spec("close"))
+	sp.script = []fakeEntry{handedOff(&stepcall.Handoff{Status: stepcall.StatusDone}, func() {
+		appendLedgerHandoff(t, dir, "collect", 1, stepcall.StatusDone)
+	})}
+	d.cfg.StepEnded = func(context.Context) error {
+		return errors.New("step-end sweep incomplete: pids 4242, 4243 still running")
+	}
+	if err := d.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	x := d.Snapshot()
+	if x.WorkflowStatus != StatusBlocked {
+		t.Fatalf("an incomplete step-end cleanup must park the work item, status %q", x.WorkflowStatus)
+	}
+	for _, want := range []string{"cleanup failed", "4242", "pf resume"} {
+		if !strings.Contains(x.BlockedReason, want) {
+			t.Fatalf("the park's reason must carry %q, got %q", want, x.BlockedReason)
+		}
+	}
+	if st := x.Steps["collect"]; st.Status != capsule.StepInProgress || st.Dispatch != 1 {
+		t.Fatalf("the park keeps the step on its dispatch for the resume to settle: %+v", st)
+	}
+	if got := sp.dispatched(); len(got) != 1 || !strings.HasPrefix(got[0], "collect@") {
+		t.Fatalf("no successor may dispatch on an incomplete cleanup: %v", got)
+	}
+
+	// the resume re-runs the hook before settling the kept hand-off: a
+	// sweep that still fails keeps the park.
+	hookCalls := 0
+	sp2 := &fakeSpawner{script: []fakeEntry{done(`{}`)}}
+	d2, err := New(Config{WI: d.wi, ExecPath: d.execPath, Workflow: d.workflow, Spawner: sp2,
+		Log: &eventLog{}, HubWrites: &hubSink{sp: sp2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d2.cfg.StepEnded = func(context.Context) error {
+		hookCalls++
+		return errors.New("still incomplete")
+	}
+	if err := d2.ResumeCurrent(); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if err := d2.Run(context.Background()); err != nil {
+		t.Fatalf("resumed Run: %v", err)
+	}
+	if hookCalls != 1 {
+		t.Fatalf("the resume must re-run the step-end hook before settling, ran %d time(s)", hookCalls)
+	}
+	if x := d2.Snapshot(); x.WorkflowStatus != StatusBlocked || x.Steps["collect"].Status != capsule.StepInProgress {
+		t.Fatalf("a still-failing sweep keeps the park: %q %+v", x.WorkflowStatus, x.Steps["collect"])
+	}
+	if got := sp2.dispatched(); len(got) != 0 {
+		t.Fatalf("nothing may dispatch while the cleanup is unproven: %v", got)
+	}
+
+	// a sweep that now proves clean settles the KEPT hand-off (no
+	// re-dispatch of collect) and advances.
+	sp3 := &fakeSpawner{script: []fakeEntry{done(`{}`)}}
+	d3, err := New(Config{WI: d.wi, ExecPath: d.execPath, Workflow: d.workflow, Spawner: sp3,
+		Log: &eventLog{}, HubWrites: &hubSink{sp: sp3}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d3.cfg.StepEnded = func(context.Context) error { return nil }
+	if err := d3.ResumeCurrent(); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if err := d3.Run(context.Background()); err != nil {
+		t.Fatalf("resumed Run: %v", err)
+	}
+	if got := sp3.dispatched(); len(got) != 1 || !strings.HasPrefix(got[0], "close@") {
+		t.Fatalf("the kept hand-off settles and the successor runs, without re-dispatching collect: %v", got)
+	}
+	if x := d3.Snapshot(); x.WorkflowStatus != StatusCompleted || x.Steps["collect"].Status != capsule.StepDone {
+		t.Fatalf("the lane completes: %q %+v", x.WorkflowStatus, x.Steps["collect"])
 	}
 }
