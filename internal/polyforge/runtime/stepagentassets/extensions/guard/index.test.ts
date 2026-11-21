@@ -29,8 +29,10 @@ function loadGuard(opts?: Parameters<typeof createStepGuard>[0]) {
 	return handlers;
 }
 
-function tmpWorkspace(): string {
-	return fs.mkdtempSync(path.join(os.tmpdir(), "guard-"));
+function tmpWorkspace(t: { after(fn: () => void): void }): string {
+	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "guard-"));
+	t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+	return tmp;
 }
 
 interface Event {
@@ -55,8 +57,8 @@ function textEvent(path0: string, isError = false): Event {
 	};
 }
 
-test("write .ts with a stray brace gets the error location", async () => {
-	const tmp = tmpWorkspace();
+test("write .ts with a stray brace gets the error location", async (t) => {
+	const tmp = tmpWorkspace(t);
 	fs.writeFileSync(path.join(tmp, "bad.ts"), "export function f(x: number): number {\n  return x + 1;\n}\n}\n");
 	const handlers = loadGuard();
 	const r = (await toolResult(handlers, textEvent("bad.ts"), tmp)) as
@@ -68,8 +70,8 @@ test("write .ts with a stray brace gets the error location", async () => {
 	assert.match(r.content[1].text, /step guard: syntax check \(typescript\) found an error in bad\.ts:4(:\d+)?: /);
 });
 
-test("valid .ts is returned untouched", async () => {
-	const tmp = tmpWorkspace();
+test("valid .ts is returned untouched", async (t) => {
+	const tmp = tmpWorkspace(t);
 	fs.writeFileSync(path.join(tmp, "good.ts"), "export const a: number = 1;\n");
 	const handlers = loadGuard();
 	const r = await toolResult(handlers, textEvent("good.ts"), tmp);
@@ -81,7 +83,7 @@ test("edit .go reports gofmt position", async (t) => {
 		t.skip("gofmt is not on PATH");
 		return;
 	}
-	const tmp = tmpWorkspace();
+	const tmp = tmpWorkspace(t);
 	fs.writeFileSync(path.join(tmp, "bad.go"), "package main\n\nfunc main() {\n}\n}\n");
 	const handlers = loadGuard();
 	const event = textEvent("bad.go");
@@ -96,7 +98,7 @@ test(".py error and no pycache", async (t) => {
 		t.skip("python3 is not on PATH");
 		return;
 	}
-	const tmp = tmpWorkspace();
+	const tmp = tmpWorkspace(t);
 	fs.writeFileSync(path.join(tmp, "bad.py"), "def f():\n    return 1\n)\n");
 	const handlers = loadGuard();
 	const r = (await toolResult(handlers, textEvent("bad.py"), tmp)) as { content: Array<{ text: string }> } | undefined;
@@ -105,8 +107,8 @@ test(".py error and no pycache", async (t) => {
 	assert.equal(fs.existsSync(path.join(tmp, "__pycache__")), false, "no __pycache__ beside the edited file");
 });
 
-test(".json error", async () => {
-	const tmp = tmpWorkspace();
+test(".json error", async (t) => {
+	const tmp = tmpWorkspace(t);
 	fs.writeFileSync(path.join(tmp, "bad.json"), '{\n "a": 1\n}}\n');
 	const handlers = loadGuard();
 	const r = (await toolResult(handlers, textEvent("bad.json"), tmp)) as { content: Array<{ text: string }> } | undefined;
@@ -114,8 +116,8 @@ test(".json error", async () => {
 	assert.ok(r.content[1].text.includes("bad.json:3:2:"), r.content[1].text);
 });
 
-test(".js error", async () => {
-	const tmp = tmpWorkspace();
+test(".js error", async (t) => {
+	const tmp = tmpWorkspace(t);
 	fs.writeFileSync(path.join(tmp, "bad.js"), "const a = 1;\n}\n");
 	const handlers = loadGuard();
 	const r = (await toolResult(handlers, textEvent("bad.js"), tmp)) as { content: Array<{ text: string }> } | undefined;
@@ -123,24 +125,24 @@ test(".js error", async () => {
 	assert.ok(r.content[1].text.includes("bad.js:2:"), r.content[1].text);
 });
 
-test("type without a checker is returned untouched", async () => {
-	const tmp = tmpWorkspace();
+test("type without a checker is returned untouched", async (t) => {
+	const tmp = tmpWorkspace(t);
 	fs.writeFileSync(path.join(tmp, "notes.md"), "}}}");
 	const handlers = loadGuard();
 	const r = await toolResult(handlers, textEvent("notes.md"), tmp);
 	assert.equal(r, undefined);
 });
 
-test("jsonc config is not checked", async () => {
-	const tmp = tmpWorkspace();
+test("jsonc config is not checked", async (t) => {
+	const tmp = tmpWorkspace(t);
 	fs.writeFileSync(path.join(tmp, "tsconfig.json"), "{ // c\n}");
 	const handlers = loadGuard();
 	const r = await toolResult(handlers, textEvent("tsconfig.json"), tmp);
 	assert.equal(r, undefined);
 });
 
-test("failed edit is not checked", async () => {
-	const tmp = tmpWorkspace();
+test("failed edit is not checked", async (t) => {
+	const tmp = tmpWorkspace(t);
 	fs.writeFileSync(path.join(tmp, "bad.ts"), "export function f(x: number): number {\n  return x + 1;\n}\n}\n");
 	const handlers = loadGuard();
 	const r = await toolResult(handlers, textEvent("bad.ts", true), tmp);
@@ -152,7 +154,7 @@ test("missing checker is noted, edit not blocked", async (t) => {
 		t.skip("python3 is not on PATH");
 		return;
 	}
-	const tmp = tmpWorkspace();
+	const tmp = tmpWorkspace(t);
 	fs.writeFileSync(path.join(tmp, "bad.py"), "def f():\n    return 1\n)\n");
 	const handlers = loadGuard({ env: { PATH: "" } });
 	const r = (await toolResult(handlers, textEvent("bad.py"), tmp)) as { content: Array<{ text: string }> } | undefined;
