@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { writePrivateFileAtomicSync } from "../atomic-file";
 import { serializeByKey } from "../key-serializer";
 import {
+  CLAUDE_CUSTOM_MODELS_MAX,
   CLAUDE_SKILL_OVERRIDES_MIN_VERSION,
   compareClaudeVersions,
   isClaudeSkillOverrideState,
@@ -354,21 +355,52 @@ export async function applyClaudePermissionChange(
 // ── the model write (85a3) ────────────────────────────────────────────────
 
 /**
+ * The native picker's refusal for a customModels write, null when its shape
+ * is writable (85a3-3): a modelPicker that exists must be a JSON object whose
+ * options, when present, is an array of rows each with a string `model` —
+ * a bad shape is refused, never overwritten (owner ruling Q3: 坏形状拒写).
+ * The same preflight backs the one-time migration's preview, so the merge and
+ * the preview can never disagree about what is writable.
+ */
+export function claudeModelPickerShapeRefusal(modelPicker: unknown): string | null {
+  if (modelPicker === undefined) return null;
+  if (!isRecord(modelPicker)) {
+    return "modelPicker has an unrecognized shape (expected a JSON object) — refusing to overwrite it";
+  }
+  const options = (modelPicker as { options?: unknown }).options;
+  if (options === undefined) return null;
+  if (!Array.isArray(options)) {
+    return "modelPicker.options has an unrecognized shape (expected an array) — refusing to overwrite it";
+  }
+  for (const option of options) {
+    if (!isRecord(option) || typeof (option as { model?: unknown }).model !== "string") {
+      return "modelPicker.options holds an entry without a model string — refusing to overwrite it";
+    }
+  }
+  return null;
+}
+
+/**
  * The model keys' registered minimum versions (owner ruling Q4: the ticket
  * registers the model keys' minimums; the gate itself recognizes the major):
  * 2.1.312 is the first recorded version that establishes the model and
- * global effort keys. Per-model modelSettings writes remain unsupported until
- * their native settings format is verified in 85a3-2.
+ * global effort keys. `modelPicker` is claude's own native key (v2.1.242+, the
+ * official settings reference; the 2.1.329 native recording proves the
+ * recognition — 85a3-3). Per-model modelSettings writes remain unsupported
+ * until their native behaviour is verified (85a3-3: the initialize answer
+ * does not surface a saved level, so the read stays display-only).
  */
 export const CLAUDE_MODEL_KEY_MIN_VERSIONS: Readonly<Record<string, string>> = {
   model: "2.1.312",
   effortLevel: "2.1.312",
+  modelPicker: "2.1.242",
 };
 
 /** A validated model change for the claude adapter's write(). One field per write. */
 export type ClaudeModelChange =
   | { kind: "model"; model: string | null }
-  | { kind: "effortLevel"; level: string | null };
+  | { kind: "effortLevel"; level: string | null }
+  | { kind: "customModels"; models: string[] };
 
 /** The native keys one change kind touches, for the key-floor check. */
 export function claudeModelChangeKeys(change: ClaudeModelChange): readonly string[] {
@@ -377,6 +409,8 @@ export function claudeModelChangeKeys(change: ClaudeModelChange): readonly strin
       return ["model"];
     case "effortLevel":
       return ["effortLevel"];
+    case "customModels":
+      return ["modelPicker"];
   }
 }
 
@@ -413,6 +447,27 @@ export function parseClaudeModelChange(
     }
     return { change: { kind: "effortLevel", level: raw as string | null } };
   }
+  if (key === "customModels") {
+    // 85a3-3: the custom names claude's own native modelPicker lists. The list
+    // is the full next state: every entry a name `--model` takes, distinct, at
+    // most CLAUDE_CUSTOM_MODELS_MAX; a surviving entry keeps its metadata, a
+    // new name lands as { model }, a dropped name's entry goes.
+    const raw = change.customModels;
+    if (!Array.isArray(raw)) {
+      return { reason: "customModels must be an array of model names" };
+    }
+    const models: string[] = [];
+    for (const name of raw) {
+      if (!isClaudeModelName(name)) {
+        return { reason: `not a claude model name: ${String(name)}` };
+      }
+      if (!models.includes(name)) models.push(name);
+    }
+    if (models.length > CLAUDE_CUSTOM_MODELS_MAX) {
+      return { reason: `customModels is capped at ${CLAUDE_CUSTOM_MODELS_MAX} entries` };
+    }
+    return { change: { kind: "customModels", models } };
+  }
   return { reason: `unknown model change: ${key}` };
 }
 
@@ -447,6 +502,32 @@ export async function applyClaudeModelChange(
       });
       return result.ok
         ? { ok: true, summary: level === null ? "effortLevel removed" : `effortLevel = ${level}` }
+        : result;
+    }
+    case "customModels": {
+      // 85a3-3: the full next state of the picker's model names. A surviving
+      // entry keeps its own metadata and position, a new name is appended as
+      // { model }, a dropped name's entry goes; the picker's other fields
+      // (replaceBuiltInOptions, unknown legal fields) stay untouched.
+      const models = change.models;
+      const result = await patchClaudeUserSettings(configDir, (record) => {
+        const refusal = claudeModelPickerShapeRefusal(record.modelPicker);
+        if (refusal !== null) return { refuse: refusal };
+        const existing = isRecord(record.modelPicker) && Array.isArray(record.modelPicker.options)
+          ? record.modelPicker.options as Record<string, unknown>[]
+          : [];
+        const kept = existing.filter((option) => models.includes(option.model as string));
+        const appended = models.filter((name) => !existing.some((option) => option.model === name));
+        return {
+          ...record,
+          modelPicker: {
+            ...(isRecord(record.modelPicker) ? record.modelPicker : {}),
+            options: [...kept, ...appended.map((model) => ({ model }))],
+          },
+        };
+      });
+      return result.ok
+        ? { ok: true, summary: models.length > 0 ? `modelPicker.options = ${models.join(", ")}` : "modelPicker.options = [] (the legal empty picker)" }
         : result;
     }
   }

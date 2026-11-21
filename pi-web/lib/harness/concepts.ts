@@ -145,8 +145,14 @@ export interface ModelPayload {
    */
   perModelReasoningEffort: Record<string, { neutral: ReasoningEffort | null; raw: string }>;
   providers: ProviderRef[];
-  /** claude's own native modelPicker custom names (claude only; migrated there by #150). */
+  /** claude's own native modelPicker custom names (claude only; written through
+   * the model concept's customModels change since 85a3-3). */
   customModels: string[];
+  /** The user layer's own modelPicker names alone (r1#1): the editor's list
+   * and the write's subject. The merged `customModels` view is display-only —
+   * a managed picker shadows the user layer whole, so its names never enter
+   * a write. claude only; pi answers an empty list. */
+  userCustomModels: string[];
 }
 
 /** One permission field's provenance (85a4): the native layer holding the

@@ -265,3 +265,34 @@ test("PUT one concept: guarded, gated and the write lands in the native file (85
   const deniedCwd = await conceptRoute.PUT(put(`/api/harness/claude/permission?cwd=${encodeURIComponent(path.join(scratch, "not-registered"))}`, { projectTrust: { trusted: true } }), params("claude", "permission"));
   assert.equal(deniedCwd.status, 403);
 });
+
+test("PUT customModels: the names land in the native modelPicker through the route's gate; a refused change touches nothing (85a3-3)", async () => {
+  const put = (url, body) => new Request(`http://localhost${url}`, {
+    method: "PUT",
+    headers: { host: "localhost", "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const params = { params: Promise.resolve({ harness: "claude", concept: "model" }) };
+  const settingsPath = path.join(claudeConfigDir, "settings.json");
+  const before = fs.readFileSync(settingsPath, "utf8");
+  // A change the adapter refuses (an invalid name) is a 400 with its reason,
+  // and the native file keeps its bytes.
+  const refused = await conceptRoute.PUT(put("/api/harness/claude/model", { customModels: ["ok-name", "not a model name!"] }), params);
+  assert.equal(refused.status, 400);
+  const refusedBody = await refused.json();
+  assert.equal(refusedBody.error, "write-refused");
+  assert.ok(refusedBody.message.includes("not a claude model name"), refusedBody.message);
+  assert.equal(fs.readFileSync(settingsPath, "utf8"), before, "a refused change touched the file");
+  // The write lands in the native user settings.json's modelPicker beside the
+  // file's other keys, and the answer never echoes a sentinel.
+  const written = await conceptRoute.PUT(put("/api/harness/claude/model", { customModels: ["claude-route-custom"] }), params);
+  assert.equal(written.status, 200);
+  const writtenBody = await written.json();
+  assert.equal(writtenBody.result.status, "written");
+  assert.ok(writtenBody.result.summary.includes("claude-route-custom"), writtenBody.result.summary);
+  noSentinel(JSON.stringify(writtenBody), "the customModels PUT answer");
+  const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+  assert.deepEqual(settings.modelPicker.options, [{ model: "claude-route-custom" }]);
+  assert.equal(settings.model, "opus");
+  assert.equal(settings.permissions.defaultMode, "auto");
+});

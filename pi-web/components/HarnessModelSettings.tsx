@@ -6,6 +6,7 @@ import { buildModelRows, type ModelViewInput, type ModelViewRow } from "@/lib/ha
 import type { ModelPayload } from "@/lib/harness/concepts";
 import { useEnabledModels, type EnabledModelsController } from "./EnabledModelsSection";
 import { ModelsConfig } from "./ModelsConfig";
+import { ClaudeCustomModels } from "./ClaudeCustomModels";
 import { ConfigSidebar, ConfigSidebarList, ConfigSidebarItem, ConfigDetail } from "./SettingsUi";
 
 type ModelIdentity = { harness: string; provider: string; id: string };
@@ -170,6 +171,10 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount }: { cwd: str
       <section aria-label="pi">
         <h3>pi</h3>
         <ModelsConfig embedded cwd={cwd} onClose={onClose ?? (() => {})} onOpenAccount={onOpenAccount} enabledModels={enabled} />
+      </section>
+      <section aria-label="claude">
+        <h3>claude</h3>
+        <ClaudeCustomModels onRefresh={() => setRevision((previous) => previous + 1)} />
       </section>
       </ConfigDetail>
       </div>

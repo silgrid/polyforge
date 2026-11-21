@@ -202,6 +202,7 @@ export function createPiAdapter(): HarnessAdapter {
             perModelReasoningEffort: perModel,
             providers,
             customModels: [],
+            userCustomModels: [],
           };
           return payload;
         }

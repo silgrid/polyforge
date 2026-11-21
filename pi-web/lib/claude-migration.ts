@@ -1,16 +1,19 @@
 // The one-time migration of Pi Web's two retired self-stored claude files
-// (polyforge#150 85a4, owner rulings Q4 B + Q5 A): pi-web-claude-settings.json
-// and claude-permissions.json move field by field into what now owns them —
+// (polyforge#150 85a4, owner rulings Q4 B + Q5 A; 85a3-3 reworked the
+// customModels half): pi-web-claude-settings.json and claude-permissions.json
+// move field by field into what now owns them —
 //
 //   launchPermissionMode → claude's native permissions.defaultMode
-//   customModels          → claude's native modelPicker.options
 //   includeHookEvents     → pi-web-settings.json's claude object
 //   mode (ask/deny)       →   "    "        "   approvalChannel
 //   push                  →   "    "        "   pushReminders
+//   customModels          → claude's native modelPicker.options, through the
+//                          models page's own preview-bearing phase (85a3-3,
+//                          below — the startup flow never writes modelPicker)
 //
 // A native value that already exists wins (the native file is the single
-// source of truth; the stored copy is never written over it). The flow is
-// copy → write → re-read and verify → delete both old files → mark the
+// source of truth; the stored copy is never written over it). The startup
+// flow is copy → write → re-read and verify → delete what it owns → mark the
 // migration in pi-web-settings.json, so an interruption at any point replays
 // safely: every write is idempotent, the old files are deleted only after the
 // fields landed, and a replay with the files gone but no marker only writes
@@ -25,14 +28,18 @@
 // can still hold the retired files), leaving lib/claude-preferences.ts as
 // the only reader of the preference fields.
 import { existsSync, unlinkSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { claudeConfigDir } from "./claude-config-dir";
 import { CLAUDE_CUSTOM_MODELS_MAX, CLAUDE_LAUNCH_PERMISSION_MODE_DEFAULT, isClaudeLaunchPermissionMode, isClaudeModelName, type ClaudeLaunchPermissionMode, type ClaudePermissionMode } from "./claude-shared";
 import { findClaudeBinary } from "./claude-session";
 import { defaultAgentDir } from "./http-dispatcher";
 import { createClaudeAdapter } from "./harness/claude";
-import { applyClaudePermissionChange, claudeUserSettingsPath, patchClaudeUserSettings, type ClaudePermissionChange } from "./harness/claude-native-write";
+import { applyClaudePermissionChange, claudeModelPickerShapeRefusal, claudeUserSettingsPath, type ClaudePermissionChange } from "./harness/claude-native-write";
+import { managedSettingsPath as defaultManagedSettingsPath } from "./harness/claude-layers";
 import { readJsonRecord } from "./harness/redact";
+import { serializeByKey } from "./key-serializer";
+import { writePrivateFileAtomicSync } from "./atomic-file";
 import { patchPiWebSettings, readPiWebSettingsRecord } from "./pi-web-settings";
 import { writeClaudePreferences, type ClaudePreferences } from "./claude-preferences";
 
@@ -82,13 +89,6 @@ function storedLaunchMode(settings: Record<string, unknown> | null, channel: Cla
   if (!isClaudeLaunchPermissionMode(mode)) return null;
   if (mode === "plan" && channel !== "ask") return CLAUDE_LAUNCH_PERMISSION_MODE_DEFAULT;
   return mode;
-}
-
-/** The stored custom model names, valid and distinct. */
-function storedCustomModels(settings: Record<string, unknown> | null): string[] {
-  const raw = settings?.customModels;
-  if (!Array.isArray(raw)) return [];
-  return [...new Set(raw.filter(isClaudeModelName))].slice(0, CLAUDE_CUSTOM_MODELS_MAX);
 }
 
 /** The migration marker: present when the migration already completed. */
@@ -195,37 +195,291 @@ async function runMigration(options: ClaudeMigrationOptions, agentDir: string): 
       migrated.push("launchPermissionMode");
     }
   }
-  const nativeHasPicker = isRecord((nativeRecord as Record<string, unknown>).modelPicker);
-  const models = storedCustomModels(oldSettings);
-  if (!nativeHasPicker && models.length > 0) {
-    const applied = await applyClaudeModelPicker(models, configDir);
-    if (!applied.ok) return { ran: false, reason: `deferred: ${applied.reason}` };
-    migrated.push("customModels");
-  }
 
-  // The fields landed and verified: delete both old files, then mark. A crash
-  // between the two replays as the "nothing to migrate" path above.
-  for (const path of [retired.settings, retired.permissions]) {
-    if (existsSync(path)) unlinkSync(path);
+  // 85a3-3: the custom names are NOT this flow's any more — the models page's
+  // own phase (below) migrates them, so an old settings file that still holds
+  // customModels to move (a non-empty list to merge, or illegal data the
+  // phase must report as a blockage) is kept for it. An empty list carries
+  // nothing — the file goes as 85a4's own case always did (claude-create's
+  // create-time AC). Delete what this flow owns, and mark only once both old
+  // files are gone.
+  const rawCustomModels = oldSettings?.customModels;
+  const settingsHoldsCustomModels = oldSettings !== null && "customModels" in oldSettings
+    && !(Array.isArray(rawCustomModels) && rawCustomModels.length === 0);
+  if (existsSync(retired.permissions)) unlinkSync(retired.permissions);
+  if (settingsHoldsCustomModels) {
+    // The file stays for the phase — this flow's own fields leave it now.
+    await stripMigratedLaunchFields(agentDir);
+  } else if (existsSync(retired.settings)) {
+    unlinkSync(retired.settings);
+  }
+  if (existsSync(retired.settings) || existsSync(retired.permissions)) {
+    const landed = migrated.length > 0 ? `migrated ${migrated.join(", ")}; ` : "";
+    return { ran: true, summary: `${landed}customModels await the models page's migration` };
   }
   await markMigrated(agentDir);
-  return { ran: true, summary: `migrated ${migrated.join(", ")}` };
-}
-
-/** Writes the custom names into claude's native modelPicker.options (user level, same read-back verify as the permission writes). */
-function applyClaudeModelPicker(models: string[], configDir: string): Promise<{ ok: true } | { ok: false; reason: string }> {
-  // modelPicker.options is claude's own native shape (v2.1.242+): one
-  // { model } entry per name, replacing the user layer's list.
-  return patchClaudeUserSettings(configDir, (record) => ({
-    ...record,
-    modelPicker: {
-      ...(isRecord(record.modelPicker) ? record.modelPicker : {}),
-      options: models.map((model) => ({ model })),
-    },
-  }));
+  return { ran: true, summary: migrated.length > 0 ? `migrated ${migrated.join(", ")}` : "nothing to migrate; marked" };
 }
 
 /** Tests reset the per-process memo between fixtures. */
 export function resetClaudeMigrationForTests(): void {
   inFlight.clear();
+}
+
+// ── the customModels phase (85a3-3) ────────────────────────────────────────
+
+/**
+ * The customModels phase (85a3-3, owner rulings Q2/Q3/Q4): the models page's
+ * protected POST — not the startup flow — migrates the retired customModels
+ * into the native modelPicker. The target empty (the key absent or a legal
+ * options: []) migrates at once; non-empty answers a merge preview (the
+ * native rows win, only the source's missing names would be appended) and
+ * writes nothing until the confirm carries the preview's digest; the source
+ * or target changing in between answers a conflict with a fresh preview.
+ * After the target lands and reads back, only the old file's customModels key
+ * is removed (never the whole file — 85a4 owns its other fields); illegal or
+ * over-cap source data reports a blockage and is kept. The done marker is
+ * keyed by the target config root in pi-web-settings.json (the adapter's
+ * persistent state; no private key in the native settings), so a new config
+ * root is never skipped by a global boolean. Every intermediate crash
+ * replays: each phase re-derives from the files (a re-run sees the names the
+ * target already holds and only retries the clear), so only "done" is
+ * recorded.
+ */
+
+/** The customModels phase's outcome for the migration POST's first call. */
+export type ClaudeCustomModelsMigrationStatus =
+  | { status: "done"; changed: boolean; shadowed: boolean }
+  | { status: "blocked"; reason: string; shadowed: boolean }
+  | { status: "deferred"; reason: string; shadowed: boolean }
+  | { status: "preview"; native: { model: string; label?: string }[]; missing: string[]; digest: string; shadowed: boolean };
+
+/** The customModels phase's outcome for the confirm call. */
+export type ClaudeCustomModelsMigrationApply =
+  | { status: "done"; changed: boolean; shadowed: boolean }
+  | { status: "blocked"; reason: string; shadowed: boolean }
+  | { status: "deferred"; reason: string; shadowed: boolean }
+  | { status: "conflict"; preview: Extract<ClaudeCustomModelsMigrationStatus, { status: "preview" }> };
+
+/** The old settings file's customModels phase serialized on its one path (a clear never interleaves with another writer). */
+const RETIRED_SETTINGS_WRITE_CHAIN = Symbol.for("pi-web.retiredClaudeSettingsWrites");
+
+/** The done marker for one target config root (Q4: keyed by root + storage, version 1). */
+async function markCustomModelsMigrated(agentDir: string, configDir: string): Promise<void> {
+  await patchPiWebSettings((record) => ({
+    ...record,
+    claudeCustomModelsMigration: {
+      ...(isRecord(record.claudeCustomModelsMigration) ? record.claudeCustomModelsMigration : {}),
+      [configDir]: { version: 1, done: true },
+    },
+  }), agentDir);
+}
+
+/**
+ * Removes this flow's already-migrated fields (launchPermissionMode,
+ * includeHookEvents) from the old settings file it must keep (r1#3): the
+ * file stays for the models page's customModels phase, but a later startup
+ * run must find nothing of this flow's left to re-migrate — the old
+ * claude-permissions.json is gone after the first run, so the ask/deny
+ * channel a stored plan was gated on would silently default to ask.
+ */
+async function stripMigratedLaunchFields(agentDir: string): Promise<void> {
+  const retired = retiredClaudeSelfStoredPaths(agentDir);
+  await serializeByKey(RETIRED_SETTINGS_WRITE_CHAIN, retired.settings, async () => {
+    if (!existsSync(retired.settings)) return;
+    const record = readJsonRecord(retired.settings);
+    if (record === null || !("launchPermissionMode" in record) && !("includeHookEvents" in record)) return;
+    const next = { ...record };
+    delete next.launchPermissionMode;
+    delete next.includeHookEvents;
+    writePrivateFileAtomicSync(retired.settings, `${JSON.stringify(next, null, 2)}\n`);
+  });
+}
+
+/** Removes only the customModels key from the old settings file, keeping its other fields (不整份删除旧文件). */
+async function clearSourceCustomModels(agentDir: string): Promise<void> {
+  const retired = retiredClaudeSelfStoredPaths(agentDir);
+  await serializeByKey(RETIRED_SETTINGS_WRITE_CHAIN, retired.settings, async () => {
+    if (!existsSync(retired.settings)) return;
+    // The file parsed when the phase reached here; a fresh parse keeps every
+    // key but customModels.
+    const record = readJsonRecord(retired.settings);
+    if (record === null || !("customModels" in record)) return;
+    const next = { ...record };
+    delete next.customModels;
+    writePrivateFileAtomicSync(retired.settings, `${JSON.stringify(next, null, 2)}\n`);
+  });
+}
+
+/** A stable JSON spelling for the digest (sorted keys, no formatting). */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (isRecord(value)) {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/** The phase's derived state: what the files say, before anything is written. */
+type CustomModelsPhase =
+  | { kind: "done"; sourceEmpty: boolean }
+  | { kind: "blocked"; reason: string }
+  | { kind: "deferred"; reason: string }
+  | { kind: "auto"; names: string[]; ctx: HarnessReadContext }
+  | { kind: "covered"; ctx: HarnessReadContext }  // the target already holds every source name
+  | { kind: "preview"; native: { model: string; label?: string }[]; nativeNames: string[]; missing: string[]; digest: string; ctx: HarnessReadContext };
+
+async function customModelsPhase(options: ClaudeMigrationOptions): Promise<CustomModelsPhase & { agentDir: string; configDir: string; shadowed: boolean }> {
+  const agentDir = options.agentDir ?? defaultAgentDir();
+  const configDir = options.claudeConfigDir ?? claudeConfigDir(options.env ?? process.env);
+  // A managed modelPicker shadows the user target whole (claude reads the key
+  // from the highest of managed/--settings/user only) — reported so the page
+  // can say 已保存、未生效 (Q6); never written.
+  const managedPath = options.managedSettingsPath ?? defaultManagedSettingsPath();
+  const managed = readJsonRecord(managedPath);
+  const shadowed = managed !== null && isRecord(managed.modelPicker);
+  const state = { agentDir, configDir, shadowed };
+  const retired = retiredClaudeSelfStoredPaths(agentDir);
+  const done = readPiWebSettingsRecord(agentDir).claudeCustomModelsMigration;
+  if (isRecord(done) && isRecord(done[configDir]) && done[configDir].done === true) {
+    return { ...state, kind: "done", sourceEmpty: false };
+  }
+  const old = readOldRecord(retired.settings);
+  if (old === null || !("customModels" in old)) {
+    await markCustomModelsMigrated(agentDir, configDir);
+    return { ...state, kind: "done", sourceEmpty: false };
+  }
+  const raw = old.customModels;
+  if (!Array.isArray(raw)) {
+    return { ...state, kind: "blocked", reason: `the retired customModels entry is not an array — nothing was migrated; fix or remove it in ${retired.settings}` };
+  }
+  if (raw.length === 0) {
+    return { ...state, kind: "done", sourceEmpty: true };
+  }
+  const names: string[] = [];
+  for (const entry of raw) {
+    if (!isClaudeModelName(entry)) {
+      return { ...state, kind: "blocked", reason: `the retired customModels list holds an invalid name (${JSON.stringify(entry)}) — nothing was migrated; fix or remove it in ${retired.settings}` };
+    }
+    if (!names.includes(entry)) names.push(entry);
+  }
+  if (names.length > CLAUDE_CUSTOM_MODELS_MAX) {
+    return { ...state, kind: "blocked", reason: `the retired customModels list holds more than ${CLAUDE_CUSTOM_MODELS_MAX} names — nothing was migrated; fix or remove it in ${retired.settings}` };
+  }
+  // The write gate (AC1): an unknown or undetected version defers the phase.
+  const binary = options.claudeBinary ?? findClaudeBinary();
+  const ctx: HarnessReadContext = {
+    claudeConfigDir: configDir,
+    env: options.env ?? process.env,
+    ...(binary !== null ? { claudeBinary: binary } : {}),
+    ...(options.managedSettingsPath !== undefined ? { managedSettingsPath: options.managedSettingsPath } : {}),
+  };
+  const probe = await createClaudeAdapter().probeVersion(ctx);
+  if (probe.version === null || !probe.known) {
+    return { ...state, kind: "deferred", reason: probe.reason ?? `claude version ${probe.version ?? "unknown"} is not known` };
+  }
+  // The native target's shape: a bad shape blocks the phase with the write's
+  // own preflight reason (坏形状拒写).
+  const native = readJsonRecord(claudeUserSettingsPath(configDir)) ?? {};
+  const refusal = claudeModelPickerShapeRefusal(native.modelPicker);
+  if (refusal !== null) return { ...state, kind: "blocked", reason: refusal };
+  const picker = isRecord(native.modelPicker) ? native.modelPicker : undefined;
+  const optionRows = picker !== undefined && Array.isArray(picker.options) ? picker.options as Record<string, unknown>[] : [];
+  const nativeNames = optionRows.map((row) => row.model as string);
+  // 缺 key 或合法 options=[] 为空（保留 replaceBuiltInOptions 等字段）。
+  const targetEmpty = picker === undefined || optionRows.length === 0;
+  if (targetEmpty) return { ...state, kind: "auto", names, ctx };
+  const missing = names.filter((name) => !nativeNames.includes(name));
+  if (missing.length === 0) return { ...state, kind: "covered", ctx };
+  const nativeRows = optionRows.map((row) => {
+    const entry: { model: string; label?: string } = { model: row.model as string };
+    if (typeof row.label === "string") entry.label = row.label;
+    return entry;
+  });
+  const digest = createHash("sha256").update(canonicalJson({ source: raw, target: native.modelPicker ?? null })).digest("hex");
+  return { ...state, kind: "preview", native: nativeRows, nativeNames, missing, digest, ctx };
+}
+
+/**
+ * The migration POST's first call: the phase as it stands now. An empty target
+ * migrates at once (自动迁移); a non-empty one answers the merge preview and
+ * writes nothing.
+ */
+export async function claudeCustomModelsMigrationStep(
+  options: ClaudeMigrationOptions = {},
+): Promise<ClaudeCustomModelsMigrationStatus> {
+  const phase = await customModelsPhase(options);
+  switch (phase.kind) {
+    case "done": {
+      if (phase.sourceEmpty) {
+        await clearSourceCustomModels(phase.agentDir);
+        await markCustomModelsMigrated(phase.agentDir, phase.configDir);
+        return { status: "done", changed: true, shadowed: phase.shadowed };
+      }
+      return { status: "done", changed: false, shadowed: phase.shadowed };
+    }
+    case "blocked":
+      return { status: "blocked", reason: phase.reason, shadowed: phase.shadowed };
+    case "deferred":
+      return { status: "deferred", reason: phase.reason, shadowed: phase.shadowed };
+    case "auto": {
+      const write = await createClaudeAdapter().write("model", { customModels: phase.names }, phase.ctx);
+      if (write.status !== "written") {
+        return { status: "blocked", reason: write.reason, shadowed: phase.shadowed };
+      }
+      await clearSourceCustomModels(phase.agentDir);
+      await markCustomModelsMigrated(phase.agentDir, phase.configDir);
+      return { status: "done", changed: true, shadowed: phase.shadowed };
+    }
+    case "covered":
+      // The target already holds every source name (a crash between the write
+      // and the clear): only the clear is retried.
+      await clearSourceCustomModels(phase.agentDir);
+      await markCustomModelsMigrated(phase.agentDir, phase.configDir);
+      return { status: "done", changed: true, shadowed: phase.shadowed };
+    case "preview":
+      return { status: "preview", native: phase.native, missing: phase.missing, digest: phase.digest, shadowed: phase.shadowed };
+  }
+}
+
+/** The migration POST's confirm call: apply the preview under its digest. */
+export async function applyClaudeCustomModelsMigration(
+  options: ClaudeMigrationOptions = {},
+  digest: string,
+): Promise<ClaudeCustomModelsMigrationApply> {
+  const phase = await customModelsPhase(options);
+  switch (phase.kind) {
+    case "done":
+      return { status: "done", changed: false, shadowed: phase.shadowed };
+    case "blocked":
+      return { status: "blocked", reason: phase.reason, shadowed: phase.shadowed };
+    case "deferred":
+      return { status: "deferred", reason: phase.reason, shadowed: phase.shadowed };
+    case "auto":
+    case "covered":
+      // The state moved past the preview while the user looked at it (the
+      // target was emptied, or the names landed another way). The confirm is
+      // stale: this call writes nothing — clearing the source here would drop
+      // names that never landed. The next {} step re-derives the phase and
+      // takes its own ruled action (the automatic write for an empty target,
+      // the clear for a covered one).
+      return { status: "done", changed: false, shadowed: phase.shadowed };
+    case "preview": {
+      if (phase.digest !== digest) {
+        return {
+          status: "conflict",
+          preview: { status: "preview", native: phase.native, missing: phase.missing, digest: phase.digest, shadowed: phase.shadowed },
+        };
+      }
+      // 同 id 以原生为准，只追加旧列表缺项 — the adapter's write keeps every
+      // native row's metadata and appends the missing names as { model }.
+      const write = await createClaudeAdapter().write("model", { customModels: [...phase.nativeNames, ...phase.missing] }, phase.ctx);
+      if (write.status !== "written") {
+        return { status: "blocked", reason: write.reason, shadowed: phase.shadowed };
+      }
+      await clearSourceCustomModels(phase.agentDir);
+      await markCustomModelsMigrated(phase.agentDir, phase.configDir);
+      return { status: "done", changed: true, shadowed: phase.shadowed };
+    }
+  }
 }

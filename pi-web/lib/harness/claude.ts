@@ -341,6 +341,10 @@ export function createClaudeAdapter(): HarnessAdapter {
               }
             }
           }
+          // The user layer's own names (r1#1): the editor's list and the
+          // write's subject — the merged view above is display-only, so a
+          // managed picker's names can never be copied into the user layer.
+          const userLayer = layers.find((layer) => layer.scope === "user");
           const payload: ModelPayload = {
             defaultProvider: null,
             defaultModel:
@@ -357,6 +361,7 @@ export function createClaudeAdapter(): HarnessAdapter {
             // 85a4: the custom names are claude's own modelPicker.options
             // (claude-layers' one merge of them).
             customModels: modelPickerOptions(layers),
+            userCustomModels: modelPickerOptions(userLayer ? [userLayer] : []),
           };
           return payload;
         }
@@ -531,7 +536,9 @@ export function createClaudeAdapter(): HarnessAdapter {
       // The shared gate first (adapter.ts): an undetected or unrecognized
       // version never reaches a write. auth has 85a2's write (the credential
       // into the native env block), the permission concept 85a4's, the model
-      // concept 85a3's, and the skills concept 85d's (the native skillOverrides,
+      // concept 85a3's (the native model and effortLevel keys, and since
+      // 85a3-3 the custom names of the native modelPicker, floor 2.1.242), and
+      // the skills concept 85d's (the native skillOverrides,
       // feature-floored); every other concept keeps gatedWrite's not-implemented.
       if (concept !== "permission" && concept !== "auth" && concept !== "model" && concept !== "skills") return gatedWrite(this, concept, change, ctx);
       const probe = await probeVersion(ctx);

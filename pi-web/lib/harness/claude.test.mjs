@@ -249,6 +249,7 @@ test("read model: layers in claude's order, local over project over user", async
     perModelReasoningEffort: {},
     providers: [],
     customModels: ["claude-custom-1"],
+    userCustomModels: ["claude-custom-1"],
   });
 });
 
