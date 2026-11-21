@@ -23,8 +23,10 @@ export function MarkdownBody() {
 // imports, as inert render pieces — a behavioural test aliases ./SettingsUi
 // here so the module graph loads against the hook shim (the real SettingsUi
 // calls createContext at load).
-const inert = (name) => function Stub() { return null; };
-export const ConfigButton = inert("ConfigButton");
+const inert = (name) => function Stub({ children }) { return children ?? null; };
+export const ConfigButton = function StubConfigButton({ children, onClick, disabled }) {
+  return { type: "button", props: { onClick, disabled, children } };
+};
 export const ConfigDetail = inert("ConfigDetail");
 export const ConfigDetailActions = inert("ConfigDetailActions");
 export const ConfigDetailNavigationContext = { Provider: function StubProvider() { return null; }, Consumer: function StubConsumer() { return null; } };
