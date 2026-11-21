@@ -61,8 +61,10 @@ func Rollback(ctx context.Context, opts RollbackOptions) (*UpgradeResult, error)
 	// status file carries the refusal too, so the page that asked
 	// shows it without another command.
 	refuse := func(err error) (*UpgradeResult, error) {
-		_ = WriteUpgradeStatus(opts.Root, &UpgradeStatus{Operation: OperationRollback, State: UpgradeStateFailed,
-			Phase: "refuse", Error: err.Error()})
+		if werr := WriteUpgradeStatus(opts.Root, &UpgradeStatus{Operation: OperationRollback, State: UpgradeStateFailed,
+			Phase: "refuse", Error: err.Error()}); werr != nil {
+			return nil, fmt.Errorf("%v (and the refusal could not be recorded in %s: %v)", err, UpgradeStatusFilename, werr)
+		}
 		return nil, err
 	}
 	// the whole transaction — the drain wait and the swap — is one
@@ -138,18 +140,23 @@ func Rollback(ctx context.Context, opts RollbackOptions) (*UpgradeResult, error)
 		return refuse(fmt.Errorf("components rollback: previous and current name the same version %s: there is nothing to roll back to", curVer))
 	}
 
-	record := func(state, errText string) {
-		_ = WriteUpgradeStatus(opts.Root, &UpgradeStatus{Operation: OperationRollback, State: state,
+	record := func(state, errText string) error {
+		return WriteUpgradeStatus(opts.Root, &UpgradeStatus{Operation: OperationRollback, State: state,
 			Phase: "drain", From: curVer, To: prevVer, Error: errText})
 	}
 	failed := func(phase string, err error) (*UpgradeResult, error) {
-		_ = WriteUpgradeStatus(opts.Root, &UpgradeStatus{Operation: OperationRollback, State: UpgradeStateFailed,
-			Phase: phase, From: curVer, To: prevVer, Error: err.Error()})
+		if werr := WriteUpgradeStatus(opts.Root, &UpgradeStatus{Operation: OperationRollback, State: UpgradeStateFailed,
+			Phase: phase, From: curVer, To: prevVer, Error: err.Error()}); werr != nil {
+			return nil, fmt.Errorf("%v (and the failure could not be recorded in %s: %v)", err, UpgradeStatusFilename, werr)
+		}
 		return nil, err
 	}
 
 	// ---- the same drain the upgrade takes.
-	record(UpgradeStateRunning, "")
+	if err := record(UpgradeStateRunning, ""); err != nil {
+		return nil, fmt.Errorf("components rollback: the status record %s on the volume cannot be written: %w — nothing was changed",
+			filepath.Join(opts.Root, UpgradeStatusFilename), err)
+	}
 	cancelled, err := drainAndWait(ctx, &drainWait{
 		root: opts.Root, face: opts.Face, poll: opts.Poll, force: opts.Force,
 		operation: OperationRollback, from: curVer, to: prevVer,

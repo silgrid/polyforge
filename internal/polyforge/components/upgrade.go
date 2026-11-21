@@ -128,19 +128,30 @@ func Upgrade(ctx context.Context, opts UpgradeOptions) (*UpgradeResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	record := func(state, phase, to string, errText string) {
+	record := func(state, phase, to string, errText string) error {
 		s := &UpgradeStatus{Operation: OperationUpgrade, State: state, Phase: phase,
 			From: cur.Version, To: to, Error: errText}
-		_ = WriteUpgradeStatus(opts.Root, s)
+		return WriteUpgradeStatus(opts.Root, s)
 	}
 	failed := func(phase string, err error) (*UpgradeResult, error) {
-		record(UpgradeStateFailed, phase, "", err.Error())
+		if werr := record(UpgradeStateFailed, phase, "", err.Error()); werr != nil {
+			return nil, fmt.Errorf("%v (and the failure could not be recorded in %s: %v)", err, UpgradeStatusFilename, werr)
+		}
 		return nil, err
 	}
 
 	// ---- stage: the source becomes one complete version directory,
 	// verified against its own manifest. Nothing of the machine is
 	// touched by any of it.
+	//
+	// The status record is the contract itself (AC2): an upgrade that
+	// cannot write it refuses before anything runs — the machine is
+	// never changed by a run whose outcome the volume cannot carry.
+	if err := WriteUpgradeStatus(opts.Root, &UpgradeStatus{Operation: OperationUpgrade,
+		State: UpgradeStateRunning, Phase: "stage", From: cur.Version, To: opts.Version}); err != nil {
+		return nil, fmt.Errorf("components upgrade: the status record %s on the volume cannot be written: %w — nothing was changed",
+			filepath.Join(opts.Root, UpgradeStatusFilename), err)
+	}
 	record(UpgradeStateRunning, "stage", opts.Version, "")
 	seed := opts.SeedDir
 	if seed == "" {
