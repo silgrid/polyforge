@@ -110,9 +110,12 @@ func TestStepEndCleanupIsNotChargedToStepT(t *testing.T) {
 // without re-dispatching the step once it proves clean.
 func TestStepEndedCleanupFailureParksKeepsHandoff(t *testing.T) {
 	d, sp, _, dir := handoffEnv(t, 4, spec("collect"), spec("close"))
-	sp.script = []fakeEntry{handedOff(&stepcall.Handoff{Status: stepcall.StatusDone}, func() {
-		appendLedgerHandoff(t, dir, "collect", 1, stepcall.StatusDone)
-	})}
+	sp.script = []fakeEntry{
+		handedOff(&stepcall.Handoff{Status: stepcall.StatusDone}, func() {
+			appendLedgerHandoff(t, dir, "collect", 1, stepcall.StatusDone)
+		}),
+		done(`{}`), // close: reachable only if the lane wrongly advances
+	}
 	d.cfg.StepEnded = func(context.Context) error {
 		return errors.New("step-end sweep incomplete: pids 4242, 4243 still running")
 	}
