@@ -46,6 +46,8 @@ import {
  */
 
 export class PolyforgeInstallError extends Error {
+  readonly status: number;
+
   /** The stable refusal code, when the error carries one (the image-managed
    *  gate's `image_managed`); absent for every other refusal. */
   readonly code: string | null;
