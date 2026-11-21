@@ -15,8 +15,8 @@ package runtime
 //	                     operator agent dir (mode 0600, daemon-owned)
 //	models.json          model service configuration — COPY (source mode
 //	                     preserved), only when the source has one
-//	agents/              subagent definition files — recursive COPY of
-//	                     the source tree; absent source dir ⇒ absent here
+//	agents/              subagent definition files — daemon-owned embed
+//	                     (agents/worker.md) installed into the snapshot
 //	extensions/subagent/ the subagent TOOL — daemon-owned embed
 //	                     installed into the snapshot (same mechanism as
 //	                     the guard below)
@@ -27,9 +27,10 @@ package runtime
 //	                     (polyforge#214; rules in the extension, the
 //	                     allowlist below)
 //
-// Neither the subagent tool nor the guard is a pi builtin: subagent is the
-// extension at <operator agent dir>/extensions/subagent/ (carried into the
-// snapshot), guard is compiled into pf; pi auto-discovers global
+// Neither the subagent tool nor the guard is a pi builtin: BOTH are
+// compiled into pf (the stepagentassets embed) and installed into the
+// snapshot by installEmbeddedTree — operator content is never used for
+// either; pi auto-discovers global
 // extensions only from <agent dir>/extensions/. So the dedicated dir
 // carries exactly those TWO extension directories and no other — the
 // operator's other extensions (extensions/polyforge is for interactive

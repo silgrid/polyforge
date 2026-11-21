@@ -250,15 +250,65 @@ func TestStepAgentRealPiGuardBlocksBackground(t *testing.T) {
 	}
 
 	// the counter-proof on the SAME session (owner plan-review #8): an
-	// ordinary command passes, written through the handle's own line writer
-	records = nil
+	// ordinary command passes, written through the handle's own line
+	// writer. The first run must be SETTLED first — a bare prompt sent
+	// mid-run is refused by pi (r1#2: "Agent is already processing…"),
+	// so the proof would never arrive.
+	firstSettled := false
+	deadline = time.Now().Add(3 * time.Minute)
+	for time.Now().Before(deadline) && !firstSettled {
+		time.Sleep(500 * time.Millisecond)
+		mu.Lock()
+		firstSettled = scanRecordType(records, "agent_settled")
+		mu.Unlock()
+	}
+	if !firstSettled {
+		mu.Lock()
+		dump := strings.Join(records, "\n")
+		mu.Unlock()
+		t.Fatalf("the first run never settled before the counter-proof could be sent:\n%s", dump)
+	}
 	p, ok := h.(*proc)
 	if !ok {
 		t.Fatalf("unexpected handle type %T", h)
 	}
+	mu.Lock()
+	records = nil
+	mu.Unlock()
 	second := `{"id":"pf-g2","type":"prompt","message":"Call the bash tool once with the command: echo ok — then reply DONE."}` + "\n"
 	if err := p.writeLine("pf-g2", []byte(second)); err != nil {
 		t.Fatalf("send the counter-proof prompt: %v", err)
+	}
+	// pi must ACCEPT the prompt: the response record for pf-g2 says so
+	accepted := false
+	deadline = time.Now().Add(1 * time.Minute)
+	for time.Now().Before(deadline) && !accepted {
+		time.Sleep(500 * time.Millisecond)
+		mu.Lock()
+		for _, line := range records {
+			var rec struct {
+				Type    string `json:"type"`
+				Command string `json:"command"`
+				ID      string `json:"id"`
+				Success *bool  `json:"success"`
+			}
+			if json.Unmarshal([]byte(line), &rec) != nil || rec.ID != "pf-g2" {
+				continue
+			}
+			if rec.Success != nil && *rec.Success {
+				accepted = true
+			} else {
+				t.Fatalf("pi refused the counter-proof prompt: %s", line)
+			}
+			break
+		}
+		mu.Unlock()
+	}
+	if !accepted {
+		mu.Lock()
+		dump := strings.Join(records, "\n")
+		mu.Unlock()
+		t.Fatalf("pi never acknowledged the counter-proof prompt:\n%s", dump)
 	}
 	passed := false
 	deadline = time.Now().Add(3 * time.Minute)
@@ -274,6 +324,20 @@ func TestStepAgentRealPiGuardBlocksBackground(t *testing.T) {
 		mu.Unlock()
 		t.Fatalf("the ordinary echo ok call did not pass cleanly:\n%s", dump)
 	}
+}
+
+// scanRecordType answers whether any record on the stream is of the
+// given type (the harness's own settled marker, not a timing guess).
+func scanRecordType(lines []string, want string) bool {
+	for _, line := range lines {
+		var rec struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal([]byte(line), &rec) == nil && rec.Type == want {
+			return true
+		}
+	}
+	return false
 }
 
 // scanGuardBashResults reads the session's bash tool_execution_end records

@@ -152,6 +152,27 @@ func TestStepAgentDirMinimalSetAndPlacement(t *testing.T) {
 	if err != nil || string(embeddedGot) != string(embeddedWant) {
 		t.Fatalf("embedded extension was replaced: %v", err)
 	}
+	// the same discipline for the guard: an operator-placed guard file
+	// never replaces the embedded one (analysis §2 AC3)
+	if err := os.MkdirAll(filepath.Join(src, "extensions", "guard"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "extensions", "guard", "index.ts"), []byte("operator guard"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.refreshStepAgentDir(); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{"extensions/guard/index.ts", "extensions/guard/rules.ts"} {
+		want, err := fs.ReadFile(stepagentassets.FS, rel)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
+		if err != nil || string(got) != string(want) {
+			t.Fatalf("the embedded %s was replaced by operator content: %v", rel, err)
+		}
+	}
 	// models.json keeps the source mode (0600 here)
 	if ms, err := os.Stat(filepath.Join(dir, "models.json")); err != nil || ms.Mode().Perm() != 0o600 {
 		t.Fatalf("models.json must keep the source mode 0600: %v %v", ms, err)
