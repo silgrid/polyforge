@@ -332,7 +332,9 @@ claim.
   whole entry is refused (polyforge#177): the GET answers `imageManaged:
   true` with no versions read, the POST answers 409 with code
   `image_managed`, and the stream answers the fact — all before any
-  probe, download or spawn, `force` included. The card's line naming
+  probe, download or spawn, `force` included. The card itself turns
+  read-only inside the image (polyforge#177): the managed note instead
+  of the install, force and credential controls — no POST, no stream. The card's line naming
   `tools/install.sh` shows only while a run is relevant
   (`polyforgeInstallRelevant`: pf absent, a newer release, a daemon on
   another binary, or a run in progress, refused or failed) — a healthy,

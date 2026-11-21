@@ -1,3 +1,4 @@
+// carries: components/PolyforgeInstallCard*, lib/i18n/messages/*
 import "#test-env";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -32,7 +33,7 @@ const run = (patch = {}) => ({
 });
 function view(props = {}) {
   return renderToStaticMarkup(h(I18nProvider, null, h(PolyforgeInstallView, {
-    versions: versions(), readError: null, streamError: null, run: null, lines: [], host: "", apiKey: "", problem: null, posting: false, confirmingForce: false,
+    versions: versions(), imageManaged: false, readError: null, streamError: null, run: null, lines: [], host: "", apiKey: "", problem: null, posting: false, confirmingForce: false,
     onHost: noop, onApiKey: noop, onStart: noop, onAskForce: noop, onForce: noop, onCancelForce: noop, ...props,
   })));
 }
@@ -90,7 +91,7 @@ test("AC3: an installed pf with no cli.toml key asks for the host and the key to
   // the start's browser-side check follows the same rule, pf installed or
   // not: no request without a host and a key of at least 8 characters
   assert.match(source, /\} else if \(versions\?\.needsConfig\) \{\s*const trimmed = host\.trim\(\);\s*if \(!trimmed\) \{\s*setProblem\(t\("polyforge\.install\.needHost"\)\);\s*return;\s*\}\s*if \(typedKey\.length < 8\) \{\s*setProblem\(t\("polyforge\.install\.needKey"\)\);\s*return;\s*\}\s*body\.host = trimmed;\s*body\.apiKey = typedKey;/);
-  assert.match(source, /\{versions\?\.needsConfig && !running && \(\s*<div className="polyforge-install-credentials"/);
+  assert.match(source, /\{versions\?\.needsConfig && !running && !imageManaged && \(\s*<div className="polyforge-install-credentials"/);
   assert.doesNotMatch(source, /pfPresent[^\n]*needsConfig|needsConfig[^\n]*pfPresent/, "pf's presence never decides whether the credentials are asked for");
 });
 
