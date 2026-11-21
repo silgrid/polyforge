@@ -292,9 +292,24 @@ func TestComponentsVerbCancelAndStatus(t *testing.T) {
 		}
 	}
 
+	// the waiting transaction consumes the marker, restarts the daemon
+	// and records the stand-down (the run's own writes, simulated
+	// here): the next cancel sees no waiting run.
+	if err := components.ClearUpgradeCancel(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := components.WriteUpgradeStatus(root, &components.UpgradeStatus{
+		Operation: components.OperationUpgrade, State: components.UpgradeStateCancelled,
+		Phase: "drain", From: "v0.2.4", To: "v0.2.4",
+	}); err != nil {
+		t.Fatal(err)
+	}
 	// no waiting run: the marker a crashed run might have left is
 	// cleared and the daemon is asked to restart — the documented
 	// recovery for a drain nothing stands down.
+	if err := components.RequestUpgradeCancel(root); err != nil {
+		t.Fatal(err)
+	}
 	code, _, stderr = runPf(t, env, "components", "cancel")
 	if code != 0 {
 		t.Fatalf("components cancel without a waiting run: exit %d (%s)", code, stderr)
@@ -325,7 +340,7 @@ func TestComponentsVerbCancelAndStatus(t *testing.T) {
 	if got.Current != "v0.2.4" || got.Previous != nil {
 		t.Fatalf("components status --json answered current=%q previous=%v", got.Current, got.Previous)
 	}
-	if got.Status == nil || got.Status.State != components.UpgradeStateWaiting {
+	if got.Status == nil || got.Status.State != components.UpgradeStateCancelled {
 		t.Fatalf("status must answer the volume's recorded run: %+v", got.Status)
 	}
 }

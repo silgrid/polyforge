@@ -45,6 +45,11 @@ func TestComponentsUpgradeDrainRefusesASecondConcurrentRun(t *testing.T) {
 	if got := rootState(t, root); got != before {
 		t.Fatalf("a refused concurrent transaction changes nothing:\n%s", got)
 	}
+	// the first run finishes on the force request (the same in-volume
+	// handoff a waiting `pf components upgrade --force` takes).
+	if err := RequestUpgradeForce(root); err != nil {
+		t.Fatal(err)
+	}
 	wg.Wait()
 	if firstErr != nil {
 		t.Fatalf("the first transaction must finish on its own terms: %v", firstErr)
