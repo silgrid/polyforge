@@ -1986,6 +1986,7 @@ export const enLocale: LocalePlugin = {
     "polyforge.blocked.kind.incomplete": "incomplete step",
     "polyforge.blocked.kind.driver": "parked by the driver",
     "polyforge.blocked.kind.write_failed": "a finished step's hub writes failed",
+    "polyforge.blocked.kind.cleanup_failed": "the step's process cleanup could not prove its processes gone",
     "polyforge.blocked.kind.contract": "its lane snapshot targets another workflow contract (cancel and re-file)",
     "polyforge.jobStatus.paused": "Paused",
     "polyforge.jobStatus.queued": "Queued",
