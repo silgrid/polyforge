@@ -2292,7 +2292,7 @@ export function WorkflowCard({ cwd, profile, active, refreshKey, regionId, reloa
             disabled={disabled}
             value={chainAdds[row.id] ?? ""}
             onChange={(next) => setChainAdds((current) => ({ ...current, [row.id]: next }))}
-            selectLabel={t("polyforge.candidatePicker.choose")}
+            selectLabel={`${t("polyforge.settings.workflowChainAdd")} · ${row.id}`}
             inputLabel={`${t("polyforge.settings.workflowChainAdd")} · ${row.id}`}
             placeholder={t("polyforge.settings.workflowChainAdd")}
             inputProps={{
