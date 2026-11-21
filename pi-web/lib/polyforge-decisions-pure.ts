@@ -255,7 +255,7 @@ export function cancelCommand(wi: string, profile?: string): string {
  *  `write_failed` a `done` hand-off's hub writes that failed, `contract` a
  *  lane snapshot of another contract. An unknown kind still renders (its
  *  raw name) and is still resumable. */
-export const KNOWN_BLOCKED_KINDS: readonly string[] = ["incomplete", "driver", "contract", "write_failed"];
+export const KNOWN_BLOCKED_KINDS: readonly string[] = ["incomplete", "driver", "contract", "write_failed", "cleanup_failed"];
 
 /** The blocked kinds no `pf resume` releases: `contract` — the capsule's lane
  *  snapshot targets another workflow contract version than the daemon runs,
