@@ -276,9 +276,10 @@ const T = {
   S22: "S85-22: the table and the editor share one enabledModels controller — a Save never re-enables a model the table just disabled (review r1#1)",
   S23: "S85-23: the models page's Claude section merges the retired custom models under a preview and edits the native picker with full-list writes (85a3-3)",
   S30: "S85-30: the model list's step-tier column sets a tier for every harness of the row and reads the state back (85b2 AC1/AC3)",
-  S31: "S85-31: an inconsistent row lists each harness's tier and a unify restore returns to 全部 (85b2 AC3)",
+  S31: "S85-31: a specific-mode claude-only tier save writes only claude (pi untouched) and reads back 指定 with the per-harness lines (85b2 AC3)",
   S32: "S85-32: an unsaved row never offers the tier setter; an incapable catalog read leaves the column read-only with its reason (85b2 AC1/AC3)",
   S33: "S85-33: a concurrent external write survives the tier column's save (the per-step re-read), and a refused write keeps the draft, reported per harness (85b2 AC1, review r2 #1)",
+  S34: "S85-34: an inconsistent row restores to 全部 through a unify save — cli.toml reads back the merged tier and the vacated one unsets (85b2 AC3)",
 };
 const failures = new Map(Object.values(T).map((title) => [title, []]));
 const ran = new Set();
@@ -1184,9 +1185,45 @@ try {
     await cell.getByRole("button", { name: "Save", exact: true }).click({ timeout: ACTION_MS });
     const results = cell.locator(".harness-apply-to-results li");
     await results.first().waitFor({ state: "visible", timeout: ACTION_MS });
-    assert.match(await cell.locator('.harness-apply-to-results [data-harness="pi"]').innerText(), /the file changed since it are read|the file changed since it was read/, "the refused harness reports the conflict");
+    assert.match(await cell.locator('.harness-apply-to-results [data-harness="pi"]').innerText(), /the file changed since it was read/, "the refused harness reports the conflict");
     assert.match(await cell.locator('.harness-apply-to-results [data-harness="claude"]').innerText(), /not attempted after the earlier failure/, "the unattempted harness says so");
     assert.equal(await cell.locator("[data-step-tier-select]").inputValue(), "default", "the draft is kept for the retry");
+    await page.context().close();
+  });
+  // S85-34 — polyforge#151 (85b2 AC3, review r2 #2): the restore path. A
+  // row starts inconsistent (pi in default, claude in fast-chat); choosing
+  // default with 应用到：全部 saves claude over and unsets the vacated
+  // fast-chat — the read-back returns to 全部：default, from the storage the
+  // writes really changed.
+  await part("S34", "inconsistent restored to all", async () => {
+    const page = await newPage();
+    seedTiers({ default: ["pi:anthropic/opus"], "fast-chat": ["claude:opus"] });
+    await tierPageMocks(page);
+    await openSettings(page);
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    const host = sectionHost(page, "models");
+    const cell = host.locator("[data-step-tier-cell]").first();
+    await cell.waitFor({ state: "visible", timeout: ACTION_MS });
+    await waitFor(async () => /Specific/.test(await cell.locator("[data-step-tier-state]").innerText()),
+      ACTION_MS, "the row never read back 指定");
+    const stateText = await cell.locator("[data-step-tier-state]").innerText();
+    assert.match(stateText, /Inconsistent: pi is currently in default/, "pi's own tier is listed");
+    assert.match(stateText, /Inconsistent: claude is currently in fast-chat/, "claude's own tier is listed");
+    // the restore: default (pi's tier) applied to ALL harnesses
+    await cell.locator("[data-step-tier-select]").selectOption("default");
+    await cell.getByRole("button", { name: "Save", exact: true }).click({ timeout: ACTION_MS });
+    await waitFor(async () => (await cell.locator("[data-step-tier-state]").innerText()).includes("All: default"),
+      ACTION_MS, "the row never read back 全部：default");
+    // the fixture storage: claude moved over, the vacated tier unset (never an empty list)
+    const state = tierState();
+    assert.deepEqual(state.tiers.default, ["pi:anthropic/opus", "claude:opus"], "the merged tier is what cli.toml reads back");
+    assert.equal(state.tiers["fast-chat"], undefined, "the vacated tier was unset, never left as an empty list");
+    // only claude was written: one set and one unset, both Host-scoped
+    const writes = tierArgv().filter((args) => (args.includes("set") || args.includes("unset")) && args.includes("step_tiers."));
+    assert.equal(writes.length, 2, "one write per plan step of the moved harness");
+    for (const write of writes) assert.ok(write.includes("--host"), "the write is Host-scoped");
+    assert.ok(writes.some((args) => args.includes("config") && args.includes("set") && args.includes("step_tiers.default")), "the merged tier was written");
+    assert.ok(writes.some((args) => args.includes("config") && args.includes("unset") && args.includes("step_tiers.fast-chat")), "the vacated tier was unset");
     await page.context().close();
   });
 } finally {

@@ -433,12 +433,10 @@ try {
       while (menu && !menu.contains(compact)) menu = menu.parentElement;
       return Boolean(menu && menu.contains(model));
     });
-    // the three controls must be in the DOM before the layout read — a read
-    // that races their mounting answers null and fails on the wrong thing
-    // (the settle duty; the suite's own S272-01 precedent). 151 r2#8: this
-    // surfaced red under host load, null !== false.
-    await waitFor(async () => (await modelInsideMenu()) !== null, 30_000, "the composer's controls never settled for the menu read");
-    assert.equal(await modelInsideMenu(), false, "the model selector is inside the More controls menu");
+    // the layout read settles only when the three controls are mounted —
+    // poll the assertion's own value (review r2 N16's safer form; 151 r2#8
+    // surfaced the race as null !== false under host load).
+    await waitFor(async () => (await modelInsideMenu()) === false, 30_000, "the composer's controls never settled (or the model selector sits inside the More controls menu)");
     // the selector now shares pi's left cell at 390 px, so the
     // composer row and the page must still fit without horizontal scrolling.
     const widths = await bottomBar().evaluate((bar) => ({
