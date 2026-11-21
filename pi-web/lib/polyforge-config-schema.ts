@@ -192,6 +192,33 @@ export function parseWorkspaceWriteKey(key: string): string | null {
   return path;
 }
 
+// polyforge#151 (85b2): the [step_tiers] key family — pf's Host-only
+// step-tier catalog, one `step_tiers.<tier>` key per tier. The tier-name
+// grammar is pf's own (internal/polyforge/cli/step_tiers.go:
+// ^[a-z][a-z0-9-]{0,39}$, the lane tier grammar), so a bad tier name is
+// refused before any spawn, and the family is Host-only beside the fixed
+// HOST_ONLY_KEYS list — a prefix family, never a fixed array entry (a
+// named Cell's list would otherwise leak the catalog as read-only chips).
+/** The pf release that first carries the [step_tiers] catalog — the
+ *  family's own floor, independent of the panel's 2.20.x line (the
+ *  summarize precedent in lib/polyforge-memory.ts: a v0.2.x pf ranks
+ *  above every 2.20.x floor, an unparseable version is never capable). */
+export const POLYFORGE_CONFIG_STEP_TIERS_MINIMUM_PF_VERSION = "0.2.4";
+
+/** The tier name a `step_tiers.<tier>` key addresses, or null when the key
+ *  is not a catalog key with a well-formed tier name (the panel's and the
+ *  write route's shared refusal — a bad name never reaches pf). */
+export function parseStepTierKey(key: string): string | null {
+  return null;
+}
+
+/** Whether a key is Host-only: one of the fixed HOST_ONLY_KEYS, or a
+ *  well-formed `step_tiers.<tier>` catalog key (the cli.toml card excludes
+ *  both; the Host region and the models page's tier column own them). */
+export function isHostOnlyKey(key: string): boolean {
+  return false;
+}
+
 const PROJECT_NAME = /^[A-Za-z0-9._-]+$/;
 
 /** A mapping row's projects as pf's ordered list: an array of names or the
