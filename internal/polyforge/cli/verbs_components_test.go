@@ -364,7 +364,7 @@ func TestComponentsVerbCancelAndStatus(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	nBefore := len(d.rec.all())
+	recsBefore := len(d.rec.all())
 	code, _, stderr = runPf(t, env, "components", "cancel")
 	if code != 0 {
 		t.Fatalf("components cancel of an interrupted run: exit %d (%s)", code, stderr)
@@ -379,7 +379,7 @@ func TestComponentsVerbCancelAndStatus(t *testing.T) {
 	if err != nil || s == nil || s.State != components.UpgradeStateFailed || !strings.Contains(s.Error, "中断") {
 		t.Fatalf("the interrupted record must be rewritten failed naming the interruption: %+v (%v)", s, err)
 	}
-	posts := len(d.rec.all()) - nBefore
+	posts := len(d.rec.all()) - recsBefore
 	if posts < 1 {
 		t.Fatal("recovering an interrupted run must ask the daemon to restart (the drain ends with it)")
 	}
