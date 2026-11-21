@@ -87,6 +87,8 @@ func CleanupFailedBlocked(reason string) bool {
 type cleanupParkFlavor int
 
 const (
+	// cleanupParkNone: no cleanup_failed park (the zero value).
+	cleanupParkNone cleanupParkFlavor = iota
 	// cleanupParkKeptHandoff: the dispatch handed off; the park keeps the
 	// accepted hand-off on the call ledger and the resume settles it
 	// without re-running the step.
@@ -99,6 +101,22 @@ const (
 	// and the resume re-enters it once the sweep proves clean.
 	cleanupParkOpenAsk
 )
+
+// cleanupParkFlavorOf reads the flavor back out of a cleanup_failed
+// park's blocked reason — its own continuation sentence (r3#1: the
+// resume's re-park carries the resumed park's flavor, and the reason is
+// the one durable record of it once the unblock clears the field).
+func cleanupParkFlavorOf(reason string) cleanupParkFlavor {
+	switch {
+	case strings.Contains(reason, "open ask to the owner stands"):
+		return cleanupParkOpenAsk
+	case strings.Contains(reason, "failure was recorded"):
+		return cleanupParkFailedDispatch
+	case strings.Contains(reason, "accepted hand-off stays"):
+		return cleanupParkKeptHandoff
+	}
+	return cleanupParkNone
+}
 
 // cleanupFailedReason is the blocked reason of a step-end cleanup that
 // could not prove the step's processes gone, flavored by its path.
