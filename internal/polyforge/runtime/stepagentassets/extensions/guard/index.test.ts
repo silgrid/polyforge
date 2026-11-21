@@ -48,12 +48,13 @@ async function toolResult(handlers: Handlers, event: Event, cwd: string) {
 	return handlers["tool_result"](event, ctx);
 }
 
-function textEvent(path0: string, isError = false): Event {
+function textEvent(path0: string, isError = false, structuredContent?: unknown): Event {
 	return {
 		toolName: "write",
 		input: { path: path0 },
 		content: [{ type: "text", text: "ok" }],
 		isError,
+		structuredContent,
 	};
 }
 
@@ -111,9 +112,15 @@ test(".json error", async (t) => {
 	const tmp = tmpWorkspace(t);
 	fs.writeFileSync(path.join(tmp, "bad.json"), '{\n "a": 1\n}}\n');
 	const handlers = loadGuard();
-	const r = (await toolResult(handlers, textEvent("bad.json"), tmp)) as { content: Array<{ text: string }> } | undefined;
+	// a tool result that carries structuredContent must get it back
+	// verbatim: replacing content alone drops it (pi's tool_result rule)
+	const structured = { marker: 1 };
+	const r = (await toolResult(handlers, textEvent("bad.json", false, structured), tmp)) as
+		| { content: Array<{ text: string }>; structuredContent?: unknown }
+		| undefined;
 	assert.ok(r, "a note was appended");
 	assert.ok(r.content[1].text.includes("bad.json:3:2:"), r.content[1].text);
+	assert.deepEqual(r.structuredContent, structured, "the note must carry the structuredContent back");
 });
 
 test(".js error", async (t) => {
