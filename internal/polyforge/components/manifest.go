@@ -30,13 +30,21 @@ var channelRepoRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9_.
 
 // Manifest is one version directory's manifest.
 type Manifest struct {
-	SchemaVersion int         `json:"schemaVersion"`
-	Version       string      `json:"version"`
-	Commit        string      `json:"commit"`
-	Platform      string      `json:"platform"`
-	ChannelRepo   string      `json:"channelRepo"`
-	MinBase       string      `json:"minBase"`
-	Components    []Component `json:"components"`
+	SchemaVersion int    `json:"schemaVersion"`
+	Version       string `json:"version"`
+	Commit        string `json:"commit"`
+	Platform      string `json:"platform"`
+	ChannelRepo   string `json:"channelRepo"`
+	MinBase       string `json:"minBase"`
+	// DataLayout is the data-layer layout this build READS (the
+	// cellcfg layout version, stamped by the seed's own build — the
+	// owner's ruling of 2026-11-21): the rollback compares it with
+	// the data dir's live layout-version and refuses the versions
+	// that crossed a data migration. Empty = a version older than
+	// the field: never machine-judged, the documented operator
+	// responsibility.
+	DataLayout string      `json:"dataLayout,omitempty"`
+	Components []Component `json:"components"`
 }
 
 // Component is one manifest entry: the name from the closed set, the

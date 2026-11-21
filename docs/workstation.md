@@ -383,10 +383,36 @@ in-container component install.
 
 ### In-place upgrade
 
-Planned, not yet available: the in-container component upgrade lands
-here — the upgradable-component list and the exit-code contract — when
-polyforge#190 merges. Until then, upgrading means the image switch
-above.
+Inside the workstation image the versioned components — pf itself (the
+daemon and the local AIHub included), the lanes and skills checkout and
+Pi Web — upgrade without rebuilding the container: the Settings ›
+Polyforge section's update card (or `pf components upgrade`) fetches
+the channel's release, verifies it against its own SHA256SUMS, assembles
+the version directory and switches the components volume's `current`
+atomically, keeping `previous`. The base — node, python, git, podman,
+`pf supervise` and the image's own bootstrap pf — still upgrades only
+with a new image; the harnesses wait for #86 to pin them into the
+release manifest.
+
+The progress and the final result (the phase, the versions, a
+refusal's reason) persist in `/components/upgrade-status.json`, so the
+page reconnects and replays the outcome across Pi Web's own restart;
+the orchestration runs detached from the Pi Web process tree. While
+the upgrade drain waits for the running work, new work is refused
+DAEMON-409; the wait can be stood down (the daemon restart clears the
+drain) or forced. After the switch the daemon exits 75 and the
+supervisor relaunches it — and the old tree's Pi Web and AIHub — on the
+new `current`. `pf components rollback` swaps `current` and `previous`
+through the same drain and restarts; a rollback is refused — changing
+nothing — when the previous is missing or corrupt, of another channel,
+of a manifest schema this build cannot judge, of another platform, of
+a data layout the data directory has migrated past (the previous
+version's declared `dataLayout` — a version older than the field is
+never machine-judged), or below the running base's floor. Only a previous version that
+declares its `dataLayout` is judged against the data directory's live
+layout; a version older than the field is never machine-judged — back
+up before upgrading and follow the version's migration notes before
+rolling back to one.
 
 ## Platform support
 

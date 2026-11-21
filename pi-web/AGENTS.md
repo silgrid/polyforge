@@ -39,6 +39,10 @@ pi's packages depend on each other with `^` ranges, and the published pi-web's d
 
 ```
 app/api/
+  components/status/route.ts       GET 读取卷上的版本与最终升级状态；check=1 查询渠道最新版
+  components/upgrade/route.ts      POST 登录与同源检查后独立启动升级编排
+  components/rollback/route.ts     POST 登录与同源检查后启动回退
+  components/cancel/route.ts       POST 取消等待并恢复 daemon 接收新作业
   sessions/route.ts               GET  list all sessions (pi files, live pi wrappers, and pi-web's claude index rows with `harness: "claude"`); awaitingSessionIds include claude sessions with a pending permission prompt
   sessions/[id]/route.ts          GET/PATCH/DELETE session (claude: history from claude's transcript plus `claudeSubagents`, the subagent runs rebuilt from its sidecars, and `claudeEditEntryIds`, the user messages an in-session edit can start from; the history is the transcript's active branch, PATCH { name } / { archived } in the index, DELETE its transcript + entry)
   sessions/[id]/context/route.ts   GET ?leafId=&tail=&before= a page of a leaf's context (tail defaults to 50; before pages upward)
@@ -145,6 +149,9 @@ app/api/
   machine-load/route.ts           GET  host CPU %, cores, loadavg 1/5/15, memory used/total for the Debug panel (#168, #198; whitelist only, 2 s shared sample, 200 { metrics: null } on failure, no 5xx)
 
 lib/
+  components-update-client.ts      断线后继续轮询组件状态，关闭面板后停止
+  components-upgrade.ts            从组件卷读状态，以独立进程启动 CLI 升级、回退、取消
+  workstation-mode.ts              通过只读种子 manifest 判断工作站镜像身份
   agent-client.ts      typed fetch helper for /api/agent commands
   missing-cwd.ts            client-safe `reason: "cwd-missing"` refusal of a folder that no longer exists: error class, body fields, parsing
   debug-types.ts            client-safe shapes of the Debug panel: GET /api/agent/debug and the page's own snapshot
@@ -275,6 +282,7 @@ lib/
   worktree.ts         project/worktree resolution and git worktree operations
 
 components/
+  ComponentsUpdateCard.tsx          镜像模式的更新、排空等待、取消、回退和断线重连结果
   AppShell.tsx        layout + URL state + tab management (no top-bar bg-tasks toggle or running-count badge: the dock opens from the bg-task terminal notification only; claude sessions: export unavailable in visible text, no background tasks/subagents/title); the Messages 「@」 fill binding (`bindPromptTarget`, click-time, through resolveChatInputHandle's derivation) and its prompt request; the Polyforge button's attention state (amber `#d97706` with `data-pf-attention=<count>` and the count in its name while anything needs a human — the waiting jobs plus the open decisions — at every width, no separate reminder; a click with the dock closed opens it through the attention walk, `openPfNeedsInput`)
   SessionSidebar.tsx  the sidebar (internal line; upstream's redesign not adopted): session rows (claude rows carry a right-aligned `claude` harness chip, never the model; a claude row's awaiting marker reads 「等待你的授权」, `sidebar.awaitingPermission`), pinned directories, archive (claude rows: in pi-web's index), filters, multi-root FileExplorer
   ChatWindow.tsx      chat composition + completion sound wrapper (claude sessions: claude's model / effort / compact handlers passed and the session's permission mode with its switch, pi's built-in command handler handed to both harnesses (#71: a claude session's menu offers /compact and /session, its /mcp goes to claude as text) and every mid-turn / command takes the same prompt-with-streaming-behavior entry as pi; provides the subagent runs to every Agent row; a claude user message's New session and its in-place Edit from here (only on `claudeEditEntryIds`), both hidden while a claude turn or compaction runs; a claude turn takes pi's Steer, no follow-up or recall; a claude session's running subagent list right above the composer, the two in one container holding the composer's outer gutter (CHAT_COLUMN_PADDING, + MINIMAP_WIDTH on desktop), and the one open subagent panel floating above it (at the bottom of the message area, never taller than it; Esc closes it), closed on a session switch, kept open after its run finishes, its Jump closing it and scrolling to the Agent row (the render window widened and a folded turn revealed when the row is not mounted); every Agent row's Open panel through ClaudeSubagentPanelContext; the running background tasks' buttons in that list, a task's panel (ClaudeBackgroundTaskPanel) in the same floating slot (one panel at a time, Esc/Close as for a subagent's, kept after the task ends), and the force-stop notice above the list)

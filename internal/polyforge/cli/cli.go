@@ -218,6 +218,7 @@ var commands = []*Command{
 	cmdDaemon,
 	cmdSupervise,
 	cmdFirstBoot,
+	cmdComponents,
 	cmdAihubServer,
 }
 

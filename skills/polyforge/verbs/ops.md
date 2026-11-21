@@ -219,3 +219,8 @@ ready-queue work by itself (an internal loop; idle-polls when the queue is
 empty, never exits); shutdown stops accepting anything new, closes what
 remains and exits. They are independent concepts and never substitute for
 each other.
+
+
+容器组件编排通过 Host 级 POST /ops/restart 请求 daemon 以退出码 75 重启，
+该入口拒绝 step/task 进程树。正常操作使用 `pf components`；取消等待会重启
+以清除内存排空门，排空期间新作业返回 DAEMON-409。

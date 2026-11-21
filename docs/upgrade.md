@@ -917,3 +917,30 @@ identity domain, so the daemon refuses to start beside it (exit 78,
 its own message naming both). Recovery is the daemon's own rule:
 reset the old dev volume (the machine is disposable) or keep the old
 Cell under its recorded identity and let the first boot be skipped.
+## v0.2.4, 容器内组件更新（polyforge#190）
+
+工作站镜像内可通过 Pi Web 的「容器组件更新」卡片或 `pf components`
+升级 pf（含 daemon 与 AIHub）、车道与 skill、Pi Web。harness 仍使用原有
+钉住版本，待 #86 提供版本清单；node、python、git、Podman、pf supervise
+和底座二进制只能换镜像升级。宿主机的 tools/install.sh 与自更新卡片不变。
+
+升级从当前 manifest 的 channelRepo 下载 GitHub Release（公开渠道匿名访问），
+核对 SHA256SUMS 后组装完整 releases/<ver>，current 切换是提交点，previous
+保存旧版本。取资产或 staging 失败不会切换 current。upgrade-status.json
+保存在组件卷上，记录阶段、成功或失败、目标版本及原因，页面断线后自动重连读取。
+编排 CLI 独立于 Pi Web 会话运行。`--seed-dir` 可指定已校验的本地完整种子。
+
+排空期间新作业收到 DAEMON-409；现有作业完成后自动继续。取消会重启 daemon
+清除排空；`--force` 允许直接切换。daemon 通过 Host 级 POST /ops/restart
+触发退出码 75，supervise 立即重新解析 current 启动，不停止容器；0 和 78
+仍结束 supervise。重启标志只在内存存在，不会在新 daemon 上重复触发。
+
+回到上一版交换 current 与 previous 并重启组件；目标 manifest schema 不可读、
+平台或渠道不同、最低底座版本不满足时拒绝，保留软链与运行组件并显示原因。
+回退在数据层同样受机械判定（owner 2026-11-21 裁定）：manifest 新增
+dataLayout 字段，由构建时的 seedtool 与组装器从本构建读取的 cellcfg 布局
+版本钉入；回退时与数据目录的 layout-version 比对，previous 声明的布局与
+卷上实际不一致即拒绝并提示两边的布局名、什么都不改。早于该字段的版本
+不声明、也不被机械判定：回退到它们前先备份并遵循对应版本的迁移说明。
+manifest schema 不是数据库兼容性的证明。组件卷首启与 compose 接线由
+84-components-C 提供。
