@@ -1313,6 +1313,7 @@ func w535SmokePersist(t *testing.T, mutate func(dir string)) (string, error) {
 		"podman-image.txt":       "sha256:persist-image-stub\n",
 		"components-current.txt": "releases/v0.2.4-dev.1\n",
 		"components-digest.txt":  "persist-digest-stub\n",
+		"components-stat.txt":    "1795239142 424242\n",
 	} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
