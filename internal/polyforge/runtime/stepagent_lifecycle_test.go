@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -445,5 +446,106 @@ func TestPiSubagentLifecycleAbortGroup(t *testing.T) {
 	}
 	if lines := extReadLines(t, dir, "started"); len(lines) != 0 {
 		t.Fatalf("a pre-aborted call must not spawn a child; the fake pi started %d time(s)", len(lines))
+	}
+}
+
+// fakePiEscapees spawns the AC2 escapee shapes: a grandchild in its OWN
+// process group that holds the child's stdout pipe open, and a
+// double-forked marked escapee reparented away. Both inherit the call's
+// env markers.
+const fakePiEscapees = `#!/bin/bash
+echo "started" >> "$FAKEPI_DIR/started"
+echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"working"}]}}'
+setsid sleep 300 &
+sh -c 'sh -c "sleep 300 < /dev/null > /dev/null 2>&1 &" '
+trap 'echo TERM >> "$FAKEPI_DIR/signals"' TERM
+while kill -0 "$PPID" 2>/dev/null; do sleep 0.1; done
+`
+
+// extMarkerPids scans /proc for live processes whose environment carries
+// PF_WI_ID=<wi> — the same fact the daemon's L4 sweep works from.
+func extMarkerPids(t *testing.T, wi string) []int {
+	t.Helper()
+	self := os.Getpid()
+	entries, err := os.ReadDir(procRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []int
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil || pid <= 1 || pid == self {
+			continue
+		}
+		state, _, _, _, ok := procStat(pid)
+		if !ok || state == "Z" {
+			continue
+		}
+		env, err := os.ReadFile(filepath.Join(procRoot, e.Name(), "environ"))
+		if err != nil {
+			continue
+		}
+		for _, kv := range strings.Split(string(env), "\x00") {
+			if kv == "PF_WI_ID="+wi {
+				out = append(out, pid)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// TestPiSubagentLifecycleDescendants pins the Q3B descendant identity: a
+// stopped call kills its OWN child's descendants — the detached-pgroup
+// grandchild holding stdout and the double-forked marked escapee — and
+// nothing else: a process of the same WI and daemon under a DIFFERENT
+// call marker survives.
+func TestPiSubagentLifecycleDescendants(t *testing.T) {
+	dir := extProject(t)
+	const wi = "wi-pf200-u2-descendants"
+	const daemon = "dm-pf200-u2"
+
+	// the sibling: same WI and daemon markers, a DIFFERENT call marker —
+	// it is exactly what a triple-marker match must spare.
+	sibling := exec.Command("sleep", "300")
+	sibling.Env = append(os.Environ(), "PF_WI_ID="+wi, "PF_DAEMON_ID="+daemon, "PF_SUBAGENT_ID=sibling-call")
+	if err := sibling.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sibling.Process.Kill(); _ = sibling.Wait() }()
+
+	scenario := map[string]any{
+		"params":       map[string]any{"agent": "worker", "task": "do work"},
+		"abortAfterMs": 400,
+		"deadlineMs":   20000,
+		"env": map[string]any{
+			"PF_WI_ID":                  wi,
+			"PF_DAEMON_ID":              daemon,
+			"PF_SUBAGENT_TERM_GRACE_MS": "300",
+			"PF_SUBAGENT_KILL_WAIT_MS":  "1000",
+			"FAKEPI_DIR":                dir,
+		},
+	}
+	res := extRun(t, dir, scenario, fakePiEscapees)
+	if res.Hung {
+		t.Fatalf("the aborted call never resolved: the stop must collect the child's descendants")
+	}
+	if res.Thrown == "" || !strings.Contains(strings.ToLower(res.Thrown), "abort") {
+		t.Fatalf("an aborted call must surface as an error, got thrown=%q", res.Thrown)
+	}
+
+	// settle: the sweep is done when the call resolved, but give the
+	// kernel a bounded moment before reading the process list.
+	deadline := time.Now().Add(3 * time.Second)
+	var left []int
+	for time.Now().Before(deadline) {
+		left = extMarkerPids(t, wi)
+		if len(left) == 1 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if len(left) != 1 || left[0] != sibling.Process.Pid {
+		t.Fatalf("after the aborted call only the sibling call-marker process may carry the WI marker; left=%v sibling=%d", left, sibling.Process.Pid)
 	}
 }
