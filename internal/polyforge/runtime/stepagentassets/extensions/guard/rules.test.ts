@@ -35,6 +35,9 @@ const blocked: Array<[string, string, string]> = [
 	["a & wait; b &", "background", "`&`"],
 	["x=1 sleep 5", "long-sleep", "`sleep 5`"],
 	["env FOO=1 sleep 5", "long-sleep", "`sleep 5`"],
+	["cmd && sleep 300", "long-sleep", "`sleep 300`"],
+	["make |& sleep 300", "long-sleep", "`sleep 300`"],
+	["a || sleep 300", "long-sleep", "`sleep 300`"],
 	["npm ci > log 2>&1 &\necho started", "background", "`&`"],
 ];
 for (const [input, rule, trigger] of blocked) {
