@@ -138,12 +138,11 @@ class OneEntryTest(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_GIT and HAVE_BASH, "git and bash are required")
-class CloseClassificationTest(unittest.TestCase):
-    """The baseline phase of fast_checks' --repo run and its close: every
-    still-red unit of a red command carries its class, its signatures and
-    the base runs' observation summary beside its failure — the classes
-    expected from FAKE_PYTEST's behaviour, never from the implementation
-    (exit codes, reds[] and the selection's status are the next unit's)."""
+class CloseTriageCase(unittest.TestCase):
+    """A close-scoped run over a fake-pytest repo whose base carries the
+    same failure: the shared fixtures (Fixture, fake_engine, FAKE_PYTEST)
+    and fast_checks' own run_close, its env now passed through so the fake
+    pytest sits on the PATH the baseline worktree's re-runs need."""
 
     def setUp(self) -> None:
         import tempfile
@@ -151,23 +150,58 @@ class CloseClassificationTest(unittest.TestCase):
         self.addCleanup(td.cleanup)
         self.root = os.path.realpath(td.name)
 
+    def sub(self, name: str) -> str:
+        d = os.path.join(self.root, name)
+        os.makedirs(d)
+        return d
+
     def env(self, name: str = "pytest", script: str = FAKE_PYTEST) -> Dict[str, str]:
         return fake_bin(self.root, name, script)
 
     def close_units_of(self, name: str, base: Dict[str, str], feature: Dict[str, str],
                        **report_extra: Any) -> Dict[str, Dict[str, Any]]:
+        code, res = self.close_of(name, base, feature, **report_extra)
+        del code
+        return close_units(res)
+
+    def close_of(self, name: str, base: Dict[str, str], feature: Dict[str, str],
+                  **report_extra: Any) -> Tuple[int, Dict[str, Any]]:
         from .test_build_scoped_close import run_close
         self.root = self.sub(name)
         fx = Fixture(self.root, {"app": base})
         fx.commit_in_repo("app", feature, "feature")
         eng = fake_engine(self.root, {"app": report("scoped", cmd_of("tests", "scoped", "pytest"), **report_extra)})
-        _code, res = run_close(fx.capsule, "app", eng, os.path.join(fx.capsule, "close.json"), env=self.env())
-        return close_units(res)
+        out = os.path.join(fx.capsule, "close.json")
+        return run_close(fx.capsule, "app", eng, out, env=self.env())
 
-    def sub(self, name: str) -> str:
-        d = os.path.join(self.root, name)
-        os.makedirs(d)
-        return d
+    def base_of(self, name: str, base: Dict[str, str], feature: Dict[str, str]) -> str:
+        """The fixture's merge-base, read from the repo itself (the expected
+        baseline, derived independently of the implementation)."""
+        self.root = self.sub(name)
+        fx = Fixture(self.root, {"app": base})
+        fx.commit_in_repo("app", feature, "feature")
+        from .verifyfix import git_t
+        return git_t(fx.repo("app"), "merge-base", "HEAD", "origin/main").strip()
+
+    def run_repo_mode(self, name: str, base: Dict[str, str], feature: Dict[str, str]) -> Tuple[int, Dict[str, Any]]:
+        """fast_checks.py --repo (the per-unit bar, the gate's own command)
+        over the fixture; its exit and its result file."""
+        self.root = self.sub(name)
+        fx = Fixture(self.root, {"app": base})
+        fx.commit_in_repo("app", feature, "feature")
+        eng = fake_engine(self.root, {"app": report("scoped", cmd_of("tests", "fast", "pytest"))})
+        out = os.path.join(fx.capsule, "fast.json")
+        argv = [sys.executable, FAST_CHECKS, "--capsule", fx.capsule, "--repo", "app",
+                "--engine", eng, "--deadline", "10m", "--out", out]
+        c = subprocess.run(argv, capture_output=True, text=True, env=self.env())
+        if not os.path.exists(out):
+            raise AssertionError("fast_checks.py wrote no result file (exit %d): %s" % (c.returncode, (c.stderr or c.stdout)[-500:]))
+        with open(out, encoding="utf-8") as f:
+            return c.returncode, json.load(f)
+
+
+@unittest.skipUnless(HAVE_GIT and HAVE_BASH, "git and bash are required")
+class CloseClassificationTest(CloseTriageCase):
 
     def test_units_of_a_close_carry_the_base_classes(self) -> None:
         cases = (
@@ -280,6 +314,198 @@ class CloseClassificationTest(unittest.TestCase):
         c = subprocess.run(argv, capture_output=True, text=True)
         self.assertEqual(c.returncode, 2, c.stderr)
         self.assertIn("--unit-runs %s is not a usable units.json" % bad, c.stderr)
+
+
+@unittest.skipUnless(HAVE_GIT and HAVE_BASH, "git and bash are required")
+class PreExistingOnBaseTest(CloseTriageCase):
+    """AC1: a suite failing the same way on the base and at HEAD is
+    pre-existing — the close records it with the baseline commit and the
+    signature, hands the check green (exit 0, the selection pre_existing)
+    and the base worktree is gone again."""
+
+    def test_same_signature_on_base_and_head_is_pre_existing(self) -> None:
+        from .test_build_scoped_close import run_close
+        base = {"tests/test_a.py": "def test_old(): # FAIL assert old breakage\n"}
+        feature = {"c.txt": "mine\n"}
+        want_base = self.base_of("expect", base, feature)
+        code, res = self.close_of("run", base, feature)
+        self.assertEqual(code, 0, res.get("summary"))
+        sel = (res["details"].get("selected") or {}).get("app") or {}
+        self.assertEqual(sel.get("status"), "pre_existing", sel)
+        baseline = res["details"].get("baseline") or {}
+        self.assertEqual(baseline.get("commit"), want_base)
+        self.assertEqual(baseline.get("ref"), "merge-base")
+        self.assertIs(baseline.get("ran"), True)
+        self.assertEqual(res["details"].get("base"), want_base, "the record's base is the same merge-base")
+        self.assertEqual(res["details"].get("reds"), [{
+            "command": "tests", "unit": "tests/test_a.py::test_old", "kind": "pytest",
+            "file": "tests/test_a.py", "class": "pre_existing", "signature": "assert old breakage",
+            "base": want_base,
+            "detail": "fails on base %s too: fails the same way on all 1 base runs, signature \"assert old breakage\"" % want_base[:12],
+        }])
+        tests_cmd = [c for c in res["details"]["commands"] if c["name"] == "tests"][0]
+        self.assertEqual(tests_cmd.get("confirmed"), "pytest --deselect tests/test_a.py::test_old",
+                         "the pre-existing failure is excluded by its skip form")
+        self.assertIn("1 pre-existing on base %s: tests/test_a.py::test_old (assert old breakage)" % want_base[:12],
+                      res.get("summary", ""))
+        # the base worktree is removed: one line, the clone itself
+        from .verifyfix import git_t
+        listed = git_t(os.path.join(self.root, "capsule", "repos", "app"), "worktree", "list")
+        self.assertEqual(len([ln for ln in listed.split("\n") if ln.strip()]), 1, listed)
+
+
+@unittest.skipUnless(HAVE_GIT and HAVE_BASH, "git and bash are required")
+class ThisChangeTest(CloseTriageCase):
+    """AC2's first half: a red the base proves fresh is this change's —
+    the close stays red (exit 1), each red named with its class and the
+    baseline."""
+
+    def test_a_test_the_base_lacks_is_this_change(self) -> None:
+        base = {"tests/test_a.py": "def test_ok():\n"}
+        feature = {"tests/test_b.py": "def test_new(): # FAIL assert new breakage\n"}
+        want_base = self.base_of("expect-lacks", base, feature)
+        code, res = self.close_of("lacks", base, feature)
+        self.assertEqual(code, 1, res.get("summary"))
+        sel = (res["details"].get("selected") or {}).get("app") or {}
+        self.assertEqual(sel.get("status"), "red")
+        reds = res["details"].get("reds") or []
+        self.assertEqual([r["class"] for r in reds], ["this_change"], reds)
+        self.assertEqual(reds[0]["unit"], "tests/test_b.py::test_new")
+        self.assertEqual(reds[0]["signature"], "assert new breakage")
+        self.assertEqual(reds[0]["base"], want_base)
+        self.assertIn("the base does not have this test", reds[0]["detail"])
+        self.assertIn("; classes: 1 this change, 0 undetermined, 0 pre-existing (base %s)" % want_base[:12],
+                      res.get("summary", ""))
+
+    def test_a_test_passing_on_the_base_is_this_change(self) -> None:
+        base = {"tests/test_a.py": "def test_old():\n"}
+        feature = {"tests/test_a.py": "def test_old(): # FAIL assert broke it\n"}
+        code, res = self.close_of("passes-on-base", base, feature)
+        self.assertEqual(code, 1, res.get("summary"))
+        reds = res["details"].get("reds") or []
+        self.assertEqual([r["class"] for r in reds], ["this_change"], reds)
+        self.assertIn("it passes on the base", reds[0]["detail"])
+
+    def test_a_protected_test_is_this_change_without_a_base_run(self) -> None:
+        from .test_build_scoped_close import run_close
+        base = {"tests/test_a.py": "def test_old(): # FAIL assert old breakage\n"}
+        self.root = self.sub("protected")
+        fx = Fixture(self.root, {"app": base})
+        fx.commit_in_repo("app", {"tests/test_a.py": "def test_old(): # FAIL assert old breakage\n# the unit's test commit\n"}, "feature")
+        units_file = os.path.join(self.root, "units.json")
+        with open(units_file, "w", encoding="utf-8") as f:
+            json.dump([{"id": "u1", "test_commit": fx.head("app"), "impl_commit": "",
+                        "run": {"repo": "app", "cwd": ".", "argv": ["sh", "-c", "echo UNIT-OK"]},
+                        "marker": "UNIT-OK"}], f)
+        eng = fake_engine(self.root, {"app": report("scoped", cmd_of("tests", "scoped", "pytest"))})
+        code, res = run_close(fx.capsule, "app", eng, os.path.join(fx.capsule, "close.json"),
+                              "--unit-runs", units_file, env=self.env())
+        self.assertEqual(code, 1, res.get("summary"))
+        reds = res["details"].get("reds") or []
+        self.assertEqual([r["class"] for r in reds], ["this_change"], reds)
+        self.assertIn("protected", reds[0]["detail"])
+        baseline = res["details"].get("baseline") or {}
+        self.assertIs(baseline.get("ran"), False, "no candidate: no worktree, no base run")
+
+
+@unittest.skipUnless(HAVE_GIT and HAVE_BASH, "git and bash are required")
+class UndeterminedTest(CloseTriageCase):
+    """AC2's second half: a red the base runs could not settle is
+    undetermined — the close stays red, never released."""
+
+    def test_a_base_run_that_never_reaches_the_test_is_undetermined(self) -> None:
+        from .test_build_scoped_close import run_close
+        from .verifyfix import git_t
+        self.root = self.sub("env-broken")
+        fx = Fixture(self.root, {"app": {"tests/test_a.py": "def test_old(): # FAIL assert old\n",
+                                          "tests/ENV_BROKEN": "x\n"}})
+        os.remove(os.path.join(fx.repo("app"), "tests", "ENV_BROKEN"))
+        git_t(fx.repo("app"), "commit", "-q", "-am", "feature")
+        eng = fake_engine(self.root, {"app": report("scoped", cmd_of("tests", "scoped", "pytest"))})
+        code, res = run_close(fx.capsule, "app", eng, os.path.join(fx.capsule, "close.json"), env=self.env())
+        self.assertEqual(code, 1, res.get("summary"))
+        reds = res["details"].get("reds") or []
+        self.assertEqual([r["class"] for r in reds], ["undetermined"], reds)
+        self.assertIn("did not reach the test's own failure", reds[0]["detail"])
+
+    def test_a_base_failure_without_an_assertion_line_is_undetermined(self) -> None:
+        code, res = self.close_of("no-sig", {"tests/test_a.py": "def test_old(): # FAIL \n"},
+                                  {"tests/test_a.py": "def test_old(): # FAIL assert x\n"})
+        self.assertEqual(code, 1, res.get("summary"))
+        reds = res["details"].get("reds") or []
+        self.assertEqual([r["class"] for r in reds], ["undetermined"], reds)
+        self.assertIn("without an assertion line", reds[0]["detail"])
+
+    def test_a_failing_base_setup_leaves_every_red_undetermined(self) -> None:
+        code, res = self.close_of("setup-false", {"tests/test_a.py": "def test_old(): # FAIL assert old breakage\n"},
+                                  {"c.txt": "mine\n"}, base_setup=["false"])
+        self.assertEqual(code, 1, res.get("summary"))
+        reds = res["details"].get("reds") or []
+        self.assertEqual([r["class"] for r in reds], ["undetermined"], reds)
+        self.assertIn('the base_setup command "false" failed on the base', reds[0]["detail"])
+        baseline = res["details"].get("baseline") or {}
+        self.assertTrue(baseline.get("note"), "the batch failure is recorded in the baseline record")
+
+    def test_a_timed_out_command_is_undetermined(self) -> None:
+        from .test_build_scoped_close import run_close
+        self.root = self.sub("timeout")
+        fx = Fixture(self.root, {"app": {"a.txt": "base\n"}})
+        fx.commit_in_repo("app", {"c.txt": "mine\n"}, "feature")
+        eng = fake_engine(self.root, {"app": report("scoped", cmd_of("gate-1", "fast", "echo gate-ok"),
+                                                       cmd_of("slow", "scoped", "sleep 5", timeout="2s"))})
+        code, res = run_close(fx.capsule, "app", eng, os.path.join(fx.capsule, "close.json"), env=self.env())
+        self.assertEqual(code, 1, res.get("summary"))
+        reds = res["details"].get("reds") or []
+        self.assertEqual(len(reds), 1, reds)
+        self.assertEqual((reds[0]["command"], reds[0]["unit"]), ("slow", "slow"), reds)
+        self.assertEqual(reds[0]["class"], "undetermined")
+        self.assertIn("killed at its timeout", reds[0]["detail"])
+        baseline = res["details"].get("baseline") or {}
+        self.assertIs(baseline.get("ran"), False, "nothing to judge: no worktree, no base run")
+
+    def test_a_mixed_command_stays_red(self) -> None:
+        base = {"tests/test_a.py": "def test_old(): # FAIL assert old breakage\n"}
+        feature = {"tests/test_a.py": "def test_old(): # FAIL assert old breakage\n",
+                   "tests/test_b.py": "def test_new(): # FAIL assert new\n"}
+        code, res = self.close_of("mixed", base, feature)
+        self.assertEqual(code, 1, res.get("summary"))
+        sel = (res["details"].get("selected") or {}).get("app") or {}
+        self.assertEqual(sel.get("status"), "red", "a pre-existing red never releases a this-change red")
+        reds = res["details"].get("reds") or []
+        self.assertEqual(sorted(r["class"] for r in reds), ["pre_existing", "this_change"], reds)
+
+
+@unittest.skipUnless(HAVE_GIT and HAVE_BASH, "git and bash are required")
+class RepoModeTest(CloseTriageCase):
+    """The per-unit bar's own shape (the hand-off gate's command): a red
+    the baseline proves pre-existing turns the run's exit 0 — the verdict
+    the gate reads — with the red still named and classified in the result."""
+
+    def test_a_pre_existing_red_passes_the_repo_mode_check(self) -> None:
+        base = {"tests/test_a.py": "def test_old(): # FAIL assert old breakage\n"}
+        feature = {"c.txt": "mine\n"}
+        want_base = self.base_of("expect-repo", base, feature)
+        code, res = self.run_repo_mode("repo-pass", base, feature)
+        self.assertEqual(code, 0, res.get("summary"))
+        self.assertEqual(res.get("verdict"), "pass")
+        reds = res["details"].get("reds") or []
+        self.assertEqual([r["class"] for r in reds], ["pre_existing"], reds)
+        self.assertEqual(reds[0]["base"], want_base)
+        baseline = res["details"].get("baseline") or {}
+        self.assertEqual(baseline.get("commit"), want_base)
+        self.assertIs(baseline.get("ran"), True)
+        self.assertIn("1 pre-existing on base %s" % want_base[:12], res.get("summary", ""))
+
+    def test_a_this_change_red_keeps_the_repo_mode_check_red(self) -> None:
+        base = {"tests/test_a.py": "def test_ok():\n"}
+        feature = {"tests/test_b.py": "def test_new(): # FAIL assert new breakage\n"}
+        want_base = self.base_of("expect-repo-red", base, feature)
+        code, res = self.run_repo_mode("repo-red", base, feature)
+        self.assertEqual(code, 1, res.get("summary"))
+        reds = res["details"].get("reds") or []
+        self.assertEqual([r["class"] for r in reds], ["this_change"], reds)
+        self.assertIn("; classes: 1 this change, 0 undetermined, 0 pre-existing (base %s)" % want_base[:12],
+                      res.get("summary", ""))
 
 
 if __name__ == "__main__":
