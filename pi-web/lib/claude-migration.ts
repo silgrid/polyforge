@@ -431,11 +431,13 @@ export async function applyClaudeCustomModelsMigration(
       return { status: "deferred", reason: phase.reason, shadowed: phase.shadowed };
     case "auto":
     case "covered":
-      // The state moved while the user looked at the preview (the target was
-      // emptied, or the names landed another way): nothing to confirm against.
-      await clearSourceCustomModels(phase.agentDir);
-      await markCustomModelsMigrated(phase.agentDir, phase.configDir);
-      return { status: "done", changed: true, shadowed: phase.shadowed };
+      // The state moved past the preview while the user looked at it (the
+      // target was emptied, or the names landed another way). The confirm is
+      // stale: this call writes nothing — clearing the source here would drop
+      // names that never landed. The next {} step re-derives the phase and
+      // takes its own ruled action (the automatic write for an empty target,
+      // the clear for a covered one).
+      return { status: "done", changed: false, shadowed: phase.shadowed };
     case "preview": {
       if (phase.digest !== digest) {
         return {

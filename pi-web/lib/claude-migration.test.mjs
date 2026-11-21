@@ -371,6 +371,26 @@ test("a source the target already fully covers clears its key without a re-appen
   assert.equal("customModels" in readJson(oldSettingsPath), false);
 });
 
+test("a confirm against a state that moved past the preview writes nothing — the source survives for the next step (r1 self-review)", async () => {
+  reset();
+  seedOld({ models: ["claude-old-1"] });
+  fs.writeFileSync(nativeSettingsPath, JSON.stringify({ modelPicker: { options: [{ model: "native-keep" }] } }));
+  const step = await migration.claudeCustomModelsMigrationStep(opts());
+  assert.equal(step.status, "preview");
+  // The user's own edit empties the target between the preview and the
+  // confirm: the stale confirm must not clear names that never landed.
+  fs.writeFileSync(nativeSettingsPath, JSON.stringify({ modelPicker: { options: [] } }));
+  const stale = await migration.applyClaudeCustomModelsMigration(opts(), step.digest);
+  assert.deepEqual({ status: stale.status, changed: stale.changed }, { status: "done", changed: false });
+  assert.deepEqual(readJson(oldSettingsPath).customModels, ["claude-old-1"], "the stale confirm cleared the source");
+  assert.equal(markerOf(), undefined, "the stale confirm marked the phase done");
+  // The next step call takes its own ruled action: the empty target migrates.
+  const next = await migration.claudeCustomModelsMigrationStep(opts());
+  assert.deepEqual({ status: next.status, changed: next.changed }, { status: "done", changed: true });
+  assert.deepEqual(readJson(nativeSettingsPath).modelPicker.options, [{ model: "claude-old-1" }]);
+  assert.equal("customModels" in readJson(oldSettingsPath), false);
+});
+
 test("an empty customModels list clears the key without any native write", async () => {
   reset();
   seedOld({ models: [] });
