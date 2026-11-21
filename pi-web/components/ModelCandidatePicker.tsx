@@ -8,7 +8,8 @@
 // lib/step-tiers.ts' pure grouping), with an invalid reference marked,
 // BESIDE the manual fill of the full candidate string (kept whatever
 // happens); a failed catalog read leaves the manual fill with its reason.
-// Presentational: the parent owns the draft and the write.
+// Presentational: the parent owns the draft and the write; the picker never
+// fetches (the dock's copy rides the watch snapshot — G11) and never saves.
 
 import { useI18n } from "@/hooks/useI18n";
 import type { StepTierPickerGroup } from "@/lib/step-tiers";
@@ -30,7 +31,59 @@ export interface ModelCandidatePickerProps {
   inputProps?: Record<string, unknown>;
 }
 
-export function ModelCandidatePicker(_props: ModelCandidatePickerProps) {
-  void useI18n;
-  return null;
+export function ModelCandidatePicker({
+  groups,
+  reason = null,
+  disabled = false,
+  value,
+  onChange,
+  selectLabel,
+  inputLabel,
+  placeholder,
+  inputProps,
+}: ModelCandidatePickerProps) {
+  const { t } = useI18n();
+  return (
+    <span className="polyforge-config-write model-candidate-picker">
+      {groups !== null && (
+        <select
+          aria-label={selectLabel}
+          disabled={disabled}
+          value=""
+          onChange={(event) => {
+            const next = event.target.value;
+            // the placeholder option re-selects nothing; a choice fills the
+            // manual draft (the parent owns the write, never this select)
+            if (next !== "") onChange(next);
+            event.target.value = "";
+          }}
+        >
+          <option value="">{t("polyforge.candidatePicker.choose")}</option>
+          {groups.map((group) => (
+            <optgroup key={group.tier ?? ""} label={group.tier ?? t("polyforge.candidatePicker.unsetGroup")}>
+              {group.candidates.map((candidate) => (
+                <option key={candidate.value} value={candidate.value}>
+                  {candidate.invalid ? `${candidate.value}${t("polyforge.candidatePicker.invalid")}` : candidate.value}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+      )}
+      <input
+        type="text"
+        disabled={disabled}
+        aria-label={inputLabel}
+        placeholder={placeholder}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        {...(inputProps ?? {})}
+      />
+      {groups === null && (
+        <span className="polyforge-config-empty">
+          {t("polyforge.candidatePicker.unavailable")}{reason ? `：${reason}` : ""}
+        </span>
+      )}
+    </span>
+  );
 }

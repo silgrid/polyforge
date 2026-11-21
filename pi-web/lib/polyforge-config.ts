@@ -3,7 +3,13 @@ import { polyforgeNamedCell, type PolyforgeConfigScope } from "./polyforge-cells
 import { pinPolyforgeScope } from "./polyforge-config-scope";
 import { isPolyforgeVersionBelowMinimum } from "./polyforge-detect";
 import { polyforgePfBin } from "./polyforge-pf-bin";
-import { POLYFORGE_CONFIG_SUMMARIZE_MINIMUM_PF_VERSION, type PolyforgeConfigSchema } from "./polyforge-config-schema";
+import {
+  POLYFORGE_CONFIG_STEP_TIERS_MINIMUM_PF_VERSION,
+  POLYFORGE_CONFIG_SUMMARIZE_MINIMUM_PF_VERSION,
+  type PolyforgeConfigSchema,
+} from "./polyforge-config-schema";
+import { stepTierItems, type StepTierItem } from "./step-tiers";
+import { stepTierDefinedModels } from "./step-tier-defined-models";
 import {
   probePolyforgeVersion,
   type PolyforgeOpsStatus,
@@ -446,4 +452,83 @@ export async function readPolyforgeConfig(cwd: string, scope: PolyforgeConfigSco
     ...(memoryPolicy ? { memoryPolicy } : {}),
     ...(summarize.reason ? { summarizeReason: summarize.reason } : {}),
   };
+}
+
+// ---------------------------------------------------------------------------
+// The step-tier catalog read (polyforge#151, 85b2)
+// ---------------------------------------------------------------------------
+
+/** The picker's one catalog read: the Host's [step_tiers] tiers and the
+ *  defined model identities per harness (pi's provider/id strings, claude's
+ *  names) — the shared candidate picker's grouping input, and the watch
+ *  route's snapshot composition (G11: the dock's controls fetch nothing on
+ *  selection). Degradation-first like every polyforge read: every failure
+ *  answers `capable: false` with its reason, never a throw. */
+export interface StepTierCatalogRead {
+  pfPresent: boolean;
+  pfVersion: string | null;
+  capable: boolean;
+  reason?: string;
+  tiers: StepTierItem[];
+  defined: { pi: string[]; claude: string[] };
+}
+
+/** The catalog read's short cache: the GET route reads once per open, the
+ *  watch route composes on every poll while a live ticket's snapshot is
+ *  asked for — a spawn per poll would be a cost the catalog does not need
+ *  (the write gate's own defined-model set stays uncached per write). */
+const STEP_TIER_CATALOG_TTL_MS = 10_000;
+let stepTierCatalogCache: { at: number; value: StepTierCatalogRead } | null = null;
+
+/** The composed catalog as it is now (the 10 s cache above): one
+ *  presence probe, one Host-pinned `pf config list` and one defined-model
+ *  computation, degraded to `capable: false` with the reason on every
+ *  failure. Never throws. */
+export async function readStepTierCatalog(): Promise<StepTierCatalogRead> {
+  if (stepTierCatalogCache && Date.now() - stepTierCatalogCache.at < STEP_TIER_CATALOG_TTL_MS) {
+    return stepTierCatalogCache.value;
+  }
+  const value = await computeStepTierCatalog();
+  stepTierCatalogCache = { at: Date.now(), value };
+  return value;
+}
+
+async function computeStepTierCatalog(): Promise<StepTierCatalogRead> {
+  const empty = { pi: [], claude: [] };
+  const incapable = (reason: string, present: boolean, version: string | null): StepTierCatalogRead => ({
+    pfPresent: present,
+    pfVersion: version,
+    capable: false,
+    reason,
+    tiers: [],
+    defined: empty,
+  });
+  const presence = await probePolyforgeVersion();
+  if (!presence.present) return incapable("polyforge is not installed on this machine", false, null);
+  if (isPolyforgeVersionBelowMinimum(presence.version, POLYFORGE_CONFIG_STEP_TIERS_MINIMUM_PF_VERSION, true)) {
+    return incapable(
+      `the step-tier catalog needs pf ${POLYFORGE_CONFIG_STEP_TIERS_MINIMUM_PF_VERSION} or newer (found ${presence.version ?? "an unparseable version"})`,
+      true,
+      presence.version,
+    );
+  }
+  const pin = await pinPolyforgeScope({ host: true });
+  if (!pin.ok) return incapable(pin.reason, true, presence.version);
+  let list: unknown;
+  try {
+    ///#367: the Host's own file
+    list = await runPfJson([...pin.prefix, "--json", "config", "list", ...pin.suffix]);
+  } catch (error) {
+    return incapable(error instanceof Error ? error.message : "pf config list is unavailable", true, presence.version);
+  }
+  if (!hasConfigListShape(list)) {
+    return incapable("this pf reports the configuration list without the class/schema shape the panel needs", true, presence.version);
+  }
+  const tiers = stepTierItems(list.items.map((item) => ({ key: typeof item.key === "string" ? item.key : "", value: item.value })));
+  try {
+    const defined = await stepTierDefinedModels();
+    return { pfPresent: true, pfVersion: presence.version, capable: true, tiers, defined };
+  } catch (error) {
+    return incapable(error instanceof Error ? error.message : "the defined model list is unavailable", true, presence.version);
+  }
 }
