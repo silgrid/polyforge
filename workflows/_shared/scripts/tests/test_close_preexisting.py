@@ -530,7 +530,10 @@ class ValidatorTest(CloseTriageCase):
                 json.dump({"changed": [], "uncovered": {}, "tests": [], "selected": {"app": sel_doc}}, f)
 
         write(sel)
-        an = read_analysis(path)
+        try:
+            an = read_analysis(path)
+        except ValueError as err:
+            self.fail("a pre_existing record must parse: %s" % err)
         self.assertEqual(selected_problem(an.selected["app"], head), "",
                          "a pre_existing record is green-equivalent evidence")
         # the contrast: the same record claiming red cannot stand
