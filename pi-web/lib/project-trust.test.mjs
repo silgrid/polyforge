@@ -254,7 +254,10 @@ test("a trust store still locked by another process counts as untrusted, with on
 
 test("all project resource loaders and reloads enforce project trust", async () => {
   const rpcSource = await readFile(new URL("./rpc-manager.ts", import.meta.url), "utf8");
-  const modelsSource = await readFile(new URL("../app/api/models/route.ts", import.meta.url), "utf8");
+  // polyforge#151: the models read's loader moved to lib/models-load.ts (the
+  // step-tier write gate consumes the same projection); the trust pin follows
+  // the code — the models read still gates untrusted project extensions.
+  const modelsSource = await readFile(new URL("./models-load.ts", import.meta.url), "utf8");
   const skillsSource = await readFile(new URL("./skills-service.ts", import.meta.url), "utf8");
   const skillsInstallSource = await readFile(new URL("../app/api/skills/install/route.ts", import.meta.url), "utf8");
   const pluginsSource = await readFile(new URL("../app/api/plugins/route.ts", import.meta.url), "utf8");

@@ -12,11 +12,11 @@ import { DEFAULT_CLAUDE_MODEL, type ClaudeModelOption } from "./claude-shared";
 import { claudeSettingsLayers, modelPickerOptions } from "./harness/claude-layers";
 import { claudeConfigDir } from "./claude-config-dir";
 
-/** What the models page's claude rows come from: the binary found (or null),
- *  its probe (null when no binary), and the two option lists — the aliases
- *  from the probe's `initialize` answer (the `default` fallback when it
- *  fails or answers none) and the custom names of claude's own native
- *  modelPicker merged across its settings layers. */
+/** What the models page's claude rows come from: the binary found (or
+ *  null), its probe (null when no binary), and the two option lists — the
+ *  aliases from the probe's `initialize` answer (the `default` fallback
+ *  when it fails or answers none) and the custom names of claude's own
+ *  native modelPicker merged across its settings layers. */
 export interface ClaudeModelsCatalog {
   binary: string | null;
   probe: Awaited<ReturnType<typeof probeClaude>> | null;
@@ -28,11 +28,17 @@ export interface ClaudeModelsCatalog {
  *  modelPicker's custom names — the route composes its answer over this,
  *  and the step-tier write gate takes the defined names from it. */
 export async function claudeModelsCatalog(): Promise<ClaudeModelsCatalog> {
-  void findClaudeBinary;
-  void probeClaude;
-  void DEFAULT_CLAUDE_MODEL;
-  void modelPickerOptions;
-  void claudeSettingsLayers;
-  void claudeConfigDir;
-  return { binary: null, probe: null, aliases: [], custom: [] };
+  const binary = findClaudeBinary();
+  const probe = binary ? await probeClaude(binary) : null;
+  const info = probe && !("error" in probe) ? probe : null;
+  const aliases: ClaudeModelOption[] = info && info.models.length > 0
+    ? info.models.map((model) => ({ ...model, source: "alias" }))
+    : [{ value: DEFAULT_CLAUDE_MODEL, source: "alias" }];
+  // The custom names: claude's own native modelPicker.options, merged across
+  // its settings layers (claude-layers' one merge; 85a4) — never a stored
+  // pi-web copy.
+  const custom: ClaudeModelOption[] = modelPickerOptions(claudeSettingsLayers(claudeConfigDir(), undefined))
+    .filter((name) => !aliases.some((alias) => alias.value === name))
+    .map((value) => ({ value, source: "custom" }));
+  return { binary, probe, aliases, custom };
 }

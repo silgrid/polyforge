@@ -27,13 +27,16 @@ export interface StepTierDefinedModels {
 }
 
 /** The defined model set as it is now: pi's registered models (the
- *  scope-all projection, cached beside the /api/models read) plus claude's
- *  aliases and custom names. Throws when the pi model list cannot load —
- *  the write gate refuses (a set it cannot compute accepts nothing). */
+ *  scope-all projection, cached beside the /api/models read under the same
+ *  `<cwd>#all` key) plus claude's aliases and custom names. Throws when the
+ *  pi model list cannot load — the write gate refuses (a set it cannot
+ *  compute accepts nothing). */
 export async function stepTierDefinedModels(cwd: string = process.cwd()): Promise<StepTierDefinedModels> {
-  void cwd;
-  void loadModelsWithCache;
-  void loadModelsData;
-  void claudeModelsCatalog;
-  return { pi: [], claude: [] };
+  const data = await loadModelsWithCache(`${cwd}#all`, () => loadModelsData(cwd, true));
+  if (data.modelError) throw new Error(data.modelError);
+  const claude = await claudeModelsCatalog();
+  return {
+    pi: data.modelList.map((model) => `${model.provider}/${model.id}`),
+    claude: [...claude.aliases, ...claude.custom].map((option) => option.value),
+  };
 }
