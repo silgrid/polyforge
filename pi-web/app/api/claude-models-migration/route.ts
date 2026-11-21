@@ -57,7 +57,22 @@ export async function POST(req: Request) {
   if (confirm !== undefined && typeof confirm !== "string") {
     return failure(400, "invalid-body", "confirm must be the preview's digest string");
   }
-  // The zero-value skeleton (85a3-3 u3): the route's guards answer, the
-  // phase itself is not wired yet.
-  return failure(501, "not-implemented", "the migration POST is not implemented yet");
+  try {
+    if (confirm === undefined) {
+      const step = await claudeCustomModelsMigrationStep();
+      return NextResponse.json(step);
+    }
+    const applied = await applyClaudeCustomModelsMigration({}, confirm);
+    if (applied.status === "conflict") {
+      // The source or target changed while the user looked at the preview:
+      // the fresh preview rides along, never a silent merge (Q2).
+      return NextResponse.json({ ...applied.preview, status: "conflict" }, { status: 409 });
+    }
+    return NextResponse.json(applied);
+  } catch (error) {
+    return NextResponse.json(
+      { error: "internal", message: error instanceof Error ? error.message : String(error) },
+      { status: 500 },
+    );
+  }
 }

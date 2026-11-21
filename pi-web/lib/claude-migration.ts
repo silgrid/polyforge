@@ -27,7 +27,7 @@
 // next minor version's upgrade floor, i.e. no install this version replaces
 // can still hold the retired files), leaving lib/claude-preferences.ts as
 // the only reader of the preference fields.
-import { existsSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, unlinkSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { claudeConfigDir } from "./claude-config-dir";
