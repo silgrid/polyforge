@@ -1375,7 +1375,8 @@ func TestWorkstationSmokePersist(t *testing.T) {
 		if readErr != nil {
 			t.Fatalf("the smoke must tag the image for the new-tag phase (the stub records it):\n%s", out)
 		}
-		retag := strings.TrimSpace(string(tagged))
+		// the first line is the outer run's retag (the exported copy tags again)
+		retag := strings.TrimSpace(strings.SplitN(string(tagged), "\n", 2)[0])
 		ups, readErr := os.ReadFile(filepath.Join(dir, "compose-up-all.log"))
 		if readErr != nil {
 			t.Fatalf("the stub must record every up's environment:\n%s", out)

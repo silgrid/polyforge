@@ -34,6 +34,17 @@ if [ "${1:-}" = inspect ]; then
 	cat "$dir/inspect.json"
 	exit 0
 fi
+# persist_changed NAME — true when the scenario sets the fail-flag AND this
+# is not the first read (the smoke's first read records the baseline, so a
+# changed value from then on must fail the comparisons)
+persist_changed() {
+	[ -f "$dir/persist-$1-changed" ] || return 1
+	n=0
+	[ -f "$dir/persist-$1-reads" ] && n=$(cat "$dir/persist-$1-reads")
+	echo $((n + 1)) > "$dir/persist-$1-reads"
+	[ "$n" -gt 0 ]
+}
+
 if [ "${1:-}" = exec ]; then
 	args="$*"
 	case "$args" in
@@ -78,6 +89,92 @@ if [ "${1:-}" = exec ]; then
 			exit 1
 		fi
 		exit 0
+		;;
+	# the persist pass (polyforge#177): the six sentinel values, each
+	# fail-flag its own injected change; the three written sentinels echo
+	# back exactly what the smoke stored
+	*"/root/.pi/agent/workstation-smoke-persist-marker"*)
+		case "$args" in
+		*printf*)
+			for last in "$@"; do :; done
+			printf '%s\n' "$last" > "$dir/persist-marker"
+			;;
+		*cat*)
+			if persist_changed marker; then
+				echo "sp-changed"
+			else
+				cat "$dir/persist-marker"
+			fi
+			;;
+		*) exit 1 ;;
+		esac
+		;;
+	*"/root/.config/polyforge/cli.toml"*)
+		case "$args" in
+		*printf*)
+			for last in "$@"; do :; done
+			printf '# workstation-smoke-persist %s\n' "$last" > "$dir/persist-clitoml"
+			;;
+		*grep*)
+			if persist_changed clitoml; then
+				echo "# workstation-smoke-persist sp-changed"
+			else
+				cat "$dir/persist-clitoml"
+			fi
+			;;
+		*) exit 1 ;;
+		esac
+		;;
+	*"/workspace/workstation-smoke-persist-marker"*)
+		case "$args" in
+		*printf*)
+			for last in "$@"; do :; done
+			printf '%s\n' "$last" > "$dir/persist-workspace"
+			;;
+		*cat*)
+			if persist_changed workspace; then
+				echo "sp-changed"
+			else
+				cat "$dir/persist-workspace"
+			fi
+			;;
+		*) exit 1 ;;
+		esac
+		;;
+	*aihub.db*)
+		if persist_changed aihub; then
+			echo "usr_changed"
+		else
+			cat "$dir/aihub-user.txt"
+		fi
+		;;
+	*podman*pull*)
+		if [ -f "$dir/persist-podman-changed" ]; then
+			echo "stub docker: podman pull failed" >&2
+			exit 1
+		fi
+		exit 0
+		;;
+	*podman*inspect*)
+		if persist_changed podman; then
+			echo "sha256:changed"
+		else
+			cat "$dir/podman-image.txt"
+		fi
+		;;
+	*readlink*components*)
+		if persist_changed components; then
+			echo "releases/changed"
+		else
+			cat "$dir/components-current.txt"
+		fi
+		;;
+	*hashlib*)
+		if persist_changed components; then
+			echo "digest-changed"
+		else
+			cat "$dir/components-digest.txt"
+		fi
 		;;
 	# the first-boot pass (polyforge#176): the record, the default
 	# Cell's server, the key's authentication, the bootstrap key's
@@ -124,20 +221,39 @@ if [ "${1:-}" = exec ]; then
 	esac
 	exit 0
 fi
+if [ "${1:-}" = tag ]; then
+	echo "$3" >> "$dir/docker-tag.log"
+	exit 0
+fi
+if [ "$1" = image ] && [ "$2" = inspect ]; then
+	if [ -f "$dir/image-missing" ]; then
+		echo "stub docker: No such image: $3" >&2
+		exit 1
+	fi
+	exit 0
+fi
 if [ "${1:-}" = compose ]; then
 	verb=""
 	# shellcheck disable=SC2124
 	for a in "$@"; do
 		case "$a" in
-		up | ps | down) verb=$a ;;
+		up | build | ps | down) verb=$a ;;
 		esac
 	done
 	case "$verb" in
-	up | build)
+	up)
 		# the smoke's own shell environment, as compose received it —
 		# the env behaviour test reads it back (review r2#2: the sentinel
 		# must be present at the up that creates the container)
 		env > "$dir/compose-$verb-env.txt"
+		# the persist test's cumulative record: every up's environment
+		# (the new-tag phase must carry WORKSTATION_IMAGE)
+		env >> "$dir/compose-up-all.log"
+		;;
+	build)
+		env > "$dir/compose-$verb-env.txt"
+		# the persist test's count: the exported copy must add none
+		echo build >> "$dir/compose-build.log"
 		;;
 	esac
 	case "$verb" in
