@@ -102,7 +102,6 @@ func writeLifecycleLane(t *testing.T, wfDir string) {
 contract: 1
 name: pflifecycle
 description: "One terminal agent step - the production subagent lifecycle proof (polyforge#200): the step calls the daemon-owned worker, hands off done and the lane completes, so the step-end process sweep is judged with no successor spawn racing the scan."
-max_rewinds: 3
 steps:
   - id: solo
     skill: solo-bounds
@@ -115,7 +114,7 @@ steps:
 	if err := os.WriteFile(filepath.Join(dir, "steps", "solo.md"), []byte(step), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	skill := "---\nname: solo-bounds\ndescription: The bounds of the lifecycle proof step.\n---\n\n# solo-bounds\n\nThe step runs the scripted proof and hands off done.\n"
+	skill := "---\nname: solo-bounds\ndescription: The bounds of the lifecycle proof step.\ncommands: []\n---\n\n# solo-bounds\n\nThe step runs the scripted proof and hands off done.\n"
 	if err := os.WriteFile(filepath.Join(dir, "skills", "solo-bounds.md"), []byte(skill), 0o644); err != nil {
 		t.Fatal(err)
 	}
