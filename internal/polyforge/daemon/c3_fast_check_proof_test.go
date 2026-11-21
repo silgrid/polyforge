@@ -19,6 +19,7 @@ import (
 
 	"github.com/silgrid/polyforge/internal/common/capsule"
 	"github.com/silgrid/polyforge/internal/common/workflow/workflowtest"
+	"github.com/silgrid/polyforge/internal/polyforge/stepcall"
 )
 
 // c3Lane is c4Lane plus develop's own fast_check_proof shape for build and
@@ -457,5 +458,56 @@ func TestFastCheckProofSyncStrayBrace(t *testing.T) {
 	}
 	if code, body := c4Call(t, f.td, "handoff", map[string]any{"status": "done", "body": c4Body()}); code != 200 {
 		t.Fatalf("sync with a passing result at HEAD = %d %s, want 200", code, body)
+	}
+}
+
+// TestFastCheckProofOwnerRelease: an owner's explicit word releases the
+// gate (the plan-review ruling 1): a red that is not this change's — a
+// result fail, an error/partial, or no result at all — is handed off done
+// with --per-owner, the daemon accepts and stamps the cited message. The at
+// is the one --per-owner always names (this step, this round); a missing
+// message and a done without the owner's word are refused.
+func TestFastCheckProofOwnerRelease(t *testing.T) {
+	const at = "2026-11-21T07:00:00.000000001Z"
+	words := "the default branch is already red: release build"
+	for _, c := range []struct {
+		name     string
+		result   string // "" = no result file
+		perOwner string
+		want     int
+	}{
+		{"a failing result the owner releases", "fail", at, 200},
+		{"a missing result the owner releases", "", at, 200},
+		{"an at naming no message", "fail", "2026-11-21T09:99:99Z", 400},
+		{"a done without the owner's word", "fail", "", 400},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newC3Fixture(t, "wi_c3o"+strings.ReplaceAll(c.name, " ", "_"))
+			f.as("build", 1)
+			if c.result != "" {
+				writeC3Result(t, f.capDir, "artifacts/build/fast-checks/app.json", c.result, map[string]string{"app": f.c2})
+			}
+			if c.perOwner == at {
+				f.ownerSays(t, "build", at, words)
+			}
+			args := map[string]any{"status": "done", "body": c4Body()}
+			if c.perOwner != "" {
+				args["per_owner"] = c.perOwner
+			}
+			code, body := c4Call(t, f.td, "handoff", args)
+			if code != c.want {
+				t.Fatalf("%s = %d %s, want %d", c.name, code, body, c.want)
+			}
+			if c.want != 200 {
+				return
+			}
+			rec := stepcall.HandoffOf(f.ledger(t), "build", 1)
+			if rec == nil || rec.Handoff.PerOwner != at {
+				t.Fatalf("the accepted hand-off does not record the cited message: %+v", rec)
+			}
+			if doc := f.handoffDoc(t); !strings.Contains(doc, words) || !strings.Contains(doc, at) {
+				t.Fatalf("the stamped section does not carry the owner's words and stamp:\n%s", doc)
+			}
+		})
 	}
 }
