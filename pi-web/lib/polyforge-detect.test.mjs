@@ -216,23 +216,24 @@ test("polyforge#177: isImageManaged — one fact, one place, never a pf probe", 
   }
 });
 
-test("polyforge#177: the judgment's seam — PI_TEST_SEED_ROOT points the DEFAULT read at a fixture", () => {
-  // The workstation's env whitelist strips every PI_TEST_* before any child
-  // runs (dist/workstation/env-whitelist.sh, pinned by the env smoke), so
-  // this override can never flip a real image: it exists so route-level
-  // tests drive the image mode through the production default call.
+test("polyforge#177: the judgment's seam — __piWebTestSeedRoot points the DEFAULT read at a fixture", () => {
+  // A test-only global, never an environment variable (this module never
+  // reads process.env — the detect contract pins that): a test process is
+  // its own world, so route-level tests drive the image mode through the
+  // production default call, and production (the global unset) reads the
+  // constant.
   const work = mkdtempSync(join(tmpdir(), "pi-web-pf-detect-seam-"));
   const image = join(work, "releases", "v0.2.4");
   mkdirSync(image, { recursive: true });
   writeFileSync(join(image, "manifest.json"), "{}\n");
-  const previous = process.env.PI_TEST_SEED_ROOT;
+  const previous = globalThis.__piWebTestSeedRoot;
   try {
-    process.env.PI_TEST_SEED_ROOT = work;
+    globalThis.__piWebTestSeedRoot = work;
     assert.equal(isImageManaged(), true, "the default read follows the seam");
-    process.env.PI_TEST_SEED_ROOT = join(work, "absent");
+    globalThis.__piWebTestSeedRoot = join(work, "absent");
     assert.equal(isImageManaged(), false, "the seam points elsewhere — still one read, one fact");
   } finally {
-    if (previous === undefined) delete process.env.PI_TEST_SEED_ROOT; else process.env.PI_TEST_SEED_ROOT = previous;
+    globalThis.__piWebTestSeedRoot = previous;
     rmSync(work, { recursive: true, force: true });
   }
 });

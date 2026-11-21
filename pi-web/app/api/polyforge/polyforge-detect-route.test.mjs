@@ -23,27 +23,27 @@ const get = (host = "127.0.0.1:30141") => new Request(`http://${host}/api/polyfo
 test("the detect read answers imageManaged beside its own fields, in both the host and the image mode", async () => {
   // the host (no seed root): the fact is false; the detection's own fields
   // are detectPolyforge's business (its own tests pin them)
-  const previous = process.env.PI_TEST_SEED_ROOT;
-  process.env.PI_TEST_SEED_ROOT = join(tmpdir(), "pf-detect-route-no-seed");
+  const previous = globalThis.__piWebTestSeedRoot;
+  globalThis.__piWebTestSeedRoot = join(tmpdir(), "pf-detect-route-no-seed");
   try {
     const host = await GET(get());
     assert.equal(host.status, 200);
     assert.equal((await host.json()).imageManaged, false, "a host answers the image fact as false");
   } finally {
-    if (previous === undefined) delete process.env.PI_TEST_SEED_ROOT; else process.env.PI_TEST_SEED_ROOT = previous;
+    globalThis.__piWebTestSeedRoot = previous;
   }
 
   // the image mode: the top-level fact is true
   const seed = mkdtempSync(join(tmpdir(), "pf-detect-route-seed-"));
   mkdirSync(join(seed, "releases", "v0.2.4-dev.1"), { recursive: true });
   writeFileSync(join(seed, "releases", "v0.2.4-dev.1", "manifest.json"), "{}\n");
-  process.env.PI_TEST_SEED_ROOT = seed;
+  globalThis.__piWebTestSeedRoot = seed;
   try {
     const image = await GET(get());
     assert.equal(image.status, 200);
     assert.equal((await image.json()).imageManaged, true, "the image mode answers the fact at the top level");
   } finally {
-    if (previous === undefined) delete process.env.PI_TEST_SEED_ROOT; else process.env.PI_TEST_SEED_ROOT = previous;
+    globalThis.__piWebTestSeedRoot = previous;
     rmSync(seed, { recursive: true, force: true });
   }
 });

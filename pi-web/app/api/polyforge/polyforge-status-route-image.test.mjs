@@ -43,10 +43,10 @@ test("the image mode: every authorized branch answers imageManaged:true, and the
   const seed = mkdtempSync(join(work, "seed-"));
   mkdirSync(join(seed, "releases", "v0.2.4-dev.1"), { recursive: true });
   writeFileSync(join(seed, "releases", "v0.2.4-dev.1", "manifest.json"), "{}\n");
-  const previous = process.env.PI_TEST_SEED_ROOT;
-  process.env.PI_TEST_SEED_ROOT = seed;
+  const previous = globalThis.__piWebTestSeedRoot;
+  globalThis.__piWebTestSeedRoot = seed;
   t.after(() => {
-    if (previous === undefined) delete process.env.PI_TEST_SEED_ROOT; else process.env.PI_TEST_SEED_ROOT = previous;
+    globalThis.__piWebTestSeedRoot = previous;
   });
 
   // the pf-absent branch FIRST, while the fresh module's presence cache is

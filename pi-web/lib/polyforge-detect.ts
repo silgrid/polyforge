@@ -291,12 +291,17 @@ function workstationImage(seedRoot: string): boolean {
 /** The one image-mode judgment every entry reads (polyforge#177, owner
  *  2026-11-19: the seed manifest is the only fact — pf absent must still
  *  identify the image, and nothing probes /components). The seed root
- *  parameter is the seam: an explicit root (the tests' fixture) wins, the
- *  PI_TEST_SEED_ROOT override points the DEFAULT read at a fixture — the
- *  workstation's env whitelist strips every PI_TEST_* before any child
- *  runs, so the override can never flip a real image — and production reads
- *  the constant. */
-export function isImageManaged(seedRoot: string = process.env.PI_TEST_SEED_ROOT ?? WORKSTATION_SEED_ROOT): boolean {
+ *  parameter is the seam: an explicit root (the tests' fixture) wins, and
+ *  the `__piWebTestSeedRoot` global points the DEFAULT read at a fixture —
+ *  a test-only global (never an environment variable: this module never
+ *  reads process.env, and the detect contract pins that), unset in
+ *  production, so the default reads the constant. */
+declare global {
+  // eslint-disable-next-line no-var
+  var __piWebTestSeedRoot: string | undefined;
+}
+
+export function isImageManaged(seedRoot: string = globalThis.__piWebTestSeedRoot ?? WORKSTATION_SEED_ROOT): boolean {
   return workstationImage(seedRoot);
 }
 

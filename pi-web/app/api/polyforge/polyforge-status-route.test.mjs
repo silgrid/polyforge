@@ -38,12 +38,12 @@ const seedFixture = () => {
   return seed;
 };
 const withSeam = async (seedRoot, run) => {
-  const previous = process.env.PI_TEST_SEED_ROOT;
-  process.env.PI_TEST_SEED_ROOT = seedRoot;
+  const previous = globalThis.__piWebTestSeedRoot;
+  globalThis.__piWebTestSeedRoot = seedRoot;
   try {
     return await run();
   } finally {
-    if (previous === undefined) delete process.env.PI_TEST_SEED_ROOT; else process.env.PI_TEST_SEED_ROOT = previous;
+    globalThis.__piWebTestSeedRoot = previous;
     if (seedRoot) rmSync(seedRoot, { recursive: true, force: true });
   }
 };
