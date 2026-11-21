@@ -152,17 +152,19 @@ def selected_problem(d: SelectedDecl, head: str) -> str:
     facts.py's close check, the messages the existing tests pin) — the
     record's head must be the repo's HEAD it is judged at (a record of
     another tree is stale: recompute the selection at the final tree),
-    its status must be green (a red or incomplete selection claimed
-    nothing and cannot stand as evidence), and every selected command
-    must carry its evidence: a green run (exit 0) or a named reuse
-    source — a command that could not run, was killed at its timeout or
-    ran red is a selection the close never completed. ``head`` is the
-    caller's read of the repo's HEAD ("" when it cannot read one: the
-    identity check is then the caller's to report)."""
+    its status must be green, or pre_existing (the close's baseline triage
+    proved every red it kept pre-existing — green-equivalent evidence,
+    polyforge#212; a red or incomplete selection claimed nothing and
+    cannot stand as evidence), and every selected command must carry its
+    evidence: a green run (exit 0) or a named reuse source — a command
+    that could not run, was killed at its timeout or ran red is a
+    selection the close never completed. ``head`` is the caller's read of
+    the repo's HEAD ("" when it cannot read one: the identity check is
+    then the caller's to report)."""
     if head and d.head != head:
         return ("its head %s is not the tree it is judged at (%s): a selection record of another"
                 " tree is stale — recompute it at the final tree" % (gostr.quote(d.head), head))
-    if d.status != "green":
+    if d.status not in ("green", "pre_existing"):
         return ("its selection is %s: %s" % (d.status, d.reason or "nothing ran")) if d.status else \
             "its selection records no status: the close's scoped run never completed"
     for c in d.commands:
@@ -302,8 +304,8 @@ def read_analysis(path: str) -> Analysis:
             commands=cmds, status=_text(ent.get("status", ""), at + ".status"),
             reason=_text(ent.get("reason", ""), at + ".reason"),
         )
-        if sel.status not in ("green", "red", "incomplete"):
-            raise ValueError("%s: %s.status is not green, red or incomplete" % (path, at))
+        if sel.status not in ("green", "pre_existing", "red", "incomplete"):
+            raise ValueError("%s: %s.status is not green, pre_existing, red or incomplete" % (path, at))
         selected[repo] = sel
 
     tests = doc.get("tests", [])
