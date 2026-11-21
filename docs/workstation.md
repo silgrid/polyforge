@@ -67,6 +67,42 @@ published port. Both variants point supervise's `--workflows-dir` and
 `--pi-web-dir` at the components volume's `/components/current` — the
 versioned components run from there, never from the image.
 
+Pi Web answers on the host's loopback at `http://127.0.0.1:30141` —
+`WORKSTATION_WEB_PORT` moves the published port (the container side is
+fixed; see [Parameters](#parameters)). Day to day:
+
+- stop the machine — `docker compose --profile aihub stop`: the
+  container stops, the volumes and everything in them stay;
+- start it again — the same `up -d`;
+- tear the container down — `docker compose --profile aihub down`: the
+  container is removed, the six volumes still hold everything, and
+  the next `up` runs the first-boot skip path;
+- a shell inside — `docker compose --profile aihub exec workstation sh`
+  (`exec` names the service; the no-aihub boot's service is
+  `workstation-noaihub`).
+
+`docker compose --profile aihub down -v` is not a stop: it deletes the
+six named volumes with everything they hold — the reset path (see
+[The persistent volumes](#the-persistent-volumes) for what each one
+loses), never the routine one.
+
+The password is required — without one, Pi Web's proxy lets `/api`
+through and redirects `/login`, and the container refuses to start
+instead of exposing the high-privilege UI bare. Remote access rides
+the optional HTTPS front — see [HTTPS](#https).
+
+## Security
+
+Know what you are running: the parameter set above — `SYS_ADMIN` and
+`NET_ADMIN`, AppArmor and system paths unconfined, every process as
+root — deliberately widens this machine's reach into the host kernel,
+and the attack surface widens with it. Run only code you trust on the
+workstation. The widening stays bounded: no `privileged`, no passed
+devices, no docker socket, and the seccomp profile is the pinned file
+(`seccomp.json`, origin and SHA beside it) — not an unconfined one.
+
+## HTTPS
+
 Remote access rides the optional HTTPS front — a Caddy sibling service
 in its own `https` profile, off by default (the settled Q7 shape). It
 terminates TLS with its own local CA and reverse-proxies the
@@ -87,14 +123,17 @@ literals and the names that variable lists. Point the browser at
 `https://<WORKSTATION_HTTPS_HOST>:8443` (`WORKSTATION_HTTPS_PORT`
 moves the published port) and import Caddy's root certificate — printed
 by `docker compose exec https-front cat /data/caddy/pki/authorities/local/root.crt` —
-for a trusted local CA; no external certificate flow is involved. The password is
-required — without one, Pi Web's proxy lets `/api` through and
-redirects `/login`, and the container refuses to start instead of
-exposing the high-privilege UI bare. The container's environment is the
-compose file's explicit list plus the `PI_*` families the entrypoint's
-whitelist passes (never `PI_TEST_*`) and the first boot's three
-`WORKSTATION_AIHUB_*` inputs; the host's environment never crosses the
-boundary.
+for a trusted local CA; no external certificate flow is involved: the
+certificate is the local CA's own, and no public certificate is
+requested for any hostname (`tls internal` — teaching caddy to request
+one is a change to the `Caddyfile`, not a setting). Two honest limits
+of the delivered shape: the front's published port binds every
+interface of the host, not the loopback Pi Web's port is bound to (the
+compose file carries no `127.0.0.1:` prefix there) — reach it through a
+hostname you control or firewall the port — and the front has not been
+exercised on a real machine yet: the acceptance passes drive the
+loopback port, and this front is the settled design, not a measured
+one.
 
 ## The persistent volumes
 
@@ -111,6 +150,88 @@ crosses. Back up and restore whole volumes, never files under them:
 | `podman-storage` | `/var/lib/containers/storage` | podman's image and container storage, on its own filesystem because native overlay refuses overlay-on-overlay |
 
 (The https front's `caddy-data` is a seventh, caddy's own.)
+
+A volume's compose name is `workstation_<volume>` (the project name the
+compose file fixes):
+
+```sh
+docker run --rm -v workstation_pf-home:/from:ro -v "$PWD:/backup" alpine \
+  tar czf /backup/pf-home.tgz -C /from .
+docker compose --profile aihub down          # the container goes, the volumes stay
+docker volume rm workstation_pf-home         # the restore target must be empty
+# (docker created implicit volumes carry none of compose's labels)
+docker compose --profile aihub create        # compose recreates the volume, with its
+                                             #   labels; nothing starts
+docker run --rm -v "$PWD:/backup:ro" -v workstation_pf-home:/to alpine \
+  sh -c 'cd /to && tar xzf /backup/pf-home.tgz'
+```
+
+Restore only into an empty volume the compose file just created — the
+`down` and `docker volume rm` above are the recipe's own steps, because
+`create` makes nothing new while the old volume still stands and untarring
+over live content is exactly what the whole-volume rule forbids. A
+single-volume reset is that same `docker volume rm` plus the next `up -d`,
+which recreates the volume with its compose labels. What a reset costs,
+volume by volume:
+
+- `pf-home` — every login and cli.toml's whole default Cell.
+- `aihub` — the local hub's whole identity: the daily user, its key
+  and the local `workstation` project.
+- `polyforge-data` — the daemon's state and workspaces, and the
+  first-boot record.
+- `components` — the versioned components: the next boot reinstalls
+  from the image's seed, at the image's version.
+- `podman-storage` — every verification image and container: the next
+  verification run builds its image again.
+- `workspace` — the workstation's own working tree.
+
+pf-home and polyforge-data are a pair — reset them together, never
+apart: alone either one strands the done first-boot record against the
+other (a done record with no Cell in cli.toml, or a Cell with no
+record) and the container REFUSES to start naming both files (The
+first boot, Troubleshooting). Reset as a pair, the next start redoes
+the first boot — and in the local boot the aihub volume can stay: the
+identity stages are idempotent, the daily user is found back by its
+fixed email in the preserved store, the same-named key is revoked and
+reissued, and the hub's own data (the SQLite store, the git repos)
+survives untouched. aihub must not be reset ALONE, though: a done
+first boot never runs again, so nothing rebuilds what the volume held
+— the aihub server just bootstraps the empty store (usr_root and a
+fresh `bootstrap-admin.key`, the very shape the first boot exists to
+prevent) and the default Cell's key is dead. To wipe the hub too,
+reset all three together: that start builds a whole new identity, and
+you log the harnesses in again.
+
+## Parameters
+
+The compose file interpolates a small explicit set — host-side values
+that shape the compose file itself; most of them never enter the
+container, which receives only the `environment:` list the file writes
+out below plus what that list interpolates. The entrypoint's whitelist
+is the second guard on what does enter: it keeps `PATH`, `HOME` and
+`TERM`, the compose list's values, any compose-added `PI_*` /
+`PI_WEB_*` variable, and the first boot's three `WORKSTATION_AIHUB_*`
+inputs, and unsets everything else, the `PI_TEST_*` family included
+(env-whitelist.sh, the real filter, not prose):
+
+| Variable | Required | What it sets |
+|---|---|---|
+| `PI_WEB_PASSWORD` | yes | Pi Web's login password — compose refuses to start without one |
+| `PI_WEB_ALLOWED_HOSTS` | no | the extra names Pi Web trusts beside loopback ones (the HTTPS hostname belongs here) |
+| `WORKSTATION_WEB_PORT` | no | the host port Pi Web publishes on 127.0.0.1 (30141 by default) |
+| `WORKSTATION_HTTPS_HOST` | no | the hostname the https front serves and signs for (localhost by default) |
+| `WORKSTATION_HTTPS_PORT` | no | the https front's published port (8443 by default) |
+| `WORKSTATION_AIHUB_SERVER` | first boot only | the external AIHub to point the default Cell at, with its key — nothing is ever created on it |
+| `WORKSTATION_AIHUB_KEY` | with the server | that server's API key: read once at the first boot, then unset before supervise starts |
+| `WORKSTATION_AIHUB_PROJECT` | no | an already-existing project for the `/workspace` mapping |
+| `WORKSTATION_IMAGE` | no | run a published image instead of the local build (the exported delivery's path); unset, the local build tags `polyforge-workstation:local` |
+
+The compose file also fixes the container-side values itself (no
+interpolation): `PORT: 30141` — Pi Web's port inside the container; to
+change the port you see, move `WORKSTATION_WEB_PORT` — plus
+`PI_WEB_HOSTNAME: 0.0.0.0`, `PI_WEB_NO_OPEN: 1`,
+`PI_WEB_SKIP_VERSION_CHECK: 1` and `PI_CODING_AGENT_DIR: /root/.pi/agent`
+(inside pf-home, so a login survives a re-create).
 
 ## The first boot
 
@@ -130,8 +251,7 @@ the phase is `<stage>/failed` with the reason, never a credential):
    fires, so the default Cell's key is a daily key by construction.
    One deliberate consequence to know: the local hub then carries NO
    administrator identity at all (no one to grant other users or
-   roles) until the management units (#163/#167) build an operator
-   path — the workstation is a single-user machine by design.
+   roles) — the workstation is a single-user machine by design.
    The external mode takes the operator-given server and key and
    creates nothing anywhere.
 3. **config** — cli.toml (in pf-home) gains the default Cell: the
@@ -184,6 +304,126 @@ already-existing project for the `/workspace` mapping (absent means no
 mapping; the wizard that asks interactively is a later unit). Neither
 set means the local mode.
 
+## Harness login
+
+The seed carries the two pinned harness packages — pi and Claude Code
+(`build-seed.sh` installs both at pinned versions) — under the
+components volume: after the first boot they live at
+`/components/current/harness/pi` and `/components/current/harness/claude`
+(`node_modules/…`, the packages' own executables under
+`node_modules/.bin`), and the pi packages entry in pf-home points at
+the current. The image's PATH carries `pf` and the Node runtime, not
+the harness CLIs — name them by their full paths (or log in through
+Pi Web's terminal panel, whose sessions run inside the machine):
+
+```sh
+docker compose --profile aihub exec workstation /components/current/harness/pi/node_modules/.bin/pi
+docker compose --profile aihub exec workstation /components/current/harness/claude/node_modules/.bin/claude
+```
+
+Logins land in pf-home (`/root/.pi/agent`, `/root/.claude`) and survive
+a re-create. Claude Code is subject to Anthropic's Commercial Terms of
+Service.
+
+## Verification with podman
+
+The workstation runs its verification containers under podman —
+rootful, with crun — inside itself. The first boot writes
+`container_engine = "podman"` into the default Cell's `[daemon]`
+table, so every verification bar the daemon runs goes through the
+podman backend instead of the docker client — the same container
+convention either way (the key is `docs/reference/config.md`'s
+`[daemon] container_engine`, the container rules are
+`docs/concepts.md`'s verification section). Two facts of the
+placement:
+
+- Networking: a verification container rides podman's default bridge
+  network and reaches the outside like any other — the outer
+  workstation's `NET_ADMIN` is what makes that possible (podman sets
+  up the bridge's interfaces and firewall rules inside the outer
+  container's own namespace).
+- Storage: podman's graphroot is the `podman-storage` volume, a real
+  filesystem of its own, because native overlay refuses
+  overlay-on-overlay (the outer container's root is already overlay).
+  Deleting that volume costs every verification image: the next run
+  builds its image again.
+
+`.polyforge/Dockerfile.verify` is engine-neutral and needs no change
+for any of this: the daemon resolves the backend once at its start and
+hands it to every step process as `PF_CONTAINER_ENGINE`. The
+acceptance for the placement is the smoke's `podman-verify` pass (see
+[The acceptance driver](#the-acceptance-driver)).
+
+## Upgrading
+
+The versions that run are the components volume's, and the image's
+seed is how a new version arrives: point `WORKSTATION_IMAGE` at the
+new image's tag (or rebuild the local one) and re-create the container.
+On the next start the seed transaction upgrades the components volume —
+a newer seed switches `current` (the `previous` link moves to the old
+release), an older seed never downgrades the volume, and the same
+version reinstalls nothing.
+
+Before any upgrade, drain: `pf ops drain --upgrade` refuses new work
+(new submits, automatic claims, task spawns) while work already
+running goes on, and answers that it is safe when the Host is idle; a
+busy one refuses with 409 until `--force` accepts the in-flight
+sessions, and the refusal ends with the daemon restart — for an image
+switch, the container re-create is that restart. A daemon that exits
+75 — the restart-for-an-upgrade exit, set when an upgrade switches
+the components volume's `current` under a running daemon — is
+relaunched by `pf supervise` at once, no failure backoff, off the new
+`current`.
+
+One consequence of the image mode: the first-boot record and Pi Web's
+status API report `imageManaged` — in that mode Pi Web's own pf
+install and self-update entries are unavailable (an install answers
+409 `image_managed`), so upgrading is the image switch above, never an
+in-container component install.
+
+### In-place upgrade
+
+Inside the workstation image the versioned components — pf itself (the
+daemon and the local AIHub included), the lanes and skills checkout and
+Pi Web — upgrade without rebuilding the container: the Settings ›
+Polyforge section's update card (or `pf components upgrade`) fetches
+the channel's release, verifies it against its own SHA256SUMS, assembles
+the version directory and switches the components volume's `current`
+atomically, keeping `previous`. The base — node, python, git, podman,
+`pf supervise` and the image's own bootstrap pf — still upgrades only
+with a new image; the harnesses wait for #86 to pin them into the
+release manifest.
+
+The progress and the final result (the phase, the versions, a
+refusal's reason) persist in `/components/upgrade-status.json`, so the
+page reconnects and replays the outcome across Pi Web's own restart;
+the orchestration runs detached from the Pi Web process tree. While
+the upgrade drain waits for the running work, new work is refused
+DAEMON-409; the wait can be stood down (the daemon restart clears the
+drain) or forced. After the switch the daemon exits 75 and the
+supervisor relaunches it — and the old tree's Pi Web and AIHub — on the
+new `current`. `pf components rollback` swaps `current` and `previous`
+through the same drain and restarts; a rollback is refused — changing
+nothing — when the previous is missing or corrupt, of another channel,
+of a manifest schema this build cannot judge, of another platform, of
+a data layout the data directory has migrated past (the previous
+version's declared `dataLayout` — a version older than the field is
+never machine-judged), or below the running base's floor. Only a previous version that
+declares its `dataLayout` is judged against the data directory's live
+layout; a version older than the field is never machine-judged — back
+up before upgrading and follow the version's migration notes before
+rolling back to one.
+
+## Platform support
+
+Verified: Linux amd64 — the engine, the image build and every
+acceptance pass of the smoke ran there. Not verified: macOS (the
+container runs under Docker Desktop in principle, but no acceptance
+pass has) and Windows. arm64 images are not built yet (polyforge#86
+builds them; a real Mac lands with polyforge#168's verification). The
+host-installed pf's own platform story is unchanged and wider —
+`docs/install.md` — this page is about the workstation image only.
+
 ## The acceptance driver
 
 `smoke.sh` measures every acceptance value and exits non-zero on the
@@ -194,8 +434,9 @@ sh dist/workstation/smoke.sh boot --no-aihub    # the minimal boot: parameters, 
 sh dist/workstation/smoke.sh boot --with-aihub  # + Pi Web /login, the daemon queue, the default Cell
 sh dist/workstation/smoke.sh first-boot         # the empty-volume first boot: identity, default Cell,
                                                 #   real key authentication, no bootstrap key, restart
-sh dist/workstation/smoke.sh first-boot --external  # 外部模式：全过程只允许 POST /api/v1/machines/heartbeat
-                                                # 创建路由与其他未知请求均失败，并输出方法和路径
+sh dist/workstation/smoke.sh first-boot --external  # the external mode: only POST /api/v1/machines/heartbeat
+                                                #   crosses the whole pass; every create route and unknown
+                                                #   request fails, its method and path printed
 sh dist/workstation/smoke.sh persist            # the persistence acceptance: two down/up cycles and a
                                                 #   NEW TAG of the image keep the six persisted facts by
                                                 #   value, then the exported copy runs (Docker + sh host)
@@ -213,9 +454,11 @@ project and volumes, and compose has no fixed `container_name` any more,
 so a concurrently running deployment never clashes with the smoke at
 all (polyforge#177). Every pass ends with a `down -v` of its own project
 and carries an EXIT trap doing the same, so a die mid-run leaves nothing
-behind either (review r1#3); `persist` also removes the retag it created. 仓库的真机 smoke 与外部模式桩测试
-通过跨进程资源锁串行操作共享项目；外部模式桩另用 38422 端口，真机计数桩用
-38421。并行测试 runner 不会让一个测试清理另一个测试的容器或卷。The first-boot
+behind either (review r1#3); `persist` also removes the retag it created. The real-engine
+smoke and the external-mode stub tests serialize their shared projects through a
+cross-process resource lock (test/w535_workstation_lock_test.go); the external-mode
+stub listens on 38422 and the real-engine counter stub on 38421, so a parallel test
+runner never lets one test clean up another's containers or volumes. The first-boot
 pass is the AC proof of the identity half: after the boot the record
 says done, the default Cell points at the local AIHub, the key REALLY
 authenticates (`pf recall` inside the container, through the
@@ -226,9 +469,11 @@ authenticates (no reissue).
 The first-boot pass also asserts AC2's layout half inside the container:
 the step agent dir is `/root/.pi/agent` (pf-home), the pi packages entry
 points at `/components/current`, and the record carries no credential
-（逐字节比较 cli.toml 中的 key 与记录）。已有 `/root/.claude` 时，还断言路由
-技能 `/root/.claude/skills/polyforge` 是指向
-`/components/current/skills/polyforge` 的软链；用户自有的其他技能不受影响。
+— the key in cli.toml compared byte-for-byte with the record's.
+When `/root/.claude` already exists, it also asserts the routing
+skill `/root/.claude/skills/polyforge` is a symlink to
+`/components/current/skills/polyforge`; the user's own other skills
+are untouched.
 
 `persist` (polyforge#177) is the persistence acceptance: after a first
 boot it records the six persisted facts BY VALUE — the harness login
@@ -262,35 +507,24 @@ The in-repo Go tests pin the same facts statically
 real on a machine with an engine (`TestWorkstationImageEngine`,
 skipped without one).
 
-## In-place upgrade
+## Troubleshooting
 
-Inside the workstation image the versioned components — pf itself (the
-daemon and the local AIHub included), the lanes and skills checkout and
-Pi Web — upgrade without rebuilding the container: the Settings ›
-Polyforge section's update card (or `pf components upgrade`) fetches
-the channel's release, verifies it against its own SHA256SUMS, assembles
-the version directory and switches the components volume's `current`
-atomically, keeping `previous`. The base — node, python, git, podman,
-`pf supervise` and the image's own bootstrap pf — still upgrades only
-with a new image; the harnesses wait for #86 to pin them into the
-release manifest.
-
-The progress and the final result (the phase, the versions, a
-refusal's reason) persist in `/components/upgrade-status.json`, so the
-page reconnects and replays the outcome across Pi Web's own restart;
-the orchestration runs detached from the Pi Web process tree. While
-the upgrade drain waits for the running work, new work is refused
-DAEMON-409; the wait can be stood down (the daemon restart clears the
-drain) or forced. After the switch the daemon exits 75 and the
-supervisor relaunches it — and the old tree's Pi Web and AIHub — on the
-new `current`. `pf components rollback` swaps `current` and `previous`
-through the same drain and restarts; a rollback is refused — changing
-nothing — when the previous is missing or corrupt, of another channel,
-of a manifest schema this build cannot judge, of another platform, of
-a data layout the data directory has migrated past (the previous
-version's declared `dataLayout` — a version older than the field is
-never machine-judged), or below the running base's floor. Only a previous version that
-declares its `dataLayout` is judged against the data directory's live
-layout; a version older than the field is never machine-judged — back
-up before upgrading and follow the version's migration notes before
-rolling back to one.
+- The container refuses to start, naming two files — pf-home and
+  polyforge-data disagree (a done first-boot record without the Cell
+  in cli.toml, or the reverse): the two volumes were reset apart.
+  Restore or reset the pair together (the aihub volume's reset rules
+  are the volumes section's: keep it on a pair reset, never reset it
+  alone).
+- A first boot that dies — read the phase record inside the container:
+  `docker compose --profile aihub exec workstation cat
+  /root/.local/share/polyforge/workstation/first-boot.json`. The
+  `phase` names the stage that stopped (`<stage>/failed`) and `error`
+  the reason (never a credential); fix the cause and restart — every
+  stage is idempotent, and an interrupted boot resumes from the
+  record.
+- "Is it really podman in there?" — `pf config get
+  daemon.container_engine` reads the default Cell's `[daemon]` table
+  back (`podman` after the first boot). `pf doctor` does not report
+  the engine choice; its supervision row passes on the container
+  marker either way, and a missing tmux inside the container is not
+  even a warn there (`pf supervise` is the supervision).

@@ -51,7 +51,7 @@ pf ops role [interactive|runner] [--force|--if-unset] # bare: show this machine'
 pf ops shutdown                                      # graceful shutdown
 pf ops drain --upgrade [--force]                      # the Host-level upgrade drain (polyforge#160): from here on new submits, automatic claims and task spawns are refused (DAEMON-409) while running work goes on; an idle Host answers and it is safe to upgrade, a busy one refuses (409, the drain stays set) until --force; the refusal ends with the daemon restart
 pf ops end-session <wi> --reason <text>              # force-end a stuck holder's session (aihub-direct)
-pf daemon ensure                                     # START: the daemon under its tmux restart loop (no-op when it answers)
+pf daemon ensure                                     # START: the daemon under its tmux restart loop (no-op when it answers; inside the workstation container always the no-op — pf supervise owns it)
 ```
 
 Starting the daemon is `pf daemon ensure` (polyforge#174) — never a bare
@@ -62,7 +62,9 @@ restarted within ~5s; a clean exit ends the loop; exit 78 — the daemon
 refused to start for an operator-fixable reason: config, daemon id,
 workspace, on-disk state, failed restart reconciliation — also ends the
 loop, so read `<data-dir>/daemon.log`, fix the cause, then `pf daemon
-ensure` again) and waits for the socket. The harness adapters already run it when a session
+ensure` again) and waits for the socket — on a host; inside the
+workstation container `pf supervise` is the supervision and ensure
+never starts anything ([supervise](supervise.md)). The harness adapters already run it when a session
 starts or resumes, so the agent runs it only as the fallback: an
 execution-plane verb answered `dial unix …` → `pf daemon ensure`, then
 retry that verb ONCE. A non-zero exit carries the reason (no `[workspace]`
@@ -210,7 +212,7 @@ end), `CORE-410` (terminal).
 |---|---|---|
 | `DAEMON-410` (`SHUTTING_DOWN`) | Any external submit while the daemon is shutting down | Wait for the shutdown to complete and the daemon to restart. |
 | `DAEMON-400` | Malformed ops-config request (`max < 1`, empty body) — the CLI's own argument validation usually catches this first with a usage error | Fix the invocation; read the detail. |
-| `dial unix …` | The daemon is not running on this machine | Run `pf daemon ensure` (starts it under its tmux restart loop; a no-op when one answers), then retry the verb once; if ensure fails, relay its message and run `pf doctor`. Check `--socket` / `PF_DAEMON_SOCKET` if you expect it elsewhere. |
+| `dial unix …` | The daemon is not running on this machine | Run `pf daemon ensure` (starts it under its tmux restart loop on a host, a no-op when one answers — inside the workstation container the supervision is `pf supervise` and ensure never starts anything), then retry the verb once; if ensure fails, relay its message and run `pf doctor`. Check `--socket` / `PF_DAEMON_SOCKET` if you expect it elsewhere. |
 
 Auto vs shutdown: with auto on the machine also claims and runs
 ready-queue work by itself (an internal loop; idle-polls when the queue is

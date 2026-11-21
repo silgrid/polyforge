@@ -57,7 +57,26 @@ var w254Pages = []string{
 	"docs/reference/uds-routes.md",
 	"docs/reference/failure-codes.md",
 	"docs/reference/release.md",
+	"docs/workstation.md",
 }
+
+// w254PureEnglishPages are the pages of the set that are pure English
+// by design: operator-facing pages that quote none of the zh workflow
+// vocabulary (the reference pages legitimately carry it — 「过目通过」,
+// `## 分析` — and stay under the 25% bar above). For these the bar is
+// total: no CJK codepoint anywhere (polyforge#163, Q3 A: #176's Chinese
+// passages passed the 25% ratio at 1.2%, so the ratio alone never
+// catches a stray insert).
+var w254PureEnglishPages = []string{
+	"docs/workstation.md",
+}
+
+// w254CJKRe matches any CJK codepoint: the CJK blocks (radicals
+// through Yi, the CJK punctuation 「」、。 among them), the
+// compatibility ideographs and the fullwidth/halfwidth forms (the
+// passages #176 left used （） ，；：). An em dash (U+2014) is not
+// CJK and stays legal.
+var w254CJKRe = regexp.MustCompile(`[\x{2e80}-\x{9fff}\x{f900}-\x{faff}\x{ff00}-\x{ffef}]`)
 
 // w254Root answers the repo root (this package's cwd is the repo's
 // test/ dir).
@@ -596,6 +615,13 @@ func TestW254NewDocsClean(t *testing.T) {
 		}
 		if m := w254PrivateIPRe.FindString(body); m != "" {
 			t.Fatalf("%s carries an internal identifier — the private-network IP literal %q; the public tree stays clean (no internal hostnames, IPs or keys in any example)", p, m)
+		}
+	}
+	for _, p := range w254PureEnglishPages {
+		body := w254Page(t, p)
+		if m := w254CJKRe.FindStringIndex(body); m != nil {
+			line := 1 + strings.Count(body[:m[0]], "\n")
+			t.Fatalf("%s is a pure-English page — no CJK codepoint anywhere (the 25%% bar passed #176's Chinese passages at 1.2%%, polyforge#163): first at line %d: %q", p, line, string([]rune(body[m[0]:])[0]))
 		}
 	}
 }
