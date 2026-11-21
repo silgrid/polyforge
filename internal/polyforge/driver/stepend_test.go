@@ -267,3 +267,134 @@ func TestStepEndedCleanupFailureRecordsAFailedDispatch(t *testing.T) {
 		t.Fatalf("status %q", x.WorkflowStatus)
 	}
 }
+
+// r2#1: a resume from a cleanup_failed park re-runs the step-end sweep
+// before anything dispatches — for EVERY flavor, not only a kept
+// hand-off: a sweep that still fails re-parks with the same continuation
+// and dispatches nothing; a clean one lets the lane continue (a failed
+// dispatch retries). The RequiredAction, the wake line and four
+// documents promise exactly this.
+func TestStepEndedCleanupFailureRerunsTheSweepOnResume(t *testing.T) {
+	dir := t.TempDir()
+	sp := &fakeSpawner{}
+	d, err := New(Config{
+		WI:        WIInfo{ID: "wi_rr", CapsuleDir: dir, BundleName: "b"},
+		ExecPath:  filepath.Join(dir, capsule.ExecutionJSON),
+		Workflow:  testLane(4, spec("a")),
+		Spawner:   sp,
+		Log:       &eventLog{},
+		HubWrites: &hubSink{sp: sp},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp.script = []fakeEntry{
+		{err: errors.New("step process exited 1")},
+		done(`{}`), // reachable only if the resume wrongly skips the re-park
+	}
+	d.cfg.StepEnded = func(context.Context) error {
+		return errors.New("step-end sweep incomplete: pids 4242 still running")
+	}
+	if err := d.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if x := d.Snapshot(); x.WorkflowStatus != StatusBlocked || !CleanupFailedBlocked(x.BlockedReason) {
+		t.Fatalf("the failed dispatch parked cleanup_failed: %q %q", x.WorkflowStatus, x.BlockedReason)
+	}
+
+	// the resume with a STILL-FAILING sweep: it re-runs (the hook is
+	// called), re-parks with the failed-dispatch continuation and
+	// dispatches nothing.
+	hookCalls := 0
+	sp2 := &fakeSpawner{script: []fakeEntry{done(`{}`)}}
+	d2, err := New(Config{WI: d.wi, ExecPath: d.execPath, Workflow: d.workflow, Spawner: sp2,
+		Log: &eventLog{}, HubWrites: &hubSink{sp: sp2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d2.cfg.StepEnded = func(context.Context) error {
+		hookCalls++
+		return errors.New("still incomplete")
+	}
+	if err := d2.ResumeCurrent(); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if err := d2.Run(context.Background()); err != nil {
+		t.Fatalf("resumed Run: %v", err)
+	}
+	if hookCalls != 1 {
+		t.Fatalf("the resume must re-run the step-end sweep before anything dispatches, ran %d time(s)", hookCalls)
+	}
+	x := d2.Snapshot()
+	if x.WorkflowStatus != StatusBlocked || !CleanupFailedBlocked(x.BlockedReason) {
+		t.Fatalf("a still-failing sweep re-parks cleanup_failed: %q %q", x.WorkflowStatus, x.BlockedReason)
+	}
+	if !strings.Contains(x.BlockedReason, "retries") || strings.Contains(x.BlockedReason, "hand-off") {
+		t.Fatalf("the re-park keeps its flavor's continuation (retries, no hand-off claim): %q", x.BlockedReason)
+	}
+	if got := sp2.dispatched(); len(got) != 0 {
+		t.Fatalf("nothing may dispatch while the sweep is unproven: %v", got)
+	}
+
+	// a clean sweep: the failed dispatch retries and the lane completes.
+	sp3 := &fakeSpawner{script: []fakeEntry{done(`{}`)}}
+	d3, err := New(Config{WI: d.wi, ExecPath: d.execPath, Workflow: d.workflow, Spawner: sp3,
+		Log: &eventLog{}, HubWrites: &hubSink{sp: sp3}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d3.cfg.StepEnded = func(context.Context) error { return nil }
+	if err := d3.ResumeCurrent(); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if err := d3.Run(context.Background()); err != nil {
+		t.Fatalf("resumed Run: %v", err)
+	}
+	if got := sp3.dispatched(); len(got) != 1 || !strings.HasPrefix(got[0], "a@") {
+		t.Fatalf("a clean sweep lets the failed step retry: %v", got)
+	}
+	if x := d3.Snapshot(); x.WorkflowStatus != StatusCompleted {
+		t.Fatalf("status %q", x.WorkflowStatus)
+	}
+
+	// the open-ask flavor (fixture-driven): the re-park keeps its own
+	// continuation — the open ask re-enters, nothing claims a hand-off.
+	askDir := t.TempDir()
+	askExec := &capsule.Execution{
+		CapsuleID: "cap_wi_rr2", WorkItemID: "wi_rr2", WorkflowStatus: StatusBlocked,
+		CurrentStep: "a", Version: 1,
+		Steps: map[string]*capsule.Step{"a": {Status: capsule.StepInProgress, Round: 1, Dispatch: 1, StepStartedAt: "2026-11-21T10:00:00Z"}},
+	}
+	askExec.BlockedReason = cleanupFailedReason("a", errors.New("sweep incomplete"), cleanupParkOpenAsk)
+	writeExecFixture(t, filepath.Join(askDir, capsule.ExecutionJSON), askExec)
+	askLine := capsule.AskLine{At: "2026-11-21T10:00:01Z", Step: "a", Spawn: 1, Kind: capsule.AskKindAsk, Text: "q", By: "owner"}
+	if err := capsule.AppendAsk(askDir, askLine); err != nil {
+		t.Fatal(err)
+	}
+	spA := &fakeSpawner{script: []fakeEntry{done(`{}`)}}
+	dA, err := New(Config{WI: WIInfo{ID: "wi_rr2", CapsuleDir: askDir, BundleName: "b"},
+		ExecPath: filepath.Join(askDir, capsule.ExecutionJSON), Workflow: testLane(4, spec("a")),
+		Spawner: spA, Log: &eventLog{}, HubWrites: &hubSink{sp: spA}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dA.cfg.StepEnded = func(context.Context) error {
+		return errors.New("still incomplete")
+	}
+	if err := dA.ResumeCurrent(); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if err := dA.Run(context.Background()); err != nil {
+		t.Fatalf("resumed Run: %v", err)
+	}
+	x = dA.Snapshot()
+	if x.WorkflowStatus != StatusBlocked || !CleanupFailedBlocked(x.BlockedReason) {
+		t.Fatalf("the open-ask flavor re-parks cleanup_failed: %q %q", x.WorkflowStatus, x.BlockedReason)
+	}
+	if !strings.Contains(x.BlockedReason, "re-enters") || strings.Contains(x.BlockedReason, "hand-off") {
+		t.Fatalf("the open-ask re-park keeps its flavor's continuation (re-enters, no hand-off claim): %q", x.BlockedReason)
+	}
+	if got := spA.dispatched(); len(got) != 0 {
+		t.Fatalf("nothing may dispatch while the sweep is unproven: %v", got)
+	}
+}
