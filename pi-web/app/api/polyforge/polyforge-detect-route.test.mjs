@@ -21,16 +21,14 @@ const source = await readFile(new URL("./detect/route.ts", import.meta.url), "ut
 const get = (host = "127.0.0.1:30141") => new Request(`http://${host}/api/polyforge/detect?`, { headers: { host } });
 
 test("the detect read answers imageManaged beside its own fields, in both the host and the image mode", async () => {
-  // the host (no seed root): the fact is false and the detection's own
-  // degraded shape is unchanged
+  // the host (no seed root): the fact is false; the detection's own fields
+  // are detectPolyforge's business (its own tests pin them)
   const previous = process.env.PI_TEST_SEED_ROOT;
   process.env.PI_TEST_SEED_ROOT = join(tmpdir(), "pf-detect-route-no-seed");
   try {
     const host = await GET(get());
     assert.equal(host.status, 200);
-    const hostBody = await host.json();
-    assert.equal(hostBody.imageManaged, false, "a host answers the image fact as false");
-    assert.equal(hostBody.pfPresent, false, "no pf on PATH degrades as before");
+    assert.equal((await host.json()).imageManaged, false, "a host answers the image fact as false");
   } finally {
     if (previous === undefined) delete process.env.PI_TEST_SEED_ROOT; else process.env.PI_TEST_SEED_ROOT = previous;
   }
@@ -53,7 +51,7 @@ test("the detect read answers imageManaged beside its own fields, in both the ho
 test("the route's catch fallback carries the image fact too — no branch may answer a bare-machine guess", () => {
   assert.match(
     source,
-    /return NextResponse\.json\(\{\s*\.\.\.\(await detectPolyforge\(force\)\),\s*imageManaged: isImageManaged\(\),\s*\}\);/,
+    /return NextResponse\.json\(\{\s*\.\.\.\(await detectPolyforge\(force\)\),\s*imageManaged: isImageManaged\(\)\s*\}\);/,
     "the success branch assembles the fact beside the detection",
   );
   assert.match(
