@@ -630,10 +630,14 @@ nothing). A write that fails parks the work item blocked, kind
 `write_failed`; `pf resume` (or an owner message) replays the writes not
 yet done, each idempotent, then the lane goes on. A step-end process
 cleanup that cannot prove the step's processes gone parks the work item
-the same way, kind `cleanup_failed` (polyforge#200): the accepted
-hand-off stays on the call ledger, nothing is written as the step's
-outcome and no successor dispatches; the resume re-runs the sweep before
-settling the kept hand-off.
+the same way, kind `cleanup_failed` (polyforge#200), after its path's
+own records are written: a received hand-off stays on the call ledger
+(the resume re-runs the sweep and settles it without re-running the
+step), a failed dispatch keeps its failure record and retry ladder (the
+resume re-runs the sweep and retries the step), an open ask keeps
+standing (the resume re-runs the sweep and re-enters it); no successor
+dispatches, the reason says which continuation applies, and a sweep
+that still fails on the resume parks again.
 A landing record is a `wrap-attrs`: the work item's own record rides its
 wrap. Security, one line: the hub
 proxy gives an agent indirect aihub writes, bounded by each step's `hub:`
