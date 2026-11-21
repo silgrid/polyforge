@@ -257,6 +257,11 @@ type Driver struct {
 	// awaiting_owner event was last emitted for in this driver life (a
 	// restarted driver re-announces an ask it finds open).
 	inputEventFor string
+	// resumeCleanupSweep: the resume that just unblocked a cleanup_failed
+	// park owes a re-run of the step-end sweep before anything dispatches
+	// (r2#1) — in-memory only: a crash between the unblock and Run
+	// re-claims fresh, and the recovery sweep covers the interval.
+	resumeCleanupSweep bool
 	// parked is the open ask of the current dispatch the driver last read
 	// from the capsule's asks.jsonl (ask.go): the lock-free fact the
 	// settled-dispatch test reads; nil = none.
@@ -412,6 +417,26 @@ func (d *Driver) Run(ctx context.Context) error {
 	// pointer; an operator shutdown never reaches this hook (the daemon
 	// filters it).
 	collected, collectedN := d.unconsumedResult()
+	// r2#1: a resume from a cleanup_failed park re-runs the step-end sweep
+	// before anything dispatches — every flavor, exactly as the park's
+	// RequiredAction and pf answer's wake line say. The kept hand-off
+	// flavor settles through the collected branch below (which re-runs the
+	// sweep itself); a failed dispatch or an open ask has nothing to
+	// settle, so the sweep gates their re-dispatch here: still failing —
+	// re-park with the flavor's own continuation and dispatch nothing.
+	if d.consumeResumeCleanupSweep() && collected == nil {
+		if serr := d.stepEndedSweep(ctx); serr != nil {
+			stepID := d.Snapshot().CurrentStep
+			flavor := cleanupParkFailedDispatch
+			if d.parkedAsk() != nil {
+				flavor = cleanupParkOpenAsk
+			}
+			if stop, err := d.parkCleanupFailed(stepID, serr, flavor); stop || err != nil {
+				return err
+			}
+			return nil
+		}
+	}
 	// A dispatch that asked the owner is settled by its ask (ask.go): the
 	// open ask is read before the interruption archive and the claim
 	// re-entry below decide what the dispatch they found needs — nothing,
@@ -1175,14 +1200,35 @@ func validateCandidates(m map[string][]string) error {
 func (d *Driver) ResumeCurrent() error {
 	d.mu.Lock()
 	blocked := d.exec.WorkflowStatus == StatusBlocked
+	cleanupPark := CleanupFailedBlocked(d.exec.BlockedReason)
 	d.mu.Unlock()
 	if !blocked {
 		return fmt.Errorf("driver: resume is the owner's blocked-step verdict; workflow is %q", d.Snapshot().WorkflowStatus)
 	}
-	return d.transition(TransitionRequest{
+	if err := d.transition(TransitionRequest{
 		Kind:   TransUnblock,
 		SpawnN: d.currentSpawnN(),
-	})
+	}); err != nil {
+		return err
+	}
+	// r2#1: the park's own RequiredAction promises the sweep re-runs first,
+	// for every flavor — the flag is consumed at Run's start.
+	if cleanupPark {
+		d.mu.Lock()
+		d.resumeCleanupSweep = true
+		d.mu.Unlock()
+	}
+	return nil
+}
+
+// consumeResumeCleanupSweep answers (and clears) the resume's owed
+// step-end sweep.
+func (d *Driver) consumeResumeCleanupSweep() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	owed := d.resumeCleanupSweep
+	d.resumeCleanupSweep = false
+	return owed
 }
 
 // Snapshot answers a deep copy of the current execution state (the
