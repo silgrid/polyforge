@@ -75,6 +75,24 @@ try {
 	if (raced.hung) { out.hung = true; emit(); }
 	if (raced.e) out.thrown = String((raced.e && raced.e.message) || raced.e);
 	else out.result = raced.v;
+	// r1#3/r1#4: at the moment the call resolved — this driver still
+	// alive — the child must be PROVED dead (or zombie): its death may
+	// never be attributable to this driver exiting.
+	if (!out.hung && scenario.childPidFile) {
+		try {
+			const pid = Number.parseInt(fs.readFileSync(scenario.childPidFile, "utf8").trim(), 10);
+			let dead = true;
+			try {
+				const stat = fs.readFileSync("/proc/" + pid + "/stat", "utf8");
+				dead = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0] === "Z";
+			} catch {
+				dead = true; // no /proc entry: gone
+			}
+			out.childDeadAtResolve = dead;
+		} catch {
+			out.childDeadAtResolve = false; // no pid recorded: not proved
+		}
+	}
 	if (scenario.lateAbortMs) {
 		await new Promise((res) => setTimeout(res, scenario.lateAbortMs));
 		ac.abort();
@@ -140,6 +158,24 @@ func extProject(t *testing.T) string {
 	if err := os.WriteFile(filepath.Join(dir, "driver.mjs"), []byte(extDriverMjs), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// r1#3/r1#4: the fake pis live while the SENTINEL file exists — never
+	// while the node driver lives — so a death can never be attributed to
+	// the driver exiting. The cleanup drops the sentinel and hard-kills
+	// whatever the fakes recorded, bounded.
+	sentinel := filepath.Join(dir, "sentinel")
+	if err := os.WriteFile(sentinel, []byte("live\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Remove(sentinel)
+		if raw, err := os.ReadFile(filepath.Join(dir, "pids")); err == nil {
+			for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+				if pid, err := strconv.Atoi(strings.TrimSpace(line)); err == nil && pid > 1 {
+					_ = syscall.Kill(pid, syscall.SIGKILL)
+				}
+			}
+		}
+	})
 	return dir
 }
 
@@ -178,6 +214,9 @@ type extRunOut struct {
 	DriverErr  string         `json:"driverError"`
 	Schema     string         `json:"schema"`
 	Result     map[string]any `json:"result"`
+	// ChildDeadAtResolve: at the moment execute resolved (nil when the
+	// scenario drove no child): the child was proved dead or zombie.
+	ChildDeadAtResolve *bool `json:"childDeadAtResolve"`
 }
 
 func extRun(t *testing.T, dir string, scenario map[string]any, fakePi string) extRunOut {
@@ -193,6 +232,12 @@ func extRun(t *testing.T, dir string, scenario map[string]any, fakePi string) ex
 	nodeBin, _ := exec.LookPath("node")
 	cmd := exec.Command(nodeBin, "driver.mjs", scenarioPath)
 	cmd.Dir = dir
+	scenario["childPidFile"] = filepath.Join(dir, "child.pid")
+	_ = os.Remove(scenario["childPidFile"].(string))
+	blob, _ = json.Marshal(scenario)
+	if err := os.WriteFile(scenarioPath, blob, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	driverTmp, err := os.MkdirTemp("", "pfext-driver-")
 	if err != nil {
 		t.Fatal(err)
@@ -201,6 +246,7 @@ func extRun(t *testing.T, dir string, scenario map[string]any, fakePi string) ex
 	cmd.Env = append(os.Environ(),
 		"PATH="+filepath.Join(dir, "bin")+":"+os.Getenv("PATH"),
 		"PI_CODING_AGENT_DIR="+filepath.Join(dir, "agentdir"),
+		"FAKEPI_SENTINEL="+filepath.Join(dir, "sentinel"),
 		// a hung call never unwinds its prompt temp dir; scope it so the
 		// test still cleans it (the production teardown would).
 		"TMPDIR="+driverTmp,
@@ -296,15 +342,20 @@ func extWaitGone(t *testing.T, pid int, bound time.Duration, what string) {
 	}
 }
 
-// fakePiIgnoreTERM records its facts, announces one assistant message,
-// records TERM and survives it (the AC1 "ignores TERM" shape). It exits
-// once its parent (the node driver) is gone, so a hung scenario never
-// leaks it past the test.
+// Every long-lived fake pi records its pid, announces one assistant
+// message and then idles while the SENTINEL file exists — its death can
+// never be attributed to the node driver exiting (r1#3/r1#4); the
+// project's cleanup drops the sentinel and hard-kills the recorded pids.
+
+// fakePiIgnoreTERM records TERM and survives it (the AC1 "ignores TERM"
+// shape).
 const fakePiIgnoreTERM = `#!/bin/bash
 echo "started" >> "$FAKEPI_DIR/started"
+echo $$ >> "$FAKEPI_DIR/pids"
+echo $$ > "$FAKEPI_DIR/child.pid"
 echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"working"}]}}'
 trap 'echo TERM >> "$FAKEPI_DIR/signals"' TERM
-while kill -0 "$PPID" 2>/dev/null; do sleep 0.1; done
+while [ -f "$FAKEPI_SENTINEL" ]; do sleep 0.1; done
 `
 
 // fakePiPlain announces one assistant message and exits 0.
@@ -317,9 +368,11 @@ exit 0
 // fakePiHonorTERM exits cleanly on TERM after announcing one message.
 const fakePiHonorTERM = `#!/bin/bash
 echo "started" >> "$FAKEPI_DIR/started"
+echo $$ >> "$FAKEPI_DIR/pids"
+echo $$ > "$FAKEPI_DIR/child.pid"
 echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"working"}]}}'
 trap 'echo TERM >> "$FAKEPI_DIR/signals"; exit 0' TERM
-while kill -0 "$PPID" 2>/dev/null; do sleep 0.1; done
+while [ -f "$FAKEPI_SENTINEL" ]; do sleep 0.1; done
 `
 
 // extReadLines reads a fake-pi record file (absent = empty).
@@ -364,6 +417,12 @@ func TestPiSubagentLifecycleAbortGroup(t *testing.T) {
 	if res.Thrown == "" || !strings.Contains(strings.ToLower(res.Thrown), "abort") {
 		t.Fatalf("an aborted call must surface as an error, got thrown=%q result=%v", res.Thrown, res.Result)
 	}
+	if strings.Contains(res.Thrown, "cleanup incomplete") {
+		t.Fatalf("a clean stop of an ignore-TERM child must not report cleanup incomplete: %q", res.Thrown)
+	}
+	if res.ChildDeadAtResolve == nil || !*res.ChildDeadAtResolve {
+		t.Fatalf("the ignore-TERM child must be PROVED dead at the moment the call resolved (the KILL), got %v", res.ChildDeadAtResolve)
+	}
 	if res.ResolvedMs < 400 {
 		t.Fatalf("resolved after %dms: the KILL must wait out the TERM grace (400ms injected), not resolve on send", res.ResolvedMs)
 	}
@@ -396,6 +455,7 @@ func TestPiSubagentLifecycleAbortGroup(t *testing.T) {
 	cmd.Env = append(os.Environ(),
 		"PATH="+filepath.Join(dir, "bin")+":"+os.Getenv("PATH"),
 		"PI_CODING_AGENT_DIR="+filepath.Join(dir, "agentdir"),
+		"FAKEPI_SENTINEL="+filepath.Join(dir, "sentinel"),
 		"TMPDIR="+driverTmp,
 	)
 	if err := cmd.Start(); err != nil {
@@ -438,6 +498,12 @@ func TestPiSubagentLifecycleAbortGroup(t *testing.T) {
 	if res.ResolvedMs >= 5000 {
 		t.Fatalf("a TERM-honoured child must not wait out the whole grace (resolved %dms)", res.ResolvedMs)
 	}
+	if strings.Contains(res.Thrown, "cleanup incomplete") {
+		t.Fatalf("a clean TERM stop must not report cleanup incomplete: %q", res.Thrown)
+	}
+	if res.ChildDeadAtResolve == nil || !*res.ChildDeadAtResolve {
+		t.Fatalf("the child must be proved dead at resolve, got %v", res.ChildDeadAtResolve)
+	}
 
 	// (d) pre-aborted: the controller is already aborted when the tool
 	// runs — no child may be spawned at all.
@@ -466,11 +532,13 @@ func TestPiSubagentLifecycleAbortGroup(t *testing.T) {
 // env markers.
 const fakePiEscapees = `#!/bin/bash
 echo "started" >> "$FAKEPI_DIR/started"
+echo $$ >> "$FAKEPI_DIR/pids"
+echo $$ > "$FAKEPI_DIR/child.pid"
 echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"working"}]}}'
 setsid sleep 300 &
 sh -c 'sh -c "sleep 300 < /dev/null > /dev/null 2>&1 &" '
 trap 'echo TERM >> "$FAKEPI_DIR/signals"' TERM
-while kill -0 "$PPID" 2>/dev/null; do sleep 0.1; done
+while [ -f "$FAKEPI_SENTINEL" ]; do sleep 0.1; done
 `
 
 // extMarkerPids scans /proc for live processes whose environment carries
@@ -560,6 +628,12 @@ func TestPiSubagentLifecycleDescendants(t *testing.T) {
 	if res.Thrown == "" || !strings.Contains(strings.ToLower(res.Thrown), "abort") {
 		t.Fatalf("an aborted call must surface as an error, got thrown=%q", res.Thrown)
 	}
+	if strings.Contains(res.Thrown, "cleanup incomplete") {
+		t.Fatalf("a stop that collected the whole tree must not report cleanup incomplete: %q", res.Thrown)
+	}
+	if res.ChildDeadAtResolve == nil || !*res.ChildDeadAtResolve {
+		t.Fatalf("the child must be proved dead at resolve (not by this driver exiting), got %v", res.ChildDeadAtResolve)
+	}
 
 	// settle: the sweep is done when the call resolved, but give the
 	// kernel a bounded moment before reading the process list.
@@ -581,10 +655,12 @@ func TestPiSubagentLifecycleDescendants(t *testing.T) {
 // shapes as u2 and idles past any short timeout.
 const fakePiTimeoutVictim = `#!/bin/bash
 echo "started" >> "$FAKEPI_DIR/started"
+echo $$ >> "$FAKEPI_DIR/pids"
+echo $$ > "$FAKEPI_DIR/child.pid"
 echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"working"}]}}'
 setsid sleep 300 &
 trap 'echo TERM >> "$FAKEPI_DIR/signals"' TERM
-while kill -0 "$PPID" 2>/dev/null; do sleep 0.1; done
+while [ -f "$FAKEPI_SENTINEL" ]; do sleep 0.1; done
 `
 
 // extResultDetails digs result.details.results[0] out of the driver's
@@ -720,6 +796,12 @@ func TestPiSubagentLifecycleTimeout(t *testing.T) {
 	}
 	if res.ResolvedMs < 1000 {
 		t.Fatalf("the timer must run the full timeoutSeconds (resolved %dms)", res.ResolvedMs)
+	}
+	if strings.Contains(extResultText(res), "cleanup incomplete") {
+		t.Fatalf("a timeout whose stop collected the whole tree must not report cleanup incomplete: %q", extResultText(res))
+	}
+	if res.ChildDeadAtResolve == nil || !*res.ChildDeadAtResolve {
+		t.Fatalf("the timed-out child must be proved dead at resolve (not by this driver exiting), got %v", res.ChildDeadAtResolve)
 	}
 	// settle, then: only the sibling call-marker process may remain.
 	deadline := time.Now().Add(3 * time.Second)
