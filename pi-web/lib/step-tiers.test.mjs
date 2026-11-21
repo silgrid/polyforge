@@ -18,9 +18,9 @@ import { createJiti } from "jiti";
 const jiti = createJiti(import.meta.url);
 const m = await jiti.import("./step-tiers.ts");
 
-test("the module is browser-safe: it imports nothing at runtime", async () => {
+test("the module is browser-safe: its only import is the fellow schema module", async () => {
   const source = await readFile(new URL("./step-tiers.ts", import.meta.url), "utf8");
-  assert.doesNotMatch(source, /^\s*import\s+(?!type\b)/m, "no runtime import");
+  assert.doesNotMatch(source, /^\s*import\s+(?!type\b)(?!.*polyforge-config-schema)/m, "no runtime import but the schema module");
   assert.doesNotMatch(source, /from\s+"node:/, "no node built-in");
   assert.doesNotMatch(source, /\brequire\(/, "no require");
 });
@@ -31,7 +31,9 @@ test("parseStepTierCandidate mirrors pf's candidate grammar", () => {
   assert.deepEqual(m.parseStepTierCandidate("claude:opus"), { harness: "claude", model: "opus", effort: "" });
   // claude's own names may carry colons: only a valid effort suffix splits
   assert.deepEqual(m.parseStepTierCandidate("claude:us.anthropic.claude-x-v1:0"), { harness: "claude", model: "us.anthropic.claude-x-v1:0", effort: "" });
-  for (const bad of ["", "pi:", "pi: :high", "foo:model", "acme/one", "pi:acme/one:high:low", "claude:opus:off", "pi:acme/one:", "x"]) {
+  // pf keeps a trailing colon (only a valid effort suffix splits — harness.go)
+  assert.deepEqual(m.parseStepTierCandidate("pi:acme/one:"), { harness: "pi", model: "acme/one:", effort: "" });
+  for (const bad of ["", "pi:", "pi: :high", "foo:model", "acme/one", "pi:acme/one:high:low", "claude:opus:off", "x"]) {
     assert.equal(m.parseStepTierCandidate(bad), null, `refused: ${JSON.stringify(bad)}`);
   }
 });
@@ -133,9 +135,8 @@ test("the picker groups: default first then alphabetical, an invalid reference m
     ] },
     { tier: null, candidates: [
       { value: "pi:c/three", invalid: false },
-      { value: "claude:opus", invalid: false },
     ] },
-  ], "default first, the rest alphabetical; a catalog candidate no defined model answers is invalid; the defined models no candidate covers are the unset group (opus is covered only at an effort, so it is NOT unset)");
+  ], "default first, the rest alphabetical; a catalog candidate no defined model answers is invalid; the defined models no candidate covers are the unset group (opus is covered by its effort entry, so it is NOT unset)");
   assert.deepEqual(m.stepTierInvalidReferences(CATALOG, defined), ["pi:b/two"]);
   // a claude probe failure leaves the alias fallback: default itself is covered
   assert.deepEqual(m.stepTierInvalidReferences([{ tier: "default", candidates: ["claude:default"] }], { pi: [], claude: ["default"] }), []);
