@@ -160,38 +160,36 @@ class CloseTriageCase(unittest.TestCase):
 
     def close_units_of(self, name: str, base: Dict[str, str], feature: Dict[str, str],
                        **report_extra: Any) -> Dict[str, Dict[str, Any]]:
-        code, res = self.close_of(name, base, feature, **report_extra)
-        del code
+        _code, res = self.close_of(name, base, feature, **report_extra)
         return close_units(res)
 
     def close_of(self, name: str, base: Dict[str, str], feature: Dict[str, str],
                   **report_extra: Any) -> Tuple[int, Dict[str, Any]]:
         from .test_build_scoped_close import run_close
         self.root = self.sub(name)
-        fx = Fixture(self.root, {"app": base})
-        fx.commit_in_repo("app", feature, "feature")
+        self.fx = Fixture(self.root, {"app": base})
+        self.fx.commit_in_repo("app", feature, "feature")
         eng = fake_engine(self.root, {"app": report("scoped", cmd_of("tests", "scoped", "pytest"), **report_extra)})
-        out = os.path.join(fx.capsule, "close.json")
-        return run_close(fx.capsule, "app", eng, out, env=self.env())
+        out = os.path.join(self.fx.capsule, "close.json")
+        return run_close(self.fx.capsule, "app", eng, out, env=self.env())
 
-    def base_of(self, name: str, base: Dict[str, str], feature: Dict[str, str]) -> str:
-        """The fixture's merge-base, read from the repo itself (the expected
-        baseline, derived independently of the implementation)."""
-        self.root = self.sub(name)
-        fx = Fixture(self.root, {"app": base})
-        fx.commit_in_repo("app", feature, "feature")
+    def merge_base(self) -> str:
+        """The fixture the last close_of/run_repo_mode ran on — its own
+        merge-base, the expected baseline, read from the repo itself so
+        two fixtures' never-identical commit shas cannot race the
+        expectation (the units check's first red, u4#1)."""
         from .verifyfix import git_t
-        return git_t(fx.repo("app"), "merge-base", "HEAD", "origin/main").strip()
+        return git_t(self.fx.repo("app"), "merge-base", "HEAD", "origin/main").strip()
 
     def run_repo_mode(self, name: str, base: Dict[str, str], feature: Dict[str, str]) -> Tuple[int, Dict[str, Any]]:
         """fast_checks.py --repo (the per-unit bar, the gate's own command)
         over the fixture; its exit and its result file."""
         self.root = self.sub(name)
-        fx = Fixture(self.root, {"app": base})
-        fx.commit_in_repo("app", feature, "feature")
+        self.fx = Fixture(self.root, {"app": base})
+        self.fx.commit_in_repo("app", feature, "feature")
         eng = fake_engine(self.root, {"app": report("scoped", cmd_of("tests", "fast", "pytest"))})
-        out = os.path.join(fx.capsule, "fast.json")
-        argv = [sys.executable, FAST_CHECKS, "--capsule", fx.capsule, "--repo", "app",
+        out = os.path.join(self.fx.capsule, "fast.json")
+        argv = [sys.executable, FAST_CHECKS, "--capsule", self.fx.capsule, "--repo", "app",
                 "--engine", eng, "--deadline", "10m", "--out", out]
         c = subprocess.run(argv, capture_output=True, text=True, env=self.env())
         if not os.path.exists(out):
@@ -324,11 +322,10 @@ class PreExistingOnBaseTest(CloseTriageCase):
     and the base worktree is gone again."""
 
     def test_same_signature_on_base_and_head_is_pre_existing(self) -> None:
-        from .test_build_scoped_close import run_close
         base = {"tests/test_a.py": "def test_old(): # FAIL assert old breakage\n"}
         feature = {"c.txt": "mine\n"}
-        want_base = self.base_of("expect", base, feature)
         code, res = self.close_of("run", base, feature)
+        want_base = self.merge_base()
         self.assertEqual(code, 0, res.get("summary"))
         sel = (res["details"].get("selected") or {}).get("app") or {}
         self.assertEqual(sel.get("status"), "pre_existing", sel)
@@ -363,8 +360,8 @@ class ThisChangeTest(CloseTriageCase):
     def test_a_test_the_base_lacks_is_this_change(self) -> None:
         base = {"tests/test_a.py": "def test_ok():\n"}
         feature = {"tests/test_b.py": "def test_new(): # FAIL assert new breakage\n"}
-        want_base = self.base_of("expect-lacks", base, feature)
         code, res = self.close_of("lacks", base, feature)
+        want_base = self.merge_base()
         self.assertEqual(code, 1, res.get("summary"))
         sel = (res["details"].get("selected") or {}).get("app") or {}
         self.assertEqual(sel.get("status"), "red")
@@ -484,8 +481,8 @@ class RepoModeTest(CloseTriageCase):
     def test_a_pre_existing_red_passes_the_repo_mode_check(self) -> None:
         base = {"tests/test_a.py": "def test_old(): # FAIL assert old breakage\n"}
         feature = {"c.txt": "mine\n"}
-        want_base = self.base_of("expect-repo", base, feature)
         code, res = self.run_repo_mode("repo-pass", base, feature)
+        want_base = self.merge_base()
         self.assertEqual(code, 0, res.get("summary"))
         self.assertEqual(res.get("verdict"), "pass")
         reds = res["details"].get("reds") or []
@@ -499,8 +496,8 @@ class RepoModeTest(CloseTriageCase):
     def test_a_this_change_red_keeps_the_repo_mode_check_red(self) -> None:
         base = {"tests/test_a.py": "def test_ok():\n"}
         feature = {"tests/test_b.py": "def test_new(): # FAIL assert new breakage\n"}
-        want_base = self.base_of("expect-repo-red", base, feature)
         code, res = self.run_repo_mode("repo-red", base, feature)
+        want_base = self.merge_base()
         self.assertEqual(code, 1, res.get("summary"))
         reds = res["details"].get("reds") or []
         self.assertEqual([r["class"] for r in reds], ["this_change"], reds)
