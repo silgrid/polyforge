@@ -207,7 +207,12 @@ async function runMigration(options: ClaudeMigrationOptions, agentDir: string): 
   const settingsHoldsCustomModels = oldSettings !== null && "customModels" in oldSettings
     && !(Array.isArray(rawCustomModels) && rawCustomModels.length === 0);
   if (existsSync(retired.permissions)) unlinkSync(retired.permissions);
-  if (!settingsHoldsCustomModels && existsSync(retired.settings)) unlinkSync(retired.settings);
+  if (settingsHoldsCustomModels) {
+    // The file stays for the phase — this flow's own fields leave it now.
+    await stripMigratedLaunchFields(agentDir);
+  } else if (existsSync(retired.settings)) {
+    unlinkSync(retired.settings);
+  }
   if (existsSync(retired.settings) || existsSync(retired.permissions)) {
     const landed = migrated.length > 0 ? `migrated ${migrated.join(", ")}; ` : "";
     return { ran: true, summary: `${landed}customModels await the models page's migration` };
@@ -268,6 +273,27 @@ async function markCustomModelsMigrated(agentDir: string, configDir: string): Pr
       [configDir]: { version: 1, done: true },
     },
   }), agentDir);
+}
+
+/**
+ * Removes this flow's already-migrated fields (launchPermissionMode,
+ * includeHookEvents) from the old settings file it must keep (r1#3): the
+ * file stays for the models page's customModels phase, but a later startup
+ * run must find nothing of this flow's left to re-migrate — the old
+ * claude-permissions.json is gone after the first run, so the ask/deny
+ * channel a stored plan was gated on would silently default to ask.
+ */
+async function stripMigratedLaunchFields(agentDir: string): Promise<void> {
+  const retired = retiredClaudeSelfStoredPaths(agentDir);
+  await serializeByKey(RETIRED_SETTINGS_WRITE_CHAIN, retired.settings, async () => {
+    if (!existsSync(retired.settings)) return;
+    const record = readJsonRecord(retired.settings);
+    if (record === null || !("launchPermissionMode" in record) && !("includeHookEvents" in record)) return;
+    const next = { ...record };
+    delete next.launchPermissionMode;
+    delete next.includeHookEvents;
+    writePrivateFileAtomicSync(retired.settings, `${JSON.stringify(next, null, 2)}\n`);
+  });
 }
 
 /** Removes only the customModels key from the old settings file, keeping its other fields (不整份删除旧文件). */
