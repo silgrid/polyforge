@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/silgrid/polyforge/internal/polyforge/components"
@@ -262,17 +263,36 @@ func TestComponentsVerbRollbackSwapsBackThroughTheFace(t *testing.T) {
 	}
 }
 
-// TestComponentsVerbCancelAndStatus pins the two light subcommands:
-// cancel lays the volume's marker (the run's wait consumes it), and
-// status answers the volume's own records — current, previous and the
-// recorded run.
+// holdTransactionLock takes the volume's transaction lock in this very
+// process, the way a live orchestration does (review r2#6: the cancel
+// path tells a live transaction from a dead record by this lock).
+func holdTransactionLock(t *testing.T, root string) *os.File {
+	t.Helper()
+	f, err := os.OpenFile(filepath.Join(root, ".transaction.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+	return f
+}
+
+// TestComponentsVerbCancelAndStatus pins the two light subcommands and
+// review r2#6's recovery: a LIVE transaction's cancel lays the marker
+// (the wait consumes it); a record whose transaction lock has no
+// holder is an interrupted run — cancel rewrites it failed, clears the
+// markers and asks the daemon to restart (the drain's only end); and
+// status answers the volume's own records.
 func TestComponentsVerbCancelAndStatus(t *testing.T) {
 	root := componentsRoot(t)
 	setWorkstationVars(t, root)
 	d, env := daemonForComponents(t)
 
-	// a waiting run: cancel lays the volume's marker — the waiting
+	// a waiting LIVE run: cancel lays the volume's marker — the waiting
 	// transaction consumes it and asks for the daemon restart itself.
+	lock := holdTransactionLock(t, root)
 	if err := components.WriteUpgradeStatus(root, &components.UpgradeStatus{
 		Operation: components.OperationUpgrade, State: components.UpgradeStateWaiting,
 		Phase: "drain", From: "v0.2.4", To: "v0.2.5",
@@ -292,39 +312,69 @@ func TestComponentsVerbCancelAndStatus(t *testing.T) {
 		}
 	}
 
-	// the waiting transaction consumes the marker, restarts the daemon
-	// and records the stand-down (the run's own writes, simulated
-	// here): the next cancel sees no waiting run.
+	// the live run ends (its lock goes with it) and leaves a stale
+	// RUNNING record: the record outlived its run, so cancel recovers
+	// (review r2#6) — the record becomes the interruption it is, the
+	// markers go, and the daemon restart clears any drain.
+	_ = lock.Close()
+	if err := os.Remove(filepath.Join(root, ".transaction.lock")); err != nil {
+		t.Fatal(err)
+	}
 	if err := components.ClearUpgradeCancel(root); err != nil {
 		t.Fatal(err)
 	}
+	if err := components.RequestUpgradeForce(root); err != nil {
+		t.Fatal(err)
+	}
 	if err := components.WriteUpgradeStatus(root, &components.UpgradeStatus{
-		Operation: components.OperationUpgrade, State: components.UpgradeStateCancelled,
-		Phase: "drain", From: "v0.2.4", To: "v0.2.4",
+		Operation: components.OperationUpgrade, State: components.UpgradeStateRunning,
+		Phase: "stage", From: "v0.2.4", To: "v0.2.5",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	// no waiting run: the marker a crashed run might have left is
-	// cleared and the daemon is asked to restart — the documented
+	nBefore := len(d.rec.all())
+	code, _, stderr = runPf(t, env, "components", "cancel")
+	if code != 0 {
+		t.Fatalf("components cancel of an interrupted run: exit %d (%s)", code, stderr)
+	}
+	if components.UpgradeCancelRequested(root) {
+		t.Fatal("recovering an interrupted run must clear the stale cancel marker")
+	}
+	if _, err := os.Stat(filepath.Join(root, "upgrade-force")); err == nil {
+		t.Fatal("recovering an interrupted run must clear the stale force marker")
+	}
+	s, err := components.ReadUpgradeStatus(root)
+	if err != nil || s == nil || s.State != components.UpgradeStateFailed || !strings.Contains(s.Error, "中断") {
+		t.Fatalf("the interrupted record must be rewritten failed naming the interruption: %+v (%v)", s, err)
+	}
+	posts := len(d.rec.all()) - nBefore
+	if posts < 1 {
+		t.Fatal("recovering an interrupted run must ask the daemon to restart (the drain ends with it)")
+	}
+
+	// no busy record at all: the marker a crashed run might have left
+	// is cleared and the daemon is asked to restart — the documented
 	// recovery for a drain nothing stands down.
 	if err := components.RequestUpgradeCancel(root); err != nil {
 		t.Fatal(err)
 	}
 	code, _, stderr = runPf(t, env, "components", "cancel")
 	if code != 0 {
-		t.Fatalf("components cancel without a waiting run: exit %d (%s)", code, stderr)
+		t.Fatalf("components cancel without a busy run: exit %d (%s)", code, stderr)
 	}
 	if components.UpgradeCancelRequested(root) {
-		t.Fatal("cancel without a waiting run must clear a stale marker")
+		t.Fatal("cancel without a busy run must clear a stale marker")
 	}
 	seen := map[string]bool{}
 	for _, rec := range d.rec.all() {
 		seen[rec.Method+" "+rec.Path] = true
 	}
 	if !seen["POST /ops/restart"] {
-		t.Fatal("cancel without a waiting run must ask the daemon to restart (the drain ends with it)")
+		t.Fatal("cancel without a busy run must ask the daemon to restart (the drain ends with it)")
 	}
 
+	// the volume's record keeps the interrupted run's failed shape for
+	// the status read below (the recovery's own write).
 	code, out, stderr := runPf(t, env, "--json", "components", "status")
 	if code != 0 {
 		t.Fatalf("components status: exit %d (%s)", code, stderr)
@@ -340,8 +390,8 @@ func TestComponentsVerbCancelAndStatus(t *testing.T) {
 	if got.Current != "v0.2.4" || got.Previous != nil {
 		t.Fatalf("components status --json answered current=%q previous=%v", got.Current, got.Previous)
 	}
-	if got.Status == nil || got.Status.State != components.UpgradeStateCancelled {
-		t.Fatalf("status must answer the volume's recorded run: %+v", got.Status)
+	if got.Status == nil || got.Status.State != components.UpgradeStateFailed || !strings.Contains(got.Status.Error, "中断") {
+		t.Fatalf("status must answer the volume's recorded run (the recovery's failed record): %+v", got.Status)
 	}
 }
 
