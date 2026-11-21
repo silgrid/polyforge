@@ -6,8 +6,12 @@
  * grouping the shared candidate picker. pf's Host file stays the only truth
  * (`[step_tiers]`, one `step_tiers.<tier>` key per tier, its value a list of
  * `<harness>:<model>[:<effort>]` candidates — internal/polyforge/cli/
- * step_tiers.go); nothing here reads or writes a file.
+ * step_tiers.go); nothing here reads or writes a file. Its one import is
+ * the fellow browser-safe schema module (the tier-name grammar is one fact
+ * there), so this module never enters a server-only dependency chain.
  */
+
+import { parseStepTierKey } from "./polyforge-config-schema";
 
 /** A catalog candidate `<harness>:<model>[:<effort>]` in its parsed form. */
 export interface StepTierCandidate {
@@ -67,8 +71,14 @@ export interface StepTierItem {
  *  route's items here; a key with a bad tier name or a non-list value is
  *  not a catalog tier). */
 export function stepTierItems(items: ReadonlyArray<{ key: string; value?: unknown }>): StepTierItem[] {
-  void items;
-  return [];
+  const out: StepTierItem[] = [];
+  for (const item of items) {
+    const tier = parseStepTierKey(item.key);
+    if (tier === null) continue;
+    if (!Array.isArray(item.value) || item.value.some((entry) => typeof entry !== "string")) continue;
+    out.push({ tier, candidates: item.value as string[] });
+  }
+  return out;
 }
 
 /** A row's tier view across its harnesses. */
@@ -84,29 +94,73 @@ export interface StepTierWrite {
   candidates: string[];
 }
 
-/** The tier names covering one model identity, in display order. */
+/** The entries of one tier's list that name the identity (their exact
+ *  strings, efforts included), in list order, deduped. */
+function identityEntries(candidates: readonly string[], identity: { harness: "pi" | "claude"; model: string }): string[] {
+  const out: string[] = [];
+  for (const candidate of candidates) {
+    const parsed = parseStepTierCandidate(candidate);
+    if (parsed && parsed.harness === identity.harness && parsed.model === identity.model && !out.includes(candidate)) out.push(candidate);
+  }
+  return out;
+}
+
+/** The display order the ticket settled: `default` first, the rest
+ *  alphabetical (85b's own list order). */
+export function stepTierDisplayOrder(tiers: readonly string[]): string[] {
+  return [...tiers].sort((a, b) => (a === b ? 0 : a === "default" ? -1 : b === "default" ? 1 : a < b ? -1 : 1));
+}
+
+/** The tiers covering one model identity, in display order (default
+ *  first, then the 85b catalog's alphabetical order). */
 export function stepTierState(catalog: ReadonlyArray<StepTierItem>, identity: { harness: "pi" | "claude"; model: string }): string[] {
-  void catalog;
-  void identity;
-  return [];
+  const tiers: string[] = [];
+  for (const item of catalog) {
+    if (identityEntries(item.candidates, identity).length > 0) tiers.push(item.tier);
+  }
+  return stepTierDisplayOrder(tiers);
 }
 
 /** The row's display state: every harness the same single tier (all), no
  *  harness set (unset), or the per-harness listing (specific). */
 export function stepTierRowView(harnesses: readonly string[], perHarness: Readonly<Record<string, readonly string[]>>): StepTierRowView {
-  void harnesses;
-  void perHarness;
-  return { kind: "unset" };
+  const per = harnesses.map((harness) => ({ harness, tiers: [...(perHarness[harness] ?? [])] }));
+  if (per.every((entry) => entry.tiers.length === 0)) return { kind: "unset" };
+  const single = per.every((entry) => entry.tiers.length === 1) && new Set(per.map((entry) => entry.tiers[0])).size === 1;
+  if (single) return { kind: "all", tier: per[0].tiers[0] };
+  return { kind: "specific", per };
 }
 
 /** The key writes that move one harness's model identity to a target tier
- *  (or unset it): add-first, effort entries as they are, a vacated tier
- *  unset. */
+ *  (or unset it): the add to the target comes first (a crash between the
+ *  two keys leaves a duplicate, never a loss — the ticket's 先加后删), the
+ *  identity's effort entries move exactly as they are, and a tier the
+ *  removal would leave empty unsets (pf refuses an empty list). A no-op
+ *  move plans nothing. */
 export function stepTierWritePlan(catalog: ReadonlyArray<StepTierItem>, identity: { harness: "pi" | "claude"; model: string }, target: string | null): StepTierWrite[] {
-  void catalog;
-  void identity;
-  void target;
-  return [];
+  const entries: string[] = [];
+  for (const item of catalog) {
+    for (const entry of identityEntries(item.candidates, identity)) {
+      if (!entries.includes(entry)) entries.push(entry);
+    }
+  }
+  const plan: StepTierWrite[] = [];
+  if (target !== null) {
+    const current = catalog.find((item) => item.tier === target)?.candidates ?? [];
+    const next = [...current];
+    for (const entry of entries) if (!next.includes(entry)) next.push(entry);
+    if (next.length !== current.length) {
+      plan.push({ action: "set", tier: target, candidates: next });
+    }
+  }
+  for (const item of catalog) {
+    if (target !== null && item.tier === target) continue;
+    const remaining = item.candidates.filter((candidate) => !entries.includes(candidate));
+    if (remaining.length === item.candidates.length) continue;
+    if (remaining.length === 0) plan.push({ action: "unset", tier: item.tier, candidates: [] });
+    else plan.push({ action: "set", tier: item.tier, candidates: remaining });
+  }
+  return plan;
 }
 
 /** One picker group: a tier's candidates, or the null tier's defined models
@@ -116,19 +170,53 @@ export interface StepTierPickerGroup {
   candidates: { value: string; invalid: boolean }[];
 }
 
+/** Whether a parsed candidate's identity is a defined model of its
+ *  harness (Q2's identity rule: pi's provider/id, claude's name). */
+function isDefinedIdentity(parsed: { harness: "pi" | "claude"; model: string }, defined: { pi: readonly string[]; claude: readonly string[] }): boolean {
+  return (parsed.harness === "pi" ? defined.pi : defined.claude).includes(parsed.model);
+}
+
 /** The catalog candidates no defined model answers (the invalid references
  *  the picker marks and the models page notes), in catalog order. */
 export function stepTierInvalidReferences(catalog: ReadonlyArray<StepTierItem>, defined: { pi: readonly string[]; claude: readonly string[] }): string[] {
-  void catalog;
-  void defined;
-  return [];
+  const out: string[] = [];
+  for (const item of catalog) {
+    for (const candidate of item.candidates) {
+      const parsed = parseStepTierCandidate(candidate);
+      if (parsed && !isDefinedIdentity(parsed, defined)) out.push(candidate);
+    }
+  }
+  return out;
 }
 
 /** The picker's groups: the tiers in display order (default first, then
  *  85b's alphabetical), each with its candidates (an invalid one marked),
  *  then the「未设置」group of defined models no candidate covers. */
 export function stepTierPickerGroups(catalog: ReadonlyArray<StepTierItem>, defined: { pi: readonly string[]; claude: readonly string[] }): StepTierPickerGroup[] {
-  void catalog;
-  void defined;
-  return [];
+  const groups: StepTierPickerGroup[] = [];
+  for (const item of [...catalog].sort((a, b) => (a.tier === b.tier ? 0 : a.tier === "default" ? -1 : b.tier === "default" ? 1 : a.tier < b.tier ? -1 : 1))) {
+    groups.push({
+      tier: item.tier,
+      candidates: item.candidates.map((candidate) => {
+        const parsed = parseStepTierCandidate(candidate);
+        return { value: candidate, invalid: parsed === null ? true : !isDefinedIdentity(parsed, defined) };
+      }),
+    });
+  }
+  const covered = new Set<string>();
+  for (const item of catalog) {
+    for (const candidate of item.candidates) {
+      const parsed = parseStepTierCandidate(candidate);
+      if (parsed && isDefinedIdentity(parsed, defined)) covered.add(`${parsed.harness}:${parsed.model}`);
+    }
+  }
+  const unset: { value: string; invalid: boolean }[] = [];
+  for (const identity of defined.pi) {
+    if (!covered.has(`pi:${identity}`)) unset.push({ value: `pi:${identity}`, invalid: false });
+  }
+  for (const name of defined.claude) {
+    if (!covered.has(`claude:${name}`)) unset.push({ value: `claude:${name}`, invalid: false });
+  }
+  if (unset.length > 0) groups.push({ tier: null, candidates: unset });
+  return groups;
 }
