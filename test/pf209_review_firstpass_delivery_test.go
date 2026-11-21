@@ -496,6 +496,112 @@ func pf209CSV(t *testing.T, path string) map[string]map[string]string {
 	return rows
 }
 
+// TestPF209DeliveryTiers pins AC1: the delivery block's hand-derived
+// values on the ticket's fixture, its CSV columns, and the counterexamples
+// (owner wait deducted, only 503 text counted as 503, an absent session is
+// unknown, the size is taken before sync).
+func TestPF209DeliveryTiers(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Fatalf("python3 is a pf doctor prerequisite and runs this tool: %v", err)
+	}
+	caps, events := pf209Fixture(t)
+	csvPath := filepath.Join(t.TempDir(), "runs.csv")
+	text, code := pf209Run(t, caps, "--events", events, "--csv", csvPath)
+	if code != 0 {
+		t.Fatalf("review-firstpass --events: exit %d\n%s", code, text)
+	}
+	for _, want := range []string{
+		"== delivery metrics (events: events) ==",
+		"runs: develop 7, completed 5, events missing 1, not completed (excluded): dv-e (1)",
+		"<=7: n 3 (wall known 2), wall median 47.0m p90 60.0m, per-file median 10.7m pooled 10.4m, rework 0.0% (0.0m of 94.0m), first-pass 3/3",
+		"8-22: n 1 (wall known 1), wall median 140.0m p90 140.0m, per-file median 11.0m pooled 11.0m, rework 22.7% (25.0m of 110.0m), first-pass 0/1",
+		">22: n 1 (wall known 1), wall median 150.0m p90 150.0m, per-file median 6.0m pooled 6.0m, rework 0.0% (0.0m of 150.0m), first-pass 1/1",
+		"size 0: n 1 (wall known 1), wall median 75.0m p90 75.0m, per-file unknown, rework 0.0% (0.0m of 55.0m), first-pass 1/1",
+		"total: n 6 (wall known 5), wall median 75.0m p90 150.0m, per-file median 10.5m pooled 8.0m, rework 6.1% (25.0m of 409.0m), first-pass 5/6",
+		"dispatches by model: flash 20 dispatches, 0 failed (0.0%); glm 6 dispatches, 3 failed (50.0%); opus 10 dispatches, 0 failed (0.0%)",
+		"all 36 dispatches, 3 failed (8.3%)",
+		"candidate switches (model-class): 2, of which 503 text: 1",
+		"estimate vs approved: 3 with estimate, ratio median 2.00 min 1.00 max 3.00; no estimate 2: dv-c, dv-d; estimate unknown 1: dv-f; approved unknown 0",
+		"dv-b: size 10 (8-22), wall 140.0m, owner wait 30.0m, build wall 80.0m, build rounds 2, first review FAIL, review rejections 1, verification rejections 0, rework 25.0m, failed dispatches 1, output 25.0 tok/s, estimate 5 (ratio 2.00)",
+		"dv-a: size 3 (<=7), wall 34.0m, owner wait 0.0m, build wall 20.0m, build rounds 1, first review PASS, review rejections 0, verification rejections 0, rework 0.0m, failed dispatches 0, output 30.0 tok/s, estimate 3 (ratio 1.00)",
+		"dv-c: size 25 (>22), wall 150.0m, owner wait 0.0m, build wall 119.0m, build rounds 1, first review PASS, review rejections 0, verification rejections 0, rework 0.0m, failed dispatches 2, output unknown tok/s, estimate none",
+		"dv-d: size 4 (<=7), wall unknown, owner wait unknown, build wall unknown, build rounds 1, first review PASS, review rejections unknown, verification rejections unknown, rework unknown, failed dispatches unknown, output unknown tok/s, estimate none",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the delivery block must carry %q:\n%s", want, text)
+		}
+	}
+	// The counterexamples: subtracting nothing would print b's 14.0m
+	// per-file and 17.9% rework; counting the 401 as 503 would print
+	// `503 text: 2`; taking the size after sync would print 8.
+	for _, bad := range []string{"per-file median 14.0m", "rework 17.9%", "of which 503 text: 2"} {
+		if strings.Contains(text, bad) {
+			t.Errorf("the delivery block must not carry %q:\n%s", bad, text)
+		}
+	}
+	if strings.Contains(text, "dv-b: size 8 ") {
+		t.Errorf("dv-b's approved size is the last build before sync (10), not the first round's 8:\n%s", text)
+	}
+	if !strings.Contains(text, "dv-f: size 0 (0), wall 75.0m, owner wait 20.0m, build wall 40.0m, build rounds 1, first review PASS, review rejections 0, verification rejections 0, rework 0.0m, failed dispatches 0, output unknown tok/s, estimate unknown") {
+		t.Errorf("dv-f (answer, no redispatch, then step_done; size 0; estimate unknown) is missing:\n%s", text)
+	}
+	// The no-redispatch shape: ending the dispatch at awaiting_owner
+	// would leave dv-f's build wall at 10.0m instead of 40.0m.
+	if strings.Contains(text, "dv-f: size 0 (0), wall 75.0m, owner wait 20.0m, build wall 10.0m") {
+		t.Errorf("an answered dispatch that never re-dispatches must end at step_done, not at awaiting_owner:\n%s", text)
+	}
+	if strings.Contains(text, "dv-c: size 25 (>22), wall 150.0m, owner wait 0.0m, build wall 119.0m, build rounds 1, first review PASS, review rejections 0, verification rejections 0, rework 0.0m, failed dispatches 2, output 0.0 tok/s") {
+		t.Errorf("a run with no session record must print output unknown, never a number:\n%s", text)
+	}
+
+	rows := pf209CSV(t, csvPath)
+	for name, want := range map[string]string{
+		"dv-b": "140.0 30.0 110.0 25.0 10 2 1 0 1 80.0 5 2.00",
+		"dv-c": "150.0 0.0 150.0 0.0 25 1 0 0 2 unknown none unknown",
+		"dv-d": "unknown unknown unknown unknown 4 1 PASS unknown unknown none unknown",
+		"dv-f": "75.0 20.0 55.0 0.0 0 1 PASS unknown 0 unknown unknown",
+	} {
+		r, ok := rows[name]
+		if !ok {
+			t.Fatalf("run %s missing from the CSV (%v)", name, rows)
+		}
+		var got string
+		if name == "dv-b" {
+			got = strings.Join([]string{r["wall_min"], r["owner_wait_min"], r["effective_min"], r["rework_min"],
+				r["approved_files"], r["build_rounds"], r["review_rejections"], r["verification_rejections"],
+				r["failed_dispatches"], r["build_wall_min"], r["estimate_files"], r["estimate_ratio"]}, " ")
+		} else {
+			got = strings.Join([]string{r["wall_min"], r["owner_wait_min"], r["effective_min"], r["rework_min"],
+				r["approved_files"], r["build_rounds"], r["first_review"], r["out_tok_s"],
+				r["failed_dispatches"], r["estimate_files"], r["estimate_ratio"]}, " ")
+			if name == "dv-c" {
+				got = strings.Join([]string{r["wall_min"], r["owner_wait_min"], r["effective_min"], r["rework_min"],
+					r["approved_files"], r["build_rounds"], r["review_rejections"], r["verification_rejections"],
+					r["failed_dispatches"], r["out_tok_s"], r["estimate_files"], r["estimate_ratio"]}, " ")
+			}
+		}
+		if got != want {
+			t.Errorf("run %s CSV = %q, want %q", name, got, want)
+		}
+	}
+
+	// regression: without --events the report is the pre-delivery one.
+	plain, code := pf209Run(t, caps)
+	if code != 0 {
+		t.Fatalf("review-firstpass plain: exit %d\n%s", code, plain)
+	}
+	if strings.Contains(plain, "delivery metrics") {
+		t.Errorf("without --events the report must not grow the delivery block:\n%s", plain)
+	}
+}
+
+func pf209Manifest(t *testing.T, body string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "cohort.json")
+	pf209WriteFile(t, p, body)
+	return p
+}
+
 // TestPF209EstimateParse pins AC3 on polyforge#213's shared sample file:
 // each row is read inside `## 分析` -> `### 1.`, ok rows give N+M and
 // reject rows `none`; the sample file is the only sample set. The extra
