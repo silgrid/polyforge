@@ -17,8 +17,11 @@
 #   sh dist/workstation/smoke.sh podman-verify      # verification via podman (AC2)
 #
 # Prerequisites: a reachable docker engine with compose (the outer
-# engine's CLI shape; podman-compose hosts are a follow-up), curl, and
-# python3 on the host. `boot --with-aihub` and `env` additionally need
+# engine's CLI shape; podman-compose hosts are a follow-up). first-boot's
+# local pass and persist need nothing else on the host (Q6: every JSON /
+# HTTP check runs inside the container, which carries curl and python3);
+# boot --with-aihub, env, podman-verify and first-boot --external still
+# probe from the host and need curl and python3 there. `boot --with-aihub` and `env` additionally need
 # the components volume to carry Pi Web (/components/current/pi-web —
 # 84-components, installed by the first boot from the image's seed); on
 # an empty volume they fail naming that, which is the honest answer: the
@@ -412,7 +415,12 @@ cmd_first_boot() {
 	*) die "first-boot takes no flags (or --external)" ;;
 	esac
 	require_engine
-	require_host_tools
+	# only the external pass needs host tools (its counting stub server
+	# is a host python3 process); the local pass's every JSON/HTTP check
+	# runs inside the container (polyforge#177 Q6)
+	if [ "$external" = yes ]; then
+		require_host_tools
+	fi
 	profile=aihub
 	if [ "$external" = yes ]; then
 		stub_port="${WORKSTATION_SMOKE_STUB_PORT:-38421}"
@@ -496,16 +504,22 @@ PYEOF
 		what=$1
 		fbj=$(record_of)
 		printf 'smoke: first-boot.json (%s) = %s\n' "$what" "$fbj"
-		printf '%s' "$fbj" | python3 -c 'import json,sys
-wants = {"local": ("local", True), "external": ("external", False)}
-mode, want_user_ready = wants[sys.argv[1]]
-d = json.load(sys.stdin)
-assert d.get("phase") == "done", "the phase is %r, want done" % d.get("phase")
-assert d.get("mode") == mode, "the mode is %r, want %s" % (d.get("mode"), mode)
-assert d.get("keyReady") is True, "keyReady must be true after the boot"
-assert d.get("userReady") is want_user_ready, "userReady must be %s in %s mode" % (want_user_ready, mode)
-assert d.get("defaultCell") == "default", "defaultCell must be default"
-' "$mode" || die "the first-boot record is not a completed $mode boot (see the record above)"
+		# POSIX greps over the entrypoint's own compact JSON — no host
+		# python3 (polyforge#177 Q6: the host needs only Docker and the
+		# system sh; the record's shape is the writer's own, pinned by
+		# the record check itself)
+		record_field() {
+			printf '%s' "$fbj" | grep -q "\"$1\": *$2"
+		}
+		record_field phase '"done"' || die "the first-boot record's phase is not done (see the record above)"
+		record_field mode "\"$mode\"" || die "the first-boot record's mode is not $mode (see the record above)"
+		record_field keyReady 'true' || die "keyReady must be true after the boot"
+		if [ "$mode" = local ]; then
+			record_field userReady 'true' || die "userReady must be true in local mode"
+		else
+			record_field userReady 'false' || die "userReady must be false in external mode"
+		fi
+		record_field defaultCell '"default"' || die "defaultCell must be default"
 	}
 
 	if [ "$external" = yes ]; then

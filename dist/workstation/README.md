@@ -45,9 +45,9 @@ environment. Full reference: docs/workstation.md, "The first boot".
 | `containers/containers.conf` | cgroupfs, file events, no container keyrings |
 | `containers/registries.conf` | short names resolve to docker.io |
 | `seccomp.json` + `seccomp.json.sha256` | the pinned seccomp profile the outer engine applies (below) |
-| `compose.yaml` | the outer container's minimal parameter set, the six persistent volumes and the two boot modes (the aihub boot is the default; `workstation-noaihub` the explicit opt-out) |
+| `compose.yaml` | the outer container's minimal parameter set, the six persistent volumes and the two boot modes (the aihub boot is the default; `workstation-noaihub` the explicit opt-out); the image is `${WORKSTATION_IMAGE:-polyforge-workstation:local}` — a published tag runs without any build — and no service carries a fixed `container_name` (the service name and the `workstation` network alias are the stable names) |
 | `Caddyfile` | the optional HTTPS front's config (`--profile https`): local-CA TLS in front of Pi Web |
-| `smoke.sh` | `boot` / `first-boot [--external]` / `env` / `podman-verify` — the acceptance driver |
+| `smoke.sh` | `boot` / `first-boot [--external]` / `persist` / `env` / `podman-verify` — the acceptance driver; `persist` compares the six persisted facts by value across down/up and a new tag, then runs the exported copy (first-boot and persist need only Docker and the system sh on the host) |
 
 ## The pinned seccomp profile
 
