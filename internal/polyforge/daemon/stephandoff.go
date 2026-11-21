@@ -209,8 +209,10 @@ func (sc *stepCall) fastCheckRefusal(spec driver.StepSpec) string {
 	}
 	reposDir := filepath.Join(sc.j.capsuleDir, capsule.DirRepos)
 	var starts map[string]string
-	if st := sc.ex.Steps[sc.j.step]; st != nil && st.StartHeads != nil && st.StartHeads.Round == stepRound(sc.ex, sc.j.step) {
-		starts = st.StartHeads.Heads
+	if sc.ex != nil {
+		if st := sc.ex.Steps[sc.j.step]; st != nil && st.StartHeads != nil && st.StartHeads.Round == stepRound(sc.ex, sc.j.step) {
+			starts = st.StartHeads.Heads
+		}
 	}
 	var problems []string
 	for _, name := range taskrepo.Names(reposDir) {
@@ -252,6 +254,9 @@ func (sc *stepCall) fastCheckProblem(spec driver.StepSpec, name, head string) st
 	if err != nil {
 		return fmt.Sprintf("repos/%s: %s is not a pf-step-result/1 result (%v); run `%s` from the capsule root", name, rel, err, cmd)
 	}
+	if real, err := filepath.EvalSymlinks(abs); err == nil && !insideCapsule(sc.j.capsuleDir, real) {
+		return fmt.Sprintf("repos/%s: %s is not a pf-step-result/1 result (the path leaves the capsule); run `%s` from the capsule root", name, rel, cmd)
+	}
 	var r struct {
 		Schema  string             `json:"schema"`
 		Verdict *string            `json:"verdict"`
@@ -286,7 +291,7 @@ func (sc *stepCall) fastCheckProblem(spec driver.StepSpec, name, head string) st
 func resultSummary(s string) string {
 	s = strings.Join(strings.Fields(s), " ")
 	if r := []rune(s); len(r) > 200 {
-		return string(r[:200]) + "…"
+		return string(r[:199]) + "…"
 	}
 	return s
 }
