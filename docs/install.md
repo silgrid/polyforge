@@ -66,7 +66,8 @@ the host (second argument or `PF_HOST`) decides what a new config points at;
 for a machine running its own aihub use `127.0.0.1`. tmux is the
 daemon's supervision on a host: without it `pf daemon ensure` still starts the daemon,
 unsupervised with a WARNING (`pf doctor`'s "daemon supervision" row says so).
-The workstation container (epic #84) is the one exception: its image
+The workstation container (epic #84 — [workstation](workstation.md)) is the one
+exception: its image
 entry point is `pf supervise`, which watches the daemon (and Pi Web, and
 `--with-aihub` the aihub server) itself — no tmux there, `pf daemon
 ensure` inside that container is a successful no-op and `pf doctor`'s

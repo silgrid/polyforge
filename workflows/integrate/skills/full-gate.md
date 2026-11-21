@@ -123,7 +123,7 @@ through the registration below.
           close → `result` `red`, with the tickets of (a).
        c. Otherwise (at least one red unit, every red unit attributed, no source past two
           rounds): `result` `red`, with the tickets of (a).
-   - **2** — not judged (the docker engine, the image, a gated repo without
+   - **2** — not judged (the container engine, the image, a gated repo without
      `.polyforge/Dockerfile.verify` and no prepared image, a fetch or checkout, the
      deadline) — unless the command's `summary` carries `pf-verify-image-missing`: the
      image the step's `image` parameter names is not present on this machine and is never
@@ -175,7 +175,7 @@ through the registration below.
 
 ## Never
 
-Run the tests, the engine or docker yourself; edit `gate.json`, `triage.json`,
+Run the tests or the container engine yourself; edit `gate.json`, `triage.json`,
 `revert.json` or `batch.json`; register a fix ticket without an acceptance naming its red
 units, or one ticket for two sources; revert, rerun or close red without the owner's
 words; write the green tag by hand; use a hub verb this skill does not name; end your turn
