@@ -129,7 +129,7 @@ test("the step_tiers family parses pf's tier grammar and is Host-only beside the
   for (const key of [...schema.HOST_ONLY_KEYS, "step_tiers.default", "step_tiers.whatever-tier"]) {
     assert.ok(schema.isHostOnlyKey(key), `${key} is Host-only`);
   }
-  for (const key of ["max_concurrent_jobs", "server", "summarize.models", "model.source", "step_tiers", "step_tiers.Bad", "steps.a.b.models", ""]) {
+  for (const key of ["claude_bin", "cell_max_concurrent_jobs", "server", "summarize.models", "model.source", "step_tiers", "step_tiers.Bad", "steps.a.b.models", ""]) {
     assert.ok(!schema.isHostOnlyKey(key), `${JSON.stringify(key)} is not Host-only`);
   }
   // HOST_ONLY_KEYS stays exactly the two fixed lists — the family is a prefix, never an entry
