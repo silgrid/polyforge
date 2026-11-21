@@ -200,6 +200,38 @@ test("a done migration reloads the list; the editor writes the full next list pe
   }
 });
 
+test("a 409 conflict replaces the banner with the fresh preview — no error, the next「合并」carries the new digest (r2#1)", async () => {
+  const state = setup();
+  try {
+    await state.answer(0, PREVIEW);
+    await state.answer(1, modelPayload(["native-keep"]));
+    const merge = findButton(state.hook, "models.claudeCustomMerge");
+    merge.onClick();
+    // The source or target changed while the user looked: the confirm answers
+    // 409 with the fresh preview riding along.
+    await state.answer(2, {
+      status: "conflict",
+      native: [{ model: "native-keep" }, { model: "user-added" }],
+      missing: ["claude-old-1", "claude-late-2"],
+      digest: "a".repeat(64),
+      shadowed: false,
+    }, 409);
+    const text = textOf(state.hook).join("\n");
+    assert.ok(text.includes("claude-late-2"), "the banner kept the stale preview");
+    assert.ok(text.includes("user-added"), "the fresh native rows are missing");
+    assert.ok(!text.includes("409"), `the conflict surfaced as an error: ${text}`);
+    assert.equal(byAttr(state.hook, "data-claude-migration-preview").length, 1, "the banner closed on the conflict");
+    // The next confirm carries the fresh digest, not the stale one.
+    findButton(state.hook, "models.claudeCustomMerge").onClick();
+    await state.answer(3, { status: "done", changed: true, shadowed: false });
+    await state.answer(4, modelPayload(["native-keep", "user-added", "claude-old-1", "claude-late-2"]));
+    assert.deepEqual(state.requestBody(3), { confirm: "a".repeat(64) });
+    assert.equal(byAttr(state.hook, "data-claude-migration-preview").length, 0, "the banner stayed after the fresh confirm");
+  } finally {
+    state.restore();
+  }
+});
+
 test("the editor lists only the user layer's own names — a managed picker never enters the PUT list (r1#1)", async () => {
   const state = setup();
   try {
