@@ -145,7 +145,8 @@ export interface ModelPayload {
    */
   perModelReasoningEffort: Record<string, { neutral: ReasoningEffort | null; raw: string }>;
   providers: ProviderRef[];
-  /** claude's own native modelPicker custom names (claude only; migrated there by #150). */
+  /** claude's own native modelPicker custom names (claude only; written through
+   * the model concept's customModels change since 85a3-3). */
   customModels: string[];
 }
 

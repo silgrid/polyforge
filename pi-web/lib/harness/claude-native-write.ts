@@ -355,6 +355,32 @@ export async function applyClaudePermissionChange(
 // ── the model write (85a3) ────────────────────────────────────────────────
 
 /**
+ * The native picker's refusal for a customModels write, null when its shape
+ * is writable (85a3-3): a modelPicker that exists must be a JSON object whose
+ * options, when present, is an array of rows each with a string `model` —
+ * a bad shape is refused, never overwritten (owner ruling Q3: 坏形状拒写).
+ * The same preflight backs the one-time migration's preview, so the merge and
+ * the preview can never disagree about what is writable.
+ */
+export function claudeModelPickerShapeRefusal(modelPicker: unknown): string | null {
+  if (modelPicker === undefined) return null;
+  if (!isRecord(modelPicker)) {
+    return "modelPicker has an unrecognized shape (expected a JSON object) — refusing to overwrite it";
+  }
+  const options = (modelPicker as { options?: unknown }).options;
+  if (options === undefined) return null;
+  if (!Array.isArray(options)) {
+    return "modelPicker.options has an unrecognized shape (expected an array) — refusing to overwrite it";
+  }
+  for (const option of options) {
+    if (!isRecord(option) || typeof (option as { model?: unknown }).model !== "string") {
+      return "modelPicker.options holds an entry without a model string — refusing to overwrite it";
+    }
+  }
+  return null;
+}
+
+/**
  * The model keys' registered minimum versions (owner ruling Q4: the ticket
  * registers the model keys' minimums; the gate itself recognizes the major):
  * 2.1.312 is the first recorded version that establishes the model and
@@ -478,9 +504,31 @@ export async function applyClaudeModelChange(
         ? { ok: true, summary: level === null ? "effortLevel removed" : `effortLevel = ${level}` }
         : result;
     }
-    case "customModels":
-      // The zero-value skeleton (85a3-3 u1): the change parses and registers
-      // its key floor, but the write itself is not implemented yet.
-      return { ok: false, reason: "the customModels write is not implemented yet" };
+    case "customModels": {
+      // 85a3-3: the full next state of the picker's model names. A surviving
+      // entry keeps its own metadata and position, a new name is appended as
+      // { model }, a dropped name's entry goes; the picker's other fields
+      // (replaceBuiltInOptions, unknown legal fields) stay untouched.
+      const models = change.models;
+      const result = await patchClaudeUserSettings(configDir, (record) => {
+        const refusal = claudeModelPickerShapeRefusal(record.modelPicker);
+        if (refusal !== null) return { refuse: refusal };
+        const existing = isRecord(record.modelPicker) && Array.isArray(record.modelPicker.options)
+          ? record.modelPicker.options as Record<string, unknown>[]
+          : [];
+        const kept = existing.filter((option) => models.includes(option.model as string));
+        const appended = models.filter((name) => !existing.some((option) => option.model === name));
+        return {
+          ...record,
+          modelPicker: {
+            ...(isRecord(record.modelPicker) ? record.modelPicker : {}),
+            options: [...kept, ...appended.map((model) => ({ model }))],
+          },
+        };
+      });
+      return result.ok
+        ? { ok: true, summary: models.length > 0 ? `modelPicker.options = ${models.join(", ")}` : "modelPicker.options = [] (the legal empty picker)" }
+        : result;
+    }
   }
 }
