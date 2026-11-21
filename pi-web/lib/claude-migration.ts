@@ -229,3 +229,49 @@ function applyClaudeModelPicker(models: string[], configDir: string): Promise<{ 
 export function resetClaudeMigrationForTests(): void {
   inFlight.clear();
 }
+
+// ── the customModels phase (85a3-3) ────────────────────────────────────────
+// Q2/Q3/Q4 (the pre-filing analysis's settled execution, owner 2026-11-19):
+// the models page's protected POST — not the startup flow — migrates the
+// retired customModels into the native modelPicker. The target empty (the
+// key absent or a legal options: []) migrates at once; non-empty answers a
+// merge preview (the native rows win, only the source's missing names would
+// be appended) and writes nothing until the confirm carries the preview's
+// digest; the source or target changing in between answers a conflict. After
+// the target lands and reads back, only the old file's customModels key is
+// removed (never the whole file — 85a4 owns its other fields); an illegal or
+// over-cap source reports a blockage and is kept. The done marker is keyed
+// by the target config root in pi-web-settings.json (the adapter's persistent
+// state; no private key in the native settings).
+
+/** The customModels phase's outcome for the migration POST's first call. */
+export type ClaudeCustomModelsMigrationStatus =
+  | { status: "done"; changed: boolean; shadowed: boolean }
+  | { status: "blocked"; reason: string; shadowed: boolean }
+  | { status: "deferred"; reason: string; shadowed: boolean }
+  | { status: "preview"; native: { model: string; label?: string }[]; missing: string[]; digest: string; shadowed: boolean };
+
+/** The customModels phase's outcome for the confirm call. */
+export type ClaudeCustomModelsMigrationApply =
+  | { status: "done"; changed: boolean; shadowed: boolean }
+  | { status: "blocked"; reason: string; shadowed: boolean }
+  | { status: "deferred"; reason: string; shadowed: boolean }
+  | { status: "conflict"; preview: Extract<ClaudeCustomModelsMigrationStatus, { status: "preview" }> };
+
+/**
+ * The zero-value skeleton (85a3-3 u2): the customModels phase's signatures
+ * exist so the suite's red is its assertions.
+ */
+export async function claudeCustomModelsMigrationStep(
+  _options: ClaudeMigrationOptions = {},
+): Promise<ClaudeCustomModelsMigrationStatus> {
+  return { status: "done", changed: false, shadowed: false };
+}
+
+/** The zero-value skeleton (85a3-3 u2): the confirm's signature alone. */
+export async function applyClaudeCustomModelsMigration(
+  _options: ClaudeMigrationOptions = {},
+  _digest: string,
+): Promise<ClaudeCustomModelsMigrationApply> {
+  return { status: "done", changed: false, shadowed: false };
+}
