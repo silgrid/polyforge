@@ -188,6 +188,10 @@ type WatchPendingQuestion struct {
 //     Evidence its section of artifacts/handoff.md); a message wakes it;
 //   - "write_failed": the pending hub writes of a `done` hand-off could
 //     not be made; the resume replays the writes not made yet;
+//   - "cleanup_failed": a step-end process cleanup could not prove the
+//     step's processes gone (polyforge#200); the resume re-runs the sweep
+//     and continues the way the park's reason says (a kept hand-off
+//     settles, a failed dispatch retries, an open ask re-enters);
 //   - "driver": the driver parked the workflow (a supervision verdict, a
 //     dispatch it could not assemble, an owner's cancel in flight).
 //
