@@ -146,16 +146,26 @@ func Cleanup(t CleanupTarget, bound time.Duration) (*CleanupReport, error) {
 	if t.WIID != "" {
 		rep.Layers = append(rep.Layers, "l4-env-marker")
 		marked := scanEnvMarker(t.WIID, t.DaemonID)
-		for _, id := range marked {
-			signalPID(id.pid, syscall.SIGTERM, rep)
-		}
-		deadline := time.Now().Add(bound)
-		for _, id := range marked {
-			for procExists(id.pid) && time.Now().Before(deadline) {
-				sleepFn(cleanupPoll)
+		sweepMarked(marked, rep, bound)
+		// A marked process's TERM handler can leave a marked child behind
+		// (polyforge#200: a child born only after the first scan, e.g. a
+		// handler that forks before exiting). One bounded re-sweep collects
+		// it — identity-checked, like every layer-4 signal — before the
+		// survivors are judged; only what still refuses to die after it
+		// is reported. The green path pays no extra walk beyond the
+		// survivor check it replaces.
+		for round := 0; round < 2; round++ {
+			rest := scanEnvMarker(t.WIID, t.DaemonID)
+			if len(rest) == 0 {
+				break
 			}
-			if procExists(id.pid) {
-				signalPID(id.pid, syscall.SIGKILL, rep)
+			if round == 0 {
+				rep.Layers = append(rep.Layers, "l4-late-resweep")
+				sweepMarked(rest, rep, bound)
+				continue
+			}
+			for _, id := range rest {
+				rep.Survivors = append(rep.Survivors, id.pid)
 			}
 		}
 	}
@@ -170,11 +180,6 @@ func Cleanup(t CleanupTarget, bound time.Duration) (*CleanupReport, error) {
 			if cur, ok := procIdentOf(id.pid); ok && cur.start == id.start {
 				rep.Survivors = append(rep.Survivors, id.pid)
 			}
-		}
-	}
-	if t.WIID != "" {
-		for _, id := range scanEnvMarker(t.WIID, t.DaemonID) {
-			rep.Survivors = append(rep.Survivors, id.pid)
 		}
 	}
 	if len(rep.Survivors) > 0 {
@@ -319,6 +324,22 @@ func signalPID(pid int, sig syscall.Signal, rep *CleanupReport) {
 	if err := killFn(pid, sig); err == nil && sig == syscall.SIGKILL {
 		rep.Killed = append(rep.Killed, pid)
 	}
+}
+
+// sweepMarked runs the escalating stop over the marked identities: TERM,
+// a bounded wait, KILL, a bounded wait. Every signal is identity-checked
+// (signalIdent), so a pid whose occupant changed between the scan and the
+// signal — pid reuse — is never touched; and the post-KILL wait means the
+// survivor check no longer reads a process that is dying but not yet gone.
+func sweepMarked(marked []procIdent, rep *CleanupReport, bound time.Duration) {
+	for _, id := range marked {
+		signalIdent(id, syscall.SIGTERM, rep)
+	}
+	waitIdents(marked, bound)
+	for _, id := range marked {
+		signalIdent(id, syscall.SIGKILL, rep)
+	}
+	waitIdents(marked, bound)
 }
 
 func waitIdents(ids []procIdent, bound time.Duration) {
