@@ -925,19 +925,11 @@ func TestWorkstationImageEngine(t *testing.T) {
 	if err := exec.Command("docker", "compose", "version").Run(); err != nil {
 		t.Skipf("no docker compose (%v), skipping the real-engine workstation boot", err)
 	}
-	// the workstation is a first-boot machine now (polyforge#176): the
-	// boot is judged on a fresh state, and a dev host's leftover
-	// workstation volumes carry pre-#176 state the boot would
-	// legitimately refuse to serve beside (a cells/default/identity.json
-	// recorded against another AIHub identity domain is the daemon's own
-	// 78). Reset the compose project's volumes first — the operator's
-	// own `smoke.sh boot` run never does this, only the engine
-	// acceptance does. (The compose file's required interpolation
-	// refuses even a `down` without the password, so it carries one
-	// here too.)
-	down := exec.Command("docker", "compose", "-p", "workstation-smoke", "-f", filepath.Join(root, "dist/workstation/compose.yaml"), "--profile", "no-aihub", "down", "-v")
-	down.Env = append(os.Environ(), "PI_WEB_PASSWORD=x")
-	_ = down.Run()
+	// the workstation is a first-boot machine now (polyforge#176), and
+	// the smoke runs under a per-run unique compose project
+	// (polyforge#177), so every engine run starts on fresh volumes by
+	// itself — no pre-reset of a fixed project is needed (or possible)
+	// any more.
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sh", filepath.Join(root, "dist/workstation/smoke.sh"), "boot", "--no-aihub")
@@ -1124,13 +1116,21 @@ func TestWorkstationSmokeProjectIsolation(t *testing.T) {
 	if !strings.Contains(body, "smoke-$(date +%s)-$$") {
 		t.Fatal("polyforge#177: the smoke must derive a per-run unique project (clock + pid) — a fixed project name lets concurrent runs down each other's volumes")
 	}
-	// every docker compose invocation carries the per-run project (the
+	// every docker compose INVOCATION carries the per-run project (the
 	// compose() helper, the env and podman-verify passes and the
-	// first-boot pass's override calls); the bare `docker compose
+	// first-boot pass's compose_ext calls) — comments and die/say
+	// messages merely mention the words, and the bare `docker compose
 	// version` probes touch no project
 	for i, line := range strings.Split(body, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if !strings.Contains(trimmed, "docker compose") || strings.Contains(trimmed, "docker compose version") {
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		invocation := strings.HasPrefix(trimmed, "docker compose") ||
+			strings.HasPrefix(trimmed, "compose ") || strings.HasPrefix(trimmed, "compose()") ||
+			strings.HasPrefix(trimmed, "compose_ext") ||
+			strings.Contains(trimmed, "$(docker compose") || strings.Contains(trimmed, "$(compose ")
+		if !invocation || strings.HasPrefix(trimmed, "docker compose version") {
 			continue
 		}
 		if !strings.Contains(trimmed, `"$smoke_project"`) {
