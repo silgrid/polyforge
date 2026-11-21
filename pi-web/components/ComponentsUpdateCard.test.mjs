@@ -14,8 +14,10 @@ test("组件卡片：显示最终结果、版本与回退入口",()=>{
   const html=renderToStaticMarkup(React.createElement(ComponentsUpdateView,{snapshot:{...snapshot,status:{state,to:"v0.2.5",error:state==="failed"?"校验失败":""}},error:null,onAction:()=>{}}));
   assert.match(html,/v0.2.5/);assert.match(html,/v0.2.4/);assert.match(html,/回到上一版/);
   assert.match(html,state==="done"?/升级成功/:state==="failed"?/校验失败/:state==="waiting-drain"?/等待作业结束/:/正在更新/);
-  // r2#6：运行与等待中都提供取消，中断后的记录才有界面恢复路径。
-  if(state==="running"||state==="waiting-drain") assert.match(html,/取消并重启 daemon/,`state=${state} 必须提供取消入口`);
+  // r2#1：等待中显示「取消并重启 daemon」（真实行为）；运行中的恢复入口换
+  // 成与行为一致的「恢复中断的编排」——是否恢复由 CLI 按锁探测结果决定。
+  if(state==="waiting-drain") assert.match(html,/取消并重启 daemon/);
+  if(state==="running") {assert.match(html,/恢复中断的编排/);assert.doesNotMatch(html,/取消并重启 daemon/);}
  }
 });
 test("组件卡片：断线后自动重读并呈现卷上的最终结果",async()=>{

@@ -312,6 +312,38 @@ func TestComponentsVerbCancelAndStatus(t *testing.T) {
 		}
 	}
 
+	// the SAME live transaction, its record now running (the stage
+	// phase — review r2#1): a cancel there is an honest refusal, never
+	// a marker nobody consumes — the marker's only reader is the drain
+	// wait, so laying one would promise a stand-down that never comes.
+	if err := components.ClearUpgradeCancel(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := components.WriteUpgradeStatus(root, &components.UpgradeStatus{
+		Operation: components.OperationUpgrade, State: components.UpgradeStateRunning,
+		Phase: "stage", From: "v0.2.4", To: "v0.2.5",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	nBefore := len(d.rec.all())
+	code, _, stderr = runPf(t, env, "components", "cancel")
+	if code == 0 {
+		t.Fatal("cancel of a live RUNNING transaction must refuse, not promise a stand-down")
+	}
+	if !strings.Contains(stderr, "stage") || !strings.Contains(stderr, "不可取消") {
+		t.Fatalf("the refusal must name the phase and say cancel is unavailable: %s", stderr)
+	}
+	if components.UpgradeCancelRequested(root) {
+		t.Fatal("a refused cancel must lay no marker (nothing would consume it outside the drain wait)")
+	}
+	if len(d.rec.all()) != nBefore {
+		t.Fatal("a refused cancel must not touch the daemon")
+	}
+	s, rerr := components.ReadUpgradeStatus(root)
+	if rerr != nil || s == nil || s.State != components.UpgradeStateRunning || s.Phase != "stage" {
+		t.Fatalf("a refused cancel must leave the live transaction's record alone: %+v (%v)", s, rerr)
+	}
+
 	// the live run ends (its lock goes with it) and leaves a stale
 	// RUNNING record: the record outlived its run, so cancel recovers
 	// (review r2#6) — the record becomes the interruption it is, the
