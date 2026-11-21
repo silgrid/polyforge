@@ -209,8 +209,12 @@ func (m *lifecycleModelService) serve(w http.ResponseWriter, r *http.Request) {
 	var blk block
 	switch {
 	case worker && workerTurns == 1:
+		// the escapee rides a `bash -c '…'` carrier: #214's step guard
+		// (owner ruling Q3) judges only direct commands, and the pid must
+		// be written inside the carrier — the parent's $! never sees the
+		// subshell's background job.
 		blk = block{kind: "tool_use", id: "toolu_w1", name: "bash",
-			text: `{"command":"setsid sleep 600 >/dev/null 2>&1 & echo $! > pf200-grandchild.pid; echo spawned"}`}
+			text: `{"command":"bash -c 'setsid sleep 600 >/dev/null 2>&1 & echo $! > pf200-grandchild.pid'; echo spawned"}`}
 	case worker:
 		blk = block{kind: "text", text: "worker finished"}
 	case stepTurns == 1:
@@ -221,9 +225,11 @@ func (m *lifecycleModelService) serve(w http.ResponseWriter, r *http.Request) {
 			text: `{"command":"cat > handoff-body.md <<'PFEORF'\n` + lifecycleHandoffBody + `PFEORF\npf step handoff --status done --body @handoff-body.md"}`}
 	case stepTurns == 4:
 		// the successor's slow turn: the window the first step's step-end
-		// sweep is judged inside
+		// sweep is judged inside. #214's step guard caps a single sleep at
+		// 3 s, so the 8 s mid-flight window is a bounded loop of short
+		// sleeps (the guard's sanctioned waiting shape).
 		blk = block{kind: "tool_use", id: "toolu_s4", name: "bash",
-			text: `{"command":"echo running > pf200-step2.running; sleep 8; echo done > pf200-step2.finished"}`}
+			text: `{"command":"echo running > pf200-step2.running; for i in $(seq 1 4); do sleep 2; done; echo done > pf200-step2.finished"}`}
 	default:
 		blk = block{kind: "text", text: "handed off"}
 	}
