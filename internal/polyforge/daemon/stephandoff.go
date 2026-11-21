@@ -167,8 +167,14 @@ func (sc *stepCall) laneRefusal(a stepcall.HandoffArgs, lines []stepcall.Line) (
 		if len(missing) > 0 {
 			return fmt.Sprintf("step %s registers the wrap attr(s) %s before it hands off done (the lane's wrap_attrs): run `pf step hub wrap-attrs <name> @<file>` for each, then hand off again", spec.ID, strings.Join(missing, ", ")), true
 		}
-		if why := sc.fastCheckRefusal(spec); why != "" {
-			return why, true
+		// the owner's explicit release (plan-review ruling 1): a done citing
+		// an owner message of this round skips the proof gate; handoffVerb
+		// checks the at and stamp records it on the section. The same path
+		// the spent rewind budget gives a gate's fail.
+		if a.PerOwner == "" {
+			if why := sc.fastCheckRefusal(spec); why != "" {
+				return why, true
+			}
 		}
 	case stepcall.StatusFail:
 		if !spec.Gate {
