@@ -300,7 +300,7 @@ func scanGuardBashResults(lines []string, wantBlocked bool) (bool, string) {
 		}
 		var text strings.Builder
 		for _, c := range rec.Result.Content {
-				text.WriteString(c.Text)
+			text.WriteString(c.Text)
 		}
 		blob := text.String()
 		if wantBlocked {
