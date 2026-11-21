@@ -197,24 +197,48 @@ func runComponents(ctx *Context, fs *flag.FlagSet, args []string) error {
 		if err != nil {
 			return err
 		}
-		if s != nil && s.State == components.UpgradeStateWaiting {
-			// a waiting run consumes the marker itself and asks for the
-			// daemon restart (that restart clears the drain).
+		busy := s != nil && (s.State == components.UpgradeStateRunning || s.State == components.UpgradeStateWaiting)
+		switch {
+		case busy && components.TransactionRunning(root):
+			// a LIVE transaction: the marker is its message — the wait
+			// consumes it and asks for the daemon restart itself.
 			if err := components.RequestUpgradeCancel(root); err != nil {
 				return err
 			}
-			return emitComponents(ctx, map[string]string{"state": components.UpgradeStateWaiting}, "已请求取消，等待中的编排将重启 daemon 后停下")
+			return emitComponents(ctx, map[string]string{"state": s.State}, "已请求取消，等待中的编排将重启 daemon 后停下")
+		case busy:
+			// the record outlived its run (review r2#6: the transaction
+			// lock has no holder): recover — the record becomes the
+			// interruption it is, the markers go, and the daemon restart
+			// clears any drain the dead run left set.
+			if err := components.ClearUpgradeCancel(root); err != nil {
+				return err
+			}
+			if err := components.ClearUpgradeForce(root); err != nil {
+				return err
+			}
+			if err := components.WriteUpgradeStatus(root, &components.UpgradeStatus{
+				Operation: s.Operation, State: components.UpgradeStateFailed, Phase: s.Phase,
+				From: s.From, To: s.To, Error: "编排进程中断：事务锁无持有者，此记录由取消恢复",
+			}); err != nil {
+				return err
+			}
+			if err := componentsFaceFor(ctx).Restart(context.Background()); err != nil {
+				return err
+			}
+			return emitComponents(ctx, map[string]string{"state": components.UpgradeStateFailed}, "编排已中断：状态已改为失败，并已请求 daemon 重启清除排空")
+		default:
+			// no busy record: the marker a crashed run might have left is
+			// cleared and the daemon is asked to restart — the documented
+			// recovery for a drain nothing stands down.
+			if err := components.ClearUpgradeCancel(root); err != nil {
+				return err
+			}
+			if err := componentsFaceFor(ctx).Restart(context.Background()); err != nil {
+				return err
+			}
+			return emitComponents(ctx, map[string]string{"state": components.UpgradeStateCancelled}, "无等待中的编排；已请求 daemon 重启以清除排空")
 		}
-		// nothing waits: a marker a crashed run left is cleared, and the
-		// daemon restart is the documented recovery for a drain nothing
-		// stands down.
-		if err := components.ClearUpgradeCancel(root); err != nil {
-			return err
-		}
-		if err := componentsFaceFor(ctx).Restart(context.Background()); err != nil {
-			return err
-		}
-		return emitComponents(ctx, map[string]string{"state": components.UpgradeStateCancelled}, "无等待中的编排；已请求 daemon 重启以清除排空")
 	case "upgrade":
 		if seed := stringFlag(fs, "seed-dir"); seed != "" && stringFlag(fs, "version") != "" {
 			manifest, err := components.ReadManifest(seed)

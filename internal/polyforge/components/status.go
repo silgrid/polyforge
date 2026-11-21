@@ -155,6 +155,24 @@ func holdTransactionLock(root string) (*os.File, error) {
 	return f, nil
 }
 
+// TransactionRunning answers whether a component transaction holds the
+// volume's transaction lock right now — a LOCK_NB probe: the lock file
+// alone proves nothing (a crashed run leaves it behind), only a held
+// flock does. A probe that cannot run answers true (fail closed: an
+// unreadable root must never be judged abandoned).
+func TransactionRunning(root string) bool {
+	f, err := os.OpenFile(filepath.Join(root, TransactionLockFilename), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return true
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		return true // held by a live transaction
+	}
+	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return false
+}
+
 // clearRunMarkers wipes the request markers a crashed run may have
 // left: a fresh transaction invalidates them, and neither a stale
 // cancel nor a stale force may decide a later run's fate.
