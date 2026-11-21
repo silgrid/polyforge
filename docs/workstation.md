@@ -289,6 +289,8 @@ nothing — when the previous is missing or corrupt, of another channel,
 of a manifest schema this build cannot judge, of another platform, of
 a data layout the data directory has migrated past (the previous
 version's declared `dataLayout` — a version older than the field is
-never machine-judged), or below the running base's floor. A data-layer schema migration is not
-judged by the manifest: back up before upgrading and follow the
-version's migration notes before rolling back.
+never machine-judged), or below the running base's floor. Only a previous version that
+declares its `dataLayout` is judged against the data directory's live
+layout; a version older than the field is never machine-judged — back
+up before upgrading and follow the version's migration notes before
+rolling back to one.

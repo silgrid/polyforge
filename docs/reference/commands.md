@@ -1845,7 +1845,9 @@ upgrade-status.json。执行 `pf components upgrade --version V`，可追加
 `--force` 或 `--seed-dir D`（完整本地版本目录）。省略版本时取渠道最新版。
 `pf components rollback` 回到 previous（previous 声明的 dataLayout 与数据目录
 的 layout-version 不一致时拒绝并提示原因），也支持 `--force`；
-`pf components cancel` 请求取消等待并重启 daemon 清排空。
+`pf components cancel` 请求取消等待并重启 daemon 清排空；记录为 running/waiting
+但事务锁无持有者（编排已中断）时，把记录改写为失败并重启 daemon 以清除排空；
+活事务在排空等待之外（running 阶段）取消会被如实拒绝且不做任何更改。
 所有操作是 Host 级，不传 --profile；宿主模式拒绝，使用 tools/install.sh。
 
 排空拒收新作业（DAEMON-409），等待现有作业结束后继续；下载和 staging

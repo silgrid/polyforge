@@ -363,8 +363,9 @@ type drainWait struct {
 // whether the run was stood down by the cancel marker: the daemon was
 // asked to restart (the drain ends with that restart), the marker was
 // consumed and the status file carries the cancelled record. A caller
-// that went away leaves the drain set (the documented recovery is the
-// daemon restart) and answers its own context's error.
+// that fails after the wait — its own context ending included — has the
+// drain cleared for it (clearDrain asks for the daemon restart), so no
+// failure path leaves the Host refusing new work forever.
 func drainAndWait(ctx context.Context, d *drainWait) (bool, error) {
 	if d.poll <= 0 {
 		d.poll = drainPollDefault

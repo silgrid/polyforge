@@ -8,7 +8,9 @@
 - `pf components upgrade --version V`：下载并核对 SHA256SUMS，准备完整版本，排空后切换。
 - `pf components upgrade --seed-dir D --version V`：使用完整本地种子。
 - `pf components rollback`：交换 current 与 previous，拒绝不兼容 schema、平台、渠道、底座版本或已跨过的数据布局（previous 声明的 dataLayout 与数据目录 layout-version 不符）。
-- `pf components cancel`：取消等待并请求 daemon 重启，清除排空。
+- `pf components cancel`：取消等待并请求 daemon 重启，清除排空。记录为
+  running/waiting 而事务锁无持有者（编排已中断）时，改写为失败并重启 daemon；
+  活事务在排空等待之外取消会被如实拒绝、不做任何更改。
 
 upgrade 与 rollback 支持 `--force`，省略 upgrade 的版本时使用渠道最新版。
 排空期间新作业收到 DAEMON-409；已有作业结束后自动继续。

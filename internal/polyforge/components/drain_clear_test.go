@@ -13,13 +13,13 @@ import (
 // daemon face stops answering mid-wait.
 var errFaceStopped = errors.New("the daemon face stopped answering")
 
-// TestComponentsVerifyAFailedSwitchClearsTheDrain pins review r2#5 /
+// TestComponentsVerifyARefusedSeedNeverLeavesTheDrain pins review r2#5 /
 // AC2's refusal half: a failure AFTER the drain is set must never
 // leave the Host refusing new work forever — the orchestration asks
 // the daemon to restart (the drain's only documented end) and says so
 // in its error. The case: a seed Install refuses (an older version),
 // so nothing switched at all.
-func TestComponentsVerifyAFailedSwitchClearsTheDrain(t *testing.T) {
+func TestComponentsVerifyARefusedSeedNeverLeavesTheDrain(t *testing.T) {
 	root, _ := upgradeFixture(t)
 	older := t.TempDir()
 	writeVersionDir(t, older, seedSpec{version: "v0.2.3", minBase: "v0.2.3"})
