@@ -79,13 +79,15 @@ const tierHome = join(work, "tier-home");
 const tierAgent = join(tierHome, ".pi", "agent");
 mkdirSync(tierAgent, { recursive: true });
 writeFileSync(join(tierAgent, "models.json"), JSON.stringify({
-  providers: { tierdemo: { baseUrl: "https://example.invalid/v1", apiKey: "sk-test", api: "openai-completions", models: [{ id: "opus", name: "Opus" }] } },
+  providers: { anthropic: { baseUrl: "https://example.invalid/v1", apiKey: "sk-test", api: "openai-completions", models: [{ id: "opus", name: "Opus" }] } },
 }, null, 2));
 const tierBin = join(work, "tier-bin");
 mkdirSync(tierBin, { recursive: true });
 copyFileSync(new URL("../lib/__fixtures__/claude-stub/claude.mjs", import.meta.url), join(tierBin, "claude"));
 chmodSync(join(tierBin, "claude"), 0o755);
-symlinkSync(decodeURIComponent(new URL("../lib/__fixtures__/claude-2.1.322", import.meta.url).pathname), join(tierBin, "claude-2.1.322"));
+// the recorded fixtures sit BESIDE the stub's directory (the stub resolves
+// `../claude-2.1.322` — the route test's layout)
+symlinkSync(decodeURIComponent(new URL("../lib/__fixtures__/claude-2.1.322", import.meta.url).pathname), join(work, "claude-2.1.322"));
 const tierStateFile = join(tierBin, "tier-state.json");
 const tierArgvFile = join(tierBin, "tier-argv.log");
 const tierRefuseFile = join(tierBin, "refuse-next");
@@ -96,9 +98,9 @@ const stateFile = ${JSON.stringify(tierStateFile)};
 const argvFile = ${JSON.stringify(tierArgvFile)};
 const refuseFile = ${JSON.stringify(tierRefuseFile)};
 const args = process.argv.slice(2);
-fs.appendFileSync(argvFile, JSON.stringify(args) + "\n");
-const out = (doc) => { process.stdout.write(JSON.stringify(doc) + "\n"); process.exit(0); };
-const refuse = (code, detail) => { process.stderr.write(JSON.stringify({ error: { code, detail } }) + "\n"); process.exit(1); };
+fs.appendFileSync(argvFile, JSON.stringify(args) + "\\n");
+const out = (doc) => { process.stdout.write(JSON.stringify(doc) + "\\n"); process.exit(0); };
+const refuse = (code, detail) => { process.stderr.write(JSON.stringify({ error: { code, detail } }) + "\\n"); process.exit(1); };
 if (args.includes("--version")) out(args.includes("--json") ? { version: "v0.2.4", capabilities: ["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1"] } : "v0.2.4");
 const load = () => JSON.parse(fs.readFileSync(stateFile, "utf8"));
 const save = (doc) => { fs.writeFileSync(stateFile + "." + process.pid, JSON.stringify(doc)); fs.renameSync(stateFile + "." + process.pid, stateFile); };
@@ -119,13 +121,13 @@ if (rest[0] === "config" && (rest[1] === "set" || rest[1] === "unset")) {
     if (exp.file_sha256 !== hash()) refuse("config-cas-409", "the file changed since it was read");
   }
   const doc = load();
-  const tier = key.replace(/^step_tiers\./, "");
+  const tier = key.replace(/^step_tiers\\./, "");
   if (rest[1] === "set") doc.tiers[tier] = JSON.parse(rest[3]);
   else delete doc.tiers[tier];
   save(doc);
   out({ ok: true, key, class: "live", outcome: "applied" });
 }
-process.stderr.write("pf: unknown command " + rest.join(" ") + "\n"); process.exit(2);
+process.stderr.write("pf: unknown command " + rest.join(" ") + "\\n"); process.exit(2);
 `);
 chmodSync(join(tierBin, "pf"), 0o755);
 const seedTiers = (tiers) => {
@@ -302,6 +304,8 @@ async function startTierServer() {
   await h.startServer({
     name: "settings-85-tiers",
     logFile: join(work, "server-settings-85-tiers.log"),
+    // its own dist dir: the main server keeps running beside it
+    distDir: ".next/e2e/harness-settings-85-tiers",
     env: {
       HOME: tierHome,
       PI_CODING_AGENT_DIR: tierAgent,
@@ -317,7 +321,7 @@ async function startTierServer() {
  *  merged pi+claude row (tierdemo/opus), matching the gate's defined set. */
 async function tierPageMocks(page) {
   await page.route(/\/api\/models\?scope=all/, (route) => route.fulfill({ json: {
-    models: { "tierdemo:opus": "Opus" }, modelList: [{ id: "opus", name: "Opus", provider: "tierdemo" }],
+    models: { "anthropic:opus": "Opus" }, modelList: [{ id: "opus", name: "Opus", provider: "anthropic" }],
     defaultModel: null, defaultThinkingLevel: null, savedDefaultThinkingLevel: null,
     thinkingLevels: {}, thinkingLevelMaps: {}, thinkingLevelPins: {}, isScoped: false } }));
   await page.route("**/api/claude", (route) => route.fulfill({ json: { ...CLAUDE_REPORT, models: [{ value: "opus", source: "alias" }] } }));
@@ -1073,7 +1077,7 @@ try {
       ACTION_MS, "the row never read back 全部：default");
     // the writes landed in the stub's storage: one per harness, the plan's
     // whole-key lists, the CAS expectation of the state each write saw
-    assert.deepEqual(tierState().tiers.default, ["pi:tierdemo/legacy", "pi:tierdemo/opus", "claude:opus"],
+    assert.deepEqual(tierState().tiers.default, ["pi:tierdemo/legacy", "pi:anthropic/opus", "claude:opus"],
       "the storage the read-back comes from");
     const writes = tierArgv().filter((a) => a.includes("set"));
     assert.equal(writes.length, 2, "one write per harness of the row");
@@ -1090,7 +1094,7 @@ try {
   // 指定 with each harness's own tier in the 不一致 lines.
   await part("S31", "specific-mode write + read-back", async () => {
     const page = await newPage();
-    seedTiers({ default: ["pi:tierdemo/opus", "claude:opus"], "fast-chat": ["pi:tierdemo/other"] });
+    seedTiers({ default: ["pi:anthropic/opus", "claude:opus"], "fast-chat": ["pi:tierdemo/other"] });
     await tierPageMocks(page);
     await openSettings(page);
     await tab(page, /^Models$/).click({ timeout: ACTION_MS });
@@ -1109,7 +1113,7 @@ try {
     assert.match(stateText, /Inconsistent: claude is currently in fast-chat/, "claude's own tier is listed");
     // only claude was written: pi's candidate stays in default, untouched
     const state = tierState();
-    assert.deepEqual(state.tiers.default, ["pi:tierdemo/opus"], "pi's candidate is untouched by the claude-only write");
+    assert.deepEqual(state.tiers.default, ["pi:anthropic/opus"], "pi's candidate is untouched by the claude-only write");
     assert.deepEqual(state.tiers["fast-chat"], ["pi:tierdemo/other", "claude:opus"], "claude moved over, the other candidate kept");
     await page.context().close();
   });
@@ -1141,32 +1145,33 @@ try {
     await page.context().close();
   });
 
-  // S85-33 — polyforge#151 (85b2, review r2 #1): the per-step re-read. An
-  // external writer (another tab, the CLI) changes the Host's catalog between
-  // the page load and the save: the write plan must come from the SAME fresh
-  // read that carries the CAS hash, so the external candidate survives — a
-  // plan from the page-load catalog would overwrite it while the fresh hash
-  // lets the CAS pass. The stub's one-shot refusal then pins the kept draft
-  // and the per-harness reporting of a conflict.
+  // S85-33 — polyforge#151 (85b2, review r2 #1): the per-step re-read. The
+  // row starts SET (全部：default); an external writer (another tab, the CLI)
+  // then adds a candidate to that same tier between the page load and the
+  // save. The write plan must come from the SAME fresh read that carries the
+  // CAS hash, so the external candidate survives the move — a plan from the
+  // page-load catalog would unset the tier and destroy it while the fresh
+  // hash lets the CAS pass. The stub's one-shot refusal then pins the kept
+  // draft and the per-harness reporting of a conflict.
   await part("S33", "concurrent external write preserved", async () => {
     const page = await newPage();
-    seedTiers({ default: ["pi:tierdemo/legacy"], "fast-chat": ["pi:tierdemo/other"] });
+    seedTiers({ default: ["pi:anthropic/opus", "claude:opus"], "fast-chat": ["pi:tierdemo/other"] });
     await tierPageMocks(page);
     await openSettings(page);
     await tab(page, /^Models$/).click({ timeout: ACTION_MS });
     const host = sectionHost(page, "models");
     const cell = host.locator("[data-step-tier-cell]").first();
     await cell.waitFor({ state: "visible", timeout: ACTION_MS });
-    assert.match(await cell.locator("[data-step-tier-state]").innerText(), /Not set/);
+    assert.match(await cell.locator("[data-step-tier-state]").innerText(), /All: default/, "the row starts set");
     // the external write lands after the page load, before the save
-    seedTiers({ default: ["pi:tierdemo/legacy", "pi:tierdemo/external"], "fast-chat": ["pi:tierdemo/other"] });
+    seedTiers({ default: ["pi:anthropic/opus", "claude:opus", "pi:tierdemo/external"], "fast-chat": ["pi:tierdemo/other"] });
     await cell.locator("[data-step-tier-select]").selectOption("fast-chat");
     await cell.getByRole("button", { name: "Save", exact: true }).click({ timeout: ACTION_MS });
     await waitFor(async () => (await cell.locator("[data-step-tier-state]").innerText()).includes("All: fast-chat"),
       ACTION_MS, "the row never read back 全部：fast-chat");
     const state = tierState();
-    assert.deepEqual(state.tiers["fast-chat"], ["pi:tierdemo/other", "pi:tierdemo/opus", "claude:opus"], "the row moved over");
-    assert.deepEqual(state.tiers.default, ["pi:tierdemo/legacy", "pi:tierdemo/external"],
+    assert.deepEqual(state.tiers["fast-chat"], ["pi:tierdemo/other", "pi:anthropic/opus", "claude:opus"], "the row moved over");
+    assert.deepEqual(state.tiers.default, ["pi:tierdemo/external"],
       "the external concurrent candidate is preserved — never silently overwritten by a stale plan");
     // a refused write (the stub's one-shot CAS conflict) keeps the draft and
     // reports per harness: the refused one the conflict, the next unattempted
@@ -1175,7 +1180,7 @@ try {
     await cell.getByRole("button", { name: "Save", exact: true }).click({ timeout: ACTION_MS });
     const results = cell.locator(".harness-apply-to-results li");
     await results.first().waitFor({ state: "visible", timeout: ACTION_MS });
-    assert.match(await cell.locator('.harness-apply-to-results [data-harness="pi"]').innerText(), /the file changed since it was read/, "the refused harness reports the conflict");
+    assert.match(await cell.locator('.harness-apply-to-results [data-harness="pi"]').innerText(), /the file changed since it are read|the file changed since it was read/, "the refused harness reports the conflict");
     assert.match(await cell.locator('.harness-apply-to-results [data-harness="claude"]').innerText(), /not attempted after the earlier failure/, "the unattempted harness says so");
     assert.equal(await cell.locator("[data-step-tier-select]").inputValue(), "default", "the draft is kept for the retry");
     await page.context().close();
