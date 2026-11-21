@@ -228,9 +228,12 @@ func TestCleanupLayer4ReapsTermSpawnedDescendants(t *testing.T) {
 	// the parent: its TERM handler spawns the late child, and the parent
 	// itself IGNORES TERM until the sweep's KILL — so the child is
 	// deterministically alive before the parent dies (the first shape of
-	// this test raced the re-sweep's scan against the handler, r1).
+	// this test raced the re-sweep's scan against the handler, r1). The
+	// loop's transient sleep runs with the WI marker unset, or the
+	// pre-signal scan below races it (close-scoped r5 caught it: the scan
+	// saw parent + its current sleep).
 	parent := exec.Command("bash", "-c", `trap '"$LATE" & disown' TERM
-while :; do sleep 0.2; done`)
+while :; do env -u PF_WI_ID -u PF_DAEMON_ID sleep 0.2; done`)
 	parent.Env = append(os.Environ(), "PF_WI_ID="+wi, "PF_DAEMON_ID=", "LATE="+lateScript)
 	if err := parent.Start(); err != nil {
 		t.Fatal(err)
