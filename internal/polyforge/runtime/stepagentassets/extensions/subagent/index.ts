@@ -35,6 +35,17 @@ const MAX_CONCURRENCY = 4;
 const COLLAPSED_ITEM_COUNT = 10;
 const PER_TASK_OUTPUT_CAP = 50 * 1024;
 
+// Lifecycle bounds (owner ruling Q4): the stop sequence for an aborted or
+// timed-out child is TERM, a bounded grace, then KILL, then a bounded wait
+// for a PROVED exit. Tests inject shorter limits through the environment.
+function envMillis(name: string, def: number): number {
+	const raw = process.env[name];
+	if (raw && /^\d+$/.test(raw)) return Number.parseInt(raw, 10);
+	return def;
+}
+const termGraceMs = (): number => envMillis("PF_SUBAGENT_TERM_GRACE_MS", 5000);
+const killWaitMs = (): number => envMillis("PF_SUBAGENT_KILL_WAIT_MS", 5000);
+
 function formatTokens(count: number): string {
 	if (count < 1000) return count.toString();
 	if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
@@ -150,7 +161,9 @@ interface SingleResult {
 	agent: string;
 	agentSource: "user" | "project" | "unknown";
 	task: string;
-	exitCode: number;
+	// null = the child died by signal (or its exit could not be proved) —
+	// never a success.
+	exitCode: number | null;
 	messages: Message[];
 	stderr: string;
 	usage: UsageStats;
@@ -180,7 +193,12 @@ function getFinalOutput(messages: Message[]): string {
 }
 
 function isFailedResult(result: SingleResult): boolean {
-	return result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
+	return (
+		result.exitCode === null ||
+		result.exitCode !== 0 ||
+		result.stopReason === "error" ||
+		result.stopReason === "aborted"
+	);
 }
 
 function getResultOutput(result: SingleResult): string {
@@ -352,10 +370,55 @@ async function runSingleAgent(
 
 		args.push(`Task: ${task}`);
 		let wasAborted = false;
+		let unproved = false;
+		let childPid: number | undefined;
 
-		const exitCode = await new Promise<number>((resolve) => {
+		// A pre-aborted call never starts a child (pi 1.5.1+ shape).
+		if (signal?.aborted) {
+			wasAborted = true;
+			throw new Error("Subagent was aborted");
+		}
+
+		const exitCode = await new Promise<number | null>((resolve) => {
 			const invocation = getPiInvocation(args);
-			const proc = spawn(invocation.command, invocation.args, {
+			let proc: ReturnType<typeof spawn>;
+			let settled = false;
+			let exited = false;
+			let escalateTimer: ReturnType<typeof setTimeout> | undefined;
+			let stopTimer: ReturnType<typeof setTimeout> | undefined;
+
+			function finish(code: number | null) {
+				if (settled) return;
+				settled = true;
+				if (escalateTimer) clearTimeout(escalateTimer);
+				if (stopTimer) clearTimeout(stopTimer);
+				if (signal) signal.removeEventListener("abort", abortProcess);
+				resolve(code);
+			}
+
+			// TERM, then KILL after the bounded grace, then a bounded wait for
+			// a proved exit. proc.killed only says a signal was SENT — it is
+			// no proof of anything about an ignore-TERM child, so the exit
+			// events (not the send) decide.
+			function abortProcess() {
+				if (settled || exited) return;
+				wasAborted = true;
+				if (!proc.kill("SIGTERM")) return;
+				escalateTimer = setTimeout(() => {
+					if (!settled && !exited) proc.kill("SIGKILL");
+				}, termGraceMs());
+				stopTimer = setTimeout(() => {
+					// the KILL wait ran out with no proved exit: answer now with a
+					// signal-death exit code and mark the stop UNPROVED, so the
+					// caller reports the leftover instead of a plain abort.
+					if (!settled) {
+						unproved = true;
+						finish(null);
+					}
+				}, termGraceMs() + killWaitMs());
+			}
+
+			proc = spawn(invocation.command, invocation.args, {
 				cwd: cwd ?? defaultCwd,
 				shell: false,
 				stdio: ["ignore", "pipe", "pipe"],
@@ -410,30 +473,32 @@ async function runSingleAgent(
 				currentResult.stderr += data.toString();
 			});
 
+			childPid = proc.pid;
+			proc.on("exit", () => {
+				exited = true;
+			});
 			proc.on("close", (code) => {
 				if (buffer.trim()) processLine(buffer);
-				resolve(code ?? 0);
+				finish(code);
 			});
 
 			proc.on("error", () => {
-				resolve(1);
+				finish(1);
 			});
 
 			if (signal) {
-				const killProc = () => {
-					wasAborted = true;
-					proc.kill("SIGTERM");
-					setTimeout(() => {
-						if (!proc.killed) proc.kill("SIGKILL");
-					}, 5000);
-				};
-				if (signal.aborted) killProc();
-				else signal.addEventListener("abort", killProc, { once: true });
+				if (signal.aborted) abortProcess();
+				else signal.addEventListener("abort", abortProcess, { once: true });
 			}
 		});
 
 		currentResult.exitCode = exitCode;
-		if (wasAborted) throw new Error("Subagent was aborted");
+		if (wasAborted) {
+			if (unproved) {
+				throw new Error(`Subagent was aborted; cleanup incomplete: child pid ${childPid} still running`);
+			}
+			throw new Error("Subagent was aborted");
+		}
 		return currentResult;
 	} finally {
 		if (tmpPromptPath)

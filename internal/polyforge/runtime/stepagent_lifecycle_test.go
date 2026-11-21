@@ -188,9 +188,17 @@ func extRun(t *testing.T, dir string, scenario map[string]any, fakePi string) ex
 	nodeBin, _ := exec.LookPath("node")
 	cmd := exec.Command(nodeBin, "driver.mjs", scenarioPath)
 	cmd.Dir = dir
+	driverTmp, err := os.MkdirTemp("", "pfext-driver-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(driverTmp) })
 	cmd.Env = append(os.Environ(),
 		"PATH="+filepath.Join(dir, "bin")+":"+os.Getenv("PATH"),
 		"PI_CODING_AGENT_DIR="+filepath.Join(dir, "agentdir"),
+		// a hung call never unwinds its prompt temp dir; scope it so the
+		// test still cleans it (the production teardown would).
+		"TMPDIR="+driverTmp,
 	)
 	var outBuf bytes.Buffer
 	cmd.Stdout = &outBuf
@@ -355,7 +363,7 @@ func TestPiSubagentLifecycleAbortGroup(t *testing.T) {
 	// the driver's — observed live from /proc, not from the tool's report.
 	scenario = map[string]any{
 		"params":     workerParams,
-		"deadlineMs": 20000,
+		"deadlineMs": 3000,
 		"env":        map[string]any{"FAKEPI_DIR": dir},
 	}
 	scenarioPath := filepath.Join(dir, "scenario.json")
@@ -366,11 +374,17 @@ func TestPiSubagentLifecycleAbortGroup(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "bin", "pi"), []byte(fakePiIgnoreTERM), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	driverTmp, err := os.MkdirTemp("", "pfext-driver-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(driverTmp) })
 	cmd := exec.Command(nodeBin, "driver.mjs", scenarioPath)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(),
 		"PATH="+filepath.Join(dir, "bin")+":"+os.Getenv("PATH"),
 		"PI_CODING_AGENT_DIR="+filepath.Join(dir, "agentdir"),
+		"TMPDIR="+driverTmp,
 	)
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
