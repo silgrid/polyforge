@@ -1292,3 +1292,151 @@ func TestWorkstationSmokeFirstBootEngine(t *testing.T) {
 		t.Fatalf("polyforge#176: the external run never printed its PASS line:\n%s", out)
 	}
 }
+
+// w535SmokePersist runs `smoke.sh persist` against one stub scenario and
+// answers its combined output and exit status. The scenario carries the
+// six persisted values the container reads back (the harness marker the
+// smoke writes and reads, cli.toml's sentinel line, the workspace file,
+// the AIHub user row, the Podman image id and the components current
+// link+digest), plus the first-boot record for the exported phase's
+// first-boot run.
+func w535SmokePersist(t *testing.T, mutate func(dir string)) (string, error) {
+	t.Helper()
+	defer w535LockSmoke(t)()
+	root := w535Root(t)
+	script := filepath.Join(root, "dist/workstation/smoke.sh")
+	dir := t.TempDir()
+	for name, content := range map[string]string{
+		"first-boot.json":        `{"phase":"done","mode":"local","defaultCell":"default","server":"http://127.0.0.1:8420","userReady":true,"keyReady":true,"imageManaged":true,"updatedAt":"2026-11-20T00:00:00Z"}`,
+		"cell-server.txt":        "http://127.0.0.1:8420\n",
+		"aihub-user.txt":         "usr_persist_stub\n",
+		"podman-image.txt":       "sha256:persist-image-stub\n",
+		"components-current.txt": "releases/v0.2.4-dev.1\n",
+		"components-digest.txt":  "persist-digest-stub\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if mutate != nil {
+		mutate(dir)
+	}
+	bin := t.TempDir()
+	if err := os.Symlink(filepath.Join(root, "test", "testdata", "workstation-smoke-stub", "docker"), filepath.Join(bin, "docker")); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", script, "persist")
+	cmd.Env = []string{
+		"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"HOME=" + os.Getenv("HOME"),
+		"W535_SMOKE_SCENARIO=" + dir,
+		"WORKSTATION_SMOKE_STUB_PORT=38421",
+	}
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// TestWorkstationSmokePersist — the persist pass (polyforge#177, AC2):
+// two down/up cycles and a NEW TAG image must keep the six persisted
+// facts BY VALUE (never existence only), the tag switch rides the up,
+// and the exported copy runs first-boot and persist from an empty
+// directory without building.
+func TestWorkstationSmokePersist(t *testing.T) {
+	root := w535Root(t)
+	if err := exec.Command("sh", "-n", filepath.Join(root, "dist/workstation/smoke.sh")).Run(); err != nil {
+		t.Fatalf("polyforge#177: smoke.sh must parse as POSIX sh: %v", err)
+	}
+	t.Run("the passing persist pass", func(t *testing.T) {
+		out, err := w535SmokePersist(t, nil)
+		if err != nil {
+			t.Fatalf("the persist pass must pass against a healthy scenario:\n%s", out)
+		}
+		// the six items are each named and compared by value
+		for _, item := range []string{"harness login marker", "cli.toml", "workspace file", "AIHub user row", "Podman image", "components current"} {
+			if !strings.Contains(out, item) {
+				t.Fatalf("the persist pass must name and compare %s:\n%s", item, out)
+			}
+		}
+		// two PASS lines: this run and the exported copy's own persist
+		if strings.Count(out, "persist: PASS") < 2 {
+			t.Fatalf("the exported copy must run persist itself:\n%s", out)
+		}
+		if !strings.Contains(out, "first-boot: PASS") {
+			t.Fatalf("the exported copy must run first-boot too:\n%s", out)
+		}
+	})
+	t.Run("the tag switch rides the up and the exported copy never builds", func(t *testing.T) {
+		dir := t.TempDir()
+		out, err := w535SmokePersist(t, func(d string) { dir = d })
+		if err != nil {
+			t.Fatalf("the persist pass must pass:\n%s", out)
+		}
+		tagged, readErr := os.ReadFile(filepath.Join(dir, "docker-tag.log"))
+		if readErr != nil {
+			t.Fatalf("the smoke must tag the image for the new-tag phase (the stub records it):\n%s", out)
+		}
+		retag := strings.TrimSpace(string(tagged))
+		ups, readErr := os.ReadFile(filepath.Join(dir, "compose-up-all.log"))
+		if readErr != nil {
+			t.Fatalf("the stub must record every up's environment:\n%s", out)
+		}
+		if !strings.Contains(string(ups), "WORKSTATION_IMAGE="+retag) {
+			t.Fatalf("the new-tag phase must up with the second tag %s:\n%s", retag, out)
+		}
+		builds, readErr := os.ReadFile(filepath.Join(dir, "compose-build.log"))
+		if readErr != nil {
+			t.Fatalf("the stub must record build invocations:\n%s", out)
+		}
+		if n := strings.Count(strings.TrimSpace(string(builds)), "\n") + 1; n != 1 {
+			t.Fatalf("exactly ONE build belongs to the whole persist pass (the outer local build); the exported copy must run the image as-is, found %d:\n%s", n, out)
+		}
+	})
+	// each sentinel's value must be compared, not its existence: a changed
+	// value after the restart fails the run naming the item
+	for flag, item := range map[string]string{
+		"persist-marker-changed":     "marker",
+		"persist-clitoml-changed":    "cli.toml",
+		"persist-workspace-changed":  "workspace",
+		"persist-aihub-changed":      "AIHub",
+		"persist-podman-changed":     "Podman",
+		"persist-components-changed": "components",
+	} {
+		t.Run("a changed "+item+" fails the run", func(t *testing.T) {
+			out, err := w535SmokePersist(t, func(dir string) {
+				if err := os.WriteFile(filepath.Join(dir, flag), []byte("1"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			})
+			if err == nil {
+				t.Fatalf("a %s whose value changed must fail the run:\n%s", item, out)
+			}
+			if !strings.Contains(out, item) {
+				t.Fatalf("the failure must name the %s:\n%s", item, out)
+			}
+		})
+	}
+	t.Run("a missing published image is an environment failure", func(t *testing.T) {
+		root := w535Root(t)
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "image-missing"), []byte("1"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		bin := t.TempDir()
+		if err := os.Symlink(filepath.Join(root, "test", "testdata", "workstation-smoke-stub", "docker"), filepath.Join(bin, "docker")); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("sh", filepath.Join(root, "dist/workstation/smoke.sh"), "persist")
+		cmd.Env = append(os.Environ(),
+			"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+			"W535_SMOKE_SCENARIO="+dir,
+			"WORKSTATION_IMAGE=polyforge-workstation:published-missing",
+		)
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			t.Fatalf("a missing image must fail the run as an environment prerequisite:\n%s", out)
+		}
+		if !strings.Contains(string(out), "polyforge-workstation:published-missing") {
+			t.Fatalf("the failure must name the missing image:\n%s", out)
+		}
+	})
+}
