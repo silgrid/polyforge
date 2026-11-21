@@ -56,6 +56,14 @@ const textOf = (hook) => nodes(hook).map((node) => {
 const findButton = (hook, match) => nodes(hook).find((node) => node.type === "button" && textOf({ result: node }).join("").includes(match))?.props
   ?? nodes(hook).find((node) => node.type === "button" && JSON.stringify(node.props).includes(match))?.props;
 const byAttr = (hook, attr) => nodes(hook).filter((node) => node.type !== "function" && attr in node.props);
+/** The remove button of one listed custom model's row. */
+const removeButtonOf = (hook, model) => nodes(hook)
+  .filter((node) => node.type === "li")
+  .find((row) => JSON.stringify(row.props).includes(model))
+  && nodes(hook)
+    .filter((node) => node.type === "li" && JSON.stringify(node.props).includes(model))
+    .flatMap((row) => walk(row.props.children))
+    .find((node) => node.type === "button")?.props;
 
 const settle = async () => {
   for (let index = 0; index < 10; index++) await new Promise((resolve) => setImmediate(resolve));
@@ -158,19 +166,21 @@ test("a done migration reloads the list; the editor writes the full next list pe
     await state.answer(1, modelPayload(["claude-a", "claude-b"]));
     assert.ok(textOf(state.hook).join("\n").includes("claude-a"));
     // Remove claude-a: the PUT carries the full next list.
-    const remove = byAttr(state.hook, "aria-label").find((button) => button.type === "button" && button.props["aria-label"].includes("claude-a"))?.props;
+    const remove = removeButtonOf(state.hook, "claude-a");
     assert.ok(remove, "the remove button is on screen");
     remove.onClick();
     await state.answer(2, { harness: "claude", concept: "model", result: { status: "written", summary: "modelPicker.options = claude-b" } }, 200);
-    await state.answer(3, modelPayload(["claude-b"]));
     assert.equal(state.requests[2].init.method, "PUT");
     assert.equal(state.requests[2].url, "/api/harness/claude/model");
     assert.deepEqual(state.requestBody(2), { customModels: ["claude-b"] });
+    // A successful write owns its state: no extra read, only the page refresh.
+    assert.equal(state.requests.length, 3, "the edit re-read the list it already knows");
     assert.equal(state.refreshes.length, 1, "the edit did not refresh the page");
     // A refused write keeps the list and shows the reason.
-    const refused = byAttr(state.hook, "aria-label").find((button) => button.type === "button" && button.props["aria-label"].includes("claude-b"))?.props;
+    const refused = removeButtonOf(state.hook, "claude-b");
+    assert.ok(refused, "the second remove button is on screen");
     refused.onClick();
-    await state.answer(4, { error: "write-refused", message: "claude 2.1.200 is below the registered minimum 2.1.242 for modelPicker" }, 400);
+    await state.answer(3, { error: "write-refused", message: "claude 2.1.200 is below the registered minimum 2.1.242 for modelPicker" }, 400);
     assert.ok(textOf(state.hook).join("\n").includes("below the registered minimum"), "the refusal reason is missing");
     assert.ok(textOf(state.hook).join("\n").includes("claude-b"), "a refused remove dropped the row");
     // Add a name through the input.
@@ -179,9 +189,10 @@ test("a done migration reloads the list; the editor writes the full next list pe
     state.hook.flush();
     const add = findButton(state.hook, "models.claudeCustomAdd");
     add.onClick();
-    await state.answer(5, { harness: "claude", concept: "model", result: { status: "written" } });
-    await state.answer(6, modelPayload(["claude-a", "claude-b", "claude-c"]));
-    assert.deepEqual(state.requestBody(5), { customModels: ["claude-a", "claude-b", "claude-c"] });
+    await state.answer(4, { harness: "claude", concept: "model", result: { status: "written" } });
+    assert.equal(state.requests[4].init.method, "PUT");
+    // claude-a went with the successful remove; the refused one kept claude-b.
+    assert.deepEqual(state.requestBody(4), { customModels: ["claude-b", "claude-c"] });
   } finally {
     state.restore();
   }
