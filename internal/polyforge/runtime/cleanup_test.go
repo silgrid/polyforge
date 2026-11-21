@@ -7,6 +7,7 @@ package runtime
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -206,4 +207,61 @@ func mentionsReuse(rep *CleanupReport) bool {
 		}
 	}
 	return false
+}
+
+// TestCleanupLayer4ReapsTermSpawnedDescendants (polyforge#200): a marked
+// process's TERM handler can leave a marked child behind — the child
+// exists only AFTER the first scan (the scan precedes every signal), so
+// the old layer 4 merely reported it as a survivor with an incomplete
+// error and left it running. The sweep must collect it (one bounded
+// re-sweep) and only report what still refuses to die; and the signals
+// themselves must be identity-checked, so a pid reused between the scan
+// and the signal is never touched.
+func TestCleanupLayer4ReapsTermSpawnedDescendants(t *testing.T) {
+	wi := runMarker("wi_pf200_l4_late")
+	dir := t.TempDir()
+	// the late descendant: ignores TERM, dies only on KILL
+	lateScript := filepath.Join(dir, "late.sh")
+	if err := os.WriteFile(lateScript, []byte("#!/bin/bash\ntrap '' TERM\nwhile :; do sleep 0.2; done\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// the parent: on TERM it spawns the late child and exits
+	parent := exec.Command("bash", "-c", `trap '"$LATE" & disown; exit 0' TERM
+while :; do sleep 0.2; done`)
+	parent.Env = append(os.Environ(), "PF_WI_ID="+wi, "PF_DAEMON_ID=", "LATE="+lateScript)
+	if err := parent.Start(); err != nil {
+		t.Fatal(err)
+	}
+	parentPid := parent.Process.Pid
+	defer func() { _ = syscall.Kill(parentPid, syscall.SIGKILL); _, _ = parent.Process.Wait() }()
+
+	// the parent must be alive when the cleanup starts, and the late
+	// child must NOT exist yet (it is born from the TERM handler).
+	if !procExists(parentPid) {
+		t.Fatal("the marked parent died before the cleanup ran")
+	}
+	if pids := scanEnvMarker(wi, ""); len(pids) != 1 || pids[0].pid != parentPid {
+		t.Fatalf("the pre-signal scan must see only the parent, got %v", pids)
+	}
+
+	rep, err := Cleanup(CleanupTarget{WIID: wi}, 5*time.Second)
+	// every marked process must be gone — the parent on TERM, its
+	// TERM-spawned child on the re-sweep's KILL.
+	deadline := time.Now().Add(3 * time.Second)
+	for procExists(parentPid) && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if procExists(parentPid) {
+		t.Fatalf("the marked parent survived the sweep: %v", rep.Warnings)
+	}
+	rest := scanEnvMarker(wi, "")
+	if len(rest) != 0 {
+		t.Fatalf("the TERM-spawned marked child must be collected by the re-sweep, still alive: %v", rest)
+	}
+	if err != nil {
+		t.Fatalf("a sweep that collects every marked process must not report cleanup incomplete: %v (report %+v)", err, rep)
+	}
+	if !layerApplied(rep, "l4-env-marker") {
+		t.Fatalf("layer 4 must be applied: %+v", rep.Layers)
+	}
 }
