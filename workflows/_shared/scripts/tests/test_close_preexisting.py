@@ -505,5 +505,39 @@ class RepoModeTest(CloseTriageCase):
                       res.get("summary", ""))
 
 
+@unittest.skipUnless(HAVE_GIT and HAVE_BASH, "git and bash are required")
+class ValidatorTest(CloseTriageCase):
+    """AC1's record half: the close's pre_existing selection record is
+    evidence the shared validator takes — the same validator verify.py's
+    --analysis and facts.py's close check call, so a record build's close
+    may hand off never lands refused downstream."""
+
+    def test_pre_existing_record_passes_the_shared_validator(self) -> None:
+        from pfstep.analysis import read_analysis, selected_problem
+        from .verifyfix import git_t
+        base = {"tests/test_a.py": "def test_old(): # FAIL assert old breakage\n"}
+        feature = {"c.txt": "mine\n"}
+        code, res = self.close_of("validator", base, feature)
+        self.assertEqual(code, 0, res.get("summary"))
+        sel = res["details"]["selected"]["app"]
+        self.assertEqual(sel["status"], "pre_existing")
+        path = os.path.join(self.fx.capsule, "artifacts", "build", "change-analysis.json")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        head = git_t(self.fx.repo("app"), "rev-parse", "HEAD")
+
+        def write(sel_doc: Dict[str, Any]) -> None:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"changed": [], "uncovered": {}, "tests": [], "selected": {"app": sel_doc}}, f)
+
+        write(sel)
+        an = read_analysis(path)
+        self.assertEqual(selected_problem(an.selected["app"], head), "",
+                         "a pre_existing record is green-equivalent evidence")
+        # the contrast: the same record claiming red cannot stand
+        write(dict(sel, status="red"))
+        an = read_analysis(path)
+        self.assertIn("its selection is red", selected_problem(an.selected["app"], head))
+
+
 if __name__ == "__main__":
     unittest.main()
