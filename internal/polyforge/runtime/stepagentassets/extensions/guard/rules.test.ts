@@ -38,6 +38,11 @@ const blocked: Array<[string, string, string]> = [
 	["cmd && sleep 300", "long-sleep", "`sleep 300`"],
 	["make |& sleep 300", "long-sleep", "`sleep 300`"],
 	["a || sleep 300", "long-sleep", "`sleep 300`"],
+	["timeout 10s sleep 60", "long-sleep", "`sleep 60`"],
+	["nice -n 10 sleep 60", "long-sleep", "`sleep 60`"],
+	["sudo -u bob sleep 60", "long-sleep", "`sleep 60`"],
+	["env -u X sleep 60", "long-sleep", "`sleep 60`"],
+	["timeout 5 nohup ./srv", "detach", "`nohup`"],
 	["npm ci > log 2>&1 &\necho started", "background", "`&`"],
 ];
 for (const [input, rule, trigger] of blocked) {
@@ -74,6 +79,7 @@ const allowed: string[] = [
 	"bash -c 'sleep 10 &'",
 	"",
 	"while sleep 2; do test -f done && break; done",
+	"timeout 300 npm ci",
 ];
 for (const input of allowed) {
 	test(`checkBashCommand allows: ${JSON.stringify(input)}`, () => {
@@ -94,6 +100,15 @@ test("checkBashCommand: while sleep 5; do … is a long sleep", () => {
 
 test("checkBashCommand: the boundary is MAX_SLEEP_SECONDS", () => {
 	assert.equal(MAX_SLEEP_SECONDS, 3);
+});
+
+test("checkBashCommand: summed seconds keep one decimal (owner plan-review #7)", () => {
+	const v = checkBashCommand("sleep 1.1 2.2");
+	assert.equal(v.block, true);
+	if (v.block) {
+		assert.equal(v.rule, "long-sleep");
+		assert.ok(v.reason.includes("waits 3.3 s"), `1.1 + 2.2 -> 3.3: ${v.reason}`);
+	}
 });
 
 test("checkBashCommand: seconds are summed and formatted per arg", () => {
