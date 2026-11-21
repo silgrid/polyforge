@@ -144,6 +144,9 @@ test("the tier cell re-reads the catalog with the CAS hash on every plan step", 
   ];
   const reads = [];
   const writes = [];
+  // the storage the writes really change — what tierRead serves next (the
+  // stub pf's fixture state, at the unit level)
+  let stateItems = freshItems.map((item) => ({ ...item, value: [...item.value] }));
   const hook = renderHook(StepTierCell, {
     row: { provider: "anthropic", id: "opus", name: "Opus", harnesses: ["pi"], chatAvailable: false, reasoning: [], isDefault: false },
     tier: { capable: true, reason: null, tiers: [
@@ -152,10 +155,14 @@ test("the tier cell re-reads the catalog with the CAS hash on every plan step", 
     ] },
     tierRead: async () => {
       reads.push(Date.now());
-      return { ok: true, items: freshItems, hash: "fresh-sha" };
+      return { ok: true, items: stateItems.map((item) => ({ ...item })), hash: "fresh-sha" };
     },
     tierWrite: async (write, hash) => {
       writes.push({ ...write, hash });
+      stateItems = stateItems.filter((item) => item.key !== `step_tiers.${write.tier}`);
+      if (write.action === "set") {
+        stateItems.push({ key: `step_tiers.${write.tier}`, value: [...write.candidates], source: "file", class: "live", schema: { kind: "model-list" } });
+      }
       return { ok: true };
     },
     onTierSaved() {},
