@@ -286,9 +286,10 @@ const ran = new Set();
 async function part(id, label, fn) {
   const title = T[id];
   ran.add(title);
+  const startedAt = Date.now();
   try {
     await fn();
-    console.log(`PASS ${id}`);
+    console.log(`PASS ${id} (${((Date.now() - startedAt) / 1000).toFixed(0)}s)`);
   } catch (error) {
     failures.get(title).push(`${label}: ${String(error?.message ?? error).split("\n")[0]}`);
     console.log(`FAIL ${id} ${label}: ${error?.message ?? error}`);
@@ -301,6 +302,9 @@ let tierServerStarted = false;
 async function startTierServer() {
   if (tierServerStarted) return;
   tierServerStarted = true;
+  // the main server's scenarios (S1–S23) are done; stop it first (the
+  // polyforge.mjs two-phase pattern) so it cannot outlive the suite
+  await h.stop();
   await h.startServer({
     name: "settings-85-tiers",
     logFile: join(work, "server-settings-85-tiers.log"),
