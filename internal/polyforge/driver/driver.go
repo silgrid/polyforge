@@ -468,8 +468,11 @@ func (d *Driver) Run(ctx context.Context) error {
 			// it BEFORE the settle writes the outcome (polyforge#200). A
 			// sweep that still cannot prove the processes gone keeps the
 			// park; a clean one settles the kept hand-off.
-			if stop, err := d.stepEndedHook(ctx, res.StepID); stop || err != nil {
-				return err
+			if serr := d.stepEndedSweep(ctx); serr != nil {
+				if stop, err := d.parkCleanupFailed(res.StepID, serr, cleanupParkKeptHandoff); stop || err != nil {
+					return err
+				}
+				return nil
 			}
 			// Book the dead dispatch's runtime before its envelope settles
 			// (B4): the measure ends where the dispatch actually
@@ -601,18 +604,22 @@ func (d *Driver) Run(ctx context.Context) error {
 			// into T ends where the wait began, the step-end hook runs (the
 			// process is gone), and the plan pass parks on the ask.
 			d.addUnbookedUntil(stepID, bookedFrom, awaiting.Since)
-			if stop, err := d.stepEndedHook(ctx, stepID); stop || err != nil {
-				return err
-			}
+			serr := d.stepEndedSweep(ctx)
 			d.announceEnd(stepID, n, supervise.OutcomeAwaitingOwner, 0, "")
 			// the owner's message resumes this conversation (relay.go):
 			// the next dispatch of the step sends only the messages
 			d.noteMessageResume(stepID)
+			// no hand-off exists here: the open ask is what the resume
+			// re-enters once the sweep proves clean (polyforge#200 r1#1).
+			if serr != nil {
+				if stop, err := d.parkCleanupFailed(stepID, serr, cleanupParkOpenAsk); stop || err != nil {
+					return err
+				}
+				return nil
+			}
 			continue
 		}
-		if stop, err := d.stepEndedHook(ctx, stepID); stop || err != nil {
-			return err
-		}
+		sweepErr := d.stepEndedSweep(ctx)
 		if verdict != nil {
 			// The supervisor judged the dispatch dead. The process is
 			// already torn down; this is the dispatch's one failure record.
@@ -623,6 +630,14 @@ func (d *Driver) Run(ctx context.Context) error {
 			vc, vsrc := verdictCauseWith(*verdict, d.textRules())
 			if stop, err := d.failDispatch(ctx, stepID, n, bookedFrom, endedAt, vc, -1, verdict.Evidence, verdict, vsrc, strings.TrimSpace(verdict.TurnError)); stop {
 				return err
+			}
+			// the dispatch's failure record is written; the park pauses the
+			// retry ladder until the sweep proves clean (polyforge#200 r1#1)
+			if sweepErr != nil {
+				if stop, err := d.parkCleanupFailed(stepID, sweepErr, cleanupParkFailedDispatch); stop || err != nil {
+					return err
+				}
+				return nil
 			}
 			continue
 		}
@@ -642,7 +657,24 @@ func (d *Driver) Run(ctx context.Context) error {
 			if stop, err := d.failDispatch(ctx, stepID, n, bookedFrom, endedAt, cause, code, detail, nil, src, etext); stop {
 				return err
 			}
+			// the failure record is written; the park pauses the retry
+			// ladder until the sweep proves clean (polyforge#200 r1#1)
+			if sweepErr != nil {
+				if stop, err := d.parkCleanupFailed(stepID, sweepErr, cleanupParkFailedDispatch); stop || err != nil {
+					return err
+				}
+				return nil
+			}
 			continue
+		}
+		// a received hand-off: the park keeps it on the ledger and the
+		// resume settles it once the sweep proves clean
+		if sweepErr != nil {
+			d.announceEnd(stepID, n, supervise.OutcomeResult, 0, "")
+			if stop, err := d.parkCleanupFailed(stepID, sweepErr, cleanupParkKeptHandoff); stop || err != nil {
+				return err
+			}
+			return nil
 		}
 		d.announceEnd(stepID, n, supervise.OutcomeResult, 0, "")
 		d.addUnbookedUntil(stepID, bookedFrom, endedAt)
