@@ -181,8 +181,13 @@ if [ "${1:-}" = exec ]; then
 		fi
 		;;
 	*podman*pull*)
-		# the pull always succeeds (review r1#2: a failing pull killed the
-		# run before any comparison — the flag belongs to inspect's reads)
+		# the pull always succeeds for persist (review r1#2: a failing pull
+		# killed the run before any comparison — the flag belongs to
+		# inspect's reads); the podman-verify die subtest gets its own flag
+		if [ -f "$dir/pv-pull-fails" ]; then
+			echo "stub docker: podman pull failed" >&2
+			exit 1
+		fi
 		exit 0
 		;;
 	*podman*inspect*)
@@ -276,10 +281,14 @@ fi
 if [ "${1:-}" = compose ]; then
 	verb=""
 	# shellcheck disable=SC2124
+	p=""
+	prev=""
 	for a in "$@"; do
 		case "$a" in
 		up | build | ps | down) verb=$a ;;
 		esac
+		[ "$prev" = "-p" ] && p=$a
+		prev=$a
 	done
 	case "$verb" in
 	up)
@@ -296,16 +305,24 @@ if [ "${1:-}" = compose ]; then
 		# with the project it took down
 		case "$*" in
 		*"-v"*)
-			p=""
-			prev=""
-			for a in "$@"; do
-				[ "$prev" = "-p" ] && p=$a
-				prev=$a
-			done
 			echo "$p" >> "$dir/compose-down-v.log"
 			;;
 		esac
 		;;
+	esac
+	# the ordered event log (review r2#1): every up and down in call
+	# order, with its project — a die subtest proves the trap cleaned up
+	# only when a `down -v` follows the run's LAST `up`
+	case "$verb" in
+	up | down)
+		mark=$verb
+		case "$verb $*" in
+		"down "*" -v"*) mark="down-v" ;;
+		esac
+		[ -n "$p" ] && echo "$mark ${p}" >> "$dir/compose-events.log"
+		;;
+	esac
+	case "$verb" in
 	build)
 		env > "$dir/compose-$verb-env.txt"
 		# the persist test's count: the exported copy must add none

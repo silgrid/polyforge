@@ -1411,8 +1411,10 @@ func TestWorkstationSmokePersist(t *testing.T) {
 	} {
 		flag, phrase := flag, phrase
 		t.Run("a changed value fails the comparison ("+flag+")", func(t *testing.T) {
-			out, err := w535SmokePersist(t, func(dir string) {
-				if err := os.WriteFile(filepath.Join(dir, flag), []byte("1"), 0o600); err != nil {
+			dir := t.TempDir()
+			out, err := w535SmokePersist(t, func(d string) {
+				dir = d
+				if err := os.WriteFile(filepath.Join(d, flag), []byte("1"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			})
@@ -1421,6 +1423,12 @@ func TestWorkstationSmokePersist(t *testing.T) {
 			}
 			if !strings.Contains(out, phrase) {
 				t.Fatalf("the failure must be the value comparison itself (%q):\n%s", phrase, out)
+			}
+			// the die must not leak the run: the trap downs this run's
+			// project after its last up (review r2#1's class, persist's
+			// own trap)
+			if proj := w535DownVAfterLastUp(dir); proj == "" {
+				t.Fatalf("the EXIT trap must down -v the failed run's own project after its last up:\n%s", out)
 			}
 		})
 	}
@@ -1508,6 +1516,39 @@ func TestWorkstationSmokeHostDependencies(t *testing.T) {
 	}
 }
 
+// w535DownVAfterLastUp reads the stub's ordered compose event log and
+// answers the project of a `down -v` that follows the scenario's LAST
+// `up`, or "" — the die subtests' proof that the EXIT trap (not the
+// pass's own explicit down -v, which a mid-run die never reaches) took
+// this run's project down.
+func w535DownVAfterLastUp(dir string) string {
+	raw, err := os.ReadFile(filepath.Join(dir, "compose-events.log"))
+	if err != nil {
+		return ""
+	}
+	var ev []string
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		if line != "" {
+			ev = append(ev, line)
+		}
+	}
+	lastUp, lastUpAt := "", -1
+	for i, line := range ev {
+		if strings.HasPrefix(line, "up ") {
+			lastUp, lastUpAt = strings.TrimPrefix(line, "up "), i
+		}
+	}
+	if lastUpAt < 0 {
+		return ""
+	}
+	for _, line := range ev[lastUpAt+1:] {
+		if line == "down-v "+lastUp {
+			return lastUp
+		}
+	}
+	return ""
+}
+
 // TestWorkstationSmokeCleansUpOwnProject — review r1#3: with per-run
 // compose projects, a pass that ends with a bare `down` (or dies mid-run)
 // permanently leaks its six named volumes, its container and its derived
@@ -1565,6 +1606,7 @@ func TestWorkstationSmokeCleansUpOwnProject(t *testing.T) {
 		}
 		return lines
 	}
+	downVAfterLastUp := w535DownVAfterLastUp
 
 	t.Run("boot: the happy run downs its own project with volumes", func(t *testing.T) {
 		dir := t.TempDir()
@@ -1640,8 +1682,8 @@ func TestWorkstationSmokeCleansUpOwnProject(t *testing.T) {
 		if err == nil {
 			t.Fatalf("a wrong PID 1 must fail the boot:\n%s", out)
 		}
-		if len(downVs(dir)) == 0 {
-			t.Fatalf("the EXIT trap must down -v the run's own project even on a die:\n%s", out)
+		if proj := downVAfterLastUp(dir); proj == "" {
+			t.Fatalf("the EXIT trap must down -v the run's own project AFTER its last up, even on a die:\n%s", out)
 		}
 	})
 	t.Run("env: the happy run downs its own project with volumes", func(t *testing.T) {
@@ -1658,8 +1700,22 @@ func TestWorkstationSmokeCleansUpOwnProject(t *testing.T) {
 		if err != nil {
 			t.Fatalf("the env pass must pass against the stub:\n%s", out)
 		}
-		if len(downVs(dir)) == 0 {
-			t.Fatalf("the env pass must end with a `down -v` of its own project:\n%s", out)
+		got := downVs(dir)
+		if len(got) == 0 || !strings.HasPrefix(got[len(got)-1], "workstation-smoke-") {
+			t.Fatalf("the env pass must end with a `down -v` of its own per-run project, got %v:\n%s", got, out)
+		}
+	})
+	t.Run("env: a die after the up still downs the run's project (the EXIT trap)", func(t *testing.T) {
+		dir := t.TempDir()
+		// the Pi Web environment answers WITHOUT the probe variables: the
+		// pass dies at its first environ assertion, after the up
+		write(dir, "environ.txt", "PORT=30141\x00PI_WEB_PASSWORD=pf-workstation-smoke-test-password\x00BUILDAH_ISOLATION=chroot\x00")
+		out, err := run(dir, "env")
+		if err == nil {
+			t.Fatalf("a Pi Web environment without the probe variables must fail the env pass:\n%s", out)
+		}
+		if proj := downVAfterLastUp(dir); proj == "" {
+			t.Fatalf("the EXIT trap must down -v the run's own project after the up, even on a die:\n%s", out)
 		}
 	})
 	t.Run("first-boot: the happy run downs its own project with volumes", func(t *testing.T) {
@@ -1670,8 +1726,35 @@ func TestWorkstationSmokeCleansUpOwnProject(t *testing.T) {
 		if err != nil {
 			t.Fatalf("the first-boot pass must pass against the stub:\n%s", out)
 		}
-		if len(downVs(dir)) == 0 {
-			t.Fatalf("the first-boot pass must end with a `down -v` of its own project:\n%s", out)
+		got := downVs(dir)
+		if len(got) == 0 || !strings.HasPrefix(got[len(got)-1], "workstation-smoke-") {
+			t.Fatalf("the first-boot pass must end with a `down -v` of its own per-run project, got %v:\n%s", got, out)
+		}
+	})
+	t.Run("first-boot (local): a die after the up still downs the run's project (the EXIT trap)", func(t *testing.T) {
+		dir := t.TempDir()
+		// an incomplete record: the pass dies at the phase check, after the up
+		write(dir, "first-boot.json", `{"phase":"config/failed","mode":"local","error":"x","updatedAt":"2026-11-20T00:00:00Z"}`)
+		out, err := run(dir, "first-boot")
+		if err == nil {
+			t.Fatalf("a record whose phase is not done must fail the first-boot pass:\n%s", out)
+		}
+		if proj := downVAfterLastUp(dir); proj == "" {
+			t.Fatalf("the EXIT trap must down -v the run's own project after the up, even on a die:\n%s", out)
+		}
+	})
+	t.Run("first-boot (--external): a die after the up still downs the run's project (the EXIT trap)", func(t *testing.T) {
+		dir := t.TempDir()
+		write(dir, "first-boot.json", `{"phase":"done","mode":"external","defaultCell":"default","server":"http://host.docker.internal:38422","userReady":false,"keyReady":true,"imageManaged":true,"updatedAt":"2026-11-20T00:00:00Z"}`)
+		// a default Cell pointing anywhere but the counting stub: the pass
+		// dies at the Cell check, after the up
+		write(dir, "cell-server.txt", "http://wrong-server:9999\n")
+		out, err := run(dir, "first-boot", "--external")
+		if err == nil {
+			t.Fatalf("a default Cell pointing at the wrong server must fail the external first-boot pass:\n%s", out)
+		}
+		if proj := downVAfterLastUp(dir); proj == "" {
+			t.Fatalf("the external EXIT trap must down -v the run's own project after the up, even on a die:\n%s", out)
 		}
 	})
 	t.Run("podman-verify: the happy run downs its own project with volumes", func(t *testing.T) {
@@ -1680,8 +1763,22 @@ func TestWorkstationSmokeCleansUpOwnProject(t *testing.T) {
 		if err != nil {
 			t.Fatalf("the podman-verify pass must pass against the stub:\n%s", out)
 		}
-		if len(downVs(dir)) == 0 {
-			t.Fatalf("the podman-verify pass must end with a `down -v` of its own project:\n%s", out)
+		got := downVs(dir)
+		if len(got) == 0 || !strings.HasPrefix(got[len(got)-1], "workstation-smoke-") {
+			t.Fatalf("the podman-verify pass must end with a `down -v` of its own per-run project, got %v:\n%s", got, out)
+		}
+	})
+	t.Run("podman-verify: a die after the up still downs the run's project (the EXIT trap)", func(t *testing.T) {
+		dir := t.TempDir()
+		// the scenario flag fails the probe container's podman pull: the
+		// pass dies at its first in-container step, after the up
+		write(dir, "pv-pull-fails", "1\n")
+		out, err := run(dir, "podman-verify")
+		if err == nil {
+			t.Fatalf("a failing podman pull must fail the podman-verify pass:\n%s", out)
+		}
+		if proj := downVAfterLastUp(dir); proj == "" {
+			t.Fatalf("the EXIT trap must down -v the run's own project after the up, even on a die:\n%s", out)
 		}
 	})
 }
