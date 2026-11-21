@@ -157,14 +157,14 @@ test("customModels: the 2.1.242 floor, an unknown major and a missing claude all
 
 test("customModels: a bad native picker shape is refused, never overwritten", async () => {
   const shapes = [
-    { modelPicker: "junk" },
-    { modelPicker: { options: "junk" } },
-    { modelPicker: { options: ["not-an-object"] } },
-    { modelPicker: { options: [{ label: "a row without a model" }] } },
+    "junk",
+    { options: "junk" },
+    { options: ["not-an-object"] },
+    { options: [{ label: "a row without a model" }] },
   ];
-  for (const [index, modelPicker] of shapes.entries()) {
+  for (const [index, picker] of shapes.entries()) {
     const configDir = writeTarget(`bad-shape-${index}`);
-    fs.writeFileSync(path.join(configDir, "settings.json"), `${JSON.stringify({ model: "opus", modelPicker }, null, 2)}\n`);
+    fs.writeFileSync(path.join(configDir, "settings.json"), `${JSON.stringify({ model: "opus", modelPicker: picker }, null, 2)}\n`);
     const before = bytesOf(configDir);
     const refused = await adapter.write("model", { customModels: ["claude-custom-1"] }, ctx(configDir));
     assert.equal(refused.status, "refused", JSON.stringify(refused));
