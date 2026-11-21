@@ -15,6 +15,11 @@
 #                                                   #   copy runs (needs only Docker + sh)
 #   sh dist/workstation/smoke.sh env                # Pi Web parameters (AC3)
 #   sh dist/workstation/smoke.sh podman-verify      # verification via podman (AC2)
+#   sh dist/workstation/smoke.sh upgrade            # the in-place component upgrade
+#                                                   #   (polyforge#190, AC1): one isolated
+#                                                   #   workstation, seeded v0.2.4-dev.1,
+#                                                   #   upgraded to a second seed image —
+#                                                   #   pointers, serving versions, identity
 #
 # Prerequisites: a reachable docker engine with compose (the outer
 # engine's CLI shape; podman-compose hosts are a follow-up). first-boot's
