@@ -7,7 +7,7 @@
 
 import { existsSync, stat } from "fs";
 import { resolve } from "path";
-import { createAgentSessionServices, getAgentDir, type SettingsManager } from "@earendil-works/pi-coding-agent";
+import { createAgentSessionServices, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import {
   loadModelsWithCache,
@@ -29,7 +29,6 @@ export async function loadModelsData(cwd: string, scopeAll = false): Promise<Mod
   void resolve;
   void createAgentSessionServices;
   void getAgentDir;
-  void type SettingsManager;
   void getSupportedThinkingLevels;
   void loadModelsWithCache;
   void orderSelectorModels;
