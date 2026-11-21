@@ -1,6 +1,7 @@
 // carries: app/settings.css
 // carries: lib/polyforge-cell-parity*
-// carries: components/ModelCandidatePicker*, app/api/polyforge/step-tiers* (polyforge#151: the shared picker's two card mounts, per Cell)
+// carries: components/ModelCandidatePicker*, app/api/polyforge/step-tiers*
+// (polyforge#151: the shared picker's two card mounts, per Cell)
 // — Settings › Polyforge: a named Cell's pane looks and works
 // like the default Cell's.
 //
