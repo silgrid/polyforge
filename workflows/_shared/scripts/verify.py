@@ -151,7 +151,17 @@ from pfstep.engine import TIER_FULL, TIER_LIGHT, EngineCommand, EngineReport, Re
 from pfstep.engine import default_engine  # noqa: E402
 from pfstep.flaky import RerunRun, rerun_flaky  # noqa: E402
 from pfstep.junit import ReportRead, merge_reported, read_declared_report, snapshot_report  # noqa: E402
-from pfstep.preexisting import PRESENT, BaseObservation, classify_base, short, unit_presence  # noqa: E402
+from pfstep.preexisting import (  # noqa: E402
+    BASE_RUNS,
+    CLASS_UNDETERMINED,
+    candidates,
+    judge_on_base,
+    join_note,
+    path_is_protected,
+    protected_paths,
+    short,
+    skip_form as shared_skip_form,
+)
 from pfstep.rerun import CommandSpec, UnitState, locate, whole_command  # noqa: E402
 from pfstep.shellwords import command_word, has_assignment, has_flag, has_go_test, shell_quote, shell_words, token_index  # noqa: E402
 from pfstep.units import (  # noqa: E402
@@ -163,7 +173,6 @@ from pfstep.units import (  # noqa: E402
     KIND_PYTEST,
     browser_crashed,
     cap_text,
-    find_unit,
     normalize_output,
     output_lines,
     parse_units,
@@ -188,7 +197,6 @@ VERSION = pfstep.LIBRARY
 COMMAND_TIMEOUT = 20 * duration.MINUTE
 BUDGET = 20 * duration.MINUTE
 RERUNS = 1
-BASE_RUNS = 1
 # Kept free at the end of the run for the cleanup and the result.
 WRITE_MARGIN = 20.0
 GIT_TIMEOUT = 600.0
@@ -372,10 +380,6 @@ class RepoRun:
 def git_quiet(directory: str, *args: str, literal: bool = True) -> str:
     """One read-only git call's stdout (git.GitError when it fails)."""
     return git.git(directory, *args, timeout=GIT_TIMEOUT, literal_pathspecs=literal)
-
-
-def join_note(a: str, b: str) -> str:
-    return b if a == "" else a + "; " + b
 
 
 def log_ref(log_path: str) -> str:
@@ -797,8 +801,7 @@ class Verification:
         return self.r.unmet(c.requires_env, c.requires_cmd, rr.dir, rr.box)
 
     def protected_path(self, p: str) -> bool:
-        c = gostr.clean_rel(p)
-        return c != "" and any(c == pr or c.startswith(pr + "/") for pr in self.protected)
+        return path_is_protected(p, self.protected)
 
     def rerun_runner(self, rr: RepoRun, timeout: int) -> Callable[[str], RerunRun]:
         def run(cmd: str) -> RerunRun:
@@ -975,42 +978,19 @@ class Verification:
             s.crashed = browser_crashed(output_lines(er.log_path))
 
     def fold_unit_runs(self) -> None:
-        """Protect the files of every unit run's test commit."""
-        seen: Set[str] = set(self.protected)
-        for d in self.unit_run_decls:
-            sha = gostr.trim_space(d.test_commit)
-            if sha == "" or sha.startswith("-") or d.repo == "":
-                continue
-            repo = os.path.join(self.capsule, "repos", d.repo)
-            if not os.path.isdir(repo):
-                continue
-            try:
-                out = git_quiet(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", sha)
-            except git.GitError:
-                continue
-            for p in gostr.fields(out):
-                c = gostr.clean_rel(p)
-                if c and c not in seen:
-                    seen.add(c)
-                    self.protected.append(c)
+        """Protect the files of every unit run's test commit (the shared
+        fold, pfstep/preexisting.py)."""
+        self.protected = protected_paths(self.capsule, self.unit_run_decls, self.protected)
 
     # -- the base runs
 
     def pre_existing_phase(self, rr: RepoRun) -> None:
-        """rr's still-failing units classified against the baseline."""
-        cands: List[UnitState] = []
-        for cr in rr.runs:
-            for u in cr.units:
-                if not u.failing():
-                    continue
-                if u.protected:
-                    u.note = join_note(u.note, "never pre-existing: it is a protected test that pins this change")
-                elif u.kind in (KIND_COMMAND, KIND_GO_PKG, KIND_LIBTEST) or u.file == "":
-                    u.note = join_note(u.note, "never pre-existing: no test file and test name locate it")
-                elif u.rerun == "":
-                    pass
-                else:
-                    cands.append(u)
+        """rr's still-failing units classified against the baseline — the one
+        shared entry (pfstep.preexisting.judge_on_base, polyforge#212),
+        verify's own executors and ns→s timeout handed in: the wording and
+        the record on each unit are byte-identical to the phase this
+        replaces, the class and the observation summary beside them."""
+        cands = candidates(u for cr in rr.runs for u in cr.units)
         if not cands:
             return
         base = base_name = ""
@@ -1020,69 +1000,21 @@ class Verification:
                 base, base_name = rr.merge.baseline, short(rr.merge.baseline)
                 if rr.merge.baseline_ref != BASELINE_MERGE_BASE:
                     base_name = rr.merge.baseline_ref + " (" + base_name + ")"
-
-        def mark_all(why: str) -> None:
-            for u in cands:
-                u.note = join_note(u.note, why)
-
         if base == "":
-            mark_all("not pre-existing: no base commit is known")
+            for u in cands:
+                u.note = join_note(u.note, "not pre-existing: no base commit is known")
+                u.base_class = CLASS_UNDETERMINED
             return
-        if not self.budget_left():
-            mark_all("not pre-existing: no base run started, %s is spent" % self.budget_note())
-            return
-        parent = rr.box.base_root if rr.box is not None else None
-        try:
-            if parent:
-                os.makedirs(parent, exist_ok=True)
-            tmp = tempfile.mkdtemp(prefix="pf-verify-base-", dir=parent)
-        except OSError as err:
-            mark_all("not pre-existing: no throwaway worktree: %s" % err)
-            return
-        try:
-            add = self.exec(rr, ["git", "worktree", "add", "--detach", tmp, base], rr.dir, rr.cwd_rel, GIT_TIMEOUT)
-            if add.exit != 0:
-                mark_all("not pre-existing: the base worktree could not be checked out (exit %d)" % add.exit)
-                return
-            try:
-                self.base_runs(rr, cands, tmp, base, base_name, mark_all)
-            finally:
-                git.run(rr.dir, "worktree", "remove", "--force", tmp, timeout=GIT_TIMEOUT)
-                git.run(rr.dir, "worktree", "prune", timeout=GIT_TIMEOUT)
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
-
-    def base_runs(self, rr: RepoRun, cands: List[UnitState], tmp: str, base: str, base_name: str,
-                  mark_all: Callable[[str], None]) -> None:
-        if rr.plan is not None:
-            for setup in rr.plan.base_setup:
-                er = self.exec_bash(rr, setup, tmp, tmp, COMMAND_TIMEOUT)
-                if er.exit != 0:
-                    mark_all("not pre-existing: the base_setup command %s failed on the base (exit %d) — an"
-                             " environmental failure" % (gostr.quote(setup), er.exit))
-                    return
-        for u in cands:
-            presence, why = unit_presence(rr.dir, base, u.kind, u.name, u.file)
-            exists = presence == PRESENT
-            runs: List[BaseObservation] = []
-            if exists:
-                i = 0
-                while i < BASE_RUNS and self.budget_left() and self.fits(u.rerun_dur):
-                    er = self.exec_bash(rr, u.rerun, tmp, tmp, COMMAND_TIMEOUT)
-                    us = parse_units(normalize_output(output_lines(er.log_path), tmp, er.tmp_dir))
-                    obs = BaseObservation(exit=er.exit)
-                    got = find_unit(us, u.kind, u.name)
-                    if got is not None:
-                        obs.found, obs.failed, obs.signature = True, got.failed, got.signature
-                    runs.append(obs)
-                    i += 1
-            pre, detail = classify_base(u.unit.signature, u.head_sig, exists, why, runs, BASE_RUNS)
-            if pre:
-                u.pre_existing = True
-                u.pre_detail = cap_text("fails on base %s too: %s, signature %s" % (base_name, detail, gostr.quote(u.head_sig)))
-                u.base_sig = u.head_sig
-            else:
-                u.note = join_note(u.note, detail)
+        judge_on_base(
+            rr.dir, base, base_name, cands,
+            rr.plan.base_setup if rr.plan is not None else [],
+            lambda tmp, sha: self.exec(rr, ["git", "worktree", "add", "--detach", tmp, sha], rr.dir, rr.cwd_rel,
+                                        GIT_TIMEOUT).exit,
+            lambda cmd, d, t: self.exec_bash(rr, cmd, d, d, int(t * duration.SECOND)),
+            self.budget_left, self.fits, self.budget_note(),
+            COMMAND_TIMEOUT / duration.SECOND,
+            rr.box.base_root if rr.box is not None else None,
+        )
 
     # -- the confirming re-run
 
@@ -1501,24 +1433,9 @@ def merge_only_between(repo_dir: str, a: str, b: str) -> bool:
 
 def skip_form(cr: CmdRun) -> Tuple[str, str]:
     """cr's bar form with its pre-existing units excluded, or the run form
-    plus a note when it cannot exclude them."""
-    pre = [u for u in cr.units if u.pre_existing]
-    if not pre:
-        return cr.cmd, ""
-    words, simple = shell_words(cr.cmd)
-    kind = pre[0].kind
-    if any(u.kind != kind for u in pre):
-        kind = ""
-    names = [u.name for u in pre]
-    if kind == KIND_GO and simple and has_go_test(words) and not has_flag(words, "-skip"):
-        return cr.cmd + " -skip '^(" + "|".join(names) + ")$'", ""
-    if kind == KIND_GO and simple and cr.harness and not has_assignment(cr.cmd, "E2E_SKIP"):
-        # the e2e harness protocol: E2E_SKIP excludes top-level tests
-        return "E2E_SKIP='^(" + "|".join(names) + ")$' " + cr.cmd, ""
-    if kind == KIND_PYTEST and simple and token_index(words, "pytest") >= 0:
-        return cr.cmd + "".join(" --deselect " + shell_quote(n) for n in names), ""
-    return cr.cmd, ("repos/%s `%s` carries the pre-existing failure(s) %s but has no skip switch verify-run can apply: it"
-                    " is listed as run, its failure(s) named here" % (cr.repo, cr.cmd, ", ".join(names)))
+    plus a note when it cannot exclude them — the shared core
+    (pfstep.preexisting.skip_form, polyforge#212), verify-run the applier."""
+    return shared_skip_form(cr.cmd, cr.repo, cr.units, cr.harness, "verify-run")
 
 
 def command_check(cr: CmdRun) -> Dict[str, Any]:
