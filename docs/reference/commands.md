@@ -1327,7 +1327,7 @@ full reference.
   skip_reason, tree, prereq_key, reused, carried, units[{kind, name,
   file, status, flaky, detail, class, signature, head_signature,
   base_detail, rerun_log, not_rerun}], confirmed, complete,
-  not_confirmed}], baseline[{commit, ref, setup, ran, note}], reds[{command,
+  not_confirmed}], baseline{commit, ref, setup, ran, note}, reds[{command,
   unit, kind, file, class, signature, base, detail}]`. Exit 0: every
   command that ran exited 0 or turned green through its flaky re-runs
   and confirmation, was reused, or carries only reds the baseline

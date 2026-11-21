@@ -131,10 +131,10 @@ repo, after its fast checks (a green run in the reuse file whose key — the com
 root's subtree tree hash, the declared prerequisites — matches is evidence, not a re-run);
 the existing tests it selects are the ones verification will select, a red one getting the one targeted
 re-run the per-unit bar gives and the same baseline triage (`--unit-runs` protecting this change's own test commits). A red or `incomplete` result (the engine answered full, or a selected command cannot run) never hands off `done` without the owner's ruling —
-except a red every `reds[]` entry of which is `pre_existing`: handed off `done` citing the
-result file (its `details.selected` status `pre_existing`, green-equivalent evidence): fix the change and re-run it — a real environment blocker is `blocked`, a full-tier
-fallback is the owner's to settle (`pf step ask`), and a residual the owner accepted keeps its
-record in the result file, cited in the hand-off. Merge each touched repo's `details.selected` of its green or pre-existing result into the change
+with one exception — a `pass`-verdict result whose selection status is `pre_existing` (every
+entry of its `reds[]` pre-existing on the `details.baseline` the run names): not this change's,
+handed off `done` citing the result file, the shared validator's green-equivalent evidence.
+Any other red or `incomplete`: fix the change and re-run it — a real environment blocker is `blocked`, a full-tier fallback is the owner's to settle (`pf step ask`), a residual keeping its record in the result file, cited in the hand-off. Merge each touched repo's `details.selected` of its green or pre-existing result into the change
 analysis's `selected` (below), keyed by the repo, verbatim. Then run the close's facts lines —
 review's own first, the same engine with the same replay it judges you with:
 `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" plan-conformance --json --out artifacts/facts/plan-conformance.json`

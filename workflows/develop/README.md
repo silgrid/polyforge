@@ -139,8 +139,10 @@ The complete variable table is in [the workflow contract's Scripts environment s
   declares `fast_check_proof`, so its `done` is refused until each moved repo has a `pass`
   at HEAD (a fast-forward needs none); a red breaks the tree at sync, where the agent can
   still fix it in the conflicted files, rather than at verification. A red that is not this
-  merge's — the default branch already red, an `error`/`partial` result, or no planned check
-  — is the owner's: `pf step ask`, and on the release hand off `done` with `--per-owner
+  merge's the check itself triages first: one the baseline (after the merge, the default
+  branch's tip) reproduces the same way is recorded `pre_existing` and the check passes;
+  what is left — an `error`/`partial` result, no planned check, or a red the baseline could
+  not settle — is the owner's: `pf step ask`, and on the release hand off `done` with `--per-owner
   <the reply's at>`, the stamp recording it. When the
   resolution is not the agent's to make, it asks the owner, and hands the work back to
   `build` (or cancels) only on the owner's word, after the skill's abort line.

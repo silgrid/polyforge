@@ -38,11 +38,14 @@ non-fast-forward merge the script already committed with no conflict is checked 
 the start line. A red check that the resolution caused is fixed in the `conflicts[]` files
 only; a red on a merge you cannot edit — no `conflicts[]`, or a real break outside them — is
 **not yours to resolve**: `pf step ask` the owner. A red that is not this
-merge's at all — the default branch was already red, the result is
-`error`/`partial`, or the engine planned no check — is the owner's the same
-way: ask, and on the explicit release hand off `done` with `--per-owner
-<the reply's at>`; the daemon accepts it and the section's header records
-the cited message. Without that word the gate still refuses `done`.
+merge's at all the check itself triages first: one the baseline — after
+the merge, the default branch's tip — reproduces the same way is recorded
+`pre_existing` and the check passes. What is left — one the baseline could
+not settle, the result `error`/`partial`, or the engine planned no check —
+is the owner's the same way: ask, and on the explicit release hand off
+`done` with `--per-owner <the reply's at>`; the daemon accepts it and the
+section's header records the cited message. Without that word the gate
+still refuses `done`.
 
 ## 开工前读什么、核对什么 — before you start: what you read and check
 
