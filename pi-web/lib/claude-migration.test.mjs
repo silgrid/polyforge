@@ -85,7 +85,9 @@ function reset() {
 }
 
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
-const markerOf = (dir = claudeConfigDir) => readJson(piWebSettingsPath).claudeCustomModelsMigration?.[dir];
+const markerOf = (dir = claudeConfigDir) => fs.existsSync(piWebSettingsPath)
+  ? readJson(piWebSettingsPath).claudeCustomModelsMigration?.[dir]
+  : undefined;
 
 // ── the startup flow (85a4): every field but customModels ────────────────
 
@@ -376,7 +378,7 @@ test("illegal or over-cap source data reports a blockage, keeps the source and w
     ["junk-string"],
     [["claude-custom-1", 42]],
     [Array.from({ length: 51 }, (_, index) => `claude-custom-${index}`)],
-  ];
+  ].map(([value]) => value);
   for (const [index, models] of cases.entries()) {
     fs.writeFileSync(oldSettingsPath, JSON.stringify({ version: 1, customModels: models }));
     const step = await migration.claudeCustomModelsMigrationStep(opts());
