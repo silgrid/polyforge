@@ -2,6 +2,7 @@
 // carries: components/HarnessGeneralSettings*, components/GeneralSettings*, components/HarnessEnvironmentSettings*, components/HarnessEffectiveSettings*, components/UnifiedSetting*, components/HarnessApplyTo*
 // carries: components/HarnessPermissionSettings*, components/ClaudePermissionSettings*, lib/harness-permissions-view*, lib/harness-settings-view*, lib/harness/diagnostics*, app/api/harness/*
 // carries: components/AccountSettings*, components/PiAccountLogin*, components/ModelsConfig*, app/api/settings/account/*, lib/provider-listing*, lib/harness/account*, lib/polyforge-doctor*
+// carries: components/ClaudeCustomModels*
 // #85 设置页、账号页、统一模型页和权限页：九个导航分区，旧模型页已移除。
 // 模型页场景保留 provider 编辑、账号跳转与三列清单的行为校验。
 //
@@ -165,6 +166,10 @@ async function mockAdapterApis(context) {
   });
   await context.route("**/api/models-config", (route) => route.fulfill({ status: 200, json: { providers: {} } }));
   await context.route("**/api/claude", (route) => route.fulfill({ status: 200, json: CLAUDE_REPORT }));
+  // 85a3-3: the models page's Claude section fires its migration POST on
+  // every mount; the default answer keeps the other scenarios hermetic (a
+  // scenario with its own page.route — S23 — overrides it).
+  await context.route("**/api/claude-models-migration", (route) => route.fulfill({ status: 200, json: { status: "done", changed: false, shadowed: false } }));
   await context.route("**/api/claude-permissions", (route) => route.fulfill({ status: 200, json: { mode: "ask", push: true, includeHookEvents: false, session: null } }));
 }
 
@@ -195,6 +200,7 @@ const T = {
   S20: "S85-20: the rules pane edits claude's allow / ask / deny lists with no unified block",
   S21: "S85-21: General has no claude permission controls; its hook switch stays",
   S22: "S85-22: the table and the editor share one enabledModels controller — a Save never re-enables a model the table just disabled (review r1#1)",
+  S23: "S85-23: the models page's Claude section merges the retired custom models under a preview and edits the native picker with full-list writes (85a3-3)",
 };
 const failures = new Map(Object.values(T).map((title) => [title, []]));
 const ran = new Set();
@@ -848,6 +854,93 @@ try {
     }, ACTION_MS, "the conversation pane never settled");
     assert.ok(!text.includes("claude tool permissions"), `General still shows the claude permission block: ${text.slice(0, 200)}`);
     assert.ok(!text.includes("Ask in a dialog"), `General still shows the approval channel radios: ${text.slice(0, 200)}`);
+    await page.context().close();
+  });
+
+  // S85-23 — 85a3-3: entering the Claude section fires the protected migration
+  // POST; a non-empty native target answers the merge preview (the native rows
+  // kept, the missing names appended, nothing written until「合并」); the editor
+  // writes every add and remove as the full next list through the adapter's
+  // PUT. The backend is browser-mocked: this pins the page's contract.
+  await part("S23", "claude custom models section", async () => {
+    const page = await newPage();
+    const DIGEST = "f".repeat(64);
+    const migrationPosts = [];
+    const modelPuts = [];
+    let names = ["claude-a", "claude-b"];
+    const modelPayload = () => ({ harness: "claude", concept: "model", data: {
+      defaultProvider: null, defaultModel: null, reasoningEffort: null,
+      perModelReasoningEffort: {}, providers: [], customModels: names,
+    } });
+    await page.route("**/api/claude-models-migration", (route) => {
+      migrationPosts.push(route.request().postDataJSON());
+      if (route.request().postDataJSON().confirm === DIGEST) {
+        names = ["native-keep", "claude-a", "claude-b"];
+        return route.fulfill({ json: { status: "done", changed: true, shadowed: false } });
+      }
+      return route.fulfill({ json: {
+        status: "preview",
+        native: [{ model: "native-keep", label: "K" }],
+        missing: ["claude-a", "claude-b"],
+        digest: DIGEST,
+        shadowed: false,
+      } });
+    });
+    await page.route("**/api/harness/claude/model", (route) => {
+      if (route.request().method() === "PUT") {
+        const body = route.request().postDataJSON();
+        modelPuts.push(body);
+        names = body.customModels;
+        return route.fulfill({ json: { harness: "claude", concept: "model", result: { status: "written", summary: "modelPicker.options" } } });
+      }
+      return route.fulfill({ json: modelPayload() });
+    });
+    await page.route(/\/api\/models\?/, (route) => route.fulfill({ json: {
+      models: {}, modelList: [], defaultModel: null, thinkingLevels: {}, thinkingLevelMaps: {}, thinkingLevelPins: {}, isScoped: false,
+    } }));
+    await page.route("**/api/models/default", (route) => route.fulfill({ json: {
+      defaultHarness: "pi", claudeDefaultModel: "default", claudeDefaultEffort: "default",
+    } }));
+    await page.route("**/api/models/enabled*", (route) => route.fulfill({ json: {
+      allEnabled: true, patterns: [], stalePatterns: [], enabledTotal: 0, availableTotal: 0,
+      scope: "global", settingsPath: "fixture/settings.json", editable: true, providers: [],
+    } }));
+    await page.route("**/api/models-config", (route) => route.fulfill({ json: { providers: {} } }));
+    await page.route("**/api/harness/pi/model", (route) => route.fulfill({ json: { harness: "pi", concept: "model", data: {
+      defaultProvider: null, defaultModel: null, reasoningEffort: null,
+      perModelReasoningEffort: {}, providers: [], customModels: [],
+    } } }));
+    await openSettings(page);
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    const models = sectionHost(page, "models");
+    const section = models.locator("[data-claude-custom-models]");
+    await section.waitFor({ state: "visible", timeout: ACTION_MS });
+    const banner = section.locator("[data-claude-migration-preview]");
+    await banner.waitFor({ state: "visible", timeout: ACTION_MS });
+    const bannerText = await banner.innerText();
+    assert.ok(bannerText.includes("native-keep (K)"), `the preview lost the native row: ${bannerText}`);
+    assert.ok(bannerText.includes("claude-a"), `the preview lost the missing name: ${bannerText}`);
+    // The preview writes nothing: every mount POST so far carries no confirm
+    // (a dev-mode StrictMode double mount may fire the effect twice), and no
+    // PUT has happened.
+    assert.ok(migrationPosts.length >= 1, "the mount never fired the POST");
+    assert.ok(migrationPosts.every((body) => body?.confirm === undefined), "a mount POST carried a confirm");
+    assert.equal(modelPuts.length, 0, "the preview wrote the picker");
+    await banner.getByRole("button", { name: "Merge", exact: true }).click({ timeout: ACTION_MS });
+    await waitFor(async () => {
+      const confirmed = migrationPosts.find((body) => body?.confirm === DIGEST);
+      return confirmed && await section.locator("[data-claude-migration-preview]").count() === 0 ? confirmed : false;
+    }, ACTION_MS, "the merge never confirmed under its digest");
+    await waitFor(async () => (await section.innerText()).includes("native-keep"),
+      ACTION_MS, "the merged list never showed the native name");
+    // The editor removes and adds with full-list writes through the PUT.
+    await section.getByRole("button", { name: "Remove claude-a", exact: true }).click({ timeout: ACTION_MS });
+    await waitFor(() => modelPuts.some((body) => JSON.stringify(body.customModels) === JSON.stringify(["native-keep", "claude-b"])),
+      ACTION_MS, "the remove never wrote the full next list");
+    await section.getByPlaceholder("Model name --model accepts").fill("claude-c");
+    await section.getByRole("button", { name: "Add", exact: true }).click({ timeout: ACTION_MS });
+    await waitFor(() => modelPuts.some((body) => JSON.stringify(body.customModels) === JSON.stringify(["native-keep", "claude-b", "claude-c"])),
+      ACTION_MS, "the add never wrote the full next list");
     await page.context().close();
   });
 } finally {
