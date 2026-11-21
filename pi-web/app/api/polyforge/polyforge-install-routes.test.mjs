@@ -1,3 +1,4 @@
+// carries: lib/polyforge-install*, app/api/polyforge/install/*
 import "#test-env";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -25,7 +26,7 @@ test("AC5: reach is the logged-in surface — the proxy's login covers every /ap
 test("the start is JSON-only, answers 202 with the run, and keeps the module's 4xx (one run at a time, a force only after a refusal)", () => {
   assert.match(route, /if \(!hasJsonContentType\(request\)\) \{\s*return NextResponse\.json\(\{ error: "Content-Type must be application\/json" \}, \{ status: 415 \}\);/);
   assert.match(route, /NextResponse\.json\(\{ ok: true, run: await startPolyforgeInstall\(body\) \}, \{ status: 202 \}\)/);
-  assert.match(route, /error instanceof PolyforgeInstallError\) \{\s*return NextResponse\.json\(\{ error: error\.message \}, \{ status: error\.status \}\);/);
+  assert.match(route, /error instanceof PolyforgeInstallError\) \{\s*return NextResponse\.json\(\{ error: error\.message, \.\.\.\(error\.code \? \{ code: error\.code \} : \{\}\) \}, \{ status: error\.status \}\);/);
   assert.doesNotMatch(route, /apiKey[^\n]*NextResponse|console\./, "the key is never echoed or logged");
 });
 

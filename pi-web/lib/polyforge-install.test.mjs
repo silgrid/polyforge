@@ -1,3 +1,4 @@
+// carries: lib/polyforge-install*, app/api/polyforge/install/*
 import "#test-env";
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
@@ -194,7 +195,7 @@ const setConfigured = (configured) => {
 const installCalls = () => existsSync(installLog) ? readFileSync(installLog, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
 const ghCalls = () => existsSync(ghLog) ? readFileSync(ghLog, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
 const pfCalls = () => existsSync(join(work, "pf.log")) ? readFileSync(join(work, "pf.log"), "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
-const reset = () => { rmSync(installLog, { force: true }); rmSync(ghLog, { force: true }); };
+const reset = () => { rmSync(installLog, { force: true }); rmSync(ghLog, { force: true }); rmSync(join(work, "pf.log"), { force: true }); };
 
 /** Collect the run's whole output and its final state through the same
  *  subscription the events route uses. */
@@ -395,6 +396,9 @@ const eventsRoute = await routeJiti.import("../app/api/polyforge/install/events/
 const seedWork = mkdtempSync(join(tmpdir(), "pf-install-image-"));
 mkdirSync(join(seedWork, "releases", "v0.2.4-dev.1"), { recursive: true });
 writeFileSync(join(seedWork, "releases", "v0.2.4-dev.1", "manifest.json"), "{}\n");
+after(() => {
+  rmSync(seedWork, { recursive: true, force: true });
+});
 const withImageSeam = async (run) => {
   const previous = globalThis.__piWebTestSeedRoot;
   globalThis.__piWebTestSeedRoot = seedWork;
@@ -411,6 +415,7 @@ test("the image mode: the start is refused before anything is probed, fetched or
   await withImageSeam(async () => {
     setConfigured(true);
     reset();
+    const runBefore = lib.polyforgeInstallRun()?.id ?? null;
     await assert.rejects(
       lib.startPolyforgeInstall({}),
       (error) => error instanceof lib.PolyforgeInstallError && error.status === 409 && error.code === "image_managed" && error.message === pure.POLYFORGE_INSTALL_IMAGE_MANAGED_MESSAGE,
@@ -423,7 +428,7 @@ test("the image mode: the start is refused before anything is probed, fetched or
     );
     assert.equal(ghCalls().length, 0, "zero gh calls: nothing probed the channel, nothing was downloaded");
     assert.equal(pfCalls().length, 0, "zero pf spawns: even the presence probe never ran");
-    assert.equal(lib.polyforgeInstallRun(), null, "no run record was ever created");
+    assert.equal(lib.polyforgeInstallRun()?.id ?? null, runBefore, "no run record was ever created");
   });
 });
 
@@ -432,11 +437,10 @@ test("the image mode: the GET answers the fact and reads nothing; the POST answe
     reset();
     const got = await installRoute.GET(allowed("/api/polyforge/install"));
     assert.equal(got.status, 200, "the read degrades as fields, never 5xx");
-    assert.deepEqual(
-      await got.json(),
-      { imageManaged: true, versions: null, run: null, error: pure.POLYFORGE_INSTALL_IMAGE_MANAGED_MESSAGE },
-      "the GET carries the fact, no versions and the fixed reason",
-    );
+    const gotBody = await got.json();
+    assert.equal(gotBody.imageManaged, true, "the GET carries the fact");
+    assert.equal(gotBody.versions, null, "no versions were read");
+    assert.equal(gotBody.error, pure.POLYFORGE_INSTALL_IMAGE_MANAGED_MESSAGE, "the fixed reason");
     assert.equal(ghCalls().length, 0, "the latest release was never probed");
     assert.equal(pfCalls().length, 0, "the presence probe never ran");
 
@@ -473,10 +477,12 @@ test("the image mode: the output stream answers the fact, not the no-run 404", a
 test("the host mode is unchanged: the gate unset, the start and the GET behave exactly as before", async () => {
   setConfigured(true);
   reset();
-  const got = await installRoute.GET(allowed("/api/polyforge/install"));
+  // ?force=1: the reads run for real, not from the module's caches
+  const got = await installRoute.GET(allowed("/api/polyforge/install?force=1"));
   assert.equal(got.status, 200);
   const body = await got.json();
   assert.equal(body.imageManaged, false, "the host answers the fact as false");
   assert.equal(body.versions.repo, pure.POLYFORGE_INSTALL_REPO, "the versions read ran as before");
   assert.ok(ghCalls().length > 0, "the host still probes the channel");
+  assert.ok(pfCalls().length > 0, "the host still probes pf");
 });
