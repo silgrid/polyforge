@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -101,14 +102,39 @@ func TestStepAgentDirMinimalSetAndPlacement(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "agents/reviewer.md")); !os.IsNotExist(err) {
 		t.Fatalf("operator agent definitions must not be copied: %v", err)
 	}
-	// extensions/ carries the subagent tool and NOTHING else
-	if exts := listDirNames(t, filepath.Join(dir, "extensions")); len(exts) != 1 || exts[0] != "subagent" {
-		t.Fatalf("extensions/ must hold exactly subagent, got %v", exts)
+	// extensions/ carries the allowlisted extensions and NOTHING else
+	// (os.ReadDir is name-sorted: guard sorts before subagent)
+	if exts := listDirNames(t, filepath.Join(dir, "extensions")); !slices.Equal(exts, []string{"guard", "subagent"}) {
+		t.Fatalf("extensions/ must hold exactly guard and subagent, got %v", exts)
 	}
-	for _, rel := range []string{"extensions/subagent/index.ts"} {
+	for _, rel := range []string{"extensions/subagent/index.ts", "extensions/guard/index.ts", "extensions/guard/rules.ts"} {
 		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(rel))); err != nil {
 			t.Fatalf("%s was not copied: %v", rel, err)
 		}
+	}
+	// the guard extension rides the same embed: the installed bytes are
+	// the embedded bytes, and a test file never reaches the step dir
+	for _, rel := range []string{"extensions/guard/index.ts", "extensions/guard/rules.ts"} {
+		want, err := fs.ReadFile(stepagentassets.FS, rel)
+		if err != nil {
+			t.Fatalf("embedded %s: %v", rel, err)
+		}
+		got, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
+		if err != nil || string(got) != string(want) {
+			t.Fatalf("the guard file %s must match the embedded bytes: %v", rel, err)
+		}
+	}
+	werr := filepath.WalkDir(dir, func(p string, de os.DirEntry, werr error) error {
+		if werr != nil {
+			return werr
+		}
+		if de.Type().IsRegular() && strings.HasSuffix(de.Name(), ".test.ts") {
+			t.Errorf("a node test file reached the step agent dir: %s", p)
+		}
+		return nil
+	})
+	if werr != nil {
+		t.Fatal(werr)
 	}
 	// Embedded bytes win over operator content, including modification.
 	operatorExt := filepath.Join(src, "extensions", "subagent", "index.ts")
@@ -225,6 +251,9 @@ func TestStepAgentDirResyncFollowsSourceAndPrunesExtras(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "extensions", "subagent", "index.ts")); err != nil {
 		t.Fatalf("the subagent extension must survive the prune: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "extensions", "guard", "index.ts")); err != nil {
+		t.Fatalf("the guard extension must survive the prune: %v", err)
 	}
 	for _, extra := range []string{"settings.json", "extensions/stray"} {
 		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(extra))); !os.IsNotExist(err) {
