@@ -151,44 +151,60 @@ crosses. Back up and restore whole volumes, never files under them:
 
 (The https front's `caddy-data` is a seventh, caddy's own.)
 
-Back up and restore whole volumes, never files under them (a volume's
-compose name is `workstation_<volume>`, the project name the compose
-file fixes):
+A volume's compose name is `workstation_<volume>` (the project name the
+compose file fixes):
 
 ```sh
 docker run --rm -v workstation_pf-home:/from:ro -v "$PWD:/backup" alpine \
   tar czf /backup/pf-home.tgz -C /from .
+docker compose --profile aihub create   # the six volumes exist, with their
+                                        #   compose labels; nothing starts
 docker run --rm -v "$PWD:/backup:ro" -v workstation_pf-home:/to alpine \
   sh -c 'cd /to && tar xzf /backup/pf-home.tgz'
 ```
 
-Restore only into a volume just created (`docker volume rm` of the old
-one first, only while the container is down) — never on top of a live
-one. A single-volume reset is that removal plus the next `up -d`, and
-it costs exactly what that volume holds:
+Restore only into a volume the compose file created — a plain `up -d`
+like `create` above makes the six with their compose labels, while a
+volume docker created implicitly from a bare `-v` carries none (compose
+warns about it) — and never on top of a live one. A single-volume reset
+is `docker volume rm` of it (only while the container is down) plus the
+next `up -d`, which recreates it with its labels. What a reset costs,
+volume by volume:
 
-- `pf-home` — every login and cli.toml's default Cell: log in again.
+- `pf-home` — every login and cli.toml's whole default Cell.
 - `aihub` — the local hub's whole identity: the daily user, its key
-  and the local `workstation` project are gone; the next boot builds
-  them again.
-- `polyforge-data` — the daemon's state and workspaces. Alone it also
-  strands the first-boot record against a pf-home that still carries
-  the Cell, and the container REFUSES to start naming both files —
-  reset the two together.
+  and the local `workstation` project.
+- `polyforge-data` — the daemon's state and workspaces, and the
+  first-boot record.
 - `components` — the versioned components: the next boot reinstalls
   from the image's seed, at the image's version.
 - `podman-storage` — every verification image and container: the next
   verification run builds its image again.
 - `workspace` — the workstation's own working tree.
 
+pf-home, polyforge-data and (in the local boot) aihub are one identity
+— reset the three together. Apart, pf-home or polyforge-data alone
+makes the container REFUSE to start: the done record and cli.toml's
+Cell disagree, and the start names both files (The first boot,
+Troubleshooting). aihub alone is quieter and no better: nothing
+rebuilds the identity (a done first boot never runs again), the aihub
+server just bootstraps the empty store — usr_root and a fresh
+`bootstrap-admin.key`, the very shape the first boot exists to prevent
+— and the default Cell's key is dead. Together, the next start redoes
+the whole first boot: a new identity is built and you log the
+harnesses in again.
+
 ## Parameters
 
-The compose file interpolates a small explicit set, and nothing else of
-the host's environment crosses the boundary — the entrypoint's
-whitelist is the second guard: it keeps the names below and any
-compose-added `PI_*` / `PI_WEB_*` variable, and unsets everything
-else, the `PI_TEST_*` family included (env-whitelist.sh, the real
-filter, not prose):
+The compose file interpolates a small explicit set — host-side values
+that shape the compose file itself; most of them never enter the
+container, which receives only the `environment:` list the file writes
+out below plus what that list interpolates. The entrypoint's whitelist
+is the second guard on what does enter: it keeps `PATH`, `HOME` and
+`TERM`, the compose list's values, any compose-added `PI_*` /
+`PI_WEB_*` variable, and the first boot's three `WORKSTATION_AIHUB_*`
+inputs, and unsets everything else, the `PI_TEST_*` family included
+(env-whitelist.sh, the real filter, not prose):
 
 | Variable | Required | What it sets |
 |---|---|---|
@@ -283,14 +299,18 @@ set means the local mode.
 ## Harness login
 
 The seed carries the two pinned harness packages — pi and Claude Code
-(`build-seed.sh` installs both at pinned versions) — and after the
-first boot the pi packages entry in pf-home points them at the
-components volume's current. Log a harness in once, through Pi Web's
-terminal panel or from a shell inside the container:
+(`build-seed.sh` installs both at pinned versions) — under the
+components volume: after the first boot they live at
+`/components/current/harness/pi` and `/components/current/harness/claude`
+(`node_modules/…`, the packages' own executables under
+`node_modules/.bin`), and the pi packages entry in pf-home points at
+the current. The image's PATH carries `pf` and the Node runtime, not
+the harness CLIs — name them by their full paths (or log in through
+Pi Web's terminal panel, whose sessions run inside the machine):
 
 ```sh
-docker compose --profile aihub exec workstation pi
-docker compose --profile aihub exec workstation claude
+docker compose --profile aihub exec workstation /components/current/harness/pi/node_modules/.bin/pi
+docker compose --profile aihub exec workstation /components/current/harness/claude/node_modules/.bin/claude
 ```
 
 Logins land in pf-home (`/root/.pi/agent`, `/root/.claude`) and survive
