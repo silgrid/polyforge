@@ -1506,3 +1506,181 @@ func TestWorkstationSmokeHostDependencies(t *testing.T) {
 		t.Fatalf("the persist pass must run on a Docker+sh host:\n%s", out)
 	}
 }
+
+// TestWorkstationSmokeCleansUpOwnProject — review r1#3: with per-run
+// compose projects, a pass that ends with a bare `down` (or dies mid-run)
+// permanently leaks its six named volumes, its container and its derived
+// port. Every pass must end with `down -v` of ITS OWN project and carry an
+// EXIT trap that does the same on a die. The stub records every `down -v`
+// it is handed, with the project name.
+func TestWorkstationSmokeCleansUpOwnProject(t *testing.T) {
+	root := w535Root(t)
+	script := filepath.Join(root, "dist/workstation/smoke.sh")
+	stubPath := filepath.Join(root, "test", "testdata", "workstation-smoke-stub", "docker")
+
+	// one stub docker on PATH and one scenario per run; the api stub
+	// answers the env pass's host-side /api 401 check
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer api.Close()
+	apiURL, err := url.Parse(api.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	write := func(dir, name, content string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run := func(dir string, args ...string) (string, error) {
+		bin := t.TempDir()
+		if err := os.Symlink(stubPath, filepath.Join(bin, "docker")); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("sh", append([]string{script}, args...)...)
+		cmd.Env = []string{
+			"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"),
+			"HOME=" + os.Getenv("HOME"),
+			"W535_SMOKE_SCENARIO=" + dir,
+			"WORKSTATION_WEB_PORT=" + apiURL.Port(),
+			"WORKSTATION_SMOKE_STUB_PORT=38421",
+		}
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	// downVs — the stub's `down -v` record for this scenario
+	downVs := func(dir string) []string {
+		raw, err := os.ReadFile(filepath.Join(dir, "compose-down-v.log"))
+		if err != nil {
+			return nil
+		}
+		var lines []string
+		for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+			if line != "" {
+				lines = append(lines, line)
+			}
+		}
+		return lines
+	}
+
+	t.Run("boot: the happy run downs its own project with volumes", func(t *testing.T) {
+		dir := t.TempDir()
+		scenario := map[string]any{
+			"caps":     []string{"CAP_SYS_ADMIN", "CAP_NET_ADMIN"},
+			"seccomp":  w535JSONAny(t, w535Deliverable(t, "dist/workstation/seccomp.json")),
+			"cgroupns": "private",
+			"pid1":     "catatonit\n",
+			"subtree":  "cpu io memory pids\n",
+		}
+		seccompInline, err := json.Marshal(scenario["seccomp"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		inspect, err := json.Marshal([]any{map[string]any{
+			"HostConfig": map[string]any{
+				"CapAdd":       scenario["caps"],
+				"SecurityOpt":  []string{"seccomp=" + string(seccompInline)},
+				"CgroupnsMode": scenario["cgroupns"],
+				"Privileged":   false,
+				"Devices":      []any{},
+				"Binds":        []any{},
+			},
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		write(dir, "inspect.json", string(inspect))
+		write(dir, "pid1.txt", scenario["pid1"].(string))
+		write(dir, "subtree.txt", scenario["subtree"].(string))
+		out, err := run(dir, "boot", "--no-aihub")
+		if err != nil {
+			t.Fatalf("the boot pass must pass against the stub:\n%s", out)
+		}
+		got := downVs(dir)
+		if len(got) == 0 {
+			t.Fatalf("the boot pass must end with a `down -v` of its own project (the stub records it):\n%s", out)
+		}
+		if !strings.HasPrefix(got[len(got)-1], "workstation-smoke-") {
+			t.Fatalf("the recorded down -v must name the per-run project, got %q:\n%s", got[len(got)-1], out)
+		}
+	})
+	t.Run("boot: a die mid-run still downs its own project (the EXIT trap)", func(t *testing.T) {
+		dir := t.TempDir()
+		scenario := map[string]any{
+			"caps":     []string{"CAP_SYS_ADMIN", "CAP_NET_ADMIN"},
+			"seccomp":  w535JSONAny(t, w535Deliverable(t, "dist/workstation/seccomp.json")),
+			"cgroupns": "private",
+			"pid1":     "not-catatonit\n",
+			"subtree":  "cpu io memory pids\n",
+		}
+		seccompInline, err := json.Marshal(scenario["seccomp"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		inspect, err := json.Marshal([]any{map[string]any{
+			"HostConfig": map[string]any{
+				"CapAdd":       scenario["caps"],
+				"SecurityOpt":  []string{"seccomp=" + string(seccompInline)},
+				"CgroupnsMode": scenario["cgroupns"],
+				"Privileged":   false,
+				"Devices":      []any{},
+				"Binds":        []any{},
+			},
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		write(dir, "inspect.json", string(inspect))
+		write(dir, "pid1.txt", scenario["pid1"].(string))
+		write(dir, "subtree.txt", scenario["subtree"].(string))
+		out, err := run(dir, "boot", "--no-aihub")
+		if err == nil {
+			t.Fatalf("a wrong PID 1 must fail the boot:\n%s", out)
+		}
+		if len(downVs(dir)) == 0 {
+			t.Fatalf("the EXIT trap must down -v the run's own project even on a die:\n%s", out)
+		}
+	})
+	t.Run("env: the happy run downs its own project with volumes", func(t *testing.T) {
+		dir := t.TempDir()
+		environ := strings.Join([]string{
+			"PORT=30141",
+			"PI_WEB_APP_NAME=pf-workstation-smoke-app",
+			"PI_SMOKE_PROBE=passed-through",
+			"PI_WEB_PASSWORD=pf-workstation-smoke-test-password",
+			"BUILDAH_ISOLATION=chroot",
+		}, "\x00") + "\x00"
+		write(dir, "environ.txt", environ)
+		out, err := run(dir, "env")
+		if err != nil {
+			t.Fatalf("the env pass must pass against the stub:\n%s", out)
+		}
+		if len(downVs(dir)) == 0 {
+			t.Fatalf("the env pass must end with a `down -v` of its own project:\n%s", out)
+		}
+	})
+	t.Run("first-boot: the happy run downs its own project with volumes", func(t *testing.T) {
+		dir := t.TempDir()
+		write(dir, "first-boot.json", `{"phase":"done","mode":"local","defaultCell":"default","server":"http://127.0.0.1:8420","userReady":true,"keyReady":true,"imageManaged":true,"updatedAt":"2026-11-20T00:00:00Z"}`)
+		write(dir, "cell-server.txt", "http://127.0.0.1:8420\n")
+		out, err := run(dir, "first-boot")
+		if err != nil {
+			t.Fatalf("the first-boot pass must pass against the stub:\n%s", out)
+		}
+		if len(downVs(dir)) == 0 {
+			t.Fatalf("the first-boot pass must end with a `down -v` of its own project:\n%s", out)
+		}
+	})
+	t.Run("podman-verify: the happy run downs its own project with volumes", func(t *testing.T) {
+		dir := t.TempDir()
+		out, err := run(dir, "podman-verify")
+		if err != nil {
+			t.Fatalf("the podman-verify pass must pass against the stub:\n%s", out)
+		}
+		if len(downVs(dir)) == 0 {
+			t.Fatalf("the podman-verify pass must end with a `down -v` of its own project:\n%s", out)
+		}
+	})
+}
