@@ -21,7 +21,8 @@ Register an incompatible change in the change that makes it: append one
 entry below, a level-two heading naming what changed, its body what the
 migration takes — for user lanes, for the work items in flight, for the
 deployment. The registry pin is red on an incompatible change the registry
-dump shows (a removed key, a new required key, a removed value) while this
+dump shows (a removed key, a new required key of an existing key set, a
+removed value) while this
 list has no entry; leave `ContractVersion` as it is.
 
 The release reads the entries (every line starting with a level-two
