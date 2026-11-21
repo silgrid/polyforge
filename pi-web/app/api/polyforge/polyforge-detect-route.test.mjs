@@ -56,7 +56,7 @@ test("the route's catch fallback carries the image fact too — no branch may an
   );
   assert.match(
     source,
-    /imageManaged: isImageManaged\(\),\s*\}\);/,
+    /imageManaged: isImageManaged\(\),\s*pfPresent: false,/,
     "the catch fallback names the fact as well",
   );
 });
