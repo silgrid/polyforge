@@ -214,12 +214,13 @@ func Upgrade(ctx context.Context, opts UpgradeOptions) (*UpgradeResult, error) {
 	// that follows re-asks until the work ends, and a cancel marker
 	// stands the run down.
 	record(UpgradeStateRunning, "drain", seedManifest.Version, "")
-	cancelled, err := drainAndWait(ctx, &drainWait{
+	dw := &drainWait{
 		root: opts.Root, face: opts.Face, poll: opts.Poll, force: opts.Force,
 		operation: OperationUpgrade, from: cur.Version, to: seedManifest.Version,
-	})
+	}
+	cancelled, err := drainAndWait(ctx, dw)
 	if err != nil {
-		return failed("drain", err)
+		return failed("drain", clearDrain(dw, err))
 	}
 	if cancelled {
 		return &UpgradeResult{From: cur.Version, To: cur.Version}, nil
@@ -232,7 +233,7 @@ func Upgrade(ctx context.Context, opts UpgradeOptions) (*UpgradeResult, error) {
 		BaseVersion: opts.BaseVersion, Platform: opts.Platform,
 	})
 	if err != nil {
-		return failed("switch", err)
+		return failed("switch", clearDrain(dw, err))
 	}
 
 	// ---- restart: the daemon relaunches on the new current (its exit
@@ -240,7 +241,7 @@ func Upgrade(ctx context.Context, opts UpgradeOptions) (*UpgradeResult, error) {
 	// relaunches it the same way.
 	record(UpgradeStateRunning, "restart", res.Version, "")
 	if err := opts.Face.Restart(ctx); err != nil {
-		return failed("restart", fmt.Errorf("the switch is complete but the daemon could not be asked to restart (it still runs the old version until it does): %w", err))
+		return failed("restart", fmt.Errorf("the switch is complete but the daemon could not be asked to restart (it still runs the old version, and the drain stays set, until it does): %w", err))
 	}
 	termPiWeb := opts.RestartPiWeb
 	if termPiWeb == nil {
@@ -351,6 +352,10 @@ type drainWait struct {
 	force     bool
 	operation string
 	from, to  string
+	// drained records that at least one Drain answer came back — the
+	// Host's upgrade drain IS set from that moment on (review r2#5: a
+	// later failure must clear it, never leave it standing).
+	drained bool
 }
 
 // drainAndWait sets the Host's upgrade drain, waits out the running
@@ -372,6 +377,7 @@ func drainAndWait(ctx context.Context, d *drainWait) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	d.drained = true
 	for len(busy) > 0 && !d.force {
 		record(UpgradeStateWaiting,
 			fmt.Sprintf("waiting for the running work of Cell(s) %s to end; new work is refused while the drain is set", strings.Join(busy, ", ")))
@@ -404,4 +410,23 @@ func drainAndWait(ctx context.Context, d *drainWait) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// clearDrain answers err for a run that may have set the Host's
+// upgrade drain (review r2#5, AC2's refusal half): the drain's only
+// documented end is the daemon's restart, so a run that fails after
+// setting it asks for that restart before answering — best effort,
+// with a context of its own (the caller's may be the very reason the
+// run failed) — and says in the error which way it went. A run whose
+// drain was never set answers err untouched.
+func clearDrain(d *drainWait, err error) error {
+	if d == nil || !d.drained {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if rerr := d.face.Restart(ctx); rerr != nil {
+		return fmt.Errorf("%w — and the drain could not be cleared: the daemon keeps refusing new work until it restarts (%v)", err, rerr)
+	}
+	return fmt.Errorf("%w (the drain was cleared: the daemon was asked to restart)", err)
 }

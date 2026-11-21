@@ -157,12 +157,13 @@ func Rollback(ctx context.Context, opts RollbackOptions) (*UpgradeResult, error)
 		return nil, fmt.Errorf("components rollback: the status record %s on the volume cannot be written: %w — nothing was changed",
 			filepath.Join(opts.Root, UpgradeStatusFilename), err)
 	}
-	cancelled, err := drainAndWait(ctx, &drainWait{
+	dw := &drainWait{
 		root: opts.Root, face: opts.Face, poll: opts.Poll, force: opts.Force,
 		operation: OperationRollback, from: curVer, to: prevVer,
-	})
+	}
+	cancelled, err := drainAndWait(ctx, dw)
 	if err != nil {
-		return failed("drain", err)
+		return failed("drain", clearDrain(dw, err))
 	}
 	if cancelled {
 		return &UpgradeResult{From: curVer, To: curVer}, nil
@@ -173,25 +174,29 @@ func Rollback(ctx context.Context, opts RollbackOptions) (*UpgradeResult, error)
 	// pointers on a complete version and explainable.
 	_ = WriteUpgradeStatus(opts.Root, &UpgradeStatus{Operation: OperationRollback, State: UpgradeStateRunning,
 		Phase: "switch", From: curVer, To: prevVer})
+	// review r2#5: any failure from the swap on still clears the drain
+	// the wait set — the swap is after it, exactly like the upgrade's
+	// switch.
+	clear := func(err error) error { return clearDrain(dw, err) }
 	swapLock, err := holdLock(opts.Root)
 	if err != nil {
-		return failed("switch", err)
+		return failed("switch", clear(err))
 	}
 	defer swapLock.Close()
 	if err := recoverPending(opts.Root); err != nil {
-		return failed("switch", err)
+		return failed("switch", clear(err))
 	}
 	if err := writeJournal(opts.Root, &journal{SchemaVersion: journalSchemaVersion, NewVersion: prevVer, OldVersion: curVer}); err != nil {
-		return failed("switch", err)
+		return failed("switch", clear(err))
 	}
 	if err := swapLink(opts.Root, CurrentLinkname, filepath.Join(ReleasesDirname, prevVer)); err != nil {
-		return failed("switch", err)
+		return failed("switch", clear(err))
 	}
 	if err := swapLink(opts.Root, PreviousLinkname, filepath.Join(ReleasesDirname, curVer)); err != nil {
-		return failed("switch", err)
+		return failed("switch", clear(err))
 	}
 	if err := removeJournal(opts.Root); err != nil {
-		return failed("switch", err)
+		return failed("switch", clear(err))
 	}
 
 	// ---- the same restarts: the daemon relaunches on the new current
