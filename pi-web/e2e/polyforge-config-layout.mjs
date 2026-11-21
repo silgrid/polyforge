@@ -558,12 +558,15 @@ try {
       if (!nearest || distance < nearest.distance) nearest = { distance, box: b };
     }
     assert.ok(nearest && nearest.distance <= 24, `${label}'s Save button is not on the input's row (nearest row distance ${nearest?.distance?.toFixed?.(1) ?? "?"}px)`);
-    // polyforge#151: a step-model add row is the shared picker (manual fill +
-    // grouped select), so the Save sits beside the row's whole control group —
-    // the anchor is the input's parent span (the picker's, or the plain write
-    // span's), not the input alone.
-    const parentRight = await input.evaluate((node) => node.parentElement.getBoundingClientRect().right);
-    return { input: box, button: nearest.box, gap: nearest.box.x - parentRight };
+    // polyforge#151 r2#1 (review #5): a step-model add row is the shared
+    // picker (manual fill + grouped select) — only there may the Save anchor
+    // on the picker span's right edge; a plain row's parent span holds the
+    // Save itself, so its anchor stays the input's right edge.
+    const anchorRight = await input.evaluate((node) =>
+      node.parentElement.classList.contains("model-candidate-picker")
+        ? node.parentElement.getBoundingClientRect().right
+        : node.getBoundingClientRect().right);
+    return { input: box, button: nearest.box, gap: nearest.box.x - anchorRight };
   };
 
   const desktop = await open();
