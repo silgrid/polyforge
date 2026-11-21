@@ -162,6 +162,16 @@ from pfstep.engine import argv_of as engine_argv_of  # noqa: E402
 from pfstep.engine import default_engine, nested_roots, reached_roots  # noqa: E402
 from pfstep.flaky import RerunRun, rerun_flaky  # noqa: E402
 from pfstep.invoke import Invocation, duration_flag  # noqa: E402
+from pfstep.preexisting import (  # noqa: E402
+    CLASS_UNDETERMINED,
+    candidates,
+    judge_on_base,
+    join_note,
+    path_is_protected,
+    protected_paths,
+    short,
+    skip_form,
+)
 from pfstep.rerun import CommandSpec, UnitState, locate, whole_command  # noqa: E402
 from pfstep.runner import Runner, bash_argv, raise_on_termination  # noqa: E402
 from pfstep.shellwords import has_flag, has_go_test, shell_quote, shell_words  # noqa: E402
@@ -265,6 +275,8 @@ def parser() -> argparse.ArgumentParser:
                     help="with --repo: only the named engine root's commands run — . is the repository's own root, a nested root its directory (repeatable; default: every root the change reaches)")
     ap.add_argument("--reuse", action="append", default=[], metavar="FILE",
                     help="with --close-scoped: a fast-checks result file whose green runs of an unchanged reuse key are reused, not re-run (repeatable)")
+    ap.add_argument("--unit-runs", default="", metavar="FILE",
+                    help="with --close-scoped: the build's units.json, its test commits' files protected — a test this change authored is never pre-existing")
     ap.add_argument("--check-units", default="", metavar="FILE",
                     help="the build's units.json: re-run its recorded unit runs as written and check each unit's marker against its run's output (verification's own rules)")
     ap.add_argument("--unit", default="", help="with --check-units: only the unit of that id")
@@ -457,6 +469,13 @@ class CheckRun:
         self.seq = 0
         self.details: Dict[str, Any] = {"repo": repo, "reports": [], "commands": []}
         self.head = ""
+        # the baseline triage (polyforge#212): the base setup the engine's
+        # reports declare, the protected paths of the close's --unit-runs
+        # decls, and the states of every red command's units — the rerun
+        # phase fills them, the baseline phase judges, the confirm reads
+        self.base_setup: List[str] = []
+        self.protected: List[str] = []
+        self.red_states: List[Tuple[Dict[str, Any], EngineCommand, str, str, str, List[UnitState]]] = []
         # the previous result file's reusable green entries, keyed by their
         # reuse key, and this run's per-root subtree hashes of the working
         # tree ("" = the repository root's whole tree)
@@ -600,17 +619,27 @@ class CheckRun:
 
     def unit_entry(self, us: UnitState) -> Dict[str, Any]:
         """One unit of the result's details — verify's own statuses, a
-        flaky carrying its re-run's log beside the first failure's."""
+        flaky carrying its re-run's log beside the first failure's; a
+        still-failing unit carries its baseline class, its signatures and
+        the base runs' observation summary beside the judgment's why."""
         out: Dict[str, Any] = {"kind": us.kind, "name": us.name, "file": us.file,
-                               "status": "flaky" if us.flaky else ("fail" if us.failed else "pass")}
+                               "status": "flaky" if us.flaky else ("pre_existing" if us.pre_existing else ("fail" if us.failed else "pass"))}
         if us.flaky:
             out["flaky"] = us.flaky
             out["detail"] = "passed on a re-run at HEAD"
             if us.pass_logs:
                 out["rerun_log"] = self.r.rel(us.pass_logs[0])
                 self.inv.logs.append(out["rerun_log"])
+        elif us.pre_existing:
+            out["detail"] = us.pre_detail
         elif us.failed:
             out["detail"] = us.note
+        if us.failed and us.base_class:
+            out["class"] = us.base_class
+            out["signature"] = us.unit.signature
+            out["head_signature"] = us.head_sig
+            if us.base_detail:
+                out["base_detail"] = us.base_detail
         if us.not_rerun:
             out["not_rerun"] = True
         return out
@@ -631,6 +660,8 @@ class CheckRun:
         for u in parsed:
             us = UnitState(unit=u)
             locate(clone, spec, us, race)
+            if us.file and path_is_protected(us.file, self.protected):
+                us.protected = True
             us_list.append(us)
         if not any(us.failed for us in us_list):
             # the exit is non-zero but no unit of the output failed: the
@@ -642,38 +673,58 @@ class CheckRun:
             rerun_flaky(us, RERUNS, clone, self.rerun_runner(timeout_of(c)),
                         lambda: self.r.remaining() > 1.0, "the fast checks' deadline",
                         "the fast checks' deadline")
-        entry["units"] = [self.unit_entry(us) for us in us_list]
         return us_list
 
     def confirm(self, entry: Dict[str, Any], c: EngineCommand, directory: str, root_rel: str,
                 log_abs: str, us_list: List[UnitState]) -> None:
-        """Verification's whole-command confirmation, the one policy: a
-        red command every failing unit of which re-ran flaky is proven
-        whole — by its first-run output's completion proof, or by one whole
-        re-run exiting 0; anything else leaves it red, named. A command the
-        deadline cannot fit is not confirmed: it stays red."""
+        """Verification's whole-command confirmation, the one policy: a red
+        command every still-failing unit of which the flaky policy or the
+        baseline phase explained (flaky or pre-existing) is proven whole —
+        in its skip form when a pre-existing failure was excluded, by its
+        first-run output's completion proof, or by one whole re-run exiting
+        0; a command that cannot exclude its pre-existing failures and has
+        no completion proof keeps a residual whole-command failure, named
+        (verify's own confirm_phase, isomorphic). A command the deadline
+        cannot fit is not confirmed: it stays red."""
         if entry.get("timed_out") or entry.get("not_started"):
             return
-        if any(us.failing() for us in us_list):
-            return  # a failure no re-run explained: nothing to confirm
+        if any(us.failing() and not us.pre_existing for us in us_list):
+            return  # a failure no re-run or the baseline explained
+        pre = any(us.pre_existing for us in us_list)
+        cmd = c.cmd
+        if pre:
+            form, note = skip_form(c.cmd, self.repo, us_list, harness_command(self.go_harness, c.cmd), "the fast checks")
+            if note:
+                proof = completion_proof(harness_command(self.go_harness, c.cmd), False, log_abs, us_list)
+                if proof:
+                    entry["complete"] = proof
+                    return
+                residual = whole_command(c.name, entry["exit_code"])
+                residual.note = ("the command has no skip switch for its pre-existing failure(s), so the rest of it"
+                                 " cannot be shown to pass: it stays failed — split the bar so each command can"
+                                 " exclude its own failures")
+                residual.base_class = CLASS_UNDETERMINED
+                us_list.append(residual)
+                return
+            cmd = form
         proof = completion_proof(harness_command(self.go_harness, c.cmd), False, log_abs, us_list)
         if proof:
             entry["complete"] = proof
             return
         if self.r.remaining() < 1.0:
             entry["not_confirmed"] = ("not confirmed: the fast checks' deadline was spent before `%s`"
-                                      " could be re-run whole to show nothing else failed" % c.cmd)
+                                      " could be re-run whole to show nothing else failed" % cmd)
             return
         dur = entry.get("duration_ms", 0) / 1000.0
         if self.r.remaining() < dur:
             entry["not_confirmed"] = ("not confirmed: the fast checks' deadline leaves less than the command's"
                                        " first-run time (%s) to re-run `%s` whole"
-                                       % (duration.format(int(dur * duration.SECOND)), c.cmd))
+                                       % (duration.format(int(dur * duration.SECOND)), cmd))
             return
         self.seq += 1
         log_path = os.path.join(self.log_dir, self.repo, str(self.seq), "command.log")
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
-        er = self.r.exec_to(runner.ExecSpec(argv=bash_argv(c.cmd), dir=directory, cwd=root_rel,
+        er = self.r.exec_to(runner.ExecSpec(argv=bash_argv(cmd), dir=directory, cwd=root_rel,
                                              timeout=timeout_of(c), private_tmp=True), log_path)
         entry["confirm_exit_code"] = er.exit
         if er.timed_out:
@@ -682,18 +733,18 @@ class CheckRun:
             entry["confirm_log"] = self.r.rel(er.log_path)
             self.inv.logs.append(entry["confirm_log"])
         if er.exit == 0:
-            entry["confirmed"] = c.cmd
+            entry["confirmed"] = cmd
         elif er.not_started:
             entry["not_confirmed"] = "not confirmed: the fast checks' deadline had passed before the re-run could start"
         else:
-            entry["not_confirmed"] = ("after its located failures were explained (flaky), `%s` still exits %d:"
-                                      " a failure no unit locates (log %s)"
-                                      % (c.cmd, er.exit, entry.get("confirm_log", "")))
+            entry["not_confirmed"] = ("after its located failures were explained (flaky or pre-existing), `%s` still"
+                                      " exits %d: a failure no unit locates (log %s)"
+                                      % (cmd, er.exit, entry.get("confirm_log", "")))
 
-    def flaky_phase(self, runs: List[Tuple[Dict[str, Any], EngineCommand, str, str, str, str, str]]) -> None:
-        """Every red command's failing units re-run once, then the whole
-        command confirmed — the entry carries the units, the flaky notes
-        and the confirmation."""
+    def rerun_phase(self, runs: List[Tuple[Dict[str, Any], EngineCommand, str, str, str, str, str]]) -> None:
+        """The flaky re-run phase's first half: every red command's failing
+        units re-run once by its derived targeted re-run; the states stay
+        for the baseline phase and the confirm."""
         for entry, c, directory, root_rel, d, log_abs, tmp_dir in runs:
             # a command its own timeout killed is red on its own — its
             # confirm never runs either — and re-running units out of its
@@ -703,7 +754,77 @@ class CheckRun:
                     or entry.get("exit_code") == 0 or not log_abs):
                 continue
             us_list = self.rerun_units(entry, c, d, log_abs, tmp_dir)
+            self.red_states.append((entry, c, directory, root_rel, log_abs, us_list))
+
+    def baseline_ref(self) -> Tuple[str, str]:
+        """The change's baseline commit and why it cannot be read ("" = it
+        can): the same one verification's head phase takes — the capsule's
+        fixed target branch, else the origin's default, and
+        merge-base HEAD origin/<branch> — so a triaged red and
+        verification's own judgment cannot disagree on the base."""
+        clone = os.path.join(self.capsule, "repos", self.repo)
+        branch, why_not = scoped_plan.base_branch_of(self.capsule, clone)
+        if branch == "":
+            return "", why_not
+        try:
+            return git.git(clone, "merge-base", "HEAD", "origin/" + branch, timeout=GIT_TIMEOUT).strip(), ""
+        except git.GitError as err:
+            return "", "the diff base is unreadable: %s" % err
+
+    def worktree_add_of(self, clone: str) -> "Callable[[str, str], int]":
+        def add(tmp: str, sha: str) -> int:
+            return git.run(clone, "worktree", "add", "--detach", tmp, sha, timeout=GIT_TIMEOUT).exit_code
+        return add
+
+    def run_bash_of(self) -> "Callable[[str, str, float], RerunRun]":
+        def run(cmd: str, d: str, t: float) -> RerunRun:
+            self.seq += 1
+            log_path = os.path.join(self.log_dir, self.repo, "base-%d" % self.seq, "command.log")
+            os.makedirs(os.path.dirname(log_path), exist_ok=True)
+            er = self.r.exec_to(runner.ExecSpec(argv=bash_argv(cmd), dir=d, cwd=d, timeout=t,
+                                                 private_tmp=True), log_path)
+            if er.log_path:
+                self.inv.logs.append(self.r.rel(er.log_path))
+            return RerunRun(not_started=er.not_started, exit=er.exit, log_path=er.log_path, tmp_dir=er.tmp_dir,
+                            duration=(er.evidence.duration_ms / 1000.0) if er.evidence is not None else 0.0)
+        return run
+
+    def baseline_phase(self) -> None:
+        """The baseline triage (polyforge#212): every unit still red after
+        its one re-run is judged on the change's baseline through the one
+        shared entry (pfstep.preexisting.judge_on_base) — the same judgment
+        verification runs, this run's own executors injected: the base
+        worktree on the host, the base setup and the re-runs over it, the
+        run's deadline as the budget. The result lands on each unit (its
+        class, the observation summary, the pre-existing record), and a red
+        the base could not settle keeps its note — fail closed, the existing
+        red rules hold."""
+        failing = [us for (_e, _c, _d, _r, _l, us_list) in self.red_states for us in us_list if us.failing()]
+        if not failing:
+            return
+        cands = candidates(failing)
+        if not cands:
+            return
+        clone = os.path.join(self.capsule, "repos", self.repo)
+        base, _why = self.baseline_ref()
+        if base == "":
+            for u in cands:
+                u.note = join_note(u.note, "not pre-existing: no base commit is known")
+                u.base_class = CLASS_UNDETERMINED
+            return
+        judge_on_base(clone, base, short(base), cands, self.base_setup,
+                      self.worktree_add_of(clone), self.run_bash_of(),
+                      lambda: self.r.remaining() > 1.0, lambda d: self.r.remaining() > d,
+                      "the fast checks' deadline", COMMAND_TIMEOUT, None)
+
+    def confirm_phase(self) -> None:
+        """The flaky re-run phase's second half: the whole-command
+        confirmation over the states the rerun phase left (a pre-existing
+        failure excluded by its skip form), the units recorded with their
+        baseline classes."""
+        for entry, c, directory, root_rel, log_abs, us_list in self.red_states:
             self.confirm(entry, c, directory, root_rel, log_abs, us_list)
+            entry["units"] = [self.unit_entry(us) for us in us_list]
 
     def run(self) -> int:
         """The repo's whole check: the report's fast and scoped commands, in
@@ -757,6 +878,10 @@ class CheckRun:
             chosen = [c for c in rep.commands if c.phase in phases]
             self.details["reports"].append({"root": self.cwd_rel(clone), "mode": rep.mode,
                                             "commands": len(chosen)})
+            # the base setup the report declares: the baseline phase runs it
+            # in the base worktree before any re-run there (Q2: the same
+            # preparation verification's base runs get)
+            self.base_setup = scoped_plan.append_new(self.base_setup, rep.base_setup)
             commands += [(c, clone, self.cwd_rel(clone), "") for c in chosen]
         # every nested engine root the changed paths reach is a repository
         # of its own whatever the root report answered — the #24 shape has
@@ -778,6 +903,8 @@ class CheckRun:
             nchosen = [c for c in nrep.commands if c.phase in phases]
             self.details["reports"].append({"root": root_rel, "mode": nrep.mode,
                                             "commands": len(nchosen)})
+            self.base_setup = scoped_plan.append_new(
+                self.base_setup, ["cd " + shell_quote(d) + " && " + s for s in nrep.base_setup])
             commands += [(nested_command(d, c), directory, root_rel, d) for c in nchosen]
         if not commands:
             self.inv.summary = ("repos/%s: the engine planned no command (stack %s, conf %s)"
@@ -832,9 +959,12 @@ class CheckRun:
             carried["carried"] = True
             self.details["commands"].append(carried)
         # the flaky phase: every red command's located failing units re-run
-        # once, then the whole command confirmed — a check green through a
-        # flaky re-run names it in its summary
-        self.flaky_phase(runs)
+        # once, the still-red judged on the baseline, then the whole command
+        # confirmed — a check green through a flaky re-run names it in its
+        # summary
+        self.rerun_phase(runs)
+        self.baseline_phase()
+        self.confirm_phase()
         red = [e for e in self.details["commands"]
                if not e.get("skipped") and not e.get("reused") and not e.get("carried")
                and (e.get("timed_out") or e.get("exit_code") != 0)
@@ -889,6 +1019,12 @@ class CloseRun(CheckRun):
         self.reuse: List[str] = list(reuse)
         self.reuse_green: Dict[ReuseKey, str] = {}
         self.details: Dict[str, Any] = {"repo": repo, "mode": "close-scoped", "commands": []}
+
+    def baseline_ref(self) -> Tuple[str, str]:
+        """The close's own baseline: the merge-base its light plan was
+        computed against, already read — the same base verification plans
+        its light tier over."""
+        return self.details.get("base", ""), ""
 
     def command_root(self, c: EngineCommand) -> str:
         """The root the record names for c: the repository's own, plus the
@@ -1035,7 +1171,14 @@ class CloseRun(CheckRun):
                 incomplete.append("`%s` cannot run: %s" % (c.cmd, entry.get("skip_reason", "")))
             else:
                 runs.append((entry, c, clone, self.command_root(c), c.dir, log_abs, tmp_dir))
-        self.flaky_phase(runs)
+        # the close's flaky phase: the selected commands' located failing
+        # units re-run once, the still-red judged on the baseline (the same
+        # light plan's own base setup preparing the base worktree), then the
+        # whole command confirmed
+        self.base_setup = list(plan.base_setup)
+        self.rerun_phase(runs)
+        self.baseline_phase()
+        self.confirm_phase()
         red = [e for e in self.details["commands"]
                if not e.get("skipped") and not e.get("reused")
                and (e.get("timed_out") or e.get("exit_code") != 0)
@@ -1086,6 +1229,8 @@ def run(inv: Invocation) -> int:
         return inv.usage("--close-scoped and --check-units are two runs: name one")
     if a.reuse and not a.close_scoped:
         return inv.usage("--reuse names a result file of --close-scoped, which is missing")
+    if a.unit_runs and not a.close_scoped:
+        return inv.usage("--unit-runs names the build's units.json of --close-scoped, which is missing")
     if (a.phase or a.root) and (a.close_scoped or a.check_units):
         return inv.usage("--phase and --root narrow a --repo run: they name no --close-scoped or --check-units run")
     capsule = os.path.abspath(a.capsule)
@@ -1127,6 +1272,12 @@ def run(inv: Invocation) -> int:
             return 2
     if a.close_scoped:
         cr: CheckRun = CloseRun(inv, capsule, a.repo, engine, a.reuse, logs, r)
+        if a.unit_runs:
+            try:
+                decls = read_unit_runs(a.unit_runs)
+            except ValueError as err:
+                return inv.usage("--unit-runs %s is not a usable units.json: %s" % (a.unit_runs, err))
+            cr.protected = protected_paths(capsule, decls)
     else:
         cr = CheckRun(inv, capsule, a.repo, engine, r.deadline, logs, r, phase=a.phase, roots=a.root)
     inv.details = cr.details

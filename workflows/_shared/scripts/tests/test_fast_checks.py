@@ -227,17 +227,25 @@ class FlakyRerunTest(FastChecksCase):
         self.assertIn("TestFlakyGate", res["summary"])
         self.assertIn(scoped["log"], res["summary"])
 
-    def test_a_unit_still_red_after_its_one_rerun_keeps_the_check_red(self) -> None:
+    def test_a_pre_existing_unit_still_red_after_its_one_rerun_turns_the_check_green(self) -> None:
+        """polyforge#212: a unit still red after its one re-run is judged on
+        the base — this fixture's TestAlwaysRed sits in the base commit and
+        fails the same way there, so the check records it pre-existing (its
+        class, the baseline and its signature) and confirms the command
+        whole in its skip form: exit 0, the gate's pass."""
         clone = self.flaky_repo(ALWAYS_RED_TEST)
         code, res = self.run_checks("app")
-        self.assertEqual(code, 1, res)
+        self.assertEqual(code, 0, res)
         scoped = self.scoped_of(res)
         u = scoped["units"][0]
-        self.assertEqual(u["status"], "fail")
-        self.assertIn("still failing on 1 re-run", u["detail"])
-        self.assertNotIn("confirmed", scoped, "an unexplained command is never confirmed")
+        self.assertEqual(u["status"], "pre_existing")
+        self.assertEqual(u["class"], "pre_existing")
+        self.assertIn("fails the same way on all 1 base runs", u["detail"])
+        self.assertIn("fails the same way on all 1 base runs", u.get("base_detail", ""))
+        self.assertEqual(scoped["confirmed"], "GOWORK=off go test -count=1 ./app -skip '^(TestAlwaysRed)$'",
+                         "a pre-existing failure is excluded by its skip form")
         with open(os.path.join(clone, "app", "always-red-runs"), encoding="utf-8") as f:
-            self.assertEqual(len(f.read()), 2, "the first run plus exactly one re-run")
+            self.assertEqual(len(f.read()), 2, "the first run plus exactly one re-run (the base run is its own worktree)")
 
     def test_a_flaky_e2e_suite_rerun_and_the_runners_summary_confirms(self) -> None:
         """AC1's e2e half: an aggregate e2e runner's failing suite re-runs
