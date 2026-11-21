@@ -45,6 +45,17 @@ export function ModelCandidatePicker({
   const { t } = useI18n();
   return (
     <span className="polyforge-config-write model-candidate-picker">
+      {/* the manual fill first — it is every row's value column (the layout
+          suite pins the columns' left edges), the grouped select beside it */}
+      <input
+        type="text"
+        disabled={disabled}
+        aria-label={inputLabel}
+        placeholder={placeholder}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        {...(inputProps ?? {})}
+      />
       {groups !== null && (
         <select
           aria-label={selectLabel}
@@ -70,15 +81,6 @@ export function ModelCandidatePicker({
           ))}
         </select>
       )}
-      <input
-        type="text"
-        disabled={disabled}
-        aria-label={inputLabel}
-        placeholder={placeholder}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        {...(inputProps ?? {})}
-      />
       {groups === null && (
         <span className="polyforge-config-empty">
           {t("polyforge.candidatePicker.unavailable")}{reason ? `：${reason}` : ""}

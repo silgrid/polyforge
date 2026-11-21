@@ -3,6 +3,8 @@
 // carries: components/HarnessPermissionSettings*, components/ClaudePermissionSettings*, lib/harness-permissions-view*, lib/harness-settings-view*, lib/harness/diagnostics*, app/api/harness/*
 // carries: components/AccountSettings*, components/PiAccountLogin*, components/ModelsConfig*, app/api/settings/account/*, lib/provider-listing*, lib/harness/account*, lib/polyforge-doctor*
 // carries: components/ClaudeCustomModels*
+// carries: lib/step-tiers*, lib/step-tier-defined-models*, lib/models-load*, lib/claude-models*
+// (polyforge#151: the tier column's projection chain, and the write gate's defined-model set behind it)
 // #85 设置页、账号页、统一模型页和权限页：九个导航分区，旧模型页已移除。
 // 模型页场景保留 provider 编辑、账号跳转与三列清单的行为校验。
 //

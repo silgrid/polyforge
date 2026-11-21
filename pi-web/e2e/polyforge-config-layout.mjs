@@ -1,6 +1,8 @@
 // carries: components/PolyforgeConfig*, components/polyforge-config-helpers*, components/PolyforgeInstallCard*, hooks/usePolyforgeDisclosure*, lib/polyforge-disclosure*, hooks/usePolyforgePanelPreferences*, lib/polyforge-panel-preferences*, lib/polyforge-config*, lib/polyforge-workflows*, lib/polyforge-install-pure*
 // carries: components/SettingsPanel*, components/SettingsUi*, components/settings-ui-helpers*, lib/settings-navigation*, lib/package-settings*, app/api/plugins*
 // carries: app/settings.css
+// carries: components/ModelCandidatePicker*, app/api/polyforge/step-tiers*, lib/step-tiers*
+// (polyforge#151: the shared picker's card mounts and its one catalog read's answer shape)
 // — Settings › Polyforge configuration page LAYOUT acceptance.
 //
 // Authored as the reproduction for the owner's second photo review: #88 made the

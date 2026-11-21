@@ -75,12 +75,6 @@ export async function GET(request: Request) {
     const paramsRead = searchParams.get("overrides") === "1"
       ? getPolyforgeParams(wi, profile).catch(() => null)
       : null;
-    // polyforge#151 (85b2): the override picker's step-tier catalog rides
-    // the same opt-in (its 10 s composer cache keeps the poll cheap) — one
-    // more parallel read, degraded to a `reason` with empty lists on failure.
-    const stepTiersRead = searchParams.get("overrides") === "1"
-      ? readStepTierCatalog().catch(() => null)
-      : null;
     const status = await getPolyforgeWatch(wi, profile);
     let overrideView: PolyforgeOverrideView | undefined;
     let paramsView: PolyforgeParamsView | undefined;
@@ -88,8 +82,13 @@ export async function GET(request: Request) {
     if (status && !FINISHED_STATUSES.has(status.workflowStatus)) {
       if (overrideRead) overrideView = await overrideRead ?? undefined;
       if (paramsRead) paramsView = await paramsRead ?? undefined;
-      if (stepTiersRead) {
-        const catalog = await stepTiersRead;
+      // polyforge#151 (85b2): the override picker's step-tier catalog rides
+      // the same opt-in, composed AFTER the watch answer and only for a live
+      // ticket (an ended one's answer spawns nothing for it — the composer's
+      // 10 s cache keeps the poll cheap), degraded to a `reason` with empty
+      // lists on failure.
+      if (searchParams.get("overrides") === "1") {
+        const catalog = await readStepTierCatalog().catch(() => null);
         stepTiers = catalog
           ? { tiers: catalog.tiers, defined: catalog.defined, ...(catalog.capable ? {} : { reason: catalog.reason ?? "the step-tier catalog is unavailable" }) }
           : { tiers: [], defined: { pi: [], claude: [] }, reason: "the step-tier catalog read failed" };
