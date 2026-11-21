@@ -1083,6 +1083,7 @@ test("the step-tier picker joins the chain and summarize add rows over the one c
       react: fixture("react-hook-shim.mjs"),
       "react/jsx-runtime": fixture("react-jsx-runtime.mjs"),
       "@/hooks/useI18n": fixture("polyforge-tasks-stubs.mjs"),
+      "./SettingsUi": fixture("polyforge-tasks-stubs.mjs"),
       "@/lib/polyforge-config-schema": modulePath("lib/polyforge-config-schema.ts"),
       "@/lib/step-tiers": modulePath("lib/step-tiers.ts"),
       "@/lib/polyforge-workflows-pure": modulePath("lib/polyforge-workflows-pure.ts"),
