@@ -26,6 +26,11 @@ import (
 type RollbackOptions struct {
 	// Root is the components volume's root.
 	Root string
+	// DataDir is the machine's data directory — the live half of the
+	// data-layout judgment (cellcfg's layout-version file). Empty
+	// skips the judgment: the daemon's own startup LayoutCheck remains
+	// the backstop.
+	DataDir string
 	// BaseVersion is the running base's (bootstrap pf's) version, for
 	// the previous version's minimum base requirement.
 	BaseVersion string
