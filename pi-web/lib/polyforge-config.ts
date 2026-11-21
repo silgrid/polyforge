@@ -98,6 +98,9 @@ export interface PolyforgeConfigRead {
   memoryPolicy?: PolyforgeMemoryPolicy;
   /** Why the summarize rows are hidden (pf below the summarize floor). */
   summarizeReason?: string;
+  /** Why the step-tier catalog is unavailable (pf below the family's own
+   *  0.2.4 floor — the models page's tier column reads it, 85b2). */
+  stepTiersReason?: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -419,6 +422,13 @@ export async function readPolyforgeConfig(cwd: string, scope: PolyforgeConfigSco
 
   const summarize = withListSummarize(items, presence.version);
   const memoryPolicy = summarize.reason ? null : sanitizeMemoryPolicy((list as Record<string, unknown>).memory_policy);
+  // the [step_tiers] family's own floor (85b2): the tier column's read-only
+  // reason, computed beside the summarize floor the same way (an
+  // unparseable version is below, and a v0.2.x pf ranks above every 2.20.x
+  // floor)
+  const stepTiersReason = isPolyforgeVersionBelowMinimum(presence.version, POLYFORGE_CONFIG_STEP_TIERS_MINIMUM_PF_VERSION, true)
+    ? `the step-tier catalog needs pf ${POLYFORGE_CONFIG_STEP_TIERS_MINIMUM_PF_VERSION} or newer (found ${presence.version ?? "an unparseable version"})`
+    : undefined;
 
   let mapped = false;
   let steps: PolyforgeConfigStep[] | undefined;
@@ -451,6 +461,7 @@ export async function readPolyforgeConfig(cwd: string, scope: PolyforgeConfigSco
     ...(workspaceFile ? { workspaceFile } : {}),
     ...(memoryPolicy ? { memoryPolicy } : {}),
     ...(summarize.reason ? { summarizeReason: summarize.reason } : {}),
+    ...(stepTiersReason ? { stepTiersReason } : {}),
   };
 }
 
