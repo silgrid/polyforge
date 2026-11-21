@@ -199,9 +199,16 @@ func runComponents(ctx *Context, fs *flag.FlagSet, args []string) error {
 		}
 		busy := s != nil && (s.State == components.UpgradeStateRunning || s.State == components.UpgradeStateWaiting)
 		switch {
+		case busy && components.TransactionRunning(root) && s.State != components.UpgradeStateWaiting:
+			// a LIVE transaction outside its drain wait (review r2#1): the
+			// cancel marker's only consumer is the wait loop, so laying
+			// one here would promise a stand-down that never comes. The
+			// honest answer refuses, changes nothing and names the phase.
+			return fmt.Errorf("components cancel: 编排正在 %s 阶段运行，此阶段不可取消（取消只在排空等待中生效）；未做任何更改", s.Phase)
 		case busy && components.TransactionRunning(root):
-			// a LIVE transaction: the marker is its message — the wait
-			// consumes it and asks for the daemon restart itself.
+			// a LIVE transaction IN its drain wait: the marker is its
+			// message — the wait consumes it and asks for the daemon
+			// restart itself.
 			if err := components.RequestUpgradeCancel(root); err != nil {
 				return err
 			}

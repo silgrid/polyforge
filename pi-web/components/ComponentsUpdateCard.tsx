@@ -15,7 +15,8 @@ export function ComponentsUpdateView({snapshot,error,onAction}:{snapshot:Compone
   {error && <p role="alert">{error}</p>}
   <button type="button" disabled={busy} onClick={()=>onAction("upgrade")}>更新</button>
   <button type="button" disabled={busy || !snapshot.previous} onClick={()=>onAction("rollback")}>回到上一版</button>
-  {busy && <button type="button" onClick={()=>onAction("cancel")}>取消并重启 daemon</button>}
+  {state==="waiting-drain" && <button type="button" onClick={()=>onAction("cancel")}>取消并重启 daemon</button>}
+  {state==="running" && <button type="button" onClick={()=>onAction("cancel")}>恢复中断的编排</button>}
   {state==="waiting-drain" && <button type="button" onClick={()=>onAction(snapshot.status?.operation ?? "upgrade",true)}>强制更新</button>}
  </section>;
 }
