@@ -398,3 +398,56 @@ func TestStepEndedCleanupFailureRerunsTheSweepOnResume(t *testing.T) {
 		t.Fatalf("nothing may dispatch while the sweep is unproven: %v", got)
 	}
 }
+
+// r3#1: an open-ask cleanup_failed park answered through `pf answer`
+// (the reply closes the ask) must keep its own flavor on the resume's
+// re-park: the reason says the ask re-enters with the owner's answer —
+// never "the dispatch's failure was recorded", which this path never
+// wrote. Red on the current tree: the answered ask makes parkedAsk()
+// nil and the flavor falls to the failed-dispatch text.
+func TestStepEndedCleanupFailureAnsweredAskKeepsItsFlavorOnResume(t *testing.T) {
+	askDir := t.TempDir()
+	askExec := &capsule.Execution{
+		CapsuleID: "cap_wi_r3", WorkItemID: "wi_r3", WorkflowStatus: StatusBlocked,
+		CurrentStep: "a", Version: 1,
+		Steps: map[string]*capsule.Step{"a": {Status: capsule.StepInProgress, Round: 1, Dispatch: 1, StepStartedAt: "2026-11-21T11:00:00Z"}},
+	}
+	askExec.BlockedReason = cleanupFailedReason("a", errors.New("sweep incomplete"), cleanupParkOpenAsk)
+	writeExecFixture(t, filepath.Join(askDir, capsule.ExecutionJSON), askExec)
+	if err := capsule.AppendAsk(askDir, capsule.AskLine{At: "2026-11-21T11:00:01Z", Step: "a", Spawn: 1, Kind: capsule.AskKindAsk, Text: "q", By: "owner"}); err != nil {
+		t.Fatal(err)
+	}
+	// `pf answer` records the reply, which closes the ask
+	if err := capsule.AppendAsk(askDir, capsule.AskLine{At: "2026-11-21T11:01:00Z", Kind: capsule.AskKindReply, AskAt: "2026-11-21T11:00:01Z", Text: "go on", By: "owner"}); err != nil {
+		t.Fatal(err)
+	}
+	sp := &fakeSpawner{script: []fakeEntry{done(`{}`)}}
+	d, err := New(Config{WI: WIInfo{ID: "wi_r3", CapsuleDir: askDir, BundleName: "b"},
+		ExecPath: filepath.Join(askDir, capsule.ExecutionJSON), Workflow: testLane(4, spec("a")),
+		Spawner: sp, Log: &eventLog{}, HubWrites: &hubSink{sp: sp}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.cfg.StepEnded = func(context.Context) error {
+		return errors.New("still incomplete")
+	}
+	if err := d.ResumeCurrent(); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if err := d.Run(context.Background()); err != nil {
+		t.Fatalf("resumed Run: %v", err)
+	}
+	x := d.Snapshot()
+	if x.WorkflowStatus != StatusBlocked || !CleanupFailedBlocked(x.BlockedReason) {
+		t.Fatalf("the answered-ask flavor re-parks cleanup_failed: %q %q", x.WorkflowStatus, x.BlockedReason)
+	}
+	if !strings.Contains(x.BlockedReason, "re-enters") {
+		t.Fatalf("the answered ask keeps its own continuation (re-enters): %q", x.BlockedReason)
+	}
+	if strings.Contains(x.BlockedReason, "failure was recorded") {
+		t.Fatalf("an answered ask never wrote a failure record — the reason must not claim one: %q", x.BlockedReason)
+	}
+	if got := sp.dispatched(); len(got) != 0 {
+		t.Fatalf("nothing may dispatch while the sweep is unproven: %v", got)
+	}
+}
