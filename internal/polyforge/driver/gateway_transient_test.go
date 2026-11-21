@@ -175,10 +175,13 @@ func TestServiceTemporarilyUnavailableIsUpstreamTransient(t *testing.T) {
 		t.Errorf("%q must never advance the candidate pointer", FailUpstreamTransient)
 	}
 	// the Host rule the owner configured (polyforge#210's interim, the
-	// same regex verbatim) answers the same cause — only the recorded
-	// source differs (added, not builtin), so deleting the Host pattern
-	// after this lands changes no verdict (the follow-up the parent
-	// ticket tracks).
+	// same regex verbatim) answers the same cause for this 503 text —
+	// only the recorded source differs (added, not builtin). Not proof
+	// that deleting the Host pattern changes no verdict (r1#5): it sits
+	// before the rate-limit row, so a text that also hits a throttle
+	// signature (an overload conjunction) classifies upstream_transient
+	// under it, rate_limited under the builtin alone — both transient,
+	// the same disposition and backoff ladder.
 	rules := &TextRules{Transient: []*regexp.Regexp{regexp.MustCompile(`(?i)\bservice\W+temporarily\W+unavailable\b`)}}
 	if cause, src := classifyTextWith(serviceUnavailable503Body, true, rules); cause != FailUpstreamTransient || src != ClassifiedByAdded {
 		t.Errorf("with the Host rule the 503 body classified (%q, %q), want (%q, %q)", cause, src, FailUpstreamTransient, ClassifiedByAdded)
