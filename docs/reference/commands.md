@@ -1308,19 +1308,37 @@ full reference.
   failing unit of which re-ran flaky is then confirmed the way
   verification confirms its bar — by its first-run output's completion
   proof (`pfstep/completion`) or by one whole re-run exiting 0 — and
-  only such a command turns green. Details: `repo, engine,
+  only such a command turns green. A unit still red after its one
+  re-run is judged on the change's baseline — the same judgment
+  verification's pre-existing phase runs (`pfstep/preexisting.py`, one
+  entry): a throwaway worktree of the merge-base, the report's declared
+  base setup, then the unit's own targeted re-run there. The classes:
+  `pre_existing` (the base fails the same way, its signature and the
+  baseline commit recorded — not this change's red, the run may pass),
+  `this_change` (the base lacks the test, or it passes there) and
+  `undetermined` (anything the base runs could not settle — fail
+  closed, the red rules hold). A pre-existing failure is excluded from
+  its command's confirming re-run by the skip form
+  verification uses (go `-skip`, `E2E_SKIP`, pytest `--deselect`); a
+  command that cannot exclude it keeps a residual whole-command
+  failure. Details: `repo, engine,
   reports[{root, mode, commands}], commands[{name, phase, root, cmd,
   exit_code, timed_out, not_started, duration_ms, log, skipped,
   skip_reason, tree, prereq_key, reused, carried, units[{kind, name,
-  file, status, flaky, detail, rerun_log, not_rerun}], confirmed,
-  complete, not_confirmed}]`. Exit 0: every
+  file, status, flaky, detail, class, signature, head_signature,
+  base_detail, rerun_log, not_rerun}], confirmed, complete,
+  not_confirmed}], baseline{commit, ref, setup, ran, note}, reds[{command,
+  unit, kind, file, class, signature, base, detail}]`. Exit 0: every
   command that ran exited 0 or turned green through its flaky re-runs
-  and confirmation, or was reused; 1: a command stayed red after the
-  flaky phase or
+  and confirmation, was reused, or carries only reds the baseline
+  proved pre-existing; 1: a command stayed red after the flaky phase,
+  its baseline triage or its confirmation — a red classified this
+  change's or undetermined — or
   was killed at its timeout; 2: not judged (no such repo, the
   engine missing or failing, an unreadable report, a repo the engine
   planned no command for).
-- `--repo <name> --close-scoped` (with `--reuse <file>`, repeatable) is
+- `--repo <name> --close-scoped` (with `--reuse <file>`, repeatable, and
+  `--unit-runs <units.json>`) is
   the build close's own mode: it plans the same light-tier selection verification's light tier
   plans (one shared implementation — the same engine
   `--json --light --base <merge-base>` request, the same choice, the same
@@ -1333,7 +1351,10 @@ full reference.
   flaky-confirmed one, never an entry an older run wrote without its
   key fields) is reused, not re-run, and a red command keeps the per-unit
   bar's one
-  targeted re-run and whole-command confirmation; a selection the engine
+  targeted re-run, its baseline triage and whole-command confirmation;
+  `--unit-runs` names the build's `units.json`: the files its test
+  commits touched are protected, never pre-existing (a test this change
+  authored is this change's red), an unusable file is exit 2; a selection the engine
   answers with the full tier, or a selected command that cannot run,
   records `incomplete` with the reason kept and exits non-zero, claiming
   nothing (the full bar stays `verification`'s; the owner decides a
@@ -1341,12 +1362,18 @@ full reference.
   analysis's machine selection record — the repo's head, tree, base and
   default branch, the engine invocations, the conf's identity, the
   selection's paths and suites, every command with its evidence (or its
-  reuse source), and the status: `green`, `red` or `incomplete` with its
-  reason. Exit 0: every selected command green (reused or run); 1: a
-  command stayed red after the flaky phase, or the selection is red or
+  reuse source), and the status: `green`, `pre_existing` (every red the
+  baseline triage kept is pre-existing — nothing this change's, exit 0,
+  the shared validator's green-equivalent evidence; `details.baseline`
+  and `details.reds[]` record the judgment, same shape as the `--repo`
+  run's), `red` or `incomplete` with its
+  reason. Exit 0: every selected command green (reused or run), or its
+  only reds pre-existing on the baseline; 1: a
+  command stayed red after the flaky phase, its baseline triage or its
+  confirmation, or the selection is red or
   incomplete; 2: not judged (no such repo, the engine missing or failing,
   an unreadable report, a repo the engine planned no command for, an
-  unusable `--reuse` file).
+  unusable `--reuse` file, an unusable `--unit-runs` file).
 - `--check-units <units.json> [--unit <id>]` is the on-the-spot unit
   check at record time: it re-runs the build's recorded unit runs as
   written (each unit's own `argv` in its own `cwd` of its own

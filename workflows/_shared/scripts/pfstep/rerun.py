@@ -126,6 +126,12 @@ class UnitState:
     pre_existing: bool = False
     pre_detail: str = ""
     base_sig: str = ""
+    # base_class: the base judgment's three-way class of a still-failing
+    # unit (pfstep.preexisting.CLASS_*, "" = not judged); base_detail: the
+    # base runs' observation summary, the judgment's own why wording
+    # (polyforge#212 — the fast checks record both beside the failure)
+    base_class: str = ""
+    base_detail: str = ""
     # carries: the globs the unit's file declares it covers,
     # repository-relative (a failing unit's; [] = none)
     carries: List[str] = field(default_factory=list)

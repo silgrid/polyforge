@@ -149,7 +149,7 @@ func TestShippedDevelopLanePromptsRender(t *testing.T) {
 			"the build close's scoped selection — the same light-tier selection verification plans, one shared implementation, over the final tree",
 			"for a work item whose verification runs the light tier (an integration batch's fix ticket runs the full bar and closes without one)",
 			"A red or `incomplete` result (the engine answered full, or a selected command cannot run) never hands off `done` without the owner's ruling",
-			"Merge each touched repo's `details.selected` of its green result into the change analysis's `selected`",
+			"Merge each touched repo's `details.selected` of its green or pre-existing result into the change analysis's `selected`",
 		},
 		reviewStepID: {
 			"## Blocking classes",

@@ -57,12 +57,15 @@ def engine_args_of(engine: str) -> List[str]:
         return []
 
 
-def run_close(capsule: str, repo: str, engine: str, out: str, *extra: str) -> Tuple[int, Dict[str, Any]]:
+def run_close(capsule: str, repo: str, engine: str, out: str, *extra: str,
+              env: Optional[Dict[str, str]] = None) -> Tuple[int, Dict[str, Any]]:
     """fast_checks.py --close-scoped on the capsule's repo, as a skill runs
-    it; its exit and its result file."""
+    it; its exit and its result file. env passes a step environment through
+    (a fake bin on the PATH — the baseline worktree's re-runs need the same
+    fake runner the bar ran with)."""
     argv = [sys.executable, FAST_CHECKS, "--capsule", capsule, "--repo", repo, "--close-scoped",
             "--engine", engine, "--deadline", "10m", "--out", out, *extra]
-    c = subprocess.run(argv, capture_output=True, text=True)
+    c = subprocess.run(argv, capture_output=True, text=True, env=env)
     if not os.path.exists(out):
         raise AssertionError("fast_checks.py wrote no result file (exit %d): %s" % (c.returncode, (c.stderr or c.stdout)[-500:]))
     with open(out, encoding="utf-8") as f:

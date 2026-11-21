@@ -203,6 +203,43 @@ class HelperTest(unittest.TestCase):
         self.assertIn("its selection records no status",
                       selected_problem(self.sel(status=""), "b" * 40))
 
+    def test_a_pre_existing_record_stands_like_a_green_one(self) -> None:
+        """polyforge#212: the close's pre_existing selection record stands
+        like a green one — the same evidence rules, a skip-form confirmation
+        among them; a red or an empty status still cannot."""
+        head = "b" * 40
+        d = self.sel(status="pre_existing",
+                     commands=[SelectedCommand(name="gate", cmd="echo ok", phase="scoped", exit_code=0),
+                               SelectedCommand(name="tests", cmd="pytest", phase="scoped", exit_code=1,
+                                               confirmed="pytest --deselect tests/test_a.py::test_old")])
+        self.assertEqual(selected_problem(d, head), "", "a pre_existing record is green-equivalent evidence")
+        self.assertIn("its selection is red", selected_problem(self.sel(status="red", reason="nothing ran"), head))
+
+    def test_the_file_parses_a_pre_existing_record_and_refuses_unknown_statuses(self) -> None:
+        """polyforge#212: read_analysis takes the close's new status and
+        names all four it accepts when a record carries another."""
+        import json as _json
+        import tempfile
+        import os
+        good = {"head": "b" * 40, "engine": "the engine --json --light", "mode": "light", "status": "pre_existing",
+                "commands": [{"name": "tests", "cmd": "pytest", "phase": "scoped", "exit_code": 1,
+                              "confirmed": "pytest --deselect tests/test_a.py::test_old"}]}
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "change-analysis.json")
+            with open(path, "w", encoding="utf-8") as f:
+                _json.dump({"tests": [], "selected": {"app": good}}, f)
+            try:
+                an = read_analysis(path)
+            except ValueError as err:
+                self.fail("a pre_existing record must parse: %s" % err)
+            self.assertEqual(an.selected["app"].status, "pre_existing")
+            self.assertEqual(selected_problem(an.selected["app"], "b" * 40), "")
+            with open(path, "w", encoding="utf-8") as f:
+                _json.dump({"tests": [], "selected": {"app": dict(good, status="purple")}}, f)
+            with self.assertRaises(ValueError) as cm:
+                read_analysis(path)
+            self.assertIn("status is not green, pre_existing, red or incomplete", str(cm.exception))
+
     def test_a_command_green_through_its_flaky_rerun_is_evidence(self) -> None:
         """The per-unit bar's own green: a red first run whose failing units
         re-ran flaky and whose whole command was then confirmed — one whole

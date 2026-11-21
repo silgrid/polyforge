@@ -1098,3 +1098,34 @@ schema changed. A work item already in flight keeps its claim-time lane snapshot
 so it is not gated; a work item claimed after the upgrade runs the new build and
 sync texts. A project whose default branch is already red will see its build and
 sync ask the owner at hand-off instead of at verification.
+
+## v0.2.4, the fast checks' baseline triage: a red the change's base carries is not this change's (polyforge#212)
+
+- `fast_checks.py` (`--repo`, the per-unit bar and the hand-off gate's own
+  command, and `--close-scoped`, the build close's scoped selection) triages a
+  unit still red after its one flaky re-run on the change's baseline — the same
+  judgment `verify.py`'s pre-existing phase runs, one shared entry
+  (`workflows/_shared/scripts/pfstep/preexisting.py`, `judge_on_base`): a
+  throwaway worktree of the merge-base, the report's declared `base_setup`, then
+  the unit's own targeted re-run there. The classes land in the result file —
+  `pre_existing` (the base fails the same way, its signature, the baseline
+  commit, `details.baseline` and `details.reds[]` recording the judgment: not
+  this change's red, the run exits 0 and the selection's `pre_existing` status
+  is the shared validator's green-equivalent evidence in
+  `facts.py analysis` and `verify.py --analysis`), `this_change` (the base lacks
+  the test, or it passes there) and `undetermined` (anything the base runs
+  could not settle — fail closed, the existing red rules hold and the owner's
+  release path is unchanged).
+- `--close-scoped` takes `--unit-runs <units.json>` (the build skill passes
+  `artifacts/build/units.json`): the files its test commits touched are
+  protected, never pre-existing — a test this change authored is this change's
+  red. A pre-existing failure is excluded from its command's confirming re-run
+  by the skip form verification uses (go `-skip`, `E2E_SKIP`, pytest
+  `--deselect`); a command that cannot exclude it and has no completion proof
+  keeps a residual whole-command failure.
+- The hand-off gate (polyforge#211) needs no change: a triaged check exits 0,
+  its `pass` verdict passes the gate — the gate's own red-release path
+  (`--per-owner`) stays for what the base could not settle. What a project
+  must change: nothing — the judgment, its records and the baseline worktree
+  are the lane's own scripts; a work item claimed before this section keeps
+  its claim-time lane snapshot and runs the previous behavior.
