@@ -62,6 +62,10 @@ const (
 	// WakeWriteFailed: the hub writes of a `done` hand-off failed; the
 	// resume replays them, then continues.
 	WakeWriteFailed WakeKind = "write_failed"
+	// WakeCleanupFailed: a step-end process cleanup could not prove the
+	// step's processes gone (polyforge#200); the resume re-runs the sweep
+	// and continues the way the park's reason says.
+	WakeCleanupFailed WakeKind = "cleanup_failed"
 	// WakePaused: the operator paused the work item; its current step
 	// continues in place with the message.
 	WakePaused WakeKind = "paused"
