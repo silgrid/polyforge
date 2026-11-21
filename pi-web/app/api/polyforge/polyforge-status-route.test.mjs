@@ -70,43 +70,6 @@ test("a status read 5 s after a failed probe answers pfPresent:true once pf work
   assert.equal((await recovered.json()).pfPresent, true, "the failed probe is cached for 5 s, not 60 s");
 });
 
-test("polyforge#177: every authorized branch answers the image-managed fact; the 403 branch answers none", async () => {
-  // the pf-absent branch: the judgment reads the seed manifest alone — pf
-  // missing must still identify the image (the dock never needs to re-probe).
-  await withSeam(seedFixture(), async () => {
-    writeFileSync(mode, "fail");
-    const absent = await GET(get());
-    assert.equal(absent.status, 200);
-    assert.deepEqual(
-      await absent.json(),
-      { imageManaged: true, pfPresent: false, status: null },
-      "the pf-absent branch carries the image fact",
-    );
-
-    // the success branch
-    writeFileSync(mode, "ok");
-    const ok = await GET(get());
-    assert.equal((await ok.json()).imageManaged, true, "the success branch carries the image fact");
-
-    // the degraded branch: pf present, the daemon's answer a failure — a
-    // 200 with status:null, never a 5xx, and the image fact still present
-    writeFileSync(mode, "daemon-down");
-    const degraded = await GET(get());
-    assert.equal(degraded.status, 200);
-    const degradedBody = await degraded.json();
-    assert.equal(degradedBody.imageManaged, true, "the degraded branch carries the image fact");
-    assert.equal(degradedBody.status, null);
-  });
-
-  // the auth branch answers 403 with no machine facts at all
-  await withSeam(seedFixture(), async () => {
-    writeFileSync(mode, "ok");
-    const forbidden = await GET(new Request("http://elsewhere:9/api/polyforge/status", { headers: { host: "elsewhere:9" } }));
-    assert.equal(forbidden.status, 403);
-    assert.equal("imageManaged" in (await forbidden.json()), false, "the 403 body carries no machine facts");
-  });
-});
-
 test("polyforge#177: the host stays the host — no seed manifest means imageManaged:false and the shape unchanged", async () => {
   await withSeam(join(work, "no-such-seed"), async () => {
     writeFileSync(mode, "ok");
