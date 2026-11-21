@@ -68,10 +68,11 @@ test("the table's fifth column: the header, the per-row tier states and the row'
   assert.match(html, /Not set/, "an unset row shows 未设置");
   assert.match(html, /data-step-tier-select/, "the tier select renders for a defined row");
   assert.match(html, /Apply to/, "the apply-to choice renders");
-  // the apply-to targets are the row's own harnesses (the merged pi+claude row offers both)
+  // the merged pi+claude row carries the apply-to over its own two harnesses
+  // (the per-harness checkboxes render in specific mode — the e2e clicks them)
   const merged = html.slice(html.indexOf("anthropic"));
-  assert.match(merged, /data-harness="pi"/, "the merged row's pi target");
-  assert.match(merged, /data-harness="claude"/, "the merged row's claude target");
+  assert.match(merged, /Apply to/, "the merged row's apply-to");
+  assert.match(merged, /data-mode="all"/, "the default choice is every harness the row offers");
 });
 
 test("an incapable catalog read leaves the tier column read-only, the other columns untouched", () => {
