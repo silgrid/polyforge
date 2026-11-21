@@ -136,6 +136,14 @@ func (r *Resources) Holds(lock string) bool {
 // Heavy reports whether the resources ask the heavy-run admission.
 func (r *Resources) Heavy() bool { return r != nil && r.Admission == AdmissionHeavy }
 
+// FastCheckProof is a step's `fast_check_proof`: the result file its done
+// reads for every task repo it changed, and the command that writes a fresh
+// one. Both templates carry {repo}, the task repo's name.
+type FastCheckProof struct {
+	Result  string
+	Command string
+}
+
 // Step is one loaded step entry: an agent step (workflow contract 4).
 type Step struct {
 	ID   string
@@ -180,6 +188,9 @@ type Step struct {
 	// round registers (`pf step hub wrap-attrs <name>`) before it may hand
 	// off done — the daemon refuses that hand-off otherwise.
 	WrapAttrs []string
+	// FastCheckProof is `fast_check_proof` (nil = none): the fast-check
+	// proof this step's done needs for each task repo it changed.
+	FastCheckProof *FastCheckProof
 	// Params is `params` (nil = none): the step's declared parameters,
 	// each name to its lane-default value (a single-line string). The
 	// final value is composed at every dispatch (lane default, the
