@@ -101,7 +101,7 @@ func writeLifecycleLane(t *testing.T, wfDir string) {
 	yaml := `# yaml-language-server: $schema=../_schema/workflow-1.schema.json
 contract: 1
 name: pflifecycle
-description: One terminal agent step - the production subagent lifecycle proof (polyforge#200): the step calls the daemon-owned worker, hands off done and the lane completes, so the step-end process sweep is judged with no successor spawn racing the scan.
+description: "One terminal agent step - the production subagent lifecycle proof (polyforge#200): the step calls the daemon-owned worker, hands off done and the lane completes, so the step-end process sweep is judged with no successor spawn racing the scan."
 max_rewinds: 3
 steps:
   - id: solo
