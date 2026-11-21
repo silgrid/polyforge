@@ -2121,7 +2121,7 @@ type WorkflowRowFeedback = { message: string; tone: "default" | "error" };
  * disabled, with pf's reason as visible text, while the running daemon cannot
  * check the step keys. `pf submit --models` is only noted, never edited.
  */
-function WorkflowCard({ cwd, profile, active, refreshKey, regionId, reloadClassLabel, onWritten, tierCatalog }: {
+export function WorkflowCard({ cwd, profile, active, refreshKey, regionId, reloadClassLabel, onWritten, tierCatalog }: {
   cwd: string | null;
   /** the pane's Cell — its mapping's workspaces, its --profile. */
   profile: string;
