@@ -201,6 +201,9 @@ const T = {
   S21: "S85-21: General has no claude permission controls; its hook switch stays",
   S22: "S85-22: the table and the editor share one enabledModels controller — a Save never re-enables a model the table just disabled (review r1#1)",
   S23: "S85-23: the models page's Claude section merges the retired custom models under a preview and edits the native picker with full-list writes (85a3-3)",
+  S30: "S85-30: the model list's step-tier column sets a tier for every harness of the row and reads the state back (85b2 AC1/AC3)",
+  S31: "S85-31: an inconsistent row lists each harness's tier and a unify restore returns to 全部 (85b2 AC3)",
+  S32: "S85-32: an unsaved row never offers the tier setter; an incapable catalog read leaves the column read-only with its reason (85b2 AC1/AC3)",
 };
 const failures = new Map(Object.values(T).map((title) => [title, []]));
 const ran = new Set();
@@ -942,6 +945,134 @@ try {
     await section.getByRole("button", { name: "Add", exact: true }).click({ timeout: ACTION_MS });
     await waitFor(() => modelPuts.some((body) => JSON.stringify(body.customModels) === JSON.stringify(["native-keep", "claude-b", "claude-c"])),
       ACTION_MS, "the add never wrote the full next list");
+    await page.context().close();
+  });
+  // S85-30 — polyforge#151 (85b2 AC1/AC3): the model list's step-tier column.
+  // A merged pi+claude row sets a tier with 应用到：全部 — one Host write per
+  // harness of the row (the plan's whole-key list, the CAS along), the state
+  // read back from the config list answer shows 全部.
+  await part("S30", "step-tier column", async () => {
+    const page = await newPage();
+    const tierWrites = [];
+    let items = [{ key: "step_tiers.default", value: ["pi:other/model"], source: "file", class: "live", schema: { kind: "model-list" } }];
+    await page.route(/\/api\/models\?scope=all/, (route) => route.fulfill({ json: {
+      models: { "anthropic:opus": "Opus" }, modelList: [{ id: "opus", name: "Opus", provider: "anthropic" }],
+      defaultModel: null, defaultThinkingLevel: null, savedDefaultThinkingLevel: null,
+      thinkingLevels: {}, thinkingLevelMaps: {}, thinkingLevelPins: {}, isScoped: false } }));
+    await page.route("**/api/claude", (route) => route.fulfill({ json: { ...CLAUDE_REPORT, models: [{ value: "opus", source: "alias" }] } }));
+    await page.route(/\/api\/polyforge\/config\?host=1/, async (route) => {
+      if (route.request().method() === "POST") {
+        const body = route.request().postDataJSON();
+        tierWrites.push(body);
+        items = body.action === "set"
+          ? [...items.filter((item) => item.key !== body.key), { key: body.key, value: body.value, source: "file", class: "live", schema: { kind: "model-list" } }]
+          : items.filter((item) => item.key !== body.key);
+        await route.fulfill({ json: { ok: true, key: body.key, outcome: "applied", message: "applied", entry: null, daemonReachable: true } });
+        return;
+      }
+      await route.fulfill({ json: { pfPresent: true, pfVersion: "v0.2.4", capable: true, items, file: { sha256: "e2e-sha", exists: true }, mapped: false } });
+    });
+    await openSettings(page);
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    const host = sectionHost(page, "models");
+    await host.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
+    const cell = host.locator("[data-step-tier-cell]").first();
+    await cell.waitFor({ state: "visible", timeout: ACTION_MS });
+    assert.match(await cell.locator("[data-step-tier-state]").innerText(), /Not set/, "an unset row shows 未设置");
+    await cell.locator("[data-step-tier-select]").selectOption("default");
+    await cell.getByRole("button", { name: "Save", exact: true }).click({ timeout: ACTION_MS });
+    await waitFor(async () => (await cell.locator("[data-step-tier-state]").innerText()).includes("All: default"),
+      ACTION_MS, "the row never read back 全部：default");
+    // 应用到：全部 expanded to one write per harness of the row (pi then
+    // claude), each the plan's whole-key list with the CAS expectation.
+    assert.deepEqual(tierWrites, [
+      { action: "set", key: "step_tiers.default", value: ["pi:other/model", "pi:anthropic/opus"], host: true, expect_state: { file_sha256: "e2e-sha" } },
+      { action: "set", key: "step_tiers.default", value: ["pi:other/model", "pi:anthropic/opus", "claude:opus"], host: true, expect_state: { file_sha256: "e2e-sha" } },
+    ], "one Host write per harness, the whole-key lists, the CAS along");
+    await page.context().close();
+  });
+
+  // S85-31 — polyforge#151 (85b2 AC3): an inconsistent row lists each
+  // harness's own tier (the 不一致 lines), 应用到 switches to 指定, and a
+  // unify restore (a tier choice with 应用到：全部) writes the other harness
+  // over and unsets its vacated tier — the read-back returns to 全部.
+  await part("S31", "inconsistent + restore", async () => {
+    const page = await newPage();
+    const tierWrites = [];
+    let items = [
+      { key: "step_tiers.default", value: ["pi:anthropic/opus"], source: "file", class: "live", schema: { kind: "model-list" } },
+      { key: "step_tiers.fast-chat", value: ["claude:opus"], source: "file", class: "live", schema: { kind: "model-list" } },
+    ];
+    await page.route(/\/api\/models\?scope=all/, (route) => route.fulfill({ json: {
+      models: { "anthropic:opus": "Opus" }, modelList: [{ id: "opus", name: "Opus", provider: "anthropic" }],
+      defaultModel: null, defaultThinkingLevel: null, savedDefaultThinkingLevel: null,
+      thinkingLevels: {}, thinkingLevelMaps: {}, thinkingLevelPins: {}, isScoped: false } }));
+    await page.route("**/api/claude", (route) => route.fulfill({ json: { ...CLAUDE_REPORT, models: [{ value: "opus", source: "alias" }] } }));
+    await page.route(/\/api\/polyforge\/config\?host=1/, async (route) => {
+      if (route.request().method() === "POST") {
+        const body = route.request().postDataJSON();
+        tierWrites.push(body);
+        items = body.action === "set"
+          ? [...items.filter((item) => item.key !== body.key), { key: body.key, value: body.value, source: "file", class: "live", schema: { kind: "model-list" } }]
+          : items.filter((item) => item.key !== body.key);
+        await route.fulfill({ json: { ok: true, key: body.key, outcome: "applied", message: "applied", entry: null, daemonReachable: true } });
+        return;
+      }
+      await route.fulfill({ json: { pfPresent: true, pfVersion: "v0.2.4", capable: true, items, file: { sha256: "e2e-sha", exists: true }, mapped: false } });
+    });
+    await openSettings(page);
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    const host = sectionHost(page, "models");
+    const cell = host.locator("[data-step-tier-cell]").first();
+    await cell.waitFor({ state: "visible", timeout: ACTION_MS });
+    const state = await cell.locator("[data-step-tier-state]").innerText();
+    assert.match(state, /Specific/, "a differing row shows 指定");
+    assert.match(state, /Inconsistent: pi is currently in default/, "pi's own tier is listed");
+    assert.match(state, /Inconsistent: claude is currently in fast-chat/, "claude's own tier is listed");
+    // 应用到 switches to 指定 (the per-harness checkboxes render), then back
+    // to 全部 — the unify restore: default (pi's tier) written for claude too.
+    await cell.getByLabel("Specific harnesses").check();
+    await cell.locator('[data-harness="pi"] input[type="checkbox"]').check();
+    await cell.getByLabel("All", { exact: true }).check();
+    await cell.locator("[data-step-tier-select]").selectOption("default");
+    await cell.getByRole("button", { name: "Save", exact: true }).click({ timeout: ACTION_MS });
+    await waitFor(async () => (await cell.locator("[data-step-tier-state]").innerText()).includes("All: default"),
+      ACTION_MS, "the unified row never read back 全部：default");
+    // pi was already in default alone (no write); claude moved over and its
+    // vacated tier unset — never an empty list.
+    assert.deepEqual(tierWrites, [
+      { action: "set", key: "step_tiers.default", value: ["pi:anthropic/opus", "claude:opus"], host: true, expect_state: { file_sha256: "e2e-sha" } },
+      { action: "unset", key: "step_tiers.fast-chat", host: true, expect_state: { file_sha256: "e2e-sha" } },
+    ], "the restore writes the other harness over and unsets its vacated tier");
+    await page.context().close();
+  });
+
+  // S85-32 — polyforge#151 (85b2 AC1/AC3): an incapable catalog read (pf
+  // below the family's own floor) leaves the column read-only with its
+  // reason while the other columns stay; an unsaved provider draft adds no
+  // row to the unified list, so it never offers the tier setter.
+  await part("S32", "unsaved row + read-only column", async () => {
+    const page = await newPage();
+    await page.route(/\/api\/models\?scope=all/, (route) => route.fulfill({ json: {
+      models: { "anthropic:opus": "Opus" }, modelList: [{ id: "opus", name: "Opus", provider: "anthropic" }],
+      defaultModel: null, defaultThinkingLevel: null, savedDefaultThinkingLevel: null,
+      thinkingLevels: {}, thinkingLevelMaps: {}, thinkingLevelPins: {}, isScoped: false } }));
+    await page.route(/\/api\/polyforge\/config\?host=1/, (route) => route.fulfill({ json: {
+      pfPresent: true, pfVersion: "v2.20.21", capable: true,
+      stepTiersReason: "the step-tier catalog needs pf 0.2.4 or newer (found v2.20.21)",
+      items: [], file: { sha256: "e2e-sha", exists: true }, mapped: false } }));
+    await openSettings(page);
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    const host = sectionHost(page, "models");
+    const cell = host.locator("[data-step-tier-cell]").first();
+    await cell.waitFor({ state: "visible", timeout: ACTION_MS });
+    assert.match(await host.locator("[data-step-tier-reason]").innerText(), /needs pf 0\.2\.4/, "the read-only reason shows once");
+    assert.equal(await host.locator("[data-step-tier-select]").count(), 0, "an incapable catalog read leaves the column read-only");
+    assert.ok((await host.innerText()).includes("Chat availability"), "the other columns are untouched");
+    // an unsaved provider draft is not a defined model: no row, no tier setter
+    await host.getByRole("button", { name: "Add provider", exact: true }).click({ timeout: ACTION_MS });
+    await host.getByPlaceholder("provider-name", { exact: true }).waitFor({ state: "visible", timeout: ACTION_MS });
+    assert.equal(await host.locator("[data-step-tier-cell]").count(), 1, "a saved row only — an unsaved draft never offers the tier setter");
     await page.context().close();
   });
 } finally {

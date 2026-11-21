@@ -93,6 +93,9 @@ const CONFIG = {
     { key: "max_concurrent_jobs", value: 6, source: "file", class: "live", schema: { kind: "int", min: 1 }, daemon: { value: 6 } },
     { key: WS, value: "e2e-project", source: "file", class: "restart-only", section: true },
     { key: "summarize.models", value: MODELS, source: "file", class: "live", schema: { kind: "model-list" } },
+    // polyforge#151 (85b2): pf lists the Host's [step_tiers] family on the
+    // default Cell too (listedInScope) — the card must never render it.
+    { key: "step_tiers.default", value: ["pi:e2e-tier-model"], source: "file", class: "live", schema: { kind: "model-list" } },
     { key: "summarize.language", value: "English", source: "file", class: "live", schema: { kind: "string" } },
     { key: "summarize.interval_sec", value: 30, source: "file", class: "live", schema: { kind: "int", min: 10, max: 3600 } },
   ],
@@ -182,6 +185,13 @@ try {
     await page.route("**/api/polyforge/config/history", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ entries: HISTORY }) }));
     await page.route("**/api/polyforge/config?*", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(CONFIG) }));
     await page.route("**/api/polyforge/workflows?*", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(workflowsFixture(project)) }));
+    await page.route("**/api/polyforge/step-tiers", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+      // polyforge#151: the shared picker's catalog read — a failed read is
+      // this suite's fixture (the manual fill stays with the reason).
+      pfPresent: true, pfVersion: "v2.20.11", capable: false,
+      reason: "the step-tier catalog needs pf 0.2.4 or newer (found v2.20.11)",
+      tiers: [], defined: { pi: [], claude: [] },
+    }) }));
     await page.route("**/api/polyforge/detect*", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
       pfPresent: true, pfVersion: "v2.20.11", pfVersionBelowMinimum: false, line: "internal",
       piSkillInstalled: true, piSkillEnabled: true, claudeSkillsSymlink: true, claudeSessionStartHook: true,
@@ -615,6 +625,28 @@ try {
       .map((node) => (node.textContent ?? "").trim())
       .filter((text) => (text.match(/,/g) ?? []).length >= 2));
     assert.deepEqual(rows, [], `the [summarize] zone still has a comma-joined long value: ${rows.join(" / ")}`);
+  });
+
+  // polyforge#151 (85b2 AC3): the default Cell's list carries the Host's
+  // step_tiers family (the fixture above), but the cli.toml card drops it —
+  // the catalog's one editing surface is the models page's tier column, and
+  // no read-only chips leak it here.
+  await check("the default Cell's card drops the step_tiers family (no read-only chips)", async () => {
+    const { dialog } = desktop;
+    const text = await dialog.innerText();
+    assert.ok(!text.includes("step_tiers"), "the cli.toml card renders a step_tiers key as chips or text");
+    assert.ok(!text.includes("pi:e2e-tier-model"), "a step_tiers candidate leaked into the card");
+    // the shared picker still renders beside the summarize chips: manual fill
+    // first (the value column stays aligned), then the grouped select.
+    const summarize = cards(dialog).summarize;
+    const input = summarize.locator("input").first();
+    const select = summarize.locator("select").first();
+    assert.ok(await input.count() === 1, "the picker's manual fill is the row's input");
+    assert.ok(await select.count() === 1, "the picker's grouped select renders beside it");
+    const inputBox = await input.boundingBox();
+    const selectBox = await select.boundingBox();
+    assert.ok(inputBox && selectBox, "the picker's controls render");
+    assert.ok(inputBox.x <= selectBox.x, "the manual fill stays first (the value column keeps its left edge)");
   });
 
   // (owner-intentional): the next-dispatch note and the live
