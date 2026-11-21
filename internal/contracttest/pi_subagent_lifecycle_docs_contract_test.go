@@ -43,9 +43,9 @@ func TestPiSubagentLifecycleDocs(t *testing.T) {
 	// the design reference's lifecycle section (§6.2's step-end paragraph)
 	reference := w68Flat(t, "docs/design/polyforge-vnext/reference.md")
 	for _, want := range []string{
-		"cleanup_failed",            // the park kind and its release
-		"re-runs the step-end hook", // the resume settles the kept hand-off only after a clean re-sweep
-		"cancelled context",         // Q10 A: the skip on ctx cancel, covered by the recovery Cleanup
+		"cleanup_failed",          // the park kind and its release
+		"still fails parks again", // the resume re-runs the sweep; a failing one keeps the park
+		"cancelled context",       // Q10 A: the skip on ctx cancel, covered by the recovery Cleanup
 	} {
 		if !strings.Contains(reference, want) {
 			t.Errorf("reference.md's lifecycle section must document %q (polyforge#200)", want)
