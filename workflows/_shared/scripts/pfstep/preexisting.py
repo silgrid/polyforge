@@ -235,6 +235,7 @@ def judge_on_base(
     budget_note: str,
     timeout: float,
     tmp_parent: Optional[str] = None,
+    batch_note: Optional[Callable[[str], None]] = None,
 ) -> None:
     """Judge the candidates on a throwaway worktree of the base commit —
     the one entry every caller triages through (verify's own pre-existing
@@ -244,12 +245,18 @@ def judge_on_base(
     pre-existing record (pre_existing / pre_detail / base_sig) verify has
     always written, plus the class and the observation summary — and a
     candidate the base could not settle keeps its note, fail closed.
+    batch_note, when given, receives every whole-batch failure's why (no
+    budget, no worktree, a failed base setup): the caller's own record of
+    a baseline that never ran; verification passes none, its record is
+    the units' notes alone.
     """
 
     def mark_all(why: str) -> None:
         for u in cands:
             u.note = join_note(u.note, why)
             u.base_class = CLASS_UNDETERMINED
+        if batch_note is not None:
+            batch_note(why)
 
     if not budget_left():
         mark_all("not pre-existing: no base run started, %s is spent" % budget_note)

@@ -163,6 +163,8 @@ from pfstep.engine import default_engine, nested_roots, reached_roots  # noqa: E
 from pfstep.flaky import RerunRun, rerun_flaky  # noqa: E402
 from pfstep.invoke import Invocation, duration_flag  # noqa: E402
 from pfstep.preexisting import (  # noqa: E402
+    CLASS_PRE_EXISTING,
+    CLASS_THIS_CHANGE,
     CLASS_UNDETERMINED,
     candidates,
     judge_on_base,
@@ -176,7 +178,7 @@ from pfstep.rerun import CommandSpec, UnitState, locate, whole_command  # noqa: 
 from pfstep.runner import Runner, bash_argv, raise_on_termination  # noqa: E402
 from pfstep.shellwords import has_flag, has_go_test, shell_quote, shell_words  # noqa: E402
 from pfstep.unitruns import UnitRunDecl, clean_cwd, limit_note, marker_matches, marker_problem, read_unit_runs, unit_limit_ns  # noqa: E402
-from pfstep.units import normalize_output, output_lines, parse_units, race_seen  # noqa: E402
+from pfstep.units import KIND_COMMAND, normalize_output, output_lines, parse_units, race_seen  # noqa: E402
 
 NAME = "fast_checks.py"
 
@@ -476,6 +478,10 @@ class CheckRun:
         self.base_setup: List[str] = []
         self.protected: List[str] = []
         self.red_states: List[Tuple[Dict[str, Any], EngineCommand, str, str, str, List[UnitState]]] = []
+        # the baseline record (polyforge#212): the commit the triage judged
+        # on, and the whole-batch failure's why ("" = none)
+        self.base_commit = ""
+        self.base_note = ""
         # the previous result file's reusable green entries, keyed by their
         # reuse key, and this run's per-root subtree hashes of the working
         # tree ("" = the repository root's whole tree)
@@ -798,24 +804,88 @@ class CheckRun:
         run's deadline as the budget. The result lands on each unit (its
         class, the observation summary, the pre-existing record), and a red
         the base could not settle keeps its note — fail closed, the existing
-        red rules hold."""
+        red rules hold. The record names the baseline itself: its commit,
+        the setup it would run, whether it ran (no red to judge, no base,
+        a spent budget or a failed setup: it did not) and the whole-batch
+        failure's why."""
+        self.base_commit, why = self.baseline_ref()
         failing = [us for (_e, _c, _d, _r, _l, us_list) in self.red_states for us in us_list if us.failing()]
-        if not failing:
-            return
         cands = candidates(failing)
-        if not cands:
-            return
-        clone = os.path.join(self.capsule, "repos", self.repo)
-        base, _why = self.baseline_ref()
-        if base == "":
+        ran = False
+        if cands and self.base_commit == "":
             for u in cands:
                 u.note = join_note(u.note, "not pre-existing: no base commit is known")
                 u.base_class = CLASS_UNDETERMINED
-            return
-        judge_on_base(clone, base, short(base), cands, self.base_setup,
-                      self.worktree_add_of(clone), self.run_bash_of(),
-                      lambda: self.r.remaining() > 1.0, lambda d: self.r.remaining() > d,
-                      "the fast checks' deadline", COMMAND_TIMEOUT, None)
+            self.base_note = why
+        elif cands:
+            notes: List[str] = []
+            clone = os.path.join(self.capsule, "repos", self.repo)
+            judge_on_base(clone, self.base_commit, short(self.base_commit), cands, self.base_setup,
+                          self.worktree_add_of(clone), self.run_bash_of(),
+                          lambda: self.r.remaining() > 1.0, lambda d: self.r.remaining() > d,
+                          "the fast checks' deadline", COMMAND_TIMEOUT, None, notes.append)
+            ran = not notes
+            self.base_note = "; ".join(notes)
+        self.details["baseline"] = {"commit": self.base_commit, "ref": "merge-base",
+                                    "setup": list(self.base_setup), "ran": ran}
+        if self.base_note:
+            self.details["baseline"]["note"] = self.base_note
+
+    def command_red(self, e: Dict[str, Any]) -> bool:
+        """Whether one command entry stayed red after its flaky re-run, its
+        baseline triage and its confirmation."""
+        return (not e.get("skipped") and not e.get("reused") and not e.get("carried")
+                and (e.get("timed_out") or e.get("exit_code") != 0)
+                and not (e.get("confirmed") or e.get("complete")))
+
+    def build_reds(self) -> List[Dict[str, Any]]:
+        """Every red that stayed: one entry per still-failing unit — its
+        class, its signatures, the baseline it was judged on and the why
+        (a pre-existing one's base record, anything else its note) — and
+        one undetermined entry per red command no unit of its own explains
+        (a command its timeout killed, a never-started run, a whole-command
+        confirmation that could not run): the command is the unit."""
+        reds: List[Dict[str, Any]] = []
+        for entry, _c, _d, _r, _l, us_list in self.red_states:
+            for us in us_list:
+                if not us.failing():
+                    continue
+                reds.append({"command": entry["name"], "unit": us.name, "kind": us.kind, "file": us.file,
+                             "class": us.base_class or CLASS_UNDETERMINED, "signature": us.unit.signature,
+                             "base": self.base_commit,
+                             "detail": us.pre_detail if us.pre_existing else us.note})
+        for e in self.details["commands"]:
+            if not self.command_red(e):
+                continue
+            if any(us.failing() for st in self.red_states if st[0] is e for us in st[5]):
+                continue  # its own units name it
+            what = ("killed at its timeout" if e.get("timed_out")
+                    else ("not started" if e.get("not_started")
+                          else (e.get("not_confirmed") or ("exited %d" % e["exit_code"]))))
+            reds.append({"command": e["name"], "unit": e["name"], "kind": KIND_COMMAND, "file": "",
+                         "class": CLASS_UNDETERMINED, "signature": "", "base": self.base_commit,
+                         "detail": what})
+        return reds
+
+    def classes_note(self, reds: List[Dict[str, Any]]) -> str:
+        """The red classes as a summary's tail: one count per class, the
+        baseline they were judged on."""
+        if not reds:
+            return ""
+        return "; classes: %d this change, %d undetermined, %d pre-existing (base %s)" % (
+            len([r for r in reds if r["class"] == CLASS_THIS_CHANGE]),
+            len([r for r in reds if r["class"] == CLASS_UNDETERMINED]),
+            len([r for r in reds if r["class"] == CLASS_PRE_EXISTING]),
+            short(self.base_commit))
+
+    def pre_existing_note(self, reds: List[Dict[str, Any]]) -> str:
+        """The pre-existing reds as a green summary's tail: each unit with
+        its signature, the baseline they were proven on."""
+        pre = [r for r in reds if r["class"] == CLASS_PRE_EXISTING]
+        if not pre:
+            return ""
+        return ", %d pre-existing on base %s: %s" % (len(pre), short(self.base_commit),
+                "; ".join("%s (%s)" % (r["unit"], r["signature"]) for r in pre))
 
     def confirm_phase(self) -> None:
         """The flaky re-run phase's second half: the whole-command
@@ -965,10 +1035,8 @@ class CheckRun:
         self.rerun_phase(runs)
         self.baseline_phase()
         self.confirm_phase()
-        red = [e for e in self.details["commands"]
-               if not e.get("skipped") and not e.get("reused") and not e.get("carried")
-               and (e.get("timed_out") or e.get("exit_code") != 0)
-               and not (e.get("confirmed") or e.get("complete"))]
+        self.details["reds"] = self.build_reds()
+        red = [e for e in self.details["commands"] if self.command_red(e)]
         skipped = len([e for e in self.details["commands"] if e.get("skipped")])
         reused_n = len([e for e in self.details["commands"] if e.get("reused")])
         carried_n = len([e for e in self.details["commands"] if e.get("carried")])
@@ -991,13 +1059,15 @@ class CheckRun:
                 self.inv.summary += "; %d command(s) red in all" % len(red)
             if flaky_note:
                 self.inv.summary += flaky_note
+            self.inv.summary += self.classes_note(self.details["reds"])
             return 1
-        self.inv.summary = "repos/%s: %d command(s) ran and exited 0%s%s%s%s" % (
+        self.inv.summary = "repos/%s: %d command(s) ran and exited 0%s%s%s%s%s" % (
             self.repo, ran,
             (", %d skipped" % skipped) if skipped else "",
             (", %d reused" % reused_n) if reused_n else "",
             (", %d carried over" % carried_n) if carried_n else "",
-            flaky_note)
+            flaky_note,
+            self.pre_existing_note(self.details["reds"]))
         return 0
 
 
@@ -1179,10 +1249,8 @@ class CloseRun(CheckRun):
         self.rerun_phase(runs)
         self.baseline_phase()
         self.confirm_phase()
-        red = [e for e in self.details["commands"]
-               if not e.get("skipped") and not e.get("reused")
-               and (e.get("timed_out") or e.get("exit_code") != 0)
-               and not (e.get("confirmed") or e.get("complete"))]
+        self.details["reds"] = self.build_reds()
+        red = [e for e in self.details["commands"] if self.command_red(e)]
         flaky_notes: List[str] = []
         for e in self.details["commands"]:
             for u in e.get("units", []):
@@ -1200,11 +1268,27 @@ class CloseRun(CheckRun):
                 self.inv.summary += "; %d selected command(s) red in all" % len(red)
             if flaky_note:
                 self.inv.summary += flaky_note
+            self.inv.summary += self.classes_note(self.details["reds"])
             code = 1
         elif incomplete:
             status, reason = "incomplete", "; ".join(incomplete)
             self.inv.summary = "repos/%s: the selection is incomplete — %s" % (self.repo, reason)
+            if flaky_note:
+                self.inv.summary += flaky_note
+            self.inv.summary += self.classes_note(self.details["reds"])
             code = 1
+        elif self.details["reds"]:
+            # every red the baseline proved pre-existing, nothing else red
+            # and nothing incomplete: the selection stands beside them —
+            # the analysis's validator takes the record as green-equivalent
+            # evidence, and the hand-off cites the result file
+            status, reason = "pre_existing", ""
+            reused = len([e for e in self.details["commands"] if e.get("reused")])
+            self.inv.summary = "repos/%s: %d selected command(s) green%s%s%s" % (
+                self.repo, len(self.details["commands"]),
+                (", %d reused" % reused) if reused else "", flaky_note,
+                self.pre_existing_note(self.details["reds"]))
+            code = 0
         else:
             status, reason = "green", ""
             reused = len([e for e in self.details["commands"] if e.get("reused")])
