@@ -40,7 +40,7 @@ function installVersionedStub(name, version) {
   const dir = path.join(scratch, name);
   fs.mkdirSync(dir);
   const binary = path.join(dir, "claude");
-  fs.writeFileSync(binary, `#!/bin/sh\nexport PI_TEST_CLAUDE_STUB_VERSION=${version}\nexec node ${path.join(here, "__fixtures__", "claude-stub", "claude.mjs")} "$@"\n`, { mode: 0o755 });
+  fs.writeFileSync(binary, `#!/bin/sh\nexport PI_TEST_CLAUDE_STUB_VERSION=${version}\nexec node ${path.join(here, "..", "__fixtures__", "claude-stub", "claude.mjs")} "$@"\n`, { mode: 0o755 });
   return binary;
 }
 const okBinary = installVersionedStub("ok-bin", "2.1.326");
