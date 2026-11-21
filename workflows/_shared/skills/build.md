@@ -144,22 +144,34 @@ record exactly what ran.
    whole-change run, so every green command is reused):
    `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/fast_checks.py" --repo <repo> --phase fast --json --out artifacts/build/fast-checks/<repo>.json`
    The daemon reads that file for every repo build changed and refuses `done` until each is
-   a `pass` at HEAD. A red the change did not cause — the default branch already red, an
-   `error`/`partial` result, or a lane that planned no check — is the owner's: `pf step
-   ask`, and on the release hand off `done` with `--per-owner <the reply's at>`; the stamp
-   records it. The step's close (3c) runs the build close's scoped selection once
+   a `pass` at HEAD. A red the change did not cause is the check's own to triage first: the
+   run re-plays every unit still red after its one re-run on the change's baseline (the same
+   judgment verification runs, `pfstep/preexisting.py`) and records each one's class in its
+   result — a red the baseline proves pre-existing (the same failure there, its signature and
+   the baseline commit in the result file) is no red of this change's, and the check passes.
+   What is left — a this-change red, one the baseline could not settle, the default branch
+   already red, an `error`/`partial` result, or a lane that planned no check — is the owner's:
+   `pf step ask`, and on the release hand off `done` with `--per-owner <the reply's at>`; the
+   stamp records it. The step's close (3c) runs the build close's scoped selection once
    per touched repo — for a work item whose verification runs the light tier (an integration
    batch's fix ticket runs the full bar and closes without one) — `"$PF_PYTHON"
-   "$PF_SHARED_DIR/scripts/fast_checks.py" --repo <name> --close-scoped --reuse
+   "$PF_SHARED_DIR/scripts/fast_checks.py" --repo <name> --close-scoped --unit-runs
+   artifacts/build/units.json --reuse
    artifacts/build/fast-checks/<repo>.json --json --out artifacts/build/scoped-close/<repo>.json`,
    after that repo's fast checks (a green run in the reuse file whose key — the command text,
    the root's subtree tree hash, the declared prerequisites — matches is evidence, not a
    re-run): the same light-tier selection verification plans, one shared implementation, over the
-   final tree. A red or `incomplete` result never hands off `done` without the owner's ruling —
+   final tree, its reds triaged on the same baseline (the close's `--unit-runs` protecting
+   the files this change's test commits touched — a test this lane authored is never
+   pre-existing). A red or `incomplete` result never hands off `done` without the owner's ruling —
+   except a red result every entry of whose `reds[]` the run records `pre_existing` (its
+   `details.baseline` naming the commit, the setup and the runs it judged on): that one is
+   not this change's, and the close hands off `done` citing the result file, its `details.selected`
+   status `pre_existing` the shared validator's green-equivalent evidence —
    fix the change and re-run it, a full-tier fallback being the owner's to settle, a residual the
    owner accepted keeping its record in the result file, cited in the hand-off — and a green
-   result's `details.selected` merges into the change analysis's `selected`, keyed by the repo,
-   verbatim. Then the step's close runs the facts lines review judges with, the same
+   or pre-existing result's `details.selected` merges into the change analysis's `selected`, keyed by
+   the repo, verbatim. Then the step's close runs the facts lines review judges with, the same
    engine and the same replay —
    `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" plan-conformance --json --out artifacts/facts/plan-conformance.json`
    (a plan the lane inherited skips this line and runs only the
@@ -181,9 +193,9 @@ record exactly what ran.
 
 ## 交接要写什么 — what your hand-off carries
 
-- **Status.** `done` only on a green build: every unit red then green, the fast checks
-  green, the close's scoped selection green (its flaky units, if any, named as the fast
-  checks name theirs), the close's facts checks (plan-conformance, build with the replay, carries)
+- **Status.** `done` only on a green build: every unit red then green, the fast checks and
+  the close's scoped selection all green but the reds their baseline triage records
+  pre-existing (the result files naming them), the close's facts checks (plan-conformance, build with the replay, carries)
   green, an exit 2 that stayed 2 after its retries disclosed in the hand-off with its summary,
   the close analysis check green,
   the self-review written; a fast check that turned green through a flaky re-run has its

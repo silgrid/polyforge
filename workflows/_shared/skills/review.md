@@ -17,7 +17,9 @@ definition's judgment.
    its header the owner messages build received (verbatim, stamped) and each task repo's
    start → end commit; `artifacts/plan.md` (`## Acceptance`, `## Units`, `## Coverage`);
    `artifacts/build/units.json`; the change analysis's `selected` records with the close-scoped
-   results that wrote them (`artifacts/build/scoped-close/<repo>.json`);
+   results that wrote them (`artifacts/build/scoped-close/<repo>.json`; a `pre_existing`
+   record is green-equivalent evidence — the shared validator takes it — its `reds[]`
+   naming the baseline-proven reds);
    `artifacts/self-review.md`; `artifacts/grill-qa.md` when
    it is there.
 2. **build's hand-off holds.** `artifacts/plan.md` and `artifacts/build/units.json` exist and

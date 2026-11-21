@@ -22,9 +22,10 @@ is the artifact: every command's exit code, log and skip reason land in
 `artifacts/build/fast-checks/<repo>.json`, and any non-zero exit (or a
 command killed at its own timeout) is a red fast check — unless every
 failing unit its output locates passed the one targeted re-run the
-command itself now makes (recorded flaky, its first-red log kept) and the
-command is confirmed — read its summary, never re-derive the commands by
-hand. No re-run is ever made by hand: the check already contains that one
+command itself now makes (recorded flaky, its first-red log kept) and
+the command is confirmed, or the run's baseline phase records every unit
+still red after it pre-existing on the change's base — read its
+summary, never re-derive the commands by hand. No re-run is ever made by hand: the check already contains that one
 re-run — a failure still red after it is red. The flaky units and their
 first-red logs are named in the result's summary and details; a fast
 check that turned green through a flaky re-run has its flaky units (with
@@ -35,10 +36,18 @@ not judged (the engine missing or failing: exit 2) is stated in your
 artifact and leaves the checks above as the bar. That is the whole
 per-unit bar: the touched roots' fast commands beside the unit's own
 targeted test.
+A red still standing after that one re-run is itself judged on the
+change's baseline (the same entry verification judges by,
+`pfstep/preexisting.py`): one the base carries the same way — same
+signature, every base run — is recorded `pre_existing` with the baseline
+commit in the result file and is no red of this change's; one the base
+lacks, or passes there, is this change's; anything the base runs could
+not settle stays red. Only the reds left after that triage keep the bar
+below.
 The full suite is not a per-unit bar — it belongs to `verification` (the
 one gate that runs the project's full bar); do not run the full suite
 (e.g. `go test ./...`) here, and do not proceed on top of a red fast
-check. The scoped selection is not a per-unit bar either:
+check the baseline triage has not recorded pre-existing. The scoped selection is not a per-unit bar either:
 `--close-scoped` runs once per touched repo at the close (3c), over the
 whole change, after the fast checks — reusing the green runs whose key
 matches, never per unit.

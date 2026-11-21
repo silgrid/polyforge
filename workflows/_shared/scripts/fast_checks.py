@@ -64,6 +64,28 @@ cannot fit it, leaves the command red (``not_confirmed``). No re-run ever
 happens by hand: the check already contains it, and its result is the
 record.
 
+The baseline triage (polyforge#212): a unit still red after its one
+re-run is judged on the change's baseline — the same judgment
+verification's pre-existing phase runs, one entry
+(``pfstep/preexisting.py``'s ``judge_on_base``, the executors this run's
+own: the worktree on the host, the base setup and the re-runs over it).
+A throwaway worktree of ``merge-base HEAD origin/<branch>``, the report's
+declared ``base_setup``, then the unit's own targeted re-run there: the
+same signature on every base run is ``pre_existing`` (not this change's
+red — the run may pass, the record carrying its signature and the
+baseline commit), a test the base lacks or that passes there is
+``this_change``, and anything the base runs could not settle is
+``undetermined`` — fail closed, the red rules hold. ``--close-scoped``
+takes ``--unit-runs <units.json>``: the files its test commits touched
+are protected, never pre-existing. A pre-existing failure is excluded
+from its command's confirming re-run by the skip form verification uses
+(go ``-skip``, ``E2E_SKIP``, pytest ``--deselect``); a command that
+cannot exclude it and has no completion proof keeps a residual
+whole-command failure. ``details.baseline`` records the judgment's own
+facts (commit, setup, whether it ran, a whole-batch failure's note) and
+``details.reds[]`` every still-red unit (or command) with its class,
+signatures, baseline and why.
+
 The reuse phase (polyforge#182): a ``--repo`` run reuses the previous
 run's green command instead of executing it when its key — the command
 text, its root's subtree tree hash of the working tree (tracked
@@ -112,7 +134,12 @@ result's ``details.selected`` is the change analysis's machine
 selection record — the repo's head, tree, base and default branch, the
 engine invocations, the conf's identity, the selection's paths and
 suites, every command with its run's evidence (or its reuse source),
-and the status: ``green``, ``red`` or ``incomplete`` with its reason.
+and the status: ``green``, ``pre_existing`` — every red its baseline
+triage kept is pre-existing, nothing this change's, exit 0 and the
+shared validator's green-equivalent evidence — ``red`` or
+``incomplete`` with its reason. ``--unit-runs <units.json>`` (the
+build's own) protects the files its test commits touched: a test this
+change authored is never pre-existing.
 
 ``--check-units`` is build's on-the-spot unit check: the build's
 ``artifacts/build/units.json`` re-run as written — every unit's own
@@ -133,8 +160,10 @@ be stable, so red it stays. ``--unit <id>`` checks only that unit.
 The result carries the repo HEADs the units ran at.
 
 Exit 0: every command that ran exited 0 (skips cost nothing) or turned
-green through its flaky re-runs and confirmation, or every checked unit
-passed. Exit 1: a command stayed red after the flaky phase, a unit is
+green through its flaky re-runs and confirmation, was reused, or carries
+only reds the baseline proved pre-existing; every checked unit passed.
+Exit 1: a command stayed red after the flaky phase, its baseline triage
+or its confirmation, a unit is
 red, or the close-scoped selection is red or incomplete. Exit 2: not
 judged — no such repo, the engine missing or failing, an unreadable
 report, a repo the engine planned no command for, an unusable units.json,
