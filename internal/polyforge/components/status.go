@@ -10,9 +10,11 @@ package components
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/atomicfile"
@@ -112,4 +114,51 @@ func ClearUpgradeCancel(root string) error {
 		return err
 	}
 	return nil
+}
+
+// The force-request marker: present means a waiting transaction must
+// continue at once (the request's only persistent form — a fresh
+// transaction clears it, so it never forces a LATER run).
+const UpgradeForceFilename = "upgrade-force"
+
+// ClearUpgradeForce removes the force marker (consumed or stale).
+func ClearUpgradeForce(root string) error {
+	if err := os.Remove(filepath.Join(root, UpgradeForceFilename)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+// TransactionLockFilename serializes the upgrade and rollback
+// transactions (flock, exclusive, non-blocking): one orchestration at
+// a time on a components volume — the fetch, the drain wait and the
+// switch are one transaction, not three separate races on the volume's
+// own state. The kernel drops the lock with the holder's process.
+const TransactionLockFilename = ".transaction.lock"
+
+// ErrTransactionRunning: another upgrade or rollback transaction holds
+// the volume's transaction lock.
+var ErrTransactionRunning = errors.New("another component transaction is already running on this volume")
+
+// holdTransactionLock takes the root's transaction lock
+// (LOCK_EX|LOCK_NB, creating the lock file) and answers its holder —
+// the caller closes it to release (crash equals shutdown).
+func holdTransactionLock(root string) (*os.File, error) {
+	f, err := os.OpenFile(filepath.Join(root, TransactionLockFilename), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("%w: %s", ErrTransactionRunning, filepath.Join(root, TransactionLockFilename))
+	}
+	return f, nil
+}
+
+// clearRunMarkers wipes the request markers a crashed run may have
+// left: a fresh transaction invalidates them, and neither a stale
+// cancel nor a stale force may decide a later run's fate.
+func clearRunMarkers(root string) {
+	_ = ClearUpgradeCancel(root)
+	_ = ClearUpgradeForce(root)
 }

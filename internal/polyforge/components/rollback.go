@@ -65,6 +65,17 @@ func Rollback(ctx context.Context, opts RollbackOptions) (*UpgradeResult, error)
 			Phase: "refuse", Error: err.Error()})
 		return nil, err
 	}
+	// the whole transaction — the drain wait and the swap — is one
+	// exclusive run on this volume (u12), exactly like the upgrade's.
+	// A lock refusal answers without touching the volume's status
+	// record: that record belongs to the transaction still running.
+	lock, err := holdTransactionLock(opts.Root)
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Close()
+	clearRunMarkers(opts.Root)
+	defer clearRunMarkers(opts.Root)
 	curTarget, err := CurrentTarget(opts.Root)
 	if err != nil {
 		return refuse(err)
@@ -155,11 +166,11 @@ func Rollback(ctx context.Context, opts RollbackOptions) (*UpgradeResult, error)
 	// pointers on a complete version and explainable.
 	_ = WriteUpgradeStatus(opts.Root, &UpgradeStatus{Operation: OperationRollback, State: UpgradeStateRunning,
 		Phase: "switch", From: curVer, To: prevVer})
-	lock, err := holdLock(opts.Root)
+	swapLock, err := holdLock(opts.Root)
 	if err != nil {
 		return failed("switch", err)
 	}
-	defer lock.Close()
+	defer swapLock.Close()
 	if err := recoverPending(opts.Root); err != nil {
 		return failed("switch", err)
 	}

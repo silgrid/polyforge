@@ -193,10 +193,28 @@ func runComponents(ctx *Context, fs *flag.FlagSet, args []string) error {
 		}
 		return emitComponents(ctx, value, fmt.Sprintf("current %v; previous %v; status %v", value["current"], value["previous"], value["status"]))
 	case "cancel":
-		if err := components.RequestUpgradeCancel(root); err != nil {
+		s, err := components.ReadUpgradeStatus(root)
+		if err != nil {
 			return err
 		}
-		return emitComponents(ctx, map[string]string{"state": components.UpgradeStateCancelled}, "已请求取消，等待编排重启 daemon")
+		if s != nil && s.State == components.UpgradeStateWaiting {
+			// a waiting run consumes the marker itself and asks for the
+			// daemon restart (that restart clears the drain).
+			if err := components.RequestUpgradeCancel(root); err != nil {
+				return err
+			}
+			return emitComponents(ctx, map[string]string{"state": components.UpgradeStateWaiting}, "已请求取消，等待中的编排将重启 daemon 后停下")
+		}
+		// nothing waits: a marker a crashed run left is cleared, and the
+		// daemon restart is the documented recovery for a drain nothing
+		// stands down.
+		if err := components.ClearUpgradeCancel(root); err != nil {
+			return err
+		}
+		if err := componentsFaceFor(ctx).Restart(context.Background()); err != nil {
+			return err
+		}
+		return emitComponents(ctx, map[string]string{"state": components.UpgradeStateCancelled}, "无等待中的编排；已请求 daemon 重启以清除排空")
 	case "upgrade":
 		if seed := stringFlag(fs, "seed-dir"); seed != "" && stringFlag(fs, "version") != "" {
 			manifest, err := components.ReadManifest(seed)

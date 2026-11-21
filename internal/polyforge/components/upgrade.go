@@ -109,6 +109,21 @@ func Upgrade(ctx context.Context, opts UpgradeOptions) (*UpgradeResult, error) {
 	if opts.Poll <= 0 {
 		opts.Poll = drainPollDefault
 	}
+	// the whole transaction — the fetch, the drain wait and the switch —
+	// is one exclusive run on this volume (u12): a second concurrent
+	// orchestration would race the assembly sweep, the status record
+	// and the switch itself. A lock refusal answers without touching
+	// the volume's status record: that record belongs to the run still
+	// holding the lock.
+	lock, err := holdTransactionLock(opts.Root)
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Close()
+	// a fresh run invalidates the request markers a crashed run left,
+	// and a finished run leaves none behind.
+	clearRunMarkers(opts.Root)
+	defer clearRunMarkers(opts.Root)
 	cur, _, err := currentManifestOf(opts.Root)
 	if err != nil {
 		return nil, err
@@ -365,8 +380,8 @@ func drainAndWait(ctx context.Context, d *drainWait) (bool, error) {
 			record(UpgradeStateCancelled, "")
 			return true, nil
 		}
-		if _, err := os.Stat(filepath.Join(d.root, "upgrade-force")); err == nil {
-			if err := os.Remove(filepath.Join(d.root, "upgrade-force")); err != nil {
+		if _, err := os.Stat(filepath.Join(d.root, UpgradeForceFilename)); err == nil {
+			if err := os.Remove(filepath.Join(d.root, UpgradeForceFilename)); err != nil {
 				return false, err
 			}
 			_, err := d.face.Drain(ctx, true)
