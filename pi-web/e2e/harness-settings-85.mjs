@@ -1210,6 +1210,7 @@ try {
     assert.match(stateText, /Inconsistent: pi is currently in default/, "pi's own tier is listed");
     assert.match(stateText, /Inconsistent: claude is currently in fast-chat/, "claude's own tier is listed");
     // the restore: default (pi's tier) applied to ALL harnesses
+    const argvBefore = tierArgv().length;
     await cell.locator("[data-step-tier-select]").selectOption("default");
     await cell.getByRole("button", { name: "Save", exact: true }).click({ timeout: ACTION_MS });
     await waitFor(async () => (await cell.locator("[data-step-tier-state]").innerText()).includes("All: default"),
@@ -1219,11 +1220,11 @@ try {
     assert.deepEqual(state.tiers.default, ["pi:anthropic/opus", "claude:opus"], "the merged tier is what cli.toml reads back");
     assert.equal(state.tiers["fast-chat"], undefined, "the vacated tier was unset, never left as an empty list");
     // only claude was written: one set and one unset, both Host-scoped
-    const writes = tierArgv().filter((args) => (args.includes("set") || args.includes("unset")) && args.includes("step_tiers."));
+    const writes = tierArgv().slice(argvBefore).filter((args) => (args.includes("set") || args.includes("unset")) && args.some((entry) => String(entry).startsWith("step_tiers.")));
     assert.equal(writes.length, 2, "one write per plan step of the moved harness");
     for (const write of writes) assert.ok(write.includes("--host"), "the write is Host-scoped");
-    assert.ok(writes.some((args) => args.includes("config") && args.includes("set") && args.includes("step_tiers.default")), "the merged tier was written");
-    assert.ok(writes.some((args) => args.includes("config") && args.includes("unset") && args.includes("step_tiers.fast-chat")), "the vacated tier was unset");
+    assert.ok(writes.some((args) => args.includes("config") && args.includes("set") && args.some((entry) => entry === "step_tiers.default")), "the merged tier was written");
+    assert.ok(writes.some((args) => args.includes("config") && args.includes("unset") && args.some((entry) => entry === "step_tiers.fast-chat")), "the vacated tier was unset");
     await page.context().close();
   });
 } finally {
