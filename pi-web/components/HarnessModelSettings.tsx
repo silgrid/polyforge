@@ -61,7 +61,7 @@ function applyStepTierWrite(catalog: StepTierItem[], write: StepTierWrite): Step
  *  add-first, every write on the fresh catalog the last one left — and a
  *  failure stops there, reported per harness with the draft kept (the
  *  CAS conflict included). A multi-tier edit confirms before it replaces. */
-function StepTierCell({ row, tier, tierWrite, onTierSaved }: {
+export function StepTierCell({ row, tier, tierWrite, onTierSaved }: {
   row: ModelViewRow;
   tier: StepTierColumnView;
   tierWrite: (write: StepTierWrite) => Promise<StepTierWriteOutcome>;
