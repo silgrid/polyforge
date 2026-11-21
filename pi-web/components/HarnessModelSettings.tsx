@@ -45,21 +45,26 @@ function stepTierIdentity(row: Pick<ModelViewRow, "provider" | "id">, harness: s
   return null;
 }
 
+/** One write applied to a local catalog copy (the cell recomputes every
+ *  next write from the state the last one left — a second harness's plan
+ *  never resurrects the first one's removed entries). */
+function applyStepTierWrite(catalog: StepTierItem[], write: StepTierWrite): StepTierItem[] {
+  const next = catalog.filter((item) => item.tier !== write.tier);
+  if (write.action === "set") next.push({ tier: write.tier, candidates: write.candidates });
+  return next;
+}
+
 /** One row's tier cell: the current state (全部 / 指定 with per-harness
  *  不一致 lines / 未设置, a multi-tier harness shown as 多档), a target
  *  select (未设置 or a tier, default first) and the「应用到」choice over
- *  the row's own harnesses. The submit writes one harness at a time, and
- *  EVERY step re-reads the Host catalog together with the file hash its
- *  write expects — the plan derives from the very state the CAS guards
- *  (review r2 #1: a plan from the page-load catalog let a concurrent
- *  write pass the fresh-hash CAS and be silently overwritten), a failure
- *  stops there, reported per harness with the draft kept (the CAS
- *  conflict included). A multi-tier edit confirms before it replaces. */
-function StepTierCell({ row, tier, tierRead, tierWrite, onTierSaved }: {
+ *  the row's own harnesses; the submit writes one harness at a time —
+ *  add-first, every write on the fresh catalog the last one left — and a
+ *  failure stops there, reported per harness with the draft kept (the
+ *  CAS conflict included). A multi-tier edit confirms before it replaces. */
+function StepTierCell({ row, tier, tierWrite, onTierSaved }: {
   row: ModelViewRow;
   tier: StepTierColumnView;
-  tierRead: () => Promise<{ ok: true; items: Array<{ key: string; value?: unknown }>; hash: string | null } | { ok: false; error: string }>;
-  tierWrite: (write: StepTierWrite, hash: string | null) => Promise<StepTierWriteOutcome>;
+  tierWrite: (write: StepTierWrite) => Promise<StepTierWriteOutcome>;
   onTierSaved?: () => void;
 }) {
   const { t } = useI18n();
@@ -90,6 +95,7 @@ function StepTierCell({ row, tier, tierRead, tierWrite, onTierSaved }: {
     setResults(null);
     const out: HarnessApplyToResult[] = [];
     let failed = false;
+    let catalog = tier.tiers;
     for (const harness of targets) {
       if (failed) {
         out.push({ harness, ok: false, text: t("models.stepTierNotAttempted") });
@@ -99,17 +105,14 @@ function StepTierCell({ row, tier, tierRead, tierWrite, onTierSaved }: {
       if (!identity) continue;
       let harnessError: string | null = null;
       for (let guard = 0; guard < 32; guard++) {
-        // one read carries both the catalog the plan derives from and the
-        // hash the write expects — the CAS then guards exactly that state
-        const read = await tierRead();
-        if (!read.ok) { harnessError = read.error; break; }
-        const plan = stepTierWritePlan(stepTierItems(read.items), identity, target === "" ? null : target);
+        const plan = stepTierWritePlan(catalog, identity, target === "" ? null : target);
         if (plan.length === 0) break;
-        const answer = await tierWrite(plan[0], read.hash);
+        const answer = await tierWrite(plan[0]);
         if (!answer.ok) {
           harnessError = answer.error ?? `HTTP`;
           break;
         }
+        catalog = applyStepTierWrite(catalog, plan[0]);
       }
       out.push({ harness, ok: !harnessError, text: harnessError ?? t("models.stepTierApplied") });
       if (harnessError) failed = true;
@@ -159,15 +162,14 @@ function StepTierCell({ row, tier, tierRead, tierWrite, onTierSaved }: {
   );
 }
 
-export function HarnessModelTable({ rows, enabled, levels = {}, piSettings, onEffort, tier, tierRead, tierWrite, onTierSaved }: {
+export function HarnessModelTable({ rows, enabled, levels = {}, piSettings, onEffort, tier, tierWrite, onTierSaved }: {
   rows: ModelViewRow[];
   enabled?: EnabledModelsController;
   levels?: Record<string, string[]>;
   piSettings?: ModelPayload | null;
   onEffort?: (provider: string, id: string, level: string) => void;
   tier?: StepTierColumnView;
-  tierRead?: () => Promise<{ ok: true; items: Array<{ key: string; value?: unknown }>; hash: string | null } | { ok: false; error: string }>;
-  tierWrite?: (write: StepTierWrite, hash: string | null) => Promise<StepTierWriteOutcome>;
+  tierWrite?: (write: StepTierWrite) => Promise<StepTierWriteOutcome>;
   onTierSaved?: () => void;
 }) {
   const { t } = useI18n();
@@ -197,7 +199,7 @@ export function HarnessModelTable({ rows, enabled, levels = {}, piSettings, onEf
           </select></label>}
           <span>{row.reasoning.join(", ") || t("models.notProvided")}</span>
         </td>
-        {tier && <td><StepTierCell row={row} tier={tier} tierRead={tierRead ?? (async () => ({ ok: false, error: "no read path" }))} tierWrite={tierWrite ?? (async () => ({ ok: false }))} onTierSaved={onTierSaved} /></td>}
+        {tier && <td><StepTierCell row={row} tier={tier} tierWrite={tierWrite ?? (async () => ({ ok: false }))} onTierSaved={onTierSaved} /></td>}
       </tr>;
     })}</tbody>
   </table>;
@@ -290,31 +292,14 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount }: { cwd: str
     } finally { setSaving(false); }
   }, []);
 
-  // One Host catalog read (85b2, review r2 #1): the items the plan derives
-  // from AND the file hash the write expects, from the SAME GET — the CAS
-  // then guards exactly the state the plan saw, so a concurrent write either
-  // shows up in the plan (it happened before the read) or refuses the write
-  // (it happened after; 409, the draft kept).
-  const tierRead = useCallback(async (): Promise<{ ok: true; items: Array<{ key: string; value?: unknown }>; hash: string | null } | { ok: false; error: string }> => {
+  // One tier-key write (85b2): a fresh Host read carries the CAS hash the
+  // write expects — every step of a plan is its own read-then-write, so a
+  // conflict (409) leaves the row's draft for the user to retry. The value
+  // is the plan's whole-key list; the write gate judges the new candidates.
+  const tierWrite = useCallback(async (writeStepTier: StepTierWrite): Promise<StepTierWriteOutcome> => {
     try {
-      const response = await fetch("/api/polyforge/config?host=1");
-      const data = await response.json().catch(() => null);
-      if (!response.ok || data?.error) return { ok: false, error: data?.error ?? `HTTP ${response.status}` };
-      return {
-        ok: true,
-        items: Array.isArray(data?.items) ? data.items.map((item: { key?: unknown; value?: unknown }) => ({ key: typeof item.key === "string" ? item.key : "", value: item.value })) : [],
-        hash: typeof data?.file?.sha256 === "string" ? data.file.sha256 : null,
-      };
-    } catch (cause) {
-      return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
-    }
-  }, []);
-
-  // One tier-key write (85b2): the CAS hash comes from the same read that
-  // planned it; the value is the plan's whole-key list, and the write gate
-  // judges the new candidates. A conflict (409) leaves the draft for a retry.
-  const tierWrite = useCallback(async (writeStepTier: StepTierWrite, hash: string | null): Promise<StepTierWriteOutcome> => {
-    try {
+      const read = await fetch("/api/polyforge/config?host=1").then((response) => response.json());
+      const hash = typeof read?.file?.sha256 === "string" ? read.file.sha256 : null;
       const response = await fetch("/api/polyforge/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -388,7 +373,7 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount }: { cwd: str
           ) : null;
         })()}
         <HarnessModelTable rows={selectedProvider ? rows.filter((row) => row.provider === selectedProvider) : rows} enabled={enabled} levels={levels} piSettings={piSettings}
-          tier={tierColumn ?? undefined} tierRead={tierRead} tierWrite={tierWrite} onTierSaved={bumpTierRevision}
+          tier={tierColumn ?? undefined} tierWrite={tierWrite} onTierSaved={bumpTierRevision}
           onEffort={(provider, id, level) => { void write(`/api/harness/pi/model${query}`, { modelThinkingLevel: { key: `${provider}/${id}`, level: level || null } }); }} />
       </section>
       <section aria-label="pi">
