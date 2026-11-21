@@ -35,7 +35,6 @@ set -eu
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 compose_file="$script_dir/compose.yaml"
-web_host_port="${WORKSTATION_WEB_PORT:-30141}"
 password="${PI_WEB_PASSWORD:-pf-workstation-smoke-test-password}"
 # the compose file's ${PI_WEB_PASSWORD:?…} refuses without one, so every
 # compose call this script makes carries the default (or the operator's
@@ -207,6 +206,9 @@ cmd_boot() {
 	esac
 	require_engine
 	require_host_tools
+	# the whole run's cleanup (review r1#3): this run's project is
+	# disposable, so even a die mid-run takes it down WITH VOLUMES
+	trap 'compose --profile "$profile" down -v >/dev/null 2>&1 || true' EXIT
 	boot_up
 
 	inspect_params
@@ -246,7 +248,7 @@ cmd_boot() {
 		esac
 	fi
 
-	compose --profile "$profile" down >/dev/null
+	compose --profile "$profile" down -v >/dev/null
 	say "boot $1: PASS"
 }
 
@@ -255,6 +257,8 @@ cmd_env() {
 	require_host_tools
 	profile=no-aihub
 	override=$(mktemp)
+	# this run's project is disposable (review r1#3): the trap covers a die
+	trap 'docker compose -p "$smoke_project" -f "$compose_file" -f "$override" down -v >/dev/null 2>&1 || true' EXIT
 	cat > "$override" <<'YEOF'
 services:
   workstation:
@@ -300,7 +304,7 @@ YEOF
 	code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$web_host_port/api")
 	printf 'smoke: anonymous /api = %s\n' "$code"
 	[ "$code" = 401 ] || die "anonymous /api is $code, want 401"
-	docker compose -p "$smoke_project" -f "$compose_file" -f "$override" --profile "$profile" down >/dev/null
+	docker compose -p "$smoke_project" -f "$compose_file" -f "$override" --profile "$profile" down -v >/dev/null
 	rm -f "$override"
 	say "env: PASS"
 }
@@ -310,6 +314,8 @@ cmd_podman_verify() {
 	require_host_tools
 	profile=no-aihub
 	override=$(mktemp)
+	# this run's project is disposable (review r1#3): the trap covers a die
+	trap 'docker compose -p "$smoke_project" -f "$compose_file" -f "$override" down -v >/dev/null 2>&1 || true' EXIT
 	sed -e "s|@ROOT@|$root|g" > "$override" <<'YEOF'
 services:
   workstation:
@@ -389,7 +395,7 @@ PYEOF
 	[ "$pod" = 0 ] || die "podman stays resident: $pod process(es)"
 	say "no residual containers, no zombies, no resident conmon/podman"
 
-	docker compose -p "$smoke_project" -f "$compose_file" -f "$override" --profile "$profile" down >/dev/null
+	docker compose -p "$smoke_project" -f "$compose_file" -f "$override" --profile "$profile" down -v >/dev/null
 	rm -f "$override"
 	say "podman-verify: PASS"
 }
@@ -448,8 +454,9 @@ services:
       - "host.docker.internal:host-gateway"
 YEOF
 		# the EXIT trap is the whole cleanup: a die anywhere below
-		# leaves no temp file behind (the test env checks for them)
-		trap 'kill "$stub_pid" 2>/dev/null; rm -f "$hits" "$stub_script" "$override" 2>/dev/null' EXIT
+		# leaves no temp file behind (the test env checks for them) and
+		# takes this run's project down with volumes (review r1#3)
+		trap 'kill "$stub_pid" 2>/dev/null; rm -f "$hits" "$stub_script" "$override" 2>/dev/null; compose_ext down -v >/dev/null 2>&1 || true' EXIT
 		poll_until "the stub server to listen" 30 \
 			sh -c "curl -s -o /dev/null http://127.0.0.1:$stub_port/" || {
 			die "the stub server never listened on $stub_port (set WORKSTATION_SMOKE_STUB_PORT to a free port)"
@@ -464,6 +471,10 @@ YEOF
 		compose_ext() {
 			docker compose -p "$smoke_project" -f "$compose_file" --profile "$profile" "$@"
 		}
+		# the local run's project is disposable (review r1#3): the trap
+		# covers a die (the external branch keeps its own trap above,
+		# which also kills the counting stub and its temp files)
+		trap 'compose_ext down -v >/dev/null 2>&1 || true' EXIT
 	fi
 
 	say "first-boot: resetting the volumes and starting the $profile profile"
@@ -659,8 +670,9 @@ cmd_persist() {
 	say "persist: project $smoke_project, image $primary, new tag $retag"
 
 	# the trap is the whole cleanup: a die anywhere below downs only THIS
-	# run's project — its volumes are disposable, an operator's never are
-	trap 'compose --profile aihub down -v >/dev/null 2>&1 || true' EXIT
+	# run's project — its volumes are disposable, an operator's never are —
+	# and removes this run's retag (review r1 N2: tags accumulated otherwise)
+	trap 'compose --profile aihub down -v >/dev/null 2>&1 || true; docker rmi "$retag" >/dev/null 2>&1 || true' EXIT
 	compose --profile aihub down -v >/dev/null 2>&1 || true
 
 	# up_with_image IMAGE — down, up on the image, wait for supervise
@@ -777,6 +789,7 @@ print(hashlib.sha256(open("/components/current/manifest.json", "rb").read()).hex
 		(cd "$export_dir" && WORKSTATION_SMOKE_EXPORTED=1 WORKSTATION_IMAGE="$retag" sh ./smoke.sh persist) ||
 			die "persist failed from the exported directory"
 		rm -rf "$export_dir"
+		docker rmi "$retag" >/dev/null 2>&1 || true
 		say "the exported copy ran first-boot and persist (image as-is, no build)"
 	fi
 	say "persist: PASS"

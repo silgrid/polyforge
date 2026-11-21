@@ -211,7 +211,9 @@ smoke derives its compose project and host port per run
 and cleanup only ever touches that run's own `workstation-smoke-*`
 project and volumes, and compose has no fixed `container_name` any more,
 so a concurrently running deployment never clashes with the smoke at
-all (polyforge#177). 仓库的真机 smoke 与外部模式桩测试
+all (polyforge#177). Every pass ends with a `down -v` of its own project
+and carries an EXIT trap doing the same, so a die mid-run leaves nothing
+behind either (review r1#3); `persist` also removes the retag it created. 仓库的真机 smoke 与外部模式桩测试
 通过跨进程资源锁串行操作共享项目；外部模式桩另用 38422 端口，真机计数桩用
 38421。并行测试 runner 不会让一个测试清理另一个测试的容器或卷。The first-boot
 pass is the AC proof of the identity half: after the boot the record

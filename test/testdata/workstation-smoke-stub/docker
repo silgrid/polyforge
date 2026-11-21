@@ -90,6 +90,38 @@ if [ "${1:-}" = exec ]; then
 		fi
 		exit 0
 		;;
+	# the podman-verify pass (polyforge#161): the probe container's
+	# measured limits, the prepared-image path, the verify build driver,
+	# the module run and the cleanliness probes
+	*smoke-verify-driver.py*)
+		case "$args" in
+		*python3*) echo "Dockerfile.verify build done" ;;
+		*) exit 0 ;;  # the driver file's cat-into-the-container
+		esac
+		;;
+	*--memory*)
+		echo "memory=67108864 pids=16 net=ok"
+		;;
+	*--pull=never*)
+		echo "prepared-path-ok"
+		;;
+	*unittest*)
+		echo "Ran 9 tests in 0.1s"
+		echo ""
+		echo "OK"
+		;;
+	*podman*ps*-a*)
+		exit 0
+		;;
+	*"ps -e -o stat="*)
+		echo 0
+		;;
+	*"[c]onmon"*)
+		echo 0
+		;;
+	*"[p]odman"*)
+		echo 0
+		;;
 	# the persist pass (polyforge#177): the six sentinel values, each
 	# fail-flag its own injected change; the three written sentinels echo
 	# back exactly what the smoke stored
@@ -230,6 +262,10 @@ if [ "${1:-}" = tag ]; then
 	echo "$3" >> "$dir/docker-tag.log"
 	exit 0
 fi
+if [ "${1:-}" = rmi ]; then
+	echo "$2" >> "$dir/docker-rmi.log"
+	exit 0
+fi
 if [ "$1" = image ] && [ "$2" = inspect ]; then
 	if [ -f "$dir/image-missing" ]; then
 		echo "stub docker: No such image: $3" >&2
@@ -254,6 +290,21 @@ if [ "${1:-}" = compose ]; then
 		# the persist test's cumulative record: every up's environment
 		# (the new-tag phase must carry WORKSTATION_IMAGE)
 		env >> "$dir/compose-up-all.log"
+		;;
+	down)
+		# the cleanup test's record (review r1#3): every `down -v`,
+		# with the project it took down
+		case "$*" in
+		*"-v"*)
+			p=""
+			prev=""
+			for a in "$@"; do
+				[ "$prev" = "-p" ] && p=$a
+				prev=$a
+			done
+			echo "$p" >> "$dir/compose-down-v.log"
+			;;
+		esac
 		;;
 	build)
 		env > "$dir/compose-$verb-env.txt"
