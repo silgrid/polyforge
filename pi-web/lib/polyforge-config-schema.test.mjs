@@ -109,3 +109,30 @@ test("the Host region's scalar keys and pattern-list keys partition the Host-onl
   assert.equal(schema.configValueError("model_error_patterns", [], { kind: "regex-list" }), null, "an empty list is a valid unset-to-empty write");
 });
 
+
+// polyforge#151 (85b2): the [step_tiers] key family — pf's Host-only
+// step-tier catalog. The tier-name grammar is pf's own (internal/polyforge/
+// cli/step_tiers.go: ^[a-z][a-z0-9-]{0,39}$, the lane tier grammar), so a
+// bad tier name is refused before any spawn; the family is Host-only beside
+// the fixed HOST_ONLY_KEYS (a prefix predicate, never an array entry, so
+// the default Cell's list cannot leak the catalog as read-only chips); the
+// family carries its own pf floor, the 0.2.x line (a 2.20.x pf and an
+// unparseable version are both below — polyforge-detect's line ranking).
+test("the step_tiers family parses pf's tier grammar and is Host-only beside the fixed keys", () => {
+  assert.equal(schema.parseStepTierKey("step_tiers.default"), "default");
+  assert.equal(schema.parseStepTierKey("step_tiers.fast-chat"), "fast-chat");
+  assert.equal(schema.parseStepTierKey("step_tiers." + "a".repeat(40)), "a".repeat(40), "40 chars is the grammar's ceiling");
+  for (const bad of ["step_tiers.", "step_tiers.Bad", "step_tiers.1x", "step_tiers." + "a".repeat(41), "step_tiers.default.x", "step_tiersx.default", "step_tiers", "summarize.models", "steps.a.b.models", ""]) {
+    assert.equal(schema.parseStepTierKey(bad), null, `refused: ${JSON.stringify(bad)}`);
+  }
+  // isHostOnlyKey: every fixed Host-only key plus the whole family
+  for (const key of [...schema.HOST_ONLY_KEYS, "step_tiers.default", "step_tiers.whatever-tier"]) {
+    assert.ok(schema.isHostOnlyKey(key), `${key} is Host-only`);
+  }
+  for (const key of ["max_concurrent_jobs", "server", "summarize.models", "model.source", "step_tiers", "step_tiers.Bad", "steps.a.b.models", ""]) {
+    assert.ok(!schema.isHostOnlyKey(key), `${JSON.stringify(key)} is not Host-only`);
+  }
+  // HOST_ONLY_KEYS stays exactly the two fixed lists — the family is a prefix, never an entry
+  assert.deepEqual([...schema.HOST_ONLY_KEYS], [...schema.HOST_SCALAR_KEYS, ...schema.HOST_LIST_KEYS]);
+  assert.equal(schema.POLYFORGE_CONFIG_STEP_TIERS_MINIMUM_PF_VERSION, "0.2.4");
+});
