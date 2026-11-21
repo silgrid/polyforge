@@ -19,6 +19,16 @@ from typing import List, Sequence, Tuple
 from . import git, gostr
 from .units import KIND_E2E_SUITE, KIND_GO, KIND_MJS, KIND_PYTEST, KIND_UNITTEST
 
+# The three classes a still-red unit's base judgment answers (the class
+# beside the why, polyforge#212): a failure the base carries the same way
+# is pre-existing (not this change's to fix), one the base proves fresh
+# (it lacks the test, or the test passes there) is this change's, and
+# anything the base runs could not settle is undetermined — never
+# released, the existing red rules hold.
+CLASS_PRE_EXISTING = "pre_existing"
+CLASS_THIS_CHANGE = "this_change"
+CLASS_UNDETERMINED = "undetermined"
+
 # Bounds one git read (seconds).
 GIT_TIMEOUT = 600.0
 
@@ -37,6 +47,16 @@ class BaseObservation:
     found: bool = False
     failed: bool = False
     signature: str = ""
+
+
+def classify_base_class(
+    bar_sig: str, head_sig: str, presence: str, presence_why: str,
+    runs: Sequence[BaseObservation], want: int,
+) -> Tuple[str, str]:
+    """The pre-existing judgment with its class: (class, why) — the same
+    conditions, the same order and the same why wording as classify_base,
+    the class beside them."""
+    return "", ""
 
 
 def classify_base(
