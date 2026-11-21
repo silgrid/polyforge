@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { writePrivateFileAtomicSync } from "../atomic-file";
 import { serializeByKey } from "../key-serializer";
 import {
+  CLAUDE_CUSTOM_MODELS_MAX,
   CLAUDE_SKILL_OVERRIDES_MIN_VERSION,
   compareClaudeVersions,
   isClaudeSkillOverrideState,
@@ -357,18 +358,23 @@ export async function applyClaudePermissionChange(
  * The model keys' registered minimum versions (owner ruling Q4: the ticket
  * registers the model keys' minimums; the gate itself recognizes the major):
  * 2.1.312 is the first recorded version that establishes the model and
- * global effort keys. Per-model modelSettings writes remain unsupported until
- * their native settings format is verified in 85a3-2.
+ * global effort keys. `modelPicker` is claude's own native key (v2.1.242+, the
+ * official settings reference; the 2.1.329 native recording proves the
+ * recognition — 85a3-3). Per-model modelSettings writes remain unsupported
+ * until their native behaviour is verified (85a3-3: the initialize answer
+ * does not surface a saved level, so the read stays display-only).
  */
 export const CLAUDE_MODEL_KEY_MIN_VERSIONS: Readonly<Record<string, string>> = {
   model: "2.1.312",
   effortLevel: "2.1.312",
+  modelPicker: "2.1.242",
 };
 
 /** A validated model change for the claude adapter's write(). One field per write. */
 export type ClaudeModelChange =
   | { kind: "model"; model: string | null }
-  | { kind: "effortLevel"; level: string | null };
+  | { kind: "effortLevel"; level: string | null }
+  | { kind: "customModels"; models: string[] };
 
 /** The native keys one change kind touches, for the key-floor check. */
 export function claudeModelChangeKeys(change: ClaudeModelChange): readonly string[] {
@@ -377,6 +383,8 @@ export function claudeModelChangeKeys(change: ClaudeModelChange): readonly strin
       return ["model"];
     case "effortLevel":
       return ["effortLevel"];
+    case "customModels":
+      return ["modelPicker"];
   }
 }
 
@@ -412,6 +420,27 @@ export function parseClaudeModelChange(
       return { reason: `unknown effort level: ${String(raw)}` };
     }
     return { change: { kind: "effortLevel", level: raw as string | null } };
+  }
+  if (key === "customModels") {
+    // 85a3-3: the custom names claude's own native modelPicker lists. The list
+    // is the full next state: every entry a name `--model` takes, distinct, at
+    // most CLAUDE_CUSTOM_MODELS_MAX; a surviving entry keeps its metadata, a
+    // new name lands as { model }, a dropped name's entry goes.
+    const raw = change.customModels;
+    if (!Array.isArray(raw)) {
+      return { reason: "customModels must be an array of model names" };
+    }
+    const models: string[] = [];
+    for (const name of raw) {
+      if (!isClaudeModelName(name)) {
+        return { reason: `not a claude model name: ${String(name)}` };
+      }
+      if (!models.includes(name)) models.push(name);
+    }
+    if (models.length > CLAUDE_CUSTOM_MODELS_MAX) {
+      return { reason: `customModels is capped at ${CLAUDE_CUSTOM_MODELS_MAX} entries` };
+    }
+    return { change: { kind: "customModels", models } };
   }
   return { reason: `unknown model change: ${key}` };
 }
@@ -449,5 +478,9 @@ export async function applyClaudeModelChange(
         ? { ok: true, summary: level === null ? "effortLevel removed" : `effortLevel = ${level}` }
         : result;
     }
+    case "customModels":
+      // The zero-value skeleton (85a3-3 u1): the change parses and registers
+      // its key floor, but the write itself is not implemented yet.
+      return { ok: false, reason: "the customModels write is not implemented yet" };
   }
 }
