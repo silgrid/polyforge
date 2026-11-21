@@ -461,8 +461,15 @@ var textClasses = []struct {
 	// on the 4xx status or invalid_request_error), or a gateway-layer
 	// transient of polyforge#34: a gateway naming itself or its upstream
 	// "temporarily unavailable" (the upstream/gateway subject keeps "The
-	// model is temporarily unavailable" model-class), a gateway with "no
-	// available accounts" (its upstream pool is dry), and the upstream
+	// model is temporarily unavailable" model-class), a gateway naming
+	// the service "temporarily unavailable" — the service subject
+	// directly before the phrase, a gateway 503 body
+	// `503: {"message":"Service temporarily unavailable","type":"api_error"}`
+	// (polyforge#210, #147's glm text; keyed on the text, never on the 503
+	// status — "503 Service Unavailable" stays model-class, and "The model
+	// service is temporarily unavailable" keeps the model classes: a word
+	// inserted between the subject and the phrase does not count), a
+	// gateway with "no available accounts" (its upstream pool is dry), and the upstream
 	// model reporting an error after output had started (the turn's
 	// delivered output is partial). The stream-drop verbs need an
 	// upstream/provider/stream/connection subject: a bare "the model ended
@@ -476,6 +483,7 @@ var textClasses = []struct {
 		`\bempty\W(response|reply|completion)\b|\b(0|zero)\W?(output\W)?tokens?\b|` +
 		`\b(upstream|provider|stream|connection)\W.{0,30}\b(reset|refused|dropped|closed|aborted|ended|interrupted|eof)\b|` +
 		`\b(upstream|gateway)\W.{0,40}\btemporarily\W+unavailable\b|` +
+		`\bservice\W+temporarily\W+unavailable\b|` +
 		`\bno\W+available\W+accounts\b|` +
 		`\bupstream\W+model\W+reported\W+an\W+error\b|` +
 		`\bupstream\W.{0,40}\bplease\W+retry\b)`),

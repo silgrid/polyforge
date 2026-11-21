@@ -1786,6 +1786,8 @@ throttles (429 / rate limit / `overloaded` / the gateways' `server
 overload. Please retry later.` and concurrency texts) and the upstream
 transients: a response stream that ended or was interrupted before
 completion, an upstream/gateway named `temporarily unavailable`, a
+gateway's `Service temporarily unavailable` (the service subject directly
+before the phrase, polyforge#210), a
 gateway's `no available accounts`, and the upstream model reporting an
 error after output had started (the output so far is partial). Every
 `step_failed` event records which rule judged its text
