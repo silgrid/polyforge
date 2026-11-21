@@ -120,13 +120,22 @@ test("once the customModels phase cleared the key, the next startup deletes the 
   assert.equal(readJson(piWebSettingsPath).claudeMigrated, true);
 });
 
-test("an old settings file without a customModels key still goes at startup (85a4's own case)", async () => {
+test("an old settings file without a customModels key — or holding an empty list — still goes at startup (85a4's own case)", async () => {
   reset();
   fs.writeFileSync(oldSettingsPath, JSON.stringify({ version: 1, launchPermissionMode: "acceptEdits", includeHookEvents: true }));
   fs.writeFileSync(oldPermissionsPath, JSON.stringify({ version: 1, mode: "ask", push: true }));
   const result = await migration.ensureClaudeSelfStoredMigration(opts());
   assert.equal(result.ran, true);
   assert.equal(fs.existsSync(oldSettingsPath), false);
+  assert.equal(readJson(piWebSettingsPath).claudeMigrated, true);
+  // An empty list carries nothing for the phase: the create-time migration
+  // (claude-create.test.mjs) still deletes the file and marks.
+  reset();
+  fs.writeFileSync(oldSettingsPath, JSON.stringify({ version: 1, customModels: [], includeHookEvents: true }));
+  fs.writeFileSync(oldPermissionsPath, JSON.stringify({ version: 1, mode: "ask", push: true }));
+  const emptied = await migration.ensureClaudeSelfStoredMigration(opts());
+  assert.equal(emptied.ran, true);
+  assert.equal(fs.existsSync(oldSettingsPath), false, "an empty customModels list kept the file");
   assert.equal(readJson(piWebSettingsPath).claudeMigrated, true);
 });
 
