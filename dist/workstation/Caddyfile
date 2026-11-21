@@ -10,8 +10,8 @@
 # loopback names, IP literals and the names that variable lists.
 #
 # The proxy target is the `workstation` network alias, which compose
-# puts on BOTH boot services (the aihub variant carries no
-# container_name of that name).
+# puts on BOTH boot services (neither carries a fixed container_name —
+# polyforge#177 — the alias is the stable name).
 {$WORKSTATION_HTTPS_HOST:localhost} {
 	tls internal
 	reverse_proxy workstation:30141

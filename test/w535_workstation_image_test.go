@@ -1116,25 +1116,40 @@ func TestWorkstationSmokeProjectIsolation(t *testing.T) {
 	if !strings.Contains(body, "smoke-$(date +%s)-$$") {
 		t.Fatal("polyforge#177: the smoke must derive a per-run unique project (clock + pid) — a fixed project name lets concurrent runs down each other's volumes")
 	}
-	// every docker compose INVOCATION carries the per-run project (the
-	// compose() helper, the env and podman-verify passes and the
-	// first-boot pass's compose_ext calls) — comments and die/say
-	// messages merely mention the words, and the bare `docker compose
-	// version` probes touch no project
+	// every RAW docker compose invocation carries the per-run project
+	// inline (the env and podman-verify passes and the first-boot pass's
+	// compose_ext calls); the compose()/compose_ext helpers carry it by
+	// construction (asserted above/below on their own definitions), the
+	// bare `docker compose version` probes touch no project, and comments
+	// and die/say messages merely mention the words
 	for i, line := range strings.Split(body, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "#") {
 			continue
 		}
-		invocation := strings.HasPrefix(trimmed, "docker compose") ||
-			strings.HasPrefix(trimmed, "compose ") || strings.HasPrefix(trimmed, "compose()") ||
-			strings.HasPrefix(trimmed, "compose_ext") ||
-			strings.Contains(trimmed, "$(docker compose") || strings.Contains(trimmed, "$(compose ")
-		if !invocation || strings.HasPrefix(trimmed, "docker compose version") {
+		raw := strings.HasPrefix(trimmed, "docker compose") || strings.Contains(trimmed, "$(docker compose")
+		if !raw || strings.HasPrefix(trimmed, "docker compose version") {
 			continue
 		}
 		if !strings.Contains(trimmed, `"$smoke_project"`) {
 			t.Fatalf("polyforge#177: smoke.sh line %d invokes docker compose without the per-run project: %q", i+1, trimmed)
+		}
+	}
+	// every helper definition carries the project too (compose_ext wraps
+	// the raw docker compose calls of the first-boot pass)
+	for _, helper := range []string{"compose() {", "compose_ext() {"} {
+		at := strings.Index(body, helper)
+		if at < 0 {
+			t.Fatalf("polyforge#177: the smoke must define %s", strings.TrimSuffix(helper, " {"))
+		}
+		rest := body[at:]
+		end := strings.Index(rest, "\n}")
+		if end < 0 {
+			end = len(rest)
+		}
+		def := rest[:end]
+		if !strings.Contains(def, `"$smoke_project"`) {
+			t.Fatalf("polyforge#177: the %s helper must carry the per-run project", strings.TrimSuffix(helper, " {"))
 		}
 	}
 	// the host port is derived per run unless WORKSTATION_WEB_PORT overrides

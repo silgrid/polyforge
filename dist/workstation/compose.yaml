@@ -38,7 +38,10 @@ x-workstation: &workstation
   build:
     context: ../..
     dockerfile: dist/workstation/Containerfile
-  image: polyforge-workstation:local
+  # parameterized (polyforge#177): WORKSTATION_IMAGE runs a published
+  # image (no build — the exported delivery's path); unset, the local
+  # build tags the default polyforge-workstation:local.
+  image: ${WORKSTATION_IMAGE:-polyforge-workstation:local}
   # AC1's minimal set — set equality, nothing else may appear here.
   cap_add: [CAP_SYS_ADMIN, CAP_NET_ADMIN]
   security_opt:
@@ -114,8 +117,10 @@ services:
     <<: *workstation
     # THE default boot (84-components-C): the local AIHub starts as a
     # watched child, and the first boot has initialized its identity.
+    # No container_name (polyforge#177): the service name and the
+    # `workstation` network alias are the stable names, so concurrent
+    # deployments never clash on a fixed one.
     profiles: [aihub]
-    container_name: workstation
     command: ["--grace", "60s", "--with-aihub",
               "--workflows-dir", "/components/current/workflows",
               "--pi-web-dir", "/components/current/pi-web"]
@@ -124,7 +129,6 @@ services:
     # the explicit without-AIHub opt-out (#176 keeps it reachable: a
     # deployment that runs its AIHub elsewhere starts this profile).
     profiles: [no-aihub]
-    container_name: workstation-noaihub
     command: ["--grace", "60s",
               "--workflows-dir", "/components/current/workflows",
               "--pi-web-dir", "/components/current/pi-web"]

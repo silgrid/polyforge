@@ -38,16 +38,23 @@ export PI_WEB_PASSWORD="$password"
 say() { printf 'smoke: %s\n' "$*"; }
 die() { printf 'smoke: FAIL: %s\n' "$*" >&2; exit 1; }
 
-# compose runs under the SMOKE'S OWN project (polyforge#176, review
-# r1#4): the compose file names the project `workstation` and its six
-# volumes are a real deployment's persistent home, so the smoke runs
-# every call under -p workstation-smoke — its `down -v` (the first-boot
-# pass resets volumes) then only ever touches workstation-smoke_*, never
-# an operator's. A concurrently running deployment's fixed
-# container_name fails the up explicitly instead of being interfered
-# with. Relative paths (the seccomp file, the build context) resolve
-# against the compose file's directory, so the caller's cwd is free.
-compose() { docker compose -p workstation-smoke -f "$compose_file" "$@"; }
+# compose runs under the SMOKE'S OWN project, unique per run
+# (polyforge#176 review r1#4; polyforge#177): the compose file names the
+# project `workstation` and its six volumes are a real deployment's
+# persistent home, so every call runs under -p "$smoke_project" — a
+# name derived from the clock and the pid, so `down -v` (the first-boot
+# pass resets volumes) only ever touches THIS run's volumes, never an
+# operator's and never a concurrent run's. The host port is derived the
+# same way (the fixed 30141 would clash with a running deployment) unless
+# WORKSTATION_WEB_PORT overrides it; compose has no fixed container_name
+# any more, so nothing else can clash either. Relative paths (the
+# seccomp file, the build context) resolve against the compose file's
+# directory, so the caller's cwd is free.
+smoke_run="smoke-$(date +%s)-$$"
+smoke_project="workstation-$smoke_run"
+web_host_port="${WORKSTATION_WEB_PORT:-$((30500 + ( ($(date +%s) + $$) % 900 )))}"
+export WORKSTATION_WEB_PORT="$web_host_port"
+compose() { docker compose -p "$smoke_project" -f "$compose_file" "$@"; }
 
 # poll_until WHAT SECONDS CMD... — a bounded poll that re-runs CMD
 # every 2s until it succeeds or the deadline passes.
@@ -244,9 +251,9 @@ YEOF
 	# prefixed per command — it must ride the `up` that CREATES the
 	# container, not just the build (review r2#2).
 	export SENTINEL_WORKSTATION_SMOKE=yes
-	docker compose -p workstation-smoke -f "$compose_file" -f "$override" --profile "$profile" build >/dev/null
-	docker compose -p workstation-smoke -f "$compose_file" -f "$override" --profile "$profile" up -d >/dev/null
-	cid=$(docker compose -p workstation-smoke -f "$compose_file" -f "$override" --profile "$profile" ps -q "$(service_of "$profile")")
+	docker compose -p "$smoke_project" -f "$compose_file" -f "$override" --profile "$profile" build >/dev/null
+	docker compose -p "$smoke_project" -f "$compose_file" -f "$override" --profile "$profile" up -d >/dev/null
+	cid=$(docker compose -p "$smoke_project" -f "$compose_file" -f "$override" --profile "$profile" ps -q "$(service_of "$profile")")
 	[ -n "$cid" ] || die "no workstation container"
 	poll_until "pf supervise to run inside" 120 \
 		docker exec "$cid" sh -c 'ps -e -o args= | grep -q "[p]f supervise"'
@@ -274,7 +281,7 @@ YEOF
 	code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$web_host_port/api")
 	printf 'smoke: anonymous /api = %s\n' "$code"
 	[ "$code" = 401 ] || die "anonymous /api is $code, want 401"
-	docker compose -p workstation-smoke -f "$compose_file" -f "$override" --profile "$profile" down >/dev/null
+	docker compose -p "$smoke_project" -f "$compose_file" -f "$override" --profile "$profile" down >/dev/null
 	rm -f "$override"
 	say "env: PASS"
 }
@@ -290,9 +297,9 @@ services:
       - "@ROOT@:/workspace:ro"
 YEOF
 	say "podman-verify: booting with the repository mounted at /workspace"
-	docker compose -p workstation-smoke -f "$compose_file" -f "$override" --profile "$profile" build >/dev/null
-	docker compose -p workstation-smoke -f "$compose_file" -f "$override" --profile "$profile" up -d >/dev/null
-	cid=$(docker compose -p workstation-smoke -f "$compose_file" -f "$override" --profile "$profile" ps -q "$(service_of "$profile")")
+	docker compose -p "$smoke_project" -f "$compose_file" -f "$override" --profile "$profile" build >/dev/null
+	docker compose -p "$smoke_project" -f "$compose_file" -f "$override" --profile "$profile" up -d >/dev/null
+	cid=$(docker compose -p "$smoke_project" -f "$compose_file" -f "$override" --profile "$profile" ps -q "$(service_of "$profile")")
 	[ -n "$cid" ] || die "no workstation container"
 	poll_until "pf supervise to run inside" 120 \
 		docker exec "$cid" sh -c 'ps -e -o args= | grep -q "[p]f supervise"'
@@ -362,7 +369,7 @@ PYEOF
 	[ "$pod" = 0 ] || die "podman stays resident: $pod process(es)"
 	say "no residual containers, no zombies, no resident conmon/podman"
 
-	docker compose -p workstation-smoke -f "$compose_file" -f "$override" --profile "$profile" down >/dev/null
+	docker compose -p "$smoke_project" -f "$compose_file" -f "$override" --profile "$profile" down >/dev/null
 	rm -f "$override"
 	say "podman-verify: PASS"
 }
@@ -424,16 +431,20 @@ YEOF
 		: >"$hits"  # the listen probe was ours, not the container's
 		export WORKSTATION_AIHUB_SERVER="http://host.docker.internal:$stub_port"
 		export WORKSTATION_AIHUB_KEY="smoke-external-key"
-		compose_up="docker compose -p workstation-smoke -f $compose_file -f $override --profile $profile"
+		compose_ext() {
+			docker compose -p "$smoke_project" -f "$compose_file" -f "$override" --profile "$profile" "$@"
+		}
 	else
-		compose_up="compose --profile $profile"
+		compose_ext() {
+			docker compose -p "$smoke_project" -f "$compose_file" --profile "$profile" "$@"
+		}
 	fi
 
 	say "first-boot: resetting the volumes and starting the $profile profile"
 	compose --profile "$profile" down -v >/dev/null 2>&1 || true
-	$compose_up build >/dev/null
-	$compose_up up -d >/dev/null
-	cid=$($compose_up ps -q workstation)
+	compose_ext build >/dev/null
+	compose_ext up -d >/dev/null
+	cid=$(compose_ext ps -q workstation)
 	[ -n "$cid" ] || die "no workstation container was created for profile $profile"
 	poll_until "the workstation container to run" 120 \
 		sh -c "docker inspect -f '{{.State.Running}}' '$cid' | grep -q true"
@@ -553,12 +564,12 @@ for name in ("api_key", "key_hash", "token"):
 	say "first-boot: restarting with the volumes intact"
 	first_record=$(record_of)
 	first_cell=$(cell_server)
-	$compose_up down >/dev/null
+	compose_ext down >/dev/null
 	if [ "$external" = yes ]; then
 		export WORKSTATION_AIHUB_SERVER="http://host.docker.internal:1/other-choice"
 	fi
-	$compose_up up -d >/dev/null
-	cid=$($compose_up ps -q workstation)
+	compose_ext up -d >/dev/null
+	cid=$(compose_ext ps -q workstation)
 	[ -n "$cid" ] || die "no workstation container was created for the restart"
 	poll_until "pf supervise to run inside (restart)" 120 \
 		docker exec "$cid" sh -c 'ps -e -o args= | grep -q "[p]f supervise"'
@@ -573,7 +584,7 @@ for name in ("api_key", "key_hash", "token"):
 		say "the same key still authenticates after the restart (no reissue)"
 	fi
 
-	$compose_up down -v >/dev/null 2>&1 || true
+	compose_ext down -v >/dev/null 2>&1 || true
 	if [ "$external" = yes ]; then
 		# 停机后再核对全部请求，覆盖首启与重启的完整运行期。
 		check_external_requests
