@@ -199,3 +199,25 @@ func TestFastCheckProofLeavesUndeclaredStepsAlone(t *testing.T) {
 		t.Fatalf("build on the same inputs = %d %s, want 400 naming repos/app", code, body)
 	}
 }
+
+func TestFastCheckProofRefusesARedResult(t *testing.T) {
+	for _, c := range []struct{ name, verdict string }{
+		{"a failing result", "fail"},
+		{"an errored result", "error"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newC3Fixture(t, "wi_c3v"+c.verdict)
+			f.as("build", 1)
+			writeC3Result(t, f.capDir, "artifacts/build/fast-checks/app.json", c.verdict, map[string]string{"app": f.c2})
+			code, body := c4Call(t, f.td, "handoff", map[string]any{"status": "done", "body": c4Body()})
+			if code != 400 {
+				t.Fatalf("build with a %s result = %d %s, want 400", c.verdict, code, body)
+			}
+			for _, want := range []string{"repos/app", "has verdict " + c.verdict + ", not pass", "run-fast-check --repo app --out artifacts/build/fast-checks/app.json"} {
+				if !strings.Contains(body, want) {
+					t.Errorf("the refusal does not carry %q:\n%s", want, body)
+				}
+			}
+		})
+	}
+}
