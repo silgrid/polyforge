@@ -1206,6 +1206,37 @@ def delivery_block(caps_dir, rows, events_dir, out=sys.stdout):
         p(delivery_detail_line(d))
 
 
+def arms_report(caps_dir, rows, manifest, events_dir, out=sys.stdout):
+    arms = cohort_arms(manifest) or {}
+    p = lambda s='': print(s, file=out)
+    by_name = {r['capsule']: r for r in rows}
+    for name in sorted(arms):
+        p()
+        p(f'== arm {name} ==')
+        found = [by_name[n] for n in arms[name] if n in by_name]
+        missing = [n for n in arms[name] if n not in by_name]
+        included, completed, events_missing, excluded = run_set(caps_dir, found, events_dir)
+        p(run_set_line(completed, events_missing, excluded))
+        delivery = delivery_rows_for(caps_dir, included, events_dir)
+        for s in summary_lines(delivery, events_dir):
+            p(s)
+        for d in delivery:
+            p(delivery_detail_line(d))
+        if missing:
+            p(f'missing from the input (counted, excluded): {", ".join(missing)} ({len(missing)})')
+
+
+def cohort_arms(manifest):
+    v = manifest.get('arms')
+    if v is None:
+        return None
+    if not isinstance(v, dict) or any(not isinstance(x, list) or any(not isinstance(n, str) for n in x)
+                                      for x in v.values()):
+        print('review-firstpass: the cohort manifest’s arms must be an object of lists of capsule dir names', file=sys.stderr)
+        sys.exit(2)
+    return v
+
+
 # ---------------------------------------------------------------- cohort view
 # The owner-confirmed split comparison (polyforge#118): the manifest IS
 # the grouping; dates only filter. Every honesty rule below answers a
@@ -1409,6 +1440,7 @@ def main(argv):
 
         since = _later(since, win.get('since', ''))
         until = _earlier(until, win.get('until', ''))
+        cohort_arms(manifest)
     rows, quarantined = collect(a.capsules_dir, since, until)
     delivery = {}
     if a.events:
@@ -1447,6 +1479,7 @@ def main(argv):
         delivery_block(a.capsules_dir, rows, a.events)
     if manifest is not None:
         cohort_report(rows, a.capsules_dir, manifest, cohort_path)
+        arms_report(a.capsules_dir, rows, manifest, a.events)
     return 0
 
 
