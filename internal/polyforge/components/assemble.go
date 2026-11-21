@@ -27,6 +27,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/silgrid/polyforge/internal/polyforge/cellcfg"
 	"time"
 )
 
@@ -242,6 +244,9 @@ func assembleVersionDir(opts AssembleOptions) (*Manifest, error) {
 		Platform:      opts.Platform,
 		ChannelRepo:   cur.ChannelRepo,
 		MinBase:       cur.MinBase,
+		// the data layout this build reads (the owner's ruling of
+		// 2026-11-21): the rollback's data-migration judgment reads it.
+		DataLayout: cellcfg.CurrentLayout,
 	}
 	for _, name := range ComponentNames {
 		path, _ := PathOfComponent(name)

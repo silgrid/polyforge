@@ -937,5 +937,10 @@ Cell under its recorded identity and let the first boot be skipped.
 
 回到上一版交换 current 与 previous 并重启组件；目标 manifest schema 不可读、
 平台或渠道不同、最低底座版本不满足时拒绝，保留软链与运行组件并显示原因。
-数据层 schema 迁移仍应先备份并遵循对应版本迁移说明，manifest schema
-不是数据库兼容性的证明。组件卷首启与 compose 接线由 84-components-C 提供。
+回退在数据层同样受机械判定（owner 2026-11-21 裁定）：manifest 新增
+dataLayout 字段，由构建时的 seedtool 与组装器从本构建读取的 cellcfg 布局
+版本钉入；回退时与数据目录的 layout-version 比对，previous 声明的布局与
+卷上实际不一致即拒绝并提示两边的布局名、什么都不改。早于该字段的版本
+不声明、也不被机械判定：回退到它们前先备份并遵循对应版本的迁移说明。
+manifest schema 不是数据库兼容性的证明。组件卷首启与 compose 接线由
+84-components-C 提供。

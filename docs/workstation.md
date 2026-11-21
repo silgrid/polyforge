@@ -286,7 +286,9 @@ supervisor relaunches it — and the old tree's Pi Web and AIHub — on the
 new `current`. `pf components rollback` swaps `current` and `previous`
 through the same drain and restarts; a rollback is refused — changing
 nothing — when the previous is missing or corrupt, of another channel,
-of a manifest schema this build cannot judge, of another platform, or
-below the running base's floor. A data-layer schema migration is not
+of a manifest schema this build cannot judge, of another platform, of
+a data layout the data directory has migrated past (the previous
+version's declared `dataLayout` — a version older than the field is
+never machine-judged), or below the running base's floor. A data-layer schema migration is not
 judged by the manifest: back up before upgrading and follow the
 version's migration notes before rolling back.

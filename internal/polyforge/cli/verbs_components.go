@@ -255,7 +255,7 @@ func runComponents(ctx *Context, fs *flag.FlagSet, args []string) error {
 		}
 		return emitComponents(ctx, result, fmt.Sprintf("upgraded %s to %s", result.From, result.To))
 	case "rollback":
-		result, err := components.Rollback(context.Background(), components.RollbackOptions{Root: root, BaseVersion: base, Force: boolFlag(fs, "force"), Face: componentsFaceFor(ctx)})
+		result, err := components.Rollback(context.Background(), components.RollbackOptions{Root: root, DataDir: componentsDataDir(), BaseVersion: base, Force: boolFlag(fs, "force"), Face: componentsFaceFor(ctx)})
 		if err != nil {
 			return err
 		}

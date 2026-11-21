@@ -7,7 +7,7 @@
 - `pf components status`：读取 current、previous 和 upgrade-status.json。
 - `pf components upgrade --version V`：下载并核对 SHA256SUMS，准备完整版本，排空后切换。
 - `pf components upgrade --seed-dir D --version V`：使用完整本地种子。
-- `pf components rollback`：交换 current 与 previous，拒绝不兼容 schema、平台、渠道或底座版本。
+- `pf components rollback`：交换 current 与 previous，拒绝不兼容 schema、平台、渠道、底座版本或已跨过的数据布局（previous 声明的 dataLayout 与数据目录 layout-version 不符）。
 - `pf components cancel`：取消等待并请求 daemon 重启，清除排空。
 
 upgrade 与 rollback 支持 `--force`，省略 upgrade 的版本时使用渠道最新版。

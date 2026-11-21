@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/silgrid/polyforge/internal/polyforge/cellcfg"
 	"github.com/silgrid/polyforge/internal/polyforge/components"
 )
 
@@ -105,6 +106,11 @@ func cmdWrite(args []string) error {
 		Platform:      *platform,
 		ChannelRepo:   *channelRepo,
 		MinBase:       *minBase,
+		// the data layout this build reads (the owner's ruling of
+		// 2026-11-21): one source, the same constant the runtime's own
+		// startup check compares against — the rollback's data-migration
+		// judgment reads it from the manifest.
+		DataLayout: cellcfg.CurrentLayout,
 	}
 	for _, name := range components.ComponentNames {
 		path, _ := components.PathOfComponent(name)

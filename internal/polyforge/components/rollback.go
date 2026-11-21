@@ -8,11 +8,12 @@ package components
 // explicit act, so it is allowed to go down a version — but never
 // blindly. It refuses, naming the reason and changing nothing at all,
 // when there is no previous to go back to, when the previous tree is
-// corrupt or its manifest a schema this build cannot judge (a version
-// that crossed a schema migration), when the previous is of another
-// channel, or when the running base does not meet the previous's
-// minimum base requirement — the downgrade protection the layout
-// itself carries.
+// corrupt or its manifest a shape this build cannot judge, when the
+// previous is of another channel, of a platform this machine does not
+// run, of a data layout the live data directory has crossed a
+// migration past (the owner's ruling of 2026-11-21), or when the
+// running base does not meet the previous's minimum base requirement —
+// the downgrade protection the layout itself carries.
 
 import (
 	"context"
@@ -20,6 +21,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/silgrid/polyforge/internal/polyforge/cellcfg"
 )
 
 // RollbackOptions is one rollback's inputs.
@@ -133,11 +136,21 @@ func Rollback(ctx context.Context, opts RollbackOptions) (*UpgradeResult, error)
 	} else if !ok {
 		return refuse(fmt.Errorf("components rollback: refusing the downgrade protection: the base runs %s, the previous version requires %s — the image's bootstrap pf cannot run it (upgrading the base is an image change)", opts.BaseVersion, prevManifest.MinBase))
 	}
-	if prevManifest.SchemaVersion != SchemaVersion {
-		// ReadManifest already refuses a schema it cannot read; this is
-		// the belt to the braces: a future reader that grows a
-		// compatibility window states its own rule here.
-		return refuse(fmt.Errorf("components rollback: the previous version's manifest carries schema version %d, this build reads %d — the version crossed a schema migration this build cannot judge", prevManifest.SchemaVersion, SchemaVersion))
+	// the data layer (review r2#1, the owner's ruling of 2026-11-21): a
+	// previous version that DECLARES the data layout it reads is
+	// refused when the data directory carries another — the daemon's
+	// own startup check would refuse later, but AC6 demands the
+	// refusal before a single byte changes. A version older than the
+	// field declares nothing: never machine-judged, the documented
+	// operator responsibility.
+	if prevManifest.DataLayout != "" && opts.DataDir != "" {
+		live, lerr := cellcfg.ReadLayoutVersion(opts.DataDir)
+		if lerr != nil {
+			return refuse(fmt.Errorf("components rollback: the data directory's layout could not be read: %w", lerr))
+		}
+		if live != "" && live != prevManifest.DataLayout {
+			return refuse(fmt.Errorf("components rollback: refusing the data schema migration crossing: the previous version reads the data layout %s, the data directory carries %s — the version crossed a migration this rollback cannot judge (back up and follow the version's own migration notes)", prevManifest.DataLayout, live))
+		}
 	}
 	prevVer := prevManifest.Version
 	curVer := curManifest.Version

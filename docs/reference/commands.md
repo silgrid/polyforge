@@ -1843,7 +1843,8 @@ recalls reach a step: the [concepts page](../concepts.md).
 `pf components check` 查询当前与渠道最新版；`pf components status` 读取卷上的
 upgrade-status.json。执行 `pf components upgrade --version V`，可追加
 `--force` 或 `--seed-dir D`（完整本地版本目录）。省略版本时取渠道最新版。
-`pf components rollback` 回到 previous，也支持 `--force`；
+`pf components rollback` 回到 previous（previous 声明的 dataLayout 与数据目录
+的 layout-version 不一致时拒绝并提示原因），也支持 `--force`；
 `pf components cancel` 请求取消等待并重启 daemon 清排空。
 所有操作是 Host 级，不传 --profile；宿主模式拒绝，使用 tools/install.sh。
 
