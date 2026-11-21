@@ -190,7 +190,7 @@ function lex(input: string): Token[] {
 			// reached here as a word character instead
 			if (c === "&") {
 				if (input[i + 1] === "&") {
-					pushOp("&&", false);
+					pushOp("&&", true); // a command may follow &&
 					i += 2;
 					continue;
 				}
@@ -205,7 +205,12 @@ function lex(input: string): Token[] {
 				continue;
 			}
 			if (c === "|" && input[i + 1] === "&") {
-				pushOp("|&", false);
+				pushOp("|&", true); // a command may follow |&
+				i += 2;
+				continue;
+			}
+			if (c === "|" && input[i + 1] === "|") {
+				pushOp("||", true); // a command may follow ||
 				i += 2;
 				continue;
 			}
@@ -256,6 +261,7 @@ function lex(input: string): Token[] {
 				const line = quoted ? input.slice(bodyEnd, stop) : input.slice(bodyEnd, stop).replace(/^\t+/, "");
 				if (delim !== "" && line === delim) {
 					found = true;
+					bodyEnd = nl === -1 ? input.length : nl + 1; // lex resumes AFTER the delimiter line
 					break;
 				}
 				if (nl === -1) break;
@@ -264,7 +270,7 @@ function lex(input: string): Token[] {
 			if (found && bodyEnd > 0) {
 				// continue lexing after the delimiter line, keeping this
 				// token stream flat
-				const rest = lex(input.slice(bodyEnd + (input[bodyEnd - 1] === "\n" ? 0 : 0)));
+				const rest = lex(input.slice(bodyEnd));
 				const head = lex(input.slice(i, lineEnd + 1));
 				for (const t of head) toks.push(t);
 				for (const t of rest) toks.push(t);
