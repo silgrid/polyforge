@@ -219,8 +219,12 @@ func (sc *stepCall) fastCheckRefusal(spec driver.StepSpec) string {
 		if head == "" {
 			continue // no HEAD, no commit of this step's: nothing to prove (Q11)
 		}
-		if start, ok := starts[name]; ok && start == head {
-			continue
+		start, known := starts[name]
+		if known && start == head {
+			continue // the round did not move this repo
+		}
+		if known && !hasLocalOnlyCommit(dir) {
+			continue // a fast-forward: HEAD carries no commit of this work item's
 		}
 		if problem := sc.fastCheckProblem(spec, name, head); problem != "" {
 			problems = append(problems, problem)
@@ -285,6 +289,15 @@ func resultSummary(s string) string {
 		return string(r[:200]) + "…"
 	}
 	return s
+}
+
+// hasLocalOnlyCommit reports whether HEAD carries a commit no
+// remote-tracking ref carries: a commit this work item made. A fast-forward
+// onto the default branch leaves it empty; an unreadable answer counts as a
+// local commit, so the proof is demanded (never a silent waiver).
+func hasLocalOnlyCommit(dir string) bool {
+	out, err := taskrepo.Git(dir, "rev-list", "--max-count=1", "HEAD", "--not", "--remotes")
+	return err != nil || strings.TrimSpace(out) != ""
 }
 
 // repoHead answers a task repo's HEAD ("" when it has none or git cannot
