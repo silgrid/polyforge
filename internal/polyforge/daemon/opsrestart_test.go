@@ -19,6 +19,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -126,5 +127,57 @@ func TestOpsRestartFlagIsProcessLocal(t *testing.T) {
 	}
 	if fresh.restartForUpgrade.Load() {
 		t.Fatal("a fresh Host must never inherit the restart flag")
+	}
+}
+
+// TestOpsRestartRouteRefusesStepAndUncredentialedPeers pins the guard
+// review r2#3/#4 found missing: POST /ops/restart is a Host-level
+// write — a step agent's process tree is refused DAEMON-403 (and Run
+// never ends: no restart was asked), and so is a peer whose UDS
+// credential is unavailable (fail closed, exactly like /shutdown and
+// the drain). The docs' claim that a step agent cannot reach it only
+// becomes true with this.
+func TestOpsRestartRouteRefusesStepAndUncredentialedPeers(t *testing.T) {
+	th := newTestHost(t, hostCell{profile: "default", machineID: "m-def"})
+	defer th.Shutdown(context.Background(), "test done")
+
+	// a step agent's process tree: the runtime probe names this very
+	// process a step of the Host's machine id.
+	restore := runtimeStepOrigin
+	runtimeStepOrigin = func(pid int, id string) (string, bool) { return "wi_step", id == "m-def" }
+	t.Cleanup(func() { runtimeStepOrigin = restore })
+
+	code, raw := opsRestartPost(t, th.sock)
+	if code != http.StatusForbidden {
+		t.Fatalf("a step agent's restart ask must be refused DAEMON-403, got %d %s", code, raw)
+	}
+	if !strings.Contains(raw, "DAEMON-403") || !strings.Contains(raw, "step process tree") {
+		t.Fatalf("the refusal must name the step origin: %s", raw)
+	}
+	if th.restartForUpgrade.Load() {
+		t.Fatal("a refused ask must never set the restart flag")
+	}
+	select {
+	case err := <-th.done:
+		t.Fatalf("a refused ask must not end Run: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	_ = th.Shutdown(context.Background(), "the step-origin half done")
+
+	// a peer without a UDS credential: the guarded handler answers the
+	// same fail-closed refusal as every other Host-level write.
+	th2 := newTestHost(t, hostCell{profile: "default", machineID: "m-def"})
+	defer th2.Shutdown(context.Background(), "test done")
+	req := httptest.NewRequest(http.MethodPost, "/ops/restart", strings.NewReader("{}"))
+	rec := httptest.NewRecorder()
+	th2.handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("an uncredentialed restart ask must be refused DAEMON-403, got %d %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "identity") {
+		t.Fatalf("the refusal must name the unavailable identity: %s", rec.Body.String())
+	}
+	if th2.restartForUpgrade.Load() {
+		t.Fatal("a refused ask must never set the restart flag")
 	}
 }
