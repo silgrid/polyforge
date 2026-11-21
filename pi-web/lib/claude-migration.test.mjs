@@ -391,6 +391,27 @@ test("a confirm against a state that moved past the preview writes nothing — t
   assert.equal("customModels" in readJson(oldSettingsPath), false);
 });
 
+test("a kept old settings file loses this flow's already-migrated keys, so a later run rewrites nothing (r1#3)", async () => {
+  reset();
+  seedOld({ launch: "plan", channel: "deny" });
+  await migration.ensureClaudeSelfStoredMigration(opts());
+  // The file was kept for the models page's phase — but this flow's own
+  // fields are gone from it: a later run must not re-migrate them (the old
+  // channel file is deleted on the first run, so a stored plan would land
+  // under the defaulted ask channel if defaultMode were ever removed).
+  const kept = readJson(oldSettingsPath);
+  assert.equal("launchPermissionMode" in kept, false, "the kept file still carries launchPermissionMode");
+  assert.equal("includeHookEvents" in kept, false, "the kept file still carries includeHookEvents");
+  assert.deepEqual(kept.customModels, ["claude-custom-1", "claude-custom-2"]);
+  // An externally deleted native defaultMode stays deleted: the re-run has
+  // nothing of its own left to write.
+  const native = readJson(nativeSettingsPath);
+  delete native.permissions;
+  fs.writeFileSync(nativeSettingsPath, JSON.stringify(native));
+  await migration.ensureClaudeSelfStoredMigration(opts());
+  assert.equal(readJson(nativeSettingsPath).permissions, undefined, "the re-run rewrote the launch mode");
+});
+
 test("an empty customModels list clears the key without any native write", async () => {
   reset();
   seedOld({ models: [] });
