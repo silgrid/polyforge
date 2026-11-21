@@ -17,6 +17,7 @@ package runtime
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,6 +47,7 @@ function pgidOf(pid) {
 	return parseInt(rest[2], 10); // field 5 of stat, 3rd after (state, ppid)
 }
 const out = { ownPgid: pgidOf(process.pid) };
+if (scenario.showSchema) out.schema = JSON.stringify(tool.parameters);
 const emit = () => { console.log("PFEXT-RESULT " + JSON.stringify(out)); process.exit(0); };
 try {
 	const ac = new AbortController();
@@ -564,5 +566,165 @@ func TestPiSubagentLifecycleDescendants(t *testing.T) {
 	}
 	if len(left) != 1 || left[0] != sibling.Process.Pid {
 		t.Fatalf("after the aborted call only the sibling call-marker process may carry the WI marker; left=%v sibling=%d", left, sibling.Process.Pid)
+	}
+}
+
+// fakePiTimeoutVictim announces one message, spawns the same escapee
+// shapes as u2 and idles past any short timeout.
+const fakePiTimeoutVictim = `#!/bin/bash
+echo "started" >> "$FAKEPI_DIR/started"
+echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"working"}]}}'
+setsid sleep 300 &
+trap 'echo TERM >> "$FAKEPI_DIR/signals"' TERM
+while kill -0 "$PPID" 2>/dev/null; do sleep 0.1; done
+`
+
+// extResultDetails digs result.details.results[0] out of the driver's
+// parsed PFEXT-RESULT for the per-child assertions.
+func extResultDetails(res extRunOut) map[string]any {
+	details, _ := res.Result["details"].(map[string]any)
+	if details == nil {
+		return nil
+	}
+	results, _ := details["results"].([]any)
+	if len(results) == 0 {
+		return nil
+	}
+	r0, _ := results[0].(map[string]any)
+	return r0
+}
+
+func extResultText(res extRunOut) string {
+	content, _ := res.Result["content"].([]any)
+	for _, c := range content {
+		cm, _ := c.(map[string]any)
+		if cm == nil {
+			continue
+		}
+		if txt, _ := cm["text"].(string); txt != "" {
+			return txt
+		}
+	}
+	return ""
+}
+
+// TestPiSubagentLifecycleTimeout pins AC2: the per-task wall-clock timeout
+// is configurable (default 1800), validated (positive integers only),
+// measured from the child's actual start, and a timeout stops the child
+// AND its descendants and is reported as a failure that says so — never
+// as a success, never silently.
+func TestPiSubagentLifecycleTimeout(t *testing.T) {
+	dir := extProject(t)
+	const wi = "wi-pf200-u3-timeout"
+	const daemon = "dm-pf200-u3"
+	extSweepMarkerPids(t, wi)
+	t.Cleanup(func() { extSweepMarkerPids(t, wi) })
+
+	// (a) the schema declares the parameter and its default on every mode.
+	res := extRun(t, dir, map[string]any{
+		"params":     map[string]any{"agent": "worker", "task": "x"},
+		"showSchema": true,
+		"deadlineMs": 20000,
+		"env":        map[string]any{"FAKEPI_DIR": dir},
+	}, fakePiHonorTERM)
+	var schema map[string]any
+	if err := json.Unmarshal([]byte(res.Result["schema"].(string)), &schema); err != nil {
+		t.Fatalf("no tool schema in the driver result: %v (result=%v)", err, res.Result)
+	}
+	prop := func(m map[string]any, k string) map[string]any {
+		props, _ := m["properties"].(map[string]any)
+		p, _ := props[k].(map[string]any)
+		return p
+	}
+	if p := prop(schema, "timeoutSeconds"); p == nil || !strings.Contains(fmt.Sprint(p["description"]), "1800") {
+		t.Fatalf("timeoutSeconds must be declared with its 1800 default, got %v", p)
+	}
+	for _, mode := range []string{"tasks", "chain"} {
+		arr, _ := schema[mode].(map[string]any)
+		items, _ := arr["items"].(map[string]any)
+		if p := prop(items, "timeoutSeconds"); p == nil {
+			t.Fatalf("%s items must declare timeoutSeconds too (single/parallel/chain share the default)", mode)
+		}
+	}
+
+	// (b) validation: 0, negative and non-integer values are rejected
+	// with an error and NO child is spawned.
+	for _, bad := range []any{0, -5, 2.5} {
+		os.Remove(filepath.Join(dir, "started"))
+		res = extRun(t, dir, map[string]any{
+			"params":     map[string]any{"agent": "worker", "task": "x", "timeoutSeconds": bad},
+			"deadlineMs": 20000,
+			"env":        map[string]any{"FAKEPI_DIR": dir},
+		}, fakePiHonorTERM)
+		if res.Hung || res.Thrown != "" {
+			t.Fatalf("timeoutSeconds=%v must be a structured tool error, got hung=%v thrown=%q", bad, res.Hung, res.Thrown)
+		}
+		if isErr, _ := res.Result["isError"].(bool); !isErr {
+			t.Fatalf("timeoutSeconds=%v must be an error result, got %v", bad, res.Result)
+		}
+		if txt := extResultText(res); !strings.Contains(txt, "timeoutSeconds") {
+			t.Fatalf("the rejection must name timeoutSeconds, got %q", txt)
+		}
+		if lines := extReadLines(t, dir, "started"); len(lines) != 0 {
+			t.Fatalf("timeoutSeconds=%v must not spawn a child; the fake pi started %d time(s)", bad, len(lines))
+		}
+	}
+
+	// (c) a timeout stops the child and its descendants and says so.
+	sibling := exec.Command("sleep", "300")
+	sibling.Env = append(os.Environ(), "PF_WI_ID="+wi, "PF_DAEMON_ID="+daemon, "PF_SUBAGENT_ID=sibling-call")
+	if err := sibling.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sibling.Process.Kill(); _ = sibling.Wait() }()
+	os.Remove(filepath.Join(dir, "started"))
+	res = extRun(t, dir, map[string]any{
+		"params":     map[string]any{"agent": "worker", "task": "do work", "timeoutSeconds": 1},
+		"deadlineMs": 20000,
+		"env": map[string]any{
+			"PF_WI_ID":                  wi,
+			"PF_DAEMON_ID":              daemon,
+			"PF_SUBAGENT_TERM_GRACE_MS": "300",
+			"PF_SUBAGENT_KILL_WAIT_MS":  "1000",
+			"FAKEPI_DIR":                dir,
+		},
+	}, fakePiTimeoutVictim)
+	if res.Hung {
+		t.Fatalf("the timed-out call never resolved")
+	}
+	if res.Thrown != "" {
+		t.Fatalf("a timeout is a structured result, not a thrown error: %q", res.Thrown)
+	}
+	if isErr, _ := res.Result["isError"].(bool); !isErr {
+		t.Fatalf("a timeout must be an error result, got %v", res.Result)
+	}
+	if txt := extResultText(res); !strings.Contains(strings.ToLower(txt), "timed out") {
+		t.Fatalf("the result text must say the child timed out, got %q", txt)
+	}
+	det := extResultDetails(res)
+	if det == nil {
+		t.Fatalf("no per-child details in the result: %v", res.Result)
+	}
+	if timed, _ := det["timedOut"].(bool); !timed {
+		t.Fatalf("details.results[0].timedOut must be true, got %v", det)
+	}
+	if got := det["timeoutSeconds"]; got != float64(1) {
+		t.Fatalf("details.results[0].timeoutSeconds must carry the effective value 1, got %v", got)
+	}
+	if res.ResolvedMs < 1000 {
+		t.Fatalf("the timer must run the full timeoutSeconds (resolved %dms)", res.ResolvedMs)
+	}
+	// settle, then: only the sibling call-marker process may remain.
+	deadline := time.Now().Add(3 * time.Second)
+	var left []int
+	for time.Now().Before(deadline) {
+		left = extMarkerPids(t, wi)
+		if len(left) == 1 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if len(left) != 1 || left[0] != sibling.Process.Pid {
+		t.Fatalf("after the timeout only the sibling call-marker process may carry the WI marker; left=%v sibling=%d", left, sibling.Process.Pid)
 	}
 }
