@@ -149,10 +149,8 @@ if [ "${1:-}" = exec ]; then
 		fi
 		;;
 	*podman*pull*)
-		if [ -f "$dir/persist-podman-changed" ]; then
-			echo "stub docker: podman pull failed" >&2
-			exit 1
-		fi
+		# the pull always succeeds (review r1#2: a failing pull killed the
+		# run before any comparison — the flag belongs to inspect's reads)
 		exit 0
 		;;
 	*podman*inspect*)
@@ -163,17 +161,24 @@ if [ "${1:-}" = exec ]; then
 		fi
 		;;
 	*readlink*components*)
-		if persist_changed components; then
+		if persist_changed components-link; then
 			echo "releases/changed"
 		else
 			cat "$dir/components-current.txt"
 		fi
 		;;
 	*hashlib*)
-		if persist_changed components; then
+		if persist_changed components-digest; then
 			echo "digest-changed"
 		else
 			cat "$dir/components-digest.txt"
+		fi
+		;;
+	*stat*components*current*)
+		if persist_changed components-stat; then
+			echo "1 1"
+		else
+			cat "$dir/components-stat.txt"
 		fi
 		;;
 	# the first-boot pass (polyforge#176): the record, the default

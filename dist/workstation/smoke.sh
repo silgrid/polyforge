@@ -706,6 +706,14 @@ print(row[0] if row else "none")') ||
 		components_digest=$(docker exec "$cid" python3 -c 'import hashlib
 print(hashlib.sha256(open("/components/current/manifest.json", "rb").read()).hexdigest())') ||
 			die "the components current manifest is unreadable"
+		# the identity a REINSTALL always changes (review r1#1): the link
+		# target and the manifest digest are seed-deterministic — a lost
+		# components volume reinstalls to byte-identical values — but the
+		# symlink swap on install recreates the object, so its mtime and
+		# inode only survive when the volume does (the noop path of
+		# components.Install writes nothing, so restarts keep them)
+		components_stat=$(docker exec "$cid" stat -c '%Y %i' /components/current) ||
+			die "the components current link is unreadable"
 	}
 
 	# persist_compare WHAT — every value must equal its first read (a
@@ -726,7 +734,9 @@ print(hashlib.sha256(open("/components/current/manifest.json", "rb").read()).hex
 			die "the components current changed after $what: $components_current (was $components_current_first)"
 		[ "$components_digest" = "$components_digest_first" ] ||
 			die "the components current manifest digest changed after $what: $components_digest (was $components_digest_first)"
-		say "persist: $what kept the harness login marker, cli.toml, the workspace file, the AIHub user row, the Podman image and the components current"
+		[ "$components_stat" = "$components_stat_first" ] ||
+			die "the components current mtime/inode identity changed after $what: $components_stat (was $components_stat_first)"
+		say "persist: $what kept the harness login marker, cli.toml, the workspace file, the AIHub user row, the Podman image and the components current (link, digest, mtime/inode identity)"
 	}
 
 	up_with_image "$primary"
@@ -739,6 +749,7 @@ print(hashlib.sha256(open("/components/current/manifest.json", "rb").read()).hex
 	podman_image_first=$podman_image
 	components_current_first=$components_current
 	components_digest_first=$components_digest
+	components_stat_first=$components_stat
 	say "persist: the six values recorded (sentinel $sp_value)"
 
 	up_with_image "$primary"
