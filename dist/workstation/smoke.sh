@@ -62,6 +62,16 @@ web_host_port="${WORKSTATION_WEB_PORT:-$((30500 + ( ($(date +%s) + $$) % 900 )))
 export WORKSTATION_WEB_PORT="$web_host_port"
 compose() { docker compose -p "$smoke_project" -f "$compose_file" "$@"; }
 
+# compose_down_v ARGV... — the EXIT traps' cleanup: `docker compose <args>
+# down -v` with ONE retry. A loaded engine can refuse a single down
+# (measured: an 8-way engine run's trap down failed once and `|| true`
+# swallowed it, leaving the container and the six volumes behind), and
+# dash's errexit aborts a trap body at the first failing command — so every
+# command in a trap body carries its own `|| true`, this one included.
+compose_down_v() {
+	"$@" down -v >/dev/null 2>&1 || "$@" down -v >/dev/null 2>&1 || true
+}
+
 # poll_until WHAT SECONDS CMD... — a bounded poll that re-runs CMD
 # every 2s until it succeeds or the deadline passes.
 poll_until() {
@@ -208,7 +218,7 @@ cmd_boot() {
 	require_host_tools
 	# the whole run's cleanup (review r1#3): this run's project is
 	# disposable, so even a die mid-run takes it down WITH VOLUMES
-	trap 'compose --profile "$profile" down -v >/dev/null 2>&1 || true' EXIT
+	trap 'compose_down_v compose --profile "$profile"' EXIT
 	boot_up
 
 	inspect_params
@@ -258,7 +268,7 @@ cmd_env() {
 	profile=no-aihub
 	override=$(mktemp)
 	# this run's project is disposable (review r1#3): the trap covers a die
-	trap 'docker compose -p "$smoke_project" -f "$compose_file" -f "$override" down -v >/dev/null 2>&1 || true' EXIT
+	trap 'compose_down_v docker compose -p "$smoke_project" -f "$compose_file" -f "$override"' EXIT
 	cat > "$override" <<'YEOF'
 services:
   workstation:
@@ -315,7 +325,7 @@ cmd_podman_verify() {
 	profile=no-aihub
 	override=$(mktemp)
 	# this run's project is disposable (review r1#3): the trap covers a die
-	trap 'docker compose -p "$smoke_project" -f "$compose_file" -f "$override" down -v >/dev/null 2>&1 || true' EXIT
+	trap 'compose_down_v docker compose -p "$smoke_project" -f "$compose_file" -f "$override"' EXIT
 	sed -e "s|@ROOT@|$root|g" > "$override" <<'YEOF'
 services:
   workstation:
@@ -456,7 +466,7 @@ YEOF
 		# the EXIT trap is the whole cleanup: a die anywhere below
 		# leaves no temp file behind (the test env checks for them) and
 		# takes this run's project down with volumes (review r1#3)
-		trap 'kill "$stub_pid" 2>/dev/null; rm -f "$hits" "$stub_script" "$override" 2>/dev/null; compose_ext down -v >/dev/null 2>&1 || true' EXIT
+		trap 'kill "$stub_pid" 2>/dev/null || true; rm -f "$hits" "$stub_script" "$override" 2>/dev/null || true; compose_down_v compose_ext' EXIT
 		poll_until "the stub server to listen" 30 \
 			sh -c "curl -s -o /dev/null http://127.0.0.1:$stub_port/" || {
 			die "the stub server never listened on $stub_port (set WORKSTATION_SMOKE_STUB_PORT to a free port)"
@@ -474,7 +484,7 @@ YEOF
 		# the local run's project is disposable (review r1#3): the trap
 		# covers a die (the external branch keeps its own trap above,
 		# which also kills the counting stub and its temp files)
-		trap 'compose_ext down -v >/dev/null 2>&1 || true' EXIT
+		trap 'compose_down_v compose_ext' EXIT
 	fi
 
 	say "first-boot: resetting the volumes and starting the $profile profile"
@@ -675,7 +685,7 @@ cmd_persist() {
 	# the trap is the whole cleanup: a die anywhere below downs only THIS
 	# run's project — its volumes are disposable, an operator's never are —
 	# and removes this run's retag (review r1 N2: tags accumulated otherwise)
-	trap 'compose --profile aihub down -v >/dev/null 2>&1 || true; docker rmi "$retag" >/dev/null 2>&1 || true' EXIT
+	trap 'compose_down_v compose --profile aihub; docker rmi "$retag" >/dev/null 2>&1 || true' EXIT
 	compose --profile aihub down -v >/dev/null 2>&1 || true
 
 	# up_with_image IMAGE — down, up on the image, wait for supervise
