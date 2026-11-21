@@ -191,6 +191,15 @@ func runComponents(ctx *Context, fs *flag.FlagSet, args []string) error {
 		if err != nil {
 			return err
 		}
+		// a BUSY record whose transaction lock has no holder is an
+		// interrupted run (the derived fact `cancel` recovers on): the
+		// status names it, so a reader tells a live run from a dead one
+		// without acting.
+		if s, ok := value["status"].(*components.UpgradeStatus); ok &&
+			s != nil && (s.State == components.UpgradeStateRunning || s.State == components.UpgradeStateWaiting) &&
+			!components.TransactionRunning(root) {
+			value["interrupted"] = true
+		}
 		return emitComponents(ctx, value, fmt.Sprintf("current %v; previous %v; status %v", value["current"], value["previous"], value["status"]))
 	case "cancel":
 		s, err := components.ReadUpgradeStatus(root)
