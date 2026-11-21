@@ -191,3 +191,27 @@ test("every install string exists in all three locales", async () => {
     for (const key of new Set(keys)) assert.match(messages, new RegExp(`"${key.replace(/\./g, "\\.")}": "`), `${locale} must carry ${key}`);
   }
 });
+
+test("polyforge#177: inside the workstation image the card is read-only — the managed note, no install controls", () => {
+  const html = view({ imageManaged: true });
+  const shown = text(html);
+  assert.match(html, /data-pf-install-image/, "the managed note carries its marker");
+  assert.ok(shown.includes("managed by the workstation image"), `the managed note is shown: ${shown}`);
+  assert.doesNotMatch(html, /data-pf-install-start/, "no install or update button is rendered");
+  assert.doesNotMatch(html, /data-pf-install-credentials/, "no host or key form is rendered");
+  assert.doesNotMatch(html, /data-pf-install-hint/, "no install.sh line is offered");
+  assert.doesNotMatch(html, /disabled/, "nothing is rendered-but-disabled: the controls are gone");
+});
+
+test("polyforge#177: the card reads the fact from the GET and never writes inside the image", () => {
+  assert.match(source, /imageManaged\?: boolean/, "the GET's body carries the fact");
+  assert.match(
+    source,
+    /if \(body\.imageManaged\) \{\s*setImageManaged\(true\);\s*setReadError\(null\);\s*return body\.run \?\? null;/,
+    "the managed read is a state, not a read failure",
+  );
+  assert.match(source, /imageManaged: boolean;/, "the view receives the fact");
+  const guard = source.indexOf("if (imageManaged) return;");
+  const post = source.indexOf('fetch("/api/polyforge/install", {');
+  assert.ok(guard > 0 && guard < post, "the start is a no-op before the POST — nothing can be sent inside the image");
+});
