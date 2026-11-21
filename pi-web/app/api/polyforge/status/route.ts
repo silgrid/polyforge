@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { isApiRequestAllowed } from "@/lib/request-security";
+import { isImageManaged } from "@/lib/polyforge-detect";
 import { getPolyforgeOpsStatus, probePolyforgePresent } from "@/lib/polyforge-status";
 
 export const dynamic = "force-dynamic";
@@ -11,22 +12,25 @@ export const dynamic = "force-dynamic";
  * `pfPresent`, so the client can distinguish "no pf" from "pf, daemon down";
  * on the former it only re-probes this route, every 30 s and on window
  * focus). No 5xx path: the e2e suite treats any 5xx as a
- * browser error.
+ * browser error. Every authorized branch also answers `imageManaged`
+ * (polyforge#177): the image-mode judgment reads the seed manifest alone,
+ * so pf absent still identifies the image.
  */
 export async function GET(request: Request) {
   if (!isApiRequestAllowed(request)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
   if (!(await probePolyforgePresent())) {
-    return NextResponse.json({ pfPresent: false, status: null });
+    return NextResponse.json({ imageManaged: isImageManaged(), pfPresent: false, status: null });
   }
   try {
     const status = await getPolyforgeOpsStatus();
-    return NextResponse.json({ pfPresent: true, status });
+    return NextResponse.json({ imageManaged: isImageManaged(), pfPresent: true, status });
   } catch (error) {
     // Only pf's own bounded stderr surfaces (PolyforgeError); never argv,
     // never `process.env` values.
     return NextResponse.json({
+      imageManaged: isImageManaged(),
       pfPresent: true,
       status: null,
       error: error instanceof Error ? error.message : "polyforge is unavailable",

@@ -288,6 +288,18 @@ function workstationImage(seedRoot: string): boolean {
   return false;
 }
 
+/** The one image-mode judgment every entry reads (polyforge#177, owner
+ *  2026-11-19: the seed manifest is the only fact — pf absent must still
+ *  identify the image, and nothing probes /components). The seed root
+ *  parameter is the seam: an explicit root (the tests' fixture) wins, the
+ *  PI_TEST_SEED_ROOT override points the DEFAULT read at a fixture — the
+ *  workstation's env whitelist strips every PI_TEST_* before any child
+ *  runs, so the override can never flip a real image — and production reads
+ *  the constant. */
+export function isImageManaged(seedRoot: string = process.env.PI_TEST_SEED_ROOT ?? WORKSTATION_SEED_ROOT): boolean {
+  return workstationImage(seedRoot);
+}
+
 /** install.sh's conventional clone path (a fixed
  *  `$HOME/.local/share/polyforge` root, verified in its source) on a
  * host; inside the workstation image (judged by the seed manifest,
