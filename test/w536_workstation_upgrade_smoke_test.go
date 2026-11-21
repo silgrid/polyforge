@@ -1,4 +1,7 @@
-// carries: dist/workstation/smoke.sh, dist/workstation/build-seed.sh, dist/workstation/upgrade-smoke.sh
+// carries: dist/workstation/smoke.sh, dist/workstation/upgrade-smoke.sh,
+//
+//	dist/workstation/README.md, dist/workstation/build-seed.sh,
+//	dist/workstation/compose.yaml
 package test
 
 import (
@@ -11,55 +14,150 @@ import (
 	"time"
 )
 
-// 脚本行为通过替身引擎执行；实际镜像与进程版本由 verification 的同一 smoke 证明。
+// TestWorkstationUpgradeSmoke drives dist/workstation/smoke.sh upgrade
+// with the stub engine (the w535 pattern): this run's own compose
+// project and port (the #177 isolation — never a fixed container name),
+// the first boot's seeding, the in-container `pf components upgrade`,
+// the pointer, version, serving-process and identity assertions, and
+// the with-volumes cleanup on every exit path. The real-engine half is
+// the verification gate's (the same script on a machine with an
+// engine).
 func TestWorkstationUpgradeSmoke(t *testing.T) {
-	dir := t.TempDir()
+	scenario := t.TempDir()
 	stub := `#!/bin/sh
 set -eu
-printf '%s\n' "$*" >> "$UPGRADE_LOG"
-case "$1" in
- version) echo 29;;
- build) :;;
- create) echo seed-id;;
- cp) mkdir -p "$3/releases/v0.2.4-dev.1";;
- rm) :;;
- inspect) echo container-stable;;
- compose)
-  case "$*" in *"ps -q"*) echo container-stable;; esac;;
- exec)
-  case "$*" in
-   *"/proc/1/stat"*) echo '1 (catatonit) 0 12345';;
-   *"upgrade --version"*) :;;
-   *"readlink /components/current"*) echo releases/v0.2.4-dev.2;;
-   *"readlink /components/previous"*) echo releases/v0.2.4-dev.1;;
-   *"pf version"*) echo v0.2.4-dev.2;;
-   *"upgrade-status.json"*) echo done;;
-  esac;;
+printf '%s\n' "$*" >> "$W536_SMOKE_SCENARIO/calls.log"
+if [ "${1:-}" = version ]; then echo 29.9.2-stub; exit 0; fi
+case "$1:$2" in
+build:*)
+	case "$*" in *--build-arg*) : ;; *) echo "stub docker: build needs --build-arg" >&2; exit 1 ;; esac
+	exit 0
+	;;
+create:*) echo seed-container-id; exit 0 ;;
+cp:*) mkdir -p "$3/releases/v0.2.4-dev.2"; exit 0 ;;
+rm:*) exit 0 ;;
+inspect:*)
+	case "$*" in
+	*{{.Id}}*) echo container-id-stable ;;
+	*{{.State.Running}}*) echo true ;;
+	esac
+	exit 0
+	;;
 esac
+if [ "$1" = compose ]; then
+	verb=""
+	for a in "$@"; do
+		case "$a" in build|up|ps|down) verb=$a ;; esac
+	done
+	case "$verb" in
+	up)
+		env > "$W536_SMOKE_SCENARIO/compose-up-env.txt"
+		[ -n "${PI_WEB_PASSWORD:-}" ] || { echo "stub docker: required variable PI_WEB_PASSWORD is missing" >&2; exit 1; }
+		;;
+	ps) echo container-id-stable ;;
+	down) : ;;
+	esac
+	exit 0
+fi
+if [ "$1" = exec ]; then
+	args="$*"
+	case "$args" in
+	*"pf components upgrade --version"*)
+		touch "$W536_SMOKE_SCENARIO/upgraded"
+		exit 0
+		;;
+	*"/proc/1/stat"*)
+		echo "1 (catatonit) 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 12345 22"
+		;;
+	*"readlink /components/current"*)
+		if [ -f "$W536_SMOKE_SCENARIO/upgraded" ]; then echo releases/v0.2.4-dev.2; else echo releases/v0.2.4-dev.1; fi
+		;;
+	*"readlink /components/previous"*)
+		if [ -f "$W536_SMOKE_SCENARIO/upgraded" ]; then echo releases/v0.2.4-dev.1; else echo ""; fi
+		;;
+	*"pf version"*)
+		if [ -f "$W536_SMOKE_SCENARIO/upgraded" ]; then echo v0.2.4-dev.2; else echo v0.2.4-dev.1; fi
+		;;
+	*"/components/upgrade-status.json"*)
+		echo '{"state":"done","to":"v0.2.4-dev.2"}'
+		;;
+	esac
+	exit 0
+fi
+exit 0
 `
-	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(stub), 0755); err != nil {
+	if err := os.WriteFile(filepath.Join(scenario, "docker"), []byte(stub), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "curl"), []byte("#!/bin/sh\necho 200\n"), 0755); err != nil {
+	// the stub curl answers 200: the smoke's bounded login poll settles
+	// at once, the way a live Pi Web does.
+	if err := os.WriteFile(filepath.Join(scenario, "curl"), []byte("#!/bin/sh\necho 200\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	log := filepath.Join(dir, "calls.log")
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sh", "dist/workstation/smoke.sh", "upgrade")
 	cmd.Dir = w535Root(t)
-	cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "UPGRADE_LOG="+log)
+	cmd.Env = append(os.Environ(),
+		"PATH="+scenario+":"+os.Getenv("PATH"),
+		"W536_SMOKE_SCENARIO="+scenario,
+	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("upgrade smoke 必须完成：%v\n%s", err, out)
+		t.Fatalf("the upgrade smoke must complete: %v\n%s", err, out)
 	}
 	if !strings.Contains(string(out), "upgrade: PASS") {
-		t.Fatalf("缺少成功证明：%s", out)
+		t.Fatalf("the smoke must print its PASS line: %s", out)
 	}
-	calls, _ := os.ReadFile(log)
-	for _, want := range []string{"components upgrade --version v0.2.4-dev.2", "readlink /components/current", "readlink /components/previous", "/proc/1/stat", "pf version", "/status", "aihub", "upgrade-status.json"} {
-		if !strings.Contains(string(calls), want) {
-			t.Errorf("smoke 缺少观测 %q", want)
+	calls, _ := os.ReadFile(filepath.Join(scenario, "calls.log"))
+	text := string(calls)
+	for _, want := range []string{
+		// this run's own project and port (the #177 isolation), the
+		// default boot service, never a fixed container name
+		"-p workstation-upgrade-",
+		"--profile aihub",
+		"ps -q workstation",
+		// the second, newer seed image
+		"--build-arg SEED_VERSION=v0.2.4-dev.2",
+		// the in-container upgrade through the CLI verb
+		"pf components upgrade --version v0.2.4-dev.2 --seed-dir /components/smoke-target",
+		// the pointer and version assertions
+		"readlink /components/current",
+		"readlink /components/previous",
+		"pf version",
+		// the identity assertions: the same container, the same PID 1
+		"{{.Id}}",
+		"/proc/1/stat",
+		// the serving-process version proof: the daemon's /status, the
+		// volume-backed aihub and the pi-web process serving out of the
+		// new release — no reachability stand-in
+		"daemon.sock",
+		"/components/current/pi-web/package.json",
+		"/proc/",
+		// the persisted final record
+		"/components/upgrade-status.json",
+		// the cleanup on the happy path
+		"down -v",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the upgrade smoke is missing %q:\n%s", want, text)
 		}
+	}
+	for _, banned := range []string{
+		"container_name",
+		"workstation-aihub", // the pre-#176 service name
+	} {
+		if strings.Contains(text, banned) {
+			t.Errorf("the upgrade smoke must not use %q", banned)
+		}
+	}
+	// the compose up carried the password (the compose file's required
+	// variable) and this run's own port
+	upEnv, _ := os.ReadFile(filepath.Join(scenario, "compose-up-env.txt"))
+	if !strings.Contains(string(upEnv), "PI_WEB_PASSWORD=") {
+		t.Error("the compose up must carry PI_WEB_PASSWORD")
+	}
+	if !strings.Contains(string(upEnv), "WORKSTATION_WEB_PORT=") {
+		t.Error("the compose up must carry this run's own WORKSTATION_WEB_PORT")
 	}
 }
