@@ -176,6 +176,7 @@ type extRunOut struct {
 	Hung       bool           `json:"hung"`
 	Thrown     string         `json:"thrown"`
 	DriverErr  string         `json:"driverError"`
+	Schema     string         `json:"schema"`
 	Result     map[string]any `json:"result"`
 }
 
@@ -635,7 +636,7 @@ func TestPiSubagentLifecycleTimeout(t *testing.T) {
 		"env":        map[string]any{"FAKEPI_DIR": dir},
 	}, fakePiPlain)
 	var schema map[string]any
-	if err := json.Unmarshal([]byte(res.Result["schema"].(string)), &schema); err != nil {
+	if err := json.Unmarshal([]byte(res.Schema), &schema); err != nil {
 		t.Fatalf("no tool schema in the driver result: %v (result=%v)", err, res.Result)
 	}
 	prop := func(m map[string]any, k string) map[string]any {
