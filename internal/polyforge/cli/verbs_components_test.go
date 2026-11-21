@@ -270,18 +270,47 @@ func TestComponentsVerbCancelAndStatus(t *testing.T) {
 	root := componentsRoot(t)
 	setWorkstationVars(t, root)
 	d, env := daemonForComponents(t)
-	_ = d
 
-	code, out, stderr := runPf(t, env, "components", "cancel")
+	// a waiting run: cancel lays the volume's marker — the waiting
+	// transaction consumes it and asks for the daemon restart itself.
+	if err := components.WriteUpgradeStatus(root, &components.UpgradeStatus{
+		Operation: components.OperationUpgrade, State: components.UpgradeStateWaiting,
+		Phase: "drain", From: "v0.2.4", To: "v0.2.5",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	code, _, stderr := runPf(t, env, "components", "cancel")
 	if code != 0 {
 		t.Fatalf("components cancel: exit %d (%s)", code, stderr)
 	}
 	if !components.UpgradeCancelRequested(root) {
-		t.Fatal("cancel must lay the volume's marker")
+		t.Fatal("cancel of a waiting run must lay the volume's marker")
 	}
-	_ = out
+	for _, rec := range d.rec.all() {
+		if rec.Path == "/ops/restart" {
+			t.Fatal("cancel of a waiting run must not restart the daemon itself — the transaction does")
+		}
+	}
 
-	code, out, stderr = runPf(t, env, "--json", "components", "status")
+	// no waiting run: the marker a crashed run might have left is
+	// cleared and the daemon is asked to restart — the documented
+	// recovery for a drain nothing stands down.
+	code, _, stderr = runPf(t, env, "components", "cancel")
+	if code != 0 {
+		t.Fatalf("components cancel without a waiting run: exit %d (%s)", code, stderr)
+	}
+	if components.UpgradeCancelRequested(root) {
+		t.Fatal("cancel without a waiting run must clear a stale marker")
+	}
+	seen := map[string]bool{}
+	for _, rec := range d.rec.all() {
+		seen[rec.Method+" "+rec.Path] = true
+	}
+	if !seen["POST /ops/restart"] {
+		t.Fatal("cancel without a waiting run must ask the daemon to restart (the drain ends with it)")
+	}
+
+	code, out, stderr := runPf(t, env, "--json", "components", "status")
 	if code != 0 {
 		t.Fatalf("components status: exit %d (%s)", code, stderr)
 	}
@@ -295,6 +324,9 @@ func TestComponentsVerbCancelAndStatus(t *testing.T) {
 	}
 	if got.Current != "v0.2.4" || got.Previous != nil {
 		t.Fatalf("components status --json answered current=%q previous=%v", got.Current, got.Previous)
+	}
+	if got.Status == nil || got.Status.State != components.UpgradeStateWaiting {
+		t.Fatalf("status must answer the volume's recorded run: %+v", got.Status)
 	}
 }
 
