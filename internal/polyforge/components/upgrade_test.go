@@ -37,12 +37,16 @@ type faceCall struct {
 // recorded. onDrain runs inside the recorded call (the tests flip
 // state, lay the cancel marker, snapshot the status file).
 type fakeFace struct {
-	mu       sync.Mutex
-	calls    []faceCall
-	busy     [][]string // each Drain pops the front answer; the last repeats
-	forced   []bool
-	onDrain  func(n int, f *fakeFace)
-	statuses []string // a snapshot of the status state at each drain call
+	mu      sync.Mutex
+	calls   []faceCall
+	busy    [][]string // each Drain pops the front answer; the last repeats
+	forced  []bool
+	onDrain func(n int, f *fakeFace)
+	// drainErrs arms a failing Drain answer by call number (review
+	// r2#5's drain-error path): set from onDrain, it makes that call
+	// answer a transport failure instead of the busy script.
+	drainErrs map[int]error
+	statuses  []string // a snapshot of the status state at each drain call
 }
 
 func (f *fakeFace) Drain(ctx context.Context, force bool) ([]string, error) {
@@ -52,6 +56,9 @@ func (f *fakeFace) Drain(ctx context.Context, force bool) ([]string, error) {
 	f.calls = append(f.calls, faceCall{verb: "drain", force: force})
 	if f.onDrain != nil {
 		f.onDrain(n, f)
+	}
+	if err, ok := f.drainErrs[n]; ok {
+		return nil, err
 	}
 	if n < len(f.busy) {
 		f.busy[n] = append([]string{}, f.busy[n]...)
