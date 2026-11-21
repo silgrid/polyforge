@@ -55,3 +55,80 @@ export function parseStepTierCandidate(candidate: string): StepTierCandidate | n
   if (model === "") return null;
   return { harness, model, effort };
 }
+
+/** One tier of the catalog, as `pf config list` reports it: the tier's name
+ *  and its ordered candidate list. */
+export interface StepTierItem {
+  tier: string;
+  candidates: string[];
+}
+
+/** The step_tiers items of one `pf config list` answer (the page hands the
+ *  route's items here; a key with a bad tier name or a non-list value is
+ *  not a catalog tier). */
+export function stepTierItems(items: ReadonlyArray<{ key: string; value?: unknown }>): StepTierItem[] {
+  void items;
+  return [];
+}
+
+/** A row's tier view across its harnesses. */
+export type StepTierRowView =
+  | { kind: "unset" }
+  | { kind: "all"; tier: string }
+  | { kind: "specific"; per: { harness: string; tiers: string[] }[] };
+
+/** One planned key write of a tier change (the write route's POST face). */
+export interface StepTierWrite {
+  action: "set" | "unset";
+  tier: string;
+  candidates: string[];
+}
+
+/** The tier names covering one model identity, in display order. */
+export function stepTierState(catalog: ReadonlyArray<StepTierItem>, identity: { harness: "pi" | "claude"; model: string }): string[] {
+  void catalog;
+  void identity;
+  return [];
+}
+
+/** The row's display state: every harness the same single tier (all), no
+ *  harness set (unset), or the per-harness listing (specific). */
+export function stepTierRowView(harnesses: readonly string[], perHarness: Readonly<Record<string, readonly string[]>>): StepTierRowView {
+  void harnesses;
+  void perHarness;
+  return { kind: "unset" };
+}
+
+/** The key writes that move one harness's model identity to a target tier
+ *  (or unset it): add-first, effort entries as they are, a vacated tier
+ *  unset. */
+export function stepTierWritePlan(catalog: ReadonlyArray<StepTierItem>, identity: { harness: "pi" | "claude"; model: string }, target: string | null): StepTierWrite[] {
+  void catalog;
+  void identity;
+  void target;
+  return [];
+}
+
+/** One picker group: a tier's candidates, or the null tier's defined models
+ *  no catalog candidate covers (the「未设置」group). */
+export interface StepTierPickerGroup {
+  tier: string | null;
+  candidates: { value: string; invalid: boolean }[];
+}
+
+/** The catalog candidates no defined model answers (the invalid references
+ *  the picker marks and the models page notes), in catalog order. */
+export function stepTierInvalidReferences(catalog: ReadonlyArray<StepTierItem>, defined: { pi: readonly string[]; claude: readonly string[] }): string[] {
+  void catalog;
+  void defined;
+  return [];
+}
+
+/** The picker's groups: the tiers in display order (default first, then
+ *  85b's alphabetical), each with its candidates (an invalid one marked),
+ *  then the「未设置」group of defined models no candidate covers. */
+export function stepTierPickerGroups(catalog: ReadonlyArray<StepTierItem>, defined: { pi: readonly string[]; claude: readonly string[] }): StepTierPickerGroup[] {
+  void catalog;
+  void defined;
+  return [];
+}
