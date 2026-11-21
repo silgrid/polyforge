@@ -69,7 +69,12 @@ function runChecker(plan: SyntaxCheckPlan, env: NodeJS.ProcessEnv, timeoutMs: nu
 					timedOut: err.killed === true,
 				});
 			});
-			child.on("close", (code) => resolve({ code, stdout, stderr }));
+			child.on("close", (code, signal) => {
+				// node's spawn timeout kills the child and this is the callback
+			// that fires (code=null, signal set) — the error event is not
+				// how a timeout arrives (r1#8)
+				resolve({ code, stdout, stderr, timedOut: signal !== null });
+			});
 		} catch (e) {
 			resolve({ code: null, stdout, stderr, spawnErrorCode: `spawn failed: ${e}` });
 		}

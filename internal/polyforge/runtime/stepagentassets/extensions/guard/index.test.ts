@@ -171,6 +171,20 @@ test("missing checker is noted, edit not blocked", async (t) => {
 	assert.equal(r.content[0].text, "ok");
 });
 
+test("a checker the timeout kills is a failed note naming the timeout (r1#8)", async (t) => {
+	if (spawnSync("python3", ["--version"]).error) {
+		t.skip("python3 is not on PATH");
+		return;
+	}
+	const tmp = tmpWorkspace(t);
+	fs.writeFileSync(path.join(tmp, "bad.py"), "def f():\n    return 1\n)\n");
+	const handlers = loadGuard({ timeoutMs: 1 });
+	const r = (await toolResult(handlers, textEvent("bad.py"), tmp)) as { content: Array<{ text: string }> } | undefined;
+	assert.ok(r, "the failure note was appended");
+	assert.ok(r.content[1].text.includes("syntax check could not run for bad.py"), r.content[1].text);
+	assert.ok(r.content[1].text.includes("timed out"), r.content[1].text);
+});
+
 test("tool_call blocks a background bash command", async () => {
 	const handlers = loadGuard();
 	const r = (await handlers["tool_call"]({ toolName: "bash", input: { command: "sleep 30 &" } }, { cwd: "/" })) as
