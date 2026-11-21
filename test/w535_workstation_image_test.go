@@ -1393,26 +1393,33 @@ func TestWorkstationSmokePersist(t *testing.T) {
 		}
 	})
 	// each sentinel's value must be compared, not its existence: a changed
-	// value after the restart fails the run naming the item
-	for flag, item := range map[string]string{
-		"persist-marker-changed":     "marker",
-		"persist-clitoml-changed":    "cli.toml",
-		"persist-workspace-changed":  "workspace",
-		"persist-aihub-changed":      "AIHub",
-		"persist-podman-changed":     "Podman",
-		"persist-components-changed": "components",
+	// value after the baseline fails the run at ITS OWN comparison — the
+	// asserted phrase is the die copy of that item, never a generic word
+	// another failure would also print (review r1#2: the Podman flag used
+	// to fail the pull, and the digest's baseline was the changed value
+	// itself, so neither comparison was ever exercised)
+	for flag, phrase := range map[string]string{
+		"persist-marker-changed":            "the harness login marker changed after",
+		"persist-clitoml-changed":           "the cli.toml sentinel changed after",
+		"persist-workspace-changed":         "the workspace file changed after",
+		"persist-aihub-changed":             "the AIHub user row changed after",
+		"persist-podman-changed":            "the Podman image changed after",
+		"persist-components-link-changed":   "the components current changed after",
+		"persist-components-digest-changed": "the components current manifest digest changed after",
+		"persist-components-stat-changed":   "the components current mtime/inode identity changed after",
 	} {
-		t.Run("a changed "+item+" fails the run", func(t *testing.T) {
+		flag, phrase := flag, phrase
+		t.Run("a changed value fails the comparison ("+flag+")", func(t *testing.T) {
 			out, err := w535SmokePersist(t, func(dir string) {
 				if err := os.WriteFile(filepath.Join(dir, flag), []byte("1"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			})
 			if err == nil {
-				t.Fatalf("a %s whose value changed must fail the run:\n%s", item, out)
+				t.Fatalf("%s must fail the run:\n%s", phrase, out)
 			}
-			if !strings.Contains(out, item) {
-				t.Fatalf("the failure must name the %s:\n%s", item, out)
+			if !strings.Contains(out, phrase) {
+				t.Fatalf("the failure must be the value comparison itself (%q):\n%s", phrase, out)
 			}
 		})
 	}
