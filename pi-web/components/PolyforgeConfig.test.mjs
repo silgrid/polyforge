@@ -2,6 +2,45 @@ import "#test-env";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { createJiti } from "jiti";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const fixture = (name) => fileURLToPath(new URL(`../hooks/__fixtures__/${name}`, import.meta.url));
+const modulePath = (path) => fileURLToPath(new URL(`../${path}`, import.meta.url));
+const settle = async () => {
+  for (let index = 0; index < 10; index++) await new Promise((resolve) => setImmediate(resolve));
+};
+function walk(node, out = []) {
+  if (Array.isArray(node)) {
+    for (const child of node) walk(child, out);
+    return out;
+  }
+  if (!node || typeof node !== "object" || !("props" in node)) return out;
+  if (typeof node.type === "function") return walk(node.type(node.props), out);
+  out.push(node);
+  walk(node.props.children, out);
+  return out;
+}
+const nodes = (hook) => walk(hook.result.current ?? hook.result);
+
+// the workflow card's read fixture (the layout suite's shape): one mapped
+// workspace owning the project, its chain declared, the card write-capable.
+const WORKFLOWS_FIXTURE = {
+  pfPresent: true,
+  pfVersion: "v0.2.4",
+  capable: true,
+  workflows: {
+    workflows_dir: "/e2e/workflows", daemon_reachable: true, reason: "", workspace: "/ws/a", projects: ["e2e-project"],
+    write_capable: true, write_reason: "",
+    bundles: [{
+      name: "autopilot",
+      defaults: { model_candidates: ["pi:auto-default"], effective: { "e2e-project": { models: ["pi:auto-default"], from: "bundle autopilot defaults.model_candidates" } } },
+      steps: [{ id: "code", model_candidates: ["pi:auto-code"], effective: { "e2e-project": { models: ["pi:auto-code"], from: "bundle autopilot step code model_candidates" } } }],
+    }],
+    bundle_errors: [],
+  },
+  workspace: { workspace: "/ws/a", yaml: { sha256: "e2e-yaml", exists: true }, steps: { "e2e-project": { code: { declared: true, models: ["pi:auto-code"] } } } },
+};
 
 const source = await readFile(new URL("./PolyforgeConfig.tsx", import.meta.url), "utf8");
 const panelSource = await readFile(new URL("./SettingsPanel.tsx", import.meta.url), "utf8");
@@ -1029,13 +1068,95 @@ test("polyforge#51: the Host region lists the unclassified fallback errors under
 // surfaces — the workflow card's step chain add row and the cli.toml
 // [summarize] chips' add row — over one catalog read, and the cli.toml card
 // drops the step_tiers family through the family-aware predicate.
-test("the step-tier picker joins the chain and summarize add rows over the one catalog read", () => {
-  assert.match(source, /from "\.\/ModelCandidatePicker"/, "the shared picker is imported");
-  assert.match(source, /\/api\/polyforge\/step-tiers/, "one catalog read per page open");
-  assert.match(source, /stepTierPickerGroups\(/, "the groups come from the pure projection");
-  const cell = source.slice(source.indexOf("function CellSettings("), source.indexOf("function HostSettingsRegion("));
-  assert.equal((cell.match(/<ModelCandidatePicker/g) ?? []).length, 1, "the summarize add row is the shared picker");
-  const workflowCard = source.slice(source.indexOf("function WorkflowCard("));
-  assert.equal((workflowCard.match(/<ModelCandidatePicker/g) ?? []).length, 1, "the chain add row is the shared picker");
-  assert.match(source, /!isHostOnlyKey\(item\.key\)/, "the Cell card's filter is the family-aware predicate");
+// polyforge#151 (85b2, review r2 #4): the u6 marker is behavioural — the
+// workflow card's chain add row is the shared picker, rendered through the
+// hook shim with the card's reads stubbed. The grouped select carries its
+// own label (the manual fill keeps the row's — review N10: the two were one
+// label before), a tier choice fills the manual draft, Enter adds the
+// candidate to the chain, and Save posts the OWNING workspace's --cwd and the
+// yaml CAS — the write target and shape AC2 pins, never a source regex.
+test("the step-tier picker joins the chain and summarize add rows over the one catalog read", async () => {
+  const { renderHook } = await import(pathToFileURL(fixture("react-hook-shim.mjs")).href);
+  const jiti = createJiti(import.meta.url, {
+    jsx: { runtime: "automatic" },
+    alias: {
+      react: fixture("react-hook-shim.mjs"),
+      "react/jsx-runtime": fixture("react-jsx-runtime.mjs"),
+      "@/hooks/useI18n": fixture("polyforge-tasks-stubs.mjs"),
+      "@/lib/polyforge-config-schema": modulePath("lib/polyforge-config-schema.ts"),
+      "@/lib/step-tiers": modulePath("lib/step-tiers.ts"),
+      "@/lib/polyforge-workflows-pure": modulePath("lib/polyforge-workflows-pure.ts"),
+      "@/lib/polyforge-cells-pure": modulePath("lib/polyforge-cells-pure.ts"),
+      "@/lib/display-path": modulePath("lib/display-path.ts"),
+      "@/lib/polyforge-panel-preferences": modulePath("lib/polyforge-panel-preferences.ts"),
+      "@/hooks/usePolyforgePanelPreferences": modulePath("hooks/usePolyforgePanelPreferences.ts"),
+      "@/hooks/usePolyforgeDisclosure": modulePath("hooks/usePolyforgeDisclosure.ts"),
+      "@/lib/polyforge-disclosure": modulePath("lib/polyforge-disclosure.ts"),
+      "@/lib/polyforge-install-pure": modulePath("lib/polyforge-install-pure.ts"),
+      type: fixture("react-hook-shim.mjs"),
+    },
+  });
+  
+  const { WorkflowCard } = await jiti.import("./PolyforgeConfig.tsx");
+
+  const posts = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (url, init) => {
+    const request = { url: String(url), init, settled: false };
+    request.promise = new Promise((resolve) => {
+      request.resolve = (status, body) => {
+        request.settled = true;
+        resolve(new Response(JSON.stringify(body ?? { ok: true }), { status, headers: { "Content-Type": "application/json" } }));
+      };
+    });
+    if (request.url.includes("/api/polyforge/workflows")) request.resolve(200, WORKFLOWS_FIXTURE);
+    else if (request.url.includes("/api/polyforge/config")) {
+      posts.push({ url: request.url, body: init ? JSON.parse(init.body) : null });
+      request.resolve(200, { ok: true, key: "steps.e2e-project.code.models", message: "applied" });
+    } else request.resolve(200, {});
+    return request.promise;
+  };
+  try {
+    const hook = renderHook(WorkflowCard, {
+      cwd: "/ws/a", profile: "beta", active: true, refreshKey: 0, regionId: "r",
+      reloadClassLabel: (entry) => entry, onWritten() {},
+      tierCatalog: { groups: [{ tier: "default", candidates: [{ value: "pi:tier/legacy", invalid: false }] }], reason: null },
+    });
+    for (let round = 0; round < 6; round++) { await settle(); hook.flush(); }
+    // ONE row's editor (the code step's): the picker's select and the manual
+    // fill both live inside it, and the Save below them is that row's own
+    const rowLabel = "polyforge.settings.workflowChainAdd · code";
+    const findRowControls = () => {
+      const all = nodes(hook);
+      const input = all.find((node) => node.type === "input" && node.props["aria-label"] === rowLabel);
+      const select = all.find((node) => node.type === "select" && node.props["aria-label"] === rowLabel && JSON.stringify(node.props.children).includes("pi:tier/legacy"));
+      return { all, input, select };
+    };
+    const { all, input, select } = findRowControls();
+    assert.ok(select, "the chain add row renders the shared picker's grouped select");
+    assert.ok(input, "the manual fill keeps the chain row's own label");
+    assert.notEqual(select.props["aria-label"], input.props["aria-label"],
+      "the grouped select carries its own label, never the manual fill's (one label for two controls)");
+    select.props.onChange({ target: { value: "pi:tier/legacy" } });
+    hook.flush();
+    assert.equal(findRowControls().input.props.value, "pi:tier/legacy", "the tier choice fills the manual draft");
+    findRowControls().input.props.onKeyDown({ key: "Enter", preventDefault() {} });
+    hook.flush();
+    const inputAt = findRowControls().all.indexOf(findRowControls().input);
+    const save = findRowControls().all.slice(inputAt).find((node) => node.type === "button" && String(node.props.children ?? "").includes("configSave"));
+    assert.ok(save, "the chain's Save renders");
+    save.props.onClick();
+    await settle();
+    assert.equal(posts.length, 1, "one write");
+    assert.deepEqual(posts[0].body, {
+      action: "set",
+      key: "steps.e2e-project.code.models",
+      value: ["pi:auto-code", "pi:tier/legacy"],
+      cwd: "/ws/a",
+      profile: "beta",
+      expect_state: { file_sha256: "e2e-yaml", values: {} },
+    }, "the chain write keeps its target and shape: the owning workspace's cwd, the Cell's profile, the yaml CAS");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
