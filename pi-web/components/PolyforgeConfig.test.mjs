@@ -2,6 +2,45 @@ import "#test-env";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { createJiti } from "jiti";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const fixture = (name) => fileURLToPath(new URL(`../hooks/__fixtures__/${name}`, import.meta.url));
+const modulePath = (path) => fileURLToPath(new URL(`../${path}`, import.meta.url));
+const settle = async () => {
+  for (let index = 0; index < 10; index++) await new Promise((resolve) => setImmediate(resolve));
+};
+function walk(node, out = []) {
+  if (Array.isArray(node)) {
+    for (const child of node) walk(child, out);
+    return out;
+  }
+  if (!node || typeof node !== "object" || !("props" in node)) return out;
+  if (typeof node.type === "function") return walk(node.type(node.props), out);
+  out.push(node);
+  walk(node.props.children, out);
+  return out;
+}
+const nodes = (hook) => walk(hook.result.current ?? hook.result);
+
+// the workflow card's read fixture (the layout suite's shape): one mapped
+// workspace owning the project, its chain declared, the card write-capable.
+const WORKFLOWS_FIXTURE = {
+  pfPresent: true,
+  pfVersion: "v0.2.4",
+  capable: true,
+  workflows: {
+    workflows_dir: "/e2e/workflows", daemon_reachable: true, reason: "", workspace: "/ws/a", projects: ["e2e-project"],
+    write_capable: true, write_reason: "",
+    bundles: [{
+      name: "autopilot",
+      defaults: { model_candidates: ["pi:auto-default"], effective: { "e2e-project": { models: ["pi:auto-default"], from: "bundle autopilot defaults.model_candidates" } } },
+      steps: [{ id: "code", model_candidates: ["pi:auto-code"], effective: { "e2e-project": { models: ["pi:auto-code"], from: "bundle autopilot step code model_candidates" } } }],
+    }],
+    bundle_errors: [],
+  },
+  workspace: { workspace: "/ws/a", yaml: { sha256: "e2e-yaml", exists: true }, steps: { "e2e-project": { code: { declared: true, models: ["pi:auto-code"] } } } },
+};
 
 const source = await readFile(new URL("./PolyforgeConfig.tsx", import.meta.url), "utf8");
 const panelSource = await readFile(new URL("./SettingsPanel.tsx", import.meta.url), "utf8");
@@ -198,8 +237,11 @@ test("visible reasons: capability floor and an incomplete workflow read are text
 });
 
 test("one cli.toml card holds the top-level, [daemon] and [summarize] zones, each headed by its literal section; the 工作区 card keeps the mapping", () => {
-  // (review s17#2): restated — the card groups every key but the Host-only ones (their one surface is the Host region)
-  assert.match(source, /const cards = config\?\.capable \? configCards\(groupConfigItems\(\(config\.items \?\? \[\]\)\.filter\(\(item\) => !HOST_ONLY_KEYS\.includes\(item\.key\)\)\)\) : null;/);
+  // (review s17#2): restated — the card groups every key but the Host-only ones (their one surface is the Host region);
+  // polyforge#151: the predicate is the family-aware isHostOnlyKey, so the
+  // default Cell's list cannot leak the Host's step_tiers.* as read-only chips
+  assert.match(source, /const cards = config\?\.capable \? configCards\(groupConfigItems\(\(config\.items \?\? \[\]\)\.filter\(\(item\) => !isHostOnlyKey\(item\.key\)\)\)\) : null;/);
+  assert.doesNotMatch(source, /HOST_ONLY_KEYS\.includes/, "the fixed-array predicate is gone (the step_tiers family is a prefix, never an entry)");
   // plus a named Cell's [model] zone (pf lists model.source for named Cells only)
   assert.match(source, /cli: \(\["flat", "daemon", "model", "summarize"\] as const\)\.map\(\(id\) => \(\{ id, items: itemsOf\(id\) \}\)\)/, "the zones, top-level first");
   assert.match(source, /workspace: itemsOf\("workspace"\),/, "the 工作区 card holds the mapping rows only");
@@ -340,7 +382,7 @@ test("at <=640px the key and class badge share a row and the values span the row
   // owner-intended change P4: the label+control rows
   // stack label over a full-width control.
   assert.match(block, /\.polyforge-config-cards \.config-detail-grid \{\s*grid-template-columns: minmax\(0, 1fr\);/, "the Jobs preferences stack");
-  assert.match(block, /\.polyforge-workflow-editor > \.polyforge-config-write > input \{ flex: 1 1 100%; \}/, "the workflow chain-add control spans the row");
+  assert.match(block, /\.polyforge-workflow-editor \.model-candidate-picker > input \{ flex: 1 1 100%; \}/, "the workflow chain-add control spans the row (the shared picker's manual fill)");
 });
 
 test("the read-only declared-candidates card is gone, region and strings included", async () => {
@@ -670,7 +712,10 @@ test("below the capability floor the read facts stay and every write control is 
   assert.match(workflowCard, /const disabled = !writeCapable \|\| writing !== null;/);
   assert.match(workflowCard, /\{workflows && !workflows\.write_capable && \(\s*\n\s*<p className="config-scope-switch-reason">\s*\n\s*\{t\("polyforge\.settings\.workflowCapabilityHint"\)\}/);
   const editor = workflowCard.slice(workflowCard.indexOf("const renderEditor ="), workflowCard.indexOf("return (\n    <section"));
-  const controls = (editor.match(/<input|<button|<ConfigButton/g) ?? []).length;
+  // polyforge#151: the shared picker is one gated control (its select and
+  // manual fill both take its disabled prop; the old literal input lives in
+  // the picker's own file now, and `<inputProps` must not count as one).
+  const controls = (editor.match(/<input\b|<button\b|<ConfigButton\b|<ModelCandidatePicker\b/g) ?? []).length;
   const gated = (editor.match(/disabled=\{disabled/g) ?? []).length;
   assert.equal(gated, controls, "every write control is gated on the capability");
 });
@@ -932,7 +977,7 @@ test(" (review s17#2): a region's connection-key write waits for the confirmatio
 });
 
 test(" (review s17#2): each key has one layered surface — the cli.toml card drops the Host-only keys, the default Cell has no second region", () => {
-  assert.match(source, /groupConfigItems\(\(config\.items \?\? \[\]\)\.filter\(\(item\) => !HOST_ONLY_KEYS\.includes\(item\.key\)\)\)/, "the Host-only rows live in the Host region only");
+  assert.match(source, /groupConfigItems\(\(config\.items \?\? \[\]\)\.filter\(\(item\) => !isHostOnlyKey\(item\.key\)\)\)/, "the Host-only rows (the fixed keys and the step_tiers family alike) live in the Host region only");
   // the default Cell's pane is its file card; so is every named Cell's —
   // one component, no second Cell surface.
   const cell = source.slice(source.indexOf("function CellSettings("), source.indexOf("function HostSettingsRegion("));
@@ -1017,4 +1062,106 @@ test("polyforge#51: the Host region lists the unclassified fallback errors under
   assert.match(region, /polyforge\.settings\.unclassifiedTitle/, "the section is titled");
   assert.match(region, /polyforge\.settings\.unclassifiedEmpty/, "the empty state says so");
   assert.match(region, /\.text\}.*\.count\}|\.count.*\.text/, "a row shows the text and its count");
+});
+
+// polyforge#151 (85b2, u6): the shared candidate picker joins the two card
+// surfaces — the workflow card's step chain add row and the cli.toml
+// [summarize] chips' add row — over one catalog read, and the cli.toml card
+// drops the step_tiers family through the family-aware predicate.
+// polyforge#151 (85b2, review r2 #4): the u6 marker is behavioural — the
+// workflow card's chain add row is the shared picker, rendered through the
+// hook shim with the card's reads stubbed. The grouped select carries its
+// own label (the manual fill keeps the row's — review N10: the two were one
+// label before), a tier choice fills the manual draft, Enter adds the
+// candidate to the chain, and Save posts the OWNING workspace's --cwd and the
+// yaml CAS — the write target and shape AC2 pins, never a source regex.
+test("the step-tier picker joins the chain and summarize add rows over the one catalog read", async () => {
+  const { renderHook } = await import(pathToFileURL(fixture("react-hook-shim.mjs")).href);
+  const jiti = createJiti(import.meta.url, {
+    jsx: { runtime: "automatic" },
+    alias: {
+      react: fixture("react-hook-shim.mjs"),
+      "react/jsx-runtime": fixture("react-jsx-runtime.mjs"),
+      "@/hooks/useI18n": fixture("polyforge-tasks-stubs.mjs"),
+      "./SettingsUi": fixture("polyforge-tasks-stubs.mjs"),
+      "@/lib/polyforge-config-schema": modulePath("lib/polyforge-config-schema.ts"),
+      "@/lib/step-tiers": modulePath("lib/step-tiers.ts"),
+      "@/lib/polyforge-workflows-pure": modulePath("lib/polyforge-workflows-pure.ts"),
+      "@/lib/polyforge-cells-pure": modulePath("lib/polyforge-cells-pure.ts"),
+      "@/lib/display-path": modulePath("lib/display-path.ts"),
+      "@/lib/polyforge-panel-preferences": modulePath("lib/polyforge-panel-preferences.ts"),
+      "@/hooks/usePolyforgePanelPreferences": modulePath("hooks/usePolyforgePanelPreferences.ts"),
+      "@/hooks/usePolyforgeDisclosure": modulePath("hooks/usePolyforgeDisclosure.ts"),
+      "@/lib/polyforge-disclosure": modulePath("lib/polyforge-disclosure.ts"),
+      "@/lib/polyforge-install-pure": modulePath("lib/polyforge-install-pure.ts"),
+      type: fixture("react-hook-shim.mjs"),
+    },
+  });
+  
+  const { WorkflowCard } = await jiti.import("./PolyforgeConfig.tsx");
+
+  const posts = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (url, init) => {
+    const request = { url: String(url), init, settled: false };
+    request.promise = new Promise((resolve) => {
+      request.resolve = (status, body) => {
+        request.settled = true;
+        resolve(new Response(JSON.stringify(body ?? { ok: true }), { status, headers: { "Content-Type": "application/json" } }));
+      };
+    });
+    if (request.url.includes("/api/polyforge/workflows")) request.resolve(200, WORKFLOWS_FIXTURE);
+    else if (request.url.includes("/api/polyforge/config")) {
+      posts.push({ url: request.url, body: init ? JSON.parse(init.body) : null });
+      request.resolve(200, { ok: true, key: "steps.e2e-project.code.models", message: "applied" });
+    } else request.resolve(200, {});
+    return request.promise;
+  };
+  try {
+    const hook = renderHook(WorkflowCard, {
+      cwd: "/ws/a", profile: "beta", active: true, refreshKey: 0, regionId: "r",
+      reloadClassLabel: (entry) => entry, onWritten() {},
+      tierCatalog: { groups: [{ tier: "default", candidates: [{ value: "pi:tier/legacy", invalid: false }] }], reason: null },
+    });
+    for (let round = 0; round < 6; round++) { await settle(); hook.flush(); }
+    // ONE row's editor (the code step's): the picker's select and the manual
+    // fill both live inside it, and the Save below them is that row's own
+    const rowLabel = "polyforge.settings.workflowChainAdd · code";
+    const findRowControls = () => {
+      const all = nodes(hook);
+      const input = all.find((node) => node.type === "input" && node.props["aria-label"] === rowLabel);
+      // the picker renders the manual fill FIRST, its grouped select right
+      // after — the code row's own, never another row's
+      const inputAt = input ? all.indexOf(input) : -1;
+      const select = inputAt >= 0
+        ? all.slice(inputAt).find((node) => node.type === "select" && JSON.stringify(node.props.children).includes("pi:tier/legacy"))
+        : undefined;
+      return { all, input, inputAt, select };
+    };
+    const { all, input, select } = findRowControls();
+    assert.ok(select, "the chain add row renders the shared picker's grouped select");
+    assert.ok(input, "the manual fill keeps the chain row's own label");
+    assert.notEqual(select.props["aria-label"], input.props["aria-label"],
+      "the grouped select carries its own label, never the manual fill's (one label for two controls)");
+    select.props.onChange({ target: { value: "pi:tier/legacy" } });
+    hook.flush();
+    assert.equal(findRowControls().input.props.value, "pi:tier/legacy", "the tier choice fills the manual draft");
+    findRowControls().input.props.onKeyDown({ key: "Enter", preventDefault() {} });
+    hook.flush();
+    const save = findRowControls().all.slice(findRowControls().inputAt).find((node) => node.type === "button" && String(node.props.children ?? "").includes("configSave"));
+    assert.ok(save, "the chain's Save renders");
+    save.props.onClick();
+    await settle();
+    assert.equal(posts.length, 1, "one write");
+    assert.deepEqual(posts[0].body, {
+      action: "set",
+      key: "steps.e2e-project.code.models",
+      value: ["pi:auto-code", "pi:tier/legacy"],
+      cwd: "/ws/a",
+      profile: "beta",
+      expect_state: { file_sha256: "e2e-yaml", values: {} },
+    }, "the chain write keeps its target and shape: the owning workspace's cwd, the Cell's profile, the yaml CAS");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

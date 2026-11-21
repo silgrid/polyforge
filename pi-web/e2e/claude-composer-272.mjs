@@ -433,7 +433,10 @@ try {
       while (menu && !menu.contains(compact)) menu = menu.parentElement;
       return Boolean(menu && menu.contains(model));
     });
-    assert.equal(await modelInsideMenu(), false, "the model selector is inside the More controls menu");
+    // the layout read settles only when the three controls are mounted —
+    // poll the assertion's own value (review r2 N16's safer form; 151 r2#8
+    // surfaced the race as null !== false under host load).
+    await waitFor(async () => (await modelInsideMenu()) === false, 30_000, "the composer's controls never settled (or the model selector sits inside the More controls menu)");
     // the selector now shares pi's left cell at 390 px, so the
     // composer row and the page must still fit without horizontal scrolling.
     const widths = await bottomBar().evaluate((bar) => ({

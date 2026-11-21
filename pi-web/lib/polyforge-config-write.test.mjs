@@ -46,6 +46,7 @@ if (rest[0] === "config" && rest[1] === "list") {
     { key: "api_key", set: true, source: "file", class: "restart-only" },
     { key: "summarize.models", value: ["pi:a"], source: "file", class: "live", schema: { kind: "model-list" } },
     { key: "summarize.interval_sec", value: state.cliInterval, source: state.cliInterval === 60 ? "default" : "file", class: "live", schema: { kind: "int", min: 10, max: 3600 } },
+    { key: "step_tiers.default", value: ["pi:gone/old", "pi:acme/one"], source: "file", class: "live", schema: { kind: "model-list" } },
   ] }) + "\\n"); process.exit(0);
 }
 if (rest[0] === "config" && rest[1] === "workspace") {
@@ -58,6 +59,13 @@ if (rest[0] === "config" && rest[1] === "workspace") {
 }
 if (rest[0] === "ops" && rest[1] === "status") { process.stdout.write(JSON.stringify({ queue: { max_concurrent: state.cliMax } }) + "\\n"); process.exit(0); }
 if (rest[0] === "config" && (rest[1] === "set" || rest[1] === "unset")) {
+  if (String(rest[2]).startsWith("step_tiers.") && args.includes("--expect-state")) {
+    const exp = JSON.parse(args[args.indexOf("--expect-state") + 1] || "{}");
+    if (exp.file_sha256 !== sha(${JSON.stringify(cliToml)})) {
+      process.stderr.write(JSON.stringify({ error: { code: "config-cas-409", detail: "the file changed since it was read", extra: { file_sha256: { expected: exp.file_sha256, current: sha(${JSON.stringify(cliToml)}) } } } }) + "\\n");
+      process.exit(1);
+    }
+  }
   if (rest[2] === "max_concurrent_jobs") { state.cliMax = Number(rest[3]); fs.writeFileSync(path.join(dir, "state.json"), JSON.stringify(state)); }
   if (rest[2] === "summarize.interval_sec") { state.cliInterval = rest[1] === "set" ? Number(rest[3]) : 60; fs.writeFileSync(path.join(dir, "state.json"), JSON.stringify(state)); }
   process.stdout.write(JSON.stringify({ outcome: "applied" }) + "\\n"); process.exit(0);
@@ -599,4 +607,143 @@ test("reload and the rollback's pre-read pin by the pf installed now: an upgrade
   await swap(CAPS, null);
   await assert.rejects(lib.rollbackPolyforgeConfig({ key: "user_id", entry: alphaEntry }), (error) => error.status === 400 && /upgrade pf/.test(error.message));
   assert.deepEqual(argvOf("list"), [], "a named Cell on the downgraded pf is refused before the pre-read");
+});
+
+// ---- polyforge#151 (85b2, u2): the [step_tiers] write gate ----
+// The Host-only catalog family (85b): only the Host scope may write it, only
+// defined models may be NEW candidates (Q2 — candidates already in the file
+// are preserved as they are), pf below 0.2.4 refuses (the 0.2.x line: a
+// 2.20.x pf and an unparseable version are both below), a bad tier name is
+// not writable at all, an empty list is refused (pf's own rule — unset the
+// tier instead), and a CAS conflict answers 409. No refusal reaches a write
+// spawn; the reads (the probe, the pre-read list) stay reads.
+
+/** Patch the stub's version probe to answer a version and the multi-Cell
+ *  capabilities (the Host pin's shape, the Host-region test's own patch). */
+function hostProbe(tree, version) {
+  const pf = readFileSync(join(tree.bin, "pf"), "utf8")
+    .replace('if (args.includes("--version"))', `if (args.includes("--version") && args.includes("--json")) { process.stdout.write(JSON.stringify({ version: ${JSON.stringify(version)}, capabilities: ["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1"] }) + "\\n"); process.exit(0); }\nif (args.includes("--version"))`);
+  writeFileSync(join(tree.bin, "pf"), pf);
+}
+
+const TIER_MODELS = JSON.stringify({ providers: { acme: { baseUrl: "https://example.invalid/v1", apiKey: "sk-test", api: "openai-completions", models: [{ id: "one", name: "Acme One" }] } } });
+
+/** A step_tiers gate tree: the host-capable probe, the acme models.json of
+ *  the defined set, a claude that cannot answer (its defined names are just
+ *  `default`) and the isolated model env the load needs. */
+async function tierGate(t, { version = "v0.2.4" } = {}) {
+  const tree = stubTree({ version });
+  hostProbe(tree, version);
+  // a claude that cannot answer: the defined claude names are exactly `default`
+  writeFileSync(join(tree.bin, "claude"), "#!/bin/sh\necho 'claude: not logged in' >&2\nexit 1\n", { mode: 0o755 });
+  writeFileSync(join(tree.agent, "models.json"), TIER_MODELS);
+  const previousOffline = process.env.PI_OFFLINE;
+  const previousAuth = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"].map((key) => [key, process.env[key]]);
+  process.env.PI_OFFLINE = "1";
+  for (const [key] of previousAuth) delete process.env[key];
+  withPath(tree, t);
+  t.after(() => {
+    if (previousOffline === undefined) delete process.env.PI_OFFLINE;
+    else process.env.PI_OFFLINE = previousOffline;
+    for (const [key, value] of previousAuth) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+  const lib = await jiti.import("./polyforge-config-write.ts");
+  const cache = await jiti.import("./models-cache.ts");
+  cache.invalidateModelsCache();
+  return { tree, lib };
+}
+
+test("a step_tiers Host write reaches pf as one JSON array with the CAS, preserving the file's old candidates", async (t) => {
+  const { tree, lib } = await tierGate(t);
+  const value = ["pi:gone/old", "pi:acme/one:high", "claude:default"];
+  const write = await lib.writePolyforgeConfig({
+    action: "set",
+    key: "step_tiers.default",
+    value,
+    host: true,
+    expect_state: { file_sha256: tree.sha(tree.cliToml) },
+  });
+  assert.equal(write.entry.scope, "cli");
+  assert.equal(write.entry.host, true, "the entry carries the Host scope");
+  assert.deepEqual(write.entry.old, ["pi:gone/old", "pi:acme/one"], "the old list is the file's own");
+  assert.deepEqual(write.entry.new, value);
+  const setCall = calls(tree).find((call) => call.args.includes("set"));
+  assert.deepEqual(setCall.args.slice(setCall.args.indexOf("--json")), [
+    "--json", "config", "set", "step_tiers.default", "--host",
+    JSON.stringify(value),
+    "--expect-state", JSON.stringify({ file_sha256: tree.sha(tree.cliToml) }),
+  ], "the write is pinned to the Host scope, the value one JSON array, the CAS along");
+  assert.ok(!setCall.args.includes("--cwd") && !setCall.args.includes("--workspace"), "a catalog key carries no path flag");
+  // a pi candidate with an effort suffix passes the defined gate on its model identity
+  const rolled = await lib.rollbackPolyforgeConfig({ entry: write.entry });
+  assert.ok(rolled.ok, "a catalog entry rolls back through the same path");
+});
+
+test("a step_tiers write off the Host scope is refused before any scoped spawn", async (t) => {
+  const { tree, lib } = await tierGate(t);
+  for (const scope of [{}, { profile: "beta" }]) {
+    await assert.rejects(
+      () => lib.writePolyforgeConfig({ action: "set", key: "step_tiers.default", value: ["pi:acme/one"], ...scope }),
+      (error) => error.status === 400 && /Host/.test(error.message),
+      JSON.stringify(scope),
+    );
+  }
+  assert.ok(!calls(tree).some((call) => call.args.includes("config")), "no scoped config call at all");
+});
+
+test("only defined models may be NEW candidates; the file's own undefined candidates are preserved", async (t) => {
+  const { tree, lib } = await tierGate(t);
+  for (const bad of [["pi:acme/two"], ["claude:nope"], ["pi:gone/old", "pi:acme/two"], ["foo:model"]]) {
+    reset(tree);
+    await assert.rejects(
+      () => lib.writePolyforgeConfig({ action: "set", key: "step_tiers.fast", value: bad, host: true }),
+      (error) => error.status === 400 && (/not a defined model|not a <pi\|claude>/.test(error.message)),
+      JSON.stringify(bad),
+    );
+    assert.ok(!calls(tree).some((call) => call.args.includes("set") || call.args.includes("unset")), `no write spawn for ${JSON.stringify(bad)}`);
+  }
+});
+
+test("pf below the 0.2.x step_tiers floor refuses — a 2.20.x pf and an unparseable version are both below", async (t) => {
+  for (const version of ["v2.20.21", "oops"]) {
+    const { tree, lib } = await tierGate(t, { version });
+    await assert.rejects(
+      () => lib.writePolyforgeConfig({ action: "set", key: "step_tiers.default", value: ["pi:acme/one"], host: true }),
+      (error) => error.status === 400 && /0\.2\.4/.test(error.message),
+      version,
+    );
+    assert.ok(!calls(tree).some((call) => call.args.includes("set")), `no write spawn on ${version}`);
+  }
+});
+
+test("a bad tier name is not writable at all; an empty list is refused (unset the tier instead)", async (t) => {
+  const { tree, lib } = await tierGate(t);
+  await assert.rejects(
+    () => lib.writePolyforgeConfig({ action: "set", key: "step_tiers.Bad-Name", value: ["pi:acme/one"], host: true }),
+    (error) => error.status === 400 && /not writable from the panel/.test(error.message),
+  );
+  for (const bad of [[], ["ok", ""], "boom"]) {
+    await assert.rejects(
+      () => lib.writePolyforgeConfig({ action: "set", key: "step_tiers.default", value: bad, host: true }),
+      (error) => error.status === 400,
+      JSON.stringify(bad),
+    );
+  }
+  assert.ok(!calls(tree).some((call) => call.args.includes("set")), "no write spawn");
+  // unset is the way to empty a tier — no defined-models judgement on removal
+  const removed = await lib.writePolyforgeConfig({ action: "unset", key: "step_tiers.default", host: true });
+  assert.equal(removed.ok, true);
+  const unsetCall = calls(tree).find((call) => call.args.includes("unset"));
+  assert.ok(unsetCall.args.includes("--host"), "the unset is Host-scoped too");
+});
+
+test("a step_tiers CAS conflict answers 409 — the caller keeps its draft", async (t) => {
+  const { tree, lib } = await tierGate(t);
+  await assert.rejects(
+    () => lib.writePolyforgeConfig({ action: "set", key: "step_tiers.default", value: ["pi:acme/one"], host: true, expect_state: { file_sha256: "deadbeef" } }),
+    (error) => error.status === 409 && /changed since it was read/.test(error.message),
+  );
 });

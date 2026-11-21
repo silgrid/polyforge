@@ -3000,6 +3000,10 @@ select.mcp-add-input {
 .polyforge-config-write-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .polyforge-config-write > input,
 .polyforge-config-write-row > input { flex: 1 1 auto; min-width: 0; box-sizing: border-box; }
+/* the shared candidate picker's select (polyforge#151): content-sized
+   beside the flexing manual fill, never squeezing it to nothing. */
+.polyforge-config-write > select,
+.polyforge-config-write-row > select { flex: 0 1 auto; min-width: 0; }
 /* a Cell's 工作区 add row — path, projects, Add — wrapping on a narrow pane. */
 .polyforge-config-workspace-add { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; margin-top: 6px; }
 .polyforge-config-workspace-add > input { flex: 1 1 160px; min-width: 0; box-sizing: border-box; }
@@ -3165,7 +3169,8 @@ select.mcp-add-input {
     flex-wrap: wrap;
     align-items: stretch;
   }
-  .polyforge-workflow-editor > .polyforge-config-write > input { flex: 1 1 100%; }
+  .polyforge-workflow-editor .model-candidate-picker > input { flex: 1 1 100%; }
+  .polyforge-workflow-editor .model-candidate-picker > select { flex: 1 1 100%; }
   .config-machine-scope-hint {
     white-space: normal;
     overflow: visible;

@@ -3,6 +3,8 @@
 // carries: components/HarnessPermissionSettings*, components/ClaudePermissionSettings*, lib/harness-permissions-view*, lib/harness-settings-view*, lib/harness/diagnostics*, app/api/harness/*
 // carries: components/AccountSettings*, components/PiAccountLogin*, components/ModelsConfig*, app/api/settings/account/*, lib/provider-listing*, lib/harness/account*, lib/polyforge-doctor*
 // carries: components/ClaudeCustomModels*
+// carries: lib/step-tiers*, lib/step-tier-defined-models*, lib/models-load*, lib/claude-models*
+// (polyforge#151: the tier column's projection chain, and the write gate's defined-model set behind it)
 // #85 设置页、账号页、统一模型页和权限页：九个导航分区，旧模型页已移除。
 // 模型页场景保留 provider 编辑、账号跳转与三列清单的行为校验。
 //
@@ -23,9 +25,9 @@
 // `PASS harness-settings-85` only when every scenario passed. Every wait
 // polls its condition to a bounded deadline; no fixed sleep.
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { chromium } from "playwright";
 import { ACTION_MS, COLD_MS, NAV_MS } from "./timeouts.mjs";
 import { assertNoDevServer, createHarness, createWaitUntil, seedStorage } from "./harness.mjs";
@@ -62,6 +64,78 @@ const h = createHarness({
     return { name, logFile: join(work, `server-${name}.log`), env: { HOME: home, PI_CODING_AGENT_DIR: agentDir, PATH: `${stubBin}:${process.env.PATH}` } };
   },
 });
+
+// ---- polyforge#151 (85b2, review r2): the tier scenarios' own server ----
+// The model list's tier column writes and reads back through the REAL
+// /api/polyforge/config route against a stub `pf` that keeps the Host's
+// [step_tiers] in a fixture state file (the w385 pattern): the read-back is
+// the storage the writes really changed, the CAS compares the state's real
+// hash, and a one-shot refusal marker injects the conflict. The server's env
+// is its own: a fixture models.json (the write gate's defined set is then
+// exactly tierdemo/opus — the route test's isolation), the recorded claude
+// stub (its aliases are the gate's claude set) and a PATH without the
+// machine's real pf or claude.
+const tierHome = join(work, "tier-home");
+const tierAgent = join(tierHome, ".pi", "agent");
+mkdirSync(tierAgent, { recursive: true });
+writeFileSync(join(tierAgent, "models.json"), JSON.stringify({
+  providers: { anthropic: { baseUrl: "https://example.invalid/v1", apiKey: "sk-test", api: "openai-completions", models: [{ id: "opus", name: "Opus" }] } },
+}, null, 2));
+const tierBin = join(work, "tier-bin");
+mkdirSync(tierBin, { recursive: true });
+copyFileSync(new URL("../lib/__fixtures__/claude-stub/claude.mjs", import.meta.url), join(tierBin, "claude"));
+chmodSync(join(tierBin, "claude"), 0o755);
+// the recorded fixtures sit BESIDE the stub's directory (the stub resolves
+// `../claude-2.1.322` — the route test's layout)
+symlinkSync(decodeURIComponent(new URL("../lib/__fixtures__/claude-2.1.322", import.meta.url).pathname), join(work, "claude-2.1.322"));
+const tierStateFile = join(tierBin, "tier-state.json");
+const tierArgvFile = join(tierBin, "tier-argv.log");
+const tierRefuseFile = join(tierBin, "refuse-next");
+writeFileSync(join(tierBin, "pf"), `#!${process.execPath}
+const fs = require("fs"); const path = require("path"); const crypto = require("crypto");
+const dir = path.dirname(fs.realpathSync(__filename));
+const stateFile = ${JSON.stringify(tierStateFile)};
+const argvFile = ${JSON.stringify(tierArgvFile)};
+const refuseFile = ${JSON.stringify(tierRefuseFile)};
+const args = process.argv.slice(2);
+fs.appendFileSync(argvFile, JSON.stringify(args) + "\\n");
+const out = (doc) => { process.stdout.write(JSON.stringify(doc) + "\\n"); process.exit(0); };
+const refuse = (code, detail) => { process.stderr.write(JSON.stringify({ error: { code, detail } }) + "\\n"); process.exit(1); };
+if (args.includes("--version")) out(args.includes("--json") ? { version: "v0.2.4", capabilities: ["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1"] } : "v0.2.4");
+const load = () => JSON.parse(fs.readFileSync(stateFile, "utf8"));
+const save = (doc) => { fs.writeFileSync(stateFile + "." + process.pid, JSON.stringify(doc)); fs.renameSync(stateFile + "." + process.pid, stateFile); };
+const hash = () => crypto.createHash("sha256").update(fs.readFileSync(stateFile)).digest("hex");
+const rest = args.filter((a) => a !== "--json" && a !== "--host");
+if (rest[0] === "ops" && rest[1] === "status") out({ queue: { pending: 0, running: 0, max_concurrent: 6, max_configured: 6 }, reload: { pending: [], overridden: [] } });
+if (rest[0] === "config" && rest[1] === "list") {
+  const doc = load();
+  out({ file: { path: path.join(dir, "cli.toml"), sha256: hash(), exists: true },
+    items: Object.entries(doc.tiers).map(([tier, list]) => ({ key: "step_tiers." + tier, value: list, source: "file", class: "live", schema: { kind: "model-list" } })) });
+}
+if (rest[0] === "config" && (rest[1] === "set" || rest[1] === "unset")) {
+  if (fs.existsSync(refuseFile)) { fs.unlinkSync(refuseFile); refuse("config-cas-409", "the file changed since it was read"); }
+  const key = rest[2];
+  const expAt = args.indexOf("--expect-state");
+  if (expAt >= 0) {
+    const exp = JSON.parse(args[expAt + 1]);
+    if (exp.file_sha256 !== hash()) refuse("config-cas-409", "the file changed since it was read");
+  }
+  const doc = load();
+  const tier = key.replace(/^step_tiers\\./, "");
+  if (rest[1] === "set") doc.tiers[tier] = JSON.parse(rest[3]);
+  else delete doc.tiers[tier];
+  save(doc);
+  out({ ok: true, key, class: "live", outcome: "applied" });
+}
+process.stderr.write("pf: unknown command " + rest.join(" ") + "\\n"); process.exit(2);
+`);
+chmodSync(join(tierBin, "pf"), 0o755);
+const seedTiers = (tiers) => {
+  writeFileSync(tierStateFile + ".seed", JSON.stringify({ tiers }));
+  renameSync(tierStateFile + ".seed", tierStateFile);
+};
+const tierState = () => JSON.parse(readFileSync(tierStateFile, "utf8"));
+const tierArgv = () => (existsSync(tierArgvFile) ? readFileSync(tierArgvFile, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)) : []);
 
 // ---- the mocked adapter contract (the shapes 85a1's routes answer) ----
 const HARNESS_LIST = {
@@ -201,6 +275,11 @@ const T = {
   S21: "S85-21: General has no claude permission controls; its hook switch stays",
   S22: "S85-22: the table and the editor share one enabledModels controller — a Save never re-enables a model the table just disabled (review r1#1)",
   S23: "S85-23: the models page's Claude section merges the retired custom models under a preview and edits the native picker with full-list writes (85a3-3)",
+  S30: "S85-30: the model list's step-tier column sets a tier for every harness of the row and reads the state back (85b2 AC1/AC3)",
+  S31: "S85-31: a specific-mode claude-only tier save writes only claude (pi untouched) and reads back 指定 with the per-harness lines (85b2 AC3)",
+  S32: "S85-32: an unsaved row never offers the tier setter; an incapable catalog read leaves the column read-only with its reason (85b2 AC1/AC3)",
+  S33: "S85-33: a concurrent external write survives the tier column's save (the per-step re-read), and a refused write keeps the draft, reported per harness (85b2 AC1, review r2 #1)",
+  S34: "S85-34: an inconsistent row restores to 全部 through a unify save — cli.toml reads back the merged tier and the vacated one unsets (85b2 AC3)",
 };
 const failures = new Map(Object.values(T).map((title) => [title, []]));
 const ran = new Set();
@@ -208,13 +287,49 @@ const ran = new Set();
 async function part(id, label, fn) {
   const title = T[id];
   ran.add(title);
+  const startedAt = Date.now();
   try {
     await fn();
-    console.log(`PASS ${id}`);
+    console.log(`PASS ${id} (${((Date.now() - startedAt) / 1000).toFixed(0)}s)`);
   } catch (error) {
     failures.get(title).push(`${label}: ${String(error?.message ?? error).split("\n")[0]}`);
     console.log(`FAIL ${id} ${label}: ${error?.message ?? error}`);
   }
+}
+
+/** The tier scenarios' own server, started once: the real config routes
+ *  against the stub pf (the fixture state is the Host's [step_tiers]). */
+let tierServerStarted = false;
+async function startTierServer() {
+  if (tierServerStarted) return;
+  tierServerStarted = true;
+  // the main server's scenarios (S1–S23) are done; stop it first (the
+  // polyforge.mjs two-phase pattern) so it cannot outlive the suite
+  await h.stop();
+  await h.startServer({
+    name: "settings-85-tiers",
+    logFile: join(work, "server-settings-85-tiers.log"),
+    // its own dist dir: the main server keeps running beside it
+    distDir: ".next/e2e/harness-settings-85-tiers",
+    env: {
+      HOME: tierHome,
+      PI_CODING_AGENT_DIR: tierAgent,
+      PI_OFFLINE: "1",
+      // the machine's real pf and claude stay off this PATH (they live in
+      // /root/.local/...); node/npm and the system tools stay on it
+      PATH: `${tierBin}${delimiter}/usr/local/bin:/usr/bin:/bin`,
+    },
+  });
+}
+
+/** The tier scenarios' page-level mocks: the unified list's rows — one
+ *  merged pi+claude row (tierdemo/opus), matching the gate's defined set. */
+async function tierPageMocks(page) {
+  await page.route(/\/api\/models\?scope=all/, (route) => route.fulfill({ json: {
+    models: { "anthropic:opus": "Opus" }, modelList: [{ id: "opus", name: "Opus", provider: "anthropic" }],
+    defaultModel: null, defaultThinkingLevel: null, savedDefaultThinkingLevel: null,
+    thinkingLevels: {}, thinkingLevelMaps: {}, thinkingLevelPins: {}, isScoped: false } }));
+  await page.route("**/api/claude", (route) => route.fulfill({ json: { ...CLAUDE_REPORT, models: [{ value: "opus", source: "alias" }] } }));
 }
 
 const waitFor = createWaitUntil({ every: 250 });
@@ -942,6 +1057,174 @@ try {
     await section.getByRole("button", { name: "Add", exact: true }).click({ timeout: ACTION_MS });
     await waitFor(() => modelPuts.some((body) => JSON.stringify(body.customModels) === JSON.stringify(["native-keep", "claude-b", "claude-c"])),
       ACTION_MS, "the add never wrote the full next list");
+    await page.context().close();
+  });
+  // S85-30 — polyforge#151 (85b2 AC1/AC3): the model list's step-tier column,
+  // against the real /api/polyforge/config route and the stub pf's fixture
+  // state: a merged pi+claude row sets a tier with 应用到：全部 — one Host
+  // write per harness of the row, the CAS along — and the read-back shows
+  // 全部 from the storage the writes really changed.
+  await part("S30", "step-tier column", async () => {
+    await startTierServer();
+    const page = await newPage();
+    seedTiers({ default: ["pi:tierdemo/legacy"] });
+    await tierPageMocks(page);
+    await openSettings(page);
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    const host = sectionHost(page, "models");
+    await host.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
+    const cell = host.locator("[data-step-tier-cell]").first();
+    await cell.waitFor({ state: "visible", timeout: ACTION_MS });
+    assert.match(await cell.locator("[data-step-tier-state]").innerText(), /Not set/, "an unset row shows 未设置");
+    await cell.locator("[data-step-tier-select]").selectOption("default");
+    await cell.getByRole("button", { name: "Save", exact: true }).click({ timeout: ACTION_MS });
+    await waitFor(async () => (await cell.locator("[data-step-tier-state]").innerText()).includes("All: default"),
+      ACTION_MS, "the row never read back 全部：default");
+    // the writes landed in the stub's storage: one per harness, the plan's
+    // whole-key lists, the CAS expectation of the state each write saw
+    assert.deepEqual(tierState().tiers.default, ["pi:tierdemo/legacy", "pi:anthropic/opus", "claude:opus"],
+      "the storage the read-back comes from");
+    const writes = tierArgv().filter((a) => a.includes("set"));
+    assert.equal(writes.length, 2, "one write per harness of the row");
+    for (const write of writes) {
+      assert.ok(write.includes("--host"), "the write is Host-scoped");
+      assert.ok(write.includes("--expect-state"), "the CAS expectation travels with the write");
+    }
+    await page.context().close();
+  });
+
+  // S85-31 — polyforge#151 (85b2 AC3): a row at 全部：default switches 应用到
+  // to 指定 with ONLY claude checked and saves a tier change — only claude is
+  // written (pi's candidate untouched), and the read-back lists the row as
+  // 指定 with each harness's own tier in the 不一致 lines.
+  await part("S31", "specific-mode write + read-back", async () => {
+    const page = await newPage();
+    seedTiers({ default: ["pi:anthropic/opus", "claude:opus"], "fast-chat": ["pi:tierdemo/other"] });
+    await tierPageMocks(page);
+    await openSettings(page);
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    const host = sectionHost(page, "models");
+    const cell = host.locator("[data-step-tier-cell]").first();
+    await cell.waitFor({ state: "visible", timeout: ACTION_MS });
+    assert.match(await cell.locator("[data-step-tier-state]").innerText(), /All: default/, "the row starts at 全部：default");
+    await cell.getByLabel("Specific harnesses").check();
+    await cell.locator('[data-harness="claude"] input[type="checkbox"]').check();
+    await cell.locator("[data-step-tier-select]").selectOption("fast-chat");
+    await cell.getByRole("button", { name: "Save", exact: true }).click({ timeout: ACTION_MS });
+    await waitFor(async () => (await cell.locator("[data-step-tier-state]").innerText()).includes("Specific"),
+      ACTION_MS, "the row never read back 指定");
+    const stateText = await cell.locator("[data-step-tier-state]").innerText();
+    assert.match(stateText, /Inconsistent: pi is currently in default/, "pi's own tier is listed");
+    assert.match(stateText, /Inconsistent: claude is currently in fast-chat/, "claude's own tier is listed");
+    // only claude was written: pi's candidate stays in default, untouched
+    const state = tierState();
+    assert.deepEqual(state.tiers.default, ["pi:anthropic/opus"], "pi's candidate is untouched by the claude-only write");
+    assert.deepEqual(state.tiers["fast-chat"], ["pi:tierdemo/other", "claude:opus"], "claude moved over, the other candidate kept");
+    await page.context().close();
+  });
+
+  // S85-32 — polyforge#151 (85b2 AC1/AC3): an incapable catalog read (pf
+  // below the family's own floor) leaves the column read-only with its
+  // reason while the other columns stay; an unsaved provider draft adds no
+  // row to the unified list, so it never offers the tier setter.
+  await part("S32", "unsaved row + read-only column", async () => {
+    const page = await newPage();
+    await tierPageMocks(page);
+    // the client-side degradation: the page's own read answers the floor reason
+    await page.route(/\/api\/polyforge\/config\?host=1/, (route) => route.fulfill({ json: {
+      pfPresent: true, pfVersion: "v2.20.21", capable: true,
+      stepTiersReason: "the step-tier catalog needs pf 0.2.4 or newer (found v2.20.21)",
+      items: [], file: { sha256: "e2e-sha", exists: true }, mapped: false } }));
+    await openSettings(page);
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    const host = sectionHost(page, "models");
+    const cell = host.locator("[data-step-tier-cell]").first();
+    await cell.waitFor({ state: "visible", timeout: ACTION_MS });
+    assert.match(await host.locator("[data-step-tier-reason]").innerText(), /needs pf 0\.2\.4/, "the read-only reason shows once");
+    assert.equal(await host.locator("[data-step-tier-select]").count(), 0, "an incapable catalog read leaves the column read-only");
+    assert.ok((await host.innerText()).includes("Chat availability"), "the other columns are untouched");
+    // an unsaved provider draft is not a defined model: no row, no tier setter
+    await host.getByRole("button", { name: "Add provider", exact: true }).click({ timeout: ACTION_MS });
+    await host.getByPlaceholder("provider-name", { exact: true }).waitFor({ state: "visible", timeout: ACTION_MS });
+    assert.equal(await host.locator("[data-step-tier-cell]").count(), 1, "a saved row only — an unsaved draft never offers the tier setter");
+    await page.context().close();
+  });
+
+  // S85-33 — polyforge#151 (85b2, review r2 #1): the per-step re-read. The
+  // row starts SET (全部：default); an external writer (another tab, the CLI)
+  // then adds a candidate to that same tier between the page load and the
+  // save. The write plan must come from the SAME fresh read that carries the
+  // CAS hash, so the external candidate survives the move — a plan from the
+  // page-load catalog would unset the tier and destroy it while the fresh
+  // hash lets the CAS pass. The stub's one-shot refusal then pins the kept
+  // draft and the per-harness reporting of a conflict.
+  await part("S33", "concurrent external write preserved", async () => {
+    const page = await newPage();
+    seedTiers({ default: ["pi:anthropic/opus", "claude:opus"], "fast-chat": ["pi:tierdemo/other"] });
+    await tierPageMocks(page);
+    await openSettings(page);
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    const host = sectionHost(page, "models");
+    const cell = host.locator("[data-step-tier-cell]").first();
+    await cell.waitFor({ state: "visible", timeout: ACTION_MS });
+    assert.match(await cell.locator("[data-step-tier-state]").innerText(), /All: default/, "the row starts set");
+    // the external write lands after the page load, before the save
+    seedTiers({ default: ["pi:anthropic/opus", "claude:opus", "pi:tierdemo/external"], "fast-chat": ["pi:tierdemo/other"] });
+    await cell.locator("[data-step-tier-select]").selectOption("fast-chat");
+    await cell.getByRole("button", { name: "Save", exact: true }).click({ timeout: ACTION_MS });
+    await waitFor(async () => (await cell.locator("[data-step-tier-state]").innerText()).includes("All: fast-chat"),
+      ACTION_MS, "the row never read back 全部：fast-chat");
+    const state = tierState();
+    assert.deepEqual(state.tiers["fast-chat"], ["pi:tierdemo/other", "pi:anthropic/opus", "claude:opus"], "the row moved over");
+    assert.deepEqual(state.tiers.default, ["pi:tierdemo/external"],
+      "the external concurrent candidate is preserved — never silently overwritten by a stale plan");
+    // a refused write (the stub's one-shot CAS conflict) keeps the draft and
+    // reports per harness: the refused one the conflict, the next unattempted
+    writeFileSync(tierRefuseFile, "");
+    await cell.locator("[data-step-tier-select]").selectOption("default");
+    await cell.getByRole("button", { name: "Save", exact: true }).click({ timeout: ACTION_MS });
+    const results = cell.locator(".harness-apply-to-results li");
+    await results.first().waitFor({ state: "visible", timeout: ACTION_MS });
+    assert.match(await cell.locator('.harness-apply-to-results [data-harness="pi"]').innerText(), /the file changed since it was read/, "the refused harness reports the conflict");
+    assert.match(await cell.locator('.harness-apply-to-results [data-harness="claude"]').innerText(), /not attempted after the earlier failure/, "the unattempted harness says so");
+    assert.equal(await cell.locator("[data-step-tier-select]").inputValue(), "default", "the draft is kept for the retry");
+    await page.context().close();
+  });
+  // S85-34 — polyforge#151 (85b2 AC3, review r2 #2): the restore path. A
+  // row starts inconsistent (pi in default, claude in fast-chat); choosing
+  // default with 应用到：全部 saves claude over and unsets the vacated
+  // fast-chat — the read-back returns to 全部：default, from the storage the
+  // writes really changed.
+  await part("S34", "inconsistent restored to all", async () => {
+    const page = await newPage();
+    seedTiers({ default: ["pi:anthropic/opus"], "fast-chat": ["claude:opus"] });
+    await tierPageMocks(page);
+    await openSettings(page);
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    const host = sectionHost(page, "models");
+    const cell = host.locator("[data-step-tier-cell]").first();
+    await cell.waitFor({ state: "visible", timeout: ACTION_MS });
+    await waitFor(async () => /Specific/.test(await cell.locator("[data-step-tier-state]").innerText()),
+      ACTION_MS, "the row never read back 指定");
+    const stateText = await cell.locator("[data-step-tier-state]").innerText();
+    assert.match(stateText, /Inconsistent: pi is currently in default/, "pi's own tier is listed");
+    assert.match(stateText, /Inconsistent: claude is currently in fast-chat/, "claude's own tier is listed");
+    // the restore: default (pi's tier) applied to ALL harnesses
+    const argvBefore = tierArgv().length;
+    await cell.locator("[data-step-tier-select]").selectOption("default");
+    await cell.getByRole("button", { name: "Save", exact: true }).click({ timeout: ACTION_MS });
+    await waitFor(async () => (await cell.locator("[data-step-tier-state]").innerText()).includes("All: default"),
+      ACTION_MS, "the row never read back 全部：default");
+    // the fixture storage: claude moved over, the vacated tier unset (never an empty list)
+    const state = tierState();
+    assert.deepEqual(state.tiers.default, ["pi:anthropic/opus", "claude:opus"], "the merged tier is what cli.toml reads back");
+    assert.equal(state.tiers["fast-chat"], undefined, "the vacated tier was unset, never left as an empty list");
+    // only claude was written: one set and one unset, both Host-scoped
+    const writes = tierArgv().slice(argvBefore).filter((args) => (args.includes("set") || args.includes("unset")) && args.some((entry) => String(entry).startsWith("step_tiers.")));
+    assert.equal(writes.length, 2, "one write per plan step of the moved harness");
+    for (const write of writes) assert.ok(write.includes("--host"), "the write is Host-scoped");
+    assert.ok(writes.some((args) => args.includes("config") && args.includes("set") && args.some((entry) => entry === "step_tiers.default")), "the merged tier was written");
+    assert.ok(writes.some((args) => args.includes("config") && args.includes("unset") && args.some((entry) => entry === "step_tiers.fast-chat")), "the vacated tier was unset");
     await page.context().close();
   });
 } finally {

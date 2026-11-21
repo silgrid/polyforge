@@ -384,6 +384,14 @@ export interface PolyforgeWatchStatus extends PolyforgeSummary {
    *  failed, answered nothing or the work item is not asked with
    *  `?overrides=1`. */
   paramsView?: PolyforgeParamsView;
+  /** (polyforge#151, 85b2, additive): the composed step-tier catalog the same
+   *  watch route composes beside `overrideView` (`status.stepTiers` — the
+   *  Host's [step_tiers] tiers and the defined model identities, the
+   *  override picker's groups), so the selected unstarted step's picker
+   *  fetches nothing on selection (G11 keeps holding). Absent when the
+   *  composition is not asked with `?overrides=1`; a failed composition
+   *  carries its `reason` with empty lists instead. */
+  stepTiers?: { tiers: { tier: string; candidates: string[] }[]; defined: { pi: string[]; claude: string[] }; reason?: string };
   events: PolyforgeEvent[];
   progress?: PolyforgeProgress;
   origin?: PolyforgeOrigin;

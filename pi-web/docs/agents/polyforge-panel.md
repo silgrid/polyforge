@@ -235,7 +235,22 @@ probe; the section UI itself is in [settings-ui.md](settings-ui.md).
   `summarize.language`, `summarize.interval_sec` (written like
   every cli.toml key — `pf config set|unset summarize.<key>` with no `--cwd`,
   the cli.toml sha256 and its declared values as `--expect-state`, the
-  history's `old` from `config list`, a mapped cwd not required; a rollback
+  history's `old` from `config list`, a mapped cwd not required; plus the
+  Host-only `step_tiers.<tier>` family (85b2, `parseStepTierKey`'s grammar
+  only): a write MUST carry `{host: true}` (any Cell scope is a 400), the
+  family's own 0.2.4 pf floor applies (an unparseable version is below), a
+  `set` value is a non-empty candidate array (a tier is emptied by `unset`,
+  never by an empty list — pf refuses one), and only the write's NEW
+  candidates must be defined models (`lib/step-tier-defined-models.ts`:
+  pi's scope-all projection behind /api/models and claude's aliases plus
+  native modelPicker names — recomputed per write, the file's own retired
+  candidates preserved); every one of those refusals precedes the write
+  spawn. The models page's tier column writes through this same POST, one
+  harness at a time (add-first, a partial
+  failure reported per harness with the draft kept; EVERY step re-reads the
+  Host catalog together with the file hash from the SAME GET, so the plan
+  derives from the very state the CAS guards — a concurrent external write
+  either joins the plan or refuses the write with 409; a rollback
   derives its scope from the key, so a pre-#286 entry recorded against a
   workspace yaml rolls back through the same flat path as a new entry;
   below the 2.20.21 summarize floor, or with an unknown version,
@@ -657,7 +672,13 @@ selection). The write controls — the model setter, the skip switch and a
 set/clear row per declared param (the same one-action POST face, `pf
 override --param` / `--clear-param`'s shapes) — stay an UNSTARTED step's
 only; a step that already ran or holds a live dispatch shows its params
-read-only, and the daemon's typed refusal of a write shows inline.
+read-only, and the daemon's typed refusal of a write shows inline. The model
+setter is the shared `ModelCandidatePicker` (85b2): the manual fill keeps
+the `data-pf-step-controls-model` hook and takes the full candidate string,
+the grouped select rides the watch snapshot's composed `status.stepTiers`
+(G11 keeps holding), and a failed or degraded catalog leaves the manual fill
+with its reason. The write shape stays `{ kind: "models", step,
+models: [candidate] }` — one model, pf's own admission.
 Files: `components/PolyforgeStepControls.tsx` (the controls; the panel
 mounts them for every selected step and passes the snapshot's rows),
 `lib/polyforge-overrides.ts` and `lib/polyforge-params.ts` (the spawn
@@ -2423,7 +2444,10 @@ configuration cards; `aria-label` 「工作流」 / Workflow):
  removed the 「所属 bundle」 label and its i18n key.
 - **Writes** fold under the `workflow` disclosure region (default closed;
   the #212 store, a draft or an error locks it open with the marker): chips
-  with ↑/↓/× and a free-text add, Save (`set steps.<project>.<id>.models` with
+  with ↑/↓/× and the shared `ModelCandidatePicker` as the add (85b2: the
+  manual fill first, a select grouped by the step-tier catalog beside it over
+  the page's one `GET /api/polyforge/step-tiers` read; a failed read leaves
+  the manual fill with its reason), Save (`set steps.<project>.<id>.models` with
   the full list) and Clear (`unset`, falls back one level). Every write is `POST /api/polyforge/config` with the
   OWNING workspace's `cwd` (never the settings cwd) and
   `expect_state:{file_sha256: <that workspace's yaml sha>, values:{}}`; its
@@ -2493,7 +2517,17 @@ carried.
   (`pf --profile NAME --json config list`); a write body or the reload body
   carries `{host: true}` or `{profile}` (exclusive). The schema module adds
   the Cell keys `cell_max_concurrent_jobs` and `model.source` (`CELL_KEYS`)
-  and names the Host-only keys (`HOST_ONLY_KEYS`).
+  and names the Host-only keys through the family-aware `isHostOnlyKey`
+  (85b2: the fixed `HOST_ONLY_KEYS` plus the whole `step_tiers.<tier>`
+  prefix family, so the default Cell's list — pf lists the Host's catalog
+  there too — never leaks it as read-only chips; the fixed array itself is
+  unchanged). The picker's own catalog read is
+  `GET /api/polyforge/step-tiers` (85b2): one answer with the Host's parsed
+  tiers and the defined model identities per harness, degraded to
+  `capable:false` plus its reason on every failure, no write face and never
+  5xx; the watch route composes the same server catalog into its snapshot
+  (`status.stepTiers`, the `?overrides=1` opt-in beside the override view,
+  a failed composition carrying its `reason` with empty lists).
 - **Every config call names its scope.** pf resolves an
   unscoped Cell command from its own process — `--profile`, `PF_PROFILE`,
   the cwd's mapped Cell, `default` — and pi-web spawns pf from its server
@@ -2583,7 +2617,7 @@ polls.
 
 Each key has exactly one surface: the Host pane's **Host region**
 (`HostSettingsRegion`, `data-pf-host-region`) edits the Host-only keys
-(`HOST_ONLY_KEYS`: the Host ceiling, socket, harness roots, the two
+(`isHostOnlyKey`, 85b2 — the fixed `HOST_ONLY_KEYS`: the Host ceiling, socket, harness roots, the two
 slow-model latency bounds as one-line rows — `HOST_SCALAR_KEYS` — and the
 two failure-classification pattern lists as one-regex-per-line editors —
 `HOST_LIST_KEYS`, `data-pf-pattern-list`, saved as one JSON array on the

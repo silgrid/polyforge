@@ -234,3 +234,28 @@ test("the light tier selects at most 8 browser suites for the #484, #485 and loc
   }
   assert.deepEqual(results, [], `light selections over 8 browser suites:\n${results.join("\n")}`);
 });
+
+// polyforge#151 (85b2): the step-tier change's new paths are exercised by
+// the suites that cover their surfaces — the models page's tier column and
+// the write gate behind it (harness-settings-85: the pure projection, the
+// defined-model set, the two route extractions), the shared picker's card
+// mounts (polyforge-config-layout: the picker component and its one catalog
+// route) and the dock's override (polyforge). A new file no suite declares
+// is the light tier's blind spot this file closes (AC4).
+test("the step-tier change's new paths are declared by the suites that exercise them", () => {
+  const decls = suiteDeclarations();
+  const expected = {
+    "lib/step-tiers.ts": "e2e/harness-settings-85.mjs",
+    "lib/step-tier-defined-models.ts": "e2e/harness-settings-85.mjs",
+    "lib/models-load.ts": "e2e/harness-settings-85.mjs",
+    "lib/claude-models.ts": "e2e/harness-settings-85.mjs",
+    "app/api/polyforge/step-tiers/route.ts": "e2e/polyforge-config-layout.mjs",
+    "components/ModelCandidatePicker.tsx": "e2e/polyforge-config-layout.mjs",
+  };
+  const missing = [];
+  for (const [path, suite] of Object.entries(expected)) {
+    const suites = declarers(decls, path);
+    if (!suites.includes(suite)) missing.push(`${path}: ${suites.length > 0 ? suites.join(", ") : "no suite declares it"} (want ${suite} among them)`);
+  }
+  assert.deepEqual(missing, [], `the step-tier change's e2e coverage gaps:\n${missing.join("\n")}`);
+});

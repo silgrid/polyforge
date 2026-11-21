@@ -31,8 +31,18 @@ import type { PolyforgeStepOverride, PolyforgeWatchStatus } from "@/lib/polyforg
 import type { PolyforgeOverrideAction, PolyforgeOverrideStepRow } from "@/lib/polyforge-overrides";
 import type { PolyforgeParamsStepRow } from "@/lib/polyforge-params";
 import { useI18n } from "@/hooks/useI18n";
+import { ModelCandidatePicker } from "./ModelCandidatePicker";
+import { stepTierPickerGroups, type StepTierItem } from "@/lib/step-tiers";
 
-export function PolyforgeStepControls({ wi, profile, step, skippable, unstarted, overlay, row, params, onApplied }: {
+/** The watch snapshot's composed step-tier catalog (85b2): the override
+ *  picker's groups, degraded to a reason when the composition failed. */
+export interface PolyforgeStepTiersView {
+  tiers: StepTierItem[];
+  defined: { pi: string[]; claude: string[] };
+  reason?: string;
+}
+
+export function PolyforgeStepControls({ wi, profile, step, skippable, unstarted, overlay, row, params, stepTiers, onApplied }: {
   wi: string | null;
   profile?: string;
   step: string;
@@ -46,10 +56,13 @@ export function PolyforgeStepControls({ wi, profile, step, skippable, unstarted,
   /** the composed params row of the watch route's `paramsView` (undefined
    *  when the snapshot carries none — an older pf, a degraded read). */
   params?: PolyforgeParamsStepRow;
+  /** the composed step-tier catalog of the same snapshot (85b2 — G11: the
+   *  picker fetches nothing on selection); undefined when the composition
+   *  is not asked for or degraded to absent. */
+  stepTiers?: PolyforgeStepTiersView;
   onApplied: () => void | Promise<void>;
 }) {
   const { t } = useI18n();
-  const [harness, setHarness] = useState<"pi" | "claude">("pi");
   const [model, setModel] = useState("");
   const [paramValues, setParamValues] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
@@ -140,29 +153,27 @@ export function PolyforgeStepControls({ wi, profile, step, skippable, unstarted,
             {pending ? ` ${t("polyforge.stepControls.pending")}` : ""}
           </span>
           <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
-            <select
-              data-pf-step-controls-harness=""
-              aria-label={t("polyforge.stepControls.harness")}
-              value={harness}
-              onChange={(event) => setHarness(event.target.value === "claude" ? "claude" : "pi")}
-              style={{ ...inputStyle, flex: "0 0 auto" }}
-            >
-              <option value="pi">pi</option>
-              <option value="claude">claude</option>
-            </select>
-            <input
-              data-pf-step-controls-model=""
-              aria-label={t("polyforge.stepControls.model")}
-              placeholder={t("polyforge.stepControls.model")}
+            {/* polyforge#151 (85b2): the single-model override is the shared
+                tier-grouped picker — the catalog rides the watch snapshot
+                (G11: no read of its own), the manual fill keeps the
+                data-pf-step-controls-model hook, and the write shape stays
+                { kind: "models", step, models: [candidate] }. */}
+            <ModelCandidatePicker
+              groups={stepTiers && !stepTiers.reason ? stepTierPickerGroups(stepTiers.tiers, stepTiers.defined) : null}
+              reason={stepTiers?.reason ?? null}
+              disabled={busy}
               value={model}
-              onChange={(event) => setModel(event.target.value)}
-              style={inputStyle}
+              onChange={setModel}
+              selectLabel={t("polyforge.stepControls.model")}
+              inputLabel={t("polyforge.stepControls.model")}
+              placeholder={t("polyforge.stepControls.model")}
+              inputProps={{ "data-pf-step-controls-model": "", style: inputStyle }}
             />
             <button
               type="button"
               data-pf-step-controls-apply=""
               disabled={busy || !model.trim()}
-              onClick={() => write({ kind: "models", step, models: [`${harness}:${model.trim()}`] })}
+              onClick={() => write({ kind: "models", step, models: [model.trim()] })}
               style={{ ...buttonStyle, opacity: busy || !model.trim() ? 0.5 : 1 }}
             >
               {busy ? t("polyforge.stepControls.busy") : t("polyforge.stepControls.apply")}

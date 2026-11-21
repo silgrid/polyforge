@@ -255,9 +255,18 @@ header that does not parse renders verbatim. pf's reload classes go through
 `t()` (`restart-only`, `cli-only`, `live`, `next-claim`) with a per-card legend
 and the raw class as the badge's tooltip; an unknown class renders through the
 fallback, never as a bare token. List values (`summarize.models`) render as
-individual chips with an add input and a remove control per chip, so no
+individual chips with an add control and a remove control per chip, so no
 comma-joined long string is displayed, while `formValue()` still splits the
-comma string it builds before the write. The three daemon-column keys show the
+comma string it builds before the write. The step-model add control (85b2)
+is the shared `ModelCandidatePicker`: the manual fill first (it stays the
+row's value column), beside it a select grouped by the step-tier catalog
+(`default` first, then alphabetical, then the「未设置」group; a candidate no
+defined model answers is marked 已失效), and a failed catalog read leaves
+the manual fill with its reason. The same picker serves the workflow card's
+step candidate chain, the summarize chips' add row and the dock's
+single-model override (its catalog rides the watch snapshot — the controls
+fetch nothing on selection); each surface's write target and shape are
+unchanged. The three daemon-column keys show the
 file value beside the daemon's loaded value with a visible stale reason (and,
 when `pf --json ops status` fails, the column says the daemon is not running),
 and the summarize values are machine-level cli.toml values from

@@ -1,5 +1,7 @@
 // carries: app/settings.css
 // carries: lib/polyforge-cell-parity*
+// carries: components/ModelCandidatePicker*, app/api/polyforge/step-tiers*
+// (polyforge#151: the shared picker's two card mounts, per Cell)
 // — Settings › Polyforge: a named Cell's pane looks and works
 // like the default Cell's.
 //
@@ -43,6 +45,12 @@ const SESSION = "e2e-pf-385-named-cell";
 const SESSION_TEXT = "E2E workbench 385 named Cell parity session";
 for (const dir of [agentDir, project, publicWs, freshWs, defaultExtra, join(home, ".config", "polyforge")]) mkdirSync(dir, { recursive: true });
 writeHostSession(agentDir, { id: SESSION, cwd: project, text: SESSION_TEXT, timestamp: "2026-11-08T00:00:00.000Z" });
+// polyforge#151 (85b2, review r2 #3): the shared picker's catalog read
+// computes the defined set server-side — a fixture models.json keeps it
+// deterministic (tierdemo/legacy is the tier group's candidate).
+writeFileSync(join(agentDir, "models.json"), JSON.stringify({
+  providers: { tierdemo: { baseUrl: "https://example.invalid/v1", apiKey: "sk-test", api: "openai-completions", models: [{ id: "legacy", name: "Legacy" }] } },
+}, null, 2));
 
 // ---- stub pf: two Cells with their own files ----
 const stubDir = join(work, "stub");
@@ -75,7 +83,7 @@ let stdin = ""; if (keyWrite) { try { stdin = fs.readFileSync(0, "utf8"); } catc
 fs.appendFileSync(path.join(dir, "argv.log"), JSON.stringify({ args, stdin }) + "\\n");
 const out = (doc) => { process.stdout.write((typeof doc === "string" ? doc : JSON.stringify(doc)) + "\\n"); process.exit(0); };
 const refuse = (code, detail) => { process.stderr.write(JSON.stringify({ error: { code, detail } }) + "\\n"); process.exit(1); };
-if (args.includes("--version")) out(args.includes("--json") ? { version: "v2.20.21", capabilities: ["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1"] } : "v2.20.21");
+if (args.includes("--version")) out(args.includes("--json") ? { version: "v0.2.4", capabilities: ["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1"] } : "v0.2.4");
 let i = 0; let profile = "";
 for (; i < args.length; i += 1) {
   if (args[i] === "--json") continue;
@@ -91,6 +99,9 @@ const file = s.files[cell];
 const save = () => { fs.writeFileSync(stateFile + "." + process.pid, JSON.stringify(s)); fs.renameSync(stateFile + "." + process.pid, stateFile); };
 const nested = (a, b) => a === b || a.startsWith(b + "/") || b.startsWith(a + "/");
 const hostItems = [
+  // polyforge#151 (85b2): the Host's [step_tiers] catalog — the shared
+  // picker's grouped select comes from these
+  { key: "step_tiers.default", value: ["pi:tierdemo/legacy"], source: "file", class: "live", schema: { kind: "model-list" } },
   { key: "daemon_socket", value: "/run/pf.sock", source: "file", class: "restart-only", schema: { kind: "path" } },
   { key: "max_concurrent_jobs", value: 6, source: "file", class: "live", schema: { kind: "int", min: 1 } },
   { key: "harness_root", value: "/opt/pf", source: "file", class: "restart-only", schema: { kind: "path" } },
@@ -114,7 +125,7 @@ const items = (name) => {
     ...Object.entries(f.mapping).map(([ws, projects]) => ({ key: '[workspace."' + ws + '"]', value: projects, source: "file", section: true, class: "next-claim" })),
   ];
 };
-if (verb[0] === "version") out({ version: "v2.20.21", capabilities: ["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1"] });
+if (verb[0] === "version") out({ version: "v0.2.4", capabilities: ["cells-v1", "config-host-cell-v1", "cell-lifecycle-v1"] });
 if (verb[0] === "cell" && verb[1] === "list") out({ dir: path.join(dir, "cfg"), profiles: s.cells });
 if (verb[0] === "cell") out({ ok: true, profile: verb[2] });
 if (verb[0] === "config" && verb[1] === "list") {
@@ -157,7 +168,11 @@ if (verb[0] === "config" && (verb[1] === "set" || verb[1] === "unset")) {
 }
 if (verb[0] === "config" && verb[1] === "reload") { s.reloads.push(host ? "host" : cell); save(); out({ reloaded: [], pending: [] }); }
 if (verb[0] === "ops" && verb[1] === "status") out({ queue: { pending: 0, running: 0, max_concurrent: 6, max_configured: 6 }, supervision: { step_timeout: file ? file.step_timeout : "30m0s", stall_window: "10m0s" }, reload: { pending: [], overridden: [] } });
-if (verb[0] === "workflows") out({ workflows_dir: "/e2e/workflows", daemon_reachable: true, reason: "", workspace: opt("--cwd"), projects: Object.values(file.mapping).flatMap((p) => p.split(",")), write_capable: false, write_reason: "", bundles: [], bundle_errors: [] });
+if (verb[0] === "workflows") out({ workflows_dir: "/e2e/workflows", daemon_reachable: true, reason: "", workspace: opt("--cwd"), projects: Object.values(file.mapping).flatMap((p) => p.split(",")), write_capable: true, write_reason: "", bundles: [{
+  name: "autopilot",
+  defaults: { model_candidates: ["pi:auto-default"] },
+  steps: [{ id: "code", model_candidates: ["pi:auto-code"] }],
+}], bundle_errors: [] });
 process.stderr.write("pf: unknown command " + verb.join(" ") + "\\n"); process.exit(2);
 `);
 chmodSync(join(stubDir, "pf"), 0o755);
@@ -224,7 +239,7 @@ try {
     logFile: join(work, "server.log"),
     env: {
       PATH: `${stubDir}${delimiter}${process.env.PATH}`, HOME: home,
-      PI_CODING_AGENT_DIR: agentDir },
+      PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" },
   });
   await h.launchBrowser(() => chromium.launch());
 
@@ -448,6 +463,78 @@ try {
     assert.ok(await waitFor(async () => calls().slice(before).some((call) => call.args[1] === "public" && call.args.includes("workflows") && call.args.includes(freshWs))), "the workflow card did not re-read the Cell's new workspace");
     assert.ok(await waitFor(async () => /ws-fresh/.test(await pub.locator('section[aria-label="Workflow"]').first().innerText())), "the workflow card does not show the new workspace");
   });
+  // polyforge#151 (85b2, review r2 #3): the shared picker's two card mounts,
+  // per Cell. A tier choice from the grouped select fills the manual draft,
+  // Enter adds it, Save writes through the Cell's own scoped writer — and
+  // the other Cell's draft stays its own (no cross-Cell leak), its write
+  // carrying only its own profile and its own list.
+  await check("T1 the summarize add row is the shared picker: a tier choice saves to its own Cell only", async () => {
+    await select(dialog, "public");
+    const pub = pane(dialog, "public");
+    const publicRow = pub.locator(".polyforge-config-zone.is-summarize").first();
+    await publicRow.locator("select").first().waitFor({ state: "visible", timeout: 30_000 });
+    const before = stubState().writes.length;
+    await publicRow.locator("select").first().selectOption("pi:tierdemo/legacy");
+    await publicRow.locator('input[aria-label="summarize.models"]').press("Enter");
+    await publicRow.locator("span.polyforge-config-write-row").first().getByRole("button", { name: "Save", exact: true }).click();
+    assert.ok(await settled((st) => st.writes.length === before + 1), "the public summarize save never reached pf");
+    const publicWrite = stubState().writes[stubState().writes.length - 1];
+    assert.equal(publicWrite.cell, "public", "the public pane's write landed in another Cell");
+    assert.equal(publicWrite.key, "summarize.models", "the write's key");
+    assert.equal(publicWrite.value, JSON.stringify(["pi:sum", "pi:tierdemo/legacy"]), "the whole-key list, the tier candidate appended");
+    // the default Cell's draft is its own — the public choice never leaked
+    await select(dialog, "default");
+    const def = pane(dialog, "default");
+    const defaultRow = def.locator(".polyforge-config-zone.is-summarize").first();
+    assert.equal(await defaultRow.locator('input[aria-label="summarize.models"]').inputValue(), "", "the default Cell's add draft is not its own");
+    const beforeDefault = stubState().writes.length;
+    await defaultRow.locator("select").first().selectOption("pi:tierdemo/legacy");
+    await defaultRow.locator('input[aria-label="summarize.models"]').press("Enter");
+    await defaultRow.locator("span.polyforge-config-write-row").first().getByRole("button", { name: "Save", exact: true }).click();
+    assert.ok(await settled((st) => st.writes.length === beforeDefault + 1), "the default summarize save never reached pf");
+    const defaultWrite = stubState().writes[stubState().writes.length - 1];
+    assert.equal(defaultWrite.cell, "default", "the default pane's write landed in another Cell");
+    assert.equal(defaultWrite.value, JSON.stringify(["pi:sum", "pi:tierdemo/legacy"]), "the default Cell's own list");
+  });
+
+  await check("T2 the workflow chain add row is the shared picker: the write carries the owning workspace's cwd and yaml CAS, per Cell", async () => {
+    await select(dialog, "public");
+    const pub = pane(dialog, "public");
+    const publicCard = pub.locator('section[aria-label="Workflow"]').first();
+    const publicFold = publicCard.locator("button.polyforge-disclosure-toggle").first();
+    if ((await publicFold.getAttribute("aria-expanded")) !== "true") await publicFold.click();
+    const publicCode = publicCard.locator("li").filter({ hasText: "code" }).first();
+    await publicCode.locator("select").first().waitFor({ state: "visible", timeout: 30_000 });
+    await publicCode.locator("select").first().selectOption("pi:tierdemo/legacy");
+    await publicCode.locator('input[aria-label^="Add candidate"]').first().press("Enter");
+    await publicCode.getByRole("button", { name: "Save", exact: true }).click();
+    const publicSet = await waitForCall((call) => call.args.includes("set") && call.args.some((entry) => String(entry).startsWith("steps.")));
+    assert.ok(publicSet, "the public chain save never reached pf");
+    assert.deepEqual(withoutState(publicSet.args), [
+      "--profile", "public", "--json", "config", "set", "steps.pub.code.models",
+      JSON.stringify(["pi:tierdemo/legacy"]), "--cwd", publicWs,
+    ], "the chain write keeps its target and shape: the owning workspace's cwd, the Cell's profile");
+    assert.equal(publicSet.args[publicSet.args.indexOf("--expect-state") + 1],
+      JSON.stringify({ file_sha256: "yaml-public", values: {} }),
+      "the owning workspace's yaml CAS travels with the chain write");
+    // the default Cell's chain draft is its own, its write its own Cell's
+    await select(dialog, "default");
+    const def = pane(dialog, "default");
+    const defaultCard = def.locator('section[aria-label="Workflow"]').first();
+    const defaultFold = defaultCard.locator("button.polyforge-disclosure-toggle").first();
+    if ((await defaultFold.getAttribute("aria-expanded")) !== "true") await defaultFold.click();
+    const defaultCode = defaultCard.locator("li").filter({ hasText: "code" }).first();
+    await defaultCode.locator("select").first().waitFor({ state: "visible", timeout: 30_000 });
+    assert.equal(await defaultCode.locator('input[aria-label^="Add candidate"]').first().inputValue(), "", "the default Cell's chain draft is not its own");
+    await defaultCode.locator("select").first().selectOption("pi:tierdemo/legacy");
+    await defaultCode.locator('input[aria-label^="Add candidate"]').first().press("Enter");
+    await defaultCode.getByRole("button", { name: "Save", exact: true }).click();
+    const defaultSet = await waitForCall((call) => call.args.includes("set") && call.args.some((entry) => String(entry).startsWith("steps.")) && call.args.includes("--cwd") && call.args.includes(project));
+    assert.ok(defaultSet, "the default chain save never reached pf");
+    assert.ok(defaultSet.args.includes("--profile") && defaultSet.args[defaultSet.args.indexOf("--profile") + 1] === "default", "the default chain write is not the default Cell's");
+    assert.ok(defaultSet.args.includes(project), "the default chain write does not carry the default Cell's own workspace");
+  });
+
   await desktop.context.close();
 
   await check("N6 a 420px viewport shows both panes without horizontal overflow", async () => {
