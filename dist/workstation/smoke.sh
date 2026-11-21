@@ -614,7 +614,10 @@ for name in ("api_key", "key_hash", "token"):
 	compose_ext up -d >/dev/null
 	cid=$(compose_ext ps -q workstation)
 	[ -n "$cid" ] || die "no workstation container was created for the restart"
-	poll_until "pf supervise to run inside (restart)" 120 \
+	# 240 s: the restart poll measured tight once under the harness's own
+	# 8-way engine parallelism (the machine was up — its heartbeat had
+	# answered — only the ps probe was slow); the settled state is unchanged
+	poll_until "pf supervise to run inside (restart)" 240 \
 		docker exec "$cid" sh -c 'ps -e -o args= | grep -q "[p]f supervise"'
 	[ "$(record_of)" = "$first_record" ] ||
 		die "the record changed after the restart — the completed first boot must skip itself (the choice is made exactly once)"
