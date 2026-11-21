@@ -61,7 +61,7 @@ func TestCountedFailureItemKeepsTheLatterNextToItsSubject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const clause = "`rate_limited` and `upstream_transient` within its bound are not counted (for the latter, "
+	const clause = "`rate_limited` and `upstream_transient` are not counted (for the latter, "
 	if !strings.Contains(string(raw), clause) {
 		t.Fatalf("01-workflow-skills.md: \"(for the latter, …)\" must directly follow the upstream_transient clause it refers to")
 	}

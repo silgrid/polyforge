@@ -111,6 +111,12 @@ var liveCases = []liveCase{
 	// interrupted response stream and its server-overload text.
 	{"upstream-stream-interrupted", `Upstream response stream was interrupted`, 0, FailUpstreamTransient, true},
 	{"server-overload", `The service is currently unable to handle additional requests due to server overload. Please retry later. Request id: 20261114172154000123456789`, 0, FailRateLimited, true},
+	// polyforge#210: the gateway's own "Service temporarily unavailable"
+	// 503 body (#147's glm text) is a builtin upstream transient — the
+	// same model after the backoff; the model-subject text stays
+	// model_error and switches candidates (AC2's counter-example).
+	{"glm-503-service-temporarily-unavailable", serviceUnavailable503Body, 0, FailUpstreamTransient, true},
+	{"model-temporarily-unavailable", `503 {"error":{"message":"The model is temporarily unavailable, please try again"}}`, 0, FailModelError, false},
 	// allowance/auth texts are archived as the exit path archives them
 	// (exit_model_class) and switch at once; an unclassified error turn
 	// stays model_error — model class too, switching to the next candidate
