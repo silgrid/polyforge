@@ -36,10 +36,18 @@ export function ClaudeCustomModels({ onRefresh }: { onRefresh?: () => void }) {
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
-    const response = await fetch("/api/harness/claude/model");
-    const data = await response.json();
-    if (!response.ok || data.error) throw new Error(data.message ?? data.error ?? `HTTP ${response.status}`);
-    setNames(Array.isArray(data.data?.customModels) ? data.data.customModels : []);
+    try {
+      const response = await fetch("/api/harness/claude/model");
+      const data = await response.json();
+      if (!response.ok || data.error) throw new Error(data.message ?? data.error ?? `HTTP ${response.status}`);
+      setNames(Array.isArray(data.data?.customModels) ? data.data.customModels : []);
+    } catch (cause) {
+      // A failed read must not leave the section loading forever (the page's
+      // other scenarios read its text): the editor offers the empty state
+      // with the reason beside it.
+      setNames([]);
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
   }, []);
 
   useEffect(() => {
