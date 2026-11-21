@@ -1466,6 +1466,7 @@ func TestWorkstationSmokeHostDependencies(t *testing.T) {
 		"podman-image.txt":       "sha256:dep-image-stub\n",
 		"components-current.txt": "releases/v0.2.4-dev.1\n",
 		"components-digest.txt":  "dep-digest-stub\n",
+		"components-stat.txt":    "1795239142 424242\n",
 	} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
