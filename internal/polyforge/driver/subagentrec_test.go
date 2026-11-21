@@ -396,4 +396,7 @@ func TestSubagentTimedOutResultArchivesFailed(t *testing.T) {
 	if _, has := meta["exitCode"]; has {
 		t.Fatalf("a null exit code stays absent from the meta: %v", meta)
 	}
+	if meta["timedOut"] != true || meta["timeoutSeconds"] != float64(1) {
+		t.Fatalf("the archive must carry the timeout facts: %v", meta)
+	}
 }
