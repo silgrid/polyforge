@@ -2,7 +2,7 @@
 """review-firstpass — first-pass review rate by plan write-set size and by implementer.
 
 Usage:
-  python3 -I tools/review-firstpass <capsules-dir> [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--csv <file>] [--cohort <manifest.json>]
+  python3 -I tools/review-firstpass <capsules-dir> [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--csv <file>] [--cohort <manifest.json>] [--events <events-dir>]
 
 Read-only over <capsules-dir> (a workspace's capsules/, one directory per work
 item run). It prints two tables and, with --csv, writes one row per run.
@@ -16,7 +16,8 @@ an owner-confirmed cohort manifest (JSON) groups the collected runs —
                  "source": "<where the pinned numbers come from>"},
    "control": ["<capsule dir name>", ...],                      // unsplit runs
    "split": [{"origin": "<wi id>", "epic": "<capsule dir>",
-              "children": ["<capsule dir>", ...]}]}            // 原票/子票对应
+              "children": ["<capsule dir>", ...]}],            // 原票/子票对应
+   "arms": {"<trial arm>": ["<capsule dir name>", ...], ...}} // trial groups
 
 — and reports each group's first-pass rate beside the plan-size buckets
 (a reviewed run with no parseable plan counts `unknown`), the epic
@@ -99,16 +100,86 @@ when every unit says subagent, `main` when every unit says main, `mixed` for
 both, `unrecorded` when no unit records one (runs before the field, lanes
 whose build reports no units, and every current-protocol run, whose build
 leaves no result.json — its units.json is not read for this).
+
+With --events (a Cell's events directory, `<data dir>/cells/<cell>/events`)
+the report gains the delivery block (polyforge#209), in fixed calibers over
+the exported event file:
+
+  run set      the develop lane's capsules: a completed terminal is in;
+               an absent event file is listed `events missing` and its
+               event fields are `unknown`; events with no completed
+               terminal are listed `not completed (excluded)`.
+  wall         first job_started (else the file's first stamp) to the
+               completed terminal. p90 is nearest-rank, median
+               statistics.median; both are stated.
+  owner wait   awaiting_owner (first per question) to its reply / resume /
+               next dispatch / terminal, plus blocked to its resume;
+               overlaps merged, so no second is subtracted twice.
+  effective    wall minus the owner wait inside it.
+  per file     effective minutes / approved size (Q2: the first build
+               section's start to the last build before the first sync,
+               no sync = the last build; git numstat across the repos);
+               the tier median and the pooled sum over the tier are both
+               printed; `size unknown` runs print `unknown`, a zero-size
+               run is its own line and takes no per-file time.
+  rework       every rewind's named gate: all dispatches started after
+               the rewind and before the gate's next step_done, over the
+               effective time (Q7, ruling 5); a dispatch ends at its
+               step's step_done/step_failed/gate_verdict, the next
+               same-step step_started, a rewind or the terminal, and the
+               owner wait inside it is subtracted.
+  first pass   the stamped review sections (the existing read).
+  infra        every step_started is a dispatch; every step_failed is a
+               failed dispatch, owned by the same step's most recent
+               step_started model+effort (modelhealth's identity rule);
+               rate per model and the all line.
+  switches     candidate_switched events whose cause is model-class
+               (model_error, model_hung, step_timeout_slow_model,
+               exit_model_class, ended_without_result); the 503 subcount
+               reads the step_failed just before it (error_text, else
+               detail) for `503` / `service temporarily unavailable`.
+  estimate     only inside `## 分析` -> `### 1.`, one line
+               `估算：<repo> 新增 N 个文件、修改 M 个文件、单元 K 个` per
+               repo; a malformed or duplicated line voids that repo only;
+               no estimate prints `none`, a missing work item `unknown`;
+               the summary counts `no estimate`, `estimate unknown` and
+               `approved unknown` apart (names included), and an estimate
+               of zero has no ratio.
+  throughput   build's output tokens over its generation seconds: each
+               build spawn's journal transcript (else session/<basename>),
+               the assistant records inside [started_at, next spawn's
+               started_at); a missing transcript or an empty window is
+               that dispatch's unknown, and a ticket with no measured
+               dispatch is unknown — never an estimate, no partial figure
+               is dressed as a whole-ticket one either. Claude's
+               output_tokens and pi's output are both read, claude's
+               records deduped by message.id (stepcall/usage.go).
+
+A manifest carrying `arms` prints one `== arm <name> ==` block per arm,
+names alphabetically: the same run-set line, tier / infra / switch /
+estimate summary over the arm's enterable runs, one detail row per run in
+the manifest's order, and the missing names (counted, excluded) — never
+dropped. An arm's run set is the delivery block's: develop only, a
+completed terminal or an absent event file enters, a run with events but no
+completed terminal is named `not completed (excluded)` and stays out of
+every number. Without
+--events the arm block still prints size and first pass, and its event
+fields are `unknown`; the infra, switch and estimate summary lines say
+`n/a (no events dir)`. The delivery block comes before the cohort / arm
+blocks.
 """
 import argparse
 import csv
 from datetime import datetime
 import glob
 import json
+import math
 import os
 import re
 import statistics
+import subprocess
 import sys
+import urllib.parse
 
 BUCKETS = (('<=7', 0, 7), ('8-22', 8, 22), ('>22', 23, None))
 IMPLEMENTERS = ('main', 'subagent', 'mixed', 'unrecorded')
@@ -455,6 +526,717 @@ def time_group_line(metrics):
           f'real endpoint N/A ({len(metrics)} runs with no offline record)')
     return l1 + '\n' + l2
 
+# ---------------------------------------------------------------- delivery metrics
+# The delivery block (polyforge#209): the same fixed calibers over the
+# daemon's event file — wall clock, owner-wait-adjusted effective time,
+# per-file delivery, rework, infra failures by model and the model-class
+# candidate switches with the 503 subcount. Everything below is a pure
+# read of the exported files; an unreadable input is `unknown`, never a
+# guessed number.
+
+MODEL_CLASS_CAUSES = ('model_error', 'model_hung', 'step_timeout_slow_model',
+                      'exit_model_class', 'ended_without_result')
+SWITCH_503 = re.compile(r'(?i)\b503\b|service temporarily unavailable')
+START_UNKNOWN = ('（起点未知）', '(start unknown)')
+REPO_LINE = re.compile(r'^- `([^`]+)`: `([^`]*)` → `([^`]*)`')
+RECEIPT_KEYS = ('approved_files', 'wall_min', 'owner_wait_min', 'effective_min',
+                'build_wall_min', 'build_rounds', 'review_rejections',
+                'verification_rejections', 'rework_min', 'failed_dispatches',
+                'out_tok_s', 'estimate_files', 'estimate_ratio')
+
+
+def iso_ts(s):
+    """an RFC3339 stamp (RFC3339Nano included) as a naive UTC datetime;
+    the fractional seconds are read to microseconds."""
+    m = re.match(r'(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?Z?$', s or '')
+    if not m:
+        return None
+    frac = (m.group(7) or '')[:6].ljust(6, '0')
+    return datetime(*[int(x) for x in m.groups()[:6]], int(frac))
+
+
+def load_events(cap, events_dir):
+    """the capsule's work-item event entries, by seq; None = no events
+    directory, no work_item_id, or no readable event file (unknown)."""
+    if not events_dir:
+        return None
+    cj = jload(os.path.join(cap, 'capsule.json')) or {}
+    wi = cj.get('work_item_id')
+    if not wi:
+        return None
+    path = os.path.join(events_dir, 'wi-' + urllib.parse.quote(wi, safe='') + '.jsonl')
+    try:
+        with open(path, errors='replace') as f:
+            lines = f.read().split('\n')
+    except OSError:
+        return None
+    out = []
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(e, dict):
+            continue
+        body = e.get('body')
+        out.append({'seq': int(e.get('seq') or 0), 'at': iso_ts(e.get('at')),
+                    'kind': e.get('kind') or '', 'body': body if isinstance(body, dict) else {}})
+    out.sort(key=lambda e: e['seq'])
+    return out
+
+
+def event_body(e):
+    return e['body'] or {}
+
+
+def merge_intervals(iv):
+    out = []
+    for a, b in sorted(iv):
+        if out and a <= out[-1][1]:
+            out[-1] = (out[-1][0], max(out[-1][1], b))
+        else:
+            out.append((a, b))
+    return out
+
+
+def owner_wait_intervals(events):
+    """the intervals the ticket spent waiting on the owner: awaiting_owner
+    (first per question) to its reply / resume / next dispatch / terminal,
+    and blocked to its resume; overlaps merged (Q5, #209's ruling 5)."""
+    iv, seen = [], set()
+    for i, e in enumerate(events):
+        b = event_body(e)
+        if e['kind'] == 'awaiting_owner':
+            q = b.get('question_id') or b.get('ask_at') or ''
+            key = q or e['seq']
+            if key in seen:
+                continue
+            seen.add(key)
+            for nxt in events[i + 1:]:
+                nb = event_body(nxt)
+                if nxt['kind'] == 'owner_message':
+                    if b.get('ask_at') and nb.get('ask_at') and nb.get('ask_at') != b.get('ask_at'):
+                        continue
+                    iv.append((e['at'], nxt['at']))
+                    break
+                if nxt['kind'] in ('resumed', 'step_started', 'terminal'):
+                    iv.append((e['at'], nxt['at']))
+                    break
+        elif e['kind'] == 'blocked':
+            for nxt in events[i + 1:]:
+                if nxt['kind'] in ('resumed', 'step_started', 'terminal'):
+                    iv.append((e['at'], nxt['at']))
+                    break
+    return merge_intervals([(a, b) for a, b in iv if a is not None and b is not None and b >= a])
+
+
+def overlap_s(start, end, intervals):
+    if start is None or end is None:
+        return 0.0
+    total = 0.0
+    for a, b in intervals:
+        lo, hi = max(start, a), min(end, b)
+        if hi > lo:
+            total += (hi - lo).total_seconds()
+    return total
+
+
+def dispatch_records(events, intervals):
+    """one record per step_started: its step, model identity, net duration.
+    A dispatch ends at its step's step_done / step_failed / gate_verdict,
+    the next same-step step_started, a rewind or the terminal; the owner
+    wait inside the span is subtracted (ruling 5)."""
+    out = []
+    for i, e in enumerate(events):
+        if e['kind'] != 'step_started':
+            continue
+        b = event_body(e)
+        step = b.get('step') or ''
+        model = b.get('model') or ''
+        effort = b.get('effort') or ''
+        ident = model + (':' + effort if effort else '') if model else ''
+        end = None
+        for nxt in events[i + 1:]:
+            nb = event_body(nxt)
+            if nxt['kind'] in ('step_done', 'step_failed', 'gate_verdict') and nb.get('step') == step:
+                end = nxt['at']
+                break
+            if nxt['kind'] in ('rewind', 'terminal'):
+                end = nxt['at']
+                break
+            if nxt['kind'] == 'step_started' and nb.get('step') == step:
+                end = nxt['at']
+                break
+        if end is None or e['at'] is None:
+            continue
+        dur = max(0.0, (end - e['at']).total_seconds() - overlap_s(e['at'], end, intervals))
+        out.append({'step': step, 'model': ident, 'start': e['at'], 'end': end,
+                    'seq': e['seq'], 'dur': dur})
+    return out
+
+
+def wall_s(events):
+    """first job_started (else the file's first stamp) to the completed
+    terminal; None when the run did not complete or has no endpoint."""
+    if not events:
+        return None
+    start = next((e['at'] for e in events if e['kind'] == 'job_started'), None)
+    if start is None:
+        start = next((e['at'] for e in events if e['at'] is not None), None)
+    end = next((e['at'] for e in events
+                if e['kind'] == 'terminal' and event_body(e).get('status') == 'completed'), None)
+    if start is None or end is None or end < start:
+        return None
+    return (end - start).total_seconds()
+
+
+def completed_run(events):
+    return any(e['kind'] == 'terminal' and event_body(e).get('status') == 'completed' for e in events)
+
+
+def rework_s(events, recs):
+    """every rewind's named gate: all dispatches started after the rewind
+    and before the gate's next step_done (Q7, ruling 5)."""
+    total = 0.0
+    for i, e in enumerate(events):
+        if e['kind'] != 'rewind':
+            continue
+        gate = event_body(e).get('gate') or ''
+        done = next((n for n in events[i + 1:]
+                     if n['kind'] == 'step_done' and event_body(n).get('step') == gate), None)
+        if done is None:
+            continue
+        for r in recs:
+            if r['seq'] > e['seq'] and r['seq'] < done['seq']:
+                total += r['dur']
+    return total
+
+
+def infra_counts(events):
+    """{model identity: dispatched}, {model identity: failed}: the failure
+    belongs to the same step's most recent step_started (modelhealth's
+    identity rule; step_failed.candidate is never read)."""
+    dispatched, failed, last = {}, {}, {}
+    total_d, total_f = 0, 0
+    for e in events:
+        b = event_body(e)
+        if e['kind'] == 'step_started':
+            total_d += 1
+            model = b.get('model') or ''
+            effort = b.get('effort') or ''
+            ident = model + (':' + effort if effort else '') if model else ''
+            last[b.get('step')] = ident
+            if ident:
+                dispatched[ident] = dispatched.get(ident, 0) + 1
+        elif e['kind'] == 'step_failed':
+            total_f += 1
+            ident = last.get(b.get('step'))
+            if ident:
+                failed[ident] = failed.get(ident, 0) + 1
+    return dispatched, failed, total_d, total_f
+
+
+def switch_counts(events):
+    """model-class candidate switches, and how many of them carried a 503
+    text in the step_failed just before (Q6, ruling 5)."""
+    switches = five03 = 0
+    for i, e in enumerate(events):
+        if e['kind'] != 'candidate_switched':
+            continue
+        b = event_body(e)
+        if b.get('cause') not in MODEL_CLASS_CAUSES:
+            continue
+        switches += 1
+        for prev in reversed(events[:i]):
+            if prev['kind'] == 'step_failed' and event_body(prev).get('step') == b.get('step'):
+                text = event_body(prev).get('error_text') or event_body(prev).get('detail') or ''
+                if SWITCH_503.search(text):
+                    five03 += 1
+                break
+    return switches, five03
+
+
+def handoff_sections(cap):
+    hb = os.path.join(cap, 'artifacts', 'handoff.md')
+    if not os.path.exists(hb):
+        return []
+    with open(hb, errors='replace') as f:
+        text = f.read()
+    out = []
+    for sec in [s for s in ('\n---\n' + text).split('\n---\n') if s.strip()]:
+        step = section_row(sec, ('步骤',)) or section_row(sec, ('Step',))
+        if not step:
+            continue
+        try:
+            rnd = int(section_row(sec, ('轮次',)) or section_row(sec, ('Round',)))
+        except ValueError:
+            rnd = 0
+        repos = []
+        for line in sec.split('\n'):
+            m = REPO_LINE.match(line.strip())
+            if m:
+                repos.append(m.groups())
+        out.append({'step': step, 'round': rnd, 'repos': repos})
+    return out
+
+
+def build_rounds(cap):
+    rounds = [s['round'] for s in handoff_sections(cap) if s['step'] == 'build' and s['round']]
+    return max(rounds) if rounds else None
+
+
+def approved_files(cap):
+    """approved size (Q2): first build section's start to the last build
+    section before the first sync (no sync: the last build), as git
+    numstat's non-empty lines across the repos; None = unknown."""
+    secs = handoff_sections(cap)
+    builds = [s for s in secs if s['step'] == 'build']
+    if not builds:
+        return None
+    base = {repo: start for repo, start, _ in builds[0]['repos']}
+    sync_at = next((i for i, s in enumerate(secs) if s['step'] == 'sync'), None)
+    cand = [s for s in (secs[:sync_at] if sync_at is not None else secs) if s['step'] == 'build']
+    if not cand:
+        return None
+    total = 0
+    for repo, _, head in cand[-1]['repos']:
+        start = base.get(repo)
+        if not start or not head or start in START_UNKNOWN or head in START_UNKNOWN:
+            return None
+        repo_dir = os.path.join(cap, 'repos', repo)
+        if not os.path.isdir(repo_dir):
+            return None
+        cmd = ['git', '-C', repo_dir, '--no-optional-locks', 'diff', '--numstat',
+               '--find-renames', '--no-ext-diff', '--no-textconv', start, head]
+        try:
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if p.returncode != 0:
+            return None
+        total += sum(1 for line in p.stdout.splitlines() if line.strip())
+    return total
+
+
+def parse_estimate(cap):
+    """the ticket's estimate lines (ruling 1): only `## 分析` -> `### 1.`,
+    one `估算：<repo> 新增 N 个文件、修改 M 个文件、单元 K 个` per repo;
+    a malformed or duplicated repo is no estimate for that repo. Returns
+    None (work item unreadable), 'none', or the file count summed."""
+    wj = jload(os.path.join(cap, 'runtime-state', 'work-item.json'))
+    if not isinstance(wj, dict):
+        return None
+    lines = (wj.get('content') or '').split('\n')
+    inside, subsection, sec_started = False, False, False
+    valid, poisoned, bad_all = {}, set(), False
+    dim = re.compile(r'^估算：(\S+) 新增 (\d+) 个文件、修改 (\d+) 个文件、单元 (\d+) 个$')
+    loose = re.compile(r'^估算[：:]\s*(\S+)?')
+    for line in lines:
+        ln = line.rstrip()
+        if ln.startswith('## '):
+            inside = ln.strip() == '## 分析'
+            subsection, sec_started = False, inside
+            continue
+        if not inside:
+            continue
+        if ln.startswith('### '):
+            subsection = ln.strip().startswith('### 1.')
+            continue
+        if not subsection:
+            continue
+        text = ln.strip()
+        if not text.startswith('估算'):
+            continue
+        m = dim.match(text)
+        if not m:
+            lm = loose.match(text)
+            repo = lm.group(1) if lm and lm.group(1) else ''
+            if repo:
+                poisoned.add(repo)
+            else:
+                bad_all = True
+            continue
+        repo = m.group(1)
+        if repo in valid:
+            poisoned.add(repo)
+        else:
+            valid[repo] = int(m.group(2)) + int(m.group(3))
+    if bad_all:
+        return 'none'
+    counts = [n for repo, n in valid.items() if repo not in poisoned]
+    return sum(counts) if counts else 'none'
+
+
+def _usage_of(rec):
+    msg = rec.get('message') or {}
+    if not isinstance(msg, dict):
+        return None
+    return msg.get('usage') if isinstance(msg.get('usage'), dict) else None
+
+
+def _output_tokens(rec):
+    """the two harness shapes stepcall/usage.go reads: claude's
+    type=assistant/output_tokens and pi's type=message/role=assistant/output."""
+    u = _usage_of(rec)
+    if u is None:
+        return None
+    if rec.get('type') == 'assistant':
+        return u.get('output_tokens')
+    if rec.get('type') == 'message':
+        msg = rec.get('message') or {}
+        if isinstance(msg, dict) and msg.get('role') == 'assistant':
+            return u.get('output')
+    return None
+
+
+def throughput(cap):
+    """build's output tok/s over its spawn windows: each build spawn's
+    transcript, or session/<basename>; a missing transcript or a window
+    with no assistant record is that dispatch's unknown. The ticket is
+    unknown when no dispatch has a measurable window or a transcript
+    cannot be parsed (Q3, ruling 6)."""
+    jp = os.path.join(cap, 'runtime-state', 'spawn-journal.jsonl')
+    try:
+        with open(jp, errors='replace') as f:
+            raw = f.read().split('\n')
+    except OSError:
+        return None
+    spawns = []
+    for line in raw:
+        if not line.strip():
+            continue
+        try:
+            e = json.loads(line)
+        except ValueError:
+            return None
+        if isinstance(e, dict) and e.get('step_id') == 'build':
+            spawns.append(e)
+    spawns.sort(key=lambda e: e.get('started_at') or '')
+    if not spawns:
+        return None
+    total_out, total_gen, measured = 0, 0.0, 0
+    for i, sp in enumerate(spawns):
+        start = iso_ts(sp.get('started_at'))
+        end = iso_ts(spawns[i + 1].get('started_at')) if i + 1 < len(spawns) else None
+        if start is None:
+            continue
+        tr = sp.get('transcript') or ''
+        path = tr if tr and os.path.exists(tr) else os.path.join(cap, 'session', os.path.basename(tr)) if tr else ''
+        if not path or not os.path.exists(path):
+            continue
+        try:
+            with open(path, errors='replace') as f:
+                recs = [json.loads(x) for x in f.read().split('\n') if x.strip()]
+        except (OSError, ValueError):
+            return None
+        prev, out, gen, seen = None, 0, 0.0, set()
+        for rec in recs:
+            if not isinstance(rec, dict):
+                continue
+            ts = iso_ts(rec.get('timestamp'))
+            if ts is None:
+                continue
+            if ts < start or (end is not None and ts >= end):
+                prev = ts
+                continue
+            tokens = _output_tokens(rec)
+            if tokens is not None:
+                msg = rec.get('message') or {}
+                mid = msg.get('id') if isinstance(msg, dict) else None
+                if rec.get('type') == 'assistant' and isinstance(mid, str) and mid:
+                    if mid in seen:
+                        prev = ts
+                        continue
+                    seen.add(mid)
+                if tokens > 0:
+                    out += tokens
+                    if prev is not None and ts > prev:
+                        gen += (ts - prev).total_seconds()
+            prev = ts
+        if out > 0 and gen > 0:
+            total_out += out
+            total_gen += gen
+            measured += 1
+    if not measured or total_gen <= 0:
+        return None
+    return total_out / total_gen
+
+
+def estimate_ratio(est, approved):
+    if isinstance(est, int) and est > 0 and isinstance(approved, int) and approved >= 0:
+        return approved / est
+    return None
+
+
+def delivery_row(cap, row, events):
+    approved = approved_files(cap)
+    if approved is None:
+        tier = 'unknown'
+    elif approved == 0:
+        tier = '0'
+    else:
+        tier = bucket(approved) or 'unknown'
+    est = parse_estimate(cap)
+    d = {'capsule': row['capsule'], 'lane': row['lane'], 'approved': approved, 'tier': tier,
+         'first_review': row['first_review'], 'build_rounds': build_rounds(cap),
+         'estimate': est, 'estimate_ratio': estimate_ratio(est, approved), 'events': events,
+         'wall': None, 'owner_wait': None, 'effective': None, 'build_wall': None,
+         'review_rejections': None, 'verification_rejections': None, 'rework': None,
+         'failed_dispatches': None, 'throughput': throughput(cap)}
+    if events is None:
+        return d
+    iv = owner_wait_intervals(events)
+    wall = wall_s(events)
+    recs = dispatch_records(events, iv)
+    d['wall'] = wall
+    if wall is not None:
+        first = next((e['at'] for e in events if e['kind'] == 'job_started'), None)
+        if first is None:
+            first = next((e['at'] for e in events if e['at'] is not None), None)
+        end = next((e['at'] for e in events
+                    if e['kind'] == 'terminal' and event_body(e).get('status') == 'completed'), None)
+        d['owner_wait'] = overlap_s(first, end, iv)
+        d['effective'] = max(0.0, wall - d['owner_wait'])
+    d['build_wall'] = sum(r['dur'] for r in recs if r['step'] == 'build')
+    d['review_rejections'] = sum(1 for e in events
+                                 if e['kind'] == 'gate_verdict' and event_body(e).get('step') == 'review')
+    d['verification_rejections'] = sum(
+        1 for e in events if e['kind'] == 'gate_verdict' and event_body(e).get('step') == 'verification')
+    d['rework'] = rework_s(events, recs)
+    d['failed_dispatches'] = sum(1 for e in events if e['kind'] == 'step_failed')
+    return d
+
+
+def fmt_float(x, suffix=''):
+    return 'unknown' if x is None else f'{x:.1f}{suffix}'
+
+
+def fmt_min(seconds):
+    return 'unknown' if seconds is None else f'{seconds / 60:.1f}m'
+
+
+def fmt_estimate(est, ratio):
+    if est is None:
+        return 'estimate unknown'
+    if est == 'none':
+        return 'estimate none'
+    r = 'unknown' if ratio is None else f'{ratio:.2f}'
+    return f'estimate {est} (ratio {r})'
+
+
+def delivery_detail_line(d):
+    size = 'unknown' if d['approved'] is None else str(d['approved'])
+    return (f"{d['capsule']}: size {size} ({d['tier']}), wall {fmt_min(d['wall'])}, "
+            f"owner wait {fmt_min(d['owner_wait'])}, build wall {fmt_min(d['build_wall'])}, "
+            f"build rounds {'unknown' if d['build_rounds'] is None else d['build_rounds']}, "
+            f"first review {d['first_review'] or '-'}, "
+            f"review rejections {fmt_int(d['review_rejections'])}, "
+            f"verification rejections {fmt_int(d['verification_rejections'])}, "
+            f"rework {fmt_min(d['rework'])}, failed dispatches {fmt_int(d['failed_dispatches'])}, "
+            f"output {fmt_float(d['throughput'])} tok/s, {fmt_estimate(d['estimate'], d['estimate_ratio'])}")
+
+
+def fmt_int(x):
+    return 'unknown' if x is None else str(x)
+
+
+def nearest_p90(vals):
+    s = sorted(vals)
+    return s[max(0, math.ceil(0.9 * len(s)) - 1)]
+
+
+def tier_line(name, rows):
+    n = len(rows)
+    if n == 0:
+        return f'{name}: n 0'
+    known = [r for r in rows if r['wall'] is not None and r['effective'] is not None]
+    wall_min = [r['wall'] / 60 for r in known]
+    eff = [r['effective'] / 60 for r in known]
+    judged = [r for r in rows if r['first_review'] in ('PASS', 'FAIL')]
+    fp = f"first-pass {sum(1 for r in judged if r['first_review'] == 'PASS')}/{len(judged)}"
+    if not known:
+        return (f'{name}: n {n} (wall known 0), wall median unknown p90 unknown, '
+                f'per-file unknown, rework unknown, {fp}')
+    head = (f'{name}: n {n} (wall known {len(known)}), '
+            f'wall median {statistics.median(wall_min):.1f}m p90 {nearest_p90(wall_min):.1f}m')
+    sized = [r for r in rows if isinstance(r['approved'], int) and r['approved'] > 0
+             and r['effective'] is not None]
+    if name in ('size unknown', 'size 0') or not sized:
+        pf = 'per-file unknown'
+    else:
+        per = [r['effective'] / 60 / r['approved'] for r in sized]
+        pooled = sum(r['effective'] for r in sized) / sum(r['approved'] for r in sized) / 60
+        pf = f'per-file median {statistics.median(per):.1f}m pooled {pooled:.1f}m'
+    rw = [r for r in known if r['rework'] is not None]
+    eff_total = sum(r['effective'] for r in rw)
+    if rw and eff_total > 0:
+        rew = sum(r['rework'] for r in rw)
+        rework = f'rework {100 * rew / eff_total:.1f}% ({rew / 60:.1f}m of {eff_total / 60:.1f}m)'
+    else:
+        rework = 'rework unknown'
+    return f'{head}, {pf}, {rework}, {fp}'
+
+
+def group_lines(rows):
+    out = []
+    for name in ('<=7', '8-22', '>22'):
+        out.append(tier_line(name, [r for r in rows if r['tier'] == name]))
+    unk = [r for r in rows if r['tier'] == 'unknown']
+    if unk:
+        out.append(tier_line('size unknown', unk))
+    zero = [r for r in rows if r['tier'] == '0']
+    if zero:
+        out.append(tier_line('size 0', zero))
+    out.append(tier_line('total', rows))
+    return out
+
+
+def infra_lines(rows):
+    dispatched, failed, td, tf = {}, {}, 0, 0
+    for r in rows:
+        if r['events'] is None:
+            continue
+        d, f, rd, rf = infra_counts(r['events'])
+        td += rd
+        tf += rf
+        for k, v in d.items():
+            dispatched[k] = dispatched.get(k, 0) + v
+        for k, v in f.items():
+            failed[k] = failed.get(k, 0) + v
+    names = sorted(set(dispatched) | set(failed))
+    parts = []
+    for m in names:
+        d, f = dispatched.get(m, 0), failed.get(m, 0)
+        parts.append(f'{m} {d} dispatches, {f} failed ({100 * f / d if d else 0.0:.1f}%)')
+    return [('dispatches by model: ' + '; '.join(parts)) if parts else 'dispatches by model: none',
+            f'all {td} dispatches, {tf} failed ({100 * tf / td if td else 0.0:.1f}%)']
+
+
+def switch_line(rows):
+    sw, t = 0, 0
+    for r in rows:
+        if r['events'] is None:
+            continue
+        s, f = switch_counts(r['events'])
+        sw += s
+        t += f
+    return f'candidate switches (model-class): {sw}, of which 503 text: {t}'
+
+
+def estimate_line(rows):
+    with_est = [r for r in rows if isinstance(r['estimate'], int)]
+    ratios = [r['estimate_ratio'] for r in with_est if r['estimate_ratio'] is not None]
+    none = sorted(r['capsule'] for r in rows if r['estimate'] == 'none')
+    unknown = sorted(r['capsule'] for r in rows if r['estimate'] is None)
+    unknown_approved = sum(1 for r in with_est if r['approved'] is None)
+    if ratios:
+        med = statistics.median(ratios)
+        dist = f'ratio median {med:.2f} min {min(ratios):.2f} max {max(ratios):.2f}'
+    else:
+        dist = 'ratio median unknown min unknown max unknown'
+    s = f'estimate vs approved: {len(with_est)} with estimate, {dist}; no estimate {len(none)}'
+    if none:
+        s += ': ' + ', '.join(none)
+    s += f'; estimate unknown {len(unknown)}'
+    if unknown:
+        s += ': ' + ', '.join(unknown)
+    return s + f'; approved unknown {unknown_approved}'
+
+
+def summary_lines(rows, events_dir):
+    out = group_lines(rows)
+    if events_dir:
+        out.extend(infra_lines(rows))
+        out.append(switch_line(rows))
+        out.append(estimate_line(rows))
+    else:
+        out.extend(['n/a (no events dir)'] * 3)
+    return out
+
+
+def delivery_rows_for(caps_dir, rows, events_dir):
+    out = []
+    for r in rows:
+        cap = os.path.join(caps_dir, r['capsule'])
+        out.append(delivery_row(cap, r, load_events(cap, events_dir)))
+    return out
+
+
+def run_set(caps_dir, rows, events_dir):
+    """the delivery/arm run set (Q4): the develop lane's capsules; an
+    absent event file is included as `events missing`, a run with events
+    but no completed terminal is excluded and named. One implementation,
+    used by the delivery block and every arm."""
+    dev = [r for r in rows if r['lane'] == 'develop']
+    completed, missing, excluded = [], [], []
+    for r in dev:
+        ev = load_events(os.path.join(caps_dir, r['capsule']), events_dir)
+        if ev is None:
+            missing.append(r)
+        elif completed_run(ev):
+            completed.append(r)
+        else:
+            excluded.append(r)
+    included = [r for r in dev if r in completed or r in missing]
+    return included, completed, missing, excluded
+
+
+def run_set_line(completed, missing, excluded):
+    line = f'runs: develop {len(completed) + len(missing) + len(excluded)}, '           f'completed {len(completed)}, events missing {len(missing)}'
+    if excluded:
+        line += f", not completed (excluded): {', '.join(r['capsule'] for r in excluded)} ({len(excluded)})"
+    return line
+
+
+def delivery_block(caps_dir, rows, events_dir, out=sys.stdout):
+    """the top-level delivery section: the develop lane's completed run set
+    plus the runs whose event file is missing (event fields unknown); a run
+    with events but no completed terminal is excluded and named."""
+    p = lambda s='': print(s, file=out)
+    included, completed, missing, excluded = run_set(caps_dir, rows, events_dir)
+    delivery = delivery_rows_for(caps_dir, included, events_dir)
+    p()
+    p(f'== delivery metrics (events: {os.path.basename(os.path.normpath(events_dir))}) ==')
+    p(run_set_line(completed, missing, excluded))
+    for s in summary_lines(delivery, events_dir):
+        p(s)
+    for d in delivery:
+        p(delivery_detail_line(d))
+
+
+def arms_report(caps_dir, rows, manifest, events_dir, out=sys.stdout):
+    arms = cohort_arms(manifest) or {}
+    p = lambda s='': print(s, file=out)
+    by_name = {r['capsule']: r for r in rows}
+    for name in sorted(arms):
+        p()
+        p(f'== arm {name} ==')
+        found = [by_name[n] for n in arms[name] if n in by_name]
+        missing = [n for n in arms[name] if n not in by_name]
+        included, completed, events_missing, excluded = run_set(caps_dir, found, events_dir)
+        p(run_set_line(completed, events_missing, excluded))
+        delivery = delivery_rows_for(caps_dir, included, events_dir)
+        for s in summary_lines(delivery, events_dir):
+            p(s)
+        for d in delivery:
+            p(delivery_detail_line(d))
+        if missing:
+            p(f'missing from the input (counted, excluded): {", ".join(missing)} ({len(missing)})')
+
+
+def cohort_arms(manifest):
+    v = manifest.get('arms')
+    if v is None:
+        return None
+    if not isinstance(v, dict) or any(not isinstance(x, list) or any(not isinstance(n, str) for n in x)
+                                      for x in v.values()):
+        print('review-firstpass: the cohort manifest’s arms must be an object of lists of capsule dir names', file=sys.stderr)
+        sys.exit(2)
+    return v
+
+
 # ---------------------------------------------------------------- cohort view
 # The owner-confirmed split comparison (polyforge#118): the manifest IS
 # the grouping; dates only filter. Every honesty rule below answers a
@@ -607,6 +1389,24 @@ def cohort_report(rows, caps_dir, manifest, path, out=sys.stdout):
         p(f'missing from the input (counted, excluded): {", ".join(missing)} ({len(missing)})')
 
 
+def receipt_fields(d):
+    return {
+        'approved_files': 'unknown' if d['approved'] is None else str(d['approved']),
+        'wall_min': fmt_float(None if d['wall'] is None else d['wall'] / 60),
+        'owner_wait_min': fmt_float(None if d['owner_wait'] is None else d['owner_wait'] / 60),
+        'effective_min': fmt_float(None if d['effective'] is None else d['effective'] / 60),
+        'build_wall_min': fmt_float(None if d['build_wall'] is None else d['build_wall'] / 60),
+        'build_rounds': 'unknown' if d['build_rounds'] is None else str(d['build_rounds']),
+        'review_rejections': fmt_int(d['review_rejections']),
+        'verification_rejections': fmt_int(d['verification_rejections']),
+        'rework_min': fmt_float(None if d['rework'] is None else d['rework'] / 60),
+        'failed_dispatches': fmt_int(d['failed_dispatches']),
+        'out_tok_s': fmt_float(d['throughput']),
+        'estimate_files': 'unknown' if d['estimate'] is None else str(d['estimate']),
+        'estimate_ratio': 'unknown' if d['estimate_ratio'] is None else f"{d['estimate_ratio']:.2f}",
+    }
+
+
 def main(argv):
     ap = argparse.ArgumentParser(prog='review-firstpass', description=__doc__.split('\n')[0])
     ap.add_argument('capsules_dir')
@@ -614,9 +1414,13 @@ def main(argv):
     ap.add_argument('--until', help='last capsule.json created_at date (YYYY-MM-DD), inclusive')
     ap.add_argument('--csv', help='write one row per run to this file')
     ap.add_argument('--cohort', help='an owner-confirmed cohort manifest (JSON): the split-comparison grouping')
+    ap.add_argument('--events', help='a Cell\'s events directory: the delivery metrics (wall, rework, infra, throughput)')
     a = ap.parse_args(argv)
     if not os.path.isdir(a.capsules_dir):
         print(f'review-firstpass: {a.capsules_dir} is not a directory', file=sys.stderr)
+        return 2
+    if a.events and not os.path.isdir(a.events):
+        print(f'review-firstpass: {a.events} is not a directory', file=sys.stderr)
         return 2
     manifest, cohort_path = None, None
     since, until = a.since, a.until
@@ -636,15 +1440,27 @@ def main(argv):
 
         since = _later(since, win.get('since', ''))
         until = _earlier(until, win.get('until', ''))
+        cohort_arms(manifest)
     rows, quarantined = collect(a.capsules_dir, since, until)
+    delivery = {}
+    if a.events:
+        delivery = {d['capsule']: d for d in delivery_rows_for(a.capsules_dir, rows, a.events)}
     if a.csv:
+        extra = []
         if manifest is not None:
-            extra = ('attempt_s', 'rework_s', 'infra_retry_s', 'rewinds_counted',
-                     'rewinds_uncounted', 'claim_at', 'merge_done_at', 'merged')
+            extra = ['attempt_s', 'rework_s', 'infra_retry_s', 'rewinds_counted',
+                     'rewinds_uncounted', 'claim_at', 'merge_done_at', 'merged']
+        if a.events:
+            extra = extra + list(RECEIPT_KEYS)
+        if extra:
             for r in rows:
-                m = capsule_time_metrics(os.path.join(a.capsules_dir, r['capsule']))
-                for k in extra:
-                    r[k] = m[k]
+                if manifest is not None:
+                    m = capsule_time_metrics(os.path.join(a.capsules_dir, r['capsule']))
+                    for k in ('attempt_s', 'rework_s', 'infra_retry_s', 'rewinds_counted',
+                              'rewinds_uncounted', 'claim_at', 'merge_done_at', 'merged'):
+                        r[k] = m[k]
+                if a.events:
+                    r.update(receipt_fields(delivery[r['capsule']]))
             with open(a.csv, 'w', newline='') as f:
                 names = list(rows[0]) if rows else list(extra)
                 for k in extra:
@@ -659,8 +1475,11 @@ def main(argv):
                 w.writeheader()
                 w.writerows(rows)
     report(rows, quarantined)
+    if a.events:
+        delivery_block(a.capsules_dir, rows, a.events)
     if manifest is not None:
         cohort_report(rows, a.capsules_dir, manifest, cohort_path)
+        arms_report(a.capsules_dir, rows, manifest, a.events)
     return 0
 
 

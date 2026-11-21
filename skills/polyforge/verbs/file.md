@@ -342,7 +342,13 @@ item with children may bind a bundle.
 
 A ticket whose pre-submit analysis carries an upgrade recommendation
 (`### 升级 epic 建议`) is split only on the owner's confirmation — the
-recommendation files nothing by itself. The owner having confirmed the
+recommendation files nothing by itself. A ticket that is merely large is
+not split: the size rule marks it at risk (at least one review rework
+round expected). A split is recommended only on rule ①, or on rule ② when
+the change carries independent parts that can run in parallel — each
+changing its own files, with no interface dependency between them, each
+passing acceptance alone — and the units are exactly those independent
+parts. The owner having confirmed the
 upgrade (and with it the analysis's decomposition — its units, in order;
 a unit's key is its stable identifier in that decomposition, never
 re-derived on a re-run), the session runs this procedure once, serially,

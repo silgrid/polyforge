@@ -139,13 +139,20 @@ such a ticket with a plain `pf submit` (polyforge#47).
   the dated line below.
 - **The report's fixed format — 7 items, defined here and here only** (the
   filing, task and execute-intent fragments reference this list):
-  1. 改动范围（文件 / 模块）；
-  2. 每条验收的证明命令和运行目录；
+  1. 改动范围（文件 / 模块）；末尾每个仓库一行估算：估算行单独成行、不加列表符号、不加反引号，格式
+     `估算：<仓库> 新增 N 个文件、修改 M 个文件、单元 K 个`（N、M、K 写整数，拿不准时取上限并在第 6 项说明）。
+  2. 每条验收的证明命令和运行目录；同一行给出测试用例：测试名与所在文件、输入、独立推导的期望值
+     （从需求推出，不照抄实现的输出）、至少一个反例或边界用例。
   3. 断言旧行为的已有测试与文档（需要同步修改的义务）；
   4. 与其他未完成票的依赖或冲突；
   5. 相关记忆（`pf recall` 命中）；
   6. 风险；
-  7. 待决问题（每条给选项和推荐，不拍板）。
+  7. 待决问题（每条给选项和推荐，不拍板；分析中发现的新歧义同样列出）。
+- **Decidable, and when to hand back**: every acceptance and recommendation
+  states its boundary cases and what to do when it cannot be carried out
+  (可判定、边界情况、做不到时怎么办). After the 7 items, a separate section
+  `### 何时必须交回` names when build must stop and ask or hand back rather than
+  improvise: 分析与代码对不上、测试用例看起来不对、需要改动分析没提到的接口.
 - **Writing it in**: the auto-scheduled analysis task writes the report
   into the ticket's `## 分析` section itself (`pf task analysis-write`);
   the owner then confirms it with `pf file analysis confirm`

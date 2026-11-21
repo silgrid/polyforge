@@ -18,7 +18,10 @@ not_runnable_rule precedent — and the gate id hashes none of them):
     fallback and the single-repository file count. Without a declaration
     the defaults are 3 / 8 / 30; a value that is not a positive integer
     is diagnosed and ignored (that key keeps its default), and a second
-    declaration of a key keeps the first.
+    declaration of a key keeps the first. ``epic_files`` marks a size
+    risk (at least one review rework round expected) rather than
+    recommending an upgrade; a split is recommended only when the change
+    has independent parts that can run in parallel.
 
 The component division itself (the entry script's): a declared range
 first, then a nested engine root (a subdirectory with its own
