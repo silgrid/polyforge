@@ -157,18 +157,21 @@ compose file fixes):
 ```sh
 docker run --rm -v workstation_pf-home:/from:ro -v "$PWD:/backup" alpine \
   tar czf /backup/pf-home.tgz -C /from .
-docker compose --profile aihub create   # the six volumes exist, with their
-                                        #   compose labels; nothing starts
+docker compose --profile aihub down          # the container goes, the volumes stay
+docker volume rm workstation_pf-home         # the restore target must be empty
+# (docker created implicit volumes carry none of compose's labels)
+docker compose --profile aihub create        # compose recreates the volume, with its
+                                             #   labels; nothing starts
 docker run --rm -v "$PWD:/backup:ro" -v workstation_pf-home:/to alpine \
   sh -c 'cd /to && tar xzf /backup/pf-home.tgz'
 ```
 
-Restore only into a volume the compose file created — a plain `up -d`
-like `create` above makes the six with their compose labels, while a
-volume docker created implicitly from a bare `-v` carries none (compose
-warns about it) — and never on top of a live one. A single-volume reset
-is `docker volume rm` of it (only while the container is down) plus the
-next `up -d`, which recreates it with its labels. What a reset costs,
+Restore only into an empty volume the compose file just created — the
+`down` and `docker volume rm` above are the recipe's own steps, because
+`create` makes nothing new while the old volume still stands and untarring
+over live content is exactly what the whole-volume rule forbids. A
+single-volume reset is that same `docker volume rm` plus the next `up -d`,
+which recreates the volume with its compose labels. What a reset costs,
 volume by volume:
 
 - `pf-home` — every login and cli.toml's whole default Cell.
@@ -182,17 +185,22 @@ volume by volume:
   verification run builds its image again.
 - `workspace` — the workstation's own working tree.
 
-pf-home, polyforge-data and (in the local boot) aihub are one identity
-— reset the three together. Apart, pf-home or polyforge-data alone
-makes the container REFUSE to start: the done record and cli.toml's
-Cell disagree, and the start names both files (The first boot,
-Troubleshooting). aihub alone is quieter and no better: nothing
-rebuilds the identity (a done first boot never runs again), the aihub
-server just bootstraps the empty store — usr_root and a fresh
-`bootstrap-admin.key`, the very shape the first boot exists to prevent
-— and the default Cell's key is dead. Together, the next start redoes
-the whole first boot: a new identity is built and you log the
-harnesses in again.
+pf-home and polyforge-data are a pair — reset them together, never
+apart: alone either one strands the done first-boot record against the
+other (a done record with no Cell in cli.toml, or a Cell with no
+record) and the container REFUSES to start naming both files (The
+first boot, Troubleshooting). Reset as a pair, the next start redoes
+the first boot — and in the local boot the aihub volume can stay: the
+identity stages are idempotent, the daily user is found back by its
+fixed email in the preserved store, the same-named key is revoked and
+reissued, and the hub's own data (the SQLite store, the git repos)
+survives untouched. aihub must not be reset ALONE, though: a done
+first boot never runs again, so nothing rebuilds what the volume held
+— the aihub server just bootstraps the empty store (usr_root and a
+fresh `bootstrap-admin.key`, the very shape the first boot exists to
+prevent) and the default Cell's key is dead. To wipe the hub too,
+reset all three together: that start builds a whole new identity, and
+you log the harnesses in again.
 
 ## Parameters
 
@@ -478,7 +486,9 @@ skipped without one).
 - The container refuses to start, naming two files — pf-home and
   polyforge-data disagree (a done first-boot record without the Cell
   in cli.toml, or the reverse): the two volumes were reset apart.
-  Restore or reset the pair together.
+  Restore or reset the pair together (the aihub volume's reset rules
+  are the volumes section's: keep it on a pair reset, never reset it
+  alone).
 - A first boot that dies — read the phase record inside the container:
   `docker compose --profile aihub exec workstation cat
   /root/.local/share/polyforge/workstation/first-boot.json`. The
