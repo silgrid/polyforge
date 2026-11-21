@@ -144,18 +144,22 @@ export function stepTierWritePlan(catalog: ReadonlyArray<StepTierItem>, identity
       if (!entries.includes(entry)) entries.push(entry);
     }
   }
+  // A model no tier names yet still gains the target: its candidate is the
+  // identity itself, no effort suffix (the S85-30 finding — a plan that only
+  // moved existing entries left an unset model's set a silent no-op).
+  const moving = entries.length > 0 ? entries : [`${identity.harness}:${identity.model}`];
   const plan: StepTierWrite[] = [];
   if (target !== null) {
     const current = catalog.find((item) => item.tier === target)?.candidates ?? [];
     const next = [...current];
-    for (const entry of entries) if (!next.includes(entry)) next.push(entry);
+    for (const entry of moving) if (!next.includes(entry)) next.push(entry);
     if (next.length !== current.length) {
       plan.push({ action: "set", tier: target, candidates: next });
     }
   }
   for (const item of catalog) {
     if (target !== null && item.tier === target) continue;
-    const remaining = item.candidates.filter((candidate) => !entries.includes(candidate));
+    const remaining = item.candidates.filter((candidate) => !moving.includes(candidate));
     if (remaining.length === item.candidates.length) continue;
     if (remaining.length === 0) plan.push({ action: "unset", tier: item.tier, candidates: [] });
     else plan.push({ action: "set", tier: item.tier, candidates: remaining });

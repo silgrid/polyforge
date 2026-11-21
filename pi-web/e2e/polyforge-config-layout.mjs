@@ -558,7 +558,12 @@ try {
       if (!nearest || distance < nearest.distance) nearest = { distance, box: b };
     }
     assert.ok(nearest && nearest.distance <= 24, `${label}'s Save button is not on the input's row (nearest row distance ${nearest?.distance?.toFixed?.(1) ?? "?"}px)`);
-    return { input: box, button: nearest.box, gap: nearest.box.x - (box.x + box.width) };
+    // polyforge#151: a step-model add row is the shared picker (manual fill +
+    // grouped select), so the Save sits beside the row's whole control group —
+    // the anchor is the input's parent span (the picker's, or the plain write
+    // span's), not the input alone.
+    const parentRight = await input.evaluate((node) => node.parentElement.getBoundingClientRect().right);
+    return { input: box, button: nearest.box, gap: nearest.box.x - parentRight };
   };
 
   const desktop = await open();

@@ -104,6 +104,13 @@ test("a move's plan adds to the target first, then removes; a vacated tier unset
   ]);
   // a no-op move plans nothing
   assert.deepEqual(m.stepTierWritePlan(CATALOG, { harness: "pi", model: "b/two" }, "fast-chat"), []);
+  // an UNSET model gains the tier: its candidate is the identity itself, no
+  // effort suffix (the S85-30 finding — a plan that only moved existing
+  // entries left the unset set a silent no-op)
+  assert.deepEqual(m.stepTierWritePlan(CATALOG, { harness: "claude", model: "sonnet-2" }, "default"), [
+    { action: "set", tier: "default", candidates: ["pi:a/one", "pi:a/one:high", "claude:sonnet", "claude:sonnet-2"] },
+  ]);
+  assert.deepEqual(m.stepTierWritePlan(CATALOG, { harness: "pi", model: "c/three" }, null), [], "an unset model's unset is still nothing");
   // a multi-tier identity collapses to the target: the other tier loses it (here: vacated)
   assert.deepEqual(m.stepTierWritePlan(CATALOG, { harness: "pi", model: "a/one" }, "zen"), [
     { action: "set", tier: "zen", candidates: ["claude:opus:low", "pi:a/one", "pi:a/one:high"] },
