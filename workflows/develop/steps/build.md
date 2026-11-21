@@ -117,23 +117,24 @@ Then, last, run the fast-check proof line once per touched repo — the same fas
 `heads` is the HEAD the hand-off gate compares against (the tree is unchanged since the whole-change run, so every green command is reused):
 `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/fast_checks.py" --repo <repo> --phase fast --json --out artifacts/build/fast-checks/<repo>.json`
 The daemon reads that file for every repo build changed and refuses `done` until each is a
-`pass` at HEAD. A red the change did not cause — the default branch already red, an
-`error`/`partial` result, or a lane that planned no check — is the owner's: `pf step ask`, and
-on the release hand off `done` with `--per-owner <the reply's at>`; the stamp records it.
+`pass` at HEAD. A red the change did not cause the run itself triages on the change's baseline
+(the same judgment verification runs): one the base carries the same way is `pre_existing` —
+not this change's, the check passes; what is left is the owner's (`pf step ask`, and on the
+release hand off `done` with `--per-owner <the reply's at>`; the stamp records it).
 Then the build close's scoped selection — the same
 light-tier selection verification plans, one shared implementation, over the final tree —
 for a work item whose verification runs the light tier (an integration batch's fix ticket
 runs the full bar and closes without one): `"$PF_PYTHON"
-"$PF_SHARED_DIR/scripts/fast_checks.py" --repo <name> --close-scoped --reuse
-artifacts/build/fast-checks/<repo>.json --json --out artifacts/build/scoped-close/<repo>.json` once per
-touched repo, after its fast checks (a green run in the reuse file whose key — the command text,
-the root's subtree tree hash, the declared prerequisites — matches is evidence, not a re-run);
+"$PF_SHARED_DIR/scripts/fast_checks.py" --repo <name> --close-scoped --unit-runs artifacts/build/units.json --reuse
+artifacts/build/fast-checks/<repo>.json --json --out artifacts/build/scoped-close/<repo>.json` once per touched
+repo, after its fast checks (a green run in the reuse file whose key — the command text, the
+root's subtree tree hash, the declared prerequisites — matches is evidence, not a re-run);
 the existing tests it selects are the ones verification will select, a red one getting the one targeted
-re-run the per-unit bar gives. A red or `incomplete` result (the engine answered full, or a selected
-command cannot run) never hands off `done` without the owner's ruling: fix the change and re-run it —
-a real environment blocker is `blocked`, a full-tier fallback is the owner's to settle (`pf step
-ask`), and a residual the owner accepted keeps its record in the result file, cited in the
-hand-off. Merge each touched repo's `details.selected` of its green result into the change
+re-run the per-unit bar gives and the same baseline triage (`--unit-runs` protecting this change's own test commits). A red or `incomplete` result (the engine answered full, or a selected command cannot run) never hands off `done` without the owner's ruling —
+with one exception — a `pass`-verdict result whose selection status is `pre_existing` (every
+entry of its `reds[]` pre-existing on the `details.baseline` the run names): not this change's,
+handed off `done` citing the result file, the shared validator's green-equivalent evidence.
+Any other red or `incomplete`: fix the change and re-run it — a real environment blocker is `blocked`, a full-tier fallback is the owner's to settle (`pf step ask`), a residual keeping its record in the result file, cited in the hand-off. Merge each touched repo's `details.selected` of its green or pre-existing result into the change
 analysis's `selected` (below), keyed by the repo, verbatim. Then run the close's facts lines —
 review's own first, the same engine with the same replay it judges you with:
 `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" plan-conformance --json --out artifacts/facts/plan-conformance.json`

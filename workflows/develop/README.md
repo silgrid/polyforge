@@ -83,7 +83,9 @@ The complete variable table is in [the workflow contract's Scripts environment s
   --root`, the green runs whose key is unchanged reused) plus every new test; the close's scoped selection — `fast_checks.py --close-scoped`,
   the same light-tier selection verification plans, for a work item whose verification runs the
   light tier (an integration batch's fix ticket closes without one), its red or `incomplete`
-  result fixed or owner-ruled before the hand-off and a green result's `details.selected` merged
+  result fixed or owner-ruled before the hand-off — a red every entry of whose `reds[]` the
+  run's baseline triage records `pre_existing` excepted: not this change's, the close hands
+  off citing the result file — and a green or pre-existing result's `details.selected` merged
   into the change analysis — before the close's
   facts checks — `facts.py build --replay --isolation host` (each
   unit's run replayed red at its test commit), `plan-conformance` and
@@ -96,7 +98,10 @@ The complete variable table is in [the workflow contract's Scripts environment s
   violates and must be fixed before the hand-off); a self-review against review's five
   blocking classes and its doc-impact check, item by item — each document compared, its
   conclusion, and synced or no-change-needed with the reason — recorded
-  (`artifacts/self-review.md`). A red the change did not cause — the default branch
+  (`artifacts/self-review.md`). A red the change did not cause is the check's own to triage
+  first: the run judges every still-red unit on the change's baseline (the same judgment
+  verification runs) and records the pre-existing ones — signature and baseline commit in the
+  result file — as no red of this change's. What is left — the default branch
   already red, an `error`/`partial` fast check, or a lane that planned no check — is the
   owner's: `pf step ask`, and on the release hand off `done` with `--per-owner <the reply's
   at>`; the stamp records it. It asks the owner (`pf step ask`) only
@@ -134,8 +139,10 @@ The complete variable table is in [the workflow contract's Scripts environment s
   declares `fast_check_proof`, so its `done` is refused until each moved repo has a `pass`
   at HEAD (a fast-forward needs none); a red breaks the tree at sync, where the agent can
   still fix it in the conflicted files, rather than at verification. A red that is not this
-  merge's — the default branch already red, an `error`/`partial` result, or no planned check
-  — is the owner's: `pf step ask`, and on the release hand off `done` with `--per-owner
+  merge's the check itself triages first: one the baseline (after the merge, the default
+  branch's tip) reproduces the same way is recorded `pre_existing` and the check passes;
+  what is left — an `error`/`partial` result, no planned check, or a red the baseline could
+  not settle — is the owner's: `pf step ask`, and on the release hand off `done` with `--per-owner
   <the reply's at>`, the stamp recording it. When the
   resolution is not the agent's to make, it asks the owner, and hands the work back to
   `build` (or cancels) only on the owner's word, after the skill's abort line.

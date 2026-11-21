@@ -409,6 +409,12 @@ and `facts.py` and `integrate.py`
 ([commands.md](commands.md#workflow-scripts--factspy-integratepy)), and
 `fast_checks.py`
 ([commands.md](commands.md#builds-checks--fast_checkspy)).
+Build's close and its per-unit fast checks triage a red that survived
+their flaky re-run on the change's baseline — the same judgment
+`verify.py`'s pre-existing phase runs (`workflows/_shared/scripts/pfstep/preexisting.py`,
+one entry): the reds classified `pre_existing` / `this_change` /
+`undetermined` in the result file, a selection whose only reds are
+pre-existing standing as green-equivalent evidence.
 Its unit tests are
 `_shared/scripts/tests/` (`python3 -m unittest discover -s
 workflows/_shared/scripts -t workflows/_shared/scripts`); CI runs them

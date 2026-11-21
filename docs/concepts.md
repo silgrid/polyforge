@@ -106,10 +106,15 @@ that a step's `done` needs proof the tree it changed still passes its own
 checks: develop's `build` and `sync` do (`fast_check_proof`), so their
 `done` is refused until every task repo the round moved has a `pass` result
 at its HEAD — the daemon reads the result file the lane's declaration names
-and never runs the check itself. A red the change did not cause — the
-default branch already red, an `error`/`partial` result, or a lane that
-planned no check — is the owner's: the step asks, and on the release hands
-off `done` with `--per-owner` naming the reply, the stamp recording it.
+and never runs the check itself. A red the change did not cause the check
+itself triages first: every unit still red after its one re-run is replayed
+on the change's baseline (the same judgment verification runs), and one
+the baseline carries the same way is recorded `pre_existing` — not the
+change's red, the check passes. What is left — a this-change or unsettled
+red, the default branch already red, an `error`/`partial` result, or a
+lane that planned no check — is the owner's: the step asks, and on the
+release hands off `done` with `--per-owner` naming the reply, the stamp
+recording it.
 
 A step agent that needs the owner asks with `pf step ask` and ends its
 turn; the owner's words — `pf answer <wi> --text "<words>"` or the job
@@ -592,9 +597,12 @@ rewind — and reads no content, and no agent merges by hand:
   line over every moved repo (`artifacts/sync/fast-checks/<repo>.json`), and
   its `done` is refused until that result is a `pass` at HEAD — a structural
   break such as a stray brace stops here, not at the gate after; a
-  fast-forward needs none, and a red that is not the resolution's (the
-  default branch already red, an `error`/`partial` result, no planned check)
-  is released by the owner's word, the step then handing off `done` with
+  fast-forward needs none, and a red that is not the resolution's is the
+  check's own to triage first: one the baseline — after the merge, the
+  default branch's tip — reproduces the same way is recorded `pre_existing`
+  and the check passes; what is left (an `error`/`partial` result, no
+  planned check, one the baseline could not settle) is released by the
+  owner's word, the step then handing off `done` with
   `--per-owner`. No review judges that resolution: the verification
   tests the resolved tree right after, publish's PR body lists the files verbatim for
   the owner ("conflict resolved in sync: <files>"), and an agent that is not
@@ -1055,7 +1063,10 @@ setting:
   implementation, for a work item whose verification runs the light tier
   (an integration batch's fix ticket runs the full bar and closes without
   one) — and merges a green record into the change analysis's
-  `selected`. Review runs four pre-written lines of the workflow's script
+  `selected`; a `pre_existing` record — every red its baseline triage
+  proved pre-existing — hands off `done` citing its result file and merges
+  the same `selected`, the shared validator taking it as green-equivalent
+  evidence. Review runs four pre-written lines of the workflow's script
   `facts.py` as written — `plan-conformance` (the plan's two-way
   conformance with the diff), `build --replay --isolation host` (each
   unit's test commit a one-parent
