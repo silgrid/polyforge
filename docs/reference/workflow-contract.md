@@ -628,7 +628,12 @@ string inside its value — resolved when the write is made. A round that ends `
 drops its pending writes (the ledger records each `dropped`; aihub sees
 nothing). A write that fails parks the work item blocked, kind
 `write_failed`; `pf resume` (or an owner message) replays the writes not
-yet done, each idempotent, then the lane goes on.
+yet done, each idempotent, then the lane goes on. A step-end process
+cleanup that cannot prove the step's processes gone parks the work item
+the same way, kind `cleanup_failed` (polyforge#200): the accepted
+hand-off stays on the call ledger, nothing is written as the step's
+outcome and no successor dispatches; the resume re-runs the sweep before
+settling the kept hand-off.
 A landing record is a `wrap-attrs`: the work item's own record rides its
 wrap. Security, one line: the hub
 proxy gives an agent indirect aihub writes, bounded by each step's `hub:`

@@ -57,6 +57,12 @@ func TestPiSubagentLifecycleDocs(t *testing.T) {
 		}
 	}
 
+	// the workflow contract's lane-blocking park list names the kind
+	contractDoc := w68Flat(t, "docs/reference/workflow-contract.md")
+	if !strings.Contains(contractDoc, "`cleanup_failed`") {
+		t.Error("workflow-contract.md's hand-off reaction must name the cleanup_failed park (polyforge#200)")
+	}
+
 	// unchanged: the switch stays default-off (the #193 baseline)
 	if !strings.Contains(dispatch, "`off`（默认）") {
 		t.Error("build_subagents.md must keep pi_subagents' default-off statement (#193 baseline, unchanged)")
