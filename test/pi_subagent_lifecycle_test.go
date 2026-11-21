@@ -368,8 +368,11 @@ func TestPiSubagentProductionHandoffCleanup(t *testing.T) {
 			x.extraArgs = []string{"--pi-bin", piBin, "--operator-agent-dir", opDir}
 		},
 		// the step's bash runs the real `pf` CLI: the built binary's dir
-		// leads the daemon's PATH, which every step inherits.
-		optEnv("PATH", filepath.Dir(inst.pfPath)+":"+os.Getenv("PATH")),
+		// leads the daemon's PATH (optEnv takes whole NAME=value entries —
+		// a name and a value as two args are two bogus entries and the
+		// daemon's PATH never changes, which the verify container exposed:
+		// the host's ambient /usr/bin/pf masked it).
+		optEnv("PATH="+filepath.Dir(inst.pfPath)+":"+os.Getenv("PATH")),
 	)
 	d.start()
 
