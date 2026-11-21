@@ -236,6 +236,12 @@ and YAML path, before a claim ever meets it. The keys:
     of the work item — a `rewind_only` declaration alone can hold a step's
     first round back; the shipped lanes declare it on develop's and epic's
     `merge` (micro's `merge` runs whatever the switch says).
+  - `fast_check_proof:` — `{result, command}`: the step's `done` needs a
+    `pf-step-result/1` result at `result` (verdict `pass`, `heads` carrying
+    the repo at HEAD) for every task repo the round changed; a repo left at
+    its round's start and a fast-forward need none. The daemon reads the
+    file and quotes `command` in a refusal, so no repository's command is
+    in the daemon ([reference](reference/workflow-contract.md#step-keys)).
   - `skill:` — the skill the step follows: `<lane>/skills/<name>.md`, else
     `_shared/skills/<name>.md`, rendered after the step definition; a skill
     names the workflow scripts it runs (`commands:`, by file name), each line

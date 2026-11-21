@@ -751,7 +751,13 @@ command's face.
   entire body); an `--evidence` path that is not an existing
   file inside the capsule; `done` while a `wrap_attrs` name the lane
   declares for this step has no `pf step hub wrap-attrs <name>` of this
-  round. Accepted, the daemon appends one section to
+  round; `done` while the lane declares `fast_check_proof` and a task repo
+  this round changed — its HEAD moved past the round's start, or the round
+  recorded no start, and HEAD carries a commit no remote-tracking ref does
+  — lacks a `pf-step-result/1` result at the declared path whose `verdict`
+  is `pass` and whose `heads` carries the repo at its HEAD (the refusal
+  names each such repo, the failing check and the declared command to
+  re-run). Accepted, the daemon appends one section to
   `artifacts/handoff.md`: a header it stamps from its own records (step,
   round, dispatch, start, end and duration, model, status, the round's
   events, the owner's messages to the step this round and the cited one

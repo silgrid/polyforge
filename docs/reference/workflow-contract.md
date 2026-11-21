@@ -583,6 +583,14 @@ are wrong exits non-zero at once, naming why. The command's flags are
   the reason falls in it, else `max_rewinds` — a `fail` without
   `--per-owner` is refused: ask the owner first
   (`pf step ask`) — so no work item parks on a spent budget;
+- a `done` from a step whose lane declares `fast_check_proof` is refused
+  unless every task repo its round moved has a `pf-step-result/1` result at
+  the declared path (verdict `pass`, `heads` carrying that repo at its
+  HEAD); a repo at its round's start commit, and a fast-forward — no commit
+  on HEAD that a remote-tracking ref does not carry — needs none, while a
+  round start the record does not carry is no exemption. The refusal names
+  every failing repo, the failing check and the declared line that writes a
+  fresh result; the daemon only reads the file (and git);
 - the body carries the template's seven sections ([handoff.md](#handoffmd))
   in the language the dispatch was told (its spawn-journal line; a line
   without one reads `en`), plus the re-entry heading (Reply to the

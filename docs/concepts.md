@@ -101,7 +101,12 @@ records (times, model, commits, the owner's messages verbatim) and appends
 it to `artifacts/handoff.md`, the work item's one append-only hand-off
 document that every later step reads first. Nothing else a step prints is
 read as a result, and the daemon never reads the body for a verdict: it
-reacts to the status alone (advance, rewind, park, end).
+reacts to the status alone (advance, rewind, park, end). A lane may declare
+that a step's `done` needs proof the tree it changed still passes its own
+checks: develop's `build` and `sync` do (`fast_check_proof`), so their
+`done` is refused until every task repo the round moved has a `pass` result
+at its HEAD — the daemon reads the result file the lane's declaration names
+and never runs the check itself.
 
 A step agent that needs the owner asks with `pf step ask` and ends its
 turn; the owner's words — `pf answer <wi> --text "<words>"` or the job
@@ -580,8 +585,12 @@ rewind — and reads no content, and no agent merges by hand:
   files only — stages it and runs `sync.py --continue`, which refuses a
   residual marker, an unstaged path, a mechanically resolved file changed or
   a resolved text file that drops a line both parents carry, commits the merge and rewrites the same result file with the files under
-  `resolved[]`. No review judges that resolution: the verification tests the
-  resolved tree right after, publish's PR body lists the files verbatim for
+  `resolved[]`. Once the merge is committed, sync runs the lane's fast-check
+  line over every moved repo (`artifacts/sync/fast-checks/<repo>.json`), and
+  its `done` is refused until that result is a `pass` at HEAD — a structural
+  break such as a stray brace stops here, not at the gate after; a
+  fast-forward needs none. No review judges that resolution: the verification
+  tests the resolved tree right after, publish's PR body lists the files verbatim for
   the owner ("conflict resolved in sync: <files>"), and an agent that is not
   confident — or finds the default branch changed a premise the change
   relies on — asks the owner (`pf step ask`) and acts on the reply (resolves

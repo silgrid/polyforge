@@ -72,7 +72,13 @@ The complete variable table is in [the workflow contract's Scripts environment s
   limit kills is an evidence problem, never a pass: the waiting inside it is bounded and an
   assertion failure exits at once; and a long command writes its output to
   a log file with its exit code and the log is searched after the run, never piped straight into
-  grep, head or tail. Per-unit
+  grep, head or tail. After the last commit it re-runs the lane's fast-check
+  proof line with `--phase fast` per touched repo
+  (`fast_checks.py --repo <repo> --phase fast --json --out
+  artifacts/build/fast-checks/<repo>.json`): the tree is unchanged, so every
+  green command is reused and only the result's `heads` move to the commits
+  the hand-off gate compares against HEAD; a repo the change touched without
+  that pass at HEAD has its `done` refused. Per-unit
   fast checks narrowed to the roots the unit's written `Touched files` reach (`--phase fast
   --root`, the green runs whose key is unchanged reused) plus every new test; the close's scoped selection — `fast_checks.py --close-scoped`,
   the same light-tier selection verification plans, for a work item whose verification runs the
@@ -119,7 +125,12 @@ The complete variable table is in [the workflow contract's Scripts environment s
   earlier `after` when merge's FAIL sent the lane back here; then merges origin's default
   branch in place (never a rebase): the conflicts the default branch's
   `.polyforge/integrate.conf` makes mechanical resolved by the script, a real conflict
-  resolved by the step's own agent and committed by the skill's continue line. When the
+  resolved by the step's own agent and committed by the skill's continue line; then it runs
+  the lane's fast-check line over every repo the merge moved (`fast_checks.py --repo
+  <repo> --phase fast --json --out artifacts/sync/fast-checks/<repo>.json`). `sync`
+  declares `fast_check_proof`, so its `done` is refused until each moved repo has a `pass`
+  at HEAD (a fast-forward needs none); a red breaks the tree at sync, where the agent can
+  still fix it in the conflicted files, rather than at verification. When the
   resolution is not the agent's to make, it asks the owner, and hands the work back to
   `build` (or cancels) only on the owner's word, after the skill's abort line.
 - **verification** (gate, `waivable: true`; skill `verify`, `verify.py`, heavy-run
