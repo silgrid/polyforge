@@ -85,3 +85,102 @@ test("an incapable catalog read leaves the tier column read-only, the other colu
   assert.match(html, /Chat availability/, "the other columns are untouched");
   assert.match(html, /Not supported/, "the claude chat note stays");
 });
+
+// polyforge#151 (85b2, review r2 #1, u8's redo): the per-step re-read pinned
+// at the unit level, on the hook shim — the e2e suite's cold compile on a
+// fresh worktree outlasts the replay's bound, so the recorded run is this
+// fast, deterministic one (S85-33 stays as the browser evidence). The page
+// loads one catalog; an external writer changes it before the save; every
+// plan step must re-read the Host catalog together with the CAS hash, so the
+// external candidate survives the move — the page-load-catalog plan would
+// unset the tier and destroy it while the fresh hash lets the CAS pass.
+test("the tier cell re-reads the catalog with the CAS hash on every plan step", async () => {
+  const shimJiti = createJiti(import.meta.url, {
+    jsx: { runtime: "automatic" },
+    moduleCache: false,
+    alias: {
+      react: new URL("../hooks/__fixtures__/react-hook-shim.mjs", import.meta.url).pathname,
+      "react/jsx-runtime": new URL("../hooks/__fixtures__/react-jsx-runtime.mjs", import.meta.url).pathname,
+      "@/hooks/useI18n": new URL("../hooks/__fixtures__/polyforge-tasks-stubs.mjs", import.meta.url).pathname,
+      "./SettingsUi": new URL("../hooks/__fixtures__/polyforge-tasks-stubs.mjs", import.meta.url).pathname,
+      "@/lib/harness/model-view": new URL("../lib/harness/model-view.ts", import.meta.url).pathname,
+      "@/lib/step-tiers": new URL("../lib/step-tiers.ts", import.meta.url).pathname,
+      "@/lib/enabled-models": new URL("../lib/enabled-models.ts", import.meta.url).pathname,
+      "@/lib/model-catalog": new URL("../lib/model-catalog.ts", import.meta.url).pathname,
+      "@/lib/model-discovery": new URL("../lib/model-discovery.ts", import.meta.url).pathname,
+      "@/lib/model-context": new URL("../lib/model-context.ts", import.meta.url).pathname,
+      "@/lib/model-provider-check": new URL("../lib/model-provider-check.ts", import.meta.url).pathname,
+      "@/lib/model-image-limits": new URL("../lib/model-image-limits.ts", import.meta.url).pathname,
+      "@/lib/settings-navigation": new URL("../lib/settings-navigation.ts", import.meta.url).pathname,
+    },
+  });
+  const { renderHook } = await import(new URL("../hooks/__fixtures__/react-hook-shim.mjs", import.meta.url).href);
+  const { StepTierCell } = await shimJiti.import("./HarnessModelSettings.tsx");
+
+  const settle = async () => {
+    for (let index = 0; index < 12; index++) await new Promise((resolve) => setImmediate(resolve));
+  };
+  const walk = (node, out = []) => {
+    if (Array.isArray(node)) {
+      for (const child of node) walk(child, out);
+      return out;
+    }
+    if (!node || typeof node !== "object" || !("props" in node)) return out;
+    if (typeof node.type === "function") return walk(node.type(node.props), out);
+    out.push(node);
+    walk(node.props.children, out);
+    return out;
+  };
+
+  // what the page loaded (stale the moment the external writer lands)
+  const pageLoadItems = [
+    { key: "step_tiers.default", value: ["pi:anthropic/opus"], source: "file", class: "live", schema: { kind: "model-list" } },
+    { key: "step_tiers.fast-chat", value: ["pi:tierdemo/other"], source: "file", class: "live", schema: { kind: "model-list" } },
+  ];
+  // the external write: default also holds a candidate the page never saw
+  const freshItems = [
+    { key: "step_tiers.default", value: ["pi:anthropic/opus", "pi:tierdemo/external"], source: "file", class: "live", schema: { kind: "model-list" } },
+    { key: "step_tiers.fast-chat", value: ["pi:tierdemo/other"], source: "file", class: "live", schema: { kind: "model-list" } },
+  ];
+  const reads = [];
+  const writes = [];
+  const hook = renderHook(StepTierCell, {
+    row: { provider: "anthropic", id: "opus", name: "Opus", harnesses: ["pi"], chatAvailable: false, reasoning: [], isDefault: false },
+    tier: { capable: true, reason: null, tiers: [
+      { tier: "default", candidates: ["pi:anthropic/opus"] },
+      { tier: "fast-chat", candidates: ["pi:tierdemo/other"] },
+    ] },
+    tierRead: async () => {
+      reads.push(Date.now());
+      return { ok: true, items: freshItems, hash: "fresh-sha" };
+    },
+    tierWrite: async (write, hash) => {
+      writes.push({ ...write, hash });
+      return { ok: true };
+    },
+    onTierSaved() {},
+  });
+  for (let round = 0; round < 6; round++) { await settle(); hook.flush(); }
+  const all = walk(hook.result);
+  if (!all.some((node) => node.type === "select")) {
+    console.log("U8DBG nodes:", all.length, "types:", JSON.stringify([...new Set(all.map((n) => typeof n.type === "string" ? n.type : "fn"))]));
+    console.log("U8DBG text:", JSON.stringify(all.map((n) => typeof n.props.children === "string" ? n.props.children : "").filter(Boolean).slice(0, 10)));
+  }
+  const select = all.find((node) => node.type === "select" && JSON.stringify(node.props.children).includes("fast-chat"));
+  assert.ok(select, "the tier select renders");
+  select.props.onChange({ target: { value: "fast-chat" } });
+  hook.flush();
+  const save = walk(hook.result).find((node) => node.type === "button" && String(node.props.children ?? "").includes("stepTierApplyTo.submit"));
+  assert.ok(save, "the apply-to submit renders");
+  save.props.onClick();
+  for (let round = 0; round < 8; round++) { await settle(); hook.flush(); }
+  assert.ok(reads.length >= 1, "the submit read the Host catalog (the per-step re-read)");
+  const defaultSet = writes.find((write) => write.action === "set" && write.tier === "default");
+  assert.ok(defaultSet, "the stale default tier was never re-written (the external candidate was destroyed by a page-load-catalog plan)");
+  assert.deepEqual(defaultSet.candidates, ["pi:tierdemo/external"],
+    "the external concurrent candidate is preserved — the plan came from the fresh read");
+  assert.equal(defaultSet.hash, "fresh-sha", "the write carries the hash from the same read that planned it");
+  const moved = writes.find((write) => write.action === "set" && write.tier === "fast-chat");
+  assert.deepEqual(moved?.candidates, ["pi:tierdemo/other", "pi:anthropic/opus"], "the row moved over");
+  assert.ok(!writes.some((write) => write.action === "unset"), "no tier was left empty and unset by a stale plan");
+});
