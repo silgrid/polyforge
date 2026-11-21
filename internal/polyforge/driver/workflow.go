@@ -335,20 +335,21 @@ func workflowOf(lane *workflow.Lane) *Workflow {
 	wf := &Workflow{Name: lane.Name, MaxRewinds: lane.MaxRewinds, UncountedRewinds: lane.UncountedRewinds}
 	for _, s := range lane.Steps {
 		step := StepSpec{
-			ID:          s.ID,
-			Gate:        s.Gate,
-			WallMinutes: s.WallMinutes,
-			ToolMinutes: s.ToolMinutes,
-			Waivable:    s.Waivable,
-			Skippable:   s.Skippable,
-			RewindOnly:  s.RewindOnly,
-			Skill:       s.Skill,
-			Resources:   s.Resources,
-			Vars:        s.Vars,
-			Params:      s.Params,
-			Hub:         s.Hub,
-			HubAttrs:    s.HubAttrs,
-			WrapAttrs:   s.WrapAttrs,
+			ID:             s.ID,
+			Gate:           s.Gate,
+			WallMinutes:    s.WallMinutes,
+			ToolMinutes:    s.ToolMinutes,
+			Waivable:       s.Waivable,
+			Skippable:      s.Skippable,
+			RewindOnly:     s.RewindOnly,
+			Skill:          s.Skill,
+			Resources:      s.Resources,
+			Vars:           s.Vars,
+			Params:         s.Params,
+			Hub:            s.Hub,
+			HubAttrs:       s.HubAttrs,
+			WrapAttrs:      s.WrapAttrs,
+			FastCheckProof: s.FastCheckProof,
 		}
 		if s.OnFailTarget != "" {
 			step.OnFail = &OnFail{Target: s.OnFailTarget}
