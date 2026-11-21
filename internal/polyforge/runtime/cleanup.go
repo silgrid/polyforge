@@ -146,16 +146,16 @@ func Cleanup(t CleanupTarget, bound time.Duration) (*CleanupReport, error) {
 	if t.WIID != "" {
 		rep.Layers = append(rep.Layers, "l4-env-marker")
 		marked := scanEnvMarker(t.WIID, t.DaemonID)
-		for _, pid := range marked {
-			signalPID(pid, syscall.SIGTERM, rep)
+		for _, id := range marked {
+			signalPID(id.pid, syscall.SIGTERM, rep)
 		}
 		deadline := time.Now().Add(bound)
-		for _, pid := range marked {
-			for procExists(pid) && time.Now().Before(deadline) {
+		for _, id := range marked {
+			for procExists(id.pid) && time.Now().Before(deadline) {
 				sleepFn(cleanupPoll)
 			}
-			if procExists(pid) {
-				signalPID(pid, syscall.SIGKILL, rep)
+			if procExists(id.pid) {
+				signalPID(id.pid, syscall.SIGKILL, rep)
 			}
 		}
 	}
@@ -173,8 +173,8 @@ func Cleanup(t CleanupTarget, bound time.Duration) (*CleanupReport, error) {
 		}
 	}
 	if t.WIID != "" {
-		for _, pid := range scanEnvMarker(t.WIID, t.DaemonID) {
-			rep.Survivors = append(rep.Survivors, pid)
+		for _, id := range scanEnvMarker(t.WIID, t.DaemonID) {
+			rep.Survivors = append(rep.Survivors, id.pid)
 		}
 	}
 	if len(rep.Survivors) > 0 {
@@ -463,22 +463,24 @@ func liveProcIDs() (map[int]bool, bool) {
 // ---------------------------------------------------------------------------
 // env marker scan (L4) and cwd scan (L5)
 
-// scanEnvMarker returns the live pids whose environment carries BOTH this
-// WI's PF_WI_ID marker and this daemon's PF_DAEMON_ID marker. Excludes
-// self (pid 1 and below are outside procListAll). Unreadable environments
+// scanEnvMarker returns the live marked processes (their environments
+// carry BOTH this WI's PF_WI_ID marker and this daemon's PF_DAEMON_ID
+// marker) WITH their (pid, starttime) identities, captured at the scan —
+// layer 4's signal-time identity check works from these. Excludes self
+// (pid 1 and below are outside procListAll). Unreadable environments
 // (another uid, an exit race) are skipped: not provably ours.
-func scanEnvMarker(wi, daemonID string) []int {
+func scanEnvMarker(wi, daemonID string) []procIdent {
 	self := os.Getpid()
 	pids, err := procListAllFn()
 	if err != nil {
 		return nil
 	}
-	var out []int
+	var out []procIdent
 	for _, pid := range pids {
 		if pid == self {
 			continue
 		}
-		state, _, _, _, ok := procStat(pid)
+		state, _, _, start, ok := procStat(pid)
 		if !ok || state == "Z" {
 			continue
 		}
@@ -487,7 +489,7 @@ func scanEnvMarker(wi, daemonID string) []int {
 			continue // unreadable (permission/exit race): not provably ours
 		}
 		if envHasMarkers(envs, wi, daemonID) {
-			out = append(out, pid)
+			out = append(out, procIdent{pid: pid, start: start})
 		}
 	}
 	return out
