@@ -45,7 +45,10 @@ export function ClaudeCustomModels({ onRefresh }: { onRefresh?: () => void }) {
       const response = await fetch("/api/harness/claude/model");
       const data = await response.json();
       if (!response.ok || data.error) throw new Error(data.message ?? data.error ?? `HTTP ${response.status}`);
-      setNames(Array.isArray(data.data?.customModels) ? data.data.customModels : []);
+      // r1#1: the editor's list is the user layer's own names — the merged
+      // customModels view is display-only, so a managed picker's names never
+      // enter this list nor a PUT body.
+      setNames(Array.isArray(data.data?.userCustomModels) ? data.data.userCustomModels : []);
     } catch (cause) {
       // A failed read must not leave the section loading forever (the page's
       // other scenarios read its text): the editor offers the empty state
@@ -163,7 +166,6 @@ export function ClaudeCustomModels({ onRefresh }: { onRefresh?: () => void }) {
           <ul data-claude-preview-missing>
             {preview.missing.map((model) => <li key={model}>{model}</li>)}
           </ul>
-          {preview.shadowed && <p role="note">{t("models.claudeCustomShadowed")}</p>}
           <button type="button" onClick={() => void confirmMerge()} disabled={busy}>{t("models.claudeCustomMerge")}</button>
           <button type="button" onClick={() => setPreview(null)}>{t("common.cancel")}</button>
         </div>

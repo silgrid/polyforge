@@ -341,6 +341,10 @@ export function createClaudeAdapter(): HarnessAdapter {
               }
             }
           }
+          // The user layer's own names (r1#1): the editor's list and the
+          // write's subject — the merged view above is display-only, so a
+          // managed picker's names can never be copied into the user layer.
+          const userLayer = layers.find((layer) => layer.scope === "user");
           const payload: ModelPayload = {
             defaultProvider: null,
             defaultModel:
@@ -357,6 +361,7 @@ export function createClaudeAdapter(): HarnessAdapter {
             // 85a4: the custom names are claude's own modelPicker.options
             // (claude-layers' one merge of them).
             customModels: modelPickerOptions(layers),
+            userCustomModels: modelPickerOptions(userLayer ? [userLayer] : []),
           };
           return payload;
         }
