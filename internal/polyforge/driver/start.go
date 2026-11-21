@@ -97,7 +97,7 @@ type StartConfig struct {
 	// Interrupted archives the dispatch the previous derivation left
 	// without a result (nil on a fresh claim or a deliberate stop).
 	Interrupted *InterruptedDispatch
-	StepEnded   func(context.Context)
+	StepEnded   func(context.Context) error
 	// ClaudeConfigDir is the step claude processes' CLAUDE_CONFIG_DIR: the
 	// claude resume decision locates a previous native session by it.
 	ClaudeConfigDir string

@@ -11,6 +11,11 @@ package driver
 //     prompt and its reason for stopping (WakeStepBlocked);
 //   - the hub writes of a `done` hand-off failed: the resume replays them,
 //     then the workflow continues by their outcome (WakeWriteFailed);
+//   - a step-end process cleanup could not prove the step's processes gone
+//     (polyforge#200): the resume re-runs the sweep and continues the way
+//     the park's reason says — a kept hand-off settles without re-running
+//     the step, a failed dispatch retries, an open ask re-enters
+//     (WakeCleanupFailed);
 //   - any other park — a supervision block (timeouts, repeated exits), a
 //     cancel that never landed, a contract 3 park: that step is dispatched
 //     again in place, the message riding its prompt (WakeStep);
@@ -62,6 +67,10 @@ const (
 	// WakeWriteFailed: the hub writes of a `done` hand-off failed; the
 	// resume replays them, then continues.
 	WakeWriteFailed WakeKind = "write_failed"
+	// WakeCleanupFailed: a step-end process cleanup could not prove the
+	// step's processes gone (polyforge#200); the resume re-runs the sweep
+	// and continues the way the park's reason says.
+	WakeCleanupFailed WakeKind = "cleanup_failed"
 	// WakePaused: the operator paused the work item; its current step
 	// continues in place with the message.
 	WakePaused WakeKind = "paused"
@@ -104,6 +113,13 @@ func WakeOf(capsuleDir string, ex *capsule.Execution) Wake {
 		return w
 	case strings.HasPrefix(reason, NoUsableModelBlockPrefix), strings.Contains(reason, compositionFailedMarker):
 		w.Kind, w.Why = WakeCannotStart, reason
+		return w
+	case CleanupFailedBlocked(reason):
+		// polyforge#200: the resume re-runs the step-end sweep and
+		// continues the way the park's reason says (a kept hand-off
+		// settles, a failed dispatch retries, an open ask re-enters) —
+		// the message never re-dispatches the step by itself.
+		w.Kind = WakeCleanupFailed
 		return w
 	}
 	// a park of the previous contract (made before the upgrade, whatever

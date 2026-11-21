@@ -42,7 +42,7 @@ what it claims before you build on it or report it.
   the diff stays inside the write set before the next unit builds on them; a unit that fails the
   check goes back once, then you build it. You write `artifacts/build/units.json` from what the
   tasks return (a task never writes it).
-- **Pi 派发。** 当 `pi_subagents` 为 `on` 时，使用 pi 的 `subagent` 工具、`agent: "worker"`，一次只发一个任务，完成后再发下一个；不要使用 `parallel` 或 `chain`。daemon 内置扩展会串行处理并用完整隔离参数启动 worker。当它为 `off`（默认）时保持主 agent 路径，并记录 `implemented_by: main`。
+- **Pi 派发。** 当 `pi_subagents` 为 `on` 时，使用 pi 的 `subagent` 工具、`agent: "worker"`，一次只发一个任务，完成后再发下一个；不要使用 `parallel` 或 `chain`。daemon 内置扩展会串行处理并用完整隔离参数启动 worker。每个任务可选 `timeoutSeconds`（正整数秒；0、负数、非整数拒绝且不启动；缺省默认 1800），从该 worker 实际启动时计时（排队不计）；超时后 worker 及其后代按 TERM→KILL 结束，超时是失败：正文与 details 标明超时（`timedOut`、实际超时值），清理不净时报告剩余 PID，都不是部分成果。中止与超时的清理以每调用唯一的 `PF_SUBAGENT_ID` 继承标记锁定本调用的后代（连同 `PF_WI_ID`/`PF_DAEMON_ID` 三重匹配），不触碰兄弟调用与本步骤进程。当它为 `off`（默认）时保持主 agent 路径，并记录 `implemented_by: main`。
 - **`implemented_by`.** A unit is `subagent` when an implementer sub-agent made both its commits,
   else `main`; your hand-off's 做了什么 says which each unit is, and why a big plan's unit is
   `main`.

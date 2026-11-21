@@ -118,6 +118,9 @@ func TestWakeOfClassifiesParks(t *testing.T) {
 			c.journal("s", 2)
 			c.handoff("s", 2, stepcall.StatusDone, write, false)
 		}, WakeWriteFailed, 2},
+		{"a step-end cleanup that could not prove the processes gone", blockedExec("cleanup failed: step s ended and its process cleanup could not prove the step's processes gone"), func(c *wakeCapsule) {
+			c.journal("s", 5)
+		}, WakeCleanupFailed, 5},
 		{"a done hand-off whose writes were all made is no write park", blockedExec("parked"), func(c *wakeCapsule) {
 			c.journal("s", 2)
 			c.handoff("s", 2, stepcall.StatusDone, write, true)

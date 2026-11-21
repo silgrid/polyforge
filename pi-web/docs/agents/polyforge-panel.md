@@ -529,7 +529,9 @@ feed-only attention card in `components/PolyforgePanel.tsx`, the feed state in
   card conversation](#job-card-conversation)):
   已阻塞 · kind — labelled for the kinds the panel
   knows, `KNOWN_BLOCKED_KINDS` = `incomplete` 步骤未完成,
-  `driver` 被调度器暂停, `contract` and `write_failed` — held equal to the kinds the daemon's `watchBlocked`
+  `driver` 被调度器暂停, `contract`, `write_failed` and `cleanup_failed`
+  (a step-end process cleanup that could not prove the step's processes
+  gone) — held equal to the kinds the daemon's `watchBlocked`
   assigns by the Go test `test/w415_blocked_kinds_test.go`; an unknown kind
   shows its raw name — the reason, 需要的操作), with the copyable
   `pf resume <wi>` command for every kind but `contract` (whose only

@@ -211,7 +211,7 @@ test("the blocked kinds: every kind is labelled, a contract block is terminal (p
   // snapshot targets another workflow contract): the composer shows the
   // cancel command only
   assert.deepEqual([...pure.TERMINAL_BLOCKED_KINDS], ["contract"]);
-  assert.deepEqual([...pure.KNOWN_BLOCKED_KINDS].sort(), ["contract", "driver", "incomplete", "write_failed"], "the kinds the panel labels (held equal to the daemon by test/w415_blocked_kinds_test.go)");
+  assert.deepEqual([...pure.KNOWN_BLOCKED_KINDS].sort(), ["cleanup_failed", "contract", "driver", "incomplete", "write_failed"], "the kinds the panel labels (held equal to the daemon by test/w415_blocked_kinds_test.go)");
   assert.equal(pure.cancelCommand("wi_W9"), "pf cancel wi_W9");
   assert.equal(pure.cancelCommand("wi_W9", "eu"), "pf --profile eu cancel wi_W9");
   assert.equal(pure.resumeCommand("wi_X", "default"), "pf resume wi_X");

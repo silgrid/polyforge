@@ -1986,6 +1986,7 @@ export const zhCNLocale: LocalePlugin = {
     "polyforge.blocked.kind.incomplete": "步骤未完成",
     "polyforge.blocked.kind.driver": "被调度器暂停",
     "polyforge.blocked.kind.write_failed": "已完成步骤的 aihub 写入失败",
+    "polyforge.blocked.kind.cleanup_failed": "步骤结束的进程清理未能证明进程已清空",
     "polyforge.blocked.kind.contract": "车道快照的工作流契约版本与本 daemon 不符（取消后重提）",
     "polyforge.jobStatus.paused": "已暂停",
     "polyforge.jobStatus.queued": "排队中",

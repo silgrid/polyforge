@@ -886,7 +886,11 @@ of them (P0): no option, no reserved word (`cancel` here is just a word;
   session when it handed off `blocked`; the step that failed after two
   timeouts or three exits without a hand-off; after a failed pending
   write, the writes are replayed first and the lane goes on; after a
-  pause, the current step. The daemon never reads the words to decide. The
+  `cleanup_failed` park (polyforge#200), the step-end process sweep
+  re-runs first and the lane continues the way the park's reason says —
+  a kept hand-off settles without re-running the step (no dispatch reads
+  the words), a failed dispatch retries (its dispatch carries them), an
+  open ask re-enters with the answer; after a pause, the current step. The daemon never reads the words to decide. The
   wake is the owner's door: the command first asks the daemon, which names
   the park (`{status: parked, park, wake}`) and records nothing; then it
   opens, with your own key, the door `pf resume` opens (a blocked work

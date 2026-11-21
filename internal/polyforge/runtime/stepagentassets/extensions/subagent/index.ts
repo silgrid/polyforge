@@ -14,6 +14,7 @@
 
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentToolResult, ThinkingLevel } from "@earendil-works/pi-agent-core";
@@ -34,6 +35,179 @@ const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
 const COLLAPSED_ITEM_COUNT = 10;
 const PER_TASK_OUTPUT_CAP = 50 * 1024;
+
+// Lifecycle bounds (owner ruling Q4): the stop sequence for an aborted or
+// timed-out child is TERM, a bounded grace, then KILL, then a bounded wait
+// for a PROVED exit. Tests inject shorter limits through the environment.
+function envMillis(name: string, def: number): number {
+	const raw = process.env[name];
+	if (raw && /^\d+$/.test(raw)) return Number.parseInt(raw, 10);
+	return def;
+}
+const termGraceMs = (): number => envMillis("PF_SUBAGENT_TERM_GRACE_MS", 5000);
+const killWaitMs = (): number => envMillis("PF_SUBAGENT_KILL_WAIT_MS", 5000);
+
+// The per-task wall-clock timeout default (owner ruling Q2): a positive
+// integer in seconds, measured from the child's ACTUAL start (queueing
+// never counts), each chain step and parallel task independently.
+const DEFAULT_TIMEOUT_SECONDS = 1800;
+
+// ---------------------------------------------------------------------------
+// Descendant identity (owner ruling Q3 B): before a stop's FIRST signal,
+// snapshot the child's descendants with their (pid, starttime) identities
+// and stamp the call with a unique inherited marker (PF_SUBAGENT_ID). The
+// stop's kill set is the snapshot plus a marker scan that requires this
+// call's marker AND (when the step runs under the daemon) this WI's and
+// daemon's markers — so a stop never touches a sibling call, the step
+// process itself, or another work item. An identity whose starttime no
+// longer matches (pid reuse) is never signaled. Without /proc (a non-Linux
+// host) the stop degrades to the child alone.
+
+interface ProcIdent {
+	pid: number;
+	starttime: string;
+}
+
+function readProcStat(pid: number): { state: string; ppid: number; starttime: string } | undefined {
+	try {
+		const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+		const rest = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+		return { state: rest[0], ppid: Number(rest[1]), starttime: rest[19] };
+	} catch {
+		return undefined;
+	}
+}
+
+function listProcPids(): number[] {
+	try {
+		return fs
+			.readdirSync("/proc")
+			.filter((n) => /^\d+$/.test(n))
+			.map(Number);
+	} catch {
+		return [];
+	}
+}
+
+// snapshotDescendants walks /proc once and answers root's live descendants
+// (never root itself) with their identities.
+function snapshotDescendants(root: number): ProcIdent[] {
+	const byParent = new Map<number, number[]>();
+	const idents = new Map<number, ProcIdent>();
+	for (const pid of listProcPids()) {
+		const st = readProcStat(pid);
+		if (!st || st.state === "Z") continue;
+		byParent.set(st.ppid, [...(byParent.get(st.ppid) ?? []), pid]);
+		idents.set(pid, { pid, starttime: st.starttime });
+	}
+	const out: ProcIdent[] = [];
+	const queue = [root];
+	const seen = new Set<number>([root]);
+	while (queue.length > 0) {
+		const cur = queue.shift() as number;
+		for (const child of byParent.get(cur) ?? []) {
+			if (seen.has(child)) continue;
+			seen.add(child);
+			const id = idents.get(child);
+			if (id) out.push(id);
+			queue.push(child);
+		}
+	}
+	return out;
+}
+
+// scanCallEscapees answers the live pids whose environment carries this
+// call's marker — and, under the daemon, this WI's and daemon's markers
+// too (the triple match). An unreadable environment is not provably ours.
+function scanCallEscapees(callMarker: string): ProcIdent[] {
+	const wanted: Record<string, string> = { PF_SUBAGENT_ID: callMarker };
+	if (process.env.PF_WI_ID) wanted.PF_WI_ID = process.env.PF_WI_ID;
+	if (process.env.PF_DAEMON_ID) wanted.PF_DAEMON_ID = process.env.PF_DAEMON_ID;
+	const self = process.pid;
+	const out: ProcIdent[] = [];
+	for (const pid of listProcPids()) {
+		if (pid <= 1 || pid === self) continue;
+		const st = readProcStat(pid);
+		if (!st || st.state === "Z") continue;
+		let env: string;
+		try {
+			env = fs.readFileSync(`/proc/${pid}/environ`, "utf8");
+		} catch {
+			continue;
+		}
+		const tokens = env.split("\x00");
+		let all = true;
+		for (const [k, v] of Object.entries(wanted)) {
+			if (!tokens.includes(`${k}=${v}`)) {
+				all = false;
+				break;
+			}
+		}
+		if (all) out.push({ pid, starttime: st.starttime });
+	}
+	return out;
+}
+
+// identSignal signals one identity, refusing a pid whose current occupant
+// no longer matches the snapshot (the pid-reuse mis-kill guard).
+function identSignal(id: ProcIdent, sig: NodeJS.Signals): void {
+	const st = readProcStat(id.pid);
+	if (!st || st.state === "Z" || st.starttime !== id.starttime) return;
+	try {
+		process.kill(id.pid, sig);
+	} catch {
+		/* gone */
+	}
+}
+
+// waitIdentsGone waits (bounded) for the identities to leave the live
+// process list and answers the ones still there.
+async function waitIdentsGone(ids: ProcIdent[], bound: number): Promise<ProcIdent[]> {
+	const deadline = Date.now() + bound;
+	for (;;) {
+		const live = ids.filter((id) => {
+			const st = readProcStat(id.pid);
+			return st !== undefined && st.state !== "Z" && st.starttime === id.starttime;
+		});
+		if (live.length === 0 || Date.now() >= deadline) return live;
+		await new Promise((res) => setTimeout(res, 25));
+	}
+}
+
+// stopTree runs the Q4 stop sequence over the child and its whole marked
+// tree — TERM, the bounded grace, KILL, the bounded wait, then ONE more
+// bounded marker round for an escapee that appeared mid-teardown — and
+// answers the pids it could not prove dead (empty = a clean stop).
+async function stopTree(childPid: number, callMarker: string): Promise<number[]> {
+	const grace = termGraceMs();
+	const wait = killWaitMs();
+	const childStat = readProcStat(childPid);
+	let killSet: ProcIdent[] = scanCallEscapees(callMarker);
+	if (childStat) {
+		killSet = [
+			{ pid: childPid, starttime: childStat.starttime },
+			...snapshotDescendants(childPid),
+			...killSet.filter((id) => id.pid !== childPid),
+		];
+	} else {
+		// the child is already gone (its exit events race the stop): only
+		// its marked escapees remain to collect
+	}
+	const seen = new Set<number>();
+	killSet = killSet.filter((id) => (seen.has(id.pid) ? false : (seen.add(id.pid), true)));
+	for (const id of killSet) identSignal(id, "SIGTERM");
+	let live = await waitIdentsGone(killSet, grace);
+	for (const id of live) identSignal(id, "SIGKILL");
+	live = await waitIdentsGone(killSet, wait);
+	if (live.length === 0) {
+		const late = scanCallEscapees(callMarker);
+		for (const id of late) identSignal(id, "SIGTERM");
+		const lateLive = await waitIdentsGone(late, grace);
+		for (const id of lateLive) identSignal(id, "SIGKILL");
+		live = await waitIdentsGone(late, wait);
+	}
+	return live.map((id) => id.pid);
+}
 
 function formatTokens(count: number): string {
 	if (count < 1000) return count.toString();
@@ -150,7 +324,9 @@ interface SingleResult {
 	agent: string;
 	agentSource: "user" | "project" | "unknown";
 	task: string;
-	exitCode: number;
+	// null = the child died by signal (or its exit could not be proved) —
+	// never a success.
+	exitCode: number | null;
 	messages: Message[];
 	stderr: string;
 	usage: UsageStats;
@@ -158,6 +334,11 @@ interface SingleResult {
 	stopReason?: string;
 	errorMessage?: string;
 	step?: number;
+	// polyforge#200 Q6: the timeout is carried in the details beside the
+	// existing shape — timedOut marks the child that hit its wall clock,
+	// timeoutSeconds the effective value (the item's or the default).
+	timedOut?: boolean;
+	timeoutSeconds?: number;
 }
 
 interface SubagentDetails {
@@ -180,7 +361,12 @@ function getFinalOutput(messages: Message[]): string {
 }
 
 function isFailedResult(result: SingleResult): boolean {
-	return result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
+	return (
+		result.exitCode === null ||
+		result.exitCode !== 0 ||
+		result.stopReason === "error" ||
+		result.stopReason === "aborted"
+	);
 }
 
 function getResultOutput(result: SingleResult): string {
@@ -292,6 +478,7 @@ async function runSingleAgent(
 	signal: AbortSignal | undefined,
 	onUpdate: OnUpdateCallback | undefined,
 	makeDetails: (results: SingleResult[]) => SubagentDetails,
+	timeoutSeconds: number | undefined,
 ): Promise<SingleResult> {
 	const agent = agents.find((a) => a.name === agentName);
 
@@ -352,13 +539,75 @@ async function runSingleAgent(
 
 		args.push(`Task: ${task}`);
 		let wasAborted = false;
+		let unproved = false;
+		let leftovers: number[] = [];
+		let childPid: number | undefined;
+		// the per-call inherited marker (Q3 B): every descendant of this
+		// child carries it, and only processes carrying it (plus the WI and
+		// daemon markers, when present) are this stop's to kill.
+		const callMarker = randomUUID();
 
-		const exitCode = await new Promise<number>((resolve) => {
+		// A pre-aborted call never starts a child (pi 1.5.1+ shape).
+		if (signal?.aborted) {
+			wasAborted = true;
+			throw new Error("Subagent was aborted");
+		}
+
+		const exitCode = await new Promise<number | null>((resolve) => {
 			const invocation = getPiInvocation(args);
-			const proc = spawn(invocation.command, invocation.args, {
+			let proc: ReturnType<typeof spawn>;
+			let settled = false;
+			let exited = false;
+			let stopping = false;
+			const effectiveTimeout = timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS;
+			let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+
+			function finish(code: number | null) {
+				if (settled) return;
+				settled = true;
+				if (timeoutTimer) clearTimeout(timeoutTimer);
+				if (signal) signal.removeEventListener("abort", abortProcess);
+				resolve(code);
+			}
+
+			// TERM, KILL after the bounded grace, a bounded wait for a PROVED
+			// exit — over the child AND its marked descendants (stopTree).
+			// Whatever cannot be proved dead becomes the stop's leftovers;
+			// the caller turns that into a cleanup-incomplete error instead
+			// of a plain one.
+			async function abortProcess() {
+				if (stopping || settled || exited) return;
+				stopping = true;
+				wasAborted = true;
+				leftovers = await stopTree(childPid as number, callMarker);
+				if (leftovers.length > 0) unproved = true;
+				finish(null);
+			}
+
+			// the per-call wall clock: measured from the child's actual
+			// start, it stops the child with the same TERM->KILL sequence
+			// (its descendants included) and is only a plain timed_out when
+			// the stop proved everything dead — otherwise the leftovers are
+			// reported (Q4).
+			async function timeoutProcess() {
+				if (stopping || settled || exited) return;
+				stopping = true;
+				leftovers = await stopTree(childPid as number, callMarker);
+				currentResult.timedOut = true;
+				currentResult.timeoutSeconds = effectiveTimeout;
+				currentResult.errorMessage =
+					leftovers.length > 0
+						? `timed out after ${effectiveTimeout}s; cleanup incomplete: still running ${leftovers.join(", ")}`
+						: `timed out after ${effectiveTimeout}s (the child and its descendants were stopped)`;
+				emitUpdate();
+				finish(null);
+			}
+
+			proc = spawn(invocation.command, invocation.args, {
 				cwd: cwd ?? defaultCwd,
 				shell: false,
 				stdio: ["ignore", "pipe", "pipe"],
+				env: { ...process.env, PF_SUBAGENT_ID: callMarker },
 			});
 			let buffer = "";
 
@@ -410,30 +659,44 @@ async function runSingleAgent(
 				currentResult.stderr += data.toString();
 			});
 
+			childPid = proc.pid;
+			timeoutTimer = setTimeout(() => void timeoutProcess(), effectiveTimeout * 1000);
+			proc.on("exit", () => {
+				exited = true;
+			});
 			proc.on("close", (code) => {
+				// During a stop the close event only proves the PIPES
+				// drained — a grandchild's death can release them before
+				// the stop sequence has collected the rest of the tree.
+				// The stop (abortProcess/timeoutProcess) finishes the call
+				// once it proved everything dead; finishing here would cut
+				// that cleanup off mid-flight.
+				if (stopping) return;
 				if (buffer.trim()) processLine(buffer);
-				resolve(code ?? 0);
+				finish(code);
 			});
 
 			proc.on("error", () => {
-				resolve(1);
+				finish(1);
 			});
 
 			if (signal) {
-				const killProc = () => {
-					wasAborted = true;
-					proc.kill("SIGTERM");
-					setTimeout(() => {
-						if (!proc.killed) proc.kill("SIGKILL");
-					}, 5000);
-				};
-				if (signal.aborted) killProc();
-				else signal.addEventListener("abort", killProc, { once: true });
+				if (signal.aborted) abortProcess();
+				else signal.addEventListener("abort", abortProcess, { once: true });
 			}
 		});
 
 		currentResult.exitCode = exitCode;
-		if (wasAborted) throw new Error("Subagent was aborted");
+		if (wasAborted) {
+			if (unproved) {
+				throw new Error(`Subagent was aborted; cleanup incomplete: still running ${leftovers.join(", ")}`);
+			}
+			throw new Error("Subagent was aborted");
+		}
+		// a timed-out child is returned, never thrown: isFailedResult (the
+		// null exit code, the timeout fields) maps it to the call's failure
+		// and the mode policies (chain stops at the failed step; parallel
+		// keeps the other started tasks) ride that.
 		return currentResult;
 	} finally {
 		if (tmpPromptPath)
@@ -451,16 +714,25 @@ async function runSingleAgent(
 	}
 }
 
+const TimeoutSchema = Type.Optional(
+	Type.Integer({
+		description:
+			"Per-task wall-clock timeout in seconds; a positive integer. Default: 1800. Measured from the child's actual start; a timeout stops the child and its descendants and is reported as a failed, timed-out result.",
+	}),
+);
+
 const TaskItem = Type.Object({
 	agent: Type.String({ description: "Name of the agent to invoke" }),
 	task: Type.String({ description: "Task to delegate to the agent" }),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
+	timeoutSeconds: TimeoutSchema,
 });
 
 const ChainItem = Type.Object({
 	agent: Type.String({ description: "Name of the agent to invoke" }),
 	task: Type.String({ description: "Task with optional {previous} placeholder for prior output" }),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
+	timeoutSeconds: TimeoutSchema,
 });
 
 const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
@@ -478,7 +750,29 @@ const SubagentParams = Type.Object({
 		Type.Boolean({ description: "Prompt before running project-local agents. Default: true.", default: true }),
 	),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process (single mode)" })),
+	timeoutSeconds: TimeoutSchema,
 });
+
+// badTimeoutValue reports a timeoutSeconds that is present but not a
+// positive integer (0, negatives, fractions — Q2's validation).
+function badTimeoutValue(v: unknown): boolean {
+	return v !== undefined && (typeof v !== "number" || !Number.isInteger(v) || v <= 0);
+}
+
+// timeoutRejected is the tool's answer to an invalid timeoutSeconds: a
+// structured error that names the parameter; nothing was spawned.
+function timeoutRejected(v: unknown): AgentToolResult<SubagentDetails> {
+	return {
+		content: [
+			{
+				type: "text",
+				text: `Invalid timeoutSeconds ${JSON.stringify(v) ?? String(v)}: it must be a positive integer number of seconds (or absent, for the 1800s default). No subagent was started.`,
+			},
+		],
+		details: { mode: "single", agentScope: "user", projectAgentsDir: undefined, results: [] },
+		isError: true,
+	};
+}
 
 export default function (pi: ExtensionAPI) {
 	pi.registerTool({
@@ -494,6 +788,12 @@ export default function (pi: ExtensionAPI) {
 		parameters: SubagentParams,
 
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+			// Q2: the timeout is a positive integer or absent — 0, negatives
+			// and fractions are rejected BEFORE anything spawns.
+			const badTimeout = badTimeoutValue(params.timeoutSeconds);
+			for (const t of params.tasks ?? []) if (badTimeoutValue(t.timeoutSeconds)) return timeoutRejected(t.timeoutSeconds);
+			for (const c of params.chain ?? []) if (badTimeoutValue(c.timeoutSeconds)) return timeoutRejected(c.timeoutSeconds);
+			if (badTimeout) return timeoutRejected(params.timeoutSeconds);
 			// The daemon fork has one fixed worker and one serial mode. Keeping
 			// the upstream result protocol lets the recorder consume updates.
 			if (params.agent !== "worker" || !params.task || params.tasks?.length || params.chain?.length || params.agentScope === "project" || params.agentScope === "both") {
@@ -604,6 +904,7 @@ export default function (pi: ExtensionAPI) {
 						signal,
 						chainUpdate,
 						makeDetails("chain"),
+						step.timeoutSeconds,
 					);
 					results.push(result);
 
@@ -683,6 +984,7 @@ export default function (pi: ExtensionAPI) {
 							}
 						},
 						makeDetails("parallel"),
+						t.timeoutSeconds,
 					);
 					allResults[index] = result;
 					emitParallelUpdate();
@@ -720,12 +1022,14 @@ export default function (pi: ExtensionAPI) {
 					signal,
 					onUpdate,
 					makeDetails("single"),
+					params.timeoutSeconds,
 				);
 				const isError = isFailedResult(result);
 				if (isError) {
 					const errorMsg = getResultOutput(result);
+					const head = result.timedOut ? `Agent timed out after ${result.timeoutSeconds}s:` : `Agent ${result.stopReason || "failed"}:`;
 					return {
-						content: [{ type: "text", text: `Agent ${result.stopReason || "failed"}: ${errorMsg}` }],
+						content: [{ type: "text", text: `${head} ${errorMsg}` }],
 						details: makeDetails("single")([result]),
 						isError: true,
 					};

@@ -1129,3 +1129,27 @@ sync ask the owner at hand-off instead of at verification.
   must change: nothing — the judgment, its records and the baseline worktree
   are the lane's own scripts; a work item claimed before this section keeps
   its claim-time lane snapshot and runs the previous behavior.
+
+## v0.2.4, the subagent process lifecycle and the cleanup_failed park (polyforge#200)
+
+Two owner-visible changes ship together. The daemon-owned pi subagent tool
+gains a per-task `timeoutSeconds` parameter (a positive integer of seconds,
+default 1800, measured from the child's actual start; 0, negatives and
+fractions are refused before anything spawns): a timed-out worker is stopped
+with its descendants — TERM, a bounded grace, KILL, a bounded wait — and the
+result is a failure that says so (`timedOut` and the effective value beside
+the existing details shape; the step's archive marks it failed). An aborted
+or timed-out stop collects only that call's descendants, identified by a
+per-call inherited `PF_SUBAGENT_ID` marker beside the work item's and the
+daemon's markers.
+
+A step-end process cleanup that cannot prove the step's processes gone now
+parks the work item blocked, kind `cleanup_failed` — after its path's own
+records are written: a received hand-off stays on the call ledger (the
+resume re-runs the sweep and settles it without re-running the step), a
+failed dispatch keeps its failure record and retry ladder (the resume
+retries the step), an open ask keeps standing (the resume re-enters it);
+`pf watch` shows the kind with its required action, Pi Web's item panel
+labels it, and `pf answer` names the continuation. The `pi_subagents`
+switch stays default-off; a work item in flight keeps its claim-time lane
+snapshot, so nothing is gated retroactively.

@@ -671,23 +671,29 @@ const stepWIPBound = 30 * time.Second
 // one step at a time per WI, so no successor exists while this runs; and
 // the dispatch's wall ends before this hook (driver.Run's endedAt), so
 // neither the sweep nor the push is booked into the step's T.
-func (r *Runtime) stepEnded(wi string) func(context.Context) {
-	return func(ctx context.Context) {
+func (r *Runtime) stepEnded(wi string) func(context.Context) error {
+	return func(ctx context.Context) error {
 		ctx, cancel := context.WithTimeout(ctx, stepWIPBound)
 		defer cancel()
-		r.sweepStepEscapees(wi)
+		serr := r.sweepStepEscapees(wi)
+		// the WIP push runs even on a failed sweep (best-effort, as
+		// before): the park keeps the hand-off and the tree's uncommitted
+		// work must not be lost behind it.
 		r.SaveTaskWIP(ctx, wi)
+		return serr
 	}
 }
 
 // sweepStepEscapees kills what the ended step left outside its process
 // group (a child that called setsid or double-forked): the same L4
 // env-marker layer the WI-level teardown runs.
-func (r *Runtime) sweepStepEscapees(wi string) {
+func (r *Runtime) sweepStepEscapees(wi string) error {
 	rep, err := Cleanup(CleanupTarget{WIID: wi, DaemonID: r.cfg.MachineID}, cleanupBound)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "runtime: %s: step-end escapee sweep incomplete: %v (warnings: %v)\n", wi, err, rep.Warnings)
+		return fmt.Errorf("step-end escapee sweep incomplete: %w", err)
 	}
+	return nil
 }
 
 // EventRecoveryParked is the durable, owner-visible record of a recovery

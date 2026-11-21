@@ -49,6 +49,16 @@ RUN GOBIN=/usr/local/bin GOPATH=/tmp/gopath GOCACHE=/tmp/gocache \
 # externally managed (PEP 668), and this image is single-purpose.
 RUN python3 -m pip install --break-system-packages --no-cache-dir mypy==1.20.2
 
+# pi for the subagent lifecycle tests (polyforge#200): the wrapper tests
+# and the production AC3 proof drive the REAL pi — the extension's
+# dependency resolution walks the installed package's node_modules and the
+# production proof launches pi as the step harness. The pin is the exact
+# version the host's step environment runs (owner ruling 2026-11-21: the
+# gate tests what production runs, `pi --version` on the host — not the
+# ticket's 1.5.x reference).
+RUN npm install -g @earendil-works/pi-coding-agent@1.4.0 \
+ && rm -rf /root/.npm
+
 # gitleaks for the public-baseline scanner test (it reads $GITLEAKS).
 ARG GITLEAKS_VERSION=8.30.1
 RUN set -e; arch="$(dpkg --print-architecture)"; \
@@ -85,4 +95,4 @@ ENV GOPATH=/cache/go \
 RUN mkdir -p /cache && chmod 1777 /cache \
  && go version && node --version && npm --version && python3 --version \
  && git --version && tmux -V && govulncheck -version && gitleaks version \
- && python3 -m mypy --version
+ && python3 -m mypy --version && pi --version

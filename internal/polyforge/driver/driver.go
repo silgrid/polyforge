@@ -108,9 +108,13 @@ type Config struct {
 	// Spawner derives the step processes. Required.
 	Spawner StepSpawner
 	// StepEnded runs after each dispatch's process is gone, before its
-	// result or failure is written (production: the task-repo WIP push).
-	// It never fails the step; nil = nothing to run.
-	StepEnded func(context.Context)
+	// result or failure is written (production: the step-end escapee
+	// sweep, then the task-repo WIP push). A non-nil error means the
+	// cleanup could not prove the step's processes gone: the work item
+	// parks (the hand-off stays on the ledger for the resume to settle
+	// after a re-run of the hook), it never fails the step. nil = nothing
+	// to run.
+	StepEnded func(context.Context) error
 	// SpawnN seeds the per-WI monotonic derivation counter (B2): the
 	// same sources the runtime uses — state.json's spawn_n, or the
 	// capsule spawn-journal max across a fresh clone. Each step process
@@ -253,6 +257,15 @@ type Driver struct {
 	// awaiting_owner event was last emitted for in this driver life (a
 	// restarted driver re-announces an ask it finds open).
 	inputEventFor string
+	// resumeCleanupPark: the flavor of the cleanup_failed park the resume
+	// just unblocked (r3#1) — the park's own flavor, read from its reason
+	// BEFORE the unblock clears it, never re-derived later: an open ask
+	// answered through `pf answer` is closed by its reply, so a later
+	// probe would mislabel it a failed dispatch. Zero (cleanupParkNone)
+	// = no cleanup park was unblocked. In-memory only: a crash between
+	// the unblock and Run re-claims fresh, and the recovery sweep covers
+	// the interval.
+	resumeCleanupPark cleanupParkFlavor
 	// parked is the open ask of the current dispatch the driver last read
 	// from the capsule's asks.jsonl (ask.go): the lock-free fact the
 	// settled-dispatch test reads; nil = none.
@@ -408,6 +421,24 @@ func (d *Driver) Run(ctx context.Context) error {
 	// pointer; an operator shutdown never reaches this hook (the daemon
 	// filters it).
 	collected, collectedN := d.unconsumedResult()
+	// r2#1/r3#1: a resume from a cleanup_failed park re-runs the step-end
+	// sweep before anything dispatches — every flavor, exactly as the
+	// park's RequiredAction and pf answer's wake line say — and the
+	// re-park keeps the flavor of the resumed park, read before the
+	// unblock (an answered ask is closed by its reply; a later probe would
+	// mislabel it). The kept hand-off flavor settles through the collected
+	// branch below (which re-runs the sweep itself); a failed dispatch or
+	// an open ask has nothing to settle, so the sweep gates their
+	// re-dispatch here: still failing — re-park with that flavor's own
+	// continuation and dispatch nothing.
+	if flavor := d.consumeResumeCleanupPark(); (flavor == cleanupParkFailedDispatch || flavor == cleanupParkOpenAsk) && collected == nil {
+		if serr := d.stepEndedSweep(ctx); serr != nil {
+			if stop, err := d.parkCleanupFailed(d.Snapshot().CurrentStep, serr, flavor); stop || err != nil {
+				return err
+			}
+			return nil
+		}
+	}
 	// A dispatch that asked the owner is settled by its ask (ask.go): the
 	// open ask is read before the interruption archive and the claim
 	// re-entry below decide what the dispatch they found needs — nothing,
@@ -459,6 +490,17 @@ func (d *Driver) Run(ctx context.Context) error {
 		if collected != nil {
 			res := collected
 			collected = nil
+			// The step-end sequence never completed for this hand-off (a
+			// parked cleanup or a predecessor that died mid-hook): re-run
+			// it BEFORE the settle writes the outcome (polyforge#200). A
+			// sweep that still cannot prove the processes gone keeps the
+			// park; a clean one settles the kept hand-off.
+			if serr := d.stepEndedSweep(ctx); serr != nil {
+				if stop, err := d.parkCleanupFailed(res.StepID, serr, cleanupParkKeptHandoff); stop || err != nil {
+					return err
+				}
+				return nil
+			}
 			// Book the dead dispatch's runtime before its envelope settles
 			// (B4): the measure ends where the dispatch actually
 			// ran — at the envelope's daemon stamp — so daemon downtime and a
@@ -589,18 +631,22 @@ func (d *Driver) Run(ctx context.Context) error {
 			// into T ends where the wait began, the step-end hook runs (the
 			// process is gone), and the plan pass parks on the ask.
 			d.addUnbookedUntil(stepID, bookedFrom, awaiting.Since)
-			if d.cfg.StepEnded != nil && ctx.Err() == nil {
-				d.cfg.StepEnded(ctx)
-			}
+			serr := d.stepEndedSweep(ctx)
 			d.announceEnd(stepID, n, supervise.OutcomeAwaitingOwner, 0, "")
 			// the owner's message resumes this conversation (relay.go):
 			// the next dispatch of the step sends only the messages
 			d.noteMessageResume(stepID)
+			// no hand-off exists here: the open ask is what the resume
+			// re-enters once the sweep proves clean (polyforge#200 r1#1).
+			if serr != nil {
+				if stop, err := d.parkCleanupFailed(stepID, serr, cleanupParkOpenAsk); stop || err != nil {
+					return err
+				}
+				return nil
+			}
 			continue
 		}
-		if d.cfg.StepEnded != nil && ctx.Err() == nil {
-			d.cfg.StepEnded(ctx)
-		}
+		sweepErr := d.stepEndedSweep(ctx)
 		if verdict != nil {
 			// The supervisor judged the dispatch dead. The process is
 			// already torn down; this is the dispatch's one failure record.
@@ -611,6 +657,14 @@ func (d *Driver) Run(ctx context.Context) error {
 			vc, vsrc := verdictCauseWith(*verdict, d.textRules())
 			if stop, err := d.failDispatch(ctx, stepID, n, bookedFrom, endedAt, vc, -1, verdict.Evidence, verdict, vsrc, strings.TrimSpace(verdict.TurnError)); stop {
 				return err
+			}
+			// the dispatch's failure record is written; the park pauses the
+			// retry ladder until the sweep proves clean (polyforge#200 r1#1)
+			if sweepErr != nil {
+				if stop, err := d.parkCleanupFailed(stepID, sweepErr, cleanupParkFailedDispatch); stop || err != nil {
+					return err
+				}
+				return nil
 			}
 			continue
 		}
@@ -630,7 +684,24 @@ func (d *Driver) Run(ctx context.Context) error {
 			if stop, err := d.failDispatch(ctx, stepID, n, bookedFrom, endedAt, cause, code, detail, nil, src, etext); stop {
 				return err
 			}
+			// the failure record is written; the park pauses the retry
+			// ladder until the sweep proves clean (polyforge#200 r1#1)
+			if sweepErr != nil {
+				if stop, err := d.parkCleanupFailed(stepID, sweepErr, cleanupParkFailedDispatch); stop || err != nil {
+					return err
+				}
+				return nil
+			}
 			continue
+		}
+		// a received hand-off: the park keeps it on the ledger and the
+		// resume settles it once the sweep proves clean
+		if sweepErr != nil {
+			d.announceEnd(stepID, n, supervise.OutcomeResult, 0, "")
+			if stop, err := d.parkCleanupFailed(stepID, sweepErr, cleanupParkKeptHandoff); stop || err != nil {
+				return err
+			}
+			return nil
 		}
 		d.announceEnd(stepID, n, supervise.OutcomeResult, 0, "")
 		d.addUnbookedUntil(stepID, bookedFrom, endedAt)
@@ -1131,14 +1202,40 @@ func validateCandidates(m map[string][]string) error {
 func (d *Driver) ResumeCurrent() error {
 	d.mu.Lock()
 	blocked := d.exec.WorkflowStatus == StatusBlocked
+	flavor := cleanupParkNone
+	if CleanupFailedBlocked(d.exec.BlockedReason) {
+		flavor = cleanupParkFlavorOf(d.exec.BlockedReason)
+	}
 	d.mu.Unlock()
 	if !blocked {
 		return fmt.Errorf("driver: resume is the owner's blocked-step verdict; workflow is %q", d.Snapshot().WorkflowStatus)
 	}
-	return d.transition(TransitionRequest{
+	if err := d.transition(TransitionRequest{
 		Kind:   TransUnblock,
 		SpawnN: d.currentSpawnN(),
-	})
+	}); err != nil {
+		return err
+	}
+	// r2#1/r3#1: the park's own RequiredAction promises the sweep re-runs
+	// first, for every flavor — and the re-park keeps the flavor of the
+	// park the owner resumed, not one re-derived from the capsule after
+	// the answer may have closed the ask.
+	if flavor != cleanupParkNone {
+		d.mu.Lock()
+		d.resumeCleanupPark = flavor
+		d.mu.Unlock()
+	}
+	return nil
+}
+
+// consumeResumeCleanupPark answers (and clears) the flavor of the
+// cleanup_failed park the resume unblocked (cleanupParkNone when none).
+func (d *Driver) consumeResumeCleanupPark() cleanupParkFlavor {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	flavor := d.resumeCleanupPark
+	d.resumeCleanupPark = cleanupParkNone
+	return flavor
 }
 
 // Snapshot answers a deep copy of the current execution state (the
