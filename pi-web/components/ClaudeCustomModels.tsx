@@ -99,13 +99,17 @@ export function ClaudeCustomModels({ onRefresh }: { onRefresh?: () => void }) {
         body: JSON.stringify({ confirm: preview.digest }),
       });
       const data = await response.json();
-      if (!response.ok || data.error) throw new Error(data.message ?? data.error ?? `HTTP ${response.status}`);
-      if (data.status === "conflict") {
-        // The source or target changed while the user looked: the fresh
-        // preview rides along, never a silent merge.
+      if (response.status === 409 && data.status === "conflict") {
+        // The source or target changed while the user looked: the route
+        // answers 409 with the fresh preview riding along (never a silent
+        // merge) — it is not an error; the banner shows the new state and
+        // the next「合并」carries the new digest (r2#1: this check runs before
+        // the !response.ok throw below, which used to eat it).
         setPreview({ native: data.native, missing: data.missing, digest: data.digest, shadowed: data.shadowed === true });
+        setShadowed(data.shadowed === true);
         return;
       }
+      if (!response.ok || data.error) throw new Error(data.message ?? data.error ?? `HTTP ${response.status}`);
       setPreview(null);
       setShadowed(data.shadowed === true);
       await load();
