@@ -165,6 +165,8 @@ test("a done migration reloads the list; the editor writes the full next list pe
     await state.answer(0, { status: "done", changed: true, shadowed: false });
     await state.answer(1, modelPayload(["claude-a", "claude-b"]));
     assert.ok(textOf(state.hook).join("\n").includes("claude-a"));
+    // An automatic migration on entry refreshed the page's own claude rows.
+    assert.equal(state.refreshes.length, 1, "an automatic migration did not refresh the page");
     // Remove claude-a: the PUT carries the full next list.
     const remove = removeButtonOf(state.hook, "claude-a");
     assert.ok(remove, "the remove button is on screen");
@@ -175,7 +177,7 @@ test("a done migration reloads the list; the editor writes the full next list pe
     assert.deepEqual(state.requestBody(2), { customModels: ["claude-b"] });
     // A successful write owns its state: no extra read, only the page refresh.
     assert.equal(state.requests.length, 3, "the edit re-read the list it already knows");
-    assert.equal(state.refreshes.length, 1, "the edit did not refresh the page");
+    assert.equal(state.refreshes.length, 2, "the edit did not refresh the page (the entry's automatic migration already counted one)");
     // A refused write keeps the list and shows the reason.
     const refused = removeButtonOf(state.hook, "claude-b");
     assert.ok(refused, "the second remove button is on screen");

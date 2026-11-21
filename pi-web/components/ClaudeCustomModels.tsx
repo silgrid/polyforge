@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 
 /**
@@ -34,6 +34,11 @@ export function ClaudeCustomModels({ onRefresh }: { onRefresh?: () => void }) {
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // The parent's refresh callback may change identity every render (the
+  // models page passes an inline bump); the mount effect must not refire on
+  // that, so it goes through a ref.
+  const refreshRef = useRef(onRefresh);
+  refreshRef.current = onRefresh;
 
   const load = useCallback(async () => {
     try {
@@ -67,6 +72,10 @@ export function ClaudeCustomModels({ onRefresh }: { onRefresh?: () => void }) {
           setPreview({ native: data.native, missing: data.missing, digest: data.digest, shadowed: data.shadowed === true });
         } else if (data.status === "blocked" || data.status === "deferred") {
           setNotice(typeof data.reason === "string" ? data.reason : String(data.status));
+        } else if (data.status === "done" && data.changed === true) {
+          // An automatic migration on entry changed the picker: the page's own
+          // claude rows (fetched beside this POST) must re-read (AC2's 列表刷新).
+          refreshRef.current?.();
         }
         await load();
       } catch (cause) {
