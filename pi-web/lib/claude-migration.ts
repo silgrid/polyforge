@@ -198,10 +198,14 @@ async function runMigration(options: ClaudeMigrationOptions, agentDir: string): 
 
   // 85a3-3: the custom names are NOT this flow's any more — the models page's
   // own phase (below) migrates them, so an old settings file that still holds
-  // a customModels key (any value: a non-empty list to merge, or illegal data
-  // the phase must report as a blockage) is kept for it. Delete what this
-  // flow owns, and mark only once both old files are gone.
-  const settingsHoldsCustomModels = oldSettings !== null && "customModels" in oldSettings;
+  // customModels to move (a non-empty list to merge, or illegal data the
+  // phase must report as a blockage) is kept for it. An empty list carries
+  // nothing — the file goes as 85a4's own case always did (claude-create's
+  // create-time AC). Delete what this flow owns, and mark only once both old
+  // files are gone.
+  const rawCustomModels = oldSettings?.customModels;
+  const settingsHoldsCustomModels = oldSettings !== null && "customModels" in oldSettings
+    && !(Array.isArray(rawCustomModels) && rawCustomModels.length === 0);
   if (existsSync(retired.permissions)) unlinkSync(retired.permissions);
   if (!settingsHoldsCustomModels && existsSync(retired.settings)) unlinkSync(retired.settings);
   if (existsSync(retired.settings) || existsSync(retired.permissions)) {
