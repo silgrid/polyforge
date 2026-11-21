@@ -84,6 +84,10 @@ type StepSpec struct {
 	Hub       []string
 	HubAttrs  []string
 	WrapAttrs []string
+	// FastCheckProof mirrors `fast_check_proof` (nil = none): the result
+	// file and the command the daemon's done gate reads for every task
+	// repo the step changed.
+	FastCheckProof *workflow.FastCheckProof
 }
 
 // HubAllowed answers the `pf step hub` verbs step id may call: its
