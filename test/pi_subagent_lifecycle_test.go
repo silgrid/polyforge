@@ -334,7 +334,7 @@ func TestPiSubagentProductionHandoffCleanup(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(opDir, "models.json"), blob, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(opDir, "auth.json"), []byte(`{"acme":{"api_key":"lifecycle"}}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(opDir, "auth.json"), []byte(`{"acme":{"type":"api_key","key":"lifecycle"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
