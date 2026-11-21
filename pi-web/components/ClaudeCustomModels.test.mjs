@@ -100,7 +100,7 @@ function setup() {
   };
 }
 
-const modelPayload = (customModels) => ({ harness: "claude", concept: "model", data: { customModels } });
+const modelPayload = (customModels, userCustomModels = customModels) => ({ harness: "claude", concept: "model", data: { customModels, userCustomModels } });
 const PREVIEW = {
   status: "preview",
   native: [{ model: "native-keep", label: "K" }],
@@ -195,6 +195,33 @@ test("a done migration reloads the list; the editor writes the full next list pe
     assert.equal(state.requests[4].init.method, "PUT");
     // claude-a went with the successful remove; the refused one kept claude-b.
     assert.deepEqual(state.requestBody(4), { customModels: ["claude-b", "claude-c"] });
+  } finally {
+    state.restore();
+  }
+});
+
+test("the editor lists only the user layer's own names — a managed picker never enters the PUT list (r1#1)", async () => {
+  const state = setup();
+  try {
+    await state.answer(0, { status: "done", changed: false, shadowed: true });
+    await state.answer(1, modelPayload(["managed-only", "user-own"], ["user-own"]));
+    const text = textOf(state.hook).join("\n");
+    assert.ok(text.includes("user-own"), "the user layer's name is missing from the editor");
+    assert.ok(!text.includes("managed-only"), "a managed name entered the editor's list");
+    // Remove the user layer's one name: the PUT carries the user layer's own
+    // next state, never the merged view.
+    const remove = removeButtonOf(state.hook, "user-own");
+    assert.ok(remove, "the remove button is on screen");
+    remove.onClick();
+    await state.answer(2, { harness: "claude", concept: "model", result: { status: "written" } });
+    assert.deepEqual(state.requestBody(2), { customModels: [] });
+    // Add one back: still the user layer alone.
+    const input = byAttr(state.hook, "aria-label").find((node) => node.type === "input")?.props;
+    input.onChange({ target: { value: "fresh-user-name" } });
+    state.hook.flush();
+    findButton(state.hook, "models.claudeCustomAdd").onClick();
+    await state.answer(3, { harness: "claude", concept: "model", result: { status: "written" } });
+    assert.deepEqual(state.requestBody(3), { customModels: ["fresh-user-name"] });
   } finally {
     state.restore();
   }

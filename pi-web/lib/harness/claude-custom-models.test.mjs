@@ -140,6 +140,21 @@ test("customModels: duplicates collapse in order; an invalid change is refused w
   assert.deepEqual(settingsOf(configDir).modelPicker.options, [{ model: "claude-x" }, { model: "claude-y" }]);
 });
 
+test("read: customModels merges the layers for display, userCustomModels is the user layer's own list the editor writes (r1#1)", async () => {
+  const configDir = writeTarget("layers-target", { modelPicker: { options: [{ model: "user-own-1" }] } });
+  fs.writeFileSync(managedSettings, JSON.stringify({ modelPicker: { options: [{ model: "managed-only" }] } }));
+  try {
+    const payload = await adapter.read("model", ctx(configDir));
+    // The merged view (the composer's list source) names both layers, the
+    // user layer's names first; the editor's list is the user layer alone,
+    // so an edit can never copy a managed name into the user settings.
+    assert.deepEqual(payload.customModels, ["user-own-1", "managed-only"]);
+    assert.deepEqual(payload.userCustomModels, ["user-own-1"]);
+  } finally {
+    fs.rmSync(managedSettings, { force: true });
+  }
+});
+
 test("customModels: the 2.1.242 floor, an unknown major and a missing claude all refuse without touching the file (AC1)", async () => {
   const configDir = writeTarget("floor-target", { model: "opus" });
   for (const [name, binary] of [["below the floor", belowFloorBinary], ["an unknown major", unknownBinary], ["no claude at all", missingBinary]]) {

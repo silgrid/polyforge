@@ -590,7 +590,7 @@ try {
     } } }));
     await page.route("**/api/harness/claude/model", (route) => route.fulfill({ json: { harness: "claude", concept: "model", data: {
       defaultProvider: null, defaultModel: null, reasoningEffort: null,
-      perModelReasoningEffort: {}, providers: [], customModels: [],
+      perModelReasoningEffort: {}, providers: [], customModels: [], userCustomModels: [],
     } } }));
     await page.route(/\/api\/auth\/providers/, (route) => route.fulfill({ json: {
       providers: [], oauthProviders: [], apiKeyProviders: [],
@@ -870,7 +870,7 @@ try {
     let names = ["claude-a", "claude-b"];
     const modelPayload = () => ({ harness: "claude", concept: "model", data: {
       defaultProvider: null, defaultModel: null, reasoningEffort: null,
-      perModelReasoningEffort: {}, providers: [], customModels: names,
+      perModelReasoningEffort: {}, providers: [], customModels: names, userCustomModels: names,
     } });
     await page.route("**/api/claude-models-migration", (route) => {
       migrationPosts.push(route.request().postDataJSON());
@@ -908,7 +908,7 @@ try {
     await page.route("**/api/models-config", (route) => route.fulfill({ json: { providers: {} } }));
     await page.route("**/api/harness/pi/model", (route) => route.fulfill({ json: { harness: "pi", concept: "model", data: {
       defaultProvider: null, defaultModel: null, reasoningEffort: null,
-      perModelReasoningEffort: {}, providers: [], customModels: [],
+      perModelReasoningEffort: {}, providers: [], customModels: [], userCustomModels: [],
     } } }));
     await openSettings(page);
     await tab(page, /^Models$/).click({ timeout: ACTION_MS });
@@ -923,7 +923,8 @@ try {
     // The preview writes nothing: every mount POST so far carries no confirm
     // (a dev-mode StrictMode double mount may fire the effect twice), and no
     // PUT has happened.
-    assert.ok(migrationPosts.length >= 1, "the mount never fired the POST");
+    assert.ok(migrationPosts.length >= 1 && migrationPosts.length <= 2,
+      `the mount fired ${migrationPosts.length} POSTs (one, or a dev-mode StrictMode double)`);
     assert.ok(migrationPosts.every((body) => body?.confirm === undefined), "a mount POST carried a confirm");
     assert.equal(modelPuts.length, 0, "the preview wrote the picker");
     await banner.getByRole("button", { name: "Merge", exact: true }).click({ timeout: ACTION_MS });

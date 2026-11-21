@@ -170,6 +170,7 @@ test("read model: defaults from settings.json, providers as existence only", asy
       { name: "nokey", hasApiKey: false },
     ],
     customModels: [],
+    userCustomModels: [],
   });
   noSentinel(payload);
 });
