@@ -336,14 +336,26 @@ interface CmdWord {
 	args: string[]; // the raw words that follow it (no ops)
 }
 
+// WRAPPER_VALUE_OPTS: a wrapper's short options that take their own
+// word as a value (owner plan-review #6: skip a wrapper's options, then
+// judge the real command) — the value word is skipped with its option.
+const WRAPPER_VALUE_OPTS: Record<string, string[]> = {
+	timeout: ["s", "k", "signal", "kill-after"],
+	nice: ["n"],
+	sudo: ["u", "g"],
+	env: ["u"],
+};
+
 function commandWords(toks: Token[]): CmdWord[] {
 	const out: CmdWord[] = [];
 	for (let i = 0; i < toks.length; i++) {
 		const t = toks[i];
 		if (t.kind !== "word" || !t.cmdPos) continue;
 		let j = i;
-		// prefix assignments and wrappers
-		let seenWrapper = false;
+		// prefix assignments and wrappers: assignments skip, a wrapper
+		// skips its options (and each value option's value word), and
+		// `timeout` additionally skips its DURATION operand — the first
+		// word after its options. Wrappers may chain (timeout 10s nice …).
 		for (;;) {
 			const w = toks[j];
 			if (!w || w.kind !== "word") break;
@@ -351,14 +363,28 @@ function commandWords(toks: Token[]): CmdWord[] {
 				j++;
 				continue;
 			}
-			if (!seenWrapper && WRAPPERS.has(strip(w.text))) {
-				seenWrapper = true;
-				j++;
-				// a wrapper's options are skipped before its command
-				while (toks[j] && toks[j].kind === "word" && strip(toks[j].text).startsWith("-")) j++;
-				continue;
+			const name = strip(w.text);
+			if (!WRAPPERS.has(name)) break;
+			j++;
+			// a wrapper's options are skipped before its command; an option
+			// in WRAPPER_VALUE_OPTS takes its value word with it
+			for (;;) {
+				const o = toks[j];
+				if (!o || o.kind !== "word") break;
+				const text = strip(o.text);
+				if (text !== "-" && text.startsWith("-")) {
+					j++;
+					const letter = text.replace(/^-+/, "");
+					if ((WRAPPER_VALUE_OPTS[name] || []).includes(letter) && toks[j] && toks[j].kind === "word") {
+						j++;
+					}
+					continue;
+				}
+				break;
 			}
-			break;
+			// `timeout`'s DURATION operand: the first word after the options
+			if (name === "timeout" && toks[j] && toks[j].kind === "word") j++;
+			continue;
 		}
 		const cmd = toks[j];
 		if (!cmd || cmd.kind !== "word") continue;
