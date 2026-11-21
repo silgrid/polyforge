@@ -2180,7 +2180,6 @@ export const enLocale: LocalePlugin = {
     "polyforge.stepControls.source": "Effective model",
     "polyforge.stepControls.sourceNone": "no chain declared — the harness default model",
     "polyforge.stepControls.pending": "(lands with the next claim)",
-    "polyforge.stepControls.harness": "harness",
     "polyforge.stepControls.model": "model id",
     "polyforge.stepControls.apply": "Set",
     "polyforge.stepControls.busy": "applying…",

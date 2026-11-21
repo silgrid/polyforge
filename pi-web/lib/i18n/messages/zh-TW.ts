@@ -2180,7 +2180,6 @@ export const zhTWLocale: LocalePlugin = {
     "polyforge.stepControls.source": "生效模型",
     "polyforge.stepControls.sourceNone": "未宣告候選鏈，將用 harness 預設模型",
     "polyforge.stepControls.pending": "（下次領取時生效）",
-    "polyforge.stepControls.harness": "harness",
     "polyforge.stepControls.model": "模型 id",
     "polyforge.stepControls.apply": "設定",
     "polyforge.stepControls.busy": "執行中…",

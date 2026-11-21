@@ -136,10 +136,17 @@ test("the watch route composes the override view into the same response (polyfor
     ],
   });
   assert.deepEqual([...argv()].sort(), [
+    // polyforge#151 (85b2): the composed step-tier catalog's presence probe
+    // (this stub answers only a bare --version, so the probe reads absent
+    // and the composer stops there — a present pf adds its Host-pinned
+    // config list read)
+    ["--json", "--version"],
     ["--json", "override", "wi_A1"],
     ["--json", "params", "wi_A1"],
     ["--json", "watch", "wi_A1", "--once", "--demand", "--events", "40"],
-  ], "one watch read and the two composed reads it starts (polyforge#48/#79: the spawn order is not pinned — they start together)");
+  ], "one watch read, the two composed reads it starts and the catalog composer's probe (polyforge#48/#79/#151: the spawn order is not pinned — they start together)");
+  assert.equal(body.status?.stepTiers?.reason, "polyforge is not installed on this machine", "the composed catalog degrades with its reason (this stub answers no --json --version, so the probe reads absent), never 5xx");
+  assert.deepEqual(body.status?.stepTiers?.tiers, []);
 });
 
 test("polyforge#48 AC3: without overrides=1 the watch route never reads the view", async () => {
