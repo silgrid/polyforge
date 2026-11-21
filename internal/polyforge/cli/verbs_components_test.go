@@ -425,6 +425,45 @@ func TestComponentsVerbCancelAndStatus(t *testing.T) {
 	if got.Status == nil || got.Status.State != components.UpgradeStateFailed || !strings.Contains(got.Status.Error, "中断") {
 		t.Fatalf("status must answer the volume's recorded run (the recovery's failed record): %+v", got.Status)
 	}
+
+	// a BUSY record whose transaction lock has no holder is an
+	// interrupted run: status says so (the derived fact the recovery
+	// acts on), so a reader can tell a live run from a dead one without
+	// acting; a LIVE transaction never carries the flag.
+	for _, tc := range []struct {
+		name string
+		live bool
+		want bool
+	}{
+		{"interrupted", false, true},
+		{"live", true, false},
+	} {
+		if err := components.WriteUpgradeStatus(root, &components.UpgradeStatus{
+			Operation: components.OperationUpgrade, State: components.UpgradeStateRunning,
+			Phase: "stage", From: "v0.2.4", To: "v0.2.5",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		var release func()
+		if tc.live {
+			holdTransactionLock(t, root)
+		} else if release != nil {
+			release()
+		}
+		code, out, stderr := runPf(t, env, "--json", "components", "status")
+		if code != 0 {
+			t.Fatalf("components status (%s): exit %d (%s)", tc.name, code, stderr)
+		}
+		var busy struct {
+			Interrupted bool `json:"interrupted"`
+		}
+		if err := json.Unmarshal([]byte(out), &busy); err != nil {
+			t.Fatalf("components status --json (%s) answered no JSON: %v (%s)", tc.name, err, out)
+		}
+		if busy.Interrupted != tc.want {
+			t.Fatalf("the interrupted fact of a %s run must be %v, got %v (%s)", tc.name, tc.want, busy.Interrupted, out)
+		}
+	}
 }
 
 // TestComponentsVerbFaceParsesBusyCells pins the busy answer's reading:
