@@ -10,6 +10,9 @@ import (
 	"github.com/silgrid/polyforge/internal/polyforge/cellcfg"
 )
 
+// (u18: the field and input landed as zero-value signatures first, so
+// this red is an assertion, never a compile error.)
+
 // setPreviousDataLayout rewrites the fixture's previous manifest with
 // the given declared data layout (the shape its build reads — the
 // owner's ruling of 2026-11-21 added the field for exactly this
