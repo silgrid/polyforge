@@ -1812,6 +1812,26 @@ func TestW113DoctorHealthyMachine(t *testing.T) {
 	if !doc.OK {
 		t.Fatalf("pf doctor --json (healthy): ok is false (checks %+v, output %q)", doc.Checks, jout)
 	}
+	// polyforge#143 (85b): the Host-only [step_tiers] catalog is doctor's
+	// newest row, and a healthy machine declares one — so the row passes and
+	// names the tier that covers the project default written below
+	// (polyforge#85 fix build, verification r1#1: this fixture declared no
+	// catalog, so the row read "skip" on a healthy machine).
+	var catalog *w113DoctorCheck
+	for i := range doc.Checks {
+		if doc.Checks[i].Name == "step tiers catalog" {
+			catalog = &doc.Checks[i]
+		}
+	}
+	if catalog == nil {
+		t.Fatalf("pf doctor --json (healthy): no %q row (checks %+v, output %q)", "step tiers catalog", doc.Checks, jout)
+	}
+	if catalog.Status != "pass" {
+		t.Fatalf("pf doctor --json (healthy): check %q is %q, want pass (detail %q, output %q)", catalog.Name, catalog.Status, catalog.Detail, jout)
+	}
+	if !strings.Contains(catalog.Detail, "in the [step_tiers] catalog") {
+		t.Fatalf("the [step_tiers] row must report the project default as covered by the catalog: %q", catalog.Detail)
+	}
 	for _, c := range doc.Checks {
 		switch c.Name {
 		case "claude statusline", "pi package",
