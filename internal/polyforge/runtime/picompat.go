@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/silgrid/polyforge/internal/polyforge/runtime/stepagentassets"
 )
@@ -72,6 +73,15 @@ func (e *PiDispatchError) Error() string {
 // piRequiredFlags is the flag set the daemon-owned step process needs
 // (polyforge#193/P6). --no-approve joined it when the dedicated step agent
 // directory replaced the operator's approvals path.
+// The compatibility gate's one budget (owner rulings 2026-11-22 Q5/D5): the
+// whole check — target/version discovery, the flag check, the capability
+// call, and the process-group recovery — shares ten seconds. Capability work
+// stops at nine; the last second bounds TERM, KILL and the waits.
+const (
+	piCompatTotalBudget      = 10 * time.Second
+	piCompatCapabilityBudget = 9 * time.Second
+)
+
 var piRequiredFlags = []string{
 	"--no-skills",
 	"--no-context-files",
@@ -84,7 +94,10 @@ var piRequiredFlags = []string{
 // short command, the first non-empty line. An empty or failing report is a
 // version-class refusal (no numeric comparison: D5 sets no version floor).
 func piVersion(ctx context.Context, bin string) (string, error) {
-	out, err := exec.CommandContext(ctx, bin, "--version").Output()
+	cmd := exec.CommandContext(ctx, bin, "--version")
+	// a descendant holding the pipe must not outlive the deadline
+	cmd.WaitDelay = 500 * time.Millisecond
+	out, err := cmd.Output()
 	if err != nil {
 		return "", err
 	}
@@ -98,7 +111,9 @@ func piVersion(ctx context.Context, bin string) (string, error) {
 // piFlagsCheck refuses a target whose --help does not advertise every
 // required flag.
 func piFlagsCheck(ctx context.Context, bin, version string) error {
-	out, err := exec.CommandContext(ctx, bin, "--help").Output()
+	cmd := exec.CommandContext(ctx, bin, "--help")
+	cmd.WaitDelay = 500 * time.Millisecond
+	out, err := cmd.Output()
 	if err != nil {
 		return piFlagRefusal(bin, version, "--help", err)
 	}
@@ -146,17 +161,29 @@ func piTimeoutRefusal(bin, version, stage string) *PiDispatchError {
 // version, its required flags, and (from the capability probe on) the real
 // load-and-call proof. Bounded by the caller's context.
 func validatePiCompatibility(ctx context.Context, bin string) error {
-	version, err := piVersion(ctx, bin)
+	start := time.Now()
+	workCtx, cancel := context.WithDeadline(ctx, start.Add(piCompatCapabilityBudget))
+	defer cancel()
+	version, err := piVersion(workCtx, bin)
 	if err != nil {
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		if errors.Is(workCtx.Err(), context.DeadlineExceeded) {
 			return piTimeoutRefusal(bin, "", "version")
 		}
 		return piVersionRefusal(bin, err)
 	}
-	if err := piFlagsCheck(ctx, bin, version); err != nil {
+	if err := piFlagsCheck(workCtx, bin, version); err != nil {
+		if errors.Is(workCtx.Err(), context.DeadlineExceeded) {
+			return piTimeoutRefusal(bin, version, "flag")
+		}
 		return err
 	}
-	return piCapabilityProbe(ctx, bin, version)
+	err = piCapabilityProbe(workCtx, bin, version)
+	// a success observed past the deadline is not a pass: the process
+	// group's recovery still has to fit the one budget.
+	if err == nil && (workCtx.Err() != nil || time.Since(start) > piCompatTotalBudget) {
+		return piTimeoutRefusal(bin, version, "capability")
+	}
+	return err
 }
 
 func firstNonEmptyLine(s string) string {

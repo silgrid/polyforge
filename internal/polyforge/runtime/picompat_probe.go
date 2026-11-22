@@ -243,30 +243,39 @@ func piCapabilityProbe(ctx context.Context, bin, version string) error {
 	stderr := &boundedTail{max: 8 << 10}
 	go func() { _, _ = io.Copy(stderr, errR) }()
 	stopped := false
-	stop := func(kill bool) {
+	// stop recovers the WHOLE process group this probe started. A graceful
+	// stop (the proof passed) closes the command channel and gives the
+	// harness a bounded moment to exit; every other stop goes straight to
+	// TERM, a bounded grace, KILL and a bounded wait for a proved exit, so
+	// the recovery fits inside the budget's last second (owner ruling Q5).
+	stop := func(graceful bool) {
 		if stopped {
 			return
 		}
 		stopped = true
 		_ = stdin.Close()
+		if graceful {
+			select {
+			case <-waitCh:
+				close(done)
+				outR.Close()
+				errR.Close()
+				return
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
+		if cmd.Process != nil {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+		}
 		select {
 		case <-waitCh:
-		case <-time.After(time.Second):
+		case <-time.After(500 * time.Millisecond):
 			if cmd.Process != nil {
-				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 			}
-			if kill {
-				select {
-				case <-waitCh:
-				case <-time.After(500 * time.Millisecond):
-					if cmd.Process != nil {
-						_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-					}
-					select {
-					case <-waitCh:
-					case <-time.After(500 * time.Millisecond):
-					}
-				}
+			select {
+			case <-waitCh:
+			case <-time.After(500 * time.Millisecond):
 			}
 		}
 		close(done)
@@ -344,7 +353,7 @@ func piCapabilityProbe(ctx context.Context, bin, version string) error {
 			}
 			result, sawResult := provider.sawToolResult()
 			if providerSawTools && offersSubagent && executed && settled && sawResult && strings.Contains(result, compatProbeRejection) {
-				stop(false)
+				stop(true)
 				return nil
 			}
 		case <-waitCh:
