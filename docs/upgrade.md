@@ -1237,6 +1237,8 @@ path plus entry fingerprint), version and built-in resource digest; a
 same-key concurrent batch probes once and a failure is never cached. Any
 change to the target, the version or any embedded resource probes again.
 An `on` dispatch whose resources or probe fail is refused at that
-dispatch, before the step process or the prompt exists; off and empty
-probe nothing. No upgrade action beyond taking the new `pf`; the switch
-stays default off.
+dispatch, before the step process or the prompt exists, classed
+`pi_resources` for the resources and otherwise by the five classes above;
+an invalid switch value is refused as `pi_subagents_invalid`. Off and
+empty probe nothing. No upgrade action beyond taking the new `pf`; the
+switch stays default off.
