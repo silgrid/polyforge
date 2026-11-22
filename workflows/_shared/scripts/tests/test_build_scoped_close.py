@@ -647,6 +647,76 @@ class CloseContainerTest(unittest.TestCase):
         # the container ends with the run
         self.assertEqual(fb.removes, ["cid-1"])
 
+    def host_fast(self, capsule: str, repo: str, engine: str, out: str,
+                  env: Optional[Dict[str, str]] = None) -> Tuple[int, Dict[str, Any]]:
+        """fast_checks.py --repo (the per-unit bar) in-process — the mode
+        that never starts a container, whatever the repo declares; its
+        exit and its result file."""
+        argv = ["--capsule", capsule, "--repo", repo, "--engine", engine,
+                "--deadline", "10m", "--out", out]
+        so, se = io.StringIO(), io.StringIO()
+        with redirect_stdout(so), redirect_stderr(se):
+            code = fast_checks.main(argv, step_env(env))
+        if not os.path.exists(out):
+            raise AssertionError("fast_checks.py wrote no result file (exit %d): %s" % (code, se.getvalue()[-500:]))
+        with open(out, encoding="utf-8") as f:
+            return code, json.load(f)
+
+    def test_no_dockerfile_keeps_host_behavior(self) -> None:
+        """AC2: a repo without the declared image keeps the host close —
+        the container engine is never even probed (unavailable here), no
+        build, start, exec or remove happens, the commands run on the
+        host, and a same-tree green --reuse entry still hits; a
+        working-tree-only Dockerfile is no declaration, and the per-unit
+        --repo run stays on the host whatever the repo carries."""
+        root = os.path.join(self.root, "host")
+        os.makedirs(root)
+        fx = Fixture(root, {"app": {"pin/note.txt": "the answer is 42\n"}})
+        fx.commit_in_repo("app", {"pin/note.txt": "the answer is 42\n", "lib/x.py": "x = 2\n"}, "change")
+        eng = light_engine(
+            root,
+            report("full", cmd_of("gate-1", "fast", "echo gate-ok")),
+            report("scoped", cmd_of("gate-1", "fast", "echo gate-ok"),
+                   cmd_of("pin", "scoped", "echo pinned")))
+        fb = self.fake_box()
+        fb.unavailable = "the container engine is not here"
+        # the per-unit bar on the host: green, its file the close's reuse
+        fast_out = os.path.join(fx.capsule, "fast.json")
+        code, _res = self.host_fast(fx.capsule, "app", eng, fast_out)
+        self.assertEqual(code, 0)
+        out = os.path.join(fx.capsule, "close.json")
+        code, res = box_close(fx.capsule, "app", eng, fb, out, "--reuse", fast_out)
+        self.assertEqual(code, 0, res.get("summary"))
+        sel = res["details"]["selected"]["app"]
+        self.assertEqual(sel["status"], "green", sel.get("reason", ""))
+        self.assertEqual(res["details"].get("isolation"), "host",
+                         "no declaration keeps the host isolation, recorded")
+        self.assertEqual((fb.builds, fb.starts, fb.execs, fb.removes), ([], [], [], []),
+                         "the host close never touches the container engine")
+        by_name = {c["name"]: c for c in sel["commands"]}
+        self.assertIn("reused", by_name["gate-1"],
+                      "a same-tree host green run is still reuse evidence on the host")
+        self.assertNotIn("reused", by_name["pin"], "a scoped run the fast check never made is no reuse")
+        self.assertEqual(by_name["pin"]["exit_code"], 0, "the selected command ran on the host")
+        # a Dockerfile in the working tree alone is no declaration
+        write(fx.repo("app"), {DOCKERFILE: TEST_DOCKERFILE})
+        code, res = box_close(fx.capsule, "app", eng, fb, os.path.join(fx.capsule, "close2.json"),
+                              "--reuse", fast_out)
+        self.assertEqual(code, 0, res.get("summary"))
+        self.assertEqual(res["details"].get("isolation"), "host",
+                         "an uncommitted Dockerfile changes nothing")
+        self.assertEqual((fb.builds, fb.starts, fb.execs, fb.removes), ([], [], [], []))
+        # a declared repo's per-unit bar stays on the host: the close may
+        # run in the container, the per-unit run never does
+        fx2, eng2 = self.declared_repo("declared")
+        fb2 = self.fake_box("box2")
+        code, res = self.host_fast(fx2.capsule, "app", eng2, os.path.join(fx2.capsule, "fast.json"))
+        self.assertEqual(code, 0, res.get("summary"))
+        self.assertNotIn("isolation", res["details"],
+                         "the per-unit run's record keeps its shape")
+        self.assertEqual((fb2.builds, fb2.starts, fb2.execs), ([], [], []),
+                         "the per-unit bar starts no container")
+
     def test_unchanged_image_reuses_verification_cache(self) -> None:
         """AC3: an unchanged image is never rebuilt — close after close,
         verification between closes, all reference one image tag and one
