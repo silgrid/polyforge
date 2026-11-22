@@ -3,6 +3,7 @@ package testenv
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -102,6 +103,53 @@ func TestNullDeviceGuard(t *testing.T) {
 	if err := nullDeviceErr(os.DevNull); err != nil {
 		t.Errorf("the real null device %s was refused: %v", os.DevNull, err)
 	}
+}
+
+// capsuleChild marks the re-exec'd helper of TestMainIsolatesPFCapsule: it
+// runs in a fresh process whose Main has isolated the environment.
+const capsuleChild = "TESTENV_CAPSULE_CHILD"
+
+// A step process always carries PF_CAPSULE, its capsule root, and the
+// verify-scope engine reads it to resolve the default diff base from the
+// capsule's runtime-state/target-branch.json (polyforge#216): a test that
+// inherits it judges against a branch its synthetic repository never built
+// and falls back to full. Main must keep it away from the tests and the
+// processes they start. The parent binary is already isolated and passes
+// TESTENV_ISOLATED on, so isolation is proven on a fresh process: one
+// started with PF_CAPSULE set and without the isolated-env marker.
+func TestMainIsolatesPFCapsule(t *testing.T) {
+	if os.Getenv(capsuleChild) == "1" {
+		if got, ok := os.LookupEnv("PF_CAPSULE"); ok {
+			t.Fatalf("PF_CAPSULE=%q survived Main's isolation; a verify-scope run would take the step's capsule target branch as the test's diff base", got)
+		}
+		return
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(exe, "-test.run=^TestMainIsolatesPFCapsule$")
+	cmd.Env = append(envWithout(os.Environ(), activeEnv), capsuleChild+"=1", "PF_CAPSULE="+t.TempDir())
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("a test binary started with PF_CAPSULE set: %v\n%s", err, out)
+	}
+}
+
+// envWithout answers env minus every entry setting one of names.
+func envWithout(env []string, names ...string) []string {
+	var keep []string
+	for _, kv := range env {
+		drop := false
+		for _, n := range names {
+			if strings.HasPrefix(kv, n+"=") {
+				drop = true
+			}
+		}
+		if !drop {
+			keep = append(keep, kv)
+		}
+	}
+	return keep
 }
 
 func TestMain(m *testing.M) { Main(m) }
