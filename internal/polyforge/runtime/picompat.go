@@ -124,10 +124,12 @@ func (c *piCompatVerdictsCache) reset() {
 // verdict runs the capability call once per key. A same-key caller joins the
 // flight and waits for its answer; every caller — the initiator included —
 // waits on its OWN context, so a cancellation ends that caller's wait at
-// once. When the last waiter leaves, the abandoned flight is canceled (its
-// probe is bounded anyway, but Q4 asks for the recovery), removed, and the
-// next same-key caller starts a fresh one; a flight that finished with an
-// error is never cached.
+// once. When the last waiter leaves, the flight is canceled and marked
+// abandoned but STAYS in the map: its probe is still reaping, and a same-key
+// caller arriving meanwhile waits for that recovery before it starts a new
+// probe (owner ruling Q4; review r2#1). The probe's goroutine removes the
+// flight when it returns; a flight that finished with an error is never
+// cached.
 func (c *piCompatVerdictsCache) verdict(ctx context.Context, deadline time.Time, hasDeadline bool, key string, probe func(context.Context) error) error {
 	for {
 		c.mu.Lock()

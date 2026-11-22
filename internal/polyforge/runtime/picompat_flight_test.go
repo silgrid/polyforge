@@ -61,6 +61,21 @@ func flightWaitFor(deadline time.Duration, cond func() bool) bool {
 	return cond()
 }
 
+// flightWaiters answers the largest waiter count any flight currently has;
+// it reads the cache under its own lock, so it observes the same state
+// verdict does (review r3#1: a fixed sleep is no sync point).
+func flightWaiters() int {
+	piCompatVerdicts.mu.Lock()
+	defer piCompatVerdicts.mu.Unlock()
+	max := 0
+	for _, f := range piCompatVerdicts.flights {
+		if f.waiters > max {
+			max = f.waiters
+		}
+	}
+	return max
+}
+
 func TestPiCompatibilityAbandonedFlightIsReapedBeforeTheNextProbe(t *testing.T) {
 	resetPiCompatCache()
 	t.Cleanup(resetPiCompatCache)
@@ -193,8 +208,12 @@ func TestPiCompatibilityOneWaiterCancelKeepsTheFlightForTheOthers(t *testing.T) 
 	}
 	go func() { b <- validatePiCompatibility(ctxB, bin) }()
 	// the second caller must have joined the same flight before A leaves:
-	// poll on the probe count staying 1 while B is blocked.
-	time.Sleep(20 * time.Millisecond)
+	// poll (bounded) until the shared flight reports two waiters. A fixed
+	// delay would race B's version/digest work and mis-red a correct
+	// implementation under load (review r3#1).
+	if !flightWaitFor(5*time.Second, func() bool { return flightWaiters() == 2 }) {
+		t.Fatalf("the second caller never joined the shared flight (waiters = %d)", flightWaiters())
+	}
 	cancelA()
 	select {
 	case err := <-a:
