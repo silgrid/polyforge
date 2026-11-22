@@ -2,9 +2,12 @@
 
 Execution-plane verb: routed to the local daemon. One command for a work
 item's snapshot, one for the machine's decision feed, one to mark feed
-entries seen. Nothing here is resident: there is no watcher to start, no
-subscription and no wake-up line — human decisions are shown and handled in
-Pi Web's Polyforge panel, which reads the same feed.
+entries seen. Nothing here is resident: this verb starts no watcher, keeps
+no subscription and has no wake-up line — human decisions are shown and
+handled in Pi Web's Polyforge panel, which reads the same feed. A session
+that promised the owner a follow-up starts its own monitor under SKILL.md's
+follow-up rule (`Rules for you`, rule 4); that monitor calls
+`pf watch <wi> --once`, never a resident mode of this verb.
 
 A snapshot targets one Cell (one per AIHub profile): `--profile`, else
 `PF_PROFILE`, else the cwd's mapped Cell, else `default` — never chosen by
