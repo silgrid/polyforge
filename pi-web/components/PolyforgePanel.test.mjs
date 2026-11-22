@@ -1112,8 +1112,8 @@ test(" (owner intentional change, reversing #238): the detail opens at its botto
 test("an analysis card's task link switches to Work › Tasks and hands the id — and the handed Cell — to the Tasks surface", () => {
   const start = source.indexOf("const openTask = useCallback(");
   const body = source.slice(start, source.indexOf("}, [onActiveTab, onWorkTab]);", start));
-  assert.match(body, /setTaskToOpen\(cell \? \{ id: taskId, cell \} : \{ id: taskId \}\);\s*onWorkTab\("tasks"\);\s*onActiveTab\("work"\);/,
-    "polyforge#73: the handed task open carries the Cell when there is one");
+  assert.match(body, /setTaskToOpen\(cell \? \{ id: taskId, cell \} : \{ id: taskId \}\);\s*onActiveTab\("work"\);\s*onWorkTab\("tasks"\);/,
+    "polyforge#73: the handed task open carries the Cell when there is one; polyforge#225: the top-level switch resets Work's sub-tab, so the explicit 任务 target writes after it");
   assert.match(source, /onOpenTask=\{openTask\}/);
   assert.match(source, /openTask=\{taskToOpen\}\s*onOpenTaskHandled=\{clearTaskToOpen\}/);
 });

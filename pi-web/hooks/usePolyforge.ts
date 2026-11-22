@@ -156,10 +156,12 @@ export function watchOverridesAsked(snapshot: PolyforgeWatchStatus | null): bool
  *  3s/30s cadence. */
 export type PolyforgeTab = "memory" | "messages" | "work";
 
-/** Work's sub-tabs (adds 工单列表, `items`; adds
+/** Work's sub-tabs (adds 工单列表, `items`; adds 项目, `projects`; adds
  *  待集成, `integrate`, which reads on its own gestures). Page memory only:
- *  kept across a dock close/reopen (this hook outlives the dock), reset by a
- *  reload, never written to storage. */
+ *  every dock open and every switch to Work from another top-level tab
+ *  starts on Jobs; an explicit target (the attention walk, an anchor, an
+ *  analysis card's task link) writes after that reset; a manual switch holds
+ *  while the dock stays open; a reload resets it; never written to storage. */
 export type PolyforgeWorkTab = "jobs" | "tasks" | "items" | "projects" | "integrate";
 
 export interface MembershipChangeInput {
@@ -813,7 +815,25 @@ export function usePolyforge(panelOpen: boolean) {
     if (!panelOpen) setAnalyses({});
   }, [panelOpen]);
 
+  // polyforge#225: the same close resets Work's sub-tab — it is page memory
+  // across one opening only. Reset at the close, never at the open: an
+  // explicit target written in the same batch as the open (the attention
+  // walk's task, AppShell's openPfNeedsInput) must not be overwritten by the
+  // opening.
+  useEffect(() => {
+    if (!panelOpen) setWorkTab("jobs");
+  }, [panelOpen]);
+
+  const activeTabRef = useRef<PolyforgeTab>(activeTab);
+  activeTabRef.current = activeTab;
   const setActiveTab = useCallback((tab: PolyforgeTab) => {
+    // polyforge#225: switching to Work from another top-level tab starts on
+    // 作业; re-activating Work while it is already shown keeps the manual
+    // sub-tab. The current tab is read from a ref, never inside the state
+    // updater (an updater must be pure; StrictMode runs it twice). An
+    // explicit target that also switches (an analysis card's task link)
+    // writes the sub-tab after this call, so its target wins.
+    if (tab === "work" && activeTabRef.current !== "work") setWorkTab("jobs");
     setActiveTabState(tab);
     if (tab === "messages") void refreshMessages();
   }, [refreshMessages]);
