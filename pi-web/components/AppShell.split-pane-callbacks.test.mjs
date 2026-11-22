@@ -248,3 +248,26 @@ test("pane attention notification targets the pane session", () => {
   classicAttention({ id: "req-3", method: "custom", title: "Approve?" });
   assert.equal(classicDelivered[0]?.targetSession.id, "selected", "classic keeps the selected session");
 });
+
+// ---- u3: the file explorer refreshes from every pane ----
+
+test("pane tool end and uploads refresh the explorer", () => {
+  // A pane's tool calls and dropped files change the workspace the explorer
+  // shows. Both handlers only bump one global refresh key and read no session,
+  // so every pane shares them (owner ruling 3=A).
+  assert.match(sessionPane, /onToolEnd=\{handleToolEnd\}/, "the session pane must report finished tools");
+  assert.match(sessionPane, /onFilesUploaded=\{handleExplorerRefresh\}/, "the session pane must refresh after uploads");
+  // The sentinel composer accepts drops too, but has no session, so it gets no
+  // onToolEnd. It is not a reporting callback, so the stats suite's sentinel
+  // negatives still hold.
+  assert.match(sentinel, /onFilesUploaded=\{handleExplorerRefresh\}/, "the new-session composer must refresh after uploads");
+  assert.doesNotMatch(sentinel, /onToolEnd=/, "the sentinel has no session to run tools");
+
+  for (const name of ["handleToolEnd", "handleExplorerRefresh"]) {
+    const body = extractAppShellCallback(name);
+    assert.ok(!body.includes("selectedSession"), `${name} must stay session-independent so every pane can share it`);
+  }
+
+  assert.match(classicWindow, /onToolEnd=\{handleToolEnd\}/, "the classic window keeps reporting tools");
+  assert.match(classicWindow, /onFilesUploaded=\{handleExplorerRefresh\}/, "the classic window keeps refreshing after uploads");
+});
