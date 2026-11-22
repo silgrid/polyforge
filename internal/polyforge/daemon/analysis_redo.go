@@ -103,9 +103,10 @@ func (d *Daemon) recordAnalysisRedoStamp(wi, staleStamp string) {
 }
 
 // analysisRedoBlocks answers whether a local auto-pull must leave wi alone
-// right now: a redo request waits, an analysis task runs, or the snapshot
-// predates the redo's own CAS. A fresh snapshot after the redo carries a
-// newer updated_at and the ticket's own unconfirmed marker decides it.
+// right now: a redo request waits, or the snapshot predates the redo's own
+// CAS. A fresh snapshot after the redo carries a newer updated_at and the
+// ticket's own unconfirmed marker decides it (the dispatch path runs no task
+// check here: an early confirm must still let the wave claim the ticket).
 func (d *Daemon) analysisRedoBlocks(wi, snapshotStamp string) bool {
 	if d.analysisQ != nil && d.analysisQ.has(wi) {
 		return true
