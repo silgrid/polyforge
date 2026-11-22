@@ -548,8 +548,14 @@ func TestTaskListShowContextLifecycle(t *testing.T) {
 	for {
 		row := readList()
 		if c, ok := row["context"].(map[string]any); ok {
-			if len(c) != 5 {
-				t.Fatalf("list context keys = %v, want the five keys", c)
+			// the harness reported no window here, so window/percent are
+			// absent (u3#1: the five keys are the maximum, never a guess)
+			for k := range c {
+				switch k {
+				case "tokens", "window", "percent", "model", "as_of":
+				default:
+					t.Fatalf("list context carries %q: %v", k, c)
+				}
 			}
 			if got, _ := c["tokens"].(float64); got != 4300 {
 				t.Fatalf("list context tokens = %#v, want 4300", c["tokens"])
@@ -559,6 +565,9 @@ func TestTaskListShowContextLifecycle(t *testing.T) {
 			}
 			if _, ok := c["as_of"].(string); !ok {
 				t.Fatalf("list context lacks as_of: %v", c)
+			}
+			if _, ok := c["window"]; ok {
+				t.Fatalf("a window the harness did not report is on the row: %v", c)
 			}
 			for _, leaked := range []string{"prompt", "report"} {
 				if _, ok := c[leaked]; ok {
@@ -572,8 +581,8 @@ func TestTaskListShowContextLifecycle(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if c, ok := readShow()["context"].(map[string]any); !ok || len(c) != 5 {
-		t.Fatalf("show context = %#v, want the five keys", c)
+	if c, ok := readShow()["context"].(map[string]any); !ok || c["model"] != "openai/m1" {
+		t.Fatalf("show context = %#v, want the same value as the list row", c)
 	}
 	// terminal: neither face carries it
 	if code, _ := stepDo(t, td.sock, "POST", "/task/cancel/"+tk.ID, ""); code != 200 {

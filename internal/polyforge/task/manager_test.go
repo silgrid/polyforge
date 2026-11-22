@@ -321,12 +321,14 @@ func TestManagerWaitContextAndUnknownID(t *testing.T) {
 // bleeds into it.
 func TestTaskContextLifecycle(t *testing.T) {
 	second := make(chan struct{}, 1)
+	release := make(chan struct{})
 	r := fakeRunner{fn: func(ctx context.Context, s RunSpec) (RunResult, error) {
 		if s.Candidate.Model == "a/one" {
 			if s.OnContext != nil {
 				tokens := int64(4300)
 				s.OnContext(&protocol.ContextUsage{Tokens: &tokens, Model: "openai/m1", AsOf: "2026-11-22T10:00:00Z"})
 			}
+			<-release
 			return RunResult{Tokens: 3}, errors.New("first candidate failed")
 		}
 		second <- struct{}{}
@@ -357,6 +359,7 @@ func TestTaskContextLifecycle(t *testing.T) {
 		t.Fatalf("the list lacks the running context: %+v", listed)
 	}
 	// the candidate switch starts the next attempt with no context of its own
+	close(release)
 	select {
 	case <-second:
 	case <-time.After(10 * time.Second):
