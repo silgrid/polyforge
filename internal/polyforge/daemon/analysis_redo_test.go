@@ -9,9 +9,13 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -574,5 +578,103 @@ func TestAnalysisRedoStaleAutoWaveSkips(t *testing.T) {
 	td.fetchAutoWave()
 	if td.q.IsPending("wi_redo_stale") {
 		t.Fatal("the auto-pull wave claimed the ticket from a snapshot taken before the redo; the local redo round must hold it back")
+	}
+}
+
+// pf233SlowHub blocks GetWorkItem for one ticket and signals when a caller
+// reached it; it is the regression seam for the redo route's lock scope.
+type pf233SlowHub struct {
+	*w72Hub
+	wi          string
+	entered     chan struct{}
+	release     chan struct{}
+	once        sync.Once
+	releaseOnce sync.Once
+}
+
+func (h *pf233SlowHub) GetWorkItem(idOrSlug string) (*api.WorkItem, error) {
+	if idOrSlug == h.wi {
+		h.once.Do(func() { close(h.entered) })
+		<-h.release
+	}
+	return h.w72Hub.GetWorkItem(idOrSlug)
+}
+
+func (h *pf233SlowHub) unblock() { h.releaseOnce.Do(func() { close(h.release) }) }
+
+// pf233Post answers one raw daemon request without t.Fatalf, so a goroutine
+// can be bounded by a deadline instead of blocking the test.
+func pf233Post(sock, path, body string, timeout time.Duration) (int, string, error) {
+	tr := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, "unix", sock)
+	}}
+	c := &http.Client{Transport: tr, Timeout: timeout}
+	req, err := http.NewRequest("POST", "http://daemon"+path, strings.NewReader(body))
+	if err != nil {
+		return 0, "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.Do(req)
+	if err != nil {
+		return 0, "", err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(raw), nil
+}
+
+// TestAnalysisRedoSlowHubKeepsAdmissionMoving (round 2, r1#1): a hub read
+// or a queue persist in the redo route must never hold drainGate. While the
+// route waits on GetWorkItem, a /task/spawn admission still completes — the
+// same gate serves submit, the auto wave, every task spawn and the drain
+// switch's safe-idle check.
+func TestAnalysisRedoSlowHubKeepsAdmissionMoving(t *testing.T) {
+	td, hub, _ := w72World(t, func(c *Config) { c.MaxConcurrent = 8 })
+	w72Ticket(t, hub, "wi_redo_slowhub", pf233TicketBody)
+	slow := &pf233SlowHub{w72Hub: hub, wi: "wi_redo_slowhub", entered: make(chan struct{}), release: make(chan struct{})}
+	td.Daemon.hub = slow
+	t.Cleanup(slow.unblock)
+
+	type answer struct {
+		code int
+		body string
+		err  error
+	}
+	redoCh := make(chan answer, 1)
+	go func() {
+		code, body, err := pf233Post(td.sock, "/analysis/redo",
+			`{"work_item_id":"wi_redo_slowhub","project":"proj"}`, 30*time.Second)
+		redoCh <- answer{code: code, body: body, err: err}
+	}()
+	select {
+	case <-slow.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the redo request never reached the hub read")
+	}
+
+	spawnCh := make(chan answer, 1)
+	go func() {
+		code, body, err := pf233Post(td.sock, "/task/spawn", `{"project":"proj","prompt":"admission probe"}`, 10*time.Second)
+		spawnCh <- answer{code: code, body: body, err: err}
+	}()
+	select {
+	case res := <-spawnCh:
+		if res.err != nil || res.code != 200 {
+			t.Fatalf("a task spawn must still be admitted while the redo route waits on its hub read, got %d %s (%v)", res.code, res.body, res.err)
+		}
+	case <-time.After(3 * time.Second):
+		slow.unblock()
+		t.Fatal("a task spawn waited on drainGate while the redo route was blocked in GetWorkItem: the route holds the gate across hub I/O")
+	}
+
+	slow.unblock()
+	select {
+	case res := <-redoCh:
+		if res.err != nil || res.code != 200 {
+			t.Fatalf("the redo request must finish after the hub answers, got %d %s (%v)", res.code, res.body, res.err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the redo request never finished after the hub was released")
 	}
 }
