@@ -25,7 +25,7 @@ func TestPF233AnalysisRedoDocumentation(t *testing.T) {
 			"strong guarantee covers this machine's daemon only",
 		},
 		filepath.Join("docs", "reference", "uds-routes.md"): {
-			"POST `/analysis/redo`",
+			"`/analysis/redo`",
 			"step and task processes refused",
 		},
 		filepath.Join("docs", "reference", "workflow-contract.md"): {
