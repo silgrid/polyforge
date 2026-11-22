@@ -243,6 +243,7 @@ func piCapabilityProbe(ctx context.Context, bin, version string) error {
 	stderr := &boundedTail{max: 8 << 10}
 	go func() { _, _ = io.Copy(stderr, errR) }()
 	stopped := false
+	exited := false // the protocol loop already consumed waitCh (review r1#8)
 	// stop recovers the WHOLE process group this probe started inside ONE
 	// bounded second (owner ruling Q5): a graceful stop (the proof passed)
 	// first gives the harness a moment to exit after its command channel
@@ -268,6 +269,14 @@ func piCapabilityProbe(ctx context.Context, bin, version string) error {
 			}
 		}
 		_ = stdin.Close()
+		if exited {
+			// the process is already reaped: nothing to wait for, and no
+			// signal is sent to a pid that may be reused.
+			close(done)
+			outR.Close()
+			errR.Close()
+			return
+		}
 		if graceful && waitExit() {
 			close(done)
 			outR.Close()
@@ -368,6 +377,7 @@ func piCapabilityProbe(ctx context.Context, bin, version string) error {
 				return nil
 			}
 		case <-waitCh:
+			exited = true
 			stop(false)
 			return probeExitRefusal(bin, version, stderr.String())
 		}

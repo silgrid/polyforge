@@ -629,7 +629,14 @@ func piCapabilityChange(changed map[string]string, h string) string {
 	if !ok {
 		return ""
 	}
-	if strings.EqualFold(strings.TrimSpace(value), "on") {
+	// the ONE pi_subagents parse rule (spawn.PiSubagents); an invalid value
+	// refuses this dispatch before any prompt exists, so it has no change
+	// line.
+	on, err := spawn.PiSubagents(map[string]string{"pi_subagents": value})
+	if err != nil {
+		return ""
+	}
+	if on {
 		return "\nPi subagents are enabled for this dispatch: use the daemon `subagent` tool with `agent: \"worker\"`, one task at a time."
 	}
 	return "\nPi subagents are disabled for this dispatch; keep `implemented_by: main` and do not dispatch a worker."
