@@ -887,6 +887,11 @@ function contextPercent(context: PolyforgeContextUsage): number | null {
   return null;
 }
 
+/** the chat header's meter colours (above 70 amber, above 90 red) — the one
+ *  map the job card's meter and a task card's context line share
+ *  (polyforge#230). */
+export const POLYFORGE_CONTEXT_METER_COLORS = { amber: "rgba(234,179,8,0.95)", red: "#ef4444" } as const;
+
 /** A context value with a catalog window filled in when the harness reported
  *  none: the window and the percent the count fills. A value that already
  *  carries a window, a null/unknown window and a non-positive one are

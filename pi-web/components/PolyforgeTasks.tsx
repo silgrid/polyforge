@@ -12,13 +12,19 @@ import {
   splitTaskSections,
   taskDurationSeconds,
   taskEndedAgo,
+  taskAnalysisSlug,
+  taskAnalysisTitle,
+  taskContextDetailText,
+  taskContextText,
   taskProjectOptions,
   taskReporterOptions,
+  type PolyforgeAnalysisTicket,
   type PolyforgeTaskDetail,
   type PolyforgeTaskRow,
   type PolyforgeTaskStateFilter,
 } from "@/lib/polyforge-tasks-pure";
-import { formatCardDuration } from "@/lib/polyforge-cards-pure";
+import { POLYFORGE_CONTEXT_METER_COLORS, formatCardDuration, polyforgeContextMeterTone } from "@/lib/polyforge-cards-pure";
+import { isPolyforgeWorkItemId } from "@/lib/polyforge-work-items-pure";
 import { POLYFORGE_BLOCK_STYLE } from "@/lib/panel-layout";
 import { MarkdownBody } from "./MarkdownBody";
 import { PolyforgeDecisionEntry, useDecisionDismiss } from "./PolyforgeDecisionEntry";
@@ -121,6 +127,7 @@ export function PolyforgeTasks({
   onDismissDecisions,
   renderDetail,
   onDetailOpenChange,
+  onOpenAnchor,
 }: {
   /** the status snapshot's `running:completed` task counts
    *  (null without a snapshot). A change while this surface is mounted
@@ -141,6 +148,11 @@ export function PolyforgeTasks({
   /** told whether a detail is open (false on back and when
    *  this surface unmounts). */
   onDetailOpenChange?: (open: boolean) => void;
+  /** the panel's existing ticket opener (the Messages surface's
+   *  onOpenAnchor, the same one the Memory sub-tab uses): an analysis task's
+   *  分析 <slug> row opens its analyzed work item by wi id (polyforge#230,
+   *  owner Q3=A). */
+  onOpenAnchor?: (ref: string) => void;
 }) {
   const { t, locale } = useI18n();
   const [list, setList] = useState<ListResponse | null>(null);
@@ -166,6 +178,32 @@ export function PolyforgeTasks({
   // Only the newest selection may write detail state (a slow earlier read
   // never overwrites a later selection's answer).
   const detailSeqRef = useRef(0);
+
+  // The analyzed tickets the list named (polyforge#230, owner Q4=A): each
+  // work item's slug and goal read once per session through the existing
+  // GET /api/polyforge/work-items/[id] — the ref is the cache (null = a read
+  // in flight or a failed one, so the row keeps the wi id and nothing is
+  // fetched twice). A failed read is not an error: the row shows the wi id.
+  const [tickets, setTickets] = useState<Record<string, PolyforgeAnalysisTicket | null>>({});
+  const ticketsRef = useRef<Record<string, PolyforgeAnalysisTicket | null | undefined>>({});
+  useEffect(() => {
+    const ids = Array.isArray(list?.tasks) ? list.tasks : [];
+    for (const row of ids) {
+      if (!row.analysis_of) continue;
+      const id = row.analysis_of;
+      if (!isPolyforgeWorkItemId(id) || ticketsRef.current[id] !== undefined) continue;
+      ticketsRef.current[id] = null; // one read per work item, in flight included
+      fetch(`/api/polyforge/work-items/${encodeURIComponent(id)}`)
+        .then(async (response) => {
+          const body = await response.json() as { item?: PolyforgeAnalysisTicket | null };
+          if (!response.ok || !body.item) return;
+          const ticket = { slug: body.item.slug ?? "", goal: body.item.goal ?? "" };
+          ticketsRef.current[id] = ticket;
+          setTickets((previous) => ({ ...previous, [id]: ticket }));
+        })
+        .catch(() => { /* the row keeps the wi id; never an error */ });
+    }
+  }, [list]);
 
   // The list read: once when the sub-tab opens (the component mounts), once
   // more per status task-count change while it stays mounted
@@ -229,6 +267,16 @@ export function PolyforgeTasks({
     const clock = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(clock);
   }, [hasRunning]);
+
+  // The running refresh (owner ruling 2026-11-22, Q2=B): while the list holds
+  // a running task this sub-tab re-reads it every 15 s, so the context usage
+  // (and the token count) moves like a job's; a task's as_of says how fresh
+  // the value is. With no running task there is no timer and no read.
+  useEffect(() => {
+    if (!hasRunning) return;
+    const refresh = setInterval(readList, REFRESH_MS);
+    return () => clearInterval(refresh);
+  }, [hasRunning, readList]);
 
   const openDetail = (id: string, cell?: string | null) => {
     if (!isPolyforgeTaskId(id)) return;
@@ -301,6 +349,8 @@ export function PolyforgeTasks({
     const selectedDecisions = taskDecisions(decisions, selected.id);
     const reportCapped = detail ? isMemoryBodyTruncated(detail.report, detail.report_len) || detail.truncated : false;
     const collapsible = detail ? detail.report_len > MEMORY_COLLAPSE_BYTES : false;
+    const detailContextText = detail ? taskContextDetailText(detail.context) : null;
+    const detailTicket = detail?.analysis_of ? tickets[detail.analysis_of] : undefined;
     const meta = (label: string, value: string) => (
       <div style={{ display: "flex", gap: 6 }}>
         <span style={{ color: "var(--text-dim)", flexShrink: 0, width: 96 }}>{label}</span>
@@ -320,6 +370,26 @@ export function PolyforgeTasks({
         {!detail && !detailError && notice(t("polyforge.loading"))}
         {detail && (
           <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "8px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
+            {/* the ticket this analysis task analyzes, at the top
+                (polyforge#230 AC3): the slug once it was read, the wi id
+                while not, its goal as the title line; a click opens it. */}
+            {detail.analysis_of && (
+              <span data-pf-detail-task-analysis="" role="link" tabIndex={0}
+                title={t("polyforge.tasks.analysisOf", { slug: taskAnalysisSlug(detail.analysis_of, detailTicket) })}
+                onClick={() => onOpenAnchor?.(detail.analysis_of!)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onOpenAnchor?.(detail.analysis_of!);
+                  }
+                }}
+                style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0, cursor: "pointer", alignSelf: "flex-start" }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: "var(--accent)", overflowWrap: "anywhere" }}>{t("polyforge.tasks.analysisOf", { slug: taskAnalysisSlug(detail.analysis_of, detailTicket) })}</span>
+                {taskAnalysisTitle(detailTicket) && (
+                  <span title={taskAnalysisTitle(detailTicket)} style={{ fontSize: 12, color: "var(--text)", overflowWrap: "anywhere" }}>{taskAnalysisTitle(detailTicket)}</span>
+                )}
+              </span>
+            )}
             {/* the task's decision-feed entries (its terminal
                 summary), with dismiss while open. */}
             {selectedDecisions.length > 0 && (
@@ -327,6 +397,16 @@ export function PolyforgeTasks({
             )}
             <div style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 11 }}>
               {meta(t("polyforge.tasks.status"), detail.state)}
+              {detailContextText && (
+                <div data-pf-detail-task-context="" style={{ display: "flex", gap: 6 }}>
+                  <span style={{ color: "var(--text-dim)", flexShrink: 0, width: 96 }}>{t("polyforge.context")}</span>
+                  <span title={[detail.context?.model, detail.context?.asOf].filter(Boolean).join(" · ") || undefined}
+                    style={{ color: "var(--text)", minWidth: 0, overflowWrap: "anywhere", fontVariantNumeric: "tabular-nums" }}>
+                    {detailContextText}
+                    {detail.context?.model && <span style={{ color: "var(--text-dim)", fontFamily: "var(--font-mono, monospace)" }}>{` · ${detail.context.model}`}</span>}
+                  </span>
+                </div>
+              )}
               {meta(t("polyforge.tasks.project"), detail.project)}
               {meta(t("polyforge.tasks.candidates"), detail.candidates.join(", ") || "—")}
               {meta(t("polyforge.tasks.budget"), t("polyforge.tasks.budgetValue", {
@@ -373,6 +453,9 @@ export function PolyforgeTasks({
     const rowDecisions = taskDecisions(decisions, row.id);
     const attention = taskNeedsAttention(rowDecisions);
     const endedAgo = row.state === "running" ? undefined : taskEndedAgo(row, now);
+    const contextText = taskContextText(row.context);
+    const contextTone = polyforgeContextMeterTone(row.context);
+    const ticket = row.analysis_of ? tickets[row.analysis_of] : undefined;
     return (
       <button key={`${row.cell ?? ""}/${row.id}`} type="button" data-pf-task={row.id} onClick={() => openDetail(row.id, row.cell)}
         style={{
@@ -380,6 +463,28 @@ export function PolyforgeTasks({
           display: "flex", flexDirection: "column", alignItems: "stretch", gap: 4, minWidth: 0, width: "100%",
           cursor: "pointer", textAlign: "left", font: "inherit", fontSize: 12, color: "var(--text)",
         }}>
+        {/* the analyzed ticket at the top of the block (polyforge#230 AC3):
+            the slug once read, the wi id while not, its goal beneath; a click
+            opens it without selecting the task (Q3=A). An ordinary task has
+            no row. */}
+        {row.analysis_of && (
+          // the block is itself a button, so this row is a plain click target,
+          // not a second focusable control (no nested interactive content);
+          // the detail's copy is the keyboard-reachable one and keeps role
+          // "link".
+          <span data-pf-task-analysis=""
+            title={t("polyforge.tasks.analysisOf", { slug: taskAnalysisSlug(row.analysis_of, ticket) })}
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpenAnchor?.(row.analysis_of!);
+            }}
+            style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0, cursor: "pointer" }}>
+            <span style={{ fontSize: 11, fontWeight: 600, lineHeight: "14px", color: "var(--accent)", overflowWrap: "anywhere" }}>{t("polyforge.tasks.analysisOf", { slug: taskAnalysisSlug(row.analysis_of, ticket) })}</span>
+            {taskAnalysisTitle(ticket) && (
+              <span title={taskAnalysisTitle(ticket)} style={{ fontSize: 11, lineHeight: "14px", color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{taskAnalysisTitle(ticket)}</span>
+            )}
+          </span>
+        )}
         <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
           <span aria-hidden="true" style={stateDotStyle(row.state)} />
           <span style={{ color: "var(--text-muted)", flexShrink: 0 }}>{stateLabel(row.state)}</span>
@@ -394,6 +499,13 @@ export function PolyforgeTasks({
             {duration === undefined ? "—" : formatCardDuration(duration)}
           </span>
         </span>
+        {/* the running context, the job card's own meter text and colours
+            (polyforge#230 AC2): tokens alone when no window is known. */}
+        {contextText && (
+          <span data-pf-task-context=""
+            title={[row.context?.model, row.context?.asOf].filter(Boolean).join(" · ") || undefined}
+            style={{ fontSize: 11, lineHeight: "14px", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums", color: contextTone ? POLYFORGE_CONTEXT_METER_COLORS[contextTone] : "var(--text-dim)" }}>{contextText}</span>
+        )}
         <span style={{ fontSize: 11, color: "var(--text-dim)", fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.project || "—"}</span>
         <span style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", lineHeight: "16px", overflowWrap: "anywhere" }}>{row.prompt_summary}</span>
         {row.state === "running" ? (
