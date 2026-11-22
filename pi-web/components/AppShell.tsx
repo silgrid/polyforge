@@ -1604,13 +1604,17 @@ export function AppShell() {
     };
   }, []);
 
-  const handleAttentionNeeded = useCallback((request: BlockingExtensionUiRequest) => {
-    if (isHiddenRelation(selectedSession?.relation)) return;
+  // polyforge#231: a split pane's waiting input belongs to the pane's own
+  // session. Classic passes no target and keeps the selected session; a pane
+  // passes its session, whose hidden relation gates the notification too.
+  const handleAttentionNeeded = useCallback((request: BlockingExtensionUiRequest, targetSession: SessionInfo | null = null) => {
+    const target = targetSession ?? selectedSession;
+    if (isHiddenRelation(target?.relation)) return;
     if (!shouldShowBrowserNotification()) return;
     if (!claimExtensionAttentionNotification(request, notifiedAttentionRequestIdsRef.current)) return;
 
     deliverSessionNotification({
-      targetSession: selectedSession,
+      targetSession: target,
       title: translate("i18n.attentionNeeded"),
       body: request.method === "custom"
         ? translate("i18n.extensionInputNeeded")
@@ -1701,6 +1705,45 @@ export function AppShell() {
     setPendingQuotePrompt({ sessionId: result.newSessionId, text: prompt });
     handleSessionForked(result.newSessionId);
   }, [handleSessionForked, translate]);
+
+  // polyforge#231: split view keeps the classic fork semantics (selected
+  // session, URL and list refresh through handleSessionForked) and then opens
+  // the forked session in a new pane beside its source, focused — the pane
+  // equivalent of classic "fork jumps to the new chat". The source pane stays.
+  const handlePaneSessionForked = useCallback((newSessionId: string, sourceSessionId: string) => {
+    handleSessionForked(newSessionId);
+    if (!splitPaneEnabled || isMobile) return;
+    const source = sourceSessionId === selectedSession?.id
+      ? selectedSession
+      : sessionCatalog.find((s) => s.id === sourceSessionId) ?? null;
+    const label = newSessionId.slice(0, 12);
+    const projectName = projectDisplayNameForPath(source?.projectRoot ?? source?.cwd ?? "");
+    setPaneTabs((prev) => openPaneOp(prev, newSessionId, label, projectName));
+    setFocusedPaneId(newSessionId);
+  }, [handleSessionForked, splitPaneEnabled, isMobile, selectedSession, sessionCatalog]);
+
+  // The pane's own quote-in-new-chat: the same fork request, but the pending
+  // prompt and the resulting pane are keyed by the forked session and opened
+  // beside the pane the quote came from.
+  const handlePaneAskInNewChat = useCallback(async (
+    prompt: string,
+    sourceSessionId: string,
+    sourceEntryId: string,
+  ) => {
+    const result = await sendAgentCommand<{ newSessionId?: string }>(sourceSessionId, {
+      type: "fork_branch",
+      entryId: sourceEntryId,
+    });
+    if (!result?.newSessionId) throw new Error(translate("chat.quoteForkFailed"));
+    setPendingQuotePrompt({ sessionId: result.newSessionId, text: prompt });
+    handlePaneSessionForked(result.newSessionId, sourceSessionId);
+  }, [handlePaneSessionForked, translate]);
+
+  // Pane focus never updates selectedSession, so a pane's pending quote prompt
+  // must be consumed only when its own session id matches.
+  const handlePaneInitialPromptConsumed = useCallback((sessionId: string) => {
+    setPendingQuotePrompt((prev) => (prev?.sessionId === sessionId ? null : prev));
+  }, []);
 
   // The sidebar calls this when the initial session is not in its list.
   const handleInitialRestoreDone = useCallback(() => {
@@ -3516,6 +3559,22 @@ export function AppShell() {
                 }
               }}
               renderPane={(sid, focused) => {
+                // polyforge#231 rulings (full table: docs/agents/sessions.md,
+                // "Split view: pane callback ownership"). A session pane binds
+                // every per-session callback to `sid`; page-global surfaces are
+                // focused-gated. 漏传 = now wired; 有意不传 = left out by design.
+                // - onAskInNewChat, quoteSelectionEnabled: 漏传 -> pane fork, new focused pane
+                // - onSessionForked: 漏传 -> pane-aware fork, source pane kept
+                // - onInitialPromptConsumed, initialPrompt: 漏传 -> keyed by sid
+                // - onAttentionNeeded: 漏传 -> notification targets this pane's session
+                // - onToolEnd, onFilesUploaded: 漏传 -> shared explorer refresh
+                // - onSessionCreated: 有意不传 -> only the sentinel creates a session (it passes it)
+                // - onSoundToggle, soundEnabled, unlockAudio, holdAudio: 漏传 -> every pane
+                // - playDoneSound: 漏传 -> only the focused pane chimes; unfocused panes ring via onAgentEnd
+                // - onBranchDataChange, onSystemPromptChange, onSystemToolsChange: 漏传 -> focused gate (tools re-report in the hook)
+                // - onSystemInfoLoaderChange, onDebugSnapshotReaderChange, onSessionStatsPanelOpen: 漏传 -> focused gate
+                // - onSearchTargetHandled, onScrollPositionChange (+ searchTarget/initialScrollPosition): 漏传 -> keyed by sid
+                // - modelsRefreshKey, externalSessionChange: 漏传 (ticket-external, owner ruling 9=A) -> every pane
                 // The sentinel tab renders the new-session composer ChatWindow;
                 // it reads the same cwd/draft props as the classic composer,
                 // so drafts survive pane switches and tab close/reopen.
@@ -3530,6 +3589,9 @@ export function AppShell() {
                       sessionRunning={false}
                       chatInputRef={getPaneChatInputRef(NEW_SESSION_TAB_ID)}
                       onSessionCreated={handleSessionCreated}
+                      // polyforge#231: a composer's uploads change the same
+                      // workspace; the refresh handler reads no session.
+                      onFilesUploaded={handleExplorerRefresh}
                       onOpenSettings={openSettingsSection}
                     />
                   );
@@ -3572,6 +3634,54 @@ export function AppShell() {
                     // selectedSession (pane focus never updates it), so every
                     // pane shares the classic layout's handler.
                     onOpenSubagent={handleOpenSubagentTab}
+                    // polyforge#231: the notification opens THIS pane's session;
+                    // the global request-id dedupe stays shared.
+                    onAttentionNeeded={(request) => handleAttentionNeeded(request, paneSession)}
+                    // polyforge#231: tools and uploads refresh the one shared
+                    // explorer key; neither handler reads a session (ruling 3=A).
+                    onToolEnd={handleToolEnd}
+                    onFilesUploaded={handleExplorerRefresh}
+                    // polyforge#231: every pane unlocks and holds the shared
+                    // audio context while its own run is active, but only the
+                    // focused pane plays the completion chime — an unfocused
+                    // pane already rings through this pane's onAgentEnd
+                    // coalescing, so one finished run rings once (ruling 4=A).
+                    soundEnabled={soundEnabled}
+                    onSoundToggle={onSoundToggle}
+                    playDoneSound={focused ? playDoneSound : undefined}
+                    unlockAudio={unlockAudio}
+                    holdAudio={holdAudio}
+                    // polyforge#231: branch, system prompt/tools, the lazy
+                    // system-info loader, the Debug reader and the session
+                    // stats panel are one page-global surface each. Only the
+                    // focused pane may write them (pi#23's pattern); on a
+                    // focus switch ChatWindow's effects clean up (empty tree /
+                    // null; the prompt and branch effects clean up on removal)
+                    // and the newly focused pane re-reports its own values.
+                    onBranchDataChange={focused ? handleBranchDataChange : undefined}
+                    onSystemPromptChange={focused ? handleSystemPromptChange : undefined}
+                    onSystemToolsChange={focused ? handleSystemToolsChange : undefined}
+                    onSystemInfoLoaderChange={focused ? handleSystemInfoLoaderChange : undefined}
+                    onDebugSnapshotReaderChange={focused ? handleDebugSnapshotReaderChange : undefined}
+                    onSessionStatsPanelOpen={focused ? openSessionStatsPanel : undefined}
+                    // polyforge#231: every per-session callback below is bound
+                    // to THIS pane's sid. Pane focus never updates
+                    // selectedSession, so reusing a selectedSession-based
+                    // handler would act on (or open) another chat.
+                    onAskInNewChat={handlePaneAskInNewChat}
+                    quoteSelectionEnabled={quoteSelectionEnabled}
+                    onSessionForked={(newSessionId) => handlePaneSessionForked(newSessionId, sid)}
+                    initialPrompt={pendingQuotePrompt?.sessionId === sid ? pendingQuotePrompt?.text : undefined}
+                    onInitialPromptConsumed={() => handlePaneInitialPromptConsumed(sid)}
+                    modelsRefreshKey={modelsRefreshKey}
+                    externalSessionChange={externalSessionChange}
+                    // polyforge#231: a search hit and a saved scroll position
+                    // belong to one session; each pane reads and writes its
+                    // own sid's values, never the selected chat's (ruling 7=A).
+                    searchTarget={searchTarget?.sessionId === sid ? searchTarget : null}
+                    onSearchTargetHandled={handleSearchTargetHandled}
+                    initialScrollPosition={sessionScrollPositionsRef.current.get(sid) ?? null}
+                    onScrollPositionChange={handleSessionScrollPositionChange}
                     onOpenSettings={openSettingsSection}
                     onAgentEnd={(end) => {
                       // A stopped run did not finish anything: no badge, no chime.
