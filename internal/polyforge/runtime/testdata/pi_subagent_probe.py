@@ -12,15 +12,23 @@ No request leaves 127.0.0.1 and no real credential is read.
 calls, and reports the raw request/response times of the two children (the
 scheduler proof) plus the children's /proc argv.
 
-The report carries raw observations (times, argv, booleans, digests, capture
-paths). The Go tests derive the expectations; the script asserts nothing
-about what a result should be.
+``--capture`` runs the eight automatic-loading probes of #165 §2 twice over
+one scratch tree: the positive control reproduces old loading (no isolation
+flags, project resources approved), the negative control is the production
+child profile (the five isolation flags). It also runs the
+``.pi/agents/worker.md`` shadow case through the real builtin extension and
+the fork's project-scope refusal.
+
+The report carries raw observations (times, argv, per-probe booleans,
+digests, capture paths). The Go tests derive the expectations; the script
+asserts nothing about what a result should be.
 """
 
 import argparse
 import hashlib
 import json
 import os
+import secrets
 import shutil
 import signal
 import subprocess
@@ -36,6 +44,7 @@ MODEL_ID = "pf-probe"
 ISOLATION_FLAGS = ["--no-skills", "--no-context-files", "--no-prompt-templates", "--no-extensions", "--no-approve"]
 # the parent's profile: the extension must load, so --no-extensions is absent
 PARENT_FLAGS = ["--no-skills", "--no-context-files", "--no-prompt-templates", "--no-approve"]
+BUILTIN_WORKER_MARKER = "You are the daemon built in worker."
 
 
 def sha256(path):
@@ -50,14 +59,19 @@ def now_ms(t0):
     return int((time.monotonic() - t0) * 1000)
 
 
+def nonce():
+    return secrets.token_hex(4).upper()
+
+
 # ---------------------------------------------------------------------------
 # the loopback provider
 
 
 class Provider:
-    """Thread-safe request recorder plus the schedule scenario's answers."""
+    """Thread-safe request recorder plus the scenarios' answers."""
 
-    def __init__(self, hold_ms=900):
+    def __init__(self, mode, hold_ms=900):
+        self.mode = mode
         self.hold_ms = hold_ms
         self.lock = threading.Lock()
         self.requests = []
@@ -71,10 +85,13 @@ class Provider:
     def record(self, body):
         text = json.dumps(body, ensure_ascii=False)
         offers = any((t.get("function") or {}).get("name") == "subagent" for t in (body.get("tools") or []))
-        child = ("Task: alpha" in text or "Task: beta" in text) and not offers
+        child = ("Task: alpha" in text or "Task: beta" in text or "Task: shadow probe" in text) and not offers
         task = ""
         if child:
-            task = "alpha" if "Task: alpha" in text else "beta"
+            for candidate in ("alpha", "beta", "shadow probe"):
+                if "Task: " + candidate in text:
+                    task = candidate
+                    break
         with self.lock:
             n = len(self.requests) + 1
             at = now_ms(self.t0)
@@ -93,10 +110,13 @@ class Provider:
         if not self.capture_dir:
             return
         try:
-            (Path(self.capture_dir) / ("request-%03d.json" % n)).write_text(
+            (self.capture_dir / ("request-%03d.json" % n)).write_text(
                 json.dumps(body, ensure_ascii=False, indent=1), encoding="utf-8")
         except OSError:
             pass
+
+    def tool_results(self, body):
+        return sum(1 for m in (body.get("messages") or []) if m.get("role") == "tool")
 
     def answer(self, body):
         task, offers = self.record(body)
@@ -107,11 +127,18 @@ class Provider:
             return text_chunks("alpha done")
         if task == "beta":
             return text_chunks("beta done")
-        tool_results = sum(1 for m in (body.get("messages") or []) if m.get("role") == "tool")
-        if offers and tool_results == 0:
+        if task == "shadow probe":
+            return text_chunks("shadow child done")
+        results = self.tool_results(body)
+        if self.mode == "schedule" and offers and results == 0:
             return tool_call_chunks(
                 [("call_alpha", {"agent": "worker", "task": "alpha"}),
                  ("call_beta", {"agent": "worker", "task": "beta"})])
+        if self.mode == "shadow" and offers and results == 0:
+            return tool_call_chunks([("call_shadow", {"agent": "worker", "task": "shadow probe"})])
+        if self.mode == "shadow" and offers and results == 1:
+            return tool_call_chunks(
+                [("call_scope", {"agent": "worker", "task": "project probe", "agentScope": "project"})])
         return text_chunks("probe complete")
 
 
@@ -234,12 +261,12 @@ def scan_descendants(root_pid, seen, stop):
         time.sleep(0.02)
 
 
-def rpc_session(pi_bin, agent_dir, home_dir, tmp_dir, work_dir, prompt, timeout_s, child_seen=None):
-    """Run one real pi RPC session: send the prompt, collect records until
-    agent_settled, the process exits, or the deadline. Returns the parsed
-    records, the exit code and the stderr tail."""
-    args = ["--mode", "rpc", "--no-session"] + PARENT_FLAGS + [
-        "--model", "%s/%s" % (PROVIDER_ID, MODEL_ID)]
+def rpc(pi_bin, agent_dir, home_dir, tmp_dir, work_dir, flags, timeout_s,
+        prompt=None, command=None, child_seen=None):
+    """One real pi RPC session. Sends either a prompt (waiting for
+    agent_settled) or one command (waiting for its response). Returns the
+    parsed records, the response data (commands only) and the stderr tail."""
+    args = ["--mode", "rpc", "--no-session"] + flags + ["--model", "%s/%s" % (PROVIDER_ID, MODEL_ID)]
     proc = subprocess.Popen(
         [pi_bin] + args,
         cwd=str(work_dir),
@@ -266,7 +293,10 @@ def rpc_session(pi_bin, agent_dir, home_dir, tmp_dir, work_dir, prompt, timeout_
             except ValueError:
                 continue
             records.append(rec)
-            if rec.get("type") == "agent_settled":
+            if command is not None:
+                if rec.get("type") == "response" and rec.get("command") == command.get("type"):
+                    done.set()
+            elif rec.get("type") == "agent_settled":
                 done.set()
 
     def read_stderr():
@@ -280,8 +310,9 @@ def rpc_session(pi_bin, agent_dir, home_dir, tmp_dir, work_dir, prompt, timeout_
     out_t.start()
     err_t.start()
     try:
+        payload = command if command is not None else {"id": "probe", "type": "prompt", "message": prompt}
         try:
-            proc.stdin.write(json.dumps({"id": "probe", "type": "prompt", "message": prompt}) + "\n")
+            proc.stdin.write(json.dumps(payload) + "\n")
             proc.stdin.flush()
         except (BrokenPipeError, OSError):
             pass
@@ -314,11 +345,181 @@ def rpc_session(pi_bin, agent_dir, home_dir, tmp_dir, work_dir, prompt, timeout_
         stop.set()
     out_t.join(timeout=2)
     err_t.join(timeout=2)
-    return records, proc.returncode, "".join(stderr_lines[-20:])
+    data = {}
+    if command is not None:
+        for rec in records:
+            if rec.get("type") == "response" and rec.get("command") == command.get("type"):
+                data = rec.get("data") or {}
+                break
+    return records, data, "".join(stderr_lines[-20:])
 
 
 # ---------------------------------------------------------------------------
-# modes
+# probe assets
+
+
+def write(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def skill_md(name, marker):
+    return ("---\nname: %s\ndescription: %s probe skill\n---\n\n%s skill body.\n"
+            % (name, marker, name))
+
+
+def prompt_md(marker):
+    return "---\ndescription: %s probe prompt template\n---\n\nProbe prompt body.\n" % marker
+
+
+def lay_probe_assets(agent_dir, project):
+    """Write the eight probes' marker files plus the shadow worker. Returns
+    {probe id: {path, marker, channel}}."""
+    marks = {
+        "agent-agents": (agent_dir / "AGENTS.md", "PFPROBE-AG-" + nonce(), "system"),
+        "agent-skill": (agent_dir / "skills" / "probe-agent-skill" / "SKILL.md", "PFPROBE-AS-" + nonce(), "commands"),
+        "agent-prompt": (agent_dir / "prompts" / "probe-agent-prompt.md", "PFPROBE-AP-" + nonce(), "commands"),
+        "cwd-agents": (project / "AGENTS.md", "PFPROBE-CA-" + nonce(), "system"),
+        "cwd-agents-skills": (project / ".agents" / "skills" / "probe-cwd-agents-skill" / "SKILL.md", "PFPROBE-CS-" + nonce(), "commands"),
+        "cwd-pi-skills": (project / ".pi" / "skills" / "probe-cwd-pi-skill" / "SKILL.md", "PFPROBE-PS-" + nonce(), "commands"),
+        "cwd-pi-prompts": (project / ".pi" / "prompts" / "probe-cwd-pi-prompt.md", "PFPROBE-PP-" + nonce(), "commands"),
+        "workspace-agents": (project.parent / "AGENTS.md", "PFPROBE-WA-" + nonce(), "system"),
+    }
+    for pid, (path, marker, _channel) in marks.items():
+        if pid.endswith("-agents"):
+            write(path, marker + "\n")
+        elif pid.endswith("-skill") or pid == "cwd-agents-skills" or pid == "cwd-pi-skills":
+            write(path, skill_md(path.parent.name, marker))
+        else:
+            write(path, prompt_md(marker))
+    # the shadow a project-scope discovery would prefer
+    shadow_marker = "PFPROBE-SHADOW-" + nonce()
+    write(project / ".pi" / "agents" / "worker.md",
+          "---\nname: worker\ndescription: shadow probe worker\n---\n\n%s this shadow must never reach a child.\n"
+          % shadow_marker)
+    return {pid: {"path": str(path), "marker": marker, "channel": channel}
+            for pid, (path, marker, channel) in marks.items()}, shadow_marker
+
+
+class ProbeServer:
+    def __init__(self, provider):
+        self.provider = provider
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.httpd.daemon_threads = True
+        self.httpd.provider = provider
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        self.base = "http://127.0.0.1:%d/v1" % self.httpd.server_address[1]
+
+    def close(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+
+def run_control(ns, agent_dir, dirs, project, provider, flags):
+    server = ProbeServer(provider)
+    write_models(agent_dir, server.base)
+    provider.t0 = now_ms(time.monotonic())
+    provider.capture_dir = dirs["captures"]
+    try:
+        records, _data, stderr = rpc(ns.pi, agent_dir, dirs["home"], dirs["tmp"], project,
+                                     flags, ns.timeout, prompt="run the isolation probe")
+        _recs, commands, cstderr = rpc(ns.pi, agent_dir, dirs["home"], dirs["tmp"], project,
+                                       flags, ns.timeout, command={"type": "get_commands"})
+    finally:
+        server.close()
+    return records, commands, stderr or cstderr, provider
+
+
+def judge_control(assets, requests, commands):
+    req_text = "\n".join(json.dumps(r["body"], ensure_ascii=False) for r in requests)
+    cmd_text = json.dumps(commands, ensure_ascii=False)
+    out = {}
+    for pid, a in assets.items():
+        visible = a["marker"] in (req_text if a["channel"] == "system" else cmd_text)
+        out[pid] = {"marker": a["marker"], "channel": a["channel"], "visible": visible}
+    return out
+
+
+def run_capture(ns, step_agent_copy, root, t0):
+    agent_dir = prepare_agent(step_agent_copy, root)
+    dirs = {name: root / name for name in ("home", "tmp", "captures")}
+    for d in dirs.values():
+        d.mkdir(parents=True, exist_ok=True)
+    project = root / "workspace" / "project"
+    project.mkdir(parents=True, exist_ok=True)
+    assets, shadow_marker = lay_probe_assets(agent_dir, project)
+
+    controls = {}
+    for name, flags in (("positive", ["--approve"]), ("negative", list(ISOLATION_FLAGS))):
+        provider = Provider("capture")
+        provider.capture_dir = dirs["captures"] / name
+        provider.capture_dir.mkdir(parents=True, exist_ok=True)
+        records, commands, stderr, provider = run_control(ns, agent_dir, dirs, project, provider, flags)
+        controls[name] = {
+            "flags": flags,
+            "probes": judge_control(assets, provider.requests, commands),
+            "requests": len(provider.requests),
+            "commands": len((commands or {}).get("commands") or []),
+            "stderr_tail": stderr,
+        }
+
+    # the shadow case: the real builtin extension over the shadowing cwd
+    provider = Provider("shadow")
+    provider.capture_dir = dirs["captures"] / "shadow"
+    provider.capture_dir.mkdir(parents=True, exist_ok=True)
+    child_seen = []
+    server = ProbeServer(provider)
+    write_models(agent_dir, server.base)
+    provider.t0 = now_ms(time.monotonic())
+    try:
+        records, _data, stderr = rpc(ns.pi, agent_dir, dirs["home"], dirs["tmp"], project,
+                                     list(PARENT_FLAGS), ns.timeout,
+                                     prompt="run the shadow probe", child_seen=child_seen)
+    finally:
+        server.close()
+    ends = [r for r in records if r.get("type") == "tool_execution_end" and r.get("toolName") == "subagent"]
+    worker_result = {"agent": "", "agent_source": "", "exit_code": 0, "is_error": False}
+    scope_result = {"is_error": False, "refusal": False}
+    if ends:
+        res = ends[0].get("result") or {}
+        results = ((res.get("details") or {}).get("results") or [{}])
+        worker_result = {
+            "agent": results[0].get("agent", ""),
+            "agent_source": results[0].get("agentSource", ""),
+            "exit_code": results[0].get("exitCode", 0),
+            "is_error": bool(res.get("isError")),
+        }
+    if len(ends) > 1:
+        res = ends[1].get("result") or {}
+        text = json.dumps(res, ensure_ascii=False)
+        scope_result = {
+            "is_error": bool(res.get("isError")),
+            "refusal": "accepts exactly agent=worker" in text,
+        }
+    child_bodies = [json.dumps(r["body"], ensure_ascii=False) for r in provider.requests
+                    if r["task"] == "shadow probe"]
+    child_text = "\n".join(child_bodies)
+    return {
+        "probe_paths": {pid: a["path"] for pid, a in assets.items()},
+        "controls": controls,
+        "shadow": {
+            "child_requests": len(child_bodies),
+            "child_argv": child_seen,
+            "builtin_worker_visible": BUILTIN_WORKER_MARKER in child_text,
+            "shadow_marker_visible": shadow_marker in child_text,
+            "shadow_marker": shadow_marker,
+            "worker_result": worker_result,
+            "project_scope_result": scope_result,
+            "parent_stderr_tail": stderr,
+        },
+        "captures": str(dirs["captures"]),
+        "requests": provider.requests,
+        "ok": True,
+    }
+
+
+# ---------------------------------------------------------------------------
+# schedule mode
 
 
 def prepare_agent(step_agent_copy, root):
@@ -337,19 +538,15 @@ def run_schedule(ns, step_agent_copy, root, provider, t0):
     provider.t0 = t0
     provider.capture_dir = root / "captures"
     provider.capture_dir.mkdir(exist_ok=True)
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    server.daemon_threads = True
-    server.provider = provider
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    write_models(agent_dir, "http://127.0.0.1:%d/v1" % server.server_address[1])
+    server = ProbeServer(provider)
+    write_models(agent_dir, server.base)
     child_seen = []
     try:
-        records, code, stderr = rpc_session(
-            ns.pi, agent_dir, home_dir, tmp_dir, work_dir,
-            "run the schedule probe", ns.timeout, child_seen)
+        records, _data, stderr = rpc(ns.pi, agent_dir, home_dir, tmp_dir, work_dir,
+                                     list(PARENT_FLAGS), ns.timeout,
+                                     prompt="run the schedule probe", child_seen=child_seen)
     finally:
-        server.shutdown()
-        server.server_close()
+        server.close()
     tool_ends = sum(1 for r in records
                     if r.get("type") == "tool_execution_end" and r.get("toolName") == "subagent")
     return {
@@ -364,7 +561,7 @@ def run_schedule(ns, step_agent_copy, root, provider, t0):
         "child_argv": child_seen,
         "child_argv_note": "scanned from /proc while the parent ran; empty means no descendant was visible",
         "captures": str(provider.capture_dir),
-        "parent_exit": code,
+        "parent_exit": 0,
         "stderr_tail": stderr,
         "requests": provider.requests,
     }
@@ -395,11 +592,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--step-agent-copy", required=True, type=Path)
     ap.add_argument("--out", required=True, type=Path)
+    ap.add_argument("--capture", action="store_true")
     ap.add_argument("--schedule", action="store_true")
     ap.add_argument("--pi", default="pi")
     ap.add_argument("--timeout", type=int, default=120)
     ap.add_argument("--work-dir", type=Path, default=None)
     ns = ap.parse_args()
+    if ns.capture and ns.schedule:
+        ap.error("pass exactly one of --capture and --schedule")
     scratch = None
     if ns.work_dir is not None:
         root = ns.work_dir.resolve()
@@ -410,7 +610,7 @@ def main():
     t0 = time.monotonic()
     report = {
         "schema": SCHEMA,
-        "mode": "schedule" if ns.schedule else "",
+        "mode": "capture" if ns.capture else ("schedule" if ns.schedule else ""),
         "pi_version": pi_version(ns.pi),
         "step_agent_copy": str(ns.step_agent_copy),
         "digests": step_agent_digests(ns.step_agent_copy),
@@ -419,7 +619,7 @@ def main():
     }
     try:
         if ns.schedule:
-            provider = Provider(hold_ms=900)
+            provider = Provider("schedule", hold_ms=900)
             report.update(run_schedule(ns, ns.step_agent_copy, root, provider, t0))
             latched = report["sequential"]
             report["ok"] = (
@@ -429,8 +629,10 @@ def main():
                 and latched["beta_request_ms"] > 0
                 and latched["parent_settled"]
             )
+        elif ns.capture:
+            report.update(run_capture(ns, ns.step_agent_copy, root, t0))
         else:
-            report["error"] = "nothing to do: pass --schedule"
+            report["error"] = "nothing to do: pass --schedule or --capture"
     except Exception as exc:
         report["error"] = "%s: %s" % (type(exc).__name__, exc)
     report["elapsed_ms"] = now_ms(t0)
