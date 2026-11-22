@@ -302,3 +302,30 @@ test("pane sound controls: every pane unlocks and holds, only the focused pane c
   assert.match(clientPlatform, /only the focused pane plays the completion chime/, "client-platform.md must name the split rule");
   assert.match(clientPlatform, /every pane holds and unlocks the audio context/, "client-platform.md must name the per-pane hold");
 });
+
+// ---- u5: the top-bar projections follow the focused pane only ----
+
+test("pane top-bar projections are focused-gated", () => {
+  // Branch, system prompt/tools, the lazy system-info loader, the Debug
+  // panel's reader and the session-stats panel are single page-global
+  // surfaces. Only the focused pane reports them, so focus switching swaps the
+  // writer instead of letting two panes fight over the top bar (pi#23's
+  // pattern; owner rulings 5=A and 6=A).
+  const projections = [
+    ["onBranchDataChange", "handleBranchDataChange"],
+    ["onSystemPromptChange", "handleSystemPromptChange"],
+    ["onSystemToolsChange", "handleSystemToolsChange"],
+    ["onSystemInfoLoaderChange", "handleSystemInfoLoaderChange"],
+    ["onDebugSnapshotReaderChange", "handleDebugSnapshotReaderChange"],
+    ["onSessionStatsPanelOpen", "openSessionStatsPanel"],
+  ];
+  for (const [prop, handler] of projections) {
+    assert.match(
+      sessionPane,
+      new RegExp(`${prop}=\\{focused \\? ${handler} : undefined\\}`),
+      `the session pane must gate ${prop} on the focused flag`,
+    );
+    assert.doesNotMatch(sentinel, new RegExp(`${prop}=`), `the sentinel pane must not report ${prop}`);
+    assert.match(classicWindow, new RegExp(`${prop}=\\{${handler}\\}`), `the classic window keeps ${prop} unconditional`);
+  }
+});
