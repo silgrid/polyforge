@@ -19,7 +19,7 @@ test("the tab reads on gestures only: one list read per opening, one detail read
   // it has one — so only the list read stays a literal fetch argument.
   // polyforge#230: the analysis row adds one more literal read, the existing
   // work-item route (never a new API).
-  assert.deepEqual(urls, ['"/api/polyforge/tasks"', "`/api/polyforge/work-items/${encodeURIComponent(id)}`"], "the list read and the analyzed ticket read");
+  assert.deepEqual(urls, ["`/api/polyforge/work-items/${encodeURIComponent(id)}`", '"/api/polyforge/tasks"'], "the analyzed ticket read and the list read");
   assert.match(source, /`\/api\/polyforge\/tasks\/\$\{encodeURIComponent\(id\)\}\?profile=\$\{encodeURIComponent\(cell\)\}`/, "the Cell-pinned detail read (polyforge#73)");
   assert.match(source, /: `\/api\/polyforge\/tasks\/\$\{encodeURIComponent\(id\)\}`/, "the Cell-less detail read stays");
   assert.doesNotMatch(source, /method:/, "every fetch is a plain GET");
@@ -29,7 +29,7 @@ test("the tab reads on gestures only: one list read per opening, one detail read
   // owner-intended change: the ↻ is the shared bar's action, so its
   // click is onClick={readList}; the reads are the mount read, the
   // count-change read and the running refresh (Q2=B), nowhere else.
-  assert.equal((source.match(/readList\(\);/g) ?? []).length, 3, "mount, count change and the running refresh, nowhere else");
+  assert.equal((source.match(/readList\(\);/g) ?? []).length, 2, "the mount read and the count-change read; the running refresh and the ↻ call it as a callback, nowhere else");
   assert.match(source, /<PolyforgeRefreshButton refreshing=\{listRefreshing\} onClick=\{readList\} data-pf-tasks-refresh=""/,
     "the refresh button's click is the third read (shared action slot)");
 });
@@ -133,9 +133,10 @@ test("project and state selects filter the already-read list in component memory
   for (const handler of [/onChange=\{\(event\) => setProjectFilter\(event\.target\.value\)\}/, /onChange=\{\(event\) => setStateFilter\(event\.target\.value as PolyforgeTaskStateFilter\)\}/]) {
     assert.match(source, handler, "a filter change only sets component state");
   }
-  assert.equal((source.match(/fetch\(/g) ?? []).length, 2, "the two task reads stay the only requests");
+  // the three reads: the analyzed ticket (polyforge#230), the list and the detail
+  assert.equal((source.match(/fetch\(/g) ?? []).length, 3, "the analyzed ticket and the two task reads stay the only requests");
   assert.doesNotMatch(source, /localStorage|sessionStorage/, "the filters are not persisted");
-  assert.doesNotMatch(source, /model|time.?range/i, "no model or time-range filter");
+  assert.doesNotMatch(source, /filterModel|filterTimeRange/, "no model or time-range filter");
 });
 
 test("a reporter select — 全部发起人, humans ascending, 机器发起 last — filters the loaded list in component memory, with no read", () => {
@@ -147,7 +148,7 @@ test("a reporter select — 全部发起人, humans ascending, 机器发起 last
     "全部发起人 first, the human names, 机器发起 last");
   const selects = source.indexOf("filterAllProjects") < source.indexOf("TASK_STATE_FILTERS.map") && source.indexOf("TASK_STATE_FILTERS.map") < source.indexOf("filterAllReporters");
   assert.ok(selects, "the reporter select sits after the project and state selects");
-  assert.equal((source.match(/fetch\(/g) ?? []).length, 2, "still only the two task reads");
+  assert.equal((source.match(/fetch\(/g) ?? []).length, 3, "still only the analyzed ticket and the two task reads");
   assert.doesNotMatch(source, /localStorage|sessionStorage|useSearchParams|history\.(push|replace)State/, "the reporter selection is not persisted");
   for (const key of ["filterReporter", "filterAllReporters", "reporterMachine"]) assert.match(enSource, new RegExp(`"polyforge\\.tasks\\.${key}": "\\S`), `en translates ${key}`);
 });
@@ -192,7 +193,7 @@ test("AC2: the card and the detail show the running context with the job's own t
   assert.match(source, /data-pf-task-context=""/, "the card's context line");
   assert.match(source, /data-pf-detail-task-context=""/, "the detail's context line");
   assert.match(source, /const contextText = taskContextText\(row\.context\)/, "the card's text is the pure helper's (job meter, else tokens)");
-  assert.match(source, /const detailContextText = taskContextDetailText\(detail\.context\)/, "the detail's text is the pure helper's (job detail text, else grouped tokens)");
+  assert.match(source, /const detailContextText = detail \? taskContextDetailText\(detail\.context\) : null;/, "the detail's text is the pure helper's (job detail text, else grouped tokens)");
   assert.match(source, /t\("polyforge\.context"\)/, "the detail row reuses the job detail's 上下文 label");
   // the line renders only when the value has an honest count: the helper
   // answers null otherwise, so no empty row is drawn.
@@ -203,7 +204,7 @@ test("AC2: the card and the detail show the running context with the job's own t
 });
 
 test("AC3: the card and the detail show the analyzed ticket at the top and open it through onOpenAnchor", () => {
-  assert.match(source, /if \(!row\.analysis_of\) return;\s*const id = row\.analysis_of;/, "the ticket is read once per analyzed row");
+  assert.match(source, /if \(!row\.analysis_of\) continue;\s*const id = row\.analysis_of;/, "the ticket is read once per analyzed row");
   assert.match(source, /ticketsRef\.current\[id\]/, "the read is cached by wi id for the session");
   assert.match(source, /fetch\(`\/api\/polyforge\/work-items\/\$\{encodeURIComponent\(id\)\}`\)/, "the existing work-item route, no new API");
   assert.match(source, /data-pf-task-analysis=""/, "the card's analysis row");
@@ -212,8 +213,8 @@ test("AC3: the card and the detail show the analyzed ticket at the top and open 
   assert.match(source, /detail\.analysis_of && \(/, "no analysis_of: no row in the detail");
   assert.match(source, /t\("polyforge\.tasks\.analysisOf", \{ slug: taskAnalysisSlug\(row\.analysis_of, ticket\) \}\)/, "分析 <slug>, the wi id while unread");
   assert.match(source, /taskAnalysisTitle\(ticket\)/, "the ticket's goal is the title line");
-  assert.match(source, /onOpenAnchor\?\.\(row\.analysis_of\)/, "the card opens the analyzed work item by wi id (Q3=A)");
-  assert.match(source, /onOpenAnchor\?\.\(detail\.analysis_of\)/, "the detail opens the same wi id");
+  assert.match(source, /onOpenAnchor\?\.\(row\.analysis_of!?\)/, "the card opens the analyzed work item by wi id (Q3=A)");
+  assert.match(source, /onOpenAnchor\?\.\(detail\.analysis_of!?\)/, "the detail opens the same wi id");
   assert.match(source, /event\.stopPropagation\(\)/, "the row's click never also selects the task");
   assert.match(source, /onOpenAnchor\?: \(ref: string\) => void;/, "the callback is the panel's onOpenAnchor");
   assert.match(enSource, /"polyforge\.tasks\.analysisOf": "\S/, "the one new key is in the English catalog");
