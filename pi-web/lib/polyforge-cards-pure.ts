@@ -887,6 +887,22 @@ function contextPercent(context: PolyforgeContextUsage): number | null {
   return null;
 }
 
+/** A context value with a catalog window filled in when the harness reported
+ *  none: the window and the percent the count fills. A value that already
+ *  carries a window, a null/unknown window and a non-positive one are
+ *  returned unchanged — never a guessed window (polyforge#230: the one merge
+ *  the Jobs rows and the Tasks rows share). Pure. */
+export function withContextWindow(context: PolyforgeContextUsage, window: number | null): PolyforgeContextUsage {
+  if (context.window !== undefined || window === null || !(window > 0)) return context;
+  return {
+    ...(context.tokens !== undefined ? { tokens: context.tokens } : {}),
+    window,
+    ...(context.tokens !== undefined ? { percent: (context.tokens / window) * 100 } : {}),
+    ...(context.model ? { model: context.model } : {}),
+    ...(context.asOf ? { asOf: context.asOf } : {}),
+  };
+}
+
 /** The job card's context meter, the chat header's text: `42% / 1.0M`,
  *  `? / 1.0M` while the count is unknown, null (no meter) without a window —
  *  never a misleading number. Pure. */
