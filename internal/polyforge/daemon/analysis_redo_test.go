@@ -78,7 +78,7 @@ const pf233TicketBody = "## 背景\n\nthe ticket body\n\n## 分析\n\n### 1. 改
 
 func TestAnalysisRedoArchivesAndQueues(t *testing.T) {
 	td, hub, _ := w72World(t, nil)
-	w72FillSlots(t, td, 4) // the lane is full: the request must wait, persisted
+	w72FillSlots(t, td, 2) // the lane is full: the request must wait, persisted
 	w72Ticket(t, hub, "wi_redo_ok", pf233TicketBody)
 	before := pf233Content(t, hub, "wi_redo_ok")
 
