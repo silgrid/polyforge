@@ -46,7 +46,7 @@ function runExtracted(callbackText, sandbox) {
 }
 
 test("the tools callback re-reports on change and clears on removal", () => {
-  const effectText = extractEffectContaining("onSystemToolsChange?.(loadedToolsRef.current)");
+  const effectText = extractEffectContaining("onSystemToolsChange(loadedToolsRef.current)");
   const tools = [{ name: "read" }, { name: "bash" }];
   const reported = [];
   const effect = runExtracted(effectText, {
