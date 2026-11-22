@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/harness"
+	"github.com/silgrid/polyforge/internal/common/protocol"
 	"github.com/silgrid/polyforge/internal/polyforge/runtime"
 	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 	"github.com/silgrid/polyforge/internal/polyforge/workspace"
@@ -60,6 +61,11 @@ type RunSpec struct {
 	// zero Silence resolves per the harness's output granularity, a zero
 	// Tool to the 30m default (supervise.Defaults.Fill / SilenceFor).
 	Limits supervise.Defaults
+	// OnContext (optional) is called with the attempt's context-window
+	// usage whenever a stream record changes it (polyforge#230): the
+	// manager stores it on the running record. The value is freshly built
+	// per call and never mutated afterwards; nil drops it.
+	OnContext func(*protocol.ContextUsage)
 }
 
 // StuckError is the runner's stuck verdict: the supervision rules that
