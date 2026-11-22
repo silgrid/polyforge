@@ -136,12 +136,16 @@ func w136CommitSHA(t *testing.T, dir, ref string) string {
 	return w136Git(t, dir, "rev-parse", ref+"^{commit}")
 }
 
-// w136Write lays out one file of the fixture origin.
+// w136Write lays out one file of the fixture origin. An existing
+// file is removed first: os.WriteFile applies the mode only on
+// create, and a rewrite must be able to change it (the mode-change
+// fixture world).
 func w136Write(t *testing.T, path, body string, mode os.FileMode) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	_ = os.Remove(path)
 	if err := os.WriteFile(path, []byte(body), mode); err != nil {
 		t.Fatal(err)
 	}
@@ -1079,13 +1083,13 @@ func TestW136InstallDevRefusesNonCommentInterfaceChange(t *testing.T) {
 		if code == 0 {
 			t.Fatalf("a diff carrying a real interface code change must refuse the dev channel; it installed:\n%s", out)
 		}
-		for _, want := range []string{"interface changes", path, apiPath, "needs a formal release"} {
+		for _, want := range []string{"interface changes", apiPath, "needs a formal release"} {
 			if !strings.Contains(out, want) {
 				t.Fatalf("the mixed refusal must name %q:\n%s", want, out)
 			}
 		}
-		if strings.Contains(out, "comment-only") {
-			t.Fatalf("a refused mixed diff must not print the comment-only line:\n%s", out)
+		if strings.Contains(out, "comment-only") || strings.Contains(out, path) {
+			t.Fatalf("a refused mixed diff must not print the comment-only line or name the file that passed the judgment:\n%s", out)
 		}
 		w136Unchanged(t, d, binBody, curBefore)
 	})
