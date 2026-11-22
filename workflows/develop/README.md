@@ -51,7 +51,10 @@ The complete variable table is in [the workflow contract's Scripts environment s
 - **build** (fresh session; skill `build`) — one session, four segments
   (`steps/build.md`): a plan against the work item's acceptance criteria
   (`artifacts/plan.md`, its `## Coverage` the criterion → test table, its `## 分析对照` section
-  mapping the ticket's `## 分析` items to units or stated reasons, each `## Units` entry
+  mapping the ticket's `## 分析` items to units or stated reasons, its `## 已定对照` section
+  mapping every item of the ticket's `## 已定` sections to a unit or a stated reason (a
+  ticket without one omits it; an unmapped ruling the close's plan-conformance names red,
+  and review judges by the same line), each `## Units` entry
   recording the behaviour its test observes, how its expected values are derived
   independently of the implementation and the change it
   catches (`workflows/_shared/test_quality.md`)); per unit, a test — a

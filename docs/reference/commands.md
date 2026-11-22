@@ -1146,7 +1146,13 @@ hold no credential.
 
 - `facts.py <kind>` computes the facts a review reads about a build's
   delivered tree: `plan-conformance` (the plan's `## Units` declarations
-  against the diff both ways), `build` (each unit resolved, its commit
+  against the diff both ways, and the plan's `## 已定对照` mapping against
+  the work item's decided rulings — every section of its content opening
+  `## 已定`: each item, numbered across the sections, mapped to a unit or
+  a `none` reason; an unmapped ruling is red, named with its number and
+  text; a ticket without such a section asks for no mapping section, an
+  unmaterialized work item reads as no ruling and a corrupt one is not
+  judged), `build` (each unit resolved, its commit
   pair test-first, its `test_weakened` hunks and, with `--replay`, its run
   replayed on the tree of its test commit — a unit declared `pre_existing_red`
   (its reproduction test already exists and is red before the change, so it

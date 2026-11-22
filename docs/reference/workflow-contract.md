@@ -415,6 +415,15 @@ their flaky re-run on the change's baseline — the same judgment
 one entry): the reds classified `pre_existing` / `this_change` /
 `undetermined` in the result file, a selection whose only reds are
 pre-existing standing as green-equivalent evidence.
+The plan's decided rulings are judged by the same entry:
+`facts.py plan-conformance` reads the work item's verbatim content
+(`runtime-state/work-item.json`) and requires every item of every section
+opening `## 已定` — numbered across the sections in order of appearance —
+mapped in the plan's `## 已定对照` section to a unit or a stated `none`
+reason; an unmapped ruling is red, named with its number and text, and
+build's close and review run the one same line. A ticket without such a
+section asks for no mapping section; the rule reads the ticket's own
+writing only and names no project.
 Its unit tests are
 `_shared/scripts/tests/` (`python3 -m unittest discover -s
 workflows/_shared/scripts -t workflows/_shared/scripts`); CI runs them

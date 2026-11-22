@@ -48,6 +48,12 @@ owner only in the cases item 3 names, and judge the plan; without sub-agents, do
    taken; a decided point takes precedence over the analysis's recommendation; an analysis written
    against a base that differs from the current one has its file:line references re-checked against
    the current base before the work starts; a ticket without `## 分析` writes `none` there.
+   The plan maps the ticket's decided rulings too: on a work item whose content carries
+   sections opening `## 已定`, it carries a `## 已定对照` section in which every item of
+   every such section is mapped to the unit that carries it, or carries `none — <reason>`;
+   a ticket without such a section omits the mapping. The close and review judge it by the
+   same `facts.py plan-conformance` line: an unmapped ruling is red, named with its number
+   and text.
 
 3. **When to ask the owner**: only in the four cases your skill names — (a) a dead end or a
    contradiction, (b) a deviation, (c) `confirm_plan: true`, (d) a missing or incomplete acceptance list
@@ -143,7 +149,8 @@ The second gives each unit's commit facts
 (its ids resolving in a task repo, `test_commit` one ordinary commit of test paths alone and an
 ancestor of `impl_commit`, `impl_commit` in HEAD) and its run replayed on the tree of its
 `test_commit` (or of the change's base for a unit declared `pre_existing_red`) — it must be red
-there; the first the plan's two-way conformance with the diff. A red — the plan's undeclared
+there; the first the plan's two-way conformance with the diff and its `## 已定对照` mapping
+(an unmapped decided ruling red, named). A red — the plan's undeclared
 writes or lapsed obligations, a unit that does not resolve, whose commits name a test-first
 problem or whose replay is not red — is fixed before the hand-off, never handed off on. Exit 2
 on either line is not judged: read the result's summary, wait one minute and run that line

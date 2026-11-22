@@ -1179,3 +1179,31 @@ this change — this is what unblocked the fifteenth batch:
 `green/20261121-1` over `v0.2.3` touches exactly one interface file,
 `internal/common/protocol/watch.go`, whose change is four comment
 lines.
+
+## v0.2.4, the plan maps the ticket's decided rulings (polyforge#221)
+
+Build's plan-conformance close fact reads the ticket for the first time:
+the work item's verbatim content (`runtime-state/work-item.json`, already
+materialized by the daemon) is scanned for every section whose heading
+opens `## 已定` — the section the owner's plan-review rulings are written
+into, before the analysis (the 2026-11-21 ruling; polyforge#202's trial
+showed both models skipping rulings appended after the analysis) — and
+every item of every such section, numbered across the sections in order of
+appearance (a prose paragraph that is no list counts as one, so a ruling
+cannot slip past), must be mapped in the plan's new `## 已定对照` section
+to a unit — an id of units.json, or a bold id of the plan's `## Units`
+when there is no units file — or to a stated `none — <reason>`. An
+unmapped ruling is red and named with its number and text, so the close
+cannot hand off, and build's close and review run the same one line — one
+engine, one result file. A ticket without such a section asks for no
+mapping section, and a work item the daemon has not materialized reads as
+no decided ruling (a corrupt one is not judged, exit 2). The rule reads
+the ticket's own writing only — no project is named, any repository's
+ticket written this way is read the same. Plans written before this
+change are judged from the next plan-writing round or the next re-run
+close: a lane in flight whose ticket carries `## 已定` sections fails the
+close red until the mapping section is added (the result names every
+unmapped item, so the fix is mechanical), and a lane whose fix build
+inherited its plan keeps skipping the plan-conformance line. The develop
+build step's line budget rises from 215 to 222. No upgrade action beyond
+the next `pf` install: texts and the one engine entry, nothing to migrate.
