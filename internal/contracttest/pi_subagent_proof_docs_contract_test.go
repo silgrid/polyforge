@@ -2,13 +2,25 @@ package test
 
 // pi_subagent_proof_docs_contract_test.go (polyforge#228 AC4): the proof
 // ticket's residual documentation, checked where each document owns it —
-// SOURCE.md's fixed upstream version, the two files' real sha256 values,
-// the MIT license source and text, and the local fork note; concepts.md and
+// SOURCE.md's fixed upstream identity, the real sha256 values, the MIT
+// license source and text, and the local fork note; concepts.md and
 // bundles.md's explicit "none + reason"; v2-converge §2.7's
 // explicit-source-refusal / implicit-default-warning rule; and the workflow
 // contract's every-resume-shape restatement. A digest in SOURCE.md that no
 // longer matches the embedded bytes is red, so the document cannot drift
 // from the fork it describes.
+//
+// The two upstream constants are derived, not copied:
+//   3493…b4b5 — the operator snapshot `/root/.pi/agent/extensions/subagent/
+//               index.ts` (file time 2026-09-19), the fork's actual base: the
+//               embedded index.ts still has `isPiCliScript` and no
+//               `formatReadLineRange`, exactly like that snapshot.
+//   1d11858d…401b — the installed pi-coding-agent 1.4.0 package's
+//               `examples/extensions/subagent/index.ts` (2026-10-29): the
+//               same-host version cross-reference, NOT the fork's base (it
+//               uses `formatReadLineRange` and drops `isPiCliScript`).
+// The snapshot carries no version number of its own, so SOURCE.md must not
+// present 1.4.0 as the snapshot's release; the test rejects that claim.
 
 import (
 	"crypto/sha256"
@@ -48,26 +60,38 @@ func TestPiSubagentProofDocs(t *testing.T) {
 		"THE SOFTWARE IS PROVIDED \"AS IS\"",
 		"daemon fork",
 		"`agents.ts` 与上游快照**逐字节相同**",
+		"/root/.pi/agent/extensions/subagent",
 		"3493514708d71de722b26494f23b77258e32c75cc7c74302ac96b7db139eb4b5",
+		"`examples/extensions/subagent/index.ts`",
+		"1d11858d163e2a3a258af51c1923fc55ad825813acd6224462fd25ad61f5401b",
+		"不是同一份",
+		"没有**随附独立的 LICENSE 文件",
+		"标准 MIT 文本",
 	} {
 		if !strings.Contains(source, want) {
 			t.Errorf("SOURCE.md must document %q", want)
 		}
 	}
-	// every 64-hex run in SOURCE.md is one of these three values; the two
+	// the snapshot carries no release version: presenting 1.4.0 as the
+	// snapshot's source is the review r1#1 finding this test must keep red.
+	if strings.Contains(source, "取自该版本随包发布") {
+		t.Error("SOURCE.md claims the snapshot came from the 1.4.0 published example; it is an earlier operator snapshot (review r1#1)")
+	}
+	// every 64-hex run in SOURCE.md is one of these four values; the two
 	// local files' digests must be the CURRENT embedded bytes.
 	digests := regexp.MustCompile(`\b[0-9a-f]{64}\b`).FindAllString(source, -1)
 	wantDigests := map[string]bool{
 		embeddedDigest(t, "extensions/subagent/index.ts"):                  true,
 		embeddedDigest(t, "extensions/subagent/agents.ts"):                 true,
 		"3493514708d71de722b26494f23b77258e32c75cc7c74302ac96b7db139eb4b5": true,
+		"1d11858d163e2a3a258af51c1923fc55ad825813acd6224462fd25ad61f5401b": true,
 	}
-	if len(digests) < 3 {
-		t.Fatalf("SOURCE.md carries %d sha256 values, want the two local digests and the upstream snapshot's", len(digests))
+	if len(digests) < 4 {
+		t.Fatalf("SOURCE.md carries %d sha256 values, want the two local digests, the operator snapshot's and the 1.4.0 example's", len(digests))
 	}
 	for _, d := range digests {
 		if !wantDigests[d] {
-			t.Errorf("SOURCE.md pins %s, which is neither a current embedded file's digest nor the upstream snapshot's", d)
+			t.Errorf("SOURCE.md pins %s, which is none of the current embedded files' digests, the operator snapshot's or the 1.4.0 example's", d)
 		}
 	}
 	for _, rel := range []string{"extensions/subagent/index.ts", "extensions/subagent/agents.ts"} {
