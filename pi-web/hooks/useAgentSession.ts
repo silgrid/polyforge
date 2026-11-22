@@ -4196,6 +4196,14 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     onSystemPromptChange?.(systemPrompt);
   }, [systemPrompt, onSystemPromptChange]);
 
+  // polyforge#231 (review r1#1): focus can move to the new-session sentinel,
+  // which holds no prompt callback. Clear the top bar's prompt when this
+  // chat's callback goes away, as the loader and the debug reader already do.
+  useEffect(() => {
+    if (!onSystemPromptChange) return;
+    return () => onSystemPromptChange?.(null);
+  }, [onSystemPromptChange]);
+
   useEffect(() => {
     onSystemInfoLoaderChange?.(loadSystemInfo);
     return () => onSystemInfoLoaderChange?.(null);
@@ -4254,6 +4262,16 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     if (!onBranchDataChange) return;
     onBranchDataChange(data?.tree ?? [], activeLeafId, handleLeafChange, branchSwitchLocked);
   }, [data?.tree, activeLeafId, handleLeafChange, branchSwitchLocked, onBranchDataChange]);
+
+  // polyforge#231 (review r1#1): losing the callback (focus moved to the
+  // sentinel) must clear the top bar's tree and replace this chat's
+  // onLeafChange with a no-op, or a branch click there would move THIS
+  // session's leaf while another chat is focused. Reported only on removal,
+  // so an ordinary tree change still reports once.
+  useEffect(() => {
+    if (!onBranchDataChange) return;
+    return () => onBranchDataChange([], null, () => {}, false);
+  }, [onBranchDataChange]);
 
   useEffect(() => {
     const container = scrollContainerRef.current;

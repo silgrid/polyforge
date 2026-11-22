@@ -43,8 +43,8 @@ Split view's `renderPane` in `components/AppShell.tsx` renders one ChatWindow pe
 | `playDoneSound` | 漏传 | only the focused pane gets it (`focused ? playDoneSound : undefined`); an unfocused pane's finished run still chimes through the pane's own `onAgentEnd` coalescing, so one run rings once. |
 | `unlockAudio` | 漏传 | every pane passes it, so a send's gesture unlocks audio from any pane. |
 | `holdAudio` | 漏传 | every pane passes it, so a background pane's active run keeps the shared AudioContext open. |
-| `onBranchDataChange` | 漏传 | focused-gated: the branch navigator is one top-bar surface and follows the chat shown. |
-| `onSystemPromptChange` | 漏传 | focused-gated, same reason. |
+| `onBranchDataChange` | 漏传 | focused-gated: the branch navigator is one top-bar surface and follows the chat shown; losing the callback清空 the tree and replaces its `onLeafChange` with a no-op, so a branch click in the sentinel's top bar can never move another pane's leaf. |
+| `onSystemPromptChange` | 漏传 | focused-gated, same reason; losing the callback清空 the prompt to null. |
 | `onSystemToolsChange` | 漏传 | focused-gated; `useAgentSession` re-reports its last loaded tools when the callback arrives and nulls it on removal, so a focus switch never leaves the previous pane's tools in the top bar. |
 | `onSystemInfoLoaderChange` | 漏传 | focused-gated; only the focused chat's lazy system-info loader is registered. |
 | `onDebugSnapshotReaderChange` | 漏传 | focused-gated; the Debug panel reads the chat shown, matching the Debug panel section above. |

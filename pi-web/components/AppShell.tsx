@@ -3655,8 +3655,9 @@ export function AppShell() {
                     // system-info loader, the Debug reader and the session
                     // stats panel are one page-global surface each. Only the
                     // focused pane may write them (pi#23's pattern); on a
-                    // focus switch ChatWindow's effects clean up (null) and
-                    // the newly focused pane re-reports its own values.
+                    // focus switch ChatWindow's effects clean up (empty tree /
+                    // null; the prompt and branch effects clean up on removal)
+                    // and the newly focused pane re-reports its own values.
                     onBranchDataChange={focused ? handleBranchDataChange : undefined}
                     onSystemPromptChange={focused ? handleSystemPromptChange : undefined}
                     onSystemToolsChange={focused ? handleSystemToolsChange : undefined}
