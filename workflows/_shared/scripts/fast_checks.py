@@ -653,7 +653,7 @@ class CheckRun:
             log_path = os.path.join(self.log_dir, self.repo, str(self.seq), "command.log")
             os.makedirs(os.path.dirname(log_path), exist_ok=True)
             er = self.r.exec_to(runner.ExecSpec(argv=bash_argv(cmd), dir=clone, cwd="repos/" + self.repo,
-                                                 timeout=timeout, private_tmp=True), log_path)
+                                                 timeout=timeout, private_tmp=True), log_path, self.box)
             return RerunRun(not_started=er.not_started, exit=er.exit, log_path=er.log_path,
                             tmp_dir=er.tmp_dir,
                             duration=(er.evidence.duration_ms / 1000.0) if er.evidence is not None else 0.0)
@@ -768,7 +768,7 @@ class CheckRun:
         log_path = os.path.join(self.log_dir, self.repo, str(self.seq), "command.log")
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
         er = self.r.exec_to(runner.ExecSpec(argv=bash_argv(cmd), dir=directory, cwd=root_rel,
-                                             timeout=timeout_of(c), private_tmp=True), log_path)
+                                             timeout=timeout_of(c), private_tmp=True), log_path, self.box)
         entry["confirm_exit_code"] = er.exit
         if er.timed_out:
             entry["confirm_timed_out"] = True
@@ -1347,7 +1347,12 @@ class CloseRun(CheckRun):
             self.tree_of(c.dir)
         for c in plan.commands:
             self.inv.say("repos/%s: `%s` (%s)" % (self.repo, c.cmd, c.phase))
-            key = self.reuse_key(c)
+            # a boxed close consumes no --reuse green evidence (Q3): the
+            # same-tree host run proves nothing inside the image — the
+            # file's shape is still load_reuse's to validate, and the
+            # image and tool caches stay shared; a host close keeps the
+            # existing reuse rules whole
+            key = self.reuse_key(c) if self.box is None else None
             if key is not None and key in self.reuse_green:
                 entry: Dict[str, Any] = {"name": c.name, "phase": c.phase, "root": self.command_root(c),
                                         "cmd": c.cmd, "source": c.source, "reused": self.reuse_green[key]}
