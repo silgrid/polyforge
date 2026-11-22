@@ -23,6 +23,9 @@ func TestPF233AnalysisRedoDocumentation(t *testing.T) {
 			"## 历次分析",
 			"unconfirmed",
 			"strong guarantee covers this machine's daemon only",
+			"old format",
+			"stale base",
+			"materially changed scope",
 		},
 		filepath.Join("docs", "reference", "uds-routes.md"): {
 			"`/analysis/redo`",
@@ -49,10 +52,18 @@ func TestPF233AnalysisRedoDocumentation(t *testing.T) {
 			"queued or blocked",
 			"## 历次分析",
 			"unconfirmed",
+			"old format",
+			"stale base",
+			"materially changed scope",
+			"pending analysis request",
+			"local execution job",
 		},
 		filepath.Join("skills", "polyforge", "verbs", "submit.md"): {
 			"pf file analysis redo",
 			"## 历次分析",
+			"old format",
+			"stale base",
+			"materially changed scope",
 		},
 	}
 	for rel, wants := range docs {
@@ -68,7 +79,16 @@ func TestPF233AnalysisRedoDocumentation(t *testing.T) {
 	// pinned by the CLI package's TestPF233HelpFileNamesRedo, and the one
 	// usage source carries the same line.
 	usage := pf27Flat(pf27Read(t, filepath.Join("internal", "polyforge", "cli", "verbs_aihub.go")))
-	for _, want := range []string{"pf file analysis redo <id>", "旧分析", "## 历次分析"} {
+	for _, want := range []string{
+		"pf file analysis redo <id>",
+		"旧分析",
+		"## 历次分析",
+		"old format",
+		"stale base",
+		"materially changed scope",
+		"pending analysis request",
+		"local execution job",
+	} {
 		if !strings.Contains(usage, want) {
 			t.Errorf("the `pf help file` usage source must carry %q", want)
 		}

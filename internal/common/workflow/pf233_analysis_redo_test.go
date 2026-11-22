@@ -86,3 +86,68 @@ func TestPF233PrepareAnalysisRedoArchivesVerbatim(t *testing.T) {
 		t.Fatalf("two active analysis sections must be refused, got:\n%s", out)
 	}
 }
+
+func TestPF233R1SecondRedoKeepsBothArchives(t *testing.T) {
+	firstID, secondID := "redo_aaaaaaaaaaaaaaaa", "redo_bbbbbbbbbbbbbbbb"
+	first, err := PrepareAnalysisRedo(pf233Doc(), firstID, "2026-11-22T00:00:00Z")
+	if err != nil {
+		t.Fatalf("first redo: %v", err)
+	}
+	second, err := PrepareAnalysisRedo(first, secondID, "2026-11-22T01:00:00Z")
+	if err != nil {
+		t.Fatalf("second redo: %v", err)
+	}
+	if !strings.Contains(second, pf233Old) {
+		t.Fatalf("the first archive must stay byte for byte after a second redo:\n%s", second)
+	}
+	if !strings.Contains(second, firstID) || !strings.Contains(second, secondID) {
+		t.Fatalf("both rounds must be named on the ticket:\n%s", second)
+	}
+	if n := strings.Count(second, AnalysisArchiveHeading); n != 1 {
+		t.Fatalf("a second redo appends to the one archive section, got %d headings:\n%s", n, second)
+	}
+	active, found := analysisSection(second)
+	if !found || strings.Contains(active, firstID) {
+		t.Fatalf("the active analysis must carry only the new round's marker, got:\n%s", active)
+	}
+	if id, ok := AnalysisRedoRequestID(second); !ok || id != secondID {
+		t.Fatalf("the active pending request = %q, %v; want %q", id, ok, secondID)
+	}
+}
+
+func TestPF233R1EnglishAnalysisHeading(t *testing.T) {
+	doc := "## Background\n\nx\n\n## Analysis\n\nold english draft\n\n## Acceptance\n\n- AC1 x\n"
+	got, err := PrepareAnalysisRedo(doc, pf233Redo, "2026-11-22T00:00:00Z")
+	if err != nil {
+		t.Fatalf("PrepareAnalysisRedo: %v", err)
+	}
+	if !strings.Contains(got, "## Analysis\n\nold english draft") {
+		t.Fatalf("the English analysis heading and its text must be archived verbatim:\n%s", got)
+	}
+	if !AnalysisUnconfirmed(got) {
+		t.Fatalf("the English section must gain the unconfirmed marker:\n%s", got)
+	}
+}
+
+func TestPF233R1ArchiveBeforeActiveRefused(t *testing.T) {
+	doc := "## 历次分析\n\n<details><summary>old</summary>\n\n````markdown\n## 分析\n\nold\n````\n</details>\n\n## 分析\n\nactive\n"
+	if out, err := PrepareAnalysisRedo(doc, pf233Redo, "2026-11-22T00:00:00Z"); err == nil {
+		t.Fatalf("an archive before the active analysis has no clear boundary and must be refused, got:\n%s", out)
+	}
+}
+
+func TestPF233AnalysisRedoPendingMarker(t *testing.T) {
+	got, err := PrepareAnalysisRedo(pf233Doc(), pf233Redo, "2026-11-22T00:00:00Z")
+	if err != nil {
+		t.Fatalf("PrepareAnalysisRedo: %v", err)
+	}
+	if !strings.Contains(got, AutoAnalysisMarker(pf233Redo)) {
+		t.Fatalf("the active section must carry the pending marker %q:\n%s", AutoAnalysisMarker(pf233Redo), got)
+	}
+	if id, ok := AnalysisRedoRequestID(got); !ok || id != pf233Redo {
+		t.Fatalf("AnalysisRedoRequestID = %q, %v; want %q", id, ok, pf233Redo)
+	}
+	if _, ok := AnalysisRedoRequestID(pf233Doc()); ok {
+		t.Fatal("a ticket without a pending marker must answer none")
+	}
+}

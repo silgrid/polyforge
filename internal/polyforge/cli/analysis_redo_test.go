@@ -88,7 +88,16 @@ func TestPF233HelpFileNamesRedo(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("help file = %d: %s", code, stderr)
 	}
-	for _, want := range []string{"pf file analysis redo <id>", "旧分析", "历次分析"} {
+	for _, want := range []string{
+		"pf file analysis redo <id>",
+		"旧分析",
+		"历次分析",
+		"old format",
+		"stale base",
+		"materially changed scope",
+		"pending analysis request",
+		"local execution job",
+	} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("pf help file must carry %q:\n%s", want, stdout)
 		}

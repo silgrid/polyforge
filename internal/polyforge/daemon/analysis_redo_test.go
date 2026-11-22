@@ -97,6 +97,53 @@ func pf233Content(t *testing.T, hub *w72Hub, wi string) string {
 	return *item.Content
 }
 
+// pf233State is one refusal case's whole ticket state: the body, the
+// content CAS stamp, the task records and the queued analysis requests.
+type pf233State struct {
+	content string
+	updated string
+	tasks   int
+	queue   int
+}
+
+func pf233Snapshot(t *testing.T, td *testDaemon, hub *w72Hub, wi string) pf233State {
+	t.Helper()
+	item, err := hub.GetWorkItem(wi)
+	if err != nil {
+		t.Fatalf("read %s: %v", wi, err)
+	}
+	content := ""
+	if item.Content != nil {
+		content = *item.Content
+	}
+	return pf233State{
+		content: content,
+		updated: item.UpdatedAt,
+		tasks:   len(tdTasks(t, td)),
+		queue:   len(pf233QueueEntries(t, td)),
+	}
+}
+
+// pf233AssertUnchanged pins the AC3 "ticket unchanged" contract: the body
+// and its updated_at byte-identical, and neither a task nor a queued
+// analysis request added.
+func (b pf233State) pf233AssertUnchanged(t *testing.T, td *testDaemon, hub *w72Hub, wi, label string) {
+	t.Helper()
+	after := pf233Snapshot(t, td, hub, wi)
+	if after.content != b.content {
+		t.Fatalf("%s: a refused redo must leave the ticket content unchanged:\nbefore:\n%s\nafter:\n%s", label, b.content, after.content)
+	}
+	if after.updated != b.updated {
+		t.Fatalf("%s: a refused redo must leave updated_at unchanged: before %q after %q", label, b.updated, after.updated)
+	}
+	if after.tasks != b.tasks {
+		t.Fatalf("%s: a refused redo must not add a task: before %d after %d", label, b.tasks, after.tasks)
+	}
+	if after.queue != b.queue {
+		t.Fatalf("%s: a refused redo must leave the analysis queue unchanged: before %d after %d", label, b.queue, after.queue)
+	}
+}
+
 // pf233QueueEntries answers the persisted redo request ids.
 func pf233QueueEntries(t *testing.T, td *testDaemon) []struct {
 	WorkItemID  string `json:"work_item_id"`
@@ -319,7 +366,7 @@ func TestAnalysisRedoRefusesIneligibleUnchanged(t *testing.T) {
 			hub.mu.Lock()
 			hub.status["wi_redo_no"] = c.status
 			hub.mu.Unlock()
-			before := pf233Content(t, hub, "wi_redo_no")
+			before := pf233Snapshot(t, td, hub, "wi_redo_no")
 			code, body := pf233RedoCall(t, td, "wi_redo_no")
 			if code == 200 {
 				t.Fatalf("a %s ticket must be refused, got 200 %s", c.status, body)
@@ -327,12 +374,7 @@ func TestAnalysisRedoRefusesIneligibleUnchanged(t *testing.T) {
 			if !strings.Contains(body, c.reason) {
 				t.Fatalf("the refusal must say why (%q), got %s", c.reason, body)
 			}
-			if after := pf233Content(t, hub, "wi_redo_no"); after != before {
-				t.Fatalf("a refused redo must leave the ticket unchanged:\nbefore:\n%s\nafter:\n%s", before, after)
-			}
-			if entries := pf233QueueEntries(t, td); len(entries) != 0 {
-				t.Fatalf("a refused redo must queue nothing, got %+v", entries)
-			}
+			before.pf233AssertUnchanged(t, td, hub, "wi_redo_no", c.name)
 		})
 	}
 
@@ -342,10 +384,27 @@ func TestAnalysisRedoRefusesIneligibleUnchanged(t *testing.T) {
 		hub.mu.Lock()
 		delete(hub.bundles, "wi_redo_nobundle")
 		hub.mu.Unlock()
+		before := pf233Snapshot(t, td, hub, "wi_redo_nobundle")
 		code, body := pf233RedoCall(t, td, "wi_redo_nobundle")
 		if code == 200 || !strings.Contains(body, "bundle") {
 			t.Fatalf("a ticket without a bundle must be refused naming it, got %d %s", code, body)
 		}
+		before.pf233AssertUnchanged(t, td, hub, "wi_redo_nobundle", "not an execution ticket")
+	})
+
+	t.Run("lane requiring no acceptance", func(t *testing.T) {
+		td, hub, _ := w72World(t, nil)
+		workflowtest.WriteLane(t, td.cfg.WorkflowsDir, "nolist", "acceptance: none\nsteps:\n  - { id: build }\n")
+		w72Ticket(t, hub, "wi_redo_nolist", pf233TicketBody)
+		hub.mu.Lock()
+		hub.bundles["wi_redo_nolist"] = "nolist"
+		hub.mu.Unlock()
+		before := pf233Snapshot(t, td, hub, "wi_redo_nolist")
+		code, body := pf233RedoCall(t, td, "wi_redo_nolist")
+		if code == 200 || !strings.Contains(body, "does not require") {
+			t.Fatalf("a lane that requires no analysis must be refused, got %d %s", code, body)
+		}
+		before.pf233AssertUnchanged(t, td, hub, "wi_redo_nolist", "lane requiring no acceptance")
 	})
 
 	t.Run("local execution job", func(t *testing.T) {
@@ -354,10 +413,12 @@ func TestAnalysisRedoRefusesIneligibleUnchanged(t *testing.T) {
 		if err := td.q.Enqueue(qEntry{WorkItemID: "wi_redo_pending", Origin: runtime.Origin{Kind: runtime.OriginChat}}); err != nil {
 			t.Fatalf("seed pending job: %v", err)
 		}
+		before := pf233Snapshot(t, td, hub, "wi_redo_pending")
 		code, body := pf233RedoCall(t, td, "wi_redo_pending")
 		if code == 200 || !strings.Contains(body, "execution job") {
 			t.Fatalf("a ticket with a local pending job must be refused, got %d %s", code, body)
 		}
+		before.pf233AssertUnchanged(t, td, hub, "wi_redo_pending", "local execution job")
 	})
 
 	t.Run("running analysis task", func(t *testing.T) {
@@ -367,10 +428,12 @@ func TestAnalysisRedoRefusesIneligibleUnchanged(t *testing.T) {
 		if err != nil {
 			t.Fatalf("spawn the running analysis: %v", err)
 		}
+		before := pf233Snapshot(t, td, hub, "wi_redo_running")
 		code, body := pf233RedoCall(t, td, "wi_redo_running")
 		if code == 200 || !strings.Contains(body, tk.ID) {
 			t.Fatalf("a running analysis task %s must refuse a second round naming it, got %d %s", tk.ID, code, body)
 		}
+		before.pf233AssertUnchanged(t, td, hub, "wi_redo_running", "running analysis task")
 	})
 
 	t.Run("pending analysis request", func(t *testing.T) {
@@ -381,12 +444,13 @@ func TestAnalysisRedoRefusesIneligibleUnchanged(t *testing.T) {
 		})
 		w72Ticket(t, hub, "wi_redo_queued", pf233TicketBody)
 		td.analysisQ.add(analysisEntry{WorkItemID: "wi_redo_queued", Project: "proj"})
+		before := pf233Snapshot(t, td, hub, "wi_redo_queued")
 		code, body := pf233RedoCall(t, td, "wi_redo_queued")
 		if code == 200 || !strings.Contains(body, "pending analysis request") {
 			t.Fatalf("a pending analysis request must refuse a second one, got %d %s", code, body)
 		}
+		before.pf233AssertUnchanged(t, td, hub, "wi_redo_queued", "pending analysis request")
 	})
-
 }
 
 // TestAnalysisRedoSurvivesRestart (u4, AC2): the request is on disk before
@@ -481,10 +545,13 @@ func TestAnalysisRedoSurvivesRestart(t *testing.T) {
 		_, serr := cli.NewDaemonClient(cfg.SocketPath).Status()
 		return serr == nil
 	})
-	deadline := time.Now().Add(10 * time.Second)
-	for len(runner2.taskIDs()) == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
+	// The queue draining is the settled state: dispatch drops the head only
+	// after it spawned the round. Assert the task count on that state, never
+	// on a first-task sighting (a duplicate that lands a moment later would
+	// otherwise slip past a single read).
+	waitFor(t, "the redo queue drained", 10*time.Second, func() bool {
+		return len(pf233QueueEntriesFrom(t, data)) == 0
+	})
 	ids := runner2.taskIDs()
 	if len(ids) != 1 {
 		t.Fatalf("the restarted daemon must dispatch the redo request exactly once, got %d tasks: %v", len(ids), ids)
@@ -496,9 +563,6 @@ func TestAnalysisRedoSurvivesRestart(t *testing.T) {
 	if after := pf233Content(t, hub, "wi_redo_restart"); after != beforeRestart {
 		t.Fatalf("a restart must not re-apply the archive or marker:\nbefore:\n%s\nafter:\n%s", beforeRestart, after)
 	}
-	waitFor(t, "the dispatched round leaving the queue", 5*time.Second, func() bool {
-		return len(pf233QueueEntriesFrom(t, data)) == 0
-	})
 }
 
 // TestAnalysisRedoConcurrentRequests (u4, AC3): two simultaneous redo
@@ -677,4 +741,101 @@ func TestAnalysisRedoSlowHubKeepsAdmissionMoving(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the redo request never finished after the hub was released")
 	}
+}
+
+// TestPF233R1BlockedTicketRedo (r1#4/N9): a blocked, unclaimed ticket is
+// eligible just like queued (owner Q2=A).
+func TestPF233R1BlockedTicketRedo(t *testing.T) {
+	td, hub, _ := w72World(t, nil)
+	w72Ticket(t, hub, "wi_redo_blocked", pf233TicketBody)
+	hub.mu.Lock()
+	hub.status["wi_redo_blocked"] = api.StatusBlocked
+	hub.mu.Unlock()
+	code, body := pf233RedoCall(t, td, "wi_redo_blocked")
+	if code != 200 {
+		t.Fatalf("a blocked ticket must be redoable, got %d %s", code, body)
+	}
+	content := pf233Content(t, hub, "wi_redo_blocked")
+	if id, ok := redoRequestOf(content); !ok || id == "" {
+		t.Fatalf("the blocked ticket must gain the pending marker:\n%s", content)
+	}
+	if !strings.Contains(content, "## 历次分析") {
+		t.Fatalf("the blocked ticket's old analysis must be archived:\n%s", content)
+	}
+}
+
+// TestPF233R1PersistFailureLeavesTicketUntouched (r1#2a): a queue persist
+// failure refuses the round before the ticket CAS.
+func TestPF233R1PersistFailureLeavesTicketUntouched(t *testing.T) {
+	td, hub, _ := w72World(t, nil)
+	w72Ticket(t, hub, "wi_redo_persist", pf233TicketBody)
+	before := pf233Snapshot(t, td, hub, "wi_redo_persist")
+	dir := filepath.Join(t.TempDir(), "not-a-file")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	td.analysisQ.mu.Lock()
+	oldPath := td.analysisQ.path
+	td.analysisQ.path = dir
+	td.analysisQ.mu.Unlock()
+	t.Cleanup(func() {
+		td.analysisQ.mu.Lock()
+		td.analysisQ.path = oldPath
+		td.analysisQ.mu.Unlock()
+	})
+	code, body := pf233RedoCall(t, td, "wi_redo_persist")
+	if code == 200 {
+		t.Fatalf("a queue persist failure must refuse the redo, got 200 %s", body)
+	}
+	td.analysisQ.mu.Lock()
+	queued := len(td.analysisQ.entries)
+	td.analysisQ.mu.Unlock()
+	if queued != 0 {
+		t.Fatalf("a failed persist must leave no in-memory request, got %d", queued)
+	}
+	before.pf233AssertUnchanged(t, td, hub, "wi_redo_persist", "persist failure")
+}
+
+// pf233ConflictHub makes the ticket CAS host answer a conflict without
+// changing the ticket, the one failure the route must roll back.
+type pf233ConflictHub struct {
+	*w72Hub
+	wi string
+}
+
+func (h *pf233ConflictHub) Do(method, path string, body, out any) error {
+	if method == "PATCH" && strings.HasSuffix(path, "/"+h.wi) {
+		return &api.Error{Code: api.ErrCoreConflict, Detail: "the ticket changed since it was read"}
+	}
+	return h.w72Hub.Do(method, path, body, out)
+}
+
+// TestPF233R1CASConflictRollsBack (r1#2b): a stale content CAS refuses the
+// round, leaves the ticket untouched and removes the queued request.
+func TestPF233R1CASConflictRollsBack(t *testing.T) {
+	td, hub, _ := w72World(t, nil)
+	w72Ticket(t, hub, "wi_redo_cas", pf233TicketBody)
+	before := pf233Snapshot(t, td, hub, "wi_redo_cas")
+	td.Daemon.hub = &pf233ConflictHub{w72Hub: hub, wi: "wi_redo_cas"}
+	code, body := pf233RedoCall(t, td, "wi_redo_cas")
+	if code != 409 || !strings.Contains(body, "changed since it was read") {
+		t.Fatalf("a stale CAS must refuse the redo with the host's reason, got %d %s", code, body)
+	}
+	before.pf233AssertUnchanged(t, td, hub, "wi_redo_cas", "CAS conflict")
+	td.Daemon.hub = hub
+}
+
+// TestPF233R1LeftoverRequestDropped (r1#2c): a persisted redo entry whose
+// ticket never got the CAS marker (the route died between persist and CAS)
+// is dropped by dispatch, dispatching nothing.
+func TestPF233R1LeftoverRequestDropped(t *testing.T) {
+	td, hub, _ := w72World(t, func(c *Config) { c.DispatchTick = time.Hour; c.DrainInterval = time.Hour })
+	w72Ticket(t, hub, "wi_redo_leftover", pf233TicketBody)
+	before := pf233Snapshot(t, td, hub, "wi_redo_leftover")
+	td.analysisQ.add(analysisEntry{WorkItemID: "wi_redo_leftover", Project: "proj", RedoRequestID: "redo_cccccccccccccccc"})
+	td.dispatchAnalysisNow()
+	if entries := pf233QueueEntries(t, td); len(entries) != 0 {
+		t.Fatalf("a redo entry without its ticket marker must be dropped, got %+v", entries)
+	}
+	before.pf233AssertUnchanged(t, td, hub, "wi_redo_leftover", "pre-CAS leftover")
 }
