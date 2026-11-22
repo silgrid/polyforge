@@ -493,7 +493,7 @@ class PlanDecidedTest(GitCase):
         cap = decided_capsule(self.tmp, "decided-targets", DECIDED_CONTENT,
                               decided_map("- 已定 1: u1", "- 已定 2: u1", "- 已定 3: u2"), units=decls)
         code, res = self.plan_conformance(cap)
-        self.assertEqual(code, 1, res["summary"], "u1 is bold in the plan but no id of units.json")
+        self.assertEqual(code, 1, res["summary"] + " — u1 is bold in the plan but no id of units.json")
         self.assertEqual([u["n"] for u in res["details"]["unmapped_decided"]], [1, 2])
 
 
