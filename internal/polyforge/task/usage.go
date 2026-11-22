@@ -16,10 +16,14 @@ package task
 //     is everything but the cache read. The final `result` record carries an
 //     aggregate usage that is counted only when no assistant usage was seen
 //     (so the total is never doubled), by the same unit.
-//   - pi: `--mode json` records. A `message_update` record's top-level usage
-//     carries the call's input/output/cacheRead/cacheWrite components; the
-//     fresh part is everything but cacheRead, and the max seen in a message
-//     is added to the running total at the message/turn boundary.
+//   - pi: `--mode json` records. A call's authoritative usage is the
+//     `message_end` record's `message.usage` (input/output/cacheRead/
+//     cacheWrite); a `message_update`'s top-level usage is the in-flight
+//     value and only stands in when the call's message_end carried none
+//     (polyforge#230 AC5: a stream that reports usage only at message_end
+//     used to count far too little). The fresh part is everything but
+//     cacheRead, and it is added to the running total at the message/turn
+//     boundary.
 //
 // A harness that emits no usage record leaves Tokens at 0; the manager
 // refuses such a candidate before it starts (SupportsUsage), so a task
@@ -167,12 +171,39 @@ func (p *StreamParser) feedPi(line []byte) {
 		if text, ok := messageText(rec.Message); ok {
 			p.piTurns = append(p.piTurns, text)
 		}
+		// the finished call's own usage is authoritative: it replaces an
+		// in-flight message_update value (polyforge#230 AC5)
+		if u, ok := piAssistantUsage(rec.Message); ok {
+			p.turnMax = u.fresh()
+		}
 		p.flushPiTurn()
 	case "turn_end":
 		p.flushPiTurn()
 	case "agent_end":
 		p.flushPiTurn()
 	}
+}
+
+// piAssistantUsage answers a finished assistant message's usage
+// (message_end.message.usage) when it is a valid call record: an assistant
+// message whose call did not end aborted or in error.
+func piAssistantUsage(raw json.RawMessage) (piUsage, bool) {
+	if len(raw) == 0 {
+		return piUsage{}, false
+	}
+	var msg struct {
+		Role       string   `json:"role"`
+		StopReason string   `json:"stopReason"`
+		Usage      *piUsage `json:"usage"`
+	}
+	if json.Unmarshal(raw, &msg) != nil || msg.Role != "assistant" || msg.Usage == nil {
+		return piUsage{}, false
+	}
+	switch msg.StopReason {
+	case "aborted", "error":
+		return piUsage{}, false
+	}
+	return *msg.Usage, true
 }
 
 func (p *StreamParser) flushPiTurn() {
