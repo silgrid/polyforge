@@ -774,7 +774,8 @@ class CloseContainerTest(unittest.TestCase):
         code, res = box_close(fx.capsule, "app", eng, fb, os.path.join(fx.capsule, "close2.json"),
                               "--reuse", bad, env=env)
         self.assertEqual(code, 2)
-        self.assertIn("not a usable result file", res.get("summary", ""))
+        self.assertEqual(res["verdict"], "error")
+        self.assertEqual(res["details"].get("commands"), [], "nothing ran, nothing claimed")
 
     def test_unchanged_image_reuses_verification_cache(self) -> None:
         """AC3: an unchanged image is never rebuilt — close after close,
