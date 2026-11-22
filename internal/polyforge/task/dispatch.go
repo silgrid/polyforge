@@ -287,6 +287,9 @@ func (r *ExecRunner) Run(ctx context.Context, spec RunSpec, progress func(tokens
 		return RunResult{}, fmt.Errorf("start %s: %w", argv[0], err)
 	}
 	parser := NewStreamParser(h)
+	// The context usage: the same fold a step session's transcript is read
+	// with, fed the stream's transcript-equivalent records (polyforge#230).
+	contexts := newContextTracker(h)
 	// The stuck detection: the tracker the step lane's translator feeds,
 	// and the judge beside it. The thresholds are the injected limits
 	// (zero silence = the harness's own granularity default).
@@ -338,6 +341,9 @@ func (r *ExecRunner) Run(ctx context.Context, spec RunSpec, progress func(tokens
 		if len(line) > 0 {
 			parser.Feed(line)
 			translator.Feed(line)
+			if _, changed := contexts.feed(line); changed && spec.OnContext != nil {
+				spec.OnContext(contexts.usage(tracker.Snapshot(time.Now()).ContextWindows))
+			}
 			if progress != nil {
 				progress(parser.Tokens())
 			}
