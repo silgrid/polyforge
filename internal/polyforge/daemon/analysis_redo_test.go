@@ -365,7 +365,11 @@ func TestAnalysisRedoRefusesIneligibleUnchanged(t *testing.T) {
 	})
 
 	t.Run("pending analysis request", func(t *testing.T) {
-		td, hub, _ := w72World(t, nil)
+		td, hub, _ := w72World(t, func(c *Config) {
+			// no dispatch tick may drain the seeded request before the call
+			c.DispatchTick = time.Hour
+			c.DrainInterval = time.Hour
+		})
 		w72Ticket(t, hub, "wi_redo_queued", pf233TicketBody)
 		td.analysisQ.add(analysisEntry{WorkItemID: "wi_redo_queued", Project: "proj"})
 		code, body := pf233RedoCall(t, td, "wi_redo_queued")
@@ -483,9 +487,9 @@ func TestAnalysisRedoSurvivesRestart(t *testing.T) {
 	if after := pf233Content(t, hub, "wi_redo_restart"); after != beforeRestart {
 		t.Fatalf("a restart must not re-apply the archive or marker:\nbefore:\n%s\nafter:\n%s", beforeRestart, after)
 	}
-	if entries := pf233QueueEntriesFrom(t, data); len(entries) != 0 {
-		t.Fatalf("the dispatched round must leave the queue, got %+v", entries)
-	}
+	waitFor(t, "the dispatched round leaving the queue", 5*time.Second, func() bool {
+		return len(pf233QueueEntriesFrom(t, data)) == 0
+	})
 }
 
 // TestAnalysisRedoConcurrentRequests (u4, AC3): two simultaneous redo
