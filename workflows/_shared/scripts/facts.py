@@ -1214,6 +1214,41 @@ def plan_entry(e: str) -> Tuple[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# the ticket's decided rulings (## 已定)
+
+
+def decided_items(content: str) -> List[Dict[str, Any]]:
+    """Every decided ruling the ticket's content carries: each item of
+    every section opening `## 已定`, numbered across the sections in
+    order of appearance (a top-level list item, its indented children
+    and continuation lines folded into it; a non-empty paragraph that
+    is no list is one item, so prose rulings cannot slip past)."""
+    return []
+
+
+def decided_mapping(plan_md: str) -> Optional[Dict[int, Dict[str, Any]]]:
+    """The plan's `## 已定对照` section: decided n -> what the plan maps
+    it to (its unit ids, or `none — <reason>`). None when the plan
+    carries no such section (a ticket without a decided ruling asks
+    for none)."""
+    return None
+
+
+def decided_targets(decls: Sequence[Dict[str, Any]], plan_md: str) -> List[str]:
+    """The unit ids a decided ruling may name: units.json's own ids, or
+    — no units file — the bold ids of the plan's `## Units`."""
+    return []
+
+
+def fold_decided(items: Sequence[Dict[str, Any]], mapping: Optional[Dict[int, Dict[str, Any]]],
+                 targets: Sequence[str]) -> List[Dict[str, Any]]:
+    """Each decided ruling the plan leaves unmapped: its number, its
+    text and why (no mapping section, not mapped, `none` without a
+    reason, or an id no unit of the plan or units.json carries)."""
+    return []
+
+
+# ---------------------------------------------------------------------------
 # carries
 
 
