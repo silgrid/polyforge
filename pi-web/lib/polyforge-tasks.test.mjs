@@ -8,7 +8,6 @@ const jiti = createJiti(import.meta.url);
 const lib = await jiti.import("./polyforge-tasks.ts");
 const pure = await jiti.import("./polyforge-tasks-pure.ts");
 const memoryPure = await jiti.import("./polyforge-memory-pure.ts");
-const pure = await jiti.import("./polyforge-tasks-pure.ts");
 
 // The real `pf --json task list` row shape (the daemon's task record, spawn
 // facts nested under spec, plus the 2.20.12 prompt_summary and the
