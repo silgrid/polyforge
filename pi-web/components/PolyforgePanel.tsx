@@ -1330,6 +1330,11 @@ const WORK_TAB_ICONS = {
   integrate: workTabIcon(<><circle cx="6" cy="5" r="2" /><circle cx="18" cy="5" r="2" /><circle cx="12" cy="19" r="2" /><path d="M6 7v2a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3V7" /><path d="M12 12v5" /></>),
 } as const;
 
+/** Work's visible sub-tabs, in DOM order (polyforge#226): 项目 and 待集成 are
+ *  hidden from the rail, not removed — their labels, icons, bodies, components
+ *  and routes stay, so showing one again is an entry in this one list. */
+export const VISIBLE_WORK_TABS: readonly PolyforgeWorkTab[] = ["jobs", "tasks", "items"];
+
 /** a queued verification as the `pf ops status` VERIFY
  *  column renders it (`queued #2: <reason>`). Pure. */
 export function verifyQueueFace(queue: PolyforgeVerifyQueue): string {
@@ -1901,7 +1906,7 @@ export function PolyforgePanel({
                 ? { flex: "0 0 40px", width: 40, display: "flex", flexDirection: "column", borderLeft: "1px solid var(--border)", overflowY: "auto" }
                 : { flex: "0 0 72px", width: 72, display: "flex", flexDirection: "column", borderLeft: "1px solid var(--border)", overflowY: "auto" }}
             >
-              {(["jobs", "tasks", "items", "projects", "integrate"] as const).map((tab) => {
+              {VISIBLE_WORK_TABS.map((tab) => {
                 const active = workTab === tab;
                 // The running count rides the existing status snapshot (no
                 // timer of its own): queue.running for Jobs, tasks.running
