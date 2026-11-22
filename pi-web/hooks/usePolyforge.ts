@@ -813,6 +813,15 @@ export function usePolyforge(panelOpen: boolean) {
     if (!panelOpen) setAnalyses({});
   }, [panelOpen]);
 
+  // polyforge#225: the same close resets Work's sub-tab — it is page memory
+  // across one opening only. Reset at the close, never at the open: an
+  // explicit target written in the same batch as the open (the attention
+  // walk's task, AppShell's openPfNeedsInput) must not be overwritten by the
+  // opening.
+  useEffect(() => {
+    if (!panelOpen) setWorkTab("jobs");
+  }, [panelOpen]);
+
   const setActiveTab = useCallback((tab: PolyforgeTab) => {
     setActiveTabState(tab);
     if (tab === "messages") void refreshMessages();
