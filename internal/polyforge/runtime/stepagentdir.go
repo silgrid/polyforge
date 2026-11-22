@@ -425,20 +425,34 @@ func copyStepAgentTree(src, dst string) error {
 	return nil
 }
 
+// validateEmbeddedStepAgentDir compares every file the daemon embeds — the
+// subagent tool, the guard, the worker definition, SOURCE.md included — with
+// the snapshot the step process will load. The embedded tree is the
+// authority: a hand-written subset would let a missing guard or SOURCE.md
+// through as "valid".
 func validateEmbeddedStepAgentDir(dir string) error {
-	for _, item := range []struct{ rel, asset string }{
-		{"agents/worker.md", "agents/worker.md"},
-		{"extensions/subagent/index.ts", "extensions/subagent/index.ts"},
-		{"extensions/subagent/agents.ts", "extensions/subagent/agents.ts"},
-	} {
-		got, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(item.rel)))
+	err := fs.WalkDir(stepagentassets.FS, ".", func(p string, de fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if de.IsDir() {
+			return nil
+		}
+		got, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(p)))
 		if err != nil {
-			return fmt.Errorf("runtime: embedded step-agent resource %s is unavailable: %w", item.rel, err)
+			return &PiDispatchError{Kind: PiReasonResources, Detail: "embedded resource validation failed: " + p, Target: dir, Stage: "resources", Err: err}
 		}
-		want, err := fs.ReadFile(stepagentassets.FS, item.asset)
-		if err != nil || string(got) != string(want) {
-			return fmt.Errorf("runtime: embedded step-agent resource %s failed content validation", item.rel)
+		want, err := fs.ReadFile(stepagentassets.FS, p)
+		if err != nil {
+			return err
 		}
+		if string(got) != string(want) {
+			return &PiDispatchError{Kind: PiReasonResources, Detail: "embedded resource validation failed: " + p, Target: dir, Stage: "resources"}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	return nil
 }

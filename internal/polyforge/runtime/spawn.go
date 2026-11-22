@@ -272,28 +272,6 @@ func (s *piSpawner) buildCmd(p SpawnParams) *exec.Cmd {
 	return cmd
 }
 
-// validatePiCompatibility performs a bounded, model-free startup capability
-// check. It fails closed when the installed CLI does not advertise the flags
-// required by the daemon-owned extension.
-func validatePiCompatibility(ctx context.Context, bin string) error {
-	checkCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(checkCtx, bin, "--help").CombinedOutput()
-	if err != nil {
-		if errors.Is(checkCtx.Err(), context.DeadlineExceeded) {
-			return fmt.Errorf("pi compatibility check timed out")
-		}
-		return fmt.Errorf("pi compatibility check failed for %s: %w", bin, err)
-	}
-	text := string(out)
-	for _, flag := range []string{"--no-skills", "--no-context-files", "--no-prompt-templates", "--no-extensions", "--no-approve"} {
-		if !strings.Contains(text, flag) {
-			return fmt.Errorf("pi compatibility check: %s does not advertise required flag %s", bin, flag)
-		}
-	}
-	return nil
-}
-
 // leads it, so it leads its own process group — the cleanup layers collect
 // step agents and command children by it — and has no controlling terminal:
 // nothing the step runs can open /dev/tty and wait on the daemon's
@@ -311,32 +289,73 @@ func validatePiCompatibility(ctx context.Context, bin string) error {
 // or a supervision verdict retires the dispatch (lifecycle (iv),
 // proc.Terminate closes the command channel first).
 func (s *piSpawner) Spawn(ctx context.Context, p SpawnParams) (AgentHandle, error) {
-	if p.InitialPrompt == "" {
-		return nil, fmt.Errorf("runtime: spawn without an initial prompt")
+	capability, err := s.piDispatchCapability(ctx, p)
+	if err != nil {
+		return nil, err
 	}
-	if s.cfg.DataDir != "" {
-		if strings.EqualFold(strings.TrimSpace(p.Params["pi_subagents"]), "on") {
-			if err := validatePiCompatibility(ctx, s.bin()); err != nil {
-				return nil, err
-			}
+	// the initial prompt is built AFTER the gate, from what it verified
+	// (owner ruling Q3): a callback failure or an empty prompt refuses this
+	// dispatch, and a direct Spawn without a callback still ran the gate.
+	prompt := p.InitialPrompt
+	if p.FinalPrompt != nil {
+		prompt, err = p.FinalPrompt(capability)
+		if err != nil {
+			return nil, fmt.Errorf("runtime: the dispatch's final prompt could not be built: %w", err)
 		}
-		if err := s.cfg.refreshStepAgentDir(); err != nil {
-			return nil, err
-		}
-		if strings.EqualFold(strings.TrimSpace(p.Params["pi_subagents"]), "on") {
-			if err := validateEmbeddedStepAgentDir(s.cfg.StepAgentDir()); err != nil {
-				return nil, err
-			}
-		}
+	}
+	if prompt == "" {
+		return nil, fmt.Errorf("runtime: spawn without an initial prompt")
 	}
 	proc, err := startHarness(s.buildCmd(p), p)
 	if err != nil {
 		return nil, err
 	}
-	if err := proc.writeCommand(piCommand{ID: "pf-init", Type: "prompt", Message: p.InitialPrompt}); err != nil {
+	if err := proc.writeCommand(piCommand{ID: "pf-init", Type: "prompt", Message: prompt}); err != nil {
 		return nil, injectionFailed(proc, err)
 	}
 	return proc, nil
+}
+
+// piDispatchCapability runs the startup gate of one pi derivation and
+// answers what it verified. Empty and off disable the worker and run no pi
+// command at all; on requires the daemon-owned resources (all six embedded
+// files, the guard included) and the compatibility probe, and any failure
+// refuses THIS dispatch with its class (owner ruling 2026-11-22 Q2); an
+// invalid value is refused before either.
+func (s *piSpawner) piDispatchCapability(ctx context.Context, p SpawnParams) (spawn.Capability, error) {
+	enabled, err := spawn.PiSubagents(p.Params)
+	if err != nil {
+		return spawn.Capability{}, &PiDispatchError{Kind: PiReasonInvalidParam, Detail: err.Error(), Err: err}
+	}
+	if !enabled {
+		if s.cfg.DataDir != "" {
+			if err := s.cfg.refreshStepAgentDir(); err != nil {
+				return spawn.Capability{}, err
+			}
+		}
+		return spawn.Capability{}, nil
+	}
+	if s.cfg.DataDir == "" {
+		return spawn.Capability{}, &PiDispatchError{
+			Kind:   PiReasonResources,
+			Detail: "embedded resource validation failed: the daemon owns no step agent directory (no data dir)",
+			Stage:  "resources",
+		}
+	}
+	if err := s.cfg.refreshStepAgentDir(); err != nil {
+		return spawn.Capability{}, &PiDispatchError{Kind: PiReasonResources, Detail: "embedded resource validation failed: " + err.Error(), Stage: "resources", Err: err}
+	}
+	if err := validateEmbeddedStepAgentDir(s.cfg.StepAgentDir()); err != nil {
+		var typed *PiDispatchError
+		if errors.As(err, &typed) {
+			return spawn.Capability{}, err
+		}
+		return spawn.Capability{}, &PiDispatchError{Kind: PiReasonResources, Detail: "embedded resource validation failed: " + err.Error(), Target: s.cfg.StepAgentDir(), Stage: "resources", Err: err}
+	}
+	if err := validatePiCompatibility(ctx, s.bin()); err != nil {
+		return spawn.Capability{}, err
+	}
+	return spawn.Capability{PiSubagents: true}, nil
 }
 
 // startHarness starts a built step command — either harness — as the

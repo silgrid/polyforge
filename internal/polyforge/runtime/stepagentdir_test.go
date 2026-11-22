@@ -386,3 +386,67 @@ func TestStepAgentDirDefaultsAndSessionsAreSeparate(t *testing.T) {
 		t.Fatalf("the session store %s must not sit inside the dedicated agent dir %s", cfg.StepAgentSessionsDir(), cfg.StepAgentDir())
 	}
 }
+
+// TestStepAgentDirRefreshAfterOperatorExtensionDeleted pins the residual
+// use case of polyforge#227 AC3: the operator deletes the extension from
+// their own agent directory (and a damaged snapshot loses it too), and the
+// next per-spawn refresh restores every built-in file from the daemon's
+// embed while leaving operator files the snapshot legitimately carries
+// alone — the refresh never prunes.
+func TestStepAgentDirRefreshAfterOperatorExtensionDeleted(t *testing.T) {
+	src := operatorDirFixture(t)
+	cfg := Config{DataDir: t.TempDir(), OperatorAgentDir: src, OperatorAgentDirExplicit: true}
+	cfg.FillDefaults()
+	if err := cfg.SyncStepAgentDir(); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	dir := cfg.StepAgentDir()
+	// the operator removes the extension from their own directory; the
+	// snapshot is damaged the same way in this scenario.
+	if err := os.RemoveAll(filepath.Join(src, "extensions", "subagent")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(dir, "extensions", "subagent")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(dir, "extensions", "guard")); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.refreshStepAgentDir(); err != nil {
+		t.Fatalf("refresh after the operator deleted the extension: %v", err)
+	}
+	want := map[string]string{
+		"agents/worker.md":              "agents/worker.md",
+		"extensions/subagent/index.ts":  "extensions/subagent/index.ts",
+		"extensions/subagent/agents.ts": "extensions/subagent/agents.ts",
+		"extensions/subagent/SOURCE.md": "extensions/subagent/SOURCE.md",
+		"extensions/guard/index.ts":     "extensions/guard/index.ts",
+		"extensions/guard/rules.ts":     "extensions/guard/rules.ts",
+	}
+	for rel, asset := range want {
+		got, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Errorf("after refresh %s is unavailable: %v", rel, err)
+			continue
+		}
+		embed, err := stepagentassets.FS.ReadFile(asset)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != string(embed) {
+			t.Errorf("after refresh %s differs from the embedded resource", rel)
+		}
+	}
+	// the refresh never prunes: a file the snapshot carries beyond the
+	// minimal set survives it (pruning is the daemon-start sync's).
+	stray := filepath.Join(dir, "step-agent-notes.txt")
+	if err := os.WriteFile(stray, []byte("kept\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.refreshStepAgentDir(); err != nil {
+		t.Fatalf("second refresh: %v", err)
+	}
+	if _, err := os.Stat(stray); err != nil {
+		t.Errorf("the per-spawn refresh pruned a file it does not own: %v", err)
+	}
+}

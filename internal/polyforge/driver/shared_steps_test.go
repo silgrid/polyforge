@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/silgrid/polyforge/internal/common/spawn"
 	"github.com/silgrid/polyforge/internal/common/workflow"
 )
 
@@ -270,9 +271,16 @@ func spawnStepPrompt(t *testing.T, bundle, stepID string) string {
 
 // spawnStepPromptWith is spawnStepPrompt for one dispatch shape (the
 // tier, a re-entry fact): the same shipped bundle, the given StepSpawn.
-func spawnStepPromptWith(t *testing.T, bundle string, spawn StepSpawn) string {
+func spawnStepPromptWith(t *testing.T, bundle string, dispatch StepSpawn) string {
 	t.Helper()
-	stepID := spawn.StepID
+	return spawnStepPromptWithCapability(t, bundle, dispatch, nil)
+}
+
+// spawnStepPromptWithCapability is spawnStepPromptWith with the verified
+// capability the fake runtime hands the dispatch's FinalPrompt callback.
+func spawnStepPromptWithCapability(t *testing.T, bundle string, dispatch StepSpawn, capability *spawn.Capability) string {
+	t.Helper()
+	stepID := dispatch.StepID
 	capDir := capsuleWithShippedBundle(t, bundle)
 	// the whole top-level _shared/ — the step definitions it ships beside
 	// the fragments a definition may include ({{principles}} and the
@@ -290,7 +298,7 @@ func spawnStepPromptWith(t *testing.T, bundle string, spawn StepSpawn) string {
 		rel, _ := filepath.Rel(root, p)
 		writeCapsuleFile(t, capDir, "workflows/"+filepath.ToSlash(rel), string(raw))
 	}
-	sp := &captureSpawner{}
+	sp := &captureSpawner{capability: capability}
 	ad, err := newTestSpawnAdapter(StepSpawnAdapter{
 		WI:           WIInfo{ID: "wi_sh", CapsuleDir: capDir, BundleName: bundle, SessionHandle: "ab12cd34"},
 		Spawner:      sp,
@@ -299,7 +307,7 @@ func spawnStepPromptWith(t *testing.T, bundle string, spawn StepSpawn) string {
 	if err != nil {
 		t.Fatalf("NewStepSpawnAdapter: %v", err)
 	}
-	if _, err := ad.SpawnStep(context.Background(), spawn); err != nil {
+	if _, err := ad.SpawnStep(context.Background(), dispatch); err != nil {
 		t.Fatalf("SpawnStep %s/%s: %v", bundle, stepID, err)
 	}
 	p, _ := sp.last()
