@@ -175,7 +175,11 @@ and YAML path, before a claim ever meets it. The keys:
   `--allow-no-analysis`), the auto claim skips it, and `pf queue` marks it
   需要交互：未分析; `pf file create` of such an item asks the daemon to
   schedule its analysis task, and the auto claim also skips an item whose
-  analysis still awaits the owner's `pf file analysis confirm`. `none` is a lane with no criterion to list: none of
+  analysis still awaits the owner's `pf file analysis confirm`. A queued or
+  blocked item's analysis is re-scheduled with `pf file analysis redo <id>`
+  when it was written before the current format or against a stale base: the
+  old section moves verbatim to `## 历次分析` and the new draft awaits the
+  same confirm. `none` is a lane with no criterion to list: none of
   this applies — neither check runs. The shipped `integrate` and
   `release` declare `none`; `develop` and `micro` do not. A user lane may
   declare it too; any other value is `WFC-112`.
