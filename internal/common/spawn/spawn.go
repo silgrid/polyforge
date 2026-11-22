@@ -211,7 +211,15 @@ func (e *InvalidPiSubagentsError) Error() string {
 // anything else is InvalidPiSubagentsError. One parser, used by the driver
 // and the runtime alike.
 func PiSubagents(params map[string]string) (bool, error) {
-	return false, nil
+	value := strings.TrimSpace(params["pi_subagents"])
+	switch {
+	case value == "", strings.EqualFold(value, "off"):
+		return false, nil
+	case strings.EqualFold(value, "on"):
+		return true, nil
+	default:
+		return false, &InvalidPiSubagentsError{Value: value}
+	}
 }
 
 // EnvParamPrefix starts the name a step param reaches the step process
