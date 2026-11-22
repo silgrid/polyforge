@@ -346,7 +346,11 @@ func (s *piSpawner) piDispatchCapability(ctx context.Context, p SpawnParams) (sp
 		return spawn.Capability{}, &PiDispatchError{Kind: PiReasonResources, Detail: "embedded resource validation failed: " + err.Error(), Stage: "resources", Err: err}
 	}
 	if err := validateEmbeddedStepAgentDir(s.cfg.StepAgentDir()); err != nil {
-		return spawn.Capability{}, err
+		var typed *PiDispatchError
+		if errors.As(err, &typed) {
+			return spawn.Capability{}, err
+		}
+		return spawn.Capability{}, &PiDispatchError{Kind: PiReasonResources, Detail: "embedded resource validation failed: " + err.Error(), Target: s.cfg.StepAgentDir(), Stage: "resources", Err: err}
 	}
 	if err := validatePiCompatibility(ctx, s.bin()); err != nil {
 		return spawn.Capability{}, err

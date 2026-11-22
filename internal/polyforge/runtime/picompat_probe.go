@@ -243,41 +243,50 @@ func piCapabilityProbe(ctx context.Context, bin, version string) error {
 	stderr := &boundedTail{max: 8 << 10}
 	go func() { _, _ = io.Copy(stderr, errR) }()
 	stopped := false
-	// stop recovers the WHOLE process group this probe started. A graceful
-	// stop (the proof passed) closes the command channel and gives the
-	// harness a bounded moment to exit; every other stop goes straight to
-	// TERM, a bounded grace, KILL and a bounded wait for a proved exit, so
-	// the recovery fits inside the budget's last second (owner ruling Q5).
+	// stop recovers the WHOLE process group this probe started inside ONE
+	// bounded second (owner ruling Q5): a graceful stop (the proof passed)
+	// first gives the harness a moment to exit after its command channel
+	// closes; every stop then goes TERM -> bounded grace -> KILL -> bounded
+	// wait for a proved exit. One reap deadline covers all of it, so the
+	// recovery can never stretch the check past its ten-second budget.
 	stop := func(graceful bool) {
 		if stopped {
 			return
 		}
 		stopped = true
-		_ = stdin.Close()
-		if graceful {
+		reapBy := time.Now().Add(time.Second)
+		waitExit := func() bool {
+			left := time.Until(reapBy)
+			if left <= 0 {
+				left = time.Millisecond
+			}
 			select {
 			case <-waitCh:
-				close(done)
-				outR.Close()
-				errR.Close()
-				return
-			case <-time.After(500 * time.Millisecond):
+				return true
+			case <-time.After(left):
+				return false
 			}
+		}
+		_ = stdin.Close()
+		if graceful && waitExit() {
+			close(done)
+			outR.Close()
+			errR.Close()
+			return
 		}
 		if cmd.Process != nil {
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
 		}
-		select {
-		case <-waitCh:
-		case <-time.After(500 * time.Millisecond):
-			if cmd.Process != nil {
-				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			}
-			select {
-			case <-waitCh:
-			case <-time.After(500 * time.Millisecond):
-			}
+		if waitExit() {
+			close(done)
+			outR.Close()
+			errR.Close()
+			return
 		}
+		if cmd.Process != nil {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+		waitExit()
 		close(done)
 		outR.Close()
 		errR.Close()
@@ -294,7 +303,9 @@ func piCapabilityProbe(ctx context.Context, bin, version string) error {
 	for {
 		select {
 		case <-ctx.Done():
-			stop(true)
+			// the deadline path reaps immediately: the graceful wait belongs
+			// to a proof that already passed.
+			stop(false)
 			return piTimeoutRefusal(bin, version, "capability")
 		case names, ok := <-provider.requestCh:
 			if !ok {
@@ -428,13 +439,17 @@ func compatProbeEnv(agentDir, homeDir, tmpDir string) []string {
 	}
 }
 
-// boundedTail keeps the last max bytes of a stream.
+// boundedTail keeps the last max bytes of a stream; the copy goroutine
+// writes while the protocol loop may read, so both take the lock.
 type boundedTail struct {
+	mu  sync.Mutex
 	max int
 	buf []byte
 }
 
 func (b *boundedTail) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.buf = append(b.buf, p...)
 	if len(b.buf) > b.max {
 		b.buf = b.buf[len(b.buf)-b.max:]
@@ -442,7 +457,11 @@ func (b *boundedTail) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (b *boundedTail) String() string { return string(b.buf) }
+func (b *boundedTail) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return string(b.buf)
+}
 
 // probeExitRefusal classifies a probe whose process ended before the call
 // proved itself: an extension that cannot load is the API class; any other
