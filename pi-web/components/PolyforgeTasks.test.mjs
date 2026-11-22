@@ -187,48 +187,9 @@ test("an external task (the analysis card's link, the walk's target) opens that 
   assert.match(source, /<span data-pf-task=\{selected\.id\}/, "the open detail names its task");
 });
 
-// ---- polyforge#230: the running context line and the analysis ticket row ----
-
-test("AC2: the card and the detail show the running context with the job's own text, and only the tokens when no window is known", () => {
-  assert.match(source, /data-pf-task-context=""/, "the card's context line");
-  assert.match(source, /data-pf-detail-task-context=""/, "the detail's context line");
-  assert.match(source, /const contextText = taskContextText\(row\.context\)/, "the card's text is the pure helper's (job meter, else tokens)");
-  assert.match(source, /const detailContextText = detail \? taskContextDetailText\(detail\.context\) : null;/, "the detail's text is the pure helper's (job detail text, else grouped tokens)");
-  assert.match(source, /t\("polyforge\.context"\)/, "the detail row reuses the job detail's 上下文 label");
-  // the line renders only when the value has an honest count: the helper
-  // answers null otherwise, so no empty row is drawn.
-  assert.match(source, /contextText && \(/, "no context: no line");
-  assert.match(source, /detailContextText && \(/, "no detail context: no line");
-  // the hover names the model and when the count was taken, like a job's meter
-  assert.match(source, /title=\{\[row\.context\?\.model, row\.context\?\.asOf\]/, "the card's as_of rides the hover (owner Q2=B)");
-});
-
-test("AC3: the card and the detail show the analyzed ticket at the top and open it through onOpenAnchor", () => {
-  assert.match(source, /if \(!row\.analysis_of\) continue;\s*const id = row\.analysis_of;/, "the ticket is read once per analyzed row");
-  assert.match(source, /ticketsRef\.current\[id\]/, "the read is cached by wi id for the session");
-  assert.match(source, /fetch\(`\/api\/polyforge\/work-items\/\$\{encodeURIComponent\(id\)\}`\)/, "the existing work-item route, no new API");
-  assert.match(source, /data-pf-task-analysis=""/, "the card's analysis row");
-  assert.match(source, /data-pf-detail-task-analysis=""/, "the detail's analysis row");
-  assert.match(source, /row\.analysis_of && \(/, "no analysis_of: no row on the card");
-  assert.match(source, /detail\.analysis_of && \(/, "no analysis_of: no row in the detail");
-  assert.match(source, /t\("polyforge\.tasks\.analysisOf", \{ slug: taskAnalysisSlug\(row\.analysis_of, ticket\) \}\)/, "分析 <slug>, the wi id while unread");
-  assert.match(source, /taskAnalysisTitle\(ticket\)/, "the ticket's goal is the title line");
-  assert.match(source, /onOpenAnchor\?\.\(row\.analysis_of!?\)/, "the card opens the analyzed work item by wi id (Q3=A)");
-  assert.match(source, /onOpenAnchor\?\.\(detail\.analysis_of!?\)/, "the detail opens the same wi id");
-  assert.match(source, /event\.stopPropagation\(\)/, "the row's click never also selects the task");
-  assert.match(source, /onOpenAnchor\?: \(ref: string\) => void;/, "the callback is the panel's onOpenAnchor");
-  assert.match(enSource, /"polyforge\.tasks\.analysisOf": "\S/, "the one new key is in the English catalog");
-});
-
-test("owner Q2=B: while the list holds a running task the tab re-reads it every 15 s, and nothing else polls", () => {
-  assert.match(source, /const REFRESH_MS = 15000;/);
-  const start = source.indexOf("// The running refresh (owner ruling");
-  assert.ok(start >= 0, "the running refresh effect is declared");
-  const effect = source.slice(start, source.indexOf("}, [hasRunning, readList]);", start));
-  assert.match(effect, /const refresh = setInterval\(readList, REFRESH_MS\);/, "the re-read is the list read, on the 15 s interval");
-  assert.match(effect, /return \(\) => clearInterval\(refresh\);/, "cleared on unmount and when no running task is left");
-});
-
+// polyforge#230's AC2/AC3/Q2=B behaviour is proven on the react-hook shim by
+// components/PolyforgeTasks.context.test.mjs (review r1#1: source pins are no
+// behaviour evidence). The one wiring pin kept here is the panel's prop.
 test("the panel hands the Tasks surface the messages surface's ticket-opener, so 分析 <slug> opens the analyzed ticket", async () => {
   const panel = await readFile(new URL("./PolyforgePanel.tsx", import.meta.url), "utf8");
   const tasks = panel.slice(panel.indexOf("<PolyforgeTasks"));
