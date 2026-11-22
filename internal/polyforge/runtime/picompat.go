@@ -17,6 +17,17 @@ import (
 	"github.com/silgrid/polyforge/internal/polyforge/runtime/stepagentassets"
 )
 
+// piCapabilityProbeFn is the capability call the checker makes; a test
+// replaces it to count probes without launching a real pi.
+var piCapabilityProbeFn = piCapabilityProbe
+
+// resetPiCompatCache drops every cached compatibility verdict (tests only).
+func resetPiCompatCache() {}
+
+// piEmbeddedResourceDigest answers the digest of the built-in resource tree
+// (the embed in production), the cache key's resource dimension.
+func piEmbeddedResourceDigest() (string, error) { return "", nil }
+
 // piCompatResourceFS is the authority for the built-in resources the
 // compatibility probe loads and the resource digest covers: production is
 // the compiled-in embed; a test substitutes an in-memory twin to inject a
