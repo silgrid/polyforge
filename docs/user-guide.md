@@ -453,11 +453,11 @@ anything. Deactivation and the hard delete are different moves:
   irreversible) removes data — see its warning in the table below.
 - The default lists hide deactivated projects: `pf projects list`
   (`--show-deactivated` lists them, marked), `pf queue`'s merged view
-  skips them, and both the AIHub console's project picker and Pi Web's
-  Work › 项目 view hide them behind a「show deactivated」entry. The
-  restore entry sits in the same place: `pf projects restore
-  <id-or-name>` (the same roles), and the console and Pi Web restore in
-  place from the marked row.
+  skips them, and the AIHub console's project picker hides them behind a
+  「show deactivated」entry. Restore with `pf projects restore
+  <id-or-name>` (the same roles), or in place from the console picker's
+  marked row. Pi Web's Work › 项目 view still implements the same
+  hide/mark/restore, but its rail entry is hidden since polyforge#226.
 - Restore brings the project back to active at once and every refused
   operation works again immediately. The deactivation state is
   operational, never data: the v0.2.1 section of
