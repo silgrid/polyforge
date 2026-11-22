@@ -381,13 +381,12 @@ the components volume's `current` under a running daemon — is
 relaunched by `pf supervise` at once, no failure backoff, off the new
 `current`.
 
-Two entries stay closed in the image mode: the first-boot record and
-Pi Web's status API report `imageManaged`, and in that mode Pi Web's
-own pf install and self-update entries are unavailable (an install
-answers 409 `image_managed`). Upgrading the versioned components does
-not go through those entries: it is the in-place upgrade below, or
-`pf components upgrade` from a terminal, never an install from that
-page.
+In the image mode two entries stay closed: Pi Web's own pf install
+and its self-update (an install answers 409 `image_managed`). The
+first-boot record and Pi Web's status API report `imageManaged`, and
+upgrading the versioned components does not go through those closed
+entries: it is the in-place upgrade below, or `pf components upgrade`
+from a terminal, never an install from that page.
 
 ### In-place upgrade
 
