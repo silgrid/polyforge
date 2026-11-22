@@ -7,11 +7,17 @@ package runtime
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/silgrid/polyforge/internal/polyforge/runtime/stepagentassets"
@@ -22,11 +28,124 @@ import (
 var piCapabilityProbeFn = piCapabilityProbe
 
 // resetPiCompatCache drops every cached compatibility verdict (tests only).
-func resetPiCompatCache() {}
+func resetPiCompatCache() { piCompatVerdicts.reset() }
 
 // piEmbeddedResourceDigest answers the digest of the built-in resource tree
-// (the embed in production), the cache key's resource dimension.
-func piEmbeddedResourceDigest() (string, error) { return "", nil }
+// (the embed in production), the cache key's resource dimension: every file
+// under its relative path, sorted, each folded in with its length and its
+// exact bytes. The tree itself is the authority — a hand-written file list
+// would silently stop covering a new or renamed resource.
+func piEmbeddedResourceDigest() (string, error) {
+	var files []string
+	if err := fs.WalkDir(piCompatResourceFS, ".", func(p string, de fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !de.IsDir() {
+			files = append(files, p)
+		}
+		return nil
+	}); err != nil {
+		return "", err
+	}
+	sort.Strings(files)
+	digest := sha256.New()
+	for _, p := range files {
+		raw, err := fs.ReadFile(piCompatResourceFS, p)
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(digest, "%s\x00%d\x00", p, len(raw))
+		digest.Write(raw)
+	}
+	return hex.EncodeToString(digest.Sum(nil)), nil
+}
+
+// piTargetIdentity pins WHICH executable was judged: the resolved path and
+// the entry file's content fingerprint, so a same-path replacement is a
+// different target and a symlink retarget invalidates the key (Q4 A).
+func piTargetIdentity(bin string) (target, fingerprint string, err error) {
+	found, err := exec.LookPath(bin)
+	if err != nil {
+		return "", "", err
+	}
+	resolved, err := filepath.EvalSymlinks(found)
+	if err != nil {
+		return "", "", err
+	}
+	abs, err := filepath.Abs(resolved)
+	if err != nil {
+		return "", "", err
+	}
+	raw, err := os.ReadFile(abs)
+	if err != nil {
+		return "", "", err
+	}
+	sum := sha256.Sum256(raw)
+	return abs, hex.EncodeToString(sum[:]), nil
+}
+
+// piCompatFlight is one in-flight (then finished) capability call shared by
+// every concurrent same-key caller.
+type piCompatFlight struct {
+	done chan struct{}
+	err  error
+}
+
+// piCompatVerdicts is the process-level SUCCESS cache: a failed flight is
+// deleted, so the next caller probes again (D4). It grows with distinct
+// targets/versions/digests; no TTL or capacity was asked for.
+type piCompatVerdictsCache struct {
+	mu      sync.Mutex
+	flights map[string]*piCompatFlight
+}
+
+var piCompatVerdicts = &piCompatVerdictsCache{flights: map[string]*piCompatFlight{}}
+
+func (c *piCompatVerdictsCache) reset() {
+	c.mu.Lock()
+	c.flights = map[string]*piCompatFlight{}
+	c.mu.Unlock()
+}
+
+// verdict runs the capability call once per key. A same-key caller joins the
+// flight and waits for its answer; its own context cancellation only ends
+// its wait (the shared flight stays bounded by the check's own 9s deadline,
+// so a departed waiter leaves no unbounded work behind).
+func (c *piCompatVerdictsCache) verdict(ctx context.Context, key string, probe func(context.Context) error) error {
+	deadline, hasDeadline := ctx.Deadline()
+	c.mu.Lock()
+	if flight, ok := c.flights[key]; ok {
+		c.mu.Unlock()
+		select {
+		case <-flight.done:
+			return flight.err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	var probeCtx context.Context
+	var cancel context.CancelFunc
+	if hasDeadline {
+		probeCtx, cancel = context.WithDeadline(context.Background(), deadline)
+	} else {
+		probeCtx, cancel = context.WithCancel(context.Background())
+	}
+	flight := &piCompatFlight{done: make(chan struct{})}
+	c.flights[key] = flight
+	c.mu.Unlock()
+
+	err := probe(probeCtx)
+	cancel()
+	c.mu.Lock()
+	flight.err = err
+	if err != nil {
+		delete(c.flights, key)
+	}
+	c.mu.Unlock()
+	close(flight.done)
+	return err
+}
 
 // piCompatResourceFS is the authority for the built-in resources the
 // compatibility probe loads and the resource digest covers: production is
@@ -175,24 +294,38 @@ func validatePiCompatibility(ctx context.Context, bin string) error {
 	start := time.Now()
 	workCtx, cancel := context.WithDeadline(ctx, start.Add(piCompatCapabilityBudget))
 	defer cancel()
-	version, err := piVersion(workCtx, bin)
+	target, fingerprint, err := piTargetIdentity(bin)
 	if err != nil {
 		if errors.Is(workCtx.Err(), context.DeadlineExceeded) {
-			return piTimeoutRefusal(bin, "", "version")
+			return piTimeoutRefusal(bin, "", "target")
 		}
 		return piVersionRefusal(bin, err)
 	}
-	if err := piFlagsCheck(workCtx, bin, version); err != nil {
+	version, err := piVersion(workCtx, bin)
+	if err != nil {
 		if errors.Is(workCtx.Err(), context.DeadlineExceeded) {
-			return piTimeoutRefusal(bin, version, "flag")
+			return piTimeoutRefusal(target, "", "version")
 		}
-		return err
+		return piVersionRefusal(target, err)
 	}
-	err = piCapabilityProbe(workCtx, bin, version)
+	digest, err := piEmbeddedResourceDigest()
+	if err != nil {
+		return &PiDispatchError{Kind: PiReasonResources, Detail: "embedded resource validation failed: the built-in resource tree is unreadable", Target: target, Version: version, Stage: "resources", Err: err}
+	}
+	key := strings.Join([]string{target, fingerprint, version, digest}, "|")
+	err = piCompatVerdicts.verdict(workCtx, key, func(probeCtx context.Context) error {
+		if err := piFlagsCheck(probeCtx, target, version); err != nil {
+			if errors.Is(probeCtx.Err(), context.DeadlineExceeded) {
+				return piTimeoutRefusal(target, version, "flag")
+			}
+			return err
+		}
+		return piCapabilityProbeFn(probeCtx, target, version)
+	})
 	// a success observed past the deadline is not a pass: the process
 	// group's recovery still has to fit the one budget.
 	if err == nil && (workCtx.Err() != nil || time.Since(start) > piCompatTotalBudget) {
-		return piTimeoutRefusal(bin, version, "capability")
+		return piTimeoutRefusal(target, version, "capability")
 	}
 	return err
 }
