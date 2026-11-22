@@ -3567,6 +3567,11 @@ export function AppShell() {
                     // handleOpenLinkedFile would tag a non-selected pane's
                     // link with another session's id (403 outside the roots).
                     onOpenFile={getPaneOpenFileHandler(sid)}
+                    // polyforge#229: the Agent card's 「open tab」 button and the
+                    // running list gate on this opener. The handler reads no
+                    // selectedSession (pane focus never updates it), so every
+                    // pane shares the classic layout's handler.
+                    onOpenSubagent={handleOpenSubagentTab}
                     onOpenSettings={openSettingsSection}
                     onAgentEnd={(end) => {
                       // A stopped run did not finish anything: no badge, no chime.
