@@ -419,8 +419,21 @@ func (d *Daemon) walkAnalysis() {
 		}
 		// The ticket is re-read and re-judged; a hub that cannot answer
 		// keeps the entry for the next walk, never drops it.
+		//
+		// A redo entry exists before its ticket CAS: this walk holds the
+		// same drainGate the redo route holds across registration and CAS,
+		// so it can never read the pre-CAS ticket and drop a round that is
+		// still being prepared. The gate is released before any spawn
+		// (admitTask takes it).
+		redo := head.RedoRequestID != ""
+		if redo {
+			d.drainGate.Lock()
+		}
 		item, err := d.hub.GetWorkItem(head.WorkItemID)
 		if err != nil {
+			if redo {
+				d.drainGate.Unlock()
+			}
 			// a ticket the daemon can never read (gone, or not this key's)
 			// would block every entry behind it: dropped, loudly
 			var ae *api.Error
@@ -431,8 +444,10 @@ func (d *Daemon) walkAnalysis() {
 			}
 			return
 		}
-		if head.RedoRequestID != "" {
-			if !d.redoEntryNeeds(item, head.RedoRequestID) {
+		if redo {
+			needs := d.redoEntryNeeds(item, head.RedoRequestID)
+			d.drainGate.Unlock()
+			if !needs {
 				q.dropHead("the redo round was confirmed or the ticket moved on")
 				continue
 			}

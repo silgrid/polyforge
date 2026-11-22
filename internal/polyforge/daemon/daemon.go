@@ -341,6 +341,15 @@ type Daemon struct {
 	// (the cleanup read, at most once per DrainInterval). Guarded by
 	// analysisDispatch.
 	analysisSweptAt time.Time
+	// analysisRedoStale maps a redone ticket to the updated_at it carried
+	// BEFORE the redo CAS: an auto-pull snapshot still at that stamp
+	// predates the marker and is never claimed by this daemon
+	// (polyforge#233, owner ruling Q4=A — the local guarantee). Guarded by
+	// analysisRedoMu; the map is memory-only (a restart has no in-flight
+	// stale snapshot, and the persisted redo request covers the queued
+	// round).
+	analysisRedoStale map[string]string
+	analysisRedoMu    sync.Mutex
 
 	rt  *runtime.Runtime
 	obs *observe.Observe
@@ -1592,6 +1601,10 @@ func (d *Daemon) fetchAutoWave() {
 		if d.pendingChange() != "" {
 			d.drainGate.Unlock()
 			return
+		}
+		if d.analysisRedoBlocks(it.ID, it.UpdatedAt) {
+			d.drainGate.Unlock()
+			continue
 		}
 		d.admitting.Add(1)
 		d.drainGate.Unlock()

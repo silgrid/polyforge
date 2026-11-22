@@ -90,6 +90,35 @@ func (d *Daemon) analysisRedoRefusal(item *api.WorkItem) (code, detail string) {
 	return "", ""
 }
 
+// recordAnalysisRedoStamp notes the ticket version the redo replaced. An
+// auto-pull snapshot still carrying that stamp is stale and is skipped by
+// this daemon even though the snapshot's own body has no marker.
+func (d *Daemon) recordAnalysisRedoStamp(wi, staleStamp string) {
+	d.analysisRedoMu.Lock()
+	defer d.analysisRedoMu.Unlock()
+	if d.analysisRedoStale == nil {
+		d.analysisRedoStale = map[string]string{}
+	}
+	d.analysisRedoStale[wi] = staleStamp
+}
+
+// analysisRedoBlocks answers whether a local auto-pull must leave wi alone
+// right now: a redo request waits, an analysis task runs, or the snapshot
+// predates the redo's own CAS. A fresh snapshot after the redo carries a
+// newer updated_at and the ticket's own unconfirmed marker decides it.
+func (d *Daemon) analysisRedoBlocks(wi, snapshotStamp string) bool {
+	if d.analysisQ != nil && d.analysisQ.has(wi) {
+		return true
+	}
+	d.analysisRedoMu.Lock()
+	stale, ok := d.analysisRedoStale[wi]
+	d.analysisRedoMu.Unlock()
+	if !ok {
+		return false
+	}
+	return snapshotStamp == "" || snapshotStamp == stale
+}
+
 // analysisRedoRoute serves POST /analysis/redo {work_item_id, project}.
 // The request is persisted BEFORE the ticket CAS: a persist failure changes
 // nothing, and a CAS failure drops the request again, so the ticket and the
@@ -161,6 +190,7 @@ func (d *Daemon) analysisRedoRoute(w http.ResponseWriter, r *http.Request) {
 		writeErrOf(w, err)
 		return
 	}
+	d.recordAnalysisRedoStamp(item.ID, item.UpdatedAt)
 	d.drainGate.Unlock()
 	d.dispatchAnalysisNow()
 	if tk, ok := d.runningAnalysisTask(item.ID); ok {
