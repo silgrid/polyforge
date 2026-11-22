@@ -125,7 +125,9 @@ func TestPiCompatibilityCache(t *testing.T) {
 		t.Errorf("a failed probe then a retry probed %d time(s), want 2 (failure must not be cached)", got)
 	}
 
-	// the executable target changes: probe again
+	// the executable target changes: probe again (a fresh cache, so both
+	// targets below are new keys)
+	resetPiCompatCache()
 	binD, _ := compatCountingPi(t)
 	probes.Store(0)
 	piCapabilityProbeFn = compatCountedProbe(&probes, 0)
