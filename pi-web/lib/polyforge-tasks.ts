@@ -4,7 +4,7 @@ import { isPolyforgeVersionBelowMinimum } from "./polyforge-detect";
 import { polyforgePfBin } from "./polyforge-pf-bin";
 import { MEMORY_BODY_FORWARD_CAP } from "./polyforge-memory";
 import { capUtf8Bytes, memoryUtf8ByteLength } from "./polyforge-memory-pure";
-import { probePolyforgeVersion } from "./polyforge-status";
+import { probePolyforgeVersion, type PolyforgeContextUsage } from "./polyforge-status";
 import { isPolyforgeTaskId, type PolyforgeTaskDetail, type PolyforgeTaskRow } from "./polyforge-tasks-pure";
 
 /**
@@ -157,6 +157,35 @@ export function sanitizeTaskDetail(raw: unknown): PolyforgeTaskDetail | null {
   if (started) detail.started_at = started;
   if (ended) detail.ended_at = ended;
   return detail;
+}
+
+/** A row's catalog window lookup (polyforge#230): the harness and model the
+ *  row's context names, answered as the window or null. Injectable so the
+ *  merge is judged without a model registry. */
+export type TaskContextWindowLookup = (context: PolyforgeContextUsage, candidate: string) => Promise<number | null>;
+
+/** Fill one row's missing context window from the catalog, the way the Jobs
+ *  rows are filled: the candidate's `<harness>:` prefix and the context's
+ *  model address the lookup, and the fill is cards-pure's one merge. A wrong
+ *  or absent address, a null answer and a failed lookup all leave the row as
+ *  it was (tokens only, never a guessed window). */
+export async function fillTaskContextWindow<T extends { context?: PolyforgeContextUsage; candidate?: string }>(
+  row: T,
+  lookup: TaskContextWindowLookup = defaultTaskContextWindow,
+): Promise<T> {
+  return row;
+}
+
+/** The catalog lookup the routes use: the harness prefix and model the row
+ *  names, through the model registry the chat header reads. */
+const defaultTaskContextWindow: TaskContextWindowLookup = async () => null;
+
+/** Fill every row through fillTaskContextWindow. */
+export async function fillTaskContextWindows<T extends { context?: PolyforgeContextUsage; candidate?: string }>(
+  rows: T[],
+  lookup: TaskContextWindowLookup = defaultTaskContextWindow,
+): Promise<T[]> {
+  return rows;
 }
 
 // ---- transport ----

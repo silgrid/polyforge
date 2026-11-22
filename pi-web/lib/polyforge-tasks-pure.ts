@@ -13,6 +13,8 @@
  * lives here, so both the server module and the client panel can use it.
  */
 
+import type { PolyforgeContextUsage } from "./polyforge-status";
+
 /** One `pf task list` row, exactly the field set the sanitizer forwards.
  *  The route's outer layer attaches the row's Cell (`cell`, polyforge#73) —
  *  a wire row is a `PolyforgeTaskRow` plus that optional field; the
@@ -36,6 +38,18 @@ export interface PolyforgeTaskRow {
   /** the spawn-time human display name, or `machine`.
    *  Absent from a pf that predates it. */
   reporter?: string;
+  /** The running task's context-window usage (polyforge#230): the job row's
+   *  `context` shape and counting. Absent on a finished task (the daemon
+   *  clears it) and from a pf that predates the field. */
+  context?: PolyforgeContextUsage;
+  /** The attempt's candidate (`pi:…` / `claude:…`), forwarded so the catalog
+   *  window lookup reads the same `<harness>:` prefix a job row uses. Absent
+   *  before the first attempt starts. */
+  candidate?: string;
+  /** The work item a daemon analysis task analyzes (`spec.analysis_of`):
+   *  a `wi_…` id, absent on an ordinary task. The panel reads that ticket for
+   *  its slug and title and opens it on click. */
+  analysis_of?: string;
 }
 
 /** One `pf task show` read: status, candidates, budget, times, prompt and
@@ -57,6 +71,12 @@ export interface PolyforgeTaskDetail {
   report: string;
   report_len: number;
   truncated: boolean;
+  /** the running task's context usage, the row's `context` (polyforge#230) */
+  context?: PolyforgeContextUsage;
+  /** the attempt's candidate, the row's `candidate` */
+  candidate?: string;
+  /** the analyzed work item, the row's `analysis_of` */
+  analysis_of?: string;
 }
 
 const TASK_ID = /^task_[0-9a-f]{16}$/;
