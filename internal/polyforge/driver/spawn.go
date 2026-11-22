@@ -632,27 +632,6 @@ const (
 	continuationHeading = "# Continuing this step"
 )
 
-func piCapabilityChange(changed map[string]string, h string) string {
-	if h != harness.Pi {
-		return ""
-	}
-	value, ok := changed["pi_subagents"]
-	if !ok {
-		return ""
-	}
-	// the ONE pi_subagents parse rule (spawn.PiSubagents); an invalid value
-	// refuses this dispatch before any prompt exists, so it has no change
-	// line.
-	on, err := spawn.PiSubagents(map[string]string{"pi_subagents": value})
-	if err != nil {
-		return ""
-	}
-	if on {
-		return "\nPi subagents are enabled for this dispatch: use the daemon `subagent` tool with `agent: \"worker\"`, one task at a time."
-	}
-	return "\nPi subagents are disabled for this dispatch; keep `implemented_by: main` and do not dispatch a worker."
-}
-
 // piCapabilityFact is a RESUME's capability restatement (owner ruling Q3,
 // polyforge#215): the value is the capability the runtime VERIFIED this
 // dispatch — never the parameter alone, and never the change since the
@@ -662,10 +641,10 @@ func piCapabilityChange(changed map[string]string, h string) string {
 // capability through part 1's fact and the step definition; every resume
 // shape (the full prompt, ShortEwr and ShortMessage) carries this line.
 func piCapabilityFact(capability spawn.Capability) string {
-	// the signature only: the polyforge#228 resume-restatement body lands
-	// in the implementation commit that turns the unit's test green.
-	_ = capability
-	return ""
+	if capability.PiSubagents {
+		return "\nPi subagents are enabled for this dispatch (the capability the runtime verified): use the daemon `subagent` tool with `agent: \"worker\"`, one task at a time. This dispatch's capability replaces the one stated in any earlier dispatch."
+	}
+	return "\nPi subagents are disabled for this dispatch (the capability the runtime verified): keep `implemented_by: main` and do not dispatch a worker. This dispatch's capability replaces the one stated in any earlier dispatch."
 }
 
 // from the six fixed parts of workflow contract 4 (design #483 §8), in
@@ -689,9 +668,6 @@ func assembleStepPrompt(p promptParts) string {
 		if s := paramsChangedSection(p.ParamsChanged); s != "" {
 			parts = append(parts, s)
 		}
-		if s := piCapabilityChange(p.ParamsChanged, p.Harness); s != "" {
-			parts = append(parts, s)
-		}
 		if p.PiCapability != "" {
 			parts = append(parts, p.PiCapability)
 		}
@@ -701,7 +677,7 @@ func assembleStepPrompt(p promptParts) string {
 		return renderOwnerMessages(p.OwnerMessages) + "\n" + strings.Join(parts, "\n")
 	}
 	if p.ShortEwrResume {
-		return ewrResumeReminder(p) + continuationPart(promptParts{OwnerMessages: p.OwnerMessages, ParamsChanged: p.ParamsChanged}) + piCapabilityChange(p.ParamsChanged, p.Harness) + p.PiCapability
+		return ewrResumeReminder(p) + continuationPart(promptParts{OwnerMessages: p.OwnerMessages, ParamsChanged: p.ParamsChanged}) + p.PiCapability
 	}
 	var b strings.Builder
 	// 1. the dispatch
