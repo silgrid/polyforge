@@ -1702,6 +1702,45 @@ export function AppShell() {
     handleSessionForked(result.newSessionId);
   }, [handleSessionForked, translate]);
 
+  // polyforge#231: split view keeps the classic fork semantics (selected
+  // session, URL and list refresh through handleSessionForked) and then opens
+  // the forked session in a new pane beside its source, focused — the pane
+  // equivalent of classic "fork jumps to the new chat". The source pane stays.
+  const handlePaneSessionForked = useCallback((newSessionId: string, sourceSessionId: string) => {
+    handleSessionForked(newSessionId);
+    if (!splitPaneEnabled || isMobile) return;
+    const source = sourceSessionId === selectedSession?.id
+      ? selectedSession
+      : sessionCatalog.find((s) => s.id === sourceSessionId) ?? null;
+    const label = newSessionId.slice(0, 12);
+    const projectName = projectDisplayNameForPath(source?.projectRoot ?? source?.cwd ?? "");
+    setPaneTabs((prev) => openPaneOp(prev, newSessionId, label, projectName));
+    setFocusedPaneId(newSessionId);
+  }, [handleSessionForked, splitPaneEnabled, isMobile, selectedSession, sessionCatalog]);
+
+  // The pane's own quote-in-new-chat: the same fork request, but the pending
+  // prompt and the resulting pane are keyed by the forked session and opened
+  // beside the pane the quote came from.
+  const handlePaneAskInNewChat = useCallback(async (
+    prompt: string,
+    sourceSessionId: string,
+    sourceEntryId: string,
+  ) => {
+    const result = await sendAgentCommand<{ newSessionId?: string }>(sourceSessionId, {
+      type: "fork_branch",
+      entryId: sourceEntryId,
+    });
+    if (!result?.newSessionId) throw new Error(translate("chat.quoteForkFailed"));
+    setPendingQuotePrompt({ sessionId: result.newSessionId, text: prompt });
+    handlePaneSessionForked(result.newSessionId, sourceSessionId);
+  }, [handlePaneSessionForked, translate]);
+
+  // Pane focus never updates selectedSession, so a pane's pending quote prompt
+  // must be consumed only when its own session id matches.
+  const handlePaneInitialPromptConsumed = useCallback((sessionId: string) => {
+    setPendingQuotePrompt((prev) => (prev?.sessionId === sessionId ? null : prev));
+  }, []);
+
   // The sidebar calls this when the initial session is not in its list.
   const handleInitialRestoreDone = useCallback(() => {
     setInitialSessionRestored(true);
@@ -3572,6 +3611,17 @@ export function AppShell() {
                     // selectedSession (pane focus never updates it), so every
                     // pane shares the classic layout's handler.
                     onOpenSubagent={handleOpenSubagentTab}
+                    // polyforge#231: every per-session callback below is bound
+                    // to THIS pane's sid. Pane focus never updates
+                    // selectedSession, so reusing a selectedSession-based
+                    // handler would act on (or open) another chat.
+                    onAskInNewChat={handlePaneAskInNewChat}
+                    quoteSelectionEnabled={quoteSelectionEnabled}
+                    onSessionForked={(newSessionId) => handlePaneSessionForked(newSessionId, sid)}
+                    initialPrompt={pendingQuotePrompt?.sessionId === sid ? pendingQuotePrompt?.text : undefined}
+                    onInitialPromptConsumed={() => handlePaneInitialPromptConsumed(sid)}
+                    modelsRefreshKey={modelsRefreshKey}
+                    externalSessionChange={externalSessionChange}
                     onOpenSettings={openSettingsSection}
                     onAgentEnd={(end) => {
                       // A stopped run did not finish anything: no badge, no chime.
