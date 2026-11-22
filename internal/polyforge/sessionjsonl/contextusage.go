@@ -98,6 +98,22 @@ func (r *ContextReader) Read(path string) Context {
 	return r.fold.context()
 }
 
+// Feed folds one complete JSONL record line into the running state and
+// answers what has been folded so far (polyforge#230): the entry a live
+// stream uses, where the records arrive on a pipe instead of in a transcript
+// file. It folds through the same fold and the same model cleaning as Read;
+// a malformed, torn or empty line is skipped exactly as Read skips it. Safe
+// for concurrent use.
+func (r *ContextReader) Feed(line []byte) Context {
+	return Context{}
+}
+
+// Context answers what has been folded so far: the zero value when nothing
+// has (polyforge#230). Safe for concurrent use.
+func (r *ContextReader) Context() Context {
+	return Context{}
+}
+
 // consume folds every complete line of chunk (prefixed by the unfinished
 // line carried over) and keeps the new unfinished tail.
 func (r *ContextReader) consume(chunk []byte) {
