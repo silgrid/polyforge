@@ -894,8 +894,8 @@ test("the top strip orders Work, Memory, Messages (owner 2026-10-30); Work hosts
     "the 全部 sub-tab renders the work-item surface with the count key, the badge reporter and the lower-part detail");
   // the external task open rides beside the count key.
   // the task summaries (decision-feed entries) ride beside it.
-  assert.match(source, /<PolyforgeTasks\s+taskCountKey=\{opsStatus \? `\$\{opsStatus\.tasks\?\.running \?\? 0\}:\$\{opsStatus\.tasks\?\.completed \?\? 0\}` : null\}\s+openTask=\{taskToOpen\}\s+onOpenTaskHandled=\{clearTaskToOpen\}\s+decisions=\{decisionsSurface\.feed\?\.decisions \?\? \[\]\}\s+onDismissDecisions=\{decisionsSurface\.onDismiss\}\s+renderDetail=\{renderWorkDetail\}\s+onDetailOpenChange=\{setSubDetailOpen\}\s+\/>/,
-    "the Tasks surface re-reads on the status snapshot's running:completed key (null without a snapshot)");
+  assert.match(source, /<PolyforgeTasks\s+taskCountKey=\{opsStatus \? `\$\{opsStatus\.tasks\?\.running \?\? 0\}:\$\{opsStatus\.tasks\?\.completed \?\? 0\}` : null\}\s+openTask=\{taskToOpen\}\s+onOpenTaskHandled=\{clearTaskToOpen\}\s+decisions=\{decisionsSurface\.feed\?\.decisions \?\? \[\]\}\s+onDismissDecisions=\{decisionsSurface\.onDismiss\}\s+renderDetail=\{renderWorkDetail\}\s+onDetailOpenChange=\{setSubDetailOpen\}\s+onOpenAnchor=\{messagesSurface\.onOpenAnchor\}\s+\/>/,
+    "the Tasks surface re-reads on the status snapshot's running:completed key (null without a snapshot) and, since polyforge#230, opens an analysis task's ticket through the messages surface's own opener");
   // The sub-tab controls: their own named tablist, after the main area.
   const work = source.slice(source.indexOf('role="tablist"\n              data-pf-tabstrip="work"'), source.indexOf('<div data-pf-work-detail=""'));
   assert.ok(source.indexOf('data-pf-tabstrip="work"') > source.indexOf(") : workTab === \"tasks\" ? ("), "the sub-tab controls follow the main area in the DOM");
