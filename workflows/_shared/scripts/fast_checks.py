@@ -117,13 +117,25 @@ prerequisites ``prereq_key`` beside the reuse marker ``reused``).
 same light-tier selection verification runs, planned by the one shared
 implementation (``pfstep/scoped_plan.py`` — the same engine argv
 ``--json --light --base <merge-base>``, the same ``choose``, the same
-nested roots), executed on the host over the final tree so the existing
+nested roots), executed over the final tree so the existing
 tests the selection pins run before the hand-off, not first at
-verification. A command whose reuse key (the same key the ``--repo`` run
+verification — inside the repository's declared verification image when
+its HEAD carries ``.polyforge/Dockerfile.verify`` (polyforge#222: the
+same ``pfstep/container.py`` machinery verification's boxes use — one
+container for the engine asks, the selected commands, the re-runs and
+the baseline's base worktree, the image and tool caches shared while
+the Dockerfile's bytes are unchanged — and on the host otherwise, the
+result recording which ran in ``details.isolation`` and the container's
+own facts in ``details.container``; the per-unit runs always on the
+host; a container the close cannot build, start or keep is the run's
+error, never a red of the change's, never a host stand-in). A command whose reuse key (the same key the ``--repo`` run
 reuses by, polyforge#182) a green entry in a ``--reuse`` result file of
 this repo already proved — the close's fast-checks run — is not re-run:
-its evidence is reused and its entry names the file it came from; a
-green-through-flaky confirmation is never that evidence. A red command gets the same one
+its evidence is reused and its entry names the file it came from — on
+the host close alone (Q3): a boxed close consumes no ``--reuse`` green
+evidence (a same-tree host run proves nothing inside the image), the
+image and tool caches still shared and an unusable file still the
+invocation's error. A green-through-flaky confirmation is never that evidence. A red command gets the same one
 targeted re-run and whole-command confirmation the per-unit bar gives.
 A selection the engine answers with the full tier is never run — the
 run records ``incomplete`` with the engine's own fallback reasons and
@@ -1113,13 +1125,17 @@ class CloseRun(CheckRun):
     """The build close's scoped selection (--close-scoped, polyforge#164):
     the same light-tier plan verification runs — one shared implementation
     (pfstep/scoped_plan.plan_light, fed this run's own engine asks) — its
-    commands executed on the host over the final tree, a command whose
-    reuse key a green run in a --reuse result already proved reused instead
-    of re-run (polyforge#182: the same key the --repo run reuses by — one
-    key, two modes). A selection the engine answers with the full tier is
-    never run: the run records incomplete with the engine's own fallback
-    reasons and exits non-zero, claiming nothing. The result's
-    details.selected is the change analysis's machine selection record."""
+    commands executed over the final tree inside the repo's declared
+    verification image when its HEAD carries the Dockerfile (polyforge#222:
+    the one Box start_box builds, everything executing through), and on
+    the host otherwise; a command whose reuse key a green run in a
+    --reuse result already proved is reused instead of re-run on the host
+    alone (polyforge#182: the same key the --repo run reuses by — one key,
+    two modes; a boxed close consumes none, Q3). A selection the engine
+    answers with the full tier is never run: the run records incomplete
+    with the engine's own fallback reasons and exits non-zero, claiming
+    nothing. The result's details.selected is the change analysis's
+    machine selection record."""
 
     def __init__(self, inv: Invocation, capsule: str, repo: str, engine: str,
                  reuse: List[str], log_dir: str, r: Runner,

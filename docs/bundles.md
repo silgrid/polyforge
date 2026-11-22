@@ -105,7 +105,10 @@ follow skills too: build records each unit's red-then-green run in
 `plan-conformance` and `carries` facts first, the scoped selection
 `fast_checks.py --close-scoped` before them for a work item whose
 verification runs the light tier (an integration batch's fix ticket closes
-without one) — a green record the change analysis's `selected`; a
+without one) — in the repository's declared verification image when its
+HEAD carries `.polyforge/Dockerfile.verify`, the host close otherwise,
+the result recording which isolation ran — a green record the change
+analysis's `selected`; a
 `pre_existing` record, every red its baseline triage proved pre-existing,
 hands off `done` citing its result file and merges the same `selected`), and review runs the workflow's `facts.py` (the units' red runs
 replayed at their test commits, or at the change's base for a unit declared

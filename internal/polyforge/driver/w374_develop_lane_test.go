@@ -150,6 +150,14 @@ func TestShippedDevelopLanePromptsRender(t *testing.T) {
 			"for a work item whose verification runs the light tier (an integration batch's fix ticket runs the full bar and closes without one)",
 			"A red or `incomplete` result (the engine answered full, or a selected command cannot run) never hands off `done` without the owner's ruling",
 			"Merge each touched repo's `details.selected` of its green or pre-existing result into the change analysis's `selected`",
+			// the close's isolation (polyforge#222): the repo's declared
+			// verification image carries the close, the host green evidence
+			// never crosses the isolation, and a container the close cannot
+			// have is the run's error
+			"run in the repository's declared verification image when its HEAD carries `.polyforge/Dockerfile.verify` (the same isolation verification runs",
+			"the result file recording which isolation ran (`details.isolation`, `host`/`container`)",
+			"a boxed close consumes no `--reuse` green evidence, the image and tool caches stay shared and an unusable file is still exit 2",
+			"a container the close cannot build, start or keep is the run's error",
 		},
 		reviewStepID: {
 			"## Blocking classes",

@@ -414,7 +414,16 @@ their flaky re-run on the change's baseline — the same judgment
 `verify.py`'s pre-existing phase runs (`workflows/_shared/scripts/pfstep/preexisting.py`,
 one entry): the reds classified `pre_existing` / `this_change` /
 `undetermined` in the result file, a selection whose only reds are
-pre-existing standing as green-equivalent evidence.
+pre-existing standing as green-equivalent evidence. The close's own run
+runs in the repository's declared verification image when its HEAD
+carries `.polyforge/Dockerfile.verify` — the same container machinery
+(`container`) verification's boxes use, the engine asks, the selected
+commands, the re-runs and the baseline's base worktree all in the one
+container — and on the host otherwise, the result's `details.isolation`
+recording which ran; the per-unit fast checks stay on the host, a boxed
+close consumes no `--reuse` green evidence, and a container the close
+cannot build, start or keep is the run's error, never a red of the
+change's, never a host stand-in.
 The plan's decided rulings are judged by the same entry:
 `facts.py plan-conformance` reads the work item's verbatim content
 (`runtime-state/work-item.json`) and requires every item of every section

@@ -169,10 +169,19 @@ record exactly what ran.
    artifacts/build/fast-checks/<repo>.json --json --out artifacts/build/scoped-close/<repo>.json`,
    after that repo's fast checks (a green run in the reuse file whose key — the command text,
    the root's subtree tree hash, the declared prerequisites — matches is evidence, not a
-   re-run): the same light-tier selection verification plans, one shared implementation, over the
-   final tree, its reds triaged on the same baseline (the close's `--unit-runs` protecting
+   re-run — on the host alone: a boxed close consumes no `--reuse` green evidence, the
+   image and tool caches stay shared and an unusable file is still exit 2):
+   the same light-tier selection verification plans, one shared implementation, over the
+   final tree — in the repository's declared verification image when its HEAD carries
+   `.polyforge/Dockerfile.verify` (the same isolation and image/tool-cache machinery
+   verification uses; a repo without the declaration keeps the host close exactly as
+   before, the per-unit runs always on the host), the result file recording which
+   isolation ran (`details.isolation`, `host`/`container`) — its reds triaged on the same
+   baseline (the close's `--unit-runs` protecting
    the files this change's test commits touched — a test this lane authored is never
-   pre-existing). A red or `incomplete` result never hands off `done` without the owner's ruling —
+   pre-existing), all of it in the one container when one was declared: a container the
+   close cannot build, start or keep is the run's error (exit 2, never a red of the
+   change's, never a host stand-in). A red or `incomplete` result never hands off `done` without the owner's ruling —
    except a red result every entry of whose `reds[]` the run records `pre_existing` (its
    `details.baseline` naming the commit, the setup and the runs it judged on): that one is
    not this change's, and the close hands off `done` citing the result file, its `details.selected`

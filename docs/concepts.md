@@ -1067,8 +1067,11 @@ setting:
   verification plans — `fast_checks.py --close-scoped`, one shared
   implementation, for a work item whose verification runs the light tier
   (an integration batch's fix ticket runs the full bar and closes without
-  one) — and merges a green record into the change analysis's
-  `selected`; a `pre_existing` record — every red its baseline triage
+  one), in the repository's declared verification image when its HEAD
+  carries `.polyforge/Dockerfile.verify` (the same isolation verification
+  uses, the image and tool caches shared; no declaration keeps the host
+  close, the result recording which isolation ran) — and merges a green
+  record into the change analysis's `selected`; a `pre_existing` record — every red its baseline triage
   proved pre-existing — hands off `done` citing its result file and merges
   the same `selected`, the shared validator taking it as green-equivalent
   evidence. Review runs four pre-written lines of the workflow's script

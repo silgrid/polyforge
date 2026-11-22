@@ -151,8 +151,9 @@ func TestW52TheReferencesStateTheTierAndTheUnion(t *testing.T) {
 		"then runs the tier the work item's attrs decide over the tree as it stands",
 		"the change analysis's listed tests run beside the plan, add-only",
 		// the build close's scoped selection (polyforge#164), scoped to the
-		// light tier (review r2 #3)
-		"its close runs the scoped selection verification plans — `fast_checks.py --close-scoped`, one shared implementation, for a work item whose verification runs the light tier (an integration batch's fix ticket runs the full bar and closes without one) — and merges a green record into the change analysis's `selected`",
+		// light tier (review r2 #3), running in the repo's declared
+		// verification image (polyforge#222)
+		"its close runs the scoped selection verification plans — `fast_checks.py --close-scoped`, one shared implementation, for a work item whose verification runs the light tier (an integration batch's fix ticket runs the full bar and closes without one), in the repository's declared verification image when its HEAD carries `.polyforge/Dockerfile.verify` (the same isolation verification uses, the image and tool caches shared; no declaration keeps the host close, the result recording which isolation ran) — and merges a green record into the change analysis's `selected`",
 		// the integrate lane's collect: a stuck hold's fix ticket carries the marker
 		"a `file` write on the develop lane, with its acceptance, registered on the held item by an `attrs` write",
 		"carries the `integration_fix` attr that makes its own verification run the full bar",
@@ -164,8 +165,9 @@ func TestW52TheReferencesStateTheTierAndTheUnion(t *testing.T) {
 		"develop's verification runs `verify.py --tier auto --unit-runs artifacts/build/units.json --analysis artifacts/build/change-analysis.json` through its skill (the build's recorded unit runs ride along; the tier is the work item's own — an integration batch's fix ticket runs the full bar, every other ticket the light one)",
 		"→ `verification` (`verify.py`, the tier the work item's attrs decide: the light tier, or the full bar on an integration batch's fix ticket; the lane's one waivable gate)",
 		// the build close's scoped selection (polyforge#164), scoped to the
-		// light tier (review r2 #3)
-		"the scoped selection `fast_checks.py --close-scoped` before them for a work item whose verification runs the light tier (an integration batch's fix ticket closes without one) — a green record the change analysis's `selected`",
+		// light tier (review r2 #3), running in the repo's declared
+		// verification image (polyforge#222)
+		"the scoped selection `fast_checks.py --close-scoped` before them for a work item whose verification runs the light tier (an integration batch's fix ticket closes without one) — in the repository's declared verification image when its HEAD carries `.polyforge/Dockerfile.verify`, the host close otherwise, the result recording which isolation ran — a green record the change analysis's `selected`",
 	})
 	w52Stale(t, "docs/bundles.md", []string{"there is no per-work-item tier", "`verify.py`, the light tier"})
 	w52Wants(t, "docs/reference/commands.md", []string{
