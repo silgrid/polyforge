@@ -437,9 +437,16 @@ func TestStepAgentDirRefreshAfterOperatorExtensionDeleted(t *testing.T) {
 			t.Errorf("after refresh %s differs from the embedded resource", rel)
 		}
 	}
-	// the refresh never prunes: an operator-provided agent definition the
-	// snapshot carries is still there.
-	if _, err := os.Stat(filepath.Join(dir, "agents", "reviewer.md")); err != nil {
-		t.Errorf("the refresh pruned an operator-provided file: %v", err)
+	// the refresh never prunes: a file the snapshot carries beyond the
+	// minimal set survives it (pruning is the daemon-start sync's).
+	stray := filepath.Join(dir, "step-agent-notes.txt")
+	if err := os.WriteFile(stray, []byte("kept\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.refreshStepAgentDir(); err != nil {
+		t.Fatalf("second refresh: %v", err)
+	}
+	if _, err := os.Stat(stray); err != nil {
+		t.Errorf("the per-spawn refresh pruned a file it does not own: %v", err)
 	}
 }
