@@ -1303,6 +1303,8 @@ class CloseRun(CheckRun):
             code = self.start_the_box(clone)
             if code:
                 return code
+        else:
+            self.details["isolation"] = "host"
         try:
             return self.close_run(clone, head, tree, base, branch)
         finally:
