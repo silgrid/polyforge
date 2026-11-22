@@ -381,8 +381,11 @@ try {
     await waitFor(() => dock(page).isVisible().then((value) => !value), "the dock closes");
     await openDock(page);
     assert.ok(await isActive(topTab(page, RE_WORK)), "工单 is still active after a close/reopen");
-    await dock(page).getByText(M1).waitFor({ timeout: 20_000 });
-    assert.equal(await card(page, A.wi).count(), 0, "任务 is still the selected sub-tab");
+    // polyforge#225: a close resets Work's sub-tab, so the reopen lands on
+    // 作业 — the manual 任务 selection does not outlive the closed dock.
+    assert.ok(await isActive(subTab(page, RE_JOBS)), "作业 is the selected sub-tab after a close/reopen");
+    await card(page, A.wi).waitFor({ timeout: 20_000 });
+    assert.equal(await dock(page).getByText(M1).count(), 0, "a close/reopen returns to the 作业 sub-tab");
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.getByText("E2E pf work host session").first().waitFor({ state: "attached", timeout: NAV_MS });
     await openWork(page);
