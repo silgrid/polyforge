@@ -450,3 +450,33 @@ func TestStepAgentDirRefreshAfterOperatorExtensionDeleted(t *testing.T) {
 		t.Errorf("the per-spawn refresh pruned a file it does not own: %v", err)
 	}
 }
+
+// TestExportPiSubagentProbeStepAgent (polyforge#228 AC2): the manual entry
+// the live probe's scratch flow uses. With PF_PROBE_EXPORT_DIR set it runs
+// the SAME refresh the daemon runs and writes the resulting step-agent copy
+// there, with no operator or daemon configuration read: the caller supplies
+// a scratch source (its credentials, if any, are the caller's). The copy's
+// builtin resources must be the embedded bytes — a probe over anything else
+// would not be evidence about the shipped worker.
+func TestExportPiSubagentProbeStepAgent(t *testing.T) {
+	dst := os.Getenv("PF_PROBE_EXPORT_DIR")
+	if dst == "" {
+		t.Skip("set PF_PROBE_EXPORT_DIR to export a refreshed step-agent copy for the live probe")
+	}
+	if err := refreshStepAgentMinimalSet(t.TempDir(), dst); err != nil {
+		t.Fatalf("refresh into %s: %v", dst, err)
+	}
+	for _, rel := range []string{"agents/worker.md", "extensions/subagent/index.ts", "extensions/subagent/agents.ts"} {
+		want, err := stepagentassets.FS.ReadFile(rel)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := os.ReadFile(filepath.Join(dst, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatalf("the export lacks %s: %v", rel, err)
+		}
+		if string(got) != string(want) {
+			t.Fatalf("the exported %s is not the embedded resource", rel)
+		}
+	}
+}
