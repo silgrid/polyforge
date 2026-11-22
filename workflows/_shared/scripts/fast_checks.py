@@ -1300,7 +1300,14 @@ class CloseRun(CheckRun):
             return 2
         if declared:
             self.details["isolation"] = "container"
-            code = self.start_the_box(clone)
+            try:
+                code = self.start_the_box(clone)
+            except container.BoxError as err:
+                # a container the close cannot have is the run's error —
+                # never a red of the change's, never a host stand-in
+                self.inv.summary = ("repos/%s: not judged: the verification container could not be"
+                                    " prepared: %s" % (self.repo, err))
+                return 2
             if code:
                 return code
         else:
@@ -1373,6 +1380,13 @@ class CloseRun(CheckRun):
         self.rerun_phase(runs)
         self.baseline_phase()
         self.confirm_phase()
+        if self.box is not None and self.box.lost_reason():
+            # a container lost under the close is the run's error — the
+            # record proves nothing, never a red of the change's
+            self.inv.summary = ("repos/%s: not judged: its verification container became unusable"
+                                " while the close ran (%s): the record proves nothing"
+                                % (self.repo, self.box.lost_reason()))
+            return 2
         self.details["reds"] = self.build_reds()
         red = [e for e in self.details["commands"] if self.command_red(e)]
         flaky_notes: List[str] = []
