@@ -484,3 +484,106 @@ func TestTaskListRowCarriesReporterAndReportTail(t *testing.T) {
 		t.Fatalf("list read the member face %d times, want none", reads)
 	}
 }
+
+// contextRunner reports one context value and waits for the run to end
+// (polyforge#230 AC1's lifecycle test).
+type contextRunner struct{ tokens int64 }
+
+func (c contextRunner) Run(ctx context.Context, spec task.RunSpec, _ func(int64)) (task.RunResult, error) {
+	if spec.OnContext != nil {
+		n := c.tokens
+		spec.OnContext(&protocol.ContextUsage{Tokens: &n, Model: "openai/m1", AsOf: "2026-11-22T10:00:00Z"})
+	}
+	<-ctx.Done()
+	return task.RunResult{Report: "partial", Tokens: 1}, nil
+}
+
+// TestTaskListShowContextLifecycle: both daemon read faces carry a running
+// task's `context` — the five keys of the job row's shape, numbers and the
+// model id only — and neither carries it once the task has ended
+// (polyforge#230 AC1).
+func TestTaskListShowContextLifecycle(t *testing.T) {
+	td := taskDaemon(t, contextRunner{tokens: 4300}, taskYaml)
+	code, body := stepDo(t, td.sock, "POST", "/task/spawn", `{"project":"proj","prompt":"look around"}`)
+	if code != 200 {
+		t.Fatalf("spawn = %d %s", code, body)
+	}
+	var tk task.Task
+	if err := json.Unmarshal([]byte(body), &tk); err != nil {
+		t.Fatal(err)
+	}
+	readList := func() map[string]any {
+		t.Helper()
+		code, raw := stepGet(t, td.sock, "/task/list")
+		if code != 200 {
+			t.Fatalf("list = %d %s", code, raw)
+		}
+		var doc struct {
+			Tasks []map[string]any `json:"tasks"`
+		}
+		if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+			t.Fatal(err)
+		}
+		for _, row := range doc.Tasks {
+			if row["id"] == tk.ID {
+				return row
+			}
+		}
+		return nil
+	}
+	readShow := func() map[string]any {
+		t.Helper()
+		code, raw := stepGet(t, td.sock, "/task/show/"+tk.ID)
+		if code != 200 {
+			t.Fatalf("show = %d %s", code, raw)
+		}
+		var row map[string]any
+		if err := json.Unmarshal([]byte(raw), &row); err != nil {
+			t.Fatal(err)
+		}
+		return row
+	}
+	// while running: both faces carry the same five-key context
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		row := readList()
+		if c, ok := row["context"].(map[string]any); ok {
+			if len(c) != 5 {
+				t.Fatalf("list context keys = %v, want the five keys", c)
+			}
+			if got, _ := c["tokens"].(float64); got != 4300 {
+				t.Fatalf("list context tokens = %#v, want 4300", c["tokens"])
+			}
+			if got, _ := c["model"].(string); got != "openai/m1" {
+				t.Fatalf("list context model = %#v, want openai/m1", c["model"])
+			}
+			if _, ok := c["as_of"].(string); !ok {
+				t.Fatalf("list context lacks as_of: %v", c)
+			}
+			for _, leaked := range []string{"prompt", "report"} {
+				if _, ok := c[leaked]; ok {
+					t.Fatalf("list context carries %q: %v", leaked, c)
+				}
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the running task's list row never carried context: %v", row)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if c, ok := readShow()["context"].(map[string]any); !ok || len(c) != 5 {
+		t.Fatalf("show context = %#v, want the five keys", c)
+	}
+	// terminal: neither face carries it
+	if code, _ := stepDo(t, td.sock, "POST", "/task/cancel/"+tk.ID, ""); code != 200 {
+		t.Fatalf("cancel = %d", code)
+	}
+	waitTaskTerminal(t, td, tk.ID)
+	if c, ok := readList()["context"]; ok {
+		t.Fatalf("the ended task's list row carries context: %v", c)
+	}
+	if c, ok := readShow()["context"]; ok {
+		t.Fatalf("the ended task's show carries context: %v", c)
+	}
+}
