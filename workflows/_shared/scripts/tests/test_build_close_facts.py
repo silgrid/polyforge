@@ -18,7 +18,11 @@ lines, extracted from the review skill the same way, agree with the
 close: the build line is review's own, argv for argv, and the static
 commit facts and carries conclusions agree on the same fixtures (one
 facts.py implementation; only each side's replay record is never part
-of the comparison)."""
+of the comparison). The decided mapping (polyforge#221) extends the
+same one-entry guarantee to plan-conformance: the three wiring lines —
+step, skill, review — are argv-identical, and the close's and review's
+runs of that line agree on a fixture whose ticket carries `## 已定`
+rulings: exits, unmapped_decided and summary word for word."""
 
 import json
 import os
@@ -31,7 +35,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from pfstep.shellwords import shell_words
 
 from .gitworld import GitCase, Repo, write
-from .test_facts import CARRIES_SEED
+from .test_facts import CARRIES_SEED, DECIDED_CONTENT, DECIDED_NO_SECTION, DECIDED_PLAN, decided_capsule, decided_map
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS = os.path.dirname(HERE)
@@ -291,6 +295,41 @@ class BuildCloseFactsTest(GitCase):
                 r_code, r_res = self.run_line(cap, review_carries)
                 self.assertEqual(c_code, r_code)
                 self.assertEqual(c_res["details"].get("problems"), r_res["details"].get("problems"))
+
+    # --- AC3: the decided mapping, one entry for build's close and review ---
+
+    def test_decided_mapping_close_and_review_agree(self) -> None:
+        """The plan's `## 已定对照` mapping is judged by one entry: the
+        close's plan-conformance line is the skill's and review's own,
+        argv for argv, and the two runs agree on the same fixture —
+        exits, unmapped_decided and summary word for word."""
+        step_line = one_line(STEP_TEXT, "plan-conformance")
+        skill_line = one_line(SKILL_TEXT, "plan-conformance")
+        review_line = one_line(REVIEW_TEXT, "plan-conformance")
+        self.assertEqual(step_line, skill_line,
+                         "the close's plan-conformance line is the shared skill's own — argv for argv")
+        self.assertEqual(step_line, review_line,
+                         "the close's plan-conformance line is review's own — argv for argv, the same engine and the same judgment")
+        cases = [
+            ("one of three decided rulings unmapped", DECIDED_CONTENT,
+             decided_map("- 已定 1: u1", "- 已定 2: u1"), 1),
+            ("every decided ruling mapped or reasoned", DECIDED_CONTENT,
+             decided_map("- 已定 1: u1", "- 已定 2: u1", "- 已定 3: none — 只改文档，无单元"), 0),
+            ("no decided section asks for no mapping", DECIDED_NO_SECTION,
+             DECIDED_PLAN, 0),
+        ]
+        for i, (name, content, plan, want) in enumerate(cases):
+            with self.subTest(name):
+                cap = decided_capsule(self.tmp, "decided-agree%d" % i, content, plan)
+                c_code, c_res = self.run_line(cap, step_line)
+                r_code, r_res = self.run_line(cap, review_line)
+                self.assertEqual(want, c_code, c_res["summary"])
+                self.assertEqual(c_code, r_code, "the two entries agree on the exit")
+                self.assertEqual(c_res["details"].get("unmapped_decided"),
+                                 r_res["details"].get("unmapped_decided"),
+                                 "the two entries agree on the unmapped rulings")
+                self.assertEqual(c_res["summary"], r_res["summary"],
+                                 "the two entries agree word for word")
 
 
 if __name__ == "__main__":
