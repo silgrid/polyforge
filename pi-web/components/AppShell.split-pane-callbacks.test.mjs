@@ -22,6 +22,7 @@ import ts from "typescript";
 
 const source = await readFile(new URL("./AppShell.tsx", import.meta.url), "utf8");
 const docs = await readFile(new URL("../docs/agents/sessions.md", import.meta.url), "utf8");
+const clientPlatform = await readFile(new URL("../docs/agents/client-platform.md", import.meta.url), "utf8");
 
 /** `source` from `startMarker` up to (excluding) the next `endMarker`. */
 function between(source, startMarker, endMarker, what) {
@@ -270,4 +271,34 @@ test("pane tool end and uploads refresh the explorer", () => {
 
   assert.match(classicWindow, /onToolEnd=\{handleToolEnd\}/, "the classic window keeps reporting tools");
   assert.match(classicWindow, /onFilesUploaded=\{handleExplorerRefresh\}/, "the classic window keeps refreshing after uploads");
+});
+
+// ---- u4: the completion sound crosses panes exactly once ----
+
+test("pane sound controls: every pane unlocks and holds, only the focused pane chimes", () => {
+  // Sound state and its controls are page-global: the toggle and the audio
+  // unlock/hold must reach every pane so a background pane's run can hold the
+  // context open. Only the chime itself is focused-gated: the focused pane's
+  // ChatWindow plays it, an unfocused pane still rings through its own
+  // onAgentEnd coalescing (owner ruling 4=A: keep that debounce).
+  assert.match(sessionPane, /soundEnabled=\{soundEnabled\}/, "the pane follows the page's sound switch");
+  assert.match(sessionPane, /onSoundToggle=\{onSoundToggle\}/, "the pane's composer keeps the sound toggle");
+  assert.match(sessionPane, /unlockAudio=\{unlockAudio\}/, "every pane can unlock audio from its own gesture");
+  assert.match(sessionPane, /holdAudio=\{holdAudio\}/, "every pane holds the audio context while its run is active");
+  assert.match(sessionPane, /playDoneSound=\{focused \? playDoneSound : undefined\}/, "only the focused pane plays the completion chime");
+  assert.doesNotMatch(sessionPane, /playDoneSound=\{playDoneSound\}/, "an unfocused pane must not chime twice");
+  // The sentinel has no run and no completion sound.
+  assert.doesNotMatch(sentinel, /playDoneSound=|onSoundToggle=|soundEnabled=|unlockAudio=|holdAudio=/, "the new-session composer owns no run sound");
+
+  // The classic window keeps all five unconditionally.
+  assert.match(classicWindow, /soundEnabled=\{soundEnabled\}/);
+  assert.match(classicWindow, /onSoundToggle=\{onSoundToggle\}/);
+  assert.match(classicWindow, /playDoneSound=\{playDoneSound\}/);
+  assert.match(classicWindow, /unlockAudio=\{unlockAudio\}/);
+  assert.match(classicWindow, /holdAudio=\{holdAudio\}/);
+
+  // The client-platform document states the split behaviour beside the
+  // existing completion-sound rules.
+  assert.match(clientPlatform, /only the focused pane plays the completion chime/, "client-platform.md must name the split rule");
+  assert.match(clientPlatform, /every pane holds and unlocks the audio context/, "client-platform.md must name the per-pane hold");
 });
