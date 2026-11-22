@@ -165,10 +165,9 @@ func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun
 		parts.Skill = renderSkill(sk)
 	}
 	h := harness.Of(sp.Harness)
-	if value := strings.TrimSpace(sp.Params["pi_subagents"]); value != "" && !strings.EqualFold(value, "on") && !strings.EqualFold(value, "off") {
-		return nil, fmt.Errorf("driver: invalid pi_subagents value %q (want on or off)", value)
+	if _, err := spawn.PiSubagents(sp.Params); err != nil {
+		return nil, fmt.Errorf("driver: %w", err)
 	}
-	parts.NoSubagents = subagentsFact(a.BundleDir, sp.StepID, h, sp.Params)
 	var transcript, hsession string
 	resume := sp.Resume
 	// degraded names why a resume the driver ordered became a new
@@ -318,25 +317,21 @@ const piNoSubagents = "This dispatch runs on pi with the daemon-owned worker ava
 	"keep the current main-agent path, do the analysis and build every unit yourself, record each unit's " +
 	"implemented_by as main, and do not dispatch a sub-agent."
 
-// subagentsFact answers the sub-agent fact of one dispatch: piNoSubagents
-// on a pi dispatch of a step whose definition includes the sub-agent
-// rules, else "".
-func subagentsFact(bundleDir, stepID, h string, params map[string]string) string {
-	if h != harness.Pi {
-		return ""
-	}
+// stepUsesSubagentsRules answers whether the step's definition includes the
+// sub-agent rules fragment.
+func stepUsesSubagentsRules(bundleDir, stepID string) bool {
 	raw, err := os.ReadFile(workflow.StepDefinitionPath(bundleDir, stepID))
-	if err != nil || !strings.Contains(string(raw), "{{"+subagentsRulesVar+"}}") {
-		return ""
-	}
-	if piSubagentsEnabled(params) {
+	return err == nil && strings.Contains(string(raw), "{{"+subagentsRulesVar+"}}")
+}
+
+// subagentsFact answers the sub-agent fact of one dispatch from the
+// capability the runtime VERIFIED (owner ruling Q3), never from the
+// parameter: the two judges are one judgment.
+func subagentsFact(capability spawn.Capability) string {
+	if capability.PiSubagents {
 		return ""
 	}
 	return piNoSubagents
-}
-
-func piSubagentsEnabled(params map[string]string) bool {
-	return strings.EqualFold(strings.TrimSpace(params["pi_subagents"]), "on")
 }
 
 // launch derives the step process for an assembled prompt: the dispatch's
@@ -358,6 +353,19 @@ func (a *StepSpawnAdapter) launch(ctx context.Context, sp StepSpawn, parts promp
 		hsession = id
 	}
 	translator, sink := a.newTranslator(h, sp.SpawnN)
+	initialPrompt := assembleStepPrompt(parts)
+	var finalPrompt func(spawn.Capability) (string, error)
+	if h == harness.Pi && stepUsesSubagentsRules(a.BundleDir, sp.StepID) {
+		// the fact is part of the prompt only after the runtime's gate: the
+		// callback receives the verified capability and the prompt is built
+		// from it (a refused dispatch never reaches here).
+		initialPrompt = ""
+		verifiedParts := parts
+		finalPrompt = func(capability spawn.Capability) (string, error) {
+			verifiedParts.NoSubagents = subagentsFact(capability)
+			return assembleStepPrompt(verifiedParts), nil
+		}
+	}
 	p := spawn.Params{
 		WorkItemID:     a.WI.ID,
 		CapsuleDir:     a.WI.CapsuleDir,
@@ -368,7 +376,8 @@ func (a *StepSpawnAdapter) launch(ctx context.Context, sp StepSpawn, parts promp
 		Resume:         resume,
 		Harness:        h,
 		HarnessSession: hsession,
-		InitialPrompt:  assembleStepPrompt(parts),
+		InitialPrompt:  initialPrompt,
+		FinalPrompt:    finalPrompt,
 		Model:          sp.Model,
 		Effort:         sp.Effort,
 		Round:          sp.Round,

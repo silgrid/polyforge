@@ -289,17 +289,28 @@ func (s *piSpawner) buildCmd(p SpawnParams) *exec.Cmd {
 // or a supervision verdict retires the dispatch (lifecycle (iv),
 // proc.Terminate closes the command channel first).
 func (s *piSpawner) Spawn(ctx context.Context, p SpawnParams) (AgentHandle, error) {
-	if _, err := s.piDispatchCapability(ctx, p); err != nil {
+	capability, err := s.piDispatchCapability(ctx, p)
+	if err != nil {
 		return nil, err
 	}
-	if p.InitialPrompt == "" && p.FinalPrompt == nil {
+	// the initial prompt is built AFTER the gate, from what it verified
+	// (owner ruling Q3): a callback failure or an empty prompt refuses this
+	// dispatch, and a direct Spawn without a callback still ran the gate.
+	prompt := p.InitialPrompt
+	if p.FinalPrompt != nil {
+		prompt, err = p.FinalPrompt(capability)
+		if err != nil {
+			return nil, fmt.Errorf("runtime: the dispatch's final prompt could not be built: %w", err)
+		}
+	}
+	if prompt == "" {
 		return nil, fmt.Errorf("runtime: spawn without an initial prompt")
 	}
 	proc, err := startHarness(s.buildCmd(p), p)
 	if err != nil {
 		return nil, err
 	}
-	if err := proc.writeCommand(piCommand{ID: "pf-init", Type: "prompt", Message: p.InitialPrompt}); err != nil {
+	if err := proc.writeCommand(piCommand{ID: "pf-init", Type: "prompt", Message: prompt}); err != nil {
 		return nil, injectionFailed(proc, err)
 	}
 	return proc, nil
