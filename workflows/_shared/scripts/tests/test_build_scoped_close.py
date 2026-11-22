@@ -777,6 +777,68 @@ class CloseContainerTest(unittest.TestCase):
         self.assertEqual(res["verdict"], "error")
         self.assertEqual(res["details"].get("commands"), [], "nothing ran, nothing claimed")
 
+    def test_container_failures_are_errors_never_host_reds(self) -> None:
+        """AC1's boundaries: an image that cannot be built or a container
+        that cannot start is the run's error — exit 2, the chosen
+        isolation recorded, nothing executed on the host as a stand-in;
+        a declared requires_cmd missing in the image is the selection's
+        incomplete (probed on the image's PATH, never the host's); a
+        container lost mid-run is not judged — never a test red — and a
+        removal that fails is recorded beside the run's own verdict."""
+        # the image build fails: the run is not judged, the host runs
+        # nothing in the container's place
+        fx, eng = self.declared_repo("build-fail")
+        fb = self.fake_box()
+        fb.build_err = "the build broke"
+        code, res = box_close(fx.capsule, "app", eng, fb, os.path.join(fx.capsule, "close.json"))
+        self.assertEqual(code, 2)
+        self.assertEqual(res["verdict"], "error")
+        self.assertEqual(res["details"].get("isolation"), "container",
+                         "the failed start still records the chosen isolation")
+        self.assertIn("could not be prepared", res["summary"])
+        self.assertEqual(fb.execs, [], "nothing ran — never a host stand-in")
+        # the container start fails: the same not-judged shape
+        fx, eng = self.declared_repo("start-fail")
+        fb = self.fake_box()
+        fb.start_err = "the engine refused the start"
+        code, res = box_close(fx.capsule, "app", eng, fb, os.path.join(fx.capsule, "close.json"))
+        self.assertEqual(code, 2)
+        self.assertEqual(res["details"].get("isolation"), "container")
+        self.assertIn("could not be prepared", res["summary"])
+        self.assertEqual(fb.execs, [])
+        # a declared requires_cmd missing in the IMAGE is incomplete —
+        # the probe ran on the image's PATH (the host's copy of the tool
+        # never satisfies it), an undeclared missing tool stays red (u3)
+        env = self.private_tool_env()
+        fx, eng = self.declared_repo("unmet", cmds=[
+            cmd_of("gate-1", "fast", "echo gate-ok"),
+            cmd_of("pin", "scoped", "close-proof-tool", requires_cmd=["close-proof-tool"])])
+        fb = self.fake_box()
+        code, res = box_close(fx.capsule, "app", eng, fb, os.path.join(fx.capsule, "close.json"), env=env)
+        self.assertEqual(code, 1, res.get("summary"))
+        sel = res["details"]["selected"]["app"]
+        self.assertEqual(sel["status"], "incomplete", sel.get("reason", ""))
+        self.assertIn("close-proof-tool", sel.get("reason", ""))
+        pin = [c for c in sel["commands"] if c["name"] == "pin"][0]
+        self.assertTrue(pin.get("skipped"), "the unmet declaration never ran")
+        # a container lost mid-run is not judged — never a red, never a green
+        fx, eng = self.declared_repo("lost")
+        fb = self.fake_box()
+        fb.reap_err = "the container did not answer"
+        code, res = box_close(fx.capsule, "app", eng, fb, os.path.join(fx.capsule, "close.json"))
+        self.assertEqual(code, 2)
+        self.assertEqual(res["verdict"], "error")
+        self.assertEqual(res["details"].get("isolation"), "container")
+        self.assertIn("became unusable", res["summary"])
+        self.assertTrue(res["details"]["container"].get("lost"), "the loss is recorded")
+        # a removal that fails is recorded beside the run's own verdict
+        fx, eng = self.declared_repo("left")
+        fb = self.fake_box()
+        fb.remove_err = "the engine refused the removal"
+        code, res = box_close(fx.capsule, "app", eng, fb, os.path.join(fx.capsule, "close.json"))
+        self.assertEqual(code, 0, res.get("summary"))
+        self.assertTrue(res["details"]["container"].get("left"), "the left-behind container is recorded")
+
     def test_unchanged_image_reuses_verification_cache(self) -> None:
         """AC3: an unchanged image is never rebuilt — close after close,
         verification between closes, all reference one image tag and one
