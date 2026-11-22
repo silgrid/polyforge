@@ -26,6 +26,34 @@ A staged edit is always a visible, cancellable mode of the composer (#128): whil
 - **In-session branch** ("Edit from here" / BranchNavigator): `navigate_tree` within one file; entries share a `parentId`. Switching calls `/api/sessions/[id]/context?leafId=`.
 - A claude session ([claude-sessions.md](claude-sessions.md)) has both: "New session" copies the active branch of claude's transcript up to the same fork point; "Edit from here" stages the same in-place edit, and its send resumes the same session truncated before the message (`--resume-session-at`), the replaced turns kept on another branch of claude's file that the history no longer shows. There is no branch switcher for it.
 
+## Split view: pane callback ownership
+
+Split view's `renderPane` in `components/AppShell.tsx` renders one ChatWindow per pane tab. Pane focus updates `focusedPaneId` only, never `selectedSession`, so a callback that reads the selected chat would act on another pane's conversation. The rulings below are the contract; the `renderPane` comment carries the same list. `漏传` means the classic layout passed it and split view did not (now wired); `有意不传` means split view leaves it out by design.
+
+| 回调 | 判定 | 接法（当前代码） |
+|---|---|---|
+| `onAskInNewChat` | 漏传 | `handlePaneAskInNewChat`: forks the pane's own session, records the pending quote prompt under the forked id, then opens the fork in a new focused pane. `quoteSelectionEnabled` travels with it (ChatWindow only renders the quote toolbar when it is true). |
+| `onSessionForked` | 漏传 | `(newSessionId) => handlePaneSessionForked(newSessionId, sid)`: the classic selection/URL/list update still runs, then the fork opens in a new focused pane and the source pane stays. |
+| `onInitialPromptConsumed` | 漏传 | `initialPrompt` is passed only while `pendingQuotePrompt.sessionId === sid`, and consuming clears only that pane's prompt. |
+| `onAttentionNeeded` | 漏传 | `(request) => handleAttentionNeeded(request, paneSession)`: the waiting-input notification opens the pane's own session and its hidden relation gates it; the global request-id dedupe stays shared. |
+| `onToolEnd` | 漏传 | shared `handleToolEnd`; it reads no session and bumps the one explorer refresh key. |
+| `onFilesUploaded` | 漏传 | shared `handleExplorerRefresh`; the new-session sentinel passes it too, since a drop changes the same workspace. |
+| `onSessionCreated` | 有意不传 | only the sentinel (new-session) composer creates a session, and it passes `onSessionCreated`; a session pane shows an existing session. |
+| `onSoundToggle` | 漏传 | every pane passes it, so the composer's sound toggle works in any pane. |
+| `playDoneSound` | 漏传 | only the focused pane gets it (`focused ? playDoneSound : undefined`); an unfocused pane's finished run still chimes through the pane's own `onAgentEnd` coalescing, so one run rings once. |
+| `unlockAudio` | 漏传 | every pane passes it, so a send's gesture unlocks audio from any pane. |
+| `holdAudio` | 漏传 | every pane passes it, so a background pane's active run keeps the shared AudioContext open. |
+| `onBranchDataChange` | 漏传 | focused-gated: the branch navigator is one top-bar surface and follows the chat shown. |
+| `onSystemPromptChange` | 漏传 | focused-gated, same reason. |
+| `onSystemToolsChange` | 漏传 | focused-gated; `useAgentSession` re-reports its last loaded tools when the callback arrives and nulls it on removal, so a focus switch never leaves the previous pane's tools in the top bar. |
+| `onSystemInfoLoaderChange` | 漏传 | focused-gated; only the focused chat's lazy system-info loader is registered. |
+| `onDebugSnapshotReaderChange` | 漏传 | focused-gated; the Debug panel reads the chat shown, matching the Debug panel section above. |
+| `onSessionStatsPanelOpen` | 漏传 | focused-gated; the session-stats panel follows the focused chat. |
+| `onSearchTargetHandled` | 漏传 | shared handler, with `searchTarget` filtered to `searchTarget.sessionId === sid`, so a search hit locates in its own pane. |
+| `onScrollPositionChange` | 漏传 | shared handler; positions are stored by session id and restored via `initialScrollPosition` for the pane's own `sid`. |
+
+Ticket-external pass-through props found by the same audit and folded in by owner ruling 9=A: `quoteSelectionEnabled` (with `onAskInNewChat`), `soundEnabled` (with the sound controls), `modelsRefreshKey` and `externalSessionChange` (both are global but session-checked, so every pane takes them). `onOpenSubagent` was already wired by polyforge#229. `onSessionStatsChange` / `onContextUsageChange` keep polyforge#23's focused gating (they report usage to one top bar).
+
 ## Session files can be fully rewritten
 `parentSession` in the header is **display metadata only**, so rewriting the whole file with `writeFileSync` is safe (pi does it in migrations); cascade-reparenting children on delete relies on this.
 

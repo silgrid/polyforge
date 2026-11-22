@@ -3559,6 +3559,22 @@ export function AppShell() {
                 }
               }}
               renderPane={(sid, focused) => {
+                // polyforge#231 rulings (full table: docs/agents/sessions.md,
+                // "Split view: pane callback ownership"). A session pane binds
+                // every per-session callback to `sid`; page-global surfaces are
+                // focused-gated. 漏传 = now wired; 有意不传 = left out by design.
+                // - onAskInNewChat, quoteSelectionEnabled: 漏传 -> pane fork, new focused pane
+                // - onSessionForked: 漏传 -> pane-aware fork, source pane kept
+                // - onInitialPromptConsumed, initialPrompt: 漏传 -> keyed by sid
+                // - onAttentionNeeded: 漏传 -> notification targets this pane's session
+                // - onToolEnd, onFilesUploaded: 漏传 -> shared explorer refresh
+                // - onSessionCreated: 有意不传 -> only the sentinel creates a session (it passes it)
+                // - onSoundToggle, soundEnabled, unlockAudio, holdAudio: 漏传 -> every pane
+                // - playDoneSound: 漏传 -> only the focused pane chimes; unfocused panes ring via onAgentEnd
+                // - onBranchDataChange, onSystemPromptChange, onSystemToolsChange: 漏传 -> focused gate (tools re-report in the hook)
+                // - onSystemInfoLoaderChange, onDebugSnapshotReaderChange, onSessionStatsPanelOpen: 漏传 -> focused gate
+                // - onSearchTargetHandled, onScrollPositionChange (+ searchTarget/initialScrollPosition): 漏传 -> keyed by sid
+                // - modelsRefreshKey, externalSessionChange: 漏传 (ticket-external, owner ruling 9=A) -> every pane
                 // The sentinel tab renders the new-session composer ChatWindow;
                 // it reads the same cwd/draft props as the classic composer,
                 // so drafts survive pane switches and tab close/reopen.
@@ -3658,6 +3674,13 @@ export function AppShell() {
                     onInitialPromptConsumed={() => handlePaneInitialPromptConsumed(sid)}
                     modelsRefreshKey={modelsRefreshKey}
                     externalSessionChange={externalSessionChange}
+                    // polyforge#231: a search hit and a saved scroll position
+                    // belong to one session; each pane reads and writes its
+                    // own sid's values, never the selected chat's (ruling 7=A).
+                    searchTarget={searchTarget?.sessionId === sid ? searchTarget : null}
+                    onSearchTargetHandled={handleSearchTargetHandled}
+                    initialScrollPosition={sessionScrollPositionsRef.current.get(sid) ?? null}
+                    onScrollPositionChange={handleSessionScrollPositionChange}
                     onOpenSettings={openSettingsSection}
                     onAgentEnd={(end) => {
                       // A stopped run did not finish anything: no badge, no chime.
