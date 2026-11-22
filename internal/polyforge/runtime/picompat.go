@@ -97,7 +97,12 @@ type piCompatFlight struct {
 	err      *flightResult
 	waiters  int
 	finished bool
-	cancel   context.CancelFunc
+	// abandoned: every waiter left before the probe finished. The flight
+	// is cancelled but STAYS in the map until its probe returns — the next
+	// same-key caller must not start a second probe while this one is still
+	// reaping its process group (owner ruling Q4; review r2#1).
+	abandoned bool
+	cancel    context.CancelFunc
 }
 
 // piCompatVerdicts is the process-level SUCCESS cache: a failed flight is
@@ -124,36 +129,51 @@ func (c *piCompatVerdictsCache) reset() {
 // next same-key caller starts a fresh one; a flight that finished with an
 // error is never cached.
 func (c *piCompatVerdictsCache) verdict(ctx context.Context, deadline time.Time, hasDeadline bool, key string, probe func(context.Context) error) error {
-	c.mu.Lock()
-	if flight, ok := c.flights[key]; ok {
-		flight.waiters++
+	for {
+		c.mu.Lock()
+		if flight, ok := c.flights[key]; ok {
+			if flight.abandoned {
+				// do not join an abandoned flight's answer: wait (bounded by
+				// this caller's own context) for its probe to return, so no
+				// second probe starts while it reaps, then look again.
+				done := flight.done
+				c.mu.Unlock()
+				select {
+				case <-done:
+					continue
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+			flight.waiters++
+			c.mu.Unlock()
+			return c.await(ctx, key, flight)
+		}
+		var probeCtx context.Context
+		var cancel context.CancelFunc
+		if hasDeadline {
+			probeCtx, cancel = context.WithDeadline(context.Background(), deadline)
+		} else {
+			probeCtx, cancel = context.WithCancel(context.Background())
+		}
+		flight := &piCompatFlight{done: make(chan struct{}), waiters: 1, cancel: cancel}
+		c.flights[key] = flight
 		c.mu.Unlock()
+
+		go func() {
+			err := probe(probeCtx)
+			cancel()
+			c.mu.Lock()
+			flight.err = &flightResult{err: err}
+			flight.finished = true
+			if (err != nil || flight.abandoned) && c.flights[key] == flight {
+				delete(c.flights, key)
+			}
+			c.mu.Unlock()
+			close(flight.done)
+		}()
 		return c.await(ctx, key, flight)
 	}
-	var probeCtx context.Context
-	var cancel context.CancelFunc
-	if hasDeadline {
-		probeCtx, cancel = context.WithDeadline(context.Background(), deadline)
-	} else {
-		probeCtx, cancel = context.WithCancel(context.Background())
-	}
-	flight := &piCompatFlight{done: make(chan struct{}), waiters: 1, cancel: cancel}
-	c.flights[key] = flight
-	c.mu.Unlock()
-
-	go func() {
-		err := probe(probeCtx)
-		cancel()
-		c.mu.Lock()
-		flight.err = &flightResult{err: err}
-		flight.finished = true
-		if err != nil && c.flights[key] == flight {
-			delete(c.flights, key)
-		}
-		c.mu.Unlock()
-		close(flight.done)
-	}()
-	return c.await(ctx, key, flight)
 }
 
 // await waits for one flight's answer or for this caller's own cancel. A
@@ -168,10 +188,11 @@ func (c *piCompatVerdictsCache) await(ctx context.Context, key string, flight *p
 		c.mu.Lock()
 		flight.waiters--
 		if flight.waiters <= 0 && !flight.finished {
+			// keep the flight in the map: its probe is still reaping, and a
+			// same-key caller must wait for it (Q4) — the probe's goroutine
+			// removes it when it returns.
+			flight.abandoned = true
 			flight.cancel()
-			if c.flights[key] == flight {
-				delete(c.flights, key)
-			}
 		}
 		c.mu.Unlock()
 		return ctx.Err()
