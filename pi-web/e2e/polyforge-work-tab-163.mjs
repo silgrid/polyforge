@@ -620,7 +620,10 @@ try {
     assert.equal(done.report_tail, "", "the list forwards an empty report_tail as \"\"");
     assert.equal(done.reporter, "alice", "the list forwards a human reporter");
     assert.equal(one.reporter, "machine", "the list forwards the machine reporter");
-    const allowed = new Set(["id", "project", "state", "prompt_summary", "started_at", "ended_at", "wall_consumed_ns", "report_tail", "reporter"]);
+    // polyforge#230's owner-intended extension of the same allowlist: the
+    // attempt's candidate and, when pf sends them, context and analysis_of.
+    const allowed = new Set(["id", "project", "state", "prompt_summary", "started_at", "ended_at", "wall_consumed_ns", "report_tail", "reporter",
+      "candidate", "context", "analysis_of"]);
     for (const row of rows) for (const key of Object.keys(row)) assert.ok(allowed.has(key), `raw field ${key} stays unfowarded`);
   });
 
