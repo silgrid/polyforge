@@ -19,16 +19,26 @@ package task
 // in the count, so a compressed pi conversation reads high rather than zero.
 
 import (
+	"time"
+
 	"github.com/silgrid/polyforge/internal/common/protocol"
 	"github.com/silgrid/polyforge/internal/polyforge/sessionjsonl"
 )
 
 // contextTracker folds one task attempt's stdout records into its context
 // usage. One runner owns one tracker (no locking here, like StreamParser).
-type contextTracker struct{}
+type contextTracker struct {
+	harness string
+	// now answers the receive time stamped on a record the stream carries
+	// none for (a transcript entry has its own timestamp; a stream record
+	// does not).
+	now func() time.Time
+}
 
 // newContextTracker answers the tracker of one harness attempt.
-func newContextTracker(harness string) *contextTracker { return &contextTracker{} }
+func newContextTracker(harness string) *contextTracker {
+	return &contextTracker{harness: harness, now: time.Now}
+}
 
 // feed folds one stdout line and answers the usage as it now stands, and
 // whether the line was a record the fold consumes.
