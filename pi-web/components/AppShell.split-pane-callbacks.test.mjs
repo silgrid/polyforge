@@ -329,3 +329,53 @@ test("pane top-bar projections are focused-gated", () => {
     assert.match(classicWindow, new RegExp(`${prop}=\\{${handler}\\}`), `the classic window keeps ${prop} unconditional`);
   }
 });
+
+// ---- u6: search/scroll are keyed by the pane's sid, and the rulings exist ----
+
+test("pane search target and scroll position bind to the pane session", () => {
+  // Search hits and saved scroll positions are per session. A pane must pass
+  // its own target/position, never the selected chat's (owner ruling 7=A).
+  assert.match(
+    sessionPane,
+    /searchTarget=\{searchTarget\?\.sessionId === sid \? searchTarget : null\}/,
+    "the pane's search target must be filtered by its own sid",
+  );
+  assert.match(sessionPane, /onSearchTargetHandled=\{handleSearchTargetHandled\}/, "the pane must acknowledge its own search target");
+  assert.match(
+    sessionPane,
+    /initialScrollPosition=\{sessionScrollPositionsRef\.current\.get\(sid\) \?\? null\}/,
+    "the pane restores the scroll position saved for its own sid",
+  );
+  assert.match(sessionPane, /onScrollPositionChange=\{handleSessionScrollPositionChange\}/, "the pane saves its own scroll position");
+  assert.doesNotMatch(sessionPane, /searchTarget=\{searchTarget\}/, "a pane must never take the selected chat's search target");
+  // The classic window keeps its selected-session wiring.
+  assert.match(classicWindow, /searchTarget=\{searchTarget\?\.sessionId === selectedSession\?\.id \? searchTarget : null\}/);
+  assert.match(classicWindow, /initialScrollPosition=\{selectedSession \? sessionScrollPositionsRef\.current\.get\(selectedSession\.id\) \?\? null : null\}/);
+});
+
+test("every listed callback has a written ruling", () => {
+  // AC2: each callback the ticket names carries a written ruling — deliberately
+  // not passed (with its reason) or passed — in docs/agents/sessions.md and
+  // beside renderPane, and the ruling matches the wiring pinned above.
+  const names = [
+    "onAskInNewChat", "onToolEnd", "onAttentionNeeded", "onSessionForked",
+    "onSessionCreated", "onFilesUploaded", "onSoundToggle", "playDoneSound",
+    "unlockAudio", "holdAudio", "onBranchDataChange", "onSystemPromptChange",
+    "onSystemToolsChange", "onSystemInfoLoaderChange", "onDebugSnapshotReaderChange",
+    "onSessionStatsPanelOpen", "onSearchTargetHandled", "onScrollPositionChange",
+    "onInitialPromptConsumed",
+  ];
+  const start = docs.indexOf("## Split view: pane callback ownership");
+  assert.ok(start >= 0, "sessions.md must carry the split-pane callback ownership section");
+  const end = docs.indexOf("\n## ", start + 3);
+  const section = docs.slice(start, end > start ? end : undefined);
+  const comments = between(renderPane, "// polyforge#231 rulings", "if (isNewSessionTab(sid)) {", "the renderPane ruling comments");
+  for (const name of names) {
+    assert.ok(section.includes(`\`${name}\``), `sessions.md must state a ruling for ${name}`);
+    assert.ok(comments.includes(name), `the renderPane comment must state a ruling for ${name}`);
+  }
+  // The one deliberate omission names its reason, not just the prop.
+  assert.match(section, /`onSessionCreated`[^\n]*有意不传[^\n]*sentinel/, "onSessionCreated's ruling must say why a session pane does not take it");
+  // Every other listed callback is marked as missing-and-wired.
+  assert.match(section, /`onToolEnd`[^\n]*漏传/, "onToolEnd's ruling must say it was missing and is now wired");
+});
