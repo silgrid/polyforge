@@ -3635,6 +3635,18 @@ export function AppShell() {
                     playDoneSound={focused ? playDoneSound : undefined}
                     unlockAudio={unlockAudio}
                     holdAudio={holdAudio}
+                    // polyforge#231: branch, system prompt/tools, the lazy
+                    // system-info loader, the Debug reader and the session
+                    // stats panel are one page-global surface each. Only the
+                    // focused pane may write them (pi#23's pattern); on a
+                    // focus switch ChatWindow's effects clean up (null) and
+                    // the newly focused pane re-reports its own values.
+                    onBranchDataChange={focused ? handleBranchDataChange : undefined}
+                    onSystemPromptChange={focused ? handleSystemPromptChange : undefined}
+                    onSystemToolsChange={focused ? handleSystemToolsChange : undefined}
+                    onSystemInfoLoaderChange={focused ? handleSystemInfoLoaderChange : undefined}
+                    onDebugSnapshotReaderChange={focused ? handleDebugSnapshotReaderChange : undefined}
+                    onSessionStatsPanelOpen={focused ? openSessionStatsPanel : undefined}
                     // polyforge#231: every per-session callback below is bound
                     // to THIS pane's sid. Pane focus never updates
                     // selectedSession, so reusing a selectedSession-based

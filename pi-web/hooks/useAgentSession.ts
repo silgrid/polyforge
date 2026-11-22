@@ -1540,11 +1540,15 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, []);
 
+  // polyforge#231: the last tools this chat loaded, so a new callback (a pane
+  // gaining focus) can re-report them without a get_tools round trip.
+  const loadedToolsRef = useRef<ToolEntry[] | null>(null);
   const loadTools = useCallback(async (sid: string) => {
     try {
       const tools = await sendAgentCommand<ToolEntry[]>(sid, { type: "get_tools" });
       if (!tools || !sessionHookMountedRef.current || sessionIdRef.current !== sid) return null;
       const { getPresetFromTools } = await import("@/lib/tool-presets");
+      loadedToolsRef.current = tools;
       setToolPresetState(sessionToolsPinnedRef.current ? getPresetFromTools(tools) : CONFIGURED_TOOL_PRESET);
       onSystemToolsChange?.(tools);
       return tools;
@@ -1553,6 +1557,15 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       return null;
     }
   }, [onSystemToolsChange, setToolPresetState]);
+
+  // polyforge#231: onSystemToolsChange flips between the focused pane's
+  // handler and undefined; report this chat's current tools on arrival and
+  // clear on removal, as the system prompt, loader and debug reader do.
+  useEffect(() => {
+    if (!onSystemToolsChange) return;
+    onSystemToolsChange(loadedToolsRef.current);
+    return () => onSystemToolsChange(null);
+  }, [onSystemToolsChange]);
 
   const promoteNewSession = useCallback((messageCount = 0, firstMessage = "(no messages)") => {
     const sid = sessionIdRef.current;
