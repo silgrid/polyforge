@@ -9,6 +9,7 @@ verification image runs its whole close inside that image, every other
 shape keeps the host close."""
 
 import hashlib
+import glob
 import io
 import json
 import os
@@ -838,6 +839,59 @@ class CloseContainerTest(unittest.TestCase):
         code, res = box_close(fx.capsule, "app", eng, fb, os.path.join(fx.capsule, "close.json"))
         self.assertEqual(code, 0, res.get("summary"))
         self.assertTrue(res["details"]["container"].get("left"), "the left-behind container is recorded")
+
+    def test_the_baseline_re_runs_in_the_same_container(self) -> None:
+        """AC1's rerun path: the located failing unit's one targeted re-run,
+        the baseline's base worktree — under the directory mounted into
+        the container — its setup and re-runs, and the skip-form
+        confirmation all execute in the same container; #212's
+        pre-existing rules stand unchanged, and the base worktree is
+        cleaned up afterwards."""
+        from .test_verify_flows import FAKE_PYTEST, fake_bin
+        root = os.path.join(self.root, "base")
+        os.makedirs(root)
+        env = fake_bin(root, "pytest", FAKE_PYTEST)
+        bindir = env["PATH"].split(os.pathsep)[0]
+        fx = Fixture(root, {"app": {"tests/test_a.py": "def test_old(): # FAIL assert old breakage\n"}})
+        fx.commit_in_repo("app", {"tests/test_a.py": "def test_old(): # FAIL assert old breakage\n# the change\n",
+                                  DOCKERFILE: TEST_DOCKERFILE}, "the change, with the image declared")
+        eng = fake_engine(root, {"app": report("scoped", cmd_of("tests", "scoped", "pytest"))})
+        fb = self.fake_box()
+        # the image's PATH carries the fake pytest: the box, never the
+        # host, can run every execution the close makes
+        fb.image_environ = ["PATH=" + bindir + os.pathsep + self.IMAGE_PATH,
+                            "IMAGE_ONLY=from-image", "HOME=/root"]
+        out = os.path.join(fx.capsule, "close.json")
+        code, res = box_close(fx.capsule, "app", eng, fb, out, env=env)
+        self.assertEqual(code, 0, res.get("summary"))
+        sel = res["details"]["selected"]["app"]
+        self.assertEqual(sel["status"], "pre_existing", sel.get("reason", ""))
+        tests_cmd = [c for c in sel["commands"] if c["name"] == "tests"][0]
+        self.assertEqual(tests_cmd.get("confirmed"), "pytest --deselect tests/test_a.py::test_old",
+                         "the pre-existing failure is excluded by its skip form")
+        self.assertEqual((res["details"].get("baseline") or {}).get("ran"), True,
+                         "the baseline actually ran")
+        # the base worktree lived under the directory the container was
+        # mounted — its re-run executes show as the container's, never the
+        # host's (a host-side baseline run leaves no exec here)
+        clone = fx.repo("app")
+        base_execs = [e for e in fb.command_execs("pytest") if e[1] != clone]
+        self.assertTrue(base_execs,
+                        "the baseline's re-runs executed in the container, in the mounted base worktree")
+        logs_dir = os.path.join(fx.capsule, "logs")
+        for e in base_execs:
+            self.assertTrue(e[1].startswith(logs_dir),
+                            "the base worktree sits under the run's mounted base root: %s" % e[1])
+        # the first run, the re-run at HEAD and the skip-form confirm went
+        # through the same container as the baseline
+        self.assertGreaterEqual(len([e for e in fb.command_execs("pytest") if e[1] == clone]), 3,
+                                "the command, its re-run and its confirm all ran in the container")
+        self.assertEqual(sorted({e[0] for e in fb.execs}), ["cid-1"])
+        # the base worktree is gone again: nothing left under the base root
+        left = [p for p in glob.glob(os.path.join(logs_dir, "*", "base", "pf-verify-base-*"))]
+        self.assertEqual(left, [], "the throwaway base worktree is cleaned up")
+        listed = git(clone, "worktree", "list")
+        self.assertEqual(len([ln for ln in listed.split("\n") if ln.strip()]), 1, listed)
 
     def test_unchanged_image_reuses_verification_cache(self) -> None:
         """AC3: an unchanged image is never rebuilt — close after close,
