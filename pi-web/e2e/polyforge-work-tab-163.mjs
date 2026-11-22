@@ -381,8 +381,11 @@ try {
     await waitFor(() => dock(page).isVisible().then((value) => !value), "the dock closes");
     await openDock(page);
     assert.ok(await isActive(topTab(page, RE_WORK)), "工单 is still active after a close/reopen");
-    await dock(page).getByText(M1).waitFor({ timeout: 20_000 });
-    assert.equal(await card(page, A.wi).count(), 0, "任务 is still the selected sub-tab");
+    // polyforge#225: a close resets Work's sub-tab, so the reopen lands on
+    // 作业 — the manual 任务 selection does not outlive the closed dock.
+    assert.ok(await isActive(subTab(page, RE_JOBS)), "作业 is the selected sub-tab after a close/reopen");
+    await card(page, A.wi).waitFor({ timeout: 20_000 });
+    assert.equal(await dock(page).getByText(M1).count(), 0, "a close/reopen returns to the 作业 sub-tab");
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.getByText("E2E pf work host session").first().waitFor({ state: "attached", timeout: NAV_MS });
     await openWork(page);
@@ -684,6 +687,13 @@ try {
     await afterStatusPolls(page, 2, "on the 记忆 tab");
     await assertTaskListReads(page, 2, "another top-level tab reads no task list");
     await topTab(page, RE_WORK).click();
+    // polyforge#225: switching back to Work from another top-level tab starts
+    // on 作业, so the task surface is not remounted and no read follows; the
+    // next read is the explicit re-entry into 任务 below.
+    await waitFor(async () => isActive(subTab(page, RE_JOBS)), "switching back to 工单 lands on 作业");
+    await afterStatusPolls(page, 2, "back on 工单 › 作业");
+    await assertTaskListReads(page, 2, "a switch to 工单 from another top-level tab reads no task list");
+    await subTab(page, RE_TASKS).click();
     await waitFor(() => taskLists().length === 3, "re-entering 任务 takes the next read");
   }));
 

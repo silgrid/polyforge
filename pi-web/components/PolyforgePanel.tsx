@@ -1464,12 +1464,13 @@ export function PolyforgePanel({
   // detail read), the task's own Cell included (polyforge#73: the analysis
   // card's task belongs to the Messages pane's pinned Cell, the walk's to
   // its entry); the Tasks surface clears it once handled. Component memory
-  // only.
+  // only. The top-level switch comes first: it resets Work's sub-tab to Jobs
+  // (polyforge#225), so the explicit 任务 target is written after it.
   const [taskToOpen, setTaskToOpen] = useState<{ id: string; cell?: string } | null>(null);
   const openTask = useCallback((taskId: string, cell?: string | null) => {
     setTaskToOpen(cell ? { id: taskId, cell } : { id: taskId });
-    onWorkTab("tasks");
     onActiveTab("work");
+    onWorkTab("tasks");
   }, [onActiveTab, onWorkTab]);
   const clearTaskToOpen = useCallback(() => setTaskToOpen(null), []);
   // the walk's task target reaches the Tasks surface through
