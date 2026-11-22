@@ -378,7 +378,12 @@ push. The two AIHubs do not follow it, and the AIHub-side preflight is
 graded (polyforge#188): a green commit whose release-tag..green diff
 touches a path of `tools/aihub-interface-paths.conf` (the client-server
 wire contracts) is refused in prepare, needing a formal release
-instead, while the diff's other AIHub-side paths (`tools/aihub-paths.conf`:
+instead — the one exception (polyforge#219) being a modified `.go`
+file whose two versions differ only in Go comments: it passes as
+comment-only, judged by the green tree's own `tools/gocommentonly`,
+with one info line naming the file, and everything else (a mode
+change, a new or deleted file, an unparseable version, no working
+judge) still refuses — fail closed — while the diff's other AIHub-side paths (`tools/aihub-paths.conf`:
 the server's insides, its SQL, the deploy tree) pass with one WARN
 naming every hit — those changes stay undeployed and wait for a formal
 release; a green tag whose lists are missing, empty or of an
