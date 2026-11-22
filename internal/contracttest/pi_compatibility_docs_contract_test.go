@@ -1,4 +1,4 @@
-package contracttest
+package test
 
 // The pi sub-agent compatibility gate's documentation contract
 // (polyforge#227 AC4): the upgrade note states default-off, the on-only
