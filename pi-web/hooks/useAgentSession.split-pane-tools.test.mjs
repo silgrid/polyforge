@@ -14,6 +14,8 @@ import { Script } from "node:vm";
 import ts from "typescript";
 
 const source = await readFile(new URL("./useAgentSession.ts", import.meta.url), "utf8");
+const appShell = await readFile(new URL("../components/AppShell.tsx", import.meta.url), "utf8");
+const sessionsDoc = await readFile(new URL("../docs/agents/sessions.md", import.meta.url), "utf8");
 const ast = ts.createSourceFile("useAgentSession.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 
 const plain = (value) => JSON.parse(JSON.stringify(value));
@@ -73,4 +75,61 @@ test("the tools callback re-reports on change and clears on removal", () => {
   // re-report above.
   assert.match(source, /loadedToolsRef\.current = tools;/, "loadTools must remember the tools it loaded");
   assert.match(source, /onSystemToolsChange\?\.\(tools\);/, "loadTools must still report the freshly loaded tools");
+});
+
+// ---- u7 (review r1#1): losing the focused pane clears its top-bar projections ----
+
+test("the top-bar projections clear when the focused pane loses them", () => {
+  // Focus can move to the new-session sentinel, which passes none of the
+  // page-global callbacks. Unless the effects that report the branch tree and
+  // the system prompt clean up on removal, the top bar keeps the previous
+  // pane's tree and its onLeafChange closure, and picking a branch there sends
+  // navigate_tree to that (now unfocused) session (review r1#1).
+  const promptEffectText = extractEffectContaining("onSystemPromptChange?.(null)");
+  const promptReports = [];
+  const promptEffect = runExtracted(promptEffectText, {
+    onSystemPromptChange: (value) => promptReports.push(value),
+  });
+  const promptCleanup = promptEffect();
+  assert.equal(typeof promptCleanup, "function", "the prompt cleanup must be registered while a callback is held");
+  promptCleanup();
+  assert.equal(promptReports.at(-1), null, "losing the prompt callback clears the top bar's prompt");
+  const inertPrompt = runExtracted(promptEffectText, { onSystemPromptChange: undefined });
+  assert.equal(inertPrompt(), undefined, "no callback registers no prompt cleanup");
+
+  const branchEffectText = extractEffectContaining("onBranchDataChange([], null");
+  const branchReports = [];
+  const branchEffect = runExtracted(branchEffectText, {
+    onBranchDataChange: (...args) => branchReports.push(args),
+  });
+  const branchCleanup = branchEffect();
+  assert.equal(typeof branchCleanup, "function", "the branch cleanup must be registered while a callback is held");
+  branchCleanup();
+  const [tree, leaf, onLeaf, locked] = branchReports.at(-1);
+  assert.deepEqual(plain(tree), [], "losing the branch callback empties the top bar's tree");
+  assert.equal(leaf, null, "and its active leaf");
+  assert.equal(typeof onLeaf, "function", "and it leaves a callable no-op instead of the old pane's handleLeafChange");
+  assert.doesNotThrow(() => onLeaf("leaf-1"), "a stale branch click must be a no-op");
+  assert.equal(locked, false, "and the switch is not reported as locked");
+  const inertBranch = runExtracted(branchEffectText, { onBranchDataChange: undefined });
+  assert.equal(inertBranch(), undefined, "no callback registers no branch cleanup");
+
+  // The normal reporting effects stay exactly as they were.
+  assert.match(source, /onSystemPromptChange\?\.\(systemPrompt\);/, "a prompt change still reports the current prompt");
+  assert.match(
+    source,
+    /onBranchDataChange\(data\?\.tree \?\? \[\], activeLeafId, handleLeafChange, branchSwitchLocked\);/,
+    "branch data changes still report the live tree",
+  );
+
+  // AC2: the written ruling must state the cleanup that now exists.
+  const commentStart = appShell.indexOf("// polyforge#231: branch, system prompt/tools");
+  assert.ok(commentStart >= 0, "renderPane keeps the top-bar ruling comment");
+  const comment = appShell.slice(commentStart, commentStart + 800);
+  assert.match(comment, /empty tree/, "the comment must name the branch cleanup");
+  const tableStart = sessionsDoc.indexOf("## Split view: pane callback ownership");
+  assert.ok(tableStart >= 0, "sessions.md keeps the ownership table");
+  const table = sessionsDoc.slice(tableStart, sessionsDoc.indexOf("\n## ", tableStart + 3));
+  assert.match(table, /`onBranchDataChange`[^\n]*清空/, "the table's branch row must state the clear-on-blur");
+  assert.match(table, /`onSystemPromptChange`[^\n]*清空/, "the table's prompt row must state the clear-on-blur");
 });
