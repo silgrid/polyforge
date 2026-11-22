@@ -552,13 +552,25 @@ func TestAnalysisRedoSurvivesRestart(t *testing.T) {
 	waitFor(t, "the redo queue drained", 10*time.Second, func() bool {
 		return len(pf233QueueEntriesFrom(t, data)) == 0
 	})
-	ids := runner2.taskIDs()
-	if len(ids) != 1 {
-		t.Fatalf("the restarted daemon must dispatch the redo request exactly once, got %d tasks: %v", len(ids), ids)
+	// The task record is the settled state: Manager.Spawn saves it before it
+	// returns, so it is ready when dispatch drops the queue head. The runner
+	// enters Run on its own goroutine later — that observation gets its own
+	// bounded poll, never a single read.
+	tasks, err := d2.tasks.List()
+	if err != nil {
+		t.Fatalf("list the restarted daemon's tasks: %v", err)
 	}
-	tk, err := d2.tasks.Show(ids[0])
-	if err != nil || tk.Spec.AnalysisOf != "wi_redo_restart" {
-		t.Fatalf("the replayed task must bind the ticket: %+v %v", tk, err)
+	var redoTasks []task.Task
+	for _, tk := range tasks {
+		if tk.Spec.AnalysisOf == "wi_redo_restart" {
+			redoTasks = append(redoTasks, tk)
+		}
+	}
+	if len(redoTasks) != 1 {
+		t.Fatalf("the restarted daemon must dispatch the redo request exactly once, got %d redo tasks: %+v", len(redoTasks), redoTasks)
+	}
+	if _, ok := w72WaitSpec(runner2, redoTasks[0].ID); !ok {
+		t.Fatalf("the runner never entered Run for the replayed task %s", redoTasks[0].ID)
 	}
 	if after := pf233Content(t, hub, "wi_redo_restart"); after != beforeRestart {
 		t.Fatalf("a restart must not re-apply the archive or marker:\nbefore:\n%s\nafter:\n%s", beforeRestart, after)
