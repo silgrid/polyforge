@@ -111,18 +111,20 @@ func (d *Daemon) analysisRedoRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.drainGate.Lock()
-	defer d.drainGate.Unlock()
 	item, err := d.hub.GetWorkItem(req.WorkItemID)
 	if err != nil {
+		d.drainGate.Unlock()
 		writeErrOf(w, err)
 		return
 	}
 	if code, detail := d.analysisRedoRefusal(item); code != "" {
+		d.drainGate.Unlock()
 		writeErr(w, code, detail)
 		return
 	}
 	requestID, err := newAnalysisRedoRequestID()
 	if err != nil {
+		d.drainGate.Unlock()
 		writeErr(w, api.ErrDaemonInternal, "analysis redo: mint the request id: "+err.Error())
 		return
 	}
@@ -133,9 +135,11 @@ func (d *Daemon) analysisRedoRoute(w http.ResponseWriter, r *http.Request) {
 		RedoRequestID: requestID,
 	}
 	if added, err := d.analysisQ.addRedo(entry); err != nil {
+		d.drainGate.Unlock()
 		writeErr(w, api.ErrDaemonInternal, "analysis redo: persist the request before touching the ticket: "+err.Error())
 		return
 	} else if !added {
+		d.drainGate.Unlock()
 		writeErr(w, api.ErrDaemonConflict, "analysis redo: "+api.DisplayName(item.Slug, item.ID)+" already has a pending analysis request — wait for it to be dispatched")
 		return
 	}
@@ -146,14 +150,30 @@ func (d *Daemon) analysisRedoRoute(w http.ResponseWriter, r *http.Request) {
 	marked, err := workflow.PrepareAnalysisRedo(content, requestID, time.Now().UTC().Format(time.RFC3339))
 	if err != nil {
 		d.analysisQ.dropRequest(item.ID, requestID)
+		d.drainGate.Unlock()
 		writeErr(w, api.ErrDaemonConflict, "analysis redo: "+err.Error())
 		return
 	}
 	if err := d.hub.Do("PATCH", "/api/v1/work-items/"+item.ID,
 		map[string]any{"content": marked, "expected_updated_at": item.UpdatedAt}, nil); err != nil {
 		d.analysisQ.dropRequest(item.ID, requestID)
+		d.drainGate.Unlock()
 		writeErrOf(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"state": "queued", "request_id": requestID})
+	d.drainGate.Unlock()
+	d.dispatchAnalysisNow()
+	if tk, ok := d.runningAnalysisTask(item.ID); ok {
+		writeJSON(w, http.StatusOK, map[string]any{"state": "scheduled", "task_id": tk, "request_id": requestID})
+		return
+	}
+	if d.analysisQ.has(item.ID) {
+		writeJSON(w, http.StatusOK, map[string]any{"state": "queued", "request_id": requestID})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"state":      "failed",
+		"request_id": requestID,
+		"detail":     "the redo request vanished before dispatch",
+	})
 }

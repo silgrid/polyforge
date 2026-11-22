@@ -307,6 +307,44 @@ func (d *Daemon) analysisSpawn(item *api.WorkItem, retries int) (task.Task, erro
 	return tk, nil
 }
 
+// redoEntryNeeds judges one explicit redo round at dispatch time: the
+// ticket is still a queued or blocked execution ticket, and its analysis
+// section still carries THIS round's pending request id, unconfirmed. A
+// confirm (the owner accepted the old draft early), a claim, a new draft
+// written over the marker or a terminal status abandons the round — the
+// queue entry is dropped and nothing is stamped back (owner ruling Q6=A).
+func (d *Daemon) redoEntryNeeds(item *api.WorkItem, requestID string) bool {
+	if item.BundleName == nil || strings.TrimSpace(*item.BundleName) == "" {
+		return false
+	}
+	if item.Status != api.StatusQueued && item.Status != api.StatusBlocked {
+		return false
+	}
+	content := ""
+	if item.Content != nil {
+		content = *item.Content
+	}
+	id, ok := workflow.AnalysisRedoRequestID(content)
+	return ok && id == requestID && workflow.AnalysisUnconfirmed(content)
+}
+
+// analysisSpawnRedo spawns one redo round's analysis task through the same
+// prompt builder the create-time scheduler uses (analysisPrompt), so the
+// current format, the prohibited actions and the component division are
+// byte-identical between the two paths.
+func (d *Daemon) analysisSpawnRedo(item *api.WorkItem, retries int) (task.Task, error) {
+	prompt, err := d.analysisPrompt(item)
+	if err != nil {
+		return task.Task{}, err
+	}
+	return d.tasks.Spawn(task.Spec{
+		Project:         item.ProjectName,
+		Prompt:          prompt,
+		AnalysisOf:      item.ID,
+		AnalysisRetries: retries,
+	})
+}
+
 // errNotNeeded marks a dispatch-time drop (terminal, analyzed or unbound
 // since the enqueue): the caller removes the entry, never logs an error.
 var errNotNeeded = errors.New("the ticket needs no analysis anymore")
@@ -336,6 +374,20 @@ func (d *Daemon) dispatchAnalysis() {
 		return
 	}
 	defer d.analysisDispatch.Unlock()
+	d.walkAnalysis()
+}
+
+// dispatchAnalysisNow is the redo route's walk: it waits for a running walk
+// (the tick's) to finish instead of skipping, so the route can answer
+// whether its request was dispatched at once.
+func (d *Daemon) dispatchAnalysisNow() {
+	d.analysisDispatch.Lock()
+	defer d.analysisDispatch.Unlock()
+	d.walkAnalysis()
+}
+
+// walkAnalysis is the one drain loop; the caller holds analysisDispatch.
+func (d *Daemon) walkAnalysis() {
 	// Never spawn on a shutting-down daemon: the terminal wave of
 	// taskDone calls (the interrupted tasks of Close) must not schedule
 	// new work — the restarted daemon replays the queue instead.
@@ -378,6 +430,30 @@ func (d *Daemon) dispatchAnalysis() {
 				continue
 			}
 			return
+		}
+		if head.RedoRequestID != "" {
+			if !d.redoEntryNeeds(item, head.RedoRequestID) {
+				q.dropHead("the redo round was confirmed or the ticket moved on")
+				continue
+			}
+			if blocked {
+				return // a live redo the lane cannot take yet: it stays queued
+			}
+			if tk, ok := d.runningAnalysisTask(item.ID); ok {
+				q.dropHead("an analysis is already running: " + tk)
+				continue
+			}
+			_, err = d.analysisSpawnRedo(item, head.Retries)
+			if err == nil || errors.Is(err, errNotNeeded) {
+				q.dropHead("redo dispatched")
+				continue
+			}
+			if analysisRetryable(err) {
+				return
+			}
+			fmt.Fprintf(os.Stderr, "daemon: redo analysis of %s dropped: %v\n", head.WorkItemID, err)
+			q.dropHead("dropped: " + err.Error())
+			continue
 		}
 		if !d.analysisNeeds(item, head.Retries) {
 			q.dropHead("no longer needs an analysis")
