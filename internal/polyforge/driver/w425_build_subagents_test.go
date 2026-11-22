@@ -16,6 +16,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/silgrid/polyforge/internal/common/spawn"
 	"github.com/silgrid/polyforge/internal/common/workflow"
 )
 
@@ -145,7 +146,24 @@ func TestPiBuildDispatchIsToldSubagentsAreUnavailable(t *testing.T) {
 	if p := spawnStepPromptWith(t, developBundle, StepSpawn{StepID: reviewStepID, SpawnN: 1, Harness: "pi"}); strings.Contains(p, fact) {
 		t.Error("a step without the sub-agent rules carries no such fact")
 	}
-	if p := spawnStepPromptWith(t, developBundle, StepSpawn{StepID: "build", SpawnN: 1, Harness: "pi", Params: map[string]string{"pi_subagents": "on"}}); strings.Contains(p, fact) {
+	verified := spawn.Capability{PiSubagents: true}
+	if p := spawnStepPromptWithCapability(t, developBundle, StepSpawn{StepID: "build", SpawnN: 1, Harness: "pi", Params: map[string]string{"pi_subagents": "on"}}, &verified); strings.Contains(p, fact) {
 		t.Error("an enabled pi build dispatch must not carry the unavailable fact")
+	}
+}
+
+// TestPiBuildDispatchCapabilityGate: the prompt's sub-agent fact follows the
+// capability the runtime VERIFIED, never the parameter alone (polyforge#227,
+// owner ruling Q3) — the dispatch cannot be told the worker is available and
+// then refused by the runtime, or the reverse.
+func TestPiBuildDispatchCapabilityGate(t *testing.T) {
+	const fact = "This dispatch runs on pi with the daemon-owned worker available, but pi_subagents is off"
+	unverified := spawn.Capability{}
+	if p := spawnStepPromptWithCapability(t, developBundle, StepSpawn{StepID: "build", SpawnN: 1, Harness: "pi", Params: map[string]string{"pi_subagents": "on"}}, &unverified); !strings.Contains(p, fact) {
+		t.Error("a dispatch whose verified capability is unproven must carry the unavailable fact, even when the parameter says on")
+	}
+	verified := spawn.Capability{PiSubagents: true}
+	if p := spawnStepPromptWithCapability(t, developBundle, StepSpawn{StepID: "build", SpawnN: 1, Harness: "pi"}, &verified); strings.Contains(p, fact) {
+		t.Error("a dispatch whose capability the runtime verified must not carry the unavailable fact")
 	}
 }

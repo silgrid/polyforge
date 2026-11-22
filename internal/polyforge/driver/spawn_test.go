@@ -66,11 +66,32 @@ type captureSpawner struct {
 	mu      sync.Mutex
 	params  []runtime.SpawnParams
 	handles []*fakeAgent
+	// capability, when set, is the verified capability the fake runtime
+	// would hand the dispatch's FinalPrompt callback. nil derives it from
+	// the params — the old param-only shape — so unrelated prompt tests
+	// keep their wording; a test that exercises the capability callback
+	// sets it explicitly.
+	capability *spawn.Capability
 }
 
 func (s *captureSpawner) Spawn(ctx context.Context, p runtime.SpawnParams) (runtime.AgentHandle, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if p.FinalPrompt != nil {
+		capability := spawn.Capability{}
+		if s.capability != nil {
+			capability = *s.capability
+		} else {
+			on, _ := spawn.PiSubagents(p.Params)
+			capability = spawn.Capability{PiSubagents: on}
+		}
+		prompt, err := p.FinalPrompt(capability)
+		if err != nil {
+			return nil, err
+		}
+		p.FinalPrompt = nil
+		p.InitialPrompt = prompt
+	}
 	h := &fakeAgent{}
 	s.params = append(s.params, p)
 	s.handles = append(s.handles, h)
