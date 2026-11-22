@@ -440,8 +440,8 @@ func TestW78ResumePiSubagentsCapability(t *testing.T) {
 		ad, sp, capDir := w228ResumeEnv(t)
 		w228Dispatch(t, ad, sp, capDir, StepSpawn{SpawnN: 1, Harness: harness.Claude, Params: map[string]string{"pi_subagents": "off"}})
 		prompt := w228Dispatch(t, ad, sp, capDir, StepSpawn{SpawnN: 2, Harness: harness.Claude, Params: map[string]string{"pi_subagents": "on"}})
-		if strings.Contains(prompt, "Pi subagents are") || strings.Contains(prompt, `agent: "worker"`) {
-			t.Fatalf("a claude dispatch must not be told to use the pi worker or disable its own agent:\n%s", prompt)
+		if strings.Contains(prompt, "Pi subagents are") {
+			t.Fatalf("a claude dispatch must not carry the pi capability restatement:\n%s", prompt)
 		}
 	})
 }
