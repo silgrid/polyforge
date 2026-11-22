@@ -1,7 +1,9 @@
 /**
  * Client-safe pure model for the dock's read-only Tasks tab:
- * the list-row and detail wire types (the row type names exactly the nine
- * keys the server passport forwards, report_tail/reporter included),
+ * the list-row and detail wire types (the row type names the keys the server
+ * passport forwards: id/project/state/prompt_summary, the timing facts,
+ * report_tail, reporter and — since polyforge#230 — candidate, a running
+ * task's context and an analysis task's analysis_of),
  * the task id validator, the
  * running-on-top section split, the client-side search, the project/state
  * filters and the block timing helpers, and the reporter

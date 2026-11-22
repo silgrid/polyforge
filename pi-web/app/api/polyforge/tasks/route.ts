@@ -13,8 +13,9 @@ export const dynamic = "force-dynamic";
  * its local reads, the same set the Host's task sum and the Jobs list
  * count) — the same `pf --json ops status` read the Jobs tab
  * polls (its shared cached reader; no new pf probe, polyforge#73) — each row
- * named with its Cell by this outer layer (`cell`, the tenth field; the
- * nine-key row passport itself is unchanged). A Cell whose read fails
+ * named with its Cell by this outer layer (`cell`), and a running row's
+ * context window filled from the model catalog exactly as a Jobs row's is
+ * (polyforge#230; no pf spawn). A Cell whose read fails
  * degrades to one `cellErrors` entry while the rest list. A pf without the
  * multi-Cell protocol — and an aggregate that cannot be read, or one with no
  * valid Cell — keeps today's single unflagged `pf --json task list`.

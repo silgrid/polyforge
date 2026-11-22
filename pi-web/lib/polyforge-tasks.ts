@@ -22,9 +22,10 @@ import { isPolyforgeTaskId, type PolyforgeTaskDetail, type PolyforgeTaskRow } fr
  * only degrade and answer.
  *
  * The sanitizers are the only passport off this module: a list row keeps
- * exactly nine keys — id/project/state/prompt_summary, the three timing facts
- * started_at?/ended_at?/wall_consumed_ns? and
- * report_tail?/reporter?: `report_tail` is pf's own bounded
+ * id/project/state/prompt_summary, the three timing facts
+ * started_at?/ended_at?/wall_consumed_ns?, report_tail?/reporter? and — since
+ * polyforge#230 — candidate? plus a running task's context? and an analysis
+ * task's analysis_of?: `report_tail` is pf's own bounded
  * last non-empty report line (never re-cut here), `reporter` the spawn-time
  * human display name or `machine`; each travels only when pf sends a string,
  * so a 2.20.12 pf without them still lists (the floor is unchanged). A detail keeps id/project/state/
