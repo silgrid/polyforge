@@ -962,9 +962,8 @@ test("the Work rail exposes only 作业, 任务 and 全部; 项目 and 待集成
   assert.ok(start >= 0, "one visible Work sub-tab list");
   const end = source.indexOf("];", start);
   assert.ok(end > start, "the visible list is a closed array");
-  const context = vm.createContext({});
-  vm.runInContext(stripTypeScriptTypes(source.slice(start, end + 2).replace("export ", "")), context);
-  assert.deepEqual([...context.VISIBLE_WORK_TABS], ["jobs", "tasks", "items"],
+  const visibleTabs = vm.runInContext(stripTypeScriptTypes(`${source.slice(start, end + 2).replace("export ", "")}\nVISIBLE_WORK_TABS`), vm.createContext({}));
+  assert.deepEqual([...visibleTabs], ["jobs", "tasks", "items"],
     "the Work rail shows 作业, 任务 and 全部, in that order, and nothing else");
   const work = source.slice(source.indexOf('role="tablist"\n              data-pf-tabstrip="work"'), source.indexOf('<div data-pf-work-detail=""'));
   assert.match(work, /\{VISIBLE_WORK_TABS\.map\(\(tab\) =>/, "the tablist consumes the one visible list");
