@@ -79,6 +79,39 @@ test("a dock close resets Work's sub-tab to Jobs for every other sub-tab", async
   }
 });
 
+test("switching to Work from Memory or Messages lands on Jobs", async () => {
+  const hook = await setup({ panelOpen: true });
+  try {
+    for (const other of ["memory", "messages"]) {
+      hook.result.setWorkTab("tasks");
+      await render(hook);
+      hook.result.setActiveTab(other);
+      await render(hook);
+      assert.equal(hook.result.activeTab, other, `${other} is the top-level tab`);
+      hook.result.setActiveTab("work");
+      await render(hook);
+      assert.equal(hook.result.activeTab, "work", `switching back shows 工单`);
+      assert.equal(hook.result.workTab, "jobs", `switching to 工单 from ${other} starts on 作业`);
+    }
+  } finally {
+    await teardown(hook);
+  }
+});
+
+test("re-activating Work while it is already shown keeps the manual sub-tab", async () => {
+  const hook = await setup({ panelOpen: true });
+  try {
+    hook.result.setWorkTab("projects");
+    await render(hook);
+    hook.result.setActiveTab("work");
+    await render(hook);
+    assert.equal(hook.result.activeTab, "work");
+    assert.equal(hook.result.workTab, "projects", "a click on the already shown 工单 tab resets nothing");
+  } finally {
+    await teardown(hook);
+  }
+});
+
 test("a manual sub-tab switch holds through re-renders while the dock stays open", async () => {
   const hook = await setup({ panelOpen: true });
   try {

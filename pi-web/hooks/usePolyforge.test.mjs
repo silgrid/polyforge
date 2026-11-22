@@ -136,7 +136,7 @@ test("the top-level tabs are memory, messages, work; Messages refresh stays gate
   const body = source.slice(start, end);
   assert.match(body, /if \(tab === "messages"\) void refreshMessages\(\);/, "only the messages tab refreshes the hook's list");
   assert.doesNotMatch(body, /memory/, "activating the Memory tab triggers no hook read");
-  assert.doesNotMatch(body, /work|tasks/, "activating the Work tab triggers no hook read (the Tasks surface reads on its own gestures)");
+  assert.doesNotMatch(body, /refreshCards|refreshStatus|refreshDecisions|refreshWatch|fetch\(/, "activating the Work tab triggers no hook read (the Tasks surface reads on its own gestures; the sub-tab reset is local state)");
 });
 
 test("the dock opens on Work › Jobs and the sub-tab lives in page memory only", () => {
