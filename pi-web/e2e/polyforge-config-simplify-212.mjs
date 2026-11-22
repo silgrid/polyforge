@@ -361,7 +361,7 @@ try {
       // hidden sibling section's (polyforge#85 fix build, verification r1#2).
       for (const pane of ["host", "cell:default"]) {
         await selectPane(dialog, pane);
-        const split = await dialog.locator(".config-split-view").first().boundingBox();
+        const split = await dialog.locator(".config-split-view:visible").first().boundingBox();
         assert.ok(split, `${pane}: the split view the page's footer closes is not on screen (a hidden settings section's split view?)`);
         const footer = await top(dialog.getByRole("button", { name: "Re-detect", exact: true }), `${pane}: footer`);
         assert.ok(footer >= split.y + split.height - 1, `${pane}: the footer renders inside the split view (${footer.toFixed(1)} < ${(split.y + split.height).toFixed(1)})`);
