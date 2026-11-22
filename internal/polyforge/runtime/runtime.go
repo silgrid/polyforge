@@ -474,7 +474,12 @@ func New(cfg Config, hub Aihub, spawner Spawner, toOB *supervise.Queue[protocol.
 // to its step harness's spawner (pi or claude, polyforge#159). It takes
 // the runtime config BY POINTER: the spawners read its fields at spawn
 // time from the shared config, so any field bound after assembly is seen.
+// It applies the Config's documented defaults (fill) first, exactly as
+// runtime.New does for its own copy: a hand-assembled Config with a DataDir
+// and no HarnessRoot otherwise left the step agent dir resolving against the
+// process cwd (polyforge#85 fix build, verification r1#3).
 func DefaultSpawner(cfg *Config) Spawner {
+	cfg.fill()
 	return &harnessSpawner{pi: newPiSpawner(cfg), claude: &claudeSpawner{cfg: cfg}}
 }
 
