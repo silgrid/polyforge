@@ -195,13 +195,13 @@ fall back to a session errand). A ticket a workflow step files
 (`pf step hub file`) gets no automatic analysis. The draft stays unconfirmed until the owner
 runs `pf file analysis confirm <id>`; the owner may instead explicitly waive
 the analysis with one dated line 「免分析」. A queued or blocked execution
-ticket whose analysis predates the current format, was written against a
-stale base, or whose scope changed materially is re-scheduled with
-`pf file analysis redo <id>`: the daemon keeps the old `## 分析` section
-verbatim in `## 历次分析`, schedules the same analysis prompt a create uses,
-and the new draft stays unconfirmed (auto-pull skips it) until
-`pf file analysis confirm`. A claimed, running or terminal ticket, or one
-with a running analysis task, is refused with the reason; the strong
+ticket's analysis in the old format, written against a stale base, or after
+a materially changed scope is re-scheduled with `pf file analysis redo <id>`:
+the daemon keeps the old `## 分析` section verbatim in `## 历次分析`, schedules
+the same analysis prompt a create uses, and the new draft stays unconfirmed
+(auto-pull skips it) until `pf file analysis confirm`. A claimed, running or
+terminal ticket, or one with a local execution job, a running analysis task
+or a pending analysis request, is refused with the reason; the strong
 guarantee is this machine's daemon's. The flow, the 7-item report
 format, the boundary against grilling and the pre-submit confirmation rule
 are defined once in `verbs/submit.md` (the analysis check) — this fragment

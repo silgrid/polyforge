@@ -369,7 +369,16 @@ func PrepareAnalysisRedo(content, requestID, stamp string) (string, error) {
 	out := make([]string, 0, len(lines)+16)
 	out = append(out, lines[:active.start+1]...)
 	out = append(out, marker)
-	body := lines[active.start+1 : active.end]
+	// The active section keeps the old TEXT; an earlier round's marker line
+	// belongs to the archive, never to the new round. (A task-written
+	// unconfirmed draft keeps its draft, its task-id marker goes too.)
+	body := make([]string, 0, active.end-active.start-1)
+	for _, line := range lines[active.start+1 : active.end] {
+		if autoAnalysisMarkerTokenRe.MatchString(strings.TrimSpace(line)) {
+			continue
+		}
+		body = append(body, line)
+	}
 	if len(body) > 0 {
 		out = append(out, "")
 		out = append(out, body...)

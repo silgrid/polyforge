@@ -37,12 +37,14 @@ var cmdFile = &Command{
 		"pf file analysis confirm <id>\n" +
 		"pf file analysis redo <id>\n\n" +
 		"`pf file analysis redo <id>` re-schedules a queued or blocked\n" +
-		"execution ticket's pre-submit analysis under the current prompt. The\n" +
+		"execution ticket's pre-submit analysis for an analysis in the old format,\n" +
+		"written against a stale base, or after a materially changed scope. The\n" +
 		"old analysis (旧分析) is kept verbatim in the ticket's `## 历次分析` section; the\n" +
 		"new draft stays unconfirmed until `pf file analysis confirm <id>`. A\n" +
-		"claimed, running or terminal ticket, or one with a running analysis\n" +
-		"task, is refused. The strong guarantee covers this machine's daemon\n" +
-		"only; another machine relies on the unconfirmed marker.\n\n" +
+		"claimed, running or terminal ticket, or one with a local execution job,\n" +
+		"a running analysis task or a pending analysis request, is refused. The\n" +
+		"strong guarantee covers this machine's daemon only; another machine\n" +
+		"relies on the unconfirmed marker.\n\n" +
 		"Dependencies are `blocks` edges inside one project: the blocked work\n" +
 		"item is not claimed until every blocker is WRAPPED. A blocker must be\n" +
 		"an execution ticket (bundle bound). A failed or canceled blocker keeps\n" +

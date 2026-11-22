@@ -156,8 +156,9 @@ such a ticket with a plain `pf submit` (polyforge#47).
 - **Writing it in**: the auto-scheduled analysis task writes the report
   into the ticket's `## 分析` section itself (`pf task analysis-write`);
   the owner then confirms it with `pf file analysis confirm`
-  (`pf file analysis confirm <id>`). A queued or blocked ticket's stale or
-  old-format analysis is re-scheduled with `pf file analysis redo <id>`; the
+  (`pf file analysis confirm <id>`). A queued or blocked ticket's analysis
+  is re-scheduled with `pf file analysis redo <id>` when it is in the old
+  format, written against a stale base, or after a materially changed scope; the
   old `## 分析` section is archived verbatim in `## 历次分析`, the new task
   runs the same create-time prompt, and its draft stays unconfirmed until the
   owner confirms it. A session errand writes with
