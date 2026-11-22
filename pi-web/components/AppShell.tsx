@@ -3625,6 +3625,16 @@ export function AppShell() {
                     // explorer key; neither handler reads a session (ruling 3=A).
                     onToolEnd={handleToolEnd}
                     onFilesUploaded={handleExplorerRefresh}
+                    // polyforge#231: every pane unlocks and holds the shared
+                    // audio context while its own run is active, but only the
+                    // focused pane plays the completion chime — an unfocused
+                    // pane already rings through this pane's onAgentEnd
+                    // coalescing, so one finished run rings once (ruling 4=A).
+                    soundEnabled={soundEnabled}
+                    onSoundToggle={onSoundToggle}
+                    playDoneSound={focused ? playDoneSound : undefined}
+                    unlockAudio={unlockAudio}
+                    holdAudio={holdAudio}
                     // polyforge#231: every per-session callback below is bound
                     // to THIS pane's sid. Pane focus never updates
                     // selectedSession, so reusing a selectedSession-based
