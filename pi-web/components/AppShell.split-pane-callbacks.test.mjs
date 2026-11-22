@@ -54,6 +54,10 @@ function extractAppShellCallback(name, fileAst = ast) {
   return node.initializer.arguments[0].getText(fileAst);
 }
 
+// Values built inside the extracted vm context have another realm's prototypes,
+// so compare their plain JSON shape, never object identity/prototype.
+const plain = (value) => JSON.parse(JSON.stringify(value));
+
 function runExtracted(callbackText, sandbox) {
   return new Script(ts.transpileModule(`(${callbackText})`, {
     compilerOptions: { target: ts.ScriptTarget.ES2020 },
@@ -109,8 +113,8 @@ test("pane fork, quote and initial prompt bind to the pane session", async () =>
     setFocusedPaneId: (id) => calls.push(["focus", id]),
   });
   paneFork("child", "source");
-  assert.deepEqual(calls, [["fork", "child"], ["focus", "child"]], "the fork must update the selection and then focus the new pane");
-  assert.deepEqual(tabs.map((t) => t.sessionId), ["source", "child"], "the source pane stays and the forked session opens beside it");
+  assert.deepEqual(plain(calls), [["fork", "child"], ["focus", "child"]], "the fork must update the selection and then focus the new pane");
+  assert.deepEqual(plain(tabs.map((t) => t.sessionId)), ["source", "child"], "the source pane stays and the forked session opens beside it");
   assert.equal(tabs[1].projectName, "proj", "the new pane keeps the source project's attribution");
 
   // Classic layout / mobile: no pane is opened, the classic navigation stands.
@@ -127,7 +131,7 @@ test("pane fork, quote and initial prompt bind to the pane session", async () =>
     setFocusedPaneId: () => { throw new Error("classic layout must not focus a pane"); },
   });
   classicFork("child", "source");
-  assert.deepEqual(classicCalls, [["fork", "child"]]);
+  assert.deepEqual(plain(classicCalls), [["fork", "child"]]);
 
   // Behaviour: quote-in-new-chat forks the source pane's session, records the
   // prompt under the NEW session id, then opens it in a pane.
@@ -143,9 +147,9 @@ test("pane fork, quote and initial prompt bind to the pane session", async () =>
     handlePaneSessionForked: (newSessionId, sourceSessionId) => asked.push(["pane-fork", newSessionId, sourceSessionId]),
   });
   await ask("quoted text", "source", "entry-7");
-  assert.deepEqual(asked[0], ["source", { type: "fork_branch", entryId: "entry-7" }], "the fork must run on the pane's own session");
-  assert.deepEqual(pending, [{ sessionId: "forked", text: "quoted text" }], "the pending prompt belongs to the forked session");
-  assert.deepEqual(asked[1], ["pane-fork", "forked", "source"], "the forked session opens in a pane");
+  assert.deepEqual(plain(asked[0]), ["source", { type: "fork_branch", entryId: "entry-7" }], "the fork must run on the pane's own session");
+  assert.deepEqual(plain(pending), [{ sessionId: "forked", text: "quoted text" }], "the pending prompt belongs to the forked session");
+  assert.deepEqual(plain(asked[1]), ["pane-fork", "forked", "source"], "the forked session opens in a pane");
 
   // A failed fork keeps the classic error and opens no pane.
   const failedPending = [];
@@ -157,8 +161,8 @@ test("pane fork, quote and initial prompt bind to the pane session", async () =>
     handlePaneSessionForked: (...args) => failedFork.push(args),
   });
   await assert.rejects(failingAsk("quoted text", "source", "entry-7"), /translated:chat\.quoteForkFailed/);
-  assert.deepEqual(failedPending, [], "a failed fork records no pending prompt");
-  assert.deepEqual(failedFork, [], "a failed fork opens no pane");
+  assert.deepEqual(plain(failedPending), [], "a failed fork records no pending prompt");
+  assert.deepEqual(plain(failedFork), [], "a failed fork opens no pane");
 
   // Consuming a prompt clears only the pane that consumed it.
   const cleared = [];
@@ -166,7 +170,7 @@ test("pane fork, quote and initial prompt bind to the pane session", async () =>
     setPendingQuotePrompt: (updater) => cleared.push(updater({ sessionId: "a", text: "keep" })),
   });
   consume("b");
-  assert.deepEqual(cleared[0], { sessionId: "a", text: "keep" }, "another pane's pending prompt is kept");
+  assert.deepEqual(plain(cleared[0]), { sessionId: "a", text: "keep" }, "another pane's pending prompt is kept");
   const clearedOwn = [];
   const consumeOwn = runExtracted(extractAppShellCallback("handlePaneInitialPromptConsumed"), {
     setPendingQuotePrompt: (updater) => clearedOwn.push(updater({ sessionId: "a", text: "send" })),
