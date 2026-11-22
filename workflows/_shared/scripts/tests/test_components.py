@@ -23,7 +23,7 @@ from typing import Any, Dict, Tuple
 
 from pfstep import components, gateid
 
-from .gitworld import GitCase, Repo, git
+from .gitworld import GitCase, HAVE_GIT, Repo, git
 
 SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENGINE = os.path.join(SCRIPTS, "verify-scope")
@@ -340,6 +340,25 @@ class ComponentsToolTest(GitCase):
         c = self.run_tool()
         self.assertEqual(c.returncode, 2)
         self.assertIn("--repo", c.stderr)
+
+
+class ThisRepositoryTest(unittest.TestCase):
+    """The declaration this repository itself carries (polyforge#223):
+    the owner's size ruling of 2026-11-21 (mem_UFO9CFQuOXDQ) sets
+    epic_files to 20 — above 20 files in this one repository the
+    pre-submit analysis flags high risk — while the other two
+    thresholds keep the ticket's defaults: only this one key is
+    declared here, read from the HEAD commit tree (the same read the
+    tool's --rev HEAD reports)."""
+
+    @unittest.skipUnless(HAVE_GIT, "git not installed")
+    def test_this_repository_declares_epic_files_20(self) -> None:
+        root = os.path.dirname(os.path.dirname(os.path.dirname(SCRIPTS)))
+        t = components.read_conf(git(root, "show", "HEAD:" + CONF)).thresholds
+        self.assertEqual((t.epic_files, t.source["epic_files"]), (20, "declared"))
+        self.assertEqual((t.epic_components, t.epic_units), (3, 8))
+        self.assertEqual((t.source["epic_components"], t.source["epic_units"]),
+                         ("default", "default"))
 
 
 if __name__ == "__main__":
