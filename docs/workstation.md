@@ -356,13 +356,19 @@ acceptance for the placement is the smoke's `podman-verify` pass (see
 
 ## Upgrading
 
-The versions that run are the components volume's, and the image's
-seed is how a new version arrives: point `WORKSTATION_IMAGE` at the
-new image's tag (or rebuild the local one) and re-create the container.
-On the next start the seed transaction upgrades the components volume —
-a newer seed switches `current` (the `previous` link moves to the old
-release), an older seed never downgrades the volume, and the same
-version reinstalls nothing.
+The versions that run are the components volume's, and there are two
+upgrade paths: the image switch upgrades the base (node, python, git,
+podman, `pf supervise`, the bootstrap pf) and brings a new component
+seed; the in-place upgrade below upgrades the versioned components —
+pf (daemon and local AIHub included), the lanes and skills checkout and
+Pi Web — without rebuilding the container.
+
+For the image switch, point `WORKSTATION_IMAGE` at the new image's tag
+(or rebuild the local one) and re-create the container. On the next
+start the seed transaction upgrades the components volume — a newer
+seed switches `current` (the `previous` link moves to the old release),
+an older seed never downgrades the volume, and the same version
+reinstalls nothing.
 
 Before any upgrade, drain: `pf ops drain --upgrade` refuses new work
 (new submits, automatic claims, task spawns) while work already
@@ -375,11 +381,13 @@ the components volume's `current` under a running daemon — is
 relaunched by `pf supervise` at once, no failure backoff, off the new
 `current`.
 
-One consequence of the image mode: the first-boot record and Pi Web's
-status API report `imageManaged` — in that mode Pi Web's own pf
-install and self-update entries are unavailable (an install answers
-409 `image_managed`), so upgrading is the image switch above, never an
-in-container component install.
+Two entries stay closed in the image mode: the first-boot record and
+Pi Web's status API report `imageManaged`, and in that mode Pi Web's
+own pf install and self-update entries are unavailable (an install
+answers 409 `image_managed`). Upgrading the versioned components does
+not go through those entries: it is the in-place upgrade below, or
+`pf components upgrade` from a terminal, never an install from that
+page.
 
 ### In-place upgrade
 
