@@ -1821,6 +1821,7 @@ export function PolyforgePanel({
                   onDismissDecisions={decisionsSurface.onDismiss}
                   renderDetail={renderWorkDetail}
                   onDetailOpenChange={setSubDetailOpen}
+                  onOpenAnchor={messagesSurface.onOpenAnchor}
                 />
               ) : opsStatus ? (
                   <div style={{ flex: "0 1 auto", minHeight: 0, overflowY: "auto", overflowX: "hidden" }}>

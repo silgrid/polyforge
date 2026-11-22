@@ -14,6 +14,11 @@
  */
 
 import type { PolyforgeContextUsage } from "./polyforge-status";
+import {
+  polyforgeContextDetailText,
+  polyforgeContextMeterText,
+  polyforgeContextTokensText,
+} from "./polyforge-cards-pure";
 
 /** One `pf task list` row, exactly the field set the sanitizer forwards.
  *  The route's outer layer attaches the row's Cell (`cell`, polyforge#73) —
@@ -189,14 +194,16 @@ export function formatTaskAge(seconds: number): string {
  *  (`42% / 200k`), else the token count alone (`4.3k`) — the ticket's "补不到
  *  只显示 tokens, 不猜". null without a token count. Pure. */
 export function taskContextText(context: PolyforgeContextUsage | undefined): string | null {
-  return null;
+  return polyforgeContextMeterText(context) ?? polyforgeContextTokensText(context);
 }
 
 /** The detail's context text: the job detail's `tokens / window` when the
  *  window is known, else the grouped token count alone. null without a token
  *  count. Pure. */
 export function taskContextDetailText(context: PolyforgeContextUsage | undefined): string | null {
-  return null;
+  if (!context) return null;
+  if (context.window) return polyforgeContextDetailText(context);
+  return polyforgeContextTokensText(context, "grouped");
 }
 
 /** What the panel knows about an analyzed ticket. */
@@ -209,11 +216,12 @@ export interface PolyforgeAnalysisTicket {
  *  while it was not (or the read failed) — never an empty or guessed slug.
  *  Pure. */
 export function taskAnalysisSlug(analysisOf: string, ticket?: PolyforgeAnalysisTicket | null): string {
-  return "";
+  const slug = ticket?.slug?.trim();
+  return slug ? slug : analysisOf;
 }
 
 /** The analysis row's title line: the ticket's goal, trimmed; "" when the
  *  ticket is not read yet. Pure. */
 export function taskAnalysisTitle(ticket?: PolyforgeAnalysisTicket | null): string {
-  return "";
+  return ticket?.goal?.trim() ?? "";
 }

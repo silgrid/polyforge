@@ -921,6 +921,15 @@ export function polyforgeContextMeterTone(context: PolyforgeContextUsage | undef
   return percent > 90 ? "red" : percent > 70 ? "amber" : null;
 }
 
+/** The tokens alone, for a context whose window is unknown (polyforge#230: a
+ *  running task's window is usually the catalog's, and the rule is never to
+ *  guess one): the card's compact count (`4k`) or the detail's grouped count
+ *  (`4,300`). null without a token count. Pure. */
+export function polyforgeContextTokensText(context: PolyforgeContextUsage | undefined, style: "compact" | "grouped" = "compact"): string | null {
+  if (context?.tokens === undefined) return null;
+  return style === "grouped" ? CONTEXT_COUNT_FORMAT.format(context.tokens) : formatCompactCount(context.tokens);
+}
+
 const CONTEXT_COUNT_FORMAT = new Intl.NumberFormat("en-US");
 
 /** The job detail's context row: `420,000 / 1,000,000`, `?` for an unknown
