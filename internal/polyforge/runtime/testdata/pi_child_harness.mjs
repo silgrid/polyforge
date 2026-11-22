@@ -63,15 +63,32 @@ if (childMode) {
 			hasUI: false,
 			isProjectTrusted: () => true,
 		};
+		const toolCallId = scenario.toolCallId || "call_pi_child_1";
 		const updates = [];
+		const recordLines = [];
 		out.result = await tool.execute(
-			scenario.toolCallId || "call_pi_child_1",
+			toolCallId,
 			scenario.params,
 			controller.signal,
-			(partial) => updates.push(partial),
+			(partial) => {
+				updates.push(partial);
+				if (scenario.producerFile) {
+					// pi serializes each update the moment it is emitted; the
+					// extension hands the SAME live result object every time,
+					// so a snapshot taken later would turn every update into the
+					// final conversation. Serialize here, exactly as pi does.
+					recordLines.push(
+						JSON.stringify({ type: "tool_execution_update", toolCallId, toolName: "subagent", partialResult: partial }),
+					);
+				}
+			},
 			ctx,
 		);
 		out.updates = updates;
+		if (scenario.producerFile) {
+			recordLines.push(JSON.stringify({ type: "tool_execution_end", toolCallId, toolName: "subagent", result: out.result }));
+			fs.writeFileSync(scenario.producerFile, recordLines.join("\n") + "\n");
+		}
 	} catch (err) {
 		out.error = String((err && err.stack) || err);
 	}
