@@ -894,13 +894,18 @@ the Work tab carries no count. The former Jobs and Tasks tabs are Work's
 first two sub-tabs (作业/任务 in zh-CN, 作業/任務 in zh-TW, so the workflow jobs
 and the one-shot tasks read apart from pi's own background-tasks surface),
 followed by the read-only work item list (全部 / 全部 /
-All — 工单列表 / 工單列表 / Work items before polyforge#22, `polyforge.work.itemsTab`), the
-project list (项目 / 專案 / Projects, `polyforge.work.projectsTab`,
+All — 工单列表 / 工單列表 / Work items before polyforge#22, `polyforge.work.itemsTab`).
+The project list (项目 / 專案 / Projects, `polyforge.work.projectsTab`,
 polyforge#30: the mapped projects with their global states — deactivated ones
 hidden by default behind a「显示已停用」toggle, marked, restorable in place
 through the route's one write) and the integration view (
-待集成 / 待整合 / Integration, `polyforge.work.integrateTab`) — order 作业,
-任务, 全部, 项目, 待集成 — in their
+待集成 / 待整合 / Integration, `polyforge.work.integrateTab`) stay supported but are
+**hidden from the rail since polyforge#226**: the rail maps one visible list,
+`VISIBLE_WORK_TABS` in `PolyforgePanel.tsx`, currently
+`["jobs", "tasks", "items"]` — visible order 作业, 任务, 全部. Their labels,
+icons, body branches, components and routes stay; restoring one is one entry
+added to that list. The hidden buttons are not rendered at all (not CSS-hidden),
+and no other entry switches to them. The three visible entries sit in the rail's
 own tablist (`data-pf-tabstrip="work"`) placed after the main area in the
 DOM, beside it on the right (`aria-orientation="vertical"`): on desktop (viewport ≥ 641px,
 `useIsMobile`, whatever the dock width) a ~72px text rail (`flex: 0 0 72px`,
@@ -914,15 +919,17 @@ icon-only buttons — a 16px stroke icon in the panel's 24-viewBox style
 (`WORK_TAB_ICONS`, `aria-hidden`) with the running badge under it, each
 button named by its existing tab copy (`aria-label` and `title` =
 `polyforge.messages.jobsTab` / `polyforge.tasks.tab` /
-`polyforge.work.itemsTab` / `polyforge.work.projectsTab` / `polyforge.work.integrateTab`; 待集成's icon is
-branches merging into one line; 项目's is a folder).
+`polyforge.work.itemsTab`); the hidden entries keep their copy, icon and body
+for the restore (`polyforge.work.projectsTab` / `polyforge.work.integrateTab`;
+待集成's icon is branches merging into one line; 项目's is a folder).
 
 **Two parts stacked (owner 2026-11-09).** At every width
 (the 460px and 340px docks, the ≤640px 40px icon rail, the 375px sheet) Work
 is a column (`data-pf-work-layout`) of two parts. The top part
 (`data-pf-work-top`) is the row: the main area (`data-pf-work-main`) shows the
 selected sub-tab's list — the Jobs queue line and card row, the Tasks list or
-the 全部 (work item) list, each with its own search and filters, or the 待集成 view
+the 全部 (work item) list, each with its own search and filters, or the hidden
+待集成 view when it is restored (polyforge#226)
 — and the rail sits beside it on the right. The lower part (`data-pf-work-detail`, a top border)
 spans the whole panel width and holds the selected item's detail: the job
 detail (its one scroll region) with the input box (`PolyforgeJobComposer`)
@@ -932,7 +939,7 @@ part whenever there is a status snapshot (with nothing selected it holds the
 open — they hand the detail to `renderDetail` (a portal into the part's slot,
 `data-pf-work-detail-slot`) and report `onDetailOpenChange`, and with nothing
 selected the part is hidden and the top part takes the whole height. 待集成
- keeps everything in the main area and shows no lower part.
+ (when restored) keeps everything in the main area and shows no lower part.
 With the
 lower part showing, the top part takes its content height, at most 45% of
 Work (the cap the card stream used to carry), and the list scrolls inside it;
@@ -951,13 +958,15 @@ is unmounted — until the next list answer; it costs no read of its own. A
 count of 0 stays visible in `var(--text-dim)` (a non-zero count is
 `var(--accent)`); with no snapshot (daemon down) the Jobs/Tasks badges do not
 render. The badge's accessible name is `polyforge.work.jobsRunning` /
-`polyforge.work.tasksRunning` / `polyforge.work.itemsRunning`. 待集成
+`polyforge.work.tasksRunning` / `polyforge.work.itemsRunning`. The hidden 待集成
  and the top-level Work tab have no badge.
 
 State: `usePolyforge` holds `activeTab` (`PolyforgeTab = "memory" |
 "messages" | "work"`, default `"work"`), `workTab` (`PolyforgeWorkTab =
 "jobs" | "tasks" | "items" | "projects" | "integrate"`, default `"jobs"`) and `workItemsRunning`
-(`number | null`). Every dock open — and every switch to Work from another
+(`number | null`). The rail maps `VISIBLE_WORK_TABS` (currently jobs, tasks and
+items, polyforge#226); `projects` and `integrate` stay valid `workTab` values
+for the one-list restore, while no rendered entry sets them. Every dock open — and every switch to Work from another
 top-level tab — resets the sub-tab to Jobs; an explicit target (the walk,
 an anchor, an analysis card's task link) writes after that reset, so a walk
 to a task still lands on 任务; a manual sub-tab switch holds while the dock
@@ -2075,7 +2084,8 @@ that carries `file show`), checked through the one presence-cached
 
 ## Integration sub-tab
 
-Work › 待集成 shows, per `[workspace]`-mapped project of the default Cell,
+Work › 待集成 (hidden from the rail since polyforge#226; its component, read
+and route stay) shows, per `[workspace]`-mapped project of the default Cell,
 the contract-1 integration state: the work items develop landed and no
 green integrate batch has closed yet, and the integrate batches (each batch
 is itself an `integrate` work item). It reads no daemon status face — no

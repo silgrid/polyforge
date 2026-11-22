@@ -124,7 +124,6 @@ const fixture = (patch = {}) => ({
   landed: { alpha: landedRows() }, batches: { alpha: batchRows() }, failProject: "beta", ...patch,
 });
 const seed = (patch = {}) => { writeFileAtomic(stateFile, JSON.stringify(fixture(patch))); writeFileSync(argvLog, ""); };
-const patchState = (patch) => writeFileAtomic(stateFile, JSON.stringify({ ...JSON.parse(readFileSync(stateFile, "utf8")), ...patch }));
 writeFileSync(join(stubDir, "pf"), `#!${process.execPath}
 const fs = require("fs"); const path = require("path");
 const dir = ${JSON.stringify(stubDir)}; const args = process.argv.slice(2);
@@ -222,57 +221,21 @@ try {
   // Warm-up at the cold ceiling: the status probe's route compiles on first use.
   await withPage({ gotoTimeout: COLD_MS, readyTimeout: COLD_MS }, (page) => waitForPolyforgeToggle(page, COLD_MS));
 
-  await check("S454-1", async () => {
+  await check("S454-hidden", async () => {
     seed();
     await withPage({}, async (page) => {
-      const region = await openIntegrate(page);
-      const alpha = region.locator('[data-pf-integrate-project="alpha"]');
-      // The integration route answers its first read cold in this page.
-      await waitFor(async () => (await landed(alpha, BLAMED).count()) > 0, "alpha's landed items render", COLD_MS);
-      assert.equal(await alpha.locator("[data-pf-integrate-landed]").count(), 3, "alpha lists its three landed items");
-      const blamed = await textOf(landed(alpha, BLAMED));
-      for (const want of ["alpha#21", SHA_A.slice(0, 7), FIX, "红轮次 1"]) assert.ok(blamed.includes(want), `the blamed item shows ${want} (got ${JSON.stringify(blamed)})`);
-      assert.ok(!blamed.includes(SHA_A), "the merge commit is shown short");
-      assert.equal(await landed(alpha, BLAMED).locator("[data-pf-integrate-waived]").count(), 0, "the blamed item is not waived");
-      assert.deepEqual(await hrefs(landed(alpha, BLAMED)), [[PR(21), "_blank"]], "the blamed item links its PR in a new tab");
-      const waived = await textOf(landed(alpha, WAIVED));
-      for (const want of ["alpha#16", SHA_B.slice(0, 7)]) assert.ok(waived.includes(want), `the waived item shows ${want} (got ${JSON.stringify(waived)})`);
-      assert.equal(await landed(alpha, WAIVED).locator("[data-pf-integrate-waived]").count(), 1, "the waived item carries the waived mark");
-      assert.deepEqual(await hrefs(landed(alpha, WAIVED)), [[PR(16), "_blank"]], "the waived item links its PR");
-      const plain = await textOf(landed(alpha, PLAIN));
-      for (const want of ["alpha#22", SHA_C.slice(0, 7)]) assert.ok(plain.includes(want), `the plain item shows ${want} (got ${JSON.stringify(plain)})`);
-      assert.equal(await landed(alpha, PLAIN).locator("[data-pf-integrate-waived]").count(), 0, "the plain item is not waived");
-      assert.ok(!plain.includes("红轮次") && !plain.includes(FIX), `the plain item names no fix ticket or red rounds (got ${JSON.stringify(plain)})`);
-      const beta = region.locator('[data-pf-integrate-project="beta"]');
-      const betaError = await textOf(beta.locator("[data-pf-integrate-project-error]"));
-      assert.ok(betaError && betaError.includes(BETA_ERROR), `beta shows pf's error (got ${JSON.stringify(betaError)})`);
-      assert.equal(await beta.locator("[data-pf-integrate-landed]").count(), 0, "beta lists nothing");
-    });
-  });
-
-  await check("S454-2", async () => {
-    seed();
-    await withPage({}, async (page) => {
-      const region = await openIntegrate(page);
-      const batch = region.locator(`[data-pf-integrate-batch="${BATCH}"]`);
-      await waitFor(async () => (await batch.count()) > 0, "the running batch renders", NAV_MS);
-      const steps = await batch.locator("[data-pf-integrate-step]").evaluateAll((nodes) => nodes.map((n) => [n.getAttribute("data-pf-integrate-step"), n.getAttribute("data-status")]));
-      assert.deepEqual(steps, [["collect", "done"], ["revert", "done"], ["full-gate", "running"], ["close", "pending"]], "the four integrate steps in declared order with their status");
-      assert.equal(await textOf(batch.locator("[data-pf-integrate-current]")), "full-gate", "the current step");
-      assert.equal(await textOf(batch.locator("[data-pf-integrate-progress]")), "2/4", "done / declared steps");
-      assert.ok((await textOf(batch)).includes("alpha#30"), "the batch shows its slug");
-      const ended = region.locator(`[data-pf-integrate-batch="${RED_BATCH}"]`);
-      assert.equal(await ended.count(), 1, "the ended batch is listed");
-      assert.equal(await ended.locator("[data-pf-integrate-step]").count(), 0, "the ended batch has no live steps");
-      const question = batch.locator("[data-pf-chat-question-text]");
-      await waitFor(async () => ((await textOf(question)) ?? "").includes(QUESTION), "the batch's question shows", NAV_MS);
-      const reads = batchReads();
-      await batch.locator("[data-pf-chat-input]").fill(ANSWER);
-      await batch.locator("[data-pf-chat-send]").click();
-      await waitFor(() => answers().length === 1, "pf answer ran once");
-      assert.deepEqual(answers()[0], ["--json", "answer", BATCH, `--text=${ANSWER}`], "the answer goes through the existing channel, no question id");
-      await waitFor(() => batchReads() > reads, "the view reads again after the answer");
-      await waitFor(async () => (await question.count()) === 0, "the answered question leaves the view");
+      const integrationRequests = [];
+      page.on("request", (request) => { if (new URL(request.url()).pathname === "/api/polyforge/integration") integrationRequests.push(request.url()); });
+      await openWork(page);
+      const names = await workTabs(page).evaluateAll((nodes) => nodes.map((node) => (node.innerText || "").trim().split(/\s/)[0]));
+      assert.deepEqual(names, ["作业", "任务", "全部"], "the Work strip lists only 作业, 任务, 全部");
+      assert.equal(await workTab(page, /待集成|待整合|integrate/i).count(), 0, "the Work rail still renders a 待集成 button");
+      assert.equal(await workTab(page, /项目|專案|projects/i).count(), 0, "the Work rail still renders a 项目 button");
+      assert.equal(await view(page).count(), 0, "the hidden 待集成 view renders without its entry");
+      const seen = statusReads();
+      await waitFor(() => statusReads() >= seen + 2, "two status polls ran", 60_000);
+      assert.deepEqual(integrationRequests, [], "the hidden 待集成 surface never reaches the integration route");
+      assert.equal(await dock(page).getByText("Polyforge 不可用").count(), 0, "the panel itself stays available");
     });
   });
 
@@ -291,18 +254,11 @@ try {
       await waitFor(() => statusReads() >= seen + 2, "two more status polls ran", 60_000);
       assert.equal(landedReads() + batchReads(), queued, "parked on Jobs, no landed or batch queue read runs");
       assert.deepEqual(integrationRequests, [], "parked on Jobs, the page never asks the integration route");
-      patchState({ hubDown: true });
-      await waitFor(async () => (await workTab(page, /待集成/).count()) > 0, "a 待集成 Work sub-tab exists", 20_000);
-      await workTab(page, /待集成/).click();
-      const projectError = (name) => textOf(view(page).locator(`[data-pf-integrate-project="${name}"] [data-pf-integrate-project-error]`));
-      await waitFor(async () => ((await projectError("alpha")) ?? "").includes(HUB_DOWN) && ((await projectError("beta")) ?? "").includes(HUB_DOWN),
-        "every project shows pf's hub error", NAV_MS);
-      // The mapping read fails too: the ↻ read's own error replaces the projects.
-      patchState({ configDown: true });
-      await view(page).locator("[data-pf-integrate-refresh]").click();
-      const error = view(page).locator("[data-pf-integrate-error]");
-      await waitFor(async () => ((await textOf(error)) ?? "").startsWith("待集成读取失败") && (await view(page).locator("[data-pf-integrate-project]").count()) === 0,
-        "the view shows its read error", NAV_MS);
+      // The hidden entries stay absent while Jobs is live; the three remaining
+      // entries and the Jobs surface are untouched (polyforge#226).
+      assert.equal(await workTabs(page).count(), 3, "the Work rail carries only 作业, 任务, 全部");
+      assert.equal(await workTab(page, /待集成|待整合|integrate/i).count(), 0, "the hidden 待集成 entry is not rendered");
+      assert.equal(await workTab(page, /项目|專案|projects/i).count(), 0, "the hidden 项目 entry is not rendered");
       await workTab(page, /作业/).click();
       await waitFor(async () => (await textOf(dock(page).locator("[data-pf-queue-count]"))) === "1 / 4", "Jobs still renders its queue line", NAV_MS);
       await waitFor(async () => (await dock(page).getByText("alpha#30").count()) > 0, "Jobs still renders the job", NAV_MS);
@@ -311,6 +267,66 @@ try {
     const banned = ledger(allLog).map(joined).filter((line) => /ops integrate|integration=1/.test(line));
     assert.deepEqual(banned, [], "no pf call names a removed integration face");
   });
+
+  // polyforge#226 hides 待集成 from the Work rail, so the scenarios that click
+  // its entry cannot run. They stay here as the restore-time record; each
+  // prints SKIP with the reason and is never reported PASS.
+  const HIDDEN_REASON = "隐藏期间：工单不再提供待集成入口（polyforge#226；恢复时把 integrate 加回 VISIBLE_WORK_TABS 并恢复这些场景）";
+  const restoreTimeScenarios = {
+    "S454-1": async () => {
+      seed();
+      await withPage({}, async (page) => {
+        const region = await openIntegrate(page);
+        const alpha = region.locator('[data-pf-integrate-project="alpha"]');
+        // The integration route answers its first read cold in this page.
+        await waitFor(async () => (await landed(alpha, BLAMED).count()) > 0, "alpha's landed items render", COLD_MS);
+        assert.equal(await alpha.locator("[data-pf-integrate-landed]").count(), 3, "alpha lists its three landed items");
+        const blamed = await textOf(landed(alpha, BLAMED));
+        for (const want of ["alpha#21", SHA_A.slice(0, 7), FIX, "红轮次 1"]) assert.ok(blamed.includes(want), `the blamed item shows ${want} (got ${JSON.stringify(blamed)})`);
+        assert.ok(!blamed.includes(SHA_A), "the merge commit is shown short");
+        assert.equal(await landed(alpha, BLAMED).locator("[data-pf-integrate-waived]").count(), 0, "the blamed item is not waived");
+        assert.deepEqual(await hrefs(landed(alpha, BLAMED)), [[PR(21), "_blank"]], "the blamed item links its PR in a new tab");
+        const waived = await textOf(landed(alpha, WAIVED));
+        for (const want of ["alpha#16", SHA_B.slice(0, 7)]) assert.ok(waived.includes(want), `the waived item shows ${want} (got ${JSON.stringify(waived)})`);
+        assert.equal(await landed(alpha, WAIVED).locator("[data-pf-integrate-waived]").count(), 1, "the waived item carries the waived mark");
+        assert.deepEqual(await hrefs(landed(alpha, WAIVED)), [[PR(16), "_blank"]], "the waived item links its PR");
+        const plain = await textOf(landed(alpha, PLAIN));
+        for (const want of ["alpha#22", SHA_C.slice(0, 7)]) assert.ok(plain.includes(want), `the plain item shows ${want} (got ${JSON.stringify(plain)})`);
+        assert.equal(await landed(alpha, PLAIN).locator("[data-pf-integrate-waived]").count(), 0, "the plain item is not waived");
+        assert.ok(!plain.includes("红轮次") && !plain.includes(FIX), `the plain item names no fix ticket or red rounds (got ${JSON.stringify(plain)})`);
+        const beta = region.locator('[data-pf-integrate-project="beta"]');
+        const betaError = await textOf(beta.locator("[data-pf-integrate-project-error]"));
+        assert.ok(betaError && betaError.includes(BETA_ERROR), `beta shows pf's error (got ${JSON.stringify(betaError)})`);
+        assert.equal(await beta.locator("[data-pf-integrate-landed]").count(), 0, "beta lists nothing");
+      });
+    },
+    "S454-2": async () => {
+      seed();
+      await withPage({}, async (page) => {
+        const region = await openIntegrate(page);
+        const batch = region.locator(`[data-pf-integrate-batch="${BATCH}"]`);
+        await waitFor(async () => (await batch.count()) > 0, "the running batch renders", NAV_MS);
+        const steps = await batch.locator("[data-pf-integrate-step]").evaluateAll((nodes) => nodes.map((n) => [n.getAttribute("data-pf-integrate-step"), n.getAttribute("data-status")]));
+        assert.deepEqual(steps, [["collect", "done"], ["revert", "done"], ["full-gate", "running"], ["close", "pending"]], "the four integrate steps in declared order with their status");
+        assert.equal(await textOf(batch.locator("[data-pf-integrate-current]")), "full-gate", "the current step");
+        assert.equal(await textOf(batch.locator("[data-pf-integrate-progress]")), "2/4", "done / declared steps");
+        assert.ok((await textOf(batch)).includes("alpha#30"), "the batch shows its slug");
+        const ended = region.locator(`[data-pf-integrate-batch="${RED_BATCH}"]`);
+        assert.equal(await ended.count(), 1, "the ended batch is listed");
+        assert.equal(await ended.locator("[data-pf-integrate-step]").count(), 0, "the ended batch has no live steps");
+        const question = batch.locator("[data-pf-chat-question-text]");
+        await waitFor(async () => ((await textOf(question)) ?? "").includes(QUESTION), "the batch's question shows", NAV_MS);
+        const reads = batchReads();
+        await batch.locator("[data-pf-chat-input]").fill(ANSWER);
+        await batch.locator("[data-pf-chat-send]").click();
+        await waitFor(() => answers().length === 1, "pf answer ran once");
+        assert.deepEqual(answers()[0], ["--json", "answer", BATCH, `--text=${ANSWER}`], "the answer goes through the existing channel, no question id");
+        await waitFor(() => batchReads() > reads, "the view reads again after the answer");
+        await waitFor(async () => (await question.count()) === 0, "the answered question leaves the view");
+      });
+    },
+  };
+  for (const id of Object.keys(restoreTimeScenarios)) console.log(`SKIP ${id} — ${HIDDEN_REASON}`);
 
   if (errors.length) console.log(`\nBROWSER ERRORS: ${errors.join(" | ")}`);
 } catch (error) {
