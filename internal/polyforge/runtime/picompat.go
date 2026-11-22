@@ -9,9 +9,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os/exec"
 	"strings"
+
+	"github.com/silgrid/polyforge/internal/polyforge/runtime/stepagentassets"
 )
+
+// piCompatResourceFS is the authority for the built-in resources the
+// compatibility probe loads and the resource digest covers: production is
+// the compiled-in embed; a test substitutes an in-memory twin to inject a
+// loading defect without touching a production extension.
+var piCompatResourceFS fs.FS = stepagentassets.FS
 
 // PiDispatchReason is the stable class of one refused pi dispatch.
 type PiDispatchReason string
