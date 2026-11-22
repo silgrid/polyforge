@@ -196,7 +196,15 @@ commit whose release-tag..green diff touches a path of
 `internal/common/api/**` and `internal/common/protocol/**` — a
 conservative path rule, not a compatibility proof) is REFUSED in
 prepare: a changed interface needs the two AIHubs deployed, which only
-a formal release does. A diff touching only the other paths of
+a formal release does. The one exception (polyforge#219): a modified
+`.go` file on an interface path whose two versions differ only in Go
+comments passes as comment-only — the installer builds the green
+tree's own `tools/gocommentonly` judge with the machine's `go` and
+prints one info line naming every such file; anything else (code of
+any size, a new, deleted or renamed file, a mode change, a
+non-`.go` path, a version that will not parse, a green tree without a
+working judge) refuses as before — fail closed. A diff touching only
+the other paths of
 `tools/aihub-paths.conf` (the server's insides, its SQL migrations, the
 deploy tree, the deploy entry point) passes with one WARN naming the
 formal tag, the green tag and every hit path: the two AIHubs stay on

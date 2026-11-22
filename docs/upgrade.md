@@ -1153,3 +1153,29 @@ retries the step), an open ask keeps standing (the resume re-enters it);
 labels it, and `pf answer` names the continuation. The `pi_subagents`
 switch stays default-off; a work item in flight keeps its claim-time lane
 snapshot, so nothing is gated retroactively.
+
+## v0.2.4, the dev channel's comment-only exception on the interface paths (polyforge#219)
+
+The development channel's client-server interface preflight (the graded
+AIHub-side check of polyforge#188) gains exactly one pass: a modified
+`.go` file on a `tools/aihub-interface-paths.conf` path whose two
+versions differ only in Go comments — added, changed or deleted
+comments, and the whitespace they cause — no longer counts as an
+interface change, and a passing run prints one info line naming every
+such path (the fixed fragment `comment-only`); the file never reaches
+the total list's `tools/aihub-paths.conf` WARN. The judgment stays
+fail closed on every other shape: any code change however small (an
+identifier, a type, a field, a string literal, a struct tag, an
+import), a new, deleted or renamed file, a mode or type change, a
+non-`.go` path, a version that will not parse, and a green tree that
+does not carry a working judge — each refuses exactly as before,
+waiting for a formal release. The judge is `tools/gocommentonly`, part
+of the repository and built by `tools/install.sh --dev` from the green
+commit's own tree with the machine's `go` (directive comments and cgo
+preludes are code: a changed `//go:build`, `//go:generate` or `import
+"C"` preamble refuses); a green tag too old to carry the judge judges
+nothing, so the exception takes effect with the next green tag after
+this change — this is what unblocked the fifteenth batch:
+`green/20261121-1` over `v0.2.3` touches exactly one interface file,
+`internal/common/protocol/watch.go`, whose change is four comment
+lines.
