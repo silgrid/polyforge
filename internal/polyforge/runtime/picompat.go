@@ -85,11 +85,19 @@ func piTargetIdentity(bin string) (target, fingerprint string, err error) {
 	return abs, hex.EncodeToString(sum[:]), nil
 }
 
+// flightResult carries one flight's answer so a nil error is still a written
+// value under the cache mutex.
+type flightResult struct{ err error }
+
 // piCompatFlight is one in-flight (then finished) capability call shared by
-// every concurrent same-key caller.
+// every concurrent same-key caller. `waiters` and `finished` are guarded by
+// the cache mutex; `err` is written under it and published by closing done.
 type piCompatFlight struct {
-	done chan struct{}
-	err  error
+	done     chan struct{}
+	err      *flightResult
+	waiters  int
+	finished bool
+	cancel   context.CancelFunc
 }
 
 // piCompatVerdicts is the process-level SUCCESS cache: a failed flight is
@@ -109,20 +117,18 @@ func (c *piCompatVerdictsCache) reset() {
 }
 
 // verdict runs the capability call once per key. A same-key caller joins the
-// flight and waits for its answer; its own context cancellation only ends
-// its wait (the shared flight stays bounded by the check's own 9s deadline,
-// so a departed waiter leaves no unbounded work behind).
-func (c *piCompatVerdictsCache) verdict(ctx context.Context, key string, probe func(context.Context) error) error {
-	deadline, hasDeadline := ctx.Deadline()
+// flight and waits for its answer; every caller — the initiator included —
+// waits on its OWN context, so a cancellation ends that caller's wait at
+// once. When the last waiter leaves, the abandoned flight is canceled (its
+// probe is bounded anyway, but Q4 asks for the recovery), removed, and the
+// next same-key caller starts a fresh one; a flight that finished with an
+// error is never cached.
+func (c *piCompatVerdictsCache) verdict(ctx context.Context, deadline time.Time, hasDeadline bool, key string, probe func(context.Context) error) error {
 	c.mu.Lock()
 	if flight, ok := c.flights[key]; ok {
+		flight.waiters++
 		c.mu.Unlock()
-		select {
-		case <-flight.done:
-			return flight.err
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+		return c.await(ctx, key, flight)
 	}
 	var probeCtx context.Context
 	var cancel context.CancelFunc
@@ -131,20 +137,45 @@ func (c *piCompatVerdictsCache) verdict(ctx context.Context, key string, probe f
 	} else {
 		probeCtx, cancel = context.WithCancel(context.Background())
 	}
-	flight := &piCompatFlight{done: make(chan struct{})}
+	flight := &piCompatFlight{done: make(chan struct{}), waiters: 1, cancel: cancel}
 	c.flights[key] = flight
 	c.mu.Unlock()
 
-	err := probe(probeCtx)
-	cancel()
-	c.mu.Lock()
-	flight.err = err
-	if err != nil {
-		delete(c.flights, key)
+	go func() {
+		err := probe(probeCtx)
+		cancel()
+		c.mu.Lock()
+		flight.err = &flightResult{err: err}
+		flight.finished = true
+		if err != nil && c.flights[key] == flight {
+			delete(c.flights, key)
+		}
+		c.mu.Unlock()
+		close(flight.done)
+	}()
+	return c.await(ctx, key, flight)
+}
+
+// await waits for one flight's answer or for this caller's own cancel. A
+// waiter that leaves before the flight finished releases it; the flight
+// itself is never cached as a success unless its probe returned nil before
+// the check's deadline (judged inside the probe closure).
+func (c *piCompatVerdictsCache) await(ctx context.Context, key string, flight *piCompatFlight) error {
+	select {
+	case <-flight.done:
+		return flight.err.err
+	case <-ctx.Done():
+		c.mu.Lock()
+		flight.waiters--
+		if flight.waiters <= 0 && !flight.finished {
+			flight.cancel()
+			if c.flights[key] == flight {
+				delete(c.flights, key)
+			}
+		}
+		c.mu.Unlock()
+		return ctx.Err()
 	}
-	c.mu.Unlock()
-	close(flight.done)
-	return err
 }
 
 // piCompatResourceFS is the authority for the built-in resources the
@@ -296,38 +327,55 @@ func validatePiCompatibility(ctx context.Context, bin string) error {
 	defer cancel()
 	target, fingerprint, err := piTargetIdentity(bin)
 	if err != nil {
-		if errors.Is(workCtx.Err(), context.DeadlineExceeded) {
-			return piTimeoutRefusal(bin, "", "target")
-		}
-		return piVersionRefusal(bin, err)
+		return piGateFailure(ctx, workCtx, piVersionRefusal(bin, err), bin, "", "target")
 	}
 	version, err := piVersion(workCtx, bin)
 	if err != nil {
-		if errors.Is(workCtx.Err(), context.DeadlineExceeded) {
-			return piTimeoutRefusal(target, "", "version")
-		}
-		return piVersionRefusal(target, err)
+		return piGateFailure(ctx, workCtx, piVersionRefusal(target, err), target, "", "version")
 	}
 	digest, err := piEmbeddedResourceDigest()
 	if err != nil {
 		return &PiDispatchError{Kind: PiReasonResources, Detail: "embedded resource validation failed: the built-in resource tree is unreadable", Target: target, Version: version, Stage: "resources", Err: err}
 	}
 	key := strings.Join([]string{target, fingerprint, version, digest}, "|")
-	err = piCompatVerdicts.verdict(workCtx, key, func(probeCtx context.Context) error {
+	workDeadline, hasWorkDeadline := workCtx.Deadline()
+	// the WAIT uses the caller's context (a cancellation or the caller's own
+	// deadline ends it with its own reason); the flight's work deadline is
+	// judged inside the probe closure, so an internal timeout is the
+	// flight's classified pi_timeout, never cached (review r1#1/#2).
+	err = piCompatVerdicts.verdict(ctx, workDeadline, hasWorkDeadline, key, func(probeCtx context.Context) error {
 		if err := piFlagsCheck(probeCtx, target, version); err != nil {
 			if errors.Is(probeCtx.Err(), context.DeadlineExceeded) {
 				return piTimeoutRefusal(target, version, "flag")
 			}
 			return err
 		}
-		return piCapabilityProbeFn(probeCtx, target, version)
+		// the deadline judgment belongs to the FLIGHT: a success observed
+		// past it is the flight's timeout (so it is a failure, never cached,
+		// and never handed to a joiner as a pass — review r1#2).
+		err := piCapabilityProbeFn(probeCtx, target, version)
+		if err == nil && (probeCtx.Err() != nil || time.Since(start) > piCompatTotalBudget) {
+			return piTimeoutRefusal(target, version, "capability")
+		}
+		return err
 	})
-	// a success observed past the deadline is not a pass: the process
-	// group's recovery still has to fit the one budget.
-	if err == nil && (workCtx.Err() != nil || time.Since(start) > piCompatTotalBudget) {
-		return piTimeoutRefusal(target, version, "capability")
+	if ctx.Err() != nil {
+		return fmt.Errorf("pi compatibility check: %w", ctx.Err())
 	}
 	return err
+}
+
+// piGateFailure applies the cancellation rule (Q2): the caller's own cancel
+// or deadline outranks every pi classification and is returned as itself;
+// the work deadline becomes the gate's timeout class.
+func piGateFailure(ctx, workCtx context.Context, classified error, target, version, stage string) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return fmt.Errorf("pi compatibility check: %w", ctxErr)
+	}
+	if errors.Is(workCtx.Err(), context.DeadlineExceeded) {
+		return piTimeoutRefusal(target, version, stage)
+	}
+	return classified
 }
 
 func firstNonEmptyLine(s string) string {
