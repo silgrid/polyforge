@@ -105,6 +105,9 @@ func TestPiCompatReasons(t *testing.T) {
 		if err == nil {
 			t.Fatal("a snapshot missing the guard extension must be refused")
 		}
+		if got := compatReason(err); got != "pi_resources" {
+			t.Fatalf("reason = %q, want pi_resources (%v)", got, err)
+		}
 		for _, want := range []string{"embedded resource validation failed", "extensions/guard/index.ts"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("error %q lacks %q", err, want)

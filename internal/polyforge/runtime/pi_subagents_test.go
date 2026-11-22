@@ -70,6 +70,24 @@ func compatGateCounts(t *testing.T, path string) (discovery, steps int) {
 	return discovery, steps
 }
 
+// compatGateWaitFor polls (bounded) for the asynchronous state the fake pi
+// writes after Spawn returned — the step's prompt line — then answers the
+// final counts. A fixed delay before one read would race the write (review
+// r1#3, the settle duty).
+func compatGateWaitFor(t *testing.T, logPath string, cond func(discovery, steps int, log string) bool) (discovery, steps int, log string) {
+	t.Helper()
+	until := time.Now().Add(5 * time.Second)
+	for time.Now().Before(until) {
+		discovery, steps = compatGateCounts(t, logPath)
+		log = strings.Join(compatGateLog(t, logPath), "\n")
+		if cond(discovery, steps, log) {
+			return discovery, steps, log
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return discovery, steps, log
+}
+
 func TestPiSubagentsDispatchGate(t *testing.T) {
 	spawnGate := func(t *testing.T, cfg *Config, params map[string]string, callback func(spawn.Capability) (string, error)) (AgentHandle, error) {
 		t.Helper()
@@ -97,9 +115,9 @@ func TestPiSubagentsDispatchGate(t *testing.T) {
 			if err != nil {
 				t.Fatalf("params %v: off must dispatch: %v", params, err)
 			}
-			_ = h
-			time.Sleep(50 * time.Millisecond)
-			discovery, steps := compatGateCounts(t, logPath)
+			discovery, steps, _ := compatGateWaitFor(t, logPath, func(_, steps int, log string) bool {
+				return steps == 1 && strings.Contains(log, "PROMPT-OFF")
+			})
 			if discovery != 0 {
 				t.Errorf("params %v: a disabled switch ran %d discovery command(s)", params, discovery)
 			}
@@ -175,22 +193,48 @@ func TestPiSubagentsDispatchGate(t *testing.T) {
 		if err != nil {
 			t.Fatalf("on with both checks passing must dispatch: %v", err)
 		}
-		time.Sleep(100 * time.Millisecond)
+		// a synchronous fact: Spawn returned only after the probe finished.
 		if probes.Load() != 1 {
 			t.Errorf("the capability probe ran %d time(s), want 1", probes.Load())
 		}
 		if calls.Load() != 1 || !verified.Load() {
 			t.Errorf("callback calls=%d verified=%v, want 1/true", calls.Load(), verified.Load())
 		}
-		_, steps := compatGateCounts(t, logPath)
+		_, steps, log := compatGateWaitFor(t, logPath, func(_, steps int, log string) bool {
+			return steps == 1 && strings.Contains(log, "PROMPT-VERIFIED")
+		})
 		if steps != 1 {
 			t.Errorf("step processes = %d, want exactly 1", steps)
 		}
-		lines := compatGateLog(t, logPath)
-		if !strings.Contains(strings.Join(lines, "\n"), "PROMPT-VERIFIED") {
-			t.Errorf("the verified prompt was never delivered to the step process: %v", lines)
+		if !strings.Contains(log, "PROMPT-VERIFIED") {
+			t.Errorf("the verified prompt was never delivered to the step process: %v", log)
 		}
 		_ = h.Terminate(2 * time.Second)
+	})
+
+	t.Run("on-resource-failure-refuses", func(t *testing.T) {
+		// owner ruling Q6: on without a daemon-owned step agent directory is
+		// the resource class, refused before any probe or process.
+		cfg, logPath := compatGateCfg(t, compatGateAllFlags)
+		cfg.DataDir = ""
+		h, err := spawnGate(t, cfg, map[string]string{"pi_subagents": "on"}, func(spawn.Capability) (string, error) {
+			t.Error("a resource-refused dispatch must not build a prompt")
+			return "x", nil
+		})
+		if err == nil {
+			_ = h.Terminate(2 * time.Second)
+			t.Fatal("on without a step agent directory must be refused as a resource failure")
+		}
+		if got := compatReason(err); got != "pi_resources" {
+			t.Fatalf("reason = %q, want pi_resources (%v)", got, err)
+		}
+		if !strings.Contains(err.Error(), "embedded resource validation failed") {
+			t.Errorf("error %q lacks the resource-validation text", err)
+		}
+		discovery, steps := compatGateCounts(t, logPath)
+		if discovery != 0 || steps != 0 {
+			t.Errorf("a resource-refused dispatch ran %d discovery command(s) and %d step process(es), want none", discovery, steps)
+		}
 	})
 
 	t.Run("callback-failure-refuses", func(t *testing.T) {
