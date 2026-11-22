@@ -1604,13 +1604,17 @@ export function AppShell() {
     };
   }, []);
 
-  const handleAttentionNeeded = useCallback((request: BlockingExtensionUiRequest) => {
-    if (isHiddenRelation(selectedSession?.relation)) return;
+  // polyforge#231: a split pane's waiting input belongs to the pane's own
+  // session. Classic passes no target and keeps the selected session; a pane
+  // passes its session, whose hidden relation gates the notification too.
+  const handleAttentionNeeded = useCallback((request: BlockingExtensionUiRequest, targetSession: SessionInfo | null = null) => {
+    const target = targetSession ?? selectedSession;
+    if (isHiddenRelation(target?.relation)) return;
     if (!shouldShowBrowserNotification()) return;
     if (!claimExtensionAttentionNotification(request, notifiedAttentionRequestIdsRef.current)) return;
 
     deliverSessionNotification({
-      targetSession: selectedSession,
+      targetSession: target,
       title: translate("i18n.attentionNeeded"),
       body: request.method === "custom"
         ? translate("i18n.extensionInputNeeded")
@@ -3611,6 +3615,9 @@ export function AppShell() {
                     // selectedSession (pane focus never updates it), so every
                     // pane shares the classic layout's handler.
                     onOpenSubagent={handleOpenSubagentTab}
+                    // polyforge#231: the notification opens THIS pane's session;
+                    // the global request-id dedupe stays shared.
+                    onAttentionNeeded={(request) => handleAttentionNeeded(request, paneSession)}
                     // polyforge#231: every per-session callback below is bound
                     // to THIS pane's sid. Pane focus never updates
                     // selectedSession, so reusing a selectedSession-based
