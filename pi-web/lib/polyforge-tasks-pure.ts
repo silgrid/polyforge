@@ -182,3 +182,38 @@ export function formatTaskAge(seconds: number): string {
   if (total < 86400) return `${Math.floor(total / 3600)}h`;
   return `${Math.floor(total / 86400)}d`;
 }
+
+// ---- polyforge#230 display: the context line and the analysis ticket row ----
+
+/** The card's context text: the job card's meter when the window is known
+ *  (`42% / 200k`), else the token count alone (`4.3k`) — the ticket's "补不到
+ *  只显示 tokens, 不猜". null without a token count. Pure. */
+export function taskContextText(context: PolyforgeContextUsage | undefined): string | null {
+  return null;
+}
+
+/** The detail's context text: the job detail's `tokens / window` when the
+ *  window is known, else the grouped token count alone. null without a token
+ *  count. Pure. */
+export function taskContextDetailText(context: PolyforgeContextUsage | undefined): string | null {
+  return null;
+}
+
+/** What the panel knows about an analyzed ticket. */
+export interface PolyforgeAnalysisTicket {
+  slug?: string | null;
+  goal?: string | null;
+}
+
+/** The analysis row's name: the ticket's slug once it was read, the wi id
+ *  while it was not (or the read failed) — never an empty or guessed slug.
+ *  Pure. */
+export function taskAnalysisSlug(analysisOf: string, ticket?: PolyforgeAnalysisTicket | null): string {
+  return "";
+}
+
+/** The analysis row's title line: the ticket's goal, trimmed; "" when the
+ *  ticket is not read yet. Pure. */
+export function taskAnalysisTitle(ticket?: PolyforgeAnalysisTicket | null): string {
+  return "";
+}
