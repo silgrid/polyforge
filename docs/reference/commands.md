@@ -1352,16 +1352,31 @@ full reference.
   the build close's own mode: it plans the same light-tier selection verification's light tier
   plans (one shared implementation — the same engine
   `--json --light --base <merge-base>` request, the same choice, the same
-  nested roots) over the repo's final tree and executes it on the host,
+  nested roots) over the repo's final tree and executes it in the
+  repository's declared verification image when its HEAD carries
+  `.polyforge/Dockerfile.verify` — the same isolation and image/tool-cache
+  machinery verification's boxes use (the image built from the committed
+  Dockerfile's bytes, reused while they are unchanged), one container for
+  the engine asks, the selected commands, the re-runs and the baseline's
+  base worktree — and on the host otherwise, the result file recording
+  which isolation ran (`details.isolation` `host`/`container`, with the
+  container's own record in `details.container` when one ran), the
+  per-unit `--repo` run always on the host; a container the close cannot
+  build, start or keep is the run's error (exit 2, never a red of the
+  change's, never a host stand-in);
   once per touched repo, after its fast checks; a command whose reuse
   key — the same key the `--repo` run reuses by: its root, its text as
   its own report gave it, its root's subtree tree hash of the working
   tree, its declared prerequisites — a green-in-one-run entry in a
   `--reuse` result file of this repo already proved (never a red or
   flaky-confirmed one, never an entry an older run wrote without its
-  key fields) is reused, not re-run, and a red command keeps the per-unit
+  key fields) is reused, not re-run — on the host close alone: a boxed
+  close consumes no `--reuse` green evidence (the same-tree host run
+  proves nothing inside the image), keeping the image and tool caches
+  shared and an unusable `--reuse` file the error it always was — and a red command keeps the per-unit
   bar's one
-  targeted re-run, its baseline triage and whole-command confirmation;
+  targeted re-run, its baseline triage and whole-command confirmation,
+  all of it in the same container when one was declared;
   `--unit-runs` names the build's `units.json`: the files its test
   commits touched are protected, never pre-existing (a test this change
   authored is this change's red), an unusable file is exit 2; a selection the engine
@@ -1383,7 +1398,8 @@ full reference.
   confirmation, or the selection is red or
   incomplete; 2: not judged (no such repo, the engine missing or failing,
   an unreadable report, a repo the engine planned no command for, an
-  unusable `--reuse` file, an unusable `--unit-runs` file).
+  unusable `--reuse` file, an unusable `--unit-runs` file, a declared
+  verification container not built, started or kept).
 - `--check-units <units.json> [--unit <id>]` is the on-the-spot unit
   check at record time: it re-runs the build's recorded unit runs as
   written (each unit's own `argv` in its own `cwd` of its own

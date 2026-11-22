@@ -50,4 +50,11 @@ one gate that runs the project's full bar); do not run the full suite
 check the baseline triage has not recorded pre-existing. The scoped selection is not a per-unit bar either:
 `--close-scoped` runs once per touched repo at the close (3c), over the
 whole change, after the fast checks — reusing the green runs whose key
-matches, never per unit.
+matches on the host (a boxed close consumes no `--reuse` green evidence,
+the image and tool caches staying shared), never per unit, and in the
+repository's declared verification image when its HEAD carries
+`.polyforge/Dockerfile.verify` — the same isolation verification uses, the
+result recording which isolation ran (`details.isolation`) — while a repo
+without the declaration keeps the host close and the per-unit runs stay
+on the host; a container the close cannot build, start or keep is the
+run's error, never a red of the change's, never a host stand-in.

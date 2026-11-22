@@ -3,8 +3,14 @@
 planning implementation shared by verification and the close
 (SharedPlanTest), the close's own run and its parity with verification's
 plan (SelectionParityTest, ExecutionTest) and the change analysis's
-machine selection record (AnalysisRecordTest)."""
+machine selection record (AnalysisRecordTest); the close's isolation
+(polyforge#222, CloseContainerTest): a repo whose HEAD declares the
+verification image runs its whole close inside that image, every other
+shape keeps the host close."""
 
+import hashlib
+import glob
+import io
 import json
 import os
 import shutil
@@ -12,17 +18,24 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from pfstep import scoped_plan
+import fast_checks
+from pfstep import container, scoped_plan
 from pfstep.engine import EngineReport, ReportError, decode_report
 
+from .capsuleutil import TEST_DOCKERFILE
+from .fakebox import FakeRuntime
 from .gitworld import HAVE_GIT, Repo, git, write
 from .test_fast_checks import APP, FLAKY_GATE_TEST, GO_MOD, FastChecksCase
-from .verifyfix import HAVE_BASH, HAVE_GO, Fixture, cmd_of, fake_engine, report, run_verify, write_files
+from .verifyfix import HAVE_BASH, HAVE_GO, Fixture, cmd_of, fake_engine, report, run_verify, step_env, write_files
 
 FAST_CHECKS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "fast_checks.py")
 ENGINE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "verify-scope")
+DOCKERFILE = container.DOCKERFILE_VERIFY
+# another generation of the declared image: different bytes, another tag
+DOCKERFILE2 = "FROM scratch-test-image\nRUN two\n"
 
 
 def light_engine(root: str, default: Dict[str, Any], light: Dict[str, Any]) -> str:
@@ -70,6 +83,23 @@ def run_close(capsule: str, repo: str, engine: str, out: str, *extra: str,
         raise AssertionError("fast_checks.py wrote no result file (exit %d): %s" % (c.returncode, (c.stderr or c.stdout)[-500:]))
     with open(out, encoding="utf-8") as f:
         return c.returncode, json.load(f)
+
+
+def box_close(capsule: str, repo: str, engine: str, rt: FakeRuntime, out: str, *extra: str,
+              env: Optional[Dict[str, str]] = None) -> Tuple[int, Dict[str, Any]]:
+    """fast_checks.py --close-scoped in-process on the fake container
+    engine rt (a test's injection: the host's docker is never probed);
+    its exit and its result file. env passes a step environment through
+    (a private bin on the host PATH the close's host side must see)."""
+    argv = ["--capsule", capsule, "--repo", repo, "--close-scoped",
+            "--engine", engine, "--deadline", "10m", "--out", out, *extra]
+    so, se = io.StringIO(), io.StringIO()
+    with redirect_stdout(so), redirect_stderr(se):
+        code = fast_checks.main(argv, step_env(env), runtime=rt)
+    if not os.path.exists(out):
+        raise AssertionError("fast_checks.py wrote no result file (exit %d): %s" % (code, se.getvalue()[-500:]))
+    with open(out, encoding="utf-8") as f:
+        return code, json.load(f)
 
 
 Ask = Callable[[str, str, str], Tuple[Optional[EngineReport], str, str]]
@@ -529,6 +559,407 @@ class ExecutionTest(FastChecksCase):
         self.assertEqual([c for c in sel["commands"] if "reused" in c], [],
                          "a result file of another tree is not reuse evidence")
 
+
+
+@unittest.skipUnless(HAVE_GIT and HAVE_BASH, "git and bash are required")
+class CloseContainerTest(unittest.TestCase):
+    """The close's isolation (polyforge#222): a repo whose HEAD declares
+    .polyforge/Dockerfile.verify runs its whole close-scoped selection
+    inside the verification image — one container for the engine asks and
+    the selected commands, the image built (or reused) by the same
+    machinery verification starts its boxes with — while a repo without
+    the declaration keeps the host close exactly as before (AC2). Every
+    run here goes through tests/fakebox.py's FakeRuntime, which really
+    executes the commands under env -i with the image's own environment,
+    never the host's; expected tags and volumes derive from the committed
+    Dockerfile's bytes and the clone's path, never from the
+    implementation's own tagging."""
+
+    # the image's own PATH: the tools a bash command needs, never the
+    # host's private test tools (they live on the host PATH alone)
+    IMAGE_PATH = "/usr/bin:/bin"
+
+    def setUp(self) -> None:
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        self.root = os.path.realpath(td.name)
+
+    def fake_box(self, sub: str = "box") -> FakeRuntime:
+        """A fake container engine whose image PATH is its own, never the
+        host's (a private tool of a test lives only on the host PATH)."""
+        d = os.path.join(self.root, sub)
+        os.makedirs(d, exist_ok=True)
+        fb = FakeRuntime(d)
+        fb.image_environ = ["PATH=" + self.IMAGE_PATH, "IMAGE_ONLY=from-image", "HOME=/root"]
+        return fb
+
+    def declared_repo(self, sub: str, dockerfile: str = TEST_DOCKERFILE,
+                      cmds: Optional[List[Dict[str, Any]]] = None) -> Tuple[Fixture, str]:
+        """A capsule whose repo app declares the verification image at HEAD
+        (the Dockerfile committed with the change, never only in the
+        working tree) and a fake engine answering the light report of the
+        given commands."""
+        root = os.path.join(self.root, sub)
+        os.makedirs(root)
+        fx = Fixture(root, {"app": {"pin/note.txt": "the answer is 42\n"}})
+        fx.commit_in_repo("app", {DOCKERFILE: dockerfile, "pin/note.txt": "the answer is 42\n"},
+                          "declare the verification image")
+        eng = fake_engine(root, {"app": report("scoped", *(cmds if cmds is not None else [
+            cmd_of("gate-1", "fast", "echo gate-ok"),
+            cmd_of("pin", "scoped", 'echo "boxed IMAGE_ONLY=$IMAGE_ONLY"')]))})
+        return fx, eng
+
+    def test_declared_image_runs_the_whole_close_in_its_container(self) -> None:
+        """The declared image carries the whole close: the engine's light
+        ask and every selected command run in the one container, the
+        commands see the image's environment (never the host's), the
+        result records the isolation and the container's own facts, and
+        the container is removed at the end."""
+        fx, eng = self.declared_repo("fx")
+        fb = self.fake_box()
+        out = os.path.join(fx.capsule, "close.json")
+        code, res = box_close(fx.capsule, "app", eng, fb, out)
+        self.assertEqual(code, 0, res.get("summary"))
+        sel = res["details"]["selected"]["app"]
+        self.assertEqual(sel["status"], "green", sel.get("reason", ""))
+        self.assertEqual(res["details"].get("isolation"), "container",
+                         "a declared image selects the container isolation")
+        # the container's facts: the image of the committed Dockerfile's
+        # bytes — the tag derived here from the bytes, never from the
+        # implementation's own tagging — built by this run
+        tag = "pf-verify-app:" + hashlib.sha256(TEST_DOCKERFILE.encode()).digest()[:16].hex()
+        cont = res["details"]["container"]
+        self.assertEqual(cont["image"], tag)
+        self.assertTrue(cont["built"])
+        self.assertEqual(len(fb.starts), 1, fb.starts)
+        # the whole close ran in the one container: the light ask and both
+        # commands, nothing on the host
+        self.assertTrue(fb.command_execs("--light"), "the light ask ran in the container")
+        for needle in ("gate-ok", "IMAGE_ONLY"):
+            self.assertTrue(fb.command_execs(needle),
+                            "the command mentioning %s ran in the container" % needle)
+        self.assertEqual(sorted({e[0] for e in fb.execs}), ["cid-1"])
+        # the selected command saw the image's own environment: IMAGE_ONLY
+        # carries the image's value, which the host environment does not
+        pin = [c for c in sel["commands"] if c["name"] == "pin"][0]
+        self.assertEqual(pin["exit_code"], 0)
+        with open(os.path.join(fx.capsule, pin["log"]), encoding="utf-8") as f:
+            self.assertIn("IMAGE_ONLY=from-image", f.read())
+        # the container ends with the run
+        self.assertEqual(fb.removes, ["cid-1"])
+
+    def host_fast(self, capsule: str, repo: str, engine: str, out: str,
+                  env: Optional[Dict[str, str]] = None) -> Tuple[int, Dict[str, Any]]:
+        """fast_checks.py --repo (the per-unit bar) in-process — the mode
+        that never starts a container, whatever the repo declares; its
+        exit and its result file."""
+        argv = ["--capsule", capsule, "--repo", repo, "--engine", engine,
+                "--deadline", "10m", "--out", out]
+        so, se = io.StringIO(), io.StringIO()
+        with redirect_stdout(so), redirect_stderr(se):
+            code = fast_checks.main(argv, step_env(env))
+        if not os.path.exists(out):
+            raise AssertionError("fast_checks.py wrote no result file (exit %d): %s" % (code, se.getvalue()[-500:]))
+        with open(out, encoding="utf-8") as f:
+            return code, json.load(f)
+
+    def test_no_dockerfile_keeps_host_behavior(self) -> None:
+        """AC2: a repo without the declared image keeps the host close —
+        the container engine is never even probed (unavailable here), no
+        build, start, exec or remove happens, the commands run on the
+        host, and a same-tree green --reuse entry still hits; a
+        working-tree-only Dockerfile is no declaration, and the per-unit
+        --repo run stays on the host whatever the repo carries."""
+        root = os.path.join(self.root, "host")
+        os.makedirs(root)
+        fx = Fixture(root, {"app": {"pin/note.txt": "the answer is 42\n"}})
+        fx.commit_in_repo("app", {"pin/note.txt": "the answer is 42\n", "lib/x.py": "x = 2\n"}, "change")
+        eng = light_engine(
+            root,
+            report("full", cmd_of("gate-1", "fast", "echo gate-ok")),
+            report("scoped", cmd_of("gate-1", "fast", "echo gate-ok"),
+                   cmd_of("pin", "scoped", "echo pinned")))
+        fb = self.fake_box()
+        fb.unavailable = "the container engine is not here"
+        # the per-unit bar on the host: green, its file the close's reuse
+        fast_out = os.path.join(fx.capsule, "fast.json")
+        code, _res = self.host_fast(fx.capsule, "app", eng, fast_out)
+        self.assertEqual(code, 0)
+        out = os.path.join(fx.capsule, "close.json")
+        code, res = box_close(fx.capsule, "app", eng, fb, out, "--reuse", fast_out)
+        self.assertEqual(code, 0, res.get("summary"))
+        sel = res["details"]["selected"]["app"]
+        self.assertEqual(sel["status"], "green", sel.get("reason", ""))
+        self.assertEqual(res["details"].get("isolation"), "host",
+                         "no declaration keeps the host isolation, recorded")
+        self.assertEqual((fb.builds, fb.starts, fb.execs, fb.removes), ([], [], [], []),
+                         "the host close never touches the container engine")
+        by_name = {c["name"]: c for c in sel["commands"]}
+        self.assertIn("reused", by_name["gate-1"],
+                      "a same-tree host green run is still reuse evidence on the host")
+        self.assertNotIn("reused", by_name["pin"], "a scoped run the fast check never made is no reuse")
+        self.assertEqual(by_name["pin"]["exit_code"], 0, "the selected command ran on the host")
+        # a Dockerfile in the working tree alone is no declaration
+        write(fx.repo("app"), {DOCKERFILE: TEST_DOCKERFILE})
+        code, res = box_close(fx.capsule, "app", eng, fb, os.path.join(fx.capsule, "close2.json"),
+                              "--reuse", fast_out)
+        self.assertEqual(code, 0, res.get("summary"))
+        self.assertEqual(res["details"].get("isolation"), "host",
+                         "an uncommitted Dockerfile changes nothing")
+        self.assertEqual((fb.builds, fb.starts, fb.execs, fb.removes), ([], [], [], []))
+        # a declared repo's per-unit bar stays on the host: the close may
+        # run in the container, the per-unit run never does
+        fx2, eng2 = self.declared_repo("declared")
+        fb2 = self.fake_box("box2")
+        code, res = self.host_fast(fx2.capsule, "app", eng2, os.path.join(fx2.capsule, "fast.json"))
+        self.assertEqual(code, 0, res.get("summary"))
+        self.assertNotIn("isolation", res["details"],
+                         "the per-unit run's record keeps its shape")
+        self.assertEqual((fb2.builds, fb2.starts, fb2.execs), ([], [], []),
+                         "the per-unit bar starts no container")
+
+    def private_tool_env(self, sub: str = "bin") -> Dict[str, str]:
+        """A host environment whose PATH carries a private tool the image's
+        PATH (IMAGE_PATH) never holds: the host has it, the image does
+        not."""
+        d = os.path.join(self.root, sub)
+        os.makedirs(d)
+        with open(os.path.join(d, "close-proof-tool"), "w", encoding="utf-8") as f:
+            f.write("#!/bin/bash\necho close-proof-tool-ok\n")
+        os.chmod(os.path.join(d, "close-proof-tool"), 0o755)
+        return {"PATH": d + os.pathsep + os.environ.get("PATH", "/usr/bin:/bin")}
+
+    def test_host_tool_missing_in_image_is_red(self) -> None:
+        """AC1: a command needing a tool the host has but the image does
+        not is green on the host and red at the close — the boxed close
+        consumes no --reuse green evidence (the command really executes
+        in the container and fails there, its re-run too), an unusable
+        --reuse file is still the invocation's error, and a red selected
+        record is what the shared validator rejects — the process rule
+        (ask the owner, never self-hand-off done) stands."""
+        env = self.private_tool_env()
+        fx, eng = self.declared_repo("fx", cmds=[
+            cmd_of("gate-1", "fast", "echo gate-ok"),
+            cmd_of("pin", "scoped", "close-proof-tool")])
+        fb = self.fake_box()
+        # the per-unit bar on the host: the tool is on the host's PATH —
+        # green, and its result file is the close's --reuse evidence
+        fast_out = os.path.join(fx.capsule, "fast.json")
+        code, _res = self.host_fast(fx.capsule, "app", eng, fast_out, env=env)
+        self.assertEqual(code, 0, "the host has the tool: the per-unit bar is green")
+        out = os.path.join(fx.capsule, "close.json")
+        code, res = box_close(fx.capsule, "app", eng, fb, out, "--reuse", fast_out, env=env)
+        self.assertEqual(code, 1, res.get("summary"))
+        self.assertEqual(res["verdict"], "fail")
+        self.assertEqual(res["details"].get("isolation"), "container")
+        sel = res["details"]["selected"]["app"]
+        self.assertEqual(sel["status"], "red", sel.get("reason", ""))
+        self.assertEqual([c for c in sel["commands"] if "reused" in c], [],
+                         "a boxed close consumes no host green evidence")
+        pin = [c for c in sel["commands"] if c["name"] == "pin"][0]
+        self.assertNotEqual(pin["exit_code"], 0, "the tool is missing in the image: red")
+        # the command really ran in the container — never a simulated red —
+        # and no re-run of it can land on the host's PATH: a whole-command
+        # residual gets no re-run by the per-unit bar's own rules (never
+        # re-runnable), and a located unit's re-run goes through the box
+        # (u5's pre-existing scenario pins that path)
+        tool_execs = fb.command_execs("close-proof-tool")
+        self.assertGreaterEqual(len(tool_execs), 1,
+                                "the command really executed in the container")
+        for e in tool_execs:
+            self.assertEqual(e[0], "cid-1")
+        # an unusable --reuse file is the invocation's error, whatever the
+        # isolation — never swallowed by the no-reuse rule
+        bad = os.path.join(fx.capsule, "bad-reuse.json")
+        write_files(fx.capsule, {"bad-reuse.json": "{not json"})
+        code, res = box_close(fx.capsule, "app", eng, fb, os.path.join(fx.capsule, "close2.json"),
+                              "--reuse", bad, env=env)
+        self.assertEqual(code, 2)
+        self.assertEqual(res["verdict"], "error")
+        self.assertEqual(res["details"].get("commands"), [], "nothing ran, nothing claimed")
+
+    def test_container_failures_are_errors_never_host_reds(self) -> None:
+        """AC1's boundaries: an image that cannot be built or a container
+        that cannot start is the run's error — exit 2, the chosen
+        isolation recorded, nothing executed on the host as a stand-in;
+        a declared requires_cmd missing in the image is the selection's
+        incomplete (probed on the image's PATH, never the host's); a
+        container lost mid-run is not judged — never a test red — and a
+        removal that fails is recorded beside the run's own verdict."""
+        # the image build fails: the run is not judged, the host runs
+        # nothing in the container's place
+        fx, eng = self.declared_repo("build-fail")
+        fb = self.fake_box()
+        fb.build_err = "the build broke"
+        code, res = box_close(fx.capsule, "app", eng, fb, os.path.join(fx.capsule, "close.json"))
+        self.assertEqual(code, 2)
+        self.assertEqual(res["verdict"], "error")
+        self.assertEqual(res["details"].get("isolation"), "container",
+                         "the failed start still records the chosen isolation")
+        self.assertIn("could not be prepared", res["summary"])
+        self.assertEqual(fb.execs, [], "nothing ran — never a host stand-in")
+        # the container start fails: the same not-judged shape
+        fx, eng = self.declared_repo("start-fail")
+        fb = self.fake_box()
+        fb.start_err = "the engine refused the start"
+        code, res = box_close(fx.capsule, "app", eng, fb, os.path.join(fx.capsule, "close.json"))
+        self.assertEqual(code, 2)
+        self.assertEqual(res["details"].get("isolation"), "container")
+        self.assertIn("could not be prepared", res["summary"])
+        self.assertEqual(fb.execs, [])
+        # a declared requires_cmd missing in the IMAGE is incomplete —
+        # the probe ran on the image's PATH (the host's copy of the tool
+        # never satisfies it), an undeclared missing tool stays red (u3)
+        env = self.private_tool_env()
+        fx, eng = self.declared_repo("unmet", cmds=[
+            cmd_of("gate-1", "fast", "echo gate-ok"),
+            cmd_of("pin", "scoped", "close-proof-tool", requires_cmd=["close-proof-tool"])])
+        fb = self.fake_box()
+        code, res = box_close(fx.capsule, "app", eng, fb, os.path.join(fx.capsule, "close.json"), env=env)
+        self.assertEqual(code, 1, res.get("summary"))
+        sel = res["details"]["selected"]["app"]
+        self.assertEqual(sel["status"], "incomplete", sel.get("reason", ""))
+        self.assertIn("close-proof-tool", sel.get("reason", ""))
+        pin = [c for c in sel["commands"] if c["name"] == "pin"][0]
+        self.assertTrue(pin.get("skipped"), "the unmet declaration never ran")
+        # a container lost mid-run is not judged — never a red, never a green
+        fx, eng = self.declared_repo("lost")
+        fb = self.fake_box()
+        fb.reap_err = "the container did not answer"
+        code, res = box_close(fx.capsule, "app", eng, fb, os.path.join(fx.capsule, "close.json"))
+        self.assertEqual(code, 2)
+        self.assertEqual(res["verdict"], "error")
+        self.assertEqual(res["details"].get("isolation"), "container")
+        self.assertIn("became unusable", res["summary"])
+        self.assertTrue(res["details"]["container"].get("lost"), "the loss is recorded")
+        # a removal that fails is recorded beside the run's own verdict
+        fx, eng = self.declared_repo("left")
+        fb = self.fake_box()
+        fb.remove_err = "the engine refused the removal"
+        code, res = box_close(fx.capsule, "app", eng, fb, os.path.join(fx.capsule, "close.json"))
+        self.assertEqual(code, 0, res.get("summary"))
+        self.assertTrue(res["details"]["container"].get("left"), "the left-behind container is recorded")
+
+    def test_the_baseline_re_runs_in_the_same_container(self) -> None:
+        """AC1's rerun path: the located failing unit's one targeted re-run,
+        the baseline's base worktree — under the directory mounted into
+        the container — its setup and re-runs, and the skip-form
+        confirmation all execute in the same container; #212's
+        pre-existing rules stand unchanged, and the base worktree is
+        cleaned up afterwards."""
+        from .test_verify_flows import FAKE_PYTEST, fake_bin
+        root = os.path.join(self.root, "base")
+        os.makedirs(root)
+        env = fake_bin(root, "pytest", FAKE_PYTEST)
+        bindir = env["PATH"].split(os.pathsep)[0]
+        fx = Fixture(root, {"app": {"tests/test_a.py": "def test_old(): # FAIL assert old breakage\n"}})
+        fx.commit_in_repo("app", {"tests/test_a.py": "def test_old(): # FAIL assert old breakage\n# the change\n",
+                                  DOCKERFILE: TEST_DOCKERFILE}, "the change, with the image declared")
+        eng = fake_engine(root, {"app": report("scoped", cmd_of("tests", "scoped", "pytest"))})
+        fb = self.fake_box()
+        # the image's PATH carries the fake pytest: the box, never the
+        # host, can run every execution the close makes
+        fb.image_environ = ["PATH=" + bindir + os.pathsep + self.IMAGE_PATH,
+                            "IMAGE_ONLY=from-image", "HOME=/root"]
+        out = os.path.join(fx.capsule, "close.json")
+        code, res = box_close(fx.capsule, "app", eng, fb, out, env=env)
+        self.assertEqual(code, 0, res.get("summary"))
+        sel = res["details"]["selected"]["app"]
+        self.assertEqual(sel["status"], "pre_existing", sel.get("reason", ""))
+        tests_cmd = [c for c in sel["commands"] if c["name"] == "tests"][0]
+        self.assertEqual(tests_cmd.get("confirmed"), "pytest --deselect tests/test_a.py::test_old",
+                         "the pre-existing failure is excluded by its skip form")
+        self.assertEqual((res["details"].get("baseline") or {}).get("ran"), True,
+                         "the baseline actually ran")
+        # the base worktree lived under the directory the container was
+        # mounted — its re-run executes show as the container's, never the
+        # host's (a host-side baseline run leaves no exec here)
+        clone = fx.repo("app")
+        base_execs = [e for e in fb.command_execs("pytest") if e[1] != clone]
+        self.assertTrue(base_execs,
+                        "the baseline's re-runs executed in the container, in the mounted base worktree")
+        logs_dir = os.path.join(fx.capsule, "logs")
+        for e in base_execs:
+            self.assertTrue(e[1].startswith(logs_dir),
+                            "the base worktree sits under the run's mounted base root: %s" % e[1])
+        # the first run, the re-run at HEAD and the skip-form confirm went
+        # through the same container as the baseline
+        self.assertGreaterEqual(len([e for e in fb.command_execs("pytest") if e[1] == clone]), 3,
+                                "the command, its re-run and its confirm all ran in the container")
+        self.assertEqual(sorted({e[0] for e in fb.execs}), ["cid-1"])
+        # the base worktree is gone again: nothing left under the base root
+        left = [p for p in glob.glob(os.path.join(logs_dir, "*", "base", "pf-verify-base-*"))]
+        self.assertEqual(left, [], "the throwaway base worktree is cleaned up")
+        listed = git(clone, "worktree", "list")
+        self.assertEqual(len([ln for ln in listed.split("\n") if ln.strip()]), 1, listed)
+
+    def test_unchanged_image_reuses_verification_cache(self) -> None:
+        """AC3: an unchanged image is never rebuilt — close after close,
+        verification between closes, all reference one image tag and one
+        cache volume, and each run still executes the selection inside
+        the container (the cache is the image and the tools, never a
+        skipped command); a Dockerfile byte change builds the next image,
+        a code-only commit does not, a deleted local image is rebuilt,
+        and another clone path shares the image but never the cache
+        volume."""
+        fx, eng = self.declared_repo("fx", cmds=[cmd_of("gate-1", "fast", "echo gate-ok")])
+        fb = self.fake_box()
+        code, res = box_close(fx.capsule, "app", eng, fb, os.path.join(fx.capsule, "close.json"))
+        self.assertEqual(code, 0, res.get("summary"))
+        tag = "pf-verify-app:" + hashlib.sha256(TEST_DOCKERFILE.encode()).digest()[:16].hex()
+        self.assertEqual([(b[0], b[1]) for b in fb.builds], [(tag, TEST_DOCKERFILE.encode())],
+                         "the first run builds the image once, from the committed bytes")
+        volume = sorted(fb.starts[0].volumes)[0]
+        self.assertTrue(volume.startswith("pf-verify-cache-app-"), volume)
+        execs_after_first = len(fb.execs)
+        # the second close: the image is present, nothing builds, and the
+        # selection still runs in a container of the same image
+        code, res = box_close(fx.capsule, "app", eng, fb, os.path.join(fx.capsule, "close2.json"))
+        self.assertEqual(code, 0, res.get("summary"))
+        self.assertEqual(len(fb.builds), 1, "an unchanged image is never rebuilt")
+        self.assertFalse(res["details"]["container"]["built"])
+        self.assertGreater(len(fb.execs), execs_after_first,
+                           "the image cache is never a skipped command: the selection still ran")
+        self.assertEqual(sorted(fb.starts[1].volumes), [volume], "the same clone keeps one cache volume")
+        # verification between closes: the same image, still no build
+        r = run_verify(fx.capsule, eng, runtime=fb)
+        self.assertEqual(r.exit, 0, r.stderr)
+        self.assertEqual(len(fb.builds), 1, "verification shares the close's image")
+        # close again after verify: still one build, the same volume
+        code, res = box_close(fx.capsule, "app", eng, fb, os.path.join(fx.capsule, "close3.json"))
+        self.assertEqual(code, 0, res.get("summary"))
+        self.assertEqual(len(fb.builds), 1)
+        self.assertEqual(sorted(fb.starts[3].volumes), [volume])
+        # a Dockerfile byte change: the next generation builds
+        fx.commit_in_repo("app", {DOCKERFILE: DOCKERFILE2}, "bump the image")
+        code, res = box_close(fx.capsule, "app", eng, fb, os.path.join(fx.capsule, "close4.json"))
+        self.assertEqual(code, 0, res.get("summary"))
+        tag2 = "pf-verify-app:" + hashlib.sha256(DOCKERFILE2.encode()).digest()[:16].hex()
+        self.assertEqual([(b[0], b[1]) for b in fb.builds[1:]], [(tag2, DOCKERFILE2.encode())],
+                         "changed bytes build the next generation")
+        # a code-only commit: nothing rebuilds
+        fx.commit_in_repo("app", {"pin/note.txt": "the answer is 43\n"}, "a code-only edit")
+        code, res = box_close(fx.capsule, "app", eng, fb, os.path.join(fx.capsule, "close5.json"))
+        self.assertEqual(code, 0, res.get("summary"))
+        self.assertEqual(len(fb.builds), 2, "a code-only commit does not rebuild the image")
+        # the local image deleted: the same generation builds again
+        fb.present[tag2] = False
+        code, res = box_close(fx.capsule, "app", eng, fb, os.path.join(fx.capsule, "close6.json"))
+        self.assertEqual(code, 0, res.get("summary"))
+        self.assertEqual([(b[0], b[1]) for b in fb.builds[2:]], [(tag2, DOCKERFILE2.encode())],
+                         "a deleted local image is rebuilt")
+        # another clone path: the same image is shared, the cache volume is not
+        root2 = os.path.join(self.root, "other")
+        os.makedirs(root2)
+        fx2 = Fixture(root2, {"app": {"pin/note.txt": "the answer is 42\n"}})
+        fx2.commit_in_repo("app", {DOCKERFILE: TEST_DOCKERFILE, "pin/note.txt": "the answer is 42\n"},
+                           "declare the verification image")
+        eng2 = fake_engine(root2, {"app": report("scoped", cmd_of("gate-1", "fast", "echo gate-ok"))})
+        code, res = box_close(fx2.capsule, "app", eng2, fb, os.path.join(fx2.capsule, "close.json"))
+        self.assertEqual(code, 0, res.get("summary"))
+        self.assertEqual(len(fb.builds), 3, "another clone of the same Dockerfile shares the image")
+        vol2 = sorted(fb.starts[-1].volumes)[0]
+        self.assertNotEqual(vol2, volume, "another clone path never shares the cache volume")
 
 
 @unittest.skipUnless(HAVE_GIT and HAVE_BASH, "git and bash are required")

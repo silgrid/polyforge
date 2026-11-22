@@ -21,7 +21,9 @@ package test
 // moved in (polyforge#164), and to 215 when the close took review's own
 // lines — the replay and plan-conformance — and the plan gained its
 // analysis-mapping section (polyforge#181), and to 222 when the plan
-// gained its decided-rulings mapping section (polyforge#221).
+// gained its decided-rulings mapping section (polyforge#221), and to 228
+// when the close's scoped selection moved into the repo's declared
+// verification image (polyforge#222).
 
 import (
 	"os"
@@ -45,6 +47,15 @@ func TestW374DevelopDriverChecksContract(t *testing.T) {
 			"A red or `incomplete` result (the engine answered full, or a selected command cannot run) never hands off `done`",
 			"for a work item whose verification runs the light tier (an integration batch's fix ticket runs the full bar and closes without one)",
 			"Merge each touched repo's `details.selected` of its green or pre-existing result into the change analysis's `selected`",
+			// the close's isolation (polyforge#222): the repo's declared
+			// verification image carries the close, the host green evidence
+			// never crosses the isolation, the result records which ran, and
+			// a container the close cannot have is the run's error
+			"run in the repository's declared verification image when its HEAD carries `.polyforge/Dockerfile.verify` (the same isolation verification runs",
+			"while a repo without the declaration keeps the host close exactly as before, the per-unit runs always on the",
+			"the result file recording which isolation ran (`details.isolation`, `host`/`container`)",
+			"a boxed close consumes no `--reuse` green evidence, the image and tool caches stay shared and an unusable file is still exit 2",
+			"a container the close cannot build, start or keep is the run's error",
 		},
 		"workflows/_shared/skills/build.md": {
 			"`review` replays each unit's run on the tree of its test commit (`facts.py build --replay`: it must be red there) and `verification` runs it again on the final tree (`verify.py --unit-runs`: it must be green)",
@@ -105,7 +116,7 @@ func TestW374DevelopDriverChecksContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n := strings.Count(string(raw), "\n"); n > 222 {
-		t.Errorf("workflows/develop/steps/build.md is %d lines, over its 222-line budget", n)
+	if n := strings.Count(string(raw), "\n"); n > 228 {
+		t.Errorf("workflows/develop/steps/build.md is %d lines, over its 228-line budget", n)
 	}
 }

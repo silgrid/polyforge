@@ -85,7 +85,11 @@ The complete variable table is in [the workflow contract's Scripts environment s
   fast checks narrowed to the roots the unit's written `Touched files` reach (`--phase fast
   --root`, the green runs whose key is unchanged reused) plus every new test; the close's scoped selection — `fast_checks.py --close-scoped`,
   the same light-tier selection verification plans, for a work item whose verification runs the
-  light tier (an integration batch's fix ticket closes without one), its red or `incomplete`
+  light tier (an integration batch's fix ticket closes without one) — run in the repository's
+  declared verification image when its HEAD carries `.polyforge/Dockerfile.verify` (the same
+  isolation verification uses, the image and tool caches shared; no declaration keeps the
+  host close, the per-unit runs always on the host), the result recording which isolation ran
+  and a boxed close consuming no `--reuse` green evidence, its red or `incomplete`
   result fixed or owner-ruled before the hand-off — a red every entry of whose `reds[]` the
   run's baseline triage records `pre_existing` excepted: not this change's, the close hands
   off citing the result file — and a green or pre-existing result's `details.selected` merged

@@ -117,13 +117,25 @@ prerequisites ``prereq_key`` beside the reuse marker ``reused``).
 same light-tier selection verification runs, planned by the one shared
 implementation (``pfstep/scoped_plan.py`` — the same engine argv
 ``--json --light --base <merge-base>``, the same ``choose``, the same
-nested roots), executed on the host over the final tree so the existing
+nested roots), executed over the final tree so the existing
 tests the selection pins run before the hand-off, not first at
-verification. A command whose reuse key (the same key the ``--repo`` run
+verification — inside the repository's declared verification image when
+its HEAD carries ``.polyforge/Dockerfile.verify`` (polyforge#222: the
+same ``pfstep/container.py`` machinery verification's boxes use — one
+container for the engine asks, the selected commands, the re-runs and
+the baseline's base worktree, the image and tool caches shared while
+the Dockerfile's bytes are unchanged — and on the host otherwise, the
+result recording which ran in ``details.isolation`` and the container's
+own facts in ``details.container``; the per-unit runs always on the
+host; a container the close cannot build, start or keep is the run's
+error, never a red of the change's, never a host stand-in). A command whose reuse key (the same key the ``--repo`` run
 reuses by, polyforge#182) a green entry in a ``--reuse`` result file of
 this repo already proved — the close's fast-checks run — is not re-run:
-its evidence is reused and its entry names the file it came from; a
-green-through-flaky confirmation is never that evidence. A red command gets the same one
+its evidence is reused and its entry names the file it came from — on
+the host close alone (Q3): a boxed close consumes no ``--reuse`` green
+evidence (a same-tree host run proves nothing inside the image), the
+image and tool caches still shared and an unusable file still the
+invocation's error. A green-through-flaky confirmation is never that evidence. A red command gets the same one
 targeted re-run and whole-command confirmation the per-unit bar gives.
 A selection the engine answers with the full tier is never run — the
 run records ``incomplete`` with the engine's own fallback reasons and
@@ -183,7 +195,7 @@ import time  # noqa: E402
 import traceback  # noqa: E402
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple  # noqa: E402
 
-from pfstep import duration, git, gostr, runner  # noqa: E402
+from pfstep import container, duration, git, gostr, runner  # noqa: E402
 from pfstep import scoped_plan  # noqa: E402
 from pfstep.completion import completion_proof, harness_command, read_go_harness  # noqa: E402
 from pfstep.engine import TIER_LIGHT, EngineCommand, EngineReport, ReportError, decode_report  # noqa: E402
@@ -498,6 +510,11 @@ class CheckRun:
         self.phase = phase
         self.roots: List[str] = list(roots or [])
         self.seq = 0
+        # the close's own container (polyforge#222): None on the host —
+        # the per-unit run's permanent shape — and the one Box a
+        # --close-scoped run of a repo that declares its verification
+        # image executes everything through
+        self.box: Optional[container.Box] = None
         self.details: Dict[str, Any] = {"repo": repo, "reports": [], "commands": []}
         self.head = ""
         # the baseline triage (polyforge#212): the base setup the engine's
@@ -573,15 +590,18 @@ class CheckRun:
         """The engine's report with directory as its root — the default
         report, no tier flag, exactly the report the model ran by hand,
         unless a caller hands its own argv (the close mode's light
-        request): (the report, the invocation, why there is none)."""
+        request): (the report, the invocation, why there is none). The
+        engine runs where the close runs — in the box, its mounted
+        path."""
+        engine = self.box.engine if self.box is not None else self.engine
         if argv is None:
-            argv = engine_argv_of(self.engine) + ["--json"]
+            argv = engine_argv_of(engine) + ["--json"]
         ref = " ".join(argv)
         self.seq += 1
         log_path = os.path.join(self.log_dir, self.repo, "engine-%d" % self.seq, "command.log")
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
         er = self.r.exec_to(runner.ExecSpec(argv=argv, dir=directory, cwd=self.cwd_rel(directory),
-                                             timeout=GIT_TIMEOUT, capture=True), log_path)
+                                             timeout=GIT_TIMEOUT, capture=True), log_path, self.box)
         if er.error:
             return None, ref, "the engine %s could not start: %s" % (self.engine, er.error)
         if er.exit != 0:
@@ -602,7 +622,7 @@ class CheckRun:
         declared prerequisites are unmet: (its entry, its log's absolute
         path, its private TMPDIR)."""
         entry: Dict[str, Any] = {"name": c.name, "phase": c.phase, "root": root_rel, "cmd": c.cmd}
-        unmet = self.r.unmet(c.requires_env, c.requires_cmd, directory, None)
+        unmet = self.r.unmet(c.requires_env, c.requires_cmd, directory, self.box)
         if unmet:
             entry["skipped"] = True
             entry["skip_reason"] = unmet
@@ -611,7 +631,7 @@ class CheckRun:
         log_path = os.path.join(self.log_dir, self.repo, str(self.seq), "command.log")
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
         er = self.r.exec_to(runner.ExecSpec(argv=bash_argv(c.cmd), dir=directory, cwd=root_rel,
-                                             timeout=timeout_of(c), private_tmp=True), log_path)
+                                             timeout=timeout_of(c), private_tmp=True), log_path, self.box)
         entry["exit_code"] = er.exit
         if er.timed_out:
             entry["timed_out"] = True
@@ -645,7 +665,7 @@ class CheckRun:
             log_path = os.path.join(self.log_dir, self.repo, str(self.seq), "command.log")
             os.makedirs(os.path.dirname(log_path), exist_ok=True)
             er = self.r.exec_to(runner.ExecSpec(argv=bash_argv(cmd), dir=clone, cwd="repos/" + self.repo,
-                                                 timeout=timeout, private_tmp=True), log_path)
+                                                 timeout=timeout, private_tmp=True), log_path, self.box)
             return RerunRun(not_started=er.not_started, exit=er.exit, log_path=er.log_path,
                             tmp_dir=er.tmp_dir,
                             duration=(er.evidence.duration_ms / 1000.0) if er.evidence is not None else 0.0)
@@ -760,7 +780,7 @@ class CheckRun:
         log_path = os.path.join(self.log_dir, self.repo, str(self.seq), "command.log")
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
         er = self.r.exec_to(runner.ExecSpec(argv=bash_argv(cmd), dir=directory, cwd=root_rel,
-                                             timeout=timeout_of(c), private_tmp=True), log_path)
+                                             timeout=timeout_of(c), private_tmp=True), log_path, self.box)
         entry["confirm_exit_code"] = er.exit
         if er.timed_out:
             entry["confirm_timed_out"] = True
@@ -817,7 +837,7 @@ class CheckRun:
             log_path = os.path.join(self.log_dir, self.repo, "base-%d" % self.seq, "command.log")
             os.makedirs(os.path.dirname(log_path), exist_ok=True)
             er = self.r.exec_to(runner.ExecSpec(argv=bash_argv(cmd), dir=d, cwd=d, timeout=t,
-                                                 private_tmp=True), log_path)
+                                                 private_tmp=True), log_path, self.box)
             if er.log_path:
                 self.inv.logs.append(self.r.rel(er.log_path))
             return RerunRun(not_started=er.not_started, exit=er.exit, log_path=er.log_path, tmp_dir=er.tmp_dir,
@@ -852,7 +872,8 @@ class CheckRun:
             judge_on_base(clone, self.base_commit, short(self.base_commit), cands, self.base_setup,
                           self.worktree_add_of(clone), self.run_bash_of(),
                           lambda: self.r.remaining() > 1.0, lambda d: self.r.remaining() > d,
-                          "the fast checks' deadline", COMMAND_TIMEOUT, None, notes.append)
+                          "the fast checks' deadline", COMMAND_TIMEOUT,
+                          self.box.base_root if self.box is not None else None, notes.append)
             ran = not notes
             self.base_note = "; ".join(notes)
         self.details["baseline"] = {"commit": self.base_commit, "ref": "merge-base",
@@ -1104,20 +1125,72 @@ class CloseRun(CheckRun):
     """The build close's scoped selection (--close-scoped, polyforge#164):
     the same light-tier plan verification runs — one shared implementation
     (pfstep/scoped_plan.plan_light, fed this run's own engine asks) — its
-    commands executed on the host over the final tree, a command whose
-    reuse key a green run in a --reuse result already proved reused instead
-    of re-run (polyforge#182: the same key the --repo run reuses by — one
-    key, two modes). A selection the engine answers with the full tier is
-    never run: the run records incomplete with the engine's own fallback
-    reasons and exits non-zero, claiming nothing. The result's
-    details.selected is the change analysis's machine selection record."""
+    commands executed over the final tree inside the repo's declared
+    verification image when its HEAD carries the Dockerfile (polyforge#222:
+    the one Box start_box builds, everything executing through), and on
+    the host otherwise; a command whose reuse key a green run in a
+    --reuse result already proved is reused instead of re-run on the host
+    alone (polyforge#182: the same key the --repo run reuses by — one key,
+    two modes; a boxed close consumes none, Q3). A selection the engine
+    answers with the full tier is never run: the run records incomplete
+    with the engine's own fallback reasons and exits non-zero, claiming
+    nothing. The result's details.selected is the change analysis's
+    machine selection record."""
 
     def __init__(self, inv: Invocation, capsule: str, repo: str, engine: str,
-                 reuse: List[str], log_dir: str, r: Runner) -> None:
+                 reuse: List[str], log_dir: str, r: Runner,
+                 runtime: Optional[container.ContainerRuntime] = None) -> None:
         super().__init__(inv, capsule, repo, engine, r.deadline, log_dir, r)
         self.reuse: List[str] = list(reuse)
         self.reuse_green: Dict[ReuseKey, str] = {}
+        # the container engine the close starts its box through (a test's
+        # injection replaces the docker CLI, the way verify.py's does)
+        self.runtime = runtime
         self.details: Dict[str, Any] = {"repo": repo, "mode": "close-scoped", "commands": []}
+
+    def dockerfile_declared(self, clone: str) -> Tuple[bool, str]:
+        """Whether the repo's HEAD carries DOCKERFILE_VERIFY — the one
+        declaration that selects the container (a working-tree-only copy
+        never counts) — and why the declaration cannot be read ("" = it
+        can): unreadable is the run's error, never a silent host
+        fall-back."""
+        c = git.run(clone, "ls-tree", "--name-only", "HEAD", "--", container.DOCKERFILE_VERIFY)
+        if c.exit_code != 0:
+            return False, ("%s unreadable at HEAD: %s"
+                           % (container.DOCKERFILE_VERIFY,
+                              c.stderr.decode("utf-8", "replace").strip() or "git exited %d" % c.exit_code))
+        return bool(c.stdout.decode("utf-8", "replace").strip()), ""
+
+    def base_root(self) -> str:
+        """The directory the baseline's throwaway worktree lives in — inside
+        the run's logs, mounted into the container so its re-runs see the
+        base tree (the same base_root shape verification's boxes mount)."""
+        return os.path.join(self.log_dir, "base")
+
+    def start_the_box(self, clone: str) -> int:
+        """Start the repo's verification container for the close (0 = up, 2
+        = the run is not judged, the reason said). The same machinery
+        verification starts its boxes with (pfstep/container.py, its
+        public entry): the image of the HEAD-committed Dockerfile's bytes,
+        the clone mounted at its own path, the tool cache volume, the
+        engine mounted read-only beside it, the baseline's base worktree
+        directory under the run's logs."""
+        co = container.for_run(container.ContainerOptions(runtime=self.runtime, say=self.inv.say),
+                               self.r.deadline, self.inv.env)
+        try:
+            co.engine().available()
+        except container.ContainerError:
+            pass  # nothing to sweep; the box below says why it cannot start
+        else:
+            container.sweep_run(co, self.inv.say)
+        try:
+            run_no = int(os.path.basename(self.log_dir))
+        except ValueError:
+            run_no = 0
+        self.box = container.start_box(co, self.repo, clone, self.log_dir, self.r.deadline, run_no,
+                                       self.r.rel, engine=os.path.realpath(self.engine),
+                                       base_root=self.base_root())
+        return 0
 
     def baseline_ref(self) -> Tuple[str, str]:
         """The close's own baseline: the merge-base its light plan was
@@ -1169,8 +1242,10 @@ class CloseRun(CheckRun):
     def ask(self, directory: str, cwd_rel: str, base: str) -> Tuple[Optional[EngineReport], str, str]:
         """plan_light's ask: the engine's light report of directory, the
         invocation the one shared implementation derives (the same argv
-        verification's light tier asks with)."""
-        return self.ask_engine(directory, scoped_plan.engine_argv(self.engine, base))
+        verification's light tier asks with) — asked of the engine where
+        the close runs, the box's mounted path."""
+        return self.ask_engine(directory, scoped_plan.engine_argv(
+            self.box.engine if self.box is not None else self.engine, base))
 
     def unit_spec(self, c: EngineCommand, d: str) -> CommandSpec:
         """The CommandSpec a failing unit of c derives its re-run from — a
@@ -1229,6 +1304,45 @@ class CloseRun(CheckRun):
             self.inv.summary = "repos/%s: not judged: the diff base is unreadable: %s" % (self.repo, err)
             return 2
         self.details["base"], self.details["default_branch"] = base, branch
+        # the close's isolation (polyforge#222): the repo's own declared
+        # verification image carries the whole close — the engine asks and
+        # the selected commands, the same image and cache verification
+        # runs — while a repo without the declaration keeps the host close
+        # exactly as before; the declaration is the HEAD-committed
+        # Dockerfile alone, read strictly (unreadable is the run's error,
+        # never a silent host fall-back)
+        declared, why_not = self.dockerfile_declared(clone)
+        if why_not:
+            self.inv.summary = "repos/%s: not judged: %s" % (self.repo, why_not)
+            return 2
+        if declared:
+            self.details["isolation"] = "container"
+            try:
+                code = self.start_the_box(clone)
+            except container.BoxError as err:
+                # a container the close cannot have is the run's error —
+                # never a red of the change's, never a host stand-in
+                self.inv.summary = ("repos/%s: not judged: the verification container could not be"
+                                    " prepared: %s" % (self.repo, err))
+                return 2
+            if code:
+                return code
+        else:
+            self.details["isolation"] = "host"
+        try:
+            return self.close_run(clone, head, tree, base, branch)
+        finally:
+            if self.box is not None:
+                self.box.remove()
+                # the container's own facts, with whatever the run left on
+                # it (lost, a failed removal) — recorded after the removal
+                # so the record is the end state
+                self.details["container"] = self.box.report.as_dict()
+
+    def close_run(self, clone: str, head: str, tree: str, base: str, branch: str) -> int:
+        """The close's whole run once the isolation stands: the shared light
+        plan of the repo's final tree, its commands run (or reused), the
+        selection recorded. The run's exit code."""
         plan = scoped_plan.plan_light(clone, self.cwd_rel(clone), base, self.ask)
         self.details["engine"] = plan.engine_ref
         if plan.status == scoped_plan.PLAN_ENGINE_FAILED:
@@ -1257,7 +1371,12 @@ class CloseRun(CheckRun):
             self.tree_of(c.dir)
         for c in plan.commands:
             self.inv.say("repos/%s: `%s` (%s)" % (self.repo, c.cmd, c.phase))
-            key = self.reuse_key(c)
+            # a boxed close consumes no --reuse green evidence (Q3): the
+            # same-tree host run proves nothing inside the image — the
+            # file's shape is still load_reuse's to validate, and the
+            # image and tool caches stay shared; a host close keeps the
+            # existing reuse rules whole
+            key = self.reuse_key(c) if self.box is None else None
             if key is not None and key in self.reuse_green:
                 entry: Dict[str, Any] = {"name": c.name, "phase": c.phase, "root": self.command_root(c),
                                         "cmd": c.cmd, "source": c.source, "reused": self.reuse_green[key]}
@@ -1278,6 +1397,13 @@ class CloseRun(CheckRun):
         self.rerun_phase(runs)
         self.baseline_phase()
         self.confirm_phase()
+        if self.box is not None and self.box.lost_reason():
+            # a container lost under the close is the run's error — the
+            # record proves nothing, never a red of the change's
+            self.inv.summary = ("repos/%s: not judged: its verification container became unusable"
+                                " while the close ran (%s): the record proves nothing"
+                                % (self.repo, self.box.lost_reason()))
+            return 2
         self.details["reds"] = self.build_reds()
         red = [e for e in self.details["commands"] if self.command_red(e)]
         flaky_notes: List[str] = []
@@ -1329,7 +1455,7 @@ class CloseRun(CheckRun):
         return code
 
 
-def run(inv: Invocation) -> int:
+def run(inv: Invocation, runtime: Optional[container.ContainerRuntime] = None) -> int:
     a = parser().parse_args(inv.argv)
     inv.out, inv.json = a.out, a.json
     if (a.repo.strip() == "") == (a.check_units.strip() == ""):
@@ -1384,7 +1510,7 @@ def run(inv: Invocation) -> int:
             inv.summary = "the units could not be checked (an infrastructure failure, never a verdict): %s" % err
             return 2
     if a.close_scoped:
-        cr: CheckRun = CloseRun(inv, capsule, a.repo, engine, a.reuse, logs, r)
+        cr: CheckRun = CloseRun(inv, capsule, a.repo, engine, a.reuse, logs, r, runtime=runtime)
         if a.unit_runs:
             try:
                 decls = read_unit_runs(a.unit_runs)
@@ -1404,11 +1530,14 @@ def run(inv: Invocation) -> int:
         return 2
 
 
-def main(argv: Optional[List[str]] = None, environ: Optional[Dict[str, str]] = None) -> int:
+def main(argv: Optional[List[str]] = None, environ: Optional[Dict[str, str]] = None,
+         runtime: Optional[container.ContainerRuntime] = None) -> int:
+    """The command: argv (default sys.argv[1:]) under environ (default the
+    process's); runtime replaces the docker CLI (a test's fake engine)."""
     inv = Invocation(NAME, sys.argv[1:] if argv is None else argv, environ)
     raise_on_termination()
     try:
-        code = run(inv)
+        code = run(inv, runtime)
     except (KeyboardInterrupt, runner.Interrupted):
         inv.summary = "interrupted (context canceled): nothing is proven"
         code = 2
