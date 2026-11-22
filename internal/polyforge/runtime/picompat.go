@@ -156,7 +156,7 @@ func validatePiCompatibility(ctx context.Context, bin string) error {
 	if err := piFlagsCheck(ctx, bin, version); err != nil {
 		return err
 	}
-	return nil
+	return piCapabilityProbe(ctx, bin, version)
 }
 
 func firstNonEmptyLine(s string) string {
