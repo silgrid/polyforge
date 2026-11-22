@@ -2204,7 +2204,7 @@ the Jobs rows are filled (`cards-pure`'s one `withContextWindow` merge, the
 `catalogContextWindow`): a value that already carries a window is never
 re-read, and a failed lookup leaves tokens only — the ticket's "补不到只显示
 tokens, 不猜". The fill spawns no pf. The detail passport carries the same
-three optional keys. The detail passport is unchanged. A detail keeps
+three optional keys. A detail keeps
 id/project/state/candidates/max_duration_ns/max_tokens/wall_consumed_ns/
 tokens_consumed/created_at/started_at?/ended_at? (pf's zero time reads as
 absent)/prompt/report/report_len/truncated; the report is cut to
@@ -2214,7 +2214,8 @@ the Memory tab's `capUtf8Bytes`, `report_len` is the measured uncut byte length 
 marks never leave the server.
 
 **Surface.** `components/PolyforgeTasks.tsx` owns its state (no hook read,
-no poll, no storage) and reads on gestures only — one list read each time
+no storage; its only timer besides the running durations' clock is the
+owner-ruled 15 s running re-read below) and reads on gestures only — one list read each time
 the Tasks sub-tab opens (the component mounts), one per click of the shared
 search bar's ↻ action (slot) and one detail read
 per selection; searching, clearing the search, filtering and going back read
@@ -2309,8 +2310,10 @@ tick on a local 1 s render clock (`setInterval` that only sets `now`, no
 I/O) that exists only while a running task is listed and is cleared on
 unmount — a clock, not a poll. A running block also shows its context usage
 (`data-pf-task-context`) directly under the state row, in the job card's own
-meter text and colour band (`polyforgeContextMeterText`
-`percent% / window`, else the compact token count alone) with the model and
+meter text and tone colour band (`polyforgeContextMeterText`
+`percent% / window`, else the compact token count alone; the colour is
+`POLYFORGE_CONTEXT_METER_COLORS` with the same above-70 amber / above-90 red
+thresholds, `var(--text-dim)` below them) with the model and
 `as_of` on its hover, and an analysis task's block opens with
 `data-pf-task-analysis`, the top line's
 `polyforge.tasks.analysisOf` (分析 <slug> / Analyzing <slug>) and the ticket's
@@ -2319,7 +2322,9 @@ goal beneath it — the ticket read once per session through the existing
 no error, the row shows the wi id), clicked through the panel's own
 `onOpenAnchor(analysis_of)` (the Messages surface's opener, the same one the
 Memory sub-tab uses) with `stopPropagation` so the task is not also selected.
-An ordinary task has no analysis row. The
+The card's row is a plain click target — the block itself is the button, so no
+second focusable control is nested in it; the detail's copy is the
+keyboard-reachable one (`role="link"`). An ordinary task has no analysis row. The
 detail shows the same analysis row at its top (`data-pf-detail-task-analysis`)
 and a `context` row (`data-pf-detail-task-context`, label
 `polyforge.context`) among its facts: the job detail's `tokens / window` when
