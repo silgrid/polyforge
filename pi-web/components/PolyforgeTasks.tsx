@@ -467,18 +467,15 @@ export function PolyforgeTasks({
             opens it without selecting the task (Q3=A). An ordinary task has
             no row. */}
         {row.analysis_of && (
-          <span data-pf-task-analysis="" role="link" tabIndex={0}
+          // the block is itself a button, so this row is a plain click target,
+          // not a second focusable control (no nested interactive content);
+          // the detail's copy is the keyboard-reachable one and keeps role
+          // "link".
+          <span data-pf-task-analysis=""
             title={t("polyforge.tasks.analysisOf", { slug: taskAnalysisSlug(row.analysis_of, ticket) })}
             onClick={(event) => {
               event.stopPropagation();
               onOpenAnchor?.(row.analysis_of!);
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" || event.key === " ") {
-                event.preventDefault();
-                event.stopPropagation();
-                onOpenAnchor?.(row.analysis_of!);
-              }
             }}
             style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0, cursor: "pointer" }}>
             <span style={{ fontSize: 11, fontWeight: 600, lineHeight: "14px", color: "var(--accent)", overflowWrap: "anywhere" }}>{t("polyforge.tasks.analysisOf", { slug: taskAnalysisSlug(row.analysis_of, ticket) })}</span>
