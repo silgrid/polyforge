@@ -27,16 +27,19 @@ test("the Tasks floor is 2.20.12 and the boundary is inclusive", async () => {
   assert.equal(detect.isPolyforgeVersionBelowMinimum("v2.20.12", lib.POLYFORGE_TASKS_MINIMUM_PF_VERSION), false);
 });
 
-test("the list passport keeps exactly the nine keys (id/project/state/prompt_summary, the timing facts, report_tail/reporter) and reads the project under spec", () => {
+test("the list passport keeps its key set (id/project/state/prompt_summary, the timing facts, report_tail/reporter and the candidate) and reads the project under spec", () => {
   const rows = lib.sanitizeTaskListAnswer({ tasks: [REAL_ROW, { id: "not-a-task" }, null], now: "x" });
   assert.equal(rows.length, 1, "an invalid id drops the row");
   // started_at and wall_consumed_ns travel; pf's zero ended_at reads as absent.
   // / owner-intended 2026-10-30 contract extension, not a relaxation:
   // the pin moves from seven to nine keys (report_tail, reporter); every other raw field stays dropped.
+  // polyforge#230 adds the running attempt's `candidate` (the harness prefix
+  // the catalog window lookup shares with a job row); every other raw field
+  // still stays dropped, and context/analysis_of travel only when pf sends them.
   assert.deepEqual(rows[0], {
     id: "task_0123456789abcdef", project: "workbench", state: "running", prompt_summary: "fix the build",
     started_at: "2026-10-27T01:00:01Z", wall_consumed_ns: 42000000000,
-    report_tail: "…the last report line", reporter: "alice",
+    report_tail: "…the last report line", reporter: "alice", candidate: "pi:m/one",
   });
   const serialized = JSON.stringify(rows);
   for (const dropped of ["ERROR_SENTINEL", "chat_SENTINEL", "REPORT_SENTINEL", "candidates", "tokens_consumed", "created_at", "report_len", "origin_chat", "delivered", "ended_at"]) {
@@ -214,4 +217,74 @@ test("reporter options and filter: humans ascending, machine last, whole list, c
   assert.deepEqual(ids({ reporter: "alice", project: "polyforge" }), [], "reporter + project compose");
   assert.deepEqual(ids({ reporter: "alice", search: "CHARLIE" }), ["3"], "reporter + search compose");
   assert.deepEqual(ids({ reporter: "carol" }), [], "an unknown reporter matches nothing");
+});
+
+// ---- polyforge#230: the running context, the candidate and analysis_of ----
+
+const CONTEXT = { tokens: 4300, model: "openai/m1", as_of: "2026-11-22T10:00:00Z" };
+
+test("AC1/AC2 passport: a running task's context travels with the five known fields only, and is dropped when its tokens are not a real count", () => {
+  const row = lib.sanitizeTaskRow({ ...REAL_ROW, context: { ...CONTEXT, text: "TRANSCRIPT_SENTINEL", window: 200000, percent: 2.15 } });
+  assert.deepEqual(row.context, { tokens: 4300, window: 200000, percent: 2.15, model: "openai/m1", asOf: "2026-11-22T10:00:00Z" },
+    "the context is the job row's shape: tokens/window/percent/model/asOf, no stream text");
+  assert.ok(!JSON.stringify(row).includes("TRANSCRIPT_SENTINEL"), "no stream text rides the context");
+
+  for (const tokens of [-1, "4300", Number.NaN, Number.POSITIVE_INFINITY, undefined]) {
+    assert.ok(!("context" in lib.sanitizeTaskRow({ ...REAL_ROW, context: { ...CONTEXT, tokens } })), `tokens ${String(tokens)} drops the whole context`);
+  }
+  // a window that is not a positive number is dropped with its percent; the count stays
+  for (const window of [0, -5, "200000", Number.NaN]) {
+    const context = lib.sanitizeTaskRow({ ...REAL_ROW, context: { ...CONTEXT, window, percent: 2 } }).context;
+    assert.equal(context.tokens, 4300);
+    assert.ok(!("window" in context) && !("percent" in context), `window ${String(window)} is absent, never guessed`);
+  }
+  // an unusable model id is dropped, the count stays
+  const noModel = lib.sanitizeTaskRow({ ...REAL_ROW, context: { ...CONTEXT, model: "bad model!" } }).context;
+  assert.equal(noModel.tokens, 4300);
+  assert.ok(!("model" in noModel));
+  // the detail carries the same value
+  assert.deepEqual(lib.sanitizeTaskDetail({ ...REAL_ROW, context: CONTEXT, report: "" }).context, CONTEXT);
+  // a task without context keeps exactly its previous keys
+  assert.ok(!("context" in lib.sanitizeTaskRow(REAL_ROW)) && !("context" in lib.sanitizeTaskDetail(REAL_ROW)));
+});
+
+test("AC3 passport: spec.analysis_of travels only as a wi id, the candidate only as a model string", () => {
+  const withSpec = (analysis_of) => lib.sanitizeTaskRow({ ...REAL_ROW, spec: { ...REAL_ROW.spec, analysis_of } });
+  assert.equal(withSpec("wi_abc123").analysis_of, "wi_abc123");
+  for (const bad of ["", "  ", "not-a-wi", 7, null, undefined]) {
+    assert.ok(!("analysis_of" in withSpec(bad)), `analysis_of ${String(bad)} is absent`);
+  }
+  assert.equal(lib.sanitizeTaskDetail({ ...REAL_ROW, spec: { ...REAL_ROW.spec, analysis_of: "wi_abc123" } }).analysis_of, "wi_abc123");
+  assert.ok(!("candidate" in lib.sanitizeTaskRow({ ...REAL_ROW, candidate: 7 })), "a non-string candidate is absent");
+});
+
+test("AC2 window fill: the catalog window and its percent are filled the way a job row is filled, and never guessed", async () => {
+  const calls = [];
+  const lookup = async (context, candidate) => {
+    calls.push([context.model, candidate]);
+    return 400000;
+  };
+  const rows = [
+    { id: "a", context: { tokens: 4300, model: "openai/m1", asOf: "2026-11-22T10:00:00Z" }, candidate: "pi:gpt-x" },
+    { id: "b", context: { tokens: 10, model: "m", window: 200000, percent: 0.005 }, candidate: "pi:gpt-x" },
+    { id: "c", context: { tokens: 7, model: "m" } },
+    { id: "d" },
+  ];
+  const filled = await lib.fillTaskContextWindows(rows, lookup);
+  assert.deepEqual(calls, [["openai/m1", "pi:gpt-x"]], "only the row with a model, no window and a candidate is looked up");
+  assert.deepEqual(filled[0].context, { tokens: 4300, model: "openai/m1", asOf: "2026-11-22T10:00:00Z", window: 400000, percent: 1.075 },
+    "4300 / 400000 * 100 = 1.075");
+  assert.deepEqual(filled[1], rows[1], "an already-known window is kept and never re-read");
+  assert.deepEqual(filled[2], rows[2], "no candidate: no lookup, tokens only");
+  assert.deepEqual(filled[3], rows[3]);
+
+  const none = await lib.fillTaskContextWindows(rows, async () => null);
+  assert.deepEqual(none[0].context, rows[0].context, "a lookup that knows no window leaves the value tokens-only");
+  const threw = await lib.fillTaskContextWindows(rows, async () => { throw new Error("catalog down"); });
+  assert.deepEqual(threw[0].context, rows[0].context, "a failed lookup leaves the value tokens-only, never a guess");
+
+  // the single row face is what the detail route uses, same merge
+  const one = await lib.fillTaskContextWindow({ context: { tokens: 4300, model: "openai/m1" }, candidate: "pi:gpt-x" }, async () => 400000);
+  assert.equal(one.context.window, 400000);
+  assert.equal(one.context.percent, 1.075);
 });
