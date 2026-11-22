@@ -1796,6 +1796,17 @@ func TestW113DoctorHealthyMachine(t *testing.T) {
 	if err := os.WriteFile(cfgPath, append(raw, "\n[memory_policy.\""+ws+"\".default]\nrecord = [\"r\"]\n"...), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// polyforge#143 (85b): the Host [step_tiers] catalog is doctor's
+	// `step tiers catalog` row's subject — a healthy machine declares one,
+	// covering the project default written below, so the row passes instead
+	// of skipping (polyforge#85 fix build, verification r1#1).
+	raw, err = os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, append(raw, "\n[step_tiers]\ndefault = [\"pi:prov/model-a\"]\n"...), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	// a healthy machine's project default names a real model: the shipped
 	// lanes' candidates are placeholders no gateway serves, which the
 	// workspace yaml row warns about
