@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -545,9 +546,11 @@ func TestTaskListShowContextLifecycle(t *testing.T) {
 	}
 	// while running: both faces carry the same five-key context
 	deadline := time.Now().Add(5 * time.Second)
+	var runningContext map[string]any
 	for {
 		row := readList()
 		if c, ok := row["context"].(map[string]any); ok {
+			runningContext = c
 			// the harness reported no window here, so window/percent are
 			// absent (u3#1: the five keys are the maximum, never a guess)
 			for k := range c {
@@ -581,8 +584,14 @@ func TestTaskListShowContextLifecycle(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if c, ok := readShow()["context"].(map[string]any); !ok || c["model"] != "openai/m1" {
-		t.Fatalf("show context = %#v, want the same value as the list row", c)
+	showContext, ok := readShow()["context"].(map[string]any)
+	if !ok {
+		t.Fatalf("show lacks the running context")
+	}
+	for _, field := range []string{"tokens", "model", "as_of", "window", "percent"} {
+		if !reflect.DeepEqual(showContext[field], runningContext[field]) {
+			t.Fatalf("show context %q = %#v, want the list row's %#v (r1#9: the two read faces carry the same value)", field, showContext[field], runningContext[field])
+		}
 	}
 	// terminal: neither face carries it
 	if code, _ := stepDo(t, td.sock, "POST", "/task/cancel/"+tk.ID, ""); code != 200 {
