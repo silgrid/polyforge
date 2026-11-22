@@ -54,6 +54,11 @@ type analysisEntry struct {
 	Project    string `json:"project"`
 	EnqueuedAt string `json:"enqueued_at"`
 	Retries    int    `json:"retries"`
+	// RedoRequestID marks an explicit redo round (polyforge#233): the
+	// request id its pending marker carries until the task's first write
+	// replaces the token with the task id. A plain create/retry entry
+	// carries none.
+	RedoRequestID string `json:"redo_request_id,omitempty"`
 }
 
 // analysisQueue is the Cell's persisted pending-analysis FIFO.
@@ -118,6 +123,56 @@ func (q *analysisQueue) add(e analysisEntry) bool {
 		fmt.Fprintf(os.Stderr, "daemon: %s persist failed: %v\n", analysisQueueFile, err)
 	}
 	return true
+}
+
+// addRedo registers one redo request BEFORE the ticket CAS and answers
+// its persist failure — unlike add, a request that cannot land refuses the
+// round instead of leaving an unbacked marker on the ticket.
+func (q *analysisQueue) addRedo(e analysisEntry) (bool, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for _, x := range q.entries {
+		if x.WorkItemID == e.WorkItemID {
+			return false, nil
+		}
+	}
+	q.entries = append(q.entries, e)
+	if err := q.persistLocked(); err != nil {
+		q.entries = q.entries[:len(q.entries)-1]
+		return false, err
+	}
+	return true, nil
+}
+
+// has answers whether a request for wi waits in the queue (a redo or a
+// create/retry): an explicit redo must not stack behind another round.
+func (q *analysisQueue) has(wi string) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for _, e := range q.entries {
+		if e.WorkItemID == wi {
+			return true
+		}
+	}
+	return false
+}
+
+// dropRequest removes one work item's queued request (the redo route's
+// rollback after a failed CAS). A requestID narrows it to that round.
+func (q *analysisQueue) dropRequest(wi, requestID string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	kept := q.entries[:0]
+	for _, e := range q.entries {
+		if e.WorkItemID == wi && (requestID == "" || e.RedoRequestID == requestID) {
+			continue
+		}
+		kept = append(kept, e)
+	}
+	q.entries = kept
+	if err := q.persistLocked(); err != nil {
+		fmt.Fprintf(os.Stderr, "daemon: %s persist failed (redo rollback): %v\n", analysisQueueFile, err)
+	}
 }
 
 // removeLocked drops the head entry; q.mu held.

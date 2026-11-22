@@ -187,6 +187,12 @@ func (d *Daemon) routes() *http.ServeMux {
 	// tree is refused DAEMON-403; only a human session's `pf file create`
 	// asks for one.
 	mux.HandleFunc("POST /analysis/enqueue", d.analysisEnqueueRoute)
+	// the owner's explicit re-analysis of a queued or blocked execution
+	// ticket (analysis_redo.go, polyforge#233). Same reach as enqueue:
+	// behind refuseStepOrigin, so a step or task process is refused
+	// DAEMON-403 before the handler; only a human session's
+	// `pf file analysis redo` asks for one.
+	mux.HandleFunc("POST /analysis/redo", d.analysisRedoRoute)
 	// the narrow write path of a running analysis task (analysis_write.go,
 	// polyforge#72): the ONE write a task agent may make — its own ticket's
 	// `## 分析` section. The task-origin guard above admits a task peer on
