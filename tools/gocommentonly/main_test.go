@@ -55,9 +55,12 @@ func TestGocommentonly(t *testing.T) {
 		{"block comment passes",
 			"package p\n\nfunc F() {}\n",
 			"package p\n\n/* one\n   block */\nfunc F() {}\n"},
-		{"whitespace and semicolon reflow passes",
-			"package p\n\nfunc F() { g(); h() }\n",
-			"package p\n\nfunc F() {\n\tg()\n\th()\n}\n"},
+		{"blank-line and indentation reflow passes",
+			"package p\n\nfunc F() {\n\tg()\n\th()\n}\n",
+			"package p\n\n\nfunc F() {\n\n\t\tg()\n\n\t\th()\n\n}\n\n"},
+		{"a comment moved between statements passes",
+			"package p\n\nfunc F() {\n\tg()\n\t// note\n\th()\n}\n",
+			"package p\n\n// note moved\nfunc F() {\n\tg()\n\th()\n}\n"},
 		{"an unchanged directive set beside a changed comment passes",
 			"//go:build linux\n\npackage p\n\nfunc F() {}\n",
 			"//go:build linux\n\npackage p\n\n// F does nothing.\nfunc F() {}\n"},
@@ -74,7 +77,12 @@ func TestGocommentonly(t *testing.T) {
 
 	// refuse cases: any code change, any directive-comment change, a
 	// changed cgo presence or preamble, an unparseable version — fail
-	// closed, exactly as before the exception existed
+	// closed, exactly as before the exception existed. The reflow case
+	// pins Q3 A's documented strictness: `{ g(); h() }` and the same
+	// statements on separate lines are grammar-equivalent, but the
+	// newline inserts a real semicolon token the written form lacks, and
+	// the settled token-stream rule refuses (the owner-accepted cost of
+	// the fail-closed bias).
 	for _, tc := range []struct {
 		name string
 		old  string
@@ -110,6 +118,9 @@ func TestGocommentonly(t *testing.T) {
 		{"a changed cgo preamble refuses",
 			"package p\n\n// int one;\nimport \"C\"\n\nfunc F() {}\n",
 			"package p\n\n// int two;\nimport \"C\"\n\nfunc F() {}\n"},
+		{"a reflow that adds a statement-list semicolon refuses",
+			"package p\n\nfunc F() { g(); h() }\n",
+			"package p\n\nfunc F() {\n\tg()\n\th()\n}\n"},
 		{"an unparseable old version refuses",
 			"this is not go source at all\n",
 			"// still nothing but a comment\nthis is not go source at all\n"},
