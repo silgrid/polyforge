@@ -183,7 +183,7 @@ import time  # noqa: E402
 import traceback  # noqa: E402
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple  # noqa: E402
 
-from pfstep import duration, git, gostr, runner  # noqa: E402
+from pfstep import container, duration, git, gostr, runner  # noqa: E402
 from pfstep import scoped_plan  # noqa: E402
 from pfstep.completion import completion_proof, harness_command, read_go_harness  # noqa: E402
 from pfstep.engine import TIER_LIGHT, EngineCommand, EngineReport, ReportError, decode_report  # noqa: E402
@@ -1404,7 +1404,10 @@ def run(inv: Invocation) -> int:
         return 2
 
 
-def main(argv: Optional[List[str]] = None, environ: Optional[Dict[str, str]] = None) -> int:
+def main(argv: Optional[List[str]] = None, environ: Optional[Dict[str, str]] = None,
+         runtime: Optional[container.ContainerRuntime] = None) -> int:
+    """The command: argv (default sys.argv[1:]) under environ (default the
+    process's); runtime replaces the docker CLI (a test's fake engine)."""
     inv = Invocation(NAME, sys.argv[1:] if argv is None else argv, environ)
     raise_on_termination()
     try:
