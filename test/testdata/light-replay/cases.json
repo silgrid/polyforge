@@ -956,6 +956,16 @@
     ]
    },
    "allowed_new": {
+    "go_pkg_cmds": [
+     {
+      "name": "./internal/polyforge/components",
+      "via": "polyforge#190: internal/polyforge/components/assemble.go and rollback.go import internal/polyforge/cellcfg, so a cellcfg/schema.go change selects the package; the corpus's old set predates the import (polyforge#84 fix build B1)"
+     },
+     {
+      "name": "./internal/polyforge/components/seedtool",
+      "via": "polyforge#190: internal/polyforge/components/seedtool/main.go imports internal/polyforge/cellcfg, so a cellcfg/schema.go change selects the package; the corpus's old set predates the import (polyforge#84 fix build B1)"
+     }
+    ],
     "e2e_run_names": [
      {
       "name": "TestV2DevelopSyncRewindKeepsBuildsWork",
