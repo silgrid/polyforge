@@ -7,6 +7,9 @@ import (
 	"math"
 	"os"
 	"sync"
+	"time"
+
+	"github.com/silgrid/polyforge/internal/common/protocol"
 )
 
 // Context is the context-window usage a step session's transcript shows:
@@ -24,6 +27,34 @@ type Context struct {
 	Model string
 	// At is the timestamp of the record that last decided Tokens.
 	At string
+}
+
+// Usage answers the context as the wire shape the step and task read faces
+// share (protocol.ContextUsage, the job row's `context` and a running task's
+// `context`): the tokens, the model id and the record's timestamp when the
+// count is known, plus the window and the percent the count fills when
+// windows carries the session model's window (polyforge#230 — the task lane's
+// adapter reads the same shape as the step lane's, from this one mapping).
+func (c Context) Usage(windows map[string]int64) *protocol.ContextUsage {
+	u := &protocol.ContextUsage{Model: c.Model}
+	if c.TokensKnown {
+		tokens := c.Tokens
+		u.Tokens = &tokens
+		if _, err := time.Parse(time.RFC3339Nano, c.At); err == nil {
+			u.AsOf = c.At
+		}
+	}
+	if u.Tokens == nil && u.Model == "" {
+		return nil
+	}
+	if w := windows[c.Model]; c.Model != "" && w > 0 {
+		u.Window = &w
+		if u.Tokens != nil {
+			pct := float64(*u.Tokens) / float64(w) * 100
+			u.Percent = &pct
+		}
+	}
+	return u
 }
 
 // ContextReader reads a session transcript's context usage incrementally:
