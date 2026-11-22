@@ -3573,6 +3573,9 @@ export function AppShell() {
                       sessionRunning={false}
                       chatInputRef={getPaneChatInputRef(NEW_SESSION_TAB_ID)}
                       onSessionCreated={handleSessionCreated}
+                      // polyforge#231: a composer's uploads change the same
+                      // workspace; the refresh handler reads no session.
+                      onFilesUploaded={handleExplorerRefresh}
                       onOpenSettings={openSettingsSection}
                     />
                   );
@@ -3618,6 +3621,10 @@ export function AppShell() {
                     // polyforge#231: the notification opens THIS pane's session;
                     // the global request-id dedupe stays shared.
                     onAttentionNeeded={(request) => handleAttentionNeeded(request, paneSession)}
+                    // polyforge#231: tools and uploads refresh the one shared
+                    // explorer key; neither handler reads a session (ruling 3=A).
+                    onToolEnd={handleToolEnd}
+                    onFilesUploaded={handleExplorerRefresh}
                     // polyforge#231: every per-session callback below is bound
                     // to THIS pane's sid. Pane focus never updates
                     // selectedSession, so reusing a selectedSession-based
