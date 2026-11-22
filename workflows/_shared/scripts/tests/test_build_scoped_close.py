@@ -757,11 +757,14 @@ class CloseContainerTest(unittest.TestCase):
                          "a boxed close consumes no host green evidence")
         pin = [c for c in sel["commands"] if c["name"] == "pin"][0]
         self.assertNotEqual(pin["exit_code"], 0, "the tool is missing in the image: red")
-        # the command really ran in the container, and its one targeted
-        # re-run did too (never the host's PATH re-running it green)
+        # the command really ran in the container — never a simulated red —
+        # and no re-run of it can land on the host's PATH: a whole-command
+        # residual gets no re-run by the per-unit bar's own rules (never
+        # re-runnable), and a located unit's re-run goes through the box
+        # (u5's pre-existing scenario pins that path)
         tool_execs = fb.command_execs("close-proof-tool")
-        self.assertGreaterEqual(len(tool_execs), 2,
-                                "the command and its re-run both executed in the container")
+        self.assertGreaterEqual(len(tool_execs), 1,
+                                "the command really executed in the container")
         for e in tool_execs:
             self.assertEqual(e[0], "cid-1")
         # an unusable --reuse file is the invocation's error, whatever the
