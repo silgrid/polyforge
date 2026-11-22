@@ -138,9 +138,12 @@ func TestRecoverNoNewDriverWhileOldRunStillAlive(t *testing.T) {
 
 // TestStepHandleTerminateReapsSetsidChild: the step-end teardown the
 // driver invokes (the step handle's Terminate, then the runtime's
-// StepEnded hook) kills the process group only. A child that called
-// setsid left the group and survives the step — until the WI ends today.
-// It must be gone at the step's own end.
+// StepEnded hook) must reach beyond the process group: a child that
+// called setsid left the group and once survived the step until the WI
+// ended; the hook's PF_WI_ID marker sweep (the same L4 layer-4 cleanup,
+// hardened in polyforge#200) collects it at the step's own end, and a
+// sweep that cannot prove the step's processes gone now parks the work
+// item (cleanup_failed) instead of advancing.
 func TestStepHandleTerminateReapsSetsidChild(t *testing.T) {
 	wi := runMarker("wi_w77_setsid")
 	daemon := runMarker("daemon-w77")

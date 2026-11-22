@@ -18,7 +18,11 @@ abandons a work item directly.
 A **parked** work item (blocked or paused) is answered too: the message wakes the step the park belongs to — its own
 session after it handed off `blocked`, the step that timed out or kept
 exiting without a hand-off, the current step after a pause, a replay of
-failed hub writes. The command opens the work item's door with your own
+failed hub writes, and after a `cleanup_failed` park the step-end
+process sweep re-runs first and the lane continues the way the park's
+reason says (a kept hand-off settles without re-running the step, a
+failed dispatch retries with the words, an open ask re-enters with the
+answer). The command opens the work item's door with your own
 key first (the one `pf resume` opens), then the daemon records the words
 and claims the work item. Only a park no agent can start (no usable model,
 a snapshot of another contract) is refused — then `pf resume` after the

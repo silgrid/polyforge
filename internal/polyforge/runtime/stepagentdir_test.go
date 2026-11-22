@@ -8,11 +8,15 @@ package runtime
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/silgrid/polyforge/internal/polyforge/runtime/stepagentassets"
 )
 
 // operatorDirFixture lays out a realistic operator agent directory: the
@@ -37,7 +41,7 @@ func operatorDirFixture(t *testing.T) string {
 		t.Fatal(err)
 	}
 	write("agents/reviewer.md", "# reviewer subagent\n")
-	// the subagent TOOL: the one extension the snapshot carries
+	// the subagent TOOL: one of the two extensions the snapshot carries
 	write("extensions/subagent/index.ts", "// subagent tool\n")
 	write("extensions/subagent/agents.ts", "// subagent discovery\n")
 	write("agents/nested/deep.md", "# nested subagent\n")
@@ -88,25 +92,92 @@ func TestStepAgentDirMinimalSetAndPlacement(t *testing.T) {
 			t.Fatalf("unexpected entry %q in the dedicated dir (%v)", n, got)
 		}
 	}
-	// the subagent definitions travel, recursively
-	for _, rel := range []string{"agents/reviewer.md", "agents/nested/deep.md"} {
+	// the daemon-owned worker definition is embedded, regardless of the
+	// operator's reviewer definition.
+	for _, rel := range []string{"agents/worker.md"} {
+		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(rel))); err != nil {
+			t.Fatalf("%s was not installed: %v", rel, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "agents/reviewer.md")); !os.IsNotExist(err) {
+		t.Fatalf("operator agent definitions must not be copied: %v", err)
+	}
+	// extensions/ carries the allowlisted extensions and NOTHING else
+	// (os.ReadDir is name-sorted: guard sorts before subagent)
+	if exts := listDirNames(t, filepath.Join(dir, "extensions")); !slices.Equal(exts, []string{"guard", "subagent"}) {
+		t.Fatalf("extensions/ must hold exactly guard and subagent, got %v", exts)
+	}
+	for _, rel := range []string{"extensions/subagent/index.ts", "extensions/guard/index.ts", "extensions/guard/rules.ts"} {
 		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(rel))); err != nil {
 			t.Fatalf("%s was not copied: %v", rel, err)
 		}
 	}
-	// extensions/ carries the subagent tool and NOTHING else
-	if exts := listDirNames(t, filepath.Join(dir, "extensions")); len(exts) != 1 || exts[0] != "subagent" {
-		t.Fatalf("extensions/ must hold exactly subagent, got %v", exts)
-	}
-	for _, rel := range []string{"extensions/subagent/index.ts", "extensions/subagent/agents.ts"} {
-		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(rel))); err != nil {
-			t.Fatalf("%s was not copied: %v", rel, err)
+	// the guard extension rides the same embed: the installed bytes are
+	// the embedded bytes, and a test file never reaches the step dir
+	for _, rel := range []string{"extensions/guard/index.ts", "extensions/guard/rules.ts"} {
+		want, err := fs.ReadFile(stepagentassets.FS, rel)
+		if err != nil {
+			t.Fatalf("embedded %s: %v", rel, err)
+		}
+		got, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
+		if err != nil || string(got) != string(want) {
+			t.Fatalf("the guard file %s must match the embedded bytes: %v", rel, err)
 		}
 	}
-	// models.json keeps the source's mode (0600 here)
+	werr := filepath.WalkDir(dir, func(p string, de os.DirEntry, werr error) error {
+		if werr != nil {
+			return werr
+		}
+		if de.Type().IsRegular() && strings.HasSuffix(de.Name(), ".test.ts") {
+			t.Errorf("a node test file reached the step agent dir: %s", p)
+		}
+		return nil
+	})
+	if werr != nil {
+		t.Fatal(werr)
+	}
+	// Embedded bytes win over operator content, including modification.
+	operatorExt := filepath.Join(src, "extensions", "subagent", "index.ts")
+	if err := os.WriteFile(operatorExt, []byte("operator replacement"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.refreshStepAgentDir(); err != nil {
+		t.Fatal(err)
+	}
+	embeddedWant, err := fs.ReadFile(stepagentassets.FS, "extensions/subagent/index.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	embeddedGot, err := os.ReadFile(filepath.Join(dir, "extensions", "subagent", "index.ts"))
+	if err != nil || string(embeddedGot) != string(embeddedWant) {
+		t.Fatalf("embedded extension was replaced: %v", err)
+	}
+	// the same discipline for the guard: an operator-placed guard file
+	// never replaces the embedded one (analysis §2 AC3)
+	if err := os.MkdirAll(filepath.Join(src, "extensions", "guard"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "extensions", "guard", "index.ts"), []byte("operator guard"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.refreshStepAgentDir(); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{"extensions/guard/index.ts", "extensions/guard/rules.ts"} {
+		want, err := fs.ReadFile(stepagentassets.FS, rel)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
+		if err != nil || string(got) != string(want) {
+			t.Fatalf("the embedded %s was replaced by operator content: %v", rel, err)
+		}
+	}
+	// models.json keeps the source mode (0600 here)
 	if ms, err := os.Stat(filepath.Join(dir, "models.json")); err != nil || ms.Mode().Perm() != 0o600 {
 		t.Fatalf("models.json must keep the source mode 0600: %v %v", ms, err)
 	}
+
 	// credentials land 0600 and are a COPY (no symlink into the
 	// operator's directory, which would re-open the whole dir)
 	st, err := os.Lstat(filepath.Join(dir, "auth.json"))
@@ -190,14 +261,20 @@ func TestStepAgentDirResyncFollowsSourceAndPrunesExtras(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "models.json")); !os.IsNotExist(err) {
 		t.Fatalf("a models.json the source no longer has must be dropped: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "agents", "reviewer.md")); !os.IsNotExist(err) {
-		t.Fatalf("a deleted subagent definition must be dropped: %v", err)
+	if _, err := os.Stat(filepath.Join(dir, "agents", "worker.md")); err != nil {
+		t.Fatalf("the built-in worker must survive refresh: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "agents", "nested", "deep.md")); err != nil {
-		t.Fatalf("a surviving subagent definition must stay: %v", err)
+	if _, err := os.Stat(filepath.Join(dir, "agents", "reviewer.md")); !os.IsNotExist(err) {
+		t.Fatalf("operator definitions must remain absent: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "agents", "nested")); !os.IsNotExist(err) {
+		t.Fatalf("operator agent tree must remain absent: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "extensions", "subagent", "index.ts")); err != nil {
 		t.Fatalf("the subagent extension must survive the prune: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "extensions", "guard", "index.ts")); err != nil {
+		t.Fatalf("the guard extension must survive the prune: %v", err)
 	}
 	for _, extra := range []string{"settings.json", "extensions/stray"} {
 		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(extra))); !os.IsNotExist(err) {
@@ -220,10 +297,9 @@ func TestStepAgentDirPerSpawnRefreshNeverPrunes(t *testing.T) {
 	if err := os.WriteFile(extra, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// the subagent extension leaves the source: the refresh drops it
-	// (allowlisted member, absent source ⇒ absent here)
-	if err := os.RemoveAll(filepath.Join(src, "extensions", "subagent")); err != nil {
-		t.Fatal(err)
+	// The embedded extension is immutable and survives any operator edit or deletion.
+	if _, err := os.Stat(filepath.Join(dir, "extensions", "subagent", "index.ts")); err != nil {
+		t.Fatalf("the built-in subagent extension must survive the prune: %v", err)
 	}
 	if err := cfg.refreshStepAgentDir(); err != nil {
 		t.Fatalf("refresh: %v", err)
@@ -231,14 +307,11 @@ func TestStepAgentDirPerSpawnRefreshNeverPrunes(t *testing.T) {
 	if _, err := os.Stat(extra); err != nil {
 		t.Fatalf("the per-spawn refresh must not prune: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "extensions", "subagent")); !os.IsNotExist(err) {
-		t.Fatalf("a subagent extension the source no longer has must be dropped: %v", err)
-	}
-	// the next daemon start prunes the extra (and the now-empty extensions/)
+	// the next daemon start prunes the extra
 	if err := cfg.SyncStepAgentDir(); err != nil {
 		t.Fatalf("daemon-start sync: %v", err)
 	}
-	for _, gone := range []string{"extra.txt", "extensions"} {
+	for _, gone := range []string{"extra.txt"} {
 		if _, err := os.Stat(filepath.Join(dir, gone)); !os.IsNotExist(err) {
 			t.Fatalf("the daemon-start sync must prune %s: %v", gone, err)
 		}

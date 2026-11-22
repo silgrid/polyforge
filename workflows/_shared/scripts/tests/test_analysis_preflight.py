@@ -18,7 +18,16 @@ the original capsules' files:
 Each bad fixture is judged red with the entry and the rule it violates
 named; a compliant fixture passes; over the supplement cap the tail is
 cut and named, never run; an unusable analysis file is not judged (exit
-2, verification's own treatment of the same file)."""
+2, verification's own treatment of the same file).
+
+polyforge#164 adds the machine selection records (``selected``): a
+green record passes; a record of another tree (a stale head), an
+incomplete selection or a command without green evidence is red — and
+the records are judged statically (never re-run) and never subject to
+the supplement cap. Whether a touched repo carries one at all is no
+machine question (the owner's Q1 ruling: the build step's own text
+demands the record, review judges its absence — a full-only repo has
+none to carry)."""
 
 import io
 import json
@@ -39,6 +48,22 @@ def entry(**kw: Any) -> Dict[str, Any]:
                          "why": "pins the changed behaviour"}
     e.update(kw)
     return e
+
+
+def selected_record(fx: Fixture, repo: str = "app", **kw: Any) -> Dict[str, Any]:
+    """One task repo's machine selection record as a green close-scoped run
+    writes it (polyforge#164): the identity the selection was computed at,
+    the selected commands with their evidence. kw overrides any field."""
+    rec: Dict[str, Any] = {
+        "head": fx.head(repo), "tree": "", "base": "", "default_branch": "main",
+        "engine": "the engine --json --light --base b0", "conf": ".polyforge/verify-scope.conf",
+        "conf_changed_in_diff": False, "mode": "light", "paths": ["lib/x.py"], "suites": [],
+        "test_glob": [], "status": "green",
+        "commands": [{"name": "gate", "root": "repos/" + repo, "cmd": "echo plan-ok",
+                      "phase": "scoped", "source": "conf", "exit_code": 0}],
+    }
+    rec.update(kw)
+    return rec
 
 
 def world(root: str) -> Fixture:
@@ -80,7 +105,9 @@ class AnalysisCloseCheckTest(unittest.TestCase):
         self.fx = world(self.root)
         self.out = os.path.join(self.fx.capsule, "artifacts", "facts", "analysis.json")
 
-    def check(self, doc: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
+    def check(self, doc: Dict[str, Any], selected: bool = True) -> Tuple[int, Dict[str, Any]]:
+        if selected and "selected" not in doc:
+            doc = dict(doc, selected={"app": selected_record(self.fx)})
         path = analysis_file(self.fx, doc)
         return run_facts(self.fx.capsule, path, self.out)
 
@@ -188,6 +215,114 @@ class AnalysisCloseCheckTest(unittest.TestCase):
                               self.out)
         self.assertEqual(code, 2)
         self.assertIn("is unusable", res.get("summary", ""), res)
+
+    # -- the machine selection records (polyforge#164)
+
+    def selected_of(self, res: Dict[str, Any]) -> Dict[str, Any]:
+        entries = self.details(res)["selected"]
+        self.assertEqual([e["repo"] for e in entries], ["app"], entries)
+        return dict(entries[0])
+
+    def test_a_missing_selected_section_is_no_machines_red(self) -> None:
+        """The record's presence is the build step's own rule and review's
+        judgment, never a machine red (the owner's Q1 ruling: a full-only
+        repo — its light selection falls back to the full tier — has no
+        record to carry and no red to answer for)."""
+        code, res = self.check({"tests": [entry(name="test_ok")]}, selected=False)
+        self.assertEqual(code, 0, res.get("summary"))
+        self.assertEqual(self.details(res)["selected"], [])
+
+    def test_an_untouched_repo_needs_no_selected_record(self) -> None:
+        os.makedirs(os.path.join(self.root, "flat"), exist_ok=True)
+        fx = Fixture(os.path.join(self.root, "flat"), {"app": {"a.txt": "base\n"}})
+        path = analysis_file(fx, {"tests": []})
+        out = os.path.join(fx.capsule, "artifacts", "facts", "analysis.json")
+        code, res = run_facts(fx.capsule, path, out)
+        self.assertEqual(code, 0, res.get("summary"))
+        selected = (res.get("details") or {}).get("selected") or []
+        self.assertEqual(selected, [], "an untouched repo is no selection to demand")
+
+    def test_a_stale_head_is_red(self) -> None:
+        code, res = self.check({"tests": [], "selected": {"app": selected_record(self.fx, head="00000000")}})
+        self.assertEqual(code, 1, res.get("summary"))
+        rec = self.selected_of(res)
+        self.assertEqual(rec["status"], "fail")
+        self.assertIn("is not the tree it is judged at", rec["problem"])
+        self.assertIn("stale", rec["problem"])
+
+    def test_an_incomplete_selection_is_red_with_its_reason(self) -> None:
+        sel = selected_record(self.fx, status="incomplete",
+                              reason="go.sum: a lockfile changed, falling back to the full tier")
+        code, res = self.check({"tests": [], "selected": {"app": sel}})
+        self.assertEqual(code, 1, res.get("summary"))
+        rec = self.selected_of(res)
+        self.assertEqual(rec["status"], "fail")
+        self.assertIn("its selection is incomplete", rec["problem"])
+        self.assertIn("falling back to the full tier", rec["problem"])
+
+    def test_a_command_without_green_evidence_is_red(self) -> None:
+        for name, cmd, want in (("red", {"exit_code": 3}, "exited 3"),
+                                ("skipped", {"skipped": True, "skip_reason": "env NO_SUCH"}, "cannot run"),
+                                ("timed out", {"timed_out": True}, "killed at its timeout"),
+                                ("no run", {}, "carries no run")):
+            with self.subTest(name):
+                sel = selected_record(self.fx, commands=[dict({"name": "pin", "cmd": "pin", "phase": "scoped"}, **cmd)])
+                code, res = self.check({"tests": [], "selected": {"app": sel}})
+                self.assertEqual(code, 1, res.get("summary"))
+                self.assertIn(want, self.selected_of(res)["problem"])
+
+    def test_a_reused_command_is_evidence_enough(self) -> None:
+        sel = selected_record(self.fx, commands=[
+            {"name": "gate", "cmd": "echo plan-ok", "phase": "fast", "reused": "fast-checks.json#gate"}])
+        code, res = self.check({"tests": [], "selected": {"app": sel}})
+        self.assertEqual(code, 0, res.get("summary"))
+        self.assertEqual(self.selected_of(res)["status"], "pass")
+
+    def test_a_selected_record_naming_an_unknown_repo_is_red(self) -> None:
+        code, res = self.check({"tests": [],
+                                "selected": {"app": selected_record(self.fx),
+                                              "web": selected_record(self.fx)}})
+        self.assertEqual(code, 1, res.get("summary"))
+        entries = self.details(res)["selected"]
+        web = [e for e in entries if e["repo"] == "web"][0]
+        self.assertEqual(web["status"], "fail")
+        self.assertIn("is not a task repo of this capsule", web["problem"])
+
+    def test_selected_records_are_never_subject_to_the_cap(self) -> None:
+        """The supplement cap cuts the tests[] tail only: the machine
+        selection is the engine's own, never a supplement, so no cap can
+        drop an engine item (the ticket's AC3)."""
+        doc = {"supplement_limit": 1, "tests": [entry(name="test_ok"), entry(name="test_ok", id="a2")],
+               "selected": {"app": selected_record(self.fx, commands=[
+                   {"name": "c1", "cmd": "echo one", "phase": "scoped", "exit_code": 0},
+                   {"name": "c2", "cmd": "echo two", "phase": "scoped", "exit_code": 0}])}}
+        code, res = self.check(doc)
+        self.assertEqual(code, 0, res.get("summary"))
+        cut = self.details(res)["cut"]
+        self.assertEqual([c["id"] for c in cut], ["a2"], "the cap cuts the tests tail only")
+        entries = self.details(res)["selected"]
+        self.assertEqual([e["repo"] for e in entries], ["app"])
+        self.assertEqual(entries[0]["status"], "pass")
+
+    def test_selected_commands_are_judged_statically_never_re_run(self) -> None:
+        """The record's own evidence is its run's: the close check judges
+        it statically — a command that would exit 7 if it ran is not run
+        here (its green run is the close-scoped run's record)."""
+        sel = selected_record(self.fx, commands=[
+            {"name": "gate", "cmd": "exit 7", "phase": "scoped", "exit_code": 0}])
+        code, res = self.check({"tests": [], "selected": {"app": sel}})
+        self.assertEqual(code, 0, res.get("summary"))
+        self.assertEqual(self.selected_of(res)["status"], "pass")
+
+    def test_a_bad_selected_shape_is_not_judged(self) -> None:
+        for name, sel in (("no head", {"engine": "the engine", "mode": "light", "status": "green", "commands": []}),
+                          ("no engine", {"head": "b" * 40, "mode": "light", "status": "green", "commands": []}),
+                          ("bad status", dict(selected_record(self.fx), status="done")),
+                          ("commands", dict(selected_record(self.fx), commands="nope"))):
+            with self.subTest(name):
+                code, res = self.check({"tests": [], "selected": {"app": sel}})
+                self.assertEqual(code, 2)
+                self.assertIn("is unusable", res.get("summary", ""), res)
 
 
 if __name__ == "__main__":

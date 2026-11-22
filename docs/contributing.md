@@ -85,7 +85,12 @@ without the section, the daemon schedules an analysis task that writes its
 (`pf task analysis-write`, the one write a task may make); the draft stays
 unconfirmed — auto-pull skips it, `pf queue` marks it 需要交互：分析待确认 —
 until the owner runs `pf file analysis confirm <id>`. The routing skill's
-submit fragment owns the analysis flow (polyforge#72). `build` does not grill the ticket; it asks the owner only on a
+submit fragment owns the analysis flow (polyforge#72). The plan `build`
+writes then maps that analysis — each old test and document obligation,
+each risk, each decided point it lists goes to the unit that carries it or
+a stated reason it is not taken (`## 分析对照` in `artifacts/plan.md`; a
+decided point first, an analysis written against an older base having its
+file:line references re-checked against the current one). `build` does not grill the ticket; it asks the owner only on a
 surprise, right after the plan and never at completion, with `pf step ask`. Human stops: a dead end or a
 contradiction the code reveals (a defect `build` cannot reproduce included); the plan
 diverging from the ticket; `confirm_plan` (one stop right after the plan, before the
@@ -96,10 +101,12 @@ owner answers in free text that `build` reads — its summary states each
 decision, the owner's words and its reading, which review checks against the
 words. No daemon check settles `build`: it runs each unit red
 then green itself and records the unit in `artifacts/build/units.json` — `[{id,
-pre_existing_red?, test_commit?, impl_commit, run{repo, cwd, argv}, marker}]`, the run
+pre_existing_red?, timeout?, test_commit?, impl_commit, run{repo, cwd, argv}, marker}]`, the run
 exactly as it ran (a unit whose reproduction test already exists and is red before
 the change declares `pre_existing_red: true` and reports no `test_commit`, its red
-evidence a replay on the tree of the change's base) —
+evidence a replay on the tree of the change's base; a unit self-reports `timeout`
+(a Go duration) to raise the limit its run and its red-state replay are bounded by,
+the default 10m) —
 and the steps after it verify that record. Review runs the workflow's `facts.py
 plan-conformance`, `build --replay --isolation host`, `carries` and `analysis` (the change
 analysis's own close check) and judges their facts: each unit's test
@@ -143,10 +150,17 @@ sweep runs.
 
 ## Verification tiers
 
-`code` commits run the fast gates of the packages they touch, and each build
-step (`code`, `fix`) also runs the `fast`- and `scoped`-phase commands of the
-engine's `--json` report below before it calls a unit green (never its
-`full`-phase ones); the full bar belongs to the `verification` step. A lane's
+`develop` 的 build 逐单元只运行本单元定向测试，以及本单元写入路径所触及
+root 的 `fast` 命令：使用 `fast_checks.py --repo <name> --phase fast`
+加可重复的 `--root <dir>`（`.` 表示仓根）。同一命令文本、root 子树的
+工作树 tree hash、声明的环境前提不变时，复用上次一次执行即成功的绿结果，
+保留原日志；未选中的绿条目继续保留，红或经 flaky 重跑确认的结果不复用。
+`scoped` 选择只在收尾对整个改动执行一次，`full` 门槛属于
+`verification` 步骤。The
+develop lane's build close runs the same light selection before its
+hand-off (`fast_checks.py --close-scoped`): the existing tests the engine
+selects run there, not first at verification, and a full-tier fallback
+records `incomplete` and is the owner's to settle. A lane's
 verification step runs the tier it declares (`with: { tier: light }`, else
 `full`); a work item chooses no tier (workflow contract 1). The
 scope comes from the engine `workflows/_shared/scripts/verify-scope` (with
@@ -183,7 +197,11 @@ changed or whose `carries:` meet it, plus the build's unit runs
 build writes at its close; the union is add-only — the engine's selection
 is never narrowed — under the analysis's `supplement_limit`, the lane's
 cap, cut in listed order past it and named in the result; a listed test
-that does not exist fails its check naming it). Under
+that does not exist fails its check naming it; and the analysis's
+`selected` records — the build close's scoped run writes them — are
+judged the same way on both sides: a stale head, a non-green selection or
+a command without green evidence fails its check, and a sync's merge
+commits between the record's head and the verified HEAD leave it valid). Under
 `--light` the conf's `forced_full=` globs and the `module_root=` spanning
 rule force nothing, a changed path no `carries:` declaration covers is
 diagnosed (the fast gates still cover it) instead of forcing full, and at a
@@ -409,18 +427,20 @@ items that merged.
   change runs the subtree conf's light report (its fast gates and the suites
   whose `carries:` meet it), and the rest of the package's bar is the
   integration run's.
-- **The release gate.** This conf's full tier, run inside the image built
-  from `.polyforge/Dockerfile.verify` — or, when the step's `image`
-  parameter names one, inside that prepared image — is also the release's test gate: one
-  definition, run by the workflow script `gate.py` (`python3
+- **The integrate gate and the release.** This conf's full tier, run inside
+  the image built from `.polyforge/Dockerfile.verify` — or, when the step's
+  `image` parameter names one, inside that prepared image — is the one
+  gate definition, run by the workflow script `gate.py` (`python3
   workflows/_shared/scripts/gate.py --isolation container` from the
-  clone's root), reused by the release when the released commit
-  carries a green tag — written only by `gate.py --mark-green` after a
-  pass — for the same gate id and plan digest (`tools/gate-id`,
-  `tools/green-tag check`). This repository gates itself: its tree
+  clone's root), whose pass writes the green tag — written only by
+  `gate.py --mark-green`, for the gate id and plan digest
+  (`tools/gate-id`, `tools/green-tag check`). The release no longer runs
+  it (polyforge#154): a green batch's own gate run is the test evidence
+  its pins ship with, and the release reads no green tag. This repository
+  gates itself: its tree
   carries the engine and the gate id the gate falls back to for a
   repository that carries neither. A change to a gate line of this conf or to the
-  Dockerfile is a change to the release gate. `make test` is a developer
+  Dockerfile is a change to what a green tag means. `make test` is a developer
   subset and gates nothing. The contract is in
   [docs/reference/release.md](reference/release.md#the-test-gate).
 - **CI.** Two GitHub workflows, reachable by any push to `main` and any

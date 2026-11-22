@@ -15,19 +15,27 @@ package runtime
 //	                     operator agent dir (mode 0600, daemon-owned)
 //	models.json          model service configuration — COPY (source mode
 //	                     preserved), only when the source has one
-//	agents/              subagent definition files — recursive COPY of
-//	                     the source tree; absent source dir ⇒ absent here
-//	extensions/subagent/ the subagent TOOL — recursive COPY of exactly
-//	                     that one extension directory; absent source ⇒
-//	                     absent here
+//	agents/              subagent definition files — daemon-owned embed
+//	                     (agents/worker.md) installed into the snapshot
+//	extensions/subagent/ the subagent TOOL — daemon-owned embed
+//	                     installed into the snapshot (same mechanism as
+//	                     the guard below)
+//	extensions/guard/    the step guard — daemon-owned embed: blocks a
+//	                     bash call that leaves a background job
+//	                     unwaited or sleeps over 3 s at once, and
+//	                     appends a syntax-check note after edit/write
+//	                     (polyforge#214; rules in the extension, the
+//	                     allowlist below)
 //
-// The subagent tool is not a pi builtin: it is the extension at
-// <operator agent dir>/extensions/subagent/, and pi auto-discovers global
+// Neither the subagent tool nor the guard is a pi builtin: BOTH are
+// compiled into pf (the stepagentassets embed) and installed into the
+// snapshot by installEmbeddedTree — operator content is never used for
+// either; pi auto-discovers global
 // extensions only from <agent dir>/extensions/. So the dedicated dir
-// carries that ONE extension directory and no other — the operator's
-// other extensions (extensions/polyforge is for interactive sessions)
-// stay out, and so do settings.json / packages, which is where the
-// background-task tools are declared.
+// carries exactly those TWO extension directories and no other — the
+// operator's other extensions (extensions/polyforge is for interactive
+// sessions) stay out, and so do settings.json / packages, which is where
+// the background-task tools are declared.
 //
 // auth.json supports API-key entries. An OAuth entry works until pi
 // refreshes it: pi writes the refreshed token into the COPY, and the next
@@ -52,8 +60,8 @@ package runtime
 //
 // Deliberately ABSENT (the isolation set): settings.json (user-level
 // packages), keybindings.json, mcp.json, AGENTS.md/CLAUDE.md/SYSTEM.md/
-// APPEND_SYSTEM.md, every extension but subagent, skills/, prompts/,
-// themes/.
+// APPEND_SYSTEM.md, every extension but subagent and guard, skills/,
+// prompts/, themes/.
 //
 // Sessions live in a SIBLING directory (step-agent-sessions), not here,
 // so the agent dir itself stays exactly the enumerated minimal set: the
@@ -85,10 +93,12 @@ package runtime
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
 	"github.com/silgrid/polyforge/internal/common/atomicfile"
+	"github.com/silgrid/polyforge/internal/polyforge/runtime/stepagentassets"
 )
 
 // The dedicated directories' names under the harness root.
@@ -105,8 +115,15 @@ const (
 	stepAgentModelsFile = "models.json"
 	stepAgentAgentsDir  = "agents"
 	stepAgentExtDir     = "extensions"
-	stepAgentSubagent   = "subagent" // the ONE extension carried: extensions/subagent
+	stepAgentSubagent   = "subagent"
+	stepAgentGuard      = "guard"
 )
+
+// stepAgentExtensions is the extension allowlist: exactly these
+// directories under extensions/, every one of them a daemon-owned embed
+// (the subagent tool, the step guard). The step process loads them by pi's
+// auto-discovery and nothing else.
+var stepAgentExtensions = []string{stepAgentSubagent, stepAgentGuard}
 
 // StepAgentDir is the dedicated step agent directory under the harness
 // root (A1: never inside a capsule).
@@ -203,20 +220,24 @@ func refreshStepAgentMinimalSet(src, dst string) error {
 	} else if err := os.Remove(dstModels); err != nil && !os.IsNotExist(err) {
 		return &StepAgentDirError{Dir: dst, Err: err}
 	}
-	// agents/ and extensions/subagent/: recursive per-file copies;
-	// absent source dir ⇒ absent destination dir.
-	if err := mirrorStepAgentTree(filepath.Join(src, stepAgentAgentsDir), filepath.Join(dst, stepAgentAgentsDir)); err != nil {
+	// agents and the allowlisted extensions are daemon-owned embedded
+	// assets; operator content is never used for either resource family.
+	if err := installEmbeddedTree(stepagentassets.FS, "agents", filepath.Join(dst, stepAgentAgentsDir)); err != nil {
 		return err
 	}
-	return mirrorStepAgentTree(
-		filepath.Join(src, stepAgentExtDir, stepAgentSubagent),
-		filepath.Join(dst, stepAgentExtDir, stepAgentSubagent))
+	for _, ext := range stepAgentExtensions {
+		if err := installEmbeddedTree(stepagentassets.FS, stepAgentExtDir+"/"+ext, filepath.Join(dst, stepAgentExtDir, ext)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // pruneStepAgentDir removes everything under dst that is not in the
 // minimal set: at the top level anything but auth.json / models.json /
-// agents / extensions, under extensions/ anything but subagent (and
-// extensions/ itself when subagent is absent). Daemon start only.
+// agents / extensions, under extensions/ anything but the allowlist (and
+// extensions/ itself when no allowlisted extension is present). Daemon
+// start only.
 func pruneStepAgentDir(dst string) error {
 	ents, err := os.ReadDir(dst)
 	if err != nil {
@@ -238,9 +259,13 @@ func pruneStepAgentDir(dst string) error {
 	} else if err != nil {
 		return &StepAgentDirError{Dir: dst, Err: err}
 	}
+	allowed := make(map[string]bool, len(stepAgentExtensions))
+	for _, ext := range stepAgentExtensions {
+		allowed[ext] = true
+	}
 	keep := false
 	for _, e := range exts {
-		if e.Name() == stepAgentSubagent && e.IsDir() {
+		if allowed[e.Name()] && e.IsDir() {
 			keep = true
 			continue
 		}
@@ -254,6 +279,40 @@ func pruneStepAgentDir(dst string) error {
 		}
 	}
 	return nil
+}
+
+// installEmbeddedTree installs a daemon-owned resource tree atomically per file.
+func installEmbeddedTree(fsys fs.FS, source, dst string) error {
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return &StepAgentDirError{Dir: dst, Err: err}
+	}
+	return fs.WalkDir(fsys, source, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return &StepAgentDirError{Dir: dst, Err: err}
+		}
+		rel, err := filepath.Rel(source, path)
+		if err != nil {
+			return &StepAgentDirError{Dir: dst, Err: err}
+		}
+		target := filepath.Join(dst, rel)
+		if entry.IsDir() {
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return &StepAgentDirError{Dir: dst, Err: err}
+			}
+			return nil
+		}
+		data, err := fs.ReadFile(fsys, path)
+		if err != nil {
+			return &StepAgentDirError{Dir: dst, Err: err}
+		}
+		if old, err := os.ReadFile(target); err == nil && string(old) == string(data) {
+			return nil
+		}
+		if err := atomicfile.Write(target, data, 0o644); err != nil {
+			return &StepAgentDirError{Dir: dst, Err: err}
+		}
+		return nil
+	})
 }
 
 // mirrorStepAgentTree copies the tree at src to dst when src exists and
@@ -366,7 +425,24 @@ func copyStepAgentTree(src, dst string) error {
 	return nil
 }
 
-// warnStepAgentDirNoCredentials is the carried-on notice for a source
+func validateEmbeddedStepAgentDir(dir string) error {
+	for _, item := range []struct{ rel, asset string }{
+		{"agents/worker.md", "agents/worker.md"},
+		{"extensions/subagent/index.ts", "extensions/subagent/index.ts"},
+		{"extensions/subagent/agents.ts", "extensions/subagent/agents.ts"},
+	} {
+		got, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(item.rel)))
+		if err != nil {
+			return fmt.Errorf("runtime: embedded step-agent resource %s is unavailable: %w", item.rel, err)
+		}
+		want, err := fs.ReadFile(stepagentassets.FS, item.asset)
+		if err != nil || string(got) != string(want) {
+			return fmt.Errorf("runtime: embedded step-agent resource %s failed content validation", item.rel)
+		}
+	}
+	return nil
+}
+
 // without auth.json (the harness adapter may hold credentials elsewhere).
 func warnStepAgentDirNoCredentials(src string) {
 	fmt.Fprintf(os.Stderr, "runtime: the operator agent dir %s carries no auth.json — the dedicated step agent directory is synced without model service credentials (the harness adapter may hold them elsewhere)\n", src)

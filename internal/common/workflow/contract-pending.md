@@ -11,14 +11,18 @@ registry's golden file and its baseline in place
 '^TestRegistryGoldenPinsTheVersion$'`) and the lane schema
 (`go generate ./internal/common/workflow`). Any other change is
 incompatible: a key removed or renamed, a key's meaning or default changed,
-a new required key, a check that refuses a lane it accepted, a value
-removed, a capsule or hand-off format the work items in flight rely on.
+a new required key of a key set the release already carries, a check that
+refuses a lane it accepted, a value removed, a capsule or hand-off format
+the work items in flight rely on. A required key of a key set the release
+does not carry at all is no such change: no lane valid under the release
+could use it.
 
 Register an incompatible change in the change that makes it: append one
 entry below, a level-two heading naming what changed, its body what the
 migration takes — for user lanes, for the work items in flight, for the
 deployment. The registry pin is red on an incompatible change the registry
-dump shows (a removed key, a new required key, a removed value) while this
+dump shows (a removed key, a new required key of an existing key set, a
+removed value) while this
 list has no entry; leave `ContractVersion` as it is.
 
 The release reads the entries (every line starting with a level-two

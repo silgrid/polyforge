@@ -2370,8 +2370,9 @@ span.token.table {
 .pf-messages-resize-handle.is-resizing::after {
   background: color-mix(in srgb, var(--text-muted) 70%, var(--border));
 }
-/* Mobile sheet resize handle (pi#120): the bottom sheets (Polyforge,
-   bg-tasks) resize vertically by their top edge. Like the dock handle it
+/* Mobile sheet resize handle (pi#120): the bottom sheet (the Polyforge
+   dock's; the bg-tasks sheet retired with its dock, #173) resizes
+   vertically by its top edge. Like the dock handle it
    straddles the edge (half outside, half inside) but stays a DOM child of
    the sheet, so it sits above the backdrop — dragging never taps the
    backdrop (the tap stays the only dismiss gesture). touch-action: none

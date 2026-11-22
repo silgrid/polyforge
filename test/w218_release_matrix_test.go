@@ -1,3 +1,5 @@
+// carries: .polyforge/release.sh, test/w218_release_matrix_test.go
+
 package test
 
 // polyforge#218 e2e: the release matrix carries the darwin assets; since
@@ -52,7 +54,7 @@ done`
 func w218Publish(t *testing.T) (*relWorld, string) {
 	t.Helper()
 	w := newRelWorld(t, []string{"v1.2.0"}, nil)
-	out, err := w.run([]string{"RELEASE_BUILD_CMD=" + w218BuildCmd})
+	out, err := w.runPinned([]string{"RELEASE_BUILD_CMD=" + w218BuildCmd})
 	if err != nil {
 		t.Fatalf("release failed: %v\n%s", err, out)
 	}

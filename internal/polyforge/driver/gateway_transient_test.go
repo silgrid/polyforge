@@ -1,8 +1,9 @@
 package driver
 
 // gateway_transient_test.go: the gateway-layer transient classes of
-// polyforge#34. Five real daemon-event texts (verbatim samples, the
-// ticket's background) all classified model_error before the fix: the
+// polyforge#34 and polyforge#210. The real daemon-event texts (verbatim
+// samples, the tickets' backgrounds) all classified model_error before
+// their fixes: the
 // daemon switched the candidate at once and opened a fresh session,
 // losing the interrupted session's progress for failures a same-model
 // backoff retry survives. The samples:
@@ -16,18 +17,22 @@ package driver
 //     the output delivered so far is partial." (polyforge#33's incident:
 //     the turn had already delivered partial output when the upstream
 //     errored)
+//   - a gateway 503 "Service temporarily unavailable" (polyforge#147's
+//     glm text: the service subject directly before "temporarily
+//     unavailable", never the 503 status alone)
 //
 // What they pin: the widening stays inside the existing subjects — a
 // text that names the MODEL (no upstream/gateway/service subject) keeps
 // the model classes, and the already-recognized samples keep theirs.
 
 import (
+	"regexp"
 	"testing"
 
 	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 )
 
-// gatewayTransientSamples are the ticket's five texts, verbatim.
+// gatewayTransientSamples are the tickets' texts, verbatim.
 var gatewayTransientSamples = []struct {
 	text string
 	want string
@@ -37,10 +42,19 @@ var gatewayTransientSamples = []struct {
 	{`503 {"error":{"message":"No available accounts: no available accounts","type":"api_error"},"type":"error"}`, FailUpstreamTransient},
 	{`The service is currently unable to handle additional requests due to server overload. Please retry later. Request id: 20261114172154000123456789`, FailRateLimited},
 	{`The upstream model reported an error after output had started; the output delivered so far is partial.`, FailUpstreamTransient},
+	{serviceUnavailable503Body, FailUpstreamTransient},
 }
 
-// TestGatewayTransientSamplesClassifyTransient: each of the five
-// verbatim gateway texts classifies as its transient cause on BOTH
+// serviceUnavailable503Body is polyforge#147's gateway text, verbatim
+// (the glm-5.3 line, four dispatches, each judged model_error and
+// switched to the next candidate): a gateway 503 naming the service
+// "temporarily unavailable". The builtin row classifies it
+// upstream_transient (polyforge#210) — the owner held the same shape with
+// a Host-configured transient_error_pattern until the builtin landed.
+const serviceUnavailable503Body = `503: {"message":"Service temporarily unavailable","type":"api_error"}`
+
+// TestGatewayTransientSamplesClassifyTransient: each of the verbatim
+// gateway texts classifies as its transient cause on BOTH
 // paths — the exit path (classifyWaitFailure, also as a live turn's
 // error text) and the live path (verdictCause) — and the transient
 // causes never advance the candidate chain.
@@ -100,6 +114,19 @@ func TestGatewayWideningKeepsTheEstablishedClasses(t *testing.T) {
 		// class — the widening must not swallow them
 		{`the model ended the turn`, FailExitModel, FailModelError, true},
 		{`The model is temporarily unavailable, please try again`, FailExitModel, FailModelError, true},
+		// polyforge#210's counter-examples: the service subject must sit
+		// directly before "temporarily unavailable" (an inserted word does
+		// not count, and "The model service is temporarily unavailable"
+		// keeps the model classes), the 503 status alone never counts, the
+		// allowance/auth row still wins, and an overload text stays
+		// rate_limited (its row is judged first).
+		{`The model service is temporarily unavailable`, FailExitModel, FailModelError, true},
+		{`503: {"message":"Service temporarily unavailable: insufficient balance","type":"api_error"}`, FailExitModel, FailExitModel, true},
+		{`401 {"message":"Service temporarily unavailable: invalid api key"}`, FailExitModel, FailExitModel, true},
+		{`402 Payment Required: Service temporarily unavailable`, FailExitModel, FailExitModel, true},
+		{`503 Service Unavailable`, FailExitModel, FailModelError, true},
+		{`Service is temporarily unavailable`, FailExitModel, FailModelError, true},
+		{`Service temporarily unavailable due to overload`, FailRateLimited, FailRateLimited, false},
 	} {
 		got, _, _, _, _ := classifyWaitFailureWith(&ExitedError{ExitCode: 1, LastError: tc.text, TurnError: true}, nil)
 		if got != tc.exitWant {
@@ -112,5 +139,56 @@ func TestGatewayWideningKeepsTheEstablishedClasses(t *testing.T) {
 		if tc.modelClass && !IsModelClass(live) {
 			t.Errorf("%q: the model classes must keep switching the candidate, got %q", tc.text, live)
 		}
+	}
+}
+
+// TestServiceTemporarilyUnavailableIsUpstreamTransient: a gateway's
+// "Service temporarily unavailable" text — polyforge#147's 503 body, its
+// rule-1 Evidence wrapper and nginx's uppercase title form — is
+// upstream_transient on the builtin row (classified_by builtin): the same
+// model retried with the backoff, never counted, never advancing the
+// candidate chain. The Host-configured transient_error_pattern the owner
+// ran until the builtin landed classifies the same text with the same
+// cause (only the recorded source differs), and the driver's own failure
+// carrying the same text stays exit_other (the exit-only rows never
+// judge it).
+func TestServiceTemporarilyUnavailableIsUpstreamTransient(t *testing.T) {
+	wrapped := "turn ended with an error 1m0s ago and no `pf step handoff` followed within the 1m0s grace: " + serviceUnavailable503Body
+	for _, x := range []string{
+		serviceUnavailable503Body,
+		wrapped,
+		`<html><head><title>503 Service Temporarily Unavailable</title></head></html>`,
+	} {
+		if cause, src := classifyTextWith(x, true, nil); cause != FailUpstreamTransient || src != ClassifiedByBuiltin {
+			t.Errorf("%q classified (%q, %q), want (%q, %q)", x, cause, src, FailUpstreamTransient, ClassifiedByBuiltin)
+		}
+		got, _, _, src, _ := classifyWaitFailureWith(&ExitedError{ExitCode: 1, LastError: x, TurnError: true}, nil)
+		if got != FailUpstreamTransient || src != ClassifiedByBuiltin {
+			t.Errorf("%q exit path classified (%q, %q), want (%q, %q)", x, got, src, FailUpstreamTransient, ClassifiedByBuiltin)
+		}
+		live, src := verdictCauseWith(supervise.StepDead{Step: "s", SpawnN: 1, Cause: supervise.CauseModelError, TurnError: x}, nil)
+		if live != FailUpstreamTransient || src != ClassifiedByBuiltin {
+			t.Errorf("%q live path classified (%q, %q), want (%q, %q)", x, live, src, FailUpstreamTransient, ClassifiedByBuiltin)
+		}
+	}
+	if IsModelClass(FailUpstreamTransient) {
+		t.Errorf("%q must never advance the candidate pointer", FailUpstreamTransient)
+	}
+	// the Host rule the owner configured (polyforge#210's interim, the
+	// same regex verbatim) answers the same cause for this 503 text —
+	// only the recorded source differs (added, not builtin). Not proof
+	// that deleting the Host pattern changes no verdict (r1#5): it sits
+	// before the rate-limit row, so a text that also hits a throttle
+	// signature (an overload conjunction) classifies upstream_transient
+	// under it, rate_limited under the builtin alone — both transient,
+	// the same disposition and backoff ladder.
+	rules := &TextRules{Transient: []*regexp.Regexp{regexp.MustCompile(`(?i)\bservice\W+temporarily\W+unavailable\b`)}}
+	if cause, src := classifyTextWith(serviceUnavailable503Body, true, rules); cause != FailUpstreamTransient || src != ClassifiedByAdded {
+		t.Errorf("with the Host rule the 503 body classified (%q, %q), want (%q, %q)", cause, src, FailUpstreamTransient, ClassifiedByAdded)
+	}
+	// the exit-only rows never judge the driver's own failure: the same
+	// text in a local read is exit_other, not a transient.
+	if got, _, _, _, _ := classifyWaitFailureWith(errWithText("read transcript: "+serviceUnavailable503Body), nil); got != FailExitOther {
+		t.Errorf("driver-local 503 body classified %q, want %q", got, FailExitOther)
 	}
 }

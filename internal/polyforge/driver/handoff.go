@@ -61,6 +61,78 @@ func WriteFailedBlocked(reason string) bool { return strings.HasPrefix(reason, w
 // WriteFailedRequiredAction is what releases a write_failed park.
 const WriteFailedRequiredAction = "fix the cause (aihub's refusal, or its reachability), then resume the work item (`pf resume <wi>`): the daemon makes the writes not made yet before the next step, or cancel it"
 
+// BlockerKindCleanupFailed is the blocked kind of a step-end process
+// cleanup that could not prove the step's processes gone (polyforge#200
+// Q5 B): the kept hand-off stays on the call ledger and the resume re-runs
+// the sweep before settling it.
+const BlockerKindCleanupFailed = "cleanup_failed"
+
+// cleanupFailedPrefix opens the blocked reason of a cleanup_failed park.
+const cleanupFailedPrefix = "cleanup failed: "
+
+// CleanupFailedRequiredAction is what releases a cleanup_failed park —
+// shared by its flavors; the reason says which continuation applies.
+const CleanupFailedRequiredAction = "clear the leftover processes the reason lists (they carry this work item's PF_WI_ID), then resume the work item (`pf resume <wi>`): the daemon re-runs the step-end sweep first and continues the way the reason says — or cancel it"
+
+// CleanupFailedBlocked reports whether a blocked reason is a
+// cleanup_failed park.
+func CleanupFailedBlocked(reason string) bool {
+	return strings.HasPrefix(reason, cleanupFailedPrefix)
+}
+
+// cleanupParkFlavor names the path a cleanup_failed park sits on: what the
+// resume continues once the re-run sweep proves clean (r1#1: the reason
+// must say the truth of ITS path — a park of a dispatch without a
+// hand-off never claims one).
+type cleanupParkFlavor int
+
+const (
+	// cleanupParkNone: no cleanup_failed park (the zero value).
+	cleanupParkNone cleanupParkFlavor = iota
+	// cleanupParkKeptHandoff: the dispatch handed off; the park keeps the
+	// accepted hand-off on the call ledger and the resume settles it
+	// without re-running the step.
+	cleanupParkKeptHandoff cleanupParkFlavor = iota
+	// cleanupParkFailedDispatch: the dispatch died or exited without a
+	// result; its failure record is written and the resume retries the
+	// step once the sweep proves clean.
+	cleanupParkFailedDispatch
+	// cleanupParkOpenAsk: the dispatch asked the owner; the ask stays open
+	// and the resume re-enters it once the sweep proves clean.
+	cleanupParkOpenAsk
+)
+
+// cleanupParkFlavorOf reads the flavor back out of a cleanup_failed
+// park's blocked reason — its own continuation sentence (r3#1: the
+// resume's re-park carries the resumed park's flavor, and the reason is
+// the one durable record of it once the unblock clears the field).
+func cleanupParkFlavorOf(reason string) cleanupParkFlavor {
+	switch {
+	case strings.Contains(reason, "open ask to the owner stands"):
+		return cleanupParkOpenAsk
+	case strings.Contains(reason, "failure was recorded"):
+		return cleanupParkFailedDispatch
+	case strings.Contains(reason, "accepted hand-off stays"):
+		return cleanupParkKeptHandoff
+	}
+	return cleanupParkNone
+}
+
+// cleanupFailedReason is the blocked reason of a step-end cleanup that
+// could not prove the step's processes gone, flavored by its path.
+func cleanupFailedReason(step string, err error, flavor cleanupParkFlavor) string {
+	var what string
+	switch flavor {
+	case cleanupParkKeptHandoff:
+		what = "the step's accepted hand-off stays on the call ledger, nothing was written as its outcome and no successor ran; the resume settles the kept hand-off without re-running the step"
+	case cleanupParkFailedDispatch:
+		what = "the dispatch's failure was recorded and its retry ladder stands; no retry ran; the resume retries the step"
+	case cleanupParkOpenAsk:
+		what = "the dispatch's open ask to the owner stands; the resume re-enters it with the owner's answer"
+	}
+	return cleanupFailedPrefix + fmt.Sprintf("step %s ended and its process cleanup could not prove the step's processes gone — %v; %s: %s", step, err, what, CleanupFailedRequiredAction)
+}
+
 // BlockerKindStepBlocked is the blocked kind of a step's own `blocked`
 // hand-off (the watch's kind name since workflow contract 2).
 const BlockerKindStepBlocked = "incomplete"
@@ -223,6 +295,34 @@ func (d *Driver) settleHandoff(ctx context.Context, stepID string, n int64, res 
 	crashpoint.At("driver.settled:" + stepID)
 	d.handoffEvents(stepID, res, before, d.Snapshot())
 	return res.Outcome == OutcomeIncomplete, nil
+}
+
+// stepEndedSweep runs the step-end hook after a dispatch's process is
+// gone, before the dispatch's result or failure is written. A cancelled
+// context still skips the hook (Q10 A: the restart/recovery Cleanup
+// covers it). The error answer is the caller's to park: each path parks
+// cleanup_failed only after ITS records are written (r1#1 — a failed
+// dispatch keeps its failure record; a received hand-off keeps the park
+// ahead of the settle).
+func (d *Driver) stepEndedSweep(ctx context.Context) error {
+	if d.cfg.StepEnded == nil || ctx.Err() != nil {
+		return nil
+	}
+	return d.cfg.StepEnded(ctx)
+}
+
+// parkCleanupFailed parks the work item on a step-end cleanup that could
+// not prove the step's processes gone (Q5 B): blocked, kind
+// cleanup_failed, with the reason of the caller's path — the successor
+// never starts and the resume re-runs the sweep before it continues the
+// way the reason says.
+func (d *Driver) parkCleanupFailed(stepID string, serr error, flavor cleanupParkFlavor) (stop bool, err error) {
+	reason := cleanupFailedReason(stepID, serr, flavor)
+	if stop, err := d.blockHandoff(stepID, d.currentSpawnN(), reason); err != nil {
+		return stop, err
+	}
+	d.emit("blocked", map[string]any{"step": stepID, "reason": reason, "kind": BlockerKindCleanupFailed, "report": false})
+	return true, nil
 }
 
 // blockHandoff parks the work item blocked on the driver's own authority

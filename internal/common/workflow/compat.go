@@ -5,11 +5,15 @@ package workflow
 // (contract.go). The registry dump (RegistryDump) is compared with its
 // baseline (testdata/contract.baseline.golden: the shape the last bump, or
 // the last compatible change, left); a difference the dump shows
-// mechanically — a key gone from a key set, a key now required, a value
-// gone from a key's closed set — is incompatible and must be registered in
-// contract-pending.md, which the release that follows reads to bump the
-// version once. Every other change is compatible: the golden file and the
-// baseline are regenerated in place, the version stays.
+// mechanically — a key gone from a key set, a key of a set base already
+// carries now required, a value gone from a key's closed set — is
+// incompatible and must be registered in contract-pending.md, which the
+// release that follows reads to bump the version once. A required key of a
+// key set base does not carry at all — a set new with its (optional) parent
+// key — is no such change: no lane valid under base could use it, and a parent
+// key that is itself new and required is caught by its own set's rule.
+// Every other change is compatible: the golden file and the baseline are
+// regenerated in place, the version stays.
 
 import (
 	"fmt"
@@ -61,8 +65,11 @@ func parseDump(dump string) dumpShape {
 }
 
 // incompatibleChanges answers the differences of cur from base no lane
-// valid under base survives: a removed key, a new required key, a removed
-// value. Two dumps of different contract versions are not compared (a
+// valid under base survives: a removed key, a new required key of a key set
+// base already carries, a removed value. A required key whose whole set is
+// new is no difference — no lane valid under base can carry it (its parent
+// key is new too, and a parent that is required is caught by the parent's
+// own set). Two dumps of different contract versions are not compared (a
 // bump rewrites the baseline).
 func incompatibleChanges(base, cur string) []string {
 	b, c := parseDump(base), parseDump(cur)
@@ -76,9 +83,13 @@ func incompatibleChanges(base, cur string) []string {
 		}
 	}
 	for k := range c.required {
-		if !b.required[k] {
-			out = append(out, "new required key "+k)
+		if b.required[k] {
+			continue
 		}
+		if set, _, ok := strings.Cut(k, "."); ok && !hasSetKey(b.keys, set) {
+			continue // the whole key set is new with this change
+		}
+		out = append(out, "new required key "+k)
 	}
 	for v := range b.value {
 		if !c.value[v] {
@@ -87,6 +98,18 @@ func incompatibleChanges(base, cur string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// hasSetKey reports whether the dump's keys carry a key of the set named
+// set (its `<set>.<key>` lines).
+func hasSetKey(keys map[string]bool, set string) bool {
+	prefix := set + "."
+	for k := range keys {
+		if strings.HasPrefix(k, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // judgeRegistry is the pin's verdict on the registry dump, its golden

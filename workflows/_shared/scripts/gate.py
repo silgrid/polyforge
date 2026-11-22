@@ -55,6 +55,19 @@ keep-alive ending five minutes after it; the gate removes it when it ends,
 and removes every container of its owner whose deadline has passed before
 it starts one.
 
+The step's ``audit`` parameter (``PF_PARAM_AUDIT``, polyforge#138):
+``on``, empty and unset keep today's behavior byte for byte; ``off`` — the
+project owner's decision, set per project in the workspace config or by a
+ticket override, never by a repository's own conf — hands the engine
+``--audit off``, so no full report plans the engine-appended dependency
+audit, and the result and a green tag's record carry the closure note (the
+merged source hint; the two layers are not distinguished). A green tag of
+the other audit state is never reused, and a tree whose own scope engine
+predates the ``--audit`` option is blocked by name, never silently
+audited nor silently switched to the lane's engine; any other value is a
+named error before any container or check starts (exit 2, the fixed mark
+``pf-audit-param-invalid`` in the summary).
+
 Without ``--capsule`` the gate judges the clone at the working directory
 (the release's and an operator's run): progress on stdout, the green tag's
 name on the last stdout line (both on stderr with ``--json``); inside a
@@ -137,6 +150,7 @@ import pfstep  # noqa: E402
 from pfstep import container, duration, gateid, git, gostr, hub, jsonout, proc, result, runner, stepenv  # noqa: E402
 from pfstep import integration as rules  # noqa: E402
 from pfstep import progress as step_progress  # noqa: E402
+from pfstep.audit import AUDIT_OFF_NOTE, AUDIT_INVALID_MARK, AuditParamError, read_audit  # noqa: E402
 from pfstep.carries import file_carries, glob_match  # noqa: E402
 from pfstep.deadline import default_deadline_for  # noqa: E402
 from pfstep.engine import TIER_FULL, EngineCommand, EngineReport, ReportError, choose, decode_report  # noqa: E402
@@ -169,6 +183,9 @@ GATE_RUNNER = "gate.py"
 # bump it whenever either changes, so a green tag written under the old
 # rules is never reused under the new ones. 1 was the Go pf-gate's; 2 is
 # this script's (its digest is of another encoding, its runner gate.py).
+# The audit parameter (polyforge#138) adds no version: its off state only
+# drops a command the plan would carry and adds a record field outside
+# the digest — the verdict rules and the digest's input never move.
 GATE_RUNNER_VERSION = "2"
 
 # The scope engine the gate plans with: the tree's own (the workflow's)
@@ -533,6 +550,11 @@ class GateResult:
     image_digest: str = ""
     image_source: str = ""
     repo_digests: List[str] = field(default_factory=list)
+    # audit_off (polyforge#138): the closure note, set when the audit step
+    # parameter turned the dependency audit off — recorded in the result
+    # and a green tag's record, never in the plan digest, so a tag of the
+    # other state is never reused (same_green compares it)
+    audit_off: str = ""
     log_dir: str = ""
     commands: List[GateCommand] = field(default_factory=list)
     # incomplete: why the gate could not be judged ("" = it ran)
@@ -557,6 +579,8 @@ class GateResult:
             d["image_source"] = self.image_source
         if self.repo_digests:
             d["repo_digests"] = list(self.repo_digests)
+        if self.audit_off:
+            d["audit_off"] = self.audit_off
         d["built"] = self.built
         if self.container:
             d["container"] = self.container
@@ -583,6 +607,7 @@ class GateResult:
             engine_source=str(d.get("engine_source") or ""), gate_id_source=str(d.get("gate_id_source") or ""),
             image_digest=str(d.get("image_digest") or ""), image_source=str(d.get("image_source") or ""),
             repo_digests=[str(x) for x in (d.get("repo_digests") or [])],
+            audit_off=str(d.get("audit_off") or ""),
             log_dir=str(d.get("log_dir") or ""),
             commands=[GateCommand.of(c) for c in d.get("commands") or [] if isinstance(c, dict)],
             incomplete=str(d.get("incomplete") or ""), passed=bool(d.get("passed")),
@@ -608,6 +633,16 @@ def fail_summary(res: GateResult) -> str:
 def gate_logs(res: GateResult) -> List[str]:
     """A gate run's logs: one per command that ran."""
     return [c.log for c in res.commands if c.log and not c.not_run]
+
+
+def engine_takes_audit(engine: str, cwd: str, env: Mapping[str, str]) -> bool:
+    """Whether the scope engine at engine knows the --audit option (its
+    --help names it). An engine that predates polyforge#138 cannot turn
+    the dependency audit off; a gate asked to is blocked by name (the
+    owner's 3-A ruling) — never a silent audit, never a silent switch to
+    the lane's engine."""
+    c = proc.run(engine_argv_of(engine) + ["--help"], cwd=cwd, env=dict(env), timeout=GIT_TIMEOUT)
+    return c.exit_code == 0 and "--audit" in (c.stdout + c.stderr).decode("utf-8", "replace")
 
 
 def select_engine(directory: str) -> Tuple[str, str, str]:
@@ -658,6 +693,7 @@ class Gate:
         say: Say,
         image: str = "",
         image_source: str = "",
+        audit: str = "",
     ) -> None:
         # co: for_run's (the defaults, the deadline label, the keep-alive)
         self.co = co
@@ -675,6 +711,12 @@ class Gate:
         # in ("" = build the repo's Dockerfile); image_source: which named it
         self.image = image
         self.image_source = image_source
+        # polyforge#138: the audit step parameter (PF_PARAM_AUDIT), read
+        # from cmd_env when the invocation names none — "off" hands every
+        # engine invocation --audit off and leaves the closure note in the
+        # result and a green tag's record; on, empty and unset hand nothing
+        # (today's argv and records byte for byte)
+        self.audit = audit or read_audit(cmd_env)
 
     def say(self, msg: str) -> None:
         self.say_line("gate: " + msg)
@@ -707,6 +749,11 @@ class Gate:
         if not self.swept:
             self.swept = True
             container.sweep_run(self.co, self.say)
+        # the clone's canonical absolute path (polyforge#153): the container
+        # mounts it at exactly this path and the cache volume keys on it, so
+        # the bind, the working directory and the volume's path identity are
+        # one path however the caller spelled it
+        directory = os.path.realpath(os.path.abspath(directory))
         r = self.runner_for(directory)
         engine, _, lane_dir = select_engine(directory)
         if self.image:
@@ -742,6 +789,8 @@ class Gate:
         argv = engine_argv_of(o.box.engine) + ["--json"]
         if full:
             argv.append("--full")
+        if self.audit == "off":
+            argv += ["--audit", "off"]
         if base:
             argv += ["--base", base]
         ref = " ".join(argv)
@@ -817,6 +866,20 @@ class Gate:
         res.engine_source = source
         res.gate_id_source = (ENGINE_SOURCE_TREE if os.path.isfile(os.path.join(directory, GATE_ID_REL))
                               else ENGINE_SOURCE_LANE)
+        if self.audit == "off":
+            # the closure note AC3 demands, recorded whichever way the run
+            # ends (the merged source hint, the two layers not
+            # distinguished — the owner's 1-B ruling)
+            res.audit_off = AUDIT_OFF_NOTE
+            # an old tree engine cannot take --audit off: blocked by name,
+            # before any container starts — never a silent audit, never a
+            # silent switch to the lane's engine (the owner's 3-A ruling)
+            if source == ENGINE_SOURCE_TREE and not engine_takes_audit(engine, directory, self.cmd_env):
+                res.incomplete = ("PF_PARAM_AUDIT=off, but the tree's scope engine predates the --audit option:"
+                                  " the dependency audit cannot be turned off by an engine this old — upgrade"
+                                  " the repository's workflows/_shared/scripts/verify-scope (or the release that"
+                                  " ships one); the gate is not judged")
+                return
         if self.image:
             res.image, res.image_source = self.image, self.image_source
         if engine == "":
@@ -1007,10 +1070,13 @@ def next_green_number(refs: GreenRefs, day: str) -> int:
 
 def same_green(g: Git, directory: str, remote: str, refs: GreenRefs, rec: Mapping[str, str]) -> str:
     """The name of a green tag on the remote that points at rec's commit and
-    records the same commit, gate id, runner, runner version, plan digest
-    and sources ("" = none). A record without the source fields — one
-    written before the sources existed, when only the tree's engine and
-    gate id could serve a gate — is the tree's by construction."""
+    records the same commit, gate id, runner, runner version, plan digest,
+    sources and audit state ("" = none). A record without the source fields —
+    one written before the sources existed, when only the tree's engine and
+    gate id could serve a gate — is the tree's by construction; one without
+    the audit note is an on run's (polyforge#138: a tree without an auditable
+    surface plans the same either way, so the note is what keeps an off
+    run from borrowing an on tag)."""
     for name in sorted(refs):
         obj, peeled = refs[name]
         if peeled != rec["commit"] or not _GREEN_NAME.fullmatch(name):
@@ -1029,7 +1095,8 @@ def same_green(g: Git, directory: str, remote: str, refs: GreenRefs, rec: Mappin
         except ValueError:
             continue
         if isinstance(got, dict) and all(got.get(k) == rec[k] for k in ("commit", "gate_id", "runner", "runner_version", "plan_digest")) \
-                and all((got.get(k) or ENGINE_SOURCE_TREE) == rec[k] for k in ("engine_source", "gate_id_source")):
+                and all((got.get(k) or ENGINE_SOURCE_TREE) == (rec.get(k) or "") for k in ("engine_source", "gate_id_source")) \
+                and (got.get("audit_off") or "") == (rec.get("audit_off") or ""):
             return name
     return ""
 
@@ -1124,6 +1191,11 @@ def mark_green(g: Git, directory: str, remote: str, summary: str, res: GateResul
         # the prepared image's local ID: what the gate_id line and the plan
         # digest already hash — here for the person reading the tag
         rec["image_digest"] = res.image_digest
+    if res.audit_off:
+        # polyforge#138: the audit closure's note — outside the plan
+        # digest, so same_green's comparison is what keeps an on tag from
+        # lending itself to an off run (and the other way round)
+        rec["audit_off"] = res.audit_off
     msg = json.dumps(rec, ensure_ascii=False, separators=(",", ":"))
     day = t.strftime("%Y%m%d")
     refs = remote_green_refs(g, directory, remote)
@@ -2067,6 +2139,13 @@ def main(
 
 def run(a: argparse.Namespace, env: Dict[str, str], inv: Invocation, runtime: Optional[container.ContainerRuntime]) -> int:
     check_invocation(a)
+    # polyforge#138: the audit step parameter, validated before any
+    # container or check starts — any other value a named error, never a
+    # silent on or off
+    try:
+        audit = read_audit(env)
+    except AuditParamError as err:
+        raise Usage("%s (%s)" % (err, AUDIT_INVALID_MARK)) from None
     cpus, memory, pids = parse_limits(a)
     timeout = parse_duration_flag("--timeout", a.timeout)
     if timeout <= 0:
@@ -2093,7 +2172,8 @@ def run(a: argparse.Namespace, env: Dict[str, str], inv: Invocation, runtime: Op
     ), until, env)
     gate = Gate(co, until, window, timeout, a.keep_going, dict(env), say,
                 image=(a.image or env.get("PF_PARAM_IMAGE", "")),
-                image_source=("flag" if a.image else ("param" if env.get("PF_PARAM_IMAGE", "") else "")))
+                image_source=("flag" if a.image else ("param" if env.get("PF_PARAM_IMAGE", "") else "")),
+                audit=audit)
     remote = a.remote or "origin"
     if not a.capsule:
         return clone_mode(a, env, inv, gate, remote)

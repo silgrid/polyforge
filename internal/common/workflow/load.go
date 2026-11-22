@@ -136,6 +136,14 @@ func (r *Resources) Holds(lock string) bool {
 // Heavy reports whether the resources ask the heavy-run admission.
 func (r *Resources) Heavy() bool { return r != nil && r.Admission == AdmissionHeavy }
 
+// FastCheckProof is a step's `fast_check_proof`: the result file its done
+// reads for every task repo it changed, and the command that writes a fresh
+// one. Both templates carry {repo}, the task repo's name.
+type FastCheckProof struct {
+	Result  string
+	Command string
+}
+
 // Step is one loaded step entry: an agent step (workflow contract 4).
 type Step struct {
 	ID   string
@@ -180,6 +188,9 @@ type Step struct {
 	// round registers (`pf step hub wrap-attrs <name>`) before it may hand
 	// off done — the daemon refuses that hand-off otherwise.
 	WrapAttrs []string
+	// FastCheckProof is `fast_check_proof` (nil = none): the fast-check
+	// proof this step's done needs for each task repo it changed.
+	FastCheckProof *FastCheckProof
 	// Params is `params` (nil = none): the step's declared parameters,
 	// each name to its lane-default value (a single-line string). The
 	// final value is composed at every dispatch (lane default, the
@@ -862,6 +873,9 @@ func (l *loader) step(file string, off int, n *yaml.Node, path string, seen map[
 	if v, ok := keys["wrap_attrs"]; ok {
 		s.WrapAttrs = l.wrapAttrs(file, off, v, join(path, "wrap_attrs"))
 	}
+	if v, ok := keys["fast_check_proof"]; ok {
+		s.FastCheckProof = l.fastCheckProof(file, off, v, join(path, "fast_check_proof"))
+	}
 	if v, ok := keys["vars"]; ok {
 		s.Vars = l.stringMap(file, off, v, join(path, "vars"))
 		s.varLines = map[string]int{}
@@ -1125,6 +1139,56 @@ func (l *loader) nameList(file string, off int, n *yaml.Node, path, what string,
 		out = append(out, v)
 	}
 	return out
+}
+
+// fastCheckProof decodes a step's `fast_check_proof`: the result file's path
+// template and the command that writes it, both required, both carrying
+// {repo}, the result relative to the capsule and leaving it never.
+func (l *loader) fastCheckProof(file string, off int, n *yaml.Node, path string) *FastCheckProof {
+	m := l.mapping(file, off, n, path, fastCheckProofKeys, nil)
+	fp := &FastCheckProof{}
+	if v, ok := m["result"]; !ok {
+		l.at(CodeMissingKey, file, off, n, join(path, "result"), "fast_check_proof declares no result (the result file's path template, carrying {repo})")
+	} else if s, good := l.stringValue(file, off, v, join(path, "result")); good {
+		switch {
+		case strings.TrimSpace(s) == "":
+			l.at(CodeInvalidValue, file, off, v, join(path, "result"), "the result path is empty")
+		case filepath.IsAbs(s):
+			l.at(CodeInvalidValue, file, off, v, join(path, "result"), "the result path is absolute: it is relative to the capsule")
+		case containsPathSegment(s, ".."):
+			l.at(CodeInvalidValue, file, off, v, join(path, "result"), "the result path carries a .. segment: it stays inside the capsule")
+		case !strings.Contains(s, "{repo}"):
+			l.at(CodeInvalidValue, file, off, v, join(path, "result"), "the result path carries no {repo}: the daemon fills it with the task repo's name")
+		default:
+			fp.Result = s
+		}
+	}
+	if v, ok := m["command"]; !ok {
+		l.at(CodeMissingKey, file, off, n, join(path, "command"), "fast_check_proof declares no command (the line that writes a fresh result, carrying {repo})")
+	} else if s, good := l.stringValue(file, off, v, join(path, "command")); good {
+		switch {
+		case strings.ContainsAny(s, "\n\r"):
+			l.at(CodeInvalidValue, file, off, v, join(path, "command"), "the command is more than one line")
+		case strings.TrimSpace(s) == "":
+			l.at(CodeInvalidValue, file, off, v, join(path, "command"), "the command is empty (it is one line carrying {repo})")
+		case !strings.Contains(s, "{repo}"):
+			l.at(CodeInvalidValue, file, off, v, join(path, "command"), "the command carries no {repo}: the daemon fills it with the task repo's name")
+		default:
+			fp.Command = s
+		}
+	}
+	return fp
+}
+
+// containsPathSegment reports whether a slash path carries segment as one
+// of its segments.
+func containsPathSegment(p, segment string) bool {
+	for _, s := range strings.Split(filepath.ToSlash(p), "/") {
+		if s == segment {
+			return true
+		}
+	}
+	return false
 }
 
 // wrapAttrs decodes a step's `wrap_attrs`: attr names, each at most once.

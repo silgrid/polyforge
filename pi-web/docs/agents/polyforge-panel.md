@@ -1,6 +1,7 @@
 # Polyforge dock panel (pi#108)
 
-A Polyforge panel in the shared dock slot (the bg-tasks slot) that reads the
+A Polyforge panel in the dock slot (its only panel since the bg-tasks dock
+retired with the built-in running list, #173) that reads the
 daemon through `GET /api/polyforge/**` and writes only through JSON-only POSTs:
 `POST /api/polyforge/messages` (send), `POST /api/polyforge/messages/ack` and
 `POST /api/polyforge/projects/members`, plus the configuration panel's pf-only
@@ -543,7 +544,9 @@ feed-only attention card in `components/PolyforgePanel.tsx`, the feed state in
   card conversation](#job-card-conversation)):
   已阻塞 · kind — labelled for the kinds the panel
   knows, `KNOWN_BLOCKED_KINDS` = `incomplete` 步骤未完成,
-  `driver` 被调度器暂停, `contract` and `write_failed` — held equal to the kinds the daemon's `watchBlocked`
+  `driver` 被调度器暂停, `contract`, `write_failed` and `cleanup_failed`
+  (a step-end process cleanup that could not prove the step's processes
+  gone) — held equal to the kinds the daemon's `watchBlocked`
   assigns by the Go test `test/w415_blocked_kinds_test.go`; an unknown kind
   shows its raw name — the reason, 需要的操作), with the copyable
   `pf resume <wi>` command for every kind but `contract` (whose only
@@ -600,7 +603,7 @@ feed-only attention card in `components/PolyforgePanel.tsx`, the feed state in
   the plain toggle, without the attribute. No separate reminder renders
   beside it. A click while the dock is closed and the count is above 0
   (`openPfNeedsInput` in `components/AppShell.tsx`) opens the dock
-  (bg-tasks closes, the shared slot) through the walk (`openNextAttention`,
+  through the walk (`openNextAttention`,
   `nextAttentionItem`): the item after the last one it opened (wrapping; the
   first time the selected waiting job stands in, as #413's walk did) to its
   target (`attentionTarget`): a waiting job or a work item entry → its job
@@ -3448,17 +3451,16 @@ replaces it. An abort by hiding, deselecting or unmounting writes nothing.
   error text is the only error signal). The busy state is written only by the
   click path — background polls never spin or disable the button.
 - `components/AppShell.tsx`: the Polyforge button renders iff pf is present,
-  independent of chat visibility; opening the Polyforge panel closes bg-tasks
-  (mutually exclusive dock slot: mobile bottom sheet both). An owner-intended change
-  removed the pi top bar's bg-tasks toggle and its
-  running-count badge: the bg-task terminal notification's jump is the only
-  path that opens bg-tasks, and its onClick closes the Polyforge panel before
-  showing bg-tasks, so the jump never lands on a covered dock. The dock, its
-  API routes, bridge and hook are unchanged.
-  **Mobile sheet heights (pi#120):** both mobile sheets (Polyforge and
-  bg-tasks, the same dock slot) open at 62 % of their container and resize
-  by dragging a top-edge handle (`.pf-sheet-resize-handle`, one shared
-  mechanism `hooks/useResizableSheet.ts`, two consumers). The drag is
+  independent of chat visibility. The bg-tasks dock that shared the slot is
+  retired (#173: a pi session's background tasks live above its composer in
+  the built-in running list and their detail panel); with it went the mobile
+  bg-tasks sheet, the `pi-web:bg-tasks-sheet-height` key and the old
+  mutual-exclusion paths. The bg-task terminal notification keeps its
+  session-wide browser notification, its click only focusing the session.
+  **Mobile sheet heights (pi#120):** the mobile sheet (the Polyforge dock's;
+  the bg-tasks one retired with its dock) opens at 62 % of its container and
+  resizes by dragging a top-edge handle (`.pf-sheet-resize-handle`, the
+  shared mechanism `hooks/useResizableSheet.ts`). The drag is
   continuous under touch and mouse pointer events alike, clamped to
   [30 %, 90 %] of the same container the 62 % resolves against
   (`lib/panel-layout.ts`: `SHEET_*_HEIGHT_PCT`, `clampSheetHeightPct`,
@@ -3466,9 +3468,9 @@ replaces it. An abort by hiding, deselecting or unmounting writes nothing.
   it never dismisses (the backdrop tap stays the only dismiss gesture; the
   handle is a DOM child of the sheet, above the backdrop), and the handle's
   `touch-action: none` keeps the page from scrolling or pull-to-refresh
-  while it is dragged. Each sheet persists its own dragged height under its
-  own localStorage key (`pi-web:polyforge-sheet-height`,
-  `pi-web:bg-tasks-sheet-height`, the pi#117 uncoupled-widths convention);
+  while it is dragged. The sheet persists its dragged height under its
+  own localStorage key (`pi-web:polyforge-sheet-height`, the pi#117
+  uncoupled-widths convention);
   absent/invalid/out-of-range reads as the 62 % default. Keyboard resize
   (arrows, Home/End, Enter/double-click reset) mirrors the dock handle.
   **Desktop dock width (pi#117):** the Polyforge dock opens at 460 px and
@@ -3480,10 +3482,9 @@ replaces it. An abort by hiding, deselecting or unmounting writes nothing.
   convention as the other `pi-web:polyforge-*` keys). The handle is a DOM child
   of the dock (it straddles the dock's left edge), so the pi#113 outside-
   pointerdown dismissal counts it as part of the dock — dragging never
-  closes the dock. The bg-tasks dock in the same slot stays fixed at
-  340 px, uncoupled from the Polyforge width; the desktop keeps no height
-  resize at all (the pi#120 sheet resizers serve the mobile branches only,
-  their refs attaching to nothing while the desktop renders).
+  closes the dock. The desktop keeps no height
+  resize at all (the pi#120 sheet resizer serves the mobile branch only,
+  its ref attaching to nothing while the desktop renders).
   Desktop dock dismissal (pi#113): while the dock is open, a `pointerdown`
   anywhere outside its own DOM (`data-pf-dock`) closes it — the press is
   never eaten (no `preventDefault`/`stopPropagation`; the dock is an overlay,
@@ -3491,8 +3492,7 @@ replaces it. An abort by hiding, deselecting or unmounting writes nothing.
   its normal action on its target. The topbar toggle (`data-pf-toggle`) is
   exempt: its own click already ends closed, and a pointerdown dismissal
   there would close-then-reopen. The listener exists only while the desktop
-  dock is open and unpinned; the mobile sheet keeps its backdrop tap and the
-  bg-tasks dock gets no outside-click close.
+  dock is open and unpinned; the mobile sheet keeps its backdrop tap.
   **Desktop dock pin:** the dock header carries a pin control
   (`aria-pressed`, translated `polyforge.dock.pin`/`unpin`) rendered only on
   the desktop dock (`showPin`; the mobile sheet passes `showPin={false}` and
@@ -3503,9 +3503,8 @@ replaces it. An abort by hiding, deselecting or unmounting writes nothing.
   press still reaches its target and the dock stays open. The topbar toggle
   and the panel's close still close the dock and never clear the pin; only the
   pin control does. A one-shot mount effect reopens the dock when pinned and
-  the `(max-width: 640px)` media query does not match (bg-tasks closes first,
-  the shared-slot rule); the dock stays the same absolute overlay, so the chat
-  is never resized.
+  the `(max-width: 640px)` media query does not match; the dock stays the
+  same absolute overlay, so the chat is never resized.
 - **Event tail display modes (pi#112) — retired.** The
   simple/verbose toggle, its `pi-web:polyforge-event-mode` preference (left in
   place, never read, rewritten or cleared), the collapsed `sync ×N` noise row

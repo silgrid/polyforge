@@ -87,7 +87,7 @@ change, nothing more, and changes no behavior.
 
 ## What each mechanical step owes
 
-- **sync** (no gate; skill `sync`, `sync.py`, tool window 20 minutes) — checks that each
+- **sync** (no gate; skill `sync`, `sync.py`, `fast_checks.py`, tool window 20 minutes) — checks that each
   task repo stands at the heads review judged, or at its own earlier `after` when merge's
   FAIL sent the lane back here; merges the default branch in place, the mechanical
   conflicts resolved by the script, a real conflict by the step's own agent (committed by
@@ -121,7 +121,7 @@ change, nothing more, and changes no behavior.
 2. **A sync that is not the agent's to resolve**, or a HEAD that is neither the reviewed
    tree nor the sync's own earlier head.
 3. **A red the change cannot have caused** — `evidence` asks and acts on the reply.
-4. **A machine that cannot run a step's command** — `facts.py`, `sync.py`, `run.py` or
+4. **A machine that cannot run a step's command** — `facts.py`, `sync.py`, `fast_checks.py`, `run.py` or
    `merge.py` exiting 2 after the skill's retries: the step hands off `blocked`; fix the
    machine, then write to the work item (or `pf resume`).
 5. **The rewind budget** — below.

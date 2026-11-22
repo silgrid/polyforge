@@ -12,7 +12,10 @@ package daemon
 // (polyforge#89), the defaults 3 / 8 / 30 applying without it — pinned
 // by internal/contracttest/w72_analysis_prompt_contract_test.go, which
 // reads this same file from the repository tree (the embedded copy IS
-// this file at compile time).
+// this file at compile time). polyforge#213 adds the fixed-form estimate
+// line (its own line, no list marker, no backticks), the decidability
+// requirement, the per-acceptance test case, the hand-back section
+// (`### 何时必须交回`) and rule ②'s risk-only wording.
 
 import _ "embed"
 

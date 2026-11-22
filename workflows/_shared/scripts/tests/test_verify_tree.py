@@ -12,6 +12,7 @@ import unittest
 from typing import Any, Dict
 
 import verify
+from pfstep import scoped_plan
 
 from .verifyfix import (
     HAVE_BASH,
@@ -130,12 +131,12 @@ class TreeTest(unittest.TestCase):
         the remote prefix."""
         fx = Fixture(self.root, {"app": {"a.txt": "base\n"}})
         d = fx.repo("app")
-        self.assertEqual(verify.resolve_default(d), "main", "origin/HEAD default")
+        self.assertEqual(scoped_plan.resolve_default(d), "main", "origin/HEAD default")
         git_t(d, "remote", "set-head", "origin", "--delete")
-        self.assertEqual(verify.resolve_default(d), "main", "fallback")
+        self.assertEqual(scoped_plan.resolve_default(d), "main", "fallback")
         git_t(d, "update-ref", "refs/remotes/origin/master", "refs/remotes/origin/main")
         git_t(d, "update-ref", "-d", "refs/remotes/origin/main")
-        self.assertEqual(verify.resolve_default(d), "master", "fallback")
+        self.assertEqual(scoped_plan.resolve_default(d), "master", "fallback")
 
 
 if __name__ == "__main__":

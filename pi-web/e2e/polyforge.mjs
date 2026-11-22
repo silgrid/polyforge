@@ -10,7 +10,7 @@
 // e2e/run.mjs). Standalone, like e2e/terminal.mjs: it starts its own dev server
 // twice — phase A with no `pf` reachable on PATH, phase B with a stub `pf` first
 // on PATH — and matches the new surfaces only by HTTP routes named in the spec and
-// by user-visible roles/text ("Polyforge" button/panel, mirroring bg-tasks markup).
+// by user-visible roles/text ("Polyforge" button/panel).
 // Each scenario is self-guarding: it logs PASS/FAIL and the run exits 1 on any FAIL.
 //
 // (owner-intentional change, by ruling — not a regression): the
@@ -502,7 +502,7 @@ const T = {
   AC6: "AC6: Selected WI stays selected after it leaves the job list",
   AC7: "AC7: Blocked WI shows its status, and its needs_input question verbatim with its id",
   AC8: "AC8: Routes validate refs before argv, time out to unavailable and leak no env values or hidden fields",
-  AC9: "AC9: Panel docks 460px (resizable) right on desktop / 62% bottom sheet on mobile, sharing the bg-tasks slot",
+  AC9: "AC9: Panel docks 460px (resizable) right on desktop / 62% bottom sheet on mobile, the dock slot's only panel (the bg-tasks dock retired, #173)",
   AC10: "AC10: Panel strings are localized in zh-CN and zh-TW",
   // pi#112 (wi_5qd5PgbQT1Gw) — readable event tail, authored pre-code against
   // artifacts/spec.md. One scenario per new-behaviour acceptance criterion.
@@ -1015,12 +1015,11 @@ try {
   // pi#117: the desktop dock opens at 460 by default (resizable via its
   // left-edge handle; the e2e asserts the default width only — the clamp,
   // persistence and dismissal-exemption contracts are pinned by unit tests).
-  // owner-intended change: the pi session's top bar no longer carries
-  // a "Background tasks" toggle. This scenario now pins that absence and that
-  // the Polyforge dock still opens at 460px; the bg-tasks/Polyforge mutual
-  // exclusion is pinned by components/AppShell.polyforge.test.mjs (the
-  // notification-jump source pin; owner-approved narrowing, grill row 4).
-  await checkPage(T.AC9, "desktop dock, no bg-tasks toggle", {}, async (page) => {
+  // polyforge#173: the bg-tasks dock retired with the built-in running list,
+  // so this scenario pins that the Polyforge dock is the slot's only panel:
+  // no top-bar toggle, no bg-tasks sheet handle, nothing named by the retired
+  // panel anywhere in the shell.
+  await checkPage(T.AC9, "desktop dock, the slot's only panel", {}, async (page) => {
     assert.equal(
       await page.getByRole("button", { name: "Background tasks", exact: true }).count(),
       0,
@@ -1028,6 +1027,11 @@ try {
     );
     const box = await (await openPanel(page)).boundingBox();
     assert.ok(Math.abs(box.width - 460) <= 2, `desktop dock is ${box.width}px wide`);
+    assert.equal(
+      await page.locator('[data-resize-handle="bg-tasks-sheet"]').count(),
+      0,
+      "a bg-tasks sheet handle remains although the dock retired",
+    );
   });
   // 600px: inside the app's mobile breakpoint (<= 640px) but above the narrow
   // (<= 480px) layout that tucks toolbar actions behind a "more" menu.

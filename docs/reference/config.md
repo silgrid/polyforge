@@ -80,7 +80,7 @@ one partition; `internal/polyforge/cellcfg/schema.go` owns it):
 | `slow_model_median_latency` | `[daemon]` | Host-only | live | the slow-model judgement's single-call median bound (default `60s`) |
 | `slow_model_p90_latency` | `[daemon]` | Host-only | live | the slow-model judgement's single-call p90 bound (default `180s`) |
 | `harness_root` | `[daemon]` | Host-only | restart-only | parent of the per-Cell harness roots (`<harness_root>/cells/<profile>`) |
-| `operator_agent_dir` | `[daemon]` | Host-only | restart-only | the shared model-credential source the default Cell syncs from |
+| `operator_agent_dir` | `[daemon]` | Host-only | restart-only | shared credential source; `auth.json` and `models.json` are copied, while embedded worker agents/extensions are not; a configured source without readable `auth.json` refuses startup. |
 | `python` | `[daemon]` | Host-only | restart-only | the interpreter the workflow step scripts run under (`PF_PYTHON`); resolved and checked at the daemon's start |
 | `layout_version` | — | Host state | read-only | reports `<data-dir>/layout-version`; never settable |
 | `server` | flat | Cell | connection-change | one normalized AIHub per Cell |
@@ -228,13 +228,13 @@ defaults:
 | `stall_window` | `--stall-window` | `10m` | N: the driver between steps (not waiting on a human) for longer than this is judged stalled; a negative value disables it. |
 | `ask_warm_window` | `--ask-warm-window` | `15m` | How long a step process that asked the owner (`pf step ask`, docs/reference/commands.md) is kept resident for the reply before the daemon ends it (stdin closed, then the signal); the step stays awaiting the owner either way and the reply resumes the session. While it waits the job holds no running slot and nothing of the dispatch is judged. Restart-only. |
 | `harness_root` | `--harness-root` | `<data-dir>` | Parent root of the step harness dirs: `<root>/step-agent` (the dedicated step agent dir), `/step-agent-sessions` (pi sessions) `/claude-config` (claude's config dir; its settings.json env block is the credential authority layer) and `/summarize-cwd` (the working directory of the summarize lane's one-shot dispatches, never the daemon's `$HOME` cwd). Host-only: every Cell, the default one included, keeps its own harness dirs under `<harness_root>/cells/<profile>/` (the `[model] source` row), so the doctor's `cells` object answers each Cell's own config roots (85a2, polyforge#142). Replaces the former `--harness-sessions-root`, which is refused. |
-| `operator_agent_dir` | `--operator-agent-dir` | `~/.pi/agent` | SOURCE of the dedicated step agent dir — a credential surface: the daemon copies the minimal set (`auth.json`, `models.json`, `agents/`, `extensions/subagent/`) from here into `<harness-root>/step-agent`, and every pi step runs against that copy. A configured source without a readable `auth.json` refuses the daemon start. |
+| `operator_agent_dir` | `--operator-agent-dir` | `~/.pi/agent` | `auth.json` and `models.json` are copied from this source; embedded worker agents/extensions are not copied from it; a configured source without readable `auth.json` refuses startup. |
 | `python` | — | `python3` on the daemon's `PATH` | The interpreter a workflow's step scripts run under — every step process gets it as `PF_PYTHON`, and a skill runs a script as `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/<name>.py"` (docs/reference/workflow-contract.md, "Scripts"). The daemon resolves it once at its start — this key, else `python3` on its own `PATH` (under `pf daemon ensure` not an interactive shell's) — and asks the interpreter for its version: a missing interpreter, one that does not answer, or one older than 3.9 refuses the start (exit 78) naming the source, the path, the version and this key; a set value is never replaced by the `PATH`'s. A quoted absolute path. `pf doctor`'s `python3` row judges the same rule from the shell it runs in. Host-only, restart-only. |
 | `max_concurrent_jobs` | `--max-concurrent-jobs` | `4` | The configured cap on concurrently running jobs; `pf ops max N` overrides it until the daemon restarts, and a reload that **changes** `max_concurrent_jobs` overrides `pf ops max` too (last action wins). |
 | `max_concurrent_tasks` | — | `2` (`task.DefaultLimit`) | The task lane's one Host-wide concurrency bound: how many one-off tasks (`pf task spawn`, the message analyze/prompt tasks) run at once over every Cell of the Host. A spawn beyond it is refused `DAEMON-409`, nothing queued. Tasks take NO `max_concurrent_jobs` (or `cell_max_concurrent_jobs`) slot — those bound work-item jobs only — so a full job ceiling never refuses a task and running tasks never hold back a job start; the task lane answers to this key alone. Live (the default Cell's file): a reload applies a change at once — the next spawn is judged by the new value; a lowered bound refuses only new spawns, nothing running is stopped. |
 | `max_concurrent_bars` | — | `2` | The heavy-run admission's global slots: how many dispatches of a step declaring `resources: { admission: heavy }` (the develop lane's verification) run at once across every repo, work item and Cell of the Host. A further run waits in the admission queue — ordered by the work item's priority, then by when it first queued — holding no process, no budget and no job slot (`max_concurrent_jobs` does not count it while it waits — the freed slot may start other work — and counts it again once it is admitted, so the running count can briefly exceed the cap: new starts wait, nothing is stopped). Live (the default Cell's file): the next dispatch tick honours a change. |
 | `bar_load_threshold` | — | cores − 4 (at least `1`) | The heavy-run admission's load gate: a further heavy run is admitted only while the 1-minute load average (`/proc/loadavg`) is below this value. It never holds the only run (with no admitted run running the next one starts whatever the load), and it is ignored where the load cannot be read. An unquoted number > 0; live like `max_concurrent_bars`. |
-| `transient_error_patterns` | — | none (no additional rules) | The additional failure-classification list (polyforge#51): every item is one RE2 regex, and a failure text that matches one is classified `upstream_transient` (the same model retried after the transient backoff, never counted; the 2-consecutive bound applies like the built-in transients'). Judged after the allowance/auth row and before every other built-in row, on the text of an exited dispatch and of a live error turn alike — never on the driver's own error. A pattern that would swallow an allowance or auth failure cannot: that row is judged first and covers the bare 402. Written through `pf config set` as a JSON list of strings; a pattern a double-quoted value cannot hold verbatim (a backslash, a `"`, a non-printable character such as a tab) is stored as a single-quoted literal so it reads back verbatim (such a pattern that also holds `'` is refused — write the quote as `\x27`, or the `"` as `\x22`), a pattern that does not compile refuses the whole write naming the item, and an empty pattern is refused. Host-only, live: the next text classification reads the reloaded rules, no restart. |
+| `transient_error_patterns` | — | none (no additional rules) | The additional failure-classification list (polyforge#51): every item is one RE2 regex, and a failure text that matches one is classified `upstream_transient` (the same model retried after the transient backoff, never counted; no separate retry-count bound — the step's cumulative T is the only limit, like the built-in transients'). Judged after the allowance/auth row and before every other built-in row, on the text of an exited dispatch and of a live error turn alike — never on the driver's own error. A pattern that would swallow an allowance or auth failure cannot: that row is judged first and covers the bare 402. Written through `pf config set` as a JSON list of strings; a pattern a double-quoted value cannot hold verbatim (a backslash, a `"`, a non-printable character such as a tab) is stored as a single-quoted literal so it reads back verbatim (such a pattern that also holds `'` is refused — write the quote as `\x27`, or the `"` as `\x22`), a pattern that does not compile refuses the whole write naming the item, and an empty pattern is refused. Host-only, live: the next text classification reads the reloaded rules, no restart. |
 | `model_error_patterns` | — | none (no additional rules) | The same list for model-class texts (polyforge#51): a match classifies the failure `exit_model_class`, switching the candidate at once — on a live error turn too, like the allowance row. The same shape, the same quoting rules and the same live behavior as `transient_error_patterns`. |
 | `slow_model_median_latency` | — | `60s` | The slow-model judgement's single-call median bound (polyforge#51): a cumulative-T expiry is `step_timeout_slow_model` only when the dying dispatch itself ran at least half of T AND at least 5 of its completed model calls were individually slow — the median over this bound or the p90 over `slow_model_p90_latency`. The call in progress counts nowhere; a dispatch of many fast calls (median under the bound) stays `step_timeout_long_task` however long it waited (the polyforge#25 misjudgement). A quoted Go duration > 0; live: every tick replays the live bounds, so a reload reaches an in-flight dispatch. |
 | `slow_model_p90_latency` | — | `180s` | The slow-model judgement's single-call p90 bound (polyforge#51); the same rules as `slow_model_median_latency`. |
@@ -303,9 +303,7 @@ it for the next dispatch), `PF_PYTHON` is the interpreter the daemon resolved at
 start (`[daemon] python`, else `python3` on its `PATH`), `PF_CAPSULE`,
 `PF_LANE_DIR` and `PF_SHARED_DIR` are the capsule root, the lane snapshot
 the step runs (`<capsule>/workflows/<lane>`) and the shared tree beside it
-(`<capsule>/workflows/_shared`) — where a step's scripts run from
-(docs/reference/workflow-contract.md, "Scripts") — and `PF_ROUND` is the step's round — `1` on the step's
-first entry, advanced by a rewind's re-entry (and, for the gate whose
+(`<capsule>/workflows/_shared`) — where a step's scripts run from (docs/reference/workflow-contract.md, "Scripts"). `TMPDIR` is also set by the daemon to `<capsule>/artifacts/downloads/tmp/`; it is created before pi or Claude starts and is unique per capsule. Explicit overrides by a tool or configuration are outside this guarantee. See [workflow contract Scripts environment](workflow-contract.md#scripts) for the complete variable table and [workflow contract Environment](workflow-contract.md#environment) for inheritance and `PATH`. `PF_ROUND` is the step's round — `1` on the step's first entry, advanced by a rewind's re-entry (and, for the gate whose
 verdict routed the rewind, by that verdict); a resume, a crash
 re-dispatch and an owner's answer stay in the round. `PF_STEP` and
 `PF_SPAWN` name the dispatch itself — the step id and the spawn ordinal
@@ -1033,6 +1031,8 @@ steps:
       params: { <name>: <value> }   # one value per param the step's lane declares
 ```
 
+For develop `build`, the daemon-owned pi worker switch is `pi_subagents`: `on` enables the worker path; empty or `off` keeps the main-agent path; other values are refused.
+
 A lane step may declare `params` in its workflow.yaml — each parameter
 name (`^[a-z][a-z0-9_]{0,63}$`) to its lane default
 ([workflow contract](workflow-contract.md#step-keys)); a project sets its
@@ -1084,6 +1084,32 @@ it per work item with
 is, who prepares it and what a missing one means:
 [concepts.md](../concepts.md)'s verification-container section and
 [release.md](release.md)'s test gate.
+
+The second lane-declared parameter is `audit` (polyforge#138): the same two
+steps (`verification`, `full-gate`) declare it, default `"on"` — the lane's
+own dependency audit, the `audit` command the scope engine appends to every
+full report. Turning it off is **the project owner's decision, not the
+repository's**: a project whose owner decides against the audit sets
+`pf config set steps.<project>.verification.params.audit off` (and
+`steps.<project>.full-gate.params.audit off`), and a ticket overrides it
+per work item with
+`pf override <id> --step <step-id> --param audit=off`. Only the lower-case
+`on` and `off` are values — an unset or empty value reads as `on`, and any
+other value is a named error before any check or container starts
+(exit 2, the fixed mark `pf-audit-param-invalid` in the summary), never a
+silent on or off. With `off` the step asks the scope engine with
+`--audit off`, so no full report plans the dependency audit, and the
+results say so — the verification's result file and the full gate's
+gate.json and green-tag record carry the merged source hint
+`PF_PARAM_AUDIT=off，来自项目配置或 pf override` (which layer turned it
+off, the project's config or a `pf override`, is not distinguished). No
+key of a repository's `verify-scope.conf` can turn the audit off or loosen
+it — see the "dependency-audit gate" section below; the switch lives on
+the owner's side alone. A green tag written with the audit off hashes a
+plan without the audit command, so the release's green-tag check (which
+recomputes the plan with the audit on) does not accept it as a
+full-audit credential on a repo the audit covers — the gate is simply run
+again where an audit is required.
 
 #### Queued work items — params before the claim (polyforge#79)
 
@@ -1226,7 +1252,7 @@ may declare them before the release ships the engine.
 | `component` | `<name>\|<path>[,<path>…]` | Repeatable: one named component of this repository for the epic-upgrade analysis. `<name>` has the `check` name shape; `<path>` is a repository-relative prefix — a declared path and everything under it, overlapping declarations taking the longest prefix. A malformed line (no `\|`, a bad name, an empty, absolute or `..`-escaping path), or a second line naming an already-declared component, is diagnosed and ignored. The engine reads none of the key (it accepts the line without the unknown-key diagnostic, like `not_runnable_rule`); the component tool `components.py` parses it, and the gate id hashes none of it. |
 | `epic_components` | positive integer | The epic-upgrade analysis's component-count threshold (rule ①'s "at least"); without a declaration 3 applies. A value that is not a positive integer, or a second declaration, is diagnosed and ignored — the first declaration wins. Like `component=`, the key is the component tool's: the engine reads none of it. These thresholds feed the pre-submit analysis's `### 升级 epic 建议`; the owner-confirmed split's filing steps are the routing skill's file verb's. |
 | `epic_units` | positive integer | The same for rule ①'s unit fallback ("more than"); without a declaration 8 applies. |
-| `epic_files` | positive integer | The same for rule ②'s single-repository file count ("more than"); without a declaration 30 applies. |
+| `epic_files` | positive integer | The same for rule ②'s single-repository file count ("more than"): above it the analysis marks a risk (at least one review rework round expected) and recommends a split only when the change has independent parts that can run in parallel; without a declaration 30 applies. |
 
 The epic-upgrade analysis's component definition, the one the component
 tool `workflows/_shared/scripts/components.py` divides a repository by

@@ -10,8 +10,8 @@ you leave.
 
 This environment runs no MCP server: no `mcp__…`-shaped tool name exists. The tools
 available to you are exactly the built-ins your harness opened this conversation with —
-on a pi dispatch `bash`, `read`, `edit`, `write` (plus `subagent`, when the operator's
-agent dir carries the sub-agent extension); on a claude dispatch `Bash`, `Read`, `Edit`,
+on a pi dispatch `bash`, `read`, `edit`, `write` (plus `subagent`, when the daemon-owned
+worker extension is installed); on a claude dispatch `Bash`, `Read`, `Edit`,
 `Write`, `Glob`, `Grep`, `TodoWrite`, `Agent`. A `Tool … not found` reply means you wrote
 a wrong name: retry with the exact name from that list. It is not an environment fault,
 and never a reason to stop working or to end your turn without `pf step handoff`.

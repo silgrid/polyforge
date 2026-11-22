@@ -15,8 +15,8 @@ capsule's file, a given path is taken as given):
   facts.py micro-bounds [--capsule DIR] --plan artifacts/fix/evidence.json [--json] [--out PATH]
 
 The task repos are capsule.json's (the claim's) present under repos/;
-units.json is the build's `[{id, pre_existing_red?, test_commit?,
-impl_commit, run{repo, cwd, argv}, marker}]` (absent for plan-conformance
+units.json is the build's `[{id, pre_existing_red?, timeout?,
+test_commit?, impl_commit, run{repo, cwd, argv}, marker}]` (absent for plan-conformance
 and carries = no unit; required for build). D is a duration (10m, 90s,
 1h30m). A unit may instead declare `pre_existing_red: true` — its
 reproduction test already exists and is red before the change (an
@@ -26,14 +26,24 @@ change) — and then reports no test_commit.
 plan-conformance — the plan's `## Units` declarations (`Touched files:`
 writes and their `Coupled obligations:`) against the delivered diff (each
 task repo's commits since its merge-base with the fetched origin default
-branch), both ways; the units' test files count as declared. Details:
-  {plan, units_file, unavailable, declared_writes: [{path, obligations:
-   [{path, note}], none_reason}], undeclared, unchanged_obligations,
-   unchanged_writes, released}
+branch), both ways, and the plan's `## 已定对照` section against the
+work item's decided rulings (every section of its verbatim content —
+`runtime-state/work-item.json`'s `content` — that opens `## 已定`:
+each item, numbered across the sections in order of appearance, mapped
+to a unit — an id of units.json, or a bold id of the plan's `## Units`
+when there is no units file — or `none — <reason>`); the units' test
+files count as declared. Details:
+  {plan, units_file, unavailable, work_item, decided, unmapped_decided,
+   declared_writes: [{path, obligations: [{path, note}], none_reason}],
+   undeclared, unchanged_obligations, unchanged_writes, released}
 Exit 0: nothing changed undeclared and no declared coupled obligation left
-unchanged (an unchanged plain write and a lapse are listed, not judged).
-Exit 1: a difference to class. Exit 2: the plan is unreadable or the diff
-could not be read (`unavailable` says why).
+unchanged (an unchanged plain write and a lapse are listed, not judged),
+and every decided ruling mapped (a ticket without a `## 已定` section
+asks for no mapping section; a work item the daemon has not
+materialized reads as no decided ruling).
+Exit 1: a difference to class (an unmapped decided ruling is named, its
+number and text). Exit 2: the plan or the work item is unreadable, or
+the diff could not be read (`unavailable` says why).
 
 build — the units resolved against the task repos (the one repo holding
 their commits; the test commit's files), each commit pair's test-first
@@ -41,9 +51,14 @@ shape (test_commit one commit of test paths alone, a proper ancestor of
 impl_commit, which HEAD holds), the `test_weakened` hunks (a unit's test
 files changed after its test commit) and, with --replay, each unit's run
 replayed on the tree of its test commit — a detached worktree under the
-clone's .git, removed afterwards — each bounded by --unit-timeout (10m)
+clone's .git, removed afterwards — each bounded by its own limit — the
+unit's self-reported `timeout` in units.json, else --unit-timeout (10m) —
 under the whole deadline (--deadline, else the step's tool window less two
-minutes); each unit's ``replaying`` start line is closed by an end line
+minutes). A run its own limit kills is an evidence problem, never a
+verdict: exit 1, the problem naming the unit and its limit (a red-state
+run did not exit non-zero within its limit) — only a kill by the whole
+run's deadline stays not judged (exit 2). Each unit's ``replaying`` start
+line is closed by an end line
 (``unit <id>: replay <verdict> (exit <n>, <duration>)``). A unit declared
 ``pre_existing_red: true`` (no test_commit, no test-first shape) resolves
 on its implementation commit alone and replays on the tree of the
@@ -112,8 +127,8 @@ hand-off, its summary naming the entry and the rule it violates. A
 missing or malformed analysis file is the invocation's (exit 2, exactly
 verification's treatment of the same file).
 Exit 0: every taken entry passes. Exit 1: an entry fails. Exit 2: not
-judged — no capsule, an unusable analysis file, a run killed at its
-time limit or not started, an infrastructure failure.
+judged — no capsule, an unusable analysis file, a run not started or
+killed by the whole run's deadline, an infrastructure failure.
 
 carries — every e2e suite the build added or changed in a task repo
 declares `carries:` in its opening comment block, and one it added or a
@@ -155,11 +170,11 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from pfstep import container, deadline, duration, git, goglob, gotext, runner, secretpat  # noqa: E402
 from pfstep import targetbranch  # noqa: E402
-from pfstep.analysis import read_analysis, static_problem  # noqa: E402
+from pfstep.analysis import read_analysis, selected_problem, static_problem  # noqa: E402
 from pfstep import godecode as gd  # noqa: E402
 from pfstep.gotext import clip_list, clip_runes, clip_text, fields, quote, short_sha, trim_space  # noqa: E402
 from pfstep.invoke import Invocation, Parser  # noqa: E402
-from pfstep.unitruns import argv_line, marker_matches, unknown_repo_problem  # noqa: E402
+from pfstep.unitruns import DEFAULT_UNIT_LIMIT, argv_line, limit_note, marker_matches, unknown_repo_problem, unit_limit_ns  # noqa: E402
 
 COMMAND = "facts.py"
 
@@ -173,7 +188,7 @@ KINDS = (PLAN_CONFORMANCE, BUILD, ANALYSIS, CARRIES, MICRO_BOUNDS)
 DEFAULT_PLAN = "artifacts/plan.md"
 DEFAULT_UNITS = "artifacts/build/units.json"
 DEFAULT_ANALYSIS = "artifacts/build/change-analysis.json"
-DEFAULT_UNIT_TIMEOUT = 10 * duration.MINUTE
+DEFAULT_UNIT_TIMEOUT = DEFAULT_UNIT_LIMIT
 
 VERIFY_SCOPE_CONF = ".polyforge/verify-scope.conf"
 CAPSULE_JSON = "capsule.json"
@@ -419,7 +434,7 @@ def tail_lines(path: str, n: int) -> str:
 
 
 UNIT_RUN = gd.Struct({"repo": gd.STR, "cwd": gd.STR, "argv": gd.List(gd.STR)})
-UNIT_DECL = gd.Struct({"id": gd.STR, "pre_existing_red": gd.BOOL, "test_commit": gd.STR, "impl_commit": gd.STR, "run": gd.Ptr(UNIT_RUN), "marker": gd.STR})
+UNIT_DECL = gd.Struct({"id": gd.STR, "pre_existing_red": gd.BOOL, "timeout": gd.STR, "test_commit": gd.STR, "impl_commit": gd.STR, "run": gd.Ptr(UNIT_RUN), "marker": gd.STR})
 
 
 class UnitsError(Exception):
@@ -432,7 +447,7 @@ def read_units(path: str) -> List[Dict[str, Any]]:
         text = read_text(path)
     except OSError as err:
         raise UnitsError(gotext.os_error("open", err)) from None
-    shape = "a JSON array of {id, [pre_existing_red,] [test_commit,] impl_commit, run{repo, cwd, argv}, marker}"
+    shape = "a JSON array of {id, [pre_existing_red,] [timeout,] [test_commit,] impl_commit, run{repo, cwd, argv}, marker}"
     try:
         doc = loads(text)
     except ValueError as err:
@@ -440,6 +455,12 @@ def read_units(path: str) -> List[Dict[str, Any]]:
     units, derr = gd.decode(doc, gd.List(UNIT_DECL))
     if derr is not None:
         raise UnitsError("%s is not %s: %s" % (path, shape, derr))
+    for i, u in enumerate(units or []):
+        t = trim_space(u.get("timeout", ""))
+        if t != "":
+            _, why = unit_limit_ns(t)
+            if why:
+                raise UnitsError("%s is not %s: unit %d: %s" % (path, shape, i, why)) from None
     return list(units or [])
 
 
@@ -1103,7 +1124,8 @@ def fold_plan_conformance(touched_files: Sequence[Any], authored: Sequence[str],
 
 
 def conformant(pc: Dict[str, Any]) -> bool:
-    return not pc["unavailable"] and not pc["undeclared"] and not pc["unchanged_obligations"]
+    return (not pc["unavailable"] and not pc["undeclared"]
+            and not pc["unchanged_obligations"] and not pc.get("unmapped_decided"))
 
 
 def plan_touched_files(md: str) -> List[Dict[str, Any]]:
@@ -1200,6 +1222,167 @@ def plan_entry(e: str) -> Tuple[str, str]:
         if j > i:
             paren = trim_space(e[i + 1:j])
     return trim_space(path), paren
+
+
+# ---------------------------------------------------------------------------
+# the ticket's decided rulings (## 已定)
+
+WORK_ITEM_DOC = "runtime-state/work-item.json"
+_DECIDED_SECTION = "## 已定"
+_DECIDED_HEADING = "## 已定对照"
+_DECIDED_ITEM = re.compile(r"^(?:[-*+]|\d{1,9}[.)])\s+(.+)$", re.ASCII)
+_DECIDED_MAP_LINE = re.compile("^已定\s*(\d{1,9})\s*[:\uff1a]\s*(.*)$", re.ASCII)
+_BOLD_ID = re.compile(r"\*\*([^*\n]+)\*\*", re.ASCII)
+
+
+def _md_section(md: str, heading: str) -> Optional[List[str]]:
+    """One `##` section's content lines, or None when the plan carries
+    no such heading (the section runs to the next `## `/`# ` heading).
+    A heading is a line starting with the given text, so `## 已定` also
+    takes `## 已定（补充）` while `### 已定` and a mid-line mention are
+    not headings."""
+    lines = md.split("\n")
+    for i, line in enumerate(lines):
+        if line.startswith(heading):
+            out: List[str] = []
+            for j in range(i + 1, len(lines)):
+                if lines[j].startswith("## ") or lines[j].startswith("# "):
+                    break
+                out.append(lines[j])
+            return out
+    return None
+
+
+def work_item_content(capsule_dir: str) -> Tuple[str, str, str]:
+    """The ticket's verbatim content and how it was read: (content,
+    state, error). State "" the file was read, `absent` the daemon has
+    not materialized it (treated as no decided ruling); error "" or why
+    the run must not judge (unreadable, not valid JSON, not the JSON
+    object expected)."""
+    try:
+        with open(os.path.join(capsule_dir, WORK_ITEM_DOC), "rb") as f:
+            doc = json.loads(f.read().decode("utf-8", "replace"))
+    except FileNotFoundError:
+        return "", "absent", ""
+    except OSError as err:
+        return "", "", gotext.os_error("open", err)
+    except ValueError as err:
+        return "", "", "not valid JSON: %s" % err
+    if not isinstance(doc, dict):
+        return "", "", "not the JSON object expected"
+    content = doc.get("content")
+    return (content if isinstance(content, str) else ""), "", ""
+
+
+def decided_items(content: str) -> List[Dict[str, Any]]:
+    """Every decided ruling the ticket's content carries: each item of
+    every section opening `## 已定`, numbered across the sections in
+    order of appearance (a top-level list item, its indented children
+    and continuation lines folded into it; a non-empty paragraph that
+    is no list is one item, so prose rulings cannot slip past)."""
+    out: List[List[str]] = []
+    section = False
+    cur = -1
+    for line in content.split("\n"):
+        if line.startswith(_DECIDED_SECTION):
+            section, cur = True, -1
+            continue
+        if line.startswith("## ") or line.startswith("# "):
+            section, cur = False, -1
+            continue
+        if not section:
+            continue
+        t = line.strip()
+        if not t:
+            cur = -1
+            continue
+        m = _DECIDED_ITEM.match(line)
+        if m is not None:
+            out.append([m.group(1)])
+            cur = len(out) - 1
+        elif cur >= 0:
+            out[cur].append(t)
+        else:
+            out.append([t])
+            cur = len(out) - 1
+    items: List[Dict[str, Any]] = []
+    for lines in out:
+        text = " ".join(" ".join(lines).split())
+        if text:
+            items.append({"n": len(items) + 1, "text": text})
+    return items
+
+
+def decided_mapping(plan_md: str) -> Optional[Dict[int, Dict[str, Any]]]:
+    """The plan's `## 已定对照` section: decided n -> what the plan maps
+    it to (its unit ids, or `none — <reason>`). None when the plan
+    carries no such section (a ticket without a decided ruling asks
+    for none). An entry no unit or reason fills is kept as it stands —
+    the fold names its ruling unmapped."""
+    lines = _md_section(plan_md, _DECIDED_HEADING)
+    if lines is None:
+        return None
+    mapping: Dict[int, Dict[str, Any]] = {}
+    for line in lines:
+        t = trim_space(line).lstrip("-*+ ").strip()
+        m = _DECIDED_MAP_LINE.match(t)
+        if m is None:
+            continue
+        rest = trim_space(m.group(2))
+        n = int(m.group(1))
+        if _NONE_DECL.search(rest):
+            mapping[n] = {"none": True, "reason": trim_space(trim_space(rest[4:]).lstrip("\u2014-\u2013:, \u3010 \u3011"))}
+        else:
+            mapping[n] = {"units": [u for u in (trim_space(p).strip("`*_") for p in rest.split(",")) if u]}
+    return mapping
+
+
+def decided_targets(decls: Sequence[Dict[str, Any]], plan_md: str) -> List[str]:
+    """The unit ids a decided ruling may name: units.json's own ids, or
+    — no units file — the bold ids of the plan's `## Units`."""
+    ids = {trim_space(d.get("id", "")) for d in decls}
+    ids.discard("")
+    if not ids:
+        lines = _md_section(plan_md, "## Units") or []
+        ids = {m.group(1).strip() for m in _BOLD_ID.finditer("\n".join(lines))}
+        ids.discard("")
+    return sorted(ids)
+
+
+def fold_decided(items: Sequence[Dict[str, Any]], mapping: Optional[Dict[int, Dict[str, Any]]],
+                 targets: Sequence[str]) -> List[Dict[str, Any]]:
+    """Each decided ruling the plan leaves unmapped: its number, its
+    text and why (no mapping section, not mapped, `none` without a
+    reason, or an id no unit of the plan or units.json carries)."""
+    out: List[Dict[str, Any]] = []
+    for it in items:
+        n = it.get("n")
+        m = (mapping or {}).get(n) if isinstance(n, int) else None
+        if m is None:
+            why = ("the plan carries no `## 已定对照` section" if mapping is None
+                   else "not mapped to a unit or a reason")
+        elif m.get("none"):
+            why = "" if m.get("reason") else "mapped `none` without a reason"
+        else:
+            bad = [u for u in m.get("units") or [] if u not in targets]
+            why = ("names %s — no unit of the plan or units.json carries it" % bad[0]) if bad else ""
+        if why:
+            out.append({"n": n, "text": it.get("text", ""), "why": why})
+    return out
+
+
+def _decided_note(items: Sequence[Dict[str, Any]], unmapped: Sequence[Dict[str, Any]]) -> str:
+    """The summary's decided segment: empty when the ticket carries no
+    decided ruling; the unmapped rulings named (their number and text)
+    when any; the mapped count when all are."""
+    if not items:
+        return ""
+    if unmapped:
+        return "; %d of %d decided ruling(s) unmapped — %s" % (
+            len(unmapped), len(items),
+            "; ".join(clip_list(["已定 %d (%s): %s" % (u["n"], clip_runes(u["text"], 64), u["why"])
+                                      for u in unmapped], 3)))
+    return "; %d decided ruling(s), all mapped" % len(items)
 
 
 # ---------------------------------------------------------------------------
@@ -1972,6 +2155,10 @@ def replay(capsule_dir: str, unit: Unit, run: Dict[str, Any], commit: str, where
             if d < until:
                 until = d
         timeout = unit_timeout if unit_timeout > 0 else until - time.time()
+        # whether the unit's own limit (not the whole run's deadline) is
+        # the bound that kills a hanging run — the red-state limit rule
+        # judges such a kill an evidence problem (polyforge#157)
+        limit_kill = unit_timeout > 0 and (time.time() + unit_timeout) <= deadline_at
 
         def run_in(command: str, wd: str, logs: str, limit: float) -> runner.CommandResult:
             try:
@@ -2026,6 +2213,8 @@ def replay(capsule_dir: str, unit: Unit, run: Dict[str, Any], commit: str, where
         out["setup"] = setup
     if res.not_started:
         out["not_started"] = True
+    if res.timed_out and limit_kill:
+        out["limit_kill"] = True
     out["duration_ms"] = res.duration_ms
     for key, v in (("log", res.log), ("image", res.image), ("container", res.container)):
         if v:
@@ -2130,6 +2319,12 @@ def plan_conformance(inv: Invocation, args: List[str]) -> int:
         d.update(pc_empty)
         inv.summary = "not judged: " + d["unavailable"]
         return 2
+    content, wi_state, wi_err = work_item_content(c.dir)
+    if wi_err:
+        d["unavailable"] = "the work item is unreadable: %s" % wi_err
+        d.update(pc_empty)
+        inv.summary = "not judged: " + d["unavailable"]
+        return 2
     touched = plan_touched_files(raw)
     authored = unit_test_files(units_of(c.repos_dir, c.repos, decls or []))
     changed, reason = changed_files(c.repos_dir)
@@ -2141,14 +2336,21 @@ def plan_conformance(inv: Invocation, args: List[str]) -> int:
     if pc["unavailable"]:
         inv.summary = "not judged: " + pc["unavailable"]
         return 2
+    items = decided_items(content)
+    unmapped = fold_decided(items, decided_mapping(raw), decided_targets(decls or [], raw))
+    pc["unmapped_decided"] = unmapped
+    d["work_item"] = wi_state or WORK_ITEM_DOC
+    d["decided"] = items
+    d["unmapped_decided"] = unmapped
     if not conformant(pc):
         inv.summary = (
-            "the plan and the diff differ: %d path(s) changed but undeclared, %d declared coupled obligation(s) left unchanged (%d declared write(s) left unchanged, %d lapsed)"
-            % (len(d["undeclared"]), len(d["unchanged_obligations"]), len(d["unchanged_writes"]), len(d["released"]))
+            "the plan and the diff differ: %d path(s) changed but undeclared, %d declared coupled obligation(s) left unchanged (%d declared write(s) left unchanged, %d lapsed)%s"
+            % (len(d["undeclared"]), len(d["unchanged_obligations"]), len(d["unchanged_writes"]), len(d["released"]),
+               _decided_note(items, unmapped))
         )
         return 1
-    inv.summary = "the plan declares every changed path and every declared coupled obligation changed (%d declared write(s), %d left unchanged, %d lapsed)" % (
-        len(d["declared_writes"]), len(d["unchanged_writes"]), len(d["released"]))
+    inv.summary = "the plan declares every changed path and every declared coupled obligation changed (%d declared write(s), %d left unchanged, %d lapsed%s)" % (
+        len(d["declared_writes"]), len(d["unchanged_writes"]), len(d["released"]), _decided_note(items, unmapped))
     return 0
 
 
@@ -2157,7 +2359,7 @@ def build(inv: Invocation, args: List[str], environ: Mapping[str, str], runtime:
     p.add_argument("--units", default="", help="build's units.json (default: the capsule's " + DEFAULT_UNITS + ")")
     p.add_argument("--replay", action="store_true", help="replay each unit's run on the tree of its test commit")
     p.add_argument("--isolation", default="", choices=["container", "host"], help="where a replay runs (default: the container when the repo's HEAD carries .polyforge/Dockerfile.verify, else the host)")
-    p.add_argument("--unit-timeout", type=_duration, default=DEFAULT_UNIT_TIMEOUT, help="one replay's time limit (under the whole deadline; default 10m)")
+    p.add_argument("--unit-timeout", type=_duration, default=DEFAULT_UNIT_TIMEOUT, help="one replay's time limit (under the whole deadline; default 10m) — a unit's self-reported `timeout` in units.json is its own limit instead")
     p.add_argument("--deadline", type=_duration, default=0, help="the whole run's deadline (default: the step's tool window less two minutes)")
     p.add_argument("--log-dir", default="", help="where the replays' logs go (default: logs/ beside --out, else the capsule's runtime-state/facts/<n>)")
     ns, code = _parsed(inv, p, args)
@@ -2257,9 +2459,14 @@ def build(inv: Invocation, args: List[str], environ: Mapping[str, str], runtime:
             commit, where = u.test_commit, "test commit"
             if u.pre_existing_red:
                 commit, where = bases[i], "the change's base"
+            # the replay's limit: the unit's self-reported `timeout`, else
+            # the run's --unit-timeout (polyforge#157: one limit the
+            # on-the-spot check and verify share)
+            t = trim_space(decls[i].get("timeout", "") or "")
+            limit_ns = unit_limit_ns(t, ns.unit_timeout)[0]
             inv.say("unit %s: replaying `%s` at %s %s (%d/%d)" % (u.id, gotext.shell_join(run["argv"]), where, short_sha(commit), i + 1, len(entries)))
             try:
-                rr = replay(c.dir, u, run, commit, where, deadline_at, ns.unit_timeout / duration.SECOND,
+                rr = replay(c.dir, u, run, commit, where, deadline_at, limit_ns / duration.SECOND,
                             os.path.join(logs, "replay", str(i + 1)), i + 1, env, co, ns.isolation)
             except (KeyboardInterrupt, runner.Interrupted) as err:
                 inv.summary = "interrupted while replaying unit %s (%s): nothing is proven" % (u.id, err or "interrupt")
@@ -2283,7 +2490,15 @@ def build(inv: Invocation, args: List[str], environ: Mapping[str, str], runtime:
                 inv.summary = "unit %s was not replayed: the deadline (%s) had passed" % (u.id, duration.format(window))
                 return 2
             if rr["timed_out"]:
-                inv.summary = "unit %s's replay was killed at its time limit (%s): not judged" % (u.id, duration.format(ns.unit_timeout))
+                if rr.get("limit_kill"):
+                    # the red-state limit: a run killed at its own limit
+                    # carries no red evidence — an evidence problem (exit 1),
+                    # never the old "not judged"
+                    problems.append("unit %s: %s, so no red evidence (log %s)"
+                                    % (quote(clip_text(u.id)), limit_note(limit_ns), rr.get("log", "")))
+                    continue
+                inv.summary = ("unit %s's replay was killed with the run's window (%s) still open at its limit (%s):"
+                               " the window ran out first — not judged" % (u.id, duration.format(window), duration.format(limit_ns)))
                 return 2
             if not_run(rr["exit_code"]):
                 inv.summary = "unit %s's run `%s` could not run at %s (exit %d: the command is missing or not executable there): not judged" % (
@@ -2403,7 +2618,7 @@ def analysis(inv: Invocation, args: List[str], environ: Mapping[str, str],
     path = c.path(ns.analysis, DEFAULT_ANALYSIS)
     rel = rel_to(c.dir, path)
     entries: List[Dict[str, Any]] = []
-    d: Dict[str, Any] = {"analysis_file": rel, "entries": entries, "cut": []}
+    d: Dict[str, Any] = {"analysis_file": rel, "entries": entries, "cut": [], "selected": []}
     inv.details = d
     try:
         an = read_analysis(path)
@@ -2416,6 +2631,31 @@ def analysis(inv: Invocation, args: List[str], environ: Mapping[str, str],
                  "note": "listed after the analysis's first %d (its supplement cap): not run" % an.limit}
                 for ad in cut]
     problems: List[str] = []
+    # the machine selection records the analysis carries: the one shared
+    # validator (the same rules verification's --analysis check runs),
+    # judged statically — the record's own evidence is its run's
+    # (pfstep/analysis.selected_problem). Whether a touched repo carries
+    # one at all is no machine question here: the build step's own text
+    # demands the record and review judges its absence (the owner's Q1
+    # ruling: rule-constrained, never a hard gate) — a full-only repo
+    # (its light selection falls back to the full tier) has no record to
+    # carry and no red to answer for.
+    have = set(c.repos)
+    for name in sorted(an.selected):
+        sel = an.selected[name]
+        srec: Dict[str, Any] = {"repo": name}
+        if name not in have:
+            srec["status"], srec["problem"] = "fail", unknown_repo_problem(name)
+        else:
+            srec["head"], srec["selection"] = sel.head, sel.status
+            problem = selected_problem(sel, repo_head(os.path.join(c.repos_dir, name)))
+            if problem:
+                srec["status"], srec["problem"] = "fail", problem
+            else:
+                srec["status"] = "pass"
+        d["selected"].append(srec)
+        if srec["status"] == "fail":
+            problems.append("%s:selected: %s" % (name, srec["problem"]))
     # the logs, the deadline and the runs — only when an entry will run
     runs = [ad for ad in taken if ad.repo in c.repos]
     logs = ns.log_dir
@@ -2506,7 +2746,7 @@ def analysis(inv: Invocation, args: List[str], environ: Mapping[str, str],
             continue
         rec["status"] = "pass"
     if problems:
-        inv.summary = "%d of %d listed test(s) fail the close check: %s" % (
+        inv.summary = "%d of the analysis's %d listed test(s) and selection record(s) fail the close check: %s" % (
             len(problems), len(taken), "; ".join(clip_list(problems, 3)))
         return 1
     tail = ""

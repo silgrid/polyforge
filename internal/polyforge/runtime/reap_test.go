@@ -111,7 +111,7 @@ func TestEnvMarkerSweepRequiresBothMarkers(t *testing.T) {
 	if got := scanEnvMarker(wi, daemonA); len(got) != 0 {
 		t.Fatalf("scan by A still sees %v", got)
 	}
-	if got := scanEnvMarker(wi, daemonB); len(got) != 1 || got[0] != b.Process.Pid {
+	if got := scanEnvMarker(wi, daemonB); len(got) != 1 || got[0].pid != b.Process.Pid {
 		t.Fatalf("scan by B = %v, want [%d]", got, b.Process.Pid)
 	}
 }

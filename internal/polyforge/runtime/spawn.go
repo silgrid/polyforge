@@ -32,11 +32,8 @@ import (
 // injected at derivation; a capsule's materialized step-agent definitions
 // are a different resource family and stay reachable.
 //
-// --no-extensions is DELIBERATELY ABSENT and must stay absent: the
-// subagent tool is not a pi builtin but an EXTENSION — on the operator's
-// machine the one at <operator agent dir>/extensions/subagent/ — and
-// --no-extensions would drop it, and with it the whole step-agent
-// dispatch path.
+// --no-extensions is DELIBERATELY ABSENT for the parent: the daemon-owned
+// extension remains available there. Child workers receive --no-extensions.
 //
 // The residual exposure this profile could never close — extension-
 // registered HARNESS BACKGROUND TASKS (the operator's user-level
@@ -45,19 +42,23 @@ import (
 // (addendum 2, owner ruling A): the step process runs with
 // PI_CODING_AGENT_DIR pointing at the dedicated daemon-owned step
 // agent directory (runtime/stepagentdir.go), a minimal snapshot —
-// auth.json, models.json, agents/ and exactly ONE extension,
-// extensions/subagent/ (pi auto-loads global extensions from
-// <agent dir>/extensions/, which is how the subagent tool reaches the
-// step process) — and never settings.json, so no package loads. The
-// allowlisted members are refreshed before every spawn; a global
-// reinstall lands in the operator's directory and never reaches the
-// step process. The isolation is the harness adapter layer's guarantee
-// (see docs/design/polyforge-vnext/v2-converge.md §2.7), not an
-// instruction.
+// auth.json, models.json, agents/ and exactly the TWO allowlisted
+// daemon-owned extensions, extensions/subagent/ and extensions/guard/
+// (pi auto-loads global extensions from <agent dir>/extensions/, which
+// is how both reach the step process) — and never settings.json, so no
+// package loads. The guard (polyforge#214) enforces part of the waiting
+// rule at the tool layer from inside the same step process: it blocks a
+// bash call that leaves a background job unwaited or sleeps over 3 s at
+// once, and appends syntax-check notes after edit/write. The allowlisted
+// members are refreshed before every spawn; a global reinstall lands in
+// the operator's directory and never reaches the step process. The
+// isolation is the harness adapter layer's guarantee (see
+// docs/design/polyforge-vnext/v2-converge.md §2.7), not an instruction.
 var piIsolationFlags = []string{
 	"--no-skills",
 	"--no-context-files",
 	"--no-prompt-templates",
+	"--no-approve",
 }
 
 // piCommand is one stdin command of the real pi RPC protocol. Every
@@ -271,7 +272,28 @@ func (s *piSpawner) buildCmd(p SpawnParams) *exec.Cmd {
 	return cmd
 }
 
-// Spawn derives one persistent agent process: a new session (the agent
+// validatePiCompatibility performs a bounded, model-free startup capability
+// check. It fails closed when the installed CLI does not advertise the flags
+// required by the daemon-owned extension.
+func validatePiCompatibility(ctx context.Context, bin string) error {
+	checkCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(checkCtx, bin, "--help").CombinedOutput()
+	if err != nil {
+		if errors.Is(checkCtx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("pi compatibility check timed out")
+		}
+		return fmt.Errorf("pi compatibility check failed for %s: %w", bin, err)
+	}
+	text := string(out)
+	for _, flag := range []string{"--no-skills", "--no-context-files", "--no-prompt-templates", "--no-extensions", "--no-approve"} {
+		if !strings.Contains(text, flag) {
+			return fmt.Errorf("pi compatibility check: %s does not advertise required flag %s", bin, flag)
+		}
+	}
+	return nil
+}
+
 // leads it, so it leads its own process group — the cleanup layers collect
 // step agents and command children by it — and has no controlling terminal:
 // nothing the step runs can open /dev/tty and wait on the daemon's
@@ -293,8 +315,18 @@ func (s *piSpawner) Spawn(ctx context.Context, p SpawnParams) (AgentHandle, erro
 		return nil, fmt.Errorf("runtime: spawn without an initial prompt")
 	}
 	if s.cfg.DataDir != "" {
+		if strings.EqualFold(strings.TrimSpace(p.Params["pi_subagents"]), "on") {
+			if err := validatePiCompatibility(ctx, s.bin()); err != nil {
+				return nil, err
+			}
+		}
 		if err := s.cfg.refreshStepAgentDir(); err != nil {
 			return nil, err
+		}
+		if strings.EqualFold(strings.TrimSpace(p.Params["pi_subagents"]), "on") {
+			if err := validateEmbeddedStepAgentDir(s.cfg.StepAgentDir()); err != nil {
+				return nil, err
+			}
 		}
 	}
 	proc, err := startHarness(s.buildCmd(p), p)
@@ -318,6 +350,11 @@ func (s *piSpawner) Spawn(ctx context.Context, p SpawnParams) (AgentHandle, erro
 // RPC commands, claude's stream-json user messages): the harness decides
 // how a later message is framed and acknowledged (SendMessage).
 func startHarness(cmd *exec.Cmd, p SpawnParams) (*proc, error) {
+	if p.CapsuleDir != "" {
+		if err := os.MkdirAll(stepTMPDir(p.CapsuleDir), 0o755); err != nil {
+			return nil, fmt.Errorf("runtime: create step TMPDIR: %w", err)
+		}
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

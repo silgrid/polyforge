@@ -20,11 +20,6 @@
     "reason": "the background task status comes from the pi-background-tasks API at run time; the keys are bgTasks.status.<value>"
   },
   {
-    "file": "components/BackgroundTasksPanel.tsx",
-    "argument": "`bgTasks.status.${task.status}`",
-    "reason": "the background task status comes from the pi-background-tasks API at run time; the keys are bgTasks.status.<value>"
-  },
-  {
     "file": "components/ClaudeSubagentPanel.tsx",
     "argument": "`claudeSubagent.${run.status}`",
     "reason": "the claude subagent run status comes from its sidecar at run time; the keys are claudeSubagent.<value>"
@@ -213,5 +208,10 @@
     "file": "components/SkillsConfig.tsx",
     "argument": "`skills.claudeState.${row.claude.state}`",
     "reason": "the row's stored claude skillOverrides word is known only at run time; the keys are skills.claudeState.<value> (85d)"
+  },
+  {
+    "file": "components/PiBackgroundTaskPanel.tsx",
+    "argument": "`bgTasks.status.${status}`",
+    "reason": "the registry record's own status (succeeded maps to the completed label); the keys are bgTasks.status.<value>"
   }
 ]

@@ -306,7 +306,7 @@ type AgentStartInput struct {
 	Spawner Spawner
 	// StepEnded is the driver's step-end hook: the task-repo WIP push of
 	// the step that just ended (SaveTaskWIP, bounded by stepWIPBound).
-	StepEnded func(context.Context)
+	StepEnded func(context.Context) error
 	// OwnerWait flips the job's owner-wait flag (job.ownerWait): the driver
 	// sets it while its step's `pf ask` is open (the step awaits the
 	// owner, workflow contract v2 §5.2) and clears it before the next

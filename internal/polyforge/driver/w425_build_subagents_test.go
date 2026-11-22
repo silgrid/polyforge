@@ -123,13 +123,14 @@ func TestBuildSubagentThresholdWrittenOnce(t *testing.T) {
 // a step that carries the sub-agent rules is told, as a driver fact, that
 // it dispatches none and records `main`; a Claude dispatch is not.
 func TestPiBuildDispatchIsToldSubagentsAreUnavailable(t *testing.T) {
+	// The default off fact remains the backwards-compatible build behavior.
 	// workflow contract 4: the fact is one of part 1's dispatch facts
-	const fact = "This dispatch runs on pi, whose sub-agents do not run with this step's isolation"
+	const fact = "This dispatch runs on pi with the daemon-owned worker available, but pi_subagents is off"
 	pi := spawnStepPromptWith(t, developBundle, StepSpawn{StepID: "build", SpawnN: 1, Harness: "pi"})
 	flat := strings.Join(strings.Fields(pi), " ")
 	for _, w := range []string{
 		fact,
-		"Dispatch no sub-agent: do the analysis and build every unit yourself, record each unit's `implemented_by` in `artifacts/build/units.json` as `main`",
+		"implemented_by as main",
 	} {
 		if !strings.Contains(flat, w) {
 			t.Errorf("a pi build dispatch must carry %q", w)
@@ -143,5 +144,8 @@ func TestPiBuildDispatchIsToldSubagentsAreUnavailable(t *testing.T) {
 	}
 	if p := spawnStepPromptWith(t, developBundle, StepSpawn{StepID: reviewStepID, SpawnN: 1, Harness: "pi"}); strings.Contains(p, fact) {
 		t.Error("a step without the sub-agent rules carries no such fact")
+	}
+	if p := spawnStepPromptWith(t, developBundle, StepSpawn{StepID: "build", SpawnN: 1, Harness: "pi", Params: map[string]string{"pi_subagents": "on"}}); strings.Contains(p, fact) {
+		t.Error("an enabled pi build dispatch must not carry the unavailable fact")
 	}
 }

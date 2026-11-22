@@ -66,6 +66,7 @@ class RealDockerGateTest(unittest.TestCase):
         self.d = ENGINE
         self.owner = "w477-real-" + secrets.token_hex(5)
         self.repo = "w477-real-" + secrets.token_hex(5)
+        self.clone = ""
         self.dirs: List[str] = []
 
     def tearDown(self) -> None:
@@ -78,7 +79,9 @@ class RealDockerGateTest(unittest.TestCase):
         except container.ContainerError:
             pass
         proc.run([self.d.bin, "rmi", "--force", container.image_tag(self.repo, REAL_DOCKERFILE.encode())], timeout=60)
-        proc.run([self.d.bin, "volume", "rm", "--force", container.cache_volume(self.repo, REAL_DOCKERFILE.encode())], timeout=60)
+        if self.clone:
+            proc.run([self.d.bin, "volume", "rm", "--force",
+                      container.cache_volume(self.repo, REAL_DOCKERFILE.encode(), self.clone)], timeout=60)
         for p in self.dirs:
             shutil.rmtree(p, ignore_errors=True)
 
@@ -87,6 +90,7 @@ class RealDockerGateTest(unittest.TestCase):
 
     def test_the_gate_never_sees_the_host(self) -> None:
         clone = os.path.join(self.visible_dir(), self.repo)
+        self.clone = clone
         os.makedirs(clone)
         git_t(clone, "init", "-q", "-b", "main")
         engine = ENGINE_SCRIPT.replace("PROBE_CLIENT", json_str(PROBE_CLIENT)).replace("PROBE_SOCKET", json_str(PROBE_SOCKET)) \
@@ -145,6 +149,7 @@ class LaneEngineDockerTest(unittest.TestCase):
         self.d = ENGINE
         self.owner = "w29-lane-" + secrets.token_hex(5)
         self.repo = "w29-lane-" + secrets.token_hex(5)
+        self.clone = ""
         self.dirs: List[str] = []
 
     def tearDown(self) -> None:
@@ -157,12 +162,15 @@ class LaneEngineDockerTest(unittest.TestCase):
         except container.ContainerError:
             pass
         proc.run([self.d.bin, "rmi", "--force", container.image_tag(self.repo, LANE_DOCKERFILE.encode())], timeout=60)
-        proc.run([self.d.bin, "volume", "rm", "--force", container.cache_volume(self.repo, LANE_DOCKERFILE.encode())], timeout=60)
+        if self.clone:
+            proc.run([self.d.bin, "volume", "rm", "--force",
+                      container.cache_volume(self.repo, LANE_DOCKERFILE.encode(), self.clone)], timeout=60)
         for p in self.dirs:
             shutil.rmtree(p, ignore_errors=True)
 
     def test_the_lane_engine_gates_a_tree_without_one(self) -> None:
         clone = os.path.join(visible_dir(self.d, self.dirs), self.repo)
+        self.clone = clone
         os.makedirs(clone)
         git_t(clone, "init", "-q", "-b", "main")
         # no engine and no tools/gate-id in the tree: only the conf and

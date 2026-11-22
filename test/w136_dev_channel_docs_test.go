@@ -15,11 +15,11 @@ package test
 //     and the green tag's residual risk carrying over unchanged;
 //   - docs/upgrade.md: one appended section, its heading the shared
 //     next-patch version (v0.2.4), moved together with the w254 sha256
-//     pin (pinned by TestW254UpgradeByteIdentical, not re-pinned here).
-//     The file is append-only and later tickets append after this one
-//     (polyforge#143's step tier catalog did — verification r1's red), so
-//     the channel's section is pinned by its own heading, never by
-//     being the file's last.
+//     pin (pinned by TestW254UpgradeByteIdentical, not re-pinned here);
+//   - polyforge#188 grades the channel's AIHub-side preflight: all
+//     three pages name the two lists and the two grades — the interface
+//     hits that refuse, the remaining AIHub-side hits that pass with
+//     one WARN — and upgrade.md carries its own appended section.
 //
 // carries: docs/install.md, docs/reference/release.md, docs/upgrade.md, test/w136_dev_channel_docs_test.go
 
@@ -58,12 +58,32 @@ func TestW136DevChannelDocs(t *testing.T) {
 			t.Fatalf("docs/install.md lacks %q: the ops page must document the development channel's entry, its build prerequisites, its boundaries and the way back to the formal channel", want)
 		}
 	}
+	// the graded preflight (polyforge#188): the ops page names both lists
+	// and the two grades — the interface hits that refuse, the remaining
+	// AIHub-side hits that pass with one WARN, the fail-closed rule —
+	// and polyforge#219's one exception: the comment-only pass
+	for _, want := range []string{
+		"`tools/aihub-interface-paths.conf`", "`tools/aihub-paths.conf`",
+		"one WARN", "fail closed", "comment-only",
+	} {
+		if !strings.Contains(im, want) {
+			t.Fatalf("docs/install.md lacks %q: the ops page must document the development channel's graded AIHub-side preflight (polyforge#188)", want)
+		}
+	}
 
 	// docs/reference/release.md: the channel beside the formal release
 	rm := read(filepath.Join("docs", "reference", "release.md"))
 	for _, want := range []string{"--dev", "green tag", "AIHub", "fast-forward"} {
 		if !strings.Contains(rm, want) {
 			t.Fatalf("docs/reference/release.md lacks %q: the release page must name the development channel, its green-tag source and its boundaries", want)
+		}
+	}
+	// the graded preflight (polyforge#188): the release page names the
+	// interface list and the two grades too, with the comment-only
+	// exception (polyforge#219) beside them
+	for _, want := range []string{"`tools/aihub-interface-paths.conf`", "`tools/aihub-paths.conf`", "one WARN", "comment-only"} {
+		if !strings.Contains(rm, want) {
+			t.Fatalf("docs/reference/release.md lacks %q: the release page must document the development channel's graded AIHub-side preflight (polyforge#188)", want)
 		}
 	}
 
@@ -79,35 +99,84 @@ func TestW136DevChannelDocs(t *testing.T) {
 		}
 	}
 
-	// docs/upgrade.md: the channel's appended section, heading the shared
-	// next-patch version, naming the channel — found by its heading
-	// (later tickets append after it; polyforge#143 did)
+	// docs/upgrade.md: one appended section, heading the shared
+	// next-patch version, naming the channel. A later ticket may append
+	// after this one (polyforge#153 did): the channel's section is found
+	// by its heading's tokens, not by position.
 	um := read(filepath.Join("docs", "upgrade.md"))
 	heads := regexp.MustCompile(`(?m)^## .+$`).FindAllString(um, -1)
 	if len(heads) == 0 {
 		t.Fatal("docs/upgrade.md carries no section heading")
 	}
-	var head string
-	for _, h := range heads {
-		if strings.Contains(h, "polyforge#136") && strings.Contains(h, "development channel") {
-			head = h
+	last := heads[len(heads)-1]
+	if !strings.HasPrefix(last, "## v0.2.4, ") {
+		t.Fatalf("the appended section's heading %q must take the next patch of the latest tag (v0.2.4), like every section appended after one tag", last)
+	}
+	mine := -1
+	for i, h := range heads {
+		if strings.Contains(h, "development channel") && strings.Contains(h, "polyforge#136") {
+			mine = i
+			break
 		}
 	}
-	if head == "" {
-		t.Fatal("docs/upgrade.md carries no development-channel section: no heading names the channel and polyforge#136")
+	if mine < 0 {
+		t.Fatal("docs/upgrade.md carries no section whose heading names the development channel and its ticket")
 	}
-	if !strings.HasPrefix(head, "## v0.2.4, ") {
-		t.Fatalf("the channel section's heading %q must take the next patch of the latest tag (v0.2.4), like every section appended after one tag", head)
+	start := strings.Index(um, heads[mine])
+	body := um[start:]
+	if end := strings.Index(body[len(heads[mine]):], "\n## "); end >= 0 {
+		body = body[:len(heads[mine])+end]
 	}
-	start := strings.Index(um, head)
-	end := len(um)
-	if next := strings.Index(um[start+len(head):], "\n## "); next >= 0 {
-		end = start + len(head) + next
-	}
-	body := um[start:end]
 	for _, want := range []string{"--dev", "green tag", "AIHub", "v0.2.4-dev."} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("the channel's upgrade section lacks %q", want)
+			t.Fatalf("the development channel's upgrade section lacks %q", want)
+		}
+	}
+
+	// polyforge#188: the graded preflight's own appended section, found
+	// by its heading's tokens like the #136 one above (a later ticket may
+	// append after it), its body naming the two lists and the two grades
+	mine188 := -1
+	for i, h := range heads {
+		if strings.Contains(h, "graded AIHub-side preflight") && strings.Contains(h, "polyforge#188") {
+			mine188 = i
+			break
+		}
+	}
+	if mine188 < 0 {
+		t.Fatal("docs/upgrade.md carries no section whose heading names the graded AIHub-side preflight and polyforge#188")
+	}
+	start188 := strings.Index(um, heads[mine188])
+	body188 := um[start188:]
+	if end := strings.Index(body188[len(heads[mine188]):], "\n## "); end >= 0 {
+		body188 = body188[:len(heads[mine188])+end]
+	}
+	for _, want := range []string{"--dev", "tools/aihub-interface-paths.conf", "tools/aihub-paths.conf", "WARN", "formal release", "fail closed"} {
+		if !strings.Contains(body188, want) {
+			t.Fatalf("the graded preflight's upgrade section lacks %q", want)
+		}
+	}
+
+	// polyforge#219's own appended section: the comment-only exception,
+	// found by its heading's tokens like the two above
+	mine219 := -1
+	for i, h := range heads {
+		if strings.Contains(h, "comment-only") && strings.Contains(h, "polyforge#219") {
+			mine219 = i
+			break
+		}
+	}
+	if mine219 < 0 {
+		t.Fatal("docs/upgrade.md carries no section whose heading names the comment-only exception and polyforge#219")
+	}
+	start219 := strings.Index(um, heads[mine219])
+	body219 := um[start219:]
+	if end := strings.Index(body219[len(heads[mine219]):], "\n## "); end >= 0 {
+		body219 = body219[:len(heads[mine219])+end]
+	}
+	for _, want := range []string{"--dev", "tools/aihub-interface-paths.conf", "tools/gocommentonly", "comment-only", "formal release", "fail closed"} {
+		if !strings.Contains(body219, want) {
+			t.Fatalf("the comment-only exception's upgrade section lacks %q", want)
 		}
 	}
 }

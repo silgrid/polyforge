@@ -1,3 +1,5 @@
+// carries: .polyforge/release.sh, test/release_bump_guard_repro_test.go
+
 package test
 
 // repro: the canonical .polyforge/release.sh defaults its bump
@@ -29,7 +31,7 @@ func TestReleaseScriptBumpGuardRepro(t *testing.T) {
 
 	t.Run("no args defaults to patch, never a silent minor crossing", func(t *testing.T) {
 		w := newRelWorld(t, []string{floor}, nil)
-		out, err := w.run(nil)
+		out, err := w.runPinned(nil)
 		if err != nil {
 			t.Fatalf("a no-argument release must still succeed (as a patch bump): %v\n%s", err, out)
 		}
@@ -44,7 +46,7 @@ func TestReleaseScriptBumpGuardRepro(t *testing.T) {
 
 	t.Run("explicit minor fails loud without an owner declaration", func(t *testing.T) {
 		w := newRelWorld(t, []string{floor}, nil)
-		out, err := w.run(nil, "minor")
+		out, err := w.runPinned(nil, "minor")
 		if err == nil {
 			t.Fatalf("explicit minor must be refused without an owner declaration, but the run succeeded:\n%s", out)
 		}
@@ -62,7 +64,7 @@ func TestReleaseScriptBumpGuardRepro(t *testing.T) {
 
 	t.Run("explicit major fails loud without an owner declaration", func(t *testing.T) {
 		w := newRelWorld(t, []string{floor}, nil)
-		out, err := w.run(nil, "major")
+		out, err := w.runPinned(nil, "major")
 		if err == nil {
 			t.Fatalf("explicit major must be refused without an owner declaration, but the run succeeded:\n%s", out)
 		}
@@ -77,7 +79,7 @@ func TestReleaseScriptBumpGuardRepro(t *testing.T) {
 
 	t.Run("explicit patch stays allowed and publishes the patch tag", func(t *testing.T) {
 		w := newRelWorld(t, []string{floor}, nil)
-		out, err := w.run(nil, "patch")
+		out, err := w.runPinned(nil, "patch")
 		if err != nil {
 			t.Fatalf("explicit patch must keep working: %v\n%s", err, out)
 		}

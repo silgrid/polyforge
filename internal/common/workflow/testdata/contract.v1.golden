@@ -20,6 +20,7 @@ tiers: map <tier> -> []<harness>:<model>[:<effort>]; the table a step's model_ti
 
 [step keys]
 budget: map {wall_minutes, tool_minutes}
+fast_check_proof: map {result, command} (default none): the fast-check proof this step's done needs for each task repo it changed — a `pf-step-result/1` file with verdict pass whose heads carry the repo at its current HEAD; a repo the step did not change and a fast-forward need none
 gate: bool
 hub: map {verbs, attrs} (default none): what the step may call through `pf step hub`
 human_mergeable: bool (default false): a project may declare the step's work done by a person with `steps.<project>.<step>.by: human` in its workspace yaml, fixed when the work item is first claimed; the step then asks the owner to do its work instead of running it itself, and a claim of a lane that does not declare the step human_mergeable is refused naming it
@@ -36,6 +37,10 @@ vars: map[string]string
 vars_files: map <var> -> a file of the lane (fragments/<name>.md), relative to the lane directory and inside it: the var's value is the file's text, exactly as if written in vars; a var is declared in vars or in vars_files, not both
 waivable: bool (default false), gate only: the gate may hand off waive on the owner's word
 wrap_attrs: []attr name (^[a-z][a-z0-9_]{0,63}$), each at most once (default none): the wrap attrs the step registers (`pf step hub wrap-attrs <name>`) before its round may hand off done; listing one lets the step call wrap-attrs. When the steps at the lane's end are skipped (a skippable step a project switched off), their wrap_attrs are the last running step's to register
+
+[fast_check_proof keys]
+command: string, required: one line carrying {repo} (WFC-112 otherwise): the command a refusal quotes to write a fresh proof
+result: string, required: the result file's path relative to the capsule, carrying {repo} (WFC-112 otherwise)
 
 [on_fail keys]
 target: an earlier step id, required
@@ -109,6 +114,8 @@ lane.description
 lane.name
 lane.steps
 step.id
+fast_check_proof.command
+fast_check_proof.result
 on_fail.target
 definition.description
 definition.name

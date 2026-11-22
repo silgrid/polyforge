@@ -6,13 +6,18 @@
  * display metadata only, so the rewrite is safe). Open wrappers are shut down,
  * subagents before their parents, before the files go.
  *
+ * The background-tasks gate goes first (#172, Q8): from the first line the
+ * deleted sessions start no task and deliver no completion wake, and their
+ * running task groups are stopped with their log directories cleared on every
+ * path — a late completion cannot revive a deleted session.
+ *
  * One call lists the catalogue and reads each folder once, however many
  * sessions it deletes.
  */
 
 import { readdirSync, readFileSync, unlinkSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
-import { abortSubagent, getRpcSession, getRpcSessionInfos } from "./rpc-manager";
+import { abortSubagent, getBgRuntime, getRpcSession, getRpcSessionInfos } from "./rpc-manager";
 import {
   invalidateSessionListCache,
   invalidateSessionManagerCache,
@@ -41,6 +46,19 @@ function addChild(childrenByParent: Map<string, string[]>, parentId: string, chi
 
 /** Deletes `ids` and their subagent sessions. */
 export async function deleteSessions(ids: readonly string[]): Promise<SessionDeleteResult> {
+  // The background-tasks gate first (Q8): from here on the deleted sessions
+  // start no task and deliver no completion wake, so nothing can revive them.
+  const bgRuntime = getBgRuntime();
+  bgRuntime.beginSessionDeletion(ids);
+  try {
+    return await deleteSessionsInner(ids);
+  } finally {
+    // Stop the sessions' tasks and clear their log directories on every path.
+    await bgRuntime.deleteSessionTasks(ids);
+  }
+}
+
+async function deleteSessionsInner(ids: readonly string[]): Promise<SessionDeleteResult> {
   const targets = new Map<string, string>();
   const missing: string[] = [];
   for (const id of new Set(ids)) {

@@ -14,6 +14,8 @@ daemon's twin is internal/polyforge/taskrepo's Git.
 """
 
 import os
+import shutil
+import tempfile
 from typing import Dict, List, Mapping, Optional
 
 from . import proc
@@ -87,3 +89,47 @@ def git(
     else:
         msg = c.stderr.decode("utf-8", "replace").strip() or "exit %d" % c.exit_code
     raise GitError("git %s: %s" % (" ".join(args), msg), c)
+
+
+def worktree_tree(cwd: str, subdir: str = "", timeout: float = READ_TIMEOUT) -> str:
+    """The working tree's own tree hash — tracked modifications plus every
+    untracked, unignored file, the state a build's uncommitted work leaves
+    (Q1 of polyforge#182) — computed through a private index (``git add -A``
+    over a copy of the repository's index, then ``git write-tree``; the
+    repository's own index is never touched, and a file outside the tree
+    never moves it), or the hash of the whole tree's ``<subdir>`` subtree
+    ("" = the whole tree, nested roots included). GitError when git cannot
+    answer — the caller degrades to running everything, never to judging
+    nothing."""
+    fd, index = tempfile.mkstemp(prefix="pf-worktree-index-")
+    os.close(fd)
+    os.unlink(index)  # git creates the index itself; an empty file it would refuse
+    e = env()
+    e["GIT_INDEX_FILE"] = index
+    try:
+        # 保留已跟踪状态，否则后来匹配忽略规则的输入会从临时索引消失。
+        source = git(cwd, "rev-parse", "--git-path", "index", timeout=timeout).strip()
+        if not os.path.isabs(source):
+            source = os.path.join(cwd, source)
+        if os.path.exists(source):
+            shutil.copyfile(source, index)
+        c = proc.run(argv("add", "-A"), cwd=cwd, env=e, timeout=timeout)
+        if c.exit_code != 0:
+            raise GitError("git add -A (a private index of the working tree): %s"
+                           % (c.stderr.decode("utf-8", "replace").strip() or "exit %d" % c.exit_code), c)
+        c = proc.run(argv("write-tree"), cwd=cwd, env=e, timeout=timeout)
+        if c.exit_code != 0 or not c.stdout.decode("utf-8", "replace").strip():
+            raise GitError("git write-tree (a private index of the working tree): exit %d" % c.exit_code, c)
+        tree = c.stdout.decode("utf-8", "replace").strip()
+        if not subdir:
+            return tree
+        c = proc.run(argv("rev-parse", "--verify", "%s:%s" % (tree, subdir)), cwd=cwd,
+                     env=env(), timeout=timeout)
+        if c.exit_code != 0 or not c.stdout.decode("utf-8", "replace").strip():
+            raise GitError("git rev-parse %s:%s: the subtree hash is unreadable" % (tree, subdir), c)
+        return c.stdout.decode("utf-8", "replace").strip()
+    finally:
+        try:
+            os.unlink(index)
+        except OSError:
+            pass

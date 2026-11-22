@@ -252,10 +252,12 @@ export function cancelCommand(wi: string, profile?: string): string {
  *  contract 4: `incomplete` is a step's own `blocked`
  *  hand-off, `driver` every supervision block (timeouts, exits without a
  *  hand-off, no usable model) and any park the daemon names no kind of,
- *  `write_failed` a `done` hand-off's hub writes that failed, `contract` a
- *  lane snapshot of another contract. An unknown kind still renders (its
- *  raw name) and is still resumable. */
-export const KNOWN_BLOCKED_KINDS: readonly string[] = ["incomplete", "driver", "contract", "write_failed"];
+ *  `write_failed` a `done` hand-off's hub writes that failed,
+ *  `cleanup_failed` a step-end process cleanup that could not prove the
+ *  step's processes gone (polyforge#200), `contract` a lane snapshot of
+ *  another contract. An unknown kind still renders (its raw name) and is
+ *  still resumable. */
+export const KNOWN_BLOCKED_KINDS: readonly string[] = ["incomplete", "driver", "contract", "write_failed", "cleanup_failed"];
 
 /** The blocked kinds no `pf resume` releases: `contract` — the capsule's lane
  *  snapshot targets another workflow contract version than the daemon runs,

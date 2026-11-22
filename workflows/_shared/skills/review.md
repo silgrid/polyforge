@@ -16,7 +16,11 @@ definition's judgment.
    verbatim) and `runtime-state/work-item.json`; build's latest section — its body, and in
    its header the owner messages build received (verbatim, stamped) and each task repo's
    start → end commit; `artifacts/plan.md` (`## Acceptance`, `## Units`, `## Coverage`);
-   `artifacts/build/units.json`; `artifacts/self-review.md`; `artifacts/grill-qa.md` when
+   `artifacts/build/units.json`; the change analysis's `selected` records with the close-scoped
+   results that wrote them (`artifacts/build/scoped-close/<repo>.json`; a `pre_existing`
+   record is green-equivalent evidence — the shared validator takes it — its `reds[]`
+   naming the baseline-proven reds);
+   `artifacts/self-review.md`; `artifacts/grill-qa.md` when
    it is there.
 2. **build's hand-off holds.** `artifacts/plan.md` and `artifacts/build/units.json` exist and
    the units file parses; build's 关键决定和理由 records every decision it asked the owner
@@ -69,6 +73,10 @@ definition's judgment.
      fix is build's: a test that runs on the replay tree (a project declares the preparation
      such a tree needs as `base_setup=` in `.polyforge/verify-scope.conf`, and the replay
      runs it). It is the result's exit 1, a fact to class, never the exit 2 retried above.
+     A unit whose `replay` was killed at its own limit (`limit_kill`) has no red evidence
+     either — its red-state run did not exit non-zero within its limit — and is blocking
+     `test_weakened` the same way: the fix is build's (a bounded wait, an assertion that
+     fails at once, or the unit self-reports a higher `timeout` in units.json).
    - `carries.json`: each `problems` entry is blocking `test_weakened`, in every round
      (the same conclusion build's close reached) — an owner message that explicitly
      accepts the finding excepted.

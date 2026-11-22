@@ -3,13 +3,12 @@
 import { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo, type RefObject } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
-import { useBackgroundTasks, markTerminalNotified } from "@/hooks/useBackgroundTasks";
+import { markTerminalNotified } from "@/hooks/useBackgroundTasks";
 import { usePolyforge } from "@/hooks/usePolyforge";
 import { SessionSidebar } from "./SessionSidebar";
 import { ChatWindow } from "./ChatWindow";
 import type { ChatScrollPosition } from "@/lib/chat-scroll-position";
 import { FileViewer } from "./FileViewer";
-import { BackgroundTasksPanel } from "./BackgroundTasksPanel";
 import { PolyforgePanel } from "./PolyforgePanel";
 import type { PolyforgePromptTarget } from "./PolyforgeMessages";
 import { parsePolyforgePrompt, type PolyforgePrompt } from "@/lib/polyforge-messages-pure";
@@ -41,7 +40,6 @@ import {
   clearBadgeOnFocus,
   coalesceCompletionSound,
   isNewSessionTab,
-  resolveBackgroundTasksSessionId,
   resolveSidebarSessionId,
   openNewSessionTab,
   hasSessionTab,
@@ -246,10 +244,9 @@ export function AppShell() {
   // stale (e.g. a delete that completes after the user navigated away).
   const selectedSessionRef = useRef(selectedSession);
   selectedSessionRef.current = selectedSession;
-  const [bgPanelOpen, setBgPanelOpen] = useState(false);
-  const [bgSelectedTaskId, setBgSelectedTaskId] = useState<string | null>(null);
-  // pi#108: the Polyforge dock panel shares the bg-tasks slot; the two are
-  // mutually exclusive (each open handler closes the other).
+  // pi#108: the Polyforge dock panel. The bg-tasks dock that shared this
+  // slot retired with the built-in running list (#173): a pi session's
+  // background tasks now live above its composer and in their detail panel.
   const [pfPanelOpen, setPfPanelOpen] = useState(false);
   // the desktop dock's pin, persisted globally under
   // PF_DOCK_PINNED_KEY ("1" = pinned; absent/invalid = unpinned). While
@@ -258,32 +255,18 @@ export function AppShell() {
   // load while pinned reopens the dock on a desktop viewport. The mobile
   // sheet has no pin.
   const [pfDockPinned, setPfDockPinned] = useState(false);
-  // pi#28: the background-tasks panel follows the FOCUSED pane's session. In
+  // pi#28: the sidebar highlight follows the FOCUSED pane's session. In
   // split view pane focus only updates focusedPaneId (never selectedSession),
-  // so the old selectedSession?.id read left the panel permanently
-  // "unavailable" while a real session pane was focused.
+  // so the highlight must read the pane focus, not selectedSession.
   const lastSessionPaneIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (focusedPaneId && !isNewSessionTab(focusedPaneId)) {
       lastSessionPaneIdRef.current = focusedPaneId;
     }
   }, [focusedPaneId]);
-  const activeBgSessionId = useMemo(
-    () => resolveBackgroundTasksSessionId({
-      splitPaneEnabled: splitPaneEnabled && !isMobile,
-      focusedPaneId,
-      selectedSessionId: selectedSession?.id ?? null,
-      // Read at render; the ref is intentionally not a dependency.
-      lastSessionPaneId: lastSessionPaneIdRef.current,
-      paneTabs,
-    }),
-    [splitPaneEnabled, isMobile, focusedPaneId, selectedSession?.id, paneTabs],
-  );
-  const activeBgSessionIdRef = useRef<string | null>(null);
-  activeBgSessionIdRef.current = activeBgSessionId;
   // Split-view sidebar follow (this wi): the sidebar's highlight derives from
-  // the FOCUSED pane's session with the same inputs as the background-tasks
-  // memo above, so the two surfaces always agree on the "current" session.
+  // the FOCUSED pane's session, so the highlight and the focused pane always
+  // agree on the "current" session.
   // Pane focus still never writes selectedSession (pi#33) — only the
   // highlight follows it — and when split view closes (or on mobile) the
   // derivation returns the classic selection, so the highlight falls back
@@ -299,14 +282,6 @@ export function AppShell() {
     }),
     [splitPaneEnabled, isMobile, focusedPaneId, selectedSession?.id, paneTabs],
   );
-  const {
-    state: bgTasksState,
-    logs: bgTaskLogs,
-    refresh: refreshBgTasks,
-    applyEvent: applyBgTasksEvent,
-    fetchLogs: fetchBgTaskLogs,
-    killTask: killBgTask,
-  } = useBackgroundTasks(activeBgSessionId, bgPanelOpen);
   const {
     pfPresent,
     opsStatus: pfOpsStatus,
@@ -400,7 +375,6 @@ export function AppShell() {
     if (!pinned) return;
     setPfDockPinned(true);
     if (window.matchMedia(MOBILE_MEDIA_QUERY).matches) return;
-    setBgPanelOpen(false);
     setPfPanelOpen(true);
   }, []);
 
@@ -416,16 +390,14 @@ export function AppShell() {
   }, [pfDockPinned]);
 
   // Live background-task events arrive per session pane (split view feeds every
-  // pane's stream; the classic single chat feeds its own). Panel state only
-  // accepts events from the session the panel currently follows; the terminal
-  // notification path stays session-wide (pi#28).
+  // pane's stream; the classic single chat feeds its own); each pane's own
+  // running list consumes its own events. Here only the terminal notification
+  // stays session-wide (pi#28): one browser notification per task id, its
+  // click focusing the session the task belongs to.
   const handleBackgroundTasksEvent = useCallback((sourceSessionId: string, event: BackgroundTasksClientEvent) => {
-    const isActiveSession = sourceSessionId === activeBgSessionIdRef.current;
-    if (isActiveSession) applyBgTasksEvent(event);
     if (event.type !== "background_task_terminal") return;
     const task = event.task;
     if (!markTerminalNotified(task.id)) return;
-    if (isActiveSession) setBgSelectedTaskId(task.id);
     if (shouldShowBrowserNotification()) {
       void showBrowserNotification({
         title: translate("bgTasks.notification.title"),
@@ -436,15 +408,10 @@ export function AppShell() {
         tag: `pi-bg-task:${task.id}`,
         onClick: () => {
           window.focus();
-          // Shared dock slot: the jump must land on a visible bg-tasks panel,
-          // so it closes the Polyforge dock it would otherwise cover (B-2).
-          setBgPanelOpen(true);
-          setPfPanelOpen(false);
-          setBgSelectedTaskId(task.id);
         },
       });
     }
-  }, [applyBgTasksEvent, translate]);
+  }, [translate]);
   const [sessionCatalog, setSessionCatalog] = useState<SessionInfo[]>([]);
   // Pane-tab restore (this wi): the sidebar reports its session list only
   // after the initial load settles, so this flag means "the live catalog is
@@ -612,20 +579,16 @@ export function AppShell() {
     storageKey: "pi-web:polyforge-dock-width",
     widthRef: pfDockWidthRef,
   });
-  // pi#120: the mobile sheets (Polyforge + bg-tasks, same dock slot) resize
-  // by dragging their top edge — one shared mechanism, two consumers, each
-  // persisting its own height (absent/invalid/out-of-range reads as 62%,
-  // clamped to [30%, 90%], never dismisses: the backdrop tap stays the only
-  // dismiss gesture). Desktop keeps its fixed heights — these resizers
-  // serve the mobile sheets only (their refs attach to nothing while the
-  // desktop branch renders).
+  // pi#120: the mobile sheet (the Polyforge dock's; the bg-tasks sheet
+  // retired with its dock, #173) resizes by dragging its top edge — the
+  // shared mechanism with one consumer left, persisting its own height
+  // (absent/invalid/out-of-range reads as 62%, clamped to [30%, 90%],
+  // never dismisses: the backdrop tap stays the only dismiss gesture).
+  // Desktop keeps its fixed height — the resizer serves the mobile sheet
+  // only (its ref attaches to nothing while the desktop branch renders).
   const pfSheetResizer = useResizableSheet({
     ariaLabel: translate("polyforge.resizeSheet"),
     storageKey: "pi-web:polyforge-sheet-height",
-  });
-  const bgSheetResizer = useResizableSheet({
-    ariaLabel: translate("bgTasks.resizeSheet"),
-    storageKey: "pi-web:bg-tasks-sheet-height",
   });
   const reclampSidebarWidth = sidebarResizer.reclampWidth;
   const reclampRightPanelWidth = rightPanelResizer.reclampWidth;
@@ -2323,22 +2286,17 @@ export function AppShell() {
   // one stable handler for the topbar toggle, used by both
   // the resident phone slot and the wide/desktop inline slot.
   const togglePolyforgePanel = useCallback(() => {
-    setPfPanelOpen((open) => {
-      const next = !open;
-      if (next) setBgPanelOpen(false);
-      return next;
-    });
+    setPfPanelOpen((open) => !open);
   }, []);
 
   // Later widened and carried by the button:
   // the attention walk. A click on the Polyforge button while
   // the dock is closed and something needs a human (the jobs waiting for an
   // answer plus the decision feed's other open entries) opens the dock
-  // (bg-tasks closes, the shared slot) at the next one: a work item's job
+  // at the next one: a work item's job
   // detail in Work › Jobs (selected), or a task in Work › Tasks.
   const openPfNeedsInput = useCallback(() => {
     openPfNextAttention();
-    setBgPanelOpen(false);
     setPfPanelOpen(true);
   }, [openPfNextAttention]);
 
@@ -3710,69 +3668,6 @@ export function AppShell() {
               </div>
             )
           ) : null}
-          {bgPanelOpen && (
-            isMobile ? (
-              <>
-                <div
-                  onClick={() => setBgPanelOpen(false)}
-                  style={{ position: "absolute", inset: 0, zIndex: 39, background: "rgba(0,0,0,0.35)" }}
-                />
-                <div
-                  ref={bgSheetResizer.sheetRef}
-                  role="dialog"
-                  aria-label={translate("bgTasks.title")}
-                  style={{
-                    position: "absolute", left: 0, right: 0, bottom: 0,
-                    height: `${bgSheetResizer.heightPct}%`,
-                    zIndex: 40, background: "var(--bg-panel)", borderTop: "1px solid var(--border)",
-                    boxShadow: "0 -12px 40px rgba(0,0,0,0.22)",
-                    paddingBottom: "var(--safe-area-bottom, 0px)",
-                  }}
-                >
-                  {/* pi#120: top-edge drag handle (a DOM child of the sheet,
-                      above the backdrop — dragging resizes, never dismisses). */}
-                  <div
-                    {...bgSheetResizer.separatorProps}
-                    className={`pf-sheet-resize-handle${bgSheetResizer.isResizing ? " is-resizing" : ""}`}
-                    data-resize-handle="bg-tasks-sheet"
-                  />
-                  <BackgroundTasksPanel
-                    sessionId={activeBgSessionId}
-                    state={bgTasksState}
-                    logs={bgTaskLogs}
-                    onRefresh={refreshBgTasks}
-                    onFetchLogs={fetchBgTaskLogs}
-                    onKill={killBgTask}
-                    onClose={() => setBgPanelOpen(false)}
-                    selectedTaskId={bgSelectedTaskId}
-                    onSelectTask={setBgSelectedTaskId}
-                  />
-                </div>
-              </>
-            ) : (
-              <div
-                role="complementary"
-                aria-label={translate("bgTasks.title")}
-                style={{
-                  position: "absolute", top: 0, right: 0, bottom: 0, width: 340,
-                  zIndex: 25, background: "var(--bg-panel)", borderLeft: "1px solid var(--border)",
-                  boxShadow: "-8px 0 24px rgba(0,0,0,0.10)",
-                }}
-              >
-                <BackgroundTasksPanel
-                  sessionId={activeBgSessionId}
-                  state={bgTasksState}
-                  logs={bgTaskLogs}
-                  onRefresh={refreshBgTasks}
-                  onFetchLogs={fetchBgTaskLogs}
-                  onKill={killBgTask}
-                  onClose={() => setBgPanelOpen(false)}
-                  selectedTaskId={bgSelectedTaskId}
-                  onSelectTask={setBgSelectedTaskId}
-                />
-              </div>
-            )
-          )}
           {pfPanelOpen && (
             isMobile ? (
               <>

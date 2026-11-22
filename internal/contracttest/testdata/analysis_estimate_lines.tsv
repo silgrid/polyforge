@@ -1,0 +1,16 @@
+# polyforge#213: the estimation-line samples shared by the Go-side contract
+# test and polyforge#209 (C1). Three tab-separated columns: the output line
+# verbatim, ok|reject, and for ok rows N,M,K; a reject row leaves the third
+# column empty. No header. A line's surrounding whitespace is trimmed before
+# matching; the line itself never carries a list marker or backticks.
+估算：polyforge 新增 2 个文件、修改 5 个文件、单元 3 个	ok	2,5,3
+估算：i-have-adhd 新增 0 个文件、修改 1 个文件、单元 1 个	ok	0,1,1
+   估算：polyforge 新增 10 个文件、修改 31 个文件、单元 12 个  	ok	10,31,12
+估算: polyforge 新增 2 个文件、修改 5 个文件、单元 3 个	reject	
+估算：polyforge 新增 2 个文件，修改 5 个文件，单元 3 个	reject	
+估算：polyforge 新增 约2 个文件、修改 5 个文件、单元 3 个	reject	
+估算：polyforge 新增 2-3 个文件、修改 5 个文件、单元 3 个	reject	
+估算：新增 2 个文件、修改 5 个文件、单元 3 个	reject	
+估算：polyforge 修改 5 个文件、新增 2 个文件、单元 3 个	reject	
+- 估算：polyforge 新增 2 个文件、修改 5 个文件、单元 3 个	reject	
+`估算：polyforge 新增 2 个文件、修改 5 个文件、单元 3 个`	reject	

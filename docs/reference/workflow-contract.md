@@ -123,6 +123,14 @@ process runs.
 | `resources` | `{admission, locks}`: what the daemon takes for each dispatch |
 | `hub` | `{verbs, attrs}` ([hub keys](#hub-keys)): what this step may call through `pf step hub`; default none |
 | `wrap_attrs` | the wrap attrs this step registers, a list of names (`^[a-z][a-z0-9_]{0,63}$`), each at most once; default none (`WFC-112`). Its round's `pf step handoff --status done` is refused until each was registered with `pf step hub wrap-attrs <name> @<file>`, so a record the wrap must carry cannot be forgotten; listing one grants the step `wrap-attrs`. When the steps at the lane's end are skipped (`skippable` steps a project switched off), their `wrap_attrs` pass to the last step that runs: it is granted `wrap-attrs` and its done is refused until it registered them |
+| `fast_check_proof` | `{result, command}` ([fast_check_proof keys](#fast_check_proof-keys)); default none. The step's `done` is refused unless every task repo whose HEAD it moved has a `pf-step-result/1` result at `result` (with `{repo}` replaced by the repo's name) whose `verdict` is `pass` and whose `heads` carries that repo at its current HEAD; a repo at its round's start commit, and a fast-forward (no commit on HEAD that no remote-tracking ref carries), needs none, a start commit the round did not record needs the result like a changed repo. The daemon only reads the file; the refusal names the repo, the failing check and the line `command` writes. A red the change did not cause — the default branch already red, an `error`/`partial` result, or a lane that planned no check — is the owner's: `pf step ask`, and on the release hand off `done` with `--per-owner <the reply's at>`; the section's header records it (the same release a spent rewind budget gives a gate's `fail`) |
+
+### fast_check_proof keys
+
+| Key | Rule |
+|---|---|
+| `result` | string, required, the `pf-step-result/1` file's path relative to the capsule, carrying `{repo}` (`WFC-112` otherwise: absolute, a `..` segment, or no `{repo}` is refused): `<repo>` is the task repo's name under `repos/` |
+| `command` | string, required, one line carrying `{repo}` (`WFC-112` otherwise: empty, more than one line, or no `{repo}` is refused): the command a refusal quotes, so the step re-runs the check and hands off again |
 
 ### on_fail keys
 
@@ -325,6 +333,9 @@ and `--help` is its full reference: a skill does not repeat it.
 | `PF_CELL_SERVER` | that Cell's server as configured |
 | `PF_DEPLOY_ENV` | the deploy configuration file that Cell's deploys read |
 | `PF_CELL_TARGETS` | every serving Cell of this machine, one line each: its profile, its server and its deploy configuration file, tab-separated |
+| `TMPDIR` | `<capsule>/artifacts/downloads/tmp/`, created before the harness starts; capsule-local and distinct between capsules |
+
+A step's `TMPDIR` is daemon-owned for the process it starts. The daemon does not fall back to the host's shared `/tmp` when creation fails; spawn fails instead. A tool or configuration that explicitly overwrites `TMPDIR` is outside this guarantee. Shell background processes end with their tool call, so a later tool call must never wait for one; long commands run in the foreground and use `$TMPDIR` or `artifacts/downloads/` for temporary files.
 
 **Python.** A script is Python 3.9 or newer and the standard library
 only: no third-party package, no virtual environment. An entry script
@@ -398,6 +409,30 @@ and `facts.py` and `integrate.py`
 ([commands.md](commands.md#workflow-scripts--factspy-integratepy)), and
 `fast_checks.py`
 ([commands.md](commands.md#builds-checks--fast_checkspy)).
+Build's close and its per-unit fast checks triage a red that survived
+their flaky re-run on the change's baseline — the same judgment
+`verify.py`'s pre-existing phase runs (`workflows/_shared/scripts/pfstep/preexisting.py`,
+one entry): the reds classified `pre_existing` / `this_change` /
+`undetermined` in the result file, a selection whose only reds are
+pre-existing standing as green-equivalent evidence. The close's own run
+runs in the repository's declared verification image when its HEAD
+carries `.polyforge/Dockerfile.verify` — the same container machinery
+(`container`) verification's boxes use, the engine asks, the selected
+commands, the re-runs and the baseline's base worktree all in the one
+container — and on the host otherwise, the result's `details.isolation`
+recording which ran; the per-unit fast checks stay on the host, a boxed
+close consumes no `--reuse` green evidence, and a container the close
+cannot build, start or keep is the run's error, never a red of the
+change's, never a host stand-in.
+The plan's decided rulings are judged by the same entry:
+`facts.py plan-conformance` reads the work item's verbatim content
+(`runtime-state/work-item.json`) and requires every item of every section
+opening `## 已定` — numbered across the sections in order of appearance —
+mapped in the plan's `## 已定对照` section to a unit or a stated `none`
+reason; an unmapped ruling is red, named with its number and text, and
+build's close and review run the one same line. A ticket without such a
+section asks for no mapping section; the rule reads the ticket's own
+writing only and names no project.
 Its unit tests are
 `_shared/scripts/tests/` (`python3 -m unittest discover -s
 workflows/_shared/scripts -t workflows/_shared/scripts`); CI runs them
@@ -486,7 +521,9 @@ own git and gh run under — each entry once, so a script's commands
 resolve what the daemon's resolve and neither `pf step` nor the harness's
 interpreter is lost; unset, it inherits the daemon's own `PATH`
 ([config.md](config.md), `command_path`). A step's own copy of any of them
-never reaches it.
+never reaches it. `TMPDIR` is `<capsule>/artifacts/downloads/tmp/`, created before the harness starts; failure to create it rejects the spawn rather than falling back to shared `/tmp`. A tool or configuration that explicitly overwrites `TMPDIR` is outside this daemon guarantee. The complete variable table is in [Scripts](#scripts), while this section describes process inheritance and `PATH`.
+
+A pi step process also loads the daemon-owned step guard from its dedicated agent directory (`extensions/guard/`, polyforge#214): before a `bash` tool call runs, the guard blocks a command that starts a background job this call does not wait for (`&` with no later `wait` or `kill` in the same call, `nohup`, `setsid`, `disown`) or sleeps more than 3 s in one go — the tool result is an error whose text starts with `step guard: blocked` and names the sanctioned shape (foreground with a logged exit code, or a bounded wait inside the same call). After an `edit` or `write` of a `.go`/`.ts`/`.tsx`/`.mts`/`.cts`/`.js`/`.mjs`/`.cjs`/`.py`/`.json` file, a fast syntax check of that file runs and its finding is appended to the tool result; the check never blocks or fails the edit, and a type without a checker is returned untouched. Claude steps run no guard (`--safe-mode` skips hooks; `claude` is out of scope).
 
 ### The prompt
 
@@ -494,7 +531,7 @@ Every dispatch's prompt is six parts, in this order, and nothing else:
 
 1. **Identity and facts**: the work item, step, round and dispatch; the
    language to work in; the capsule root; the facts of this dispatch (a
-   pi step cannot start subagents; where downloads go); the lane's step
+   pi build uses the daemon-owned worker only when `pi_subagents: on`; when off it keeps the main-agent path; where downloads go); the lane's step
    order as it stands for this dispatch, its skipped steps and the last
    step that runs marked — the opening of `artifacts/handoff.md`
    carries the claim-time copy, so a mid-run `pf override --step <s>
@@ -572,11 +609,24 @@ are wrong exits non-zero at once, naming why. The command's flags are
   the reason falls in it, else `max_rewinds` — a `fail` without
   `--per-owner` is refused: ask the owner first
   (`pf step ask`) — so no work item parks on a spent budget;
+- a `done` from a step whose lane declares `fast_check_proof` is refused
+  unless every task repo its round moved has a `pf-step-result/1` result at
+  the declared path (verdict `pass`, `heads` carrying that repo at its
+  HEAD); a repo at its round's start commit, and a fast-forward — no commit
+  on HEAD that a remote-tracking ref does not carry — needs none, while a
+  round start the record does not carry is no exemption. The refusal names
+  every failing repo, the failing check and the declared line that writes a
+  fresh result; the daemon only reads the file (and git). A `done` citing an
+  owner message of the round with `--per-owner` is the owner's explicit
+  release of that red (the default branch already red, an `error`/`partial`
+  result, or no planned check): the gate is skipped, the at is checked like
+  every `--per-owner`, and the section's header records it;
 - the body carries the template's seven sections ([handoff.md](#handoffmd))
   in the language the dispatch was told (its spawn-journal line; a line
   without one reads `en`), plus the re-entry heading (Reply to the
-  previous round / 回应上一轮) when this step handed off before, in at most 3,000
-  characters (detail goes into files; the body names their paths);
+  previous round / 回应上一轮) when this step handed off before, in at most 6,000
+  characters (Unicode code points, counted over the entire body;
+  detail goes into files; the body names their paths);
 - every `--evidence` is an existing file inside the capsule.
 
 **Hub verbs** — only aihub's generic routes, on the step's own project,
@@ -604,7 +654,16 @@ string inside its value — resolved when the write is made. A round that ends `
 drops its pending writes (the ledger records each `dropped`; aihub sees
 nothing). A write that fails parks the work item blocked, kind
 `write_failed`; `pf resume` (or an owner message) replays the writes not
-yet done, each idempotent, then the lane goes on.
+yet done, each idempotent, then the lane goes on. A step-end process
+cleanup that cannot prove the step's processes gone parks the work item
+the same way, kind `cleanup_failed` (polyforge#200), after its path's
+own records are written: a received hand-off stays on the call ledger
+(the resume re-runs the sweep and settles it without re-running the
+step), a failed dispatch keeps its failure record and retry ladder (the
+resume re-runs the sweep and retries the step), an open ask keeps
+standing (the resume re-runs the sweep and re-enters it); no successor
+dispatches, the reason says which continuation applies, and a sweep
+that still fails on the resume parks again.
 A landing record is a `wrap-attrs`: the work item's own record rides its
 wrap. Security, one line: the hub
 proxy gives an agent indirect aihub writes, bounded by each step's `hub:`
@@ -668,7 +727,8 @@ hand-off wrong says so in its own 发现的问题和风险. Facts are the stampe
 header's; whether a claim holds is checked against the evidence files and
 the code.
 
-**Length.** Only the body is bounded: 3,000 characters per section.
+**Length.** Only the body is bounded: 6,000 characters (Unicode code points)
+counted over the entire body.
 
 **A rewind keeps everything.** Commits, result files and `handoff.md` all
 stay. The rewind's target resumes its own previous session when it can,
@@ -1024,14 +1084,19 @@ registry's golden file (`contract.v<N>.golden`) and its baseline
 (`PF_WRITE_CONTRACT_GOLDEN=1`), the lane schema
 (`workflows/_schema/workflow-<N>.schema.json`) with `go generate`, and this
 page is kept in step. Any other change is incompatible: a key removed or
-renamed, a key's meaning or default changed, a new required key, a value
-removed, a check that refuses a lane it accepted, a capsule or hand-off
-format the work items in flight rely on. It is registered when it merges,
+renamed, a key's meaning or default changed, a new required key of a key
+set the release already carries, a value removed, a check that refuses a
+lane it accepted, a capsule or hand-off format the work items in flight
+rely on. A required key of a key set the release does not carry at all — a
+set new with its optional parent key — is no such change: no lane valid
+under the release could use it, and a parent key that is itself new and
+required is caught by its own set's rule. It is registered when it merges,
 one entry in `internal/common/workflow/contract-pending.md` (what changed,
 what the migration takes); the registry pin is red on an incompatible
 change the registry dump shows mechanically against the baseline (a
-removed key, a new required key, a removed value: the dump's `[required]`
-and `[values]` sections) while the list has no entry. The release that
+removed key, a new required key of an existing key set, a removed value:
+the dump's `[required]` and `[values]` sections) while the list has no
+entry. The release that
 follows a registration bumps the version once, in one change with the
 golden file, the baseline, the lane schema, this page, every shipped lane,
 a docs/upgrade.md section (the drain) and the emptied list; with the list

@@ -26,8 +26,13 @@ what it claims before you build on it or report it.
   nothing else and commits only them (`git add <path>`, never `-A`); the run is that unit's
   test alone (the test runner's own name filter; a suite without one is named in the task's
   answer and runs once, in the scoped command), the red is taken once, at the test commit — no
-  manual worktree replay: the facts engine's replay is the record — a flaky failure re-runs only
-  the suite that failed, once, and a long command writes its output to a log file with its exit
+  manual worktree replay: the facts engine's replay is the record — a flaky failure is re-run only
+  in the suite that failed, once, by the written fast-check command itself — the same rules
+  verification runs — never by hand: the check already contains that one re-run, and a failure
+  still red after it is red; a red-state run must exit non-zero within its limit — a unit
+  self-reports `timeout` in units.json, else the default — and a run its limit kills is an
+  evidence problem, never a pass: the waiting inside it is bounded and an assertion failure
+  exits at once; and a long command writes its output to a log file with its exit
   code (`> log 2>&1; echo exit=$?`) and the log is searched after the run — never piped straight
   into grep, head or tail. Each task returns, per unit,
   `test_commit`, `impl_commit`, the run that went red then green (`repo`, `cwd`, `argv`) with both
@@ -37,6 +42,7 @@ what it claims before you build on it or report it.
   the diff stays inside the write set before the next unit builds on them; a unit that fails the
   check goes back once, then you build it. You write `artifacts/build/units.json` from what the
   tasks return (a task never writes it).
+- **Pi 派发。** 当 `pi_subagents` 为 `on` 时，使用 pi 的 `subagent` 工具、`agent: "worker"`，一次只发一个任务，完成后再发下一个；不要使用 `parallel` 或 `chain`。daemon 内置扩展会串行处理并用完整隔离参数启动 worker。每个任务可选 `timeoutSeconds`（正整数秒；0、负数、非整数拒绝且不启动；缺省默认 1800），从该 worker 实际启动时计时（排队不计）；超时后 worker 及其后代按 TERM→KILL 结束，超时是失败：正文与 details 标明超时（`timedOut`、实际超时值），清理不净时报告剩余 PID，都不是部分成果。中止与超时的清理以每调用唯一的 `PF_SUBAGENT_ID` 继承标记锁定本调用的后代（连同 `PF_WI_ID`/`PF_DAEMON_ID` 三重匹配），不触碰兄弟调用与本步骤进程。当它为 `off`（默认）时保持主 agent 路径，并记录 `implemented_by: main`。
 - **`implemented_by`.** A unit is `subagent` when an implementer sub-agent made both its commits,
   else `main`; your hand-off's 做了什么 says which each unit is, and why a big plan's unit is
   `main`.

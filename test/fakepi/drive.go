@@ -868,6 +868,7 @@ func (d *driveEnv) writeEnvelope(act planAction) {
 			d.pfStep("hub_wrap_attrs", "hub", "wrap-attrs", name, string(raw))
 		}
 	}
+	d.writeFastCheckProof(stepID)
 	args := []string{"handoff"}
 	reason := ""
 	if outcome == "completed" && str(output, "verdict") == "fail" && d.gate(stepID) {
@@ -939,6 +940,53 @@ func (d *driveEnv) writeEnvelope(act planAction) {
 	args = append(args, "--body", "-")
 	d.pfStepIn("handoff", body, args...)
 	d.journal("envelope", map[string]any{"step": stepID, "outcome": outcome, "args": args, "crash": act.Crash})
+}
+
+// writeFastCheckProof writes the proof a real build or sync step hands off
+// under a lane declaring `fast_check_proof` (polyforge#211): the scripted
+// agent is no repository's checker, but it must satisfy the daemon's gate
+// the way a real step's own fast check does — a pass at each task repo's
+// HEAD. A lane that declares no proof ignores the file.
+func (d *driveEnv) writeFastCheckProof(stepID string) {
+	var dir string
+	switch stepID {
+	case "build":
+		dir = filepath.Join("artifacts", "build", "fast-checks")
+	case "sync":
+		dir = filepath.Join("artifacts", "sync", "fast-checks")
+	default:
+		return
+	}
+	ents, err := os.ReadDir("repos")
+	if err != nil {
+		return
+	}
+	heads := map[string]string{}
+	for _, e := range ents {
+		if !e.IsDir() {
+			continue
+		}
+		out, err := exec.Command("git", "-C", filepath.Join("repos", e.Name()), "rev-parse", "--verify", "HEAD^{commit}").Output()
+		if err != nil {
+			continue
+		}
+		heads[e.Name()] = strings.TrimSpace(string(out))
+	}
+	if len(heads) == 0 {
+		return
+	}
+	raw, err := json.Marshal(map[string]any{"schema": "pf-step-result/1", "verdict": "pass", "heads": heads})
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	for name := range heads {
+		if err := os.WriteFile(filepath.Join(dir, name+".json"), raw, 0o644); err != nil {
+			return
+		}
+	}
 }
 
 // pfStep runs one `pf step <args>` from the capsule root and journals it

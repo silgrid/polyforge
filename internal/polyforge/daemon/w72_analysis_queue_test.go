@@ -201,6 +201,23 @@ func (r *w72Runner) specOf(id string) (task.RunSpec, bool) {
 	return task.RunSpec{}, false
 }
 
+// w72WaitSpec polls until the gate runner has entered Run for id. Spawn
+// starts the runner on its own goroutine, so one read right after the
+// enqueue races it — verification round 1's flaky failure under load
+// (polyforge#213's settle duty: poll the state you assert, bounded).
+func w72WaitSpec(r *w72Runner, id string) (task.RunSpec, bool) {
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if spec, ok := r.specOf(id); ok {
+			return spec, true
+		}
+		if !time.Now().Before(deadline) {
+			return task.RunSpec{}, false
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // readW72Queue answers the persisted queue file's entries (ids only:
 // the entry shape is the implementation's, the test decodes its own).
 func readW72Queue(t *testing.T, td *testDaemon) []string {
@@ -338,9 +355,9 @@ func TestW72AnalysisEnqueueSpawnsImmediately(t *testing.T) {
 	if of := analysisOf(t, td, res.TaskID); of != "wi_w72_a" {
 		t.Fatalf("the task must bind the analyzed ticket, got %q", of)
 	}
-	spec, ok := runner.specOf(res.TaskID)
+	spec, ok := w72WaitSpec(runner, res.TaskID)
 	if !ok {
-		t.Fatal("the runner never saw the analysis task")
+		t.Fatalf("the runner never saw the analysis task %s", res.TaskID)
 	}
 	if !strings.Contains(spec.Prompt, "the ticket body") || !strings.Contains(spec.Prompt, "提交前分析") {
 		t.Fatalf("the prompt must carry the template and the ticket body:\n%s", spec.Prompt)

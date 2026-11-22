@@ -662,7 +662,7 @@ func TestReleaseDeployDryRunIsReadOnly(t *testing.T) {
 // server). Both scripts share relFakeDigest + imageRepoDigest.
 func TestReleaseScriptDigestFileFeedsDeployPreflight(t *testing.T) {
 	rw := newRelWorld(t, []string{"v1.2.0"}, nil)
-	if out, err := rw.run(nil); err != nil {
+	if out, err := rw.runPinned(nil); err != nil {
 		t.Fatalf("release failed: %v\n%s", err, out)
 	}
 	produced := filepath.Join(rw.fakeRel, "v1.2.1")

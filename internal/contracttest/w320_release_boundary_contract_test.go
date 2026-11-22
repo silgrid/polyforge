@@ -1,13 +1,15 @@
 package test
 
-// w320_release_boundary_contract_test.go (polyforge#113): one audit, one
-// command — the release's dependency audit is the scope engine's own gate.
-// release.sh takes its default audit command from the engine's
-// --json --full report and runs it verbatim after the binaries build,
-// unconditionally: a reused green tag skips the test gate, never the audit.
-// No hardcoded component audit (`cd webui && npm audit …`) remains, and
-// RELEASE_AUDIT_CMD still replaces the whole gate. The old boundary
-// wording ("Two audits, two scopes") is red.
+// w320_release_boundary_contract_test.go (polyforge#113, polyforge#154):
+// one audit, one command — the release's dependency audit is the scope
+// engine's own gate. release.sh takes its default audit command from the
+// engine's --json --full report and runs it verbatim after the binaries
+// build, unconditionally: the release runs no test gate (the green
+// integrate batch's own full-gate run is the test evidence), so nothing
+// can skip the audit. No hardcoded component audit
+// (`cd webui && npm audit …`) remains, and RELEASE_AUDIT_CMD still
+// replaces the whole gate. The old boundary wordings ("Two audits, two
+// scopes", "a reused green tag skips the test gate") are red.
 //
 // Run (targeted): GOWORK=off go test ./internal/contracttest/ -run '^TestW320ReleaseBoundary' -count=1
 
@@ -49,7 +51,7 @@ func TestW320ReleaseBoundaryComments(t *testing.T) {
 	for _, want := range []string{
 		"one audit, one command - the release runs the scope engine's own dependency-audit gate, the same `audit` command the verification bar and main's CI run",
 		"over the same trees: the Go module and every shipped npm tree, pi-web and its demo included - never the one hardcoded tree of the old gate",
-		"a reused green tag skips the test gate, never the audit - the advisory feed moves, a green tag says nothing about today's advisories",
+		"unconditionally: the release runs no test gate (the green integrate batch's own full-gate run is the test evidence), so nothing can skip the audit - the advisory feed moves, a green batch says nothing about today's advisories",
 	} {
 		if !strings.Contains(c, want) {
 			t.Fatalf("release.sh must state the audit boundary %q", want)
@@ -59,6 +61,7 @@ func TestW320ReleaseBoundaryComments(t *testing.T) {
 		"Two audits, two scopes",
 		"the release audits production dependencies only",
 		"npm audit --omit=dev",
+		"a reused green tag skips the test gate",
 	} {
 		if strings.Contains(c, old) {
 			t.Fatalf("release.sh still carries the old audit boundary %q", old)

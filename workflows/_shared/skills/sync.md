@@ -1,7 +1,7 @@
 ---
 name: sync
 description: Merge origin's default branch into every task repo with one pre-written command; resolve a real conflict in place and continue the same command; ask the owner when a resolution is not yours to make.
-commands: [sync.py]
+commands: [sync.py, fast_checks.py]
 ---
 # sync
 
@@ -20,9 +20,32 @@ timeout) — the one the situation names:
 | every start and every re-run | `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/sync.py" --json --out artifacts/sync/result.json` |
 | a real conflict resolved in place, `git add`ed | `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/sync.py" --continue --json --out artifacts/sync/result.json` |
 | handing the work back (`rewind`, `cancel`) on the owner's word | `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/sync.py" --abort --json --out artifacts/sync/result.json` |
+| a merge that moved a repo, before `done` (see **The hand-off gate** below) | `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/fast_checks.py" --repo <repo> --phase fast --json --out artifacts/sync/fast-checks/<repo>.json` |
 
 The step after you checks the result file's `argv` against the first two lines: a result
 written by any other line is a hand-off mismatch there.
+
+**The hand-off gate (develop declares it; polyforge#211).** The daemon reads the file the
+lane's `fast_check_proof` names — `artifacts/sync/fast-checks/<repo>.json` on develop — for
+every task repo the merge moved, and refuses `done` until each is a `pf-step-result/1` with
+`verdict` `pass` whose `heads` carries that repo at its current HEAD. A repo the merge
+fast-forwarded, or left at its start commit, needs none. Run the fast-check line above:
+once on the working tree after the conflicts are resolved and `git add`ed (before the
+continue line), so a real break is fixed in the conflicted files while the merge is still in
+progress; then again after the continue line wrote the merge commit, so the result records
+the merge commit's HEAD (the tree is unchanged, so every green command is reused). A
+non-fast-forward merge the script already committed with no conflict is checked once after
+the start line. A red check that the resolution caused is fixed in the `conflicts[]` files
+only; a red on a merge you cannot edit — no `conflicts[]`, or a real break outside them — is
+**not yours to resolve**: `pf step ask` the owner. A red that is not this
+merge's at all the check itself triages first: one the baseline — after
+the merge, the default branch's tip — reproduces the same way is recorded
+`pre_existing` and the check passes. What is left — one the baseline could
+not settle, the result `error`/`partial`, or the engine planned no check —
+is the owner's the same way: ask, and on the explicit release hand off
+`done` with `--per-owner <the reply's at>`; the daemon accepts it and the
+section's header records the cited message. Without that word the gate
+still refuses `done`.
 
 ## 开工前读什么、核对什么 — before you start: what you read and check
 
@@ -65,7 +88,9 @@ no `<<<<<<<`, `|||||||` or `>>>>>>>` line is left, then `git -C repos/<name> add
 file both sides deleted or renamed: `git rm` or `git add` the outcome you chose. You may
 run a unit's test for your own confidence; nothing trusts it — the gate right after you
 (develop's verification, micro's evidence) tests the resolved tree, and the PR body lists
-every file you resolved. Then run the continue line (the table above) — it refuses a
+every file you resolved. The fast-check line above is the exception: it tests the tree the
+merge produced before `done`, so a structural break stops here, not at that gate; that gate
+still tests the resolved tree. Then run the continue line (the table above) — it refuses a
 residual marker, an unstaged or unmerged path, a mechanically resolved file changed and a
 resolved text file that drops a line both parents (`HEAD` and `MERGE_HEAD`) carry (fix the
 tree, run it again), commits each merge and rewrites the same result file. Refused for
@@ -94,12 +119,14 @@ off `--status rewind --to <build on develop, fix on micro> --per-owner <the repl
 - **回应上一轮** (after merge's FAIL): what the forge refused, and what this merge of the
   default branch changed about it.
 - **做了什么**: per repo — `before` → `after`, the default branch's commit merged in
-  (`default_head`), the files resolved mechanically, the files you resolved.
+  (`default_head`), the files resolved mechanically, the files you resolved, and the
+  fast-check result (`verdict`, `heads`) the hand-off gate read.
 - **关键决定和理由**: for each file you resolved, which side's change you adapted and why;
   each owner message you acted on (its `at`, the words, your reading).
 - **给下游与未决**: the files you resolved, verbatim — no review judges them; the gate after
   you tests them and publish lists them for the owner.
-- **Evidence**: `artifacts/sync/result.json`.
+- **Evidence**: `artifacts/sync/result.json`, and each `artifacts/sync/fast-checks/<repo>.json`
+  the gate read; on an owner's release, the message `--per-owner` cites.
 
 ## Never
 
@@ -109,6 +136,8 @@ new one) by hand — the script owns the merge; run any line but the table's; ed
 the result lists under
 `mechanical[]` (its resolution is the conf's rule), or any repo whose `conflicts[]` is
 empty; hand off `rewind` to the step that makes the change, or `cancel`, without running
-the abort line first; pass a Bash timeout; end a turn that needs the owner without
+the abort line first; hand off `done` after a merge that moved a repo without the
+fast-check line's `pass` at HEAD unless the owner released it with `--per-owner`;
+pass a Bash timeout; end a turn that needs the owner without
 `pf step ask`; run a command in the background and poll it, or give it a timeout or
 deadline of your own.
