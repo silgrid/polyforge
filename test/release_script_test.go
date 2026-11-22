@@ -563,7 +563,6 @@ func (w *relWorld) env(extra ...string) []string {
 		"DOCKER_CONFIG="+dockerCfg, "HOME="+w.root, "FAKE_ORIGIN="+w.origin,
 		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@e", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@e",
 		"RELEASE_XREFS_CMD=echo xrefs >> \"$CALLLOG\"",
-		"RELEASE_TEST_CMD=echo tests >> \"$CALLLOG\"",
 		"RELEASE_AUDIT_CMD=echo audit >> \"$CALLLOG\"",
 		"RELEASE_GH_REPO=silgrid/polyforge",
 		// origin is a local bare repo: state which GitHub repo it stands for
@@ -582,6 +581,36 @@ func (w *relWorld) run(extra []string, args ...string) (string, error) {
 	c.Env = w.env(extra...)
 	out, err := c.CombinedOutput()
 	return string(out), err
+}
+
+// relPins writes the green batch's pins file - the owner repo's pin, any
+// extra repos of the group and the red batches that closed after it - and
+// answers its path (the release step's artifact, passed with --pins).
+func (w *relWorld) relPins(pin string, extra map[string]string, redAfter []string) string {
+	w.t.Helper()
+	repos := map[string]string{"polyforge": pin}
+	for k, v := range extra {
+		repos[k] = v
+	}
+	doc := map[string]any{"batch": "wi_b", "repos": repos}
+	if len(redAfter) > 0 {
+		doc["red_batches_after"] = redAfter
+	}
+	b, err := json.Marshal(doc)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	p := filepath.Join(w.root, "pins.json")
+	relWrite(w.t, p, string(b)+"\n", 0o644)
+	return p
+}
+
+// runPinned runs the procedure with the green batch's pins at the clone's
+// HEAD - the step's shape: the owner repo sits at its pinned commit, and
+// the pins file is the procedure's whole input.
+func (w *relWorld) runPinned(extra []string, args ...string) (string, error) {
+	p := w.relPins(relGit(w.t, w.work, "rev-parse", "HEAD"), nil, nil)
+	return w.run(extra, append(args, "--pins", p)...)
 }
 
 func (w *relWorld) calls() []string {
@@ -610,12 +639,12 @@ func relIndex(calls []string, prefix string) int {
 
 func TestReleaseScriptHappyPathOrderAndAssets(t *testing.T) {
 	w := newRelWorld(t, []string{"v1.2.0"}, nil)
-	out, err := w.run(nil)
+	out, err := w.runPinned(nil)
 	if err != nil {
 		t.Fatalf("release failed: %v\n%s", err, out)
 	}
 	calls := w.calls()
-	order := []string{"xrefs", "tests", "build", "audit", "docker build", "npm ci", "npm run build", "npm version", "npm pack", "git push", "docker push", "docker inspect", "gh release create"}
+	order := []string{"xrefs", "build", "audit", "docker build", "npm ci", "npm run build", "npm version", "npm pack", "git push", "docker push", "docker inspect", "gh release create"}
 	last := -1
 	for _, p := range order {
 		i := relIndex(calls, p)
@@ -704,11 +733,10 @@ func TestReleaseScriptHappyPathOrderAndAssets(t *testing.T) {
 	}
 }
 
-// The design-doc cross-reference gate runs before the test gate; a
-// failure stops the release before tests, build and any publish. The
+// The design-doc cross-reference gate is the release's first check; a
+// failure stops the release before build and any publish. The
 // default (RELEASE_XREFS_CMD empty) runs check-xrefs.py itself — absent
-// from the fake repo, so it fails the same way — and RELEASE_TEST_CMD
-// being set does not skip it.
+// from the fake repo, so it fails the same way.
 func TestReleaseScriptXrefsGateFailsBeforeTests(t *testing.T) {
 	for name, cmd := range map[string]string{
 		"override": "RELEASE_XREFS_CMD=echo xrefs >> \"$CALLLOG\"; exit 3",
@@ -716,7 +744,7 @@ func TestReleaseScriptXrefsGateFailsBeforeTests(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			w := newRelWorld(t, []string{"v1.2.0"}, nil)
-			out, err := w.run([]string{cmd})
+			out, err := w.runPinned([]string{cmd})
 			if err == nil {
 				t.Fatalf("release passed with a failing xrefs gate:\n%s", out)
 			}
@@ -726,7 +754,7 @@ func TestReleaseScriptXrefsGateFailsBeforeTests(t *testing.T) {
 			if !strings.Contains(out, "nothing built or published") {
 				t.Fatalf("message does not say nothing was published:\n%s", out)
 			}
-			for _, p := range []string{"tests", "build", "docker", "git push", "gh release"} {
+			for _, p := range []string{"build", "docker", "git push", "gh release"} {
 				if i := relIndex(w.calls(), p); i >= 0 {
 					t.Fatalf("%q ran after the xrefs gate failed: %v", p, w.calls())
 				}
@@ -793,7 +821,7 @@ func TestReleaseScriptAudit(t *testing.T) {
 	// change the fake world releases
 	w.recordPR(relGit(t, w.work, "rev-parse", "HEAD"))
 
-	out, err := w.run([]string{"RELEASE_AUDIT_CMD="})
+	out, err := w.runPinned([]string{"RELEASE_AUDIT_CMD="})
 	if err != nil {
 		t.Fatalf("release failed: %v\n%s", err, out)
 	}
@@ -827,7 +855,7 @@ func TestReleaseScriptAudit(t *testing.T) {
 func TestReleaseScriptAuditGateStopsBeforePublish(t *testing.T) {
 	t.Run("override fails", func(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.2.0"}, nil)
-		out, err := w.run([]string{"RELEASE_AUDIT_CMD=echo audit >> \"$CALLLOG\"; exit 1"})
+		out, err := w.runPinned([]string{"RELEASE_AUDIT_CMD=echo audit >> \"$CALLLOG\"; exit 1"})
 		if err == nil {
 			t.Fatalf("release passed with a failing audit gate:\n%s", out)
 		}
@@ -854,7 +882,7 @@ func TestReleaseScriptAuditGateStopsBeforePublish(t *testing.T) {
 		// the plain world: stack=none, no lockfile - the engine reports no
 		// audit command, and the release refuses rather than skip the gate
 		w := newRelWorld(t, []string{"v1.2.0"}, nil)
-		out, err := w.run([]string{"RELEASE_AUDIT_CMD="})
+		out, err := w.runPinned([]string{"RELEASE_AUDIT_CMD="})
 		if err == nil {
 			t.Fatalf("release passed with no audit command to run:\n%s", out)
 		}
@@ -893,7 +921,7 @@ func TestReleaseScriptVersionFloorAndBump(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			w := newRelWorld(t, c.origin, c.local)
-			out, err := w.run(nil, c.args...)
+			out, err := w.runPinned(nil, c.args...)
 			if err != nil {
 				t.Fatalf("release failed: %v\n%s", err, out)
 			}
@@ -907,7 +935,7 @@ func TestReleaseScriptVersionFloorAndBump(t *testing.T) {
 		relGit(t, w.work, "tag", "-a", "-m", "x", "v7.0.0", "HEAD~1")
 		relGit(t, w.work, "push", "-q", "origin", "v7.0.0")
 		relGit(t, w.work, "tag", "-d", "v7.0.0")
-		out, err := w.run(nil)
+		out, err := w.runPinned(nil)
 		if err != nil || !strings.Contains(out, "version=v7.0.1\n") {
 			t.Fatalf("err=%v\n%s", err, out)
 		}
@@ -919,7 +947,7 @@ func TestReleaseScriptTagTakenOnOriginStopsBeforePublish(t *testing.T) {
 	// a parallel release claims the computed version while we build
 	build := "echo build >> \"$CALLLOG\"; mkdir -p artifacts/release-$TAG; for n in pf pf-darwin-arm64 pf-darwin-amd64; do echo bin > artifacts/release-$TAG/$n; done; " +
 		"git tag -a -m other \"$TAG\" HEAD~1 && git push -q origin \"$TAG\" && git tag -d \"$TAG\" >/dev/null"
-	out, err := w.run([]string{"RELEASE_BUILD_CMD=" + build})
+	out, err := w.runPinned([]string{"RELEASE_BUILD_CMD=" + build})
 	if err == nil {
 		t.Fatalf("expected failure\n%s", out)
 	}
@@ -942,7 +970,7 @@ func TestReleaseScriptTagTakenOnOriginStopsBeforePublish(t *testing.T) {
 // world with the tag absent releases.
 func TestReleaseScriptRefusesAnImageTagAlreadyInThePackage(t *testing.T) {
 	w := newRelWorld(t, []string{"v1.2.0"}, nil)
-	out, err := w.run([]string{"FAKE_REGISTRY_HAS=v1.2.1"})
+	out, err := w.runPinned([]string{"FAKE_REGISTRY_HAS=v1.2.1"})
 	if err == nil {
 		t.Fatalf("expected the release to refuse an image tag already in the package\n%s", out)
 	}
@@ -957,7 +985,7 @@ func TestReleaseScriptRefusesAnImageTagAlreadyInThePackage(t *testing.T) {
 	if got := w.originTags(); strings.Contains(got, "v1.2.1") {
 		t.Fatalf("tag claimed despite the refusal: %q", got)
 	}
-	out, err = w.run(nil)
+	out, err = w.runPinned(nil)
 	if err != nil || !strings.Contains(out, "image ghcr.io/silgrid/polyforge-aihub:v1.2.1 is not in the registry yet") || !strings.Contains(out, "version=v1.2.1") {
 		t.Fatalf("with the tag absent the release goes on: %v\n%s", err, out)
 	}
@@ -965,7 +993,7 @@ func TestReleaseScriptRefusesAnImageTagAlreadyInThePackage(t *testing.T) {
 
 func TestReleaseScriptLsRemoteFailureIsFatalBeforeAnyWork(t *testing.T) {
 	w := newRelWorld(t, []string{"v1.2.0"}, []string{"v9.0.0"})
-	out, err := w.run([]string{"FAKE_LSREMOTE_FAIL=1"})
+	out, err := w.runPinned([]string{"FAKE_LSREMOTE_FAIL=1"})
 	if err == nil || !strings.Contains(out, "ls-remote") {
 		t.Fatalf("expected a fatal ls-remote failure: %v\n%s", err, out)
 	}
@@ -983,7 +1011,7 @@ func TestReleaseScriptRefusesAHeadWithTwoReleaseTags(t *testing.T) {
 	relGit(t, w.work, "tag", "-a", "-m", "v1.3.0", "v1.3.0")
 	relGit(t, w.work, "tag", "v1.3.1")
 	relGit(t, w.work, "push", "-q", "origin", "v1.3.0", "v1.3.1")
-	out, err := w.run(nil)
+	out, err := w.runPinned(nil)
 	if err == nil {
 		t.Fatalf("expected a refusal\n%s", out)
 	}
@@ -1002,7 +1030,7 @@ func TestReleaseScriptRefusesAHeadWithTwoReleaseTags(t *testing.T) {
 
 func TestReleaseScriptPostFailTextIsAccurate(t *testing.T) {
 	w := newRelWorld(t, []string{"v1.2.0"}, nil)
-	out, err := w.run([]string{"FAKE_PUSH_FAIL=1"})
+	out, err := w.runPinned([]string{"FAKE_PUSH_FAIL=1"})
 	if err == nil {
 		t.Fatalf("expected failure\n%s", out)
 	}
@@ -1024,24 +1052,24 @@ func TestReleaseScriptRefusals(t *testing.T) {
 	t.Run("dirty tree", func(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.0.0"}, nil)
 		relWrite(t, filepath.Join(w.work, "README"), "dirty\n", 0o644)
-		out, err := w.run(nil)
+		out, err := w.runPinned(nil)
 		if err == nil || !strings.Contains(out, "dirty") || len(w.calls()) != 0 {
 			t.Fatalf("err=%v calls=%v\n%s", err, w.calls(), out)
 		}
 	})
-	t.Run("HEAD not origin/main", func(t *testing.T) {
+	t.Run("HEAD off the default branch's history", func(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.0.0"}, nil)
 		relWrite(t, filepath.Join(w.work, "third"), "3\n", 0o644)
 		relGit(t, w.work, "add", "-A")
 		relGit(t, w.work, "commit", "-q", "-m", "unpushed")
-		out, err := w.run(nil)
-		if err == nil || !strings.Contains(out, "not origin/main") || len(w.calls()) != 0 {
+		out, err := w.runPinned(nil)
+		if err == nil || !strings.Contains(out, "not on the history of origin/main") || len(w.calls()) != 0 {
 			t.Fatalf("err=%v calls=%v\n%s", err, w.calls(), out)
 		}
 	})
 	t.Run("bad bump", func(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.0.0"}, nil)
-		if _, err := w.run(nil, "huge"); err == nil {
+		if _, err := w.runPinned(nil, "huge"); err == nil {
 			t.Fatal("expected failure")
 		}
 	})
@@ -1051,7 +1079,7 @@ func TestReleaseScriptRefusals(t *testing.T) {
 	for _, bump := range []string{"minor", "major"} {
 		t.Run(bump+" refused", func(t *testing.T) {
 			w := newRelWorld(t, []string{"v1.10.1"}, nil)
-			out, err := w.run(nil, bump)
+			out, err := w.runPinned(nil, bump)
 			if err == nil || !strings.Contains(out, "bump "+bump+" refused") || !strings.Contains(out, "owner") || len(w.calls()) != 0 {
 				t.Fatalf("err=%v calls=%v\n%s", err, w.calls(), out)
 			}
@@ -1061,7 +1089,7 @@ func TestReleaseScriptRefusals(t *testing.T) {
 
 func TestReleaseScriptNotesGeneratedWhenMissing(t *testing.T) {
 	w := newRelWorld(t, []string{"v1.2.0"}, nil)
-	if out, err := w.run(nil); err != nil {
+	if out, err := w.runPinned(nil); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	body, _ := os.ReadFile(filepath.Join(w.fakeRel, "v1.2.1", ".body"))
@@ -1076,13 +1104,13 @@ func TestReleaseScriptNotesGeneratedWhenMissing(t *testing.T) {
 func TestReleaseScriptCommittedNotesUsedAsIs(t *testing.T) {
 	w := newRelWorld(t, []string{"v1.2.0"}, nil)
 	w.mergeOnMain(filepath.Join("docs", "release-notes", "v1.2.1.md"), "# hand written\n", "notes", true)
-	if out, err := w.run(nil); err != nil {
+	if out, err := w.runPinned(nil); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	body, _ := os.ReadFile(filepath.Join(w.fakeRel, "v1.2.1", ".body"))
-	// the committed notes, byte for byte, then the test gate's record;
-	// the committed file itself is not touched
-	if !strings.HasPrefix(string(body), "# hand written\n\n## Test gate\n\n") || !strings.Contains(string(body), "Ran RELEASE_TEST_CMD (gate `") {
+	// the committed notes, byte for byte, then the integration batch's
+	// record; the committed file itself is not touched
+	if !strings.HasPrefix(string(body), "# hand written\n\n## Integration batch\n\n") || !strings.Contains(string(body), "green integrate batch `wi_b`") {
 		t.Fatalf("notes = %q", body)
 	}
 	if got := relGit(t, w.work, "status", "--porcelain"); got != "" {
@@ -1099,7 +1127,7 @@ func TestReleaseScriptCommittedNotesTooLongRefused(t *testing.T) {
 	w := newRelWorld(t, []string{"v1.2.0"}, nil)
 	w.mergeOnMain(filepath.Join("docs", "release-notes", "v1.2.1.md"),
 		"# hand written\n\n"+strings.Repeat("x", 130000), "overlong notes", true)
-	out, err := w.run(nil)
+	out, err := w.runPinned(nil)
 	if err == nil || !strings.Contains(out, "no version claimed") || !strings.Contains(out, "125000") {
 		t.Fatalf("an overlong committed notes file must refuse before the claim: %v\n%s", err, out)
 	}
@@ -1131,12 +1159,12 @@ func relLongNotesWorld(t *testing.T, prs, subjectLen int) *relWorld {
 // generated notes stay within 125000 bytes, keep the NEWEST commits, end
 // the list with a 「还有 N 个提交」notice whose count is exactly the dropped
 // lines and a compare link built on the previous release's commit id
-// (never its tag name), and the notes still end with the "Test gate" section.
+// (never its tag name), and the notes still end with the batch section.
 func TestReleaseScriptNotesTooLongAreTruncated(t *testing.T) {
 	w := relLongNotesWorld(t, 80, 2000)
 	prev := relGit(t, w.work, "rev-parse", "v1.2.0^{commit}")
 	head := relGit(t, w.work, "rev-parse", "HEAD")
-	out, err := w.run(nil)
+	out, err := w.runPinned(nil)
 	if err != nil {
 		t.Fatalf("an overlong commit list must still release: %v\n%s", err, out)
 	}
@@ -1167,13 +1195,13 @@ func TestReleaseScriptNotesTooLongAreTruncated(t *testing.T) {
 	if strings.Contains(notes, "/compare/v1.2.0") {
 		t.Fatalf("the compare link must not use the tag name (a downstream origin may carry an older tag of the same name):\n%.500s…", notes)
 	}
-	gate := strings.Index(notes, "## Test gate")
+	gate := strings.Index(notes, "## Integration batch")
 	notice := strings.Index(notes, "还有 ")
 	if gate < 0 || notice < 0 || notice > gate {
-		t.Fatalf("the notes must still end with the Test gate section after the notice:\n%.500s…", notes)
+		t.Fatalf("the notes must still end with the batch section after the notice:\n%.500s…", notes)
 	}
 	if last := strings.LastIndex(notes, "## "); last != gate {
-		t.Fatalf("the Test gate section must be the notes' last section (r1#5):\n%.500s…", notes)
+		t.Fatalf("the batch section must be the notes' last section (r1#5):\n%.500s…", notes)
 	}
 }
 
@@ -1184,14 +1212,14 @@ func TestReleaseScriptNotesTooLongAreTruncated(t *testing.T) {
 // times).
 func TestReleaseScriptNotesTooLongResume(t *testing.T) {
 	w := relLongNotesWorld(t, 80, 2000)
-	if out, err := w.run([]string{"FAKE_GH_CREATE_FAIL=1"}); err == nil || !strings.Contains(out, "FAILED AFTER v1.2.1 WAS CLAIMED") {
+	if out, err := w.runPinned([]string{"FAKE_GH_CREATE_FAIL=1"}); err == nil || !strings.Contains(out, "FAILED AFTER v1.2.1 WAS CLAIMED") {
 		t.Fatalf("setup: the first run must fail at the release create, after the claim: %v\n%s", err, out)
 	}
 	first, err := os.ReadFile(filepath.Join(w.fakeRel, "create-failed.body"))
 	if err != nil {
 		t.Fatalf("the failed create must keep its attempted notes for the comparison: %v", err)
 	}
-	out, err := w.run(nil)
+	out, err := w.runPinned(nil)
 	if err != nil || !strings.Contains(out, "resuming v1.2.1") {
 		t.Fatalf("the re-run must resume the claimed version: %v\n%s", err, out)
 	}
@@ -1211,7 +1239,7 @@ func TestReleaseScriptLoginWhenNotLoggedIn(t *testing.T) {
 	w := newRelWorld(t, []string{"v1.2.0"}, nil)
 	empty := filepath.Join(w.root, "emptycfg")
 	relWrite(t, filepath.Join(empty, "config.json"), `{}`, 0o644)
-	if out, err := w.run([]string{"DOCKER_CONFIG=" + empty}); err != nil {
+	if out, err := w.runPinned([]string{"DOCKER_CONFIG=" + empty}); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	if relIndex(w.calls(), "docker login") < 0 {
@@ -1346,10 +1374,183 @@ func TestReleaseScriptVerify(t *testing.T) {
 func TestReleaseScriptHelpMentionsVerify(t *testing.T) {
 	w := newRelWorld(t, []string{"v1.0.0"}, nil)
 	for _, a := range []string{"--help", "-h"} {
-		out, err := w.run(nil, a)
+		out, err := w.runPinned(nil, a)
 		if err != nil || !strings.Contains(out, "--verify") {
 			t.Fatalf("%s: %v\n%s", a, err, out)
 		}
+	}
+}
+
+// ---- the green batch's pins (polyforge#154)
+
+// TestReleaseScriptHelpMentionsPins: --help declares the --pins convention -
+// the lane probes it (an old script that does not is refused
+// PF-RELEASE-PROCEDURE_CONTRACT before anything runs), so the declaration is
+// the contract, not documentation.
+func TestReleaseScriptHelpMentionsPins(t *testing.T) {
+	w := newRelWorld(t, []string{"v1.0.0"}, nil)
+	for _, a := range []string{"--help", "-h"} {
+		out, err := w.run(nil, a)
+		if err != nil || !strings.Contains(out, "--pins") {
+			t.Fatalf("%s must declare --pins: %v\n%s", a, err, out)
+		}
+	}
+}
+
+// TestReleaseScriptRequiresPins: a release without --pins refuses with
+// nothing run and nothing claimed - the release object is the green batch's
+// pinned commits, and a run that cannot name them must not fall back to a
+// branch head.
+func TestReleaseScriptRequiresPins(t *testing.T) {
+	w := newRelWorld(t, []string{"v1.2.0"}, nil)
+	out, err := w.run(nil)
+	if err == nil || !strings.Contains(out, "--pins") || !strings.Contains(out, "nothing built or published") {
+		t.Fatalf("a release without pins must refuse naming --pins: %v\n%s", err, out)
+	}
+	if c := w.calls(); len(c) != 0 {
+		t.Fatalf("work happened despite the missing pins: %v", c)
+	}
+	if got := w.originTags(); strings.Contains(got, "v1.2.1") {
+		t.Fatalf("a version was claimed: %q", got)
+	}
+}
+
+// TestReleaseScriptReleasesThePinnedCommitBehindTheHead: the release object
+// is the pin, not the default branch's tip - main one merged PR AHEAD of the
+// pin (the exact shape the origin-head release refused or re-gated), and the
+// release still cuts the pin's version, tags the pin and leaves main's tip
+// untouched.
+func TestReleaseScriptReleasesThePinnedCommitBehindTheHead(t *testing.T) {
+	w := newRelWorld(t, []string{"v1.2.0"}, nil)
+	pin := w.landPR("pinned-change", "the batch's pinned commit")
+	head := w.landPR("after-the-batch", "landed after the batch closed")
+	relGit(t, w.work, "checkout", "-q", "--detach", pin) // the step sits the owner repo at its pin
+	p := w.relPins(pin, nil, nil)
+	out, err := w.run(nil, "--pins", p)
+	if err != nil {
+		t.Fatalf("the pinned commit behind the head must release: %v\n%s", err, out)
+	}
+	for _, want := range []string{"version=v1.2.1\n", "commit=" + pin + "\n"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output lacks %q:\n%s", want, out)
+		}
+	}
+	// the tag is the pin's, and main keeps its own tip
+	if got := relGit(t, w.origin, "rev-list", "-n", "1", "v1.2.1"); got != pin {
+		t.Fatalf("v1.2.1 points at %s, want the pin %s", got, pin)
+	}
+	if got := relGit(t, w.origin, "rev-parse", "main"); got != head {
+		t.Fatalf("origin/main = %s, want the head the batch did not cover (%s), untouched", got, head)
+	}
+	if vout, verr := w.run(nil, "--verify", "v1.2.1"); verr != nil {
+		t.Fatalf("verify: %v\n%s", verr, vout)
+	}
+}
+
+// TestReleaseScriptRefusesAHeadNoPinNames: the clone sits at a commit the
+// pins do not name - the step did not check the owner repo out at its
+// pinned commit - and the run refuses before any work rather than release
+// the wrong tree.
+func TestReleaseScriptRefusesAHeadNoPinNames(t *testing.T) {
+	w := newRelWorld(t, []string{"v1.2.0"}, nil)
+	pin := relGit(t, w.work, "rev-parse", "HEAD~1")
+	p := w.relPins(pin, nil, nil)
+	out, err := w.run(nil, "--pins", p)
+	if err == nil || !strings.Contains(out, "none of the pins") || !strings.Contains(out, "nothing built or published") {
+		t.Fatalf("a HEAD no pin names must refuse: %v\n%s", err, out)
+	}
+	if c := w.calls(); len(c) != 0 {
+		t.Fatalf("work happened despite the pin mismatch: %v", c)
+	}
+}
+
+// TestReleaseScriptRefusesAPinOffTheDefaultBranch: a pin the default branch
+// no longer carries (the lane's PF-RELEASE-PIN_OFF_DEFAULT, checked before
+// the procedure runs) is the script's backstop refusal - the release object
+// must be on origin's default branch history, whatever file named it.
+func TestReleaseScriptRefusesAPinOffTheDefaultBranch(t *testing.T) {
+	w := newRelWorld(t, []string{"v1.2.0"}, nil)
+	relGit(t, w.work, "checkout", "-q", "-b", "side")
+	relWrite(t, filepath.Join(w.work, "side.txt"), "off the branch\n", 0o644)
+	relGit(t, w.work, "add", "-A")
+	relGit(t, w.work, "commit", "-q", "-m", "a commit no default branch carries")
+	off := relGit(t, w.work, "rev-parse", "HEAD")
+	relGit(t, w.work, "checkout", "-q", "--detach", off)
+	p := w.relPins(off, nil, nil)
+	out, err := w.run(nil, "--pins", p)
+	if err == nil || !strings.Contains(out, "not on the history of origin/main") || !strings.Contains(out, "nothing built or published") {
+		t.Fatalf("an off-branch pin must refuse: %v\n%s", err, out)
+	}
+	if c := w.calls(); len(c) != 0 {
+		t.Fatalf("work happened despite the off-branch pin: %v", c)
+	}
+	if got := w.originTags(); strings.Contains(got, "v1.2.1") {
+		t.Fatalf("a version was claimed: %q", got)
+	}
+}
+
+// TestReleaseScriptRefusesAMalformedPinsFile: the pins file is the
+// procedure's whole input, so every unreadable or incomplete shape refuses
+// before any work - never a silent fallback.
+func TestReleaseScriptRefusesAMalformedPinsFile(t *testing.T) {
+	head := ""
+	for name, body := range map[string]string{
+		"not JSON":            "not json at all",
+		"no batch":            `{"repos":{"polyforge":"PLACEHOLDER"}}`,
+		"no repos":            `{"batch":"wi_b"}`,
+		"empty repos":         `{"batch":"wi_b","repos":{}}`,
+		"a short sha":         `{"batch":"wi_b","repos":{"polyforge":"deadbeef"}}`,
+		"a non-string batch":  `{"batch":42,"repos":{"polyforge":"PLACEHOLDER"}}`,
+		"a non-string commit": `{"batch":"wi_b","repos":{"polyforge":42}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newRelWorld(t, []string{"v1.2.0"}, nil)
+			if head == "" {
+				head = relGit(t, w.work, "rev-parse", "HEAD")
+			}
+			p := filepath.Join(w.root, "pins.json")
+			relWrite(t, p, strings.ReplaceAll(body, "PLACEHOLDER", head), 0o644)
+			out, err := w.run(nil, "--pins", p)
+			if err == nil || !strings.Contains(out, "pins") || !strings.Contains(out, "nothing built or published") {
+				t.Fatalf("a malformed pins file must refuse naming it: %v\n%s", err, out)
+			}
+			if c := w.calls(); len(c) != 0 {
+				t.Fatalf("work happened despite the malformed pins: %v", c)
+			}
+			if got := w.originTags(); strings.Contains(got, "v1.2.1") {
+				t.Fatalf("a version was claimed: %q", got)
+			}
+		})
+	}
+}
+
+// TestReleaseScriptPinsCarryTheWholeBatch: a multi-repo project's pins name
+// the whole group (only the owner repo is released here, the others' commits
+// ride the record), the release notes carry the integration batch section -
+// the batch's id, and the red batches that closed after it for the owner's
+// information - and no test-gate section any more.
+func TestReleaseScriptPinsCarryTheWholeBatch(t *testing.T) {
+	w := newRelWorld(t, []string{"v1.2.0"}, nil)
+	pin := relGit(t, w.work, "rev-parse", "HEAD")
+	p := w.relPins(pin, map[string]string{"lib": strings.Repeat("0", 39) + "1"}, []string{"wi_red1"})
+	out, err := w.run(nil, "--pins", p)
+	if err != nil {
+		t.Fatalf("a multi-repo pins file must release: %v\n%s", err, out)
+	}
+	body, _ := os.ReadFile(filepath.Join(w.fakeRel, "v1.2.1", ".body"))
+	for _, want := range []string{
+		"\n## Integration batch\n\n",
+		"Released from the green integrate batch `wi_b`",
+		"full-gate run is the test evidence",
+		"no test gate of its own",
+		"Red batch(es) closed after it: wi_red1",
+	} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("the notes' batch section lacks %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(string(body), "## Test gate") {
+		t.Fatalf("the notes still carry a test-gate section:\n%s", body)
 	}
 }
 
@@ -1384,7 +1585,7 @@ func TestReleaseScriptRefusesCommitsNotFromAMergedPR(t *testing.T) {
 			if c.env != nil {
 				bad = relGit(t, w.work, "rev-parse", "HEAD")
 			}
-			out, err := w.run(c.env)
+			out, err := w.runPinned(c.env)
 			if err == nil {
 				t.Fatalf("expected a refusal\n%s", out)
 			}
@@ -1411,7 +1612,7 @@ func TestReleaseScriptAcceptsAMergedPRSquashCommit(t *testing.T) {
 	w := newRelWorld(t, []string{"v1.2.0"}, nil)
 	squashed := w.commitOnMain("squashed", "squashed PR")
 	w.recordPR(squashed)
-	out, err := w.run(nil)
+	out, err := w.runPinned(nil)
 	if err != nil {
 		t.Fatalf("a PR merged as a squash commit must pass the PR-only gate: %v\n%s", err, out)
 	}
@@ -1436,7 +1637,7 @@ func TestReleaseScriptPagesPastANullMergeCommitSha(t *testing.T) {
 	page2 := w.mergeOnMain("third", "third\n", "third PR", false)
 	w.recordPRPage2(page2)
 	w.recordClosedPRWithoutSha()
-	out, err := w.run(nil)
+	out, err := w.runPinned(nil)
 	if err != nil {
 		t.Fatalf("a page ending with a null merge_commit_sha must not stop paging: %v\n%s", err, out)
 	}
@@ -1503,7 +1704,7 @@ func TestReleaseScriptAllowsNamedCommitsForOneRun(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.2.0"}, nil)
 		bad := w.commitOnMain("direct", "direct push")
 		w.landPR("later", "a later PR")
-		out, err := w.run([]string{"RELEASE_ALLOW_COMMITS=" + bad})
+		out, err := w.runPinned([]string{"RELEASE_ALLOW_COMMITS=" + bad})
 		if err != nil || !strings.Contains(out, "version=v1.2.1") {
 			t.Fatalf("a named commit must let the release through: %v\n%s", err, out)
 		}
@@ -1519,7 +1720,7 @@ func TestReleaseScriptAllowsNamedCommitsForOneRun(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.2.0"}, nil)
 		named := w.commitOnMain("direct", "direct push")
 		other := w.commitOnMain("other", "another direct push")
-		out, err := w.run([]string{"RELEASE_ALLOW_COMMITS=" + named})
+		out, err := w.runPinned([]string{"RELEASE_ALLOW_COMMITS=" + named})
 		if err == nil || !strings.Contains(out, "without a merged PR") || !strings.Contains(out, other) || w.originTags() != "v1.2.0" {
 			t.Fatalf("the unnamed commit must still refuse: %v\n%s", err, out)
 		}
@@ -1527,7 +1728,7 @@ func TestReleaseScriptAllowsNamedCommitsForOneRun(t *testing.T) {
 	t.Run("a short id refuses before any work", func(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.2.0"}, nil)
 		bad := w.commitOnMain("direct", "direct push")
-		out, err := w.run([]string{"RELEASE_ALLOW_COMMITS=" + bad[:12]})
+		out, err := w.runPinned([]string{"RELEASE_ALLOW_COMMITS=" + bad[:12]})
 		if err == nil || !strings.Contains(out, "is not a full commit id") || len(w.calls()) != 0 {
 			t.Fatalf("a short id must refuse before any work: %v %v\n%s", err, w.calls(), out)
 		}
@@ -1535,7 +1736,7 @@ func TestReleaseScriptAllowsNamedCommitsForOneRun(t *testing.T) {
 	t.Run("an id outside the range refuses", func(t *testing.T) {
 		w := newRelWorld(t, []string{"v1.2.0"}, nil)
 		before := relGit(t, w.work, "rev-parse", "v1.2.0^{commit}")
-		out, err := w.run([]string{"RELEASE_ALLOW_COMMITS=" + before})
+		out, err := w.runPinned([]string{"RELEASE_ALLOW_COMMITS=" + before})
 		if err == nil || !strings.Contains(out, "no first-parent commit of") || !strings.Contains(out, before) || w.originTags() != "v1.2.0" {
 			t.Fatalf("a named commit outside the range must refuse: %v\n%s", err, out)
 		}
@@ -1604,7 +1805,7 @@ func TestReleaseScriptOwnerDirectAllowlist(t *testing.T) {
 			w := newRelWorld(t, []string{"v1.2.0"}, nil)
 			owner, bad := c.setup(w)
 			w.landPR("later", "a later PR")
-			out, err := w.run([]string{"OWNER_DIRECT_EMAILS=" + ownerDirectEmail})
+			out, err := w.runPinned([]string{"OWNER_DIRECT_EMAILS=" + ownerDirectEmail})
 			if owner != "" && !strings.Contains(out, "PASS pr-only: owner-direct: "+owner+" "+ownerDirectEmail+"\n") {
 				t.Errorf("no owner-direct audit line for %s\n%s", owner, out)
 			}
@@ -1675,7 +1876,7 @@ func TestReleaseScriptPiwebPackFailureStopsBeforeTag(t *testing.T) {
 	for _, stage := range []string{"ci", "run", "pack"} {
 		t.Run(stage, func(t *testing.T) {
 			w := newRelWorld(t, []string{"v1.2.0"}, nil)
-			out, err := w.run([]string{"FAKE_NPM_FAIL=" + stage})
+			out, err := w.runPinned([]string{"FAKE_NPM_FAIL=" + stage})
 			if err == nil || !strings.Contains(out, "pi-web package failed; nothing published") {
 				t.Fatalf("expected the pi-web stage refusal: %v\n%s", err, out)
 			}
@@ -1717,7 +1918,7 @@ func TestReleaseScriptVersionLineCutover(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w := newRelWorld(t, c.origin, nil)
-			out, err := w.run(nil)
+			out, err := w.runPinned(nil)
 			if err != nil || !strings.Contains(out, "version="+c.want+"\n") {
 				t.Fatalf("want version %s: %v\n%s", c.want, err, out)
 			}
@@ -1729,7 +1930,7 @@ func TestReleaseScriptVersionLineCutover(t *testing.T) {
 	}
 	t.Run("the cutover tag's previous release is the highest v2.20.x tag", func(t *testing.T) {
 		w := newRelWorld(t, []string{"v2.19.9", "v2.20.21", "v2.20.22"}, nil)
-		if out, err := w.run(nil); err != nil || !strings.Contains(out, "version=v0.2.0\n") {
+		if out, err := w.runPinned(nil); err != nil || !strings.Contains(out, "version=v0.2.0\n") {
 			t.Fatalf("%v\n%s", err, out)
 		}
 		vout, _ := w.run(nil, "--verify", "v0.2.0")
@@ -1875,7 +2076,7 @@ func TestReleaseScriptSuffixVersion(t *testing.T) {
 	t.Run("row 1: first suffixed release of the public v0.2.0", func(t *testing.T) {
 		w := newRelSuffixWorld(t, relSuffixConf("fork"))
 		head := relGit(t, w.work, "rev-parse", "HEAD")
-		out, err := w.run(nil)
+		out, err := w.runPinned(nil)
 		if err != nil || !strings.Contains(out, "version=v0.2.0-fork.1\n") {
 			t.Fatalf("want version v0.2.0-fork.1: %v\n%s", err, out)
 		}
@@ -1906,7 +2107,7 @@ func TestReleaseScriptSuffixVersion(t *testing.T) {
 	t.Run("row 2: the next number of the same base", func(t *testing.T) {
 		w := newRelSuffixWorld(t, relSuffixConf("fork"))
 		w.tagOn("v0.2.0-fork.3", "HEAD^1")
-		out, err := w.run(nil)
+		out, err := w.runPinned(nil)
 		if err != nil || !strings.Contains(out, "version=v0.2.0-fork.4\n") {
 			t.Fatalf("want version v0.2.0-fork.4: %v\n%s", err, out)
 		}
@@ -1918,7 +2119,7 @@ func TestReleaseScriptSuffixVersion(t *testing.T) {
 		w := newRelSuffixWorld(t, relSuffixConf("fork"))
 		w.tagOn("v0.2.0-fork.4", "HEAD")
 		w.absorbPublic("v0.2.1")
-		out, err := w.run(nil)
+		out, err := w.runPinned(nil)
 		if err != nil || !strings.Contains(out, "version=v0.2.1-fork.1\n") {
 			t.Fatalf("want version v0.2.1-fork.1: %v\n%s", err, out)
 		}
@@ -1942,7 +2143,7 @@ func TestReleaseScriptSuffixVersion(t *testing.T) {
 	// without the file patches the old line's floor as before.
 	t.Run("case 5: no configuration keeps the plain version", func(t *testing.T) {
 		w := newRelSuffixWorld(t, nil)
-		out, err := w.run(nil)
+		out, err := w.runPinned(nil)
 		if err != nil || !strings.Contains(out, "version=v0.2.13\n") {
 			t.Fatalf("want version v0.2.13: %v\n%s", err, out)
 		}
@@ -1952,10 +2153,10 @@ func TestReleaseScriptSuffixVersion(t *testing.T) {
 	// resumed, never released as a second version.
 	t.Run("case 6: a claimed suffixed version is resumed", func(t *testing.T) {
 		w := newRelSuffixWorld(t, relSuffixConf("fork"))
-		if out, err := w.run([]string{"FAKE_PUSH_FAIL=1"}); err == nil || !strings.Contains(out, "FAILED AFTER v0.2.0-fork.1 WAS CLAIMED") {
+		if out, err := w.runPinned([]string{"FAKE_PUSH_FAIL=1"}); err == nil || !strings.Contains(out, "FAILED AFTER v0.2.0-fork.1 WAS CLAIMED") {
 			t.Fatalf("setup: the first run must fail after claiming v0.2.0-fork.1: %v\n%s", err, out)
 		}
-		out, err := w.run([]string{"FAKE_REGISTRY_MISSING=1"})
+		out, err := w.runPinned([]string{"FAKE_REGISTRY_MISSING=1"})
 		if err != nil || !strings.Contains(out, "resuming v0.2.0-fork.1") || !strings.Contains(out, "version=v0.2.0-fork.1\n") {
 			t.Fatalf("the re-run must resume v0.2.0-fork.1: %v\n%s", err, out)
 		}
@@ -1968,7 +2169,7 @@ func TestReleaseScriptSuffixVersion(t *testing.T) {
 	// Case 8: the name is the configuration's, not the script's.
 	t.Run("case 8: another configured name", func(t *testing.T) {
 		w := newRelSuffixWorld(t, relSuffixConf("other"))
-		out, err := w.run(nil)
+		out, err := w.runPinned(nil)
 		if err != nil || !strings.Contains(out, "version=v0.2.0-other.1\n") {
 			t.Fatalf("want version v0.2.0-other.1: %v\n%s", err, out)
 		}
@@ -1977,7 +2178,7 @@ func TestReleaseScriptSuffixVersion(t *testing.T) {
 	// A name that is not one alphanumeric identifier refuses before any work.
 	t.Run("a malformed name refuses", func(t *testing.T) {
 		w := newRelSuffixWorld(t, relSuffixConf("fork.1"))
-		out, err := w.run(nil)
+		out, err := w.runPinned(nil)
 		if err == nil || !strings.Contains(out, "suffix") {
 			t.Fatalf("want a refusal naming the suffix: %v\n%s", err, out)
 		}

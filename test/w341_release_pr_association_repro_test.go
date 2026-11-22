@@ -1,3 +1,5 @@
+// carries: .polyforge/release.sh, test/w341_release_pr_association_repro_test.go
+
 package test
 
 // w341_release_pr_association_repro_test.go: a bug repro.
@@ -159,7 +161,7 @@ func TestW341ReleasePROnlyReliableAssociation(t *testing.T) {
 				{number: 797, mergeCommit: flaky, flaky: true},
 			})
 
-			out, err := w.run(nil)
+			out, err := w.runPinned(nil)
 			if err != nil {
 				t.Fatalf("release must pass when %s is the merge_commit_sha of a merged PR; the commits/<sha>/pulls endpoint is unreliable for it: %v\n%s",
 					flaky, err, out)

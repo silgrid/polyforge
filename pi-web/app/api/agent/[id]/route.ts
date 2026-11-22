@@ -4,6 +4,7 @@ import { getRpcSession, isSessionReloadedFromDiskError, setRpcSessionTools, star
 import { cwdMissingBody, missingCwdFromBody } from "@/lib/missing-cwd";
 import { getClaudeSessionRecord } from "@/lib/claude-index";
 import { CLAUDE_RESTART_REFUSED_CODE } from "@/lib/claude-shared";
+import { PI_RESTART_REFUSED_CODE } from "@/lib/bg-protocol";
 import {
   CLAUDE_SESSION_COMMANDS,
   claudeCommandEffort,
@@ -181,6 +182,12 @@ export async function POST(
       ...(missingCwd ? cwdMissingBody(missingCwd) : {}),
       ...(commandType === "prompt" && !promptAccepted
         ? { code: promptCode, accepted: false }
+        : {}),
+      // A pi command refused over unfinished background work answers the
+      // structured code for any command type (AC3), so the client can roll
+      // its view back without guessing from the message.
+      ...((error as { code?: string }).code === PI_RESTART_REFUSED_CODE && commandType !== "prompt"
+        ? { code: PI_RESTART_REFUSED_CODE }
         : {}),
     }, { status: 500 });
   }

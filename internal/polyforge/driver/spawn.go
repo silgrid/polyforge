@@ -154,6 +154,7 @@ func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun
 		Definition:              def,
 		PriorEndedWithoutResult: sp.PriorEndedWithoutResult,
 		Language:                a.liveLanguage(),
+		Harness:                 sp.Harness,
 	}
 	// the step's skill (the lane snapshot's markdown, the loader judged it)
 	if spec.Skill != "" {
@@ -164,7 +165,10 @@ func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun
 		parts.Skill = renderSkill(sk)
 	}
 	h := harness.Of(sp.Harness)
-	parts.NoSubagents = subagentsFact(a.BundleDir, sp.StepID, h)
+	if value := strings.TrimSpace(sp.Params["pi_subagents"]); value != "" && !strings.EqualFold(value, "on") && !strings.EqualFold(value, "off") {
+		return nil, fmt.Errorf("driver: invalid pi_subagents value %q (want on or off)", value)
+	}
+	parts.NoSubagents = subagentsFact(a.BundleDir, sp.StepID, h, sp.Params)
 	var transcript, hsession string
 	resume := sp.Resume
 	// degraded names why a resume the driver ordered became a new
@@ -310,15 +314,14 @@ const subagentsRulesVar = "build_subagents"
 // AGENTS.md/CLAUDE.md, skills and prompt templates the step runs
 // without. Until a worker can run isolated, a pi step does the work
 // itself.
-const piNoSubagents = "This dispatch runs on pi, whose sub-agents do not run with this step's isolation: " +
-	"a worker the `subagent` tool starts loads the context files, skills and prompt templates this " +
-	"step was started without. Dispatch no sub-agent: do the analysis and build every unit yourself, " +
-	"record each unit's `implemented_by` in `artifacts/build/units.json` as `main`, and say in your hand-off that this harness offers no isolated sub-agent."
+const piNoSubagents = "This dispatch runs on pi with the daemon-owned worker available, but pi_subagents is off: " +
+	"keep the current main-agent path, do the analysis and build every unit yourself, record each unit's " +
+	"implemented_by as main, and do not dispatch a sub-agent."
 
 // subagentsFact answers the sub-agent fact of one dispatch: piNoSubagents
 // on a pi dispatch of a step whose definition includes the sub-agent
 // rules, else "".
-func subagentsFact(bundleDir, stepID, h string) string {
+func subagentsFact(bundleDir, stepID, h string, params map[string]string) string {
 	if h != harness.Pi {
 		return ""
 	}
@@ -326,7 +329,14 @@ func subagentsFact(bundleDir, stepID, h string) string {
 	if err != nil || !strings.Contains(string(raw), "{{"+subagentsRulesVar+"}}") {
 		return ""
 	}
+	if piSubagentsEnabled(params) {
+		return ""
+	}
 	return piNoSubagents
+}
+
+func piSubagentsEnabled(params map[string]string) bool {
+	return strings.EqualFold(strings.TrimSpace(params["pi_subagents"]), "on")
 }
 
 // launch derives the step process for an assembled prompt: the dispatch's
@@ -581,6 +591,7 @@ type promptParts struct {
 	// carries its instruction (languageInstruction); "" reads as the
 	// default.
 	Language string
+	Harness  string
 	// ContinueInPlace selects the fast-path reference
 	// instruction: the tree is byte-identical to the previous attempt's
 	// death, so the new conversation continues in place instead of
@@ -601,7 +612,20 @@ const (
 	continuationHeading = "# Continuing this step"
 )
 
-// assembleStepPrompt builds the step process's one instruction of record
+func piCapabilityChange(changed map[string]string, h string) string {
+	if h != harness.Pi {
+		return ""
+	}
+	value, ok := changed["pi_subagents"]
+	if !ok {
+		return ""
+	}
+	if strings.EqualFold(strings.TrimSpace(value), "on") {
+		return "\nPi subagents are enabled for this dispatch: use the daemon `subagent` tool with `agent: \"worker\"`, one task at a time."
+	}
+	return "\nPi subagents are disabled for this dispatch; keep `implemented_by: main` and do not dispatch a worker."
+}
+
 // from the six fixed parts of workflow contract 4 (design #483 §8), in
 // order: (1) the dispatch — its identity, the language it works in, the
 // capsule root and this dispatch's facts (a pi dispatch runs no sub-agent;
@@ -619,13 +643,20 @@ func assembleStepPrompt(p promptParts) string {
 		// the owner's words continue the conversation they were written
 		// to (relay.go): exactly what a live delivery sends — and the
 		// params that changed since, when any did
+		var parts []string
 		if s := paramsChangedSection(p.ParamsChanged); s != "" {
-			return renderOwnerMessages(p.OwnerMessages) + "\n" + s
+			parts = append(parts, s)
 		}
-		return renderOwnerMessages(p.OwnerMessages)
+		if s := piCapabilityChange(p.ParamsChanged, p.Harness); s != "" {
+			parts = append(parts, s)
+		}
+		if len(parts) == 0 {
+			return renderOwnerMessages(p.OwnerMessages)
+		}
+		return renderOwnerMessages(p.OwnerMessages) + "\n" + strings.Join(parts, "\n")
 	}
 	if p.ShortEwrResume {
-		return ewrResumeReminder(p) + continuationPart(promptParts{OwnerMessages: p.OwnerMessages, ParamsChanged: p.ParamsChanged})
+		return ewrResumeReminder(p) + continuationPart(promptParts{OwnerMessages: p.OwnerMessages, ParamsChanged: p.ParamsChanged}) + piCapabilityChange(p.ParamsChanged, p.Harness)
 	}
 	var b strings.Builder
 	// 1. the dispatch
@@ -813,8 +844,8 @@ func changedParams(prev, cur map[string]string) map[string]string {
 // TestW82EwrReminderCarriesToolNameCorrection.
 const toolNameCorrection = "This environment runs no MCP server: no `mcp__…`-shaped tool name exists. " +
 	"The tools available to you are exactly the built-ins your harness opened this conversation with — " +
-	"on a pi dispatch `bash`, `read`, `edit`, `write` (plus `subagent`, when the operator's agent dir " +
-	"carries the sub-agent extension); on a claude dispatch `Bash`, `Read`, `Edit`, `Write`, `Glob`, " +
+	"on a pi dispatch `bash`, `read`, `edit`, `write` (plus `subagent`, when the daemon-owned " +
+	"worker extension is installed); on a claude dispatch `Bash`, `Read`, `Edit`, `Write`, `Glob`, " +
 	"`Grep`, `TodoWrite`, `Agent`. A `Tool … not found` reply means you wrote a wrong name: retry with " +
 	"the exact name from that list. It is not an environment fault, and never a reason to stop working " +
 	"or to end your turn without `pf step handoff`."

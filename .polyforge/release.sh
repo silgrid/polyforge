@@ -2,9 +2,25 @@
 # polyforge's own release procedure.
 #
 # Usage:
-#   sh .polyforge/release.sh [patch]                 release (default: patch)
+#   sh .polyforge/release.sh [patch] --pins <file>   release (default: patch)
 #   sh .polyforge/release.sh --verify <tag>          read-only audit of a release
 #   sh .polyforge/release.sh --help
+#
+# The release object is the green integrate batch's pinned commits
+# (polyforge#154): the release lane resolves the project's most recent
+# green integrate batch and passes its pins with --pins - one JSON file,
+# {"batch": "<batch id>", "repos": {"<repo>": "<sha>", ...}}, one entry per
+# repo the batch judged, plus "red_batches_after": [<batch id>, ...] when
+# red batches closed after it (the release notes name them). The repo this
+# script runs in releases ITS pinned commit: the clone must sit at it (HEAD
+# is one of the pins' shas) and it must be on the origin default branch's
+# history (an ancestor-or-equal of origin/$BRANCH) - a pinned commit the
+# default branch has moved PAST still releases, exactly the shape the
+# origin-head release could not; one the branch no longer carries refuses.
+# A run without --pins, or a pins file that is not that shape, refuses with
+# nothing built or published: the release object is never a branch head
+# and never guessed. An old script whose --help does not declare --pins is
+# refused by the lane with PF-RELEASE-PROCEDURE_CONTRACT before it runs.
 #
 # Version scheme: vX.Y.Z semver. The floor is the highest semver among the tags
 # on ORIGIN (git ls-remote; local tags are ignored, and a failing ls-remote is
@@ -49,11 +65,15 @@
 # ruling and a major one an architecture rebuild, neither of which this script
 # can judge.
 #
-# Release, in order (nothing is published before the gate passes):
-#   1. refuse a dirty worktree; fetch origin; refuse unless HEAD == origin/main;
-#      when HEAD already carries exactly one release tag on origin, RESUME that
-#      version instead of computing one (see "Resume" below; two or more tags
-#      on HEAD refuse); else compute the version from the origin tags; the
+# Release, in order (nothing is published before a check passes):
+#   1. refuse a dirty worktree; read and validate the pins (python3 parses
+#      the JSON: batch a non-empty string, repos a non-empty map of full
+#      commit ids, red_batches_after a list of ids); fetch origin; refuse
+#      unless HEAD is one of the pins' commits and on origin/$BRANCH's
+#      history; when the pinned commit already carries exactly one release
+#      tag on origin, RESUME that version instead of computing one (see
+#      "Resume" below; two or more tags on it refuse); else compute the
+#      version from the origin tags; the
 #      preflight (step 1b''' below: tools, node major, the ghcr.io push
 #      credential - every problem in one message); refuse unless every commit that entered
 #      main since the previous release tag came through a merged PR or is an
@@ -72,11 +92,13 @@
 #      package (step 1b'''' below), so it never pushes over another build;
 #   2. design-doc cross-reference gate (docs/design/polyforge-vnext/tools/
 #      check-xrefs.py, the Makefile's `xrefs` check; python3 is REQUIRED here -
-#      unlike `make xrefs`, a release never skips it), then the test gate
-#      (see "Test gate" below: the verification's full plan inside its
-#      container, or the reused result of a green tag on HEAD); the
-#      dependency audit follows the binaries build - step 3b below, the
-#      same gate the verification bar runs;
+#      unlike `make xrefs`, a release never skips it). The release runs NO
+#      test gate of its own (polyforge#154): the green integrate batch's
+#      own full-gate run - the run that made the batch green, on exactly
+#      the pinned commits this script releases - is the test evidence, and
+#      the release notes name the batch (see "The green batch's pins"
+#      below). The dependency audit follows the binaries build - step 3b
+#      below, the same gate the verification bar runs;
 #   3. build the binaries (GOWORK=off make release VERSION=<tag>) -> the
 #      one pf binary for linux-amd64, darwin-arm64, darwin-amd64
 #      (the server runs as `pf aihub`); build the image from
@@ -103,9 +125,10 @@
 #   6. gh release create <tag> with the 5 payload assets (3 pf binaries +
 #      digest + pi-web tarball) + SHA256SUMS + release-manifest.json,
 #      notes from docs/release-notes/<tag>.md (generated from git log when
-#      absent), followed by a "Test gate" section naming how the gate passed
-#      (the green tag reused, or the gate run in its container, with the gate
-#      id; the committed notes file itself is never changed); the notes never
+#      absent), followed by an "## Integration batch" section naming the
+#      green integrate batch the release object came from, and the red
+#      batches that closed after it, for the owner's information (the
+#      committed notes file itself is never changed); the notes never
 #      exceed GitHub's 125000-character release-body limit, counted in bytes
 #      (>= the character count under UTF-8) and checked BEFORE the version is
 #      claimed: the generated commit list is cut to the newest commits within
@@ -119,42 +142,29 @@
 #      second version line.
 # Last lines on stdout: version=<tag>, commit=<sha>, notes=<release url>.
 #
-# Test gate: ONE definition, the same one the integrate
-# workflow's full verification runs before it marks a commit releasable -
-# the tree's own scope-engine plan (workflows/_shared/scripts/verify-scope --json --full --base
-# HEAD: the fast gates, the full commands and the engine-appended
-# dependency audit, in that order) with every command, the engine included,
-# run inside the container built from .polyforge/Dockerfile.verify.
-# The tree's own workflow script runs it - python3
-# workflows/_shared/scripts/gate.py --isolation container (the shared
-# library pfstep's container executor: the image tag, the mounts, the
-# environment allowlist, the limits and the per-command timeouts are the
-# workflow scripts' own) - from the repository root, its logs kept in the ignored
-# artifacts/release-<tag>/gate/ (the image build and one log per command;
-# a failing command's tail is printed). Nothing of the gate runs on this
-# host, so a host-only difference (a docker client on PATH, a tmux, another
-# toolchain) can no longer turn red a gate the container passes: on
-# 2026-11-08 the host-run gate (then `make test`) failed a test because the
-# host had a docker client, while the containerized full bar of the same
-# tree passed. `make test` stays a developer convenience; no release step
-# runs it. The gate passes only when every planned command ran and exited
-# 0.
-# Before running it the release asks tools/green-tag check <commit> (against
-# REMOTE) whether the released commit carries a green tag - an annotated
-# green/<YYYYMMDD>-<n> tag whose JSON message records that commit, its
-# gate_id, the runner (gate.py and its version) and the digest of the plan
-# as executed - matching this tree's tools/gate-id (the hash of the conf's
-# gate lines and of Dockerfile.verify) and the runner and plan digest
-# `gate.py --plan-only` computes for HEAD now (the same path a gate run
-# takes, in the same container, under the gate's default limits). A match means this gate
-# already passed on exactly this commit: it is not run again, the run says
-# so and the release notes name the tag. No tag, another gate id, runner or
-# plan, or a check that cannot tell: the gate runs. A green tag is never
-# written here: only `gate.py --mark-green`, after a pass, writes one (the
-# integrate workflow's full gate, or a human running it).
-# A gate gate.py cannot judge - exit 2: no docker engine, no Dockerfile, no
-# image, no plan, its deadline, an interrupt - fails the release as "not
-# judged", never as a red gate.
+# The green batch's pins: the release object and the test evidence
+# (polyforge#154). The lane resolves the project's most recent green
+# integrate batch (workflows/_shared/scripts/release.py: its record's main
+# is every judged repo's green head) and hands the whole group to this
+# script. This repo's own pin is released - the tag, the image, the
+# binaries, the notes; the other repos' pins are the group this release
+# belongs to and ride the lane's release record, not this script's
+# publish. The batch's own full-gate run is the test evidence: gate.py ran
+# the verification's full plan on exactly these pinned commits inside the
+# container built from .polyforge/Dockerfile.verify and wrote the green tag
+# the batch record names - that is what a green batch IS - so this script
+# runs no test gate of its own (no green-tag check, no gate.py, no
+# `make test`): a green tag is never read here (tools/green-tag stays, for
+# the integrate workflow and tools/install.sh's dev channel) and a green
+# tag is never written here. The release notes say the same, in an
+# "## Integration batch" section naming the batch (and the red batches that
+# closed after it, for the owner's information) - that section replaces
+# the old "## Test gate" one.
+# What the release still checks itself, before the claim: the pins
+# (step 1), the design-doc cross-reference gate (step 2), the PR-only
+# check, the workflow-contract check, the machine preflight and - after
+# the binaries build - the dependency audit (step 3b). A red there is
+# this script's own refusal, never a test verdict.
 #
 # --verify <tag> (no mutation, no tests, no build): tag format; strict
 # monotonicity (the tag must be strictly greater than EVERY other release tag on
@@ -269,12 +279,6 @@
 # Environment overrides (mainly for the fake-env tests):
 #   RELEASE_XREFS_CMD   xrefs gate command        (default: python3 -I
 #                       docs/design/polyforge-vnext/tools/check-xrefs.py)
-#   RELEASE_TEST_CMD    test gate command; when set it replaces the whole
-#                       gate - no green tag is consulted (default:
-#                       tools/green-tag check, then python3
-#                       workflows/_shared/scripts/gate.py --isolation
-#                       container from the root unless a green tag is
-#                       reused)
 #   RELEASE_AUDIT_CMD   dependency-audit gate command (default: the scope
 #                       engine's own `audit` command - the one named `audit`
 #                       of workflows/_shared/scripts/verify-scope --json
@@ -304,8 +308,8 @@
 #                       check (default: none; see the PR-only check above)
 #   DOCKER_CONFIG       docker config dir (ghcr login check; default ~/.docker)
 # Each *_CMD override, when non-empty, runs via sh -c INSTEAD of its default;
-# unset or empty keeps the default. They are independent: RELEASE_TEST_CMD
-# replaces only the test gate, the xrefs gate still runs.
+# unset or empty keeps the default. They are independent: each override
+# replaces only its own gate.
 set -eu
 
 REMOTE="${RELEASE_REMOTE:-origin}"
@@ -361,9 +365,14 @@ remote_urls() {
 
 usage() {
   cat <<'USAGE'
-usage: release.sh [patch]                 cut a release (bump: patch, default patch)
+usage: release.sh [patch] --pins <file>   cut a release (bump: patch, default patch)
        release.sh --verify <tag>          read-only verification of a published release
        release.sh --help
+
+--pins names the green integrate batch's pins ({batch, repos: {<name>: <sha>}},
+one entry per repo the batch judged) - the pinned commits are the release
+object; this repo releases its own pin (the clone at it, on the default
+branch's history).
 USAGE
 }
 
@@ -757,22 +766,75 @@ if [ "${1:-}" = "--verify" ]; then
 fi
 
 # --------------------------------------------------------------- release mode
-BUMP="${1:-patch}"
+# The arguments: one optional bump (patch, the default) and the required
+# --pins <file> (the green integrate batch's pins - the release object).
+BUMP="patch"
+PINS=""
+set -- "$@"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --pins)
+      [ $# -ge 2 ] || { usage >&2; die "--pins needs the pins file (the green integrate batch's pins: {batch, repos: {<name>: <sha>}}); nothing built or published"; }
+      PINS="$2"; shift 2 ;;
+    patch|minor|major)
+      BUMP="$1"; shift ;;
+    *)
+      usage >&2; die "unknown argument \"$1\" (a release is [bump] --pins <file>; --verify <tag> audits a published release); nothing built or published" ;;
+  esac
+done
 case "$BUMP" in
   patch) ;;
   minor|major) die "bump $BUMP refused, nothing published: 中间版本号跳跃需 owner 明确声明 - routine releases are patch only; a minor/major jump needs an explicit owner ruling (CONTRIBUTING.md \"Version line\")" ;;
-  *) usage >&2; die "bump must be patch (got \"$BUMP\")" ;;
 esac
-[ $# -le 1 ] || { usage >&2; exit 2; }
+[ -n "$PINS" ] || die "--pins <file> is required (the green integrate batch's pins: {batch, repos: {<name>: <sha>}}) - the release object is the batch's pinned commits, never a branch head; nothing built or published"
 
 cd "$(git rev-parse --show-toplevel)"
 
-# 1. clean tree, HEAD == origin/main.
+# 1. clean tree, the pins, HEAD on the pins' commit and on the default branch.
 [ -z "$(git status --porcelain)" ] || die "worktree is dirty; commit or stash first"
+# python3 is a hard prerequisite BEFORE the preflight: the pins file is parsed
+# with it, so a machine without it refuses here, naming it (the preflight
+# reports every tool together, but this one is needed before it can run).
+command -v python3 >/dev/null 2>&1 || die "python3 is not on PATH: the green batch's pins file (--pins) is parsed with it, and so are the default xrefs gate and the dependency audit's scope engine - install it and run again; nothing built or published, no version claimed"
+# The pins file is parsed and validated with python3: batch a non-empty
+# string, repos a non-empty map of full commit ids, red_batches_after (when
+# present) a list of ids. PINS_SHAS carries the shas one per line for the
+# HEAD membership check; BATCH the batch's id; RED_AFTER the after-batches.
+PINS_EVAL=$(python3 -c '
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception as err:
+    sys.exit("the pins file %s is not readable JSON: %s" % (sys.argv[1], err))
+if not isinstance(d, dict):
+    sys.exit("the pins file %s is not a JSON object" % sys.argv[1])
+b = d.get("batch")
+if not isinstance(b, str) or not b:
+    sys.exit("the pins file names no batch: batch must be a non-empty string")
+repos = d.get("repos")
+if not isinstance(repos, dict) or not repos:
+    sys.exit("the pins file names no repos: repos must be a non-empty map of repo to full commit id")
+shas = []
+for name, sha in sorted(repos.items()):
+    if not isinstance(sha, str) or len(sha) != 40 or sha.strip("0123456789abcdef") != "":
+        sys.exit("the pins file: repo %s names %r, not a full commit id (40 lowercase hex)" % (name, sha))
+    shas.append(sha)
+red = d.get("red_batches_after", [])
+if not isinstance(red, list) or any(not isinstance(x, str) or not x for x in red):
+    sys.exit("the pins file: red_batches_after must be a list of batch ids")
+print(b)
+print("RED_AFTER=" + ",".join(red))
+print("\n".join(shas))
+' "$PINS" 2>&1) || die "${PINS_EVAL:-the pins file could not be read (is python3 on PATH? the preflight checks it too)} - the release object is the green batch's pins and nothing else may be invented; nothing built or published"
+BATCH=$(printf '%s\n' "$PINS_EVAL" | sed -n 1p)
+RED_AFTER=$(printf '%s\n' "$PINS_EVAL" | sed -n 's/^RED_AFTER=//p')
+PINS_SHAS=$(printf '%s\n' "$PINS_EVAL" | sed -n '3,$p')
 git fetch "$REMOTE" >/dev/null 2>&1 || die "git fetch $REMOTE failed"
 COMMIT=$(git rev-parse HEAD)
 OMAIN=$(git rev-parse "refs/remotes/$REMOTE/$BRANCH" 2>/dev/null) || die "$REMOTE/$BRANCH not found"
-[ "$COMMIT" = "$OMAIN" ] || die "HEAD ($COMMIT) is not $REMOTE/$BRANCH ($OMAIN); release only from the pushed tip of $BRANCH"
+printf '%s\n' "$PINS_SHAS" | grep -qx "$COMMIT" || die "HEAD ($COMMIT) is none of the pins the batch names ($(printf '%s' "$PINS_SHAS" | tr '\n' ' '))- the clone must sit at its repo's pinned commit; nothing built or published"
+git merge-base --is-ancestor "$COMMIT" "$OMAIN" || die "HEAD ($COMMIT) is not on the history of $REMOTE/$BRANCH ($OMAIN) - the green batch's pinned commit is gone from the default branch; a new green batch is needed; nothing built or published"
+echo "release: the green integrate batch $BATCH pins this repo at $COMMIT (origin/$BRANCH at $OMAIN)"
 
 # 1b. the origin tags are the only source of truth: a failing ls-remote is fatal.
 LS=$(ls_tags) || die "git ls-remote --tags $REMOTE failed - cannot read the origin tags; nothing built or published"
@@ -944,22 +1006,21 @@ fi
 # 1b'''. preflight: every machine prerequisite of the rest of
 # the run is checked HERE, before the gates, the build and the claim, and
 # every problem is reported in ONE message. Before it, a missing prerequisite
-# surfaced in the middle of the run: the node major in the test gate (#144),
+# surfaced in the middle of the run: the node major at the build (#144),
 # the ghcr.io push credential only AFTER the tag was pushed (#265: the login
 # was skipped because docker's config already named ghcr.io, with a
 # credential that could not push).
 #   - tools: git gh docker npm node sha256sum tar, plus make and go for the
-#     default build, python3 for the default xrefs gate, the default
-#     test gate (workflows/_shared/scripts/gate.py) and the default
-#     dependency audit (the scope engine that reports the audit command;
-#     it needs python3 >= 3.9 - an older one is a preflight problem, never
-#     a gate verdict), and, for the default dependency audit's Go surface
-#     (a root go.mod gives the engine's audit command its --go flag:
-#     govulncheck loads every Go package), go and govulncheck
-#     (polyforge#113: the audit runs on the release host after the build);
+#     default build, and python3 always (the green batch's pins file is
+#     parsed with it; the default xrefs gate and the default dependency
+#     audit's scope engine need it too - python3 >= 3.9, an older one is a
+#     preflight problem, never a gate verdict), and, for the default
+#     dependency audit's Go surface (a root go.mod gives the engine's audit
+#     command its --go flag: govulncheck loads every Go package), go and
+#     govulncheck (polyforge#113: the audit runs on the release host after
+#     the build);
 #   - node: its major must equal the repo-root .nvmrc's (when present) - for
-#     the build on this host; the test gate runs in its container, with the
-#     image's own node;
+#     the build on this host;
 #   - the ghcr.io credential (an image on ghcr.io): a stored ghcr.io login is
 #     kept when it can read the image's repository (the previous tag's
 #     image; this cannot prove it can push, and the run says so); a stored
@@ -971,15 +1032,8 @@ fi
 PF_PROBLEMS=""
 pf_problem() { PF_PROBLEMS="$PF_PROBLEMS
   - $*"; }
-_need="git gh docker npm node sha256sum tar"
+_need="git gh docker npm node sha256sum tar python3"
 [ -n "${RELEASE_BUILD_CMD:-}" ] || _need="$_need make go"
-# python3: whichever of the default xrefs gate, the default test gate and
-# the default dependency audit runs (the audit's scope engine needs it)
-if [ -n "${RELEASE_XREFS_CMD:-}" ] && [ -n "${RELEASE_TEST_CMD:-}" ] && [ -n "${RELEASE_AUDIT_CMD:-}" ]; then
-  :
-else
-  _need="$_need python3"
-fi
 # the default dependency audit's Go surface (polyforge#113): a root go.mod
 # gives the engine's audit command --go, whose govulncheck loads every Go
 # package - so the release host needs go and govulncheck, checked HERE
@@ -989,14 +1043,14 @@ fi
 _miss=""
 for _c in $_need; do command -v "$_c" >/dev/null 2>&1 || _miss="$_miss $_c"; done
 [ -z "$_miss" ] || pf_problem "tool(s) not on PATH:$_miss"
-if { [ -z "${RELEASE_TEST_CMD:-}" ] || [ -z "${RELEASE_AUDIT_CMD:-}" ]; } && command -v python3 >/dev/null 2>&1 \
+if command -v python3 >/dev/null 2>&1 \
   && ! python3 -c 'import sys; sys.exit(sys.version_info < (3, 9))' >/dev/null 2>&1; then
-  pf_problem "python3 $(python3 -c 'import platform; print(platform.python_version())' 2>/dev/null || echo '(version unreadable)') is older than 3.9: the test gate (workflows/_shared/scripts/gate.py) and the dependency audit's scope engine need python3 >= 3.9 - install a newer one first"
+  pf_problem "python3 $(python3 -c 'import platform; print(platform.python_version())' 2>/dev/null || echo '(version unreadable)') is older than 3.9: the green batch's pins file (the --pins JSON) is parsed with it, and so are the default xrefs gate and the dependency audit's scope engine - install a newer one first"
 fi
 if [ -f .nvmrc ] && command -v node >/dev/null 2>&1; then
   _want=$(sed -n '1{s/^[[:space:]]*v\{0,1\}//; s/[.[:space:]].*$//; p;}' .nvmrc)
   _have=$(node --version 2>/dev/null | sed 's/^v//; s/\..*$//')
-  [ "$_want" = "$_have" ] || pf_problem "node $(node --version 2>/dev/null) is not major $_want (pinned by .nvmrc; the build on this host needs it - the test gate uses the node of its container): install node $_want.x first"
+  [ "$_want" = "$_have" ] || pf_problem "node $(node --version 2>/dev/null) is not major $_want (pinned by .nvmrc; the build on this host needs it): install node $_want.x first"
 fi
 DCFG="${DOCKER_CONFIG:-$HOME/.docker}/config.json"
 case "$IMAGE" in
@@ -1160,10 +1214,13 @@ else
   echo "release: contract: first release, no previous tag to compare against"
 fi
 
-# 2. xrefs gate, then the test gate. A resume runs them too: a tag proves a
-# claim, not that the gates passed (a hand-made tag carries none), and the
-# missing parts are built from this tree now. A gate failure publishes
-# nothing and claims no version (a resumed one stays claimed, resumable).
+# 2. the xrefs gate - the release's one check before the build (the
+# dependency audit follows it, after the binaries). A resume runs it too:
+# a tag proves a claim, not that the checks passed (a hand-made tag carries
+# none), and the missing parts are built from this tree now. A failure
+# publishes nothing and claims no version (a resumed one stays claimed,
+# resumable). No test gate runs here: the green integrate batch's own
+# full-gate run is the test evidence (see the header).
 echo "release: running the design-doc cross-reference check"
 XREFS="docs/design/polyforge-vnext/tools/check-xrefs.py"
 if [ -n "${RELEASE_XREFS_CMD:-}" ]; then
@@ -1171,42 +1228,6 @@ if [ -n "${RELEASE_XREFS_CMD:-}" ]; then
 else
   command -v python3 >/dev/null 2>&1 || die "python3 not found: the release gate runs $XREFS and does not skip it; nothing built or published, $NOCLAIM"
   python3 -I "$XREFS" || die "design-doc cross-reference check failed ($XREFS); fix the references (make xrefs) and release again; nothing built or published, $NOCLAIM"
-fi
-echo "release: running test gate"
-# The gate's identity (see "Test gate" above): what a reusable green tag must
-# record, and what the release notes name either way.
-GATE_ID=$(sh tools/gate-id) || die "cannot compute the test gate's id (tools/gate-id at $COMMIT); nothing built or published, $NOCLAIM"
-GREEN=""
-if [ -n "${RELEASE_TEST_CMD:-}" ]; then
-  # an override replaces the whole gate: no green tag is consulted (a green
-  # tag records the gate's plan, which this command is not)
-  echo "release: test gate: RELEASE_TEST_CMD replaces the gate (gate $GATE_ID; no green tag consulted)"
-  GATE_RECORD="Ran RELEASE_TEST_CMD (gate \`$GATE_ID\`)."
-  TGRC=0
-  sh -c "$RELEASE_TEST_CMD" || TGRC=$?
-  [ "$TGRC" -eq 0 ] || die "test gate failed (sh -c \"\$RELEASE_TEST_CMD\" exited $TGRC; the failing tests are named above); nothing built or published, $NOCLAIM - after a fix, or for a flake, run the release again"
-else
-  # the tree's gate.py both answers the green-tag check (its --plan-only
-  # digest of HEAD's plan) and, without a reusable tag, is the gate
-  GATE_PY=workflows/_shared/scripts/gate.py
-  [ -f "$GATE_PY" ] || die "the tree carries no test gate ($GATE_PY at $COMMIT); nothing built or published, $NOCLAIM"
-  if GREEN=$(sh tools/green-tag check "$COMMIT" --remote "$REMOTE" 2>"$WORK/green.err"); then
-    echo "release: test gate: $COMMIT carries the green tag $GREEN on $REMOTE for gate $GATE_ID, written by the gate for this plan - that result is reused, the gate is not run again"
-    GATE_RECORD="Not run again: the commit carries the green tag \`$GREEN\` for gate \`$GATE_ID\` (tools/green-tag check: written by gate.py --mark-green after a pass of the same plan on this commit)."
-  else
-    echo "release: test gate: no reusable green tag ($(tail -n 1 "$WORK/green.err")) - running the gate (gate $GATE_ID)"
-    # A red test gate (a flake as often as a defect: #155 #184 #353) is cheap to
-    # retry: nothing is built or published and no version is claimed, so the next
-    # run computes the same version (a resumed one stays claimed and resumable).
-    GATE_RECORD="Ran in the verification container (.polyforge/Dockerfile.verify; the full plan of workflows/_shared/scripts/verify-scope, workflows/_shared/scripts/gate.py) for gate \`$GATE_ID\`."
-    TGRC=0
-    python3 "$GATE_PY" --isolation container --log-dir "artifacts/release-$TAG/gate" || TGRC=$?
-    case "$TGRC" in
-      0) ;;
-      2) die "test gate not judged: gate.py exited 2 - it could not judge the tree (its container, image or plan, its deadline or an interrupt; the reason is above), which is not a red gate; nothing built or published, $NOCLAIM - fix the cause and run the release again" ;;
-      *) die "test gate failed (gate.py exited $TGRC; the failing command and its log tail are above); nothing built or published, $NOCLAIM - after a fix, or for a flake, run the release again" ;;
-    esac
-  fi
 fi
 
 # build binaries: the full matrix (linux-amd64 pf consumed by the image
@@ -1236,14 +1257,15 @@ fi
 # demo included - never the one hardcoded tree of the old gate. It runs
 # AFTER the binaries build (govulncheck loads every Go package, so the
 # console SPA's go:embed tree must exist; a resume that built no binary
-# builds it here) and unconditionally: a reused green tag skips the test
-# gate, never the audit - the advisory feed moves, a green tag says nothing
-# about today's advisories. RELEASE_AUDIT_CMD (mainly for the fake-env
-# tests) replaces the whole gate.
+# builds it here) and unconditionally: the release runs no test gate (the
+# green integrate batch's own full-gate run is the test evidence), so
+# nothing can skip the audit - the advisory feed moves, a green batch says
+# nothing about today's advisories. RELEASE_AUDIT_CMD (mainly for the
+# fake-env tests) replaces the whole gate.
 echo "release: running dependency-audit gate"
 if [ -n "${RELEASE_AUDIT_CMD:-}" ]; then
   echo "release: dependency-audit gate: $RELEASE_AUDIT_CMD"
-  sh -c "$RELEASE_AUDIT_CMD" || die "dependency-audit gate failed (RELEASE_AUDIT_CMD); nothing published, $NOCLAIM"
+  sh -c "$RELEASE_AUDIT_CMD" || die "dependency-audit gate failed (RELEASE_AUDIT_CMD); nothing published, $NOCLAIM - after a fix, or for an owner-ruled exemption row, run the release again"
 else
   ENGINE=workflows/_shared/scripts/verify-scope
   [ -f "$ENGINE" ] || die "the tree carries no scope engine ($ENGINE at $COMMIT), so no dependency-audit command to run; nothing published, $NOCLAIM"
@@ -1310,7 +1332,13 @@ if [ -z "$REL_EXISTS" ]; then
       fi
     } >"$WORK/notes.md"
   fi
-  printf '\n## Test gate\n\n%s\n' "$GATE_RECORD" >>"$WORK/notes.md"
+  {
+    printf '\n## Integration batch\n\n'
+    printf 'Released from the green integrate batch `%s` - its pinned commits are the release object;\nits full-gate run is the test evidence (this procedure runs no test gate of its own).\n' "$BATCH"
+    if [ -n "$RED_AFTER" ]; then
+      printf '\nRed batch(es) closed after it: %s (for the information of the owner).\n' "$(printf '%s' "$RED_AFTER" | tr ',' ' ')"
+    fi
+  } >>"$WORK/notes.md"
   if [ -n "$ALLOW_COMMITS" ]; then
     {
       printf '\n## PR-only exceptions\n\nFirst-parent commits without a merged PR, let through for this release by RELEASE_ALLOW_COMMITS:\n\n'
@@ -1327,6 +1355,7 @@ if [ -z "$REL_EXISTS" ]; then
 fi
 
 # 4. the atomic claim: tag push, no force. A resume claimed $TAG before.
+# The tag lands on the pinned commit - the batch's, never a branch tip.
 if [ -z "$RESUME" ]; then
   git tag -a "$TAG" -m "release $TAG" "$COMMIT"
   if ! git push "$REMOTE" "refs/tags/$TAG"; then
@@ -1345,8 +1374,8 @@ POSTFAIL() {
 release: FAILED AFTER $TAG WAS CLAIMED ($TAG at $COMMIT; failing step: $1).
 Nothing has been deleted, moved or rolled back. The version is claimed, NOT
 burned - resume it:
-  - fix the cause, then run this script again from the same commit
-    (origin/$BRANCH still at $COMMIT, clean worktree). It finds $TAG on
+  - fix the cause, then run this script again from the same pinned commit
+    ($COMMIT, still on $REMOTE/$BRANCH's history, clean worktree). It finds $TAG on
     $COMMIT and resumes it: what is already published (the image, the
     GitHub release and its assets) is checked and kept, only what is missing
     is published; no second version is cut. A release workflow work item

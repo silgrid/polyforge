@@ -45,7 +45,10 @@
    unit whose `replay` carries `not_runnable` has no red
    evidence (its run could not run there: a build, setup, compile or import error, a
    missing module) — neither red nor a pass: blocking `test_weakened`, naming the unit and
-   its `rule`, never made up for by reading the code. So is a deleted or relaxed assertion, a new skip, a
+   its `rule`, never made up for by reading the code. So does a unit whose `replay` was
+   killed at its own limit (`limit_kill`): its red-state run did not exit non-zero within
+   its limit, so no red evidence — the fix is build's (a bounded wait, an assertion that
+   fails at once, or the unit self-reports a higher `timeout` in units.json). So is a deleted or relaxed assertion, a new skip, a
    changed `carries:` header, a changed helper or fixture the test relies on, or an
    input changed so the assertion holds trivially, with no finding cited for it in
    build's 关键决定和理由.
@@ -87,4 +90,17 @@
    `artifacts/facts/analysis.json` (`facts.py analysis`) names each entry that fails the
    close check (the same shared validator this gate's machine twin calls): a listed test
    that does not exist, cannot run as written, or whose run does not show its marker is a
-   blocking `test_weakened` finding naming the entry.
+   blocking `test_weakened` finding naming the entry. The analysis's `selected` section —
+   the machine selection the build close's scoped run records, the same selection this
+   gate's verification twin plans — is part of the same judgment, read with the
+   close-scoped results that wrote it (`artifacts/build/scoped-close/<repo>.json`): a
+   touched repo with no record and no result explaining its absence (an `incomplete`
+   close-scoped, a red the owner ruled a residual, or a red every entry of whose `reds[]`
+   the run records `pre_existing` — each cited in the hand-off; a work
+   item whose verification runs the full bar (an integration batch's fix ticket) closes
+   without a close-scoped run and owes no record), a record
+   whose head is not the judged head, or a selected command without its green
+   evidence (a green run, a reuse source, or — on a `pre_existing` record — the skip-form
+   confirmation or completion proof that kept it) is a
+   blocking `test_weakened` finding naming the repo. The machine selection never removes the manual
+   duty above: it lists what the engine selected, not every test that matters.

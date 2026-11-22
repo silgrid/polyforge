@@ -69,10 +69,16 @@ record exactly what ran.
    it: the daemon backs every commit up to aihub and cannot back up a rewritten history
    over it; a fix is a new commit. The red run just made is the build's own red evidence —
    beside it no manual worktree replay is made (the facts engine's replay is the record),
-   and a command's result already in hand on one tree (the same tree hash) is not re-run: a
-   differently spelled command proves nothing new on it. A flaky failure re-runs only the
-   suite that failed, once. A long command writes its output to a log file and records its
-   exit code (`> log 2>&1; echo exit=$?`), and the log is searched after the run; a long
+   and a command's result already in hand for its key — the same command text, the same
+   working-tree hash of the root it runs in, the same declared prerequisites — is not
+   re-run: a differently spelled command proves nothing new on it. A flaky failure is re-run only in
+   the suite that failed, once, by the written fast-check command itself — the same rules
+   verification runs — never by hand: the check already contains that one re-run, and a
+   failure still red after it is red. A red-state run must exit non-zero within its limit
+   — a unit self-reports `timeout` in units.json, else the default — and a run its limit
+   kills is an evidence problem, never a pass: the waiting inside it is bounded and an
+   assertion failure exits at once. A long command writes its output to a log file and records
+   its exit code (`> log 2>&1; echo exit=$?`), and the log is searched after the run; a long
    command is never piped straight into grep, head or tail — the pipe eats the failure
    detail and the exit code. Then add the unit to `artifacts/build/units.json` — a JSON
    array, one object per unit in commit order, cumulative across rounds:
@@ -91,6 +97,9 @@ record exactly what ran.
    the red run also prints, never one a filter that matched no test prints (`ok  ` alone is
    not a marker: `go test -run NoSuchTest` prints it), never one the empty string matches
    (`.*`, `^`, `a*`: verification fails such a unit without running it).
+   A unit may self-report `timeout` (a Go duration) — the limit its recorded run and the
+   facts engine's red-state replay are bounded by (the default is 10m): a red run that
+   needs longer raises it, and one that hangs is an evidence problem, never a pass.
    Both commit ids are the full output of `git -C repos/<repo> rev-parse <ref>`, taken right
    after each commit is made and saved where the unit is recorded — never hand-copied from a
    transcript or a log (`test_commit` and `impl_commit` each resolve their own commit the
@@ -111,30 +120,105 @@ record exactly what ran.
    output by `verify.py`'s own rules (`pfstep/unitruns`: the one implementation, never a second
    copy). A red names the unit, its marker and the closest output line: fix the record (the
    marker, or the recorded run) and re-check; at the close (3c) run the same command over the
-   whole file with no `--unit`.
+   whole file with no `--unit`. A red unit declared `pre_existing_red` is re-run once by the
+   check, and a pass records it flaky; a unit this lane just wrote is never re-run there — a
+   test just written must be stable, so red it stays.
 4. **Coverage stays in the plan.** `artifacts/plan.md`'s `## Coverage` is the table review
    and publish read — one row per criterion of the judged list, every id once:
    `| AC | kind | ref |`, kind `test` (ref `<repo>/<test file>: <test name>`), `existing`
    (the test already pinning it) or `doc` (the file and the validator that shows it).
    Keep it current with every round.
-5. **The close's facts checks.** The step's close (3c) runs the two facts lines review will
-   judge with —
-   `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" build --json --out artifacts/facts/build.json`
+   A round that wrote the plan adds its `## 分析对照` section beside `## Units` — its own `##`
+   heading, never inside it (the plan-conformance scan reads `## Units` up to the next `##`
+   heading): on a ticket whose content carries a `## 分析` section, each item the analysis
+   lists — each old test and document obligation, each risk, each decided point (`已定`) —
+   mapped to the unit that carries it, or the stated reason it is not taken; a decided point
+   takes precedence over the analysis's recommendation; an analysis written against a base that
+   differs from the current one has its file:line references re-checked against the current
+   base before the work starts; a ticket without `## 分析` writes `none` there. A round that
+   keeps an inherited plan adds nothing to it.
+   A round that wrote the plan maps the ticket's decided rulings too: on a work item whose
+   content carries one or more sections opening `## 已定`, the plan also carries a
+   `## 已定对照` section beside `## Units` — its own `##` heading — in which every item of
+   every such section (numbered across the sections in order of appearance) is mapped to
+   the unit that carries it, or carries `none — <reason>` (docs-only, or a confirmation of
+   the state as it stands); a ticket without such a section omits the mapping. The close
+   and review judge it by the same `facts.py plan-conformance` line: an unmapped ruling is
+   red, named with its number and text (an unmaterialized work item reads as no decided
+   ruling, a corrupt one is not judged).
+5. **The close's checks.** Last, after the whole-change fast check and the unit check, run
+   the fast-check proof line once per touched repo — the same fast check with `--phase
+   fast`, the final write of `artifacts/build/fast-checks/<repo>.json`, so each result's
+   `heads` is the HEAD the hand-off gate compares against (the tree is unchanged since the
+   whole-change run, so every green command is reused):
+   `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/fast_checks.py" --repo <repo> --phase fast --json --out artifacts/build/fast-checks/<repo>.json`
+   The daemon reads that file for every repo build changed and refuses `done` until each is
+   a `pass` at HEAD. A red the change did not cause is the check's own to triage first: the
+   run re-plays every unit still red after its one re-run on the change's baseline (the same
+   judgment verification runs, `pfstep/preexisting.py`) and records each one's class in its
+   result — a red the baseline proves pre-existing (the same failure there, its signature and
+   the baseline commit in the result file) is no red of this change's, and the check passes.
+   What is left — a this-change red, one the baseline could not settle, the default branch
+   already red, an `error`/`partial` result, or a lane that planned no check — is the owner's:
+   `pf step ask`, and on the release hand off `done` with `--per-owner <the reply's at>`; the
+   stamp records it. The step's close (3c) runs the build close's scoped selection once
+   per touched repo — for a work item whose verification runs the light tier (an integration
+   batch's fix ticket runs the full bar and closes without one) — `"$PF_PYTHON"
+   "$PF_SHARED_DIR/scripts/fast_checks.py" --repo <name> --close-scoped --unit-runs
+   artifacts/build/units.json --reuse
+   artifacts/build/fast-checks/<repo>.json --json --out artifacts/build/scoped-close/<repo>.json`,
+   after that repo's fast checks (a green run in the reuse file whose key — the command text,
+   the root's subtree tree hash, the declared prerequisites — matches is evidence, not a
+   re-run — on the host alone: a boxed close consumes no `--reuse` green evidence, the
+   image and tool caches stay shared and an unusable file is still exit 2):
+   the same light-tier selection verification plans, one shared implementation, over the
+   final tree — in the repository's declared verification image when its HEAD carries
+   `.polyforge/Dockerfile.verify` (the same isolation and image/tool-cache machinery
+   verification uses; a repo without the declaration keeps the host close exactly as
+   before, the per-unit runs always on the host), the result file recording which
+   isolation ran (`details.isolation`, `host`/`container`) — its reds triaged on the same
+   baseline (the close's `--unit-runs` protecting
+   the files this change's test commits touched — a test this lane authored is never
+   pre-existing), all of it in the one container when one was declared: a container the
+   close cannot build, start or keep is the run's error (exit 2, never a red of the
+   change's, never a host stand-in). A red or `incomplete` result never hands off `done` without the owner's ruling —
+   except a red result every entry of whose `reds[]` the run records `pre_existing` (its
+   `details.baseline` naming the commit, the setup and the runs it judged on): that one is
+   not this change's, and the close hands off `done` citing the result file, its `details.selected`
+   status `pre_existing` the shared validator's green-equivalent evidence —
+   fix the change and re-run it, a full-tier fallback being the owner's to settle, a residual the
+   owner accepted keeping its record in the result file, cited in the hand-off — and a green
+   or pre-existing result's `details.selected` merges into the change analysis's `selected`, keyed by
+   the repo, verbatim. Then the step's close runs the facts lines review judges with, the same
+   engine and the same replay —
+   `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" plan-conformance --json --out artifacts/facts/plan-conformance.json`
+   (a plan the lane inherited skips this line and runs only the
+   replay) and
+   `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" build --replay --isolation host --json --out artifacts/facts/build.json`
    and `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" carries --json --out artifacts/facts/carries.json`
-   — the same engine, no replay: the first each unit's static commit facts (its ids
-   resolving in a task repo, test-first shape), the second the e2e carries. A red names the
-   unit, or the repo, suite and reason — fix it and re-run until green before the hand-off;
-   exit 2 is no pass either (fix the input it names; a real machine blocker is `blocked`).
-   They are the build's own static runs — review recomputes both with its replay and its own
-   selection, so neither file here is replay evidence. Then the change analysis's own facts
+   — the second each unit's commit facts (its ids resolving in a task repo, test-first shape)
+   with its run replayed red on the tree of its test commit, the first the plan's two-way
+   conformance with the diff and its `## 已定对照` mapping (an unmapped decided ruling red,
+   named), the third the e2e carries. A red is fixed before the hand-off,
+   never handed off on. Exit 2 on the first two lines is not judged: read the result's
+   summary, wait one minute and run that line again, at most twice; still 2 — its failure
+   summary goes into the hand-off and the lane goes on to review, which re-runs the line
+   itself (never `blocked` for it); exit 2 on `carries` is no pass either (fix the input it
+   names; a real machine blocker is `blocked`).
+   They are the build's own runs — review recomputes them fresh, so no file here is review's
+   evidence. Then the change analysis's own facts
    line, `facts.py analysis` — the same shared validator `verification` calls; its red names
    the entry and the rule it violates, and the close check must be green before the hand-off.
 
 ## 交接要写什么 — what your hand-off carries
 
-- **Status.** `done` only on a green build: every unit red then green, the fast checks
-  green, the close's facts checks (build, carries) green, the close analysis check green,
-  the self-review written. A real blocker — the machine, not a choice — is
+- **Status.** `done` only on a green build: every unit red then green, the fast checks and
+  the close's scoped selection all green but the reds their baseline triage records
+  pre-existing (the result files naming them), the close's facts checks (plan-conformance, build with the replay, carries)
+  green, an exit 2 that stayed 2 after its retries disclosed in the hand-off with its summary,
+  the close analysis check green,
+  the self-review written; a fast check that turned green through a flaky re-run has its
+  flaky units (with their first-red logs) listed in Status. A real blocker — the machine, not a choice — is
   `blocked` with `--reason`. A choice that is the owner's is a `pf step ask`, not a
   hand-off. `cancel` only on the owner's word (`--per-owner`).
 - **回应上一轮** (a later round): each point of the FAIL or the owner's words, numbered as
@@ -151,7 +235,8 @@ record exactly what ran.
   at first.
 - **Evidence**: `artifacts/plan.md`, `artifacts/build/units.json`,
   `artifacts/build/change-analysis.json`, `artifacts/build/units-check.json`,
-  `artifacts/build/fast-checks/<repo>.json`, `artifacts/facts/build.json`,
+  `artifacts/build/fast-checks/<repo>.json`, `artifacts/build/scoped-close/<repo>.json`,
+  `artifacts/facts/plan-conformance.json`, `artifacts/facts/build.json`,
   `artifacts/facts/carries.json`, `artifacts/facts/analysis.json`,
   `artifacts/self-review.md` (and `artifacts/grill-qa.md` when there is one).
 

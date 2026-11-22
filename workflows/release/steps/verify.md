@@ -1,6 +1,6 @@
 ---
 name: verify
-description: Fresh-context audit of the release the previous step claims. Re-derives everything from the remote by commands - release commit vs origin head, the new tag, immutability of every older tag, non-empty release notes - then runs the repo's own `release.sh --verify <version>`. The only step whose pass lets deploy run.
+description: Fresh-context audit of the release the previous step claims. Re-derives everything from the remote by commands - release commit vs the green batch's pins, the new tag, immutability of every older tag, non-empty release notes - then runs the repo's own `release.sh --verify <version>`. The only step whose pass lets deploy run.
 ---
 
 # verify
@@ -15,11 +15,13 @@ not the previous step's report.
 ## 开工前读什么、核对什么 — before you start: what you read and check
 
 `artifacts/release-record.json` (the release step's record) names the claimed `version`,
-`commit`, `default_branch`, `origin_head_at_release`, `notes`, `repo` and the pre-release
+`commit`, `default_branch`, `batch`, `pins` (the green batch's whole group, the
+resolver's own file), `origin_head_at_release`, `notes`, `repo` and the pre-release
 tag list file (`artifacts/pre-release-tags.txt`, the remote tag list captured before the
 procedure ran). Read release's latest section of `artifacts/handoff.md` for context only —
 the values you check come from the record. Before any check: the record must parse as
-JSON and name `version` and `commit`; one that does not is a `fail` naming what is
+JSON and name `version`, `commit`, `batch` and `pins`, and `pins` must name the record's
+`repo`; one that does not is a `fail` naming what is
 missing. Re-resolve the owner yourself: exactly one repo under `repos/` carries
 `.polyforge/release.sh`; anything else is a `fail`. Work in that repo.
 
@@ -27,10 +29,13 @@ The version is `V`, the claimed release commit is `C`, the default branch is `<d
 
 ## Checks (record each in `artifacts/release-audit.md`, in this order)
 
-- **(a) release commit and origin head.** `git fetch --tags origin` (`release.sh --verify`
-  needs the previous release tag's commit locally). `C` must equal the
-  recorded `origin_head_at_release`, and `C` must be an ancestor-or-equal of the current
-  `origin/<default>` (`git merge-base --is-ancestor C origin/<default>`).
+- **(a) release commit and the batch pin.** `git fetch --tags origin` (`release.sh --verify`
+  needs the previous release tag's commit locally). `C` must equal the owner repo's pin
+  of the recorded `pins` (the map's entry named by the record's `repo` - the repo's
+  directory name under `repos/`), and `C` must be an
+  ancestor-or-equal of the current `origin/<default>`
+  (`git merge-base --is-ancestor C origin/<default>`) - the default branch may have moved
+  past the pin; the release is the batch, not the head.
 - **(b) the tag.** The tag named EXACTLY `V` (no prefix or suffix games, compare the
   strings) must now exist on origin (`git ls-remote --tags origin 'V' 'V^{}'`) and
   point at `C` (for an annotated tag compare the peeled `V^{}` entry; for a lightweight

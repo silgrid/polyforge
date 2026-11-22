@@ -663,6 +663,32 @@ test("clears a completed built-in only while its submitted input is unchanged", 
   assert.equal(canClearBuiltinCommandInput("/copy", 1, "/copy"), false);
 });
 
+test("a refused built-in command keeps the composer's text (r1#7b)", async () => {
+  const sourceText = readFileSync(new URL("./ChatInput.tsx", import.meta.url), "utf8");
+  const source = ts.createSourceFile("ChatInput.tsx", sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  function findCallback(node) {
+    if (ts.isVariableDeclaration(node) && node.name.getText(source) === "runBuiltinCommand") {
+      return node.initializer.arguments[0];
+    }
+    return ts.forEachChild(node, findCallback);
+  }
+  const cleared = [];
+  const callback = new Script(ts.transpileModule(findCallback(source).getText(source), {
+    compilerOptions: { target: ts.ScriptTarget.ES2020 },
+  }).outputText).runInNewContext({
+    attachedImages: [],
+    attachedImagesRef: { current: [] },
+    builtinCommandPendingRef: { current: false },
+    canClearBuiltinCommandInput,
+    clearInput() { cleared.push("cleared"); },
+    onBuiltinCommand: async () => ({ handled: true, error: "Cannot reload session resources while this session has unfinished background work" }),
+    setBuiltinCommandPending() {},
+    valueRef: { current: "/reload" },
+  });
+  assert.equal(await callback("/reload"), true, "the command was handled");
+  assert.deepEqual(cleared, [], "the composer keeps the refused command's text — AC3's draft preservation");
+});
+
 test("locks built-in command submission until it settles", async () => {
   const sourceText = readFileSync(new URL("./ChatInput.tsx", import.meta.url), "utf8");
   const source = ts.createSourceFile("ChatInput.tsx", sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);

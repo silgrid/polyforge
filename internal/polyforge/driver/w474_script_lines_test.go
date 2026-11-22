@@ -23,7 +23,9 @@ func TestW474ScriptStepsCarryTheirLines(t *testing.T) {
 		lines                []string
 	}{
 		{developBundle, "sync", "sync.py", []string{" --json --out artifacts/sync/result.json", " --continue --json --out artifacts/sync/result.json", " --abort --json --out artifacts/sync/result.json"}},
+		{developBundle, "sync", "fast_checks.py", []string{" --repo <repo> --phase fast --json --out artifacts/sync/fast-checks/<repo>.json"}},
 		{"micro", "sync", "sync.py", []string{" --json --out artifacts/sync/result.json", " --continue --json --out artifacts/sync/result.json", " --abort --json --out artifacts/sync/result.json"}},
+		{"micro", "sync", "fast_checks.py", []string{" --repo <repo> --phase fast --json --out artifacts/sync/fast-checks/<repo>.json"}},
 		{developBundle, "merge", "merge.py", []string{" --publish artifacts/publish.json --verified artifacts/verify/result.json --landing-out artifacts/merge/landing.json --json --out artifacts/merge/result.json"}},
 		{"micro", "merge", "merge.py", []string{" --publish artifacts/publish.json --verified artifacts/run/result.json --landing-out artifacts/merge/landing.json --json --out artifacts/merge/result.json"}},
 		{"micro", "evidence", "run.py", []string{" --isolation host --plan-from artifacts/fix/evidence.json --json --out artifacts/run/result.json"}},
@@ -85,14 +87,14 @@ func TestW474NoLaneNamesTheRetiredCommands(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for skill, script := range map[string]string{"_shared/skills/sync.md": "sync.py", "_shared/skills/merge.md": "merge.py",
+	for skill, commands := range map[string]string{"_shared/skills/sync.md": "sync.py, fast_checks.py", "_shared/skills/merge.md": "merge.py",
 		"integrate/skills/revert.md": "revert.py", "micro/skills/evidence.md": "run.py"} {
 		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(skill)))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(raw), "\ncommands: ["+script+"]\n") {
-			t.Errorf("%s: commands: must be [%s]", skill, script)
+		if !strings.Contains(string(raw), "\ncommands: ["+commands+"]\n") {
+			t.Errorf("%s: commands: must be [%s]", skill, commands)
 		}
 	}
 }

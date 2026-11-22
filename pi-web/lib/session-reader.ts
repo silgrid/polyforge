@@ -297,6 +297,31 @@ export async function listSessionSummaries(): Promise<SessionInfo[]> {
   return buildSessionList(await listSessionsIncremental({ deferDetails: true }));
 }
 
+/** A scan that keeps being invalidated retries at most this many times (polyforge#140 2-A). */
+const SESSION_LIST_MAX_SCAN_RETRIES = 3;
+
+/**
+ * Scan the catalogue and cache it, retrying while a mutation invalidates the
+ * scan in flight. The old 30 s result cache is gone (polyforge#140, owner 2-A):
+ * the scan itself revalidates the file set and every file's (size, mtime)
+ * fingerprint, so an ordinary listing always reflects writes that finished
+ * before it started, and an unchanged one re-reads no transcript. Past the
+ * retry bound the listing fails rather than serve an unmarked stale result.
+ */
+async function rebuildSessionList(): Promise<SessionInfo[]> {
+  for (let attempt = 0; ; attempt += 1) {
+    const generation = globalThis.__piSessionListGeneration ?? 0;
+    const data = await loadAllSessions();
+    if ((globalThis.__piSessionListGeneration ?? 0) === generation) {
+      globalThis.__piSessionListCache = { data, ts: Date.now(), generation };
+      return data;
+    }
+    if (attempt >= SESSION_LIST_MAX_SCAN_RETRIES) {
+      throw new Error("session list kept changing during the scan");
+    }
+  }
+}
+
 export async function listAllSessions(options: { force?: boolean; allowStale?: boolean } = {}): Promise<SessionInfo[]> {
   if (options.force) invalidateSessionListCache();
   // Lazy fallback so direct route-module tests and any non-Next entry point
@@ -307,49 +332,46 @@ export async function listAllSessions(options: { force?: boolean; allowStale?: b
     // Watching is best-effort display freshness, never a hard failure.
   }
   const generation = globalThis.__piSessionListGeneration ?? 0;
-
-  // Return cached result if still fresh (avoids re-scanning session files
-  // and re-spawning git processes on every page load).
   const cache = globalThis.__piSessionListCache;
-  if (cache && cache.generation === generation && Date.now() - cache.ts < SESSION_LIST_CACHE_TTL_MS) {
-    return cache.data;
-  }
 
   // Callers that only need session metadata — mapping search hits onto sidebar
   // rows, for example — can take the previous scan and let the rebuild happen in
-  // the background. A rebuild costs hundreds of milliseconds because it re-reads
-  // every forked and subagent session, and it is triggered by ordinary agent
-  // activity rather than by anything the caller did.
+  // the background, but only when something actually invalidated it; a fresh
+  // catalogue is not rebuilt behind their back.
   if (options.allowStale && cache) {
-    void listAllSessions().catch(() => undefined);
+    if (cache.generation !== generation) {
+      void listAllSessions().catch(() => undefined);
+    }
     return cache.data;
   }
 
-  // Coalescing dedup: concurrent callers share the same in-flight promise
-  // only while it belongs to the current cache generation.
-  if (globalThis.__piSessionListPromise && globalThis.__piSessionListPromiseGeneration === generation) {
-    return globalThis.__piSessionListPromise;
+  // Coalescing dedup (2-A): a caller shares an in-flight scan only when that
+  // scan began enumerating at or after the caller arrived — a scan from
+  // before a write finished can miss it, so joining it would serve this
+  // caller a list that predates a write it must see. A caller that arrives
+  // during an older scan waits it out (its result is discarded) and takes the
+  // next one, which starts after its own arrival; later callers join that.
+  // Ordering is a monotonic ticket, not a clock: a scan and a request can
+  // land in the same millisecond.
+  const arrivalTicket = (globalThis.__piSessionListScanTickets = (globalThis.__piSessionListScanTickets ?? 0) + 1);
+  for (let waits = 0; waits < SESSION_LIST_MAX_SCAN_RETRIES + 1; waits += 1) {
+    const inflight = globalThis.__piSessionListPromise;
+    if (!inflight) break;
+    if ((globalThis.__piSessionListScanTicket ?? 0) > arrivalTicket) return inflight;
+    await inflight.catch(() => undefined);
   }
 
-  const loadPromise = loadAllSessions().then((data) => {
-    // If a mutation invalidated this scan, make this caller join (or start) a
-    // scan for the current generation. Returning the stale result here made a
-    // refresh race indistinguishable from a successful refresh.
-    if ((globalThis.__piSessionListGeneration ?? 0) !== generation) {
-      return listAllSessions();
-    }
-    globalThis.__piSessionListCache = { data, ts: Date.now(), generation };
-    return data;
-  });
-  const trackedPromise = loadPromise.finally(() => {
+  const trackedPromise = rebuildSessionList().finally(() => {
     if (globalThis.__piSessionListPromise === trackedPromise) {
       globalThis.__piSessionListPromise = undefined;
       globalThis.__piSessionListPromiseGeneration = undefined;
+      globalThis.__piSessionListScanTicket = undefined;
     }
   });
 
   globalThis.__piSessionListPromise = trackedPromise;
   globalThis.__piSessionListPromiseGeneration = generation;
+  globalThis.__piSessionListScanTicket = (globalThis.__piSessionListScanTickets = (globalThis.__piSessionListScanTickets ?? 0) + 1);
   return trackedPromise;
 }
 
@@ -361,11 +383,13 @@ declare global {
   var __piPathToSessionIdCache: Map<string, string> | undefined;
   var __piSessionListPromise: Promise<SessionInfo[]> | undefined;
   var __piSessionListPromiseGeneration: number | undefined;
+  /** Monotonic ticket of the last arrival and of the in-flight scan (2-A join rule). */
+  var __piSessionListScanTickets: number | undefined;
+  var __piSessionListScanTicket: number | undefined;
   var __piSessionListGeneration: number | undefined;
   var __piSessionListCache: { data: SessionInfo[]; ts: number; generation: number } | undefined;
 }
 
-const SESSION_LIST_CACHE_TTL_MS = 30_000;
 export const SESSION_ID_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 
 function defaultSessionsDir(): string {

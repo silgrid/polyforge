@@ -382,6 +382,8 @@ func wakeLine(wake string) string {
 		return "the step that stopped resumes its session with your message"
 	case "write_failed":
 		return "its failed hub writes are replayed, then it continues"
+	case "cleanup_failed":
+		return "the step-end process sweep re-runs and, once it proves clean, the lane continues the way the park's reason says (a kept hand-off settles without re-running the step; a failed dispatch retries; an open ask re-enters with your message)"
 	case "paused":
 		return "the paused step continues in place with your message"
 	default:

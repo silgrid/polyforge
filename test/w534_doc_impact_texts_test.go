@@ -58,8 +58,8 @@ func TestW534ReleaseChecksTheDocsSinceTheLastTag(t *testing.T) {
 	const item = "**The docs against the changes since the last release** (a normal first run only: a resumed `V` was cut already, so skip this item)"
 	for _, want := range []string{
 		item,
-		"`git describe --tags --abbrev=0 --match 'v*' <origin_head>`",
-		"`git log --first-parent --oneline <prev>..<origin_head>`",
+		"`git describe --tags --abbrev=0 --match 'v*' <pin>`",
+		"`git log --first-parent --oneline <prev>..<pin>`",
 		"with no earlier release tag, read the documents against the tree as it stands",
 		"the repository's README, its install instructions and its upgrade notes agree with those changes and name no command or configuration key the range removed",
 		"Edit no document.",

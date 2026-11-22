@@ -52,20 +52,35 @@ const getList = async (query) => (await list.GET(new Request(`http://localhost/a
 const patch = (id, body) => detail.PATCH(new Request("http://localhost", { method: "PATCH", body: JSON.stringify(body) }), params(id));
 
 test("the list carries the index's claude rows with their harness marker, never a transcript outside the index", async () => {
-  for (const query of ["?summary=1", ""]) {
-    const { sessions } = await getList(query);
-    const ids = sessions.map((session) => session.id);
-    assert.ok(ids.includes(MINE) && ids.includes(OTHER), query);
-    assert.ok(!ids.includes(OUTSIDER), "a claude transcript pi-web did not create is not listed");
-    const row = sessions.find((session) => session.id === MINE);
-    assert.equal(row.harness, "claude");
-    assert.deepEqual(row.claude, { model: "claude-sonnet-5-5", effort: "default" });
-    assert.equal(row.cwd, project);
-    assert.equal(row.firstMessage, `first of ${MINE}`);
-    assert.equal(row.messageCount, 4);
-    assert.equal(row.path, transcriptOf(MINE));
-    assert.ok(row.projectKey);
-  }
+  // A cold summary defers the transcript-derived count (owner ruling 2026-11-19,
+  // polyforge#140 1-A): firstMessage still comes from the index, the exact count
+  // follows with the first ordinary listing, and a transcript pi-web did not
+  // register is never listed in either mode.
+  const { sessions: summaryRows } = await getList("?summary=1");
+  const summaryRow = summaryRows.find((session) => session.id === MINE);
+  assert.ok(summaryRows.some((session) => session.id === OTHER), "summary");
+  assert.ok(!summaryRows.some((session) => session.id === OUTSIDER), "a claude transcript pi-web did not create is not listed");
+  assert.equal(summaryRow.harness, "claude");
+  assert.deepEqual(summaryRow.claude, { model: "claude-sonnet-5-5", effort: "default" });
+  assert.equal(summaryRow.cwd, project);
+  assert.equal(summaryRow.firstMessage, `first of ${MINE}`);
+  assert.equal(summaryRow.messageCount, 0, "the cold summary parses no transcript");
+  assert.equal(summaryRow.detailsPending, true);
+  assert.equal(summaryRow.path, transcriptOf(MINE));
+  assert.ok(summaryRow.projectKey);
+
+  const { sessions } = await getList("");
+  const ids = sessions.map((session) => session.id);
+  assert.ok(ids.includes(MINE) && ids.includes(OTHER));
+  assert.ok(!ids.includes(OUTSIDER), "a claude transcript pi-web did not create is not listed");
+  const row = sessions.find((session) => session.id === MINE);
+  assert.equal(row.harness, "claude");
+  assert.deepEqual(row.claude, { model: "claude-sonnet-5-5", effort: "default" });
+  assert.equal(row.cwd, project);
+  assert.equal(row.firstMessage, `first of ${MINE}`);
+  assert.equal(row.messageCount, 4);
+  assert.equal(row.path, transcriptOf(MINE));
+  assert.ok(row.projectKey);
 });
 
 test("the detail renders history from claude's transcript and writes no parallel log", async () => {

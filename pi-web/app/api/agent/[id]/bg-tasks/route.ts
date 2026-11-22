@@ -1,33 +1,19 @@
 import { NextResponse } from "next/server";
-import { getRpcSession } from "@/lib/rpc-manager";
+import { getBgRuntime } from "@/lib/rpc-manager";
 
 export const dynamic = "force-dynamic";
 
-// GET /api/agent/[id]/bg-tasks - list background tasks of a live session
+// GET /api/agent/[id]/bg-tasks — the session's built-in background tasks from the
+// executor's registry (polyforge#173, AC2): every record the session owns, live
+// and settled, the ones a restart left behind included. The URL's session id
+// scopes the read by construction — another session's tasks never appear, with
+// or without a live wrapper. This and the logs/kill routes are the old
+// v1 bridge's paths, kept as the built-in interface's shell; the bridge
+// extension and its third-party package probe are gone.
 export async function GET(
   _req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const session = getRpcSession(id);
-  const bridge = session?.getBackgroundTasks() ?? null;
-  if (!bridge) {
-    // No live wrapper (or chat-only session): the pi-background-tasks bridge
-    // is not attached. Degrade explicitly instead of erroring (#7).
-    return NextResponse.json(
-      { error: "pi-background-tasks bridge is not attached (no live session, chat-only session, or package absent)" },
-      { status: 404 },
-    );
-  }
-  if (!(await bridge.probeCapabilities())) {
-    return NextResponse.json(
-      { error: "pi-background-tasks is unavailable (package not installed in this session)" },
-      { status: 404 },
-    );
-  }
-  const result = await bridge.listTasks();
-  if (!result.ok) {
-    return NextResponse.json({ error: result.error }, { status: 404 });
-  }
-  return NextResponse.json({ tasks: result.result });
+  return NextResponse.json({ tasks: getBgRuntime().listAll(id) });
 }

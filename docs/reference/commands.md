@@ -178,6 +178,21 @@ detaching the child, `pf file edit <child> --parent ""` (a running child is
 refused `CHILD_RUNNING`); a refused `pf submit` of such a parent names the
 same command beside `pf file dep rm` for an edge.
 
+## `pf file create` / `pf queue` — one `--attr` shape
+
+`pf file create --attr <path>=json-value` writes a dotted path nested
+— `--attr split.origin=X` stores `attrs` `{"split":{"origin":"X"}}`
+— and `pf queue --attr <path>=<value>` filters on the same dot path
+(`?attr=<path>:<value>`, repeatable, all must hold). One shape, write
+and read: a create never stores a flat dotted key — aihub refuses it
+`CORE-400`, and the `detail` spells the nested object to send (the CLI
+nests dotted `--attr` paths itself; a `--stdin` body carries the
+nested object). The flag texts, the epic-split procedure that files
+`split.origin`/`split.unit` markers and the error table live in the
+skills: [verbs/file.md](../../skills/polyforge/verbs/file.md) (create,
+the split), [verbs/queue.md](../../skills/polyforge/verbs/queue.md)
+(the filter).
+
 ## `pf msg` — user-to-user messages
 
 `pf msg send --to <user> --text <text> [--about-wi <wi>] [--reply-to <msg>]`
@@ -448,11 +463,30 @@ step's `image` parameter (or `--image`; the flag wins and the result's
 `image` record names the value and where it came from) names a prepared
 image every touched repo's bar then runs in, Dockerfile or not — never
 built, never pulled; a machine without it is not judged (exit 2, the
-fixed mark `pf-verify-image-missing` in the summary, the image named). The union
+fixed mark `pf-verify-image-missing` in the summary, the
+image named). The step's `audit`
+parameter (the dispatch's `PF_PARAM_AUDIT`, default `on`; only the
+lower-case `on` and `off`, empty or unset reads as `on`) turns the
+dependency audit off: with `off` every scope-engine invocation is handed
+`--audit off`, no full report plans the `audit` command, and the step's
+result names the closure — the run's document and the result file's
+details carry `audit_disabled` with the merged source hint
+(`PF_PARAM_AUDIT=off，来自项目配置或 pf override`), the summary and the
+mechanical report say the audit was off. Any other value is a named error
+before any check or container starts (exit 2, the fixed mark
+`pf-audit-param-invalid` in the summary, the value named). The union
 with the build's change analysis is add-only: the change analysis's listed
 tests run beside the plan, add-only, under the analysis's supplement cap —
 a listed test that does not exist fails its check naming it, and the
-entries past the cap are cut in listed order and named in the result. (The
+entries past the cap are cut in listed order and named in the result.
+The analysis's machine selection records (`selected`, one per task repo,
+which the build close's `fast_checks.py --close-scoped` writes) are
+judged by the same shared validator: a record of another tree is stale —
+except that a sync's merge commits between its head and the verified HEAD
+leave it valid, the change's own tree being what it was computed at — and
+a record whose selection is not green or whose selected commands carry no
+green evidence fails its `<repo>:selected` check; the records are never
+subject to the supplement cap. (The
 daemon's `verify` action, which ran the same bar in-process after fetching
 and merging the default branch itself, left with the daemon actions.)
 For each touched repo it asks the
@@ -557,7 +591,9 @@ repo's bar runs — beside the plan, one check `<repo>:unit-run:<id>` each
 `unit_run`): it passes on exit 0 with an output line its `marker`
 matches — a Python regular expression (`re.ASCII`, searched in each line)
 — a failing first run is re-run once (a pass records it flaky), and it is
-never pre-existing. A run naming a repo the capsule does not carry, an
+never pre-existing. A unit's run is bounded by its self-reported `timeout`
+in units.json, else the shared 10m default — a run its limit kills is an
+evidence problem, the why naming the limit. A run naming a repo the capsule does not carry, an
 empty argv, a cwd outside the repo or missing at HEAD, an empty or blank
 marker, or one that is no regular expression or matches the empty string
 (`.*`, `^`, `a*`) fails its check unrun; an unreadable or malformed file
@@ -618,7 +654,18 @@ dispatch's `PF_PARAM_IMAGE`, else `--image`, which wins and is recorded as
 the value's source) names a prepared image every gated repo runs in — one
 image for the project, Dockerfile or not, resolved to its local ID, never
 built, never pulled; a machine without it is not judged either (exit 2,
-the fixed mark `pf-verify-image-missing` in the summary). The container's
+the fixed mark `pf-verify-image-missing` in the summary). The step's
+`audit` parameter (the dispatch's
+`PF_PARAM_AUDIT`, default `on`; only the lower-case `on` and `off`, empty
+or unset reads as `on`) turns the dependency audit off: with `off` the
+engine is handed `--audit off`, no full report plans the `audit` command,
+the result (gate.json) carries `audit_off` with the merged source hint
+(`PF_PARAM_AUDIT=off，来自项目配置或 pf override`) and so does a green
+tag's record — a tag of the other audit state is never reused, and a tree
+whose own scope engine predates the `--audit` option is blocked by name
+before any container starts. Any other value is a named error before any
+container or check starts (exit 2, the fixed mark `pf-audit-param-invalid`
+in the summary). The container's
 limits are the script's flags (`--cpus` / `--memory` / `--pids`, default
 min(8, cores) / `16g` / 4096; design r2 D7).
 
@@ -704,10 +751,19 @@ command's face.
   open; Simplified Chinese: 结论, 这一步要回答什么, 做了什么, 关键决定和理由,
   验证, 发现的问题和风险, 给下游与未决), or on a re-run of the step Reply to
   the previous round / 回应上一轮; a
-  body over 3,000 characters; an `--evidence` path that is not an existing
+  body over 6,000 characters (Unicode code points, counted over the
+  entire body); an `--evidence` path that is not an existing
   file inside the capsule; `done` while a `wrap_attrs` name the lane
   declares for this step has no `pf step hub wrap-attrs <name>` of this
-  round. Accepted, the daemon appends one section to
+  round; `done` while the lane declares `fast_check_proof` and a task repo
+  this round changed — its HEAD moved past the round's start, or the round
+  recorded no start, and HEAD carries a commit no remote-tracking ref does
+  — lacks a `pf-step-result/1` result at the declared path whose `verdict`
+  is `pass` and whose `heads` carries the repo at its HEAD (the refusal
+  names each such repo, the failing check and the declared command to
+  re-run); a `done` that cites an owner message of the round with
+  `--per-owner` is the owner's release of such a red and is accepted, the
+  section's header recording the cited message. Accepted, the daemon appends one section to
   `artifacts/handoff.md`: a header it stamps from its own records (step,
   round, dispatch, start, end and duration, model, status, the round's
   events, the owner's messages to the step this round and the cited one
@@ -834,7 +890,11 @@ of them (P0): no option, no reserved word (`cancel` here is just a word;
   session when it handed off `blocked`; the step that failed after two
   timeouts or three exits without a hand-off; after a failed pending
   write, the writes are replayed first and the lane goes on; after a
-  pause, the current step. The daemon never reads the words to decide. The
+  `cleanup_failed` park (polyforge#200), the step-end process sweep
+  re-runs first and the lane continues the way the park's reason says —
+  a kept hand-off settles without re-running the step (no dispatch reads
+  the words), a failed dispatch retries (its dispatch carries them), an
+  open ask re-enters with the answer; after a pause, the current step. The daemon never reads the words to decide. The
   wake is the owner's door: the command first asks the daemon, which names
   the park (`{status: parked, park, wake}`) and records nothing; then it
   opens, with your own key, the door `pf resume` opens (a blocked work
@@ -1090,12 +1150,24 @@ hold no credential.
 
 - `facts.py <kind>` computes the facts a review reads about a build's
   delivered tree: `plan-conformance` (the plan's `## Units` declarations
-  against the diff both ways), `build` (each unit resolved, its commit
+  against the diff both ways, and the plan's `## 已定对照` mapping against
+  the work item's decided rulings — every section of its content opening
+  `## 已定`: each item, numbered across the sections, mapped to a unit or
+  a `none` reason; an unmapped ruling is red, named with its number and
+  text; a ticket without such a section asks for no mapping section, an
+  unmaterialized work item reads as no ruling and a corrupt one is not
+  judged), `build` (each unit resolved, its commit
   pair test-first, its `test_weakened` hunks and, with `--replay`, its run
   replayed on the tree of its test commit — a unit declared `pre_existing_red`
   (its reproduction test already exists and is red before the change, so it
   reports no `test_commit`) replays on the tree of the change's base: red
-  there is its red evidence, and a run that exited 0 there fails the unit —
+  there is its red evidence, and a run that exited 0 there fails the unit;
+  each replay is bounded by its own limit — the unit's self-reported
+  `timeout` in units.json, else `--unit-timeout` (10m) — and a run its own
+  limit kills carries no red evidence: an evidence problem, exit 1, the
+  problem naming the unit and its limit (a red-state run must exit
+  non-zero within its limit, never hang), while only a kill by the whole
+  run's deadline stays not judged —
   where it replays: `--isolation host` on the
   host under the step's `PATH`, `--isolation container` in the
   repo's verification container (exit 2 when its HEAD carries no
@@ -1112,7 +1184,11 @@ hold no credential.
   listed entry judged statically — its repo, its run's shape, its file at HEAD, its name
   inside it — and each taken one's run executed once at HEAD and judged by its marker,
   the cut tail named over the supplement cap; a red names the entry and the rule it
-  violates, and the build must fix it before its hand-off) and `micro-bounds
+  violates, and the build must fix it before its hand-off; the machine selection records the
+  analysis carries (`selected`) are judged statically by the same shared validator — a stale
+  head, a non-green selection or a command without green evidence is red, never under the
+  supplement cap — while a touched repo carrying none is the build step's own rule to demand
+  and review's to judge) and `micro-bounds
   --plan <evidence.json>` (every changed path inside the repo's
   `micro_path=` at the change's base; the credential plan). Exit 0: the
   facts hold; 1: a difference to class; 2: not judged.
@@ -1166,6 +1242,37 @@ hold no credential.
   thresholds with their sources, and a per-repository error entry when a
   clone cannot be read. Exit 0 whatever an entry says (each named), 2
   when no `--repo` is named.
+- `release.py --capsule DIR [--batches FILE] [--pre-release FILE]
+  [--pins-out FILE]` (the release lane's script, polyforge#154) is the
+  release step's green-batch resolver: the release object is the
+  project's most recent green integrate batch — its pinned commits,
+  never a branch head. It resolves the owner (the one repo of the
+  capsule carrying `.polyforge/release.sh`), reads every wrapped batch
+  of the integrate lane through the step's hub (`pf --json step hub
+  list`, held to the release step's `hub` verbs; `--batches` names a
+  snapshot file instead), picks the green batch with the newest
+  `closed_at` and answers what the lane does: exit 0, verdict pass and
+  decision `fresh` (the owner pin carries no release tag) or `resume`
+  with its `version` (the owner pin carries exactly one `v*` tag — the
+  same release resumed, whoever claimed it, never a second version of
+  one commit), writing the pins file `--pins-out` names —
+  `{batch, repos: {<repo>: <sha>}}, red_batches_after` when red batches
+  closed after the green one (the release notes name them) — the
+  procedure's whole input (`--pins`); exit 1, verdict fail, a named
+  refusal whose summary begins with the code: `PF-RELEASE-NO_GREEN_BATCH`
+  (nothing green to release), `PF-RELEASE-ALREADY_RELEASED` (two or
+  more release tags on the owner pin, or a release tag the recorded
+  pre-release list lacks on a commit that is not the owner pin),
+  `PF-RELEASE-PIN_OFF_DEFAULT` (a batch pin no longer on its repo's
+  origin default branch), `PF-RELEASE-UNPINNED_OWNER` (the batch's main
+  names no commit for the owner), `PF-RELEASE-AMBIGUOUS_OWNER` (two or
+  more owner candidates); exit 2, not judged: an unreadable input — the
+  hub, a batch record whose `main` names a repo no clone is of or whose
+  shas are not full commit ids, a fetch, an origin default branch that
+  cannot be resolved. A capsule repo the batch does not cover is not
+  part of the release (named in the details), and the pre-release list
+  (`--pre-release`, default `<capsule>/artifacts/pre-release-tags.txt`)
+  is only read, for its guard; `verify`'s immutability check keeps it.
 
 The verification-scope engine is the workflow's too:
 `workflows/_shared/scripts/verify-scope`, with its dependency-audit helper
@@ -1191,13 +1298,112 @@ full reference.
   runs in that subdirectory), with each entry's own declared `timeout`;
   a command missing a declared `requires_env`/`requires_cmd`
   prerequisite is skipped and its reason recorded; the full phase never
-  runs, and the run never stops at a failure. Details: `repo, engine,
+  runs, and the run never stops at a failure. `--phase fast` narrows the
+  run to the fast commands alone (the per-unit bar's own shape: the
+  scoped selection is the close's, never the per-unit's), and a
+  repeatable `--root <dir>` to the named engine roots — `.` the
+  repository's own root, a nested root its directory, a name that is
+  neither a usage error naming the roots there are — the roots a
+  narrowed run never asks keeping their green entries carried in the
+  result file; without the flags every root the change reaches runs,
+  exactly as before. A green command whose key — its text, its root's
+  subtree tree hash of the working tree (tracked modifications plus
+  untracked, unignored files; the repository root's key counts the whole
+  tree, nested roots included), its sorted declared prerequisites — the
+  previous run in the same result file already proved is recorded
+  `reused` and not executed, its evidence (the original log path,
+  `exit_code: 0`) kept; a red, timed-out or flaky-confirmed result, or
+  any changed key dimension, runs again, and a previous result file
+  that is missing, unreadable or not a usable result is no cache: every
+  command runs, never a usage error. A red command's failing
+  units are located from its output and each re-run once by its derived
+  targeted re-run (verification's own rules, `pfstep/rerun` and
+  `pfstep/flaky`), and a pass is recorded flaky; a red command every
+  failing unit of which re-ran flaky is then confirmed the way
+  verification confirms its bar — by its first-run output's completion
+  proof (`pfstep/completion`) or by one whole re-run exiting 0 — and
+  only such a command turns green. A unit still red after its one
+  re-run is judged on the change's baseline — the same judgment
+  verification's pre-existing phase runs (`pfstep/preexisting.py`, one
+  entry): a throwaway worktree of the merge-base, the report's declared
+  base setup, then the unit's own targeted re-run there. The classes:
+  `pre_existing` (the base fails the same way, its signature and the
+  baseline commit recorded — not this change's red, the run may pass),
+  `this_change` (the base lacks the test, or it passes there) and
+  `undetermined` (anything the base runs could not settle — fail
+  closed, the red rules hold). A pre-existing failure is excluded from
+  its command's confirming re-run by the skip form
+  verification uses (go `-skip`, `E2E_SKIP`, pytest `--deselect`); a
+  command that cannot exclude it keeps a residual whole-command
+  failure. Details: `repo, engine,
   reports[{root, mode, commands}], commands[{name, phase, root, cmd,
   exit_code, timed_out, not_started, duration_ms, log, skipped,
-  skip_reason}]`. Exit 0: every command that ran exited 0; 1: a command
-  failed or was killed at its timeout; 2: not judged (no such repo, the
+  skip_reason, tree, prereq_key, reused, carried, units[{kind, name,
+  file, status, flaky, detail, class, signature, head_signature,
+  base_detail, rerun_log, not_rerun}], confirmed, complete,
+  not_confirmed}], baseline{commit, ref, setup, ran, note}, reds[{command,
+  unit, kind, file, class, signature, base, detail}]`. Exit 0: every
+  command that ran exited 0 or turned green through its flaky re-runs
+  and confirmation, was reused, or carries only reds the baseline
+  proved pre-existing; 1: a command stayed red after the flaky phase,
+  its baseline triage or its confirmation — a red classified this
+  change's or undetermined — or
+  was killed at its timeout; 2: not judged (no such repo, the
   engine missing or failing, an unreadable report, a repo the engine
   planned no command for).
+- `--repo <name> --close-scoped` (with `--reuse <file>`, repeatable, and
+  `--unit-runs <units.json>`) is
+  the build close's own mode: it plans the same light-tier selection verification's light tier
+  plans (one shared implementation — the same engine
+  `--json --light --base <merge-base>` request, the same choice, the same
+  nested roots) over the repo's final tree and executes it in the
+  repository's declared verification image when its HEAD carries
+  `.polyforge/Dockerfile.verify` — the same isolation and image/tool-cache
+  machinery verification's boxes use (the image built from the committed
+  Dockerfile's bytes, reused while they are unchanged), one container for
+  the engine asks, the selected commands, the re-runs and the baseline's
+  base worktree — and on the host otherwise, the result file recording
+  which isolation ran (`details.isolation` `host`/`container`, with the
+  container's own record in `details.container` when one ran), the
+  per-unit `--repo` run always on the host; a container the close cannot
+  build, start or keep is the run's error (exit 2, never a red of the
+  change's, never a host stand-in);
+  once per touched repo, after its fast checks; a command whose reuse
+  key — the same key the `--repo` run reuses by: its root, its text as
+  its own report gave it, its root's subtree tree hash of the working
+  tree, its declared prerequisites — a green-in-one-run entry in a
+  `--reuse` result file of this repo already proved (never a red or
+  flaky-confirmed one, never an entry an older run wrote without its
+  key fields) is reused, not re-run — on the host close alone: a boxed
+  close consumes no `--reuse` green evidence (the same-tree host run
+  proves nothing inside the image), keeping the image and tool caches
+  shared and an unusable `--reuse` file the error it always was — and a red command keeps the per-unit
+  bar's one
+  targeted re-run, its baseline triage and whole-command confirmation,
+  all of it in the same container when one was declared;
+  `--unit-runs` names the build's `units.json`: the files its test
+  commits touched are protected, never pre-existing (a test this change
+  authored is this change's red), an unusable file is exit 2; a selection the engine
+  answers with the full tier, or a selected command that cannot run,
+  records `incomplete` with the reason kept and exits non-zero, claiming
+  nothing (the full bar stays `verification`'s; the owner decides a
+  full-tier fallback). The result's `details.selected` is the change
+  analysis's machine selection record — the repo's head, tree, base and
+  default branch, the engine invocations, the conf's identity, the
+  selection's paths and suites, every command with its evidence (or its
+  reuse source), and the status: `green`, `pre_existing` (every red the
+  baseline triage kept is pre-existing — nothing this change's, exit 0,
+  the shared validator's green-equivalent evidence; `details.baseline`
+  and `details.reds[]` record the judgment, same shape as the `--repo`
+  run's), `red` or `incomplete` with its
+  reason. Exit 0: every selected command green (reused or run), or its
+  only reds pre-existing on the baseline; 1: a
+  command stayed red after the flaky phase, its baseline triage or its
+  confirmation, or the selection is red or
+  incomplete; 2: not judged (no such repo, the engine missing or failing,
+  an unreadable report, a repo the engine planned no command for, an
+  unusable `--reuse` file, an unusable `--unit-runs` file, a declared
+  verification container not built, started or kept).
 - `--check-units <units.json> [--unit <id>]` is the on-the-spot unit
   check at record time: it re-runs the build's recorded unit runs as
   written (each unit's own `argv` in its own `cwd` of its own
@@ -1206,16 +1412,24 @@ full reference.
   exits 0 and one output line matches its marker; a marker problem, a
   red run or no matching line — a marker wrong by one `$` against a
   suffixed output line — is red on the spot, the result naming the unit,
-  its marker and the closest output line. Details: `units_file, units[{id,
-  check, repo, cwd, argv, marker, passed, why, exit_code, log,
-  closest_line}]`. Exit 0: every checked unit passed; 1: a unit is red;
-  2: not judged (an unusable units.json, `--unit` naming no unit, a file
+  its marker and the closest output line. A unit's run is bounded by its
+  self-reported `timeout` in units.json, else the shared 10m default —
+  a run its limit kills is an evidence problem, the why naming the
+  limit (a red-state run must exit non-zero within its limit, never
+  hang). A red unit declared `pre_existing_red` is re-run once, and a
+  pass records it flaky with both logs; a unit the lane just wrote is
+  never re-run — red it stays. Details: `units_file, units[{id,
+  check, repo, cwd, argv, marker, passed, flaky, why, exit_code, log,
+  rerun_log, closest_line}]`. Exit 0: every checked unit passed; 1: a
+  unit is red; 2: not judged (an unusable units.json — an invalid
+  self-reported `timeout` included — `--unit` naming no unit, a file
   naming no unit).
 
-The logs of both modes go to `<log-dir>/<repo>/<seq>/command.log`, the
-log dir being `--log-dir`, else `logs/` beside `--out`, else the
-capsule's next `runtime-state/fast-checks/<n>` (a .gitignore keeps them
-out of the capsule chain).
+The logs of both modes go to `<log-dir>/<n>/<repo>/<seq>/command.log`,
+one directory `<n>` per run (a later run's executions never overwrite a
+reused entry's original log), the log dir being `--log-dir`, else `logs/`
+beside `--out`, else the capsule's next `runtime-state/fast-checks/<n>`
+(a .gitignore keeps them out of the capsule chain).
 
 ## `pf config` — cli.toml and hot reload
 
@@ -1784,6 +1998,8 @@ throttles (429 / rate limit / `overloaded` / the gateways' `server
 overload. Please retry later.` and concurrency texts) and the upstream
 transients: a response stream that ended or was interrupted before
 completion, an upstream/gateway named `temporarily unavailable`, a
+gateway's `Service temporarily unavailable` (the service subject directly
+before the phrase, polyforge#210), a
 gateway's `no available accounts`, and the upstream model reporting an
 error after output had started (the output so far is partial). Every
 `step_failed` event records which rule judged its text

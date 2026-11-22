@@ -1,6 +1,6 @@
 ---
 name: sync
-description: Merge origin's default branch into every task repo with the pre-written sync script (the sync skill's `sync.py` lines), resolve a real conflict in place and continue the same script - no gate, no rewind of its own; the {{verifying_gate}} step right after tests the resolved tree.
+description: Merge origin's default branch into every task repo with the pre-written sync script (the sync skill's `sync.py` lines), resolve a real conflict in place and continue the same script, then run the lane's fast-check line over every repo the merge moved - no gate, no rewind of its own; the hand-off gate needs that pass at HEAD, and the {{verifying_gate}} step right after tests the resolved tree.
 ---
 
 # sync
@@ -8,7 +8,9 @@ description: Merge origin's default branch into every task repo with the pre-wri
 The lane's merge of the default branch into the branch, after review passed and before
 the `{{verifying_gate}}` step runs. Your skill is the whole procedure: check that every task
 repo stands at the tree review judged, run the skill's start line as written, resolve a real
-conflict in place and run its continue line, ask the owner when a resolution is not yours to make.
-The result file the script writes (`artifacts/sync/result.json`) is what the
-`{{verifying_gate}}` step checks first. A real conflict never sends the work back to
+conflict in place and run its continue line, run the fast-check line over every repo the merge
+moved, and ask the owner when a resolution is not yours to make. The result file the script
+writes (`artifacts/sync/result.json`) is what the `{{verifying_gate}}` step checks first, and
+the fast-check result (`artifacts/sync/fast-checks/<repo>.json`) is what the daemon's hand-off
+gate checks before `done`. A real conflict never sends the work back to
 `{{change_step}}` by itself: only the owner's word does, after the skill's abort line.

@@ -54,7 +54,7 @@
     "test:terminal": "node e2e/terminal.mjs",
     "test:e2e:all": "node e2e/all.mjs",
     "test:e2e": "node --experimental-strip-types e2e/run.mjs",
-    "test": "node scripts/tmp-guard.mjs node --experimental-strip-types --test \"app/**/*.test.mjs\" \"components/**/*.test.mjs\" \"docs/**/*.test.mjs\" \"hooks/**/*.test.mjs\" \"lib/**/*.test.mjs\" \"public/**/*.test.mjs\" \"e2e/runner/**/*.test.mjs\""
+    "test": "node scripts/tmp-guard.mjs node --experimental-strip-types --test \"app/**/*.test.mjs\" \"components/**/*.test.mjs\" \"docs/**/*.test.mjs\" \"hooks/**/*.test.mjs\" \"lib/**/*.test.mjs\" \"public/**/*.test.mjs\" \"scripts/**/*.test.mjs\" \"e2e/runner/**/*.test.mjs\""
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "1.5.0",

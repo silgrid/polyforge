@@ -101,8 +101,16 @@ Their own `README.md` files carry each lane's narrative. Every step of
 every lane is an agent step (the daemon runs no step
 itself); develop's verification runs `verify.py --tier auto --unit-runs artifacts/build/units.json --analysis artifacts/build/change-analysis.json` through its skill (the build's recorded unit runs ride along; the tier is the work item's own — an integration batch's fix ticket runs the full bar, every other ticket the light one). The change analysis's listed tests run beside the plan, add-only, under its supplement cap. develop's `build` and `review`
 follow skills too: build records each unit's red-then-green run in
-`artifacts/build/units.json` (its close running the static `build` (no
-replay) and `carries` facts first), and review runs the workflow's `facts.py` (the units' red runs
+`artifacts/build/units.json` (its close running the `build` replay,
+`plan-conformance` and `carries` facts first, the scoped selection
+`fast_checks.py --close-scoped` before them for a work item whose
+verification runs the light tier (an integration batch's fix ticket closes
+without one) — in the repository's declared verification image when its
+HEAD carries `.polyforge/Dockerfile.verify`, the host close otherwise,
+the result recording which isolation ran — a green record the change
+analysis's `selected`; a
+`pre_existing` record, every red its baseline triage proved pre-existing,
+hands off `done` citing its result file and merges the same `selected`), and review runs the workflow's `facts.py` (the units' red runs
 replayed at their test commits, or at the change's base for a unit declared
 `pre_existing_red`) under the heavy-run admission.
 
@@ -233,6 +241,14 @@ and YAML path, before a claim ever meets it. The keys:
     of the work item — a `rewind_only` declaration alone can hold a step's
     first round back; the shipped lanes declare it on develop's and epic's
     `merge` (micro's `merge` runs whatever the switch says).
+  - `fast_check_proof:` — `{result, command}`: the step's `done` needs a
+    `pf-step-result/1` result at `result` (verdict `pass`, `heads` carrying
+    the repo at HEAD) for every task repo the round changed; a repo left at
+    its round's start and a fast-forward need none. The daemon reads the
+    file and quotes `command` in a refusal, so no repository's command is
+    in the daemon; a `done` the gate would refuse is accepted when it cites
+    the owner's release with `--per-owner`, the stamp recording it
+    ([reference](reference/workflow-contract.md#step-keys)).
   - `skill:` — the skill the step follows: `<lane>/skills/<name>.md`, else
     `_shared/skills/<name>.md`, rendered after the step definition; a skill
     names the workflow scripts it runs (`commands:`, by file name), each line

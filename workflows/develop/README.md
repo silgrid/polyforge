@@ -40,42 +40,84 @@ needs travels in result files, never in a body: `artifacts/plan.md`,
 `artifacts/verify/result.json`, `artifacts/publish.json`, `artifacts/merge/result.json`
 and `artifacts/merge/landing.json`. The daemon orchestrates; it judges no content.
 
+## Step process environment
+
+The daemon gives every pi and Claude step process its capsule facts and a capsule private temporary directory. `TMPDIR` is `<capsule>/artifacts/downloads/tmp/`; the daemon creates it before spawning the harness, and the value is different for concurrent capsules. A harness configuration or tool that deliberately overwrites `TMPDIR` is outside this guarantee. A background process started by a step shell ends with that tool call, so a later call must not wait for it; run long commands in the foreground and put temporary files under `$TMPDIR` or `artifacts/downloads/`, never a fixed `/tmp/<name>`.
+
+The complete variable table is in [the workflow contract's Scripts environment section](../../docs/reference/workflow-contract.md#scripts). Its Environment section describes inheritance and `PATH`; the lane's step processes are resident across turns, but a shell tool invocation does not provide cross-invocation process lifetime.
+
 ## What each step owes
 
 - **build** (fresh session; skill `build`) — one session, four segments
   (`steps/build.md`): a plan against the work item's acceptance criteria
-  (`artifacts/plan.md`, its `## Coverage` the criterion → test table, each `## Units` entry
+  (`artifacts/plan.md`, its `## Coverage` the criterion → test table, its `## 分析对照` section
+  mapping the ticket's `## 分析` items to units or stated reasons, its `## 已定对照` section
+  mapping every item of the ticket's `## 已定` sections to a unit or a stated reason (a
+  ticket without one omits it; an unmapped ruling the close's plan-conformance names red,
+  and review judges by the same line), each `## Units` entry
   recording the behaviour its test observes, how its expected values are derived
   independently of the implementation and the change it
   catches (`workflows/_shared/test_quality.md`)); per unit, a test — a
   unit-level test, or an e2e scenario whose suite declares `carries:` — committed red
   before the implementation that turns it green, both runs the session's own, recorded in
-  `artifacts/build/units.json` (`[{id, pre_existing_red?, test_commit?, impl_commit,
+  `artifacts/build/units.json` (`[{id, pre_existing_red?, timeout?, test_commit?, impl_commit,
   run{repo, cwd, argv}, marker}]`; a unit whose reproduction test already exists red
   before the change declares `pre_existing_red: true` and carries no `test_commit`). Each
   unit's targeted command runs only that unit's test (the test runner's own name filter; a suite
   that offers no filter is named in the hand-off and runs once, in the scoped command); a result
-  already in hand on one tree is not re-proven — a bare commit changes no tree, and beside the
+  already in hand for its key — the same command text, the same working-tree hash of the root it
+  runs in, the same declared prerequisites — is not re-proven: a bare commit changes no tree, and beside the
   test-first red no manual worktree replay is made (the facts engine's replay is the record); a
-  flaky failure re-runs only the suite that failed, once; and a long command writes its output to
+  flaky failure is re-run only in the suite that failed, once, by the written fast-check command
+  itself — the same rules verification runs — never by hand: the check already contains that
+  one re-run, and a failure still red after it is red; a red-state run must exit non-zero within
+  its limit — a unit self-reports `timeout` in units.json, else the default — and a run its
+  limit kills is an evidence problem, never a pass: the waiting inside it is bounded and an
+  assertion failure exits at once; and a long command writes its output to
   a log file with its exit code and the log is searched after the run, never piped straight into
-  grep, head or tail. Fast
-  checks plus every new test; the close's facts checks — `facts.py build` without the
-  replay (each unit's static commit facts) and `carries`, the same engine review judges
-  with, a red naming the unit, or the repo, suite and reason and fixed before the
-  hand-off; the change analysis's close check (`facts.py analysis` — the
+  grep, head or tail. After the last commit it re-runs the lane's fast-check
+  proof line with `--phase fast` per touched repo
+  (`fast_checks.py --repo <repo> --phase fast --json --out
+  artifacts/build/fast-checks/<repo>.json`): the tree is unchanged, so every
+  green command is reused and only the result's `heads` move to the commits
+  the hand-off gate compares against HEAD; a repo the change touched without
+  that pass at HEAD has its `done` refused. Per-unit
+  fast checks narrowed to the roots the unit's written `Touched files` reach (`--phase fast
+  --root`, the green runs whose key is unchanged reused) plus every new test; the close's scoped selection — `fast_checks.py --close-scoped`,
+  the same light-tier selection verification plans, for a work item whose verification runs the
+  light tier (an integration batch's fix ticket closes without one) — run in the repository's
+  declared verification image when its HEAD carries `.polyforge/Dockerfile.verify` (the same
+  isolation verification uses, the image and tool caches shared; no declaration keeps the
+  host close, the per-unit runs always on the host), the result recording which isolation ran
+  and a boxed close consuming no `--reuse` green evidence, its red or `incomplete`
+  result fixed or owner-ruled before the hand-off — a red every entry of whose `reds[]` the
+  run's baseline triage records `pre_existing` excepted: not this change's, the close hands
+  off citing the result file — and a green or pre-existing result's `details.selected` merged
+  into the change analysis — before the close's
+  facts checks — `facts.py build --replay --isolation host` (each
+  unit's run replayed red at its test commit), `plan-conformance` and
+  `carries`, the same engine and the same lines review judges with, a
+  red naming the unit, the plan's undeclared or lapsed obligation, or
+  the repo, suite and reason and fixed before the hand-off (an exit 2
+  that stays 2 after its retries is disclosed in the hand-off, for
+  review to re-run); the change analysis's close check (`facts.py analysis` — the
   same shared validator `verify.py --analysis` calls; a red names the entry and the rule it
   violates and must be fixed before the hand-off); a self-review against review's five
   blocking classes and its doc-impact check, item by item — each document compared, its
   conclusion, and synced or no-change-needed with the reason — recorded
-  (`artifacts/self-review.md`). It asks the owner (`pf step ask`) only
+  (`artifacts/self-review.md`). A red the change did not cause is the check's own to triage
+  first: the run judges every still-red unit on the change's baseline (the same judgment
+  verification runs) and records the pre-existing ones — signature and baseline commit in the
+  result file — as no red of this change's. What is left — the default branch
+  already red, an `error`/`partial` fast check, or a lane that planned no check — is the
+  owner's: `pf step ask`, and on the release hand off `done` with `--per-owner <the reply's
+  at>`; the stamp records it. It asks the owner (`pf step ask`) only
   when the code reveals something the ticket did not decide, when the plan diverges from
   the ticket, when the ticket carries `confirm_plan: true`, or when it has no acceptance
   list or an incomplete one — right after the plan, never at the end. Its hand-off states
   each owner decision with the owner's words and its reading. A round a FAIL opened
   changes the tree (or units.json), or states per point why not; `review` judges that.
-  The session orchestrates fresh-context sub-agents (`workflows/_shared/build_subagents.md`;
-  a pi dispatch is told, as a dispatch fact, that it dispatches none).
+  The session orchestrates fresh-context sub-agents (`workflows/_shared/build_subagents.md`; a pi build uses the daemon-owned worker when `pi_subagents` is on and records `main` when it is off). On pi the build session itself runs under the step guard (`docs/reference/workflow-contract.md`, "Environment"): a bash call that leaves a background job unwaited, or waits too long in one go, is blocked with the sanctioned shape.
 - **review** (fresh, gate; skill `review`, heavy-run admission, tool window 20 minutes) —
   the shared review (`workflows/_shared/steps/review.md`), on the facts of four
   pre-written lines of the workflow's script `facts.py`: `plan-conformance`, `build
@@ -93,12 +135,22 @@ and `artifacts/merge/landing.json`. The daemon orchestrates; it judges no conten
   the previous round's findings and, from the commits the daemon stamped, whether the build
   changed anything at all — a build that changed nothing without a reason per finding fails
   again.
-- **sync** (no gate; skill `sync`, `sync.py`, tool window 20 minutes) — checks that each
+- **sync** (no gate; skill `sync`, `sync.py`, `fast_checks.py`, tool window 20 minutes) — checks that each
   task repo stands at the heads review judged (stamped on review's section), or at its own
   earlier `after` when merge's FAIL sent the lane back here; then merges origin's default
   branch in place (never a rebase): the conflicts the default branch's
   `.polyforge/integrate.conf` makes mechanical resolved by the script, a real conflict
-  resolved by the step's own agent and committed by the skill's continue line. When the
+  resolved by the step's own agent and committed by the skill's continue line; then it runs
+  the lane's fast-check line over every repo the merge moved (`fast_checks.py --repo
+  <repo> --phase fast --json --out artifacts/sync/fast-checks/<repo>.json`). `sync`
+  declares `fast_check_proof`, so its `done` is refused until each moved repo has a `pass`
+  at HEAD (a fast-forward needs none); a red breaks the tree at sync, where the agent can
+  still fix it in the conflicted files, rather than at verification. A red that is not this
+  merge's the check itself triages first: one the baseline (after the merge, the default
+  branch's tip) reproduces the same way is recorded `pre_existing` and the check passes;
+  what is left — an `error`/`partial` result, no planned check, or a red the baseline could
+  not settle — is the owner's: `pf step ask`, and on the release hand off `done` with `--per-owner
+  <the reply's at>`, the stamp recording it. When the
   resolution is not the agent's to make, it asks the owner, and hands the work back to
   `build` (or cancels) only on the owner's word, after the skill's abort line.
 - **verification** (gate, `waivable: true`; skill `verify`, `verify.py`, heavy-run
@@ -113,7 +165,16 @@ and `artifacts/merge/landing.json`. The daemon orchestrates; it judges no conten
   runs and the rest, the whole tool window its budget; every other ticket runs the light
   tier. Exit 0 passes; a red it can place on the change FAILs to `build`; a red it
   cannot place is the owner's call — run again, have it fixed, or accept it (`waive`,
-  citing the owner's message). Exit 2 is retried, then `blocked`. The heavy-run admission
+  citing the owner's message). The step's `audit` parameter (the dispatch's
+  `PF_PARAM_AUDIT`, default `on`) turns the lane's dependency audit off
+  when the project's owner sets it to `off`
+  (`steps.<project>.verification.params.audit` in the workspace config, or
+  a ticket's `pf override` — a repository's own conf key can never do it):
+  the engine is then asked `--audit off`, no full report plans the `audit`
+  command, and the result files record the closure. Any other value is a
+  named error before any check runs (exit 2, the fixed mark
+  `pf-audit-param-invalid` in the summary) — the owner fixes the config; a
+  retry cannot. Exit 2 is retried, then `blocked`. The heavy-run admission
   is the daemon's: a denied dispatch waits in the daemon's queue, no process, no budget.
 - **publish** (gate; skill `publish`) — checks that the verification's result names every
   repo's HEAD and passed (or that the owner's waiver of that same round is quoted on the
@@ -157,7 +218,7 @@ message (`--per-owner`); the daemon checks the message exists and never reads it
    check enforces either stop: `review` judges a self-written list with no owner reply, or a
    first test commit older than the reply to a `confirm_plan` ticket, a blocking
    `guarantee`.
-2. **A machine that cannot run a step's command** — `facts.py`, `sync.py`, `verify.py` or
+2. **A machine that cannot run a step's command** — `facts.py`, `sync.py`, `fast_checks.py`, `verify.py` or
    `merge.py` exiting 2 after the skill's retries: the step hands off `blocked`; fix the
    machine, then write to the work item (or `pf resume`).
 3. **A sync that is not the agent's to resolve**, or a HEAD that is neither the reviewed

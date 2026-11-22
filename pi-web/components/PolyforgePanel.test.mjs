@@ -483,7 +483,7 @@ test("pi#117/#238: the summary carries tool calls, recent files and chat origin 
   assert.match(source, /title=\{file\}/, "full file path on hover");
   // Live age at render time (the watch poll re-renders every 3s): the clock
   // read lives in the module-level helper (the repo's clock-at-render
-  // pattern, BackgroundTasksPanel.formatDuration).
+  // pattern — Date.now() at render, no timer).
   assert.match(source, /function liveStepTimings\(steps: \{ name: string; status: string; startedAt\?: string \}\[\]\): Map<string, StepTiming> \{\s*return buildStepTimings\(steps, Date\.now\(\)\);/, "the live age reads the clock");
   assert.match(source, /const stepTimings = watchStatus \? liveStepTimings\(watchStatus\.steps\) : null;/, "timing derives from the snapshot at render");
   // Origin: the owner as plain text; the row exists only when it is present

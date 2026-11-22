@@ -14,7 +14,9 @@ import tempfile
 import unittest
 from typing import Any, Dict, List, Optional, Tuple
 
+from .test_analysis_preflight import selected_record
 from .verifyfix import (
+    git_t,
     HAVE_BASH,
     HAVE_GIT,
     Fixture,
@@ -54,7 +56,12 @@ def entry(
     return e
 
 
-def analysis_file(fixture: Fixture, doc: Dict[str, Any]) -> str:
+def analysis_file(fixture: Fixture, doc: Dict[str, Any], selected: bool = True) -> str:
+    """The analysis file of doc under the fixture's capsule; a doc without
+    its own selected section carries the default green record of the
+    touched repo (the new section's own checks are the tests below)."""
+    if selected and "selected" not in doc:
+        doc = dict(doc, selected={"app": selected_record(fixture)})
     path = os.path.join(fixture.capsule, "artifacts", "build", "change-analysis.json")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
@@ -262,6 +269,75 @@ class AnalysisTest(unittest.TestCase):
             with self.subTest(name):
                 r = self.run_analysis(fx, eng, path)
                 self.assertEqual(r.exit, 2, "%s: %s" % (name, r.result.get("summary")))
+
+    # -- the machine selection records (polyforge#164): the same shared
+    # validator the close check runs, judged against the tree this run
+    # verifies
+
+    def test_a_missing_selected_section_adds_no_check(self) -> None:
+        """The record's presence is the build step's own rule and review's
+        judgment (the owner's Q1 ruling), never the gate's: no check
+        appears for a repo whose analysis carries no record."""
+        fx, eng = analysis_fixture(self.root)
+        path = analysis_file(fx, {"tests": []}, selected=False)
+        r = self.run_analysis(fx, eng, path)
+        self.assertEqual(r.exit, 0, r.result.get("summary"))
+        sel = [c for c in self.doc(r).get("checks", []) if c["name"] == "app:selected"]
+        self.assertEqual(sel, [])
+
+    def test_a_stale_selected_head_fails_its_check(self) -> None:
+        fx, eng = analysis_fixture(self.root)
+        path = analysis_file(fx, {"tests": [], "selected": {"app": selected_record(fx, head="1" * 40)}})
+        r = self.run_analysis(fx, eng, path)
+        self.assertEqual(r.exit, 1, r.result.get("summary"))
+        sel = [c for c in self.doc(r).get("checks", []) if c["name"] == "app:selected"]
+        self.assertEqual(sel[0]["status"], "fail")
+        self.assertIn("is not the tree it is judged at", sel[0].get("detail", ""))
+
+    def test_a_sync_merge_between_keeps_the_record_valid(self) -> None:
+        """The lane's order is build → review → sync → verification: when
+        sync merges origin's movement in (--no-ff), the record's head is an
+        ancestor of the verified HEAD with only merge commits between —
+        the change's own tree is what the record was computed at, and the
+        check passes."""
+        fx, eng = analysis_fixture(self.root)
+        sel = selected_record(fx)  # the record of the tree as build closed it
+        fx.advance_origin("app", {"up.txt": "upstream\n"})
+        git_t(fx.repo("app"), "fetch", "-q", "origin")
+        git_t(fx.repo("app"), "merge", "--no-ff", "-m", "sync: merge origin/main", "origin/main")
+        self.assertNotEqual(fx.head("app"), sel["head"])
+        # the merge is the sync's own shape: --no-ff, the branch's own
+        # commit the first parent
+        self.assertEqual(git_t(fx.repo("app"), "rev-parse", "HEAD^"), sel["head"])
+        path = analysis_file(fx, {"tests": [], "selected": {"app": sel}})
+        r = self.run_analysis(fx, eng, path)
+        self.assertEqual(r.exit, 0, r.result.get("summary"))
+        selck = [c for c in self.doc(r).get("checks", []) if c["name"] == "app:selected"]
+        self.assertEqual(len(selck), 1)
+        self.assertEqual(selck[0]["status"], "pass", selck[0])
+
+    def test_a_plain_commit_between_still_fails_the_check(self) -> None:
+        """The tolerance is the sync merge's alone: a plain commit between
+        the record's head and the verified HEAD is a change the record was
+        not computed at — stale, red."""
+        fx, eng = analysis_fixture(self.root)
+        sel = selected_record(fx)
+        fx.commit_in_repo("app", {"later.txt": "mine\n"}, "a later commit")
+        path = analysis_file(fx, {"tests": [], "selected": {"app": sel}})
+        r = self.run_analysis(fx, eng, path)
+        self.assertEqual(r.exit, 1, r.result.get("summary"))
+        selck = [c for c in self.doc(r).get("checks", []) if c["name"] == "app:selected"]
+        self.assertEqual(selck[0]["status"], "fail")
+        self.assertIn("is not the tree it is judged at", selck[0].get("detail", ""))
+
+    def test_a_green_selected_record_passes_its_check(self) -> None:
+        fx, eng = analysis_fixture(self.root)
+        path = analysis_file(fx, {"tests": []})
+        r = self.run_analysis(fx, eng, path)
+        self.assertEqual(r.exit, 0, r.result.get("summary"))
+        sel = [c for c in self.doc(r).get("checks", []) if c["name"] == "app:selected"]
+        self.assertEqual(len(sel), 1)
+        self.assertEqual(sel[0]["status"], "pass", sel[0])
 
 
 if __name__ == "__main__":

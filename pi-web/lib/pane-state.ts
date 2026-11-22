@@ -193,22 +193,14 @@ function resolveFocusedSessionId({
   return selectedSessionId;
 }
 
-/** Background-tasks panel session (pi#28): the panel follows the FOCUSED
- *  pane's session, not the classic selectedSession. */
-export function resolveBackgroundTasksSessionId(
-  args: FocusedPaneSessionArgs,
-): string | null {
-  return resolveFocusedSessionId(args);
-}
-
 /**
  * Sidebar highlight session (split-view sidebar follow): the row the sidebar
  * highlights — and, when its follow gate is on, scrolls into view — follows
- * the FOCUSED pane's session with the same fallbacks as the background-tasks
- * panel, so the two surfaces always agree. The sentinel never becomes a
- * highlighted row, and when split view closes the derivation returns the
- * classic selection, so the highlight falls back with no further user
- * action.
+ * the FOCUSED pane's session, not the classic selectedSession (pi#28; the
+ * background-tasks panel that shared this derivation retired with its
+ * dock, #173). The sentinel never becomes a highlighted row, and when
+ * split view closes the derivation returns the classic selection, so the
+ * highlight falls back with no further user action.
  */
 export function resolveSidebarSessionId(
   args: FocusedPaneSessionArgs,

@@ -146,16 +146,26 @@ func Cleanup(t CleanupTarget, bound time.Duration) (*CleanupReport, error) {
 	if t.WIID != "" {
 		rep.Layers = append(rep.Layers, "l4-env-marker")
 		marked := scanEnvMarker(t.WIID, t.DaemonID)
-		for _, pid := range marked {
-			signalPID(pid, syscall.SIGTERM, rep)
-		}
-		deadline := time.Now().Add(bound)
-		for _, pid := range marked {
-			for procExists(pid) && time.Now().Before(deadline) {
-				sleepFn(cleanupPoll)
+		sweepMarked(marked, rep, bound)
+		// A marked process's TERM handler can leave a marked child behind
+		// (polyforge#200: a child born only after the first scan, e.g. a
+		// handler that forks before exiting). One bounded re-sweep collects
+		// it — identity-checked, like every layer-4 signal — before the
+		// survivors are judged; only what still refuses to die after it
+		// is reported. The green path pays no extra walk beyond the
+		// survivor check it replaces.
+		for round := 0; round < 2; round++ {
+			rest := scanEnvMarker(t.WIID, t.DaemonID)
+			if len(rest) == 0 {
+				break
 			}
-			if procExists(pid) {
-				signalPID(pid, syscall.SIGKILL, rep)
+			if round == 0 {
+				rep.Layers = append(rep.Layers, "l4-late-resweep")
+				sweepMarked(rest, rep, bound)
+				continue
+			}
+			for _, id := range rest {
+				rep.Survivors = append(rep.Survivors, id.pid)
 			}
 		}
 	}
@@ -170,11 +180,6 @@ func Cleanup(t CleanupTarget, bound time.Duration) (*CleanupReport, error) {
 			if cur, ok := procIdentOf(id.pid); ok && cur.start == id.start {
 				rep.Survivors = append(rep.Survivors, id.pid)
 			}
-		}
-	}
-	if t.WIID != "" {
-		for _, pid := range scanEnvMarker(t.WIID, t.DaemonID) {
-			rep.Survivors = append(rep.Survivors, pid)
 		}
 	}
 	if len(rep.Survivors) > 0 {
@@ -321,6 +326,22 @@ func signalPID(pid int, sig syscall.Signal, rep *CleanupReport) {
 	}
 }
 
+// sweepMarked runs the escalating stop over the marked identities: TERM,
+// a bounded wait, KILL, a bounded wait. Every signal is identity-checked
+// (signalIdent), so a pid whose occupant changed between the scan and the
+// signal — pid reuse — is never touched; and the post-KILL wait means the
+// survivor check no longer reads a process that is dying but not yet gone.
+func sweepMarked(marked []procIdent, rep *CleanupReport, bound time.Duration) {
+	for _, id := range marked {
+		signalIdent(id, syscall.SIGTERM, rep)
+	}
+	waitIdents(marked, bound)
+	for _, id := range marked {
+		signalIdent(id, syscall.SIGKILL, rep)
+	}
+	waitIdents(marked, bound)
+}
+
 func waitIdents(ids []procIdent, bound time.Duration) {
 	deadline := time.Now().Add(bound)
 	for {
@@ -463,22 +484,24 @@ func liveProcIDs() (map[int]bool, bool) {
 // ---------------------------------------------------------------------------
 // env marker scan (L4) and cwd scan (L5)
 
-// scanEnvMarker returns the live pids whose environment carries BOTH this
-// WI's PF_WI_ID marker and this daemon's PF_DAEMON_ID marker. Excludes
-// self (pid 1 and below are outside procListAll). Unreadable environments
+// scanEnvMarker returns the live marked processes (their environments
+// carry BOTH this WI's PF_WI_ID marker and this daemon's PF_DAEMON_ID
+// marker) WITH their (pid, starttime) identities, captured at the scan —
+// layer 4's signal-time identity check works from these. Excludes self
+// (pid 1 and below are outside procListAll). Unreadable environments
 // (another uid, an exit race) are skipped: not provably ours.
-func scanEnvMarker(wi, daemonID string) []int {
+func scanEnvMarker(wi, daemonID string) []procIdent {
 	self := os.Getpid()
 	pids, err := procListAllFn()
 	if err != nil {
 		return nil
 	}
-	var out []int
+	var out []procIdent
 	for _, pid := range pids {
 		if pid == self {
 			continue
 		}
-		state, _, _, _, ok := procStat(pid)
+		state, _, _, start, ok := procStat(pid)
 		if !ok || state == "Z" {
 			continue
 		}
@@ -487,7 +510,7 @@ func scanEnvMarker(wi, daemonID string) []int {
 			continue // unreadable (permission/exit race): not provably ours
 		}
 		if envHasMarkers(envs, wi, daemonID) {
-			out = append(out, pid)
+			out = append(out, procIdent{pid: pid, start: start})
 		}
 	}
 	return out

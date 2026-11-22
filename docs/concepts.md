@@ -101,7 +101,20 @@ records (times, model, commits, the owner's messages verbatim) and appends
 it to `artifacts/handoff.md`, the work item's one append-only hand-off
 document that every later step reads first. Nothing else a step prints is
 read as a result, and the daemon never reads the body for a verdict: it
-reacts to the status alone (advance, rewind, park, end).
+reacts to the status alone (advance, rewind, park, end). A lane may declare
+that a step's `done` needs proof the tree it changed still passes its own
+checks: develop's `build` and `sync` do (`fast_check_proof`), so their
+`done` is refused until every task repo the round moved has a `pass` result
+at its HEAD — the daemon reads the result file the lane's declaration names
+and never runs the check itself. A red the change did not cause the check
+itself triages first: every unit still red after its one re-run is replayed
+on the change's baseline (the same judgment verification runs), and one
+the baseline carries the same way is recorded `pre_existing` — not the
+change's red, the check passes. What is left — a this-change or unsettled
+red, the default branch already red, an `error`/`partial` result, or a
+lane that planned no check — is the owner's: the step asks, and on the
+release hands off `done` with `--per-owner` naming the reply, the stamp
+recording it.
 
 A step agent that needs the owner asks with `pf step ask` and ends its
 turn; the owner's words — `pf answer <wi> --text "<words>"` or the job
@@ -318,7 +331,18 @@ has one; develop's build writes its own
 obligations (the documents, tables and projection rules that must change with
 it, or an explicit none with a reason — a plan missing one is rejected), and
 review checks the scope both ways: changed-but-undeclared files, and
-declared obligations or writes the diff left unchanged. A review-driven
+declared obligations or writes the diff left unchanged. A plan written
+on a ticket that carries a `## 分析` section also carries a `## 分析对照`
+section mapping each item the analysis lists — each old test and document
+obligation, each risk, each decided point — to the unit that carries it,
+or the stated reason it is not taken (a decided point first; an analysis
+written against an older base has its file:line references re-checked
+against the current one). A plan written on a ticket that carries one
+or more `## 已定`-opening sections also carries a `## 已定对照` section
+mapping each of their items to the unit that carries it, or to a stated
+reason — a ticket without such a section asks for no mapping section;
+the close's plan-conformance names any unmapped ruling red (its number
+and text), and review runs the same line. A review-driven
 fix that needs a file outside the declared set cites the review finding
 for it instead of re-planning. The plan also maps every deliverable it
 demands from a later step (a report, a proof, an owner presentation) to
@@ -582,8 +606,18 @@ rewind — and reads no content, and no agent merges by hand:
   files only — stages it and runs `sync.py --continue`, which refuses a
   residual marker, an unstaged path, a mechanically resolved file changed or
   a resolved text file that drops a line both parents carry, commits the merge and rewrites the same result file with the files under
-  `resolved[]`. No review judges that resolution: the verification tests the
-  resolved tree right after, publish's PR body lists the files verbatim for
+  `resolved[]`. Once the merge is committed, sync runs the lane's fast-check
+  line over every moved repo (`artifacts/sync/fast-checks/<repo>.json`), and
+  its `done` is refused until that result is a `pass` at HEAD — a structural
+  break such as a stray brace stops here, not at the gate after; a
+  fast-forward needs none, and a red that is not the resolution's is the
+  check's own to triage first: one the baseline — after the merge, the
+  default branch's tip — reproduces the same way is recorded `pre_existing`
+  and the check passes; what is left (an `error`/`partial` result, no
+  planned check, one the baseline could not settle) is released by the
+  owner's word, the step then handing off `done` with
+  `--per-owner`. No review judges that resolution: the verification
+  tests the resolved tree right after, publish's PR body lists the files verbatim for
   the owner ("conflict resolved in sync: <files>"), and an agent that is not
   confident — or finds the default branch changed a premise the change
   relies on — asks the owner (`pf step ask`) and acts on the reply (resolves
@@ -812,9 +846,10 @@ with its own credentials (a step agent holds none) once the step hands off
   owner fixes it and the agent retries, or rewinds, or cancels.
 - `full-gate` (the script `gate.py --isolation container --capsule --pins`,
   no tier — its step key, else
-  the project default; heavy admission; the lane's gate) — runs the release's test gate once on every
-  gated repo's pinned head — never the live tip, which keeps moving (what
-  `.polyforge/release.sh` runs; never the daemon's
+  the project default; heavy admission; the lane's gate) — runs the full gate once on every
+  gated repo's pinned head — never the live tip, which keeps moving (the
+  batch's pins are the release lane's release object, polyforge#154; never
+  the daemon's
   verification run) — with the repo's own scope engine, else the lane's
   copy (a repo that provides only `.polyforge/verify-scope.conf` and
   `.polyforge/Dockerfile.verify` is gated too) — and on a pass writes the green tag itself
@@ -1025,17 +1060,32 @@ setting:
   e2e scenario is a unit, red before its implementation like any other.
   No daemon check judges what `build` reports: it
   runs each unit red then green itself and records it in
-  `artifacts/build/units.json` (`[{id, pre_existing_red?, test_commit?, impl_commit,
+  `artifacts/build/units.json` (`[{id, pre_existing_red?, timeout?, test_commit?, impl_commit,
   run{repo, cwd, argv}, marker}]`, the run exactly as it ran red and green; a unit
   whose reproduction test already exists and is red before the change — an
   integration fix ticket — declares `pre_existing_red: true` and reports no
-  `test_commit`, its red evidence a replay on the tree of the change's base; the
+  `test_commit`, its red evidence a replay on the tree of the change's base; a unit
+  self-reports `timeout` (a Go duration) to raise the limit its run and its red-state
+  replay are bounded by (the default is 10m, and a run its limit kills is an evidence
+  problem, never a pass); the
   daemon checks only that the file parses), and the steps after it verify
-  it. Its close runs two of the same facts first — `build` without the
-  replay (each unit's static commit facts) and `carries` — and hands off
-  only on green. Review runs four pre-written lines of the workflow's script
+  it. Its close runs the same facts first — `plan-conformance`, `build`
+  with the replay (each unit's run red at its test commit) and `carries` — and hands off
+  only on green. Before them its close runs the scoped selection
+  verification plans — `fast_checks.py --close-scoped`, one shared
+  implementation, for a work item whose verification runs the light tier
+  (an integration batch's fix ticket runs the full bar and closes without
+  one), in the repository's declared verification image when its HEAD
+  carries `.polyforge/Dockerfile.verify` (the same isolation verification
+  uses, the image and tool caches shared; no declaration keeps the host
+  close, the result recording which isolation ran) — and merges a green
+  record into the change analysis's `selected`; a `pre_existing` record — every red its baseline triage
+  proved pre-existing — hands off `done` citing its result file and merges
+  the same `selected`, the shared validator taking it as green-equivalent
+  evidence. Review runs four pre-written lines of the workflow's script
   `facts.py` as written — `plan-conformance` (the plan's two-way
-  conformance with the diff), `build --replay --isolation host` (each
+  conformance with the diff, and its `## 已定对照` mapping of the ticket's
+  decided rulings — an unmapped one red and named), `build --replay --isolation host` (each
   unit's test commit a one-parent
   ancestor of its implementation commit holding test paths only, every
   change to a unit's test after its red commit as a `test_weakened` fact,

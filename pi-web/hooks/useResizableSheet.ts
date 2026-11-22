@@ -43,8 +43,8 @@ function writeStoredSheetHeightPct(storageKey: string, pct: number): void {
 }
 
 /** Drag-to-resize for the mobile bottom sheets (pi#120): one shared
- *  mechanism, two consumers (the Polyforge sheet and the bg-tasks sheet,
- *  each persisting its own height). The drag is continuous, clamped to
+ *  mechanism, one consumer left (the Polyforge sheet; the bg-tasks sheet
+ *  retired with its dock, #173). The drag is continuous, clamped to
  *  [30%, 90%] of the sheet's container — dragging past either bound clamps
  *  and never dismisses (the backdrop tap stays the only dismiss gesture: the
  *  handle is a DOM child of the sheet, above the backdrop). Absent/invalid/

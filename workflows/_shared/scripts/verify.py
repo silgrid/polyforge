@@ -49,6 +49,16 @@ Dockerfile or not; an image the machine does not carry is `not judged`
 (exit 2, the fixed mark ``pf-verify-image-missing`` in the summary: a
 person prepares it, a retry cannot).
 
+The step's ``audit`` parameter (``PF_PARAM_AUDIT``, polyforge#138):
+``on``, empty and unset keep today's behavior byte for byte; ``off`` —
+the project owner's decision, set per project in the workspace config
+or by a ticket override, never by a repository's own conf — hands every
+scope-engine invocation ``--audit off``, so no full report plans the
+engine-appended dependency audit, and the result records the closure
+(the merged source hint, the two layers not distinguished); any other
+value is a named error before any check or container starts (exit 2,
+the fixed mark ``pf-audit-param-invalid`` in the summary).
+
 ``--analysis`` names the build's change analysis
 (``artifacts/build/change-analysis.json``): the tests it lists run beside
 the plan — the union is add-only, the engine's selection never narrowed.
@@ -63,7 +73,7 @@ judged by its marker under ``--unit-runs``' own rules;
 a listed test that does not exist fails its check naming it. A missing or
 malformed analysis file is the invocation's (exit 2).
 
-``--unit-runs`` names the build's units.json (``[{id, [pre_existing_red,]
+``--unit-runs`` names the build's units.json (``[{id, [pre_existing_red,] [timeout,]
 [test_commit,] impl_commit, run{repo, cwd, argv}, marker}]``): every unit's green run is run
 again as written beside the plan, each its own check
 ``<repo>:unit-run:<id>``. It passes when it exits 0 and one output line
@@ -71,8 +81,12 @@ matches its marker — a Python regular expression (``re.ASCII``, searched in
 each line) that must not be empty, blank or able to match the empty string;
 a run that cannot run as written fails its check without running. A unit
 run is never pre-existing (it pins this change), and its test commit's files
-are protected for the plan's units too. An unreadable or malformed file is
-the invocation's (exit 2).
+are protected for the plan's units too. A unit's run is bounded by its
+self-reported ``timeout``, else the shared 10m default (``pfstep/unitruns``):
+a run its limit kills is an evidence problem, the why naming the limit — a
+red-state run must exit non-zero within its limit, never hang. An unreadable
+or malformed file (an invalid ``timeout`` included) is the invocation's
+(exit 2).
 
 The scope engine: ``--engine``, else the shared tree's
 ``$PF_SHARED_DIR/scripts/verify-scope``.
@@ -111,13 +125,11 @@ import argparse
 import json
 import os
 import re
-import shutil
 import sys
-import tempfile
 import time
 import traceback
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -125,16 +137,29 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pfstep  # noqa: E402
 from pfstep import container, duration, git, gostr, jsonout, result, runner, stepenv, tmpdir  # noqa: E402
 from pfstep import progress  # noqa: E402
+from pfstep import scoped_plan  # noqa: E402
+from pfstep.scoped_plan import append_new, base_branch_of, engine_argv, fallback_reasons, plan_light  # noqa: E402
 from pfstep import targetbranch  # noqa: E402
-from pfstep.analysis import Analysis, AnalysisDecl, read_analysis, static_problem  # noqa: E402
+from pfstep.analysis import Analysis, AnalysisDecl, read_analysis, selected_problem, static_problem  # noqa: E402
+from pfstep.audit import AUDIT_OFF_NOTE, AUDIT_INVALID_MARK, AuditParamError, read_audit  # noqa: E402
 from pfstep.carries import file_carries, glob_match  # noqa: E402
+from pfstep.completion import completion_proof, harness_command, read_go_harness  # noqa: E402
 from pfstep.deadline import default_deadline_for  # noqa: E402
 from pfstep.engine import TIER_FULL, TIER_LIGHT, EngineCommand, EngineReport, ReportError, choose, decode_report  # noqa: E402
-from pfstep.engine import default_engine, nested_roots, reached_roots  # noqa: E402
-from pfstep.engine import argv_of as engine_argv_of  # noqa: E402
+from pfstep.engine import default_engine  # noqa: E402
 from pfstep.flaky import RerunRun, rerun_flaky  # noqa: E402
 from pfstep.junit import ReportRead, merge_reported, read_declared_report, snapshot_report  # noqa: E402
-from pfstep.preexisting import PRESENT, BaseObservation, classify_base, short, unit_presence  # noqa: E402
+from pfstep.preexisting import (  # noqa: E402
+    BASE_RUNS,
+    CLASS_UNDETERMINED,
+    candidates,
+    judge_on_base,
+    join_note,
+    path_is_protected,
+    protected_paths,
+    short,
+    skip_form as shared_skip_form,
+)
 from pfstep.rerun import CommandSpec, UnitState, locate, whole_command  # noqa: E402
 from pfstep.shellwords import command_word, has_assignment, has_flag, has_go_test, shell_quote, shell_words, token_index  # noqa: E402
 from pfstep.units import (  # noqa: E402
@@ -146,7 +171,6 @@ from pfstep.units import (  # noqa: E402
     KIND_PYTEST,
     browser_crashed,
     cap_text,
-    find_unit,
     normalize_output,
     output_lines,
     parse_units,
@@ -156,9 +180,11 @@ from pfstep.units import (  # noqa: E402
 from pfstep.unitruns import (  # noqa: E402
     UnitRunDecl,
     argv_line,
+    limit_note,
     marker_matches,
     read_unit_runs,
     run_shape_problem,
+    unit_limit_ns,
     unknown_repo_problem,
 )
 
@@ -169,7 +195,6 @@ VERSION = pfstep.LIBRARY
 COMMAND_TIMEOUT = 20 * duration.MINUTE
 BUDGET = 20 * duration.MINUTE
 RERUNS = 1
-BASE_RUNS = 1
 # Kept free at the end of the run for the cleanup and the result.
 WRITE_MARGIN = 20.0
 GIT_TIMEOUT = 600.0
@@ -180,9 +205,13 @@ KIND_UNIT_RUN = "unit_run"
 ORIGIN_ANALYSIS = "analysis"
 KIND_ANALYSIS = "analysis"
 
-PLAN_PLANNED = "planned"
-PLAN_EMPTY = "empty"
-PLAN_ENGINE_FAILED = "engine-failed"
+# the plan's statuses, the fallback reasons and the measured branch: the
+# one shared planning implementation's (pfstep/scoped_plan.py), the words
+# verify.py's own records keep (polyforge#164)
+PLAN_PLANNED = scoped_plan.PLAN_PLANNED
+PLAN_EMPTY = scoped_plan.PLAN_EMPTY
+PLAN_ENGINE_FAILED = scoped_plan.PLAN_ENGINE_FAILED
+NO_FALLBACK_DIAGNOSTIC = scoped_plan.NO_FALLBACK_DIAGNOSTIC
 
 MERGE_NONE = "none"
 BASELINE_MERGE_BASE = "merge-base"
@@ -197,11 +226,6 @@ BROWSER_CRASH_NOTE = "browser crash"
 GENERIC_TEST_BASE = ("*_test.go", "*.test.*", "*.spec.*", "test_*.py", "*_test.py")
 
 _S = gostr.SPACE
-_HARNESS_RAN = re.compile(r"FAIL\te2e\t(\d+)/(\d+) tests ran(?:, (\d+) excluded by E2E_SKIP)?,", re.ASCII)
-_SUMMARY_LINE = re.compile(r"(PASS|FAIL) ([^\t\n\f\r ]+) [^\t\n\f\r ]+s\Z", re.ASCII)
-_SUMMARY_TALLY = re.compile(r"(\d+)/(\d+) passed\b", re.ASCII)
-_SUMMARY_HEADER = re.compile(r"===== summary =====\Z", re.ASCII)
-_SUITES_HEADER = re.compile(r"e2e/all: (\d+) suite\(s\)", re.ASCII)
 
 
 class Usage(Exception):
@@ -343,13 +367,9 @@ class RepoRun:
     box: Optional[container.Box] = None
 
     def is_harness(self, cmd: str) -> bool:
-        """Whether cmd runs the declared Go harness directly: assignments,
-        then sh or bash, then exactly the harness path."""
-        if self.go_harness == "":
-            return False
-        words, simple = shell_words(cmd)
-        cw, ci = command_word(words)
-        return simple and cw in ("sh", "bash") and len(words) == ci + 2 and gostr.clean_rel(words[ci + 1]) == self.go_harness
+        """Whether cmd runs the declared Go harness directly (the one
+        implementation, pfstep.completion)."""
+        return harness_command(self.go_harness, cmd)
 
 
 # ---- helpers ---------------------------------------------------------------
@@ -358,10 +378,6 @@ class RepoRun:
 def git_quiet(directory: str, *args: str, literal: bool = True) -> str:
     """One read-only git call's stdout (git.GitError when it fails)."""
     return git.git(directory, *args, timeout=GIT_TIMEOUT, literal_pathspecs=literal)
-
-
-def join_note(a: str, b: str) -> str:
-    return b if a == "" else a + "; " + b
 
 
 def log_ref(log_path: str) -> str:
@@ -383,21 +399,6 @@ def is_test_file(p: str, globs: Sequence[str]) -> bool:
     if any(d in ("test", "tests") for d in parts[:-1]):
         return True
     return any(glob_match(g, p) or glob_match(g, base) for g in globs)
-
-
-def read_go_harness(repo_dir: str) -> str:
-    """The repo conf's ``go_harness=`` declaration (the last one wins)."""
-    try:
-        with open(os.path.join(repo_dir, ".polyforge", "verify-scope.conf"), encoding="utf-8", errors="replace") as f:
-            raw = f.read()
-    except OSError:
-        return ""
-    h = ""
-    for line in raw.split("\n"):
-        t = gostr.trim_space(line)
-        if t.startswith("go_harness="):
-            h = gostr.clean_rel(gostr.trim_space(t[len("go_harness="):]))
-    return h
 
 
 # ---- the run ---------------------------------------------------------------
@@ -437,6 +438,7 @@ class Verification:
         tier_reason: str = "",
         image: str = "",
         image_source: str = "",
+        audit: str = "on",
     ) -> None:
         self.capsule = capsule
         self.engine = engine
@@ -450,10 +452,14 @@ class Verification:
         self.tier_reason = tier_reason
         self.unit_run_decls = unit_runs
         # the analysis's listed tests: the first `limit` run beside the
-        # plan, the tail cut and named (the union is add-only)
+        # plan, the tail cut and named (the union is add-only); its machine
+        # selection records are judged by the same shared validator the
+        # build close's own check runs (pfstep/analysis.selected_problem)
         an = analysis or Analysis()
+        self.analysis_given = analysis is not None
         self.analysis_taken, self.analysis_cut = an.taken()
         self.analysis_limit = an.limit
+        self.analysis_selected = an.selected
         self.env = env
         self.say = say
         self.co = co
@@ -462,6 +468,10 @@ class Verification:
         # "flag" (--image) or "param" (PF_PARAM_IMAGE)
         self.image = image
         self.image_source = image_source
+        # polyforge#138: the audit step parameter — "off" hands every
+        # engine invocation --audit off (the project owner's switch; on,
+        # empty and unset hand nothing, today's argv byte for byte)
+        self.audit = audit
         self.n, self.run_dir = self._run_dir(run_dir)
         start = time.time()
         # the light tier's rerun budget is its own knob; a full run is
@@ -702,9 +712,14 @@ class Verification:
         under the light tier, the full one under the full tier): (report,
         the invocation, why there is none)."""
         engine = rr.box.engine if rr.box is not None else self.engine
-        argv = engine_argv_of(engine) + ["--json", "--light" if light else "--full"]
-        if base:
-            argv += ["--base", base]
+        # the invocation itself is the one shared planning implementation's
+        # (pfstep/scoped_plan.py: engine_argv), so verification's light
+        # request and the build close's ask the engine exactly alike; the
+        # audit switch is the owner's parameter and rides on top of the
+        # shared invocation (pfstep/audit.py, w138)
+        argv = engine_argv(engine, base, light=light)
+        if self.audit == "off":
+            argv += ["--audit", "off"]
         ref = " ".join(argv)
         er = self.exec(rr, argv, directory, cwd, GIT_TIMEOUT, boxed=True, capture=True)
         if er.error:
@@ -738,61 +753,15 @@ class Verification:
                 return
             p.status, p.commands = PLAN_PLANNED, chosen
             return
-        rep, ref, why = self.ask_engine(rr, rr.dir, rr.cwd_rel, base)
-        p = RepoPlan(engine_ref=ref, report=rep)
+        # the light plan itself is the one shared planning
+        # implementation's (pfstep/scoped_plan.py: plan_light) — the build
+        # close's scoped selection plans through it too, so the two cannot
+        # drift (tests/test_build_scoped_close.py's SelectionParityTest)
+        lp = plan_light(rr.dir, rr.cwd_rel, base, lambda d, rel, b: self.ask_engine(rr, d, rel, b))
+        p = RepoPlan(status=lp.status, reason=lp.reason, mode=lp.mode, commands=lp.commands,
+                     engine_ref=lp.engine_ref, report=lp.report, base_setup=lp.base_setup,
+                     nested_full=lp.nested_full)
         rr.plan = p
-        if rep is None:
-            p.status, p.reason = PLAN_ENGINE_FAILED, why
-            return
-        chosen, mode = choose(rep, TIER_LIGHT)
-        p.mode = mode
-        p.base_setup = append_new([], rep.base_setup)
-        if mode == TIER_LIGHT:
-            nested, setup, refs, nested_full, why = self.plan_nested(rr, base, rep.paths or [])
-            if why:
-                p.status, p.reason = PLAN_ENGINE_FAILED, why
-                return
-            chosen += nested
-            p.base_setup = append_new(p.base_setup, setup)
-            p.engine_ref += "".join("; " + ref for ref in refs)
-            p.nested_full = nested_full
-        if not chosen:
-            p.status = PLAN_EMPTY
-            p.reason = "the engine planned no command (stack %s, conf %s)" % (gostr.quote(rep.stack), rep.conf)
-            return
-        p.status, p.commands = PLAN_PLANNED, chosen
-
-    def plan_nested(
-        self, rr: RepoRun, base: str, paths: List[str]
-    ) -> Tuple[List[EngineCommand], List[str], List[str], List[str], str]:
-        """The nested engine roots the changed paths reach (each path owned
-        by its deepest root): their commands behind ``cd <root> &&`` (named
-        ``<root>/<name>``), their base setup likewise, the engine
-        invocations, and — for a nested root whose own light report fell
-        back to the full tier, whose full plan then runs — why the run is
-        full; the last answer is why a nested engine failed ("" = none did).
-        """
-        cmds: List[EngineCommand] = []
-        setup: List[str] = []
-        refs: List[str] = []
-        nested_full: List[str] = []
-        for d in reached_roots(nested_roots(rr.dir), paths):
-            rep, ref, why = self.ask_engine(rr, os.path.join(rr.dir, d), rr.cwd_rel + "/" + d, base)
-            if rep is None:
-                return [], [], [], [], "the nested engine root %s: %s" % (d, why)
-            refs.append(ref + " (in " + d + ")")
-            chosen, mode = choose(rep, TIER_LIGHT)
-            if mode != TIER_LIGHT:
-                nested_full.extend(nested_full_reasons(d, rep))
-            cd = "cd " + shell_quote(d) + " && "
-            for c in chosen:
-                cmds.append(EngineCommand(
-                    name=d + "/" + c.name, phase=c.phase, cmd=cd + c.cmd, requires_env=c.requires_env,
-                    requires_cmd=c.requires_cmd, timeout=c.timeout, report=c.report,
-                    rerun=cd + c.rerun if c.rerun else "", source=c.source, dir=d, inner=c.cmd,
-                ))
-            setup += [cd + s for s in rep.base_setup]
-        return cmds, setup, refs, nested_full, ""
 
     # -- the bar
 
@@ -830,8 +799,7 @@ class Verification:
         return self.r.unmet(c.requires_env, c.requires_cmd, rr.dir, rr.box)
 
     def protected_path(self, p: str) -> bool:
-        c = gostr.clean_rel(p)
-        return c != "" and any(c == pr or c.startswith(pr + "/") for pr in self.protected)
+        return path_is_protected(p, self.protected)
 
     def rerun_runner(self, rr: RepoRun, timeout: int) -> Callable[[str], RerunRun]:
         def run(cmd: str) -> RerunRun:
@@ -932,7 +900,7 @@ class Verification:
                 return ""
         return body_of
 
-    def recorded_reruns(self, rr: RepoRun, s: UnitRunState) -> None:
+    def recorded_reruns(self, rr: RepoRun, s: UnitRunState, timeout: float) -> None:
         """A failed recorded run is re-run once at HEAD (RERUNS): a pass on
         the re-run is flaky; a re-run the budget never started leaves it a
         failure with not_rerun."""
@@ -940,7 +908,7 @@ class Verification:
         while not s.passed and s.ran and i <= RERUNS:
             runs = s.runs
             if self.budget_left():
-                self.exec_unit_run(rr, s)
+                self.exec_unit_run(rr, s, timeout)
             if s.runs == runs:
                 # not started: the budget spent or the deadline passed
                 s.not_rerun = i == 1
@@ -960,8 +928,14 @@ class Verification:
             s.problem = self.prepare_unit_run(s, rr)
             if s.problem:
                 continue
-            self.exec_unit_run(rr, s)
-            self.recorded_reruns(rr, s)
+            self.exec_unit_run(rr, s, self.unit_run_limit(d))
+            self.recorded_reruns(rr, s, self.unit_run_limit(d))
+
+    def unit_run_limit(self, d: UnitRunDecl) -> float:
+        """A recorded unit run's limit: its self-reported `timeout`, else
+        the shared default (pfstep/unitruns) — never the bar commands'
+        own bound."""
+        return unit_limit_ns(d.timeout)[0] / duration.SECOND
 
     def run_analysis_runs(self, rr: RepoRun) -> None:
         """The analysis's taken entries of rr: each runs beside the plan,
@@ -977,12 +951,12 @@ class Verification:
             self.prepare_analysis_run(s, rr)
             if s.problem:
                 continue
-            self.exec_unit_run(rr, s)
-            self.recorded_reruns(rr, s)
+            self.exec_unit_run(rr, s, COMMAND_TIMEOUT / duration.SECOND)
+            self.recorded_reruns(rr, s, COMMAND_TIMEOUT / duration.SECOND)
 
-    def exec_unit_run(self, rr: RepoRun, s: UnitRunState) -> None:
+    def exec_unit_run(self, rr: RepoRun, s: UnitRunState, timeout: float) -> None:
         er = self.exec(rr, list(s.decl.argv), os.path.join(rr.dir, s.cwd), gostr.path_join(rr.cwd_rel, s.cwd),
-                       COMMAND_TIMEOUT / duration.SECOND, private_tmp=True, boxed=True)
+                       timeout, private_tmp=True, boxed=True)
         if er.not_started:
             if not s.ran:
                 s.why = "not started: " + self.r.deadline_note() + " had passed"
@@ -990,7 +964,7 @@ class Verification:
         s.ran, s.runs = True, s.runs + 1
         s.exit, s.timed_out, s.log_path = er.exit, er.timed_out, er.log_path
         if er.timed_out:
-            s.passed, s.why = False, "exit %d: killed at its timeout" % er.exit
+            s.passed, s.why = False, limit_note(int(timeout * duration.SECOND))
         elif er.exit != 0:
             s.passed, s.why = False, "exit %d" % er.exit
         elif not marker_matches(s.decl.marker, output_lines(er.log_path)):
@@ -1002,42 +976,19 @@ class Verification:
             s.crashed = browser_crashed(output_lines(er.log_path))
 
     def fold_unit_runs(self) -> None:
-        """Protect the files of every unit run's test commit."""
-        seen: Set[str] = set(self.protected)
-        for d in self.unit_run_decls:
-            sha = gostr.trim_space(d.test_commit)
-            if sha == "" or sha.startswith("-") or d.repo == "":
-                continue
-            repo = os.path.join(self.capsule, "repos", d.repo)
-            if not os.path.isdir(repo):
-                continue
-            try:
-                out = git_quiet(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", sha)
-            except git.GitError:
-                continue
-            for p in gostr.fields(out):
-                c = gostr.clean_rel(p)
-                if c and c not in seen:
-                    seen.add(c)
-                    self.protected.append(c)
+        """Protect the files of every unit run's test commit (the shared
+        fold, pfstep/preexisting.py)."""
+        self.protected = protected_paths(self.capsule, self.unit_run_decls, self.protected)
 
     # -- the base runs
 
     def pre_existing_phase(self, rr: RepoRun) -> None:
-        """rr's still-failing units classified against the baseline."""
-        cands: List[UnitState] = []
-        for cr in rr.runs:
-            for u in cr.units:
-                if not u.failing():
-                    continue
-                if u.protected:
-                    u.note = join_note(u.note, "never pre-existing: it is a protected test that pins this change")
-                elif u.kind in (KIND_COMMAND, KIND_GO_PKG, KIND_LIBTEST) or u.file == "":
-                    u.note = join_note(u.note, "never pre-existing: no test file and test name locate it")
-                elif u.rerun == "":
-                    pass
-                else:
-                    cands.append(u)
+        """rr's still-failing units classified against the baseline — the one
+        shared entry (pfstep.preexisting.judge_on_base, polyforge#212),
+        verify's own executors and ns→s timeout handed in: the wording and
+        the record on each unit are byte-identical to the phase this
+        replaces, the class and the observation summary beside them."""
+        cands = candidates(u for cr in rr.runs for u in cr.units)
         if not cands:
             return
         base = base_name = ""
@@ -1047,69 +998,21 @@ class Verification:
                 base, base_name = rr.merge.baseline, short(rr.merge.baseline)
                 if rr.merge.baseline_ref != BASELINE_MERGE_BASE:
                     base_name = rr.merge.baseline_ref + " (" + base_name + ")"
-
-        def mark_all(why: str) -> None:
-            for u in cands:
-                u.note = join_note(u.note, why)
-
         if base == "":
-            mark_all("not pre-existing: no base commit is known")
+            for u in cands:
+                u.note = join_note(u.note, "not pre-existing: no base commit is known")
+                u.base_class = CLASS_UNDETERMINED
             return
-        if not self.budget_left():
-            mark_all("not pre-existing: no base run started, %s is spent" % self.budget_note())
-            return
-        parent = rr.box.base_root if rr.box is not None else None
-        try:
-            if parent:
-                os.makedirs(parent, exist_ok=True)
-            tmp = tempfile.mkdtemp(prefix="pf-verify-base-", dir=parent)
-        except OSError as err:
-            mark_all("not pre-existing: no throwaway worktree: %s" % err)
-            return
-        try:
-            add = self.exec(rr, ["git", "worktree", "add", "--detach", tmp, base], rr.dir, rr.cwd_rel, GIT_TIMEOUT)
-            if add.exit != 0:
-                mark_all("not pre-existing: the base worktree could not be checked out (exit %d)" % add.exit)
-                return
-            try:
-                self.base_runs(rr, cands, tmp, base, base_name, mark_all)
-            finally:
-                git.run(rr.dir, "worktree", "remove", "--force", tmp, timeout=GIT_TIMEOUT)
-                git.run(rr.dir, "worktree", "prune", timeout=GIT_TIMEOUT)
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
-
-    def base_runs(self, rr: RepoRun, cands: List[UnitState], tmp: str, base: str, base_name: str,
-                  mark_all: Callable[[str], None]) -> None:
-        if rr.plan is not None:
-            for setup in rr.plan.base_setup:
-                er = self.exec_bash(rr, setup, tmp, tmp, COMMAND_TIMEOUT)
-                if er.exit != 0:
-                    mark_all("not pre-existing: the base_setup command %s failed on the base (exit %d) — an"
-                             " environmental failure" % (gostr.quote(setup), er.exit))
-                    return
-        for u in cands:
-            presence, why = unit_presence(rr.dir, base, u.kind, u.name, u.file)
-            exists = presence == PRESENT
-            runs: List[BaseObservation] = []
-            if exists:
-                i = 0
-                while i < BASE_RUNS and self.budget_left() and self.fits(u.rerun_dur):
-                    er = self.exec_bash(rr, u.rerun, tmp, tmp, COMMAND_TIMEOUT)
-                    us = parse_units(normalize_output(output_lines(er.log_path), tmp, er.tmp_dir))
-                    obs = BaseObservation(exit=er.exit)
-                    got = find_unit(us, u.kind, u.name)
-                    if got is not None:
-                        obs.found, obs.failed, obs.signature = True, got.failed, got.signature
-                    runs.append(obs)
-                    i += 1
-            pre, detail = classify_base(u.unit.signature, u.head_sig, exists, why, runs, BASE_RUNS)
-            if pre:
-                u.pre_existing = True
-                u.pre_detail = cap_text("fails on base %s too: %s, signature %s" % (base_name, detail, gostr.quote(u.head_sig)))
-                u.base_sig = u.head_sig
-            else:
-                u.note = join_note(u.note, detail)
+        judge_on_base(
+            rr.dir, base, base_name, cands,
+            rr.plan.base_setup if rr.plan is not None else [],
+            lambda tmp, sha: self.exec(rr, ["git", "worktree", "add", "--detach", tmp, sha], rr.dir, rr.cwd_rel,
+                                        GIT_TIMEOUT).exit,
+            lambda cmd, d, t: self.exec_bash(rr, cmd, d, d, int(t * duration.SECOND)),
+            self.budget_left, self.fits, self.budget_note(),
+            COMMAND_TIMEOUT / duration.SECOND,
+            rr.box.base_root if rr.box is not None else None,
+        )
 
     # -- the confirming re-run
 
@@ -1135,7 +1038,7 @@ class Verification:
             if pre:
                 form, note = skip_form(cr)
                 if note:
-                    proof = completion_proof(cr)
+                    proof = completion_proof(cr.harness, cr.timed_out, cr.log_path, cr.units)
                     if proof:
                         cr.completion = proof + " (the light tier carries no bar to a re-run, so its pre-existing failure needs no skip form)"
                         continue
@@ -1145,7 +1048,7 @@ class Verification:
                     cr.units.append(residual)
                     continue
                 cmd = form
-            proof = completion_proof(cr)
+            proof = completion_proof(cr.harness, cr.timed_out, cr.log_path, cr.units)
             if proof:
                 cr.completion = proof
                 continue
@@ -1293,9 +1196,34 @@ class Verification:
                     analysis_runs.append(rec)
                     commands.append(crep)
                 checks.extend(test_file_checks(rr))
+                # the analysis's machine selection record of rr, when it
+                # carries one: the one shared validator (pfstep/analysis),
+                # the head it is judged at being the tree this run
+                # verifies. Whether a touched repo carries one at all is
+                # no machine question (the owner's Q1 ruling: the build
+                # step's own text demands the record, review judges its
+                # absence; a full-only repo has none to carry)
+                sel = self.analysis_selected.get(rr.name)
+                if sel is not None:
+                    head = rr.merge.head if rr.merge is not None else ""
+                    # the record is judged at the tree it was computed at:
+                    # the build close's own HEAD, which a sync's --no-ff
+                    # merge of origin's movement may sit under (only merge
+                    # commits between — the change's own tree unchanged);
+                    # anything else is a stale record
+                    judged = head
+                    if head and sel.head != head and merge_only_between(rr.dir, sel.head, head):
+                        judged = sel.head
+                    problem = selected_problem(sel, judged)
+                    checks.append(check(rr.name + ":selected", "fail" if problem else "pass",
+                                        problem or ("the selection record of " + short(sel.head))))
                 rep["commands"] = commands
                 reports.append(rep)
             have = {rr.name for rr in repos}
+            for repo in (sorted(self.analysis_selected) if self.analysis_given else []):
+                if repo not in have:
+                    checks.append(check(repo + ":selected", "fail",
+                                        "the analysis's selected record names no task repo of this capsule"))
             for d in self.unit_run_decls:
                 if d.repo not in have:
                     s = UnitRunState(decl=d, problem=unknown_repo_problem(d.repo))
@@ -1472,77 +1400,6 @@ def omit_empty(d: Dict[str, Any], keep: Sequence[str] = ()) -> Dict[str, Any]:
     return {k: v for k, v in d.items() if k in keep or (v is not None and v != "" and v is not False and v != [] and v != {})}
 
 
-def append_new(lst: List[str], vals: Sequence[str]) -> List[str]:
-    out = list(lst)
-    for v in vals:
-        if v not in out:
-            out.append(v)
-    return out
-
-
-def resolve_default(repo_dir: str) -> str:
-    """The origin default branch name: what refs/remotes/origin/HEAD names,
-    else main, else master ("" = none)."""
-    c = git.run(repo_dir, "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD", timeout=GIT_TIMEOUT)
-    if c.exit_code == 0:
-        b = gostr.trim_space(c.stdout.decode("utf-8", "replace"))
-        if b.startswith("origin/"):
-            b = b[len("origin/"):]
-        if b:
-            return b
-    for b in ("main", "master"):
-        if git.run(repo_dir, "rev-parse", "-q", "--verify", "refs/remotes/origin/" + b, timeout=GIT_TIMEOUT).exit_code == 0:
-            return b
-    return ""
-
-
-def base_branch_of(capsule: str, repo_dir: str) -> Tuple[str, str]:
-    """The branch the change is measured against: the capsule's fixed
-    target branch when it carries one (runtime-state/target-branch.json,
-    read strictly, the origin ref checked to exist), else the origin
-    default branch; ("", why) when neither can be named. The branch lands
-    in the record's default_branch field, which keeps its name and carries
-    either branch (the diff base and the baseline follow it)."""
-    try:
-        target = targetbranch.read(capsule)
-    except targetbranch.TargetBranchError as err:
-        return "", str(err)
-    if target:
-        if git.run(repo_dir, "rev-parse", "-q", "--verify", "refs/remotes/origin/" + target,
-                   timeout=GIT_TIMEOUT).exit_code != 0:
-            return "", ("origin has no branch %s — the capsule's fixed target branch is missing on origin; never a"
-                        " fall-back to the default branch" % target)
-        return target, ""
-    default = resolve_default(repo_dir)
-    if default == "":
-        return "", ("the origin default branch is unresolvable (no refs/remotes/origin/HEAD, origin/main or"
-                    " origin/master in the clone): nothing to measure the change against")
-    return default, ""
-
-
-NO_FALLBACK_DIAGNOSTIC = "the engine answered mode full with no fallback diagnostic (a forced-full path or a full-only declaration)"
-
-# The phrase every engine diagnostic of a full-tier fallback carries; the
-# engine's informational --light diagnostics are not reasons.
-FALLBACK_PHRASE = "falling back to the full tier"
-
-
-def fallback_reasons(rep: EngineReport) -> List[str]:
-    """Why one engine report is full, one entry per reason: its own
-    full-tier fallback diagnostics, else the bare fact."""
-    why = [d for d in (rep.diagnostics or []) if FALLBACK_PHRASE in d]
-    return why or [NO_FALLBACK_DIAGNOSTIC]
-
-
-def nested_full_reasons(root: str, rep: EngineReport) -> List[str]:
-    """Why a nested engine root's light report made the run full."""
-    why = [d for d in (rep.diagnostics or []) if FALLBACK_PHRASE in d]
-    if not why:
-        return ["the nested engine root %s answered mode full with no fallback diagnostic (a forced-full path or a"
-                " full-only declaration)" % root]
-    return ["the nested engine root %s fell back to the full tier: %s" % (root, d) for d in why]
-
-
 def full_tier_reasons(p: RepoPlan) -> List[str]:
     """Why one touched repo's run is not light, one entry per reason: an
     unplanned repo's reason, the repo report's own full-tier fallbacks, and
@@ -1556,94 +1413,27 @@ def full_tier_reasons(p: RepoPlan) -> List[str]:
     return why or [NO_FALLBACK_DIAGNOSTIC]
 
 
+def merge_only_between(repo_dir: str, a: str, b: str) -> bool:
+    """Whether only merge commits sit between a and b (a an ancestor of
+    b): a sync's --no-ff merge of origin's movement leaves the change's
+    own commits as they were, so a selection record of a still names the
+    change's own tree (review r1 #1)."""
+    if a == "" or b == "" or a == b:
+        return False
+    if git.run(repo_dir, "merge-base", "--is-ancestor", a, b, timeout=GIT_TIMEOUT).exit_code != 0:
+        return False
+    try:
+        out = git_quiet(repo_dir, "rev-list", "--count", "--first-parent", "--no-merges", a + ".." + b)
+    except git.GitError:
+        return False
+    return out.strip() == "0"
+
+
 def skip_form(cr: CmdRun) -> Tuple[str, str]:
     """cr's bar form with its pre-existing units excluded, or the run form
-    plus a note when it cannot exclude them."""
-    pre = [u for u in cr.units if u.pre_existing]
-    if not pre:
-        return cr.cmd, ""
-    words, simple = shell_words(cr.cmd)
-    kind = pre[0].kind
-    if any(u.kind != kind for u in pre):
-        kind = ""
-    names = [u.name for u in pre]
-    if kind == KIND_GO and simple and has_go_test(words) and not has_flag(words, "-skip"):
-        return cr.cmd + " -skip '^(" + "|".join(names) + ")$'", ""
-    if kind == KIND_GO and simple and cr.harness and not has_assignment(cr.cmd, "E2E_SKIP"):
-        # the e2e harness protocol: E2E_SKIP excludes top-level tests
-        return "E2E_SKIP='^(" + "|".join(names) + ")$' " + cr.cmd, ""
-    if kind == KIND_PYTEST and simple and token_index(words, "pytest") >= 0:
-        return cr.cmd + "".join(" --deselect " + shell_quote(n) for n in names), ""
-    return cr.cmd, ("repos/%s `%s` carries the pre-existing failure(s) %s but has no skip switch verify-run can apply: it"
-                    " is listed as run, its failure(s) named here" % (cr.repo, cr.cmd, ", ".join(names)))
-
-
-def last_line(lines: Sequence[str]) -> str:
-    """The last non-empty output line (the run's own `# pf verify-run:`
-    notes skipped)."""
-    for ln in reversed(lines):
-        if gostr.trim_space(ln) != "" and not ln.startswith("# pf verify-run:"):
-            return ln
-    return ""
-
-
-def completion_proof(cr: CmdRun) -> str:
-    """How cr's first-run output proves its suite ran to completion ("" =
-    it does not): the declared Go harness's trailer, or an aggregate e2e
-    runner's closing summary."""
-    if cr.timed_out or cr.log_path == "":
-        return ""
-    lines = output_lines(cr.log_path)
-    if not cr.harness:
-        return aggregate_completion(cr, lines)
-    m = _HARNESS_RAN.match(last_line(lines))
-    if m is None:
-        return ""
-    ran, listed = int(m.group(1)), int(m.group(2))
-    excluded = int(m.group(3)) if m.group(3) else 0
-    if ran + excluded != listed:
-        return ""
-    return "the harness trailer shows all %d listed tests ran or were excluded" % listed
-
-
-def aggregate_completion(cr: CmdRun, lines: Sequence[str]) -> str:
-    """How an aggregate e2e runner's summary proves every suite it announced
-    settled, each failed one a located failing unit of cr ("" = no proof)."""
-    at, announced = -1, -1
-    for i, ln in enumerate(lines):
-        if _SUMMARY_HEADER.match(ln):
-            at = i
-    if at < 0:
-        return ""
-    for ln in lines[:at]:
-        m = _SUITES_HEADER.match(ln)
-        if m:
-            announced = int(m.group(1))
-    if announced < 0:
-        return ""
-    failed = {u.name for u in cr.units if u.kind == KIND_E2E_SUITE and u.failed}
-    suites = passed = 0
-    for ln in lines[at + 1:]:
-        m = _SUMMARY_LINE.match(ln)
-        if m:
-            suites += 1
-            if m.group(1) == "PASS":
-                passed += 1
-            else:
-                s = m.group(2)
-                if s.startswith("e2e/"):
-                    s = s[len("e2e/"):]
-                if "e2e/" + s not in failed:
-                    return ""  # a failed suite the output did not locate
-            continue
-        m = _SUMMARY_TALLY.match(ln)
-        if m is None:
-            continue
-        p, n = int(m.group(1)), int(m.group(2))
-        if n == 0 or n != suites or n != announced or p != passed:
-            return ""
-        return "the runner's summary shows all %d suites it announced settled (%d passed)" % (n, p)
-    return ""
+    plus a note when it cannot exclude them — the shared core
+    (pfstep.preexisting.skip_form, polyforge#212), verify-run the applier."""
+    return shared_skip_form(cr.cmd, cr.repo, cr.units, cr.harness, "verify-run")
 
 
 def command_check(cr: CmdRun) -> Dict[str, Any]:
@@ -1761,6 +1551,8 @@ def _code_list(xs: Optional[Sequence[str]]) -> str:
 def render_report(res: Dict[str, Any]) -> str:
     """report-mechanical.md: the mechanical section of the verification report."""
     b: List[str] = ["## Mechanical run (run %d)\n\n" % res["run"]]
+    if res.get("audit_disabled"):
+        b.append("Dependency audit disabled: %s.\n\n" % res["audit_disabled"])
     if res.get("incomplete"):
         b.append("**Incomplete — no merged-tree proof could be made:** %s\n\n" % res["incomplete"])
     else:
@@ -1868,6 +1660,8 @@ def details_of(res: Dict[str, Any]) -> Dict[str, Any]:
     d: Dict[str, Any] = {"tier": res["tier"]}
     if res.get("image"):
         d["image"] = res["image"]
+    if res.get("audit_disabled"):
+        d["audit_disabled"] = res["audit_disabled"]
     if res["mechanical_verdict"]:
         d["mechanical_verdict"] = res["mechanical_verdict"]
     if res.get("fail_reason"):
@@ -2039,13 +1833,20 @@ def run(
     if not os.path.isfile(eng):
         raise Usage("no scope engine at %s (--engine names it; the shared tree's is <PF_SHARED_DIR>/scripts/verify-scope)"
                     % eng)
+    # polyforge#138: the audit step parameter, validated before any check
+    # or container starts — any other value a named error, never a silent
+    # on or off.
+    try:
+        audit = read_audit(env)
+    except AuditParamError as err:
+        raise Usage("%s (%s)" % (err, AUDIT_INVALID_MARK)) from None
     decls: List[UnitRunDecl] = []
     if a.unit_runs:
         try:
             decls = read_unit_runs(a.unit_runs)
         except ValueError as err:
             raise Usage("--unit-runs: %s" % err) from None
-    analysis = Analysis()
+    analysis: Optional[Analysis] = None
     if a.analysis:
         try:
             analysis = read_analysis(a.analysis)
@@ -2083,7 +1884,7 @@ def run(
         tier, tier_reason = resolve_tier(capsule, a.tier)
         v = Verification(capsule, eng, window, logs, decls, cmd_env, say, co, analysis=analysis,
                          tier=tier, tier_requested=a.tier, tier_reason=tier_reason,
-                         image=image, image_source=image_source)
+                         image=image, image_source=image_source, audit=audit)
     except OSError as err:
         res.summary = "the verification could not run: %s" % err
         return 2
@@ -2092,6 +1893,10 @@ def run(
     doc = v.run()
     if image:
         doc["image"] = {"value": image, "source": image_source}
+    if audit == "off":
+        # the closure note AC3 demands: the merged source hint, the two
+        # layers not distinguished (the owner's 1-B ruling)
+        doc["audit_disabled"] = AUDIT_OFF_NOTE
     try:
         with open(os.path.join(v.run_dir, "result.json"), "w", encoding="utf-8") as f:
             f.write(json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
@@ -2106,16 +1911,19 @@ def run(
     for name, m in doc["merge_outcomes"].items():
         if m["head"]:
             res.heads[name] = m["head"]
+    # the closure rides every summary (AC3: a reviewer sees the audit was
+    # off without opening result.json); an on run's summary stays as today
+    audit_note = "; dependency audit off (%s)" % doc["audit_disabled"] if doc.get("audit_disabled") else ""
     if doc.get("incomplete"):
-        res.summary = "not judged: " + doc["incomplete"]
+        res.summary = "not judged: " + doc["incomplete"] + audit_note
         return 2
     if doc["mechanical_verdict"] != "pass":
         fails = sum(1 for c in doc["checks"] if c["status"] == "fail")
-        res.summary = "%d check(s) failed: %s" % (fails, doc.get("fail_reason", "").split("\n", 1)[0])
+        res.summary = "%d check(s) failed: %s%s" % (fails, doc.get("fail_reason", "").split("\n", 1)[0], audit_note)
         return 1
     over = ", ".join("repos/" + r["name"] for r in doc["repos"] or [])
-    res.summary = "%s verification passed: %d check(s) over %s (tier %s)" % (
-        doc["tier"]["effective"], len(doc["checks"]), over, doc["tier"]["effective"])
+    res.summary = "%s verification passed: %d check(s) over %s (tier %s)%s" % (
+        doc["tier"]["effective"], len(doc["checks"]), over, doc["tier"]["effective"], audit_note)
     return 0
 
 

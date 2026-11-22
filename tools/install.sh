@@ -88,9 +88,21 @@
 #      own field (make dev-build stamps internal/version.Commit;
 #      `pf --json version` and `pf doctor`'s `pf build` row report it).
 #      The green commit's diff latest-release-tag..green-commit must
-#      not touch the AIHub-side paths of tools/aihub-paths.conf (the
-#      two AIHubs do not follow dev builds: such a set needs a formal
-#      release) and the machine must carry the build tools (go, make,
+#      not touch the client-server interface paths of
+#      tools/aihub-interface-paths.conf (the two AIHubs do not follow
+#      dev builds: a changed wire contract needs a formal release),
+#      with ONE exception (polyforge#219): an interface-path hit that
+#      is a modified .go file, mode unchanged, whose two versions
+#      differ only in Go comments — judged by the green tree's own
+#      tools/gocommentonly, built with this machine's go — passes with
+#      one info line naming the file (comment-only); everything else
+#      (code of any size, a new, deleted or renamed file, a mode
+#      change, a non-.go path, a version that will not parse, a green
+#      tree without a working judge) refuses as before — fail closed;
+#      the other AIHub-side paths of tools/aihub-paths.conf (the
+#      server's insides, its SQL, the deploy tree) pass with ONE WARN
+#      naming every hit — those changes are not deployed and wait for
+#      a formal release. The machine must carry the build tools (go, make,
 #      node of the checkout's .nvmrc major, npm — checked and reported
 #      together with the rest). prepare clones the full history, runs
 #      the checks, builds pf locally (make -C <clone> dev-build), proves
@@ -437,17 +449,60 @@ if [ -n "$DEV" ]; then
   # the dev version: the next patch as a SemVer pre-release —
   # release-shaped (the downgrade guard compares it), never +metadata
   DEVVER="v$VMAJ.$VMIN.$((VPATCH + 1))-dev.$N"
-  # the AIHub-side preflight: the two AIHubs do not follow dev builds,
-  # so a green commit whose release-tag..green diff touches any path of
-  # the list needs a formal release. The list is the repository's own
-  # file, read from the green commit's tree (the same file the tests
-  # read — one list, never a second copy).
-  aihub_side_path() {
-    # <conf> <changed path>: an entry ending in /** covers the directory
-    # recursively; any other entry is one exact path
-    while IFS= read -r pat; do
+  # the AIHub-side preflight, graded (polyforge#188): the two AIHubs do
+  # not follow dev builds. The client-server interface list
+  # (tools/aihub-interface-paths.conf) refuses on its own — a new local
+  # pf must never talk to the old server over a changed wire contract;
+  # every other AIHub-side path of the total list
+  # (tools/aihub-paths.conf) — the server's insides, its SQL, the
+  # deploy tree — passes with ONE WARN naming every hit: those changes
+  # are the two AIHubs' own business, they stay undeployed and wait
+  # for a formal release. One exception (polyforge#219): an
+  # interface-path hit that is a modified .go file with an unchanged
+  # mode whose two versions the green tree's own comment-only judge
+  # (tools/gocommentonly, built with the machine's go from that same
+  # tree) proves differ only in Go comments passes with one info line
+  # naming every such path — a comment is not a wire contract. The
+  # exception fails closed: a judge the green tree does not carry or
+  # cannot build, a version that will not parse, a mode change, a new
+  # or deleted file — each refuses exactly as before, and a
+  # comment-only file never reaches the total list's WARN (it passed
+  # the interface list, it is not an AIHub-side hit to report). Both
+  # lists are the repository's own files,
+  # read from the green commit's tree (the same files the tests read —
+  # one list each, never a second copy), and the preflight fails
+  # closed on its input: a list it cannot read, a list with no entry,
+  # an entry of an unsupported shape, or a changed path git cannot
+  # print unambiguously each refuse — this installer waits for a green
+  # tag whose lists it can judge.
+  aihub_conf_write() {
+    # <conf> <out> <name>: write the list's valid entries to <out>, one
+    # per line, trimmed. A missing or unreadable file, a list with no
+    # entry, or an entry that is neither one exact path nor a
+    # directory prefix ending in /**, refuses — a list the preflight
+    # cannot read or judge never silently passes everything (the old
+    # matcher answered «no match» on a read error)
+    [ -r "$1" ] || prep_fail "the green tag $GNAME carries no readable $3 ($1): the AIHub-side preflight judges nothing it cannot read — this installer waits for a green tag that carries the list"
+    : > "$2"
+    n=0
+    while IFS= read -r pat || [ -n "$pat" ]; do
       pat=$(printf '%s\n' "$pat" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
       case "$pat" in ""|'#'*) continue ;; esac
+      body=$pat
+      case "$pat" in */'**') body=${pat%/'**'} ;; esac
+      case "$body" in
+        ""|/*|*[!A-Za-z0-9./_-]*)
+          prep_fail "the $3 ($1) carries the unsupported entry «$pat»: one exact path, or a directory prefix ending in /**, is all this preflight reads" ;;
+      esac
+      printf '%s\n' "$pat" >> "$2"
+      n=$((n + 1))
+    done < "$1"
+    [ "$n" -gt 0 ] || prep_fail "the $3 ($1) declares no entry: an empty list would pass every AIHub-side change — this installer waits for a green tag that carries the list"
+  }
+  aihub_side_path() {
+    # <entries> <changed path>: an entry ending in /** covers the
+    # directory recursively; any other entry is one exact path
+    while IFS= read -r pat; do
       [ "$pat" = "$2" ] && return 0
       case "$pat" in
         */'**') case "$2" in "${pat%/'**'}"/*) return 0 ;; esac ;;
@@ -455,19 +510,89 @@ if [ -n "$DEV" ]; then
     done < "$1"
     return 1
   }
+  aihub_conf_write "$SRC/tools/aihub-interface-paths.conf" "$TMP/iface-entries" "interface path list tools/aihub-interface-paths.conf"
+  aihub_conf_write "$SRC/tools/aihub-paths.conf" "$TMP/aihub-entries" "AIHub-side path list tools/aihub-paths.conf"
   # the diff lands in a file first: a git failure must refuse (fail
-  # closed), not hand an empty list to the loop
-  git -C "$SRC" diff --name-only "$TAGCOMMIT" "$GCOMMIT" > "$TMP/aihub-changed" \
+  # closed), not hand an empty list to the loop. No rename folding (a
+  # move out of a judged directory must stay visible as its old path
+  # too) and no path quoting: a path git cannot print unambiguously is
+  # refused below, never silently unmatched. The RAW form — one
+  # «:oldmode newmode oldsha newsha status<TAB>path» line per change —
+  # feeds the comment-only exception below: only a plain M of an
+  # unchanged-mode blob can be judged comment-only (polyforge#219),
+  # and the TAB splits the raw line's fields from its path
+  TAB=$(printf '\t')
+  git -C "$SRC" -c core.quotePath=off diff --raw --no-renames "$TAGCOMMIT" "$GCOMMIT" > "$TMP/aihub-changed" \
     || prep_fail "cannot diff $VER..$GNAME in the clone for the AIHub-side preflight"
+  # the comment-only exception's judge (polyforge#219): built once,
+  # lazily, from the GREEN COMMIT's own tree — a green tag too old to
+  # carry the tool, or a machine whose go cannot build it, judges
+  # nothing and every interface hit refuses exactly as before (fail
+  # closed). The judge answers for one file pair only; the status and
+  # mode gates stay here, in the caller
+  GOCO=""
+  gocommentonly_bin() {
+    [ -n "$GOCO" ] && return 0
+    [ -f "$SRC/tools/gocommentonly/main.go" ] || return 1
+    GOCO="$TMP/gocommentonly"
+    go build -o "$GOCO" "$SRC/tools/gocommentonly/main.go" >"$TMP/gocommentonly-build.log" 2>&1 \
+      || { GOCO=""; return 1; }
+    return 0
+  }
+  iface_comment_only() {
+    # <raw status fields> <path>: 0 when the path's two versions
+    # differ only in Go comments — the ONE change that passes the
+    # interface preflight (polyforge#219). Fail closed: an M-status
+    # .go blob with an unchanged mode (a mode or type change is a
+    # change), both versions extractable from the clone, and the
+    # green tree's own judge saying comment-only; every other shape —
+    # a new, deleted or renamed file, a non-.go path, a version that
+    # will not parse, a judge that will not build or run — answers 1
+    # and refuses as before
+    case "$1" in
+      ":100644 100644 "*" M"|":100755 100755 "*" M") ;;
+      *) return 1 ;;
+    esac
+    case "$2" in
+      *.go) ;;
+      *) return 1 ;;
+    esac
+    gocommentonly_bin || return 1
+    git -C "$SRC" show "$TAGCOMMIT:$2" > "$TMP/co-old" 2>/dev/null || return 1
+    git -C "$SRC" show "$GCOMMIT:$2" > "$TMP/co-new" 2>/dev/null || return 1
+    "$GOCO" "$TMP/co-old" "$TMP/co-new" >/dev/null 2>&1 || return 1
+    return 0
+  }
+  IFACE_HIT=""
+  IFACE_COMMENT_ONLY=""
   AIHUB_HIT=""
-  while IFS= read -r ch; do
+  while IFS= read -r raw; do
+    [ -n "$raw" ] || continue
+    st=${raw%%"$TAB"*}
+    ch=${raw#*"$TAB"}
     [ -n "$ch" ] || continue
-    if aihub_side_path "$SRC/tools/aihub-paths.conf" "$ch"; then
-      AIHUB_HIT="$ch"
-      break
+    case "$ch" in
+      '"'*) prep_fail "the diff $VER..$GNAME carries a path git cannot print unambiguously ($ch): the AIHub-side preflight judges plain paths only — this installer waits for a green tag whose changed paths it can read" ;;
+    esac
+    if aihub_side_path "$TMP/iface-entries" "$ch"; then
+      if iface_comment_only "$st" "$ch"; then
+        IFACE_COMMENT_ONLY="$IFACE_COMMENT_ONLY $ch"
+      else
+        IFACE_HIT="$IFACE_HIT $ch"
+      fi
+      continue
+    fi
+    if aihub_side_path "$TMP/aihub-entries" "$ch"; then
+      AIHUB_HIT="$AIHUB_HIT $ch"
     fi
   done < "$TMP/aihub-changed"
-  [ -z "$AIHUB_HIT" ] || prep_fail "the green tag $GNAME carries AIHub-side changes ($AIHUB_HIT, matched against tools/aihub-paths.conf): the two AIHubs do not follow dev builds — this set needs a formal release"
+  [ -z "$IFACE_HIT" ] \
+    || prep_fail "the green tag $GNAME carries client-server interface changes ($IFACE_HIT, matched against tools/aihub-interface-paths.conf): the two AIHubs do not follow dev builds — this set needs a formal release"
+  [ -z "$IFACE_COMMENT_ONLY" ] \
+    || echo "   interface paths with comment-only changes (no code change, passed):$IFACE_COMMENT_ONLY"
+  if [ -n "$AIHUB_HIT" ]; then
+    echo "   WARN: the green tag $GNAME carries AIHub-side changes this machine's pf does not need ($AIHUB_HIT, matched against tools/aihub-paths.conf): the two AIHubs stay on their current formal release (the newest this installer knows is $VER) — these server-side changes and migrations are not deployed, they wait for the next formal release, and no effect of them is usable from this machine."
+  fi
   # the node major the checkout pins
   NODEWANT=$(cat "$SRC/.nvmrc" 2>/dev/null) || prep_fail "the green commit's tree carries no .nvmrc to pin the node major"
   NODEWANT=$(printf '%s' "$NODEWANT" | tr -d '[:space:]')

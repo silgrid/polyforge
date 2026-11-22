@@ -7,11 +7,16 @@ the three steps compose; it is not itself a structural schema - the `steps` arra
 This is the ONLY lane that releases or deploys. The delivery lanes (`develop`, `micro`)
 end at their daemon `merge` step (after `publish`'s push and PR)
 and never release or deploy; shipping is a separate WI filed against this bundle,
-so it always acts on a verified merged origin head and is gated, evidenced and auditable on its own.
+so it always acts on the project's most recent green integrate batch (what the
+full gate judged, exactly as it judged it) and is gated, evidenced and auditable on its own.
 
 The bundle is project-agnostic. The release and deploy procedures belong to the project
 repositories (`.polyforge/release.sh`, `.polyforge/deploy.sh`); this lane only
-dispatches to them, then checks their result independently.
+dispatches to them, then checks their result independently. The release OBJECT is
+never a branch head: it is the project's most recent green integrate batch, resolved
+by the lane's own command (`workflows/_shared/scripts/release.py`) and handed to the
+procedure with `--pins`; without a green batch the release refuses before any version
+is claimed.
 
 ## Shape of the flow
 
@@ -21,7 +26,7 @@ release --> verify --> deploy
 
 | step | gate | checks first | resources | budget | tier | what it does |
 |---|---|---|---|---|---|---|
-| `release` | yes | — (the ticket names a bump, or none) | heavy admission | tool 120 min / wall 135 min | `mid` | preconditions, then runs the repo's `.polyforge/release.sh [bump]` itself |
+| `release` | yes | — (the ticket names a bump, or none) | heavy admission | tool 120 min / wall 135 min | `mid` | resolves the most recent green integrate batch (its own command, the step's read-only hub), refuses the named refusals, then runs the repo's `.polyforge/release.sh [bump] --pins <file>` itself |
 | `verify` | yes | `release-record.json` parses and names V and its tag's commit | — | wall 30 min | — (strong) | fresh-context audit of what `release` claims, by its own commands, then `release.sh --verify <version>` |
 | `deploy` | yes | `verified-version.json`'s V equals `release-record.json`'s version | heavy admission | tool 60 min | `mid` | runs `.polyforge/deploy.sh <version> --confirm <version>` itself, for the verified version only; deploys nothing (and says so) when the project has no deploy procedure |
 
@@ -48,7 +53,7 @@ waiver to hand off. Each step's agent runs its commands — the checks,
 the git and gh calls, the procedure — itself, in the owner repo, and reports what they
 printed; the daemon records no command and judges none. The two procedures run inside
 ONE tool call, under the step's own tool window (`budget.tool_minutes`: 120 minutes for
-`release`, sized for a procedure that runs the full test gate itself; 30 for `deploy`),
+`release`, sized for a procedure that builds, audits and publishes; 30 for `deploy`),
 under the step's own `PATH` — the daemon's command PATH, the one its own in-process
 commands run under — and the output teed into the capsule (`artifacts/release.log`,
 `artifacts/deploy.log`). `release` and `deploy` declare `resources: { admission: heavy }`:
@@ -62,7 +67,7 @@ Each step reads the upstream file by its path convention under `artifacts/`:
 
 | step | writes | read by |
 |---|---|---|
-| `release` | `artifacts/release-record.json` (version, release commit, default branch, pre-release remote tag list, notes location, resumed) | `verify` (by path), `deploy` (its `version`, as a check) |
+| `release` | `artifacts/release-record.json` (version, release commit, default branch, the green batch's id and whole pins, the default branch's head at release time, pre-release remote tag list, notes location, resumed), `artifacts/release-batch.json` and `artifacts/release-pins.json` (the resolver's result and its pins file) | `verify` (by path), `deploy` (its `version`, as a check) |
 | `verify` | `artifacts/verified-version.json` (only on pass: the verified version), `artifacts/release-audit.md` (each check and its evidence) | `deploy` (by path; checked against the release record's version) |
 | `deploy` | its hand-off (which version is serving, or the rollback report), `artifacts/deploy.log` | (terminal) |
 
@@ -77,11 +82,27 @@ No step declares `on_fail`, so a `fail` hand-off terminates the workflow as a ga
 rewinding `verify` or `deploy` back into `release` would try to publish a second
 release for the same intent. A failed release lane therefore stops, with the failing
 step's hand-off, quoting what its commands printed, as the record. Retrying is a property of the
-`release` step, not a rewind: a version is claimed once (its tag on origin's head) and
-never burned. Filing the release WI again, once the cause is fixed, RESUMES the version
-on origin's head: a complete release is adopted without running the procedure, a
-partial one gets only its missing parts, and no second version of that head is ever
-cut. A new version needs new code on the default branch. (A step that needs the owner
+`release` step, not a rewind: a version is claimed once (its tag on the batch's pinned
+commit) and never burned. Filing the release WI again, once the cause is fixed, RESUMES the version
+on the green batch's pinned commit: a complete release is adopted without running the
+procedure, a partial one gets only its missing parts, and no second version of one
+pinned commit is ever cut. A new version needs a new green batch.
+
+### What the lane refuses before any version is claimed (polyforge#154)
+
+The release step's resolver answers before the procedure runs, and every
+refusal is a `fail` hand-off whose `--reason` begins with its named code:
+`PF-RELEASE-NO_GREEN_BATCH` (no wrapped integrate batch of the project was judged
+green - a release object is never invented), `PF-RELEASE-ALREADY_RELEASED` (the
+owner pin carries two or more release tags, or a release tag appeared on another
+commit after the pre-release list was recorded), `PF-RELEASE-PIN_OFF_DEFAULT` (a
+batch pin is no longer on its repo's origin default branch), `PF-RELEASE-UNPINNED_OWNER`
+(the batch's main names no commit for the owner repo), `PF-RELEASE-AMBIGUOUS_OWNER`
+(two or more owner candidates) and `PF-RELEASE-PROCEDURE_CONTRACT` (the procedure's
+`--help` does not declare `--pins`: an old-convention script would read the pins file
+as a bump or ignore it and release a branch head). A capsule repo the green batch
+does not cover is not part of the release (the resolver names it); the release
+proceeds with exactly the batch's pinned group. (A step that needs the owner
 asks with `pf step ask` and ends its turn; an owner answer that calls the release off is
 handed off as `cancel` citing it, which ends this work item without a failure.) In
 particular:
@@ -127,14 +148,28 @@ contract — never cutting a second one.
 
 ## Procedure contract (what a repo provides)
 
-- `.polyforge/release.sh [bump]` - releases the origin default-branch head and exits
+(The release lane resolves the release object itself, before any of this:
+the most recent green integrate batch, its pins handed to the procedure. The
+procedures below run only once a green batch exists.)
+
+- `.polyforge/release.sh [bump] --pins <file>` - releases the green integrate
+  batch's pinned commit of this repo and exits
   non-zero on any failure; on success prints `version=<tag>`, `commit=<sha>` and
-  `notes=<path or url>` lines. On a head that already carries its release tag it
-  RESUMES that version: it checks what is published, keeps it, publishes only what is
+  `notes=<path or url>` lines. The pins file is the batch's whole group
+  (`{"batch": "<id>", "repos": {"<repo>": "<sha>", ...}}`, plus
+  `"red_batches_after"` when red batches closed after it); the clone must sit
+  at its repo's pin, on the origin default branch's history, and the
+  procedure's `--help` output must declare `--pins` (a script whose `--help`
+  does not is refused `PF-RELEASE-PROCEDURE_CONTRACT` before it runs). On a
+  pinned commit that already carries its release tag it RESUMES that version:
+  it checks what is published, keeps it, publishes only what is
   missing and reports that version (a procedure without resume refuses instead, and the
   step reports `PF-RELEASE-INCOMPLETE`). It must support `--verify <version>`, a read-only audit of
   a published release (format, ordering, artifacts, integrity) that exits 0 only when
-  everything checks out.
+  everything checks out. The release runs no test gate of its own (the batch's own
+  full-gate run is the test evidence); what it still checks itself - the pins'
+  shape, the cross-reference gate, the PR-only and workflow-contract checks, the
+  machine preflight, the dependency audit - is the repo's own contract.
 - `.polyforge/deploy.sh <version> --confirm <version>` - deploys that published version
   and ends with production either on that version or rolled back to the previous one;
   a rollback must exit non-zero.

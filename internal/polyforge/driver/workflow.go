@@ -84,6 +84,10 @@ type StepSpec struct {
 	Hub       []string
 	HubAttrs  []string
 	WrapAttrs []string
+	// FastCheckProof mirrors `fast_check_proof` (nil = none): the result
+	// file and the command the daemon's done gate reads for every task
+	// repo the step changed.
+	FastCheckProof *workflow.FastCheckProof
 }
 
 // HubAllowed answers the `pf step hub` verbs step id may call: its
@@ -331,20 +335,21 @@ func workflowOf(lane *workflow.Lane) *Workflow {
 	wf := &Workflow{Name: lane.Name, MaxRewinds: lane.MaxRewinds, UncountedRewinds: lane.UncountedRewinds}
 	for _, s := range lane.Steps {
 		step := StepSpec{
-			ID:          s.ID,
-			Gate:        s.Gate,
-			WallMinutes: s.WallMinutes,
-			ToolMinutes: s.ToolMinutes,
-			Waivable:    s.Waivable,
-			Skippable:   s.Skippable,
-			RewindOnly:  s.RewindOnly,
-			Skill:       s.Skill,
-			Resources:   s.Resources,
-			Vars:        s.Vars,
-			Params:      s.Params,
-			Hub:         s.Hub,
-			HubAttrs:    s.HubAttrs,
-			WrapAttrs:   s.WrapAttrs,
+			ID:             s.ID,
+			Gate:           s.Gate,
+			WallMinutes:    s.WallMinutes,
+			ToolMinutes:    s.ToolMinutes,
+			Waivable:       s.Waivable,
+			Skippable:      s.Skippable,
+			RewindOnly:     s.RewindOnly,
+			Skill:          s.Skill,
+			Resources:      s.Resources,
+			Vars:           s.Vars,
+			Params:         s.Params,
+			Hub:            s.Hub,
+			HubAttrs:       s.HubAttrs,
+			WrapAttrs:      s.WrapAttrs,
+			FastCheckProof: s.FastCheckProof,
 		}
 		if s.OnFailTarget != "" {
 			step.OnFail = &OnFail{Target: s.OnFailTarget}

@@ -723,6 +723,491 @@ path — and each start still prunes only its own repo's older
 generations; the disk cost is the price of the isolation, and no time-
 or count-based reclamation ships with it.
 
+## v0.2.4, the release lane ships the green integrate batch (polyforge#154)
+
+The release lane no longer releases a branch head: its object is the
+project's most recent green integrate batch, resolved by the lane's own
+command (`workflows/_shared/scripts/release.py`, reading the project's
+batches through the step's hub) and refused — before any version is
+claimed, with a named code — when there is no green batch
+(`PF-RELEASE-NO_GREEN_BATCH`), when the owner repo's pinned commit
+carries two or more release tags or a release tag appeared elsewhere
+after the pre-release list was recorded (`PF-RELEASE-ALREADY_RELEASED`),
+when a batch pin left the default branch (`PF-RELEASE-PIN_OFF_DEFAULT`),
+when the batch names no commit for the owner repo
+(`PF-RELEASE-UNPINNED_OWNER`) or when two repos both carry the release
+procedure (`PF-RELEASE-AMBIGUOUS_OWNER`).
+
+What a project must change — its own `.polyforge/release.sh`:
+
+- Accept `[bump] --pins <file>`: the pins file is the batch's whole
+  group, `{"batch": "<id>", "repos": {"<repo>": "<sha>", ...}}` (plus
+  `"red_batches_after": [...]` when red batches closed after it). The
+  script releases ITS repo's pinned commit: require the clone to sit at
+  it (HEAD is one of the pins' shas) and require it on the origin
+  default branch's history — a pinned commit the branch has moved past
+  still releases, exactly the shape the old origin-head release could
+  not. A run without `--pins` must refuse, never fall back to a head.
+- Declare the convention: the script's `--help` output must contain
+  `--pins`. The lane probes it and refuses a script that does not
+  declare it with `PF-RELEASE-PROCEDURE_CONTRACT`, before the script
+  runs — an old-convention script would read the pins file as a bump
+  argument or ignore it and release a branch head, so it is never
+  handed one.
+- Stop running a test gate: the batch's own full-gate run is the test
+  evidence, and the release notes name the batch (polyforge's own script
+  dropped its green-tag check and its containerized gate; what it kept
+  is the machine preflight, the design-doc cross-reference gate, the
+  PR-only and workflow-contract checks and the dependency audit after
+  the build).
+- The resume contract keeps its shape: a pinned commit that already
+  carries exactly one release tag resumes that version, whoever claimed
+  it — the lane adopts a complete one and finishes a partial one, and the
+  release record carries the batch's id and its whole pins for `verify`.
+
+A project that does not change its script cannot release after the
+daemon upgrade that ships this: the resolver still finds the green
+batch, but the procedure-contract probe (`--help` lacking `--pins`)
+refuses with `PF-RELEASE-PROCEDURE_CONTRACT`, nothing built or published.
+Make the four changes above and file the release again.
+
+The order cuts both ways, and the first release across it is always a
+hand run. A daemon still on the pre-#154 release lane calls the
+procedure without `--pins` (from the origin head, per its old step
+text), so a script changed first refuses it (`--pins <file> is
+required`) until the daemon's lane text carries the resolver — which
+arrives with the polyforge release that ships this change, installed by
+`pf daemon ensure`. In that window no release goes through the lane, by
+design; cut the release by hand: take the latest green batch's pins
+(`{"batch": "<id>", "repos": {"<repo>": "<sha>", ...}}`), sit the owner
+repo at its pin and run `.polyforge/release.sh [patch] --pins <file>`
+yourself (the same way polyforge's own first release across this change
+is cut — the reference page's "Two halves" paragraph says so).
+
+## v0.2.4, the build fast check's flaky re-run and the red-state limit (polyforge#157)
+
+The workflow's own scripts changed, and a lane claimed before this keeps
+running its claim-time snapshot: the new rules reach a work item through
+the workflow version its lane snapshot carries, never a `pf` release.
+What changed under `workflows/_shared/scripts`:
+
+- `fast_checks.py --repo` re-runs a red command's located failing units
+  once each, by their derived targeted re-run (the same rules
+  verification's bar runs), and a pass is recorded flaky beside the
+  first-red log; a red command every failing unit of which re-ran flaky
+  is confirmed — by its first-run output's completion proof (the
+  declared Go harness's trailer, an aggregate e2e runner's closing
+  summary) or by one whole re-run exiting 0 — and only such a command
+  turns green. A command its own timeout killed skips the re-run phase
+  and stays red.
+- `fast_checks.py --check-units` re-runs a red unit declared
+  `pre_existing_red` once (a pass records it flaky with both logs); a
+  unit the lane just wrote is never re-run there — red it stays. A
+  unit's self-reported `timeout` in `artifacts/build/units.json` (a Go
+  duration; an invalid or non-positive one makes the file unusable)
+  bounds its recorded run, else a shared 10m default — the bar
+  commands' own 20m bound no longer applies to a recorded unit run.
+- `facts.py build --replay` bounds each replay the same way — the
+  unit's self-reported `timeout`, else `--unit-timeout` — and a
+  red-state run its own limit kills is an evidence problem: exit 1, the
+  problem naming the unit and its limit (a red-state run must exit
+  non-zero within its limit, never hang), no longer the old "not
+  judged" retried. Only a kill by the whole run's deadline stays not
+  judged. `verify.py --unit-runs` reads the same self-report with the
+  same default.
+
+What a project must change — nothing: the rules are the workflow's own,
+project-neutral, and the slow red run of a project that needs longer
+self-reports a higher `timeout` in its `units.json`.
+
+## v0.2.4, the split attrs one shape and the data migration (polyforge#174)
+
+`pf file create --attr <path>=json-value` writes a dotted path nested —
+`--attr split.origin=X --attr split.unit=Y` stores `attrs` as
+`{"split":{"origin":"X","unit":"Y"}}` — the same dot path `pf queue
+--attr` filters on, and the aihub create boundary refuses a top-level
+attrs key that carries a dot (`CORE-400`; the CLI nests dotted paths
+itself, a `--stdin` body must carry the nested object — the `detail`
+spells it). One shape, write and read: the epic split's duplicate
+check, which the flat-key defect had never let match, works from this
+release on. Deploy the aihub server first, as ever: an old CLI's
+dotted `--attr` create fails loudly on the new server until the work
+machine takes the new `pf` — an explicit failure instead of the old
+success whose ticket no query could ever find (a new `pf` keeps
+working against an old server: the nested shape is plain attrs to
+it).
+
+The v0.2.4 window also moves the OLD rows: `deploy/sql/v0.2.4`
+(applied by `.polyforge/deploy.sh` inside the switch window, run-once
+by its probe) migrates the flat `split.origin` / `split.unit` attrs
+keys of every project and every status to the nested dot paths — other
+attrs, other dotted keys and statuses stay, the ticket ids stay, and
+after the deploy the split check's own query (`pf queue --project P
+--attr split.origin=… --attr split.unit=…`) lists the old sub-tickets
+again:
+
+```sql
+-- deploy/sql/v0.2.4/upgrade.sql — the split attrs migration
+-- (polyforge#174): the one-time move of the flat `split.origin` /
+-- `split.unit` attrs keys to the nested dot paths every reader walks
+-- (the list filter's json_extract, the attrs write's `if`), so the
+-- tickets the pre-fix `pf file create --attr` filed become listable by
+-- the split check's own query again. Scope: the WHOLE database, every
+-- project and every status, exactly these two keys — other attrs,
+-- other dotted keys and statuses are not touched. Refusal: a row whose
+-- nested `split` shape conflicts (a same-key different value, or a
+-- `split` parent that is no object) refuses the WHOLE batch — one
+-- transaction, nothing applied; resolve the row by hand and re-deploy.
+-- Rollback reads the before-image table split_attrs_before_w174, which
+-- holds exactly the rows this migration changes.
+
+-- 1. the whole-batch refusal, first: one conflict aborts the
+--    transaction (the CHECK fires on the inserted 'refuse' row).
+CREATE TABLE w174_refuse(x TEXT CHECK (x <> 'refuse'));
+INSERT INTO w174_refuse (x)
+  SELECT CASE WHEN
+         (json_type(w.attrs, '$.split') IS NOT NULL
+          AND json_type(w.attrs, '$.split') <> 'object')
+      OR (json_type(w.attrs, '$."split.origin"') IS NOT NULL
+          AND json_type(w.attrs, '$.split.origin') IS NOT NULL
+          AND json_extract(w.attrs, '$."split.origin"')
+              IS NOT json_extract(w.attrs, '$.split.origin'))
+      OR (json_type(w.attrs, '$."split.unit"') IS NOT NULL
+          AND json_type(w.attrs, '$.split.unit') IS NOT NULL
+          AND json_extract(w.attrs, '$."split.unit"')
+              IS NOT json_extract(w.attrs, '$.split.unit'))
+       THEN 'refuse' ELSE 'ok' END
+    FROM work_items w
+   WHERE json_type(w.attrs, '$."split.origin"') IS NOT NULL
+      OR json_type(w.attrs, '$."split.unit"') IS NOT NULL;
+DROP TABLE w174_refuse;
+
+-- 2. the before-image: exactly the rows this migration changes, their
+--    pre-migration attrs whole (the rollback's whole input).
+CREATE TABLE IF NOT EXISTS split_attrs_before_w174 (
+  id    TEXT PRIMARY KEY,
+  attrs TEXT NOT NULL
+);
+INSERT OR REPLACE INTO split_attrs_before_w174 (id, attrs)
+  SELECT id, attrs FROM work_items
+   WHERE json_type(attrs, '$."split.origin"') IS NOT NULL
+      OR json_type(attrs, '$."split.unit"') IS NOT NULL;
+
+-- 3. the move: each flat key becomes the nested dot path it names
+--    (json_set creates the missing `split` object, or writes into the
+--    existing one — the guard already refused every conflicting
+--    shape, so a same-key double shape keeps one nested copy), and the
+--    flat key goes.
+UPDATE work_items
+   SET attrs = json_remove(json_set(attrs, '$.split.origin',
+                        json_extract(attrs, '$."split.origin"')),
+                           '$."split.origin"')
+ WHERE json_type(attrs, '$."split.origin"') IS NOT NULL;
+UPDATE work_items
+   SET attrs = json_remove(json_set(attrs, '$.split.unit',
+                        json_extract(attrs, '$."split.unit"')),
+                           '$."split.unit"')
+ WHERE json_type(attrs, '$."split.unit"') IS NOT NULL;
+```
+
+A row whose nested `split` shape conflicts — a `split` parent that is
+no object, or a nested `split.origin` / `split.unit` of another value
+than the flat key — refuses the whole batch: the window's one
+transaction applies nothing and the deploy aborts; resolve the row by
+hand (keep one value, drop the other shape) and re-deploy. The
+automatic rollback of the same window restores exactly the changed
+rows from the `split_attrs_before_w174` before-image table the upgrade
+writes, then drops it — a row the migration never moved is never
+flattened. After a successful deploy the before-image table stays as
+the durable record of what moved: the post-deploy comparison reads
+it, and once that comparison is signed off a person may DROP it — no
+code reads it, and it serves nothing else.
+
+Before authorizing the deploy, review the blast radius read-only (the
+probe counts only the split pair) and keep the list for the
+post-deploy comparison — the accepted delivery's last half re-runs the
+split check's query per original id and expects exactly the old ids:
+
+```sql
+-- the tickets the migration moves (whole database, every project and status)
+SELECT id, project_id, status, attrs FROM work_items
+ WHERE json_type(attrs, '$."split.origin"') IS NOT NULL
+    OR json_type(attrs, '$."split.unit"') IS NOT NULL;
+-- the inventory of OTHER dotted top-level keys (reported only — NOT migrated)
+SELECT w.id, je.key, w.project_id FROM work_items w, json_each(w.attrs) je
+ WHERE je.key LIKE '%.%'
+   AND je.key NOT IN ('split.origin', 'split.unit');
+```
+
+## v0.2.4, the build close's scoped selection (polyforge#164)
+
+What changed under `workflows/_shared/scripts`:
+
+- `fast_checks.py --repo <name> --close-scoped` is the build close's own
+  mode: it plans the same light-tier selection verification's light tier
+  plans (one shared implementation, `pfstep/scoped_plan.py`, which
+  verify.py's own light tier now plans through) over the repo's final
+  tree and executes it on the host, reusing the green same-tree runs a
+  `--reuse` result file records instead of re-running them; a selection
+  the engine answers with the full tier, or a selected command that
+  cannot run, records `incomplete` with the reason kept and exits
+  non-zero, claiming nothing. The develop build step runs it once per
+  touched repo after its fast checks — for a work item whose
+  verification runs the light tier only (an integration batch's fix
+  ticket runs the full bar and closes without one) — and a red or
+  `incomplete` result never hands off `done` without the owner's
+  ruling, so a repository whose light selection falls back to the full
+  tier (a `stack=none` pin, a changed lockfile, no analyzer) stops at
+  the owner where it never did before.
+- The change analysis (`artifacts/build/change-analysis.json`) gains a
+  `selected` section — the close's machine selection record, one entry
+  per task repo (head, tree, base, default branch, the engine
+  invocations, the conf's identity, the selection's paths and suites,
+  every command with its evidence, and the status: green, red or
+  incomplete with its reason). `facts.py analysis` and `verify.py
+  --analysis` judge the records an analysis carries by the one shared
+  validator: a stale head, a non-green selection or a command without
+  green evidence is red — a sync's merge commits between the record's
+  head and the verified HEAD leave it valid — and the records are never
+  subject to the supplement cap; whether a touched repo carries one at
+  all stays the build step's own rule and review's judgment.
+
+What a project must change — nothing: the close runs the same
+project-neutral selection verification runs, and a repository whose
+light selection answers the full tier sees the same stop at the owner
+that its verification's own full bar always was.
+
+## v0.2.4, the development channel's graded AIHub-side preflight (polyforge#188)
+
+What changed under `tools/` and the dev channel of `tools/install.sh --dev`:
+
+- `tools/aihub-interface-paths.conf` is the new client-server interface
+  list, read from the green commit's tree beside the total list
+  `tools/aihub-paths.conf` (one list each, both readers: the tests
+  generate their fixture paths from the same files). A
+  release-tag..green diff touching an interface path
+  (`internal/common/api/**`, `internal/common/protocol/**` — a
+  conservative path rule, not a compatibility proof) still refuses the
+  dev install in prepare; touching only the total list's other paths —
+  the server's insides, the SQL migrations, the deploy tree — passes
+  with one WARN naming the formal tag, the green tag and every hit
+  path: the two AIHubs stay on their formal release and those changes
+  wait for the next formal one.
+- The preflight is fail closed on its input: a green tree whose interface
+  list or total list is missing, declares no entry, or carries an
+  unsupported entry refuses the install with nothing on the machine
+  changed, and so does a changed path git cannot print unambiguously;
+  renames are judged on both their ends (no rename folding).
+- No action on upgrade beyond taking the new pf: the change is
+  installer logic and repository declarations. A dev install over a
+  green tag that predates the interface list now refuses by design —
+  wait for the next green tag; the one-time bypass copy that installed
+  v0.2.4-dev.19 over green/20261120-1 is retired with this change.
+
+## v0.2.4, the build close runs review's replay and the plan maps the analysis (polyforge#181)
+
+- The develop build's close no longer stops at the static facts: before the
+  hand-off it runs the same lines review judges with — `facts.py
+  plan-conformance` and `facts.py build --replay --isolation host` — beside
+  the `carries` line it already ran, a red fixed before the hand-off; an
+  exit 2 that stays 2 after its retries (one minute apart, at most two) is
+  disclosed in the hand-off and left to review to re-run, never judged
+  blocked. The shared build skill carries the same close, conditioned: a
+  lane whose fix build inherited its plan (the epic lane's) skips the
+  plan-conformance line and runs only the replay. The develop build step's
+  line budget rises from 190 to 215 lines for the two additions, the pinning
+  contract test moved with it.
+- The plan `build` writes gains a `## 分析对照` section on a ticket that
+  carries a `## 分析` section: each item the analysis lists — each old test
+  and document obligation, each risk, each decided point (`已定`) — is
+  mapped to the unit that carries it or a stated reason it is not taken; a
+  decided point takes precedence over the analysis's recommendation, and an
+  analysis written against an older base has its file:line references
+  re-checked against the current one. A ticket without `## 分析` writes
+  `none` there.
+
+What a project must change — nothing: the close's lines and the plan's
+section are the workflow's own texts; no script, conf key or command
+surface changed.
+
+## v0.2.4, the build fast check reuses green runs by key and the per-unit bar narrows to the touched roots (polyforge#182)
+
+- `fast_checks.py --repo` reuses a green command instead of executing it
+  when its key — the command text, its root's subtree tree hash of the
+  working tree (a private index over tracked modifications plus
+  untracked, unignored files; the repository root's key counts the whole
+  tree, nested roots included), its sorted declared `requires_env`/
+  `requires_cmd` prerequisites — is unchanged from the previous run in
+  the same result file: the entry is recorded `reused`, not executed,
+  its original log path and `exit_code: 0` kept, and a green entry of a
+  root or command the run never plans is carried in the file for a later
+  run or the close to reuse. A red, timed-out, never-started or
+  flaky-confirmed result is never reused, and a previous file that is
+  unreadable or not a usable result is no cache — everything runs, never
+  a usage error.
+- The per-unit bar narrows: `--repo <name> --phase fast --root <dir>`
+  (repeatable; `.` the repository's own root, a nested root its
+  directory) runs only the named roots' fast commands — the scoped
+  selection still runs once per touched repo at the close — and the
+  logs move one directory per run (`<log-dir>/<n>/<repo>/<seq>/`), so a
+  later run's executions never overwrite a reused entry's original log.
+- The close's `--close-scoped` reuse is keyed the same way (one key, two
+  modes): the whole-repo head comparison is gone, a commit outside a
+  nested root keeps that root's green runs reusable, and the per-unit
+  file's own `reused` and `carried` entries are accepted evidence.
+
+What a project must change — nothing: the command's flags and result
+shape are the workflow's own; no conf key, pf subcommand or schema
+changed.
+
+## v0.2.4, review-firstpass delivery metrics and trial arms (polyforge#209)
+
+- `tools/review-firstpass --events <events-dir>` adds the delivery block over a Cell's exported event files: the develop lane's completed run set (an absent event file is `events missing`, its event fields `unknown`; events without a completed terminal are `not completed (excluded)`), wall clock median and nearest-rank p90, owner-wait-adjusted effective time, per-file delivery time (approved size = the first build section's start to the last build before the first sync; git numstat across the repos), rework share (every rewind's named gate to that gate's next `step_done`; a dispatch ends at its step's `step_done`/`step_failed`/`gate_verdict`, the next same-step `step_started`, a rewind or the terminal, with the owner wait inside it subtracted), first pass, infra failures per model+effort (a `step_failed` owned by the same step's most recent `step_started`) and model-class candidate switches with the 503 subcount. A ticket with no measured build dispatch is `unknown`; a missing transcript or an empty window is that dispatch's unknown, never an estimated number.
+- The cohort manifest gains `"arms": {"<arm>": ["<capsule>", ...]}`: each arm prints the same tier / infra / switch / estimate summary, one detail row per run in the manifest's order, and the missing names (counted, excluded). An arm uses the delivery block's run set: develop only, a completed terminal or an absent event file enters, a run with events but no completed terminal is named `not completed (excluded)` and stays out of every number. Without `--events` the arm keeps size and first pass, the event fields are `unknown`, and the infra, switch and estimate lines say `n/a (no events dir)`.
+- The estimate line is read only inside `## 分析` -> `### 1.`, one `估算：<repo> 新增 N 个文件、修改 M 个文件、单元 K 个` per repository; a malformed or duplicated line voids that repository only; the summary counts `estimate unknown` apart, with its names (the shared samples are polyforge#213's `internal/contracttest/testdata/analysis_estimate_lines.tsv`).
+
+What a project must change — nothing: the tool is read-only, its new output is gated by `--events` / `arms`, and the pre-existing report and CSV stay byte-identical without them.
+
+## v0.2.4, the hand-off gate: build and sync hand off done only with a passing fast check at HEAD (polyforge#211)
+
+- The develop lane's `build` and `sync` declare the step key
+  `fast_check_proof {result, command}`. Before `done`, the daemon reads the
+  result file the declaration names — `artifacts/build/fast-checks/<repo>.json`
+  for build, `artifacts/sync/fast-checks/<repo>.json` for sync — for every task
+  repo the step's round moved: it must be a `pf-step-result/1` with `verdict`
+  `pass` and `heads` carrying that repo at its current HEAD. A missing file, an
+  unreadable result, a stale head or a non-pass verdict refuses `done` and names
+  the repo, the failing check and the line that re-runs it. A repo left at the
+  round's start commit and a fast-forward need none; a start the record does not
+  carry needs one like a changed repo.
+- A red the change did not cause — the default branch already red, an
+  `error`/`partial` result, or a lane that planned no check — is released by the
+  owner's word: the step asks, then hands off `done` with `--per-owner <the
+  reply's at>` and the section's header records the cited message (the same
+  release a spent rewind budget gives a gate's `fail`). polyforge#212 (C4) will
+  later treat a triaged known red as passing inside the gate.
+- Build's close re-runs the check with `--phase fast` after its last commit so
+  the result's `heads` are the commits the gate compares; sync's skill runs the
+  check after a merge that moved a repo (before `continue` on the working tree
+  and again after it, so the merge commit's HEAD is recorded). The daemon still
+  only reads files and git; it runs no check and knows no repository's command.
+
+What a project must change — nothing: this is a new optional lane step key and
+the develop lane's own declaration; no config key, `pf` subcommand or result
+schema changed. A work item already in flight keeps its claim-time lane snapshot,
+so it is not gated; a work item claimed after the upgrade runs the new build and
+sync texts. A project whose default branch is already red will see its build and
+sync ask the owner at hand-off instead of at verification.
+
+## v0.2.4, the fast checks' baseline triage: a red the change's base carries is not this change's (polyforge#212)
+
+- `fast_checks.py` (`--repo`, the per-unit bar and the hand-off gate's own
+  command, and `--close-scoped`, the build close's scoped selection) triages a
+  unit still red after its one flaky re-run on the change's baseline — the same
+  judgment `verify.py`'s pre-existing phase runs, one shared entry
+  (`workflows/_shared/scripts/pfstep/preexisting.py`, `judge_on_base`): a
+  throwaway worktree of the merge-base, the report's declared `base_setup`, then
+  the unit's own targeted re-run there. The classes land in the result file —
+  `pre_existing` (the base fails the same way, its signature, the baseline
+  commit, `details.baseline` and `details.reds[]` recording the judgment: not
+  this change's red, the run exits 0 and the selection's `pre_existing` status
+  is the shared validator's green-equivalent evidence in
+  `facts.py analysis` and `verify.py --analysis`), `this_change` (the base lacks
+  the test, or it passes there) and `undetermined` (anything the base runs
+  could not settle — fail closed, the existing red rules hold and the owner's
+  release path is unchanged).
+- `--close-scoped` takes `--unit-runs <units.json>` (the build skill passes
+  `artifacts/build/units.json`): the files its test commits touched are
+  protected, never pre-existing — a test this change authored is this change's
+  red. A pre-existing failure is excluded from its command's confirming re-run
+  by the skip form verification uses (go `-skip`, `E2E_SKIP`, pytest
+  `--deselect`); a command that cannot exclude it and has no completion proof
+  keeps a residual whole-command failure.
+- The hand-off gate (polyforge#211) needs no change: a triaged check exits 0,
+  its `pass` verdict passes the gate — the gate's own red-release path
+  (`--per-owner`) stays for what the base could not settle. What a project
+  must change: nothing — the judgment, its records and the baseline worktree
+  are the lane's own scripts; a work item claimed before this section keeps
+  its claim-time lane snapshot and runs the previous behavior.
+
+## v0.2.4, the subagent process lifecycle and the cleanup_failed park (polyforge#200)
+
+Two owner-visible changes ship together. The daemon-owned pi subagent tool
+gains a per-task `timeoutSeconds` parameter (a positive integer of seconds,
+default 1800, measured from the child's actual start; 0, negatives and
+fractions are refused before anything spawns): a timed-out worker is stopped
+with its descendants — TERM, a bounded grace, KILL, a bounded wait — and the
+result is a failure that says so (`timedOut` and the effective value beside
+the existing details shape; the step's archive marks it failed). An aborted
+or timed-out stop collects only that call's descendants, identified by a
+per-call inherited `PF_SUBAGENT_ID` marker beside the work item's and the
+daemon's markers.
+
+A step-end process cleanup that cannot prove the step's processes gone now
+parks the work item blocked, kind `cleanup_failed` — after its path's own
+records are written: a received hand-off stays on the call ledger (the
+resume re-runs the sweep and settles it without re-running the step), a
+failed dispatch keeps its failure record and retry ladder (the resume
+retries the step), an open ask keeps standing (the resume re-enters it);
+`pf watch` shows the kind with its required action, Pi Web's item panel
+labels it, and `pf answer` names the continuation. The `pi_subagents`
+switch stays default-off; a work item in flight keeps its claim-time lane
+snapshot, so nothing is gated retroactively.
+
+## v0.2.4, the dev channel's comment-only exception on the interface paths (polyforge#219)
+
+The development channel's client-server interface preflight (the graded
+AIHub-side check of polyforge#188) gains exactly one pass: a modified
+`.go` file on a `tools/aihub-interface-paths.conf` path whose two
+versions differ only in Go comments — added, changed or deleted
+comments, and the whitespace they cause — no longer counts as an
+interface change, and a passing run prints one info line naming every
+such path (the fixed fragment `comment-only`); the file never reaches
+the total list's `tools/aihub-paths.conf` WARN. The judgment stays
+fail closed on every other shape: any code change however small (an
+identifier, a type, a field, a string literal, a struct tag, an
+import), a new, deleted or renamed file, a mode or type change, a
+non-`.go` path, a version that will not parse, and a green tree that
+does not carry a working judge — each refuses exactly as before,
+waiting for a formal release. The judge is `tools/gocommentonly`, part
+of the repository and built by `tools/install.sh --dev` from the green
+commit's own tree with the machine's `go` (directive comments and cgo
+preludes are code: a changed `//go:build`, `//go:generate` or `import
+"C"` preamble refuses); a green tag too old to carry the judge judges
+nothing, so the exception takes effect with the next green tag after
+this change — this is what unblocked the fifteenth batch:
+`green/20261121-1` over `v0.2.3` touches exactly one interface file,
+`internal/common/protocol/watch.go`, whose change is four comment
+lines.
+
+## v0.2.4, the plan maps the ticket's decided rulings (polyforge#221)
+
+Build's plan-conformance close fact reads the ticket for the first time:
+the work item's verbatim content (`runtime-state/work-item.json`, already
+materialized by the daemon) is scanned for every section whose heading
+opens `## 已定` — the section the owner's plan-review rulings are written
+into, before the analysis (the 2026-11-21 ruling; polyforge#202's trial
+showed both models skipping rulings appended after the analysis) — and
+every item of every such section, numbered across the sections in order of
+appearance (a prose paragraph that is no list counts as one, so a ruling
+cannot slip past), must be mapped in the plan's new `## 已定对照` section
+to a unit — an id of units.json, or a bold id of the plan's `## Units`
+when there is no units file — or to a stated `none — <reason>`. An
+unmapped ruling is red and named with its number and text, so the close
+cannot hand off, and build's close and review run the same one line — one
+engine, one result file. A ticket without such a section asks for no
+mapping section, and a work item the daemon has not materialized reads as
+no decided ruling (a corrupt one is not judged, exit 2). The rule reads
+the ticket's own writing only — no project is named, any repository's
+ticket written this way is read the same. Plans written before this
+change are judged from the next plan-writing round or the next re-run
+close: a lane in flight whose ticket carries `## 已定` sections fails the
+close red until the mapping section is added (the result names every
+unmapped item, so the fix is mechanical), and a lane whose fix build
+inherited its plan keeps skipping the plan-conformance line. The develop
+build step's line budget rises from 215 to 222. No upgrade action beyond
+the next `pf` install: texts and the one engine entry, nothing to migrate.
+
 ## v0.2.4, the container supervisor and the upgrade drain (polyforge#160)
 
 The workstation container's supervision ships: `pf supervise` is the

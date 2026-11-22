@@ -128,7 +128,11 @@ through the registration below.
      deadline) — unless the command's `summary` carries `pf-verify-image-missing`: the
      image the step's `image` parameter names is not present on this machine and is never
      pulled — hand off `blocked` at once, no retry (a person prepares the image or clears
-     the parameter; the summary names the image). Otherwise: wait one
+     the parameter; the summary names the image) — or carries
+     `pf-audit-param-invalid`: the `audit` parameter's value is neither `on` nor `off` —
+     hand off `blocked` at once, no retry (the owner fixes
+     `steps.<project>.full-gate.params.audit` or the override; the summary names the
+     value). Otherwise: wait one
      minute and run the gate line again, at most twice more; still 2 → hand off `blocked`,
      the command's `summary` and the last gate log's tail (`logs`) in the body. No question
      to the owner: an environment problem is fixed on the machine, and the owner's message

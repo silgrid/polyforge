@@ -1,10 +1,9 @@
 import "#test-env";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test, { mock } from "node:test";
+import test from "node:test";
 import { createJiti } from "jiti";
 
 const jiti = createJiti(import.meta.url);
@@ -15,18 +14,15 @@ const {
   resetSessionScanIndexForTests,
   scanSessionFileInfo,
 } = await jiti.import("./session-list-scanner.ts");
+const { disposeSessionScanWorkerPoolForTests } = await jiti.import("./session-parse-worker-pool.ts");
 const { listAllSessions, invalidateSessionListCache } = await jiti.import("./session-reader.ts");
 const timestamp = "2026-01-01T00:00:00.000Z";
-// Every read stream a scan opens and where it starts: a full scan reads from
-// byte 0, a resumed one from where the previous scan stopped. Mocked before the
-// first scan: through jiti the scanner keeps the function its first call found.
+// Every stream read a scan opens and where it starts: a full scan reads from
+// byte 0, a resumed one from where the previous scan stopped. The scan runs on
+// the worker pool (lib/session-parse-worker-pool.ts), which records each
+// completed read here — the same facts the old fs.createReadStream mock did.
 const reads = [];
-const createReadStream = fs.createReadStream;
-mock.method(fs, "createReadStream", (path, options, ...rest) => {
-  reads.push({ path, start: options?.start ?? 0 });
-  return createReadStream(path, options, ...rest);
-});
-syncBuiltinESMExports();
+globalThis.__piWebScanTaskLog = reads;
 const line = (entry) => JSON.stringify(entry) + "\n";
 const message = (id, role, content, time = timestamp) => ({
   type: "message", id, parentId: null, timestamp: time, message: { role, content },
@@ -40,11 +36,13 @@ function fixture(t) {
   process.env.PI_CODING_AGENT_DIR = root;
   resetSessionScanIndexForTests();
   invalidateSessionListCache();
+  globalThis.__piWebScanTaskLog = reads;
   t.after(() => {
     resetSessionScanIndexForTests();
     invalidateSessionListCache();
     globalThis.__piSessionPathCache = undefined;
     globalThis.__piPathToSessionIdCache = undefined;
+    globalThis.__piWebScanTaskLog = undefined;
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
     fs.rmSync(root, { recursive: true, force: true });
@@ -433,6 +431,69 @@ test("a summary listing defers only the files the index has not scanned", async 
   assert.equal(byId.cached.messageCount, 1);
   assert.equal(byId.fresh.detailsPending, true);
   assert.equal(byId.fresh.messageCount, 0);
+});
+
+test.after(() => {
+  disposeSessionScanWorkerPoolForTests();
+});
+
+test("a repeated summary listing reads no header it already read", async (t) => {
+  const { write } = fixture(t);
+  const path = write("deferred-twice", [message("d1", "user", "deferred request")]);
+
+  // A cold summary reads each unknown file's 64 KiB header as a pool task;
+  // an unchanged file's second summary must come from the fingerprint cache,
+  // or a summary-only workload re-reads the whole corpus on every call
+  // (polyforge#140 review r2#8).
+  reads.length = 0;
+  const first = await listSessionsIncremental({ deferDetails: true });
+  assert.equal(first[0].detailsPending, true);
+  assert.deepEqual(reads.filter((read) => read.kind === "header"), [{ path, start: 0, kind: "header" }],
+    "the first summary reads the file's header as a pool task");
+
+  reads.length = 0;
+  const second = await listSessionsIncremental({ deferDetails: true });
+  assert.equal(second[0].detailsPending, true);
+  assert.equal(second[0].id, "deferred-twice");
+  assert.deepEqual(reads.filter((read) => read.kind === "header"), [],
+    "an unchanged file's header summary is served from the cache, not re-read");
+
+  // A changed file (an append) re-reads its header once more.
+  fs.appendFileSync(path, line({ type: "session_info", name: "renamed" }));
+  await listSessionsIncremental({ deferDetails: true });
+  assert.deepEqual(reads.filter((read) => read.kind === "header"), [{ path, start: 0, kind: "header" }],
+    "a changed file's header is read again");
+});
+
+test("a deferred summary rejects a file whose first object line is not a session header", async (t) => {
+  const { write } = fixture(t);
+  // A file that opens with a non-session object row has no usable header
+  // within the summary budget: the old main-thread reader and the worker's
+  // full scan both reject it, so the summary must too — continuing past the
+  // row would list a session the ordinary listing drops (review r3 N1).
+  const path = write("midfile", [message("m1", "user", "first question")]);
+  fs.writeFileSync(path, line(message("stray", "user", "not a header")) + fs.readFileSync(path, "utf8"));
+
+  const summary = await listSessionsIncremental({ deferDetails: true });
+  assert.equal(summary.find((session) => session.id === "midfile"), undefined,
+    "the summary lists no row for a file without a leading session header");
+});
+
+test("a deferred summary skips a leading non-object line and still finds the header", async (t) => {
+  const { write } = fixture(t);
+  // A leading line that parses as a JSON primitive (a torn write, a writer's
+  // stray line) is skipped, not fatal: the old main-thread reader went on to
+  // the next line, and so must the worker's header summary (review r2 N1).
+  const path = write("after-null", [message("a1", "user", "first question")]);
+  fs.writeFileSync(path, "null\n" + fs.readFileSync(path, "utf8"));
+  reads.length = 0;
+
+  const summary = await listSessionsIncremental({ deferDetails: true });
+  const row = summary.find((session) => session.id === "after-null");
+  assert.ok(row, "the file is listed");
+  assert.equal(row.detailsPending, true);
+  assert.equal(row.messageCount, 0);
+  assert.deepEqual(reads.filter((read) => read.kind === "header"), [{ path, start: 0, kind: "header" }]);
 });
 
 test("discovers sessions through project directory symlinks", { skip: process.platform === "win32" }, async (t) => {

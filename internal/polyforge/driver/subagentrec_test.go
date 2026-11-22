@@ -371,3 +371,32 @@ func TestSpawnStepRecordsPiSubagentsFromStdout(t *testing.T) {
 		t.Fatalf("the translator must still see the records: %+v", s)
 	}
 }
+
+// A timed-out child (polyforge#200 Q6): the stop kills the child, so its
+// exitCode is null and the failure rides details.results[i].timedOut —
+// the archive must record the failure, never a success.
+func TestSubagentTimedOutResultArchivesFailed(t *testing.T) {
+	capDir, transcript := recorderCapsule(t)
+	rec := newPiSubagentRecorder(capDir, transcript)
+	id := "call_to1"
+	timedOut := map[string]any{
+		"agent": "worker", "task": "task worker", "exitCode": nil,
+		"timedOut": true, "timeoutSeconds": 1,
+		"messages": []any{map[string]any{"role": "user", "timestamp": 1793625884435}},
+	}
+	rec.Feed(subagentUpdate(id, "tool_execution_update", "single", false, timedOut))
+	rec.Feed(subagentUpdate(id, "tool_execution_end", "single", true, timedOut))
+	meta := readMeta(t, filepath.Join(capDir, capsule.DirSession, "session-tok", capsule.DirSubagents, subagentFileStem(id, 0)+".meta.json"))
+	if meta["finished"] != true {
+		t.Fatalf("the ended call must mark the child finished: %v", meta)
+	}
+	if meta["isError"] != true {
+		t.Fatalf("a timed-out child (exitCode null, timedOut true) must archive as a failure: %v", meta)
+	}
+	if _, has := meta["exitCode"]; has {
+		t.Fatalf("a null exit code stays absent from the meta: %v", meta)
+	}
+	if meta["timedOut"] != true || meta["timeoutSeconds"] != float64(1) {
+		t.Fatalf("the archive must carry the timeout facts: %v", meta)
+	}
+}

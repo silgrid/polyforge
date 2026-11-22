@@ -1,0 +1,1 @@
+该目录内的 `index.ts` 与 `agents.ts` 固定取自 pi-coding-agent operator subagent 扩展快照（来源：/root/.pi/agent/extensions/subagent，构建时快照；上游示例同源 MIT 许可）。daemon 仅修改输入边界：固定 worker、project scope、parallel/chain 拒绝和隔离 flags；输出事件协议保持上游形状。

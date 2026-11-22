@@ -16,8 +16,11 @@ release ...`, or ask the routing skill: "release" / "deploy" /
 `patch`) it is passed verbatim to the repo's procedure; otherwise the
 repo default applies.
 
-The bundle runs three gate steps — `release`
-(`.polyforge/release.sh [bump]`, after the deploy procedure's read-only
+The bundle runs three gate steps — `release` (the project's most recent
+green integrate batch resolved by the lane's own command and refused with
+named codes before any version is claimed when there is none —
+`PF-RELEASE-NO_GREEN_BATCH`; the procedure runs as `.polyforge/release.sh
+[bump] --pins <file>`, after the deploy procedure's read-only
 `.polyforge/deploy.sh --preflight` when the project has one and, on a first
 run, a read of the README, install and upgrade docs against the changes since
 the previous release tag — a mismatch is a question to the owner, never an
@@ -27,27 +30,46 @@ edit), an independent `verify`
 <version>`; a project without `deploy.sh` releases without deploying).
 A failure terminates the work item: published tags, releases and images
 are immutable, so there is no rewind into a re-release. A claimed version
-is never burned, though: when `origin_head` already carries exactly one
-release tag `V` - an earlier attempt or work item that died after its
-claim, a release whose deploy failed, a hand release - the `release` step
-resumes `V` instead of refusing it. A complete `V` (`release.sh --verify V`
-passes) is adopted without running the procedure: the release record
-carries `resumed: true` and `notes=<location>` = the published release
-page URL, which `verify` checks, and `verify` audits it again. A partial
-`V` runs the procedure, which resumes it (`release.sh`: what is published
-is checked and kept, only what is missing is published - no second
-version of the commit is ever cut). `verify` accepts `V` in the
-pre-release tag list only for a resumed release. Two release tags on
-`origin_head`, or a tag an earlier attempt of the same work item left on
-another commit, still refuse with `PF-RELEASE-ALREADY_RELEASED`; a
-procedure that cannot resume ends `PF-RELEASE-INCOMPLETE`. Two halves
-take effect at different times: `release.sh`/`deploy.sh` act from the
-merge on (the step runs the procedure from origin's head), while the step
-text (resume or adopt, the deploy preflight, `verify`'s check (b)) reaches
-a work machine only with its next daemon install; until then a re-filed
-release work item still refuses a tagged head with
-`PF-RELEASE-ALREADY_RELEASED` before calling the procedure - run
-`release.sh` from the same commit by hand to resume. The
+is never burned, though: when the green batch's pinned commit already
+carries exactly one release tag `V` - an earlier attempt or work item that
+died after its claim, a release whose deploy failed, a hand release,
+whoever claimed it - the `release` step resumes `V` instead of refusing
+it. A complete `V` (`release.sh --verify V` passes) is adopted without
+running the procedure: the release record carries `resumed: true` and
+`notes=<location>` = the published release page URL, which `verify`
+checks, and `verify` audits it again. A partial `V` runs the procedure,
+which resumes it (`release.sh`: what is published is checked and kept,
+only what is missing is published - no second version of one pinned commit
+is ever cut). `verify` accepts `V` in the pre-release tag list only for a
+resumed release. Two release tags on the owner pin, a release tag that
+appeared on another commit after the pre-release list was recorded, a
+batch pin no longer on the default branch or a batch that names no commit
+for the owner repo refuse at the lane's own resolver, before the
+procedure runs - `PF-RELEASE-ALREADY_RELEASED`,
+`PF-RELEASE-PIN_OFF_DEFAULT`, `PF-RELEASE-UNPINNED_OWNER` - and a
+procedure that cannot resume ends `PF-RELEASE-INCOMPLETE`. A project whose
+procedure declares no `--pins` in its `--help` is refused
+`PF-RELEASE-PROCEDURE_CONTRACT` before it runs (see
+[upgrade](../upgrade.md)). Two halves take effect at
+different times, and the change carries its own transition: the procedure
+contract (`--pins`) acts from the merge on — a script that requires
+`--pins` refuses a run without it immediately — while the step text that
+HANDS the pins (the resolver, the pinned checkout, the refusals) reaches a
+work machine only with its next daemon install (`pf daemon ensure` sets a
+daemon's lanes from `<data-dir>/release/current/workflows`, the installed
+release's copy). Between the merge and the first release cut with the new
+script, a daemon still running the old lane text calls the procedure
+without `--pins` — from the origin head, per its old text — and the new
+script refuses (`--pins <file> is required`), nothing built or published:
+the lane cannot cut that first version, by design (never a silent branch-head
+release). The release that ships the new convention is therefore cut by
+hand: take the project's most recent green integrate batch (its record's
+`main`, through the aihub), write the pins file
+`{"batch": "<id>", "repos": {"<repo>": "<sha>", ...}}`, sit the owner repo
+at its pinned commit and run
+`.polyforge/release.sh [patch] --pins <pins file>` yourself; once that
+release is installed on the daemon, its lane text runs the resolver and
+the lane releases on its own. The
 step-by-step checks and failure codes are in
 [workflows/release/README.md](../../workflows/release/README.md)
 and its steps.
@@ -68,8 +90,10 @@ until the process is gone: **a release waits for running verifications**
 (the work item shows `verify_queued`, "heavy-run slots full", like a queued
 verification) and no verification starts beside the procedure; and it runs
 under a 120-minute tool window (`PF_TOOL_WINDOW_MS`; a claude step's Bash
-default timeout equals it), sized for a procedure that runs the full gate
-itself, inside a 135-minute wall (T = 405 minutes across its dispatches).
+default timeout equals it), sized for a procedure that builds, audits and
+publishes (the batch's own full-gate run is the test evidence; the
+procedure runs none), inside a 135-minute wall (T = 405 minutes across
+its dispatches).
 `deploy` likewise holds the heavy admission under a 60-minute window (one run may deploy several targets);
 `verify` declares a 30-minute wall and no resources. Downstream verifies
 upstream: `verify` first checks that `release-record.json` parses and names
@@ -99,9 +123,16 @@ audits it and `deploy` deploys it - no duplicate version is cut.
 Per-repo procedure contract (the repo owns the procedure; the bundle
 only dispatches):
 
-- `.polyforge/release.sh [bump]` releases origin's default-branch head,
-  exits non-zero on any failure, and prints `version=<tag>`,
-  `commit=<sha>`, `notes=<location>` lines at the end.
+- `.polyforge/release.sh [bump] --pins <file>` releases the green
+  integrate batch's pinned commit of this repo (the pins file is the
+  batch's whole group, `{batch, repos: {<name>: <sha>}}`; the clone must
+  sit at its repo's pin, and the pin must be on the origin default
+  branch's history - a pinned commit the branch has moved past still
+  releases; its `--help` output declares `--pins`, and a script whose
+  `--help` does not is refused by the lane with
+  `PF-RELEASE-PROCEDURE_CONTRACT`), exits non-zero on any failure, and
+  prints `version=<tag>`, `commit=<sha>`, `notes=<location>` lines at the
+  end.
 - `.polyforge/release.sh --verify <version>` is a read-only audit of a
   published release (format, ordering, artifacts, integrity); exit 0
   only if all pass.
@@ -242,12 +273,14 @@ pi-web` has no targets and is unchanged.
 
 Both procedures check their machine before anything is published.
 `release.sh` runs a preflight after computing the version and before its
-gates — the tools, the node major against `.nvmrc`, and the `ghcr.io` push
-credential (docker logs in with gh's token when that token carries
-`write:packages`, replacing a stale stored login) — and reports every
-problem in one message. The tools cover the default dependency audit too
-(polyforge#113): python3 for the scope engine that reports the audit
-command, and go and govulncheck when the repository root carries a go.mod
+checks — the tools (python3 among them, always: the green batch's pins
+file is parsed with it), the node major against `.nvmrc`, and the
+`ghcr.io` push credential (docker logs in with gh's token when that token
+carries `write:packages`, replacing a stale stored login) — and reports
+every problem in one message. The tools cover the default dependency
+audit too (polyforge#113): python3 for the scope engine that reports the
+audit command, and go and govulncheck when the repository root carries a
+go.mod
 (the audit's `--go` surface runs on the release host, after the build) —
 so a missing tool is a preflight problem, never a red audit after the
 test gate and the build. `deploy.sh --preflight [--component aihub|pi-web]`
@@ -341,9 +374,20 @@ installs
 `v<next patch of the latest release tag>-dev.<N>` — `N` the
 first-parent commit count release-tag..green-commit, stable because main
 only fast-forwards — and nothing is published: no release, no asset, no
-push. The two AIHubs do not follow it: a green commit whose
-release-tag..green diff touches any path of `tools/aihub-paths.conf` is
-refused in prepare, needing a formal release instead. The channel's
+push. The two AIHubs do not follow it, and the AIHub-side preflight is
+graded (polyforge#188): a green commit whose release-tag..green diff
+touches a path of `tools/aihub-interface-paths.conf` (the client-server
+wire contracts) is refused in prepare, needing a formal release
+instead — the one exception (polyforge#219) being a modified `.go`
+file whose two versions differ only in Go comments: it passes as
+comment-only, judged by the green tree's own `tools/gocommentonly`,
+with one info line naming the file, and everything else (a mode
+change, a new or deleted file, an unparseable version, no working
+judge) still refuses — fail closed — while the diff's other AIHub-side paths (`tools/aihub-paths.conf`:
+the server's insides, its SQL, the deploy tree) pass with one WARN
+naming every hit — those changes stay undeployed and wait for a formal
+release; a green tag whose lists are missing, empty or of an
+unsupported shape is refused too (fail closed). The channel's
 residual risk is the green tag's own ("The residual risk" below): the
 tag proves its record matches the commit's gate, not who wrote it. The
 development version is a SemVer pre-release of the next formal release,
@@ -463,12 +507,13 @@ and the release:
   green tag names, not by the id. A tree without `tools/gate-id` is served
   by the lane's own copy (`pfstep/gateid.py`), byte-identical with this
   one by a consistency test, which the gate uses for its green tag.
-  **The known limitation:** `release.sh` and `tools/green-tag check` never
-  pass `--image` — they compute the id of the tree alone — so a repository
-  that gates in a prepared image gets a green tag whose id they cannot
-  reproduce on their own: the image is a person's, and the release host
-  may not even carry it. Nothing of the release changes for a repository
-  that sets no `image`.
+  **The known limitation:** `tools/green-tag check` will never pass
+  `--image` — it computes the id of the tree alone — so a repository that
+  gates in a prepared image gets a green tag whose id it cannot reproduce
+  on its own: the image is a person's, and the host that checks may not
+  even carry it. Nothing changes for a repository that sets no `image`.
+  (The release shared this limitation once; since polyforge#154 it reads
+  no green tag at all.)
 - **The plan digest.** A gate run records the sha256 of the plan as
   executed (its compact JSON encoding, the keys in the order below,
   non-ASCII as UTF-8): the image's content hash
@@ -529,23 +574,23 @@ and the release:
   not who wrote it: anyone allowed to push tags to the remote can still
   hand-write a tag of this shape, and the release would reuse it. Tag-push
   rights on the remote are therefore release rights.
-- **In the release.** After the cross-reference check, `release.sh`
-  computes the gate id and asks `tools/green-tag check` for the released
-  commit: a reusable green tag skips the gate and the run names it;
-  otherwise the release runs the tree's `gate.py --isolation container`, its
-  logs kept in `artifacts/release-<tag>/gate/`; exit 1 stops the release
-  as a failed gate, exit 2 as a gate that was not judged. Either way the
-  release notes end with a `## Test gate` section naming the reused tag or
-  the run, with the gate id. `RELEASE_TEST_CMD` (for the fake-environment
-  tests) replaces the whole gate: no green tag is consulted. After the
-  binaries build the release runs the dependency audit (polyforge#113): the
-  scope engine's own `audit` command, taken verbatim from `verify-scope
-  --json --full` (a declared `audit_prod_level` rides in it), over the same
-  trees the verification bar audits - never skipped by a reused green tag,
-  whose record says nothing about today's advisories. `RELEASE_AUDIT_CMD`
-  (the fake-environment tests) replaces the whole gate.
-  `release-manifest.json`, the assets and `release.sh --verify` are
-  unchanged.
+- **In the release.** After the cross-reference check, `release.sh` runs
+  NO test gate of its own (polyforge#154): the green integrate batch's own
+  full-gate run - the run that made the batch green, on exactly the pinned
+  commits the script releases - is the test evidence, no green tag is read
+  and none is written (`tools/green-tag` stays, for the integrate workflow
+  and the dev channel). The release still checks its own pre-claim
+  preconditions: the pins' shape and the pinned commit's place on the
+  default branch, the design-doc cross-reference check, the PR-only check,
+  the workflow contract, the machine preflight. After the binaries build
+  it runs the dependency audit (polyforge#113): the scope engine's own
+  `audit` command, taken verbatim from `verify-scope --json --full` (a
+  declared `audit_prod_level` rides in it), over the same trees the
+  verification bar audits - never skipped by anything, for the advisory
+  feed moves and a green batch says nothing about today's advisories.
+  `RELEASE_AUDIT_CMD` (the fake-environment tests) replaces the whole
+  audit gate. `release-manifest.json`, the assets and `release.sh
+  --verify` are unchanged.
 - **In the release (notes).** The release notes never exceed GitHub's
   125000-character release-body limit: `release.sh` counts bytes (the
   character count or more under UTF-8, the conservative side) and checks
@@ -579,7 +624,8 @@ classes.
 | C. wrong default repository | #120, #240 (first deploy attempt), #155 (first invocation) | `release.sh` once defaulted gh to the public mirror; the fail-loud fix (`release.sh:170,296`) then cost #155 an attempt; `deploy.sh` defaulted `GH_REPO` to the public mirror (fixed earlier: `deploy.sh:278`, 535ab3ee) | `release.sh` defaults to this repository's release repo and refuses, before any work, a gh repo that is not the one `origin`'s GitHub URL names | `TestW372ReleaseRefusesATagReleaseRepoSplit`, `TestW121ReleaseGHRepoFailLoud`, `TestW241DeployGHRepoDefault` |
 | D. machine prerequisite found mid-run | #144 (node major), #265 (stored ghcr.io login that cannot push), #283 (ssh BatchMode) | node checked only inside the test gate (`Makefile:21`); the ghcr.io login was skipped whenever docker's config named ghcr.io (`release.sh:581-586`); ssh checked only at deploy step 0 (`deploy.sh:1230`), after release and audit | `release.sh` preflight before the gates (tools, node major, ghcr.io login from gh's `write:packages` token), every problem in one message; `deploy.sh --preflight`, run by the release step before anything is published (`PF-RELEASE-PREFLIGHT`) | `TestW372ReleasePreflightReportsEveryMissingPrerequisiteFirst`, `TestW372ReleasePreflightRefreshesAStoredGhcrLogin`, `TestW372DeployPreflightCatchesSSHBatchModeBeforeARelease`, `TestW372ReleaseStepRunsTheDeployPreflightFirst` |
 | E. PR-only gate logic | #118 (genuine owner-direct commits: the gate was right; allowlist added later), #340 (index-blind `commits/<sha>/pulls`, fixed earlier by 5c7ab5b3) | left over: a failed GitHub read was reported as "without a merged PR" (`release.sh:254,269`) | a failed lookup is "PR lookup failed ... retryable, not a missing PR" (fail closed, before the claim); a merge commit the list lacks is confirmed through the PR its GitHub merge subject names | `TestW372PROnlyLookupFailureIsRetryableNotAMissingPR`, `TestW372PROnlyConfirmsAMergeCommitThroughItsOwnPR`, `TestW341ReleasePROnlyReliableAssociation` |
-| F. test gate red | #155 (`deploy_sql_test.go:174`, a test bug since fixed), #184 (`TestW167ReportTailEmptyAndNoFallback`), #353 (`TestV5Kill9ChaosMatrix/quarantine_split`) | the gate ran before the claim but exited through `set -e` without a word (`release.sh:507`); the flaky tests are not fixed here | the gate refuses with "nothing built or published, no version claimed (V is still free)" or, on a resume, "V stays claimed and resumable" | `TestW372FailingTestGateConsumesNoVersion`, `TestW372FailingTestGateKeepsAResumedVersionResumable` |
+| F. test gate red | #155 (`deploy_sql_test.go:174`, a test bug since fixed), #184 (`TestW167ReportTailEmptyAndNoFallback`), #353 (`TestV5Kill9ChaosMatrix/quarantine_split`) | the gate ran before the claim but exited through `set -e` without a word (`release.sh:507`); the flaky tests are not fixed here | the gate refuses with "nothing built or published, no version claimed (V is still free)" or, on a resume, "V stays claimed and resumable" | `TestW372FailingTestGateConsumesNoVersion`, `TestW372FailingTestGateKeepsAResumedVersionResumable` (renamed by polyforge#154 to the audit-gate shapes below, the release running no test gate any more) |
+| I. the release re-ran the batch's tests (polyforge#154) | — (closed in analysis, before it cost a release) | the release once re-gated the origin head itself: an integrate batch green, main moving on, meant either a second full gate (12 repos, about 64 minutes) or shipping a head nothing had tested as a batch | the release object is the most recent green integrate batch's pinned commits (passed with `--pins`); the batch's own full-gate run is the test evidence, and the script runs no test gate of its own | `TestReleaseScriptReleasesThePinnedCommitBehindTheHead`, `TestW405ReleaseRunsNoTestGate` |
 | G. deploy procedure logic (fixed earlier) | #71 (rollback: the row-count guard read the migration's intended row deletion as loss), #240 #242 (a failed `/pf` probe read as version "directory") | `deploy.sh` post-swap baseline guard; `probe_ctr`'s last-word parse | 75a86952 (`expected_deltas`); 303d5555 and 9a4e9590 | `TestDeployAcceptsDeclaredRowDelta`, `TestDeployRefusesUndeclaredRowLoss`, `TestW243DualLayoutContainerDeploys`, `TestW243OldAihubLayoutPreflight` |
 | H. release notes over GitHub's 125000-character body limit | #14 (found in analysis: a suffix line's first release once listed 3243 commits; closed before a release ran into it) | `git log $PREV..HEAD` listed the whole absorbed history on a suffix line's first release, and no length check existed anywhere, so `gh release create` would fail only after the tag was pushed and the image shipped | the suffix line's first release lists only the absorption's descendants (`--ancestry-path`); the generated list is cut to the newest commits within a byte budget (a 「还有 N 个提交」 notice and a compare link on the previous release's commit id); an overlong committed notes file refuses the release before the claim | `TestReleaseScriptSuffixVersion`, `TestReleaseScriptNotesTooLongAreTruncated`, `TestReleaseScriptNotesTooLongResume`, `TestReleaseScriptCommittedNotesTooLongRefused` |
 
@@ -588,7 +634,7 @@ classes.
 ```
 make check     # build + vet + fmt + xrefs + test, all packages, + pi-web lint/test
 make test      # unit packages, then the e2e suite in parallel (a developer subset)
-python3 workflows/_shared/scripts/gate.py --isolation container  # the full verification = the release's test gate, in its container
+python3 workflows/_shared/scripts/gate.py --isolation container  # the full verification (the integrate gate; the release runs none)
 make xrefs     # design-doc cross-references only
 make pi-web-build  # the pi-web package's production build (pi-web/)
 make pi-web-lint   # pi-web: npm run lint + tsc --noEmit

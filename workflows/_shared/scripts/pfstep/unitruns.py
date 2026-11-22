@@ -11,7 +11,39 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Sequence, Tuple
 
-from . import gostr
+from . import duration, gostr
+
+# The default limit of one recorded unit's run — the same limit its
+# red-state replay is bounded by: a run must pass or exit non-zero within
+# its limit, never hang (polyforge#157). A unit raises its own limit with
+# a self-reported `timeout` (a Go duration) in units.json — the one limit
+# fast_checks.py's --check-units, facts.py's replay and verify.py's
+# --unit-runs share.
+DEFAULT_UNIT_LIMIT = 10 * duration.MINUTE
+
+
+def unit_limit_ns(timeout: str, default: int = DEFAULT_UNIT_LIMIT) -> Tuple[int, str]:
+    """A unit's self-reported `timeout` as nanoseconds, or the default;
+    (0, why) when the report is not a Go duration or not positive — the one
+    rule every reader of the field enforces (r1#N3)."""
+    t = gostr.trim_space(timeout)
+    if t == "":
+        return default, ""
+    try:
+        d = duration.parse(t)
+    except ValueError as err:
+        return 0, "the self-reported timeout %s is not a Go duration: %s" % (gostr.quote(t), err)
+    if d <= 0:
+        return 0, "the self-reported timeout %s is not positive" % gostr.quote(t)
+    return d, ""
+
+
+def limit_note(limit_ns: int) -> str:
+    """The one note a run killed at its time limit carries — the red-state
+    limit rule: a run must exit non-zero within its limit (a red-state run
+    fails on its assertions), never hang."""
+    return ("its run was killed at its time limit (%s): it did not exit non-zero within the"
+            " limit — a red-state run must fail on its assertions, not hang" % duration.format(limit_ns))
 
 
 @dataclass
@@ -24,6 +56,12 @@ class UnitRunDecl:
     argv: List[str] = field(default_factory=list)
     marker: str = ""
     test_commit: str = ""
+    # pre_existing_red: its reproduction test predates the change (the
+    # on-the-spot check's flaky policy re-runs such a unit once)
+    pre_existing_red: bool = False
+    # timeout: the unit's self-reported run limit (a Go duration); "" = the
+    # shared default — the limit its run and its red-state replay share
+    timeout: str = ""
 
     def check(self) -> str:
         return self.repo + ":unit-run:" + self.id
@@ -37,7 +75,7 @@ def read_unit_runs(path: str) -> List[UnitRunDecl]:
             raw = f.read()
     except OSError as err:
         raise ValueError(str(err)) from None
-    shape = "a JSON array of {id, [pre_existing_red,] [test_commit,] impl_commit, run{repo, cwd, argv}}"
+    shape = "a JSON array of {id, [pre_existing_red,] [timeout,] [test_commit,] impl_commit, run{repo, cwd, argv}}"
     try:
         doc = json.loads(raw.decode("utf-8", "replace"))
     except ValueError as err:
@@ -63,6 +101,16 @@ def read_unit_runs(path: str) -> List[UnitRunDecl]:
         d = UnitRunDecl(id=text(u.get("id"), "id"), marker=text(u.get("marker"), "marker"),
                         test_commit=text(u.get("test_commit"), "test_commit"))
         text(u.get("impl_commit"), "impl_commit")
+        pre = u.get("pre_existing_red")
+        if pre is not None:
+            if not isinstance(pre, bool):
+                raise ValueError("%s is not %s: entry %d's pre_existing_red is not a boolean" % (path, shape, i))
+            d.pre_existing_red = pre
+        d.timeout = text(u.get("timeout"), "timeout")
+        if gostr.trim_space(d.timeout) != "":
+            _, why = unit_limit_ns(d.timeout)
+            if why:
+                raise ValueError("%s is not %s: entry %d: %s" % (path, shape, i, why))
         r = u.get("run")
         if r is not None:
             if not isinstance(r, dict):

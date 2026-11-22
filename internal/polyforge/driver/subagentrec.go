@@ -100,13 +100,17 @@ type piSubagentResult struct {
 	ExitCode   *int              `json:"exitCode"`
 	StopReason string            `json:"stopReason"`
 	Messages   []json.RawMessage `json:"messages"`
+	// TimedOut marks a child stopped by its wall clock (polyforge#200):
+	// the stop's kill leaves exitCode null, so the timeout is the failure.
+	TimedOut       bool `json:"timedOut"`
+	TimeoutSeconds *int `json:"timeoutSeconds"`
 }
 
 // failed is the extension's own failure rule for one child
-// (isFailedResult): a non-zero exit, or a turn that stopped on an error
-// or an abort.
+// (isFailedResult): a non-zero exit, a turn that stopped on an error or
+// an abort, or a timed-out child (whose kill leaves exitCode null).
 func (r piSubagentResult) failed() bool {
-	return (r.ExitCode != nil && *r.ExitCode != 0) || r.StopReason == "error" || r.StopReason == "aborted"
+	return r.TimedOut || (r.ExitCode != nil && *r.ExitCode != 0) || r.StopReason == "error" || r.StopReason == "aborted"
 }
 
 // notStarted is a parallel task's placeholder before its child starts:
@@ -202,6 +206,12 @@ func (r *piSubagentRecorder) record(callID string, index int, res piSubagentResu
 		meta["isError"] = res.failed()
 		if res.ExitCode != nil {
 			meta["exitCode"] = *res.ExitCode
+		}
+		if res.TimedOut {
+			meta["timedOut"] = true
+		}
+		if res.TimeoutSeconds != nil {
+			meta["timeoutSeconds"] = *res.TimeoutSeconds
 		}
 	}
 	body, err := json.Marshal(meta)
