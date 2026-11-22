@@ -39,11 +39,14 @@ test("the restore is exactly one POST through the route's action door, then the 
   assert.match(restore, /readList\(\);/, "the answer settles the view with the one re-read");
 });
 
-test("the panel wires the projects sub-tab with its label and icon", () => {
-  assert.match(panel, /"jobs", "tasks", "items", "projects", "integrate"/, "the Work rail carries the projects segment");
-  assert.match(panel, /tab === "projects" \? t\("polyforge\.work\.projectsTab"\)/, "the segment label");
+test("the panel keeps the projects sub-tab wired while the rail hides its entry", () => {
+  // polyforge#226: the visible list holds 作业/任务/全部 only; 项目 stays a
+  // full surface (label, body, icon) so re-adding it to that one list is the
+  // whole restore.
+  assert.match(panel, /VISIBLE_WORK_TABS: readonly PolyforgeWorkTab\[\] = \["jobs", "tasks", "items"\]/, "the Work rail's one visible list hides 项目");
+  assert.match(panel, /tab === "projects" \? t\("polyforge\.work\.projectsTab"\)/, "the segment label stays for the one-list restore");
   assert.match(panel, /workTab === "projects"/, "the body renders the projects surface");
-  assert.match(panel, /projects: workTabIcon\(/, "the segment icon");
+  assert.match(panel, /projects: workTabIcon\(/, "the segment icon stays");
 });
 
 test("the i18n keys exist in every locale", () => {
