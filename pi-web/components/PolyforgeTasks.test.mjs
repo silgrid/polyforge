@@ -7,16 +7,19 @@ const source = await readFile(new URL("./PolyforgeTasks.tsx", import.meta.url), 
 const enSource = await readFile(new URL("../lib/i18n/messages/en.ts", import.meta.url), "utf8");
 
 test("the tab reads on gestures only: one list read per opening, one detail read per selection, no poll or storage", () => {
-  // the one timer is the block clock — it re-renders and
-  // fetches nothing (the spec's own requirement; it replaces "no timer").
-  assert.equal((source.match(/setInterval\(/g) ?? []).length, 1, "exactly one interval: the block clock");
+  // two intervals: the block clock (re-renders, fetches nothing) and the
+  // owner-ruled running refresh (polyforge#230 Q2=B: 15 s while a running
+  // task is listed) — see the dedicated test below.
+  assert.equal((source.match(/setInterval\(/g) ?? []).length, 2, "two intervals: the block clock and the running refresh");
   assert.doesNotMatch(source, /setTimeout/, "no other timer");
   assert.match(source, /const clock = setInterval\(\(\) => setNow\(Date\.now\(\)\), 1000\);/, "the clock only reads the time, about once per second");
   assert.doesNotMatch(source, /localStorage|sessionStorage/, "nothing persisted");
   const urls = [...source.matchAll(/fetch\((`[^`]+`|"[^"]+")/g)].map((m) => m[1]);
   // polyforge#73: the detail URL is built per row — its Cell's ?profile= when
   // it has one — so only the list read stays a literal fetch argument.
-  assert.deepEqual(urls, ['"/api/polyforge/tasks"'], "the one literal list read");
+  // polyforge#230: the analysis row adds one more literal read, the existing
+  // work-item route (never a new API).
+  assert.deepEqual(urls, ['"/api/polyforge/tasks"', "`/api/polyforge/work-items/${encodeURIComponent(id)}`"], "the list read and the analyzed ticket read");
   assert.match(source, /`\/api\/polyforge\/tasks\/\$\{encodeURIComponent\(id\)\}\?profile=\$\{encodeURIComponent\(cell\)\}`/, "the Cell-pinned detail read (polyforge#73)");
   assert.match(source, /: `\/api\/polyforge\/tasks\/\$\{encodeURIComponent\(id\)\}`/, "the Cell-less detail read stays");
   assert.doesNotMatch(source, /method:/, "every fetch is a plain GET");
@@ -24,8 +27,9 @@ test("the tab reads on gestures only: one list read per opening, one detail read
   assert.match(source, /if \(listReadRef\.current\) return;\s*listReadRef\.current = true;\s*readList\(\);/,
     "exactly one list read per mounted tab, even when mount effects re-run");
   // owner-intended change: the ↻ is the shared bar's action, so its
-  // click is onClick={readList}; the three reads are unchanged.
-  assert.equal((source.match(/readList\(\);/g) ?? []).length, 2, "the list is read at mount and on a count change, nowhere else");
+  // click is onClick={readList}; the reads are the mount read, the
+  // count-change read and the running refresh (Q2=B), nowhere else.
+  assert.equal((source.match(/readList\(\);/g) ?? []).length, 3, "mount, count change and the running refresh, nowhere else");
   assert.match(source, /<PolyforgeRefreshButton refreshing=\{listRefreshing\} onClick=\{readList\} data-pf-tasks-refresh=""/,
     "the refresh button's click is the third read (shared action slot)");
 });
@@ -180,4 +184,54 @@ test("an external task (the analysis card's link, the walk's target) opens that 
   const effect = source.slice(start, source.indexOf("}, [openTask]);", start));
   assert.match(effect, /openDetail\(openTask\.id, openTask\.cell \?\? undefined\);\s*onOpenTaskHandled\?\.\(\);/, "the same one detail read a row click makes, then handed back");
   assert.match(source, /<span data-pf-task=\{selected\.id\}/, "the open detail names its task");
+});
+
+// ---- polyforge#230: the running context line and the analysis ticket row ----
+
+test("AC2: the card and the detail show the running context with the job's own text, and only the tokens when no window is known", () => {
+  assert.match(source, /data-pf-task-context=""/, "the card's context line");
+  assert.match(source, /data-pf-detail-task-context=""/, "the detail's context line");
+  assert.match(source, /const contextText = taskContextText\(row\.context\)/, "the card's text is the pure helper's (job meter, else tokens)");
+  assert.match(source, /const detailContextText = taskContextDetailText\(detail\.context\)/, "the detail's text is the pure helper's (job detail text, else grouped tokens)");
+  assert.match(source, /t\("polyforge\.context"\)/, "the detail row reuses the job detail's 上下文 label");
+  // the line renders only when the value has an honest count: the helper
+  // answers null otherwise, so no empty row is drawn.
+  assert.match(source, /contextText && \(/, "no context: no line");
+  assert.match(source, /detailContextText && \(/, "no detail context: no line");
+  // the hover names the model and when the count was taken, like a job's meter
+  assert.match(source, /title=\{\[row\.context\?\.model, row\.context\?\.asOf\]/, "the card's as_of rides the hover (owner Q2=B)");
+});
+
+test("AC3: the card and the detail show the analyzed ticket at the top and open it through onOpenAnchor", () => {
+  assert.match(source, /if \(!row\.analysis_of\) return;\s*const id = row\.analysis_of;/, "the ticket is read once per analyzed row");
+  assert.match(source, /ticketsRef\.current\[id\]/, "the read is cached by wi id for the session");
+  assert.match(source, /fetch\(`\/api\/polyforge\/work-items\/\$\{encodeURIComponent\(id\)\}`\)/, "the existing work-item route, no new API");
+  assert.match(source, /data-pf-task-analysis=""/, "the card's analysis row");
+  assert.match(source, /data-pf-detail-task-analysis=""/, "the detail's analysis row");
+  assert.match(source, /row\.analysis_of && \(/, "no analysis_of: no row on the card");
+  assert.match(source, /detail\.analysis_of && \(/, "no analysis_of: no row in the detail");
+  assert.match(source, /t\("polyforge\.tasks\.analysisOf", \{ slug: taskAnalysisSlug\(row\.analysis_of, ticket\) \}\)/, "分析 <slug>, the wi id while unread");
+  assert.match(source, /taskAnalysisTitle\(ticket\)/, "the ticket's goal is the title line");
+  assert.match(source, /onOpenAnchor\?\.\(row\.analysis_of\)/, "the card opens the analyzed work item by wi id (Q3=A)");
+  assert.match(source, /onOpenAnchor\?\.\(detail\.analysis_of\)/, "the detail opens the same wi id");
+  assert.match(source, /event\.stopPropagation\(\)/, "the row's click never also selects the task");
+  assert.match(source, /onOpenAnchor\?: \(ref: string\) => void;/, "the callback is the panel's onOpenAnchor");
+  assert.match(enSource, /"polyforge\.tasks\.analysisOf": "\S/, "the one new key is in the English catalog");
+});
+
+test("owner Q2=B: while the list holds a running task the tab re-reads it every 15 s, and nothing else polls", () => {
+  assert.match(source, /const REFRESH_MS = 15000;/);
+  const start = source.indexOf("// The running refresh (owner ruling");
+  assert.ok(start >= 0, "the running refresh effect is declared");
+  const effect = source.slice(start, source.indexOf("}, [hasRunning, readList]);", start));
+  assert.match(effect, /const refresh = setInterval\(readList, REFRESH_MS\);/, "the re-read is the list read, on the 15 s interval");
+  assert.match(effect, /return \(\) => clearInterval\(refresh\);/, "cleared on unmount and when no running task is left");
+});
+
+test("the panel hands the Tasks surface the messages surface's ticket-opener, so 分析 <slug> opens the analyzed ticket", async () => {
+  const panel = await readFile(new URL("./PolyforgePanel.tsx", import.meta.url), "utf8");
+  const tasks = panel.slice(panel.indexOf("<PolyforgeTasks"));
+  const element = tasks.slice(0, tasks.indexOf("/>"));
+  assert.match(element, /onOpenAnchor=\{messagesSurface\.onOpenAnchor\}/, "the same opener the Memory sub-tab uses (Q3=A)");
+  assert.match(element, /openTask=\{taskToOpen\}/, "the existing open-task wiring stays");
 });

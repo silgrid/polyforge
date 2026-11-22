@@ -8,6 +8,7 @@ const jiti = createJiti(import.meta.url);
 const lib = await jiti.import("./polyforge-tasks.ts");
 const pure = await jiti.import("./polyforge-tasks-pure.ts");
 const memoryPure = await jiti.import("./polyforge-memory-pure.ts");
+const pure = await jiti.import("./polyforge-tasks-pure.ts");
 
 // The real `pf --json task list` row shape (the daemon's task record, spawn
 // facts nested under spec, plus the 2.20.12 prompt_summary and the
@@ -287,4 +288,27 @@ test("AC2 window fill: the catalog window and its percent are filled the way a j
   const one = await lib.fillTaskContextWindow({ context: { tokens: 4300, model: "openai/m1" }, candidate: "pi:gpt-x" }, async () => 400000);
   assert.equal(one.context.window, 400000);
   assert.equal(one.context.percent, 1.075);
+});
+
+test("AC2 display text: the card uses the job meter's form when the window is known and the token count alone otherwise; the detail mirrors it", () => {
+  // the job card's meter spec (polyforge-cards-pure): `${percent.toFixed(0)}% / ${compact(window)}`
+  // and the job detail's `grouped(tokens) / grouped(window)`; formatCompactCount: >=1M → 1 decimal M, >=1000 → 0 decimal k.
+  assert.equal(pure.taskContextText({ tokens: 4300, window: 400000, percent: 1.075 }), "1% / 400k");
+  assert.equal(pure.taskContextText({ tokens: 4300, model: "openai/m1" }), "4k", "no window: the token count alone, never a guessed percent");
+  assert.equal(pure.taskContextText({ tokens: 999 }), "999");
+  assert.equal(pure.taskContextText(undefined), null, "no context: no line");
+  assert.equal(pure.taskContextDetailText({ tokens: 4300, window: 400000 }), "4,300 / 400,000");
+  assert.equal(pure.taskContextDetailText({ tokens: 4300 }), "4,300", "no window: tokens only");
+  assert.equal(pure.taskContextDetailText({ window: 400000 }), "? / 400,000", "the job detail's unknown count side stays '?'");
+  assert.equal(pure.taskContextDetailText(undefined), null);
+});
+
+test("AC3 display text: the analysis row names the ticket's slug once read, the wi id while it is not, and its goal as the title", () => {
+  assert.equal(pure.taskAnalysisSlug("wi_abc123", { slug: "polyforge#72", goal: "任务上下文" }), "polyforge#72");
+  assert.equal(pure.taskAnalysisSlug("wi_abc123", null), "wi_abc123", "unread: the wi id, never blank");
+  assert.equal(pure.taskAnalysisSlug("wi_abc123", { slug: "   ", goal: "" }), "wi_abc123", "a blank slug falls back to the wi id");
+  assert.equal(pure.taskAnalysisTitle({ slug: "polyforge#72", goal: "任务上下文" }), "任务上下文");
+  assert.equal(pure.taskAnalysisTitle({ slug: "polyforge#72", goal: "  任务上下文  " }), "任务上下文", "the title is trimmed");
+  assert.equal(pure.taskAnalysisTitle(null), "", "unknown ticket: no title line");
+  assert.equal(pure.taskAnalysisTitle({ slug: "polyforge#72", goal: "  " }), "", "a blank goal adds no line");
 });
