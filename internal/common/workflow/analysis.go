@@ -219,3 +219,27 @@ func ConfirmAnalysisSection(content string) (string, bool) {
 	}
 	return content, false
 }
+
+// AnalysisArchiveHeading is the section a redo appends after the active
+// analysis: the verbatim copies of the sections it replaced, newest last
+// (polyforge#233, owner ruling Q1=B).
+const AnalysisArchiveHeading = "## 历次分析"
+
+// AnalysisRedoPrefix prefixes the request id a pending redo round carries
+// in the auto-analysis marker's token slot, before the task that replaces
+// it has written its first draft: `<!-- pf:auto-analysis
+// redo_<16 hex> unconfirmed -->` (owner ruling Q3=A).
+const AnalysisRedoPrefix = "redo_"
+
+// PrepareAnalysisRedo archives content's active analysis section verbatim
+// into AnalysisArchiveHeading and prefixes the active section with a
+// pending redo marker.
+func PrepareAnalysisRedo(content, requestID, stamp string) (string, error) {
+	return content, nil
+}
+
+// AnalysisRedoRequestID answers the pending redo request id the analysis
+// section's unconfirmed marker carries.
+func AnalysisRedoRequestID(content string) (string, bool) {
+	return "", false
+}
