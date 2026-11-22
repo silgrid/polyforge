@@ -1357,7 +1357,7 @@ def fold_decided(items: Sequence[Dict[str, Any]], mapping: Optional[Dict[int, Di
     out: List[Dict[str, Any]] = []
     for it in items:
         n = it.get("n")
-        m = (mapping or {}).get(n)
+        m = (mapping or {}).get(n) if isinstance(n, int) else None
         if m is None:
             why = ("the plan carries no `## 已定对照` section" if mapping is None
                    else "not mapped to a unit or a reason")
