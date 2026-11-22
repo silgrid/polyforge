@@ -189,3 +189,62 @@ test("pane fork, quote and initial prompt bind to the pane session", async () =>
   assert.ok(source.includes("const handlePaneAskInNewChat = useCallback("), "AppShell must define handlePaneAskInNewChat");
   assert.ok(source.includes("const handlePaneInitialPromptConsumed = useCallback("), "AppShell must define handlePaneInitialPromptConsumed");
 });
+
+// ---- u2: the attention notification belongs to the pane that raised it ----
+
+test("pane attention notification targets the pane session", () => {
+  // Pane focus never updates selectedSession: the classic handler would notify
+  // (and open) the selected chat, not the background pane waiting for input.
+  assert.match(
+    sessionPane,
+    /onAttentionNeeded=\{\(request\) => handleAttentionNeeded\(request, paneSession\)\}/,
+    "the session pane must pass its own session as the notification target",
+  );
+  assert.doesNotMatch(sessionPane, /onAttentionNeeded=\{handleAttentionNeeded\}/, "the pane must not reuse the selectedSession-based handler");
+
+  const delivered = [];
+  const attention = runExtracted(extractAppShellCallback("handleAttentionNeeded"), {
+    selectedSession: { id: "selected", relation: "subagent" },
+    isHiddenRelation: (relation) => relation === "subagent",
+    shouldShowBrowserNotification: () => true,
+    claimExtensionAttentionNotification: () => true,
+    notifiedAttentionRequestIdsRef: { current: new Set() },
+    deliverSessionNotification: (payload) => delivered.push(payload),
+    translate: (key) => key,
+  });
+  // The selected chat is hidden, the pane is not: the pane's request still
+  // notifies, and the notification opens the pane's session.
+  attention({ id: "req-1", method: "custom", title: "Approve?" }, { id: "pane", relation: undefined });
+  assert.equal(delivered.length, 1, "the pane's waiting input must notify");
+  assert.equal(delivered[0].targetSession.id, "pane", "the notification opens the pane's own session");
+  assert.equal(delivered[0].tag, "pi-extension-ui:req-1", "the global dedupe tag is unchanged");
+
+  // The pane's own hidden relation still suppresses its notification, even
+  // when the selected chat is visible: the gate follows the target.
+  const hiddenDelivered = [];
+  const hiddenAttention = runExtracted(extractAppShellCallback("handleAttentionNeeded"), {
+    selectedSession: { id: "selected", relation: undefined },
+    isHiddenRelation: (relation) => relation === "subagent",
+    shouldShowBrowserNotification: () => true,
+    claimExtensionAttentionNotification: () => true,
+    notifiedAttentionRequestIdsRef: { current: new Set() },
+    deliverSessionNotification: (payload) => hiddenDelivered.push(payload),
+    translate: (key) => key,
+  });
+  hiddenAttention({ id: "req-2", method: "custom", title: "Approve?" }, { id: "pane", relation: "subagent" });
+  assert.equal(hiddenDelivered.length, 0, "a hidden pane's session never notifies");
+
+  // Classic layout passes no target: it keeps notifying the selected session.
+  const classicDelivered = [];
+  const classicAttention = runExtracted(extractAppShellCallback("handleAttentionNeeded"), {
+    selectedSession: { id: "selected", relation: undefined },
+    isHiddenRelation: () => false,
+    shouldShowBrowserNotification: () => true,
+    claimExtensionAttentionNotification: () => true,
+    notifiedAttentionRequestIdsRef: { current: new Set() },
+    deliverSessionNotification: (payload) => classicDelivered.push(payload),
+    translate: (key) => key,
+  });
+  classicAttention({ id: "req-3", method: "custom", title: "Approve?" });
+  assert.equal(classicDelivered[0]?.targetSession.id, "selected", "classic keeps the selected session");
+});
