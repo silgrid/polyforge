@@ -26,14 +26,24 @@ change) — and then reports no test_commit.
 plan-conformance — the plan's `## Units` declarations (`Touched files:`
 writes and their `Coupled obligations:`) against the delivered diff (each
 task repo's commits since its merge-base with the fetched origin default
-branch), both ways; the units' test files count as declared. Details:
-  {plan, units_file, unavailable, declared_writes: [{path, obligations:
-   [{path, note}], none_reason}], undeclared, unchanged_obligations,
-   unchanged_writes, released}
+branch), both ways, and the plan's `## 已定对照` section against the
+work item's decided rulings (every section of its verbatim content —
+`runtime-state/work-item.json`'s `content` — that opens `## 已定`:
+each item, numbered across the sections in order of appearance, mapped
+to a unit — an id of units.json, or a bold id of the plan's `## Units`
+when there is no units file — or `none — <reason>`); the units' test
+files count as declared. Details:
+  {plan, units_file, unavailable, work_item, decided, unmapped_decided,
+   declared_writes: [{path, obligations: [{path, note}], none_reason}],
+   undeclared, unchanged_obligations, unchanged_writes, released}
 Exit 0: nothing changed undeclared and no declared coupled obligation left
-unchanged (an unchanged plain write and a lapse are listed, not judged).
-Exit 1: a difference to class. Exit 2: the plan is unreadable or the diff
-could not be read (`unavailable` says why).
+unchanged (an unchanged plain write and a lapse are listed, not judged),
+and every decided ruling mapped (a ticket without a `## 已定` section
+asks for no mapping section; a work item the daemon has not
+materialized reads as no decided ruling).
+Exit 1: a difference to class (an unmapped decided ruling is named, its
+number and text). Exit 2: the plan or the work item is unreadable, or
+the diff could not be read (`unavailable` says why).
 
 build — the units resolved against the task repos (the one repo holding
 their commits; the test commit's files), each commit pair's test-first
@@ -1114,7 +1124,8 @@ def fold_plan_conformance(touched_files: Sequence[Any], authored: Sequence[str],
 
 
 def conformant(pc: Dict[str, Any]) -> bool:
-    return not pc["unavailable"] and not pc["undeclared"] and not pc["unchanged_obligations"]
+    return (not pc["unavailable"] and not pc["undeclared"]
+            and not pc["unchanged_obligations"] and not pc.get("unmapped_decided"))
 
 
 def plan_touched_files(md: str) -> List[Dict[str, Any]]:
@@ -1211,6 +1222,167 @@ def plan_entry(e: str) -> Tuple[str, str]:
         if j > i:
             paren = trim_space(e[i + 1:j])
     return trim_space(path), paren
+
+
+# ---------------------------------------------------------------------------
+# the ticket's decided rulings (## 已定)
+
+WORK_ITEM_DOC = "runtime-state/work-item.json"
+_DECIDED_SECTION = "## 已定"
+_DECIDED_HEADING = "## 已定对照"
+_DECIDED_ITEM = re.compile(r"^(?:[-*+]|\d{1,9}[.)])\s+(.+)$", re.ASCII)
+_DECIDED_MAP_LINE = re.compile("^已定\s*(\d{1,9})\s*[:\uff1a]\s*(.*)$", re.ASCII)
+_BOLD_ID = re.compile(r"\*\*([^*\n]+)\*\*", re.ASCII)
+
+
+def _md_section(md: str, heading: str) -> Optional[List[str]]:
+    """One `##` section's content lines, or None when the plan carries
+    no such heading (the section runs to the next `## `/`# ` heading).
+    A heading is a line starting with the given text, so `## 已定` also
+    takes `## 已定（补充）` while `### 已定` and a mid-line mention are
+    not headings."""
+    lines = md.split("\n")
+    for i, line in enumerate(lines):
+        if line.startswith(heading):
+            out: List[str] = []
+            for j in range(i + 1, len(lines)):
+                if lines[j].startswith("## ") or lines[j].startswith("# "):
+                    break
+                out.append(lines[j])
+            return out
+    return None
+
+
+def work_item_content(capsule_dir: str) -> Tuple[str, str, str]:
+    """The ticket's verbatim content and how it was read: (content,
+    state, error). State "" the file was read, `absent` the daemon has
+    not materialized it (treated as no decided ruling); error "" or why
+    the run must not judge (unreadable, not valid JSON, not the JSON
+    object expected)."""
+    try:
+        with open(os.path.join(capsule_dir, WORK_ITEM_DOC), "rb") as f:
+            doc = json.loads(f.read().decode("utf-8", "replace"))
+    except FileNotFoundError:
+        return "", "absent", ""
+    except OSError as err:
+        return "", "", gotext.os_error("open", err)
+    except ValueError as err:
+        return "", "", "not valid JSON: %s" % err
+    if not isinstance(doc, dict):
+        return "", "", "not the JSON object expected"
+    content = doc.get("content")
+    return (content if isinstance(content, str) else ""), "", ""
+
+
+def decided_items(content: str) -> List[Dict[str, Any]]:
+    """Every decided ruling the ticket's content carries: each item of
+    every section opening `## 已定`, numbered across the sections in
+    order of appearance (a top-level list item, its indented children
+    and continuation lines folded into it; a non-empty paragraph that
+    is no list is one item, so prose rulings cannot slip past)."""
+    out: List[List[str]] = []
+    section = False
+    cur = -1
+    for line in content.split("\n"):
+        if line.startswith(_DECIDED_SECTION):
+            section, cur = True, -1
+            continue
+        if line.startswith("## ") or line.startswith("# "):
+            section, cur = False, -1
+            continue
+        if not section:
+            continue
+        t = line.strip()
+        if not t:
+            cur = -1
+            continue
+        m = _DECIDED_ITEM.match(line)
+        if m is not None:
+            out.append([m.group(1)])
+            cur = len(out) - 1
+        elif cur >= 0:
+            out[cur].append(t)
+        else:
+            out.append([t])
+            cur = len(out) - 1
+    items: List[Dict[str, Any]] = []
+    for lines in out:
+        text = " ".join(" ".join(lines).split())
+        if text:
+            items.append({"n": len(items) + 1, "text": text})
+    return items
+
+
+def decided_mapping(plan_md: str) -> Optional[Dict[int, Dict[str, Any]]]:
+    """The plan's `## 已定对照` section: decided n -> what the plan maps
+    it to (its unit ids, or `none — <reason>`). None when the plan
+    carries no such section (a ticket without a decided ruling asks
+    for none). An entry no unit or reason fills is kept as it stands —
+    the fold names its ruling unmapped."""
+    lines = _md_section(plan_md, _DECIDED_HEADING)
+    if lines is None:
+        return None
+    mapping: Dict[int, Dict[str, Any]] = {}
+    for line in lines:
+        t = trim_space(line).lstrip("-*+ ").strip()
+        m = _DECIDED_MAP_LINE.match(t)
+        if m is None:
+            continue
+        rest = trim_space(m.group(2))
+        n = int(m.group(1))
+        if _NONE_DECL.search(rest):
+            mapping[n] = {"none": True, "reason": trim_space(trim_space(rest[4:]).lstrip("\u2014-\u2013:, \u3010 \u3011"))}
+        else:
+            mapping[n] = {"units": [u for u in (trim_space(p).strip("`*_") for p in rest.split(",")) if u]}
+    return mapping
+
+
+def decided_targets(decls: Sequence[Dict[str, Any]], plan_md: str) -> List[str]:
+    """The unit ids a decided ruling may name: units.json's own ids, or
+    — no units file — the bold ids of the plan's `## Units`."""
+    ids = {trim_space(d.get("id", "")) for d in decls}
+    ids.discard("")
+    if not ids:
+        lines = _md_section(plan_md, "## Units") or []
+        ids = {m.group(1).strip() for m in _BOLD_ID.finditer("\n".join(lines))}
+        ids.discard("")
+    return sorted(ids)
+
+
+def fold_decided(items: Sequence[Dict[str, Any]], mapping: Optional[Dict[int, Dict[str, Any]]],
+                 targets: Sequence[str]) -> List[Dict[str, Any]]:
+    """Each decided ruling the plan leaves unmapped: its number, its
+    text and why (no mapping section, not mapped, `none` without a
+    reason, or an id no unit of the plan or units.json carries)."""
+    out: List[Dict[str, Any]] = []
+    for it in items:
+        n = it.get("n")
+        m = (mapping or {}).get(n) if isinstance(n, int) else None
+        if m is None:
+            why = ("the plan carries no `## 已定对照` section" if mapping is None
+                   else "not mapped to a unit or a reason")
+        elif m.get("none"):
+            why = "" if m.get("reason") else "mapped `none` without a reason"
+        else:
+            bad = [u for u in m.get("units") or [] if u not in targets]
+            why = ("names %s — no unit of the plan or units.json carries it" % bad[0]) if bad else ""
+        if why:
+            out.append({"n": n, "text": it.get("text", ""), "why": why})
+    return out
+
+
+def _decided_note(items: Sequence[Dict[str, Any]], unmapped: Sequence[Dict[str, Any]]) -> str:
+    """The summary's decided segment: empty when the ticket carries no
+    decided ruling; the unmapped rulings named (their number and text)
+    when any; the mapped count when all are."""
+    if not items:
+        return ""
+    if unmapped:
+        return "; %d of %d decided ruling(s) unmapped — %s" % (
+            len(unmapped), len(items),
+            "; ".join(clip_list(["已定 %d (%s): %s" % (u["n"], clip_runes(u["text"], 64), u["why"])
+                                      for u in unmapped], 3)))
+    return "; %d decided ruling(s), all mapped" % len(items)
 
 
 # ---------------------------------------------------------------------------
@@ -2147,6 +2319,12 @@ def plan_conformance(inv: Invocation, args: List[str]) -> int:
         d.update(pc_empty)
         inv.summary = "not judged: " + d["unavailable"]
         return 2
+    content, wi_state, wi_err = work_item_content(c.dir)
+    if wi_err:
+        d["unavailable"] = "the work item is unreadable: %s" % wi_err
+        d.update(pc_empty)
+        inv.summary = "not judged: " + d["unavailable"]
+        return 2
     touched = plan_touched_files(raw)
     authored = unit_test_files(units_of(c.repos_dir, c.repos, decls or []))
     changed, reason = changed_files(c.repos_dir)
@@ -2158,14 +2336,21 @@ def plan_conformance(inv: Invocation, args: List[str]) -> int:
     if pc["unavailable"]:
         inv.summary = "not judged: " + pc["unavailable"]
         return 2
+    items = decided_items(content)
+    unmapped = fold_decided(items, decided_mapping(raw), decided_targets(decls or [], raw))
+    pc["unmapped_decided"] = unmapped
+    d["work_item"] = wi_state or WORK_ITEM_DOC
+    d["decided"] = items
+    d["unmapped_decided"] = unmapped
     if not conformant(pc):
         inv.summary = (
-            "the plan and the diff differ: %d path(s) changed but undeclared, %d declared coupled obligation(s) left unchanged (%d declared write(s) left unchanged, %d lapsed)"
-            % (len(d["undeclared"]), len(d["unchanged_obligations"]), len(d["unchanged_writes"]), len(d["released"]))
+            "the plan and the diff differ: %d path(s) changed but undeclared, %d declared coupled obligation(s) left unchanged (%d declared write(s) left unchanged, %d lapsed)%s"
+            % (len(d["undeclared"]), len(d["unchanged_obligations"]), len(d["unchanged_writes"]), len(d["released"]),
+               _decided_note(items, unmapped))
         )
         return 1
-    inv.summary = "the plan declares every changed path and every declared coupled obligation changed (%d declared write(s), %d left unchanged, %d lapsed)" % (
-        len(d["declared_writes"]), len(d["unchanged_writes"]), len(d["released"]))
+    inv.summary = "the plan declares every changed path and every declared coupled obligation changed (%d declared write(s), %d left unchanged, %d lapsed%s)" % (
+        len(d["declared_writes"]), len(d["unchanged_writes"]), len(d["released"]), _decided_note(items, unmapped))
     return 0
 
 

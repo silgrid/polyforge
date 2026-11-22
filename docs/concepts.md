@@ -337,7 +337,12 @@ section mapping each item the analysis lists — each old test and document
 obligation, each risk, each decided point — to the unit that carries it,
 or the stated reason it is not taken (a decided point first; an analysis
 written against an older base has its file:line references re-checked
-against the current one). A review-driven
+against the current one). A plan written on a ticket that carries one
+or more `## 已定`-opening sections also carries a `## 已定对照` section
+mapping each of their items to the unit that carries it, or to a stated
+reason — a ticket without such a section asks for no mapping section;
+the close's plan-conformance names any unmapped ruling red (its number
+and text), and review runs the same line. A review-driven
 fix that needs a file outside the declared set cites the review finding
 for it instead of re-planning. The plan also maps every deliverable it
 demands from a later step (a report, a proof, an owner presentation) to
@@ -1068,7 +1073,8 @@ setting:
   the same `selected`, the shared validator taking it as green-equivalent
   evidence. Review runs four pre-written lines of the workflow's script
   `facts.py` as written — `plan-conformance` (the plan's two-way
-  conformance with the diff), `build --replay --isolation host` (each
+  conformance with the diff, and its `## 已定对照` mapping of the ticket's
+  decided rulings — an unmapped one red and named), `build --replay --isolation host` (each
   unit's test commit a one-parent
   ancestor of its implementation commit holding test paths only, every
   change to a unit's test after its red commit as a `test_weakened` fact,

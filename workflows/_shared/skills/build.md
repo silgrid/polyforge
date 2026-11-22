@@ -137,6 +137,15 @@ record exactly what ran.
    differs from the current one has its file:line references re-checked against the current
    base before the work starts; a ticket without `## 分析` writes `none` there. A round that
    keeps an inherited plan adds nothing to it.
+   A round that wrote the plan maps the ticket's decided rulings too: on a work item whose
+   content carries one or more sections opening `## 已定`, the plan also carries a
+   `## 已定对照` section beside `## Units` — its own `##` heading — in which every item of
+   every such section (numbered across the sections in order of appearance) is mapped to
+   the unit that carries it, or carries `none — <reason>` (docs-only, or a confirmation of
+   the state as it stands); a ticket without such a section omits the mapping. The close
+   and review judge it by the same `facts.py plan-conformance` line: an unmapped ruling is
+   red, named with its number and text (an unmaterialized work item reads as no decided
+   ruling, a corrupt one is not judged).
 5. **The close's checks.** Last, after the whole-change fast check and the unit check, run
    the fast-check proof line once per touched repo — the same fast check with `--phase
    fast`, the final write of `artifacts/build/fast-checks/<repo>.json`, so each result's
@@ -180,7 +189,8 @@ record exactly what ran.
    and `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" carries --json --out artifacts/facts/carries.json`
    — the second each unit's commit facts (its ids resolving in a task repo, test-first shape)
    with its run replayed red on the tree of its test commit, the first the plan's two-way
-   conformance with the diff, the third the e2e carries. A red is fixed before the hand-off,
+   conformance with the diff and its `## 已定对照` mapping (an unmapped decided ruling red,
+   named), the third the e2e carries. A red is fixed before the hand-off,
    never handed off on. Exit 2 on the first two lines is not judged: read the result's
    summary, wait one minute and run that line again, at most twice; still 2 — its failure
    summary goes into the hand-off and the lane goes on to review, which re-runs the line

@@ -20,7 +20,8 @@ package test
 // first; polyforge#131), and to 190 when the close's scoped selection
 // moved in (polyforge#164), and to 215 when the close took review's own
 // lines — the replay and plan-conformance — and the plan gained its
-// analysis-mapping section (polyforge#181).
+// analysis-mapping section (polyforge#181), and to 222 when the plan
+// gained its decided-rulings mapping section (polyforge#221).
 
 import (
 	"os"
@@ -104,7 +105,7 @@ func TestW374DevelopDriverChecksContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n := strings.Count(string(raw), "\n"); n > 215 {
-		t.Errorf("workflows/develop/steps/build.md is %d lines, over its 215-line budget", n)
+	if n := strings.Count(string(raw), "\n"); n > 222 {
+		t.Errorf("workflows/develop/steps/build.md is %d lines, over its 222-line budget", n)
 	}
 }

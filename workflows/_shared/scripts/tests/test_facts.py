@@ -4,13 +4,16 @@ that pinned it (planconformance, w374 D2 plan grammar, build settle and
 test_weakened, fast_lane, w403 carries): the units file and the resolved
 units, the test-first check, the test paths from the base conf, the
 test_weakened hunks, plan conformance both ways and its grammar, the
-micro bounds and the e2e carries."""
+ticket's decided rulings (## 已定) against the plan's mapping of them,
+the micro bounds and the e2e carries."""
 
 import json
 import os
 import re
+import subprocess
+import sys
 import unittest
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import facts
 from pfstep import gotext
@@ -294,6 +297,204 @@ class PlanConformanceTest(GitCase):
             '{"intent":"read","path":"lib/util.go"},'
             '{"coupled_obligations":[{"none":true,"reason":"a private constant no document lists"}],"intent":"write","path":"cfg.go"}]')
         self.assertEqual(got, want)
+
+
+# --- the ticket's decided rulings (## 已定) against the plan ----------
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+SCRIPTS = os.path.dirname(HERE)
+
+# The ticket's verbatim content, as the daemon materializes it into
+# runtime-state/work-item.json: one real `## 已定` section (three items)
+# beside the shapes that must NOT open one — prose mentioning the word,
+# a mid-line `## 已定`, a `### 已定` heading with its own list.
+DECIDED_CONTENT = (
+    "## 背景\n\n"
+    "正文里出现「已定」两个字，行中间的 ## 已定 文本，都不算章节。\n\n"
+    "### 已定\n\n"
+    "- 三级标题不是已定章节，这条不作数。\n\n"
+    "## 已定\n\n"
+    "- 甲：回答常数由配置给出。\n"
+    "- 乙：错误码不变。\n"
+    "- 丙：文档同步交给 review。\n"
+)
+
+# Two sections opening `## 已定`: the numbering runs across them.
+DECIDED_TWO_SECTIONS = (
+    "## 已定\n\n- 甲：回答常数由配置给出。\n\n"
+    "## 已定（补充）\n\n- 乙：错误码不变。\n- 丙：文档同步交给 review。\n"
+)
+
+# No `## 已定` section at all: the prose and the mid-line mention and
+# the `### 已定` heading are not one.
+DECIDED_NO_SECTION = (
+    "## 背景\n\n"
+    "这个票的正文提到已定二字，但只是叙述：裁定要写进专门的已定章节才作数。\n"
+    "行中间的 ## 已定 不算章节开头。\n\n"
+    "### 已定\n\n- 三级标题不算。\n"
+)
+
+DECIDED_PLAN = (
+    "## Units\n\n"
+    "**u1** — the answer.\n"
+    "Touched files: `app.go` (write)\n"
+    "Coupled obligations: none — a private constant no document lists\n"
+)
+
+
+def decided_map(*lines: str) -> str:
+    """The plan above with a `## 已定对照` section of the given lines."""
+    return DECIDED_PLAN + "\n## 已定对照\n\n" + "\n".join(lines) + "\n"
+
+
+def decided_capsule(tmp: str, name: str, content: Optional[str], plan: str,
+                    units: Optional[List[Dict[str, Any]]] = None,
+                    raw_work_item: Optional[str] = None) -> str:
+    """A capsule whose repos/app changed exactly the one file the plan
+    declares (so the diff side of plan-conformance is conformant and
+    only the decided mapping drives the exit), with the work item the
+    daemon materializes: content None = the file absent, raw_work_item
+    given = the file's own bytes (a corrupt-file case)."""
+    cap = os.path.join(tmp, name)
+    repo = Repo(os.path.join(cap, "repos", "app"), {"app.go": "package app\n"})
+    repo.git("update-ref", "refs/remotes/origin/main", repo.head())
+    repo.commit("the change", {"app.go": "package app\n\nvar Answer = 42\n"})
+    files: Dict[str, str] = {
+        "capsule.json": json.dumps({"work_item_id": "wi_221", "bundle_name": "develop", "repos": {"app": "app"}}),
+        "artifacts/plan.md": plan,
+    }
+    if raw_work_item is not None:
+        files["runtime-state/work-item.json"] = raw_work_item
+    elif content is not None:
+        files["runtime-state/work-item.json"] = json.dumps({"content": content})
+    if units is not None:
+        files["artifacts/build/units.json"] = json.dumps(units)
+    write(cap, files)
+    return cap
+
+
+class PlanDecidedTest(GitCase):
+    maxDiff = None
+
+    def plan_conformance(self, cap: str) -> Tuple[int, Dict[str, Any]]:
+        """One facts.py plan-conformance run on the capsule; the result
+        file must carry the run's own exit code."""
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_", "PF_", "BASH_"))}
+        out = os.path.join(self.tmp, "decided-res.json")
+        argv = [sys.executable, "-B", os.path.join(SCRIPTS, "facts.py"),
+                "plan-conformance", "--capsule", cap, "--json", "--out", out]
+        p = subprocess.run(argv, cwd=cap, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        with open(out, encoding="utf-8") as f:
+            res = json.load(f)
+        self.assertEqual(p.returncode, res["exit_code"], "the result file carries the run's own exit code")
+        return p.returncode, res
+
+    def test_decided_items_read_only_the_sections(self) -> None:
+        items = facts.decided_items(DECIDED_CONTENT)
+        self.assertEqual([i["n"] for i in items], [1, 2, 3],
+                         "prose, a mid-line mention and a ### heading open no section")
+        self.assertEqual(items[2], {"n": 3, "text": "丙：文档同步交给 review。"})
+        self.assertEqual(facts.decided_items(DECIDED_NO_SECTION), [], "no section, no ruling")
+
+    def test_paragraph_counts_as_one_item(self) -> None:
+        items = facts.decided_items("## 已定\n\n甲：回答常数由配置给出。\n\n- 乙：错误码不变。\n")
+        self.assertEqual([i["n"] for i in items], [1, 2], "a prose ruling is one item, so it cannot slip past")
+        self.assertEqual(items[0]["text"], "甲：回答常数由配置给出。")
+        # and it is judged like any other: mapped, it passes
+        cap = decided_capsule(self.tmp, "decided-para", "## 已定\n\n甲：回答常数由配置给出。\n\n- 乙：错误码不变。\n",
+                              decided_map("- 已定 1: u1", "- 已定 2: u1"))
+        code, res = self.plan_conformance(cap)
+        self.assertEqual(code, 0, res["summary"])
+
+    def test_three_decided_one_unmapped_is_red_and_named(self) -> None:
+        cap = decided_capsule(self.tmp, "decided-red", DECIDED_CONTENT,
+                              decided_map("- 已定 1: u1", "- 已定 2: u1"))
+        code, res = self.plan_conformance(cap)
+        self.assertEqual(code, 1, res["summary"])
+        self.assertIn("已定 3", res["summary"], "the missing ruling is named by its number")
+        self.assertIn("丙：文档同步交给 review。", res["summary"], "the missing ruling is named by its text")
+        d = res["details"]
+        self.assertEqual([i["n"] for i in d["decided"]], [1, 2, 3])
+        unmapped = d["unmapped_decided"]
+        self.assertEqual(len(unmapped), 1, res["summary"])
+        self.assertEqual(unmapped[0]["n"], 3)
+        self.assertEqual(unmapped[0]["text"], "丙：文档同步交给 review。")
+        self.assertTrue(unmapped[0]["why"], "why the ruling is unmapped")
+
+    def test_unknown_unit_id_is_red(self) -> None:
+        cap = decided_capsule(self.tmp, "decided-unknown", DECIDED_CONTENT,
+                              decided_map("- 已定 1: u1", "- 已定 2: u1", "- 已定 3: u9"))
+        code, res = self.plan_conformance(cap)
+        self.assertEqual(code, 1, res["summary"])
+        self.assertIn("u9", res["summary"], "the unknown id is named")
+        unmapped = res["details"]["unmapped_decided"]
+        self.assertEqual([u["n"] for u in unmapped], [3])
+
+    def test_none_without_a_reason_is_red(self) -> None:
+        cap = decided_capsule(self.tmp, "decided-none", DECIDED_CONTENT,
+                              decided_map("- 已定 1: u1", "- 已定 2: u1", "- 已定 3: none"))
+        code, res = self.plan_conformance(cap)
+        self.assertEqual(code, 1, res["summary"])
+        unmapped = res["details"]["unmapped_decided"]
+        self.assertEqual([u["n"] for u in unmapped], [3])
+
+    def test_two_decided_sections_number_across(self) -> None:
+        cap = decided_capsule(self.tmp, "decided-two", DECIDED_TWO_SECTIONS,
+                              decided_map("- 已定 1: u1", "- 已定 3: u1"))
+        code, res = self.plan_conformance(cap)
+        self.assertEqual(code, 1, res["summary"])
+        d = res["details"]
+        self.assertEqual([i["n"] for i in d["decided"]], [1, 2, 3], "the numbering runs across the sections")
+        self.assertEqual([u["n"] for u in d["unmapped_decided"]], [2])
+        self.assertIn("乙", res["summary"])
+
+    def test_all_mapped_passes(self) -> None:
+        cap = decided_capsule(self.tmp, "decided-all", DECIDED_CONTENT,
+                              decided_map("- 已定 1: u1", "- 已定 2: u1", "- 已定 3: none — 只改文档，无单元"))
+        code, res = self.plan_conformance(cap)
+        self.assertEqual(code, 0, res["summary"])
+        self.assertEqual(res["details"].get("unmapped_decided"), [])
+        self.assertIn("3 decided ruling(s), all mapped", res["summary"])
+
+    def test_no_decided_section_needs_no_mapping(self) -> None:
+        cap = decided_capsule(self.tmp, "decided-no-section", DECIDED_NO_SECTION, DECIDED_PLAN)
+        code, res = self.plan_conformance(cap)
+        self.assertEqual(code, 0, res["summary"])
+        d = res["details"]
+        self.assertEqual(d.get("decided"), [])
+        self.assertEqual(d.get("unmapped_decided"), [])
+
+    def test_empty_section_and_absent_work_item(self) -> None:
+        cap = decided_capsule(self.tmp, "decided-empty", "## 已定\n\n## 背景\n\n- 不在已定节的条目。\n", DECIDED_PLAN)
+        code, res = self.plan_conformance(cap)
+        self.assertEqual(code, 0, res["summary"])
+        self.assertEqual(res["details"].get("decided"), [], "an empty section carries no ruling")
+        cap = decided_capsule(self.tmp, "decided-absent", None, DECIDED_PLAN)
+        code, res = self.plan_conformance(cap)
+        self.assertEqual(code, 0, res["summary"])
+        self.assertEqual(res["details"].get("work_item"), "absent", "a work item the daemon has not materialized reads as no decided ruling")
+        self.assertEqual(res["details"].get("unmapped_decided"), [])
+
+    def test_corrupt_work_item_is_exit_two(self) -> None:
+        cap = decided_capsule(self.tmp, "decided-corrupt", "", DECIDED_PLAN, raw_work_item="{not json")
+        code, res = self.plan_conformance(cap)
+        self.assertEqual(code, 2, "a corrupt work item is not judged, never a silent pass")
+        self.assertIn("not judged", res["summary"])
+
+    def test_decided_targets_prefer_units_json(self) -> None:
+        self.assertEqual(facts.decided_targets([{"id": "u1"}], DECIDED_PLAN), ["u1"],
+                         "with units.json, its own ids are the targets")
+        self.assertEqual(facts.decided_targets([], DECIDED_PLAN), ["u1"],
+                         "without units.json, the plan's bold ## Units ids are")
+        self.assertEqual(facts.decided_targets([], "# no units section\n"), [])
+        # with units.json present, a bold id it does not carry is not a target
+        decls = [{"id": "u2", "test_commit": "0" * 40, "impl_commit": "0" * 40,
+                  "run": {"repo": "app", "cwd": ".", "argv": ["true"]}, "marker": "^x"}]
+        cap = decided_capsule(self.tmp, "decided-targets", DECIDED_CONTENT,
+                              decided_map("- 已定 1: u1", "- 已定 2: u1", "- 已定 3: u2"), units=decls)
+        code, res = self.plan_conformance(cap)
+        self.assertEqual(code, 1, res["summary"] + " — u1 is bold in the plan but no id of units.json")
+        self.assertEqual([u["n"] for u in res["details"]["unmapped_decided"]], [1, 2])
 
 
 FL_CONF = "micro_path=docs/**\nmicro_path=*.md\nfast_gate=sh fast.sh\nmicro_check=sh keys.sh\n"

@@ -40,6 +40,9 @@ the close's facts checks (`facts.py build` with the replay and
 `carries`, and `plan-conformance` beside them when the plan is this
 lane's own — an inherited plan skips that line; the skill's own lines)
 run over it too, a red fixed before
+the hand-off; a plan this lane writes maps the ticket's `## 已定`
+rulings in its `## 已定对照` section, as the skill states, an unmapped
+ruling red; the
 the hand-off; the
 self-review reads the full diff review judges — the WHOLE epic against
 the default branch
