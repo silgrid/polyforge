@@ -825,7 +825,7 @@ class CheckRun:
             log_path = os.path.join(self.log_dir, self.repo, "base-%d" % self.seq, "command.log")
             os.makedirs(os.path.dirname(log_path), exist_ok=True)
             er = self.r.exec_to(runner.ExecSpec(argv=bash_argv(cmd), dir=d, cwd=d, timeout=t,
-                                                 private_tmp=True), log_path)
+                                                 private_tmp=True), log_path, self.box)
             if er.log_path:
                 self.inv.logs.append(self.r.rel(er.log_path))
             return RerunRun(not_started=er.not_started, exit=er.exit, log_path=er.log_path, tmp_dir=er.tmp_dir,
@@ -860,7 +860,8 @@ class CheckRun:
             judge_on_base(clone, self.base_commit, short(self.base_commit), cands, self.base_setup,
                           self.worktree_add_of(clone), self.run_bash_of(),
                           lambda: self.r.remaining() > 1.0, lambda d: self.r.remaining() > d,
-                          "the fast checks' deadline", COMMAND_TIMEOUT, None, notes.append)
+                          "the fast checks' deadline", COMMAND_TIMEOUT,
+                          self.box.base_root if self.box is not None else None, notes.append)
             ran = not notes
             self.base_note = "; ".join(notes)
         self.details["baseline"] = {"commit": self.base_commit, "ref": "merge-base",
