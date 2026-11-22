@@ -684,6 +684,13 @@ try {
     await afterStatusPolls(page, 2, "on the 记忆 tab");
     await assertTaskListReads(page, 2, "another top-level tab reads no task list");
     await topTab(page, RE_WORK).click();
+    // polyforge#225: switching back to Work from another top-level tab starts
+    // on 作业, so the task surface is not remounted and no read follows; the
+    // next read is the explicit re-entry into 任务 below.
+    await waitFor(async () => isActive(subTab(page, RE_JOBS)), "switching back to 工单 lands on 作业");
+    await afterStatusPolls(page, 2, "back on 工单 › 作业");
+    await assertTaskListReads(page, 2, "a switch to 工单 from another top-level tab reads no task list");
+    await subTab(page, RE_TASKS).click();
     await waitFor(() => taskLists().length === 3, "re-entering 任务 takes the next read");
   }));
 
