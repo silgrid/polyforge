@@ -60,3 +60,16 @@ test("the list route answers only the sanitized rows, timing facts included, nev
   assert.doesNotMatch(passport.replace(/\breport_tail\b|\breporter\b/g, ""), /report|created_at|origin|delivered|tokens_consumed/, "no other raw field is read by the row passport");
   assert.doesNotMatch(passport, /\bcell\b/, "the passport itself carries no Cell — the route's outer layer names it");
 });
+
+test("AC2 (polyforge#230): both task routes fill a running context's missing window through the one shared helper, and answer the filled value", () => {
+  assert.match(list, /import \{[^}]*fillTaskContextWindows[^}]*\} from "@\/lib\/polyforge-tasks"/, "the list route imports the list fill");
+  assert.equal((list.match(/await fillTaskContextWindows\(/g) ?? []).length, 2, "both list branches (the Cell reads and the pre-Cell fallback) fill their rows");
+  assert.match(list, /tasks: filled/, "the answer carries the filled rows");
+  assert.match(show, /import \{[^}]*fillTaskContextWindow\b[^}]*\} from "@\/lib\/polyforge-tasks"/, "the show route imports the single-row fill");
+  assert.match(show, /const filled = task === null \? null : await fillTaskContextWindow\(task\)/, "a read task passes through the fill");
+  assert.match(show, /task: filled/, "the answer carries the filled task");
+  // the fill never reaches pf: it is the model registry's window, not a read
+  for (const [name, source] of [["list", list], ["show", show]]) {
+    assert.doesNotMatch(source, /runPfJson|catalogContextWindow/, `${name} performs no catalog read of its own`);
+  }
+});

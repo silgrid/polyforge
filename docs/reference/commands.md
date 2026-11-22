@@ -340,7 +340,22 @@ does not change it; `list` never asks aihub), else `machine`; `report_tail`
 is the report's last non-empty line, trimmed, at most 200 code points (a
 longer line is `…` followed by its last 199), `""` while the task runs or for
 an empty report — never the error text and not masked. The text table keeps
-its four columns.
+its four columns. A **running** task's `task list --json` row and its
+`task show --json` document also carry `context` (polyforge#230): `tokens`
+— the conversation's fill, counted from the attempt's own stream with the
+same transcript fold the step lane's `context` uses (a pi `message_end`'s
+finished message, wrapped as the transcript's `message` record, or claude's
+`assistant`/`system` records stamped with their receive time; the last valid
+reply's usage plus the chars/4 estimate of what follows it) —, `model`,
+`as_of` (the record's time) and, only when the harness reported that model's
+window (claude's `result.modelUsage`; a pi stream reports none), `window` and
+`percent`. The fields are numbers, the model id and a timestamp: no
+transcript text. The daemon clears `context` at the terminal transition (a
+finished task never carries it) and at a candidate switch until the next
+attempt reports its own; it is never persisted. The human `pf task show`
+text output is unchanged — `context` is a `--json` field. It is not
+`tokens_consumed`: that is the cumulative fresh budget spend, while
+`context` is the fill of the current conversation.
 
 - **Trust: the same as a session agent's.** A task agent runs with the
   daemon user's own filesystem and network reach — there is no OS-level
@@ -400,6 +415,11 @@ its four columns.
   output. Context the harness re-sends and the provider serves from its prompt
   cache (a cache read) was already paid for once and is not charged again, so
   the budget tracks the work a task does, not the turns x context it resends.
+  A pi call's authoritative usage is the finished message's
+  `message_end.message.usage` (polyforge#230): the per-call
+  `message_update` top-level usage is the in-flight value and only stands in
+  when the finished message carries none, so a pi stream that reports usage
+  only at `message_end` is no longer undercounted.
 - **Stuck detection.** Every task runs under the step lane's silence and
   tool-hang rules that apply to a task (rules 0, 2 and 3), with the
   daemon's supervision windows as thresholds. A candidate judged stuck is

@@ -4,7 +4,9 @@ import { isPolyforgeVersionBelowMinimum } from "./polyforge-detect";
 import { polyforgePfBin } from "./polyforge-pf-bin";
 import { MEMORY_BODY_FORWARD_CAP } from "./polyforge-memory";
 import { capUtf8Bytes, memoryUtf8ByteLength } from "./polyforge-memory-pure";
-import { probePolyforgeVersion } from "./polyforge-status";
+import { catalogContextWindow, probePolyforgeVersion, type PolyforgeContextUsage } from "./polyforge-status";
+import { withContextWindow } from "./polyforge-cards-pure";
+import { isPolyforgeWorkItemId } from "./polyforge-work-items-pure";
 import { isPolyforgeTaskId, type PolyforgeTaskDetail, type PolyforgeTaskRow } from "./polyforge-tasks-pure";
 
 /**
@@ -20,9 +22,10 @@ import { isPolyforgeTaskId, type PolyforgeTaskDetail, type PolyforgeTaskRow } fr
  * only degrade and answer.
  *
  * The sanitizers are the only passport off this module: a list row keeps
- * exactly nine keys — id/project/state/prompt_summary, the three timing facts
- * started_at?/ended_at?/wall_consumed_ns? and
- * report_tail?/reporter?: `report_tail` is pf's own bounded
+ * id/project/state/prompt_summary, the three timing facts
+ * started_at?/ended_at?/wall_consumed_ns?, report_tail?/reporter? and — since
+ * polyforge#230 — candidate? plus a running task's context? and an analysis
+ * task's analysis_of?: `report_tail` is pf's own bounded
  * last non-empty report line (never re-cut here), `reporter` the spawn-time
  * human display name or `machine`; each travels only when pf sends a string,
  * so a 2.20.12 pf without them still lists (the floor is unchanged). A detail keeps id/project/state/
@@ -115,7 +118,38 @@ export function sanitizeTaskRow(raw: unknown): PolyforgeTaskRow | null {
   if (typeof row.wall_consumed_ns === "number" && Number.isFinite(row.wall_consumed_ns)) sanitized.wall_consumed_ns = num(row.wall_consumed_ns);
   if (typeof row.report_tail === "string") sanitized.report_tail = row.report_tail;
   if (typeof row.reporter === "string") sanitized.reporter = row.reporter;
+  const context = taskContext(row.context);
+  if (context) sanitized.context = context;
+  if (typeof row.candidate === "string" && row.candidate.trim() !== "") sanitized.candidate = row.candidate.trim();
+  const analysisOf = specField(row, "analysis_of");
+  if (typeof analysisOf === "string" && isPolyforgeWorkItemId(analysisOf)) sanitized.analysis_of = analysisOf;
   return sanitized;
+}
+
+/** A model id pf may carry (`<provider>/<model>` for pi, claude's name). */
+const MODEL_ID = /^[A-Za-z0-9._:/@+-]{1,128}$/;
+
+/** The running task's context usage (polyforge#230), the job row's shape: a
+ *  real non-negative token count, the model id when it is a plain one, the
+ *  as_of, and the window/percent only as a positive finite pair. A context
+ *  without an honest count is absent altogether; extra keys never travel. */
+function taskContext(raw: unknown): PolyforgeContextUsage | undefined {
+  const row = asRow(raw);
+  if (!row) return undefined;
+  const tokens = row.tokens;
+  if (typeof tokens !== "number" || !Number.isFinite(tokens) || tokens < 0) return undefined;
+  const context: PolyforgeContextUsage = { tokens: Math.trunc(tokens) };
+  const window = row.window;
+  if (typeof window === "number" && Number.isFinite(window) && window > 0) {
+    context.window = window;
+    const percent = row.percent;
+    if (typeof percent === "number" && Number.isFinite(percent) && percent >= 0) context.percent = percent;
+  }
+  const model = row.model;
+  if (typeof model === "string" && MODEL_ID.test(model)) context.model = model;
+  const asOf = row.as_of;
+  if (typeof asOf === "string" && asOf.trim() !== "") context.asOf = asOf.trim();
+  return context;
 }
 
 /** The `pf task list` answer: only its `tasks` list, each through the row passport. */
@@ -156,7 +190,51 @@ export function sanitizeTaskDetail(raw: unknown): PolyforgeTaskDetail | null {
   const ended = instant(row.ended_at);
   if (started) detail.started_at = started;
   if (ended) detail.ended_at = ended;
+  if (listRow.context) detail.context = listRow.context;
+  if (listRow.candidate) detail.candidate = listRow.candidate;
+  if (listRow.analysis_of) detail.analysis_of = listRow.analysis_of;
   return detail;
+}
+
+/** A row's catalog window lookup (polyforge#230): the harness and model the
+ *  row's context names, answered as the window or null. Injectable so the
+ *  merge is judged without a model registry. */
+export type TaskContextWindowLookup = (context: PolyforgeContextUsage, candidate: string) => Promise<number | null>;
+
+/** Fill one row's missing context window from the catalog, the way the Jobs
+ *  rows are filled: the candidate's `<harness>:` prefix and the context's
+ *  model address the lookup, and the fill is cards-pure's one merge. A wrong
+ *  or absent address, a null answer and a failed lookup all leave the row as
+ *  it was (tokens only, never a guessed window). */
+export async function fillTaskContextWindow<T extends { context?: PolyforgeContextUsage; candidate?: string }>(
+  row: T,
+  lookup: TaskContextWindowLookup = defaultTaskContextWindow,
+): Promise<T> {
+  const context = row.context;
+  if (!context?.model || context.window !== undefined || !row.candidate) return row;
+  let window: number | null = null;
+  try {
+    window = await lookup(context, row.candidate);
+  } catch {
+    window = null;
+  }
+  const filled = withContextWindow(context, window);
+  return filled === context ? row : { ...row, context: filled };
+}
+
+/** The catalog lookup the routes use: the harness prefix and model the row
+ *  names, through the model registry the chat header reads. */
+const defaultTaskContextWindow: TaskContextWindowLookup = async (context, candidate) => {
+  const harness = candidate.split(":", 1)[0];
+  return catalogContextWindow(harness, context.model ?? "").catch(() => null);
+};
+
+/** Fill every row through fillTaskContextWindow. */
+export async function fillTaskContextWindows<T extends { context?: PolyforgeContextUsage; candidate?: string }>(
+  rows: T[],
+  lookup: TaskContextWindowLookup = defaultTaskContextWindow,
+): Promise<T[]> {
+  return Promise.all(rows.map((row) => fillTaskContextWindow(row, lookup)));
 }
 
 // ---- transport ----

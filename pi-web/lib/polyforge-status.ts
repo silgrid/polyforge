@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
+import { isPolyforgeWorkItemId, withContextWindow } from "./polyforge-cards-pure";
 import { isPolyforgeProfileName, sanitizePolyforgeCapabilities } from "./polyforge-cells-pure";
-import { isPolyforgeWorkItemId } from "./polyforge-cards-pure";
 import { execFileAsync } from "./exec-file";
 import { polyforgePfBin } from "./polyforge-pf-bin";
 // type-only: the override view rides the watch response (polyforge#42
@@ -593,7 +593,7 @@ const CONTEXT_CATALOG_TIMEOUT_MS = 3000;
  *  pi session on that model reads (built-ins, models.json, extension
  *  providers). null when there is none: no meter rather than a guess. Both
  *  modules load only when a window is missing. */
-async function catalogContextWindow(harness: string, model: string): Promise<number | null> {
+export async function catalogContextWindow(harness: string, model: string): Promise<number | null> {
   if (harness === "claude") {
     const { claudeContextWindow } = await import("./claude-session");
     return claudeContextWindow(model);
@@ -626,17 +626,9 @@ export async function fillPolyforgeContextWindows(status: PolyforgeOpsStatus | n
     if (!context?.model || context.window !== undefined) return job;
     const harness = job.candidate.split(":", 1)[0];
     const window = await catalogContextWindow(harness, context.model).catch(() => null);
-    if (window === null) return job;
-    return {
-      ...job,
-      context: {
-        ...(context.tokens !== undefined ? { tokens: context.tokens } : {}),
-        window,
-        ...(context.tokens !== undefined ? { percent: (context.tokens / window) * 100 } : {}),
-        model: context.model,
-        ...(context.asOf ? { asOf: context.asOf } : {}),
-      },
-    };
+    const filled = withContextWindow(context, window);
+    if (filled === context) return job;
+    return { ...job, context: filled };
   }));
   return { ...status, jobs };
 }

@@ -13,6 +13,7 @@ import {
   polyforgeContextDetailText,
   polyforgeContextMeterText,
   polyforgeContextMeterTone,
+  POLYFORGE_CONTEXT_METER_COLORS,
   polyforgeJobRef,
   progressBlocks,
   shortJobTitle,
@@ -1277,7 +1278,7 @@ const PolyforgeJobCard = memo(function PolyforgeJobCard({
             status at the row's right end (`42% / 1.0M`, `? / 1.0M`). */}
         {contextMeter && job.context && (
           <div style={{ display: "flex", justifyContent: "flex-end", minWidth: 0 }}>
-            <span data-pf-context-meter="" title={contextMeterTitle(job.context) || undefined} style={{ fontSize: 11, lineHeight: "14px", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums", color: contextTone ? CONTEXT_METER_COLORS[contextTone] : "var(--text-dim)" }}>{contextMeter}</span>
+            <span data-pf-context-meter="" title={contextMeterTitle(job.context) || undefined} style={{ fontSize: 11, lineHeight: "14px", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums", color: contextTone ? POLYFORGE_CONTEXT_METER_COLORS[contextTone] : "var(--text-dim)" }}>{contextMeter}</span>
           </div>
         )}
         {goal && (
@@ -1299,8 +1300,7 @@ const PolyforgeJobCard = memo(function PolyforgeJobCard({
   );
 });
 
-/** the chat header's meter colours (above 70 amber, above 90 red). */
-const CONTEXT_METER_COLORS = { amber: "rgba(234,179,8,0.95)", red: "#ef4444" } as const;
+
 
 /** the hover of a job's context meter — the model and when
  *  the count was taken. */
@@ -1827,6 +1827,7 @@ export function PolyforgePanel({
                   onDismissDecisions={decisionsSurface.onDismiss}
                   renderDetail={renderWorkDetail}
                   onDetailOpenChange={setSubDetailOpen}
+                  onOpenAnchor={messagesSurface.onOpenAnchor}
                 />
               ) : opsStatus ? (
                   <div style={{ flex: "0 1 auto", minHeight: 0, overflowY: "auto", overflowX: "hidden" }}>

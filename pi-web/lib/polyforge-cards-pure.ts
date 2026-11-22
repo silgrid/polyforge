@@ -887,6 +887,27 @@ function contextPercent(context: PolyforgeContextUsage): number | null {
   return null;
 }
 
+/** the chat header's meter colours (above 70 amber, above 90 red) — the one
+ *  map the job card's meter and a task card's context line share
+ *  (polyforge#230). */
+export const POLYFORGE_CONTEXT_METER_COLORS = { amber: "rgba(234,179,8,0.95)", red: "#ef4444" } as const;
+
+/** A context value with a catalog window filled in when the harness reported
+ *  none: the window and the percent the count fills. A value that already
+ *  carries a window, a null/unknown window and a non-positive one are
+ *  returned unchanged — never a guessed window (polyforge#230: the one merge
+ *  the Jobs rows and the Tasks rows share). Pure. */
+export function withContextWindow(context: PolyforgeContextUsage, window: number | null): PolyforgeContextUsage {
+  if (context.window !== undefined || window === null || !(window > 0)) return context;
+  return {
+    ...(context.tokens !== undefined ? { tokens: context.tokens } : {}),
+    window,
+    ...(context.tokens !== undefined ? { percent: (context.tokens / window) * 100 } : {}),
+    ...(context.model ? { model: context.model } : {}),
+    ...(context.asOf ? { asOf: context.asOf } : {}),
+  };
+}
+
 /** The job card's context meter, the chat header's text: `42% / 1.0M`,
  *  `? / 1.0M` while the count is unknown, null (no meter) without a window —
  *  never a misleading number. Pure. */
@@ -903,6 +924,15 @@ export function polyforgeContextMeterTone(context: PolyforgeContextUsage | undef
   const percent = contextPercent(context);
   if (percent === null) return null;
   return percent > 90 ? "red" : percent > 70 ? "amber" : null;
+}
+
+/** The tokens alone, for a context whose window is unknown (polyforge#230: a
+ *  running task's window is usually the catalog's, and the rule is never to
+ *  guess one): the card's compact count (`4k`) or the detail's grouped count
+ *  (`4,300`). null without a token count. Pure. */
+export function polyforgeContextTokensText(context: PolyforgeContextUsage | undefined, style: "compact" | "grouped" = "compact"): string | null {
+  if (context?.tokens === undefined) return null;
+  return style === "grouped" ? CONTEXT_COUNT_FORMAT.format(context.tokens) : formatCompactCount(context.tokens);
 }
 
 const CONTEXT_COUNT_FORMAT = new Intl.NumberFormat("en-US");
