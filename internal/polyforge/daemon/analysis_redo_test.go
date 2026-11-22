@@ -78,6 +78,7 @@ const pf233TicketBody = "## 背景\n\nthe ticket body\n\n## 分析\n\n### 1. 改
 
 func TestAnalysisRedoArchivesAndQueues(t *testing.T) {
 	td, hub, _ := w72World(t, nil)
+	w72FillSlots(t, td, 4) // the lane is full: the request must wait, persisted
 	w72Ticket(t, hub, "wi_redo_ok", pf233TicketBody)
 	before := pf233Content(t, hub, "wi_redo_ok")
 
@@ -150,8 +151,12 @@ func TestAnalysisRedoDispatchesOneTaskWithBuildPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build the create-time prompt: %v", err)
 	}
-	if spec.Prompt != want {
-		t.Fatalf("the redo prompt must be the create-time analysisPrompt, byte for byte:\n--- got ---\n%s\n--- want ---\n%s", spec.Prompt, want)
+	tk, err := td.tasks.Show(res.TaskID)
+	if err != nil {
+		t.Fatalf("show the redo task: %v", err)
+	}
+	if tk.Spec.Prompt != want {
+		t.Fatalf("the redo task's prompt must be the create-time analysisPrompt, byte for byte:\n--- got ---\n%s\n--- want ---\n%s", tk.Spec.Prompt, want)
 	}
 	content := pf233Content(t, hub, "wi_redo_dispatch")
 	if !strings.Contains(spec.Prompt, content) {
