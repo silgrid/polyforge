@@ -717,6 +717,62 @@ class CloseContainerTest(unittest.TestCase):
         self.assertEqual((fb2.builds, fb2.starts, fb2.execs), ([], [], []),
                          "the per-unit bar starts no container")
 
+    def private_tool_env(self, sub: str = "bin") -> Dict[str, str]:
+        """A host environment whose PATH carries a private tool the image's
+        PATH (IMAGE_PATH) never holds: the host has it, the image does
+        not."""
+        d = os.path.join(self.root, sub)
+        os.makedirs(d)
+        with open(os.path.join(d, "close-proof-tool"), "w", encoding="utf-8") as f:
+            f.write("#!/bin/bash\necho close-proof-tool-ok\n")
+        os.chmod(os.path.join(d, "close-proof-tool"), 0o755)
+        return {"PATH": d + os.pathsep + os.environ.get("PATH", "/usr/bin:/bin")}
+
+    def test_host_tool_missing_in_image_is_red(self) -> None:
+        """AC1: a command needing a tool the host has but the image does
+        not is green on the host and red at the close — the boxed close
+        consumes no --reuse green evidence (the command really executes
+        in the container and fails there, its re-run too), an unusable
+        --reuse file is still the invocation's error, and a red selected
+        record is what the shared validator rejects — the process rule
+        (ask the owner, never self-hand-off done) stands."""
+        env = self.private_tool_env()
+        fx, eng = self.declared_repo("fx", cmds=[
+            cmd_of("gate-1", "fast", "echo gate-ok"),
+            cmd_of("pin", "scoped", "close-proof-tool")])
+        fb = self.fake_box()
+        # the per-unit bar on the host: the tool is on the host's PATH —
+        # green, and its result file is the close's --reuse evidence
+        fast_out = os.path.join(fx.capsule, "fast.json")
+        code, _res = self.host_fast(fx.capsule, "app", eng, fast_out, env=env)
+        self.assertEqual(code, 0, "the host has the tool: the per-unit bar is green")
+        out = os.path.join(fx.capsule, "close.json")
+        code, res = box_close(fx.capsule, "app", eng, fb, out, "--reuse", fast_out, env=env)
+        self.assertEqual(code, 1, res.get("summary"))
+        self.assertEqual(res["verdict"], "fail")
+        self.assertEqual(res["details"].get("isolation"), "container")
+        sel = res["details"]["selected"]["app"]
+        self.assertEqual(sel["status"], "red", sel.get("reason", ""))
+        self.assertEqual([c for c in sel["commands"] if "reused" in c], [],
+                         "a boxed close consumes no host green evidence")
+        pin = [c for c in sel["commands"] if c["name"] == "pin"][0]
+        self.assertNotEqual(pin["exit_code"], 0, "the tool is missing in the image: red")
+        # the command really ran in the container, and its one targeted
+        # re-run did too (never the host's PATH re-running it green)
+        tool_execs = fb.command_execs("close-proof-tool")
+        self.assertGreaterEqual(len(tool_execs), 2,
+                                "the command and its re-run both executed in the container")
+        for e in tool_execs:
+            self.assertEqual(e[0], "cid-1")
+        # an unusable --reuse file is the invocation's error, whatever the
+        # isolation — never swallowed by the no-reuse rule
+        bad = os.path.join(fx.capsule, "bad-reuse.json")
+        write_files(fx.capsule, {"bad-reuse.json": "{not json"})
+        code, res = box_close(fx.capsule, "app", eng, fb, os.path.join(fx.capsule, "close2.json"),
+                              "--reuse", bad, env=env)
+        self.assertEqual(code, 2)
+        self.assertIn("not a usable result file", res.get("summary", ""))
+
     def test_unchanged_image_reuses_verification_cache(self) -> None:
         """AC3: an unchanged image is never rebuilt — close after close,
         verification between closes, all reference one image tag and one
