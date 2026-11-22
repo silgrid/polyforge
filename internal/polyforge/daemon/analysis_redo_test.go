@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/common/workflow"
@@ -91,8 +92,11 @@ func TestAnalysisRedoArchivesAndQueues(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &res); err != nil {
 		t.Fatalf("redo answer: %v (%s)", err, body)
 	}
-	if res.State != "queued" || res.RequestID == "" {
-		t.Fatalf("a redo whose lane cannot take it yet must queue a named request: %+v", res)
+	if res.State != "scheduled" && res.State != "queued" {
+		t.Fatalf("a redo must answer the scheduled task or a queued request: %+v", res)
+	}
+	if res.RequestID == "" {
+		t.Fatalf("a redo must name its request id: %+v", res)
 	}
 	content := pf233Content(t, hub, "wi_redo_ok")
 	if !strings.Contains(content, "## 历次分析") || !strings.Contains(content, "### 1. 改动范围\n\n- old draft") {
@@ -108,8 +112,146 @@ func TestAnalysisRedoArchivesAndQueues(t *testing.T) {
 	if len(entries) != 1 || entries[0].WorkItemID != "wi_redo_ok" || entries[0].RedoRequest != res.RequestID {
 		t.Fatalf("the redo request must be persisted before dispatch, got %+v", entries)
 	}
-	if ts := tdTasks(t, td); len(ts) != 0 {
-		t.Fatalf("this unit only registers the request; no task may spawn yet: %+v", ts)
+}
+
+// TestAnalysisRedoDispatchesOneTaskWithBuildPrompt (u3, AC1): the redo's
+// round reaches the same analysis task the create-time scheduler builds —
+// one task, bound to the ticket, prompted by the one analysisPrompt.
+func TestAnalysisRedoDispatchesOneTaskWithBuildPrompt(t *testing.T) {
+	td, hub, runner := w72World(t, func(c *Config) { c.MaxConcurrent = 8 })
+	w72Ticket(t, hub, "wi_redo_dispatch", pf233TicketBody)
+	code, body := pf233RedoCall(t, td, "wi_redo_dispatch")
+	if code != 200 {
+		t.Fatalf("redo = %d %s, want 200", code, body)
+	}
+	var res struct {
+		State     string `json:"state"`
+		TaskID    string `json:"task_id"`
+		RequestID string `json:"request_id"`
+	}
+	if err := json.Unmarshal([]byte(body), &res); err != nil {
+		t.Fatalf("redo answer: %v (%s)", err, body)
+	}
+	if res.State != "scheduled" || !strings.HasPrefix(res.TaskID, "task_") {
+		t.Fatalf("a free lane must schedule one analysis task: %+v", res)
+	}
+	if of := analysisOf(t, td, res.TaskID); of != "wi_redo_dispatch" {
+		t.Fatalf("analysis_of = %q, want the redone ticket", of)
+	}
+	spec, ok := w72WaitSpec(runner, res.TaskID)
+	if !ok {
+		t.Fatalf("the runner never saw the redo task %s", res.TaskID)
+	}
+	item, err := hub.GetWorkItem("wi_redo_dispatch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := td.analysisPrompt(item)
+	if err != nil {
+		t.Fatalf("build the create-time prompt: %v", err)
+	}
+	if spec.Prompt != want {
+		t.Fatalf("the redo prompt must be the create-time analysisPrompt, byte for byte:\n--- got ---\n%s\n--- want ---\n%s", spec.Prompt, want)
+	}
+	content := pf233Content(t, hub, "wi_redo_dispatch")
+	if !strings.Contains(spec.Prompt, content) {
+		t.Fatalf("the redo prompt must carry the ticket as it stands (the archived old text included):\n%s", spec.Prompt)
+	}
+	if !strings.Contains(content, "### 1. 改动范围\n\n- old draft") || !strings.Contains(content, "## 历次分析") {
+		t.Fatalf("the ticket must keep the archive while the task runs:\n%s", content)
+	}
+	if ts := tdTasks(t, td); len(ts) != 1 {
+		t.Fatalf("exactly one analysis task per redo round, got %d: %+v", len(ts), ts)
+	}
+}
+
+// TestAnalysisRedoWriteAndConfirmGate (u3, AC2): the scheduled task writes
+// through the existing narrow path because the redo marker is unconfirmed;
+// the auto-pull wave skips the ticket until the owner confirms, then claims
+// it, and the archive survives both.
+func TestAnalysisRedoWriteAndConfirmGate(t *testing.T) {
+	td, hub, runner := w72World(t, func(c *Config) {
+		c.MaxConcurrent = 8
+		c.DrainInterval = time.Hour
+		c.DispatchTick = time.Hour
+	})
+	w72Ticket(t, hub, "wi_redo_write", pf233TicketBody)
+	code, body := pf233RedoCall(t, td, "wi_redo_write")
+	if code != 200 {
+		t.Fatalf("redo = %d %s, want 200", code, body)
+	}
+	var res struct {
+		State  string `json:"state"`
+		TaskID string `json:"task_id"`
+	}
+	if err := json.Unmarshal([]byte(body), &res); err != nil {
+		t.Fatalf("redo answer: %v (%s)", err, body)
+	}
+	if res.TaskID == "" {
+		t.Fatalf("the redo must schedule a task: %s", body)
+	}
+	if _, ok := w72WaitSpec(runner, res.TaskID); !ok {
+		t.Fatalf("the runner never saw %s", res.TaskID)
+	}
+
+	draft := "### 1. 改动范围\n\n#### 1.1 新稿\n\n- new draft\n"
+	if err := td.writeAnalysisSection(res.TaskID, "wi_redo_write", draft); err != nil {
+		t.Fatalf("the running redo task must write through the narrow path: %v", err)
+	}
+	written := pf233Content(t, hub, "wi_redo_write")
+	if !strings.Contains(written, workflow.AutoAnalysisMarker(res.TaskID)) {
+		t.Fatalf("the write must stamp the task id marker:\n%s", written)
+	}
+	if !strings.Contains(written, "- new draft") {
+		t.Fatalf("the task's draft must be the active section:\n%s", written)
+	}
+	if !strings.Contains(written, "### 1. 改动范围\n\n- old draft") {
+		t.Fatalf("the old analysis must survive in the archive:\n%s", written)
+	}
+	if !workflow.AnalysisUnconfirmed(written) {
+		t.Fatalf("the written analysis must still be unconfirmed:\n%s", written)
+	}
+
+	// confirm 前：auto-pull 跳过这张票。
+	bundle := "develop"
+	stamp := w72Stamp
+	if hub.updatedAt != nil {
+		if s := hub.updatedAt["wi_redo_write"]; s != "" {
+			stamp = s
+		}
+	}
+	queueItem := func(content string) api.WorkItem {
+		return api.WorkItem{ID: "wi_redo_write", Slug: "wi_redo_write", ProjectName: "proj",
+			Status: api.StatusQueued, Priority: api.PriorityNormal, BundleName: &bundle,
+			Content: strp(content), UpdatedAt: stamp}
+	}
+	hub.mu.Lock()
+	hub.queues = []api.WorkItem{queueItem(written)}
+	hub.mu.Unlock()
+	if err := td.modes.SetAuto(true); err != nil {
+		t.Fatalf("enable auto: %v", err)
+	}
+	td.fetchAutoWave()
+	if td.q.IsPending("wi_redo_write") {
+		t.Fatal("the auto-pull wave claimed a ticket whose redo analysis is unconfirmed")
+	}
+
+	confirmed, changed := workflow.ConfirmAnalysisSection(written)
+	if !changed {
+		t.Fatal("confirm must remove the redo task's marker")
+	}
+	hub.mu.Lock()
+	hub.queues = []api.WorkItem{queueItem(confirmed)}
+	hub.mu.Unlock()
+	td.fetchAutoWave()
+	if !td.q.IsPending("wi_redo_write") {
+		t.Fatal("after confirm the auto-pull wave must claim the analyzed ticket")
+	}
+	if strings.Contains(confirmed, "pf:auto-analysis") {
+		t.Fatalf("the confirmed section must carry no marker:\n%s", confirmed)
+	}
+	if !strings.Contains(confirmed, "- new draft") || !strings.Contains(confirmed, "- old draft") {
+		t.Fatalf("confirm must keep the draft and the archive:\n%s", confirmed)
 	}
 }
 
