@@ -7,6 +7,7 @@ package daemon
 // holds; every refusal leaves the ticket untouched.
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -16,8 +17,11 @@ import (
 
 	"github.com/silgrid/polyforge/internal/common/api"
 	"github.com/silgrid/polyforge/internal/common/workflow"
+	"github.com/silgrid/polyforge/internal/common/workflow/workflowtest"
+	"github.com/silgrid/polyforge/internal/polyforge/cli"
 	"github.com/silgrid/polyforge/internal/polyforge/runtime"
 	"github.com/silgrid/polyforge/internal/polyforge/task"
+	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
 
 // pf233RedoCall posts one redo request over the daemon's own socket.
@@ -30,6 +34,50 @@ func pf233RedoCall(t *testing.T, td *testDaemon, wi string) (int, string) {
 // redoRequestOf answers the pending redo request id the ticket carries.
 func redoRequestOf(content string) (string, bool) {
 	return workflow.AnalysisRedoRequestID(content)
+}
+
+// pf233RedoCallSock posts one redo request over a given daemon socket.
+func pf233RedoCallSock(t *testing.T, sock, wi string) (int, string) {
+	t.Helper()
+	return stepDo(t, sock, "POST", "/analysis/redo",
+		`{"work_item_id":"`+wi+`","project":"proj"}`)
+}
+
+// pf233RedoCallAlways is pf233RedoCall without t.Fatalf on transport
+// errors: the concurrency test calls it from goroutines.
+func pf233RedoCallAlways(t *testing.T, sock, wi string) (int, string) {
+	t.Helper()
+	return stepDo(t, sock, "POST", "/analysis/redo",
+		`{"work_item_id":"`+wi+`","project":"proj"}`)
+}
+
+// pf233QueueEntriesFrom reads the queue file under one data dir.
+func pf233QueueEntriesFrom(t *testing.T, dataDir string) []struct {
+	WorkItemID  string `json:"work_item_id"`
+	RedoRequest string `json:"redo_request_id"`
+	EnqueuedAt  string `json:"enqueued_at"`
+	Retries     int    `json:"retries"`
+} {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(dataDir, "analysis-queue.json"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		t.Fatal(err)
+	}
+	var st struct {
+		Entries []struct {
+			WorkItemID  string `json:"work_item_id"`
+			RedoRequest string `json:"redo_request_id"`
+			EnqueuedAt  string `json:"enqueued_at"`
+			Retries     int    `json:"retries"`
+		} `json:"entries"`
+	}
+	if err := json.Unmarshal(raw, &st); err != nil {
+		t.Fatalf("analysis-queue.json: %v", err)
+	}
+	return st.Entries
 }
 
 // pf233Content answers the ticket body the hub currently serves.
@@ -53,25 +101,7 @@ func pf233QueueEntries(t *testing.T, td *testDaemon) []struct {
 	Retries     int    `json:"retries"`
 } {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(td.cfg.DataDir, "analysis-queue.json"))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		t.Fatal(err)
-	}
-	var st struct {
-		Entries []struct {
-			WorkItemID  string `json:"work_item_id"`
-			RedoRequest string `json:"redo_request_id"`
-			EnqueuedAt  string `json:"enqueued_at"`
-			Retries     int    `json:"retries"`
-		} `json:"entries"`
-	}
-	if err := json.Unmarshal(raw, &st); err != nil {
-		t.Fatalf("analysis-queue.json: %v", err)
-	}
-	return st.Entries
+	return pf233QueueEntriesFrom(t, td.cfg.DataDir)
 }
 
 const pf233TicketBody = "## 背景\n\nthe ticket body\n\n## 分析\n\n### 1. 改动范围\n\n- old draft\n\n## Acceptance\n\n- AC1 x — carried by build\n"
@@ -344,4 +374,196 @@ func TestAnalysisRedoRefusesIneligibleUnchanged(t *testing.T) {
 		}
 	})
 
+}
+
+// TestAnalysisRedoSurvivesRestart (u4, AC2): the request is on disk before
+// the ticket changes, so a daemon that dies with the lane full replays the
+// same round once — no second archive, no second marker, no lost request.
+func TestAnalysisRedoSurvivesRestart(t *testing.T) {
+	setGitIdentity(t)
+	dir := t.TempDir()
+	ws := filepath.Join(dir, "ws")
+	data := filepath.Join(dir, "data")
+	hubBase := filepath.Join(dir, "hub")
+	sock := filepath.Join(dir, "d1.sock")
+	for _, d := range []string{ws, data, hubBase} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wf := t.TempDir()
+	workflowtest.WriteLane(t, wf, "develop", "steps:\n  - { id: build }\n")
+	inner := newFakeHub()
+	hub := &w72Hub{fakeHub: inner, contents: map[string]*string{}}
+	bundle := "develop"
+	hub.mu.Lock()
+	hub.status = map[string]string{"wi_redo_restart": api.StatusQueued}
+	hub.bundles = map[string]string{"wi_redo_restart": bundle}
+	hub.contents["wi_redo_restart"] = strp(pf233TicketBody)
+	hub.mu.Unlock()
+	if err := os.WriteFile(filepath.Join(ws, workspace.FileName),
+		[]byte("steps:\n  proj:\n    task: { models: [pi:w72/m] }\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := newW72Runner()
+	cfg := e2eConfig(sock, ws, data, hubBase, hub.fakeHub, &fakeSpawner{})
+	cfg.WorkflowsDir = wf
+	cfg.TaskRunner = runner
+	cfg.Hub = hub
+	cfg.MaxConcurrent = 8
+	d1, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runDone := make(chan error, 1)
+	go func() { runDone <- d1.Run(context.Background()) }()
+	waitFor(t, "the first daemon serving", 5*time.Second, func() bool {
+		_, serr := cli.NewDaemonClient(cfg.SocketPath).Status()
+		return serr == nil
+	})
+	for i := 0; i < 2; i++ {
+		if code, b := stepDo(t, cfg.SocketPath, "POST", "/task/spawn", `{"project":"proj","prompt":"filler"}`); code != 200 {
+			t.Fatalf("filler spawn %d = %d %s", i, code, b)
+		}
+	}
+	code, body := pf233RedoCallSock(t, cfg.SocketPath, "wi_redo_restart")
+	if code != 200 || !strings.Contains(body, `"queued"`) {
+		t.Fatalf("redo under a full lane = %d %s, want queued", code, body)
+	}
+	var first struct {
+		RequestID string `json:"request_id"`
+	}
+	if err := json.Unmarshal([]byte(body), &first); err != nil || first.RequestID == "" {
+		t.Fatalf("redo answer: %v (%s)", err, body)
+	}
+	beforeRestart := pf233Content(t, hub, "wi_redo_restart")
+	if err := d1.Shutdown(context.Background(), DirectShutdownCause()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-runDone:
+	case <-time.After(15 * time.Second):
+		t.Fatal("the first daemon never stopped")
+	}
+	settleAfterShutdown(t, d1)
+	if entries := pf233QueueEntriesFrom(t, data); len(entries) != 1 || entries[0].RedoRequest != first.RequestID {
+		t.Fatalf("the redo request must survive the shutdown: %+v", entries)
+	}
+
+	runner2 := newW72Runner()
+	cfg.TaskRunner = runner2
+	cfg.SocketPath = filepath.Join(dir, "d2.sock")
+	d2, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runDone2 := make(chan error, 1)
+	go func() { runDone2 <- d2.Run(context.Background()) }()
+	t.Cleanup(func() {
+		_ = d2.Shutdown(context.Background(), DirectShutdownCause())
+		<-runDone2
+	})
+	waitFor(t, "the restarted daemon serving", 5*time.Second, func() bool {
+		_, serr := cli.NewDaemonClient(cfg.SocketPath).Status()
+		return serr == nil
+	})
+	deadline := time.Now().Add(10 * time.Second)
+	for len(runner2.taskIDs()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	ids := runner2.taskIDs()
+	if len(ids) != 1 {
+		t.Fatalf("the restarted daemon must dispatch the redo request exactly once, got %d tasks: %v", len(ids), ids)
+	}
+	tk, err := d2.tasks.Show(ids[0])
+	if err != nil || tk.Spec.AnalysisOf != "wi_redo_restart" {
+		t.Fatalf("the replayed task must bind the ticket: %+v %v", tk, err)
+	}
+	if after := pf233Content(t, hub, "wi_redo_restart"); after != beforeRestart {
+		t.Fatalf("a restart must not re-apply the archive or marker:\nbefore:\n%s\nafter:\n%s", beforeRestart, after)
+	}
+	if entries := pf233QueueEntriesFrom(t, data); len(entries) != 0 {
+		t.Fatalf("the dispatched round must leave the queue, got %+v", entries)
+	}
+}
+
+// TestAnalysisRedoConcurrentRequests (u4, AC3): two simultaneous redo
+// calls accept exactly one; the ticket gains one archive and one pending
+// request, the loser gets a conflict naming the pending request.
+func TestAnalysisRedoConcurrentRequests(t *testing.T) {
+	td, hub, _ := w72World(t, nil)
+	w72FillSlots(t, td, 2)
+	w72Ticket(t, hub, "wi_redo_race", pf233TicketBody)
+	start := make(chan struct{})
+	type result struct {
+		code int
+		body string
+	}
+	results := make(chan result, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			<-start
+			code, body := pf233RedoCallAlways(t, td.sock, "wi_redo_race")
+			results <- result{code: code, body: body}
+		}()
+	}
+	close(start)
+	var ok, conflict int
+	for i := 0; i < 2; i++ {
+		r := <-results
+		switch {
+		case r.code == 200:
+			ok++
+		case r.code == 409 && strings.Contains(r.body, "pending analysis request"):
+			conflict++
+		default:
+			t.Fatalf("unexpected answer: %d %s", r.code, r.body)
+		}
+	}
+	if ok != 1 || conflict != 1 {
+		t.Fatalf("two concurrent redos must accept one and refuse one, got %d ok / %d conflict", ok, conflict)
+	}
+	content := pf233Content(t, hub, "wi_redo_race")
+	if n := strings.Count(content, "<!-- pf:analysis-archive "); n != 2 {
+		t.Fatalf("the ticket must carry exactly one archive entry (begin+end markers), got %d markers:\n%s", n, content)
+	}
+	if entries := pf233QueueEntries(t, td); len(entries) != 1 {
+		t.Fatalf("one pending redo request, got %+v", entries)
+	}
+}
+
+// TestAnalysisRedoStaleAutoWaveSkips (u4, AC2/AC3 local guarantee): a wave
+// snapshot fetched before the redo CAS carries the old, confirmed text. The
+// marker it lacks is on the ticket now, so the local wave must not claim it
+// from that stale snapshot — the redo started a new round.
+func TestAnalysisRedoStaleAutoWaveSkips(t *testing.T) {
+	td, hub, _ := w72World(t, func(c *Config) {
+		c.MaxConcurrent = 8
+		c.DrainInterval = time.Hour
+		c.DispatchTick = time.Hour
+	})
+	const staleStamp = "2026-11-22T00:00:00Z"
+	w72Ticket(t, hub, "wi_redo_stale", pf233TicketBody)
+	hub.mu.Lock()
+	if hub.updatedAt == nil {
+		hub.updatedAt = map[string]string{}
+	}
+	stale := api.WorkItem{ID: "wi_redo_stale", Slug: "wi_redo_stale", ProjectName: "proj",
+		Status: api.StatusQueued, Priority: api.PriorityNormal, BundleName: strp("develop"),
+		Content: strp(pf233TicketBody), UpdatedAt: staleStamp}
+	hub.updatedAt["wi_redo_stale"] = staleStamp
+	hub.queues = []api.WorkItem{stale}
+	hub.mu.Unlock()
+
+	if code, body := pf233RedoCall(t, td, "wi_redo_stale"); code != 200 {
+		t.Fatalf("redo = %d %s, want 200", code, body)
+	}
+	if err := td.modes.SetAuto(true); err != nil {
+		t.Fatalf("enable auto: %v", err)
+	}
+	td.fetchAutoWave()
+	if td.q.IsPending("wi_redo_stale") {
+		t.Fatal("the auto-pull wave claimed the ticket from a snapshot taken before the redo; the local redo round must hold it back")
+	}
 }
