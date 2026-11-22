@@ -238,3 +238,66 @@ func TestEmbeddedResourceDigest(t *testing.T) {
 		t.Errorf("the same resource content digested as %q, want %q", again, base)
 	}
 }
+
+// TestPiCompatibilityDeadlineSuccessNotCached pins the deadline boundary of
+// the cache (owner ruling Q5; review r1#2): a capability call that answers
+// nil only AFTER the check's work deadline is the flight's pi_timeout — a
+// failure, never cached — for the initiator and for a same-key joiner, and
+// the next same-key call probes again.
+func TestPiCompatibilityDeadlineSuccessNotCached(t *testing.T) {
+	resetPiCompatCache()
+	t.Cleanup(resetPiCompatCache)
+	oldFS := piCompatResourceFS
+	piCompatResourceFS = compatResourceMap(t)
+	t.Cleanup(func() { piCompatResourceFS = oldFS })
+	oldProbe := piCapabilityProbeFn
+	t.Cleanup(func() { piCapabilityProbeFn = oldProbe })
+
+	bin, _ := compatCountingPi(t)
+	var probes atomic.Int32
+	started := make(chan struct{}, 1)
+	piCapabilityProbeFn = func(ctx context.Context, bin, version string) error {
+		probes.Add(1)
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		// deliberately ignores ctx: the success lands after the work deadline
+		time.Sleep(9*time.Second + 200*time.Millisecond)
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	first := make(chan error, 1)
+	go func() { first <- validatePiCompatibility(ctx, bin) }()
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the capability probe never started")
+	}
+	joiner := make(chan error, 1)
+	go func() { joiner <- validatePiCompatibility(ctx, bin) }()
+	for name, ch := range map[string]chan error{"initiator": first, "joiner": joiner} {
+		select {
+		case err := <-ch:
+			if got := compatReason(err); got != "pi_timeout" {
+				t.Errorf("%s: reason = %q, want pi_timeout (%v)", name, got, err)
+			}
+		case <-time.After(20 * time.Second):
+			t.Fatalf("%s never returned", name)
+		}
+	}
+	if n := probes.Load(); n != 1 {
+		t.Fatalf("one same-key flight probed %d time(s), want 1", n)
+	}
+	piCapabilityProbeFn = func(ctx context.Context, bin, version string) error {
+		probes.Add(1)
+		return nil
+	}
+	if err := validatePiCompatibility(ctx, bin); err != nil {
+		t.Fatalf("the call after a deadline refusal failed: %v", err)
+	}
+	if n := probes.Load(); n != 2 {
+		t.Fatalf("a success observed past the deadline was cached: the next same-key call ran %d probe(s), want 2", n)
+	}
+}
