@@ -123,8 +123,8 @@ func TestAnalysisRedoArchivesAndQueues(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &res); err != nil {
 		t.Fatalf("redo answer: %v (%s)", err, body)
 	}
-	if res.State != "scheduled" && res.State != "queued" {
-		t.Fatalf("a redo must answer the scheduled task or a queued request: %+v", res)
+	if res.State != "queued" {
+		t.Fatalf("a redo under a full task lane must queue its request, got %+v", res)
 	}
 	if res.RequestID == "" {
 		t.Fatalf("a redo must name its request id: %+v", res)
@@ -142,6 +142,11 @@ func TestAnalysisRedoArchivesAndQueues(t *testing.T) {
 	entries := pf233QueueEntries(t, td)
 	if len(entries) != 1 || entries[0].WorkItemID != "wi_redo_ok" || entries[0].RedoRequest != res.RequestID {
 		t.Fatalf("the redo request must be persisted before dispatch, got %+v", entries)
+	}
+	for _, tk := range tdTasks(t, td) {
+		if tk.Spec.AnalysisOf != "" {
+			t.Fatalf("a queued redo must not spawn an analysis before a slot frees, got %+v", tk)
+		}
 	}
 }
 
