@@ -105,13 +105,18 @@ func (r *ContextReader) Read(path string) Context {
 // a malformed, torn or empty line is skipped exactly as Read skips it. Safe
 // for concurrent use.
 func (r *ContextReader) Feed(line []byte) Context {
-	return Context{}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.foldLine(line)
+	return r.fold.context()
 }
 
 // Context answers what has been folded so far: the zero value when nothing
 // has (polyforge#230). Safe for concurrent use.
 func (r *ContextReader) Context() Context {
-	return Context{}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.fold.context()
 }
 
 // consume folds every complete line of chunk (prefixed by the unfinished
