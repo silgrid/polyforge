@@ -270,8 +270,12 @@ func piCapabilityProbe(ctx context.Context, bin, version string) error {
 		}
 		_ = stdin.Close()
 		if exited {
-			// the process is already reaped: nothing to wait for, and no
-			// signal is sent to a pid that may be reused.
+			// the process itself is already reaped; any descendant it left
+			// in its process group is not. Kill that group now — while it
+			// still has a member the pgid cannot be reused (review r2#3).
+			if cmd.Process != nil {
+				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			}
 			close(done)
 			outR.Close()
 			errR.Close()
