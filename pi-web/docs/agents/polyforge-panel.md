@@ -956,10 +956,13 @@ render. The badge's accessible name is `polyforge.work.jobsRunning` /
 
 State: `usePolyforge` holds `activeTab` (`PolyforgeTab = "memory" |
 "messages" | "work"`, default `"work"`), `workTab` (`PolyforgeWorkTab =
-"jobs" | "tasks" | "items" | "integrate"`, default `"jobs"`) and `workItemsRunning`
-(`number | null`). The hook outlives the dock, so a
-close/reopen keeps the sub-tab and the items badge; a reload resets all
-three; nothing is written to storage. `openAnchor` (the Messages and Memory
+"jobs" | "tasks" | "items" | "projects" | "integrate"`, default `"jobs"`) and `workItemsRunning`
+(`number | null`). Every dock open — and every switch to Work from another
+top-level tab — resets the sub-tab to Jobs; an explicit target (the walk,
+an anchor, an analysis card's task link) writes after that reset, so a walk
+to a task still lands on 任务; a manual sub-tab switch holds while the dock
+stays open, and a reload resets all three. A close/reopen keeps the items
+badge (`workItemsRunning`); nothing is written to storage. `openAnchor` (the Messages and Memory
 work-item links) sets Work › Jobs and the selection — never the 全部 list. The
 cards poll is gated on `activeTab === "work" && workTab === "jobs"`; the
 Tasks, work-item and 待集成 surfaces read only while they are mounted.
