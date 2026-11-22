@@ -72,13 +72,13 @@ test("report_tail and reporter travel only as the strings pf sent", () => {
   const old = { ...REAL_ROW };
   delete old.report_tail;
   delete old.reporter;
-  assert.deepEqual(Object.keys(lib.sanitizeTaskRow(old)).sort(), ["id", "project", "prompt_summary", "started_at", "state", "wall_consumed_ns"],
-    "a pf that predates the fields still lists, with no fabricated keys");
+  assert.deepEqual(Object.keys(lib.sanitizeTaskRow(old)).sort(), ["candidate", "id", "project", "prompt_summary", "started_at", "state", "wall_consumed_ns"],
+    "a pf that predates the fields still lists, with no fabricated keys (candidate is the polyforge#230 addition)");
 });
 
 test("the detail passport keeps status, candidates, budget, times, prompt and report, and drops the rest", () => {
   const detail = lib.sanitizeTaskDetail({ ...REAL_ROW, spec: { ...REAL_ROW.spec, prompt: "the full prompt" }, report: "**done**", truncated: true });
-  assert.deepEqual(Object.keys(detail).sort(), ["candidates", "created_at", "id", "max_duration_ns", "max_tokens", "project", "prompt",
+  assert.deepEqual(Object.keys(detail).sort(), ["candidate", "candidates", "created_at", "id", "max_duration_ns", "max_tokens", "project", "prompt",
     "report", "report_len", "started_at", "state", "tokens_consumed", "truncated", "wall_consumed_ns"],
   "a zero-time ended_at is absent; every other field is in the passport");
   assert.deepEqual(detail.candidates, ["pi:m/one"]);
@@ -242,8 +242,8 @@ test("AC1/AC2 passport: a running task's context travels with the five known fie
   const noModel = lib.sanitizeTaskRow({ ...REAL_ROW, context: { ...CONTEXT, model: "bad model!" } }).context;
   assert.equal(noModel.tokens, 4300);
   assert.ok(!("model" in noModel));
-  // the detail carries the same value
-  assert.deepEqual(lib.sanitizeTaskDetail({ ...REAL_ROW, context: CONTEXT, report: "" }).context, CONTEXT);
+  // the detail carries the same value (the wire shape: as_of becomes asOf)
+  assert.deepEqual(lib.sanitizeTaskDetail({ ...REAL_ROW, context: CONTEXT, report: "" }).context, { tokens: 4300, model: "openai/m1", asOf: "2026-11-22T10:00:00Z" });
   // a task without context keeps exactly its previous keys
   assert.ok(!("context" in lib.sanitizeTaskRow(REAL_ROW)) && !("context" in lib.sanitizeTaskDetail(REAL_ROW)));
 });

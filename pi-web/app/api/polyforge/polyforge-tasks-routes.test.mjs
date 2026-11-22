@@ -68,8 +68,8 @@ test("AC2 (polyforge#230): both task routes fill a running context's missing win
   assert.match(show, /import \{[^}]*fillTaskContextWindow\b[^}]*\} from "@\/lib\/polyforge-tasks"/, "the show route imports the single-row fill");
   assert.match(show, /const filled = task === null \? null : await fillTaskContextWindow\(task\)/, "a read task passes through the fill");
   assert.match(show, /task: filled/, "the answer carries the filled task");
-  // the fill is the catalog's, never a pf spawn: no new argv in either route
+  // the fill never reaches pf: it is the model registry's window, not a read
   for (const [name, source] of [["list", list], ["show", show]]) {
-    assert.doesNotMatch(source, /spawn|catalogContextWindow/, `${name} adds no spawn and no second catalog read`);
+    assert.doesNotMatch(source, /runPfJson|catalogContextWindow/, `${name} performs no catalog read of its own`);
   }
 });
