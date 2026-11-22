@@ -145,3 +145,21 @@ test("the attention walk's task target survives the same-batch open", async () =
     await teardown(hook);
   }
 });
+
+test("an analysis card's task link from Messages lands on Tasks", async () => {
+  const hook = await setup({ panelOpen: true });
+  try {
+    hook.result.setActiveTab("messages");
+    await render(hook);
+    hook.result.setWorkTab("integrate");
+    await render(hook);
+    // openTask's order: the top-level switch first, then the explicit target.
+    hook.result.setActiveTab("work");
+    hook.result.setWorkTab("tasks");
+    await render(hook);
+    assert.equal(hook.result.activeTab, "work", "the card's link shows 工单");
+    assert.equal(hook.result.workTab, "tasks", "the explicit task target writes after the sub-tab reset");
+  } finally {
+    await teardown(hook);
+  }
+});
