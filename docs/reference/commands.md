@@ -274,8 +274,10 @@ only `pf projects delete` below removes data. Deactivation is refused
 (`CORE-409 NON_TERMINAL_WORK_ITEMS`, every blocker listed) while the project
 still has queued, running, paused or blocked work items — settle the work
 first. Both doors need a project maintainer or an admin; the console's
-project picker and Pi Web's Work › 项目 view restore in place from the
-marked row. `pf projects list [--show-deactivated]` lists the active line by
+project picker restores in place from the marked row, and the CLI is
+`pf projects restore <id-or-name>` (Pi Web's Work › 项目 view still implements
+the same hide/mark/restore, but its rail entry is hidden since polyforge#226).
+`pf projects list [--show-deactivated]` lists the active line by
 default; the flag adds the deactivated projects with their marker.
 
 
