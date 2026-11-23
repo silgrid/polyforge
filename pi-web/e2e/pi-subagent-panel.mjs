@@ -298,26 +298,41 @@ try {
     const handle = p.locator("[data-claude-subagent-panel-resize]");
     await handle.waitFor({ state: "visible", timeout: 20_000 });
     const boundsHeight = await page.locator("[data-claude-subagent-panel-bounds]").evaluate((el) => el.clientHeight);
-    const hb = await handle.boundingBox();
-    assert.ok(hb, "the drag handle is laid out");
-    const center = { x: hb.x + hb.width / 2, y: hb.y + hb.height / 2 };
-    await page.mouse.move(center.x, center.y);
-    await page.mouse.down();
-    await page.mouse.move(center.x, center.y - 2000, { steps: 4 });
-    await page.mouse.up();
-    const tall = (await p.boundingBox()).height;
-    assert.ok(tall <= boundsHeight - 14 + 2, `the panel exceeded the bounds minus padding: ${tall} > ${boundsHeight - 14}`);
-    const hb2 = await handle.boundingBox();
-    const center2 = { x: hb2.x + hb2.width / 2, y: hb2.y + hb2.height / 2 };
-    await page.mouse.move(center2.x, center2.y);
-    await page.mouse.down();
-    await page.mouse.move(center2.x, center2.y + 2000, { steps: 4 });
-    await page.mouse.up();
-    const short = (await p.boundingBox()).height;
-    assert.ok(Math.abs(short - 160) <= 2, `the panel did not clamp to its 160px floor: ${short}`);
+    // The transcript lands after the first paint: settle the default height
+    // (two consecutive equal reads) before measuring it.
+    let previousHeight = null;
+    const defaultHeight = await waitFor(async () => {
+      const box = await p.boundingBox();
+      if (!box) return null;
+      if (previousHeight !== null && Math.abs(box.height - previousHeight) <= 0.5) return box.height;
+      previousHeight = box.height;
+      return null;
+    }, 10_000, "the panel's default height never settled");
+    async function dragBy(deltaY) {
+      const box = await handle.boundingBox();
+      assert.ok(box, "the drag handle is laid out");
+      const center = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+      await page.mouse.move(center.x, center.y);
+      await page.mouse.down();
+      await page.mouse.move(center.x, center.y + deltaY, { steps: 4 });
+      await page.mouse.up();
+    }
+    // The height is set by a pointermove-driven React state, so the rendered
+    // value is polled until it reaches the clamp (the settle duty).
+    const heightReaches = (expected, message) => waitFor(async () => {
+      const box = await p.boundingBox();
+      return box && Math.abs(box.height - expected) <= 2 ? box.height : null;
+    }, 10_000, message);
+    await dragBy(-2000);
+    await heightReaches(boundsHeight - 14, `the panel did not stop at the bounds minus padding: expected ${boundsHeight - 14}`);
+    await dragBy(2000);
+    await heightReaches(160, "the panel did not clamp to its 160px floor");
     await handle.dblclick();
-    const inlineHeight = await p.evaluate((el) => el.style.height);
-    assert.equal(inlineHeight, "", "double-click did not clear the stored height");
+    await waitFor(async () => {
+      const inlineHeight = await p.evaluate((el) => el.style.height);
+      const box = await p.boundingBox();
+      return inlineHeight === "" && box && Math.abs(box.height - defaultHeight) <= 2 ? true : null;
+    }, 10_000, "double-click did not clear the stored height and return to the default height");
     await closeOpened();
   });
 
@@ -341,10 +356,14 @@ try {
     await waitFor(async () => !(await jump.isDisabled()), 60_000, "the paged launch record was never found");
     await jump.click();
     await waitFor(async () => (await panel(page).count()) === 0, 10_000, "Jump did not close the panel");
+    // The scroll happens in a rAF after the panel unmounts: poll the card's
+    // own position each round rather than reading it once.
     const card = page.locator('[data-pi-agent-tool-call]').first();
-    const cardBox = await card.boundingBox();
-    const viewport = page.viewportSize();
-    assert.ok(cardBox && viewport && cardBox.y + cardBox.height > 0 && cardBox.y < viewport.height, `the launch card was not brought into view: ${JSON.stringify(cardBox)}`);
+    await waitFor(async () => {
+      const cardBox = await card.boundingBox();
+      const viewport = page.viewportSize();
+      return cardBox && viewport && cardBox.y + cardBox.height > 0 && cardBox.y < viewport.height ? true : null;
+    }, 20_000, "the launch card was not brought into view");
     await closeOpened();
   });
 
