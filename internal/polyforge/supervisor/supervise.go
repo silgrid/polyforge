@@ -125,7 +125,11 @@ type supProc struct {
 	// way to the main loop (allDead waits for it, so no manager is left
 	// blocked on a channel nobody reads).
 	inflight bool
-	fails    int
+	// postExitHold is this child's snapshot of supPostExitSendHold,
+	// taken when it was created: the test seam delays the manager right
+	// after its exit event was sent (polyforge#251). nil in production.
+	postExitHold func(*supProc)
+	fails        int
 	// stop marks "do not restart"; done is closed with it so a manager
 	// sleeping its backoff wakes at once.
 	stop bool
@@ -245,9 +249,18 @@ func RunSupervise(rs RunSpec) int {
 // proc whose start is in flight. nil in production.
 var supPreStartHold func(p *supProc)
 
+// supPostExitSendHold, when non-nil, runs in every child's manager after
+// its exit event was handed to the main loop and before the manager
+// clears inflight — the test seam that pins the last-exit-event race
+// (polyforge#251). Snapshotted into supProc at creation, so a test's
+// Cleanup restoring the variable never races a manager still reading it.
+// nil in production.
+var supPostExitSendHold func(p *supProc)
+
 // newSupProc answers one managed child.
 func newSupProc(spec ChildSpec, daemon bool, baseDelay time.Duration) *supProc {
-	return &supProc{spec: spec, daemon: daemon, baseDelay: baseDelay, done: make(chan struct{})}
+	return &supProc{spec: spec, daemon: daemon, baseDelay: baseDelay,
+		postExitHold: supPostExitSendHold, done: make(chan struct{})}
 }
 
 // manage runs the child's start/wait/backoff loop until the run stops it.
@@ -284,6 +297,9 @@ func (p *supProc) manage(exits chan<- supExit, runDone <-chan struct{}) {
 		case exits <- supExit{proc: p, code: code}:
 		case <-runDone:
 			return
+		}
+		if p.postExitHold != nil {
+			p.postExitHold(p)
 		}
 		p.mu.Lock()
 		p.inflight = false
@@ -421,13 +437,10 @@ func (p *supProc) term() {
 	}
 }
 
-// kill is the grace's end: SIGKILL to a child still running.
-func (p *supProc) kill() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.cmd != nil && p.cmd.Process != nil {
-		_ = p.cmd.Process.Kill()
-	}
+// kill is the grace's end: SIGKILL to a child still running, answering
+// whether it signalled one (polyforge#251).
+func (p *supProc) kill() bool {
+	return false
 }
 
 // backoff answers the nth consecutive failure's restart delay: first
