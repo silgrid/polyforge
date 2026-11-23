@@ -146,3 +146,88 @@ func TestW86Build(t *testing.T) {
 		t.Fatalf("aihub-image.digest = %q, want the canonical %q (unchanged)", dg, relFakeDigest)
 	}
 }
+
+// TestW86Verify (AC2, Q2): --verify checks the workstation image beside the
+// aihub image - the published workstation-image.digest equals the registry's
+// index digest, the index carries both platforms, and the public channel's
+// image reads anonymously (an empty DOCKER_CONFIG). A missing arm64, a digest
+// mismatch, a tampered digest asset and a still-private package each fail it;
+// the suffixed (internal) channel makes no anonymous check.
+func TestW86Verify(t *testing.T) {
+	w := newRelWorld(t, []string{"v1.2.0"}, nil)
+	if out, err := w.runPinned(nil); err != nil {
+		t.Fatalf("release failed: %v\n%s", err, out)
+	}
+	vout, verr := w.run(nil, "--verify", "v1.2.1")
+	if verr != nil {
+		t.Fatalf("verify of a fresh release must pass: %v\n%s", verr, vout)
+	}
+	for _, want := range []string{
+		"PASS workstation image index digest " + relFakeDigest + " matches workstation-image.digest",
+		"PASS workstation index platform linux/amd64 present",
+		"PASS workstation index platform linux/arm64 present",
+		"PASS anonymous read of ghcr.io/silgrid/polyforge-workstation:v1.2.1 (empty DOCKER_CONFIG)",
+	} {
+		if !strings.Contains(vout, want) {
+			t.Errorf("verify output lacks %q:\n%s", want, vout)
+		}
+	}
+
+	// the index missing arm64 fails --verify, naming it
+	vout, verr = w.run([]string{"FAKE_WS_NO_ARM64=1"}, "--verify", "v1.2.1")
+	if verr == nil || !strings.Contains(vout, "FAIL workstation image index lacks linux/arm64") {
+		t.Fatalf("an index without arm64 must fail --verify naming it: %v\n%s", verr, vout)
+	}
+	if strings.Contains(vout, "FAIL workstation image index lacks linux/amd64") {
+		t.Fatalf("amd64 is present; only the arm64 miss may be named:\n%s", vout)
+	}
+
+	// a digest the registry does not hold fails it
+	vout, verr = w.run([]string{"FAKE_REGISTRY_DIGEST=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, "--verify", "v1.2.1")
+	if verr == nil || !strings.Contains(vout, "FAIL workstation image digest mismatch") {
+		t.Fatalf("a workstation digest mismatch must fail --verify: %v\n%s", verr, vout)
+	}
+
+	// a tampered digest asset fails the checksum check
+	relWrite(t, filepath.Join(w.fakeRel, "v1.2.1", "workstation-image.digest"), "tampered\n", 0o644)
+	vout, verr = w.run(nil, "--verify", "v1.2.1")
+	if verr == nil {
+		t.Fatalf("a tampered workstation-image.digest must fail --verify (sha256sum covers it):\n%s", vout)
+	}
+	if !strings.Contains(vout, "sha256sum") {
+		t.Fatalf("the tamper must fail the checksum check:\n%s", vout)
+	}
+
+	// the public channel's anonymous read: a package still private fails it
+	w2 := newRelWorld(t, []string{"v1.2.0"}, nil)
+	if out, err := w2.runPinned(nil); err != nil {
+		t.Fatalf("release failed: %v\n%s", err, out)
+	}
+	vout, verr = w2.run([]string{"FAKE_ANON_UNAUTHORIZED=1"}, "--verify", "v1.2.1")
+	if verr == nil || !strings.Contains(vout, "FAIL anonymous read of ghcr.io/silgrid/polyforge-workstation:v1.2.1") {
+		t.Fatalf("an unreadable anonymous read must fail --verify naming it: %v\n%s", verr, vout)
+	}
+
+	// the suffixed (internal) channel makes no anonymous check: verify passes
+	// with the knob set once RELEASE_WORKSTATION_IMAGE names the internal
+	// repository (the suffixed line's own rule, u4)
+	sw := newRelSuffixWorld(t, relSuffixConf("fork"))
+	if out, err := sw.runPinned([]string{"RELEASE_WORKSTATION_IMAGE=ghcr.io/example-org/fork-workstation"}); err != nil {
+		t.Fatalf("release failed: %v\n%s", err, out)
+	}
+	vout, verr = sw.run([]string{"RELEASE_WORKSTATION_IMAGE=ghcr.io/example-org/fork-workstation", "FAKE_ANON_UNAUTHORIZED=1"}, "--verify", "v0.2.0-fork.1")
+	if verr != nil {
+		t.Fatalf("the internal channel needs no anonymous read: %v\n%s", verr, vout)
+	}
+	if strings.Contains(vout, "anonymous") {
+		t.Fatalf("the suffixed channel must not check anonymous reads:\n%s", vout)
+	}
+	for _, want := range []string{
+		"PASS workstation image index digest " + relFakeDigest + " matches workstation-image.digest",
+		"PASS workstation index platform linux/arm64 present",
+	} {
+		if !strings.Contains(vout, want) {
+			t.Errorf("the internal channel's verify output lacks %q:\n%s", want, vout)
+		}
+	}
+}

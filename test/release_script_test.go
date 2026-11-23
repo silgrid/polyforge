@@ -318,20 +318,34 @@ case "$1" in
         case "$*" in *" --push"*) : > "$CALLLOG.pushed-ws" ;; esac ;;
       *)
     [ -n "$FAKE_REGISTRY_NEEDS_LOGIN" ] && [ ! -e "$CALLLOG.loggedin" ] && { echo "ERROR: unauthorized: authentication required" >&2; exit 1; }
+    # FAKE_ANON_UNAUTHORIZED: with no stored credential (an empty
+    # DOCKER_CONFIG - the anonymous read polyforge#86's --verify makes) the
+    # package answers unauthorized: it is still private
+    [ -n "$FAKE_ANON_UNAUTHORIZED" ] && [ ! -f "${DOCKER_CONFIG:-$HOME/.docker}/config.json" ] && { echo "ERROR: unauthorized: authentication required" >&2; exit 1; }
     [ -n "$FAKE_REGISTRY_UNREADABLE" ] && { echo "ERROR: failed to authorize: 403 Forbidden" >&2; exit 1; }
     [ -n "$FAKE_BUILDX_ERROR" ] && { echo "ERROR: $FAKE_BUILDX_ERROR" >&2; exit 1; }
     registry_read_gate "$4"
     registry_has "$4" || { echo "ERROR: $4: not found" >&2; exit 1; }
-    echo "Name: x"; echo "Digest: $FAKE_REGISTRY_DIGEST" ;;
+    echo "Name: x"; echo "Digest: $FAKE_REGISTRY_DIGEST"
+    # the index's platforms (polyforge#86's --verify reads them);
+    # FAKE_WS_NO_ARM64 drops the arm64 child - a broken index
+    echo "Manifests:"
+    echo "  Name: x@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    echo "  Platform: linux/amd64"
+    if [ -z "$FAKE_WS_NO_ARM64" ]; then
+      echo "  Name: x@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+      echo "  Platform: linux/arm64"
+    fi ;;
     esac ;;
   # config/layer digests come BEFORE the Descriptor here, so only the
   # Descriptor-scoped read can find the manifest digest
   manifest)
     [ -n "$FAKE_REGISTRY_UNREADABLE" ] && { echo "unauthorized: authentication required" >&2; exit 1; }
+    [ -n "$FAKE_ANON_UNAUTHORIZED" ] && [ ! -f "${DOCKER_CONFIG:-$HOME/.docker}/config.json" ] && { echo "unauthorized: authentication required" >&2; exit 1; }
     [ -n "$FAKE_REGISTRY_NEEDS_LOGIN" ] && [ ! -e "$CALLLOG.loggedin" ] && { echo "unauthorized: authentication required" >&2; exit 1; }
     registry_read_gate "$4"
     registry_has "$4" || { echo "no such manifest: $4" >&2; exit 1; }
-    printf '{\n\t"Ref": "x",\n\t"SchemaV2Manifest": {\n\t\t"config": {\n\t\t\t"digest": "sha256:cccc"\n\t\t},\n\t\t"layers": [\n\t\t\t{\n\t\t\t\t"Digest": "sha256:dddd"\n\t\t\t}\n\t\t]\n\t},\n\t"Descriptor": {\n\t\t"mediaType": "m",\n\t\t"digest": "%s",\n\t\t"size": 952\n\t}\n}\n' "$FAKE_REGISTRY_DIGEST" ;;
+    printf '{\n\t"Ref": "x",\n\t"SchemaV2Manifest": {\n\t\t"config": {\n\t\t\t"digest": "sha256:cccc"\n\t\t},\n\t\t"layers": [\n\t\t\t{\n\t\t\t\t"Digest": "sha256:dddd"\n\t\t\t}\n\t\t]\n\t},\n\t"Descriptor": {\n\t\t"mediaType": "m",\n\t\t"digest": "%s",\n\t\t"size": 952\n\t},\n\t"manifests": [\n\t\t{\n\t\t\t"Descriptor": {\n\t\t\t\t"platform": {\n\t\t\t\t\t"architecture": "amd64",\n\t\t\t\t\t"os": "linux"\n\t\t\t\t}\n\t\t\t}\n\t\t},\n\t\t{\n\t\t\t"Descriptor": {\n\t\t\t\t"platform": {\n\t\t\t\t\t"architecture": "arm64",\n\t\t\t\t\t"os": "linux"\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t]\n}\n' "$FAKE_REGISTRY_DIGEST" ;;
 esac
 exit 0
 `, 0o755)
