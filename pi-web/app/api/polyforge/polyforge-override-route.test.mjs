@@ -40,6 +40,14 @@ process.on("exit", () => { try { fs.appendFileSync(${JSON.stringify(exitedLog)},
 // through process.exit so the exit record is written too.
 for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => process.exit(0));
 if (args[0] === "--version") { process.stdout.write("v2.21.0\\n"); process.exit(0); }
+// polyforge#238 defect 3 reproduction input: on an ended ticket the route
+// drops the override/params reads unawaited; letting those two children delay
+// their own argv makes the ordering race deterministic for the loop harness.
+// This is a controlled slow child (a scenario input), not a synchronization.
+if (fs.readFileSync(${JSON.stringify(mode)}, "utf8") === "ended" && (args.includes("override") || args.includes("params"))) {
+  const until = Date.now() + 300;
+  while (Date.now() < until) { /* deliberate slow child */ }
+}
 fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(args) + "\\n");
 const mode = fs.readFileSync(${JSON.stringify(mode)}, "utf8");
 const out = (v) => { process.stdout.write(JSON.stringify(v) + "\\n"); process.exit(0); };
@@ -132,6 +140,21 @@ const reset = async (m = "view") => {
   }
   writeFileSync(mode, m); writeFileSync(log, ""); writeFileSync(exitedLog, "");
 };
+// polyforge#238 defect 3 (review r1#1): the watch route starts the override
+// and params reads beside the watch read and drops them unawaited on an ended
+// ticket. Before a reset clears the logs, both reads must have written their
+// own argv — a reset that only counts exits cannot see a child that has not
+// reached its argv append yet, and that late argv would land in the next
+// test's log. Bounded; a timeout fails the test, never a fixed sleep.
+const awaitDroppedReads = async () => {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const lines = argv();
+    if (lines.some((a) => a.includes("override")) && lines.some((a) => a.includes("params"))) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  assert.fail("the dropped override/params reads did not write their own argv inside the bound");
+};
 
 test("both routes re-check the host/origin gate in-route; the override route is POST-only, the watch route GET-only, never 5xx", () => {
   for (const [name, source] of [["override", overrideSource], ["watch", watchSource]]) {
@@ -208,7 +231,9 @@ test("polyforge#48 AC3: an ended ticket's answer never carries the view", async 
   assert.equal(body.status?.overrideView, undefined, "the composed view never rides an ended ticket's answer");
   assert.equal(body.status?.stepTiers, undefined, "the step-tier catalog composes for a live ticket only (85b2)");
   // The next reset waits for these dropped reads to exit before it clears
-  // the logs (polyforge#238 defect 3).
+  // the logs; the argv wait first keeps a child that has not reached its argv
+  // append yet from landing in the next test (polyforge#238 defect 3, r1#1).
+  await awaitDroppedReads();
 });
 
 test("the composed view read names the Cell exactly like the watch read (a slug is a valid ref)", async () => {
