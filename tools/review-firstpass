@@ -444,13 +444,14 @@ def _is_blocking_line(label, section_blocking, section_non):
 
 
 def _item_number(label, fallback):
-    """(item, round) from the item's own `#<k>`/`1.` first, then a leading
-    `r<n>#<k>` reference (the round it names is the item's own when it is the
-    round being parsed); else fallback."""
+    """(item, round) from the item's own leading `#<k>`, a leading `r<n>#<k>`
+    reference (the round it names is the item's own when it is the round being
+    parsed) or a leading `1.`; else fallback. A number anywhere else in the
+    prose — `polyforge#117` — is not an item number."""
     m = re.match(r'^r(\d+)#(\d+)', label)
     if m:
         return int(m.group(2)), int(m.group(1))
-    m = re.search(r'(?<!r\d)#(\d+)', label)
+    m = re.match(r'^#(\d+)', label)
     if m:
         return int(m.group(1)), None
     m = re.match(r'^(\d+)\.', label)
@@ -461,35 +462,27 @@ def _item_number(label, fallback):
 
 def parse_blocking_items(text, round_no):
     """The blocking items of one review round: [{item, class, label}], one
-    per distinct item number, by first appearance. A line that only mentions
-    an earlier round's item (`r<n>#<k>` with n != round_no) is not an item."""
+    per distinct item number, by first appearance. Only a line that opens
+    with its own item number is an item — a body list, a sub-bullet or a
+    prose mention is not; a line that only mentions an earlier round's item
+    (`r<n>#<k>` with n != round_no) is not an item either."""
     items, seen = [], set()
     section_blocking = section_non = False
     for line in text.split('\n'):
         h = BLOCK_HEADING.match(line)
-        if h:
-            if len(h.group(1)) == 2:
-                body = h.group(2).strip()
-                section_blocking = bool(BLOCK_SECTION_BLOCK.search(body)) and not BLOCK_SECTION_NON.search(body)
-                section_non = bool(BLOCK_SECTION_NON.search(body))
-                continue
-            label = _item_label(line)
-            num, ref_round = _item_number(label, None)
-            if num is None or (ref_round is not None and ref_round != round_no):
-                continue
-            if _is_blocking_line(label, section_blocking, section_non) and num not in seen:
-                seen.add(num)
-                items.append({'item': num, 'class': _class_of(label), 'label': label})
+        if h and len(h.group(1)) == 2:
+            body = h.group(2).strip()
+            section_blocking = bool(BLOCK_SECTION_BLOCK.search(body)) and not BLOCK_SECTION_NON.search(body)
+            section_non = bool(BLOCK_SECTION_NON.search(body))
             continue
-        m = BLOCK_LIST.match(line)
-        if not m or section_non:
+        if section_non:
             continue
         label = _item_label(line)
-        numbered = bool(BLOCK_REF.search(label) or re.search(r'#\d+', label))
-        if not numbered and not section_blocking:
+        starts = bool(re.match(r'^(?:#\d+|r\d+#\d+)', label))
+        if not starts and not section_blocking:
             # the old numbered form under `## 发现`: `1. **ac_gap AC2**`
-            numbered = bool(re.match(r'^\d+\.', label) or label.startswith('**'))
-        if not numbered:
+            starts = bool(re.match(r'^\d+\.', label))
+        if not starts:
             continue
         num, ref_round = _item_number(label, None)
         if num is None or (ref_round is not None and ref_round != round_no):
