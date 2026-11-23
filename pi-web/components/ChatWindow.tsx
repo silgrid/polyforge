@@ -1219,10 +1219,23 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
       let cursor: string | null = history.historyCursor;
       let hasMore = true;
       while (!cancelled && hasMore && cursor) {
+        // The same paging discipline the search jump uses: one page at a
+        // time, with the scroll anchor kept so the reader's viewport does
+        // not jump while older rows are prepended (r2#8).
+        if (loadingOlderRef.current) break;
+        loadingOlderRef.current = true;
+        const container = scrollContainerRef.current;
+        if (container) prevScrollAnchorRef.current = captureScrollAnchor(
+          container.scrollHeight,
+          container.scrollTop,
+          container.querySelector<HTMLElement>("[data-entry-id]")?.dataset.entryId ?? null,
+        );
         const context = await loadOlderPage(session.id, cursor, { tail: 200 });
+        loadingOlderRef.current = false;
         if (!context) break;
         const found = findPiSubagentLaunchEntryId(toolCallId, context.messages, context.entryIds);
         if (found) {
+          prevScrollAnchorRef.current = null;
           if (!cancelled) setPiJump({ status: "found", entryId: found });
           return;
         }

@@ -10,6 +10,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   mergePiSubagentEntries,
   piSubagentRunFromJson,
+  piSubagentSnapshotReplaces,
   piSubagentSteerRequest,
   piSubagentTranscriptFromJson,
   type PiSubagentEntry,
@@ -157,14 +158,16 @@ export class PiSubagentPanelController {
         this.launchResolved = true;
       }
       if (transcript.ok) {
+        // A replacement (first load, or a snapshot with no overlap after a
+        // pause longer than its tail) adopts the snapshot's own hasMore: the
+        // missing middle must stay reachable through 「加载更早」 (r3#2).
+        const replaced = piSubagentSnapshotReplaces(this.state.entries, transcript.value.entries);
         this.apply({
           run,
           phase: "ready",
           error: null,
           entries: mergePiSubagentEntries(this.state.entries, transcript.value.entries, mode),
-          // A poll never re-enables 「加载更早」: only the first load and an
-          // earlier page decide whether more history exists (Q5).
-          hasEarlier: mode === "replace" ? transcript.value.hasEarlier : this.state.hasEarlier,
+          hasEarlier: mode === "replace" || replaced ? transcript.value.hasEarlier : this.state.hasEarlier,
           cwd: transcript.value.cwd ?? this.state.cwd,
           launchToolCallId: this.launchToolCallId,
         });

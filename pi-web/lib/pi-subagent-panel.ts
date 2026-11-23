@@ -133,10 +133,24 @@ export function mergePiSubagentEntries(
   // would silently drop the middle. Show the snapshot whole instead; the
   // snapshot's own `hasMore` still offers the older history.
   const existingIds = new Set(existing.map((entry) => entry.id));
-  if (existing.length > 0 && incoming.length > 0 && !incoming.some((entry) => existingIds.has(entry.id))) {
+  if (piSubagentSnapshotReplaces(existing, incoming)) {
     return dedupe(incoming);
   }
   return [...existing, ...dedupe(incoming.filter((entry) => !existingIds.has(entry.id)))];
+}
+
+/**
+ * Whether an append snapshot shares nothing with the loaded transcript: a
+ * pause longer than the snapshot's tail. The caller must then adopt the
+ * snapshot's own `hasEarlier` too, or the missing middle stays unreachable.
+ */
+export function piSubagentSnapshotReplaces(
+  existing: readonly PiSubagentEntry[],
+  incoming: readonly PiSubagentEntry[],
+): boolean {
+  if (existing.length === 0 || incoming.length === 0) return false;
+  const existingIds = new Set(existing.map((entry) => entry.id));
+  return !incoming.some((entry) => existingIds.has(entry.id));
 }
 
 function dedupe(entries: readonly PiSubagentEntry[]): PiSubagentEntry[] {
