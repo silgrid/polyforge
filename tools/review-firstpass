@@ -641,22 +641,35 @@ def _table_cells(line):
     return [c.strip() for c in s.strip('|').split('|')]
 
 
+def _disposition_ref(cell):
+    """the `r<n>#<k>` a cell or clause opens with, after stripping list,
+    bold and backtick markers."""
+    s = cell.strip().strip('`*_').strip()
+    return BLOCK_REF.match(s)
+
+
 def _dispositions(line):
     """[(ref, status_text)] of a disposition line: a line that opens with a
-    `r<n>#<k>` reference, or a table row whose first cell does. Each
-    `；`/`;`/`。`-separated clause starts its own subject. Any other
-    reference on the line is a mention, not a disposition."""
+    `r<n>#<k>` reference, or a table row whose first cell does. A table row
+    uses only its first status-bearing cell after the reference cell; a
+    non-table line splits on `；`/`;`/`。` and each clause starts its own
+    subject. Any other reference is a mention, not a disposition."""
     cells = _table_cells(line)
     if cells is not None:
         if not cells:
             return []
-        m = BLOCK_REF.match(cells[0])
+        m = _disposition_ref(cells[0])
         if not m:
             return []
-        return [((int(m.group(1)), int(m.group(2))), ' | '.join(cells[1:]))]
+        for cell in cells[1:]:
+            if outcome_of_line(cell) is not None:
+                return [((int(m.group(1)), int(m.group(2))), cell)]
+        return []
     label = _item_label(line)
+    label = re.sub(r'^\d+\.\s*', '', label)
     out = []
     for clause in re.split(r'[；;。]', label):
+        clause = clause.strip().strip('`*_').strip()
         m = BLOCK_REF.match(clause)
         if m:
             out.append(((int(m.group(1)), int(m.group(2))), clause[m.end():]))
