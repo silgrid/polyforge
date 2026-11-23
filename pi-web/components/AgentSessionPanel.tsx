@@ -13,10 +13,8 @@ interface Props {
   selectedSessionId: string;
   runningSessionIds: ReadonlySet<string>;
   onSelectSession: (session: SessionInfo) => void;
-  /** Subagents with a viewer tab in the open right panel. */
-  openSubagentTabIds: ReadonlySet<string>;
-  /** Opens a subagent's read-only viewer tab in the right panel (the `Agent` card's button), or closes it when open. */
-  onToggleSubagentTab: (sessionId: string, label: string) => void;
+  /** Opens a subagent's in-chat progress panel (polyforge#255 Q3 A); the row body is the entry. */
+  onOpenSubagent: (sessionId: string, label: string) => void;
 }
 
 const STATS_POLL_MS = 3000;
@@ -171,17 +169,17 @@ function AgentRow({
   running,
   usage,
   onSelect,
-  tabShown,
-  onToggleTab,
+  onOpen,
 }: {
   session: SessionInfo;
   main?: boolean;
   selected: boolean;
   running: boolean;
   usage?: SessionUsageSummary;
+  /** The main row's session selection. */
   onSelect: () => void;
-  tabShown?: boolean;
-  onToggleTab?: () => void;
+  /** A subagent row's in-chat panel; absent on the main row. */
+  onOpen?: () => void;
 }) {
   const { locale, t } = useI18n();
   const relation = session.relation?.kind === "subagent" ? session.relation : null;
@@ -211,7 +209,8 @@ function AgentRow({
         type="button"
         role="option"
         aria-selected={selected}
-        onClick={onSelect}
+        onClick={main ? onSelect : onOpen}
+        aria-disabled={main ? undefined : selected || undefined}
         style={{
           flex: 1,
           minWidth: 0,
@@ -224,7 +223,7 @@ function AgentRow({
           border: "none",
           background: "transparent",
           color: "var(--text)",
-          cursor: "pointer",
+          cursor: !main && selected ? "default" : "pointer",
           textAlign: "left",
         }}
         onMouseEnter={(event) => {
@@ -270,28 +269,11 @@ function AgentRow({
           )}
         </span>
       </button>
-      {onToggleTab && (
-        <button
-          type="button"
-          onClick={onToggleTab}
-          title={t(tabShown ? "subagent.closeTab" : "subagent.openTab")}
-          aria-label={t(tabShown ? "subagent.closeTab" : "subagent.openTab")}
-          aria-pressed={tabShown}
-          style={{ width: 36, display: "grid", placeItems: "center", border: "none", borderLeft: "1px solid var(--border)", background: "none", color: tabShown ? "var(--accent)" : "var(--text-muted)", cursor: "pointer", flexShrink: 0 }}
-          onMouseEnter={(event) => { event.currentTarget.style.background = "var(--bg-hover)"; if (!tabShown) event.currentTarget.style.color = "var(--text)"; }}
-          onMouseLeave={(event) => { event.currentTarget.style.background = "none"; if (!tabShown) event.currentTarget.style.color = "var(--text-muted)"; }}
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <rect x="3" y="4" width="18" height="16" rx="2" /><path d="M15 4v16" />
-            {tabShown && <path d="M15 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4z" fill="currentColor" />}
-          </svg>
-        </button>
-      )}
     </div>
   );
 }
 
-export function AgentSessionPanel({ rootSession, subagents, selectedSessionId, runningSessionIds, onSelectSession, openSubagentTabIds, onToggleSubagentTab }: Props) {
+export function AgentSessionPanel({ rootSession, subagents, selectedSessionId, runningSessionIds, onSelectSession, onOpenSubagent }: Props) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
   const sortedSubagents = useMemo(() => [...subagents].sort((a, b) => {
@@ -401,10 +383,12 @@ export function AgentSessionPanel({ rootSession, subagents, selectedSessionId, r
               running={runningSessionIds.has(session.id)}
               usage={usage[session.id]}
               onSelect={() => onSelectSession(session)}
-              tabShown={openSubagentTabIds.has(session.id)}
-              onToggleTab={() => {
+              onOpen={() => {
+                // The chat already showing the child is inert (Q4): opening its
+                // panel there would embed the session in itself.
+                if (session.id === selectedSessionId) return;
                 const relation = session.relation?.kind === "subagent" ? session.relation : null;
-                onToggleSubagentTab(session.id, relation?.description || relation?.profile || sessionTitle(session));
+                onOpenSubagent(session.id, relation?.description || relation?.profile || sessionTitle(session));
               }}
             />
           ))}

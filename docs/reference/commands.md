@@ -1203,7 +1203,12 @@ hold no credential.
   a `none` reason; an unmapped ruling is red, named with its number and
   text; a ticket without such a section asks for no mapping section, an
   unmaterialized work item reads as no ruling and a corrupt one is not
-  judged), `build` (each unit resolved, its commit
+  judged; a declared path is repository-root relative, and a path relative
+  to a nested project root — a directory carrying its own tracked
+  `.polyforge/verify-scope.conf` — names that root's file when the change
+  base's or HEAD's committed tree holds it under exactly one such root: a
+  repository-root path wins and an ambiguous relative path stays
+  undeclared), `build` (each unit resolved, its commit
   pair test-first, its `test_weakened` hunks and, with `--replay`, its run
   replayed on the tree of its test commit — a unit declared `pre_existing_red`
   (its reproduction test already exists and is red before the change, so it
@@ -1415,6 +1420,15 @@ full reference.
   per-unit `--repo` run always on the host; a container the close cannot
   build, start or keep is the run's error (exit 2, never a red of the
   change's, never a host stand-in);
+  the close's order is fixed: the scoped selection green, then the facts,
+  then the self-review, then the hand-off, and once the scoped selection
+  has run a step that changes no code does not re-run it (the reuse key is
+  the command text, the root's subtree tree hash and the declared
+  prerequisites, so changing artifacts alone is not a code change) while a
+  changed tree re-runs only itself and on a host close reuses the untouched roots by `--reuse` (a boxed close consumes none), and a
+  red is reported from the result file's own baseline record
+  (`details.baseline` and its `reds[]` classification), never reproduced by
+  hand on the base worktree;
   once per touched repo, after its fast checks; a command whose reuse
   key — the same key the `--repo` run reuses by: its root, its text as
   its own report gave it, its root's subtree tree hash of the working

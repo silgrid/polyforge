@@ -5,7 +5,7 @@
 //	dist/workstation/compose.yaml, dist/workstation/smoke.sh,
 //	dist/workstation/env-whitelist.sh, dist/workstation/Caddyfile,
 //	test/testdata/workstation-smoke-stub/docker, .dockerignore,
-//	.polyforge/verify-scope.conf
+//	.polyforge/verify-scope.conf, docs/reference/release.md
 package test
 
 // w535_workstation_image_test.go — polyforge#161 (84-image): the
@@ -1322,6 +1322,15 @@ func w535SmokePersist(t *testing.T, mutate func(dir string)) (string, error) {
 	if mutate != nil {
 		mutate(dir)
 	}
+	// polyforge#168: the persist pass also writes and compares the onboarding
+	// wizard's completion record through Pi Web's own API. The fake server is
+	// real (the stub runs the smoke's in-container python validator for real);
+	// the scenario's changed-value flag flips its answers after the baseline.
+	onboarding := &w168Server{}
+	server := w168StartServer(t, onboarding)
+	if _, err := os.Stat(filepath.Join(dir, "persist-onboarding-changed")); err == nil {
+		onboarding.changeAfter = 2
+	}
 	bin := t.TempDir()
 	if err := os.Symlink(filepath.Join(root, "test", "testdata", "workstation-smoke-stub", "docker"), filepath.Join(bin, "docker")); err != nil {
 		t.Fatal(err)
@@ -1332,16 +1341,18 @@ func w535SmokePersist(t *testing.T, mutate func(dir string)) (string, error) {
 		"HOME=" + os.Getenv("HOME"),
 		"W535_SMOKE_SCENARIO=" + dir,
 		"WORKSTATION_SMOKE_STUB_PORT=38421",
+		"WORKSTATION_SMOKE_ONBOARDING_URL=" + server.URL,
 	}
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
 
-// TestWorkstationSmokePersist — the persist pass (polyforge#177, AC2):
-// two down/up cycles and a NEW TAG image must keep the six persisted
-// facts BY VALUE (never existence only), the tag switch rides the up,
-// and the exported copy runs first-boot and persist from an empty
-// directory without building.
+// TestWorkstationSmokePersist — the persist pass (polyforge#177, AC2;
+// polyforge#168's seventh fact): two down/up cycles and a NEW TAG image
+// must keep the persisted facts BY VALUE (never existence only) — the six
+// volume facts plus the onboarding wizard's completion record — the tag
+// switch rides the up, and the exported copy runs first-boot and persist
+// from an empty directory without building.
 func TestWorkstationSmokePersist(t *testing.T) {
 	root := w535Root(t)
 	if err := exec.Command("sh", "-n", filepath.Join(root, "dist/workstation/smoke.sh")).Run(); err != nil {
@@ -1352,8 +1363,8 @@ func TestWorkstationSmokePersist(t *testing.T) {
 		if err != nil {
 			t.Fatalf("the persist pass must pass against a healthy scenario:\n%s", out)
 		}
-		// the six items are each named and compared by value
-		for _, item := range []string{"harness login marker", "cli.toml", "workspace file", "AIHub user row", "Podman image", "components current"} {
+		// the seven items are each named and compared by value
+		for _, item := range []string{"harness login marker", "cli.toml", "workspace file", "AIHub user row", "Podman image", "components current", "onboarding state"} {
 			if !strings.Contains(out, item) {
 				t.Fatalf("the persist pass must name and compare %s:\n%s", item, out)
 			}
@@ -1408,6 +1419,7 @@ func TestWorkstationSmokePersist(t *testing.T) {
 		"persist-components-link-changed":   "the components current changed after",
 		"persist-components-digest-changed": "the components current manifest digest changed after",
 		"persist-components-stat-changed":   "the components current mtime/inode identity changed after",
+		"persist-onboarding-changed":        "the onboarding state changed after",
 	} {
 		flag, phrase := flag, phrase
 		t.Run("a changed value fails the comparison ("+flag+")", func(t *testing.T) {
@@ -1491,6 +1503,7 @@ func TestWorkstationSmokeHostDependencies(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	onboarding := w168StartServer(t, &w168Server{})
 	run := func(args ...string) string {
 		t.Helper()
 		cmd := exec.Command("sh", append([]string{filepath.Join(root, "dist/workstation/smoke.sh")}, args...)...)
@@ -1499,6 +1512,7 @@ func TestWorkstationSmokeHostDependencies(t *testing.T) {
 			"HOME=" + os.Getenv("HOME"),
 			"W535_SMOKE_SCENARIO=" + dir,
 			"WORKSTATION_SMOKE_STUB_PORT=38421",
+			"WORKSTATION_SMOKE_ONBOARDING_URL=" + onboarding.URL,
 		}
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -1781,4 +1795,51 @@ func TestWorkstationSmokeCleansUpOwnProject(t *testing.T) {
 			t.Fatalf("the EXIT trap must down -v the run's own project after the up, even on a die:\n%s", out)
 		}
 	})
+}
+
+// TestW168CleanRoomChecklist pins AC4's document half (polyforge#168): the
+// manual checklist and the sanitized evidence template live in
+// docs/reference/release.md, name the actual delivered commands/assets
+// (#86's five host files, the published image tag, the sandbox repo, the Mac
+// arm64 pass), mark the team path NOT RUN and the two-release upgrade as the
+// tracked polyforge#169, and keep credentials out of the evidence.
+func TestW168CleanRoomChecklist(t *testing.T) {
+	body := w254Read(t, "docs/reference/release.md")
+	at := strings.Index(body, "## Clean-room acceptance")
+	if at < 0 {
+		t.Fatal("polyforge#168: docs/reference/release.md must carry the clean-room acceptance checklist (AC4)")
+	}
+	section := body[at:]
+	if next := strings.Index(section[len("## Clean-room acceptance"):], "\n## "); next >= 0 {
+		section = section[:len("## Clean-room acceptance")+next]
+	}
+	for _, want := range []string{
+		"sh smoke.sh onboarding",                // AC1's automated half
+		"sh smoke.sh persist",                   // AC4's persistence proof
+		"/opt/polyforge/host-files",             // #86 Q8's export entry
+		"ghcr.io/silgrid/polyforge-workstation", // the published image
+		"PI_WEB_PASSWORD",                       // the one required input (no .env.example)
+		"silgrid/polyforge-sandbox",             // AC2's ticket-sized test repo
+		"gh pr view",                            // AC2's merged-PR proof
+		"pf --json doctor",                      // AC2's health-row evidence
+		"podman-verify",                         // AC5's in-container proof
+		"arm64",                                 // AC5's Apple-silicon image
+		"stdin",                                 // the credential channel
+		".env",                                  // the one alternative credential channel
+		"NOT RUN",                               // AC3 this version
+		"#169",                                  // the tracked two-release upgrade test
+		"upgrade.md",                            // AC4's #92 in-container upgrade pointer
+		"Redaction",                             // the sanitized evidence template
+	} {
+		if !strings.Contains(section, want) {
+			t.Fatalf("polyforge#168: the clean-room section lacks %q", want)
+		}
+	}
+	// The template enumerates the fields a piece of evidence carries, and
+	// the credentials it never carries.
+	for _, want := range []string{"work item", "PR", "doctor", "token", "key", "screenshot"} {
+		if !strings.Contains(section, want) {
+			t.Fatalf("polyforge#168: the sanitized evidence template must name %q", want)
+		}
+	}
 }
