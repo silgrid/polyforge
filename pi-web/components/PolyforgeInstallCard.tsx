@@ -162,13 +162,6 @@ export function PolyforgeInstallCard({ active, refreshKey, onFinished }: {
 
   const start = async (force: boolean) => {
     if (imageManaged) return;
-    // A run only ever installs (pf absent), updates a pf behind the channel, or
-    // writes a missing cli.toml key; an ahead/current/unknown installed pf has
-    // no update entry (polyforge#256 B2 — no path may send a downgrade POST).
-    if (!versions) return;
-    const currentFlags = polyforgeVersionFlags(versions);
-    if (currentFlags.aheadOfChannel) return;
-    if (versions.pfPresent && !currentFlags.updateAvailable && !versions.needsConfig) return;
     setProblem(null);
     // the key never stays in the form, whatever the outcome — a refused
     // check included
@@ -283,6 +276,14 @@ export function PolyforgeInstallView({
   // (polyforge#256 B2).
   const canRun = Boolean(versions && !flags?.aheadOfChannel
     && (!versions.pfPresent || flags?.updateAvailable || versions.needsConfig));
+  // The one entry's label says what the run would do (owner ruling 2026-11-23,
+  // polyforge#256 r1#7 1A): an installed, current pf whose cli.toml still
+  // needs its key writes the configuration, it never "updates" a same version.
+  const startLabel = !versions?.pfPresent
+    ? t("polyforge.install.install")
+    : flags?.updateAvailable
+      ? t("polyforge.install.update")
+      : t("polyforge.install.configure");
   // A run this page lost the stream of is no longer shown as running.
   const shownState = run?.state === "running" && streamError ? "lost" : run?.state;
   const conclusion = !run
@@ -375,7 +376,7 @@ export function PolyforgeInstallView({
       {!imageManaged && canRun && (
         <div className="polyforge-install-actions">
           <ConfigButton variant="primary" disabled={!versions || running || posting} onClick={onStart} data-pf-install-start>
-            {versions?.pfPresent ? t("polyforge.install.update") : t("polyforge.install.install")}
+            {startLabel}
           </ConfigButton>
           {running && <span className="config-scope-switch-reason">{t("polyforge.install.busyReason")}</span>}
         </div>

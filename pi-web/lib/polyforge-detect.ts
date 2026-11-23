@@ -29,11 +29,6 @@ import { probePolyforgeVersion, readPolyforgeOpsStatus } from "./polyforge-statu
 
 import { isPolyforgeVersionBelowMinimum } from "./polyforge-version";
 
-// The browser-safe comparison lives in lib/polyforge-version.ts (the install
-// card imports that module without the Node/SDK chain this one carries); keep
-// the old names exported from here so every server caller stays put.
-export { POLYFORGE_MINIMUM_PF_VERSION, isPolyforgeVersionBelowMinimum } from "./polyforge-version";
-
 /** The sha256 (hex) of the internal line's origin owner/repo pair — the
  *  only form the pair is stored in (never the plaintext pair, never a URL,
  *  never a path). */

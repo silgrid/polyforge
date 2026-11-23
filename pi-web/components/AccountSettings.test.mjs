@@ -20,7 +20,7 @@ const jiti = createJiti(import.meta.url, {
 });
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
-const { AccountClaudeCard, AccountHarnessPane, ClaudeCredentialForm, CredentialWriteResults } = await jiti.import("./AccountSettings.tsx");
+const { AccountClaudeCard, AccountHarnessPane, AccountReadStatus, ClaudeCredentialForm, CredentialWriteResults } = await jiti.import("./AccountSettings.tsx");
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
 
 const h = React.createElement;
@@ -311,18 +311,39 @@ test("account pending, success, empty, failure and refresh are distinct", async 
   hook.unmount();
 });
 
-test("B3: the shell shows the pending and error states, and a finished read without claude is its own explanation", async () => {
-  const { readFile } = await import("node:fs/promises");
-  const source = await readFile(new URL("./AccountSettings.tsx", import.meta.url), "utf8");
-  assert.match(source, /data-account-loading=""/, "the shell renders a pending status");
-  assert.match(source, /role="status" data-account-loading/, "the pending status is a live region");
-  assert.match(source, /data-account-read-error=""/, "the shell renders a visible read error");
-  assert.match(source, /role="alert" data-account-read-error/, "the read error is announced");
-  // a read that finished without a claude state is not still loading
-  const absent = renderToStaticMarkup(h(I18nProvider, null, h(AccountClaudeCard, { claude: null, loaded: true })));
-  assert.match(absent, /data-claude-status="absent"/);
-  assert.match(absent, /read finished/, "the finished-but-unavailable explanation is shown");
-  const pendingCard = renderToStaticMarkup(h(I18nProvider, null, h(AccountClaudeCard, { claude: null, loaded: false })));
-  assert.match(pendingCard, /data-claude-status="loading"/, "a read still in flight says it is loading");
-  assert.match(pendingCard, /Reading the account facts/, "the loading text is localized");
+test("B3: the shell renders the pending status and the retry line, and a finished read without claude is its own explanation", () => {
+  const t = (key) => key;
+  const loading = renderToStaticMarkup(h(I18nProvider, null, h(AccountReadStatus, { loading: true, readError: null, t })));
+  assert.match(loading, /role="status"/, "the first read is a live pending status");
+  assert.match(loading, /data-account-loading/);
+  assert.ok(loading.includes("settings.accountLoading"), "the pending text is the localized key");
+
+  const failed = renderToStaticMarkup(h(I18nProvider, null, h(AccountReadStatus, { loading: false, readError: "settings.accountReadFailed", t })));
+  assert.match(failed, /role="alert"/, "a failed read is announced");
+  assert.match(failed, /data-account-read-error/);
+  assert.ok(failed.includes("settings.accountReadFailed"));
+  assert.ok(!failed.includes("data-account-loading"), "a failed read is never still pending");
+
+  const idle = renderToStaticMarkup(h(I18nProvider, null, h(AccountReadStatus, { loading: false, readError: null, t })));
+  assert.equal(idle, "", "a settled, successful read has no status line");
+
+  // the claude pane's own state: loading while in flight, absent once the read finished without claude
+  const pendingPane = renderToStaticMarkup(h(I18nProvider, null, h(AccountHarnessPane, {
+    harness: "claude", read: null, capabilities: null, onOpenLoginTerminal: noop, loading: true,
+  })));
+  assert.match(pendingPane, /data-claude-status="loading"/, "a read still in flight says it is loading");
+  assert.match(pendingPane, /Reading the account facts/, "the loading text is localized");
+  const failedPane = renderToStaticMarkup(h(I18nProvider, null, h(AccountHarnessPane, {
+    harness: "claude", read: null, capabilities: null, onOpenLoginTerminal: noop, loading: false,
+  })));
+  assert.match(failedPane, /data-claude-status="absent"/, "a finished read without claude is not still loading");
+  assert.ok(!failedPane.includes("Reading the account facts"), "the failed read never claims to be reading");
+  assert.match(failedPane, /read finished/, "the finished-but-unavailable explanation is shown");
+
+  // a read that answered claude keeps the data, regardless of the loading flag
+  const withClaude = renderToStaticMarkup(h(I18nProvider, null, h(AccountClaudeCard, {
+    claude: { available: true, loggedIn: true, authMethod: "oauth_token", configDirectory: "/home/op/.claude", consoleProfile: "absent", envCredentials: {} },
+    loaded: true,
+  })));
+  assert.match(withClaude, /data-claude-status="logged-in"/);
 });

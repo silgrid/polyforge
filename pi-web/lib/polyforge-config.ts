@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { polyforgeNamedCell, type PolyforgeConfigScope } from "./polyforge-cells-pure";
 import { pinPolyforgeScope } from "./polyforge-config-scope";
-import { isPolyforgeVersionBelowMinimum } from "./polyforge-detect";
+import { isPolyforgeVersionBelowMinimum } from "./polyforge-version";
 import { polyforgePfBin } from "./polyforge-pf-bin";
 import {
   POLYFORGE_CONFIG_STEP_TIERS_MINIMUM_PF_VERSION,

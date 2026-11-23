@@ -15,7 +15,7 @@ import {
   POLYFORGE_CONFIG_PANEL_MINIMUM_PF_VERSION,
   POLYFORGE_CONFIG_SUMMARIZE_MINIMUM_PF_VERSION,
 } from "./polyforge-config";
-import { isPolyforgeVersionBelowMinimum } from "./polyforge-detect";
+import { isPolyforgeVersionBelowMinimum } from "./polyforge-version";
 import { polyforgePfBin } from "./polyforge-pf-bin";
 import { probePolyforgeVersion } from "./polyforge-status";
 import {

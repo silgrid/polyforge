@@ -246,14 +246,14 @@ probe; the section UI itself is in [settings-ui.md](settings-ui.md).
   pi's scope-all projection behind /api/models and claude's aliases plus
   native modelPicker names — recomputed per write, the file's own retired
   candidates preserved); every one of those refusals precedes the write
-  spawn. The write path stays for the CLI and any direct POST even though the
-  models page's tier column is read-only (polyforge#256 B7: the labels name
-  the tier, the editor entry and its write callback are gone, so opening the
-  page writes nothing); the server's gates are unchanged — add-first, a
-  partial failure reported per harness with the draft kept, and every step
-  re-reading the Host catalog together with the file hash from the SAME GET,
-  so the plan derives from the very state the CAS guards — a concurrent
-  external write either joins the plan or refuses the write with 409; a
+  spawn. The write path serves the CLI and any direct POST; the models page's
+  tier column is read-only (polyforge#256 B7: it shows the labels only, the
+  editor entry and its write callback are gone, so opening the page writes
+  nothing). The write gate itself is Host-only (`{host: true}`; a Cell scope
+  is a 400), only NEW candidates must be defined models (the file's own
+  retired candidates are preserved), a `set` list must be non-empty (an empty
+  tier is emptied by `unset`), and `--expect-state` carries the file hash —
+  a concurrent change makes pf refuse with 409; a
   rollback
   derives its scope from the key, so a pre-#286 entry recorded against a
   workspace yaml rolls back through the same flat path as a new entry;

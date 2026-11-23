@@ -112,14 +112,8 @@ export function isPolyforgeVersionBelowMinimum(
   minimum: string = POLYFORGE_MINIMUM_PF_VERSION,
   unknownIsBelow = false,
 ): boolean {
-  const parsed = typeof version === "string" ? parsePolyforgeVersion(version) : null;
-  const floor = parsePolyforgeVersion(minimum);
-  if (!floor) return false;
-  if (!parsed) return unknownIsBelow;
-  const core = versionLineRank(parsed.core);
-  const floorCore = versionLineRank(floor.core);
-  for (let i = 0; i < 3; i++) {
-    if (core[i] !== floorCore[i]) return core[i] < floorCore[i];
-  }
-  return comparePreRelease(parsed.preRelease, floor.preRelease) < 0;
+  if (parsePolyforgeVersion(minimum) === null) return false;
+  if (typeof version !== "string" || parsePolyforgeVersion(version) === null) return unknownIsBelow;
+  const sign = comparePolyforgeVersions(version, minimum);
+  return sign !== null && sign < 0;
 }

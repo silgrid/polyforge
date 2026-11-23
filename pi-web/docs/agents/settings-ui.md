@@ -359,14 +359,17 @@ claim.
   `tools/install.sh` shows only while a run is relevant
   (`polyforgeInstallRelevant`: pf absent, the channel's latest strictly
   ahead of the installed pf, or cli.toml still needs its key) — a current
-  or ahead pf shows none of it. polyforge#256 B2 (owner ruling): every
-  update entry — the main button, retry and force — exists only while the
-  installed version is **known below** the channel; equal and unknown
-  versions keep their status and 「重新检测」 only, and an installed version
-  ahead of the channel shows its own note (「已安装预发布版（高于发布渠道）」
-  for a pre-release, 「已安装版本高于发布渠道」 for a stable one) with no
-  install/update/force control and no POST path (the start guard re-checks
-  the precedence before the one `fetch`). The comparison is
+  or ahead pf shows none of it. polyforge#256 B2 (owner ruling 2026-11-23,
+  1A/2A): every update entry — the main button, retry and force — exists only
+  while the installed version is **known below** the channel; equal and
+  unknown versions keep their status and 「重新检测」 only, with one exception:
+  an installed pf whose `cli.toml` still needs its `api_key` (`needsConfig`)
+  runs install.sh once to write the configuration, and that state labels the
+  same button 「写入配置」 (「安装 pf」 when pf is absent, 「更新 pf」 when below)
+  — it is never called an update. An installed version ahead of the channel
+  shows its own note (「已安装预发布版（高于发布渠道）」 for a pre-release,
+  「已安装版本高于发布渠道」 for a stable one) with no install/update/force
+  control and no POST path, `needsConfig` included. The comparison is
   `lib/polyforge-version.ts` (SemVer precedence, +build metadata ignored),
   shared with the step-tier floor. While no `cli.toml` carries an
   `api_key` (`needsConfig`, install.sh's `has_config` rule, the one the route

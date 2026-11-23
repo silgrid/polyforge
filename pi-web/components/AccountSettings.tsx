@@ -78,12 +78,15 @@ function credentialText(t: (key: string) => string, row: AccountHarnessRow): str
 }
 
 /** One harness's interactive card + the per-Cell rows. */
-export function AccountHarnessPane({ harness, read, capabilities, onOpenLoginTerminal, onSaveCredentials }: {
+export function AccountHarnessPane({ harness, read, capabilities, onOpenLoginTerminal, onSaveCredentials, loading = false }: {
   harness: "pi" | "claude";
   read: AccountRead | null;
   capabilities: AccountHarnessCap | null;
   onOpenLoginTerminal: (id: string) => void;
   onSaveCredentials?: (body: Record<string, unknown>) => void;
+  /** The read is still in flight (polyforge#256 r1#1): a failed read is
+   *  finished, never still "reading". */
+  loading?: boolean;
 }) {
   const { t } = useI18n();
   const rows = useMemo(
@@ -95,7 +98,7 @@ export function AccountHarnessPane({ harness, read, capabilities, onOpenLoginTer
     <div data-account-pane={harness} className="settings-general-pane-host">
       <section className="settings-general-section" data-account-card="interactive">
         <h3 className="settings-general-heading">{t("settings.accountInteractiveSession")}</h3>
-        {harness === "claude" ? <AccountClaudeCard claude={read?.claude ?? null} loaded={read !== null} /> : <PiAccountLogin />}
+        {harness === "claude" ? <AccountClaudeCard claude={read?.claude ?? null} loaded={!loading} /> : <PiAccountLogin />}
         {commands.length > 0 && (
           <ConfigDetailActions>
             {commands.map((command) => (
@@ -277,6 +280,20 @@ export function CredentialWriteResults({ results }: { results: { target: string;
   );
 }
 
+/** The account read's visible state (polyforge#256 B3/r1#2): the pending
+ *  status while a read is in flight, the retry line once it failed. A
+ *  presentational component, so the shell's two visible states are pinned by
+ *  rendering rather than by reading the source. */
+export function AccountReadStatus({ loading, readError, t }: {
+  loading: boolean;
+  readError: string | null;
+  t: (key: string, params?: Record<string, string | number>) => string;
+}) {
+  if (loading) return <p role="status" data-account-loading="" className="settings-general-description">{t("settings.accountLoading")}</p>;
+  if (readError) return <p role="alert" data-account-read-error="" className="config-add-source-error">{t(readError)}</p>;
+  return null;
+}
+
 /** The account read's state (polyforge#256 B3): an explicit pending state
  *  (first read and refresh alike), the last good read kept across a refresh,
  *  a visible error the refresh button retries, and a request sequence that
@@ -290,7 +307,6 @@ export interface AccountReadState {
 }
 
 export function useAccountRead(): AccountReadState {
-  const { t } = useI18n();
   const [read, setRead] = useState<AccountRead | null>(null);
   const [loading, setLoading] = useState(true);
   const [readError, setReadError] = useState<string | null>(null);
@@ -309,10 +325,10 @@ export function useAccountRead(): AccountReadState {
           if (seq !== requestRef.current) return;
           setRead(data);
         } else {
-          setReadError(t("settings.accountReadFailed"));
+          setReadError("settings.accountReadFailed");
         }
       } catch {
-        if (seq === requestRef.current) setReadError(t("settings.accountReadFailed"));
+        if (seq === requestRef.current) setReadError("settings.accountReadFailed");
       } finally {
         if (seq === requestRef.current) setLoading(false);
       }
@@ -333,7 +349,7 @@ export function useAccountRead(): AccountReadState {
         setCapabilities(caps);
       } catch { /* the panes degrade without the capability slice */ }
     })();
-  }, [t]);
+  }, []);
   useEffect(() => { load(); }, [load]);
   return { read, loading, readError, capabilities, load };
 }
@@ -414,11 +430,11 @@ export function AccountSettings({ embedded = true }: { embedded?: boolean }) {
               <button type="button" className="config-button" data-account-action="refresh" onClick={load}>{t("settings.accountRefresh")}</button>
             </ConfigDetailActions>
           </ConfigDetailHeader>
-          {loading && <p role="status" data-account-loading="" className="settings-general-description">{t("settings.accountLoading")}</p>}
-          {!loading && readError && <p role="alert" data-account-read-error="" className="config-add-source-error">{readError}</p>}
+          <AccountReadStatus loading={loading} readError={readError} t={t} />
           <AccountHarnessPane
             harness={pane}
             read={read}
+            loading={loading}
             capabilities={capabilities[pane] ?? null}
             onOpenLoginTerminal={openLoginTerminal}
             onSaveCredentials={pane === "claude" ? saveCredentials : undefined}

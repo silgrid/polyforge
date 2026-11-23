@@ -85,7 +85,7 @@ test("AC3: an installed pf with no cli.toml key asks for the host and the key to
   assert.match(installed, /data-pf-install-credentials/);
   assert.match(installed, /<input aria-label="aihub host"/);
   assert.match(installed, /<input type="password" autoComplete="off" aria-label="API key"[^>]*value=""/);
-  assert.match(installed, /<button type="button"(?! disabled)[^>]*data-pf-install-start[^>]*>Update pf<\/button>/, "the update stays startable");
+  assert.match(installed, /<button type="button"(?! disabled)[^>]*data-pf-install-start[^>]*>Write configuration<\/button>/, "the config write stays startable, and never calls itself an update");
   // a reinstall onto an existing cli.toml key needs neither
   assert.doesNotMatch(view({ versions: versions({ pfPresent: false, installed: null, needsConfig: false }) }), /data-pf-install-credentials/);
   // the start's browser-side check follows the same rule, pf installed or
@@ -204,15 +204,30 @@ test("AC2/B2: an installed version ahead of the channel shows its own note and n
   assert.match(below, /<button type="button"[^>]*data-pf-install-start[^>]*>Update pf<\/button>/);
 });
 
-test("B2: every start path refuses an ahead/current/unknown machine before any POST", () => {
-  // the guard sits before the one POST
-  const guard = source.indexOf("if (currentFlags.aheadOfChannel) return;");
-  const post = source.indexOf('fetch("/api/polyforge/install", {');
-  assert.ok(guard > 0 && guard < post, "the ahead guard precedes the POST");
-  assert.match(source, /if \(versions\.pfPresent && !currentFlags\.updateAvailable && !versions\.needsConfig\) return;/,
-    "an installed, current machine without needsConfig cannot start a run");
-  assert.match(source, /const canRun = Boolean\(versions && !flags\?\.aheadOfChannel/,
-    "the view renders the install entry only where a run is possible");
+test("B2/r1#7: the one entry exists only where a run is possible — ahead/current/unknown render no start, force or credential control", () => {
+  // ahead, current and an unparseable version: no run entry of any kind
+  for (const versionSet of [
+    versions({ installed: "v0.2.5", latest: "v0.2.4", running: "v0.2.5" }),
+    versions(),
+    versions({ installed: "oops", latest: "v0.2.6", running: "oops" }),
+  ]) {
+    const html = view({ versions: versionSet });
+    assert.doesNotMatch(html, /data-pf-install-start/, "no install/update entry");
+    assert.doesNotMatch(html, /data-pf-install-force/, "no force entry");
+    assert.doesNotMatch(html, /data-pf-install-credentials/, "no host/key form");
+  }
+  // ahead + needsConfig stays status-only (owner ruling 2026-11-23 1A/2A)
+  const aheadNeedsConfig = view({ versions: versions({ installed: "v0.2.4-dev.49", latest: "v0.2.3", running: "v0.2.4-dev.49", needsConfig: true }) });
+  assert.doesNotMatch(aheadNeedsConfig, /data-pf-install-start/);
+  assert.doesNotMatch(aheadNeedsConfig, /data-pf-install-credentials/);
+  // a current installed pf whose cli.toml has no key writes the configuration
+  // (its own label), while a pf behind the channel updates
+  const configure = view({ versions: versions({ needsConfig: true }) });
+  assert.match(configure, /data-pf-install-start/);
+  assert.match(configure, />Write configuration</);
+  assert.doesNotMatch(configure, />Update pf</, "a same-version config write is never called an update");
+  assert.match(view({ versions: versions({ latest: "v0.2.6", needsConfig: true }) }), />Update pf</, "behind the channel with a missing key is an update");
+  assert.match(view({ versions: versions({ latest: "v0.2.6" }) }), />Update pf</);
 });
 
 test("every install string exists in all three locales", async () => {
