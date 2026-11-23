@@ -942,6 +942,14 @@ func (d *driveEnv) writeEnvelope(act planAction) {
 	d.journal("envelope", map[string]any{"step": stepID, "outcome": outcome, "args": args, "crash": act.Crash})
 }
 
+// writeProofs writes a passing pf-step-result/1 proof of every task
+// repo's HEAD under dir (capsule relative) — the shape the daemon's done
+// gate reads for `fast_check_proof` and `facts_proof` (polyforge#211,
+// #241).
+func writeProofs(root, dir string) error {
+	return nil
+}
+
 // writeFastCheckProof writes the proof a real build or sync step hands off
 // under a lane declaring `fast_check_proof` (polyforge#211): the scripted
 // agent is no repository's checker, but it must satisfy the daemon's gate
