@@ -436,20 +436,22 @@ func TestW86ExportAndTerms(t *testing.T) {
 		t.Fatal(err)
 	}
 	var copyLines []string
-	inCopy := false
+	found := false
 	for _, l := range strings.Split(string(raw), "\n") {
+		if found {
+			break
+		}
 		switch {
 		case strings.HasPrefix(l, "COPY "):
-			inCopy = true
 			copyLines = []string{l}
-		case inCopy:
+		case len(copyLines) > 0:
 			copyLines = append(copyLines, l)
 		}
-		if inCopy && strings.HasSuffix(strings.TrimSpace(l), "/opt/polyforge/host-files/") {
-			inCopy = false
+		if strings.HasSuffix(strings.TrimSpace(l), "/opt/polyforge/host-files/") {
+			found = true
 		}
 	}
-	if len(copyLines) == 0 {
+	if !found {
 		t.Fatal("the Containerfile must COPY the host-side files into /opt/polyforge/host-files/ (the Q8 export entry)")
 	}
 	have := map[string]bool{}
