@@ -41,12 +41,10 @@ func TestInprocRigKeepsStepAgentOutOfTheCheckout(t *testing.T) {
 	t.Cleanup(func() { killOrphans(wi) })
 	rig.start(wi)
 
-	// Info answers only after the claim's spawn returned, so the step agent
-	// directory (written before the process is born) would already exist.
-	waitUntil(t, 60*time.Second, "the engine never started", func() bool {
-		ji, ok := rig.rt.Info(wi)
-		return ok && ji.Agent != nil
-	})
+	// The step agent directory is written before the harness process is
+	// born, and the driver emits job_started only after the spawn returns —
+	// so by this event the write, if it is going to happen, has happened.
+	rig.waitEvent(t, wi, "job_started", 60*time.Second)
 
 	if _, err := os.Stat(leaked); err == nil {
 		t.Fatalf("the inproc rig wrote the daemon-owned step agent dir into the checkout: %s", leaked)
