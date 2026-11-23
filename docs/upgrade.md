@@ -1502,3 +1502,20 @@ dataLayout 字段，由构建时的 seedtool 与组装器从本构建读取的 c
 不声明、也不被机械判定：回退到它们前先备份并遵循对应版本的迁移说明。
 manifest schema 不是数据库兼容性的证明。组件卷首启与 compose 接线由
 84-components-C 提供。
+
+## v0.2.4, 工作站发版镜像（polyforge#86）
+
+发版现在在 AIHub 镜像之外同时构建并推送本地运行（工作站）镜像
+`ghcr.io/silgrid/polyforge-workstation:<tag>`：buildx 一次构建 linux/amd64 与
+linux/arm64 双架构，构建在占版本之前（进 buildx 缓存——占版本之前不发布任
+何东西），推送在占版本之后；index digest 作为新资产 `workstation-image.digest`
+发布，进 SHA256SUMS 与 release-manifest.json。`release.sh --verify` 核对 index
+digest 与两个平台，并对公开渠道用空 `DOCKER_CONFIG` 做一次匿名读取。全新发
+版遇到任一镜像标签已存在即在占版本之前拒绝；续发按镜像各自保留已在
+registry 的、只补缺的；预检在占版本之前检查 buildx 与 arm64 binfmt。内部
+`-gmi` 线必须显式设置 `RELEASE_WORKSTATION_IMAGE`（未设即拒绝），把
+`vX.Y.Z-gmi.N` 推到指定仓库。镜像自带宿主侧文件（compose.yaml、seccomp 及
+其 SHA、Caddyfile、smoke.sh，位于镜像内 /opt/polyforge/host-files），一行
+`docker run --rm --entrypoint tar <镜像>:<版本> -C /opt/polyforge/host-files -cf - . | tar -xf -`
+导出——安装与升级只需镜像地址加版本号，不需要 gh；GHCR 首次推送会建私有
+包，org owner 需一次性把公开包改成公开。
