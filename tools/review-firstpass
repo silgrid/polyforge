@@ -181,6 +181,8 @@ With --events the report also gains the blocking-findings block
                reference. A mention elsewhere on a line (an explanation, a
                facts table) links at most and never overrides the
                disposition; a `；`/`;`/`。` clause starts its own subject.
+               An item line's parenthetical owner note (`… owner 已接受`)
+               is a mention, not a disposition.
   outcomes     fixed (a later round says repaired, or says it was fixed by
                the owner's ruling — `已按 owner 裁定修`); rebutted
                (withdrawn on the build's evidence); owner-overturned (a
