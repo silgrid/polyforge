@@ -295,15 +295,16 @@ func TestWorkstationSmokeOnboarding(t *testing.T) {
 		}
 	})
 	t.Run("a host-mode Pi Web is not the image's first open", func(t *testing.T) {
-		view := w168FreshView()
-		view["imageManaged"] = false
-		server := w168StartServer(t, &w168Server{view: view})
+		// the REAL host-mode answer is the one boolean (polyforge#167's
+		// route: `{imageManaged:false}` and no step or connection field), so
+		// the pass must name the host mode, not a missing field.
+		server := w168StartServer(t, &w168Server{view: map[string]any{"imageManaged": false}})
 		out, err := w168RunOnboarding(t, passScenario(t), server.URL)
 		if err == nil {
 			t.Fatalf("an imageManaged=false answer must fail — a host-mode Pi Web has no wizard:\n%s", out)
 		}
 		if !strings.Contains(out, "not the image-managed workstation") {
-			t.Fatalf("the failure must name imageManaged:\n%s", out)
+			t.Fatalf("the failure must name imageManaged, not a missing field:\n%s", out)
 		}
 	})
 	t.Run("invalid JSON fails, an HTTP 200 is not a pass", func(t *testing.T) {
