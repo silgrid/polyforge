@@ -25,6 +25,27 @@ import (
 	"testing"
 )
 
+// w86AssertOneVersionTag: a buildx build line carries exactly one --tag and
+// it is the immutable version tag of its channel (Q1/AC4, r1#3: a :latest or
+// any second tag alongside must turn the test red).
+func w86AssertOneVersionTag(t *testing.T, line, repo, tag string) {
+	t.Helper()
+	n := strings.Count(line, "--tag ")
+	if n != 1 {
+		t.Errorf("the buildx build line must carry exactly one --tag, has %d:\n%s", n, line)
+		return
+	}
+	i := strings.Index(line, "--tag ") + len("--tag ")
+	rest := line[i:]
+	got := rest
+	if j := strings.IndexByte(rest, ' '); j >= 0 {
+		got = rest[:j]
+	}
+	if got != repo+":"+tag {
+		t.Errorf("the only --tag must be %s:%s, got %q:\n%s", repo, tag, got, line)
+	}
+}
+
 // w86BuildCalls splits the call log into the cacheonly (pre-claim) build, the
 // --push (post-claim) build and the tag push's index, with -1 for a missing
 // one. The pre-claim build carries --output type=cacheonly and never --push;
@@ -104,6 +125,9 @@ func TestW86Build(t *testing.T) {
 	if strings.Contains(pushLine, "type=cacheonly") {
 		t.Errorf("the post-claim build must push, not stay cacheonly:\n%s", pushLine)
 	}
+	// the version tag is the ONLY tag: no latest, nothing alongside (AC4/Q1, r1#3)
+	w86AssertOneVersionTag(t, build, "ghcr.io/silgrid/polyforge-workstation", "v1.2.1")
+	w86AssertOneVersionTag(t, pushLine, "ghcr.io/silgrid/polyforge-workstation", "v1.2.1")
 
 	rel := filepath.Join(w.fakeRel, "v1.2.1")
 	// the index digest the registry reports is the published asset
@@ -206,6 +230,19 @@ func TestW86Verify(t *testing.T) {
 	vout, verr = w2.run([]string{"FAKE_ANON_UNAUTHORIZED=1"}, "--verify", "v1.2.1")
 	if verr == nil || !strings.Contains(vout, "FAIL anonymous read of ghcr.io/silgrid/polyforge-workstation:v1.2.1") {
 		t.Fatalf("an unreadable anonymous read must fail --verify naming it: %v\n%s", verr, vout)
+	}
+
+	// no buildx (r1#1): a multi-arch index's digest never appears in
+	// docker manifest inspect -v's per-platform array, so the workstation
+	// digest check fails NAMING buildx - never a mismatch against a child
+	// manifest's digest - while the aihub digest still checks out through
+	// the manifest fallback.
+	vout, verr = w2.run([]string{"FAKE_NO_BUILDX=1"}, "--verify", "v1.2.1")
+	if verr == nil || !strings.Contains(vout, "needs docker buildx") {
+		t.Fatalf("without buildx the workstation index digest check must fail naming buildx: %v\n%s", verr, vout)
+	}
+	if !strings.Contains(vout, "PASS image digest "+relFakeDigest+" matches aihub-image.digest") {
+		t.Fatalf("the aihub digest still checks out via the manifest fallback:\n%s", vout)
 	}
 
 	// the suffixed (internal) channel makes no anonymous check: verify passes
@@ -411,6 +448,8 @@ func TestW86Channel(t *testing.T) {
 	if !strings.Contains(pushLine, "--tag ghcr.io/example-org/fork-workstation:v0.2.0-fork.1") {
 		t.Fatalf("the push build must carry the internal repository and the suffixed tag:\n%s", pushLine)
 	}
+	// the suffixed version tag is the ONLY tag (AC4/Q1, r1#3)
+	w86AssertOneVersionTag(t, pushLine, "ghcr.io/example-org/fork-workstation", "v0.2.0-fork.1")
 	for _, c := range w2.calls() {
 		if strings.Contains(c, "polyforge-workstation") {
 			t.Fatalf("the internal release must not touch the public package: %v", w2.calls())
@@ -506,4 +545,61 @@ func TestW86ExportAndTerms(t *testing.T) {
 			t.Errorf("docs/workstation.md lacks %q", want)
 		}
 	}
+}
+
+// TestW86RegistryUnreadableIsRetryable (AC3, r1#2): a registry the
+// workstation image's repository cannot be read from is a retryable refusal
+// - never read as absent, never overwritten - on a fresh release (before
+// the claim) and on a resume (before any publish action).
+func TestW86RegistryUnreadableIsRetryable(t *testing.T) {
+	t.Run("fresh: refuses before the claim", func(t *testing.T) {
+		w := newRelWorld(t, []string{"v1.2.0"}, nil)
+		out, err := w.runPinned([]string{"FAKE_WS_REGISTRY_UNREADABLE=1"})
+		if err == nil {
+			t.Fatalf("an unreadable workstation registry must refuse the fresh release:\n%s", out)
+		}
+		for _, want := range []string{
+			"cannot read whether ghcr.io/silgrid/polyforge-workstation:v1.2.1 exists in the registry",
+			"retryable",
+			"no version claimed",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("the refusal lacks %q:\n%s", want, out)
+			}
+		}
+		if c := w.calls(); len(c) != 0 {
+			t.Fatalf("work ran before the refusal: %v", c)
+		}
+		if got := w.originTags(); strings.Contains(got, "v1.2.1") {
+			t.Fatalf("the version was claimed despite the refusal: %q", got)
+		}
+	})
+
+	t.Run("resume: refuses without publishing", func(t *testing.T) {
+		w := newRelWorld(t, []string{"v1.2.0"}, nil)
+		if out, err := w.runPinned(nil); err != nil {
+			t.Fatalf("setup release: %v\n%s", err, out)
+		}
+		// an incomplete release: the resume re-reads the registry before
+		// publishing the missing checksums
+		rel := filepath.Join(w.fakeRel, "v1.2.1")
+		for _, n := range []string{"SHA256SUMS", "release-manifest.json"} {
+			if err := os.Remove(filepath.Join(rel, n)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		w372ResetCalls(t, w)
+		out, err := w.runPinned([]string{"FAKE_WS_REGISTRY_UNREADABLE=1"})
+		if err == nil {
+			t.Fatalf("the resume must refuse when the workstation registry cannot be read:\n%s", out)
+		}
+		if !strings.Contains(out, "cannot read the registry state of ghcr.io/silgrid/polyforge-workstation:v1.2.1") || !strings.Contains(out, "retryable") {
+			t.Errorf("the refusal must name the workstation image's registry state and be retryable:\n%s", out)
+		}
+		for _, no := range []string{"docker push", "docker buildx build", "gh release upload", "gh release create"} {
+			if relIndex(w.calls(), no) >= 0 {
+				t.Fatalf("the resume published despite the unreadable registry: %v", w.calls())
+			}
+		}
+	})
 }

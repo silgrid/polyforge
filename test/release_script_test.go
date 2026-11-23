@@ -329,6 +329,12 @@ case "$1" in
     # package answers unauthorized: it is still private
     [ -n "$FAKE_ANON_UNAUTHORIZED" ] && [ ! -f "${DOCKER_CONFIG:-$HOME/.docker}/config.json" ] && { echo "ERROR: unauthorized: authentication required" >&2; exit 1; }
     [ -n "$FAKE_REGISTRY_UNREADABLE" ] && { echo "ERROR: failed to authorize: 403 Forbidden" >&2; exit 1; }
+    # FAKE_WS_REGISTRY_UNREADABLE (polyforge#86 r1#2): the workstation
+    # image's repository alone answers nothing - unreadable, never absent
+    case "$4" in
+      "$_ah":*) ;;
+      *) [ -n "$FAKE_WS_REGISTRY_UNREADABLE" ] && { echo "ERROR: failed to authorize: 403 Forbidden" >&2; exit 1; } ;;
+    esac
     [ -n "$FAKE_BUILDX_ERROR" ] && { echo "ERROR: $FAKE_BUILDX_ERROR" >&2; exit 1; }
     registry_read_gate "$4"
     registry_has "$4" || { echo "ERROR: $4: not found" >&2; exit 1; }
@@ -348,10 +354,26 @@ case "$1" in
   manifest)
     [ -n "$FAKE_REGISTRY_UNREADABLE" ] && { echo "unauthorized: authentication required" >&2; exit 1; }
     [ -n "$FAKE_ANON_UNAUTHORIZED" ] && [ ! -f "${DOCKER_CONFIG:-$HOME/.docker}/config.json" ] && { echo "unauthorized: authentication required" >&2; exit 1; }
+    [ -n "$FAKE_WS_REGISTRY_UNREADABLE" ] && case "$4" in
+      "$_ah":*) ;;
+      *) echo "unauthorized: authentication required" >&2; exit 1 ;;
+    esac
     [ -n "$FAKE_REGISTRY_NEEDS_LOGIN" ] && [ ! -e "$CALLLOG.loggedin" ] && { echo "unauthorized: authentication required" >&2; exit 1; }
     registry_read_gate "$4"
     registry_has "$4" || { echo "no such manifest: $4" >&2; exit 1; }
-    printf '{\n\t"Ref": "x",\n\t"SchemaV2Manifest": {\n\t\t"config": {\n\t\t\t"digest": "sha256:cccc"\n\t\t},\n\t\t"layers": [\n\t\t\t{\n\t\t\t\t"Digest": "sha256:dddd"\n\t\t\t}\n\t\t]\n\t},\n\t"Descriptor": {\n\t\t"mediaType": "m",\n\t\t"digest": "%s",\n\t\t"size": 952\n\t},\n\t"manifests": [\n\t\t{\n\t\t\t"Descriptor": {\n\t\t\t\t"platform": {\n\t\t\t\t\t"architecture": "amd64",\n\t\t\t\t\t"os": "linux"\n\t\t\t\t}\n\t\t\t}\n\t\t},\n\t\t{\n\t\t\t"Descriptor": {\n\t\t\t\t"platform": {\n\t\t\t\t\t"architecture": "arm64",\n\t\t\t\t\t"os": "linux"\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t]\n}\n' "$FAKE_REGISTRY_DIGEST" ;;
+    case "$4" in
+      "$_ah":*)
+        # single-arch image: one object; config/layer digests come BEFORE the
+        # Descriptor, so only the Descriptor-scoped read finds the manifest digest
+        printf '{\n\t"Ref": "x",\n\t"SchemaV2Manifest": {\n\t\t"config": {\n\t\t\t"digest": "sha256:cccc"\n\t\t},\n\t\t"layers": [\n\t\t\t{\n\t\t\t\t"Digest": "sha256:dddd"\n\t\t\t}\n\t\t]\n\t},\n\t"Descriptor": {\n\t\t"mediaType": "m",\n\t\t"digest": "%s",\n\t\t"size": 952\n\t}\n}\n' "$FAKE_REGISTRY_DIGEST" ;;
+      *)
+        # multi-arch index: docker manifest inspect -v answers an ARRAY, one
+        # object per platform - every Descriptor.digest is a CHILD manifest's
+        # and the index digest appears nowhere (which is why the workstation
+        # digest is read through buildx alone, polyforge#86 r1#1)
+        printf '[\n\t{\n\t\t"Ref": "x",\n\t\t"Descriptor": {\n\t\t\t"mediaType": "m",\n\t\t\t"digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",\n\t\t\t"size": 952,\n\t\t\t"platform": {\n\t\t\t\t"architecture": "amd64",\n\t\t\t\t"os": "linux"\n\t\t\t}\n\t\t},\n\t\t"SchemaV2Manifest": {\n\t\t\t"config": {\n\t\t\t\t"digest": "sha256:cccc"\n\t\t\t}\n\t\t}\n\t},\n\t{\n\t\t"Ref": "y",\n\t\t"Descriptor": {\n\t\t\t"mediaType": "m",\n\t\t\t"digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",\n\t\t\t"size": 952,\n\t\t\t"platform": {\n\t\t\t\t"architecture": "arm64",\n\t\t\t\t"os": "linux"\n\t\t\t}\n\t\t},\n\t\t"SchemaV2Manifest": {\n\t\t\t"config": {\n\t\t\t\t"digest": "sha256:eeee"\n\t\t\t}\n\t\t}\n\t}\n]\n' ;;
+    esac
+    ;;
 esac
 exit 0
 `, 0o755)
