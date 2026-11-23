@@ -321,3 +321,39 @@ func TestW91UserGuideStart(t *testing.T) {
 		t.Fatalf("the Install section must point the image newcomer at the mainline page:\n%s", install)
 	}
 }
+
+// TestW91SkillAndDoctorPointers: the routing skill's help and init fragments
+// point a newcomer at the mainline page (the CLI's `pf help` stays, Q3), and
+// the doctor's pi-package hint names both install modes on one line — the
+// image mainline beside the existing host installer pointer (Q2) — with no
+// runtime mode detection.
+func TestW91SkillAndDoctorPointers(t *testing.T) {
+	for _, rel := range []string{"skills/polyforge/verbs/help.md", "skills/polyforge/verbs/init.md"} {
+		body := w91Norm(w91Read(t, rel))
+		if !strings.Contains(body, "docs/getting-started.md") {
+			t.Fatalf("%s must point a newcomer at the mainline page (docs/getting-started.md)", rel)
+		}
+	}
+	// Q3: the CLI's pf help is untouched, so the skill's help fragment keeps
+	// naming the daily-use guide (the discovery chain chat → skill → help →
+	// guide).
+	if !strings.Contains(w91Norm(w91Read(t, "skills/polyforge/verbs/help.md")), "docs/user-guide.md") {
+		t.Fatalf("the skill help fragment must keep the daily-use guide pointer (docs/user-guide.md); Q3 leaves the CLI pf help unchanged")
+	}
+	// The doctor hint: one line, both modes, the existing host substring kept.
+	var hint string
+	for _, line := range strings.Split(w91Read(t, "internal/polyforge/cli/doctor_display.go"), "\n") {
+		if strings.Contains(line, "hint :=") {
+			hint = line
+			break
+		}
+	}
+	if hint == "" {
+		t.Fatalf("internal/polyforge/cli/doctor_display.go carries no `hint :=` line: the pi-package warning is the surface Q2 pins")
+	}
+	for _, want := range []string{"docs/getting-started.md", "re-run tools/install.sh"} {
+		if !strings.Contains(hint, want) {
+			t.Fatalf("the doctor's pi-package hint must name both install modes on the same line — %q is missing:\n%s", want, hint)
+		}
+	}
+}
