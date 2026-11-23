@@ -37,6 +37,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -44,6 +45,7 @@ import (
 	"github.com/silgrid/polyforge/internal/common/atomicfile"
 	"github.com/silgrid/polyforge/internal/common/capsule"
 	"github.com/silgrid/polyforge/internal/common/protocol"
+	"github.com/silgrid/polyforge/internal/common/workflow"
 	"github.com/silgrid/polyforge/internal/polyforge/gitops"
 )
 
@@ -58,6 +60,12 @@ const (
 	// One event per composition that carries a fallback, scope
 	// "composition" — never "this step's dispatch already fell back".
 	EventStepTierFallback = "step_tier_fallback"
+	// EventStepTierDropped is the claim-time diagnostic (polyforge#81
+	// Q14 A): a queued tier named a step the claim's lane snapshot no
+	// longer declares, so it was not merged into the fresh capsule's
+	// overlay. One event names the work item, the lane, the dropped steps
+	// and their tiers; the claim goes on.
+	EventStepTierDropped = "step_tier_dropped"
 )
 
 // The postures the write lands in (protocol.OverrideView.Posture's
@@ -643,6 +651,16 @@ func (r *Runtime) writePendingStepOverrides(ctx context.Context, j *job) error {
 	if len(entries) == 0 {
 		return nil
 	}
+	// polyforge#81 Q14 A: the claim-time lane snapshot re-judges the
+	// pending tiers. A tier whose step the fresh lane no longer declares
+	// cannot dispatch, so it never enters the overlay; one visible
+	// diagnosis asks the operator to set it again on the running lane.
+	// The claim goes on and the other aspects are untouched.
+	var dropped bool
+	entries, dropped = r.revalidatePendingTiers(j, entries)
+	if dropped {
+		r.persistPendingOverrides(j.wi, entries)
+	}
 	ov, err := capsule.ReadStepOverrides(j.capsuleDir)
 	if err != nil {
 		return fmt.Errorf("merging the recorded step overrides into the fresh capsule: %w", err)
@@ -659,6 +677,84 @@ func (r *Runtime) writePendingStepOverrides(ctx context.Context, j *job) error {
 	}
 	r.clearPendingOverrides(j.wi)
 	return nil
+}
+
+// revalidatePendingTiers drops every pending tier whose step the claim's
+// fresh lane snapshot does not declare (polyforge#81 Q14 A) and records
+// one step_tier_dropped diagnosis naming the work item, the lane, the
+// steps and their tiers. A lane snapshot that cannot be read at all drops
+// the pending tiers for the same reason (they cannot be judged) and the
+// diagnosis says so. It answers the filtered entries and whether anything
+// was dropped; models, skip and params are never touched.
+func (r *Runtime) revalidatePendingTiers(j *job, entries map[string]*capsule.StepOverride) (map[string]*capsule.StepOverride, bool) {
+	hasTier := false
+	for _, e := range entries {
+		if e != nil && (e.Tier != "" || e.TierCleared) {
+			hasTier = true
+			break
+		}
+	}
+	if !hasTier {
+		return entries, false
+	}
+	lane, errs := workflow.Load(filepath.Join(j.capsuleDir, capsule.DirWorkflows, j.bundleName))
+	byID := map[string]bool{}
+	if lane != nil {
+		for i := range lane.Steps {
+			byID[lane.Steps[i].ID] = true
+		}
+	}
+	var droppedSteps []map[string]any
+	for step, e := range entries {
+		if e == nil || (e.Tier == "" && !e.TierCleared) {
+			continue
+		}
+		if lane != nil && byID[step] {
+			continue
+		}
+		droppedSteps = append(droppedSteps, map[string]any{"step": step, "tier": e.Tier})
+		e.Tier, e.TierBy, e.TierAt, e.TierCleared = "", "", "", false
+	}
+	if len(droppedSteps) == 0 {
+		return entries, false
+	}
+	sort.Slice(droppedSteps, func(a, b int) bool {
+		return droppedSteps[a]["step"].(string) < droppedSteps[b]["step"].(string)
+	})
+	reason := "step_missing"
+	if lane == nil {
+		reason = "lane_unreadable"
+	}
+	r.tap(j.wi, EventStepTierDropped, map[string]any{
+		"work_item":   j.wi,
+		"lane":        j.bundleName,
+		"reason":      reason,
+		"steps":       droppedSteps,
+		"lane_errors": fmt.Sprint(errs),
+		"note":        "a queued capability tier was not merged: the claim-time lane snapshot does not declare its step; set the tier again on a step of the lane the ticket now runs",
+	})
+	return entries, true
+}
+
+// persistPendingOverrides rewrites the daemon-local pending record's entry
+// for wi (deleting it when nothing is left); a failed write is reported
+// and left for the next claim's judgment.
+func (r *Runtime) persistPendingOverrides(wi string, entries map[string]*capsule.StepOverride) {
+	r.pendingMu.Lock()
+	defer r.pendingMu.Unlock()
+	m, err := r.readPendingOverrides()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "runtime: %s: re-reading the pending overlay record to drop an invalid tier failed (it is re-judged at the next claim): %v\n", wi, err)
+		return
+	}
+	if len(entries) == 0 {
+		delete(m, wi)
+	} else {
+		m[wi] = entries
+	}
+	if err := r.writePendingOverrides(m); err != nil {
+		fmt.Fprintf(os.Stderr, "runtime: %s: persisting the pending overlay record without an invalid tier failed (it is re-judged at the next claim): %v\n", wi, err)
+	}
 }
 
 // mergePendingAspects merges pending entries over the capsule's overlay
