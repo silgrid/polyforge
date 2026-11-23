@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { polyforgeNamedCell, type PolyforgeConfigScope } from "./polyforge-cells-pure";
 import { pinPolyforgeScope } from "./polyforge-config-scope";
-import { isPolyforgeVersionBelowMinimum } from "./polyforge-detect";
+import { isPolyforgeVersionBelowMinimum } from "./polyforge-version";
 import { polyforgePfBin } from "./polyforge-pf-bin";
 import {
   POLYFORGE_CONFIG_STEP_TIERS_MINIMUM_PF_VERSION,
@@ -425,7 +425,8 @@ export async function readPolyforgeConfig(cwd: string, scope: PolyforgeConfigSco
   // the [step_tiers] family's own floor (85b2): the tier column's read-only
   // reason, computed beside the summarize floor the same way (an
   // unparseable version is below, and a v0.2.x pf ranks above every 2.20.x
-  // floor)
+  // floor; the floor `0.2.4-0` admits the 0.2.4 line's dev.N pre-releases,
+  // polyforge#256 B1)
   const stepTiersReason = isPolyforgeVersionBelowMinimum(presence.version, POLYFORGE_CONFIG_STEP_TIERS_MINIMUM_PF_VERSION, true)
     ? `the step-tier catalog needs pf ${POLYFORGE_CONFIG_STEP_TIERS_MINIMUM_PF_VERSION} or newer (found ${presence.version ?? "an unparseable version"})`
     : undefined;

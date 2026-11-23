@@ -1,63 +1,77 @@
-// carries: components/AppShell*, components/ChatWindow*, components/MessageView*
-// polyforge#229: split view is the default desktop layout, but renderPane never
-// passed onOpenSubagent to the pane's ChatWindow. MessageView only renders an
-// Agent card's 「open tab」 button when `subagent && onOpenSubagent`, and the
-// running list above the composer only opens a run when its click reaches an
-// opener, so in the layout users actually see both entry points did nothing.
-// The classic full-width window and the sub-agent panel were wired; this fixes
-// only the pane, with the same handler, and pins the counter-example that a
-// card without an opener renders no button at all.
-//
-// The pane handler is not session-bound: pane focus never updates
-// selectedSession, so a handler that read it (like the classic file-link
-// handler does, hence getPaneOpenFileHandler) would open the wrong session.
+// carries: components/AppShell*, components/ChatWindow*, components/MessageView*, components/PiRunningList*, components/AgentSessionPanel*, components/TabBar*
+// polyforge#255 u5: every pi subagent entry — the running list's row, the
+// Agent tool card, the top bar's subagent row — opens the in-chat progress
+// panel of the chat it belongs to (Q3/Q4 A), carries its own launch call id
+// (Q6), and the right panel's agent tab path is gone. The handlers are
+// executed from their source, not matched as text: the pane filter, the
+// queued row, the card's tool call id and the current-child guard all run.
 import "#test-env";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { Script } from "node:vm";
 import { createJiti } from "jiti";
+import ts from "typescript";
 
-const jiti = createJiti(import.meta.url, {
-  jsx: { runtime: "automatic" },
-  tsconfigPaths: true,
-});
+const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
 const { MessageView } = await jiti.import("./MessageView.tsx");
+const { PiRunningList } = await jiti.import("./PiRunningList.tsx");
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
+await jiti.import("@/lib/i18n/messages/en");
 
-const [appShell, chatWindow, messageView] = await Promise.all([
+const [appShell, chatWindow, messageView, runningList, agentSessionPanel] = await Promise.all([
   readFile(new URL("./AppShell.tsx", import.meta.url), "utf8"),
   readFile(new URL("./ChatWindow.tsx", import.meta.url), "utf8"),
   readFile(new URL("./MessageView.tsx", import.meta.url), "utf8"),
+  readFile(new URL("./PiRunningList.tsx", import.meta.url), "utf8"),
+  readFile(new URL("./AgentSessionPanel.tsx", import.meta.url), "utf8"),
 ]);
+const appAst = ts.createSourceFile("AppShell.tsx", appShell, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const chatAst = ts.createSourceFile("ChatWindow.tsx", chatWindow, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const messageAst = ts.createSourceFile("MessageView.tsx", messageView, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const listAst = ts.createSourceFile("PiRunningList.tsx", runningList, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const agentAst = ts.createSourceFile("AgentSessionPanel.tsx", agentSessionPanel, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 
-/** `source` from `startMarker` up to (excluding) the next `endMarker`. */
-function between(source, startMarker, endMarker, what) {
-  const start = source.indexOf(startMarker);
-  assert.ok(start >= 0, `${what}: missing anchor ${JSON.stringify(startMarker)}`);
-  const end = source.indexOf(endMarker, start + startMarker.length);
-  assert.ok(end > start, `${what}: missing end anchor ${JSON.stringify(endMarker)}`);
-  return source.slice(start, end);
+const plain = (value) => JSON.parse(JSON.stringify(value));
+function run(text, sandbox) {
+  return new Script(ts.transpileModule(`(${text})`, { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText).runInNewContext(sandbox);
 }
 
-const OPEN_SUBAGENT_PROP = /onOpenSubagent=\{handleOpenSubagentTab\}/;
+/** The smallest arrow function whose source contains `marker` (the inner handler, not its map's JSX). */
+function arrow(source, fileAst, marker) {
+  let found = null;
+  function walk(node) {
+    if (ts.isArrowFunction(node)) {
+      const text = node.getText(fileAst);
+      if (text.includes(marker) && (found === null || text.length < found.length)) found = text;
+    }
+    ts.forEachChild(node, walk);
+  }
+  walk(fileAst);
+  assert.ok(found, `no arrow function contains ${JSON.stringify(marker)}`);
+  return found;
+}
 
-const renderPane = between(appShell, "renderPane={(sid, focused) => {", ") : showChat ? (", "the split renderPane");
-const classicWindow = between(appShell, ") : showChat ? (", ') : initialCwdStatus === "validating" ? (', "the classic ChatWindow branch");
-const sentinelPane = between(renderPane, "if (isNewSessionTab(sid)) {", "const paneSession", "the sentinel branch");
-const sessionPane = renderPane.slice(renderPane.indexOf("const paneSession"));
-const subagentHandler = between(
-  appShell,
-  "const handleOpenSubagentTab = useCallback(",
-  "}, [isMobile]);",
-  "the subagent tab handler",
-);
+function callbackBinding(source, fileAst, name) {
+  let node = null;
+  function walk(n) {
+    if (ts.isVariableDeclaration(n) && n.name.getText(fileAst) === name) {
+      node = n;
+      return;
+    }
+    ts.forEachChild(n, walk);
+  }
+  walk(fileAst);
+  assert.ok(node, `missing ${name}`);
+  return node.initializer.arguments[0].getText(fileAst);
+}
 
-function renderCard(props) {
+const renderCard = (props) => {
   const block = {
     type: "toolCall",
-    toolCallId: "call-agent-split",
+    toolCallId: "call-agent-1",
     toolName: "Agent",
     input: { subagent_type: "Explore", prompt: "Find the parser", description: "Find parser" },
   };
@@ -65,97 +79,103 @@ function renderCard(props) {
     role: "toolResult",
     toolCallId: block.toolCallId,
     content: [{ type: "text", text: "Parser is in lib/parser.ts" }],
-    details: {
-      kind: "pi-web-subagent",
-      sessionId: "child-session",
-      profile: "Explore",
-      description: "Find parser",
-      status: "completed",
-      runInBackground: false,
-      createdAt: "2026-01-01T00:00:00.000Z",
-    },
+    details: { kind: "pi-web-subagent", sessionId: "child-1", profile: "Explore", description: "Find parser", status: "completed", runInBackground: false, createdAt: "2026-01-01T00:00:00.000Z" },
   };
-  return renderToStaticMarkup(
-    React.createElement(
-      I18nProvider,
-      null,
-      React.createElement(MessageView, {
-        message: { role: "assistant", provider: "anthropic", model: "claude-test", content: [block] },
-        toolResults: new Map([[block.toolCallId, result]]),
-        ...props,
-      }),
-    ),
-  );
-}
+  return renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(MessageView, {
+    message: { role: "assistant", provider: "anthropic", model: "claude-test", content: [block] },
+    toolResults: new Map([[block.toolCallId, result]]),
+    ...props,
+  })));
+};
 
-test("the split session pane opens subagents in a side-panel tab", () => {
-  // The requirement: an Agent card in a split pane offers the same 「open tab」
-  // action as the classic layout, so the pane must hand ChatWindow the opener
-  // MessageView and the running list gate their buttons on.
-  assert.match(
-    sessionPane,
-    OPEN_SUBAGENT_PROP,
-    "the split session pane must pass onOpenSubagent={handleOpenSubagentTab} to its ChatWindow",
-  );
+test("polyforge#255 u5: the top bar's opener targets the active pane, never the selected session", () => {
+  const handler = callbackBinding(appShell, appAst, "handleOpenPiSubagentPanel");
+  assert.doesNotMatch(handler, /selectedSession/, "pane focus never updates selectedSession; reading it would open the wrong chat");
+  const requests = [];
+  const open = run(handler, {
+    sidebarSessionId: "pane-A",
+    isMobile: false,
+    piSubagentRequestSeqRef: { current: 0 },
+    setPiSubagentPanelRequest: (request) => requests.push(request),
+    setActiveTopPanel: () => {},
+  });
+  open("child-1", "Explore");
+  assert.deepEqual(plain(requests), [{ paneSessionId: "pane-A", childSessionId: "child-1", requestId: 1 }], "the request names the active pane's chat");
 });
 
-test("the new-session sentinel pane carries no subagent opener", () => {
-  // session={null}: no transcript Agent card exists, and ChatWindow skips the
-  // running list for a new session, so there is nothing to open there.
-  assert.doesNotMatch(
-    sentinelPane,
-    /onOpenSubagent=/,
-    "the sentinel pane renders a new-session composer and can open no subagent",
-  );
+test("polyforge#255 u5: the ChatWindow request effect ignores another pane and consumes its own", () => {
+  const effect = arrow(chatWindow, chatAst, "request.paneSessionId !== session.id");
+  const other = [];
+  run(effect, {
+    piSubagentPanelRequest: { paneSessionId: "pane-B", childSessionId: "child-1", requestId: 4 },
+    session: { id: "pane-A" },
+    setOpenPanelChoice: (choice) => other.push(choice),
+    onPiSubagentPanelRequestHandled: (id) => other.push(["handled", id]),
+  })();
+  assert.deepEqual(plain(other), [], "a request for another pane changes nothing here");
+
+  const own = [];
+  run(effect, {
+    piSubagentPanelRequest: { paneSessionId: "pane-A", childSessionId: "child-1", requestId: 5, toolCallId: "call-card" },
+    session: { id: "pane-A" },
+    setOpenPanelChoice: (choice) => own.push(choice),
+    onPiSubagentPanelRequestHandled: (id) => own.push(["handled", id]),
+  })();
+  assert.deepEqual(plain(own), [
+    { sessionId: "pane-A", kind: "piSubagent", id: "child-1", toolCallId: "call-card" },
+    ["handled", 5],
+  ], "the owning pane opens the child and consumes the request once");
 });
 
-test("the pane and the classic window share the same, session-independent subagent handler", () => {
-  assert.match(classicWindow, OPEN_SUBAGENT_PROP, "the classic ChatWindow stays wired (no regression)");
-  // Pane focus only updates focusedPaneId, never selectedSession; a handler
-  // that read selectedSession would open a tab labelled with the wrong session.
-  assert.doesNotMatch(
-    subagentHandler,
-    /selectedSession/,
-    "handleOpenSubagentTab must not read selectedSession, so every pane may share it",
-  );
-  assert.match(
-    subagentHandler,
-    /setActiveFileTabId\(`agent:\$\{sessionId\}`\)/,
-    "the shared handler activates the subagent's own agent:<id> tab",
-  );
-  assert.match(subagentHandler, /setRightPanelOpen\(true\)/, "the shared handler opens the right panel");
+test("polyforge#255 u5: a card keeps its own tool call id for Jump", () => {
+  const opener = callbackBinding(chatWindow, chatAst, "openPiSubagentPanel");
+  const choices = [];
+  const open = run(opener, { session: { id: "pane-A" }, setOpenPanelChoice: (choice) => choices.push(choice) });
+  open("child-1", "Find parser", "call-agent-1");
+  assert.deepEqual(plain(choices), [{ sessionId: "pane-A", kind: "piSubagent", id: "child-1", label: "Find parser", toolCallId: "call-agent-1" }], "the card's own call id travels with the open choice");
+
+  const click = arrow(messageView, messageAst, "onOpenSubagent(subagent.sessionId");
+  const calls = [];
+  run(click, { onOpenSubagent: (...args) => calls.push(args), subagent: { sessionId: "child-1", description: "Find parser", profile: "Explore" }, block: { toolCallId: "call-agent-1" } })();
+  assert.deepEqual(plain(calls), [["child-1", "Find parser", "call-agent-1"]], "the button passes the card's tool call id, not only the child id");
 });
 
-test("the running list forwards each row to the session's subagent opener", () => {
-  // ChatWindow:2054 — a running run's click must reach the same opener as the
-  // Agent card, or the list stays inert in the pane.
-  const listBlock = between(chatWindow, "<PiRunningList", "onOpenTask={openPiTaskPanel}", "the running list");
-  assert.match(
-    listBlock,
-    /onOpenSubagent=\{\(subagentSessionId, label\) => onOpenSubagent\?\.\(subagentSessionId, label\)\}/,
-    "each running subagent row opens its own session id under its own label",
-  );
+test("polyforge#255 u5: a queued running-list row opens the same in-chat panel", () => {
+  const click = arrow(runningList, listAst, "onOpenSubagent(run.sessionId");
+  const opened = [];
+  run(click, { running: false, onOpenSubagent: (...args) => opened.push(args), run: { sessionId: "sub-1" }, label: "Audit the parsers" })();
+  assert.deepEqual(plain(opened), [["sub-1", "Audit the parsers"]], "a queued row forwards its opener too");
+  assert.doesNotMatch(click, /if \(running\)/, "the click is not gated on the running state");
 });
 
-test("a subagent card opens the tab with its session id and its description", () => {
-  // The button's click is the only place the (sessionId, label) pair is built:
-  // the run's own id, and its description falling back to the agent profile.
-  assert.match(
-    messageView,
-    /onClick=\{\(\) => onOpenSubagent\(subagent\.sessionId, subagent\.description \|\| subagent\.profile\)\}/,
-    "the card's button must open the run's session under its description (else its profile)",
-  );
-  assert.match(messageView, /aside=\{subagent && onOpenSubagent && \(/, "the button exists only with an opener");
+test("polyforge#255 u5: the top bar's subagent row opens the panel; the current child's row is inert", () => {
+  const onOpenArrow = arrow(agentSessionPanel, agentAst, "if (session.id === selectedSessionId) return;");
+  const calls = [];
+  const open = run(onOpenArrow, {
+    session: { id: "child-1", relation: { kind: "subagent", description: "Find parser", profile: "Explore" } },
+    selectedSessionId: "child-1",
+    onOpenSubagent: (...args) => calls.push(args),
+    sessionTitle: () => "Find parser",
+  });
+  open();
+  assert.deepEqual(plain(calls), [], "a row for the chat already showing the child does not open a nested panel");
+
+  run(onOpenArrow, {
+    session: { id: "child-2", relation: { kind: "subagent", description: "Other task", profile: "Explore" } },
+    selectedSessionId: "root-1",
+    onOpenSubagent: (...args) => calls.push(args),
+    sessionTitle: () => "Other task",
+  })();
+  assert.deepEqual(plain(calls), [["child-2", "Other task"]], "another subagent's row opens its panel");
 });
 
-test("a subagent result with no opener renders no side-panel button", () => {
-  // The defect's visible half: without the opener the card silently drops the
-  // action. Both readings are observed on the rendered HTML, not the source.
+test("polyforge#255 u5: the right panel's agent tab path is gone", () => {
+  for (const source of [appShell, chatWindow, messageView, runningList]) {
+    assert.doesNotMatch(source, /SessionChatPanel|handleOpenSubagentTab|openSubagentTabIds|handleToggleSubagentTab|lastAgentTabId|agentTabs/, "no agent-tab path remains");
+  }
+  assert.doesNotMatch(appShell, /`agent:\$\{/, "no agent:<sessionId> tab id is built");
   const withOpener = renderCard({ onOpenSubagent() {} });
-  assert.match(withOpener, /aria-label="View sub-agent work in side panel"/);
-
-  const withoutOpener = renderCard({});
-  assert.doesNotMatch(withoutOpener, /View sub-agent work in side panel/);
-  assert.match(withoutOpener, />Agent</, "the card itself still renders");
-  assert.match(withoutOpener, />Explore</, "the card keeps its profile");
+  assert.match(withOpener, /aria-label="Open sub-agent panel"/, "the card offers the panel action");
+  assert.match(withOpener, /data-pi-agent-tool-call="call-agent-1"/, "the card carries its tool call id");
+  assert.doesNotMatch(renderCard({}), /aria-label="Open sub-agent panel"/, "without an opener the card renders no button");
 });
