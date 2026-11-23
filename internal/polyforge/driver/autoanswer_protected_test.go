@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/capsule"
+	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 )
 
 func TestAutoAnswerProtectedStops(t *testing.T) {
@@ -27,7 +28,7 @@ func TestAutoAnswerProtectedStops(t *testing.T) {
 		{"build confirm_plan", "develop", "build", "ordinary\n\nconfirm_plan: true\n\n## Acceptance\n- AC1: x\n", true},
 		{"build without confirm_plan", "develop", "build", "ordinary", false},
 		{"micro fix", "micro", "fix", "", false},
-		{"custom lane", "custom", "fix", "", true},
+		{"custom step", "develop", "custom-step", "", true},
 	}
 	for _, tc := range cases {
 		if got := autoAnswerProtectedStop(tc.lane, tc.step, tc.content); got != tc.want {
@@ -42,11 +43,21 @@ func TestAutoAnswerProtectedStops(t *testing.T) {
 	clock := &autoAnswerClock{at: base.Add(20 * time.Minute)}
 	ask := seedProtectedCapsule(t, dir, "publish", "ordinary ticket")
 	sp := &fakeSpawner{script: []fakeEntry{{hold: true}}}
-	d, log, _, _ := askEnv(t, dir, sp, nil, 150*time.Millisecond)
+	log := &safeLog{}
+	ow := &ownerWaits{}
+	d, err := New(Config{
+		WI:       WIInfo{ID: "wi_run", CapsuleDir: dir, BundleName: "b"},
+		ExecPath: filepath.Join(dir, capsule.ExecutionJSON),
+		Workflow: &Workflow{Name: "develop", MaxRewinds: 4, Steps: []StepSpec{spec("publish")}},
+		Spawner:  sp, Log: log, Link: supervise.NewLink("wi_run"),
+		Limits:    supervise.Defaults{AskWarmWindow: 150 * time.Millisecond},
+		AskPoll:   5 * time.Millisecond,
+		OwnerWait: ow.set,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	d.cfg.Now = clock.now
-	d.workflow = testLane(4, spec("publish"))
-	d.lane = d.workflow
-	d.workflow.Name = "develop"
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { defer close(done); _ = d.Run(ctx) }()

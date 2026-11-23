@@ -207,15 +207,21 @@ func autoAnswerReplyText(recommendations []string, elapsed time.Duration) string
 // a lane this build cannot verify. content is the work item's verbatim
 // content (runtime-state/work-item.json).
 func autoAnswerProtectedStop(lane, stepID, content string) bool {
-	switch lane {
-	case "develop", "epic", "integrate", "micro", "release":
-	default:
-		return true // a lane this build cannot verify: the owner keeps every stop
+	if !autoAnswerKnownSteps[stepID] {
+		return true // a step this build cannot verify: the owner keeps the stop
 	}
 	if stepID == "publish" || stepID == "merge" {
 		return true // owner-review and the human landing
 	}
 	return stepID == "build" && autoAnswerConfirmPlan(content)
+}
+
+// autoAnswerKnownSteps are the shipped lanes' step ids: a lane whose step
+// this build does not know is not verified, so its cards keep waiting.
+var autoAnswerKnownSteps = map[string]bool{
+	"build": true, "review": true, "sync": true, "verification": true, "publish": true, "merge": true,
+	"fix": true, "evidence": true, "release": true, "verify": true, "deploy": true,
+	"collect": true, "repair": true, "revert": true, "full-gate": true, "close": true, "verify-children": true,
 }
 
 // autoAnswerConfirmPlan reports whether the ticket carries the
