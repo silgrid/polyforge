@@ -357,3 +357,40 @@ func TestW91SkillAndDoctorPointers(t *testing.T) {
 		}
 	}
 }
+
+// TestW91PageRegistry: the new mainline page joins every list the doc set is
+// pinned in — the micro lane's conf declaration, the test package's
+// micro_check selector, the W254 doc set (ratio and zero-CJK), the W457
+// micro-path list and the drift check's page list — so a page added without
+// its lists noticing is a finding here rather than at the integration gate.
+func TestW91PageRegistry(t *testing.T) {
+	const page = "docs/getting-started.md"
+	conf := w91Read(t, ".polyforge/verify-scope.conf")
+	if !regexp.MustCompile(`(?m)^micro_path=` + regexp.QuoteMeta(page) + `$`).MatchString(conf) {
+		t.Fatalf(".polyforge/verify-scope.conf's micro_path= must declare %s — a text-only change to the mainline page takes the micro lane", page)
+	}
+	var microCheck string
+	for _, line := range strings.Split(conf, "\n") {
+		if strings.HasPrefix(line, "micro_check=") && strings.Contains(line, "./test/") {
+			microCheck = line
+		}
+	}
+	if !strings.Contains(microCheck, "TestW91") {
+		t.Fatalf("the test package's micro_check= selector must run the TestW91 scenarios — a micro change that breaks the mainline page still fails its own evidence:\n%s", microCheck)
+	}
+	for _, c := range []struct{ rel, list string }{
+		{"test/w254_docs_set_acceptance_test.go", "w254Pages"},
+		{"test/w254_docs_set_acceptance_test.go", "w254PureEnglishPages"},
+		{"test/w457_micro_docs_lane_test.go", "w457MicroPaths"},
+		{"internal/polyforge/cli/docs_drift_test.go", "docsSetPages"},
+	} {
+		body := w91Read(t, c.rel)
+		m := regexp.MustCompile(`(?s)var ` + c.list + ` = \[\]string\{.*?\n\}`).FindString(body)
+		if m == "" {
+			t.Fatalf("%s: no %s var block found", c.rel, c.list)
+		}
+		if !strings.Contains(m, `"`+page+`"`) {
+			t.Fatalf("%s's %s must carry %s — a page added without its list noticing is a finding here waiting to happen:\n%s", c.rel, c.list, page, m)
+		}
+	}
+}

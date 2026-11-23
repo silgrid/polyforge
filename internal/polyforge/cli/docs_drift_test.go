@@ -147,3 +147,27 @@ func TestDocsConceptsCarriesSixteenTerms(t *testing.T) {
 		t.Fatalf("docs/concepts.md is the newcomer manual doubling as glossary and must define every term a newcomer meets — it never names: %s", strings.Join(missing, ", "))
 	}
 }
+
+// TestW91GettingStartedDriftRedSide (polyforge#166 u4): the mainline page
+// meets the same drift bar as every other doc-set page. The delivered page
+// passes; a planted revision naming a pf verb the CLI does not have fails
+// naming the drifted verb, and one carrying a relative link that resolves to
+// no file fails naming the dead link. docDriftCheck is the one
+// implementation (TestDocsSetNoDrift runs it over the real page), so no
+// throwaway tree copy is needed here.
+func TestW91GettingStartedDriftRedSide(t *testing.T) {
+	dir := filepath.Join("..", "..", "..", "docs")
+	real, err := os.ReadFile(filepath.Join(dir, "getting-started.md"))
+	if err != nil {
+		t.Fatalf("polyforge#166: docs/getting-started.md is the drift check's subject and the repo must carry it: %v", err)
+	}
+	if _, _, _, _, bad := docDriftCheck(t, "docs/getting-started.md", dir, string(real)); len(bad) > 0 {
+		t.Fatalf("the delivered mainline page must pass the drift check:\n%s", strings.Join(bad, "\n"))
+	}
+	if _, _, _, _, bad := docDriftCheck(t, "docs/getting-started.md", dir, string(real)+"\n\nRun `pf frobnicate` to recalibrate the sockets.\n"); len(bad) == 0 {
+		t.Fatalf("the drift check must FAIL a mainline revision naming a pf verb that does not exist (pf frobnicate)")
+	}
+	if _, _, _, _, bad := docDriftCheck(t, "docs/getting-started.md", dir, string(real)+"\n\nSee [the missing handbook](no-such-doc-w91.md) for detail.\n"); len(bad) == 0 {
+		t.Fatalf("the drift check must FAIL a mainline revision carrying a relative link that resolves to no file (no-such-doc-w91.md)")
+	}
+}
