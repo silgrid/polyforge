@@ -1,4 +1,4 @@
-package fakepi
+package main
 
 // w241 proof of the scripted agent's done-gate proof (polyforge#241): the
 // e2e fake agent must write the mechanical facts proof a real build writes
