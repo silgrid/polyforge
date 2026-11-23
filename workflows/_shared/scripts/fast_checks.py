@@ -180,6 +180,26 @@ red, or the close-scoped selection is red or incomplete. Exit 2: not
 judged — no such repo, the engine missing or failing, an unreadable
 report, a repo the engine planned no command for, an unusable units.json,
 the deadline, an interrupt — or the invocation unusable.
+
+The execution phase is grouped (polyforge#254): the plan's commands run
+group by group — the groups side by side, at most the plan's parallelism
+at once (``--parallel N``, else the repository's declared
+``full_parallel``, else two), each group's own commands in plan order.
+A command's group is the group its report bound it to (polyforge#244)
+else its report's root, so a change that reaches the repository root and
+a nested engine root runs the two roots' commands side by side and a
+repository with one root keeps the serial plan. The log numbers are the
+plan's, reserved in plan order before anything runs (a reused or skipped
+command takes none), so a serial and a parallel run of one plan name the
+same log for the same command; the flaky re-run, the baseline triage and
+the whole-command confirmation run serially after the execution phase,
+one group at a time. A plan with one group, or ``--parallel 1``, takes
+the serial path exactly as before, and no command ever stops the others
+(no fail-fast): every group runs to its end. In a boxed close every
+group runs in a container of its own (polyforge#244's rule: a
+container's reap kills every process in it after a command, so commands
+sharing one container would kill each other), the engine asks and the
+serial phases keeping the close's own container.
 """
 
 import os
@@ -191,8 +211,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import argparse  # noqa: E402
 import difflib  # noqa: E402
 import json  # noqa: E402
+import threading  # noqa: E402
 import time  # noqa: E402
 import traceback  # noqa: E402
+from dataclasses import dataclass  # noqa: E402
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple  # noqa: E402
 
 from pfstep import container, duration, git, gostr, runner  # noqa: E402
@@ -230,6 +252,14 @@ GIT_TIMEOUT = 600.0
 # The one targeted re-run a failing unit gets — verification's own count
 # (verify.py's RERUNS), the same rules rerun_flaky enforces.
 RERUNS = 1
+
+# The plan's default parallelism (polyforge#254): a grouped plan runs at
+# most this many groups at once; --parallel overrides it, 1 being the
+# serial plan (the comparison baseline).
+PARALLEL_DEFAULT = 2
+
+# How long an interrupted grouped plan waits for one worker to stop (s).
+INTERRUPT_JOIN = 5.0
 
 # A log directory's .gitignore: logs are local, never capsule chain content.
 LOGS_GITIGNORE = "# pf step command logs are local, never capsule chain content\n*\n"
@@ -328,6 +358,9 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--deadline", type=duration_flag, default=0,
                     help="the whole run's deadline, a Go duration (default: derived from the step's tool window, two minutes under it)")
     ap.add_argument("--log-dir", default="", help="where the logs go (default: logs/ beside --out, else the capsule's next runtime-state/fast-checks/<n>)")
+    ap.add_argument("--parallel", default="", metavar="N",
+                    help="with --repo: the plan's parallelism, a positive integer (default: the repository's declared"
+                         " full_parallel, else 2; 1 runs the plan serially — the comparison baseline and the manual override)")
     ap.add_argument("--json", action="store_true", help="print the result as one JSON object on stdout")
     ap.add_argument("--out", default="", help="write the result file there (atomically)")
     return ap
@@ -369,6 +402,49 @@ def closest_line(marker: str, lines: Sequence[str]) -> str:
         if r > ratio:
             best, ratio = ln, r
     return best
+
+
+def parallel_flag(v: str) -> int:
+    """--parallel N: a positive integer, else a usage error (polyforge#254;
+    the same plain-integer rule the gate's own flag enforces)."""
+    try:
+        n = int(v)
+    except ValueError:
+        raise ValueError("--parallel %s: not a positive integer" % gostr.quote(v)) from None
+    # int() also reads a padded or non-ASCII digit string; the flag is one
+    # plain positive integer.
+    if n <= 0 or str(n) != v:
+        raise ValueError("--parallel %s: not a positive integer" % gostr.quote(v))
+    return n
+
+
+def declared_parallel(rep: Optional[EngineReport]) -> int:
+    """The parallelism the repository's report declares (its full_parallel,
+    polyforge#244), 0 when it declares none — an undeclared repository
+    takes the run's default."""
+    if rep is None:
+        return 0
+    v = rep.raw.get("full_parallel")
+    if isinstance(v, bool) or not isinstance(v, int) or v <= 0:
+        return 0
+    return v
+
+
+@dataclass
+class PlannedCommand:
+    """One command of a run's plan: where it runs, its report's root, the
+    nested root it belongs to, and — once the run has decided — the green
+    entry it is reused as or the reason it is skipped (None/"" = it runs).
+    A command that runs carries its log number's path from the plan's
+    reservation."""
+
+    c: EngineCommand
+    directory: str
+    root_rel: str
+    d: str
+    entry: Optional[Dict[str, Any]] = None
+    skip_reason: str = ""
+    log_path: str = ""
 
 
 class UnitCheck:
@@ -497,7 +573,7 @@ class CheckRun:
 
     def __init__(self, inv: Invocation, capsule: str, repo: str, engine: str,
                  deadline: float, log_dir: str, r: Runner,
-                 phase: str = "", roots: Optional[Sequence[str]] = None) -> None:
+                 phase: str = "", roots: Optional[Sequence[str]] = None, parallel: int = 0) -> None:
         self.inv = inv
         self.capsule = capsule
         self.repo = repo
@@ -505,6 +581,14 @@ class CheckRun:
         self.deadline = deadline
         self.log_dir = log_dir
         self.r = r
+        # the grouped plan (polyforge#254): --parallel's override (0 = the
+        # repository's own declaration, then the 2-way default), and what
+        # the reports declared — recorded while the plan is read
+        self.parallel = parallel
+        self.declared_parallel = 0
+        # the progress lines and the logs are written from a grouped plan's
+        # workers too
+        self._mu = threading.Lock()
         # the per-unit narrowing (polyforge#182): --phase fast runs only
         # the fast commands, a --root name only its engine root's
         self.phase = phase
@@ -617,21 +701,227 @@ class CheckRun:
         except ReportError as err:
             return None, ref, "the engine's report is unreadable: %s" % err
 
-    def run_command(self, c: EngineCommand, directory: str, root_rel: str) -> Tuple[Dict[str, Any], str, str]:
+    # -- the execution phase (polyforge#254): the plan's commands reused,
+    #    skipped or run — serially, or group by group side by side
+
+    def command_entry(self, p: PlannedCommand) -> Dict[str, Any]:
+        """The record entry a command starts from (the close adds the
+        command's source, its own contract)."""
+        return {"name": p.c.name, "phase": p.c.phase, "root": p.root_rel, "cmd": p.c.cmd}
+
+    def reuse_key_of(self, p: PlannedCommand) -> Optional[ReuseKey]:
+        """The key a previous green run is matched by (polyforge#182): the
+        command's root as the record names it, its text, its root's subtree
+        tree hash of the working tree and its declared prerequisites; None
+        when the hash is unreadable (nothing is reused)."""
+        subtree = self.trees.get(p.d, "")
+        if not subtree:
+            return None
+        return p.root_rel, p.c.cmd, subtree, prereq_key(p.c)
+
+    def reuse_of(self, p: PlannedCommand, consumed: Set[ReuseKey]) -> Optional[Dict[str, Any]]:
+        """The green entry p is reused as, or None when it runs: a previous
+        run of its key — the same root, text, subtree tree hash and declared
+        prerequisites — whose own prerequisites are met here too; its original
+        log path is its evidence and it is never executed."""
+        c = p.c
+        key = self.reuse_key_of(p)
+        prev = self.previous.get(key) if key is not None else None
+        if key is None or prev is None \
+                or self.r.unmet(c.requires_env, c.requires_cmd, p.directory, None):
+            return None
+        consumed.add(key)
+        entry = self.command_entry(p)
+        entry.update({"exit_code": 0, "log": prev.get("log", ""), "tree": key[2],
+                      "prereq_key": key[3], "reused": True})
+        return entry
+
+    def groups_of(self, plan: Sequence[PlannedCommand]) -> List[Tuple[str, List[int]]]:
+        """The plan's execution groups, in plan order: a command's declared
+        group (polyforge#244) else its report's root ("" = the repository's
+        own root); each group's members keep plan order."""
+        order: List[str] = []
+        members: Dict[str, List[int]] = {}
+        for i, p in enumerate(plan):
+            g = p.c.group or p.d
+            if g not in members:
+                members[g] = []
+                order.append(g)
+            members[g].append(i)
+        return [(g, members[g]) for g in order]
+
+    def parallelism(self) -> int:
+        """The plan's parallelism: --parallel when given, else the
+        repository's declared full_parallel, else the 2-way default (1 = the
+        serial plan)."""
+        return self.parallel or self.declared_parallel or PARALLEL_DEFAULT
+
+    def exec_phase(self, plan: List[PlannedCommand], planned: Set[Tuple[str, str]],
+                   consumed: Set[ReuseKey]) -> List[Tuple[Dict[str, Any], EngineCommand, str, str, str, str, str]]:
+        """Run the plan's commands — reused, skipped or executed — and answer
+        the runs the flaky phase takes, both in plan order: the serial plan
+        when there is one group or a parallelism of 1, the groups side by
+        side otherwise."""
+        groups = self.groups_of(plan)
+        parallel = self.parallelism()
+        if parallel <= 1 or len(groups) <= 1:
+            return self.run_serial(plan, planned, consumed)
+        return self.run_parallel(plan, groups, parallel, planned, consumed)
+
+    def run_serial(self, plan: List[PlannedCommand], planned: Set[Tuple[str, str]],
+                   consumed: Set[ReuseKey]) -> List[Tuple[Dict[str, Any], EngineCommand, str, str, str, str, str]]:
+        """The serial plan: every command in plan order, exactly as before."""
+        runs: List[Tuple[Dict[str, Any], EngineCommand, str, str, str, str, str]] = []
+        for p in plan:
+            c = p.c
+            self.inv.say("repos/%s: `%s` (%s)" % (self.repo, c.cmd, c.phase))
+            planned.add((p.root_rel, c.cmd))
+            entry = self.reuse_of(p, consumed)
+            if entry is not None:
+                self.details["commands"].append(entry)
+                continue
+            entry, log_abs, tmp_dir = self.run_command(p)
+            if self.trees.get(p.d, "") and not entry.get("skipped"):
+                entry["tree"] = self.trees[p.d]
+                entry["prereq_key"] = prereq_key(c)
+            self.details["commands"].append(entry)
+            if not entry.get("skipped"):
+                runs.append((entry, c, p.directory, p.root_rel, p.d, log_abs, tmp_dir))
+        return runs
+
+    def run_parallel(self, plan: List[PlannedCommand], groups: List[Tuple[str, List[int]]], parallel: int,
+                      planned: Set[Tuple[str, str]],
+                      consumed: Set[ReuseKey]) -> List[Tuple[Dict[str, Any], EngineCommand, str, str, str, str, str]]:
+        """The plan's groups side by side, each group's commands in plan
+        order, no command stopped for another's failure. The reuse and skip
+        decisions and the log numbers are the plan's, taken before anything
+        runs (a reused or skipped command takes none); a boxed close gives
+        every group a container of its own (a container's reap kills every
+        process in it after a command, so commands sharing one container
+        would kill each other)."""
+        self.inv.say("repos/%s: %d group(s), at most %d at once, in order inside each group"
+                     % (self.repo, len(groups), parallel))
+        for p in plan:
+            planned.add((p.root_rel, p.c.cmd))
+            p.entry = self.reuse_of(p, consumed)
+            if p.entry is not None:
+                continue
+            p.skip_reason = self.r.unmet(p.c.requires_env, p.c.requires_cmd, p.directory, self.box)
+            if p.skip_reason:
+                continue
+            self.seq += 1
+            p.log_path = os.path.join(self.log_dir, self.repo, str(self.seq), "command.log")
+        boxes: Dict[str, container.Box] = {}
+        written: List[Optional[Tuple[Dict[str, Any], str, str]]] = [None] * len(plan)
+        stop = threading.Event()
+        try:
+            if self.box is not None:
+                for n, (g, _members) in enumerate(groups):
+                    if g == "":
+                        boxes[g] = self.box  # the close's own container, its engine asks' too
+                        continue
+                    boxes[g] = self.start_group_box(n + 1)
+            threads: List[threading.Thread] = []
+            for g, members in groups:
+                threads.append(threading.Thread(target=self.run_group,
+                                                args=(plan, members, boxes.get(g), written, stop),
+                                                name="group-" + (g or "root")))
+            for t in threads:
+                t.start()
+            try:
+                for t in threads:
+                    t.join()
+            except (KeyboardInterrupt, runner.Interrupted):
+                stop.set()
+                for t in threads:
+                    t.join(timeout=INTERRUPT_JOIN)
+                raise
+            for g, b in boxes.items():
+                why = b.lost_reason()
+                if why:
+                    raise container.BoxError("the group %s's container became unusable: %s"
+                                             % (g or "root", why))
+        finally:
+            for g, b in boxes.items():
+                if b is not self.box:
+                    b.remove()
+        runs: List[Tuple[Dict[str, Any], EngineCommand, str, str, str, str, str]] = []
+        for i, p in enumerate(plan):
+            if p.entry is not None:
+                self.details["commands"].append(p.entry)
+                continue
+            if p.skip_reason:
+                entry = self.command_entry(p)
+                entry["skipped"] = True
+                entry["skip_reason"] = p.skip_reason
+                self.details["commands"].append(entry)
+                continue
+            got = written[i]
+            if got is None:
+                raise runner.ExecutorError("the grouped plan left `%s` unrecorded" % p.c.cmd)
+            entry, log_abs, tmp_dir = got
+            if self.trees.get(p.d, "") and not entry.get("skipped"):
+                entry["tree"] = self.trees[p.d]
+                entry["prereq_key"] = prereq_key(p.c)
+            self.details["commands"].append(entry)
+            runs.append((entry, p.c, p.directory, p.root_rel, p.d, log_abs, tmp_dir))
+        return runs
+
+    def start_group_box(self, n: int) -> container.Box:
+        """The n-th group's own container: only a boxed close (CloseRun) runs
+        a grouped plan in containers; the per-unit run is on the host."""
+        raise container.BoxError("no container: the per-unit run is on the host")
+
+    def run_group(self, plan: List[PlannedCommand], members: Sequence[int], box: Optional[container.Box],
+                  written: List[Optional[Tuple[Dict[str, Any], str, str]]], stop: threading.Event) -> None:
+        """One group's commands, in plan order, in its own container (None on
+        the host). A fault of the script is never a verdict: it is recorded
+        as a run that never started and the other groups stop starting new
+        commands."""
+        for i in members:
+            p = plan[i]
+            if p.entry is not None or p.skip_reason or stop.is_set():
+                continue
+            with self._mu:
+                self.inv.say("repos/%s: `%s` (%s)" % (self.repo, p.c.cmd, p.c.phase))
+            entry = self.command_entry(p)
+            try:
+                written[i] = self.exec_command(p, p.log_path, entry, box)
+            except (KeyboardInterrupt, runner.Interrupted):
+                stop.set()
+                raise
+            except BaseException as err:
+                entry["exit_code"] = -1
+                entry["not_started"] = True
+                self.inv.summary = ("repos/%s: could not run `%s`: %s: %s"
+                                    % (self.repo, p.c.cmd, type(err).__name__, err))
+                stop.set()
+                written[i] = (entry, "", "")
+
+    def run_command(self, p: PlannedCommand) -> Tuple[Dict[str, Any], str, str]:
         """One planned command in its report's root, skipped when its
         declared prerequisites are unmet: (its entry, its log's absolute
         path, its private TMPDIR)."""
-        entry: Dict[str, Any] = {"name": c.name, "phase": c.phase, "root": root_rel, "cmd": c.cmd}
-        unmet = self.r.unmet(c.requires_env, c.requires_cmd, directory, self.box)
+        c = p.c
+        entry = self.command_entry(p)
+        unmet = self.r.unmet(c.requires_env, c.requires_cmd, p.directory, self.box)
         if unmet:
             entry["skipped"] = True
             entry["skip_reason"] = unmet
             return entry, "", ""
         self.seq += 1
         log_path = os.path.join(self.log_dir, self.repo, str(self.seq), "command.log")
+        return self.exec_command(p, log_path, entry, self.box)
+
+    def exec_command(self, p: PlannedCommand, log_path: str, entry: Dict[str, Any],
+                     box: Optional[container.Box]) -> Tuple[Dict[str, Any], str, str]:
+        """p's command run in its report's root (in box when the close is
+        boxed), its entry filled from the run: (its entry, its log's
+        absolute path, its private TMPDIR)."""
+        c = p.c
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
-        er = self.r.exec_to(runner.ExecSpec(argv=bash_argv(c.cmd), dir=directory, cwd=root_rel,
-                                             timeout=timeout_of(c), private_tmp=True), log_path, self.box)
+        er = self.r.exec_to(runner.ExecSpec(argv=bash_argv(c.cmd), dir=p.directory, cwd=p.root_rel,
+                                             timeout=timeout_of(c), private_tmp=True), log_path, box)
         entry["exit_code"] = er.exit
         if er.timed_out:
             entry["timed_out"] = True
@@ -640,7 +930,8 @@ class CheckRun:
         entry["duration_ms"] = er.evidence.duration_ms if er.evidence is not None else 0
         if er.log_path:
             entry["log"] = self.r.rel(er.log_path)
-            self.inv.logs.append(entry["log"])
+            with self._mu:
+                self.inv.logs.append(entry["log"])
         return entry, er.log_path, er.tmp_dir
 
     # -- the flaky re-run phase (the one targeted re-run a failing unit
@@ -1032,6 +1323,10 @@ class CheckRun:
                                    gostr.quote(root_rep.stack if root_rep is not None else ""),
                                    (root_rep.conf if root_rep is not None else "the named root")))
             return 2
+        # the repository's declared parallelism (polyforge#244), read from
+        # the report that carries it; --parallel overrides it, the default
+        # is 2
+        self.declared_parallel = declared_parallel(root_rep)
         # every root's subtree hash, before any command runs: one snapshot
         # of the working tree keys the whole run's reuse
         for d in sorted({d for _c, _dir2, _rel, d in commands}):
@@ -1042,32 +1337,17 @@ class CheckRun:
         # pair this run re-ran is superseded (dropped), one of a pair it
         # never planned — another root, a removed gate — is carried
         planned: Set[Tuple[str, str]] = set()
-        # (the entry, its command, its directory, its root, its nested
-        # root, its log's absolute path, its private TMPDIR)
-        runs: List[Tuple[Dict[str, Any], EngineCommand, str, str, str, str, str]] = []
-        for c, directory, root_rel, d in commands:
-            self.inv.say("repos/%s: `%s` (%s)" % (self.repo, c.cmd, c.phase))
-            planned.add((root_rel, c.cmd))
-            subtree = self.trees.get(d, "")
-            key: Optional[ReuseKey] = (root_rel, c.cmd, subtree, prereq_key(c)) if subtree else None
-            prev = self.previous.get(key) if key is not None else None
-            if key is not None and prev is not None \
-                    and not self.r.unmet(c.requires_env, c.requires_cmd, directory, None):
-                # a green run of the same key: reused, not executed — the
-                # original log path and exit code 0 are its evidence
-                entry: Dict[str, Any] = {"name": c.name, "phase": c.phase, "root": root_rel,
-                                         "cmd": c.cmd, "exit_code": 0, "log": prev.get("log", ""),
-                                         "tree": subtree, "prereq_key": key[3], "reused": True}
-                self.details["commands"].append(entry)
-                consumed.add(key)
-                continue
-            entry, log_abs, tmp_dir = self.run_command(c, directory, root_rel)
-            if subtree and not entry.get("skipped"):
-                entry["tree"] = subtree
-                entry["prereq_key"] = prereq_key(c)
-            self.details["commands"].append(entry)
-            if not entry.get("skipped"):
-                runs.append((entry, c, directory, root_rel, d, log_abs, tmp_dir))
+        # the execution phase (polyforge#254): serial when one group or
+        # --parallel 1, else the groups side by side; its entries land in
+        # plan order, its runs in plan order for the flaky phase
+        plan = [PlannedCommand(c, directory, root_rel, d) for c, directory, root_rel, d in commands]
+        try:
+            runs = self.exec_phase(plan, planned, consumed)
+        except container.BoxError as err:
+            # a group's container the run cannot have is the run's error —
+            # never a red of the change's, never a host stand-in
+            self.inv.summary = "repos/%s: not judged: %s" % (self.repo, err)
+            return 2
         # a green entry of a (root, cmd) this run did not plan stays in the
         # file (carried): the close — or the next unit's run — can still
         # reuse it
@@ -1139,8 +1419,8 @@ class CloseRun(CheckRun):
 
     def __init__(self, inv: Invocation, capsule: str, repo: str, engine: str,
                  reuse: List[str], log_dir: str, r: Runner,
-                 runtime: Optional[container.ContainerRuntime] = None) -> None:
-        super().__init__(inv, capsule, repo, engine, r.deadline, log_dir, r)
+                 runtime: Optional[container.ContainerRuntime] = None, parallel: int = 0) -> None:
+        super().__init__(inv, capsule, repo, engine, r.deadline, log_dir, r, parallel=parallel)
         self.reuse: List[str] = list(reuse)
         self.reuse_green: Dict[ReuseKey, str] = {}
         # the container engine the close starts its box through (a test's
@@ -1175,6 +1455,15 @@ class CloseRun(CheckRun):
         the clone mounted at its own path, the tool cache volume, the
         engine mounted read-only beside it, the baseline's base worktree
         directory under the run's logs."""
+        self.box = self.start_box_at(clone, self.log_dir)
+        return 0
+
+    def start_box_at(self, clone: str, log_dir: str) -> container.Box:
+        """A container started for log_dir — the close's own (the engine
+        asks and the serial phases), or one group's own (polyforge#244:
+        the groups run side by side, each in a container of its own, its
+        image build note and mount probe in its own log directory). A
+        container that cannot be had is the run's error (BoxError)."""
         co = container.for_run(container.ContainerOptions(runtime=self.runtime, say=self.inv.say),
                                self.r.deadline, self.inv.env)
         try:
@@ -1184,13 +1473,52 @@ class CloseRun(CheckRun):
         else:
             container.sweep_run(co, self.inv.say)
         try:
-            run_no = int(os.path.basename(self.log_dir))
+            run_no = int(os.path.basename(log_dir))
         except ValueError:
             run_no = 0
-        self.box = container.start_box(co, self.repo, clone, self.log_dir, self.r.deadline, run_no,
-                                       self.r.rel, engine=os.path.realpath(self.engine),
-                                       base_root=self.base_root())
-        return 0
+        return container.start_box(co, self.repo, clone, log_dir, self.r.deadline, run_no,
+                                   self.r.rel, engine=os.path.realpath(self.engine),
+                                   base_root=self.base_root())
+
+    def start_group_box(self, n: int) -> container.Box:
+        """The n-th group's own container, its logs in <log_dir>/group-<n>
+        so no group overwrites another's image build note or mount probe."""
+        log_dir = os.path.join(self.log_dir, "group-%d" % n)
+        os.makedirs(log_dir, exist_ok=True)
+        return self.start_box_at(os.path.join(self.capsule, "repos", self.repo), log_dir)
+
+    def command_entry(self, p: PlannedCommand) -> Dict[str, Any]:
+        """The record entry a command starts from: the close's own shape
+        carries the command's source (the conf's or the analyzer's)."""
+        entry = super().command_entry(p)
+        entry["source"] = p.c.source
+        return entry
+
+    def reuse_key_of(self, p: PlannedCommand) -> Optional[ReuseKey]:
+        """What a green run in a --reuse file is matched by: the same key a
+        --repo run reuses by — the command's own root, the command as its
+        own report gave it (a nested root's entry runs there, without the
+        cd the light plan wraps it with), its root's subtree tree hash of
+        the working tree and its declared prerequisites."""
+        c = p.c
+        subtree = self.trees.get(c.dir, "")
+        if not subtree:
+            return None
+        return self.command_root(c), (c.inner if c.dir else c.cmd), subtree, prereq_key(c)
+
+    def reuse_of(self, p: PlannedCommand, consumed: Set[ReuseKey]) -> Optional[Dict[str, Any]]:
+        """The green entry a command of a host close is reused as: a green
+        run in a --reuse file of the same key — a boxed close consumes
+        none (Q3: a same-tree host run proves nothing inside the image),
+        the image and tool caches staying shared."""
+        if self.box is not None:
+            return None
+        key = self.reuse_key_of(p)
+        if key is None or key not in self.reuse_green:
+            return None
+        entry = self.command_entry(p)
+        entry["reused"] = self.reuse_green[key]
+        return entry
 
     def baseline_ref(self) -> Tuple[str, str]:
         """The close's own baseline: the merge-base its light plan was
@@ -1203,18 +1531,6 @@ class CloseRun(CheckRun):
         nested root a command belongs to."""
         rel = self.cwd_rel(os.path.join(self.capsule, "repos", self.repo))
         return rel + (("/" + c.dir) if c.dir else "")
-
-    def reuse_key(self, c: EngineCommand) -> Optional[ReuseKey]:
-        """What a green run in a --reuse file is matched by: the same key a
-        --repo run reuses by — the command's own root, the command as its
-        own report gave it (a nested root's entry runs there, without the
-        cd the light plan wraps it with), its root's subtree tree hash of
-        the working tree and its declared prerequisites. None when the
-        hash is unreadable: nothing is reused, everything runs."""
-        subtree = self.tree_of(c.dir)
-        if not subtree:
-            return None
-        return self.command_root(c), (c.inner if c.dir else c.cmd), subtree, prereq_key(c)
 
     def load_reuse(self) -> int:
         """The reusable green entries of the --reuse files, keyed by the
@@ -1364,31 +1680,25 @@ class CloseRun(CheckRun):
         # every planned command: reused, or run in the repository's own
         # root (a nested root's command carries its own cd), never stopped
         # for a failure — the subtree hashes are taken before any command
-        # runs, one snapshot of the working tree keying the whole run
-        runs: List[Tuple[Dict[str, Any], EngineCommand, str, str, str, str, str]] = []
-        incomplete: List[str] = []
+        # runs, one snapshot of the working tree keying the whole run.
+        # polyforge#254: the groups (the report roots) run side by side,
+        # each group's commands in plan order, the serial phases after them
         for c in plan.commands:
             self.tree_of(c.dir)
-        for c in plan.commands:
-            self.inv.say("repos/%s: `%s` (%s)" % (self.repo, c.cmd, c.phase))
-            # a boxed close consumes no --reuse green evidence (Q3): the
-            # same-tree host run proves nothing inside the image — the
-            # file's shape is still load_reuse's to validate, and the
-            # image and tool caches stay shared; a host close keeps the
-            # existing reuse rules whole
-            key = self.reuse_key(c) if self.box is None else None
-            if key is not None and key in self.reuse_green:
-                entry: Dict[str, Any] = {"name": c.name, "phase": c.phase, "root": self.command_root(c),
-                                        "cmd": c.cmd, "source": c.source, "reused": self.reuse_green[key]}
-                self.details["commands"].append(entry)
-                continue
-            entry, log_abs, tmp_dir = self.run_command(c, clone, self.command_root(c))
-            entry["source"] = c.source
-            self.details["commands"].append(entry)
+        self.declared_parallel = declared_parallel(plan.report)
+        planned: Set[Tuple[str, str]] = set()
+        close_plan = [PlannedCommand(c, clone, self.command_root(c), c.dir) for c in plan.commands]
+        try:
+            runs = self.exec_phase(close_plan, planned, set())
+        except container.BoxError as err:
+            # a group's container the close cannot have is the run's error —
+            # never a red of the change's, never a host stand-in
+            self.inv.summary = "repos/%s: not judged: %s" % (self.repo, err)
+            return 2
+        incomplete: List[str] = []
+        for entry in self.details["commands"]:
             if entry.get("skipped"):
-                incomplete.append("`%s` cannot run: %s" % (c.cmd, entry.get("skip_reason", "")))
-            else:
-                runs.append((entry, c, clone, self.command_root(c), c.dir, log_abs, tmp_dir))
+                incomplete.append("`%s` cannot run: %s" % (entry.get("cmd", ""), entry.get("skip_reason", "")))
         # the close's flaky phase: the selected commands' located failing
         # units re-run once, the still-red judged on the baseline (the same
         # light plan's own base setup preparing the base worktree), then the
@@ -1397,12 +1707,13 @@ class CloseRun(CheckRun):
         self.rerun_phase(runs)
         self.baseline_phase()
         self.confirm_phase()
-        if self.box is not None and self.box.lost_reason():
+        lost = self.box.lost_reason() if self.box is not None else ""
+        if lost:
             # a container lost under the close is the run's error — the
             # record proves nothing, never a red of the change's
             self.inv.summary = ("repos/%s: not judged: its verification container became unusable"
                                 " while the close ran (%s): the record proves nothing"
-                                % (self.repo, self.box.lost_reason()))
+                                % (self.repo, lost))
             return 2
         self.details["reds"] = self.build_reds()
         red = [e for e in self.details["commands"] if self.command_red(e)]
@@ -1472,6 +1783,14 @@ def run(inv: Invocation, runtime: Optional[container.ContainerRuntime] = None) -
         return inv.usage("--unit-runs names the build's units.json of --close-scoped, which is missing")
     if (a.phase or a.root) and (a.close_scoped or a.check_units):
         return inv.usage("--phase and --root narrow a --repo run: they name no --close-scoped or --check-units run")
+    parallel = 0
+    if a.parallel != "":
+        try:
+            parallel = parallel_flag(a.parallel)
+        except ValueError as err:
+            return inv.usage(str(err))
+    if parallel and a.check_units:
+        return inv.usage("--parallel %s names a --repo run: it names no --check-units run" % gostr.quote(a.parallel))
     capsule = os.path.abspath(a.capsule)
     engine = a.engine or default_engine(inv.env)
     logs = a.log_dir
@@ -1510,7 +1829,7 @@ def run(inv: Invocation, runtime: Optional[container.ContainerRuntime] = None) -
             inv.summary = "the units could not be checked (an infrastructure failure, never a verdict): %s" % err
             return 2
     if a.close_scoped:
-        cr: CheckRun = CloseRun(inv, capsule, a.repo, engine, a.reuse, logs, r, runtime=runtime)
+        cr: CheckRun = CloseRun(inv, capsule, a.repo, engine, a.reuse, logs, r, runtime=runtime, parallel=parallel)
         if a.unit_runs:
             try:
                 decls = read_unit_runs(a.unit_runs)
@@ -1518,7 +1837,8 @@ def run(inv: Invocation, runtime: Optional[container.ContainerRuntime] = None) -
                 return inv.usage("--unit-runs %s is not a usable units.json: %s" % (a.unit_runs, err))
             cr.protected = protected_paths(capsule, decls)
     else:
-        cr = CheckRun(inv, capsule, a.repo, engine, r.deadline, logs, r, phase=a.phase, roots=a.root)
+        cr = CheckRun(inv, capsule, a.repo, engine, r.deadline, logs, r, phase=a.phase, roots=a.root,
+                      parallel=parallel)
     inv.details = cr.details
     try:
         return cr.run()
