@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { workspaceProjects } from "../components/polyforge-config-helpers";
 import { execFileAsync } from "./exec-file";
 import { parsePfError } from "./polyforge-config-write";
@@ -82,6 +83,7 @@ export {
   mergeNewestPage,
   mergeOlderPage,
   splitAnchor,
+  validatePolyforgeLane,
 } from "./polyforge-messages-pure";
 
 export interface PolyforgeMessagesRead {
@@ -121,6 +123,7 @@ import {
   type PolyforgeMessagePage,
   type PolyforgeProjectGroup,
   type PolyforgeProjectMembersRead,
+  validatePolyforgeLane,
 } from "./polyforge-messages-pure";
 
 /** pf's typed failure: the code as pf reports it (empty when the failure is
@@ -430,6 +433,59 @@ async function runPfJson(argv: string[], timeoutMs = READ_TIMEOUT_MS, maxBuffer?
   } catch (error) {
     throw PolyforgeMessagesError.fromSpawnError(error);
   }
+}
+
+/** The one stdin-carrying pf read/write: `pf file create --stdin` takes the
+ *  whole create body on stdin (polyforge#167 Q5's lane, `bundle_name`,
+ *  included). The child gets argv only — nothing the caller sends rides the
+ *  command line — and its failure keeps pf's stderr for the one error mapper. */
+function runPfJsonWithStdin(argv: string[], stdin: string, timeoutMs: number, maxBuffer?: number): Promise<unknown> {
+  return new Promise<unknown>((resolve, reject) => {
+    const child = spawn(polyforgePfBin(), argv, { shell: false, stdio: ["pipe", "pipe", "pipe"] });
+    const cap = maxBuffer ?? 1_048_576;
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    const deadline = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, timeoutMs);
+    deadline.unref();
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+      if (stdout.length > cap) stdout = stdout.slice(0, cap);
+    });
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+      if (stderr.length > STDERR_CAP) stderr = stderr.slice(0, STDERR_CAP);
+    });
+    child.on("error", (error) => {
+      clearTimeout(deadline);
+      const failure = new Error(error.message) as Error & { stderr?: string };
+      failure.stderr = stderr;
+      reject(PolyforgeMessagesError.fromSpawnError(failure));
+    });
+    child.on("close", (code) => {
+      clearTimeout(deadline);
+      if (timedOut || code !== 0) {
+        const failure = new Error(timedOut ? "pf did not answer in time" : `pf exited ${code}`) as Error & { stderr?: string };
+        failure.stderr = stderr;
+        reject(PolyforgeMessagesError.fromSpawnError(failure));
+        return;
+      }
+      try {
+        resolve(JSON.parse(stdout));
+      } catch {
+        reject(new PolyforgeMessagesError("pf answered unreadable JSON", "DAEMON-500"));
+      }
+    });
+    // A pf that exits before reading the whole body closes stdin; the write
+    // error is that refusal's symptom, reported through the exit code.
+    child.stdin.on("error", () => {});
+    child.stdin.end(stdin);
+  });
 }
 
 async function listConversationsRaw(pin: string[]): Promise<unknown> {
@@ -853,12 +909,19 @@ export async function analyzePolyforgeMessage(messageId: string, pin: string[] =
 
 const TICKET_SLUG = /^[A-Za-z0-9][A-Za-z0-9_.#-]{0,127}$/;
 
-/** One 【建票】 confirm — exactly one pf subprocess:
+/** One 【建票】 confirm — exactly one pf subprocess. Without a lane:
  *  `pf --json file create --project <p> --goal <g> --content <c>`, never
- *  `--bundle`: a registration ticket, not claimable, no lane chosen. pi-web
- *  writes no config file and never calls aihub directly; a refusal throws
- *  pf's typed failure. Only the created ticket's slug leaves. */
-export async function createPolyforgeFileTicket(input: PolyforgeFileTicketInput, pin: string[] = []): Promise<{ slug: string }> {
+ *  `--bundle`: a registration ticket, not claimable, no lane chosen. With a
+ *  lane (the onboarding wizard's first ticket, polyforge#167 Q5): the same
+ *  one create through `--stdin`, whose JSON body carries `bundle_name`; the
+ *  Messages path's flag argv is untouched. pi-web writes no config file and
+ *  never calls aihub directly; a refusal throws pf's typed failure. Only the
+ *  created ticket's slug leaves. */
+export async function createPolyforgeFileTicket(
+  input: PolyforgeFileTicketInput,
+  pin: string[] = [],
+  lane?: string,
+): Promise<{ slug: string }> {
   const raw = await runPfJson(
     [...pin, "--json", "file", "create", "--project", input.project, "--goal", input.goal, "--content", input.content],
     WRITE_TIMEOUT_MS,

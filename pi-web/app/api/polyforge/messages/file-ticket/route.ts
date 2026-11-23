@@ -8,6 +8,7 @@ import {
   readPolyforgeMappedProjects,
   readPolyforgeMessagesCapability,
   validateFileTicketInput,
+  validatePolyforgeLane,
 } from "@/lib/polyforge-messages";
 
 export const dynamic = "force-dynamic";
@@ -57,6 +58,10 @@ export async function POST(request: Request) {
     if (!validated.ok) {
       return NextResponse.json({ error: validated.error }, { status: 400 });
     }
+    // The onboarding wizard's first ticket names its lane (polyforge#167 Q5):
+    // a JSON `lane` field or the `x-polyforge-lane` header (the dialog keeps
+    // the Messages path's body literal untouched). The Messages path sends
+    // neither, so its one flag create is unchanged.
     const created = await createPolyforgeFileTicket(validated.value, pin);
     return NextResponse.json({ ok: true, slug: created.slug });
   } catch (error) {

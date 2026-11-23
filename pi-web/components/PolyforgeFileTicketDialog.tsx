@@ -20,18 +20,28 @@ type FileTicketResponse = { ok?: boolean; slug?: string; error?: string };
  * (one `pf file create` without `--bundle`: a registration ticket); success
  * hands the created slug up (the panel closes the dialog and names it), a
  * refusal keeps the dialog open with pf's text and is never retried.
+ *
+ * The onboarding wizard's first-ticket step (polyforge#167 Q5) reuses this
+ * one dialog without a source message: `analysis`/`message` are optional
+ * (blank goal/content, the first mapped project) and `lane` names the
+ * ticket's lane (`develop`). The lane rides a request header, so the
+ * Messages path's body stays exactly `{goal, project, content}` and its one
+ * flag create is unchanged.
  */
 export function PolyforgeFileTicketDialog({
   analysis,
   message,
   projects,
+  lane,
   onClose,
   onCreated,
 }: {
-  analysis: PolyforgeAnalysis;
-  message: Pick<PolyforgeMessage, "id" | "text">;
+  analysis?: PolyforgeAnalysis | null;
+  message?: Pick<PolyforgeMessage, "id" | "text"> | null;
   /** The `cli.toml`-mapped projects (the Messages project groups). */
   projects: string[];
+  /** The ticket's lane (bundle name); absent on the Messages path. */
+  lane?: string;
   onClose: () => void;
   onCreated: (slug: string) => void;
 }) {
