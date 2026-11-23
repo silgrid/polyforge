@@ -30,12 +30,14 @@ steps:
     resources: { admission: heavy }
     budget: { tool_minutes: 30 }
   - id: publish
+    protected_stop: true
     gate: true
     on_fail: { target: fix }
     skill: publish
     model_tier: cheap
     budget: { wall_minutes: 15 }
   - id: merge
+    protected_stop: true
     gate: true
     on_fail: { target: sync }
     skill: merge

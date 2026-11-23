@@ -48,4 +48,17 @@ func TestAutoAnswerFeedEntry(t *testing.T) {
 	if needs == nil || !needs.Replied || needs.RepliedAt != "2026-11-23T00:30:00Z" || needs.Attention {
 		t.Fatalf("needs_input entry = %+v, want it replied at the auto reply's stamp", needs)
 	}
+
+	// A restart re-emits the event from the reply (the authority): the feed
+	// keeps one entry per question.
+	f.Ingest("default", protocol.EventEntry{At: "2026-11-23T00:45:00Z", WI: wi, Kind: driver.EvAutoAnswered, Body: autoBody}, nil)
+	var autoEntries int
+	for _, e := range f.List().Decisions {
+		if e.Class == "auto_answered" {
+			autoEntries++
+		}
+	}
+	if autoEntries != 1 {
+		t.Fatalf("auto_answered entries = %d, want the re-emission deduped to one", autoEntries)
+	}
 }

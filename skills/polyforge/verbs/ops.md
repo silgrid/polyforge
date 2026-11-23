@@ -84,7 +84,8 @@ config set <key> <value>`; a hand edit needs `pf config reload`. The running dae
 keys (`step_timeout`, `stall_window`, `max_concurrent_jobs`,
 `max_concurrent_tasks`, `cell_max_concurrent_jobs`, `max_concurrent_bars`,
 `agent_language`, `transient_error_patterns`, `model_error_patterns`,
-`slow_model_median_latency`, `slow_model_p90_latency`) without a restart,
+`slow_model_median_latency`, `slow_model_p90_latency`,
+`ask_auto_reply_enabled`, `ask_auto_reply_timeout`) without a restart,
 takes the `[workspace]`
 mapping at the next claim, and reports the restart-only keys (`harness_root`, `operator_agent_dir`, and the flat
 `server`/`api_key`/`daemon_socket`) as pending until the next daemon

@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/capsule"
+	"github.com/silgrid/polyforge/internal/polyforge/crashpoint"
 	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 )
 
@@ -202,27 +203,33 @@ func autoAnswerReplyText(recommendations []string, elapsed time.Duration) string
 	return b.String()
 }
 
-// autoAnswerProtectedStop reports whether stepID is a protected stop — a
-// human gate the owner's ruling 2026-11-23 keeps human-only, or a step of
-// a lane this build cannot verify. content is the work item's verbatim
-// content (runtime-state/work-item.json).
-func autoAnswerProtectedStop(gate bool, content string) bool {
-	if autoAnswerConfirmPlan(content) {
-		return true // a plan-confirmation ticket keeps every stop human
+// autoAnswerProtectedStop reports whether the card keeps waiting for the
+// owner (polyforge#239, owner ruling 2026-11-23 Q1 A): a lane this build
+// cannot verify, a protected stop (a gate or a step declaring
+// `protected_stop`), or a plan-confirmation ticket — whose marker is
+// matched fail-safe (any case, backticks and trailing explanation allowed;
+// a false positive only keeps the card waiting).
+func autoAnswerProtectedStop(protected, verifiable bool, content string) bool {
+	if !verifiable {
+		return true // a lane this build cannot verify keeps every stop human
 	}
-	return gate // a gate's question is a human stop (review, owner-review, merge, gate FAIL)
+	if protected {
+		return true
+	}
+	return autoAnswerConfirmPlan(content)
 }
 
 // autoAnswerConfirmPlan reports whether the ticket carries the
-// `confirm_plan: true` marker (a build stop before the first test).
+// `confirm_plan: true` marker anywhere (a build stop before the first
+// test). A false positive is the safe direction: the card keeps waiting.
 func autoAnswerConfirmPlan(content string) bool {
 	return autoAnswerConfirmPlanLine.MatchString(content)
 }
 
-// autoAnswerConfirmPlanLine is the ticket's own `confirm_plan: true`
-// marker, on a line of its own (a list bullet allowed). A mention inside
-// prose is not the marker: the stop is declared, not discussed.
-var autoAnswerConfirmPlanLine = regexp.MustCompile(`(?im)^\s*(?:[-*]\s*)?confirm_plan\s*:\s*true\s*$`)
+// autoAnswerConfirmPlanLine is the ticket's `confirm_plan: true` marker,
+// matched anywhere in the content regardless of case, surrounding
+// backticks/quotes or a trailing explanation.
+var autoAnswerConfirmPlanLine = regexp.MustCompile("(?i)confirm_plan\\s*[:：=]\\s*[`'\"\\s]*true\\b")
 
 // EvAutoAnswered is the driver event of an automatic reply (polyforge#239):
 // `{step, spawn_n, ask_at, question_id, at, by, elapsed, timeout,
@@ -279,6 +286,9 @@ func (d *Driver) autoAnswer(ask *capsule.AskLine) bool {
 	if ask == nil || ask.Kind != capsule.AskKindAsk || d.wi.CapsuleDir == "" {
 		return false
 	}
+	if d.cfg.AutoAnswerChecked != nil {
+		d.cfg.AutoAnswerChecked()
+	}
 	if d.autoAnswerProtected(ask.Step) {
 		return false
 	}
@@ -300,6 +310,11 @@ func (d *Driver) autoAnswer(ask *capsule.AskLine) bool {
 		return false
 	}
 	elapsed := now.Sub(t0)
+	if d.cfg.AutoAnswerBeforeCommit != nil {
+		// Test seam: the caller interleaves the owner relay here, after the
+		// first read and before the serialized commit, to prove the order.
+		d.cfg.AutoAnswerBeforeCommit()
+	}
 	// The commit is one serialized read-check-append against the owner's
 	// relay: whoever appends first wins, and the loser writes nothing extra.
 	d.askWriteMu.Lock()
@@ -322,12 +337,61 @@ func (d *Driver) autoAnswer(ask *capsule.AskLine) bool {
 		fmt.Fprintf(os.Stderr, "driver: %s: automatic reply not appended (the question keeps waiting): %v\n", d.wi.ID, err)
 		return false
 	}
-	d.emit(EvAutoAnswered, map[string]any{
-		"step": ask.Step, "spawn_n": ask.Spawn, "ask_at": ask.At, "question_id": ask.At, "at": reply.At,
+	crashpoint.At("driver.autoanswer.reply:" + ask.Step)
+	d.emit(EvAutoAnswered, autoAnswerEventBody(reply, ask.Spawn, elapsed, timeout, recommendations))
+	return true
+}
+
+// autoAnswerEventBody is the auto_answered event body of one automatic
+// reply: the machine fields the decision feed classifies.
+func autoAnswerEventBody(reply capsule.AskLine, spawn int64, elapsed, timeout time.Duration, recommendations []string) map[string]any {
+	return map[string]any{
+		"step": reply.Step, "spawn_n": spawn, "ask_at": reply.AskAt, "question_id": reply.AskAt, "at": reply.At,
 		"by": capsule.AutoAnswerBy, "elapsed": elapsed.Truncate(time.Second).String(), "timeout": timeout.String(),
 		"recommendations": recommendations,
-	})
-	return true
+	}
+}
+
+// replayAutoAnswerAudit re-emits the auto_answered event of every automatic
+// reply in the record (polyforge#239, owner ruling Q6 A): the reply is the
+// authority, and a restart rebuilds the event/feed entry a crash after the
+// append may have lost. The decision feed dedupes by question id, so a
+// re-emission never adds a second entry; the reply itself is never
+// appended again.
+func (d *Driver) replayAutoAnswerAudit() {
+	if d.wi.CapsuleDir == "" {
+		return
+	}
+	lines, err := capsule.ReadAsks(d.wi.CapsuleDir)
+	if err != nil {
+		return
+	}
+	for _, l := range lines {
+		if l.Kind != capsule.AskKindReply || l.By != capsule.AutoAnswerBy || l.AskAt == "" {
+			continue
+		}
+		elapsed, _, recommendations := autoAnswerReplyFacts(lines, l)
+		d.emit(EvAutoAnswered, autoAnswerEventBody(l, l.Spawn, elapsed, supervise.DefaultAskAutoReplyTimeout, recommendations))
+	}
+}
+
+// autoAnswerReplyFacts recovers the machine facts of an automatic reply
+// from the record: the real wait from its T0, and the numbered
+// recommendations from its own lines.
+func autoAnswerReplyFacts(lines []capsule.AskLine, reply capsule.AskLine) (time.Duration, time.Duration, []string) {
+	var elapsed time.Duration
+	if at, err := time.Parse(time.RFC3339Nano, reply.At); err == nil {
+		if t0, ok := capsule.AwaitingSince(lines, reply.Step, reply.Spawn, reply.AskAt, at); ok {
+			elapsed = at.Sub(t0)
+		}
+	}
+	var recs []string
+	for _, line := range strings.Split(reply.Text, "\n") {
+		if i := strings.Index(line, ". "); i > 0 && i <= 4 {
+			recs = append(recs, line[i+2:])
+		}
+	}
+	return elapsed, 0, recs
 }
 
 // autoAnswerProtected answers autoAnswerProtectedStop for the current lane
@@ -346,9 +410,13 @@ func (d *Driver) autoAnswerProtected(stepID string) bool {
 		}
 		content = *doc.Content
 	}
-	gate := false
+	protected := false
+	verifiable := true
 	if d.workflow != nil {
-		gate = d.workflow.IsGate(stepID)
+		protected = d.workflow.IsGate(stepID) || d.workflow.ProtectedStop(stepID)
+		if d.cfg.LaneVerifiable != nil {
+			verifiable = d.cfg.LaneVerifiable(d.workflow.Name)
+		}
 	}
-	return autoAnswerProtectedStop(gate, content)
+	return autoAnswerProtectedStop(protected, verifiable, content)
 }

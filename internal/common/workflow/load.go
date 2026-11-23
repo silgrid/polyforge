@@ -168,6 +168,10 @@ type Step struct {
 	// (`steps.<project>.<step>.by: human` in its workspace yaml,
 	// polyforge#36).
 	HumanMergeable bool
+	// ProtectedStop is `protected_stop` (default false): the step's
+	// question is a human stop the daemon's automatic reply never answers
+	// (polyforge#239) — an owner-only stop the gate flag cannot express.
+	ProtectedStop bool
 	// ToolMinutes is `budget.tool_minutes` (0 = none declared).
 	ToolMinutes int
 	// ModelTier is `model_tier` ("" = none): a tier of the lane's
@@ -839,6 +843,9 @@ func (l *loader) step(file string, off int, n *yaml.Node, path string, seen map[
 	}
 	if v, ok := keys["human_mergeable"]; ok {
 		s.HumanMergeable, _ = l.boolValue(file, off, v, join(path, "human_mergeable"))
+	}
+	if v, ok := keys["protected_stop"]; ok {
+		s.ProtectedStop, _ = l.boolValue(file, off, v, join(path, "protected_stop"))
 	}
 	if v, ok := keys["model_candidates"]; ok {
 		s.ModelCandidates = l.candidates(file, off, v, join(path, "model_candidates"))

@@ -113,6 +113,7 @@ process runs.
 | `skippable` | bool, default false (`WFC-112` otherwise): a project may switch the step off with `steps.<project>.<step>.skip: true` in its workspace yaml ([config.md](config.md)); the switch is fixed when the work item is first claimed, and a switched-off step is never dispatched (its execution status is `skipped`). A step not declaring it runs on every round of the work item — a `rewind_only` declaration alone can hold a step's first round back |
 | `rewind_only` | bool, default false (`WFC-112` otherwise): the step runs only after a rewind covers it. The first round records it skipped without a dispatch (a `step_skipped` event, no model session, no artifacts — nothing before the covering gate may rely on its output in the first round); once any rewind that covers it resets it to pending it runs, on that round and on every later round another rewind resets it to — a gate FAIL's rewind (automatic or `--per-owner`) and an owner's rewind record the same archives on the step's own attempts, so any of them activates it. A project skip of the step (a `skippable` it declares) wins over the declaration. The loader refuses a `rewind_only` step no gate's `[on_fail target, gate)` range covers (`WFC-112`, naming the step): without a covering gate it would never run. When every gate covering it is switched off for a project, the step does not run on that project's work items |
 | `human_mergeable` | bool, default false (`WFC-112` otherwise): a project may declare the step's work done by a person with `steps.<project>.<step>.by: human` in its workspace yaml ([config.md](config.md)); the declaration is fixed when the work item is first claimed, and a claim of a lane that does not declare the step `human_mergeable` is refused naming it — the mode never reaches a lane that does not ask for it |
+| `protected_stop` | bool, default false: the step's `pf step ask` question is a human stop the daemon's automatic reply never answers (polyforge#239) — for an owner-only stop that is not a gate (a hold only the owner's word clears, an owner-ruled revert). A gate is protected without the key; a step of a lane this build cannot verify is protected too |
 | `budget` | `{wall_minutes, tool_minutes}` |
 | `model_candidates` | the step's candidates (`WFC-198`); exclusive with `model_tier` (`WFC-112`) |
 | `model_tier` | a tier of the lane's `defaults.tiers` (`WFC-198` when the table lacks it; `WFC-112` beside `model_candidates`) |
@@ -184,9 +185,12 @@ Cell's `ask_auto_reply_timeout` (default 30m) and only if no owner replied
 first. The automatic reply is a delivery, never an owner authorization:
 `--per-owner`, waive/rewind/force-fail and attrs writes reject it. A
 protected stop keeps waiting for the owner: every gate step (review,
-owner-review, merge, a gate FAIL) and every step of a ticket whose content
-carries `confirm_plan: true`. A wait with no recorded T0 (an older
-dispatch) is never auto-answered, and a restart keeps the original T0.
+owner-review, merge, a gate FAIL), every step declaring `protected_stop`,
+every step of a lane this build cannot verify (the daemon enumerates the
+shipped lanes under `workflows/`), and every step of a ticket whose content
+carries `confirm_plan: true` (matched fail-safe: any case, backticks and a
+trailing explanation). A wait with no recorded T0 (an older dispatch) is
+never auto-answered, and a restart keeps the original T0.
 
 ### hub keys
 

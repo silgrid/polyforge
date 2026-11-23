@@ -1525,7 +1525,8 @@ write leaves the file untouched. `api_key` is write-only: stdin only,
 never argv, never emitted.
 
 The running daemon applies live keys on the write (`max_concurrent_jobs`,
-`cell_max_concurrent_jobs`, `step_timeout`, `stall_window`, `agent_language`, `claude_bin`, `summarize.*`,
+`cell_max_concurrent_jobs`, `step_timeout`, `stall_window`, `agent_language`, `claude_bin`,
+`ask_auto_reply_enabled`, `ask_auto_reply_timeout`, `summarize.*`,
 the `[step_tiers]` catalog — reported `applied` as one `[step_tiers]`
 outcome; it has no daemon consumer, the classification itself says no
 restart is needed), takes the

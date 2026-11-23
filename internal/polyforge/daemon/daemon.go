@@ -748,6 +748,19 @@ func New(cfg Config) (*Daemon, error) {
 	// unconditionally, no selection flag, no fallback. The AgentStarter
 	// config knob only swaps WHICH starter binds (tests).
 	var d *Daemon // bound below; the starter closure reads it at call time
+	// polyforge#239: the automatic reply keeps every stop of a lane this
+	// build cannot verify. The shipped lanes are enumerated from the
+	// daemon's workflows/ tree (no Go literal names a lane or a step id);
+	// a custom lane's cards keep waiting for the owner.
+	shippedLanes := map[string]bool{}
+	if dirs, derr := workflow.LaneDirs(cfg.WorkflowsDir); derr == nil {
+		for _, dir := range dirs {
+			if lane, errs := workflow.Load(dir); len(errs) == 0 && lane != nil {
+				shippedLanes[lane.Name] = true
+			}
+		}
+	}
+	laneVerifiable := func(name string) bool { return shippedLanes[name] }
 	start := cfg.AgentStarter
 	if start == nil {
 		start = func(ctx context.Context, in runtime.AgentStartInput) (Agent, error) {
@@ -794,7 +807,8 @@ func New(cfg Config) (*Daemon, error) {
 				OwnerWait: in.OwnerWait,
 				// the agent language a new conversation takes: the live
 				// `[daemon] agent_language` at dispatch time
-				Language: live.AgentLanguage,
+				Language:       live.AgentLanguage,
+				LaneVerifiable: laneVerifiable,
 			})
 		}
 	}

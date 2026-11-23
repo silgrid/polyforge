@@ -144,6 +144,19 @@ type Config struct {
 	MaxStepFailures int
 	// Now overrides the clock (tests).
 	Now func() time.Time
+	// LaneVerifiable, when set, answers whether the workflow's lane is one
+	// this build can verify (the daemon enumerates the shipped lanes): a
+	// lane it refuses keeps every stop human (polyforge#239). nil = the
+	// lane is trusted (tests and an embedded driver).
+	LaneVerifiable func(lane string) bool
+	// AutoAnswerBeforeCommit, when set, runs after the automatic reply's
+	// first read and before its serialized commit (tests interleave the
+	// owner relay there to prove the order). nil in production.
+	AutoAnswerBeforeCommit func()
+	// AutoAnswerChecked, when set, runs at every automatic-reply check
+	// (tests wait on it to assert that a due check happened and wrote
+	// nothing). nil in production.
+	AutoAnswerChecked func()
 	// Sleep overrides the driver's waits (the D7 rate-limit backoff);
 	// nil = a real timer cut short by the context. Tests inject a
 	// recorder so the backoff curve is asserted without the wall time.
@@ -416,6 +429,11 @@ func (d *Driver) Run(ctx context.Context) error {
 			return fmt.Errorf("driver: execution init failed: %w", err)
 		}
 	}
+	// polyforge#239 (owner ruling Q6 A): an automatic reply is the
+	// authority; a restart rebuilds the auto_answered event/feed entry a
+	// crash after the append may have lost. The feed dedupes by question
+	// id, so this never adds a second entry or a second reply.
+	d.replayAutoAnswerAudit()
 	// a question the daemon worded itself before the
 	// upgrade is withdrawn; its step runs again under the new rules
 	// polyforge#79 era: the recovery path's interrupted-dispatch

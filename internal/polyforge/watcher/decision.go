@@ -143,7 +143,7 @@ func Classify(kind string, body json.RawMessage) (Decision, bool) {
 	}
 	d := Decision{Rule: r, Source: kind}
 	switch kind {
-	case "awaiting_owner":
+	case "awaiting_owner", "auto_answered":
 		d.QuestionID = safeID(bodyField(body, "question_id"))
 	case "carrier_push_failed":
 		d.Repo = safeID(bodyField(body, "repo"))

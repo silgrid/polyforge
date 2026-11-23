@@ -1538,9 +1538,11 @@ daemon 以保留身份 `daemon:auto-recommendation` 追加一条 reply，逐行�
 「推荐选项」，并写明实际等待时长与授权日期。自动回复不是 owner 授权：
 `--per-owner`、waive/rewind/强制 fail、attrs 与免计数都不认它；决策流出现
 固定条目「已自动按推荐继续」。任一行 ≥ ★★★、星级缺失或不可解析、不是
-唯一一张非 fenced 严格四列表、没有可信 T0、或该步骤是 gate（review、
-owner-review、人工 merge、gate FAIL 等），或工单带 confirm_plan: true 时，
-一律继续等人。重启保留原 T0；关闭开关或改超时后下一次判断即时生效。
+唯一一张非 fenced 严格四列表、没有可信 T0、该步骤是 gate（review、
+owner-review、人工 merge、gate FAIL 等）、该步骤声明 `protected_stop`、
+车道无法验证（daemon 从 `workflows/` 枚举已发布车道），或工单带
+`confirm_plan: true`（宽松识别）时，一律继续等人。重启保留原 T0，并从
+reply 补齐缺失的 `auto_answered` 事件；关闭开关或改超时后下一次判断即时生效。
 
 两个 Cell 级 live 配置键（`[daemon]`，经 `pf config set` 写入；unset 即默认）：
 

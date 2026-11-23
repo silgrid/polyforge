@@ -20,18 +20,22 @@ import (
 
 func TestAutoAnswerProtectedStops(t *testing.T) {
 	cases := []struct {
-		name    string
-		gate    bool
-		content string
-		want    bool
+		name                  string
+		protected, verifiable bool
+		content               string
+		want                  bool
 	}{
-		{"gate step", true, "ordinary", true},
-		{"non-gate step", false, "ordinary", false},
-		{"confirm_plan ticket protects a non-gate step", false, "ordinary\n\nconfirm_plan: true\n\n## Acceptance\n- AC1: x\n", true},
-		{"gate step without confirm_plan", true, "", true},
+		{"gate step", true, true, "ordinary", true},
+		{"protected_stop step", true, true, "ordinary", true},
+		{"unverifiable lane", false, false, "ordinary", true},
+		{"ordinary non-gate step", false, true, "ordinary", false},
+		{"confirm_plan ticket protects a non-gate step", false, true, "ordinary\n\nconfirm_plan: true\n\n## Acceptance\n- AC1: x\n", true},
+		{"backticked confirm_plan with explanation", false, true, "the ticket says `confirm_plan: true` (plan confirmation)", true},
+		{"case-insensitive confirm_plan", false, true, "CONFIRM_PLAN = TRUE", true},
+		{"a mention without true does not protect", false, true, "confirm_plan is discussed here", false},
 	}
 	for _, tc := range cases {
-		if got := autoAnswerProtectedStop(tc.gate, tc.content); got != tc.want {
+		if got := autoAnswerProtectedStop(tc.protected, tc.verifiable, tc.content); got != tc.want {
 			t.Errorf("%s: protected = %v, want %v", tc.name, got, tc.want)
 		}
 	}
@@ -58,6 +62,7 @@ func TestAutoAnswerProtectedStops(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	d.cfg.Now = clock.now
+	d.cfg.LaneVerifiable = func(string) bool { return true }
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { defer close(done); _ = d.Run(ctx) }()

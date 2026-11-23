@@ -1352,6 +1352,10 @@ def _close_run(inv: Invocation, ns: argparse.Namespace, environ: Mapping[str, st
 # records
 
 ASKS_JSONL = os.path.join("runtime-state", "asks.jsonl")
+# AUTO_ANSWER_BY is the daemon's reserved automatic-reply author
+# (polyforge#239; the Go side's capsule.AutoAnswerBy): a delivery, never the
+# owner's authorization, so a per-owner ruling never rests on it.
+AUTO_ANSWER_BY = "daemon:auto-recommendation"
 ASK_LINE = gd.Struct({"at": gd.STR, "step": gd.STR, "kind": gd.STR, "text": gd.STR, "by": gd.STR})
 RECORD_KINDS = ("fix", "clear", "blame")
 
@@ -1391,6 +1395,8 @@ def owner_message(capsule_root: str, at: str, step: str) -> Optional[Dict[str, s
         except ValueError:
             continue
         if derr is not None or line["kind"] not in ("reply", "message") or line["at"] != at:
+            continue
+        if line["by"] == AUTO_ANSWER_BY:
             continue
         if step and line["step"] != step:
             continue

@@ -207,7 +207,14 @@ func (d *Driver) OwnerMessage(ctx context.Context, text, by string) (protocol.Ow
 		return protocol.OwnerMessageAck{}, fmt.Errorf("driver: no step agent is running or waiting for the owner (step %q)", cur)
 	}
 	step, n := cur, st.Dispatch
+	// The record's read-check-append is one serialized section with the
+	// daemon's automatic reply (polyforge#239): whoever appends first
+	// wins, and the loser writes nothing extra — a reply recorded before
+	// the automatic commit leaves no open ask, so no automatic reply is
+	// appended over it.
+	d.askWriteMu.Lock()
 	line, err := RecordOwnerMessage(d.wi.CapsuleDir, step, n, text, by, d.stamp())
+	d.askWriteMu.Unlock()
 	if err != nil {
 		return protocol.OwnerMessageAck{}, err
 	}
