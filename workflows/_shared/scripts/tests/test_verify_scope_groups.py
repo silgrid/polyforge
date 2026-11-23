@@ -104,6 +104,25 @@ class ScopeGroupDeclarationTest(GitCase):
         self.assertIn("second full_parallel", c.stderr)
         self.assertEqual(report_of(c)["full_parallel"], 3, "a second valid declaration is diagnosed and ignored")
 
+    def test_a_non_full_report_is_silent_about_its_groups(self) -> None:
+        """polyforge#244 r1#2: only the full plan carries full-phase commands,
+        so a valid group= declaration is no diagnostic in the light, scoped or
+        micro reports — otherwise every polyforge work item's verification
+        report would accuse the conf of naming nothing."""
+        d = self.new_dir("non-full")
+        Repo(d, {"go.mod": "module example.invalid/nonfull\n\ngo 1.22\n", "src/a.go": "package src\n",
+                 ".polyforge/verify-scope.conf": "stack=go\nfast_gate=echo f\n"
+                 "full_command=echo one\nfull_command=echo two\ngroup=go|full-1\ngroup=go|full-2\n"})
+        for flags in (["--light"], ["--micro"]):
+            with self.subTest(flags):
+                c = subprocess.run(["python3", ENGINE, "--json", *flags, "--base", "HEAD"], cwd=d,
+                                   capture_output=True, text=True, stdin=subprocess.DEVNULL)
+                self.assertEqual(c.returncode, 0, c.stderr)
+                self.assertNotIn("group", c.stderr, "a legal declaration is diagnosed in %s" % (flags,))
+                self.assertNotIn("full_parallel", report_of(c))
+                for x in cmds_of(c):
+                    self.assertNotIn("group", x)
+
     def test_a_group_naming_no_full_command_is_diagnosed_and_dropped(self) -> None:
         d = self.repo("unbound", "group=go|full-9\ngroup=go|no-such-command\n")
         c = run_engine(d)
