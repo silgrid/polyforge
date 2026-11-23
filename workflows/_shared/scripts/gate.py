@@ -138,6 +138,7 @@ import os
 import re
 import sys
 import tempfile
+import threading
 import time
 import traceback
 from dataclasses import dataclass, field
@@ -737,9 +738,12 @@ class Gate:
         # polyforge#244: --parallel N overrides the report's declared
         # full-gate parallelism (0 = take it from the report).
         self.parallel = parallel
+        # the progress stream is written from the group workers too
+        self._say_mu = threading.Lock()
 
     def say(self, msg: str) -> None:
-        self.say_line("gate: " + msg)
+        with self._say_mu:
+            self.say_line("gate: " + msg)
 
     def deadline_note(self) -> str:
         return "the gate's deadline (%s)" % dur(self.window)
@@ -915,11 +919,11 @@ class Gate:
             res.incomplete = why
             return
         try:
-            self._judge(res, o, plan_only)
+            self._judge(res, o, plan_only, repo)
         finally:
             o.box.remove()
 
-    def _judge(self, res: GateResult, o: Opened, plan_only: bool) -> None:
+    def _judge(self, res: GateResult, o: Opened, plan_only: bool, repo: str) -> None:
         box, r = o.box, o.r
         res.image, res.built, res.container = box.report.image, box.report.built, box.report.name
         res.image_digest = box.report.digest
@@ -938,27 +942,46 @@ class Gate:
         if not cmds:
             res.incomplete = "the scope engine planned no command (stack %s, conf %s)" % (gostr.quote(rep.stack), rep.conf)
             return
-        res.plan = plan_of(o.directory, box.report, cmds, self.timeout_of, o.lane_dir)
+        # polyforge#244: the parallelism the gate runs the plan's groups at —
+        # the --parallel override, else the report's declaration (1 = serial,
+        # the case of a repository that declares no group).
+        grouped = any(c.group for c in cmds)
+        parallel = 1
+        if grouped:
+            parallel = self.parallel if self.parallel > 0 else (rep.parallel or 1)
+        res.plan = plan_of(o.directory, box.report, cmds, self.timeout_of, o.lane_dir, parallel=parallel)
         res.plan_digest = plan_digest(res.plan)
         if plan_only:
             return
-        self.say("plan: %s -> %d commands (plan digest %s), run in order inside the container" % (ref, len(cmds), res.plan_digest))
+        self.say("plan: %s -> %d commands (plan digest %s), run %s" % (
+            ref, len(cmds), res.plan_digest,
+            "in %d parallel groups, in order inside each container" % parallel if grouped
+            else "in order inside the container"))
 
-        def not_judged(when: str) -> str:
+        def not_judged(b: container.Box, when: str) -> str:
             # a command's status after any of these says nothing about the tree
             if self.interrupted:
                 return "the gate was interrupted %s (%s)" % (when, self.interrupted)
-            if box.is_removed():
+            if b.is_removed():
                 return "the gate removed its container (at its deadline or an interrupt) " + when
             if time.time() >= r.deadline:
                 return "%s passed %s" % (self.deadline_note(), when)
             return ""
 
+        if not grouped:
+            self._judge_serial(res, o, cmds, not_judged)
+            return
+        self._judge_grouped(res, o, repo, cmds, parallel, not_judged)
+
+    def _judge_serial(self, res: GateResult, o: Opened, cmds: Sequence[EngineCommand],
+                      not_judged: Callable[[container.Box, str], str]) -> None:
+        """The plan in order in the one container — the serial gate, byte for
+        byte the gate of a repository that declares no group."""
         stopped = False
         for i, c in enumerate(cmds):
             gc = GateCommand(name=c.name, phase=c.phase, cmd=c.cmd)
             if not stopped and not res.incomplete:
-                why = not_judged("before %s could start" % c.name)
+                why = not_judged(o.box, "before %s could start" % c.name)
                 if why:
                     res.incomplete = why
             if stopped or res.incomplete:
@@ -968,7 +991,7 @@ class Gate:
             at = "[%d/%d] %s" % (i + 1, len(cmds), c.name)
             self.say("%s (%s): %s" % (at, c.phase, c.cmd))
             try:
-                self._command(res, o, c, gc, at, not_judged)
+                self._command(res, o, o.box, c, gc, at, "", not_judged)
             except (KeyboardInterrupt, runner.Interrupted) as err:
                 self.interrupted = interrupt_name(err)
                 gc.exit = -1
@@ -977,12 +1000,136 @@ class Gate:
             if gc.failed() and not self.keep_going:
                 stopped = True
 
-    def _command(self, res: GateResult, o: Opened, c: EngineCommand, gc: GateCommand, at: str,
-                 not_judged: Callable[[str], str]) -> None:
-        box, r = o.box, o.r
+    def _judge_grouped(self, res: GateResult, o: Opened, repo: str, cmds: Sequence[EngineCommand], parallel: int,
+                       not_judged: Callable[[container.Box, str], str]) -> None:
+        """The plan's declared groups side by side, each group in plan order,
+        every group in a container of its own (polyforge#244).
+
+        The commands no group binds run serially in the gate's own container:
+        those before the grouped span first (the fast gates, in plan order),
+        those after it last (the dependency audit). At most `parallel` group
+        commands run at once, a group's own members one at a time; at
+        parallelism 1 the plan runs strictly in plan order. A failure without
+        --keep-going starts nothing new — a command already running finishes
+        and is recorded as it ran — and the interrupted, container-lost and
+        deadline conditions stop the rest exactly as they do serially. The
+        result is in plan order whatever finished first, and a command's log
+        is named by its plan index, so a serial and a parallel run of one
+        plan name the same log for the same command."""
+        n = len(cmds)
+        groups = [c.group for c in cmds]
+        first = min(i for i in range(n) if groups[i])
+        last = max(i for i in range(n) if groups[i])
+        head = [i for i in range(n) if not groups[i] and i < last]
+        tail = [i for i in range(n) if not groups[i] and i > last]
+        names: List[str] = []
+        members: Dict[str, List[int]] = {}
+        for i in range(n):
+            if not groups[i]:
+                continue
+            if groups[i] not in members:
+                members[groups[i]] = []
+                names.append(groups[i])
+            members[groups[i]].append(i)
+        # The log names are the plan's, reserved before anything runs: a
+        # serial and a parallel run of one plan name the same log for the
+        # same command (and an undeclared repository keeps its own counter).
+        log_paths = [o.r.next_log(o.log_dir) for _ in range(n)]
+        stop = threading.Event()
+        sem = threading.BoundedSemaphore(max(parallel, 1))
+        written: List[Optional[GateCommand]] = [None] * n
+
+        def placeholder(i: int) -> None:
+            c = cmds[i]
+            written[i] = GateCommand(name=c.name, phase=c.phase, cmd=c.cmd, not_run=True)
+
+        def run_one(i: int, b: container.Box) -> None:
+            c = cmds[i]
+            gc = GateCommand(name=c.name, phase=c.phase, cmd=c.cmd)
+            written[i] = gc
+            if stop.is_set() or res.incomplete:
+                gc.not_run = True
+                return
+            why = not_judged(b, "before %s could start" % c.name)
+            if why:
+                gc.not_run, res.incomplete = True, why
+                stop.set()
+                return
+            at = "[%d/%d] %s" % (i + 1, n, c.name)
+            self.say("%s (%s): %s" % (at, c.phase, c.cmd))
+            try:
+                self._command(res, o, b, c, gc, at, log_paths[i], not_judged)
+            except (KeyboardInterrupt, runner.Interrupted) as err:
+                self.interrupted = self.interrupted or interrupt_name(err)
+                gc.exit = -1
+                res.incomplete = "the gate was interrupted while %s ran (%s)" % (c.name, self.interrupted)
+            if gc.failed() and not self.keep_going:
+                stop.set()
+
+        def worker(b: container.Box, idxs: Sequence[int]) -> None:
+            for i in idxs:
+                sem.acquire()
+                try:
+                    run_one(i, b)
+                finally:
+                    sem.release()
+
+        boxes: Dict[str, container.Box] = {}
+
+        def box_of(g: str) -> container.Box:
+            """The group's container, started on its first command (the image
+            is already built; the boxes start serially, so no two builds
+            race). A container that cannot be had leaves the group's commands
+            not_run and the gate incomplete — never red."""
+            if g in boxes:
+                return boxes[g]
+            opened, why = self.open(o.directory, repo, o.log_dir)
+            if opened is None:
+                res.incomplete = why
+                stop.set()
+                for i in members[g]:
+                    placeholder(i)
+                return o.box
+            boxes[g] = opened.box
+            return opened.box
+
+        try:
+            if parallel <= 1:
+                # parallelism 1 is the serial plan: every command in plan
+                # order, a group's own container started when its first
+                # command comes up.
+                for i in range(n):
+                    run_one(i, box_of(groups[i]) if groups[i] else o.box)
+            else:
+                for i in head:
+                    run_one(i, o.box)
+                for g in names:
+                    if not res.incomplete and not stop.is_set():
+                        box_of(g)
+                threads = [threading.Thread(target=worker, args=(boxes[g], members[g]), name="group-" + g)
+                           for g in names if g in boxes]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
+                for i in tail:
+                    run_one(i, o.box)
+        finally:
+            for b in boxes.values():
+                b.remove()
+        for i in range(n):
+            if written[i] is None:
+                placeholder(i)
+            gc = written[i]
+            if gc is not None:
+                res.commands.append(gc)
+
+    def _command(self, res: GateResult, o: Opened, box: container.Box, c: EngineCommand, gc: GateCommand, at: str,
+                 log_path: str, not_judged: Callable[[container.Box, str], str]) -> None:
+        r = o.r
         why = r.unmet(c.requires_env, c.requires_cmd, o.directory, box)
         if why:
-            nj = not_judged("while probing %s's prerequisites" % c.name)
+            nj = not_judged(box, "while probing %s's prerequisites" % c.name)
             if nj:
                 gc.not_run, res.incomplete = True, nj
             else:
@@ -994,11 +1141,17 @@ class Gate:
             gc.not_run, res.incomplete = True, "the gate's container became unusable: " + lost
             return
         timeout = self.timeout_of(c)
-        er = r.exec(o.log_dir, runner.ExecSpec(argv=runner.bash_argv(c.cmd), dir=o.directory, cwd=".",
-                                               timeout=timeout / duration.SECOND, private_tmp=True), box)
+        spec = runner.ExecSpec(argv=runner.bash_argv(c.cmd), dir=o.directory, cwd=".",
+                               timeout=timeout / duration.SECOND, private_tmp=True)
+        # polyforge#244: a grouped command's log name is its plan index's,
+        # reserved by the scheduler; the serial path keeps the plain counter.
+        if log_path:
+            er = r.exec_to(spec, log_path, box)
+        else:
+            er = r.exec(o.log_dir, spec, box)
         gc.exit, gc.timed_out, gc.log = er.exit, er.timed_out, er.log_path
         gc.duration_ns = er.evidence.duration_ms * duration.MILLISECOND if er.evidence is not None else 0
-        nj = not_judged("while %s ran" % c.name)
+        nj = not_judged(box, "while %s ran" % c.name)
         if er.not_started:
             gc.not_run, gc.log = True, ""
             res.incomplete = "%s passed before %s could start" % (self.deadline_note(), c.name)
