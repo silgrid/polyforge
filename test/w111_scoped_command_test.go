@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 // w111scCommand is one reported command; the source reaches the JSON too.
@@ -89,6 +90,16 @@ scoped_command=lib/*|python3 -m pytest tests/
 scoped_command=docs/*|echo DOCS-CHANGED
 `
 
+// w111scNextSecond blocks until the wall clock leaves the current second, so
+// the next fixture's base commit carries a different commit timestamp — and
+// with the same content and message, a different SHA. The scenarios below
+// rely on it: two fixtures built in one second would share their base SHA and
+// hide a sub-case that reuses another fixture's --base.
+func w111scNextSecond(t *testing.T) {
+	t.Helper()
+	time.Sleep(time.Until(time.Now().Truncate(time.Second).Add(time.Second)) + 5*time.Millisecond)
+}
+
 // TestW111ScopedCommandSelected: a matching changed path adds the declared
 // command after the analyzer's own scoped commands (light and default
 // scoped alike), reported as a scoped command of source conf; a non-matching
@@ -114,6 +125,13 @@ func TestW111ScopedCommandSelected(t *testing.T) {
 			t.Fatalf("the matched scoped_command follows, source conf: %+v", got)
 		}
 
+		// polyforge#85 fix build (verification r2#1): force this fixture into a
+		// later wall-clock second, so its base commit is a different SHA and
+		// the reuse of the lib fixture's --base below is a deterministic
+		// stale-base scenario (the full bar's failure: verify-scope cannot
+		// diff an unknown base, falls back to the full tier, and scoped() is
+		// empty).
+		w111scNextSecond(t)
 		dir, base = w25e2eFixture(t, w111scFiles(w111scConf))
 		w25e2eWrite(t, dir, "docs/guide.md", "# guide 2\n")
 		w25e2eCommit(t, dir, "change docs")
