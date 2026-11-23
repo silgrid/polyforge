@@ -936,20 +936,26 @@ HUNK_LINE_RUNES = 160
 
 def _carries_suite(repos_dir: str, repo_name: str, cache: Dict[str, Callable[[str], bool]], path: str) -> bool:
     """Whether path is an e2e suite of repo_name: its `carries:` line is a
-    suite declaration, not a comment (a Go test file outside the harness
-    directory is no suite, AGENTS.md), read at the change base. D5's
-    `carries:` marker is a suite's alone (polyforge#241 review r2 N15)."""
+    suite declaration, not a comment — an npm, python or rust suite, or a
+    `*_test.go` under a Go repository's declared `go_harness` directory
+    (AGENTS.md, polyforge#111); a Go test file outside the harness directory
+    is no suite. Read at the change base; a base that cannot be read treats
+    the file as a suite, so D5 never silently drops a hit (fail-closed,
+    polyforge#241 review r2 N15, r3#1)."""
     if repo_name not in cache:
         repo = Repo(repos_dir, repo_name)
         base, _why = change_base(repo.dir)
+        rules = TestPathRules.at(repo.dir)
         roots: Dict[str, CarriesRoot] = {}
 
         def check(p: str) -> bool:
             if not base:
-                return False
+                return True  # fail-closed: no base, no silent D5 drop
             root = repo._carries_root_of(base, gotext.path_dir(p), roots)
             rel, ok = root.rel(p)
-            return ok and root.is_suite(rel)
+            if ok and root.is_suite(rel):
+                return True
+            return bool(rules.harness_dir) and p.startswith(rules.harness_dir + "/") and p.endswith("_test.go")
 
         cache[repo_name] = check
     return cache[repo_name](path)

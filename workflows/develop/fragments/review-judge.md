@@ -105,8 +105,9 @@ on their own.
    test already pins, one the analysis does not list, is a blocking `test_weakened` finding:
    find them the way build should have (the selectors, routes, copy keys and test names the
    diff touches; the engine's `--light` report and its `carries:` declarations). So is an
-   `uncovered` list that does not match that report, or a listed test that does not exist
-   (its file or name) — each finding names the missing or wrong entry.
+   `uncovered` list that does not match that report — each finding names the missing or
+   wrong entry; a listed test that does not exist (its file or name) is in the hand-off
+   gate's subset (the `analysis.json` paragraph below), not this manual judgment.
    `artifacts/facts/analysis.json` (`facts.py analysis`) names each entry that fails the
    close check (the same shared validator this gate's machine twin calls): a listed test
    that does not exist, cannot run as written, or whose run does not show its marker is in
