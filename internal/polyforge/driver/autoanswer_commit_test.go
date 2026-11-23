@@ -36,6 +36,22 @@ func (c *autoAnswerClock) advance(d time.Duration) {
 	c.mu.Unlock()
 }
 
+func writeAutoAnswerWorkItem(t *testing.T, dir, content string) {
+	t.Helper()
+	doc := capsule.WorkItemDoc{ID: "wi_run", Project: "proj", Goal: "g", Content: &content}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, filepath.FromSlash(capsule.WorkItemJSON))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func autoAnswerLines(t *testing.T, dir string) []capsule.AskLine {
 	t.Helper()
 	lines, err := capsule.ReadAsks(dir)
@@ -57,14 +73,23 @@ func autoReplies(lines []capsule.AskLine, askAt string) []capsule.AskLine {
 
 func TestAutoAnswerDeadlineAndRecommendations(t *testing.T) {
 	dir := t.TempDir()
+	writeAutoAnswerWorkItem(t, dir, "ordinary ticket")
 	base := time.Date(2026, 11, 23, 0, 0, 0, 0, time.UTC)
 	clock := &autoAnswerClock{at: base}
 	sp := &fakeSpawner{script: []fakeEntry{{hold: true}, {hold: true}}}
 	d, log, _, _ := askEnv(t, dir, sp, nil, 150*time.Millisecond)
 	d.cfg.Now = clock.now
+	d.workflow.Name = "develop"
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = d.Run(ctx) }()
+	done := make(chan struct{})
+	go func() { defer close(done); _ = d.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+		}
+	})
 	waitUntil(t, "the first dispatch", func() bool { return len(sp.dispatched()) == 1 })
 	n := readExec(t, filepath.Join(dir, capsule.ExecutionJSON)).Steps["fix"].Dispatch
 	ask := writeAsk(t, dir, "fix", n, autoAnswerCardTwoRows)
@@ -108,14 +133,23 @@ func TestAutoAnswerDeadlineAndRecommendations(t *testing.T) {
 
 func TestAutoAnswerOwnerWins(t *testing.T) {
 	dir := t.TempDir()
+	writeAutoAnswerWorkItem(t, dir, "ordinary ticket")
 	base := time.Date(2026, 11, 23, 0, 0, 0, 0, time.UTC)
 	clock := &autoAnswerClock{at: base}
 	sp := &fakeSpawner{script: []fakeEntry{{hold: true}}}
 	d, log, _, _ := askEnv(t, dir, sp, nil, 150*time.Millisecond)
 	d.cfg.Now = clock.now
+	d.workflow.Name = "develop"
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = d.Run(ctx) }()
+	done := make(chan struct{})
+	go func() { defer close(done); _ = d.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+		}
+	})
 	waitUntil(t, "the dispatch", func() bool { return len(sp.dispatched()) == 1 })
 	n := readExec(t, filepath.Join(dir, capsule.ExecutionJSON)).Steps["fix"].Dispatch
 	ask := writeAsk(t, dir, "fix", n, autoAnswerCardTwoRows)
@@ -139,6 +173,7 @@ func TestAutoAnswerOwnerWins(t *testing.T) {
 // dispatch n, with an open ask and (optionally) its recorded T0.
 func seedAutoAnswerCapsule(t *testing.T, dir, step string, n int64, base time.Time, withAwaiting bool) capsule.AskLine {
 	t.Helper()
+	writeAutoAnswerWorkItem(t, dir, "ordinary ticket")
 	ex := capsule.Execution{WorkItemID: "wi_run", CurrentStep: step, WorkflowStatus: capsule.WorkflowStatusRunning,
 		Steps: map[string]*capsule.Step{step: {Status: capsule.StepInProgress, Dispatch: n}}}
 	raw, err := json.Marshal(ex)
@@ -174,9 +209,17 @@ func TestAutoAnswerWarmColdRestart(t *testing.T) {
 		sp := &fakeSpawner{script: []fakeEntry{{hold: true}}}
 		d, log, _, _ := askEnv(t, dir, sp, nil, 150*time.Millisecond)
 		d.cfg.Now = clock.now
+		d.workflow.Name = "develop"
 		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		go func() { _ = d.Run(ctx) }()
+		done := make(chan struct{})
+		go func() { defer close(done); _ = d.Run(ctx) }()
+		t.Cleanup(func() {
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+			}
+		})
 		waitUntil(t, "the resumed park", func() bool { return len(log.byKind(EvAwaitingOwner)) == 1 })
 		clock.advance(10*time.Minute + time.Second) // 30m1s after the original T0
 		waitUntil(t, "the automatic reply after the restart", func() bool {
@@ -195,9 +238,17 @@ func TestAutoAnswerWarmColdRestart(t *testing.T) {
 		sp := &fakeSpawner{script: []fakeEntry{{hold: true}}}
 		d, log, _, _ := askEnv(t, dir, sp, nil, 150*time.Millisecond)
 		d.cfg.Now = clock.now
+		d.workflow.Name = "develop"
 		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		go func() { _ = d.Run(ctx) }()
+		done := make(chan struct{})
+		go func() { defer close(done); _ = d.Run(ctx) }()
+		t.Cleanup(func() {
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+			}
+		})
 		waitUntil(t, "the resumed park", func() bool { return len(log.byKind(EvAwaitingOwner)) == 1 })
 		clock.advance(60 * time.Minute)
 		time.Sleep(200 * time.Millisecond)
