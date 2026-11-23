@@ -37,9 +37,11 @@ A published release needs no repository checkout and no `gh`: the image
 address plus the version is the whole install (the public package must be
 made public once by an org owner - GHCR creates it private on the first
 push; `release.sh --verify` checks the anonymous read). Point compose's
-`WORKSTATION_IMAGE` at the published tag and `docker compose --profile
-aihub up -d` (or `--profile no-aihub` for the opt-out) boots the machine;
-an upgrade is changing the tag and running it again. The internal channel's
+`WORKSTATION_IMAGE` at the published tag, export the required
+`PI_WEB_PASSWORD` (compose refuses to start without it), and
+`docker compose --profile aihub up -d` (or `--profile no-aihub` for the
+opt-out) boots the machine; an upgrade is changing the tag and running it
+again. The internal channel's
 image is private: a group member logs in once with a token that carries
 `read:packages` (`docker login ghcr.io -u <user>`) and pulls the same way.
 
