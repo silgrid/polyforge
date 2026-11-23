@@ -63,6 +63,11 @@ const (
 	AskKindDelivered = "delivered"
 )
 
+// AutoAnswerBy is the reserved author of the daemon's automatic reply to a
+// low-star question card (polyforge#239): a normal `pf answer` may never
+// record it, and no per-owner authorization consumer reads it.
+const AutoAnswerBy = "daemon:auto-recommendation"
+
 // MaxAskBytes bounds one ask's text (`pf ask` refuses a longer one): the
 // question is shown whole in the job card and the decision feed.
 const MaxAskBytes = 8 * 1024
