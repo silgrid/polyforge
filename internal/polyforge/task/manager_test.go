@@ -2,11 +2,14 @@ package task
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/silgrid/polyforge/internal/common/protocol"
 )
 
 type fakeRunner struct {
@@ -307,5 +310,121 @@ func TestManagerWaitContextAndUnknownID(t *testing.T) {
 	m.mu.Unlock()
 	if left != 0 {
 		t.Fatalf("an abandoned waiter must be dropped: %d left", left)
+	}
+}
+
+// TestTaskContextLifecycle pins the running task's context window
+// (polyforge#230 AC1): a value an attempt reports is on the record while it
+// runs, a candidate switch starts the next attempt with none until it reports
+// its own, the terminal transition leaves none, a recovered task carries none,
+// and the wire value is the five keys only — the report's own text never
+// bleeds into it.
+func TestTaskContextLifecycle(t *testing.T) {
+	second := make(chan struct{}, 1)
+	release := make(chan struct{})
+	r := fakeRunner{fn: func(ctx context.Context, s RunSpec) (RunResult, error) {
+		if s.Candidate.Model == "a/one" {
+			if s.OnContext != nil {
+				tokens := int64(4300)
+				s.OnContext(&protocol.ContextUsage{Tokens: &tokens, Model: "openai/m1", AsOf: "2026-11-22T10:00:00Z"})
+			}
+			<-release
+			return RunResult{Tokens: 3}, errors.New("first candidate failed")
+		}
+		second <- struct{}{}
+		<-ctx.Done()
+		return RunResult{Report: `{"context":{"tokens":1}} secret`, Tokens: 1}, nil
+	}}
+	m, _ := newTestManager(t, r, []string{"pi:a/one", "pi:a/two"})
+	tk, err := m.Spawn(Spec{Project: "p", Prompt: "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// while the first attempt runs: the reported value is on the record
+	deadline := time.Now().Add(10 * time.Second)
+	var live Task
+	for time.Now().Before(deadline) {
+		live, _ = m.Show(tk.ID)
+		if live.Context != nil {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if live.Context == nil || live.Context.Tokens == nil || *live.Context.Tokens != 4300 || live.Context.Model != "openai/m1" ||
+		live.Context.AsOf != "2026-11-22T10:00:00Z" {
+		t.Fatalf("while running: context = %#v, want tokens 4300 of openai/m1 and its as_of", live.Context)
+	}
+	listed, _ := m.List()
+	if len(listed) != 1 || listed[0].Context == nil {
+		t.Fatalf("the list lacks the running context: %+v", listed)
+	}
+	// the candidate switch starts the next attempt with no context of its own
+	close(release)
+	select {
+	case <-second:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the second candidate never started")
+	}
+	if got, _ := m.Show(tk.ID); got.Context != nil {
+		t.Fatalf("the switched attempt carries the previous context: %#v", got.Context)
+	}
+	if err := m.Cancel(tk.ID); err != nil {
+		t.Fatal(err)
+	}
+	done := waitState(t, m, tk.ID, StateInterrupted)
+	if done.Context != nil {
+		t.Fatalf("a terminal task carries context: %#v", done.Context)
+	}
+	// a completed task carries none either
+	m2, _ := newTestManager(t, fakeRunner{fn: func(context.Context, RunSpec) (RunResult, error) {
+		return RunResult{Report: "done", Tokens: 1}, nil
+	}}, []string{"pi:a/one"})
+	tk2, err := m2.Spawn(Spec{Project: "p", Prompt: "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := waitState(t, m2, tk2.ID, StateCompleted); got.Context != nil {
+		t.Fatalf("a completed task carries context: %#v", got.Context)
+	}
+
+	// a record the store still holds as running is recovered interrupted with
+	// no inherited context
+	now := time.Now().UTC()
+	tokens := int64(99)
+	stale := Task{ID: "task_0123456789abcdea", State: StateRunning, CreatedAt: now, Context: &protocol.ContextUsage{Tokens: &tokens, Model: "m"}}
+	if err := m.cfg.Store.Save(stale); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Recover(); err != nil {
+		t.Fatal(err)
+	}
+	recovered, _ := m.Show(stale.ID)
+	if recovered.State != StateInterrupted || recovered.Context != nil {
+		t.Fatalf("recovered = %+v, want interrupted with no context", recovered)
+	}
+
+	// the wire shape is the five keys and never the report's text
+	tokens = 4300
+	pct := 2.15
+	window := int64(200000)
+	raw, err := json.Marshal(Task{ID: tk.ID, Report: `{"context":{"tokens":1}} secret`, Context: &protocol.ContextUsage{
+		Tokens: &tokens, Window: &window, Percent: &pct, Model: "openai/m1", AsOf: "2026-11-22T10:00:00Z"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Context map[string]json.RawMessage `json:"context"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"as_of", "model", "percent", "tokens", "window"}
+	if len(doc.Context) != len(want) {
+		t.Fatalf("context keys = %v, want exactly %v", doc.Context, want)
+	}
+	for _, k := range want {
+		if _, ok := doc.Context[k]; !ok {
+			t.Fatalf("context keys = %v, want %v", doc.Context, want)
+		}
 	}
 }

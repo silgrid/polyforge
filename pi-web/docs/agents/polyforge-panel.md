@@ -915,13 +915,18 @@ the Work tab carries no count. The former Jobs and Tasks tabs are Work's
 first two sub-tabs (作业/任务 in zh-CN, 作業/任務 in zh-TW, so the workflow jobs
 and the one-shot tasks read apart from pi's own background-tasks surface),
 followed by the read-only work item list (全部 / 全部 /
-All — 工单列表 / 工單列表 / Work items before polyforge#22, `polyforge.work.itemsTab`), the
-project list (项目 / 專案 / Projects, `polyforge.work.projectsTab`,
+All — 工单列表 / 工單列表 / Work items before polyforge#22, `polyforge.work.itemsTab`).
+The project list (项目 / 專案 / Projects, `polyforge.work.projectsTab`,
 polyforge#30: the mapped projects with their global states — deactivated ones
 hidden by default behind a「显示已停用」toggle, marked, restorable in place
 through the route's one write) and the integration view (
-待集成 / 待整合 / Integration, `polyforge.work.integrateTab`) — order 作业,
-任务, 全部, 项目, 待集成 — in their
+待集成 / 待整合 / Integration, `polyforge.work.integrateTab`) stay supported but are
+**hidden from the rail since polyforge#226**: the rail maps one visible list,
+`VISIBLE_WORK_TABS` in `PolyforgePanel.tsx`, currently
+`["jobs", "tasks", "items"]` — visible order 作业, 任务, 全部. Their labels,
+icons, body branches, components and routes stay; restoring one is one entry
+added to that list. The hidden buttons are not rendered at all (not CSS-hidden),
+and no other entry switches to them. The three visible entries sit in the rail's
 own tablist (`data-pf-tabstrip="work"`) placed after the main area in the
 DOM, beside it on the right (`aria-orientation="vertical"`): on desktop (viewport ≥ 641px,
 `useIsMobile`, whatever the dock width) a ~72px text rail (`flex: 0 0 72px`,
@@ -935,15 +940,17 @@ icon-only buttons — a 16px stroke icon in the panel's 24-viewBox style
 (`WORK_TAB_ICONS`, `aria-hidden`) with the running badge under it, each
 button named by its existing tab copy (`aria-label` and `title` =
 `polyforge.messages.jobsTab` / `polyforge.tasks.tab` /
-`polyforge.work.itemsTab` / `polyforge.work.projectsTab` / `polyforge.work.integrateTab`; 待集成's icon is
-branches merging into one line; 项目's is a folder).
+`polyforge.work.itemsTab`); the hidden entries keep their copy, icon and body
+for the restore (`polyforge.work.projectsTab` / `polyforge.work.integrateTab`;
+待集成's icon is branches merging into one line; 项目's is a folder).
 
 **Two parts stacked (owner 2026-11-09).** At every width
 (the 460px and 340px docks, the ≤640px 40px icon rail, the 375px sheet) Work
 is a column (`data-pf-work-layout`) of two parts. The top part
 (`data-pf-work-top`) is the row: the main area (`data-pf-work-main`) shows the
 selected sub-tab's list — the Jobs queue line and card row, the Tasks list or
-the 全部 (work item) list, each with its own search and filters, or the 待集成 view
+the 全部 (work item) list, each with its own search and filters, or the hidden
+待集成 view when it is restored (polyforge#226)
 — and the rail sits beside it on the right. The lower part (`data-pf-work-detail`, a top border)
 spans the whole panel width and holds the selected item's detail: the job
 detail (its one scroll region) with the input box (`PolyforgeJobComposer`)
@@ -953,7 +960,7 @@ part whenever there is a status snapshot (with nothing selected it holds the
 open — they hand the detail to `renderDetail` (a portal into the part's slot,
 `data-pf-work-detail-slot`) and report `onDetailOpenChange`, and with nothing
 selected the part is hidden and the top part takes the whole height. 待集成
- keeps everything in the main area and shows no lower part.
+ (when restored) keeps everything in the main area and shows no lower part.
 With the
 lower part showing, the top part takes its content height, at most 45% of
 Work (the cap the card stream used to carry), and the list scrolls inside it;
@@ -972,15 +979,20 @@ is unmounted — until the next list answer; it costs no read of its own. A
 count of 0 stays visible in `var(--text-dim)` (a non-zero count is
 `var(--accent)`); with no snapshot (daemon down) the Jobs/Tasks badges do not
 render. The badge's accessible name is `polyforge.work.jobsRunning` /
-`polyforge.work.tasksRunning` / `polyforge.work.itemsRunning`. 待集成
+`polyforge.work.tasksRunning` / `polyforge.work.itemsRunning`. The hidden 待集成
  and the top-level Work tab have no badge.
 
 State: `usePolyforge` holds `activeTab` (`PolyforgeTab = "memory" |
 "messages" | "work"`, default `"work"`), `workTab` (`PolyforgeWorkTab =
-"jobs" | "tasks" | "items" | "integrate"`, default `"jobs"`) and `workItemsRunning`
-(`number | null`). The hook outlives the dock, so a
-close/reopen keeps the sub-tab and the items badge; a reload resets all
-three; nothing is written to storage. `openAnchor` (the Messages and Memory
+"jobs" | "tasks" | "items" | "projects" | "integrate"`, default `"jobs"`) and `workItemsRunning`
+(`number | null`). The rail maps `VISIBLE_WORK_TABS` (currently jobs, tasks and
+items, polyforge#226); `projects` and `integrate` stay valid `workTab` values
+for the one-list restore, while no rendered entry sets them. Every dock open — and every switch to Work from another
+top-level tab — resets the sub-tab to Jobs; an explicit target (the walk,
+an anchor, an analysis card's task link) writes after that reset, so a walk
+to a task still lands on 任务; a manual sub-tab switch holds while the dock
+stays open, and a reload resets all three. A close/reopen keeps the items
+badge (`workItemsRunning`); nothing is written to storage. `openAnchor` (the Messages and Memory
 work-item links) sets Work › Jobs and the selection — never the 全部 list. The
 cards poll is gated on `activeTab === "work" && workTab === "jobs"`; the
 Tasks, work-item and 待集成 surfaces read only while they are mounted.
@@ -2093,7 +2105,8 @@ that carries `file show`), checked through the one presence-cached
 
 ## Integration sub-tab
 
-Work › 待集成 shows, per `[workspace]`-mapped project of the default Cell,
+Work › 待集成 (hidden from the rail since polyforge#226; its component, read
+and route stay) shows, per `[workspace]`-mapped project of the default Cell,
 the contract-1 integration state: the work items develop landed and no
 green integrate batch has closed yet, and the integrate batches (each batch
 is itself an `integrate` work item). It reads no daemon status face — no
@@ -2156,8 +2169,13 @@ other surface keep rendering.
 A read-only view of every task of every valid Cell (polyforge#73; no
 project filter, no per-Cell filter — the search matches the Cell name).
 `lib/polyforge-tasks-pure.ts` is the client-safe model (the list row
-`PolyforgeTaskRow` id/project/state/prompt_summary + the optional timing facts
-and report_tail?/reporter?, the detail
+`PolyforgeTaskRow` id/project/state/prompt_summary + the optional timing facts,
+report_tail?/reporter? and, since polyforge#230, candidate?, a running task's
+context? and an analysis task's analysis_of?; `taskContextText` /
+`taskContextDetailText` are the card's and the detail's context line — the job
+card's meter text and the job detail's `tokens / window` when the window is
+known, the token count alone when it is not — and `taskAnalysisSlug` /
+`taskAnalysisTitle` name an analyzed ticket, the wi id while it is unread; the detail
 `PolyforgeTaskDetail`, `isPolyforgeTaskId` — `task_` + 16 lowercase hex —
 `splitTaskSections`: 正在运行 is exactly `state === "running"`, 全部 the rest,
 both in pf's order, so every task is listed exactly once with the running ones
@@ -2198,7 +2216,12 @@ the list never carries the full prompt or the report) plus the three timing
 facts started_at?/ended_at?/wall_consumed_ns? (each absent when
 pf has none — pf's zero time reads as absent, a non-numeric wall time is
 dropped), so a block shows its duration without a detail read, plus
-report_tail?/reporter? — nine keys in all: `report_tail` is
+report_tail?/reporter?, the attempt's `candidate` and, when pf sends them,
+the running task's `context` (polyforge#230: `tokens`, `model`, `as_of`, and
+`window`/`percent` only as a positive finite pair — the job row's own shape;
+an unreal count drops the whole object, an unusable window drops the window
+and its percent, and an unusable model id is dropped) and the analysis task's
+`analysis_of` (only a `wi_…` id) — `report_tail` is
 pf's own bounded last non-empty report line (≤ 200 code points, an over-long
 line already `…` + its last 199; `""` while running) forwarded exactly as sent,
 never trimmed or re-cut, and `reporter` is the spawn-time human display name
@@ -2206,8 +2229,16 @@ or the sentinel `machine`; each travels only when pf sends a string (`""`
 included), so a non-string value is absent, never coerced. Neither field
 moves the floor: a 2.20.12 pf that lacks them still lists (its finished
 blocks show 暂无报告 and the reporter filter offers only 全部发起人). The
-unit pin, the routes source pin and e2e S13 name these nine keys (an owner-intended 2026-10-30
-extension, not a relaxation). The detail passport is unchanged. A detail keeps
+unit pin, the routes source pin and e2e S13 name these keys (an owner-intended 2026-10-30
+extension, not a relaxation; polyforge#230's context/candidate/analysis_of are
+the same kind of owner-intended extension, absent from a pf that predates
+them). Both task routes then fill a running context's missing window the way
+the Jobs rows are filled (`cards-pure`'s one `withContextWindow` merge, the
+`candidate`'s `<harness>:` prefix and the context's model through
+`catalogContextWindow`): a value that already carries a window is never
+re-read, and a failed lookup leaves tokens only — the ticket's "补不到只显示
+tokens, 不猜". The fill spawns no pf. The detail passport carries the same
+three optional keys. A detail keeps
 id/project/state/candidates/max_duration_ns/max_tokens/wall_consumed_ns/
 tokens_consumed/created_at/started_at?/ended_at? (pf's zero time reads as
 absent)/prompt/report/report_len/truncated; the report is cut to
@@ -2217,11 +2248,18 @@ the Memory tab's `capUtf8Bytes`, `report_len` is the measured uncut byte length 
 marks never leave the server.
 
 **Surface.** `components/PolyforgeTasks.tsx` owns its state (no hook read,
-no poll, no storage) and reads on gestures only — one list read each time
+no storage; its only timer besides the running durations' clock is the
+owner-ruled 15 s running re-read below) and reads on gestures only — one list read each time
 the Tasks sub-tab opens (the component mounts), one per click of the shared
 search bar's ↻ action (slot) and one detail read
 per selection; searching, clearing the search, filtering and going back read
-nothing. The one automatic exception: `PolyforgePanel` passes
+nothing. One owner-ruled exception (polyforge#230, owner 2026-11-22, Q2=B): while the
+list holds a **running** task this sub-tab re-reads it every 15 s
+(`REFRESH_MS = 15000`, a `setInterval` on the same `readList`, cleared on
+unmount and as soon as no running task is left), so a running task's context
+usage and token count move like a job's and its `as_of` says how fresh the
+value is; with no running task there is no timer. The other automatic
+exception: `PolyforgePanel` passes
 `taskCountKey` = the status snapshot's `` `${tasks.running}:${tasks.completed}` ``
 (null without a snapshot; the aggregate's counts cover every valid Cell
 since polyforge#73, so a task change in any Cell re-reads the list), and while the sub-page stays mounted each change
@@ -2242,8 +2280,8 @@ in Work's full-width lower part —
 the 暂无任务 empty list included, but never in the detail or on the loading,
 not-installed, below-the-floor and first-read-failure notices. A click calls
 the same `readList`, so it adds exactly one `GET /api/polyforge/tasks` read
-and nothing else: no poll, no timer (a minimum spin duration included), no
-storage, and the count-key re-read is unchanged. The button's busy state has
+and nothing else: no timer of its own (a minimum spin duration included), no
+storage, and the count-key and running-refresh reads are unchanged. The button's busy state has
 one source — the newest list read still in flight, whether the mount read, a
 count change or the click started it: while it lasts the button is `disabled`,
 `aria-busy="true"`, its icon carries `animate-spin`, and its title/aria-label
@@ -2304,8 +2342,28 @@ finished one shows `wall_consumed_ns` plus `polyforge.tasks.endedAgo` from
 `ended_at`; an absent field renders `—`, never NaN. The running durations
 tick on a local 1 s render clock (`setInterval` that only sets `now`, no
 I/O) that exists only while a running task is listed and is cleared on
-unmount — a clock, not a poll. The
-detail shows status, project, candidates, the budget (wall and tokens,
+unmount — a clock, not a poll. A running block also shows its context usage
+(`data-pf-task-context`) directly under the state row, in the job card's own
+meter text and tone colour band (`polyforgeContextMeterText`
+`percent% / window`, else the compact token count alone; the colour is
+`POLYFORGE_CONTEXT_METER_COLORS` with the same above-70 amber / above-90 red
+thresholds, `var(--text-dim)` below them) with the model and
+`as_of` on its hover, and an analysis task's block opens with
+`data-pf-task-analysis`, the top line's
+`polyforge.tasks.analysisOf` (分析 <slug> / Analyzing <slug>) and the ticket's
+goal beneath it — the ticket read once per session through the existing
+`GET /api/polyforge/work-items/[id]` (a per-wi cache in a ref; a failed read is
+no error, the row shows the wi id), clicked through the panel's own
+`onOpenAnchor(analysis_of)` (the Messages surface's opener, the same one the
+Memory sub-tab uses) with `stopPropagation` so the task is not also selected.
+The card's row is a plain click target — the block itself is the button, so no
+second focusable control is nested in it; the detail's copy is the
+keyboard-reachable one (`role="link"`). An ordinary task has no analysis row. The
+detail shows the same analysis row at its top (`data-pf-detail-task-analysis`)
+and a `context` row (`data-pf-detail-task-context`, label
+`polyforge.context`) among its facts: the job detail's `tokens / window` when
+the window is known, the grouped token count alone otherwise. The
+detail also shows status, project, candidates, the budget (wall and tokens,
 consumed of limit), created/started/ended, the prompt, and the report through
 `MarkdownBody` with the Memory tab's rules: collapsed behind a height clip
 when `report_len` exceeds `MEMORY_COLLAPSE_BYTES` (2000), and the truncation

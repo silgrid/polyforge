@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { hasPolyforgeCellCapabilities, polyforgeScopePrefix } from "@/lib/polyforge-cells-pure";
 import { isApiRequestAllowed } from "@/lib/request-security";
 import { getPolyforgeOpsStatus, probePolyforgeVersion, servingPolyforgeCells } from "@/lib/polyforge-status";
-import { listPolyforgeTasks, PolyforgeTasksError, readPolyforgeTasksCapability, type PolyforgeTaskRow } from "@/lib/polyforge-tasks";
+import { fillTaskContextWindows, listPolyforgeTasks, PolyforgeTasksError, readPolyforgeTasksCapability, type PolyforgeTaskRow } from "@/lib/polyforge-tasks";
 
 export const dynamic = "force-dynamic";
 
@@ -13,8 +13,9 @@ export const dynamic = "force-dynamic";
  * its local reads, the same set the Host's task sum and the Jobs list
  * count) — the same `pf --json ops status` read the Jobs tab
  * polls (its shared cached reader; no new pf probe, polyforge#73) — each row
- * named with its Cell by this outer layer (`cell`, the tenth field; the
- * nine-key row passport itself is unchanged). A Cell whose read fails
+ * named with its Cell by this outer layer (`cell`), and a running row's
+ * context window filled from the model catalog exactly as a Jobs row's is
+ * (polyforge#230; no pf spawn). A Cell whose read fails
  * degrades to one `cellErrors` entry while the rest list. A pf without the
  * multi-Cell protocol — and an aggregate that cannot be read, or one with no
  * valid Cell — keeps today's single unflagged `pf --json task list`.
@@ -45,8 +46,8 @@ export async function GET(request: Request) {
     // (lib/polyforge-cells-pure.ts), once the oldest pf pi-web supports
     // reports the multi-Cell capabilities.
     if (cells.length === 0) {
-      const tasks = await listPolyforgeTasks();
-      return NextResponse.json({ ...capability, tasks });
+      const filled = await fillTaskContextWindows(await listPolyforgeTasks());
+      return NextResponse.json({ ...capability, tasks: filled });
     }
     const reads = await Promise.all(cells.map(async (cell) => {
       try {
@@ -57,8 +58,9 @@ export async function GET(request: Request) {
       }
     }));
     const tasks: (PolyforgeTaskRow & { cell: string })[] = reads.flatMap((read) => read.tasks ?? []);
+    const filled = await fillTaskContextWindows(tasks);
     const cellErrors = reads.flatMap((read) => (read.error === undefined ? [] : [{ cell: read.cell, error: read.error }]));
-    return NextResponse.json({ ...capability, tasks, ...(cellErrors.length > 0 ? { cellErrors } : {}) });
+    return NextResponse.json({ ...capability, tasks: filled, ...(cellErrors.length > 0 ? { cellErrors } : {}) });
   } catch (error) {
     const failure = error instanceof PolyforgeTasksError ? error : new PolyforgeTasksError("polyforge is unavailable");
     return NextResponse.json({ ...capability, tasks: [], error: failure.message });

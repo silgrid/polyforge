@@ -300,11 +300,10 @@ try {
       assert.ok(Math.abs(railBox.width - 40) <= 4, `the rail is about 40px wide (${railBox.width})`);
       assert.ok(railBox.x >= jobs.main.x + jobs.main.width - 2, `the rail sits right of the main area (rail ${railBox.x}, main end ${jobs.main.x + jobs.main.width})`);
       const buttons = rail.getByRole("tab");
-      // intentional fourth sub-tab: 待集成 joins the Work rail after 全部 (工单列表 before polyforge#22);
-      // polyforge#30 adds the fifth segment 项目 after 全部, before 待集成.
-      assert.equal(await buttons.count(), 5, "five sub-tab buttons");
+      // polyforge#226 hides 项目 and 待集成: the rail renders 作业, 任务, 全部 only.
+      assert.equal(await buttons.count(), 3, "three sub-tab buttons");
       mobileButtons = [];
-      for (let i = 0; i < 5; i++) {
+      for (let i = 0; i < 3; i++) {
         const button = buttons.nth(i);
         const box = await button.boundingBox();
         assert.ok(box && Math.abs(box.width - 40) <= 6 && Math.abs(box.height - 40) <= 6, `button ${i} is about 40×40 (${box?.width}×${box?.height})`);
@@ -321,7 +320,7 @@ try {
       await workLayout(page);
       const buttons = workTablist(page).getByRole("tab");
       const desktop = [];
-      for (let i = 0; i < 5; i++) desktop.push(await buttons.nth(i).boundingBox());
+      for (let i = 0; i < 3; i++) desktop.push(await buttons.nth(i).boundingBox());
       assert.ok(desktop.every(Boolean), "the desktop rail buttons measure");
       for (const box of mobileButtons) {
         assert.ok(box.width <= Math.max(...desktop.map((item) => item.width)) + 1, `a mobile button is no wider than a desktop rail button (${box.width})`);
@@ -356,10 +355,9 @@ try {
     const rail = workTablist(page);
     await rail.waitFor({ timeout: 15_000 });
     const buttons = rail.getByRole("tab");
-    // intentional fourth sub-tab: 待集成 joins the Work rail after 工单列表;
-    // polyforge#30 adds the fifth segment 项目 after 全部, before 待集成.
-    const names = ["作业", "任务", "全部", "项目", "待集成"];
-    assert.equal(await buttons.count(), names.length, "five sub-tab buttons");
+    // polyforge#226 hides 项目 and 待集成: three entries, same names and icons.
+    const names = ["作业", "任务", "全部"];
+    assert.equal(await buttons.count(), names.length, "three sub-tab buttons");
     for (let i = 0; i < names.length; i++) {
       const button = buttons.nth(i);
       assert.equal(await button.getAttribute("aria-label"), names[i], `button ${i} has the existing tab copy as aria-label`);

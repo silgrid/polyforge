@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/harness"
+	"github.com/silgrid/polyforge/internal/common/protocol"
 )
 
 func fakePi(t *testing.T, body string) *ExecRunner {
@@ -214,5 +215,35 @@ func TestResolveBinFollowsLookPathAndSymlinks(t *testing.T) {
 	r := &ExecRunner{ClaudeBin: func() string { return "claude" }}
 	if got := r.bin(harness.Claude); got != real {
 		t.Fatalf("ExecRunner.bin(claude) = %q; want %q", got, real)
+	}
+}
+
+// TestExecRunnerFeedsContext: the runner reports the attempt's context usage
+// as the stream records arrive, through the same fold the step lane reads a
+// transcript with (polyforge#230 AC1): a pi message_end whose assistant
+// message carries usage 1000+200+3000+0 is a context of 4200 on openai/m1,
+// with a receive-time as_of, while the budget keeps counting from the
+// message_update's fresh part.
+func TestExecRunnerFeedsContext(t *testing.T) {
+	r := fakePi(t, `cat >/dev/null
+echo '{"type":"turn_start"}'
+echo '{"type":"message_update","usage":{"input":10,"output":2,"cacheRead":900,"cacheWrite":0}}'
+echo '{"type":"message_end","message":{"role":"assistant","provider":"openai","model":"m1","stopReason":"toolUse","content":[],"usage":{"input":1000,"output":200,"cacheRead":3000,"cacheWrite":0}}}'
+`)
+	spec := piSpec(t, 100000)
+	var seen []*protocol.ContextUsage
+	spec.OnContext = func(u *protocol.ContextUsage) { seen = append(seen, u) }
+	if _, err := r.Run(context.Background(), spec, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) == 0 {
+		t.Fatal("the runner reported no context")
+	}
+	last := seen[len(seen)-1]
+	if last.Tokens == nil || *last.Tokens != 4200 {
+		t.Fatalf("context = %#v, want tokens 4200", last)
+	}
+	if last.Model != "openai/m1" || last.AsOf == "" || last.Window != nil || last.Percent != nil {
+		t.Fatalf("context = %#v, want openai/m1 with its as_of and no guessed window", last)
 	}
 }

@@ -142,6 +142,16 @@ session writes its report (`pf file edit <id> --content @file`).
     points, `…` + the last 199 when longer), unmasked, `""` while running or
     for an empty report — never the error. Read the full report with
     `pf task show <id>`.
+  - `candidate` is the attempt's `<harness>:<model>` string (absent before
+    the first attempt starts), and a **running** task's row and its
+    `pf task show --json` document carry `context` (polyforge#230): `tokens`,
+    `model`, `as_of` and, only when the harness reported that model's window,
+    `window` and `percent`. It is the conversation's fill counted from the
+    attempt's own stream with the same transcript fold the step lane's job
+    `context` uses — not `tokens_consumed`, which is the cumulative fresh
+    budget spend. The daemon clears it at the terminal transition, so a
+    finished task never carries it; the human `pf task show` text output does
+    not show it (a `--json` field only).
 - `show <id>` prints the budget usage and the report (its
   `--json` also carries the full prompt); `cancel <id>` asks the daemon to
   stop a running task.

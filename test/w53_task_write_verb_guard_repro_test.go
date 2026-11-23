@@ -88,6 +88,9 @@ func w53DaemonProbes() []w53DaemonProbe {
 		// polyforge#72 (AC3, review r1#3): the analysis request a ticket's
 		// filing makes is a write a task may not make either
 		{"POST", "/analysis/enqueue", `{"work_item_id":"wi_x","project":"e2e"}`},
+		// polyforge#233: the owner's redo request is a write a task may not
+		// make either; it sits behind the same step-origin guard.
+		{"POST", "/analysis/redo", `{"work_item_id":"wi_x","project":"e2e"}`},
 		// polyforge#72's one exception (AC3): /task/analysis-write is the
 		// narrow write path a TASK peer may reach — the route itself still
 		// refuses this fake task (it is no running analysis task of this

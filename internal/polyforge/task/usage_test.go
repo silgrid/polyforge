@@ -124,3 +124,26 @@ func TestSupportsUsage(t *testing.T) {
 		t.Fatal("SupportsUsage closed set")
 	}
 }
+
+// TestStreamParserPiCountsMessageEndUsage pins the ticket's undercount
+// (polyforge#230 AC5): a pi stream's message_update may carry only a partial
+// usage (or none at all); the finished call's authoritative usage is the
+// message_end's message.usage, the same record the transcript holds. The
+// fixture is a sanitized excerpt of the recorded stream shape: four calls,
+// two with a partial top-level message_update usage and two with none.
+//
+// The hand-derived total is the fresh part (input + output + cacheWrite,
+// cacheRead excluded — it is the re-sent prefix) of each call's
+// message_end.message.usage: (1996+384) + (120+900+5000) + (40+2500) +
+// (30+1800) = 12770. Counting only the message_update top-level usage, the
+// behavior before the fix, sums to 2500 — the undercount reported for a
+// 7-minute analysis task that wrote a 12 KB report.
+func TestStreamParserPiCountsMessageEndUsage(t *testing.T) {
+	p := NewStreamParser(harnessPi)
+	for _, line := range fixtureLines(t, "pi-message-end-stream.jsonl") {
+		p.Feed(line)
+	}
+	if got, want := p.Tokens(), int64(12770); got != want {
+		t.Fatalf("tokens = %d, want %d (each call's message_end usage, cacheRead excluded; the message_update-only total is 2500)", got, want)
+	}
+}

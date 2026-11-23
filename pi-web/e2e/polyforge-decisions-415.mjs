@@ -286,11 +286,9 @@ try {
     await withPage(async (page) => {
       await openDock(page);
       const tabs = await dock(page).locator('[data-pf-tabstrip="work"] [role="tab"]').allInnerTexts();
-      // intentional fourth sub-tab: 待集成 joins the Work rail; polyforge#22
-      // renamed 工单列表 to 全部 (this pin still said the old name — a
-      // pre-existing red, fixed here); polyforge#30 adds the fifth segment
-      // 项目 after 全部, before 待集成.
-      assert.deepEqual(tabs.map((text) => text.trim().split(/\s/)[0]), ["作业", "任务", "全部", "项目", "待集成"], "no 决策 sub-tab");
+      // polyforge#226 hides 项目 and 待集成; polyforge#22 renamed 工单列表 to
+      // 全部. The rail carries 作业, 任务, 全部 only.
+      assert.deepEqual(tabs.map((text) => text.trim().split(/\s/)[0]), ["作业", "任务", "全部"], "no 决策 sub-tab, and the hidden entries are not rendered");
       // J1: its card is the flow and the input box — no 交互 button, none of its entries listed.
       await openJob(page, J1);
       await dock(page).locator("[data-pf-chat]").waitFor();

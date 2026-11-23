@@ -1589,11 +1589,15 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, []);
 
+  // polyforge#231: the last tools this chat loaded, so a new callback (a pane
+  // gaining focus) can re-report them without a get_tools round trip.
+  const loadedToolsRef = useRef<ToolEntry[] | null>(null);
   const loadTools = useCallback(async (sid: string) => {
     try {
       const tools = await sendAgentCommand<ToolEntry[]>(sid, { type: "get_tools" });
       if (!tools || !sessionHookMountedRef.current || sessionIdRef.current !== sid) return null;
       const { getPresetFromTools } = await import("@/lib/tool-presets");
+      loadedToolsRef.current = tools;
       setToolPresetState(sessionToolsPinnedRef.current ? getPresetFromTools(tools) : CONFIGURED_TOOL_PRESET);
       onSystemToolsChange?.(tools);
       return tools;
@@ -1602,6 +1606,15 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       return null;
     }
   }, [onSystemToolsChange, setToolPresetState]);
+
+  // polyforge#231: onSystemToolsChange flips between the focused pane's
+  // handler and undefined; report this chat's current tools on arrival and
+  // clear on removal, as the system prompt, loader and debug reader do.
+  useEffect(() => {
+    if (!onSystemToolsChange) return;
+    onSystemToolsChange(loadedToolsRef.current);
+    return () => onSystemToolsChange(null);
+  }, [onSystemToolsChange]);
 
   const promoteNewSession = useCallback((messageCount = 0, firstMessage = "(no messages)") => {
     const sid = sessionIdRef.current;
@@ -4261,6 +4274,14 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     onSystemPromptChange?.(systemPrompt);
   }, [systemPrompt, onSystemPromptChange]);
 
+  // polyforge#231 (review r1#1): focus can move to the new-session sentinel,
+  // which holds no prompt callback. Clear the top bar's prompt when this
+  // chat's callback goes away, as the loader and the debug reader already do.
+  useEffect(() => {
+    if (!onSystemPromptChange) return;
+    return () => onSystemPromptChange?.(null);
+  }, [onSystemPromptChange]);
+
   useEffect(() => {
     onSystemInfoLoaderChange?.(loadSystemInfo);
     return () => onSystemInfoLoaderChange?.(null);
@@ -4319,6 +4340,16 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     if (!onBranchDataChange) return;
     onBranchDataChange(data?.tree ?? [], activeLeafId, handleLeafChange, branchSwitchLocked);
   }, [data?.tree, activeLeafId, handleLeafChange, branchSwitchLocked, onBranchDataChange]);
+
+  // polyforge#231 (review r1#1): losing the callback (focus moved to the
+  // sentinel) must clear the top bar's tree and replace this chat's
+  // onLeafChange with a no-op, or a branch click there would move THIS
+  // session's leaf while another chat is focused. Reported only on removal,
+  // so an ordinary tree change still reports once.
+  useEffect(() => {
+    if (!onBranchDataChange) return;
+    return () => onBranchDataChange([], null, () => {}, false);
+  }, [onBranchDataChange]);
 
   useEffect(() => {
     const container = scrollContainerRef.current;

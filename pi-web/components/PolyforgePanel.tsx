@@ -13,6 +13,7 @@ import {
   polyforgeContextDetailText,
   polyforgeContextMeterText,
   polyforgeContextMeterTone,
+  POLYFORGE_CONTEXT_METER_COLORS,
   polyforgeJobRef,
   progressBlocks,
   shortJobTitle,
@@ -1277,7 +1278,7 @@ const PolyforgeJobCard = memo(function PolyforgeJobCard({
             status at the row's right end (`42% / 1.0M`, `? / 1.0M`). */}
         {contextMeter && job.context && (
           <div style={{ display: "flex", justifyContent: "flex-end", minWidth: 0 }}>
-            <span data-pf-context-meter="" title={contextMeterTitle(job.context) || undefined} style={{ fontSize: 11, lineHeight: "14px", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums", color: contextTone ? CONTEXT_METER_COLORS[contextTone] : "var(--text-dim)" }}>{contextMeter}</span>
+            <span data-pf-context-meter="" title={contextMeterTitle(job.context) || undefined} style={{ fontSize: 11, lineHeight: "14px", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums", color: contextTone ? POLYFORGE_CONTEXT_METER_COLORS[contextTone] : "var(--text-dim)" }}>{contextMeter}</span>
           </div>
         )}
         {goal && (
@@ -1299,8 +1300,7 @@ const PolyforgeJobCard = memo(function PolyforgeJobCard({
   );
 });
 
-/** the chat header's meter colours (above 70 amber, above 90 red). */
-const CONTEXT_METER_COLORS = { amber: "rgba(234,179,8,0.95)", red: "#ef4444" } as const;
+
 
 /** the hover of a job's context meter — the model and when
  *  the count was taken. */
@@ -1329,6 +1329,11 @@ const WORK_TAB_ICONS = {
   // 待集成: branches merging into one line.
   integrate: workTabIcon(<><circle cx="6" cy="5" r="2" /><circle cx="18" cy="5" r="2" /><circle cx="12" cy="19" r="2" /><path d="M6 7v2a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3V7" /><path d="M12 12v5" /></>),
 } as const;
+
+/** Work's visible sub-tabs, in DOM order (polyforge#226): 项目 and 待集成 are
+ *  hidden from the rail, not removed — their labels, icons, bodies, components
+ *  and routes stay, so showing one again is an entry in this one list. */
+export const VISIBLE_WORK_TABS: readonly PolyforgeWorkTab[] = ["jobs", "tasks", "items"];
 
 /** a queued verification as the `pf ops status` VERIFY
  *  column renders it (`queued #2: <reason>`). Pure. */
@@ -1464,12 +1469,13 @@ export function PolyforgePanel({
   // detail read), the task's own Cell included (polyforge#73: the analysis
   // card's task belongs to the Messages pane's pinned Cell, the walk's to
   // its entry); the Tasks surface clears it once handled. Component memory
-  // only.
+  // only. The top-level switch comes first: it resets Work's sub-tab to Jobs
+  // (polyforge#225), so the explicit 任务 target is written after it.
   const [taskToOpen, setTaskToOpen] = useState<{ id: string; cell?: string } | null>(null);
   const openTask = useCallback((taskId: string, cell?: string | null) => {
     setTaskToOpen(cell ? { id: taskId, cell } : { id: taskId });
-    onWorkTab("tasks");
     onActiveTab("work");
+    onWorkTab("tasks");
   }, [onActiveTab, onWorkTab]);
   const clearTaskToOpen = useCallback(() => setTaskToOpen(null), []);
   // the walk's task target reaches the Tasks surface through
@@ -1821,6 +1827,7 @@ export function PolyforgePanel({
                   onDismissDecisions={decisionsSurface.onDismiss}
                   renderDetail={renderWorkDetail}
                   onDetailOpenChange={setSubDetailOpen}
+                  onOpenAnchor={messagesSurface.onOpenAnchor}
                 />
               ) : opsStatus ? (
                   <div style={{ flex: "0 1 auto", minHeight: 0, overflowY: "auto", overflowX: "hidden" }}>
@@ -1900,7 +1907,7 @@ export function PolyforgePanel({
                 ? { flex: "0 0 40px", width: 40, display: "flex", flexDirection: "column", borderLeft: "1px solid var(--border)", overflowY: "auto" }
                 : { flex: "0 0 72px", width: 72, display: "flex", flexDirection: "column", borderLeft: "1px solid var(--border)", overflowY: "auto" }}
             >
-              {(["jobs", "tasks", "items", "projects", "integrate"] as const).map((tab) => {
+              {VISIBLE_WORK_TABS.map((tab) => {
                 const active = workTab === tab;
                 // The running count rides the existing status snapshot (no
                 // timer of its own): queue.running for Jobs, tasks.running
