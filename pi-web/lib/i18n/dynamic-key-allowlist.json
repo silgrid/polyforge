@@ -213,5 +213,10 @@
     "file": "components/PiBackgroundTaskPanel.tsx",
     "argument": "`bgTasks.status.${status}`",
     "reason": "the registry record's own status (succeeded maps to the completed label); the keys are bgTasks.status.<value>"
+  },
+  {
+    "file": "hooks/usePolyforgeNotifications.ts",
+    "argument": "`polyforge.decisions.class.${decision.class}`",
+    "reason": "the notified decision's class comes from pf watch decisions at run time; the keys are polyforge.decisions.class.<value> (polyforge#240)"
   }
 ]

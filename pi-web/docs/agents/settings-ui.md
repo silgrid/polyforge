@@ -201,6 +201,21 @@ detected; the inputs show the stored value clamped (absent/corrupt/non-positive
 stores and dispatches `pi-web:polyforge-preferences` so an open panel applies
 it without a reload.
 
+A "Browser notifications" card (polyforge#240) follows the Jobs card card: one
+`ConfigSwitch` (default on, stored in this browser under
+`pi-web:polyforge-notifications` through `lib/polyforge-panel-preferences.ts`,
+live on save through the same `pi-web:polyforge-preferences` event), the
+browser's permission as visible text (granted / not granted yet / blocked in
+the browser / no Notification API) and, while it is `not granted yet`, one
+授权通知 button that calls `Notification.requestPermission()` once on the
+click. Nothing asks for the permission on load; a denied browser gets the
+"allow it in the site settings" explanation instead of a button, an unsupported
+browser gets its own line, and an unusable localStorage ledger shows the paused
+note. The card renders whether or not pf is detected. The one-time in-app
+explanation the notification hook raises for the first entry is the dock-side
+banner (`components/PolyforgeNotifications.tsx`), documented in
+[polyforge-panel.md](polyforge-panel.md).
+
 The configuration panel below the detection card is its own surface: the
 machine-scope note is always visible, and the keys of `pf --json config list`
 render in source cards, each with a title and a visible one-line

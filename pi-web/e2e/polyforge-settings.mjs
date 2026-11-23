@@ -402,8 +402,12 @@ try {
     const dialog = await openSettings(page);
     await pfTab(dialog).click();
     await page.waitForRequest((request) => new URL(request.url()).pathname === "/api/polyforge/detect", { timeout: 15_000 }).catch(() => {});
-    const switches = dialog.locator("main").getByRole("switch");
-    assert.equal(await switches.count(), 1, "the section must offer exactly one switch (the pi package switch; the Claude rows are read-only)");
+    // polyforge#240 adds a second switch (the browser-notification card), so
+    // the scenario names the package switch instead of counting the section.
+    const switches = dialog.locator("main").getByRole("switch", { name: "Polyforge package (global)" });
+    assert.equal(await switches.count(), 1, "the section offers the pi package switch (the Claude rows are read-only)");
+    assert.equal(await dialog.locator("main").getByRole("switch", { name: "Notify me about owner decisions" }).count(), 1,
+      "polyforge#240: the browser-notification switch is the section's own second switch");
     // The switch renders as soon as detection reports the package, but it stays
     // disabled until the section's package read (/api/plugins) answers. That
     // first read is a cold route compile, which a loaded host can push past the

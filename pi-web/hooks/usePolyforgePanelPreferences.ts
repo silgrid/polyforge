@@ -2,9 +2,11 @@
 
 import { useSyncExternalStore } from "react";
 import {
+  POLYFORGE_NOTIFICATIONS,
   POLYFORGE_POLL_INTERVAL,
   POLYFORGE_PREFERENCES_EVENT,
   POLYFORGE_TITLE_LENGTH,
+  readPolyforgeNotificationPreference,
   readPolyforgePreference,
 } from "@/lib/polyforge-panel-preferences";
 
@@ -21,16 +23,20 @@ function subscribe(onChange: () => void): () => void {
 
 const readTitleLength = () => readPolyforgePreference(POLYFORGE_TITLE_LENGTH);
 const readPollInterval = () => readPolyforgePreference(POLYFORGE_POLL_INTERVAL);
+const readNotificationsEnabled = () => readPolyforgeNotificationPreference();
 // The server render (and hydration) uses the defaults; the stored values
 // apply right after, so server and client markup agree.
 const defaultTitleLength = () => POLYFORGE_TITLE_LENGTH.defaultValue;
 const defaultPollInterval = () => POLYFORGE_POLL_INTERVAL.defaultValue;
+const defaultNotificationsEnabled = () => POLYFORGE_NOTIFICATIONS.defaultValue;
 
-/** The card stream's two browser-stored preferences:
- *  `titleLength` in code points and `pollIntervalSec` in seconds, both
- *  clamped, both live without a reload. */
-export function usePolyforgePanelPreferences(): { titleLength: number; pollIntervalSec: number } {
+/** The panel's browser-stored preferences: the card stream's
+ *  `titleLength` in code points and `pollIntervalSec` in seconds (both
+ *  clamped) and the `notificationsEnabled` switch (polyforge#240), all live
+ *  without a reload. */
+export function usePolyforgePanelPreferences(): { titleLength: number; pollIntervalSec: number; notificationsEnabled: boolean } {
   const titleLength = useSyncExternalStore(subscribe, readTitleLength, defaultTitleLength);
   const pollIntervalSec = useSyncExternalStore(subscribe, readPollInterval, defaultPollInterval);
-  return { titleLength, pollIntervalSec };
+  const notificationsEnabled = useSyncExternalStore(subscribe, readNotificationsEnabled, defaultNotificationsEnabled);
+  return { titleLength, pollIntervalSec, notificationsEnabled };
 }
