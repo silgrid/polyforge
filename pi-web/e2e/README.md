@@ -113,6 +113,35 @@ error collects nothing, and the network-change pairing above reads only
 the raw console text: a `net::ERR_NETWORK_CHANGED` token that appears
 merely in the appended URL never pairs.
 
+## Host-load and wall-clock assertions (polyforge#238)
+
+Some assertions in this package observe real time or the host's scheduling.
+They are classified here so a red under load is not mistaken for a product
+defect, and so the deterministic ones do not regress into fixed sleeps.
+
+- `e2e/session-stall-recovery.mjs` — `BOUND_MS` (10 s) is a wall-clock
+  responsiveness assertion (a recovery must land within the bound). It is kept
+  at 10 s and never relaxed; the suite is isolated from the parallel browser
+  pool (`e2e/all.mjs`) because a loaded host was observed at 20 167 ms against
+  the bound. A red there is host CPU/scheduling noise, reported with the
+  suite's RESULT/diagnostics lines, not a code defect;
+  `E2E_STALL_DISABLE_RING_RECOVERY=1` is the no-relaxation proof.
+- `e2e/run.mjs` browser errors — a `net::ERR_NETWORK_CHANGED` console error
+  paired one-to-one with a `requestfailed` event is host-network noise
+  (container veth churn), capped and logged by `trackBrowserErrors`; every
+  other error stays red (see "Network-change tolerance" above).
+- `e2e/run.mjs` archive pass — the allowed-roots set is rebuilt from the
+  session list on a 5 s TTL. The pass registers its two fixture projects
+  through `POST /api/cwd/validate` before it runs, so a model read for a
+  project whose session the external-delete scenario removes stays authorized
+  instead of racing the cache window (polyforge#238 defect 4). The production
+  cache itself is unchanged; the residual TTL behaviour is listed for the
+  owner in the ticket's pattern list.
+- Fixed sleeps are not a settling proof anywhere in this package: a state that
+  settles asynchronously is waited for with a bounded poll of the condition
+  under test (`e2e/archive.mjs`'s `assertEventually`, the override route test's
+  child-exit wait), never a bare delay.
+
 ## Running every suite in parallel
 
 `npm run test:e2e:all` (`e2e/all.mjs`) runs every standalone `e2e/*.mjs` suite

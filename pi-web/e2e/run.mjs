@@ -515,6 +515,19 @@ try {
     return response.json();
   }
 
+  // polyforge#238 (defect 4): the archive pass opens beta-project and then
+  // deletes beta's session file (the external-delete scenario). getAllowedFileRoots
+  // rebuilds the cwd set from the session list on a 5 s TTL, so a model read
+  // for a cwd whose session just left the list can answer 403 under host load
+  // (the #215 verification red). Register the two fixture projects through the
+  // app's own workspace route: allowFileRoot keeps a registered cwd a root for
+  // the server's lifetime, independent of that cache window, so a selected
+  // project's model read stays authorized. The production cache is unchanged.
+  for (const cwd of [archiveProjectA, archiveProjectB]) {
+    const registered = await post("/api/cwd/validate", { cwd });
+    assert.equal(registered.success, true, `the archive fixture workspace is registered: ${cwd}`);
+  }
+
   const { sessions } = await api("/api/sessions");
   assert.deepEqual(sessions.map((session) => session.id).sort(), [LONG, BRANCH, RICH, COMPACTED, APPEND, CODE_BACKGROUND, ARCHIVE_ALPHA, ARCHIVE_BETA, ZERO].sort());
 
