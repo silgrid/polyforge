@@ -10,6 +10,7 @@ const {
   getRecentProjects,
   isPathInsideDirectory,
   sessionsForDirectory,
+  workspaceAfterSessionRemoval,
 } = await jiti.import("./project-groups.ts");
 
 function session(id, projectRoot, modified) {
@@ -146,4 +147,27 @@ test("a nested git project inside a listed directory groups under it too", () =>
     sessionsForDirectory([inside, itsWorktree, outside], "/data").map((item) => item.id),
     ["inside", "wt"],
   );
+});
+
+test("a vanished session leaves its project only when the project has no sessions left", () => {
+  const first = session("first", "C:\\Users\\Alex\\First", "2026-08-12T00:00:00.000Z");
+  const newest = session("newest", "C:\\Users\\Alex\\Newest", "2026-08-14T00:00:00.000Z");
+  const older = session("older", "C:\\Users\\Alex\\Older", "2026-08-13T00:00:00.000Z");
+
+  // Another session of the same project remains: keep it, at a root that
+  // session still authorizes.
+  assert.deepEqual(workspaceAfterSessionRemoval([first, newest], first.projectKey), {
+    keep: true,
+    root: first.projectRoot,
+  });
+
+  // The project has no sessions left: the most recently active remaining one.
+  const goneKey = projectIdentityKey("C:\\Users\\Alex\\Gone", "win32");
+  assert.deepEqual(workspaceAfterSessionRemoval([first, newest, older], goneKey), {
+    keep: false,
+    next: { key: newest.projectKey, root: newest.projectRoot },
+  });
+
+  // Nothing is left at all: no project selected.
+  assert.deepEqual(workspaceAfterSessionRemoval([], goneKey), { keep: false, next: null });
 });

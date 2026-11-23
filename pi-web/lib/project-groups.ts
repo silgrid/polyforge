@@ -111,3 +111,28 @@ export function sessionsForDirectory(
     return projectRoot != null && isPathInsideDirectory(root, projectRoot);
   });
 }
+
+/** What the interface does when the selected session vanished (polyforge#252). */
+export type WorkspaceAfterSessionRemoval =
+  | { keep: true; root: string }
+  | { keep: false; next: RecentProject | null };
+
+/**
+ * Where the effective workspace goes once `removedProjectKey`'s session left
+ * the catalogue: stay in the project (at a root its remaining sessions still
+ * authorize) while it has sessions, else move to the most recent remaining
+ * project, else to no project at all. Never keeps the vanished session's cwd:
+ * that directory is exactly the one the delete un-authorized.
+ */
+export function workspaceAfterSessionRemoval(
+  sessions: readonly SessionInfo[],
+  removedProjectKey: string,
+): WorkspaceAfterSessionRemoval {
+  const remaining = sessions.filter((session) => workspaceKeyOf(session) === removedProjectKey);
+  if (remaining.length > 0) {
+    // The project stays; its own remaining session's server-resolved root is
+    // the one the allowed-roots scan authorizes (never the vanished cwd).
+    return { keep: true, root: remaining[0].projectRoot ?? remaining[0].cwd };
+  }
+  return { keep: false, next: getRecentProjects(sessions)[0] ?? null };
+}
