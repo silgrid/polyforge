@@ -71,7 +71,8 @@ export class PiSubagentPanelController {
   private readonly options: PiSubagentPanelControllerOptions;
   private readonly fetchImpl: typeof fetch;
   private state: PiSubagentPanelSnapshot = emptyPiSubagentPanelSnapshot();
-  private seq = 0;
+  private readSeq = 0;
+  private earlierSeq = 0;
   private disposed = false;
   private missingAttempts = 0;
   private launchToolCallId: string | null = null;
@@ -92,7 +93,11 @@ export class PiSubagentPanelController {
   }
 
   private current(seq: number): boolean {
-    return !this.disposed && seq === this.seq;
+    return !this.disposed && seq === this.readSeq;
+  }
+
+  private currentEarlier(seq: number): boolean {
+    return !this.disposed && seq === this.earlierSeq;
   }
 
   async load(): Promise<void> {
@@ -104,7 +109,7 @@ export class PiSubagentPanelController {
   }
 
   private async read(mode: "replace" | "append"): Promise<void> {
-    const seq = ++this.seq;
+    const seq = ++this.readSeq;
     let response: Response;
     try {
       response = await this.fetchImpl(runUrl(this.options.childSessionId));
@@ -199,18 +204,21 @@ export class PiSubagentPanelController {
   async loadEarlier(): Promise<void> {
     const oldest = this.state.entries[0]?.id;
     if (!oldest || this.state.loadingEarlier || this.state.phase !== "ready") return;
-    const seq = ++this.seq;
+    // Paging has its own sequence: a 2 s snapshot poll running beside it must
+    // not drop the page (and leave the button stuck loading), and the page
+    // must not drop a poll either.
+    const seq = ++this.earlierSeq;
     this.apply({ loadingEarlier: true });
     const query = `leafId=${encodeURIComponent(oldest)}&before=${encodeURIComponent(oldest)}&tail=50`;
     let response: Response;
     try {
       response = await this.fetchImpl(`/api/sessions/${encodeURIComponent(this.options.childSessionId)}/context?${query}`);
     } catch (error) {
-      if (!this.current(seq)) return;
+      if (!this.currentEarlier(seq)) return;
       this.apply({ loadingEarlier: false, error: message(error) });
       return;
     }
-    if (!this.current(seq)) return;
+    if (!this.currentEarlier(seq)) return;
     const page = response.ok ? piSubagentTranscriptFromJson(await response.json().catch(() => null)) : null;
     if (!page) {
       this.apply({ loadingEarlier: false, error: response.ok ? "unreadable transcript" : `HTTP ${response.status}` });
@@ -254,7 +262,8 @@ export class PiSubagentPanelController {
 
   dispose(): void {
     this.disposed = true;
-    this.seq += 1;
+    this.readSeq += 1;
+    this.earlierSeq += 1;
   }
 }
 

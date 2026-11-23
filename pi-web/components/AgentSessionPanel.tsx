@@ -223,7 +223,7 @@ function AgentRow({
           border: "none",
           background: "transparent",
           color: "var(--text)",
-          cursor: "pointer",
+          cursor: !main && selected ? "default" : "pointer",
           textAlign: "left",
         }}
         onMouseEnter={(event) => {
@@ -384,6 +384,9 @@ export function AgentSessionPanel({ rootSession, subagents, selectedSessionId, r
               usage={usage[session.id]}
               onSelect={() => onSelectSession(session)}
               onOpen={() => {
+                // The chat already showing the child is inert (Q4): opening its
+                // panel there would embed the session in itself.
+                if (session.id === selectedSessionId) return;
                 const relation = session.relation?.kind === "subagent" ? session.relation : null;
                 onOpenSubagent(session.id, relation?.description || relation?.profile || sessionTitle(session));
               }}

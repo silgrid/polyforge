@@ -105,7 +105,10 @@ export function PiSubagentPanel({
   useEffect(() => {
     const body = bodyRef.current;
     if (!body) return;
-    if (seenLastRef.current !== null && lastEntryId !== seenLastRef.current) {
+    // The first loaded snapshot opens at its newest entry (the run's latest
+    // step); later entries scroll along, an earlier page prepended keeps the
+    // reader where the loaded history began.
+    if (lastEntryId !== null && lastEntryId !== seenLastRef.current) {
       body.scrollTop = body.scrollHeight;
     }
     seenLastRef.current = lastEntryId;
