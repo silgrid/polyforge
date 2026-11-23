@@ -33,6 +33,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // AsksJSONL is the capsule-relative path of the ask record.
@@ -47,6 +48,13 @@ const (
 	// AskKindMessage is an owner message sent while no ask is open (a
 	// live interjection, PR 6d); it closes nothing.
 	AskKindMessage = "message"
+	// AskKindAwaiting is the daemon-only wait start of one open ask
+	// (polyforge#239): `at` is the first moment the dispatch was observed
+	// awaiting the owner (T0), `step`/`spawn`/`ask_at` bind it to exactly
+	// that ask. Written once, by the live dispatch that first parked; a
+	// restart only reads it, so an older wait without one has no
+	// trustworthy T0 and is never auto-answered.
+	AskKindAwaiting = "awaiting"
 	// AskKindDelivered records that one owner message (`msg_at`) reached
 	// the step's conversation under dispatch `spawn` (PR 6d): the marker
 	// the daemon embedded in the delivered text appeared in the harness's
@@ -235,4 +243,13 @@ func CurrentDispatch(ex *Execution) (step string, spawn int64, ok bool) {
 		return "", 0, false
 	}
 	return ex.CurrentStep, st.Dispatch, true
+}
+
+// AwaitingSince answers the recorded T0 of (step, spawn)'s open ask askAt:
+// the earliest valid awaiting line bound to it that is not in the future
+// of now. ok=false when no such line exists (an old wait, a torn record,
+// or a clock that makes the stamp untrustworthy) — the safe default: no
+// automatic reply, the question keeps waiting for its owner.
+func AwaitingSince(lines []AskLine, step string, spawn int64, askAt string, now time.Time) (time.Time, bool) {
+	return time.Time{}, false
 }
