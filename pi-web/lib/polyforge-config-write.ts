@@ -333,8 +333,9 @@ async function assertStepWriteCapability(cwd: string, pin: PolyforgeScopeArgv): 
 /** The step-tier catalog needs the pf release that first carries
  *  `[step_tiers]` (docs/upgrade.md v0.2.4 — the 0.2.x line: a 2.20.x pf and
  *  an unparseable version are both below it, so the unknown counts
- *  below like the summarize floor). A null/unparseable version is
- *  400, nothing spawned beyond the probe. */
+ *  below like the summarize floor; the floor `0.2.4-0` admits the 0.2.4
+ *  line's dev.N pre-releases, polyforge#256 B1). A null/unparseable version
+ *  is 400, nothing spawned beyond the probe. */
 async function assertStepTiersWriteCapability(): Promise<void> {
   const presence = await probePolyforgeVersion(true);
   if (isPolyforgeVersionBelowMinimum(presence.version, POLYFORGE_CONFIG_STEP_TIERS_MINIMUM_PF_VERSION, true)) {

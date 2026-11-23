@@ -27,9 +27,12 @@ import { probePolyforgeVersion, readPolyforgeOpsStatus } from "./polyforge-statu
  * spawn, a broken link): never an error, never a guess.
  */
 
-/** The minimum pf the dock documents (the `--demand` floor, v2.18.1): the
- *  settings section's non-blocking 「版本过低」 hint threshold. */
-export const POLYFORGE_MINIMUM_PF_VERSION = "2.18.1";
+import { isPolyforgeVersionBelowMinimum } from "./polyforge-version";
+
+// The browser-safe comparison lives in lib/polyforge-version.ts (the install
+// card imports that module without the Node/SDK chain this one carries); keep
+// the old names exported from here so every server caller stays put.
+export { POLYFORGE_MINIMUM_PF_VERSION, isPolyforgeVersionBelowMinimum } from "./polyforge-version";
 
 /** The sha256 (hex) of the internal line's origin owner/repo pair — the
  *  only form the pair is stored in (never the plaintext pair, never a URL,
@@ -71,82 +74,6 @@ export interface PolyforgeDetectStatus {
 }
 
 // ---- pure helpers ----
-
-/** The X.Y.Z core and, when present, a SemVer 2.0 pre-release
- *  (`-<id>[.<id>...]`, ids of [0-9A-Za-z-]); whatever follows is ignored. */
-const VERSION_PATTERN = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?/;
-
-interface ParsedVersion {
-  core: [number, number, number];
-  preRelease: string[];
-}
-
-function parseVersion(value: string): ParsedVersion | null {
-  const match = VERSION_PATTERN.exec(value.trim());
-  if (!match) return null;
-  return {
-    core: [Number(match[1]), Number(match[2]), Number(match[3])],
-    preRelease: match[4] === undefined ? [] : match[4].split("."),
-  };
-}
-
-/** SemVer 2.0 §11 pre-release precedence (sign of a - b): none ranks above
- *  any; identifiers one by one — numeric ones as numbers and below
- *  alphanumeric ones, alphanumeric ones in ASCII order — and a shorter
- *  prefix first. */
-function comparePreRelease(a: string[], b: string[]): number {
-  if (a.length === 0 || b.length === 0) return b.length - a.length;
-  for (let i = 0; i < Math.min(a.length, b.length); i++) {
-    if (a[i] === b[i]) continue;
-    const aNumeric = /^\d+$/.test(a[i]);
-    const bNumeric = /^\d+$/.test(b[i]);
-    if (aNumeric && bNumeric) {
-      if (Number(a[i]) !== Number(b[i])) return Number(a[i]) - Number(b[i]);
-      continue;
-    }
-    if (aNumeric !== bNumeric) return aNumeric ? -1 : 1;
-    return a[i] < b[i] ? -1 : 1;
-  }
-  return a.length - b.length;
-}
-
-/** The named version-line cutover: the unified product line
- *  v0.2.x follows the retired internal v2.20.x line, so a v0.2.x core ranks
- *  above every 2.20.x floor (major 0 / minor 2 compares as major 1000);
- *  v0.1.x and every other core compare as before. Delete this mapping
- *  together with .polyforge/release.sh's CUTOVER_* branches, once no v2.20.x
- *  release is the current line anywhere (every deployed aihub and installed
- *  pf runs v0.2.x) and the floors are restated on the v0.2.x line. */
-function versionLineRank(core: [number, number, number]): [number, number, number] {
-  return core[0] === 0 && core[1] === 2 ? [1000, core[1], core[2]] : core;
-}
-
-/** Non-blocking minimum-version hint (pure): SemVer 2.0 precedence
- * — the X.Y.Z cores, line-aware (see versionLineRank: a
- *  v0.2.x pf is newer than every 2.20.x floor), then a pre-release below its
- *  core release and pre-release identifiers by comparePreRelease, so
- *  `v0.2.0-<name>.9` is below `v0.2.0-<name>.10` (leading `v` tolerated, the
- *  hint blocks nothing). Unparseable → false, never a guess —
- *  unless the caller passes `unknownIsBelow`: then a null/unparseable
- *  version counts as below the floor (the summarize floor
- *  never treats an unknown pf as capable). Every other floor keeps the
- *  default. */
-export function isPolyforgeVersionBelowMinimum(
-  version: string | null,
-  minimum: string = POLYFORGE_MINIMUM_PF_VERSION,
-  unknownIsBelow = false,
-): boolean {
-  const parsed = typeof version === "string" ? parseVersion(version) : null;
-  const floor = parseVersion(minimum);
-  if (!floor) return false;
-  if (!parsed) return unknownIsBelow;
-  const core = versionLineRank(parsed.core);
-  const floorCore = versionLineRank(floor.core);
-  for (let i = 0; i < 3; i++) {
-    if (core[i] !== floorCore[i]) return core[i] < floorCore[i];
-  }
-  return comparePreRelease(parsed.preRelease, floor.preRelease) < 0;
-}
 
 /** The owner/repo pair of a git origin URL (`git@host:O/R.git` and
  *  `https://host/O/R.git` forms, `.git` stripped) — null when the URL carries
