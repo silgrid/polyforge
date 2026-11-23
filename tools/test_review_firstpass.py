@@ -221,6 +221,30 @@ class BlockingOutcomesTest(unittest.TestCase):
         self.assertEqual(chain['outcome'], 'unknown')
         self.assertEqual(chain['reason'], 'last mention still open')
 
+    def test_a_table_row_uses_its_first_status_cell(self):
+        versions = _versions(
+            _review(1, 'FAIL', '## 发现\n\n### #2 blocking · test_weakened — x\n'),
+            _review(2, 'PASS', (
+                '## 上一轮发现逐条核对\n\n'
+                '| r1#2 信任写入绕过 | 已修（行为） | 另外一条路由没有改成调用它，见 #3（非阻断）。 |\n')))
+        [chain] = rf.chain_findings(self.cap, versions)
+        self.assertEqual(chain['outcome'], 'fixed')
+
+    def test_a_table_row_whose_first_cell_is_backticked_is_a_disposition(self):
+        versions = _versions(
+            _review(1, 'FAIL', '## 发现\n\n### #1 blocking · bug — x\n'),
+            _review(2, 'PASS', '## 上一轮发现逐条核对\n\n| `r1#1` | **已修** | 说明 |\n'))
+        [chain] = rf.chain_findings(self.cap, versions)
+        self.assertEqual(chain['outcome'], 'fixed')
+
+    def test_a_numbered_list_and_an_ascii_semicolon_are_dispositions(self):
+        versions = _versions(
+            _review(1, 'FAIL', '## 发现\n\n### #1 blocking · bug — x\n\n### #2 blocking · test_weakened — y\n'),
+            _review(2, 'PASS', '## 上一轮发现逐条核对\n\n1. **r1#1 已修**; r1#2 撤回（build 证据成立）\n'))
+        got = {c['item']: c['outcome'] for c in rf.chain_findings(self.cap, versions)}
+        self.assertEqual(got[1], 'fixed')
+        self.assertEqual(got[2], 'rebutted')
+
     def test_this_round_reference_links_the_chain(self):
         versions = _versions(
             _review(1, 'FAIL', '## 发现\n\n### #1 blocking · guarantee — x\n'),
