@@ -92,6 +92,12 @@ func TestLeaseAuthz(t *testing.T) {
 		replayTS, leaseAcquireBody(key, "r-replay", wiA)); code != http.StatusUnauthorized {
 		t.Fatalf("replayed signature = %d, want AUTH-401", code)
 	}
+	// The replay's own first call queued a request; withdraw it so the
+	// withdrawal case below starts from an empty queue.
+	if code, _, raw := leasePost(t, e, leaseKindPath+"/release", e.key, "m-lease", privLease, 0,
+		map[string]any{"key": key, "request_id": "r-replay", "work_item": wiA}); code != http.StatusOK {
+		t.Fatalf("withdraw the replay request: %d %s", code, raw)
+	}
 
 	// ② an unrelated machine: a different operator cannot speak for the
 	// holder's machine, and a machine whose operator is a project writer
@@ -138,11 +144,11 @@ func TestLeaseAuthz(t *testing.T) {
 	}
 
 	// ③ lost execution: a force-ended session refuses the old machine.
-	if code, raw := e.do(t, "POST", "/api/v1/work-items/"+wiA+"/force-end-session", e.key, map[string]any{}, nil); code != http.StatusOK {
+	if code, raw := e.do(t, "POST", "/api/v1/work-items/"+wiA+"/force-end-session", e.key, map[string]any{"reason": "lease test"}, nil); code != http.StatusOK {
 		t.Fatalf("force-end: %d %s", code, raw)
 	}
-	if code, _, _ := leasePost(t, e, leaseKindPath+"/acquire", e.key, "m-lease", privLease, 0,
-		leaseAcquireBody(key, "r-hold", wiA)); code != http.StatusForbidden {
+	if code, _, _ := leasePost(t, e, leaseKindPath+"/acquire", e.key, "m-lease", privLease,
+		time.Now().Unix()+120, leaseAcquireBody(key, "r-hold", wiA)); code != http.StatusForbidden {
 		t.Fatalf("force-ended session = %d, want AUTH-403", code)
 	}
 
