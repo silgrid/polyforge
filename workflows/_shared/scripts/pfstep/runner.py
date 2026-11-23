@@ -46,7 +46,7 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from types import FrameType
-from typing import IO, Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Callable, IO, Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from . import container, duration, git, proc, tmpdir
 from .container import ContainerOptions
@@ -176,6 +176,9 @@ class ExecSpec:
     # capture: the command's stdout is also answered (ExecResult.stdout);
     # the log keeps it after the command's stderr
     capture: bool = False
+    # started: called with the command's process-group leader as soon as it
+    # runs (a caller that must end it from another thread)
+    started: Optional[Callable[[int], None]] = None
 
 
 @dataclass
@@ -372,9 +375,11 @@ class Runner:
                     mono = time.monotonic()
                     try:
                         if spec.capture:
-                            c = proc.run(argv, cwd=spec.dir, env=env, timeout=timeout, stdout=cap, stderr=logf)
+                            c = proc.run(argv, cwd=spec.dir, env=env, timeout=timeout, stdout=cap, stderr=logf,
+                                         started=spec.started)
                         else:
-                            c = proc.run(argv, cwd=spec.dir, env=env, timeout=timeout, stdout=logf, merge_stderr=True)
+                            c = proc.run(argv, cwd=spec.dir, env=env, timeout=timeout, stdout=logf, merge_stderr=True,
+                                         started=spec.started)
                     except BaseException:
                         interrupted = True
                         raise

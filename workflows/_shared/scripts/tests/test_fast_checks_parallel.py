@@ -543,12 +543,12 @@ class WorkerFaultTest(ParallelCase):
             nested_conf="stack=go\ncheck=boom|fast|echo boom\n")
         original = fast_checks.CheckRun.exec_command
 
-        def boom(self: Any, p: Any, log_path: str, entry: Dict[str, Any], box: Any) -> Any:
+        def boom(self: Any, p: Any, log_path: str, entry: Dict[str, Any], box: Any, **kw: Any) -> Any:
             if p.c.name == "pi/boom":
                 with open(faulted, "w", encoding="utf-8") as f:
                     f.write("1")
                 raise OSError("the log directory vanished")
-            return original(self, p, log_path, entry, box)
+            return original(self, p, log_path, entry, box, **kw)
 
         argv = ["--capsule", self.capsule, "--engine", ENGINE, "--repo", "app", "--phase", "fast",
                 "--deadline", "10m", "--out", self.out]
@@ -601,6 +601,9 @@ class InterruptTest(ParallelCase):
             if p.poll() is None:
                 p.kill()
                 p.wait()
+            for stream in (p.stdout, p.stderr):
+                if stream is not None:
+                    stream.close()
         self.assertEqual(rc, 2, stderr[-800:])
         self.assertLess(elapsed, 15, "the run ended at the interrupt, not at the commands' own end")
         gone = False

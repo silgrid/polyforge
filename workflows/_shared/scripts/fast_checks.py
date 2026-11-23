@@ -217,7 +217,7 @@ import traceback  # noqa: E402
 from dataclasses import dataclass  # noqa: E402
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple  # noqa: E402
 
-from pfstep import container, duration, git, gostr, runner  # noqa: E402
+from pfstep import container, duration, git, gostr, proc, runner  # noqa: E402
 from pfstep import scoped_plan  # noqa: E402
 from pfstep.completion import completion_proof, harness_command, read_go_harness  # noqa: E402
 from pfstep.engine import TIER_LIGHT, EngineCommand, EngineReport, ReportError, decode_report  # noqa: E402
@@ -826,6 +826,24 @@ class CheckRun:
         boxes: Dict[str, container.Box] = {}
         written: List[Optional[Tuple[Dict[str, Any], str, str]]] = [None] * len(plan)
         stop = threading.Event()
+        # a fault of the script while a command runs (never a verdict): the
+        # run stops starting commands and ends not judged (polyforge#254 r2#3)
+        faults: List[str] = []
+        # the process group each running command leads, by group: an
+        # interrupt kills them (a host command's group is its own session;
+        # nothing else would end it, polyforge#254 r2#4)
+        pids: Dict[str, int] = {}
+        pids_mu = threading.Lock()
+
+        def register(g: str) -> "Callable[[int], None]":
+            def note(pid: int) -> None:
+                with pids_mu:
+                    pids[g] = pid
+            return note
+
+        def clear(g: str) -> None:
+            with pids_mu:
+                pids.pop(g, None)
         try:
             if self.box is not None:
                 for n, (g, members) in enumerate(groups):
@@ -840,7 +858,8 @@ class CheckRun:
             threads: List[threading.Thread] = []
             for g, members in groups:
                 threads.append(threading.Thread(target=self.run_group,
-                                                args=(plan, members, boxes.get(g), written, stop),
+                                                args=(plan, members, boxes.get(g), written, stop, faults,
+                                                      register(g), lambda g=g: clear(g)),
                                                 name="group-" + (g or "root")))
             for t in threads:
                 t.start()
@@ -848,10 +867,26 @@ class CheckRun:
                 for t in threads:
                     t.join()
             except (KeyboardInterrupt, runner.Interrupted):
+                # end the commands still running (their process groups are
+                # separate sessions, so the terminal's signal never reached
+                # them), then join the workers — bounded, and re-killing a
+                # command that started after the last round (r2#4)
                 stop.set()
-                for t in threads:
-                    t.join(timeout=INTERRUPT_JOIN)
+                deadline = time.monotonic() + INTERRUPT_JOIN
+                while time.monotonic() < deadline:
+                    with pids_mu:
+                        live = list(pids.values())
+                    for pid in live:
+                        proc.killpg(pid)
+                    for t in threads:
+                        t.join(timeout=0.05)
+                    if not any(t.is_alive() for t in threads):
+                        break
                 raise
+            if faults:
+                # a fault is never a red command: the run exits 2, the same
+                # as a fault on the serial path (r2#3)
+                raise runner.ExecutorError("; ".join(faults))
             for g, b in boxes.items():
                 why = b.lost_reason()
                 if why:
@@ -889,10 +924,12 @@ class CheckRun:
         raise container.BoxError("no container: the per-unit run is on the host")
 
     def run_group(self, plan: List[PlannedCommand], members: Sequence[int], box: Optional[container.Box],
-                  written: List[Optional[Tuple[Dict[str, Any], str, str]]], stop: threading.Event) -> None:
+                  written: List[Optional[Tuple[Dict[str, Any], str, str]]], stop: threading.Event,
+                  faults: List[str], register: "Callable[[int], None]",
+                  clear: "Callable[[], None]") -> None:
         """One group's commands, in plan order, in its own container (None on
-        the host). A fault of the script is never a verdict: it is recorded
-        as a run that never started and the other groups stop starting new
+        the host). A fault of the script is never a verdict: it is collected
+        (the run then ends not judged) and the groups stop starting new
         commands."""
         for i in members:
             p = plan[i]
@@ -902,17 +939,17 @@ class CheckRun:
                 self.inv.say("repos/%s: `%s` (%s)" % (self.repo, p.c.cmd, p.c.phase))
             entry = self.command_entry(p)
             try:
-                written[i] = self.exec_command(p, p.log_path, entry, box)
+                written[i] = self.exec_command(p, p.log_path, entry, box, started=register)
             except (KeyboardInterrupt, runner.Interrupted):
                 stop.set()
                 raise
             except BaseException as err:
-                entry["exit_code"] = -1
-                entry["not_started"] = True
-                self.inv.summary = ("repos/%s: could not run `%s`: %s: %s"
-                                    % (self.repo, p.c.cmd, type(err).__name__, err))
+                with self._mu:
+                    faults.append("could not run `%s`: %s: %s" % (p.c.cmd, type(err).__name__, err))
                 stop.set()
-                written[i] = (entry, "", "")
+                return
+            finally:
+                clear()
 
     def run_command(self, p: PlannedCommand) -> Tuple[Dict[str, Any], str, str]:
         """One planned command in its report's root, skipped when its
@@ -930,14 +967,16 @@ class CheckRun:
         return self.exec_command(p, log_path, entry, self.box)
 
     def exec_command(self, p: PlannedCommand, log_path: str, entry: Dict[str, Any],
-                     box: Optional[container.Box]) -> Tuple[Dict[str, Any], str, str]:
+                     box: Optional[container.Box],
+                     started: Optional[Callable[[int], None]] = None) -> Tuple[Dict[str, Any], str, str]:
         """p's command run in its report's root (in box when the close is
         boxed), its entry filled from the run: (its entry, its log's
         absolute path, its private TMPDIR)."""
         c = p.c
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
         er = self.r.exec_to(runner.ExecSpec(argv=bash_argv(c.cmd), dir=p.directory, cwd=p.root_rel,
-                                             timeout=timeout_of(c), private_tmp=True), log_path, box)
+                                             timeout=timeout_of(c), private_tmp=True, started=started),
+                            log_path, box)
         entry["exit_code"] = er.exit
         if er.timed_out:
             entry["timed_out"] = True

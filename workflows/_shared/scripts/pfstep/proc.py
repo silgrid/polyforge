@@ -23,7 +23,7 @@ import signal
 import subprocess
 import tempfile
 from dataclasses import dataclass
-from typing import IO, Dict, List, Mapping, Optional, Sequence, Union
+from typing import Callable, IO, Dict, List, Mapping, Optional, Sequence, Union
 
 from .stepenv import MARKERS
 
@@ -75,6 +75,7 @@ def run(
     stdout: Optional[IO[bytes]] = None,
     stderr: Optional[IO[bytes]] = None,
     merge_stderr: bool = False,
+    started: Optional[Callable[[int], None]] = None,
 ) -> Completed:
     """Run argv (no shell) and answer how it ended.
 
@@ -106,6 +107,8 @@ def run(
             )
         except OSError as err:
             return Completed(argv=args, exit_code=NOT_STARTED_EXIT, error=str(err))
+        if started is not None:
+            started(p.pid)
         timed_out = False
         try:
             p.wait(timeout=timeout)
