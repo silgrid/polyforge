@@ -200,6 +200,14 @@ func renderOverrideWrite(w io.Writer, res *protocol.OverrideWriteResult, req pro
 	case req.ClearParam != "":
 		by = req.Operator
 		fmt.Fprintf(w, "overlay param %s cleared", req.ClearParam)
+	case req.Tier != "":
+		// polyforge#81: the tier aspect, never "overlay models"/"cleared"
+		// (review r1#2); its operator is the tier aspect's own.
+		by = res.Step.TierBy
+		fmt.Fprintf(w, "overlay tier=%s", req.Tier)
+	case req.ClearTier:
+		by = req.Operator
+		fmt.Fprintf(w, "overlay tier cleared")
 	case res.Step.Models != nil:
 		fmt.Fprintf(w, "overlay models=%s", strings.Join(res.Step.Models, ","))
 	case res.Step.Skip != nil:

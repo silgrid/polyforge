@@ -23,11 +23,16 @@ func TestOverrideTierCLI(t *testing.T) {
 		{ID: "review", Status: "pending", Tier: "cheap", TierBy: "usr_1", TierFallback: "missing",
 			Effective: []string{"pi:prov/review"}, Source: "steps.proj.review.models"},
 		{ID: "merge", Status: "pending", Tier: "default", TierBy: "usr_2"},
+		// a set tier the explicit chain masks: both aspects show
+		{ID: "sync", Status: "pending", Models: []string{"pi:prov/masked"}, ModelsBy: "usr_3",
+			Tier: "main", TierBy: "usr_2", Effective: []string{"pi:prov/masked"}, Source: "step override"},
 	}}
 	raw, _ := json.Marshal(view)
 	d.answer("GET", "/jobs/wi_tier/overrides", string(raw))
+	// the answer carries the model chain too: a tier write must render the
+	// TIER aspect, never "overlay models" (review r1#2).
 	write := protocol.OverrideWriteResult{WorkItem: "wi_tier", Changed: true, Posture: "running", Published: true,
-		Step: protocol.OverrideStepView{ID: "build", Tier: "main", TierBy: "usr_1"}}
+		Step: protocol.OverrideStepView{ID: "build", Models: []string{"pi:ov/m"}, ModelsBy: "usr_9", Tier: "main", TierBy: "usr_1"}}
 	wraw, _ := json.Marshal(write)
 	d.answer("POST", "/jobs/wi_tier/overrides", string(wraw))
 
@@ -42,6 +47,7 @@ func TestOverrideTierCLI(t *testing.T) {
 		"next dispatch: pi:prov/review (steps.proj.review.models)",
 		"overlay-tier=default (by usr_2)",
 		"next dispatch: (none — the harness adapter's default model)",
+		"overlay-tier=main (by usr_2) [masked by overlay-models]",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("the view lacks %q:\n%s", want, out)
@@ -68,7 +74,7 @@ func TestOverrideTierCLI(t *testing.T) {
 		body string
 	}{
 		{[]string{"override", "wi_tier", "--step", "build", "--tier", "main", "--by", "usr_1"}, `"step":"build","operator":"usr_1","tier":"main"`},
-		{[]string{"override", "wi_tier", "--step", "build", "--clear-tier"}, `"step":"build","clear_tier":true`},
+		{[]string{"override", "wi_tier", "--step", "build", "--clear-tier", "--by", "usr_1"}, `"step":"build","operator":"usr_1","clear_tier":true`},
 	}
 	for _, tc := range cases {
 		code, out, _ = runPf(t, map[string]string{"PF_DAEMON_SOCKET": d.sock}, tc.args...)
@@ -82,5 +88,17 @@ func TestOverrideTierCLI(t *testing.T) {
 		if !strings.Contains(string(last.Body), tc.body) {
 			t.Fatalf("%v: body %s lacks %s", tc.args, last.Body, tc.body)
 		}
+	}
+	// the write's rendered aspect: a set shows the tier (and its operator),
+	// never "overlay models"; a clear says the tier was cleared (r1#2).
+	// The answer carries an explicit chain too, so the masked case is the
+	// one a wrong branch would print.
+	code, out, _ = runPf(t, map[string]string{"PF_DAEMON_SOCKET": d.sock}, "override", "wi_tier", "--step", "build", "--tier", "main", "--by", "usr_1")
+	if code != 0 || !strings.Contains(out, "overlay tier=main (posture running, by usr_1)") || strings.Contains(out, "overlay models=") {
+		t.Fatalf("a tier set must render the tier aspect, not the masked chain:\n%s", out)
+	}
+	code, out, _ = runPf(t, map[string]string{"PF_DAEMON_SOCKET": d.sock}, "override", "wi_tier", "--step", "build", "--clear-tier", "--by", "usr_1")
+	if code != 0 || !strings.Contains(out, "overlay tier cleared (posture running, by usr_1)") {
+		t.Fatalf("a tier clear must render its own aspect and operator:\n%s", out)
 	}
 }

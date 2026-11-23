@@ -210,4 +210,17 @@ func TestOverrideTierPostures(t *testing.T) {
 	if _, ae := td.ovPost(t, wi, protocol.OverrideWriteRequest{Step: "review", Operator: "usr_4", Models: []string{"pi:prov/m"}}); ae == nil || ae.Code != api.ErrDaemonConflict || !strings.Contains(ae.Detail, "queued") {
 		t.Fatalf("a queued model chain must be refused: %+v", ae)
 	}
+
+	// the queued write's own validation: a tier the catalog lacks, a
+	// malformed name and an unknown step are refused with the reason
+	// (review r1#8).
+	if _, ae := td.ovPost(t, wi, protocol.OverrideWriteRequest{Step: "review", Operator: "usr_5", Tier: "nosuch"}); ae == nil || ae.Code != api.ErrDaemonBadInput || !strings.Contains(ae.Detail, "catalog declares no tier") {
+		t.Fatalf("a queued unknown tier must be refused naming the catalog: %+v", ae)
+	}
+	if _, ae := td.ovPost(t, wi, protocol.OverrideWriteRequest{Step: "review", Operator: "usr_5", Tier: "Main"}); ae == nil || ae.Code != api.ErrDaemonBadInput {
+		t.Fatalf("a queued malformed tier name must be refused: %+v", ae)
+	}
+	if _, ae := td.ovPost(t, wi, protocol.OverrideWriteRequest{Step: "nosuch", Operator: "usr_5", Tier: "main"}); ae == nil || ae.Code != api.ErrDaemonBadInput || !strings.Contains(ae.Detail, "declares no step") {
+		t.Fatalf("a queued unknown step must be refused: %+v", ae)
+	}
 }

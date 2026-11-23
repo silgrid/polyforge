@@ -897,7 +897,12 @@ it means "unset", so the yaml and lane layers govern. A clear needs no
 catalog row. A **queued** ticket's tier rides this daemon's local pending
 override record, not an attrs key: the claim that follows on this
 machine inherits it (a claim on another machine does not; set it there
-instead). The view's source label says `step override tier <name>` (or
+instead). The claim re-judges the pending tier against the fresh
+capsule's lane snapshot: a tier whose step the lane no longer declares
+never enters the overlay, one `step_tier_dropped` event names the work
+item, the lane, the step and the tier, and the claim goes on — set the
+tier again on a step of the lane the ticket now runs. The view's source
+label says `step override tier <name>` (or
 `step override (pending) tier <name>`) and names a missing/empty tier's
 fallback.
 

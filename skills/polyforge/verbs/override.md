@@ -127,7 +127,12 @@ the next dispatch with no restart.
   tier, `missing`/`empty`, the layer that now governs). The view's source
   label names it too.
 - Queued: the tier rides this daemon's local pending record (see above);
-  a repeated set is the unchanged success.
+  a repeated set is the unchanged success. The claim re-judges it against
+  the fresh capsule's lane snapshot (Q14 A): a tier whose step the lane no
+  longer declares never enters the overlay — one visible
+  `step_tier_dropped` event names the work item, the lane, the step and
+  the tier, and the claim goes on — so set it again on a step of the lane
+  the ticket now runs.
 - Pi Web shows the daemon's source string; it has no tier editor yet
   (a follow-up ticket).
 

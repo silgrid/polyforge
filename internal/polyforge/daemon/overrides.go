@@ -400,21 +400,12 @@ func (d *Daemon) overrideWriteRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// polyforge#81: a written tier is a catalog name — the lane tier
-	// grammar, declared and non-empty in the Host [step_tiers] catalog.
-	// `default` is validated like any name (Q10 A: no exemption) and means
-	// "unset" at dispatch. A clear needs no catalog row.
+	// grammar, then the Host [step_tiers] catalog. `default` is validated
+	// like any name (Q10 A: no exemption) and means "unset" at dispatch.
+	// A clear needs no catalog row.
 	if req.Tier != "" {
-		if why := cli.StepTierNameProblem(req.Tier); why != "" {
-			writeErr(w, api.ErrDaemonBadInput, "tier: "+why)
-			return
-		}
-		catalog := d.rt.StepTiersCatalog()
-		if _, ok := catalog[req.Tier]; !ok {
-			if len(catalog) == 0 {
-				writeErr(w, api.ErrDaemonBadInput, "tier: the Host [step_tiers] catalog is empty — set step_tiers.<tier> with `pf config set step_tiers.<tier> '[\"<harness>:<model>\"]' --host` first, or clear the tier (`--clear-tier`)")
-			} else {
-				writeErr(w, api.ErrDaemonBadInput, fmt.Sprintf("tier: the Host [step_tiers] catalog declares no tier %q — its tiers are %s; set one of them or clear the tier (`--clear-tier`)", req.Tier, strings.Join(sortedStepTiers(catalog), ", ")))
-			}
+		if ae := d.tierWriteProblem(req.Tier); ae != nil {
+			writeErrOf(w, ae)
 			return
 		}
 	}
@@ -622,6 +613,27 @@ func wfStep(wf *driver.Workflow, id string) *driver.StepSpec {
 	return nil
 }
 
+// tierWriteProblem answers the typed refusal a written capability tier
+// takes (polyforge#81): the lane tier grammar, then the Host
+// [step_tiers] catalog, whose row must exist (the config parser already
+// refuses an empty candidate list, so "declared" is the check). nil =
+// accepted. A clear needs no catalog row.
+func (d *Daemon) tierWriteProblem(name string) *api.Error {
+	if why := cli.StepTierNameProblem(name); why != "" {
+		return &api.Error{Code: api.ErrDaemonBadInput, Detail: "tier: " + why}
+	}
+	catalog := d.rt.StepTiersCatalog()
+	if _, ok := catalog[name]; ok {
+		return nil
+	}
+	if len(catalog) == 0 {
+		return &api.Error{Code: api.ErrDaemonBadInput,
+			Detail: "tier: the Host [step_tiers] catalog is empty — set step_tiers.<tier> with `pf config set step_tiers.<tier> '[\"<harness>:<model>\"]' --host` first, or clear the tier (`--clear-tier`)"}
+	}
+	return &api.Error{Code: api.ErrDaemonBadInput,
+		Detail: fmt.Sprintf("tier: the Host [step_tiers] catalog declares no tier %q — its tiers are %s; set one of them or clear the tier (`--clear-tier`)", name, strings.Join(sortedStepTiers(catalog), ", "))}
+}
+
 // sortedStepTiers answers a catalog's tier names in order (an error
 // message's list).
 func sortedStepTiers(catalog map[string][]string) []string {
@@ -699,17 +711,8 @@ func (d *Daemon) queuedTierWrite(ctx context.Context, wi string, item *api.WorkI
 			Detail: fmt.Sprintf("the lane declares no step %q", req.Step)}
 	}
 	if req.Tier != "" {
-		if why := cli.StepTierNameProblem(req.Tier); why != "" {
-			return nil, &api.Error{Code: api.ErrDaemonBadInput, Detail: "tier: " + why}
-		}
-		catalog := d.rt.StepTiersCatalog()
-		if _, ok := catalog[req.Tier]; !ok {
-			if len(catalog) == 0 {
-				return nil, &api.Error{Code: api.ErrDaemonBadInput,
-					Detail: "tier: the Host [step_tiers] catalog is empty — set step_tiers.<tier> with `pf config set step_tiers.<tier> '[\"<harness>:<model>\"]' --host` first, or clear the tier (`--clear-tier`)"}
-			}
-			return nil, &api.Error{Code: api.ErrDaemonBadInput,
-				Detail: fmt.Sprintf("tier: the Host [step_tiers] catalog declares no tier %q — its tiers are %s; set one of them or clear the tier (`--clear-tier`)", req.Tier, strings.Join(sortedStepTiers(catalog), ", "))}
+		if ae := d.tierWriteProblem(req.Tier); ae != nil {
+			return nil, ae
 		}
 	}
 	out, err := d.rt.ApplyStepOverride(ctx, wi, runtime.OverrideChange{
