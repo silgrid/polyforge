@@ -908,6 +908,42 @@ UPDATE work_items
                         json_extract(attrs, '$."split.unit"')),
                            '$."split.unit"')
  WHERE json_type(attrs, '$."split.unit"') IS NOT NULL;
+
+-- 4. the generic lease base (polyforge#245, 245-lease): one holder per
+--    (kind, key) and its FIFO waiters. The landing lock is the first
+--    kind; polyforge#246 reuses the same tables under another kind. The
+--    key and the holder identity are opaque caller strings, the token is
+--    stored only as its SHA-256 digest, and every time stamp is the
+--    server's clock in Unix nanoseconds.
+CREATE TABLE IF NOT EXISTS leases (
+  kind        TEXT NOT NULL,
+  key         TEXT NOT NULL,
+  request_id  TEXT NOT NULL UNIQUE,
+  machine_id  TEXT NOT NULL,
+  work_item   TEXT NOT NULL,
+  operator_id TEXT NOT NULL,
+  token_hash  TEXT NOT NULL,
+  acquired_at_ns INTEGER NOT NULL,
+  expires_at_ns  INTEGER NOT NULL,
+  PRIMARY KEY (kind, key)
+);
+CREATE TABLE IF NOT EXISTS lease_waiters (
+  seq             INTEGER PRIMARY KEY AUTOINCREMENT,
+  request_id      TEXT NOT NULL UNIQUE,
+  kind            TEXT NOT NULL,
+  key             TEXT NOT NULL,
+  machine_id      TEXT NOT NULL,
+  work_item       TEXT NOT NULL,
+  operator_id     TEXT NOT NULL,
+  requested_at_ns INTEGER NOT NULL,
+  last_poll_at_ns INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_lease_waiters_fifo ON lease_waiters(kind, key, seq);
+CREATE TABLE IF NOT EXISTS repo_aliases (
+  alias    TEXT NOT NULL,
+  repo_key TEXT NOT NULL,
+  PRIMARY KEY (alias, repo_key)
+);
 ```
 
 A row whose nested `split` shape conflicts — a `split` parent that is
@@ -1529,3 +1565,26 @@ owner 的 asks.jsonl 裁定，给出结局（修复后通过、反驳成立、ow
 原因计数和无法解析的 FAIL 版本数。stdout 只打印汇总与无法判定的计数；
 同时给 `--csv` 时另写 `<csv>.blocking.csv`，既有 CSV 不加列。这是离线
 只读工具，不需要迁移动作。
+
+## v0.2.4, the landing lock's lease base: AIHub tables, signed lease routes and the daemon client (polyforge#247)
+
+The v0.2.4 window also carries the generic lease base of polyforge#245's
+first unit (245-lease): AIHub's `leases` / `lease_waiters` /
+`repo_aliases` tables (the second half of
+`deploy/sql/v0.2.4/upgrade.sql`), three signed machine routes —
+`POST /api/v1/leases/{kind}/acquire|renew|release` and
+`GET /api/v1/leases/requests/{rid}` — authorized by the machine's
+operator, the ticket's project write and the ticket's current session,
+the server clock's 300 s lease / 60 s waiter liveness / FIFO order, a
+token stored only as its SHA-256 digest, and the daemon's private
+request journal (request id / key / cycle, never the token). The landing
+lock is the first kind; polyforge#246 reuses the same tables and routes
+under another kind.
+
+Upgrade the AIHub server first, as every window does: an old daemon
+never calls the new routes and keeps working against the new server.
+The probe answers apply for a database that already ran the old v0.2.4
+(the split migration done, no lock schema), the upgrade is idempotent,
+and the rollback drops the lease tables beside the split restore. No
+lane changes in this unit: the driver, `pf step lock-check` and the
+landing-lock projection arrive in the next units.

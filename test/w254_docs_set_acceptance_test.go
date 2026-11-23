@@ -504,13 +504,14 @@ func TestW254QuickstartsMovedIntact(t *testing.T) {
 // - v0.2.4 容器内组件更新（polyforge#190：版本卷、排空、状态重连、退出码 75 与回退边界）
 // - the v0.2.4 section appended with the workstation release image (polyforge#86: buildx builds linux/amd64 and linux/arm64 before the claim and pushes after it, workstation-image.digest joins SHA256SUMS and the manifest, --verify checks the index digest, both platforms and the public channel's anonymous read, resume and the fresh-refusal cover both images, the preflight demands buildx and arm64 binfmt, a suffixed line must set RELEASE_WORKSTATION_IMAGE, and the image exports the host-side files from /opt/polyforge/host-files)
 // - the v0.2.4 section appended with review-firstpass blocking findings and the suspected false-positive rate (polyforge#242: --events reads every artifacts/review.md version from the capsule's git history — the stamped hand-off sections when no history is readable, never both — extracts each blocker, chains it by the `r<n>#<k>` reference and the owner's asks.jsonl rulings, and reports the outcome, the rate by class and by model with the unknown reasons counted apart; with --csv it writes one row per chain to <csv>.blocking.csv and the existing CSV gains no column; no upgrade action)
+// - the v0.2.4 section appended with the landing lock's lease base (polyforge#247: AIHub's leases/lease_waiters/repo_aliases tables in the v0.2.4 window, the three signed lease routes and lookup-by-request-id authorized by the machine operator, the ticket project write and current session, the server-clock 300 s lease / 60 s waiter liveness / FIFO order with a SHA-256-only token, the daemon's private request journal (request id / key / cycle, no token), the probe answering apply on a database that already ran the old v0.2.4, an idempotent upgrade and a rollback dropping the lease tables; upgrade the AIHub server first, no lane changes in this unit)
 // upgrade-sections:end
 // The file is only routed to, from the install ops page and the README
 // landing page.
 func TestW254UpgradeByteIdentical(t *testing.T) {
 	raw := []byte(w254Read(t, "docs/upgrade.md"))
 	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != "78df18cc284b991c95a43aaeb7896189742065c0d44246e3dbf7ddc1b7276732" {
+	if got := hex.EncodeToString(sum[:]); got != "9298a355d2a42e2aef27260cb9d84a0d10b35ccf06130c924734fe5827388f55" {
 		t.Fatalf("docs/upgrade.md must stay byte-identical (only routed to, never rewritten): sha256 %s != the pinned pre-move sha256", got)
 	}
 	// the list beside the pin: one whole `// - ` line per appended section

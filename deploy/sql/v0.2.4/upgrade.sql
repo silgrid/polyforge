@@ -59,3 +59,39 @@ UPDATE work_items
                         json_extract(attrs, '$."split.unit"')),
                            '$."split.unit"')
  WHERE json_type(attrs, '$."split.unit"') IS NOT NULL;
+
+-- 4. the generic lease base (polyforge#245, 245-lease): one holder per
+--    (kind, key) and its FIFO waiters. The landing lock is the first
+--    kind; polyforge#246 reuses the same tables under another kind. The
+--    key and the holder identity are opaque caller strings, the token is
+--    stored only as its SHA-256 digest, and every time stamp is the
+--    server's clock in Unix nanoseconds.
+CREATE TABLE IF NOT EXISTS leases (
+  kind        TEXT NOT NULL,
+  key         TEXT NOT NULL,
+  request_id  TEXT NOT NULL UNIQUE,
+  machine_id  TEXT NOT NULL,
+  work_item   TEXT NOT NULL,
+  operator_id TEXT NOT NULL,
+  token_hash  TEXT NOT NULL,
+  acquired_at_ns INTEGER NOT NULL,
+  expires_at_ns  INTEGER NOT NULL,
+  PRIMARY KEY (kind, key)
+);
+CREATE TABLE IF NOT EXISTS lease_waiters (
+  seq             INTEGER PRIMARY KEY AUTOINCREMENT,
+  request_id      TEXT NOT NULL UNIQUE,
+  kind            TEXT NOT NULL,
+  key             TEXT NOT NULL,
+  machine_id      TEXT NOT NULL,
+  work_item       TEXT NOT NULL,
+  operator_id     TEXT NOT NULL,
+  requested_at_ns INTEGER NOT NULL,
+  last_poll_at_ns INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_lease_waiters_fifo ON lease_waiters(kind, key, seq);
+CREATE TABLE IF NOT EXISTS repo_aliases (
+  alias    TEXT NOT NULL,
+  repo_key TEXT NOT NULL,
+  PRIMARY KEY (alias, repo_key)
+);
