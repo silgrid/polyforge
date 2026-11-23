@@ -47,6 +47,10 @@ test("polyforge#255 r3: the Jump search pages until the launch call is found, th
     piJumpHistoryRef: { current: { messages: [], entryIds: [], historyCursor: "e-50", hasEarlierMessages: true } },
     setPiJump: (value) => seen.push(value),
     loadOlderPage: async () => pages.shift() ?? null,
+    loadingOlderRef: { current: false },
+    scrollContainerRef: { current: null },
+    prevScrollAnchorRef: { current: null },
+    captureScrollAnchor: () => null,
     findPiSubagentLaunchEntryId: (toolCallId, messages, entryIds) => {
       for (let i = 0; i < messages.length; i += 1) {
         if ((messages[i].content ?? []).some((block) => block.toolCallId === toolCallId)) return entryIds[i];
@@ -75,6 +79,10 @@ test("polyforge#255 r3: a history searched to its end reports missing; the panel
     setPiJump: (value) => seen.push(value),
     loadOlderPage: async () => ({ messages: [assistant("x")], entryIds: ["e-1"], hasMore: false, oldestEntryId: "e-1" }),
     findPiSubagentLaunchEntryId: () => null,
+    loadingOlderRef: { current: false },
+    scrollContainerRef: { current: null },
+    prevScrollAnchorRef: { current: null },
+    captureScrollAnchor: () => null,
   })();
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
