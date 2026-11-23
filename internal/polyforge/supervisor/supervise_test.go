@@ -386,3 +386,142 @@ func TestSuperviseStopEndsEvenWhenAChildCannotStart(t *testing.T) {
 		t.Fatal("the run hung on the daemon's 78: a child that cannot start must not hold it open")
 	}
 }
+
+// supTrapSh answers a daemon child that writes its pid to pidF, then
+// loops a short foreground sleep so a forwarded TERM is caught between
+// iterations (one term line per delivery, the done line, exit 0). A
+// SIGKILL of the shell leaves no long-lived orphan behind, unlike
+// supTrapDaemon's background sleep — the restart tests kill the child.
+func supTrapSh(pidF, termF, doneF string) ChildSpec {
+	script := "echo $$ > '" + pidF + "'; trap 'echo term >> " + termF +
+		"; echo done >> " + doneF + "; exit 0' TERM\n" +
+		"while :; do sleep 0.05; done\n"
+	return supSh("daemon", script)
+}
+
+// TestSuperviseSettlesWhenTheLastExitEventRacesItsManager (polyforge#251,
+// AC1/AC2): the manager is held right after it handed its exit event to
+// the main loop — the scheduling race the flaky
+// TestSuperviseRestartsAKilledChild loses — and the stop that follows
+// must still settle at once: every child ended inside the grace, so the
+// run answers 0 well before it.
+func TestSuperviseSettlesWhenTheLastExitEventRacesItsManager(t *testing.T) {
+	dir := t.TempDir()
+	pidF := filepath.Join(dir, "daemon.pid")
+	oldHold := supPostExitSendHold
+	supPostExitSendHold = func(*supProc) { time.Sleep(300 * time.Millisecond) }
+	t.Cleanup(func() { supPostExitSendHold = oldHold })
+
+	rs := RunSpec{Daemon: supPidChild("daemon", pidF),
+		Grace: 3 * time.Second, RestartDelay: 100 * time.Millisecond}
+	code := supRun(rs)
+	supPoll(t, "the daemon's pid", func() bool { return pidAlive(supReadPid(pidF)) })
+	started := time.Now()
+	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case c := <-code:
+		if c != 0 {
+			t.Fatalf("stop after the last exit event: exit %d, want 0", c)
+		}
+	case <-time.After(supDeadline):
+		t.Fatal("the run did not end after the stop")
+	}
+	if waited := time.Since(started); waited >= time.Second {
+		t.Fatalf("the run waited %s to settle after every child had ended; the grace is %s", waited, rs.Grace)
+	}
+}
+
+// TestSuperviseStopAfterARestart (polyforge#251, AC1's two timings,
+// AC2): a stop right after a child was restarted forwards exactly one
+// TERM to the restarted child and answers 0 inside the grace even with
+// the manager delayed after the exit event's delivery; a stop landing
+// while the restart is scheduled (the backoff not yet over) cancels the
+// restart — no new process starts — and answers 0 well before the
+// delay.
+func TestSuperviseStopAfterARestart(t *testing.T) {
+	t.Run("immediately", func(t *testing.T) {
+		dir := t.TempDir()
+		pidF := filepath.Join(dir, "daemon.pid")
+		termF := filepath.Join(dir, "term.log")
+		doneF := filepath.Join(dir, "done.log")
+		oldHold := supPostExitSendHold
+		supPostExitSendHold = func(*supProc) { time.Sleep(300 * time.Millisecond) }
+		t.Cleanup(func() { supPostExitSendHold = oldHold })
+
+		rs := RunSpec{Daemon: supTrapSh(pidF, termF, doneF),
+			Grace: 5 * time.Second, RestartDelay: 300 * time.Millisecond}
+		code := supRun(rs)
+		first := 0
+		supPoll(t, "the daemon's pid", func() bool {
+			first = supReadPid(pidF)
+			return pidAlive(first)
+		})
+		if err := syscall.Kill(first, syscall.SIGKILL); err != nil {
+			t.Fatal(err)
+		}
+		restarted := 0
+		supPoll(t, "the restarted daemon", func() bool {
+			restarted = supReadPid(pidF)
+			return restarted != 0 && restarted != first && pidAlive(restarted)
+		})
+		started := time.Now()
+		if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case c := <-code:
+			if c != 0 {
+				t.Fatalf("stop after a restart: exit %d, want 0", c)
+			}
+		case <-time.After(supDeadline):
+			t.Fatal("the run did not end after the stop")
+		}
+		if waited := time.Since(started); waited >= 2*time.Second {
+			t.Fatalf("the run waited %s after the stop; every child ended well inside the %s grace", waited, rs.Grace)
+		}
+		if n := supLineCount(termF); n != 1 {
+			t.Fatalf("the restarted daemon saw %d TERM lines, want exactly 1", n)
+		}
+		if raw, err := os.ReadFile(doneF); err != nil || !strings.Contains(string(raw), "done") {
+			t.Fatalf("the restarted daemon did not complete its shutdown inside the grace (done file: %v)", err)
+		}
+	})
+
+	t.Run("scheduled", func(t *testing.T) {
+		dir := t.TempDir()
+		pidF := filepath.Join(dir, "daemon.pid")
+		rs := RunSpec{Daemon: supPidChild("daemon", pidF),
+			Grace: 2 * time.Second, RestartDelay: 2 * time.Second}
+		code := supRun(rs)
+		first := 0
+		supPoll(t, "the daemon's pid", func() bool {
+			first = supReadPid(pidF)
+			return pidAlive(first)
+		})
+		if err := syscall.Kill(first, syscall.SIGKILL); err != nil {
+			t.Fatal(err)
+		}
+		// the child is gone; the restart's backoff is running
+		supPoll(t, "the killed daemon to be gone", func() bool { return !pidAlive(first) })
+		started := time.Now()
+		if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case c := <-code:
+			if c != 0 {
+				t.Fatalf("stop during a scheduled restart: exit %d, want 0", c)
+			}
+		case <-time.After(supDeadline):
+			t.Fatal("the run did not end after the stop")
+		}
+		if waited := time.Since(started); waited >= rs.RestartDelay {
+			t.Fatalf("the run waited %s, past the %s restart delay it should have cancelled", waited, rs.RestartDelay)
+		}
+		if got := supReadPid(pidF); got != first {
+			t.Fatalf("the daemon restarted after the stop: pid %d (was %d), want no relaunch", got, first)
+		}
+	})
+}
