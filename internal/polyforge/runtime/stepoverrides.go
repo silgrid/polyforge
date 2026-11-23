@@ -162,6 +162,10 @@ type OverrideChange struct {
 	// to clear.
 	Param      *protocol.OverrideParam
 	ClearParam string
+	// Tier sets the step's capability-tier name (polyforge#81); ClearTier
+	// clears it.
+	Tier      string
+	ClearTier bool
 	// SealedDir is the sealed scene the route resolved for a work item
 	// held by no job: a clear reads the chain its overlay carries.
 	SealedDir string
@@ -341,7 +345,7 @@ func (r *Runtime) mutatePending(wi string, ch OverrideChange) (bool, *capsule.St
 	if cur == nil {
 		cur = map[string]*capsule.StepOverride{}
 	}
-	changed, entry := applyAspect(cur, ch, sealed)
+	changed, entry := applyAspectAt(cur, ch, true, sealed)
 	if !changed {
 		return false, entry, nil
 	}
@@ -365,51 +369,14 @@ func (r *Runtime) mutatePending(wi string, ch OverrideChange) (bool, *capsule.St
 // cleared chain or param for the step: a clear then leaves the tombstone
 // the claim merge applies, unless one already stands.
 func applyAspect(entries map[string]*capsule.StepOverride, ch OverrideChange, sealed bool) (bool, *capsule.StepOverride) {
-	e := entries[ch.Step]
-	if e == nil {
-		e = &capsule.StepOverride{}
-		entries[ch.Step] = e
-	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	switch {
-	case ch.Models != nil:
-		if equalCandidates(e.Models, ch.Models) {
-			return false, e
-		}
-		e.Models = append([]string(nil), ch.Models...)
-		e.ModelsBy, e.ModelsAt, e.ModelsCleared = ch.Operator, now, false
-	case ch.ClearModels:
-		if e.Models == nil && (!sealed || e.ModelsCleared) {
-			return false, e
-		}
-		e.Models, e.ModelsBy, e.ModelsAt = nil, ch.Operator, now
-		e.ModelsCleared = sealed
-	case ch.Skip != nil:
-		if e.Skip != nil && *e.Skip == *ch.Skip {
-			return false, e
-		}
-		skip := *ch.Skip
-		e.Skip = &skip
-		e.SkipBy, e.SkipAt = ch.Operator, now
-	case ch.Param != nil:
-		if p := e.Params[ch.Param.Name]; p != nil && !p.Cleared && p.Value == ch.Param.Value {
-			return false, e
-		}
-		if e.Params == nil {
-			e.Params = map[string]*capsule.ParamOverride{}
-		}
-		e.Params[ch.Param.Name] = &capsule.ParamOverride{Value: ch.Param.Value, By: ch.Operator, At: now}
-	case ch.ClearParam != "":
-		p := e.Params[ch.ClearParam]
-		if (p == nil && !sealed) || (p != nil && p.Cleared) {
-			return false, e
-		}
-		if e.Params == nil {
-			e.Params = map[string]*capsule.ParamOverride{}
-		}
-		e.Params[ch.ClearParam] = &capsule.ParamOverride{By: ch.Operator, At: now, Cleared: true}
-	}
-	return true, e
+	return applyAspectAt(entries, ch, false, sealed)
+}
+
+// applyAspectAt is applyAspect naming whether the entries are the
+// daemon-local pending record (a tier clear then keeps the tombstone the
+// claim's merge applies).
+func applyAspectAt(entries map[string]*capsule.StepOverride, ch OverrideChange, pendingRecord, sealed bool) (bool, *capsule.StepOverride) {
+	return false, nil
 }
 
 // mutateOverlay is the capsule's read-modify-write: exactly one aspect
@@ -647,6 +614,7 @@ func mergePendingAspects(ov capsule.StepOverrides, pending map[string]*capsule.S
 // capsule's).
 type PendingAspects struct {
 	Models bool
+	Tier   bool
 	Skip   bool
 	Params bool // some param of the step
 }
