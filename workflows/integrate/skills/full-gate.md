@@ -49,7 +49,12 @@ through the registration below.
    from the capsule root, without a Bash timeout (it takes the full tool window;
    `--mark-green` writes the green tag itself when every repo passes):
    `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/gate.py" --isolation container --keep-going --capsule . --pins artifacts/integrate/revert.json --mark-green --summary "integration batch $PF_WI_ID" --json --out artifacts/integrate/gate.json`
-   (`--help` is the script's full reference)
+   (`--help` is the script's full reference). A repo that declares
+   parallel groups in its `.polyforge/verify-scope.conf` runs them side by
+   side, each group in plan order in its own container: the progress lines
+   of two groups interleave, so read a command's start and its PASS/FAIL by
+   its `[i/n]` prefix, never by adjacency; the result and the summary stay
+   in plan order.
 3. **Route on the gate's exit code:**
    - **0** — `result` `green` (the tags are in `details.tags`).
    - **1** — a repo's gate failed: run the triage, this one line as written:

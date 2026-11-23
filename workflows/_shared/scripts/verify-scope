@@ -175,6 +175,20 @@ value like any other (never evaluated at parse time), and a declaration
 whose value has no ``|``, an empty glob or an empty command is diagnosed
 and fails the conf closed.
 
+``group=<name>|<full-N|command>`` and ``full_parallel=<N>`` (polyforge#244)
+are the full gate's parallel groups, a declaration the engine only echoes:
+one line binds one full-phase command — by its name (``full-<i>`` or a
+check name) or by its command text, verbatim — to a group, and a bound
+command's JSON entry then carries ``group: <name>``; a repository that
+binds none keeps the report's key set unchanged. ``full_parallel`` is the
+parallelism with a default of 2, echoed as the report's ``full_parallel``
+only when a command is bound; a value that is not a positive integer, or a
+second valid declaration, is diagnosed and ignored — an invalid one
+answers 1 (serial) unless a later valid line follows it, which wins. A line naming no full-phase command, a fast-phase command, or
+one already bound elsewhere is diagnosed and dropped, the first binding
+winning. The engine itself runs nothing in parallel: the gate that
+consumes the report schedules the groups.
+
 The conf is declarative: it is never evaluated at parse time and it has no
 hook-style keys (pre/post/exec); an unknown key is diagnosed and contributes
 nothing — except the keys another tool owns (``not_runnable_rule=``, the
@@ -292,7 +306,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from typing import Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -425,6 +439,13 @@ class Engine:
         self.conf_micro_path: List[str] = []
         self.conf_micro: List[Tuple[str, str]] = []
         self.conf_host: List[Tuple[str, ...]] = []
+        # polyforge#244: the full gate's parallel groups — group=<name>|<target>
+        # bound lines, the declared parallelism (0 = undeclared) and the
+        # resolution command name -> group the report echoes.
+        self.conf_groups: List[Tuple[str, str]] = []
+        self.conf_parallel = 0
+        self.conf_parallel_bad = False
+        self.group_of: Dict[str, str] = {}
         self.conf_runner = ""
         self.conf_e2e_runner = ""
         self.conf_e2e_start_threshold = ""
@@ -1009,6 +1030,38 @@ class Engine:
                     self.diag("conf ignores an empty go_harness")
                     continue
                 self.conf_harness.append(val)
+            elif key == "group":
+                # polyforge#244: one full-phase command bound to a group; the
+                # target is the command's name (full-<i>/check name) or its
+                # text, resolved once the plan is complete.
+                if "|" not in val:
+                    self.diag("conf rejects group without the <name>|<full-N|command> shape: %s" % line)
+                    continue
+                gname, target = val.split("|", 1)
+                gname, target = c_rstrip(gname), c_rstrip(target)
+                if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", gname, re.ASCII):
+                    self.diag("conf rejects group name %s (letters, digits, '.', '_' and '-',"
+                              " starting with a letter or digit): %s" % (gname, line))
+                    continue
+                if target == "":
+                    self.diag("conf rejects group '%s' without a full command: %s" % (gname, line))
+                    continue
+                self.conf_groups.append((gname, target))
+            elif key == "full_parallel":
+                # polyforge#244: the full gate's parallelism. A value that is
+                # not a positive integer is diagnosed and falls back to serial
+                # (the owner's Q2-A ruling, like an unknown key).
+                val = c_rstrip(val)
+                if not re.fullmatch(r"[0-9]+", val, re.ASCII) or int(val) <= 0:
+                    self.diag("conf ignores full_parallel %s (expected a positive integer);"
+                              " the full gate runs serially: %s" % (val, line))
+                    self.conf_parallel_bad = True
+                    continue
+                if self.conf_parallel:
+                    self.diag("conf ignores a second full_parallel: %s" % line)
+                    continue
+                self.conf_parallel = int(val)
+                self.conf_parallel_bad = False
             elif key == "not_runnable_rule":
                 # facts.py's replay key: the engine reads none of it, so it
                 # accepts the line without the unknown-key diagnostic — no
@@ -2262,6 +2315,36 @@ class Engine:
                 counts[rec[1]] = counts.get(rec[1], 0) + 1
                 rec[0] = "%s-%d" % (rec[1], counts[rec[1]])
 
+    def resolve_groups(self) -> None:
+        """Bind each group= line to its full-phase command: the target is the
+        command's name or its text, verbatim. A line naming no full-phase
+        command, a fast-phase command or one already bound elsewhere is
+        diagnosed and dropped; the first binding wins."""
+        if not self.conf_groups:
+            return
+        by_name = {rec[0]: rec for rec in self.commands}
+        by_text: Dict[str, List[str]] = {}
+        for rec in self.commands:
+            if rec[1] == "full":
+                by_text.setdefault(rec[3], []).append(rec[0])
+        for gname, target in self.conf_groups:
+            names = [target] if target in by_name else by_text.get(target, [])
+            if not names:
+                self.diag("conf ignores group '%s' for '%s', which names no full command" % (gname, target))
+                continue
+            if len(names) > 1:
+                self.diag("conf ignores group '%s' for '%s', which names %d full commands (%s)"
+                          % (gname, target, len(names), ", ".join(names)))
+                continue
+            name = names[0]
+            if by_name[name][1] != "full":
+                self.diag("conf ignores group '%s' for '%s', which is not a full-phase command" % (gname, name))
+                continue
+            if name in self.group_of:
+                self.diag("conf ignores group '%s' for '%s': already in group '%s'" % (gname, name, self.group_of[name]))
+                continue
+            self.group_of[name] = gname
+
     def line_report(self) -> str:
         out = ["mode: %s" % self.mode]
         for p in self.changed:
@@ -2295,7 +2378,7 @@ class Engine:
         reruns = {k: v[0] for k, v in bound(self.conf_rerun).items()}
         commands = []
         for name, phase, source, cmd in self.commands:
-            commands.append({
+            entry: Dict[str, Any] = {
                 "name": name,
                 "phase": phase,
                 "cmd": cmd,
@@ -2305,7 +2388,13 @@ class Engine:
                 "report": reports.get(name),
                 "rerun": reruns.get(name),
                 "source": source,
-            })
+            }
+            # polyforge#244: a bound command names its group; an unbound one
+            # (and every command of a repository that declares no group)
+            # keeps the report's key set unchanged.
+            if name in self.group_of:
+                entry["group"] = self.group_of[name]
+            commands.append(entry)
         report = {
             "schema": 1,
             "root": self.root,
@@ -2339,6 +2428,10 @@ class Engine:
                 "uncovered_paths": list(self.sel_uncov),
                 "full_commands": list(self.sel_full),
             } if self.sel_mode else None
+        # polyforge#244: the full gate's parallelism, only when a group is
+        # bound — an undeclared repository's report keeps its key set.
+        if self.group_of:
+            report["full_parallel"] = self.conf_parallel or (1 if self.conf_parallel_bad else 2)
         # A repository that declares micro_path= or micro_check= (and every
         # --micro report) echoes the micro declaration; one that declares
         # neither keeps the report's key set unchanged.
@@ -2809,6 +2902,13 @@ class Engine:
                     self.commands.append(["", "scoped", "conf", c])
 
             self.name_commands()
+            # polyforge#244: bind the declared groups to the full plan's
+            # commands (the plan is complete; a group names a full-phase
+            # command). Only the full report carries full-phase commands, so
+            # the light, scoped and micro reports stay silent about the
+            # declaration instead of accusing it of naming nothing (r1#2).
+            if self.mode == "full":
+                self.resolve_groups()
 
             if self.since_set:
                 self.since_query()
