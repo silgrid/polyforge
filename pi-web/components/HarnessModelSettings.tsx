@@ -36,6 +36,20 @@ export interface StepTierWriteOutcome {
   error?: string;
 }
 
+/** The raw Host config answer the tier column reads (polyforge#256 B1). */
+export interface HostTierConfig {
+  pfPresent: boolean | null;
+  pfVersion: string | null;
+  capable: boolean;
+  stepTiersReason: string | null;
+  items: Array<{ key: string; value?: unknown }>;
+}
+
+/** Why the tier column is read-only, localized from the read's facts. */
+export function stepTierReasonText(_host: HostTierConfig, _t: (key: string, params?: Record<string, unknown>) => string): string {
+  return "";
+}
+
 /** The identity a row's harness addresses in the catalog: pi's
  *  provider/id, claude's model name (Q2's identity rule — the same one the
  *  write gate judges). */
