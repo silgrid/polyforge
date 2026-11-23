@@ -702,7 +702,7 @@ boots the default AIHub profile, and checks inside the container: the
 image-managed `/api/onboarding` view has all four steps unfinished
 (`nextStep` `aihub`, `dismissed` false) and the first boot's connection
 is local (`mode` `local`, default Cell `default`, server
-`http://127.0.0.1:8420`, user and key ready); the `pf --json doctor`
+`http://<local-aihub>:<port>`, user and key ready); the `pf --json doctor`
 necessary rows pass (`config`, `workspace mapping`, `workspace dirs`,
 `server reach`, `daemon socket`, `daemon supervision`, `workflow lanes`,
 `aihub projects`, `auth`); and `pf --json cell list` holds exactly one
@@ -710,7 +710,7 @@ necessary rows pass (`config`, `workspace mapping`, `workspace dirs`,
 proves the host carries no polyforge component. An HTTP 200 alone is
 never a pass, and the report's overall `ok` is never the proof.
 
-Then the human half: open `http://127.0.0.1:30141` in a fresh browser
+Then the human half: open `http://<pi-web-host>:<port>` in a fresh browser
 session, sign in with the password, and record that the first open shows
 the onboarding wizard. The wizard asks for the AIHub step; on the
 default path it is the image's local AIHub.
