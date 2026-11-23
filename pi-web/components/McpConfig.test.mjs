@@ -1613,3 +1613,26 @@ test("a pi row claude does not hold says so, never the local-scope sentence (r2#
   assert.ok(markup.includes(messages["mcp.claude.notHeld"]), "the claude partition says claude does not hold this entry");
   assert.ok(!markup.includes(messages["mcp.applyTo.piUnsupportedLocal"]), "the local-scope sentence stays in the local group where it is true");
 });
+
+// polyforge#257 (T2 止血) B8: the sidebar group label is uppercase
+// (settings.css `.config-sidebar-group-label`), which inherited into the
+// 「Claude 专属」 badge and shouted it (review's `settings.css:136`). The badge
+// keeps its own spelling and stands off the group name; the group label's
+// uppercase stays for the name itself.
+test("the group badge keeps the harness spelling and stands off the group name (B8)", async () => {
+  const html = view({ cwd: "/Users/me/repo", load: { state: "loaded", data: unifiedData() } });
+  const markup = decode(html);
+  assert.match(
+    markup,
+    new RegExp(`<span class="config-sidebar-group-label-text">local<span class="mcp-sidebar-badge is-muted">${messages["mcp.group.claudeOnly"]}</span></span>`),
+    "the badge sits in the group label's text",
+  );
+
+  const css = await readFile(new URL("../app/settings.css", import.meta.url), "utf8");
+  const rules = (selector) => [...css.matchAll(new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\{([^}]*)\\}`, "g"))].map((match) => match[1]);
+  const label = rules(".config-sidebar-group-label").join("\n");
+  const badge = rules(".mcp-sidebar-badge").join("\n");
+  assert.match(label, /text-transform:\s*uppercase/, "the group name is still uppercased");
+  assert.match(badge, /text-transform:\s*none/, "text-transform inherits, so the badge must opt out");
+  assert.match(badge, /margin-left:\s*[1-9]/, "the badge needs its own space from the group name");
+});

@@ -35,3 +35,33 @@ test("the add panel offers the global scope alone without a project (Q7 B)", () 
   assert.deepEqual(addScopeChoices(false), ["global"]);
   assert.deepEqual(addScopeChoices(true), ["global", "project"]);
 });
+
+// polyforge#257 (T2 止血) B8: an embedded panel with nothing to report drew an
+// empty 52px footer bar under the skill detail (SkillsConfig.tsx:1311 rendered
+// ConfigFooter unconditionally). The footer is the panel's one status line
+// plus its actions, so it exists exactly when one of them does — expected
+// values come from the ticket's B8 sentence, not from the render.
+const { skillFooterVisible } = await jiti.import("./SkillsConfig.tsx");
+
+test("an empty embedded skill footer is not rendered (B8)", () => {
+  assert.equal(
+    skillFooterVisible({ embedded: true, installable: false, updateAvailable: false }),
+    false,
+    "an embedded panel with no update and no install action draws no footer",
+  );
+  assert.equal(
+    skillFooterVisible({ embedded: true, installable: true, updateAvailable: false }),
+    true,
+    "the check-updates action needs a footer",
+  );
+  assert.equal(
+    skillFooterVisible({ embedded: true, installable: false, updateAvailable: true }),
+    true,
+    "an update count needs a footer",
+  );
+  assert.equal(
+    skillFooterVisible({ embedded: false, installable: false, updateAvailable: false }),
+    true,
+    "a standalone panel keeps its Close button",
+  );
+});
