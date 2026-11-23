@@ -175,6 +175,20 @@ held is released, and the owner's reply resumes the session through a
 dispatch that takes them again. A daemon without the binding a declared
 resource needs parks the step blocked naming it.
 
+A low-star question card is answered by the daemon's standing
+authorization (polyforge#239): the live dispatch records its first
+awaiting observation as T0, and a card whose every row's `重点关注程度`
+is exactly ★ or ★★ is answered — under the reserved author
+`daemon:auto-recommendation`, adopting each row's 推荐选项, after the
+Cell's `ask_auto_reply_timeout` (default 30m) and only if no owner replied
+first. The automatic reply is a delivery, never an owner authorization:
+`--per-owner`, waive/rewind/force-fail and attrs writes reject it. A
+protected stop keeps waiting for the owner: `build` on a ticket whose
+content carries `confirm_plan: true`, `publish` (owner-review), `merge`
+(the human landing), and any lane this build cannot verify. A wait with no
+recorded T0 (an older dispatch) is never auto-answered, and a restart
+keeps the original T0.
+
 ### hub keys
 
 | Key | Rule |

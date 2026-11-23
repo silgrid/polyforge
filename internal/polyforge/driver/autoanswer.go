@@ -207,7 +207,15 @@ func autoAnswerReplyText(recommendations []string, elapsed time.Duration) string
 // a lane this build cannot verify. content is the work item's verbatim
 // content (runtime-state/work-item.json).
 func autoAnswerProtectedStop(lane, stepID, content string) bool {
-	return false
+	switch lane {
+	case "develop", "epic", "integrate", "micro", "release":
+	default:
+		return true // a lane this build cannot verify: the owner keeps every stop
+	}
+	if stepID == "publish" || stepID == "merge" {
+		return true // owner-review and the human landing
+	}
+	return stepID == "build" && autoAnswerConfirmPlan(content)
 }
 
 // autoAnswerConfirmPlan reports whether the ticket carries the
