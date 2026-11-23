@@ -694,13 +694,13 @@ def _union(parent, a, b):
 
 
 def _unknown_reason(verdicts, last_round, owner_msgs, round_end, still_open=False):
+    if still_open:
+        return 'unknown', 'last mention still open'
     later = [r for r in sorted(verdicts) if r > last_round]
     if later:
         if any(verdicts[r] == 'PASS' for r in later):
             return 'unknown', 'PASS round without naming it'
         return 'unknown', 'later rounds do not mention it'
-    if still_open:
-        return 'unknown', 'last mention still open'
     # Only an owner message that arrived after the round it would explain can
     # name its missing item number; a plan confirmation from before it cannot.
     msgs = [m for m in owner_msgs if not round_end or m[0] >= round_end]
