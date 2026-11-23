@@ -14,6 +14,7 @@ its start and end to a file the test reads) and from the plan order the
 conf declares, never from the implementation's output.
 """
 
+import io
 import json
 import os
 import re
@@ -21,17 +22,24 @@ import subprocess
 import sys
 import typing
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from typing import Any, Dict, List, Optional, Tuple
 
-from .gitworld import GitCase, Repo, git, write
+import fast_checks
+from pfstep import container
+from pfstep.container import ContainerError, ContainerSpec
+
+from .fakebox import FakeRuntime
+from .gitworld import GitCase, Repo, git
 from .test_fast_checks import env_without
+from .capsuleutil import TEST_DOCKERFILE
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS = os.path.dirname(HERE)
 ENGINE = os.path.join(SCRIPTS, "verify-scope")
 FAST_CHECKS = os.path.join(SCRIPTS, "fast_checks.py")
 
-GO_MOD = "module demo\n\ngo 0.0.1\n"
+GO_MOD = "module demo\n\ngo 1.21\n"
 APP = "package app\n\nfunc Answer() int {\n\treturn 42\n}\n"
 
 
@@ -270,3 +278,125 @@ class HostSemanticsTest(ParallelCase):
                          [{k: c.get(k) for k in fields} for c in self.commands_of(parallel)])
         self.assertEqual([p["root"] for p in serial["details"]["reports"]],
                          [p["root"] for p in parallel["details"]["reports"]])
+
+
+class SecondStartFails(FakeRuntime):
+    """A fake engine whose image starts once and whose second container
+    cannot be had (the first group's close stands, the next group's does
+    not)."""
+
+    def start(self, spec: ContainerSpec) -> str:
+        if self.starts:
+            raise ContainerError("the group's image did not start")
+        return super().start(spec)
+
+
+class CloseParallelTest(ParallelCase):
+    """AC1: the build close's light plan runs its report roots' commands
+    side by side, each group's commands in plan order, and the serial and
+    parallel runs record the same selection (commands, exit codes, heads,
+    status); a boxed close gives every group a container of its own, and a
+    group's container that cannot be had is the run's error (exit 2),
+    never a red of the change's."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.conf = (
+            "stack=go\n"
+            "fast_gate=%s\n"
+            "fast_gate=%s\n"
+            "scoped_command=*|echo scoped-root >> %s\n"
+            "full_command=echo full-ran > full.txt\n"
+        ) % (gate(self.events, "A1", sleep="1"), gate(self.events, "A2"), self.events)
+        self.nested_conf = (
+            "stack=go\n"
+            "fast_gate=%s\n"
+            "fast_gate=%s\n"
+            "scoped_command=*|echo scoped-nested >> %s\n"
+            "full_command=echo nested-full > nested-full.txt\n"
+        ) % (gate(self.events, "B1", wait_for="A1.start"), gate(self.events, "B2"), self.events)
+
+    def close_repo(self, dockerfile: str = "") -> str:
+        change = {"app/app.go": APP.replace("42", "43"), "pi/note.txt": "pi 2\n"}
+        if dockerfile:
+            change[container.DOCKERFILE_VERIFY] = dockerfile
+        return self.two_root_repo(change=change)
+
+    def run_close(self, extra: Tuple[str, ...] = (), out: str = "",
+                  runtime: Optional[FakeRuntime] = None) -> Tuple[int, Dict[str, Any], str]:
+        """fast_checks.py --close-scoped on the capsule's repo; its exit,
+        its result file and the progress it said."""
+        out = out or self.out
+        argv = ["--capsule", self.capsule, "--repo", "app", "--close-scoped", "--engine", ENGINE,
+                "--deadline", "10m", "--out", out, *extra]
+        if runtime is None:
+            c = subprocess.run([sys.executable, FAST_CHECKS, *argv], capture_output=True, text=True,
+                               env=env_without("PF_CAPSULE"))
+            code, said = c.returncode, c.stderr
+        else:
+            so, se = io.StringIO(), io.StringIO()
+            with redirect_stdout(so), redirect_stderr(se):
+                code = fast_checks.main(argv, env_without("PF_CAPSULE"), runtime=runtime)
+            said = se.getvalue()
+        if not os.path.exists(out):
+            raise AssertionError("fast_checks.py wrote no result file (exit %d): %s" % (code, said[-800:]))
+        with open(out, encoding="utf-8") as f:
+            return code, json.load(f), said
+
+    @staticmethod
+    def selection(res: Dict[str, Any]) -> Dict[str, Any]:
+        """The parts of the close's record two runs of one plan must share
+        (the logs and the durations are each run's own)."""
+        sel = res["details"]["selected"]["app"]
+        fields = ("name", "phase", "root", "cmd", "exit_code", "source", "skipped", "reused")
+        return {"head": sel.get("head"), "tree": sel.get("tree"), "base": sel.get("base"),
+                "default_branch": sel.get("default_branch"), "status": sel.get("status"),
+                "paths": sel.get("paths"), "suites": sel.get("suites"),
+                "commands": [{k: c.get(k) for k in fields} for c in sel["commands"]],
+                "reds": res["details"].get("reds") or []}
+
+    def test_parallel_and_serial_selections_agree(self) -> None:
+        """Same HEAD, same plan: the serial and the parallel close record
+        the same commands, exit codes, heads, paths and status."""
+        self.close_repo()
+        code_s, serial, _ = self.run_close(("--parallel", "1"), out=os.path.join(self.capsule, "serial.json"))
+        self.assertEqual(code_s, 0, serial.get("summary"))
+        serial_events = self.events_of()
+        self.assertEqual(serial_events, ["A1.start", "A1.end", "A2.start", "A2.end", "scoped-root",
+                                         "B1.start", "B1.end", "B2.start", "B2.end", "scoped-nested"],
+                         "the serial plan runs every group's commands in plan order")
+        code_p, parallel, _ = self.run_close(out=os.path.join(self.capsule, "parallel.json"))
+        self.assertEqual(code_p, 0, parallel.get("summary"))
+        self.assertEqual(self.selection(serial), self.selection(parallel))
+        self.assertEqual(len(parallel["details"]["selected"]["app"]["commands"]), 7)
+        events = self.events_of()[len(serial_events):]
+        self.assertLess(events.index("B1.start"), events.index("A1.end"), events)
+        self.assertEqual(self.events_of()[:len(serial_events)], serial_events)
+
+    def test_boxed_close_runs_each_group_in_its_own_container(self) -> None:
+        self.close_repo(dockerfile=TEST_DOCKERFILE)
+        fb = FakeRuntime(os.path.join(self.tmp, "box"))
+        fb.image_environ = ["PATH=" + os.environ.get("PATH", "/usr/bin:/bin"), "IMAGE_ONLY=from-image", "HOME=/root"]
+        code, res, said = self.run_close(runtime=fb)
+        self.assertEqual(code, 0, (res.get("summary"), said[-500:]))
+        self.assertEqual(res["details"].get("isolation"), "container")
+        self.assertEqual(res["details"]["selected"]["app"]["status"], "green")
+        self.assertEqual(len(fb.starts), 2, fb.starts)
+
+        def cids_of(*needles: str) -> set:
+            return {e[0] for e in fb.execs if any(n in " ".join(e[3]) for n in needles)}
+
+        root, nested = cids_of("echo A1.start >>", "echo scoped-root >>"), cids_of("echo B1.start >>", "echo scoped-nested >>")
+        self.assertEqual(len(root), 1, root)
+        self.assertEqual(len(nested), 1, nested)
+        self.assertNotEqual(root, nested, "each group runs in a container of its own")
+        self.assertEqual(sorted(fb.removes), ["cid-1", "cid-2"], "every container ends with the run")
+
+    def test_a_group_container_that_cannot_start_is_not_judged(self) -> None:
+        self.close_repo(dockerfile=TEST_DOCKERFILE)
+        fb = SecondStartFails(os.path.join(self.tmp, "box"))
+        fb.image_environ = ["PATH=" + os.environ.get("PATH", "/usr/bin:/bin"), "HOME=/root"]
+        code, res, said = self.run_close(runtime=fb)
+        self.assertEqual(code, 2, (res.get("summary"), said[-500:]))
+        self.assertIn("not judged", res.get("summary", ""))
+        self.assertNotIn("selected", res["details"], "nothing is claimed when a group's container is not had")
