@@ -37,7 +37,7 @@ func TestPF59PreExistingRedTextContract(t *testing.T) {
 		},
 		"workflows/develop/fragments/review-judge.md": {
 			"A unit declared `pre_existing_red` (its reproduction test already exists and is red before the change) has no `test_commit`: its replay runs on the tree of the change's base, and red there is its red evidence",
-			"a replay that exited 0 there (the test was green before the change) is blocking `test_weakened` — the unit has no red evidence",
+			"a replay that exited 0 there (the test was green before the change) is in the same subset — the unit has no red evidence",
 		},
 		"workflows/develop/README.md": {
 			"a unit whose reproduction test already exists red before the change declares `pre_existing_red: true` and carries no `test_commit`",

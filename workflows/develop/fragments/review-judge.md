@@ -84,12 +84,12 @@ on their own.
    Blocking `test_weakened` on their own: a scenario synchronised by a fixed delay instead of
    polling the condition it awaits (a bounded poll deadline is fine); one that asserts
    or measures before the awaited state has settled (a column width read right after
-   a resize, while a ResizeObserver callback still recomputes it). A `carries:` header
-   that is missing or does not name the paths the suite exercises, on a suite the
+   a resize, while a ResizeObserver callback still recomputes it). The `carries:` item — a
+   header that is missing or does not name the paths the suite exercises, on a suite the
    verification-scope engine discovers (an npm, python or rust root's default
-   discovery or its `suite_glob=`; never a Go `test/` file —
-   `artifacts/facts/carries.json`, `facts.py carries`, lists each suite the build
-   added or changed whose header is missing, malformed or matches no path it touched),
+   discovery or its `suite_glob=`; never a Go `test/` file) —
+   `artifacts/facts/carries.json` (`facts.py carries`) lists each suite the build
+   added or changed whose header is missing, malformed or matches no path it touched —
    is in the hand-off gate's subset above.
 5. **The plan against the diff, both directions.** `artifacts/facts/plan-conformance.json`
    (`facts.py plan-conformance`) lists a changed file no unit declares (`undeclared`)
