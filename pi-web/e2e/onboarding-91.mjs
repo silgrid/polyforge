@@ -189,6 +189,23 @@ try {
     assert.match(await page.locator('[data-fact="keyReady"]').innerText(), /ready/, "the first-boot key fact is not shown");
   });
 
+  await scenario("OB9", "the first-open popup survives the entry fallback opening its draft session (the null-session branch is stable)", async () => {
+    // Split view is ON in this context, so AppShell's entry fallback opens the
+    // new-session draft tab — the transient that used to stand in for the
+    // null-session branch. The wizard must still be there after it fired.
+    const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: "en-US" });
+    contexts.push(context);
+    const page = await context.newPage();
+    page.setDefaultTimeout(NAV_MS);
+    const entryFallback = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/cwd/validate"
+      && response.request().method() === "POST", { timeout: COLD_MS }).catch(() => null);
+    await page.goto(`${base}/`, { waitUntil: "domcontentloaded", timeout: COLD_MS });
+    const fallback = await entryFallback;
+    assert.ok(fallback, "the entry fallback never ran: split view was off and the transient was not exercised");
+    await page.locator("[data-onboarding-wizard]").waitFor({ state: "visible", timeout: COLD_MS });
+    assert.equal(await page.locator('[data-onboarding-step-panel="aihub"]').count(), 1, "the draft-session fallback closed the first-open wizard");
+  });
+
   await scenario("OB2", "the team mode adds a Cell through the existing route: the key rides stdin only", async () => {
     await page.locator("[data-onboarding-cell-profile]").fill("team");
     await page.locator("[data-onboarding-cell-server]").fill(TEAM_SERVER);
@@ -205,10 +222,16 @@ try {
   });
 
   await scenario("OB3", "skipping the account step leaves it 「未完成」 and moves the wizard on", async () => {
-    // The panel's own skip control (the wizard's per-step skip).
+    // The panel's own skip control (the wizard's per-step skip). The write's
+    // own answer is read first: the panel advance is optimistic, and a read
+    // before the write lands could not tell a recorded completion from it.
+    const skipWritten = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/onboarding"
+      && response.request().method() === "POST", { timeout: COLD_MS });
     await page.locator('[data-onboarding-step-panel="account"]').getByRole("button", { name: /^Skip for now$/ }).click({ timeout: ACTION_MS });
+    const answered = await (await skipWritten).json();
+    assert.equal(answered.steps.account, "incomplete", "a skipped step was recorded complete (the write answered complete)");
     await page.locator('[data-onboarding-step-panel="workspace"]').waitFor({ state: "visible", timeout: COLD_MS });
-    assert.equal((await stepStatuses(page)).find(([step]) => step === "account")[1], "incomplete", "a skipped step was recorded complete");
+    await waitFor(async () => (await stepStatuses(page)).find(([step]) => step === "account")[1] === "incomplete", COLD_MS, "the applied skip read complete");
   });
 
   await scenario("OB4", "the workspace goes through the existing selection, then the first ticket is the develop lane", async () => {
@@ -236,10 +259,12 @@ try {
   });
 
   await scenario("OB5", "after completion a reload shows no popup; Settings › 常规 reopens at the first unfinished step", async () => {
-    const dismissedRead = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/onboarding", { timeout: COLD_MS });
     await page.reload({ waitUntil: "domcontentloaded", timeout: COLD_MS });
+    // A positive read flag: the shell applied the state API's dismissed answer.
+    // Only then is the absence of the wizard a settled fact, not a race with
+    // the first read.
+    await page.locator('[data-onboarding-read="dismissed"]').waitFor({ state: "attached", timeout: COLD_MS });
     await page.getByRole("button", { name: /^Settings$/ }).first().waitFor({ state: "visible", timeout: COLD_MS });
-    await dismissedRead;
     assert.equal(await wizard.count(), 0, "the wizard popped up again after the completion/skip");
     assert.equal(await page.locator("[data-onboarding-reopen]").count(), 0, "the reopen entry is in the visible page before Settings opens");
 
@@ -271,10 +296,9 @@ try {
     assert.equal((await stepStatuses(page)).find(([step]) => step === "workspace")[1], "complete", "the workspace record was lost");
     await page.locator("[data-onboarding-close]").click({ timeout: ACTION_MS });
     await wizard.waitFor({ state: "detached", timeout: COLD_MS });
-    const dismissedAgain = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/onboarding", { timeout: COLD_MS });
     await page.reload({ waitUntil: "domcontentloaded", timeout: COLD_MS });
+    await page.locator('[data-onboarding-read="dismissed"]').waitFor({ state: "attached", timeout: COLD_MS });
     await page.getByRole("button", { name: /^Settings$/ }).first().waitFor({ state: "visible", timeout: COLD_MS });
-    await dismissedAgain;
     assert.equal(await wizard.count(), 0, "the wizard reopened after being dismissed");
   });
 
@@ -296,9 +320,8 @@ try {
     await h.stop();
     ({ base } = await h.startServer({ name: "onboarding-91-host", logFile: join(scratch, "server-host.log"), env: serverEnv(hostSeedRoot) }));
     const hostPage = await newPage();
-    const hostRead = hostPage.page.waitForResponse((response) => new URL(response.url()).pathname === "/api/onboarding", { timeout: COLD_MS });
     await hostPage.page.goto(`${base}/`, { waitUntil: "domcontentloaded", timeout: COLD_MS });
-    await hostRead;
+    await hostPage.page.locator('[data-onboarding-read="host"]').waitFor({ state: "attached", timeout: COLD_MS });
     await hostPage.page.getByRole("button", { name: /^Settings$/ }).first().waitFor({ state: "visible", timeout: COLD_MS });
     assert.equal(await hostPage.page.locator("[data-onboarding-wizard]").count(), 0, "a host-mode Pi Web showed the wizard");
     const response = await fetch(`${base}/api/onboarding`);
