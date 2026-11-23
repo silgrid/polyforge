@@ -79,6 +79,11 @@ import { startNextServer } from "./next-server.mjs";
 import { launchBrowser, softCheck } from "./harness.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
+// polyforge#238 (AC4) classification: a wall-clock responsiveness assertion
+// on the host's CPU/scheduling, kept at 10 s and never relaxed. The suite is
+// isolated from the parallel browser pool (e2e/all.mjs, below) because a
+// loaded host was observed at 20 167 ms against the bound; a red here is host
+// load, reported with the RESULT/diagnostics lines, never a code defect.
 const BOUND_MS = 10_000;
 const OBSERVE_MS = 30_000;
 // How long the own-run block waits for the first reconcile tick's status read

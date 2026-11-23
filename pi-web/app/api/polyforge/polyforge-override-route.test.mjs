@@ -23,14 +23,33 @@ import { createJiti } from "jiti";
 const work = mkdtempSync(join(tmpdir(), "pf-override-route-"));
 const saved = { PF_BIN: process.env.PF_BIN, POLYFORGE_DATA_DIR: process.env.POLYFORGE_DATA_DIR };
 const log = join(work, "argv.log");
+const exitedLog = join(work, "exit.log");
 const mode = join(work, "mode");
 mkdirSync(join(work, "data"));
 writeFileSync(log, "");
+writeFileSync(exitedLog, "");
 writeFileSync(mode, "view");
 writeFileSync(join(work, "pf"), `#!${process.execPath}
 const fs = require("fs");
 const args = process.argv.slice(2);
+// Every invocation records its exit, so the test can wait for a dropped read
+// (the route starts it beside the watch read and does not await it) to finish
+// before the next reset clears the logs (polyforge#238 defect 3).
+process.on("exit", () => { try { fs.appendFileSync(${JSON.stringify(exitedLog)}, JSON.stringify(args) + "\\n"); } catch {} });
+// A read the route abandons on its timeout is killed with SIGTERM; terminate
+// through process.exit so the exit record is written too.
+for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => process.exit(0));
 if (args[0] === "--version") { process.stdout.write("v2.21.0\\n"); process.exit(0); }
+// polyforge#238 defect 3 reproduction input: on an ended ticket the route
+// drops the override/params reads unawaited; letting those two children delay
+// their own argv — together with the slow next-view answer gated on
+// WI238_SLOW_WATCH below — makes the ordering race deterministic for the loop
+// harness. These are controlled slow children (scenario inputs), not
+// synchronization.
+if (fs.readFileSync(${JSON.stringify(mode)}, "utf8") === "ended" && (args.includes("override") || args.includes("params"))) {
+  const until = Date.now() + 300;
+  while (Date.now() < until) { /* deliberate slow child */ }
+}
 fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(args) + "\\n");
 const mode = fs.readFileSync(${JSON.stringify(mode)}, "utf8");
 const out = (v) => { process.stdout.write(JSON.stringify(v) + "\\n"); process.exit(0); };
@@ -54,6 +73,15 @@ if (args.includes("watch")) {
       else setTimeout(check, 25);
     };
     return check();
+  }
+  // polyforge#238 defect 3 reproduction input (round 3, review r2#1): with
+  // WI238_SLOW_WATCH=1 the next view answer is slow, so the loop harness's
+  // late argv (the two dropped reads above) lands before that test's
+  // assertion. Off by default; the flake loop sets it together with the slow
+  // child. A controlled slow answer (scenario input), not synchronization.
+  if (mode === "view" && process.env.WI238_SLOW_WATCH === "1") {
+    const until = Date.now() + 600;
+    while (Date.now() < until) { /* deliberate slow answer */ }
   }
   answer("running");
 }
@@ -105,7 +133,39 @@ const post = (body, type = "application/json") => new Request(`http://${host}/ap
   method: "POST", headers: { host, origin: `http://${host}`, "content-type": type }, body: typeof body === "string" ? body : JSON.stringify(body),
 });
 const argv = () => readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
-const reset = (m = "view") => { writeFileSync(mode, m); writeFileSync(log, ""); };
+const exited = () => readFileSync(exitedLog, "utf8").trim().split("\n").filter(Boolean).length;
+// The watch route starts the composed reads beside the watch read and drops
+// them unawaited once the ticket reads ended. Before a reset clears the logs,
+// every pf child started since the last reset must have exited: a dropped read
+// that is still running appends its argv after the reset, into the next test's
+// log (polyforge#238 defect 3 — the reset raced the dropped read). The wait is
+// bounded; a child that does not exit inside it fails the test, never a fixed
+// sleep.
+const reset = async (m = "view") => {
+  const deadline = Date.now() + 15_000;
+  while (exited() < argv().length) {
+    if (Date.now() >= deadline) {
+      assert.fail(`dropped pf read children did not exit before reset (${exited()} exited of ${argv().length} started)`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  writeFileSync(mode, m); writeFileSync(log, ""); writeFileSync(exitedLog, "");
+};
+// polyforge#238 defect 3 (review r1#1): the watch route starts the override
+// and params reads beside the watch read and drops them unawaited on an ended
+// ticket. Before a reset clears the logs, both reads must have written their
+// own argv — a reset that only counts exits cannot see a child that has not
+// reached its argv append yet, and that late argv would land in the next
+// test's log. Bounded; a timeout fails the test, never a fixed sleep.
+const awaitDroppedReads = async () => {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const lines = argv();
+    if (lines.some((a) => a.includes("override")) && lines.some((a) => a.includes("params"))) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  assert.fail("the dropped override/params reads did not write their own argv inside the bound");
+};
 
 test("both routes re-check the host/origin gate in-route; the override route is POST-only, the watch route GET-only, never 5xx", () => {
   for (const [name, source] of [["override", overrideSource], ["watch", watchSource]]) {
@@ -121,7 +181,7 @@ test("both routes re-check the host/origin gate in-route; the override route is 
 });
 
 test("the watch route composes the override view into the same response (polyforge#42 G11: the snapshot carries it, the controls fetch nothing on selection)", async () => {
-  reset("view");
+  await reset("view");
   const response = await WATCH_GET(watchGet("?wi=wi_A1&overrides=1"));
   assert.equal(response.status, 200);
   const body = await response.json();
@@ -150,7 +210,7 @@ test("the watch route composes the override view into the same response (polyfor
 });
 
 test("polyforge#48 AC3: without overrides=1 the watch route never reads the view", async () => {
-  reset("view");
+  await reset("view");
   const response = await WATCH_GET(watchGet("?wi=wi_A1"));
   assert.equal(response.status, 200);
   const body = await response.json();
@@ -160,7 +220,7 @@ test("polyforge#48 AC3: without overrides=1 the watch route never reads the view
 });
 
 test("polyforge#48 AC3: the view read runs concurrently with the watch read", async () => {
-  reset("wait-view");
+  await reset("wait-view");
   const started = Date.now();
   const response = await WATCH_GET(watchGet("?wi=wi_A1&overrides=1"));
   const elapsed = Date.now() - started;
@@ -174,28 +234,21 @@ test("polyforge#48 AC3: the view read runs concurrently with the watch read", as
 });
 
 test("polyforge#48 AC3: an ended ticket's answer never carries the view", async () => {
-  reset("ended");
+  await reset("ended");
   const response = await WATCH_GET(watchGet("?wi=wi_A1&overrides=1"));
   assert.equal(response.status, 200);
   const body = await response.json();
   assert.equal(body.status?.workflowStatus, "completed");
   assert.equal(body.status?.overrideView, undefined, "the composed view never rides an ended ticket's answer");
   assert.equal(body.status?.stepTiers, undefined, "the step-tier catalog composes for a live ticket only (85b2)");
-  // The route starts the composed reads together with the watch read and
-  // drops them unawaited once the ticket reads ended (the established
-  // pattern): under load a dropped stub child can append its argv after
-  // this test — a bounded wait for the reads' own argv keeps the next
-  // test's reset from racing one (polyforge#151's flaky spawn-set find).
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
-    const lines = argv();
-    if (lines.some((a) => a.includes("override")) && lines.some((a) => a.includes("params"))) break;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
+  // The next reset waits for these dropped reads to exit before it clears
+  // the logs; the argv wait first keeps a child that has not reached its argv
+  // append yet from landing in the next test (polyforge#238 defect 3, r1#1).
+  await awaitDroppedReads();
 });
 
 test("the composed view read names the Cell exactly like the watch read (a slug is a valid ref)", async () => {
-  reset("view");
+  await reset("view");
   const response = await WATCH_GET(watchGet("?wi=demo%231&profile=lab&overrides=1"));
   await response.json();
   assert.deepEqual([...argv()].sort(), [
@@ -207,7 +260,7 @@ test("the composed view read names the Cell exactly like the watch read (a slug 
 
 test("a garbage or refused view read degrades to a snapshot without it — the watch answer itself never fails", async () => {
   for (const m of ["garbage", "refuse-409"]) {
-    reset(m);
+    await reset(m);
     const response = await WATCH_GET(watchGet("?wi=wi_A1&overrides=1"));
     assert.equal(response.status, 200, m);
     const body = await response.json();
@@ -217,7 +270,7 @@ test("a garbage or refused view read degrades to a snapshot without it — the w
 });
 
 test("a hung view read times out on the read bound — the watch answer still returns the snapshot (polyforge#42 r1#1)", async () => {
-  reset("hang-view");
+  await reset("hang-view");
   const started = Date.now();
   // The test's own bound (a real condition raced against a deadline, not a
   // sleep): the route must answer inside it — the view read's own timeout
@@ -235,7 +288,7 @@ test("a hung view read times out on the read bound — the watch answer still re
 });
 
 test("an unknown ref answers status null and never spawns the view read", async () => {
-  reset("unknown");
+  await reset("unknown");
   const response = await WATCH_GET(watchGet("?wi=wi_A1"));
   assert.equal(response.status, 200);
   assert.equal((await response.json()).status, null);
@@ -243,7 +296,7 @@ test("an unknown ref answers status null and never spawns the view read", async 
 });
 
 test("POST runs one action's argv and answers the result; --models and the skip switches reach pf", async () => {
-  reset("write");
+  await reset("write");
   let response = await POST(post({ wi: "wi_A1", action: { kind: "models", step: "merge", models: ["pi:pf25/m-1", "pi:pf25/m-2"] } }));
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { ok: true, result: {
@@ -251,29 +304,29 @@ test("POST runs one action's argv and answers the result; --models and the skip 
     step: { id: "merge", status: "pending", skippable: true, models: ["pi:pf25/m-1"], modelsBy: "usr_2" },
   } });
   assert.deepEqual(argv(), [["--json", "override", "wi_A1", "--step", "merge", "--models", "pi:pf25/m-1,pi:pf25/m-2"]]);
-  reset("write");
+  await reset("write");
   response = await POST(post({ wi: "wi_A1", profile: "lab", action: { kind: "skip", step: "merge", value: true } }));
   await response.json();
   assert.deepEqual(argv(), [["--profile", "lab", "--json", "override", "wi_A1", "--step", "merge", "--skip"]]);
-  reset("write");
+  await reset("write");
   response = await POST(post({ wi: "wi_A1", action: { kind: "clearModels", step: "merge" } }));
   await response.json();
   assert.deepEqual(argv(), [["--json", "override", "wi_A1", "--step", "merge", "--clear-models"]]);
 });
 
 test("pf's refusal comes back 409 {ok:false, error} with the typed envelope's words", async () => {
-  reset("refuse-409");
+  await reset("refuse-409");
   let response = await POST(post({ wi: "wi_A1", action: { kind: "skip", step: "merge", value: true } }));
   assert.equal(response.status, 409);
   assert.deepEqual(await response.json(), { ok: false, error: "DAEMON-409: step merge has a live dispatch (its status is in_progress): the overlay is for steps without one" });
-  reset("refuse-400");
+  await reset("refuse-400");
   response = await POST(post({ wi: "wi_A1", action: { kind: "models", step: "merge", models: ["pi:absent"] } }));
   assert.equal(response.status, 409);
   assert.deepEqual(await response.json(), { ok: false, error: 'DAEMON-400: models: the pi model "absent" is not in this Cell\'s step-agent models.json' });
 });
 
 test("a bad wi or profile, no action, an unknown kind or an empty chain is a 400 before any spawn; garbage bodies stay decodable", async () => {
-  reset();
+  await reset();
   for (const body of [
     { wi: "wi_A1; rm -rf" },
     { wi: "wi_A1", profile: "Bad Profile", action: { kind: "skip", step: "merge", value: true } },
@@ -298,22 +351,22 @@ test("a bad wi or profile, no action, an unknown kind or an empty chain is a 400
 // composes the params view beside the override view (the same opt-in,
 // never for an ended ticket, never without it).
 test("the param actions ride the POST face: set and clear, the refusal's words, the 400 before any spawn", async () => {
-  reset("write");
+  await reset("write");
   let response = await POST(post({ wi: "wi_A1", action: { kind: "param", step: "review", name: "image", value: "reg/x:1" } }));
   assert.equal(response.status, 200);
   assert.equal((await response.json()).ok, true);
   assert.deepEqual(argv().at(-1), ["--json", "override", "wi_A1", "--step", "review", "--param", "image=reg/x:1"]);
-  reset("write");
+  await reset("write");
   response = await POST(post({ wi: "wi_A1", action: { kind: "clearParam", step: "review", name: "image" } }));
   assert.equal((await response.json()).ok, true);
   assert.deepEqual(argv().at(-1), ["--json", "override", "wi_A1", "--step", "review", "--clear-param", "image"]);
   // the lane did not declare the name: the daemon's refusal is the 409 the panel shows
-  reset("refuse-400-param");
+  await reset("refuse-400-param");
   response = await POST(post({ wi: "wi_A1", action: { kind: "param", step: "review", name: "nosuch", value: "x" } }));
   assert.equal(response.status, 409);
   assert.deepEqual(await response.json(), { ok: false, error: 'DAEMON-400: the lane declares no step param "nosuch" on step review: a param is set only where the lane declares it' });
   // an invalid action answers 400 before any spawn
-  reset("view");
+  await reset("view");
   const before = argv().length;
   response = await POST(post({ wi: "wi_A1", action: { kind: "param", step: "review", name: "image", value: "two\nlines" } }));
   assert.equal(response.status, 400);
@@ -321,7 +374,7 @@ test("the param actions ride the POST face: set and clear, the refusal's words, 
 });
 
 test("the watch route composes the params view beside the override view (the same opt-in, never for an ended ticket)", async () => {
-  reset("view");
+  await reset("view");
   let response = await WATCH_GET(watchGet("?wi=wi_A1&overrides=1"));
   assert.equal(response.status, 200);
   let body = await response.json();
@@ -333,7 +386,7 @@ test("the watch route composes the params view beside the override view (the sam
   // an ended ticket composes neither view — the reads may have started
   // (the one transitional ask before the panel knows, polyforge#48), but
   // the answer drops them
-  reset("ended");
+  await reset("ended");
   response = await WATCH_GET(watchGet("?wi=wi_A1&overrides=1"));
   body = await response.json();
   assert.equal(body.status?.overrideView, undefined, "an ended ticket composes no override view (polyforge#48)");
@@ -350,7 +403,7 @@ test("the watch route composes the params view beside the override view (the sam
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   // without the opt-in the params view is not asked for
-  reset("view");
+  await reset("view");
   response = await WATCH_GET(watchGet("?wi=wi_A1"));
   body = await response.json();
   assert.equal(body.status?.paramsView, undefined);
