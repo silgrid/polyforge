@@ -947,6 +947,8 @@ class Verification:
                                % (rr.name, g, box.report.name, self.rel(group_logs)))
             if self.bar_incomplete:
                 return
+            # a grouped bar is one whose repo runs in a container (bar_parallel)
+            assert rr.box is not None
             for i in head:
                 run_one(i, rr.box)
                 if self.bar_incomplete or self.interrupted:

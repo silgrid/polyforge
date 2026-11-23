@@ -24,7 +24,7 @@ import os
 import re
 import tempfile
 import unittest
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Type
 
 from pfstep import container
 
@@ -126,7 +126,7 @@ class FullParallelBase(unittest.TestCase):
                   encoding="utf-8") as f:
             f.write(json.dumps(rep))
 
-    def runtime(self, sub: str = "box", cls: Any = FakeRuntime) -> FakeRuntime:
+    def runtime(self, sub: str = "box", cls: Type[FakeRuntime] = FakeRuntime) -> FakeRuntime:
         d = os.path.join(self.root, sub)
         os.makedirs(d, exist_ok=True)
         rt = cls(d)
