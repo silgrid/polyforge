@@ -263,6 +263,15 @@ and YAML path, before a claim ever meets it. The keys:
     in the daemon; a `done` the gate would refuse is accepted when it cites
     the owner's release with `--per-owner`, the stamp recording it
     ([reference](reference/workflow-contract.md#step-keys)).
+  - `facts_proof:` — `{result, command}`: the step's `done` needs the
+    mechanical facts summary `facts.py handoff` writes (a
+    `pf-step-result/1` result at `result`, verdict `pass`, `heads` carrying
+    the repo at HEAD) for every task repo the round changed; a
+    deterministic hit — a unit's commits or red-state replay, an undeclared
+    write, an existing test changed outside the plan's write set, an e2e
+    suite without `carries:`, a listed test that does not exist — refuses
+    the `done` and returns each hit one line beside the result file
+    ([reference](reference/workflow-contract.md#step-keys)).
   - `skill:` — the skill the step follows: `<lane>/skills/<name>.md`, else
     `_shared/skills/<name>.md`, rendered after the step definition; a skill
     names the workflow scripts it runs (`commands:`, by file name), each line

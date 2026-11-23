@@ -166,13 +166,13 @@ export function SettingsPanel({
   const [mountedSections, setMountedSections] = useState<ReadonlySet<SettingsSection>>(
     () => new Set([section]),
   );
-  // The rail is one fact in lib/settings-navigation.ts (SETTINGS_TABS): nine
-  // new sections plus the two legacy-marked old pages (85a1b AC1).
-  const sections: { id: SettingsSection; label: string; legacy: boolean; requiresProject: boolean }[] = SETTINGS_TABS
+  // The rail is one fact in lib/settings-navigation.ts (SETTINGS_TABS): the
+  // nine sections, each with its translated label (polyforge#257 r2#9: the
+  // retired legacy-marked pages left no consumer of a `legacy` flag).
+  const sections: { id: SettingsSection; label: string; requiresProject: boolean }[] = SETTINGS_TABS
     .map((item) => ({
       id: item.id,
       label: t(item.labelKey),
-      legacy: "legacy" in item && item.legacy === true,
       requiresProject: settingsSectionRequiresProject(item.id),
     }));
   const sectionRequiresProject = settingsSectionRequiresProject(section);
@@ -296,7 +296,7 @@ export function SettingsPanel({
                 <button
                   key={item.id}
                   type="button"
-                  className={item.legacy ? "settings-section-tab is-legacy" : "settings-section-tab"}
+                  className="settings-section-tab"
                   disabled={disabled}
                   title={disabled ? t("settings.projectRequired") : item.label}
                   aria-current={selected ? "page" : undefined}

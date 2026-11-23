@@ -17,6 +17,7 @@ import { useI18n } from "@/hooks/useI18n";
 import type { AccountCellRow, AccountHarnessRow } from "@/lib/harness/account-rows";
 import type { HarnessLoginCommand } from "@/lib/harness/concepts";
 import {
+  ConfigButton,
   ConfigDetail,
   ConfigDetailActions,
   ConfigDetailHeader,
@@ -102,9 +103,9 @@ export function AccountHarnessPane({ harness, read, capabilities, onOpenLoginTer
         {commands.length > 0 && (
           <ConfigDetailActions>
             {commands.map((command) => (
-              <button key={command.id} type="button" className="config-button" data-login-command={command.id} onClick={() => onOpenLoginTerminal(command.id)}>
+              <ConfigButton key={command.id} data-login-command={command.id} onClick={() => onOpenLoginTerminal(command.id)}>
                 {command.id === "auth-login" ? t("settings.accountClaudeLogin") : t("settings.accountClaudeSetupToken")}
-              </button>
+              </ConfigButton>
             ))}
           </ConfigDetailActions>
         )}
@@ -252,7 +253,7 @@ export function ClaudeCredentialForm({ cells, onSave }: {
           ))}
         </fieldset>
         <ConfigDetailActions>
-          <button type="button" className="config-button" data-account-action="save" onClick={save}>{t("settings.accountSaveCredential")}</button>
+          <ConfigButton data-account-action="save" onClick={save}>{t("settings.accountSaveCredential")}</ConfigButton>
         </ConfigDetailActions>
       </div>
     </section>
@@ -427,7 +428,7 @@ export function AccountSettings({ embedded = true }: { embedded?: boolean }) {
               <ConfigDetailTitle>{t(pane === "pi" ? "settings.accountHarnessPi" : "settings.accountHarnessClaude")}</ConfigDetailTitle>
             </ConfigDetailHeaderInfo>
             <ConfigDetailActions>
-              <button type="button" className="config-button" data-account-action="refresh" onClick={load}>{t("settings.accountRefresh")}</button>
+              <ConfigButton data-account-action="refresh" onClick={load}>{t("settings.accountRefresh")}</ConfigButton>
             </ConfigDetailActions>
           </ConfigDetailHeader>
           <AccountReadStatus loading={loading} readError={readError} t={t} />
@@ -460,7 +461,7 @@ export function AccountSettings({ embedded = true }: { embedded?: boolean }) {
                 onClosed={() => setLoginTerminal(null)}
                 onCloseError={() => setLoginTerminal(null)}
               />
-              <button type="button" className="config-button" onClick={() => setLoginTerminal((current) => current ? { ...current, closing: "close" } : current)}>{t("settings.accountCloseTerminal")}</button>
+              <ConfigButton onClick={() => setLoginTerminal((current) => current ? { ...current, closing: "close" } : current)}>{t("settings.accountCloseTerminal")}</ConfigButton>
             </div>
           )}
         </ConfigDetail>

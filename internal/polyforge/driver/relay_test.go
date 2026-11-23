@@ -193,11 +193,15 @@ func TestRelayDeliversReplyIntoTheLiveProcess(t *testing.T) {
 	// the record: ask, reply (naming the ask, the step, the dispatch, the
 	// writer, the words verbatim), delivered (naming the reply)
 	lines := mustAsks(t, dir)
-	if len(lines) != 3 || lines[1].Kind != capsule.AskKindReply || lines[1].AskAt != ask.At || lines[1].Step != "fix" || lines[1].Spawn != 1 ||
-		lines[1].By != "usr_root" || lines[1].Text != "/lean, keep the tests" || lines[1].At != ack.At {
+	// the record: ask, the daemon's wait start (polyforge#239), reply
+	// (naming the ask, the step, the dispatch, the writer, the words
+	// verbatim), delivered (naming the reply)
+	if len(lines) != 4 || lines[1].Kind != capsule.AskKindAwaiting || lines[1].AskAt != ask.At ||
+		lines[2].Kind != capsule.AskKindReply || lines[2].AskAt != ask.At || lines[2].Step != "fix" || lines[2].Spawn != 1 ||
+		lines[2].By != "usr_root" || lines[2].Text != "/lean, keep the tests" || lines[2].At != ack.At {
 		t.Fatalf("the reply line: %+v", lines)
 	}
-	if dl := lines[2]; dl.Kind != capsule.AskKindDelivered || dl.MsgAt != ack.At || dl.Spawn != 1 || dl.Step != "fix" || dl.Text != "" {
+	if dl := lines[3]; dl.Kind != capsule.AskKindDelivered || dl.MsgAt != ack.At || dl.Spawn != 1 || dl.Step != "fix" || dl.Text != "" {
 		t.Fatalf("the delivered line: %+v", dl)
 	}
 	if open := capsule.OpenAsk(lines, "fix", 1); open != nil {

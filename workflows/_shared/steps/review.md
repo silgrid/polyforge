@@ -79,6 +79,21 @@ found it (publish lists it in the PR body).
   support (develop: the build's 关键决定和理由 against the owner's quoted replies) — a
   decision the build took for the owner.
 
+**The hand-off gate's subset.** The deterministic items the build's `done` gate already
+judges (`facts_proof`, polyforge#241) are not, on their own, a blocking finding here: a
+unit's test-first commits or its replay not red at the test commit, a skip or a changed
+`carries:` header with no cited finding, an e2e suite without a matching `carries:`, a
+listed analysis test that does not exist, an existing test changed outside the plan's
+write set, an undeclared write, an unchanged coupled obligation, an unmapped decided
+ruling. Recompute them — the gate only reads build's file, and a fresh recomputation is the
+only way to catch a bypass — record each hit as non-blocking and name it "the hand-off gate
+should have refused this"; it fails the review only beside a hit of another class. A hit
+the gate's `facts_proof` result did not carry at the judged HEAD is not that: the gate was
+bypassed or its result forged, which is blocking `guarantee`, naming the item. The semantic
+items around this subset — a relaxed assertion, a weakened helper or input, a fixed-delay
+e2e, a missing test-quality record, a document left stale — stay as classed above and block
+on their own.
+
 {{test_quality}}
 
 {{review_security}}

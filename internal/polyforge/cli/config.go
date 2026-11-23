@@ -141,6 +141,13 @@ type DaemonSettings struct {
 	// duration > 0; 0 = unset, daemon default 15m); flag --ask-warm-window.
 	// Restart-only.
 	AskWarmWindow time.Duration
+	// AskAutoReplyEnabled is the Cell's switch for the daemon's automatic
+	// reply to a low-star question card (polyforge#239): nil = unset (on),
+	// an explicit false turns it off. Cell, live.
+	AskAutoReplyEnabled *bool
+	// AskAutoReplyTimeout is how long such a card waits before the automatic
+	// reply (Go duration > 0; 0 = unset, default 30m). Cell, live.
+	AskAutoReplyTimeout time.Duration
 	// HarnessRoot is the parent of the step harness dirs (absolute path;
 	// daemon default <data-dir>); flag --harness-root.
 	HarnessRoot string
@@ -341,6 +348,26 @@ func parseDaemonTable(file string, kvs []daemonKV) (DaemonSettings, error) {
 				return s, refuse(fmt.Sprintf("must be an unquoted number > 0 (a 1-minute load average, e.g. 12 or 7.5), got %s", kv.val))
 			}
 			s.BarLoadThreshold = f
+		case "ask_auto_reply_enabled":
+			// polyforge#239: unquoted true/false; an unset key means on, so
+			// only an explicit false can turn the automatic reply off. A
+			// quoted value is refused rather than silently normalized.
+			v := strings.TrimSpace(kv.val)
+			b, err := strconv.ParseBool(v)
+			if err != nil || (v != "true" && v != "false") {
+				return s, refuse("must be the unquoted boolean true or false (remove the key for the default, on)")
+			}
+			s.AskAutoReplyEnabled = &b
+		case "ask_auto_reply_timeout":
+			v, err := parseQuotedValue(kv.val, kv.line)
+			if err != nil {
+				return s, refuse(`must be a quoted Go duration, e.g. "30m"`)
+			}
+			d, err := time.ParseDuration(v)
+			if err != nil || d <= 0 {
+				return s, refuse(fmt.Sprintf(`%q is not a positive Go duration (e.g. "30m", "1h")`, v))
+			}
+			s.AskAutoReplyTimeout = d
 		case "ask_warm_window":
 			v, err := parseQuotedValue(kv.val, kv.line)
 			if err != nil {

@@ -31,13 +31,13 @@ func TestW112AnalysisCloseTextContract(t *testing.T) {
 		},
 		"workflows/_shared/skills/review.md": {
 			line,
-			"This fact red is never classed away: the lane goes back to `build`",
+			"every entry problem is in the hand-off gate's subset above",
 			"naming the entry and the rule it violates",
 			"`artifacts/facts/analysis.json`",
 		},
 		"workflows/develop/fragments/review-judge.md": {
 			"`artifacts/facts/analysis.json` (`facts.py analysis`)",
-			"a blocking `test_weakened` finding naming the entry",
+			"in the hand-off gate's subset above — non-blocking when the gate's proof stood, blocking `guarantee` when the gate was bypassed — naming the entry",
 		},
 		"workflows/develop/README.md": {
 			"the facts of four pre-written lines",

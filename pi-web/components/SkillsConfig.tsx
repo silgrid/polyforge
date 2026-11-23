@@ -166,6 +166,60 @@ export function skillAuthorDeclaredHidden(skill: Pick<Skill, "declaredDisableMod
   return skill.declaredDisableModelInvocation === true;
 }
 
+/**
+ * Whether the panel renders a footer at all (polyforge#257 B8): the footer is
+ * one status line (an update count) plus its actions (Close, check updates),
+ * so an embedded panel with neither draws no empty bar. Only this panel's
+ * call site is narrowed — other pages keep their footer, whose own words
+ * (a hint, a save) are their own.
+ */
+export function skillFooterVisible({ embedded, installable, updateAvailable }: { embedded: boolean; installable: boolean; updateAvailable: boolean }): boolean {
+  return updateAvailable || installable || !embedded;
+}
+
+/**
+ * The panel's footer (polyforge#257 B8): presentational, and it draws only
+ * while it has a status line (an update count) or an action (Close, check
+ * updates). The panel renders it unconditionally; the unit decides. Only this
+ * panel's call site is narrowed — other pages keep their footer, whose own
+ * words (a hint, a save) are their own.
+ */
+export function SkillsConfigFooter({
+  embedded,
+  installable,
+  updateCount,
+  checkingAll,
+  updating,
+  onClose,
+  onCheckUpdates,
+}: {
+  embedded: boolean;
+  installable: boolean;
+  updateCount: number;
+  checkingAll: boolean;
+  updating: boolean;
+  onClose: () => void;
+  onCheckUpdates: () => void;
+}) {
+  const { t } = useI18n();
+  if (!skillFooterVisible({ embedded, installable, updateAvailable: updateCount > 0 })) return null;
+  return (
+    <ConfigFooter status={updateCount > 0 && (
+      <span style={{ fontSize: 12, color: "#d97706" }}>
+        {updateCount}{" "}
+        {updateCount === 1 ? t("i18n.update") : t("i18n.updates")}
+      </span>
+    )}>
+      {!embedded && <ConfigButton onClick={onClose}>{t("i18n.close")}</ConfigButton>}
+      {installable && (
+        <ConfigButton variant="secondary" onClick={onCheckUpdates} disabled={checkingAll || updating}>
+          {checkingAll ? t("i18n.checking") : t("i18n.checkUpdates")}
+        </ConfigButton>
+      )}
+    </ConfigFooter>
+  );
+}
+
 /** The sidebar's scope groups (AC1/AC3): 用户 always, 项目 only with a project; empty groups never render. */
 export function skillRowGroups(
   rows: UnifiedSkillRow[],
@@ -1307,32 +1361,17 @@ export function SkillsConfig({
           </ConfigDetail>
         </ConfigSplitView>
 
-        {/* Footer */}
-        <ConfigFooter status={
-            Object.values(updateStatuses).filter(
-              (status) => status.state === "update-available",
-            ).length > 0 && (
-              <span style={{ fontSize: 12, color: "#d97706" }}>
-                {
-                  Object.values(updateStatuses).filter(
-                    (status) => status.state === "update-available",
-                  ).length
-                }{" "}
-                {Object.values(updateStatuses).filter(
-                  (status) => status.state === "update-available",
-                ).length === 1
-                   ? t("i18n.update")
-                   : t("i18n.updates")}
-              </span>
-            )}
-        >
-          {!embedded && <ConfigButton onClick={onClose}>{t("i18n.close")}</ConfigButton>}
-          {piSkills.some((skill) => Boolean(skill.install)) && (
-            <ConfigButton variant="secondary" onClick={() => void checkForUpdates()} disabled={checkingAll || updatingSkill !== null}>
-              {checkingAll ? t("i18n.checking") : t("i18n.checkUpdates")}
-            </ConfigButton>
-          )}
-        </ConfigFooter>
+        {/* Footer: its own unit decides whether it has anything to say
+            (polyforge#257 B8 — an embedded panel drew an empty bar). */}
+        <SkillsConfigFooter
+          embedded={Boolean(embedded)}
+          installable={piSkills.some((skill) => Boolean(skill.install))}
+          updateCount={Object.values(updateStatuses).filter((status) => status.state === "update-available").length}
+          checkingAll={checkingAll}
+          updating={updatingSkill !== null}
+          onClose={onClose}
+          onCheckUpdates={() => void checkForUpdates()}
+        />
     </ConfigPanelShell>
   );
 }

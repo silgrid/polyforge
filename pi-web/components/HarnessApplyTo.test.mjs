@@ -17,6 +17,7 @@ const jiti = createJiti(import.meta.url, {
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
 const { HarnessApplyTo, applyToTargets, applyToCanSubmit } = await jiti.import("./HarnessApplyTo.tsx");
+const { ConfigButton } = await jiti.import("./SettingsUi.tsx");
 
 const h = React.createElement;
 const noop = () => {};
@@ -162,14 +163,17 @@ test("choosing all or specific harnesses changes only the target — never a sav
 
 test("an empty specific selection cannot submit: the submit button itself is disabled (r1#1)", () => {
   // A target set with no disabled item, so nothing but the empty selection can
-  // hold the button back — the assertion lands on the button element itself.
+  // hold the button back — the assertion lands on the button element itself
+  // (polyforge#257: the submit is the shared ConfigButton, so the element
+  // found is that component; its own `disabled` prop is what reaches the
+  // native button, asserted rendered in components/settings-buttons.test.mjs).
   const clean = [{ harness: "pi", label: "pi" }, { harness: "claude", label: "claude" }];
   const empty = HarnessApplyTo({ texts: TEXTS, targets: clean, value: { mode: "specific", selected: [] }, onChange: noop, onSubmit: noop });
-  const submit = collect(empty).find((element) => element.type === "button" && textOf(element.props.children) === "Apply");
+  const submit = collect(empty).find((element) => element.type === ConfigButton && textOf(element.props.children) === "Apply");
   assert.ok(submit, "the submit button is not rendered");
   assert.equal(submit.props.disabled, true, "an empty target selection can submit");
   const named = HarnessApplyTo({ texts: TEXTS, targets: clean, value: { mode: "specific", selected: ["pi"] }, onChange: noop, onSubmit: noop });
-  const submitNamed = collect(named).find((element) => element.type === "button" && textOf(element.props.children) === "Apply");
+  const submitNamed = collect(named).find((element) => element.type === ConfigButton && textOf(element.props.children) === "Apply");
   assert.notEqual(submitNamed.props.disabled, true, "a named target cannot submit");
 });
 

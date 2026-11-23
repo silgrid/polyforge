@@ -70,3 +70,15 @@ export function renderHook(hook, props) {
 // memo: the shim renders elements directly and a test's tree walk expands
 // function components itself, so a memoized component is its plain function.
 export const memo = (component) => component;
+
+// Context: a component that shares a panel's navigation renders fine here — the
+// default is what a tree outside a provider reads, which is the shape the
+// panels fall back to (SettingsUi's NO_DETAIL_NAVIGATION).
+export function createContext(defaultValue) {
+  return { _defaultValue: defaultValue, Provider: (props) => props.children, Consumer: () => null };
+}
+export function useContext(context) { return context?._defaultValue ?? null; }
+// A stable id per hook slot; the DOM never sees it (no renderer here).
+let idSequence = 0;
+export function useId() { return slot(() => `:h${++idSequence}:`); }
+export const Fragment = Symbol.for("react.fragment");

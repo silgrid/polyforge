@@ -106,7 +106,11 @@ that a step's `done` needs proof the tree it changed still passes its own
 checks: develop's `build` and `sync` do (`fast_check_proof`), so their
 `done` is refused until every task repo the round moved has a `pass` result
 at its HEAD — the daemon reads the result file the lane's declaration names
-and never runs the check itself. A red the change did not cause the check
+and never runs the check itself. develop's `build` does (`facts_proof`), so its `done` is refused while the mechanical facts summary
+it writes lists a deterministic hit — a unit's commits or red-state replay,
+an existing test changed outside the plan's write set, an e2e suite without
+`carries:`, a listed test that does not exist — and the refusal returns
+each hit. A red the change did not cause the check
 itself triages first: every unit still red after its one re-run is replayed
 on the change's baseline (the same judgment verification runs), and one
 the baseline carries the same way is recorded `pre_existing` — not the
@@ -124,6 +128,17 @@ parked work item wakes the step concerned. What the owner wants beyond the
 step's own work (cancel the work item, waive a FAIL, send the work back)
 the agent hands off with that status and `--per-owner`, citing the
 message.
+
+A low-star card (every row ★ or ★★) is the owner's standing
+authorization: with no reply before the Cell's `ask_auto_reply_timeout`
+(default 30m) the daemon answers it under the reserved
+`daemon:auto-recommendation` author with each row's recommended option,
+and the decision feed shows 「已自动按推荐继续」. A protected stop — every
+gate step (review, owner-review, merge, a gate FAIL), every step declaring
+`protected_stop`, every step of a lane this build cannot verify, and every
+step of a `confirm_plan: true` ticket — and any row at ★★★ or above keep
+waiting for the owner; the automatic reply is never a `--per-owner`
+authorization.
 
 A step runs its commands itself — the workflow scripts its skill names
 write result files, whose paths ride the hand-off as
@@ -420,6 +435,15 @@ may be red, since items merge before the integration lane's full gate
 then pass on record, so such a round spends no rewind; what stays red the
 `verification` agent routes as its skill says, and it never passes a red
 it cannot place.
+
+A repository whose `.polyforge/verify-scope.conf` declares parallel
+`group=` lines (polyforge#244) runs its full tier's declared groups side by
+side (polyforge#253): each group in a container of its own, a group's
+commands in plan order, the fast gates before the grouped span and the
+dependency audit after it serially in the repository's container; the
+commands, the checks and the summary stay in plan order, and a repository
+that declares no group — one group, `full_parallel=1` or a host run
+included — keeps the serial bar byte for byte.
 
 A repository whose tree carries `.polyforge/Dockerfile.verify` runs
 that bar in a container of its own; one without it runs on
@@ -1101,7 +1125,11 @@ setting:
   the same `selected`, the shared validator taking it as green-equivalent
   evidence. Review runs four pre-written lines of the workflow's script
   `facts.py` as written — `plan-conformance` (the plan's two-way
-  conformance with the diff, and its `## 已定对照` mapping of the ticket's
+  conformance with the diff — a plan path relative to a nested project
+  root, a directory carrying its own tracked `.polyforge/verify-scope.conf`,
+  names that root's file when exactly one root holds it; a repository-root
+  path wins and an ambiguous relative path stays undeclared — and its
+  `## 已定对照` mapping of the ticket's
   decided rulings — an unmapped one red and named), `build --replay --isolation host` (each
   unit's test commit a one-parent
   ancestor of its implementation commit holding test paths only, every
@@ -1111,16 +1139,20 @@ setting:
   run that passes there is a test the old code already passed,
   `test_weakened`; one that could not run there — a build, setup,
   compile or import error, a missing module or test runner dependency preflight (`node_modules/` or Playwright Chromium missing), `not_runnable` — is not red
-  either: its red evidence is missing, `test_weakened` too) and `carries` (an e2e suite
+  either: its red evidence is missing, in the hand-off gate's subset) and `carries` (an e2e suite
   the build added, or whose run a unit records, whose `carries:` matches
   none of the paths it touched; an edited suite owes a well-formed
   `carries:`) and `analysis` (the change analysis's own close check — the same
   shared validator `verify.py --analysis` calls: every listed entry judged statically,
   and each taken one's run executed once at HEAD and judged by its marker; a red entry is
-  a blocking `test_weakened` finding naming it) — and judges the coverage (every criterion of the judged
+  in the same subset, naming it) — and judges the coverage (every criterion of the judged
   list exactly once), the hand-off's decisions against the owner's own
   words and, on a `confirm_plan` ticket, a reply older than the first test
-  commit. A blocking finding names its class in `artifacts/review.md`;
+  commit. The deterministic items the build's `facts_proof` gate already judges — a
+  unit's commits or red-state replay, `carries`, an analysis entry, an undeclared write,
+  an existing test changed outside the plan's write set — are recomputed fresh but recorded
+  non-blocking on their own; a hit the gate's result did not carry is blocking
+  `guarantee` (the gate was bypassed or its result forged). A blocking finding names its class in `artifacts/review.md`;
   every FAIL resumes `build` as an ordinary charged round. Verification runs each unit's recorded run again on the
   final tree (`verify.py --unit-runs`). No sweep follows a review PASS:
   its text-only findings reach the owner in the PR body like any other.

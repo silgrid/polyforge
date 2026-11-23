@@ -2325,6 +2325,7 @@ export const enLocale: LocalePlugin = {
     "polyforge.decisions.class.superseded": "Released",
     "polyforge.decisions.class.capped": "Capped",
     "polyforge.decisions.class.interrupted": "Interrupted",
+    "polyforge.decisions.class.auto_answered": "Continued with the recommended answers",
     "polyforge.messages.unread": "Unread messages",
     "polyforge.messages.upgrade": "pf upgrade required",
     "polyforge.messages.upgradeReason": "Update pf to use the Messages tab.",

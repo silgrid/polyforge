@@ -100,6 +100,12 @@ func (d *Daemon) answerRoute(w http.ResponseWriter, r *http.Request) {
 	if payload.AnsweredBy == "" {
 		payload.AnsweredBy = r.Header.Get("X-PF-User")
 	}
+	// The daemon's automatic reply has its own reserved author (polyforge#239):
+	// a normal `pf answer` may not claim it, on any route or park.
+	if payload.AnsweredBy == capsule.AutoAnswerBy {
+		writeErr(w, api.ErrDaemonBadInput, "answered_by "+capsule.AutoAnswerBy+" is reserved for the daemon's automatic reply; pf answer may not impersonate it")
+		return
+	}
 	// the message continues a run: a disabled Cell refuses it
 	if err := d.execDisabledRefusal(); err != nil {
 		writeErrOf(w, err)

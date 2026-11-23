@@ -402,7 +402,7 @@ try {
     // folds server and user_id, and the [daemon] zone has no advanced row).
     const topCount = (await zoneToggleOf("user_id").innerText()).trim();
     assert.match(topCount, /2/, `the top-level zone's counted control does not count 2: "${topCount}"`);
-    const daemonZone = page.locator(".polyforge-config-zone.is-daemon").first();
+    const daemonZone = page.locator('.polyforge-config-zone[data-zone="daemon"]').first();
     assert.equal(await daemonZone.locator("button.polyforge-disclosure-toggle").count(), 0, "the [daemon] zone folds a row the cli.toml card no longer holds");
     // A draft keeps its zone open and says so; the confirmation is never hidden.
     await page.locator('input[aria-label="user_id"]').first().fill("u_e2e_9955");

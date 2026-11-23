@@ -311,6 +311,43 @@ func bodyString(body json.RawMessage, field string) string {
 	return s
 }
 
+// hasAutoAnsweredLocked reports whether the profile's work item already
+// carries an automatic-reply entry of the question (the re-emission from a
+// restart is idempotent). Callers hold f.mu.
+func (f *decisionFeed) hasAutoAnsweredLocked(profile, wi, askAt string) bool {
+	if askAt == "" {
+		return false
+	}
+	for i := range f.doc.Entries {
+		e := f.doc.Entries[i]
+		if e.Kind == protocol.DecisionWorkItem && e.WI == wi && e.Profile == profile &&
+			e.Class == "auto_answered" && e.QuestionID == askAt {
+			return true
+		}
+	}
+	return false
+}
+
+// recordAutoAnswered records the question's automatic-reply entry unless it
+// already has one: the check and the append share one f.mu section, so
+// concurrent Ingest/Dismiss/prune of the Host-shared feed never race on
+// f.doc.Entries and a restart's re-emission stays one entry per question
+// (polyforge#239, owner ruling Q6 A).
+func (f *decisionFeed) recordAutoAnswered(profile, wi, slug, at string, d watcher.Decision) error {
+	profile = normProfile(profile)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.hasAutoAnsweredLocked(profile, wi, d.QuestionID) {
+		return nil
+	}
+	f.appendLocked(protocol.Decision{
+		At: at, Kind: protocol.DecisionWorkItem, Profile: profile, WI: wi, Slug: slug,
+		Class: d.Class, Source: d.Source, Phrase: d.Phrase, QuestionID: d.QuestionID, Repo: d.Repo,
+		Attention: d.Attention,
+	})
+	return f.persistLocked()
+}
+
 // resolveExcept resolves the work item's unresolved entries of every class
 // but the kept ones, and persists on a change.
 func (f *decisionFeed) resolveExcept(profile, wi string, keep map[string]bool) error {
@@ -391,6 +428,21 @@ func (f *decisionFeed) Ingest(profile string, e protocol.EventEntry, slug func(s
 		// (kind message) changes nothing
 		if bodyString(e.Body, "kind") == "reply" {
 			err = f.markReplied(profile, e.WI, bodyString(e.Body, "ask_at"), bodyString(e.Body, "at"))
+		}
+	case driver.EvAutoAnswered:
+		// the daemon answered the question by its standing authorization
+		// (polyforge#239): the original needs_input no longer needs a
+		// human — replied, like an owner reply, still open until the step
+		// hands over — and the feed keeps its own distinguishable entry.
+		askAt := bodyString(e.Body, "ask_at")
+		if err = f.markReplied(profile, e.WI, askAt, bodyString(e.Body, "at")); err == nil {
+			if d, ok := watcher.Classify(e.Kind, e.Body); ok {
+				s := ""
+				if slug != nil {
+					s = slug(e.WI)
+				}
+				err = f.recordAutoAnswered(profile, e.WI, s, e.At, d)
+			}
 		}
 	case driver.EvOwnerRewind:
 		// the owner sent the work item back: the question it

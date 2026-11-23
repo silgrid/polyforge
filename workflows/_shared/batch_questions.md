@@ -4,8 +4,12 @@ focused question, answerable in one line; the row number opens the 问题 cell
 (`1. …`, `2. …`) - no fifth column; every row fills 推荐选项 (your recommended
 answer), 理由 (why) and 重点关注程度. `重点关注程度` is the LAST column and every
 row carries one value (`每行必标`) on the `★~★★★★★` scale: ★ = 例行确认,
-★★★★★ = 方向性裁定 / 大影响 / 与既有裁定冲突, ★★–★★★★ scale with impact. Stars
-are for owner attention only and are never mechanically consumed. Escape a
+★★★★★ = 方向性裁定 / 大影响 / 与既有裁定冲突, ★★–★★★★ scale with impact. The
+stars ARE read mechanically: a card whose every row is ★ or ★★ is answered
+automatically — each row's 推荐选项 adopted — after the Cell's
+`ask_auto_reply_timeout` (default 30m) without an owner reply, so grade
+truthfully; a question that cancels or abandons the work must be ≥ ★★★ (and
+any row at ★★★ or above keeps the card waiting for you). Escape a
 literal `|` inside a cell as `\|`. Context or evidence goes in prose above the
 table. After the table ALWAYS (even for a one-row batch; each may be one line)
 add `预期效果` (what happens once the batch is answered) and then `注意事项`

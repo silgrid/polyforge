@@ -598,6 +598,17 @@ carries `units[].failure` (also under `details.checks[].units[]`):
 crash (`Target crashed` / `Page crashed`, a suite's `ABORT` line inside its
 block included), else `assertion`; `report-mechanical.md`
 marks the crashes.
+A repository whose conf declares parallel `group=` lines runs its full
+tier's declared groups side by side (polyforge#253, polyforge#244's
+declaration): each group in a container of its own (its container's own
+notes under `<log dir>/group-<n>/`), a group's commands in plan order, the
+fast gates before the grouped span and the dependency audit after it
+serially in the repository's container; the commands, the checks, the units
+and the command logs stay in plan order, the group containers are removed
+when the bar ends, and the build's unit runs, the analysis's supplements,
+the base runs and the confirming re-runs follow in the repository's
+container. A repository that declares no group, one group, `full_parallel=1`,
+or one that runs on the host keeps the serial bar byte for byte.
 A wall budget (20m) bounds when those re-runs and base runs may still
 start; a unit or command they no longer reach stays a failure — a failed
 unit whose re-run never started (the budget spent, the deadline passed)
@@ -810,7 +821,11 @@ command's face.
   names each such repo, the failing check and the declared command to
   re-run); a `done` that cites an owner message of the round with
   `--per-owner` is the owner's release of such a red and is accepted, the
-  section's header recording the cited message. Accepted, the daemon appends one section to
+  section's header recording the cited message; `done` while the lane
+  declares `facts_proof` and a task repo this round changed lacks a
+  `pf-step-result/1` result at the declared path whose `verdict` is `pass`
+  and whose `heads` carries the repo at its HEAD (the refusal returns each
+  hit the result lists, one line each, the tail named by count). Accepted, the daemon appends one section to
   `artifacts/handoff.md`: a header it stamps from its own records (step,
   round, dispatch, start, end and duration, model, status, the round's
   events, the owner's messages to the step this round and the cited one
@@ -885,7 +900,12 @@ of them (P0): no option, no reserved word (`cancel` here is just a word;
   `step` and `spawn` are the step addressed and the dispatch current when
   you wrote. The `owner_message` event (`at`, `step`, `spawn_n`, `kind`,
   `ask_at`, `by`, `text` — the words verbatim) follows the line. `--by`
-  defaults to the configured user.
+  defaults to the configured user. `--by daemon:auto-recommendation` is
+  refused DAEMON-400 and nothing is recorded: that author is the daemon's
+  own automatic reply to a low-star question card (every row ★/★★, after
+  the Cell's `ask_auto_reply_timeout`), and no `pf answer` may impersonate
+  it. The automatic line is delivered like a reply but is never an owner
+  authorization (`--per-owner`, waive/rewind/force-fail, attrs reject it).
 - **Delivered next.** The step process is alive — idle after its ask
   (inside the warm window), or mid-turn: the message goes into that
   process through its harness's own channel (claude: a stream-json user
@@ -1203,7 +1223,12 @@ hold no credential.
   a `none` reason; an unmapped ruling is red, named with its number and
   text; a ticket without such a section asks for no mapping section, an
   unmaterialized work item reads as no ruling and a corrupt one is not
-  judged), `build` (each unit resolved, its commit
+  judged; a declared path is repository-root relative, and a path relative
+  to a nested project root — a directory carrying its own tracked
+  `.polyforge/verify-scope.conf` — names that root's file when the change
+  base's or HEAD's committed tree holds it under exactly one such root: a
+  repository-root path wins and an ambiguous relative path stays
+  undeclared), `build` (each unit resolved, its commit
   pair test-first, its `test_weakened` hunks and, with `--replay`, its run
   replayed on the tree of its test commit — a unit declared `pre_existing_red`
   (its reproduction test already exists and is red before the change, so it
@@ -1340,7 +1365,12 @@ full reference.
 - `--repo <name>` is the per-unit bar: it runs the scope engine's
   `--json` report — the default report, the one the model ran by hand —
   in the repo clone and executes the commands whose `phase` is `fast` or
-  `scoped`, in the report's order, each in its report's `root` (a nested
+  `scoped` group by group — a command's group is the group its report
+  bound it to (polyforge#244) else its report's root, the groups side by
+  side at most `--parallel N` at once (the report's declared
+  `full_parallel`, else default 2; one group, or `--parallel 1`, is the
+  serial plan), each group's own commands in the plan's order — each in
+  its report's `root` (a nested
   root the changed paths reach is a repository of its own: its report
   runs in that subdirectory), with each entry's own declared `timeout`;
   a command missing a declared `requires_env`/`requires_cmd`
@@ -1407,14 +1437,26 @@ full reference.
   repository's declared verification image when its HEAD carries
   `.polyforge/Dockerfile.verify` — the same isolation and image/tool-cache
   machinery verification's boxes use (the image built from the committed
-  Dockerfile's bytes, reused while they are unchanged), one container for
-  the engine asks, the selected commands, the re-runs and the baseline's
-  base worktree — and on the host otherwise, the result file recording
+  Dockerfile's bytes, reused while they are unchanged), one container per
+  group for the selected commands (a container's reap kills every process
+  in it after a command, so commands sharing one container would kill
+  each other), the close's own container for the engine asks, the re-runs
+  and the baseline's base worktree —
+  and on the host otherwise, the result file recording
   which isolation ran (`details.isolation` `host`/`container`, with the
   container's own record in `details.container` when one ran), the
   per-unit `--repo` run always on the host; a container the close cannot
   build, start or keep is the run's error (exit 2, never a red of the
   change's, never a host stand-in);
+  the close's order is fixed: the scoped selection green, then the facts,
+  then the self-review, then the hand-off, and once the scoped selection
+  has run a step that changes no code does not re-run it (the reuse key is
+  the command text, the root's subtree tree hash and the declared
+  prerequisites, so changing artifacts alone is not a code change) while a
+  changed tree re-runs only itself and on a host close reuses the untouched roots by `--reuse` (a boxed close consumes none), and a
+  red is reported from the result file's own baseline record
+  (`details.baseline` and its `reds[]` classification), never reproduced by
+  hand on the base worktree;
   once per touched repo, after its fast checks; a command whose reuse
   key — the same key the `--repo` run reuses by: its root, its text as
   its own report gave it, its root's subtree tree hash of the working
@@ -1427,7 +1469,12 @@ full reference.
   shared and an unusable `--reuse` file the error it always was — and a red command keeps the per-unit
   bar's one
   targeted re-run, its baseline triage and whole-command confirmation,
-  all of it in the same container when one was declared;
+  the selected commands in each group's own container when one was
+  declared, the engine asks, the re-runs, the baseline triage and the
+  whole-command confirmation in the close's own container;
+  `--parallel <N>` overrides the plan's parallelism (a positive integer;
+  1 runs the plan serially — the comparison baseline and the manual
+  override), for the per-unit and the close run alike;
   `--unit-runs` names the build's `units.json`: the files its test
   commits touched are protected, never pre-existing (a test this change
   authored is this change's red), an unusable file is exit 2; a selection the engine
@@ -1520,7 +1567,8 @@ write leaves the file untouched. `api_key` is write-only: stdin only,
 never argv, never emitted.
 
 The running daemon applies live keys on the write (`max_concurrent_jobs`,
-`cell_max_concurrent_jobs`, `step_timeout`, `stall_window`, `agent_language`, `claude_bin`, `summarize.*`,
+`cell_max_concurrent_jobs`, `step_timeout`, `stall_window`, `agent_language`, `claude_bin`,
+`ask_auto_reply_enabled`, `ask_auto_reply_timeout`, `summarize.*`,
 the `[step_tiers]` catalog — reported `applied` as one `[step_tiers]`
 outcome; it has no daemon consumer, the classification itself says no
 restart is needed), takes the

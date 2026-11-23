@@ -984,6 +984,9 @@ func (d *Driver) awaitDispatch(ctx context.Context, run StepRun, stepID string, 
 		case <-askTick.C:
 			d.relayConfirm(rl)
 			if awaiting != nil {
+				if d.autoAnswer(&awaiting.Ask) {
+					return endWarm() // answered by the standing authorization: the plan resumes the step
+				}
 				continue
 			}
 			ask := d.openAsk(stepID, n)

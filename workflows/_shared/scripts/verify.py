@@ -36,6 +36,19 @@ the budget. Every other ticket runs the **light** tier, exactly as before.
 ``--tier light`` and ``--tier full`` are the hand run's explicit overrides
 (an explicit light stays light on a marked ticket).
 
+The full tier's bar honours the repository's declared groups
+(polyforge#253, polyforge#244's declaration): two or more ``group=`` lines
+in the conf run side by side — each group in a container of its own, a
+group's commands in plan order, at most the report's ``full_parallel`` at
+once — while the commands no group binds run serially in the repository's
+container, the fast gates before the grouped span and the dependency audit
+after it; the commands, the checks and the command logs stay in plan order,
+the group containers are removed when the bar ends, and the build's unit
+runs, the analysis's supplements, the base runs and the confirming re-runs
+follow in the repository's container. A repository that declares no group —
+or one group, or ``full_parallel=1``, or one that runs on the host — keeps
+the serial bar byte for byte.
+
 Where a repo's bar runs is the repo's: one whose HEAD carries
 ``.polyforge/Dockerfile.verify`` runs its engine and bar in a verification
 container of its own (the ``pf.verify.*`` labels, the deadline label and a
@@ -126,6 +139,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 import traceback
 from dataclasses import dataclass, field
@@ -198,6 +212,9 @@ RERUNS = 1
 # Kept free at the end of the run for the cleanup and the result.
 WRITE_MARGIN = 20.0
 GIT_TIMEOUT = 600.0
+# How long the grouped bar waits for a group worker to end once its
+# containers are removed (an interrupt's cleanup, polyforge#244 r1#7).
+INTERRUPT_JOIN = 30.0
 
 ORIGIN_PLAN = "plan"
 ORIGIN_UNIT_RUN = "unit-run"
@@ -404,6 +421,23 @@ def is_test_file(p: str, globs: Sequence[str]) -> bool:
 # ---- the run ---------------------------------------------------------------
 
 
+def bar_parallel(p: RepoPlan, boxed: bool) -> int:
+    """The parallelism a repo's bar runs at (polyforge#253): the
+    repository's declared groups side by side only when there are two of
+    them to run side by side, the report declares that much parallelism, and
+    the repo runs in a container to isolate each group in. Everything else —
+    no group declared, a single group, a declared parallelism of 1, a repo
+    that runs on the host — is 1, today's serial bar byte for byte (the plan
+    review's ruling 1)."""
+    rep = p.report
+    if rep is None or not boxed:
+        return 1
+    groups = {c.group for c in p.commands if c.group}
+    if len(groups) < 2:
+        return 1
+    return min(max(rep.parallel, 1), len(groups))
+
+
 def bar_end_line(at: str, cr: CmdRun) -> str:
     """The end line of one bar command, gate.py's format: PASS with its
     duration, FAIL with its exit code, duration and log, SKIP / not started
@@ -489,6 +523,12 @@ class Verification:
         self.repos_names: List[str] = []
         self.protected: List[str] = []
         self.boxes: List[container.Box] = []
+        # polyforge#253: the grouped bar's own state — the shared log
+        # counter's lock, the progress stream's lock and why the run is not
+        # judged (a group's container could not be had or was lost)
+        self.log_mu = threading.Lock()
+        self.say_mu = threading.Lock()
+        self.bar_incomplete = ""
         self.interrupted = False
 
     # -- the run directory
@@ -545,16 +585,39 @@ class Verification:
 
     # -- running one command
 
-    def exec(self, rr: RepoRun, argv: List[str], directory: str, cwd: str, timeout: float,
-             private_tmp: bool = False, boxed: bool = False, capture: bool = False) -> runner.ExecResult:
-        return self.r.exec(
-            rr.log_dir,
-            runner.ExecSpec(argv=argv, dir=directory, cwd=cwd, timeout=timeout, private_tmp=private_tmp, capture=capture),
-            rr.box if boxed else None,
-        )
+    def next_log(self, log_dir: str) -> str:
+        """log_dir's next numbered log, the group workers' reservations
+        serialized: the log is named by the plan's index (polyforge#253)."""
+        with self.log_mu:
+            return self.r.next_log(log_dir)
 
-    def exec_bash(self, rr: RepoRun, cmd: str, directory: str, cwd: str, timeout_ns: int) -> runner.ExecResult:
-        return self.exec(rr, runner.bash_argv(cmd), directory, cwd, timeout_ns / duration.SECOND, private_tmp=True, boxed=True)
+    def say_whole(self, msg: str) -> None:
+        """One progress line, said whole: the group workers say at the same
+        moment (polyforge#253)."""
+        with self.say_mu:
+            self.say(msg)
+
+    def exec(self, rr: RepoRun, argv: List[str], directory: str, cwd: str, timeout: float,
+             private_tmp: bool = False, boxed: bool = False, capture: bool = False,
+             box: Optional[container.Box] = None, log_path: str = "") -> runner.ExecResult:
+        """One command in rr's container (box overrides it, for a group's;
+        log_path overrides the next numbered log, for a run that reserved the
+        plan's names up front)."""
+        b = rr.box if (boxed and box is None) else box
+        spec = runner.ExecSpec(argv=argv, dir=directory, cwd=cwd, timeout=timeout, private_tmp=private_tmp,
+                               capture=capture)
+        if not log_path:
+            try:
+                os.makedirs(rr.log_dir, exist_ok=True)
+            except OSError as err:
+                return runner.ExecResult(exit=-1, error=str(err))
+            log_path = self.next_log(rr.log_dir)
+        return self.r.exec_to(spec, log_path, b)
+
+    def exec_bash(self, rr: RepoRun, cmd: str, directory: str, cwd: str, timeout_ns: int,
+                  box: Optional[container.Box] = None) -> runner.ExecResult:
+        return self.exec(rr, runner.bash_argv(cmd), directory, cwd, timeout_ns / duration.SECOND, private_tmp=True,
+                         boxed=True, box=box)
 
     # -- the phases
 
@@ -580,12 +643,19 @@ class Verification:
                     # 3. bars and the build's unit runs, one repo after another
                     for rr in repos:
                         self.run_bar(rr)
+                        if self.bar_incomplete or self.interrupted:
+                            # a group's container could not be had or was
+                            # lost, or the bar was interrupted: nothing after
+                            # it proves anything (polyforge#253 r1#1, r1#2)
+                            incomplete = self.bar_incomplete
+                            break
                         self.run_unit_runs(rr)
                         self.run_analysis_runs(rr)
                     # 4. pre-existing base runs, then the confirming re-runs
-                    for rr in repos:
-                        self.pre_existing_phase(rr)
-                        self.confirm_phase(rr)
+                    if not self.interrupted and not incomplete:
+                        for rr in repos:
+                            self.pre_existing_phase(rr)
+                            self.confirm_phase(rr)
             except (KeyboardInterrupt, runner.Interrupted):
                 self.interrupted = True
             if not incomplete and not self.interrupted:
@@ -778,6 +848,10 @@ class Verification:
         rr.untracked_before = self.untracked_test_files(rr)
         if not (rr.touched and rr.plan is not None and rr.plan.planned()):
             return
+        parallel = bar_parallel(rr.plan, rr.box is not None)
+        if parallel > 1:
+            self.run_bar_grouped(rr, rr.plan.commands, parallel)
+            return
         for i, c in enumerate(rr.plan.commands):
             at = "[%d/%d] %s" % (i + 1, len(rr.plan.commands), c.name)
             cr = CmdRun(repo=rr.name, check=rr.name + ":" + c.name, name=c.name, phase=c.phase, cmd=c.cmd,
@@ -793,26 +867,197 @@ class Verification:
                 self.say(bar_end_line(at, cr))
             rr.runs.append(cr)
 
-    def unmet(self, c: EngineCommand, rr: RepoRun) -> str:
+    def run_bar_grouped(self, rr: RepoRun, cmds: List[EngineCommand], parallel: int) -> None:
+        """The plan's declared groups side by side (polyforge#253), in
+        polyforge#244's shape: each group in a container of its own, a
+        group's commands one at a time in plan order, at most `parallel`
+        commands at once; the commands no group binds run serially in the
+        repository's own container, those before the grouped span first
+        (the fast gates) and those after it last (the dependency audit).
+        The plan's log names are reserved before anything runs, so a serial
+        and a grouped run of one plan name the same log for the same command;
+        the results are in plan order whatever finished first. A group's
+        container starts when the bar reaches the groups (the image is
+        already built, the boxes start serially), its own notes go to
+        <log_dir>/group-<n>/, and it is removed when the bar ends — the
+        phases after the bar keep the repository's container. A group's
+        container that cannot be had or is lost leaves the run not judged
+        (`self.bar_incomplete`), never a red and never a host stand-in."""
+        n = len(cmds)
+        groups = [c.group for c in cmds]
+        last = max(i for i in range(n) if groups[i])
+        head = [i for i in range(n) if not groups[i] and i < last]
+        tail = [i for i in range(n) if not groups[i] and i > last]
+        names: List[str] = []
+        members: Dict[str, List[int]] = {}
+        for i in range(n):
+            if not groups[i]:
+                continue
+            if groups[i] not in members:
+                members[groups[i]] = []
+                names.append(groups[i])
+            members[groups[i]].append(i)
+        try:
+            os.makedirs(rr.log_dir, exist_ok=True)
+        except OSError as err:
+            self.bar_incomplete = "repos/%s: its log directory %s: %s" % (rr.name, rr.log_dir, err)
+            return
+        log_paths = [self.next_log(rr.log_dir) for _ in range(n)]
+        slots: List[Optional[CmdRun]] = [None] * n
+        stop = threading.Event()
+        sem = threading.BoundedSemaphore(parallel)
+
+        def run_one(i: int, box: container.Box) -> None:
+            c = cmds[i]
+            at = "[%d/%d] %s" % (i + 1, n, c.name)
+            cr = CmdRun(repo=rr.name, check=rr.name + ":" + c.name, name=c.name, phase=c.phase, cmd=c.cmd,
+                        origin=ORIGIN_PLAN, timeout=self.timeout_of(c), report=c.report, rerun_tmpl=c.rerun,
+                        dir=c.dir, inner=c.inner)
+            slots[i] = cr
+            if stop.is_set() or self.bar_incomplete:
+                cr.not_started = "the bar stopped before it could start"
+                return
+            self.say_whole("%s (%s): %s" % (at, c.phase, c.cmd))
+            why = self.unmet(c, rr, box)
+            if why:
+                cr.skipped = why
+                self.say_whole("%s SKIP - %s" % (at, why))
+                return
+            try:
+                self.run_command(rr, cr, box=box, log_path=log_paths[i])
+            except (KeyboardInterrupt, runner.Interrupted):
+                # a signal lands in the main thread; this worker stops, the
+                # bar stops, and the run is not judged (polyforge#253 r1#2)
+                self.interrupted = True
+                cr.exit, cr.not_started = -1, "the bar was interrupted while it ran"
+                stop.set()
+                return
+            except BaseException as err:
+                # a fault of the script is never a verdict (the serial path's
+                # own rule, main's except Exception): the run is not judged
+                # (polyforge#253 r1#1)
+                cr.exit = -1
+                self.bar_incomplete = "the verification could not run %s: %s: %s" % (
+                    c.name, type(err).__name__, err)
+                stop.set()
+                return
+            self.say_whole(bar_end_line(at, cr))
+
+        def worker(box: container.Box, idxs: Sequence[int]) -> None:
+            for i in idxs:
+                sem.acquire()
+                try:
+                    run_one(i, box)
+                finally:
+                    sem.release()
+
+        boxes: Dict[str, container.Box] = {}
+        threads: List[threading.Thread] = []
+        try:
+            for g in names:
+                group_logs = os.path.join(rr.log_dir, "group-%d" % (names.index(g) + 1))
+                try:
+                    os.makedirs(group_logs, exist_ok=True)
+                except OSError as err:
+                    self.bar_incomplete = "repos/%s: the group %s's log directory %s: %s" % (
+                        rr.name, g, group_logs, err)
+                    return
+                box, why = self.group_box(rr, group_logs)
+                if box is None:
+                    self.bar_incomplete = why
+                    return
+                boxes[g] = box
+                self.say_whole("repos/%s: group %s runs in container %s (logs %s)"
+                               % (rr.name, g, box.report.name, self.rel(group_logs)))
+            if self.bar_incomplete:
+                return
+            # a grouped bar is one whose repo runs in a container (bar_parallel)
+            assert rr.box is not None
+            for i in head:
+                run_one(i, rr.box)
+                if self.bar_incomplete or self.interrupted:
+                    return
+            threads = [threading.Thread(target=worker, args=(boxes[g], members[g]), name="group-" + g)
+                       for g in names]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            if self.interrupted or self.bar_incomplete:
+                return
+            for g in names:
+                why = boxes[g].lost_reason()
+                if why:
+                    self.bar_incomplete = ("repos/%s: its verification container became unusable while the bar ran"
+                                           " (%s): the record proves nothing" % (rr.name, why))
+                    return
+            for i in tail:
+                run_one(i, rr.box)
+                if self.bar_incomplete or self.interrupted:
+                    return
+        except (KeyboardInterrupt, runner.Interrupted):
+            self.interrupted = True
+            stop.set()
+        finally:
+            for b in boxes.values():
+                b.remove()
+            for t in threads:
+                t.join(timeout=INTERRUPT_JOIN)
+            # every planned command keeps its record: a slot no worker wrote
+            # (the bar stopped, a worker faulted) is a not-started command,
+            # never a missing check (gate.py's own placeholder, polyforge#253
+            # r1#1)
+            for i, cr in enumerate(slots):
+                if cr is None:
+                    c = cmds[i]
+                    cr = CmdRun(repo=rr.name, check=rr.name + ":" + c.name, name=c.name, phase=c.phase,
+                                cmd=c.cmd, origin=ORIGIN_PLAN, timeout=self.timeout_of(c), report=c.report,
+                                rerun_tmpl=c.rerun, dir=c.dir, inner=c.inner)
+                    cr.not_started = "not started: the bar stopped before it could start"
+                rr.runs.append(cr)
+
+    def group_box(self, rr: RepoRun, group_logs: str) -> Tuple[Optional[container.Box], str]:
+        """A group's container (polyforge#253): the repository's image, a
+        container of its own and its own log directory, or why it could not
+        be had."""
+        if self.co is None:
+            return None, "repos/%s: a group's container needs the run's container options, and it has none" % rr.name
+        try:
+            box = container.start_box(self.co, rr.name, rr.dir, group_logs, self.hard, self.n, self.rel,
+                                      engine=os.path.realpath(self.engine), image=self.image)
+        except container.ImageMissing as err:
+            return None, ("repos/%s: the image %s is not present on this machine and is never pulled (%s): the image"
+                          " is prepared by a person — have one prepared or clear the step parameter; the bar was not"
+                          " run" % (rr.name, err.ref, container.IMAGE_MISSING_MARK))
+        except container.BoxError as err:
+            return None, "repos/%s: the verification container could not be prepared: %s" % (rr.name, err)
+        return box, ""
+
+    def unmet(self, c: EngineCommand, rr: RepoRun, box: Optional[container.Box] = None) -> str:
         """The unmet precondition of a planned command ("" = none), judged
-        where it runs (runner.Runner.unmet)."""
-        return self.r.unmet(c.requires_env, c.requires_cmd, rr.dir, rr.box)
+        where it runs (runner.Runner.unmet): in the group's container for a
+        grouped command, else the repository's."""
+        return self.r.unmet(c.requires_env, c.requires_cmd, rr.dir, box if box is not None else rr.box)
 
     def protected_path(self, p: str) -> bool:
         return path_is_protected(p, self.protected)
 
-    def rerun_runner(self, rr: RepoRun, timeout: int) -> Callable[[str], RerunRun]:
+    def rerun_runner(self, rr: RepoRun, timeout: int,
+                     box: Optional[container.Box] = None) -> Callable[[str], RerunRun]:
         def run(cmd: str) -> RerunRun:
-            er = self.exec_bash(rr, cmd, rr.dir, rr.cwd_rel, timeout)
+            er = self.exec_bash(rr, cmd, rr.dir, rr.cwd_rel, timeout, box=box)
             dur = er.evidence.duration_ms / 1000.0 if er.evidence is not None else 0.0
             return RerunRun(not_started=er.not_started, exit=er.exit, log_path=er.log_path, tmp_dir=er.tmp_dir, duration=dur)
         return run
 
-    def run_command(self, rr: RepoRun, cr: CmdRun) -> None:
+    def run_command(self, rr: RepoRun, cr: CmdRun, box: Optional[container.Box] = None, log_path: str = "") -> None:
         """One bar command run, its units parsed and located, the flaky
-        policy applied."""
+        policy applied — in the repository's container (the serial bar) or
+        in box (a group's, its flaky re-run included), its log the next
+        numbered one or log_path (the grouped bar's reserved name)."""
         before = snapshot_report(rr.dir, cr.report) if cr.report is not None else {}
-        er = self.exec_bash(rr, cr.cmd, rr.dir, rr.cwd_rel, cr.timeout)
+        er = self.exec(rr, runner.bash_argv(cr.cmd), rr.dir, rr.cwd_rel, cr.timeout / duration.SECOND,
+                       private_tmp=True, boxed=True, box=box, log_path=log_path)
         if er.not_started:
             cr.exit, cr.not_started = -1, "not started: " + self.r.deadline_note() + " had passed"
             return
@@ -853,7 +1098,7 @@ class Verification:
                 us.carries = file_carries(rr.dir, us.file)
         report_note = cr.report_read.note if cr.report_read is not None else ""
         for us in [u for u in cr.units if u.failed]:
-            rerun_flaky(us, RERUNS, rr.dir, self.rerun_runner(rr, cr.timeout), self.budget_left, self.budget_note(),
+            rerun_flaky(us, RERUNS, rr.dir, self.rerun_runner(rr, cr.timeout, box), self.budget_left, self.budget_note(),
                         self.r.deadline_note(), report_note)
 
     # -- the build's unit runs and the analysis's supplements

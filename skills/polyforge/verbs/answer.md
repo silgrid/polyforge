@@ -44,7 +44,12 @@ pf answer <id> --text "..." [--by user]
 agent as words). `--by` is the answerer's user id recorded with the
 message, defaulting to the config's `user_id` / `PF_USER_ID` (the daemon
 does not cross-check it against the caller); the CLI refuses locally if no
-identity is resolvable.
+identity is resolvable. `--by daemon:auto-recommendation` is refused
+`DAEMON-400` and nothing is recorded: that author is the daemon's own
+automatic reply to a low-star question card (polyforge#239), and no
+`pf answer` may impersonate it. The automatic line is delivered like a
+reply but is never an owner authorization (`--per-owner`, waive/rewind/
+force-fail, attrs reject it).
 
 ## Success
 
@@ -71,6 +76,7 @@ work item is woken — <how it continues>`.
 | (door refused) `answer: <id> is parked …; opening its door was refused` | aihub refused the resume door with your key (you are not the reporter, a maintainer, an admin or the machine's operator) | Nothing was recorded; ask someone who may resume it. |
 | `DAEMON-409` (disabled Cell) | The Cell's execution plane is closed (the error names why) | Nothing was recorded; fix the Cell's cause first. |
 | `DAEMON-400` (empty or oversize message) | The `--text` words are blank or over 64 KiB; nothing was recorded | Say it in words, at most 64 KiB (split a longer message). |
+| `DAEMON-400` (reserved author) | `--by daemon:auto-recommendation` — the daemon's automatic-reply identity (polyforge#239); nothing was recorded | Use your own user id; the automatic reply is the daemon's, never a `pf answer`. |
 | `DAEMON-400` (a question id or an option) | The request named a `question_id` or an `option` — the fields of an earlier answer shape (an older client) | Answer with `--text` alone; the step's agent reads the words. |
 | `DAEMON-403` (step process — the only 403) | The caller runs inside a step agent's process tree (polyforge#122: the daemon checks the UDS peer, its ancestors and its process group for the step markers) | Questions are a human's to answer — a step agent never answers; answer from your own session. |
 | `DAEMON-404` | No local job for this work item | The work item is not running on this machine — answer from the machine that runs it. |

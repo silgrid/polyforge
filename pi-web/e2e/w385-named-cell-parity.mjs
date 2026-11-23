@@ -471,7 +471,7 @@ try {
   await check("T1 the summarize add row is the shared picker: a tier choice saves to its own Cell only", async () => {
     await select(dialog, "public");
     const pub = pane(dialog, "public");
-    const publicRow = pub.locator(".polyforge-config-zone.is-summarize").first();
+    const publicRow = pub.locator('.polyforge-config-zone[data-zone="summarize"]').first();
     await publicRow.locator("select").first().waitFor({ state: "visible", timeout: 30_000 });
     const before = stubState().writes.length;
     await publicRow.locator("select").first().selectOption("pi:tierdemo/legacy");
@@ -485,7 +485,7 @@ try {
     // the default Cell's draft is its own — the public choice never leaked
     await select(dialog, "default");
     const def = pane(dialog, "default");
-    const defaultRow = def.locator(".polyforge-config-zone.is-summarize").first();
+    const defaultRow = def.locator('.polyforge-config-zone[data-zone="summarize"]').first();
     assert.equal(await defaultRow.locator('input[aria-label="summarize.models"]').inputValue(), "", "the default Cell's add draft is not its own");
     const beforeDefault = stubState().writes.length;
     await defaultRow.locator("select").first().selectOption("pi:tierdemo/legacy");

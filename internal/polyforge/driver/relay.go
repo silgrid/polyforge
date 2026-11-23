@@ -132,6 +132,9 @@ func OwnerMessageLine(capsuleDir, step string, n int64, text, by, at string) (ca
 	if by == "" {
 		by = "owner"
 	}
+	if by == capsule.AutoAnswerBy {
+		return capsule.AskLine{}, fmt.Errorf("driver: %w: %q is the daemon's reserved automatic-reply identity; a normal answer may not record it", ErrInvalidOwnerMessage, by)
+	}
 	lines, err := capsule.ReadAsks(capsuleDir)
 	if err != nil {
 		return capsule.AskLine{}, fmt.Errorf("driver: the ask record is unreadable: %w", err)
@@ -178,6 +181,9 @@ func (d *Driver) OwnerMessage(ctx context.Context, text, by string) (protocol.Ow
 	if err := ValidateOwnerMessage(text); err != nil {
 		return protocol.OwnerMessageAck{}, err
 	}
+	if by == capsule.AutoAnswerBy {
+		return protocol.OwnerMessageAck{}, fmt.Errorf("driver: %w: %q is the daemon's reserved automatic-reply identity; a normal answer may not record it", ErrInvalidOwnerMessage, by)
+	}
 	if d.wi.CapsuleDir == "" {
 		return protocol.OwnerMessageAck{}, errors.New("driver: no capsule to record the owner message in")
 	}
@@ -201,7 +207,14 @@ func (d *Driver) OwnerMessage(ctx context.Context, text, by string) (protocol.Ow
 		return protocol.OwnerMessageAck{}, fmt.Errorf("driver: no step agent is running or waiting for the owner (step %q)", cur)
 	}
 	step, n := cur, st.Dispatch
+	// The record's read-check-append is one serialized section with the
+	// daemon's automatic reply (polyforge#239): whoever appends first
+	// wins, and the loser writes nothing extra — a reply recorded before
+	// the automatic commit leaves no open ask, so no automatic reply is
+	// appended over it.
+	d.askWriteMu.Lock()
 	line, err := RecordOwnerMessage(d.wi.CapsuleDir, step, n, text, by, d.stamp())
+	d.askWriteMu.Unlock()
 	if err != nil {
 		return protocol.OwnerMessageAck{}, err
 	}
