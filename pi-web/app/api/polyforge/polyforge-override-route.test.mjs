@@ -319,6 +319,17 @@ test("the watch route composes the params view beside the override view (the sam
   body = await response.json();
   assert.equal(body.status?.overrideView, undefined, "an ended ticket composes no override view (polyforge#48)");
   assert.equal(body.status?.paramsView, undefined, "an ended ticket composes no params view either");
+  // The route starts both composed reads beside the watch read and drops
+  // them unawaited once the ticket reads ended (the established pattern):
+  // under load a dropped stub child can append its argv after this answer.
+  // A bounded wait for the reads' own argv keeps the next reset from racing
+  // one (polyforge#151's flaky spawn-set find; polyforge#84's close red).
+  const settled = Date.now() + 15_000;
+  while (Date.now() < settled) {
+    const lines = argv();
+    if (lines.some((a) => a.includes("override")) && lines.some((a) => a.includes("params"))) break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
   // without the opt-in the params view is not asked for
   reset("view");
   response = await WATCH_GET(watchGet("?wi=wi_A1"));
