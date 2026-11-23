@@ -752,15 +752,7 @@ func New(cfg Config) (*Daemon, error) {
 	// build cannot verify. The shipped lanes are enumerated from the
 	// daemon's workflows/ tree (no Go literal names a lane or a step id);
 	// a custom lane's cards keep waiting for the owner.
-	shippedLanes := map[string]bool{}
-	if dirs, derr := workflow.LaneDirs(cfg.WorkflowsDir); derr == nil {
-		for _, dir := range dirs {
-			if lane, errs := workflow.Load(dir); len(errs) == 0 && lane != nil {
-				shippedLanes[lane.Name] = true
-			}
-		}
-	}
-	laneVerifiable := func(name string) bool { return shippedLanes[name] }
+	laneVerifiable := shippedLaneVerifier(cfg.WorkflowsDir)
 	start := cfg.AgentStarter
 	if start == nil {
 		start = func(ctx context.Context, in runtime.AgentStartInput) (Agent, error) {
@@ -1943,4 +1935,21 @@ func (d *Daemon) reportUserLanes() {
 			delete(d.userLaneRefused, dir)
 		}
 	}
+}
+
+// shippedLaneVerifier answers the predicate the driver's automatic reply
+// consults (polyforge#239): a lane name under workflowsDir that loads is
+// one this build verifies; an unknown or unloadable name is not, so its
+// stops keep waiting for the owner. The shipped set is enumerated from the
+// tree — no Go literal names a lane or a step id.
+func shippedLaneVerifier(workflowsDir string) func(string) bool {
+	lanes := map[string]bool{}
+	if dirs, err := workflow.LaneDirs(workflowsDir); err == nil {
+		for _, dir := range dirs {
+			if lane, errs := workflow.Load(dir); len(errs) == 0 && lane != nil {
+				lanes[lane.Name] = true
+			}
+		}
+	}
+	return func(name string) bool { return lanes[name] }
 }

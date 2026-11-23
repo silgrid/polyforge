@@ -24,10 +24,9 @@ import (
 	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 )
 
-// The owner's relay and the automatic commit share askWriteMu: an owner
-// reply that lands between the automatic check's first read and its commit
-// closes the ask, so the automatic commit writes nothing — never two
-// replies for one ask.
+// The owner's relay and the automatic commit share askWriteMu: a relay
+// that starts while the automatic commit holds the lock waits for it, and
+// then records a message (the ask is closed) — never a second reply.
 func TestAutoAnswerOwnerRelayIsSerialized(t *testing.T) {
 	dir := t.TempDir()
 	base := time.Date(2026, 11, 23, 0, 0, 0, 0, time.UTC)
@@ -37,15 +36,20 @@ func TestAutoAnswerOwnerRelayIsSerialized(t *testing.T) {
 	d, _, _, _ := askEnv(t, dir, sp, nil, 150*time.Millisecond)
 	d.cfg.Now = clock.now
 	d.cfg.LaneVerifiable = func(string) bool { return true }
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	var once sync.Once
+	relayDone := make(chan struct{})
 	d.cfg.AutoAnswerBeforeCommit = func() {
 		once.Do(func() {
-			if _, err := d.OwnerMessage(context.Background(), "owner says", "alice"); err != nil {
-				t.Errorf("the interleaved owner relay: %v", err)
-			}
+			go func() {
+				defer close(relayDone)
+				if _, err := d.OwnerMessage(ctx, "owner says", "alice"); err != nil {
+					t.Errorf("the interleaved owner relay: %v", err)
+				}
+			}()
 		})
 	}
-	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { defer close(done); _ = d.Run(ctx) }()
 	t.Cleanup(func() {
@@ -56,26 +60,23 @@ func TestAutoAnswerOwnerRelayIsSerialized(t *testing.T) {
 		}
 	})
 	clock.advance(31 * time.Minute)
-	waitUntil(t, "the owner reply", func() bool {
-		for _, l := range autoAnswerLines(t, dir) {
-			if l.Kind == capsule.AskKindReply && l.By == "alice" && l.AskAt == ask.At {
-				return true
-			}
-		}
-		return false
-	})
-	waitUntil(t, "the resumed dispatch", func() bool { return len(sp.dispatched()) >= 1 })
-	var ownerReplies, autoRepliesCount int
+	waitUntil(t, "the automatic reply", func() bool { return len(autoReplies(autoAnswerLines(t, dir), ask.At)) == 1 })
+	select {
+	case <-relayDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the owner relay did not finish after the automatic commit")
+	}
+	var ownerReplies, messages int
 	for _, l := range autoAnswerLines(t, dir) {
 		if l.Kind == capsule.AskKindReply && l.AskAt == ask.At && l.By == "alice" {
 			ownerReplies++
 		}
-		if l.Kind == capsule.AskKindReply && l.AskAt == ask.At && l.By == capsule.AutoAnswerBy {
-			autoRepliesCount++
+		if l.Kind == capsule.AskKindMessage && l.By == "alice" {
+			messages++
 		}
 	}
-	if ownerReplies != 1 || autoRepliesCount != 0 {
-		t.Fatalf("replies for the ask: owner %d, automatic %d; want 1 and 0", ownerReplies, autoRepliesCount)
+	if ownerReplies != 0 || messages != 1 {
+		t.Fatalf("owner replies %d, messages %d; want 0 and 1 (the relay waited, the ask was already answered)", ownerReplies, messages)
 	}
 }
 
@@ -151,7 +152,8 @@ func TestAutoAnswerConfigDrivesBehavior(t *testing.T) {
 			}
 		})
 		clock.advance(60 * time.Minute)
-		waitUntil(t, "the disabled checks", func() bool { return checks.Load() >= 5 })
+		n0 := checks.Load()
+		waitUntil(t, "the disabled checks", func() bool { return checks.Load() >= n0+5 })
 		if got := autoReplies(autoAnswerLines(t, dir), ask.At); len(got) != 0 {
 			t.Fatalf("a disabled switch answered: %+v", got)
 		}
@@ -188,7 +190,8 @@ func TestAutoAnswerConfigDrivesBehavior(t *testing.T) {
 			}
 		})
 		clock.advance(31 * time.Minute)
-		waitUntil(t, "the 31m checks", func() bool { return checks.Load() >= 5 })
+		n0 := checks.Load()
+		waitUntil(t, "the 31m checks", func() bool { return checks.Load() >= n0+5 })
 		if got := autoReplies(autoAnswerLines(t, dir), ask.At); len(got) != 0 {
 			t.Fatalf("answered before the 45m deadline: %+v", got)
 		}
@@ -290,5 +293,29 @@ func TestAutoAnswerOnlyRunsOnStepAskPaths(t *testing.T) {
 				t.Errorf("%s names %s: the task path never writes an ask or calls autoAnswer", filepath.Base(f), bad)
 			}
 		}
+	}
+}
+
+// Run replays the audit at driver start (polyforge#239): a capsule whose
+// automatic reply lost its event before a restart gains it again without a
+// second reply.
+func TestAutoAnswerReplayRunsAtDriverStart(t *testing.T) {
+	dir := t.TempDir()
+	base := time.Date(2026, 11, 23, 0, 0, 0, 0, time.UTC)
+	ask := seedAutoAnswerCapsule(t, dir, "fix", 1, base, true)
+	reply := capsule.AskLine{
+		At: base.Add(31 * time.Minute).UTC().Format(time.RFC3339Nano), Step: "fix", Spawn: 1,
+		Kind: capsule.AskKindReply, AskAt: ask.At, By: capsule.AutoAnswerBy,
+		Text: autoAnswerReplyText([]string{"A：JSON"}, 31*time.Minute),
+	}
+	if err := capsule.AppendAsk(dir, reply); err != nil {
+		t.Fatal(err)
+	}
+	d, log, _, _ := askEnv(t, dir, &fakeSpawner{script: []fakeEntry{{hold: true}}}, nil, 150*time.Millisecond)
+	stop := runDriver(t, d)
+	waitUntil(t, "the replayed auto_answered event at Run start", func() bool { return len(log.byKind(EvAutoAnswered)) == 1 })
+	stop()
+	if got := autoReplies(autoAnswerLines(t, dir), ask.At); len(got) != 1 {
+		t.Fatalf("the replay appended another reply: %+v", got)
 	}
 }

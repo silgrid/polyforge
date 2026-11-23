@@ -78,7 +78,8 @@ func TestAutoAnswerProtectedStops(t *testing.T) {
 	})
 	waitUntil(t, "the publish park", func() bool { return len(log.byKind(EvAwaitingOwner)) == 1 })
 	clock.advance(60 * time.Minute)
-	waitUntil(t, "the due checks", func() bool { return checks.Load() >= 5 })
+	n0 := checks.Load()
+	waitUntil(t, "the due checks", func() bool { return checks.Load() >= n0+5 })
 	if got := autoReplies(autoAnswerLines(t, dir), ask.At); len(got) != 0 {
 		t.Fatalf("a protected publish stop was answered: %+v", got)
 	}

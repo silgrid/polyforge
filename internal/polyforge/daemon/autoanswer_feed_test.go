@@ -8,6 +8,7 @@ package daemon
 import (
 	"encoding/json"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/silgrid/polyforge/internal/common/capsule"
@@ -60,5 +61,48 @@ func TestAutoAnswerFeedEntry(t *testing.T) {
 	}
 	if autoEntries != 1 {
 		t.Fatalf("auto_answered entries = %d, want the re-emission deduped to one", autoEntries)
+	}
+}
+
+// The Host-shared feed is written by every Cell: the automatic-reply
+// dedupe and append are one f.mu section, so concurrent Ingest, List and
+// Dismiss neither race on f.doc.Entries nor leave a second entry for the
+// question (run with -race).
+func TestAutoAnswerFeedConcurrentIngest(t *testing.T) {
+	f, err := newDecisionFeed(filepath.Join(t.TempDir(), "decisions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		wi    = "wi_feed_race"
+		askAt = "2026-11-23T00:00:00Z"
+	)
+	body, _ := json.Marshal(map[string]any{
+		"step": "build", "spawn_n": 1, "ask_at": askAt, "question_id": askAt, "at": "2026-11-23T00:30:00Z",
+		"by": capsule.AutoAnswerBy, "elapsed": "30m0s", "timeout": "30m0s", "recommendations": []string{"A"},
+	})
+	event := protocol.EventEntry{At: "2026-11-23T00:30:00Z", WI: wi, Kind: driver.EvAutoAnswered, Body: body}
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			f.Ingest("default", event, nil)
+		}()
+		go func() {
+			defer wg.Done()
+			f.List()
+			_, _ = f.Dismiss(nil, true)
+		}()
+	}
+	wg.Wait()
+	var n int
+	for _, e := range f.List().Decisions {
+		if e.Class == "auto_answered" && e.QuestionID == askAt {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("auto_answered entries = %d, want exactly one under concurrent Ingest/Dismiss", n)
 	}
 }

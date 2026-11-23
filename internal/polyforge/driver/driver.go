@@ -149,9 +149,10 @@ type Config struct {
 	// lane it refuses keeps every stop human (polyforge#239). nil = the
 	// lane is trusted (tests and an embedded driver).
 	LaneVerifiable func(lane string) bool
-	// AutoAnswerBeforeCommit, when set, runs after the automatic reply's
-	// first read and before its serialized commit (tests interleave the
-	// owner relay there to prove the order). nil in production.
+	// AutoAnswerBeforeCommit, when set, runs inside the automatic reply's
+	// serialized section, after its re-read and before its append (tests
+	// start the owner relay in a goroutine there to prove it waits). nil
+	// in production.
 	AutoAnswerBeforeCommit func()
 	// AutoAnswerChecked, when set, runs at every automatic-reply check
 	// (tests wait on it to assert that a due check happened and wrote

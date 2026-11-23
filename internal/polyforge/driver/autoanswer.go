@@ -310,11 +310,6 @@ func (d *Driver) autoAnswer(ask *capsule.AskLine) bool {
 		return false
 	}
 	elapsed := now.Sub(t0)
-	if d.cfg.AutoAnswerBeforeCommit != nil {
-		// Test seam: the caller interleaves the owner relay here, after the
-		// first read and before the serialized commit, to prove the order.
-		d.cfg.AutoAnswerBeforeCommit()
-	}
 	// The commit is one serialized read-check-append against the owner's
 	// relay: whoever appends first wins, and the loser writes nothing extra.
 	d.askWriteMu.Lock()
@@ -328,6 +323,13 @@ func (d *Driver) autoAnswer(ask *capsule.AskLine) bool {
 	}
 	if _, ok := capsule.AwaitingSince(lines, ask.Step, ask.Spawn, ask.At, now); !ok {
 		return false
+	}
+	if d.cfg.AutoAnswerBeforeCommit != nil {
+		// Test seam: inside the serialized section, after the re-read and
+		// before the append. A test starts the owner relay in a goroutine:
+		// it must wait for the lock and then record a message, never a
+		// second reply.
+		d.cfg.AutoAnswerBeforeCommit()
 	}
 	reply := capsule.AskLine{
 		At: now.UTC().Format(time.RFC3339Nano), Step: ask.Step, Spawn: ask.Spawn,
