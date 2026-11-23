@@ -15,7 +15,10 @@ package driver
 // decisions.go).
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -204,7 +207,15 @@ func autoAnswerReplyText(recommendations []string, elapsed time.Duration) string
 // a lane this build cannot verify. content is the work item's verbatim
 // content (runtime-state/work-item.json).
 func autoAnswerProtectedStop(lane, stepID, content string) bool {
-	return true
+	switch lane {
+	case "develop", "epic", "integrate", "micro", "release":
+	default:
+		return true // a lane this build cannot verify: the owner keeps every stop
+	}
+	if stepID == "publish" || stepID == "merge" {
+		return true // owner-review and the human landing
+	}
+	return stepID == "build" && autoAnswerConfirmPlan(content)
 }
 
 // autoAnswerConfirmPlan reports whether the ticket carries the
@@ -242,6 +253,25 @@ func (d *Driver) autoAnswerSettings() (enabled bool, timeout time.Duration) {
 // restart's plan pass only reads it (announceParkedAsk), so a wait older
 // than this change has no trustworthy T0 and is never auto-answered.
 func (d *Driver) recordAwaitingStart(stepID string, n int64, ask *capsule.AskLine) {
+	if d.wi.CapsuleDir == "" || ask == nil {
+		return
+	}
+	d.askWriteMu.Lock()
+	defer d.askWriteMu.Unlock()
+	lines, err := capsule.ReadAsks(d.wi.CapsuleDir)
+	if err != nil {
+		return
+	}
+	for _, l := range lines {
+		if l.Kind == capsule.AskKindAwaiting && l.Step == stepID && l.Spawn == n && l.AskAt == ask.At {
+			return // a restart never moves T0
+		}
+	}
+	if err := capsule.AppendAsk(d.wi.CapsuleDir, capsule.AskLine{
+		At: d.stamp(), Step: stepID, Spawn: n, Kind: capsule.AskKindAwaiting, AskAt: ask.At,
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "driver: %s: awaiting line not appended (no automatic reply for ask %s): %v\n", d.wi.ID, ask.At, err)
+	}
 }
 
 // autoAnswer commits the automatic reply for ask when the card is safe, the
@@ -251,5 +281,79 @@ func (d *Driver) recordAwaitingStart(stepID string, n int64, ask *capsule.AskLin
 // writes nothing extra. true = the reply was appended (and the event
 // emitted).
 func (d *Driver) autoAnswer(ask *capsule.AskLine) bool {
-	return false
+	if ask == nil || ask.Kind != capsule.AskKindAsk || d.wi.CapsuleDir == "" {
+		return false
+	}
+	if d.autoAnswerProtected(ask.Step) {
+		return false
+	}
+	enabled, timeout := d.autoAnswerSettings()
+	if !enabled {
+		return false
+	}
+	now := d.now()
+	lines, err := capsule.ReadAsks(d.wi.CapsuleDir)
+	if err != nil {
+		return false
+	}
+	t0, ok := capsule.AwaitingSince(lines, ask.Step, ask.Spawn, ask.At, now)
+	if !ok || now.Before(t0.Add(timeout)) {
+		return false
+	}
+	recommendations, ok := parseAutoAnswerCard(ask.Text)
+	if !ok {
+		return false
+	}
+	elapsed := now.Sub(t0)
+	// The commit is one serialized read-check-append against the owner's
+	// relay: whoever appends first wins, and the loser writes nothing extra.
+	d.askWriteMu.Lock()
+	defer d.askWriteMu.Unlock()
+	lines, err = capsule.ReadAsks(d.wi.CapsuleDir)
+	if err != nil {
+		return false
+	}
+	if open := capsule.OpenAsk(lines, ask.Step, ask.Spawn); open == nil || open.At != ask.At {
+		return false
+	}
+	if _, ok := capsule.AwaitingSince(lines, ask.Step, ask.Spawn, ask.At, now); !ok {
+		return false
+	}
+	reply := capsule.AskLine{
+		At: now.UTC().Format(time.RFC3339Nano), Step: ask.Step, Spawn: ask.Spawn,
+		Kind: capsule.AskKindReply, AskAt: ask.At, Text: autoAnswerReplyText(recommendations, elapsed), By: capsule.AutoAnswerBy,
+	}
+	if err := capsule.AppendAsk(d.wi.CapsuleDir, reply); err != nil {
+		fmt.Fprintf(os.Stderr, "driver: %s: automatic reply not appended (the question keeps waiting): %v\n", d.wi.ID, err)
+		return false
+	}
+	d.emit(EvAutoAnswered, map[string]any{
+		"step": ask.Step, "spawn_n": ask.Spawn, "ask_at": ask.At, "question_id": ask.At, "at": reply.At,
+		"by": capsule.AutoAnswerBy, "elapsed": elapsed.Truncate(time.Second).String(), "timeout": timeout.String(),
+		"recommendations": recommendations,
+	})
+	return true
+}
+
+// autoAnswerProtected answers autoAnswerProtectedStop for the current lane
+// and work item. A work item whose content cannot be read has no
+// trustworthy confirm_plan fact: no automatic reply.
+func (d *Driver) autoAnswerProtected(stepID string) bool {
+	lane := ""
+	if d.workflow != nil {
+		lane = d.workflow.Name
+	}
+	content := ""
+	if d.wi.CapsuleDir != "" {
+		raw, err := os.ReadFile(filepath.Join(d.wi.CapsuleDir, filepath.FromSlash(capsule.WorkItemJSON)))
+		if err != nil {
+			return true
+		}
+		var doc capsule.WorkItemDoc
+		if err := json.Unmarshal(raw, &doc); err != nil || doc.Content == nil {
+			return true
+		}
+		content = *doc.Content
+	}
+	return autoAnswerProtectedStop(lane, stepID, content)
 }
