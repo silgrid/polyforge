@@ -421,6 +421,15 @@ then pass on record, so such a round spends no rewind; what stays red the
 `verification` agent routes as its skill says, and it never passes a red
 it cannot place.
 
+A repository whose `.polyforge/verify-scope.conf` declares parallel
+`group=` lines (polyforge#244) runs its full tier's declared groups side by
+side (polyforge#253): each group in a container of its own, a group's
+commands in plan order, the fast gates before the grouped span and the
+dependency audit after it serially in the repository's container; the
+commands, the checks and the summary stay in plan order, and a repository
+that declares no group — one group, `full_parallel=1` or a host run
+included — keeps the serial bar byte for byte.
+
 A repository whose tree carries `.polyforge/Dockerfile.verify` runs
 that bar in a container of its own; one without it runs on
 the host as above. The container runs on the backend the Host selected —
