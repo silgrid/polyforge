@@ -1,6 +1,6 @@
 import { execFileAsync } from "./exec-file";
 import { parsePfError } from "./polyforge-config-write";
-import { isPolyforgeVersionBelowMinimum } from "./polyforge-detect";
+import { isPolyforgeVersionBelowMinimum } from "./polyforge-version";
 import { MEMORY_BODY_FORWARD_CAP } from "./polyforge-memory";
 import { capUtf8Bytes, memoryUtf8ByteLength } from "./polyforge-memory-pure";
 import { polyforgePfBin } from "./polyforge-pf-bin";

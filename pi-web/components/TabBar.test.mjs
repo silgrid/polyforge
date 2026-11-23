@@ -46,3 +46,14 @@ test("overflowing tabs keep the whole bar: the strip has no scrollbar", () => {
     assert.equal(tab["align-items"], "center");
   }
 });
+
+
+test("polyforge#255 u5: the tab bar carries no agent tab (the right panel's subagent path is deleted)", async () => {
+  const source = await readFileSync(new URL("./TabBar.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /kind === "agent"/, "no agent branch remains");
+  assert.doesNotMatch(source, /subagent\.tabLabel/, "the agent tab label is gone");
+  assert.doesNotMatch(source, /M12 7V4M10 4h4/, "the agent tab's icon is gone");
+  const html = renderTabBar(2);
+  assert.match(html, /role="tab"/, "file tabs still render");
+  assert.doesNotMatch(html, /Sub-agent/, "no subagent tab label renders");
+});

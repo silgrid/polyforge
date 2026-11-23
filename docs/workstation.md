@@ -389,7 +389,10 @@ upgrade paths: the image switch upgrades the base (node, python, git,
 podman, `pf supervise`, the bootstrap pf) and brings a new component
 seed; the in-place upgrade below upgrades the versioned components —
 pf (daemon and local AIHub included), the lanes and skills checkout and
-Pi Web — without rebuilding the container.
+Pi Web — without rebuilding the container. The in-container component
+upgrade's release notes and migration rules are the
+[upgrade notes](upgrade.md) (polyforge#92); this page is the operating
+guide, the upgrade notes are the version history.
 
 For the image switch, point `WORKSTATION_IMAGE` at the new image's tag
 (or rebuild the local one) and re-create the container. On the next
@@ -474,16 +477,22 @@ sh dist/workstation/smoke.sh first-boot         # the empty-volume first boot: i
 sh dist/workstation/smoke.sh first-boot --external  # the external mode: only POST /api/v1/machines/heartbeat
                                                 #   crosses the whole pass; every create route and unknown
                                                 #   request fails, its method and path printed
+sh dist/workstation/smoke.sh onboarding         # the clean-room first open (polyforge#168, AC1): a fresh
+                                                #   volume's /api/onboarding is unfinished, the doctor's
+                                                #   necessary rows pass, the one default Cell serves the
+                                                #   local AIHub, and the host carries no component
 sh dist/workstation/smoke.sh persist            # the persistence acceptance: two down/up cycles and a
-                                                #   NEW TAG of the image keep the six persisted facts by
-                                                #   value, then the exported copy runs (Docker + sh host)
+                                                #   NEW TAG of the image keep the seven persisted facts
+                                                #   (six volume facts + the onboarding completion record)
+                                                #   by value, then the exported copy runs (Docker + sh host)
 sh dist/workstation/smoke.sh env                # Pi Web parameters, PI_TEST_* excluded, /api 401
 sh dist/workstation/smoke.sh podman-verify      # verification via podman end to end
 ```
 
-`boot --with-aihub`, `first-boot` and `env` need the components volume
-to carry the seed's Pi Web (the first boot installs it); `first-boot`
-and `persist` reset volumes first — their own, never an operator's: the
+`boot --with-aihub`, `first-boot`, `onboarding` and `env` need the
+components volume to carry the seed's Pi Web (the first boot installs
+it); `first-boot`, `onboarding` and `persist` reset volumes first —
+their own, never an operator's: the
 smoke derives its compose project and host port per run
 (clock + pid, `WORKSTATION_WEB_PORT` overrides the port), so every reset
 and cleanup only ever touches that run's own `workstation-smoke-*`
@@ -503,6 +512,26 @@ authenticates (`pf recall` inside the container, through the
 with the volumes intact changes nothing — the same key still
 authenticates (no reissue).
 
+`onboarding` is AC1's script half in one pass (polyforge#168): it starts
+the default AIHub boot on a fresh volume, then reads, **inside** the
+container, the image-managed `/api/onboarding` view — all four steps
+unfinished, `nextStep` `aihub`, the first-boot connection local with
+server `http://127.0.0.1:8420` and default Cell `default` — the
+`pf --json doctor` rows the acceptance needs (`config`, the workspace
+mapping and dirs, `server reach`, `daemon socket`, `daemon supervision`,
+`workflow lanes`, `aihub projects`, `auth`; every other row may warn or
+skip and the report's overall `ok` is never the proof), and the
+`pf --json cell list` registry holding exactly one `default` Cell that
+is `serving`, `valid`, on the local AIHub. It also refuses a host that
+carries `pf`, `aihub`, `pi` or `claude` — the clean-room precondition
+(AC1). An HTTP 200 alone is never a pass, and the browser's own first
+open stays the human's. The manual clean-room checklist, the sanitized
+evidence template and the owner-run parts (a sandbox ticket to a merged
+PR, the Apple-silicon Mac's arm64 boot with the in-container Podman
+pass, the team path recorded NOT RUN) live in the release reference's
+[clean-room acceptance](reference/release.md#clean-room-acceptance-workstation)
+section.
+
 The first-boot pass also asserts AC2's layout half inside the container:
 the step agent dir is `/root/.pi/agent` (pf-home), the pi packages entry
 points at `/components/current`, and the record carries no credential
@@ -512,12 +541,14 @@ skill `/root/.claude/skills/polyforge` is a symlink to
 `/components/current/skills/polyforge`; the user's own other skills
 are untouched.
 
-`persist` (polyforge#177) is the persistence acceptance: after a first
-boot it records the six persisted facts BY VALUE — the harness login
-marker, a cli.toml sentinel line, a workspace file, the AIHub database's
-user row, a pulled Podman image and the components volume's `current`
-link plus its manifest digest (the record and every check run inside
-the container, so the host needs only Docker and the system sh) — then
+`persist` (polyforge#177, polyforge#168) is the persistence acceptance:
+after a first boot it records the seven persisted facts BY VALUE — the
+harness login marker, a cli.toml sentinel line, a workspace file, the
+AIHub database's user row, a pulled Podman image, the components
+volume's `current` link plus its manifest digest, and the onboarding
+wizard's completion record (completed through Pi Web's own API; the
+record and every check run inside the container, so the host needs only
+Docker and the system sh) — then
 proves them unchanged through two `compose down && up` cycles and a
 NEW TAG of the image (`docker tag`, the second tag ups in
 `WORKSTATION_IMAGE`'s place). The image is the given
