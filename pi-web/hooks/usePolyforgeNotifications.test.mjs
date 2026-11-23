@@ -26,7 +26,12 @@ class FakeNotification {
   static requested = 0;
   static permission = "granted";
   static next = "granted";
-  static requestPermission() { FakeNotification.requested += 1; return Promise.resolve(FakeNotification.next); }
+  static requestPermission() {
+    FakeNotification.requested += 1;
+    // A real browser records the answer as the new permission.
+    FakeNotification.permission = FakeNotification.next;
+    return Promise.resolve(FakeNotification.next);
+  }
   constructor(title, options) {
     this.title = title;
     this.options = options;
@@ -196,7 +201,7 @@ test("without permission it never asks by itself and explains once", async () =>
     assert.equal(hook.result.hint, true, "a later entry does not repeat the explanation");
 
     hook.result.dismissHint();
-    await settle();
+    await settle(); hook.flush();
     assert.equal(hook.result.hint, false, "the explanation can be dismissed");
     feed(hook, [decision({ id: 42 }), decision({ id: 43 })]);
     await settle();
@@ -211,7 +216,7 @@ test("without permission it never asks by itself and explains once", async () =>
 
     FakeNotification.next = "granted";
     await reload.hook.result.requestPermission();
-    await settle();
+    await settle(); reload.hook.flush();
     assert.equal(FakeNotification.requested, 1, "the explicit gesture asks exactly once");
     assert.equal(reload.hook.result.permission, "granted");
     feed(reload.hook, [decision({ id: 44 }), decision({ id: 45 })]);
