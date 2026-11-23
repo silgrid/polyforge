@@ -39,6 +39,14 @@ export interface PiSubagentEntry {
 
 export type PiSubagentPanelPhase = "loading" | "ready" | "missing" | "error";
 
+/** One cross-pane request to open a pi subagent panel in a named chat. */
+export interface PiSubagentPanelRequest {
+  /** The chat that owns the overlay: the pane that was active when the entry was clicked. */
+  paneSessionId: string;
+  childSessionId: string;
+  requestId: number;
+}
+
 const STATUSES: ReadonlySet<string> = new Set(["starting", "queued", "running", "completed", "failed", "aborted", "interrupted"]);
 const ACTIVE: ReadonlySet<string> = new Set(["starting", "queued", "running"]);
 

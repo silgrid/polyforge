@@ -146,7 +146,7 @@ export class PiSubagentPanelController {
     this.apply({
       run,
       phase: "ready",
-      error: transcript.error,
+      error: transcript.ok ? null : transcript.error,
       ...(transcript.ok ? {
         entries: mergePiSubagentEntries(this.state.entries, transcript.value.entries, mode),
         hasEarlier: transcript.value.hasEarlier,
