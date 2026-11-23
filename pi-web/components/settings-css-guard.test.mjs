@@ -59,12 +59,80 @@ const UTILITY = {
 };
 
 /**
- * A composition whose whole class name is dynamic (`className={`${value}`}`):
- * `file:expression` → the finite classes its source produces. No settings
- * component does this today — every composition keeps a static family — so the
- * table is empty and a new bare composition fails loudly.
+ * Every dynamic className composition in the settings closure and the finite
+ * values its source produces: `file:expression` (whitespace collapsed) → those
+ * values and where they come from. The guard composes each class name from
+ * them and matches it against the stylesheets exactly — a composition without
+ * an entry is reported by file and line, never skipped.
  */
-const DYNAMIC_BASES = {};
+const DYNAMIC_VALUES = {
+  "McpAddServer.tsx:mcpImportNoteSeverity(note)": {
+    values: ["error", "warning"],
+    source: "lib/mcp-import-core.ts MCP_IMPORT_NOTE_SEVERITY（每个提示码映射 error / warning）与它的 warning 兜底",
+  },
+  "McpConfig.tsx:mcpCodemodeTone(state)": {
+    values: ["error", "off", "on"],
+    source: "components/mcp-config-helpers.ts mcpCodemodeTone 返回 McpStateTone",
+  },
+  "McpConfig.tsx:tone": {
+    values: ["on", "off", "warning", "error"],
+    source: "components/mcp-config-helpers.ts McpStateTone 联合类型",
+  },
+  "McpConfig.tsx:view.tone": {
+    values: ["on", "off", "warning", "error"],
+    source: "components/mcp-config-helpers.ts McpStateTone 联合类型",
+  },
+  "McpConfig.tsx:mcpRowStateTone(state)": {
+    values: ["on", "off", "warning", "error"],
+    source: "components/mcp-config-helpers.ts mcpRowStateTone 的四个分支",
+  },
+  "McpSignIn.tsx:lineClass": {
+    values: ["mcp-config-line is-error", "mcp-config-line is-warning", "mcp-config-line"],
+    source: "McpSignIn.tsx McpSignInOutcome 的三个 tone 分支（mcpSignInOutcomeTone 的 error / warning / 其余）",
+  },
+  "PolyforgeConfig.tsx:CELL_STATE_TONE[state]": {
+    values: ["on", "warning", "error", "off"],
+    source: "PolyforgeConfig.tsx CELL_STATE_TONE 的 Cell 状态取值",
+  },
+  "PolyforgeConfig.tsx:hostTone": {
+    values: ["on", "off", "warning", "error"],
+    source: "PolyforgeConfig.tsx EntryTone 联合类型（Host 行的徽标）",
+  },
+  "PolyforgeConfig.tsx:tone": {
+    values: ["on", "off", "warning", "error"],
+    source: "PolyforgeConfig.tsx EntryTone 联合类型（Cell 行的徽标）",
+  },
+  "PolyforgeInstallCard.tsx:shownState": {
+    values: ["running", "succeeded", "failed", "refused", "lost"],
+    source: "lib/polyforge-install-pure.ts PolyforgeInstallState（running / succeeded / failed / refused）加页面自己的 lost",
+  },
+  "SettingsUi.tsx:tone": {
+    values: ["muted", "dim", "error"],
+    source: "SettingsUi.tsx ConfigDetailGridRow 的 tone 联合类型，plain 不拼类",
+  },
+  "SettingsUi.tsx:variant": {
+    values: ["primary", "secondary", "danger", "ghost"],
+    source: "SettingsUi.tsx ConfigButtonVariant 联合类型",
+  },
+  "SettingsUi.tsx:size": {
+    values: ["small", "default"],
+    source: "SettingsUi.tsx ConfigButtonSize 联合类型",
+  },
+  "SkillsConfig.tsx:harness": {
+    values: ["pi", "claude"],
+    source: "lib/skills 的 harness 联合类型（pi / claude）",
+  },
+};
+
+/**
+ * An expression that renders nothing of its own: the forwarded `className` prop
+ * (the caller's own class, checked at its call sites) and the literals that
+ * stand for no class.
+ */
+const NO_CLASS = new Set(["className", "undefined", "null", "false", "true"]);
+
+/** The expression's text with its whitespace collapsed — the registry's key. */
+const normalizeExpr = (expression) => expression.replace(/\s+/g, " ").trim();
 
 /** Every `.file` in the local-import closure of SettingsPanel.tsx, resolved under components/. */
 function componentClosure() {
@@ -230,8 +298,14 @@ function composeTemplate(template) {
         else if (inner === "}") depth -= 1;
       }
       const composed = composeValue(template.slice(start, end - 1));
-      if (composed.text.trim().length > 0) text += composed.text;
-      else { text += PLACEHOLDER; dynamics.push(...composed.dynamics.length > 0 ? composed.dynamics : [template.slice(start, end - 1)]); }
+      if (composed.dynamics.length === 0 && composed.text.trim().length > 0) {
+        // a composition of literals (a conditional's branches): its own classes
+        text += composed.text;
+      } else {
+        // an unreadable value: one placeholder, with the expression behind it
+        text += PLACEHOLDER;
+        dynamics.push(...(composed.dynamics.length > 0 ? composed.dynamics : [template.slice(start, end - 1)]));
+      }
       cursor = end;
       continue;
     }
@@ -272,7 +346,10 @@ function composeValue(expression) {
       return { text: `${total.text} ${value.text}`, dynamics: [...total.dynamics, ...value.dynamics] };
     }, { text: "", dynamics: [] });
   }
-  return { text: "", dynamics: [] };
+  // A bare expression — an identifier, a member, a call: its class is not
+  // readable here, so it becomes a placeholder the registry must answer for.
+  if (NO_CLASS.has(trimmed)) return { text: "", dynamics: [] };
+  return { text: PLACEHOLDER, dynamics: [trimmed] };
 }
 
 /** Every className in a source file: its line, its static tokens and its composed (dynamic) tokens. */
@@ -301,9 +378,9 @@ function classNameTokens(source) {
     for (const token of composed.text.split(/\s+/).filter((entry) => entry.length > 0)) {
       const count = [...token].filter((entry) => entry === PLACEHOLDER).length;
       if (count === 0) { staticTokens.push({ line, token }); continue; }
-      const exprs = composed.dynamics.slice(placeholder, placeholder + count);
+      const exprs = composed.dynamics.slice(placeholder, placeholder + count).map(normalizeExpr);
       placeholder += count;
-      dynamicTokens.push({ line, token, expr: exprs.join(", ") });
+      dynamicTokens.push({ line, token, exprs });
     }
   }
   return { staticTokens, dynamicTokens };
@@ -325,25 +402,34 @@ test("every className a settings component renders resolves to a CSS rule (AC1)"
   assert.deepEqual(missing, [], `settings class tokens with no CSS rule: ${missing.join(", ")}`);
 });
 
-test("a composed className names a class family the stylesheet declares (AC1)", () => {
+/** Every class name a composed token can render, from the values its placeholders take. */
+function composedNames(token, valueLists) {
+  const segments = token.split(PLACEHOLDER);
+  let names = [segments[0]];
+  for (let index = 0; index < valueLists.length; index += 1) {
+    names = names.flatMap((prefix) => valueLists[index].map((value) => `${prefix}${value}${segments[index + 1] ?? ""}`));
+  }
+  return names.flatMap((name) => name.split(/\s+/).filter(Boolean));
+}
+
+test("every composed className is composed from the values its source enumerates, and each resolves (AC1)", () => {
   const problems = [];
   for (const file of owned) {
     const name = relative(componentDir, file);
     for (const entry of classNameTokens(readFileSync(file, "utf8")).dynamicTokens) {
-      const first = entry.token.indexOf(PLACEHOLDER);
-      const last = entry.token.lastIndexOf(PLACEHOLDER);
-      const stem = entry.token.slice(0, first);
-      const tail = entry.token.slice(last + 1);
-      if (stem.length > 0 && !familyExists(stem, classes)) {
-        problems.push(`${name}:${entry.line} ${shown(entry.token)} composes no declared class family (static part ${JSON.stringify(stem)}; ${entry.expr})`);
-      } else if (stem.length === 0 && tail.length === 0 && !Object.hasOwn(DYNAMIC_BASES, `${name}:${entry.expr}`)) {
-        problems.push(`${name}:${entry.line} ${entry.expr} is a whole dynamic class name — name its finite values in DYNAMIC_BASES`);
-      }
-      if (tail.length > 0 && !familyExists(tail, classes)) {
-        problems.push(`${name}:${entry.line} ${shown(entry.token)} ends in a family no rule declares (${JSON.stringify(tail)})`);
-      }
-      for (const composed of DYNAMIC_BASES[`${name}:${entry.expr}`] ?? []) {
-        if (!resolves(composed, classes)) problems.push(`${name}:${entry.line} ${entry.expr} composes ${composed}, which no rule declares`);
+      const valueLists = entry.exprs.map((expression) => {
+        const registered = DYNAMIC_VALUES[`${name}:${expression}`];
+        if (!registered) {
+          problems.push(`${name}:${entry.line} ${expression} is a dynamic className the registry does not know — name its finite values and their source in DYNAMIC_VALUES`);
+          return null;
+        }
+        return registered.values;
+      });
+      if (valueLists.some((values) => values === null)) continue;
+      for (const composed of composedNames(entry.token, valueLists)) {
+        if (!resolves(composed, classes)) {
+          problems.push(`${name}:${entry.line} ${entry.exprs.join(", ")} composes ${composed}, which no rule declares`);
+        }
       }
     }
   }
@@ -361,7 +447,7 @@ test("the settings scan covers the whole closure and no exclusion is stale (AC1)
 
 // The checker's own rules: the reds it must be able to report, so a green
 // guard is not a guard that passes whatever it reads.
-test("the CSS coverage guard rejects comment-only, partial and undeclared definitions (AC1)", () => {
+test("the CSS coverage guard rejects comment-only, partial and unregistered definitions (AC1)", () => {
   const commentOnly = definedClasses("/* .missing-class { color: red } */");
   assert.equal(resolves("missing-class", commentOnly), false, "a class named only in a comment is not defined");
 
@@ -371,12 +457,23 @@ test("the CSS coverage guard rejects comment-only, partial and undeclared defini
 
   const family = definedClasses(".x:hover { color: var(--text) }");
   assert.equal(resolves("x", family), true, "a class with only a state rule is defined");
-  assert.equal(familyExists("settings-missing-", family), false, "a dynamic family with no declared class is reported");
-  assert.equal(familyExists("is-", definedClasses(".is-muted { color: red }")), true, "a modifier family is declared");
 
   const composed = classNameTokens('const a = <b className={`missing-family-${tone} is-grow`} />;');
   assert.deepEqual(composed.staticTokens, [{ line: 1, token: "is-grow" }], "a template's bare class is a static token");
-  assert.deepEqual(composed.dynamicTokens.map((entry) => entry.token), [`missing-family-${PLACEHOLDER}`], "the composed token keeps its static part");
+  assert.deepEqual(composed.dynamicTokens.map((entry) => [entry.token, entry.exprs]), [[`missing-family-${PLACEHOLDER}`, ["tone"]]], "the composed token keeps its static part and the expression behind it");
+
+  // Only a same-prefix neighbour exists: the composed class itself is missing.
+  const prefixOnly = definedClasses(".is-warning-extra { color: red }");
+  const tokens = classNameTokens('const a = <b className={`is-${severity}`} />;').dynamicTokens;
+  const names = composedNames(tokens[0].token, [["warning"]]);
+  assert.deepEqual(names, ["is-warning"], "the composed name is the whole class, not the family");
+  assert.equal(names.some((entry) => resolves(entry, prefixOnly)), false, "a same-prefix class never answers for the composed one");
+
+  // An identifier the registry does not know is reported, never skipped.
+  const bare = classNameTokens('const a = <b className={lineClass} />;').dynamicTokens;
+  assert.deepEqual(bare.map((entry) => entry.exprs), [["lineClass"]], "a bare identifier is a composition the registry must answer for");
+  assert.equal(Object.hasOwn(DYNAMIC_VALUES, `Nope.tsx:lineClass`), false, "an unregistered bare expression has no values");
+  assert.deepEqual(classNameTokens('const a = <b className={className} />;').dynamicTokens, [], "the forwarded className prop renders nothing of its own");
 
   const conditional = classNameTokens('const a = <b className={phase === "success" ? "is-success" : undefined} />;');
   assert.deepEqual(conditional.staticTokens, [{ line: 1, token: "is-success" }], "a conditional's branch is a class; its comparison operand is not");
