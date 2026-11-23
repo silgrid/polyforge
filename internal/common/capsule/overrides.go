@@ -57,6 +57,13 @@ type StepOverride struct {
 	// capsule's models aspect is newer (ModelsAt carries the clear's
 	// time).
 	ModelsCleared bool `json:"models_cleared,omitempty"`
+	// Tier is the step's overlay capability-tier name (polyforge#81; ""
+	// = none set), expanded through the Host [step_tiers] catalog at
+	// dispatch time; an explicit Models chain outranks it.
+	Tier        string `json:"tier,omitempty"`
+	TierBy      string `json:"tier_by,omitempty"`
+	TierAt      string `json:"tier_at,omitempty"`
+	TierCleared bool   `json:"tier_cleared,omitempty"`
 	// Skip is tri-state: nil = no skip aspect set (a pointer so absent and
 	// false stay distinct on the wire).
 	Skip   *bool  `json:"skip,omitempty"`
@@ -116,7 +123,7 @@ func WriteStepOverrides(capsuleDir string, ov StepOverrides) error {
 		ov.Steps = map[string]*StepOverride{}
 	}
 	for id, e := range ov.Steps {
-		if e == nil || (len(e.Models) == 0 && e.ModelsBy == "" && e.ModelsAt == "" && e.Skip == nil && e.SkipBy == "" && e.SkipAt == "" && len(e.Params) == 0) {
+		if e == nil || (len(e.Models) == 0 && e.ModelsBy == "" && e.ModelsAt == "" && e.Tier == "" && e.TierBy == "" && e.TierAt == "" && e.Skip == nil && e.SkipBy == "" && e.SkipAt == "" && len(e.Params) == 0) {
 			delete(ov.Steps, id)
 		}
 	}

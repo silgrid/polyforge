@@ -3,14 +3,18 @@
 Execution-plane verb: routed to the local daemon (the override routes). A
 work item's **step overlay** is a capsule-scoped record (`runtime-state/
 step-overrides.json`, polyforge#25): per step of this one ticket, a model
-chain and a skip switch that outrank every other candidate source at
-dispatch time, and param values that outrank the project's and the
-lane's (polyforge#78). It changes no lane snapshot, travels with the capsule
+chain, a capability-tier name and a skip switch that outrank every other
+candidate source at dispatch time, and param values that outrank the
+project's and the lane's (polyforge#78). It changes no lane snapshot, travels with the capsule
 chain, and is written only through the daemon (a step agent's process
 tree is refused `DAEMON-403`). A **queued** work item takes its param
 changes the same way (polyforge#79): they ride the reserved `step_params`
 attrs key until its claim, so the owner can configure a ticket's params
-before it is submitted or claimed — the composed final values and sources
+before it is submitted or claimed. Its capability tier (polyforge#81)
+also can be set while queued: it rides this daemon's local pending
+override record (the same record a parked ticket's change uses), so the
+next claim of the ticket ON THIS MACHINE inherits it — a claim elsewhere
+does not, and the answer says so. The composed final values and sources
 read back with `pf params <id>`.
 
 ## Triggers
@@ -24,6 +28,8 @@ read back with `pf params <id>`.
 pf override <id>                                        # the view: every step, its overlay, the effective chain and its source
 pf override <id> --step <step-id> --models <h:m[:e],...>   # set the step's overlay chain (comma-separated, in order)
 pf override <id> --step <step-id> --clear-models         # clear it (the step composes from its usual sources again)
+pf override <id> --step <step-id> --tier <name>          # set a capability tier from the Host [step_tiers] catalog (expanded at dispatch)
+pf override <id> --step <step-id> --clear-tier           # clear it (the lower layers govern again)
 pf override <id> --step <step-id> --skip                 # switch a lane-declared skippable step off (never dispatched, records skipped)
 pf override <id> --step <step-id> --unskip               # clear the overlay's own skip switch (a project-level skip is refused — see Skip rules)
 pf override <id> --step <step-id> --param <name>=<value>  # set this ticket's value of a param the lane declares on the step (see Params)
@@ -36,7 +42,7 @@ anything is sent.
 `--by <user>` records the operator (default: config `user_id` /
 `PF_USER_ID`); `--json` prints the daemon's raw answer. Candidates are
 `<harness>:<model>[:<effort>]` with harness `pi` or `claude` — the same
-shape as `pf submit --models`. Precedence: **the overlay > `pf submit --models` > workspace yaml step/tier > bundle > yaml default > bundle defaults**; the overlay is read at every dispatch, so the next dispatch of
+shape as `pf submit --models`. Precedence: **the overlay > `pf submit --models` > workspace yaml step/tier > bundle > yaml default > bundle defaults**; inside the overlay an explicit `--models` chain outranks `--tier`. The overlay is read at every dispatch, so the next dispatch of
 that step takes its first candidate and a model-class failure rotates
 along it. The overlay holds for the whole ticket (a rewind's re-dispatch
 included) until cleared.
@@ -95,6 +101,41 @@ skip hands the new last step (the moved wrap attrs, the
 published-record registration) were settled at that dispatch. Skip
 the tail before that step starts, or let it run.
 
+## Capability tier
+
+`--tier <name>` sets the overlay's second model aspect (polyforge#81):
+the **name**, never the expanded chain, is stored, and the step's next
+dispatch expands it through the Host `[step_tiers]` catalog
+(`docs/reference/config.md`) to that tier's whole ordered candidate
+list — above `pf submit --models` and every yaml/bundle level, below an
+explicit `--models` chain on the same step. A Host reload takes effect at
+the next dispatch with no restart.
+
+- The name must be in **this** Host's catalog (`DAEMON-400` naming the
+  catalog's tiers when it is not; an empty catalog says so) and follow the
+  lane tier grammar; `--tier default` is no exemption — it must be in the
+  catalog, and it means **unset** (the yaml and lane layers govern; the
+  catalog's `default` candidates are never expanded). A clear needs no
+  catalog row.
+- An explicit `--models` chain on the same step masks the tier; the view
+  shows the tier as set and the chain as the effective source.
+  `--clear-models` lets the tier govern; `--clear-tier` clears only the
+  tier.
+- A tier the catalog does not declare (or declares empty) does not block
+  the ticket: the dispatch falls to the next layer and records one
+  composition-scoped `step_tier_fallback` event (the affected steps, the
+  tier, `missing`/`empty`, the layer that now governs). The view's source
+  label names it too.
+- Queued: the tier rides this daemon's local pending record (see above);
+  a repeated set is the unchanged success. The claim re-judges it against
+  the fresh capsule's lane snapshot (Q14 A): a tier whose step the lane no
+  longer declares never enters the overlay — one visible
+  `step_tier_dropped` event names the work item, the lane, the step and
+  the tier, and the claim goes on — so set it again on a step of the lane
+  the ticket now runs.
+- Pi Web shows the daemon's source string; it has no tier editor yet
+  (a follow-up ticket).
+
 ## Params
 
 A lane step may declare `params` (a name to its lane default, the
@@ -125,7 +166,8 @@ which values changed.
 
 ## Success
 
-`step <id>: overlay models=… (posture running, by <user>)` (a param:
+`step <id>: overlay models=… (posture running, by <user>)` (a tier:
+`overlay tier=<name> (by <user>)`; a param:
 `overlay param <name>="<value>" …`, every param override of the step;
 a clear: `overlay param <name> cleared`) plus
 `published: the capsule chain carries it` (or the posture's note for a
@@ -138,16 +180,18 @@ for a param —, the new value, the operator).
 | Code | When | What to tell the user |
 |---|---|---|
 | `DAEMON-400` | a candidate without a harness prefix, an unknown harness, an effort its harness refuses | Quote the daemon's text; the shape is `<pi\|claude>:<model>[:<effort>]`. |
+| `DAEMON-400` | a `--tier` name outside the lane tier grammar, or a name the Host `[step_tiers]` catalog does not declare (or the catalog is empty) | Clear the tier (`--clear-tier`) or set one the catalog names (`pf config list --host` shows its tiers); `default` is validated too. |
 | `DAEMON-400` | a param the lane snapshot does not declare on the step, or a value that is not one line of at most 256 bytes | Name the params the step declares (`pf workflows --cwd <dir>`); a value goes on one line. |
-| `DAEMON-400` | a pi model the Cell's step-agent `models.json` does not declare | Add the model there first (the operator agent dir's `models.json`), then retry; claude candidates are not file-checked. The `[step_tiers]` catalog (cli.toml's step tier list) is a recommendation only — `pf override` never reads it, and a catalog entry never admits a pi model the Cell's `models.json` lacks (doctor's `step tiers catalog` row warns when a user-written candidate sits outside the catalog; the admission stays this file's hard check). |
+| `DAEMON-400` | a pi model the Cell's step-agent `models.json` does not declare | Add the model there first (the operator agent dir's `models.json`), then retry; claude candidates are not file-checked. The `[step_tiers]` catalog (cli.toml's step tier list) validates a `--tier` NAME only — a catalog entry never admits a pi model the Cell's `models.json` lacks (doctor's `step tiers catalog` row warns when a user-written candidate sits outside the catalog; the admission stays this file's hard check). |
 | `DAEMON-409` | the step holds a live dispatch, already ran, is not declared skippable, or is skipped at the project level (`--unskip` refused naming it) | Set it on a step that has not started, or while the ticket is parked; for a gate that must pass, use the waive; a project-level skip is the project's switch, not this ticket's. |
 | `DAEMON-403` | a step or task agent's process tree called | The overlay is the owner's move; call it from a human session. |
 | `DAEMON-404` | this daemon holds neither a job nor a capsule of the ticket, and the ticket is not queued (an id aihub does not know, one running on another machine, a terminal one with no scene here) | Set the overlay on the machine that runs (or last ran) the ticket; a queued work item answers here — its params ride the `step_params` attrs key. |
-| `DAEMON-409` | a queued work item's lane does not load on this daemon (its params are written against its lane), or its chain/skip write reached the queued posture | Write the params on a machine whose lane set has the bundle; the chain and the skip switch wait until the ticket runs. |
+| `DAEMON-409` | a queued work item's lane does not load on this daemon (its params/tier are written against its lane), or its chain/skip write reached the queued posture | Write the params/tier on a machine whose lane set has the bundle; the chain and the skip switch wait until the ticket runs. |
 
 Pi Web's job detail reaches the same face through this verb's routes; the
 panel offers the single-candidate form (harness + model), the skip
 toggle of a skippable step and — per declared param — a set/clear row
+(a tier shows its source string and has no editor yet; polyforge#81)
 (queued work items get theirs in the 工单详情; a step that already ran
 shows its params read-only). `pf params <id>` is the composed read both
 surfaces display.

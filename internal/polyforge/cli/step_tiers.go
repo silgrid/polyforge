@@ -84,6 +84,16 @@ func parseStepTiersTable(file string, t *tableBlock) (map[string][]string, error
 	return out, nil
 }
 
+// StepTierNameProblem answers why name is not a legal catalog tier name
+// ("" = legal): the grammar the [step_tiers] keys follow, so a written
+// `pf override --tier` name is the same kind of name a catalog row takes.
+func StepTierNameProblem(name string) string {
+	if !stepTierName.MatchString(name) {
+		return fmt.Sprintf("%q is not a tier name (^[a-z][a-z0-9-]{0,39}$, the lane tier grammar)", name)
+	}
+	return ""
+}
+
 // stepTierCatalogCovers reports whether candidate is in the catalog,
 // by Q3's strength rule: a catalog entry without an effort covers the
 // candidate's model at any effort; an entry with an effort requires the
