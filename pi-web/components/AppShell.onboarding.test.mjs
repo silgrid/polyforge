@@ -1,12 +1,12 @@
-// carries: components/AppShell.tsx, components/SettingsPanel.tsx, components/HarnessGeneralSettings.tsx, components/GeneralSettings.tsx
+// carries: components/AppShell.tsx, components/SettingsPanel.tsx, components/HarnessGeneralSettings.tsx, components/GeneralSettings.tsx, lib/onboarding-flow.ts
 // polyforge#167 (91-onboarding) AC1: the wizard's first-open entry lives on
-// the null-session (welcome) branch and the reopen entry in Settings › 常规.
-// AppShell is a 4,000-line client shell the suite observes through its
-// rendered settings entry plus the wiring that only a browser can run (the
-// e2e drives the flow itself); expected labels come from the English table.
+// AppShell's null-session branch (no selected session, a draft tab included)
+// and Settings › 常规's reopen entry opens it over a session. The popup
+// decision is a pure function with a truth table taken from the ticket; the
+// shell's fetch/POST wiring is the e2e's to observe (e2e/onboarding-91.mjs
+// OB1–OB8), never a source scan. Expected labels come from the English table.
 import "#test-env";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { createJiti } from "jiti";
 
@@ -15,37 +15,39 @@ const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
 const { GeneralSettings } = await jiti.import("./GeneralSettings.tsx");
 const { HarnessGeneralSettings } = await jiti.import("./HarnessGeneralSettings.tsx");
+const { onboardingPopupOpen } = await jiti.import("@/lib/onboarding-flow");
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
-const source = await readFile(new URL("./AppShell.tsx", import.meta.url), "utf8");
-const settingsPanel = await readFile(new URL("./SettingsPanel.tsx", import.meta.url), "utf8");
 
 const h = React.createElement;
 const noop = () => {};
-
-test("AppShell reads the onboarding state once and writes each wizard action", () => {
-  assert.match(source, /import \{ OnboardingWizard \} from "\.\/OnboardingWizard";/);
-  assert.match(source, /fetch\("\/api\/onboarding"\)/, "the shell never reads the onboarding state");
-  assert.match(source, /method: "POST"/);
-  assert.match(source, /void writeOnboarding\(\{ action: "complete", step \}\);/, "a completed step writes no completion");
-  assert.match(source, /void writeOnboarding\(\{ action: "skip", step \}\);/, "a skip writes no skip record");
-  assert.match(source, /void writeOnboarding\(\{ action: "dismiss" \}\);/, "closing the wizard writes no dismissal");
-  assert.match(source, /void writeOnboarding\(\{ action: "reopen" \}\);/, "the settings entry writes no reopen");
+const facts = (overrides = {}) => ({
+  imageManaged: true,
+  dismissed: false,
+  hasSelectedSession: false,
+  reopened: false,
+  ...overrides,
 });
 
-test("the popup rests on the dismissed fact alone; a reopen clears it", () => {
-  assert.match(source, /const showPlaceholder = initialSessionRestored && !showChat;/);
-  assert.match(source, /const onboardingOpen = onboarding\?\.imageManaged === true && !onboarding\.dismissed;/,
-    "the wizard's open condition does not rest on the dismissed fact alone");
-  assert.match(source, /onClose=\{handleOnboardingDismiss\}/);
-  assert.match(source, /onOpenAccount=\{\(\) => openSettingsSection\("account"\)\}/, "the account step does not deep-link to Settings › 账号");
-  assert.match(source, /onWorkspaceChange=\{handleCwdChange\}/, "the workspace step does not go through the existing selection");
+test("the popup opens on the null-session branch only: host mode, a dismissal and an open session each keep it closed", () => {
+  // AC1: 第一次打开时出现引导；完成或跳过以后不再弹出；非镜像模式的 Pi Web 上不出现；
+  // 工单: 无会话时的入口挂在 AppShell 的 null-session 分支。
+  assert.equal(onboardingPopupOpen(facts()), true, "the first open with no session does not show the wizard");
+  assert.equal(onboardingPopupOpen(facts({ hasSelectedSession: true })), false, "an open session auto-opens the wizard off the null-session branch");
+  assert.equal(onboardingPopupOpen(facts({ dismissed: true })), false, "a dismissed wizard opens again without a reopen");
+  assert.equal(onboardingPopupOpen(facts({ imageManaged: false })), false, "a host-mode Pi Web shows the wizard");
+  assert.equal(onboardingPopupOpen(facts({ imageManaged: false, reopened: true })), false, "a host-mode reopen shows the wizard");
+  // A draft tab (the entry fallback's new session) has no selected session, so
+  // the null-session branch keeps the popup — the transient welcome mount must
+  // not be what decides it.
+  assert.equal(onboardingPopupOpen(facts({ hasSelectedSession: false })), true, "a draft tab suppresses the first-open popup");
 });
 
-test("Settings › 常规 gets the reopen entry only in the image mode", () => {
-  assert.match(source, /onReopenOnboarding=\{onboarding\?\.imageManaged === true \? handleOnboardingReopen : undefined\}/,
-    "the settings panel does not receive the reopen entry behind the image gate");
-  assert.match(settingsPanel, /onReopenOnboarding\?: \(\) => void;/, "the panel's prop is not optional");
-  assert.match(settingsPanel, /onReopenOnboarding=\{onReopenOnboarding\}/, "the panel does not forward the entry to General");
+test("Settings › 常规's reopen opens the wizard over a session, and only after the reopen write lands", () => {
+  // AC1: 可以从设置 › 常规重新打开. The reopen POST clears `dismissed`; until
+  // that answer lands the dismissal still wins, so the popup never flashes open
+  // ahead of the state it is showing.
+  assert.equal(onboardingPopupOpen(facts({ hasSelectedSession: true, reopened: true })), true, "the reopen does not open over a session");
+  assert.equal(onboardingPopupOpen(facts({ reopened: true, dismissed: true })), false, "the reopened popup ignores the not-yet-cleared dismissal");
 });
 
 function renderGeneral(onReopenOnboarding) {
