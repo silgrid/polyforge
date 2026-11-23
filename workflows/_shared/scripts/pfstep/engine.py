@@ -152,6 +152,7 @@ def decode_report(raw: bytes) -> EngineReport:
             report=None if rep is None else ReportDecl(_str(rep, "format", "report.format"), _str(rep, "path", "report.path")),
             rerun=_str(c, "rerun", "report.commands.rerun"),
             source=_str(c, "source", "report.commands.source"),
+            group=_str(c, "group", "report.commands.group"),
         )
         if gostr.trim_space(ec.name) == "" or gostr.trim_space(ec.cmd) == "":
             raise ReportError("commands[%d] lacks a name or a cmd" % i)
@@ -171,6 +172,10 @@ def decode_report(raw: bytes) -> EngineReport:
         base_setup=_strings(doc, "base_setup", "report.base_setup") or [],
         diagnostics=_strings(doc, "diagnostics", "report.diagnostics"),
         e2e_selection=sel,
+        # polyforge#244: the report's full_parallel is the declared
+        # parallelism; a report that names none (or a value that is no
+        # positive integer) runs serially.
+        parallel=max(_typed(doc, "full_parallel", int, "report.full_parallel") or 0, 1),
     )
 
 
