@@ -36,6 +36,10 @@ type Server struct {
 	Git      *git.Manager
 	DataDir  string
 
+	// Leases is the generic server-side lease base (polyforge#245): the
+	// signed lease routes are its only network face.
+	Leases *core.LeaseManager
+
 	// StaleAfter is the machines liveness threshold used by the machines
 	// read face: a machine whose last_heartbeat_at is older than this is
 	// reported stale. Zero keeps the default (5× the 60s heartbeat
@@ -71,6 +75,7 @@ func New(db *core.DB, dataDir string, gitMgr *git.Manager) *Server {
 		Mems:     memory.NewStore(db, dataDir),
 		Git:      gitMgr,
 		DataDir:  dataDir,
+		Leases:   core.NewLeaseManager(db),
 		pending:  newQueryRegistry(),
 		relay:    newRelayBudget(relayHolderQuota, relayMemberQuota, relayWindow),
 		replay:   machinesign.NewReplayCache(),
@@ -137,6 +142,13 @@ func (s *Server) routes() {
 	// daemon proxy, as a pending `pf step hub attrs` write the daemon makes
 	// when the step round hands off done.
 	m.HandleFunc("PATCH /api/v1/work-items/{id}/attrs", s.signedMachine(laneAttrs, s.hWriteAttrs))
+	// The generic lease base (polyforge#245). Signed machine routes only:
+	// the machine's operator must write the ticket's project and the
+	// machine must hold the ticket's current session (server/landinglock.go).
+	m.HandleFunc("POST /api/v1/leases/{kind}/acquire", s.signedMachineScoped(laneLeasePoll, leaseBodyScope, s.hLeaseAcquire))
+	m.HandleFunc("POST /api/v1/leases/{kind}/renew", s.signedMachineScoped(laneLeaseManage, leaseBodyScope, s.hLeaseRenew))
+	m.HandleFunc("POST /api/v1/leases/{kind}/release", s.signedMachineScoped(laneLeaseManage, leaseBodyScope, s.hLeaseRelease))
+	m.HandleFunc("GET /api/v1/leases/requests/{rid}", s.signedMachineScoped(laneLeaseManage, leaseQueryScope, s.hLeaseLookup))
 	// messaging: Bearer-auth user-to-user conversations with
 	// permanent history. Reachability: a step agent cannot reach them
 	// (`pf msg` is refused inside a step; step processes hold no key).

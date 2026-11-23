@@ -1,0 +1,52 @@
+package api
+
+// lease.go: the wire contract of the generic lease base (polyforge#245,
+// 245-lease). The three signed machine routes —
+// POST /api/v1/leases/{kind}/acquire|renew|release and
+// GET /api/v1/leases/requests/{rid} — carry these bodies and answer
+// LeaseGrant. `work_item` is the ticket whose current session the
+// signing machine must hold; the key is the caller's opaque lease key
+// (the landing lock passes the normalized repository identity plus the
+// target branch).
+
+// LeaseAcquire is one acquire/poll request. A retry with the same
+// request_id is idempotent; a new request_id for the same machine and
+// ticket is a new queue entry.
+type LeaseAcquire struct {
+	Key       string `json:"key"`
+	RequestID string `json:"request_id"`
+	WorkItem  string `json:"work_item"`
+}
+
+// LeaseRenew extends the holder's lease. The token is the plaintext one
+// the granting poll answered; the server never stores it.
+type LeaseRenew struct {
+	Key       string `json:"key"`
+	RequestID string `json:"request_id"`
+	WorkItem  string `json:"work_item"`
+	Token     string `json:"token"`
+}
+
+// LeaseRelease gives the lease or the queued request back. An empty token
+// is the release-by-request-id path (a restarted daemon, or a waiter
+// withdrawing); it is limited to the same machine, ticket and request id.
+type LeaseRelease struct {
+	Key       string `json:"key"`
+	RequestID string `json:"request_id"`
+	WorkItem  string `json:"work_item"`
+	Token     string `json:"token,omitempty"`
+}
+
+// LeaseGrant is the answer of acquire/renew/release/lookup. Token is
+// present exactly once, on the poll that granted the lease.
+type LeaseGrant struct {
+	Kind      string `json:"kind"`
+	Key       string `json:"key"`
+	RequestID string `json:"request_id"`
+	Status    string `json:"status"`
+	Token     string `json:"token,omitempty"`
+	Position  int    `json:"position,omitempty"`
+	HeldSince string `json:"held_since,omitempty"`
+	ExpiresAt string `json:"expires_at,omitempty"`
+	QueuedMS  int64  `json:"queued_ms,omitempty"`
+}
