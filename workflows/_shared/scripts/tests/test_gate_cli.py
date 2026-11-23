@@ -204,7 +204,8 @@ class GateCLITest(unittest.TestCase):
         with open(os.path.join(self.root, "order.txt"), encoding="utf-8") as f:
             self.assertEqual(f.read().splitlines(), ["fast", "one", "two", "three"],
                              "parallelism 1 runs the plan in plan order")
-        self.assertIn("in 1 parallel groups", m.stdout, "the plan line names the parallelism it ran at")
+        self.assertIn("in 2 groups, at most 1 at once", m.stdout,
+                      "the plan line names the groups there are and the parallelism it ran at (r1#5)")
 
     def test_the_plan_alone(self) -> None:
         d = gate_clone(self.root, "stack=none\nfast_gate=echo one\n")
