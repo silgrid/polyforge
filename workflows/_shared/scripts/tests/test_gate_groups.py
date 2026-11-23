@@ -15,6 +15,8 @@ implementation's own output."""
 
 import os
 import tempfile
+import threading
+import time
 import unittest
 from typing import Any, Dict, List
 
@@ -22,7 +24,7 @@ import gate
 from pfstep import container, engine
 
 from .fakebox import FakeRuntime
-from .gatefix import HAVE_BASH, HAVE_GIT, HAVE_PY, boxed_bash, gate_clone, run_gate
+from .gatefix import HAVE_BASH, HAVE_GIT, HAVE_PY, boxed_bash, gate_clone, new_gate, run_gate
 
 # The plan's key set of an undeclared repository, recorded from the serial
 # gate before the grouped path existed: a grouped run must leave every one of
@@ -126,6 +128,29 @@ ORDER_CONF = ("stack=none\n"
               "full_command=printf 'tail\\n' >> ../order.txt\n"
               "group=go|full-2\ngroup=go|full-3\n"
               "group=pi-web|full-4\ngroup=pi-web|full-5\n")
+# r1#3's fixture: the failing command polls for the pi-web group's start
+# marker (bounded), the pi-web command waits for the test's release file
+# (bounded), and the third command only announces itself — so it must never
+# run.
+FAILS = "for i in $(seq 1 600); do [ -f ../p2.started ] && break; sleep 0.01; done; exit 7"
+WAITS = ": > ../p2.started; for i in $(seq 1 600); do [ -f ../release ] && break; sleep 0.01; done; exit 0"
+ANNOUNCES = ": > ../p3.started"
+
+
+def peak_cmd(name: str) -> str:
+    """One group command that records its start and end and stays up until
+    two commands have started (bounded): three groups at parallelism 2 give
+    a peak of 2, and a scheduler that lost its bound gives 3."""
+    return ("printf 'start %s\\n' >> ../order.txt;"
+            " for i in $(seq 1 500); do [ \"$(grep -c '^start' ../order.txt)\" -ge 2 ] && break; sleep 0.01; done;"
+            " printf 'end %s\\n' >> ../order.txt" % (name, name))
+
+
+PEAK_CONF = ("stack=none\n"
+             "full_command=%s\nfull_command=%s\nfull_command=%s\n"
+             "group=go|full-1\ngroup=pi-web|full-2\ngroup=extra|full-3\n"
+             "full_parallel=2\n" % (peak_cmd("a"), peak_cmd("b"), peak_cmd("c")))
+
 SERIAL_CONF = ("stack=none\n"
                "fast_gate=printf 'fast\\n' >> ../order.txt\n"
                "full_command=printf 'one\\n' >> ../order.txt\n"
@@ -174,20 +199,46 @@ class GroupedExecutionTest(unittest.TestCase):
         self.assertGreater(steps.index("tail"), steps.index("p2"), "the trailing ungrouped command runs after the groups")
 
     def test_a_failure_without_keep_going_starts_nothing_new(self) -> None:
-        conf = ("stack=none\nfull_command=exit 7\nfull_command=printf 'g2\\n' >> ../order.txt\n"
-                "full_command=sleep 0.4; printf 'p1\\n' >> ../order.txt\n"
-                "full_command=printf 'p2\\n' >> ../order.txt\n"
-                "group=go|full-1\ngroup=go|full-2\ngroup=pi-web|full-3\ngroup=pi-web|full-4\n")
+        """polyforge#244: with --keep-going off a failure starts nothing new,
+        while a command already running finishes and is recorded. Both
+        orderings are explicit, no fixed sleep: the failing command waits
+        (bounded) until the other group's first command announced itself, and
+        that command waits for the release file the test writes only after the
+        gate printed the failure."""
+        conf = ("stack=none\n"
+                "full_command=%s\nfull_command=%s\nfull_command=%s\n"
+                "group=go|full-1\ngroup=pi-web|full-2\ngroup=pi-web|full-3\n" % (FAILS, WAITS, ANNOUNCES))
         d = self.clone(conf)
-        fb = self.fb()
-        r = run_gate(d, fb, os.path.join(self.root, "logs"))
-        self.assertEqual(r.res.incomplete, "", r.progress)
-        self.assertFalse(r.res.passed)
-        self.assertEqual([c.not_run for c in r.res.commands], [False, True, False, True],
-                         "the failing group's second command and the other group's second command never start")
-        self.assertEqual(r.res.commands[0].exit, 7)
-        self.assertEqual((r.res.commands[2].exit, r.res.commands[2].not_run), (0, False),
+        lines: List[str] = []
+        g = new_gate(self.fb(), lines=lines, parallel=2)
+        done: List[gate.GateResult] = []
+
+        def run_gate_here() -> None:
+            done.append(g.run(d, "", os.path.join(self.root, "logs")))
+
+        def failed() -> bool:
+            return any("full-1 FAIL" in ln for ln in lines)
+
+        t = threading.Thread(target=run_gate_here)
+        t.start()
+        deadline = time.monotonic() + 120
+        while not failed() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertTrue(failed(), "the failing command never failed:\n" + "\n".join(lines))
+        with open(os.path.join(self.root, "release"), "w", encoding="utf-8") as f:
+            f.write("go\n")
+        t.join(timeout=120)
+        self.assertFalse(t.is_alive(), "the gate never finished")
+        r = done[0]
+        self.assertEqual(r.incomplete, "", "\n".join(lines))
+        self.assertFalse(r.passed)
+        self.assertEqual([c.not_run for c in r.commands], [False, False, True],
+                         "only the pi-web group's second command never starts")
+        self.assertEqual(r.commands[0].exit, 7)
+        self.assertEqual((r.commands[1].exit, r.commands[1].not_run), (0, False),
                          "a command already running finishes and is recorded")
+        self.assertFalse(os.path.exists(os.path.join(self.root, "p3.started")),
+                         "a command the stop reached must not have started")
 
     def test_keep_going_runs_every_group_command(self) -> None:
         conf = ("stack=none\nfull_command=exit 7\nfull_command=printf 'g2\\n' >> ../order.txt\n"
@@ -233,10 +284,47 @@ class GroupedExecutionTest(unittest.TestCase):
         fb = self.fb()
         run_gate(d, fb, os.path.join(self.root, "logs"))
         self.assertEqual(len(fb.starts), 3, "the gate's own container and one per group")
-        self.assertEqual(sorted(fb.removes), sorted(c for c in fb.containers) or ["cid-1", "cid-2", "cid-3"],
-                         "every container is removed")
-        group_boxes = {cid for cid, _, _, _ in fb.execs if "printf" in " ".join(_)}
-        self.assertEqual(len(group_boxes), 3, "the group commands run in the group containers too")
+        self.assertEqual(sorted(fb.removes), ["cid-1", "cid-2", "cid-3"], "every container is removed")
+        group_boxes = {cid for cid, _, _, argv in fb.execs if "printf" in " ".join(argv)}
+        self.assertEqual(len(group_boxes), 3, "every container ran a command of its own")
+
+    def test_at_most_the_declared_parallelism_runs_at_once(self) -> None:
+        """polyforge#244: three groups at full_parallel=2 never run more than
+        two commands at once (r1#4: a semaphore that stopped bounding would
+        show a peak of 3)."""
+        d = self.clone(PEAK_CONF)
+        r = run_gate(d, self.fb(), os.path.join(self.root, "logs"))
+        self.assertEqual(r.res.incomplete, "", r.progress)
+        self.assertTrue(r.res.passed, r.progress)
+        steps = self.order()
+        peak = running = 0
+        for ln in steps:
+            if ln.startswith("start "):
+                running += 1
+                peak = max(peak, running)
+            elif ln.startswith("end "):
+                running -= 1
+        self.assertEqual(peak, 2, "three groups at parallelism 2 ran %d at once: %s" % (peak, steps))
+        self.assertEqual(len([ln for ln in steps if ln.startswith("end ")]), 3, "every group command ran: %s" % steps)
+
+    def test_group_containers_write_no_log_the_gate_itself_owns(self) -> None:
+        """polyforge#244 r1#1: a group's container must not overwrite the
+        gate's own image build log or its mount-probe log (each group writes
+        into a log directory of its own)."""
+        d = self.clone(ORDER_CONF)
+        logs = os.path.join(self.root, "logs")
+        r = run_gate(d, self.fb(), logs, parallel=2)
+        self.assertTrue(r.res.passed, r.progress)
+        with open(os.path.join(logs, "image-build.log"), encoding="utf-8") as f:
+            build = f.read()
+        self.assertIn("Step 1/1", build, "the gate's own image-build.log was overwritten by a group container")
+        self.assertNotIn("present", build, "a group container's 'image is present' note replaced the build log")
+        with open(os.path.join(logs, "1.log"), encoding="utf-8") as f:
+            probe = f.read()
+        self.assertIn("cat ", probe, "the gate's own mount-probe log was overwritten by a group container")
+        for n in ("1", "2"):
+            own = os.path.join(logs, "group-%s" % n, "1.log")
+            self.assertTrue(os.path.isfile(own), "group %s's container logs need a directory of their own (%s)" % (n, own))
 
 
 if __name__ == "__main__":
