@@ -32,8 +32,8 @@ func TestNoOwnerWaiveOrRewindRoute(t *testing.T) {
 // question it had open and a block it lifted are over.
 func TestOwnerRewindResolvesTheFeed(t *testing.T) {
 	f := testFeed(t)
-	f.Ingest("default", evAt("wi_1", "awaiting_owner", `{"question_id":"q-1"}`), nil)
-	f.Ingest("default", evAt("wi_1", driver.EvOwnerRewind, `{"from":"review","to":"plan"}`), nil)
+	f.Ingest("default", evAt(f, "wi_1", "awaiting_owner", `{"question_id":"q-1"}`), nil)
+	f.Ingest("default", evAt(f, "wi_1", driver.EvOwnerRewind, `{"from":"review","to":"plan"}`), nil)
 	if e := newest(f); !e.Resolved || f.List().Attention != 0 {
 		t.Fatalf("the ended dispatch's question is still open: %+v", e)
 	}
