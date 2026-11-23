@@ -1519,3 +1519,13 @@ registry 的、只补缺的；预检在占版本之前检查 buildx 与 arm64 bi
 `docker run --rm --entrypoint tar <镜像>:<版本> -C /opt/polyforge/host-files -cf - . | tar -xf -`
 导出——安装与升级只需镜像地址加版本号，不需要 gh；GHCR 首次推送会建私有
 包，org owner 需一次性把公开包改成公开。
+## v0.2.4, review-firstpass 阻断项明细与疑似误报率（polyforge#242）
+
+`tools/review-firstpass` 在 `--events` 下新增阻断项段落：遍历 capsule 的
+`artifacts/review.md` git 版本链（没有可读历史时回退到 handoff 的盖章
+review 节，两者不叠加），逐条提取阻断项，按 `r<n>#<k>` 关联后续轮次和
+owner 的 asks.jsonl 裁定，给出结局（修复后通过、反驳成立、owner 改判、
+撤回原因不明、无法判定）、按类别与按模型的疑似误报率，以及无法判定按
+原因计数和无法解析的 FAIL 版本数。stdout 只打印汇总与无法判定的计数；
+同时给 `--csv` 时另写 `<csv>.blocking.csv`，既有 CSV 不加列。这是离线
+只读工具，不需要迁移动作。
