@@ -1,4 +1,4 @@
-# carries: skills/polyforge/SKILL.md, skills/polyforge/verbs/file.md
+# carries: skills/polyforge/SKILL.md, skills/polyforge/verbs/file.md, workflows/_shared/skills/build.md, workflows/_shared/fast_checks_build.md, workflows/develop/steps/build.md, docs/reference/commands.md, docs/contributing.md
 """polyforge 建票路由的文本契约。"""
 import os
 import unittest
