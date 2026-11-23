@@ -147,5 +147,29 @@ class BlockingOutcomesTest(unittest.TestCase):
         self.assertIn('  bug: items 2, decidable 1, suspected 0/1 (0%)', out.getvalue())
 
 
+class DocstringCaliberTest(unittest.TestCase):
+    """AC1: the caliber lives in the tool's module docstring."""
+
+    def test_docstring_names_the_caliber(self):
+        doc = rf.__doc__ or ''
+        for phrase in (
+                'blocking-findings block',
+                'artifacts/review.md',
+                'git history',
+                'stamped hand-off',
+                'bug, ac_gap, project_rule,',
+                'unclassified',
+                '`r<n>#<k>`',
+                'suspected false-positive rate',
+                'numerator',
+                'denominator',
+                'unknown',
+                'one model',
+                'fixed but no behaviour change',
+                '<csv>.blocking.csv',
+        ):
+            self.assertIn(phrase, doc, 'the docstring must state: ' + phrase)
+
+
 if __name__ == '__main__':
     unittest.main()
