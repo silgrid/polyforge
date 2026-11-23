@@ -155,6 +155,51 @@ the exported event file:
                output_tokens and pi's output are both read, claude's
                records deduped by message.id (stepcall/usage.go).
 
+With --events the report also gains the blocking-findings block
+(polyforge#242), over the same run set:
+
+  source       every version of artifacts/review.md in the capsule's own
+               git history is one review round (a capsule without a
+               readable history falls back to the stamped hand-off
+               sections, never both). The round number is the report
+               title's, the verdict its conclusion line.
+  classes      the five review classes — bug, ac_gap, project_rule,
+               test_weakened and guarantee — read from the item's own
+               line; an item that names none is unclassified. The
+               document dimension is not a sixth class.
+  linkage      an item is chained to a later round only by the
+               `r<n>#<k>` reference (the round's number and the item
+               number); a later round that repeats the text without the
+               reference is a different finding. A chain's final outcome
+               is its last named outcome; its rounds are the rounds it
+               appears in (cross-round is a marker, not an outcome).
+  outcomes     fixed (a later round says repaired), rebutted (withdrawn
+               on the build's evidence), owner-overturned (the withdrawal
+               names the owner's ruling, or an asks.jsonl reply/message
+               names the item and rules it non-blocking),
+               withdrawn-unknown (withdrawn with no attributable reason),
+               unknown (the reasons below, counted apart).
+  rate         the suspected false-positive rate is the numerator
+               (rebutted + owner-overturned + withdrawn-unknown) over the
+               denominator (every decidable chain: fixed + the numerator);
+               unknown chains never enter either. A class or model with no
+               decidable chain prints `n/a`, never 0%. The sensitivity
+               line counts a PASS round that names no item as fixed.
+  unknown      no later round, later rounds do not mention it, a PASS
+               round without naming it, owner words without an item
+               number, multiple candidates, last mention still open.
+  unparsable   a FAIL version whose conclusion names blockers but whose
+               items cannot be parsed is counted apart and enters no
+               denominator.
+  model        the model is the round's stamped model; the baseline's
+               rounds carry one model, so the by-model table has one row
+               and cannot support a model comparison.
+  not tested   "fixed but no behaviour change" is offline-undecidable and
+               is not measured here.
+  detail       stdout prints only the summary and the unknown counts;
+               with --csv too, one row per chain is written to
+               `<csv>.blocking.csv`, and the existing CSV gains no column.
+
 A manifest carrying `arms` prints one `== arm <name> ==` block per arm,
 names alphabetically: the same run-set line, tier / infra / switch /
 estimate summary over the arm's enterable runs, one detail row per run in
