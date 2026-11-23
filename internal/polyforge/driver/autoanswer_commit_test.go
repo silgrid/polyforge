@@ -1,6 +1,7 @@
 package driver
 
 // autoanswer_commit_test.go: the automatic reply's deadline, content and
+// (the reserved identity is capsule.AutoAnswerBy).
 // dedupe over a fake clock (autoanswer.go, polyforge#239). The card's
 // recommendations are adopted verbatim after the REAL elapsed wait; an
 // owner reply before the deadline wins; a restart keeps the original T0,
