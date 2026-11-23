@@ -53,7 +53,10 @@ docker compose --profile aihub up -d
 
 `WORKSTATION_IMAGE` runs the published image instead of a local build; the
 password is required or the container refuses to start rather than expose the
-high-privilege UI bare. What the parameters mean, the six volumes and their
+high-privilege UI bare. Verify the two downloads against the sums the release
+publishes (`sha256sum`) before the machine is trusted with anything — the
+workstation page names the pinned seccomp file's origin and SHA. What the
+parameters mean, the six volumes and their
 reset cost, HTTPS and the security posture are
 [the workstation page](workstation.md) — read it before the machine is trusted
 with anything.

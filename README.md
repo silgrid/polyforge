@@ -62,7 +62,7 @@ in-place upgrade moves — see [the workstation page](docs/workstation.md).
   items, spawns a step agent per step inside the capsule, and keeps
   every run recoverable.
 
-## Try it in 30 seconds
+## Try it on the workstation image
 
 The recommended first run is the workstation image: Docker on the host, the
 published image, compose up, and the first boot hands you a working machine
