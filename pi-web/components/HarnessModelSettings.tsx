@@ -14,7 +14,7 @@ import {
 import { useEnabledModels, type EnabledModelsController } from "./EnabledModelsSection";
 import { ModelsConfig } from "./ModelsConfig";
 import { ClaudeCustomModels } from "./ClaudeCustomModels";
-import { ConfigSidebar, ConfigSidebarList, ConfigSidebarItem, ConfigDetail } from "./SettingsUi";
+import { ConfigSidebar, ConfigSidebarGroupLabel, ConfigSidebarList, ConfigSidebarItem, ConfigDetail } from "./SettingsUi";
 
 type ModelIdentity = { harness: string; provider: string; id: string };
 
@@ -129,6 +129,37 @@ export function HarnessModelTable({ rows, enabled, levels = {}, piSettings, onEf
   </table>;
 }
 
+/**
+ * The model page's left column: the 「默认模型」 item, then one shared group
+ * heading per provider with its models (polyforge#257 T2: the heading is
+ * `ConfigSidebarGroupLabel`, the same group label every other settings tab
+ * draws — a bare `<strong>` read as a second title).
+ */
+export function HarnessModelSidebar({ rows, selectedProvider, onSelect }: {
+  rows: ModelViewRow[];
+  selectedProvider: string | null;
+  onSelect: (provider: string | null) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <ConfigSidebar>
+      <ConfigSidebarList>
+        <ConfigSidebarItem active={selectedProvider === null} onClick={() => onSelect(null)}>{t("models.defaultHeading")}</ConfigSidebarItem>
+        {[...new Set(rows.map((row) => row.provider))].map((provider) => (
+          <div key={provider} className="config-sidebar-group">
+            <ConfigSidebarGroupLabel>{provider}</ConfigSidebarGroupLabel>
+            {rows.filter((row) => row.provider === provider).map((row) => (
+              <ConfigSidebarItem key={row.id} active={selectedProvider === provider} onClick={() => onSelect(provider)}>
+                {row.name} · {row.harnesses.join(", ")}
+              </ConfigSidebarItem>
+            ))}
+          </div>
+        ))}
+      </ConfigSidebarList>
+    </ConfigSidebar>
+  );
+}
+
 export function HarnessModelSettings({ cwd, onClose, onOpenAccount }: { cwd: string | null; onClose?: () => void; onOpenAccount?: () => void }) {
   const { t } = useI18n();
   const enabled = useEnabledModels(cwd);
@@ -233,19 +264,9 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount }: { cwd: str
   const selected = defaultModel ? JSON.stringify(defaultModel) : "";
   return (
     <div className="settings-section settings-models" data-model-page="unified">
-      <h2>{t("common.models")}</h2>
       {(error || enabled.failure) && <div role="alert">{error ?? enabled.failure?.message ?? (enabled.failure?.messageKey ? t(enabled.failure.messageKey) : "")}</div>}
       <div className="config-split-view">
-      <ConfigSidebar><ConfigSidebarList>
-        <ConfigSidebarItem active={selectedProvider === null} onClick={() => setSelectedProvider(null)}>{t("models.defaultHeading")}</ConfigSidebarItem>
-        {[...new Set(rows.map((row) => row.provider))].map((provider) => <div key={provider}>
-          <strong>{provider}</strong>
-          {rows.filter((row) => row.provider === provider).map((row) => <ConfigSidebarItem
-            key={row.id} active={selectedProvider === provider} onClick={() => setSelectedProvider(provider)}>
-            {row.name} · {row.harnesses.join(", ")}
-          </ConfigSidebarItem>)}
-        </div>)}
-      </ConfigSidebarList></ConfigSidebar>
+      <HarnessModelSidebar rows={rows} selectedProvider={selectedProvider} onSelect={setSelectedProvider} />
       <ConfigDetail>
       <section aria-label={t("models.defaultHeading")}>
         <h3>{t("models.defaultHeading")}</h3>
