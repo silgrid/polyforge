@@ -231,3 +231,140 @@ func TestW86Verify(t *testing.T) {
 		}
 	}
 }
+
+// TestW86RefusesEitherExistingImageTag (AC3): a fresh release refuses
+// before the version is claimed when EITHER image's tag is already in its
+// package - the aihub image's or the workstation image's - and never pushes
+// over another build's image.
+func TestW86RefusesEitherExistingImageTag(t *testing.T) {
+	for name, env := range map[string][]string{
+		"the aihub image":       {"FAKE_REGISTRY_HAS=v1.2.1"},
+		"the workstation image": {"FAKE_REGISTRY_HAS_WS=v1.2.1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newRelWorld(t, []string{"v1.2.0"}, nil)
+			out, err := w.runPinned(env)
+			if err == nil {
+				t.Fatalf("a fresh release whose image tag exists must refuse:\n%s", out)
+			}
+			which := "ghcr.io/silgrid/polyforge-aihub:v1.2.1"
+			vark := "RELEASE_IMAGE"
+			if name == "the workstation image" {
+				which = "ghcr.io/silgrid/polyforge-workstation:v1.2.1"
+				vark = "RELEASE_WORKSTATION_IMAGE"
+			}
+			for _, want := range []string{which + " already exists in the registry", vark, "no release of " + "origin to resume", "nothing built or published, no version claimed"} {
+				if !strings.Contains(out, want) {
+					t.Errorf("refusal lacks %q:\n%s", want, out)
+				}
+			}
+			if c := w.calls(); len(c) != 0 {
+				t.Fatalf("work ran before the refusal: %v", c)
+			}
+			if got := w.originTags(); strings.Contains(got, "v1.2.1") {
+				t.Fatalf("the version was claimed despite the refusal: %q", got)
+			}
+		})
+	}
+}
+
+// TestW86ResumePushesPerImage (AC3): a resume keeps the image that is
+// already in the registry and publishes only the missing one - either side.
+func TestW86ResumePushesPerImage(t *testing.T) {
+	t.Run("aihub pushed, the workstation push failed", func(t *testing.T) {
+		w := newRelWorld(t, []string{"v1.2.0"}, nil)
+		if out, err := w.runPinned([]string{"FAKE_WS_BUILD_FAIL=1"}); err == nil || !strings.Contains(out, "FAILED AFTER v1.2.1 WAS CLAIMED") {
+			t.Fatalf("setup: the first run must fail at the workstation image push: %v\n%s", err, out)
+		}
+		w372ResetCalls(t, w)
+		out, err := w.runPinned(nil)
+		if err != nil {
+			t.Fatalf("the re-run must resume v1.2.1: %v\n%s", err, out)
+		}
+		calls := w.calls()
+		if relIndex(calls, "docker push") >= 0 {
+			t.Fatalf("the aihub image is in the registry: the resume must not push it: %v", calls)
+		}
+		if relIndex(calls, "docker build -f deploy") >= 0 {
+			t.Fatalf("the aihub image is in the registry: the resume must not rebuild it: %v", calls)
+		}
+		if relIndex(calls, "docker buildx build") < 0 {
+			t.Fatalf("the workstation image is missing: the resume must build and push it: %v", calls)
+		}
+		if !strings.Contains(out, "image ghcr.io/silgrid/polyforge-aihub:v1.2.1 is already in the registry ("+relFakeDigest+")") {
+			t.Fatalf("the aihub image's keep must be reported:\n%s", out)
+		}
+		w372AssertResumedOnce(t, w, out)
+	})
+
+	t.Run("workstation pushed, the aihub image missing", func(t *testing.T) {
+		w := newRelWorld(t, []string{"v1.2.0"}, nil)
+		if out, err := w.runPinned(nil); err != nil {
+			t.Fatalf("setup release: %v\n%s", err, out)
+		}
+		// the aihub push never made it: its marker is gone and its digest
+		// asset unpublished; the checksums are unpublished alongside
+		if err := os.Remove(w.log + ".pushed"); err != nil {
+			t.Fatal(err)
+		}
+		rel := filepath.Join(w.fakeRel, "v1.2.1")
+		for _, n := range []string{"SHA256SUMS", "release-manifest.json", "aihub-image.digest"} {
+			if err := os.Remove(filepath.Join(rel, n)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		w372ResetCalls(t, w)
+		out, err := w.runPinned([]string{"FAKE_REGISTRY_MISSING=1"})
+		if err != nil {
+			t.Fatalf("the resume must complete v1.2.1: %v\n%s", err, out)
+		}
+		calls := w.calls()
+		if relIndex(calls, "docker buildx build") >= 0 {
+			t.Fatalf("the workstation image is in the registry: the resume must not rebuild it: %v", calls)
+		}
+		if relIndex(calls, "docker push") < 0 || relIndex(calls, "docker build -f deploy") < 0 {
+			t.Fatalf("the aihub image is missing: the resume must rebuild and push it: %v", calls)
+		}
+		if !strings.Contains(out, "workstation image ghcr.io/silgrid/polyforge-workstation:v1.2.1 is already in the registry") {
+			t.Fatalf("the workstation image's keep must be reported:\n%s", out)
+		}
+		w372AssertResumedOnce(t, w, out)
+	})
+}
+
+// TestW86PreflightNeedsBuildxAndArm64 (AC3): a machine without buildx, or
+// whose builder does not list linux/arm64, is refused in the preflight -
+// before any work and before the version is claimed - with the way out in
+// the message.
+func TestW86PreflightNeedsBuildxAndArm64(t *testing.T) {
+	for name, env := range map[string][]string{
+		"no buildx":       {"FAKE_NO_BUILDX=1"},
+		"no arm64 binfmt": {"FAKE_NO_ARM64=1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newRelWorld(t, []string{"v1.2.0"}, nil)
+			out, err := w.runPinned(env)
+			if err == nil {
+				t.Fatalf("the preflight must refuse: %v\n%s", err, out)
+			}
+			if !strings.Contains(out, "preflight failed - nothing built or published, no version claimed") {
+				t.Fatalf("the refusal must be the preflight's, before the claim:\n%s", out)
+			}
+			want := "docker buildx is not available"
+			way := "install the buildx plugin"
+			if name == "no arm64 binfmt" {
+				want = "does not list linux/arm64"
+				way = "tonistiigi/binfmt --install arm64"
+			}
+			if !strings.Contains(out, want) || !strings.Contains(out, way) {
+				t.Errorf("the preflight problem must name %q and the way out %q:\n%s", want, way, out)
+			}
+			if c := w.calls(); len(c) != 0 {
+				t.Fatalf("work ran before the preflight refusal: %v", c)
+			}
+			if got := w.originTags(); strings.Contains(got, "v1.2.1") {
+				t.Fatalf("the version was claimed despite the preflight refusal: %q", got)
+			}
+		})
+	}
+}

@@ -231,23 +231,24 @@ registry_has() {
   case "$1" in
     "$_ah":*)
       [ -e "$CALLLOG.pushed" ] && return 0
-      case " $FAKE_REGISTRY_HAS " in *" $_t "*) return 0 ;; esac ;;
-    *)  # the workstation image (polyforge#86): its own pushed marker and knob
+      case " $FAKE_REGISTRY_HAS " in *" $_t "*) return 0 ;; esac
+      git --git-dir="$FAKE_ORIGIN" rev-parse -q --verify "refs/tags/$_t" >/dev/null 2>&1 ;;
+    *)  # the workstation image (polyforge#86): explicit only - this world
+      # pushed it or FAKE_REGISTRY_HAS_WS names it, never an origin tag
+      # (a partial publish leaves the tag on origin without the image)
       [ -e "$CALLLOG.pushed-ws" ] && return 0
-      case " $FAKE_REGISTRY_HAS_WS " in *" $_t "*) return 0 ;; esac ;;
+      case " $FAKE_REGISTRY_HAS_WS " in *" $_t "*) return 0 ;; esac
+      return 1 ;;
   esac
-  git --git-dir="$FAKE_ORIGIN" rev-parse -q --verify "refs/tags/$_t" >/dev/null 2>&1
 }
 _ah="${RELEASE_IMAGE:-ghcr.io/silgrid/polyforge-aihub}"
 # registry_read_gate <ref>: the not-found knobs, per image - FAKE_REGISTRY_MISSING
-# ("not found" until this world pushed that image), FAKE_WS_MISSING (the
-# workstation image alone, a partial publish the tag on origin cannot
-# prove) and FAKE_REGISTRY_APPEARS_ON (another run pushes meanwhile).
+# ("not found" until this world pushed that image) and
+# FAKE_REGISTRY_APPEARS_ON (another run pushes meanwhile).
 registry_read_gate() {
   case "$1" in
     "$_ah":*) [ -n "$FAKE_REGISTRY_MISSING" ] && [ ! -e "$CALLLOG.pushed" ] && { echo "ERROR: $1: not found" >&2; exit 1; } ;;
-    *) [ -n "$FAKE_WS_MISSING" ] && { echo "ERROR: $1: not found" >&2; exit 1; }
-       [ -n "$FAKE_REGISTRY_MISSING" ] && [ ! -e "$CALLLOG.pushed-ws" ] && { echo "ERROR: $1: not found" >&2; exit 1; } ;;
+    *) [ -n "$FAKE_REGISTRY_MISSING" ] && [ ! -e "$CALLLOG.pushed-ws" ] && { echo "ERROR: $1: not found" >&2; exit 1; } ;;
   esac
   [ -n "$FAKE_REGISTRY_APPEARS_ON" ] && [ ! -e "$FAKE_REGISTRY_APPEARS_ON" ] && { echo "ERROR: $1: not found" >&2; exit 1; }
 }
@@ -312,9 +313,14 @@ case "$1" in
   # has its own marker (a buildx --push) and its own FAKE_REGISTRY_HAS_WS.
   buildx) [ -n "$FAKE_NO_BUILDX" ] && { echo "docker: 'buildx' is not a docker command." >&2; exit 1; }
     case "$2" in
+      version) echo "github.com/docker/buildx v0.17.1" ;;
+      inspect) echo "Name: default"
+        if [ -n "$FAKE_NO_ARM64" ]; then echo "Platforms: linux/amd64"; else echo "Platforms: linux/amd64, linux/arm64"; fi ;;
       build)
         echo "docker buildx $*" >> "$CALLLOG"
-        [ -n "$FAKE_WS_BUILD_FAIL" ] && { echo "ERROR: $FAKE_WS_BUILD_FAIL" >&2; exit 1; }
+        # FAKE_WS_BUILD_FAIL fails only the --push build (the pre-claim
+        # cacheonly build still succeeds, so the failure lands after the claim)
+        case "$*" in *" --push"*) [ -n "$FAKE_WS_BUILD_FAIL" ] && { echo "ERROR: $FAKE_WS_BUILD_FAIL" >&2; exit 1; } ;; esac
         case "$*" in *" --push"*) : > "$CALLLOG.pushed-ws" ;; esac ;;
       *)
     [ -n "$FAKE_REGISTRY_NEEDS_LOGIN" ] && [ ! -e "$CALLLOG.loggedin" ] && { echo "ERROR: unauthorized: authentication required" >&2; exit 1; }
@@ -1292,12 +1298,16 @@ func TestReleaseScriptLoginWhenNotLoggedIn(t *testing.T) {
 // ---- --verify
 
 // publishFake plants a release in the fake gh store; mutate lets a case break it.
+// The planted release's images are in the fake registry too (both push
+// markers): --verify reads them.
 func (w *relWorld) publishFake(tag string, files map[string]string) {
 	d := filepath.Join(w.fakeRel, tag)
 	for n, c := range files {
 		relWrite(w.t, filepath.Join(d, n), c, 0o644)
 	}
 	relWrite(w.t, filepath.Join(d, ".body"), "notes\n", 0o644)
+	relWrite(w.t, w.log+".pushed", "", 0o644)
+	relWrite(w.t, w.log+".pushed-ws", "", 0o644)
 }
 
 // goodRelease is a complete release of tag: the 6 payloads, SHA256SUMS and
