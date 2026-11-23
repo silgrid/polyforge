@@ -37,6 +37,9 @@ writeFileSync(join(agentDir, "agents/settings.json"), JSON.stringify({ builtInEn
 
 // ---- fake model ------------------------------------------------------------
 let scripted = [];
+// P1P2 holds the child's answer until the test has steered the running run.
+let releaseChild = null;
+const childGate = new Promise((resolve) => { releaseChild = resolve; });
 const OK = { kind: "text", text: "OK-ANSWER" };
 const model = createHttpServer(async (request, response) => {
   await new Promise((resolve) => {
@@ -46,6 +49,7 @@ const model = createHttpServer(async (request, response) => {
   });
   const reply = scripted.length > 0 ? scripted.shift() : OK;
   if (reply.delay) await new Promise((resolve) => setTimeout(resolve, reply.delay));
+  if (reply.gate) await childGate;
   response.writeHead(200, { "Content-Type": "text/event-stream" });
   const chunk = (delta, finish = null, extra = {}) => `data: ${JSON.stringify({
     id: "fake", object: "chat.completion.chunk", created: 0, model: "fake-model",
@@ -119,7 +123,7 @@ async function postJson(pathname, body) {
 async function newSessionWithSubagent(delayMs) {
   scripted = [
     { kind: "agent" },
-    { kind: "text", text: "CHILD-ANSWER", delay: delayMs },
+    { kind: "text", text: "CHILD-ANSWER", ...(delayMs > 1000 ? { gate: true } : { delay: delayMs }) },
     { kind: "text", text: "PARENT-DONE" },
   ];
   const created = await postJson("/api/agent/new", { cwd: project, type: "prompt", message: "delegate to a subagent", provider: "fake", modelId: "fake-model" });
@@ -189,6 +193,7 @@ try {
     await waitFor(async () => steer !== null, 15_000, "the steer never reached the subagents route");
     assert.deepEqual(steer, { action: "steer", message: "focus tests" }, "the message goes through the run's own steer action");
     await page.unroute(/\/api\/subagents\/[^/?]+$/);
+    releaseChild();
     // The transcript refreshes in place; the settled run disables the box with its reason.
     await waitFor(async () => (await panelText(page)).includes("CHILD-ANSWER"), 45_000, "the child transcript never reached the panel");
     await waitFor(async () => /Completed/.test(await panelText(page)), 45_000, "the panel never showed the run completed");
