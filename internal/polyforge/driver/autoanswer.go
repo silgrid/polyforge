@@ -15,6 +15,8 @@ package driver
 // decisions.go).
 
 import (
+	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -33,7 +35,152 @@ var autoAnswerCardHeader = []string{"问题", "推荐选项", "理由", "重点�
 // exactly that shape (ok is all-or-nothing: one unsafe or ambiguous row
 // refuses the whole card).
 func parseAutoAnswerCard(text string) (recommendations []string, ok bool) {
-	return nil, false
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	// One table block: consecutive lines that start with `|` (the template's
+	// shape). A fenced block is skipped whole — a table inside it is no
+	// table — and any second block refuses the card.
+	var tables [][]string
+	var cur []string
+	fence := ""
+	flush := func() {
+		if len(cur) > 0 {
+			tables = append(tables, cur)
+			cur = nil
+		}
+	}
+	for _, raw := range strings.Split(text, "\n") {
+		t := strings.TrimSpace(raw)
+		if fence != "" {
+			if strings.HasPrefix(t, fence) {
+				fence = ""
+			}
+			continue
+		}
+		if strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~") {
+			flush()
+			fence = t[:3]
+			continue
+		}
+		if strings.HasPrefix(t, "|") {
+			cur = append(cur, raw)
+			continue
+		}
+		flush()
+	}
+	flush()
+	if len(tables) != 1 {
+		return nil, false
+	}
+	rows := tables[0]
+	if len(rows) < 3 { // header + separator + at least one data row
+		return nil, false
+	}
+	header, ok := splitAutoAnswerRow(rows[0])
+	if !ok || len(header) != len(autoAnswerCardHeader) {
+		return nil, false
+	}
+	for i := range header {
+		if strings.TrimSpace(header[i]) != autoAnswerCardHeader[i] {
+			return nil, false
+		}
+	}
+	sep, ok := splitAutoAnswerRow(rows[1])
+	if !ok || len(sep) != len(autoAnswerCardHeader) {
+		return nil, false
+	}
+	for _, c := range sep {
+		if !isAutoAnswerSeparator(c) {
+			return nil, false
+		}
+	}
+	for _, raw := range rows[2:] {
+		cells, ok := splitAutoAnswerRow(raw)
+		if !ok || len(cells) != len(autoAnswerCardHeader) {
+			return nil, false
+		}
+		for _, c := range cells {
+			if strings.TrimSpace(c) == "" {
+				return nil, false
+			}
+		}
+		star := strings.TrimSpace(cells[3])
+		if star != "★" && star != "★★" {
+			return nil, false
+		}
+		recommendations = append(recommendations, strings.TrimSpace(cells[1]))
+	}
+	if len(recommendations) == 0 {
+		return nil, false
+	}
+	return recommendations, true
+}
+
+// splitAutoAnswerRow splits one `|`-delimited table line into its cells,
+// honouring `\|` (a literal pipe) and inline-code spans (whose `|` never
+// splits a cell). ok=false when the line is no table row.
+func splitAutoAnswerRow(line string) ([]string, bool) {
+	s := strings.TrimSpace(line)
+	if !strings.HasPrefix(s, "|") {
+		return nil, false
+	}
+	s = s[1:]
+	var cells []string
+	var b strings.Builder
+	code, escaped := false, false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if escaped {
+			if c == '|' {
+				b.WriteByte('|')
+			} else {
+				b.WriteByte('\\')
+				b.WriteByte(c)
+			}
+			escaped = false
+			continue
+		}
+		switch c {
+		case '\\':
+			escaped = true
+		case '`':
+			code = !code
+			b.WriteByte(c)
+		case '|':
+			if code {
+				b.WriteByte(c)
+				continue
+			}
+			cells = append(cells, b.String())
+			b.Reset()
+		default:
+			b.WriteByte(c)
+		}
+	}
+	if escaped {
+		b.WriteByte('\\')
+	}
+	if b.Len() > 0 {
+		cells = append(cells, b.String())
+	}
+	return cells, true
+}
+
+// isAutoAnswerSeparator reports whether c is a Markdown table's delimiter
+// cell (`---`, `:--`, `--:` or `:-:`; at least three dashes).
+func isAutoAnswerSeparator(c string) bool {
+	c = strings.TrimSpace(c)
+	c = strings.TrimPrefix(c, ":")
+	c = strings.TrimSuffix(c, ":")
+	if len(c) < 3 {
+		return false
+	}
+	for i := 0; i < len(c); i++ {
+		if c[i] != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 // autoAnswerReplyText renders the reply the daemon appends for a card whose
@@ -41,7 +188,12 @@ func parseAutoAnswerCard(text string) (recommendations []string, ok bool) {
 // sentence (with the REAL wait, never the configured threshold) and one
 // numbered line per recommendation, in card order.
 func autoAnswerReplyText(recommendations []string, elapsed time.Duration) string {
-	return ""
+	var b strings.Builder
+	fmt.Fprintf(&b, "自动：按推荐（超时 %s，owner %s 授权）", elapsed.Truncate(time.Second), autoAnswerAuthorizationDate)
+	for i, rec := range recommendations {
+		fmt.Fprintf(&b, "\n%d. %s", i+1, rec)
+	}
+	return b.String()
 }
 
 // autoAnswerProtectedStop reports whether stepID is a protected stop — a
@@ -55,5 +207,10 @@ func autoAnswerProtectedStop(lane, stepID, content string) bool {
 // autoAnswerConfirmPlan reports whether the ticket carries the
 // `confirm_plan: true` marker (a build stop before the first test).
 func autoAnswerConfirmPlan(content string) bool {
-	return strings.Contains(content, "confirm_plan: true")
+	return autoAnswerConfirmPlanLine.MatchString(content)
 }
+
+// autoAnswerConfirmPlanLine is the ticket's own `confirm_plan: true`
+// marker, on a line of its own (a list bullet allowed). A mention inside
+// prose is not the marker: the stop is declared, not discussed.
+var autoAnswerConfirmPlanLine = regexp.MustCompile(`(?im)^\s*(?:[-*]\s*)?confirm_plan\s*:\s*true\s*$`)
