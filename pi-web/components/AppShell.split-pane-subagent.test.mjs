@@ -40,8 +40,6 @@ const renderPane = between(appShell, "renderPane={(sid, focused) => {", ") : sho
 const sentinelPane = between(renderPane, "if (isNewSessionTab(sid)) {", "const paneSession", "the sentinel branch");
 const sessionPane = renderPane.slice(renderPane.indexOf("const paneSession"));
 const classicWindow = between(appShell, ") : showChat ? (", ') : initialCwdStatus === "validating" ? (', "the classic ChatWindow branch");
-const openPanelHandler = between(appShell, "const handleOpenPiSubagentPanel = useCallback(", "}, [isMobile, sidebarSessionId]);", "the pi panel opener");
-
 const ast = ts.createSourceFile("AppShell.tsx", appShell, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 
 /** The text of the arrow function AppShell passes to useCallback, by binding name. */
@@ -111,6 +109,7 @@ test("polyforge#255 u5: the split session pane and the classic window both recei
 });
 
 test("polyforge#255 u5: the top bar's opener targets the active pane, never the selected session", () => {
+  const openPanelHandler = extractAppShellCallback("handleOpenPiSubagentPanel");
   assert.doesNotMatch(openPanelHandler, /selectedSession/, "pane focus never updates selectedSession; reading it would open the wrong chat");
   const requests = [];
   const open = runExtracted(openPanelHandler, {
