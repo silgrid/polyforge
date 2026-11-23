@@ -254,6 +254,21 @@ class BlockingOutcomesTest(unittest.TestCase):
         self.assertEqual(chain['outcome'], 'fixed')
         self.assertEqual(chain['rounds'], [1, 2])
 
+    def test_owner_ruling_without_a_withdrawal_word(self):
+        cases = [
+            ('r1#2 ac_gap AC1 —— owner 已裁定，不再提。', 'owner'),
+            ('| r1#4 guarantee AC3 | **已由 owner 裁定** | 说明 |', 'owner'),
+            ('r1#1（blocking · test_weakened · u1）：**owner 裁定已处理，不再提出。**', 'owner'),
+            ('r1#3 guarantee（自定非目标）：已按 owner 裁定修。', 'fixed'),
+        ]
+        for line, want in cases:
+            versions = _versions(
+                _review(1, 'FAIL', '## 发现\n\n### #%s blocking · guarantee — x\n'
+                        % line.split('#', 1)[1].split(' ', 1)[0]),
+                _review(2, 'PASS', '## 上一轮发现逐条核对\n\n' + line + '\n'))
+            [chain] = rf.chain_findings(self.cap, versions)
+            self.assertEqual(chain['outcome'], want, line)
+
     def test_rebutted_and_owner_and_fixed(self):
         versions = _versions(
             _review(1, 'FAIL', (
