@@ -37,31 +37,33 @@ test("the add panel offers the global scope alone without a project (Q7 B)", () 
 });
 
 // polyforge#257 (T2 止血) B8: an embedded panel with nothing to report drew an
-// empty 52px footer bar under the skill detail (SkillsConfig.tsx:1311 rendered
+// empty 52px footer bar under the skill detail (SkillsConfig.tsx rendered
 // ConfigFooter unconditionally). The footer is the panel's one status line
-// plus its actions, so it exists exactly when one of them does — expected
-// values come from the ticket's B8 sentence, not from the render.
-const { skillFooterVisible } = await jiti.import("./SkillsConfig.tsx");
+// plus its actions, so it exists exactly when one of them does — and the test
+// reads the rendered markup, so a call site that draws it unconditionally
+// again turns red. Expected values come from the ticket's B8 sentence.
+const React = await jiti.import("react");
+const { renderToStaticMarkup } = await jiti.import("react-dom/server");
+const { I18nProvider } = await jiti.import("@/hooks/useI18n");
+const { SkillsConfig, SkillsConfigFooter } = await jiti.import("./SkillsConfig.tsx");
 
-test("an empty embedded skill footer is not rendered (B8)", () => {
-  assert.equal(
-    skillFooterVisible({ embedded: true, installable: false, updateAvailable: false }),
-    false,
-    "an embedded panel with no update and no install action draws no footer",
-  );
-  assert.equal(
-    skillFooterVisible({ embedded: true, installable: true, updateAvailable: false }),
-    true,
-    "the check-updates action needs a footer",
-  );
-  assert.equal(
-    skillFooterVisible({ embedded: true, installable: false, updateAvailable: true }),
-    true,
-    "an update count needs a footer",
-  );
-  assert.equal(
-    skillFooterVisible({ embedded: false, installable: false, updateAvailable: false }),
-    true,
-    "a standalone panel keeps its Close button",
-  );
+const h = React.createElement;
+const render = (element) => renderToStaticMarkup(h(I18nProvider, null, element));
+const noop = () => {};
+const footer = (props) => render(h(SkillsConfigFooter, {
+  embedded: true, installable: false, updateCount: 0, checkingAll: false, updating: false,
+  onClose: noop, onCheckUpdates: noop, ...props,
+}));
+
+test("the skills footer renders exactly while it has a status line or an action (B8)", () => {
+  // The panel's own call site: an embedded panel with nothing to report draws no footer bar.
+  const panel = render(h(SkillsConfig, { cwd: null, onClose: noop, embedded: true }));
+  assert.ok(panel.includes("config-split-view"), "the panel rendered");
+  assert.ok(!panel.includes("config-footer"), "an embedded panel with no update and no install action draws no footer");
+
+  // The footer unit: each of the three reasons draws one; without any it draws nothing.
+  assert.equal(footer({}), "", "no status line and no action draws no footer");
+  assert.match(footer({ installable: true }), /class="config-footer"/, "the check-updates action needs a footer");
+  assert.match(footer({ updateCount: 2 }), /class="config-footer"/, "an update count needs a footer");
+  assert.match(footer({ embedded: false }), /class="config-footer"/, "a standalone panel keeps its Close button");
 });
