@@ -2161,6 +2161,9 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--cpus", default="", help="the container's cpu limit (default min(8, this machine's cores))")
     p.add_argument("--memory", default="", help="the container's memory limit, docker syntax (default 16g; at least 6m)")
     p.add_argument("--pids", default="", help="the container's pids limit (default 4096)")
+    p.add_argument("--parallel", default="", help="the full gate's parallelism, overriding the repository's declared"
+                   " full_parallel (a positive integer; 1 runs the plan serially — the comparison baseline and the"
+                   " manual override)")
     p.add_argument("--log-dir", default="", help="where the image build log and one log per command go (default: a fresh temp dir,"
                    " kept; with --capsule: logs/ beside --out, else the capsule's runtime-state/gate/<n>)")
     p.add_argument("--repo", default="", help="the name the image and the cache volume are tagged with (default: the clone"
@@ -2221,6 +2224,21 @@ def parse_limits(a: argparse.Namespace) -> Tuple[float, str, int]:
         except ValueError:
             raise Usage("--pids %s: not an integer" % gostr.quote(a.pids)) from None
     return cpus, memory, pids
+
+
+def parse_parallel(v: str) -> int:
+    """--parallel N: a positive integer, else a usage error (polyforge#244).
+    Empty takes the repository's declaration."""
+    if v == "":
+        return 0
+    if not gostr_trim_ascii_digits(v) or int(v) <= 0:
+        raise Usage("--parallel %s: not a positive integer" % gostr.quote(v))
+    return int(v)
+
+
+def gostr_trim_ascii_digits(v: str) -> bool:
+    """Whether v is one or more ASCII digits."""
+    return v != "" and all("0" <= ch <= "9" for ch in v)
 
 
 def parse_duration_flag(name: str, v: str) -> int:
@@ -2320,6 +2338,7 @@ def run(a: argparse.Namespace, env: Dict[str, str], inv: Invocation, runtime: Op
     except AuditParamError as err:
         raise Usage("%s (%s)" % (err, AUDIT_INVALID_MARK)) from None
     cpus, memory, pids = parse_limits(a)
+    parallel = parse_parallel(a.parallel)
     timeout = parse_duration_flag("--timeout", a.timeout)
     if timeout <= 0:
         timeout = DEFAULT_COMMAND_TIMEOUT
@@ -2346,7 +2365,7 @@ def run(a: argparse.Namespace, env: Dict[str, str], inv: Invocation, runtime: Op
     gate = Gate(co, until, window, timeout, a.keep_going, dict(env), say,
                 image=(a.image or env.get("PF_PARAM_IMAGE", "")),
                 image_source=("flag" if a.image else ("param" if env.get("PF_PARAM_IMAGE", "") else "")),
-                audit=audit)
+                audit=audit, parallel=parallel)
     remote = a.remote or "origin"
     if not a.capsule:
         return clone_mode(a, env, inv, gate, remote)
