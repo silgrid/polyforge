@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 // Loaded through jiti so the module's own extensionless imports resolve the way
 // the app resolves them (tsconfig moduleResolution: "bundler"); bare
