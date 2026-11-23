@@ -192,6 +192,7 @@ export const zhCNLocale: LocalePlugin = {
     "settings.permissionPiWebChannel": "Pi Web 审批通道与推送",
     "settings.permissionPiWebChannelDescription": "claude 会话的权限询问如何到达你——Pi Web 弹窗，或由 claude 自行拒绝——以及有待授权时的推送提醒。这两项是 Pi Web 偏好：claude 原生没有对应位置。",
     "settings.permissionSandboxEnabled": "Bash 沙箱",
+    "settings.permissionSandboxUnset": "未设置",
     "settings.permissionSandboxAutoAllow": "沙箱内自动放行 Bash",
     "settings.permissionSandboxOtherKeys": "其余沙箱键由 claude 自有（只读展示）：{keys}",
     "settings.permissionTrustPiNote": "pi 的信任决定存于自身的 trust.json，随 agent 配置目录变化。",

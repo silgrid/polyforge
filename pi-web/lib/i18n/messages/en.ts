@@ -192,6 +192,7 @@ export const enLocale: LocalePlugin = {
     "settings.permissionPiWebChannel": "Pi Web approval channel and push",
     "settings.permissionPiWebChannelDescription": "How a claude session's permission prompts reach you — Pi Web dialogs or claude refusing them itself — and the pending-permission push reminders. These are Pi Web preferences: claude has no native place for them.",
     "settings.permissionSandboxEnabled": "Bash sandbox",
+    "settings.permissionSandboxUnset": "Not set",
     "settings.permissionSandboxAutoAllow": "Auto-allow Bash if sandboxed",
     "settings.permissionSandboxOtherKeys": "Other sandbox keys claude owns (shown read-only): {keys}",
     "settings.permissionTrustPiNote": "pi's trust decision lives in its own trust.json, following the agent config directory.",

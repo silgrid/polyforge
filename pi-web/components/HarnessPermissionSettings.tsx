@@ -276,6 +276,7 @@ export function HarnessPermissionSettings({ cwd, sessionId }: HarnessPermissionS
                   values={unifiedValues("sandbox", sandboxCompare, {
                     pi: t("settings.permissionPiNoSandbox"),
                     claude: "",
+                    unset: t("settings.permissionSandboxUnset"),
                   })}
                 />
                 <section className="settings-general-section" data-permission-zone="claude">
