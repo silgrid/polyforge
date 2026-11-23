@@ -373,7 +373,7 @@ func (d *Daemon) overrideWriteRoute(w http.ResponseWriter, r *http.Request) {
 	// answers its own shape.
 	if scene.posture == runtime.OverridePostureQueued {
 		if req.Tier != "" || req.ClearTier {
-			out, qerr := d.queuedTierWrite(wi, item, req, operator)
+			out, qerr := d.queuedTierWrite(r.Context(), wi, item, req, operator)
 			if qerr != nil {
 				writeErrOf(w, qerr)
 				return
@@ -679,7 +679,7 @@ func (d *Daemon) piModelsAcceptable() map[string]bool {
 // the work item ON THIS MACHINE inherits it. It is not an attrs key: a
 // claim elsewhere does not inherit it, and the note says so. The lane the
 // ticket names judges the step; the Host catalog judges the name.
-func (d *Daemon) queuedTierWrite(wi string, item *api.WorkItem, req protocol.OverrideWriteRequest, operator string) (*protocol.OverrideWriteResult, error) {
+func (d *Daemon) queuedTierWrite(ctx context.Context, wi string, item *api.WorkItem, req protocol.OverrideWriteRequest, operator string) (*protocol.OverrideWriteResult, error) {
 	scene := &overrideScene{posture: runtime.OverridePostureQueued}
 	if item.BundleName != nil {
 		scene.bundle = *item.BundleName
@@ -712,7 +712,7 @@ func (d *Daemon) queuedTierWrite(wi string, item *api.WorkItem, req protocol.Ove
 				Detail: fmt.Sprintf("tier: the Host [step_tiers] catalog declares no tier %q — its tiers are %s; set one of them or clear the tier (`--clear-tier`)", req.Tier, strings.Join(sortedStepTiers(catalog), ", "))}
 		}
 	}
-	out, err := d.rt.ApplyStepOverride(context.Background(), wi, runtime.OverrideChange{
+	out, err := d.rt.ApplyStepOverride(ctx, wi, runtime.OverrideChange{
 		Step: req.Step, Operator: operator, Tier: req.Tier, ClearTier: req.ClearTier,
 	})
 	if err != nil {
@@ -726,8 +726,16 @@ func (d *Daemon) queuedTierWrite(wi string, item *api.WorkItem, req protocol.Ove
 	if row.Pending {
 		row.Source = overrideSourcePend
 	}
+	// the write resolved a posture itself: a claim that landed first sends
+	// it to the running capsule instead, and the answer must not pretend
+	// the local pending record now carries it (the queued param write's
+	// own re-read rule).
+	note := "queued: the tier rides this daemon's local pending record — the next claim of the work item on this machine carries it into the fresh capsule (a claim on another machine does not inherit it; set it there instead)"
+	if out.Posture != runtime.OverridePostureBlocked {
+		note = fmt.Sprintf("the work item was claimed while the write landed (posture %s): read the view before you send the change again", out.Posture)
+	}
 	return &protocol.OverrideWriteResult{WorkItem: wi, Changed: out.Changed, Posture: runtime.OverridePostureQueued, Published: false,
-		Note: "queued: the tier rides this daemon's local pending record — the next claim of the work item on this machine carries it into the fresh capsule (a claim on another machine does not inherit it; set it there instead)", Step: row}, nil
+		Note: note, Step: row}, nil
 }
 
 // queuedParamWrite applies one param change of a QUEUED work item to the
