@@ -125,6 +125,14 @@ class BlockingOutcomesTest(unittest.TestCase):
         self.assertEqual(chain['outcome'], 'fixed')
         self.assertEqual(chain['rounds'], [1, 2])
 
+    def test_last_mention_still_open_is_its_own_reason(self):
+        versions = _versions(
+            _review(1, 'FAIL', '## 发现\n\n### #1 blocking · bug — x\n'),
+            _review(2, 'FAIL', '## 发现\n\n### #1 blocking · bug（残留 r1#1）— x\n'))
+        [chain] = rf.chain_findings(self.cap, versions)
+        self.assertEqual(chain['outcome'], 'unknown')
+        self.assertEqual(chain['reason'], 'last mention still open')
+
     def test_rebutted_and_owner_and_fixed(self):
         versions = _versions(
             _review(1, 'FAIL', (
