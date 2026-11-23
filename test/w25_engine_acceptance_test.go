@@ -21,7 +21,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // ---------------------------------------------------------------------------
@@ -56,16 +58,38 @@ func w25e2eEnginePath(t *testing.T) string {
 // w25e2eGit runs one git command in dir with a fixed identity.
 func w25e2eGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
+	return w25e2eGitEnv(t, dir, nil, args...)
+}
+
+// w25e2eGitEnv is w25e2eGit with extra environment entries appended last
+// (the child sees the last duplicate key).
+func w25e2eGitEnv(t *testing.T, dir string, extra []string, args ...string) string {
+	t.Helper()
 	c := exec.Command("git", args...)
 	c.Dir = dir
 	c.Env = append(os.Environ(),
 		"GIT_AUTHOR_NAME=w25e2e", "GIT_AUTHOR_EMAIL=w25e2e@e",
 		"GIT_COMMITTER_NAME=w25e2e", "GIT_COMMITTER_EMAIL=w25e2e@e")
+	c.Env = append(c.Env, extra...)
 	out, err := c.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v in %s: %v\n%s", args, dir, err, out)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// w25e2eFixtureSeq numbers every fixture so its base commit carries its own
+// second. Two same-content fixtures then never share a base SHA, so a scenario
+// can tell a stale --base from its own without waiting for the wall clock to
+// turn (polyforge#238 u1: the w111 scenario used a sleep for exactly that,
+// which made the run depend on the host clock). The epoch is fixed, so the
+// same tree produces the same SHAs on every run.
+var w25e2eFixtureSeq atomic.Int64
+
+const w25e2eFixtureEpoch = 1767225600 // 2026-01-01T00:00:00Z
+
+func w25e2eFixtureDate() string {
+	return time.Unix(w25e2eFixtureEpoch+w25e2eFixtureSeq.Add(1), 0).UTC().Format("2006-01-02T15:04:05Z")
 }
 
 // w25e2eWrite writes one file (creating parent dirs).
@@ -88,6 +112,16 @@ func w25e2eCommit(t *testing.T, dir, msg string) string {
 	return w25e2eGit(t, dir, "rev-parse", "HEAD")
 }
 
+// w25e2eCommitAt is w25e2eCommit with the given author/committer date; the
+// fixture base uses it so each fixture lands in its own second.
+func w25e2eCommitAt(t *testing.T, dir, msg, date string) string {
+	t.Helper()
+	env := []string{"GIT_AUTHOR_DATE=" + date, "GIT_COMMITTER_DATE=" + date}
+	w25e2eGitEnv(t, dir, env, "add", "-A")
+	w25e2eGitEnv(t, dir, env, "commit", "-q", "-m", msg)
+	return w25e2eGitEnv(t, dir, env, "rev-parse", "HEAD")
+}
+
 // w25e2eFixture builds a clone whose default base is a recorded origin/main,
 // writes the given files, commits a base, and answers the clone dir and base.
 func w25e2eFixture(t *testing.T, files map[string]string) (dir, base string) {
@@ -102,7 +136,7 @@ func w25e2eFixture(t *testing.T, files map[string]string) (dir, base string) {
 	for rel, body := range files {
 		w25e2eWrite(t, dir, rel, body)
 	}
-	base = w25e2eCommit(t, dir, "w25e2e base")
+	base = w25e2eCommitAt(t, dir, "w25e2e base", w25e2eFixtureDate())
 	w25e2eGit(t, dir, "update-ref", "refs/remotes/origin/main", base)
 	w25e2eGit(t, dir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
 	return dir, base

@@ -18,7 +18,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"time"
 )
 
 // w111scCommand is one reported command; the source reaches the JSON too.
@@ -93,25 +92,18 @@ scoped_command=docs/*|echo DOCS-CHANGED
 // w111scArgs answers the engine argv of one sub-case: --base is THAT
 // fixture's own base commit (polyforge#85 fix build, verification r2#1:
 // reusing the lib fixture's --base made the scenario depend on the wall-clock
-// second — two same-content fixtures built in one second carry the same base
-// SHA, one built in the next does not, and the stale SHA made verify-scope
-// silently fall back to the full tier).
+// second — two same-content fixtures built in one second carried the same base
+// SHA, one built in the next did not, and the stale SHA made verify-scope
+// silently fall back to the full tier). polyforge#238 u1 removed the last
+// wall-clock dependence: the fixture helper gives every fixture base its own
+// commit second (w25e2eFixtureDate), so this scenario needs no sleep between
+// fixtures.
 func w111scArgs(light bool, base string) []string {
 	args := []string{"--base", base}
 	if light {
 		args = append([]string{"--light"}, args...)
 	}
 	return args
-}
-
-// w111scNextSecond blocks until the wall clock leaves the current second, so
-// the next fixture's base commit carries a different commit timestamp — and
-// with the same content and message, a different SHA. The scenarios below
-// rely on it: two fixtures built in one second would share their base SHA and
-// hide a sub-case that reuses another fixture's --base.
-func w111scNextSecond(t *testing.T) {
-	t.Helper()
-	time.Sleep(time.Until(time.Now().Truncate(time.Second).Add(time.Second)) + 5*time.Millisecond)
 }
 
 // TestW111ScopedCommandSelected: a matching changed path adds the declared
@@ -135,12 +127,13 @@ func TestW111ScopedCommandSelected(t *testing.T) {
 			t.Fatalf("the matched scoped_command follows, source conf: %+v", got)
 		}
 
-		// polyforge#85 fix build (verification r2#1): force this fixture into a
-		// later wall-clock second, so its base commit is a different SHA — the
-		// scenario then proves the engine reads THIS fixture's --base, never a
-		// stale one from the previous fixture (which would fall back to the
-		// full tier and leave scoped() empty).
-		w111scNextSecond(t)
+		// polyforge#85 fix build (verification r2#1): each fixture owns its
+		// --base. polyforge#238 u1: the fixture helper gives every fixture base
+		// its own commit second, so the docs fixture's base is a different SHA
+		// without a wall-clock wait — the scenario still proves the engine
+		// reads THIS fixture's --base, never a stale one from the previous
+		// fixture (which would fall back to the full tier and leave scoped()
+		// empty).
 		dir, base = w25e2eFixture(t, w111scFiles(w111scConf))
 		w25e2eWrite(t, dir, "docs/guide.md", "# guide 2\n")
 		w25e2eCommit(t, dir, "change docs")
