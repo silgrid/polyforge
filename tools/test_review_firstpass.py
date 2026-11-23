@@ -70,6 +70,21 @@ class BlockingParseTest(unittest.TestCase):
         items = _item(text, 1)
         self.assertEqual([(i['item'], i['class']) for i in items], [(1, 'bug')])
 
+    def test_negated_blocking_is_not_an_item(self):
+        text = _review(1, 'FAIL', '## 发现\n\n4. 顺手可做（不阻断）：#9 和 #13 的措辞\n')
+        self.assertEqual(_item(text, 1), [])
+
+    def test_a_section_heading_without_blocking_is_not_a_blocking_section(self):
+        text = _review(1, 'FAIL', '## 逐项核对（无阻断的部分）\n\n  #24 下会把唯一块折叠\n')
+        self.assertEqual(_item(text, 1), [])
+
+    def test_a_body_number_list_under_discovery_is_not_an_item(self):
+        text = _review(1, 'FAIL', (
+            '## 发现\n\n### #1 blocking · guarantee — x\n\n'
+            '2. 本改动自己的过渡没有交代，见 ac_gap 的说明。\n'))
+        self.assertEqual([(i['item'], i['class']) for i in _item(text, 1)],
+                         [(1, 'guarantee')])
+
     def test_mention_of_an_earlier_round_is_not_an_item(self):
         text = _review(2, 'PASS', '## 上一轮发现逐条核对\n\n- **r1#1 已修。**\n')
         self.assertEqual(_item(text, 2), [])
