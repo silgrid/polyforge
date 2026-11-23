@@ -14,6 +14,14 @@ declare global {
 
 const ALLOWED_ROOTS_TTL_MS = 5_000;
 
+/**
+ * Invalidate the allowed-roots cache (polyforge#252). A successful delete
+ * drops it, so the deleted sessions' cwds stop being roots at once; the 5s
+ * TTL still bounds what an external change takes (see
+ * docs/agents/files-and-access.md).
+ */
+export function invalidateAllowedFileRoots(): void {}
+
 export async function getAllowedFileRoots(): Promise<Set<string>> {
   const now = Date.now();
   const cached = globalThis.__piAllowedRootsCache;
