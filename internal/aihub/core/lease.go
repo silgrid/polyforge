@@ -397,6 +397,10 @@ func (m *LeaseManager) Lookup(requestID, machineID, workItemID string) (*LeaseGr
 			return nil, Fail(api.ErrCoreNotFound, "LEASE_NOT_QUEUED",
 				"request %s holds no lease for this machine and work item", requestID)
 		}
+		if holder.expiresAtNS <= m.now().UnixNano() {
+			return nil, Fail(api.ErrCoreConflict, "LEASE_LOST",
+				"lease %s/%s expired", holder.kind, holder.key)
+		}
 		return heldGrant(holder), nil
 	}
 	waiter, err := loadLeaseWaiter(m.db, requestID)
