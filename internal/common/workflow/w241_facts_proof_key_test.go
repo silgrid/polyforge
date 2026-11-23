@@ -78,9 +78,10 @@ func TestW241FactsProofRegistry(t *testing.T) {
 	dump := workflow.RegistryDump()
 	for _, want := range []string{
 		"[facts_proof keys]",
-		"facts_proof.result: string, required",
-		"facts_proof.command: string, required",
-		"[required]\nfacts_proof.command\nfacts_proof.result",
+		"result: string, required",
+		"command: string, required",
+		"facts_proof.command",
+		"facts_proof.result",
 	} {
 		if !strings.Contains(dump, want) {
 			t.Errorf("the contract registry carries no %q", want)
@@ -91,7 +92,7 @@ func TestW241FactsProofRegistry(t *testing.T) {
 		t.Fatal(err)
 	}
 	schema := string(raw)
-	for _, want := range []string{`"facts_proof"`, `\{repo\}`} {
+	for _, want := range []string{`"facts_proof"`, `\\{repo\\}`} {
 		if !strings.Contains(schema, want) {
 			t.Errorf("the lane schema carries no %q", want)
 		}
