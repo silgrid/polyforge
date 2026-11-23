@@ -163,7 +163,7 @@ class BlockingOutcomesTest(unittest.TestCase):
                 '## 发现\n\n### #1 blocking · test_weakened — y\n\n'
                 '| r1#1 blocking test_weakened (AC7) | **残留（范围缩小）→ 本轮 #1** | 某段说明 owner 消息 2026-11-15 的要求。 |\n')),
             _review(3, 'PASS', (
-                '## 发现\n\n### #1 blocking · test_weakened — y\n\n'
+                '## 上一轮发现逐条核对\n\n'
                 '| r2#1 blocking test_weakened (AC7，r1#1 的残留) | **已修** | 某段说明 owner 消息 2026-11-16 的要求。 |\n')))
         [chain] = rf.chain_findings(self.cap, versions)
         self.assertEqual(chain['outcome'], 'fixed')
@@ -182,7 +182,7 @@ class BlockingOutcomesTest(unittest.TestCase):
     def test_last_mention_still_open_is_its_own_reason(self):
         versions = _versions(
             _review(1, 'FAIL', '## 发现\n\n### #1 blocking · bug — x\n'),
-            _review(2, 'FAIL', '## 发现\n\n### #1 blocking · bug（残留 r1#1）— x\n'))
+            _review(2, 'FAIL', '## 发现\n\n### #1 blocking · bug — x\n\nr1#1 仍在（本轮 #1）\n'))
         [chain] = rf.chain_findings(self.cap, versions)
         self.assertEqual(chain['outcome'], 'unknown')
         self.assertEqual(chain['reason'], 'last mention still open')
@@ -197,7 +197,7 @@ class BlockingOutcomesTest(unittest.TestCase):
                 '## 上一轮发现逐条核对\n\n'
                 '- **r1#1 已修。**\n\n'
                 '- **r1#2：撤回（build 证据成立）。**\n\n'
-                '- **r1#3：撤回。** owner 消息 2026-11-14 明确接受\n')))
+                '- **r1#3：撤回（owner 消息 2026-11-14 明确接受）。**\n')))
         got = {c['item']: (c['outcome'], c['reason']) for c in rf.chain_findings(self.cap, versions)}
         self.assertEqual(got[1], ('fixed', ''))
         self.assertEqual(got[2], ('rebutted', ''))
