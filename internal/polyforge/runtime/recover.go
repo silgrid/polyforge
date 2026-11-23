@@ -302,7 +302,7 @@ func (r *Runtime) startEngine(ctx context.Context, j *job, interruptedCause stri
 		SpawnN:           int64(spawnN),
 		Spawner:          r.spawner,
 		StepEnded:        r.stepEnded(j.wi),
-		Compose:          r.composeFor(j.capsuleDir, project, bundle, manual),
+		Compose:          r.composeFor(j.wi, j.capsuleDir, project, bundle, manual),
 		Params:           r.paramsFor(j.capsuleDir, project, bundle),
 		EpicChildren:     epicChildrenProvider(r, j),
 		InterruptedCause: interruptedCause,
@@ -344,13 +344,29 @@ func (r *Runtime) startEngine(ctx context.Context, j *job, interruptedCause stri
 // workspace.ComposeCandidates with the work item's frozen manual list.
 // File reads only; the driver calls it outside its own lock. A WI without
 // a bundle has no list.
-func (r *Runtime) composeFor(capsuleDir, project, bundle string, manual []string) func() (map[string][]string, error) {
+func (r *Runtime) composeFor(wi, capsuleDir, project, bundle string, manual []string) func() (map[string][]string, error) {
 	return func() (map[string][]string, error) {
 		fm, wcfg, ov, err := r.dispatchSources(capsuleDir, project, bundle)
 		if err != nil || fm == nil {
 			return nil, err
 		}
-		return workspace.ComposeCandidatesWithOverlay(fm, wcfg, project, manual, ov), nil
+		out, fallbacks := workspace.ComposeCandidatesWithTier(fm, wcfg, project, manual, ov, r.StepTiersCatalog())
+		if len(fallbacks) > 0 {
+			// polyforge#81 Q12 A: one composition-scoped diagnostic event
+			// per dispatch composition that fell through — the affected
+			// steps, the missing/empty tier and the layer that now
+			// governs. It never claims the step's dispatch already ran.
+			steps := make([]map[string]any, 0, len(fallbacks))
+			for _, f := range fallbacks {
+				steps = append(steps, map[string]any{"step": f.Step, "tier": f.Tier, "reason": f.Reason, "next_source": f.NextSource, "scope": f.Scope})
+			}
+			r.tap(wi, EventStepTierFallback, map[string]any{
+				"scope": "composition",
+				"steps": steps,
+				"note":  "an overlay tier is not in the Host [step_tiers] catalog; the step composes from the next layer",
+			})
+		}
+		return out, nil
 	}
 }
 

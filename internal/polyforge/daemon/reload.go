@@ -190,6 +190,10 @@ func (d *Daemon) reloadConfig() (*cli.ConfigReloadResponse, error) {
 	// applied/live (the classification is the proof no restart is needed),
 	// and only the Host's (the default Cell's) reload reports it.
 	if d.profile() == cellcfg.DefaultProfile && !reflect.DeepEqual(prev.StepTiers, newCfg.StepTiers) {
+		// polyforge#81: the catalog now has a daemon consumer — the
+		// dispatch-time expansion — so the Host's reload swaps the live
+		// snapshot. A named Cell's reload never reports or writes it.
+		d.live.SetStepTiers(newCfg.StepTiers)
 		add(cli.StepTiersLabel, cli.ConfigLive, "applied", "")
 	}
 	mappingChanged := !d.plan().Equal(newCfg.Mapping)

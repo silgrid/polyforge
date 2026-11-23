@@ -88,7 +88,11 @@ type Config struct {
 	// mapping and claude_bin are read through it at their use sites so a
 	// reload takes effect without a restart. nil (unit tests) falls back
 	// to Mapping/ClaudeBin.
-	Live          *liveconfig.State
+	Live *liveconfig.State
+	// StepTiers answers the Host's live [step_tiers] catalog (polyforge#81):
+	// the dispatch-time composition expands an overlay tier through it. nil
+	// (a bare Config) is no catalog.
+	StepTiers     func() map[string][]string
 	DataDir       string // state.json + external git-dirs live here
 	GitRemoteBase string // e.g. https://aihub.example/git → <base>/<wi>.git
 	WorkflowsDir  string // daemon checkout's workflows/ (materialization source)
