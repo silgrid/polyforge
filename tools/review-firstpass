@@ -376,7 +376,9 @@ BLOCK_VERDICT = re.compile(r'\b(PASS|FAIL)\b')
 BLOCK_REF = re.compile(r'r(\d+)#(\d+)')
 BLOCK_HEADING = re.compile(r'^\s{0,3}(#{2,4})\s+(.*)$')
 BLOCK_SECTION_BLOCK = re.compile(r'阻断|阻塞|blocking')
-BLOCK_SECTION_NON = re.compile(r'非阻断|非阻塞|non-blocking')
+BLOCK_SECTION_NON = re.compile(r'非阻断|非阻塞|non-blocking|无阻断|无阻塞|不阻断|不阻塞|没有阻断|没有阻塞|no blocking|without blocking')
+BLOCK_NEGATIVE = re.compile(r'不阻断|不阻塞|无阻断|无阻塞|没有阻断|没有阻塞|non-blocking|no blocking|without blocking')
+BLOCK_OLD_ITEM = re.compile(r'^\d+\.\s*(?:\*\*|`)*(?:#\d+\s*)?(?:blocking|阻断|阻塞|bug|ac_gap|project_rule|test_weakened|guarantee)\b', re.I)
 BLOCK_THIS_ROUND = re.compile(r'(?:本轮|this round)\s*#(\d+)', re.I)
 BLOCK_SUMMARY = re.compile(r'(\d+)\s*条?\s*(?<!非)(?:阻断|阻塞)|(?<!non-)blocking\s*(\d+)\s*条|(\d+)\s*(?<!non-)blocking')
 BLOCK_OUTCOMES = ('fixed', 'rebutted', 'owner', 'withdrawn-unknown', 'unknown')
@@ -430,9 +432,9 @@ def _class_of(label):
 
 
 def _is_blocking_line(label, section_blocking, section_non):
-    low = label.lower()
-    if 'non-blocking' in low or '非阻断' in label or '非阻塞' in label:
+    if BLOCK_NEGATIVE.search(label):
         return False
+    low = label.lower()
     if 'blocking' in low or '阻断' in label or '阻塞' in label:
         return True
     if section_blocking:
@@ -465,23 +467,25 @@ def parse_blocking_items(text, round_no):
     per distinct item number, by first appearance. Only a line that opens
     with its own item number is an item — a body list, a sub-bullet or a
     prose mention is not; a line that only mentions an earlier round's item
-    (`r<n>#<k>` with n != round_no) is not an item either."""
+    (`r<n>#<k>` with n != round_no) is not an item either. A negated
+    `blocking` (`不阻断`, `无阻断`, `non-blocking`) never makes a line or a
+    section blocking, and the old numbered form under `## 发现` counts only
+    when the class word (or `blocking`) leads the item."""
     items, seen = [], set()
     section_blocking = section_non = False
     for line in text.split('\n'):
         h = BLOCK_HEADING.match(line)
         if h and len(h.group(1)) == 2:
             body = h.group(2).strip()
-            section_blocking = bool(BLOCK_SECTION_BLOCK.search(body)) and not BLOCK_SECTION_NON.search(body)
             section_non = bool(BLOCK_SECTION_NON.search(body))
+            section_blocking = bool(BLOCK_SECTION_BLOCK.search(body)) and not section_non
             continue
         if section_non:
             continue
         label = _item_label(line)
         starts = bool(re.match(r'^(?:#\d+|r\d+#\d+)', label))
         if not starts and not section_blocking:
-            # the old numbered form under `## 发现`: `1. **ac_gap AC2**`
-            starts = bool(re.match(r'^\d+\.', label))
+            starts = bool(BLOCK_OLD_ITEM.match(label))
         if not starts:
             continue
         num, ref_round = _item_number(label, None)
