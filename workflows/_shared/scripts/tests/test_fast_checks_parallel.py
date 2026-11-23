@@ -19,6 +19,7 @@ import os
 import re
 import subprocess
 import sys
+import typing
 import unittest
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -69,33 +70,35 @@ class ParallelCase(GitCase):
             "full_command=echo nested-full > nested-full.txt\n"
         ) % (gate(self.events, "B1", wait_for="A1.start"), gate(self.events, "B2"))
 
-    def two_root_repo(self) -> str:
+    def two_root_repo(self, conf: str = "", nested_conf: str = "",
+                      change: Optional[Dict[str, str]] = None) -> str:
         """The clone, one commit ahead of its origin; the change touches
         the root's app/ and the nested root's pi/."""
         bare = os.path.join(self.tmp, "app.git")
         git(self.tmp, "init", "-q", "--bare", "-b", "main", "app.git")
         clone = Repo(os.path.join(self.capsule, "repos", "app"), {
             "go.mod": GO_MOD,
-            ".polyforge/verify-scope.conf": self.conf,
+            ".polyforge/verify-scope.conf": conf or self.conf,
             "app/app.go": APP,
-            "pi/.polyforge/verify-scope.conf": self.nested_conf,
+            "pi/.polyforge/verify-scope.conf": nested_conf or self.nested_conf,
             "pi/note.txt": "pi\n",
         })
         git(clone.dir, "remote", "add", "origin", bare)
         git(clone.dir, "push", "-q", "origin", "main")
         git(clone.dir, "remote", "set-head", "origin", "-a")
-        clone.commit("the change", {"app/app.go": APP.replace("42", "43"), "pi/note.txt": "pi 2\n"})
+        clone.commit("the change", change or {"app/app.go": APP.replace("42", "43"), "pi/note.txt": "pi 2\n"})
         return clone.dir
 
-    def run_checks(self, extra: Tuple[str, ...] = ()) -> Tuple[int, Dict[str, Any]]:
+    def run_checks(self, extra: Tuple[str, ...] = (), out: str = "") -> Tuple[int, Dict[str, Any]]:
         """fast_checks.py --repo app --phase fast, as a skill runs it."""
+        out = out or self.out
         argv = [sys.executable, FAST_CHECKS, "--capsule", self.capsule, "--engine", ENGINE,
-                "--repo", "app", "--phase", "fast", "--deadline", "10m", "--out", self.out, *extra]
+                "--repo", "app", "--phase", "fast", "--deadline", "10m", "--out", out, *extra]
         c = subprocess.run(argv, capture_output=True, text=True, env=env_without("PF_CAPSULE"))
-        if not os.path.exists(self.out):
+        if not os.path.exists(out):
             raise AssertionError("fast_checks.py wrote no result file (exit %d): %s"
                                  % (c.returncode, c.stderr[-800:]))
-        with open(self.out, encoding="utf-8") as f:
+        with open(out, encoding="utf-8") as f:
             return c.returncode, json.load(f)
 
     def events_of(self) -> List[str]:
@@ -106,7 +109,7 @@ class ParallelCase(GitCase):
             return []
 
     def commands_of(self, res: Dict[str, Any]) -> List[Dict[str, Any]]:
-        return res["details"]["commands"]
+        return typing.cast(List[Dict[str, Any]], res["details"]["commands"])
 
     def log_seq(self, entry: Dict[str, Any]) -> int:
         """The number of the command's log directory (<n>/command.log)."""
@@ -171,3 +174,99 @@ class HostGroupsTest(ParallelCase):
                                capture_output=True, text=True, env=env_without("PF_CAPSULE"))
             self.assertEqual(c.returncode, 2, (bad, c.stderr[-400:]))
             self.assertIn("--parallel", c.stderr)
+
+
+class HostSemanticsTest(ParallelCase):
+    """AC1: the parallel path keeps the serial path's meaning — a green
+    run is still reused (never executed, the original log kept), a skipped
+    command still takes no log number, one command's failure or timeout
+    stops neither its group nor the other one, and heads, entries and
+    summary are the serial run's."""
+
+    def test_reuse_still_skips_the_execution(self) -> None:
+        self.two_root_repo()
+        code, first = self.run_checks()
+        self.assertEqual(code, 0, first.get("summary"))
+        events = self.events_of()
+        code, second = self.run_checks()
+        self.assertEqual(code, 0, second.get("summary"))
+        cmds = self.commands_of(second)
+        self.assertEqual([c.get("reused") for c in cmds], [True] * 4, cmds)
+        self.assertEqual(self.events_of(), events, "a reused command is not executed")
+        self.assertEqual([c["log"] for c in cmds],
+                         [c["log"] for c in self.commands_of(first)], "a reused entry keeps its original log")
+        self.assertIn("4 reused", second["summary"])
+
+    def test_skip_takes_no_log_number(self) -> None:
+        """A gate missing its declared prerequisite is skipped with its
+        reason, and the commands that run keep the plan's contiguous
+        numbers (the skip takes none)."""
+        self.two_root_repo(
+            conf=("stack=go\n"
+                  "check=first|fast|echo first >> %(e)s\n"
+                  "check=absent|fast|echo absent >> %(e)s\n"
+                  "check_requires_cmd=absent|no-such-bin-pf254\n"
+                  "check=last|fast|echo last >> %(e)s\n") % {"e": self.events},
+            nested_conf=self.nested_conf)
+        code, res = self.run_checks()
+        self.assertEqual(code, 0, res.get("summary"))
+        cmds = self.commands_of(res)
+        self.assertEqual([c["name"] for c in cmds], ["first", "absent", "last", "pi/fast-1", "pi/fast-2"])
+        self.assertTrue(cmds[1]["skipped"])
+        self.assertIn("no-such-bin-pf254", cmds[1]["skip_reason"])
+        self.assertNotIn("log", cmds[1])
+        ran = [self.log_seq(c) for c in cmds if not c.get("skipped")]
+        self.assertEqual(ran, list(range(ran[0], ran[0] + len(ran))), "a skip takes no log number")
+
+    def test_one_groups_failure_does_not_stop_the_other(self) -> None:
+        self.two_root_repo(
+            conf=("stack=go\n"
+                  "check=fail|fast|exit 3\n"
+                  "check=after|fast|echo after.done >> %(e)s\n") % {"e": self.events},
+            nested_conf=self.nested_conf)
+        code, res = self.run_checks()
+        self.assertEqual(code, 1, res.get("summary"))
+        cmds = self.commands_of(res)
+        self.assertEqual([c["name"] for c in cmds], ["fail", "after", "pi/fast-1", "pi/fast-2"])
+        self.assertEqual([c["exit_code"] for c in cmds], [3, 0, 0, 0])
+        events = self.events_of()
+        # the failing group's own next command ran, and so did the other group
+        self.assertIn("after.done", events)
+        self.assertIn("B1.end", events)
+        self.assertIn("B2.end", events)
+        self.assertIn("`exit 3`", res["summary"])
+
+    def test_one_commands_timeout_does_not_stop_its_group(self) -> None:
+        self.two_root_repo(
+            conf=("stack=go\n"
+                  "check=slow|fast|sleep 5; echo slow.done >> %(e)s\n"
+                  "check_timeout=slow|100ms\n"
+                  "check=after|fast|echo after.done >> %(e)s\n") % {"e": self.events},
+            nested_conf=self.nested_conf)
+        code, res = self.run_checks()
+        self.assertEqual(code, 1, res.get("summary"))
+        by_name = {c["name"]: c for c in self.commands_of(res)}
+        self.assertTrue(by_name["slow"]["timed_out"], by_name["slow"])
+        self.assertEqual(by_name["after"]["exit_code"], 0, "the group ran on after the timeout")
+        self.assertEqual(by_name["pi/fast-2"]["exit_code"], 0, "the other group ran too")
+        events = self.events_of()
+        self.assertIn("after.done", events)
+        self.assertNotIn("slow.done", events, "the timeout killed the command whole")
+
+    def test_heads_and_reds_are_the_serial_ones(self) -> None:
+        """The same tree and plan: the serial and the parallel run record
+        the same commands, exit codes, heads and summary — only the
+        durations and the log directories differ."""
+        self.two_root_repo()
+        serial_out = os.path.join(self.capsule, "serial.json")
+        parallel_out = os.path.join(self.capsule, "parallel.json")
+        code_s, serial = self.run_checks(("--parallel", "1"), out=serial_out)
+        code_p, parallel = self.run_checks(out=parallel_out)
+        self.assertEqual((code_s, code_p), (0, 0), (serial.get("summary"), parallel.get("summary")))
+        self.assertEqual(serial["heads"], parallel["heads"])
+        self.assertEqual(serial["summary"], parallel["summary"])
+        fields = ("name", "phase", "root", "cmd", "exit_code", "skipped", "reused", "source")
+        self.assertEqual([{k: c.get(k) for k in fields} for c in self.commands_of(serial)],
+                         [{k: c.get(k) for k in fields} for c in self.commands_of(parallel)])
+        self.assertEqual([p["root"] for p in serial["details"]["reports"]],
+                         [p["root"] for p in parallel["details"]["reports"]])
