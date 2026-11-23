@@ -895,7 +895,7 @@ outranks it — the view shows the tier as set and masked — and
 catalog to declare `default` (Q10 A: no exemption) but expands nothing:
 it means "unset", so the yaml and lane layers govern. A clear needs no
 catalog row. A **queued** ticket's tier rides this daemon's local pending
-override record, not an attrs key: the next claim of the ticket on this
+override record, not an attrs key: the claim that follows on this
 machine inherits it (a claim on another machine does not; set it there
 instead). The view's source label says `step override tier <name>` (or
 `step override (pending) tier <name>`) and names a missing/empty tier's
