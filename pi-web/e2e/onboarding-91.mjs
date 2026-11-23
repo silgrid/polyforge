@@ -1,6 +1,5 @@
 // carries: components/OnboardingWizard*, components/AppShell.tsx, components/GeneralSettings.tsx
-// carries: app/api/onboarding/*, lib/onboarding-state.ts, lib/polyforge-messages*.ts
-// carries: components/PolyforgeFileTicketDialog.tsx, app/api/polyforge/messages/file-ticket/*
+// carries: app/api/onboarding/*, lib/onboarding-state.ts, lib/onboarding-flow.ts
 // — polyforge#167 (91-onboarding) AC2, authored before the implementation from
 // the ticket alone: image mode only, four steps (AIHub → 账号 → 工作区 → 第一张票),
 // each skippable, the team mode's `pf cell add` key on stdin, the account deep
@@ -114,6 +113,7 @@ const serverFile = join(scratch, "server.log");
 const h = createHarness();
 let browser;
 let base;
+const contexts = [];
 const failures = [];
 const scenario = createCheck({ failures, message: errorText, record: (names, text) => `${names.join(" ")}: ${text}` });
 const waitFor = createWaitUntil({ every: 200, withLast: true });
@@ -169,6 +169,7 @@ try {
   ({ base } = await h.startServer({ name: "onboarding-91", logFile: serverFile, env: serverEnv(seedRoot) }));
   browser = await h.launchBrowser(() => chromium.launch());
   const { context, page } = await newPage();
+  contexts.push(context);
   const wizard = page.locator("[data-onboarding-wizard]");
   const problems = [];
   page.on("pageerror", (error) => problems.push(error.message));
@@ -304,6 +305,7 @@ try {
 } catch (error) {
   setupFailed(failures, error);
 } finally {
+  for (const context of contexts) await context.close().catch(() => {});
   await browser?.close().catch(() => {});
   await h.stop().catch(() => {});
   rmSync(scratch, { recursive: true, force: true });

@@ -30,12 +30,12 @@ const saved = {
   dataDir: process.env.POLYFORGE_DATA_DIR,
   seed: globalThis.__piWebTestSeedRoot,
 };
-function useEnv({ image = true } = {}) {
+function applyEnv({ image = true } = {}) {
   process.env.PI_CODING_AGENT_DIR = agentDir;
   process.env.POLYFORGE_DATA_DIR = dataRoot;
   globalThis.__piWebTestSeedRoot = image ? seedRoot : absentSeed;
 }
-useEnv();
+applyEnv();
 test.after(() => {
   process.env.PI_CODING_AGENT_DIR = saved.agentDir;
   process.env.POLYFORGE_DATA_DIR = saved.dataDir;
@@ -54,7 +54,7 @@ const statePath = join(agentDir, "pi-web-onboarding.json");
 const stored = () => JSON.parse(readFileSync(statePath, "utf8"));
 
 test("the empty image-mode state names the four steps, the first step and no connection", async () => {
-  useEnv();
+  applyEnv();
   rmSync(statePath, { force: true });
   const response = await GET(request());
   assert.equal(response.status, 200);
@@ -69,7 +69,7 @@ test("the empty image-mode state names the four steps, the first step and no con
 });
 
 test("the AIHub connection is the first-boot record's whitelist, and no credential value rides any response or the file", async () => {
-  useEnv();
+  applyEnv();
   rmSync(statePath, { force: true });
   mkdirSync(join(dataRoot, "workstation"), { recursive: true });
   writeFileSync(join(dataRoot, "workstation", "first-boot.json"), JSON.stringify({
@@ -110,7 +110,7 @@ test("the AIHub connection is the first-boot record's whitelist, and no credenti
 });
 
 test("each write merges by step: complete/skip/dismiss/reopen and the persisted file", async () => {
-  useEnv();
+  applyEnv();
   rmSync(statePath, { force: true });
   const complete = await post({ action: "complete", step: "aihub" });
   assert.equal(complete.status, 200);
@@ -136,7 +136,7 @@ test("each write merges by step: complete/skip/dismiss/reopen and the persisted 
 });
 
 test("the request contract: gate, JSON-only, action and step validated before any write", async () => {
-  useEnv();
+  applyEnv();
   rmSync(statePath, { force: true });
   const untrusted = await GET(new Request("http://evil.example.test/api/onboarding", { headers: { host: "evil.example.test" } }));
   assert.equal(untrusted.status, 403);
@@ -155,7 +155,7 @@ test("the request contract: gate, JSON-only, action and step validated before an
 });
 
 test("outside the image the API answers one boolean and never the wizard's state facts", async () => {
-  useEnv({ image: false });
+  applyEnv({ image: false });
   rmSync(statePath, { force: true });
   const response = await GET(request());
   assert.equal(response.status, 200);
