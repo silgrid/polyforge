@@ -152,6 +152,7 @@ test("a successful delete invalidates the allowed-roots cache; a failed one leav
   const broken = await writeSession(sessionsDir, "cache-broken", { id: "cache-broken", cwd: "/work/cache-broken" });
   ids.push("cache-broken");
   invalidateSessionListCache();
+  globalThis.__piAllowedRootsCache = undefined; // let the cache rebuild and pick the new session up
   await getAllowedFileRoots();
   const cacheBeforeFailure = globalThis.__piAllowedRootsCache;
   assert.equal(cacheBeforeFailure.roots.has("/work/cache-broken"), true, "the cache holds the third session's cwd");
