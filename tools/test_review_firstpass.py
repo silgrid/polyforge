@@ -269,6 +269,16 @@ class BlockingOutcomesTest(unittest.TestCase):
             [chain] = rf.chain_findings(self.cap, versions)
             self.assertEqual(chain['outcome'], want, line)
 
+    def test_a_negated_owner_ruling_is_not_a_ruling(self):
+        versions = _versions(
+            _review(1, 'FAIL', '## 发现\n\n### #2 blocking · bug — x\n'),
+            _review(2, 'PASS', (
+                '## 上一轮发现逐条核对\n\n'
+                '| r1#2 bug | **已修** | 说明 |\n\n'
+                '- owner 消息：build 第 2 轮 header 记「无」。r1#2 的修法用的是 review 推荐的软链，没有新的目的地，不需要 owner 裁定。\n')))
+        [chain] = rf.chain_findings(self.cap, versions)
+        self.assertEqual(chain['outcome'], 'fixed')
+
     def test_rebutted_and_owner_and_fixed(self):
         versions = _versions(
             _review(1, 'FAIL', (
