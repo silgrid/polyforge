@@ -213,6 +213,16 @@ func RunSupervise(rs RunSpec) int {
 			st.active, st.viaSignal = true, true
 			stopAll()
 		case e := <-exits:
+			// The event is here: this run is no longer in flight, and
+			// the main loop is the one that settles it. The manager may
+			// be descheduled right after its send, so clearing the flag
+			// there raced this very check — the run then waited out the
+			// whole grace with nothing left to kill and answered 1
+			// (polyforge#251). Clearing it here, before allSettled, is
+			// the single place the reception is visible to the loop.
+			e.proc.mu.Lock()
+			e.proc.inflight = false
+			e.proc.mu.Unlock()
 			if e.proc.daemon && !st.active && (e.code == 0 || e.code == NeedsOperatorExit) {
 				// the daemon ended the run itself (Q3): the container
 				// stops with its code
@@ -301,9 +311,6 @@ func (p *supProc) manage(exits chan<- supExit, runDone <-chan struct{}) {
 		if p.postExitHold != nil {
 			p.postExitHold(p)
 		}
-		p.mu.Lock()
-		p.inflight = false
-		p.mu.Unlock()
 		if p.daemon && code == UpgradeRestartExit {
 			// the daemon asked for the restart-for-an-upgrade
 			// (polyforge#175): relaunch AT ONCE — no failure count,
@@ -440,6 +447,11 @@ func (p *supProc) term() {
 // kill is the grace's end: SIGKILL to a child still running, answering
 // whether it signalled one (polyforge#251).
 func (p *supProc) kill() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.cmd != nil && p.cmd.Process != nil {
+		_ = p.cmd.Process.Kill()
+	}
 	return false
 }
 
