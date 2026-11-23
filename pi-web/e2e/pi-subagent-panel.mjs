@@ -5,13 +5,14 @@
 // starts a real child session; every later fact is the product's own.
 //
 // P1  the running list's row, the Agent tool card's button and the top-bar
-//     subagent row each open the panel in the chat (classic viewport; the
-//     split-pane request filter is executed by AppShell.split-pane-subagent).
+//     subagent row each open the panel in the chat; a split pane and a phone
+//     keep it in the pane/chat it belongs to.
 // P2  the panel shows the child transcript, refreshes as entries arrive, sends
 //     a running steer through POST /api/subagents/<id> {action:"steer"}, and
 //     disables the box with its reason once the run settles.
-// P3  Esc, Close and Jump to launch work; Jump closes the panel and keeps the
-//     launch card.
+// P3  Esc, Close and Jump to launch work; a launch card outside the loaded
+//     50-entry window is found by paging and Jump brings it into view; the
+//     panel drag clamps to [160, bounds-14] and double-click resets it.
 // P4  no right-panel agent tab is created; the Claude panel and file tabs are
 //     untouched (their own suites stay green).
 //
@@ -137,10 +138,16 @@ async function newSessionWithSubagent(delayMs) {
   return { sessionId, childId: run.sessionId };
 }
 
-async function openSession(sessionId) {
+async function pageText(sessionId) {
+  const body = await getJson(`/api/sessions/${encodeURIComponent(sessionId)}`);
+  return (body.context?.messages ?? []).map((m) => (typeof m.content === "string" ? m.content : (m.content ?? []).map((b) => b.text ?? "").join(""))).join("\n");
+}
+
+async function openSession(sessionId, options = {}) {
   const page = await h.openPage({
     session: sessionId,
-    storage: STORAGE,
+    storage: { ...STORAGE, ...(options.storage ?? {}) },
+    ...(options.viewport ? { viewport: options.viewport } : {}),
     ready: async (page, _o, timeout) => { await composer(page).waitFor({ state: "visible", timeout }); },
   });
   opened.push(page);
@@ -221,6 +228,123 @@ try {
     await jump.click();
     await waitFor(async () => (await panel(page).count()) === 0, 10_000, "Jump did not close the panel");
     assert.equal(await page.locator(`[data-pi-agent-tool-call]`).count() >= 1, true, "the launch card is still in the chat");
+    await closeOpened();
+  });
+
+  // P1 split — two panes, each card opens its own pane's panel.
+  await scenario("P1-split", async () => {
+    const a = await newSessionWithSubagent(50);
+    await waitFor(async () => (await pageText(a.sessionId)).includes("PARENT-DONE"), 45_000, "the first split session never settled");
+    const b = await newSessionWithSubagent(50);
+    await waitFor(async () => (await pageText(b.sessionId)).includes("PARENT-DONE"), 45_000, "the second split session never settled");
+    const page = await openSession(a.sessionId, {
+      storage: {
+        "pi-web:split-view-enabled": "true",
+        "pi-web:open-pane-tabs": JSON.stringify({ version: 1, tabs: [
+          { sessionId: a.sessionId, label: "A", projectName: "project" },
+          { sessionId: b.sessionId, label: "B", projectName: "project" },
+        ], focusedPaneId: a.sessionId }),
+      },
+    });
+    await page.locator("[data-split-pane-area]").waitFor({ state: "visible", timeout: 30_000 });
+    for (const id of [a.sessionId, b.sessionId]) {
+      await page.locator(`#pane-panel-${id}`).waitFor({ state: "visible", timeout: 30_000 });
+    }
+    async function openInPane(sessionId, childId) {
+      const pane = page.locator(`#pane-panel-${sessionId}`);
+      for (const fold of await pane.getByRole("button", { name: /^Process details/ }).all()) {
+        if ((await fold.getAttribute("aria-expanded")) !== "true") await fold.click();
+      }
+      const card = pane.getByRole("button", { name: "Open sub-agent panel" }).first();
+      await card.waitFor({ state: "visible", timeout: 20_000 });
+      await card.click();
+      await waitFor(async () => (await pane.locator(`[data-pi-subagent-panel="${childId}"]`).count()) === 1, 20_000, `pane ${sessionId} did not open its own panel`);
+    }
+    await openInPane(a.sessionId, a.childId);
+    assert.equal(await page.locator(`#pane-panel-${b.sessionId} [data-pi-subagent-panel]`).count(), 0, "pane A's panel appeared in pane B too");
+    await page.locator(`#pane-tab-${b.sessionId}`).click();
+    await openInPane(b.sessionId, b.childId);
+    assert.equal(await page.locator(`#pane-panel-${a.sessionId} [data-pi-subagent-panel="${a.childId}"]`).count(), 1, "pane A keeps its own panel");
+    assert.equal(await page.locator(`#pane-panel-${a.sessionId} [data-pi-subagent-panel="${b.childId}"]`).count(), 0, "pane B's panel appeared in pane A too");
+    assert.equal(await page.locator(`#pane-panel-${b.sessionId} [data-pi-subagent-panel="${b.childId}"]`).count(), 1, "pane B shows its own child");
+    await closeOpened();
+  });
+
+  // P1 mobile — the panel stays inside a 375px viewport, its close button on screen.
+  await scenario("P1-mobile", async () => {
+    const { sessionId, childId } = await newSessionWithSubagent(50);
+    const page = await openSession(sessionId, { viewport: { width: 375, height: 667 } });
+    await waitFor(async () => (await page.locator("body").innerText()).includes("PARENT-DONE"), 45_000, "the parent turn never finished");
+    await revealToolCards(page);
+    await cardButton(page).click();
+    const close = panel(page).getByRole("button", { name: "Close" });
+    await close.waitFor({ state: "visible", timeout: 20_000 });
+    const box = await panel(page).boundingBox();
+    assert.ok(box && box.width <= 375 + 1, `the panel overflows the phone viewport: ${JSON.stringify(box)}`);
+    const closeBox = await close.boundingBox();
+    assert.ok(closeBox && closeBox.x >= 0 && closeBox.x + closeBox.width <= 375 + 1 && closeBox.y + closeBox.height <= 667 + 1, `the close button is not on screen: ${JSON.stringify(closeBox)}`);
+    assert.equal(await page.locator(`[data-pi-subagent-panel="${childId}"]`).count(), 1, "the phone panel did not open");
+    await closeOpened();
+  });
+
+  // P3 drag — the top edge clamps to [160, bounds-14] and double-click resets.
+  await scenario("P3-drag", async () => {
+    const { sessionId, childId } = await newSessionWithSubagent(50);
+    const page = await openSession(sessionId);
+    await waitFor(async () => (await page.locator("body").innerText()).includes("PARENT-DONE"), 45_000, "the parent turn never finished");
+    await revealToolCards(page);
+    await cardButton(page).click();
+    const p = page.locator(`[data-pi-subagent-panel="${childId}"]`);
+    const handle = p.locator("[data-claude-subagent-panel-resize]");
+    await handle.waitFor({ state: "visible", timeout: 20_000 });
+    const boundsHeight = await page.locator("[data-claude-subagent-panel-bounds]").evaluate((el) => el.clientHeight);
+    const hb = await handle.boundingBox();
+    assert.ok(hb, "the drag handle is laid out");
+    const center = { x: hb.x + hb.width / 2, y: hb.y + hb.height / 2 };
+    await page.mouse.move(center.x, center.y);
+    await page.mouse.down();
+    await page.mouse.move(center.x, center.y - 2000, { steps: 4 });
+    await page.mouse.up();
+    const tall = (await p.boundingBox()).height;
+    assert.ok(tall <= boundsHeight - 14 + 2, `the panel exceeded the bounds minus padding: ${tall} > ${boundsHeight - 14}`);
+    const hb2 = await handle.boundingBox();
+    const center2 = { x: hb2.x + hb2.width / 2, y: hb2.y + hb2.height / 2 };
+    await page.mouse.move(center2.x, center2.y);
+    await page.mouse.down();
+    await page.mouse.move(center2.x, center2.y + 2000, { steps: 4 });
+    await page.mouse.up();
+    const short = (await p.boundingBox()).height;
+    assert.ok(Math.abs(short - 160) <= 2, `the panel did not clamp to its 160px floor: ${short}`);
+    await handle.dblclick();
+    const inlineHeight = await p.evaluate((el) => el.style.height);
+    assert.equal(inlineHeight, "", "double-click did not clear the stored height");
+    await closeOpened();
+  });
+
+  // P3 history — a launch card outside the loaded 50-entry window is paged
+  // into view, and Jump brings it on screen.
+  await scenario("P3-history", async () => {
+    const { sessionId } = await newSessionWithSubagent(50);
+    scripted.push(...Array.from({ length: 50 }, (_, i) => ({ kind: "text", text: `FILL-${i}` })));
+    await waitFor(async () => (await pageText(sessionId)).includes("PARENT-DONE"), 45_000, "the first parent turn never finished");
+    for (let i = 0; i < 50; i += 1) {
+      const sent = await postJson(`/api/agent/${encodeURIComponent(sessionId)}`, { type: "prompt", message: `fill ${i}` });
+      assert.equal(sent.status, 200, `prompt ${i} -> ${sent.status}`);
+    }
+    await waitFor(async () => (await getJson(`/api/sessions/${encodeURIComponent(sessionId)}`)).stats.totalMessages >= 100, 120_000, "the filler history never settled");
+    const page = await openSession(sessionId);
+    await page.getByRole("button", { name: /^Agents/ }).click();
+    const row = page.getByRole("option").filter({ hasText: "Read the note" }).first();
+    await row.waitFor({ state: "visible", timeout: 20_000 });
+    await row.click();
+    const jump = panel(page).getByRole("button", { name: "Jump to launch" });
+    await waitFor(async () => !(await jump.isDisabled()), 60_000, "the paged launch record was never found");
+    await jump.click();
+    await waitFor(async () => (await panel(page).count()) === 0, 10_000, "Jump did not close the panel");
+    const card = page.locator('[data-pi-agent-tool-call]').first();
+    const cardBox = await card.boundingBox();
+    const viewport = page.viewportSize();
+    assert.ok(cardBox && viewport && cardBox.y + cardBox.height > 0 && cardBox.y < viewport.height, `the launch card was not brought into view: ${JSON.stringify(cardBox)}`);
     await closeOpened();
   });
 
