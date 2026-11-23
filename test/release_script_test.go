@@ -71,13 +71,13 @@ func relPiwebTgz(version string) string {
 	return buf.String()
 }
 
-// relRepin recomputes a fake release's SHA256SUMS over its 5 payloads and its
+// relRepin recomputes a fake release's SHA256SUMS over its 6 payloads and its
 // manifest (keeping the manifest's commit), so a case that swaps a payload
 // fails only the check it targets.
 func relRepin(f map[string]string, tag string) {
 	tgz := "silgrid-pi-web-" + tag + ".tgz"
 	var sums strings.Builder
-	for _, n := range []string{"pf-linux-amd64", "pf-darwin-arm64", "pf-darwin-amd64", "aihub-image.digest", tgz} {
+	for _, n := range []string{"pf-linux-amd64", "pf-darwin-arm64", "pf-darwin-amd64", "aihub-image.digest", "workstation-image.digest", tgz} {
 		fmt.Fprintf(&sums, "%x  %s\n", sha256.Sum256([]byte(f[n])), n)
 	}
 	f["SHA256SUMS"] = sums.String()
@@ -228,9 +228,29 @@ exec %s "$@"
 	relWrite(t, filepath.Join(w.bin, "docker"), `#!/bin/sh
 registry_has() {
   _t=${1##*:}
-  [ -e "$CALLLOG.pushed" ] && return 0
-  case " $FAKE_REGISTRY_HAS " in *" $_t "*) return 0 ;; esac
-  git --git-dir="$FAKE_ORIGIN" rev-parse -q --verify "refs/tags/$_t" >/dev/null 2>&1
+  case "$1" in
+    "$_ah":*)
+      [ -e "$CALLLOG.pushed" ] && return 0
+      case " $FAKE_REGISTRY_HAS " in *" $_t "*) return 0 ;; esac
+      git --git-dir="$FAKE_ORIGIN" rev-parse -q --verify "refs/tags/$_t" >/dev/null 2>&1 ;;
+    *)  # the workstation image (polyforge#86): explicit only - this world
+      # pushed it or FAKE_REGISTRY_HAS_WS names it, never an origin tag
+      # (a partial publish leaves the tag on origin without the image)
+      [ -e "$CALLLOG.pushed-ws" ] && return 0
+      case " $FAKE_REGISTRY_HAS_WS " in *" $_t "*) return 0 ;; esac
+      return 1 ;;
+  esac
+}
+_ah="${RELEASE_IMAGE:-ghcr.io/silgrid/polyforge-aihub}"
+# registry_read_gate <ref>: the not-found knobs, per image - FAKE_REGISTRY_MISSING
+# ("not found" until this world pushed that image) and
+# FAKE_REGISTRY_APPEARS_ON (another run pushes meanwhile).
+registry_read_gate() {
+  case "$1" in
+    "$_ah":*) [ -n "$FAKE_REGISTRY_MISSING" ] && [ ! -e "$CALLLOG.pushed" ] && { echo "ERROR: $1: not found" >&2; exit 1; } ;;
+    *) [ -n "$FAKE_REGISTRY_MISSING" ] && [ ! -e "$CALLLOG.pushed-ws" ] && { echo "ERROR: $1: not found" >&2; exit 1; } ;;
+  esac
+  [ -n "$FAKE_REGISTRY_APPEARS_ON" ] && [ ! -e "$FAKE_REGISTRY_APPEARS_ON" ] && { echo "ERROR: $1: not found" >&2; exit 1; }
 }
 case "$1" in
   # The test gate's container (; gate.py's docker client):
@@ -289,24 +309,71 @@ case "$1" in
   # FAKE_REGISTRY_NEEDS_LOGIN - unauthorized until a docker login succeeded.
   # Otherwise the registry holds a tag when origin carries it as a release,
   # this world pushed an image, or FAKE_REGISTRY_HAS names it (another
-  # build's tag in the same package).
+  # build's tag in the same package). The workstation image (polyforge#86)
+  # has its own marker (a buildx --push) and its own FAKE_REGISTRY_HAS_WS.
   buildx) [ -n "$FAKE_NO_BUILDX" ] && { echo "docker: 'buildx' is not a docker command." >&2; exit 1; }
+    case "$2" in
+      version) echo "github.com/docker/buildx v0.17.1" ;;
+      inspect) echo "Name: default"
+        if [ -n "$FAKE_NO_ARM64" ]; then echo "Platforms: linux/amd64"; else echo "Platforms: linux/amd64, linux/arm64"; fi ;;
+      build)
+        echo "docker buildx $*" >> "$CALLLOG"
+        # FAKE_WS_BUILD_FAIL fails only the --push build (the pre-claim
+        # cacheonly build still succeeds, so the failure lands after the claim)
+        case "$*" in *" --push"*) [ -n "$FAKE_WS_BUILD_FAIL" ] && { echo "ERROR: $FAKE_WS_BUILD_FAIL" >&2; exit 1; } ;; esac
+        case "$*" in *" --push"*) : > "$CALLLOG.pushed-ws" ;; esac ;;
+      *)
     [ -n "$FAKE_REGISTRY_NEEDS_LOGIN" ] && [ ! -e "$CALLLOG.loggedin" ] && { echo "ERROR: unauthorized: authentication required" >&2; exit 1; }
+    # FAKE_ANON_UNAUTHORIZED: with no stored credential (an empty
+    # DOCKER_CONFIG - the anonymous read polyforge#86's --verify makes) the
+    # package answers unauthorized: it is still private
+    [ -n "$FAKE_ANON_UNAUTHORIZED" ] && [ ! -f "${DOCKER_CONFIG:-$HOME/.docker}/config.json" ] && { echo "ERROR: unauthorized: authentication required" >&2; exit 1; }
     [ -n "$FAKE_REGISTRY_UNREADABLE" ] && { echo "ERROR: failed to authorize: 403 Forbidden" >&2; exit 1; }
+    # FAKE_WS_REGISTRY_UNREADABLE (polyforge#86 r1#2): the workstation
+    # image's repository alone answers nothing - unreadable, never absent
+    case "$4" in
+      "$_ah":*) ;;
+      *) [ -n "$FAKE_WS_REGISTRY_UNREADABLE" ] && { echo "ERROR: failed to authorize: 403 Forbidden" >&2; exit 1; } ;;
+    esac
     [ -n "$FAKE_BUILDX_ERROR" ] && { echo "ERROR: $FAKE_BUILDX_ERROR" >&2; exit 1; }
-    [ -n "$FAKE_REGISTRY_MISSING" ] && [ ! -e "$CALLLOG.pushed" ] && { echo "ERROR: $4: not found" >&2; exit 1; }
-    [ -n "$FAKE_REGISTRY_APPEARS_ON" ] && [ ! -e "$FAKE_REGISTRY_APPEARS_ON" ] && { echo "ERROR: $4: not found" >&2; exit 1; }
+    registry_read_gate "$4"
     registry_has "$4" || { echo "ERROR: $4: not found" >&2; exit 1; }
-    echo "Name: x"; echo "Digest: $FAKE_REGISTRY_DIGEST" ;;
+    echo "Name: x"; echo "Digest: $FAKE_REGISTRY_DIGEST"
+    # the index's platforms (polyforge#86's --verify reads them);
+    # FAKE_WS_NO_ARM64 drops the arm64 child - a broken index
+    echo "Manifests:"
+    echo "  Name: x@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    echo "  Platform: linux/amd64"
+    if [ -z "$FAKE_WS_NO_ARM64" ]; then
+      echo "  Name: x@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+      echo "  Platform: linux/arm64"
+    fi ;;
+    esac ;;
   # config/layer digests come BEFORE the Descriptor here, so only the
   # Descriptor-scoped read can find the manifest digest
   manifest)
     [ -n "$FAKE_REGISTRY_UNREADABLE" ] && { echo "unauthorized: authentication required" >&2; exit 1; }
+    [ -n "$FAKE_ANON_UNAUTHORIZED" ] && [ ! -f "${DOCKER_CONFIG:-$HOME/.docker}/config.json" ] && { echo "unauthorized: authentication required" >&2; exit 1; }
+    [ -n "$FAKE_WS_REGISTRY_UNREADABLE" ] && case "$4" in
+      "$_ah":*) ;;
+      *) echo "unauthorized: authentication required" >&2; exit 1 ;;
+    esac
     [ -n "$FAKE_REGISTRY_NEEDS_LOGIN" ] && [ ! -e "$CALLLOG.loggedin" ] && { echo "unauthorized: authentication required" >&2; exit 1; }
-    [ -n "$FAKE_REGISTRY_MISSING" ] && [ ! -e "$CALLLOG.pushed" ] && { echo "no such manifest: $4" >&2; exit 1; }
-    [ -n "$FAKE_REGISTRY_APPEARS_ON" ] && [ ! -e "$FAKE_REGISTRY_APPEARS_ON" ] && { echo "no such manifest: $4" >&2; exit 1; }
+    registry_read_gate "$4"
     registry_has "$4" || { echo "no such manifest: $4" >&2; exit 1; }
-    printf '{\n\t"Ref": "x",\n\t"SchemaV2Manifest": {\n\t\t"config": {\n\t\t\t"digest": "sha256:cccc"\n\t\t},\n\t\t"layers": [\n\t\t\t{\n\t\t\t\t"Digest": "sha256:dddd"\n\t\t\t}\n\t\t]\n\t},\n\t"Descriptor": {\n\t\t"mediaType": "m",\n\t\t"digest": "%s",\n\t\t"size": 952\n\t}\n}\n' "$FAKE_REGISTRY_DIGEST" ;;
+    case "$4" in
+      "$_ah":*)
+        # single-arch image: one object; config/layer digests come BEFORE the
+        # Descriptor, so only the Descriptor-scoped read finds the manifest digest
+        printf '{\n\t"Ref": "x",\n\t"SchemaV2Manifest": {\n\t\t"config": {\n\t\t\t"digest": "sha256:cccc"\n\t\t},\n\t\t"layers": [\n\t\t\t{\n\t\t\t\t"Digest": "sha256:dddd"\n\t\t\t}\n\t\t]\n\t},\n\t"Descriptor": {\n\t\t"mediaType": "m",\n\t\t"digest": "%s",\n\t\t"size": 952\n\t}\n}\n' "$FAKE_REGISTRY_DIGEST" ;;
+      *)
+        # multi-arch index: docker manifest inspect -v answers an ARRAY, one
+        # object per platform - every Descriptor.digest is a CHILD manifest's
+        # and the index digest appears nowhere (which is why the workstation
+        # digest is read through buildx alone, polyforge#86 r1#1)
+        printf '[\n\t{\n\t\t"Ref": "x",\n\t\t"Descriptor": {\n\t\t\t"mediaType": "m",\n\t\t\t"digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",\n\t\t\t"size": 952,\n\t\t\t"platform": {\n\t\t\t\t"architecture": "amd64",\n\t\t\t\t"os": "linux"\n\t\t\t}\n\t\t},\n\t\t"SchemaV2Manifest": {\n\t\t\t"config": {\n\t\t\t\t"digest": "sha256:cccc"\n\t\t\t}\n\t\t}\n\t},\n\t{\n\t\t"Ref": "y",\n\t\t"Descriptor": {\n\t\t\t"mediaType": "m",\n\t\t\t"digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",\n\t\t\t"size": 952,\n\t\t\t"platform": {\n\t\t\t\t"architecture": "arm64",\n\t\t\t\t"os": "linux"\n\t\t\t}\n\t\t},\n\t\t"SchemaV2Manifest": {\n\t\t\t"config": {\n\t\t\t\t"digest": "sha256:eeee"\n\t\t\t}\n\t\t}\n\t}\n]\n' ;;
+    esac
+    ;;
 esac
 exit 0
 `, 0o755)
@@ -644,7 +711,7 @@ func TestReleaseScriptHappyPathOrderAndAssets(t *testing.T) {
 		t.Fatalf("release failed: %v\n%s", err, out)
 	}
 	calls := w.calls()
-	order := []string{"xrefs", "build", "audit", "docker build", "npm ci", "npm run build", "npm version", "npm pack", "git push", "docker push", "docker inspect", "gh release create"}
+	order := []string{"xrefs", "build", "audit", "docker build", "docker buildx build", "npm ci", "npm run build", "npm version", "npm pack", "git push", "docker push", "docker inspect", "gh release create"}
 	last := -1
 	for _, p := range order {
 		i := relIndex(calls, p)
@@ -683,7 +750,7 @@ func TestReleaseScriptHappyPathOrderAndAssets(t *testing.T) {
 		t.Fatalf("main's pi-web/package.json must keep its development value: %q", got)
 	}
 	rel := filepath.Join(w.fakeRel, "v1.2.1")
-	relFiles := []string{"pf-linux-amd64", "pf-darwin-arm64", "pf-darwin-amd64", "aihub-image.digest", "silgrid-pi-web-v1.2.1.tgz", "SHA256SUMS", "release-manifest.json", ".body"}
+	relFiles := []string{"pf-linux-amd64", "pf-darwin-arm64", "pf-darwin-amd64", "aihub-image.digest", "workstation-image.digest", "silgrid-pi-web-v1.2.1.tgz", "SHA256SUMS", "release-manifest.json", ".body"}
 	for _, f := range relFiles {
 		if _, err := os.Stat(filepath.Join(rel, f)); err != nil {
 			t.Fatalf("release missing %s: %v", f, err)
@@ -701,11 +768,14 @@ func TestReleaseScriptHappyPathOrderAndAssets(t *testing.T) {
 	if strings.TrimSpace(string(dg)) != relFakeDigest {
 		t.Fatalf("digest file = %q", dg)
 	}
-	sums, _ := os.ReadFile(filepath.Join(rel, "SHA256SUMS"))
-	if n := strings.Count(string(sums), "\n"); n != 5 || strings.Contains(string(sums), "SHA256SUMS") || strings.Contains(string(sums), "release-manifest") {
-		t.Fatalf("SHA256SUMS should cover exactly the 5 payload files: %q", sums)
+	if wsd, _ := os.ReadFile(filepath.Join(rel, "workstation-image.digest")); strings.TrimSpace(string(wsd)) != relFakeDigest {
+		t.Fatalf("workstation-image.digest = %q, want the registry's index digest", wsd)
 	}
-	for _, n := range []string{"pf-linux-amd64", "pf-darwin-arm64", "pf-darwin-amd64", "aihub-image.digest", "silgrid-pi-web-v1.2.1.tgz"} {
+	sums, _ := os.ReadFile(filepath.Join(rel, "SHA256SUMS"))
+	if n := strings.Count(string(sums), "\n"); n != 6 || strings.Contains(string(sums), "SHA256SUMS") || strings.Contains(string(sums), "release-manifest") {
+		t.Fatalf("SHA256SUMS should cover exactly the 6 payload files: %q", sums)
+	}
+	for _, n := range []string{"pf-linux-amd64", "pf-darwin-arm64", "pf-darwin-amd64", "aihub-image.digest", "workstation-image.digest", "silgrid-pi-web-v1.2.1.tgz"} {
 		if !strings.Contains(string(sums), "  "+n+"\n") {
 			t.Fatalf("SHA256SUMS lacks %s: %q", n, sums)
 		}
@@ -1036,7 +1106,7 @@ func TestReleaseScriptPostFailTextIsAccurate(t *testing.T) {
 	}
 	// a failure after the claim no longer burns the version -
 	// the text says so and how to resume it.
-	for _, want := range []string{"FAILED AFTER v1.2.1 WAS CLAIMED", "failing step: docker push", "NOT\nburned", "resumes it", "immutable", "artifacts/release-v1.2.1/pf and the two darwin", "artifacts/release-v1.2.1/pf-darwin-{arm64,amd64}", "staging directory"} {
+	for _, want := range []string{"FAILED AFTER v1.2.1 WAS CLAIMED", "failing step: docker push", "NOT\nburned", "resumes it", "immutable", "artifacts/release-v1.2.1/pf and the two darwin", "artifacts/release-v1.2.1/pf-darwin-{arm64,amd64}", "buildx builder's cache", "staging directory"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("post-fail text lacks %q\n%s", want, out)
 		}
@@ -1108,9 +1178,11 @@ func TestReleaseScriptCommittedNotesUsedAsIs(t *testing.T) {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	body, _ := os.ReadFile(filepath.Join(w.fakeRel, "v1.2.1", ".body"))
-	// the committed notes, byte for byte, then the integration batch's
-	// record; the committed file itself is not touched
-	if !strings.HasPrefix(string(body), "# hand written\n\n## Integration batch\n\n") || !strings.Contains(string(body), "green integrate batch `wi_b`") {
+	// the committed notes, byte for byte, then the workstation image's
+	// section (polyforge#86), then the integration batch's record - which
+	// stays the LAST section (#14 r1#5); the committed file itself is not
+	// touched
+	if !strings.HasPrefix(string(body), "# hand written\n\n## Workstation image\n\n") || !strings.Contains(string(body), "ghcr.io/silgrid/polyforge-workstation:v1.2.1") || !strings.Contains(string(body), "green integrate batch `wi_b`") {
 		t.Fatalf("notes = %q", body)
 	}
 	if got := relGit(t, w.work, "status", "--porcelain"); got != "" {
@@ -1250,15 +1322,19 @@ func TestReleaseScriptLoginWhenNotLoggedIn(t *testing.T) {
 // ---- --verify
 
 // publishFake plants a release in the fake gh store; mutate lets a case break it.
+// The planted release's images are in the fake registry too (both push
+// markers): --verify reads them.
 func (w *relWorld) publishFake(tag string, files map[string]string) {
 	d := filepath.Join(w.fakeRel, tag)
 	for n, c := range files {
 		relWrite(w.t, filepath.Join(d, n), c, 0o644)
 	}
 	relWrite(w.t, filepath.Join(d, ".body"), "notes\n", 0o644)
+	relWrite(w.t, w.log+".pushed", "", 0o644)
+	relWrite(w.t, w.log+".pushed-ws", "", 0o644)
 }
 
-// goodRelease is a complete release of tag: the 5 payloads, SHA256SUMS and
+// goodRelease is a complete release of tag: the 6 payloads, SHA256SUMS and
 // the manifest naming the tag's commit on origin (empty when origin has no
 // such tag).
 func (w *relWorld) goodRelease(tag string) map[string]string {
@@ -1266,11 +1342,12 @@ func (w *relWorld) goodRelease(tag string) map[string]string {
 	tgz := "silgrid-pi-web-" + tag + ".tgz"
 	f := map[string]string{
 		"pf-linux-amd64": "P", "pf-darwin-arm64": "Pa", "pf-darwin-amd64": "Px",
-		"aihub-image.digest": relFakeDigest + "\n",
-		tgz:                  relPiwebTgz(strings.TrimPrefix(tag, "v")),
+		"aihub-image.digest":       relFakeDigest + "\n",
+		"workstation-image.digest": relFakeDigest + "\n",
+		tgz:                        relPiwebTgz(strings.TrimPrefix(tag, "v")),
 	}
 	var sums strings.Builder
-	for _, n := range []string{"pf-linux-amd64", "pf-darwin-arm64", "pf-darwin-amd64", "aihub-image.digest", tgz} {
+	for _, n := range []string{"pf-linux-amd64", "pf-darwin-arm64", "pf-darwin-amd64", "aihub-image.digest", "workstation-image.digest", tgz} {
 		fmt.Fprintf(&sums, "%x  %s\n", sha256.Sum256([]byte(f[n])), n)
 	}
 	f["SHA256SUMS"] = sums.String()
@@ -1323,11 +1400,16 @@ func TestReleaseScriptVerify(t *testing.T) {
 			}, fail: "pi-web package version"},
 		{name: "digest mismatch", tag: "v1.3.0", origin: []string{"v1.2.0", "v1.3.0"},
 			env: []string{"FAKE_REGISTRY_DIGEST=sha256:bbbb"}, fail: "digest mismatch"},
-		// no buildx: the `docker manifest inspect -v` fallback reads the
-		// lowercase "digest" inside "Descriptor"
-		{name: "pass via manifest fallback", tag: "v1.3.0", origin: []string{"v1.2.0", "v1.3.0"},
-			env: []string{"FAKE_NO_BUILDX=1"}},
-		{name: "digest mismatch via manifest fallback", tag: "v1.3.0", origin: []string{"v1.2.0", "v1.3.0"},
+		// no buildx: the aihub image's digest still reads through the
+		// `docker manifest inspect -v` fallback (one object, the lowercase
+		// "digest" inside "Descriptor"), but the workstation image's index
+		// digest needs buildx - the manifest fallback answers only the
+		// per-platform CHILD manifests' digests, so matching a digest out of
+		// it would be wrong (r1#1). This case is red on the old fallback
+		// reader: it reported a digest MISMATCH, never named buildx.
+		{name: "no buildx: the workstation index digest needs buildx", tag: "v1.3.0", origin: []string{"v1.2.0", "v1.3.0"},
+			env: []string{"FAKE_NO_BUILDX=1"}, fail: "needs docker buildx"},
+		{name: "digest mismatch via manifest fallback (the aihub image)", tag: "v1.3.0", origin: []string{"v1.2.0", "v1.3.0"},
 			env: []string{"FAKE_NO_BUILDX=1", "FAKE_REGISTRY_DIGEST=sha256:bbbb"}, fail: "digest mismatch"},
 		{name: "non-monotonic", tag: "v1.2.0", origin: []string{"v1.02.0", "v1.2.0"}, fail: "monotonic"},
 		{name: "newer tag exists", tag: "v1.3.0", origin: []string{"v1.2.0", "v1.3.0", "v1.4.0"}, fail: "not strictly greater"},
@@ -2076,7 +2158,7 @@ func TestReleaseScriptSuffixVersion(t *testing.T) {
 	t.Run("row 1: first suffixed release of the public v0.2.0", func(t *testing.T) {
 		w := newRelSuffixWorld(t, relSuffixConf("fork"))
 		head := relGit(t, w.work, "rev-parse", "HEAD")
-		out, err := w.runPinned(nil)
+		out, err := w.runPinned([]string{"RELEASE_WORKSTATION_IMAGE=ghcr.io/example-org/fork-workstation"})
 		if err != nil || !strings.Contains(out, "version=v0.2.0-fork.1\n") {
 			t.Fatalf("want version v0.2.0-fork.1: %v\n%s", err, out)
 		}
@@ -2096,7 +2178,7 @@ func TestReleaseScriptSuffixVersion(t *testing.T) {
 		if strings.Contains(string(body), "second change") || strings.Contains(string(body), "topic-second") {
 			t.Fatalf("the notes of the first suffixed release must not list the pre-absorption history:\n%s", body)
 		}
-		vout, verr := w.run(nil, "--verify", "v0.2.0-fork.1")
+		vout, verr := w.run([]string{"RELEASE_WORKSTATION_IMAGE=ghcr.io/example-org/fork-workstation"}, "--verify", "v0.2.0-fork.1")
 		if verr != nil || strings.Contains(vout, "FAIL") ||
 			!strings.Contains(vout, "since v0.2.0 came through a merged PR") {
 			t.Fatalf("case 7: --verify v0.2.0-fork.1 must pass against the public v0.2.0: %v\n%s", verr, vout)
@@ -2107,7 +2189,7 @@ func TestReleaseScriptSuffixVersion(t *testing.T) {
 	t.Run("row 2: the next number of the same base", func(t *testing.T) {
 		w := newRelSuffixWorld(t, relSuffixConf("fork"))
 		w.tagOn("v0.2.0-fork.3", "HEAD^1")
-		out, err := w.runPinned(nil)
+		out, err := w.runPinned([]string{"RELEASE_WORKSTATION_IMAGE=ghcr.io/example-org/fork-workstation"})
 		if err != nil || !strings.Contains(out, "version=v0.2.0-fork.4\n") {
 			t.Fatalf("want version v0.2.0-fork.4: %v\n%s", err, out)
 		}
@@ -2119,7 +2201,7 @@ func TestReleaseScriptSuffixVersion(t *testing.T) {
 		w := newRelSuffixWorld(t, relSuffixConf("fork"))
 		w.tagOn("v0.2.0-fork.4", "HEAD")
 		w.absorbPublic("v0.2.1")
-		out, err := w.runPinned(nil)
+		out, err := w.runPinned([]string{"RELEASE_WORKSTATION_IMAGE=ghcr.io/example-org/fork-workstation"})
 		if err != nil || !strings.Contains(out, "version=v0.2.1-fork.1\n") {
 			t.Fatalf("want version v0.2.1-fork.1: %v\n%s", err, out)
 		}
@@ -2132,7 +2214,7 @@ func TestReleaseScriptSuffixVersion(t *testing.T) {
 			strings.Contains(string(body), "second change") {
 			t.Fatalf("the notes between the line's own versions must keep the whole range: %v\n%s", nerr, body)
 		}
-		vout, verr := w.run(nil, "--verify", "v0.2.1-fork.1")
+		vout, verr := w.run([]string{"RELEASE_WORKSTATION_IMAGE=ghcr.io/example-org/fork-workstation"}, "--verify", "v0.2.1-fork.1")
 		if verr != nil || strings.Contains(vout, "FAIL") ||
 			!strings.Contains(vout, "since v0.2.0-fork.4 came through a merged PR") {
 			t.Fatalf("case 7: --verify v0.2.1-fork.1 must pass against v0.2.0-fork.4: %v\n%s", verr, vout)
@@ -2153,10 +2235,10 @@ func TestReleaseScriptSuffixVersion(t *testing.T) {
 	// resumed, never released as a second version.
 	t.Run("case 6: a claimed suffixed version is resumed", func(t *testing.T) {
 		w := newRelSuffixWorld(t, relSuffixConf("fork"))
-		if out, err := w.runPinned([]string{"FAKE_PUSH_FAIL=1"}); err == nil || !strings.Contains(out, "FAILED AFTER v0.2.0-fork.1 WAS CLAIMED") {
+		if out, err := w.runPinned([]string{"RELEASE_WORKSTATION_IMAGE=ghcr.io/example-org/fork-workstation", "FAKE_PUSH_FAIL=1"}); err == nil || !strings.Contains(out, "FAILED AFTER v0.2.0-fork.1 WAS CLAIMED") {
 			t.Fatalf("setup: the first run must fail after claiming v0.2.0-fork.1: %v\n%s", err, out)
 		}
-		out, err := w.runPinned([]string{"FAKE_REGISTRY_MISSING=1"})
+		out, err := w.runPinned([]string{"RELEASE_WORKSTATION_IMAGE=ghcr.io/example-org/fork-workstation", "FAKE_REGISTRY_MISSING=1"})
 		if err != nil || !strings.Contains(out, "resuming v0.2.0-fork.1") || !strings.Contains(out, "version=v0.2.0-fork.1\n") {
 			t.Fatalf("the re-run must resume v0.2.0-fork.1: %v\n%s", err, out)
 		}
@@ -2169,7 +2251,7 @@ func TestReleaseScriptSuffixVersion(t *testing.T) {
 	// Case 8: the name is the configuration's, not the script's.
 	t.Run("case 8: another configured name", func(t *testing.T) {
 		w := newRelSuffixWorld(t, relSuffixConf("other"))
-		out, err := w.runPinned(nil)
+		out, err := w.runPinned([]string{"RELEASE_WORKSTATION_IMAGE=ghcr.io/example-org/other-workstation"})
 		if err != nil || !strings.Contains(out, "version=v0.2.0-other.1\n") {
 			t.Fatalf("want version v0.2.0-other.1: %v\n%s", err, out)
 		}
