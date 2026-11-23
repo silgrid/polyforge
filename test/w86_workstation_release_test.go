@@ -331,8 +331,14 @@ func TestW86ResumePushesPerImage(t *testing.T) {
 		if !strings.Contains(out, "image ghcr.io/silgrid/polyforge-aihub:v1.2.1 is already in the registry ("+relFakeDigest+")") {
 			t.Fatalf("the aihub image's keep must be reported:\n%s", out)
 		}
-		if push := w.calls(); relIndex(push, "docker buildx build") >= 0 && !strings.Contains(push[relIndex(push, "docker buildx build")], "--push") {
-			t.Fatalf("the workstation image's rebuild must end in a push build, not a cacheonly one: %v", push)
+		var pushBuild string
+		for _, c := range w.calls() {
+			if strings.HasPrefix(c, "docker buildx build") && strings.Contains(c, " --push") {
+				pushBuild = c
+			}
+		}
+		if pushBuild == "" {
+			t.Fatalf("the workstation image's rebuild must end in a push build, not only a cacheonly one: %v", w.calls())
 		}
 		w372AssertResumedOnce(t, w, out)
 	})
