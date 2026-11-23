@@ -32,6 +32,8 @@ const agentDir = join(home, ".pi", "agent");
 const project = join(scratch, "project");
 mkdirSync(project, { recursive: true });
 mkdirSync(agentDir, { recursive: true });
+mkdirSync(join(agentDir, "agents"), { recursive: true });
+writeFileSync(join(agentDir, "agents/settings.json"), JSON.stringify({ builtInEnabled: true }));
 
 // ---- fake model ------------------------------------------------------------
 let scripted = [];
@@ -165,13 +167,13 @@ try {
 
   // P1 + P2 — the three entries, the live transcript and a real steer.
   await scenario("P1P2", async () => {
-    const { sessionId, childId } = await newSessionWithSubagent(4_000);
+    const { sessionId, childId } = await newSessionWithSubagent(20_000);
     const page = await openSession(sessionId);
     // The running list's row appears while the child runs.
     await waitFor(async () => (await runningItem(page, childId).count()) === 1, 30_000, "the running subagent never appeared in the list");
     await runningItem(page, childId).click();
     await waitFor(async () => (await panel(page).count()) === 1, 20_000, "the running list did not open the panel");
-    assert.match(await panel(page).getAttribute("data-pi-subagent-status"), /running/, "the panel shows the run running");
+    await waitFor(async () => /running/.test(await panel(page).getAttribute("data-pi-subagent-status") ?? ""), 20_000, "the panel never showed the run running");
     // The box is enabled while running; the steer is a real POST to the run's route.
     const textarea = panel(page).locator("textarea");
     await textarea.waitFor({ state: "visible", timeout: 10_000 });
@@ -208,7 +210,7 @@ try {
     await waitFor(async () => (await cardButton(page).count()) === 1, 20_000, "the Agent card's panel button never appeared");
     await cardButton(page).click();
     await waitFor(async () => (await panel(page).count()) === 1, 20_000, "the Agent card did not open the panel");
-    assert.match(await panelText(page), /CHILD-ANSWER/, "the card's panel shows the child result");
+    await waitFor(async () => (await panelText(page)).includes("CHILD-ANSWER"), 30_000, "the card's panel never showed the child result");
     const jump = panel(page).getByRole("button", { name: "Jump to launch" });
     await waitFor(async () => !(await jump.isDisabled()), 20_000, "Jump never became available for the launch card");
     await jump.click();
