@@ -52,6 +52,8 @@ import (
 const (
 	EventOverrideSet   = "override_set"
 	EventOverrideClear = "override_clear"
+	// EventStepTierFallback is the dispatch-time composition's diagnostic.
+	EventStepTierFallback = "step_tier_fallback"
 )
 
 // The postures the write lands in (protocol.OverrideView.Posture's

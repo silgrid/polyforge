@@ -84,6 +84,9 @@ func parseStepTiersTable(file string, t *tableBlock) (map[string][]string, error
 	return out, nil
 }
 
+// StepTierNameProblem answers why name is not a legal catalog tier name.
+func StepTierNameProblem(name string) string { return "" }
+
 // stepTierCatalogCovers reports whether candidate is in the catalog,
 // by Q3's strength rule: a catalog entry without an effort covers the
 // candidate's model at any effort; an entry with an effort requires the

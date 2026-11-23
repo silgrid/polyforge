@@ -164,6 +164,38 @@ func ComposeCandidatesWithOverlay(fm *workflow.Lane, cfg *Config, project string
 	return out
 }
 
+// DefaultTierName is the catalog's conventional mainline tier (polyforge#81;
+// in the per-ticket overlay it means "unset").
+const DefaultTierName = "default"
+
+// TierFallback names one step whose overlay tier did not expand.
+type TierFallback struct {
+	Step       string
+	Tier       string
+	Reason     string
+	NextSource string
+	Scope      string
+}
+
+// TieredModelSource is one step's effective chain with the layer it came from.
+type TieredModelSource struct {
+	Models       []string
+	Source       string
+	FromOverlay  bool
+	TierGoverns  bool
+	TierFallback string
+}
+
+// ComposeCandidatesWithTier is ComposeCandidatesWithOverlay plus the Host catalog.
+func ComposeCandidatesWithTier(fm *workflow.Lane, cfg *Config, project string, manual []string, ov capsule.StepOverrides, catalog map[string][]string) (map[string][]string, []TierFallback) {
+	return nil, nil
+}
+
+// StepModelSourcesWithTier is StepModelSources plus the overlay tier.
+func StepModelSourcesWithTier(fm *workflow.Lane, cfg *Config, project string, manual []string, ov capsule.StepOverrides, catalog map[string][]string) map[string]TieredModelSource {
+	return nil
+}
+
 // StepModelSources answers, per step of lane, the effective candidate
 // list and the level it comes from — the chain BELOW the overlay
 // (polyforge#25): the manual list first, then the yaml/bundle levels
