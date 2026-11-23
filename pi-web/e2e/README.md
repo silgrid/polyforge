@@ -140,7 +140,8 @@ defect, and so the deterministic ones do not regress into fixed sleeps.
 - Fixed sleeps are not a settling proof anywhere in this package: a state that
   settles asynchronously is waited for with a bounded poll of the condition
   under test (`e2e/archive.mjs`'s `assertEventually`, the override route test's
-  child-exit wait), never a bare delay.
+  dropped-read wait — the two reads' own argv, then their exits, both bounded),
+  never a bare delay.
 
 ## Running every suite in parallel
 

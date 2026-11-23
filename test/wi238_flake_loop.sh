@@ -21,7 +21,7 @@
 # Usage:
 #   bash test/wi238_flake_loop.sh [--case step-agent|fixture-clock|override|all]
 #        [--n 20] [--ref <git-ref>] [--expect pass|fail] [--git-clock-wrap]
-#        [--log-dir <dir>]
+#        [--slow-dropped-read] [--log-dir <dir>]
 #
 #   --ref checks the ref out in a throwaway worktree; the repository's
 #   webui/dist and pi-web/node_modules are shared from the checkout so the
@@ -30,6 +30,9 @@
 #   deterministically crosses its second boundary and exposes the stale --base
 #   reuse (the fixed fixture overrides that clock with its own).
 #   --expect fail is the before-fix reproduction: every run must be red.
+#   --slow-dropped-read injects the controlled slow child into the target
+#   ref's override test mock: on an ended ticket the two dropped reads delay
+#   their own argv append, so the pre-fix ordering race is deterministic.
 #
 # Evidence for polyforge#238 is the pair of runs — `--ref <pre-fix>` red and
 # `--ref HEAD` N times green — with these logs.
@@ -42,6 +45,7 @@ n=20
 ref=""
 expect=pass
 git_clock_wrap=0
+slow_dropped_read=0
 log_dir=""
 
 while [ $# -gt 0 ]; do
@@ -51,6 +55,7 @@ while [ $# -gt 0 ]; do
     --ref) ref=${2:?}; shift 2 ;;
     --expect) expect=${2:?}; shift 2 ;;
     --git-clock-wrap) git_clock_wrap=1; shift ;;
+    --slow-dropped-read) slow_dropped_read=1; shift ;;
     --log-dir) log_dir=${2:?}; shift 2 ;;
     -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
     *) echo "wi238_flake_loop: unknown argument $1" >&2; exit 2 ;;
@@ -116,6 +121,51 @@ EOF
   export PATH=$wrap_dir:$PATH
 fi
 
+if [ "$slow_dropped_read" = 1 ]; then
+  # Controlled slow child (polyforge#238 defect 3 reproduction): in an ended
+  # ticket the route drops the override/params reads unawaited; delaying their
+  # own argv makes the ordering race deterministic on the pre-fix test file.
+  # Add-only: the committed file already carries this input.
+  python3 - "$worktree/pi-web/app/api/polyforge/polyforge-override-route.test.mjs" <<'W238PATCH'
+import sys
+path = sys.argv[1]
+lines = open(path).read().split("\n")
+if any("polyforge#238 defect 3 reproduction input" in line for line in lines):
+    sys.exit(0)
+idx = next((i for i, line in enumerate(lines) if "fs.appendFileSync(${JSON.stringify(log)}" in line), None)
+if idx is None:
+    sys.exit("wi238_flake_loop: the override mock's argv append line was not found")
+slow = [
+    "// polyforge#238 defect 3 reproduction input: on an ended ticket the route",
+    "// drops the override/params reads unawaited; letting those two children delay",
+    "// their own argv makes the ordering race deterministic for the loop harness.",
+    "// This is a controlled slow child (a scenario input), not a synchronization.",
+    'if (fs.readFileSync(${JSON.stringify(mode)}, "utf8") === "ended" && (args.includes("override") || args.includes("params"))) {',
+    "  const until = Date.now() + 300;",
+    "  while (Date.now() < until) { /* deliberate slow child */ }",
+    "}",
+]
+lines[idx:idx] = slow
+watch = next((i for i, line in enumerate(lines) if line.strip() == 'answer("running");'), None)
+if watch is None:
+    sys.exit("wi238_flake_loop: the override mock's view answer line was not found")
+slow_watch = [
+    '  // The reproduction widens the observation window of the NEXT test, so',
+    '  // the late argv lands before its assertion (a controlled slow answer).',
+    '  if (mode === "view" && process.env.WI238_SLOW_WATCH === "1") {',
+    "    const until = Date.now() + 600;",
+    "    while (Date.now() < until) { /* deliberate slow answer */ }",
+    "  }",
+]
+lines[watch:watch] = slow_watch
+open(path, "w").write("\n".join(lines))
+W238PATCH
+  if [ $? -ne 0 ]; then
+    echo "wi238_flake_loop: the slow-dropped-read patch failed" >&2
+    exit 2
+  fi
+fi
+
 if [ -z "$log_dir" ]; then
   log_dir=$tmp/logs
 fi
@@ -142,7 +192,7 @@ run_fixture_clock() {
 }
 
 run_override() {
-  ( cd "$worktree/pi-web" && node --experimental-strip-types --test app/api/polyforge/polyforge-override-route.test.mjs )
+  ( cd "$worktree/pi-web" && WI238_SLOW_WATCH=$slow_dropped_read node --experimental-strip-types --test app/api/polyforge/polyforge-override-route.test.mjs )
 }
 
 run_case() {
