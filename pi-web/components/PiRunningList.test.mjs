@@ -1,6 +1,7 @@
 // carries: components/PiRunningList.tsx, hooks/useSubagentRuns.ts, components/ChatWindow.tsx, hooks/useBackgroundTasks*
 import "#test-env";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { createJiti } from "jiti";
 
@@ -142,4 +143,15 @@ test("the running items are buttons in Claude's grid; no history entry renders a
   assert.doesNotMatch(html, /data-pi-bg-history/, "the retired history entry renders");
   // The grid the Claude list established: equal-width columns from 260px.
   assert.match(html, /repeat\(auto-fill, ?minmax\(260px, ?1fr\)\)/, "the grid is not Claude's");
+});
+
+
+test("polyforge#255 u5: a queued subagent opens the same in-chat panel as a running one", async () => {
+  // Q7 A: both states open the panel; a queued run shows the wait and its
+  // disabled input there. The row must not gate its click on `running`.
+  const source = await readFile(new URL("./PiRunningList.tsx", import.meta.url), "utf8");
+  assert.match(source, /onClick=\{\(\) => onOpenSubagent\(run\.sessionId, label\)\}/, "the subagent row forwards every state to the opener");
+  assert.doesNotMatch(source, /if \(running\) onOpenSubagent/, "the click is not gated on the running state");
+  const html = render({ subagents: [subagent({ status: "queued", description: "" })] });
+  assert.match(html, /<button[^>]*data-pi-subagent-item="sub-1"[^>]*data-pi-subagent-status="queued"/, "a queued run is a button");
 });
