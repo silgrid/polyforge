@@ -146,7 +146,7 @@ record exactly what ran.
    and review judge it by the same `facts.py plan-conformance` line: an unmapped ruling is
    red, named with its number and text (an unmaterialized work item reads as no decided
    ruling, a corrupt one is not judged).
-5. **The close's checks.** Last, after the whole-change fast check and the unit check, run
+5. **The close's checks.** The close's order is fixed: the scoped selection green, then the facts, then the self-review, then the hand-off. Last, after the whole-change fast check and the unit check, run
    the fast-check proof line once per touched repo — the same fast check with `--phase
    fast`, the final write of `artifacts/build/fast-checks/<repo>.json`, so each result's
    `heads` is the HEAD the hand-off gate compares against (the tree is unchanged since the
@@ -189,7 +189,7 @@ record exactly what ran.
    fix the change and re-run it, a full-tier fallback being the owner's to settle, a residual the
    owner accepted keeping its record in the result file, cited in the hand-off — and a green
    or pre-existing result's `details.selected` merges into the change analysis's `selected`, keyed by
-   the repo, verbatim. Then the step's close runs the facts lines review judges with, the same
+   the repo, verbatim. Once the close's scoped selection has run, a step that changes no code does not re-run it — the reuse key is the command text, the root's subtree tree hash and the declared prerequisites, so changing artifacts alone is not a code change; a step that does change code re-runs the selection only on the new tree, and the roots it did not touch are reused by `--reuse`. A red the scoped selection reports is reported from the result file's own baseline record (`details.baseline` and its `reds[]` classification); never reproduce it by hand on the base worktree. Then the step's close runs the facts lines review judges with, the same
    engine and the same replay —
    `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" plan-conformance --json --out artifacts/facts/plan-conformance.json`
    (a plan the lane inherited skips this line and runs only the
