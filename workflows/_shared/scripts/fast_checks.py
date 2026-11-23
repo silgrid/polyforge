@@ -816,9 +816,13 @@ class CheckRun:
         stop = threading.Event()
         try:
             if self.box is not None:
-                for n, (g, _members) in enumerate(groups):
+                for n, (g, members) in enumerate(groups):
                     if g == "":
                         boxes[g] = self.box  # the close's own container, its engine asks' too
+                        continue
+                    # a group with nothing to run gets no container (every
+                    # member reused or skipped: its worker runs nothing)
+                    if not any(plan[i].entry is None and not plan[i].skip_reason for i in members):
                         continue
                     boxes[g] = self.start_group_box(n + 1)
             threads: List[threading.Thread] = []
