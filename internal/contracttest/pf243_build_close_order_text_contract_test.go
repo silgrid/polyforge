@@ -56,7 +56,11 @@ func TestPF243BuildCloseOrderText(t *testing.T) {
 		// "never reproduce it by hand on the base worktree" does not match.
 		stripped := strings.ReplaceAll(flat, red, "")
 		for _, forbidden := range []*regexp.Regexp{
-			regexp.MustCompile(`(?i)\b(?:never|do not|don't)\s+re-?runs?\b`),
+			// an unconditional never-re-run of the close, and the old
+			// unqualified reuse sentence (review r1#1)
+			regexp.MustCompile(`(?i)\b(?:never|do not|don't)\s+re-?runs?\b[^.]*\b(?:close|selection)\b`),
+			regexp.MustCompile(`(?i)\band the roots it did not touch are reused by\b`),
+			// a positive "reproduce it on the base" requirement
 			regexp.MustCompile(`(?i)\breproduce\b[^.]*\bon the base\b`),
 		} {
 			if m := forbidden.FindString(stripped); m != "" {
