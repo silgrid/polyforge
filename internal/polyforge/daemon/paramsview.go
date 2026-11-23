@@ -97,17 +97,20 @@ func (d *Daemon) queuedOverrideView(wi string, item *api.WorkItem, scene *overri
 		return nil, err
 	}
 	cfg, _ := d.rt.LoadWorkspace(item.ProjectName)
-	sources := workspace.StepModelSources(lane, cfg, item.ProjectName, d.rt.ManualModels(wi))
-	ov := queuedOverlayOf(item.Attrs, runtime.StepParamsClaimedBy)
+	// the queued overlay is its step_params attrs key (the params) merged
+	// with this daemon's pending record (the tier, polyforge#81), by the
+	// same time rule the claim applies.
+	ov, applied := runtime.MergedStepOverrides(queuedOverlayOf(item.Attrs, runtime.StepParamsClaimedBy), d.rt.PendingStepOverrides(wi))
+	sources := workspace.StepModelSourcesWithTier(lane, cfg, item.ProjectName, d.rt.ManualModels(wi), ov, d.rt.StepTiersCatalog())
 	out := &protocol.OverrideView{WorkItem: wi, Posture: scene.posture, Steps: []protocol.OverrideStepView{}}
 	for _, s := range lane.Steps {
 		row := protocol.OverrideStepView{ID: s.ID, Skippable: s.Skippable}
 		if e := ov.Steps[s.ID]; e != nil {
 			fillRow(&row, e)
 		}
-		if src, ok := sources[s.ID]; ok {
-			row.Effective, row.Source = src.Models, src.Source
-		}
+		a := applied[s.ID]
+		row.Pending = a.Models || a.Tier || a.Skip || a.Params
+		fillEffective(&row, ov, a, sources)
 		out.Steps = append(out.Steps, row)
 	}
 	return out, nil

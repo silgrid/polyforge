@@ -89,6 +89,8 @@ func TestPF27PreSubmitAnalysisSkillContract(t *testing.T) {
 		"风险",
 		"待决问题",
 		"不拍板",
+		"步骤能力档建议",
+		"`pf override <id> --step",
 		// the boundary against grilling
 		"only establishes facts",
 		"belongs to the grill",

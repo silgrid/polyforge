@@ -48,8 +48,12 @@ The Host-only `[step_tiers]` table of `cli.toml` (`step_tiers.<tier>`, a
 tier's recommended `<harness>:<model>[:<effort>]` candidates; written
 with `pf config set step_tiers.<tier> … --host`, read with `pf config
 list`) — the machine-level step tier list `pf doctor`'s `step tiers
-catalog` row checks a workspace's user-written candidates against, and
-the source Pi Web's step-tier page edits: the config reference's
+catalog` row checks a workspace's user-written candidates against, the
+source Pi Web's step-tier page edits, and — the daemon consumer
+(polyforge#81) — the tier a work item's `pf override --step <s> --tier
+<name>` names, expanded at every dispatch; the pre-submit analysis reads
+the catalog and the lane step table to recommend one tier per step (it
+never sets one): the config reference's
 [`[step_tiers]` section](reference/config.md#step_tiers--the-step-tier-catalog).
 
 ### Summarize models
