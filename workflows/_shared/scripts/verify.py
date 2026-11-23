@@ -36,6 +36,19 @@ the budget. Every other ticket runs the **light** tier, exactly as before.
 ``--tier light`` and ``--tier full`` are the hand run's explicit overrides
 (an explicit light stays light on a marked ticket).
 
+The full tier's bar honours the repository's declared groups
+(polyforge#253, polyforge#244's declaration): two or more ``group=`` lines
+in the conf run side by side — each group in a container of its own, a
+group's commands in plan order, at most the report's ``full_parallel`` at
+once — while the commands no group binds run serially in the repository's
+container, the fast gates before the grouped span and the dependency audit
+after it; the commands, the checks and the command logs stay in plan order,
+the group containers are removed when the bar ends, and the build's unit
+runs, the analysis's supplements, the base runs and the confirming re-runs
+follow in the repository's container. A repository that declares no group —
+or one group, or ``full_parallel=1``, or one that runs on the host — keeps
+the serial bar byte for byte.
+
 Where a repo's bar runs is the repo's: one whose HEAD carries
 ``.polyforge/Dockerfile.verify`` runs its engine and bar in a verification
 container of its own (the ``pf.verify.*`` labels, the deadline label and a

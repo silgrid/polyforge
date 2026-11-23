@@ -598,6 +598,17 @@ carries `units[].failure` (also under `details.checks[].units[]`):
 crash (`Target crashed` / `Page crashed`, a suite's `ABORT` line inside its
 block included), else `assertion`; `report-mechanical.md`
 marks the crashes.
+A repository whose conf declares parallel `group=` lines runs its full
+tier's declared groups side by side (polyforge#253, polyforge#244's
+declaration): each group in a container of its own (its container's own
+notes under `<log dir>/group-<n>/`), a group's commands in plan order, the
+fast gates before the grouped span and the dependency audit after it
+serially in the repository's container; the commands, the checks, the units
+and the command logs stay in plan order, the group containers are removed
+when the bar ends, and the build's unit runs, the analysis's supplements,
+the base runs and the confirming re-runs follow in the repository's
+container. A repository that declares no group, one group, `full_parallel=1`,
+or one that runs on the host keeps the serial bar byte for byte.
 A wall budget (20m) bounds when those re-runs and base runs may still
 start; a unit or command they no longer reach stays a failure — a failed
 unit whose re-run never started (the budget spent, the deadline passed)
