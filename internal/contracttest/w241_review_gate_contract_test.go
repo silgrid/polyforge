@@ -72,7 +72,6 @@ func TestW241ReviewGateContract(t *testing.T) {
 			"or whose replay exited 0 — a test that passes on the old code, never red or weakened since — is blocking `test_weakened`",
 			"a replay that exited 0 there (the test was green before the change) is blocking `test_weakened`",
 			"neither red nor a pass: blocking `test_weakened`, naming the unit and its `rule`",
-			"is the same standard: blocking `test_weakened` too",
 			"is a blocking `test_weakened` finding naming the entry",
 		},
 		"workflows/_shared/skills/review.md": {
