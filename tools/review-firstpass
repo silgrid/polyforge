@@ -372,7 +372,7 @@ def blocking_count_in_summary(text):
 def _item_label(line):
     s = line.strip()
     s = re.sub(r'^#{1,6}\s+', '', s)
-    s = re.sub(r'^(?:[-*]|\d+\.)\s+', '', s)
+    s = re.sub(r'^[-*]\s+', '', s)
     s = re.sub(r'^\*+\s*', '', s)
     return s
 
@@ -520,9 +520,28 @@ def load_review_versions(cap):
 
 
 def owner_messages(cap):
-    """[(at, text)] of the owner's asks.jsonl replies and messages that
-    decide a finding; the item reference is matched by the caller."""
-    return []
+    """[(at, text)] of the owner's asks.jsonl replies and messages; the
+    item reference is matched by the caller."""
+    path = os.path.join(cap, 'runtime-state', 'asks.jsonl')
+    try:
+        with open(path, errors='replace') as f:
+            lines = f.read().split('\n')
+    except OSError:
+        return []
+    out = []
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(e, dict) or e.get('kind') not in ('reply', 'message'):
+            continue
+        text = e.get('text') or ''
+        if text:
+            out.append((e.get('at') or '', text))
+    return out
 
 
 def owner_rulings(cap):
@@ -600,7 +619,8 @@ def chain_findings(cap, versions):
     class, model, final outcome and the rounds it spans."""
     nodes, parent = {}, {}
     for v in versions:
-        for it in v['items']:
+        items = v['items'] if 'items' in v else parse_blocking_items(v['text'], v['round'])
+        for it in items:
             key = (v['round'], it['item'])
             if key in nodes:
                 continue
