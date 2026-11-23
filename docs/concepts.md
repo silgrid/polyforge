@@ -257,6 +257,12 @@ one: [workflow contract](reference/workflow-contract.md#user-lanes)).
 Authoring a custom bundle is
 [bundles: the bundle-authoring chapter](bundles.md).
 
+polyforge#228 adds no new concept (`none`): the pi build's worker reuses the
+daemon-owned step agent directory (`agents/worker.md` plus the embedded
+`extensions/subagent`), the existing bundle format and the subagent tool's
+existing output protocol; there is no new term, setting or bundle shape to
+learn.
+
 ### Gate
 
 A step that can FAIL the whole run: the delivery lanes' gates rewind it

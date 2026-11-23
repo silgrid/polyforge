@@ -531,7 +531,7 @@ Every dispatch's prompt is six parts, in this order, and nothing else:
 
 1. **Identity and facts**: the work item, step, round and dispatch; the
    language to work in; the capsule root; the facts of this dispatch (a
-   pi build uses the daemon-owned worker only when `pi_subagents: on`; when off it keeps the main-agent path; where downloads go); the lane's step
+   pi build uses the daemon-owned worker only when `pi_subagents: on` and that dispatch's startup checks pass (the full built-in resource set, guard included, and the pi capability probe: version, required flags with `--no-approve`, the extension load and the subagent tool's registration, under one 10-second budget); off or empty keeps the main-agent path and probes nothing; a failing check refuses that dispatch with a classified reason and the prompt is built only from the verified capability, and every resume shape of such a dispatch (the full prompt, the short ended-without-hand-off reminder and the short owner-message resume — a changed value, the same value twice, an on→off or off→on change alike) restates the capability this dispatch verified and says it replaces the one stated earlier, so no conversation keeps acting on a stale switch; where downloads go); the lane's step
    order as it stands for this dispatch, its skipped steps and the last
    step that runs marked — the opening of `artifacts/handoff.md`
    carries the claim-time copy, so a mid-run `pf override --step <s>

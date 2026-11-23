@@ -386,3 +386,97 @@ func TestStepAgentDirDefaultsAndSessionsAreSeparate(t *testing.T) {
 		t.Fatalf("the session store %s must not sit inside the dedicated agent dir %s", cfg.StepAgentSessionsDir(), cfg.StepAgentDir())
 	}
 }
+
+// TestStepAgentDirRefreshAfterOperatorExtensionDeleted pins the residual
+// use case of polyforge#227 AC3: the operator deletes the extension from
+// their own agent directory (and a damaged snapshot loses it too), and the
+// next per-spawn refresh restores every built-in file from the daemon's
+// embed while leaving operator files the snapshot legitimately carries
+// alone — the refresh never prunes.
+func TestStepAgentDirRefreshAfterOperatorExtensionDeleted(t *testing.T) {
+	src := operatorDirFixture(t)
+	cfg := Config{DataDir: t.TempDir(), OperatorAgentDir: src, OperatorAgentDirExplicit: true}
+	cfg.FillDefaults()
+	if err := cfg.SyncStepAgentDir(); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	dir := cfg.StepAgentDir()
+	// the operator removes the extension from their own directory; the
+	// snapshot is damaged the same way in this scenario.
+	if err := os.RemoveAll(filepath.Join(src, "extensions", "subagent")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(dir, "extensions", "subagent")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(dir, "extensions", "guard")); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.refreshStepAgentDir(); err != nil {
+		t.Fatalf("refresh after the operator deleted the extension: %v", err)
+	}
+	want := map[string]string{
+		"agents/worker.md":              "agents/worker.md",
+		"extensions/subagent/index.ts":  "extensions/subagent/index.ts",
+		"extensions/subagent/agents.ts": "extensions/subagent/agents.ts",
+		"extensions/subagent/SOURCE.md": "extensions/subagent/SOURCE.md",
+		"extensions/guard/index.ts":     "extensions/guard/index.ts",
+		"extensions/guard/rules.ts":     "extensions/guard/rules.ts",
+	}
+	for rel, asset := range want {
+		got, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Errorf("after refresh %s is unavailable: %v", rel, err)
+			continue
+		}
+		embed, err := stepagentassets.FS.ReadFile(asset)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != string(embed) {
+			t.Errorf("after refresh %s differs from the embedded resource", rel)
+		}
+	}
+	// the refresh never prunes: a file the snapshot carries beyond the
+	// minimal set survives it (pruning is the daemon-start sync's).
+	stray := filepath.Join(dir, "step-agent-notes.txt")
+	if err := os.WriteFile(stray, []byte("kept\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.refreshStepAgentDir(); err != nil {
+		t.Fatalf("second refresh: %v", err)
+	}
+	if _, err := os.Stat(stray); err != nil {
+		t.Errorf("the per-spawn refresh pruned a file it does not own: %v", err)
+	}
+}
+
+// TestExportPiSubagentProbeStepAgent (polyforge#228 AC2): the manual entry
+// the live probe's scratch flow uses. With PF_PROBE_EXPORT_DIR set it runs
+// the SAME refresh the daemon runs and writes the resulting step-agent copy
+// there, with no operator or daemon configuration read: the caller supplies
+// a scratch source (its credentials, if any, are the caller's). The copy's
+// builtin resources must be the embedded bytes — a probe over anything else
+// would not be evidence about the shipped worker.
+func TestExportPiSubagentProbeStepAgent(t *testing.T) {
+	dst := os.Getenv("PF_PROBE_EXPORT_DIR")
+	if dst == "" {
+		t.Skip("set PF_PROBE_EXPORT_DIR to export a refreshed step-agent copy for the live probe")
+	}
+	if err := refreshStepAgentMinimalSet(t.TempDir(), dst); err != nil {
+		t.Fatalf("refresh into %s: %v", dst, err)
+	}
+	for _, rel := range []string{"agents/worker.md", "extensions/subagent/index.ts", "extensions/subagent/agents.ts"} {
+		want, err := stepagentassets.FS.ReadFile(rel)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := os.ReadFile(filepath.Join(dst, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatalf("the export lacks %s: %v", rel, err)
+		}
+		if string(got) != string(want) {
+			t.Fatalf("the exported %s is not the embedded resource", rel)
+		}
+	}
+}

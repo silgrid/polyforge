@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"syscall"
@@ -208,6 +209,7 @@ func piPackageDir(t *testing.T) string {
 // test.
 type extRunOut struct {
 	OwnPgid    int            `json:"ownPgid"`
+	ExecPath   string         `json:"execPath"`
 	ResolvedMs int64          `json:"resolvedMs"`
 	Hung       bool           `json:"hung"`
 	Thrown     string         `json:"thrown"`
@@ -816,4 +818,201 @@ func TestPiSubagentLifecycleTimeout(t *testing.T) {
 	if len(left) != 1 || left[0] != sibling.Process.Pid {
 		t.Fatalf("after the timeout only the sibling call-marker process may carry the WI marker; left=%v sibling=%d", left, sibling.Process.Pid)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// polyforge#228 AC1: the fake-child base on the PRODUCTION invocation path.
+//
+// The lifecycle harness above runs its node driver from a plain temp dir,
+// so getPiInvocation answers the PATH branch (`pi`). Production runs the
+// extension from inside the installed pi package, where the CLI branch
+// answers `process.execPath + <cli script>`. This harness puts the driver
+// under a directory literally named pi-coding-agent — the CLI shape
+// getPiInvocation keys on — so the child the extension derives is the
+// production one, and the child records its own argv. A PATH `pi` that
+// writes a sentinel stands in as the counter-proof: it must never run.
+
+// piChildRecord is what the fake CLI child recorded about its own birth.
+type piChildRecord struct {
+	ExecPath string            `json:"execPath"`
+	Argv     []string          `json:"argv"`
+	Cwd      string            `json:"cwd"`
+	Pid      int               `json:"pid"`
+	Ppid     int               `json:"ppid"`
+	Env      map[string]string `json:"env"`
+}
+
+// piCLIProject lays out the throwaway node project whose entry script lives
+// under <root>/pi-coding-agent/ (the CLI shape). It returns the project
+// root and the node binary the parent runs on.
+func piCLIProject(t *testing.T) (string, string) {
+	t.Helper()
+	nodeBin, err := exec.LookPath("node")
+	if err != nil {
+		t.Fatalf("node is required to drive the embedded subagent extension: %v", err)
+	}
+	pkg := piPackageDir(t)
+	root := filepath.Join(t.TempDir(), "pi-coding-agent")
+	nm := filepath.Join(root, "node_modules", "@earendil-works")
+	if err := os.MkdirAll(nm, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	targets := map[string]string{
+		"pi-agent-core":   filepath.Join(pkg, "node_modules", "@earendil-works", "pi-agent-core"),
+		"pi-ai":           filepath.Join(pkg, "node_modules", "@earendil-works", "pi-ai"),
+		"pi-tui":          filepath.Join(pkg, "node_modules", "@earendil-works", "pi-tui"),
+		"pi-coding-agent": pkg,
+	}
+	for m, target := range targets {
+		if err := os.Symlink(target, filepath.Join(nm, m)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Join(pkg, "node_modules", "typebox"), filepath.Join(root, "node_modules", "typebox")); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{"index.ts", "agents.ts"} {
+		b, err := stepagentassets.FS.ReadFile("extensions/subagent/" + rel)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, rel), b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	agentDir := filepath.Join(root, "agentdir", "agents")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	worker := "---\nname: worker\ndescription: test worker\n---\ntest worker body\n"
+	if err := os.WriteFile(filepath.Join(agentDir, "worker.md"), []byte(worker), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// the CLI script the extension's getPiInvocation resolves: the harness
+	// bytes are the delivered fake child base, so a stamp/deviation is this
+	// test's to keep current.
+	harness, err := os.ReadFile(filepath.Join("testdata", "pi_child_harness.mjs"))
+	if err != nil {
+		t.Fatalf("the fake child base testdata/pi_child_harness.mjs is missing: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "driver.mjs"), harness, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// the PATH counter-proof: any execution of this `pi` leaves its sentinel.
+	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := "#!/bin/sh\nprintf 'PATH_PI_RAN\\n' > \"$FAKEPI_SENTINEL\"\nprintf 'PATH-branch child must never run\\n' >&2\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(root, "bin", "pi"), []byte(sentinel), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return root, nodeBin
+}
+
+// piCLIRun runs the harness as the parent with the CLI shape and returns
+// the extension result plus the child's own record.
+func piCLIRun(t *testing.T, root, nodeBin string, scenario map[string]any) (extRunOut, piChildRecord) {
+	t.Helper()
+	scenarioPath := filepath.Join(root, "scenario.json")
+	blob, _ := json.Marshal(scenario)
+	if err := os.WriteFile(scenarioPath, blob, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tmp := t.TempDir()
+	cmd := exec.Command(nodeBin, filepath.Join(root, "driver.mjs"), scenarioPath)
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(),
+		"PATH="+filepath.Join(root, "bin")+":"+os.Getenv("PATH"),
+		"PI_CODING_AGENT_DIR="+filepath.Join(root, "agentdir"),
+		"FAKEPI_SENTINEL="+filepath.Join(root, "path-pi-ran"),
+		"FAKEPI_ARGV_FILE="+filepath.Join(root, "child-argv.json"),
+		"TMPDIR="+tmp,
+	)
+	var outBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &outBuf
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case <-done:
+	case <-time.After(60 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatalf("the CLI-shaped driver still ran after 60s; output:\n%s", outBuf.String())
+	}
+	line := ""
+	for _, l := range strings.Split(outBuf.String(), "\n") {
+		if strings.HasPrefix(l, "PFEXT-RESULT ") {
+			line = strings.TrimPrefix(l, "PFEXT-RESULT ")
+		}
+	}
+	if line == "" {
+		t.Fatalf("no PFEXT-RESULT line; driver output:\n%s", outBuf.String())
+	}
+	var res extRunOut
+	if err := json.Unmarshal([]byte(line), &res); err != nil {
+		t.Fatalf("bad PFEXT-RESULT %q: %v", line, err)
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "child-argv.json"))
+	if err != nil {
+		t.Fatalf("the fake CLI child recorded no argv (harness missing or not on the production path): %v", err)
+	}
+	var child piChildRecord
+	if err := json.Unmarshal(raw, &child); err != nil {
+		t.Fatalf("the child argv record is not JSON: %v (%q)", err, raw)
+	}
+	return res, child
+}
+
+// TestPiSubagentChildArgvOnProductionPath: the child the embedded extension
+// derives on the production CLI path is `process.execPath + <cli script>`
+// with the five isolation flags (and the startup protocol flags) in its
+// argv, the per-call marker in its env, and no PATH `pi` executed.
+func TestPiSubagentChildArgvOnProductionPath(t *testing.T) {
+	root, nodeBin := piCLIProject(t)
+	res, child := piCLIRun(t, root, nodeBin, map[string]any{
+		"params": map[string]any{"agent": "worker", "task": "argv probe"},
+	})
+	if res.DriverErr != "" || res.Thrown != "" {
+		t.Fatalf("the extension call failed: driverError=%q thrown=%q", res.DriverErr, res.Thrown)
+	}
+	// the production branch: same runtime binary as the parent, the CLI
+	// script as argv[1].
+	if child.ExecPath == "" || child.ExecPath != res.ExecPath {
+		t.Fatalf("child execPath %q, want the parent's %q (process.execPath branch)", child.ExecPath, res.ExecPath)
+	}
+	if len(child.Argv) == 0 || !strings.HasSuffix(child.Argv[0], filepath.Join("pi-coding-agent", "driver.mjs")) {
+		t.Fatalf("child argv[1] (the CLI script) = %v, want the pi-coding-agent entry", child.Argv)
+	}
+	want := []string{"--mode", "json", "-p", "--no-session", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-extensions", "--no-approve"}
+	if len(child.Argv) < 1+len(want) || !reflect.DeepEqual(child.Argv[1:1+len(want)], want) {
+		t.Fatalf("child isolation argv = %v, want the startup protocol then the five flags %v", child.Argv, want)
+	}
+	for _, flag := range []string{"--no-skills", "--no-context-files", "--no-prompt-templates", "--no-extensions", "--no-approve"} {
+		if n := countArg(child.Argv, flag); n != 1 {
+			t.Errorf("flag %s appears %d times in %v, want exactly once", flag, n, child.Argv)
+		}
+	}
+	if child.Env["PF_SUBAGENT_ID"] == "" {
+		t.Fatalf("the child carries no PF_SUBAGENT_ID marker: %v", child.Env)
+	}
+	if _, err := os.Stat(filepath.Join(root, "path-pi-ran")); err == nil {
+		t.Fatal("the PATH `pi` ran: the extension did not use process.execPath")
+	}
+	det := extResultDetails(res)
+	if det == nil || det["agent"] != "worker" || det["exitCode"] != float64(0) {
+		t.Fatalf("the call did not run the worker child: %v", res.Result)
+	}
+}
+
+func countArg(argv []string, want string) int {
+	n := 0
+	for _, a := range argv {
+		if a == want {
+			n++
+		}
+	}
+	return n
 }

@@ -21,9 +21,11 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/silgrid/polyforge/internal/common/capsule"
 	"github.com/silgrid/polyforge/internal/common/harness"
+	"github.com/silgrid/polyforge/internal/common/spawn"
 	"github.com/silgrid/polyforge/internal/common/workflow"
 )
 
@@ -280,4 +282,166 @@ func TestW78ResumeParamsChanged(t *testing.T) {
 			}
 		})
 	}
+}
+
+// w228ResumeEnv is a capsule with the shipped develop bundle and an adapter
+// over it, for the resume-shape dispatches.
+func w228ResumeEnv(t *testing.T) (*StepSpawnAdapter, *captureSpawner, string) {
+	t.Helper()
+	capDir := capsuleWithShippedBundle(t, developBundle)
+	if err := os.MkdirAll(filepath.Join(capDir, "session"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sp := &captureSpawner{}
+	ad, err := newTestSpawnAdapter(StepSpawnAdapter{
+		WI:           WIInfo{ID: "wi_w228", CapsuleDir: capDir, BundleName: developBundle, SessionHandle: "ab12cd34"},
+		Spawner:      sp,
+		PollInterval: 2 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewStepSpawnAdapter: %v", err)
+	}
+	return ad, sp, capDir
+}
+
+// w228Dispatch runs one build dispatch and leaves the conversation
+// resumable for the next one (a transcript and a journal line).
+func w228Dispatch(t *testing.T, ad *StepSpawnAdapter, sp *captureSpawner, capDir string, dispatch StepSpawn) string {
+	t.Helper()
+	dispatch.StepID, dispatch.WIID = "build", "wi_w228"
+	if _, err := ad.SpawnStep(context.Background(), dispatch); err != nil {
+		t.Fatalf("dispatch %d: %v", dispatch.SpawnN, err)
+	}
+	p, _ := sp.last()
+	rel := strings.TrimPrefix(p.TranscriptPath, capDir+string(filepath.Separator))
+	writeCapsuleFile(t, capDir, rel, "{\"type\":\"user\"}\n")
+	if p.Journal != nil {
+		if err := p.Journal(4242, "2026-11-22T00:00:00Z"); err != nil {
+			t.Fatalf("dispatch %d journal: %v", dispatch.SpawnN, err)
+		}
+	}
+	return p.InitialPrompt
+}
+
+const (
+	w228Enabled  = "Pi subagents are enabled for this dispatch"
+	w228Disabled = "Pi subagents are disabled for this dispatch"
+	w228Replaces = "replaces the one stated in any earlier dispatch"
+	w228Changed  = "## Step params changed"
+)
+
+// TestW78ResumePiSubagentsCapability: every resume shape of a pi build
+// dispatch restates the CURRENT verified capability and revokes the old
+// fact (owner ruling Q3) — on→off, off→on, the same value twice, ShortEwr
+// and ShortMessage alike — while the ordinary changed-params section still
+// lists only the changed values and a claude dispatch is never rewritten by
+// the pi switch.
+func TestW78ResumePiSubagentsCapability(t *testing.T) {
+	msgs := []capsule.AskLine{{At: "2026-11-22T00:00:01Z", Step: "build", Spawn: 1, Kind: capsule.AskKindMessage, Text: "continue with the plan"}}
+
+	// the direct assemble matrix: every shape, both values (the transition
+	// itself is exercised through SpawnStep below)
+	for _, shape := range []struct {
+		name  string
+		parts promptParts
+	}{
+		{"full resume", promptParts{}},
+		{"ShortEwr", promptParts{ShortEwrResume: true}},
+		{"ShortMessage", promptParts{ShortMessageResume: true, OwnerMessages: msgs}},
+	} {
+		for _, on := range []bool{true, false} {
+			p := shape.parts
+			p.WIID, p.StepID, p.SpawnN = "wi_w228", "build", 2
+			p.PiCapability = piCapabilityFact(spawn.Capability{PiSubagents: on})
+			prompt := assembleStepPrompt(p)
+			want, unwanted := w228Disabled, w228Enabled
+			if on {
+				want, unwanted = w228Enabled, w228Disabled
+			}
+			if !strings.Contains(prompt, want) {
+				t.Errorf("%s (on=%v): the prompt must restate the current capability %q:\n%s", shape.name, on, want, prompt)
+			}
+			if strings.Contains(prompt, unwanted) {
+				t.Errorf("%s (on=%v): the prompt carries the stale capability %q", shape.name, on, unwanted)
+			}
+			if !strings.Contains(prompt, w228Replaces) {
+				t.Errorf("%s (on=%v): the prompt must revoke the earlier fact", shape.name, on)
+			}
+		}
+	}
+	// claude: the driver never supplies a pi capability fact; every shape
+	// then carries no pi-subagent rewrite at all.
+	for _, parts := range []promptParts{
+		{WIID: "wi_w228", StepID: "build", SpawnN: 2},
+		{WIID: "wi_w228", StepID: "build", SpawnN: 2, ShortEwrResume: true},
+		{WIID: "wi_w228", StepID: "build", SpawnN: 2, ShortMessageResume: true, OwnerMessages: msgs},
+	} {
+		if prompt := assembleStepPrompt(parts); strings.Contains(prompt, "Pi subagents are") {
+			t.Errorf("a claude dispatch's prompt carries a pi capability rewrite:\n%s", prompt)
+		}
+	}
+
+	// the dispatch path: the journal's previous params give the transition,
+	// and the verified capability (not the parameter) builds the sentence.
+	for _, tc := range []struct {
+		name   string
+		old    string
+		next   string
+		shape  StepSpawn
+		extra  *spawn.Capability
+		want   string
+		change bool
+	}{
+		{"on→off full resume", "on", "off", StepSpawn{Resume: true}, nil, w228Disabled, true},
+		{"off→on full resume", "off", "on", StepSpawn{Resume: true}, nil, w228Enabled, true},
+		{"same-value on→on full resume", "on", "on", StepSpawn{Resume: true}, nil, w228Enabled, false},
+		{"same-value off→off full resume", "off", "off", StepSpawn{Resume: true}, nil, w228Disabled, false},
+		{"on→off owner-message resume", "on", "off", StepSpawn{Resume: true, MessageResume: true, OwnerMessages: msgs}, nil, w228Disabled, true},
+		{"same-value owner-message resume", "on", "on", StepSpawn{Resume: true, MessageResume: true, OwnerMessages: msgs}, nil, w228Enabled, false},
+		{"same-value ShortEwr", "on", "on", StepSpawn{Resume: true, PriorEndedWithoutResult: true, RetryTriggered: true}, nil, w228Enabled, false},
+		{"verified capability wins over the parameter", "off", "off", StepSpawn{Resume: true}, &spawn.Capability{PiSubagents: true}, w228Enabled, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ad, sp, capDir := w228ResumeEnv(t)
+			if tc.extra != nil {
+				sp.capability = tc.extra
+			}
+			w228Dispatch(t, ad, sp, capDir, StepSpawn{SpawnN: 1, Harness: harness.Pi, Params: map[string]string{"pi_subagents": tc.old}})
+			next := tc.shape
+			next.SpawnN, next.Harness, next.Params = 2, harness.Pi, map[string]string{"pi_subagents": tc.next}
+			prompt := w228Dispatch(t, ad, sp, capDir, next)
+			if !strings.Contains(prompt, tc.want) {
+				t.Fatalf("the resume must restate the current capability %q:\n%s", tc.want, prompt)
+			}
+			if !strings.Contains(prompt, w228Replaces) {
+				t.Fatalf("the resume must revoke the earlier fact:\n%s", prompt)
+			}
+			if got := strings.Contains(prompt, w228Changed); got != tc.change {
+				t.Fatalf("the resume's changed-params section present=%v, want %v:\n%s", got, tc.change, prompt)
+			}
+			if tc.shape.MessageResume {
+				if !strings.Contains(prompt, "continue with the plan") || strings.Contains(prompt, "# This dispatch") {
+					t.Fatalf("the owner-message resume must send the owner's words alone (plus the capability):\n%s", prompt)
+				}
+			}
+			if tc.shape.PriorEndedWithoutResult && tc.shape.RetryTriggered {
+				if !strings.Contains(prompt, "ended without `pf step handoff`") || strings.Contains(prompt, "# This dispatch") {
+					t.Fatalf("the ShortEwr resume must be the short reminder, not the full prompt:\n%s", prompt)
+				}
+			}
+			if tc.change && !strings.Contains(prompt, "- `pi_subagents`: `"+tc.next+"`") {
+				t.Fatalf("the changed-params section must name the new value %q:\n%s", tc.next, prompt)
+			}
+		})
+	}
+
+	// a claude dispatch is never rewritten by the pi switch
+	t.Run("claude keeps its native capabilities", func(t *testing.T) {
+		ad, sp, capDir := w228ResumeEnv(t)
+		w228Dispatch(t, ad, sp, capDir, StepSpawn{SpawnN: 1, Harness: harness.Claude, Params: map[string]string{"pi_subagents": "off"}})
+		prompt := w228Dispatch(t, ad, sp, capDir, StepSpawn{SpawnN: 2, Harness: harness.Claude, Params: map[string]string{"pi_subagents": "on"}})
+		if strings.Contains(prompt, "Pi subagents are") {
+			t.Fatalf("a claude dispatch must not carry the pi capability restatement:\n%s", prompt)
+		}
+	})
 }

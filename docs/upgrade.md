@@ -1245,3 +1245,38 @@ every command with that parse error: empty the table first
 upgrading, fill the catalog once by hand — `pf config set
 step_tiers.default '["pi:…", "claude:…"]' --host`, and one row per tier
 the lanes name — `pf doctor`'s row is the check it took effect.
+
+## v0.2.4, the pi sub-agent compatibility gate (polyforge#227)
+
+The `pi_subagents` switch (develop `build` only, default off) opens the
+daemon-owned worker only after that dispatch's startup checks pass: the
+dedicated step agent directory must carry every built-in resource — the
+worker definition, the subagent tool and the guard, SOURCE.md included —
+and the installed `pi` must pass a real capability probe. The probe uses
+the target's own `--version` and `--help` (the required flags include
+`--no-approve`), then launches the real `pi` against those resources and a
+loopback fake provider with a literal fake key: the subagent tool must be
+registered and callable, its controlled refusal must return to the model,
+and the session must settle un-aborted. No operator credential or model
+configuration is read and no request leaves the loopback service.
+
+A refusal keeps one stable class and a readable message: `pi_version`
+(the target cannot report a version), `pi_flag` (a required flag is
+missing), `pi_api` (the installed target looks supported but its
+extension API cannot load or complete the minimal call),
+`pi_tool_registration` (the extension loads but the subagent tool is not
+offered) and `pi_timeout` (the whole check exceeded its budget). The check
+has ONE 10-second budget including process recovery — no per-stage
+timeouts — and no version floor: the version is a cache key and a message,
+not a numeric comparison.
+
+Successful verdicts are cached in memory per executable target (resolved
+path plus entry fingerprint), version and built-in resource digest; a
+same-key concurrent batch probes once and a failure is never cached. Any
+change to the target, the version or any embedded resource probes again.
+An `on` dispatch whose resources or probe fail is refused at that
+dispatch, before the step process or the prompt exists, classed
+`pi_resources` for the resources and otherwise by the five classes above;
+an invalid switch value is refused as `pi_subagents_invalid`. Off and
+empty probe nothing. No upgrade action beyond taking the new `pf`; the
+switch stays default off.
