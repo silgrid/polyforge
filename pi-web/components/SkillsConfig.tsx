@@ -166,6 +166,16 @@ export function skillAuthorDeclaredHidden(skill: Pick<Skill, "declaredDisableMod
   return skill.declaredDisableModelInvocation === true;
 }
 
+/**
+ * Whether the panel renders a footer at all (polyforge#257 B8): the footer is
+ * one status line (an update count) plus its actions (Close, check updates),
+ * so an embedded panel with neither draws no empty bar. Placeholder body: the
+ * unit's test lands first and this always-true body is what it fails on.
+ */
+export function skillFooterVisible(_options: { embedded: boolean; installable: boolean; updateAvailable: boolean }): boolean {
+  return true;
+}
+
 /** The sidebar's scope groups (AC1/AC3): 用户 always, 项目 only with a project; empty groups never render. */
 export function skillRowGroups(
   rows: UnifiedSkillRow[],
