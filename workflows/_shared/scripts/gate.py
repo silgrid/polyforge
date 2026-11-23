@@ -950,6 +950,7 @@ class Gate:
         # the --parallel override, else the report's declaration (1 = serial,
         # the case of a repository that declares no group).
         grouped = any(c.group for c in cmds)
+        ngroups = len({c.group for c in cmds if c.group})
         parallel = 1
         if grouped:
             parallel = self.parallel if self.parallel > 0 else (rep.parallel or 1)
@@ -959,7 +960,7 @@ class Gate:
             return
         self.say("plan: %s -> %d commands (plan digest %s), run %s" % (
             ref, len(cmds), res.plan_digest,
-            "in %d parallel groups, in order inside each container" % parallel if grouped
+            "in %d groups, at most %d at once, in order inside each container" % (ngroups, parallel) if grouped
             else "in order inside the container"))
 
         def not_judged(b: container.Box, when: str) -> str:
