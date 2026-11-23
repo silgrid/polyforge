@@ -12,6 +12,10 @@ capsule's file, a given path is taken as given):
   facts.py analysis [--capsule DIR] [--analysis artifacts/build/change-analysis.json]
       [--unit-timeout D] [--deadline D] [--log-dir DIR] [--json] [--out PATH]
   facts.py carries [--capsule DIR] [--units artifacts/build/units.json] [--json] [--out PATH]
+  facts.py handoff [--capsule DIR] [--plan artifacts/plan.md]
+      [--units artifacts/build/units.json] [--analysis artifacts/build/change-analysis.json]
+      [--isolation host|container] [--cite TEXT] [--unit-timeout D] [--deadline D]
+      [--log-dir DIR] [--json] [--out PATH]
   facts.py micro-bounds [--capsule DIR] --plan artifacts/fix/evidence.json [--json] [--out PATH]
 
 The task repos are capsule.json's (the claim's) present under repos/;
@@ -152,6 +156,23 @@ Exit 2: the plan is unreadable.
 Every kind's result carries `heads` (each task repo's HEAD) and, for build
 --replay, the replays' logs. No kind writes a task repo; git runs hardened
 (pfstep.git). Exit 2 also for an unusable invocation.
+
+handoff — the mechanical facts a build's done gate reads (polyforge#241):
+one `pf-step-result/1` summarising the existing kinds in-process (the one
+implementation, never a second copy) — `build --replay` (D1: a unit's
+commits, its red-state replay), `plan-conformance` (D2: an undeclared
+write, an unchanged coupled obligation, an unmapped decided ruling),
+`carries` (D3) and `analysis` (D4) — plus the two deterministic
+`test_weakened` markers (D5: "adds a skip" and "changes the `carries:`
+header", with no `cite` finding) and the plan's write set against the
+existing test files the diff changed (D6). Details:
+  {checks: {<kind>: <exit>}, hits: [{item, repo, unit, path, reason}],
+   not_judged: [{item, reason}], test_weakened: [<the build kind's hunks>]}
+Exit 0: no hit (a sub-item that could not be judged is recorded in
+not_judged and is no hit). Exit 1: a hit — every deterministic item listed
+in `hits`, the summary naming each one (clipped) — and also a `carries`
+exit 2, which stays not-pass and refuses the hand-off (owner Q3 ruling).
+A sub-item's exit 2 is never a pass for it: it is recorded and named.
 """
 
 import os
@@ -161,6 +182,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import argparse  # noqa: E402
+import io  # noqa: E402
 import json  # noqa: E402
 import re  # noqa: E402
 import secrets  # noqa: E402
@@ -183,7 +205,8 @@ BUILD = "build"
 ANALYSIS = "analysis"
 CARRIES = "carries"
 MICRO_BOUNDS = "micro-bounds"
-KINDS = (PLAN_CONFORMANCE, BUILD, ANALYSIS, CARRIES, MICRO_BOUNDS)
+HANDOFF = "handoff"
+KINDS = (PLAN_CONFORMANCE, BUILD, ANALYSIS, CARRIES, MICRO_BOUNDS, HANDOFF)
 
 DEFAULT_PLAN = "artifacts/plan.md"
 DEFAULT_UNITS = "artifacts/build/units.json"
@@ -2358,6 +2381,7 @@ def build(inv: Invocation, args: List[str], environ: Mapping[str, str], runtime:
     p = _parser(BUILD)
     p.add_argument("--units", default="", help="build's units.json (default: the capsule's " + DEFAULT_UNITS + ")")
     p.add_argument("--replay", action="store_true", help="replay each unit's run on the tree of its test commit")
+    p.add_argument("--cite", default="", help="the findings a build's decisions cite (s<n>#<k>): a test_weakened hunk it names is reported, not judged (polyforge#241)")
     p.add_argument("--isolation", default="", choices=["container", "host"], help="where a replay runs (default: the container when the repo's HEAD carries .polyforge/Dockerfile.verify, else the host)")
     p.add_argument("--unit-timeout", type=_duration, default=DEFAULT_UNIT_TIMEOUT, help="one replay's time limit (under the whole deadline; default 10m) — a unit's self-reported `timeout` in units.json is its own limit instead")
     p.add_argument("--deadline", type=_duration, default=0, help="the whole run's deadline (default: the step's tool window less two minutes)")
@@ -2420,7 +2444,7 @@ def build(inv: Invocation, args: List[str], environ: Mapping[str, str], runtime:
             bu["run"] = run_json(run)
         units.append(bu)
         entries.append((u, bu))
-    weakened, _ = weakened_facts(c.repos_dir, resolved, "")
+    weakened, _ = weakened_facts(c.repos_dir, resolved, ns.cite)
     d["test_weakened"] = weakened
     if not decls:
         inv.summary = "no unit is reported in %s — a build without a red-then-green unit proves nothing" % units_file
@@ -2759,6 +2783,205 @@ def analysis(inv: Invocation, args: List[str], environ: Mapping[str, str],
 PLAN_LINE = gd.Struct({"repo": gd.STR, "line": gd.STR})
 
 
+def _handoff_child(kind: str, environ: Mapping[str, str]) -> Invocation:
+    """One sub-kind's invocation: its progress lines are dropped, no
+    result file is written — the summary kind writes the one result."""
+    return Invocation(COMMAND, [kind], environ, stdout=io.StringIO(), stderr=io.StringIO())
+
+
+def _handoff_hit(item: str, reason: str, repo: str = "", unit: str = "", path: str = "") -> Dict[str, Any]:
+    h: Dict[str, Any] = {"item": item, "reason": reason}
+    if repo:
+        h["repo"] = repo
+    if unit:
+        h["unit"] = unit
+    if path:
+        h["path"] = path
+    return h
+
+
+def _handoff_line(h: Mapping[str, Any]) -> str:
+    """One hit as the refusal names it: its item, repo, unit and path,
+    then its reason (the whole line clipped)."""
+    bits = [str(h.get("item", ""))]
+    if h.get("repo"):
+        bits.append("repos/" + str(h["repo"]))
+    if h.get("unit"):
+        bits.append("unit " + str(h["unit"]))
+    if h.get("path"):
+        bits.append(str(h["path"]))
+    return clip_runes(" ".join(bits) + ": " + str(h.get("reason", "")), 400)
+
+
+def handoff(inv: Invocation, args: List[str], environ: Mapping[str, str],
+            runtime: Optional[container.ContainerRuntime]) -> int:
+    """The mechanical facts a build's done gate reads (polyforge#241):
+    the existing kinds judged in-process — one implementation, never a
+    second copy — plus the deterministic test_weakened markers. A hit
+    exits 1; a sub-item that could not be judged is recorded in
+    not_judged and is no hit, except carries, whose exit 2 stays
+    not-pass and refuses the hand-off."""
+    p = _parser(HANDOFF)
+    p.add_argument("--plan", default="", help="build's plan (default: the capsule's " + DEFAULT_PLAN + ")")
+    p.add_argument("--units", default="", help="build's units.json (default: the capsule's " + DEFAULT_UNITS + ")")
+    p.add_argument("--analysis", default="", help="build's change analysis (default: the capsule's " + DEFAULT_ANALYSIS + ")")
+    p.add_argument("--isolation", default="host", choices=["container", "host"], help="where a unit's red-state replay runs (default: the host, as the build close's own replay line)")
+    p.add_argument("--cite", default="", help="the build's cited findings (a text carrying s<n>#<k>), exempting the hunks it names from D5")
+    p.add_argument("--unit-timeout", type=_duration, default=DEFAULT_UNIT_TIMEOUT, help="one unit replay's time limit (default 10m)")
+    p.add_argument("--deadline", type=_duration, default=0, help="the whole run's deadline (default: the step's tool window less two minutes)")
+    p.add_argument("--log-dir", default="", help="where the replays' logs go (default: logs/ beside --out, else the capsule's runtime-state/facts/<n>)")
+    ns, code = _parsed(inv, p, args)
+    if ns is None:
+        return code
+    try:
+        c = Capsule(ns.capsule)
+    except ValueError as err:
+        return inv.usage(str(err))
+    inv.heads = c.heads()
+    window = ns.deadline if ns.deadline > 0 else deadline.default_deadline_for(environ)
+    deadline_at = time.time() + window / duration.SECOND
+
+    def remaining() -> str:
+        return duration.format(max(0, int((deadline_at - time.time()) * duration.SECOND)))
+
+    common = ["--capsule", c.dir]
+    # the build replay's logs: the run's own --log-dir, else beside --out
+    logs = ns.log_dir
+    if not logs and ns.out:
+        logs = os.path.join(os.path.dirname(ns.out), "logs")
+    build_args = common + (["--units", ns.units] if ns.units else [])
+    build_args += ["--replay", "--isolation", ns.isolation,
+                   "--unit-timeout", duration.format(ns.unit_timeout), "--deadline", remaining()]
+    if logs:
+        build_args += ["--log-dir", logs]
+    if ns.cite:
+        build_args += ["--cite", ns.cite]
+    plan_args = common + (["--plan", ns.plan] if ns.plan else []) + (["--units", ns.units] if ns.units else [])
+    carries_args = common + (["--units", ns.units] if ns.units else [])
+    analysis_args = common + (["--analysis", ns.analysis] if ns.analysis else [])
+    analysis_args += ["--unit-timeout", duration.format(ns.unit_timeout), "--deadline", remaining()]
+    if logs:
+        analysis_args += ["--log-dir", logs]
+
+    checks: Dict[str, int] = {}
+    hits: List[Dict[str, Any]] = []
+    not_judged: List[Dict[str, Any]] = []
+
+    def build_child() -> Tuple[int, Invocation]:
+        child = _handoff_child(BUILD, environ)
+        got = build(child, build_args, environ, runtime)
+        inv.heads.update(child.heads)
+        inv.logs.extend(child.logs)
+        return got, child
+
+    def plain_child(kind: str, fn: Callable[[Invocation, List[str]], int], child_args: List[str]) -> Tuple[int, Invocation]:
+        child = _handoff_child(kind, environ)
+        got = fn(child, list(child_args))
+        inv.heads.update(child.heads)
+        return got, child
+
+    def analysis_child() -> Tuple[int, Invocation]:
+        child = _handoff_child(ANALYSIS, environ)
+        got = analysis(child, analysis_args, environ, runtime)
+        inv.heads.update(child.heads)
+        inv.logs.extend(child.logs)
+        return got, child
+
+    # D1: build --replay — the commits' test-first shape and each unit's
+    # red-state replay.
+    b_code, b_inv = build_child()
+    checks[BUILD] = b_code
+    bd = b_inv.details if isinstance(b_inv.details, dict) else {}
+    if b_code == 2:
+        not_judged.append({"item": "D1", "reason": b_inv.summary})
+    else:
+        units = bd.get("units") or []
+        if b_code == 1 and not units:
+            hits.append(_handoff_hit("D1", "no unit is reported: a build without a red-then-green unit proves nothing"))
+        for u in units:
+            uid, repo = str(u.get("id", "")), str(u.get("repo", ""))
+            why = u.get("why") or u.get("commits")
+            if why:
+                hits.append(_handoff_hit("D1", str(why), repo=repo, unit=uid))
+                continue
+            rr = u.get("replay") or {}
+            if not rr:
+                continue
+            if rr.get("not_runnable") is not None:
+                hit = rr["not_runnable"]
+                hits.append(_handoff_hit("D1", "its run `%s` could not run at the test commit (not runnable — %s %s: `%s`): no red evidence"
+                                         % (rr.get("line", ""), hit.get("toolchain", ""), hit.get("rule", ""), hit.get("line", "")), repo=repo, unit=uid))
+            elif rr.get("timed_out") and rr.get("limit_kill"):
+                hits.append(_handoff_hit("D1", "its red-state run was killed at its own limit: no red evidence", repo=repo, unit=uid))
+            elif rr.get("red") is False or rr.get("exit_code") == 0:
+                hits.append(_handoff_hit("D1", "its run `%s` exited 0 on the tree of test_commit %s — the test was green before its implementation"
+                                         % (rr.get("line", ""), short_sha(str(rr.get("commit", "")))), repo=repo, unit=uid))
+    weakened = bd.get("test_weakened") or []
+
+    # D2: plan-conformance.
+    p_code, p_inv = plain_child(PLAN_CONFORMANCE, plan_conformance, plan_args)
+    checks[PLAN_CONFORMANCE] = p_code
+    pd = p_inv.details if isinstance(p_inv.details, dict) else {}
+    if p_code == 2:
+        not_judged.append({"item": "D2", "reason": p_inv.summary})
+    else:
+        for path in pd.get("undeclared") or []:
+            hits.append(_handoff_hit("D2", "changed but no unit declares it (plan-conformance undeclared)", path=str(path)))
+        for path in pd.get("unchanged_obligations") or []:
+            hits.append(_handoff_hit("D2", "a declared coupled obligation is unchanged", path=str(path)))
+        for ruling in pd.get("unmapped_decided") or []:
+            hits.append(_handoff_hit("D2", "decided ruling %s is unmapped: %s" % (ruling.get("n"), ruling.get("text"))))
+
+    # D3: carries. Its exit 2 is no pass (owner Q3 B): the hand-off refuses.
+    c_code, c_inv = plain_child(CARRIES, carries, carries_args)
+    checks[CARRIES] = c_code
+    cd = c_inv.details if isinstance(c_inv.details, dict) else {}
+    if c_code == 2:
+        hits.append(_handoff_hit("D3", "not judged (exit 2): " + c_inv.summary))
+    else:
+        for problem in cd.get("problems") or []:
+            hits.append(_handoff_hit("D3", str(problem)))
+
+    # D4: the change analysis's listed tests and selection record.
+    a_code, a_inv = analysis_child()
+    checks[ANALYSIS] = a_code
+    ad = a_inv.details if isinstance(a_inv.details, dict) else {}
+    if a_code == 2:
+        not_judged.append({"item": "D4", "reason": a_inv.summary})
+    else:
+        for ent in ad.get("entries") or []:
+            if ent.get("status") == "fail":
+                hits.append(_handoff_hit("D4", "%s: %s" % (ent.get("id", ""), ent.get("problem", "")), repo=str(ent.get("repo", ""))))
+        for sel in ad.get("selected") or []:
+            if sel.get("status") == "fail":
+                hits.append(_handoff_hit("D4", "%s:selected: %s" % (sel.get("repo", ""), sel.get("problem", "")), repo=str(sel.get("repo", ""))))
+
+    # D5: the two deterministic test_weakened markers, no cite finding.
+    for hunk in weakened:
+        if hunk.get("cite"):
+            continue
+        reason = str(hunk.get("reason", ""))
+        if "adds a skip" in reason or "changes the `carries:` header" in reason:
+            hits.append(_handoff_hit("D5", reason, repo=str(hunk.get("repo", "")),
+                                     unit=str(hunk.get("unit", "")), path=str(hunk.get("path", ""))))
+
+    d: Dict[str, Any] = {"checks": checks, "hits": hits, "not_judged": not_judged, "test_weakened": weakened}
+    inv.details = d
+    named = len(hits)
+    if hits:
+        shown = [_handoff_line(h) for h in hits[:8]]
+        tail = ""
+        if named > len(shown):
+            tail = " — and %d more (the whole list in the result file)" % (named - len(shown))
+        inv.summary = "%d hand-off gate hit(s): %s%s" % (named, "; ".join(shown), tail)
+        return 1
+    if not_judged:
+        inv.summary = "every mechanical fact passes; %d sub-item(s) not judged: %s" % (
+            len(not_judged), "; ".join("%s: %s" % (n.get("item"), clip_runes(str(n.get("reason", "")), 200)) for n in not_judged))
+        return 0
+    inv.summary = "every mechanical fact passes (D1–D5; %d test_weakened hunk(s) left for review)" % len(weakened)
+    return 0
+
 def micro_bounds(inv: Invocation, args: List[str]) -> int:
     p = _parser(MICRO_BOUNDS)
     p.add_argument("--plan", default="", help="the fix step's evidence plan, a JSON array [{repo, line}] (required)")
@@ -2827,8 +3050,10 @@ def main(argv: Optional[List[str]] = None, environ: Optional[Mapping[str, str]] 
             code = analysis(inv, rest, env, runtime)
         elif kind == CARRIES:
             code = carries(inv, rest)
-        else:
+        elif kind == MICRO_BOUNDS:
             code = micro_bounds(inv, rest)
+        else:
+            code = handoff(inv, rest, env, runtime)
     except SystemExit as e:
         # argparse: --help (0) or a usage error (2) — no result file
         return int(e.code or 0) if not isinstance(e.code, str) else 2
