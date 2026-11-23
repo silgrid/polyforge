@@ -183,11 +183,10 @@ is exactly ★ or ★★ is answered — under the reserved author
 Cell's `ask_auto_reply_timeout` (default 30m) and only if no owner replied
 first. The automatic reply is a delivery, never an owner authorization:
 `--per-owner`, waive/rewind/force-fail and attrs writes reject it. A
-protected stop keeps waiting for the owner: `build` on a ticket whose
-content carries `confirm_plan: true`, `publish` (owner-review), `merge`
-(the human landing), and any lane this build cannot verify. A wait with no
-recorded T0 (an older dispatch) is never auto-answered, and a restart
-keeps the original T0.
+protected stop keeps waiting for the owner: every gate step (review,
+owner-review, merge, a gate FAIL) and every step of a ticket whose content
+carries `confirm_plan: true`. A wait with no recorded T0 (an older
+dispatch) is never auto-answered, and a restart keeps the original T0.
 
 ### hub keys
 

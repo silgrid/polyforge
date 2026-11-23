@@ -206,22 +206,11 @@ func autoAnswerReplyText(recommendations []string, elapsed time.Duration) string
 // human gate the owner's ruling 2026-11-23 keeps human-only, or a step of
 // a lane this build cannot verify. content is the work item's verbatim
 // content (runtime-state/work-item.json).
-func autoAnswerProtectedStop(lane, stepID, content string) bool {
-	if !autoAnswerKnownSteps[stepID] {
-		return true // a step this build cannot verify: the owner keeps the stop
+func autoAnswerProtectedStop(gate bool, content string) bool {
+	if autoAnswerConfirmPlan(content) {
+		return true // a plan-confirmation ticket keeps every stop human
 	}
-	if stepID == "publish" || stepID == "merge" {
-		return true // owner-review and the human landing
-	}
-	return stepID == "build" && autoAnswerConfirmPlan(content)
-}
-
-// autoAnswerKnownSteps are the shipped lanes' step ids: a lane whose step
-// this build does not know is not verified, so its cards keep waiting.
-var autoAnswerKnownSteps = map[string]bool{
-	"build": true, "review": true, "sync": true, "verification": true, "publish": true, "merge": true,
-	"fix": true, "evidence": true, "release": true, "verify": true, "deploy": true,
-	"collect": true, "repair": true, "revert": true, "full-gate": true, "close": true, "verify-children": true,
+	return gate // a gate's question is a human stop (review, owner-review, merge, gate FAIL)
 }
 
 // autoAnswerConfirmPlan reports whether the ticket carries the
@@ -345,10 +334,6 @@ func (d *Driver) autoAnswer(ask *capsule.AskLine) bool {
 // and work item. A work item whose content cannot be read has no
 // trustworthy confirm_plan fact: no automatic reply.
 func (d *Driver) autoAnswerProtected(stepID string) bool {
-	lane := ""
-	if d.workflow != nil {
-		lane = d.workflow.Name
-	}
 	content := ""
 	if d.wi.CapsuleDir != "" {
 		raw, err := os.ReadFile(filepath.Join(d.wi.CapsuleDir, filepath.FromSlash(capsule.WorkItemJSON)))
@@ -361,5 +346,9 @@ func (d *Driver) autoAnswerProtected(stepID string) bool {
 		}
 		content = *doc.Content
 	}
-	return autoAnswerProtectedStop(lane, stepID, content)
+	gate := false
+	if d.workflow != nil {
+		gate = d.workflow.IsGate(stepID)
+	}
+	return autoAnswerProtectedStop(gate, content)
 }

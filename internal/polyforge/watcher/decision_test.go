@@ -19,6 +19,7 @@ func TestEveryDocumentedKindIsClassified(t *testing.T) {
 		// a step's `pf ask` (workflow contract v2 §5.2): the needs_input
 		// class, Pi Web's attention channel
 		"awaiting_owner":       {"needs_input", true},
+		"auto_answered":        {"auto_answered", false},
 		"blocked":              {"blocked", true},
 		"canceled":             {"canceled", false},
 		"candidates_exhausted": {"candidates_exhausted", true},

@@ -20,18 +20,18 @@ import (
 
 func TestAutoAnswerProtectedStops(t *testing.T) {
 	cases := []struct {
-		name, lane, step, content string
-		want                      bool
+		name    string
+		gate    bool
+		content string
+		want    bool
 	}{
-		{"publish owner-review", "develop", "publish", "ordinary", true},
-		{"human merge", "develop", "merge", "ordinary", true},
-		{"build confirm_plan", "develop", "build", "ordinary\n\nconfirm_plan: true\n\n## Acceptance\n- AC1: x\n", true},
-		{"build without confirm_plan", "develop", "build", "ordinary", false},
-		{"micro fix", "micro", "fix", "", false},
-		{"custom step", "develop", "custom-step", "", true},
+		{"gate step", true, "ordinary", true},
+		{"non-gate step", false, "ordinary", false},
+		{"confirm_plan ticket protects a non-gate step", false, "ordinary\n\nconfirm_plan: true\n\n## Acceptance\n- AC1: x\n", true},
+		{"gate step without confirm_plan", true, "", true},
 	}
 	for _, tc := range cases {
-		if got := autoAnswerProtectedStop(tc.lane, tc.step, tc.content); got != tc.want {
+		if got := autoAnswerProtectedStop(tc.gate, tc.content); got != tc.want {
 			t.Errorf("%s: protected = %v, want %v", tc.name, got, tc.want)
 		}
 	}
@@ -48,7 +48,7 @@ func TestAutoAnswerProtectedStops(t *testing.T) {
 	d, err := New(Config{
 		WI:       WIInfo{ID: "wi_run", CapsuleDir: dir, BundleName: "b"},
 		ExecPath: filepath.Join(dir, capsule.ExecutionJSON),
-		Workflow: &Workflow{Name: "develop", MaxRewinds: 4, Steps: []StepSpec{spec("publish")}},
+		Workflow: &Workflow{Name: "develop", MaxRewinds: 4, Steps: []StepSpec{{ID: "publish", Gate: true}}},
 		Spawner:  sp, Log: log, Link: supervise.NewLink("wi_run"),
 		Limits:    supervise.Defaults{AskWarmWindow: 150 * time.Millisecond},
 		AskPoll:   5 * time.Millisecond,
