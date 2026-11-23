@@ -106,7 +106,11 @@ that a step's `done` needs proof the tree it changed still passes its own
 checks: develop's `build` and `sync` do (`fast_check_proof`), so their
 `done` is refused until every task repo the round moved has a `pass` result
 at its HEAD — the daemon reads the result file the lane's declaration names
-and never runs the check itself. A red the change did not cause the check
+and never runs the check itself. develop's `build` does (`facts_proof`), so its `done` is refused while the mechanical facts summary
+it writes lists a deterministic hit — a unit's commits or red-state replay,
+an existing test changed outside the plan's write set, an e2e suite without
+`carries:`, a listed test that does not exist — and the refusal returns
+each hit. A red the change did not cause the check
 itself triages first: every unit still red after its one re-run is replayed
 on the change's baseline (the same judgment verification runs), and one
 the baseline carries the same way is recorded `pre_existing` — not the

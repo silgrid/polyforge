@@ -81,7 +81,13 @@ The complete variable table is in [the workflow contract's Scripts environment s
   artifacts/build/fast-checks/<repo>.json`): the tree is unchanged, so every
   green command is reused and only the result's `heads` move to the commits
   the hand-off gate compares against HEAD; a repo the change touched without
-  that pass at HEAD has its `done` refused. Per-unit
+  that pass at HEAD has its `done` refused. The mechanical facts gate
+  (`facts_proof`, `facts.py handoff`) refuses `done` while the result lists
+  a deterministic hit — a unit's commits or red-state replay, an undeclared
+  write, an existing test changed outside the plan's write set, an e2e
+  suite without `carries:`, a listed test that does not exist, a skip after
+  the test commit — so review reads a tree whose mechanical facts are
+  already green. Per-unit
   fast checks narrowed to the roots the unit's written `Touched files` reach (`--phase fast
   --root`, the green runs whose key is unchanged reused) plus every new test; the close's scoped selection — `fast_checks.py --close-scoped`,
   the same light-tier selection verification plans, for a work item whose verification runs the
