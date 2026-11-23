@@ -3604,7 +3604,9 @@ select.mcp-add-input {
   color: var(--text-muted);
   font-size: 10px;
   font-weight: 600;
-  text-transform: uppercase;
+  /* No text-transform here: `innerText` reflects it, and the header's own
+     words are what the e2e suites (and a screen reader) read — the column
+     names are already short enough to read as labels. */
 }
 .settings-model-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
 .settings-model-table tbody tr:hover { background: var(--bg-hover); }
