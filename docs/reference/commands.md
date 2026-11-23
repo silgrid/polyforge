@@ -1420,7 +1420,7 @@ full reference.
   has run a step that changes no code does not re-run it (the reuse key is
   the command text, the root's subtree tree hash and the declared
   prerequisites, so changing artifacts alone is not a code change) while a
-  changed tree re-runs only itself and reuses the untouched roots, and a
+  changed tree re-runs only itself and on a host close reuses the untouched roots by `--reuse` (a boxed close consumes none), and a
   red is reported from the result file's own baseline record
   (`details.baseline` and its `reds[]` classification), never reproduced by
   hand on the base worktree;
