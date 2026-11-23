@@ -228,3 +228,96 @@ func TestW91PlaceholderInventory(t *testing.T) {
 		t.Fatalf("a placeholder must never stand in a `pf` command — it reads as a runnable verb the CLI does not have: %q", m)
 	}
 }
+
+// w91BeforeFirstH2 answers the page's body up to its first '## ' heading:
+// the H1 and the opening paragraphs, where a reader starts.
+func w91BeforeFirstH2(body string) string {
+	var out []string
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, "## ") {
+			break
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
+}
+
+// TestW91EntryPointersAndModes: every entry points at the mainline — the
+// README's Try it and Documentation list, docs/zh.md's routing table, the
+// two host pages labelled as the host installation, the developer page
+// labelled as the from-source path, and the user guide's opening — and every
+// relative link resolves to the real page.
+func TestW91EntryPointersAndModes(t *testing.T) {
+	readme := w91Read(t, "README.md")
+	try := w91Section(t, readme, "try")
+	norm := w91Norm(try)
+	if !strings.Contains(norm, "docs/getting-started.md") {
+		t.Fatalf("README's Try it section must point at the mainline page (docs/getting-started.md):\n%s", norm)
+	}
+	// The from-zero tutorial moved to the mainline page; the README no longer
+	// restates it.
+	if regexp.MustCompile(`pf\s+file\s+create`).MatchString(norm) {
+		t.Fatalf("README's Try it section must not restate the from-zero tutorial (pf file create belongs on the mainline page):\n%s", norm)
+	}
+	docs := w91Norm(w91Section(t, readme, "documentation"))
+	if !strings.Contains(docs, "docs/getting-started.md") {
+		t.Fatalf("README's Documentation list must name the mainline page (docs/getting-started.md):\n%s", docs)
+	}
+	if !strings.Contains(w91Norm(w91Read(t, "docs/zh.md")), "getting-started.md") {
+		t.Fatalf("docs/zh.md's routing table must route the newcomer mainline to getting-started.md")
+	}
+
+	for _, c := range []struct{ rel, label string }{
+		{"docs/install.md", "Host installation"},
+		{"docs/quickstart-macos.md", "Host installation"},
+		{"docs/quickstart-developers.md", "from source"},
+	} {
+		top := w91Norm(w91BeforeFirstH2(w91Read(t, c.rel)))
+		if !regexp.MustCompile(`(?i)` + c.label).MatchString(top) {
+			t.Fatalf("%s must open labelled %q — the reader has to know which path the page installs:\n%s", c.rel, c.label, top)
+		}
+		if !strings.Contains(top, "getting-started.md") {
+			t.Fatalf("%s must point the image newcomer at the mainline page (getting-started.md):\n%s", c.rel, top)
+		}
+	}
+
+	// Every pointer resolves to the real page under its own directory.
+	for _, c := range []struct{ rel, target string }{
+		{"README.md", "docs/getting-started.md"},
+		{"docs/zh.md", "getting-started.md"},
+		{"docs/install.md", "getting-started.md"},
+		{"docs/quickstart-macos.md", "getting-started.md"},
+		{"docs/quickstart-developers.md", "getting-started.md"},
+		{"docs/user-guide.md", "getting-started.md"},
+	} {
+		dir := filepath.Dir(filepath.Join(w91Root(t), c.rel))
+		if _, err := os.Stat(filepath.Join(dir, c.target)); err != nil {
+			t.Fatalf("%s's link %q must resolve to a real page: %v", c.rel, c.target, err)
+		}
+	}
+}
+
+// TestW91UserGuideStart: the user guide starts where the new reader starts —
+// its opening paragraph names the workstation image and links the mainline —
+// while the Install section is labelled as the host installation for a
+// machine joining an existing team (polyforge#166 Q6).
+func TestW91UserGuideStart(t *testing.T) {
+	body := w91Read(t, "docs/user-guide.md")
+	open := w91Norm(w91BeforeFirstH2(body))
+	if !strings.Contains(open, "getting-started.md") {
+		t.Fatalf("the user guide's opening paragraph must link the workstation image mainline (getting-started.md):\n%s", open)
+	}
+	if !regexp.MustCompile(`(?i)\bimage\b`).MatchString(open) {
+		t.Fatalf("the user guide's opening names the workstation image as the entry:\n%s", open)
+	}
+	if regexp.MustCompile(`tools/install\.sh|curl\s+-`).MatchString(open) {
+		t.Fatalf("the guide's opening must not be the host install one-liner — that stays under the host installation section:\n%s", open)
+	}
+	install := w91Norm(w91Section(t, body, "install"))
+	if !regexp.MustCompile(`(?i)\bhost\b`).MatchString(install) {
+		t.Fatalf("the Install section must say it is the host-installed path (a machine joining an existing team):\n%s", install)
+	}
+	if !strings.Contains(install, "getting-started.md") {
+		t.Fatalf("the Install section must point the image newcomer at the mainline page:\n%s", install)
+	}
+}
