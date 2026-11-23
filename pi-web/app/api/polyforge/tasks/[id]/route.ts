@@ -3,6 +3,7 @@ import { isPolyforgeProfileName, polyforgeScopeArgv } from "@/lib/polyforge-cell
 import { isApiRequestAllowed } from "@/lib/request-security";
 import { probePolyforgeVersion } from "@/lib/polyforge-status";
 import {
+  fillTaskContextWindow,
   isPolyforgeTaskId,
   PolyforgeTasksError,
   readPolyforgeTasksCapability,
@@ -50,7 +51,8 @@ export async function GET(
   const pin = profile ? (polyforgeScopeArgv({ profile }, capabilities)?.prefix ?? []) : [];
   try {
     const task = await showPolyforgeTask(id, pin);
-    return NextResponse.json({ ...capability, task });
+    const filled = task === null ? null : await fillTaskContextWindow(task);
+    return NextResponse.json({ ...capability, task: filled });
   } catch (error) {
     const failure = error instanceof PolyforgeTasksError ? error : new PolyforgeTasksError("polyforge is unavailable");
     return NextResponse.json({ ...capability, task: null, error: failure.message });

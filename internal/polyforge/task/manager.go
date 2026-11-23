@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/harness"
+	"github.com/silgrid/polyforge/internal/common/protocol"
 	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 	"github.com/silgrid/polyforge/internal/polyforge/workspace"
 )
@@ -359,13 +360,22 @@ func (m *Manager) run(ctx context.Context, e *entry, dir string) {
 			break
 		}
 		c, _ := harness.ParseCandidate(cand)
+		// a candidate starts with no context of its own: the previous
+		// attempt's value belongs to that attempt's conversation and is
+		// dropped until this one reports its own (polyforge#230 AC1)
 		m.mu.Lock()
 		e.t.Candidate = cand
+		e.t.Context = nil
 		m.mu.Unlock()
 		res, err := m.cfg.Runner.Run(ctx, RunSpec{
 			Candidate: c, Prompt: promptOf(), MaxTokens: t.MaxTokens - tokens, WorkDir: dir, TaskID: t.ID,
 			ScratchTaskDir: e.scratchTask, ScratchRawDir: e.scratchRaw,
 			ReadOnlyTools: t.ReadOnlyTools, Limits: limits(),
+			OnContext: func(u *protocol.ContextUsage) {
+				m.mu.Lock()
+				e.t.Context = u
+				m.mu.Unlock()
+			},
 		}, func(n int64) {
 			m.mu.Lock()
 			e.t.TokensConsumed = tokens + n
@@ -467,6 +477,10 @@ func (m *Manager) finish(ctx context.Context, e *entry, report string, tokens in
 	now := m.cfg.Now()
 	t.Report = report
 	t.TokensConsumed = tokens
+	// a finished task carries no context usage: the value describes a live
+	// conversation, and the terminal record is what list/show and the store
+	// answer (polyforge#230 AC1)
+	t.Context = nil
 	t.EndedAt = now
 	t.WallConsumed = now.Sub(t.StartedAt)
 	if err := m.cfg.Store.Save(t); err != nil && t.Error == "" {
@@ -509,6 +523,7 @@ func (m *Manager) Recover() error {
 		}
 		t.State = StateInterrupted
 		t.Error = "the daemon restarted while the task ran"
+		t.Context = nil
 		t.EndedAt = now
 		if err := m.cfg.Store.Save(t); err != nil {
 			return err

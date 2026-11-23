@@ -119,18 +119,24 @@ const waitFor = createWaitFor({ ms: 20_000 });
 const listRequests = (page) => page.__pf.filter((pathname) => pathname === "/api/polyforge/projects").length;
 const requestBarrier = (page) => page.evaluate(async (url) => { await fetch(url, { cache: "no-store" }); }, BARRIER);
 
-async function openProjects(page) {
+async function openWorkRail(page) {
   if ((await dock(page).count()) === 0 || !(await dock(page).isVisible().catch(() => false))) {
     await openPolyforgeDock(page);
   }
   await waitFor(async () => (await topTab(page, RE_WORK).count()) > 0, "a Work top-level tab exists", NAV_MS);
   await topTab(page, RE_WORK).click();
+  await dock(page).locator('[data-pf-tabstrip="work"]').waitFor({ timeout: NAV_MS });
+  await waitFor(async () => (await segments(page).count()) > 0, "the Work rail renders", NAV_MS);
+  await requestBarrier(page);
+  return dock(page);
+}
+
+// The restore-time variant opens the 项目 sub-tab. Hidden by polyforge#226 and
+// kept for the skipped scenarios below.
+async function openProjects(page) {
+  await openWorkRail(page);
   const before = listRequests(page);
-  const tab = segment(page, RE_PROJECTS)
-    .or(dock(page).locator('[data-pf-tabstrip="work"]').getByRole("tab", { name: RE_PROJECTS }))
-    .first();
-  await tab.waitFor({ timeout: NAV_MS });
-  await tab.click();
+  await segment(page, RE_PROJECTS).first().click();
   await waitFor(() => listRequests(page) > before, "the projects sub-tab issues its list read", NAV_MS);
   await requestBarrier(page);
   return dock(page);
@@ -141,71 +147,77 @@ try {
   await startServer("main");
   await withPage({ gotoTimeout: 60_000, readyTimeout: 60_000 }, (page) => waitForPolyforgeToggle(page, 60_000));
 
-  await check("S30-1", async () => {
+  await check("S30-hidden", async () => {
     seed();
     await withPage({}, async (page) => {
-      const panel = await openProjects(page);
-      // The Work rail carries the fifth sub-tab after 全部.
+      const panel = await openWorkRail(page);
+      // AC1: exactly 作业, 任务, 全部, in that order — 项目 and 待集成 are not
+      // rendered at all, not merely hidden by CSS.
       assert.deepEqual((await segments(page).allInnerTexts()).map((t) => t.trim().split(/\s/)[0]),
-        ["作业", "任务", "全部", "项目", "待集成"], "the Work strip lists 作业, 任务, 全部, 项目, 待集成 in order");
-      // The default view lists the active project and hides the deactivated one.
-      const view = panel.getByTestId("pf-projects-list");
-      await view.waitFor({ timeout: NAV_MS });
-      await waitFor(async () => (await view.textContent()).includes("workbench"), "the active project renders", NAV_MS);
-      assert(!(await view.textContent()).includes("dormant"), "the default view lists the deactivated project");
-      // The「显示已停用」entry exists beside the list.
-      assert((await panel.getByTestId("pf-projects-toggle").count()) === 1, "no 显示已停用 entry beside the list");
-      // The read discipline: one route read per opening, and behind it the
-      // mapping read plus one projects get per mapped project (the panel's
-      // other surfaces share the pf, so the mapping read's count is not
-      // pinned here — the projects route's own one-read is).
-      assert.equal(listRequests(page), 1, "more than one projects read fired");
-      assert.ok(calls().filter((a) => a[0] === "config" && a[1] === "list").length >= 1, "the mapping read never fired");
-      assert.deepEqual(projectGets().map((a) => a[2]).sort(), ["dormant", "workbench"], "one projects get per mapped project");
-      assert.equal(projectRestores().length, 0, "no restore fired on a read");
+        ["作业", "任务", "全部"], "the Work strip lists only 作业, 任务, 全部");
+      assert.equal(await segment(page, RE_PROJECTS).count(), 0, "the Work rail still renders a 项目 button");
+      assert.equal(await segment(page, /待集成|待整合|integrate/i).count(), 0, "the Work rail still renders a 待集成 button");
+      assert.equal(await panel.locator('[data-testid="pf-projects-list"]').count(), 0, "the hidden projects surface renders without its entry");
+      assert.equal(listRequests(page), 0, "a projects read fired although its entry is hidden");
+      // The three remaining entries are real controls, each selectable.
+      for (const [id, name] of [["jobs", /作业|作業|jobs/i], ["tasks", /任务|任務|tasks/i], ["items", /全部|all/i]]) {
+        const button = segment(page, name).first();
+        await button.waitFor({ timeout: NAV_MS });
+        assert.equal(await button.isEnabled(), true, `the ${id} entry is not a usable control`);
+        await button.click();
+        await waitFor(async () => (await button.getAttribute("aria-selected")) === "true", `the ${id} entry becomes selected`, NAV_MS);
+      }
+      assert.equal(projectGets().length, 0, "a projects get fired although its entry is hidden");
+      assert.equal(projectRestores().length, 0, "the hidden projects surface wrote something");
     });
   });
 
-  await check("S30-2", async () => {
-    seed();
-    await withPage({}, async (page) => {
-      const panel = await openProjects(page);
-      const view = panel.getByTestId("pf-projects-list");
-      await waitFor(async () => (await view.textContent()).includes("workbench"), "the active project renders", NAV_MS);
-      // The toggle reveals the deactivated project, marked, with the
-      // restore entry in the same row.
-      await panel.getByTestId("pf-projects-toggle").click();
-      const row = panel.locator('[data-pf-project-row]').filter({ hasText: "dormant" });
-      await row.waitFor({ timeout: NAV_MS });
-      assert((await row.locator('[data-pf-project-mark]').count()) === 1, "the revealed row carries no deactivated marker");
-      assert((await row.getByTestId("pf-projects-restore").count()) === 1, "the revealed row carries no in-place restore entry");
-    });
-  });
-
-  await check("S30-3", async () => {
-    seed();
-    await withPage({}, async (page) => {
-      const panel = await openProjects(page);
-      const view = panel.getByTestId("pf-projects-list");
-      await waitFor(async () => (await view.textContent()).includes("workbench"), "the active project renders", NAV_MS);
-      await panel.getByTestId("pf-projects-toggle").click();
-      const row = panel.locator('[data-pf-project-row]').filter({ hasText: "dormant" });
-      await row.waitFor({ timeout: NAV_MS });
-      // Restore: the write goes through the route's action door, the stub
-      // flips the project, the one re-read settles the row — unmarked.
-      await row.getByTestId("pf-projects-restore").click();
-      await row.locator('[data-pf-project-mark]').waitFor({ state: "detached", timeout: NAV_MS });
-      assert(!(await row.textContent()).includes("deactivated"), "the restored row still carries the marker");
-      assert.equal(projectRestores().length, 1, "the restore did not fire exactly once");
-      assert.deepEqual(projectRestores()[0].slice(0, 2), ["projects", "restore"], "the restore argv");
-      // The restored project is back in the default view.
-      await panel.getByTestId("pf-projects-toggle").click();
-      await waitFor(async () => {
-        const text = await panel.getByTestId("pf-projects-list").textContent();
-        return text.includes("dormant") && !text.includes("deactivated");
-      }, "the default view never listed the restored project unmarked", NAV_MS);
-    });
-  });
+  // polyforge#226 hides 项目 from the Work rail, so the scenarios that click
+  // its entry cannot run. They stay here as the restore-time record; each
+  // prints SKIP with the reason and is never reported PASS.
+  const HIDDEN_REASON = "隐藏期间：工单不再提供项目入口（polyforge#226；恢复时把 projects 加回 VISIBLE_WORK_TABS 并恢复这些场景）";
+  const restoreTimeScenarios = {
+    "S30-2": async () => {
+      seed();
+      await withPage({}, async (page) => {
+        const panel = await openProjects(page);
+        const view = panel.getByTestId("pf-projects-list");
+        await waitFor(async () => (await view.textContent()).includes("workbench"), "the active project renders", NAV_MS);
+        // The toggle reveals the deactivated project, marked, with the
+        // restore entry in the same row.
+        await panel.getByTestId("pf-projects-toggle").click();
+        const row = panel.locator('[data-pf-project-row]').filter({ hasText: "dormant" });
+        await row.waitFor({ timeout: NAV_MS });
+        assert((await row.locator('[data-pf-project-mark]').count()) === 1, "the revealed row carries no deactivated marker");
+        assert((await row.getByTestId("pf-projects-restore").count()) === 1, "the revealed row carries no in-place restore entry");
+      });
+    },
+    "S30-3": async () => {
+      seed();
+      await withPage({}, async (page) => {
+        const panel = await openProjects(page);
+        const view = panel.getByTestId("pf-projects-list");
+        await waitFor(async () => (await view.textContent()).includes("workbench"), "the active project renders", NAV_MS);
+        await panel.getByTestId("pf-projects-toggle").click();
+        const row = panel.locator('[data-pf-project-row]').filter({ hasText: "dormant" });
+        await row.waitFor({ timeout: NAV_MS });
+        // Restore: the write goes through the route's action door, the stub
+        // flips the project, the one re-read settles the row — unmarked.
+        await row.getByTestId("pf-projects-restore").click();
+        await row.locator('[data-pf-project-mark]').waitFor({ state: "detached", timeout: NAV_MS });
+        assert(!(await row.textContent()).includes("deactivated"), "the restored row still carries the marker");
+        assert.equal(projectRestores().length, 1, "the restore did not fire exactly once");
+        assert.deepEqual(projectRestores()[0].slice(0, 2), ["projects", "restore"], "the restore argv");
+        // The restored project is back in the default view.
+        await panel.getByTestId("pf-projects-toggle").click();
+        await waitFor(async () => {
+          const text = await panel.getByTestId("pf-projects-list").textContent();
+          return text.includes("dormant") && !text.includes("deactivated");
+        }, "the default view never listed the restored project unmarked", NAV_MS);
+      });
+    },
+  };
+  for (const id of Object.keys(restoreTimeScenarios)) console.log(`SKIP ${id} — ${HIDDEN_REASON}`);
 
   if (errors.length) {
     failures.push("errors");

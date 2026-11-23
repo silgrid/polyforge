@@ -224,7 +224,11 @@ try {
     const response = await fetch(`${base}/api/polyforge/tasks`, { signal: AbortSignal.timeout(30_000) });
     assert.equal(response.status, 200);
     const body = await response.text(); const rows = JSON.parse(body).tasks;
-    const allowed = new Set(["id", "project", "state", "prompt_summary", "started_at", "ended_at", "wall_consumed_ns", "report_tail", "reporter"]);
+    // polyforge#230's owner-intended extension: the attempt's candidate and,
+    // when pf sends them, a running task's context and an analysis task's
+    // analysis_of — the same kind of extension the 2026-10-30 keys were.
+    const allowed = new Set(["id", "project", "state", "prompt_summary", "started_at", "ended_at", "wall_consumed_ns", "report_tail", "reporter",
+      "candidate", "context", "analysis_of"]);
     for (const row of rows) for (const key of Object.keys(row)) assert.ok(allowed.has(key), `raw field ${key} stays unforwarded`);
     const by = (id) => rows.find((row) => row.id === id);
     assert.equal(by(ids.R1).reporter, "alice", "reporter is forwarded");
@@ -235,8 +239,8 @@ try {
     assert.ok("report_tail" in by(ids.F3) && "reporter" in by(ids.F3), "the empty values are present keys, not absent ones");
     assert.ok(!("report_tail" in by(ids.F8)) && !("reporter" in by(ids.F8)), "a non-string field is not forwarded");
     assert.deepEqual(Object.keys(by(ids.F5)).sort(),
-      ["ended_at", "id", "project", "prompt_summary", "started_at", "state", "wall_consumed_ns"],
-      "an old-pf row keeps the seven keys and fabricates neither new field");
+      ["candidate", "ended_at", "id", "project", "prompt_summary", "started_at", "state", "wall_consumed_ns"],
+      "a row without the reporting fields keeps its keys plus the candidate (polyforge#230) and fabricates neither new field");
     for (const sentinel of ["FULL-REPORT-SENTINEL", "ERROR-SENTINEL", "ORIGIN-CHAT-SENTINEL"]) {
       assert.ok(!body.includes(sentinel), `the ${sentinel} raw field never leaves the server`);
     }

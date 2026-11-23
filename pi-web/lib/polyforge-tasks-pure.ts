@@ -1,7 +1,9 @@
 /**
  * Client-safe pure model for the dock's read-only Tasks tab:
- * the list-row and detail wire types (the row type names exactly the nine
- * keys the server passport forwards, report_tail/reporter included),
+ * the list-row and detail wire types (the row type names the keys the server
+ * passport forwards: id/project/state/prompt_summary, the timing facts,
+ * report_tail, reporter and — since polyforge#230 — candidate, a running
+ * task's context and an analysis task's analysis_of),
  * the task id validator, the
  * running-on-top section split, the client-side search, the project/state
  * filters and the block timing helpers, and the reporter
@@ -12,6 +14,13 @@
  * `lib/polyforge-memory-pure.ts`) — one rule, one place. No Node import
  * lives here, so both the server module and the client panel can use it.
  */
+
+import type { PolyforgeContextUsage } from "./polyforge-status";
+import {
+  polyforgeContextDetailText,
+  polyforgeContextMeterText,
+  polyforgeContextTokensText,
+} from "./polyforge-cards-pure";
 
 /** One `pf task list` row, exactly the field set the sanitizer forwards.
  *  The route's outer layer attaches the row's Cell (`cell`, polyforge#73) —
@@ -36,6 +45,18 @@ export interface PolyforgeTaskRow {
   /** the spawn-time human display name, or `machine`.
    *  Absent from a pf that predates it. */
   reporter?: string;
+  /** The running task's context-window usage (polyforge#230): the job row's
+   *  `context` shape and counting. Absent on a finished task (the daemon
+   *  clears it) and from a pf that predates the field. */
+  context?: PolyforgeContextUsage;
+  /** The attempt's candidate (`pi:…` / `claude:…`), forwarded so the catalog
+   *  window lookup reads the same `<harness>:` prefix a job row uses. Absent
+   *  before the first attempt starts. */
+  candidate?: string;
+  /** The work item a daemon analysis task analyzes (`spec.analysis_of`):
+   *  a `wi_…` id, absent on an ordinary task. The panel reads that ticket for
+   *  its slug and title and opens it on click. */
+  analysis_of?: string;
 }
 
 /** One `pf task show` read: status, candidates, budget, times, prompt and
@@ -57,6 +78,12 @@ export interface PolyforgeTaskDetail {
   report: string;
   report_len: number;
   truncated: boolean;
+  /** the running task's context usage, the row's `context` (polyforge#230) */
+  context?: PolyforgeContextUsage;
+  /** the attempt's candidate, the row's `candidate` */
+  candidate?: string;
+  /** the analyzed work item, the row's `analysis_of` */
+  analysis_of?: string;
 }
 
 const TASK_ID = /^task_[0-9a-f]{16}$/;
@@ -161,4 +188,42 @@ export function formatTaskAge(seconds: number): string {
   if (total < 3600) return `${Math.floor(total / 60)}m`;
   if (total < 86400) return `${Math.floor(total / 3600)}h`;
   return `${Math.floor(total / 86400)}d`;
+}
+
+// ---- polyforge#230 display: the context line and the analysis ticket row ----
+
+/** The card's context text: the job card's meter when the window is known
+ *  (`42% / 200k`), else the token count alone (`4.3k`) — the ticket's "补不到
+ *  只显示 tokens, 不猜". null without a token count. Pure. */
+export function taskContextText(context: PolyforgeContextUsage | undefined): string | null {
+  return polyforgeContextMeterText(context) ?? polyforgeContextTokensText(context);
+}
+
+/** The detail's context text: the job detail's `tokens / window` when the
+ *  window is known, else the grouped token count alone. null without a token
+ *  count. Pure. */
+export function taskContextDetailText(context: PolyforgeContextUsage | undefined): string | null {
+  if (!context) return null;
+  if (context.window) return polyforgeContextDetailText(context);
+  return polyforgeContextTokensText(context, "grouped");
+}
+
+/** What the panel knows about an analyzed ticket. */
+export interface PolyforgeAnalysisTicket {
+  slug?: string | null;
+  goal?: string | null;
+}
+
+/** The analysis row's name: the ticket's slug once it was read, the wi id
+ *  while it was not (or the read failed) — never an empty or guessed slug.
+ *  Pure. */
+export function taskAnalysisSlug(analysisOf: string, ticket?: PolyforgeAnalysisTicket | null): string {
+  const slug = ticket?.slug?.trim();
+  return slug ? slug : analysisOf;
+}
+
+/** The analysis row's title line: the ticket's goal, trimmed; "" when the
+ *  ticket is not read yet. Pure. */
+export function taskAnalysisTitle(ticket?: PolyforgeAnalysisTicket | null): string {
+  return ticket?.goal?.trim() ?? "";
 }

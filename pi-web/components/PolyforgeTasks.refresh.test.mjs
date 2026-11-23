@@ -35,6 +35,7 @@ const jiti = createJiti(import.meta.url, {
     "@/lib/polyforge-cards-pure": modulePath("lib/polyforge-cards-pure.ts"),
     "@/lib/panel-layout": modulePath("lib/panel-layout.ts"),
     "@/lib/polyforge-decisions-pure": modulePath("lib/polyforge-decisions-pure.ts"),
+    "@/lib/polyforge-work-items-pure": modulePath("lib/polyforge-work-items-pure.ts"),
   },
 });
 const { renderHook } = await import(pathToFileURL(shimPath).href);
