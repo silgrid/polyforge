@@ -450,10 +450,12 @@ rolling back to one.
 ## Platform support
 
 Verified: Linux amd64 — the engine, the image build and every
-acceptance pass of the smoke ran there. Not verified: macOS (the
-container runs under Docker Desktop in principle, but no acceptance
-pass has) and Windows. arm64 images are not built yet (polyforge#86
-builds them; a real Mac lands with polyforge#168's verification). The
+acceptance pass of the smoke ran there. The release pipeline builds the
+image for linux/amd64 AND linux/arm64 (polyforge#86, one buildx pass; the
+arm64 index is verified by `release.sh --verify`), but no acceptance pass
+has run on the arm64 index yet: a real Mac lands with polyforge#168's
+verification, and macOS (Docker Desktop) and Windows stay not verified
+here. The
 host-installed pf's own platform story is unchanged and wider —
 `docs/install.md` — this page is about the workstation image only.
 
