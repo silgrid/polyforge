@@ -123,15 +123,16 @@ the exported event file:
                printed; `size unknown` runs print `unknown`, a zero-size
                run is its own line and takes no per-file time.
   rework       every rewind's named gate: the dispatches started after
-               the rewind and before the gate's next step_done, each
-               counted once however many rewind windows overlap (their
-               union, polyforge#261), over the effective time (Q7,
-               ruling 5); a dispatch ends at its step's
+               the rewind and before the gate's next step_done, all
+               gates' windows merged into one union and each dispatch
+               counted once however many overlap (polyforge#261, the
+               owner's ruling of 2026-11-23), over the effective time
+               (Q7, ruling 5); a dispatch ends at its step's
                step_done/step_failed/gate_verdict, the next same-step
                step_started, a rewind or the terminal, and the owner
                wait and any coordinator pause inside it (a
                `job_finished` whose reason is `paused` to the next
-               `job_started`) are subtracted.
+               `job_started`) are subtracted once, merged.
   first pass   the stamped review sections (the existing read).
   infra        every step_started is a dispatch; every step_failed is a
                failed dispatch, owned by the same step's most recent
@@ -1311,9 +1312,11 @@ def completed_run(events):
 
 def rework_s(events, recs):
     """every rewind's named gate: the dispatches started after the rewind
-    and before the gate's next step_done, counted once however many
-    rewind windows overlap (their union), each net of the owner wait and
-    of any coordinator pause inside it (Q7, ruling 5; polyforge#261)."""
+    and before the gate's next step_done, all gates' windows merged into
+    one union so each dispatch counts once however many overlap (the
+    owner's ruling of 2026-11-23; polyforge#261), each net of the owner
+    wait and of any coordinator pause inside it — both merged, so a
+    minute that belongs to both is subtracted once (Q7, ruling 5)."""
     windows = []
     for i, e in enumerate(events):
         if e['kind'] != 'rewind':
@@ -1326,12 +1329,13 @@ def rework_s(events, recs):
         windows.append((e['at'], done['at']))
     merged = merge_intervals([(a, b) for a, b in windows
                               if a is not None and b is not None and b >= a])
-    pause = pause_intervals(events)
+    excluded = merge_intervals(owner_wait_intervals(events) + pause_intervals(events))
     total = 0.0
     for r in recs:
         if not any(a <= r['start'] < b for a, b in merged):
             continue
-        total += max(0.0, r['dur'] - overlap_s(r['start'], r['end'], pause))
+        span = (r['end'] - r['start']).total_seconds()
+        total += max(0.0, span - overlap_s(r['start'], r['end'], excluded))
     return total
 
 
