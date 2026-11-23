@@ -107,3 +107,29 @@ func TestFakeContainerReapLeavesTheRealTmpAlone(t *testing.T) {
 		t.Fatalf("the fake container kept its own copy of %s: %v", real, err)
 	}
 }
+
+// TestFakeContainerCommandTmpdirIsItsOwn: the TMPDIR a container command
+// is given is the fake container's own directory, not the real path the
+// runner names — a command that makes or writes its TMPDIR (the runner's
+// `mkdir -p "$TMPDIR"` wrapper) must not touch the outer run's.
+func TestFakeContainerCommandTmpdirIsItsOwn(t *testing.T) {
+	dir := (&fakeRuntime{}).dockerDir(t)
+	real := outerRunTmpdir()
+	t.Cleanup(func() { _ = os.RemoveAll(real) })
+
+	out, code := runFakeDocker(t, dir, "exec", "--workdir", dir, "--env", "TMPDIR="+real, "cid-1", "sh", "-c",
+		`mkdir -p "$TMPDIR" && printf ok > "$TMPDIR/probe" && printf %s "$TMPDIR"`)
+	if code != 0 {
+		t.Fatalf("the container command exited %d: %s", code, out)
+	}
+	want := filepath.Join(dir, "tmp", "cid-1", filepath.Base(real))
+	if got := strings.TrimSpace(out); got != want {
+		t.Fatalf("the container command's TMPDIR is %q, want the fake container's own %q", got, want)
+	}
+	if raw, err := os.ReadFile(filepath.Join(want, "probe")); err != nil || string(raw) != "ok" {
+		t.Fatalf("the command's output is not in the fake container's TMPDIR %s: %q, %v", want, raw, err)
+	}
+	if _, err := os.Stat(real); !os.IsNotExist(err) {
+		t.Fatalf("the container command wrote the real TMPDIR %s the outer run is using: %v", real, err)
+	}
+}
