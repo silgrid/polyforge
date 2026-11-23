@@ -60,3 +60,18 @@ class FastChecksParallelTextTest(unittest.TestCase):
         for want in ("group by group", "each group's own commands in plan order",
                      "`--parallel N`", "default 2", "each group's own container"):
             self.assertIn(want, text)
+
+    def test_the_serial_phases_name_the_closes_own_container(self) -> None:
+        """r2#5: the selected commands run in each group's own container;
+        the engine asks, the re-runs, the baseline triage and the
+        whole-command confirmation run in the close's own container. A
+        document that says the serial phases run in the groups' containers
+        contradicts the implementation."""
+        for rel in ("workflows/_shared/skills/build.md", "workflows/develop/steps/build.md",
+                    "docs/reference/commands.md"):
+            text = self.flat(rel)
+            self.assertIn("in the close's own container", text, rel)
+            for stale in ("all of it in each group's own container",
+                          "all of it in the container each group was given",
+                          "one container for the engine asks, the selected commands, the re-runs"):
+                self.assertNotIn(stale, text, "%s still says %r" % (rel, stale))

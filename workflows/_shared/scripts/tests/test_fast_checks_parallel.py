@@ -18,11 +18,14 @@ import io
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
+import time
 import typing
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from unittest import mock
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import fast_checks
@@ -31,7 +34,7 @@ from pfstep.container import ContainerError, ContainerSpec
 
 from .fakebox import FakeRuntime
 from .gitworld import GitCase, Repo, git
-from .test_fast_checks import env_without
+from .test_fast_checks import ALWAYS_RED_TEST, FLAKY_GATE_TEST, env_without
 from .capsuleutil import TEST_DOCKERFILE
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -79,18 +82,22 @@ class ParallelCase(GitCase):
         ) % (gate(self.events, "B1", wait_for="A1.start"), gate(self.events, "B2"))
 
     def two_root_repo(self, conf: str = "", nested_conf: str = "",
-                      change: Optional[Dict[str, str]] = None) -> str:
+                      change: Optional[Dict[str, str]] = None,
+                      files: Optional[Dict[str, str]] = None) -> str:
         """The clone, one commit ahead of its origin; the change touches
-        the root's app/ and the nested root's pi/."""
+        the root's app/ and the nested root's pi/. files ride in the base
+        commit (a test a baseline triage can find there)."""
         bare = os.path.join(self.tmp, "app.git")
         git(self.tmp, "init", "-q", "--bare", "-b", "main", "app.git")
-        clone = Repo(os.path.join(self.capsule, "repos", "app"), {
+        base = {
             "go.mod": GO_MOD,
             ".polyforge/verify-scope.conf": conf or self.conf,
             "app/app.go": APP,
             "pi/.polyforge/verify-scope.conf": nested_conf or self.nested_conf,
             "pi/note.txt": "pi\n",
-        })
+        }
+        base.update(files or {})
+        clone = Repo(os.path.join(self.capsule, "repos", "app"), base)
         git(clone.dir, "remote", "add", "origin", bare)
         git(clone.dir, "push", "-q", "origin", "main")
         git(clone.dir, "remote", "set-head", "origin", "-a")
@@ -261,6 +268,55 @@ class HostSemanticsTest(ParallelCase):
         self.assertIn("after.done", events)
         self.assertNotIn("slow.done", events, "the timeout killed the command whole")
 
+    def clear_flaky_marker(self) -> None:
+        """The flaky fixture passes once its marker exists; clear it so the
+        next run starts red (each run is its own first run)."""
+        p = os.path.join(self.capsule, "repos", "app", "app", "flaky-marker")
+        if os.path.exists(p):
+            os.remove(p)
+
+    def test_a_flaky_unit_is_rerun_once_in_the_parallel_plan(self) -> None:
+        """r2#2: a failing unit in one group's command is re-run once by the
+        check itself in the parallel plan too, recorded flaky, and the whole
+        command confirmed — the serial plan's record exactly."""
+        self.two_root_repo(files={"app/app_test.go": FLAKY_GATE_TEST})
+        code, parallel = self.run_checks(out=os.path.join(self.capsule, "parallel.json"))
+        self.assertEqual(code, 0, parallel.get("summary"))
+        self.clear_flaky_marker()
+        code, serial = self.run_checks(("--parallel", "1"), out=os.path.join(self.capsule, "serial.json"))
+        self.assertEqual(code, 0, serial.get("summary"))
+        for res in (parallel, serial):
+            scoped = [c for c in self.commands_of(res) if c["phase"] == "scoped"]
+            self.assertEqual(len(scoped), 1, res.get("summary"))
+            self.assertNotEqual(scoped[0]["exit_code"], 0, "the first run failed")
+            u = scoped[0]["units"][0]
+            self.assertEqual(u["name"], "TestFlakyGate")
+            self.assertEqual(u["status"], "flaky")
+            self.assertEqual(u["flaky"], "flaky 1/2")
+            self.assertTrue(u["rerun_log"])
+            self.assertEqual(scoped[0]["confirmed"], scoped[0]["cmd"])
+        self.assertIn("flaky", parallel["summary"])
+        self.assertIn("TestFlakyGate", parallel["summary"])
+
+    def test_a_pre_existing_unit_is_judged_on_the_base_in_the_parallel_plan(self) -> None:
+        """r2#2: a unit still red after its one re-run is judged on the
+        change's baseline in the parallel plan too — the same signature
+        there records pre-existing and the command turns green in its skip
+        form, exactly as the serial plan."""
+        self.two_root_repo(files={"app/app_test.go": ALWAYS_RED_TEST})
+        code, parallel = self.run_checks(out=os.path.join(self.capsule, "parallel.json"))
+        self.assertEqual(code, 0, parallel.get("summary"))
+        code, serial = self.run_checks(("--parallel", "1"), out=os.path.join(self.capsule, "serial.json"))
+        self.assertEqual(code, 0, serial.get("summary"))
+        for res in (parallel, serial):
+            scoped = [c for c in self.commands_of(res) if c["phase"] == "scoped"]
+            u = scoped[0]["units"][0]
+            self.assertEqual(u["status"], "pre_existing")
+            self.assertEqual(u["class"], "pre_existing")
+            self.assertIn("fails the same way on all 1 base runs", u["detail"])
+            self.assertIn("-skip", scoped[0]["confirmed"])
+        self.assertEqual(serial["details"]["reds"], [])
+
     def test_heads_and_reds_are_the_serial_ones(self) -> None:
         """The same tree and plan: the serial and the parallel run record
         the same commands, exit codes, heads and summary — only the
@@ -400,3 +456,149 @@ class CloseParallelTest(ParallelCase):
         self.assertEqual(code, 2, (res.get("summary"), said[-500:]))
         self.assertIn("not judged", res.get("summary", ""))
         self.assertNotIn("selected", res["details"], "nothing is claimed when a group's container is not had")
+
+
+class SerialRecordShapeTest(CloseParallelTest):
+    """r2#1: the serial plans keep the pre-change record shape — the
+    per-unit `--repo` record adds `tree`/`prereq_key` after the run, the
+    close's record carries neither and appends `source` last. Both modes
+    are checked as written, not against another new-code run."""
+
+    def test_the_repo_plan_keeps_its_record_shape(self) -> None:
+        self.two_root_repo()
+        code, res = self.run_checks(("--parallel", "1"))
+        self.assertEqual(code, 0, res.get("summary"))
+        self.assertEqual([list(c.keys()) for c in self.commands_of(res)],
+                         [["name", "phase", "root", "cmd", "exit_code", "duration_ms", "log",
+                           "tree", "prereq_key"]] * 4)
+
+    def test_the_repo_plan_keeps_the_skipped_and_reused_shapes(self) -> None:
+        self.two_root_repo(
+            conf=("stack=go\n"
+                  "check=first|fast|echo first >> %(e)s\n"
+                  "check=absent|fast|echo absent >> %(e)s\n"
+                  "check_requires_cmd=absent|no-such-bin-pf254\n") % {"e": self.events},
+            nested_conf=self.nested_conf)
+        code, res = self.run_checks(("--parallel", "1"))
+        self.assertEqual(code, 0, res.get("summary"))
+        by_name = {c["name"]: c for c in self.commands_of(res)}
+        self.assertEqual(list(by_name["absent"].keys()),
+                         ["name", "phase", "root", "cmd", "skipped", "skip_reason"])
+        code, res = self.run_checks(("--parallel", "1"))
+        self.assertEqual(code, 0, res.get("summary"))
+        self.assertEqual(list(self.commands_of(res)[0].keys()),
+                         ["name", "phase", "root", "cmd", "exit_code", "log", "tree", "prereq_key", "reused"])
+
+    def test_the_close_keeps_its_record_shape(self) -> None:
+        self.close_repo()
+        code, res, said = self.run_close(("--parallel", "1"), out=os.path.join(self.capsule, "serial.json"))
+        self.assertEqual(code, 0, (res.get("summary"), said[-300:]))
+        want = ["name", "phase", "root", "cmd", "exit_code", "duration_ms", "log", "source"]
+        cmds = res["details"]["commands"]
+        self.assertEqual([list(c.keys()) for c in cmds], [want] * len(cmds))
+        self.assertEqual([list(c.keys()) for c in res["details"]["selected"]["app"]["commands"]],
+                         [want] * len(cmds), "the selection record is the same entries, never a second shape")
+        for c in cmds:
+            self.assertNotIn("tree", c)
+            self.assertNotIn("prereq_key", c)
+
+    def test_the_close_keeps_the_skipped_and_reused_shapes(self) -> None:
+        self.close_repo()
+        # a green per-unit run of the fast gates is the close's --reuse input
+        code, fast = self.run_checks(out=os.path.join(self.capsule, "fast.json"))
+        self.assertEqual(code, 0, fast.get("summary"))
+        code, res, said = self.run_close(("--reuse", os.path.join(self.capsule, "fast.json")),
+                                         out=os.path.join(self.capsule, "reused.json"))
+        self.assertEqual(code, 0, (res.get("summary"), said[-300:]))
+        reused = [c for c in res["details"]["commands"] if c.get("reused")]
+        self.assertTrue(reused, "the fast gates' green runs are reused")
+        for c in reused:
+            self.assertEqual(list(c.keys()), ["name", "phase", "root", "cmd", "source", "reused"])
+
+
+class WorkerFaultTest(ParallelCase):
+    """r2#3: a fault of the script while a group runs is never a verdict —
+    the run exits 2 (not judged), the same as a serial run's fault, and no
+    placeholder entry is judged red."""
+
+    def test_a_worker_fault_is_not_judged(self) -> None:
+        """The faulting command is the plan's last one and the other group
+        has already recorded its own command by then: without the fix every
+        command is recorded and the faulting placeholder is judged red."""
+        faulted = os.path.join(self.capsule, "faulted")
+        self.two_root_repo(
+            conf=("stack=go\n"
+                  "check=wait|fast|n=0; while [ ! -f %(f)s ] && [ $n -lt 200 ]; do sleep 0.05; n=$((n+1)); done;"
+                  " echo waited\n") % {"f": faulted},
+            nested_conf="stack=go\ncheck=boom|fast|echo boom\n")
+        original = fast_checks.CheckRun.exec_command
+
+        def boom(self: Any, p: Any, log_path: str, entry: Dict[str, Any], box: Any) -> Any:
+            if p.c.name == "pi/boom":
+                with open(faulted, "w", encoding="utf-8") as f:
+                    f.write("1")
+                raise OSError("the log directory vanished")
+            return original(self, p, log_path, entry, box)
+
+        argv = ["--capsule", self.capsule, "--engine", ENGINE, "--repo", "app", "--phase", "fast",
+                "--deadline", "10m", "--out", self.out]
+        so, se = io.StringIO(), io.StringIO()
+        with mock.patch.object(fast_checks.CheckRun, "exec_command", boom):
+            with redirect_stdout(so), redirect_stderr(se):
+                code = fast_checks.main(argv, env_without("PF_CAPSULE"))
+        self.assertEqual(code, 2, (code, se.getvalue()[-800:]))
+        with open(self.out, encoding="utf-8") as f:
+            res = json.load(f)
+        self.assertIn("never a verdict", res.get("summary", ""))
+        self.assertEqual(res["details"].get("reds", []), [], "a script fault is not a red command")
+
+
+class InterruptTest(ParallelCase):
+    """r2#4: an interrupt of a host run ends the commands running in the
+    groups — the script exits 2 promptly, it does not wait for them."""
+
+    def test_an_interrupt_kills_the_running_groups(self) -> None:
+        pids = os.path.join(self.capsule, "pids.txt")
+        self.two_root_repo(
+            conf=("stack=go\n"
+                  "check=long|fast|echo $$ > %(p)s; exec sleep 30\n"
+                  "check=after|fast|echo after >> %(e)s\n") % {"p": pids, "e": self.events},
+            nested_conf="stack=go\ncheck=nlong|fast|exec sleep 30\n")
+        argv = [sys.executable, FAST_CHECKS, "--capsule", self.capsule, "--engine", ENGINE,
+                "--repo", "app", "--phase", "fast", "--deadline", "10m", "--out", self.out]
+        p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             env=env_without("PF_CAPSULE"))
+        try:
+            deadline = time.monotonic() + 15
+            pid = 0
+            while time.monotonic() < deadline and p.poll() is None:
+                if os.path.exists(pids):
+                    text = open(pids, encoding="utf-8").read().strip()
+                    if text:
+                        pid = int(text)
+                        break
+                time.sleep(0.05)
+            self.assertTrue(pid, "the long-running group command started")
+            started = time.monotonic()
+            p.send_signal(signal.SIGINT)
+            try:
+                rc = p.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                self.fail("the interrupted run did not end: it waited for its 30 s commands")
+            elapsed = time.monotonic() - started
+            stderr = p.stderr.read().decode("utf-8", "replace") if p.stderr is not None else ""
+        finally:
+            if p.poll() is None:
+                p.kill()
+                p.wait()
+        self.assertEqual(rc, 2, stderr[-800:])
+        self.assertLess(elapsed, 15, "the run ended at the interrupt, not at the commands' own end")
+        gone = False
+        for _ in range(100):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                gone = True
+                break
+            time.sleep(0.05)
+        self.assertTrue(gone, "the interrupted command's process group is gone")
