@@ -44,15 +44,22 @@ func leaseClaim(t *testing.T, e *srvEnv, wi, machine, secret, key string) {
 	}
 }
 
-// leaseAcquireBody names one request.
-func leaseAcquireBody(key, requestID, wi string) map[string]any {
-	return map[string]any{"key": key, "request_id": requestID, "work_item": wi}
+// leaseAcquireBody names one landing request: the repository and target
+// branch the server normalizes into the key.
+func leaseAcquireBody(repo, branch, requestID, wi string) map[string]any {
+	return map[string]any{"repo": repo, "branch": branch, "request_id": requestID, "work_item": wi}
 }
 
 // TestLeaseAuthz pins the signed lease face's authorization.
 func TestLeaseAuthz(t *testing.T) {
 	e := newSrvEnv(t)
-	const key = "github.com/o/app\nmain"
+	if _, err := e.db.Exec(`UPDATE projects SET repos=?1 WHERE name='alpha'`,
+		`[{"name":"app","url":"git@github.com:o/app.git"}]`); err != nil {
+		t.Fatalf("declare project repos: %v", err)
+	}
+	const repo = "git@github.com:o/app.git"
+	const branch = "main"
+	key := "" // the canonical key the first grant answers
 
 	pubLease, privLease := machineKey(t)
 	e.registerSigned(t, e.key, "m-lease", pubLease, privLease)
@@ -66,30 +73,31 @@ func TestLeaseAuthz(t *testing.T) {
 	// ① the machine's operator, the project write and the current session
 	// all hold: the acquire is accepted and granted.
 	code, held, raw := leasePost(t, e, leaseKindPath+"/acquire", e.key, "m-lease", privLease, 0,
-		leaseAcquireBody(key, "r-hold", wiA))
+		leaseAcquireBody(repo, branch, "r-hold", wiA))
 	if code != http.StatusOK || held.Status != "granted" || held.Token == "" {
 		t.Fatalf("authorized acquire: %d %s", code, raw)
 	}
+	key = held.Key
 
 	// ④ step/task direct: a Bearer without the machine signature never
 	// reaches the route.
-	if code, _ := e.do(t, "POST", leaseKindPath+"/acquire", e.key, leaseAcquireBody(key, "r-bare", wiA), nil); code != http.StatusUnauthorized {
+	if code, _ := e.do(t, "POST", leaseKindPath+"/acquire", e.key, leaseAcquireBody(repo, branch, "r-bare", wiA), nil); code != http.StatusUnauthorized {
 		t.Fatalf("Bearer-only acquire = %d, want AUTH-401", code)
 	}
 
 	// Expired signature and a verbatim replay are AUTH-401.
 	if code, _, _ := leasePost(t, e, leaseKindPath+"/acquire", e.key, "m-lease", privLease,
-		time.Now().Unix()-301, leaseAcquireBody(key, "r-expired", wiA)); code != http.StatusUnauthorized {
+		time.Now().Unix()-301, leaseAcquireBody(repo, branch, "r-expired", wiA)); code != http.StatusUnauthorized {
 		t.Fatalf("expired signature = %d, want AUTH-401", code)
 	}
 	replayTS := time.Now().Unix()
 	first, _, _ := leasePost(t, e, leaseKindPath+"/acquire", e.key, "m-lease", privLease,
-		replayTS, leaseAcquireBody(key, "r-replay", wiA))
+		replayTS, leaseAcquireBody(repo, branch, "r-replay", wiA))
 	if first != http.StatusOK {
 		t.Fatalf("replay fixture = %d", first)
 	}
 	if code, _, _ := leasePost(t, e, leaseKindPath+"/acquire", e.key, "m-lease", privLease,
-		replayTS, leaseAcquireBody(key, "r-replay", wiA)); code != http.StatusUnauthorized {
+		replayTS, leaseAcquireBody(repo, branch, "r-replay", wiA)); code != http.StatusUnauthorized {
 		t.Fatalf("replayed signature = %d, want AUTH-401", code)
 	}
 	// The replay's own first call queued a request; withdraw it so the
@@ -103,11 +111,11 @@ func TestLeaseAuthz(t *testing.T) {
 	// holder's machine, and a machine whose operator is a project writer
 	// still does not hold the ticket's session.
 	if code, _, _ := leasePost(t, e, leaseKindPath+"/acquire", otherKey, "m-lease", privLease, 0,
-		leaseAcquireBody(key, "r-wrong-op", wiA)); code != http.StatusForbidden {
+		leaseAcquireBody(repo, branch, "r-wrong-op", wiA)); code != http.StatusForbidden {
 		t.Fatalf("foreign operator = %d, want AUTH-403", code)
 	}
 	if code, _, raw := leasePost(t, e, leaseKindPath+"/acquire", otherKey, "m-other", privOther, 0,
-		leaseAcquireBody(key, "r-foreign", wiA)); code != http.StatusForbidden || string(raw) == "" {
+		leaseAcquireBody(repo, branch, "r-foreign", wiA)); code != http.StatusForbidden || string(raw) == "" {
 		t.Fatalf("unrelated machine = %d %s, want AUTH-403", code, raw)
 	} else {
 		var envl api.Error
@@ -126,7 +134,7 @@ func TestLeaseAuthz(t *testing.T) {
 	wiB := createExecWIOverHTTP(t, e, "lease waiter B")
 	leaseClaim(t, e, wiB, "m-lease", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", e.key)
 	code, queued, raw := leasePost(t, e, leaseKindPath+"/acquire", e.key, "m-lease", privLease, 0,
-		leaseAcquireBody(key, "r-wait", wiB))
+		leaseAcquireBody(repo, branch, "r-wait", wiB))
 	if code != http.StatusOK || queued.Status != "queued" || queued.Position != 1 {
 		t.Fatalf("waiter = %d %+v %s", code, queued, raw)
 	}
@@ -148,7 +156,7 @@ func TestLeaseAuthz(t *testing.T) {
 		t.Fatalf("force-end: %d %s", code, raw)
 	}
 	if code, _, _ := leasePost(t, e, leaseKindPath+"/acquire", e.key, "m-lease", privLease,
-		time.Now().Unix()+120, leaseAcquireBody(key, "r-hold", wiA)); code != http.StatusForbidden {
+		time.Now().Unix()+120, leaseAcquireBody(repo, branch, "r-hold", wiA)); code != http.StatusForbidden {
 		t.Fatalf("force-ended session = %d, want AUTH-403", code)
 	}
 
@@ -156,14 +164,14 @@ func TestLeaseAuthz(t *testing.T) {
 	// holder proceeds; the old request id cannot release the holder.
 	leaseClaim(t, e, wiA, "m-other", "cccccccccccccccccccccccccccccccc", otherKey)
 	if code, _, _ := leasePost(t, e, leaseKindPath+"/acquire", e.key, "m-lease", privLease, 0,
-		leaseAcquireBody(key, "r-hold2", wiA)); code != http.StatusForbidden {
+		leaseAcquireBody(repo, branch, "r-hold2", wiA)); code != http.StatusForbidden {
 		t.Fatalf("reclaimed session (old machine) = %d, want AUTH-403", code)
 	}
 	if code, queued, raw := leasePost(t, e, leaseKindPath+"/acquire", otherKey, "m-other", privOther, 0,
-		leaseAcquireBody(key, "r-new", wiA)); code != http.StatusOK {
+		leaseAcquireBody(repo, branch, "r-new", wiA)); code != http.StatusOK {
 		t.Fatalf("reclaimed session (new machine) = %d %s", code, raw)
-	} else if queued.Status != "queued" && queued.Status != "granted" {
-		t.Fatalf("new machine acquire = %+v, want queued or granted", queued)
+	} else if queued.Status != "queued" {
+		t.Fatalf("new machine acquire = %+v, want exactly queued behind the live holder", queued)
 	}
 	if code, _, raw := leasePost(t, e, leaseKindPath+"/release", otherKey, "m-other", privOther, 0,
 		map[string]any{"key": key, "request_id": "r-hold", "work_item": wiA}); code != http.StatusForbidden {

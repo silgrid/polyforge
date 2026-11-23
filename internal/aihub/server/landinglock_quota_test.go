@@ -21,7 +21,12 @@ import (
 
 func TestLeaseQuotaIsolation(t *testing.T) {
 	e := newSrvEnv(t)
-	const key = "github.com/o/app\nmain"
+	if _, err := e.db.Exec(`UPDATE projects SET repos=?1 WHERE name='alpha'`,
+		`[{"name":"app","url":"git@github.com:o/app.git"}]`); err != nil {
+		t.Fatalf("declare project repos: %v", err)
+	}
+	const repo = "git@github.com:o/app.git"
+	const branch = "main"
 	pub, priv := machineKey(t)
 	e.registerSigned(t, e.key, "m-lease", pub, priv)
 
@@ -34,13 +39,14 @@ func TestLeaseQuotaIsolation(t *testing.T) {
 
 	// 1 holder + 5 waiting tickets, all on one machine.
 	code, holder, raw := leasePost(t, e, leaseKindPath+"/acquire", e.key, "m-lease", priv, now,
-		leaseAcquireBody(key, "r-hold", wis[0]))
+		leaseAcquireBody(repo, branch, "r-hold", wis[0]))
 	if code != http.StatusOK || holder.Status != "granted" || holder.Token == "" {
 		t.Fatalf("holder = %d %+v %s", code, holder, raw)
 	}
+	key := holder.Key
 	for i := 1; i <= 5; i++ {
 		c, g, raw := leasePost(t, e, leaseKindPath+"/acquire", e.key, "m-lease", priv, now+250+int64(i),
-			leaseAcquireBody(key, fmt.Sprintf("r-%d", i), wis[i]))
+			leaseAcquireBody(repo, branch, fmt.Sprintf("r-%d", i), wis[i]))
 		if c != http.StatusOK || g.Status != "queued" {
 			t.Fatalf("waiter %d = %d %+v %s", i, c, g, raw)
 		}
@@ -50,7 +56,7 @@ func TestLeaseQuotaIsolation(t *testing.T) {
 	// entry, and 511 more distinct signatures bring it to the quota.
 	for i := 0; i < 511; i++ {
 		c, _, raw := leasePost(t, e, leaseKindPath+"/acquire", e.key, "m-lease", priv,
-			now-300+int64(i), leaseAcquireBody(key, "r-1", wis[1]))
+			now-290+int64(i), leaseAcquireBody(repo, branch, "r-1", wis[1]))
 		if c != http.StatusOK {
 			t.Fatalf("poll %d of the bucket = %d %s", i+1, c, raw)
 		}
@@ -61,7 +67,7 @@ func TestLeaseQuotaIsolation(t *testing.T) {
 		t.Fatalf("the quota fixture assumes the shared 512-entry bucket, got %d", machinesign.ReplayQuota)
 	}
 	if c, _, raw := leasePost(t, e, leaseKindPath+"/acquire", e.key, "m-lease", priv,
-		now+211, leaseAcquireBody(key, "r-1", wis[1])); c != http.StatusTooManyRequests {
+		now+221, leaseAcquireBody(repo, branch, "r-1", wis[1])); c != http.StatusTooManyRequests {
 		t.Fatalf("513th signature of one ticket's bucket = %d %s, want CORE-429", c, raw)
 	}
 	// The holder's renew rides the manage lane and its own ticket bucket.
@@ -70,8 +76,8 @@ func TestLeaseQuotaIsolation(t *testing.T) {
 		t.Fatalf("holder renew after a waiter's bucket filled = %d %+v %s", c, g, raw)
 	}
 	// Another waiting ticket's poll is its own bucket, unaffected.
-	if c, g, raw := leasePost(t, e, leaseKindPath+"/acquire", e.key, "m-lease", priv, now+211,
-		leaseAcquireBody(key, "r-2", wis[2])); c != http.StatusOK || g.Status != "queued" {
+	if c, g, raw := leasePost(t, e, leaseKindPath+"/acquire", e.key, "m-lease", priv, now+221,
+		leaseAcquireBody(repo, branch, "r-2", wis[2])); c != http.StatusOK || g.Status != "queued" {
 		t.Fatalf("another ticket's poll after a full bucket = %d %+v %s", c, g, raw)
 	}
 	// A waiter's withdrawal is its own call and still works from a full

@@ -83,7 +83,7 @@ func TestLeaseClientRoundTrip(t *testing.T) {
 
 	c := New(srv.URL, "k-lease")
 	c.SetMachineIdentity(machine, priv)
-	g, err := c.AcquireLease("landing", api.LeaseAcquire{Key: "k", RequestID: "r1", WorkItem: "alpha#1"})
+	g, err := c.AcquireLease("landing", api.LeaseAcquire{Repo: "github.com/o/app", Branch: "main", RequestID: "r1", WorkItem: "alpha#1"})
 	if err != nil || g.Token != "tok" || g.RequestID != "r1" {
 		t.Fatalf("acquire = %+v, %v", g, err)
 	}

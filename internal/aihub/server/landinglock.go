@@ -15,9 +15,11 @@ package server
 // key nor a machine key, so it reaches none of them directly; the daemon
 // is the only caller.
 //
-// The poll lane and the manage lane are separate anti-replay buckets and
-// both are scoped by work item, so one waiting ticket's traffic never
-// spends another ticket's or the holder's quota (decided Q12).
+// The poll lane and the manage lane are separate anti-replay buckets. The
+// POST routes are scoped by the ticket the signed body names, so one
+// waiting ticket's traffic never spends another ticket's or the holder's
+// quota (decided Q12); the lookup is a read and keeps the machine-wide
+// manage bucket, so its unsigned query never decides a bucket.
 
 import (
 	"encoding/json"
@@ -83,12 +85,87 @@ func (s *Server) hLeaseAcquire(w http.ResponseWriter, r *http.Request, idn *iden
 	if err != nil {
 		return err
 	}
-	out, err := s.Leases.Acquire(leaseRequest(r.PathValue("kind"), req.Key, req.RequestID,
-		g.id, m.MachineID, idn.UserID))
+	kind := r.PathValue("kind")
+	key, err := s.leaseKey(g, kind, req)
+	if err != nil {
+		return err
+	}
+	out, err := s.Leases.Acquire(leaseRequest(kind, key, req.RequestID, g.id, m.MachineID, idn.UserID))
 	if err != nil {
 		return err
 	}
 	return reply(w, http.StatusOK, leaseGrantWire(out))
+}
+
+// leaseKey answers the key of one acquire. The landing kind derives it on
+// the server from the repository the ticket's project declares plus the
+// target branch (已定 Q2): the URL is normalized (ssh / https / a name
+// collapse), the explicit alias table applies, and a repository the
+// project does not declare is refused — so no caller can take another
+// project's repository lock by naming it. Kinds that carry their own
+// opaque key pass it through.
+func (s *Server) leaseKey(g *wiGrant, kind string, req api.LeaseAcquire) (string, error) {
+	if kind != "landing" {
+		if strings.TrimSpace(req.Key) == "" {
+			return "", core.Fail(api.ErrCoreBadInput, "LEASE_BAD_REQUEST",
+				"a lease request carries a key")
+		}
+		return req.Key, nil
+	}
+	repo := strings.TrimSpace(req.Repo)
+	branch := strings.TrimSpace(req.Branch)
+	if repo == "" || branch == "" {
+		return "", core.Fail(api.ErrCoreBadInput, "LEASE_BAD_REQUEST",
+			"the landing kind requires the repository and the target branch")
+	}
+	canonical, err := s.landingRepo(g.projectID, repo)
+	if err != nil {
+		return "", err
+	}
+	return canonical + "\n" + branch, nil
+}
+
+// landingRepo normalizes one repository through the ticket's project
+// declaration: a declared name resolves to its URL, the normalized
+// identity must be one the project declares, and the explicit alias table
+// then answers the canonical key (an ambiguous alias is CORE-403, never a
+// silent pick).
+func (s *Server) landingRepo(projectID, repo string) (string, error) {
+	var raw string
+	if err := s.DB.QueryRow(`SELECT repos FROM projects WHERE id=?1`, projectID).Scan(&raw); err != nil {
+		return "", err
+	}
+	var declared []api.ProjectRepo
+	if err := json.Unmarshal([]byte(raw), &declared); err != nil {
+		return "", core.Fail(api.ErrCoreInternal, "",
+			"project %s repositories are not JSON: %v", projectID, err)
+	}
+	for _, r := range declared {
+		if r.Name == repo && strings.TrimSpace(r.URL) != "" {
+			repo = r.URL
+			break
+		}
+	}
+	id, err := core.NormalizeRepoURL(repo)
+	if err != nil {
+		return "", err
+	}
+	trusted := false
+	for _, r := range declared {
+		if strings.TrimSpace(r.URL) == "" {
+			continue
+		}
+		d, err := core.NormalizeRepoURL(r.URL)
+		if err == nil && d.Key() == id.Key() {
+			trusted = true
+			break
+		}
+	}
+	if !trusted {
+		return "", core.Fail(api.ErrAuthForbidden, "LEASE_REPO_NOT_DECLARED",
+			"repository %q is not declared by project %s", id.Key(), projectID)
+	}
+	return s.Repos.Key(repo)
 }
 
 // hLeaseRenew serves POST /leases/{kind}/renew.
@@ -158,10 +235,4 @@ func leaseBodyScope(_ *http.Request, body []byte) string {
 		return ""
 	}
 	return strings.TrimSpace(req.WorkItem)
-}
-
-// leaseQueryScope is the lookup route's scope (its ticket rides in the
-// query).
-func leaseQueryScope(r *http.Request, _ []byte) string {
-	return strings.TrimSpace(r.URL.Query().Get("work_item"))
 }

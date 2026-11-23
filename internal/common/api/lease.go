@@ -13,7 +13,14 @@ package api
 // request_id is idempotent; a new request_id for the same machine and
 // ticket is a new queue entry.
 type LeaseAcquire struct {
-	Key       string `json:"key"`
+	// Repo and Branch are the landing kind's inputs: the repository (its
+	// declared URL or a declared name) and the target branch. The server
+	// normalizes them into the lease key, so two daemons spelling one
+	// repository differently share one lock. Kinds that carry their own
+	// opaque key (polyforge#246) set Key instead.
+	Repo      string `json:"repo,omitempty"`
+	Branch    string `json:"branch,omitempty"`
+	Key       string `json:"key,omitempty"`
 	RequestID string `json:"request_id"`
 	WorkItem  string `json:"work_item"`
 	// Nonce makes every call's signed bytes distinct, so a poll or an
