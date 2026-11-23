@@ -89,15 +89,27 @@ test("a scan that raced a delete is not written back", async () => {
     "the pre-delete scan must not be written back after the delete invalidated the cache");
 });
 
-test("a just-created session's cwd is allowed at once and survives a delete", async () => {
-  resetAllowedRootsCache([]);
+test("a just-created session's cwd joins a warm cache at once and survives a delete", async () => {
+  // AC2's regression is the warm path: a cache built less than 5 s ago must
+  // take a new session's cwd without re-scanning (lib/allowed-roots.ts writes
+  // it into the current cache), so the session is usable immediately instead
+  // of after the TTL.
+  resetAllowedRootsCache([{ cwd: "/work/existing-project" }]);
+  const warm = await getAllowedFileRoots();
+  assert.equal(warm.has("/work/existing-project"), true, "the warm cache was built");
+  const scansBefore = cacheReader.state.calls;
+
   allowFileRoot("/work/new-session");
-  const fresh = await getAllowedFileRoots();
-  assert.equal(fresh.has("/work/new-session"), true,
+  const hit = await getAllowedFileRoots();
+  assert.equal(cacheReader.state.calls, scansBefore,
+    "the warm cache answered without a re-scan");
+  assert.equal(hit.has("/work/new-session"), true,
     "allowFileRoot() makes a new session's cwd usable without waiting for the TTL");
 
+  // A delete invalidates the cache but never withdraws allowFileRoot()'s grant.
   invalidateAllowedFileRoots();
   const afterDelete = await getAllowedFileRoots();
   assert.equal(afterDelete.has("/work/new-session"), true,
     "a delete must not withdraw allowFileRoot()'s grant before the process restarts");
+  assert.equal(afterDelete.has("/work/existing-project"), true, "the surviving session's cwd stays");
 });
