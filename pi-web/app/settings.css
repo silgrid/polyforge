@@ -2276,9 +2276,13 @@
 .mcp-sidebar-badge {
   flex-shrink: 0;
   max-width: 45%;
+  margin-left: 6px;
   overflow: hidden;
   color: var(--text-dim);
   font-size: 10px;
+  /* The group label is uppercase (`.config-sidebar-group-label`); the badge
+     names a harness, so it keeps its own spelling (polyforge#257 B8). */
+  text-transform: none;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
