@@ -2162,7 +2162,10 @@ export const enLocale: LocalePlugin = {
     "polyforge.jobStatus.running": "Running",
     "polyforge.jobStatus.needs_input": "Needs input",
     "polyforge.needsInput.badgeTitle": "{count} items on this machine need you (questions, failures, blocked work…) — click to open the next one",
-    "polyforge.needsInput.count": "{count} items on this machine need you",
+
+    "polyforge.notifications.hint": "A Polyforge entry needs you, but this browser has not allowed notifications yet. Allow them to get a desktop notification next time.",
+    "polyforge.notifications.authorize": "Allow notifications",
+    "polyforge.notifications.dismiss": "Got it",    "polyforge.needsInput.count": "{count} items on this machine need you",
     "polyforge.blocked.title": "Blocked · {kind}",
     "polyforge.blocked.action": "Required action: {action}",
     "polyforge.blocked.kind.incomplete": "incomplete step",

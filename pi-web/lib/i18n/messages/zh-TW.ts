@@ -2162,7 +2162,10 @@ export const zhTWLocale: LocalePlugin = {
     "polyforge.jobStatus.running": "執行中",
     "polyforge.jobStatus.needs_input": "等待輸入",
     "polyforge.needsInput.badgeTitle": "本機有 {count} 項需要你處理（提問、失敗、阻塞…）— 點擊打開下一項",
-    "polyforge.needsInput.count": "本機有 {count} 項需要你處理",
+
+    "polyforge.notifications.hint": "Polyforge 有新的需要你處理的條目，但瀏覽器尚未授予通知權限。授權後下次會直接發桌面通知。",
+    "polyforge.notifications.authorize": "授權通知",
+    "polyforge.notifications.dismiss": "知道了",    "polyforge.needsInput.count": "本機有 {count} 項需要你處理",
     "polyforge.blocked.title": "已阻塞 · {kind}",
     "polyforge.blocked.action": "需要的操作：{action}",
     "polyforge.blocked.kind.incomplete": "步驟未完成",
