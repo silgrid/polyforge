@@ -863,6 +863,20 @@ fingerprint; the landed record names each landed commit with its merge
 flag), and a landing that does not match the verified change is a
 question to the owner, never a FAIL.
 
+**A capability tier on one step (polyforge#81).** The per-step overlay may
+carry a catalog tier name (`pf override <id> --step <s> --tier <name>`),
+not the expanded chain: the daemon composes it at every dispatch through
+the Host `[step_tiers]` catalog to that tier's whole ordered candidate
+list — below an explicit overlay `--models` chain and above `pf submit
+--models` and every yaml/bundle level. A tier the catalog does not
+declare (or declares empty) falls to the next layer and records one
+composition-scoped `step_tier_fallback` event (the affected steps, the
+tier, `missing`/`empty` and the layer that now governs — never a claim
+that the step already dispatched): a view read records nothing. `--tier
+default` means "unset" and expands nothing. The pre-submit analysis only
+recommends tier names as text; nothing sets an override automatically —
+the session sets it after the owner confirms.
+
 **A step the operator skips mid-run (polyforge#25).** The per-step overlay
 (`pf override <id> --step <s> --skip`, written only through the daemon)
 switches a lane-declared skippable step off for THIS one work item without

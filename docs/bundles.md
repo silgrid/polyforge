@@ -219,7 +219,11 @@ and YAML path, before a claim ever meets it. The keys:
   written and the claim keeps the default branch.
 - `defaults:` — `model_candidates`, the workflow-level fallback chain
   (the format and the whole precedence chain: the
-  [config reference](reference/config.md)), and `tiers`.
+  [config reference](reference/config.md)), and `tiers`. The chain's
+  per-ticket overlay may carry a Host `[step_tiers]` capability tier
+  (`pf override <id> --step <s> --tier <name>`, polyforge#81): the
+  dispatch expands it to that tier's candidates above `--models` and
+  every level here; `default` means "unset".
 - `steps:` — one entry per step, in order. Each entry:
   - `id` — the step id (the step definition file's name).
   - `gate: true` — the step can FAIL the run: it ends its dispatch with
