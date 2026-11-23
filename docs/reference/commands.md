@@ -885,7 +885,12 @@ of them (P0): no option, no reserved word (`cancel` here is just a word;
   `step` and `spawn` are the step addressed and the dispatch current when
   you wrote. The `owner_message` event (`at`, `step`, `spawn_n`, `kind`,
   `ask_at`, `by`, `text` — the words verbatim) follows the line. `--by`
-  defaults to the configured user.
+  defaults to the configured user. `--by daemon:auto-recommendation` is
+  refused DAEMON-400 and nothing is recorded: that author is the daemon's
+  own automatic reply to a low-star question card (every row ★/★★, after
+  the Cell's `ask_auto_reply_timeout`), and no `pf answer` may impersonate
+  it. The automatic line is delivered like a reply but is never an owner
+  authorization (`--per-owner`, waive/rewind/force-fail, attrs reject it).
 - **Delivered next.** The step process is alive — idle after its ask
   (inside the warm window), or mid-turn: the message goes into that
   process through its harness's own channel (claude: a stream-json user

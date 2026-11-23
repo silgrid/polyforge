@@ -158,8 +158,9 @@ already requires.
 - Header exactly `| 问题 | 推荐选项 | 理由 | 重点关注程度 |`, one row per focused
   question, numbered in the 问题 cell, no fifth column. 重点关注程度 is last and
   every row marks it (`每行必标`) on the `★~★★★★★` scale: ★ = 例行确认,
-  ★★★★★ = 方向性裁定 / 大影响 / 与既有裁定冲突, ★★–★★★★ scale with impact; owner
-  attention only, never consumed.
+  ★★★★★ = 方向性裁定 / 大影响 / 与既有裁定冲突, ★★–★★★★ scale with impact. The
+  stars are read mechanically: an all-★/★★ card may be auto-answered after the
+  Cell's timeout, so grade truthfully; cancelling or abandoning the work is ≥ ★★★.
 - After the table always add 预期效果 (what happens once answered) and then 注意事项
   (dependencies, prior rulings, rubber-stamp rows); one line each is enough.
 - Question first, options concrete, reason one sentence.

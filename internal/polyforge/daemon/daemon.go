@@ -644,6 +644,10 @@ func New(cfg Config) (*Daemon, error) {
 	}
 	live.SetSlowModelMedianLatency(cfg.StartupFile.Daemon.SlowModelMedianLatency)
 	live.SetSlowModelP90Latency(cfg.StartupFile.Daemon.SlowModelP90Latency)
+	// polyforge#239: the Cell's automatic-reply switch and timeout are live;
+	// the startup file seeds them and a reload swaps them.
+	live.SetAskAutoReplyEnabled(cfg.StartupFile.Daemon.AskAutoReplyEnabled)
+	live.SetAskAutoReplyTimeout(cfg.StartupFile.Daemon.AskAutoReplyTimeout)
 	live.SetAgentLanguageFallback(cfg.AgentLanguageFallback)
 	live.SetMemoryPolicy(cfg.StartupFile.MemoryPolicy)
 	// polyforge#81: the Host [step_tiers] catalog is live configuration —
@@ -668,12 +672,14 @@ func New(cfg Config) (*Daemon, error) {
 	// negative stall window still disables the stall check at the consumer.
 	liveLimits := func() supervise.Defaults {
 		return supervise.Defaults{
-			Silence:         cfg.Supervision.SilenceWindow,
-			Tool:            cfg.Supervision.ToolWindow,
-			StepTimeout:     live.StepTimeout(),
-			DriverStall:     live.StallWindow(),
-			ModelErrorGrace: cfg.Supervision.ModelErrorGrace,
-			AskWarmWindow:   cfg.Supervision.AskWarmWindow,
+			Silence:             cfg.Supervision.SilenceWindow,
+			Tool:                cfg.Supervision.ToolWindow,
+			StepTimeout:         live.StepTimeout(),
+			DriverStall:         live.StallWindow(),
+			ModelErrorGrace:     cfg.Supervision.ModelErrorGrace,
+			AskWarmWindow:       cfg.Supervision.AskWarmWindow,
+			AskAutoReplyEnabled: live.AskAutoReplyEnabled(),
+			AskAutoReplyTimeout: live.AskAutoReplyTimeout(),
 			// polyforge#51: the slow-model judgement's live bounds
 			SlowModelMedianLatency: hostLive().SlowModelMedianLatency(),
 			SlowModelP90Latency:    hostLive().SlowModelP90Latency(),

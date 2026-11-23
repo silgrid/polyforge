@@ -1529,3 +1529,25 @@ owner 的 asks.jsonl 裁定，给出结局（修复后通过、反驳成立、ow
 原因计数和无法解析的 FAIL 版本数。stdout 只打印汇总与无法判定的计数；
 同时给 `--csv` 时另写 `<csv>.blocking.csv`，既有 CSV 不加列。这是离线
 只读工具，不需要迁移动作。
+## v0.2.5, 低星级问题卡的自动按推荐继续（polyforge#239）
+
+owner 2026-11-23 授权：步骤问题卡（`pf step ask` 的四列表）里每一行的
+`重点关注程度` 都是 ★ 或 ★★ 时，若 T0（该 dispatch 首次进入
+`awaiting_owner` 的持久时刻）+ 超时（默认 30 分钟）到期仍无 owner 回复，
+daemon 以保留身份 `daemon:auto-recommendation` 追加一条 reply，逐行采纳
+「推荐选项」，并写明实际等待时长与授权日期。自动回复不是 owner 授权：
+`--per-owner`、waive/rewind/强制 fail、attrs 与免计数都不认它；决策流出现
+固定条目「已自动按推荐继续」。任一行 ≥ ★★★、星级缺失或不可解析、不是
+唯一一张非 fenced 严格四列表、没有可信 T0、或停点为 confirm_plan /
+owner-review / 人工 merge 时一律继续等人。重启保留原 T0；关闭开关或改
+超时后下一次判断即时生效。
+
+两个 Cell 级 live 配置键（`[daemon]`，经 `pf config set` 写入；unset 即默认）：
+
+- `ask_auto_reply_enabled`：unquoted `true` / `false`，默认 `true`。
+- `ask_auto_reply_timeout`：quoted Go duration，> 0，默认 `30m`。
+
+升级动作：无。取新的 pf 即生效；已有等待若没有本版本写入的 `awaiting`
+记录，不会自动回复（保守边界）。`workflows/_shared/batch_questions.md` 与
+`skills/output-format/SKILL.md` 已改写为「星级会被机械读取、如实打星；
+取消 / 放弃类问题必须 ≥ ★★★」。
