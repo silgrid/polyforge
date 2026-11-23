@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -63,6 +64,8 @@ func TestAutoAnswerProtectedStops(t *testing.T) {
 	}
 	d.cfg.Now = clock.now
 	d.cfg.LaneVerifiable = func(string) bool { return true }
+	var checks atomic.Int64
+	d.cfg.AutoAnswerChecked = func() { checks.Add(1) }
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { defer close(done); _ = d.Run(ctx) }()
@@ -75,7 +78,7 @@ func TestAutoAnswerProtectedStops(t *testing.T) {
 	})
 	waitUntil(t, "the publish park", func() bool { return len(log.byKind(EvAwaitingOwner)) == 1 })
 	clock.advance(60 * time.Minute)
-	time.Sleep(200 * time.Millisecond)
+	waitUntil(t, "the due checks", func() bool { return checks.Load() >= 5 })
 	if got := autoReplies(autoAnswerLines(t, dir), ask.At); len(got) != 0 {
 		t.Fatalf("a protected publish stop was answered: %+v", got)
 	}
