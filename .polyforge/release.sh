@@ -1122,6 +1122,10 @@ fi
 #     the build);
 #   - node: its major must equal the repo-root .nvmrc's (when present) - for
 #     the build on this host;
+#   - buildx and the arm64 platform (polyforge#86): docker buildx answers
+#     its version and the builder's platform list carries linux/amd64 AND
+#     linux/arm64 (the binfmt/QEMU handlers registered, or a native arm64
+#     builder) - the workstation image is built for both in one pass;
 #   - the ghcr.io credential (an image on ghcr.io): a stored ghcr.io login is
 #     kept when it can read the image's repository (the previous tag's
 #     image; this cannot prove it can push, and the run says so); a stored
@@ -1152,6 +1156,28 @@ if [ -f .nvmrc ] && command -v node >/dev/null 2>&1; then
   _want=$(sed -n '1{s/^[[:space:]]*v\{0,1\}//; s/[.[:space:]].*$//; p;}' .nvmrc)
   _have=$(node --version 2>/dev/null | sed 's/^v//; s/\..*$//')
   [ "$_want" = "$_have" ] || pf_problem "node $(node --version 2>/dev/null) is not major $_want (pinned by .nvmrc; the build on this host needs it): install node $_want.x first"
+fi
+# buildx and the arm64 platform (polyforge#86): the workstation image is
+# built for linux/amd64 AND linux/arm64 in one buildx pass, so a machine
+# without the plugin, or whose builder does not list linux/arm64 (the
+# binfmt/QEMU handlers not registered), cannot build it - both are
+# preflight problems, known here before any work and before the claim.
+if docker buildx version >/dev/null 2>&1; then
+  if _bx=$(docker buildx inspect --bootstrap 2>&1); then
+    _pl=" $(printf '%s\n' "$_bx" | sed -n 's/^Platforms:[[:space:]]*//p' | head -n 1 | tr -s ' ,' '  ') "
+    case "$_pl" in
+      *" linux/amd64 "*) ;;
+      *) pf_problem "the buildx builder does not list linux/amd64 (its platforms: $(printf '%s' "$_pl" | tr -d '\n')) - the workstation image is built for linux/amd64 and linux/arm64; docker buildx create --use and run again" ;;
+    esac
+    case "$_pl" in
+      *" linux/arm64 "*) ;;
+      *) pf_problem "the buildx builder does not list linux/arm64 (its platforms: $(printf '%s' "$_pl" | tr -d '\n')) - register the arm64 binfmt handlers (docker run --privileged --rm tonistiigi/binfmt --install arm64) or use a native arm64 builder; the workstation image is built for both platforms" ;;
+    esac
+  else
+    pf_problem "docker buildx inspect --bootstrap failed ($(printf '%s\n' "$_bx" | tail -n 1)) - the release builds the workstation image with buildx; a usable builder is a prerequisite"
+  fi
+else
+  pf_problem "docker buildx is not available (docker buildx version failed) - the workstation image is built for linux/amd64 and linux/arm64 with it; install the buildx plugin and run again"
 fi
 DCFG="${DOCKER_CONFIG:-$HOME/.docker}/config.json"
 case "$IMAGE" in
@@ -1189,7 +1215,7 @@ case "$IMAGE" in
     fi ;;
 esac
 [ -z "$PF_PROBLEMS" ] || die "preflight failed - nothing built or published, no version claimed; fix these and run again:$PF_PROBLEMS"
-echo "release: preflight passed (tools, node, registry credential)"
+echo "release: preflight passed (tools, node, buildx and the arm64 platform, registry credential)"
 
 # 1b, resume continued - after the preflight's registry login (the read and the push
 # use the same identity): each image's state in the registry - the aihub
