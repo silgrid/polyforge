@@ -172,7 +172,15 @@ With --events the report also gains the blocking-findings block
                number); a later round that repeats the text without the
                reference is a different finding. A chain's final outcome
                is its last named outcome; its rounds are the rounds it
-               appears in (cross-round is a marker, not an outcome).
+               appears in (cross-round is a marker, not an outcome). A
+               round re-dispatched keeps its last version for chaining,
+               while every version counts in the version and FAIL-version
+               totals.
+  outcome line only a disposition line sets an outcome: a line that opens
+               with the reference, or a table row whose first cell is the
+               reference. A mention elsewhere on a line (an explanation, a
+               facts table) links at most and never overrides the
+               disposition; a `；`/`;`/`。` clause starts its own subject.
   outcomes     fixed (a later round says repaired), rebutted (withdrawn
                on the build's evidence), owner-overturned (the withdrawal
                names the owner's ruling, or an asks.jsonl reply/message
@@ -562,9 +570,8 @@ def load_review_versions(cap):
     return out
 
 
-def owner_messages(cap):
-    """[(at, text)] of the owner's asks.jsonl replies and messages; the
-    item reference is matched by the caller."""
+def asks_entries(cap):
+    """the owner's asks.jsonl replies and messages, read once."""
     path = os.path.join(cap, 'runtime-state', 'asks.jsonl')
     try:
         with open(path, errors='replace') as f:
@@ -579,33 +586,22 @@ def owner_messages(cap):
             e = json.loads(line)
         except ValueError:
             continue
-        if not isinstance(e, dict) or e.get('kind') not in ('reply', 'message'):
-            continue
-        text = e.get('text') or ''
-        if text:
-            out.append((e.get('at') or '', text))
+        if isinstance(e, dict) and e.get('kind') in ('reply', 'message') and (e.get('text') or ''):
+            out.append(e)
     return out
 
 
-def owner_rulings(cap):
+def owner_messages(entries):
+    """[(at, text)] of the owner entries; the item reference is matched by
+    the caller."""
+    return [(e.get('at') or '', e.get('text') or '') for e in entries]
+
+
+def owner_rulings(entries):
     """[(round, item, at, text)]: an owner reply/message naming an item and
     ruling it non-blocking."""
-    path = os.path.join(cap, 'runtime-state', 'asks.jsonl')
-    try:
-        with open(path, errors='replace') as f:
-            lines = f.read().split('\n')
-    except OSError:
-        return []
     out = []
-    for line in lines:
-        if not line.strip():
-            continue
-        try:
-            e = json.loads(line)
-        except ValueError:
-            continue
-        if not isinstance(e, dict) or e.get('kind') not in ('reply', 'message'):
-            continue
+    for e in entries:
         text = e.get('text') or ''
         if not re.search(r'改判|放行|非阻断|不阻断|不算阻断', text):
             continue
@@ -677,7 +673,7 @@ def _union(parent, a, b):
         parent[rb] = ra
 
 
-def _unknown_reason(verdicts, last_round, owner_msgs, still_open=False):
+def _unknown_reason(verdicts, last_round, owner_msgs, round_end, still_open=False):
     later = [r for r in sorted(verdicts) if r > last_round]
     if later:
         if any(verdicts[r] == 'PASS' for r in later):
@@ -685,10 +681,13 @@ def _unknown_reason(verdicts, last_round, owner_msgs, still_open=False):
         return 'unknown', 'later rounds do not mention it'
     if still_open:
         return 'unknown', 'last mention still open'
-    if owner_msgs:
-        if any(not BLOCK_REF.search(m[1]) for m in owner_msgs):
+    # Only an owner message that arrived after the round it would explain can
+    # name its missing item number; a plan confirmation from before it cannot.
+    msgs = [m for m in owner_msgs if not round_end or m[0] >= round_end]
+    if msgs:
+        if any(not BLOCK_REF.search(m[1]) for m in msgs):
             return 'unknown', 'owner words without an item number'
-        if len({BLOCK_REF.search(m[1]).group(0) for m in owner_msgs}) > 1:
+        if len({BLOCK_REF.search(m[1]).group(0) for m in msgs}) > 1:
             return 'unknown', 'multiple candidates'
     return 'unknown', 'no later round'
 
@@ -711,7 +710,8 @@ def chain_findings(cap, versions):
         return []
     verdicts = {v['round']: v['verdict'] for v in versions}
     stamps = {s['round']: s for s in review_stamps(cap)}
-    owner_msgs = owner_messages(cap)
+    entries = asks_entries(cap)
+    owner_msgs = owner_messages(entries)
     events = []
     for v in versions:
         for line in v['text'].split('\n'):
@@ -735,7 +735,7 @@ def chain_findings(cap, versions):
                     other = (v['round'], int(m.group(1)))
                     if other in nodes:
                         _union(parent, ref, other)
-    for rnd, item, at, text in owner_rulings(cap):
+    for rnd, item, at, text in owner_rulings(entries):
         if (rnd, item) in nodes:
             events.append((rnd + 0.5, (rnd, item), 'owner', text))
     chains = {}
@@ -749,13 +749,16 @@ def chain_findings(cap, versions):
         rel.sort(key=lambda e: e[0])
         if rel:
             last_round, _, oc, evidence = rel[-1]
+            round_end = (stamps.get(last_round) or {}).get('end') or ''
             if oc == 'still-open':
-                outcome, reason = _unknown_reason(verdicts, last_round, owner_msgs, still_open=True)
+                outcome, reason = _unknown_reason(verdicts, last_round, owner_msgs, round_end, still_open=True)
             else:
                 outcome, reason = oc, ''
         else:
             evidence = ''
-            outcome, reason = _unknown_reason(verdicts, max(k[0] for k in keys), owner_msgs)
+            last_round = max(k[0] for k in keys)
+            round_end = (stamps.get(last_round) or {}).get('end') or ''
+            outcome, reason = _unknown_reason(verdicts, last_round, owner_msgs, round_end)
         model = (stamps.get(first[0]) or {}).get('model') or 'unknown'
         out.append({'capsule': os.path.basename(cap), 'first_round': first[0],
                     'last_round': max(k[0] for k in keys), 'item': nodes[first]['item'],
