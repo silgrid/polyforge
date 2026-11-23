@@ -5,6 +5,7 @@ import { isPolyforgeProfileName } from "@/lib/polyforge-cells-pure";
 import { FINISHED_STATUSES } from "@/lib/polyforge-conversation-pure";
 import { getPolyforgeOverride } from "@/lib/polyforge-overrides";
 import { getPolyforgeParams } from "@/lib/polyforge-params";
+import { readStepTierCatalog } from "@/lib/polyforge-config";
 import type { PolyforgeOverrideView } from "@/lib/polyforge-overrides";
 import type { PolyforgeParamsView } from "@/lib/polyforge-params";
 
@@ -77,11 +78,23 @@ export async function GET(request: Request) {
     const status = await getPolyforgeWatch(wi, profile);
     let overrideView: PolyforgeOverrideView | undefined;
     let paramsView: PolyforgeParamsView | undefined;
+    let stepTiers: { tiers: { tier: string; candidates: string[] }[]; defined: { pi: string[]; claude: string[] }; reason?: string } | undefined;
     if (status && !FINISHED_STATUSES.has(status.workflowStatus)) {
       if (overrideRead) overrideView = await overrideRead ?? undefined;
       if (paramsRead) paramsView = await paramsRead ?? undefined;
+      // polyforge#151 (85b2): the override picker's step-tier catalog rides
+      // the same opt-in, composed AFTER the watch answer and only for a live
+      // ticket (an ended one's answer spawns nothing for it — the composer's
+      // 10 s cache keeps the poll cheap), degraded to a `reason` with empty
+      // lists on failure.
+      if (searchParams.get("overrides") === "1") {
+        const catalog = await readStepTierCatalog().catch(() => null);
+        stepTiers = catalog
+          ? { tiers: catalog.tiers, defined: catalog.defined, ...(catalog.capable ? {} : { reason: catalog.reason ?? "the step-tier catalog is unavailable" }) }
+          : { tiers: [], defined: { pi: [], claude: [] }, reason: "the step-tier catalog read failed" };
+      }
     }
-    return NextResponse.json({ status: status ? { ...status, ...(overrideView ? { overrideView } : {}), ...(paramsView ? { paramsView } : {}) } : status });
+    return NextResponse.json({ status: status ? { ...status, ...(overrideView ? { overrideView } : {}), ...(paramsView ? { paramsView } : {}), ...(stepTiers ? { stepTiers } : {}) } : status });
   } catch (error) {
     if (error instanceof PolyforgeError) {
       return NextResponse.json({ status: null, error: error.message });

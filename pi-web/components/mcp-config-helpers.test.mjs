@@ -1,3 +1,4 @@
+// carries: components/mcp-config-helpers.ts, components/McpConfig.tsx, lib/i18n/messages/en.ts
 import "#test-env";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -29,6 +30,9 @@ const {
   mcpCodemodeProjectOverrideNotice,
   mcpCodemodeReachNotice,
   mcpExposureReachNotice,
+  mcpApplyToSelection,
+  mcpApplyToTargetsView,
+  mcpClaudeRowKey,
   mcpCodemodeRowState,
   mcpCodemodeTone,
   mcpEffectiveAutoEnableCodemode,
@@ -52,6 +56,7 @@ const {
   mcpServerRowState,
   mcpSessionStateView,
   mcpSessionSummaryKey,
+  mcpUnifiedRowOf,
   mcpStatusDot,
   mcpStatusRowState,
   mcpStatusTime,
@@ -1324,4 +1329,104 @@ test("a test is posted to its own route with the project only when given, and en
   caller.abort();
   assert.deepEqual(await stopped, { ok: false, error: { error: "aborted" } });
   assert.equal(callerSignal.aborted, true);
+});
+
+// ---------------------------------------------------------------------------
+// #85 85c: the unified list — claude's rows beside pi's, the local group
+// claude's alone, the apply-to selection, and pi's unsupported targets.
+
+function claudeServer(overrides = {}) {
+  return {
+    name: "claude-entry",
+    scope: "global",
+    sourcePath: "/home/u/.claude.json",
+    envNames: [],
+    headerNames: [],
+    ...overrides,
+  };
+}
+
+function claudeHalf(overrides = {}) {
+  return {
+    present: true,
+    configPath: "/home/u/.claude.json",
+    stateReadable: true,
+    servers: [],
+    disabledMcpServers: [],
+    ...overrides,
+  };
+}
+
+test("claude's rows join pi's groups, and the local group is claude's alone (AC1)", () => {
+  const data = {
+    files: [file("global"), file("project")],
+    servers: [server({ name: "shared" }), server({ name: "pi-own", scope: "project" })],
+    claude: claudeHalf({
+      servers: [
+        claudeServer({ name: "shared" }),
+        claudeServer({ name: "claude-own" }),
+        claudeServer({ name: "claude-proj", scope: "project" }),
+        claudeServer({ name: "claude-local", scope: "local" }),
+      ],
+    }),
+    unified: [],
+  };
+  const groups = mcpServerGroups(data, true);
+  assert.deepEqual(groups.map((group) => group.scope), ["project", "global", "local"]);
+  const project = groups[0];
+  assert.deepEqual(project.servers.map((entry) => entry.name), ["pi-own"]);
+  assert.deepEqual((project.claudeOnly ?? []).map((entry) => entry.name), ["claude-proj"]);
+  const global = groups[1];
+  assert.deepEqual(global.servers.map((entry) => entry.name), ["shared"]);
+  assert.deepEqual((global.claudeOnly ?? []).map((entry) => entry.name), ["claude-own"], "a name pi shares is one row, not a claude-only one");
+  const local = groups[2];
+  assert.deepEqual(local.servers, [], "pi holds no local scope");
+  assert.deepEqual((local.claudeOnly ?? []).map((entry) => entry.name), ["claude-local"]);
+
+  // Without claude's half the groups stay what they were, and no local group appears.
+  const before = mcpServerGroups({ files: [file("global")], servers: [server()] }, true);
+  assert.deepEqual(before.map((group) => group.scope), ["project", "global"]);
+  assert.equal(before.every((group) => (group.claudeOnly ?? []).length === 0), true);
+  const noProject = mcpServerGroups(data, false);
+  assert.deepEqual(noProject.map((group) => group.scope), ["global"], "claude's local scope is keyed by the project folder");
+  assert.deepEqual((noProject[0].claudeOnly ?? []).map((entry) => entry.name), ["shared", "claude-own"].filter((name) => name !== "shared"));
+});
+
+test("a claude-only row's key never collides with a pi row's, and the selection keeps it", () => {
+  assert.equal(mcpServerKey({ scope: "global", name: "x" }), "global\0x");
+  assert.equal(mcpClaudeRowKey({ scope: "global", name: "x" }), "global\0x\0claude");
+  const groups = [
+    { scope: "global", servers: [], claudeOnly: [claudeServer({ name: "c" })] },
+  ];
+  assert.equal(pickMcpSelection(groups, "global\0c\0claude"), "global\0c\0claude");
+  assert.equal(pickMcpSelection(groups, null), "global\0c\0claude");
+});
+
+test("the apply-to selection says all while both harnesses hold the row, else the one that does", () => {
+  const row = (pi, claude) => ({ scope: "global", name: "x", pi, claude, missing: [], inconsistent: [], otherScopes: [] });
+  assert.deepEqual(mcpApplyToSelection(row(true, true)), { mode: "all", selected: [] });
+  assert.deepEqual(mcpApplyToSelection(row(true, false)), { mode: "specific", selected: ["pi"] });
+  assert.deepEqual(mcpApplyToSelection(row(false, true)), { mode: "specific", selected: ["claude"] });
+});
+
+test("pi's target is disabled where it takes no such entry: claude's local scope, an sse entry (Q1/Q5)", () => {
+  const both = mcpApplyToTargetsView("global", claudeServer(), "pi takes no such entry");
+  assert.deepEqual(both, [
+    { harness: "pi", label: "pi" },
+    { harness: "claude", label: "claude" },
+  ]);
+  const local = mcpApplyToTargetsView("local", claudeServer({ scope: "local" }), "pi holds no local scope");
+  assert.equal(local.find((target) => target.harness === "pi")?.disabled, true);
+  assert.equal(local.find((target) => target.harness === "pi")?.disabledReason, "pi holds no local scope");
+  assert.equal(local.find((target) => target.harness === "claude")?.disabled, undefined);
+  const sse = mcpApplyToTargetsView("global", claudeServer({ type: "sse", url: "https://x/sse" }), "pi loads no sse entry");
+  assert.equal(sse.find((target) => target.harness === "pi")?.disabled, true);
+  assert.equal(sse.find((target) => target.harness === "claude")?.disabled, undefined);
+});
+
+test("the unified row of (scope, name) is the overview's, when it carries one", () => {
+  const row = { scope: "global", name: "x", pi: true, claude: false, missing: ["claude"], inconsistent: [], otherScopes: [] };
+  assert.equal(mcpUnifiedRowOf({ unified: [row] }, "global", "x"), row);
+  assert.equal(mcpUnifiedRowOf({ unified: [row] }, "global", "y"), undefined);
+  assert.equal(mcpUnifiedRowOf({ unified: [row] }, "local", "x"), undefined);
 });

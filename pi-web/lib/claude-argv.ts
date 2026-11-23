@@ -49,7 +49,7 @@ export interface ClaudeArgvOptions {
    * <mode>` for acceptEdits / plan; default or absent passes none (claude's own setting).
    */
   launchPermissionMode?: ClaudeLaunchPermissionMode;
-  /** Settings › Claude's hook switch at creation: `--include-hook-events`. */
+  /** The Pi Web hook preference at creation: `--include-hook-events`. */
   includeHookEvents?: boolean;
   /**
    * The session's permission mode: `ask` routes claude's permission

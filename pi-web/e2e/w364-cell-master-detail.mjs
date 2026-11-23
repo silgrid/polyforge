@@ -390,8 +390,13 @@ try {
   await check("M6 a 420px viewport puts the list above the detail on one screen", async () => {
     const narrow = await openPage({ width: 420, height: 900 });
     try {
-      const sidebar = await narrow.dialog.locator(".config-sidebar").first().boundingBox();
-      const detail = await narrow.dialog.locator(".config-detail").first().boundingBox();
+      // 85a1b: General became a left-column pane of its own (.config-sidebar
+      // and .config-detail inside the still-mounted hidden general host), so
+      // the raw .first() locators must scope to the Polyforge section's host.
+      const narrowList = narrow.dialog.locator('.settings-section-host[data-settings-section="polyforge"] .config-sidebar');
+      const narrowDetail = narrow.dialog.locator('.settings-section-host[data-settings-section="polyforge"] .config-detail');
+      const sidebar = await narrowList.first().boundingBox();
+      const detail = await narrowDetail.first().boundingBox();
       assert.ok(sidebar && detail, "the list or the detail has no box");
       assert.ok(sidebar.y + sidebar.height <= detail.y + 1, `the list does not sit above the detail (list bottom ${sidebar.y + sidebar.height}, detail top ${detail.y})`);
       assert.ok(Math.abs(sidebar.width - detail.width) <= 2 && sidebar.width >= 380, `the list and the detail do not both span the narrow page (${sidebar.width} / ${detail.width})`);
@@ -407,11 +412,11 @@ try {
       await shot(narrow.page, "narrow-420-host.png");
       // selecting a Cell keeps the list on screen: no one-pane drill-in
       await select(narrow.dialog, "public");
-      assert.ok(await narrow.dialog.locator(".config-sidebar").first().isVisible(), "selecting a Cell hid the list");
+      assert.ok(await narrowList.first().isVisible(), "selecting a Cell hid the list");
       await pane(narrow.dialog, "public").locator(".polyforge-config-cli").first().waitFor({ state: "visible", timeout: 60_000 });
       assert.ok(await pane(narrow.dialog, "public").locator(".polyforge-config-cli").first().isVisible(), "the Cell's settings are not shown under the list");
       assert.ok(await waitForValue(pane(narrow.dialog, "public").locator('input[aria-label="step_timeout"]').first(), "45m0s"), "the narrow Cell pane did not load its keys");
-      const cellOverflow = await narrow.dialog.locator(".config-detail").first().evaluate((node) => ({ scrollWidth: node.scrollWidth, clientWidth: node.clientWidth }));
+      const cellOverflow = await narrowDetail.first().evaluate((node) => ({ scrollWidth: node.scrollWidth, clientWidth: node.clientWidth }));
       assert.ok(cellOverflow.scrollWidth <= cellOverflow.clientWidth + 1, `the narrow Cell pane overflows horizontally (${cellOverflow.scrollWidth} > ${cellOverflow.clientWidth})`);
       await shot(narrow.page, "narrow-420-cell-public.png");
     } finally {

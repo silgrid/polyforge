@@ -34,9 +34,11 @@ export async function checkModelContext(page) {
     if (await sidebar.isVisible()) await sidebar.click();
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     const section = settings.getByRole("combobox", { name: "Settings", exact: true });
+    // The models.json editor lives under the unified Models page.
     if (await section.isVisible()) await section.selectOption("models");
     else await settings.getByRole("button", { name: "Models", exact: true }).click();
-    await settings.locator(".config-sidebar-item").filter({ hasText: "OpenAI Codex" }).click();
+    const sectionHost = (id) => settings.locator(`.settings-section-host[data-settings-section="${id}"]:not([hidden])`);
+    await sectionHost("models").locator(".config-sidebar-item").filter({ hasText: "OpenAI Codex" }).click();
   };
   const input = settings.getByRole("textbox", { name: "Context window for GPT-6 Astra", exact: true });
   const save = async () => {

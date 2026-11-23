@@ -14,7 +14,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/silgrid/polyforge/internal/polyforge/cli"
 	"github.com/silgrid/polyforge/internal/polyforge/liveconfig"
+	"github.com/silgrid/polyforge/internal/polyforge/runtime"
 )
 
 // TestHarnessStatusesNeverCarryValues: the /status harness view reports
@@ -210,5 +212,93 @@ func TestPiModelsEnvRefs(t *testing.T) {
 	}
 	if got := d.piModelsEnvRefs(); strings.Join(got, " ") != "GW_TOKEN OPENROUTER_API_KEY" {
 		t.Fatalf("refs = %v", got)
+	}
+}
+
+// TestW85HarnessCellFacts (polyforge#142, 85a2 AC2): the per-Cell harness
+// facts the doctor relays — pi's step-agent auth.json as set/unset (the
+// file stat'ed, never read), the config roots, the model-credential
+// source and its kind (operator / shared-default / directory / none),
+// and claude's residual OAuth login marked present/absent — with a
+// credential value never surviving the JSON. Expected kinds come from the
+// ticket's Q1/Q2 rulings and docs/reference/config.md's [model] source
+// semantics, never from the implementation.
+func TestW85HarnessCellFacts(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "step-agent"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, runtime.ClaudeConfigDirName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "step-agent", "auth.json"), []byte(`{"sub2api":{"key":"sk-SENTINEL-W85"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d := &Daemon{cfg: Config{
+		ClaudeBin: "/nonexistent/claude", PiBin: "/nonexistent/pi",
+		HarnessRoot: root, OperatorAgentDir: "/opt/w85/operator-agent",
+	}}
+	hs := d.harnessStatuses()
+	pi := hs["pi"]
+	if pi.ConfigRoot != filepath.Join(root, "step-agent") || pi.Credential != "set" {
+		t.Fatalf("pi facts: %+v", pi)
+	}
+	if pi.Source != "/opt/w85/operator-agent" || pi.SourceKind != "operator" {
+		t.Fatalf("the default Cell's source facts: %+v", pi)
+	}
+	cl := hs["claude"]
+	if cl.ConfigRoot != filepath.Join(root, runtime.ClaudeConfigDirName) || cl.CredentialsFile != "absent" {
+		t.Fatalf("claude facts: %+v", cl)
+	}
+	if cl.SourceKind != "operator" {
+		t.Fatalf("claude's source kind: %+v", cl)
+	}
+
+	// auth.json absent: the credential fact is unset, never an error
+	if err := os.Remove(filepath.Join(root, "step-agent", "auth.json")); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.harnessStatuses()["pi"].Credential; got != "unset" {
+		t.Fatalf("a missing auth.json answers %q", got)
+	}
+
+	// a residual OAuth login in claude-config: present, its value never read
+	if err := os.WriteFile(filepath.Join(root, runtime.ClaudeConfigDirName, ".credentials.json"),
+		[]byte(`{"claudeAiOauth":{"accessToken":"sk-SENTINEL-W85-cred"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hs = d.harnessStatuses()
+	if got := hs["claude"].CredentialsFile; got != "present" {
+		t.Fatalf("a residual .credentials.json answers %q", got)
+	}
+	blob, _ := json.Marshal(hs)
+	if strings.Contains(string(blob), "SENTINEL") {
+		t.Fatalf("the harness facts carry a credential value: %s", blob)
+	}
+
+	// a named Cell's source kind follows its [model] source declaration
+	for _, tc := range []struct {
+		modelSource, wantSource, wantKind string
+	}{
+		{cli.ModelSourceShared, "/opt/w85/operator-agent", "shared-default"},
+		{"/srv/w85/own-agent", "/srv/w85/own-agent", "directory"},
+		{"", "", "none"},
+	} {
+		cfg := Config{
+			ClaudeBin: "/nonexistent/claude", PiBin: "/nonexistent/pi",
+			HarnessRoot: root, Profile: "beta",
+			OperatorAgentDir: tc.wantSource,
+		}
+		if tc.wantKind == "none" {
+			cfg.OperatorAgentDir = filepath.Join(root, "no-model-source")
+		}
+		cfg.StartupFile = cli.Config{ModelSource: tc.modelSource}
+		got := (&Daemon{cfg: cfg}).harnessStatuses()["pi"]
+		if got.SourceKind != tc.wantKind {
+			t.Fatalf("[model] source %q answered kind %q, want %q", tc.modelSource, got.SourceKind, tc.wantKind)
+		}
+		if got.Source != cfg.OperatorAgentDir {
+			t.Fatalf("[model] source %q answered source %q, want %q", tc.modelSource, got.Source, cfg.OperatorAgentDir)
+		}
 	}
 }

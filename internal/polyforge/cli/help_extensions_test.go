@@ -69,9 +69,10 @@ func TestHelpExtensionsIndexesTheExtendingSubsections(t *testing.T) {
 		t.Fatalf("the index does not name summarize.language and summarize.interval_sec:\n%s", stdout)
 	}
 	// workflow contract 4 removed the step attrs configuration (its
-	// docs/extending.md subsection with it,/#488): 9 items
-	if len(want) != 9 {
-		t.Fatalf("docs/extending.md has %d subsections %q, want the 9 inventory items", len(want), want)
+	// docs/extending.md subsection with it,/#488); the step tier catalog
+	// added one back (polyforge#143): 10 items
+	if len(want) != 10 {
+		t.Fatalf("docs/extending.md has %d subsections %q, want the 10 inventory items", len(want), want)
 	}
 }
 

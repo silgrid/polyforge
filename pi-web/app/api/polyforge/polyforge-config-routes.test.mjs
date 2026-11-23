@@ -43,3 +43,34 @@ test("the read assembles only the three pf reads and gates capability on the lis
   assert.match(readLib, /hasConfigListShape/);
   assert.match(readLib, /POLYFORGE_CONFIG_PANEL_MINIMUM_PF_VERSION = "2.20.6"/);
 });
+
+// polyforge#151 (85b2): the [step_tiers] family's write gate — the Host-only
+// catalog joins the panel allowlist as a prefix family, its own 0.2.4 floor
+// treats an unparseable version as below, the defined-model set is
+// recomputed per write (never trusted from the client), and every refusal
+// precedes the write spawn (the reads — the probe, the pre-read list — stay
+// reads).
+test("the step_tiers family is writable only on the Host scope, behind its own floor and the defined-models gate", async () => {
+  assert.match(writeLib, /parseStepTierKey\(key\) !== null/, "the family joins the panel's allowlist as a prefix family");
+  assert.match(writeLib, /isPolyforgeVersionBelowMinimum\(presence\.version, POLYFORGE_CONFIG_STEP_TIERS_MINIMUM_PF_VERSION, true\)/, "the family's floor counts an unparseable version below");
+  assert.match(writeLib, /await stepTierDefinedModels\(\)/, "the defined set is recomputed per write");
+  assert.match(writeLib, /is not a defined model/, "an undefined new candidate is refused");
+  assert.match(writeLib, /the Host's catalog/, "a non-Host write is refused with the Host reason");
+  assert.match(configSource, /\?host=1 reads the Host keys/, "the GET read stays the one read face (no new read route for the gate)");
+});
+
+// polyforge#151 (85b2, u4): the picker's one catalog read — a GET-only,
+// degradation-first route over the shared server composer (the same one the
+// watch route composes into its snapshot): never 5xx, no POST face, and the
+// tier family's own floor named in the composer.
+test("the step-tiers catalog route is a read-only degradation-first face over the shared composer", async () => {
+  const source = await read("./step-tiers/route.ts");
+  assert.match(source, /isApiRequestAllowed\(request\)/, "the route re-checks the host/origin gate in-route");
+  assert.match(source, /\{ error: "Forbidden" \}, \{ status: 403 \}/, "a refusal answers 403 JSON");
+  assert.doesNotMatch(source, /export async function (POST|PUT|DELETE)/, "no write face on a read route");
+  assert.doesNotMatch(source, /status: 5\d\d/, "never 5xx");
+  assert.match(source, /readStepTierCatalog\(\)/, "the route composes through the one server composer");
+  assert.match(source, /no-store/, "the answer is never cached");
+  assert.match(readLib, /export async function readStepTierCatalog/, "the composer lives in the config read module (the watch route shares it)");
+  assert.match(readLib, /POLYFORGE_CONFIG_STEP_TIERS_MINIMUM_PF_VERSION/, "the composer names the family's own floor");
+});

@@ -133,6 +133,70 @@ export function trustProject(cwd: string, agentDir: string): ProjectTrustStatus 
 }
 
 /**
+ * Records the explicit distrust of the project at `cwd` — the mirror of
+ * trustProject() the permission page's unify needs (polyforge#150 85a4). Same
+ * shape and tolerance: a folder that requires no trust answers its status and
+ * writes nothing.
+ */
+export function denyProject(cwd: string, agentDir: string): ProjectTrustStatus {
+  const status = getProjectTrustStatus(cwd, agentDir);
+  if (!status.requiresTrust) return status;
+
+  new ProjectTrustStore(agentDir).set(cwd, false);
+  return { requiresTrust: true, trusted: false, decision: false, decisionPath: trustKeyPath(cwd), inherited: false };
+}
+
+/** A trust decision's collaborators, injectable for the tests. */
+export interface ProjectTrustWriteCollaborators {
+  /** Whether the cwd has a busy session (default: the rpc manager's own check). */
+  isBusy?: (cwd: string) => boolean | Promise<boolean>;
+  /** Rebuilds after a landed decision (default: the model cache drops, then the cwd's wrappers end). */
+  rebuild?: (cwd: string) => Promise<void>;
+}
+
+/** A trust decision's outcome: landed with its status, or refused with the route's own reason. */
+export type ProjectTrustWriteResult =
+  | { ok: true; status: ProjectTrustStatus }
+  | { ok: false; reason: "not-required" | "session-busy"; message: string };
+
+/**
+ * The one gated path a project trust decision takes (polyforge#150 85a4,
+ * review r1#2): the permission page's pi write and POST /api/project-trust
+ * both pass here — a busy session on the cwd refuses before anything is
+ * written, and a landed decision rebuilds the cwd's sessions (the model
+ * cache drops, the wrappers end) so the next start reads the new trust
+ * state. The rpc manager imports this module, so its default collaborators
+ * load lazily to keep the import cycle at bay.
+ */
+export async function writeProjectTrustDecision(
+  cwd: string,
+  trusted: boolean,
+  agentDir: string,
+  collaborators: ProjectTrustWriteCollaborators = {},
+): Promise<ProjectTrustWriteResult> {
+  const current = getProjectTrustStatus(cwd, agentDir);
+  if (!current.requiresTrust) {
+    return { ok: false, reason: "not-required", message: "This project has no resources that require trust" };
+  }
+  const isBusy = collaborators.isBusy ?? (async (cwd: string) => (await import("./rpc-manager")).hasBusyRpcSessionForCwd(cwd));
+  if (await isBusy(cwd)) {
+    return { ok: false, reason: "session-busy", message: "Wait for the active session to finish before changing this project's trust" };
+  }
+  const status = trusted ? trustProject(cwd, agentDir) : denyProject(cwd, agentDir);
+  const rebuild = collaborators.rebuild ?? defaultTrustRebuild;
+  await rebuild(cwd);
+  return { ok: true, status };
+}
+
+/** The default rebuild: the models cache drops, then the cwd's wrappers end. */
+async function defaultTrustRebuild(cwd: string): Promise<void> {
+  const { invalidateModelsCache } = await import("./models-cache");
+  const { destroyRpcSessionsForCwd } = await import("./rpc-manager");
+  invalidateModelsCache();
+  await destroyRpcSessionsForCwd(cwd);
+}
+
+/**
  * Reload options that gate project-local, trust-requiring resources — a
  * repository's `.pi/extensions`, project `.pi/settings.json` extension
  * entries, and `.agents/skills` — behind the SDK's project-trust store.

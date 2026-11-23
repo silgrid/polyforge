@@ -1,0 +1,41 @@
+{
+  "firstStartTime": "2026-11-19T13:59:38.531Z",
+  "firstStartVersion": "2.1.326",
+  "mcpServers": {
+    "demo-user": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "server"
+      ],
+      "env": {
+        "A": "1",
+        "SECRET_TOKEN": "fixture-secret-value"
+      }
+    },
+    "manual-http": {
+      "type": "http",
+      "url": "https://api.example.com/mcp?token=fixture-token-value",
+      "headers": {
+        "Authorization": "Bearer fixture-header-secret",
+        "X-Custom": "plain"
+      }
+    }
+  },
+  "projects": {
+    "/tmp/claude-mcp-fixture/proj": {
+      "mcpServers": {
+        "demo-local": {
+          "type": "http",
+          "url": "https://x.example/mcp"
+        }
+      },
+      "enabledMcpjsonServers": [],
+      "disabledMcpjsonServers": [],
+      "hasTrustDialogAccepted": false
+    }
+  },
+  "disabledMcpServers": [
+    "demo-proj"
+  ]
+}

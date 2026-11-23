@@ -1222,6 +1222,30 @@ must both carry the new verb; the strong guarantee is that machine's daemon —
 another machine's auto-pull relies on the ticket's unconfirmed marker. No
 database or configuration migration is needed.
 
+## v0.2.4, the step tier catalog (polyforge#143)
+
+`cli.toml` gains the Host-only `[step_tiers]` table: the step tiers'
+model-candidate catalog, one row per tier (the conventional `default`
+tier carries the mainline models), each row a non-empty list of
+`<harness>:<model>[:<effort>]` candidates. It is live on reload (a
+changed catalog reports one `applied` outcome, no restart needed),
+refused in a named Cell's file as a Host-only key, and it is the
+recommendation list `pf doctor`'s new `step tiers catalog` row checks a
+workspace's user-written candidates against — a candidate outside it
+warns, never fails (the workspace yaml and the `[summarize]` models still
+run exactly as before), and an empty catalog skips the row. The catalog
+recommends, it never gates: a pi candidate's admission stays the Cell's
+`step-agent/models.json` check (`pf override --models` answers
+`DAEMON-400` for a model it does not declare, catalog or no catalog).
+No upgrade action is required — but a `pf` older than this release
+refuses the whole `cli.toml` on the unknown section, so downgrading, or
+running a mixed-version CLI/daemon pair against a filled catalog, fails
+every command with that parse error: empty the table first
+(`pf config unset step_tiers.<tier> --host`) on the way back. After
+upgrading, fill the catalog once by hand — `pf config set
+step_tiers.default '["pi:…", "claude:…"]' --host`, and one row per tier
+the lanes name — `pf doctor`'s row is the check it took effect.
+
 ## v0.2.4, the pi sub-agent compatibility gate (polyforge#227)
 
 The `pi_subagents` switch (develop `build` only, default off) opens the

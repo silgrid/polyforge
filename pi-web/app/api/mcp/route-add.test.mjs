@@ -1,9 +1,10 @@
+// carries: app/api/mcp/route.ts, lib/api-types.ts, lib/mcp-add.ts, lib/claude-mcp-write.ts, lib/__fixtures__/claude-2.1.326-mcp/mcp/*
 import "#test-env";
 import assert from "node:assert/strict";
-import { existsSync, realpathSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmodSync, existsSync, realpathSync } from "node:fs";
+import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import test, { after, beforeEach } from "node:test";
 import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
 import { createJiti } from "jiti";
@@ -321,4 +322,147 @@ test("MCP off leaves every file as it is", async () => {
   assert.deepEqual([status, body.reason], [409, "mcp-off"]);
   assert.equal(await readFile(globalPath, "utf8"), globalText);
   assert.deepEqual(await trustFile(), { [trusted]: true });
+});
+
+// ---------------------------------------------------------------------------
+// #85 85c (AC4): an add carries its 「应用到」 targets — the harnesses it
+// writes — and the local scope, claude's own, writes only claude. Claude is
+// the stub recording its argv (AC2).
+
+const stubSource = new URL("../../../lib/__fixtures__/claude-2.1.326-mcp/mcp/stub-claude.mjs", import.meta.url).pathname;
+const claudeConfigDir = join(root, "claude-cfg");
+const previousPath = process.env.PATH;
+const previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+const previousStubLog = process.env.CLAUDE_MCP_STUB_LOG;
+
+async function withClaudeStub(t, { version = "2.1.326" } = {}) {
+  // One dir per version: the binary must be named `claude`, and probeClaude caches by its realpath.
+  const binDir = join(root, `claude-bin-${version}`);
+  await mkdir(binDir, { recursive: true });
+  const binary = join(binDir, "claude");
+  if (!existsSync(binary)) {
+    await copyFile(stubSource, binary);
+    chmodSync(binary, 0o755);
+  }
+  await mkdir(claudeConfigDir, { recursive: true });
+  const log = join(root, `spawns-${version}-${t.name.replace(/\W+/g, "-")}.jsonl`);
+  process.env.PATH = `${binDir}${delimiter}${previousPath ?? ""}`;
+  process.env.CLAUDE_CONFIG_DIR = claudeConfigDir;
+  process.env.CLAUDE_MCP_STUB_LOG = log;
+  process.env.CLAUDE_MCP_STUB_VERSION = version;
+  // A failure mode set by one test never leaks into the next.
+  delete process.env.CLAUDE_MCP_STUB_FAIL;
+  await writeFile(join(claudeConfigDir, ".claude.json"), JSON.stringify({
+    mcpServers: { existing: { command: "x" } },
+  }, null, 2));
+  t.after(() => {
+    process.env.PATH = previousPath;
+    if (previousClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = previousClaudeConfigDir;
+    if (previousStubLog === undefined) delete process.env.CLAUDE_MCP_STUB_LOG;
+    else process.env.CLAUDE_MCP_STUB_LOG = previousStubLog;
+  });
+  return { log };
+}
+
+async function stubSpawns(log) {
+  const text = await readFile(log, "utf8").catch(() => "");
+  return text.split("\n").filter((line) => line !== "").map((line) => JSON.parse(line));
+}
+
+test("an add with both harnesses writes pi's file and claude's CLI, once each (AC4)", async (t) => {
+  const { log } = await withClaudeStub(t);
+  const { status, body } = await add({ text: "npx -y @scope/lint-mcp", harnesses: ["pi", "claude"] });
+  assert.equal(status, 200);
+  assert.deepEqual((await readJson(globalPath)).mcpServers.lint, { command: "npx", args: ["-y", "@scope/lint-mcp"] });
+  const mcpSpawns = (await stubSpawns(log)).filter((spawn) => spawn.argv[0] === "mcp");
+  assert.deepEqual(mcpSpawns.map((spawn) => spawn.argv), [
+    ["mcp", "add-json", "-s", "user", "lint", JSON.stringify({ command: "npx", args: ["-y", "@scope/lint-mcp"] })],
+  ]);
+  assert.equal(body.applied === undefined || body.applied === null, true, "an add answers `added`, not per-harness results");
+});
+
+test("an add to claude alone never opens pi's file (AC4)", async (t) => {
+  const { log } = await withClaudeStub(t);
+  const before = await readFile(globalPath, "utf8");
+  const { status } = await add({ text: "npx -y @scope/lint-mcp", harnesses: ["claude"] });
+  assert.equal(status, 200);
+  assert.equal(await readFile(globalPath, "utf8"), before);
+  assert.deepEqual((await stubSpawns(log)).filter((spawn) => spawn.argv[0] === "mcp").map((spawn) => spawn.argv), [
+    ["mcp", "add-json", "-s", "user", "lint", JSON.stringify({ command: "npx", args: ["-y", "@scope/lint-mcp"] })],
+  ]);
+});
+
+test("the local scope is claude's own: an add there needs the project and refuses pi (Q5)", async (t) => {
+  const { log } = await withClaudeStub(t);
+  const toPi = await post({ action: "add", text: "npx -y @scope/lint-mcp", scope: "local", harnesses: ["pi"], cwd: trusted });
+  assert.equal(toPi.status, 409);
+  assert.equal(toPi.body.reason, "harness-unsupported");
+
+  const { status, body } = await post({ action: "add", text: "npx -y @scope/lint-mcp", scope: "local", harnesses: ["claude"], cwd: trusted });
+  assert.equal(status, 200);
+  assert.deepEqual(body.added, { scope: "local", name: "lint", harness: "claude", path: join(claudeConfigDir, ".claude.json") });
+  const mcpSpawns = (await stubSpawns(log)).filter((spawn) => spawn.argv[0] === "mcp");
+  assert.deepEqual(mcpSpawns.map((spawn) => [spawn.argv, spawn.cwd]), [
+    [["mcp", "add-json", "-s", "local", "lint", JSON.stringify({ command: "npx", args: ["-y", "@scope/lint-mcp"] })], trusted],
+  ]);
+  assert.equal((await post({ action: "add", text: "npx -y x", scope: "local", harnesses: ["claude"] })).status, 400, "no project, no local scope");
+});
+
+test("an add to both harnesses gates claude first: a version it does not recognize writes nothing (r2#3)", async (t) => {
+  const { log } = await withClaudeStub(t, { version: "9.9.9" });
+  const before = await readFile(globalPath, "utf8");
+  const { status, body } = await add({ text: "npx -y @scope/lint-mcp", harnesses: ["pi", "claude"] });
+  assert.equal(status, 409);
+  assert.equal(body.reason, "claude-unwritable");
+  assert.equal(await readFile(globalPath, "utf8"), before, "pi's file is untouched");
+  assert.equal(body.added, undefined);
+  const mcpSpawns = (await stubSpawns(log)).filter((spawn) => spawn.argv[0] === "mcp");
+  assert.deepEqual(mcpSpawns, [], "nothing spawned for a version outside the range");
+});
+
+test("an add whose claude half fails after the gate takes pi's entry back, so a retry meets no name-taken (r2#3)", async (t) => {
+  const { log } = await withClaudeStub(t);
+  const before = await readFile(globalPath, "utf8");
+  process.env.CLAUDE_MCP_STUB_FAIL = "add";
+  const { status, body } = await add({ text: "npx -y @scope/lint-mcp", harnesses: ["pi", "claude"] });
+  assert.equal(status, 409);
+  assert.equal(body.reason, "claude-unwritable");
+  assert.equal(await readFile(globalPath, "utf8"), before, "pi's entry is rolled back");
+  const mcpSpawns = (await stubSpawns(log)).filter((spawn) => spawn.argv[0] === "mcp");
+  assert.deepEqual(mcpSpawns.map((spawn) => spawn.argv[1]), ["add-json"], "claude was asked once; pi's file shows no trace");
+  // A retry reaches the same refusal, not a name-taken from a half-written add.
+  const retry = await add({ text: "npx -y @scope/lint-mcp", harnesses: ["pi", "claude"] });
+  assert.equal(retry.status, 409);
+  assert.equal(retry.body.reason, "claude-unwritable");
+});
+
+test("an http entry reaches claude with the type its own config writes (r2#4)", async (t) => {
+  const { log } = await withClaudeStub(t);
+  const { status } = await post({ action: "add", text: "https://docs.example.com/mcp", scope: "global", harnesses: ["claude"], name: "docs" });
+  assert.equal(status, 200);
+  const mcpSpawns = (await stubSpawns(log)).filter((spawn) => spawn.argv[0] === "mcp");
+  assert.deepEqual(mcpSpawns.map((spawn) => spawn.argv), [
+    ["mcp", "add-json", "-s", "user", "docs", JSON.stringify({ url: "https://docs.example.com/mcp", type: "http" })],
+  ], "pi's http entry carries no type; claude's own files always write one, and its validator asks for it");
+});
+
+test("a fresh folder's trusted add rolls pi's entry back too when the claude half fails (r3#1)", async (t) => {
+  const { log } = await withClaudeStub(t);
+  process.env.CLAUDE_MCP_STUB_FAIL = "add";
+  const before = await trustFile();
+  const { status, body } = await add({ text: "npx -y @scope/lint-mcp", scope: "project", cwd: fresh, trustFolder: true, harnesses: ["pi", "claude"] });
+  assert.equal(status, 409);
+  assert.equal(body.reason, "claude-unwritable");
+  // The trustFolder path has no `target` of its own: the rollback must use the
+  // same project target the trust step wrote through.
+  assert.deepEqual((await readJson(projectPath(fresh))).mcpServers, {}, "pi's entry is rolled back");
+  assert.equal(body.trustKept, true, "the folder's trust is kept and said so");
+  assert.deepEqual(body.trust, { requiresTrust: true, trusted: true, decision: true, decisionPath: fresh, inherited: false });
+  assert.deepEqual(await trustFile(), { ...before, [fresh]: true }, "the trust itself stays");
+  // A retry meets the same refusal, never a name-taken from a half-written
+  // add: the folder is trusted now, so it goes as a plain project add.
+  const retry = await add({ text: "npx -y @scope/lint-mcp", scope: "project", cwd: fresh, harnesses: ["pi", "claude"] });
+  assert.deepEqual([retry.status, retry.body.reason], [409, "claude-unwritable"]);
+  assert.deepEqual((await readJson(projectPath(fresh))).mcpServers, {}, "still no half-written entry");
 });

@@ -2273,6 +2273,7 @@ export function PolyforgePanel({
                               overlay={watchStatus.overrides?.[selectedStep]}
                               row={watchStatus.overrideView?.steps.find((r) => r.id === selectedStep)}
                               params={watchStatus.paramsView?.steps.find((r) => r.id === selectedStep)}
+                              stepTiers={watchStatus.stepTiers}
                               onApplied={onRefresh}
                             />
                           )}

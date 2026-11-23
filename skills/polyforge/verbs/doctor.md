@@ -73,7 +73,20 @@ Exit codes follow the repo convention: 0 every check passes, 1 any check
 fails, 2 usage errors. `--json` emits one machine document:
 `{"ok": <bool>, "checks": [{"name", "status": "pass"|"fail"|"skip"|"warn",
 "detail", "cell"}]}` — the `cell` field names the Cell a Cell-level row
-examined and is absent on the Host-level rows.
+examined and is absent on the Host-level rows — plus, additively
+(polyforge#142, 85a2), a top-level `cells` object: one entry per Cell of
+the disk set (the default Cell and every named one, an invalid Cell
+included with its parse refusal as the probe error), each carrying that
+Cell's structured `harnesses` facts from the daemon's
+`GET /status?harnesses=1` — the step harnesses' config roots, pi's
+step-agent `auth.json` as `"credential": "set"|"unset"`, the
+model-credential source and its kind (`operator`, `shared-default`,
+`directory`, `none`), claude's env-block facts as set/unset and its
+residual OAuth login as `"credentials_file": "present"|"absent"` — and
+the Cell's `execution_disabled` reason. A daemon that does not answer (or
+is too old for `?harnesses=1`) answers `probe_error`, never a faked fact.
+Values never appear: set/unset, names and paths only. The human report
+does not print the object.
 
 To judge workflow lanes alone — a workspace's lane set (the installed lanes
 and the workspace's own user lanes under `.polyforge/workflows/<lane>/`), or
@@ -100,6 +113,7 @@ every defect prints with its `WFC-*` code, file:line and YAML path
 | `workspace mapping` | the verdict is judged per Cell, machine-wide: a Cell without a `[workspace."<path>"]` section warns — its execution plane is closed (the daemon serves its data plane only) and `pf daemon ensure` still starts because another Cell of the machine has a mapping — while any Cell has one; a machine whose no Cell has a mapping fails every mapping row with the shape guidance (the fresh-install template; `pf daemon ensure` starts the daemon only once at least one Cell has a mapping) | guidance to add the shape, plus the pointer to docs/extending.md (`pf help extensions`) (a zero-section config is the fresh-install template) |
 | `workspace dirs` | every mapped workspace pre-exists as a directory | the missing path(s), named |
 | `workspace yaml` | every mapped `.polyforge.yaml` loads, every candidate (yaml and installed bundles) is `<harness>:<model>`, every per-step key names a step of a lane of the workspace's lane set (the built-in lanes and its user lanes; see below), and no resolved step would run on a placeholder model (a first candidate `<harness>:example-…`, the shipped lanes' lane-level placeholders: a step-level or tier placeholder list is undeclared and never outranks the project default) | the refusal a claim would meet (DAEMON-414), file and key named, plus the pointer to docs/extending.md (`pf help extensions`); `warn` naming each stale per-step key — no step of a lane of the workspace's set, the retired `verify-judge` among them: it governs nothing — with the rewrite (a sub-definition's models are its dispatching step's: `verification` for the verify-judge) and the docs/upgrade.md section; `warn` naming each `<project>/<lane>/<step>` whose first resolved candidate is `example-…` with the level it came from — set `steps.<project>.default.models` (or the step's key) in the workspace yaml; `warn` naming each project param value no lane of the workspace's set declares for its step — `steps.<project>.<step-id>.params.<name>`, worded apart from a stale step key (the step exists; the param is what no lane declares): it governs nothing — declare the param in the lane's step entry (`params`) or delete the value; `warn` naming a workspace whose user lane root is unreadable (its keys are not judged; the built-in lanes still run) |
+| `step tiers catalog` | every candidate the user wrote — the workspace yaml's `steps.<project>.<step>.models` and `tiers.<project>.<tier>.models` lists, and cli.toml's `[summarize]` models — is named in the Host's `[step_tiers]` catalog, the machine-level recommendation list (polyforge#143; the resolved chain's lane defaults are not the user's writing and are not judged); a candidate outside it warns, never fails (the catalog is a recommendation, not an admission rule — `pf override` does not read it), a placeholder candidate does not count (the `workspace yaml` row's finding), and the strength rule is Q3's: a catalog entry without an effort covers the model at any effort, one with an effort requires the same effort; `skip` while the catalog is empty; a catalog tier no installed lane declares is information only (judged when the daemon reports its workflows dir) | `warn` naming each uncovered candidate and where it is written (`steps.<project>.<step>`, `tiers.<project>.<tier>`, `summarize.models`), with the rewrite: add it with `pf config set step_tiers.<tier> '["…"]' --host` or drop the yaml entry |
 | `workflow lanes` | the built-in lanes the daemon runs work items on (its workflows dir) and every mapped workspace's user lanes (`.polyforge/workflows/<lane>/`) load through the one lane loader under the workflow contract — the same judgement as `pf workflows validate` — and no queued work item of a mapped project is bound to a lane its workspace's lane set does not carry; `skip` while the daemon does not answer; out of `--harness` | `fail` naming every `WFC-*` defect of a built-in lane with its file:line and YAML path (a release defect; a claim on such a lane is refused); `warn` naming every defect of a user lane (`WFC-122` included: only that lane is unavailable) and listing each queued work item bound to a missing lane (`WFC-123`: a claim refuses it and it stays queued) — fix the user lane, re-bind the work item (`pf file edit <wi> --bundle <lane>`) or cancel it |
 | `harness claude` | when some resolved candidate is `claude:…`: the daemon finds the claude binary (see below) | the binary the daemon could not resolve |
 | `harness diagram guidance` | every installed harness's context file carries the native-SVG diagram guidance block (see below); `warn` at most — never `fail`, never moves the exit code; `skip` when no harness is installed | — (`warn` lists each file as `pass` / `legacy` / `missing` / `no file` / `unreadable` and carries the SVG block to add; `legacy` = mermaid-only guidance, which no longer passes) |
@@ -314,13 +328,16 @@ only matters when some resolved candidate is `claude:…` (otherwise it
 passes: nothing needs the CLI). The daemon reports its own view on
 `GET /status?harnesses=1` (the doctor runs CLI-side and cannot see the
 daemon's environment); the daemon runs `claude --version` but never logs
-in, never calls a model and never reports a credential value.
+in, never calls a model and never reports a credential value. The
+`--json` `cells` object (above) probes every Cell the same way, claude
+steps or none — the row above is the judgement, the cells object is the
+per-Cell facts (polyforge#142, 85a2: the account page reads it).
 
 | Result | When | What to tell the user |
 |---|---|---|
 | `pass` | the binary resolves, the version is a verified one, the claude-config `settings.json` `env` block sets `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_API_KEY` | — (the detail lists every step with a claude candidate: its whole chain, each candidate's harness shown by its prefix, and the level the chain came from) |
 | `fail` | the claude binary does not resolve on the daemon's PATH | Install Claude Code and log it in (a human does this), or set `claude_bin` in cli.toml (docs/extending.md › Claude binary; `pf help extensions`). |
-| `warn` | version older than the verified minimum (2.1.296) or unparsable; neither `ANTHROPIC_AUTH_TOKEN` nor `ANTHROPIC_API_KEY` in the `<harness-root>/claude-config/settings.json` `env` block (the steps' only credential source); a rejected token / gateway pairing or a `CLAUDE_CONFIG_DIR` in that `env` block | Relay the note. The claude-config `settings.json` `env` block is the single credential authority (polyforge#171; the daemon reports its keys as set/unset, never values): put ONE `ANTHROPIC_AUTH_TOKEN` (+ optional `ANTHROPIC_BASE_URL`) there, never `CLAUDE_CONFIG_DIR` — see docs/upgrade.md. |
+| `warn` | version older than the verified minimum (2.1.296) or unparsable; neither `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY` nor `CLAUDE_CODE_OAUTH_TOKEN` in the `<harness-root>/claude-config/settings.json` `env` block (the steps' only credential source); a rejected token / gateway pairing or a `CLAUDE_CONFIG_DIR` in that `env` block | Relay the note. The claude-config `settings.json` `env` block is the single credential authority (polyforge#171; the daemon reports its keys as set/unset, never values): set it through Pi Web's account page (85a2, polyforge#142: the setup-token / API-key / gateway forms write exactly this block, keeping the file's other keys) or by hand — ONE `ANTHROPIC_AUTH_TOKEN` (+ optional `ANTHROPIC_BASE_URL`), or a `CLAUDE_CODE_OAUTH_TOKEN` minted by `claude setup-token`, never `CLAUDE_CONFIG_DIR` — see docs/upgrade.md. |
 | `skip` | claude steps exist but the daemon is unreachable | Start the daemon and re-run. |
 
 Note (env hygiene, superseding V-11): claude steps strip every inherited
@@ -328,7 +345,11 @@ Note (env hygiene, superseding V-11): claude steps strip every inherited
 credential / endpoint source; the daemon env's `ANTHROPIC_*` are reported
 as facts in the detail but neither count as a credential nor reach a step.
 `pf daemon ensure` gives the daemon no `ANTHROPIC_*` anyway (an allow-listed
-environment, see `daemon env`).
+environment, see `daemon env`). A residual OAuth login in the claude-config
+(`.credentials.json`, from before the env block was the guided way) is
+marked `credentials_file: present` in the `cells` object — the daemon still
+uses it; Pi Web's account page shows it but does not guide it (85a2, the
+2026-11-19 Q3 revision).
 
 ## Harness diagram guidance (`warn` at most, out of `--harness`)
 

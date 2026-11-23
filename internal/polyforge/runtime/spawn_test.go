@@ -610,3 +610,33 @@ func helperRPC(line string) {
 }
 
 const capsuleDirRuntimeState = "runtime-state"
+
+// polyforge#85 fix build (verification r1#3): DefaultSpawner applies the
+// Config's documented defaults exactly as runtime.New's own fill does, so a
+// hand-assembled Config (DataDir set, HarnessRoot empty) still resolves the
+// dedicated step agent directory UNDER its data dir. A spawner that kept the
+// unfilled config resolved `step-agent` against the process cwd and wrote the
+// embedded snapshot there — the checkout's test/step-agent/ tree the full
+// bar's no-untracked-test-files check caught.
+func TestDefaultSpawnerFillsTheHarnessRoot(t *testing.T) {
+	data := t.TempDir()
+	cfg := &Config{PiBin: "/nonexistent-pi", DataDir: data}
+	sp := DefaultSpawner(cfg)
+	hs, ok := sp.(*harnessSpawner)
+	if !ok {
+		t.Fatalf("DefaultSpawner must answer the production harness spawner, got %T", sp)
+	}
+	want := filepath.Join(data, StepAgentDirName)
+	if got := cfg.StepAgentDir(); got != want {
+		t.Fatalf("DefaultSpawner must fill the Config it is handed: StepAgentDir %q, want %q", got, want)
+	}
+	cmd := hs.pi.buildCmd(SpawnParams{WorkItemID: "wi_fill", CapsuleDir: "/caps", SpawnN: 1})
+	env := strings.Join(cmd.Env, "\n")
+	wantEnv := "PI_CODING_AGENT_DIR=" + want
+	if !strings.Contains(env, wantEnv+"\n") && !strings.HasSuffix(env, wantEnv) {
+		t.Fatalf("a DataDir-only Config must point the step harness at %s, got:\n%s", wantEnv, env)
+	}
+	if strings.Contains(env, "PI_CODING_AGENT_DIR=step-agent") {
+		t.Fatalf("the step agent dir must never resolve against the process cwd, got:\n%s", env)
+	}
+}
