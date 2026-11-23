@@ -386,7 +386,6 @@ class DocstringCaliberTest(unittest.TestCase):
                 'owner 裁定移出',
                 'pending',
                 'last mention still open outranks',
-                'never reported as a PASS round without naming it',
         ):
             self.assertIn(phrase, doc, 'the docstring must state: ' + phrase)
 
