@@ -592,8 +592,8 @@ func w372AssertResumedOnce(t *testing.T, w *relWorld, out string) {
 			t.Fatalf("resume output lacks %q:\n%s", want, out)
 		}
 	}
-	if n := len(w372ReleaseFiles(t, w, "v1.2.1")); n != 7 {
-		t.Fatalf("release v1.2.1 has %d assets, want 7: %v", n, w372ReleaseFiles(t, w, "v1.2.1"))
+	if n := len(w372ReleaseFiles(t, w, "v1.2.1")); n != 8 {
+		t.Fatalf("release v1.2.1 has %d assets, want 8: %v", n, w372ReleaseFiles(t, w, "v1.2.1"))
 	}
 	if vout, err := w.run(nil, "--verify", "v1.2.1"); err != nil {
 		t.Fatalf("the resumed release must pass --verify: %v\n%s", err, vout)
@@ -618,7 +618,7 @@ func TestW372ReleaseResumesAfterAFailureAfterTheClaim(t *testing.T) {
 			t.Fatalf("the re-run must resume v1.2.1: %v\n%s", err, out)
 		}
 		calls := w.calls()
-		for _, want := range []string{"xrefs", "build", "audit", "docker build", "docker push", "npm pack", "gh release create v1.2.1"} {
+		for _, want := range []string{"xrefs", "build", "audit", "docker build", "docker buildx build", "docker push", "npm pack", "gh release create v1.2.1"} {
 			if relIndex(calls, want) < 0 {
 				t.Fatalf("the resume lacks %q (nothing was published before): %v", want, calls)
 			}
@@ -637,7 +637,7 @@ func TestW372ReleaseResumesAfterAFailureAfterTheClaim(t *testing.T) {
 			t.Fatalf("the re-run must resume v1.2.1: %v\n%s", err, out)
 		}
 		calls := w.calls()
-		for _, no := range []string{"docker build", "docker push"} {
+		for _, no := range []string{"docker build", "docker push", "docker buildx build"} {
 			if relIndex(calls, no) >= 0 {
 				t.Fatalf("the image is in the registry: the resume must not %q: %v", no, calls)
 			}

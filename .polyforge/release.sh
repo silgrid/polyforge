@@ -113,17 +113,25 @@
 #      development rule), built with the release's version and packed as
 #      silgrid-pi-web-<tag>.tgz, whose packed package.json must carry the
 #      tag's version; main's pi-web/package.json keeps its development
-#      value and no bump commit exists;
+#      value and no bump commit exists; beside the aihub image, the
+#      WORKSTATION image (polyforge#86) is built here too, for linux/amd64
+#      AND linux/arm64 in one buildx pass (into the builder cache - nothing
+#      is published before the claim, Q5), from the repository root with the
+#      released tag and the batch-pinned commit injected into the seed;
 #   4. git tag <tag> + git push origin <tag> (NO force): the atomic claim of the
 #      version. If the tag exists on origin the run stops, nothing published;
 #   5. docker push; write aihub-image.digest (the bare image digest
 #      sha256:<64 hex>, known only after the push; the canonical format that
-#      deploy.sh consumes); SHA256SUMS over the three pf binaries, the
-#      digest file and the pi-web tarball (5 lines); release-manifest.json
+#      deploy.sh consumes); push the workstation image (the buildx push
+#      build re-using the pre-claim cache) and write
+#      workstation-image.digest (its multi-arch INDEX digest, read from the
+#      registry - a multi-arch image never loads into the classic local
+#      store); SHA256SUMS over the three pf binaries, the
+#      two digest files and the pi-web tarball (6 lines); release-manifest.json
 #      (the tag, the commit, every payload with its sha256 and the
 #      aihub-first ordering statement - see manifest_of);
-#   6. gh release create <tag> with the 5 payload assets (3 pf binaries +
-#      digest + pi-web tarball) + SHA256SUMS + release-manifest.json,
+#   6. gh release create <tag> with the 6 payload assets (3 pf binaries +
+#      the two image digests + pi-web tarball) + SHA256SUMS + release-manifest.json,
 #      notes from docs/release-notes/<tag>.md (generated from git log when
 #      absent), followed by an "## Integration batch" section naming the
 #      green integrate batch the release object came from, and the red
@@ -170,12 +178,16 @@
 # monotonicity (the tag must be strictly greater than EVERY other release tag on
 # origin); the PR-only check over previous-tag..tag, owner-direct allowlist
 # included (needs the commits locally: git fetch origin first); release exists
-# with EXACTLY the 5 payload assets + SHA256SUMS + release-manifest.json;
+# with EXACTLY the 6 payload assets + SHA256SUMS + release-manifest.json;
 # sha256sum -c SHA256SUMS on the downloaded assets; release-manifest.json is
 # exactly what manifest_of derives from the tag, its commit and SHA256SUMS;
 # the pi-web tarball's packed package.json carries the tag's version;
 # aihub-image.digest is exactly sha256:<64 hex> and the registry digest of
-# ghcr.io/silgrid/polyforge-aihub:<tag> equals it. Exit 0 iff all pass.
+# ghcr.io/silgrid/polyforge-aihub:<tag> equals it; workstation-image.digest
+# is the registry's index digest of the workstation image (polyforge#86),
+# the index carries both linux/amd64 and linux/arm64, and the public
+# channel's workstation image reads anonymously (an empty DOCKER_CONFIG, Q2).
+# Exit 0 iff all pass.
 #
 # PR-only check (polyforge#163): main's FIRST-PARENT history from the previous
 # release tag to the released commit must consist only of commits GitHub records
@@ -251,9 +263,10 @@
 # an earlier run that died after the claim (the tag pushed, then docker push
 # or gh release create failed), or a later lane that carries a finished
 # release on to its deploy. It reads what of V is published - the GitHub
-# release (absent, draft, or which of the 7 assets it has) and the registry
-# image (present with its digest, or answered not-found) - and:
-#   - V complete (published, all 7 assets): nothing runs; it prints the
+# release (absent, draft, or which of the 8 assets it has) and the registry
+# images, the aihub and the workstation image alike (each present with its
+# digest, or answered not-found) - and:
+#   - V complete (published, all 8 assets): nothing runs; it prints the
 #     version/commit/notes lines (notes = the release page) and exits 0;
 #   - otherwise the preflight, the PR-only check (against V's previous tag)
 #     and the gates run (a tag proves a claim, not that the gates passed),
@@ -291,6 +304,12 @@
 #                       binaries .../pf-darwin-arm64, .../pf-darwin-amd64
 #                                                 (default: GOWORK=off make release VERSION=$TAG)
 #   RELEASE_IMAGE       image repository          (default: ghcr.io/silgrid/polyforge-aihub)
+#   RELEASE_WORKSTATION_IMAGE  workstation image repository
+#                       (default: ghcr.io/silgrid/polyforge-workstation; a
+#                       suffixed line - .polyforge/release.conf - MUST name
+#                       its own explicitly, or the run refuses before any
+#                       work: an internal release never pushes to the public
+#                       package)
 #   RELEASE_GH_REPO     gh -R repo                (default: silgrid/polyforge,
 #                       this repository's own release repo).
 #                       Whatever it names, it must be the repo the tag is
@@ -315,6 +334,14 @@ set -eu
 REMOTE="${RELEASE_REMOTE:-origin}"
 BRANCH="${RELEASE_BRANCH:-main}"
 IMAGE="${RELEASE_IMAGE:-ghcr.io/silgrid/polyforge-aihub}"
+# the workstation image (polyforge#86): built for linux/amd64 AND
+# linux/arm64 beside the aihub image - the multi-arch index is built before
+# the version is claimed, pushed after it (Q5: nothing is published before
+# the tag push), and its index digest is published as the
+# workstation-image.digest asset. A suffixed line must name its own
+# repository (see RELEASE_WORKSTATION_IMAGE above) - the refusal itself
+# sits after the release.conf parse below.
+WS_IMAGE="${RELEASE_WORKSTATION_IMAGE:-ghcr.io/silgrid/polyforge-workstation}"
 GH_REPO="${RELEASE_GH_REPO:-silgrid/polyforge}"
 SEMVER_RE='^v[0-9]+\.[0-9]+\.[0-9]+$'
 # Suffixed versions (see the header): set from .polyforge/release.conf below.
@@ -697,15 +724,15 @@ if [ "${1:-}" = "--verify" ]; then
   VWORK=$(mktemp -d "${TMPDIR:-/tmp}/release-verify.XXXXXX")
   trap 'rm -rf "$VWORK"' EXIT INT TERM
 
-  # 2. release exists with exactly the 5 payload assets + SHA256SUMS +
+  # 2. release exists with exactly the 6 payload assets + SHA256SUMS +
   # release-manifest.json.
-  WANT=$(printf '%s\n' SHA256SUMS aihub-image.digest pf-darwin-amd64 pf-darwin-arm64 pf-linux-amd64 \
+  WANT=$(printf '%s\n' SHA256SUMS aihub-image.digest workstation-image.digest pf-darwin-amd64 pf-darwin-arm64 pf-linux-amd64 \
     release-manifest.json "silgrid-pi-web-$VTAG.tgz" | LC_ALL=C sort)
   if gh_ release view "$VTAG" --json assets,body -q '.assets[].name' >"$VWORK/assets.raw" 2>"$VWORK/view.err"; then
     pass "release $VTAG exists"
     LC_ALL=C sort "$VWORK/assets.raw" >"$VWORK/assets.txt"
     if [ "$(cat "$VWORK/assets.txt")" = "$WANT" ]; then
-      pass "exactly the 5 payload assets + SHA256SUMS + release-manifest.json: $(tr '\n' ' ' <"$VWORK/assets.txt")"
+      pass "exactly the 6 payload assets + SHA256SUMS + release-manifest.json: $(tr '\n' ' ' <"$VWORK/assets.txt")"
     else
       fail "asset set differs; want [$(echo "$WANT" | tr '\n' ' ')] got [$(tr '\n' ' ' <"$VWORK/assets.txt")]"
     fi
@@ -755,6 +782,22 @@ if [ "${1:-}" = "--verify" ]; then
       pass "image digest $GOTD matches aihub-image.digest"
     else
       fail "image digest mismatch: registry $GOTD vs aihub-image.digest ${WANTD:-<empty>}"
+    fi
+    # 4b. the workstation image (polyforge#86): workstation-image.digest is
+    # the registry's index digest of the workstation image.
+    WANTW=$(tr -d ' \t\r\n' <"$VWORK/dl/workstation-image.digest" 2>/dev/null || true)
+    if printf '%s' "$WANTW" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+      pass "workstation-image.digest format: sha256:<64 hex>"
+    else
+      fail "workstation-image.digest format: \"${WANTW:-<empty>}\" is not sha256:<64 hex>"
+    fi
+    GOTW=$(registry_digest "$WS_IMAGE:$VTAG" 2>/dev/null || true)
+    if [ -z "$GOTW" ]; then
+      fail "registry digest of $WS_IMAGE:$VTAG unreadable"
+    elif [ -n "$WANTW" ] && [ "$GOTW" = "$WANTW" ]; then
+      pass "workstation image index digest $GOTW matches workstation-image.digest"
+    else
+      fail "workstation image digest mismatch: registry $GOTW vs workstation-image.digest ${WANTW:-<empty>}"
     fi
   else
     fail "gh release download: $(head -1 "$VWORK/dl.log")"
@@ -901,19 +944,19 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/release.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT INT TERM
 OUT="$WORK/out"; mkdir "$OUT"
 PIWEB_TGZ="silgrid-pi-web-$TAG.tgz"
-PAYLOADS="pf-linux-amd64 pf-darwin-arm64 pf-darwin-amd64 aihub-image.digest $PIWEB_TGZ"
+PAYLOADS="pf-linux-amd64 pf-darwin-arm64 pf-darwin-amd64 aihub-image.digest workstation-image.digest $PIWEB_TGZ"
 ASSETS="$PAYLOADS SHA256SUMS release-manifest.json"
 printf '%s\n' $ASSETS >"$WORK/assets.want"
 REL_EXISTS=""; REL_DRAFT=""; REL_ASSETS=""
 has_asset() { printf '%s\n' "$REL_ASSETS" | grep -qx "$1"; }
-NEED_BIN=1; NEED_IMAGE=1; NEED_PIWEB=1; DIGEST=""
+NEED_BIN=1; NEED_IMAGE=1; NEED_WS_IMAGE=1; NEED_PIWEB=1; DIGEST=""; WS_DIGEST=""
 # A resume publishes into a version another run may be publishing too (a
 # second lane, a hand run, an orphaned earlier run): unlike a fresh release it
 # holds no exclusive claim. So it snapshots what is published when it reads
 # it, and re-reads both right before each publish action (resume_recheck):
 # any change, or a state that can no longer be read, refuses with nothing
 # more pushed - it never publishes from a stale picture.
-REL_SNAP=""; REG_SNAP=""; PUSHED_BY_RUN=""
+REL_SNAP=""; REG_SNAP=""; WS_SNAP=""; PUSHED_BY_RUN=""
 rel_snap_of() {   # <exists> <draft> <asset names>: one comparable line
   if [ -n "$1" ]; then
     printf 'present draft=%s assets=%s\n' "$2" "$(printf '%s\n' "$3" | grep . | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
@@ -931,10 +974,10 @@ release_snapshot() {   # the release's state now; non-zero when unreadable
     return 1
   fi
 }
-registry_snapshot() {   # the image's state now: "present <digest>" | absent; non-zero when unreadable
-  if registry_digest "$IMAGE:$TAG" >"$WORK/regdigest" 2>"$WORK/reg.err"; then _r=0; else _r=$?; fi
+registry_snapshot() {   # <ref> <tag-for-files>: that image's state now: "present <digest>" | absent; non-zero when unreadable
+  if registry_digest "$1" >"$WORK/regdigest-$2" 2>"$WORK/reg.err-$2"; then _r=0; else _r=$?; fi
   case "$_r" in
-    0) printf 'present %s\n' "$(tr -d ' \t\r\n' <"$WORK/regdigest")" ;;
+    0) printf 'present %s\n' "$(tr -d ' \t\r\n' <"$WORK/regdigest-$2")" ;;
     1) echo absent ;;
     *) return 1 ;;
   esac
@@ -942,9 +985,10 @@ registry_snapshot() {   # the image's state now: "present <digest>" | absent; no
 resume_recheck() {   # <the action about to run>
   [ -n "$RESUME" ] || return 0
   _rel_now=$(release_snapshot) || _rel_now="unreadable ($(head -n 1 "$WORK/view.err"))"
-  _reg_now=$(registry_snapshot) || _reg_now="unreadable ($(head -n 1 "$WORK/reg.err"))"
-  if [ "$_rel_now" != "$REL_SNAP" ] || [ "$_reg_now" != "$REG_SNAP" ]; then
-    die "resume of $TAG stopped before $1: what is published changed since this run read it, or can no longer be read (GitHub release: $REL_SNAP -> $_rel_now; image $IMAGE:$TAG: $REG_SNAP -> $_reg_now) - another run may be publishing $TAG. Published by this run: ${PUSHED_BY_RUN:-nothing}. $TAG stays claimed: run again once that run has finished - a complete release is adopted, a partial one resumed"
+  _reg_now=$(registry_snapshot "$IMAGE:$TAG" aihub) || _reg_now="unreadable ($(head -n 1 "$WORK/reg.err-aihub"))"
+  _ws_now=$(registry_snapshot "$WS_IMAGE:$TAG" ws) || _ws_now="unreadable ($(head -n 1 "$WORK/reg.err-ws"))"
+  if [ "$_rel_now" != "$REL_SNAP" ] || [ "$_reg_now" != "$REG_SNAP" ] || [ "$_ws_now" != "$WS_SNAP" ]; then
+    die "resume of $TAG stopped before $1: what is published changed since this run read it, or can no longer be read (GitHub release: $REL_SNAP -> $_rel_now; image $IMAGE:$TAG: $REG_SNAP -> $_reg_now; workstation image $WS_IMAGE:$TAG: $WS_SNAP -> $_ws_now) - another run may be publishing $TAG. Published by this run: ${PUSHED_BY_RUN:-nothing}. $TAG stays claimed: run again once that run has finished - a complete release is adopted, a partial one resumed"
   fi
   echo "release: resume $TAG: re-read before $1 - unchanged"
 }
@@ -1000,6 +1044,8 @@ if [ -n "$RESUME" ]; then
   fi
   DIGEST_PUB=""
   if [ -f "$OUT/aihub-image.digest" ]; then DIGEST_PUB=$(tr -d ' \t\r\n' <"$OUT/aihub-image.digest"); fi
+  WS_DIGEST_PUB=""
+  if [ -f "$OUT/workstation-image.digest" ]; then WS_DIGEST_PUB=$(tr -d ' \t\r\n' <"$OUT/workstation-image.digest"); fi
   REL_SNAP=$(rel_snap_of "$REL_EXISTS" "$REL_DRAFT" "$REL_ASSETS")
 fi
 
@@ -1091,9 +1137,12 @@ esac
 echo "release: preflight passed (tools, node, registry credential)"
 
 # 1b, resume continued - after the preflight's registry login (the read and the push
-# use the same identity): the image's state in the registry.
+# use the same identity): each image's state in the registry - the aihub
+# image and the workstation image alike (polyforge#86: a partial publish
+# may hold either one alone).
 if [ -n "$RESUME" ]; then
-  REG_SNAP=$(registry_snapshot) || die "cannot read the registry state of $IMAGE:$TAG: $(head -n 1 "$WORK/reg.err") - retryable; nothing published"
+  REG_SNAP=$(registry_snapshot "$IMAGE:$TAG" aihub) || die "cannot read the registry state of $IMAGE:$TAG: $(head -n 1 "$WORK/reg.err-aihub") - retryable; nothing published"
+  WS_SNAP=$(registry_snapshot "$WS_IMAGE:$TAG" ws) || die "cannot read the registry state of $WS_IMAGE:$TAG: $(head -n 1 "$WORK/reg.err-ws") - retryable; nothing published"
   case "$REG_SNAP" in
     "present "*)
       DIGEST=${REG_SNAP#present }
@@ -1104,26 +1153,40 @@ if [ -n "$RESUME" ]; then
     absent)
       [ -z "$DIGEST_PUB" ] || die "release $TAG publishes image digest $DIGEST_PUB but the registry has no $IMAGE:$TAG - a human decides; nothing published" ;;
   esac
+  case "$WS_SNAP" in
+    "present "*)
+      WS_DIGEST=${WS_SNAP#present }
+      printf '%s' "$WS_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$' || die "the registry digest of $WS_IMAGE:$TAG is unreadable (\"$WS_DIGEST\") - retryable; nothing published"
+      [ -z "$WS_DIGEST_PUB" ] || [ "$WS_DIGEST_PUB" = "$WS_DIGEST" ] || die "the published workstation-image.digest of $TAG ($WS_DIGEST_PUB) is not the registry's digest of $WS_IMAGE:$TAG ($WS_DIGEST) - a human decides; nothing published"
+      NEED_WS_IMAGE=""
+      echo "release: resume $TAG: workstation image $WS_IMAGE:$TAG is already in the registry ($WS_DIGEST) - kept, not rebuilt or pushed" ;;
+    absent)
+      [ -z "$WS_DIGEST_PUB" ] || die "release $TAG publishes workstation image digest $WS_DIGEST_PUB but the registry has no $WS_IMAGE:$TAG - a human decides; nothing published" ;;
+  esac
   NEED_BIN=""
   for _a in pf-linux-amd64 pf-darwin-arm64 pf-darwin-amd64; do [ -f "$OUT/$_a" ] || NEED_BIN=1; done
   NEED_PIWEB=""; [ -f "$OUT/$PIWEB_TGZ" ] || NEED_PIWEB=1
 fi
 
 # 1b''''. a fresh release (not a resume) never pushes over an existing image
-# tag: the package may hold a tag this repository never released (another
-# line publishing to the same package, or a release deleted by hand), and a
-# push would overwrite it. The registry is read with the identity the push
-# uses (after the preflight's login), through registry_digest: an image
-# there refuses, an unreadable registry refuses (retryable), and only an
-# explicit not-found answer lets the release go on. A resume of the same
-# release keeps its own image as before (1b above).
+# tag - for EITHER image (polyforge#86): the package may hold a tag this
+# repository never released (another line publishing to the same package,
+# or a release deleted by hand), and a push would overwrite it. The registry
+# is read with the identity the push uses (after the preflight's login),
+# through registry_digest: an image there refuses, an unreadable registry
+# refuses (retryable), and only an explicit not-found answer lets the
+# release go on. A resume of the same release keeps its own images as
+# before (1b above).
 if [ -z "$RESUME" ]; then
-  if registry_digest "$IMAGE:$TAG" >"$WORK/regdigest" 2>"$WORK/reg.err"; then _r=0; else _r=$?; fi
-  case "$_r" in
-    0) die "refusing to release: $IMAGE:$TAG already exists in the registry ($(tr -d ' \t\r\n' <"$WORK/regdigest")), but $TAG is no release of $REMOTE to resume - a push would overwrite that image; publish to another package (RELEASE_IMAGE) or remove the tag from the package by hand, then run again; nothing built or published, no version claimed" ;;
-    1) echo "release: image $IMAGE:$TAG is not in the registry yet" ;;
-    *) die "refusing to release: cannot read whether $IMAGE:$TAG exists in the registry ($(head -n 1 "$WORK/reg.err")) - retryable; nothing built or published, no version claimed" ;;
-  esac
+  for _spec in "aihub $IMAGE RELEASE_IMAGE" "ws $WS_IMAGE RELEASE_WORKSTATION_IMAGE"; do
+    set -- $_spec; _key=$1; _img=$2; _var=$3
+    if registry_digest "$_img:$TAG" >"$WORK/regdigest-$_key" 2>"$WORK/reg.err-$_key"; then _r=0; else _r=$?; fi
+    case "$_r" in
+      0) die "refusing to release: $_img:$TAG already exists in the registry ($(tr -d ' \t\r\n' <"$WORK/regdigest-$_key")), but $TAG is no release of $REMOTE to resume - a push would overwrite that image; publish to another package ($_var) or remove the tag from the package by hand, then run again; nothing built or published, no version claimed" ;;
+      1) echo "release: image $_img:$TAG is not in the registry yet" ;;
+      *) die "refusing to release: cannot read whether $_img:$TAG exists in the registry ($(head -n 1 "$WORK/reg.err-$_key")) - retryable; nothing built or published, no version claimed" ;;
+    esac
+  done
 fi
 
 # 1c. PR-only: every commit that entered the branch since the previous release
@@ -1300,6 +1363,23 @@ if [ -n "$NEED_IMAGE" ]; then
   docker build -f deploy/Dockerfile -t "$IMAGE:$TAG" "$WORK/ctx"
 fi
 
+# build the workstation image, both platforms (polyforge#86): the multi-arch
+# index is BUILT here - before the version is claimed, Q5: nothing is
+# published before the tag push - into the buildx builder's cache
+# (type=cacheonly), and only PUSHED after the claim (the push build below
+# re-runs the same command with --push and hits that cache). The seed's
+# injection points are the released tag and the batch-pinned commit (the
+# Containerfile's own ARG defaults pin the harness package versions); the
+# buildx preflight (buildx present, arm64 binfmt registered) ran in step 1b.
+if [ -n "$NEED_WS_IMAGE" ]; then
+  docker buildx build --platform linux/amd64,linux/arm64 \
+    --build-arg SEED_VERSION="$TAG" --build-arg SEED_COMMIT="$COMMIT" \
+    --build-arg SEED_CHANNEL_REPO="$GH_REPO" \
+    -f dist/workstation/Containerfile --tag "$WS_IMAGE:$TAG" \
+    --output type=cacheonly . \
+    || die "building the workstation image failed ($WS_IMAGE:$TAG, linux/amd64 and linux/arm64); nothing published, $NOCLAIM"
+fi
+
 # pack the pi-web package (see step 3 above) from the released commit's tree,
 # through the one shared packaging script (the same path the installer's
 # dev channel calls, polyforge#136).
@@ -1388,16 +1468,19 @@ burned - resume it:
     incomplete): finish $TAG by hand and audit it with release.sh --verify $TAG;
   - local files that survive: artifacts/release-$TAG/pf and the two darwin
     binaries artifacts/release-$TAG/pf-darwin-{arm64,amd64} (the built
-    binaries) and the local docker image
-    $IMAGE:$TAG. The staging directory (checksums, aihub-image.digest, the
-    pi-web tarball, release-manifest.json, notes) is removed when this
+    binaries), the local docker image
+    $IMAGE:$TAG, and the workstation image's built layers kept in the
+    buildx builder's cache (the push build after the fix re-uses them;
+    nothing was pushed when the failure preceded it). The staging directory (checksums, aihub-image.digest,
+    the pi-web tarball, release-manifest.json, notes) is removed when this
     script exits.
 ##########################################################################
 MSG
   exit 1
 }
 
-# 5. docker push, digest after push, checksums.
+# 5. docker push, digest after push, checksums - the aihub image first
+# (install.sh consumes it), then the workstation image's push build.
 if [ -n "$NEED_IMAGE" ]; then
   resume_recheck "docker push"
   docker push "$IMAGE:$TAG" || POSTFAIL "docker push"
@@ -1406,26 +1489,43 @@ if [ -n "$NEED_IMAGE" ]; then
   PUSHED_BY_RUN="the image $IMAGE:$TAG ($DIGEST)"; REG_SNAP="present $DIGEST"
 fi
 [ -f "$OUT/aihub-image.digest" ] || printf '%s\n' "$DIGEST" >"$OUT/aihub-image.digest"
+
+# the workstation image's push build (same command as the pre-claim cache
+# build, --push instead of cacheonly) and its index digest (a multi-arch
+# image never loads into the classic local store, so the digest is read
+# from the registry, not from docker inspect).
+if [ -n "$NEED_WS_IMAGE" ]; then
+  resume_recheck "the workstation image push"
+  docker buildx build --platform linux/amd64,linux/arm64 \
+    --build-arg SEED_VERSION="$TAG" --build-arg SEED_COMMIT="$COMMIT" \
+    --build-arg SEED_CHANNEL_REPO="$GH_REPO" \
+    -f dist/workstation/Containerfile --tag "$WS_IMAGE:$TAG" --push . \
+    || POSTFAIL "the workstation image push"
+  WS_DIGEST=$(registry_digest "$WS_IMAGE:$TAG" 2>"$WORK/wsdigest.err" || true)
+  printf '%s' "$WS_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$' || POSTFAIL "reading the pushed workstation image digest (got \"$WS_DIGEST\")"
+  PUSHED_BY_RUN="${PUSHED_BY_RUN:+$PUSHED_BY_RUN, }the workstation image $WS_IMAGE:$TAG ($WS_DIGEST)"; WS_SNAP="present $WS_DIGEST"
+fi
+[ -f "$OUT/workstation-image.digest" ] || printf '%s\n' "$WS_DIGEST" >"$OUT/workstation-image.digest"
 if has_asset SHA256SUMS; then
   cp "$WORK/dl/SHA256SUMS" "$OUT/SHA256SUMS"
 else
   ( cd "$OUT" && sha256sum pf-linux-amd64 pf-darwin-arm64 pf-darwin-amd64 \
-    aihub-image.digest "$PIWEB_TGZ" >SHA256SUMS ) || POSTFAIL "SHA256SUMS"
+    aihub-image.digest workstation-image.digest "$PIWEB_TGZ" >SHA256SUMS ) || POSTFAIL "SHA256SUMS"
 fi
 manifest_of "$TAG" "$COMMIT" "$OUT/SHA256SUMS" >"$OUT/release-manifest.json" || POSTFAIL "release-manifest.json"
 if has_asset release-manifest.json && ! cmp -s "$WORK/dl/release-manifest.json" "$OUT/release-manifest.json"; then
   POSTFAIL "the published release-manifest.json of $TAG is not the one its tag, commit and SHA256SUMS derive (a human decides)"
 fi
 
-# 6. GitHub release: the 5 payload assets (3 pf binaries + digest + pi-web
-# tarball) + SHA256SUMS + release-manifest.json. A resume whose release
-# exists uploads only the missing assets (never --clobber) and publishes a
-# draft.
+# 6. GitHub release: the 6 payload assets (3 pf binaries + the two image
+# digests + pi-web tarball) + SHA256SUMS + release-manifest.json. A resume
+# whose release exists uploads only the missing assets (never --clobber)
+# and publishes a draft.
 resume_recheck "the GitHub release update"
 if [ -z "$REL_EXISTS" ]; then
   URL=$(gh_ release create "$TAG" --verify-tag --title "$TAG" --notes-file "$NOTES" \
     "$OUT/pf-linux-amd64" "$OUT/pf-darwin-arm64" "$OUT/pf-darwin-amd64" \
-    "$OUT/aihub-image.digest" "$OUT/$PIWEB_TGZ" "$OUT/SHA256SUMS" \
+    "$OUT/aihub-image.digest" "$OUT/workstation-image.digest" "$OUT/$PIWEB_TGZ" "$OUT/SHA256SUMS" \
     "$OUT/release-manifest.json") || POSTFAIL "gh release create"
 else
   set --
