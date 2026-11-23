@@ -110,9 +110,11 @@ export function usePolyforgeNotifications(options: PolyforgeNotificationsOptions
 
     for (const decision of notifiable) {
       try {
-        const classKey = `polyforge.decisions.class.${decision.class}`;
-        const label = translate(classKey);
-        const copy = ownerNotificationCopy(decision, label === classKey ? (decision.phrase ?? decision.class) : label);
+        const label = translate(`polyforge.decisions.class.${decision.class}`);
+        const copy = ownerNotificationCopy(
+          decision,
+          label === `polyforge.decisions.class.${decision.class}` ? (decision.phrase ?? decision.class) : label,
+        );
         const notification = new Notification(copy.title, { body: copy.body, tag: copy.tag });
         notification.onclick = () => {
           notification.close();
