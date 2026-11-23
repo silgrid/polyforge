@@ -31,7 +31,7 @@ func TestW241HandoffGateContract(t *testing.T) {
 			t.Errorf("%s must state the mechanical facts line %q", rel, command)
 		}
 		// the close names the gate the line satisfies
-		if !strings.Contains(flat, "facts.py handoff") {
+		if !strings.Contains(flat, `facts.py" handoff`) {
 			t.Errorf("%s must name the facts.py handoff gate", rel)
 		}
 	}
