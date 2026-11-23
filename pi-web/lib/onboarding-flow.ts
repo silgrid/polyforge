@@ -150,3 +150,18 @@ export function projectFirstBootRecord(raw: unknown): OnboardingConnection | nul
   };
 }
 
+
+/** The popup's facts (polyforge#167): whether the state API named the image,
+ *  whether the wizard was dismissed, whether a session is selected, and
+ *  whether 设置 › 常规 asked to reopen it. The pure decision the shell calls;
+ *  a later unit fills it in. */
+export interface OnboardingPopupFacts {
+  imageManaged: boolean;
+  dismissed: boolean;
+  hasSelectedSession: boolean;
+  reopened: boolean;
+}
+
+export function onboardingPopupOpen(_facts: OnboardingPopupFacts): boolean {
+  return false;
+}
