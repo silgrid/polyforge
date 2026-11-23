@@ -16,6 +16,10 @@ type LeaseAcquire struct {
 	Key       string `json:"key"`
 	RequestID string `json:"request_id"`
 	WorkItem  string `json:"work_item"`
+	// Nonce makes every call's signed bytes distinct, so a poll or an
+	// immediate idempotent retry is never refused as a replay; the
+	// server ignores its value.
+	Nonce string `json:"nonce,omitempty"`
 }
 
 // LeaseRenew extends the holder's lease. The token is the plaintext one
@@ -25,6 +29,7 @@ type LeaseRenew struct {
 	RequestID string `json:"request_id"`
 	WorkItem  string `json:"work_item"`
 	Token     string `json:"token"`
+	Nonce     string `json:"nonce,omitempty"`
 }
 
 // LeaseRelease gives the lease or the queued request back. An empty token
@@ -35,6 +40,7 @@ type LeaseRelease struct {
 	RequestID string `json:"request_id"`
 	WorkItem  string `json:"work_item"`
 	Token     string `json:"token,omitempty"`
+	Nonce     string `json:"nonce,omitempty"`
 }
 
 // LeaseGrant is the answer of acquire/renew/release/lookup. Token is
