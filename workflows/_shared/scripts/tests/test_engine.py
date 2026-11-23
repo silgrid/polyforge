@@ -1,3 +1,4 @@
+# carries: workflows/_shared/scripts/pfstep/engine.py, workflows/_shared/scripts/tests/test_engine.py
 """pfstep.engine: the scope engine's report checked against its contract
 (schema 1, a mode, named commands with a known phase) — the Go table of
 verifyrun/rules_test.go, asserting the Go behavior."""
@@ -26,6 +27,36 @@ class DecodeReportTest(unittest.TestCase):
             with self.subTest(bad):
                 with self.assertRaises(engine.ReportError):
                     engine.decode_report(bad.encode())
+
+
+class DecodeReportGroupsTest(unittest.TestCase):
+    """polyforge#244: the full gate's declared groups (polyforge#244). A
+    command bound to a group carries ``group``; the report's
+    ``full_parallel`` is the parallelism, 1 (serial) when it names none."""
+
+    def report(self, *extra: str) -> str:
+        cmds = ('{"name":"fast-1","phase":"fast","cmd":"echo f","group":"nope"},'
+                '{"name":"full-1","phase":"full","cmd":"echo one","group":"go"},'
+                '{"name":"full-2","phase":"full","cmd":"echo two"}')
+        body = '{"schema":1,"stack":"go","mode":"full","commands":[' + cmds + ']'
+        if extra:
+            body += "," + ",".join(extra)
+        return body + "}"
+
+    def test_a_bound_command_carries_its_group(self) -> None:
+        rep = engine.decode_report(self.report().encode())
+        self.assertEqual([c.group for c in rep.commands], ["nope", "go", ""])
+        self.assertEqual(rep.parallel, 1, "a report that names no parallelism runs serially")
+
+    def test_the_reports_parallelism_is_decoded(self) -> None:
+        rep = engine.decode_report(self.report('"full_parallel":2').encode())
+        self.assertEqual(rep.parallel, 2)
+        self.assertEqual(rep.commands[1].group, "go")
+
+    def test_a_non_positive_parallelism_is_serial(self) -> None:
+        for bad in ('"full_parallel":0', '"full_parallel":-3'):
+            with self.subTest(bad):
+                self.assertEqual(engine.decode_report(self.report(bad).encode()).parallel, 1)
 
 
 class ArgvOfTest(unittest.TestCase):

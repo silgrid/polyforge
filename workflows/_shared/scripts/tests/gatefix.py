@@ -134,7 +134,7 @@ class GateRun:
 def new_gate(fb: container.ContainerRuntime, env: Optional[Mapping[str, str]] = None, deadline: int = 0,
              keep_going: bool = False, cpus: float = 0.0, memory: str = "", pids: int = 0,
              command_timeout: int = gate.DEFAULT_COMMAND_TIMEOUT, lines: Optional[List[str]] = None,
-             owner: str = container.GATE_OWNER) -> gate.Gate:
+             owner: str = container.GATE_OWNER, parallel: int = 0) -> gate.Gate:
     """A Gate on fb (the options as gate.run builds them), its progress
     lines appended to lines."""
     environ = dict(os.environ)
@@ -145,7 +145,7 @@ def new_gate(fb: container.ContainerRuntime, env: Optional[Mapping[str, str]] = 
     out = lines if lines is not None else []
     co = container.for_run(container.ContainerOptions(runtime=fb, owner=owner, wi=gate.GATE_WI, cpus=cpus, memory=memory,
                                                       pids=pids, say=out.append), until, environ)
-    return gate.Gate(co, until, window, command_timeout, keep_going, environ, out.append)
+    return gate.Gate(co, until, window, command_timeout, keep_going, environ, out.append, parallel=parallel)
 
 
 def run_gate(directory: str, fb: container.ContainerRuntime, log_dir: str, plan_only: bool = False, **kw: Any) -> GateRun:

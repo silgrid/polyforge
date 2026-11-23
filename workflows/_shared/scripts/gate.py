@@ -138,6 +138,7 @@ import os
 import re
 import sys
 import tempfile
+import threading
 import time
 import traceback
 from dataclasses import dataclass, field
@@ -210,6 +211,10 @@ GIT_TIMEOUT = 600.0
 
 # How much of a failing command's log the progress shows.
 TAIL_LINES = 40
+
+# How long an interrupted grouped plan waits for one worker to stop (seconds):
+# bounded, so an uninterruptible worker cannot hang the gate.
+INTERRUPT_JOIN = 60.0
 
 # The retries when concurrent writers take the computed tag name first.
 GREEN_PUSH_TRIES = 5
@@ -482,12 +487,17 @@ def plan_digest(plan: Mapping[str, Any]) -> str:
 
 
 def plan_of(directory: str, report: container.ContainerReport, cmds: Sequence[EngineCommand],
-            timeout_of: Callable[[EngineCommand], int], lane_dir: str = "") -> Dict[str, Any]:
+            timeout_of: Callable[[EngineCommand], int], lane_dir: str = "",
+            parallel: int = 0) -> Dict[str, Any]:
     """The plan as a gate executes it — what its digest, the identity a green
     tag records and the release compares, is made of: the image's content
     half (the Dockerfile's hash), the container's limits, and every command
     in order with its phase, its declared prerequisites and the timeout it
-    runs under. A command naming the clone's path names it as <clone>, and
+    runs under. A repository that declares full-gate groups (polyforge#244)
+    records them too — each bound command's group, and the parallelism the
+    gate runs them at — while a repository that declares none keeps the
+    plan, and so the digest, byte for byte. A command naming the clone's
+    path names it as <clone>, and
     one a fallback's engine names the lane snapshot's directory (its audit
     names the engine's own) reads <engine>, so where either lives never
     splits the digest — the <engine> half only when lane_dir names the
@@ -510,14 +520,25 @@ def plan_of(directory: str, report: container.ContainerReport, cmds: Sequence[En
         cmd = pat.sub("<clone>", c.cmd)
         if lane_pat is not None:
             cmd = lane_pat.sub("<engine>", cmd)
-        commands.append({
+        entry: Dict[str, Any] = {
             "name": c.name, "phase": c.phase, "cmd": cmd,
             "requires_env": list(c.requires_env), "requires_cmd": list(c.requires_cmd),
             "timeout": duration.format(timeout_of(c)),
-        })
-    return {"image": report.digest if report.digest else report.image[report.image.rfind(":") + 1:],
-            "cpus": report.cpus, "memory": report.memory,
-            "pids": report.pids, "commands": commands}
+        }
+        # polyforge#244: a bound command names its group; an unbound one (and
+        # every command of a repository that declares no group) adds no key.
+        if c.group:
+            entry["group"] = c.group
+        commands.append(entry)
+    plan: Dict[str, Any] = {
+        "image": report.digest if report.digest else report.image[report.image.rfind(":") + 1:],
+        "cpus": report.cpus, "memory": report.memory,
+        "pids": report.pids, "commands": commands}
+    # The parallelism is part of the plan only when a group is declared: the
+    # serial gate's plan keeps its bytes (and its green tags' identity).
+    if any(c.group for c in cmds):
+        plan["parallel"] = parallel or 2
+    return plan
 
 
 @dataclass
@@ -694,6 +715,7 @@ class Gate:
         image: str = "",
         image_source: str = "",
         audit: str = "",
+        parallel: int = 0,
     ) -> None:
         # co: for_run's (the defaults, the deadline label, the keep-alive)
         self.co = co
@@ -717,9 +739,15 @@ class Gate:
         # result and a green tag's record; on, empty and unset hand nothing
         # (today's argv and records byte for byte)
         self.audit = audit or read_audit(cmd_env)
+        # polyforge#244: --parallel N overrides the report's declared
+        # full-gate parallelism (0 = take it from the report).
+        self.parallel = parallel
+        # the progress stream is written from the group workers too
+        self._say_mu = threading.Lock()
 
     def say(self, msg: str) -> None:
-        self.say_line("gate: " + msg)
+        with self._say_mu:
+            self.say_line("gate: " + msg)
 
     def deadline_note(self) -> str:
         return "the gate's deadline (%s)" % dur(self.window)
@@ -895,11 +923,11 @@ class Gate:
             res.incomplete = why
             return
         try:
-            self._judge(res, o, plan_only)
+            self._judge(res, o, plan_only, repo)
         finally:
             o.box.remove()
 
-    def _judge(self, res: GateResult, o: Opened, plan_only: bool) -> None:
+    def _judge(self, res: GateResult, o: Opened, plan_only: bool, repo: str) -> None:
         box, r = o.box, o.r
         res.image, res.built, res.container = box.report.image, box.report.built, box.report.name
         res.image_digest = box.report.digest
@@ -918,27 +946,47 @@ class Gate:
         if not cmds:
             res.incomplete = "the scope engine planned no command (stack %s, conf %s)" % (gostr.quote(rep.stack), rep.conf)
             return
-        res.plan = plan_of(o.directory, box.report, cmds, self.timeout_of, o.lane_dir)
+        # polyforge#244: the parallelism the gate runs the plan's groups at —
+        # the --parallel override, else the report's declaration (1 = serial,
+        # the case of a repository that declares no group).
+        grouped = any(c.group for c in cmds)
+        ngroups = len({c.group for c in cmds if c.group})
+        parallel = 1
+        if grouped:
+            parallel = self.parallel if self.parallel > 0 else (rep.parallel or 1)
+        res.plan = plan_of(o.directory, box.report, cmds, self.timeout_of, o.lane_dir, parallel=parallel)
         res.plan_digest = plan_digest(res.plan)
         if plan_only:
             return
-        self.say("plan: %s -> %d commands (plan digest %s), run in order inside the container" % (ref, len(cmds), res.plan_digest))
+        self.say("plan: %s -> %d commands (plan digest %s), run %s" % (
+            ref, len(cmds), res.plan_digest,
+            "in %d groups, at most %d at once, in order inside each container" % (ngroups, parallel) if grouped
+            else "in order inside the container"))
 
-        def not_judged(when: str) -> str:
+        def not_judged(b: container.Box, when: str) -> str:
             # a command's status after any of these says nothing about the tree
             if self.interrupted:
                 return "the gate was interrupted %s (%s)" % (when, self.interrupted)
-            if box.is_removed():
+            if b.is_removed():
                 return "the gate removed its container (at its deadline or an interrupt) " + when
             if time.time() >= r.deadline:
                 return "%s passed %s" % (self.deadline_note(), when)
             return ""
 
+        if not grouped:
+            self._judge_serial(res, o, cmds, not_judged)
+            return
+        self._judge_grouped(res, o, repo, cmds, parallel, not_judged)
+
+    def _judge_serial(self, res: GateResult, o: Opened, cmds: Sequence[EngineCommand],
+                      not_judged: Callable[[container.Box, str], str]) -> None:
+        """The plan in order in the one container — the serial gate, byte for
+        byte the gate of a repository that declares no group."""
         stopped = False
         for i, c in enumerate(cmds):
             gc = GateCommand(name=c.name, phase=c.phase, cmd=c.cmd)
             if not stopped and not res.incomplete:
-                why = not_judged("before %s could start" % c.name)
+                why = not_judged(o.box, "before %s could start" % c.name)
                 if why:
                     res.incomplete = why
             if stopped or res.incomplete:
@@ -948,7 +996,7 @@ class Gate:
             at = "[%d/%d] %s" % (i + 1, len(cmds), c.name)
             self.say("%s (%s): %s" % (at, c.phase, c.cmd))
             try:
-                self._command(res, o, c, gc, at, not_judged)
+                self._command(res, o, o.box, c, gc, at, "", not_judged)
             except (KeyboardInterrupt, runner.Interrupted) as err:
                 self.interrupted = interrupt_name(err)
                 gc.exit = -1
@@ -957,12 +1005,168 @@ class Gate:
             if gc.failed() and not self.keep_going:
                 stopped = True
 
-    def _command(self, res: GateResult, o: Opened, c: EngineCommand, gc: GateCommand, at: str,
-                 not_judged: Callable[[str], str]) -> None:
-        box, r = o.box, o.r
+    def _judge_grouped(self, res: GateResult, o: Opened, repo: str, cmds: Sequence[EngineCommand], parallel: int,
+                       not_judged: Callable[[container.Box, str], str]) -> None:
+        """The plan's declared groups side by side, each group in plan order,
+        every group in a container of its own (polyforge#244).
+
+        The commands no group binds run serially in the gate's own container:
+        those before the grouped span first (the fast gates, in plan order),
+        those after it last (the dependency audit). At most `parallel` group
+        commands run at once, a group's own members one at a time; at
+        parallelism 1 the plan runs strictly in plan order. A failure without
+        --keep-going starts nothing new — a command already running finishes
+        and is recorded as it ran — and the interrupted, container-lost and
+        deadline conditions stop the rest exactly as they do serially. The
+        result is in plan order whatever finished first, and a command's log
+        is named by its plan index, so a serial and a parallel run of one
+        plan name the same log for the same command."""
+        n = len(cmds)
+        groups = [c.group for c in cmds]
+        last = max(i for i in range(n) if groups[i])
+        head = [i for i in range(n) if not groups[i] and i < last]
+        tail = [i for i in range(n) if not groups[i] and i > last]
+        names: List[str] = []
+        members: Dict[str, List[int]] = {}
+        for i in range(n):
+            if not groups[i]:
+                continue
+            if groups[i] not in members:
+                members[groups[i]] = []
+                names.append(groups[i])
+            members[groups[i]].append(i)
+        # The log names are the plan's, reserved before anything runs: a
+        # serial and a parallel run of one plan name the same log for the
+        # same command (and an undeclared repository keeps its own counter).
+        log_paths = [o.r.next_log(o.log_dir) for _ in range(n)]
+        stop = threading.Event()
+        sem = threading.BoundedSemaphore(max(parallel, 1))
+        written: List[Optional[GateCommand]] = [None] * n
+
+        def placeholder(i: int) -> None:
+            c = cmds[i]
+            written[i] = GateCommand(name=c.name, phase=c.phase, cmd=c.cmd, not_run=True)
+
+        def run_one(i: int, b: container.Box) -> None:
+            c = cmds[i]
+            gc = GateCommand(name=c.name, phase=c.phase, cmd=c.cmd)
+            written[i] = gc
+            if stop.is_set() or res.incomplete:
+                gc.not_run = True
+                return
+            why = not_judged(b, "before %s could start" % c.name)
+            if why:
+                gc.not_run, res.incomplete = True, why
+                stop.set()
+                return
+            at = "[%d/%d] %s" % (i + 1, n, c.name)
+            self.say("%s (%s): %s" % (at, c.phase, c.cmd))
+            try:
+                self._command(res, o, b, c, gc, at, log_paths[i], not_judged)
+            except (KeyboardInterrupt, runner.Interrupted) as err:
+                self.interrupted = self.interrupted or interrupt_name(err)
+                gc.exit = -1
+                res.incomplete = "the gate was interrupted while %s ran (%s)" % (c.name, self.interrupted)
+            except BaseException as err:
+                # A fault of the script is never a verdict, and a worker
+                # thread must not swallow it into a pass.
+                gc.exit = -1
+                res.incomplete = "the gate could not run %s: %s: %s" % (c.name, type(err).__name__, err)
+            if gc.failed() and not self.keep_going:
+                stop.set()
+
+        def worker(b: container.Box, idxs: Sequence[int]) -> None:
+            for i in idxs:
+                sem.acquire()
+                try:
+                    run_one(i, b)
+                finally:
+                    sem.release()
+
+        boxes: Dict[str, container.Box] = {}
+
+        def box_of(g: str) -> container.Box:
+            """The group's container, started on its first command (the image
+            is already built; the boxes start serially, so no two builds
+            race). A container that cannot be had leaves the group's commands
+            not_run and the gate incomplete — never red.
+
+            Every group writes its container's own logs (the image build note
+            and its mount probe) into a directory of its own: the gate's own
+            <log_dir>/image-build.log and probe logs are the gate's, never
+            overwritten by a group (polyforge#244 r1#1). The commands' logs
+            stay the plan's, reserved above in the gate's log directory."""
+            if g in boxes:
+                return boxes[g]
+            group_logs = os.path.join(o.log_dir, "group-%d" % (names.index(g) + 1))
+            try:
+                os.makedirs(group_logs, exist_ok=True)
+            except OSError as err:
+                res.incomplete = "the group %s's log directory %s: %s" % (g, group_logs, err)
+                stop.set()
+                for i in members[g]:
+                    placeholder(i)
+                return o.box
+            opened, why = self.open(o.directory, repo, group_logs)
+            if opened is None:
+                res.incomplete = why
+                stop.set()
+                for i in members[g]:
+                    placeholder(i)
+                return o.box
+            boxes[g] = opened.box
+            return opened.box
+
+        threads: List[threading.Thread] = []
+        try:
+            if parallel <= 1:
+                # parallelism 1 is the serial plan: every command in plan
+                # order, a group's own container started when its first
+                # command comes up.
+                for i in range(n):
+                    run_one(i, box_of(groups[i]) if groups[i] else o.box)
+            else:
+                for i in head:
+                    run_one(i, o.box)
+                for g in names:
+                    if not res.incomplete and not stop.is_set():
+                        box_of(g)
+                threads = [threading.Thread(target=worker, args=(boxes[g], members[g]), name="group-" + g)
+                           for g in names if g in boxes]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
+                for i in tail:
+                    run_one(i, o.box)
+        except (KeyboardInterrupt, runner.Interrupted) as err:
+            # An interrupt lands in the main thread, here: stop the workers,
+            # remove their containers (which ends whatever they run), join
+            # them, and record every command — never lose one, never let a
+            # worker write the result after the gate finished (polyforge#244
+            # r1#7).
+            self.interrupted = self.interrupted or interrupt_name(err)
+            res.incomplete = res.incomplete or "the gate was interrupted (%s)" % self.interrupted
+            stop.set()
+        finally:
+            for b in boxes.values():
+                b.remove()
+            for t in threads:
+                t.join(timeout=INTERRUPT_JOIN)
+
+        for i in range(n):
+            if written[i] is None:
+                placeholder(i)
+            gc = written[i]
+            if gc is not None:
+                res.commands.append(gc)
+
+    def _command(self, res: GateResult, o: Opened, box: container.Box, c: EngineCommand, gc: GateCommand, at: str,
+                 log_path: str, not_judged: Callable[[container.Box, str], str]) -> None:
+        r = o.r
         why = r.unmet(c.requires_env, c.requires_cmd, o.directory, box)
         if why:
-            nj = not_judged("while probing %s's prerequisites" % c.name)
+            nj = not_judged(box, "while probing %s's prerequisites" % c.name)
             if nj:
                 gc.not_run, res.incomplete = True, nj
             else:
@@ -974,11 +1178,17 @@ class Gate:
             gc.not_run, res.incomplete = True, "the gate's container became unusable: " + lost
             return
         timeout = self.timeout_of(c)
-        er = r.exec(o.log_dir, runner.ExecSpec(argv=runner.bash_argv(c.cmd), dir=o.directory, cwd=".",
-                                               timeout=timeout / duration.SECOND, private_tmp=True), box)
+        spec = runner.ExecSpec(argv=runner.bash_argv(c.cmd), dir=o.directory, cwd=".",
+                               timeout=timeout / duration.SECOND, private_tmp=True)
+        # polyforge#244: a grouped command's log name is its plan index's,
+        # reserved by the scheduler; the serial path keeps the plain counter.
+        if log_path:
+            er = r.exec_to(spec, log_path, box)
+        else:
+            er = r.exec(o.log_dir, spec, box)
         gc.exit, gc.timed_out, gc.log = er.exit, er.timed_out, er.log_path
         gc.duration_ns = er.evidence.duration_ms * duration.MILLISECOND if er.evidence is not None else 0
-        nj = not_judged("while %s ran" % c.name)
+        nj = not_judged(box, "while %s ran" % c.name)
         if er.not_started:
             gc.not_run, gc.log = True, ""
             res.incomplete = "%s passed before %s could start" % (self.deadline_note(), c.name)
@@ -1988,6 +2198,9 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--cpus", default="", help="the container's cpu limit (default min(8, this machine's cores))")
     p.add_argument("--memory", default="", help="the container's memory limit, docker syntax (default 16g; at least 6m)")
     p.add_argument("--pids", default="", help="the container's pids limit (default 4096)")
+    p.add_argument("--parallel", default="", help="the full gate's parallelism, overriding the repository's declared"
+                   " full_parallel (a positive integer; 1 runs the plan serially — the comparison baseline and the"
+                   " manual override)")
     p.add_argument("--log-dir", default="", help="where the image build log and one log per command go (default: a fresh temp dir,"
                    " kept; with --capsule: logs/ beside --out, else the capsule's runtime-state/gate/<n>)")
     p.add_argument("--repo", default="", help="the name the image and the cache volume are tagged with (default: the clone"
@@ -2048,6 +2261,22 @@ def parse_limits(a: argparse.Namespace) -> Tuple[float, str, int]:
         except ValueError:
             raise Usage("--pids %s: not an integer" % gostr.quote(a.pids)) from None
     return cpus, memory, pids
+
+
+def parse_parallel(v: str) -> int:
+    """--parallel N: a positive integer, else a usage error (polyforge#244).
+    Empty takes the repository's declaration."""
+    if v == "":
+        return 0
+    try:
+        n = int(v)
+    except ValueError:
+        raise Usage("--parallel %s: not a positive integer" % gostr.quote(v)) from None
+    # int() also reads a padded or non-ASCII digit string; the flag is one
+    # plain positive integer.
+    if n <= 0 or str(n) != v:
+        raise Usage("--parallel %s: not a positive integer" % gostr.quote(v))
+    return n
 
 
 def parse_duration_flag(name: str, v: str) -> int:
@@ -2147,6 +2376,7 @@ def run(a: argparse.Namespace, env: Dict[str, str], inv: Invocation, runtime: Op
     except AuditParamError as err:
         raise Usage("%s (%s)" % (err, AUDIT_INVALID_MARK)) from None
     cpus, memory, pids = parse_limits(a)
+    parallel = parse_parallel(a.parallel)
     timeout = parse_duration_flag("--timeout", a.timeout)
     if timeout <= 0:
         timeout = DEFAULT_COMMAND_TIMEOUT
@@ -2173,7 +2403,7 @@ def run(a: argparse.Namespace, env: Dict[str, str], inv: Invocation, runtime: Op
     gate = Gate(co, until, window, timeout, a.keep_going, dict(env), say,
                 image=(a.image or env.get("PF_PARAM_IMAGE", "")),
                 image_source=("flag" if a.image else ("param" if env.get("PF_PARAM_IMAGE", "") else "")),
-                audit=audit)
+                audit=audit, parallel=parallel)
     remote = a.remote or "origin"
     if not a.capsule:
         return clone_mode(a, env, inv, gate, remote)
