@@ -707,8 +707,8 @@ test("only defined models may be NEW candidates; the file's own undefined candid
   }
 });
 
-test("pf below the 0.2.x step_tiers floor refuses — a 2.20.x pf and an unparseable version are both below", async (t) => {
-  for (const version of ["v2.20.21", "oops"]) {
+test("pf below the 0.2.x step_tiers floor refuses — 0.2.3, a 2.20.x pf and an unparseable version are all below", async (t) => {
+  for (const version of ["v0.2.3", "v2.20.21", "oops"]) {
     const { tree, lib } = await tierGate(t, { version });
     await assert.rejects(
       () => lib.writePolyforgeConfig({ action: "set", key: "step_tiers.default", value: ["pi:acme/one"], host: true }),
@@ -717,6 +717,19 @@ test("pf below the 0.2.x step_tiers floor refuses — a 2.20.x pf and an unparse
     );
     assert.ok(!calls(tree).some((call) => call.args.includes("set")), `no write spawn on ${version}`);
   }
+});
+
+test("a v0.2.4-dev.N pf passes the step-tier floor (polyforge#256 B1): the catalog read/write is usable on a prefixed release", async (t) => {
+  const { tree, lib } = await tierGate(t, { version: "v0.2.4-dev.49" });
+  const write = await lib.writePolyforgeConfig({
+    action: "set", key: "step_tiers.default", value: ["pi:acme/one"], host: true,
+    expect_state: { file_sha256: tree.sha(tree.cliToml) },
+  });
+  assert.equal(write.ok, true, "the dev.49 pf is above the 0.2.4-0 floor, so the write is not refused");
+  const setCall = calls(tree).find((call) => call.args.includes("set"));
+  assert.ok(setCall, "the write reached pf");
+  assert.ok(setCall.args.includes("step_tiers.default"), "the catalog key travelled");
+  assert.ok(setCall.args.includes("--host"), "the write stays Host-scoped");
 });
 
 test("a bad tier name is not writable at all; an empty list is refused (unset the tier instead)", async (t) => {

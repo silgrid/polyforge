@@ -247,6 +247,7 @@ test("the step-tier change's new paths are declared by the suites that exercise 
   const expected = {
     "lib/step-tiers.ts": "e2e/harness-settings-85.mjs",
     "lib/step-tier-defined-models.ts": "e2e/harness-settings-85.mjs",
+    "lib/polyforge-version.ts": "e2e/polyforge-install-418.mjs",
     "lib/models-load.ts": "e2e/harness-settings-85.mjs",
     "lib/claude-models.ts": "e2e/harness-settings-85.mjs",
     "app/api/polyforge/step-tiers/route.ts": "e2e/polyforge-config-layout.mjs",
