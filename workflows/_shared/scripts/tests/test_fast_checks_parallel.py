@@ -23,7 +23,7 @@ import sys
 import typing
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import fast_checks
 from pfstep import container
@@ -383,7 +383,7 @@ class CloseParallelTest(ParallelCase):
         self.assertEqual(res["details"]["selected"]["app"]["status"], "green")
         self.assertEqual(len(fb.starts), 2, fb.starts)
 
-        def cids_of(*needles: str) -> set:
+        def cids_of(*needles: str) -> Set[str]:
             return {e[0] for e in fb.execs if any(n in " ".join(e[3]) for n in needles)}
 
         root, nested = cids_of("echo A1.start >>", "echo scoped-root >>"), cids_of("echo B1.start >>", "echo scoped-nested >>")
