@@ -423,3 +423,85 @@ func TestW86Channel(t *testing.T) {
 		t.Fatalf("the internal release must verify: %v\n%s", verr, vout)
 	}
 }
+
+// TestW86ExportAndTerms (AC9, Q8): the image carries the host-side delivery
+// (the smoke's own export set, smoke.sh first) under /opt/polyforge/host-files,
+// so a user with nothing but Docker reads it straight from the published
+// image; the assembled release notes and the workstation documentation each
+// carry the Claude Code commercial-terms line (Q9's fourth condition).
+func TestW86ExportAndTerms(t *testing.T) {
+	// the Containerfile exports exactly the host-side set
+	raw, err := os.ReadFile(filepath.Join("..", "dist", "workstation", "Containerfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var copyLines []string
+	inCopy := false
+	for _, l := range strings.Split(string(raw), "\n") {
+		switch {
+		case strings.HasPrefix(l, "COPY "):
+			inCopy = true
+			copyLines = []string{l}
+		case inCopy:
+			copyLines = append(copyLines, l)
+		}
+		if inCopy && strings.HasSuffix(strings.TrimSpace(l), "/opt/polyforge/host-files/") {
+			inCopy = false
+		}
+	}
+	if len(copyLines) == 0 {
+		t.Fatal("the Containerfile must COPY the host-side files into /opt/polyforge/host-files/ (the Q8 export entry)")
+	}
+	have := map[string]bool{}
+	for _, l := range copyLines {
+		for _, f := range strings.Fields(strings.ReplaceAll(strings.TrimSuffix(l, "\\"), "\\", " ")) {
+			if strings.HasPrefix(f, "dist/workstation/") {
+				have[strings.TrimPrefix(f, "dist/workstation/")] = true
+			}
+		}
+	}
+	for _, want := range []string{"compose.yaml", "seccomp.json", "seccomp.json.sha256", "Caddyfile", "smoke.sh"} {
+		if !have[want] {
+			t.Errorf("the exported host-side set lacks %s (the smoke's own export set, #168 Q3): %v", want, have)
+		}
+	}
+	if len(have) != 5 {
+		t.Errorf("the exported host-side set must be exactly the smoke's five files, got %v", have)
+	}
+
+	// the assembled release notes carry the workstation section and the
+	// Claude Code commercial-terms line
+	w := newRelWorld(t, []string{"v1.2.0"}, nil)
+	if out, err := w.runPinned(nil); err != nil {
+		t.Fatalf("release failed: %v\n%s", err, out)
+	}
+	body, err := os.ReadFile(filepath.Join(w.fakeRel, "v1.2.1", ".body"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"## Workstation image",
+		"ghcr.io/silgrid/polyforge-workstation:v1.2.1",
+		"linux/amd64 and linux/arm64",
+		"Claude Code 受 Anthropic 商业条款约束",
+	} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("the assembled release notes lack %q:\n%s", want, body)
+		}
+	}
+
+	// the workstation documentation carries the terms line (in English - the
+	// page is pinned zero-CJK, w254) and the export command
+	doc, err := os.ReadFile(filepath.Join("..", "docs", "workstation.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Claude Code is subject to Anthropic's Commercial Terms of Service",
+		"/opt/polyforge/host-files",
+	} {
+		if !strings.Contains(string(doc), want) {
+			t.Errorf("docs/workstation.md lacks %q", want)
+		}
+	}
+}
