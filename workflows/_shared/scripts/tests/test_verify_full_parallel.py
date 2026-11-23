@@ -209,12 +209,16 @@ class GroupedBarTest(FullParallelBase):
         # results and logs in plan order, whatever finished first
         self.assertEqual(command_names(r), [c["name"] for c in cmds])
         self.assertEqual(log_names(r), ["%d.log" % (i + 2) for i in range(len(cmds))])
-        # every progress line is whole and numbered by the plan
+        # every progress line is whole and numbered by the plan; the two
+        # groups' lines interleave, so the plan index is the order
         lines = start_lines(r)
-        self.assertEqual([line.split("] ", 1)[1].split(" ", 1)[0] for line in lines],
-                         [c["name"] for c in cmds])
-        for i, line in enumerate(lines):
-            self.assertRegex(line, r"^verify\.py: \[%d/%d\] " % (i + 1, len(cmds)))
+        self.assertEqual(len(lines), len(cmds), lines)
+        for line in lines:
+            m = re.match(r"^verify\.py: \[(\d+)/(\d+)\] (\S+) \((?:fast|full|scoped)\): ", line, re.ASCII)
+            self.assertIsNotNone(m, "a whole start line: %r" % line)
+            assert m is not None
+            self.assertEqual(int(m.group(1)), [c["name"] for c in cmds].index(m.group(3)) + 1, line)
+            self.assertEqual(m.group(3), cmds[int(m.group(1)) - 1]["name"], line)
 
     def test_group_container_logs_are_their_own(self) -> None:
         """Each group writes its container's notes into a log directory of
@@ -253,12 +257,16 @@ class FlakyInGroupTest(FullParallelBase):
         u = r.unit("TestA")
         self.assertEqual(u["status"], "flaky", u)
         self.assertIn("flaky 1/2", u.get("detail", ""), u)
-        go1_cid, _ = one_exec(rt, "PF253GO1")
+        # go1 ran its first run and (the confirmed whole command) once more
+        # in the repository's container; its group's run is the first
+        go1_cids = [cid for cid, _w, _e, argv in rt.execs
+                    if "PF253GO1" in " ".join(argv) and "TMPDIR" in " ".join(_e)]
         go2_cid, _ = one_exec(rt, "PF253GO2")
         reruns = [cid for cid, _w, _e, argv in rt.execs if "retry.sh" in " ".join(argv)]
         self.assertEqual(len(reruns), 1, "one targeted re-run: %r" % rt.execs)
-        self.assertEqual(reruns[0], go1_cid, "the re-run stays in the group's container")
-        self.assertEqual(go2_cid, go1_cid, "the group keeps its container")
+        self.assertEqual(reruns[0], go1_cids[0], "the re-run stays in the group's container")
+        self.assertEqual(go2_cid, go1_cids[0], "the group keeps its container")
+        self.assertNotEqual(go1_cids[0], "cid-1", "the group's container is not the repository's")
 
 
 class GroupBoxFailureTest(FullParallelBase):
