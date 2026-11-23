@@ -643,17 +643,19 @@ class Verification:
                     # 3. bars and the build's unit runs, one repo after another
                     for rr in repos:
                         self.run_bar(rr)
-                        if self.bar_incomplete:
+                        if self.bar_incomplete or self.interrupted:
                             # a group's container could not be had or was
-                            # lost: nothing after it proves anything
+                            # lost, or the bar was interrupted: nothing after
+                            # it proves anything (polyforge#253 r1#1, r1#2)
                             incomplete = self.bar_incomplete
                             break
                         self.run_unit_runs(rr)
                         self.run_analysis_runs(rr)
                     # 4. pre-existing base runs, then the confirming re-runs
-                    for rr in repos:
-                        self.pre_existing_phase(rr)
-                        self.confirm_phase(rr)
+                    if not self.interrupted and not incomplete:
+                        for rr in repos:
+                            self.pre_existing_phase(rr)
+                            self.confirm_phase(rr)
             except (KeyboardInterrupt, runner.Interrupted):
                 self.interrupted = True
             if not incomplete and not self.interrupted:
@@ -924,10 +926,21 @@ class Verification:
             try:
                 self.run_command(rr, cr, box=box, log_path=log_paths[i])
             except (KeyboardInterrupt, runner.Interrupted):
+                # a signal lands in the main thread; this worker stops, the
+                # bar stops, and the run is not judged (polyforge#253 r1#2)
                 self.interrupted = True
                 cr.exit, cr.not_started = -1, "the bar was interrupted while it ran"
                 stop.set()
-                raise
+                return
+            except BaseException as err:
+                # a fault of the script is never a verdict (the serial path's
+                # own rule, main's except Exception): the run is not judged
+                # (polyforge#253 r1#1)
+                cr.exit = -1
+                self.bar_incomplete = "the verification could not run %s: %s: %s" % (
+                    c.name, type(err).__name__, err)
+                stop.set()
+                return
             self.say_whole(bar_end_line(at, cr))
 
         def worker(box: container.Box, idxs: Sequence[int]) -> None:
@@ -970,6 +983,8 @@ class Verification:
                 t.start()
             for t in threads:
                 t.join()
+            if self.interrupted or self.bar_incomplete:
+                return
             for g in names:
                 why = boxes[g].lost_reason()
                 if why:
@@ -988,9 +1003,18 @@ class Verification:
                 b.remove()
             for t in threads:
                 t.join(timeout=INTERRUPT_JOIN)
-            for cr in slots:
-                if cr is not None:
-                    rr.runs.append(cr)
+            # every planned command keeps its record: a slot no worker wrote
+            # (the bar stopped, a worker faulted) is a not-started command,
+            # never a missing check (gate.py's own placeholder, polyforge#253
+            # r1#1)
+            for i, cr in enumerate(slots):
+                if cr is None:
+                    c = cmds[i]
+                    cr = CmdRun(repo=rr.name, check=rr.name + ":" + c.name, name=c.name, phase=c.phase,
+                                cmd=c.cmd, origin=ORIGIN_PLAN, timeout=self.timeout_of(c), report=c.report,
+                                rerun_tmpl=c.rerun, dir=c.dir, inner=c.inner)
+                    cr.not_started = "not started: the bar stopped before it could start"
+                rr.runs.append(cr)
 
     def group_box(self, rr: RepoRun, group_logs: str) -> Tuple[Optional[container.Box], str]:
         """A group's container (polyforge#253): the repository's image, a
