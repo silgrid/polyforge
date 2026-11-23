@@ -122,12 +122,16 @@ the exported event file:
                the tier median and the pooled sum over the tier are both
                printed; `size unknown` runs print `unknown`, a zero-size
                run is its own line and takes no per-file time.
-  rework       every rewind's named gate: all dispatches started after
-               the rewind and before the gate's next step_done, over the
-               effective time (Q7, ruling 5); a dispatch ends at its
-               step's step_done/step_failed/gate_verdict, the next
-               same-step step_started, a rewind or the terminal, and the
-               owner wait inside it is subtracted.
+  rework       every rewind's named gate: the dispatches started after
+               the rewind and before the gate's next step_done, each
+               counted once however many rewind windows overlap (their
+               union, polyforge#261), over the effective time (Q7,
+               ruling 5); a dispatch ends at its step's
+               step_done/step_failed/gate_verdict, the next same-step
+               step_started, a rewind or the terminal, and the owner
+               wait and any coordinator pause inside it (a
+               `job_finished` whose reason is `paused` to the next
+               `job_started`) are subtracted.
   first pass   the stamped review sections (the existing read).
   infra        every step_started is a dispatch; every step_failed is a
                failed dispatch, owned by the same step's most recent
@@ -140,8 +144,13 @@ the exported event file:
                detail) for `503` / `service temporarily unavailable`.
   estimate     only inside `## 分析` -> `### 1.`, one line
                `估算：<repo> 新增 N 个文件、修改 M 个文件、单元 K 个` per
-               repo; a malformed or duplicated line voids that repo only;
-               no estimate prints `none`, a missing work item `unknown`;
+               repo; a line that starts with `估算` without the strict
+               estimate shape is a description line (`估算依据：…`) and is
+               ignored, while a malformed estimate line voids that repo
+               only, as does a duplicated one; content inside a fenced
+               code block and the whole `## 历次分析` archive are ignored
+               (polyforge#261); no estimate prints `none`, a missing work
+               item `unknown`;
                the summary counts `no estimate`, `estimate unknown` and
                `approved unknown` apart (names included), and an estimate
                of zero has no ratio.
@@ -1188,6 +1197,23 @@ def merge_intervals(iv):
     return out
 
 
+def pause_intervals(events):
+    """the coordinator's pauses: a `job_finished` whose reason is
+    `paused` to the next `job_started`, overlaps merged (polyforge#261).
+    `pf pause` writes the first, `pf resume` the second; a pause with no
+    resume before the file ends is no interval (unmeasured)."""
+    iv = []
+    for i, e in enumerate(events):
+        if e['kind'] != 'job_finished':
+            continue
+        if (event_body(e).get('reason') or '') != 'paused':
+            continue
+        nxt = next((n for n in events[i + 1:] if n['kind'] == 'job_started'), None)
+        if nxt is not None:
+            iv.append((e['at'], nxt['at']))
+    return merge_intervals([(a, b) for a, b in iv if a is not None and b is not None and b >= a])
+
+
 def owner_wait_intervals(events):
     """the intervals the ticket spent waiting on the owner: awaiting_owner
     (first per question) to its reply / resume / next dispatch / terminal,
@@ -1284,9 +1310,11 @@ def completed_run(events):
 
 
 def rework_s(events, recs):
-    """every rewind's named gate: all dispatches started after the rewind
-    and before the gate's next step_done (Q7, ruling 5)."""
-    total = 0.0
+    """every rewind's named gate: the dispatches started after the rewind
+    and before the gate's next step_done, counted once however many
+    rewind windows overlap (their union), each net of the owner wait and
+    of any coordinator pause inside it (Q7, ruling 5; polyforge#261)."""
+    windows = []
     for i, e in enumerate(events):
         if e['kind'] != 'rewind':
             continue
@@ -1295,9 +1323,15 @@ def rework_s(events, recs):
                      if n['kind'] == 'step_done' and event_body(n).get('step') == gate), None)
         if done is None:
             continue
-        for r in recs:
-            if r['seq'] > e['seq'] and r['seq'] < done['seq']:
-                total += r['dur']
+        windows.append((e['at'], done['at']))
+    merged = merge_intervals([(a, b) for a, b in windows
+                              if a is not None and b is not None and b >= a])
+    pause = pause_intervals(events)
+    total = 0.0
+    for r in recs:
+        if not any(a <= r['start'] < b for a, b in merged):
+            continue
+        total += max(0.0, r['dur'] - overlap_s(r['start'], r['end'], pause))
     return total
 
 
@@ -1410,8 +1444,11 @@ def approved_files(cap):
 def parse_estimate(cap):
     """the ticket's estimate lines (ruling 1): only `## 分析` -> `### 1.`,
     one `估算：<repo> 新增 N 个文件、修改 M 个文件、单元 K 个` per repo;
-    a malformed or duplicated repo is no estimate for that repo. Returns
-    None (work item unreadable), 'none', or the file count summed."""
+    a malformed or duplicated repo is no estimate for that repo. A line
+    that starts with 估算 but carries no estimate colon (`估算依据：…`) is
+    a description and is ignored; fenced code blocks and the `## 历次分析`
+    archive are ignored (polyforge#261). Returns None (work item
+    unreadable), 'none', or the file count summed."""
     wj = jload(os.path.join(cap, 'runtime-state', 'work-item.json'))
     if not isinstance(wj, dict):
         return None
