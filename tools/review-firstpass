@@ -379,7 +379,6 @@ BLOCK_SECTION_BLOCK = re.compile(r'阻断|阻塞|blocking')
 BLOCK_SECTION_NON = re.compile(r'非阻断|非阻塞|non-blocking|无阻断|无阻塞|不阻断|不阻塞|没有阻断|没有阻塞|no blocking|without blocking')
 BLOCK_NEGATIVE = re.compile(r'不阻断|不阻塞|无阻断|无阻塞|没有阻断|没有阻塞|non-blocking|no blocking|without blocking')
 BLOCK_OLD_ITEM = re.compile(r'^\d+\.\s*(?:\*\*|`)*(?:#\d+\s*)?(?:blocking|阻断|阻塞|bug|ac_gap|project_rule|test_weakened|guarantee)\b', re.I)
-BLOCK_THIS_ROUND = re.compile(r'(?:本轮|this round)\s*#(\d+)', re.I)
 BLOCK_SUMMARY = re.compile(r'(\d+)\s*条?\s*(?<!非)(?:阻断|阻塞)|(?<!non-)blocking\s*(\d+)\s*条|(\d+)\s*(?<!non-)blocking')
 BLOCK_OUTCOMES = ('fixed', 'rebutted', 'owner', 'withdrawn-unknown', 'unknown')
 BLOCK_REASONS = ('no later round', 'later rounds do not mention it',
@@ -732,10 +731,6 @@ def chain_findings(cap, versions):
                 oc = outcome_of_line(status)
                 if oc:
                     events.append((v['round'], ref, oc, line.strip()))
-                for m in BLOCK_THIS_ROUND.finditer(status):
-                    other = (v['round'], int(m.group(1)))
-                    if other in nodes:
-                        _union(parent, ref, other)
     for rnd, item, at, text in owner_rulings(cap):
         if (rnd, item) in nodes:
             events.append((rnd + 0.5, (rnd, item), 'owner', text))
