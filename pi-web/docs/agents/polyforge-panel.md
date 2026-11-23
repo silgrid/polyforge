@@ -12,8 +12,10 @@ resident, immediately right of the toolbar's ⋯ (More) button and left of the
 session-stats strip; the More overlay holds the other chat actions but never
 the Polyforge button. Files: `lib/polyforge-status.ts`, `lib/polyforge-decisions.ts`, `lib/polyforge-decisions-pure.ts`, `lib/polyforge-messages.ts`,
 `lib/polyforge-messages-pure.ts`, `lib/polyforge-cards.ts`, `lib/polyforge-cards-pure.ts`,
-`lib/polyforge-panel-preferences.ts`, `lib/polyforge-conversation-pure.ts` (the job card's conversation), `lib/polyforge-disclosure.ts`, `lib/polyforge-messages-collapse.ts`, `lib/polyforge-messages-list-collapse.ts`, `app/api/polyforge/**`,
-`hooks/usePolyforge.ts`, `hooks/usePolyforgePanelPreferences.ts`, `hooks/usePolyforgeDisclosure.ts`, `hooks/usePolyforgeMessagesCollapse.ts`, `hooks/usePolyforgeMessagesListCollapse.ts`, `components/PolyforgePanel.tsx`,
+`lib/polyforge-panel-preferences.ts`, `lib/polyforge-notifications.ts`,
+`lib/polyforge-conversation-pure.ts` (the job card's conversation), `lib/polyforge-disclosure.ts`, `lib/polyforge-messages-collapse.ts`, `lib/polyforge-messages-list-collapse.ts`, `app/api/polyforge/**`,
+`hooks/usePolyforge.ts`, `hooks/usePolyforgePanelPreferences.ts`, `hooks/usePolyforgeNotifications.ts`, `hooks/usePolyforgeDisclosure.ts`, `hooks/usePolyforgeMessagesCollapse.ts`, `hooks/usePolyforgeMessagesListCollapse.ts`, `components/PolyforgePanel.tsx`,
+`components/PolyforgeNotificationSettings.tsx`, `components/PolyforgeNotifications.tsx`,
 `components/PolyforgeMessages.tsx`, `components/PolyforgeAnalysisCard.tsx`, `components/PolyforgeFileTicketDialog.tsx`, `components/PolyforgeJobComposer.tsx` (the job card's conversation; a parked work item's message wakes it; no buttons), `components/PolyforgeDecisionEntry.tsx` (a task's feed entries in Work › Tasks), the `polyforge.*` wiring in
 `components/AppShell.tsx`, the dock width
 and sheet height constants in `lib/panel-layout.ts`, the resize handles
@@ -629,6 +631,62 @@ feed-only attention card in `components/PolyforgePanel.tsx`, the feed state in
   item's feed-only card until a message wakes it, the other classes until dismissed, the
   needs_input card once and amber, both themes) are
   `e2e/polyforge-attention-458.mjs`.
+
+## Browser notifications (polyforge#240)
+
+New entries of the decision feed that need the owner notify the browser while
+the tab is not in the foreground (owner rulings 2026-11-23, Q1–Q10). The
+allowlist is exactly `needs_input`, `blocked` and `failed` on an OPEN entry
+(`attention && !resolved && !dismissed`); informational classes and the other
+attention classes never notify, and the analysis-pending / #239 auto-continue
+events are another ticket's.
+
+- **Reading and the baseline.** No timer of its own: `hooks/usePolyforgeNotifications.ts`
+  consumes the hook's decision feed on its own 3 s / 30 s read cadence. The first
+  successful feed only establishes a baseline (its entry ids are recorded, nothing
+  notifies), so a fresh install never floods the owner with history; a null feed
+  (pf absent, a failed read) is no baseline.
+- **Once per entry.** A localStorage ledger
+  (`pi-web:polyforge-notified-decisions`, `lib/polyforge-notifications.ts`) claims
+  each entry id before delivery, so a reload, another poll or a second tab of the
+  same origin does not notify it again (best effort, owner Q5 B: the ledger keeps
+  the newest 2000 ids, outliving the feed's 300-entry retention; two tabs claiming
+  at the same instant may still duplicate once, an entry still open after 2000
+  later ids may notify once more, and a site that later points at another Host or
+  a rebuilt feed with reset ids is a new namespace this browser cannot tell
+  apart). Only ids are stored, never the entry's text. An entry observed in the
+  foreground, while the switch is off or without permission is consumed, never
+  back-filled (Q6 A). A browser whose ledger cannot be read or written (a full
+  quota, a locked-down profile) pauses delivery; while the notification switch is
+  on, the same in-page banner reports it with a dismiss control for the page (the
+  settings card also names a read-blocked ledger), while a browser with the switch
+  off shows no note at all (polyforge#240 review r2#1).
+- **Delivery.** `window.Notification` (owner Q7 A), only while
+  `shouldShowBrowserNotification()` says the page is not in the foreground
+  (`visibilityState !== "visible" || !hasFocus()`, owner Q3 A, the same rule the
+  session notifications use). The title is the entry's target (its slug, else its
+  id, else its task id) and its class label; the body is its summary — the wire's
+  `text` — folded to one line and cut at 120 Unicode code points, else the class
+  label (owner Q8: the existing wire fields only). A browser refusing the
+  constructor delivers nothing; there is no retry.
+- **Click.** The notification captures the entry it was built from and its click
+  calls the panel's directed opener (`openDecisionTarget` in
+  `hooks/usePolyforge.ts`): the same target rules the attention walk uses — a work
+  item's job detail in Work › 作业, selected, or a task in Work › 任务 — and the
+  dock opens. It never walks to another entry; an entry that names nothing
+  openable opens nothing. A notification is a window notification, so a refresh or
+  a closed page loses its click target (documented limit; owner Q7 A).
+- **Permission and the switch.** Settings › Polyforge carries the switch
+  (`pi-web:polyforge-notifications`, default on) and the browser's permission as
+  visible text ([settings-ui.md](settings-ui.md)). The page never pops the browser
+  prompt by itself: the first entry that would have notified while the permission
+  is not granted shows one in-app explanation (`components/PolyforgeNotifications.tsx`,
+  `pi-web:polyforge-notification-hint-shown` once per browser), whose 授权通知 is
+  the explicit gesture that asks; a denied browser is never asked again. With the
+  switch off nothing notifies, and entries observed meanwhile are consumed.
+- **Limits.** A closed page, a discarded or frozen tab, another browser or device,
+  and the system's do-not-disturb overlay are outside this best-effort surface
+  (Q2 A); the panel's reminder remains the fallback.
 
 ## Job card conversation
 

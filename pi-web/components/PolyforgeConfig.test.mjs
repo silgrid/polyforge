@@ -1090,6 +1090,9 @@ test("the step-tier picker joins the chain and summarize add rows over the one c
       "@/lib/polyforge-cells-pure": modulePath("lib/polyforge-cells-pure.ts"),
       "@/lib/display-path": modulePath("lib/display-path.ts"),
       "@/lib/polyforge-panel-preferences": modulePath("lib/polyforge-panel-preferences.ts"),
+      // polyforge#240: PolyforgeConfig's notification card imports the
+      // decision notification vocabulary; the alias table is controlled.
+      "@/lib/polyforge-notifications": modulePath("lib/polyforge-notifications.ts"),
       "@/hooks/usePolyforgePanelPreferences": modulePath("hooks/usePolyforgePanelPreferences.ts"),
       "@/hooks/usePolyforgeDisclosure": modulePath("hooks/usePolyforgeDisclosure.ts"),
       "@/lib/polyforge-disclosure": modulePath("lib/polyforge-disclosure.ts"),

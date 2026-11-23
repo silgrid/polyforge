@@ -28,6 +28,7 @@ import {
   sanitizePolyforgeDecisionFeed,
   singleFlight,
   type PolyforgeAttentionItem,
+  type PolyforgeDecision,
   type PolyforgeDecisionFeed,
 } from "@/lib/polyforge-decisions-pure";
 import { usePolyforgePanelPreferences } from "./usePolyforgePanelPreferences";
@@ -873,21 +874,38 @@ export function usePolyforge(panelOpen: boolean) {
   // Work › Tasks.
   const waitingJobs = needsInputJobs(opsStatus);
   const attention: PolyforgeAttentionItem[] = attentionItems(waitingJobs, decisionsFeed?.decisions ?? []);
-  const openNextAttention = useCallback(() => {
-    const item = nextAttentionItem(attention, { lastKey: lastAttentionKey.current, selectedWi, selectedProfile: selectedCell });
-    if (!item) return;
-    lastAttentionKey.current = item.key;
+  // Open one attention item's own target: its job detail in Work › 作业
+  // (selected) or, for a task entry, Work › 任务 on that task. Returns false
+  // when the item names nothing openable — the caller never falls through to
+  // another entry (polyforge#240 Q7: a notification click opens ITS entry).
+  const openAttentionTarget = useCallback((item: PolyforgeAttentionItem): boolean => {
     const target = attentionTarget(item, opsStatus?.jobs ?? []);
-    if (!target) return;
+    if (!target) return false;
     setActiveTabState("work");
     if (target.kind === "task") {
       setWorkTab("tasks");
       setTaskRequest({ id: target.id, seq: ++taskRequestSeq.current, ...(target.profile ? { profile: target.profile } : {}) });
-      return;
+      return true;
     }
     setWorkTab("jobs");
     if (target.ref !== selectedWi || target.profile !== selectedCell) select(target.ref, target.profile);
-  }, [attention, selectedWi, selectedCell, opsStatus, select]);
+    return true;
+  }, [opsStatus, selectedWi, selectedCell, select]);
+  const openNextAttention = useCallback(() => {
+    const item = nextAttentionItem(attention, { lastKey: lastAttentionKey.current, selectedWi, selectedProfile: selectedCell });
+    if (!item) return;
+    lastAttentionKey.current = item.key;
+    openAttentionTarget(item);
+  }, [attention, selectedWi, selectedCell, openAttentionTarget]);
+  // polyforge#240: a browser notification carries the entry it was built
+  // from, so its click opens that exact entry (the same target rules the
+  // walk uses) and leaves the walk continuing after it.
+  const openDecisionTarget = useCallback((decision: PolyforgeDecision): boolean => {
+    const item: PolyforgeAttentionItem = { key: `decision:${decision.id}`, kind: "decision", decision };
+    const opened = openAttentionTarget(item);
+    if (opened) lastAttentionKey.current = item.key;
+    return opened;
+  }, [openAttentionTarget]);
 
   const unreadTotal = conversations.reduce((sum, conversation) => sum + conversation.unread, 0);
   const runningCount = opsStatus ? opsStatus.queue.running : null;
@@ -943,5 +961,6 @@ export function usePolyforge(panelOpen: boolean) {
     clearTaskRequest,
     attentionCount: attention.length,
     openNextAttention,
+    openDecisionTarget,
   };
 }

@@ -288,11 +288,13 @@ test("the decision feed rides every status read that finds pf; the reminder walk
   assert.match(source, /nextAttentionItem\(attention, \{ lastKey: lastAttentionKey\.current, selectedWi, selectedProfile: selectedCell \}\)/);
   assert.match(source, /fetch\("\/api\/polyforge\/decisions\/dismiss", \{\s*method: "POST",\s*headers: \{ "content-type": "application\/json" \},\s*body: JSON\.stringify\(\{ ids \}\),/);
   // owner ruling 2026-11-09, the walk selects the work item's job detail (nothing else opens), or the task in Tasks.
-  const walk = source.slice(source.indexOf("const openNextAttention = useCallback"));
+  const walk = source.slice(source.indexOf("const openAttentionTarget = useCallback"));
   assert.match(walk, /const target = attentionTarget\(item, opsStatus\?\.jobs \?\? \[\]\);/);
+  assert.match(source, /lastAttentionKey\.current = item\.key;\s*openAttentionTarget\(item\);/, "the walk delegates to the one target opener");
   assert.match(walk, /setWorkTab\("tasks"\);\s*setTaskRequest\(\{ id: target\.id, seq: \+\+taskRequestSeq\.current, \.\.\.\(target\.profile \? \{ profile: target\.profile \} : \{\}\) \}\);/,
     "polyforge#73: the walk's task request carries the entry's Cell");
-  assert.match(walk, /setWorkTab\("jobs"\);\s*if \(target\.ref !== selectedWi \|\| target\.profile !== selectedCell\) select\(target\.ref, target\.profile\);\s*\}, \[/, "the walk selects the job, nothing more");
+  assert.match(walk, /setWorkTab\("jobs"\);\s*if \(target\.ref !== selectedWi \|\| target\.profile !== selectedCell\) select\(target\.ref, target\.profile\);\s*return true;/, "the walk selects the job, nothing more");
+  assert.match(walk, /\}, \[opsStatus, selectedWi, selectedCell, select\]\);/, "one opener, its dependencies the selection's");
   assert.match(source, /setWatchStatus\(null\);\s*\}, \[\]\);/, "a new selection starts from a clean snapshot");
 });
 
