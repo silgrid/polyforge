@@ -9,6 +9,7 @@ import {
   type PolyforgeInstallRun,
   type PolyforgeInstallVersions,
 } from "@/lib/polyforge-install-pure";
+import { isPolyforgePrerelease } from "@/lib/polyforge-version";
 import { ConfigButton, ConfigDetailGrid, ConfigDetailGridRow } from "./SettingsUi";
 
 /**
@@ -161,6 +162,13 @@ export function PolyforgeInstallCard({ active, refreshKey, onFinished }: {
 
   const start = async (force: boolean) => {
     if (imageManaged) return;
+    // A run only ever installs (pf absent), updates a pf behind the channel, or
+    // writes a missing cli.toml key; an ahead/current/unknown installed pf has
+    // no update entry (polyforge#256 B2 — no path may send a downgrade POST).
+    if (!versions) return;
+    const currentFlags = polyforgeVersionFlags(versions);
+    if (currentFlags.aheadOfChannel) return;
+    if (versions.pfPresent && !currentFlags.updateAvailable && !versions.needsConfig) return;
     setProblem(null);
     // the key never stays in the form, whatever the outcome — a refused
     // check included
@@ -270,6 +278,11 @@ export function PolyforgeInstallView({
   const running = run?.state === "running" && !streamError;
   const flags = versions ? polyforgeVersionFlags(versions) : null;
   const installed = versions?.installed ?? unknown;
+  // The install/update entry exists only where a run would install, update or
+  // write the missing cli.toml key — never on a machine ahead of the channel
+  // (polyforge#256 B2).
+  const canRun = Boolean(versions && !flags?.aheadOfChannel
+    && (!versions.pfPresent || flags?.updateAvailable || versions.needsConfig));
   // A run this page lost the stream of is no longer shown as running.
   const shownState = run?.state === "running" && streamError ? "lost" : run?.state;
   const conclusion = !run
@@ -329,6 +342,13 @@ export function PolyforgeInstallView({
           {t("polyforge.install.flagUpdate", { latest: versions.latest ?? "", installed })}
         </p>
       )}
+      {versions && flags?.aheadOfChannel && (
+        <p className="polyforge-install-flag" data-pf-install-flag="ahead">
+          {t(isPolyforgePrerelease(versions.installed ?? "")
+            ? "polyforge.install.flagAheadPrerelease"
+            : "polyforge.install.flagAheadStable", { latest: versions.latest ?? "", installed })}
+        </p>
+      )}
       {versions && flags?.daemonStale && (
         <p className="polyforge-install-flag is-warning" data-pf-install-flag="daemon-stale">
           {t("polyforge.install.flagDaemonStale", { running: versions.running ?? "", installed })}
@@ -345,14 +365,14 @@ export function PolyforgeInstallView({
         </p>
       )}
 
-      {versions?.needsConfig && !running && !imageManaged && (
+      {versions?.needsConfig && canRun && !running && !imageManaged && (
         <div className="polyforge-install-credentials" data-pf-install-credentials>
           <p className="polyforge-config-card-hint">{t("polyforge.install.firstInstallHint")}</p>
           <input aria-label={t("polyforge.install.host")} placeholder={t("polyforge.install.host")} value={host} onChange={(event) => onHost(event.target.value)} />
           <input type="password" autoComplete="off" aria-label={t("polyforge.install.apiKey")} placeholder={t("polyforge.install.apiKey")} value={apiKey} onChange={(event) => onApiKey(event.target.value)} />
         </div>
       )}
-      {!imageManaged && (
+      {!imageManaged && canRun && (
         <div className="polyforge-install-actions">
           <ConfigButton variant="primary" disabled={!versions || running || posting} onClick={onStart} data-pf-install-start>
             {versions?.pfPresent ? t("polyforge.install.update") : t("polyforge.install.install")}
@@ -365,7 +385,7 @@ export function PolyforgeInstallView({
       {run && (
         <div className="polyforge-install-run" data-pf-install-run={run.state}>
           <p role="status" className={`polyforge-install-conclusion is-${shownState}`} data-pf-install-conclusion={shownState}>{conclusion}</p>
-          {run.state === "refused" && (
+          {run.state === "refused" && canRun && (
             <div className="polyforge-install-refusal" data-pf-install-refusal>
               {run.refusal && run.refusal.jobs.length > 0 && (
                 <>

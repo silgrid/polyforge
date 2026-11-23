@@ -2540,6 +2540,8 @@ export const enLocale: LocalePlugin = {
     "polyforge.install.daemonDown": "not answering",
     "polyforge.install.readFailed": "Could not read the versions.",
     "polyforge.install.flagUpdate": "A newer pf is on the channel: {latest} (installed: {installed}).",
+    "polyforge.install.flagAheadPrerelease": "The installed prerelease is ahead of the release channel: {installed} (channel: {latest}). It is newer than the channel's latest release; no downgrade is offered.",
+    "polyforge.install.flagAheadStable": "The installed version is ahead of the release channel: {installed} (channel: {latest}). No downgrade is offered.",
     "polyforge.install.flagDaemonStale": "The running daemon is still {running} while pf {installed} is installed: it runs the installed binary only after its next restart.",
     "polyforge.install.flagPiWeb": "Pi Web {piWeb} is not in sync with pf {installed}. Updating Pi Web is separate (restarting it ends every session).",
     "polyforge.install.flagJobs": "The daemon is running {count} job(s): install.sh refuses an update while they run.",

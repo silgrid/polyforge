@@ -2540,6 +2540,8 @@ export const zhCNLocale: LocalePlugin = {
     "polyforge.install.daemonDown": "无响应",
     "polyforge.install.readFailed": "无法读取版本信息。",
     "polyforge.install.flagUpdate": "发布渠道上有新版本 pf：{latest}（已安装：{installed}）。",
+    "polyforge.install.flagAheadPrerelease": "已安装预发布版（高于发布渠道）：{installed}（渠道：{latest}）。它比渠道最新版更新，不提供降级。",
+    "polyforge.install.flagAheadStable": "已安装版本高于发布渠道：{installed}（渠道：{latest}）。不提供降级。",
     "polyforge.install.flagDaemonStale": "运行中的守护进程仍是 {running}，而已安装的 pf 是 {installed}：守护进程下次重启后才会运行已安装的版本。",
     "polyforge.install.flagPiWeb": "Pi Web {piWeb} 与 pf {installed} 不同步。Pi Web 需要单独更新（重启 Pi Web 会中断所有会话）。",
     "polyforge.install.flagJobs": "守护进程正在跑 {count} 个作业：作业在跑时 install.sh 会拒绝更新。",
