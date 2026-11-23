@@ -11,7 +11,9 @@ each dispatch of overlapping rewind windows once (all gates' windows merged into
 one union, the owner's ruling of 2026-11-23) and subtracts a coordinator pause
 (`job_finished{reason: paused}` to the next `job_started`) once, even when it
 overlaps an owner wait; the estimate line ignores a description line, a fenced
-code block and the `## 历次分析` archive.
+code block and the `## 历次分析` archive (a closing fence at least as long as
+the opening one, per CommonMark and the redo archive's ````-wrapped ``markdown
+block).
 
 Run from the repository root:
   python3 -m unittest discover -s tools -p 'test_review_firstpass*.py'
@@ -618,6 +620,31 @@ class ReworkEdgeTest(unittest.TestCase):
     def test_non_overlapping_rewind_windows_both_count(self):
         events = _event_file(self._NON_OVERLAPPING)
         self.assertEqual(_rework(events), 40 * 60)
+
+class EstimateFenceTest(unittest.TestCase):
+    """AC2 (review r1#2): a shorter inner fence inside the `## 历次分析`
+    archive must not close the outer ```` (CommonMark: a closing fence is at
+    least as long as the opening one). The archived `## 分析` and its
+    estimate stay inside the fence; only the active analysis's 2 + 3 = 5
+    counts."""
+
+    _CONTENT = (
+        '## 分析\n\n### 1. 改动范围\n\n'
+        '估算：polyforge 新增 2 个文件、修改 3 个文件、单元 1 个\n'
+        '\n## 历次分析\n\n<details><summary>旧分析</summary>\n\n'
+        '````markdown\n## 分析\n\n### 1. 改动范围\n\n'
+        '```\n## 分析\n\n### 1. 改动范围\n\n'
+        '估算：polyforge 新增 9 个文件、修改 9 个文件、单元 3 个\n```\n\n'
+        '估算：polyforge 新增 5 个文件、修改 5 个文件、单元 2 个\n````\n\n'
+        '</details>\n\n'
+        '估算：polyforge 新增 4 个文件、修改 4 个文件、单元 1 个\n')
+
+    def test_a_shorter_inner_fence_does_not_close_the_archive(self):
+        cap = tempfile.mkdtemp()
+        os.makedirs(os.path.join(cap, 'runtime-state'))
+        with open(os.path.join(cap, 'runtime-state', 'work-item.json'), 'w') as f:
+            json.dump({'content': self._CONTENT}, f)
+        self.assertEqual(rf.parse_estimate(cap), 5)
 
 
 if __name__ == '__main__':
