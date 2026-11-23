@@ -1203,7 +1203,12 @@ hold no credential.
   a `none` reason; an unmapped ruling is red, named with its number and
   text; a ticket without such a section asks for no mapping section, an
   unmaterialized work item reads as no ruling and a corrupt one is not
-  judged), `build` (each unit resolved, its commit
+  judged; a declared path is repository-root relative, and a path relative
+  to a nested project root — a directory carrying its own tracked
+  `.polyforge/verify-scope.conf` — names that root's file when the change
+  base's or HEAD's committed tree holds it under exactly one such root: a
+  repository-root path wins and an ambiguous relative path stays
+  undeclared), `build` (each unit resolved, its commit
   pair test-first, its `test_weakened` hunks and, with `--replay`, its run
   replayed on the tree of its test commit — a unit declared `pre_existing_red`
   (its reproduction test already exists and is red before the change, so it

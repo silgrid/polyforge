@@ -128,6 +128,11 @@ record exactly what ran.
    `| AC | kind | ref |`, kind `test` (ref `<repo>/<test file>: <test name>`), `existing`
    (the test already pinning it) or `doc` (the file and the validator that shows it).
    Keep it current with every round.
+   A unit's `Touched files` and `Coupled obligations` paths are repository-root relative; a
+   path relative to a nested project root — a directory carrying its own tracked
+   `.polyforge/verify-scope.conf` — names that root's file when exactly one root holds it, a
+   repository-root path wins over the relative one, and an ambiguous relative path stays
+   undeclared.
    A round that wrote the plan adds its `## 分析对照` section beside `## Units` — its own `##`
    heading, never inside it (the plan-conformance scan reads `## Units` up to the next `##`
    heading): on a ticket whose content carries a `## 分析` section, each item the analysis
