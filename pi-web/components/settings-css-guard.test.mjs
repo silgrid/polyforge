@@ -129,7 +129,7 @@ const DYNAMIC_VALUES = {
  * (the caller's own class, checked at its call sites) and the literals that
  * stand for no class.
  */
-const NO_CLASS = new Set(["className", "undefined", "null", "false", "true"]);
+const NO_CLASS = new Set(["undefined", "null", "false", "true"]);
 
 /** The expression's text with its whitespace collapsed — the registry's key. */
 const normalizeExpr = (expression) => expression.replace(/\s+/g, " ").trim();
@@ -297,15 +297,12 @@ function composeTemplate(template) {
         if (inner === "{") depth += 1;
         else if (inner === "}") depth -= 1;
       }
+      // The composed value's own text joins the template — a literal keeps its
+      // class, an unreadable value brings a placeholder and the expression
+      // behind it.
       const composed = composeValue(template.slice(start, end - 1));
-      if (composed.dynamics.length === 0 && composed.text.trim().length > 0) {
-        // a composition of literals (a conditional's branches): its own classes
-        text += composed.text;
-      } else {
-        // an unreadable value: one placeholder, with the expression behind it
-        text += PLACEHOLDER;
-        dynamics.push(...(composed.dynamics.length > 0 ? composed.dynamics : [template.slice(start, end - 1)]));
-      }
+      text += composed.text;
+      dynamics.push(...composed.dynamics);
       cursor = end;
       continue;
     }
@@ -352,35 +349,123 @@ function composeValue(expression) {
   return { text: PLACEHOLDER, dynamics: [trimmed] };
 }
 
-/** Every className in a source file: its line, its static tokens and its composed (dynamic) tokens. */
-function classNameTokens(source) {
+/**
+ * The value expression of a JSX attribute's initializer (a string literal's
+ * text, or the expression inside the braces).
+ */
+function attributeExpression(initializer) {
+  if (ts.isStringLiteral(initializer)) return { literal: initializer.text };
+  const expression = ts.isJsxExpression(initializer) && initializer.expression
+    ? initializer.expression.getText()
+    : initializer.getText();
+  return { expression };
+}
+
+/** Whether a function-like node destructures `className` from its parameters — the forwarded prop. */
+function forwardsClassName(node) {
+  return [...(node.parameters ?? [])].some((parameter) => ts.isObjectBindingPattern(parameter.name)
+    && parameter.name.elements.some((element) => !element.dotDotDotToken && element.name.getText() === "className"));
+}
+
+/** The nearest named function-like node around a node, or `<module>`. */
+function enclosingComponent(node) {
+  for (let current = node.parent; current; current = current.parent) {
+    if (!ts.isFunctionLike(current)) continue;
+    const name = current.name?.getText?.();
+    if (name && !name.includes("=>")) return name;
+    if (ts.isVariableDeclaration(current.parent) && ts.isIdentifier(current.parent.name)) return current.parent.name.text;
+    if (ts.isPropertyAssignment(current.parent)) return current.parent.name.getText();
+  }
+  return "<module>";
+}
+
+/**
+ * Every class expression a source file renders: a JSX `className` attribute, an
+ * object-literal `className:` property (a spread style object), and a local
+ * `const/let/var className = …` binding — the shape a component uses when it
+ * composes a class once and spreads it. The scanner walks the real TypeScript
+ * tree, so generics, comparisons and strings are never mistaken for tags, and
+ * a bare `className` reference is exempt only when the enclosing component
+ * destructures it as a parameter (the forwarded prop); a reference to a local
+ * binding is exempt because the binding's own initializer is scanned.
+ */
+function classExpressions(source, fileName = "Snippet.tsx") {
+  const file = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const lineOf = (node) => file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1;
+  const expressions = [];
+  const localBindings = new Set();
+  const reference = (node) => {
+    if (ts.isIdentifier(node) && node.text === "className") return "className";
+    return null;
+  };
+  const visit = (node) => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === "className" && node.initializer) {
+      localBindings.add(node);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  const record = (node, expression, kind, enclosing) => {
+    const composed = composeValue(expression);
+    // A `className` in the expression is the caller's own class when the
+    // component destructures it (the forwarded prop) or when it names a local
+    // binding (whose initializer is scanned on its own); either way it holds no
+    // class of this component's, and every other expression must be registered.
+    const forwards = Boolean(enclosing && forwardsClassName(enclosing));
+    const callerOwned = (value) => value === "className" && (forwards || localBindings.size > 0);
+    const segments = composed.text.split(PLACEHOLDER);
+    let text = segments[0];
+    const dynamics = [];
+    for (let index = 0; index < composed.dynamics.length; index += 1) {
+      if (callerOwned(composed.dynamics[index])) continue;
+      text += `${PLACEHOLDER}${segments[index + 1] ?? ""}`;
+      dynamics.push(composed.dynamics[index]);
+    }
+    if (text.replaceAll(PLACEHOLDER, "").trim().length === 0 && dynamics.length === 0) return;
+    expressions.push({
+      line: lineOf(node),
+      component: enclosingComponent(node),
+      kind,
+      text,
+      dynamics,
+    });
+  };
+  const walk = (node, enclosing) => {
+    const scope = ts.isFunctionLike(node) ? node : enclosing;
+    if (ts.isJsxAttribute(node) && node.name.getText() === "className" && node.initializer) {
+      const value = attributeExpression(node.initializer);
+      if ("literal" in value) {
+        expressions.push({ line: lineOf(node), component: enclosingComponent(node), kind: "jsx", forwarded: false, text: value.literal, dynamics: [] });
+      } else {
+        record(node, value.expression, "jsx", scope);
+      }
+    } else if (ts.isPropertyAssignment(node) && node.name.getText() === "className") {
+      record(node, node.initializer.getText(), "object", scope);
+    } else if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === "className" && node.initializer) {
+      record(node, node.initializer.getText(), "binding", scope);
+    }
+    ts.forEachChild(node, (child) => walk(child, scope));
+  };
+  walk(file, null);
+  return expressions;
+}
+
+/**
+ * Every className in a source file: its line, its static tokens and its
+ * composed (dynamic) tokens (each carrying the component and the expressions
+ * behind it, so the registry can tell two `tone`s in one file apart).
+ */
+function classNameTokens(source, fileName = "Snippet.tsx") {
   const staticTokens = [];
   const dynamicTokens = [];
-  const lineAt = (index) => source.slice(0, index).split("\n").length;
-  let index = 0;
-  while ((index = source.indexOf("className=", index)) !== -1) {
-    const line = lineAt(index);
-    const start = index + "className=".length;
-    index = start;
-    const character = source[start];
-    if (character === '"' || character === "'") {
-      const end = source.indexOf(character, start + 1);
-      for (const token of source.slice(start + 1, end).split(/\s+/).filter(Boolean)) staticTokens.push({ line, token });
-      index = end;
-      continue;
-    }
-    if (character !== "{") continue;
-    const end = matchingBracket(source, start);
-    if (end === -1) { index = start + 1; continue; }
-    const composed = composeValue(source.slice(start + 1, end));
-    index = end;
+  for (const entry of classExpressions(source, fileName)) {
     let placeholder = 0;
-    for (const token of composed.text.split(/\s+/).filter((entry) => entry.length > 0)) {
-      const count = [...token].filter((entry) => entry === PLACEHOLDER).length;
-      if (count === 0) { staticTokens.push({ line, token }); continue; }
-      const exprs = composed.dynamics.slice(placeholder, placeholder + count).map(normalizeExpr);
+    for (const token of entry.text.split(/\s+/).filter((part) => part.length > 0)) {
+      const count = [...token].filter((character) => character === PLACEHOLDER).length;
+      if (count === 0) { staticTokens.push({ line: entry.line, token }); continue; }
+      const exprs = entry.dynamics.slice(placeholder, placeholder + count).map(normalizeExpr);
       placeholder += count;
-      dynamicTokens.push({ line, token, exprs });
+      dynamicTokens.push({ line: entry.line, token, exprs, component: entry.component });
     }
   }
   return { staticTokens, dynamicTokens };
@@ -418,7 +503,7 @@ test("every composed className is composed from the values its source enumerates
     const name = relative(componentDir, file);
     for (const entry of classNameTokens(readFileSync(file, "utf8")).dynamicTokens) {
       const valueLists = entry.exprs.map((expression) => {
-        const registered = DYNAMIC_VALUES[`${name}:${expression}`];
+        const registered = DYNAMIC_VALUES[`${name}:${entry.component}:${expression}`];
         if (!registered) {
           problems.push(`${name}:${entry.line} ${expression} is a dynamic className the registry does not know — name its finite values and their source in DYNAMIC_VALUES`);
           return null;
@@ -470,14 +555,31 @@ test("the CSS coverage guard rejects comment-only, partial and unregistered defi
   assert.equal(names.some((entry) => resolves(entry, prefixOnly)), false, "a same-prefix class never answers for the composed one");
 
   // An identifier the registry does not know is reported, never skipped.
-  const bare = classNameTokens('const a = <b className={lineClass} />;').dynamicTokens;
+  const bare = classNameTokens('function C() { const lineClass = "x"; return <b className={lineClass} />; }').dynamicTokens;
   assert.deepEqual(bare.map((entry) => entry.exprs), [["lineClass"]], "a bare identifier is a composition the registry must answer for");
-  assert.equal(Object.hasOwn(DYNAMIC_VALUES, `Nope.tsx:lineClass`), false, "an unregistered bare expression has no values");
-  assert.deepEqual(classNameTokens('const a = <b className={className} />;').dynamicTokens, [], "the forwarded className prop renders nothing of its own");
+
+  // A local `className` binding is composed from its initializer (review r2#1).
+  const local = classNameTokens('function C({ tone }) { const className = `wrap${tone === "default" ? "" : ` is-${tone}`}`; return <b className={className} />; }');
+  assert.deepEqual(local.staticTokens.map((entry) => entry.token), ["wrap"], "the local binding's static class is checked");
+  assert.deepEqual(local.dynamicTokens.map((entry) => entry.exprs), [["tone"]], "the local binding's composition is registered like any other");
+  assert.deepEqual(local.dynamicTokens.map((entry) => entry.component), ["C"], "the registry key names the component the expression lives in");
+
+  // Two components in one file keep separate registries for the same expression.
+  const twoComponents = classNameTokens('function A({ tone }) { return <b className={`a-${tone}`} />; }\nfunction B({ tone }) { return <b className={`b-${tone}`} />; }');
+  assert.deepEqual(twoComponents.dynamicTokens.map((entry) => `${entry.component}:${entry.exprs[0]}`), ["A:tone", "B:tone"], "the same expression in two components is two entries");
+
+  // The forwarded `className` prop stays exempt — and only there.
+  assert.deepEqual(classNameTokens('function C({ className }) { return <b className={className} />; }').dynamicTokens, [], "a destructured className prop renders the caller's own class");
+  const notForwarded = classNameTokens('function C(props) { return <b className={props.className} />; }').dynamicTokens;
+  assert.deepEqual(notForwarded.map((entry) => entry.exprs), [["props.className"]], "a member expression is not the forwarded prop");
 
   const conditional = classNameTokens('const a = <b className={phase === "success" ? "is-success" : undefined} />;');
   assert.deepEqual(conditional.staticTokens, [{ line: 1, token: "is-success" }], "a conditional's branch is a class; its comparison operand is not");
   assert.deepEqual(conditional.dynamicTokens, [], "a conditional of literals leaves nothing dynamic");
+
+  // An object-literal className (a spread style object) is scanned too (review r2#11).
+  const objectLiteral = classNameTokens('const common = { className: "settings-section-icon" };');
+  assert.deepEqual(objectLiteral.staticTokens.map((entry) => entry.token), ["settings-section-icon"], "an object-literal className is a class expression");
 });
 
 // polyforge#257 AC2: the settings surfaces carry no direct `config-button` base
