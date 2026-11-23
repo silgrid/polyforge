@@ -24,7 +24,7 @@ import {
   type OnboardingConnection,
   type OnboardingStep,
   type OnboardingView,
-} from "@/lib/onboarding-state";
+} from "@/lib/onboarding-flow";
 import { PolyforgeFileTicketDialog } from "./PolyforgeFileTicketDialog";
 
 export interface OnboardingWizardProps {
@@ -137,18 +137,18 @@ function AihubStep({
           <legend style={{ fontSize: 11, color: "var(--text-dim)" }}>{t("onboarding.aihubAddCell")}</legend>
           <label style={{ display: "flex", flexDirection: "column", gap: 2 }}>
             {t("onboarding.aihubProfile")}
-            <input value={profile} onChange={(event) => setProfile(event.target.value)} style={field} />
+            <input value={profile} onChange={(event) => setProfile(event.target.value)} data-onboarding-cell-profile style={field} />
           </label>
           <label style={{ display: "flex", flexDirection: "column", gap: 2 }}>
             {t("onboarding.aihubServer")}
-            <input value={server} onChange={(event) => setServer(event.target.value)} style={field} />
+            <input value={server} onChange={(event) => setServer(event.target.value)} data-onboarding-cell-server style={field} />
           </label>
           <label style={{ display: "flex", flexDirection: "column", gap: 2 }}>
             {t("onboarding.aihubApiKey")}
-            <input type="password" autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)} style={field} />
+            <input type="password" autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)} data-onboarding-cell-key style={field} />
           </label>
           {error && <div role="alert" style={{ color: "#dc2626", overflowWrap: "anywhere" }}>{error}</div>}
-          <button type="button" onClick={() => void addCell()} disabled={busy || profile === "" || server === "" || apiKey === ""}
+          <button type="button" onClick={() => void addCell()} data-onboarding-cell-add disabled={busy || profile === "" || server === "" || apiKey === ""}
             style={{ alignSelf: "flex-start", background: "var(--accent)", color: "var(--bg-panel)", border: "none", borderRadius: 4, padding: "4px 12px", fontSize: 12 }}>
             {t("onboarding.aihubAdd")}
           </button>
@@ -260,7 +260,7 @@ function WorkspaceStep({ cwd, onComplete, onSkip, onWorkspaceChange }: { cwd: st
       <p style={{ margin: 0, color: "var(--text-muted)" }}>{t("onboarding.workspaceCurrent")}: <code>{cwd ?? "—"}</code></p>
       <label style={{ display: "flex", flexDirection: "column", gap: 2 }}>
         {t("onboarding.workspacePath")}
-        <input value={path} onChange={(event) => setPath(event.target.value)} style={field} />
+        <input value={path} onChange={(event) => setPath(event.target.value)} data-onboarding-workspace-path style={field} />
       </label>
       {error && <div role="alert" style={{ color: "#dc2626", overflowWrap: "anywhere" }}>{error}</div>}
       <button type="button" onClick={() => void use()} disabled={busy || path.trim() === ""} data-onboarding-workspace-use
@@ -281,7 +281,6 @@ function TicketStep({ onComplete, onSkip, onClose }: { onComplete: () => void; o
   const [open, setOpen] = useState(false);
   const [projects, setProjects] = useState<string[]>([]);
   useEffect(() => {
-    if (!open) return;
     const controller = new AbortController();
     fetch("/api/polyforge/projects", { signal: controller.signal })
       .then(async (response) => {
@@ -293,7 +292,7 @@ function TicketStep({ onComplete, onSkip, onClose }: { onComplete: () => void; o
       })
       .catch((error) => { if (!(error instanceof DOMException && error.name === "AbortError")) setProjects([]); });
     return () => controller.abort();
-  }, [open]);
+  }, []);
   return (
     <div data-onboarding-step-panel="ticket" style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 12 }}>
       <p style={{ margin: 0, color: "var(--text-muted)" }}>{t("onboarding.ticketHint")}</p>

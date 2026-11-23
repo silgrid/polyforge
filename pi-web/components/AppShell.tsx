@@ -100,7 +100,7 @@ import { getAgentsBadge, getSessionFamily, isHiddenRelation } from "@/lib/sessio
 import { getLastSettingsSection, settingsSectionRequiresProject, type SettingsSection } from "@/lib/settings-navigation";
 import { focusIfLost } from "@/lib/stacked-dialog";
 import { OnboardingWizard } from "./OnboardingWizard";
-import type { OnboardingStep, OnboardingView } from "@/lib/onboarding-state";
+import type { OnboardingStep, OnboardingView } from "@/lib/onboarding-flow";
 
 type SessionCopyField = "file" | "id" | "projectDir" | "gitBranch" | "gitWorktree";
 /** The onboarding state API's answer: an image-mode view or the host-mode

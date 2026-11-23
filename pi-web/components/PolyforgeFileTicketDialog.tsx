@@ -54,6 +54,13 @@ export function PolyforgeFileTicketDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // The onboarding wizard opens this dialog before its mapped-projects read
+  // settles (polyforge#167 Q5): the select then starts on the first project
+  // that arrives, so a confirm never sends a blank project.
+  useEffect(() => {
+    if (project === "" && projects.length > 0) setProject(projects[0]);
+  }, [project, projects]);
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape" && !busy) onClose(); };
     window.addEventListener("keydown", onKey);

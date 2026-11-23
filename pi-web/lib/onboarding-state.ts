@@ -20,170 +20,59 @@
 // wins over the whole file. A file that no longer parses is moved aside
 // (`<path>.corrupt`) before the first fresh write, never silently discarded.
 //
-// `readFirstBootConnection` publishes #162's first-boot record
-// (`<data-dir>/workstation/first-boot.json`, docs/workstation.md) as the
-// AIHub step's connection result: a closed whitelist of the record's fields,
-// never its `error` text, never anything that could be a credential.
+// The pure vocabulary and transitions live in `lib/onboarding-flow.ts` (the
+// client wizard imports that module, never this one); this file re-exports
+// them and adds the file reads. `readFirstBootConnection` publishes #162's
+// first-boot record (`<data-dir>/workstation/first-boot.json`,
+// docs/workstation.md) as the AIHub step's connection result: a closed
+// whitelist of the record's fields, never its `error` text, never anything
+// that could be a credential.
 import { mkdirSync, readFileSync, renameSync } from "fs";
 import { dirname, join } from "path";
 import { writePrivateFileAtomicSync } from "./atomic-file";
 import { defaultAgentDir } from "./http-dispatcher";
 import { serializeByKey } from "./key-serializer";
 import { polyforgeDataRoot } from "./polyforge-cards";
+import {
+  completeOnboardingStep,
+  dismissOnboarding,
+  mergeOnboardingState,
+  projectFirstBootRecord,
+  reopenOnboarding,
+  skipOnboardingStep,
+  type OnboardingConnection,
+  type OnboardingState,
+  type OnboardingStep,
+} from "./onboarding-flow";
 
-export const ONBOARDING_VERSION = 1;
-
-/** The four steps, in the order the wizard walks them (the ticket's AC2). */
-export const ONBOARDING_STEPS = ["aihub", "account", "workspace", "ticket"] as const;
-
-export type OnboardingStep = (typeof ONBOARDING_STEPS)[number];
-export type OnboardingStepStatus = "complete" | "incomplete";
-
-export interface OnboardingState {
-  version: typeof ONBOARDING_VERSION;
-  steps: Record<OnboardingStep, boolean>;
-  dismissed: boolean;
-}
-
-/** The AIHub step's read of #162's first-boot record: the published fields
- *  (`phase`, `mode`, `defaultCell`, `server`, `project`, `userReady`,
- *  `keyReady`) and nothing else. `mode` `external` is the team mode. */
-export interface OnboardingConnection {
-  phase: string | null;
-  mode: "local" | "external" | null;
-  defaultCell: string | null;
-  server: string | null;
-  project: string | null;
-  userReady: boolean;
-  keyReady: boolean;
-}
-
-/** The client-safe view of the state the state API answers (the route adds
- *  `imageManaged`). */
-export interface OnboardingView {
-  version: number;
-  steps: Record<OnboardingStep, OnboardingStepStatus>;
-  nextStep: OnboardingStep;
-  dismissed: boolean;
-  connection: OnboardingConnection | null;
-}
+export {
+  ONBOARDING_STEPS,
+  ONBOARDING_VERSION,
+  completeOnboardingStep,
+  dismissOnboarding,
+  emptyOnboardingState,
+  followingOnboardingStep,
+  mergeOnboardingState,
+  nextOnboardingStep,
+  onboardingStepStatuses,
+  onboardingView,
+  projectFirstBootRecord,
+  reopenOnboarding,
+  skipOnboardingStep,
+} from "./onboarding-flow";
+export type {
+  OnboardingConnection,
+  OnboardingState,
+  OnboardingStep,
+  OnboardingStepStatus,
+  OnboardingView,
+} from "./onboarding-flow";
 
 /** One file, one write chain (route copies re-evaluate this module). */
 export const ONBOARDING_STATE_WRITE_CHAIN = Symbol.for("pi-web.onboardingStateWrites");
 
 export function onboardingStatePath(agentDir: string = defaultAgentDir()): string {
   return join(agentDir, "pi-web-onboarding.json");
-}
-
-export function emptyOnboardingState(): OnboardingState {
-  return {
-    version: ONBOARDING_VERSION,
-    steps: { aihub: false, account: false, workspace: false, ticket: false },
-    dismissed: false,
-  };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/**
- * One stored (or future) state → the state this version understands. A known
- * step survives as complete only when its stored value is exactly `true`;
- * every other value (absent, a string, a future step id, a nested object) is
- * incomplete. An unknown `version` is migrated the same way — the known
- * steps stay, the version is rewritten to this one, nothing is cleared
- * (owner ruling Q2). Any other shape is the empty state.
- */
-export function mergeOnboardingState(raw: unknown): OnboardingState {
-  if (!isRecord(raw)) return emptyOnboardingState();
-  const stored = isRecord(raw.steps) ? raw.steps : {};
-  const steps = {} as Record<OnboardingStep, boolean>;
-  for (const step of ONBOARDING_STEPS) steps[step] = stored[step] === true;
-  return { version: ONBOARDING_VERSION, steps, dismissed: raw.dismissed === true };
-}
-
-export function onboardingStepStatuses(state: OnboardingState): Record<OnboardingStep, OnboardingStepStatus> {
-  const out = {} as Record<OnboardingStep, OnboardingStepStatus>;
-  for (const step of ONBOARDING_STEPS) out[step] = state.steps[step] ? "complete" : "incomplete";
-  return out;
-}
-
-/** The first unfinished step; with every step finished the first step is the
- *  review starting point (Q6: completed steps stay reviewable). */
-export function nextOnboardingStep(state: OnboardingState): OnboardingStep {
-  return ONBOARDING_STEPS.find((step) => !state.steps[step]) ?? ONBOARDING_STEPS[0];
-}
-
-/** The step after `step`, or null at the last one. */
-export function followingOnboardingStep(step: OnboardingStep): OnboardingStep | null {
-  const index = ONBOARDING_STEPS.indexOf(step);
-  return index >= 0 && index < ONBOARDING_STEPS.length - 1 ? ONBOARDING_STEPS[index + 1] : null;
-}
-
-export function completeOnboardingStep(state: OnboardingState, step: OnboardingStep): OnboardingState {
-  return { ...state, steps: { ...state.steps, [step]: true } };
-}
-
-/** A skip changes no step record: the step stays 「未完成」. */
-export function skipOnboardingStep(state: OnboardingState): OnboardingState {
-  return state;
-}
-
-export function dismissOnboarding(state: OnboardingState): OnboardingState {
-  return { ...state, dismissed: true };
-}
-
-export function reopenOnboarding(state: OnboardingState): OnboardingState {
-  return { ...state, dismissed: false };
-}
-
-/** The client view the router answers (without `imageManaged`). */
-export function onboardingView(state: OnboardingState, connection: OnboardingConnection | null): OnboardingView {
-  return {
-    version: state.version,
-    steps: onboardingStepStatuses(state),
-    nextStep: nextOnboardingStep(state),
-    dismissed: state.dismissed,
-    connection,
-  };
-}
-
-function boundedText(value: unknown, max: number): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed !== "" && trimmed.length <= max ? trimmed : null;
-}
-
-const PHASE_PATTERN = /^[a-z][a-z0-9-]*(?:\/[a-z][a-z0-9-]*)?$/;
-const PROFILE_PATTERN = /^[a-z0-9][a-z0-9-]{0,31}$/;
-const PROJECT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
-const SERVER_PATTERN = /^https?:\/\/[^\s]{1,500}$/;
-
-/**
- * #162's first-boot record → the AIHub step's connection result. A closed
- * whitelist: the published fields only, each through its own vocabulary —
- * `error` and every undeclared key (a credential, a hash, a token) never
- * cross. A non-object, or an object carrying neither a phase nor a mode, is
- * not a record (null).
- */
-export function projectFirstBootRecord(raw: unknown): OnboardingConnection | null {
-  if (!isRecord(raw)) return null;
-  const phase = boundedText(raw.phase, 64);
-  const mode = raw.mode === "local" || raw.mode === "external" ? raw.mode : null;
-  if (phase === null && mode === null) return null;
-  const defaultCell = boundedText(raw.defaultCell, 32);
-  const server = boundedText(raw.server, 500);
-  const project = boundedText(raw.project, 128);
-  return {
-    phase: phase !== null && PHASE_PATTERN.test(phase) ? phase : null,
-    mode,
-    defaultCell: defaultCell !== null && PROFILE_PATTERN.test(defaultCell) ? defaultCell : null,
-    server: server !== null && SERVER_PATTERN.test(server) ? server : null,
-    project: project !== null && PROJECT_PATTERN.test(project) ? project : null,
-    userReady: raw.userReady === true,
-    keyReady: raw.keyReady === true,
-  };
 }
 
 /** The first-boot record's path (the data dir's published location). */
@@ -213,11 +102,11 @@ function readText(path: string): string | null {
  *  empty state (the wizard must never be bricked by its own file). */
 export function readOnboardingState(agentDir: string = defaultAgentDir()): OnboardingState {
   const text = readText(onboardingStatePath(agentDir));
-  if (text === null) return emptyOnboardingState();
+  if (text === null) return mergeOnboardingState(undefined);
   try {
     return mergeOnboardingState(JSON.parse(text));
   } catch {
-    return emptyOnboardingState();
+    return mergeOnboardingState(undefined);
   }
 }
 
