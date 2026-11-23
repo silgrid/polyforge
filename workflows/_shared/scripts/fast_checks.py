@@ -705,9 +705,22 @@ class CheckRun:
     #    skipped or run — serially, or group by group side by side
 
     def command_entry(self, p: PlannedCommand) -> Dict[str, Any]:
-        """The record entry a command starts from (the close adds the
-        command's source, its own contract)."""
+        """The record entry a command starts from; the fields a run adds
+        (the reuse key, the close's source) follow it in their old order."""
         return {"name": p.c.name, "phase": p.c.phase, "root": p.root_rel, "cmd": p.c.cmd}
+
+    def record_fields(self, p: PlannedCommand, entry: Dict[str, Any]) -> None:
+        """The fields the per-unit record adds after a command ran: the
+        reuse key's tree hash and serialized prerequisites (polyforge#182).
+        The close's record carries neither (polyforge#254 r2#1: its shape is
+        the pre-change one, byte for byte)."""
+        if self.trees.get(p.d, "") and not entry.get("skipped"):
+            entry["tree"] = self.trees[p.d]
+            entry["prereq_key"] = prereq_key(p.c)
+
+    def source_field(self, p: PlannedCommand, entry: Dict[str, Any]) -> None:
+        """The close's record names the command's source, appended after the
+        run (the per-unit record carries none)."""
 
     def reuse_key_of(self, p: PlannedCommand) -> Optional[ReuseKey]:
         """The key a previous green run is matched by (polyforge#182): the
@@ -781,9 +794,8 @@ class CheckRun:
                 self.details["commands"].append(entry)
                 continue
             entry, log_abs, tmp_dir = self.run_command(p)
-            if self.trees.get(p.d, "") and not entry.get("skipped"):
-                entry["tree"] = self.trees[p.d]
-                entry["prereq_key"] = prereq_key(c)
+            self.record_fields(p, entry)
+            self.source_field(p, entry)
             self.details["commands"].append(entry)
             if not entry.get("skipped"):
                 runs.append((entry, c, p.directory, p.root_rel, p.d, log_abs, tmp_dir))
@@ -858,15 +870,15 @@ class CheckRun:
                 entry = self.command_entry(p)
                 entry["skipped"] = True
                 entry["skip_reason"] = p.skip_reason
+                self.source_field(p, entry)
                 self.details["commands"].append(entry)
                 continue
             got = written[i]
             if got is None:
                 raise runner.ExecutorError("the grouped plan left `%s` unrecorded" % p.c.cmd)
             entry, log_abs, tmp_dir = got
-            if self.trees.get(p.d, "") and not entry.get("skipped"):
-                entry["tree"] = self.trees[p.d]
-                entry["prereq_key"] = prereq_key(p.c)
+            self.record_fields(p, entry)
+            self.source_field(p, entry)
             self.details["commands"].append(entry)
             runs.append((entry, p.c, p.directory, p.root_rel, p.d, log_abs, tmp_dir))
         return runs
@@ -1491,12 +1503,14 @@ class CloseRun(CheckRun):
         os.makedirs(log_dir, exist_ok=True)
         return self.start_box_at(os.path.join(self.capsule, "repos", self.repo), log_dir)
 
-    def command_entry(self, p: PlannedCommand) -> Dict[str, Any]:
-        """The record entry a command starts from: the close's own shape
-        carries the command's source (the conf's or the analyzer's)."""
-        entry = super().command_entry(p)
+    def record_fields(self, p: PlannedCommand, entry: Dict[str, Any]) -> None:
+        """The close's record carries no reuse key (polyforge#254 r2#1: its
+        shape is the pre-change one)."""
+
+    def source_field(self, p: PlannedCommand, entry: Dict[str, Any]) -> None:
+        """The close's record names the command's source (the conf's or the
+        analyzer's), in its old position after the run."""
         entry["source"] = p.c.source
-        return entry
 
     def reuse_key_of(self, p: PlannedCommand) -> Optional[ReuseKey]:
         """What a green run in a --reuse file is matched by: the same key a
@@ -1521,6 +1535,7 @@ class CloseRun(CheckRun):
         if key is None or key not in self.reuse_green:
             return None
         entry = self.command_entry(p)
+        entry["source"] = p.c.source
         entry["reused"] = self.reuse_green[key]
         return entry
 
