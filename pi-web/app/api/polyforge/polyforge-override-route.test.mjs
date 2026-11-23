@@ -32,6 +32,13 @@ writeFileSync(mode, "view");
 writeFileSync(join(work, "pf"), `#!${process.execPath}
 const fs = require("fs");
 const args = process.argv.slice(2);
+// Every invocation records its exit, so the test can wait for a dropped read
+// (the route starts it beside the watch read and does not await it) to finish
+// before the next reset clears the logs (polyforge#238 defect 3).
+process.on("exit", () => { try { fs.appendFileSync(${JSON.stringify(exitedLog)}, JSON.stringify(args) + "\\n"); } catch {} });
+// A read the route abandons on its timeout is killed with SIGTERM; terminate
+// through process.exit so the exit record is written too.
+for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => process.exit(0));
 if (args[0] === "--version") { process.stdout.write("v2.21.0\\n"); process.exit(0); }
 fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(args) + "\\n");
 const mode = fs.readFileSync(${JSON.stringify(mode)}, "utf8");
