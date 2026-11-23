@@ -36,6 +36,11 @@ type State struct {
 	memoryPolicy map[string]map[string]workspace.PolicyEntry
 	// agentLanguage is [daemon] agent_language ("" = unset: "en").
 	agentLanguage string
+	// stepTiers is cli.toml's [step_tiers] catalog (nil = absent: an
+	// empty catalog), the Host-only step-tier candidates the dispatch
+	// expands an overlay tier into (polyforge#81). Swapped whole, never
+	// mutated in place.
+	stepTiers map[string][]string
 	// The polyforge#51 failure-classification additions: the compiled
 	// Host-configured pattern lists (nil = none) and the slow-model
 	// judgement's two single-call latency bounds (0 = unset: the
@@ -206,6 +211,44 @@ func (s *State) SetMemoryPolicy(v map[string]map[string]workspace.PolicyEntry) {
 	}
 	s.mu.Lock()
 	s.memoryPolicy = v
+	s.mu.Unlock()
+}
+
+// StepTiers answers the [step_tiers] catalog as a deep copy: tier name →
+// its candidates (nil/empty = no catalog). The copy keeps a reader from
+// mutating the live state through a returned map or slice.
+func (s *State) StepTiers() map[string][]string {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	src := s.stepTiers
+	s.mu.RUnlock()
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[string][]string, len(src))
+	for tier, list := range src {
+		out[tier] = cloneList(list)
+	}
+	return out
+}
+
+// SetStepTiers swaps the whole [step_tiers] catalog (a reload's live
+// half; the caller hands over a freshly parsed map).
+func (s *State) SetStepTiers(v map[string][]string) {
+	if s == nil {
+		return
+	}
+	var cp map[string][]string
+	if v != nil {
+		cp = make(map[string][]string, len(v))
+		for tier, list := range v {
+			cp[tier] = cloneList(list)
+		}
+	}
+	s.mu.Lock()
+	s.stepTiers = cp
 	s.mu.Unlock()
 }
 

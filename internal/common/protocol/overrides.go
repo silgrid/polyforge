@@ -27,9 +27,14 @@ type OverrideStepView struct {
 	ModelsBy string   `json:"models_by,omitempty"`
 	ModelsAt string   `json:"models_at,omitempty"`
 	// Skip is tri-state (nil = no skip aspect set).
-	Skip   *bool  `json:"skip,omitempty"`
-	SkipBy string `json:"skip_by,omitempty"`
-	SkipAt string `json:"skip_at,omitempty"`
+	// Tier is the step's overlay capability-tier name (polyforge#81).
+	Tier         string `json:"tier,omitempty"`
+	TierBy       string `json:"tier_by,omitempty"`
+	TierAt       string `json:"tier_at,omitempty"`
+	TierFallback string `json:"tier_fallback,omitempty"`
+	Skip         *bool  `json:"skip,omitempty"`
+	SkipBy       string `json:"skip_by,omitempty"`
+	SkipAt       string `json:"skip_at,omitempty"`
 	// Params is the step's per-ticket param overrides (the overlay layer
 	// only, never the final value), sorted by name; a cleared param is
 	// no override and is not listed.
@@ -81,6 +86,10 @@ type OverrideWriteRequest struct {
 	// ClearParam names one to clear.
 	Param      *OverrideParam `json:"param,omitempty"`
 	ClearParam string         `json:"clear_param,omitempty"`
+	// Tier sets the step's capability-tier name (polyforge#81); ClearTier
+	// clears it.
+	Tier      string `json:"tier,omitempty"`
+	ClearTier bool   `json:"clear_tier,omitempty"`
 }
 
 // OverrideParam is a param write: the declared name and its value (one

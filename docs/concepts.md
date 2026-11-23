@@ -590,12 +590,18 @@ work item merges itself at its end — its conflicts with the default branch
 are resolved then, while they are its own, never in a later batch. Every
 step of the lane is an agent step: `sync`,
 `verification`, `publish` and `merge` are mechanical steps on the lane's
-`cheap` tier, each following a shared skill
+`cheap` tier (a lane-declared tier, distinct from the per-ticket
+capability tier below), each following a shared skill
 (`workflows/_shared/skills/<name>.md`, rendered into its prompt) that runs
 one pre-written command verbatim — `sync.py`, `verify.py`, `merge.py` — and
 routes on the exit code the command's result file carries; each first
 checks what the step before it handed off (its skill says what: the
-result file and the commits stamped in `handoff.md`). The daemon
+result file and the commits stamped in `handoff.md`). A work item's
+**capability tier** is the per-ticket layer above these lane tiers: the
+pre-submit analysis recommends one Host `[step_tiers]` tier per step as
+text, and the session sets it with `pf override <id> --step <s> --tier
+<name>` after the owner confirms (an explicit `--models` chain on the same
+step outranks it). The daemon
 orchestrates — the dispatch, the heavy-run admission, the merge lock, the
 rewind — and reads no content, and no agent merges by hand:
 

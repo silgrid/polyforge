@@ -164,18 +164,33 @@ daemon as at or after the signing release `v2.20.8`, and Pi Web's pf
 capability floors count a `v0.2.x` pf as newer than every `2.20.x` floor;
 it is all transition code, deleted together once no `v2.20.x` release is
 the current line anywhere — every other downgrade stays refused) is the one release entry for every artifact of a tag: it
-publishes the five payload assets — `pf-linux-amd64`, `pf-darwin-arm64`,
-`pf-darwin-amd64`, `aihub-image.digest` and the Pi Web package
-`silgrid-pi-web-<tag>.tgz` — plus `SHA256SUMS` covering those five and
-`release-manifest.json` (the tag, the commit, every payload with its
-sha256 and the aihub-first ordering statement), and
+publishes the six payload assets — `pf-linux-amd64`, `pf-darwin-arm64`,
+`pf-darwin-amd64`, `aihub-image.digest`, `workstation-image.digest` and the
+Pi Web package `silgrid-pi-web-<tag>.tgz` — plus `SHA256SUMS` covering those
+six and `release-manifest.json` (the tag, the commit, every payload with
+its sha256 and the aihub-first ordering statement), and two images:
 `ghcr.io/silgrid/polyforge-aihub:<tag>`, built from the linux `pf` binary with the
 entrypoint `pf aihub` (the image stays linux/amd64-only; another
 deployment names its own package with `RELEASE_IMAGE`, and `deploy.sh`
-with `GHCR_IMAGE`). GHCR creates the package on its first push, and a new
+with `GHCR_IMAGE`), and the workstation image
+`ghcr.io/silgrid/polyforge-workstation:<tag>` (polyforge#86) — built with
+buildx for linux/amd64 AND linux/arm64 in one pass, its multi-arch index
+built before the version is claimed and only pushed after it, its index
+digest published as `workstation-image.digest`. The public channel pushes
+the default repository above with the plain immutable version tag; a
+suffixed (internal) line must name its own workstation repository
+explicitly with `RELEASE_WORKSTATION_IMAGE` — unset, the release refuses
+before any work — and pushes `vX.Y.Z-<name>.N` there (private: a group
+member logs in with a `read:packages` token). The preflight checks buildx
+and the builder's platforms (arm64 needs the binfmt handlers registered or
+a native arm64 builder), and a fresh release refuses when either image's
+tag already exists in its package; a resume keeps the image that is
+already in the registry and publishes only the missing one, per image. GHCR creates the package on its first push, and a new
 package is private: once, an owner of the organization makes it public
 (the package's settings, "Danger Zone", "Change visibility", Public) so
-the image pulls without a login. A fresh release (not a resume) refuses
+the image pulls without a login — `release.sh --verify` proves it for the
+workstation image with an anonymous read (an empty `DOCKER_CONFIG`), and
+checks that its index carries both platforms. A fresh release (not a resume) refuses
 before any build or claim when its image tag already exists in the
 package, so it never pushes over another build's image. Pi Web
 (`pi-web/`, its own MIT npm package) is packed by the same entry from the
@@ -354,9 +369,12 @@ own versions the plain range stands, unchanged.
                               v
      GitHub release: pf-linux-amd64, pf-darwin-arm64,
      pf-darwin-amd64, aihub-image.digest,
-     silgrid-pi-web-<tag>.tgz, SHA256SUMS, release-manifest.json
-                              |  +  ghcr.io image <tag> (linux/amd64,
+     workstation-image.digest, silgrid-pi-web-<tag>.tgz,
+     SHA256SUMS, release-manifest.json
+                              |  +  ghcr.io aihub image <tag> (linux/amd64,
                               |     pf, entrypoint `pf aihub`)
+                              |  +  workstation image <tag> (linux/amd64
+                              |     and linux/arm64, one buildx index)
                               v
  DEPLOYMENT: `deploy.sh` for the aihub host; re-run `tools/install.sh` on work machines
  +-----------------------------------------------------------+
