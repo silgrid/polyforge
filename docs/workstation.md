@@ -526,7 +526,7 @@ open stays the human's. The manual clean-room checklist, the sanitized
 evidence template and the owner-run parts (a sandbox ticket to a merged
 PR, the Apple-silicon Mac's arm64 boot with the in-container Podman
 pass, the team path recorded NOT RUN) live in the release reference's
-[clean-room acceptance](../reference/release.md#clean-room-acceptance-workstation)
+[clean-room acceptance](reference/release.md#clean-room-acceptance-workstation)
 section.
 
 The first-boot pass also asserts AC2's layout half inside the container:
