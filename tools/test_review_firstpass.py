@@ -125,6 +125,20 @@ class BlockingOutcomesTest(unittest.TestCase):
         self.assertEqual(chain['outcome'], 'fixed')
         self.assertEqual(chain['rounds'], [1, 2])
 
+    def test_fixed_wins_over_a_residue_reference(self):
+        versions = _versions(
+            _review(1, 'FAIL', '## 发现\n\n### #1 blocking · bug — x\n'),
+            _review(2, 'PASS', '## 上一轮发现逐条核对\n\n- **r1#1 已修（残留 r0#9 的旧描述）**\n'))
+        [chain] = rf.chain_findings(self.cap, versions)
+        self.assertEqual(chain['outcome'], 'fixed')
+
+    def test_files_still_there_does_not_reopen_a_fix(self):
+        versions = _versions(
+            _review(1, 'FAIL', '## 发现\n\n### #1 blocking · bug — x\n'),
+            _review(2, 'PASS', '## 上一轮发现逐条核对\n\n- **r1#1 已修。** 两个文件都还在\n'))
+        [chain] = rf.chain_findings(self.cap, versions)
+        self.assertEqual(chain['outcome'], 'fixed')
+
     def test_last_mention_still_open_is_its_own_reason(self):
         versions = _versions(
             _review(1, 'FAIL', '## 发现\n\n### #1 blocking · bug — x\n'),
