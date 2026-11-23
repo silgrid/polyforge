@@ -429,6 +429,15 @@ export function AppShell() {
   // final for gating purposes" — an empty but settled list still flips it,
   // which a not-yet-loaded list never does.
   const [sessionCatalogReported, setSessionCatalogReported] = useState(false);
+  // The interface moves off a vanished session's project before any request
+  // can use its cwd (polyforge#252). Filled in by this unit's implementation
+  // commit; declared here so the component test runs real code.
+  const moveOffVanishedSession = useCallback((
+    _vanished: SessionInfo,
+    _remaining: readonly SessionInfo[],
+  ) => {
+    // (implementation)
+  }, []);
   const handleSessionsChange = useCallback((sessions: SessionInfo[]) => {
     setSessionCatalog(sessions);
     setSessionCatalogReported(true);
