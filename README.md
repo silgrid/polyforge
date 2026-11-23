@@ -40,6 +40,9 @@ harness without it. It ships only as part of the GitHub Release (the
 `silgrid-pi-web-<tag>.tgz` asset, the same release as `pf`) and is installed
 by the installer's `--with-pi-web`, not from npm — see
 [install: the web workbench](docs/install.md#optional-the-web-workbench-pi-web).
+That installer step is the host path; the workstation image is the other
+path, where Pi Web is a versioned component the first boot populates and an
+in-place upgrade moves — see [the workstation page](docs/workstation.md).
 
 ## Core concepts
 
