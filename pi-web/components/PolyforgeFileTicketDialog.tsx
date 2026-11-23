@@ -94,6 +94,7 @@ export function PolyforgeFileTicketDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        data-lane={lane ?? "none"}
         style={{ width: "min(520px, 100%)", maxHeight: "100%", overflowY: "auto", background: "var(--bg-panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}
       >
         <div id={titleId} style={{ fontSize: 13, fontWeight: 600 }}>{t("polyforge.messages.ticketTitle")}</div>
