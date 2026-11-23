@@ -1,22 +1,26 @@
 // carries: components/PolyforgeNotificationSettings.tsx, hooks/__fixtures__/settings-ui-props-stubs.mjs
 import "#test-env";
 import assert from "node:assert/strict";
-import { mock, test } from "node:test";
+import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createJiti } from "jiti";
 
 // Settings › Polyforge's notification card, rendered through the react-hook
 // shim: every assertion reads what the owner can switch or click, never the
 // source text.
-const shimPath = fileURLToPath(new URL("./__fixtures__/react-hook-shim.mjs", import.meta.url));
+const shimPath = fileURLToPath(new URL("../hooks/__fixtures__/react-hook-shim.mjs", import.meta.url));
+const modulePath = (path) => fileURLToPath(new URL(`../${path}`, import.meta.url));
 const jiti = createJiti(import.meta.url, {
   jsx: { runtime: "automatic" },
-  tsconfigPaths: true,
   alias: {
     react: shimPath,
-    "react/jsx-runtime": fileURLToPath(new URL("./__fixtures__/react-jsx-runtime.mjs", import.meta.url)),
-    "@/hooks/useI18n": fileURLToPath(new URL("./__fixtures__/polyforge-tasks-stubs.mjs", import.meta.url)),
-    "./SettingsUi": fileURLToPath(new URL("./__fixtures__/settings-ui-props-stubs.mjs", import.meta.url)),
+    "react/jsx-runtime": modulePath("hooks/__fixtures__/react-jsx-runtime.mjs"),
+    "@/hooks/useI18n": modulePath("hooks/__fixtures__/polyforge-tasks-stubs.mjs"),
+    "./SettingsUi": modulePath("hooks/__fixtures__/settings-ui-props-stubs.mjs"),
+    "@/hooks/usePolyforgePanelPreferences": modulePath("hooks/usePolyforgePanelPreferences.ts"),
+    "@/lib/polyforge-panel-preferences": modulePath("lib/polyforge-panel-preferences.ts"),
+    "@/lib/polyforge-notifications": modulePath("lib/polyforge-notifications.ts"),
+    "@/lib/i18n/types": modulePath("lib/i18n/types.ts"),
   },
 });
 const { renderHook } = await import(pathToFileURL(shimPath).href);
@@ -70,7 +74,6 @@ function install({ permission = "granted", storage = memory() } = {}) {
 }
 
 async function render() {
-  mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
   const hook = renderHook(PolyforgeNotificationSettings, {});
   await settle(); hook.flush(); await settle();
   return hook;
@@ -96,7 +99,7 @@ test("the switch is on by default and writes the browser preference", async () =
     assert.equal(offSwitch.props.checked, false, "a stored false renders the switch off");
     off.unmount();
   } finally {
-    mock.timers.reset();
+    // no timers: the card starts none
   }
 });
 
@@ -138,8 +141,8 @@ test("permission states are visible text and only default offers the authorize g
     assert.match(body(unsupported), /polyforge\.settings\.notificationsUnsupportedHint/);
     unsupported.unmount();
   } finally {
+    // no timers: the card starts none
     delete globalThis.Notification;
-    mock.timers.reset();
   }
 });
 
@@ -151,6 +154,6 @@ test("an unusable ledger is reported, so the owner knows notifications are pause
     assert.match(body(hook), /polyforge\.settings\.notificationsStorageBlocked/);
     hook.unmount();
   } finally {
-    mock.timers.reset();
+    // no timers: the card starts none
   }
 });
