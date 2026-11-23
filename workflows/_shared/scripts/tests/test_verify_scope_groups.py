@@ -91,6 +91,19 @@ class ScopeGroupDeclarationTest(GitCase):
                 self.assertEqual(report_of(c)["full_parallel"], 1, "an invalid parallelism falls back to serial")
                 self.assertEqual(cmds_of(c)[1]["group"], "go", "the group binding itself stays valid")
 
+    def test_the_first_valid_parallelism_wins(self) -> None:
+        """polyforge#244 self-review#1: an invalid line never shadows a later
+        valid one, and two valid lines keep the first."""
+        d = self.repo("valid-wins", "group=go|full-1\nfull_parallel=0\nfull_parallel=3\n")
+        c = run_engine(d)
+        self.assertEqual(c.returncode, 0, c.stderr)
+        self.assertEqual(report_of(c)["full_parallel"], 3, "the first valid declaration wins over an earlier invalid one")
+        d = self.repo("first-valid", "group=go|full-1\nfull_parallel=3\nfull_parallel=7\n")
+        c = run_engine(d)
+        self.assertEqual(c.returncode, 0, c.stderr)
+        self.assertIn("second full_parallel", c.stderr)
+        self.assertEqual(report_of(c)["full_parallel"], 3, "a second valid declaration is diagnosed and ignored")
+
     def test_a_group_naming_no_full_command_is_diagnosed_and_dropped(self) -> None:
         d = self.repo("unbound", "group=go|full-9\ngroup=go|no-such-command\n")
         c = run_engine(d)
