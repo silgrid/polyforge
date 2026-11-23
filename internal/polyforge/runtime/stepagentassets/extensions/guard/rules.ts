@@ -803,11 +803,14 @@ export function isWholeTreeRun(argv: string[]): boolean {
 	switch (runner) {
 		case "go test":
 			if (has("-run", "-skip", "-bench", "-fuzz", "-example", "-list")) return false;
-			return positional.length === 0 || positional.every((a) => a === "./..." || a.endsWith("/..."));
+			// only the whole tree is `./...`; a `./<subdir>/...` subtree is a
+			// narrower target and therefore a targeted run (review r1#2)
+			return positional.length === 0 || positional.every((a) => a === "./...");
 		case "npm test":
 			if (has("-t", "--testNamePattern", "--testPathPattern", "--grep", "-g", "--filter")) return false;
 			if (rest.includes("--")) return false;
-			return true;
+			// a positional argument is handed to the script: a targeted run
+			return positional.length === 0;
 		case "pytest":
 			if (has("-k", "-m", "--deselect", "--ignore", "--lf", "--last-failed", "--sw")) return false;
 			return positional.length === 0;
@@ -821,7 +824,7 @@ export function isWholeTreeRun(argv: string[]): boolean {
 			if (runner.startsWith("npm run ")) {
 				if (has("-t", "--testNamePattern", "--testPathPattern", "--grep", "-g", "--filter")) return false;
 				if (rest.includes("--")) return false;
-				return true;
+				return positional.length === 0;
 			}
 			return false;
 	}
