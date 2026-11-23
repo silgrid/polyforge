@@ -1156,9 +1156,11 @@ func TestReleaseScriptCommittedNotesUsedAsIs(t *testing.T) {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	body, _ := os.ReadFile(filepath.Join(w.fakeRel, "v1.2.1", ".body"))
-	// the committed notes, byte for byte, then the integration batch's
-	// record; the committed file itself is not touched
-	if !strings.HasPrefix(string(body), "# hand written\n\n## Integration batch\n\n") || !strings.Contains(string(body), "green integrate batch `wi_b`") {
+	// the committed notes, byte for byte, then the workstation image's
+	// section (polyforge#86), then the integration batch's record - which
+	// stays the LAST section (#14 r1#5); the committed file itself is not
+	// touched
+	if !strings.HasPrefix(string(body), "# hand written\n\n## Workstation image\n\n") || !strings.Contains(string(body), "ghcr.io/silgrid/polyforge-workstation:v1.2.1") || !strings.Contains(string(body), "green integrate batch `wi_b`") {
 		t.Fatalf("notes = %q", body)
 	}
 	if got := relGit(t, w.work, "status", "--porcelain"); got != "" {

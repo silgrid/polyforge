@@ -31,6 +31,33 @@ Everything the workstation needs lives in `dist/workstation/`:
 | `seccomp.json` | the pinned seccomp profile the outer engine applies (origin and SHA beside it) |
 | `smoke.sh` | the acceptance driver: `boot`, `first-boot`, `persist`, `env`, `podman-verify` |
 
+## Running a published image
+
+A published release needs no repository checkout and no `gh`: the image
+address plus the version is the whole install (the public package must be
+made public once by an org owner - GHCR creates it private on the first
+push; `release.sh --verify` checks the anonymous read). Point compose's
+`WORKSTATION_IMAGE` at the published tag and `docker compose --profile
+aihub up -d` (or `--profile no-aihub` for the opt-out) boots the machine;
+an upgrade is changing the tag and running it again. The internal channel's
+image is private: a group member logs in once with a token that carries
+`read:packages` (`docker login ghcr.io -u <user>`) and pulls the same way.
+
+The host-side files export from the image itself, so the versions always
+match the image:
+
+```sh
+docker run --rm --entrypoint tar ghcr.io/silgrid/polyforge-workstation:v0.2.4 \
+  -C /opt/polyforge/host-files -cf - . | tar -xf -
+```
+
+writes `compose.yaml`, `seccomp.json` (with its SHA), `Caddyfile` and
+`smoke.sh` - the smoke's own export set - into the current directory;
+`WORKSTATION_IMAGE=<published tag> sh ./smoke.sh first-boot` then measures
+the machine with nothing but Docker on the host. The image preinstalls the
+pinned pi and Claude Code harness packages; each user logs in with their
+own credentials (the harness login section names Claude Code's terms).
+
 ## Boot modes
 
 The outer container runs the measured minimal parameter set — exactly
@@ -322,8 +349,7 @@ docker compose --profile aihub exec workstation /components/current/harness/clau
 ```
 
 Logins land in pf-home (`/root/.pi/agent`, `/root/.claude`) and survive
-a re-create. Claude Code is subject to Anthropic's Commercial Terms of
-Service.
+a re-create. Claude Code is subject to Anthropic's Commercial Terms of Service.
 
 ## Verification with podman
 

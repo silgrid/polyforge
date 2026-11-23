@@ -1503,6 +1503,13 @@ if [ -z "$REL_EXISTS" ]; then
     } >"$WORK/notes.md"
   fi
   {
+    # the workstation image this release also publishes (polyforge#86): the
+    # install story (image address + version, no gh) and the preinstall's
+    # fourth condition - the commercial-terms line (Q9). It comes before the
+    # batch section, which stays the notes' last (#14 r1#5).
+    printf '\n## Workstation image\n\n'
+    printf 'This release also publishes the workstation image %s:%s for linux/amd64 and linux/arm64 (its multi-arch index digest is the workstation-image.digest asset; the host-side files export from the image - see docs/workstation.md). The image preinstalls the pinned pi and Claude Code harness packages; each user logs in with their own credentials.\n' "$WS_IMAGE" "$TAG"
+    printf 'Claude Code 受 Anthropic 商业条款约束\n'
     printf '\n## Integration batch\n\n'
     printf 'Released from the green integrate batch `%s` - its pinned commits are the release object;\nits full-gate run is the test evidence (this procedure runs no test gate of its own).\n' "$BATCH"
     if [ -n "$RED_AFTER" ]; then
