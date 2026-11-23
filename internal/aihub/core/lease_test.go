@@ -11,6 +11,7 @@ package core
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"sync"
 	"testing"
@@ -308,4 +309,80 @@ func TestLeaseRestartNoDoubleHolder(t *testing.T) {
 	if b := mustLeaseAcquire(t, m2, leaseReq("r-b", key, "m-b", "alpha#2")); b.Status != LeaseStatusGranted {
 		t.Fatalf("B after the TTL = %+v, want granted", b)
 	}
+}
+
+// TestLeaseConcurrentAcquire pins AC1's "simultaneous" half: several
+// independent callers start on one barrier and race for one key. Exactly
+// one is granted, every other one is queued, no call errors, and the queue
+// positions are a distinct 1..n-1 — a read-then-write split (no single
+// compare-and-write transaction) turns the extra callers into errors or a
+// second grant.
+func TestLeaseConcurrentAcquire(t *testing.T) {
+	m, _, _ := newLeaseEnv(t)
+	const key = "github.com/o/app\nmain"
+	const n = 8
+	start := make(chan struct{})
+	results := make([]*LeaseGrant, n)
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			results[i], errs[i] = m.Acquire(leaseReq(
+				fmt.Sprintf("r-%d", i), key, fmt.Sprintf("m-%d", i), fmt.Sprintf("alpha#%d", i)))
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	granted, queued := 0, 0
+	positions := map[int]bool{}
+	for i, g := range results {
+		if errs[i] != nil {
+			t.Fatalf("caller %d errored: %v", i, errs[i])
+		}
+		switch g.Status {
+		case LeaseStatusGranted:
+			granted++
+			if !leaseTokenShape.MatchString(g.Token) {
+				t.Fatalf("grant %d carries no token: %+v", i, g)
+			}
+		case LeaseStatusQueued:
+			queued++
+			positions[g.Position] = true
+		default:
+			t.Fatalf("caller %d = %+v, want granted or queued", i, g)
+		}
+	}
+	if granted != 1 || queued != n-1 {
+		t.Fatalf("grants=%d queues=%d, want exactly 1 granted and %d queued", granted, queued, n-1)
+	}
+	for p := 1; p < n; p++ {
+		if !positions[p] {
+			t.Fatalf("queue positions = %v, want the distinct set 1..%d", positions, n-1)
+		}
+	}
+}
+
+// TestLeaseLookupExpired pins the recovered daemon's read: a grant whose
+// TTL passed is not reported held. Before a new acquire takes the key, the
+// lookup answers CORE-409 LEASE_LOST; after that acquire the request id is
+// no longer a lease request at all (CORE-404).
+func TestLeaseLookupExpired(t *testing.T) {
+	m, _, clk := newLeaseEnv(t)
+	const key = "github.com/o/app\nmain"
+	if a := mustLeaseAcquire(t, m, leaseReq("r-a", key, "m-a", "alpha#1")); a.Status != LeaseStatusGranted {
+		t.Fatalf("A = %+v, want granted", a)
+	}
+	clk.Advance(300 * time.Second)
+	leaseWantErr(t, func() error { _, err := m.Lookup("r-a", "m-a", "alpha#1"); return err }(),
+		api.ErrCoreConflict, "LEASE_LOST")
+	b := mustLeaseAcquire(t, m, leaseReq("r-b", key, "m-b", "alpha#2"))
+	if b.Status != LeaseStatusGranted {
+		t.Fatalf("B = %+v, want granted after the expiry", b)
+	}
+	leaseWantErr(t, func() error { _, err := m.Lookup("r-a", "m-a", "alpha#1"); return err }(),
+		api.ErrCoreNotFound, "LEASE_NOT_QUEUED")
 }
