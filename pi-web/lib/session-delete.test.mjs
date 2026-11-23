@@ -1,6 +1,6 @@
 import "#test-env";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -123,4 +123,41 @@ test("what stays is re-pointed at its nearest ancestor left, or loses a parent n
 test("ids already gone delete nothing and say so", async (t) => {
   await scratchAgentDir(t);
   assert.deepEqual(await deleteSessions(["nobody", "nobody"]), { deleted: [], missing: ["nobody"] });
+});
+
+// polyforge#252: the allowed-roots cache is a 5 s scan of the session list, so
+// a delete pi-web itself completed must not wait for that TTL to stop granting
+// the deleted session's cwd. A failed delete keeps the cache as it was.
+test("a successful delete invalidates the allowed-roots cache; a failed one leaves it", async (t) => {
+  const { sessionsDir, ids } = await scratchAgentDir(t);
+  globalThis.__piAllowedRootsCache = undefined;
+  globalThis.__piAdditionalAllowedRoots = new Set();
+  const cwdKeep = "/work/cache-keep";
+  const cwdGone = "/work/cache-gone";
+  await writeSession(sessionsDir, "cache-keep", { id: "cache-keep", cwd: cwdKeep });
+  await writeSession(sessionsDir, "cache-gone", { id: "cache-gone", cwd: cwdGone });
+  ids.push("cache-keep", "cache-gone");
+  const { getAllowedFileRoots } = await jiti.import("./file-access.ts");
+
+  const before = await getAllowedFileRoots();
+  assert.equal(before.has(cwdGone), true, "the cache holds the deleted session's cwd before the delete");
+
+  await deleteSessions(["cache-gone"]);
+  const after = await getAllowedFileRoots();
+  assert.equal(after.has(cwdGone), false, "the deleted session's cwd leaves the cache at once, not after the TTL");
+  assert.equal(after.has(cwdKeep), true, "a surviving session's cwd stays allowed");
+
+  // A non-ENOENT failure (the header read on a directory answers EISDIR) is
+  // returned as it always was, and the cache is left untouched.
+  const broken = await writeSession(sessionsDir, "cache-broken", { id: "cache-broken", cwd: "/work/cache-broken" });
+  ids.push("cache-broken");
+  invalidateSessionListCache();
+  await getAllowedFileRoots();
+  const cacheBeforeFailure = globalThis.__piAllowedRootsCache;
+  assert.equal(cacheBeforeFailure.roots.has("/work/cache-broken"), true, "the cache holds the third session's cwd");
+  rmSync(broken, { force: true });
+  mkdirSync(broken);
+  await assert.rejects(deleteSessions(["cache-broken"]), (error) => error && error.code !== "ENOENT");
+  assert.equal(globalThis.__piAllowedRootsCache, cacheBeforeFailure, "a failed delete leaves the cache as it was");
+  assert.equal(globalThis.__piAllowedRootsCache.roots.has("/work/cache-broken"), true);
 });
