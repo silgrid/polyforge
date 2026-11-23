@@ -20,6 +20,8 @@
 // script file — accepted (owner ruling Q3: only direct commands, no
 // anti-bypass arms race).
 
+import * as path from "node:path";
+
 export const MAX_SLEEP_SECONDS = 3;
 
 // ---------------------------------------------------------------------------
@@ -666,6 +668,17 @@ export function syntaxNote(displayPath: string, plan: SyntaxCheckPlan, outcome: 
 
 // ---------------------------------------------------------------------------
 // build's whole-suite test guard (polyforge#243)
+//
+// In the build step a `bash` call that runs a repository's whole-suite
+// tests — a test command declared in the full phase, run against the whole
+// tree — is blocked with the sanctioned form: the build's close runs it
+// once, through `fast_checks.py`, and one unit's test is run with the test
+// runner's own name filter. The pattern comes from the repository
+// declaration (the `verify-scope --full --json` projection, schema 1),
+// never from a hardcoded command: this module only splits a command into
+// (effective directory, argv) segments and compares them with the
+// projection. It is pure — the caller supplies the projection and the
+// starting directory.
 
 export interface CommandSegment {
 	dir: string;
@@ -690,26 +703,178 @@ export interface FullSuiteVerdict {
 	reason: string;
 }
 
-export function parseCommandSegments(_command: string, _startDir: string): CommandSegment[] {
-	return [];
+// The test-runner vocabulary: the leading words a declared command uses to
+// run tests. `npm run <script>` counts only when the script's name carries
+// `test` (a lint or build script stays out). This is stack knowledge, not a
+// repository's command text (owner plan-review ruling 2).
+const TEST_RUNNERS: Array<{ words: string[]; scriptIncludesTest?: boolean }> = [
+	{ words: ["go", "test"] },
+	{ words: ["npm", "test"] },
+	{ words: ["npm", "run"], scriptIncludesTest: true },
+	{ words: ["pytest"] },
+	{ words: ["cargo", "test"] },
+];
+
+// parseCommandSegments splits a bash command into its command words, each
+// with the effective directory a leading `cd <dir> &&` chain leaves it in.
+// Prefix assignments and wrappers are dropped (commandWords), so
+// `GOWORK=off go test ./...` is `go test ./...`. A `cd` target that only
+// an expansion could resolve ($VAR, backtick) is not guessed: the segment
+// keeps the old directory, so the caller's root lookup cannot match and the
+// command passes (fail-open, #214's ruling).
+export function parseCommandSegments(command: string, startDir: string): CommandSegment[] {
+	if (typeof command !== "string" || command === "") return [];
+	const cmds = commandWords(lex(command));
+	const out: CommandSegment[] = [];
+	let dir = path.resolve(startDir);
+	for (const c of cmds) {
+		const argv = [strip(c.text), ...c.args.map(strip)];
+		if (argv[0] === "cd") {
+			const target = argv.slice(1).find((a) => !a.startsWith("-"));
+			if (target && !/[$`]/.test(target)) dir = path.resolve(dir, target);
+			continue;
+		}
+		out.push({ dir, argv });
+	}
+	return out;
 }
 
+// normalizeArgv strips the quotes the lexer kept and moves `-count=<n>` (in
+// either spelling) to the end, so two spellings of one command that differ
+// only in environment-assignment order or `-count` placement share a key.
 export function normalizeArgv(argv: string[]): string[] {
-	return argv;
-}
-
-export function testRunner(_argv: string[]): { words: string[]; rest: string[] } | undefined {
-	return undefined;
-}
-
-export function isWholeTreeRun(_argv: string[]): boolean {
-	return false;
+	const out: string[] = [];
+	const counts: string[] = [];
+	for (let i = 0; i < argv.length; i++) {
+		const a = strip(argv[i]);
+		if (a === "-count" && i + 1 < argv.length) {
+			counts.push(`-count=${strip(argv[i + 1])}`);
+			i++;
+			continue;
+		}
+		if (a.startsWith("-count=")) {
+			counts.push(`-count=${a.slice("-count=".length)}`);
+			continue;
+		}
+		out.push(a);
+	}
+	return out.concat(counts);
 }
 
 export function commandKey(dir: string, argv: string[]): string {
-	return dir + ":" + argv.join(" ");
+	return path.resolve(dir) + "\u0000" + normalizeArgv(argv).join("\u0001");
 }
 
-export function judgeFullSuite(_segments: CommandSegment[], _projections: RootProjection[], _capsuleDir: string): FullSuiteVerdict | undefined {
+// testRunner classifies an argv: the runner words to compare and the tail
+// the whole-tree decision reads, or undefined when the command does not run
+// tests at a command position.
+export function testRunner(argv: string[]): { words: string[]; rest: string[] } | undefined {
+	const norm = normalizeArgv(argv);
+	for (const r of TEST_RUNNERS) {
+		if (norm.length < r.words.length) continue;
+		let same = true;
+		for (let i = 0; i < r.words.length; i++) {
+			if (norm[i] !== r.words[i]) {
+				same = false;
+				break;
+			}
+		}
+		if (!same) continue;
+		const tail = norm.slice(r.words.length);
+		if (r.scriptIncludesTest && !/test/i.test(tail[0] ?? "")) continue;
+		return r.scriptIncludesTest
+			? { words: r.words.concat(tail[0]), rest: tail.slice(1) }
+			: { words: r.words, rest: tail };
+	}
 	return undefined;
+}
+
+// isWholeTreeRun decides whether a test-runner invocation targets the whole
+// tree: `./...` (or a bare runner, which the declaration uses for the same
+// run) with no name filter. A narrower package/path/file argument or a
+// filter option makes it a targeted run, which the build may make.
+export function isWholeTreeRun(argv: string[]): boolean {
+	const r = testRunner(argv);
+	if (!r) return false;
+	const rest = r.rest;
+	const has = (...flags: string[]) => rest.some((a) => flags.some((f) => a === f || a.startsWith(f + "=")));
+	const runner = r.words.join(" ");
+	const positional = rest.filter((a) => !a.startsWith("-"));
+	switch (runner) {
+		case "go test":
+			if (has("-run", "-skip", "-bench", "-fuzz", "-example", "-list")) return false;
+			return positional.length === 0 || positional.every((a) => a === "./..." || a.endsWith("/..."));
+		case "npm test":
+			if (has("-t", "--testNamePattern", "--testPathPattern", "--grep", "-g", "--filter")) return false;
+			if (rest.includes("--")) return false;
+			return true;
+		case "pytest":
+			if (has("-k", "-m", "--deselect", "--ignore", "--lf", "--last-failed", "--sw")) return false;
+			return positional.length === 0;
+		case "cargo test":
+			if (has("--test", "--lib", "--bin", "--example", "--bench")) return false;
+			if (rest.includes("--")) return false;
+			return positional.length === 0;
+		default:
+			// `npm run <script>`: the script name is the runner; its own
+			// `--` arguments name a subset.
+			if (runner.startsWith("npm run ")) {
+				if (has("-t", "--testNamePattern", "--testPathPattern", "--grep", "-g", "--filter")) return false;
+				if (rest.includes("--")) return false;
+				return true;
+			}
+			return false;
+	}
+}
+
+// judgeFullSuite blocks the first segment that runs a whole-suite test
+// command declared at its effective directory. The full-phase entries are
+// the candidates; an entry a cheaper phase (fast/scoped/micro or a
+// base_setup) declares at the same directory is subtracted first, so a
+// command the declaration itself calls cheaper stays allowed.
+export function judgeFullSuite(segments: CommandSegment[], projections: RootProjection[], capsuleDir: string): FullSuiteVerdict | undefined {
+	const cheap = new Set<string>();
+	for (const p of projections) for (const e of p.cheap) cheap.add(commandKey(e.dir, e.argv));
+	const reposRoot = path.resolve(capsuleDir, "repos");
+	for (const seg of segments) {
+		const agentRunner = testRunner(seg.argv);
+		if (!agentRunner) continue;
+		const whole = isWholeTreeRun(seg.argv);
+		const agentKey = commandKey(seg.dir, seg.argv);
+		for (const p of projections) {
+			for (const e of p.full) {
+				const entryKey = commandKey(e.dir, e.argv);
+				if (cheap.has(entryKey)) continue;
+				if (entryKey === agentKey) return blockFullSuite(seg, reposRoot);
+				if (path.resolve(e.dir) !== path.resolve(seg.dir)) continue;
+				const entryRunner = testRunner(e.argv);
+				if (!entryRunner) continue;
+				if (entryRunner.words.join(" ") === agentRunner.words.join(" ") && whole) {
+					return blockFullSuite(seg, reposRoot);
+				}
+			}
+		}
+	}
+	return undefined;
+}
+
+function blockFullSuite(seg: CommandSegment, reposRoot: string): FullSuiteVerdict {
+	const trigger = "`" + seg.argv.join(" ") + "`";
+	const rel = path.relative(reposRoot, seg.dir);
+	const name = rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel) ? rel.split(path.sep)[0] : "<repo>";
+	const scoped =
+		`"$PF_PYTHON" "$PF_SHARED_DIR/scripts/fast_checks.py" --repo ${name} --close-scoped ` +
+		`--unit-runs artifacts/build/units.json --json --out artifacts/build/scoped-close/${name}.json`;
+	return {
+		block: true,
+		rule: "full-test",
+		trigger,
+		reason:
+			`step guard: blocked — ${trigger} runs a repository's whole-suite tests, which the build's close runs once through the written fast-check command.\n` +
+			`Do instead:\n` +
+			`- the close's scoped selection, from the capsule root: ${scoped}\n` +
+			`- one unit's test, filtered by the test runner's own name filter: ` +
+			"`go test <package> -run '^<TestName>$' -count=1`, `pytest -k <pattern>`, or `npm test -- <file>` — " +
+			`a suite with no filter runs once, in the scoped command.`,
+	};
 }
