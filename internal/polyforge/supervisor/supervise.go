@@ -125,7 +125,11 @@ type supProc struct {
 	// way to the main loop (allDead waits for it, so no manager is left
 	// blocked on a channel nobody reads).
 	inflight bool
-	fails    int
+	// postExitHold is this child's snapshot of supPostExitSendHold,
+	// taken when it was created: the test seam delays the manager right
+	// after its exit event was sent (polyforge#251). nil in production.
+	postExitHold func(*supProc)
+	fails        int
 	// stop marks "do not restart"; done is closed with it so a manager
 	// sleeping its backoff wakes at once.
 	stop bool
@@ -209,6 +213,16 @@ func RunSupervise(rs RunSpec) int {
 			st.active, st.viaSignal = true, true
 			stopAll()
 		case e := <-exits:
+			// The event is here: this run is no longer in flight, and
+			// the main loop is the one that settles it. The manager may
+			// be descheduled right after its send, so clearing the flag
+			// there raced this very check — the run then waited out the
+			// whole grace with nothing left to kill and answered 1
+			// (polyforge#251). Clearing it here, before allSettled, is
+			// the single place the reception is visible to the loop.
+			e.proc.mu.Lock()
+			e.proc.inflight = false
+			e.proc.mu.Unlock()
 			if e.proc.daemon && !st.active && (e.code == 0 || e.code == NeedsOperatorExit) {
 				// the daemon ended the run itself (Q3): the container
 				// stops with its code
@@ -217,11 +231,20 @@ func RunSupervise(rs RunSpec) int {
 				stopAll()
 			}
 		case <-deadline:
-			st.killed = true
 			deadline = nil
-			logf("the stop grace ran out: SIGKILL to every child still running")
+			// The run reports a SIGKILL only when one really ended a
+			// child still running: a straggler that already exited is
+			// not a SIGKILL, and the run must not answer 1 for it
+			// (polyforge#251).
+			killed := false
 			for _, p := range procs {
-				p.kill()
+				if p.kill() {
+					killed = true
+				}
+			}
+			st.killed = killed
+			if killed {
+				logf("the stop grace ran out: SIGKILL to every child still running")
 			}
 		}
 		if st.active && allSettled() {
@@ -245,9 +268,17 @@ func RunSupervise(rs RunSpec) int {
 // proc whose start is in flight. nil in production.
 var supPreStartHold func(p *supProc)
 
+// supPostExitSendHold, when non-nil, runs in every child's manager right
+// after its exit event was handed to the main loop — the test seam that
+// pins the last-exit-event race (polyforge#251). Snapshotted into supProc
+// at creation, so a test's Cleanup restoring the variable never races a
+// manager still reading it. nil in production.
+var supPostExitSendHold func(p *supProc)
+
 // newSupProc answers one managed child.
 func newSupProc(spec ChildSpec, daemon bool, baseDelay time.Duration) *supProc {
-	return &supProc{spec: spec, daemon: daemon, baseDelay: baseDelay, done: make(chan struct{})}
+	return &supProc{spec: spec, daemon: daemon, baseDelay: baseDelay,
+		postExitHold: supPostExitSendHold, done: make(chan struct{})}
 }
 
 // manage runs the child's start/wait/backoff loop until the run stops it.
@@ -285,9 +316,9 @@ func (p *supProc) manage(exits chan<- supExit, runDone <-chan struct{}) {
 		case <-runDone:
 			return
 		}
-		p.mu.Lock()
-		p.inflight = false
-		p.mu.Unlock()
+		if p.postExitHold != nil {
+			p.postExitHold(p)
+		}
 		if p.daemon && code == UpgradeRestartExit {
 			// the daemon asked for the restart-for-an-upgrade
 			// (polyforge#175): relaunch AT ONCE — no failure count,
@@ -421,13 +452,15 @@ func (p *supProc) term() {
 	}
 }
 
-// kill is the grace's end: SIGKILL to a child still running.
-func (p *supProc) kill() {
+// kill is the grace's end: SIGKILL to a child still running, answering
+// whether it signalled one (polyforge#251).
+func (p *supProc) kill() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.cmd != nil && p.cmd.Process != nil {
-		_ = p.cmd.Process.Kill()
+	if p.cmd == nil || p.cmd.Process == nil {
+		return false
 	}
+	return p.cmd.Process.Kill() == nil
 }
 
 // backoff answers the nth consecutive failure's restart delay: first
