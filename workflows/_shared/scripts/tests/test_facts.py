@@ -1033,13 +1033,18 @@ class PlanPrefixNormalizeTest(GitCase):
                            {"pi-web/app/page.tsx": "new\n"},
                            prefix_plan("`app/page.tsx` (write)", "`app/docs/page.md` (the row)"))
         code, res = self.plan_conformance(cap)
-        self.assertEqual(code, 1, res["summary"],
-                         "an unchanged coupled obligation is judged red (conformant())")
+        self.assertEqual(code, 1,
+                         "an unchanged coupled obligation is judged red (conformant()): " + res["summary"])
         self.assertEqual(res["details"]["unchanged_obligations"], ["app/docs/page.md"])
         self.assertEqual(res["details"]["released"], [])
-        cap = self.capsule("prefix-obligation-lapsed", base,
-                           {"pi-web/app/docs/page.md": "new\n"},
-                           prefix_plan("`app/page.tsx` (write)", "`app/docs/page.md` (the row)"))
+        # the obligation's parent write is not in the diff: the obligation lapses
+        plan = ("# plan\n\n## Units\n\n1. **u1** — the page\n"
+                "   - Touched files: `app/page.tsx` (write)\n"
+                "   - Coupled obligations: `app/docs/page.md` (the row)\n"
+                "2. **u2** — the other\n"
+                "   - Touched files: `other.tsx` (write)\n"
+                "   - Coupled obligations: none — fixture\n")
+        cap = self.capsule("prefix-obligation-lapsed", base, {"pi-web/other.tsx": "new\n"}, plan)
         code, res = self.plan_conformance(cap)
         self.assertEqual(code, 0, res["summary"])
         self.assertEqual(len(res["details"]["released"]), 1)
