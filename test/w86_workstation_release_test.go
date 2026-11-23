@@ -368,3 +368,58 @@ func TestW86PreflightNeedsBuildxAndArm64(t *testing.T) {
 		})
 	}
 }
+
+// TestW86Channel (AC4): the public channel pushes the workstation image to
+// the default public repository under the plain immutable version tag (Q1,
+// pinned by TestW86Build's --tag assertion); a suffixed (internal) line
+// that does not explicitly set RELEASE_WORKSTATION_IMAGE refuses before any
+// work - an internal release must never silently push to the public
+// package - and with it set, the image goes to the named internal
+// repository under the suffixed tag vX.Y.Z-<name>.N.
+func TestW86Channel(t *testing.T) {
+	// a suffixed line without the variable refuses before any work
+	w := newRelSuffixWorld(t, relSuffixConf("fork"))
+	out, err := w.runPinned(nil)
+	if err == nil {
+		t.Fatalf("a suffixed line without RELEASE_WORKSTATION_IMAGE must refuse:\n%s", out)
+	}
+	for _, want := range []string{"RELEASE_WORKSTATION_IMAGE", "suffix=fork", "ghcr.io/silgrid/polyforge-workstation", "nothing done"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the refusal lacks %q:\n%s", want, out)
+		}
+	}
+	if c := w.calls(); len(c) != 0 {
+		t.Fatalf("work ran before the refusal: %v", c)
+	}
+	if got := w.originTags(); strings.Contains(got, "fork.1") {
+		t.Fatalf("the version was claimed despite the refusal: %q", got)
+	}
+
+	// with the variable set, the workstation image pushes to the internal
+	// repository under the suffixed tag
+	w2 := newRelSuffixWorld(t, relSuffixConf("fork"))
+	out, err = w2.runPinned([]string{"RELEASE_WORKSTATION_IMAGE=ghcr.io/example-org/fork-workstation"})
+	if err != nil {
+		t.Fatalf("the internal release must run with the variable set: %v\n%s", err, out)
+	}
+	var pushLine string
+	for _, c := range w2.calls() {
+		if strings.HasPrefix(c, "docker buildx build") && strings.Contains(c, " --push") {
+			pushLine = c
+		}
+	}
+	if !strings.Contains(pushLine, "--tag ghcr.io/example-org/fork-workstation:v0.2.0-fork.1") {
+		t.Fatalf("the push build must carry the internal repository and the suffixed tag:\n%s", pushLine)
+	}
+	for _, c := range w2.calls() {
+		if strings.Contains(c, "polyforge-workstation") {
+			t.Fatalf("the internal release must not touch the public package: %v", w2.calls())
+		}
+	}
+	if dg, _ := os.ReadFile(filepath.Join(w2.fakeRel, "v0.2.0-fork.1", "workstation-image.digest")); strings.TrimSpace(string(dg)) != relFakeDigest {
+		t.Fatalf("workstation-image.digest = %q, want the registry's index digest", dg)
+	}
+	if vout, verr := w2.run([]string{"RELEASE_WORKSTATION_IMAGE=ghcr.io/example-org/fork-workstation"}, "--verify", "v0.2.0-fork.1"); verr != nil {
+		t.Fatalf("the internal release must verify: %v\n%s", verr, vout)
+	}
+}
