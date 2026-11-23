@@ -1435,7 +1435,9 @@ full reference.
   shared and an unusable `--reuse` file the error it always was — and a red command keeps the per-unit
   bar's one
   targeted re-run, its baseline triage and whole-command confirmation,
-  all of it in each group's own container when one was declared;
+  the selected commands in each group's own container when one was
+  declared, the engine asks, the re-runs, the baseline triage and the
+  whole-command confirmation in the close's own container;
   `--parallel <N>` overrides the plan's parallelism (a positive integer;
   1 runs the plan serially — the comparison baseline and the manual
   override), for the per-unit and the close run alike;

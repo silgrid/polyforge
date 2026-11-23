@@ -131,8 +131,8 @@ Then the build close's scoped selection — the same
 light-tier selection verification plans, one shared implementation, over the final tree, group by group (each
 group's own commands in plan order: a command's group is the group its report bound it to else its report's root,
 the groups side by side at most `--parallel N` at once, default 2, one group or `--parallel 1` the serial plan) —
-run in the repository's declared verification image when its HEAD carries `.polyforge/Dockerfile.verify` (the same isolation verification runs — one container for the engine asks, the selected commands, the re-runs and the
-baseline's base worktree, the image and tool caches it shares — while a repo without the declaration keeps the host
+run in the repository's declared verification image when its HEAD carries `.polyforge/Dockerfile.verify` (the same isolation verification runs — one container per group for the selected commands, the engine asks, the re-runs and the
+baseline's base worktree in the close's own container, the image and tool caches it shares — while a repo without the declaration keeps the host
 close exactly as before, the per-unit runs always on the host), the result file recording which isolation ran (`details.isolation`, `host`/`container`) — for a work item whose verification runs the light tier (an integration batch's fix ticket
 runs the full bar and closes without one): `"$PF_PYTHON"
 "$PF_SHARED_DIR/scripts/fast_checks.py" --repo <name> --close-scoped --unit-runs artifacts/build/units.json --reuse
@@ -142,8 +142,8 @@ root's subtree tree hash, the declared prerequisites — matches is evidence, no
 close consumes no `--reuse` green evidence, the image and tool caches stay shared and an unusable file is still exit 2);
 the existing tests it selects are the ones verification will select, a red one getting the one targeted
 re-run the per-unit bar gives and the same baseline triage (`--unit-runs` protecting this change's own test commits) — all
-of it in each group's own container when one was declared (one container per group: a container's reap kills every
-process in it after a command): a container the close cannot build, start or keep is the run's error
+the selected commands in each group's own container when one was declared, the serial phases in the close's own
+container (one container per group: a container's reap kills every process in it after a command): a container the close cannot build, start or keep is the run's error
 (exit 2, never a red of the change's, never a host stand-in). A red or `incomplete` result (the engine answered full, or a selected command cannot run) never hands off `done` without the owner's ruling —
 with one exception — a `pass`-verdict result whose selection status is `pre_existing` (every
 entry of its `reds[]` pre-existing on the `details.baseline` the run names): not this change's,

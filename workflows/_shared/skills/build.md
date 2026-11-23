@@ -184,12 +184,13 @@ record exactly what ran.
    isolation ran (`details.isolation`, `host`/`container`) — its reds triaged on the same
    baseline (the close's `--unit-runs` protecting
    the files this change's test commits touched — a test this lane authored is never
-   pre-existing), all of it in the container each group was given when one
-   was declared (one container per group: a container's reap kills every
+   pre-existing), the selected commands in each group's own container when
+   one was declared (one container per group: a container's reap kills every
    process in it after a command, so commands sharing one container would
-   kill each other): a container the close cannot build, start or keep is
-   the run's error (exit 2, never a red of the change's, never a host
-   stand-in). A red or `incomplete` result never hands off `done` without the owner's ruling —
+   kill each other), the engine asks, the re-runs, the baseline triage and
+   the whole-command confirmation in the close's own container: a container
+   the close cannot build, start or keep is the run's error (exit 2, never
+   a red of the change's, never a host stand-in). A red or `incomplete` result never hands off `done` without the owner's ruling —
    except a red result every entry of whose `reds[]` the run records `pre_existing` (its
    `details.baseline` naming the commit, the setup and the runs it judged on): that one is
    not this change's, and the close hands off `done` citing the result file, its `details.selected`
