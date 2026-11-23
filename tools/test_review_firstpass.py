@@ -29,9 +29,12 @@ def _review(round_no, verdict, findings):
 
 
 def _versions(*texts):
-    return [{'round': rf.review_round(t) or i + 1,
-             'verdict': rf.review_verdict(t), 'text': t}
-            for i, t in enumerate(texts)]
+    out = []
+    for i, t in enumerate(texts):
+        rnd = rf.review_round(t) or i + 1
+        out.append({'round': rnd, 'verdict': rf.review_verdict(t), 'text': t,
+                    'items': rf.parse_blocking_items(t, rnd)})
+    return out
 
 
 def _item(text, round_no):
