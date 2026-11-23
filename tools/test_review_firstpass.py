@@ -88,6 +88,22 @@ class BlockingParseTest(unittest.TestCase):
         self.assertEqual([(i['item'], i['class']) for i in _item(text, 1)],
                          [(1, 'guarantee')])
 
+    def test_non_blocking_marker_is_not_an_item(self):
+        text = _review(1, 'FAIL', '## 发现\n\n- **#1 非阻断**：plan-conformance 把一处说明当成阻断。\n')
+        self.assertEqual(_item(text, 1), [])
+
+    def test_a_non_blocking_count_in_a_bullet_is_not_an_item(self):
+        text = _review(1, 'FAIL', (
+            '## 发现\n\n'
+            '- **#227** https://example.invalid/x（MERGED，review 第 4 轮 PASS，7 条非阻断）：说明。\n'))
+        self.assertEqual(_item(text, 1), [])
+
+    def test_a_number_range_placeholder_is_not_an_item(self):
+        text = _review(1, 'FAIL', (
+            '## 发现\n\n'
+            '### #2–#5 —（编号保留给 r1 的 4 条阻断，均已修，见上表）\n'))
+        self.assertEqual(_item(text, 1), [])
+
     def test_mention_of_an_earlier_round_is_not_an_item(self):
         text = _review(2, 'PASS', '## 上一轮发现逐条核对\n\n- **r1#1 已修。**\n')
         self.assertEqual(_item(text, 2), [])
