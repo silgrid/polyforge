@@ -2,6 +2,7 @@
 import "#test-env";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import ts from "typescript";
 import test from "node:test";
 import { createJiti } from "jiti";
 
@@ -148,10 +149,23 @@ test("the running items are buttons in Claude's grid; no history entry renders a
 
 test("polyforge#255 u5: a queued subagent opens the same in-chat panel as a running one", async () => {
   // Q7 A: both states open the panel; a queued run shows the wait and its
-  // disabled input there. The row must not gate its click on `running`.
+  // disabled input there. The row's handler is executed, not matched as text.
   const source = await readFile(new URL("./PiRunningList.tsx", import.meta.url), "utf8");
-  assert.match(source, /onClick=\{\(\) => onOpenSubagent\(run\.sessionId, label\)\}/, "the subagent row forwards every state to the opener");
-  assert.doesNotMatch(source, /if \(running\) onOpenSubagent/, "the click is not gated on the running state");
+  const ast = ts.createSourceFile("PiRunningList.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let handler = null;
+  const walk = (node) => {
+    if (handler) return;
+    if (ts.isArrowFunction(node) && node.getText(ast).includes("onOpenSubagent(run.sessionId")) {
+      handler = node.getText(ast);
+      return;
+    }
+    ts.forEachChild(node, walk);
+  };
+  walk(ast);
+  assert.ok(handler, "the running list's subagent click handler exists");
+  const opened = [];
+  new Function("running", "onOpenSubagent", "run", "label", `return (${handler})()`)(false, (...args) => opened.push(args), { sessionId: "sub-1" }, "Audit the parsers");
+  assert.deepEqual(JSON.parse(JSON.stringify(opened)), [["sub-1", "Audit the parsers"]], "a queued row forwards its opener");
   const html = render({ subagents: [subagent({ status: "queued", description: "" })] });
   assert.match(html, /<button[^>]*data-pi-subagent-item="sub-1"[^>]*data-pi-subagent-status="queued"/, "a queued run is a button");
 });
