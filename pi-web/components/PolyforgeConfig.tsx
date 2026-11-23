@@ -1685,7 +1685,7 @@ function CellSettings({ profile, cwd, active, epoch, onWritten, onPageStatus, ti
                   const advanced = zone.items.filter((item) => !common.includes(item));
                   const fold = regionToggle(region, lockMarker(advanced.map((item) => item.key)));
                   return (
-                    <div key={zone.id} className={`polyforge-config-zone is-${zone.id}`}>
+                    <div key={zone.id} className="polyforge-config-zone" data-zone={zone.id}>
                       <p className="polyforge-config-zone-title">{`${file}${ZONE_SECTION[zone.id]}`}</p>
                       {hasDaemon && <p className="polyforge-config-card-hint">{t("polyforge.settings.configGroupDaemonHint")}</p>}
                       <div className={`polyforge-config-grid${hasDaemon ? " has-daemon" : ""}`}>

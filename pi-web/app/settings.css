@@ -3459,6 +3459,7 @@ select.mcp-add-input {
 .polyforge-install-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
 .polyforge-install-run { display: grid; gap: 6px; min-width: 0; }
 .polyforge-install-conclusion { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
+.polyforge-install-conclusion.is-running { color: var(--accent); }
 .polyforge-install-conclusion.is-succeeded { color: #16a34a; }
 .polyforge-install-conclusion.is-failed { color: #ef4444; }
 .polyforge-install-conclusion.is-refused { color: #d97706; }

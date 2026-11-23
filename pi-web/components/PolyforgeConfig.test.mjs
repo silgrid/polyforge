@@ -249,7 +249,9 @@ test("one cli.toml card holds the top-level, [daemon] and [summarize] zones, eac
   assert.match(source, /flat: "",\s*\n\s*daemon: " \[daemon\]",\s*\n\s*model: " \[model\]",\s*\n\s*summarize: " \[summarize\]",/);
   assert.match(source, /<p className="polyforge-config-zone-title">\{`\$\{file\}\$\{ZONE_SECTION\[zone\.id\]\}`\}<\/p>/);
   assert.match(source, /const file = polyforgeCellFileName\(profile\);/, "the file is the Cell's own (cli.toml / cli-<profile>.toml)");
-  assert.match(source, /<div key=\{zone\.id\} className=\{`polyforge-config-zone is-\$\{zone\.id\}`\}>/);
+  // polyforge#257 r1#2: the zone id is a data attribute, not a class with no
+  // rule — every className a settings component renders must resolve.
+  assert.match(source, /<div key=\{zone\.id\} className="polyforge-config-zone" data-zone=\{zone\.id\}>/);
   // One card: one section opens before the zone loop, the loop lives inside it.
   const cli = source.slice(source.indexOf('className="polyforge-config-card polyforge-config-cli"'), source.indexOf("the connection-key confirmation renders"));
   assert.ok(cli.length > 0, "the cli.toml card exists");
