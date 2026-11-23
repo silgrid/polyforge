@@ -141,6 +141,13 @@ type DaemonSettings struct {
 	// duration > 0; 0 = unset, daemon default 15m); flag --ask-warm-window.
 	// Restart-only.
 	AskWarmWindow time.Duration
+	// AskAutoReplyEnabled is the Cell's switch for the daemon's automatic
+	// reply to a low-star question card (polyforge#239): nil = unset (on),
+	// an explicit false turns it off. Cell, live.
+	AskAutoReplyEnabled *bool
+	// AskAutoReplyTimeout is how long such a card waits before the automatic
+	// reply (Go duration > 0; 0 = unset, default 30m). Cell, live.
+	AskAutoReplyTimeout time.Duration
 	// HarnessRoot is the parent of the step harness dirs (absolute path;
 	// daemon default <data-dir>); flag --harness-root.
 	HarnessRoot string
