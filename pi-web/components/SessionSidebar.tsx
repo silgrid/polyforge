@@ -1554,6 +1554,11 @@ export function SessionSidebar({ selectedSessionId, highlightSessionId, followHi
   }, []);
 
   const restoredRef = useRef(false);
+  // The entry workspace is chosen once, from the first settled catalogue. A
+  // later return to "no selection" is AppShell moving off a vanished session,
+  // and the catalogue in hand may still be the pre-delete one — choosing from
+  // it again would put the deleted project back (polyforge#252 r1#1).
+  const initialWorkspaceSelectedRef = useRef(false);
 
   const projectSelection = useCallback((root: string, key: string): ProjectSelection => ({
     root,
@@ -1642,9 +1647,12 @@ export function SessionSidebar({ selectedSessionId, highlightSessionId, followHi
       : null);
   }, [workspaceSwitch]);
 
-  // Auto-select cwd and restore session from URL on first load
+  // Auto-select cwd and restore session from URL on first load. It runs once:
+  // after the entry workspace is chosen, a null selection means AppShell moved
+  // off a vanished session and must not be undone from a stale catalogue.
   useEffect(() => {
     if (allSessions.length === 0 || skipInitialProjectSelection) return;
+    if (initialWorkspaceSelectedRef.current) return;
 
     if (selectedCwd === null) {
       // If restoring a session, set cwd to match that session
@@ -1657,6 +1665,7 @@ export function SessionSidebar({ selectedSessionId, highlightSessionId, followHi
           // project becomes the explorer's trailing section — resolved to the
           // project root, never a worktree cwd.
           setExplorerSelection({ root: target.projectRoot ?? target.cwd, key: workspaceKeyOf(target) });
+          initialWorkspaceSelectedRef.current = true;
           onSelectSession(target, true);
           return;
         }
@@ -1669,6 +1678,7 @@ export function SessionSidebar({ selectedSessionId, highlightSessionId, followHi
         // One-shot initial auto-select: the most recent project becomes the
         // explorer's trailing section on load.
         setExplorerSelection(projects[0]);
+        initialWorkspaceSelectedRef.current = true;
       }
     }
   }, [allSessions, selectedCwd, initialSessionId, skipInitialProjectSelection, onSelectSession, onInitialRestoreDone]);
@@ -2213,6 +2223,10 @@ export function SessionSidebar({ selectedSessionId, highlightSessionId, followHi
         onFocus={() => void prefetchSessionView(family.root.id)}
         onRenamed={loadSessions}
         onDeleted={(id) => {
+          // Drop the row from the catalogue in hand first: the workspace
+          // decision and the entry auto-selection both read it, and it still
+          // lists the session being deleted (polyforge#252 r1#1).
+          setAllSessions((current) => current.filter((session) => session.id !== id));
           onSessionDeleted?.(id);
           loadSessions();
         }}

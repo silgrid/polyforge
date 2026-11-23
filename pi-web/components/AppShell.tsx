@@ -251,6 +251,10 @@ export function AppShell() {
   // project, which the selection-driven prop sync cannot express.
   const [workspaceSwitch, setWorkspaceSwitch] = useState<{ root: string | null; key: string | null; token: number } | null>(null);
   const workspaceSwitchTokenRef = useRef(0);
+  // The session ids the last catalogue report carried: only a session that was
+  // reported and then vanished was deleted elsewhere. A fork (or a just-created
+  // session) the list has not reported yet is not one (polyforge#252 r1#8).
+  const reportedSessionIdsRef = useRef<Set<string>>(new Set());
   // pi#108: the Polyforge dock panel. The bg-tasks dock that shared this
   // slot retired with the built-in running list (#173): a pi session's
   // background tasks now live above its composer and in their detail panel.
@@ -483,10 +487,19 @@ export function AppShell() {
     // A refreshed catalogue that no longer carries the selected session means
     // another process deleted it (an external delete, not pi-web's own, which
     // handles itself below). Its cwd is no longer authorized by any session, so
-    // move off it before a request uses it. A transient draft is not in the
-    // catalogue by design and is never treated as vanished.
+    // move off it before a request uses it. Only a session a previous report
+    // carried counts as vanished — a fork still landing in the list was never
+    // reported and must not kick the user out — and a transient draft is not in
+    // the catalogue by design.
     const active = selectedSessionRef.current;
-    if (active && !active.transient && !sessions.some((session) => session.id === active.id)) {
+    const reportedBefore = reportedSessionIdsRef.current;
+    reportedSessionIdsRef.current = new Set(sessions.map((session) => session.id));
+    if (
+      active
+      && !active.transient
+      && reportedBefore.has(active.id)
+      && !sessions.some((session) => session.id === active.id)
+    ) {
       moveOffVanishedSession(active, sessions);
     }
   }, [moveOffVanishedSession]);
