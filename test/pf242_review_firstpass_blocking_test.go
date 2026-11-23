@@ -143,7 +143,7 @@ func pf242Fixtures(t *testing.T) (string, string) {
 				pf242Review("# polyforge#242 review · 第 1 轮", "**结论：FAIL** —— 1 条阻断。",
 					"## 发现\n\n### #1 blocking · guarantee — the open guarantee\n\nbody\n"),
 				pf242Review("# polyforge#242 review · 第 2 轮", "**结论：FAIL** —— 1 条阻断。",
-					"## 发现\n\n### #1 blocking · guarantee（残留 r1#1）— still open\n\nbody\n"),
+					"## 发现\n\n### #1 blocking · guarantee — still open\n\nr1#1 仍在（本轮 #1）\n"),
 				pf242Review("# polyforge#242 review · 第 3 轮", "**结论：PASS** —— 0 条阻断。",
 					"## 上一轮发现逐条核对\n\n- **r2#1 已修。**\n"),
 			},

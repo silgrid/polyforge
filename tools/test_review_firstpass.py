@@ -202,6 +202,15 @@ class BlockingOutcomesTest(unittest.TestCase):
         self.assertEqual(chain['outcome'], 'unknown')
         self.assertEqual(chain['reason'], 'last mention still open')
 
+    def test_this_round_reference_links_the_chain(self):
+        versions = _versions(
+            _review(1, 'FAIL', '## 发现\n\n### #1 blocking · guarantee — x\n'),
+            _review(2, 'FAIL', '## 发现\n\n### #1 blocking · guarantee — x\n\nr1#1 仍在（本轮 #1）\n'),
+            _review(3, 'PASS', '## 上一轮发现逐条核对\n\n- **r2#1 已修。**\n'))
+        [chain] = rf.chain_findings(self.cap, versions)
+        self.assertEqual(chain['outcome'], 'fixed')
+        self.assertEqual(chain['rounds'], [1, 2])
+
     def test_rebutted_and_owner_and_fixed(self):
         versions = _versions(
             _review(1, 'FAIL', (
