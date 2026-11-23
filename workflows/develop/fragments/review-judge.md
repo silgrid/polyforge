@@ -77,7 +77,10 @@
    and a declared coupled obligation left unchanged (`unchanged_obligations`): facts,
    blocking only inside a class — an obligation the repo's `AGENTS.md` names is
    `project_rule`, an undeclared change that removes or weakens a guarantee is
-   `guarantee`; anything else is recorded non-blocking.
+   `guarantee`; anything else is recorded non-blocking. A plan path relative to a nested
+   project root (a directory carrying its own tracked `.polyforge/verify-scope.conf`)
+   names that root's file when exactly one root holds it — a repository-root path wins and
+   an ambiguous relative path stays an `undeclared` fact.
 
 6. **The change analysis (`test_weakened`)** — read `artifacts/build/change-analysis.json`
    (build's close wrote it): the analysis is review's to judge for obviously missing tests —

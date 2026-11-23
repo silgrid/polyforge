@@ -1101,7 +1101,11 @@ setting:
   the same `selected`, the shared validator taking it as green-equivalent
   evidence. Review runs four pre-written lines of the workflow's script
   `facts.py` as written — `plan-conformance` (the plan's two-way
-  conformance with the diff, and its `## 已定对照` mapping of the ticket's
+  conformance with the diff — a plan path relative to a nested project
+  root, a directory carrying its own tracked `.polyforge/verify-scope.conf`,
+  names that root's file when exactly one root holds it; a repository-root
+  path wins and an ambiguous relative path stays undeclared — and its
+  `## 已定对照` mapping of the ticket's
   decided rulings — an unmapped one red and named), `build --replay --isolation host` (each
   unit's test commit a one-parent
   ancestor of its implementation commit holding test paths only, every

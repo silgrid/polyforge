@@ -38,7 +38,7 @@ owner only in the cases item 3 names, and judge the plan; without sub-agents, do
    behaviour its test observes, how its expected values are derived independently of the implementation,
    the change it catches — the bar below), `Touched files: <path> (write|read), ...` and `Coupled
    obligations:` (what must change with each write — the repo's `AGENTS.md` names its known couplings —
-   or `none` and why); `## Coverage` — per criterion `test` (its unit's test), `existing` (the test
+   or `none` and why; a declared path is repository-root relative, and a path relative to a nested project root — a directory carrying its own tracked `.polyforge/verify-scope.conf` — names that root's file when exactly one root holds it, so an ambiguous relative path must be written repository-root relative); `## Coverage` — per criterion `test` (its unit's test), `existing` (the test
    already pinning it) or `doc` (the file and its validator) — the table your skill gives — and for a
    user-visible criterion its e2e scenario or one line why a unit test suffices. The plan carries a
    `## 分析对照` section beside `## Units` — its own `##` heading, never inside it (the plan-conformance
