@@ -31,7 +31,7 @@ func TestAutoAnswerParseCard(t *testing.T) {
 		{"surrounding whitespace", "  \n  " + autoAnswerCardTwoRows + "  \n", []string{"A：JSON", "B：两次"}, true},
 		{"escaped pipe is a literal pipe", "| 问题 | 推荐选项 | 理由 | 重点关注程度 |\n|---|---|---|---|\n| 1. 格式 | A\\|B | 可审计 | ★ |\n", []string{"A|B"}, true},
 		{"inline code pipe does not split", "| 问题 | 推荐选项 | 理由 | 重点关注程度 |\n|---|---|---|---|\n| 1. 格式 | `A|B` | 可审计 | ★ |\n", []string{"`A|B`"}, true},
-		{"colon separator", "| 问题 | 推荐选项 | 理由 | 重点关注程度 |\n|:---|---|---:|\n| 1. 格式 | A | 可审计 | ★ |\n", []string{"A"}, true},
+		{"colon separator", "| 问题 | 推荐选项 | 理由 | 重点关注程度 |\n|:---|---|---|---:|\n| 1. 格式 | A | 可审计 | ★ |\n", []string{"A"}, true},
 
 		{"★★★★★ refuses", "| 问题 | 推荐选项 | 理由 | 重点关注程度 |\n|---|---|---|---|\n| 1. 格式 | A | 可审计 | ★★★ |\n", nil, false},
 		{"empty star refuses", "| 问题 | 推荐选项 | 理由 | 重点关注程度 |\n|---|---|---|---|\n| 1. 格式 | A | 可审计 |  |\n", nil, false},
