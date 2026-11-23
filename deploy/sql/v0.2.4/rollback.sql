@@ -21,3 +21,11 @@ UPDATE work_items
                 WHERE b.id = work_items.id)
  WHERE id IN (SELECT id FROM split_attrs_before_w174);
 DROP TABLE split_attrs_before_w174;
+
+-- 4. the generic lease base (polyforge#245) is this window's, not a
+--    durable provenance table: the rollback drops it so the old version
+--    starts on the pre-window shape (drain every lock cycle first; an
+--    old daemon never acquires).
+DROP TABLE IF EXISTS leases;
+DROP TABLE IF EXISTS lease_waiters;
+DROP TABLE IF EXISTS repo_aliases;
