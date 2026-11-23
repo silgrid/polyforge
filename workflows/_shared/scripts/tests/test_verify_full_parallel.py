@@ -24,9 +24,9 @@ import os
 import re
 import tempfile
 import unittest
-from typing import Any, Dict, List, Tuple, Type
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from pfstep import container
+from pfstep import container, runner
 
 from .capsuleutil import TEST_DOCKERFILE
 from .fakebox import FakeRuntime
@@ -126,11 +126,11 @@ class FullParallelBase(unittest.TestCase):
                   encoding="utf-8") as f:
             f.write(json.dumps(rep))
 
-    def runtime(self, sub: str = "box", cls: Type[FakeRuntime] = FakeRuntime) -> FakeRuntime:
+    def runtime(self, sub: str = "box",
+                make: Optional[Callable[[str], FakeRuntime]] = None) -> FakeRuntime:
         d = os.path.join(self.root, sub)
         os.makedirs(d, exist_ok=True)
-        rt = cls(d)
-        return rt
+        return (make or FakeRuntime)(d)
 
     def out(self, sub: str) -> str:
         return os.path.join(self.root, "res-" + sub, "result.json")
@@ -276,14 +276,17 @@ class GroupBoxFailureTest(FullParallelBase):
         fx, eng = self.fixture()
         cmds = marker_cmds()
         self.write_report(eng, report("full", *cmds, full_parallel=2))
-        rt = self.runtime(cls=SecondStartFailsRuntime)
+        rt = self.runtime(make=lambda d: SecondStartFailsRuntime(d))
         r = run_verify(fx.capsule, eng, tier="full", runtime=rt, out=self.out("start-fail"))
         self.assertEqual(r.exit, 2, r.result.get("summary"))
         summary = r.result.get("summary", "")
         self.assertIn("the verification container could not be prepared", summary)
         self.assertIn("repos/app", summary)
-        self.assertNotIn("PF253GO1", " ".join(" ".join(e[3]) for e in rt.execs),
-                         "no group command runs on the host: %r" % rt.execs)
+        # a host run would be no FakeRuntime exec: the fallback shows in the
+        # worktree, where the group's command would leave its marker
+        self.assertFalse(os.path.exists(os.path.join(fx.repo("app"), "go1.going")),
+                         "no group command runs on the host (its marker would be in the worktree)")
+        self.assertFalse(os.path.exists(os.path.join(fx.repo("app"), "web1.going")), "nor the other group's")
 
     def test_group_container_lost_incomplete(self) -> None:
         """A group's container lost while the bar ran leaves the record
@@ -291,10 +294,69 @@ class GroupBoxFailureTest(FullParallelBase):
         fx, eng = self.fixture()
         cmds = marker_cmds()
         self.write_report(eng, report("full", *cmds, full_parallel=2))
-        rt = self.runtime(cls=GroupBoxLostRuntime)
+        rt = self.runtime(make=lambda d: GroupBoxLostRuntime(d))
         r = run_verify(fx.capsule, eng, tier="full", runtime=rt, out=self.out("lost"))
         self.assertEqual(r.exit, 2, r.result.get("summary"))
         self.assertIn("became unusable", r.result.get("summary", ""))
+
+
+class WorkerFaultTest(FullParallelBase):
+    def test_a_worker_fault_leaves_the_run_not_judged(self) -> None:
+        """A fault of the script inside a group worker never becomes a pass:
+        the run is not judged (exit 2) and the summary names the command and
+        the fault — the serial path's own rule (a fault is never a verdict)."""
+        fx, eng = self.fixture()
+        cmds = marker_cmds()
+        self.write_report(eng, report("full", *cmds, full_parallel=2))
+        rt = self.runtime(make=lambda d: FaultyRuntime(d, "PF253GO2", RuntimeError("the report reader broke")))
+        r = run_verify(fx.capsule, eng, tier="full", runtime=rt, out=self.out("fault"))
+        self.assertEqual(r.exit, 2, r.result.get("summary"))
+        summary = r.result.get("summary", "")
+        self.assertIn("the verification could not run", summary)
+        self.assertIn("go2", summary)
+        self.assertIn("RuntimeError", summary)
+        self.assertIn("the report reader broke", summary)
+
+
+class GroupInterruptTest(FullParallelBase):
+    def test_an_interrupt_in_a_group_stops_the_run(self) -> None:
+        """An interrupt while a group's command runs stops the whole run: exit
+        2, and the phases after the bar — here the build's unit run — never
+        start (the serial path's own behaviour)."""
+        fx, eng = self.fixture()
+        cmds = marker_cmds()
+        self.write_report(eng, report("full", *cmds, full_parallel=2))
+        units = os.path.join(self.root, "units-interrupt.json")
+        with open(units, "w", encoding="utf-8") as f:
+            f.write(json.dumps([{
+                "id": "u1", "test_commit": fx.head("app"), "impl_commit": fx.head("app"),
+                "run": {"repo": "app", "cwd": ".", "argv": [
+                    "bash", "-c", ": PF253UNIT; touch unit.ran; echo UNIT_OK"]},
+                "marker": "UNIT_OK",
+            }]))
+        rt = self.runtime(make=lambda d: FaultyRuntime(d, "PF253GO2", runner.Interrupted(15)))
+        r = run_verify(fx.capsule, eng, "--unit-runs", units, tier="full", runtime=rt,
+                       out=self.out("interrupt"))
+        self.assertEqual(r.exit, 2, r.result.get("summary"))
+        self.assertIn("interrupted", r.result.get("summary", ""))
+        self.assertFalse(os.path.exists(os.path.join(fx.repo("app"), "unit.ran")),
+                         "the unit run after the bar never starts: its marker is not written")
+
+
+class FaultyRuntime(FakeRuntime):
+    """A fake container engine whose exec raises a fault for the command
+    carrying token — a script's fault (RuntimeError) or an interrupt
+    (runner.Interrupted), never a verdict of the command itself."""
+
+    def __init__(self, tmp_root: str, token: str, exc: BaseException) -> None:
+        super().__init__(tmp_root)
+        self.token = token
+        self.exc = exc
+
+    def exec_argv(self, cid: str, workdir: str, env: Any, argv: Any) -> List[str]:
+        if self.token in " ".join(argv):
+            raise self.exc
+        return super().exec_argv(cid, workdir, env, argv)
 
 
 class SecondStartFailsRuntime(FakeRuntime):
