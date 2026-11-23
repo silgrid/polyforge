@@ -2231,14 +2231,15 @@ def parse_parallel(v: str) -> int:
     Empty takes the repository's declaration."""
     if v == "":
         return 0
-    if not gostr_trim_ascii_digits(v) or int(v) <= 0:
+    try:
+        n = int(v)
+    except ValueError:
+        raise Usage("--parallel %s: not a positive integer" % gostr.quote(v)) from None
+    # int() also reads a padded or non-ASCII digit string; the flag is one
+    # plain positive integer.
+    if n <= 0 or str(n) != v:
         raise Usage("--parallel %s: not a positive integer" % gostr.quote(v))
-    return int(v)
-
-
-def gostr_trim_ascii_digits(v: str) -> bool:
-    """Whether v is one or more ASCII digits."""
-    return v != "" and all("0" <= ch <= "9" for ch in v)
+    return n
 
 
 def parse_duration_flag(name: str, v: str) -> int:
