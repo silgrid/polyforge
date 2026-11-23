@@ -27,6 +27,7 @@ export async function checkModelDiscovery(page) {
   try {
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     const settings = page.getByRole("dialog", { name: "Settings", exact: true });
+    // The models.json editor is embedded in the unified Models page.
     await settings.getByRole("button", { name: "Models", exact: true }).click();
     const modelRows = settings.locator(".models-sidebar-indented-item");
     await modelRows.filter({ hasText: /^claude-existing$/ }).waitFor(); // a model without a name is listed by its id

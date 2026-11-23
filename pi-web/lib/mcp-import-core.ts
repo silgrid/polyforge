@@ -197,7 +197,8 @@ export interface McpImportServer {
   /** True when values were taken as pi syntax (`pi mcp add`, or the "this is a pi config" toggle). */
   rawPi: boolean;
   /** The scope the source asked for (`pi mcp add -l`, `--scope user|project`); the panel decides. */
-  scopeHint?: "global" | "project";
+  /** The paste's own scope: claude's local (#85 85c, Q5) joins pi's global/project. */
+  scopeHint?: "global" | "project" | "local";
 }
 
 export type McpImportResult =
@@ -470,7 +471,7 @@ export interface VsCodeInput {
 export class ServerDraft {
   name: string | undefined;
   originalName: string | undefined;
-  scopeHint: "global" | "project" | undefined;
+  scopeHint: "global" | "project" | "local" | undefined;
   transport: "stdio" | "http" | undefined;
   command: Segment[] | undefined;
   args: Segment[][] = [];

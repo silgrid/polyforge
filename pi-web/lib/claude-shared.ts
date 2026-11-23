@@ -19,8 +19,8 @@ export const CLAUDE_RESTART_REFUSED_CODE = "claude_restart_refused";
 /**
  * A new claude session's model: claude's own `default` alias, which the
  * CLI resolves itself (`--model default`). The list the composer offers is claude's
- * aliases from its `initialize` answer (lib/claude-probe.ts) plus Settings › Claude's
- * custom names; nothing is pinned here.
+ * aliases from its `initialize` answer (lib/claude-probe.ts) plus the custom
+ * names of claude's own native modelPicker; nothing is pinned here.
  */
 export const DEFAULT_CLAUDE_MODEL = "default";
 
@@ -111,7 +111,7 @@ export function claudeFirstMessage(text: string, imageCount: number): string {
 export type ClaudeDelivery = "absorbed" | "queued";
 
 /**
- * The permission modes Settings › Claude offers a new claude session,
+ * The permission modes the permission page's approval pane offers a claude session,
  * as claude 2.1.322's init and `set_permission_mode` name them. `default` passes no
  * `--permission-mode` (claude's own `permissions.defaultMode` applies); claude's other
  * modes (auto, dontAsk, bypassPermissions) are not offered.
@@ -136,7 +136,7 @@ export function claudePlanModeAllowed(approvalMode: ClaudePermissionMode): boole
   return approvalMode === "ask";
 }
 /** Why plan is unavailable (the API's refusal; the pages show their own localized text). */
-export const CLAUDE_PLAN_UNAVAILABLE_REASON = "Plan mode needs claude tool permissions set to Ask in a dialog (Settings › General): on Deny silently claude would refuse to leave plan mode";
+export const CLAUDE_PLAN_UNAVAILABLE_REASON = "Plan mode needs claude tool permissions set to Ask in a dialog (Settings › Permissions): on Deny silently claude would refuse to leave plan mode";
 
 /**
  * A claude model name passed to `--model` verbatim: one of claude's
@@ -165,7 +165,7 @@ export function isClaudeRecordedVersion(value: unknown): boolean {
 /**
  * One entry of GET /api/claude's model list: one of claude's aliases from
  * its `initialize` answer (`source: "alias"`, with the full name it resolves to), or one
- * of Settings › Claude's custom names (`source: "custom"`). `value` goes to `--model`.
+ * of claude's native modelPicker custom names (`source: "custom"`, 85a4). `value` goes to `--model`.
  */
 export interface ClaudeModelOption {
   value: string;
@@ -206,6 +206,29 @@ export interface ClaudeFeature {
 export const CLAUDE_FEATURE_MIN_VERSION = { backgroundTasks: "2.1.322", subagentText: "2.1.322" } as const;
 
 /**
+ * claude's native `skillOverrides` values, verified in the 2.1.319, 2.1.322 and
+ * 2.1.326 binaries (`strings` carries the four words together; the settings key
+ * appears in the same binaries). 2.1.312 cannot be verified here, so writes
+ * refuse below the floor (never write what you cannot recognize).
+ */
+export const CLAUDE_SKILL_OVERRIDE_STATES = ["enabled", "disabled", "name-only", "user-invocable-only"] as const;
+
+/** One value of claude's native `skillOverrides`. */
+export type ClaudeSkillOverrideState = (typeof CLAUDE_SKILL_OVERRIDE_STATES)[number];
+
+/** Whether `value` is one of claude's own skillOverrides words. */
+export function isClaudeSkillOverrideState(value: unknown): value is ClaudeSkillOverrideState {
+  return typeof value === "string" && (CLAUDE_SKILL_OVERRIDE_STATES as readonly string[]).includes(value);
+}
+
+/**
+ * The first claude version whose binary proves the `skillOverrides` values above
+ * (85d 风险4: 查清再加). A claude older than this refuses the skills write, even
+ * inside the write gate's known range.
+ */
+export const CLAUDE_SKILL_OVERRIDES_MIN_VERSION = "2.1.319";
+
+/**
  * `a` against `b`, segment by segment as numbers (a missing segment is 0): negative,
  * 0 or positive; null when either is not dot-separated digits.
  */
@@ -221,17 +244,9 @@ export function compareClaudeVersions(a: unknown, b: unknown): number | null {
   return 0;
 }
 
-/** How many custom model names Settings › Claude keeps. */
+/** How many custom model names the retired pi-web store kept; the migration
+ * caps the names it moves into claude's native modelPicker the same way. */
 export const CLAUDE_CUSTOM_MODELS_MAX = 50;
-
-/** Settings › Claude: what a new claude session starts with. */
-export interface ClaudeSettings {
-  launchPermissionMode: ClaudeLaunchPermissionMode;
-  /** Model names offered beside claude's aliases, valid (`isClaudeModelName`) and distinct. */
-  customModels: string[];
-  /** `--include-hook-events`: hook activity shown in the session. */
-  includeHookEvents: boolean;
-}
 
 /**
  * The pi built-in slash commands a claude session's server answers (polyforge#71,
@@ -264,7 +279,7 @@ export const CLAUDE_COMMAND_EXCLUSIONS: ReadonlyMap<string, string> = new Map([
   // claude answers these with `<local-command-stdout>`, which the adapter hides:
   // a listed command would visibly do nothing.
   ["autocompact", "its output is hidden bookkeeping; pi-web tracks claude's auto-compaction itself"],
-  ["config", "its output is hidden bookkeeping; Settings › Claude owns what pi-web configures"],
+  ["config", "its output is hidden bookkeeping; the permission page owns what pi-web configures"],
   ["context", "its output is hidden bookkeeping; the header's context meter answers it"],
   ["usage", "its output is hidden bookkeeping; the session's stats answer it"],
   ["list-agents", "its output is hidden bookkeeping; the session's Agent rows answer it"],

@@ -7,8 +7,14 @@ import test from "node:test";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { createJiti } from "jiti";
 
-const { isThinkingLevel, shadowingProjectKeys, writeDefaultPreferences } = await createJiti(import.meta.url)
-  .import("./default-preferences.ts");
+// The star's helpers beside the pi adapter's model write (85a3-1: the native
+// write went through SettingsManager's setter and now goes through the
+// adapter's gated write, one field per write — the "without touching" bars and
+// the corrupt-file refusal pin the same behaviours on the new path; the write
+// itself is pinned in depth by lib/harness-model-adapters-85a3.test.mjs).
+const jiti = createJiti(import.meta.url, { alias: { "@": process.cwd() }, interopDefault: true, moduleCache: false });
+const { isThinkingLevel, shadowingProjectKeys } = await jiti.import("./default-preferences.ts");
+const { createPiAdapter } = await jiti.import("./harness/pi.ts");
 
 async function withSettings(run, { project } = {}) {
   const root = await mkdtemp(join(tmpdir(), "pi-web-default-preferences-"));
@@ -23,19 +29,17 @@ async function withSettings(run, { project } = {}) {
 
   try {
     const settings = SettingsManager.create(cwd, agentDir);
-    await run({ settings, settingsPath: join(agentDir, "settings.json") });
+    await run({ settings, settingsPath: join(agentDir, "settings.json"), agentDir });
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 }
 
-test("writes the saved default model without touching the thinking default", async () => {
-  await withSettings(async ({ settings, settingsPath }) => {
-    settings.setDefaultThinkingLevel("medium");
-    await settings.flush();
-
-    await writeDefaultPreferences(settings, { model: { provider: "deepseek", modelId: "deepseek-chat" } });
-
+test("writes the saved default model without touching the thinking default (the adapter's gated write)", async () => {
+  await withSettings(async ({ settingsPath, agentDir }) => {
+    await writeFile(settingsPath, JSON.stringify({ defaultThinkingLevel: "medium" }));
+    const written = await createPiAdapter().write("model", { model: { provider: "deepseek", modelId: "deepseek-chat" } }, { agentDir, piVersion: "1.5.0", env: {} });
+    assert.equal(written.status, "written");
     const saved = JSON.parse(await readFile(settingsPath, "utf8"));
     assert.equal(saved.defaultProvider, "deepseek");
     assert.equal(saved.defaultModel, "deepseek-chat");
@@ -43,13 +47,11 @@ test("writes the saved default model without touching the thinking default", asy
   });
 });
 
-test("writes the saved default thinking level without touching the model default", async () => {
-  await withSettings(async ({ settings, settingsPath }) => {
-    settings.setDefaultModelAndProvider("saved", "saved-model");
-    await settings.flush();
-
-    await writeDefaultPreferences(settings, { thinkingLevel: "high" });
-
+test("writes the saved default thinking level without touching the model default (the adapter's gated write)", async () => {
+  await withSettings(async ({ settingsPath, agentDir }) => {
+    await writeFile(settingsPath, JSON.stringify({ defaultProvider: "saved", defaultModel: "saved-model" }));
+    const written = await createPiAdapter().write("model", { thinkingLevel: "high" }, { agentDir, piVersion: "1.5.0", env: {} });
+    assert.equal(written.status, "written");
     const saved = JSON.parse(await readFile(settingsPath, "utf8"));
     assert.equal(saved.defaultProvider, "saved");
     assert.equal(saved.defaultModel, "saved-model");
@@ -63,9 +65,9 @@ test("refuses to write when the global settings file could not be loaded", async
     const agentDir = join(root, "agent");
     await mkdir(agentDir);
     await writeFile(join(agentDir, "settings.json"), "{ not json");
-    const settings = SettingsManager.create(root, agentDir);
-
-    await assert.rejects(writeDefaultPreferences(settings, { thinkingLevel: "high" }));
+    const refused = await createPiAdapter().write("model", { thinkingLevel: "high" }, { agentDir, piVersion: "1.5.0", env: {} });
+    assert.equal(refused.status, "refused");
+    assert.ok(refused.reason.includes("settings.json"), refused.reason);
     assert.equal(await readFile(join(agentDir, "settings.json"), "utf8"), "{ not json");
   } finally {
     await rm(root, { recursive: true, force: true });

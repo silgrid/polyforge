@@ -1,0 +1,175 @@
+# Harness adapters（统一 harness 配置层 · #85 85a1）
+
+## 模型页写入补充（85a3-2）
+
+pi 的模型适配器新增 `modelsConfig` 与 `enabledModels` 两种互斥写请求：provider 定义和上下文编辑经原有 models.json schema 与文件写保护保存，聊天开关先由既有最小编辑引擎计算 patterns，再经适配器的共享版本闸门及 settings.json 锁写入。旧 /api/models-config 与 /api/models/enabled 路由均转交适配器，不形成绕过写闸门的入口。#178（85a3-3）为 claude 增加 `customModels` 写：官方 settings reference 的 `modelPicker.options`（v2.1.242 起键级下界；隔离 2.1.329 的 initialize 录制证明原生识别），整表替换模型名——留存条目保留自身 metadata 与位置、新名以 `{model}` 追加、坏形状经 `claudeModelPickerShapeRefusal` 拒写；Claude 按模型推理强度（modelSettings）仍只读——其原生行为无法零成本录制（initialize 不反映、非法值无校验回显），按裁定「核实不了就只读显示、不写」。
+
+The harness configuration layer of parent ticket #85: one **unified concept**
+vocabulary, one **capability table** per harness, and one **adapter** per
+harness that reads (and later writes) the harness's own native config files.
+The native files are the single source of truth; data native config has no
+place for is stored beside it (step capabilities in pf Host config, UI
+preferences in Pi Web). **Adding a harness = adding an adapter**: Codex,
+opencode, Gemini CLI and Grok need no change anywhere else.
+
+Not to be confused with `lib/claude-adapter.ts`, the *session converter* that
+turns claude's stream-json into pi events ([claude-sessions.md](claude-sessions.md)).
+The harness adapters here are configuration adapters under `lib/harness/`.
+
+## The pieces
+
+| File | What it is |
+|---|---|
+| `lib/harness/concepts.ts` | The neutral vocabulary: concept ids (`auth`, `config-root`, `model`, `permission`, `skills`, `mcp`, and the read-only `env`, `effective-config`), scopes (`managed/user/project/local/session` plus the `pi-web` pseudo-scope), the neutral reasoning-effort enum (`off<minimal<low<medium<high<xhigh<max`) and approval-mode enum, the per-concept payload types, and the `HarnessCapabilities` declaration — with the mcp concept's own capability since 85c (#85 c2): `mcp: { scopes, transports, cliAdd, enableToggle, toolFilter }`, claude holding the local scope and sse/ws but no enable toggle and no tool filter (its apply-to is having an entry or not, owner ruling Q1 A), pi writing its mcp.json itself with its own toggle and tool filter. Client-safe: never imports a server-only module (85a1b's UI reuses it). |
+| `lib/harness/effort-levels.ts` | The unified reasoning-effort mapping (85a3-1, AC3): the five levels both harnesses spell the same (low, medium, high, xhigh, max), each harness's own values listed apart (pi's off and minimal, claude's ultracode; claude's "default" is unset), and `unifiedGlobalEffortWrite()` — the global default's one-write mapping onto both natives (一写多读). Client-safe. |
+| `lib/harness/adapter.ts` | The `HarnessAdapter` interface (`probeVersion`, `capabilities`, `read`, `write`, and `diagnose` as a signature only), the adapter registry, the known-version ranges and the **write gate**. |
+| `lib/harness/pi.ts` / `lib/harness/claude.ts` | The two adapters. Both read native files directly and build every payload through `lib/harness/redact.ts`'s allow-list helpers. 85a3-1 adds the **model** write on pi's settings.json defaults (`defaultProvider`/`defaultModel`/`defaultThinkingLevel`, the per-model `modelThinkingLevels` keyed `provider/modelId`, through `pi-native-write.ts`'s locked read-merge-write) and on claude's user-level `model`/`effortLevel`. 85a3-3 (#178) adds claude's `customModels` write: the full next state of the native `modelPicker.options` names (floor 2.1.242), a kept entry preserving its metadata and position, a new name appended as `{model}`, a bad native shape refused — the preflight `claudeModelPickerShapeRefusal` is the one fact the write and the migration's preview share. The model read answers `userCustomModels` beside the merged `customModels`: the user layer's own names alone, the list the models page's editor writes (r1#1) — the merged view is display-only, so a managed picker's names can never enter a write. Claude's per-model `modelSettings` stays read-only: its native behaviour cannot be recorded zero-credit (the initialize answer neither reflects a saved level nor validates an invalid one), so the ruling keeps it display-only. |
+| `lib/harness/claude-layers.ts` | claude's settings layers (managed > `.claude/settings.local.json` > `.claude/settings.json` > `$CLAUDE_CONFIG_DIR/settings.json`), the managed-settings path and the state file's placement, shared by the adapter and the effective-value computation. |
+| `lib/harness/effective.ts` | Per-layer effective values, each `{value, sourceScope, sourcePath, inferred: true}`. |
+| `lib/harness/compare.ts` | The read-back comparison: `consistent` / `inconsistent` (each harness's value listed) / `unsupported`. |
+| `lib/harness/redact.ts` | The allow-list: credential files as existence+path, env blocks as key names, MCP entries masked through `lib/mcp-secrets.ts` (the one masking implementation). |
+| `lib/harness/diagnostics.ts` | Native diagnostics executed (85a1b, AC6): the capability table's **fixed safe command only** — claude's `claude doctor`, pi answering its visible reason until it has one — run without a terminal (stdin closed at once, so an interactive prompt reads EOF and cannot block), bounded by a deadline that SIGTERM then SIGKILL enforces, capped in lines and bytes, and filtered so no credential or environment variable value is ever echoed — three rules: an environment-variable-shaped pair (`^[A-Z][A-Z0-9_]*$` before `=` or `:`, credential-named or not) masks its whole value; a URL's `user:pass@` userinfo is masked wherever it sits, its host kept; a set secret-named variable's value (at least 8 characters, no whitespace) is masked even bare through the run's env — beside which secret-named pairs and key-looking tokens (`looksLikeSecretValue`) are masked as before, and non-secret-named bare values are left alone. A command that could print a secret is never started at all; the filter is the second layer, not the safety. |
+| `lib/harness/account.ts` / `account-rows.ts` / `account-rows-facts.ts` | The account layer (85a2): the two safe status runs (claude `auth status`, pi `auth check --provider --json --no-refresh` per source dir) and the client-safe Cell-row model the account page renders — see 「The account layer」 below. |
+| `app/api/harness/**` | The read routes: the harness list, one concept's read, the comparison, and one harness's native diagnostics (85a1b: `GET /api/harness/[harness]/diagnose`, the adapter's fixed safe command executed with its deadline and through the credential filter). All behind the API guard; `?cwd=` goes through the file-access check. |
+
+## The write gate (owner ruling 2026-11-19, Q1 A + Q2 C; 85a3's Q4 revision)
+
+Every write goes through `writeGate()` before anything is touched:
+
+- **Version probe first.** pi's interactive-session version is the installed
+  SDK package's version (`node_modules/@earendil-works/pi-coding-agent`, as
+  `next.config.ts` reads at build time); the Cell CLI version joins in 85a2
+  once doctor provides it. claude's version comes from `probeClaude()` — the
+  one probe implementation (`lib/claude-probe.ts`); no second probe exists,
+  and none may be added.
+- **A known version** (85a3's Q4 ruling: the gate recognizes the **same
+  major** — `claude 2.x`, `pi 1.x` — whatever the minor or patch) **plus** a
+  recognizable file structure: a settings file or state file that exists but
+  is not a JSON object refuses the write. The minor/patch of the first
+  version whose recording proves a key stays recorded as that key's floor:
+  each concept's write registers its keys' minimum versions
+  (`PI_MODEL_KEY_MIN_VERSIONS`, `CLAUDE_MODEL_KEY_MIN_VERSIONS` for the model
+  keys) and refuses a version below one, so a same-major version that
+  predates a key never writes it. `CLAUDE_RECORDED_VERSIONS` keeps its own
+  fixture semantics untouched.
+- **Refusal answers** `{status:"refused", reason}`; a known version with a
+  concept whose write is not implemented answers
+  `{status:"not-implemented", reason}`. 85a4 (polyforge#150) made `permission`
+  writable on both adapters — claude's native user-level settings.json and
+  state file, pi's trust store — through `PUT /api/harness/<h>/<concept>`, and
+  85a2 landed claude's `auth` write; 85a3-1 adds the `model` write on both,
+  85c's claude side lands through the official command, so the write result
+  type carries both a file write and a command run.
+- **Reads are open to any version.**
+
+## Redaction boundary
+
+No credential value ever reaches a route response: auth is existence and
+path only (`Q4 A`: the status itself is `unknown` until 85a2 runs the status
+commands), env blocks appear as key names, `.credentials.json` and pi's
+`auth.json`/`models.json` keys never leave the process, MCP urls and args go
+through `maskUrl`/`maskArgs`, and the adapters never call a command that
+prints a secret. The unit routes test scans every concept's response for
+sentinel strings planted in exactly those files.
+
+## Effective values are computed, never observed
+
+Each effective value carries `inferred: true` (#85 d-5): claude applies its
+settings `env` only after the child is spawned, and every harness merges its
+layers its own way, so the layer walk is pi-web's own computation. Since the
+retired self-stored claude files migrated back (#150 85a4), the claude side
+lists the Pi Web preference layer (`pi-web:approval-channel` from
+`pi-web-settings.json`'s `claude` object) under the `pi-web` scope; the
+launch-permission-mode layer is gone (claude's native
+`permissions.defaultMode` owns that field).
+
+## Known gaps (deliberate)
+
+- **pi has no native diagnostic command yet** (85a2's doctor joins later):
+  pi's `diagnose` answers `{available: false, reason: "pi has no fixed safe
+  diagnostic command yet"}` — the visible reason, never a guessed command.
+  claude's is implemented (85a1b): `claude doctor` through
+  `lib/harness/diagnostics.ts`, `nativeDiagnostics.implemented: true`.
+- **Account status is `unknown`** (Q4 A): `claude auth status` / `pi auth
+  check` are 85a2's; the auth read answers only the credential store's
+  existence, the automation env variable *names* set, and whether
+  credentials follow the config root.
+- **Claude's state-file details are best-known, display-only** (analysis
+  risk 3): `.claude.json` is read from `$CLAUDE_CONFIG_DIR` when that is set
+  (else `~/.claude.json`), and project trust reads the projects entry's
+  `hasTrustDialogAccepted`. A wrong guess can only mislabel a display; the
+  write gate never writes to the state file.
+- **claude's settings layers' `mcpServers` is listed unverified**: claude's
+  own MCP config is believed to live in `.claude.json` and `.mcp.json`;
+  whether a settings layer's `mcpServers` is also a source has not been
+  checked against claude itself. Listing it is read-only — a wrong listing
+  shows a server claude would not load, never writes anything. 85a2
+  verifies this against the real claude.
+- **The `model` concept reads the user layer's defaults**
+  (`defaultProvider`/`defaultModel`/`defaultThinkingLevel` of the agent settings,
+  claude's effective `model`/`effortLevel`/`modelSettings`), while the
+  `effective-config` concept walks the project-over-user layers — so the two
+  can differ on the same cwd. The effective view is the merged one; 85a3-1
+  landed the model writes, and the model page's display semantics settle
+  with 85a3-2.
+- **`GET /api/harness` probes claude on its first call**: the list route asks
+  the claude adapter for its version, which goes through `probeClaude`'s
+  per-binary cache (one child process per binary per server life, up to 15 s
+  when no cached claude answers); later calls read the cache. A UI that
+  polls this route (85a1b) rides that cache.
+- **Skill state is not read** (the #146 conflict): the skills concept lists
+  name/path/source only; claude's native `skillOverrides` pass through as the
+  harness's own words, and pi's frontmatter state is never read. The concept
+  is writable for claude since 85d (polyforge#148): `write("skills",
+  {name, state, scope})` lands in the native `skillOverrides` — scope `user`
+  in `$CLAUDE_CONFIG_DIR/settings.json`, scope `project` in the project's
+  `.claude/settings.local.json` (owner Q3 B) — through the shared write gate
+  plus a feature floor at 2.1.319, the first claude binary that proves the
+  four native words (`enabled`, `disabled`, `name-only`,
+  `user-invocable-only`); an unknown word or a project write without the cwd
+  is refused. pi keeps the concept read-only here: its skills switch is
+  pi-web's own preference (`skillVisibility.pi`, #146), not a native write.
+
+## The account layer (85a2, polyforge#142)
+
+- **`capabilities.loginCommands`** is the terminal whitelist's data source
+  (AC3): each entry declares an id, the argv the one-shot terminal runs
+  verbatim, and whether it may run against a Cell's own config root. claude
+  declares `auth-login` and `setup-token`, both on the operator's
+  interactive environment (the 2026-11-19 Q3 revision); pi declares none
+  (Q4: its interactive session logs in through the SDK routes the account
+  tab reuses). `lib/harness-login-commands.ts` resolves `{harness, id,
+  cell}` onto the argv, env and cwd — a Cell-scoped command's config root
+  comes from the server's own doctor read, never from the client.
+- **`lib/harness/account.ts`** holds the two safe status runs: claude's
+  `auth status` (JSON, exit 1 when signed out) and pi's
+  `auth check --provider <p> --json --no-refresh` against a
+  model-credential source dir (the provider is the dir's `defaultProvider`,
+  else the first credential key of its auth.json — names only). The pi run
+  always passes `--no-refresh` (a refresh would write auth.json) and never
+  `--credentials` or a print-* subcommand; only the parsed closed-set
+  fields leave the module.
+- **The auth write (AC6)**: claude's `write("auth")` lands the credential
+  in the native env block of the target's settings.json through the shared
+  gate — kind `oauth-token` → `CLAUDE_CODE_OAUTH_TOKEN`, `api-key` →
+  `ANTHROPIC_API_KEY`, `gateway` → `ANTHROPIC_BASE_URL` +
+  `ANTHROPIC_AUTH_TOKEN` — keeping the file's other keys, refusing an
+  unrecognized format, writing atomically 0600, never echoing the value.
+  `POST /api/settings/account` is its caller: it resolves the interactive
+  session's `~/.claude` and the checked Cells' claude-config roots
+  server-side (the client names profiles only), and 沿用交互会话的值
+  copies the interactive env block without the value passing through the
+  browser.
+- **`capabilities.credentialsFollowConfigRoot`** is platform-derived for
+  claude (`claudeCredentialsFollowConfigRoot`): darwin's Keychain does not
+  follow the config dir, and the account page's Cell rows show the hint
+  (AC7). pi's credentials always follow.
+
+## Adding a harness
+
+1. One adapter file under `lib/harness/` implementing `HarnessAdapter` — the
+   probe, the capability declaration, the per-concept reads (through
+   `redact.ts`), and `write` composed of `gatedWrite()`.
+2. Register it in `lib/harness/adapters.ts` and extend `HarnessId` in
+   `concepts.ts`.
+3. The routes, the comparison and the capability table need no change; a harness with a fixed safe diagnostic adds its command to `lib/harness/diagnostics.ts` and flips its capability's `implemented`.

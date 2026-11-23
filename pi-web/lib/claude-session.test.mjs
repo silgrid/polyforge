@@ -719,8 +719,11 @@ test("background_task without a tool call id is refused before anything reaches 
 
 // claude's permission prompts, wired through the session (the stub's
 // `permission` mode speaks claude 2.1.322's can_use_tool / control_response shapes).
-const permissionConfig = path.join(agentDir, "claude-permissions.json");
-const setPermissionConfig = (config) => fs.writeFileSync(permissionConfig, JSON.stringify({ version: 1, ...config }));
+const permissionConfig = path.join(agentDir, "pi-web-settings.json");
+const setPermissionConfig = (config) => fs.writeFileSync(permissionConfig, JSON.stringify({
+  version: 1,
+  claude: { approvalChannel: "ask", pushReminders: true, includeHookEvents: false, ...config },
+}));
 const clearPermissionConfig = () => fs.rmSync(permissionConfig, { force: true });
 const ASK_FLAGS = ["--permission-prompts", "host", "--permission-prompt-tool", "stdio"];
 const flagsAt = (argv) => argv.slice(argv.indexOf("--permission-prompts"), argv.indexOf("--permission-prompts") + 4);
@@ -773,7 +776,7 @@ test("ask mode launches with --permission-prompts host --permission-prompt-tool 
 test("a pending request is replayed to a new listener, makes isAwaitingInput true and holds the idle timer", async () => {
   process.env.PI_TEST_CLAUDE_STUB_MODE = "permission";
   // The push switch is read when a request opens: off now, so nothing is pushed.
-  setPermissionConfig({ mode: "ask", push: false });
+  setPermissionConfig({ approvalChannel: "ask", pushReminders: false });
   const record = await newRecord();
   const pushed = pushes.length;
   const session = claude.startClaudeSession(record);
@@ -842,7 +845,7 @@ test("AskUserQuestion's answers reach claude as updatedInput.answers", async () 
 test("deny (the global default or the record's override) launches --permission-prompts none and claude's permission_denied becomes a warning notice", async () => {
   process.env.PI_TEST_CLAUDE_STUB_MODE = "permission";
   try {
-    setPermissionConfig({ mode: "deny", push: true });
+    setPermissionConfig({ approvalChannel: "deny", pushReminders: true });
     const record = await newRecord();
     let before = launches().length;
     const session = claude.startClaudeSession(record);
@@ -861,7 +864,7 @@ test("deny (the global default or the record's override) launches --permission-p
 
     // The record's override wins over the global mode, either way; its notice speaks the session's language.
     const zh = await newRecord({ permissionMode: "deny", agentLanguage: "zh-CN" });
-    setPermissionConfig({ mode: "ask", push: true });
+    setPermissionConfig({ approvalChannel: "ask", pushReminders: true });
     before = launches().length;
     const overridden = claude.startClaudeSession(index.getClaudeSessionRecord(zh.id));
     const zhLaunch = await waitFor(() => launches()[before], 5_000, "no launch");
@@ -872,7 +875,7 @@ test("deny (the global default or the record's override) launches --permission-p
     assert.deepEqual(dialogs(zhEvents).map(({ method, message }) => ({ method, message })), [{ method: "notify", message: "claude 拒绝了 Bash：mode" }]);
     await overridden.shutdown();
 
-    setPermissionConfig({ mode: "deny", push: true });
+    setPermissionConfig({ approvalChannel: "deny", pushReminders: true });
     const asking = await newRecord({ permissionMode: "ask" });
     before = launches().length;
     const askSession = claude.startClaudeSession(index.getClaudeSessionRecord(asking.id));
@@ -892,7 +895,7 @@ test("the global mode is read at spawn: a changed default leaves the live child'
   const sessions = [live];
   try {
     assert.ok(isAsk((await waitFor(() => launches()[before], 5_000, "no launch")).argv), "launched with the default ask");
-    setPermissionConfig({ mode: "deny", push: true });
+    setPermissionConfig({ approvalChannel: "deny", pushReminders: true });
     const other = await newRecord();
     before = launches().length;
     sessions.push(claude.startClaudeSession(other));

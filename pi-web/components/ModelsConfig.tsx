@@ -7,7 +7,6 @@ import type { DiscoveredModel } from "@/lib/model-discovery";
 import { ContextWindowError, normalizeContextWindowOverrides, withContextWindowOverride } from "@/lib/model-context";
 import { checkProviderEntries, ProviderEntryError, type ProviderEntryProblem } from "@/lib/model-provider-check";
 import { checkImageMaxBytes, DEFAULT_IMAGE_MAX_BYTES, formatImageBytes, ImageMaxBytesError, imageMaxBytes, parseImageMaxBytes, withImageMaxBytes } from "@/lib/model-image-limits";
-import type { ModelContextSettings } from "./ModelContextWindow";
 import {
   getLastSettingsSelection,
   setLastSettingsSelection,
@@ -17,7 +16,6 @@ import {
   modelCostToDraft,
   modelSidebarLabel,
   parseCompleteModelCost,
-  providerMatchesSearch,
   savedModelIds,
   serializeHeaderRows,
   setCompatBool,
@@ -41,7 +39,6 @@ import {
   ConfigEmptyState,
   ConfigField,
   ConfigFooter,
-  ConfigListAction,
   ConfigPanelShell,
   ConfigSectionTitle,
   ConfigSidebar,
@@ -52,17 +49,14 @@ import {
   useConfigDetailNavigation,
 } from "./SettingsUi";
 import {
+  EnabledModelsSection,
   EnabledModelsBanner,
   EnabledModelsProviderSwitch,
   EnabledModelsProviderSwitchNote,
-  EnabledModelsSection,
-  useEnabledModels,
   type EnabledModelsController,
 } from "./EnabledModelsSection";
 import { providerBadgeLabel } from "./enabled-models-helpers";
-import { OAuthPastePanel } from "./OAuthPastePanel";
 import { ProviderIcon } from "./ProviderIcon";
-import { ProviderUsageSummary } from "./ProviderUsageSummary";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -84,17 +78,6 @@ interface ApiKeyProvider {
   /** Provider also supports OAuth, so it appears in both picker sections. */
   supportsOAuth?: boolean;
 }
-
-type OAuthLoginState =
-  | { phase: "idle" }
-  | { phase: "connecting" }
-  | { phase: "auth"; url: string; instructions: string | null; token: string }
-  | { phase: "device_code"; userCode: string; verificationUri: string; intervalSeconds: number | null; expiresInSeconds: number | null }
-  | { phase: "prompt"; message: string; placeholder: string | null; token: string }
-  | { phase: "select"; message: string; options: { id: string; label: string }[]; token: string }
-  | { phase: "progress"; message: string }
-  | { phase: "success" }
-  | { phase: "error"; message: string };
 
 interface ModelEntry {
   id: string;
@@ -566,6 +549,18 @@ function ProviderDetail({ name, editingName, provider, onChange, onEditingNameCh
           </>
         )}
       </div>
+      <EnabledModelsSection
+        providerId={name}
+        controller={enabledModels}
+        contextSettings={{
+          overrides: provider.modelOverrides,
+          disabled: false,
+          onChange: (modelId, value) => {
+            const updated = withContextWindowOverride({ providers: { [name]: provider } }, name, modelId, value);
+            onChange(updated.providers?.[name] ?? {});
+          },
+        }}
+      />
 
     </div>
   );
@@ -1367,553 +1362,19 @@ function ModelDetail({
   );
 }
 
-// ── OAuth detail ──────────────────────────────────────────────────────────────
-
-function OAuthDetail({ provider, onRefresh, enabledModels, contextSettings }: {
-  provider: OAuthProvider; onRefresh: () => void; enabledModels: EnabledModelsController;
-  contextSettings: ModelContextSettings;
-}) {
-  const [loginState, setLoginState] = useState<OAuthLoginState>({ phase: "idle" });
-  const { t } = useI18n();
-  const [inputValue, setInputValue] = useState("");
-  const eventSourceRef = useRef<EventSource | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (loginState.phase === "auth" || loginState.phase === "prompt") {
-      setTimeout(() => inputRef.current?.focus(), 50);
-    }
-  }, [loginState.phase]);
-
-  // Reset state when provider changes
-  useEffect(() => {
-    setLoginState({ phase: "idle" });
-    setInputValue("");
-    eventSourceRef.current?.close();
-    eventSourceRef.current = null;
-  }, [provider.id]);
-
-  useEffect(() => {
-    return () => { eventSourceRef.current?.close(); };
-  }, []);
-
-  const handleLogin = useCallback(() => {
-    eventSourceRef.current?.close();
-    setLoginState({ phase: "connecting" });
-    setInputValue("");
-
-    const es = new EventSource(`/api/auth/login/${encodeURIComponent(provider.id)}`);
-    eventSourceRef.current = es;
-
-    es.onmessage = (e) => {
-      const data = JSON.parse(e.data) as {
-        type: string; url?: string; instructions?: string | null;
-        token?: string; message?: string; placeholder?: string | null;
-        userCode?: string; verificationUri?: string; intervalSeconds?: number | null; expiresInSeconds?: number | null;
-        options?: { id: string; label: string }[];
-      };
-      if (data.type === "auth") {
-        setLoginState({ phase: "auth", url: data.url!, instructions: data.instructions ?? null, token: data.token! });
-        window.open(data.url!, "_blank", "noopener,noreferrer");
-      } else if (data.type === "device_code") {
-        setLoginState({
-          phase: "device_code",
-          userCode: data.userCode!,
-          verificationUri: data.verificationUri!,
-          intervalSeconds: data.intervalSeconds ?? null,
-          expiresInSeconds: data.expiresInSeconds ?? null,
-        });
-        window.open(data.verificationUri!, "_blank", "noopener,noreferrer");
-      } else if (data.type === "prompt_request") {
-        setLoginState({ phase: "prompt", message: data.message!, placeholder: data.placeholder ?? null, token: data.token! });
-      } else if (data.type === "select_request") {
-        setLoginState({ phase: "select", message: data.message!, options: data.options ?? [], token: data.token! });
-      } else if (data.type === "progress") {
-        setLoginState({ phase: "progress", message: data.message! });
-      } else if (data.type === "success") {
-        es.close();
-        setLoginState({ phase: "success" });
-        onRefresh();
-      } else if (data.type === "error") {
-        es.close();
-        setLoginState({ phase: "error", message: data.message! });
-      } else if (data.type === "cancelled") {
-        es.close();
-        setLoginState({ phase: "idle" });
-      }
-    };
-    es.onerror = () => {
-      es.close();
-      setLoginState((prev) => prev.phase === "success" ? prev : { phase: "error", message: t("models.connectionLost") });
-    };
-  }, [provider.id, onRefresh, t]);
-
-  const handleLogout = useCallback(async () => {
-    await fetch(`/api/auth/logout/${encodeURIComponent(provider.id)}`, { method: "POST" });
-    setLoginState({ phase: "idle" });
-    onRefresh();
-  }, [provider.id, onRefresh]);
-
-  const submitCode = useCallback(async (token: string, code: string) => {
-    if (!code.trim()) return;
-    setLoginState({ phase: "progress", message: t("models.verifying") });
-    try {
-      const res = await fetch(`/api/auth/login/${encodeURIComponent(provider.id)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, code: code.trim() }),
-      });
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({})) as { error?: string };
-        setLoginState({ phase: "error", message: d.error ?? t("models.serverError", { status: res.status }) });
-        return;
-      }
-      setInputValue("");
-      // Success path: SSE stream will emit "success" and update state
-    } catch (e) {
-      setLoginState({ phase: "error", message: e instanceof Error ? e.message : t("i18n.networkError") });
-    }
-  }, [provider.id, t]);
-
-  const submitSelection = useCallback(async (token: string, value: string) => {
-    setLoginState({ phase: "progress", message: t("i18n.continuing") });
-    try {
-      const res = await fetch(`/api/auth/login/${encodeURIComponent(provider.id)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, code: value }),
-      });
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({})) as { error?: string };
-        setLoginState({ phase: "error", message: d.error ?? t("models.serverError", { status: res.status }) });
-      }
-    } catch (e) {
-      setLoginState({ phase: "error", message: e instanceof Error ? e.message : t("i18n.networkError") });
-    }
-  }, [provider.id, t]);
-
-  const isWorking = loginState.phase === "connecting" || loginState.phase === "progress" ||
-    loginState.phase === "auth" || loginState.phase === "device_code" ||
-    loginState.phase === "prompt" || loginState.phase === "select";
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: provider.loggedIn && loginState.phase === "idle" ? 0 : 16 }}>
-      <ConfigDetailHeader>
-        <ConfigDetailHeaderInfo>
-          <SectionTitle>{t("i18n.subscription")}</SectionTitle>
-        </ConfigDetailHeaderInfo>
-        <ConfigDetailActions>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ width: 7, height: 7, borderRadius: "50%", background: provider.loggedIn ? "#4ade80" : "var(--border)", display: "inline-block" }} />
-            <span style={{ fontSize: 11, color: provider.loggedIn ? "#4ade80" : "var(--text-dim)" }}>
-               {provider.loggedIn ? t("i18n.connected") : t("i18n.notConnected")}
-            </span>
-          </div>
-          {isWorking ? (
-            <ConfigButton
-              size="small"
-              onClick={() => { eventSourceRef.current?.close(); setLoginState({ phase: "idle" }); }}
-            >
-              {t("i18n.cancel")}
-            </ConfigButton>
-          ) : (
-            <>
-              <ConfigButton
-                variant="primary"
-                size="small"
-                onClick={handleLogin}
-              >
-                 {provider.loggedIn ? t("i18n.relogin") : t("i18n.login")}
-              </ConfigButton>
-              {provider.loggedIn && (
-                <ConfigButton
-                  variant="danger"
-                  size="small"
-                  onClick={handleLogout}
-                >
-                   {t("i18n.disconnect")}
-                </ConfigButton>
-              )}
-            </>
-          )}
-        </ConfigDetailActions>
-      </ConfigDetailHeader>
-
-      {/* Status */}
-      <div style={{ minHeight: provider.loggedIn && loginState.phase === "idle" ? 0 : 48 }}>
-        {loginState.phase === "idle" && (
-          !provider.loggedIn && (
-            <p style={{ margin: 0, fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5 }}>
-              {t("models.oauthConnect", { provider: provider.name })}
-            </p>
-          )
-        )}
-        {loginState.phase === "connecting" && (
-            <p style={{ margin: 0, fontSize: 12, color: "var(--text-muted)" }}>{t("i18n.openingBrowser")}</p>
-        )}
-        {loginState.phase === "select" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <p style={{ margin: 0, fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5 }}>
-              {loginState.message}
-            </p>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {loginState.options.map((option) => (
-                <button
-                  key={option.id}
-                  onClick={() => submitSelection(loginState.token, option.id)}
-                  style={{ padding: "6px 9px", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 5, color: "var(--text)", cursor: "pointer", fontSize: 12, textAlign: "left" }}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-        {(loginState.phase === "auth" || loginState.phase === "prompt") && (
-          <OAuthPastePanel
-            message={loginState.phase === "auth"
-              ? t("models.oauthPasteRedirect")
-              : loginState.message}
-            hint={loginState.phase === "auth" ? (
-              <>
-                {t("models.oauthNoBrowser")}{" "}
-                <a href={loginState.url} target="_blank" rel="noopener noreferrer">
-                  {t("models.oauthOpenLoginPage")}
-                </a>
-                {t("models.oauthOpenLoginPageEnd")}
-              </>
-            ) : undefined}
-            value={inputValue}
-            placeholder={loginState.phase === "auth" ? "http://localhost:1455/auth/callback?code=…" : (loginState.placeholder ?? t("models.oauthValuePlaceholder"))}
-            submitLabel={t("i18n.submit")}
-            inputRef={inputRef}
-            onValueChange={setInputValue}
-            onSubmit={() => void submitCode(loginState.token, inputValue)}
-          />
-        )}
-        {loginState.phase === "device_code" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <p style={{ margin: 0, fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5 }}>
-              {t("models.oauthDeviceCode")}
-            </p>
-            <div style={{ padding: "8px 10px", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 5, color: "var(--text)", fontSize: 16, fontWeight: 700, fontFamily: "var(--font-mono)", letterSpacing: 0 }}>
-              {loginState.userCode}
-            </div>
-            <p style={{ margin: 0, fontSize: 11, color: "var(--text-dim)", lineHeight: 1.5 }}>
-              <a href={loginState.verificationUri} target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)", wordBreak: "break-all" }}>
-                {loginState.verificationUri}
-              </a>
-              {loginState.expiresInSeconds ? ` ${t("models.deviceCodeExpires", { minutes: Math.ceil(loginState.expiresInSeconds / 60) })}` : ""}
-            </p>
-          </div>
-        )}
-        {loginState.phase === "progress" && (
-          <p style={{ margin: 0, fontSize: 12, color: "var(--text-muted)" }}>{loginState.message}</p>
-        )}
-        {loginState.phase === "success" && (
-             <p style={{ margin: 0, fontSize: 12, color: "#4ade80" }}>{t("i18n.connectedSuccessfully")}</p>
-        )}
-        {loginState.phase === "error" && (
-          <p style={{ margin: 0, fontSize: 12, color: "#f87171" }}>{loginState.message}</p>
-        )}
-      </div>
-
-      <ProviderUsageSummary providerId={provider.id} enabled={provider.loggedIn} />
-
-      {provider.loggedIn && <EnabledModelsSection providerId={provider.id} controller={enabledModels} contextSettings={contextSettings} />}
-    </div>
-  );
-}
-
-// ── API Key detail ────────────────────────────────────────────────────────────
-
-function ApiKeyDetail({ provider, onRefresh, enabledModels, contextSettings }: {
-  provider: ApiKeyProvider; onRefresh: () => void; enabledModels: EnabledModelsController;
-  contextSettings: ModelContextSettings;
-}) {
-  const [apiKey, setApiKey] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [removing, setRemoving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [savedOk, setSavedOk] = useState(false);
-  const { t } = useI18n();
-
-  // Reset state when provider changes
-  useEffect(() => {
-    setApiKey("");
-    setError(null);
-    setSavedOk(false);
-  }, [provider.id]);
-
-  const handleSave = useCallback(async () => {
-    if (!apiKey.trim()) return;
-    setSaving(true);
-    setError(null);
-    setSavedOk(false);
-    try {
-      const res = await fetch(`/api/auth/api-key/${encodeURIComponent(provider.id)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey: apiKey.trim() }),
-      });
-      const d = await res.json() as { success?: boolean; error?: string };
-      if (!res.ok || d.error) {
-        setError(d.error ?? `HTTP ${res.status}`);
-      } else {
-        setApiKey("");
-        setSavedOk(true);
-        setTimeout(() => setSavedOk(false), 2000);
-        onRefresh();
-      }
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setSaving(false);
-    }
-  }, [apiKey, provider.id, onRefresh]);
-
-  const handleRemove = useCallback(async () => {
-    setRemoving(true);
-    setError(null);
-    try {
-      const res = await fetch(`/api/auth/api-key/${encodeURIComponent(provider.id)}`, { method: "DELETE" });
-      const d = await res.json() as { success?: boolean; error?: string };
-      if (!res.ok || d.error) setError(d.error ?? `HTTP ${res.status}`);
-      else onRefresh();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setRemoving(false);
-    }
-  }, [provider.id, onRefresh]);
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <ConfigDetailHeader>
-        <ConfigDetailHeaderInfo>
-          <SectionTitle>API Key</SectionTitle>
-        </ConfigDetailHeaderInfo>
-        <ConfigDetailActions>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ width: 7, height: 7, borderRadius: "50%", background: provider.configured ? "#4ade80" : "var(--border)", display: "inline-block" }} />
-            <span style={{ fontSize: 11, color: provider.configured ? "#4ade80" : "var(--text-dim)" }}>
-               {provider.configured ? t("i18n.configured") : t("i18n.notConfigured")}
-            </span>
-          </div>
-          {provider.configured && (
-            <ConfigButton
-              variant="danger"
-              size="small"
-              onClick={handleRemove}
-              disabled={removing}
-            >
-               {removing ? t("i18n.removing") : t("i18n.disconnect")}
-            </ConfigButton>
-          )}
-        </ConfigDetailActions>
-      </ConfigDetailHeader>
-
-      {!provider.configured && (
-        <p style={{ margin: 0, fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5 }}>
-          {provider.modelCount === 1
-            ? t("models.apiKeyEnableOne", { provider: provider.displayName })
-            : t("models.apiKeyEnable", { provider: provider.displayName, count: provider.modelCount })}
-        </p>
-      )}
-
-      <div style={{ display: "flex", gap: 6 }}>
-        <SecretTextInput
-          value={apiKey}
-          onChange={setApiKey}
-          onKeyDown={(e) => { if (e.key === "Enter" && apiKey.trim()) handleSave(); }}
-          placeholder={provider.configured ? t("models.replaceApiKey") : "sk-…"}
-          style={{ flex: 1 }}
-          autoComplete="off"
-          spellCheck={false}
-          mono
-        />
-        <button
-          onClick={handleSave}
-          disabled={saving || !apiKey.trim() || savedOk}
-          style={{
-            padding: "6px 12px",
-            background: savedOk ? "#16a34a" : apiKey.trim() ? "var(--accent)" : "var(--bg-panel)",
-            border: "none", borderRadius: 5,
-            color: savedOk ? "#fff" : apiKey.trim() ? "var(--accent-contrast)" : "var(--text-dim)",
-            cursor: (saving || !apiKey.trim() || savedOk) ? "not-allowed" : "pointer",
-            fontSize: 12, fontWeight: 600, flexShrink: 0,
-            display: "flex", alignItems: "center", gap: 5,
-          }}
-        >
-          {savedOk && (
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="20 6 9 17 4 12" />
-            </svg>
-          )}
-           {savedOk ? t("i18n.saved") : saving ? t("i18n.saving") : t("i18n.save")}
-        </button>
-      </div>
-
-      {error && <p style={{ margin: 0, fontSize: 12, color: "#f87171" }}>{error}</p>}
-
-      <ProviderUsageSummary providerId={provider.id} enabled={provider.configured} />
-
-      {provider.configured && <EnabledModelsSection providerId={provider.id} controller={enabledModels} contextSettings={contextSettings} />}
-    </div>
-  );
-}
-
-// ── Add provider picker ───────────────────────────────────────────────────────
-
-interface AddProviderPickerProps {
-  oauthProviders: OAuthProvider[];
-  apiKeyProviders: ApiKeyProvider[];
-  onSelectOAuth: (id: string) => void;
-  onSelectApiKey: (id: string) => void;
-  onAddCustom: () => void;
-  onClose: () => void;
-}
-
-function AddProviderPicker({
-  oauthProviders, apiKeyProviders,
-  onSelectOAuth, onSelectApiKey, onAddCustom, onClose,
-}: AddProviderPickerProps) {
-  const [search, setSearch] = useState("");
-  const { t } = useI18n();
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => { setTimeout(() => inputRef.current?.focus(), 30); }, []);
-
-  const q = search.trim().toLowerCase();
-
-  const availableOAuth = oauthProviders.filter((p) => !p.loggedIn && providerMatchesSearch(q, p.id, p.name));
-  const availableApiKey = apiKeyProviders.filter((p) => !p.configured && providerMatchesSearch(q, p.id, p.displayName));
-  const showCustom = !q || "custom".includes(q) || "openai-compatible".includes(q) || "anthropic-compatible".includes(q);
-
-  const totalCount = availableOAuth.length + availableApiKey.length + (showCustom ? 1 : 0);
-
-  const cardStyle: React.CSSProperties = {
-    display: "flex", flexDirection: "row", alignItems: "center", gap: 8,
-    padding: "10px 12px",
-    background: "var(--bg-panel)",
-    border: "1px solid var(--border)",
-    borderRadius: 7,
-    boxSizing: "border-box",
-    cursor: "pointer",
-    minWidth: 0,
-    textAlign: "left",
-    transition: "border-color 0.12s, background 0.12s",
-    width: "100%",
-  };
-
-
-
-  return (
-    <div
-      style={{ position: "fixed", inset: 0, zIndex: 1100, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center" }}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
-      onKeyDown={(e) => {
-        if (e.key !== "Escape" || e.nativeEvent.isComposing || e.keyCode === 229) return;
-        e.preventDefault();
-        e.stopPropagation();
-        onClose();
-      }}
-    >
-      <div style={{ width: 820, maxWidth: "calc(100vw - 32px)", maxHeight: "min(72vh, calc(100vh - 32px))", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 10, display: "flex", flexDirection: "column", boxShadow: "0 8px 32px rgba(0,0,0,0.22)", overflow: "hidden" }}>
-        {/* Search */}
-        <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--border)", flexShrink: 0, display: "flex", alignItems: "center", gap: 8 }}>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--text-dim)", flexShrink: 0 }}>
-            <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-          </svg>
-          <input
-            ref={inputRef}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-             placeholder={t("i18n.searchProviders")}
-            style={{ flex: 1, background: "none", border: "none", outline: "none", color: "var(--text)", fontSize: 13, boxSizing: "border-box" }}
-          />
-        </div>
-
-        {/* Card grid */}
-        <div style={{ flex: 1, overflowY: "auto", padding: 14 }}>
-          {totalCount === 0 ? (
-            <div style={{ padding: "20px 0", fontSize: 12, color: "var(--text-dim)", textAlign: "center" }}>{t("i18n.noProviders")}</div>
-          ) : (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(240px, 100%), 1fr))", gap: 8 }}>
-              {showCustom && (
-                 <div style={{ gridColumn: "1 / -1", fontSize: 10, fontWeight: 600, color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: "0.07em" }}>{t("i18n.custom")}</div>
-              )}
-              {showCustom && (
-                <button
-                  onClick={() => { onAddCustom(); onClose(); }}
-                  style={cardStyle}
-                  onMouseEnter={(e) => { e.currentTarget.style.borderColor = "var(--accent)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.background = "var(--bg-panel)"; }}
-                >
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", lineHeight: 1.3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>OpenAI / Anthropic compatible</div>
-                     <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2 }}>{t("i18n.customEndpoint")}</div>
-                  </div>
-                  <span style={{ width: 26, height: 26, borderRadius: 5, background: "var(--bg-hover)", border: "1px dashed var(--border)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--text-dim)" }}>
-                      <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
-                    </svg>
-                  </span>
-                </button>
-              )}
-
-              {availableOAuth.length > 0 && (
-                 <div style={{ gridColumn: "1 / -1", paddingTop: showCustom ? 6 : 0, fontSize: 10, fontWeight: 600, color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: "0.07em" }}>{t("i18n.subscriptions")}</div>
-              )}
-              {availableOAuth.map((p) => (
-                <button key={p.id} onClick={() => { onSelectOAuth(p.id); onClose(); }}
-                  style={cardStyle}
-                  onMouseEnter={(e) => { e.currentTarget.style.borderColor = "var(--accent)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.background = "var(--bg-panel)"; }}
-                >
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", lineHeight: 1.3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</div>
-                    <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2 }}>OAuth</div>
-                  </div>
-                  <ProviderIcon id={p.id} size={28} />
-                </button>
-              ))}
-
-              {availableApiKey.length > 0 && (
-                <div style={{ gridColumn: "1 / -1", paddingTop: availableOAuth.length > 0 ? 6 : 0, fontSize: 10, fontWeight: 600, color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: "0.07em" }}>API Key</div>
-              )}
-              {availableApiKey.map((p) => (
-                <button key={p.id} onClick={() => { onSelectApiKey(p.id); onClose(); }}
-                  style={cardStyle}
-                  onMouseEnter={(e) => { e.currentTarget.style.borderColor = "var(--accent)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.background = "var(--bg-panel)"; }}
-                >
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", lineHeight: 1.3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.displayName}</div>
-                    <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2 }}>{p.modelCount === 1 ? t("models.modelCountOne") : t("models.modelCount", { count: p.modelCount })}</div>
-                  </div>
-                  <ProviderIcon id={p.id} size={28} />
-                </button>
-              ))}
-
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ── Main component ────────────────────────────────────────────────────────────
 
-export function ModelsConfig({ onClose, embedded = false, cwd = null }: {
-  onClose: () => void; embedded?: boolean; cwd?: string | null;
+export function ModelsConfig({ onClose, embedded = false, cwd = null, onOpenAccount, enabledModels }: {
+  onClose: () => void; embedded?: boolean; cwd?: string | null; onOpenAccount?: () => void;
+  /** The page's one shared controller — the table and this editor must never
+ * hold two views of pi's enabledModels, or a Save's resync would re-enable
+ * what the table just switched off (review r1#1). */
+  enabledModels: EnabledModelsController;
 }) {
   const { t } = useI18n();
-  const { openDetail, closeDetail } = useConfigDetailNavigation();
+  const { closeDetail, openDetail } = useConfigDetailNavigation();
   // `enabledModels` lives in pi's settings, not models.json, so these switches
   // apply immediately instead of waiting for this panel's Save button.
-  const enabledModels = useEnabledModels(cwd);
   const [config, setConfig] = useState<ModelsJson>({ providers: {} });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -1927,7 +1388,6 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null }: {
   const [apiKeyProviders, setApiKeyProviders] = useState<ApiKeyProvider[]>([]);
   /** Set once the provider lists have answered; until then an overrides-only entry may be a managed provider's. */
   const [authListed, setAuthListed] = useState(false);
-  const [pickerOpen, setPickerOpen] = useState(false);
   /** Provider ids as models.json has them on disk, and where renames moved them. */
   const savedProvidersRef = useRef<Set<string>>(new Set());
   const renamesRef = useRef<Map<string, string>>(new Map());
@@ -1993,28 +1453,6 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null }: {
       setSelection({ type: "apikey", providerId: selection.name });
     }
   }, [apiKeyProviders, config.providers, oauthProviders, selection]);
-
-  const contextSettings = (providerId: string): ModelContextSettings => ({
-    overrides: config.providers?.[providerId]?.modelOverrides,
-    disabled: loading || saving || loadError !== null,
-    onChange: (modelId, value) => {
-      try {
-        setConfig(withContextWindowOverride(config, providerId, modelId, value));
-        setSavedOk(false);
-        setSaveError(null);
-      } catch (error) {
-        setSaveError(String(error));
-      }
-    },
-  });
-
-  const addCustomProvider = useCallback(() => {
-    let finalName = "new-provider";
-    let n = 1;
-    while (config.providers?.[finalName]) finalName = `new-provider-${n++}`;
-    setConfig((prev) => ({ ...prev, providers: { ...(prev.providers ?? {}), [finalName]: { api: "openai-completions" } } }));
-    setSelection({ type: "provider", name: finalName });
-  }, [config.providers]);
 
   const updateProvider = useCallback((name: string, p: ProviderEntry) => {
     setConfig((prev) => ({ ...prev, providers: { ...(prev.providers ?? {}), [name]: p } }));
@@ -2186,15 +1624,18 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null }: {
   // Resolve current detail
   const detailContent = (() => {
     if (!selection) return null;
-    if (selection.type === "oauth") {
-      const p = oauthProviders.find((p) => p.id === selection.providerId);
-      if (!p) return null;
-      return <OAuthDetail key={p.id} provider={p} onRefresh={refreshAuthProviders} enabledModels={enabledModels} contextSettings={contextSettings(p.id)} />;
-    }
-    if (selection.type === "apikey") {
-      const p = apiKeyProviders.find((p) => p.id === selection.providerId);
-      if (!p) return null;
-      return <ApiKeyDetail key={p.id} provider={p} onRefresh={refreshAuthProviders} enabledModels={enabledModels} contextSettings={contextSettings(p.id)} />;
+    if (selection.type === "oauth" || selection.type === "apikey") {
+      return <EnabledModelsSection
+        key={selection.providerId}
+        providerId={selection.providerId}
+        controller={enabledModels}
+        contextSettings={{
+          overrides: config.providers?.[selection.providerId]?.modelOverrides,
+          disabled: loadError !== null,
+          onChange: (modelId, value) => setConfig((previous) =>
+            withContextWindowOverride(previous, selection.providerId, modelId, value)),
+        }}
+      />;
     }
     if (selection.type === "provider") {
       const provider = config.providers?.[selection.name];
@@ -2242,6 +1683,15 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null }: {
           {/* Left: tree */}
           <ConfigSidebar>
             <ConfigSidebarList>
+              <ConfigButton disabled={loading || loadError !== null} onClick={() => {
+                let name = "custom";
+                let suffix = 1;
+                while (Object.hasOwn(config.providers ?? {}, name)) name = `custom-${suffix++}`;
+                setConfig((previous) => ({ ...previous, providers: { ...previous.providers, [name]: { api: "openai-completions" } } }));
+                setSelection({ type: "provider", name });
+                openDetail();
+              }}>{t("i18n.addProvider")}</ConfigButton>
+              {onOpenAccount && <ConfigButton onClick={onOpenAccount}>{t("settings.tabAccount")}</ConfigButton>}
               {/* Active OAuth subscriptions */}
               {activeOAuth.map((p) => {
                 const isSelected = selection?.type === "oauth" && selection.providerId === p.id;
@@ -2337,9 +1787,6 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null }: {
               })}
             </ConfigSidebarList>
 
-            {/* Add provider */}
-            {/* The picker chooses first; its choice opens the detail on a phone. */}
-            <ConfigListAction onClick={(event) => { event.preventDefault(); setPickerOpen(true); }}>{t("i18n.addProvider")}</ConfigListAction>
           </ConfigSidebar>
 
           {/* Right: detail */}
@@ -2375,16 +1822,6 @@ export function ModelsConfig({ onClose, embedded = false, cwd = null }: {
           </ConfigButton>
         </ConfigFooter>
     </ConfigPanelShell>
-    {pickerOpen && (
-      <AddProviderPicker
-        oauthProviders={oauthProviders}
-        apiKeyProviders={apiKeyProviders}
-        onSelectOAuth={(id) => { setSelection({ type: "oauth", providerId: id }); openDetail(); }}
-        onSelectApiKey={(id) => { setSelection({ type: "apikey", providerId: id }); openDetail(); }}
-        onAddCustom={() => { addCustomProvider(); openDetail(); }}
-        onClose={() => setPickerOpen(false)}
-      />
-    )}
     </>
   );
 }

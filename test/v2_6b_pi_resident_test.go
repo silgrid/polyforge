@@ -52,7 +52,10 @@ func spawnResidentFakepi(t *testing.T, wi string, plan map[string]any) (capDir s
 	}
 	transcript := filepath.Join(capDir, "session", "session-6b.jsonl")
 	var count atomic.Int32
-	sp := runtime.DefaultSpawner(&runtime.Config{PiBin: filepath.Join(bins, "fakepi")})
+	// polyforge#85 fix build (verification r1#3, the owner's ruling): name the
+	// data dir, so the step agent snapshot and the session store live under a
+	// temp dir this test owns — never the checkout.
+	sp := runtime.DefaultSpawner(&runtime.Config{PiBin: filepath.Join(bins, "fakepi"), DataDir: t.TempDir()})
 	h, err = sp.Spawn(context.Background(), spawn.Params{
 		WorkItemID: wi, CapsuleDir: capDir, SessionHandle: "6b6b6b6b", SpawnN: 1,
 		TranscriptPath: transcript, InitialPrompt: "begin the step",

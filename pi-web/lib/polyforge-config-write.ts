@@ -23,12 +23,16 @@ import {
   IDENTITY_KEYS,
   NON_EMPTY_STRING_KEYS,
   isStepSkipKey,
+  parseStepTierKey,
   parseStepWriteKey,
   parseWorkspaceWriteKey,
+  POLYFORGE_CONFIG_STEP_TIERS_MINIMUM_PF_VERSION,
   stepValueError,
   SUMMARIZE_KEYS,
   workspaceProjectsValue,
 } from "./polyforge-config-schema";
+import { parseStepTierCandidate } from "./step-tiers";
+import { stepTierDefinedModels } from "./step-tier-defined-models";
 import { POLYFORGE_WORKFLOW_CARD_MINIMUM_PF_VERSION } from "./polyforge-workflows";
 import {
   appendPolyforgeConfigHistory,
@@ -63,10 +67,12 @@ export const WRITABLE_KEYS = new Set([...CLI_WRITABLE_KEYS, ...SUMMARIZE_KEYS]);
 
 /** The panel's allowlist: the fixed keys above, the workspace step keys
  *  `steps.<project>.<step-id>.models` and
- *  `steps.<project>.<step-id>.skip`, and a Cell's whole
- *  `[workspace."<abs path>"]` mapping sections. */
+ *  `steps.<project>.<step-id>.skip`, a Cell's whole
+ *  `[workspace."<abs path>"]` mapping sections, and the Host's
+ *  `step_tiers.<tier>` catalog family (polyforge#151, 85b2 — a well-formed
+ *  tier name only; the Host scope is the gate's own refusal). */
 export function isPanelWritableKey(key: string): boolean {
-  return WRITABLE_KEYS.has(key) || parseStepWriteKey(key) !== null || parseWorkspaceWriteKey(key) !== null;
+  return WRITABLE_KEYS.has(key) || parseStepWriteKey(key) !== null || parseWorkspaceWriteKey(key) !== null || parseStepTierKey(key) !== null;
 }
 
 /** A key written to the workspace `.polyforge.yaml` (needs a cwd): the
@@ -150,6 +156,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function assertShape(key: string, value: unknown): void {
+  if (parseStepTierKey(key) !== null) {
+    // pf refuses an empty tier list itself (unset the tier instead); the
+    // panel refuses the same shape before any spawn, and every candidate
+    // must be a non-empty string (pf alone judges the candidate grammar).
+    if (!Array.isArray(value) || value.length === 0 || value.some((item) => typeof item !== "string" || item.trim() === "")) {
+      throw new ConfigWriteError(`${key} must be a non-empty array of candidate strings (unset the tier to empty it)`);
+    }
+    return;
+  }
   if (parseStepWriteKey(key)) {
     const invalid = stepValueError(key, value);
     if (invalid) throw new ConfigWriteError(`${key}: ${invalid}`);
@@ -208,7 +223,7 @@ function assertShape(key: string, value: unknown): void {
 function valueArg(key: string, value: unknown): string {
   // a mapping section is pf's `projects=a,b`
   if (parseWorkspaceWriteKey(key)) return `projects=${(workspaceProjectsValue(value) ?? []).join(",")}`;
-  if (key === "summarize.models" || key === "transient_error_patterns" || key === "model_error_patterns" || (parseStepWriteKey(key) && Array.isArray(value))) return JSON.stringify(value);
+  if (key === "summarize.models" || key === "transient_error_patterns" || key === "model_error_patterns" || (parseStepWriteKey(key) && Array.isArray(value)) || parseStepTierKey(key) !== null) return JSON.stringify(value);
   return String(value);
 }
 
@@ -312,6 +327,47 @@ async function assertStepWriteCapability(cwd: string, pin: PolyforgeScopeArgv): 
   if (doc.write_capable !== true) {
     const reason = typeof doc.write_reason === "string" && doc.write_reason ? doc.write_reason : "the running daemon cannot check the step keys";
     throw new ConfigWriteError(reason, 400);
+  }
+}
+
+/** The step-tier catalog needs the pf release that first carries
+ *  `[step_tiers]` (docs/upgrade.md v0.2.4 — the 0.2.x line: a 2.20.x pf and
+ *  an unparseable version are both below it, so the unknown counts
+ *  below like the summarize floor). A null/unparseable version is
+ *  400, nothing spawned beyond the probe. */
+async function assertStepTiersWriteCapability(): Promise<void> {
+  const presence = await probePolyforgeVersion(true);
+  if (isPolyforgeVersionBelowMinimum(presence.version, POLYFORGE_CONFIG_STEP_TIERS_MINIMUM_PF_VERSION, true)) {
+    throw new ConfigWriteError(`the step-tier catalog needs pf ${POLYFORGE_CONFIG_STEP_TIERS_MINIMUM_PF_VERSION} or newer (found ${presence.version ?? "an unparseable version"})`, 400);
+  }
+}
+
+/** The defined-model gate (Q2): every NEW candidate of a tier write (one
+ *  the file does not already list) must name a defined model of its
+ *  harness — pi's registered models, claude's aliases and custom names —
+ *  with pf's candidate grammar. Candidates already in the file are the
+ *  file's own and preserved untouched. Refused before the write spawn. */
+async function assertStepTierCandidatesDefined(key: string, value: unknown, old: unknown): Promise<void> {
+  const list = Array.isArray(value) ? value.map((item) => String(item)) : [];
+  const oldSet = new Set(Array.isArray(old) ? old.map((item) => String(item)) : []);
+  const fresh = [...new Set(list.filter((item) => !oldSet.has(item)))];
+  if (fresh.length === 0) return;
+  let defined;
+  try {
+    defined = await stepTierDefinedModels();
+  } catch (error) {
+    throw new ConfigWriteError(`the defined model list is unavailable; the write is refused (try again): ${error instanceof Error ? error.message : String(error)}`, 400);
+  }
+  for (const candidate of fresh) {
+    const parsed = parseStepTierCandidate(candidate);
+    if (!parsed) {
+      throw new ConfigWriteError(`${key}: ${JSON.stringify(candidate)} is not a <pi|claude>:<model>[:<effort>] candidate`, 400);
+    }
+    const identity = `${parsed.harness}:${parsed.model}`;
+    const names = parsed.harness === "pi" ? defined.pi : defined.claude;
+    if (!names.includes(parsed.model)) {
+      throw new ConfigWriteError(`${key}: ${identity} is not a defined model — save its native definition first`, 400);
+    }
   }
 }
 
@@ -420,13 +476,28 @@ async function executeWrite(body: ConfigWriteRequest): Promise<ConfigWriteResult
   if (scope === "workspace" && "host" in cellScope) {
     throw new ConfigWriteError("a workspace (.polyforge.yaml) write belongs to a Cell: it takes no Host scope", 400);
   }
+  // The step-tier catalog is the Host's own family (85b): a non-Host write
+  // is refused here, before the scoped pin — the default Cell's file is a
+  // different file and a named Cell's list never shows the catalog at all.
+  const stepTier = parseStepTierKey(key);
+  if (stepTier !== null && !("host" in cellScope)) {
+    throw new ConfigWriteError("step_tiers.<tier> is the Host's catalog: only the Host scope may write it (host: true)", 400);
+  }
   const pin = await assertWritableScope(cellScope);
   if (parseStepWriteKey(key)) await assertStepWriteCapability(cwd, pin);
   if (key.startsWith("summarize.")) await assertSummarizeWriteCapability();
+  if (stepTier !== null) await assertStepTiersWriteCapability();
 
   // A fresh read gives the file value before the write (the history's `old`)
   // and the file the key lives in (the CAS hash).
   const current = await readCurrentValue(key, scope === "workspace" ? cwd : "", pin);
+  // Only NEW candidates must be defined models (Q2): candidates already in
+  // the file are preserved as they are, so a tier holding retired models
+  // stays editable. The set is recomputed per write — never trusted from
+  // the client — and every refusal precedes the write spawn.
+  if (stepTier !== null && action === "set") {
+    await assertStepTierCandidatesDefined(key, body.value, current.value);
+  }
 
   const argv = [...pin.prefix, "--json", "config", action, key, ...pin.suffix];
   let stdin: string | undefined;

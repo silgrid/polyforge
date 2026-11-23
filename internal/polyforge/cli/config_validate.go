@@ -66,6 +66,9 @@ func applyConfigBytes(cfg *Config, path string, data []byte) error {
 	if cfg.ModelSource, err = parseModelTable(path, p.model); err != nil {
 		return err
 	}
+	if cfg.StepTiers, err = parseStepTiersTable(path, p.stepTiers); err != nil {
+		return err
+	}
 	if cfg.Summarize, err = parseSummarizeTable(path, p.summarize); err != nil {
 		return err
 	}
@@ -213,6 +216,11 @@ func checkFileRole(path string, p *parsedConfig) error {
 		if cellcfg.HostOnly("daemon", kv.key) {
 			return refuse(kv.line, "[daemon] "+kv.key)
 		}
+	}
+	// the [step_tiers] catalog is a Host-only table family: a named Cell's
+	// file never carries it (polyforge#143, 85b)
+	if p.stepTiers != nil {
+		return refuse(p.stepTiers.line, "["+StepTiersSection+"]")
 	}
 	return nil
 }

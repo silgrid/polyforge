@@ -199,7 +199,7 @@ it resolves to:
     sonnet  → claude-sonnet-5-5
     haiku   → claude-haiku-5-5
 
-Pi Web's model list is these aliases (`value`) plus Settings › Claude's custom names; an
+Pi Web's model list is these aliases (`value`) plus claude's native modelPicker custom names; an
 alias's context window is the one pi's catalog has for its `resolvedModel`.
 
 Scrubbing: `account.tokenSource` named the recording environment's credential variable;

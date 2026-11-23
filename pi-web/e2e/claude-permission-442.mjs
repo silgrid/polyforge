@@ -1,4 +1,4 @@
-// carries: lib/claude-permission*, app/api/claude-permissions/*, components/ClaudePermission*, lib/web-push*
+// carries: lib/claude-permission*, app/api/claude-permissions/*, components/ClaudePermission*, lib/pi-web-settings*, lib/claude-preferences*, lib/claude-migration*, lib/web-push*
 // AC1–AC5, AC4b — a claude session's permission prompts in Pi Web: browser e2e.
 //
 // The child is the PATH-injected e2e/claude-stub/claude.mjs. A `perm: <command>` line asks
@@ -11,8 +11,12 @@
 //
 // Both languages are Chinese: the page's (`pi-locale` zh-CN: the sidebar marker, Settings)
 // and the Agent language (`pi-web-settings.json` zh-CN before the server starts: the
-// dialogs' and the notice's text, which follow the session's language). No
-// `claude-permissions.json` exists at the start, so the defaults are in force (ask, push on).
+// dialogs' and the notice's text, which follow the session's language). The
+// approval channel is a Pi Web preference in that file now (85a4): nothing is
+// stored for it at the start, so the defaults are in force (ask, push on),
+// and the first session creation runs the one-time migration of the retired
+// self-stored files. The block lives on the permission page's approval pane
+// (85a4 moved it out of General).
 // The idle timeout is the product default; only the suite ends a child.
 //
 // Not declared (each already has 3 suites, lib/e2e-carries.test.mjs): lib/claude-session.ts,
@@ -37,7 +41,7 @@ writeFileSync(join(agentDir, "pi-web-settings.json"), `${JSON.stringify({ versio
 // The page's words (zh-CN) and the dialogs' (the session's zh-CN Agent language).
 const UI = {
   settings: "设置",
-  general: "常规",
+  permission: "权限",
   send: "发送",
   showSidebar: "显示侧边栏",
   processDetails: "处理详情",
@@ -132,7 +136,7 @@ const radio = (group, label) => group.getByRole("radio", { name: label });
 const pushSwitch = () => settingsDialog().getByRole("switch", { name: UI.push, exact: true });
 const checked = async (locator) => (await locator.getAttribute("aria-checked")) === "true";
 
-/** Opens Settings › General and waits for the claude permission block. */
+/** Opens Settings › 权限 and waits for the claude approval-channel block (85a4). */
 async function openSettings() {
   const button = page.getByRole("button", { name: UI.settings, exact: true }).first();
   await button.waitFor({ state: "visible", timeout: NAV_MS });
@@ -142,8 +146,8 @@ async function openSettings() {
     await button.click({ timeout: ACTION_MS }).catch(() => {});
     return settingsDialog().isVisible().catch(() => false);
   }, NAV_MS, "Settings never opened");
-  await settingsDialog().locator(".settings-section-tabs").getByRole("button", { name: UI.general }).first().click({ timeout: ACTION_MS }).catch(() => {});
-  await waitFor(async () => (await modeGroup().count()) === 1 && modeGroup().isVisible(), 30_000, `Settings › General shows no "${UI.mode}" choice`);
+  await settingsDialog().locator(".settings-section-tabs").getByRole("button", { name: UI.permission }).first().click({ timeout: ACTION_MS }).catch(() => {});
+  await waitFor(async () => (await modeGroup().count()) === 1 && modeGroup().isVisible(), 30_000, `Settings › 权限 shows no "${UI.mode}" choice`);
 }
 async function closeSettings() {
   await settingsDialog().locator(".settings-dialog-close").click({ timeout: ACTION_MS });

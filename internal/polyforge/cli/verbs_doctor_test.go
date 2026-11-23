@@ -146,7 +146,7 @@ func TestDoctorHealthyMachineAllPassExit0(t *testing.T) {
 	ws := filepath.Join(filepath.Dir(env["XDG_CONFIG_HOME"]), "ws-polyforge")
 	if raw, err := os.ReadFile(cfgPath); err != nil {
 		t.Fatal(err)
-	} else if err := os.WriteFile(cfgPath, append(raw, "\n[memory_policy.\""+ws+"\".default]\nrecord = [\"r\"]\n"...), 0o600); err != nil {
+	} else if err := os.WriteFile(cfgPath, append(raw, "\n[memory_policy.\""+ws+"\".default]\nrecord = [\"r\"]\n"+"\n[step_tiers]\ndefault = [\"pi:prov/model-a\"]\n"...), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	env["HOME"] = displayHome(t, `{"statusLine":{"type":"command","command":"echo main"}}`,

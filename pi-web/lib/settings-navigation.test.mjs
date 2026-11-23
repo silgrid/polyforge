@@ -1,3 +1,4 @@
+// carries: lib/settings-navigation.ts, components/SettingsPanel.tsx, components/ModelsConfig.tsx, components/AppShell.tsx, lib/i18n/messages/*
 import "#test-env";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -7,6 +8,7 @@ const jiti = createJiti(import.meta.url);
 const {
   getLastSettingsSection,
   getLastSettingsSelection,
+  SETTINGS_TABS,
   settingsSectionRequiresProject,
   SETTINGS_SECTION_VALUES,
   setLastSettingsSection,
@@ -34,7 +36,8 @@ test("restores the last settings section and falls back without a project", () =
 
   setLastSettingsSection("skills", storage);
   assert.equal(getLastSettingsSection("/project", storage), "skills");
-  assert.equal(getLastSettingsSection(null, storage), "general");
+  // 85d AC3: skills opens without a project too (the user scope alone).
+  assert.equal(getLastSettingsSection(null, storage), "skills");
 
   setLastSettingsSection("agents", storage);
   assert.equal(getLastSettingsSection("/project", storage), "agents");
@@ -63,7 +66,20 @@ test("keeps project settings selections isolated by cwd", () => {
   assert.equal(getLastSettingsSelection("skills", "/project-three", storage), null);
 });
 
-test("shares the models selection globally", () => {
+test("legacy model navigation migrates once to the unified pi selection", () => {
+  const selection = JSON.stringify({ type: "provider", name: "gateway" });
+  const storage = createStorage({ "pi-web:settings-navigation": JSON.stringify({ section: "legacy-models", selections: { models: selection } }) });
+  assert.equal(getLastSettingsSection(null, storage), "models");
+  assert.equal(getLastSettingsSelection("models", null, storage), selection);
+  const stored = JSON.parse(storage.values.get("pi-web:settings-navigation"));
+  assert.equal(stored.section, "models");
+  assert.equal(Object.hasOwn(stored.selections, "models"), false);
+  assert.equal(stored.selections[JSON.stringify(["models", "pi"])], selection);
+  setLastSettingsSelection("models", JSON.stringify({ type: "provider", name: "new" }), null, storage);
+  assert.equal(Object.hasOwn(JSON.parse(storage.values.get("pi-web:settings-navigation")).selections, "models"), false);
+});
+
+test("shares the Models page selection globally under the historical key", () => {
   const storage = createStorage();
   const selection = JSON.stringify({ type: "provider", name: "custom" });
 
@@ -71,6 +87,55 @@ test("shares the models selection globally", () => {
 
   assert.equal(getLastSettingsSelection("models", "/project-two", storage), selection);
   assert.equal(getLastSettingsSelection("models", null, storage), selection);
+  // A selection stored before the rename still reads.
+  const old = createStorage({ "pi-web:settings-navigation": JSON.stringify({ selections: { models: selection } }) });
+  assert.equal(getLastSettingsSelection("models", null, old), selection);
+  assert.equal(getLastSettingsSelection("models", null, storage), selection);
+});
+
+test("the settings rail contains the unified model page", () => {
+  assert.ok(Array.isArray(SETTINGS_TABS), "SETTINGS_TABS is not exported");
+  assert.deepEqual(
+    SETTINGS_TABS.map((tab) => tab.id),
+    ["general", "account", "models", "permission", "skills", "mcp", "agents", "plugins", "polyforge"],
+  );
+  assert.deepEqual(SETTINGS_TABS.filter((tab) => tab.legacy).map((tab) => tab.id), []);
+  assert.deepEqual(SETTINGS_SECTION_VALUES, SETTINGS_TABS.map((tab) => tab.id));
+  // Every tab names a label key, once.
+  const keys = SETTINGS_TABS.map((tab) => tab.labelKey);
+  assert.deepEqual([...new Set(keys)], keys);
+  for (const key of keys) assert.match(key, /^(settings|common|polyforge)\./, `${key} is not a locale key`);
+  // The new concept pages and both legacy pages open without a project; the
+  // skills page too (85d AC3: it shows the user scope without a project).
+  for (const section of ["general", "account", "models", "permission", "skills", "mcp", "polyforge"]) {
+    assert.equal(settingsSectionRequiresProject(section), false, section);
+  }
+  for (const section of ["agents", "plugins"]) {
+    assert.equal(settingsSectionRequiresProject(section), true, section);
+  }
+});
+
+test("the deleted Claude page's stored `claude` value reads as unknown and lands on general (review r1#7: the migration map went with the page)", () => {
+  const storage = createStorage({ "pi-web:settings-navigation": JSON.stringify({ section: "claude" }) });
+  assert.equal(getLastSettingsSection("/project", storage), "general");
+  // Other selections survive the unknown value untouched.
+  const both = createStorage({
+    "pi-web:settings-navigation": JSON.stringify({
+      section: "claude",
+      selections: { [JSON.stringify(["skills", "/p"])]: "/skill.md", models: "{}" },
+    }),
+  });
+  assert.equal(getLastSettingsSection("/p", both), "general");
+  assert.equal(getLastSettingsSelection("skills", "/p", both), "/skill.md");
+  assert.equal(getLastSettingsSelection("models", null, both), "{}");
+});
+
+test("a stored models section value lands on the new Models concept page (85a1b AC4)", () => {
+  const storage = createStorage({ "pi-web:settings-navigation": JSON.stringify({ section: "models" }) });
+  assert.equal(getLastSettingsSection("/project", storage), "models");
+  assert.equal(getLastSettingsSection(null, storage), "models");
+  // The raw value keeps its spelling; the destination changed meaning.
+  assert.equal(JSON.parse(storage.values.get("pi-web:settings-navigation")).section, "models");
 });
 
 test("restores Settings › MCP without a project, since it lists the global file alone", () => {
@@ -83,7 +148,8 @@ test("restores Settings › MCP without a project, since it lists the global fil
   assert.equal(settingsSectionRequiresProject("mcp"), false);
   assert.equal(settingsSectionRequiresProject("models"), false);
   assert.equal(settingsSectionRequiresProject("general"), false);
-  for (const section of ["skills", "agents", "plugins"]) {
+  assert.equal(settingsSectionRequiresProject("skills"), false, "85d AC3: skills opens without a project");
+  for (const section of ["agents", "plugins"]) {
     assert.equal(settingsSectionRequiresProject(section), true, section);
   }
 });
@@ -119,4 +185,23 @@ test("ignores malformed and unavailable browser storage", () => {
   assert.equal(getLastSettingsSection("/project", unavailable), "general");
   assert.doesNotThrow(() => setLastSettingsSection("plugins", unavailable));
   assert.doesNotThrow(() => setLastSettingsSelection("plugins", "key", "/project", unavailable));
+});
+
+test("the skills section works without a project: no redirect, and its selection lives under the bare name (85d AC3)", () => {
+  // A stored skills section survives a null cwd instead of falling back to general.
+  const stored = createStorage({ "pi-web:settings-navigation": JSON.stringify({ section: "skills" }) });
+  assert.equal(getLastSettingsSection(null, stored), "skills");
+  assert.equal(getLastSettingsSection("/project", stored), "skills");
+
+  // The no-project selection is its own key, like MCP's: no project key
+  // (always an array) can collide with it, and each side keeps its own.
+  const storage = createStorage();
+  setLastSettingsSelection("skills", "/agent/skills/a/SKILL.md", null, storage);
+  setLastSettingsSelection("skills", "/agent/skills/b/SKILL.md", "/project", storage);
+  assert.equal(getLastSettingsSelection("skills", null, storage), "/agent/skills/a/SKILL.md");
+  assert.equal(getLastSettingsSelection("skills", "/project", storage), "/agent/skills/b/SKILL.md");
+  // A remembered project selection never leaks into the no-project listing.
+  const projectOnly = createStorage();
+  setLastSettingsSelection("skills", "/project/.pi/skills/x/SKILL.md", "/project", projectOnly);
+  assert.equal(getLastSettingsSelection("skills", null, projectOnly), null);
 });

@@ -1,0 +1,298 @@
+// carries: app/api/harness/route.ts, app/api/harness/[harness]/[concept]/route.ts, app/api/harness/compare/route.ts, lib/harness/route-context.ts
+import "#test-env";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+import { createJiti } from "jiti";
+
+// The three harness routes (AC3): the harness list with capabilities, every
+// concept's read, and the comparison — every response scanned for the
+// sentinel strings planted in the credential files (the ticket's list:
+// claude settings env values, key-like fields in .claude.json,
+// .credentials.json, pi's auth.json, models.json's apiKey, MCP headers and
+// url parameters), and the stub log checked for a forbidden command. The
+// claude on PATH is the unit stub answering initialize as 2.1.326.
+const here = path.dirname(new URL(import.meta.url).pathname);
+const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "pi-web-harness-route-"));
+const agentDir = path.join(scratch, "agent");
+const claudeConfigDir = path.join(scratch, "claude-config");
+const project = path.join(scratch, "project");
+const outside = path.join(scratch, "outside");
+const binDir = path.join(scratch, "bin");
+fs.mkdirSync(path.join(agentDir, "skills", "route-skill"), { recursive: true });
+fs.mkdirSync(path.join(claudeConfigDir, "skills", "cl-skill"), { recursive: true });
+fs.mkdirSync(path.join(project, ".pi"), { recursive: true });
+fs.mkdirSync(path.join(project, ".claude", "skills", "p-skill"), { recursive: true });
+fs.mkdirSync(outside);
+fs.mkdirSync(binDir);
+fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({
+  defaultProvider: "anthropic",
+  defaultModel: "route-model",
+  defaultThinkingLevel: "high",
+}));
+fs.writeFileSync(path.join(agentDir, "models.json"), JSON.stringify({
+  providers: { anthropic: { apiKey: "sk-RT-SENTINEL-KEY" } },
+}));
+fs.writeFileSync(path.join(agentDir, "auth.json"), JSON.stringify({ apiKeys: { anthropic: "RT-SENTINEL-AUTH" } }));
+fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({
+  mcpServers: {
+    pmcp: { url: "https://pmcp.example/?token=RT-SENTINEL-PI-MCP", headers: { Authorization: "Bearer RT-SENTINEL-PI-H" } },
+  },
+}));
+fs.writeFileSync(path.join(agentDir, "skills", "route-skill", "SKILL.md"), "---\nname: route-skill\ndescription: x\n---\n");
+fs.writeFileSync(path.join(claudeConfigDir, "settings.json"), JSON.stringify({
+  model: "opus",
+  effortLevel: "low",
+  env: { ANTHROPIC_CUSTOM_HEADER: "RT-SENTINEL-ENV" },
+  mcpServers: { cmcp: { url: "https://cmcp.example/?token=RT-SENTINEL-MCP-URL", headers: { Authorization: "RT-SENTINEL-MCP-H" } } },
+  permissions: { defaultMode: "default" },
+}));
+fs.writeFileSync(path.join(claudeConfigDir, ".credentials.json"), JSON.stringify({ claudeAiOauth: { accessToken: "RT-SENTINEL-CRED" } }));
+fs.writeFileSync(path.join(claudeConfigDir, ".claude.json"), JSON.stringify({
+  apiKeyHelper: "RT-SENTINEL-HELPER",
+  mcpServers: { smcp: { command: "npx", args: ["--token", "RT-SENTINEL-ARG"] } },
+  projects: {},
+}));
+fs.writeFileSync(path.join(claudeConfigDir, "skills", "cl-skill", "SKILL.md"), "---\nname: cl-skill\ndescription: x\n---\n");
+fs.writeFileSync(path.join(project, ".pi", "settings.json"), JSON.stringify({ defaultThinkingLevel: "low" }));
+fs.writeFileSync(path.join(project, ".claude", "settings.json"), JSON.stringify({ model: "sonnet" }));
+fs.writeFileSync(path.join(project, ".claude", "settings.local.json"), JSON.stringify({ effortLevel: "low" }));
+fs.writeFileSync(path.join(project, ".claude", "skills", "p-skill", "SKILL.md"), "---\nname: p-skill\ndescription: x\n---\n");
+fs.writeFileSync(path.join(project, ".mcp.json"), JSON.stringify({
+  mcpServers: { dmcp: { url: "https://dmcp.example/?token=RT-SENTINEL-DOTMCP" } },
+}));
+const state = JSON.parse(fs.readFileSync(path.join(claudeConfigDir, ".claude.json"), "utf8"));
+state.projects[project] = { hasTrustDialogAccepted: true };
+fs.writeFileSync(path.join(claudeConfigDir, ".claude.json"), JSON.stringify(state));
+// The unit claude stub, answering initialize from the 2.1.322 recording.
+fs.copyFileSync(path.join(here, "..", "..", "..", "lib", "__fixtures__", "claude-stub", "claude.mjs"), path.join(binDir, "claude"));
+fs.chmodSync(path.join(binDir, "claude"), 0o755);
+fs.symlinkSync(path.join(here, "..", "..", "..", "lib", "__fixtures__", "claude-2.1.322"), path.join(scratch, "claude-2.1.322"));
+const stubLog = path.join(scratch, "stub.jsonl");
+process.env.PI_TEST_CLAUDE_STUB_LOG = stubLog;
+process.env.PI_TEST_CLAUDE_STUB_VERSION = "2.1.326";
+process.env.PI_CODING_AGENT_DIR = agentDir;
+process.env.CLAUDE_CONFIG_DIR = claudeConfigDir;
+delete process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS;
+const originalPath = process.env.PATH;
+process.env.PATH = `${binDir}${path.delimiter}${originalPath}`;
+const SENTINELS = [
+  "RT-SENTINEL-KEY", "RT-SENTINEL-AUTH", "RT-SENTINEL-PI-MCP", "RT-SENTINEL-PI-H",
+  "RT-SENTINEL-ENV", "RT-SENTINEL-MCP-URL", "RT-SENTINEL-MCP-H", "RT-SENTINEL-CRED",
+  "RT-SENTINEL-HELPER", "RT-SENTINEL-ARG", "RT-SENTINEL-DOTMCP",
+];
+const CONCEPTS = ["auth", "config-root", "model", "permission", "skills", "mcp", "env", "effective-config"];
+test.after(() => {
+  process.env.PATH = originalPath;
+  delete process.env.PI_TEST_CLAUDE_STUB_VERSION;
+  delete process.env.CLAUDE_CONFIG_DIR;
+  fs.rmSync(scratch, { recursive: true, force: true });
+});
+
+const jiti = createJiti(import.meta.url, { alias: { "@": process.cwd() }, interopDefault: true, moduleCache: false });
+const listRoute = await jiti.import("./route.ts");
+const conceptRoute = await jiti.import("./[harness]/[concept]/route.ts");
+const compareRoute = await jiti.import("./compare/route.ts");
+const { allowFileRoot } = await jiti.import("../../../lib/file-access.ts");
+globalThis.__piAllowedRootsCache = undefined;
+for (const folder of [project, outside]) allowFileRoot(folder);
+
+const request = (url) => new Request(`http://localhost${url}`, { headers: { host: "localhost" } });
+const noSentinel = (text, what) => {
+  for (const sentinel of SENTINELS) assert.ok(!text.includes(sentinel), `${what} leaks ${sentinel}: ${text}`);
+};
+
+test("the harness list answers both adapters with version, known and capabilities", async () => {
+  const response = await listRoute.GET(request("/api/harness"));
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.deepEqual(body.harnesses.map((entry) => entry.id), ["pi", "claude"]);
+  const [pi, claude] = body.harnesses;
+  const sdkPackage = JSON.parse(fs.readFileSync(path.join(process.cwd(), "node_modules/@earendil-works/pi-coding-agent/package.json"), "utf8"));
+  assert.equal(pi.version, sdkPackage.version);
+  assert.equal(pi.versionKnown, true);
+  assert.equal(pi.writable, true);
+  assert.deepEqual(pi.capabilities.concepts, CONCEPTS);
+  assert.equal(pi.capabilities.configRootEnv, "PI_CODING_AGENT_DIR");
+  assert.equal(claude.version, "2.1.326");
+  assert.equal(claude.versionKnown, true);
+  assert.deepEqual(claude.capabilities.concepts, CONCEPTS);
+  assert.equal(claude.capabilities.configRootEnv, "CLAUDE_CONFIG_DIR");
+  noSentinel(JSON.stringify(body), "the harness list");
+});
+
+test("every concept read of both harnesses answers its payload with no sentinel anywhere", async () => {
+  for (const harness of ["pi", "claude"]) {
+    for (const concept of CONCEPTS) {
+      const response = await conceptRoute.GET(
+        request(`/api/harness/${harness}/${concept}?cwd=${encodeURIComponent(project)}`),
+        { params: Promise.resolve({ harness, concept }) },
+      );
+      assert.equal(response.status, 200, `${harness}/${concept}`);
+      const body = await response.json();
+      assert.equal(body.harness, harness);
+      assert.equal(body.concept, concept);
+      assert.ok(body.data, `${harness}/${concept} read nothing`);
+      noSentinel(JSON.stringify(body), `${harness}/${concept}`);
+    }
+  }
+});
+
+test("an unknown harness or concept answers 404", async () => {
+  const noHarness = await conceptRoute.GET(request("/api/harness/nope/auth"), { params: Promise.resolve({ harness: "nope", concept: "auth" }) });
+  assert.equal(noHarness.status, 404);
+  const noConcept = await conceptRoute.GET(request("/api/harness/pi/nope"), { params: Promise.resolve({ harness: "pi", concept: "nope" }) });
+  assert.equal(noConcept.status, 404);
+});
+
+test("a cwd outside the allowed roots answers 403, a relative one 400", async () => {
+  const denied = await conceptRoute.GET(request(`/api/harness/pi/auth?cwd=${encodeURIComponent(path.join(scratch, "not-registered"))}`), { params: Promise.resolve({ harness: "pi", concept: "auth" }) });
+  assert.equal(denied.status, 403);
+  const relative = await conceptRoute.GET(request("/api/harness/pi/auth?cwd=relative/path"), { params: Promise.resolve({ harness: "pi", concept: "auth" }) });
+  assert.equal(relative.status, 400);
+});
+
+test("a cross-site request is refused by the API guard", async () => {
+  const crossSite = (url) => new Request(`http://localhost${url}`, { headers: { host: "localhost", "sec-fetch-site": "cross-site" } });
+  const response = await listRoute.GET(crossSite("/api/harness"));
+  assert.equal(response.status, 403);
+  const concept = await conceptRoute.GET(crossSite("/api/harness/pi/auth"), { params: Promise.resolve({ harness: "pi", concept: "auth" }) });
+  assert.equal(concept.status, 403);
+  const comparison = await compareRoute.GET(crossSite("/api/harness/compare"));
+  assert.equal(comparison.status, 403);
+});
+
+test("the compare route answers both fields, one field, and refuses an unknown one", async () => {
+  const all = await compareRoute.GET(request(`/api/harness/compare?cwd=${encodeURIComponent(project)}`));
+  assert.equal(all.status, 200);
+  const body = await all.json();
+  assert.deepEqual(body.results.map((entry) => entry.field), ["reasoning-effort", "approval-mode", "sandbox", "project-trust"]);
+  assert.equal(body.results[0].status, "consistent");
+  assert.deepEqual(body.results[0].values, {
+    pi: { supported: true, neutral: "low", raw: "low" },
+    claude: { supported: true, neutral: "low", raw: "low" },
+  });
+  assert.equal(body.results[1].status, "unsupported");
+  assert.equal(body.results[2].status, "unsupported");
+  assert.equal(body.results[3].status, "inconsistent");
+  noSentinel(JSON.stringify(body), "the compare route");
+  const one = await compareRoute.GET(request(`/api/harness/compare?cwd=${encodeURIComponent(project)}&field=approval-mode`));
+  const oneBody = await one.json();
+  assert.deepEqual(oneBody.results.map((entry) => entry.field), ["approval-mode"]);
+  const unknown = await compareRoute.GET(request(`/api/harness/compare?field=bogus`));
+  assert.equal(unknown.status, 400);
+});
+
+test("the stub log shows no forbidden command", () => {
+  const lines = fs.readFileSync(stubLog, "utf8").split("\n").filter(Boolean);
+  assert.ok(lines.length > 0, "the stub was never launched");
+  for (const line of lines) {
+    const entry = JSON.parse(line);
+    const argv = Array.isArray(entry.argv) ? entry.argv : [];
+    assert.ok(!argv.some((arg) => arg.includes("auth")), `a forbidden command was launched: ${line}`);
+    const stdin = Array.isArray(entry.stdin) ? entry.stdin : [];
+    for (const frame of stdin) {
+      assert.ok(!frame.includes("auth print"), `a forbidden command was requested: ${frame}`);
+    }
+  }
+});
+
+test("PUT one concept: guarded, gated and the write lands in the native file (85a4)", async () => {
+  const put = (url, body, contentType = "application/json") => new Request(`http://localhost${url}`, {
+    method: "PUT",
+    headers: { host: "localhost", "content-type": contentType },
+    body: JSON.stringify(body),
+  });
+  const params = (harness, concept) => ({ params: Promise.resolve({ harness, concept }) });
+
+  // not JSON -> 415, before anything is read
+  const badType = await conceptRoute.PUT(put("/api/harness/claude/permission", {}, "text/plain"), params("claude", "permission"));
+  assert.equal(badType.status, 415);
+  // an unknown harness -> 404
+  const unknown = await conceptRoute.PUT(put("/api/harness/nope/permission", { approvalMode: "auto" }), params("nope", "permission"));
+  assert.equal(unknown.status, 404);
+  // a concept the adapter does not declare writable -> 400
+  const notWritable = await conceptRoute.PUT(put("/api/harness/claude/env", {}), params("claude", "env"));
+  assert.equal(notWritable.status, 400);
+  assert.equal((await notWritable.json()).error, "not-writable");
+  // a change the adapter refuses -> 400 with its reason
+  const refused = await conceptRoute.PUT(put("/api/harness/claude/permission", { approvalMode: "nope" }), params("claude", "permission"));
+  assert.equal(refused.status, 400);
+  const refusedBody = await refused.json();
+  assert.equal(refusedBody.error, "write-refused");
+  assert.ok(refusedBody.message.includes("nope"), refusedBody.message);
+  // a cross-site write is refused by the API guard
+  const crossSite = new Request("http://localhost/api/harness/claude/permission", {
+    method: "PUT",
+    headers: { host: "localhost", "sec-fetch-site": "cross-site", "content-type": "application/json" },
+    body: JSON.stringify({ approvalMode: "auto" }),
+  });
+  const guarded = await conceptRoute.PUT(crossSite, params("claude", "permission"));
+  assert.equal(guarded.status, 403);
+
+  // the write lands in the native user settings.json, unknown keys kept
+  const written = await conceptRoute.PUT(put("/api/harness/claude/permission", { approvalMode: "auto" }), params("claude", "permission"));
+  assert.equal(written.status, 200);
+  const writtenBody = await written.json();
+  assert.equal(writtenBody.harness, "claude");
+  assert.equal(writtenBody.concept, "permission");
+  assert.equal(writtenBody.result.status, "written");
+  noSentinel(JSON.stringify(writtenBody), "the PUT answer");
+  const settings = JSON.parse(fs.readFileSync(path.join(claudeConfigDir, "settings.json"), "utf8"));
+  assert.equal(settings.permissions.defaultMode, "auto");
+  assert.equal(settings.model, "opus");
+  assert.deepEqual(settings.mcpServers, { cmcp: { url: "https://cmcp.example/?token=RT-SENTINEL-MCP-URL", headers: { Authorization: "RT-SENTINEL-MCP-H" } } });
+
+  // pi's own absences answer their reason, never a write
+  const piMode = await conceptRoute.PUT(put("/api/harness/pi/permission", { approvalMode: "ask" }), params("pi", "permission"));
+  assert.equal(piMode.status, 400);
+  const piBody = await piMode.json();
+  assert.equal(piBody.error, "write-refused");
+  assert.ok(piBody.message.includes("approval"), piBody.message);
+
+  // a project trust write goes through the cwd file-access check: first the
+  // explicit untrust, then back to trusted, so the write itself is what moved
+  // the state file (the fixture started it trusted).
+  const untrust = await conceptRoute.PUT(put(`/api/harness/claude/permission?cwd=${encodeURIComponent(project)}`, { projectTrust: { trusted: false } }), params("claude", "permission"));
+  assert.equal(untrust.status, 200);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(claudeConfigDir, ".claude.json"), "utf8")).projects[project].hasTrustDialogAccepted, false);
+  const trust = await conceptRoute.PUT(put(`/api/harness/claude/permission?cwd=${encodeURIComponent(project)}`, { projectTrust: { trusted: true } }), params("claude", "permission"));
+  assert.equal(trust.status, 200);
+  const state2 = JSON.parse(fs.readFileSync(path.join(claudeConfigDir, ".claude.json"), "utf8"));
+  assert.equal(state2.projects[project].hasTrustDialogAccepted, true);
+  const deniedCwd = await conceptRoute.PUT(put(`/api/harness/claude/permission?cwd=${encodeURIComponent(path.join(scratch, "not-registered"))}`, { projectTrust: { trusted: true } }), params("claude", "permission"));
+  assert.equal(deniedCwd.status, 403);
+});
+
+test("PUT customModels: the names land in the native modelPicker through the route's gate; a refused change touches nothing (85a3-3)", async () => {
+  const put = (url, body) => new Request(`http://localhost${url}`, {
+    method: "PUT",
+    headers: { host: "localhost", "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const params = { params: Promise.resolve({ harness: "claude", concept: "model" }) };
+  const settingsPath = path.join(claudeConfigDir, "settings.json");
+  const before = fs.readFileSync(settingsPath, "utf8");
+  // A change the adapter refuses (an invalid name) is a 400 with its reason,
+  // and the native file keeps its bytes.
+  const refused = await conceptRoute.PUT(put("/api/harness/claude/model", { customModels: ["ok-name", "not a model name!"] }), params);
+  assert.equal(refused.status, 400);
+  const refusedBody = await refused.json();
+  assert.equal(refusedBody.error, "write-refused");
+  assert.ok(refusedBody.message.includes("not a claude model name"), refusedBody.message);
+  assert.equal(fs.readFileSync(settingsPath, "utf8"), before, "a refused change touched the file");
+  // The write lands in the native user settings.json's modelPicker beside the
+  // file's other keys, and the answer never echoes a sentinel.
+  const written = await conceptRoute.PUT(put("/api/harness/claude/model", { customModels: ["claude-route-custom"] }), params);
+  assert.equal(written.status, 200);
+  const writtenBody = await written.json();
+  assert.equal(writtenBody.result.status, "written");
+  assert.ok(writtenBody.result.summary.includes("claude-route-custom"), writtenBody.result.summary);
+  noSentinel(JSON.stringify(writtenBody), "the customModels PUT answer");
+  const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+  assert.deepEqual(settings.modelPicker.options, [{ model: "claude-route-custom" }]);
+  assert.equal(settings.model, "opus");
+  assert.equal(settings.permissions.defaultMode, "auto");
+});

@@ -31,9 +31,9 @@ const DEFAULT_LABEL = {
 };
 // r3 (D11): plan needs the claude tool permissions on 「Ask in a dialog」.
 const PLAN_UNAVAILABLE = {
-  en: "Not available: plan mode needs claude tool permissions set to Ask in a dialog (Settings › General) — on Deny silently claude would refuse to leave plan mode",
-  "zh-CN": "暂不可用：plan 模式需要 claude 工具授权为「弹窗询问」（设置 › 常规）——在「静默拒绝」下 claude 会拒绝退出 plan 模式",
-  "zh-TW": "暫不可用：plan 模式需要 claude 工具授權為「彈窗詢問」（設定 › 一般）——在「靜默拒絕」下 claude 會拒絕退出 plan 模式",
+  en: "Not available: plan mode needs claude tool permissions set to Ask in a dialog (Settings › Permissions) — on Deny silently claude would refuse to leave plan mode",
+  "zh-CN": "暂不可用：plan 模式需要 claude 工具授权为「弹窗询问」（设置 › 权限）——在「静默拒绝」下 claude 会拒绝退出 plan 模式",
+  "zh-TW": "暫不可用：plan 模式需要 claude 工具授權為「彈窗詢問」（設定 › 權限）——在「靜默拒絕」下 claude 會拒絕退出 plan 模式",
 };
 const KEYS = [
   "claude.permissionModeLabel",
@@ -90,7 +90,7 @@ test("an open claude session shows the permission-mode control with default and 
 
 test("a fresh claude composer shows no permission-mode control, and every label exists in en, zh-CN and zh-TW", () => {
   assert.equal(typeof ClaudeLaunchPermissionModeMenu, "function");
-  assert.equal(control(composer({ ...base, choosing: true, onHarnessChange() {} })), null, "a fresh claude composer: Settings › Claude decides");
+  assert.equal(control(composer({ ...base, choosing: true, onHarnessChange() {} })), null, "a fresh claude composer: claude's own native default decides");
   assert.equal(control(composer({ ...base, choosing: true, harness: "pi" })), null, "pi");
   assert.equal(control(composer({ ...base, choosing: false, harness: "pi" })), null, "a pi session");
 
@@ -118,17 +118,7 @@ test("an open claude session whose permission prompts come to Pi Web offers plan
   assert.match(rows(menu("plan", true))[2].attrs, /aria-selected="true"/);
 });
 
-// r3 (owner ruling 2026-11-13T07:40:00Z): owns settings.claudePermission*
-// (its ask/deny tool permissions); Settings › Claude's launch permission mode has its own keys.
-test("the launch permission mode's settings labels have their own keys, apart from's settings.claudePermission* ( r3)", () => {
-  const LAUNCH = {
-    en: ["Default permission mode", "The permission mode a new claude session starts with (--permission-mode); an open session can switch its own from the composer."],
-    "zh-CN": ["默认权限模式", "新建 claude 会话启动时的权限模式（--permission-mode）；已打开的会话可在输入框旁切换自己的模式。"],
-    "zh-TW": ["預設權限模式", "新建 claude 工作階段啟動時的權限模式（--permission-mode）；已開啟的工作階段可在輸入框旁切換自己的模式。"],
-  };
-  for (const [id, locale] of [["en", enLocale], ["zh-CN", zhCNLocale], ["zh-TW", zhTWLocale]]) {
-    assert.equal(locale.messages["settings.claudeLaunchPermissionMode"], LAUNCH[id][0], id);
-    assert.equal(locale.messages["settings.claudeLaunchPermissionModeDescription"], LAUNCH[id][1], id);
-    assert.ok(!LAUNCH[id].includes(locale.messages["settings.claudePermissionMode"]), `${id}: settings.claudePermissionMode is's key`);
-  }
-});
+// r3's key-separation pin went with the retired page and its
+// settings.claudeLaunchPermissionMode* labels (review r1#13: orphaned keys
+// deleted); the composer's own labels (claude.permissionMode*) keep their
+// separate keys from settings.claudePermission*, pinned by the suites above.

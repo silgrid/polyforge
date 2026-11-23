@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { completeSimple, type AssistantMessage } from "@earendil-works/pi-ai/compat";
+import { complete, completeSimple, type AssistantMessage } from "@earendil-works/pi-ai/compat";
 import { withTempModelsRuntime, TempModelsLoadError } from "@/lib/model-discovery-auth";
 import {
   getConfiguredProviderBaseUrl,
@@ -142,7 +142,13 @@ export async function POST(req: Request) {
         const startedAt = Date.now();
 
         try {
-          const message = await completeSimple(resolvedModel, {
+          // Adaptive-only Anthropic models reject the explicit disabled value
+          // streamSimple derives from an absent reasoning option. The native
+          // stream API omits thinking when no thinkingEnabled option is given.
+          const runCompletion = resolvedModel.api === "anthropic-messages"
+            && resolvedModel.compat && (resolvedModel.compat as Record<string, unknown>).forceAdaptiveThinking === true
+            ? complete : completeSimple;
+          const message = await runCompletion(resolvedModel, {
             messages: [{
               role: "user",
               content: "Reply with OK only.",
