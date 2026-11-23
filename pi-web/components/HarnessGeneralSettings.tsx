@@ -26,6 +26,8 @@ export interface HarnessGeneralSettingsProps {
   onSessionReloaded: () => void;
   quoteSelectionEnabled: boolean;
   onQuoteSelectionChange: (enabled: boolean) => void;
+  /** Reopen the first-time onboarding wizard (polyforge#167); absent on a host. */
+  onReopenOnboarding?: () => void;
 }
 
 /** The three panes, in their settled order; the label keys are one fact here. */
@@ -43,6 +45,7 @@ export function HarnessGeneralSettings({
   onSessionReloaded,
   quoteSelectionEnabled,
   onQuoteSelectionChange,
+  onReopenOnboarding,
 }: HarnessGeneralSettingsProps) {
   const { t } = useI18n();
   const [pane, setPane] = useState<GeneralPaneId>("conversation");
@@ -66,6 +69,7 @@ export function HarnessGeneralSettings({
                 onSessionReloaded={onSessionReloaded}
                 quoteSelectionEnabled={quoteSelectionEnabled}
                 onQuoteSelectionChange={onQuoteSelectionChange}
+                onReopenOnboarding={onReopenOnboarding}
               />
             </div>
           )}
