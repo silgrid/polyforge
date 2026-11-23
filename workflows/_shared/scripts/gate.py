@@ -1018,7 +1018,6 @@ class Gate:
         plan name the same log for the same command."""
         n = len(cmds)
         groups = [c.group for c in cmds]
-        first = min(i for i in range(n) if groups[i])
         last = max(i for i in range(n) if groups[i])
         head = [i for i in range(n) if not groups[i] and i < last]
         tail = [i for i in range(n) if not groups[i] and i > last]
@@ -1063,6 +1062,11 @@ class Gate:
                 self.interrupted = self.interrupted or interrupt_name(err)
                 gc.exit = -1
                 res.incomplete = "the gate was interrupted while %s ran (%s)" % (c.name, self.interrupted)
+            except BaseException as err:
+                # A fault of the script is never a verdict, and a worker
+                # thread must not swallow it into a pass.
+                gc.exit = -1
+                res.incomplete = "the gate could not run %s: %s: %s" % (c.name, type(err).__name__, err)
             if gc.failed() and not self.keep_going:
                 stop.set()
 
