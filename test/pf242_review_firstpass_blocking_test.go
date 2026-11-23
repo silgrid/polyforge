@@ -12,6 +12,7 @@ package test
 // the tool.
 
 import (
+	"encoding/csv"
 	"fmt"
 	"os"
 	"os/exec"
@@ -237,4 +238,94 @@ func TestPF242ReviewFirstpassBlockingParseHandoffFallback(t *testing.T) {
 		"blocking items: 1 (chains 1, cross-round 0)",
 		"  no later round: 1",
 	)
+}
+
+// pf242DetailCSV reads the one row per blocker chain the tool writes beside
+// the existing CSV.
+func pf242DetailCSV(t *testing.T, path string) []map[string]string {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	recs, err := csv.NewReader(f).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) == 0 {
+		t.Fatalf("empty detail CSV %s", path)
+	}
+	var out []map[string]string
+	for _, r := range recs[1:] {
+		m := map[string]string{}
+		for i, k := range recs[0] {
+			if i < len(r) {
+				m[k] = r[i]
+			}
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+func TestPF242ReviewFirstpassBlockingDetail(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Fatalf("python3 is a pf doctor prerequisite and runs this tool: %v", err)
+	}
+	caps, events := pf242Fixtures(t)
+	dir := t.TempDir()
+	csvPath := filepath.Join(dir, "runs.csv")
+	out, code := pf242Run(t, caps, "--since", "2026-11-14", "--events", events, "--csv", csvPath)
+	if code != 0 {
+		t.Fatalf("review-firstpass exit %d\n%s", code, out)
+	}
+	detail := pf242DetailCSV(t, csvPath+".blocking.csv")
+	if len(detail) != 5 {
+		t.Fatalf("detail rows = %d, want 5 (one per blocker chain)\n%v", len(detail), detail)
+	}
+	byItem := map[string]map[string]string{}
+	for _, row := range detail {
+		byItem[row["capsule"]+"#"+row["item"]] = row
+	}
+	want := []struct{ key, class, model, outcome, reason, rounds string }{
+		{"a-1#1", "bug", "M1", "fixed", "", "1"},
+		{"a-1#2", "test_weakened", "M1", "rebutted", "", "1"},
+		{"b-1#1", "ac_gap", "M2", "owner", "", "1"},
+		{"c-1#1", "guarantee", "M1", "fixed", "", "1-2"},
+		{"d-1#1", "bug", "M1", "unknown", "no later round", "1"},
+	}
+	for _, w := range want {
+		row, ok := byItem[w.key]
+		if !ok {
+			t.Fatalf("detail lacks %s\n%v", w.key, detail)
+		}
+		if row["class"] != w.class || row["model"] != w.model || row["outcome"] != w.outcome ||
+			row["reason"] != w.reason || row["rounds"] != w.rounds {
+			t.Fatalf("%s = %v, want class=%s model=%s outcome=%s reason=%q rounds=%s",
+				w.key, row, w.class, w.model, w.outcome, w.reason, w.rounds)
+		}
+	}
+	// --csv without --events keeps the existing CSV's columns and writes no
+	// detail file.
+	plainCSV := filepath.Join(dir, "plain.csv")
+	if _, code := pf242Run(t, caps, "--since", "2026-11-14", "--csv", plainCSV); code != 0 {
+		t.Fatal("csv-only run failed")
+	}
+	if _, err := os.Stat(plainCSV + ".blocking.csv"); !os.IsNotExist(err) {
+		t.Fatalf("a detail CSV appeared without --events")
+	}
+	f, err := os.Open(plainCSV)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	recs, err := csv.NewReader(f).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantHeader := "capsule,lane,created,review_runs,first_review,written_files,bucket,implementer"
+	if got := strings.Join(recs[0], ","); got != wantHeader {
+		t.Fatalf("existing CSV header changed: %q", got)
+	}
 }
