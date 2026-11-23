@@ -142,10 +142,15 @@ class HandoffCase(GitCase):
         # build judges the run declaration before any replay; a unit with
         # no argv is exit 1, and D1 must take it
         cap, repo = self.capsule("d1-norun")
-        self.sound_unit(cap, repo, ["answer.txt"])
-        write(cap, {"artifacts/build/units.json": json.dumps([
-            {"id": "u1", "test_commit": repo.head(), "impl_commit": repo.head(),
-             "run": {"repo": "app", "cwd": ".", "argv": []}, "marker": "^ok$"}])})
+        test = repo.commit("u1: test", {"test/check_test.sh": UNIT_TEST})
+        impl = repo.commit("u1: impl", {"answer.txt": "42\n"})
+        write(cap, {
+            "artifacts/plan.md": plan(["answer.txt"]),
+            "artifacts/build/units.json": json.dumps([
+                {"id": "u1", "test_commit": test, "impl_commit": impl,
+                 "run": {"repo": "app", "cwd": ".", "argv": []}, "marker": "^ok$"}]),
+            "artifacts/build/change-analysis.json": json.dumps(CLEAN_ANALYSIS),
+        })
         code, res = self.run_handoff(cap)
         self.assertEqual(code, 1, res["summary"])
         self.assertIn("D1", self.items(res))

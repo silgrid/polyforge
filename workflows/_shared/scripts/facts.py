@@ -2941,11 +2941,14 @@ def handoff(inv: Invocation, args: List[str], environ: Mapping[str, str],
         not_judged.append({"item": "D1", "reason": b_inv.summary})
     else:
         units = bd.get("units") or []
+        d1_before = len(hits)
         if b_code == 1 and not units:
             hits.append(_handoff_hit("D1", "no unit is reported: a build without a red-then-green unit proves nothing"))
         for u in units:
             uid, repo = str(u.get("id", "")), str(u.get("repo", ""))
-            why = u.get("why") or u.get("commits")
+            # the unit dict carries a resolution's reason as `unresolved`
+            # (Unit.as_dict); `why`/`commits` are the older spellings
+            why = u.get("unresolved") or u.get("why") or u.get("commits")
             if why:
                 hits.append(_handoff_hit("D1", str(why), repo=repo, unit=uid))
                 continue
@@ -2961,6 +2964,12 @@ def handoff(inv: Invocation, args: List[str], environ: Mapping[str, str],
             elif rr.get("red") is False or rr.get("exit_code") == 0:
                 hits.append(_handoff_hit("D1", "its run `%s` exited 0 on the tree of test_commit %s — the test was green before its implementation"
                                          % (rr.get("line", ""), short_sha(str(rr.get("commit", "")))), repo=repo, unit=uid))
+        if b_code == 1 and len(hits) == d1_before:
+            # build judged something before any replay and no unit dict
+            # carries it (an empty argv, a run naming another repo, a
+            # pre_existing_red base that cannot be named): its exit 1 is
+            # still D1's to refuse, named by build's own summary
+            hits.append(_handoff_hit("D1", "the build's test-first check failed: " + b_inv.summary))
     weakened = bd.get("test_weakened") or []
 
     # D2: plan-conformance.
