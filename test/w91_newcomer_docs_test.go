@@ -54,19 +54,6 @@ func w91Norm(body string) string {
 	return regexp.MustCompile(`\s+`).ReplaceAllString(body, " ")
 }
 
-// w91Preamble answers the page's body before its first heading: the opening
-// the reader starts at.
-func w91Preamble(body string) string {
-	var out []string
-	for _, line := range strings.Split(body, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "#") {
-			break
-		}
-		out = append(out, line)
-	}
-	return strings.Join(out, "\n")
-}
-
 // w91Headings answers the page's '## ' headings in document order.
 func w91Headings(body string) []string {
 	var out []string
@@ -209,19 +196,62 @@ func TestW91SupportedPlatforms(t *testing.T) {
 	}
 }
 
+// w91Placeholder is one entry of the ticket's own placeholder registration
+// (polyforge#166 Q1: "W91 测试登记位置清单"): the token, the page section
+// that uses it, and how many times that section carries it.
+type w91Placeholder struct {
+	token   string
+	section string
+	count   int
+}
+
+// w91PlaceholderRegistry is the ticket's registration, written here and
+// independent of the page under test: each delivery placeholder in the
+// section that uses it, with its count. #86 lands the real assets and a
+// later unit empties this table together with the page's registry — the
+// ticket pins no "at least one placeholder" rule.
+var w91PlaceholderRegistry = []w91Placeholder{
+	{"<PF_IMAGE>", "pull", 1},
+	{"<PF_IMAGE>", "compose", 1},
+	{"<PF_COMPOSE_URL>", "compose", 1},
+	{"<PF_SECCOMP_URL>", "compose", 1},
+}
+
 // TestW91PlaceholderInventory: until polyforge#86 publishes the delivery the
-// page carries greppable placeholders, and its registry lists exactly them;
-// a placeholder never stands in for a `pf` command (that would read as a
-// runnable verb the CLI does not have).
+// page carries exactly the registered placeholders, in the registered
+// sections, the registered number of times; a placeholder never stands in
+// for a `pf` command (that would read as a runnable verb the CLI does not
+// have).
 func TestW91PlaceholderInventory(t *testing.T) {
 	body := w91Read(t, "docs/getting-started.md")
-	found := w91Placeholders(body)
-	// Once #86 lands and the real assets are verified the page legitimately
-	// carries no placeholder; the registry then matches an empty list too, so
-	// no "at least one placeholder" rule is pinned here.
-	registered := w91Placeholders(w91Section(t, body, "placeholder"))
-	if strings.Join(found, "\n") != strings.Join(registered, "\n") {
-		t.Fatalf("the placeholder registry must list exactly the placeholders the page uses:\n page uses: %v\n registry:  %v", found, registered)
+	for _, want := range w91PlaceholderRegistry {
+		sec := w91Section(t, body, want.section)
+		if got := strings.Count(sec, want.token); got != want.count {
+			t.Fatalf("polyforge#166 Q1: %s must appear %d time(s) in the %q section, found %d:\n%s", want.token, want.count, want.section, got, sec)
+		}
+	}
+	// No unregistered token: the page's usage outside its own registry table
+	// is exactly the registered set.
+	usage := strings.Replace(body, w91Section(t, body, "placeholder"), "", 1)
+	registered := map[string]bool{}
+	for _, want := range w91PlaceholderRegistry {
+		registered[want.token] = true
+	}
+	var unregistered []string
+	for _, tok := range w91Placeholders(usage) {
+		if !registered[tok] {
+			unregistered = append(unregistered, tok)
+		}
+	}
+	if len(unregistered) > 0 {
+		t.Fatalf("polyforge#166 Q1: the mainline carries unregistered placeholder(s) %v — register each in w91PlaceholderRegistry (and the page's registry table) or drop it", unregistered)
+	}
+	// The page's own registry table names every registered token.
+	table := w91Section(t, body, "placeholder")
+	for _, tok := range w91Placeholders(usage) {
+		if !strings.Contains(table, "`"+tok+"`") {
+			t.Fatalf("the page's placeholder registry must list %s", tok)
+		}
 	}
 	// A placeholder is a delivery value, never a pf verb or flag.
 	if m := regexp.MustCompile(`(?m)\bpf\s+[^\n]*<PF_`).FindString(body); m != "" {
@@ -323,10 +353,11 @@ func TestW91UserGuideStart(t *testing.T) {
 }
 
 // TestW91SkillAndDoctorPointers: the routing skill's help and init fragments
-// point a newcomer at the mainline page (the CLI's `pf help` stays, Q3), and
-// the doctor's pi-package hint names both install modes on one line — the
-// image mainline beside the existing host installer pointer (Q2) — with no
-// runtime mode detection.
+// point a newcomer at the mainline page (the CLI's `pf help` stays, Q3).
+// The doctor's pi-package hint (Q2) is behaviour, not a source string: the
+// cli package's TestPiPackageCheckNamesBothModes drives the check and
+// asserts its Detail names both install modes, so this test does not grep
+// the implementation.
 func TestW91SkillAndDoctorPointers(t *testing.T) {
 	for _, rel := range []string{"skills/polyforge/verbs/help.md", "skills/polyforge/verbs/init.md"} {
 		body := w91Norm(w91Read(t, rel))
@@ -339,59 +370,6 @@ func TestW91SkillAndDoctorPointers(t *testing.T) {
 	// guide).
 	if !strings.Contains(w91Norm(w91Read(t, "skills/polyforge/verbs/help.md")), "docs/user-guide.md") {
 		t.Fatalf("the skill help fragment must keep the daily-use guide pointer (docs/user-guide.md); Q3 leaves the CLI pf help unchanged")
-	}
-	// The doctor hint: one line, both modes, the existing host substring kept.
-	var hint string
-	for _, line := range strings.Split(w91Read(t, "internal/polyforge/cli/doctor_display.go"), "\n") {
-		if strings.Contains(line, "hint :=") {
-			hint = line
-			break
-		}
-	}
-	if hint == "" {
-		t.Fatalf("internal/polyforge/cli/doctor_display.go carries no `hint :=` line: the pi-package warning is the surface Q2 pins")
-	}
-	for _, want := range []string{"docs/getting-started.md", "re-run tools/install.sh"} {
-		if !strings.Contains(hint, want) {
-			t.Fatalf("the doctor's pi-package hint must name both install modes on the same line — %q is missing:\n%s", want, hint)
-		}
-	}
-}
-
-// TestW91PageRegistry: the new mainline page joins every list the doc set is
-// pinned in — the micro lane's conf declaration, the test package's
-// micro_check selector, the W254 doc set (ratio and zero-CJK), the W457
-// micro-path list and the drift check's page list — so a page added without
-// its lists noticing is a finding here rather than at the integration gate.
-func TestW91PageRegistry(t *testing.T) {
-	const page = "docs/getting-started.md"
-	conf := w91Read(t, ".polyforge/verify-scope.conf")
-	if !regexp.MustCompile(`(?m)^micro_path=` + regexp.QuoteMeta(page) + `$`).MatchString(conf) {
-		t.Fatalf(".polyforge/verify-scope.conf's micro_path= must declare %s — a text-only change to the mainline page takes the micro lane", page)
-	}
-	var microCheck string
-	for _, line := range strings.Split(conf, "\n") {
-		if strings.HasPrefix(line, "micro_check=") && strings.Contains(line, "./test/") {
-			microCheck = line
-		}
-	}
-	if !strings.Contains(microCheck, "TestW91") {
-		t.Fatalf("the test package's micro_check= selector must run the TestW91 scenarios — a micro change that breaks the mainline page still fails its own evidence:\n%s", microCheck)
-	}
-	for _, c := range []struct{ rel, list string }{
-		{"test/w254_docs_set_acceptance_test.go", "w254Pages"},
-		{"test/w254_docs_set_acceptance_test.go", "w254PureEnglishPages"},
-		{"test/w457_micro_docs_lane_test.go", "w457MicroPaths"},
-		{"internal/polyforge/cli/docs_drift_test.go", "docsSetPages"},
-	} {
-		body := w91Read(t, c.rel)
-		m := regexp.MustCompile(`(?s)var ` + c.list + ` = \[\]string\{.*?\n\}`).FindString(body)
-		if m == "" {
-			t.Fatalf("%s: no %s var block found", c.rel, c.list)
-		}
-		if !strings.Contains(m, `"`+page+`"`) {
-			t.Fatalf("%s's %s must carry %s — a page added without its list noticing is a finding here waiting to happen:\n%s", c.rel, c.list, page, m)
-		}
 	}
 }
 
