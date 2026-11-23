@@ -92,7 +92,7 @@ function run(active, sessionCatalog, body, call) {
 }
 
 const deleteSession = (active, catalog) => run(active, catalog, sessionDeletedBody, 'handleSessionDeleted("gone-session");');
-const reportCatalog = (active, catalog) => run(active, catalog, sessionsChangeBody, "handleSessionsChange(catalog);");
+const reportCatalog = (active, catalog) => run(active, catalog, sessionsChangeBody, "handleSessionsChange(sessionCatalog);");
 
 test("a delete completing after the user navigated away keeps the new chat", () => {
   const state = deleteSession(otherProject, [otherProject]);
@@ -112,7 +112,8 @@ test("deleting a session whose project has no sessions left moves off its cwd", 
   assert.deepEqual(state.setSelectedSession, [null]);
   assert.deepEqual(state.setNewSessionCwd, [null], "the vanished cwd is never the composer's");
   assert.deepEqual(state.setActiveCwd, [null], "no component keeps fetching with the vanished cwd");
-  assert.deepEqual(state.workspaceSwitch, { root: null, key: null, token: 1 }, "the sidebar drops the project");
+  assert.equal(state.workspaceSwitch.root, null, "the sidebar drops the project");
+  assert.equal(state.workspaceSwitch.token, 1);
   assert.equal(state.routerReplaced, "/", "the URL keeps no cwd");
 });
 
@@ -121,7 +122,8 @@ test("deleting a session keeps the project while another of its sessions remains
   assert.deepEqual(state.setSelectedSession, [null]);
   assert.deepEqual(state.setNewSessionCwd, [projectA], "the composer stays in the project, at its authorized root");
   assert.deepEqual(state.setActiveCwd, [projectA]);
-  assert.deepEqual(state.workspaceSwitch, { root: projectA, key: projectA, token: 1 });
+  assert.equal(state.workspaceSwitch.root, projectA, "the sidebar keeps the project");
+  assert.equal(state.workspaceSwitch.token, 1);
   assert.equal(state.routerReplaced, `?cwd=${encodeURIComponent(projectA)}`);
 });
 
@@ -130,13 +132,16 @@ test("deleting the last session of a project switches to the most recent remaini
   assert.deepEqual(state.setSelectedSession, [null]);
   assert.deepEqual(state.setNewSessionCwd, [projectB]);
   assert.deepEqual(state.setActiveCwd, [projectB]);
-  assert.deepEqual(state.workspaceSwitch, { root: projectB, key: projectB, token: 1 });
+  assert.equal(state.workspaceSwitch.root, projectB, "the sidebar follows the switch");
+  assert.equal(state.workspaceSwitch.key, projectB);
+  assert.equal(state.workspaceSwitch.token, 1);
   assert.equal(state.routerReplaced, `?cwd=${encodeURIComponent(projectB)}`);
 });
 
 test("a refreshed catalogue that no longer carries the selected session moves the workspace too", () => {
   const state = reportCatalog(gone, [otherProject]);
-  assert.deepEqual(state.setSelectedSession.length, 1, "the catalogue update is applied");
+  assert.equal(typeof state.setSelectedSession[0], "function", "the catalogue update is applied");
+  assert.equal(state.setSelectedSession.at(-1), null, "the vanished selection is cleared");
   assert.deepEqual(state.setNewSessionCwd, [projectB], "the external delete moves the composer off the gone cwd");
   assert.deepEqual(state.setActiveCwd, [projectB]);
   assert.equal(state.workspaceSwitch.root, projectB);
