@@ -122,6 +122,55 @@ class HandoffCase(GitCase):
         self.assertIn("u1", res["summary"])
         self.assertIn("exited 0 on the tree of test_commit", res["summary"])
 
+    def test_d1_an_unresolvable_unit_is_a_hit(self) -> None:
+        # the unit's test_commit names no commit of the task repo: build
+        # exits 1 before a replay, and D1 must take it (the unit dict
+        # carries the reason under `unresolved`, never `why`)
+        cap, repo = self.capsule("d1-unresolved")
+        self.sound_unit(cap, repo, ["answer.txt"])
+        write(cap, {"artifacts/build/units.json": json.dumps([
+            {"id": "u1", "test_commit": "0" * 40, "impl_commit": repo.head(),
+             "run": {"repo": "app", "cwd": ".", "argv": ["sh", "test/check_test.sh"]},
+             "marker": "^ok$"}])})
+        code, res = self.run_handoff(cap)
+        self.assertEqual(code, 1, res["summary"])
+        self.assertIn("D1", self.items(res))
+        self.assertIn("u1", res["summary"])
+        self.assertIn("not both commits of one task repo", res["summary"])
+
+    def test_d1_a_unit_without_a_run_is_a_hit(self) -> None:
+        # build judges the run declaration before any replay; a unit with
+        # no argv is exit 1, and D1 must take it
+        cap, repo = self.capsule("d1-norun")
+        self.sound_unit(cap, repo, ["answer.txt"])
+        write(cap, {"artifacts/build/units.json": json.dumps([
+            {"id": "u1", "test_commit": repo.head(), "impl_commit": repo.head(),
+             "run": {"repo": "app", "cwd": ".", "argv": []}, "marker": "^ok$"}])})
+        code, res = self.run_handoff(cap)
+        self.assertEqual(code, 1, res["summary"])
+        self.assertIn("D1", self.items(res))
+        self.assertIn("u1", res["summary"])
+        self.assertIn("reports no run", res["summary"])
+
+    def test_d1_a_test_commit_touching_non_test_paths_is_a_hit(self) -> None:
+        # the test commit holds an implementation file: build's test-first
+        # shape is red, and D1 takes it with the commits reason
+        cap, repo = self.capsule("d1-mixed")
+        test = repo.commit("u1: test and impl", {"test/check_test.sh": UNIT_TEST, "mixed.txt": "x\n"})
+        impl = repo.commit("u1: impl", {"answer.txt": "42\n"})
+        write(cap, {
+            "artifacts/plan.md": plan(["answer.txt", "mixed.txt"]),
+            "artifacts/build/units.json": json.dumps([
+                {"id": "u1", "test_commit": test, "impl_commit": impl,
+                 "run": {"repo": "app", "cwd": ".", "argv": ["sh", "test/check_test.sh"]},
+                 "marker": "^ok$"}]),
+            "artifacts/build/change-analysis.json": json.dumps(CLEAN_ANALYSIS),
+        })
+        code, res = self.run_handoff(cap)
+        self.assertEqual(code, 1, res["summary"])
+        self.assertIn("D1", self.items(res))
+        self.assertIn("mixed.txt", res["summary"])
+
     def test_d2_an_undeclared_write_is_a_hit(self) -> None:
         cap, repo = self.capsule("d2")
         self.sound_unit(cap, repo, ["answer.txt"])

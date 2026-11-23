@@ -1,4 +1,4 @@
-// carries: workflows/_shared/steps/review.md, workflows/develop/fragments/review-judge.md, workflows/_shared/skills/review.md, internal/contracttest/w241_review_gate_contract_test.go
+// carries: workflows/_shared/steps/review.md, workflows/develop/fragments/review-judge.md, workflows/_shared/skills/review.md, docs/concepts.md, workflows/develop/README.md, internal/contracttest/w241_review_gate_contract_test.go
 
 package test
 
@@ -9,7 +9,10 @@ package test
 // non-blocking, naming the gate that should have refused it — and that a
 // hit the gate's result did not carry (the gate was bypassed or its result
 // forged) is blocking `guarantee`. The five blocking classes stay as they
-// are. Whitespace-flattened, so a rewrap keeps the sentences pinned.
+// are. The negative half is the ticket's own counterexample: a text that
+// writes a gate-covered item as blocking on its own turns this test red,
+// because the old sentences are named and refused. Whitespace-flattened, so
+// a rewrap keeps the sentences pinned.
 
 import (
 	"strings"
@@ -17,7 +20,7 @@ import (
 )
 
 func TestW241ReviewGateContract(t *testing.T) {
-	texts := map[string][]string{
+	subset := map[string][]string{
 		"workflows/_shared/steps/review.md": {
 			"**`bug`**",
 			"**`ac_gap`**",
@@ -28,7 +31,7 @@ func TestW241ReviewGateContract(t *testing.T) {
 		"workflows/develop/fragments/review-judge.md": {},
 		"workflows/_shared/skills/review.md":          {},
 	}
-	for rel, wants := range texts {
+	for rel, wants := range subset {
 		flat := w68Flat(t, rel)
 		// the gate-covered subset: non-blocking on its own, a bypass is a guarantee
 		for _, want := range append(wants,
@@ -38,6 +41,57 @@ func TestW241ReviewGateContract(t *testing.T) {
 			"blocking `guarantee`, naming the item") {
 			if !strings.Contains(flat, want) {
 				t.Errorf("%s must state %q", rel, want)
+			}
+		}
+	}
+
+	// the two documents that describe review's behaviour state the same subset
+	for rel, wants := range map[string][]string{
+		"docs/concepts.md": {
+			"in the hand-off gate's subset",
+			"blocking `guarantee`",
+		},
+		"workflows/develop/README.md": {
+			"in the hand-off gate's subset",
+			"blocking `guarantee`",
+		},
+	} {
+		flat := w68Flat(t, rel)
+		for _, want := range wants {
+			if !strings.Contains(flat, want) {
+				t.Errorf("%s must state %q", rel, want)
+			}
+		}
+	}
+
+	// The old wording — a gate-covered item written as blocking on its own
+	// — is refused: the ticket's counterexample ("write any of D1–D6 as
+	// 'blocking … on its own' and the contract test fails").
+	stale := map[string][]string{
+		"workflows/develop/fragments/review-judge.md": {
+			"or whose replay exited 0 — a test that passes on the old code, never red or weakened since — is blocking `test_weakened`",
+			"a replay that exited 0 there (the test was green before the change) is blocking `test_weakened`",
+			"neither red nor a pass: blocking `test_weakened`, naming the unit and its `rule`",
+			"is the same standard: blocking `test_weakened` too",
+			"is a blocking `test_weakened` finding naming the entry",
+		},
+		"workflows/_shared/skills/review.md": {
+			"The resolution and commits facts are static — the same ones build's close ran without the replay (`facts.py build`) — and they block in every round",
+			"each `problems` entry is blocking `test_weakened`, in every round",
+		},
+		"docs/concepts.md": {
+			"its red evidence is missing, `test_weakened` too",
+			"a red entry is a blocking `test_weakened` finding naming it",
+		},
+		"workflows/develop/README.md": {
+			"every entry it fails is a blocking `test_weakened` finding naming the entry",
+		},
+	}
+	for rel, olds := range stale {
+		flat := w68Flat(t, rel)
+		for _, old := range olds {
+			if strings.Contains(flat, strings.Join(strings.Fields(old), " ")) {
+				t.Errorf("%s still writes a gate-covered item as blocking on its own: %q", rel, old)
 			}
 		}
 	}
