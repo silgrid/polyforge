@@ -942,12 +942,52 @@ func (d *driveEnv) writeEnvelope(act planAction) {
 	d.journal("envelope", map[string]any{"step": stepID, "outcome": outcome, "args": args, "crash": act.Crash})
 }
 
-// writeFastCheckProof writes the proof a real build or sync step hands off
-// under a lane declaring `fast_check_proof` (polyforge#211): the scripted
-// agent is no repository's checker, but it must satisfy the daemon's gate
-// the way a real step's own fast check does — a pass at each task repo's
-// HEAD. A lane that declares no proof ignores the file.
+// writeProofs writes a passing pf-step-result/1 proof of every task
+// repo's HEAD under dir (capsule relative) — the shape the daemon's done
+// gate reads for `fast_check_proof` and `facts_proof` (polyforge#211,
+// #241). A lane that declares no such proof ignores the files.
+func writeProofs(root, dir string) error {
+	ents, err := os.ReadDir(filepath.Join(root, "repos"))
+	if err != nil {
+		return err
+	}
+	heads := map[string]string{}
+	for _, e := range ents {
+		if !e.IsDir() {
+			continue
+		}
+		out, err := exec.Command("git", "-C", filepath.Join(root, "repos", e.Name()), "rev-parse", "--verify", "HEAD^{commit}").Output()
+		if err != nil {
+			continue
+		}
+		heads[e.Name()] = strings.TrimSpace(string(out))
+	}
+	if len(heads) == 0 {
+		return nil
+	}
+	raw, err := json.Marshal(map[string]any{"schema": "pf-step-result/1", "verdict": "pass", "heads": heads})
+	if err != nil {
+		return err
+	}
+	out := filepath.Join(root, filepath.FromSlash(dir))
+	if err := os.MkdirAll(out, 0o755); err != nil {
+		return err
+	}
+	for name := range heads {
+		if err := os.WriteFile(filepath.Join(out, name+".json"), raw, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeFastCheckProof writes the proofs a real build or sync step hands off
+// under a lane declaring them: the scripted agent is no repository's
+// checker, but it must satisfy the daemon's gates the way a real step's own
+// checks do — a pass at each task repo's HEAD. build also writes the
+// mechanical facts proof its `facts_proof` names (polyforge#241).
 func (d *driveEnv) writeFastCheckProof(stepID string) {
+	root := d.capsuleRoot()
 	var dir string
 	switch stepID {
 	case "build":
@@ -957,35 +997,9 @@ func (d *driveEnv) writeFastCheckProof(stepID string) {
 	default:
 		return
 	}
-	ents, err := os.ReadDir("repos")
-	if err != nil {
-		return
-	}
-	heads := map[string]string{}
-	for _, e := range ents {
-		if !e.IsDir() {
-			continue
-		}
-		out, err := exec.Command("git", "-C", filepath.Join("repos", e.Name()), "rev-parse", "--verify", "HEAD^{commit}").Output()
-		if err != nil {
-			continue
-		}
-		heads[e.Name()] = strings.TrimSpace(string(out))
-	}
-	if len(heads) == 0 {
-		return
-	}
-	raw, err := json.Marshal(map[string]any{"schema": "pf-step-result/1", "verdict": "pass", "heads": heads})
-	if err != nil {
-		return
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return
-	}
-	for name := range heads {
-		if err := os.WriteFile(filepath.Join(dir, name+".json"), raw, 0o644); err != nil {
-			return
-		}
+	_ = writeProofs(root, dir)
+	if stepID == "build" {
+		_ = writeProofs(root, filepath.Join("artifacts", "build", "handoff-facts"))
 	}
 }
 

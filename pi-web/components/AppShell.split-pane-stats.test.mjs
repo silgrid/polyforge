@@ -52,7 +52,7 @@ test("every pane-tab creation site threads project attribution (pi#25 embedded h
   // site must resolve it from the sidebar's project identity.
   const sites = source.match(/projectDisplayNameForPath\(/g) ?? [];
   assert.ok(sites.length >= 4, "AppShell must compute projectName at every pane creation site");
-  assert.match(source, /import \{ projectDisplayNameForPath \} from "@\/lib\/project-groups";/);
+  assert.match(source, /import \{ [^}]*projectDisplayNameForPath[^}]*\} from "@\/lib\/project-groups";/);
   assert.match(source, /openPaneOp\(tabs, session\.id, label, projectDisplayNameForPath\(session\.projectRoot \?\? session\.cwd\)\)/,
     "handleSelectSession must attribute its opened pane");
   assert.match(source, /openNewSessionTab\(prev, label, projectName\)\.tabs/,

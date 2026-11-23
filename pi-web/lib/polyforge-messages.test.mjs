@@ -15,7 +15,7 @@ const status = await jiti.import("./polyforge-status.ts");
 test("the Messages floor is 2.20.12 and below it the capability rep says upgrade", async () => {
   // the contact list needs `pf msg contacts` (2.20.12).
   assert.equal(lib.POLYFORGE_MESSAGES_MINIMUM_PF_VERSION, "2.20.12");
-  const detect = await jiti.import("./polyforge-detect.ts");
+  const detect = await jiti.import("./polyforge-version.ts");
   assert.equal(detect.isPolyforgeVersionBelowMinimum("v2.20.6", lib.POLYFORGE_MESSAGES_MINIMUM_PF_VERSION), true);
   // Numeric compare: 2.20.9 < 2.20.12, no string trap.
   assert.equal(detect.isPolyforgeVersionBelowMinimum("v2.20.9", lib.POLYFORGE_MESSAGES_MINIMUM_PF_VERSION), true);
@@ -578,7 +578,7 @@ test("the analysis floor is 2.20.18, separate from the 2.20.12 Messages floor", 
   assert.equal(lib.POLYFORGE_ANALYZE_MINIMUM_PF_VERSION, "2.20.18");
   assert.equal(pure.POLYFORGE_ANALYZE_MINIMUM_PF_VERSION, "2.20.18", "the panel and the server read one constant");
   assert.equal(lib.POLYFORGE_MESSAGES_MINIMUM_PF_VERSION, "2.20.12", "the Messages floor is unchanged");
-  const detect = await jiti.import("./polyforge-detect.ts");
+  const detect = await jiti.import("./polyforge-version.ts");
   assert.equal(detect.isPolyforgeVersionBelowMinimum("v2.20.17", lib.POLYFORGE_ANALYZE_MINIMUM_PF_VERSION), true);
   assert.equal(detect.isPolyforgeVersionBelowMinimum("v2.20.18", lib.POLYFORGE_ANALYZE_MINIMUM_PF_VERSION), false);
   const source = readFileSync(new URL("./polyforge-messages.ts", import.meta.url), "utf8");
@@ -722,7 +722,7 @@ const promptFixture = { prompt: "Fix the login timeout in the session store.", t
 test("the prompt floor is its own constant, read by the panel and the server alike", async () => {
   assert.match(pure.POLYFORGE_PROMPT_MINIMUM_PF_VERSION, /^\d+\.\d+\.\d+$/);
   assert.equal(lib.POLYFORGE_PROMPT_MINIMUM_PF_VERSION, pure.POLYFORGE_PROMPT_MINIMUM_PF_VERSION, "one constant");
-  const detect = await jiti.import("./polyforge-detect.ts");
+  const detect = await jiti.import("./polyforge-version.ts");
   assert.equal(detect.isPolyforgeVersionBelowMinimum(lib.POLYFORGE_ANALYZE_MINIMUM_PF_VERSION, lib.POLYFORGE_PROMPT_MINIMUM_PF_VERSION), true,
     "the prompt floor is above the analysis floor");
   assert.equal(detect.isPolyforgeVersionBelowMinimum(`v${lib.POLYFORGE_PROMPT_MINIMUM_PF_VERSION}`, lib.POLYFORGE_PROMPT_MINIMUM_PF_VERSION), false);

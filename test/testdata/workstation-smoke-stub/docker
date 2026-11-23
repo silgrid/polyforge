@@ -45,7 +45,35 @@ persist_changed() {
 	[ "$n" -gt 0 ]
 }
 
+# run_validator ARGV... — the smoke's in-container python validators
+# (polyforge#168) are the one thing this stub does not fake: the container
+# carries python3, so the stub host runs the REAL script with
+# /usr/bin/python3 (absolute — the restricted-PATH tests keep no python3 on
+# PATH). Every other command still comes from the scenario directory.
+run_validator() {
+	[ "${1:-}" = exec ] || return 0
+	shift
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			-i|-t) shift ;;
+			-e|-u|-w) shift 2 ;;
+			-*) shift ;;
+			*) break ;;
+		esac
+	done
+	[ "${2:-}" = python3 ] || return 0
+	[ "${3:-}" = -c ] || return 0
+	script=${4:-}
+	case "$script" in
+		*smoke-onboarding-view*) ;;
+		*) return 0 ;;
+	esac
+	shift 4
+	exec /usr/bin/python3 -c "$script" "$@"
+}
+
 if [ "${1:-}" = exec ]; then
+	run_validator "$@"
 	args="$*"
 	case "$args" in
 	*"/proc/1/comm"*)
@@ -217,6 +245,15 @@ if [ "${1:-}" = exec ]; then
 		else
 			cat "$dir/components-stat.txt"
 		fi
+		;;
+	# the clean-room onboarding pass (polyforge#168): the doctor report and
+	# the Cell registry, each answered verbatim from the scenario (the
+	# smoke's in-container python validators judge them)
+	*"pf --json cell list"*)
+		cat "$dir/cell-list.json"
+		;;
+	*"pf --json doctor"*)
+		cat "$dir/doctor.json"
 		;;
 	# the first-boot pass (polyforge#176): the record, the default
 	# Cell's server, the key's authentication, the bootstrap key's

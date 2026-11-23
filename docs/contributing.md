@@ -805,7 +805,12 @@ declaration.
   container, each group's commands in plan order) and `full_parallel=` is
   the parallelism, default 2, an invalid value diagnosed and run serially.
   A repository that declares none keeps the serial gate and its plan bytes
-  exactly as before; the gate's own flag is `--parallel <N>`.
+  exactly as before; the gate's own flag is `--parallel <N>`. The develop
+  lane's verification (`verify.py`) runs its full tier's declared groups the
+  same way (polyforge#253) — each group in a container of its own, a group's
+  commands in plan order, the results in plan order — and keeps the serial
+  bar byte for byte for a repository that declares no group, one group,
+  `full_parallel=1` or one that runs on the host.
 - **The conf keys.** `e2e_runner=` (the runner the selected suites are
   appended to), `e2e_start_threshold=` together with `e2e_start_prefix=` (a
   positive light-tier count and the prefix its strict excess puts before the

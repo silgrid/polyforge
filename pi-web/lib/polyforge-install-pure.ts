@@ -5,7 +5,11 @@
  * block an upgrade (install.sh's own rule), what install.sh's refusal said.
  * Import-free, so the panel can import it without pulling the server module
  * (`lib/polyforge-install.ts`, which spawns) into the browser bundle.
+ *
+ * The version precedence is the browser-safe `lib/polyforge-version.ts` (the
+ * one comparator the step-tier gate shares), not a second copy.
  */
+import { comparePolyforgeVersionOrder } from "./polyforge-version";
 
 /** The release channel pf is installed from: the repository whose releases
  *  carry pf and Pi Web alike (the same repository as Pi Web's own shipped
@@ -92,8 +96,10 @@ export interface PolyforgeInstallVersions {
 }
 
 export interface PolyforgeVersionFlags {
-  /** The channel's latest differs from the installed pf. */
+  /** The channel's latest is ahead of the installed pf (a real update). */
   updateAvailable: boolean;
+  /** The installed pf is ahead of the channel's latest — never a downgrade. */
+  aheadOfChannel: boolean;
   /** The daemon answers a version other than the installed binary's. */
   daemonStale: boolean;
   /** Pi Web's version differs from the installed pf's. */
@@ -104,33 +110,40 @@ function versionCore(value: string): string {
   return value.trim().replace(/^v/, "");
 }
 
-/** Which of the versions disagree (pure). A missing version proves nothing,
- *  so it never raises a flag. */
+/** Which of the versions disagree (pure), by the shared SemVer precedence:
+ *  `updateAvailable` only when the channel is *ahead* of the installed pf
+ *  (an older channel release never suggests a downgrade), `aheadOfChannel`
+ *  when the installed pf is the newer one. A missing or unparseable version
+ *  proves nothing, so it never raises a flag. */
 export function polyforgeVersionFlags(versions: Pick<PolyforgeInstallVersions, "installed" | "latest" | "running" | "piWeb">): PolyforgeVersionFlags {
   const { installed, latest, running, piWeb } = versions;
+  const channel = installed && latest ? comparePolyforgeVersionOrder(installed, latest) : null;
   return {
-    updateAvailable: Boolean(installed && latest && versionCore(installed) !== versionCore(latest)),
+    updateAvailable: channel === "behind",
+    aheadOfChannel: channel === "ahead",
     daemonStale: Boolean(installed && running && versionCore(installed) !== versionCore(running)),
     piWebOutOfSync: Boolean(installed && piWeb && versionCore(installed) !== versionCore(piWeb)),
   };
 }
 
 /** Whether running install.sh is relevant now — what the card's line
- *  naming tools/install.sh explains: pf is absent, the channel has a newer
- *  release, the daemon still runs another binary than the installed one, or
- *  a run is in progress or did not succeed (refused, failed). While pf is
- *  installed, current and its daemon on it, nothing about install.sh is
- *  shown (a healthy page shows no install command). Unknown
- *  versions prove nothing, so they make it relevant only through a run. Pure. */
+ *  naming tools/install.sh explains: pf is absent (install), the channel has
+ *  a newer release (update), or cli.toml still has no api_key and the run
+ *  would write it (install.sh's has_config rule). An installed pf that is
+ *  current, ahead of the channel or unknown to it offers only its status and
+ *  「重新检测」: no install/update/force entry (owner ruling 2026-11-23,
+ *  polyforge#256 B2). A run in progress on an ahead machine keeps its
+ *  explanation; on a current one it is status only. Unknown versions prove
+ *  nothing, so they make it relevant only through a run. Pure. */
 export function polyforgeInstallRelevant(
-  versions: Pick<PolyforgeInstallVersions, "pfPresent" | "installed" | "latest" | "running" | "piWeb"> | null,
+  versions: Pick<PolyforgeInstallVersions, "pfPresent" | "installed" | "latest" | "running" | "piWeb" | "needsConfig"> | null,
   run: Pick<PolyforgeInstallRun, "state"> | null,
 ): boolean {
-  if (run && run.state !== "succeeded") return true;
-  if (!versions) return false;
+  if (!versions) return Boolean(run && run.state !== "succeeded");
   if (!versions.pfPresent) return true;
   const flags = polyforgeVersionFlags(versions);
-  return flags.updateAvailable || flags.daemonStale;
+  if (flags.aheadOfChannel) return run?.state === "running";
+  return flags.updateAvailable || versions.needsConfig;
 }
 
 const VERSION_TOKEN = /^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$/;
