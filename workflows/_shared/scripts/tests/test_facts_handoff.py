@@ -81,6 +81,8 @@ class HandoffCase(GitCase):
         env = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_", "PF_", "BASH_"))}
         argv = [sys.executable, "-B", FACTS, "handoff", "--capsule", cap, "--json", "--out", out, *extra]
         p = subprocess.run(argv, cwd=cap, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if not os.path.exists(out):
+            self.fail("facts.py handoff wrote no result (exit %d): %s" % (p.returncode, p.stderr.decode()))
         with open(out, encoding="utf-8") as f:
             res = json.load(f)
         self.assertEqual(p.returncode, res["exit_code"], "the result file carries the run's own exit code")
