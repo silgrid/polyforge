@@ -114,9 +114,14 @@ func newInprocRig(t *testing.T, inst *v1Install, obsTune ...inprocObsTune) *inpr
 		t.Fatal(err)
 	}
 	rtCfg := runtime.Config{
-		MachineID:     "m-inproc",
-		Mapping:       plan,
-		DataDir:       dataDir,
+		MachineID: "m-inproc",
+		Mapping:   plan,
+		DataDir:   dataDir,
+		// The spawner holds THIS value by pointer while runtime.New fills a
+		// copy, so the rig sets HarnessRoot itself: a bare Config would
+		// degenerate StepAgentDir() to the relative "step-agent" and write
+		// the daemon-owned set into the checkout (polyforge#84 r2).
+		HarnessRoot:   dataDir,
 		GitRemoteBase: inst.url + "/git",
 		WorkflowsDir:  inst.workflowsPath(),
 		PiBin:         inst.fakepiPath,
