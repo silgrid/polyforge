@@ -165,6 +165,25 @@ failing or stuck run answers one fallback line and the dispatch
 proceeds, the template's default thresholds applying without the
 division.
 
+**Re-scheduling a stale analysis (polyforge#233).** `pf file analysis redo <id>`
+re-schedules the pre-submit analysis of a queued or blocked execution ticket
+on an acceptance lane — for an analysis in the old format, written against a
+stale base, or after a materially changed scope. The daemon first copies the
+active `## 分析` section verbatim (its heading included) into the ticket's
+`## 历次分析` area, appended after the active section, and prefixes the
+active section with a pending redo marker in the same content CAS; the
+request is persisted before that CAS, so a restart continues the same round.
+The scheduled analysis task runs the same prompt a create-time analysis
+runs, writes through the existing narrow path, and its draft stays
+unconfirmed (auto-pull skips the ticket, `pf queue` marks
+`需要交互：分析待确认`) until `pf file analysis confirm <id>`. A running,
+paused or terminal ticket, one with a local execution job, a running
+analysis task or a pending analysis request is refused with the reason and
+the ticket unchanged; a confirm before the task writes abandons that round,
+and the task's later write is still refused. The strong guarantee covers
+this machine's daemon only: another machine's auto-pull relies on the
+ticket's unconfirmed marker, not on this machine's queue.
+
 A third mark is lane-independent (polyforge#77): a bundle-bound parent waits
 for each child that is not wrapped (aihub's `waiting_for` entries with
 `via: "child"`, shown in WAITING-FOR as `<slug> (child, <status>)`), and a

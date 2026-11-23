@@ -84,7 +84,11 @@ without the section, the daemon schedules an analysis task that writes its
 7-item report into the ticket's `## 分析` section itself
 (`pf task analysis-write`, the one write a task may make); the draft stays
 unconfirmed — auto-pull skips it, `pf queue` marks it 需要交互：分析待确认 —
-until the owner runs `pf file analysis confirm <id>`. The routing skill's
+until the owner runs `pf file analysis confirm <id>`. A queued or blocked
+execution ticket whose analysis was written before the current format, or
+against a stale base, is re-scheduled with `pf file analysis redo <id>`: the
+old `## 分析` section is archived verbatim in `## 历次分析` and the new draft
+awaits the same confirm. The routing skill's
 submit fragment owns the analysis flow (polyforge#72). The plan `build`
 writes then maps that analysis — each old test and document obligation,
 each risk, each decided point it lists goes to the unit that carries it or
