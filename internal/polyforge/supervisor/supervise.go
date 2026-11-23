@@ -268,12 +268,11 @@ func RunSupervise(rs RunSpec) int {
 // proc whose start is in flight. nil in production.
 var supPreStartHold func(p *supProc)
 
-// supPostExitSendHold, when non-nil, runs in every child's manager after
-// its exit event was handed to the main loop and before the manager
-// clears inflight — the test seam that pins the last-exit-event race
-// (polyforge#251). Snapshotted into supProc at creation, so a test's
-// Cleanup restoring the variable never races a manager still reading it.
-// nil in production.
+// supPostExitSendHold, when non-nil, runs in every child's manager right
+// after its exit event was handed to the main loop — the test seam that
+// pins the last-exit-event race (polyforge#251). Snapshotted into supProc
+// at creation, so a test's Cleanup restoring the variable never races a
+// manager still reading it. nil in production.
 var supPostExitSendHold func(p *supProc)
 
 // newSupProc answers one managed child.
