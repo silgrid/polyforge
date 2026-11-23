@@ -1,4 +1,4 @@
-// carries: components/PolyforgeInstallCard*, lib/polyforge-install*, app/api/polyforge/install/*, app/api/polyforge/polyforge-install-routes*
+// carries: components/PolyforgeInstallCard*, lib/polyforge-install*, lib/polyforge-version*, app/api/polyforge/install/*, app/api/polyforge/polyforge-install-routes*
 // — Settings › Polyforge: install / update pf from the release
 // channel, end to end in the browser. It NEVER runs a real installer: `gh`
 // and `pf` are stubs first on PATH, and the tools/install.sh the stub `gh`

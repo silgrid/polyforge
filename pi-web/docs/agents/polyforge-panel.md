@@ -239,19 +239,22 @@ probe; the section UI itself is in [settings-ui.md](settings-ui.md).
   history's `old` from `config list`, a mapped cwd not required; plus the
   Host-only `step_tiers.<tier>` family (85b2, `parseStepTierKey`'s grammar
   only): a write MUST carry `{host: true}` (any Cell scope is a 400), the
-  family's own 0.2.4 pf floor applies (an unparseable version is below), a
+  family's own 0.2.4-0 pf floor applies (v0.2.4-dev.N and v0.2.4 pass; v0.2.3, 2.20.x and an unparseable version are below), a
   `set` value is a non-empty candidate array (a tier is emptied by `unset`,
   never by an empty list — pf refuses one), and only the write's NEW
   candidates must be defined models (`lib/step-tier-defined-models.ts`:
   pi's scope-all projection behind /api/models and claude's aliases plus
   native modelPicker names — recomputed per write, the file's own retired
   candidates preserved); every one of those refusals precedes the write
-  spawn. The models page's tier column writes through this same POST, one
-  harness at a time (add-first, a partial
-  failure reported per harness with the draft kept; EVERY step re-reads the
-  Host catalog together with the file hash from the SAME GET, so the plan
-  derives from the very state the CAS guards — a concurrent external write
-  either joins the plan or refuses the write with 409; a rollback
+  spawn. The write path stays for the CLI and any direct POST even though the
+  models page's tier column is read-only (polyforge#256 B7: the labels name
+  the tier, the editor entry and its write callback are gone, so opening the
+  page writes nothing); the server's gates are unchanged — add-first, a
+  partial failure reported per harness with the draft kept, and every step
+  re-reading the Host catalog together with the file hash from the SAME GET,
+  so the plan derives from the very state the CAS guards — a concurrent
+  external write either joins the plan or refuses the write with 409; a
+  rollback
   derives its scope from the key, so a pre-#286 entry recorded against a
   workspace yaml rolls back through the same flat path as a new entry;
   below the 2.20.21 summarize floor, or with an unknown version,
