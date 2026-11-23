@@ -14,6 +14,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import re
 import tempfile
 import unittest
 
@@ -297,8 +298,9 @@ class BlockingOutcomesTest(unittest.TestCase):
             '| r5#9 test_weakened toggle 测试不属单元 | 归入 owner 接受的「units.json 真实测试提交关系」→ 非阻断 #6 |',
         ]
         for row in rows:
+            item = re.search(r'r5#(\d+)', row).group(1)
             versions = _versions(
-                _review(5, 'FAIL', '## 发现\n\n### #1 blocking · ac_gap — x\n'),
+                _review(5, 'FAIL', '## 发现\n\n### #%s blocking · ac_gap — x\n' % item),
                 _review(6, 'PASS', '## 上一轮发现逐条核对\n\n' + row + '\n'))
             [chain] = rf.chain_findings(self.cap, versions)
             self.assertEqual(chain['outcome'], 'owner', row)
@@ -309,8 +311,9 @@ class BlockingOutcomesTest(unittest.TestCase):
             'r1#3：残留，需要 owner 裁定',
         ]
         for line in cases:
+            item = re.search(r'r1#(\d+)', line).group(1)
             versions = _versions(
-                _review(1, 'FAIL', '## 发现\n\n### #3 blocking · bug — x\n'),
+                _review(1, 'FAIL', '## 发现\n\n### #%s blocking · bug — x\n' % item),
                 _review(2, 'PASS', '## 上一轮发现逐条核对\n\n' + line + '\n'))
             [chain] = rf.chain_findings(self.cap, versions)
             self.assertNotEqual(chain['outcome'], 'owner', line)
