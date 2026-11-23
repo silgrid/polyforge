@@ -42,8 +42,10 @@ for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => process.exi
 if (args[0] === "--version") { process.stdout.write("v2.21.0\\n"); process.exit(0); }
 // polyforge#238 defect 3 reproduction input: on an ended ticket the route
 // drops the override/params reads unawaited; letting those two children delay
-// their own argv makes the ordering race deterministic for the loop harness.
-// This is a controlled slow child (a scenario input), not a synchronization.
+// their own argv — together with the slow next-view answer gated on
+// WI238_SLOW_WATCH below — makes the ordering race deterministic for the loop
+// harness. These are controlled slow children (scenario inputs), not
+// synchronization.
 if (fs.readFileSync(${JSON.stringify(mode)}, "utf8") === "ended" && (args.includes("override") || args.includes("params"))) {
   const until = Date.now() + 300;
   while (Date.now() < until) { /* deliberate slow child */ }
@@ -71,6 +73,15 @@ if (args.includes("watch")) {
       else setTimeout(check, 25);
     };
     return check();
+  }
+  // polyforge#238 defect 3 reproduction input (round 3, review r2#1): with
+  // WI238_SLOW_WATCH=1 the next view answer is slow, so the loop harness's
+  // late argv (the two dropped reads above) lands before that test's
+  // assertion. Off by default; the flake loop sets it together with the slow
+  // child. A controlled slow answer (scenario input), not synchronization.
+  if (mode === "view" && process.env.WI238_SLOW_WATCH === "1") {
+    const until = Date.now() + 600;
+    while (Date.now() < until) { /* deliberate slow answer */ }
   }
   answer("running");
 }

@@ -21,7 +21,7 @@
 # Usage:
 #   bash test/wi238_flake_loop.sh [--case step-agent|fixture-clock|override|all]
 #        [--n 20] [--ref <git-ref>] [--expect pass|fail] [--git-clock-wrap]
-#        [--slow-dropped-read] [--log-dir <dir>]
+#        [--slow-dropped-read] [--mutate-remove-argv-wait] [--log-dir <dir>]
 #
 #   --ref checks the ref out in a throwaway worktree; the repository's
 #   webui/dist and pi-web/node_modules are shared from the checkout so the
@@ -30,9 +30,15 @@
 #   deterministically crosses its second boundary and exposes the stale --base
 #   reuse (the fixed fixture overrides that clock with its own).
 #   --expect fail is the before-fix reproduction: every run must be red.
-#   --slow-dropped-read injects the controlled slow child into the target
-#   ref's override test mock: on an ended ticket the two dropped reads delay
-#   their own argv append, so the pre-fix ordering race is deterministic.
+#   --slow-dropped-read injects the controlled slow child AND the slow next
+#   view answer into the target ref's override test mock (idempotent: the
+#   committed file already carries both): on an ended ticket the two dropped
+#   reads delay their own argv append, and the next view answer is slow, so
+#   the late argv lands before that test's assertion. Both refs run the same
+#   pressure.
+#   --mutate-remove-argv-wait deletes the first ended sub-case's
+#   `await awaitDroppedReads()` on the target tree (never committed): the
+#   mutation run must be red under --slow-dropped-read.
 #
 # Evidence for polyforge#238 is the pair of runs — `--ref <pre-fix>` red and
 # `--ref HEAD` N times green — with these logs.
@@ -46,6 +52,7 @@ ref=""
 expect=pass
 git_clock_wrap=0
 slow_dropped_read=0
+mutate_remove_argv_wait=0
 log_dir=""
 
 while [ $# -gt 0 ]; do
@@ -56,6 +63,7 @@ while [ $# -gt 0 ]; do
     --expect) expect=${2:?}; shift 2 ;;
     --git-clock-wrap) git_clock_wrap=1; shift ;;
     --slow-dropped-read) slow_dropped_read=1; shift ;;
+    --mutate-remove-argv-wait) mutate_remove_argv_wait=1; shift ;;
     --log-dir) log_dir=${2:?}; shift 2 ;;
     -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
     *) echo "wi238_flake_loop: unknown argument $1" >&2; exit 2 ;;
@@ -121,47 +129,52 @@ EOF
   export PATH=$wrap_dir:$PATH
 fi
 
-if [ "$slow_dropped_read" = 1 ]; then
-  # Controlled slow child (polyforge#238 defect 3 reproduction): in an ended
-  # ticket the route drops the override/params reads unawaited; delaying their
-  # own argv makes the ordering race deterministic on the pre-fix test file.
-  # Add-only: the committed file already carries this input.
-  python3 - "$worktree/pi-web/app/api/polyforge/polyforge-override-route.test.mjs" <<'W238PATCH'
+if [ "$slow_dropped_read" = 1 ] || [ "$mutate_remove_argv_wait" = 1 ]; then
+  # Controlled inputs (polyforge#238 defect 3 reproduction): the slow child and
+  # the slow next-view answer together make the late argv land before the next
+  # test's assertion. Add-only and idempotent per piece: the committed file
+  # already carries both. The mutation removes the first ended sub-case's argv
+  # wait on the target tree only, never committed.
+  python3 - "$worktree/pi-web/app/api/polyforge/polyforge-override-route.test.mjs" "$slow_dropped_read" "$mutate_remove_argv_wait" <<'W238PATCH'
 import sys
-path = sys.argv[1]
+path, slow_flag, mutate_flag = sys.argv[1], sys.argv[2] == "1", sys.argv[3] == "1"
 lines = open(path).read().split("\n")
-if any("polyforge#238 defect 3 reproduction input" in line for line in lines):
-    sys.exit(0)
-idx = next((i for i, line in enumerate(lines) if "fs.appendFileSync(${JSON.stringify(log)}" in line), None)
-if idx is None:
-    sys.exit("wi238_flake_loop: the override mock's argv append line was not found")
-slow = [
-    "// polyforge#238 defect 3 reproduction input: on an ended ticket the route",
-    "// drops the override/params reads unawaited; letting those two children delay",
-    "// their own argv makes the ordering race deterministic for the loop harness.",
-    "// This is a controlled slow child (a scenario input), not a synchronization.",
-    'if (fs.readFileSync(${JSON.stringify(mode)}, "utf8") === "ended" && (args.includes("override") || args.includes("params"))) {',
-    "  const until = Date.now() + 300;",
-    "  while (Date.now() < until) { /* deliberate slow child */ }",
-    "}",
-]
-lines[idx:idx] = slow
-watch = next((i for i, line in enumerate(lines) if line.strip() == 'answer("running");'), None)
-if watch is None:
-    sys.exit("wi238_flake_loop: the override mock's view answer line was not found")
-slow_watch = [
-    '  // The reproduction widens the observation window of the NEXT test, so',
-    '  // the late argv lands before its assertion (a controlled slow answer).',
-    '  if (mode === "view" && process.env.WI238_SLOW_WATCH === "1") {',
-    "    const until = Date.now() + 600;",
-    "    while (Date.now() < until) { /* deliberate slow answer */ }",
-    "  }",
-]
-lines[watch:watch] = slow_watch
+if slow_flag:
+    if not any("polyforge#238 defect 3 reproduction input:" in line for line in lines):
+        idx = next((i for i, line in enumerate(lines) if "fs.appendFileSync(${JSON.stringify(log)}" in line), None)
+        if idx is None:
+            sys.exit("wi238_flake_loop: the override mock's argv append line was not found")
+        lines[idx:idx] = [
+            "// polyforge#238 defect 3 reproduction input: on an ended ticket the route",
+            "// drops the override/params reads unawaited; letting those two children delay",
+            "// their own argv makes the ordering race deterministic for the loop harness.",
+            "// This is a controlled slow child (a scenario input), not a synchronization.",
+            'if (fs.readFileSync(${JSON.stringify(mode)}, "utf8") === "ended" && (args.includes("override") || args.includes("params"))) {',
+            "  const until = Date.now() + 300;",
+            "  while (Date.now() < until) { /* deliberate slow child */ }",
+            "}",
+        ]
+    if not any("WI238_SLOW_WATCH" in line for line in lines):
+        watch = next((i for i, line in enumerate(lines) if line.strip() == 'answer("running");'), None)
+        if watch is None:
+            sys.exit("wi238_flake_loop: the override mock's view answer line was not found")
+        lines[watch:watch] = [
+            '  // The reproduction widens the observation window of the NEXT test, so',
+            '  // the late argv lands before its assertion (a controlled slow answer).',
+            '  if (mode === "view" && process.env.WI238_SLOW_WATCH === "1") {',
+            "    const until = Date.now() + 600;",
+            "    while (Date.now() < until) { /* deliberate slow answer */ }",
+            "  }",
+        ]
+if mutate_flag:
+    hits = [i for i, line in enumerate(lines) if line == "  await awaitDroppedReads();"]
+    if not hits:
+        sys.exit("wi238_flake_loop: the mutation target (the first ended sub-case's argv wait) was not found")
+    del lines[hits[0]]
 open(path, "w").write("\n".join(lines))
 W238PATCH
   if [ $? -ne 0 ]; then
-    echo "wi238_flake_loop: the slow-dropped-read patch failed" >&2
+    echo "wi238_flake_loop: the reproduction patch/mutation failed" >&2
     exit 2
   fi
 fi
