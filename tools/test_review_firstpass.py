@@ -379,6 +379,14 @@ class DocstringCaliberTest(unittest.TestCase):
                 'one model',
                 'fixed but no behaviour change',
                 '<csv>.blocking.csv',
+                'owner-overturned',
+                'owner 已裁定',
+                '已由 owner 裁定',
+                'owner 裁定已处理',
+                'owner 裁定移出',
+                'pending',
+                'last mention still open outranks',
+                'never reported as a PASS round without naming it',
         ):
             self.assertIn(phrase, doc, 'the docstring must state: ' + phrase)
 
