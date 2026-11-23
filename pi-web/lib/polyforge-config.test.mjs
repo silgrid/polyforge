@@ -32,7 +32,7 @@ test("stale classification names the four plan reasons", () => {
 
 test("the capability floor is the panel's own, above the dock floor", async () => {
   assert.equal(lib.POLYFORGE_CONFIG_PANEL_MINIMUM_PF_VERSION, "2.20.6");
-  const detect = await jiti.import("./polyforge-detect.ts");
+  const detect = await jiti.import("./polyforge-version.ts");
   assert.equal(detect.isPolyforgeVersionBelowMinimum("v2.20.5", lib.POLYFORGE_CONFIG_PANEL_MINIMUM_PF_VERSION), true);
   assert.equal(detect.isPolyforgeVersionBelowMinimum("v2.20.6", lib.POLYFORGE_CONFIG_PANEL_MINIMUM_PF_VERSION), false);
 });

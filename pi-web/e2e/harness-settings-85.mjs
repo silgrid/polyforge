@@ -1,4 +1,4 @@
-// carries: components/HarnessModelSettings*, lib/harness/model-view*
+// carries: components/HarnessModelSettings*, lib/harness/model-view*, lib/polyforge-version*
 // carries: components/HarnessGeneralSettings*, components/GeneralSettings*, components/HarnessEnvironmentSettings*, components/HarnessEffectiveSettings*, components/UnifiedSetting*, components/HarnessApplyTo*
 // carries: components/HarnessPermissionSettings*, components/ClaudePermissionSettings*, lib/harness-permissions-view*, lib/harness-settings-view*, lib/harness/diagnostics*, app/api/harness/*
 // carries: components/AccountSettings*, components/PiAccountLogin*, components/ModelsConfig*, app/api/settings/account/*, lib/provider-listing*, lib/harness/account*, lib/polyforge-doctor*
@@ -275,11 +275,11 @@ const T = {
   S21: "S85-21: General has no claude permission controls; its hook switch stays",
   S22: "S85-22: the table and the editor share one enabledModels controller — a Save never re-enables a model the table just disabled (review r1#1)",
   S23: "S85-23: the models page's Claude section merges the retired custom models under a preview and edits the native picker with full-list writes (85a3-3)",
-  S30: "S85-30: the model list's step-tier column sets a tier for every harness of the row and reads the state back (85b2 AC1/AC3)",
-  S31: "S85-31: a specific-mode claude-only tier save writes only claude (pi untouched) and reads back 指定 with the per-harness lines (85b2 AC3)",
-  S32: "S85-32: an unsaved row never offers the tier setter; an incapable catalog read leaves the column read-only with its reason (85b2 AC1/AC3)",
-  S33: "S85-33: a concurrent external write survives the tier column's save (the per-step re-read), and a refused write keeps the draft, reported per harness (85b2 AC1, review r2 #1)",
-  S34: "S85-34: an inconsistent row restores to 全部 through a unify save — cli.toml reads back the merged tier and the vacated one unsets (85b2 AC3)",
+  S30: "S85-30: the model list's step-tier column is a read-only badge — a shared tier shows its name, no editor renders and opening the page writes nothing (polyforge#256 B7/AC1)",
+  S31: "S85-31: differing harnesses show their own read-only 归属 (pi: default / claude: fast-chat), never an apply-to control (polyforge#256 B7)",
+  S32: "S85-32: an incapable catalog read leaves the column read-only with a localized 0.2.4-0 reason, the other columns untouched (polyforge#256 B1)",
+  S33: "S85-33: the page offers no step-tier write entry at all — no select, no checkbox, no button, no config POST (polyforge#256 B7)",
+  S34: "S85-34: an external [step_tiers] write is what the read-only labels show after a reload (polyforge#256 B7/AC1)",
 };
 const failures = new Map(Object.values(T).map((title) => [title, []]));
 const ran = new Set();
@@ -1059,15 +1059,14 @@ try {
       ACTION_MS, "the add never wrote the full next list");
     await page.context().close();
   });
-  // S85-30 — polyforge#151 (85b2 AC1/AC3): the model list's step-tier column,
-  // against the real /api/polyforge/config route and the stub pf's fixture
-  // state: a merged pi+claude row sets a tier with 应用到：全部 — one Host
-  // write per harness of the row, the CAS along — and the read-back shows
-  // 全部 from the storage the writes really changed.
-  await part("S30", "step-tier column", async () => {
+  // S85-30 — polyforge#256 B7: the model list's step-tier column is a
+  // read-only badge. A merged pi+claude row that shares one tier shows that
+  // tier's name; no editor renders anywhere in the cell, and opening the page
+  // writes nothing (the write gate and CLI stay, the UI entry is gone).
+  await part("S30", "read-only tier badge", async () => {
     await startTierServer();
     const page = await newPage();
-    seedTiers({ default: ["pi:tierdemo/legacy"] });
+    seedTiers({ default: ["pi:anthropic/opus", "claude:opus"] });
     await tierPageMocks(page);
     await openSettings(page);
     await tab(page, /^Models$/).click({ timeout: ACTION_MS });
@@ -1075,127 +1074,21 @@ try {
     await host.locator('[data-model-page="unified"]').waitFor({ state: "visible", timeout: ACTION_MS });
     const cell = host.locator("[data-step-tier-cell]").first();
     await cell.waitFor({ state: "visible", timeout: ACTION_MS });
-    assert.match(await cell.locator("[data-step-tier-state]").innerText(), /Not set/, "an unset row shows 未设置");
-    await cell.locator("[data-step-tier-select]").selectOption("default");
-    await cell.getByRole("button", { name: "Save", exact: true }).click({ timeout: ACTION_MS });
-    await waitFor(async () => (await cell.locator("[data-step-tier-state]").innerText()).includes("All: default"),
-      ACTION_MS, "the row never read back 全部：default");
-    // the writes landed in the stub's storage: one per harness, the plan's
-    // whole-key lists, the CAS expectation of the state each write saw
-    assert.deepEqual(tierState().tiers.default, ["pi:tierdemo/legacy", "pi:anthropic/opus", "claude:opus"],
-      "the storage the read-back comes from");
-    const writes = tierArgv().filter((a) => a.includes("set"));
-    assert.equal(writes.length, 2, "one write per harness of the row");
-    for (const write of writes) {
-      assert.ok(write.includes("--host"), "the write is Host-scoped");
-      assert.ok(write.includes("--expect-state"), "the CAS expectation travels with the write");
-    }
-    await page.context().close();
-  });
-
-  // S85-31 — polyforge#151 (85b2 AC3): a row at 全部：default switches 应用到
-  // to 指定 with ONLY claude checked and saves a tier change — only claude is
-  // written (pi's candidate untouched), and the read-back lists the row as
-  // 指定 with each harness's own tier in the 不一致 lines.
-  await part("S31", "specific-mode write + read-back", async () => {
-    const page = await newPage();
-    seedTiers({ default: ["pi:anthropic/opus", "claude:opus"], "fast-chat": ["pi:tierdemo/other"] });
-    await tierPageMocks(page);
-    await openSettings(page);
-    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
-    const host = sectionHost(page, "models");
-    const cell = host.locator("[data-step-tier-cell]").first();
-    await cell.waitFor({ state: "visible", timeout: ACTION_MS });
-    assert.match(await cell.locator("[data-step-tier-state]").innerText(), /All: default/, "the row starts at 全部：default");
-    await cell.getByLabel("Specific harnesses").check();
-    await cell.locator('[data-harness="claude"] input[type="checkbox"]').check();
-    await cell.locator("[data-step-tier-select]").selectOption("fast-chat");
-    await cell.getByRole("button", { name: "Save", exact: true }).click({ timeout: ACTION_MS });
-    await waitFor(async () => (await cell.locator("[data-step-tier-state]").innerText()).includes("Specific"),
-      ACTION_MS, "the row never read back 指定");
-    const stateText = await cell.locator("[data-step-tier-state]").innerText();
-    assert.match(stateText, /Inconsistent: pi is currently in default/, "pi's own tier is listed");
-    assert.match(stateText, /Inconsistent: claude is currently in fast-chat/, "claude's own tier is listed");
-    // only claude was written: pi's candidate stays in default, untouched
-    const state = tierState();
-    assert.deepEqual(state.tiers.default, ["pi:anthropic/opus"], "pi's candidate is untouched by the claude-only write");
-    assert.deepEqual(state.tiers["fast-chat"], ["pi:tierdemo/other", "claude:opus"], "claude moved over, the other candidate kept");
-    await page.context().close();
-  });
-
-  // S85-32 — polyforge#151 (85b2 AC1/AC3): an incapable catalog read (pf
-  // below the family's own floor) leaves the column read-only with its
-  // reason while the other columns stay; an unsaved provider draft adds no
-  // row to the unified list, so it never offers the tier setter.
-  await part("S32", "unsaved row + read-only column", async () => {
-    const page = await newPage();
-    await tierPageMocks(page);
-    // the client-side degradation: the page's own read answers the floor reason
-    await page.route(/\/api\/polyforge\/config\?host=1/, (route) => route.fulfill({ json: {
-      pfPresent: true, pfVersion: "v2.20.21", capable: true,
-      stepTiersReason: "the step-tier catalog needs pf 0.2.4 or newer (found v2.20.21)",
-      items: [], file: { sha256: "e2e-sha", exists: true }, mapped: false } }));
-    await openSettings(page);
-    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
-    const host = sectionHost(page, "models");
-    const cell = host.locator("[data-step-tier-cell]").first();
-    await cell.waitFor({ state: "visible", timeout: ACTION_MS });
-    assert.match(await host.locator("[data-step-tier-reason]").innerText(), /needs pf 0\.2\.4/, "the read-only reason shows once");
-    assert.equal(await host.locator("[data-step-tier-select]").count(), 0, "an incapable catalog read leaves the column read-only");
+    assert.match(await cell.innerText(), /default/, "a shared tier shows its name");
+    assert.equal(await cell.locator("[data-step-tier-select]").count(), 0, "no tier select renders");
+    assert.equal(await cell.locator("button").count(), 0, "no button renders in the cell");
+    assert.equal(await cell.locator('input[type="checkbox"]').count(), 0, "no apply-to checkbox renders");
+    assert.ok(!(await cell.innerText()).includes("Apply to"), "no apply-to control renders");
     assert.ok((await host.innerText()).includes("Chat availability"), "the other columns are untouched");
-    // an unsaved provider draft is not a defined model: no row, no tier setter
-    await host.getByRole("button", { name: "Add provider", exact: true }).click({ timeout: ACTION_MS });
-    await host.getByPlaceholder("provider-name", { exact: true }).waitFor({ state: "visible", timeout: ACTION_MS });
-    assert.equal(await host.locator("[data-step-tier-cell]").count(), 1, "a saved row only — an unsaved draft never offers the tier setter");
+    // opening the page is a read: no Host config write reached pf
+    const writes = tierArgv().filter((args) => (args.includes("set") || args.includes("unset")) && args.some((entry) => String(entry).startsWith("step_tiers.")));
+    assert.deepEqual(writes, [], "no step-tier write from the page");
     await page.context().close();
   });
 
-  // S85-33 — polyforge#151 (85b2, review r2 #1): the per-step re-read. The
-  // row starts SET (全部：default); an external writer (another tab, the CLI)
-  // then adds a candidate to that same tier between the page load and the
-  // save. The write plan must come from the SAME fresh read that carries the
-  // CAS hash, so the external candidate survives the move — a plan from the
-  // page-load catalog would unset the tier and destroy it while the fresh
-  // hash lets the CAS pass. The stub's one-shot refusal then pins the kept
-  // draft and the per-harness reporting of a conflict.
-  await part("S33", "concurrent external write preserved", async () => {
-    const page = await newPage();
-    seedTiers({ default: ["pi:anthropic/opus", "claude:opus"], "fast-chat": ["pi:tierdemo/other"] });
-    await tierPageMocks(page);
-    await openSettings(page);
-    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
-    const host = sectionHost(page, "models");
-    const cell = host.locator("[data-step-tier-cell]").first();
-    await cell.waitFor({ state: "visible", timeout: ACTION_MS });
-    assert.match(await cell.locator("[data-step-tier-state]").innerText(), /All: default/, "the row starts set");
-    // the external write lands after the page load, before the save
-    seedTiers({ default: ["pi:anthropic/opus", "claude:opus", "pi:tierdemo/external"], "fast-chat": ["pi:tierdemo/other"] });
-    await cell.locator("[data-step-tier-select]").selectOption("fast-chat");
-    await cell.getByRole("button", { name: "Save", exact: true }).click({ timeout: ACTION_MS });
-    await waitFor(async () => (await cell.locator("[data-step-tier-state]").innerText()).includes("All: fast-chat"),
-      ACTION_MS, "the row never read back 全部：fast-chat");
-    const state = tierState();
-    assert.deepEqual(state.tiers["fast-chat"], ["pi:tierdemo/other", "pi:anthropic/opus", "claude:opus"], "the row moved over");
-    assert.deepEqual(state.tiers.default, ["pi:tierdemo/external"],
-      "the external concurrent candidate is preserved — never silently overwritten by a stale plan");
-    // a refused write (the stub's one-shot CAS conflict) keeps the draft and
-    // reports per harness: the refused one the conflict, the next unattempted
-    writeFileSync(tierRefuseFile, "");
-    await cell.locator("[data-step-tier-select]").selectOption("default");
-    await cell.getByRole("button", { name: "Save", exact: true }).click({ timeout: ACTION_MS });
-    const results = cell.locator(".harness-apply-to-results li");
-    await results.first().waitFor({ state: "visible", timeout: ACTION_MS });
-    assert.match(await cell.locator('.harness-apply-to-results [data-harness="pi"]').innerText(), /the file changed since it was read/, "the refused harness reports the conflict");
-    assert.match(await cell.locator('.harness-apply-to-results [data-harness="claude"]').innerText(), /not attempted after the earlier failure/, "the unattempted harness says so");
-    assert.equal(await cell.locator("[data-step-tier-select]").inputValue(), "default", "the draft is kept for the retry");
-    await page.context().close();
-  });
-  // S85-34 — polyforge#151 (85b2 AC3, review r2 #2): the restore path. A
-  // row starts inconsistent (pi in default, claude in fast-chat); choosing
-  // default with 应用到：全部 saves claude over and unsets the vacated
-  // fast-chat — the read-back returns to 全部：default, from the storage the
-  // writes really changed.
-  await part("S34", "inconsistent restored to all", async () => {
+  // S85-31 — polyforge#256 B7: differing harnesses keep their real 归属 as
+  // short read-only labels, default first.
+  await part("S31", "per-harness badges", async () => {
     const page = await newPage();
     seedTiers({ default: ["pi:anthropic/opus"], "fast-chat": ["claude:opus"] });
     await tierPageMocks(page);
@@ -1204,29 +1097,82 @@ try {
     const host = sectionHost(page, "models");
     const cell = host.locator("[data-step-tier-cell]").first();
     await cell.waitFor({ state: "visible", timeout: ACTION_MS });
-    await waitFor(async () => /Specific/.test(await cell.locator("[data-step-tier-state]").innerText()),
-      ACTION_MS, "the row never read back 指定");
-    const stateText = await cell.locator("[data-step-tier-state]").innerText();
-    assert.match(stateText, /Inconsistent: pi is currently in default/, "pi's own tier is listed");
-    assert.match(stateText, /Inconsistent: claude is currently in fast-chat/, "claude's own tier is listed");
-    // the restore: default (pi's tier) applied to ALL harnesses
-    const argvBefore = tierArgv().length;
-    await cell.locator("[data-step-tier-select]").selectOption("default");
-    await cell.getByRole("button", { name: "Save", exact: true }).click({ timeout: ACTION_MS });
-    await waitFor(async () => (await cell.locator("[data-step-tier-state]").innerText()).includes("All: default"),
-      ACTION_MS, "the row never read back 全部：default");
-    // the fixture storage: claude moved over, the vacated tier unset (never an empty list)
-    const state = tierState();
-    assert.deepEqual(state.tiers.default, ["pi:anthropic/opus", "claude:opus"], "the merged tier is what cli.toml reads back");
-    assert.equal(state.tiers["fast-chat"], undefined, "the vacated tier was unset, never left as an empty list");
-    // only claude was written: one set and one unset, both Host-scoped
-    const writes = tierArgv().slice(argvBefore).filter((args) => (args.includes("set") || args.includes("unset")) && args.some((entry) => String(entry).startsWith("step_tiers.")));
-    assert.equal(writes.length, 2, "one write per plan step of the moved harness");
-    for (const write of writes) assert.ok(write.includes("--host"), "the write is Host-scoped");
-    assert.ok(writes.some((args) => args.includes("config") && args.includes("set") && args.some((entry) => entry === "step_tiers.default")), "the merged tier was written");
-    assert.ok(writes.some((args) => args.includes("config") && args.includes("unset") && args.some((entry) => entry === "step_tiers.fast-chat")), "the vacated tier was unset");
+    const text = await cell.innerText();
+    assert.match(text, /pi: default/, "pi's own tier is named with its harness");
+    assert.match(text, /claude: fast-chat/, "claude's own tier is named with its harness");
+    assert.equal(await cell.locator("[data-step-tier-select]").count(), 0, "no editor renders");
+    assert.equal(await cell.locator("button").count(), 0, "no control renders");
     await page.context().close();
   });
+
+  // S85-32 — polyforge#256 B1: an incapable catalog read (pf below the
+  // family's 0.2.4-0 floor) leaves the column read-only with a localized
+  // reason naming the found version, while the other columns stay.
+  await part("S32", "localized read-only reason", async () => {
+    const page = await newPage();
+    await tierPageMocks(page);
+    await page.route(/\/api\/polyforge\/config\?host=1/, (route) => route.fulfill({ json: {
+      pfPresent: true, pfVersion: "v0.2.3", capable: true,
+      stepTiersReason: "the step-tier catalog needs pf 0.2.4-0 or newer (found v0.2.3)",
+      items: [], file: { sha256: "e2e-sha", exists: true }, mapped: false } }));
+    await openSettings(page);
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    const host = sectionHost(page, "models");
+    const reason = host.locator("[data-step-tier-reason]");
+    await reason.waitFor({ state: "visible", timeout: ACTION_MS });
+    const text = await reason.innerText();
+    assert.match(text, /needs pf 0\.2\.4-0/, "the reason names the new floor");
+    assert.match(text, /v0\.2\.3/, "the reason names the found version");
+    assert.ok(!text.startsWith("the step-tier catalog needs"), "the reason is localized, not the server's English sentence");
+    assert.equal(await host.locator("[data-step-tier-select]").count(), 0, "an incapable catalog leaves the column read-only");
+    assert.ok((await host.innerText()).includes("Chat availability"), "the other columns are untouched");
+    await page.context().close();
+  });
+
+  // S85-33 — polyforge#256 B7: there is no write entry at all. The cell has
+  // no interactive control, and no step-tier write reaches pf from the page.
+  await part("S33", "no write entry", async () => {
+    const page = await newPage();
+    seedTiers({ default: ["pi:anthropic/opus"] });
+    await tierPageMocks(page);
+    await openSettings(page);
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    const host = sectionHost(page, "models");
+    const cell = host.locator("[data-step-tier-cell]").first();
+    await cell.waitFor({ state: "visible", timeout: ACTION_MS });
+    assert.equal(await cell.locator("select, input, button").count(), 0, "the cell is pure text");
+    await cell.click({ timeout: ACTION_MS }).catch(() => {});
+    const writes = tierArgv().filter((args) => (args.includes("set") || args.includes("unset")) && args.some((entry) => String(entry).startsWith("step_tiers.")));
+    assert.deepEqual(writes, [], "clicking the read-only cell writes nothing");
+    await page.context().close();
+  });
+
+  // S85-34 — polyforge#256 B7/AC1: the labels follow the Host storage. An
+  // external writer changes [step_tiers]; a reload shows the new 归属.
+  await part("S34", "external write re-read", async () => {
+    const page = await newPage();
+    seedTiers({ default: ["pi:anthropic/opus", "claude:opus"] });
+    await tierPageMocks(page);
+    await openSettings(page);
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    const host = sectionHost(page, "models");
+    let cell = host.locator("[data-step-tier-cell]").first();
+    await cell.waitFor({ state: "visible", timeout: ACTION_MS });
+    assert.match(await cell.innerText(), /default/, "the row starts sharing default");
+    // the external write (another tab, the CLI) moves claude to fast-chat
+    seedTiers({ default: ["pi:anthropic/opus"], "fast-chat": ["claude:opus"] });
+    await goto(page);
+    await clickSettingsButton(page);
+    await dialog(page).waitFor({ state: "visible", timeout: COLD_MS });
+    await tab(page, /^Models$/).click({ timeout: ACTION_MS });
+    cell = sectionHost(page, "models").locator("[data-step-tier-cell]").first();
+    await cell.waitFor({ state: "visible", timeout: ACTION_MS });
+    const text = await cell.innerText();
+    assert.match(text, /pi: default/, "the reload shows pi's new 归属");
+    assert.match(text, /claude: fast-chat/, "the reload shows claude's new 归属");
+    await page.context().close();
+  });
+
 } finally {
   await h.close();
 }
