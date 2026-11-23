@@ -222,3 +222,107 @@ test("an unavailable claude status degrades with its reason, and the doctor erro
   })));
   assert.match(empty, /No Cell is configured on this machine/);
 });
+
+// polyforge#256 (T1, B3): the account read's state machine — an explicit
+// pending state on the first read and on refresh, the last good data kept
+// across a refresh, a visible error the refresh retries, and a late answer
+// that never overwrites a newer one. The fetches are controlled promises
+// (resolved by the test), never a real 40 s wait; the hook is driven through
+// the same hook shim the other component behaviour tests use.
+test("account pending, success, empty, failure and refresh are distinct", async () => {
+  const shim = createJiti(import.meta.url, {
+    jsx: { runtime: "automatic" },
+    moduleCache: false,
+    alias: {
+      react: new URL("../hooks/__fixtures__/react-hook-shim.mjs", import.meta.url).pathname,
+      "react/jsx-runtime": new URL("../hooks/__fixtures__/react-jsx-runtime.mjs", import.meta.url).pathname,
+      "@/hooks/useI18n": new URL("../hooks/__fixtures__/polyforge-tasks-stubs.mjs", import.meta.url).pathname,
+      "./SettingsUi": new URL("../hooks/__fixtures__/polyforge-tasks-stubs.mjs", import.meta.url).pathname,
+      "./TerminalPanel": new URL("../hooks/__fixtures__/polyforge-tasks-stubs.mjs", import.meta.url).pathname,
+      "./PiAccountLogin": new URL("../hooks/__fixtures__/polyforge-tasks-stubs.mjs", import.meta.url).pathname,
+    },
+  });
+  const { renderHook } = await import(new URL("../hooks/__fixtures__/react-hook-shim.mjs", import.meta.url).href);
+  const { useAccountRead } = await shim.import("./AccountSettings.tsx");
+
+  const pending = [];
+  globalThis.fetch = (url) => new Promise((resolve) => pending.push({ url, resolve }));
+  const take = (url) => {
+    const at = pending.findIndex((entry) => entry.url === url);
+    assert.ok(at >= 0, `no pending ${url} (pending: ${pending.map((entry) => entry.url).join(", ")})`);
+    const [entry] = pending.splice(at, 1);
+    return entry;
+  };
+  const ok = (body) => ({ ok: true, status: 200, json: async () => body });
+  const settle = async (hook) => {
+    for (let round = 0; round < 16; round++) {
+      await new Promise((resolve) => setImmediate(resolve));
+      hook.flush();
+    }
+  };
+  const answer = async (hook, body, harnesses = []) => {
+    take("/api/settings/account").resolve(ok(body));
+    await settle(hook);
+    take("/api/harness").resolve(ok({ harnesses }));
+    await settle(hook);
+  };
+
+  const hook = renderHook(useAccountRead, {});
+  assert.equal(hook.result.loading, true, "the first read starts pending");
+  assert.equal(hook.result.read, null);
+
+  // success: the data replaces the pending state
+  await answer(hook, READ);
+  assert.equal(hook.result.loading, false);
+  assert.equal(hook.result.readError, null);
+  assert.equal(hook.result.read.cells.length, 3, "the read's Cell rows are shown");
+
+  // refresh: pending again, the last good read kept
+  hook.result.load();
+  await settle(hook);
+  assert.equal(hook.result.loading, true, "a refresh shows its own pending state");
+  assert.equal(hook.result.read.cells.length, 3, "the last good read stays while refreshing");
+  await answer(hook, { ...READ, cells: [], doctorError: null });
+  assert.equal(hook.result.loading, false);
+  assert.deepEqual(hook.result.read.cells, [], "the refreshed (empty) read replaces the old data");
+
+  // failure: the pending state ends, an error is visible, the data is kept
+  hook.result.load();
+  await settle(hook);
+  take("/api/settings/account").resolve({ ok: false, status: 500, json: async () => ({}) });
+  await settle(hook);
+  assert.equal(hook.result.loading, false, "a failed read never stays pending");
+  assert.equal(hook.result.readError, "settings.accountReadFailed");
+  assert.deepEqual(hook.result.read.cells, [], "the last good read is kept through a failure");
+
+  // a late older answer never overwrites a newer one
+  hook.result.load(); // request A
+  await settle(hook);
+  hook.result.load(); // request B, newer
+  await settle(hook);
+  const [first, second] = pending.filter((entry) => entry.url === "/api/settings/account");
+  second.resolve(ok({ ...READ, cells: [] }));
+  await settle(hook);
+  take("/api/harness").resolve(ok({ harnesses: [] }));
+  await settle(hook);
+  first.resolve(ok(READ));
+  await settle(hook);
+  assert.deepEqual(hook.result.read.cells, [], "the newer read wins; the late older answer is dropped");
+  hook.unmount();
+});
+
+test("B3: the shell shows the pending and error states, and a finished read without claude is its own explanation", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("./AccountSettings.tsx", import.meta.url), "utf8");
+  assert.match(source, /data-account-loading=""/, "the shell renders a pending status");
+  assert.match(source, /role="status" data-account-loading/, "the pending status is a live region");
+  assert.match(source, /data-account-read-error=""/, "the shell renders a visible read error");
+  assert.match(source, /role="alert" data-account-read-error/, "the read error is announced");
+  // a read that finished without a claude state is not still loading
+  const absent = renderToStaticMarkup(h(I18nProvider, null, h(AccountClaudeCard, { claude: null, loaded: true })));
+  assert.match(absent, /data-claude-status="absent"/);
+  assert.match(absent, /read finished/, "the finished-but-unavailable explanation is shown");
+  const pendingCard = renderToStaticMarkup(h(I18nProvider, null, h(AccountClaudeCard, { claude: null, loaded: false })));
+  assert.match(pendingCard, /data-claude-status="loading"/, "a read still in flight says it is loading");
+  assert.match(pendingCard, /Reading the account facts/, "the loading text is localized");
+});
