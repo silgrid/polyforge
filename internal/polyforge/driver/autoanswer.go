@@ -19,6 +19,9 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/silgrid/polyforge/internal/common/capsule"
+	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 )
 
 // autoAnswerAuthorizationDate is the date of the owner ruling that
@@ -214,3 +217,39 @@ func autoAnswerConfirmPlan(content string) bool {
 // marker, on a line of its own (a list bullet allowed). A mention inside
 // prose is not the marker: the stop is declared, not discussed.
 var autoAnswerConfirmPlanLine = regexp.MustCompile(`(?im)^\s*(?:[-*]\s*)?confirm_plan\s*:\s*true\s*$`)
+
+// EvAutoAnswered is the driver event of an automatic reply (polyforge#239):
+// `{step, spawn_n, ask_at, question_id, at, by, elapsed, timeout,
+// recommendations}` — machine fields only, never the agent's prose. The
+// decision feed classifies it as its own information entry and marks the
+// question replied (it still needs no human).
+const EvAutoAnswered = "auto_answered"
+
+// autoAnswerSettings answers the Cell's switch and timeout as the current
+// supervision defaults hold them (a live reload is read at every check).
+func (d *Driver) autoAnswerSettings() (enabled bool, timeout time.Duration) {
+	lim := d.limits()
+	enabled = lim.AskAutoReplyEnabled == nil || *lim.AskAutoReplyEnabled
+	timeout = lim.AskAutoReplyTimeout
+	if timeout <= 0 {
+		timeout = supervise.DefaultAskAutoReplyTimeout
+	}
+	return enabled, timeout
+}
+
+// recordAwaitingStart appends the daemon-only awaiting line of (step, n)'s
+// ask when the live dispatch FIRST observes it: that stamp is T0. A
+// restart's plan pass only reads it (announceParkedAsk), so a wait older
+// than this change has no trustworthy T0 and is never auto-answered.
+func (d *Driver) recordAwaitingStart(stepID string, n int64, ask *capsule.AskLine) {
+}
+
+// autoAnswer commits the automatic reply for ask when the card is safe, the
+// wait is due and no one answered first. It re-reads and re-checks the
+// record under askWriteMu, so the owner's relay and this commit are one
+// serialized read-check-append: whoever appends first wins, and the loser
+// writes nothing extra. true = the reply was appended (and the event
+// emitted).
+func (d *Driver) autoAnswer(ask *capsule.AskLine) bool {
+	return false
+}

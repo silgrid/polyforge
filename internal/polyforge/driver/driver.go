@@ -220,8 +220,13 @@ type Driver struct {
 	// (capsule.json repos, read once in New).
 	claimRepos []string
 
-	mu     sync.Mutex // serializes every transition (the single write entry)
-	spawnN int64
+	mu sync.Mutex // serializes every transition (the single write entry)
+	// askWriteMu serializes the append-only asks.jsonl read-check-append
+	// pairs the relay and the automatic reply commit (polyforge#239): the
+	// record's own order decides who wrote first, so no reply is lost or
+	// doubled.
+	askWriteMu sync.Mutex
+	spawnN     int64
 	// initialized records that execution.json exists on disk (loaded,
 	// or written by the init transition).
 	initialized bool
