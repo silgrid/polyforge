@@ -45,7 +45,12 @@ export interface PiSubagentPanelRequest {
   paneSessionId: string;
   childSessionId: string;
   requestId: number;
+  /** A card's own launch call id, when the entry was an Agent tool card (Q6). */
+  toolCallId?: string;
 }
+
+/** Whether Jump has a launch row to scroll to in the chat that owns the panel. */
+export type PiSubagentJumpStatus = "idle" | "searching" | "found" | "missing";
 
 const STATUSES: ReadonlySet<string> = new Set(["starting", "queued", "running", "completed", "failed", "aborted", "interrupted"]);
 const ACTIVE: ReadonlySet<string> = new Set(["starting", "queued", "running"]);
@@ -123,8 +128,15 @@ export function mergePiSubagentEntries(
     const seen = new Set(incoming.map((entry) => entry.id));
     return dedupe([...incoming, ...existing.filter((entry) => !seen.has(entry.id))]);
   }
-  const seen = new Set(existing.map((entry) => entry.id));
-  return [...existing, ...dedupe(incoming.filter((entry) => !seen.has(entry.id)))];
+  // A default snapshot is the latest 50 entries: no overlap with what is
+  // loaded means entries were written while the poll paused, and appending
+  // would silently drop the middle. Show the snapshot whole instead; the
+  // snapshot's own `hasMore` still offers the older history.
+  const existingIds = new Set(existing.map((entry) => entry.id));
+  if (existing.length > 0 && incoming.length > 0 && !incoming.some((entry) => existingIds.has(entry.id))) {
+    return dedupe(incoming);
+  }
+  return [...existing, ...dedupe(incoming.filter((entry) => !existingIds.has(entry.id)))];
 }
 
 function dedupe(entries: readonly PiSubagentEntry[]): PiSubagentEntry[] {

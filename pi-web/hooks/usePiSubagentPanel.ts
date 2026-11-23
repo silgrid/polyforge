@@ -38,6 +38,8 @@ export interface PiSubagentPanelControllerOptions {
   childSessionId: string;
   /** The chat the panel is open in: the family walk stops here. */
   parentSessionId: string;
+  /** A card's own launch call id, which wins over the run's parent call (Q6). */
+  preferredToolCallId?: string | null;
   fetchImpl?: typeof fetch;
   onChange?: (snapshot: PiSubagentPanelSnapshot) => void;
   missingRetries?: number;
@@ -63,9 +65,10 @@ function runUrl(sessionId: string): string {
 }
 
 /**
- * Reads one run's panel. Every read carries a sequence number: a read whose
- * answer the next read (or `dispose`) superseded is dropped, so an A→B switch
- * can never paint A's run into B's panel.
+ * Reads one run's panel. A read is single-flight: a 2 s tick that lands while
+ * the previous read still runs is skipped, never started beside it, so a slow
+ * answer still lands (Q5's at most one batch every 2 s). Only `dispose` (a
+ * child switch) invalidates an in-flight answer.
  */
 export class PiSubagentPanelController {
   private readonly options: PiSubagentPanelControllerOptions;
@@ -75,7 +78,9 @@ export class PiSubagentPanelController {
   private earlierSeq = 0;
   private disposed = false;
   private missingAttempts = 0;
+  private inFlight = false;
   private launchToolCallId: string | null = null;
+  private launchResolved = false;
 
   constructor(options: PiSubagentPanelControllerOptions) {
     this.options = options;
@@ -109,56 +114,78 @@ export class PiSubagentPanelController {
   }
 
   private async read(mode: "replace" | "append"): Promise<void> {
-    const seq = ++this.readSeq;
-    let response: Response;
+    if (this.inFlight) return;
+    this.inFlight = true;
+    const seq = this.readSeq;
     try {
-      response = await this.fetchImpl(runUrl(this.options.childSessionId));
-    } catch (error) {
-      if (!this.current(seq)) return;
-      this.apply({ phase: "error", error: message(error) });
-      return;
-    }
-    if (!this.current(seq)) return;
-    if (response.status === 404) {
-      this.missingAttempts += 1;
-      if (this.missingAttempts > (this.options.missingRetries ?? PI_SUBAGENT_PANEL_MISSING_RETRIES)) {
-        this.apply({ phase: "missing", error: null });
+      let response: Response;
+      try {
+        response = await this.fetchImpl(runUrl(this.options.childSessionId));
+      } catch (error) {
+        if (!this.current(seq)) return;
+        this.apply({ phase: "error", error: message(error) });
+        return;
       }
-      return;
+      if (!this.current(seq)) return;
+      if (response.status === 404) {
+        this.missingAttempts += 1;
+        if (this.missingAttempts > (this.options.missingRetries ?? PI_SUBAGENT_PANEL_MISSING_RETRIES)) {
+          this.apply({ phase: "missing", error: null });
+        }
+        return;
+      }
+      this.missingAttempts = 0;
+      if (!response.ok) {
+        this.apply({ phase: "error", error: `HTTP ${response.status}` });
+        return;
+      }
+      const run = piSubagentRunFromJson(await response.json().catch(() => null));
+      if (!this.current(seq)) return;
+      if (!run) {
+        this.apply({ phase: "error", error: "unreadable run" });
+        return;
+      }
+      // The run's own read decides the header; the child transcript is read on
+      // the same snapshot, and a settled run gets one more read of it (the
+      // terminal status and the final entry do not land in one answer, Q5).
+      const transcript = await this.readTranscript(seq);
+      if (!this.current(seq)) return;
+      if (!this.launchResolved) {
+        this.launchToolCallId = this.options.preferredToolCallId
+          ?? await this.resolveLaunch(run, seq);
+        if (!this.current(seq)) return;
+        this.launchResolved = true;
+      }
+      if (transcript.ok) {
+        this.apply({
+          run,
+          phase: "ready",
+          error: null,
+          entries: mergePiSubagentEntries(this.state.entries, transcript.value.entries, mode),
+          // A poll never re-enables 「加载更早」: only the first load and an
+          // earlier page decide whether more history exists (Q5).
+          hasEarlier: mode === "replace" ? transcript.value.hasEarlier : this.state.hasEarlier,
+          cwd: transcript.value.cwd ?? this.state.cwd,
+          launchToolCallId: this.launchToolCallId,
+        });
+      } else if (transcript.error === null) {
+        // A queued or starting run may have no session file yet: an empty
+        // body, not an error — the header still explains the wait.
+        this.apply({
+          run,
+          phase: "ready",
+          error: null,
+          ...(mode === "replace" ? { hasEarlier: false } : {}),
+          launchToolCallId: this.launchToolCallId,
+        });
+      } else {
+        // The last snapshot stays visible, but the panel says it is stale and
+        // disables sending until a read succeeds again (Q5).
+        this.apply({ run, phase: "error", error: transcript.error, launchToolCallId: this.launchToolCallId });
+      }
+    } finally {
+      this.inFlight = false;
     }
-    this.missingAttempts = 0;
-    if (!response.ok) {
-      this.apply({ phase: "error", error: `HTTP ${response.status}` });
-      return;
-    }
-    const run = piSubagentRunFromJson(await response.json().catch(() => null));
-    if (!this.current(seq)) return;
-    if (!run) {
-      this.apply({ phase: "error", error: "unreadable run" });
-      return;
-    }
-    // The run's own read decides the header; the child transcript is read on
-    // the same snapshot, and a settled run gets one more read of it (the
-    // terminal status and the final entry do not land in one answer, Q5).
-    const transcript = await this.readTranscript(seq);
-    if (!this.current(seq)) return;
-    const resolvedLaunch = run.parentToolCallId && run.parentSessionId === this.options.parentSessionId
-      ? run.parentToolCallId
-      : this.launchToolCallId;
-    const launchToolCallId = resolvedLaunch ?? await this.resolveLaunch(run, seq);
-    if (!this.current(seq)) return;
-    this.launchToolCallId = launchToolCallId;
-    this.apply({
-      run,
-      phase: "ready",
-      error: transcript.ok ? null : transcript.error,
-      ...(transcript.ok ? {
-        entries: mergePiSubagentEntries(this.state.entries, transcript.value.entries, mode),
-        hasEarlier: transcript.value.hasEarlier,
-        cwd: transcript.value.cwd ?? this.state.cwd,
-      } : {}),
-      launchToolCallId,
-    });
   }
 
   private async readTranscript(seq: number): Promise<{ ok: true; value: NonNullable<ReturnType<typeof piSubagentTranscriptFromJson>> } | { ok: false; error: string | null }> {
@@ -169,8 +196,6 @@ export class PiSubagentPanelController {
       return { ok: false, error: message(error) };
     }
     if (!this.current(seq)) return { ok: false, error: null };
-    // A queued or starting run may have no session file yet: that is an empty
-    // body, not a panel error — the header still explains the wait.
     if (response.status === 404) return { ok: false, error: null };
     if (!response.ok) return { ok: false, error: `HTTP ${response.status}` };
     const value = piSubagentTranscriptFromJson(await response.json().catch(() => null));
@@ -180,21 +205,24 @@ export class PiSubagentPanelController {
   /**
    * The Agent call in THIS chat that leads to the child. A direct child is its
    * own launch; a deeper descendant walks its ancestors' runs until one names
-   * this chat. A chain that cannot be read keeps the direct parent call, and
-   * the panel disables Jump when the transcript holds no such row (Q6).
+   * this chat. A chain that cannot be read (404, a network failure, a cycle)
+   * yields null — never another chat's call id (Q6).
    */
   private async resolveLaunch(run: PiSubagentRunView, seq: number): Promise<string | null> {
     let current: PiSubagentRunView | null = run;
+    const seen = new Set<string>();
     for (let depth = 0; current && depth < 20; depth += 1) {
       if (current.parentSessionId === this.options.parentSessionId) return current.parentToolCallId ?? null;
+      if (seen.has(current.parentSessionId)) return null;
+      seen.add(current.parentSessionId);
       let response: Response;
       try {
         response = await this.fetchImpl(runUrl(current.parentSessionId));
       } catch {
-        return current.parentToolCallId ?? null;
+        return null;
       }
       if (!this.current(seq)) return this.launchToolCallId;
-      if (!response.ok) return current.parentToolCallId ?? null;
+      if (!response.ok) return null;
       current = piSubagentRunFromJson(await response.json().catch(() => null));
     }
     return null;
@@ -280,12 +308,14 @@ function message(error: unknown): string {
 export function usePiSubagentPanel(options: {
   childSessionId: string | null;
   parentSessionId: string | null;
+  /** The Agent card's own call id, when the panel was opened from one. */
+  toolCallId?: string | null;
   open: boolean;
 }): PiSubagentPanelSnapshot & {
   loadEarlier: () => void;
   steer: (text: string) => Promise<boolean>;
 } {
-  const { childSessionId, parentSessionId, open } = options;
+  const { childSessionId, parentSessionId, toolCallId, open } = options;
   const [snapshot, setSnapshot] = useState<PiSubagentPanelSnapshot>(emptyPiSubagentPanelSnapshot);
   const controllerRef = useRef<PiSubagentPanelController | null>(null);
   useEffect(() => {
@@ -299,6 +329,7 @@ export function usePiSubagentPanel(options: {
     const controller = new PiSubagentPanelController({
       childSessionId,
       parentSessionId,
+      preferredToolCallId: toolCallId,
       onChange: setSnapshot,
     });
     controllerRef.current = controller;
@@ -318,7 +349,7 @@ export function usePiSubagentPanel(options: {
       controller.dispose();
       if (controllerRef.current === controller) controllerRef.current = null;
     };
-  }, [childSessionId, parentSessionId, open]);
+  }, [childSessionId, parentSessionId, toolCallId, open]);
   return {
     ...snapshot,
     loadEarlier: () => {

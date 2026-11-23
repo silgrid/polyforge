@@ -4,7 +4,7 @@
 // top-edge height drag and its Esc rule, with the header, body and footer
 // supplied by the caller. ClaudeSubagentPanel and PiSubagentPanel both use it,
 // so the two panels keep one layout, one drag and one keyboard rule.
-import { useCallback, useRef, useState, type PointerEvent, type ReactNode } from "react";
+import { useCallback, useRef, useState, type PointerEvent, type ReactNode, type RefObject } from "react";
 
 /** What `isClaudeSubagentPanelEscape` reads of a keydown. */
 export interface ClaudeSubagentPanelKey {
@@ -163,6 +163,7 @@ export function SubagentPanelFrame({
   status,
   failed = false,
   resizeLabel,
+  bodyRef,
   header,
   children,
   footer,
@@ -177,6 +178,8 @@ export function SubagentPanelFrame({
   status?: string;
   failed?: boolean;
   resizeLabel: string;
+  /** The scrolling body, for a panel that keeps its newest entry in view. */
+  bodyRef?: RefObject<HTMLDivElement | null>;
   header: ReactNode;
   children: ReactNode;
   footer: ReactNode;
@@ -201,7 +204,7 @@ export function SubagentPanelFrame({
         <span aria-hidden="true" style={{ width: 32, height: 3, borderRadius: 2, background: "rgba(139,92,246,0.35)" }} />
       </div>
       {header}
-      <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+      <div ref={bodyRef} data-subagent-panel-body="" style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
         {children}
       </div>
       {footer}

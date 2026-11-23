@@ -62,7 +62,7 @@ import { PiBackgroundTaskHistory, PiBackgroundTaskPanel } from "./PiBackgroundTa
 import { PiRunningList } from "./PiRunningList";
 import { PiSubagentPanel } from "./PiSubagentPanel";
 import { usePiSubagentPanel } from "@/hooks/usePiSubagentPanel";
-import { findPiSubagentLaunchEntryId, type PiSubagentPanelRequest } from "@/lib/pi-subagent-panel";
+import { findPiSubagentLaunchEntryId, type PiSubagentJumpStatus, type PiSubagentPanelRequest } from "@/lib/pi-subagent-panel";
 import { claudeSubagentLaunchEntryId, isRunningBackgroundAgentMessage, isSubagentJumpTarget } from "@/lib/claude-subagent-view";
 
 interface Props {
@@ -85,8 +85,6 @@ interface Props {
   onBackgroundTasksEvent?: (event: BackgroundTasksClientEvent) => void;
   onSessionCreated?: (session: SessionInfo, sourceDraftKey: string) => void;
   onSessionForked?: (newSessionId: string) => void;
-  /** A subagent's tab beside the main chat: the page's global shortcuts stay with the main chat. */
-  panel?: boolean;
   modelsRefreshKey?: number;
   chatInputRef?: React.RefObject<ChatInputHandle | null>;
   onBranchDataChange?: (tree: SessionTreeNode[], activeLeafId: string | null, onLeafChange: (leafId: string | null) => void, locked: boolean) => void;
@@ -290,7 +288,7 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, durationMs, cacheMis
   );
 }
 
-export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initialScrollPosition, onScrollPositionChange, sessionRunning, isActivePane = true, newSessionCwd, newSessionDraftKey, initialNewSessionChoices, onNewSessionChoicesChange, onAgentEnd, onToolEnd, onAttentionNeeded, onBackgroundTasksEvent, onSessionCreated, onSessionForked, panel = false, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onDebugSnapshotReaderChange, onOpenSettings, onContextUsageChange, externalSessionChange, onOpenFile, onFilesUploaded, piSubagentPanelRequest, onPiSubagentPanelRequestHandled, onAskInNewChat, quoteSelectionEnabled = false, initialPrompt, onInitialPromptConsumed, soundEnabled = true, onSoundToggle, playDoneSound = () => {}, unlockAudio, holdAudio }: Props) {
+export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initialScrollPosition, onScrollPositionChange, sessionRunning, isActivePane = true, newSessionCwd, newSessionDraftKey, initialNewSessionChoices, onNewSessionChoicesChange, onAgentEnd, onToolEnd, onAttentionNeeded, onBackgroundTasksEvent, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onDebugSnapshotReaderChange, onOpenSettings, onContextUsageChange, externalSessionChange, onOpenFile, onFilesUploaded, piSubagentPanelRequest, onPiSubagentPanelRequestHandled, onAskInNewChat, quoteSelectionEnabled = false, initialPrompt, onInitialPromptConsumed, soundEnabled = true, onSoundToggle, playDoneSound = () => {}, unlockAudio, holdAudio }: Props) {
   const { t } = useI18n();
   const isMobile = useIsMobile();
   const completionNotificationsEnabled = session?.relation?.kind !== "subagent";
@@ -659,10 +657,10 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
     playDoneSoundRef.current();
   }, [completionNotificationsEnabled, extensionDialog]);
 
-  // Register the abort handler for the global Esc shortcut
+  // Register the abort handler for the global Esc shortcut.
   useEffect(() => {
-    if (!panel) registerAbortHandler(sessionBusy ? handleAbort : null);
-  }, [panel, sessionBusy, handleAbort]);
+    registerAbortHandler(sessionBusy ? handleAbort : null);
+  }, [sessionBusy, handleAbort]);
 
   // --- Lazy-load historical messages ---
   // Only render the last N messages initially. When the user scrolls to the
@@ -1093,7 +1091,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
   // since the choice is kept with the session it was made in), and a pending jump to a
   // run's launch position when its Agent row is not mounted. a background
   // task's panel takes the same slot, so one choice holds either; opening one closes the other.
-  const [openPanelChoice, setOpenPanelChoice] = useState<{ sessionId: string | undefined; kind: "subagent" | "task" | "piTask" | "piHistory" | "piSubagent"; id: string; label?: string } | null>(null);
+  const [openPanelChoice, setOpenPanelChoice] = useState<{ sessionId: string | undefined; kind: "subagent" | "task" | "piTask" | "piHistory" | "piSubagent"; id: string; label?: string; toolCallId?: string } | null>(null);
   const openChoice = openPanelChoice && openPanelChoice.sessionId === session?.id ? openPanelChoice : null;
   const openSubagentRun = openChoice?.kind === "subagent" ? claudeSubagents[openChoice.id] : undefined;
   const openTask = openChoice?.kind === "task" ? claudeBackgroundTasks[openChoice.id] : undefined;
@@ -1116,13 +1114,13 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
   // A pi subagent's panel takes the same slot (polyforge#255): opened by this
   // chat's running list or Agent card, or by a top-bar request bound to this
   // session id. `label` is only the pre-read fallback the list gives.
-  const openPiSubagentPanel = useCallback((childSessionId: string, label: string) => {
-    setOpenPanelChoice({ sessionId: session?.id, kind: "piSubagent", id: childSessionId, label });
+  const openPiSubagentPanel = useCallback((childSessionId: string, label: string, toolCallId?: string) => {
+    setOpenPanelChoice({ sessionId: session?.id, kind: "piSubagent", id: childSessionId, label, toolCallId });
   }, [session?.id]);
   useEffect(() => {
     const request = piSubagentPanelRequest;
     if (!request || !session?.id || request.paneSessionId !== session.id) return;
-    setOpenPanelChoice({ sessionId: session.id, kind: "piSubagent", id: request.childSessionId });
+    setOpenPanelChoice({ sessionId: session.id, kind: "piSubagent", id: request.childSessionId, toolCallId: request.toolCallId });
     onPiSubagentPanelRequestHandled?.(request.requestId);
   }, [piSubagentPanelRequest, session?.id, onPiSubagentPanelRequestHandled]);
   const closeClaudeSubagentPanel = useCallback(() => setOpenPanelChoice(null), []);
@@ -1138,6 +1136,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
   const piSubagentPanel = usePiSubagentPanel({
     childSessionId: piSubagentPanelOpen ? openChoice?.id ?? null : null,
     parentSessionId: session?.id ?? null,
+    toolCallId: piSubagentPanelOpen && openChoice?.kind === "piSubagent" ? openChoice.toolCallId ?? null : null,
     open: piSubagentPanelOpen,
   });
   const floatingPanelOpen = subagentPanelOpen || taskPanelOpen || piTaskPanelOpen || piHistoryPanelOpen || piSubagentPanelOpen;
@@ -1187,23 +1186,68 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
     });
     return () => cancelAnimationFrame(frame);
   }, [pendingSubagentJump, scrollContainerRef, highlightJumpTarget]);
-  // A pi subagent's Jump closes its panel and scrolls to the Agent tool card
-  // that launched it (the card is marked with its tool call id); an unmounted
-  // card first widens the render window to its launch entry. No located launch
-  // call leaves the panel's Jump disabled (Q6) and does nothing here.
+  // A pi subagent's Jump is offered only when THIS chat can locate the launch
+  // call (Q6): the loaded transcript first, then the existing history paging
+  // to its end. The panel stays open while the search runs or after it fails;
+  // a located row closes the panel and scrolls to it.
+  const [piJump, setPiJump] = useState<{ status: PiSubagentJumpStatus; entryId: string | null }>({ status: "idle", entryId: null });
+  const piJumpHistoryRef = useRef({ messages, entryIds, historyCursor, hasEarlierMessages });
+  piJumpHistoryRef.current = { messages, entryIds, historyCursor, hasEarlierMessages };
+  useEffect(() => {
+    if (!piSubagentPanelOpen) {
+      setPiJump({ status: "idle", entryId: null });
+      return undefined;
+    }
+    const toolCallId = piSubagentPanel.launchToolCallId;
+    if (!toolCallId) {
+      setPiJump({ status: "missing", entryId: null });
+      return undefined;
+    }
+    let cancelled = false;
+    const search = async () => {
+      const history = piJumpHistoryRef.current;
+      const loaded = findPiSubagentLaunchEntryId(toolCallId, history.messages, history.entryIds);
+      if (loaded) {
+        if (!cancelled) setPiJump({ status: "found", entryId: loaded });
+        return;
+      }
+      if (!history.hasEarlierMessages || !history.historyCursor || !session?.id) {
+        if (!cancelled) setPiJump({ status: "missing", entryId: null });
+        return;
+      }
+      if (!cancelled) setPiJump({ status: "searching", entryId: null });
+      let cursor: string | null = history.historyCursor;
+      let hasMore = true;
+      while (!cancelled && hasMore && cursor) {
+        const context = await loadOlderPage(session.id, cursor, { tail: 200 });
+        if (!context) break;
+        const found = findPiSubagentLaunchEntryId(toolCallId, context.messages, context.entryIds);
+        if (found) {
+          if (!cancelled) setPiJump({ status: "found", entryId: found });
+          return;
+        }
+        cursor = context.oldestEntryId;
+        hasMore = context.hasMore;
+      }
+      if (!cancelled) setPiJump({ status: "missing", entryId: null });
+    };
+    void search();
+    return () => { cancelled = true; };
+  }, [piSubagentPanelOpen, piSubagentPanel.launchToolCallId, session?.id, loadOlderPage]);
   const [pendingPiSubagentJump, setPendingPiSubagentJump] = useState<{ toolCallId: string; entryId: string } | null>(null);
-  const jumpToPiSubagent = useCallback((toolCallId: string) => {
+  const jumpToPiSubagent = useCallback(() => {
+    if (piJump.status !== "found" || !piJump.entryId) return;
+    const toolCallId = piSubagentPanel.launchToolCallId;
+    if (!toolCallId) return;
     setOpenPanelChoice(null);
     const row = scrollContainerRef.current?.querySelector<HTMLElement>(`[data-pi-agent-tool-call="${CSS.escape(toolCallId)}"]`);
     if (row) {
       highlightJumpTarget(row);
       return;
     }
-    const entryId = findPiSubagentLaunchEntryId(toolCallId, messages, entryIds);
-    if (!entryId) return;
     setVisibleCount((current) => Math.max(current, messages.length * 2));
-    setPendingPiSubagentJump({ toolCallId, entryId });
-  }, [scrollContainerRef, highlightJumpTarget, messages, entryIds]);
+    setPendingPiSubagentJump({ toolCallId, entryId: piJump.entryId });
+  }, [piJump.status, piJump.entryId, piSubagentPanel.launchToolCallId, scrollContainerRef, highlightJumpTarget, messages.length]);
   useLayoutEffect(() => {
     if (!pendingPiSubagentJump) return;
     const frame = requestAnimationFrame(() => {
@@ -1622,9 +1666,10 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
                 loadingEarlier={piSubagentPanel.loadingEarlier}
                 steerError={piSubagentPanel.steerError}
                 launchToolCallId={piSubagentPanel.launchToolCallId}
+                jumpStatus={piJump.status}
                 cwd={piSubagentPanel.cwd}
                 onLoadEarlier={piSubagentPanel.loadEarlier}
-                onJump={() => { if (piSubagentPanel.launchToolCallId) jumpToPiSubagent(piSubagentPanel.launchToolCallId); }}
+                onJump={jumpToPiSubagent}
                 onClose={closeClaudeSubagentPanel}
                 onSteer={piSubagentPanel.steer}
               />

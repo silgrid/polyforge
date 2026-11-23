@@ -17,9 +17,9 @@ import {
   piSubagentCanSteer,
   piSubagentElapsedMs,
   piSubagentInputReason,
-  piSubagentIsActive,
   piSubagentStatusLabelKey,
   type PiSubagentEntry,
+  type PiSubagentJumpStatus,
   type PiSubagentPanelPhase,
   type PiSubagentRunView,
 } from "@/lib/pi-subagent-panel";
@@ -57,6 +57,7 @@ export function PiSubagentPanel({
   loadingEarlier,
   steerError,
   launchToolCallId,
+  jumpStatus,
   cwd,
   onLoadEarlier,
   onJump,
@@ -74,6 +75,8 @@ export function PiSubagentPanel({
   steerError: string | null;
   /** The Agent call in this chat that leads to the child; null disables Jump (Q6). */
   launchToolCallId: string | null;
+  /** Whether the chat can locate that call; `found` alone enables Jump (Q6). */
+  jumpStatus?: PiSubagentJumpStatus;
   cwd: string | null;
   onLoadEarlier: () => void;
   onJump: () => void;
@@ -84,7 +87,6 @@ export function PiSubagentPanel({
 }) {
   const { t } = useI18n();
   const status = run?.status ?? "unknown";
-  const active = piSubagentIsActive(status);
   const now = useClaudeSubagentClock(status === "running", fixedNow);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
@@ -98,7 +100,12 @@ export function PiSubagentPanel({
   const canRelay = phase === "ready" && piSubagentCanSteer(status);
   const canSend = canRelay && !sending && text.trim() !== "";
   const title = run?.description || run?.profile || t("piSubagent.status.unknown");
-  const jumpEnabled = launchToolCallId !== null;
+  const jumpEnabled = jumpStatus === undefined ? launchToolCallId !== null : jumpStatus === "found";
+  const jumpTitle = jumpEnabled
+    ? t("piSubagent.jumpToLaunch")
+    : jumpStatus === "searching"
+      ? t("piSubagent.jumpSearching")
+      : t("piSubagent.jumpUnavailable");
 
   // A new entry scrolls the body to it; an earlier page prepended keeps the
   // reader where the loaded history began.
@@ -133,6 +140,7 @@ export function PiSubagentPanel({
       borderColor="rgba(139,92,246,0.35)"
       status={status}
       resizeLabel={t("piSubagent.resizePanel")}
+      bodyRef={bodyRef}
       header={(
         <div style={{ display: "flex", alignItems: "center", gap: 7, flexShrink: 0, minWidth: 0, padding: "0 8px 6px 10px" }}>
           {run?.profile && (
@@ -150,7 +158,7 @@ export function PiSubagentPanel({
             type="button"
             onClick={onJump}
             disabled={!jumpEnabled}
-            title={jumpEnabled ? t("piSubagent.jumpToLaunch") : t("piSubagent.jumpUnavailable")}
+            title={jumpTitle}
             style={{ ...HEADER_BUTTON, cursor: jumpEnabled ? "pointer" : "default", opacity: jumpEnabled ? 1 : 0.55 }}
           >
             {t("piSubagent.jumpToLaunch")}
@@ -183,7 +191,7 @@ export function PiSubagentPanel({
         </div>
       )}
     >
-      <div ref={bodyRef} style={{ padding: "4px 10px 8px", borderTop: "1px solid rgba(139,92,246,0.2)", display: "flex", flexDirection: "column", gap: 6 }}>
+      <div style={{ padding: "4px 10px 8px", borderTop: "1px solid rgba(139,92,246,0.2)", display: "flex", flexDirection: "column", gap: 6 }}>
         {entries.length === 0 && (
           <div data-pi-subagent-empty="" style={{ color: "var(--text-dim)" }}>{phase === "loading" ? t("piSubagent.input.loading") : t("piSubagent.noEntries")}</div>
         )}
@@ -207,7 +215,7 @@ export function PiSubagentPanel({
             sessionId={sessionId}
           />
         ))}
-        {error && phase !== "ready" && <div style={{ color: "#f87171" }}>{error}</div>}
+        {error && <div style={{ color: "#f87171" }}>{error}</div>}
         {phase === "missing" && <div style={{ color: "var(--text-dim)" }}>{t("piSubagent.input.missing")}</div>}
         {run?.result && (
           <div>
