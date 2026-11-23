@@ -710,6 +710,7 @@ class Gate:
         image: str = "",
         image_source: str = "",
         audit: str = "",
+        parallel: int = 0,
     ) -> None:
         # co: for_run's (the defaults, the deadline label, the keep-alive)
         self.co = co
@@ -733,6 +734,9 @@ class Gate:
         # result and a green tag's record; on, empty and unset hand nothing
         # (today's argv and records byte for byte)
         self.audit = audit or read_audit(cmd_env)
+        # polyforge#244: --parallel N overrides the report's declared
+        # full-gate parallelism (0 = take it from the report).
+        self.parallel = parallel
 
     def say(self, msg: str) -> None:
         self.say_line("gate: " + msg)
