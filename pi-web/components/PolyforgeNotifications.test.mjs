@@ -21,6 +21,7 @@ const jiti = createJiti(import.meta.url, {
     "@/lib/polyforge-panel-preferences": modulePath("lib/polyforge-panel-preferences.ts"),
     "@/lib/polyforge-notifications": modulePath("lib/polyforge-notifications.ts"),
     "@/lib/polyforge-decisions-pure": modulePath("lib/polyforge-decisions-pure.ts"),
+    "@/lib/browser-notifications": modulePath("lib/browser-notifications.ts"),
     "@/lib/i18n/types": modulePath("lib/i18n/types.ts"),
   },
 });
@@ -172,12 +173,12 @@ test("a granted background tab delivers a notification instead of the explanatio
   install({ permission: "granted" });
   const { hook } = mount([decision({ id: 5 })]);
   await settle(); hook.flush();
-  feed(hook, [decision({ id: 101 }), decision({ id: 5 })]);
+  feed(hook, [decision({ id: 101, phrase: "a step asked the owner a question" }), decision({ id: 5 })]);
   await settle();
   assert.equal(hook.result, null, "a granted browser needs no explanation");
   assert.equal(FakeNotification.calls.length, 1, "the entry notifies");
-  assert.equal(FakeNotification.calls[0].title, "polyforge#240 · polyforge.decisions.class.needs_input",
-    "the notification carries the ticket and the class");
+  assert.equal(FakeNotification.calls[0].title, "polyforge#240 · a step asked the owner a question",
+    "the notification carries the ticket and the class (the wire phrase when the label is missing)");
   hook.unmount();
 });
 
