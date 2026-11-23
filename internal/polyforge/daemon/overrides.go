@@ -27,6 +27,7 @@ package daemon
 // claim's fresh capsule.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -34,6 +35,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/api"
@@ -41,6 +43,7 @@ import (
 	"github.com/silgrid/polyforge/internal/common/harness"
 	"github.com/silgrid/polyforge/internal/common/protocol"
 	"github.com/silgrid/polyforge/internal/common/workflow"
+	"github.com/silgrid/polyforge/internal/polyforge/cli"
 	"github.com/silgrid/polyforge/internal/polyforge/driver"
 	"github.com/silgrid/polyforge/internal/polyforge/runtime"
 	"github.com/silgrid/polyforge/internal/polyforge/workspace"
@@ -213,11 +216,13 @@ func (d *Daemon) overrideView(wi string, item *api.WorkItem) (*protocol.Override
 		pending = d.rt.PendingStepOverrides(wi)
 	}
 	ov, applied := runtime.MergedStepOverrides(ov, pending)
-	// the sources below the overlay, for the effective labels
-	var sources map[string]workspace.StepModelSource
+	// the effective chain and its source, overlay aspects first (an
+	// explicit chain, then the catalog-expanded tier), below them the
+	// manual/yaml/bundle layers (polyforge#81)
+	var sources map[string]workspace.TieredModelSource
 	if lane := laneSnapshotOf(scene); lane != nil {
 		cfg, _ := d.rt.LoadWorkspace(laneProject(item, scene))
-		sources = workspace.StepModelSources(lane, cfg, laneProject(item, scene), d.rt.ManualModels(wi))
+		sources = workspace.StepModelSourcesWithTier(lane, cfg, laneProject(item, scene), d.rt.ManualModels(wi), ov, d.rt.StepTiersCatalog())
 	}
 	out := &protocol.OverrideView{WorkItem: wi, Posture: scene.posture, Steps: []protocol.OverrideStepView{}}
 	for _, spec := range wf.Steps {
@@ -226,20 +231,35 @@ func (d *Daemon) overrideView(wi string, item *api.WorkItem) (*protocol.Override
 			fillRow(&row, e)
 		}
 		a := applied[spec.ID]
-		row.Pending = a.Models || a.Skip || a.Params
-		switch {
-		case row.Models != nil && a.Models:
-			row.Effective, row.Source = row.Models, overrideSourcePend
-		case row.Models != nil:
-			row.Effective, row.Source = row.Models, overrideSource
-		case sources != nil:
-			if src, ok := sources[spec.ID]; ok {
-				row.Effective, row.Source = src.Models, src.Source
-			}
-		}
+		row.Pending = a.Models || a.Tier || a.Skip || a.Params
+		fillEffective(&row, ov, a, sources)
 		out.Steps = append(out.Steps, row)
 	}
 	return out, nil
+}
+
+// fillEffective copies one step's effective chain, its source label and
+// a failed tier's reason onto the row (the overlay view; polyforge#81):
+// the pending record's own aspects are labelled "(pending)".
+func fillEffective(row *protocol.OverrideStepView, ov capsule.StepOverrides, a runtime.PendingAspects, sources map[string]workspace.TieredModelSource) {
+	src, ok := sources[row.ID]
+	if !ok {
+		return
+	}
+	row.Effective, row.Source = src.Models, src.Source
+	row.TierFallback = src.TierFallback
+	if !src.FromOverlay {
+		return
+	}
+	switch {
+	case src.TierGoverns && a.Tier:
+		e := ov.Steps[row.ID]
+		if e != nil {
+			row.Source = overrideSourcePend + " tier " + e.Tier
+		}
+	case !src.TierGoverns && a.Models:
+		row.Source = overrideSourcePend
+	}
 }
 
 // fillRow copies one entry's aspects onto the row.
@@ -253,6 +273,9 @@ func fillRow(row *protocol.OverrideStepView, e *capsule.StepOverride) {
 	if e.ModelsCleared {
 		// the pending clear tombstone: the sealed chain no longer governs
 		row.Models, row.ModelsBy, row.ModelsAt = nil, "", ""
+	}
+	if e.Tier != "" && !e.TierCleared {
+		row.Tier, row.TierBy, row.TierAt = e.Tier, e.TierBy, e.TierAt
 	}
 	if e.Skip != nil {
 		row.Skip, row.SkipBy, row.SkipAt = e.Skip, e.SkipBy, e.SkipAt
@@ -323,8 +346,14 @@ func (d *Daemon) overrideWriteRoute(w http.ResponseWriter, r *http.Request) {
 	if req.ClearParam != "" {
 		actions++
 	}
+	if req.Tier != "" {
+		actions++
+	}
+	if req.ClearTier {
+		actions++
+	}
 	if actions != 1 {
-		writeErr(w, api.ErrDaemonBadInput, "exactly one action per request: models (set), clear_models, skip (true/false), param (set) or clear_param")
+		writeErr(w, api.ErrDaemonBadInput, "exactly one action per request: models (set), clear_models, tier (set), clear_tier, skip (true/false), param (set) or clear_param")
 		return
 	}
 	operator := req.Operator
@@ -343,6 +372,15 @@ func (d *Daemon) overrideWriteRoute(w http.ResponseWriter, r *http.Request) {
 	// request itself, validates it against this machine's lane set and
 	// answers its own shape.
 	if scene.posture == runtime.OverridePostureQueued {
+		if req.Tier != "" || req.ClearTier {
+			out, qerr := d.queuedTierWrite(wi, item, req, operator)
+			if qerr != nil {
+				writeErrOf(w, qerr)
+				return
+			}
+			writeJSON(w, http.StatusOK, out)
+			return
+		}
 		out, qerr := d.queuedParamWrite(wi, item, req, operator)
 		if qerr != nil {
 			writeErrOf(w, qerr)
@@ -360,6 +398,25 @@ func (d *Daemon) overrideWriteRoute(w http.ResponseWriter, r *http.Request) {
 	if spec == nil {
 		writeErr(w, api.ErrDaemonBadInput, fmt.Sprintf("the lane declares no step %q", req.Step))
 		return
+	}
+	// polyforge#81: a written tier is a catalog name — the lane tier
+	// grammar, declared and non-empty in the Host [step_tiers] catalog.
+	// `default` is validated like any name (Q10 A: no exemption) and means
+	// "unset" at dispatch. A clear needs no catalog row.
+	if req.Tier != "" {
+		if why := cli.StepTierNameProblem(req.Tier); why != "" {
+			writeErr(w, api.ErrDaemonBadInput, "tier: "+why)
+			return
+		}
+		catalog := d.rt.StepTiersCatalog()
+		if _, ok := catalog[req.Tier]; !ok {
+			if len(catalog) == 0 {
+				writeErr(w, api.ErrDaemonBadInput, "tier: the Host [step_tiers] catalog is empty — set step_tiers.<tier> with `pf config set step_tiers.<tier> '[\"<harness>:<model>\"]' --host` first, or clear the tier (`--clear-tier`)")
+			} else {
+				writeErr(w, api.ErrDaemonBadInput, fmt.Sprintf("tier: the Host [step_tiers] catalog declares no tier %q — its tiers are %s; set one of them or clear the tier (`--clear-tier`)", req.Tier, strings.Join(sortedStepTiers(catalog), ", ")))
+			}
+			return
+		}
 	}
 	// a param is one the capsule's lane snapshot declares on the step,
 	// its value one line within the bound every layer shares
@@ -452,7 +509,7 @@ func (d *Daemon) overrideWriteRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	ch := runtime.OverrideChange{
 		Step: req.Step, Operator: operator, Models: models, ClearModels: req.ClearModels, Skip: req.Skip,
-		Param: req.Param, ClearParam: req.ClearParam,
+		Param: req.Param, ClearParam: req.ClearParam, Tier: req.Tier, ClearTier: req.ClearTier,
 	}
 	if !scene.live {
 		ch.SealedDir = scene.capsuleDir // a clear reaches the chain the sealed scene carries
@@ -475,6 +532,14 @@ func (d *Daemon) overrideWriteRoute(w http.ResponseWriter, r *http.Request) {
 		row.Effective, row.Source = row.Models, overrideSource
 		if row.Pending {
 			row.Source = overrideSourcePend
+		}
+	}
+	if out.Changed && row.Tier != "" && row.Models == nil {
+		if list, ok := d.rt.StepTiersCatalog()[row.Tier]; ok && len(list) > 0 && row.Tier != workspace.DefaultTierName {
+			row.Effective, row.Source = list, overrideSource+" tier "+row.Tier
+			if row.Pending {
+				row.Source = overrideSourcePend + " tier " + row.Tier
+			}
 		}
 	}
 	writeJSON(w, http.StatusOK, protocol.OverrideWriteResult{
@@ -557,6 +622,17 @@ func wfStep(wf *driver.Workflow, id string) *driver.StepSpec {
 	return nil
 }
 
+// sortedStepTiers answers a catalog's tier names in order (an error
+// message's list).
+func sortedStepTiers(catalog map[string][]string) []string {
+	out := make([]string, 0, len(catalog))
+	for tier := range catalog {
+		out = append(out, tier)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // piModelsAcceptable answers the set of pi model ids this Cell's step
 // agent may run, parsed from <harness-root>/step-agent/models.json: each
 // provider's models[].id, in the `<provider>/<id>` form pi resolves and
@@ -597,6 +673,63 @@ func (d *Daemon) piModelsAcceptable() map[string]bool {
 	return out
 }
 
+// queuedTierWrite applies one tier change of a QUEUED work item
+// (polyforge#81 Q8 A): the tier rides this daemon's local pending
+// override record — the same file the claim merges — so the next claim of
+// the work item ON THIS MACHINE inherits it. It is not an attrs key: a
+// claim elsewhere does not inherit it, and the note says so. The lane the
+// ticket names judges the step; the Host catalog judges the name.
+func (d *Daemon) queuedTierWrite(wi string, item *api.WorkItem, req protocol.OverrideWriteRequest, operator string) (*protocol.OverrideWriteResult, error) {
+	scene := &overrideScene{posture: runtime.OverridePostureQueued}
+	if item.BundleName != nil {
+		scene.bundle = *item.BundleName
+	}
+	lane, err := d.queuedLaneOf(wi, item, scene, "a queued work item's tier is written against its lane")
+	if err != nil {
+		return nil, err
+	}
+	var spec *workflow.Step
+	for i := range lane.Steps {
+		if lane.Steps[i].ID == req.Step {
+			spec = &lane.Steps[i]
+		}
+	}
+	if spec == nil {
+		return nil, &api.Error{Code: api.ErrDaemonBadInput,
+			Detail: fmt.Sprintf("the lane declares no step %q", req.Step)}
+	}
+	if req.Tier != "" {
+		if why := cli.StepTierNameProblem(req.Tier); why != "" {
+			return nil, &api.Error{Code: api.ErrDaemonBadInput, Detail: "tier: " + why}
+		}
+		catalog := d.rt.StepTiersCatalog()
+		if _, ok := catalog[req.Tier]; !ok {
+			if len(catalog) == 0 {
+				return nil, &api.Error{Code: api.ErrDaemonBadInput,
+					Detail: "tier: the Host [step_tiers] catalog is empty — set step_tiers.<tier> with `pf config set step_tiers.<tier> '[\"<harness>:<model>\"]' --host` first, or clear the tier (`--clear-tier`)"}
+			}
+			return nil, &api.Error{Code: api.ErrDaemonBadInput,
+				Detail: fmt.Sprintf("tier: the Host [step_tiers] catalog declares no tier %q — its tiers are %s; set one of them or clear the tier (`--clear-tier`)", req.Tier, strings.Join(sortedStepTiers(catalog), ", "))}
+		}
+	}
+	out, err := d.rt.ApplyStepOverride(context.Background(), wi, runtime.OverrideChange{
+		Step: req.Step, Operator: operator, Tier: req.Tier, ClearTier: req.ClearTier,
+	})
+	if err != nil {
+		return nil, err
+	}
+	row := protocol.OverrideStepView{ID: req.Step, Skippable: spec.Skippable}
+	if out.Entry != nil {
+		fillRow(&row, out.Entry)
+	}
+	row.Pending = out.Changed
+	if row.Pending {
+		row.Source = overrideSourcePend
+	}
+	return &protocol.OverrideWriteResult{WorkItem: wi, Changed: out.Changed, Posture: runtime.OverridePostureQueued, Published: false,
+		Note: "queued: the tier rides this daemon's local pending record — the next claim of the work item on this machine carries it into the fresh capsule (a claim on another machine does not inherit it; set it there instead)", Step: row}, nil
+}
+
 // queuedParamWrite applies one param change of a QUEUED work item to the
 // reserved step_params attrs key (polyforge#79): the write is the
 // daemon's machine-signed hub face (the key's one writer), whole-key
@@ -613,7 +746,7 @@ func (d *Daemon) piModelsAcceptable() map[string]bool {
 func (d *Daemon) queuedParamWrite(wi string, item *api.WorkItem, req protocol.OverrideWriteRequest, operator string) (*protocol.OverrideWriteResult, error) {
 	if req.Param == nil && req.ClearParam == "" {
 		return nil, &api.Error{Code: api.ErrDaemonConflict,
-			Detail: fmt.Sprintf("%s is queued: a queued work item takes its params only (they ride the work item's attrs until its claim) — set the model chain or the skip switch once it runs", wi)}
+			Detail: fmt.Sprintf("%s is queued: a queued work item takes its params (they ride the work item's attrs until its claim) and its capability tier (it rides this daemon's local pending record) — set the model chain or the skip switch once it runs", wi)}
 	}
 	if item.BundleName == nil || *item.BundleName == "" {
 		return nil, &api.Error{Code: api.ErrDaemonConflict,

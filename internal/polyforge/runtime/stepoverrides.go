@@ -52,7 +52,11 @@ import (
 const (
 	EventOverrideSet   = "override_set"
 	EventOverrideClear = "override_clear"
-	// EventStepTierFallback is the dispatch-time composition's diagnostic.
+	// EventStepTierFallback is the dispatch-time composition's diagnostic
+	// (polyforge#81 Q12 A): an overlay tier the Host [step_tiers] catalog
+	// does not declare (or declares empty) fell through to the next layer.
+	// One event per composition that carries a fallback, scope
+	// "composition" — never "this step's dispatch already fell back".
 	EventStepTierFallback = "step_tier_fallback"
 )
 

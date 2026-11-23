@@ -164,11 +164,18 @@ func ComposeCandidatesWithOverlay(fm *workflow.Lane, cfg *Config, project string
 	return out
 }
 
-// DefaultTierName is the catalog's conventional mainline tier (polyforge#81;
-// in the per-ticket overlay it means "unset").
+// DefaultTierName is the catalog's conventional mainline tier. In the
+// per-ticket overlay it means "unset" (polyforge#81 Q7 B): the step
+// composes from the yaml and lane layers below and the catalog's
+// `default` candidates are never expanded.
 const DefaultTierName = "default"
 
-// TierFallback names one step whose overlay tier did not expand.
+// TierFallback names one step whose overlay tier did not expand at
+// composition time: the tier is absent from the Host catalog
+// ("missing") or its candidate list is empty ("empty"), and the step
+// composes from NextSource instead. Scope names where the fallback was
+// observed ("composition": a dispatch's own composition, never a view
+// read).
 type TierFallback struct {
 	Step       string
 	Tier       string
@@ -177,7 +184,57 @@ type TierFallback struct {
 	Scope      string
 }
 
-// TieredModelSource is one step's effective chain with the layer it came from.
+// ComposeCandidatesWithTier is ComposeCandidatesWithOverlay with the
+// Host [step_tiers] catalog (polyforge#81): an overlay tier the catalog
+// declares and fills expands into that tier's candidates as the step's
+// whole effective list — below an explicit overlay Models chain and above
+// the manual `pf submit --models` list and every yaml/bundle level. The
+// name `default` means "unset" and expands nothing; a tier the catalog
+// does not declare (or declares empty) falls through to the next layer
+// and is answered as a TierFallback, one per affected step.
+func ComposeCandidatesWithTier(fm *workflow.Lane, cfg *Config, project string, manual []string, ov capsule.StepOverrides, catalog map[string][]string) (map[string][]string, []TierFallback) {
+	if fm == nil || len(fm.Steps) == 0 {
+		return nil, nil
+	}
+	pm, pt := projectLists(cfg, project)
+	out := make(map[string][]string, len(fm.Steps))
+	var fallbacks []TierFallback
+	for _, s := range fm.Steps {
+		e := ov.Steps[s.ID]
+		if e != nil && len(e.Models) > 0 {
+			out[s.ID] = append([]string(nil), e.Models...)
+			continue
+		}
+		if e != nil && !e.TierCleared && e.Tier != "" && e.Tier != DefaultTierName {
+			if list, ok := catalog[e.Tier]; ok && len(list) > 0 {
+				out[s.ID] = append([]string(nil), list...)
+				continue
+			}
+			reason := "missing"
+			if _, ok := catalog[e.Tier]; ok {
+				reason = "empty"
+			}
+			list, from := composeBelow(fm, pm, pt, s, project, manual)
+			if list != nil {
+				out[s.ID] = list
+			}
+			fallbacks = append(fallbacks, TierFallback{Step: s.ID, Tier: e.Tier, Reason: reason, NextSource: from, Scope: "composition"})
+			continue
+		}
+		if list, _ := composeBelow(fm, pm, pt, s, project, manual); list != nil {
+			out[s.ID] = list
+		}
+	}
+	if len(out) == 0 {
+		return nil, fallbacks
+	}
+	return out, fallbacks
+}
+
+// TieredModelSource is one step's effective chain with the layer it came
+// from (the override view, polyforge#81): FromOverlay is the per-ticket
+// overlay aspect that governed (an explicit chain, or an expanded tier
+// when TierGoverns); TierFallback names why a set tier did not expand.
 type TieredModelSource struct {
 	Models       []string
 	Source       string
@@ -186,14 +243,51 @@ type TieredModelSource struct {
 	TierFallback string
 }
 
-// ComposeCandidatesWithTier is ComposeCandidatesWithOverlay plus the Host catalog.
-func ComposeCandidatesWithTier(fm *workflow.Lane, cfg *Config, project string, manual []string, ov capsule.StepOverrides, catalog map[string][]string) (map[string][]string, []TierFallback) {
-	return nil, nil
+// StepModelSourcesWithTier is StepModelSources with the overlay record
+// and the Host catalog (polyforge#81): the effective chain and its
+// source, overlay aspects first — an explicit chain, then an expanded
+// tier, then the manual/yaml/bundle layers. A tier the catalog does not
+// declare falls through with the reason named; `default` expands nothing
+// and names no fallback.
+func StepModelSourcesWithTier(fm *workflow.Lane, cfg *Config, project string, manual []string, ov capsule.StepOverrides, catalog map[string][]string) map[string]TieredModelSource {
+	if fm == nil || len(fm.Steps) == 0 {
+		return nil
+	}
+	pm, pt := projectLists(cfg, project)
+	out := make(map[string]TieredModelSource, len(fm.Steps))
+	for _, s := range fm.Steps {
+		e := ov.Steps[s.ID]
+		if e != nil && len(e.Models) > 0 {
+			out[s.ID] = TieredModelSource{Models: append([]string(nil), e.Models...), Source: "step override", FromOverlay: true}
+			continue
+		}
+		if e != nil && !e.TierCleared && e.Tier != "" && e.Tier != DefaultTierName {
+			if list, ok := catalog[e.Tier]; ok && len(list) > 0 {
+				out[s.ID] = TieredModelSource{Models: append([]string(nil), list...), Source: "step override tier " + e.Tier, FromOverlay: true, TierGoverns: true}
+				continue
+			}
+			reason := "missing"
+			if _, ok := catalog[e.Tier]; ok {
+				reason = "empty"
+			}
+			list, from := composeBelow(fm, pm, pt, s, project, manual)
+			out[s.ID] = TieredModelSource{Models: list, Source: from, TierFallback: reason}
+			continue
+		}
+		list, from := composeBelow(fm, pm, pt, s, project, manual)
+		out[s.ID] = TieredModelSource{Models: list, Source: from}
+	}
+	return out
 }
 
-// StepModelSourcesWithTier is StepModelSources plus the overlay tier.
-func StepModelSourcesWithTier(fm *workflow.Lane, cfg *Config, project string, manual []string, ov capsule.StepOverrides, catalog map[string][]string) map[string]TieredModelSource {
-	return nil
+// composeBelow composes one step from the layers below the overlay: the
+// manual `--models` list first, then the yaml/bundle levels
+// (composeStepFrom), naming the level.
+func composeBelow(fm *workflow.Lane, pm, pt map[string][]string, s workflow.Step, project string, manual []string) ([]string, string) {
+	if len(manual) > 0 {
+		return append([]string(nil), manual...), "pf submit --models"
+	}
+	return composeStepFrom(fm, pm, pt, s, project, "")
 }
 
 // StepModelSources answers, per step of lane, the effective candidate

@@ -123,7 +123,7 @@ func WriteStepOverrides(capsuleDir string, ov StepOverrides) error {
 		ov.Steps = map[string]*StepOverride{}
 	}
 	for id, e := range ov.Steps {
-		if e == nil || (len(e.Models) == 0 && e.ModelsBy == "" && e.ModelsAt == "" && e.Skip == nil && e.SkipBy == "" && e.SkipAt == "" && len(e.Params) == 0) {
+		if e == nil || (len(e.Models) == 0 && e.ModelsBy == "" && e.ModelsAt == "" && e.Tier == "" && e.TierBy == "" && e.TierAt == "" && e.Skip == nil && e.SkipBy == "" && e.SkipAt == "" && len(e.Params) == 0) {
 			delete(ov.Steps, id)
 		}
 	}
