@@ -51,10 +51,11 @@
    killed at its own limit (`limit_kill`): its red-state run did not exit non-zero within
    its limit, so no red evidence — the fix is build's (a bounded wait, an assertion that
    fails at once, or the unit self-reports a higher `timeout` in units.json), and the
-   item is in the same subset. So is a deleted or relaxed assertion, a new skip, a
-   changed `carries:` header, a changed helper or fixture the test relies on, or an
-   input changed so the assertion holds trivially, with no finding cited for it in
-   build's 关键决定和理由.
+   item is in the same subset. A new skip, or a changed `carries:` header, with no
+   finding cited for it, is in the hand-off gate's subset above. A deleted or relaxed
+   assertion, a changed helper or fixture the test relies on, or an input changed so
+   the assertion holds trivially, with no finding cited for it in build's
+   关键决定和理由, is blocking `test_weakened`.
    The shared test-quality bar (`workflows/_shared/test_quality.md`, included in this
    step's definition) is the same standard: blocking `test_weakened` too — a unit whose
    plan entry carries no test-quality record (the behaviour its test observes, how its

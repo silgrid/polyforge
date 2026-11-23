@@ -79,8 +79,8 @@ on their own.
      A unit declared `pre_existing_red` (its reproduction test already exists and is red
      before the change) carries no `test_commit`: its `replay` runs on the tree of the
      change's base, and red there is its red evidence — a replay that exited 0 there (the
-     test was green before the change, so it was not already red) is blocking
-     `test_weakened` too. A unit whose
+     test was green before the change, so it was not already red) is in the
+     same subset. A unit whose
      `replay` carries `not_runnable` has no red evidence: its run could not run on the tree
      of its `test_commit` (a build, setup, compile or import error, a missing module or
      package — `[setup failed]`, `ERR_MODULE_NOT_FOUND` — the matched line and its `rule`

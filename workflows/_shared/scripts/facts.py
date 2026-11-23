@@ -934,6 +934,27 @@ HUNK_LINES_MAX = 16
 HUNK_LINE_RUNES = 160
 
 
+def _carries_suite(repos_dir: str, repo_name: str, cache: Dict[str, Callable[[str], bool]], path: str) -> bool:
+    """Whether path is an e2e suite of repo_name: its `carries:` line is a
+    suite declaration, not a comment (a Go test file outside the harness
+    directory is no suite, AGENTS.md), read at the change base. D5's
+    `carries:` marker is a suite's alone (polyforge#241 review r2 N15)."""
+    if repo_name not in cache:
+        repo = Repo(repos_dir, repo_name)
+        base, _why = change_base(repo.dir)
+        roots: Dict[str, CarriesRoot] = {}
+
+        def check(p: str) -> bool:
+            if not base:
+                return False
+            root = repo._carries_root_of(base, gotext.path_dir(p), roots)
+            rel, ok = root.rel(p)
+            return ok and root.is_suite(rel)
+
+        cache[repo_name] = check
+    return cache[repo_name](path)
+
+
 def weakened_facts(repos_dir: str, units: Sequence[Unit], summary: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """The test_weakened facts of the units (and the ones summary cites)."""
     cite = ""
@@ -942,6 +963,7 @@ def weakened_facts(repos_dir: str, units: Sequence[Unit], summary: str) -> Tuple
         cite = m.group(0)
     weakened: List[Dict[str, Any]] = []
     cited: List[Dict[str, Any]] = []
+    suite_cache: Dict[str, Callable[[str], bool]] = {}
     for u in units:
         if u.why or not u.test_files:
             continue
@@ -952,7 +974,7 @@ def weakened_facts(repos_dir: str, units: Sequence[Unit], summary: str) -> Tuple
                              "reason": "the diff since the test commit is unreadable: " + err})
             continue
         for path, header, lines in diff_hunks(diff):
-            reason = weakening_reason(lines)
+            reason = weakening_reason(lines, _carries_suite(repos_dir, u.repo, suite_cache, path))
             if not reason:
                 continue
             f: Dict[str, Any] = {"unit": u.id, "repo": u.repo, "path": path, "reason": reason}
@@ -987,7 +1009,7 @@ def diff_hunks(diff: str) -> List[Tuple[str, str, List[str]]]:
     return out
 
 
-def weakening_reason(lines: Sequence[str]) -> str:
+def weakening_reason(lines: Sequence[str], carries_in_suite: bool = True) -> str:
     reasons: List[str] = []
     deleted = asserts = 0
     for line in lines:
@@ -998,7 +1020,7 @@ def weakening_reason(lines: Sequence[str]) -> str:
                 asserts += 1
         if line[0] == "+" and _SKIP_ADDED.search(body):
             reasons.append("adds a skip")
-        if _CARRIES_LINE.search(body):
+        if carries_in_suite and _CARRIES_LINE.search(body):
             reasons.append("changes the `carries:` header")
     if deleted > 0:
         r = "deletes or changes %d line(s)" % deleted
