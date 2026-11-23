@@ -98,6 +98,7 @@ import {
   type ConfigGroupId,
 } from "./polyforge-config-helpers";
 import { PolyforgeInstallCard } from "./PolyforgeInstallCard";
+import { ComponentsUpdateCard } from "./ComponentsUpdateCard";
 
 /**
  * Settings › Polyforge: machine-level detection (pi#122) plus the
@@ -938,7 +939,7 @@ export function PolyforgeConfig({ cwd, active }: Props) {
 
       {/* install or update pf from the release channel, the
           output line by line; a finished run re-detects the machine. */}
-      <PolyforgeInstallCard active={active} refreshKey={installRefresh} onFinished={onInstallFinished} />
+      {detect?.imageManaged ? <ComponentsUpdateCard active={active} /> : <PolyforgeInstallCard active={active} refreshKey={installRefresh} onFinished={onInstallFinished} />}
 
       {/* The install remedy is forced open, with no extra disclosure, until
           detection proves pf present and new enough. */}

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { AppUpdateResponse } from "@/lib/api-types";
 import { getPiWebReleaseUrl, isNewerStableVersion } from "@/lib/app-update";
+import { isImageManaged } from "@/lib/polyforge-detect";
 
 export const dynamic = "force-dynamic";
 
@@ -67,6 +68,18 @@ async function loadUpdateStatus(): Promise<AppUpdateResponse> {
 }
 
 export async function GET() {
+  // The workstation image never asks the registry (polyforge#177): the
+  // answer is the SKIP_VERSION_CHECK shape plus the imageManaged fact —
+  // no request, no spawn, before any version read.
+  if (isImageManaged()) {
+    return NextResponse.json({
+      currentVersion: CURRENT_VERSION,
+      latestVersion: CURRENT_VERSION,
+      updateAvailable: false,
+      releaseUrl: "",
+      imageManaged: true,
+    } satisfies AppUpdateResponse);
+  }
   if (SKIP_VERSION_CHECK) {
     return NextResponse.json({
       currentVersion: CURRENT_VERSION,

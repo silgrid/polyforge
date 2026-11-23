@@ -2546,6 +2546,8 @@ export const enLocale: LocalePlugin = {
     "polyforge.install.needKey": "Enter the API key (at least 8 characters).",
     "polyforge.install.install": "Install pf",
     "polyforge.install.update": "Update pf",
+    "polyforge.install.imageManaged": "This machine is managed by the workstation image: pf and Pi Web update with a new image, never from this page.",
+
     "polyforge.install.busyReason": "An install is running.",
     "polyforge.install.startFailed": "The install could not start.",
     "polyforge.install.output": "Installer output",

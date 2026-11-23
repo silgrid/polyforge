@@ -6,7 +6,8 @@ per AIHub profile): `status`, `auto` and `max` address the Host aggregate
 — the Host ceiling, every Cell's jobs and a block per Cell — unless an
 explicit `pf --profile <name> ops …` targets one Cell (`PF_PROFILE` and
 the cwd never change their scope); `shutdown` always stops the whole Host
-and refuses `--profile`. Each Cell has its own machine id and heartbeat:
+and refuses `--profile`; `drain --upgrade [--force]` is Host-level too — the upgrade
+refusal of new work covers every Cell and takes no `--profile`. Each Cell has its own machine id and heartbeat:
 the aggregate's `cells[]` rows carry `machine_id` and `heartbeat`. `max`
 is the Host ceiling over the SUM of every Cell's running jobs and one-off
 jobs (a Cell's optional `cell_max_concurrent_jobs` lowers its own share;
@@ -48,8 +49,9 @@ pf ops auto [on|off]                                 # bare: show; on: pull the 
 pf ops max [N]                                       # bare: show; N >= 1: the cap until the daemon restarts or a pf config set/reload changes [daemon] max_concurrent_jobs (last action wins)
 pf ops role [interactive|runner] [--force|--if-unset] # bare: show this machine's role; interactive|runner: ask the heartbeat for it; --force: take interactive over from the machine holding it; --if-unset: only while no operator chose a role
 pf ops shutdown                                      # graceful shutdown
+pf ops drain --upgrade [--force]                      # the Host-level upgrade drain (polyforge#160): from here on new submits, automatic claims and task spawns are refused (DAEMON-409) while running work goes on; an idle Host answers and it is safe to upgrade, a busy one refuses (409, the drain stays set) until --force; the refusal ends with the daemon restart
 pf ops end-session <wi> --reason <text>              # force-end a stuck holder's session (aihub-direct)
-pf daemon ensure                                     # START: the daemon under its tmux restart loop (no-op when it answers)
+pf daemon ensure                                     # START: the daemon under its tmux restart loop (no-op when it answers; inside the workstation container always the no-op — pf supervise owns it)
 ```
 
 Starting the daemon is `pf daemon ensure` (polyforge#174) — never a bare
@@ -60,7 +62,9 @@ restarted within ~5s; a clean exit ends the loop; exit 78 — the daemon
 refused to start for an operator-fixable reason: config, daemon id,
 workspace, on-disk state, failed restart reconciliation — also ends the
 loop, so read `<data-dir>/daemon.log`, fix the cause, then `pf daemon
-ensure` again) and waits for the socket. The harness adapters already run it when a session
+ensure` again) and waits for the socket — on a host; inside the
+workstation container `pf supervise` is the supervision and ensure
+never starts anything ([supervise](supervise.md)). The harness adapters already run it when a session
 starts or resumes, so the agent runs it only as the fallback: an
 execution-plane verb answered `dial unix …` → `pf daemon ensure`, then
 retry that verb ONCE. A non-zero exit carries the reason (no `[workspace]`
@@ -157,6 +161,7 @@ end), `CORE-410` (terminal).
 
 ## Success
 
+- `drain --upgrade`: the daemon's one-line answer — either `the upgrade drain is set and the Host is idle: … upgrade now` (nothing holds work: proceed with the upgrade; new work is refused from now on until the daemon restarts) or, with `--force` over in-flight work, the same naming the busy Cells it accepted. `--json` re-emits the POST /ops/drain answer.
 - `models`: `window: <duration> (from <start> to <end>)` followed by the model+effort × step table (MODEL — the key, an empty effort renders as the model alone —, STEP,
   DISPATCHES, SUCCESSES, MODEL-DEATHS, RATE, MEAN-WALL, NON-MODEL, LAST-CAUSE) and any current warnings. `--json`
   prints the GET /models document unchanged.
@@ -201,14 +206,21 @@ end), `CORE-410` (terminal).
 
 ## Failure branches
 
+- `drain` (no `--upgrade`), `--force` without `--upgrade`, a stray argument or `--profile`: refused locally, exit 1, naming the shape (`pf ops drain --upgrade [--force]`).
+- `drain --upgrade` while any Cell holds work (jobs of any state, queued submits, in-flight admissions, held one-off tasks): `DAEMON-409` naming the busy Cell(s) — the drain IS set (new work is refused from now on); wait for the work to end and re-run, or re-run with `--force` to accept the in-flight sessions (they are interrupted by the shutdown that follows and resume after the restart). The refusal of new work ends only with the daemon restart; an upgrade called off is unwound with `pf ops shutdown` then `pf daemon ensure` (or the container supervisor restarting it).
 | Code | When | What to tell the user |
 |---|---|---|
 | `DAEMON-410` (`SHUTTING_DOWN`) | Any external submit while the daemon is shutting down | Wait for the shutdown to complete and the daemon to restart. |
 | `DAEMON-400` | Malformed ops-config request (`max < 1`, empty body) — the CLI's own argument validation usually catches this first with a usage error | Fix the invocation; read the detail. |
-| `dial unix …` | The daemon is not running on this machine | Run `pf daemon ensure` (starts it under its tmux restart loop; a no-op when one answers), then retry the verb once; if ensure fails, relay its message and run `pf doctor`. Check `--socket` / `PF_DAEMON_SOCKET` if you expect it elsewhere. |
+| `dial unix …` | The daemon is not running on this machine | Run `pf daemon ensure` (starts it under its tmux restart loop on a host, a no-op when one answers — inside the workstation container the supervision is `pf supervise` and ensure never starts anything), then retry the verb once; if ensure fails, relay its message and run `pf doctor`. Check `--socket` / `PF_DAEMON_SOCKET` if you expect it elsewhere. |
 
 Auto vs shutdown: with auto on the machine also claims and runs
 ready-queue work by itself (an internal loop; idle-polls when the queue is
 empty, never exits); shutdown stops accepting anything new, closes what
 remains and exits. They are independent concepts and never substitute for
 each other.
+
+
+容器组件编排通过 Host 级 POST /ops/restart 请求 daemon 以退出码 75 重启，
+该入口拒绝 step/task 进程树。正常操作使用 `pf components`；取消等待会重启
+以清除内存排空门，排空期间新作业返回 DAEMON-409。

@@ -1280,3 +1280,225 @@ dispatch, before the step process or the prompt exists, classed
 an invalid switch value is refused as `pi_subagents_invalid`. Off and
 empty probe nothing. No upgrade action beyond taking the new `pf`; the
 switch stays default off.
+
+## v0.2.4, the container supervisor and the upgrade drain (polyforge#160)
+
+The workstation container's supervision ships: `pf supervise` is the
+image entry point (84-image runs it as catatonit's direct child) — it
+starts and watches the daemon, Pi Web and, with `--with-aihub`, the
+aihub server as its own children, restarts a dead child with a growing
+delay, ends with the daemon's own 0/78 exit, and forwards a stop signal
+once with a `--grace` (floor 45s) for the daemon's shutdown before a
+SIGKILL. Under it `pf daemon ensure` is a successful no-op (the machine
+mapping check still runs; only the starting is skipped) and `pf doctor`'s
+supervision row passes on the `POLYFORGE_SUPERVISOR=container:pf-supervise`
+marker, with tmux no longer a required prerequisite there. A host is
+untouched: the tmux loop keeps its behavior.
+
+The upgrade drain ships with it: `pf ops drain --upgrade [--force]`
+(Host-level, `POST /ops/drain`, human-only) sets a Host-wide refusal of
+new work — every Cell refuses new submits, automatic claims and task
+spawns `DAEMON-409` while running work goes on — then judges idleness;
+an idle Host answers (safe to upgrade), a busy one refuses with 409
+naming the busy Cells until `--force` accepts the in-flight sessions
+(interrupted by the shutdown that follows, resumed after the restart).
+No upgrade action beyond taking the new pf: `tools/install.sh` does not
+use the gate yet (that integration is its own ticket), but a manual
+upgrade now has the gate available — run it, wait for the idle answer,
+then `pf ops shutdown` and install. The refusal of new work ends only
+with the daemon restart; an upgrade called off is unwound by restarting
+the daemon (`pf ops shutdown` then `pf daemon ensure`, or the container
+supervisor restarting it).
+
+## v0.2.4, the workstation image and compose (polyforge#161)
+
+The workstation container ships: a whole polyforge machine in one
+container, its base image and outer parameter set in the new top-level
+`dist/workstation/` — podman (rootful, crun) runs the verification
+containers inside, catatonit is PID 1, the entrypoint initializes a
+private writable cgroup namespace as root and hands the machine to
+`pf supervise`, and two named volumes persist the data dir and podman's
+storage. The outer container carries exactly the measured minimal set:
+`SYS_ADMIN` and `NET_ADMIN`, the pinned seccomp file (moby's default
+template plus `pivot_root`, its SHA recorded beside it), a private
+cgroup namespace, AppArmor and system paths unconfined — no
+`privileged`, no devices, no docker socket. Boot modes are compose
+profiles, one per smoke flag (`--profile no-aihub`, `--profile aihub`
+adds `pf supervise --with-aihub`), and the optional HTTPS front is a
+third profile (`--profile https`: a pinned caddy terminates TLS with its
+own local CA at `WORKSTATION_HTTPS_HOST` — the same name belongs in
+`PI_WEB_ALLOWED_HOSTS` — and reverse-proxies the `workstation` network
+alias both boot modes answer); `PI_WEB_PASSWORD` is required by the
+compose interpolation, the container's environment is its explicit list
+plus the `PI_*` families the entrypoint whitelists (`PI_TEST_*` never
+crosses). `dist/workstation/smoke.sh` (`boot`, `env`, `podman-verify`)
+is the acceptance driver: it prints every measured value and fails on
+the first miss; `boot --with-aihub` and `env` need the data volume to
+carry the release layout's Pi Web component (84-components). Inside the
+workstation, podman needs two measured accommodations the minimal cap
+set forces, both shipped in the image and the entrypoint: no container
+keyrings (`keyring = false`; the pinned profile blocks `add_key`) and
+`BUILDAH_ISOLATION=chroot` for build steps (buildah's build-network
+setup would need `CAP_SYS_PTRACE`; the daemon's environment allow-list
+now carries that one name to every step). A host is untouched — the
+workstation is opt-in, nothing existing changes shape; the only
+repository-wide registrations are the new `dist` component in
+`.polyforge/verify-scope.conf` and a root `.dockerignore` trimming the
+image build's repo-root context (the release and verification image
+builds use their own contexts and are unaffected).
+
+## v0.2.4, the component seed and install transaction (polyforge#162)
+
+The workstation image now carries the component seed beside the
+runtime. The final layer adds the Node runtime (the same node:24.22.2
+pin the webui build uses — Pi Web and the two harness CLIs run on it,
+so the workstation boots without installing anything) and one
+complete, read-only seed at `/opt/polyforge/seed/releases/<ver>`: the
+release checkout (package.json, skills, workflows), `bin/pf`, Pi Web
+built with its production dependencies (no dev packages, no build
+cache) and the two harness packages
+(`@earendil-works/pi-coding-agent`, `@anthropic-ai/claude-code` —
+official packages as published, version-pinned, carrying no
+credentials; each user logs in themselves). A manifest pins the whole
+seed: per-component sha256 digests, the product version, the source
+commit, the platform, the channel repository, the minimum base
+requirement and the harnesses' own package versions —
+`dist/workstation/build-seed.sh` assembles it inside the image build
+and `seedtool` (from `internal/polyforge/components/seedtool`) writes
+and verifies the manifest. The version and TARGETARCH build arguments
+are the injection points a release pipeline fills; the repository
+carries defaults for a repository-root dev build.
+
+The same `internal/polyforge/components` package ships the local
+install transaction every component switch goes through — the one the
+workstation's first boot and #92's in-container upgrade verb share. A
+components root holds one complete version directory per
+`releases/<ver>` (a version directory IS the release checkout root)
+with `current` and `previous` symlinks at the root; `current` is the
+single commit point: a staged copy is verified against the manifest's
+digests, published by one rename, and the link is swapped. A newer
+seed upgrades and keeps `previous`; an older seed never downgrades;
+the same version and digest writes nothing; the same version with a
+different digest, a bad digest, a wrong platform, a base below the
+manifest's minimum, an illegal version and a cross-channel seed are
+all refused with `current` untouched. A kill at any commit stage
+recovers on the next run — the journal completes a committed switch
+or an uncommitted one is discarded, and staging never survives — and
+the pre-#162 layout the #161 image and the host installer leave in the
+data directory (`<data-dir>/release/<ver>` with a `current` symlink
+inside) is refused, through the install's data-directory input, with
+a migration note, never imported. The first boot's wiring, the components volume itself and
+the supervision that runs the components' pf are the later
+84-components units; nothing on a host changes — the host installer's
+own layout is untouched.
+
+## v0.2.4, the runtime paths and the upgrade-restart exit (polyforge#175)
+
+The workstation's runtime paths follow one component-root convention.
+Inside the image — judged by the one fact the seed manifest at
+`/opt/polyforge/seed/releases/<ver>` exists — the supervised daemon, the
+aihub server and Pi Web's `PF_BIN` all launch the components volume's
+`/components/current/bin/pf` (a literal path: exec resolves the current
+symlink afresh at every start, so an upgrade that switches current is
+live at the next relaunch), and the `pf supervise` flag defaults
+(`--workflows-dir`, `--pi-web-dir`) sit under `/components/current`.
+`pf doctor`'s pi package and Claude skill layout rows judge the
+components current there, never name `tools/install.sh` in a fix, and
+the pre-#162 `<data-dir>/release` layout is refused with a migration
+note, never bridged. The base pf moved to
+`/usr/local/libexec/polyforge/pf` — the path the image's entry point
+execs by absolute value, never a PATH lookup. The container supervisor
+grew the restart-for-an-upgrade exit: a daemon exit 75 is relaunched AT
+ONCE — no failure count, no backoff, the run never ends on it — while
+0/78, the stop window and the failed-start backoff stay as they were;
+the constant `UpgradeRestartExit` ships in
+`internal/polyforge/supervisor` beside 78, the daemon aliasing it, and
+the trigger that exits 75 is #92's upgrade orchestration. Nothing on a
+host changes: `tools/install.sh`'s `/usr/local/bin/pf` and
+`<data-dir>/release/current` are untouched. No action on upgrade beyond
+taking the new image.
+
+## v0.2.4, the first boot: identity, config and the persistent volumes (polyforge#176)
+
+The workstation container now persists everything in six independent
+named volumes — `pf-home` (the whole `/root`: cli.toml, the pi agent
+dir `PI_CODING_AGENT_DIR=/root/.pi/agent`, every login), the existing
+`polyforge-data` (nested inside pf-home at its canonical path), the
+components volume the seed installs into, the local AIHub's store at
+`/var/lib/polyforge/aihub`, the `/workspace` working tree and the
+existing `podman-storage`. The DEFAULT boot is the aihub one: the
+service `workstation` carries profile `aihub` and starts the local
+AIHub as a watched child, and running without an AIHub is the explicit
+opt-out — the service `workstation-noaihub`, profile `no-aihub`
+(#161's no-aihub default is flipped; a deployment that ran
+`--profile no-aihub` keeps working, and a bare `docker compose up`
+still starts nothing until a profile is named). Both profiles point
+supervise's component paths at `/components/current`.
+
+The entrypoint runs `pf first-boot` before supervise, and the boot is
+idempotent per stage: the seed install (a same-version noop), the AIHub
+identity — a daily user, its key and the local `workstation` project,
+established in one in-process transaction through the new local
+initialization entry `pf aihub init` (no network listener, refused
+inside a step or task environment and beside a running server) —
+cli.toml's default Cell (the local `http://127.0.0.1:8420` or the
+external server, `container_engine = "podman"`, the `/workspace`
+mapping), and the harness references toward `/components/current` (the
+pi packages entry and the claude skill symlinks; the host installer's
+own merge is untouched and the two are documented as independent). A
+fresh store initialized this way never gets the server's own bootstrap
+admin (usr_root / bootstrap-admin.key); the default Cell's key is a
+daily key by construction. The result record
+`<data-dir>/workstation/first-boot.json` publishes the phase (done, or
+`<stage>/failed` with the reason — never a credential) and is a
+published contract for the later management units. A completed boot
+skips itself (the first choice — local or the external mode whose
+`WORKSTATION_AIHUB_SERVER`/`KEY`/`PROJECT` inputs ride the container
+environment — is made exactly once); an interrupted boot resumes
+without duplicating the user (the same-named key is revoked and
+reissued), with the in-progress record — not the environment — as
+the authority for the choice (owner ruling of 2026-11-20 on review
+r1#1: environment inputs that disagree with the record refuse the
+start, and an external record's key input must be set again); done
+without the default Cell, or a Cell with no record, is an
+inconsistency the container refuses to start on. The smoke gains
+`first-boot`；`first-boot --external` 的计数桩在首启和重启全过程中只允许
+`POST /api/v1/machines/heartbeat`，创建用户、key、项目以及任何其他请求均令
+验收失败并点名方法与路径。No action on upgrade beyond taking the new image
+and compose. The image has not shipped in a release, so no real
+deployment exists to migrate; a dev host's leftover volumes are the
+only pre-#176 state, and one honest leftover comes with them: such a
+volume carries the daemon's recorded Cell identity against
+`http://localhost:8420` (the bare config default of that era), and the
+first boot's default Cell names `http://127.0.0.1:8420` — another
+identity domain, so the daemon refuses to start beside it (exit 78,
+its own message naming both). Recovery is the daemon's own rule:
+reset the old dev volume (the machine is disposable) or keep the old
+Cell under its recorded identity and let the first boot be skipped.
+## v0.2.4, 容器内组件更新（polyforge#190）
+
+工作站镜像内可通过 Pi Web 的「容器组件更新」卡片或 `pf components`
+升级 pf（含 daemon 与 AIHub）、车道与 skill、Pi Web。harness 仍使用原有
+钉住版本，待 #86 提供版本清单；node、python、git、Podman、pf supervise
+和底座二进制只能换镜像升级。宿主机的 tools/install.sh 与自更新卡片不变。
+
+升级从当前 manifest 的 channelRepo 下载 GitHub Release（公开渠道匿名访问），
+核对 SHA256SUMS 后组装完整 releases/<ver>，current 切换是提交点，previous
+保存旧版本。取资产或 staging 失败不会切换 current。upgrade-status.json
+保存在组件卷上，记录阶段、成功或失败、目标版本及原因，页面断线后自动重连读取。
+编排 CLI 独立于 Pi Web 会话运行。`--seed-dir` 可指定已校验的本地完整种子。
+
+排空期间新作业收到 DAEMON-409；现有作业完成后自动继续。取消会重启 daemon
+清除排空；`--force` 允许直接切换。daemon 通过 Host 级 POST /ops/restart
+触发退出码 75，supervise 立即重新解析 current 启动，不停止容器；0 和 78
+仍结束 supervise。重启标志只在内存存在，不会在新 daemon 上重复触发。
+
+回到上一版交换 current 与 previous 并重启组件；目标 manifest schema 不可读、
+平台或渠道不同、最低底座版本不满足时拒绝，保留软链与运行组件并显示原因。
+回退在数据层同样受机械判定（owner 2026-11-21 裁定）：manifest 新增
+dataLayout 字段，由构建时的 seedtool 与组装器从本构建读取的 cellcfg 布局
+版本钉入；回退时与数据目录的 layout-version 比对，previous 声明的布局与
+卷上实际不一致即拒绝并提示两边的布局名、什么都不改。早于该字段的版本
+不声明、也不被机械判定：回退到它们前先备份并遵循对应版本的迁移说明。
+manifest schema 不是数据库兼容性的证明。组件卷首启与 compose 接线由
+84-components-C 提供。

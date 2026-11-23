@@ -38,5 +38,8 @@ func main() {
 	if len(argv) > 0 && argv[0] == "aihub" {
 		os.Exit(aihub.Main(argv[1:], os.Stdin, os.Stdout, os.Stderr))
 	}
+	if len(argv) > 0 && argv[0] == "supervise" {
+		os.Exit(cli.SuperviseMain(argv[1:], os.Stdin, os.Stdout, os.Stderr))
+	}
 	os.Exit(cli.Run(argv, os.Stdin, os.Stdout, os.Stderr))
 }

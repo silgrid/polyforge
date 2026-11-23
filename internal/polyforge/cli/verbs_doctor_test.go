@@ -484,7 +484,7 @@ func TestDaemonEnvCheckPiModelsRefs(t *testing.T) {
 
 func TestPrerequisitesCheck(t *testing.T) {
 	everyone := func(string) (string, error) { return "/usr/bin/found", nil }
-	if c := prerequisitesCheck(everyone); c.Status != "pass" || !strings.Contains(c.Detail, "gh, curl, python3, tmux, git") {
+	if c := prerequisitesCheck(everyone, false); c.Status != "pass" || !strings.Contains(c.Detail, "gh, curl, python3, tmux, git") {
 		t.Fatalf("complete PATH: %+v", c)
 	}
 	c := prerequisitesCheck(func(tool string) (string, error) {
@@ -492,7 +492,7 @@ func TestPrerequisitesCheck(t *testing.T) {
 			return "", exec.ErrNotFound
 		}
 		return "/usr/bin/" + tool, nil
-	})
+	}, false)
 	if c.Status != "warn" {
 		t.Fatalf("missing tools must warn, never fail: %+v", c)
 	}

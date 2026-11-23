@@ -86,7 +86,7 @@ const OPEN_WATCH_POLL_MS = 3000;
  *  a request that never settles is aborted and frees the in-flight slot. */
 const CARD_REQUEST_TIMEOUT_MS = 15000;
 
-type StatusResponse = { pfPresent?: boolean; status?: PolyforgeOpsStatus | null; error?: string };
+type StatusResponse = { pfPresent?: boolean; imageManaged?: boolean; status?: PolyforgeOpsStatus | null; error?: string };
 type DecisionsResponse = { pfPresent?: boolean; feed?: unknown; error?: string };
 type DismissResponse = { ok?: boolean; dismissed?: number; error?: string };
 
@@ -179,6 +179,10 @@ export interface SendMessageInput {
 
 export function usePolyforge(panelOpen: boolean) {
   const [pfPresent, setPfPresent] = useState(false);
+  // the image-mode fact of the machine (polyforge#177): the status read
+  // answers it on every authorized branch; a consumer renders the managed
+  // state from it, never a second judgment.
+  const [imageManaged, setImageManaged] = useState(false);
   const [probed, setProbed] = useState(false);
   const [opsStatus, setOpsStatus] = useState<PolyforgeOpsStatus | null>(null);
   const [opsError, setOpsError] = useState<string | null>(null);
@@ -321,6 +325,7 @@ export function usePolyforge(panelOpen: boolean) {
         const body = await response.json() as StatusResponse;
         if (seq !== statusSeq.current) return;
         setPfPresent(Boolean(body.pfPresent));
+        setImageManaged(Boolean(body.imageManaged));
         setProbed(true);
         setOpsStatus(body.status ?? null);
         setOpsError(body.status ? null : (body.error ?? null));
@@ -889,6 +894,7 @@ export function usePolyforge(panelOpen: boolean) {
 
   return {
     pfPresent,
+    imageManaged,
     opsStatus,
     opsError,
     cards,

@@ -192,6 +192,20 @@ type OpsConfigRequest struct {
 	Max  *int  `json:"max,omitempty"`
 }
 
+// DrainRequest is the POST /ops/drain body (polyforge#160): the
+// Host-level upgrade drain and its force switch.
+type DrainRequest struct {
+	Upgrade bool `json:"upgrade"`
+	Force   bool `json:"force"`
+}
+
+// DrainResponse is POST /ops/drain's answer.
+type DrainResponse struct {
+	Upgrading bool   `json:"upgrading"`
+	Forced    bool   `json:"forced"`
+	Detail    string `json:"detail"`
+}
+
 // ConfigKeyOutcome is one key's reload outcome (R15).
 type ConfigKeyOutcome struct {
 	Key    string `json:"key"`
@@ -593,6 +607,15 @@ func (d *DaemonClient) StatusWithHarnesses() (json.RawMessage, error) {
 // OpsConfig issues one POST /ops/config operation.
 func (d *DaemonClient) OpsConfig(req OpsConfigRequest) (json.RawMessage, error) {
 	return d.do("POST", "/ops/config", "", req, nil)
+}
+
+// Drain sets the Host-level upgrade drain (POST /ops/drain,
+// polyforge#160): new work is refused from here on; the answer's detail
+// says whether the Host is idle (safe to upgrade) or --force accepted
+// the in-flight work. A busy Host without force answers DAEMON-409.
+// Host-level: no profile is sent (the CLI refuses --profile for it).
+func (d *DaemonClient) Drain(req DrainRequest) (json.RawMessage, error) {
+	return d.do("POST", "/ops/drain", "", req, nil)
 }
 
 // ConfigReload asks the daemon to re-read its cli.toml and apply the

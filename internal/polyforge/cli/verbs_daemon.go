@@ -740,11 +740,12 @@ var cmdOps = &Command{
 		"pf ops max [N]          # max concurrent jobs on this machine, N >= 1; lasts until the daemon restarts, and a `pf config set`/`pf config reload` that changes [daemon] max_concurrent_jobs overrides it (last action wins); bare = show\n" +
 		"pf ops role [interactive|runner] [--force|--if-unset]  # the machine role the heartbeat negotiates: interactive (the operator's machine; --force takes it over from the machine holding it) or runner; --if-unset applies only while no operator chose a role on this Cell (the choice is kept across restarts) (the session-start adapters use it); bare = show; the Cell resolves like every Cell-scoped command (--profile, else PF_PROFILE, else the cwd's workspace, else default)\n" +
 		"pf ops shutdown         # graceful shutdown (quiesce); the restart loop ends with it — start again with `pf daemon ensure`\n" +
+		"pf ops drain --upgrade [--force]  # the Host-level upgrade drain (polyforge#160): from here on new submits, automatic claims and task spawns are refused (DAEMON-409) while running work goes on; an idle Host answers and it is safe to upgrade, a busy one refuses until --force (in-flight sessions are interrupted and resume after the restart); the refusal ends with the daemon restart — Host-level, takes no --profile\n" +
 		"pf ops end-session <wi> --reason <text>  # admin/maintainer: force-end a stuck holder's session (WI -> queued; then `pf submit <wi>` anywhere)",
 	Setup: func(fs *flag.FlagSet) {},
 	Run: func(ctx *Context, fs *flag.FlagSet, args []string) error {
 		if len(args) == 0 {
-			return fmt.Errorf("ops: expected status|models|unclassified|auto|max|role|shutdown|end-session")
+			return fmt.Errorf("ops: expected status|models|unclassified|auto|max|role|shutdown|drain|end-session")
 		}
 		if args[0] == "end-session" {
 			return opsEndSession(ctx, args[1:])
@@ -758,6 +759,9 @@ var cmdOps = &Command{
 		}
 		if args[0] == "shutdown" && ctx.FlagProfile != "" {
 			return fmt.Errorf("ops shutdown: shutdown is Host-level — it stops every Cell of the Host and takes no --profile (got %q); run `pf ops shutdown` alone", ctx.FlagProfile)
+		}
+		if args[0] == "drain" && ctx.FlagProfile != "" {
+			return fmt.Errorf("ops drain: the upgrade drain is Host-level — it stops every Cell of this Host from taking new work and takes no --profile (got %q); run `pf ops drain --upgrade` alone", ctx.FlagProfile)
 		}
 		d := ctx.daemon()
 		d.Profile = ctx.FlagProfile
@@ -813,6 +817,8 @@ var cmdOps = &Command{
 			}
 			ctx.finishLine(raw, "graceful shutdown requested; the daemon quiesces and exits\n")
 			return nil
+		case "drain":
+			return opsDrain(ctx, d, args[1:])
 		default:
 			return fmt.Errorf("ops: unknown action %q", args[0])
 		}
@@ -874,6 +880,31 @@ func opsMax(ctx *Context, d *DaemonClient, args []string) error {
 		return opsApply(ctx, d, OpsConfigRequest{Max: &n})
 	}
 	return fmt.Errorf("ops max: expected a single N")
+}
+
+// opsDrain handles `pf ops drain --upgrade [--force]` (polyforge#160):
+// the Host-level upgrade drain. The refusal of new work begins with
+// the daemon's answer and ends with the daemon restart the upgrade
+// itself performs; a busy Host answers 409 (the daemon's words reach
+// the caller) until --force accepts the in-flight work.
+func opsDrain(ctx *Context, d *DaemonClient, args []string) error {
+	force, rest := false, []string{}
+	for _, a := range args {
+		if a == "--force" {
+			force = true
+			continue
+		}
+		rest = append(rest, a)
+	}
+	if len(rest) != 1 || rest[0] != "--upgrade" {
+		return fmt.Errorf("ops drain: expected --upgrade [--force] — the upgrade drain is the one drain it sets (a bare `pf ops drain` sets nothing); it is Host-level and refuses new work on every Cell until the daemon restarts")
+	}
+	resp, err := d.Drain(DrainRequest{Upgrade: true, Force: force})
+	if err != nil {
+		return err
+	}
+	finishAs(ctx, resp, func(r *DrainResponse) { fmt.Fprintln(ctx.Stdout, r.Detail) })
+	return nil
 }
 
 // opsRole handles `pf ops role [interactive|runner] [--force]`

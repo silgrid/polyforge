@@ -26,7 +26,9 @@ import (
 // stepEnv answers the daemon-owned step environment (runtime.StepEnv,
 // bound as the runtime's Config.StepEnv): the live command_path ("" =
 // unset), this daemon's pf directory and the Python interpreter the daemon
-// resolved at its start (Config.Python), the step scripts' PF_PYTHON — and
+// resolved at its start (Config.Python), the step scripts' PF_PYTHON, the
+// resolved container backend every step's scripts pick their engine by
+// (Config.ContainerEngine; restart-only, read once at the start) — and
 // the step's Cell facts (polyforge#75): this Cell's name (d.profile),
 // its server as configured (Config.Server) and the deploy configuration
 // file that Cell's deploys read (deployEnvPath), beside the all-Cells
@@ -38,7 +40,7 @@ func (d *Daemon) stepEnv() runtime.StepEnv {
 	d.reloadMu.Unlock()
 	return runtime.StepEnv{CommandPath: p, PfDir: d.pfDir, Python: d.cfg.Python,
 		Cell: d.profile(), CellServer: d.cfg.Server, DeployEnv: d.deployEnvPath(),
-		CellTargets: d.cellTargets()}
+		CellTargets: d.cellTargets(), ContainerEngine: d.cfg.ContainerEngine}
 }
 
 // cellTargets answers the all-Cells target facts (polyforge#76): the live

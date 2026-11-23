@@ -404,6 +404,8 @@ func configValueChanged(newCfg, baseline cli.Config, key string) bool {
 		return newCfg.Daemon.OperatorAgentDir != baseline.Daemon.OperatorAgentDir
 	case "python":
 		return newCfg.Daemon.Python != baseline.Daemon.Python
+	case "container_engine":
+		return newCfg.Daemon.ContainerEngine != baseline.Daemon.ContainerEngine
 	case "max_concurrent_jobs":
 		return newCfg.Daemon.MaxConcurrentJobs != baseline.Daemon.MaxConcurrentJobs
 	case "max_concurrent_tasks":

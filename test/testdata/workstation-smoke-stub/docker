@@ -1,0 +1,348 @@
+#!/bin/sh
+# test/testdata/workstation-smoke-stub/docker — the stub docker CLI
+# TestWorkstationSmoke drives dist/workstation/smoke.sh with
+# (polyforge#161, review round 2). It answers every command the smoke's
+# boot path makes from the scenario directory $W535_SMOKE_SCENARIO
+# (inspect.json, pid1.txt, subtree.txt), and enforces compose's
+# required-interpolation contract at `compose up`: a missing
+# PI_WEB_PASSWORD refuses exactly the way the compose file's
+# ${PI_WEB_PASSWORD:?…} does — the default the smoke itself must carry.
+set -eu
+
+dir=${W535_SMOKE_SCENARIO:?the scenario directory is required}
+
+if [ "${1:-}" = version ]; then
+	echo 29.9.2-stub
+	exit 0
+fi
+if [ "${1:-}" = inspect ]; then
+	shift
+	case "${1:-}" in
+	-f)
+		if [ "$2" = "{{.State.Running}}" ]; then
+			if [ -f "$dir/not-running" ]; then
+				echo false
+			else
+				echo true
+			fi
+			exit 0
+		fi
+		exit 0
+		;;
+	esac
+	# the full inspect: the scenario's parameters
+	cat "$dir/inspect.json"
+	exit 0
+fi
+# persist_changed NAME — true when the scenario sets the fail-flag AND this
+# is not the first read (the smoke's first read records the baseline, so a
+# changed value from then on must fail the comparisons)
+persist_changed() {
+	[ -f "$dir/persist-$1-changed" ] || return 1
+	n=0
+	[ -f "$dir/persist-$1-reads" ] && n=$(cat "$dir/persist-$1-reads")
+	echo $((n + 1)) > "$dir/persist-$1-reads"
+	[ "$n" -gt 0 ]
+}
+
+if [ "${1:-}" = exec ]; then
+	args="$*"
+	case "$args" in
+	*"/proc/1/comm"*)
+		cat "$dir/pid1.txt"
+		;;
+	*"/sys/fs/cgroup/cgroup.subtree_control"*)
+		cat "$dir/subtree.txt"
+		;;
+	*"[p]f supervise"*)
+		exit 0
+		;;
+	*"[p]f aihub"*)
+		if [ -f "$dir/aihub-running" ]; then
+			exit 0
+		fi
+		exit 1
+		;;
+	# the first-boot pass's AC2 probes (polyforge#176, review r1#5),
+	# answered before the record's case below (the probe commands name
+	# the record file too): each fail-flag its own injected failure
+	*PI_CODING_AGENT_DIR*)
+		if [ -f "$dir/agentdir-wrong" ]; then
+			exit 1
+		fi
+		exit 0
+		;;
+	*PACKAGES_PROBE*)
+		if [ -f "$dir/packages-wrong" ]; then
+			exit 1
+		fi
+		exit 0
+		;;
+	*SKILLS_PROBE*)
+		if [ -f "$dir/skills-wrong" ]; then
+			echo 'SKILLS_PROBE: wrong skill symlink' >&2
+			exit 1
+		fi
+		exit 0 ;;
+	*CREDENTIAL_PROBE*)
+		if [ -f "$dir/credential-in-record" ]; then
+			exit 1
+		fi
+		exit 0
+		;;
+	# the podman-verify pass (polyforge#161): the probe container's
+	# measured limits, the prepared-image path, the verify build driver,
+	# the module run and the cleanliness probes
+	*smoke-verify-driver.py*)
+		case "$args" in
+		*python3*) echo "Dockerfile.verify build done" ;;
+		*) exit 0 ;;  # the driver file's cat-into-the-container
+		esac
+		;;
+	*--memory*)
+		echo "memory=67108864 pids=16 net=ok"
+		;;
+	*--pull=never*)
+		echo "prepared-path-ok"
+		;;
+	*unittest*)
+		echo "Ran 9 tests in 0.1s"
+		echo ""
+		echo "OK"
+		;;
+	*podman*ps*-a*)
+		exit 0
+		;;
+	*"ps -e -o stat="*)
+		echo 0
+		;;
+	*"[c]onmon"*)
+		echo 0
+		;;
+	*"[p]odman"*)
+		echo 0
+		;;
+	# the persist pass (polyforge#177): the six sentinel values, each
+	# fail-flag its own injected change; the three written sentinels echo
+	# back exactly what the smoke stored
+	*"/root/.pi/agent/workstation-smoke-persist-marker"*)
+		case "$args" in
+		*printf*)
+			for last in "$@"; do :; done
+			printf '%s\n' "$last" > "$dir/persist-marker"
+			;;
+		*cat*)
+			if persist_changed marker; then
+				echo "sp-changed"
+			else
+				cat "$dir/persist-marker"
+			fi
+			;;
+		*) exit 1 ;;
+		esac
+		;;
+	*"/root/.config/polyforge/cli.toml"*)
+		case "$args" in
+		*printf*)
+			for last in "$@"; do :; done
+			printf '# workstation-smoke-persist %s\n' "$last" > "$dir/persist-clitoml"
+			;;
+		*grep*)
+			if persist_changed clitoml; then
+				echo "# workstation-smoke-persist sp-changed"
+			else
+				cat "$dir/persist-clitoml"
+			fi
+			;;
+		*) exit 1 ;;
+		esac
+		;;
+	*"/workspace/workstation-smoke-persist-marker"*)
+		case "$args" in
+		*printf*)
+			for last in "$@"; do :; done
+			printf '%s\n' "$last" > "$dir/persist-workspace"
+			;;
+		*cat*)
+			if persist_changed workspace; then
+				echo "sp-changed"
+			else
+				cat "$dir/persist-workspace"
+			fi
+			;;
+		*) exit 1 ;;
+		esac
+		;;
+	*aihub.db*)
+		if persist_changed aihub; then
+			echo "usr_changed"
+		else
+			cat "$dir/aihub-user.txt"
+		fi
+		;;
+	*podman*pull*)
+		# the pull always succeeds for persist (review r1#2: a failing pull
+		# killed the run before any comparison — the flag belongs to
+		# inspect's reads); the podman-verify die subtest gets its own flag
+		if [ -f "$dir/pv-pull-fails" ]; then
+			echo "stub docker: podman pull failed" >&2
+			exit 1
+		fi
+		exit 0
+		;;
+	*podman*inspect*)
+		if persist_changed podman; then
+			echo "sha256:changed"
+		else
+			cat "$dir/podman-image.txt"
+		fi
+		;;
+	*readlink*components*)
+		if persist_changed components-link; then
+			echo "releases/changed"
+		else
+			cat "$dir/components-current.txt"
+		fi
+		;;
+	*hashlib*)
+		if persist_changed components-digest; then
+			echo "digest-changed"
+		else
+			cat "$dir/components-digest.txt"
+		fi
+		;;
+	*stat*components*current*)
+		if persist_changed components-stat; then
+			echo "1 1"
+		else
+			cat "$dir/components-stat.txt"
+		fi
+		;;
+	# the first-boot pass (polyforge#176): the record, the default
+	# Cell's server, the key's authentication, the bootstrap key's
+	# absence and the local AIHub's answer — each answered from the
+	# scenario, each fail-flag its own file
+	*first-boot.json*)
+		# 用真实 HTTP 请求验证外部 smoke 的远端写入门。
+		if [ -f "$dir/remote-request" ]; then
+			read -r method path < "$dir/remote-request"
+			curl -s -X "$method" "http://127.0.0.1:${WORKSTATION_SMOKE_STUB_PORT:-38421}$path" >/dev/null
+			rm "$dir/remote-request"
+		fi
+		cat "$dir/first-boot.json"
+		;;
+	*"config get server"*)
+		cat "$dir/cell-server.txt"
+		;;
+	*"pf recall"*)
+		if [ -f "$dir/recall-fails" ]; then
+			exit 1
+		fi
+		exit 0
+		;;
+	*bootstrap-admin.key*)
+		if [ -f "$dir/bootstrap-key-exists" ]; then
+			exit 0
+		fi
+		exit 1
+		;;
+	*127.0.0.1:8420*)
+		exit 0
+		;;
+	*"[s]tart:lan"*)
+		# the pi-web process: the listing pipeline asks for a pid, the
+		# poll only asks whether one exists
+		case "$args" in
+		*awk*) echo 4242 ;;
+		*) exit 0 ;;
+		esac
+		;;
+	*"/proc/"*"environ"*)
+		cat "$dir/environ.txt"
+		;;
+	esac
+	exit 0
+fi
+if [ "${1:-}" = tag ]; then
+	echo "$3" >> "$dir/docker-tag.log"
+	exit 0
+fi
+if [ "${1:-}" = rmi ]; then
+	echo "$2" >> "$dir/docker-rmi.log"
+	exit 0
+fi
+if [ "$1" = image ] && [ "$2" = inspect ]; then
+	if [ -f "$dir/image-missing" ]; then
+		echo "stub docker: No such image: $3" >&2
+		exit 1
+	fi
+	exit 0
+fi
+if [ "${1:-}" = compose ]; then
+	verb=""
+	# shellcheck disable=SC2124
+	p=""
+	prev=""
+	for a in "$@"; do
+		case "$a" in
+		up | build | ps | down) verb=$a ;;
+		esac
+		[ "$prev" = "-p" ] && p=$a
+		prev=$a
+	done
+	case "$verb" in
+	up)
+		# the smoke's own shell environment, as compose received it —
+		# the env behaviour test reads it back (review r2#2: the sentinel
+		# must be present at the up that creates the container)
+		env > "$dir/compose-$verb-env.txt"
+		# the persist test's cumulative record: every up's environment
+		# (the new-tag phase must carry WORKSTATION_IMAGE)
+		env >> "$dir/compose-up-all.log"
+		;;
+	down)
+		# the cleanup test's record (review r1#3): every `down -v`,
+		# with the project it took down
+		case "$*" in
+		*"-v"*)
+			echo "$p" >> "$dir/compose-down-v.log"
+			;;
+		esac
+		;;
+	esac
+	# the ordered event log (review r2#1): every up and down in call
+	# order, with its project — a die subtest proves the trap cleaned up
+	# only when a `down -v` follows the run's LAST `up`
+	case "$verb" in
+	up | down)
+		mark=$verb
+		case "$verb $*" in
+		"down "*" -v"*) mark="down-v" ;;
+		esac
+		[ -n "$p" ] && echo "$mark ${p}" >> "$dir/compose-events.log"
+		;;
+	esac
+	case "$verb" in
+	build)
+		env > "$dir/compose-$verb-env.txt"
+		# the persist test's count: the exported copy must add none
+		echo build >> "$dir/compose-build.log"
+		;;
+	esac
+	case "$verb" in
+	up)
+		# compose's own refusal shape: the required variable is missing
+		if [ -z "${PI_WEB_PASSWORD:-}" ]; then
+			echo "stub docker: required variable PI_WEB_PASSWORD is missing" >&2
+			exit 1
+		fi
+		;;
+	ps)
+		echo stub-workstation-container-id
+		exit 0
+		;;
+	esac
+	exit 0
+fi
+echo "stub docker: unsupported command: $*" >&2
+exit 1

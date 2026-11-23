@@ -25,6 +25,15 @@ export const POLYFORGE_INSTALL_REFUSED_EXIT = 3;
  *  jobs it named say nothing about the jobs running now. */
 export const POLYFORGE_INSTALL_FORCE_WINDOW_MS = 10 * 60_000;
 
+/** The workstation image's refusal (polyforge#177, owner Q3): the one fixed
+ *  reason every image-managed entry answers — the GET and the stream as a
+ *  degraded field, the POST with 409 and code "image_managed". */
+export const POLYFORGE_INSTALL_IMAGE_MANAGED_MESSAGE =
+  "this machine is managed by the workstation image: pf installs and updates come with a new image";
+
+/** The stable refusal code of the image-managed gate. */
+export const POLYFORGE_INSTALL_IMAGE_MANAGED_CODE = "image_managed";
+
 export type PolyforgeInstallState = "running" | "succeeded" | "failed" | "refused";
 
 /** One job a graceful daemon shutdown would interrupt, as install.sh names it. */

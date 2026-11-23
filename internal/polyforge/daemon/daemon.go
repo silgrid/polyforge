@@ -131,7 +131,15 @@ type Config struct {
 	// start when it is missing or older than cli.MinPython. "" (a test's
 	// bare Config) = PF_PYTHON is set empty.
 	Python string
-	APIKey string // machine credential; NEVER reaches an agent env
+	// ContainerEngine is the container backend a verification container
+	// runs on (polyforge#159, 84-engine): Main resolves it once at the
+	// start (cli.ResolveContainerEngine of the Host's [daemon]
+	// container_engine — "docker" or "podman") and every step's step env
+	// carries it as PF_CONTAINER_ENGINE; "" (a test's bare Config) = the
+	// variable is not set (the scripts' own default, docker). Restart-
+	// only: a reload moves nothing.
+	ContainerEngine string
+	APIKey          string // machine credential; NEVER reaches an agent env
 	// Server is the Cell's AIHub base URL as configured (reported
 	// normalized on GET /profiles; the Hub client carries the connection).
 	Server string
@@ -174,6 +182,10 @@ type Config struct {
 	// HostSlots is the Host's ceiling over every Cell (nil = this Cell's
 	// own queue ceiling only: the unhosted test seam).
 	HostSlots *hostSlots
+	// UpgradeDrain is the Host-wide upgrade drain state (upgradedrain.go;
+	// nil = the unhosted test seam: new work is never refused for an
+	// upgrade).
+	UpgradeDrain *upgradeDrain
 	// PendingAPIKey is a verified rotation the Cell drains toward (restored
 	// from its effective-connection record at a Host restart; "" = none).
 	PendingAPIKey string
@@ -537,6 +549,9 @@ type Daemon struct {
 	// and persists its queue entry after releasing it; it is taken before
 	// reloadMu, the queue lock and the Host slot lock, never after them.
 	drainGate sync.Mutex
+	// upgradeDrain is the Host-wide upgrade drain state (nil: the
+	// unhosted test seam — the Cell never refuses for an upgrade).
+	upgradeDrain *upgradeDrain
 	// admitting counts admissions that passed their pending check under
 	// drainGate and are persisting their queue entry outside it; an open
 	// reservation keeps the Cell from being safe-idle until the entry is
@@ -810,6 +825,7 @@ func New(cfg Config) (*Daemon, error) {
 		sup:          supervise.NewRegistry(),
 		merges:       newMergeLocks(),
 		verifyQ:      cfg.SharedAdmission,
+		upgradeDrain: cfg.UpgradeDrain,
 		// the Cell's own command_path (a reload moves it)
 		commandPath: cfg.StartupFile.Daemon.CommandPath,
 		pfDir:       selfDir(),
@@ -1603,11 +1619,12 @@ func (d *Daemon) fetchAutoWave() {
 		// the auto-off purge takes, so an entry either sees auto off or
 		// lands before the purge and is dropped by it (audit B3 race,
 		// wi_seWTgHeKtaa8).
-		// A rotation that became pending during the fetch stops the wave:
+		// A rotation that became pending during the fetch stops the wave,
+		// and so does the Host-wide upgrade drain (upgradedrain.go):
 		// the check and the enqueue are one step under drainGate.
 		// The persist runs outside the gate under an admitting reservation.
 		d.drainGate.Lock()
-		if d.pendingChange() != "" {
+		if d.drainRefusal() != nil {
 			d.drainGate.Unlock()
 			return
 		}

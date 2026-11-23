@@ -43,6 +43,7 @@ import (
 	"github.com/silgrid/polyforge/internal/polyforge/cellcfg"
 	"github.com/silgrid/polyforge/internal/polyforge/cli"
 	"github.com/silgrid/polyforge/internal/polyforge/runtime"
+	"github.com/silgrid/polyforge/internal/polyforge/supervisor"
 )
 
 // Main executes `pf daemon <flags>` and returns the process exit code.
@@ -162,13 +163,18 @@ func Main(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		OperatorAgentDir:         *operatorAgentDir,
 		OperatorAgentDirExplicit: *operatorAgentDir != "",
 		Python:                   python.Path,
-		MaxConcurrent:            *maxConcurrent,
-		RecallTopK:               *recallTopK,
-		Auto:                     autoCfg,
-		HeartbeatEvery:           *heartbeatEvery,
-		Launcher:                 *launcher,
-		EnvWarnings:              envWarnings,
-		Hosted:                   true,
+		// polyforge#159 (84-engine): the resolved container backend, once —
+		// Host-only and restart-only, no auto-detection (the scripts' own
+		// default, docker, answers a step the daemon stated none to only
+		// outside a Host: a hosted daemon always injects one).
+		ContainerEngine: hostContainerEngine(host),
+		MaxConcurrent:   *maxConcurrent,
+		RecallTopK:      *recallTopK,
+		Auto:            autoCfg,
+		HeartbeatEvery:  *heartbeatEvery,
+		Launcher:        *launcher,
+		EnvWarnings:     envWarnings,
+		Hosted:          true,
 		// Zero fields fall through to the documented defaults.
 		Supervision: SupervisionConfig{
 			SilenceWindow:          *silenceWindow,
@@ -218,6 +224,10 @@ func Main(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}()
 
 	if err := h.Run(context.Background()); err != nil {
+		if errors.Is(err, errRestartForUpgrade) {
+			fmt.Fprintf(stderr, "pf daemon: %v\n", err)
+			return ExitUpgradeRestart
+		}
 		fmt.Fprintf(stderr, "pf daemon: %v\n", err)
 		var no *needsOperatorError
 		if errors.As(err, &no) {
@@ -231,10 +241,20 @@ func Main(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 // ExitNeedsOperator is the daemon's exit status for a startup failure
 // only an operator can fix — configuration, identity, workspace, on-disk
 // state, a failed restart reconciliation (EX_CONFIG). The ensure
-// supervision loop ends on it instead of restarting into the same
-// failure every few seconds; the next
-// `pf daemon ensure` starts a fresh loop once the cause is fixed.
-const ExitNeedsOperator = 78
+// supervision loop and the container supervisor (pf supervise) both end
+// on it instead of restarting into the same failure every few seconds;
+// the next `pf daemon ensure` (or the next container start) starts fresh
+// once the cause is fixed. The value is stated once, in the supervisor
+// package, which this package imports.
+const ExitNeedsOperator = supervisor.NeedsOperatorExit
+
+// ExitUpgradeRestart is the restart-for-an-upgrade convention
+// (polyforge#175): a daemon exit with it asks the container supervisor
+// to relaunch at once on the new current — no failure, no backoff. The
+// trigger that ends a run in this exit code is #92's upgrade
+// orchestration; the value is stated once, in the supervisor package,
+// which this package imports.
+const ExitUpgradeRestart = supervisor.UpgradeRestartExit
 
 // needsOperatorError marks a Run error as ExitNeedsOperator-class.
 type needsOperatorError struct{ err error }
@@ -538,4 +558,14 @@ func cellFilePath(set *cli.HostSet, profile string) string {
 		return set.HostPath
 	}
 	return set.CellPath(profile)
+}
+
+// hostContainerEngine answers the container backend the Host file
+// selects, resolved once at the Host's start (review r1#4: the one-line
+// mapping cli.ResolveContainerEngine(host.Daemon.ContainerEngine) was
+// Main's own, untestable; it is this named function now — the Host→Config
+// leg of the injection chain, the same resolution every Cell's Config
+// carries and the daemon's step env injects).
+func hostContainerEngine(host cli.Config) string {
+	return cli.ResolveContainerEngine(host.Daemon.ContainerEngine)
 }

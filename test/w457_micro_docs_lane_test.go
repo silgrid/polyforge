@@ -43,6 +43,7 @@ var w457MicroPaths = []string{
 	"docs/quickstart-developers.md",
 	"docs/quickstart-macos.md",
 	"docs/user-guide.md",
+	"docs/workstation.md",
 	"docs/zh.md",
 	"docs/reference/*.md",
 	"docs/design/polyforge-vnext/*.md",

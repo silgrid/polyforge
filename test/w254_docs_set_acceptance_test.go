@@ -57,7 +57,26 @@ var w254Pages = []string{
 	"docs/reference/uds-routes.md",
 	"docs/reference/failure-codes.md",
 	"docs/reference/release.md",
+	"docs/workstation.md",
 }
+
+// w254PureEnglishPages are the pages of the set that are pure English
+// by design: operator-facing pages that quote none of the zh workflow
+// vocabulary (the reference pages legitimately carry it — 「过目通过」,
+// `## 分析` — and stay under the 25% bar above). For these the bar is
+// total: no CJK codepoint anywhere (polyforge#163, Q3 A: #176's Chinese
+// passages passed the 25% ratio at 1.2%, so the ratio alone never
+// catches a stray insert).
+var w254PureEnglishPages = []string{
+	"docs/workstation.md",
+}
+
+// w254CJKRe matches any CJK codepoint: the CJK blocks (radicals
+// through Yi, the CJK punctuation 「」、。 among them), the
+// compatibility ideographs and the fullwidth/halfwidth forms (the
+// passages #176 left used （） ，；：). An em dash (U+2014) is not
+// CJK and stays legal.
+var w254CJKRe = regexp.MustCompile(`[\x{2e80}-\x{9fff}\x{f900}-\x{faff}\x{ff00}-\x{ffef}]`)
 
 // w254Root answers the repo root (this package's cwd is the repo's
 // test/ dir).
@@ -477,13 +496,19 @@ func TestW254QuickstartsMovedIntact(t *testing.T) {
 // - the v0.2.4 section appended with the redo verb for an old ticket's analysis (polyforge#233: pf file analysis redo <id> archives the active ## 分析 verbatim in ## 历次分析 in the same CAS as the pending marker, persists the request before the CAS and survives a restart, dispatches the create-time analysis prompt through the narrow write path, refuses a claimed/running/terminal ticket or a live local job/task/request unchanged, keeps confirm's meaning (an early confirm abandons the round), and limits the strong guarantee to the local daemon — another machine relies on the unconfirmed marker; daemon and CLI both need the new verb, no database or configuration migration)
 // - the v0.2.4 section appended with the step tier catalog (polyforge#143: the Host-only [step_tiers] table of cli.toml — one row per tier of recommended <harness>:<model> candidates, live on reload, refused in a named Cell's file; doctor's step tiers catalog row warns when a user-written candidate sits outside it and skips on an empty catalog; the catalog never gates — a pi candidate's admission stays the Cell's step-agent/models.json check; a pf older than this release refuses the whole cli.toml on the unknown section, so a downgrade or a mixed CLI/daemon pair empties the table first)
 // - the v0.2.4 section appended with the pi sub-agent compatibility gate (polyforge#227: with pi_subagents on, every dispatch validates all six built-in resources (guard and SOURCE.md included) and runs a real capability probe — the installed pi loads the built-in extensions against a loopback fake provider with a fake key, the subagent tool must be registered, callable and its controlled refusal returned to the model, and the session settles — inside ONE 10-second budget including process recovery; refusals keep the classes pi_version, pi_flag, pi_api, pi_tool_registration and pi_timeout (a failed resource validation is pi_resources and an invalid switch value pi_subagents_invalid), no version floor exists, successful verdicts are cached in memory per resolved target + entry fingerprint + version + resource digest with concurrent same-key callers sharing one probe and failures never cached, off/empty probe nothing, and an on dispatch with a failing check is refused at that dispatch before its prompt; the driver's prompt fact comes from the verified capability)
+// - the v0.2.4 section appended with the container supervisor and the upgrade drain (polyforge#160: pf supervise is the workstation container's entry point — it watches the daemon, Pi Web and --with-aihub the aihub server, restarts a dead child, ends with the daemon's 0/78 and forwards a stop once with a >= 45s grace; under it pf daemon ensure is a successful no-op and pf doctor passes the supervision row, tmux no longer required there; pf ops drain --upgrade [--force] sets a Host-wide refusal of new work — DAEMON-409 on every Cell — and answers idle/busy/force, the refusal ending with the daemon restart; install.sh does not use the gate yet, that integration is its own ticket)
+// - the v0.2.4 section appended with the workstation image and compose (polyforge#161: dist/workstation/ ships the base image — podman rootful with crun inside, catatonit as PID 1, a cgroup-init entrypoint handing the machine to pf supervise — and the compose file pinning the measured minimal outer set: SYS_ADMIN and NET_ADMIN, the pinned seccomp file (moby's default template plus pivot_root, SHA recorded), private cgroupns, AppArmor/systempaths unconfined, no privileged/devices/docker.sock; boot modes are the no-aihub and aihub compose profiles, PI_WEB_PASSWORD required, the container environment an explicit list plus the whitelisted PI_* families (PI_TEST_* never crosses); smoke.sh boot/env/podman-verify is the acceptance driver, the aihub and env halves needing the Pi Web component in the data volume (84-components); inside, keyring=false (the pinned profile blocks add_key) and BUILDAH_ISOLATION=chroot (buildah's build-network ns open needs CAP_SYS_PTRACE the minimal set has not; the daemon's env allow-list carries that one name to every step); opt-in, nothing on a host changes, the registrations being the dist component in verify-scope.conf and a root .dockerignore the release and verification builds never read)
+// - the v0.2.4 section appended with the component seed and install transaction (polyforge#162: the workstation image's final layer carries the Node runtime and one complete read-only seed at /opt/polyforge/seed/releases/<ver> — the release checkout, bin/pf, Pi Web built with its production dependencies, the two pinned harness packages — pinned by the manifest seedtool writes and verifies inside the build, with the version and TARGETARCH build arguments as the release pipeline's injection points; internal/polyforge/components ships the install transaction the first boot and #92 share — releases/<ver> with current/previous at the root, current the single commit point, newer seeds upgrading and older ones never downgrading, the same version writing nothing, every corruption or cross-channel seed refused with current untouched, journal-based interruption recovery, and the pre-#162 layout (<data-dir>/release/current) refused through the install data-directory input with a migration note; the components volume and first-boot wiring are the later 84-components units, the host installer untouched)
+// - the v0.2.4 section appended with the runtime paths and the upgrade-restart exit (polyforge#175: inside the image — judged by the seed manifest at /opt/polyforge/seed — the supervised daemon, aihub and Pi Web's PF_BIN launch /components/current/bin/pf resolved afresh at every start, the supervise flag defaults sit under /components/current, doctor's layout rows judge the components current with image fix texts and refuse the pre-#162 <data-dir>/release layout with a migration note, the base pf moves to /usr/local/libexec/polyforge/pf exec'"'"'d by the entry point by absolute path, and a daemon exit 75 relaunches at once with no failure backoff — 0/78, the stop window and the failed-start backoff unchanged; the host installer untouched, the 75 trigger itself being #92's)
+// - the v0.2.4 section appended with the first boot: identity, config and the persistent volumes (polyforge#176: six independent volumes — pf-home owning /root whole with the data dir nested inside it, the components volume, the AIHub store, /workspace beside the existing polyforge-data and podman-storage; the aihub boot becomes the default (workstation, profile aihub) with workstation-noaihub the explicit opt-out; pf first-boot runs before supervise and installs the seed, establishes the daily identity in-process through the new pf aihub init entry (no listener, refused in step/task env and beside a live server — a fresh store never gets the server's bootstrap admin), writes cli.toml's default Cell (container_engine podman, the /workspace mapping), merges the harness references toward /components/current and publishes the phase record <data-dir>/workstation/first-boot.json, never a credential; a completed boot skips, an interrupted one resumes without duplicating the user and with the in-progress record — not the environment — as the authority for the choice (owner ruling of 2026-11-20 on review r1#1), done-without-cell or cell-without-record refuses to start; the external mode takes WORKSTATION_AIHUB_SERVER/KEY/PROJECT from the environment and creates nothing remote; smoke first-boot [--external] asserts the whole half with a counting stub, allowing only POST /api/v1/machines/heartbeat and rejecting creation or unknown requests)
+// - v0.2.4 容器内组件更新（polyforge#190：版本卷、排空、状态重连、退出码 75 与回退边界）
 // upgrade-sections:end
 // The file is only routed to, from the install ops page and the README
 // landing page.
 func TestW254UpgradeByteIdentical(t *testing.T) {
 	raw := []byte(w254Read(t, "docs/upgrade.md"))
 	sum := sha256.Sum256(raw)
-	if got := hex.EncodeToString(sum[:]); got != "e0d5d52916e53aadbea643cae4a2d19b1e7c48878ea7b5c6cd35c8c456c87d02" {
+	if got := hex.EncodeToString(sum[:]); got != "ced46afae3e258e1a07db4d1c1ec637b4dfedcbbbbd4ca17a351b89f697d77e7" {
 		t.Fatalf("docs/upgrade.md must stay byte-identical (only routed to, never rewritten): sha256 %s != the pinned pre-move sha256", got)
 	}
 	// the list beside the pin: one whole `// - ` line per appended section
@@ -606,6 +631,13 @@ func TestW254NewDocsClean(t *testing.T) {
 		}
 		if m := w254PrivateIPRe.FindString(body); m != "" {
 			t.Fatalf("%s carries an internal identifier — the private-network IP literal %q; the public tree stays clean (no internal hostnames, IPs or keys in any example)", p, m)
+		}
+	}
+	for _, p := range w254PureEnglishPages {
+		body := w254Page(t, p)
+		if m := w254CJKRe.FindStringIndex(body); m != nil {
+			line := 1 + strings.Count(body[:m[0]], "\n")
+			t.Fatalf("%s is a pure-English page — no CJK codepoint anywhere (the 25%% bar passed #176's Chinese passages at 1.2%%, polyforge#163): first at line %d: %q", p, line, string([]rune(body[m[0]:])[0]))
 		}
 	}
 }

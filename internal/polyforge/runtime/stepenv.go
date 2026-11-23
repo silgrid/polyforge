@@ -78,6 +78,14 @@ type StepEnv struct {
 	// step derivation with it); a bare Config names no source and answers
 	// none.
 	CellTargets []CellTarget
+	// ContainerEngine is the container backend a verification container
+	// runs on (polyforge#159, 84-engine): the daemon-resolved [daemon]
+	// container_engine — "docker" or "podman". Empty = the daemon stated
+	// none (a hand run, a bare test Config): the variable is then absent
+	// and the scripts' own default, docker, applies — an empty value is
+	// never injected (the selection refuses one). Host-only, read once at
+	// the daemon's start (never a live reload).
+	ContainerEngine string
 }
 
 // Vars answers the harness-neutral entries of the step env: PF_PYTHON (an
@@ -86,21 +94,28 @@ type StepEnv struct {
 // PF_CELL_SERVER and PF_DEPLOY_ENV - and the all-Cells target facts
 // (polyforge#76): PF_CELL_TARGETS, one line per serving Cell of this
 // machine, "<profile>\t<server>\t<deploy configuration file>" in the
-// registry's order (default first, then by profile). Empty values are
-// included the same way, so a step can always tell a stated fact from an
-// inherited copy (the sanitize point strips those).
+// registry's order (default first, then by profile), and the container
+// backend (polyforge#159): PF_CONTAINER_ENGINE, exactly when the daemon
+// stated one (an unset variable is the scripts' docker default; an empty
+// value their selection refuses, so it is never injected). Empty values
+// are included the same way, so a step can always tell a stated fact
+// from an inherited copy (the sanitize point strips those).
 func (e StepEnv) Vars() []string {
 	var lines []string
 	for _, t := range e.CellTargets {
 		lines = append(lines, t.Profile+"\t"+t.Server+"\t"+t.DeployEnv)
 	}
-	return []string{
+	vars := []string{
 		spawn.EnvPython + "=" + e.Python,
 		spawn.EnvCell + "=" + e.Cell,
 		spawn.EnvCellServer + "=" + e.CellServer,
 		spawn.EnvDeployEnv + "=" + e.DeployEnv,
 		spawn.EnvCellTargets + "=" + strings.Join(lines, "\n"),
 	}
+	if e.ContainerEngine != "" {
+		vars = append(vars, spawn.EnvContainerEngine+"="+e.ContainerEngine)
+	}
+	return vars
 }
 
 // StepPath answers the PATH a step process of the harness binary

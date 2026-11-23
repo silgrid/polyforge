@@ -1,3 +1,4 @@
+// carries: lib/polyforge-install*, app/api/polyforge/install/*
 import "#test-env";
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
@@ -153,6 +154,7 @@ process.exit(2);
 `);
 writeFileSync(join(bin, "pf"), `#!${process.execPath}
 const fs = require("fs"); const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(join(work, "pf.log"))}, JSON.stringify(args) + "\\n");
 const s = JSON.parse(fs.readFileSync(${JSON.stringify(stateFile)}, "utf8"));
 if (args.includes("--version")) { process.stdout.write(s.pf + "\\n"); process.exit(0); }
 if (args.join(" ") === "--json ops status") {
@@ -192,7 +194,8 @@ const setConfigured = (configured) => {
 };
 const installCalls = () => existsSync(installLog) ? readFileSync(installLog, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
 const ghCalls = () => existsSync(ghLog) ? readFileSync(ghLog, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
-const reset = () => { rmSync(installLog, { force: true }); rmSync(ghLog, { force: true }); };
+const pfCalls = () => existsSync(join(work, "pf.log")) ? readFileSync(join(work, "pf.log"), "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
+const reset = () => { rmSync(installLog, { force: true }); rmSync(ghLog, { force: true }); rmSync(join(work, "pf.log"), { force: true }); };
 
 /** Collect the run's whole output and its final state through the same
  *  subscription the events route uses. */
@@ -377,4 +380,109 @@ test("a late subscriber replays the kept output after its cursor, then the end",
   const late = lib.subscribePolyforgeInstall(2, () => assert.fail("a finished run streams nothing new"));
   assert.deepEqual(late.lines.map((line) => line.n), Array.from({ length: whole.lines.length - 2 }, (_, i) => i + 3));
   assert.equal(late.run.state, "succeeded");
+});
+
+// ---- the image-managed gate (polyforge#177) ----
+// The workstation image refuses the whole install entry: the start is
+// rejected before the force window (force never reaches it), the GET reads
+// nothing (no probe, no gh), and the stream answers the fact — zero
+// downloads, zero spawns, zero writes, on every entry.
+
+const routeJiti = createJiti(import.meta.url, { alias: { "@": process.cwd() }, interopDefault: true });
+const installRoute = await routeJiti.import("../app/api/polyforge/install/route.ts");
+const eventsRoute = await routeJiti.import("../app/api/polyforge/install/events/route.ts");
+
+// a seed-root fixture: the image's final layer (releases/<ver>/manifest.json)
+const seedWork = mkdtempSync(join(tmpdir(), "pf-install-image-"));
+mkdirSync(join(seedWork, "releases", "v0.2.4-dev.1"), { recursive: true });
+writeFileSync(join(seedWork, "releases", "v0.2.4-dev.1", "manifest.json"), "{}\n");
+after(() => {
+  rmSync(seedWork, { recursive: true, force: true });
+});
+const withImageSeam = async (run) => {
+  const previous = globalThis.__piWebTestSeedRoot;
+  globalThis.__piWebTestSeedRoot = seedWork;
+  try {
+    return await run();
+  } finally {
+    globalThis.__piWebTestSeedRoot = previous;
+  }
+};
+
+const allowed = (path, init) => new Request(`http://127.0.0.1:30141${path}`, { headers: { host: "127.0.0.1:30141" }, ...init });
+
+test("the image mode: the start is refused before anything is probed, fetched or written — force included", async () => {
+  await withImageSeam(async () => {
+    setConfigured(true);
+    reset();
+    const runBefore = lib.polyforgeInstallRun()?.id ?? null;
+    await assert.rejects(
+      lib.startPolyforgeInstall({}),
+      (error) => error instanceof lib.PolyforgeInstallError && error.status === 409 && error.code === "image_managed" && error.message === pure.POLYFORGE_INSTALL_IMAGE_MANAGED_MESSAGE,
+      "a plain start answers the image-managed refusal",
+    );
+    await assert.rejects(
+      lib.startPolyforgeInstall({ force: true, refusedRun: "whatever" }),
+      (error) => error.status === 409 && error.code === "image_managed",
+      "force does not bypass the gate — it never reaches the force window",
+    );
+    assert.equal(ghCalls().length, 0, "zero gh calls: nothing probed the channel, nothing was downloaded");
+    assert.equal(pfCalls().length, 0, "zero pf spawns: even the presence probe never ran");
+    assert.equal(lib.polyforgeInstallRun()?.id ?? null, runBefore, "no run record was ever created");
+  });
+});
+
+test("the image mode: the GET answers the fact and reads nothing; the POST answers 409 image_managed", async () => {
+  await withImageSeam(async () => {
+    reset();
+    const got = await installRoute.GET(allowed("/api/polyforge/install"));
+    assert.equal(got.status, 200, "the read degrades as fields, never 5xx");
+    const gotBody = await got.json();
+    assert.equal(gotBody.imageManaged, true, "the GET carries the fact");
+    assert.equal(gotBody.versions, null, "no versions were read");
+    assert.equal(gotBody.error, pure.POLYFORGE_INSTALL_IMAGE_MANAGED_MESSAGE, "the fixed reason");
+    assert.equal(ghCalls().length, 0, "the latest release was never probed");
+    assert.equal(pfCalls().length, 0, "the presence probe never ran");
+
+    const posted = await installRoute.POST(allowed("/api/polyforge/install", {
+      method: "POST",
+      headers: { "content-type": "application/json", host: "127.0.0.1:30141" },
+      body: JSON.stringify({ force: true, refusedRun: "r9" }),
+    }));
+    assert.equal(posted.status, 409);
+    const body = await posted.json();
+    assert.equal(body.code, "image_managed", "the write refusal carries the stable code");
+    assert.equal(body.error, pure.POLYFORGE_INSTALL_IMAGE_MANAGED_MESSAGE);
+    assert.equal(ghCalls().length, 0, "even a forced POST fetched nothing");
+  });
+});
+
+test("the image mode: the output stream answers the fact, not the no-run 404", async () => {
+  await withImageSeam(async () => {
+    const streamed = await eventsRoute.GET(allowed("/api/polyforge/install/events"));
+    assert.equal(streamed.status, 200, "the SSE entry degrades as a field, never 5xx");
+    assert.match(
+      streamed.headers.get("content-type") ?? "",
+      /application\/json/,
+      "the image mode answers one decodable JSON fact, never an event stream",
+    );
+    assert.deepEqual(
+      await streamed.json(),
+      { imageManaged: true, error: pure.POLYFORGE_INSTALL_IMAGE_MANAGED_MESSAGE },
+      "the stream answers the image fact before any run is consulted",
+    );
+  });
+});
+
+test("the host mode is unchanged: the gate unset, the start and the GET behave exactly as before", async () => {
+  setConfigured(true);
+  reset();
+  // ?force=1: the reads run for real, not from the module's caches
+  const got = await installRoute.GET(allowed("/api/polyforge/install?force=1"));
+  assert.equal(got.status, 200);
+  const body = await got.json();
+  assert.equal(body.imageManaged, false, "the host answers the fact as false");
+  assert.equal(body.versions.repo, pure.POLYFORGE_INSTALL_REPO, "the versions read ran as before");
+  assert.ok(ghCalls().length > 0, "the host still probes the channel");
+  assert.ok(pfCalls().length > 0, "the host still probes pf");
 });

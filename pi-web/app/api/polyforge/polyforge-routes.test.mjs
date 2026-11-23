@@ -22,7 +22,7 @@ test("degradation-first: no 5xx path, every failure answers decodable JSON with 
   // The detect route's degradation shape is the flat absent status asserted
   // in its own test below (no status/error envelope).
   for (const [name, source] of [["status", statusSource], ["watch", watchSource]]) {
-    assert.match(source, /NextResponse\.json\(\{ pfPresent: false, status: null \}\)|NextResponse\.json\(\{ status: null, error/, `${name} has the 200-null degradation path`);
+    assert.match(source, /NextResponse\.json\(\{ pfPresent: false, status: null \}\)|NextResponse\.json\(\{ imageManaged: isImageManaged\(\), pfPresent: false, status: null \}\)|NextResponse\.json\(\{ status: null, error/, `${name} has the 200-null degradation path`);
     assert.doesNotMatch(source, /status: 5\d\d/, `${name} must never answer 5xx (the e2e suite treats any 5xx as a browser error)`);
     assert.doesNotMatch(source, /throw new Error/, `${name} must not bare-throw`);
   }

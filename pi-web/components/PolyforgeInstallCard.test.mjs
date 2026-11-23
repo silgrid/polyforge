@@ -1,3 +1,4 @@
+// carries: components/PolyforgeInstallCard*, lib/i18n/messages/*
 import "#test-env";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -32,7 +33,7 @@ const run = (patch = {}) => ({
 });
 function view(props = {}) {
   return renderToStaticMarkup(h(I18nProvider, null, h(PolyforgeInstallView, {
-    versions: versions(), readError: null, streamError: null, run: null, lines: [], host: "", apiKey: "", problem: null, posting: false, confirmingForce: false,
+    versions: versions(), imageManaged: false, readError: null, streamError: null, run: null, lines: [], host: "", apiKey: "", problem: null, posting: false, confirmingForce: false,
     onHost: noop, onApiKey: noop, onStart: noop, onAskForce: noop, onForce: noop, onCancelForce: noop, ...props,
   })));
 }
@@ -90,7 +91,7 @@ test("AC3: an installed pf with no cli.toml key asks for the host and the key to
   // the start's browser-side check follows the same rule, pf installed or
   // not: no request without a host and a key of at least 8 characters
   assert.match(source, /\} else if \(versions\?\.needsConfig\) \{\s*const trimmed = host\.trim\(\);\s*if \(!trimmed\) \{\s*setProblem\(t\("polyforge\.install\.needHost"\)\);\s*return;\s*\}\s*if \(typedKey\.length < 8\) \{\s*setProblem\(t\("polyforge\.install\.needKey"\)\);\s*return;\s*\}\s*body\.host = trimmed;\s*body\.apiKey = typedKey;/);
-  assert.match(source, /\{versions\?\.needsConfig && !running && \(\s*<div className="polyforge-install-credentials"/);
+  assert.match(source, /\{versions\?\.needsConfig && !running && !imageManaged && \(\s*<div className="polyforge-install-credentials"/);
   assert.doesNotMatch(source, /pfPresent[^\n]*needsConfig|needsConfig[^\n]*pfPresent/, "pf's presence never decides whether the credentials are asked for");
 });
 
@@ -190,4 +191,28 @@ test("every install string exists in all three locales", async () => {
     const messages = await readFile(new URL(`../lib/i18n/messages/${locale}.ts`, import.meta.url), "utf8");
     for (const key of new Set(keys)) assert.match(messages, new RegExp(`"${key.replace(/\./g, "\\.")}": "`), `${locale} must carry ${key}`);
   }
+});
+
+test("polyforge#177: inside the workstation image the card is read-only — the managed note, no install controls", () => {
+  const html = view({ imageManaged: true });
+  const shown = text(html);
+  assert.match(html, /data-pf-install-image/, "the managed note carries its marker");
+  assert.ok(shown.includes("managed by the workstation image"), `the managed note is shown: ${shown}`);
+  assert.doesNotMatch(html, /data-pf-install-start/, "no install or update button is rendered");
+  assert.doesNotMatch(html, /data-pf-install-credentials/, "no host or key form is rendered");
+  assert.doesNotMatch(html, /data-pf-install-hint/, "no install.sh line is offered");
+  assert.doesNotMatch(html, /disabled/, "nothing is rendered-but-disabled: the controls are gone");
+});
+
+test("polyforge#177: the card reads the fact from the GET and never writes inside the image", () => {
+  assert.match(source, /imageManaged\?: boolean/, "the GET's body carries the fact");
+  assert.match(
+    source,
+    /if \(body\.imageManaged\) \{\s*setImageManaged\(true\);\s*setReadError\(null\);\s*return body\.run \?\? null;/,
+    "the managed read is a state, not a read failure",
+  );
+  assert.match(source, /imageManaged: boolean;/, "the view receives the fact");
+  const guard = source.indexOf("if (imageManaged) return;");
+  const post = source.indexOf('fetch("/api/polyforge/install", {');
+  assert.ok(guard > 0 && guard < post, "the start is a no-op before the POST — nothing can be sent inside the image");
 });

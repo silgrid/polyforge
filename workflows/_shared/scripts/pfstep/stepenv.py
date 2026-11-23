@@ -23,6 +23,12 @@ ENV_CAPSULE = "PF_CAPSULE"
 ENV_LANE_DIR = "PF_LANE_DIR"
 ENV_SHARED_DIR = "PF_SHARED_DIR"
 ENV_PYTHON = "PF_PYTHON"
+# The container backend the daemon chose (polyforge#159): "docker" or
+# "podman" — [daemon] container_engine, resolved once at the daemon's
+# start and injected here; unset (a hand run) means the scripts' own
+# default, docker. An empty or unknown value is refused by the selection
+# (container.engine_for_env), never silently defaulted.
+ENV_CONTAINER_ENGINE = "PF_CONTAINER_ENGINE"
 # A claude step's shell-call maximum (the harness's own variable).
 ENV_BASH_MAX_TIMEOUT = "BASH_MAX_TIMEOUT_MS"
 

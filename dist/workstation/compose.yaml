@@ -1,0 +1,161 @@
+# dist/workstation/compose.yaml — the workstation container's outer
+# parameter set (polyforge#161, 84-image; the volumes, the default
+# AIHub boot and the first-boot inputs are polyforge#176,
+# 84-components-C). Everything here is the measured minimal machine:
+# exactly SYS_ADMIN + NET_ADMIN, the pinned seccomp file, a private
+# cgroup namespace, no privileged, no devices, no docker socket, and a
+# stop grace above `pf supervise`'s own.
+#
+# The two services are the same machine under the two boot modes
+# (settled Q7, the #176 default flip: the AIHub boot is THE workstation
+# — service `workstation`, profile aihub — and running without an
+# AIHub is the explicit opt-out `workstation-noaihub`, profile
+# no-aihub; compose activates profiles only when named and `--profile`
+# can only add, never subtract, so both variants carry an explicit
+# profile and stay mutually exclusive), one-to-one with the smoke
+# script's flags:
+#
+#   docker compose --profile aihub     up -d    # smoke.sh boot --with-aihub (the default boot)
+#   docker compose --profile no-aihub up -d    # smoke.sh boot --no-aihub (the explicit opt-out)
+#
+# The service `command` carries only pf supervise's flags: the image's
+# entrypoint first-boot-initializes the machine and ends by exec'ing
+# the base pf at /usr/local/libexec/polyforge/pf with
+# `pf supervise "$@"`, so this list is the argument list of that call.
+# The versioned components run from the components volume
+# (/components/current — the release checkout, Pi Web, the workflows),
+# so both variants point supervise's component paths there. Pi Web and
+# the aihub server are versioned components, never in the image: the
+# aihub boot starts and watches `pf aihub` beside them.
+name: workstation
+
+# the shared machine: one anchor, two profile variants. With a YAML
+# merge key (`<<`) a service's own key REPLACES the anchor's (lists are
+# never merged), so a variant could narrow the machine by re-declaring
+# any parameter — the compose test pins both variants to the full
+# parameter set, so nothing narrows silently.
+x-workstation: &workstation
+  build:
+    context: ../..
+    dockerfile: dist/workstation/Containerfile
+  # parameterized (polyforge#177): WORKSTATION_IMAGE runs a published
+  # image (no build — the exported delivery's path); unset, the local
+  # build tags the default polyforge-workstation:local.
+  image: ${WORKSTATION_IMAGE:-polyforge-workstation:local}
+  # AC1's minimal set — set equality, nothing else may appear here.
+  cap_add: [CAP_SYS_ADMIN, CAP_NET_ADMIN]
+  security_opt:
+    # the pinned profile beside this file (compose reads it and hands
+    # the content to the engine; the smoke compares content hashes).
+    - seccomp:./seccomp.json
+    - apparmor=unconfined
+    - systempaths=unconfined
+  # the entrypoint initializes a private, writable cgroup namespace.
+  cgroup: private
+  # pf supervise's own stop grace defaults to 60s (the daemon's shutdown
+  # can take up to 30s of WIP pushes); the outer SIGKILL deadline must
+  # sit above it — the grace plus a margin.
+  stop_grace_period: 90s
+  volumes:
+    # the six persistent volumes (84-components-C), each its own so a
+    # reset never crosses. pf-home owns /root whole — the CLI's
+    # cli.toml, the pi agent dir (PI_CODING_AGENT_DIR=/root/.pi/agent)
+    # and every login — with the data dir nested inside it at its
+    # canonical path (compose mounts the deeper path after the parent;
+    # the smoke's restart check proves the nesting survives a reboot).
+    - pf-home:/root
+    - polyforge-data:/root/.local/share/polyforge
+    # the versioned components (releases/<ver>, current and previous).
+    - components:/components
+    # the local AIHub's store (pf aihub's default data dir).
+    - aihub:/var/lib/polyforge/aihub
+    # the workstation's own working tree, mapped to the local project.
+    - workspace:/workspace
+    # podman's storage on its own volume: native overlay refuses
+    # overlay-on-overlay, so the graphroot must be a real filesystem.
+    - podman-storage:/var/lib/containers/storage
+  environment:
+    # AC3: the container's explicit list — never env_file, never the
+    # host's wholesale environment. The entrypoint's whitelist keeps
+    # these, any compose-added PI_* variable (minus PI_TEST_*), and the
+    # first boot's WORKSTATION_AIHUB_* inputs.
+    PORT: "30141"
+    PI_WEB_HOSTNAME: "0.0.0.0"
+    PI_WEB_NO_OPEN: "1"
+    # required (settled Q5): without a password pi-web's proxy lets /api
+    # through and redirects /login, and AC1's 200/401 pair cannot hold.
+    PI_WEB_PASSWORD: "${PI_WEB_PASSWORD:?set PI_WEB_PASSWORD to a long, unique secret}"
+    PI_WEB_ALLOWED_HOSTS: "${PI_WEB_ALLOWED_HOSTS:-}"
+    PI_WEB_SKIP_VERSION_CHECK: "1"
+    # the step agents' harness home (84-components-C): inside pf-home,
+    # so a login and the harness references survive a re-create.
+    PI_CODING_AGENT_DIR: "/root/.pi/agent"
+    # the first boot's external-mode inputs (84-components-C): set the
+    # server (and its key) to point the default Cell at an existing
+    # remote AIHub instead of the local one — nothing is ever created
+    # on it; the optional project names an already-existing project for
+    # the /workspace mapping. Unset = the local mode. The key rides the
+    # environment exactly once, at first boot (operator-supplied, the
+    # same trust as PI_WEB_PASSWORD), lands in cli.toml (0600) — and
+    # the entrypoint unsets all three names after the boot, so the
+    # credential never reaches the supervise children.
+    WORKSTATION_AIHUB_SERVER: "${WORKSTATION_AIHUB_SERVER:-}"
+    WORKSTATION_AIHUB_KEY: "${WORKSTATION_AIHUB_KEY:-}"
+    WORKSTATION_AIHUB_PROJECT: "${WORKSTATION_AIHUB_PROJECT:-}"
+  ports:
+    # Pi Web, bound to the host's loopback by default; remote access is
+    # the https profile's front below (or an operator override).
+    - "127.0.0.1:${WORKSTATION_WEB_PORT:-30141}:30141"
+  networks:
+    # the `workstation` name answers under BOTH boot services — the
+    # https front reverse-proxies it.
+    default:
+      aliases: [workstation]
+
+services:
+  workstation:
+    <<: *workstation
+    # THE default boot (84-components-C): the local AIHub starts as a
+    # watched child, and the first boot has initialized its identity.
+    # No container_name (polyforge#177): the service name and the
+    # `workstation` network alias are the stable names, so concurrent
+    # deployments never clash on a fixed one.
+    profiles: [aihub]
+    command: ["--grace", "60s", "--with-aihub",
+              "--workflows-dir", "/components/current/workflows",
+              "--pi-web-dir", "/components/current/pi-web"]
+  workstation-noaihub:
+    <<: *workstation
+    # the explicit without-AIHub opt-out (#176 keeps it reachable: a
+    # deployment that runs its AIHub elsewhere starts this profile).
+    profiles: [no-aihub]
+    command: ["--grace", "60s",
+              "--workflows-dir", "/components/current/workflows",
+              "--pi-web-dir", "/components/current/pi-web"]
+  # The optional HTTPS front (settled Q7: default off, opened by the
+  # https profile). Caddy terminates TLS with its own local CA (tls
+  # internal — the browser trusts it after importing Caddy's root
+  # cert, printed by `docker compose exec https-front cat /data/caddy/pki/authorities/local/root.crt`)
+  # and reverse-proxies the workstation's Pi Web. Start it beside a boot
+  # mode: docker compose --profile aihub --profile https up -d
+  https-front:
+    image: docker.io/library/caddy:2.10.2-alpine
+    profiles: [https]
+    environment:
+      # the Caddyfile's site address: the hostname the operator reaches
+      # the front by — the same name belongs in PI_WEB_ALLOWED_HOSTS.
+      WORKSTATION_HTTPS_HOST: "${WORKSTATION_HTTPS_HOST:-localhost}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    ports:
+      - "${WORKSTATION_HTTPS_PORT:-8443}:443"
+
+volumes:
+  pf-home:
+  polyforge-data:
+  components:
+  aihub:
+  workspace:
+  podman-storage:
+  caddy-data:

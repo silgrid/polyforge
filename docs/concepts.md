@@ -423,7 +423,15 @@ it cannot place.
 
 A repository whose tree carries `.polyforge/Dockerfile.verify` runs
 that bar in a container of its own; one without it runs on
-the host as above. The image is built from that file alone — an empty build
+the host as above. The container runs on the backend the Host selected —
+`[daemon] container_engine` ([config.md](reference/config.md)), `docker`
+(the CLI client exactly as always) or `podman` (polyforge#159, 84-engine:
+the same container convention under podman's own semantics, a prepared
+image started by its normalized local ID, `image not known` the
+missing-image answer, a build under a private crun `--no-new-keyring`
+wrapper, the default bridge network); the daemon hands the resolved
+value to every step as `PF_CONTAINER_ENGINE`, and a script's own run
+without one keeps the docker client. The image is built from that file alone — an empty build
 context, so the file must be self-contained: public base images, every tool
 at an exact pinned version — and must carry what the scope engine itself
 runs as well as the bar: `python3` (the engine is a python3 program), `sh`,
@@ -512,9 +520,9 @@ live in the image, and `node_modules` is never cached (each `npm ci`
 installs it into the clone). Each container start removes the repo's older
 generations no container references (a volume named exactly
 `pf-verify-cache-<repo>-<32 hex generation>-<32 hex path identity>` of
-an older generation than the started one's, that docker lists as unused;
+an older generation than the started one's, that the engine lists as unused;
 every clone path's volume of the running generation stays, and never
-another repo's volume; docker refuses to remove one in
+another repo's volume; the engine refuses to remove one in
 use, so a verification still running on an older image keeps its volume
 until a later start). Volumes accumulate one per clone path per image
 generation — every capsule, every integrate batch has its own path — and
@@ -522,7 +530,7 @@ the pre-path shared shape `pf-verify-cache-<repo>-<32 hex>` is left to a
 person (docs/upgrade.md); the base-worktree directory a run mounts beside
 the clone shares the clone's volume, one path the naming scheme does not
 separate. A cache suspected corrupt is removed with
-`docker volume rm` of the current volume: the next run starts cold. It has its own pid and network
+the selected backend's `volume rm` of the current volume: the next run starts cold. It has its own pid and network
 namespaces, no docker socket, no `pf` binary, no operator configuration, and
 an environment that is the image's own plus, when the daemon's environment
 sets them, `LANG`, `LC_ALL`, `TZ`, the proxies (`HTTP_PROXY`, `HTTPS_PROXY`,
@@ -532,14 +540,14 @@ container sees them — nothing of the host is mounted for them), `GOPROXY`,
 own `TMPDIR` / `E2E_JOBS` / `GOMAXPROCS` — no `PF_*`, `TMUX*` or
 credential. Its `PATH` is the image's: the step's `PATH` (`[daemon]
 command_path`) applies only to a bar on the host. The scope engine and every bar, flaky re-run,
-confirming re-run and base run is one `docker exec` in the same working
+confirming re-run and base run is one engine `exec` in the same working
 directory; git (the base worktree, the scans) stays on the host.
 After each command every process it left in the container is killed — a
-timed-out command's whole tree included, which killing the `docker exec`
+timed-out command's whole tree included, which killing the `exec`
 client alone would not do — and the container is removed at the run's end,
-at the run's deadline and on a pause or shutdown. Every docker call but the
-image build (bounded by the run's deadline) and a command's own `docker
-exec` (bounded by its timeout) gets at most 2 minutes, so a docker engine
+at the run's deadline and on a pause or shutdown. Every engine call but the
+image build (bounded by the run's deadline) and a command's own
+exec (bounded by its timeout) gets at most 2 minutes, so a container engine
 that stops answering cannot hold a run; a removal that fails is logged
 once on the script's stderr (and noted as `left` in the repo's `container`
 record when the run completes); the container ends by itself five minutes
@@ -553,9 +561,9 @@ suites peak near 9.4 GiB and 6 suites near 12.5 GiB, and under `8g` the
 kernel's OOM kill took Chromium's renderer).
 The logs, the junit reports and `result.json` have the
 host run's shape; the repo's `repos[]` entry adds `container` (image, name,
-whether this run built the image, the build log, the limits). Docker
-unavailable, a failed build, a refused start, a container lost mid-run or a
-`requires_cmd` probe docker could not run (never read as a missing command)
+whether this run built the image, the build log, the limits). The
+engine unavailable, a failed build, a refused start, a container lost mid-run or a
+`requires_cmd` probe the engine could not run (never read as a missing command)
 makes the run incomplete (`verify.py` exits 2: not judged) — never a red
 bar and never a pass. The daemon itself may run inside a container when the
 capsule roots are mounted at identical host paths (the bind mounts name

@@ -162,6 +162,15 @@ const (
 	EnvPython    = "PF_PYTHON"
 )
 
+// EnvContainerEngine (polyforge#159, 84-engine) is the container backend
+// a verification container runs on: the daemon-resolved [daemon]
+// container_engine — "docker" or "podman" — of every step process; the
+// step's scripts pick their container backend by it (an unset variable
+// is their docker default, so the value is never injected empty). A
+// step's own copy never reaches it (the sanitize point strips inherited
+// PF_* names).
+const EnvContainerEngine = "PF_CONTAINER_ENGINE"
+
 // The Cell facts a step process carries (polyforge#75): the Cell its
 // work item belongs to (PF_CELL: "default" for the Host's own Cell, else
 // the named Cell's profile), that Cell's AIHub base URL as configured

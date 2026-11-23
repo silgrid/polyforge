@@ -41,7 +41,7 @@ var coincidences = map[string]string{
 	"daemon/ensure.go:release":         "the release tree's directory",
 	"runtime/recover.go:release":       "a park kind (a job's release)",
 	"runtime/runtime.go:close":         "a lifecycle phase",
-	"cli/doctor_layout.go:release":     "the release tree's directory",
+	"cli/runtime_layout.go:release":    "the release tree's directory",
 	"cli/verbs_workflow.go:release":    "the release tree's directory",
 	"cli/verbs_step.go:evidence":       "the `pf step handoff --evidence` flag and its wire key",
 	"cli/verbs_cell.go:repair":         "a cell verb (a profile's repair: `pf cell repair <profile>`), predating the step id",

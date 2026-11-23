@@ -3,11 +3,14 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { isImageManaged } from "./polyforge-detect";
 import { polyforgePfBin } from "./polyforge-pf-bin";
 import { sanitizeProjectCommandEnvironment } from "./project-command-env";
 import { maskPolyforgeCredentials, probePolyforgeVersion } from "./polyforge-status";
 import {
   POLYFORGE_INSTALL_FORCE_WINDOW_MS,
+  POLYFORGE_INSTALL_IMAGE_MANAGED_CODE,
+  POLYFORGE_INSTALL_IMAGE_MANAGED_MESSAGE,
   POLYFORGE_INSTALL_REF,
   POLYFORGE_INSTALL_REFUSED_EXIT,
   POLYFORGE_INSTALL_REPO,
@@ -43,9 +46,17 @@ import {
  */
 
 export class PolyforgeInstallError extends Error {
-  constructor(message: string, readonly status: number) {
+  readonly status: number;
+
+  /** The stable refusal code, when the error carries one (the image-managed
+   *  gate's `image_managed`); absent for every other refusal. */
+  readonly code: string | null;
+
+  constructor(message: string, status: number, code: string | null = null) {
     super(message);
     this.name = "PolyforgeInstallError";
+    this.status = status;
+    this.code = code;
   }
 }
 
@@ -270,9 +281,13 @@ function assertStartable(force: boolean, refusedRun: unknown) {
 }
 
 /** Start one run (validated before anything is fetched or spawned). The
- *  answer is the new run; its output arrives through subscribe. */
+ *  answer is the new run; its output arrives through subscribe. The
+ *  workstation image refuses first (polyforge#177): before the force
+ *  window, before the config check, before any probe — so `force` cannot
+ *  reach the gate and nothing is ever fetched, spawned or written. */
 export async function startPolyforgeInstall(body: PolyforgeInstallRequest): Promise<PolyforgeInstallRun> {
   const s = store();
+  if (isImageManaged()) throw new PolyforgeInstallError(POLYFORGE_INSTALL_IMAGE_MANAGED_MESSAGE, 409, POLYFORGE_INSTALL_IMAGE_MANAGED_CODE);
   if (body.force !== undefined && typeof body.force !== "boolean") throw new PolyforgeInstallError("force must be a boolean", 400);
   const force = body.force === true;
   assertStartable(force, body.refusedRun);

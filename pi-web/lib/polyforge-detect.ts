@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { hasPolyforgeCellCapabilities } from "./polyforge-cells-pure";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { type PackageSource } from "@earendil-works/pi-coding-agent";
@@ -42,6 +42,8 @@ const POLYFORGE_PACKAGE_NAME = "polyforge";
 
 const GIT_TIMEOUT_MS = 3000;
 
+import { workstationImage } from "./workstation-mode";
+
 export type PolyforgeLine = "internal" | "public" | "unknown";
 
 export interface PolyforgeDaemonStatus {
@@ -51,6 +53,7 @@ export interface PolyforgeDaemonStatus {
 }
 
 export interface PolyforgeDetectStatus {
+  imageManaged?: boolean;
   pfPresent: boolean;
   pfVersion: string | null;
   pfVersionBelowMinimum: boolean;
@@ -256,9 +259,49 @@ export async function readGlobalPackageEntries(): Promise<PackageSource[]> {
   }
 }
 
+/** The workstation image's read-only seed root — the one fact the image
+ * judgment reads (polyforge#175, owner 2026-11-19: the seed manifest the
+ * image's final layer carries; the same convention the Go side states,
+ * never a probe of /components). */
+const WORKSTATION_SEED_ROOT = "/opt/polyforge/seed";
+
+/** The workstation's components volume root: the volume whose current/
+ * symlink every consumer inside the image resolves. */
+const WORKSTATION_COMPONENTS_ROOT = "/components";
+
+/** The image judgment: the seed (with its manifest) the image's final
+ * layer carries is under the seed root — one manifest under
+ * releases/<ver>/ is the fact, a bare releases/ directory is not. Every
+ * read degrades on its own (a missing or unreadable root reads as a
+ * host, never an error, never a guess). */
+
+/** The one image-mode judgment every entry reads (polyforge#177, owner
+ *  2026-11-19: the seed manifest is the only fact — pf absent must still
+ *  identify the image, and nothing probes /components). The seed root
+ *  parameter is the seam: an explicit root (the tests' fixture) wins, and
+ *  the `__piWebTestSeedRoot` global points the DEFAULT read at a fixture —
+ *  a test-only global (never an environment variable: this module never
+ *  reads process.env, and the detect contract pins that), unset in
+ *  production, so the default reads the constant. */
+declare global {
+  // eslint-disable-next-line no-var
+  var __piWebTestSeedRoot: string | undefined;
+}
+
+export function isImageManaged(seedRoot: string = globalThis.__piWebTestSeedRoot ?? WORKSTATION_SEED_ROOT): boolean {
+  return workstationImage(seedRoot);
+}
+
 /** install.sh's conventional clone path (a fixed
- *  `$HOME/.local/share/polyforge` root, verified in its source). */
-export function conventionalPolyforgeRoot(home: string = homedir()): string {
+ *  `$HOME/.local/share/polyforge` root, verified in its source) on a
+ * host; inside the workstation image (judged by the seed manifest,
+ * polyforge#175) the components volume's current instead. The seed root
+ * is a parameter so the tests inject a fixture; production reads the
+ * constant. */
+export function conventionalPolyforgeRoot(home: string = homedir(), seedRoot: string = WORKSTATION_SEED_ROOT): string {
+  if (workstationImage(seedRoot)) {
+    return join(WORKSTATION_COMPONENTS_ROOT, "current");
+  }
   return join(home, ".local", "share", "polyforge", "release", "current");
 }
 
@@ -340,6 +383,7 @@ export async function detectPolyforge(force = false): Promise<PolyforgeDetectSta
     }
   }
   return {
+    ...(workstationImage() ? { imageManaged: true } : {}),
     pfPresent: present,
     pfVersion,
     pfVersionBelowMinimum: isPolyforgeVersionBelowMinimum(pfVersion),

@@ -23,6 +23,23 @@ before CLI dispatch and calls internal/aihub.Main. This CLI registration
 exists only to serve ` + "`pf help aihub`" + ` presentation. It needs no
 cli.toml and no aihub api key.
 
+pf aihub init [--data-dir D] --key-out F
+
+The local first-boot initialization entry (polyforge#176,
+84-components-C): it opens the core database IN PROCESS — no network
+listener, no HTTP route — and establishes the workstation's daily
+identity (the user, its API key and the local project) in one
+transaction, before any server starts on the data dir (a server
+started afterwards finds the users table non-empty and its own
+fresh-install bootstrap never fires). It refuses to run inside a step
+or task environment and beside a running server (the single-active
+lock), and the issued key's plaintext lands only in the 0600 file
+--key-out names — never on stdout. On an initialized store the
+identity is verified, never duplicated, and the same-named key is
+revoked and reissued (the first boot's retry discipline). The
+workstation's entrypoint reaches it through pf first-boot; a human
+never needs it by hand.
+
 Flags:
 ` + aihubServerFlagsHelp()
 

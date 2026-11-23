@@ -309,6 +309,11 @@ func daemonValue(d DaemonSettings, key string) string {
 		return d.OperatorAgentDir
 	case "python":
 		return d.Python
+	case "container_engine":
+		// polyforge#159: the raw file value; the read face's default (the
+		// resolved docker) is daemonDefault's, one fact with the docs'
+		// defaults table
+		return d.ContainerEngine
 	case "max_concurrent_jobs":
 		if d.MaxConcurrentJobs > 0 {
 			return strconv.Itoa(d.MaxConcurrentJobs)
@@ -376,6 +381,10 @@ func daemonDefault(key string) string {
 		return strconv.FormatFloat(DefaultBarLoadThreshold(), 'g', -1, 64)
 	case "agent_language":
 		return stepcall.DefaultLanguage
+	case "container_engine":
+		// the resolved default of an unset key — one fact with the daemon's
+		// own start resolution (cli.ResolveContainerEngine, the empty case)
+		return ResolveContainerEngine("")
 	case "slow_model_median_latency":
 		return supervise.DefaultSlowModelMedianLatency.String()
 	case "slow_model_p90_latency":
