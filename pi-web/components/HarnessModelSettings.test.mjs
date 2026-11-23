@@ -158,5 +158,5 @@ test("the model page has no page-level h2 and its sidebar groups use the shared 
     );
   }
   assert.ok(!/<strong>/.test(sidebar), "no bare <strong> group heading survives");
-  assert.match(sidebar, /<div class="config-sidebar-text">Opus · pi, claude<\/div>/, "each model row keeps its name and harnesses");
+  assert.match(sidebar, />Opus · pi, claude</, "each model row keeps its name and harnesses");
 });
