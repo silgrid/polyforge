@@ -212,6 +212,10 @@ GIT_TIMEOUT = 600.0
 # How much of a failing command's log the progress shows.
 TAIL_LINES = 40
 
+# How long an interrupted grouped plan waits for one worker to stop (seconds):
+# bounded, so an uninterruptible worker cannot hang the gate.
+INTERRUPT_JOIN = 60.0
+
 # The retries when concurrent writers take the computed tag name first.
 GREEN_PUSH_TRIES = 5
 
@@ -1084,10 +1088,25 @@ class Gate:
             """The group's container, started on its first command (the image
             is already built; the boxes start serially, so no two builds
             race). A container that cannot be had leaves the group's commands
-            not_run and the gate incomplete — never red."""
+            not_run and the gate incomplete — never red.
+
+            Every group writes its container's own logs (the image build note
+            and its mount probe) into a directory of its own: the gate's own
+            <log_dir>/image-build.log and probe logs are the gate's, never
+            overwritten by a group (polyforge#244 r1#1). The commands' logs
+            stay the plan's, reserved above in the gate's log directory."""
             if g in boxes:
                 return boxes[g]
-            opened, why = self.open(o.directory, repo, o.log_dir)
+            group_logs = os.path.join(o.log_dir, "group-%d" % (names.index(g) + 1))
+            try:
+                os.makedirs(group_logs, exist_ok=True)
+            except OSError as err:
+                res.incomplete = "the group %s's log directory %s: %s" % (g, group_logs, err)
+                stop.set()
+                for i in members[g]:
+                    placeholder(i)
+                return o.box
+            opened, why = self.open(o.directory, repo, group_logs)
             if opened is None:
                 res.incomplete = why
                 stop.set()
@@ -1097,6 +1116,7 @@ class Gate:
             boxes[g] = opened.box
             return opened.box
 
+        threads: List[threading.Thread] = []
         try:
             if parallel <= 1:
                 # parallelism 1 is the serial plan: every command in plan
@@ -1118,9 +1138,21 @@ class Gate:
                     t.join()
                 for i in tail:
                     run_one(i, o.box)
+        except (KeyboardInterrupt, runner.Interrupted) as err:
+            # An interrupt lands in the main thread, here: stop the workers,
+            # remove their containers (which ends whatever they run), join
+            # them, and record every command — never lose one, never let a
+            # worker write the result after the gate finished (polyforge#244
+            # r1#7).
+            self.interrupted = self.interrupted or interrupt_name(err)
+            res.incomplete = res.incomplete or "the gate was interrupted (%s)" % self.interrupted
+            stop.set()
         finally:
             for b in boxes.values():
                 b.remove()
+            for t in threads:
+                t.join(timeout=INTERRUPT_JOIN)
+
         for i in range(n):
             if written[i] is None:
                 placeholder(i)
