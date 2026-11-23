@@ -109,14 +109,20 @@ def parse_view(body):
         fail("the onboarding answer is not valid JSON: %r" % body[:120])
     if not isinstance(view, dict):
         fail("the onboarding answer is not a JSON object: %r" % body[:120])
+    # a host-mode Pi Web answers the one boolean `{imageManaged:false}` (the
+    # route's whole body outside the image), so the image gate is judged
+    # BEFORE the view's fields: the failure names the host mode, never a
+    # missing field it was never meant to carry (review r1#5).
+    if "imageManaged" not in view:
+        fail("the onboarding answer lacks field(s): imageManaged")
+    if view["imageManaged"] is not True:
+        fail("imageManaged is %r — this Pi Web is not the image-managed workstation" % view["imageManaged"])
     extra = sorted(set(view) - VIEW_KEYS)
     if extra:
         fail("the onboarding answer carries unknown field(s): %s" % ", ".join(extra))
     missing = sorted(VIEW_KEYS - set(view))
     if missing:
         fail("the onboarding answer lacks field(s): %s" % ", ".join(missing))
-    if view["imageManaged"] is not True:
-        fail("imageManaged is %r — this Pi Web is not the image-managed workstation" % view["imageManaged"])
     if view["version"] != 1:
         fail("the onboarding version is %r, want 1" % view["version"])
     steps = view["steps"]

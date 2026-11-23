@@ -682,11 +682,17 @@ docker run --rm --entrypoint tar ghcr.io/silgrid/polyforge-workstation:<tag> \
 ```
 
 writes `compose.yaml`, `seccomp.json`, `seccomp.json.sha256`, `Caddyfile`
-and `smoke.sh` into the current directory (the smoke's own five-file
-export set; there is no separate `.env.example` — `PI_WEB_PASSWORD` is a
+and `smoke.sh` into the current directory — the smoke's own five-file
+export set. There is no separate `.env.example`: `PI_WEB_PASSWORD` is a
 compose-required environment variable, so export a long unique one, or
-keep it in a permission-restricted `.env` the operator alone can read).
-Then:
+keep it in a permission-restricted `.env` the operator alone can read.
+(The owner ruled on 2026-11-23 that this five-file set is the delivery
+and the environment variable — or that restricted `.env` — stands in for
+a sample file; AC1's `.env.example` wording predates #86's settled set.)
+The newcomer mainline (`docs/getting-started.md`) and its `<PF_*>` image,
+compose and smoke placeholders land with 91-docs (polyforge#166);
+replacing them with #86's values is that page's follow-up, not this work
+item's (same owner ruling). Then:
 
 ```sh
 export WORKSTATION_IMAGE=ghcr.io/silgrid/polyforge-workstation:<tag>
@@ -710,9 +716,12 @@ necessary rows pass (`config`, `workspace mapping`, `workspace dirs`,
 proves the host carries no polyforge component. An HTTP 200 alone is
 never a pass, and the report's overall `ok` is never the proof.
 
-Then the human half: open `http://<pi-web-host>:<port>` in a fresh browser
-session, sign in with the password, and record that the first open shows
-the onboarding wizard. The wizard asks for the AIHub step; on the
+The AC1 proof line's `docker compose up -d` is this `--profile aihub`
+boot: the compose file names a profile and compose starts no profiled
+service without it (review r1#10). Then the human half: open
+`http://<pi-web-host>:<port>` in a fresh browser session, sign in with
+the password, and record that the first open shows the onboarding
+wizard. The wizard asks for the AIHub step; on the
 default path it is the image's local AIHub.
 
 Evidence: the pass's PASS line, the doctor row statuses and the Cell row
@@ -765,11 +774,12 @@ project: it completes the wizard through Pi Web's own API and proves the
 onboarding completion record survives two `compose down && up` cycles
 and a new image tag, beside the six volume facts (harness marker,
 `cli.toml`, workspace file, AIHub user row, Podman image, components
-current). The in-container upgrade entry is the one in
-[`docs/upgrade.md`](../upgrade.md) (polyforge#92); the "a state survives
-an upgrade across two image-bearing releases" test needs two published
-releases and is tracked in polyforge#169 — this work item does not claim
-it.
+current). The newcomer page's upgrade section
+([`docs/workstation.md`](../workstation.md#upgrading)) points at the
+in-container upgrade entry in [`docs/upgrade.md`](../upgrade.md)
+(polyforge#92); the "a state survives an upgrade across two
+image-bearing releases" test needs two published releases and is tracked
+in polyforge#169 — this work item does not claim it.
 
 ### AC5 — Apple silicon (owner-run)
 

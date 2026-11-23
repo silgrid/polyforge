@@ -389,7 +389,10 @@ upgrade paths: the image switch upgrades the base (node, python, git,
 podman, `pf supervise`, the bootstrap pf) and brings a new component
 seed; the in-place upgrade below upgrades the versioned components —
 pf (daemon and local AIHub included), the lanes and skills checkout and
-Pi Web — without rebuilding the container.
+Pi Web — without rebuilding the container. The in-container component
+upgrade's release notes and migration rules are the
+[upgrade notes](upgrade.md) (polyforge#92); this page is the operating
+guide, the upgrade notes are the version history.
 
 For the image switch, point `WORKSTATION_IMAGE` at the new image's tag
 (or rebuild the local one) and re-create the container. On the next
