@@ -11,7 +11,6 @@ import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { chromium } from "playwright";
 import { ACTION_MS, COLD_MS, NAV_MS } from "./timeouts.mjs";
 import { createCheck, createHarness, createWaitUntil, errorText, setupFailed } from "./harness.mjs";
@@ -157,7 +156,7 @@ async function openSettings(page) {
   for (let attempt = 0; attempt < 6; attempt += 1) {
     await button.click({ timeout: ACTION_MS }).catch(() => {});
     try {
-      await dialog.waitFor({ state: "visible", timeout: 15_000 });
+      await dialog.waitFor({ state: "visible", timeout: 30_000 });
       return dialog;
     } catch { /* not hydrated yet */ }
   }
@@ -195,7 +194,7 @@ try {
     await page.locator("[data-onboarding-cell-server]").fill(TEAM_SERVER);
     await page.locator("[data-onboarding-cell-key]").fill(KEY_SENTINEL);
     await page.locator("[data-onboarding-cell-add]").click({ timeout: ACTION_MS });
-    await page.locator('[data-onboarding-step-panel="account"]').waitFor({ state: "visible", timeout: 30_000 });
+    await page.locator('[data-onboarding-step-panel="account"]').waitFor({ state: "visible", timeout: COLD_MS });
     assert.equal((await stepStatuses(page)).find(([step]) => step === "aihub")[1], "complete", "the AIHub step did not complete after the Cell add");
     const add = calls().find((call) => call.argv.includes("cell") && call.argv.includes("add"));
     assert.ok(add, "no `pf cell add` was spawned");
@@ -208,24 +207,24 @@ try {
   await scenario("OB3", "skipping the account step leaves it 「未完成」 and moves the wizard on", async () => {
     // The panel's own skip control (the wizard's per-step skip).
     await page.locator('[data-onboarding-step-panel="account"]').getByRole("button", { name: /^Skip for now$/ }).click({ timeout: ACTION_MS });
-    await page.locator('[data-onboarding-step-panel="workspace"]').waitFor({ state: "visible", timeout: 30_000 });
+    await page.locator('[data-onboarding-step-panel="workspace"]').waitFor({ state: "visible", timeout: COLD_MS });
     assert.equal((await stepStatuses(page)).find(([step]) => step === "account")[1], "incomplete", "a skipped step was recorded complete");
   });
 
   await scenario("OB4", "the workspace goes through the existing selection, then the first ticket is the develop lane", async () => {
     await page.locator("[data-onboarding-workspace-path]").fill(project);
     await page.locator("[data-onboarding-workspace-use]").click({ timeout: ACTION_MS });
-    await page.locator('[data-onboarding-step-panel="ticket"]').waitFor({ state: "visible", timeout: 30_000 });
+    await page.locator('[data-onboarding-step-panel="ticket"]').waitFor({ state: "visible", timeout: COLD_MS });
     assert.equal((await stepStatuses(page)).find(([step]) => step === "workspace")[1], "complete", "the workspace step did not complete");
 
     await page.locator("[data-onboarding-ticket-open]").click({ timeout: ACTION_MS });
     const dialog = page.locator('[role="dialog"][data-lane="develop"]').first();
-    await dialog.waitFor({ state: "visible", timeout: 30_000 });
-    await dialog.locator('option[value="polyforge"]').waitFor({ state: "attached", timeout: 30_000 });
+    await dialog.waitFor({ state: "visible", timeout: COLD_MS });
+    await dialog.locator('option[value="polyforge"]').waitFor({ state: "attached", timeout: COLD_MS });
     await dialog.locator("input").first().fill("First ticket from onboarding");
     await dialog.locator("textarea").fill("Created by the first-open onboarding e2e.");
     await dialog.getByRole("button", { name: "Confirm and file" }).click({ timeout: ACTION_MS });
-    await wizard.waitFor({ state: "detached", timeout: 30_000 });
+    await wizard.waitFor({ state: "detached", timeout: COLD_MS });
     const create = calls().find((call) => call.argv.includes("file") && call.argv.includes("create"));
     assert.ok(create, "no `pf file create` was spawned");
     assert.ok(create.argv.includes("--stdin"), "the wizard's create did not go through stdin");
@@ -237,9 +236,10 @@ try {
   });
 
   await scenario("OB5", "after completion a reload shows no popup; Settings › 常规 reopens at the first unfinished step", async () => {
+    const dismissedRead = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/onboarding", { timeout: COLD_MS });
     await page.reload({ waitUntil: "domcontentloaded", timeout: COLD_MS });
-    await page.getByText("Get started", { exact: false }).first().waitFor({ state: "visible", timeout: COLD_MS }).catch(() => {});
-    await delay(1500);
+    await page.getByRole("button", { name: /^Settings$/ }).first().waitFor({ state: "visible", timeout: COLD_MS });
+    await dismissedRead;
     assert.equal(await wizard.count(), 0, "the wizard popped up again after the completion/skip");
     assert.equal(await page.locator("[data-onboarding-reopen]").count(), 0, "the reopen entry is in the visible page before Settings opens");
 
@@ -261,18 +261,20 @@ try {
   await scenario("OB6", "the account step deep-links to Settings › 账号 and completes only on the read-back login", async () => {
     await page.locator("[data-onboarding-account-link]").click({ timeout: ACTION_MS });
     const settings = page.locator('[role="dialog"][aria-label="Settings"]').first();
-    await settings.waitFor({ state: "visible", timeout: 30_000 });
-    await settings.locator('[data-settings-section="account"]').first().waitFor({ state: "visible", timeout: 30_000 });
+    await settings.waitFor({ state: "visible", timeout: COLD_MS });
+    await settings.locator('[data-settings-section="account"]').first().waitFor({ state: "visible", timeout: COLD_MS });
     await page.keyboard.press("Escape");
     await settings.waitFor({ state: "hidden", timeout: NAV_MS });
 
     await page.locator("[data-onboarding-account-check]").click({ timeout: ACTION_MS });
-    await waitFor(async () => (await stepStatuses(page)).find(([step]) => step === "account")[1] === "complete", 30_000, "the account step did not complete on the read-back login");
+    await waitFor(async () => (await stepStatuses(page)).find(([step]) => step === "account")[1] === "complete", COLD_MS, "the account step did not complete on the read-back login");
     assert.equal((await stepStatuses(page)).find(([step]) => step === "workspace")[1], "complete", "the workspace record was lost");
     await page.locator("[data-onboarding-close]").click({ timeout: ACTION_MS });
-    await wizard.waitFor({ state: "detached", timeout: 30_000 });
+    await wizard.waitFor({ state: "detached", timeout: COLD_MS });
+    const dismissedAgain = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/onboarding", { timeout: COLD_MS });
     await page.reload({ waitUntil: "domcontentloaded", timeout: COLD_MS });
-    await delay(1500);
+    await page.getByRole("button", { name: /^Settings$/ }).first().waitFor({ state: "visible", timeout: COLD_MS });
+    await dismissedAgain;
     assert.equal(await wizard.count(), 0, "the wizard reopened after being dismissed");
   });
 
@@ -294,8 +296,10 @@ try {
     await h.stop();
     ({ base } = await h.startServer({ name: "onboarding-91-host", logFile: join(scratch, "server-host.log"), env: serverEnv(hostSeedRoot) }));
     const hostPage = await newPage();
+    const hostRead = hostPage.page.waitForResponse((response) => new URL(response.url()).pathname === "/api/onboarding", { timeout: COLD_MS });
     await hostPage.page.goto(`${base}/`, { waitUntil: "domcontentloaded", timeout: COLD_MS });
-    await delay(2000);
+    await hostRead;
+    await hostPage.page.getByRole("button", { name: /^Settings$/ }).first().waitFor({ state: "visible", timeout: COLD_MS });
     assert.equal(await hostPage.page.locator("[data-onboarding-wizard]").count(), 0, "a host-mode Pi Web showed the wizard");
     const response = await fetch(`${base}/api/onboarding`);
     assert.equal(response.status, 200);
