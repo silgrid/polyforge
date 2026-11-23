@@ -328,6 +328,7 @@ test("build allows a targeted package run and a filtered run", async (t) => {
 	const capsule = fixtureRepo(t, { files: { "go.mod": "module example.com/r\n\ngo 1.21\n", "pkg/a.go": "package pkg\n" } });
 	const repo = path.join(capsule, "repos", "r");
 	assert.equal(await bashCall({ env: buildEnv(capsule) }, repo, "go test ./pkg/ -count=1"), undefined);
+	assert.equal(await bashCall({ env: buildEnv(capsule) }, repo, "go test ./internal/polyforge/... -count=1"), undefined);
 	assert.equal(await bashCall({ env: buildEnv(capsule) }, repo, "go test ./... -run TestX"), undefined);
 });
 
@@ -346,6 +347,7 @@ test("build allows a filtered npm run and blocks the bare one", async (t) => {
 	const repo = path.join(capsule, "repos", "r");
 	assert.ok((await bashCall({ env: buildEnv(capsule) }, repo, "npm test"))?.block);
 	assert.equal(await bashCall({ env: buildEnv(capsule) }, repo, "npm test -- one.test.ts"), undefined);
+	assert.equal(await bashCall({ env: buildEnv(capsule) }, repo, "npm test one.test.ts"), undefined);
 });
 
 test("a non-build step passes a whole-tree run", async (t) => {
