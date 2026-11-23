@@ -29,7 +29,7 @@ var verifyFullParallelDocs = []struct {
 }{
 	{"workflows/_shared/skills/verify.md", []string{
 		"declared groups", "each group in a container of its own", "plan order",
-		"a repository that declares no group", "serial bar",
+		"A repository that declares no group", "serial bar",
 	}},
 	{"docs/reference/commands.md", []string{
 		"declared groups", "each group in a container of its own", "plan order",
