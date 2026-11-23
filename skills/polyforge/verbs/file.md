@@ -207,6 +207,10 @@ format, the boundary against grilling and the pre-submit confirmation rule
 are defined once in `verbs/submit.md` (the analysis check) — this fragment
 adds nothing to them.
 
+When the draft is what you promised the owner to check ("I'll look at it when
+it is written"), how the session learns it is due is SKILL.md's follow-up rule
+(`Rules for you`, rule 4): start the monitor, or say where the result appears.
+
 ### Deepening check
 
 An execution ticket's `--content` must carry the two deepening sections
