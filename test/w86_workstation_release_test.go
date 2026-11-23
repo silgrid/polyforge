@@ -290,7 +290,7 @@ func TestW86RefusesEitherExistingImageTag(t *testing.T) {
 				which = "ghcr.io/silgrid/polyforge-workstation:v1.2.1"
 				vark = "RELEASE_WORKSTATION_IMAGE"
 			}
-			for _, want := range []string{which + " already exists in the registry", vark, "no release of " + "origin to resume", "nothing built or published, no version claimed"} {
+			for _, want := range []string{which + " already exists in the registry", vark, "a push would overwrite that image", "no release of origin to resume", "nothing built or published, no version claimed"} {
 				if !strings.Contains(out, want) {
 					t.Errorf("refusal lacks %q:\n%s", want, out)
 				}
@@ -331,6 +331,9 @@ func TestW86ResumePushesPerImage(t *testing.T) {
 		if !strings.Contains(out, "image ghcr.io/silgrid/polyforge-aihub:v1.2.1 is already in the registry ("+relFakeDigest+")") {
 			t.Fatalf("the aihub image's keep must be reported:\n%s", out)
 		}
+		if push := w.calls(); relIndex(push, "docker buildx build") >= 0 && !strings.Contains(push[relIndex(push, "docker buildx build")], "--push") {
+			t.Fatalf("the workstation image's rebuild must end in a push build, not a cacheonly one: %v", push)
+		}
 		w372AssertResumedOnce(t, w, out)
 	})
 
@@ -362,8 +365,11 @@ func TestW86ResumePushesPerImage(t *testing.T) {
 		if relIndex(calls, "docker push") < 0 || relIndex(calls, "docker build -f deploy") < 0 {
 			t.Fatalf("the aihub image is missing: the resume must rebuild and push it: %v", calls)
 		}
-		if !strings.Contains(out, "workstation image ghcr.io/silgrid/polyforge-workstation:v1.2.1 is already in the registry") {
-			t.Fatalf("the workstation image's keep must be reported:\n%s", out)
+		if !strings.Contains(out, "workstation image ghcr.io/silgrid/polyforge-workstation:v1.2.1 is already in the registry ("+relFakeDigest+")") {
+			t.Fatalf("the workstation image's keep must be reported with its digest:\n%s", out)
+		}
+		if dg, _ := os.ReadFile(filepath.Join(w.fakeRel, "v1.2.1", "workstation-image.digest")); strings.TrimSpace(string(dg)) != relFakeDigest {
+			t.Fatalf("the kept workstation image's digest asset = %q, want the registry's %q", dg, relFakeDigest)
 		}
 		w372AssertResumedOnce(t, w, out)
 	})
