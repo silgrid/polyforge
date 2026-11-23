@@ -1400,11 +1400,16 @@ func TestReleaseScriptVerify(t *testing.T) {
 			}, fail: "pi-web package version"},
 		{name: "digest mismatch", tag: "v1.3.0", origin: []string{"v1.2.0", "v1.3.0"},
 			env: []string{"FAKE_REGISTRY_DIGEST=sha256:bbbb"}, fail: "digest mismatch"},
-		// no buildx: the `docker manifest inspect -v` fallback reads the
-		// lowercase "digest" inside "Descriptor"
-		{name: "pass via manifest fallback", tag: "v1.3.0", origin: []string{"v1.2.0", "v1.3.0"},
-			env: []string{"FAKE_NO_BUILDX=1"}},
-		{name: "digest mismatch via manifest fallback", tag: "v1.3.0", origin: []string{"v1.2.0", "v1.3.0"},
+		// no buildx: the aihub image's digest still reads through the
+		// `docker manifest inspect -v` fallback (one object, the lowercase
+		// "digest" inside "Descriptor"), but the workstation image's index
+		// digest needs buildx - the manifest fallback answers only the
+		// per-platform CHILD manifests' digests, so matching a digest out of
+		// it would be wrong (r1#1). This case is red on the old fallback
+		// reader: it reported a digest MISMATCH, never named buildx.
+		{name: "no buildx: the workstation index digest needs buildx", tag: "v1.3.0", origin: []string{"v1.2.0", "v1.3.0"},
+			env: []string{"FAKE_NO_BUILDX=1"}, fail: "needs docker buildx"},
+		{name: "digest mismatch via manifest fallback (the aihub image)", tag: "v1.3.0", origin: []string{"v1.2.0", "v1.3.0"},
 			env: []string{"FAKE_NO_BUILDX=1", "FAKE_REGISTRY_DIGEST=sha256:bbbb"}, fail: "digest mismatch"},
 		{name: "non-monotonic", tag: "v1.2.0", origin: []string{"v1.02.0", "v1.2.0"}, fail: "monotonic"},
 		{name: "newer tag exists", tag: "v1.3.0", origin: []string{"v1.2.0", "v1.3.0", "v1.4.0"}, fail: "not strictly greater"},

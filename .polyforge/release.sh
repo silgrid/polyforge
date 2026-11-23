@@ -627,33 +627,39 @@ registry_digest() {
   return 2
 }
 # index_platforms <ref>: the platforms the multi-arch index carries, one
-# <os>/<arch> per line (polyforge#86). buildx imagetools names each child
-# manifest on a Platform: line; without buildx the `docker manifest inspect
-# -v` fallback prints each child's platform block, and the awk pairs the
-# architecture with its os. Empty output with exit 0 is an index that carries
-# no platform the reader can see (a single-arch image); exit 2 when the
-# registry cannot be read - never guessed.
+# <os>/<arch> per line (polyforge#86), read through buildx imagetools alone:
+# it names each child manifest on a Platform: line. There is no fallback
+# reader - `docker manifest inspect -v` answers an array of per-platform
+# objects whose digests are the CHILD manifests' (the index digest appears
+# nowhere), so without buildx the platforms are unreadable (r1#1). Empty
+# output with exit 0 is an index that carries no platform the reader can
+# see (a single-arch image); exit 2 when the registry cannot be read -
+# never guessed.
 index_platforms() {
   if _o=$(docker buildx imagetools inspect "$1" 2>&1); then
     printf '%s\n' "$_o" | sed -n 's/^[[:space:]]*Platform:[[:space:]]*//p' | LC_ALL=C sort -u
     return 0
   fi
   case "$_o" in
-    *"not a docker command"*|*"unknown command"*) ;;   # no buildx: docker manifest
     *"not found"*|*"manifest unknown"*|*MANIFEST_UNKNOWN*) return 1 ;;
     *) printf '%s\n' "$_o" | tail -n 1 >&2; return 2 ;;
   esac
-  if _o=$(docker manifest inspect -v "$1" 2>&1); then
-    printf '%s\n' "$_o" | awk '
-      /"platform"/ { _in = 1; _arch = "" }
-      _in && /"architecture"/ { _arch = $0; sub(/.*"architecture": *"/, "", _arch); sub(/".*/, "", _arch) }
-      _in && /"os"/ { _os = $0; sub(/.*"os": *"/, "", _os); sub(/".*/, "", _os); if (_arch != "") print _os "/" _arch; _in = 0 }
-    ' | LC_ALL=C sort -u
+}
+
+# index_digest <ref>: the multi-arch index digest of <ref>, read through
+# buildx imagetools alone (polyforge#86, r1#1) - `docker manifest inspect -v`
+# shows only the per-platform child manifests' digests, so there is no
+# fallback reader for it. Exit 1 when the registry answers not-found,
+# exit 2 when it cannot be read - never guessed.
+index_digest() {
+  if _o=$(docker buildx imagetools inspect "$1" 2>&1); then
+    printf '%s\n' "$_o" | awk '/^Digest:/{print $2; exit}'
     return 0
   fi
-  case "$_o" in *"no such manifest"*|*"manifest unknown"*|*"not found"*) return 1 ;; esac
-  printf '%s\n' "$_o" | tail -n 1 >&2
-  return 2
+  case "$_o" in
+    *"not found"*|*"manifest unknown"*|*MANIFEST_UNKNOWN*) return 1 ;;
+    *) printf '%s\n' "$_o" | tail -n 1 >&2; return 2 ;;
+  esac
 }
 # tgz_version <tarball>: the version in the packed package/package.json.
 tgz_version() {
@@ -829,9 +835,9 @@ if [ "${1:-}" = "--verify" ]; then
     else
       fail "workstation-image.digest format: \"${WANTW:-<empty>}\" is not sha256:<64 hex>"
     fi
-    GOTW=$(registry_digest "$WS_IMAGE:$VTAG" 2>/dev/null || true)
+    GOTW=$(index_digest "$WS_IMAGE:$VTAG" 2>"$VWORK/wsdigest.err" || true)
     if [ -z "$GOTW" ]; then
-      fail "registry digest of $WS_IMAGE:$VTAG unreadable"
+      fail "workstation index digest of $WS_IMAGE:$VTAG unreadable - reading a multi-arch index digest needs docker buildx (docker buildx imagetools inspect; docker manifest inspect -v answers only the per-platform child manifests' digests)"
     elif [ -n "$WANTW" ] && [ "$GOTW" = "$WANTW" ]; then
       pass "workstation image index digest $GOTW matches workstation-image.digest"
     else
@@ -839,7 +845,7 @@ if [ "${1:-}" = "--verify" ]; then
     fi
     # 4c. the index carries both platforms (a single-arch push, or a broken
     # index, must never pass as the workstation image).
-    if _plat=$(index_platforms "$WS_IMAGE:$VTAG"); then
+    if _plat=$(index_platforms "$WS_IMAGE:$VTAG" 2>"$VWORK/wsplat.err"); then
       for _p in linux/amd64 linux/arm64; do
         if printf '%s\n' "$_plat" | grep -qx "$_p"; then
           pass "workstation index platform $_p present"
@@ -848,7 +854,7 @@ if [ "${1:-}" = "--verify" ]; then
         fi
       done
     else
-      fail "the platforms of the workstation index $WS_IMAGE:$VTAG are unreadable"
+      fail "the platforms of the workstation index $WS_IMAGE:$VTAG are unreadable - they need docker buildx (imagetools inspect)"
     fi
     # 5. the public channel's anonymous read (polyforge#86 Q2): the
     # workstation image must pull with no credential at all - that is the
@@ -1038,10 +1044,10 @@ release_snapshot() {   # the release's state now; non-zero when unreadable
     return 1
   fi
 }
-registry_snapshot() {   # <ref> <tag-for-files>: that image's state now: "present <digest>" | absent; non-zero when unreadable
-  if registry_digest "$1" >"$WORK/regdigest-$2" 2>"$WORK/reg.err-$2"; then _r=0; else _r=$?; fi
+registry_snapshot() {   # <reader> <ref> <tag-for-files>: that image's state now: "present <digest>" | absent; non-zero when unreadable (the aihub image reads through registry_digest, the workstation index through index_digest - r1#1)
+  if "$1" "$2" >"$WORK/regdigest-$3" 2>"$WORK/reg.err-$3"; then _r=0; else _r=$?; fi
   case "$_r" in
-    0) printf 'present %s\n' "$(tr -d ' \t\r\n' <"$WORK/regdigest-$2")" ;;
+    0) printf 'present %s\n' "$(tr -d ' \t\r\n' <"$WORK/regdigest-$3")" ;;
     1) echo absent ;;
     *) return 1 ;;
   esac
@@ -1049,8 +1055,8 @@ registry_snapshot() {   # <ref> <tag-for-files>: that image's state now: "presen
 resume_recheck() {   # <the action about to run>
   [ -n "$RESUME" ] || return 0
   _rel_now=$(release_snapshot) || _rel_now="unreadable ($(head -n 1 "$WORK/view.err"))"
-  _reg_now=$(registry_snapshot "$IMAGE:$TAG" aihub) || _reg_now="unreadable ($(head -n 1 "$WORK/reg.err-aihub"))"
-  _ws_now=$(registry_snapshot "$WS_IMAGE:$TAG" ws) || _ws_now="unreadable ($(head -n 1 "$WORK/reg.err-ws"))"
+  _reg_now=$(registry_snapshot registry_digest "$IMAGE:$TAG" aihub) || _reg_now="unreadable ($(head -n 1 "$WORK/reg.err-aihub"))"
+  _ws_now=$(registry_snapshot index_digest "$WS_IMAGE:$TAG" ws) || _ws_now="unreadable ($(head -n 1 "$WORK/reg.err-ws"))"
   if [ "$_rel_now" != "$REL_SNAP" ] || [ "$_reg_now" != "$REG_SNAP" ] || [ "$_ws_now" != "$WS_SNAP" ]; then
     die "resume of $TAG stopped before $1: what is published changed since this run read it, or can no longer be read (GitHub release: $REL_SNAP -> $_rel_now; image $IMAGE:$TAG: $REG_SNAP -> $_reg_now; workstation image $WS_IMAGE:$TAG: $WS_SNAP -> $_ws_now) - another run may be publishing $TAG. Published by this run: ${PUSHED_BY_RUN:-nothing}. $TAG stays claimed: run again once that run has finished - a complete release is adopted, a partial one resumed"
   fi
@@ -1231,8 +1237,8 @@ echo "release: preflight passed (tools, node, buildx and the arm64 platform, reg
 # image and the workstation image alike (polyforge#86: a partial publish
 # may hold either one alone).
 if [ -n "$RESUME" ]; then
-  REG_SNAP=$(registry_snapshot "$IMAGE:$TAG" aihub) || die "cannot read the registry state of $IMAGE:$TAG: $(head -n 1 "$WORK/reg.err-aihub") - retryable; nothing published"
-  WS_SNAP=$(registry_snapshot "$WS_IMAGE:$TAG" ws) || die "cannot read the registry state of $WS_IMAGE:$TAG: $(head -n 1 "$WORK/reg.err-ws") - retryable; nothing published"
+  REG_SNAP=$(registry_snapshot registry_digest "$IMAGE:$TAG" aihub) || die "cannot read the registry state of $IMAGE:$TAG: $(head -n 1 "$WORK/reg.err-aihub") - retryable; nothing published"
+  WS_SNAP=$(registry_snapshot index_digest "$WS_IMAGE:$TAG" ws) || die "cannot read the registry state of $WS_IMAGE:$TAG: $(head -n 1 "$WORK/reg.err-ws") - retryable; nothing published"
   case "$REG_SNAP" in
     "present "*)
       DIGEST=${REG_SNAP#present }
@@ -1268,9 +1274,9 @@ fi
 # release go on. A resume of the same release keeps its own images as
 # before (1b above).
 if [ -z "$RESUME" ]; then
-  for _spec in "aihub $IMAGE RELEASE_IMAGE" "ws $WS_IMAGE RELEASE_WORKSTATION_IMAGE"; do
-    set -- $_spec; _key=$1; _img=$2; _var=$3
-    if registry_digest "$_img:$TAG" >"$WORK/regdigest-$_key" 2>"$WORK/reg.err-$_key"; then _r=0; else _r=$?; fi
+  for _spec in "aihub $IMAGE RELEASE_IMAGE registry_digest" "ws $WS_IMAGE RELEASE_WORKSTATION_IMAGE index_digest"; do
+    set -- $_spec; _key=$1; _img=$2; _var=$3; _rd=$4
+    if "$_rd" "$_img:$TAG" >"$WORK/regdigest-$_key" 2>"$WORK/reg.err-$_key"; then _r=0; else _r=$?; fi
     case "$_r" in
       0) die "refusing to release: $_img:$TAG already exists in the registry ($(tr -d ' \t\r\n' <"$WORK/regdigest-$_key")), but $TAG is no release of $REMOTE to resume - a push would overwrite that image; publish to another package ($_var) or remove the tag from the package by hand, then run again; nothing built or published, no version claimed" ;;
       1) echo "release: image $_img:$TAG is not in the registry yet" ;;
@@ -1598,7 +1604,7 @@ if [ -n "$NEED_WS_IMAGE" ]; then
     --build-arg SEED_CHANNEL_REPO="$GH_REPO" \
     -f dist/workstation/Containerfile --tag "$WS_IMAGE:$TAG" --push . \
     || POSTFAIL "the workstation image push"
-  WS_DIGEST=$(registry_digest "$WS_IMAGE:$TAG" 2>"$WORK/wsdigest.err" || true)
+  WS_DIGEST=$(index_digest "$WS_IMAGE:$TAG" 2>"$WORK/wsdigest.err" || true)
   printf '%s' "$WS_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$' || POSTFAIL "reading the pushed workstation image digest (got \"$WS_DIGEST\")"
   PUSHED_BY_RUN="${PUSHED_BY_RUN:+$PUSHED_BY_RUN, }the workstation image $WS_IMAGE:$TAG ($WS_DIGEST)"; WS_SNAP="present $WS_DIGEST"
 fi
