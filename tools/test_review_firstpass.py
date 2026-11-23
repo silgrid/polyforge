@@ -288,6 +288,33 @@ class BlockingOutcomesTest(unittest.TestCase):
         self.assertEqual(chain['outcome'], 'unknown')
         self.assertEqual(chain['reason'], 'last mention still open')
 
+    def test_owner_accepts_and_reclassifies_is_owner(self):
+        rows = [
+            '| r5#1 ac_gap AC1 | owner「b」接受（child argv 截获、operator 删除刷新）→ 非阻断 #6 |',
+            '| r5#2 ac_gap AC2 | owner「b」接受（on 正向 / 非法值）→ 非阻断 #6 |',
+            '| r5#6 test_weakened sequential 文本测试 | owner「b」接受（sequential 行为测试）→ 非阻断 #6 |',
+            '| r5#7 test_weakened 伪 test-first | owner「b」接受（units.json 真实测试提交关系）→ 非阻断 #6 |',
+            '| r5#9 test_weakened toggle 测试不属单元 | 归入 owner 接受的「units.json 真实测试提交关系」→ 非阻断 #6 |',
+        ]
+        for row in rows:
+            versions = _versions(
+                _review(5, 'FAIL', '## 发现\n\n### #1 blocking · ac_gap — x\n'),
+                _review(6, 'PASS', '## 上一轮发现逐条核对\n\n' + row + '\n'))
+            [chain] = rf.chain_findings(self.cap, versions)
+            self.assertEqual(chain['outcome'], 'owner', row)
+
+    def test_a_pending_owner_decision_is_not_a_ruling(self):
+        cases = [
+            '| r1#10 | 仍在，非阻断 | follow-up，留 owner 决定 |',
+            'r1#3：残留，需要 owner 裁定',
+        ]
+        for line in cases:
+            versions = _versions(
+                _review(1, 'FAIL', '## 发现\n\n### #3 blocking · bug — x\n'),
+                _review(2, 'PASS', '## 上一轮发现逐条核对\n\n' + line + '\n'))
+            [chain] = rf.chain_findings(self.cap, versions)
+            self.assertNotEqual(chain['outcome'], 'owner', line)
+
     def test_rebutted_and_owner_and_fixed(self):
         versions = _versions(
             _review(1, 'FAIL', (
