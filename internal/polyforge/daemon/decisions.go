@@ -392,6 +392,20 @@ func (f *decisionFeed) Ingest(profile string, e protocol.EventEntry, slug func(s
 		if bodyString(e.Body, "kind") == "reply" {
 			err = f.markReplied(profile, e.WI, bodyString(e.Body, "ask_at"), bodyString(e.Body, "at"))
 		}
+	case driver.EvAutoAnswered:
+		// the daemon answered the question by its standing authorization
+		// (polyforge#239): the original needs_input no longer needs a
+		// human — replied, like an owner reply, still open until the step
+		// hands over — and the feed keeps its own distinguishable entry.
+		if err = f.markReplied(profile, e.WI, bodyString(e.Body, "ask_at"), bodyString(e.Body, "at")); err == nil {
+			if d, ok := watcher.Classify(e.Kind, e.Body); ok {
+				s := ""
+				if slug != nil {
+					s = slug(e.WI)
+				}
+				_, err = f.record(profile, e.WI, s, e.At, d)
+			}
+		}
 	case driver.EvOwnerRewind:
 		// the owner sent the work item back: the question it
 		// withdrew and the block it lifted are over

@@ -31,6 +31,7 @@ export const DECISION_CLASSES: readonly string[] = [
   "superseded",
   "capped",
   "interrupted",
+  "auto_answered",
 ];
 
 export function isKnownDecisionClass(value: string): boolean {

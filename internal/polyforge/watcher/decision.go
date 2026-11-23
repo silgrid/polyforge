@@ -49,6 +49,12 @@ var eventRules = map[string]Rule{
 	// ask's stamp (its id) from the body. (The v1 needs_input event left
 	// with the v1 question, workflow contract v2 change 19.)
 	"awaiting_owner": {Class: "needs_input", Phrase: "a step asked the owner a question and is waiting for the reply", Attention: true},
+	// the daemon answered a low-star question card by its standing
+	// authorization (polyforge#239): a distinguishable information entry —
+	// the fixed phrase names the act, the elapsed wait and the adopted
+	// recommendations ride the event — and the original question is replied,
+	// not a new one
+	"auto_answered": {Class: "auto_answered", Phrase: "已自动按推荐继续"},
 	// a step was judged dead / the model candidates ran out
 	"step_dead":            {Class: "step_dead", Phrase: "a step was judged dead and the daemon handled it"},
 	"candidates_exhausted": {Class: "candidates_exhausted", Phrase: "all model candidates are exhausted", Attention: true},
