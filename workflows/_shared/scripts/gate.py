@@ -482,7 +482,8 @@ def plan_digest(plan: Mapping[str, Any]) -> str:
 
 
 def plan_of(directory: str, report: container.ContainerReport, cmds: Sequence[EngineCommand],
-            timeout_of: Callable[[EngineCommand], int], lane_dir: str = "") -> Dict[str, Any]:
+            timeout_of: Callable[[EngineCommand], int], lane_dir: str = "",
+            parallel: int = 0) -> Dict[str, Any]:
     """The plan as a gate executes it — what its digest, the identity a green
     tag records and the release compares, is made of: the image's content
     half (the Dockerfile's hash), the container's limits, and every command
