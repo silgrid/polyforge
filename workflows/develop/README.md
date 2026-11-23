@@ -131,7 +131,8 @@ The complete variable table is in [the workflow contract's Scripts environment s
   (or of the change's base for a unit declared `pre_existing_red`, whose red evidence
   that replay is), on the host: it must be red), `carries` and `analysis` (the change
   analysis's own close check — the same shared validator `verify.py --analysis` calls;
-  every entry it fails is a blocking `test_weakened` finding naming the entry). A
+  every entry it fails is in the hand-off gate's subset (non-blocking on its own, a gate
+  bypass is blocking `guarantee`), naming the entry). A
   blocking finding names one of five classes: `bug`, `ac_gap`, `project_rule`,
   `test_weakened`, `guarantee`; everything else is non-blocking. A unit that misses its
   test-quality record (`workflows/_shared/test_quality.md`), or whose replayed red

@@ -37,18 +37,21 @@
    the evidence) and every hunk of `git diff <test_commit>..HEAD -- <its test files>`
    (`test_weakened[]`). A unit whose commits are not test first, or whose replay
    exited 0 — a test that passes on the old code, never red or weakened since — is
-   blocking `test_weakened`. A unit declared `pre_existing_red` (its reproduction
+   in the hand-off gate's subset above: non-blocking when the gate's proof stood,
+   blocking `guarantee` when the gate was bypassed. A unit declared
+   `pre_existing_red` (its reproduction
    test already exists and is red before the change) has no `test_commit`: its
    replay runs on the tree of the change's base, and red there is its red
    evidence; a replay that exited 0 there (the test was green before the
-   change) is blocking `test_weakened` — the unit has no red evidence. A
+   change) is in the same subset — the unit has no red evidence. A
    unit whose `replay` carries `not_runnable` has no red
    evidence (its run could not run there: a build, setup, compile or import error, a
-   missing module) — neither red nor a pass: blocking `test_weakened`, naming the unit and
+   missing module) — neither red nor a pass: in the same subset, naming the unit and
    its `rule`, never made up for by reading the code. So does a unit whose `replay` was
    killed at its own limit (`limit_kill`): its red-state run did not exit non-zero within
    its limit, so no red evidence — the fix is build's (a bounded wait, an assertion that
-   fails at once, or the unit self-reports a higher `timeout` in units.json). So is a deleted or relaxed assertion, a new skip, a
+   fails at once, or the unit self-reports a higher `timeout` in units.json), and the
+   item is in the same subset. So is a deleted or relaxed assertion, a new skip, a
    changed `carries:` header, a changed helper or fixture the test relies on, or an
    input changed so the assertion holds trivially, with no finding cited for it in
    build's 关键决定和理由.
@@ -78,15 +81,16 @@ e2e, a missing test-quality record, a document left stale — stay as classed ab
 on their own.
 
 4. **e2e quality (`test_weakened`).** Read every e2e suite the diff adds or changes.
-   Blocking `test_weakened`: a scenario synchronised by a fixed delay instead of
+   Blocking `test_weakened` on their own: a scenario synchronised by a fixed delay instead of
    polling the condition it awaits (a bounded poll deadline is fine); one that asserts
    or measures before the awaited state has settled (a column width read right after
-   a resize, while a ResizeObserver callback still recomputes it); a `carries:` header
+   a resize, while a ResizeObserver callback still recomputes it). A `carries:` header
    that is missing or does not name the paths the suite exercises, on a suite the
    verification-scope engine discovers (an npm, python or rust root's default
-   discovery or its `suite_glob=`; never a Go `test/` file) —
-   `artifacts/facts/carries.json` (`facts.py carries`) lists each suite the build
-   added or changed whose header is missing, malformed or matches no path it touched.
+   discovery or its `suite_glob=`; never a Go `test/` file —
+   `artifacts/facts/carries.json`, `facts.py carries`, lists each suite the build
+   added or changed whose header is missing, malformed or matches no path it touched),
+   is in the hand-off gate's subset above.
 5. **The plan against the diff, both directions.** `artifacts/facts/plan-conformance.json`
    (`facts.py plan-conformance`) lists a changed file no unit declares (`undeclared`)
    and a declared coupled obligation left unchanged (`unchanged_obligations`): facts,
@@ -104,8 +108,9 @@ on their own.
    (its file or name) — each finding names the missing or wrong entry.
    `artifacts/facts/analysis.json` (`facts.py analysis`) names each entry that fails the
    close check (the same shared validator this gate's machine twin calls): a listed test
-   that does not exist, cannot run as written, or whose run does not show its marker is a
-   blocking `test_weakened` finding naming the entry. The analysis's `selected` section —
+   that does not exist, cannot run as written, or whose run does not show its marker is in
+   the hand-off gate's subset above — non-blocking when the gate's proof stood,
+   blocking `guarantee` when the gate was bypassed — naming the entry. The analysis's `selected` section —
    the machine selection the build close's scoped run records, the same selection this
    gate's verification twin plans — is part of the same judgment, read with the
    close-scoped results that wrote it (`artifacts/build/scoped-close/<repo>.json`): a
@@ -116,6 +121,7 @@ on their own.
    without a close-scoped run and owes no record), a record
    whose head is not the judged head, or a selected command without its green
    evidence (a green run, a reuse source, or — on a `pre_existing` record — the skip-form
-   confirmation or completion proof that kept it) is a
-   blocking `test_weakened` finding naming the repo. The machine selection never removes the manual
+   confirmation or completion proof that kept it) is in the hand-off gate's subset above,
+   naming the repo (the gate's `analysis` check judges the same record); a repo with no
+   record at all stays blocking `test_weakened`, the gate not judging its absence. The machine selection never removes the manual
    duty above: it lists what the engine selected, not every test that matters.

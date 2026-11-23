@@ -1115,16 +1115,20 @@ setting:
   run that passes there is a test the old code already passed,
   `test_weakened`; one that could not run there — a build, setup,
   compile or import error, a missing module or test runner dependency preflight (`node_modules/` or Playwright Chromium missing), `not_runnable` — is not red
-  either: its red evidence is missing, `test_weakened` too) and `carries` (an e2e suite
+  either: its red evidence is missing, in the hand-off gate's subset) and `carries` (an e2e suite
   the build added, or whose run a unit records, whose `carries:` matches
   none of the paths it touched; an edited suite owes a well-formed
   `carries:`) and `analysis` (the change analysis's own close check — the same
   shared validator `verify.py --analysis` calls: every listed entry judged statically,
   and each taken one's run executed once at HEAD and judged by its marker; a red entry is
-  a blocking `test_weakened` finding naming it) — and judges the coverage (every criterion of the judged
+  in the same subset, naming it) — and judges the coverage (every criterion of the judged
   list exactly once), the hand-off's decisions against the owner's own
   words and, on a `confirm_plan` ticket, a reply older than the first test
-  commit. A blocking finding names its class in `artifacts/review.md`;
+  commit. The deterministic items the build's `facts_proof` gate already judges — a
+  unit's commits or red-state replay, `carries`, an analysis entry, an undeclared write,
+  an existing test changed outside the plan's write set — are recomputed fresh but recorded
+  non-blocking on their own; a hit the gate's result did not carry is blocking
+  `guarantee` (the gate was bypassed or its result forged). A blocking finding names its class in `artifacts/review.md`;
   every FAIL resumes `build` as an ordinary charged round. Verification runs each unit's recorded run again on the
   final tree (`verify.py --unit-runs`). No sweep follows a review PASS:
   its text-only findings reach the owner in the PR body like any other.
