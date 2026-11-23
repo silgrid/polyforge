@@ -1094,6 +1094,10 @@ test("the step-tier picker joins the chain and summarize add rows over the one c
       "@/hooks/usePolyforgeDisclosure": modulePath("hooks/usePolyforgeDisclosure.ts"),
       "@/lib/polyforge-disclosure": modulePath("lib/polyforge-disclosure.ts"),
       "@/lib/polyforge-install-pure": modulePath("lib/polyforge-install-pure.ts"),
+      // polyforge#256: the install card's browser-safe version comparator is a
+      // new edge of PolyforgeConfig.tsx's graph; the controlled alias table
+      // needs its entry or the picker test dies with MODULE_NOT_FOUND.
+      "@/lib/polyforge-version": modulePath("lib/polyforge-version.ts"),
       // polyforge#177's install card's sibling: PolyforgeConfig.tsx imports
       // ./ComponentsUpdateCard, which imports this client. The alias table is
       // controlled (main #151), so the new edge needs its entry here or the
