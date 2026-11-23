@@ -1,4 +1,4 @@
-// carries: components/PiSubagentPanel*, components/SubagentPanelFrame*, components/PiRunningList*, components/MessageView*, components/AppShell*, components/ChatWindow*, components/AgentSessionPanel*, hooks/usePiSubagentPanel*, lib/pi-subagent-panel.ts
+// carries: components/PiSubagentPanel*, components/SubagentPanelFrame*, components/PiRunningList*, components/AppShell*, components/AgentSessionPanel*, components/AppShell.split-pane-subagent.test.mjs, hooks/usePiSubagentPanel*, lib/pi-subagent-panel.ts
 // polyforge#255 round 2 (review #1/#2): a pi subagent's in-chat progress
 // panel in a real browser. A local OpenAI-compatible fake model answers the
 // session's first request with an `Agent` tool call, so the built-in runtime
