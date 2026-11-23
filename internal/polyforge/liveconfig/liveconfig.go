@@ -209,6 +209,12 @@ func (s *State) SetMemoryPolicy(v map[string]map[string]workspace.PolicyEntry) {
 	s.mu.Unlock()
 }
 
+// StepTiers answers the [step_tiers] catalog (polyforge#81).
+func (s *State) StepTiers() map[string][]string { return nil }
+
+// SetStepTiers swaps the whole [step_tiers] catalog (polyforge#81).
+func (s *State) SetStepTiers(v map[string][]string) {}
+
 // compilePatterns compiles one pattern list (the cli.toml parse has
 // already validated every item compiles; an impossible error here names
 // the key and changes nothing).

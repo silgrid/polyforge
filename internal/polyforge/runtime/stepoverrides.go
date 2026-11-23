@@ -568,6 +568,10 @@ func (r *Runtime) ManualModels(wi string) []string {
 	return r.loadManualModels(wi)
 }
 
+// StepTiersCatalog answers the Host's live [step_tiers] catalog
+// (polyforge#81).
+func (r *Runtime) StepTiersCatalog() map[string][]string { return nil }
+
 // pendingPublishFn is the claim's publish of the merged pending record
 // (a seam for the failed-publish test).
 var pendingPublishFn = gitops.CommitPush
