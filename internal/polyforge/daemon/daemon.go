@@ -646,6 +646,10 @@ func New(cfg Config) (*Daemon, error) {
 	live.SetSlowModelP90Latency(cfg.StartupFile.Daemon.SlowModelP90Latency)
 	live.SetAgentLanguageFallback(cfg.AgentLanguageFallback)
 	live.SetMemoryPolicy(cfg.StartupFile.MemoryPolicy)
+	// polyforge#81: the Host [step_tiers] catalog is live configuration —
+	// a reload of the Host file swaps it and the dispatch-time expansion
+	// reads the new value without a restart.
+	live.SetStepTiers(cfg.StartupFile.StepTiers)
 	// hostLive answers the state the Host-only keys are read from: the
 	// default Cell's for a named Cell (a Host reload updates only that
 	// one), this Cell's own otherwise.
@@ -707,6 +711,10 @@ func New(cfg Config) (*Daemon, error) {
 		OperatorAgentDir:         cfg.OperatorAgentDir,
 		OperatorAgentDirExplicit: cfg.OperatorAgentDirExplicit,
 		EnvSecrets:               []string{cfg.APIKey},
+		// polyforge#81: the dispatch-time candidate composition expands an
+		// overlay tier through the Host's [step_tiers] catalog, read live
+		// through the same Host state the other Host-only keys use.
+		StepTiers: func() map[string][]string { return hostLive().StepTiers() },
 	}
 	rtCfg.FillDefaults()
 	if err := rtCfg.SyncStepAgentDir(); err != nil {

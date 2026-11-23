@@ -24,8 +24,8 @@ func TestStepTiersSnapshot(t *testing.T) {
 
 	// AC1's startup catalog: main and judgment tiers, in order.
 	s.SetStepTiers(map[string][]string{
-		"main":      {"pi:a", "claude:b"},
-		"judgment":  {"pi:j"},
+		"main":     {"pi:a", "claude:b"},
+		"judgment": {"pi:j"},
 	})
 	got := s.StepTiers()
 	if len(got) != 2 || len(got["main"]) != 2 || got["main"][0] != "pi:a" || got["main"][1] != "claude:b" ||

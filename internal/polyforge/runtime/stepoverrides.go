@@ -569,8 +569,15 @@ func (r *Runtime) ManualModels(wi string) []string {
 }
 
 // StepTiersCatalog answers the Host's live [step_tiers] catalog
-// (polyforge#81).
-func (r *Runtime) StepTiersCatalog() map[string][]string { return nil }
+// (polyforge#81), nil when no catalog is configured: the dispatch-time
+// composition expands an overlay tier through it, and the override
+// route validates a written tier name against it.
+func (r *Runtime) StepTiersCatalog() map[string][]string {
+	if r.cfg.StepTiers == nil {
+		return nil
+	}
+	return r.cfg.StepTiers()
+}
 
 // pendingPublishFn is the claim's publish of the merged pending record
 // (a seam for the failed-publish test).
