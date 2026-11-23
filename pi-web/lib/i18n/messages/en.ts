@@ -136,6 +136,8 @@ export const enLocale: LocalePlugin = {
     "settings.accountAuthMethod": "Auth method",
     "settings.accountCredentialKinds": "Credential keys",
     "settings.accountLoading": "Reading the account facts…",
+    "settings.accountReadFailed": "Could not read the account facts. Use Refresh to try again; the last good read stays on screen.",
+    "settings.accountClaudeAbsent": "The account read finished, but claude's status is not available on this machine.",
     "settings.accountClaudeUnavailable": "claude's status is unavailable: {reason}",
     "settings.accountClaudeLogin": "Log in with Claude (OAuth)",
     "settings.accountClaudeSetupToken": "Mint a setup token",

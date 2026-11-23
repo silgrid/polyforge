@@ -136,6 +136,8 @@ export const zhTWLocale: LocalePlugin = {
     "settings.accountAuthMethod": "認證方式",
     "settings.accountCredentialKinds": "憑據鍵",
     "settings.accountLoading": "正在讀取帳號事實…",
+    "settings.accountReadFailed": "帳號事實讀取失敗。用「刷新」重試；上次讀取的資料仍保留。",
+    "settings.accountClaudeAbsent": "帳號讀取已完成，但本機沒有 claude 的狀態。",
     "settings.accountClaudeUnavailable": "claude 狀態不可用：{reason}",
     "settings.accountClaudeLogin": "用 Claude 登入（OAuth）",
     "settings.accountClaudeSetupToken": "產生 setup token",

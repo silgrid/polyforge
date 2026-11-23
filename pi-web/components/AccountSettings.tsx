@@ -12,7 +12,7 @@
 // command runs in a one-shot terminal embedded here (Q5: not a workspace
 // shell, never in the restore list, gone when it ends). No credential
 // value is ever displayed: the route answers set/unset only.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import type { AccountCellRow, AccountHarnessRow } from "@/lib/harness/account-rows";
 import type { HarnessLoginCommand } from "@/lib/harness/concepts";
@@ -95,7 +95,7 @@ export function AccountHarnessPane({ harness, read, capabilities, onOpenLoginTer
     <div data-account-pane={harness} className="settings-general-pane-host">
       <section className="settings-general-section" data-account-card="interactive">
         <h3 className="settings-general-heading">{t("settings.accountInteractiveSession")}</h3>
-        {harness === "claude" ? <AccountClaudeCard claude={read?.claude ?? null} /> : <PiAccountLogin />}
+        {harness === "claude" ? <AccountClaudeCard claude={read?.claude ?? null} loaded={read !== null} /> : <PiAccountLogin />}
         {commands.length > 0 && (
           <ConfigDetailActions>
             {commands.map((command) => (
@@ -157,10 +157,16 @@ export function AccountHarnessPane({ harness, read, capabilities, onOpenLoginTer
   );
 }
 
-/** The interactive claude card: the auth status and the env credential kinds. */
-export function AccountClaudeCard({ claude }: { claude: AccountRead["claude"] }) {
+/** The interactive claude card: the auth status and the env credential kinds.
+ *  `loaded` separates a read still in flight (「正在读取…」) from a finished
+ *  read that answered no claude state (「已完成但不可用」) — polyforge#256 B3. */
+export function AccountClaudeCard({ claude, loaded = true }: { claude: AccountRead["claude"]; loaded?: boolean }) {
   const { t } = useI18n();
-  if (claude === null) return <p className="settings-general-description">{t("settings.accountLoading")}</p>;
+  if (claude === null) {
+    return <p className="settings-general-description" data-claude-status={loaded ? "absent" : "loading"}>
+      {loaded ? t("settings.accountClaudeAbsent") : t("settings.accountLoading")}
+    </p>;
+  }
   if (!claude.available) {
     return <p className="settings-general-description" data-claude-status="unavailable">{t("settings.accountClaudeUnavailable", { reason: claude.reason ?? "" })}</p>;
   }
@@ -271,7 +277,10 @@ export function CredentialWriteResults({ results }: { results: { target: string;
   );
 }
 
-/** The account read's state (polyforge#256 B3) — signatures first. */
+/** The account read's state (polyforge#256 B3): an explicit pending state
+ *  (first read and refresh alike), the last good read kept across a refresh,
+ *  a visible error the refresh button retries, and a request sequence that
+ *  drops a late answer so an older read never overwrites a newer one. */
 export interface AccountReadState {
   read: AccountRead | null;
   loading: boolean;
@@ -281,42 +290,61 @@ export interface AccountReadState {
 }
 
 export function useAccountRead(): AccountReadState {
-  return { read: null, loading: false, readError: null, capabilities: {}, load: () => {} };
+  const { t } = useI18n();
+  const [read, setRead] = useState<AccountRead | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [readError, setReadError] = useState<string | null>(null);
+  const requestRef = useRef(0);
+  const [capabilities, setCapabilities] = useState<Record<string, AccountHarnessCap>>({});
+  const load = useCallback(() => {
+    const seq = ++requestRef.current;
+    setLoading(true);
+    setReadError(null);
+    void (async () => {
+      try {
+        const response = await fetch("/api/settings/account");
+        if (seq !== requestRef.current) return;
+        if (response.ok) {
+          const data = await response.json() as AccountRead;
+          if (seq !== requestRef.current) return;
+          setRead(data);
+        } else {
+          setReadError(t("settings.accountReadFailed"));
+        }
+      } catch {
+        if (seq === requestRef.current) setReadError(t("settings.accountReadFailed"));
+      } finally {
+        if (seq === requestRef.current) setLoading(false);
+      }
+      if (seq !== requestRef.current) return;
+      try {
+        const response = await fetch("/api/harness");
+        if (seq !== requestRef.current || !response.ok) return;
+        const answer = await response.json() as { harnesses?: { id: string; capabilities?: { loginCommands?: HarnessLoginCommand[]; credentialsFollowConfigRoot?: boolean } }[] };
+        if (seq !== requestRef.current) return;
+        const caps: Record<string, AccountHarnessCap> = {};
+        for (const entry of answer.harnesses ?? []) {
+          caps[entry.id] = {
+            id: entry.id,
+            loginCommands: entry.capabilities?.loginCommands ?? [],
+            credentialsFollowConfigRoot: entry.capabilities?.credentialsFollowConfigRoot ?? true,
+          };
+        }
+        setCapabilities(caps);
+      } catch { /* the panes degrade without the capability slice */ }
+    })();
+  }, [t]);
+  useEffect(() => { load(); }, [load]);
+  return { read, loading, readError, capabilities, load };
 }
 
 /** The shell: the two panes over the route's read, plus the one-shot login
  * terminal (Q5) a declared login command opens. */
 export function AccountSettings({ embedded = true }: { embedded?: boolean }) {
   const { t } = useI18n();
-  const [read, setRead] = useState<AccountRead | null>(null);
-  const [capabilities, setCapabilities] = useState<Record<string, AccountHarnessCap>>({});
+  const { read, loading, readError, capabilities, load } = useAccountRead();
   const [pane, setPane] = useState<"pi" | "claude">("pi");
   const [loginTerminal, setLoginTerminal] = useState<{ id: string; commandId: string; closing?: "close" } | null>(null);
-
-  const load = useCallback(() => {
-    void (async () => {
-      try {
-        const response = await fetch("/api/settings/account");
-        if (response.ok) setRead(await response.json() as AccountRead);
-      } catch { /* the panes show the last good read */ }
-      try {
-        const response = await fetch("/api/harness");
-        if (response.ok) {
-          const answer = await response.json() as { harnesses?: { id: string; capabilities?: { loginCommands?: HarnessLoginCommand[]; credentialsFollowConfigRoot?: boolean } }[] };
-          const caps: Record<string, AccountHarnessCap> = {};
-          for (const entry of answer.harnesses ?? []) {
-            caps[entry.id] = {
-              id: entry.id,
-              loginCommands: entry.capabilities?.loginCommands ?? [],
-              credentialsFollowConfigRoot: entry.capabilities?.credentialsFollowConfigRoot ?? true,
-            };
-          }
-          setCapabilities(caps);
-        }
-      } catch { /* the panes degrade without the capability slice */ }
-    })();
-  }, []);
-  useEffect(() => { load(); }, [load]);
 
   const openLoginTerminal = useCallback((commandId: string) => {
     void (async () => {
@@ -386,6 +414,8 @@ export function AccountSettings({ embedded = true }: { embedded?: boolean }) {
               <button type="button" className="config-button" data-account-action="refresh" onClick={load}>{t("settings.accountRefresh")}</button>
             </ConfigDetailActions>
           </ConfigDetailHeader>
+          {loading && <p role="status" data-account-loading="" className="settings-general-description">{t("settings.accountLoading")}</p>}
+          {!loading && readError && <p role="alert" data-account-read-error="" className="config-add-source-error">{readError}</p>}
           <AccountHarnessPane
             harness={pane}
             read={read}

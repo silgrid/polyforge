@@ -136,6 +136,8 @@ export const zhCNLocale: LocalePlugin = {
     "settings.accountAuthMethod": "认证方式",
     "settings.accountCredentialKinds": "凭据键",
     "settings.accountLoading": "正在读取账号事实…",
+    "settings.accountReadFailed": "账号事实读取失败。用「刷新」重试；上次读取的数据仍保留。",
+    "settings.accountClaudeAbsent": "账号读取已完成，但本机没有 claude 的状态。",
     "settings.accountClaudeUnavailable": "claude 状态不可用：{reason}",
     "settings.accountClaudeLogin": "用 Claude 登录（OAuth）",
     "settings.accountClaudeSetupToken": "生成 setup token",
