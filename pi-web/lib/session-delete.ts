@@ -28,6 +28,7 @@ import {
   resolveSessionPath,
 } from "./session-reader";
 import { sessionPathKey } from "./session-path";
+import { invalidateAllowedFileRoots } from "./file-access";
 import { readSubagentRun, SUBAGENT_META_TYPE } from "./subagents";
 import type { SessionEntry } from "./types";
 
@@ -235,5 +236,10 @@ async function deleteSessionsInner(ids: readonly string[]): Promise<SessionDelet
     invalidateSessionManagerCache(deletedPath);
   }
   invalidateSessionListCache();
+  // The deleted sessions' cwds stop being allowed file roots at once, not at
+  // the cache's next 5s rebuild (polyforge#252). Only a whole batch that got
+  // here invalidates: a non-ENOENT unlink error above throws first, so a
+  // partial failure keeps the cache as it was.
+  invalidateAllowedFileRoots();
   return { deleted: [...deletedSessionIds], missing };
 }

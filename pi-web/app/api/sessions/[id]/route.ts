@@ -20,6 +20,7 @@ import type { SessionEntry } from "@/lib/types";
 import { readSubagentRun, readSubagentSessionResources } from "@/lib/subagents";
 import { readSessionToolSelection } from "@/lib/session-tool-selection";
 import { deleteSessions } from "@/lib/session-delete";
+import { invalidateAllowedFileRoots } from "@/lib/file-access";
 import { attachTranscriptNotices, readSessionTranscriptNotices } from "@/lib/transcript-notices-server";
 import { getClaudeSessionRecord, removeClaudeSessionRecord, updateClaudeSessionRecord, type ClaudeSessionRecord } from "@/lib/claude-index";
 import { claudeSessionInfo, claudeSessionStats, getClaudeSession, readClaudeHistory } from "@/lib/claude-session";
@@ -292,6 +293,10 @@ export async function DELETE(
       await getClaudeSession(id)?.shutdown();
       removeClaudeTranscript(id);
       await removeClaudeSessionRecord(id);
+      // The record's cwd stops being an allowed file root at once, not at the
+      // cache's next 5 s rebuild (polyforge#252). A throw above skips this, so
+      // a failed delete keeps the cache as it was.
+      invalidateAllowedFileRoots();
       return NextResponse.json({ ok: true });
     }
     const { missing } = await deleteSessions([id]);

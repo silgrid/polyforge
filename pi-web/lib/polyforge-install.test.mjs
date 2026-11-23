@@ -31,25 +31,52 @@ test("the channel is Pi Web's own release channel and the copyable command's", a
   }
 });
 
-test("version flags: update available, a stale daemon, Pi Web out of sync — a missing version raises none", () => {
+test("version flags: update available only when the channel is ahead; ahead of channel never suggests a downgrade", () => {
   const flags = (patch) => pure.polyforgeVersionFlags({ installed: "v0.2.5", latest: "v0.2.5", running: "v0.2.5", piWeb: "0.2.5", ...patch });
-  assert.deepEqual(flags({}), { updateAvailable: false, daemonStale: false, piWebOutOfSync: false }, "a leading v does not count");
+  assert.deepEqual(flags({}), { updateAvailable: false, aheadOfChannel: false, daemonStale: false, piWebOutOfSync: false }, "a leading v does not count");
   assert.equal(flags({ latest: "v0.2.6" }).updateAvailable, true);
+  assert.equal(flags({ latest: "v0.2.6" }).aheadOfChannel, false);
   assert.equal(flags({ running: "v0.2.4" }).daemonStale, true, "installed new, daemon still the old process");
   assert.equal(flags({ piWeb: "0.2.4" }).piWebOutOfSync, true);
-  assert.deepEqual(flags({ installed: null }), { updateAvailable: false, daemonStale: false, piWebOutOfSync: false });
-  assert.deepEqual(flags({ latest: null, running: null, piWeb: "" }), { updateAvailable: false, daemonStale: false, piWebOutOfSync: false });
+  // B2: an older channel release is ahead-of-channel, not an update
+  const older = flags({ installed: "v0.2.4-dev.49", latest: "v0.2.3" });
+  assert.equal(older.updateAvailable, false, "dev.49 is above 0.2.3: no update, never a downgrade");
+  assert.equal(older.aheadOfChannel, true);
+  // dev.49 is below the 0.2.4 release: the channel does have a newer release
+  assert.equal(flags({ installed: "v0.2.4-dev.49", latest: "v0.2.4" }).updateAvailable, true);
+  // the pre-release ordering, a leading v and +build metadata
+  assert.equal(flags({ installed: "0.2.4-dev.9", latest: "v0.2.4-dev.10" }).updateAvailable, true, "dev.9 < dev.10");
+  assert.equal(flags({ installed: "v0.2.4-dev.10", latest: "0.2.4-dev.9" }).aheadOfChannel, true);
+  assert.equal(flags({ installed: "v0.2.4+build.9", latest: "v0.2.4+build.10" }).updateAvailable, false, "build metadata is not a new version");
+  assert.equal(flags({ installed: "v0.2.4", latest: "v0.2.4" }).updateAvailable, false, "the same version has no update");
+  // a stable installed version above the channel is ahead, never called a prerelease
+  const stable = flags({ installed: "v0.2.5", latest: "v0.2.4" });
+  assert.equal(stable.updateAvailable, false);
+  assert.equal(stable.aheadOfChannel, true);
+  // unparseable versions prove nothing
+  assert.equal(flags({ installed: "oops", latest: "v0.2.6" }).updateAvailable, false);
+  assert.equal(flags({ installed: "oops", latest: "v0.2.6" }).aheadOfChannel, false);
+  assert.deepEqual(flags({ installed: null }), { updateAvailable: false, aheadOfChannel: false, daemonStale: false, piWebOutOfSync: false });
+  assert.deepEqual(flags({ latest: null, running: null, piWeb: "" }), { updateAvailable: false, aheadOfChannel: false, daemonStale: false, piWebOutOfSync: false });
 });
 
-test("install.sh is relevant when pf is absent, behind, its daemon stale, or a run did not succeed", () => {
-  const v = (patch) => ({ pfPresent: true, installed: "v0.2.5", latest: "v0.2.5", running: "v0.2.5", piWeb: "0.2.5", ...patch });
+test("install.sh is relevant when pf is absent, behind, or cli.toml still needs a key — a current/ahead machine offers status only", () => {
+  const v = (patch) => ({ pfPresent: true, installed: "v0.2.5", latest: "v0.2.5", running: "v0.2.5", piWeb: "0.2.5", needsConfig: false, ...patch });
   assert.equal(pure.polyforgeInstallRelevant(v({}), null), false, "installed, current, daemon on it");
   assert.equal(pure.polyforgeInstallRelevant(v({ piWeb: "0.2.4" }), null), false, "Pi Web out of sync is not install.sh's to fix");
-  assert.equal(pure.polyforgeInstallRelevant(v({ pfPresent: false, installed: null }), null), true);
-  assert.equal(pure.polyforgeInstallRelevant(v({ latest: "v0.2.6" }), null), true);
-  assert.equal(pure.polyforgeInstallRelevant(v({ running: "v0.2.4" }), null), true);
+  assert.equal(pure.polyforgeInstallRelevant(v({ pfPresent: false, installed: null }), null), true, "pf absent installs");
+  assert.equal(pure.polyforgeInstallRelevant(v({ latest: "v0.2.6" }), null), true, "the channel is ahead: update");
+  assert.equal(pure.polyforgeInstallRelevant(v({ needsConfig: true }), null), true, "cli.toml still needs a key: the run writes it");
+  // owner ruling B: an installed machine provides update/retry/force only when
+  // the channel is known to be ahead — equal, ahead and unknown states are status only
+  assert.equal(pure.polyforgeInstallRelevant(v({ running: "v0.2.4" }), null), false, "a stale daemon is a status, not an update");
+  assert.equal(pure.polyforgeInstallRelevant(v({ installed: "v0.2.5", latest: "v0.2.4" }), null), false, "ahead of the channel: no update");
+  assert.equal(pure.polyforgeInstallRelevant(v({ installed: "v0.2.4-dev.49", latest: "v0.2.4" }), null), true, "below the channel release: update");
   assert.equal(pure.polyforgeInstallRelevant(null, null), false, "unknown versions prove nothing");
-  for (const state of ["running", "refused", "failed"]) assert.equal(pure.polyforgeInstallRelevant(v({}), { state }), true, state);
+  for (const state of ["refused", "failed"]) assert.equal(pure.polyforgeInstallRelevant(v({}), { state }), false, `${state} on a current machine is status only`);
+  assert.equal(pure.polyforgeInstallRelevant(v({}), { state: "running" }), false, "a run on a current machine is status only");
+  assert.equal(pure.polyforgeInstallRelevant(v({ installed: "v0.2.5", latest: "v0.2.4" }), { state: "running" }), true, "an ahead machine keeps the running explanation");
+  assert.equal(pure.polyforgeInstallRelevant(v({ latest: "v0.2.6" }), { state: "failed" }), true, "a failed update below the channel can retry");
   assert.equal(pure.polyforgeInstallRelevant(v({}), { state: "succeeded" }), false);
 });
 

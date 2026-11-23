@@ -134,5 +134,7 @@ test("the step_tiers family parses pf's tier grammar and is Host-only beside the
   }
   // HOST_ONLY_KEYS stays exactly the two fixed lists — the family is a prefix, never an entry
   assert.deepEqual([...schema.HOST_ONLY_KEYS], [...schema.HOST_SCALAR_KEYS, ...schema.HOST_LIST_KEYS]);
-  assert.equal(schema.POLYFORGE_CONFIG_STEP_TIERS_MINIMUM_PF_VERSION, "0.2.4");
+  // polyforge#256 B1: the floor is `0.2.4-0`, so the 0.2.4 line's own
+  // dev.N pre-releases are capable while 0.2.3 and 2.20.x stay below.
+  assert.equal(schema.POLYFORGE_CONFIG_STEP_TIERS_MINIMUM_PF_VERSION, "0.2.4-0");
 });
