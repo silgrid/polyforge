@@ -231,11 +231,20 @@ func RunSupervise(rs RunSpec) int {
 				stopAll()
 			}
 		case <-deadline:
-			st.killed = true
 			deadline = nil
-			logf("the stop grace ran out: SIGKILL to every child still running")
+			// The run reports a SIGKILL only when one really ended a
+			// child still running: a straggler that already exited is
+			// not a SIGKILL, and the run must not answer 1 for it
+			// (polyforge#251).
+			killed := false
 			for _, p := range procs {
-				p.kill()
+				if p.kill() {
+					killed = true
+				}
+			}
+			st.killed = killed
+			if killed {
+				logf("the stop grace ran out: SIGKILL to every child still running")
 			}
 		}
 		if st.active && allSettled() {
@@ -449,10 +458,10 @@ func (p *supProc) term() {
 func (p *supProc) kill() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.cmd != nil && p.cmd.Process != nil {
-		_ = p.cmd.Process.Kill()
+	if p.cmd == nil || p.cmd.Process == nil {
+		return false
 	}
-	return false
+	return p.cmd.Process.Kill() == nil
 }
 
 // backoff answers the nth consecutive failure's restart delay: first
