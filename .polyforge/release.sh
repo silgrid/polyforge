@@ -673,6 +673,15 @@ if _top=$(git rev-parse --show-toplevel 2>/dev/null) && [ -f "$_top/$RELEASE_CON
     || die "$RELEASE_CONF: suffix=\"$SUFFIX\" is not one alphanumeric identifier starting with a letter; nothing done"
   [ -n "$UPSTREAM" ] || die "$RELEASE_CONF: suffix=$SUFFIX needs upstream=<the public repository> (its vX.Y.Z tags are the base versions); nothing done"
   TAG_RE="^v[0-9]+\.[0-9]+\.[0-9]+-$SUFFIX\.[0-9]+\$"
+  # The workstation image's channel (polyforge#86): a suffixed (internal)
+  # line MUST name its own workstation image repository explicitly - this
+  # line switches channels by owner-side environment alone, and an
+  # internal release that silently pushed its workstation image to the
+  # public package would be exactly that mistake. Refused before any work,
+  # in both modes.
+  if [ -z "${RELEASE_WORKSTATION_IMAGE:-}" ]; then
+    die "RELEASE_WORKSTATION_IMAGE is not set but this line is suffixed (suffix=$SUFFIX): the workstation image would go to the public package $WS_IMAGE - set RELEASE_WORKSTATION_IMAGE=<the internal workstation image repository> and run again; nothing done"
+  fi
 fi
 
 # The tag (git push REMOTE) and the release (gh -R GH_REPO) must land in ONE

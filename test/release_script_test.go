@@ -2129,7 +2129,7 @@ func TestReleaseScriptSuffixVersion(t *testing.T) {
 	t.Run("row 1: first suffixed release of the public v0.2.0", func(t *testing.T) {
 		w := newRelSuffixWorld(t, relSuffixConf("fork"))
 		head := relGit(t, w.work, "rev-parse", "HEAD")
-		out, err := w.runPinned(nil)
+		out, err := w.runPinned([]string{"RELEASE_WORKSTATION_IMAGE=ghcr.io/example-org/fork-workstation"})
 		if err != nil || !strings.Contains(out, "version=v0.2.0-fork.1\n") {
 			t.Fatalf("want version v0.2.0-fork.1: %v\n%s", err, out)
 		}
@@ -2149,7 +2149,7 @@ func TestReleaseScriptSuffixVersion(t *testing.T) {
 		if strings.Contains(string(body), "second change") || strings.Contains(string(body), "topic-second") {
 			t.Fatalf("the notes of the first suffixed release must not list the pre-absorption history:\n%s", body)
 		}
-		vout, verr := w.run(nil, "--verify", "v0.2.0-fork.1")
+		vout, verr := w.run([]string{"RELEASE_WORKSTATION_IMAGE=ghcr.io/example-org/fork-workstation"}, "--verify", "v0.2.0-fork.1")
 		if verr != nil || strings.Contains(vout, "FAIL") ||
 			!strings.Contains(vout, "since v0.2.0 came through a merged PR") {
 			t.Fatalf("case 7: --verify v0.2.0-fork.1 must pass against the public v0.2.0: %v\n%s", verr, vout)
@@ -2160,7 +2160,7 @@ func TestReleaseScriptSuffixVersion(t *testing.T) {
 	t.Run("row 2: the next number of the same base", func(t *testing.T) {
 		w := newRelSuffixWorld(t, relSuffixConf("fork"))
 		w.tagOn("v0.2.0-fork.3", "HEAD^1")
-		out, err := w.runPinned(nil)
+		out, err := w.runPinned([]string{"RELEASE_WORKSTATION_IMAGE=ghcr.io/example-org/fork-workstation"})
 		if err != nil || !strings.Contains(out, "version=v0.2.0-fork.4\n") {
 			t.Fatalf("want version v0.2.0-fork.4: %v\n%s", err, out)
 		}
@@ -2172,7 +2172,7 @@ func TestReleaseScriptSuffixVersion(t *testing.T) {
 		w := newRelSuffixWorld(t, relSuffixConf("fork"))
 		w.tagOn("v0.2.0-fork.4", "HEAD")
 		w.absorbPublic("v0.2.1")
-		out, err := w.runPinned(nil)
+		out, err := w.runPinned([]string{"RELEASE_WORKSTATION_IMAGE=ghcr.io/example-org/fork-workstation"})
 		if err != nil || !strings.Contains(out, "version=v0.2.1-fork.1\n") {
 			t.Fatalf("want version v0.2.1-fork.1: %v\n%s", err, out)
 		}
@@ -2185,7 +2185,7 @@ func TestReleaseScriptSuffixVersion(t *testing.T) {
 			strings.Contains(string(body), "second change") {
 			t.Fatalf("the notes between the line's own versions must keep the whole range: %v\n%s", nerr, body)
 		}
-		vout, verr := w.run(nil, "--verify", "v0.2.1-fork.1")
+		vout, verr := w.run([]string{"RELEASE_WORKSTATION_IMAGE=ghcr.io/example-org/fork-workstation"}, "--verify", "v0.2.1-fork.1")
 		if verr != nil || strings.Contains(vout, "FAIL") ||
 			!strings.Contains(vout, "since v0.2.0-fork.4 came through a merged PR") {
 			t.Fatalf("case 7: --verify v0.2.1-fork.1 must pass against v0.2.0-fork.4: %v\n%s", verr, vout)
@@ -2206,10 +2206,10 @@ func TestReleaseScriptSuffixVersion(t *testing.T) {
 	// resumed, never released as a second version.
 	t.Run("case 6: a claimed suffixed version is resumed", func(t *testing.T) {
 		w := newRelSuffixWorld(t, relSuffixConf("fork"))
-		if out, err := w.runPinned([]string{"FAKE_PUSH_FAIL=1"}); err == nil || !strings.Contains(out, "FAILED AFTER v0.2.0-fork.1 WAS CLAIMED") {
+		if out, err := w.runPinned([]string{"RELEASE_WORKSTATION_IMAGE=ghcr.io/example-org/fork-workstation", "FAKE_PUSH_FAIL=1"}); err == nil || !strings.Contains(out, "FAILED AFTER v0.2.0-fork.1 WAS CLAIMED") {
 			t.Fatalf("setup: the first run must fail after claiming v0.2.0-fork.1: %v\n%s", err, out)
 		}
-		out, err := w.runPinned([]string{"FAKE_REGISTRY_MISSING=1"})
+		out, err := w.runPinned([]string{"RELEASE_WORKSTATION_IMAGE=ghcr.io/example-org/fork-workstation", "FAKE_REGISTRY_MISSING=1"})
 		if err != nil || !strings.Contains(out, "resuming v0.2.0-fork.1") || !strings.Contains(out, "version=v0.2.0-fork.1\n") {
 			t.Fatalf("the re-run must resume v0.2.0-fork.1: %v\n%s", err, out)
 		}
@@ -2222,7 +2222,7 @@ func TestReleaseScriptSuffixVersion(t *testing.T) {
 	// Case 8: the name is the configuration's, not the script's.
 	t.Run("case 8: another configured name", func(t *testing.T) {
 		w := newRelSuffixWorld(t, relSuffixConf("other"))
-		out, err := w.runPinned(nil)
+		out, err := w.runPinned([]string{"RELEASE_WORKSTATION_IMAGE=ghcr.io/example-org/other-workstation"})
 		if err != nil || !strings.Contains(out, "version=v0.2.0-other.1\n") {
 			t.Fatalf("want version v0.2.0-other.1: %v\n%s", err, out)
 		}
