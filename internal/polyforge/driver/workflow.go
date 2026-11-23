@@ -88,6 +88,10 @@ type StepSpec struct {
 	// file and the command the daemon's done gate reads for every task
 	// repo the step changed.
 	FastCheckProof *workflow.FastCheckProof
+	// FactsProof mirrors `facts_proof` (nil = none): the mechanical facts
+	// summary (facts.py handoff) the done gate reads for every task repo
+	// the step changed (polyforge#241).
+	FactsProof *workflow.FastCheckProof
 }
 
 // HubAllowed answers the `pf step hub` verbs step id may call: its
@@ -350,6 +354,7 @@ func workflowOf(lane *workflow.Lane) *Workflow {
 			HubAttrs:       s.HubAttrs,
 			WrapAttrs:      s.WrapAttrs,
 			FastCheckProof: s.FastCheckProof,
+			FactsProof:     s.FactsProof,
 		}
 		if s.OnFailTarget != "" {
 			step.OnFail = &OnFail{Target: s.OnFailTarget}

@@ -191,6 +191,11 @@ type Step struct {
 	// FastCheckProof is `fast_check_proof` (nil = none): the fast-check
 	// proof this step's done needs for each task repo it changed.
 	FastCheckProof *FastCheckProof
+	// FactsProof is `facts_proof` (nil = none): the mechanical facts
+	// summary (facts.py handoff) this step's done needs for each task repo
+	// it changed (polyforge#241). It shares fast_check_proof's shape: a
+	// result file's path template and the one command that writes it.
+	FactsProof *FastCheckProof
 	// Params is `params` (nil = none): the step's declared parameters,
 	// each name to its lane-default value (a single-line string). The
 	// final value is composed at every dispatch (lane default, the
