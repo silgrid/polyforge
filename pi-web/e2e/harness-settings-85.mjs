@@ -1066,7 +1066,7 @@ try {
   await part("S30", "read-only tier badge", async () => {
     await startTierServer();
     const page = await newPage();
-    seedTiers({ default: ["pi:tierdemo/opus", "claude:opus"] });
+    seedTiers({ default: ["pi:anthropic/opus", "claude:opus"] });
     await tierPageMocks(page);
     await openSettings(page);
     await tab(page, /^Models$/).click({ timeout: ACTION_MS });
@@ -1090,7 +1090,7 @@ try {
   // short read-only labels, default first.
   await part("S31", "per-harness badges", async () => {
     const page = await newPage();
-    seedTiers({ default: ["pi:tierdemo/opus"], "fast-chat": ["claude:opus"] });
+    seedTiers({ default: ["pi:anthropic/opus"], "fast-chat": ["claude:opus"] });
     await tierPageMocks(page);
     await openSettings(page);
     await tab(page, /^Models$/).click({ timeout: ACTION_MS });
@@ -1133,7 +1133,7 @@ try {
   // no interactive control, and no step-tier write reaches pf from the page.
   await part("S33", "no write entry", async () => {
     const page = await newPage();
-    seedTiers({ default: ["pi:tierdemo/opus"] });
+    seedTiers({ default: ["pi:anthropic/opus"] });
     await tierPageMocks(page);
     await openSettings(page);
     await tab(page, /^Models$/).click({ timeout: ACTION_MS });
@@ -1151,7 +1151,7 @@ try {
   // external writer changes [step_tiers]; a reload shows the new 归属.
   await part("S34", "external write re-read", async () => {
     const page = await newPage();
-    seedTiers({ default: ["pi:tierdemo/opus", "claude:opus"] });
+    seedTiers({ default: ["pi:anthropic/opus", "claude:opus"] });
     await tierPageMocks(page);
     await openSettings(page);
     await tab(page, /^Models$/).click({ timeout: ACTION_MS });
@@ -1160,7 +1160,7 @@ try {
     await cell.waitFor({ state: "visible", timeout: ACTION_MS });
     assert.match(await cell.innerText(), /default/, "the row starts sharing default");
     // the external write (another tab, the CLI) moves claude to fast-chat
-    seedTiers({ default: ["pi:tierdemo/opus"], "fast-chat": ["claude:opus"] });
+    seedTiers({ default: ["pi:anthropic/opus"], "fast-chat": ["claude:opus"] });
     await goto(page);
     await clickSettingsButton(page);
     await dialog(page).waitFor({ state: "visible", timeout: COLD_MS });

@@ -308,7 +308,7 @@ try {
 
   // ---- E4: the run outlives its page; one at a time; reopening shows it ----
   await check(T.E4, "close and reopen", async () => {
-    setState({ script: "hold", tag: "v0.2.7" });
+    setState({ script: "hold", tag: "v0.2.8" });
     rmSync(releaseFile, { force: true });
     const first = await openPage();
     let card;
@@ -364,7 +364,7 @@ try {
 
   // ---- E5: refused while jobs run; a separately confirmed force ----
   await check(T.E5, "refusal and force", async () => {
-    setState({ script: "refuse", tag: "v0.2.7", jobs: [{ work_item_id: "wi_e2e7", slug: "demo#7", status: "running" }] });
+    setState({ script: "refuse", tag: "v0.2.9", jobs: [{ work_item_id: "wi_e2e7", slug: "demo#7", status: "running" }] });
     rmSync(recordLog, { force: true });
     const page = await openPage();
     try {
@@ -397,7 +397,7 @@ try {
 
   // ---- E6: failures ----
   await check(T.E6, "failures", async () => {
-    setState({ script: "fail", tag: "v0.2.7" });
+    setState({ script: "fail", tag: "v0.2.10" });
     const page = await openPage();
     try {
       const { card } = await openCard(page);
