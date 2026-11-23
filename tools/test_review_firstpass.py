@@ -8,7 +8,9 @@ hand-derived from the ticket, never read out of the tool.
 
 polyforge#261 adds the delivery-metric regressions: the rework measure counts
 each dispatch of overlapping rewind windows once and subtracts a coordinator
-pause (`job_finished{reason: paused}` to the next `job_started`).
+pause (`job_finished{reason: paused}` to the next `job_started`), and the
+estimate line ignores a description line, a fenced code block and the
+`## 历次分析` archive.
 
 Run from the repository root:
   python3 -m unittest discover -s tools -p 'test_review_firstpass*.py'
@@ -463,6 +465,32 @@ class ReworkCaliberTest(unittest.TestCase):
         self.assertEqual(rework, 50 * 60)
         self.assertEqual(rf.wall_s(events), 100 * 60)
         self.assertLessEqual(rework, rf.wall_s(events))
+
+class EstimateScopeTest(unittest.TestCase):
+    """AC2 of polyforge#261: a description line before the estimate, a fenced
+    estimate block and the `## 历次分析` archive never change which estimate
+    the ticket carries. The expected 2 + 3 = 5 is the current analysis's own
+    strict line, hand-read from the fixture."""
+
+    _CONTENT = (
+        '## 分析\n\n### 1. 改动范围\n\n'
+        '估算依据：按文件数上限估算。\n'
+        '```\n'
+        '估算：polyforge 新增 9 个文件、修改 9 个文件、单元 3 个\n'
+        '```\n'
+        '估算：polyforge 新增 2 个文件、修改 3 个文件、单元 1 个\n'
+        '\n## 历次分析\n\n<details><summary>旧分析</summary>\n\n'
+        '````markdown\n## 分析\n\n### 1. 改动范围\n\n'
+        '估算：polyforge 新增 5 个文件、修改 5 个文件、单元 2 个\n````\n\n'
+        '</details>\n\n'
+        '估算：polyforge 新增 4 个文件、修改 4 个文件、单元 1 个\n')
+
+    def test_estimate_scope_ignores_descriptions_fences_and_the_archive(self):
+        cap = tempfile.mkdtemp()
+        os.makedirs(os.path.join(cap, 'runtime-state'))
+        with open(os.path.join(cap, 'runtime-state', 'work-item.json'), 'w') as f:
+            json.dump({'content': self._CONTENT}, f)
+        self.assertEqual(rf.parse_estimate(cap), 5)
 
 
 if __name__ == '__main__':
