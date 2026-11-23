@@ -6,6 +6,10 @@ owner's asks.jsonl rulings (entry numbers only, never inferred from prose),
 the class/model summary, and the unknown-outcome reasons. Expected values are
 hand-derived from the ticket, never read out of the tool.
 
+polyforge#261 adds the delivery-metric regressions: the rework measure counts
+each dispatch of overlapping rewind windows once and subtracts a coordinator
+pause (`job_finished{reason: paused}` to the next `job_started`).
+
 Run from the repository root:
   python3 -m unittest discover -s tools -p 'test_review_firstpass*.py'
 """
@@ -388,6 +392,77 @@ class DocstringCaliberTest(unittest.TestCase):
                 'last mention still open outranks',
         ):
             self.assertIn(phrase, doc, 'the docstring must state: ' + phrase)
+
+
+class ReworkCaliberTest(unittest.TestCase):
+    """AC1 of polyforge#261: overlapping rewind windows count one dispatch
+    once, and a coordinator pause inside a dispatch is subtracted.
+
+    Timeline (all 2026-11-10Z), read as the daemon writes it: build 10:00
+    -> 10:20, review 10:20 -> 10:30 FAIL, rewind #1; build 10:30 -> 10:40,
+    review 10:40 -> 10:50 FAIL, rewind #2; build 10:50 -> 11:00, review
+    11:00 starts, the coordinator pauses 11:10 -> 11:30, review resumes and
+    ends 11:40 PASS. The two rewind windows ([10:30, 11:40] and [10:50,
+    11:40]) overlap; hand-computed, each of the five dispatches they cover
+    counts once (10 + 10 + 10 + (30 - 20) + 10 = 50m) and the effective
+    time is 100m, so the rework is 50m and never exceeds the effective
+    time. The old per-rewind sum double-counts the second window and keeps
+    the 20m pause (70 + 50 = 120m, above the 100m effective time)."""
+
+    _KINDS = [
+        # (clock, kind, step) — the body each kind carries.
+        ('10:00:00', 'job_started', ''),
+        ('10:00:00', 'step_started', 'build'),
+        ('10:20:00', 'step_done', 'build'),
+        ('10:20:00', 'step_started', 'review'),
+        ('10:30:00', 'gate_verdict', 'review'),
+        ('10:30:00', 'rewind', ''),
+        ('10:30:00', 'step_started', 'build'),
+        ('10:40:00', 'step_done', 'build'),
+        ('10:40:00', 'step_started', 'review'),
+        ('10:50:00', 'gate_verdict', 'review'),
+        ('10:50:00', 'rewind', ''),
+        ('10:50:00', 'step_started', 'build'),
+        ('11:00:00', 'step_done', 'build'),
+        ('11:00:00', 'step_started', 'review'),
+        ('11:10:00', 'job_finished', ''),
+        ('11:30:00', 'job_started', ''),
+        ('11:30:00', 'step_started', 'review'),
+        ('11:40:00', 'step_done', 'review'),
+        ('11:40:00', 'terminal', ''),
+    ]
+
+    def _events(self):
+        cap = tempfile.mkdtemp()
+        with open(os.path.join(cap, 'capsule.json'), 'w') as f:
+            json.dump({'work_item_id': 'wi_test'}, f)
+        events_dir = os.path.join(cap, 'events')
+        os.makedirs(events_dir)
+        with open(os.path.join(events_dir, 'wi-wi_test.jsonl'), 'w') as f:
+            for seq, (clock, kind, step) in enumerate(self._KINDS, start=1):
+                if kind == 'rewind':
+                    body = {'gate': 'review', 'target': 'build', 'archived': ['build']}
+                elif kind == 'job_finished':
+                    body = {'reason': 'paused'}
+                elif kind == 'terminal':
+                    body = {'status': 'completed'}
+                elif step:
+                    body = {'step': step}
+                else:
+                    body = {}
+                f.write(json.dumps({'seq': seq, 'at': '2026-11-10T' + clock + 'Z',
+                                    'kind': kind, 'body': body}) + '\n')
+        return rf.load_events(cap, events_dir)
+
+    def test_overlapping_rewinds_and_a_pause(self):
+        events = self._events()
+        recs = rf.dispatch_records(events, rf.owner_wait_intervals(events))
+        rework = rf.rework_s(events, recs)
+        # 10 (build 10:30) + 10 (review 10:40) + 10 (build 10:50)
+        # + (30 - 20 pause) (review 11:00) + 10 (review 11:30).
+        self.assertEqual(rework, 50 * 60)
+        self.assertEqual(rf.wall_s(events), 100 * 60)
+        self.assertLessEqual(rework, rf.wall_s(events))
 
 
 if __name__ == '__main__':
