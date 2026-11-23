@@ -93,7 +93,7 @@ function useClaudeSubagentPanelHeight() {
 
   const onPointerDown = useCallback((event: PointerEvent<HTMLDivElement>) => {
     if (event.pointerType === "mouse" && event.button !== 0) return;
-    const panel = event.currentTarget.closest("[data-claude-subagent-panel]");
+    const panel = event.currentTarget.closest("[data-subagent-panel]");
     if (!panel) return;
     const bounds = panel.closest("[data-claude-subagent-panel-bounds]");
     const area = bounds ? bounds.clientHeight : window.innerHeight;
@@ -185,6 +185,7 @@ export function SubagentPanelFrame({
   return (
     <section
       {...panelAttrs}
+      data-subagent-panel=""
       aria-label={ariaLabel}
       style={{ display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, ...(height === null ? { maxHeight: "min(60vh, 560px)" } : { height }), overflow: "hidden", fontSize: 12, borderRadius: 8, border: `1px solid ${borderColor}`, borderLeftColor: failed || status === "failed" ? "#f87171" : accent, background: "var(--bg-panel)", boxShadow: "0 6px 24px rgba(0,0,0,0.18)" }}
     >
