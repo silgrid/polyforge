@@ -153,8 +153,7 @@ export function projectFirstBootRecord(raw: unknown): OnboardingConnection | nul
 
 /** The popup's facts (polyforge#167): whether the state API named the image,
  *  whether the wizard was dismissed, whether a session is selected, and
- *  whether 设置 › 常规 asked to reopen it. The pure decision the shell calls;
- *  a later unit fills it in. */
+ *  whether 设置 › 常规 asked to reopen it. */
 export interface OnboardingPopupFacts {
   imageManaged: boolean;
   dismissed: boolean;
@@ -162,6 +161,13 @@ export interface OnboardingPopupFacts {
   reopened: boolean;
 }
 
-export function onboardingPopupOpen(_facts: OnboardingPopupFacts): boolean {
-  return false;
+/**
+ * The one popup decision the shell calls. Image mode only; a dismissal wins
+ * until a reopen's write clears it (no flash ahead of the state it shows);
+ * and the automatic first-open popup belongs to the null-session branch — a
+ * selected session never auto-opens it, while 设置 › 常规's reopen does
+ * (Q6: reopen starts at the first unfinished step).
+ */
+export function onboardingPopupOpen(facts: OnboardingPopupFacts): boolean {
+  return facts.imageManaged && !facts.dismissed && (!facts.hasSelectedSession || facts.reopened);
 }

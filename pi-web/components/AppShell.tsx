@@ -100,7 +100,7 @@ import { getAgentsBadge, getSessionFamily, isHiddenRelation } from "@/lib/sessio
 import { getLastSettingsSection, settingsSectionRequiresProject, type SettingsSection } from "@/lib/settings-navigation";
 import { focusIfLost } from "@/lib/stacked-dialog";
 import { OnboardingWizard } from "./OnboardingWizard";
-import type { OnboardingStep, OnboardingView } from "@/lib/onboarding-flow";
+import { onboardingPopupOpen, type OnboardingStep, type OnboardingView } from "@/lib/onboarding-flow";
 
 type SessionCopyField = "file" | "id" | "projectDir" | "gitBranch" | "gitWorktree";
 /** The onboarding state API's answer: an image-mode view or the host-mode
@@ -489,6 +489,10 @@ export function AppShell() {
   // answers imageManaged:false and the wizard never mounts; `dismissed` is the
   // one popup switch, and the reopen entry clears it.
   const [onboarding, setOnboarding] = useState<OnboardingRead | null>(null);
+  // 设置 › 常规's reopen: opens the wizard over a selected session (Q6); a
+  // dismissal clears it, and the automatic popup stays on the null-session
+  // branch below.
+  const [onboardingReopened, setOnboardingReopened] = useState(false);
   // The plain Settings button opens a phone's Settings on its list of sections; shortcuts open theirs.
   const [settingsOpenAtHome, setSettingsOpenAtHome] = useState(false);
   const [modelsRefreshKey, setModelsRefreshKey] = useState(0);
@@ -932,9 +936,11 @@ export function AppShell() {
     void writeOnboarding({ action: "skip", step });
   }, [writeOnboarding]);
   const handleOnboardingDismiss = useCallback(() => {
+    setOnboardingReopened(false);
     void writeOnboarding({ action: "dismiss" });
   }, [writeOnboarding]);
   const handleOnboardingReopen = useCallback(() => {
+    setOnboardingReopened(true);
     setSettingsSection(null);
     void writeOnboarding({ action: "reopen" });
   }, [writeOnboarding]);
@@ -1980,9 +1986,19 @@ export function AppShell() {
   const projectTrustCwd = selectedSession?.cwd ?? effectiveNewSessionCwd;
   // While restoring initial session from URL, don't show the placeholder
   const showPlaceholder = initialSessionRestored && !showChat;
-  // AC1's popup: the first open shows it, a dismissal stops it, and Settings ›
-  // 常规's reopen clears the dismissal. Host mode never mounts it.
-  const onboardingOpen = onboarding?.imageManaged === true && !onboarding.dismissed;
+  // AC1's popup: the first open (the null-session branch) shows it, a
+  // dismissal stops it, and Settings › 常规's reopen opens it over a session.
+  // Host mode never mounts it; the decision is the pure function's.
+  const onboardingOpen = onboardingPopupOpen({
+    imageManaged: onboarding?.imageManaged === true,
+    dismissed: onboarding?.imageManaged === true ? onboarding.dismissed : false,
+    hasSelectedSession: selectedSession !== null,
+    reopened: onboardingReopened,
+  });
+  // A positive read flag for the e2e: the shell applied the state API's
+  // answer (host, dismissed, or open) — an absence assertion polls this
+  // instead of racing the first read.
+  const onboardingRead = onboarding === null ? undefined : onboarding.imageManaged ? (onboarding.dismissed ? "dismissed" : "open") : "host";
 
   // Pane-tab restore (this wi): a browser reload re-opens every previously
   // open split-view pane, not just the single ?session= deep-link target.
@@ -3096,7 +3112,7 @@ export function AppShell() {
         }
       }
     `}</style>
-    <div style={{
+    <div data-onboarding-read={onboardingRead} style={{
       display: "flex",
       width: "100%",
       height: "var(--app-viewport-height, 100dvh)",

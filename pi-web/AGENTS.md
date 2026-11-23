@@ -160,6 +160,7 @@ lib/
   components-update-client.ts      断线后继续轮询组件状态，关闭面板后停止
   components-upgrade.ts            从组件卷读状态，以独立进程启动 CLI 升级、回退、取消
   workstation-mode.ts              通过只读种子 manifest 判断工作站镜像身份
+  onboarding-flow.ts               the onboarding vocabulary and pure transitions the client wizard imports (four steps, merge/migration, next step, 跳过, dismiss/reopen, the popup truth table `onboardingPopupOpen`); no fs, so the wizard's client bundle never pulls the server reads
   onboarding-state.ts              the versioned onboarding state (`agentDir/pi-web-onboarding.json`: four steps + `dismissed`), its read-merge-write and migration (known steps kept, unknown ones 「未完成」), and #162's first-boot record projected through a closed whitelist (no key/token/error)
   agent-client.ts      typed fetch helper for /api/agent commands
   bg-supervisor.ts          process layer of the built-in background tasks (#172): one wrapper process (detached group leader, `node -e`) per task running /bin/sh -c, byte-capped log writing, the host-pid watch (the server's SIGKILL death kills the group, AC4), an R-ready handshake and the stopped/log-limit reports
