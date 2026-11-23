@@ -251,5 +251,21 @@ func CurrentDispatch(ex *Execution) (step string, spawn int64, ok bool) {
 // or a clock that makes the stamp untrustworthy) — the safe default: no
 // automatic reply, the question keeps waiting for its owner.
 func AwaitingSince(lines []AskLine, step string, spawn int64, askAt string, now time.Time) (time.Time, bool) {
-	return time.Time{}, false
+	var earliest time.Time
+	for _, l := range lines {
+		if l.Kind != AskKindAwaiting || l.Step != step || l.Spawn != spawn || l.AskAt != askAt {
+			continue
+		}
+		t, err := time.Parse(time.RFC3339Nano, l.At)
+		if err != nil || t.After(now) {
+			continue
+		}
+		if earliest.IsZero() || t.Before(earliest) {
+			earliest = t
+		}
+	}
+	if earliest.IsZero() {
+		return time.Time{}, false
+	}
+	return earliest, true
 }
