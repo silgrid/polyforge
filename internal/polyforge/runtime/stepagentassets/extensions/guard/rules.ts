@@ -663,3 +663,53 @@ export function syntaxNote(displayPath: string, plan: SyntaxCheckPlan, outcome: 
 			return `step guard: syntax check could not run for ${displayPath}: ${outcome.why}`;
 	}
 }
+
+// ---------------------------------------------------------------------------
+// build's whole-suite test guard (polyforge#243)
+
+export interface CommandSegment {
+	dir: string;
+	argv: string[];
+}
+
+export interface TestEntry {
+	dir: string;
+	argv: string[];
+}
+
+export interface RootProjection {
+	root: string;
+	full: TestEntry[];
+	cheap: TestEntry[];
+}
+
+export interface FullSuiteVerdict {
+	block: true;
+	rule: "full-test";
+	trigger: string;
+	reason: string;
+}
+
+export function parseCommandSegments(_command: string, _startDir: string): CommandSegment[] {
+	return [];
+}
+
+export function normalizeArgv(argv: string[]): string[] {
+	return argv;
+}
+
+export function testRunner(_argv: string[]): { words: string[]; rest: string[] } | undefined {
+	return undefined;
+}
+
+export function isWholeTreeRun(_argv: string[]): boolean {
+	return false;
+}
+
+export function commandKey(dir: string, argv: string[]): string {
+	return dir + ":" + argv.join(" ");
+}
+
+export function judgeFullSuite(_segments: CommandSegment[], _projections: RootProjection[], _capsuleDir: string): FullSuiteVerdict | undefined {
+	return undefined;
+}
