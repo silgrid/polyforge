@@ -45,6 +45,21 @@ func TestW241ReviewGateContract(t *testing.T) {
 		}
 	}
 
+	// The semantic items stay blocking on their own (the gate judges none of
+	// them): the judge fragment states it in so many words (polyforge#241
+	// review r2#1 — "So is …" must not put them in the subset).
+	judge := w68Flat(t, "workflows/develop/fragments/review-judge.md")
+	if !strings.Contains(judge, strings.Join(strings.Fields(
+		"A deleted or relaxed assertion, a changed helper or fixture the test relies on, or an input changed so the assertion holds trivially, with no finding cited for it in build's 关键决定和理由, is blocking `test_weakened`"), " ")) {
+		t.Errorf("the judge fragment must keep the semantic test_weakened items blocking on their own")
+	}
+	// the skill's pre_existing_red sentence follows the same subset (N12)
+	skill := w68Flat(t, "workflows/_shared/skills/review.md")
+	if !strings.Contains(skill, strings.Join(strings.Fields(
+		"a replay that exited 0 there (the test was green before the change, so it was not already red) is in the same subset"), " ")) {
+		t.Errorf("the skill's pre_existing_red replay sentence must follow the gate subset")
+	}
+
 	// the two documents that describe review's behaviour state the same subset
 	for rel, wants := range map[string][]string{
 		"docs/concepts.md": {
@@ -73,10 +88,12 @@ func TestW241ReviewGateContract(t *testing.T) {
 			"a replay that exited 0 there (the test was green before the change) is blocking `test_weakened`",
 			"neither red nor a pass: blocking `test_weakened`, naming the unit and its `rule`",
 			"is a blocking `test_weakened` finding naming the entry",
+			"So is a deleted or relaxed assertion, a new skip, a changed `carries:` header, a changed helper or fixture the test relies on, or an input changed so the assertion holds trivially, with no finding cited for it in build's 关键决定和理由.",
 		},
 		"workflows/_shared/skills/review.md": {
 			"The resolution and commits facts are static — the same ones build's close ran without the replay (`facts.py build`) — and they block in every round",
 			"each `problems` entry is blocking `test_weakened`, in every round",
+			"is blocking `test_weakened` too",
 		},
 		"docs/concepts.md": {
 			"its red evidence is missing, `test_weakened` too",

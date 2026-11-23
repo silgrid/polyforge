@@ -219,6 +219,53 @@ class HandoffCase(GitCase):
         self.assertIn("D5", self.items(res))
         self.assertIn("adds a skip", res["summary"])
 
+    def test_d5_a_go_contract_test_carries_comment_is_no_suite(self) -> None:
+        # a Go test file's `// carries:` line is a comment, not a suite
+        # declaration (AGENTS.md): changing it is a semantic hunk for review,
+        # never D5's deterministic marker (review r2 N15)
+        base = {"app.go": "package app\n",
+                "internal/contracttest/x_test.go": "// carries: app.go\n\npackage test\n"}
+        cap, repo = self.capsule("d5-nonsuite", base)
+        test = repo.commit("u1: test", {"test/check_test.sh": UNIT_TEST,
+                                        "internal/contracttest/x_test.go": "// carries: app.go\n\npackage test\n\n// pin\n"})
+        impl = repo.commit("u1: impl", {"answer.txt": "42\n"})
+        repo.commit("rewire the comment", {"internal/contracttest/x_test.go":
+                                           "// carries: app.go, internal/contracttest/x_test.go\n\npackage test\n\n// pin\n"})
+        write(cap, {
+            "artifacts/plan.md": plan(["answer.txt", "internal/contracttest/x_test.go"]),
+            "artifacts/build/units.json": json.dumps([
+                {"id": "u1", "test_commit": test, "impl_commit": impl,
+                 "run": {"repo": "app", "cwd": ".", "argv": ["sh", "test/check_test.sh"]},
+                 "marker": "^ok$"}]),
+            "artifacts/build/change-analysis.json": json.dumps(CLEAN_ANALYSIS),
+        })
+        code, res = self.run_handoff(cap)
+        self.assertEqual(code, 0, res["summary"])
+        self.assertNotIn("D5", self.items(res))
+        reasons = " ".join(h["reason"] for h in res["details"]["test_weakened"])
+        self.assertIn("deletes or changes", reasons, "the comment change stays a semantic hunk for review")
+
+    def test_d5_an_e2e_suite_carries_header_change_is_a_hit(self) -> None:
+        # an e2e suite's carries: header is its selection declaration: a
+        # change with no cited finding is D5, suite or not (regression guard)
+        cap, repo = self.capsule("d5-suite", dict(CARRIES_SEED))
+        test = repo.commit("u1: test", {"test/check_test.sh": UNIT_TEST,
+                                        "web/e2e/run.mjs": '// carries: lib/run*\n\nimport "node:assert";\n\n// edit\n'})
+        impl = repo.commit("u1: impl", {"answer.txt": "42\n"})
+        repo.commit("rewire the suite", {"web/e2e/run.mjs": '// carries: lib/panel*\n\nimport "node:assert";\n\n// edit\n'})
+        write(cap, {
+            "artifacts/plan.md": plan(["answer.txt", "web/e2e/run.mjs"]),
+            "artifacts/build/units.json": json.dumps([
+                {"id": "u1", "test_commit": test, "impl_commit": impl,
+                 "run": {"repo": "app", "cwd": ".", "argv": ["sh", "test/check_test.sh"]},
+                 "marker": "^ok$"}]),
+            "artifacts/build/change-analysis.json": json.dumps(CLEAN_ANALYSIS),
+        })
+        code, res = self.run_handoff(cap)
+        self.assertEqual(code, 1, res["summary"])
+        self.assertIn("D5", self.items(res))
+        self.assertIn("changes the `carries:` header", res["summary"])
+
     def test_d5_a_plain_deletion_is_listed_not_taken(self) -> None:
         cap, repo = self.capsule("d5-plain")
         self.sound_unit(cap, repo, ["answer.txt"])
