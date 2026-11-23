@@ -378,7 +378,7 @@ BLOCK_HEADING = re.compile(r'^\s{0,3}(#{2,4})\s+(.*)$')
 BLOCK_LIST = re.compile(r'^\s*(?:[-*]|\d+\.)\s+(.*)$')
 BLOCK_SECTION_BLOCK = re.compile(r'阻断|阻塞|blocking')
 BLOCK_SECTION_NON = re.compile(r'非阻断|非阻塞|non-blocking')
-BLOCK_SUMMARY = re.compile(r'(\d+)\s*条?\s*(?:阻断|阻塞|blocking)|(?:阻断|阻塞|blocking)\s*(\d+)\s*条')
+BLOCK_SUMMARY = re.compile(r'(\d+)\s*条?\s*(?<!非)(?:阻断|阻塞)|(?<!non-)blocking\s*(\d+)\s*条|(\d+)\s*(?<!non-)blocking')
 BLOCK_OUTCOMES = ('fixed', 'rebutted', 'owner', 'withdrawn-unknown', 'unknown')
 BLOCK_REASONS = ('no later round', 'later rounds do not mention it',
                  'PASS round without naming it', 'owner words without an item number',
@@ -410,7 +410,7 @@ def blocking_count_in_summary(text):
         if '结论' in line or 'Conclusion' in line:
             m = BLOCK_SUMMARY.search(line)
             if m:
-                return int(m.group(1) or m.group(2))
+                return int(next(g for g in m.groups() if g))
     return None
 
 
@@ -485,12 +485,13 @@ def parse_blocking_items(text, round_no):
         if not m or section_non:
             continue
         label = _item_label(line)
-        numbered = bool(BLOCK_REF.search(label) or re.search(r'#\d+', label)
-                        or re.match(r'^\d+\.', label) or label.startswith('**'))
+        numbered = bool(BLOCK_REF.search(label) or re.search(r'#\d+', label))
         if not numbered and not section_blocking:
+            # the old numbered form under `## 发现`: `1. **ac_gap AC2**`
+            numbered = bool(re.match(r'^\d+\.', label) or label.startswith('**'))
+        if not numbered:
             continue
-        fallback = (max(seen) + 1) if (section_blocking and seen) else (1 if section_blocking else None)
-        num, ref_round = _item_number(label, fallback)
+        num, ref_round = _item_number(label, None)
         if num is None or (ref_round is not None and ref_round != round_no):
             continue
         if _is_blocking_line(label, section_blocking, section_non) and num not in seen:
@@ -626,7 +627,7 @@ def outcome_of_line(line):
         if re.search(r'build|证据|evidence', line, re.I):
             return 'rebutted'
         return 'withdrawn-unknown'
-    if re.search(r'已修|修复|修掉|已解决|已改|已补|fixed', line, re.I):
+    if re.search(r'已修复|已修|修好|修掉|已解决|已改|已补|fixed', line, re.I):
         return 'fixed'
     return None
 
