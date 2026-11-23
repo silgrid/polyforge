@@ -1,0 +1,108 @@
+package daemon
+
+// autoanswer_feed_test.go: the decision feed's automatic-reply entry
+// (decisions.go; polyforge#239). The event resolves the open question's
+// needs_input entry as replied and records its own distinguishable
+// information entry.
+
+import (
+	"encoding/json"
+	"path/filepath"
+	"sync"
+	"testing"
+
+	"github.com/silgrid/polyforge/internal/common/capsule"
+	"github.com/silgrid/polyforge/internal/common/protocol"
+	"github.com/silgrid/polyforge/internal/polyforge/driver"
+)
+
+func TestAutoAnswerFeedEntry(t *testing.T) {
+	f, err := newDecisionFeed(filepath.Join(t.TempDir(), "decisions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		wi    = "wi_feed"
+		askAt = "2026-11-23T00:00:00Z"
+	)
+	askBody, _ := json.Marshal(map[string]any{"step": "build", "spawn_n": 1, "ask_at": askAt, "question_id": askAt, "question": "q"})
+	f.Ingest("default", protocol.EventEntry{At: "2026-11-23T00:00:01Z", WI: wi, Kind: driver.EvAwaitingOwner, Body: askBody}, nil)
+	autoBody, _ := json.Marshal(map[string]any{
+		"step": "build", "spawn_n": 1, "ask_at": askAt, "question_id": askAt, "at": "2026-11-23T00:30:00Z",
+		"by": capsule.AutoAnswerBy, "elapsed": "30m0s", "timeout": "30m0s", "recommendations": []string{"A"},
+	})
+	f.Ingest("default", protocol.EventEntry{At: "2026-11-23T00:30:00Z", WI: wi, Kind: driver.EvAutoAnswered, Body: autoBody}, nil)
+
+	var needs, auto *protocol.Decision
+	feed := f.List()
+	for i := range feed.Decisions {
+		switch feed.Decisions[i].Class {
+		case "needs_input":
+			needs = &feed.Decisions[i]
+		case "auto_answered":
+			auto = &feed.Decisions[i]
+		}
+	}
+	if auto == nil || auto.Phrase != "已自动按推荐继续" || auto.Attention {
+		t.Fatalf("auto entry = %+v, want the fixed phrase and no attention", auto)
+	}
+	if needs == nil || !needs.Replied || needs.RepliedAt != "2026-11-23T00:30:00Z" || needs.Attention {
+		t.Fatalf("needs_input entry = %+v, want it replied at the auto reply's stamp", needs)
+	}
+
+	// A restart re-emits the event from the reply (the authority): the feed
+	// keeps one entry per question.
+	f.Ingest("default", protocol.EventEntry{At: "2026-11-23T00:45:00Z", WI: wi, Kind: driver.EvAutoAnswered, Body: autoBody}, nil)
+	var autoEntries int
+	for _, e := range f.List().Decisions {
+		if e.Class == "auto_answered" {
+			autoEntries++
+		}
+	}
+	if autoEntries != 1 {
+		t.Fatalf("auto_answered entries = %d, want the re-emission deduped to one", autoEntries)
+	}
+}
+
+// The Host-shared feed is written by every Cell: the automatic-reply
+// dedupe and append are one f.mu section, so concurrent Ingest, List and
+// Dismiss neither race on f.doc.Entries nor leave a second entry for the
+// question (run with -race).
+func TestAutoAnswerFeedConcurrentIngest(t *testing.T) {
+	f, err := newDecisionFeed(filepath.Join(t.TempDir(), "decisions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		wi    = "wi_feed_race"
+		askAt = "2026-11-23T00:00:00Z"
+	)
+	body, _ := json.Marshal(map[string]any{
+		"step": "build", "spawn_n": 1, "ask_at": askAt, "question_id": askAt, "at": "2026-11-23T00:30:00Z",
+		"by": capsule.AutoAnswerBy, "elapsed": "30m0s", "timeout": "30m0s", "recommendations": []string{"A"},
+	})
+	event := protocol.EventEntry{At: "2026-11-23T00:30:00Z", WI: wi, Kind: driver.EvAutoAnswered, Body: body}
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			f.Ingest("default", event, nil)
+		}()
+		go func() {
+			defer wg.Done()
+			f.List()
+			_, _ = f.Dismiss(nil, true)
+		}()
+	}
+	wg.Wait()
+	var n int
+	for _, e := range f.List().Decisions {
+		if e.Class == "auto_answered" && e.QuestionID == askAt {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("auto_answered entries = %d, want exactly one under concurrent Ingest/Dismiss", n)
+	}
+}

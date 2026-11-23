@@ -224,6 +224,10 @@
             },
             "type": "object"
           },
+          "protected_stop": {
+            "description": "bool (default false): the step's `pf step ask` question is a human stop the daemon's automatic reply never answers (polyforge#239) — for an owner-only stop a gate flag cannot express (a hold only the owner's word clears, an owner-ruled revert). A gate is protected without the key; a step of a lane this build cannot verify is protected too",
+            "type": "boolean"
+          },
           "resources": {
             "additionalProperties": false,
             "description": "map {admission, locks}: what the daemon takes for the step's dispatch",

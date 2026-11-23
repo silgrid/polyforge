@@ -2325,6 +2325,7 @@ export const zhTWLocale: LocalePlugin = {
     "polyforge.decisions.class.superseded": "已移交",
     "polyforge.decisions.class.capped": "已達上限",
     "polyforge.decisions.class.interrupted": "已中斷",
+    "polyforge.decisions.class.auto_answered": "已自動按推薦繼續",
     "polyforge.messages.unread": "未讀訊息",
     "polyforge.messages.upgrade": "需要升級 pf",
     "polyforge.messages.upgradeReason": "升級 pf 後才能使用訊息面板。",

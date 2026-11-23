@@ -77,6 +77,12 @@ func ownerMessagesOf(lines []capsule.AskLine, since string) []capsule.AskLine {
 		if l.Kind != capsule.AskKindReply && l.Kind != capsule.AskKindMessage {
 			continue
 		}
+		// The daemon's own automatic reply is a delivery, never the
+		// owner's authorization (polyforge#239): no --per-owner consumer,
+		// intent or attrs write may rest on it.
+		if l.By == capsule.AutoAnswerBy {
+			continue
+		}
 		if since != "" && !stampAfter(l.At, since) {
 			continue
 		}

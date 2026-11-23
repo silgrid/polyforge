@@ -2325,6 +2325,7 @@ export const zhCNLocale: LocalePlugin = {
     "polyforge.decisions.class.superseded": "已移交",
     "polyforge.decisions.class.capped": "已达上限",
     "polyforge.decisions.class.interrupted": "已中断",
+    "polyforge.decisions.class.auto_answered": "已自动按推荐继续",
     "polyforge.messages.unread": "未读消息",
     "polyforge.messages.upgrade": "需要升级 pf",
     "polyforge.messages.upgradeReason": "升级 pf 后才能使用消息面板。",

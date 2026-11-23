@@ -900,7 +900,12 @@ of them (P0): no option, no reserved word (`cancel` here is just a word;
   `step` and `spawn` are the step addressed and the dispatch current when
   you wrote. The `owner_message` event (`at`, `step`, `spawn_n`, `kind`,
   `ask_at`, `by`, `text` — the words verbatim) follows the line. `--by`
-  defaults to the configured user.
+  defaults to the configured user. `--by daemon:auto-recommendation` is
+  refused DAEMON-400 and nothing is recorded: that author is the daemon's
+  own automatic reply to a low-star question card (every row ★/★★, after
+  the Cell's `ask_auto_reply_timeout`), and no `pf answer` may impersonate
+  it. The automatic line is delivered like a reply but is never an owner
+  authorization (`--per-owner`, waive/rewind/force-fail, attrs reject it).
 - **Delivered next.** The step process is alive — idle after its ask
   (inside the warm window), or mid-turn: the message goes into that
   process through its harness's own channel (claude: a stream-json user
@@ -1562,7 +1567,8 @@ write leaves the file untouched. `api_key` is write-only: stdin only,
 never argv, never emitted.
 
 The running daemon applies live keys on the write (`max_concurrent_jobs`,
-`cell_max_concurrent_jobs`, `step_timeout`, `stall_window`, `agent_language`, `claude_bin`, `summarize.*`,
+`cell_max_concurrent_jobs`, `step_timeout`, `stall_window`, `agent_language`, `claude_bin`,
+`ask_auto_reply_enabled`, `ask_auto_reply_timeout`, `summarize.*`,
 the `[step_tiers]` catalog — reported `applied` as one `[step_tiers]`
 outcome; it has no daemon consumer, the classification itself says no
 restart is needed), takes the

@@ -41,6 +41,7 @@ class RecordsCase(unittest.TestCase):
         ], batches=[wi("wi_old", status="wrapped", slug="p#50"), wi(BATCH, status="running", slug="p#51")])
         self.asks([{"at": "2026-11-11T09:00:00Z", "step": "collect", "spawn": 1, "kind": "ask", "text": "清还是修？"},
                    {"at": OWNER_AT, "step": "collect", "spawn": 1, "kind": "reply", "text": WORDS, "by": "u_alice"},
+                   {"at": "2026-11-11T10:10:00Z", "step": "collect", "spawn": 1, "kind": "reply", "text": "自动", "by": "daemon:auto-recommendation"},
                    {"at": "2026-11-11T10:05:00Z", "step": "close", "spawn": 1, "kind": "message", "text": "another step's"}])
 
     def write(self, rel: str, doc: Any) -> str:
@@ -139,6 +140,7 @@ class RecordsFixAndClearTest(RecordsCase):
             ("a fix on a work item not wrapped", [{"item": "wi_q", "fix": ["p#10"]}], "NOT_HELD"),
             ("a clear on no owner message", [{"item": "wi_h", "clear": "2026-11-11T09:00:00Z"}], "NO_REASON"),
             ("a clear on another step's message", [{"item": "wi_h", "clear": "2026-11-11T10:05:00Z"}], "NO_REASON"),
+            ("a clear on the daemon's automatic reply", [{"item": "wi_h", "clear": "2026-11-11T10:10:00Z"}], "NO_REASON"),
             ("an unknown work item", [{"item": "p#404", "fix": ["p#10"]}], "NO_HANDOFF"),
             ("one good, one refused", [{"item": "wi_h", "fix": ["p#10"]}, {"item": "wi_n", "fix": ["p#10"]}], "NOT_HELD"),
         ):

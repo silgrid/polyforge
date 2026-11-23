@@ -10,6 +10,7 @@ defaults:
   tiers: { cheap: [pi:example-gateway/model-cheap], mid: [pi:example-gateway/model-mid] }
 steps:
   - id: collect
+    protected_stop: true
     skill: collect
     model_tier: mid
     budget: { wall_minutes: 20, tool_minutes: 10 }
@@ -24,6 +25,7 @@ steps:
     rewind_only: true
     budget: { wall_minutes: 30, tool_minutes: 20 }
   - id: revert
+    protected_stop: true
     skill: revert
     model_tier: cheap
     budget: { tool_minutes: 20 }

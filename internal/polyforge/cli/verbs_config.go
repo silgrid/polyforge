@@ -295,6 +295,14 @@ func (v *configView) hasDaemonKey(key string) bool {
 // daemonValue renders one [daemon] key's effective value ("" = unset).
 func daemonValue(d DaemonSettings, key string) string {
 	switch key {
+	case "ask_auto_reply_enabled":
+		if d.AskAutoReplyEnabled != nil {
+			return strconv.FormatBool(*d.AskAutoReplyEnabled)
+		}
+	case "ask_auto_reply_timeout":
+		if d.AskAutoReplyTimeout != 0 {
+			return d.AskAutoReplyTimeout.String()
+		}
 	case "step_timeout":
 		if d.StepTimeout != 0 {
 			return d.StepTimeout.String()
@@ -381,6 +389,10 @@ func daemonDefault(key string) string {
 		return strconv.FormatFloat(DefaultBarLoadThreshold(), 'g', -1, 64)
 	case "agent_language":
 		return stepcall.DefaultLanguage
+	case "ask_auto_reply_enabled":
+		return "true"
+	case "ask_auto_reply_timeout":
+		return supervise.DefaultAskAutoReplyTimeout.String()
 	case "container_engine":
 		// the resolved default of an unset key — one fact with the daemon's
 		// own start resolution (cli.ResolveContainerEngine, the empty case)
@@ -949,7 +961,7 @@ func configSetValue(ctx *Context, k configKey, args []string) (string, []string,
 				return "", nil, err
 			}
 			return "[" + body + "]", nil, nil
-		case "max_concurrent_jobs", "max_concurrent_tasks", "max_concurrent_bars", "bar_load_threshold", "cell_max_concurrent_jobs":
+		case "max_concurrent_jobs", "max_concurrent_tasks", "max_concurrent_bars", "bar_load_threshold", "cell_max_concurrent_jobs", "ask_auto_reply_enabled":
 			return strings.TrimSpace(val), nil, nil
 		default:
 			return strconv.Quote(val), nil, nil

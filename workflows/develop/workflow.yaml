@@ -96,12 +96,14 @@ steps:
     # PF_PARAM_AUDIT.
     params: { image: "", audit: "on" }
   - id: publish
+    protected_stop: true
     gate: true
     on_fail: { target: build }
     skill: publish
     model_tier: cheap
     budget: { wall_minutes: 15 }
   - id: merge
+    protected_stop: true
     gate: true
     skippable: true
     # the project may take the merge over: `steps.<project>.merge.by:

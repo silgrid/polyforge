@@ -129,6 +129,17 @@ step's own work (cancel the work item, waive a FAIL, send the work back)
 the agent hands off with that status and `--per-owner`, citing the
 message.
 
+A low-star card (every row ★ or ★★) is the owner's standing
+authorization: with no reply before the Cell's `ask_auto_reply_timeout`
+(default 30m) the daemon answers it under the reserved
+`daemon:auto-recommendation` author with each row's recommended option,
+and the decision feed shows 「已自动按推荐继续」. A protected stop — every
+gate step (review, owner-review, merge, a gate FAIL), every step declaring
+`protected_stop`, every step of a lane this build cannot verify, and every
+step of a `confirm_plan: true` ticket — and any row at ★★★ or above keep
+waiting for the owner; the automatic reply is never a `--per-owner`
+authorization.
+
 A step runs its commands itself — the workflow scripts its skill names
 write result files, whose paths ride the hand-off as
 evidence and which the next step checks (downstream verifies upstream) —

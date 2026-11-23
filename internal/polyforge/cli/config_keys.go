@@ -55,6 +55,8 @@ var configKeyDefs = []configKeyDef{
 	{"step_timeout", keyDaemon, ConfigLive},
 	{"stall_window", keyDaemon, ConfigLive},
 	{"ask_warm_window", keyDaemon, ConfigRestartOnly},
+	{"ask_auto_reply_enabled", keyDaemon, ConfigLive},
+	{"ask_auto_reply_timeout", keyDaemon, ConfigLive},
 	{"harness_root", keyDaemon, ConfigRestartOnly},
 	{"operator_agent_dir", keyDaemon, ConfigRestartOnly},
 	{"python", keyDaemon, ConfigRestartOnly},
@@ -107,8 +109,10 @@ func ConfigSchema(name string) map[string]any {
 		return map[string]any{"kind": "path"}
 	case "container_engine":
 		return map[string]any{"kind": "enum", "values": []string{"docker", "podman"}}
-	case "step_timeout", "ask_warm_window":
+	case "step_timeout", "ask_warm_window", "ask_auto_reply_timeout":
 		return map[string]any{"kind": "duration", "min_exclusive": 0}
+	case "ask_auto_reply_enabled":
+		return map[string]any{"kind": "bool"}
 	case "stall_window":
 		return map[string]any{"kind": "duration", "nonzero": true, "allow_negative": true}
 	case "max_concurrent_jobs", "max_concurrent_tasks", "max_concurrent_bars", "cell_max_concurrent_jobs":
