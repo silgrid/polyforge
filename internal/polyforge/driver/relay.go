@@ -132,6 +132,9 @@ func OwnerMessageLine(capsuleDir, step string, n int64, text, by, at string) (ca
 	if by == "" {
 		by = "owner"
 	}
+	if by == capsule.AutoAnswerBy {
+		return capsule.AskLine{}, fmt.Errorf("driver: %w: %q is the daemon's reserved automatic-reply identity; a normal answer may not record it", ErrInvalidOwnerMessage, by)
+	}
 	lines, err := capsule.ReadAsks(capsuleDir)
 	if err != nil {
 		return capsule.AskLine{}, fmt.Errorf("driver: the ask record is unreadable: %w", err)
@@ -177,6 +180,9 @@ func OwnerMessageEvent(line capsule.AskLine) map[string]any {
 func (d *Driver) OwnerMessage(ctx context.Context, text, by string) (protocol.OwnerMessageAck, error) {
 	if err := ValidateOwnerMessage(text); err != nil {
 		return protocol.OwnerMessageAck{}, err
+	}
+	if by == capsule.AutoAnswerBy {
+		return protocol.OwnerMessageAck{}, fmt.Errorf("driver: %w: %q is the daemon's reserved automatic-reply identity; a normal answer may not record it", ErrInvalidOwnerMessage, by)
 	}
 	if d.wi.CapsuleDir == "" {
 		return protocol.OwnerMessageAck{}, errors.New("driver: no capsule to record the owner message in")
