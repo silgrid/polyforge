@@ -139,6 +139,46 @@ class BlockingOutcomesTest(unittest.TestCase):
         [chain] = rf.chain_findings(self.cap, versions)
         self.assertEqual(chain['outcome'], 'fixed')
 
+    def test_a_later_mention_does_not_override_the_disposition(self):
+        versions = _versions(
+            _review(1, 'FAIL', '## 发现\n\n### #4 blocking · test_weakened — x\n'),
+            _review(2, 'PASS', (
+                '## 上一轮发现逐条核对\n\n'
+                '- **r1#4（test_weakened u9）已修。** build 没有采用 r1 给的方案。\n\n'
+                '- **N17**（新）r1#4 的处理方式是撤销单元记录……所以不构成 ac_gap。\n')))
+        [chain] = rf.chain_findings(self.cap, versions)
+        self.assertEqual(chain['outcome'], 'fixed')
+
+    def test_explicit_fix_outranks_a_withdrawal_word_in_the_same_sentence(self):
+        versions = _versions(
+            _review(1, 'FAIL', '## 发现\n\n### #1 blocking · test_weakened — x\n'),
+            _review(2, 'PASS', '## 上一轮发现逐条核对\n\n- **r1#1 test_weakened（u9 的红是缺符号的红）**：已修。442780fd 只撤回了 `selected_problem` 里的条件。\n'))
+        [chain] = rf.chain_findings(self.cap, versions)
+        self.assertEqual(chain['outcome'], 'fixed')
+
+    def test_owner_words_in_a_later_explanation_do_not_make_it_owner(self):
+        versions = _versions(
+            _review(1, 'FAIL', '## 发现\n\n### #1 blocking · test_weakened — x\n'),
+            _review(2, 'FAIL', (
+                '## 发现\n\n### #1 blocking · test_weakened — y\n\n'
+                '| r1#1 blocking test_weakened (AC7) | **残留（范围缩小）→ 本轮 #1** | 某段说明 owner 消息 2026-11-15 的要求。 |\n')),
+            _review(3, 'PASS', (
+                '## 发现\n\n### #1 blocking · test_weakened — y\n\n'
+                '| r2#1 blocking test_weakened (AC7，r1#1 的残留) | **已修** | 某段说明 owner 消息 2026-11-16 的要求。 |\n')))
+        [chain] = rf.chain_findings(self.cap, versions)
+        self.assertEqual(chain['outcome'], 'fixed')
+        self.assertEqual(chain['rounds'], [1, 2])
+
+    def test_a_facts_table_mention_does_not_override_the_disposition(self):
+        versions = _versions(
+            _review(1, 'FAIL', '## 发现\n\n### #1 blocking · bug — x\n'),
+            _review(2, 'PASS', (
+                '## 上一轮发现逐条核对\n\n'
+                '- **r1#1 `bug` — 已修。** 见下。\n\n'
+                '| `artifacts/facts/build.json` | pass | r1#1 已修，不构成削弱 |\n')))
+        [chain] = rf.chain_findings(self.cap, versions)
+        self.assertEqual(chain['outcome'], 'fixed')
+
     def test_last_mention_still_open_is_its_own_reason(self):
         versions = _versions(
             _review(1, 'FAIL', '## 发现\n\n### #1 blocking · bug — x\n'),
