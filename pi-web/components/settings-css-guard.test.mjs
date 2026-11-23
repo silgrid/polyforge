@@ -66,59 +66,63 @@ const UTILITY = {
  * an entry is reported by file and line, never skipped.
  */
 const DYNAMIC_VALUES = {
-  "McpAddServer.tsx:mcpImportNoteSeverity(note)": {
+  "McpAddServer.tsx:McpImportNotes:mcpImportNoteSeverity(note)": {
     values: ["error", "warning"],
     source: "lib/mcp-import-core.ts MCP_IMPORT_NOTE_SEVERITY（每个提示码映射 error / warning）与它的 warning 兜底",
   },
-  "McpConfig.tsx:mcpCodemodeTone(state)": {
+  "McpConfig.tsx:McpCodemodeRow:mcpCodemodeTone(state)": {
     values: ["error", "off", "on"],
     source: "components/mcp-config-helpers.ts mcpCodemodeTone 返回 McpStateTone",
   },
-  "McpConfig.tsx:tone": {
+  "McpConfig.tsx:McpServerGroupList:tone": {
     values: ["on", "off", "warning", "error"],
-    source: "components/mcp-config-helpers.ts McpStateTone 联合类型",
+    source: "components/mcp-config-helpers.ts McpStateTone 联合类型（行状态）",
   },
-  "McpConfig.tsx:view.tone": {
-    values: ["on", "off", "warning", "error"],
-    source: "components/mcp-config-helpers.ts McpStateTone 联合类型",
-  },
-  "McpConfig.tsx:mcpRowStateTone(state)": {
+  "McpConfig.tsx:McpStatusRow:mcpRowStateTone(state)": {
     values: ["on", "off", "warning", "error"],
     source: "components/mcp-config-helpers.ts mcpRowStateTone 的四个分支",
   },
-  "McpSignIn.tsx:lineClass": {
+  "McpConfig.tsx:McpStatusStateWord:view.tone": {
+    values: ["on", "off", "warning", "error"],
+    source: "components/mcp-config-helpers.ts McpStateTone 联合类型（详情状态字）",
+  },
+  "McpSignIn.tsx:McpSignInOutcome:lineClass": {
     values: ["mcp-config-line is-error", "mcp-config-line is-warning", "mcp-config-line"],
     source: "McpSignIn.tsx McpSignInOutcome 的三个 tone 分支（mcpSignInOutcomeTone 的 error / warning / 其余）",
   },
-  "PolyforgeConfig.tsx:CELL_STATE_TONE[state]": {
-    values: ["on", "warning", "error", "off"],
-    source: "PolyforgeConfig.tsx CELL_STATE_TONE 的 Cell 状态取值",
-  },
-  "PolyforgeConfig.tsx:hostTone": {
+  "PolyforgeConfig.tsx:PolyforgeConfig:hostTone": {
     values: ["on", "off", "warning", "error"],
     source: "PolyforgeConfig.tsx EntryTone 联合类型（Host 行的徽标）",
   },
-  "PolyforgeConfig.tsx:tone": {
+  "PolyforgeConfig.tsx:PolyforgeConfig:tone": {
     values: ["on", "off", "warning", "error"],
     source: "PolyforgeConfig.tsx EntryTone 联合类型（Cell 行的徽标）",
   },
-  "PolyforgeInstallCard.tsx:shownState": {
+  "PolyforgeConfig.tsx:renderCellHead:CELL_STATE_TONE[state]": {
+    values: ["on", "warning", "error", "off"],
+    source: "PolyforgeConfig.tsx CELL_STATE_TONE 的 Cell 状态取值",
+  },
+  "PolyforgeInstallCard.tsx:PolyforgeInstallView:shownState": {
     values: ["running", "succeeded", "failed", "refused", "lost"],
     source: "lib/polyforge-install-pure.ts PolyforgeInstallState（running / succeeded / failed / refused）加页面自己的 lost",
   },
-  "SettingsUi.tsx:tone": {
-    values: ["muted", "dim", "error"],
-    source: "SettingsUi.tsx ConfigDetailGridRow 的 tone 联合类型，plain 不拼类",
-  },
-  "SettingsUi.tsx:variant": {
-    values: ["primary", "secondary", "danger", "ghost"],
-    source: "SettingsUi.tsx ConfigButtonVariant 联合类型",
-  },
-  "SettingsUi.tsx:size": {
+  "SettingsUi.tsx:ConfigButton:size": {
     values: ["small", "default"],
     source: "SettingsUi.tsx ConfigButtonSize 联合类型",
   },
-  "SkillsConfig.tsx:harness": {
+  "SettingsUi.tsx:ConfigButton:variant": {
+    values: ["primary", "secondary", "danger", "ghost"],
+    source: "SettingsUi.tsx ConfigButtonVariant 联合类型",
+  },
+  "SettingsUi.tsx:ConfigDetailGridRow:tone": {
+    values: ["muted", "dim", "error"],
+    source: "SettingsUi.tsx ConfigDetailGridRow 的 tone 联合类型，plain 不拼类",
+  },
+  "SettingsUi.tsx:ConfigFooterStatus:tone": {
+    values: ["warning", "error"],
+    source: "SettingsUi.tsx ConfigFooterStatus 的 tone 联合类型（default / warning / error），default 不拼类",
+  },
+  "SkillsConfig.tsx:HarnessChips:harness": {
     values: ["pi", "claude"],
     source: "lib/skills 的 harness 联合类型（pi / claude）",
   },

@@ -3629,6 +3629,8 @@ select.mcp-add-input {
 /* 模型页的每个分区：标题与内容留出间距（review r1#7 的标题粘连），
    默认模型下拉与 claude 自定义模型编辑器各自有规则（review r1#1）。 */
 .settings-model-section { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+/* 分区之间也留出间距（review r2#10）：.config-detail 是纯块容器，没有自己的 gap。 */
+.settings-model-section + .settings-model-section { margin-top: 12px; }
 .settings-model-section > h3 { margin: 0; color: var(--text); font-size: 13px; font-weight: 650; }
 .settings-model-default-select,
 .settings-claude-model-input {
