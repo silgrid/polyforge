@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { shouldShowBrowserNotification } from "@/lib/browser-notifications";
 import type { PolyforgeDecision } from "@/lib/polyforge-decisions-pure";
 import type { TranslationParams } from "@/lib/i18n/types";
@@ -61,6 +61,12 @@ export function usePolyforgeNotifications(options: PolyforgeNotificationsOptions
   const [hint, setHint] = useState(false);
   const [storageBlocked, setStorageBlocked] = useState(false);
 
+  // Review r1#1: a notification lives past the render that delivered it, so
+  // its click must run the LATEST open callback — the selection and jobs it
+  // reads are the ones current when the owner clicks.
+  const onOpenDecisionRef = useRef(onOpenDecision);
+  onOpenDecisionRef.current = onOpenDecision;
+
   const dismissHint = useCallback(() => setHint(false), []);
   const requestPermission = useCallback(async () => {
     const answer = await requestNotificationPermission();
@@ -82,8 +88,10 @@ export function usePolyforgeNotifications(options: PolyforgeNotificationsOptions
     setStorageBlocked(false);
     const fresh = newNotificationIds(decisions, new Set(ledger.ids));
     if (!ledger.present) {
-      // The first successful feed only establishes the baseline (Q6 A).
-      writeNotificationLedger(mergeNotificationLedger(ledger.ids, fresh));
+      // The first successful feed only establishes the baseline (Q6 A). A
+      // storage that cannot take it would re-baseline on every read and
+      // silently never notify, so it pauses delivery and says so.
+      if (!writeNotificationLedger(mergeNotificationLedger(ledger.ids, fresh))) setStorageBlocked(true);
       return;
     }
     if (fresh.length === 0) return;
@@ -117,14 +125,15 @@ export function usePolyforgeNotifications(options: PolyforgeNotificationsOptions
         );
         const notification = new Notification(copy.title, { body: copy.body, tag: copy.tag });
         notification.onclick = () => {
+          window.focus?.();
           notification.close();
-          onOpenDecision(decision);
+          onOpenDecisionRef.current(decision);
         };
       } catch {
         // A browser refusing the constructor delivers nothing; never retried.
       }
     }
-  }, [decisions, notificationsEnabled, translate, onOpenDecision]);
+  }, [decisions, notificationsEnabled, translate]);
 
   return { enabled: notificationsEnabled, permission, hint, storageBlocked, dismissHint, requestPermission };
 }

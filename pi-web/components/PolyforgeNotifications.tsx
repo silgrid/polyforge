@@ -21,12 +21,14 @@ export function PolyforgeNotifications({
   const { t } = useI18n();
   // The one explicit gesture is the card's and this banner's: the page never
   // requests the permission on its own (owner ruling Q4).
-  const { hint, permission, dismissHint, requestPermission } = usePolyforgeNotifications({
+  const { hint, permission, storageBlocked, dismissHint, requestPermission } = usePolyforgeNotifications({
     decisions,
     translate: t,
     onOpenDecision,
   });
-  if (!hint) return null;
+  // Review r1#4: a ledger the browser cannot write (quota, a locked-down
+  // profile) pauses delivery; the same one-time banner reports it.
+  if (!hint && !storageBlocked) return null;
 
   const authorize = async () => {
     const answer = await requestPermission();
@@ -57,8 +59,10 @@ export function PolyforgeNotifications({
         color: "var(--text)",
       }}
     >
-      <span data-pf-notification-hint-text="" style={{ minWidth: 0 }}>{t("polyforge.notifications.hint")}</span>
-      {permission === "default" && (
+      <span data-pf-notification-hint-text="" style={{ minWidth: 0 }}>
+        {storageBlocked ? t("polyforge.settings.notificationsStorageBlocked") : t("polyforge.notifications.hint")}
+      </span>
+      {!storageBlocked && permission === "default" && (
         <button
           type="button"
           data-pf-notification-authorize=""
@@ -78,6 +82,7 @@ export function PolyforgeNotifications({
           {t("polyforge.notifications.authorize")}
         </button>
       )}
+      {!storageBlocked && (
       <button
         type="button"
         data-pf-notification-dismiss=""
@@ -96,6 +101,7 @@ export function PolyforgeNotifications({
       >
         {t("polyforge.notifications.dismiss")}
       </button>
+      )}
     </div>
   );
 }

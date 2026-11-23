@@ -651,11 +651,14 @@ events are another ticket's.
   each entry id before delivery, so a reload, another poll or a second tab of the
   same origin does not notify it again (best effort, owner Q5 B: the ledger keeps
   the newest 2000 ids, outliving the feed's 300-entry retention; two tabs claiming
-  at the same instant may still duplicate once). Only ids are stored, never the
-  entry's text. An entry observed in the foreground, while the switch is off or
-  without permission is consumed, never back-filled (Q6 A). A browser that cannot
-  read or write the ledger pauses delivery instead of repeating (the settings card
-  says so).
+  at the same instant may still duplicate once, an entry still open after 2000
+  later ids may notify once more, and a site that later points at another Host or
+  a rebuilt feed with reset ids is a new namespace this browser cannot tell
+  apart). Only ids are stored, never the entry's text. An entry observed in the
+  foreground, while the switch is off or without permission is consumed, never
+  back-filled (Q6 A). A browser whose ledger cannot be read pauses delivery (the
+  settings card says so); a ledger the browser cannot write — a full quota, a
+  locked-down profile — also pauses delivery, and the one-time banner reports it.
 - **Delivery.** `window.Notification` (owner Q7 A), only while
   `shouldShowBrowserNotification()` says the page is not in the foreground
   (`visibilityState !== "visible" || !hasFocus()`, owner Q3 A, the same rule the
