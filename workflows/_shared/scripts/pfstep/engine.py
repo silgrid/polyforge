@@ -53,6 +53,9 @@ class EngineCommand:
     # directory and the command its engine reported, before `cd <dir> &&`
     dir: str = ""
     inner: str = ""
+    # group: the repository-declared full-gate group the command belongs
+    # to ("" = ungrouped; polyforge#244)
+    group: str = ""
 
 
 @dataclass
@@ -72,6 +75,9 @@ class EngineReport:
     diagnostics: Optional[List[str]]
     # e2e_selection: {mode, suites, uncovered_paths, full_commands} (None = none)
     e2e_selection: Optional[Dict[str, Any]]
+    # parallel: the declared full-gate parallelism (1 = serial; the report's
+    # full_parallel, absent when the repository declares no group)
+    parallel: int = 1
 
 
 def _typed(obj: Dict[str, Any], key: str, typ: type, what: str) -> Any:
