@@ -103,9 +103,12 @@ func w241Section(t *testing.T, raw, kw string) string {
 }
 
 // TestW241GuideExistsForNewMember: docs/user-guide.md exists, in
-// English, written for a team member joining an already-running aihub —
-// starting where that reader starts, at the install one-liner (they have
-// an API key and the aihub host and nothing else).
+// English, written for a team member on an already-running aihub —
+// starting where that reader starts, at the workstation image mainline
+// (docs/getting-started.md) for a new machine, with the host one-liner
+// kept but labelled as the path for a machine joining an existing team
+// (polyforge#166 Q6: the image entry starts the guide, not the install
+// one-liner).
 func TestW241GuideExistsForNewMember(t *testing.T) {
 	body := w241ReadGuide(t)
 	nonASCII, total := 0, 0
@@ -118,13 +121,26 @@ func TestW241GuideExistsForNewMember(t *testing.T) {
 	if nonASCII*4 > total {
 		t.Fatalf("the guide is English-only (the spec's non-goal: no Chinese or bilingual guide); %d of %d runes are non-ASCII", nonASCII, total)
 	}
-	m := regexp.MustCompile(`(?i)install`).FindStringIndex(body)
-	if m == nil || m[0] > len(body)*3/10 {
-		at := -1
-		if m != nil {
-			at = m[0]
+	// the reader's start is the opening paragraph, before the first '## '
+	// heading: it names the workstation image and links the mainline.
+	var opening []string
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, "## ") {
+			break
 		}
-		t.Fatalf("the guide starts at the install one-liner — the reader has an API key and the aihub host and nothing else; the first \"install\" mention sits at byte %d of %d", at, len(body))
+		opening = append(opening, line)
+	}
+	open := strings.Join(opening, "\n")
+	if !strings.Contains(open, "getting-started.md") {
+		t.Fatalf("the guide starts at the workstation image mainline — its opening paragraph must link docs/getting-started.md; it never does:\n%s", open)
+	}
+	if !regexp.MustCompile(`(?i)\bimage\b`).MatchString(open) {
+		t.Fatalf("the guide's opening names the workstation image as the entry — it never says image:\n%s", open)
+	}
+	// the host install one-liner stays in the guide, but not at its start
+	// (polyforge#166 Q6): the opening carries no install command.
+	if regexp.MustCompile(`tools/install\.sh|curl\s+-`).MatchString(open) {
+		t.Fatalf("the guide's opening must not be the host install one-liner (polyforge#166 Q6: the image entry starts the guide); the one-liner stays under the host installation section:\n%s", open)
 	}
 }
 

@@ -48,6 +48,7 @@ var w254Pages = []string{
 	"docs/install.md",
 	"docs/quickstart-developers.md",
 	"docs/quickstart-macos.md",
+	"docs/getting-started.md",
 	"docs/extending.md",
 	"docs/bundles.md",
 	"docs/architecture.md",
@@ -69,6 +70,7 @@ var w254Pages = []string{
 // catches a stray insert).
 var w254PureEnglishPages = []string{
 	"docs/workstation.md",
+	"docs/getting-started.md",
 }
 
 // w254CJKRe matches any CJK codepoint: the CJK blocks (radicals

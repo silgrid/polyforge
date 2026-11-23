@@ -1,5 +1,10 @@
 # Quickstart (macOS — one Mac as one machine: local aihub + pf + daemon + lane)
 
+**Host installation (macOS).** This walkthrough installs `pf` on a Mac — the
+host path, which stays supported. The workstation image is not verified on
+macOS yet; a newcomer who wants the image instead starts at
+[getting started](getting-started.md).
+
 Everything below uses existing commands only — the macOS-native `pf`
 asset from the release (it is the CLI, the daemon and, as `pf aihub`, the
 server), the same CLI verbs, and `tools/install.sh` (a

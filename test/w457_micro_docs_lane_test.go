@@ -39,6 +39,7 @@ var w457MicroPaths = []string{
 	"docs/concepts.md",
 	"docs/contributing.md",
 	"docs/extending.md",
+	"docs/getting-started.md",
 	"docs/install.md",
 	"docs/quickstart-developers.md",
 	"docs/quickstart-macos.md",

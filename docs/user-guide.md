@@ -1,10 +1,14 @@
 # Polyforge user guide
 
-The daily-use guide for a team member joining an already-running aihub. It starts
-where you start, at the install one-liner, and carries you to competent daily use:
-filing work, submitting it, watching it run, answering its questions, closing it
-out. Every mechanism lives one link away; the [where to find what](#where-to-find-what)
-section maps each kind of question to the document that owns its answer.
+The daily-use guide for a team member on an already-running aihub. It starts
+where you start: a new machine boots the workstation image through the
+[newcomer mainline](getting-started.md) — Docker, the image, compose, the
+first boot — while a host machine joining an existing team installs with the
+one-liner under [Host installation](#install). From either entry it carries
+you to competent daily use: filing work, submitting it, watching it run,
+answering its questions, closing it out. Every mechanism lives one link away;
+the [where to find what](#where-to-find-what) section maps each kind of
+question to the document that owns its answer.
 
 ## Who this guide is for
 
@@ -20,6 +24,11 @@ Standing up your own aihub is the
 [developers' Quickstart](quickstart-developers.md).
 
 ## Install
+
+**Host installation.** This section is the host-installed path — a `pf` binary
+on your own machine, for a team member joining an existing aihub. A workstation
+image already carries the whole machine; newcomers on the image start at
+[getting started](getting-started.md) and never run this one-liner.
 
 One line, any team machine. It needs `gh` authenticated (the one-liner reads
 `gh auth token`); the key is read with echo off, so it never lands in your
