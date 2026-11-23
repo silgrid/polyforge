@@ -4,7 +4,7 @@
 // and Settings › 常规's reopen entry opens it over a session. The popup
 // decision is a pure function with a truth table taken from the ticket; the
 // shell's fetch/POST wiring is the e2e's to observe (e2e/onboarding-91.mjs
-// OB1–OB8), never a source scan. Expected labels come from the English table.
+// OB1–OB9), never a source scan. Expected labels come from the English table.
 import "#test-env";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -36,10 +36,9 @@ test("the popup opens on the null-session branch only: host mode, a dismissal an
   assert.equal(onboardingPopupOpen(facts({ dismissed: true })), false, "a dismissed wizard opens again without a reopen");
   assert.equal(onboardingPopupOpen(facts({ imageManaged: false })), false, "a host-mode Pi Web shows the wizard");
   assert.equal(onboardingPopupOpen(facts({ imageManaged: false, reopened: true })), false, "a host-mode reopen shows the wizard");
-  // A draft tab (the entry fallback's new session) has no selected session, so
-  // the null-session branch keeps the popup — the transient welcome mount must
-  // not be what decides it.
-  assert.equal(onboardingPopupOpen(facts({ hasSelectedSession: false })), true, "a draft tab suppresses the first-open popup");
+  // A draft tab (the entry fallback's new session) leaves `selectedSession`
+  // null in the shell, so the null-session branch keeps the popup; that
+  // wiring is the e2e's OB9 to observe (the pure function only sees the fact).
 });
 
 test("Settings › 常规's reopen opens the wizard over a session, and only after the reopen write lands", () => {

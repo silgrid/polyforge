@@ -202,6 +202,12 @@ try {
     await page.goto(`${base}/`, { waitUntil: "domcontentloaded", timeout: COLD_MS });
     const fallback = await entryFallback;
     assert.ok(fallback, "the entry fallback never ran: split view was off and the transient was not exercised");
+    // The fallback's answer only starts the draft's open: its `.then` calls
+    // handleNewSession, whose setState (and React's commit) come after the
+    // response. The applied fact is the draft tab itself, so wait for that
+    // tab before reading the wizard — a regression that let the draft close
+    // the popup has its effect in the same commit the tab first shows.
+    await page.locator("#pane-tab-__new-session__").waitFor({ state: "attached", timeout: COLD_MS });
     await page.locator("[data-onboarding-wizard]").waitFor({ state: "visible", timeout: COLD_MS });
     assert.equal(await page.locator('[data-onboarding-step-panel="aihub"]').count(), 1, "the draft-session fallback closed the first-open wizard");
   });
