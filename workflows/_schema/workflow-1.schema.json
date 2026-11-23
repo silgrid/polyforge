@@ -100,6 +100,27 @@
             },
             "type": "object"
           },
+          "facts_proof": {
+            "additionalProperties": false,
+            "description": "map {result, command} (default none): the mechanical facts summary this step's done needs for each task repo it changed (polyforge#241) — a `pf-step-result/1` file `facts.py handoff` writes, verdict pass whose heads carry the repo at its current HEAD; a repo the step did not change and a fast-forward need none; its refusal names every hit beside the result file",
+            "properties": {
+              "command": {
+                "description": "string, required: one line carrying {repo} (WFC-112 otherwise): the command a refusal quotes to write a fresh proof",
+                "pattern": "\\{repo\\}",
+                "type": "string"
+              },
+              "result": {
+                "description": "string, required: the result file's path relative to the capsule, carrying {repo} (WFC-112 otherwise)",
+                "pattern": "\\{repo\\}",
+                "type": "string"
+              }
+            },
+            "required": [
+              "command",
+              "result"
+            ],
+            "type": "object"
+          },
           "fast_check_proof": {
             "additionalProperties": false,
             "description": "map {result, command} (default none): the fast-check proof this step's done needs for each task repo it changed — a `pf-step-result/1` file with verdict pass whose heads carry the repo at its current HEAD; a repo the step did not change and a fast-forward need none",

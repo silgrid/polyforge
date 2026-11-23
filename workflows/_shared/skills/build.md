@@ -157,6 +157,11 @@ record exactly what ran.
    `heads` is the HEAD the hand-off gate compares against (the tree is unchanged since the
    whole-change run, so every green command is reused):
    `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/fast_checks.py" --repo <repo> --phase fast --json --out artifacts/build/fast-checks/<repo>.json`
+   The plan runs group by group — a command's group is the group its report
+   bound it to (polyforge#244) else its report's root, the groups side by side
+   at most `--parallel N` at once (the repository's declared `full_parallel`,
+   else default 2; one group, or `--parallel 1`, is the serial plan), each
+   group's own commands in the plan's order.
    The daemon reads that file for every repo build changed and refuses `done` until each is
    a `pass` at HEAD. A red the change did not cause is the check's own to triage first: the
    run re-plays every unit still red after its one re-run on the change's baseline (the same
@@ -184,9 +189,13 @@ record exactly what ran.
    isolation ran (`details.isolation`, `host`/`container`) — its reds triaged on the same
    baseline (the close's `--unit-runs` protecting
    the files this change's test commits touched — a test this lane authored is never
-   pre-existing), all of it in the one container when one was declared: a container the
-   close cannot build, start or keep is the run's error (exit 2, never a red of the
-   change's, never a host stand-in). A red or `incomplete` result never hands off `done` without the owner's ruling —
+   pre-existing), the selected commands in each group's own container when
+   one was declared (one container per group: a container's reap kills every
+   process in it after a command, so commands sharing one container would
+   kill each other), the engine asks, the re-runs, the baseline triage and
+   the whole-command confirmation in the close's own container: a container
+   the close cannot build, start or keep is the run's error (exit 2, never
+   a red of the change's, never a host stand-in). A red or `incomplete` result never hands off `done` without the owner's ruling —
    except a red result every entry of whose `reds[]` the run records `pre_existing` (its
    `details.baseline` naming the commit, the setup and the runs it judged on): that one is
    not this change's, and the close hands off `done` citing the result file, its `details.selected`
@@ -214,6 +223,15 @@ record exactly what ran.
    evidence. Then the change analysis's own facts
    line, `facts.py analysis` — the same shared validator `verification` calls; its red names
    the entry and the rule it violates, and the close check must be green before the hand-off.
+
+   Then run the mechanical facts gate once per touched repo — the line the lane's `facts_proof`
+declares, the summary `review` recomputes, over the final tree:
+   `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" handoff --json --out artifacts/build/handoff-facts/<repo>.json`
+   Exit 1 names the deterministic item the build must fix — a unit's commits or red-state replay,
+   an undeclared write, an existing test outside the plan's write set, an e2e suite without
+   `carries:`, a listed test that does not exist, a skip after the test commit — and `done` is
+   refused until it is green; a sub-item it could not judge (exit 2) is recorded in
+   `details.not_judged` and is no hit, except `carries`, whose exit 2 stays no pass.
 
 ## 交接要写什么 — what your hand-off carries
 

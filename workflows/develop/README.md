@@ -81,7 +81,13 @@ The complete variable table is in [the workflow contract's Scripts environment s
   artifacts/build/fast-checks/<repo>.json`): the tree is unchanged, so every
   green command is reused and only the result's `heads` move to the commits
   the hand-off gate compares against HEAD; a repo the change touched without
-  that pass at HEAD has its `done` refused. The close's order is fixed: the scoped selection green, then the facts, then the self-review, then the hand-off. Per-unit
+  that pass at HEAD has its `done` refused. The close's order is fixed: the scoped selection green, then the facts, then the self-review, then the hand-off. The mechanical facts gate
+  (`facts_proof`, `facts.py handoff`) refuses `done` while the result lists
+  a deterministic hit — a unit's commits or red-state replay, an undeclared
+  write, an existing test changed outside the plan's write set, an e2e
+  suite without `carries:`, a listed test that does not exist, a skip after
+  the test commit — so review reads a tree whose mechanical facts are
+  already green. Per-unit
   fast checks narrowed to the roots the unit's written `Touched files` reach (`--phase fast
   --root`, the green runs whose key is unchanged reused) plus every new test; the close's scoped selection — `fast_checks.py --close-scoped`,
   the same light-tier selection verification plans, for a work item whose verification runs the
@@ -125,7 +131,8 @@ The complete variable table is in [the workflow contract's Scripts environment s
   (or of the change's base for a unit declared `pre_existing_red`, whose red evidence
   that replay is), on the host: it must be red), `carries` and `analysis` (the change
   analysis's own close check — the same shared validator `verify.py --analysis` calls;
-  every entry it fails is a blocking `test_weakened` finding naming the entry). A
+  every entry it fails is in the hand-off gate's subset (non-blocking on its own, a gate
+  bypass is blocking `guarantee`), naming the entry). A
   blocking finding names one of five classes: `bug`, `ac_gap`, `project_rule`,
   `test_weakened`, `guarantee`; everything else is non-blocking. A unit that misses its
   test-quality record (`workflows/_shared/test_quality.md`), or whose replayed red

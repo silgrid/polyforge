@@ -81,6 +81,7 @@ var stepKeys = map[string]keySpec{
 	"hub":              {Type: "map {verbs, attrs} (default none): what the step may call through `pf step hub`", Schema: object(hubKeys)},
 	"wrap_attrs":       {Type: "[]attr name (^[a-z][a-z0-9_]{0,63}$), each at most once (default none): the wrap attrs the step registers (`pf step hub wrap-attrs <name>`) before its round may hand off done; listing one lets the step call wrap-attrs. When the steps at the lane's end are skipped (a skippable step a project switched off), their wrap_attrs are the last running step's to register", Schema: jsonSchema{"type": "array", "items": pattern(wrapAttrName.String()), "uniqueItems": true}},
 	"fast_check_proof": {Type: "map {result, command} (default none): the fast-check proof this step's done needs for each task repo it changed — a `pf-step-result/1` file with verdict pass whose heads carry the repo at its current HEAD; a repo the step did not change and a fast-forward need none", Schema: object(fastCheckProofKeys)},
+	"facts_proof":      {Type: "map {result, command} (default none): the mechanical facts summary this step's done needs for each task repo it changed (polyforge#241) — a `pf-step-result/1` file `facts.py handoff` writes, verdict pass whose heads carry the repo at its current HEAD; a repo the step did not change and a fast-forward need none; its refusal names every hit beside the result file", Schema: object(fastCheckProofKeys)},
 }
 
 // fastCheckProofKeys is the closed key set of `fast_check_proof`: the
@@ -283,6 +284,7 @@ func keySets() []keySet {
 	return []keySet{
 		{"lane", laneKeys}, {"defaults", defaultsKeys}, {"step", stepKeys},
 		{"fast_check_proof", fastCheckProofKeys},
+		{"facts_proof", fastCheckProofKeys},
 		{"on_fail", onFailKeys}, {"resources", resourcesKeys}, {"hub", hubKeys},
 		{"budget", budgetKeys}, {"definition", defKeys}, {"skill", skillKeys},
 	}

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
+import { ConfigButton } from "./SettingsUi";
 
 /**
  * The models page's Claude section (85a3-3): the editor of claude's own
@@ -149,64 +150,70 @@ export function ClaudeCustomModels({ onRefresh }: { onRefresh?: () => void }) {
   }, [input, names, writeNames]);
 
   return (
-    <div data-claude-custom-models>
-      <h4>{t("models.claudeCustomHeading")}</h4>
+    <div data-claude-custom-models className="settings-claude-models">
+      <h4 className="settings-general-heading">{t("models.claudeCustomHeading")}</h4>
       {notice !== null && (
-        <p role="note">
+        <p role="note" className="settings-general-description">
           {t("models.claudeCustomBlocked")}
           <code>{notice}</code>
         </p>
       )}
       {preview !== null && (
-        <div data-claude-migration-preview>
-          <p>{t("models.claudeCustomPreviewTitle")}</p>
-          <p>{t("models.claudeCustomNativeKept")}</p>
-          <ul data-claude-preview-native>
+        <div data-claude-migration-preview className="settings-claude-preview">
+          <p className="settings-general-description">{t("models.claudeCustomPreviewTitle")}</p>
+          <p className="settings-general-description">{t("models.claudeCustomNativeKept")}</p>
+          <ul data-claude-preview-native className="settings-claude-names">
             {preview.native.map((row) => (
               <li key={row.model}>{row.label !== undefined ? `${row.model} (${row.label})` : row.model}</li>
             ))}
           </ul>
-          <p>{t("models.claudeCustomMissing")}</p>
-          <ul data-claude-preview-missing>
+          <p className="settings-general-description">{t("models.claudeCustomMissing")}</p>
+          <ul data-claude-preview-missing className="settings-claude-names">
             {preview.missing.map((model) => <li key={model}>{model}</li>)}
           </ul>
-          <button type="button" onClick={() => void confirmMerge()} disabled={busy}>{t("models.claudeCustomMerge")}</button>
-          <button type="button" onClick={() => setPreview(null)}>{t("common.cancel")}</button>
+          <div className="settings-claude-actions">
+            <ConfigButton onClick={() => void confirmMerge()} disabled={busy}>{t("models.claudeCustomMerge")}</ConfigButton>
+            <ConfigButton onClick={() => setPreview(null)}>{t("common.cancel")}</ConfigButton>
+          </div>
         </div>
       )}
       {names === null ? (
-        <p>{t("models.claudeCustomLoading")}</p>
+        <p className="settings-general-description">{t("models.claudeCustomLoading")}</p>
       ) : names.length === 0 ? (
-        <p>{t("models.claudeCustomEmpty")}</p>
+        <p className="settings-general-description">{t("models.claudeCustomEmpty")}</p>
       ) : (
-        <ul data-claude-custom-list>
+        <ul data-claude-custom-list className="settings-claude-names">
           {names.map((model) => (
             <li key={model}>
               <code>{model}</code>
-              <button
-                type="button"
+              <ConfigButton
+                size="small"
+                variant="ghost"
                 aria-label={t("models.claudeCustomRemove", { model })}
                 disabled={busy}
                 onClick={() => void writeNames(names.filter((entry) => entry !== model))}
               >
                 ✕
-              </button>
+              </ConfigButton>
             </li>
           ))}
         </ul>
       )}
-      {shadowed && <p role="note">{t("models.claudeCustomShadowed")}</p>}
+      {shadowed && <p role="note" className="settings-general-description">{t("models.claudeCustomShadowed")}</p>}
+      <div className="settings-claude-add">
       <input
+        className="settings-claude-model-input"
         value={input}
         placeholder={t("models.claudeCustomPlaceholder")}
         aria-label={t("models.claudeCustomPlaceholder")}
         disabled={busy || names === null}
         onChange={(event) => setInput(event.target.value)}
       />
-      <button type="button" onClick={add} disabled={busy || input.trim() === "" || names === null}>
+      <ConfigButton onClick={add} disabled={busy || input.trim() === "" || names === null}>
         {t("models.claudeCustomAdd")}
-      </button>
-      {error !== null && <p role="alert" style={{ color: "#dc2626" }}>{error}</p>}
+      </ConfigButton>
+      </div>
+      {error !== null && <p role="alert" className="config-add-source-error">{error}</p>}
     </div>
   );
 }

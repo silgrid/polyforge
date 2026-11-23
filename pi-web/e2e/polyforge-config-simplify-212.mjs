@@ -250,9 +250,9 @@ try {
       assert.equal(await card(dialog, "cli.toml · [daemon]").count(), 0, "the separate [daemon] card still renders");
       const cli = card(dialog, "cli.toml");
       // Top-level zone: server, user_id + the unknown future_knob (daemon_socket is Host-only).
-      assert.equal(await foldCount(cli.locator(".polyforge-config-zone.is-flat")), 3, "the cli.toml zone's advanced toggle does not state its 3 hidden rows");
-      assert.equal(await cli.locator(".polyforge-config-zone.is-daemon .polyforge-disclosure-toggle").count(), 0, "the [daemon] zone folds rows the cli.toml card no longer holds (harness_root, operator_agent_dir are Host-only)");
-      assert.deepEqual(await visibleRowKeys(cli.locator(".polyforge-config-zone.is-summarize")), ["summarize.interval_sec", "summarize.language", "summarize.models"],
+      assert.equal(await foldCount(cli.locator('.polyforge-config-zone[data-zone="flat"]')), 3, "the cli.toml zone's advanced toggle does not state its 3 hidden rows");
+      assert.equal(await cli.locator('.polyforge-config-zone[data-zone="daemon"] .polyforge-disclosure-toggle').count(), 0, "the [daemon] zone folds rows the cli.toml card no longer holds (harness_root, operator_agent_dir are Host-only)");
+      assert.deepEqual(await visibleRowKeys(cli.locator('.polyforge-config-zone[data-zone="summarize"]')), ["summarize.interval_sec", "summarize.language", "summarize.models"],
         "the cli.toml card's [summarize] zone does not show exactly the three summarize keys");
       assert.deepEqual(await visibleRowKeys(cli.locator(".polyforge-config-zone.is-memory-policy")), [...MEMORY_KEYS].sort(),
         "the cli.toml card does not show the path's memory_policy rows");

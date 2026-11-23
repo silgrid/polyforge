@@ -821,7 +821,11 @@ command's face.
   names each such repo, the failing check and the declared command to
   re-run); a `done` that cites an owner message of the round with
   `--per-owner` is the owner's release of such a red and is accepted, the
-  section's header recording the cited message. Accepted, the daemon appends one section to
+  section's header recording the cited message; `done` while the lane
+  declares `facts_proof` and a task repo this round changed lacks a
+  `pf-step-result/1` result at the declared path whose `verdict` is `pass`
+  and whose `heads` carries the repo at its HEAD (the refusal returns each
+  hit the result lists, one line each, the tail named by count). Accepted, the daemon appends one section to
   `artifacts/handoff.md`: a header it stamps from its own records (step,
   round, dispatch, start, end and duration, model, status, the round's
   events, the owner's messages to the step this round and the cited one
@@ -1361,7 +1365,12 @@ full reference.
 - `--repo <name>` is the per-unit bar: it runs the scope engine's
   `--json` report — the default report, the one the model ran by hand —
   in the repo clone and executes the commands whose `phase` is `fast` or
-  `scoped`, in the report's order, each in its report's `root` (a nested
+  `scoped` group by group — a command's group is the group its report
+  bound it to (polyforge#244) else its report's root, the groups side by
+  side at most `--parallel N` at once (the report's declared
+  `full_parallel`, else default 2; one group, or `--parallel 1`, is the
+  serial plan), each group's own commands in the plan's order — each in
+  its report's `root` (a nested
   root the changed paths reach is a repository of its own: its report
   runs in that subdirectory), with each entry's own declared `timeout`;
   a command missing a declared `requires_env`/`requires_cmd`
@@ -1428,9 +1437,12 @@ full reference.
   repository's declared verification image when its HEAD carries
   `.polyforge/Dockerfile.verify` — the same isolation and image/tool-cache
   machinery verification's boxes use (the image built from the committed
-  Dockerfile's bytes, reused while they are unchanged), one container for
-  the engine asks, the selected commands, the re-runs and the baseline's
-  base worktree — and on the host otherwise, the result file recording
+  Dockerfile's bytes, reused while they are unchanged), one container per
+  group for the selected commands (a container's reap kills every process
+  in it after a command, so commands sharing one container would kill
+  each other), the close's own container for the engine asks, the re-runs
+  and the baseline's base worktree —
+  and on the host otherwise, the result file recording
   which isolation ran (`details.isolation` `host`/`container`, with the
   container's own record in `details.container` when one ran), the
   per-unit `--repo` run always on the host; a container the close cannot
@@ -1457,7 +1469,12 @@ full reference.
   shared and an unusable `--reuse` file the error it always was — and a red command keeps the per-unit
   bar's one
   targeted re-run, its baseline triage and whole-command confirmation,
-  all of it in the same container when one was declared;
+  the selected commands in each group's own container when one was
+  declared, the engine asks, the re-runs, the baseline triage and the
+  whole-command confirmation in the close's own container;
+  `--parallel <N>` overrides the plan's parallelism (a positive integer;
+  1 runs the plan serially — the comparison baseline and the manual
+  override), for the per-unit and the close run alike;
   `--unit-runs` names the build's `units.json`: the files its test
   commits touched are protected, never pre-existing (a test this change
   authored is this change's red), an unusable file is exit 2; a selection the engine

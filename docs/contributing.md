@@ -159,6 +159,11 @@ root 的 `fast` 命令：使用 `fast_checks.py --repo <name> --phase fast`
 加可重复的 `--root <dir>`（`.` 表示仓根）。同一命令文本、root 子树的
 工作树 tree hash、声明的环境前提不变时，复用上次一次执行即成功的绿结果，
 保留原日志；未选中的绿条目继续保留，红或经 flaky 重跑确认的结果不复用。
+命令按组执行：组间并行、组内保持计划序，默认 2 路，`--parallel 1` 或只有一组时走旧的串行路径。
+The commands run group by group — a command's group is the group its
+report bound it to else its report's root — the groups side by side at
+most `--parallel N` at once (default 2; one group, or `--parallel 1`, is
+the serial plan), each group's own commands in the plan's order.
 `scoped` 选择只在收尾对整个改动执行一次，`full` 门槛属于
 `verification` 步骤。The
 develop lane's build close runs the same light selection before its

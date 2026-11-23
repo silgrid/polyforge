@@ -195,6 +195,11 @@ type Step struct {
 	// FastCheckProof is `fast_check_proof` (nil = none): the fast-check
 	// proof this step's done needs for each task repo it changed.
 	FastCheckProof *FastCheckProof
+	// FactsProof is `facts_proof` (nil = none): the mechanical facts
+	// summary (facts.py handoff) this step's done needs for each task repo
+	// it changed (polyforge#241). It shares fast_check_proof's shape: a
+	// result file's path template and the one command that writes it.
+	FactsProof *FastCheckProof
 	// Params is `params` (nil = none): the step's declared parameters,
 	// each name to its lane-default value (a single-line string). The
 	// final value is composed at every dispatch (lane default, the
@@ -883,6 +888,9 @@ func (l *loader) step(file string, off int, n *yaml.Node, path string, seen map[
 	if v, ok := keys["fast_check_proof"]; ok {
 		s.FastCheckProof = l.fastCheckProof(file, off, v, join(path, "fast_check_proof"))
 	}
+	if v, ok := keys["facts_proof"]; ok {
+		s.FactsProof = l.factsProof(file, off, v, join(path, "facts_proof"))
+	}
 	if v, ok := keys["vars"]; ok {
 		s.Vars = l.stringMap(file, off, v, join(path, "vars"))
 		s.varLines = map[string]int{}
@@ -1152,10 +1160,25 @@ func (l *loader) nameList(file string, off int, n *yaml.Node, path, what string,
 // template and the command that writes it, both required, both carrying
 // {repo}, the result relative to the capsule and leaving it never.
 func (l *loader) fastCheckProof(file string, off int, n *yaml.Node, path string) *FastCheckProof {
+	return l.proof(file, off, n, path, "fast_check_proof")
+}
+
+// factsProof decodes a step's `facts_proof` (polyforge#241): the same
+// shape as `fast_check_proof`, the mechanical facts summary facts.py
+// handoff writes.
+func (l *loader) factsProof(file string, off int, n *yaml.Node, path string) *FastCheckProof {
+	return l.proof(file, off, n, path, "facts_proof")
+}
+
+// proof decodes one proof key's mapping: the result file's path template
+// and the command that writes it, both required, both carrying {repo},
+// the result relative to the capsule and leaving it never. key is the
+// lane key the messages name.
+func (l *loader) proof(file string, off int, n *yaml.Node, path, key string) *FastCheckProof {
 	m := l.mapping(file, off, n, path, fastCheckProofKeys, nil)
 	fp := &FastCheckProof{}
 	if v, ok := m["result"]; !ok {
-		l.at(CodeMissingKey, file, off, n, join(path, "result"), "fast_check_proof declares no result (the result file's path template, carrying {repo})")
+		l.at(CodeMissingKey, file, off, n, join(path, "result"), "%s declares no result (the result file's path template, carrying {repo})", key)
 	} else if s, good := l.stringValue(file, off, v, join(path, "result")); good {
 		switch {
 		case strings.TrimSpace(s) == "":
@@ -1171,7 +1194,7 @@ func (l *loader) fastCheckProof(file string, off int, n *yaml.Node, path string)
 		}
 	}
 	if v, ok := m["command"]; !ok {
-		l.at(CodeMissingKey, file, off, n, join(path, "command"), "fast_check_proof declares no command (the line that writes a fresh result, carrying {repo})")
+		l.at(CodeMissingKey, file, off, n, join(path, "command"), "%s declares no command (the line that writes a fresh result, carrying {repo})", key)
 	} else if s, good := l.stringValue(file, off, v, join(path, "command")); good {
 		switch {
 		case strings.ContainsAny(s, "\n\r"):

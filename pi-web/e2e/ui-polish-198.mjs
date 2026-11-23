@@ -493,7 +493,7 @@ try {
       await dialog.locator('[data-pf-cell-entry="default"]').first().click();
       await dialog.locator('[data-pf-pane="cell:default"]').first().waitFor({ state: "visible", timeout: 30_000 });
       // [daemon] is a zone of the one cli.toml card, no card of its own.
-      await dialog.locator('section[aria-label="cli.toml"] .polyforge-config-zone.is-daemon').first().waitFor({ state: "attached", timeout: 30_000 });
+      await dialog.locator('section[aria-label="cli.toml"] .polyforge-config-zone[data-zone="daemon"]').first().waitFor({ state: "attached", timeout: 30_000 });
       await page.setViewportSize({ width: 390, height: 844 });
       await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       const geometry = await page.evaluate(() => {

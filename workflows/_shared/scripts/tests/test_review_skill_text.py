@@ -28,7 +28,7 @@ class ReviewSkillTextTest(unittest.TestCase):
                 low = text.lower()
                 self.assertIn("a unit whose `replay` carries `not_runnable` has no red evidence", low)
                 self.assertIn("neither red nor a pass", low)
-                self.assertIn("blocking `test_weakened`", text)
+                self.assertIn("in the same subset", text)
                 self.assertIn("`rule`", text)
         self.assertIn("reading the code by hand never stands in for the missing red", skill)
         self.assertIn("`base_setup=`", skill)

@@ -1530,6 +1530,18 @@ owner 的 asks.jsonl 裁定，给出结局（修复后通过、反驳成立、ow
 同时给 `--csv` 时另写 `<csv>.blocking.csv`，既有 CSV 不加列。这是离线
 只读工具，不需要迁移动作。
 
+## v0.2.4, build 交 done 前的机械事实闸（polyforge#241）
+
+develop 的 build 新增 `facts_proof` 车道键：交 done 前跑 `facts.py handoff`
+（每改动仓库一次，写 `artifacts/build/handoff-facts/<repo>.json`），把
+`build --replay`、`plan-conformance`、`carries`、`analysis` 与
+`test_weakened` 的确定标记（新增 skip、改 `carries:` 头）汇总成一份
+`pf-step-result/1`；任一确定项命中即拒收 done 并逐项返还（含计划 write set
+未声明的已有测试文件），判不定的子项记 `not_judged`（`carries` 的 exit 2
+仍拒收）。review 重算同一份事实：交接闸已覆盖的机械项单独不构成阻断，命中
+只记 non-blocking 并注明「交接闸本应拦下」；闸被绕过或伪造则升级为
+blocking `guarantee`。
+
 ## v0.2.4, 低星级问题卡的自动按推荐继续（polyforge#239）
 
 owner 2026-11-23 授权：步骤问题卡（`pf step ask` 的四列表）里每一行的
