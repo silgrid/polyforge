@@ -51,6 +51,17 @@ class BlockingParseTest(unittest.TestCase):
         self.assertEqual([(i['item'], i['class']) for i in items],
                          [(1, 'guarantee'), (2, 'bug'), (4, 'ac_gap')])
 
+    def test_numbered_body_list_under_a_blocking_item_is_not_new_items(self):
+        text = _review(1, 'FAIL', (
+            '## 阻断项\n\n'
+            '### #1 test_weakened — the first blocker\n\n'
+            '1. first repair step\n'
+            '2. second repair step\n\n'
+            '### #2 bug — the second blocker\n'))
+        items = _item(text, 1)
+        self.assertEqual([(i['item'], i['class']) for i in items],
+                         [(1, 'test_weakened'), (2, 'bug')])
+
     def test_mention_of_an_earlier_round_is_not_an_item(self):
         text = _review(2, 'PASS', '## 上一轮发现逐条核对\n\n- **r1#1 已修。**\n')
         self.assertEqual(_item(text, 2), [])
