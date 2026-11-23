@@ -188,7 +188,7 @@ import re  # noqa: E402
 import secrets  # noqa: E402
 import shutil  # noqa: E402
 import time  # noqa: E402
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple  # noqa: E402
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple  # noqa: E402
 
 from pfstep import container, deadline, duration, git, goglob, gotext, runner, secretpat  # noqa: E402
 from pfstep import targetbranch  # noqa: E402
@@ -2789,6 +2789,51 @@ def _handoff_child(kind: str, environ: Mapping[str, str]) -> Invocation:
     return Invocation(COMMAND, [kind], environ, stdout=io.StringIO(), stderr=io.StringIO())
 
 
+def plan_write_paths(md: str) -> Set[str]:
+    """The plan's `Touched files:` writes (repo-relative paths): D6's
+    declared set — the units' test files are no declaration (owner Q5 A)."""
+    out: Set[str] = set()
+    for f in plan_touched_files(md):
+        if f.get("intent") != "write":
+            continue
+        p = clean_repo_path(f.get("path"))
+        if p:
+            out.add(p)
+    return out
+
+
+def existing_test_hits(capsule_dir: str, repos: Sequence[str], plan_md: str,
+                       changed: Optional[Dict[str, List[str]]], unavailable: str) -> Tuple[List[Dict[str, Any]], str]:
+    """D6 (polyforge#241, AC2): a test file that already exists at the
+    change base and is changed by the build, with no `Touched files:`
+    `(write)` in the plan naming it. A new test file is no existing test;
+    a deleted or renamed-away path is a modification (`--no-renames`).
+    Answers (hits, why the item could not be judged — "" when it could)."""
+    if unavailable:
+        return [], unavailable
+    declared = plan_write_paths(plan_md)
+    hits: List[Dict[str, Any]] = []
+    files = changed or {}
+    for name in sorted(files):
+        d = os.path.join(capsule_dir, "repos", name)
+        if not os.path.isdir(d):
+            continue
+        base, why = change_base(d)
+        if why:
+            return [], "repos/%s: %s" % (name, why)
+        rules = TestPathRules.at(d)
+        for p in files[name]:
+            if not rules.is_test(p):
+                continue
+            if p in declared or (name + "/" + p) in declared:
+                continue
+            if run_git(d, "cat-file", "-e", base + ":" + p)[1] is not None:
+                continue  # absent at the change base: a new test file owes no declaration
+            hits.append(_handoff_hit("D6", "existing test modified but the plan's write set does not declare it",
+                                     repo=name, path=p))
+    return hits, ""
+
+
 def _handoff_hit(item: str, reason: str, repo: str = "", unit: str = "", path: str = "") -> Dict[str, Any]:
     h: Dict[str, Any] = {"item": item, "reason": reason}
     if repo:
@@ -2956,6 +3001,18 @@ def handoff(inv: Invocation, args: List[str], environ: Mapping[str, str],
             if sel.get("status") == "fail":
                 hits.append(_handoff_hit("D4", "%s:selected: %s" % (sel.get("repo", ""), sel.get("problem", "")), repo=str(sel.get("repo", ""))))
 
+    # D6: the plan's write set against the existing test files the diff changed.
+    plan_path = c.path(ns.plan, DEFAULT_PLAN)
+    changed, changed_why = changed_files(c.repos_dir)
+    try:
+        raw_plan = read_text(plan_path)
+    except OSError as err:
+        raw_plan, changed_why = "", changed_why or ("build's plan is unreadable: %s" % gotext.os_error("open", err))
+    d6_hits, d6_why = existing_test_hits(c.dir, c.repos, raw_plan, changed, changed_why)
+    hits.extend(d6_hits)
+    if d6_why:
+        not_judged.append({"item": "D6", "reason": d6_why})
+
     # D5: the two deterministic test_weakened markers, no cite finding.
     for hunk in weakened:
         if hunk.get("cite"):
@@ -2979,7 +3036,7 @@ def handoff(inv: Invocation, args: List[str], environ: Mapping[str, str],
         inv.summary = "every mechanical fact passes; %d sub-item(s) not judged: %s" % (
             len(not_judged), "; ".join("%s: %s" % (n.get("item"), clip_runes(str(n.get("reason", "")), 200)) for n in not_judged))
         return 0
-    inv.summary = "every mechanical fact passes (D1–D5; %d test_weakened hunk(s) left for review)" % len(weakened)
+    inv.summary = "every mechanical fact passes (D1–D6; %d test_weakened hunk(s) left for review)" % len(weakened)
     return 0
 
 def micro_bounds(inv: Invocation, args: List[str]) -> int:
