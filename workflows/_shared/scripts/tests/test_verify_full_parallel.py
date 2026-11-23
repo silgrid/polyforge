@@ -21,6 +21,7 @@ group's start marker, so the same case fails red under a serial run.
 
 import json
 import os
+import re
 import tempfile
 import unittest
 from typing import Any, Dict, List, Tuple
@@ -83,14 +84,14 @@ def log_names(r: Run) -> List[str]:
     return [os.path.basename(c.get("log_path", "")) for c in r.doc["repos"][0]["commands"]]
 
 
+# A command's start line: gate.py's format, [i/n] name (phase): cmd
+START_LINE = re.compile(r"^verify\.py: \[\d+/\d+\] \S+ \((?:fast|full|scoped)\): ", re.ASCII)
+
+
 def start_lines(r: Run) -> List[str]:
     """The progress stream's command start lines, in the order they were
     said."""
-    out = []
-    for line in r.stderr.split("\n"):
-        if "] " in line and " (" in line and line.startswith("verify.py: ["):
-            out.append(line)
-    return out
+    return [line for line in r.stderr.split("\n") if START_LINE.match(line)]
 
 
 @unittest.skipUnless(HAVE_GIT and HAVE_BASH, "git and bash are needed")
