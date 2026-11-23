@@ -149,9 +149,10 @@ the exported event file:
                estimate shape is a description line (`估算依据：…`) and is
                ignored, while a malformed estimate line voids that repo
                only, as does a duplicated one; content inside a fenced
-               code block and the whole `## 历次分析` archive are ignored
-               (polyforge#261); no estimate prints `none`, a missing work
-               item `unknown`;
+               code block (a closing fence is at least as long as the
+               opening one) and the whole `## 历次分析` archive are
+               ignored (polyforge#261); no estimate prints `none`, a
+               missing work item `unknown`;
                the summary counts `no estimate`, `estimate unknown` and
                `approved unknown` apart (names included), and an estimate
                of zero has no ratio.
@@ -1450,14 +1451,15 @@ def parse_estimate(cap):
     one `估算：<repo> 新增 N 个文件、修改 M 个文件、单元 K 个` per repo;
     a malformed or duplicated repo is no estimate for that repo. A line
     that starts with 估算 but carries no estimate colon (`估算依据：…`) is
-    a description and is ignored; fenced code blocks and the `## 历次分析`
-    archive are ignored (polyforge#261). Returns None (work item
-    unreadable), 'none', or the file count summed."""
+    a description and is ignored; fenced code blocks (a closing fence is
+    at least as long as the opening one) and the `## 历次分析` archive are
+    ignored (polyforge#261). Returns None (work item unreadable), 'none',
+    or the file count summed."""
     wj = jload(os.path.join(cap, 'runtime-state', 'work-item.json'))
     if not isinstance(wj, dict):
         return None
     lines = (wj.get('content') or '').split('\n')
-    inside, subsection, in_history = False, False, False
+    inside, subsection = False, False
     fence = ''
     valid, poisoned, bad_all = {}, set(), False
     dim = re.compile(r'^估算：(\S+) 新增 (\d+) 个文件、修改 (\d+) 个文件、单元 (\d+) 个$')
@@ -1466,21 +1468,23 @@ def parse_estimate(cap):
         text = line.strip()
         marker = re.match(r'^(`{3,}|~{3,})', text)
         if fence:
-            if marker and marker.group(1)[0] == fence:
+            # CommonMark: a closing fence is at least as long as the opening
+            # one and carries the same character, so an inner ``` never
+            # closes an outer ```` (the redo archive's own shape).
+            if marker and marker.group(1)[0] == fence[0] and len(marker.group(1)) >= len(fence):
                 fence = ''
             continue
         if marker:
-            fence = marker.group(1)[0]
+            fence = marker.group(1)
             continue
         if text.startswith('## '):
             # `## 历次分析` archives the analyses a redo replaced; its own
             # `## 分析` heading rides inside a fenced block and is ignored
             # above (polyforge#261).
-            in_history = text == '## 历次分析'
-            inside = not in_history and text == '## 分析'
+            inside = text == '## 分析'
             subsection = False
             continue
-        if in_history or not inside:
+        if not inside:
             continue
         if text.startswith('### '):
             subsection = text.startswith('### 1.')
