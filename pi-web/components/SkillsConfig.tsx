@@ -177,6 +177,24 @@ export function skillFooterVisible({ embedded, installable, updateAvailable }: {
   return updateAvailable || installable || !embedded;
 }
 
+/**
+ * The panel's footer (polyforge#257 B8): presentational, and it draws only
+ * while it has a status line (an update count) or an action (Close, check
+ * updates). Placeholder body: the unit's render test lands first and this
+ * always-empty body is what it fails on.
+ */
+export function SkillsConfigFooter(_props: {
+  embedded: boolean;
+  installable: boolean;
+  updateCount: number;
+  checkingAll: boolean;
+  updating: boolean;
+  onClose: () => void;
+  onCheckUpdates: () => void;
+}) {
+  return null;
+}
+
 /** The sidebar's scope groups (AC1/AC3): 用户 always, 项目 only with a project; empty groups never render. */
 export function skillRowGroups(
   rows: UnifiedSkillRow[],
@@ -1318,30 +1336,32 @@ export function SkillsConfig({
           </ConfigDetail>
         </ConfigSplitView>
 
-        {/* Footer: only while it has something to say (polyforge#257 B8 — an
-            embedded panel with no update and no action drew an empty bar). */}
-        {(() => {
-          const updates = Object.values(updateStatuses).filter((status) => status.state === "update-available").length;
-          const installable = piSkills.some((skill) => Boolean(skill.install));
-          if (!skillFooterVisible({ embedded: Boolean(embedded), installable, updateAvailable: updates > 0 })) return null;
-          return (
-            <ConfigFooter status={
-                updates > 0 && (
-                  <span style={{ fontSize: 12, color: "#d97706" }}>
-                    {updates}{" "}
-                    {updates === 1 ? t("i18n.update") : t("i18n.updates")}
-                  </span>
-                )}
-            >
-              {!embedded && <ConfigButton onClick={onClose}>{t("i18n.close")}</ConfigButton>}
-              {installable && (
-                <ConfigButton variant="secondary" onClick={() => void checkForUpdates()} disabled={checkingAll || updatingSkill !== null}>
-                  {checkingAll ? t("i18n.checking") : t("i18n.checkUpdates")}
-                </ConfigButton>
-              )}
-            </ConfigFooter>
-          );
-        })()}
+        {/* Footer */}
+        <ConfigFooter status={
+            Object.values(updateStatuses).filter(
+              (status) => status.state === "update-available",
+            ).length > 0 && (
+              <span style={{ fontSize: 12, color: "#d97706" }}>
+                {
+                  Object.values(updateStatuses).filter(
+                    (status) => status.state === "update-available",
+                  ).length
+                }{" "}
+                {Object.values(updateStatuses).filter(
+                  (status) => status.state === "update-available",
+                ).length === 1
+                   ? t("i18n.update")
+                   : t("i18n.updates")}
+              </span>
+            )}
+        >
+          {!embedded && <ConfigButton onClick={onClose}>{t("i18n.close")}</ConfigButton>}
+          {piSkills.some((skill) => Boolean(skill.install)) && (
+            <ConfigButton variant="secondary" onClick={() => void checkForUpdates()} disabled={checkingAll || updatingSkill !== null}>
+              {checkingAll ? t("i18n.checking") : t("i18n.checkUpdates")}
+            </ConfigButton>
+          )}
+        </ConfigFooter>
     </ConfigPanelShell>
   );
 }
