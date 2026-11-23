@@ -262,6 +262,12 @@ func (d *Daemon) analysisPrompt(item *api.WorkItem) (string, error) {
 	if sec := d.analysisComponentsSection(item, dir); sec != "" {
 		p += "\n\n---\n\n" + sec
 	}
+	// polyforge#81 (AC4): the Host step-tier catalog and the ticket's lane
+	// step table ride the prompt so the analysis can recommend one tier
+	// per step; an empty catalog is one fallback line, never a refusal.
+	if sec := d.analysisStepTiersSection(item); sec != "" {
+		p += "\n\n---\n\n" + sec
+	}
 	return p + "\n\n---\n\n# 工单\n\n" + content, nil
 }
 

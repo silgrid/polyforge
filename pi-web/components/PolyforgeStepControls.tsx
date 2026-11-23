@@ -149,7 +149,11 @@ export function PolyforgeStepControls({ wi, profile, step, skippable, unstarted,
         <>
           <span data-pf-step-controls-source="">
             {t("polyforge.stepControls.source")}:{" "}
-            {effective.length > 0 ? `${effective.join(", ")} · ${source}` : t("polyforge.stepControls.sourceNone")}
+            {effective.length > 0
+              ? `${effective.join(", ")} · ${source}`
+              : source
+                ? `— · ${source}` // polyforge#81 (Q13 A): a declared-empty level still has a real source; never hide it
+                : t("polyforge.stepControls.sourceNone")}
             {pending ? ` ${t("polyforge.stepControls.pending")}` : ""}
           </span>
           <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>

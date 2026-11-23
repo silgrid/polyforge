@@ -119,6 +119,15 @@ RUN ln -s /components/current/bin/pf /usr/local/bin/pf
 # the component seed: read-only in the image, the first boot installs
 # it into the components volume (84-components).
 COPY --from=seed /seed /opt/polyforge/seed/releases/${SEED_VERSION}
+# the host-side delivery (polyforge#86, Q8): the files a published image
+# hands the host - the compose file, the pinned seccomp profile, the https
+# fronting and the acceptance driver, the smoke's own export set (smoke.sh
+# first per the #168 Q3 ruling) - read straight from the image, so a user
+# with nothing but Docker needs no repository checkout:
+#   docker run --rm --entrypoint tar <image>:<tag> -C /opt/polyforge/host-files -cf - . | tar -xf -
+COPY dist/workstation/compose.yaml dist/workstation/seccomp.json \
+     dist/workstation/seccomp.json.sha256 dist/workstation/Caddyfile \
+     dist/workstation/smoke.sh /opt/polyforge/host-files/
 COPY dist/workstation/entrypoint.sh /usr/local/bin/workstation-entrypoint.sh
 COPY dist/workstation/env-whitelist.sh /usr/local/bin/workstation-env-whitelist.sh
 COPY dist/workstation/containers/storage.conf /etc/containers/storage.conf
