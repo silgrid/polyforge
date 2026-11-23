@@ -6,6 +6,7 @@ import { stripTypeScriptTypes } from "node:module";
 import vm from "node:vm";
 
 const source = await readFile(new URL("./PolyforgePanel.tsx", import.meta.url), "utf8");
+const hookSource = await readFile(new URL("../hooks/usePolyforge.ts", import.meta.url), "utf8");
 const panelLayoutSource = await readFile(new URL("../lib/panel-layout.ts", import.meta.url), "utf8");
 const enSource = await readFile(new URL("../lib/i18n/messages/en.ts", import.meta.url), "utf8");
 const zhCNSource = await readFile(new URL("../lib/i18n/messages/zh-CN.ts", import.meta.url), "utf8");
@@ -894,16 +895,16 @@ test("the top strip orders Work, Memory, Messages (owner 2026-10-30); Work hosts
     "the 全部 sub-tab renders the work-item surface with the count key, the badge reporter and the lower-part detail");
   // the external task open rides beside the count key.
   // the task summaries (decision-feed entries) ride beside it.
-  assert.match(source, /<PolyforgeTasks\s+taskCountKey=\{opsStatus \? `\$\{opsStatus\.tasks\?\.running \?\? 0\}:\$\{opsStatus\.tasks\?\.completed \?\? 0\}` : null\}\s+openTask=\{taskToOpen\}\s+onOpenTaskHandled=\{clearTaskToOpen\}\s+decisions=\{decisionsSurface\.feed\?\.decisions \?\? \[\]\}\s+onDismissDecisions=\{decisionsSurface\.onDismiss\}\s+renderDetail=\{renderWorkDetail\}\s+onDetailOpenChange=\{setSubDetailOpen\}\s+\/>/,
-    "the Tasks surface re-reads on the status snapshot's running:completed key (null without a snapshot)");
+  assert.match(source, /<PolyforgeTasks\s+taskCountKey=\{opsStatus \? `\$\{opsStatus\.tasks\?\.running \?\? 0\}:\$\{opsStatus\.tasks\?\.completed \?\? 0\}` : null\}\s+openTask=\{taskToOpen\}\s+onOpenTaskHandled=\{clearTaskToOpen\}\s+decisions=\{decisionsSurface\.feed\?\.decisions \?\? \[\]\}\s+onDismissDecisions=\{decisionsSurface\.onDismiss\}\s+renderDetail=\{renderWorkDetail\}\s+onDetailOpenChange=\{setSubDetailOpen\}\s+onOpenAnchor=\{messagesSurface\.onOpenAnchor\}\s+\/>/,
+    "the Tasks surface re-reads on the status snapshot's running:completed key (null without a snapshot) and, since polyforge#230, opens an analysis task's ticket through the messages surface's own opener");
   // The sub-tab controls: their own named tablist, after the main area.
   const work = source.slice(source.indexOf('role="tablist"\n              data-pf-tabstrip="work"'), source.indexOf('<div data-pf-work-detail=""'));
   assert.ok(source.indexOf('data-pf-tabstrip="work"') > source.indexOf(") : workTab === \"tasks\" ? ("), "the sub-tab controls follow the main area in the DOM");
   // (intentional 2026-10-31 third-segment change): jobs, tasks, items in that order
   // (the 决策 sub-tab is gone again: owner ruling 2026-11-09, every interaction is the work item's).
-  // intentional fourth sub-tab: 待集成 (`integrate`) last; polyforge#30 adds
-  // the fifth segment 项目 (`projects`) between 全部 and 待集成.
-  assert.match(work, /\(\["jobs", "tasks", "items", "projects", "integrate"\] as const\)\.map\(\(tab\) =>/);
+  // polyforge#226 hides 项目 (`projects`) and 待集成 (`integrate`): the rail
+  // maps one visible list, and both hidden segments keep their label/icon/body.
+  assert.match(work, /\{VISIBLE_WORK_TABS\.map\(\(tab\) =>/, "the rail maps the one visible list");
   assert.match(work, /role="tab" aria-selected=\{active\}\s*onClick=\{\(\) => onWorkTab\(tab\)\}/);
   assert.match(work, /const label = tab === "jobs" \? t\("polyforge\.messages\.jobsTab"\) : tab === "tasks" \? t\("polyforge\.tasks\.tab"\)\s*: tab === "items" \? t\("polyforge\.work\.itemsTab"\) : tab === "projects" \? t\("polyforge\.work\.projectsTab"\)\s*: t\("polyforge\.work\.integrateTab"\);/,
     "作业 / 任务 / 全部 / 项目 / 待集成 labels ( adds the third; intentional fourth sub-tab; 全部 renamed by polyforge#22; polyforge#30 adds 项目)");
@@ -938,8 +939,9 @@ test("the top strip orders Work, Memory, Messages (owner 2026-10-30); Work hosts
   // the badge rides right of the label on one line.
   assert.match(work, /display: "flex", flexDirection: isMobile \? "column" : "row", alignItems: "center", justifyContent: "center"/, "mobile stacks the icon over the badge; desktop puts the badge right of the label on one line (polyforge#22)");
   assert.match(source, /const workTabIcon = \(paths: ReactNode\) => \(\s*<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">/, "16px icons in the panel's 24-viewBox stroke style");
-  // intentional fourth sub-tab: 待集成 has its rail icon too.
-  for (const tab of ["jobs", "tasks", "items", "integrate"]) assert.match(source, new RegExp(`\\n  ${tab}: workTabIcon\\(`), `${tab} has a rail icon`);
+  // intentional fourth sub-tab: 待集成 has its rail icon too; polyforge#226
+  // hides it and 项目 from the rail but keeps both icons for the restore.
+  for (const tab of ["jobs", "tasks", "items", "projects", "integrate"]) assert.match(source, new RegExp(`\\n  ${tab}: workTabIcon\\(`), `${tab} has a rail icon`);
   assert.match(work, /background: active \? "var\(--bg-selected\)" : "none"/);
   for (const [name, localeSource] of [["en", enSource], ["zh-CN", zhCNSource], ["zh-TW", zhTWSource]]) {
     assert.match(localeSource, /"polyforge\.tasks\.tab": "\S/, `${name} translates the Tasks label`);
@@ -953,6 +955,29 @@ test("the top strip orders Work, Memory, Messages (owner 2026-10-30); Work hosts
   assert.match(zhCNSource, /"polyforge\.messages\.jobsTab": "作业"/);
   assert.match(zhTWSource, /"polyforge\.messages\.jobsTab": "作業"/);
   assert.match(enSource, /"polyforge\.tasks\.tab": "Tasks"/);
+});
+
+test("the Work rail exposes only 作业, 任务 and 全部; 项目 and 待集成 stay restorable from the one visible list", () => {
+  const start = source.indexOf("export const VISIBLE_WORK_TABS");
+  assert.ok(start >= 0, "one visible Work sub-tab list");
+  const end = source.indexOf("];", start);
+  assert.ok(end > start, "the visible list is a closed array");
+  const visibleTabs = vm.runInContext(stripTypeScriptTypes(`${source.slice(start, end + 2).replace("export ", "")}\nVISIBLE_WORK_TABS`), vm.createContext({}));
+  assert.deepEqual([...visibleTabs], ["jobs", "tasks", "items"],
+    "the Work rail shows 作业, 任务 and 全部, in that order, and nothing else");
+  const work = source.slice(source.indexOf('role="tablist"\n              data-pf-tabstrip="work"'), source.indexOf('<div data-pf-work-detail=""'));
+  assert.match(work, /\{VISIBLE_WORK_TABS\.map\(\(tab\) =>/, "the tablist consumes the one visible list");
+  assert.doesNotMatch(work, /\[\s*"jobs",\s*"tasks",\s*"items",\s*"projects",\s*"integrate",?\s*\]/, "no second five-value literal drives the rail");
+  // The hidden surfaces stay wired: one visible-list entry is all a restore changes.
+  assert.match(source, /import \{ PolyforgeProjects \} from "\.\/PolyforgeProjects";/);
+  assert.match(source, /import \{ PolyforgeIntegrate \} from "\.\/PolyforgeIntegrate";/);
+  assert.match(source, /workTab === "projects" \? \(/);
+  assert.match(source, /workTab === "integrate" \? \(/);
+  assert.match(source, /projects: workTabIcon\(/);
+  assert.match(source, /integrate: workTabIcon\(/);
+  assert.match(source, /polyforge\.work\.projectsTab/);
+  assert.match(source, /polyforge\.work\.integrateTab/);
+  assert.match(hookSource, /export type PolyforgeWorkTab = "jobs" \| "tasks" \| "items" \| "projects" \| "integrate";/, "the five-value type stays");
 });
 
 test("the sub-tab badges show running counts from the one status snapshot; zero greyed, none on Work", () => {
@@ -1112,8 +1137,8 @@ test(" (owner intentional change, reversing #238): the detail opens at its botto
 test("an analysis card's task link switches to Work › Tasks and hands the id — and the handed Cell — to the Tasks surface", () => {
   const start = source.indexOf("const openTask = useCallback(");
   const body = source.slice(start, source.indexOf("}, [onActiveTab, onWorkTab]);", start));
-  assert.match(body, /setTaskToOpen\(cell \? \{ id: taskId, cell \} : \{ id: taskId \}\);\s*onWorkTab\("tasks"\);\s*onActiveTab\("work"\);/,
-    "polyforge#73: the handed task open carries the Cell when there is one");
+  assert.match(body, /setTaskToOpen\(cell \? \{ id: taskId, cell \} : \{ id: taskId \}\);\s*onActiveTab\("work"\);\s*onWorkTab\("tasks"\);/,
+    "polyforge#73: the handed task open carries the Cell when there is one; polyforge#225: the top-level switch resets Work's sub-tab, so the explicit 任务 target writes after it");
   assert.match(source, /onOpenTask=\{openTask\}/);
   assert.match(source, /openTask=\{taskToOpen\}\s*onOpenTaskHandled=\{clearTaskToOpen\}/);
 });

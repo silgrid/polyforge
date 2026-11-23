@@ -1208,6 +1208,20 @@ inherited its plan keeps skipping the plan-conformance line. The develop
 build step's line budget rises from 215 to 222. No upgrade action beyond
 the next `pf` install: texts and the one engine entry, nothing to migrate.
 
+## v0.2.4, `pf file analysis redo` re-schedules an old ticket's analysis (polyforge#233)
+
+A queued or blocked execution ticket whose pre-submit analysis was written
+before the current report format or against a stale base can be re-analyzed
+in place: `pf file analysis redo <id>` archives the active `## 分析` section
+verbatim in the ticket's new `## 历次分析` area, schedules the same analysis
+task `pf file create` schedules, and leaves the new draft unconfirmed until
+the owner runs `pf file analysis confirm <id>`. The ticket is refused while
+it is claimed, running or terminal, or while a local execution job, a running
+analysis task or a pending analysis request holds it. The daemon and the CLI
+must both carry the new verb; the strong guarantee is that machine's daemon —
+another machine's auto-pull relies on the ticket's unconfirmed marker. No
+database or configuration migration is needed.
+
 ## v0.2.4, the container supervisor and the upgrade drain (polyforge#160)
 
 The workstation container's supervision ships: `pf supervise` is the

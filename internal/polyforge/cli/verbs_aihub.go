@@ -33,7 +33,18 @@ var cmdFile = &Command{
 		"pf file show <id>\n" +
 		"pf file dep add <blocking> <blocked>\n" +
 		"pf file dep rm <blocking> <blocked>\n" +
-		"pf file dep list <id>\n\n" +
+		"pf file dep list <id>\n" +
+		"pf file analysis confirm <id>\n" +
+		"pf file analysis redo <id>\n\n" +
+		"`pf file analysis redo <id>` re-schedules a queued or blocked\n" +
+		"execution ticket's pre-submit analysis for an analysis in the old format,\n" +
+		"written against a stale base, or after a materially changed scope. The\n" +
+		"old analysis (旧分析) is kept verbatim in the ticket's `## 历次分析` section; the\n" +
+		"new draft stays unconfirmed until `pf file analysis confirm <id>`. A\n" +
+		"claimed, running or terminal ticket, or one with a local execution job,\n" +
+		"a running analysis task or a pending analysis request, is refused. The\n" +
+		"strong guarantee covers this machine's daemon only; another machine\n" +
+		"relies on the unconfirmed marker.\n\n" +
 		"Dependencies are `blocks` edges inside one project: the blocked work\n" +
 		"item is not claimed until every blocker is WRAPPED. A blocker must be\n" +
 		"an execution ticket (bundle bound). A failed or canceled blocker keeps\n" +
@@ -69,16 +80,32 @@ var cmdFile = &Command{
 // fileAnalysis serves the analysis section's owner gate:
 //
 //	pf file analysis confirm <id>
+//	pf file analysis redo <id>
 //
-// — the one command that removes an unconfirmed auto-analysis marker
-// (polyforge#72, ruling 9): after it the auto-pull wave may claim the
-// ticket again. The draft itself is untouched; the write carries the
-// content CAS so a concurrent edit elsewhere is never overwritten.
+// `confirm` is the one command that removes an unconfirmed auto-analysis
+// marker (polyforge#72, ruling 9): after it the auto-pull wave may claim
+// the ticket again. `redo` (polyforge#233) asks this machine's daemon to
+// re-schedule the analysis under the current prompt for a queued or
+// blocked execution ticket — the old section is archived verbatim in
+// `## 历次分析` and the new draft stays unconfirmed until the owner
+// confirms it. Both keep the draft itself untouched; every write carries
+// the content CAS so a concurrent edit elsewhere is never overwritten.
 func fileAnalysis(ctx *Context, args []string) error {
-	if len(args) != 2 || args[0] != "confirm" {
-		return fmt.Errorf("file analysis: expected `confirm <id>` — the owner's confirmation of the auto-scheduled analysis (see `pf help file`)")
+	if len(args) != 2 {
+		return fmt.Errorf("file analysis: expected `confirm <id>` or `redo <id>` — the owner's confirmation of the auto-scheduled analysis, or a re-scheduling of a stale one (see `pf help file`)")
 	}
-	name := args[1]
+	switch args[0] {
+	case "confirm":
+		return fileAnalysisConfirm(ctx, args[1])
+	case "redo":
+		return fileAnalysisRedo(ctx, args[1])
+	default:
+		return fmt.Errorf("file analysis: unknown action %q — expected `confirm <id>` or `redo <id>` (see `pf help file`)", args[0])
+	}
+}
+
+// fileAnalysisConfirm is `pf file analysis confirm <id>`.
+func fileAnalysisConfirm(ctx *Context, name string) error {
 	wi, err := ctx.aihub().GetWorkItem(name)
 	if err != nil {
 		return err
@@ -101,6 +128,44 @@ func fileAnalysis(ctx *Context, args []string) error {
 	finishAs(ctx, raw, func(v *WIView) {
 		fmt.Fprintf(ctx.Stdout, "已确认分析（标记已去除；自动领取放行）：%s\n", api.DisplayName(v.Slug, v.ID))
 	})
+	return nil
+}
+
+// fileAnalysisRedo is `pf file analysis redo <id>`: the daemon owns the
+// eligibility checks, the archive and the scheduling; the CLI only names
+// the ticket and reports what came of the request.
+func fileAnalysisRedo(ctx *Context, name string) error {
+	wi, err := ctx.aihub().GetWorkItem(name)
+	if err != nil {
+		return err
+	}
+	display := api.DisplayName(wi.Slug, wi.ID)
+	raw, err := ctx.daemon().do("POST", "/analysis/redo", "",
+		map[string]any{"work_item_id": wi.ID, "project": wi.ProjectName}, nil)
+	if err != nil {
+		return fmt.Errorf("file analysis redo %s: %w", display, err)
+	}
+	var res struct {
+		State     string `json:"state"`
+		TaskID    string `json:"task_id"`
+		RequestID string `json:"request_id"`
+		Detail    string `json:"detail"`
+	}
+	if err := json.Unmarshal(raw, &res); err != nil {
+		return fmt.Errorf("file analysis redo %s: the daemon's answer is unreadable: %w", display, err)
+	}
+	switch res.State {
+	case "scheduled":
+		fmt.Fprintf(ctx.Stdout, "已重新安排分析：%s（旧分析已归档到 `## 历次分析`；确认前自动领取跳过，见 `pf file analysis confirm`）\n", res.TaskID)
+	case "queued":
+		fmt.Fprintf(ctx.Stdout, "分析重排已排队（%s；daemon 会在有空位时自动派出）\n", res.RequestID)
+	default:
+		detail := strings.TrimSpace(res.Detail)
+		if detail == "" {
+			detail = "the daemon refused the request"
+		}
+		return fmt.Errorf("file analysis redo %s: %s", display, detail)
+	}
 	return nil
 }
 

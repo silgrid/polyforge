@@ -77,26 +77,9 @@ func (s *contextSource) read(windows map[string]int64) *protocol.ContextUsage {
 	if s.path == "" {
 		return nil
 	}
-	c := s.reader.Read(s.path)
-	u := &protocol.ContextUsage{Model: c.Model}
-	if c.TokensKnown {
-		tokens := c.Tokens
-		u.Tokens = &tokens
-		if _, err := time.Parse(time.RFC3339Nano, c.At); err == nil {
-			u.AsOf = c.At
-		}
-	}
-	if u.Tokens == nil && u.Model == "" {
-		return nil
-	}
-	if w := windows[c.Model]; c.Model != "" && w > 0 {
-		u.Window = &w
-		if u.Tokens != nil {
-			pct := float64(*u.Tokens) / float64(w) * 100
-			u.Percent = &pct
-		}
-	}
-	return u
+	// the wire shape is sessionjsonl's one mapping (polyforge#230), shared
+	// with the task lane's running-task `context`
+	return s.reader.Read(s.path).Usage(windows)
 }
 
 // contextUsage answers the published dispatch's context usage (any

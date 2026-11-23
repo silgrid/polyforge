@@ -2238,6 +2238,7 @@ export const enLocale: LocalePlugin = {
     "polyforge.tasks.upgrade": "pf upgrade required",
     "polyforge.tasks.upgradeReason": "Update pf to use the Tasks tab.",
     "polyforge.tasks.back": "Back",
+    "polyforge.tasks.analysisOf": "Analyzing {slug}",
     "polyforge.tasks.status": "Status",
     "polyforge.tasks.project": "Project",
     "polyforge.tasks.candidates": "Candidates",

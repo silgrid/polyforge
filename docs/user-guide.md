@@ -240,6 +240,12 @@ the analysis task (or says it is queued), and that task writes its 7-item
 report into the ticket's `## 分析` section itself (`pf task analysis-write`).
 Read the draft (`pf file show demo#7`); `pf queue` marks the ticket
 需要交互：分析待确认 until the owner confirms it with
+`pf file analysis confirm demo#7`. If that analysis was written before the
+current report format, against a stale base, or the scope changed materially,
+re-schedule it for a queued or blocked ticket with
+`pf file analysis redo demo#7`: the old `## 分析` text moves verbatim to
+`## 历次分析`, a new analysis task runs the current prompt, and its draft
+stays unconfirmed (auto-pull skips the ticket) until
 `pf file analysis confirm demo#7`. When the create says 未安排分析 (no daemon
 reachable), the session runs it instead: a read-only `pf task spawn` errand
 over the ticket and the code it touches, its report written in with
@@ -453,11 +459,11 @@ anything. Deactivation and the hard delete are different moves:
   irreversible) removes data — see its warning in the table below.
 - The default lists hide deactivated projects: `pf projects list`
   (`--show-deactivated` lists them, marked), `pf queue`'s merged view
-  skips them, and both the AIHub console's project picker and Pi Web's
-  Work › 项目 view hide them behind a「show deactivated」entry. The
-  restore entry sits in the same place: `pf projects restore
-  <id-or-name>` (the same roles), and the console and Pi Web restore in
-  place from the marked row.
+  skips them, and the AIHub console's project picker hides them behind a
+  「show deactivated」entry. Restore with `pf projects restore
+  <id-or-name>` (the same roles), or in place from the console picker's
+  marked row. Pi Web's Work › 项目 view still implements the same
+  hide/mark/restore, but its rail entry is hidden since polyforge#226.
 - Restore brings the project back to active at once and every refused
   operation works again immediately. The deactivation state is
   operational, never data: the v0.2.1 section of

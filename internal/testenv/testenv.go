@@ -171,8 +171,12 @@ func run(m *testing.M, atExit []func() error) (int, error) {
 	// on a machine serving several Cells carries PF_CELL, PF_CELL_SERVER,
 	// PF_DEPLOY_ENV and PF_CELL_TARGETS — the last naming the operator's
 	// deploy configuration file — and the deploy acceptance tests must
-	// not see a serving-Cell machine the test world never built.)
-	for _, k := range []string{"PF_DAEMON_SOCKET", "PF_WI_ID", "PF_DAEMON_ID", "POLYFORGE_MACHINE_ID", "TMUX", "TMUX_PANE", "PI_CODING_AGENT_DIR", "GOTMPDIR", "PF_CELL", "PF_CELL_SERVER", "PF_DEPLOY_ENV", "PF_CELL_TARGETS"} {
+	// not see a serving-Cell machine the test world never built.
+	// PF_CAPSULE is the same class: a step's capsule root, whose
+	// runtime-state/target-branch.json makes the verify-scope engine take
+	// an epic child ticket's target branch as the default diff base, while
+	// the tests' synthetic repositories build only origin/main.)
+	for _, k := range []string{"PF_DAEMON_SOCKET", "PF_WI_ID", "PF_DAEMON_ID", "POLYFORGE_MACHINE_ID", "TMUX", "TMUX_PANE", "PI_CODING_AGENT_DIR", "GOTMPDIR", "PF_CELL", "PF_CELL_SERVER", "PF_DEPLOY_ENV", "PF_CELL_TARGETS", "PF_CAPSULE"} {
 		os.Unsetenv(k)
 	}
 	code := m.Run()

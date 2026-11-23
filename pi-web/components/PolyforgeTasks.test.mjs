@@ -7,16 +7,19 @@ const source = await readFile(new URL("./PolyforgeTasks.tsx", import.meta.url), 
 const enSource = await readFile(new URL("../lib/i18n/messages/en.ts", import.meta.url), "utf8");
 
 test("the tab reads on gestures only: one list read per opening, one detail read per selection, no poll or storage", () => {
-  // the one timer is the block clock — it re-renders and
-  // fetches nothing (the spec's own requirement; it replaces "no timer").
-  assert.equal((source.match(/setInterval\(/g) ?? []).length, 1, "exactly one interval: the block clock");
+  // two intervals: the block clock (re-renders, fetches nothing) and the
+  // owner-ruled running refresh (polyforge#230 Q2=B: 15 s while a running
+  // task is listed) — see the dedicated test below.
+  assert.equal((source.match(/setInterval\(/g) ?? []).length, 2, "two intervals: the block clock and the running refresh");
   assert.doesNotMatch(source, /setTimeout/, "no other timer");
   assert.match(source, /const clock = setInterval\(\(\) => setNow\(Date\.now\(\)\), 1000\);/, "the clock only reads the time, about once per second");
   assert.doesNotMatch(source, /localStorage|sessionStorage/, "nothing persisted");
   const urls = [...source.matchAll(/fetch\((`[^`]+`|"[^"]+")/g)].map((m) => m[1]);
   // polyforge#73: the detail URL is built per row — its Cell's ?profile= when
   // it has one — so only the list read stays a literal fetch argument.
-  assert.deepEqual(urls, ['"/api/polyforge/tasks"'], "the one literal list read");
+  // polyforge#230: the analysis row adds one more literal read, the existing
+  // work-item route (never a new API).
+  assert.deepEqual(urls, ["`/api/polyforge/work-items/${encodeURIComponent(id)}`", '"/api/polyforge/tasks"'], "the analyzed ticket read and the list read");
   assert.match(source, /`\/api\/polyforge\/tasks\/\$\{encodeURIComponent\(id\)\}\?profile=\$\{encodeURIComponent\(cell\)\}`/, "the Cell-pinned detail read (polyforge#73)");
   assert.match(source, /: `\/api\/polyforge\/tasks\/\$\{encodeURIComponent\(id\)\}`/, "the Cell-less detail read stays");
   assert.doesNotMatch(source, /method:/, "every fetch is a plain GET");
@@ -24,8 +27,9 @@ test("the tab reads on gestures only: one list read per opening, one detail read
   assert.match(source, /if \(listReadRef\.current\) return;\s*listReadRef\.current = true;\s*readList\(\);/,
     "exactly one list read per mounted tab, even when mount effects re-run");
   // owner-intended change: the ↻ is the shared bar's action, so its
-  // click is onClick={readList}; the three reads are unchanged.
-  assert.equal((source.match(/readList\(\);/g) ?? []).length, 2, "the list is read at mount and on a count change, nowhere else");
+  // click is onClick={readList}; the reads are the mount read, the
+  // count-change read and the running refresh (Q2=B), nowhere else.
+  assert.equal((source.match(/readList\(\);/g) ?? []).length, 2, "the mount read and the count-change read; the running refresh and the ↻ call it as a callback, nowhere else");
   assert.match(source, /<PolyforgeRefreshButton refreshing=\{listRefreshing\} onClick=\{readList\} data-pf-tasks-refresh=""/,
     "the refresh button's click is the third read (shared action slot)");
 });
@@ -129,9 +133,10 @@ test("project and state selects filter the already-read list in component memory
   for (const handler of [/onChange=\{\(event\) => setProjectFilter\(event\.target\.value\)\}/, /onChange=\{\(event\) => setStateFilter\(event\.target\.value as PolyforgeTaskStateFilter\)\}/]) {
     assert.match(source, handler, "a filter change only sets component state");
   }
-  assert.equal((source.match(/fetch\(/g) ?? []).length, 2, "the two task reads stay the only requests");
+  // the three reads: the analyzed ticket (polyforge#230), the list and the detail
+  assert.equal((source.match(/fetch\(/g) ?? []).length, 3, "the analyzed ticket and the two task reads stay the only requests");
   assert.doesNotMatch(source, /localStorage|sessionStorage/, "the filters are not persisted");
-  assert.doesNotMatch(source, /model|time.?range/i, "no model or time-range filter");
+  assert.doesNotMatch(source, /filterModel|filterTimeRange/, "no model or time-range filter");
 });
 
 test("a reporter select — 全部发起人, humans ascending, 机器发起 last — filters the loaded list in component memory, with no read", () => {
@@ -143,7 +148,7 @@ test("a reporter select — 全部发起人, humans ascending, 机器发起 last
     "全部发起人 first, the human names, 机器发起 last");
   const selects = source.indexOf("filterAllProjects") < source.indexOf("TASK_STATE_FILTERS.map") && source.indexOf("TASK_STATE_FILTERS.map") < source.indexOf("filterAllReporters");
   assert.ok(selects, "the reporter select sits after the project and state selects");
-  assert.equal((source.match(/fetch\(/g) ?? []).length, 2, "still only the two task reads");
+  assert.equal((source.match(/fetch\(/g) ?? []).length, 3, "still only the analyzed ticket and the two task reads");
   assert.doesNotMatch(source, /localStorage|sessionStorage|useSearchParams|history\.(push|replace)State/, "the reporter selection is not persisted");
   for (const key of ["filterReporter", "filterAllReporters", "reporterMachine"]) assert.match(enSource, new RegExp(`"polyforge\\.tasks\\.${key}": "\\S`), `en translates ${key}`);
 });
@@ -180,4 +185,15 @@ test("an external task (the analysis card's link, the walk's target) opens that 
   const effect = source.slice(start, source.indexOf("}, [openTask]);", start));
   assert.match(effect, /openDetail\(openTask\.id, openTask\.cell \?\? undefined\);\s*onOpenTaskHandled\?\.\(\);/, "the same one detail read a row click makes, then handed back");
   assert.match(source, /<span data-pf-task=\{selected\.id\}/, "the open detail names its task");
+});
+
+// polyforge#230's AC2/AC3/Q2=B behaviour is proven on the react-hook shim by
+// components/PolyforgeTasks.context.test.mjs (review r1#1: source pins are no
+// behaviour evidence). The one wiring pin kept here is the panel's prop.
+test("the panel hands the Tasks surface the messages surface's ticket-opener, so 分析 <slug> opens the analyzed ticket", async () => {
+  const panel = await readFile(new URL("./PolyforgePanel.tsx", import.meta.url), "utf8");
+  const tasks = panel.slice(panel.indexOf("<PolyforgeTasks"));
+  const element = tasks.slice(0, tasks.indexOf("/>"));
+  assert.match(element, /onOpenAnchor=\{messagesSurface\.onOpenAnchor\}/, "the same opener the Memory sub-tab uses (Q3=A)");
+  assert.match(element, /openTask=\{taskToOpen\}/, "the existing open-task wiring stays");
 });

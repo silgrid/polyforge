@@ -7,6 +7,9 @@ import (
 	"math"
 	"os"
 	"sync"
+	"time"
+
+	"github.com/silgrid/polyforge/internal/common/protocol"
 )
 
 // Context is the context-window usage a step session's transcript shows:
@@ -24,6 +27,34 @@ type Context struct {
 	Model string
 	// At is the timestamp of the record that last decided Tokens.
 	At string
+}
+
+// Usage answers the context as the wire shape the step and task read faces
+// share (protocol.ContextUsage, the job row's `context` and a running task's
+// `context`): the tokens, the model id and the record's timestamp when the
+// count is known, plus the window and the percent the count fills when
+// windows carries the session model's window (polyforge#230 — the task lane's
+// adapter reads the same shape as the step lane's, from this one mapping).
+func (c Context) Usage(windows map[string]int64) *protocol.ContextUsage {
+	u := &protocol.ContextUsage{Model: c.Model}
+	if c.TokensKnown {
+		tokens := c.Tokens
+		u.Tokens = &tokens
+		if _, err := time.Parse(time.RFC3339Nano, c.At); err == nil {
+			u.AsOf = c.At
+		}
+	}
+	if u.Tokens == nil && u.Model == "" {
+		return nil
+	}
+	if w := windows[c.Model]; c.Model != "" && w > 0 {
+		u.Window = &w
+		if u.Tokens != nil {
+			pct := float64(*u.Tokens) / float64(w) * 100
+			u.Percent = &pct
+		}
+	}
+	return u
 }
 
 // ContextReader reads a session transcript's context usage incrementally:
@@ -95,6 +126,27 @@ func (r *ContextReader) Read(path string) Context {
 			break
 		}
 	}
+	return r.fold.context()
+}
+
+// Feed folds one complete JSONL record line into the running state and
+// answers what has been folded so far (polyforge#230): the entry a live
+// stream uses, where the records arrive on a pipe instead of in a transcript
+// file. It folds through the same fold and the same model cleaning as Read;
+// a malformed, torn or empty line is skipped exactly as Read skips it. Safe
+// for concurrent use.
+func (r *ContextReader) Feed(line []byte) Context {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.foldLine(line)
+	return r.fold.context()
+}
+
+// Context answers what has been folded so far: the zero value when nothing
+// has (polyforge#230). Safe for concurrent use.
+func (r *ContextReader) Context() Context {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	return r.fold.context()
 }
 

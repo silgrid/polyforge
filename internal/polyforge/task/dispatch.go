@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/silgrid/polyforge/internal/common/harness"
+	"github.com/silgrid/polyforge/internal/common/protocol"
 	"github.com/silgrid/polyforge/internal/polyforge/runtime"
 	"github.com/silgrid/polyforge/internal/polyforge/supervise"
 	"github.com/silgrid/polyforge/internal/polyforge/workspace"
@@ -60,6 +61,11 @@ type RunSpec struct {
 	// zero Silence resolves per the harness's output granularity, a zero
 	// Tool to the 30m default (supervise.Defaults.Fill / SilenceFor).
 	Limits supervise.Defaults
+	// OnContext (optional) is called with the attempt's context-window
+	// usage whenever a stream record changes it (polyforge#230): the
+	// manager stores it on the running record. The value is freshly built
+	// per call and never mutated afterwards; nil drops it.
+	OnContext func(*protocol.ContextUsage)
 }
 
 // StuckError is the runner's stuck verdict: the supervision rules that
@@ -281,6 +287,9 @@ func (r *ExecRunner) Run(ctx context.Context, spec RunSpec, progress func(tokens
 		return RunResult{}, fmt.Errorf("start %s: %w", argv[0], err)
 	}
 	parser := NewStreamParser(h)
+	// The context usage: the same fold a step session's transcript is read
+	// with, fed the stream's transcript-equivalent records (polyforge#230).
+	contexts := newContextTracker(h)
 	// The stuck detection: the tracker the step lane's translator feeds,
 	// and the judge beside it. The thresholds are the injected limits
 	// (zero silence = the harness's own granularity default).
@@ -332,6 +341,9 @@ func (r *ExecRunner) Run(ctx context.Context, spec RunSpec, progress func(tokens
 		if len(line) > 0 {
 			parser.Feed(line)
 			translator.Feed(line)
+			if _, changed := contexts.feed(line); changed && spec.OnContext != nil {
+				spec.OnContext(contexts.usage(tracker.Snapshot(time.Now()).ContextWindows))
+			}
 			if progress != nil {
 				progress(parser.Tokens())
 			}

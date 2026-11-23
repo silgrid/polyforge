@@ -26,6 +26,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/silgrid/polyforge/internal/common/protocol"
 )
 
 // State is a task's lifecycle state. The four terminal states are
@@ -250,6 +252,15 @@ type Task struct {
 	// order; the run switched to the next candidate inside the same
 	// budget each time.
 	Attempts []Attempt `json:"attempts,omitempty"`
+	// Context is the running task's context-window usage (polyforge#230):
+	// the tokens its conversation fills, counted from the same transcript
+	// fold the step lane uses over the attempt's own stream records, with
+	// the model and the record's time, and the harness-reported window and
+	// percent when there is one. It is set while the task runs and cleared
+	// at its terminal transition — a finished task never carries it — and
+	// it is never persisted (the record store writes it absent). Numbers,
+	// a model id and a timestamp only: no transcript content.
+	Context *protocol.ContextUsage `json:"context,omitempty"`
 }
 
 // Clone answers a copy of t (no shared slices) suitable for handing out

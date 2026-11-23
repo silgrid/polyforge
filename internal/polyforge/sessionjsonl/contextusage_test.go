@@ -219,3 +219,55 @@ func TestContextUsageReadsOnlyAppendedBytes(t *testing.T) {
 		})
 	}
 }
+
+// TestContextUsageFeedLines pins the per-line entry a live task stream uses
+// (polyforge#230 AC1): feeding the same transcript records line by line,
+// without a file, must arrive at exactly the values the hand-computed
+// expectations of the file tests state — the same fold and the same model
+// cleaning — and non-record lines (empty, a diagnostic, a torn record) must
+// leave the value untouched.
+func TestContextUsageFeedLines(t *testing.T) {
+	feed := func(harness string, lines []string) Context {
+		t.Helper()
+		r := NewContextReader(harness)
+		if got := r.Context(); got != (Context{}) {
+			t.Fatalf("%s: before any line: got %+v, want the zero value", harness, got)
+		}
+		var got Context
+		for _, line := range lines {
+			got = r.Feed([]byte(line))
+		}
+		if last := r.Context(); last != got {
+			t.Fatalf("%s: Context() = %+v, want the last Feed answer %+v", harness, last, got)
+		}
+		return got
+	}
+
+	// The pi session's hand-computed final value (TestContextUsagePiSession):
+	// the last valid usage 1600 plus the trailing 40-char tool result's 10.
+	piWant := Context{Tokens: 1610, TokensKnown: true, Model: "example-gateway/model-a", At: ts("06")}
+	if got := feed("pi", piLines); got != piWant {
+		t.Fatalf("pi lines: got %+v, want %+v", got, piWant)
+	}
+	// The claude session's hand-computed value (TestContextUsageClaudeSession):
+	// the last main-chain reply's 20+100+4000+50.
+	claudeWant := Context{Tokens: 4170, TokensKnown: true, Model: "claude-model-x", At: ts("03")}
+	if got := feed("claude", claudeLines); got != claudeWant {
+		t.Fatalf("claude lines: got %+v, want %+v", got, claudeWant)
+	}
+
+	// Non-record lines fold nothing: an empty line, a harness diagnostic and a
+	// torn record between two real ones leave the hand-computed value standing.
+	junk := []string{"", "Reading session...", `{"type":"message","message":`}
+	withJunk := append([]string{}, piLines...)
+	withJunk = append(withJunk, junk...)
+	if got := feed("pi", withJunk); got != piWant {
+		t.Fatalf("junk lines changed the pi value: got %+v, want %+v", got, piWant)
+	}
+	// A compaction's unknown state is the fold's own answer, fed line by line
+	// exactly as from the file (unknown tokens, the model still known).
+	compact := append(append([]string{}, piLines...), piCompaction...)
+	if got := feed("pi", compact); got.TokensKnown || got.Model != "example-gateway/model-a" {
+		t.Fatalf("after a fed compaction: got %+v, want tokens unknown and the model", got)
+	}
+}

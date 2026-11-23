@@ -2238,6 +2238,7 @@ export const zhTWLocale: LocalePlugin = {
     "polyforge.tasks.upgrade": "需要升級 pf",
     "polyforge.tasks.upgradeReason": "請更新 pf 後再使用任務標籤頁。",
     "polyforge.tasks.back": "返回",
+    "polyforge.tasks.analysisOf": "分析 {slug}",
     "polyforge.tasks.status": "狀態",
     "polyforge.tasks.project": "專案",
     "polyforge.tasks.candidates": "候選模型",

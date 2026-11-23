@@ -168,9 +168,11 @@ dropped submit, a task repo whose carrier ref could not be saved
 every background task's terminal summary lands in the daemon's
 machine-level **decision feed**. Pi Web's Polyforge panel shows that feed
 and is where the human handles it; on the CLI, `pf watch decisions` lists it
-and `pf watch dismiss` marks entries seen (`verbs/watch.md`). There is no
-watcher to start, nothing to subscribe and no wake-up line: progress is a
-pull, `pf watch <wi> --once`.
+and `pf watch dismiss` marks entries seen (`verbs/watch.md`). Nothing on the
+execution plane waits for a session, and there is no daemon-side watcher to
+start, no subscription and no wake-up line of its own: progress is a pull,
+`pf watch <wi> --once`. A session that promises the owner a follow-up starts
+its own monitor under rule 4 below, or says where the result will appear.
 
 ### Rules for you (every harness)
 
@@ -184,10 +186,31 @@ pull, `pf watch <wi> --once`.
    request: it hides an entry from the panel's count.
 2. **Progress questions** ("how's it going") are one `pf watch <wi> --once`
    (`--json` for fields): status, current step and its age, last work signal,
-   pending question id and text, latest events. Do not poll. "What needs
-   me?" is one `pf watch decisions`.
+   pending question id and text, latest events. Do not poll in the foreground;
+   a monitor started under a promise (rule 4) is the one exception. "What
+   needs me?" is one `pf watch decisions`.
 3. A work item shown as `queued/preparing` is submitted but not yet registered
    with a monitor — normal for a few seconds, not an error.
+4. **A follow-up promise needs a means.** When you promise the owner to do
+   something once work finishes ("I'll check the analysis when it is
+   written"), say in the same reply how you will learn that it is due — one
+   of these two, never neither:
+   - **Start a monitor** when the session outlives the wait: use the host's
+     background-task capability (pi's `bg_run` and Claude Code's background
+     shell task are examples only) to poll `pf task show <id>`, `pf queue`
+     or `pf watch <wi> --once`, and exit when the work finishes or gets stuck
+     — a decision-feed terminal such as failed, blocked, `needs_input` or
+     candidates exhausted — which wakes the session. It may also perform a
+     mechanical action the owner has already approved for that exact case
+     (e.g. `pf submit` the next ticket once its blocker is wrapped) only
+     when the trigger is mechanically decidable and the action adds no new
+     judgment; otherwise it only notifies.
+   - **Point at the panel** when it cannot: a one-shot sub-agent dies when
+     its process exits, so never start a monitor there. Tell the owner the
+     result lands in Pi Web's Polyforge panel decision feed (or `pf watch
+     decisions` lists it), and make no session-side follow-up promise.
+   This fires only on a promise you made; a wait you did not promise needs
+   no monitor, and the execution plane still wakes nobody.
 
 ## Session rules
 
