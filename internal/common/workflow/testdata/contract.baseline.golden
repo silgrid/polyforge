@@ -20,6 +20,7 @@ tiers: map <tier> -> []<harness>:<model>[:<effort>]; the table a step's model_ti
 
 [step keys]
 budget: map {wall_minutes, tool_minutes}
+facts_proof: map {result, command} (default none): the mechanical facts summary this step's done needs for each task repo it changed (polyforge#241) — a `pf-step-result/1` file `facts.py handoff` writes, verdict pass whose heads carry the repo at its current HEAD; a repo the step did not change and a fast-forward need none; its refusal names every hit beside the result file
 fast_check_proof: map {result, command} (default none): the fast-check proof this step's done needs for each task repo it changed — a `pf-step-result/1` file with verdict pass whose heads carry the repo at its current HEAD; a repo the step did not change and a fast-forward need none
 gate: bool
 hub: map {verbs, attrs} (default none): what the step may call through `pf step hub`
@@ -39,6 +40,10 @@ waivable: bool (default false), gate only: the gate may hand off waive on the ow
 wrap_attrs: []attr name (^[a-z][a-z0-9_]{0,63}$), each at most once (default none): the wrap attrs the step registers (`pf step hub wrap-attrs <name>`) before its round may hand off done; listing one lets the step call wrap-attrs. When the steps at the lane's end are skipped (a skippable step a project switched off), their wrap_attrs are the last running step's to register
 
 [fast_check_proof keys]
+command: string, required: one line carrying {repo} (WFC-112 otherwise): the command a refusal quotes to write a fresh proof
+result: string, required: the result file's path relative to the capsule, carrying {repo} (WFC-112 otherwise)
+
+[facts_proof keys]
 command: string, required: one line carrying {repo} (WFC-112 otherwise): the command a refusal quotes to write a fresh proof
 result: string, required: the result file's path relative to the capsule, carrying {repo} (WFC-112 otherwise)
 
@@ -116,6 +121,8 @@ lane.steps
 step.id
 fast_check_proof.command
 fast_check_proof.result
+facts_proof.command
+facts_proof.result
 on_fail.target
 definition.description
 definition.name

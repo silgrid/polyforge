@@ -1,6 +1,8 @@
 // carries: components/PiRunningList.tsx, hooks/useSubagentRuns.ts, components/ChatWindow.tsx, hooks/useBackgroundTasks*
 import "#test-env";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import ts from "typescript";
 import test from "node:test";
 import { createJiti } from "jiti";
 
@@ -142,4 +144,27 @@ test("the running items are buttons in Claude's grid; no history entry renders a
   assert.doesNotMatch(html, /data-pi-bg-history/, "the retired history entry renders");
   // The grid the Claude list established: equal-width columns from 260px.
   assert.match(html, /repeat\(auto-fill, ?minmax\(260px, ?1fr\)\)/, "the grid is not Claude's");
+});
+
+
+test("polyforge#255 u5: a queued subagent opens the same in-chat panel as a running one", async () => {
+  // Q7 A: both states open the panel; a queued run shows the wait and its
+  // disabled input there. The row's handler is executed, not matched as text.
+  const source = await readFile(new URL("./PiRunningList.tsx", import.meta.url), "utf8");
+  const ast = ts.createSourceFile("PiRunningList.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let handler = null;
+  const walk = (node) => {
+    if (ts.isArrowFunction(node)) {
+      const text = node.getText(ast);
+      if (text.includes("onOpenSubagent(run.sessionId") && (handler === null || text.length < handler.length)) handler = text;
+    }
+    ts.forEachChild(node, walk);
+  };
+  walk(ast);
+  assert.ok(handler, "the running list's subagent click handler exists");
+  const opened = [];
+  new Function("running", "onOpenSubagent", "run", "label", `return (${handler})()`)(false, (...args) => opened.push(args), { sessionId: "sub-1" }, "Audit the parsers");
+  assert.deepEqual(JSON.parse(JSON.stringify(opened)), [["sub-1", "Audit the parsers"]], "a queued row forwards its opener");
+  const html = render({ subagents: [subagent({ status: "queued", description: "" })] });
+  assert.match(html, /<button[^>]*data-pi-subagent-item="sub-1"[^>]*data-pi-subagent-status="queued"/, "a queued run is a button");
 });

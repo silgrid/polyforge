@@ -81,7 +81,13 @@ The complete variable table is in [the workflow contract's Scripts environment s
   artifacts/build/fast-checks/<repo>.json`): the tree is unchanged, so every
   green command is reused and only the result's `heads` move to the commits
   the hand-off gate compares against HEAD; a repo the change touched without
-  that pass at HEAD has its `done` refused. Per-unit
+  that pass at HEAD has its `done` refused. The close's order is fixed: the scoped selection green, then the facts, then the self-review, then the hand-off. The mechanical facts gate
+  (`facts_proof`, `facts.py handoff`) refuses `done` while the result lists
+  a deterministic hit — a unit's commits or red-state replay, an undeclared
+  write, an existing test changed outside the plan's write set, an e2e
+  suite without `carries:`, a listed test that does not exist, a skip after
+  the test commit — so review reads a tree whose mechanical facts are
+  already green. Per-unit
   fast checks narrowed to the roots the unit's written `Touched files` reach (`--phase fast
   --root`, the green runs whose key is unchanged reused) plus every new test; the close's scoped selection — `fast_checks.py --close-scoped`,
   the same light-tier selection verification plans, for a work item whose verification runs the
@@ -100,7 +106,7 @@ The complete variable table is in [the workflow contract's Scripts environment s
   red naming the unit, the plan's undeclared or lapsed obligation, or
   the repo, suite and reason and fixed before the hand-off (an exit 2
   that stays 2 after its retries is disclosed in the hand-off, for
-  review to re-run); the change analysis's close check (`facts.py analysis` — the
+  review to re-run). Once the close's scoped selection has run, a step that changes no code does not re-run it — the reuse key is the command text, the root's subtree tree hash and the declared prerequisites, so changing artifacts alone is not a code change; a step that does change code re-runs the selection only on the new tree, and on a host close the roots it did not touch are reused by `--reuse` (a boxed close consumes none). A red the scoped selection reports is reported from the result file's own baseline record (`details.baseline` and its `reds[]` classification); never reproduce it by hand on the base worktree. The change analysis's close check (`facts.py analysis` — the
   same shared validator `verify.py --analysis` calls; a red names the entry and the rule it
   violates and must be fixed before the hand-off); a self-review against review's five
   blocking classes and its doc-impact check, item by item — each document compared, its
@@ -117,7 +123,7 @@ The complete variable table is in [the workflow contract's Scripts environment s
   list or an incomplete one — right after the plan, never at the end. Its hand-off states
   each owner decision with the owner's words and its reading. A round a FAIL opened
   changes the tree (or units.json), or states per point why not; `review` judges that.
-  The session orchestrates fresh-context sub-agents (`workflows/_shared/build_subagents.md`; a pi build uses the daemon-owned worker when `pi_subagents` is on and records `main` when it is off). On pi the build session itself runs under the step guard (`docs/reference/workflow-contract.md`, "Environment"): a bash call that leaves a background job unwaited, or waits too long in one go, is blocked with the sanctioned shape.
+  The session orchestrates fresh-context sub-agents (`workflows/_shared/build_subagents.md`; a pi build uses the daemon-owned worker when `pi_subagents` is on and records `main` when it is off). On pi the build session itself runs under the step guard (`docs/reference/workflow-contract.md`, "Environment"): a bash call that leaves a background job unwaited, or waits too long in one go, is blocked with the sanctioned shape, and a whole-suite test command the repository's own declaration runs in its full phase is blocked with the written fast-check form and the runner's name filter.
 - **review** (fresh, gate; skill `review`, heavy-run admission, tool window 20 minutes) —
   the shared review (`workflows/_shared/steps/review.md`), on the facts of four
   pre-written lines of the workflow's script `facts.py`: `plan-conformance`, `build
@@ -125,7 +131,8 @@ The complete variable table is in [the workflow contract's Scripts environment s
   (or of the change's base for a unit declared `pre_existing_red`, whose red evidence
   that replay is), on the host: it must be red), `carries` and `analysis` (the change
   analysis's own close check — the same shared validator `verify.py --analysis` calls;
-  every entry it fails is a blocking `test_weakened` finding naming the entry). A
+  every entry it fails is in the hand-off gate's subset (non-blocking on its own, a gate
+  bypass is blocking `guarantee`), naming the entry). A
   blocking finding names one of five classes: `bug`, `ac_gap`, `project_rule`,
   `test_weakened`, `guarantee`; everything else is non-blocking. A unit that misses its
   test-quality record (`workflows/_shared/test_quality.md`), or whose replayed red

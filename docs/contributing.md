@@ -159,6 +159,11 @@ root 的 `fast` 命令：使用 `fast_checks.py --repo <name> --phase fast`
 加可重复的 `--root <dir>`（`.` 表示仓根）。同一命令文本、root 子树的
 工作树 tree hash、声明的环境前提不变时，复用上次一次执行即成功的绿结果，
 保留原日志；未选中的绿条目继续保留，红或经 flaky 重跑确认的结果不复用。
+命令按组执行：组间并行、组内保持计划序，默认 2 路，`--parallel 1` 或只有一组时走旧的串行路径。
+The commands run group by group — a command's group is the group its
+report bound it to else its report's root — the groups side by side at
+most `--parallel N` at once (default 2; one group, or `--parallel 1`, is
+the serial plan), each group's own commands in the plan's order.
 `scoped` 选择只在收尾对整个改动执行一次，`full` 门槛属于
 `verification` 步骤。The
 develop lane's build close runs the same light selection before its
@@ -800,7 +805,12 @@ declaration.
   container, each group's commands in plan order) and `full_parallel=` is
   the parallelism, default 2, an invalid value diagnosed and run serially.
   A repository that declares none keeps the serial gate and its plan bytes
-  exactly as before; the gate's own flag is `--parallel <N>`.
+  exactly as before; the gate's own flag is `--parallel <N>`. The develop
+  lane's verification (`verify.py`) runs its full tier's declared groups the
+  same way (polyforge#253) — each group in a container of its own, a group's
+  commands in plan order, the results in plan order — and keeps the serial
+  bar byte for byte for a repository that declares no group, one group,
+  `full_parallel=1` or one that runs on the host.
 - **The conf keys.** `e2e_runner=` (the runner the selected suites are
   appended to), `e2e_start_threshold=` together with `e2e_start_prefix=` (a
   positive light-tier count and the prefix its strict excess puts before the

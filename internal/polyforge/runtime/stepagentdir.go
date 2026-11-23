@@ -22,10 +22,12 @@ package runtime
 //	                     the guard below)
 //	extensions/guard/    the step guard — daemon-owned embed: blocks a
 //	                     bash call that leaves a background job
-//	                     unwaited or sleeps over 3 s at once, and
-//	                     appends a syntax-check note after edit/write
-//	                     (polyforge#214; rules in the extension, the
-//	                     allowlist below)
+//	                     unwaited or sleeps over 3 s at once, blocks a
+//	                     whole-suite test command in the build step (the
+//	                     pattern comes from the repository declaration),
+//	                     and appends a syntax-check note after edit/write
+//	                     (polyforge#214, polyforge#243; rules in the
+//	                     extension, the allowlist below)
 //
 // Neither the subagent tool nor the guard is a pi builtin: BOTH are
 // compiled into pf (the stepagentassets embed) and installed into the

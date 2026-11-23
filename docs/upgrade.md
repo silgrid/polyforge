@@ -1062,9 +1062,9 @@ changed.
 
 ## v0.2.4, review-firstpass delivery metrics and trial arms (polyforge#209)
 
-- `tools/review-firstpass --events <events-dir>` adds the delivery block over a Cell's exported event files: the develop lane's completed run set (an absent event file is `events missing`, its event fields `unknown`; events without a completed terminal are `not completed (excluded)`), wall clock median and nearest-rank p90, owner-wait-adjusted effective time, per-file delivery time (approved size = the first build section's start to the last build before the first sync; git numstat across the repos), rework share (every rewind's named gate to that gate's next `step_done`; a dispatch ends at its step's `step_done`/`step_failed`/`gate_verdict`, the next same-step `step_started`, a rewind or the terminal, with the owner wait inside it subtracted), first pass, infra failures per model+effort (a `step_failed` owned by the same step's most recent `step_started`) and model-class candidate switches with the 503 subcount. A ticket with no measured build dispatch is `unknown`; a missing transcript or an empty window is that dispatch's unknown, never an estimated number.
+- `tools/review-firstpass --events <events-dir>` adds the delivery block over a Cell's exported event files: the develop lane's completed run set (an absent event file is `events missing`, its event fields `unknown`; events without a completed terminal are `not completed (excluded)`), wall clock median and nearest-rank p90, owner-wait-adjusted effective time, per-file delivery time (approved size = the first build section's start to the last build before the first sync; git numstat across the repos), rework share (all gates' rewind windows — every rewind's named gate to that gate's next `step_done` — merged into one union, each dispatch counted once however many windows overlap; a dispatch ends at its step's `step_done`/`step_failed`/`gate_verdict`, the next same-step `step_started`, a rewind or the terminal, with the owner wait and any coordinator pause inside it subtracted once), first pass, infra failures per model+effort (a `step_failed` owned by the same step's most recent `step_started`) and model-class candidate switches with the 503 subcount. A ticket with no measured build dispatch is `unknown`; a missing transcript or an empty window is that dispatch's unknown, never an estimated number.
 - The cohort manifest gains `"arms": {"<arm>": ["<capsule>", ...]}`: each arm prints the same tier / infra / switch / estimate summary, one detail row per run in the manifest's order, and the missing names (counted, excluded). An arm uses the delivery block's run set: develop only, a completed terminal or an absent event file enters, a run with events but no completed terminal is named `not completed (excluded)` and stays out of every number. Without `--events` the arm keeps size and first pass, the event fields are `unknown`, and the infra, switch and estimate lines say `n/a (no events dir)`.
-- The estimate line is read only inside `## 分析` -> `### 1.`, one `估算：<repo> 新增 N 个文件、修改 M 个文件、单元 K 个` per repository; a malformed or duplicated line voids that repository only; the summary counts `estimate unknown` apart, with its names (the shared samples are polyforge#213's `internal/contracttest/testdata/analysis_estimate_lines.tsv`).
+- The estimate line is read only inside `## 分析` -> `### 1.`, one `估算：<repo> 新增 N 个文件、修改 M 个文件、单元 K 个` per repository; a line that starts with `估算` but is not a strict estimate line (`估算依据：…`) is a description and is ignored, content inside a fenced code block and the whole `## 历次分析` archive is ignored, and a malformed or duplicated line voids that repository only; the summary counts `estimate unknown` apart, with its names (the shared samples are polyforge#213's `internal/contracttest/testdata/analysis_estimate_lines.tsv`).
 
 What a project must change — nothing: the tool is read-only, its new output is gated by `--events` / `arms`, and the pre-existing report and CSV stay byte-identical without them.
 
@@ -1529,3 +1529,15 @@ owner 的 asks.jsonl 裁定，给出结局（修复后通过、反驳成立、ow
 原因计数和无法解析的 FAIL 版本数。stdout 只打印汇总与无法判定的计数；
 同时给 `--csv` 时另写 `<csv>.blocking.csv`，既有 CSV 不加列。这是离线
 只读工具，不需要迁移动作。
+
+## v0.2.4, build 交 done 前的机械事实闸（polyforge#241）
+
+develop 的 build 新增 `facts_proof` 车道键：交 done 前跑 `facts.py handoff`
+（每改动仓库一次，写 `artifacts/build/handoff-facts/<repo>.json`），把
+`build --replay`、`plan-conformance`、`carries`、`analysis` 与
+`test_weakened` 的确定标记（新增 skip、改 `carries:` 头）汇总成一份
+`pf-step-result/1`；任一确定项命中即拒收 done 并逐项返还（含计划 write set
+未声明的已有测试文件），判不定的子项记 `not_judged`（`carries` 的 exit 2
+仍拒收）。review 重算同一份事实：交接闸已覆盖的机械项单独不构成阻断，命中
+只记 non-blocking 并注明「交接闸本应拦下」；闸被绕过或伪造则升级为
+blocking `guarantee`。

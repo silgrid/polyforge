@@ -61,6 +61,14 @@ call, and a pass is the command's, not yours.
    then write the lines `units.json sha256: <digest>` (`sha256sum artifacts/build/units.json`)
    and `change-analysis sha256: <digest>` (`sha256sum artifacts/build/change-analysis.json`)
    as the first lines of `artifacts/verify/report.md`, whatever the exit.
+   On the full tier a repository whose `.polyforge/verify-scope.conf` declares parallel
+   `group=` lines (polyforge#244) runs its plan's declared groups side by side
+   (polyforge#253): each group in a container of its own, a group's commands in plan
+   order, the fast gates before the grouped span and the dependency audit after it
+   serially in the repository's container — the commands, the checks and the command
+   logs stay in plan order, and the build's unit runs, the analysis's supplements and the
+   base runs follow after every group. A repository that declares no group, one group,
+   `full_parallel=1`, or one that runs on the host keeps the serial bar byte for byte.
 3. **Route on the exit code.**
    - **0** — add to `artifacts/verify/report.md` the verdict and each check of
      `details.checks[]` (id, repo, status) in a few lines; hand off `done`.

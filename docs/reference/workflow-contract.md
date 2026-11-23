@@ -124,6 +124,7 @@ process runs.
 | `hub` | `{verbs, attrs}` ([hub keys](#hub-keys)): what this step may call through `pf step hub`; default none |
 | `wrap_attrs` | the wrap attrs this step registers, a list of names (`^[a-z][a-z0-9_]{0,63}$`), each at most once; default none (`WFC-112`). Its round's `pf step handoff --status done` is refused until each was registered with `pf step hub wrap-attrs <name> @<file>`, so a record the wrap must carry cannot be forgotten; listing one grants the step `wrap-attrs`. When the steps at the lane's end are skipped (`skippable` steps a project switched off), their `wrap_attrs` pass to the last step that runs: it is granted `wrap-attrs` and its done is refused until it registered them |
 | `fast_check_proof` | `{result, command}` ([fast_check_proof keys](#fast_check_proof-keys)); default none. The step's `done` is refused unless every task repo whose HEAD it moved has a `pf-step-result/1` result at `result` (with `{repo}` replaced by the repo's name) whose `verdict` is `pass` and whose `heads` carries that repo at its current HEAD; a repo at its round's start commit, and a fast-forward (no commit on HEAD that no remote-tracking ref carries), needs none, a start commit the round did not record needs the result like a changed repo. The daemon only reads the file; the refusal names the repo, the failing check and the line `command` writes. A red the change did not cause — the default branch already red, an `error`/`partial` result, or a lane that planned no check — is the owner's: `pf step ask`, and on the release hand off `done` with `--per-owner <the reply's at>`; the section's header records it (the same release a spent rewind budget gives a gate's `fail`) |
+| `facts_proof` | `{result, command}` ([facts_proof keys](#facts_proof-keys)); default none. The step's `done` is refused unless every task repo whose HEAD it moved has a `pf-step-result/1` result at `result` (with `{repo}` replaced by the repo's name) whose `verdict` is `pass` and whose `heads` carries that repo at its current HEAD — the mechanical facts summary `facts.py handoff` writes (polyforge#241). The same exemptions as `fast_check_proof` apply (an unchanged repo, a fast-forward, a round start the record does not carry), the refusal names every hit the result carries beside the result file (each hit one line, the tail clipped and named), and `--per-owner` releases a red the change did not cause |
 
 ### fast_check_proof keys
 
@@ -131,6 +132,13 @@ process runs.
 |---|---|
 | `result` | string, required, the `pf-step-result/1` file's path relative to the capsule, carrying `{repo}` (`WFC-112` otherwise: absolute, a `..` segment, or no `{repo}` is refused): `<repo>` is the task repo's name under `repos/` |
 | `command` | string, required, one line carrying `{repo}` (`WFC-112` otherwise: empty, more than one line, or no `{repo}` is refused): the command a refusal quotes, so the step re-runs the check and hands off again |
+
+### facts_proof keys
+
+| Key | Rule |
+|---|---|
+| `result` | string, required, the `pf-step-result/1` file's path relative to the capsule, carrying `{repo}` (`WFC-112` otherwise: absolute, a `..` segment, or no `{repo}` is refused): `<repo>` is the task repo's name under `repos/` |
+| `command` | string, required, one line carrying `{repo}` (`WFC-112` otherwise: empty, more than one line, or no `{repo}` is refused): the command a refusal quotes, so the step re-runs the mechanical facts summary and hands off again |
 
 ### on_fail keys
 
@@ -424,7 +432,14 @@ container — and on the host otherwise, the result's `details.isolation`
 recording which ran; the per-unit fast checks stay on the host, a boxed
 close consumes no `--reuse` green evidence, and a container the close
 cannot build, start or keep is the run's error, never a red of the
-change's, never a host stand-in.
+change's, never a host stand-in. The close's order is fixed: the scoped
+selection green, then the facts, then the self-review, then the hand-off;
+once the scoped selection has run, a step that changes no code does not
+re-run it (the reuse key is the command text, the root's subtree tree hash
+and the declared prerequisites — artifacts alone are no code change) while
+a changed tree re-runs only itself and on a host close reuses the untouched roots by `--reuse` (a boxed close consumes none), and a
+red is reported from the result file's own baseline record, never
+reproduced by hand on the base worktree.
 The plan's decided rulings are judged by the same entry:
 `facts.py plan-conformance` reads the work item's verbatim content
 (`runtime-state/work-item.json`) and requires every item of every section
@@ -528,7 +543,7 @@ container backend `PF_CONTAINER_ENGINE` (`[daemon] container_engine`,
 default). A step's own copy of any of them
 never reaches it. `TMPDIR` is `<capsule>/artifacts/downloads/tmp/`, created before the harness starts; failure to create it rejects the spawn rather than falling back to shared `/tmp`. A tool or configuration that explicitly overwrites `TMPDIR` is outside this daemon guarantee. The complete variable table is in [Scripts](#scripts), while this section describes process inheritance and `PATH`.
 
-A pi step process also loads the daemon-owned step guard from its dedicated agent directory (`extensions/guard/`, polyforge#214): before a `bash` tool call runs, the guard blocks a command that starts a background job this call does not wait for (`&` with no later `wait` or `kill` in the same call, `nohup`, `setsid`, `disown`) or sleeps more than 3 s in one go — the tool result is an error whose text starts with `step guard: blocked` and names the sanctioned shape (foreground with a logged exit code, or a bounded wait inside the same call). After an `edit` or `write` of a `.go`/`.ts`/`.tsx`/`.mts`/`.cts`/`.js`/`.mjs`/`.cjs`/`.py`/`.json` file, a fast syntax check of that file runs and its finding is appended to the tool result; the check never blocks or fails the edit, and a type without a checker is returned untouched. Claude steps run no guard (`--safe-mode` skips hooks; `claude` is out of scope).
+A pi step process also loads the daemon-owned step guard from its dedicated agent directory (`extensions/guard/`, polyforge#214): before a `bash` tool call runs, the guard blocks a command that starts a background job this call does not wait for (`&` with no later `wait` or `kill` in the same call, `nohup`, `setsid`, `disown`) or sleeps more than 3 s in one go — the tool result is an error whose text starts with `step guard: blocked` and names the sanctioned shape (foreground with a logged exit code, or a bounded wait inside the same call). In the `build` step (every lane whose step id is `build`) it also blocks a whole-suite test command — a full-phase test command of the repository's own `verify-scope --full --json` declaration at the command's effective directory, run against the whole tree — with the reason naming the written fast-check form (`fast_checks.py --repo <name> --close-scoped …`, run from the capsule root) and the test runner's own name filter; a command the declaration puts in a cheaper phase (fast, scoped or a base setup), a `fast_checks.py` command, and a targeted or filtered test run pass, and a projection that cannot be read fails open. After an `edit` or `write` of a `.go`/`.ts`/`.tsx`/`.mts`/`.cts`/`.js`/`.mjs`/`.cjs`/`.py`/`.json` file, a fast syntax check of that file runs and its finding is appended to the tool result; the check never blocks or fails the edit, and a type without a checker is returned untouched. Claude steps run no guard (`--safe-mode` skips hooks; `claude` is out of scope).
 
 ### The prompt
 
@@ -614,6 +629,17 @@ are wrong exits non-zero at once, naming why. The command's flags are
   the reason falls in it, else `max_rewinds` — a `fail` without
   `--per-owner` is refused: ask the owner first
   (`pf step ask`) — so no work item parks on a spent budget;
+- a `done` from a step whose lane declares `facts_proof` is refused
+  unless every task repo its round moved has a `pf-step-result/1` result at
+  the declared path (verdict `pass`, `heads` carrying that repo at its
+  HEAD) — the mechanical facts summary `facts.py handoff` writes: the
+  deterministic items (a unit's commits and red-state replay, an undeclared
+  write, an unchanged coupled obligation, an unmapped decided ruling, an e2e
+  suite without `carries:`, a listed test that does not exist, a skip or a
+  `carries:` change after the test commit, and an existing test changed
+  outside the plan's write set) refuse the hand-off and are returned one
+  line each; the same exemptions as `fast_check_proof` apply, and
+  `--per-owner` releases a red the change did not cause;
 - a `done` from a step whose lane declares `fast_check_proof` is refused
   unless every task repo its round moved has a `pf-step-result/1` result at
   the declared path (verdict `pass`, `heads` carrying that repo at its

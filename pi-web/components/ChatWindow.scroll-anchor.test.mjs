@@ -34,8 +34,8 @@ test("sentinel observer is created once per sentinel lifecycle and reads cursor 
 
 test("pagination captures a full scroll anchor snapshot, not a bare distance", async () => {
   const source = await readFile(new URL("./ChatWindow.tsx", import.meta.url), "utf8");
-  assert.equal((source.match(/captureScrollAnchor\(/g) ?? []).length, 3,
-    "all upward-load capture sites (sentinel fetch, sentinel widen #896, search-locate) must capture the DOM fingerprint");
+  assert.equal((source.match(/captureScrollAnchor\(/g) ?? []).length, 4,
+    "all upward-load capture sites (sentinel fetch, sentinel widen #896, search-locate, pi subagent Jump) must capture the DOM fingerprint");
   assert.doesNotMatch(source, /captureScrollDistance\(/);
   assert.match(source, /const prevScrollAnchorRef = useRef<ScrollAnchorSnapshot \| null>\(null\);/);
 });

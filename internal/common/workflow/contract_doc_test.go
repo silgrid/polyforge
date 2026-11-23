@@ -84,6 +84,7 @@ func TestReferenceDocMatchesTheRegistry(t *testing.T) {
 	keyTable("### defaults keys", defaultsKeys)
 	keyTable("### Step keys", stepKeys)
 	keyTable("### fast_check_proof keys", fastCheckProofKeys)
+	keyTable("### facts_proof keys", fastCheckProofKeys)
 	keyTable("### on_fail keys", onFailKeys)
 	keyTable("### uncounted_rewinds keys", uncountedRewindsKeys)
 	keyTable("### budget keys", budgetKeys)
