@@ -959,10 +959,11 @@ cmd_onboarding() {
 }
 
 # cmd_persist — the AC2 acceptance (polyforge#177): two compose down/up
-# cycles and a NEW TAG of the image keep the six persisted facts BY VALUE
-# — the harness login marker, cli.toml, the workspace file, the AIHub
-# database's user row, the pulled Podman image and the components
-# volume's current — then the delivery is exported to an EMPTY directory
+# cycles and a NEW TAG of the image keep the seven persisted facts BY
+# VALUE — the harness login marker, cli.toml, the workspace file, the
+# AIHub database's user row, the pulled Podman image, the components
+# volume's current, and (polyforge#168, owner Q3) the onboarding wizard's
+# completion record — then the delivery is exported to an EMPTY directory
 # and first-boot and persist run from there on the given image (Q6: the
 # host needs only Docker and the system sh; every JSON/HTTP check runs
 # inside the container). WORKSTATION_SMOKE_EXPORTED=1 marks the exported
@@ -971,6 +972,7 @@ cmd_persist() {
 	require_engine
 	profile=aihub
 	sp_value="sp-$(date +%s)-$$"
+	persist_onboarding_url="${WORKSTATION_SMOKE_ONBOARDING_URL:-http://127.0.0.1:30141/api/onboarding}"
 	ensure_image aihub
 	primary="${WORKSTATION_IMAGE:-polyforge-workstation:local}"
 	retag="polyforge-workstation-smoke:retag-$smoke_run"
@@ -997,16 +999,20 @@ cmd_persist() {
 	}
 
 	# the three written sentinels ride the volumes; the podman image is
-	# pulled once (the podman-storage volume's own AC2 half)
+	# pulled once (the podman-storage volume's own AC2 half); the onboarding
+	# wizard is completed through Pi Web's own write so the record has a
+	# non-empty state to survive the restarts
 	persist_write_sentinels() {
 		docker exec "$cid" sh -c 'printf "%s\n" "$1" > /root/.pi/agent/workstation-smoke-persist-marker' persist "$sp_value"
 		docker exec "$cid" sh -c 'printf "# workstation-smoke-persist %s\n" "$1" >> /root/.config/polyforge/cli.toml' persist "$sp_value"
 		docker exec "$cid" sh -c 'printf "%s\n" "$1" > /workspace/workstation-smoke-persist-marker' persist "$sp_value"
 		docker exec "$cid" podman pull -q busybox:1.37 >/dev/null ||
 			die "the Podman pull failed inside the workstation (the podman-storage volume is the AC2 half)"
+		onboarding_state=$(docker exec -i "$cid" python3 -c "$onboarding_py" complete "$persist_onboarding_url") ||
+			die "the onboarding state could not be completed and read back inside the workstation"
 	}
 
-	# all six values, read inside the container (Q6: no host curl/python3)
+	# all seven values, read inside the container (Q6: no host curl/python3)
 	persist_read_values() {
 		harness_marker=$(docker exec "$cid" cat /root/.pi/agent/workstation-smoke-persist-marker) ||
 			die "the harness login marker is gone"
@@ -1034,6 +1040,8 @@ print(hashlib.sha256(open("/components/current/manifest.json", "rb").read()).hex
 		# components.Install writes nothing, so restarts keep them)
 		components_stat=$(docker exec "$cid" stat -c '%Y %i' /components/current) ||
 			die "the components current link is unreadable"
+		onboarding_state=$(docker exec -i "$cid" python3 -c "$onboarding_py" capture "$persist_onboarding_url") ||
+			die "the onboarding completion state is unreadable inside the workstation"
 	}
 
 	# persist_compare WHAT — every value must equal its first read (a
@@ -1056,7 +1064,9 @@ print(hashlib.sha256(open("/components/current/manifest.json", "rb").read()).hex
 			die "the components current manifest digest changed after $what: $components_digest (was $components_digest_first)"
 		[ "$components_stat" = "$components_stat_first" ] ||
 			die "the components current mtime/inode identity changed after $what: $components_stat (was $components_stat_first)"
-		say "persist: $what kept the harness login marker, cli.toml, the workspace file, the AIHub user row, the Podman image and the components current (link, digest, mtime/inode identity)"
+		[ "$onboarding_state" = "$onboarding_state_first" ] ||
+			die "the onboarding state changed after $what: $onboarding_state (was $onboarding_state_first)"
+		say "persist: $what kept the harness login marker, cli.toml, the workspace file, the AIHub user row, the Podman image, the components current (link, digest, mtime/inode identity) and the onboarding state"
 	}
 
 	up_with_image "$primary"
@@ -1070,7 +1080,8 @@ print(hashlib.sha256(open("/components/current/manifest.json", "rb").read()).hex
 	components_current_first=$components_current
 	components_digest_first=$components_digest
 	components_stat_first=$components_stat
-	say "persist: the six values recorded (sentinel $sp_value)"
+	onboarding_state_first=$onboarding_state
+	say "persist: the seven values recorded (sentinel $sp_value)"
 
 	up_with_image "$primary"
 	persist_read_values

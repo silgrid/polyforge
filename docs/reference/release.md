@@ -652,6 +652,163 @@ classes.
 | G. deploy procedure logic (fixed earlier) | #71 (rollback: the row-count guard read the migration's intended row deletion as loss), #240 #242 (a failed `/pf` probe read as version "directory") | `deploy.sh` post-swap baseline guard; `probe_ctr`'s last-word parse | 75a86952 (`expected_deltas`); 303d5555 and 9a4e9590 | `TestDeployAcceptsDeclaredRowDelta`, `TestDeployRefusesUndeclaredRowLoss`, `TestW243DualLayoutContainerDeploys`, `TestW243OldAihubLayoutPreflight` |
 | H. release notes over GitHub's 125000-character body limit | #14 (found in analysis: a suffix line's first release once listed 3243 commits; closed before a release ran into it) | `git log $PREV..HEAD` listed the whole absorbed history on a suffix line's first release, and no length check existed anywhere, so `gh release create` would fail only after the tag was pushed and the image shipped | the suffix line's first release lists only the absorption's descendants (`--ancestry-path`); the generated list is cut to the newest commits within a byte budget (a 「还有 N 个提交」 notice and a compare link on the previous release's commit id); an overlong committed notes file refuses the release before the claim | `TestReleaseScriptSuffixVersion`, `TestReleaseScriptNotesTooLongAreTruncated`, `TestReleaseScriptNotesTooLongResume`, `TestReleaseScriptCommittedNotesTooLongRefused` |
 
+## Clean-room acceptance (workstation)
+
+The workstation image's acceptance is two halves: the scripted passes
+(`sh smoke.sh onboarding`, `sh smoke.sh persist`) and the owner-run
+evidence on real machines. This section is the checklist and the
+sanitized evidence template; the measured evidence itself is attached to
+the work item (polyforge#168), never committed to the repository.
+
+### What "clean" means
+
+- A fresh VM, or at minimum a new compose project name, empty volumes and
+  a state after `docker logout` — never the development machine's
+  `~/.config/polyforge`, data directory, volumes or workspaces.
+- The host has Docker with compose v2 and the system `sh`, nothing else.
+  `sh smoke.sh onboarding` refuses a host that carries `pf`, `aihub`, `pi`
+  or `claude`; a development machine fails it honestly.
+- The browser starts a fresh site session for the first-open check.
+
+### The assets (polyforge#86)
+
+A published release needs no checkout and no `gh`. The image address plus
+the version is the whole install; the host-side files export from the
+image itself, so the versions always match:
+
+```sh
+docker run --rm --entrypoint tar ghcr.io/silgrid/polyforge-workstation:<tag> \
+  -C /opt/polyforge/host-files -cf - . | tar -xf -
+```
+
+writes `compose.yaml`, `seccomp.json`, `seccomp.json.sha256`, `Caddyfile`
+and `smoke.sh` into the current directory (the smoke's own five-file
+export set; there is no separate `.env.example` — `PI_WEB_PASSWORD` is a
+compose-required environment variable, so export a long unique one, or
+keep it in a permission-restricted `.env` the operator alone can read).
+Then:
+
+```sh
+export WORKSTATION_IMAGE=ghcr.io/silgrid/polyforge-workstation:<tag>
+export PI_WEB_PASSWORD='<a long, unique secret>'
+docker compose pull
+docker compose --profile aihub up -d
+```
+
+### AC1 — the fresh machine (scripted)
+
+`sh smoke.sh onboarding` resets its own disposable project's volumes,
+boots the default AIHub profile, and checks inside the container: the
+image-managed `/api/onboarding` view has all four steps unfinished
+(`nextStep` `aihub`, `dismissed` false) and the first boot's connection
+is local (`mode` `local`, default Cell `default`, server
+`http://127.0.0.1:8420`, user and key ready); the `pf --json doctor`
+necessary rows pass (`config`, `workspace mapping`, `workspace dirs`,
+`server reach`, `daemon socket`, `daemon supervision`, `workflow lanes`,
+`aihub projects`, `auth`); and `pf --json cell list` holds exactly one
+`default` Cell that is `serving`, `valid`, on that local server. It also
+proves the host carries no polyforge component. An HTTP 200 alone is
+never a pass, and the report's overall `ok` is never the proof.
+
+Then the human half: open `http://127.0.0.1:30141` in a fresh browser
+session, sign in with the password, and record that the first open shows
+the onboarding wizard. The wizard asks for the AIHub step; on the
+default path it is the image's local AIHub.
+
+Evidence: the pass's PASS line, the doctor row statuses and the Cell row
+(redacted below), the browser screenshot of the first open (no
+credential in frame), and the `docker compose`/image versions.
+
+### AC2 — a real ticket on the default path (owner-run)
+
+Prerequisites the owner provides, supplied at the wizard or in the
+container only — never on a command line, in a log, in a screenshot, in
+the repository or in the ticket:
+
+- the test repository `silgrid/polyforge-sandbox` (public, default branch
+  `main`; a harmless change and an open PR are possible);
+- a GitHub fine-grained `token` scoped to that repository only (Contents
+  and Pull requests read/write) and the model-account `key`;
+- both enter through the wizard, or through `stdin` / a
+  permission-restricted `.env` on the acceptance machine.
+
+The owner, following only the newcomer mainline, signs in to the harness,
+files one develop ticket against the sandbox repository and runs it to a
+merged PR. Evidence, all inside the container:
+
+```sh
+docker compose exec -T -w /workspace workstation pf --json file show <wi>
+docker compose exec -T -w /workspace workstation pf --json doctor
+docker compose exec -T -w /workspace workstation gh pr view <n> \
+  -R silgrid/polyforge-sandbox --json state,mergedAt,url
+```
+
+The `file show` answer names the same develop ticket; the `gh pr view`
+answer has `state` `MERGED` and a non-empty `mergedAt`; the doctor's
+necessary rows pass (the same list as AC1). A PR that is only opened, a
+ticket that does not correspond to the PR, a local-only simulation, or a
+credential anywhere in the evidence is a fail. Until this evidence comes
+back, AC2 is **not complete** — the default path is not claimed done.
+
+### AC3 — the team path (NOT RUN this version)
+
+The team mode (a second fresh environment connecting the wizard to a
+shared AIHub) is **NOT RUN** in this version by the owner's ruling; it
+does not block closing this work item. It needs a separate shared-AIHub
+test account and a second clean environment; do not substitute a CLI
+`pf cell add` for the wizard, and do not record it as a pass.
+
+### AC4 — persistence, the checklist and the upgrade pointer
+
+`sh smoke.sh persist` runs after a first boot in its own disposable
+project: it completes the wizard through Pi Web's own API and proves the
+onboarding completion record survives two `compose down && up` cycles
+and a new image tag, beside the six volume facts (harness marker,
+`cli.toml`, workspace file, AIHub user row, Podman image, components
+current). The in-container upgrade entry is the one in
+[`docs/upgrade.md`](../upgrade.md) (polyforge#92); the "a state survives
+an upgrade across two image-bearing releases" test needs two published
+releases and is tracked in polyforge#169 — this work item does not claim
+it.
+
+### AC5 — Apple silicon (owner-run)
+
+On an Apple-silicon Mac with Docker Desktop or OrbStack, in an empty
+directory: pull the release's `linux/arm64` image
+(`ghcr.io/silgrid/polyforge-workstation:<tag>`) and start it with the same
+compose file, then run the in-container Podman verification:
+
+```sh
+sh smoke.sh podman-verify
+```
+
+Record the OS/architecture, the Docker/OrbStack and compose versions, the
+image tag/digest, the commands and the output summary (redacted). A
+skipped test, an amd64 image, a Linux-only run or a start with no Podman
+verification is not a pass. Without an Apple-silicon machine, AC5 stays
+open (review's call), never simulated.
+
+### Redaction — the evidence template
+
+Attach only these fields:
+
+| Field | Content |
+|---|---|
+| work item | the sandbox develop ticket's id and title |
+| PR | the `gh pr view` URL, `state`, `mergedAt` |
+| environment | OS/architecture, Docker/OrbStack and compose versions, the image tag and digest |
+| doctor | the necessary rows' names and statuses (pass/skip/warn), one line each — never the full document |
+| cell | the default Cell's profile, `state`, `valid`, `server` |
+| commands | the pass's PASS lines and the exit codes of the commands above |
+| deviations | any step that differed from the documentation |
+| reviewer | the second person who read the evidence for credentials |
+
+Never attach a `token`, a `key`, an auth file, a full `env` dump, an
+expanded `docker compose config`, a full `docker inspect`, full doctor or
+account-API text, or a `screenshot`/log that contains any of them. The
+redaction reviewer confirms the absence of those values before the
+evidence is attached to the ticket.
+
 ## Build and test
 
 ```
