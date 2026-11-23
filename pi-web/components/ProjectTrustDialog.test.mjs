@@ -232,7 +232,7 @@ test("the trust error stays outside the scrolling body, translated from its reas
   const busy = render(h(ProjectTrustDialog, {
     cwd: "/repo",
     busy: true,
-    error: { error: "Wait for the active session to finish before trusting this project", reason: "session-busy" },
+    error: { error: "Wait for the active session to finish before changing this project's trust", reason: "session-busy" },
     onCancel() {},
     onConfirm() {},
   }));

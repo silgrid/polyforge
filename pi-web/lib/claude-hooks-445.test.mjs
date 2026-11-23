@@ -1,5 +1,5 @@
 // carries: lib/claude-adapter.ts, lib/__fixtures__/claude-2.1.322/hooks/*
-// AC5: with Settings › Claude's hook switch on, claude runs with
+// AC5: with the Pi Web hook preference on, claude runs with
 // --include-hook-events and reports its hooks as system hook_* frames. Pi Web shows them
 // in a light form: one status line above the composer (pi's extension setStatus, one
 // key) that each finished hook replaces and the turn's end clears, plus a warning

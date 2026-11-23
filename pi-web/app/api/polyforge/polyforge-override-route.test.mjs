@@ -136,10 +136,17 @@ test("the watch route composes the override view into the same response (polyfor
     ],
   });
   assert.deepEqual([...argv()].sort(), [
+    // polyforge#151 (85b2): the composed step-tier catalog's presence probe
+    // (this stub answers only a bare --version, so the probe reads absent
+    // and the composer stops there — a present pf adds its Host-pinned
+    // config list read)
+    ["--json", "--version"],
     ["--json", "override", "wi_A1"],
     ["--json", "params", "wi_A1"],
     ["--json", "watch", "wi_A1", "--once", "--demand", "--events", "40"],
-  ], "one watch read and the two composed reads it starts (polyforge#48/#79: the spawn order is not pinned — they start together)");
+  ], "one watch read, the two composed reads it starts and the catalog composer's probe (polyforge#48/#79/#151: the spawn order is not pinned — they start together)");
+  assert.equal(body.status?.stepTiers?.reason, "polyforge is not installed on this machine", "the composed catalog degrades with its reason (this stub answers no --json --version, so the probe reads absent), never 5xx");
+  assert.deepEqual(body.status?.stepTiers?.tiers, []);
 });
 
 test("polyforge#48 AC3: without overrides=1 the watch route never reads the view", async () => {
@@ -173,6 +180,18 @@ test("polyforge#48 AC3: an ended ticket's answer never carries the view", async 
   const body = await response.json();
   assert.equal(body.status?.workflowStatus, "completed");
   assert.equal(body.status?.overrideView, undefined, "the composed view never rides an ended ticket's answer");
+  assert.equal(body.status?.stepTiers, undefined, "the step-tier catalog composes for a live ticket only (85b2)");
+  // The route starts the composed reads together with the watch read and
+  // drops them unawaited once the ticket reads ended (the established
+  // pattern): under load a dropped stub child can append its argv after
+  // this test — a bounded wait for the reads' own argv keeps the next
+  // test's reset from racing one (polyforge#151's flaky spawn-set find).
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const lines = argv();
+    if (lines.some((a) => a.includes("override")) && lines.some((a) => a.includes("params"))) break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
 });
 
 test("the composed view read names the Cell exactly like the watch read (a slug is a valid ref)", async () => {

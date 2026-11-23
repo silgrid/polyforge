@@ -1,6 +1,5 @@
 import type { McpExposure, ResourceDiagnostic } from "@earendil-works/pi-coding-agent";
 import type { AgentLanguage } from "./agent-language";
-import type { ClaudeSettings } from "./claude-shared";
 import type { McpImportNote } from "./mcp-import-core";
 import type { PolyforgeAgentLanguage } from "./polyforge-config-write";
 import type { SubagentProfile } from "./subagents";
@@ -51,8 +50,6 @@ export interface AgentLanguageResponse {
   polyforge?: PolyforgeAgentLanguage | null;
 }
 
-/** GET/PUT /api/claude-settings: Settings › Claude as stored (a PUT's body too). */
-export type ClaudeSettingsResponse = ClaudeSettings;
 
 export interface ToolSettingsResponse {
   isWindows: boolean;
@@ -121,6 +118,56 @@ export interface SkillsResponse {
   projectResourcesLoaded: boolean;
 }
 
+/** The pi half of a unified row: the loader's own view of the file (#85 85d). */
+export interface UnifiedSkillPiSide {
+  /** The loader's skill name. */
+  name: string;
+  /** The loader-reported skill file path — the skillVisibility preference's key (#146). */
+  filePath: string;
+  /** The effective value: the stored preference applied over the author's frontmatter. */
+  disableModelInvocation: boolean;
+  /** The author's frontmatter value, when the loader reported one. */
+  declaredDisableModelInvocation?: boolean;
+  sourceInfo: {
+    source?: string;
+    scope?: string;
+  };
+  install?: SkillInstallInfo;
+}
+
+/** The claude half of a unified row: the adapter's own view of the file (#85 85d). */
+export interface UnifiedSkillClaudeSide {
+  /** claude's entry name — the native `skillOverrides` key. */
+  name: string;
+  filePath: string;
+  /** The native `skillOverrides` word stored for the name, when one is. */
+  state?: string;
+}
+
+/** One merged row of the unified skills listing (#85 85d, AC1): one real
+ * SKILL.md as every harness that lists it sees it, in one scope group. */
+export interface UnifiedSkillRow {
+  /** Stable row key: the scope-prefixed real file path (review r1#3: two
+   * scopes' rows of one file never share a key and never merge). */
+  key: string;
+  /** The scope group the row renders under: 用户 / 项目. */
+  scope: "user" | "project";
+  /** Display name: the pi loader's name, else claude's entry name. */
+  name: string;
+  /** Every harness that lists this file, pi first. */
+  harnesses: ("pi" | "claude")[];
+  pi?: UnifiedSkillPiSide;
+  claude?: UnifiedSkillClaudeSide;
+  /** The same scope's other rows sharing this display name (同名不同文件，遮蔽注明，Q2 B). */
+  sameName: string[];
+}
+
+/** GET /api/skills with the merged view (85d): the pi listing as before, plus
+ * the unified rows the Skills panel renders. */
+export interface UnifiedSkillsResponse extends SkillsResponse {
+  rows: UnifiedSkillRow[];
+}
+
 export interface SkillContentResponse {
   content: string;
 }
@@ -128,6 +175,15 @@ export interface SkillContentResponse {
 /** One file of a bulk `PATCH /api/skills`; `error` means it was left as it was. */
 export interface SkillToggleResult {
   filePath: string;
+  error?: string;
+}
+
+/** One item of a bulk `PATCH /api/skills` (85d): which harness's store a
+ * skill's state was written to; `error` means it was left as it was. */
+export interface SkillApplyResult {
+  /** The item's skill as the request named it: a pi skill file path or a claude entry name. */
+  skill: string;
+  harness: "pi" | "claude";
   error?: string;
 }
 
@@ -191,7 +247,10 @@ export type McpTrustFolderInfo =
 // is an English diagnostic, `reason` a code the panel translates.
 // ---------------------------------------------------------------------------
 
-export type McpScope = "global" | "project";
+/** The unified scopes of the MCP list (ADR 0006; #85 85c): `local` is Claude's own — its
+ * `projects[<cwd>].mcpServers` — and pi has no place for it, so the local group is
+ * Claude-only and pi never lists or takes one. */
+export type McpScope = "global" | "project" | "local";
 export type McpTransportKind = "stdio" | "http";
 /** What a project entry may change of the global server of its name (the SDK's `OVERRIDE_KEYS`). */
 export type McpOverrideKey = "enabled" | "exposure" | "toolExposure";
@@ -296,7 +355,7 @@ export interface McpServerInfo {
   headerNames: string[];
   /** An HTTP server without an `Authorization` header or `auth` signs in with OAuth when it answers 401. */
   usesOAuth: boolean;
-  /** An HTTP server's `auth.provider`: it sends that pi provider's token (signed in under Settings › Models) instead of using OAuth. */
+  /** An HTTP server's `auth.provider`: it sends that pi provider's token (signed in under Settings › Account › pi) instead of using OAuth. */
   authProvider?: string;
   /**
    * Whether `mcp-auth.json` holds an access token for the server (by its name
@@ -554,6 +613,65 @@ export interface McpCodemodeProjectOverride {
   preference: McpCodemodePreference;
 }
 
+/**
+ * One of claude's MCP entries as the unified list shows it (#85 85c, AC1):
+ * read from claude's native files only, masked like pi's entries — env and
+ * header names without values, url and args through `lib/mcp-secrets.ts`.
+ */
+export interface ClaudeMcpServerInfo {
+  name: string;
+  /** The unified scope: claude's user is the global group, its local is Claude-only. */
+  scope: McpScope;
+  /** The native file the entry was read from. */
+  sourcePath: string;
+  command?: string;
+  args?: string[];
+  url?: string;
+  /** claude's own `type` as written, when the entry carries one. */
+  type?: string;
+  envNames: string[];
+  headerNames: string[];
+  /** Named in the state file's `disabledMcpServers`; read-only display (Q1 A). */
+  disabled?: boolean;
+}
+
+/** What reading claude's native MCP files found (#85 85c; `present` is a PATH lookup, never a spawn). */
+export interface ClaudeMcpFileInfo {
+  present: boolean;
+  /** The state file's path: `$CLAUDE_CONFIG_DIR/.claude.json`, else `~/.claude.json`. */
+  configPath: string;
+  /** False when the state file exists but is not a JSON object. */
+  stateReadable: boolean;
+  servers: ClaudeMcpServerInfo[];
+  /** The state file's top-level `disabledMcpServers`, read-only (Q1 A). */
+  disabledMcpServers: string[];
+}
+
+/** One shared field whose values differ between the harnesses that hold the row (#85 85c, AC3). */
+export interface McpUnifiedFieldDiff {
+  field: string;
+  /** Each present harness's current value as display text (masked), by harness id. */
+  values: Partial<Record<"pi" | "claude", string>>;
+}
+
+/**
+ * One row of the unified MCP list (#85 85c, Q2 A): the (scope, name) both
+ * sides merge on — same name, same unified scope, one row whatever each side
+ * holds; `missing` names the harnesses that support the scope but hold no
+ * entry, so the row's 「应用到」 shows what a change would reach.
+ */
+export interface McpUnifiedRow {
+  scope: McpScope;
+  name: string;
+  pi: boolean;
+  claude: boolean;
+  missing: ("pi" | "claude")[];
+  /** Shared fields whose values differ (Q1: only fields both sides define). */
+  inconsistent: McpUnifiedFieldDiff[];
+  /** Other unified scopes holding the same name (「另在 X 组」). */
+  otherScopes: McpScope[];
+}
+
 export interface McpProjectInfo {
   cwd: string;
   /** Absent when `trust.json` cannot be read; the project then counts as untrusted. */
@@ -569,6 +687,10 @@ export interface McpProjectInfo {
 
 export interface McpResponse {
   mcp: McpAvailability;
+  /** claude's side of the unified list (#85 85c): read from files only, never a spawn. */
+  claude?: ClaudeMcpFileInfo;
+  /** The unified rows: pi's and claude's entries merged by (scope, name). */
+  unified?: McpUnifiedRow[];
   codemode: McpCodemodeInfo;
   /**
    * Present when `-builtin:tool-search` (or a pattern matching it), in the
@@ -676,6 +798,10 @@ export type McpRefusalReason =
   | "folder-not-fresh"
   /** `add` with `trustFolder`: trusting the folder would trust more than it (`breadth`), so Pi Web does not do it by itself. */
   | "trust-too-broad"
+  /** A harness the request named cannot take this entry or scope (#85 85c): pi at claude's local scope, or an sse/ws entry pi does not load. */
+  | "harness-unsupported"
+  /** A write to claude its own CLI refused or could not make: no binary, or a version the write gate does not recognize (#85 85c). */
+  | "claude-unwritable"
   /** Reading failed unexpectedly; `error` says how. */
   | "internal";
 
@@ -719,6 +845,8 @@ export interface McpServerRef {
  * which stays on the server and may hold literal secrets.
  */
 export interface McpUndoInfo extends McpServerRef {
+  /** Present when the removal took a claude entry (#85 85c): undo re-adds it through the CLI. */
+  harness?: "claude";
   token: string;
   /** The configured path it was removed from. */
   path: string;
@@ -743,11 +871,38 @@ export interface McpActionResponse extends McpResponse {
   /** `sign-out`: the server signed out of, and whether `mcp-auth.json` held anything for its URL. */
   signedOut?: McpServerRef & { removed: boolean };
   /** `add`: the server written, and the configured path of its file. */
-  added?: McpServerRef & { path: string };
+  added?: McpServerRef & { path: string; harness?: "claude" };
+  /** `set-apply` (#85 85c): one result per harness the row could reach, in [pi, claude] order. */
+  applied?: {
+    scope: McpScope;
+    name: string;
+    results: McpApplyResult[];
+  };
   /** `add` to a project: the folder's trust after the write (it requires trust once `.pi/mcp.json` exists), for the page's trust status. */
   trust?: ProjectTrustStatus;
   /** `add` with `trustFolder`: the folder was trusted in the same request. */
   trustedFolder?: true;
+}
+
+/**
+ * One harness's outcome of a `set-apply` (#85 85c, AC3): the row now says
+ * what was asked of that harness, or why its write refused — the reason a
+ * failure carries is a `McpRefusalReason` the panel translates.
+ */
+export interface McpApplyResult {
+  harness: "pi" | "claude";
+  ok: boolean;
+  error?: string;
+  reason?: McpRefusalReason;
+  /**
+   * A removal this result made (#85 85c, Q1 A): the 60-second undo the remove
+   * action gives, so an apply-to that takes a side away can put it back.
+   */
+  undo?: {
+    token: string;
+    path: string;
+    expiresInMs: number;
+  };
 }
 
 /**

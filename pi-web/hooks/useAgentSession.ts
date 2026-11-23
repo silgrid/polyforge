@@ -27,6 +27,7 @@ import {
   type SessionHarness,
   CLAUDE_SESSION_BUILTIN_COMMANDS,
 } from "@/lib/claude-shared";
+import { parseDefaultModelFetch, resolveFetchedComposerDefaults } from "@/lib/default-model-client";
 import { PI_RESTART_REFUSED_CODE } from "@/lib/bg-protocol";
 import { normalizeToolCalls } from "@/lib/normalize";
 import { claudeSubagentRelayText, mergeClaudeSubagentHistory, mergeClaudeSubagentRuns, type ClaudeSubagentRun, type ClaudeSubagentRuns } from "@/lib/claude-subagent-view";
@@ -180,7 +181,7 @@ export function foldClaudeSubagents(state: ClaudeSubagentState, sessionId: strin
 /**
  * What GET /api/claude reports that the composer uses: whether claude is on PATH and the
  * names its model list offers — claude's aliases from its initialize answer, then
- * Settings › Claude's custom names.
+ * claude's native modelPicker custom names.
  */
 export interface ClaudeAvailability {
   available: boolean;
@@ -773,6 +774,15 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // a claude session (or a fresh composer set to claude).
   const isClaudeSession = isNew ? newSessionHarness === CLAUDE_HARNESS : (session?.harness ?? data?.info?.harness) === CLAUDE_HARNESS;
   const [newSessionClaudeModel, setNewSessionClaudeModel] = useState<string>(() => initialChoices?.claudeModel ?? DEFAULT_CLAUDE_MODEL);
+  // 85a3-1 (AC2): the combined default's claude half — the native defaults a
+  // fresh composer starts from (the star's filled marker shows the model) and
+  // the pick guards that keep a late fetch from overriding the user.
+  const [claudeDefaultModel, setClaudeDefaultModel] = useState<string>(DEFAULT_CLAUDE_MODEL);
+  const claudeDefaultModelRef = useRef<string>(DEFAULT_CLAUDE_MODEL);
+  const claudeDefaultEffortRef = useRef<ClaudeEffort>(CLAUDE_EFFORT_DEFAULT);
+  const harnessPickedRef = useRef(false);
+  const claudeModelPickedRef = useRef(false);
+  const claudeEffortPickedRef = useRef(false);
   const [claudeAvailability, setClaudeAvailability] = useState<ClaudeAvailability | null>(null);
   // a fresh claude composer's effort; an open claude session's switched values
   // (until its row catches up) and the visible line of a switch claude refused.
@@ -1011,6 +1021,45 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     })();
     return () => { current = false; };
   }, [wantsClaudeAvailability]);
+
+  // 85a3-1 (AC2): a fresh composer starts from the combined default — the
+  // stored harness (Pi Web's own preference) and claude's native defaults
+  // (Q2 A: the native `model`, "default" when unset). Only untouched state
+  // takes the fetched values: a carried draft choice or the user's own pick
+  // always wins, so a late answer never overrides the user. An open claude
+  // session asks for the same fetch — its star's filled marker shows the
+  // native default (review r1#4), while its own model stays the session's.
+  const wantsComposerDefaults = isNew || isClaudeSession;
+  useEffect(() => {
+    if (!wantsComposerDefaults) return;
+    let current = true;
+    void (async () => {
+      try {
+        const response = await fetch("/api/models/default");
+        if (!response.ok) return;
+        const fetched = parseDefaultModelFetch(await response.json());
+        if (!current || !fetched) return;
+        setClaudeDefaultModel(fetched.claudeDefaultModel);
+        claudeDefaultModelRef.current = fetched.claudeDefaultModel;
+        claudeDefaultEffortRef.current = fetched.claudeDefaultEffort;
+        if (!isNew) return; // an open session needs only the star's marker
+        const apply = resolveFetchedComposerDefaults(fetched, {
+          carriedHarness: initialChoices?.harness !== undefined,
+          carriedClaudeModel: initialChoices?.claudeModel !== undefined,
+          carriedClaudeEffort: initialChoices?.claudeEffort !== undefined,
+          pickedHarness: harnessPickedRef.current,
+          pickedClaudeModel: claudeModelPickedRef.current,
+          pickedClaudeEffort: claudeEffortPickedRef.current,
+        });
+        if (apply.harness !== undefined) setNewSessionHarness(apply.harness);
+        if (apply.claudeModel !== undefined) setNewSessionClaudeModel(apply.claudeModel);
+        if (apply.claudeEffort !== undefined) setNewSessionClaudeEffort(apply.claudeEffort);
+      } catch {
+        // The composer keeps its built-in defaults.
+      }
+    })();
+    return () => { current = false; };
+  }, [isNew, wantsComposerDefaults, initialChoices]);
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
     const container = scrollContainerRef.current;
@@ -3239,13 +3288,15 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, [activeLeafId, addNotice, isCompacting, loadContext]);
 
   // a fresh composer's harness switch resets the destination harness's model —
-  // claude to its default full name, pi to no override (pi's default model again).
+  // claude to its own native default (85a3-1: the settings' `model`, "default"
+  // when unset, the fetched GET /api/models/default answer), pi to no override.
   const chooseNewSessionHarness = useCallback((harness: SessionHarness) => {
     if (harness === newSessionHarness) return;
+    harnessPickedRef.current = true;
     setNewSessionHarness(harness);
     if (harness === CLAUDE_HARNESS) {
-      setNewSessionClaudeModel(DEFAULT_CLAUDE_MODEL);
-      setNewSessionClaudeEffort(CLAUDE_EFFORT_DEFAULT);
+      setNewSessionClaudeModel(claudeDefaultModelRef.current);
+      setNewSessionClaudeEffort(claudeDefaultEffortRef.current);
       return;
     }
     newSessionModelOverrideRef.current = null;
@@ -3458,9 +3509,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   // Picking a model or reasoning level is session-scoped, as in the TUI. The
   // selectors' star is the explicit Ctrl+S equivalent: it saves the global
-  // default new sessions start with and also selects it for this chat.
+  // default new sessions start with and also selects it for this chat. The
+  // claude star posts the combined default's claude branch (85a3-1, AC2).
   const saveDefaultPreferences = useCallback(async (
-    edit: { provider: string; modelId: string } | { thinkingLevel: ConcreteThinkingLevel },
+    edit: { provider: string; modelId: string } | { thinkingLevel: ConcreteThinkingLevel } | { harness: "claude"; model: string },
   ) => {
     const cwd = newSessionCwd ?? session?.cwd;
     const res = await fetch("/api/models/default", {
@@ -3498,6 +3550,23 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
     reloadModelsQuietly();
   }, [addNotice, displayModel, handleModelChange, reloadModelsQuietly, saveDefaultPreferences]);
+
+  // 85a3-1 (AC2): the claude selector's 「设为默认」 — the star writes claude's
+  // native `model` and the same combined 「harness + 模型」 setting the pi star
+  // writes. An open session keeps its own model (a default is what new
+  // sessions start from); a fresh composer whose model is untouched follows.
+  const handleSetDefaultClaudeModel = useCallback(async (model: string) => {
+    try {
+      await saveDefaultPreferences({ harness: "claude", model });
+    } catch (e) {
+      addNotice({ type: "error", message: `Failed to save default model: ${e instanceof Error ? e.message : String(e)}` });
+      return;
+    }
+    addNotice({ type: "success", message: `Default model (claude): ${model}` });
+    setClaudeDefaultModel(model);
+    claudeDefaultModelRef.current = model;
+    if (isNew && !claudeModelPickedRef.current) setNewSessionClaudeModel(model);
+  }, [addNotice, isNew, saveDefaultPreferences]);
 
 
 
@@ -3777,6 +3846,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   const handleClaudeModelChange = useCallback((model: string) => {
     if (isNew) {
+      claudeModelPickedRef.current = true;
       setNewSessionClaudeModel(model);
       return;
     }
@@ -3785,11 +3855,19 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   const handleClaudeEffortChange = useCallback((effort: ClaudeEffort) => {
     if (isNew) {
+      claudeEffortPickedRef.current = true;
       setNewSessionClaudeEffort(effort);
       return;
     }
     void switchClaudeSetting({ type: "set_effort", effort });
   }, [isNew, switchClaudeSetting]);
+
+  // a fresh composer's claude model pick: the raw setter wrapped so the choice
+  // is marked and a late fetch of the combined default never overrides it.
+  const pickNewSessionClaudeModel = useCallback((model: string) => {
+    claudeModelPickedRef.current = true;
+    setNewSessionClaudeModel(model);
+  }, []);
 
   // an open claude session's permission mode, for that session alone.
   const handleClaudeLaunchPermissionModeChange = useCallback((mode: ClaudeLaunchPermissionMode) => {
@@ -4421,7 +4499,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     // the claude user messages 「从此处编辑」 can start from (pi: none needed, every one can).
     claudeEditEntryIds: isClaudeSession && !isNew ? data?.claudeEditEntryIds ?? NO_CLAUDE_EDIT_ENTRY_IDS : NO_CLAUDE_EDIT_ENTRY_IDS,
     newSessionHarness, chooseNewSessionHarness,
-    newSessionClaudeModel, setNewSessionClaudeModel,
+    newSessionClaudeModel, pickNewSessionClaudeModel,
+    // 85a3-1: the combined default's claude half — the star's filled marker and its save handler.
+    claudeDefaultModel, handleSetDefaultClaudeModel,
     // claude's model / effort controls and the line of a switch claude refused.
     newSessionClaudeEffort, handleClaudeModelChange, handleClaudeEffortChange,
     // an open claude session's permission-mode switch (its mode is claudeSessionChoices.launchPermissionMode, absent = default).

@@ -12,7 +12,7 @@ import {
   CLI_WRITABLE_KEYS,
   CONNECTION_KEYS,
   configValueError,
-  HOST_ONLY_KEYS,
+  isHostOnlyKey,
   HOST_LIST_KEYS,
   HOST_SCALAR_KEYS,
   IDENTITY_KEYS,
@@ -25,6 +25,8 @@ import {
   workspaceProjectsValue,
   workspaceWriteKey,
 } from "@/lib/polyforge-config-schema";
+import { ModelCandidatePicker } from "./ModelCandidatePicker";
+import { stepTierPickerGroups, type StepTierPickerGroup } from "@/lib/step-tiers";
 import type { PolyforgeWorkflowsRead } from "@/lib/polyforge-workflows";
 import {
   addCandidate,
@@ -422,6 +424,28 @@ export function PolyforgeConfig({ cwd, active }: Props) {
   const { disclosure, setRegion } = usePolyforgeDisclosure();
   const regionToggle = regionToggles(disclosure, setRegion);
   const regionId = useId();
+  // polyforge#151 (85b2): the shared picker's one catalog read — fetched once
+  // per section open, threaded to both card surfaces (the chain add row and
+  // the summarize chips'); a failed or incapable read leaves the manual
+  // fill with the reason (the pure grouping is lib/step-tiers.ts').
+  const [tierCatalog, setTierCatalog] = useState<{ groups: StepTierPickerGroup[] | null; reason: string | null }>({ groups: null, reason: null });
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/polyforge/step-tiers")
+      .then(async (response) => ({ ok: response.ok, body: await response.json().catch(() => null) as { capable?: boolean; reason?: string; error?: string; tiers?: { tier: string; candidates: string[] }[]; defined?: { pi: string[]; claude: string[] } } | null }))
+      .then(({ ok, body }) => {
+        if (cancelled) return;
+        if (!ok || !body || body.error) {
+          setTierCatalog({ groups: null, reason: body?.reason ?? body?.error ?? `HTTP ${ok ? "error" : "refused"}` });
+          return;
+        }
+        setTierCatalog(body.capable === true && Array.isArray(body.tiers) && body.defined
+          ? { groups: stepTierPickerGroups(body.tiers, body.defined), reason: null }
+          : { groups: null, reason: body.reason ?? "the step-tier catalog is unavailable" });
+      })
+      .catch(() => { if (!cancelled) setTierCatalog({ groups: null, reason: "the step-tier catalog read failed" }); });
+    return () => { cancelled = true; };
+  }, []);
   // the list's Cell registry (the Cells card's read, moved up:
   // the list, the Cell panes and Add Cell share it) and the selected entry.
   const [cellsRead, setCellsRead] = useState<PolyforgeCellsRead | null>(null);
@@ -967,6 +991,7 @@ export function PolyforgeConfig({ cwd, active }: Props) {
             epoch={configEpoch}
             onWritten={onCellWritten}
             onPageStatus={onPageStatus}
+            tierCatalog={tierCatalog}
           />
         )}
       </>
@@ -1083,7 +1108,7 @@ type PendingWrite = { item: PolyforgeConfigItem; action: "set" | "unset"; value?
  * (their one home is the Host pane); what pf lists differently per Cell
  * (a named Cell's [model] source) is its only content difference.
  */
-function CellSettings({ profile, cwd, active, epoch, onWritten, onPageStatus }: {
+function CellSettings({ profile, cwd, active, epoch, onWritten, onPageStatus, tierCatalog }: {
   profile: string;
   cwd: string | null;
   active: boolean;
@@ -1093,6 +1118,8 @@ function CellSettings({ profile, cwd, active, epoch, onWritten, onPageStatus }: 
   onWritten: () => void;
   /** Reload's outcome, page-level status (the footer's). */
   onPageStatus: (error: string | null, message: string | null) => void;
+  /** the shared picker's catalog (the page's one read), threaded to both card surfaces. */
+  tierCatalog: { groups: StepTierPickerGroup[] | null; reason: string | null };
 }) {
   const { t } = useI18n();
   const file = polyforgeCellFileName(profile);
@@ -1431,14 +1458,21 @@ function CellSettings({ profile, cwd, active, epoch, onWritten, onPageStatus }: 
         <span className="polyforge-config-write is-multiline">
           {chips}
           <span className="polyforge-config-write-row">
-            <input
-              type="text"
-              aria-label={item.key}
-              placeholder={t("polyforge.settings.configAddModel")}
+            {/* polyforge#151: the add row is the shared tier-grouped picker —
+                the chips, the save, the unset and the CAS are unchanged. */}
+            <ModelCandidatePicker
+              groups={tierCatalog.groups}
+              reason={tierCatalog.reason}
+              disabled={writeBusy !== null}
               value={modelAdds[item.key] ?? ""}
-              onChange={(event) => setModelAdds((current) => ({ ...current, [item.key]: event.target.value }))}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") { event.preventDefault(); addModel(item); }
+              onChange={(next) => setModelAdds((current) => ({ ...current, [item.key]: next }))}
+              selectLabel={t("polyforge.settings.configAddModel")}
+              inputLabel={item.key}
+              placeholder={t("polyforge.settings.configAddModel")}
+              inputProps={{
+                onKeyDown: (event: React.KeyboardEvent<HTMLInputElement>) => {
+                  if (event.key === "Enter") { event.preventDefault(); addModel(item); }
+                },
               }}
             />
             <ConfigButton size="small" disabled={writeBusy !== null} onClick={() => void save(item)}>
@@ -1521,7 +1555,7 @@ function CellSettings({ profile, cwd, active, epoch, onWritten, onPageStatus }: 
 
   // the Host-only keys have one surface, the Host region, so
   // no Host key renders in a Cell's pane.
-  const cards = config?.capable ? configCards(groupConfigItems((config.items ?? []).filter((item) => !HOST_ONLY_KEYS.includes(item.key)))) : null;
+  const cards = config?.capable ? configCards(groupConfigItems((config.items ?? []).filter((item) => !isHostOnlyKey(item.key)))) : null;
   // the read-only memory_policy blocks of `pf config list`,
   // one group per mapped workspace path (sorted; pf builds them from a map).
   const memoryPolicyPaths = config?.capable && config.memoryPolicy
@@ -1801,6 +1835,7 @@ function CellSettings({ profile, cwd, active, epoch, onWritten, onPageStatus }: 
         regionId={regionId}
         reloadClassLabel={reloadClassLabel}
         onWritten={onWorkflowWritten}
+        tierCatalog={tierCatalog}
       />
     </>
   );
@@ -2087,7 +2122,7 @@ type WorkflowRowFeedback = { message: string; tone: "default" | "error" };
  * disabled, with pf's reason as visible text, while the running daemon cannot
  * check the step keys. `pf submit --models` is only noted, never edited.
  */
-function WorkflowCard({ cwd, profile, active, refreshKey, regionId, reloadClassLabel, onWritten }: {
+export function WorkflowCard({ cwd, profile, active, refreshKey, regionId, reloadClassLabel, onWritten, tierCatalog }: {
   cwd: string | null;
   /** the pane's Cell — its mapping's workspaces, its --profile. */
   profile: string;
@@ -2097,6 +2132,8 @@ function WorkflowCard({ cwd, profile, active, refreshKey, regionId, reloadClassL
   regionId: string;
   reloadClassLabel: (reloadClass: string) => string;
   onWritten: () => void;
+  /** the shared picker's catalog (the page's one read). */
+  tierCatalog: { groups: StepTierPickerGroup[] | null; reason: string | null };
 }) {
   const { t } = useI18n();
   const { disclosure, setRegion } = usePolyforgeDisclosure();
@@ -2247,19 +2284,26 @@ function WorkflowCard({ cwd, profile, active, refreshKey, regionId, reloadClassL
           ))}
         </span>
         <span className="polyforge-config-write">
-          <input
-            type="text"
-            aria-label={`${t("polyforge.settings.workflowChainAdd")} · ${row.id}`}
-            placeholder={t("polyforge.settings.workflowChainAdd")}
+          {/* polyforge#151: the chain's add row is the shared tier-grouped
+              picker — ↑↓×, save, clear, the step-value guard and the
+              workspace CAS are unchanged. */}
+          <ModelCandidatePicker
+            groups={tierCatalog.groups}
+            reason={tierCatalog.reason}
             disabled={disabled}
             value={chainAdds[row.id] ?? ""}
-            onChange={(event) => setChainAdds((current) => ({ ...current, [row.id]: event.target.value }))}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                editChain(row, addCandidate(chain, chainAdds[row.id] ?? ""));
-                setChainAdds((current) => ({ ...current, [row.id]: "" }));
-              }
+            onChange={(next) => setChainAdds((current) => ({ ...current, [row.id]: next }))}
+            selectLabel={t("polyforge.candidatePicker.choose")}
+            inputLabel={`${t("polyforge.settings.workflowChainAdd")} · ${row.id}`}
+            placeholder={t("polyforge.settings.workflowChainAdd")}
+            inputProps={{
+              onKeyDown: (event: React.KeyboardEvent<HTMLInputElement>) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  editChain(row, addCandidate(chain, chainAdds[row.id] ?? ""));
+                  setChainAdds((current) => ({ ...current, [row.id]: "" }));
+                }
+              },
             }}
           />
           <ConfigButton size="small" disabled={disabled} onClick={save}>{t("polyforge.settings.configSave")}</ConfigButton>

@@ -9,7 +9,8 @@ import test from "node:test";
 // exist in all three dictionaries.
 
 const sidebar = await readFile(new URL("./SessionSidebar.tsx", import.meta.url), "utf8");
-const settings = await readFile(new URL("./SettingsPanel.tsx", import.meta.url), "utf8");
+// 85a1b: General's controls moved whole into the conversation pane's file.
+const settings = await readFile(new URL("./GeneralSettings.tsx", import.meta.url), "utf8");
 const lib = await readFile(new URL("../lib/session-filter.ts", import.meta.url), "utf8");
 const en = await readFile(new URL("../lib/i18n/messages/en.ts", import.meta.url), "utf8");
 const zhCN = await readFile(new URL("../lib/i18n/messages/zh-CN.ts", import.meta.url), "utf8");

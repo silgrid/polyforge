@@ -12,7 +12,11 @@ package daemon
 //     step_timeout/stall_window/claude_bin/agent_language (the live state
 //     the runtime reads);
 //   - live: summarize.models|language|interval_sec (the [summarize] table
-//     the summarize lane reads from the live state);
+//     the summarize lane reads from the live state) and the whole
+//     [step_tiers] catalog (polyforge#143: a Host-only family with no
+//     daemon consumer — the reload's applied/live classification is the
+//     proof no restart is needed; doctor and `pf config list` read the
+//     file);
 //   - next-claim: the [workspace] mapping (additions take effect at the
 //     next claim; a removal/re-route that would strand a held job is
 //     refused and the work items are listed) and the whole
@@ -180,6 +184,13 @@ func (d *Daemon) reloadConfig() (*cli.ConfigReloadResponse, error) {
 	}
 	if !reflect.DeepEqual(prev.MemoryPolicy, newCfg.MemoryPolicy) {
 		add(cli.MemoryPolicyLabel, cli.MemoryPolicyClass, "next-claim", "")
+	}
+	// polyforge#143 (85b): the [step_tiers] catalog is a Host-only live
+	// family with no daemon consumer (Q5 B) — a changed catalog reports
+	// applied/live (the classification is the proof no restart is needed),
+	// and only the Host's (the default Cell's) reload reports it.
+	if d.profile() == cellcfg.DefaultProfile && !reflect.DeepEqual(prev.StepTiers, newCfg.StepTiers) {
+		add(cli.StepTiersLabel, cli.ConfigLive, "applied", "")
 	}
 	mappingChanged := !d.plan().Equal(newCfg.Mapping)
 	d.live.SetMapping(newCfg.Mapping)

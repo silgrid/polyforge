@@ -49,7 +49,7 @@ import { CLAUDE_BACKGROUND_TASK_EVENT, CLAUDE_BACKGROUND_TASKS_EVENT, CLAUDE_FOR
 import { claudeConfigDir, claudeSidecarFiles, claudeTranscriptFile } from "./claude-config-dir";
 import { runSessionScanTask } from "./session-parse-worker-pool";
 import { ClaudePermissionBroker, claudePermissionDeniedNotice } from "./claude-permission";
-import { readClaudePermissionConfig } from "./claude-permission-config";
+import { readClaudePreferences } from "./claude-preferences";
 import {
   EMPTY_CLAUDE_USAGE,
   getClaudeSessionRecord,
@@ -263,7 +263,7 @@ export interface ClaudeListProjection {
 export function claudeSessionInfo(
   record: ClaudeSessionRecord,
   history = readClaudeHistory(record.id),
-  globalApprovalMode: ClaudePermissionMode = readClaudePermissionConfig().mode,
+  globalApprovalMode: ClaudePermissionMode = readClaudePreferences().approvalChannel,
 ): SessionInfo {
   return claudeSessionInfoFromProjection(record, { file: history.file, messageCount: history.messages.length }, globalApprovalMode);
 }
@@ -272,7 +272,7 @@ export function claudeSessionInfo(
 export function claudeSessionInfoFromProjection(
   record: ClaudeSessionRecord,
   projection: ClaudeListProjection,
-  globalApprovalMode: ClaudePermissionMode = readClaudePermissionConfig().mode,
+  globalApprovalMode: ClaudePermissionMode = readClaudePreferences().approvalChannel,
 ): SessionInfo {
   return {
     path: projection.file ?? "",
@@ -386,7 +386,7 @@ export function resetClaudeSessionListCachesForTests(): void {
  * counted defers its count (`detailsPending`) instead of reading it.
  */
 export async function getClaudeSessionInfos(options: { summary?: boolean } = {}): Promise<SessionInfo[]> {
-  const globalApprovalMode = readClaudePermissionConfig().mode;
+  const globalApprovalMode = readClaudePreferences().approvalChannel;
   const summary = options.summary === true;
   const rows: SessionInfo[] = [];
   for (const record of readClaudeIndex()) {
@@ -465,7 +465,7 @@ export function claudeCommandEffort(command: Record<string, unknown>): ClaudeEff
  * launch would take — the record's override, else the global mode.
  */
 export function claudeSessionApprovalMode(record: ClaudeSessionRecord, globalApprovalMode?: ClaudePermissionMode): ClaudePermissionMode {
-  return getClaudeSession(record.id)?.permissionMode ?? record.permissionMode ?? globalApprovalMode ?? readClaudePermissionConfig().mode;
+  return getClaudeSession(record.id)?.permissionMode ?? record.permissionMode ?? globalApprovalMode ?? readClaudePreferences().approvalChannel;
 }
 
 /**
@@ -528,7 +528,7 @@ export async function setIdleClaudeSetting(
 ): Promise<ClaudeModelSwitch | ClaudeEffortSwitch | ClaudeLaunchPermissionModeSwitch> {
   if (command.type === "set_permission_mode") {
     const record = getClaudeSessionRecord(id);
-    const approvalMode = record ? claudeSessionApprovalMode(record) : readClaudePermissionConfig().mode;
+    const approvalMode = record ? claudeSessionApprovalMode(record) : readClaudePreferences().approvalChannel;
     const launchPermissionMode = claudeCommandLaunchPermissionMode(command, approvalMode);
     await updateClaudeSessionRecord(id, (record) => ({ ...record, launchPermissionMode }));
     return { launchPermissionMode, pending: true };
@@ -713,7 +713,7 @@ export class ClaudeSession {
     this.configDir = options.configDir;
     this.resumeAt = options.resume && options.resumeAt ? options.resumeAt : null;
     this.tasksOwed = options.resume;
-    this.permissionMode = record.permissionMode ?? readClaudePermissionConfig().mode;
+    this.permissionMode = record.permissionMode ?? readClaudePreferences().approvalChannel;
     this.argv = buildClaudeArgv({
       sessionId: record.id,
       resume: options.resume,
@@ -733,7 +733,7 @@ export class ClaudeSession {
       language: record.agentLanguage,
       onOpen: (_requestId, request) => {
         // The switch is read per request: a change in Settings applies to the next prompt.
-        if (!readClaudePermissionConfig().push) return;
+        if (!readClaudePreferences().pushReminders) return;
         const name = typeof request.display_name === "string" && request.display_name ? request.display_name : request.tool_name;
         void notifyClaudePermissionPending(this.sessionId, this.currentRecord().name, name)
           .catch((error) => console.error("[pi-web] failed to send permission push:", error instanceof Error ? error.message : error));
@@ -1113,7 +1113,7 @@ export class ClaudeSession {
    * The in-session permission-mode switch: claude's own
    * `set_permission_mode` on the live child, not idle-guarded (claude takes it mid-turn).
    * Accepted: the index records it and every later child starts with it; it is the
-   * session's own, Settings › Claude is not changed. Refused by claude: its text comes
+   * session's own, claude's native default in ~/.claude is not changed. Refused by claude: its text comes
    * back and nothing changes. No live child (or one that exits before answering): the
    * index alone. Plan is refused before anything is sent unless this child was launched
    * with ask mode (r3, plan D11); with no live child, the next launch's mode decides.

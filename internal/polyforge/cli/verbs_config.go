@@ -13,8 +13,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -125,7 +127,12 @@ func selectConfigScope(ctx *Context, args []string) ([]string, error) {
 // written on a refusal.
 func checkKeyScope(ctx *Context, verb string, k configKey) error {
 	section, name := keySection(k)
-	hostOnly := cellcfg.HostOnly(section, name)
+	if k.kind == keyStepTiers {
+		// the refusal names the family key (step_tiers.<tier>), not the
+		// tier alone — a tier can spell almost any word (r1#N4)
+		name = StepTiersSection + "." + name
+	}
+	hostOnly := cellcfg.HostOnly(section, k.name)
 	sc := ctx.cfgScope
 	switch {
 	case sc.host && !hostOnly:
@@ -151,6 +158,8 @@ func keySection(k configKey) (string, string) {
 		return "memory_policy", k.name
 	case keyModel:
 		return "model", strings.TrimPrefix(k.name, "model.")
+	case keyStepTiers:
+		return StepTiersSection, k.name
 	}
 	return "", k.name
 }
@@ -406,8 +415,8 @@ func runConfigGet(ctx *Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	if k.kind == keySummarize || k.kind == keyPolicy {
-		return fmt.Errorf("config get %s: read it via `pf config list` (the one read face of the [summarize] table and the memory_policy family)", k.raw)
+	if k.kind == keySummarize || k.kind == keyPolicy || k.kind == keyStepTiers {
+		return fmt.Errorf("config get %s: read it via `pf config list` (the one read face of the [summarize] table, the memory_policy family and the [step_tiers] catalog)", k.raw)
 	}
 	if err := checkKeyScope(ctx, "get", k); err != nil {
 		return err
@@ -585,6 +594,17 @@ func runConfigList(ctx *Context) error {
 		}
 		val, src := summarizeValueOf(v.file.Summarize, key)
 		items = append(items, configListItem{Key: key, Value: val, Source: src, Class: mustConfigClass(key), Schema: ConfigSchema(key)})
+	}
+	// the [step_tiers] catalog: one item per tier, the family's one class
+	// and the same model-list schema a [summarize] models item carries
+	// (polyforge#143, 85b — every item carries class: Pi Web's list gate
+	// drops a whole list that misses one)
+	for _, tier := range slices.Sorted(maps.Keys(v.file.StepTiers)) {
+		if !listedInScope(ctx, StepTiersSection, tier) {
+			continue
+		}
+		name := StepTiersSection + "." + tier
+		items = append(items, configListItem{Key: name, Value: v.file.StepTiers[tier], Source: "file", Class: StepTiersClass, Schema: ConfigSchema(name)})
 	}
 	if listedInScope(ctx, "model", "source") {
 		src := "default"
@@ -773,6 +793,8 @@ func runConfigSet(ctx *Context, args []string) error {
 			c.setSummarize(strings.TrimPrefix(k.name, "summarize."), rawValue)
 		case k.kind == keyModel:
 			c.setModel(strings.TrimPrefix(k.name, "model."), rawValue)
+		case k.kind == keyStepTiers:
+			c.setStepTiers(k.name, rawValue)
 		case k.kind == keyPolicy:
 			c.setPolicyList(ws, k.name, k.list, projects)
 		default:
@@ -816,6 +838,8 @@ func runConfigUnset(ctx *Context, args []string) error {
 			c.unsetSummarize(strings.TrimPrefix(k.name, "summarize."))
 		case k.kind == keyModel:
 			c.unsetModel(strings.TrimPrefix(k.name, "model."))
+		case k.kind == keyStepTiers:
+			c.unsetStepTiers(k.name)
 		case k.kind == keyPolicy:
 			c.unsetPolicyList(ws, k.name, k.list)
 		default:
@@ -877,6 +901,26 @@ func configSetValue(ctx *Context, k configKey, args []string) (string, []string,
 	case keySummarize:
 		v, err := summarizeTOMLValue(k.name, val)
 		return v, nil, err
+	case keyStepTiers:
+		// the value is a JSON list of candidate strings; the candidates
+		// normalize before the writer renders them, so the file holds the
+		// canonical form whatever the argv spelled
+		var items []string
+		if err := json.Unmarshal([]byte(val), &items); err != nil {
+			return "", nil, fmt.Errorf("config set %s: the value is a JSON list of `<harness>:<model>` candidates, e.g. '[\"pi:prov/model\", \"claude:sonnet\"]': %v", k.raw, err)
+		}
+		if len(items) == 0 {
+			return "", nil, fmt.Errorf("config set %s: name at least one candidate, or unset the tier", k.raw)
+		}
+		list, reason := normalizeSummarizeModels(items)
+		if reason != "" {
+			return "", nil, fmt.Errorf("config set %s: %s", k.raw, reason)
+		}
+		body, err := quoteCandidateList(k.raw, list)
+		if err != nil {
+			return "", nil, err
+		}
+		return "[" + body + "]", nil, nil
 	case keyPolicy:
 		var items []string
 		if err := json.Unmarshal([]byte(val), &items); err != nil {
@@ -1149,6 +1193,8 @@ func configKeyLabel(k configKey) string {
 		return "[workspace]"
 	case k.kind == keyPolicy:
 		return MemoryPolicyLabel
+	case k.kind == keyStepTiers:
+		return StepTiersLabel
 	}
 	return k.name
 }

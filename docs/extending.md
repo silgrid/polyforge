@@ -42,6 +42,16 @@ precedence chain are the config reference's one authority
 the routing skill's fragments, `pf submit --models` and
 [upgrade.md](upgrade.md) point there.
 
+### Step tier catalog
+
+The Host-only `[step_tiers]` table of `cli.toml` (`step_tiers.<tier>`, a
+tier's recommended `<harness>:<model>[:<effort>]` candidates; written
+with `pf config set step_tiers.<tier> … --host`, read with `pf config
+list`) — the machine-level step tier list `pf doctor`'s `step tiers
+catalog` row checks a workspace's user-written candidates against, and
+the source Pi Web's step-tier page edits: the config reference's
+[`[step_tiers]` section](reference/config.md#step_tiers--the-step-tier-catalog).
+
 ### Summarize models
 
 The one machine-level `[summarize]` table of `cli.toml` (`summarize.models`,

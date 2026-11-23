@@ -587,6 +587,10 @@ try {
     // tolerance"). The pagination probe below stays a plain listener.
     const errors = trackBrowserErrors(page, { base });
     const olderResponses = [];
+    page.on("requestfailed", (request) => {
+      const url = new URL(request.url());
+      console.log(`REQUEST_FAILED ${url.pathname}: ${request.failure()?.errorText}`);
+    });
     page.on("response", (response) => {
       const url = new URL(response.url());
       if (url.pathname === `/api/sessions/${LONG}/context` && url.searchParams.has("before")) olderResponses.push(response);

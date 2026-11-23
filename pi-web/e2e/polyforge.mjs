@@ -1,6 +1,8 @@
 // carries: components/PolyforgePanel*, components/ThinkingFold*, hooks/usePolyforge.*, lib/polyforge-status*, lib/polyforge-pf-bin*, app/api/polyforge/status/*, components/PolyforgeJobComposer*, lib/polyforge-conversation-pure*, lib/polyforge-cards-pure*, app/api/polyforge/watch/*, components/PolyforgeStepControls*, app/api/polyforge/override/*, lib/polyforge-overrides*, lib/polyforge-params*, app/api/polyforge/params/*, components/PolyforgeWorkItemParams*
 // carries: components/AppShell*, app/api/polyforge/polyforge-routes*, app/api/polyforge/polyforge-status-route*, lib/i18n/*, docs/agents/polyforge-panel.md
 // carries: components/PolyforgeDetailProgress*, hooks/__fixtures__/react-hook-shim.mjs, hooks/__tests__/polyforge-panel-progress-stubs.mjs, app/api/polyforge/polyforge-override-route*, app/api/polyforge/polyforge-params-route*
+// carries: components/ModelCandidatePicker*, lib/step-tiers*
+// (polyforge#151: the override picker rides the watch snapshot's composed catalog)
 // pi#108 (wi_y3y9SMz4IXKg) — Polyforge dock panel: end-to-end acceptance pass.
 //
 // Authored pre-code against artifacts/spec.md (AC1–AC10; AC11's e2e half is this
@@ -1352,8 +1354,9 @@ try {
     await pollUntil(async () => (await controls.count()) === 1, "the selected unstarted step offers the overlay controls");
     assert.ok(await controls.locator("[data-pf-step-controls-skip]").count() === 1, "a skippable step shows the skip switch");
     // the harness + model setter: one write, one argv
-    await controls.locator("[data-pf-step-controls-harness]").selectOption("pi");
-    await controls.locator("[data-pf-step-controls-model]").fill("ovr/p25-model");
+    // polyforge#151: the shared picker's manual fill takes the full candidate
+    // string (the harness select is gone); the argv below is unchanged.
+    await controls.locator("[data-pf-step-controls-model]").fill("pi:ovr/p25-model");
     await controls.locator("[data-pf-step-controls-apply]").click();
     await pollUntil(async () => {
       const lines = readFileSync(ovrLog, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
@@ -1398,7 +1401,7 @@ try {
     await node("bravo-code").click();
     const controls = panel.locator("[data-pf-step-controls]");
     await pollUntil(async () => (await controls.count()) === 1, "the controls render");
-    await controls.locator("[data-pf-step-controls-model]").fill("ovr/p25-model");
+    await controls.locator("[data-pf-step-controls-model]").fill("pi:ovr/p25-model");
     await controls.locator("[data-pf-step-controls-apply]").click();
     await pollUntil(async () => (await controls.locator("[data-pf-step-controls-error]").innerText()).includes("DAEMON-409"),
       "the refusal's typed words show inline");
@@ -1729,7 +1732,7 @@ try {
     const controls = panel.locator("[data-pf-step-controls]");
     await node("bravo-code").click();
     await pollUntil(async () => (await controls.count()) === 1, "the skippable tail's controls render");
-    await controls.locator("[data-pf-step-controls-model]").fill("ovr/p48-model");
+    await controls.locator("[data-pf-step-controls-model]").fill("pi:ovr/p48-model");
     await controls.locator("[data-pf-step-controls-apply]").click();
     await pollUntil(async () => (await controls.locator("[data-pf-step-controls-applied]").count()) === 1, "the applied feedback shows on the first step");
     // The switch to another unstarted step: a fresh control block — the
@@ -1744,7 +1747,7 @@ try {
     // carry to the next step either.
     setState({ overrideView: OVERRIDE_VIEW_P25, overrideRefuse: { code: "DAEMON-409", detail: "step alpha-plan has a live dispatch (its status is in_progress): the overlay is for steps without one" } });
     const saw409 = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/polyforge/override" && r.status() === 409, { timeout: 5000 });
-    await controls.locator("[data-pf-step-controls-model]").fill("ovr/p48-refused");
+    await controls.locator("[data-pf-step-controls-model]").fill("pi:ovr/p48-refused");
     await controls.locator("[data-pf-step-controls-apply]").click();
     await saw409;
     await pollUntil(async () => (await controls.locator("[data-pf-step-controls-error]").count()) === 1, "the refused write's typed words show on this step");

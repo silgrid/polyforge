@@ -19,18 +19,23 @@ fs.symlinkSync(decodeURIComponent(new URL("../../../lib/__fixtures__/claude-2.1.
 // A claude that cannot answer: it exits before reading anything.
 fs.writeFileSync(path.join(failDir, "claude"), "#!/bin/sh\necho 'claude: not logged in' >&2\nexit 1\n", { mode: 0o755 });
 process.env.PI_CODING_AGENT_DIR = agentDir;
+// The custom names are claude's native modelPicker now (85a4): the route reads
+// them from the config dir, so the tests own it instead of the real ~/.claude.
+const claudeConfigDir = path.join(scratch, "claude-config");
+fs.mkdirSync(claudeConfigDir, { recursive: true });
+process.env.CLAUDE_CONFIG_DIR = claudeConfigDir;
 // Pi Web's background-task feature reads the child's environment: the tests set
 // CLAUDE_CODE_DISABLE_BACKGROUND_TASKS themselves, never inherit the host's.
 delete process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS;
 const originalPath = process.env.PATH;
 test.after(() => {
   process.env.PATH = originalPath;
+  delete process.env.CLAUDE_CONFIG_DIR;
   fs.rmSync(scratch, { recursive: true, force: true });
 });
 
 const jiti = createJiti(import.meta.url, { alias: { "@": process.cwd() }, interopDefault: true, moduleCache: false });
 const { GET } = await jiti.import("./route.ts");
-const settings = await jiti.import("../../../lib/claude-settings.ts");
 
 const ALIASES = [
   { value: "default", displayName: "Default (recommended)", resolvedModel: "claude-opus-5-5", source: "alias" },
@@ -41,15 +46,15 @@ const ALIASES = [
 ];
 const CAPABILITIES = ["ui_surface_v1", "mcp_call_result_not_for_model_v1", "mcp_call_check_permissions_v1"];
 const RECORDED = ["2.1.312", "2.1.319", "2.1.322"];
-// r3: approvals follow the global permission mode; no
-// claude-permissions.json reads as its default, ask.
-const permissionConfig = path.join(agentDir, "claude-permissions.json");
+// r3: approvals follow the Pi Web approval channel; nothing stored reads as
+// its default, ask. The channel is a Pi Web preference now (85a4).
+const piWebSettings = path.join(agentDir, "pi-web-settings.json");
 const FEATURES_322 = [
   { id: "approvals", available: true, basis: "host-prompts" },
   { id: "backgroundTasks", available: true, basis: "recorded" },
   { id: "subagentText", available: true, basis: "recorded" },
 ];
-const CUSTOM = { launchPermissionMode: "default", customModels: ["claude-custom-1", "opus", "us.anthropic.claude-x-v1:0"], includeHookEvents: false };
+const CUSTOM_MODELS = ["claude-custom-1", "opus", "us.anthropic.claude-x-v1:0"];
 
 test("claude on PATH: the models are claude's aliases from its initialize answer plus the custom names, the default is default, with the version and capabilities", async () => {
   process.env.PATH = `${binDir}${path.delimiter}${originalPath}`;
@@ -65,7 +70,9 @@ test("claude on PATH: the models are claude's aliases from its initialize answer
     features: FEATURES_322,
   });
   assert.equal(fs.existsSync(agentDir), false, "reading availability creates no directory");
-  await settings.writeClaudeSettings(CUSTOM);
+  fs.writeFileSync(path.join(claudeConfigDir, "settings.json"), JSON.stringify({
+    modelPicker: { options: CUSTOM_MODELS.map((model) => ({ model })) },
+  }));
   const body = await (await GET()).json();
   assert.deepEqual(body.models, [
     ...ALIASES,
@@ -130,16 +137,16 @@ test("GET /api/claude answers Pi Web's three claude features with their basis ne
     { id: "subagentText", available: null, basis: "version-unknown" },
   ]);
 
-  // the global mode on deny: Pi Web starts claude with --permission-prompts none.
+  // the channel on deny: Pi Web starts claude with --permission-prompts none.
   process.env.PATH = `${binDir}${path.delimiter}${originalPath}`;
   fs.mkdirSync(agentDir, { recursive: true });
-  fs.writeFileSync(permissionConfig, JSON.stringify({ version: 1, mode: "deny", push: false }));
+  fs.writeFileSync(piWebSettings, JSON.stringify({ version: 1, claude: { approvalChannel: "deny", pushReminders: false, includeHookEvents: false } }));
   try {
     const denied = await (await GET()).json();
     assert.deepEqual(denied.features, [{ id: "approvals", available: false, basis: "no-host-prompts" }, ...FEATURES_322.slice(1)]);
   } finally {
-    fs.rmSync(permissionConfig, { force: true });
+    fs.rmSync(piWebSettings, { force: true });
   }
   const asked = await (await GET()).json();
-  assert.deepEqual(asked.features, FEATURES_322, "with the file gone, the default ask makes approvals available");
+  assert.deepEqual(asked.features, FEATURES_322, "with nothing stored, the default ask makes approvals available");
 });

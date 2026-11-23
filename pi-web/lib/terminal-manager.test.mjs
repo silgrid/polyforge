@@ -4,12 +4,14 @@ import test from "node:test";
 import { createJiti } from "jiti";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
-import { readFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
 
 const jiti = createJiti(import.meta.url, { alias: { "@": fileURLToPath(new URL("../", import.meta.url)) } });
-const { createTerminal, getTerminalCwd, hasTerminal, killTerminal, subscribeTerminal, TERMINAL_RECONNECT_MS } = await jiti.import("./terminal-manager.ts");
+const { createLoginTerminal, createTerminal, getTerminalCwd, hasTerminal, killTerminal, subscribeTerminal, TERMINAL_RECONNECT_MS } = await jiti.import("./terminal-manager.ts");
 const { GET } = await jiti.import("../app/api/terminal/[id]/events/route.ts");
 // The vm harnesses below require() terminal-manager's imports; the SDK is ESM-only, so they get this stub.
 const piSdkStub = { getPowerShellConfig() { throw new Error("No PowerShell executable found."); } };
@@ -319,4 +321,52 @@ test("terminal stats follow the cleanup deadline, which a reattached stream clea
   exports.killTerminal(id);
   assert.equal(record.cleanupAt, null);
   assert.deepEqual(stats(), { count: 1, listeners: 1, detached: 0, exited: 0, nextCleanupAt: null });
+});
+
+// ── the one-shot login terminal (polyforge#142, 85a2 AC3/Q5) ──────────────────
+
+test("a login terminal spawns the declared argv directly with its extra env, and its exit destroys it at once", async (t) => {
+  const scratch = mkdtempSync(join(tmpdir(), "pi-web-login-terminal-"));
+  t.after(() => rmSync(scratch, { recursive: true, force: true }));
+  const log = join(scratch, "calls.jsonl");
+  const stub = join(scratch, "login-cmd");
+  writeFileSync(stub, `#!/bin/sh
+printf '%s\\n' "{\\"argv\\":\\"$*\\",\\"envNames\\":\\"$(env | cut -d= -f1 | sort | tr '\\n' ' ')\\"}" >> ${JSON.stringify(log)}
+sleep 0.1
+`);
+  chmodSync(stub, 0o755);
+  const id = createLoginTerminal([stub, "--flag", "word"], { CLAUDE_CONFIG_DIR: "/cfg" }, homedir(), 80, 24);
+  try {
+    assert.ok(hasTerminal(id), "the login terminal record exists while the command runs");
+    assert.equal(getTerminalCwd(id), homedir());
+    // the record is gone the moment the command exits — bounded poll
+    const end = Date.now() + 10_000;
+    while (hasTerminal(id) && Date.now() < end) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.ok(!hasTerminal(id), "the login terminal outlived its command");
+    assert.equal(subscribeTerminal(id, () => {}), null, "the replay buffer survived the exit (Q5: it is discarded)");
+    const calls = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].argv, "--flag word");
+    const names = calls[0].envNames.split(" ").filter(Boolean);
+    assert.ok(names.includes("CLAUDE_CONFIG_DIR"), "the declared env override reached the command");
+    assert.ok(!names.includes("PI_WEB_PASSWORD"), "the browser login password reached the command");
+  } finally {
+    killTerminal(id);
+  }
+});
+
+test("a login terminal id cannot be reused while its command runs", async (t) => {
+  const scratch = mkdtempSync(join(tmpdir(), "pi-web-login-terminal-id-"));
+  t.after(() => rmSync(scratch, { recursive: true, force: true }));
+  const stub = join(scratch, "login-cmd");
+  writeFileSync(stub, `#!/bin/sh\nsleep 1\n`);
+  chmodSync(stub, 0o755);
+  const id = createLoginTerminal([stub], {}, homedir(), 80, 24, "b".repeat(32));
+  try {
+    assert.throws(() => createLoginTerminal([stub], {}, homedir(), 80, 24, id), /already in use/);
+  } finally {
+    killTerminal(id);
+  }
 });

@@ -510,6 +510,7 @@ var extensionPoints = []struct{ what, section string }{
 	{"repos/<repo>/AGENTS.md (else CLAUDE.md)", "Per-repo rules"},
 	{"docs/agents/ area notes", "Area notes"},
 	{".polyforge.yaml steps.<project>.<step|default>.models, steps.<project>.<step>.skip", "Model candidates"},
+	{"cli.toml [step_tiers] step_tiers.<tier>", "Step tier catalog"},
 	{"cli.toml [summarize] models, language, interval_sec", "Summarize models"},
 	{"cli.toml [memory_policy.\"<path>\".<entry>]", "Memory policy"},
 	{"cli.toml [workspace.\"<path>\"]", "Workspace mapping"},

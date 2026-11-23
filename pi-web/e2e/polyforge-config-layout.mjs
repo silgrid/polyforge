@@ -1,6 +1,8 @@
 // carries: components/PolyforgeConfig*, components/polyforge-config-helpers*, components/PolyforgeInstallCard*, hooks/usePolyforgeDisclosure*, lib/polyforge-disclosure*, hooks/usePolyforgePanelPreferences*, lib/polyforge-panel-preferences*, lib/polyforge-config*, lib/polyforge-workflows*, lib/polyforge-install-pure*
 // carries: components/SettingsPanel*, components/SettingsUi*, components/settings-ui-helpers*, lib/settings-navigation*, lib/package-settings*, app/api/plugins*
 // carries: app/settings.css
+// carries: components/ModelCandidatePicker*, app/api/polyforge/step-tiers*, lib/step-tiers*
+// (polyforge#151: the shared picker's card mounts and its one catalog read's answer shape)
 // — Settings › Polyforge configuration page LAYOUT acceptance.
 //
 // Authored as the reproduction for the owner's second photo review: #88 made the
@@ -93,6 +95,9 @@ const CONFIG = {
     { key: "max_concurrent_jobs", value: 6, source: "file", class: "live", schema: { kind: "int", min: 1 }, daemon: { value: 6 } },
     { key: WS, value: "e2e-project", source: "file", class: "restart-only", section: true },
     { key: "summarize.models", value: MODELS, source: "file", class: "live", schema: { kind: "model-list" } },
+    // polyforge#151 (85b2): pf lists the Host's [step_tiers] family on the
+    // default Cell too (listedInScope) — the card must never render it.
+    { key: "step_tiers.default", value: ["pi:e2e-tier-model"], source: "file", class: "live", schema: { kind: "model-list" } },
     { key: "summarize.language", value: "English", source: "file", class: "live", schema: { kind: "string" } },
     { key: "summarize.interval_sec", value: 30, source: "file", class: "live", schema: { kind: "int", min: 10, max: 3600 } },
   ],
@@ -182,6 +187,13 @@ try {
     await page.route("**/api/polyforge/config/history", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ entries: HISTORY }) }));
     await page.route("**/api/polyforge/config?*", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(CONFIG) }));
     await page.route("**/api/polyforge/workflows?*", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(workflowsFixture(project)) }));
+    await page.route("**/api/polyforge/step-tiers", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+      // polyforge#151: the shared picker's catalog read — a small capable
+      // catalog, so the grouped select renders beside the manual fill.
+      pfPresent: true, pfVersion: "v0.2.4", capable: true,
+      tiers: [{ tier: "default", candidates: ["pi:layout-tier-model"] }],
+      defined: { pi: ["layout-tier-model"], claude: [] },
+    }) }));
     await page.route("**/api/polyforge/detect*", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
       pfPresent: true, pfVersion: "v2.20.11", pfVersionBelowMinimum: false, line: "internal",
       piSkillInstalled: true, piSkillEnabled: true, claudeSkillsSymlink: true, claudeSessionStartHook: true,
@@ -380,7 +392,9 @@ try {
   // the whole segment between separators is itself wider than its box. At the
   // same time every card/zone must stay within its client width.
   const assertNoMidWordBreaks = async (dialog, width, locale) => {
-    const result = await dialog.locator(".config-detail").first().evaluate((root) => {
+    // 85a1b: General owns a hidden .config-detail of its own now; scope to the
+    // Polyforge section's host so the oracle scans the page it was written for.
+    const result = await dialog.locator('.settings-section-host[data-settings-section="polyforge"] .config-detail').first().evaluate((root) => {
       const SEPARATORS = new Set(["-", "_", "/", ".", ":", ",", ";", "|"]);
       const CJK = /[\u2E80-\u2FFF\u3000-\u303F\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF\uFF00-\uFFEF]/;
       const isSpace = (ch) => /\s/.test(ch);
@@ -544,7 +558,15 @@ try {
       if (!nearest || distance < nearest.distance) nearest = { distance, box: b };
     }
     assert.ok(nearest && nearest.distance <= 24, `${label}'s Save button is not on the input's row (nearest row distance ${nearest?.distance?.toFixed?.(1) ?? "?"}px)`);
-    return { input: box, button: nearest.box, gap: nearest.box.x - (box.x + box.width) };
+    // polyforge#151 r2#1 (review #5): a step-model add row is the shared
+    // picker (manual fill + grouped select) — only there may the Save anchor
+    // on the picker span's right edge; a plain row's parent span holds the
+    // Save itself, so its anchor stays the input's right edge.
+    const anchorRight = await input.evaluate((node) =>
+      node.parentElement.classList.contains("model-candidate-picker")
+        ? node.parentElement.getBoundingClientRect().right
+        : node.getBoundingClientRect().right);
+    return { input: box, button: nearest.box, gap: nearest.box.x - anchorRight };
   };
 
   const desktop = await open();
@@ -613,6 +635,28 @@ try {
       .map((node) => (node.textContent ?? "").trim())
       .filter((text) => (text.match(/,/g) ?? []).length >= 2));
     assert.deepEqual(rows, [], `the [summarize] zone still has a comma-joined long value: ${rows.join(" / ")}`);
+  });
+
+  // polyforge#151 (85b2 AC3): the default Cell's list carries the Host's
+  // step_tiers family (the fixture above), but the cli.toml card drops it —
+  // the catalog's one editing surface is the models page's tier column, and
+  // no read-only chips leak it here.
+  await check("the default Cell's card drops the step_tiers family (no read-only chips)", async () => {
+    const { dialog } = desktop;
+    const text = await dialog.innerText();
+    assert.ok(!text.includes("step_tiers"), "the cli.toml card renders a step_tiers key as chips or text");
+    assert.ok(!text.includes("pi:e2e-tier-model"), "a step_tiers candidate leaked into the card");
+    // the shared picker still renders beside the summarize chips: manual fill
+    // first (the value column stays aligned), then the grouped select.
+    const summarize = cards(dialog).summarize;
+    const input = summarize.locator("input").first();
+    const select = summarize.locator("select").first();
+    assert.ok(await input.count() === 1, "the picker's manual fill is the row's input");
+    assert.ok(await select.count() === 1, "the picker's grouped select renders beside it");
+    const inputBox = await input.boundingBox();
+    const selectBox = await select.boundingBox();
+    assert.ok(inputBox && selectBox, "the picker's controls render");
+    assert.ok(inputBox.x <= selectBox.x, "the manual fill stays first (the value column keeps its left edge)");
   });
 
   // (owner-intentional): the next-dispatch note and the live

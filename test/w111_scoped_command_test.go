@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 // w111scCommand is one reported command; the source reaches the JSON too.
@@ -89,6 +90,30 @@ scoped_command=lib/*|python3 -m pytest tests/
 scoped_command=docs/*|echo DOCS-CHANGED
 `
 
+// w111scArgs answers the engine argv of one sub-case: --base is THAT
+// fixture's own base commit (polyforge#85 fix build, verification r2#1:
+// reusing the lib fixture's --base made the scenario depend on the wall-clock
+// second — two same-content fixtures built in one second carry the same base
+// SHA, one built in the next does not, and the stale SHA made verify-scope
+// silently fall back to the full tier).
+func w111scArgs(light bool, base string) []string {
+	args := []string{"--base", base}
+	if light {
+		args = append([]string{"--light"}, args...)
+	}
+	return args
+}
+
+// w111scNextSecond blocks until the wall clock leaves the current second, so
+// the next fixture's base commit carries a different commit timestamp — and
+// with the same content and message, a different SHA. The scenarios below
+// rely on it: two fixtures built in one second would share their base SHA and
+// hide a sub-case that reuses another fixture's --base.
+func w111scNextSecond(t *testing.T) {
+	t.Helper()
+	time.Sleep(time.Until(time.Now().Truncate(time.Second).Add(time.Second)) + 5*time.Millisecond)
+}
+
 // TestW111ScopedCommandSelected: a matching changed path adds the declared
 // command after the analyzer's own scoped commands (light and default
 // scoped alike), reported as a scoped command of source conf; a non-matching
@@ -98,11 +123,7 @@ func TestW111ScopedCommandSelected(t *testing.T) {
 		dir, base := w25e2eFixture(t, w111scFiles(w111scConf))
 		w25e2eWrite(t, dir, "lib/lib.go", "package lib\n\nfunc Value() int { return 2 }\n")
 		w25e2eCommit(t, dir, "change lib")
-		args := []string{"--base", base}
-		if light {
-			args = append([]string{"--light"}, args...)
-		}
-		r := w111scRun(t, dir, args...)
+		r := w111scRun(t, dir, w111scArgs(light, base)...)
 		if r.Mode != "scoped" {
 			t.Fatalf("a lib change must stay scoped (light=%v), got %q (diagnostics %v)", light, r.Mode, r.Diagnostics)
 		}
@@ -114,10 +135,16 @@ func TestW111ScopedCommandSelected(t *testing.T) {
 			t.Fatalf("the matched scoped_command follows, source conf: %+v", got)
 		}
 
+		// polyforge#85 fix build (verification r2#1): force this fixture into a
+		// later wall-clock second, so its base commit is a different SHA — the
+		// scenario then proves the engine reads THIS fixture's --base, never a
+		// stale one from the previous fixture (which would fall back to the
+		// full tier and leave scoped() empty).
+		w111scNextSecond(t)
 		dir, base = w25e2eFixture(t, w111scFiles(w111scConf))
 		w25e2eWrite(t, dir, "docs/guide.md", "# guide 2\n")
 		w25e2eCommit(t, dir, "change docs")
-		r = w111scRun(t, dir, args...)
+		r = w111scRun(t, dir, w111scArgs(light, base)...)
 		if got := r.scoped(); len(got) != 1 || got[0].Cmd != "echo DOCS-CHANGED" || got[0].Source != "conf" {
 			t.Fatalf("a docs change matches only the docs declaration: %+v", got)
 		}
@@ -125,7 +152,7 @@ func TestW111ScopedCommandSelected(t *testing.T) {
 		dir, base = w25e2eFixture(t, w111scFiles(w111scConf))
 		w25e2eWrite(t, dir, "other/thing.txt", "y\n")
 		w25e2eCommit(t, dir, "change other")
-		r = w111scRun(t, dir, args...)
+		r = w111scRun(t, dir, w111scArgs(light, base)...)
 		if got := r.scoped(); len(got) != 0 {
 			t.Fatalf("a path no declaration matches adds nothing: %+v", got)
 		}

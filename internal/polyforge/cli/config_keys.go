@@ -43,7 +43,9 @@ type configKeyDef struct {
 // the [daemon] table keys in the docs' order, then the [summarize] table
 // keys. Everything else (the CLI's
 // argument parser, its rendered lists and the daemon's reload) derives
-// from this list.
+// from this list. The [step_tiers] catalog is addressed by family
+// (step_tiers.<tier>, parseConfigKey), not by fixed rows: its tier names
+// are not a set.
 var configKeyDefs = []configKeyDef{
 	{"server", keyFlat, ConfigRestartOnly},
 	{"api_key", keyFlat, ConfigRestartOnly},
@@ -90,6 +92,12 @@ const MemoryPolicyLabel = "[memory_policy]"
 // derived from the same key model the CLI validates with; no bound is
 // invented here (notably `language` has no enum).
 func ConfigSchema(name string) map[string]any {
+	// the [step_tiers] catalog is addressed by family: every tier takes
+	// the same shape as a [summarize] models list (a new kind would break
+	// Pi Web's list gate for nothing)
+	if strings.HasPrefix(name, StepTiersSection+".") {
+		return map[string]any{"kind": "model-list"}
+	}
 	switch name {
 	case "server", "user_id", "claude_bin":
 		return map[string]any{"kind": "string"}
@@ -189,6 +197,7 @@ const (
 	keySummarize // a [summarize] table key (summarize.<name>)
 	keyPolicy    // one memory_policy.<entry>.record|skip list
 	keyModel     // the [model] table's source key (model.source)
+	keyStepTiers // one [step_tiers] catalog tier (step_tiers.<tier>)
 )
 
 // configKey is one parsed key argument.
@@ -241,6 +250,13 @@ func parseConfigKey(arg string) (configKey, error) {
 		}
 		return configKey{kind: keyPolicy, name: parts[1], list: parts[2], raw: raw, cls: MemoryPolicyClass}, nil
 	}
+	if strings.HasPrefix(arg, StepTiersSection+".") {
+		tier := strings.TrimPrefix(arg, StepTiersSection+".")
+		if !stepTierName.MatchString(tier) {
+			return configKey{}, fmt.Errorf("config: malformed step_tiers key %q (want step_tiers.<tier>, a tier name ^[a-z][a-z0-9-]{0,39}$)", raw)
+		}
+		return configKey{kind: keyStepTiers, name: tier, raw: raw, cls: StepTiersClass}, nil
+	}
 	if kind, cls, ok := lookupConfigKey(arg); ok {
 		return configKey{kind: kind, name: arg, raw: raw, cls: cls}, nil
 	}
@@ -248,7 +264,7 @@ func parseConfigKey(arg string) (configKey, error) {
 }
 
 func unknownConfigKey(name string) error {
-	return fmt.Errorf("config: unknown key %q — the known keys are the flat keys (%s), the [daemon] keys (%s), the [summarize] keys (%s), memory_policy.<default|project>.record|skip and whole [workspace.\"<path>\"] sections",
+	return fmt.Errorf("config: unknown key %q — the known keys are the flat keys (%s), the [daemon] keys (%s), the [summarize] keys (%s), memory_policy.<default|project>.record|skip, step_tiers.<tier> and whole [workspace.\"<path>\"] sections",
 		name, strings.Join(knownFlatKeyNames(), ", "), strings.Join(knownDaemonKeyNames(), ", "), strings.Join(knownSummarizeKeyNames(), ", "))
 }
 

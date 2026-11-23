@@ -1,6 +1,7 @@
 import "#test-env";
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFile } from "node:fs/promises";
 import { createJiti } from "jiti";
 
 const jiti = createJiti(import.meta.url, { tsconfigPaths: true });
@@ -253,3 +254,18 @@ test("the Models sidebar labels a model by its name and falls back to the id", (
   assert.equal(modelSidebarLabel({ id: "m1", name: "  " }), "m1");
   assert.equal(modelSidebarLabel({ id: "", name: "" }), "");
 });
+
+// ── 85a2 (polyforge#142, AC4): the login moved to Account › pi ─────────────────
+test("Models keeps credential login on Account while allowing native provider definitions (85a3-2 r1#1)", async () => {
+  // 85a3-2 restores native provider definition creation here; authentication
+  // forms remain on Account. The e2e scenario exercises the restored action.
+  const source = await readFile(new URL("./ModelsConfig.tsx", import.meta.url), "utf8");
+  for (const gone of [/function OAuthDetail/, /function ApiKeyDetail/]) {
+    assert.ok(!gone.test(source), `the moved sign-in piece is still in ModelsConfig: ${gone}`);
+  }
+});
+
+// ── 85a2 r2 (review r1#3): the moved notice is gone with its mount (85a3-2
+// r1#5) — the managed provider's detail is the shared EnabledModelsSection,
+// pinned by e2e/harness-settings-85.mjs S11 at its new position.
+

@@ -8,13 +8,17 @@ import { invalidateSessionListCache } from "@/lib/session-reader";
 import { startRpcSession } from "@/lib/rpc-manager";
 import { cwdMissingBody } from "@/lib/missing-cwd";
 import { readStoredAgentLanguage } from "@/lib/agent-language-config";
-import { readClaudeSettings } from "@/lib/claude-settings";
+import { ensureClaudeSelfStoredMigration } from "@/lib/claude-migration";
+import { readClaudePreferences } from "@/lib/claude-preferences";
+import { createClaudeAdapter } from "@/lib/harness/claude";
 import { EMPTY_CLAUDE_USAGE, removeClaudeSessionRecord, upsertClaudeSessionRecord } from "@/lib/claude-index";
 import { findClaudeBinary, startClaudeSession } from "@/lib/claude-session";
 import { validateClaudeImages } from "@/lib/image-attachments";
 import {
   CLAUDE_PROVIDER,
   CLAUDE_EFFORT_DEFAULT,
+  CLAUDE_LAUNCH_PERMISSION_MODE_DEFAULT,
+  DEFAULT_CLAUDE_MODEL,
   claudeFirstMessage,
   isClaudeEffort,
   isClaudeHarness,
@@ -40,11 +44,29 @@ function rejected(commandType: string | undefined, body: Record<string, unknown>
 }
 
 /**
+ * A new claude session's initial model (85a3-1, owner ruling Q2 A): the
+ * native `model` claude's user settings hold, "default" when unset — read
+ * through the claude adapter, the one implementation (the same read
+ * GET /api/models/default serves the composer's display). Reads are open to
+ * any version; nothing here spawns or writes.
+ */
+async function resolveInitialClaudeModel(): Promise<string> {
+  const read = await createClaudeAdapter().read("model", {});
+  const model = read !== null && "defaultModel" in read ? read.defaultModel : null;
+  return isClaudeModelName(model) ? model : DEFAULT_CLAUDE_MODEL;
+}
+
+/**
  * A new claude session (#250), after the cwd guard: claude must be on PATH,
- * then the index entry (the model name as given, effort, no preset; the Agent language and
- * Settings › Claude's permission mode and hook switch as they are now,
- * #445) and the first child
- * (`--session-id <new id>`, `--effort` for a non-default level).
+ * then the index entry (the model name as given, effort, no preset; the Agent
+ * language and the Pi Web hook-activity preference as they are now) and the
+ * first child (`--session-id <new id>`, `--effort` for a non-default level).
+ * The model is optional (85a3-1): an absent one resolves to the native
+ * default, still passed explicitly (`--model` names it, Q2 A). The retired
+ * startup override is gone (85a4, Q7 B): a new session captures no launch
+ * permission mode — claude's own native permissions.defaultMode applies —
+ * and the one-time migration of the retired self-stored files runs first,
+ * so the user's stored mode has already reached the native file.
  * The child is spawned before the reply; a prompt goes to its stdin.
  */
 async function createClaudeSession(
@@ -58,7 +80,8 @@ async function createClaudeSession(
     return rejected(commandType, { error: "claude was not found on PATH" }, 400);
   }
   const now = new Date().toISOString();
-  const claudeSettings = readClaudeSettings();
+  await ensureClaudeSelfStoredMigration();
+  const claudePreferences = readClaudePreferences();
   const record = {
     id: randomUUID(),
     cwd,
@@ -66,9 +89,10 @@ async function createClaudeSession(
     effort,
     // The server setting at creation; later launches read this record.
     agentLanguage: readStoredAgentLanguage(),
-    // Settings › Claude at creation: a later change reaches new sessions only.
-    launchPermissionMode: claudeSettings.launchPermissionMode,
-    includeHookEvents: claudeSettings.includeHookEvents,
+    // No startup override (85a4): the record's mode starts at default — the
+    // field stays for a session's own set_permission_mode switch and resume.
+    launchPermissionMode: CLAUDE_LAUNCH_PERMISSION_MODE_DEFAULT,
+    includeHookEvents: claudePreferences.includeHookEvents,
     created: now,
     modified: now,
     firstMessage: commandType === "prompt"
@@ -98,7 +122,9 @@ async function createClaudeSession(
 
 // POST /api/agent/new  body: { cwd: string; type: string; message?: string; harness?: "pi" | "claude"; ... }
 // Spawns a brand-new pi session, or with harness "claude" a claude session
-// (`model`: a name `--model` takes — one of claude's aliases or a full name; optional `effort`: a claude level or "default")
+// (`model`: a name `--model` takes — one of claude's aliases or a full name,
+// optional since 85a3-1, the native default resolved server-side; optional
+// `effort`: a claude level or "default")
 // (type "prompt" or "ensure_session";
 // a #219 `claudePreset` is dropped unread). Most calls immediately send the first command;
 // type:"ensure_session" only creates the runtime so clients can query commands.
@@ -118,13 +144,14 @@ export async function POST(req: Request) {
     }
     const claude = isClaudeHarness(harness);
     // A claude session's model is a name `--model` takes (an alias or a full
-    // name, no fixed list); pi's command keeps its own fields.
+    // name, no fixed list); an absent one is resolved to the native default
+    // further down (Q2 A). pi's command keeps its own fields.
     const claudeModel = claude ? command.model : undefined;
     const claudeEffort = claude ? (command.effort ?? CLAUDE_EFFORT_DEFAULT) : undefined;
     if (claude) {
       delete command.model;
       delete command.effort;
-      if (!isClaudeModelName(claudeModel)) {
+      if (claudeModel !== undefined && !isClaudeModelName(claudeModel)) {
         return rejected(commandType, { error: `A claude session needs a model: ${String(claudeModel)}` }, 400);
       }
       if (!isClaudeEffort(claudeEffort)) {
@@ -178,7 +205,7 @@ export async function POST(req: Request) {
     if (claude) {
       return await createClaudeSession(
         registrable.path,
-        claudeModel as string,
+        typeof claudeModel === "string" ? claudeModel : await resolveInitialClaudeModel(),
         claudeEffort as ClaudeEffort,
         command,
         commandType,

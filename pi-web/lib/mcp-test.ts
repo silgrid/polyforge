@@ -90,7 +90,8 @@ export type McpTestInternals = Pick<
 
 /** The entry to test, as the route read and validated it from its file. */
 export interface McpTestTarget {
-  scope: McpScope;
+  /** pi's own scope: Test runs a pi entry only (ADR 0006), so Claude's `local` never reaches here. */
+  scope: Exclude<McpScope, "local">;
   name: string;
   /** The configured path of its file; with `scope` and `name` the key of its status. */
   sourcePath: string;

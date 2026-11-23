@@ -1,9 +1,10 @@
+// carries: app/api/mcp/route.ts, lib/api-types.ts, lib/mcp-unified.ts, lib/claude-mcp-write.ts, lib/claude-mcp-read.ts, lib/mcp-undo.ts, lib/__fixtures__/claude-2.1.326-mcp/mcp/*
 import "#test-env";
 import assert from "node:assert/strict";
-import { realpathSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmodSync, existsSync, realpathSync } from "node:fs";
+import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import test, { after, beforeEach } from "node:test";
 import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
 import { createJiti } from "jiti";
@@ -410,4 +411,188 @@ test("a global server is turned off and on in the project alone, through an over
   // It names a global server and a switch position, and needs the project.
   assert.equal((await post({ action: "set-in-project", name: "lint", cwd })).status, 400);
   assert.equal((await post({ action: "set-in-project", name: "lint", enabled: false })).status, 400);
+});
+
+// ---------------------------------------------------------------------------
+// #85 85c: the unified list's claude half — apply-to, unify, and removing a
+// claude entry. Claude is a stub on PATH recording its argv (AC2): Pi Web
+// never writes .claude.json itself, so the claude side is asserted through
+// the stub's log, and the pi files through their bytes.
+
+const stubSource = new URL("../../../lib/__fixtures__/claude-2.1.326-mcp/mcp/stub-claude.mjs", import.meta.url).pathname;
+const claudeConfigDir = join(root, "claude-cfg");
+const claudeStatePath = join(claudeConfigDir, ".claude.json");
+const dotMcpPath = join(cwd, ".mcp.json");
+const previousPath = process.env.PATH;
+const previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+const previousStubLog = process.env.CLAUDE_MCP_STUB_LOG;
+const previousStubFail = process.env.CLAUDE_MCP_STUB_FAIL;
+const previousStubVersion = process.env.CLAUDE_MCP_STUB_VERSION;
+
+/** The stub claude on PATH, its log and its config dir, for this one test. */
+async function withClaudeStub(t, { version = "2.1.326" } = {}) {
+  await mkdir(claudeConfigDir, { recursive: true });
+  // One dir per version: the binary must be named `claude` (what
+  // findClaudeBinary looks for), and probeClaude caches by its realpath.
+  const binDir = join(root, `claude-bin-${version}`);
+  await mkdir(binDir, { recursive: true });
+  const binary = join(binDir, "claude");
+  if (!existsSync(binary)) await copyFile(stubSource, binary);
+  chmodSync(binary, 0o755);
+  const log = join(root, `spawns-${version}-${t.name.replace(/\W+/g, "-")}.jsonl`);
+  process.env.PATH = `${binDir}${delimiter}${previousPath ?? ""}`;
+  process.env.CLAUDE_CONFIG_DIR = claudeConfigDir;
+  process.env.CLAUDE_MCP_STUB_LOG = log;
+  process.env.CLAUDE_MCP_STUB_VERSION = version;
+  delete process.env.CLAUDE_MCP_STUB_FAIL;
+  // claude's own shape for `claude mcp add-json -s user|local|project` (a real
+  // 2.1.326 run): user and local in the state file, project in .mcp.json.
+  await writeFile(claudeStatePath, JSON.stringify({
+    mcpServers: {
+      "shared-entry": { command: "npx", args: ["-y", "shared-one"], env: { A: "1", CLAUDE_ONLY_SECRET: "claude-literal-secret" } },
+    },
+    projects: {
+      [cwd]: { mcpServers: { "local-entry": { type: "http", url: "https://local.example/mcp" } }, hasTrustDialogAccepted: false },
+    },
+  }, null, 2));
+  await writeFile(dotMcpPath, JSON.stringify({ mcpServers: { "claude-proj": { command: "node", args: ["cp.js"] } } }, null, 2));
+  t.after(() => {
+    process.env.PATH = previousPath;
+    if (previousClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = previousClaudeConfigDir;
+    if (previousStubLog === undefined) delete process.env.CLAUDE_MCP_STUB_LOG;
+    else process.env.CLAUDE_MCP_STUB_LOG = previousStubLog;
+    if (previousStubFail === undefined) delete process.env.CLAUDE_MCP_STUB_FAIL;
+    else process.env.CLAUDE_MCP_STUB_FAIL = previousStubFail;
+    if (previousStubVersion === undefined) delete process.env.CLAUDE_MCP_STUB_VERSION;
+    else process.env.CLAUDE_MCP_STUB_VERSION = previousStubVersion;
+  });
+  return { log, binary };
+}
+
+async function stubSpawns(log) {
+  const text = await readFile(log, "utf8").catch(() => "");
+  return text.split("\n").filter((line) => line !== "").map((line) => JSON.parse(line));
+}
+
+test("set-apply to pi alone removes only claude's copy; pi's files keep their bytes (AC3)", async (t) => {
+  const { log } = await withClaudeStub(t);
+  await writeFile(globalPath, JSON.stringify({
+    mcpServers: { "shared-entry": { command: "npx", args: ["-y", "shared-one"], env: { A: "1" } } },
+    keep: "unknown keys stay",
+  }, null, 2));
+  const before = await readFile(globalPath, "utf8");
+
+  const { status, body } = await post({ action: "set-apply", scope: "global", name: "shared-entry", harnesses: ["pi"] });
+  assert.equal(status, 200);
+  assert.deepEqual((await stubSpawns(log)).map((spawn) => spawn.argv), [["mcp", "remove", "-s", "user", "shared-entry"]], "exactly one claude remove");
+  assert.equal(await readFile(globalPath, "utf8"), before, "pi's mcp.json is byte-identical");
+  assert.equal(JSON.stringify(body).includes("claude-literal-secret"), false);
+  assert.ok(body.applied, "the answer reports per-harness results");
+  assert.deepEqual(body.applied.results.map((result) => [result.harness, result.ok]), [["pi", true], ["claude", true]]);
+});
+
+test("set-apply to claude alone removes pi's copy only: no spawn, claude's files keep their bytes (AC3)", async (t) => {
+  const { log } = await withClaudeStub(t);
+  await writeFile(globalPath, JSON.stringify({ mcpServers: { "shared-entry": { command: "npx", args: ["-y", "shared-one"] } } }, null, 2));
+  const stateBefore = await readFile(claudeStatePath, "utf8");
+  const dotMcpBefore = await readFile(dotMcpPath, "utf8");
+
+  const { status, body } = await post({ action: "set-apply", scope: "global", name: "shared-entry", harnesses: ["claude"] });
+  assert.equal(status, 200);
+  assert.deepEqual(await stubSpawns(log), [], "claude holds it, so keeping it there spawns nothing");
+  assert.equal(await readFile(claudeStatePath, "utf8"), stateBefore);
+  assert.equal(await readFile(dotMcpPath, "utf8"), dotMcpBefore);
+  assert.deepEqual((await readJson(globalPath)).mcpServers, {}, "pi's copy is the one the change removes");
+  assert.deepEqual(body.applied.results.map((result) => [result.harness, result.ok]), [["pi", true], ["claude", true]]);
+});
+
+test("set-apply adds a missing side from the other's native definition (AC3)", async (t) => {
+  const { log } = await withClaudeStub(t);
+  await writeFile(globalPath, JSON.stringify({ mcpServers: { "pi-own": { command: "npx", args: ["-y", "pi-one"], env: { TOKEN: "pi-raw" } } } }, null, 2));
+
+  const { status, body } = await post({ action: "set-apply", scope: "global", name: "pi-own", harnesses: ["pi", "claude"] });
+  assert.equal(status, 200);
+  const spawns = await stubSpawns(log);
+  assert.deepEqual(spawns.map((spawn) => spawn.argv), [
+    ["mcp", "add-json", "-s", "user", "pi-own", JSON.stringify({ command: "npx", args: ["-y", "pi-one"], env: { TOKEN: "pi-raw" } })],
+  ], "claude gets pi's definition, its own fields only, as one argv word");
+  assert.equal(body.applied.results.find((result) => result.harness === "claude").ok, true);
+});
+
+test("a claude removal is undoable: the raw entry is held server-side and written back by undo (Q1 A)", async (t) => {
+  const { log } = await withClaudeStub(t);
+  const { status, body } = await post({ action: "remove", harness: "claude", scope: "global", name: "shared-entry" });
+  assert.equal(status, 200);
+  assert.ok(body.undo?.token);
+  assert.equal(body.undo.harness, "claude");
+  assert.deepEqual((await stubSpawns(log)).map((spawn) => spawn.argv), [["mcp", "remove", "-s", "user", "shared-entry"]]);
+
+  const undone = await post({ action: "undo", token: body.undo.token });
+  assert.equal(undone.status, 200);
+  assert.deepEqual((await stubSpawns(log)).map((spawn) => spawn.argv), [
+    ["mcp", "remove", "-s", "user", "shared-entry"],
+    ["mcp", "add-json", "-s", "user", "shared-entry", JSON.stringify({ command: "npx", args: ["-y", "shared-one"], env: { A: "1", CLAUDE_ONLY_SECRET: "claude-literal-secret" } })],
+  ], "undo writes the held raw definition back through the CLI");
+});
+
+test("unify writes only the other side, claude's as remove + add-json of the projected entry (AC3)", async (t) => {
+  const { log } = await withClaudeStub(t);
+  await writeFile(globalPath, JSON.stringify({
+    mcpServers: { "shared-entry": { command: "npx", args: ["-y", "pi-version"], env: { A: "1" }, exposure: "direct" } },
+  }, null, 2));
+  const before = await readFile(globalPath, "utf8");
+
+  const { status } = await post({ action: "unify", scope: "global", name: "shared-entry", from: "pi" });
+  assert.equal(status, 200);
+  assert.deepEqual((await stubSpawns(log)).map((spawn) => spawn.argv), [
+    ["mcp", "remove", "-s", "user", "shared-entry"],
+    ["mcp", "add-json", "-s", "user", "shared-entry", JSON.stringify({ command: "npx", args: ["-y", "pi-version"], env: { A: "1" } })],
+  ], "pi's exposure never reaches claude (its CLI would drop it anyway)");
+  assert.equal(await readFile(globalPath, "utf8"), before, "the side the value came from is not touched");
+});
+
+test("the local group is claude's alone: pi is refused as a target, claude removes work (Q2/Q3)", async (t) => {
+  const { log } = await withClaudeStub(t);
+  const toPi = await post({ action: "set-apply", scope: "local", name: "local-entry", harnesses: ["pi"], cwd });
+  assert.equal(toPi.status, 409);
+  assert.equal(toPi.body.reason, "harness-unsupported");
+  assert.deepEqual(await stubSpawns(log), []);
+
+  const { status, body } = await post({ action: "remove", harness: "claude", scope: "local", name: "local-entry", cwd });
+  assert.equal(status, 200);
+  assert.deepEqual((await stubSpawns(log)).map((spawn) => [spawn.argv, spawn.cwd]), [
+    [["mcp", "remove", "-s", "local", "local-entry"], cwd],
+  ], "claude's local scope is keyed by the project folder");
+  assert.equal(body.undo.scope, "local");
+});
+
+test("a claude whose version the gate does not recognize is written to by nothing (AC2)", async (t) => {
+  const { log } = await withClaudeStub(t, { version: "9.9.9" });
+  await writeFile(globalPath, JSON.stringify({ mcpServers: { "shared-entry": { command: "npx", args: ["-y", "shared-one"] } } }, null, 2));
+  const { status, body } = await post({ action: "set-apply", scope: "global", name: "shared-entry", harnesses: ["pi"] });
+  assert.equal(status, 200);
+  const claude = body.applied.results.find((result) => result.harness === "claude");
+  assert.equal(claude.ok, false);
+  assert.equal(claude.reason, "claude-unwritable");
+  assert.deepEqual(await stubSpawns(log).then((spawns) => spawns.filter((spawn) => spawn.argv[0] === "mcp")), [], "nothing spawned for a version outside the range");
+});
+
+test("a set-apply that removes a side answers with that side's undo, so it is undoable like any removal (Q1 A)", async (t) => {
+  const { log } = await withClaudeStub(t);
+  await writeFile(globalPath, JSON.stringify({ mcpServers: { "shared-entry": { command: "npx", args: ["-y", "shared-one"] } } }, null, 2));
+
+  const { status, body } = await post({ action: "set-apply", scope: "global", name: "shared-entry", harnesses: ["pi"] });
+  assert.equal(status, 200);
+  const claude = body.applied.results.find((result) => result.harness === "claude");
+  assert.ok(claude.ok, "claude's copy was removed");
+  assert.ok(claude.undo?.token, "the removal carries its undo token");
+  assert.equal(typeof claude.undo.path, "string");
+  assert.equal(claude.undo.expiresInMs > 0, true);
+
+  const undone = await post({ action: "undo", token: claude.undo.token });
+  assert.equal(undone.status, 200);
+  assert.deepEqual((await stubSpawns(log)).map((spawn) => spawn.argv).slice(-1), [
+    ["mcp", "add-json", "-s", "user", "shared-entry", JSON.stringify({ command: "npx", args: ["-y", "shared-one"], env: { A: "1", CLAUDE_ONLY_SECRET: "claude-literal-secret" } })],
+  ], "the token restores claude's raw definition through its CLI");
 });

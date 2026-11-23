@@ -18,3 +18,35 @@ export function useI18n() {
 export function MarkdownBody() {
   return null;
 }
+
+// polyforge#151 (85b2, review r2 #4): the SettingsUi members PolyforgeConfig
+// imports, as inert render pieces — a behavioural test aliases ./SettingsUi
+// here so the module graph loads against the hook shim (the real SettingsUi
+// calls createContext at load).
+const inert = (name) => function Stub({ children }) { return children ?? null; };
+export const ConfigButton = function StubConfigButton({ children, onClick, disabled }) {
+  return { type: "button", props: { onClick, disabled, children } };
+};
+export const ConfigDetail = inert("ConfigDetail");
+export const ConfigDetailActions = inert("ConfigDetailActions");
+export const ConfigDetailNavigationContext = { Provider: function StubProvider() { return null; }, Consumer: function StubConsumer() { return null; } };
+export const ConfigDetailGrid = inert("ConfigDetailGrid");
+export const ConfigDetailGridRow = inert("ConfigDetailGridRow");
+export const ConfigDetailHeader = inert("ConfigDetailHeader");
+export const ConfigDetailHeaderInfo = inert("ConfigDetailHeaderInfo");
+export const ConfigDetailStack = inert("ConfigDetailStack");
+export const ConfigDetailTitle = inert("ConfigDetailTitle");
+export const ConfigFooter = inert("ConfigFooter");
+export const ConfigFooterStatus = inert("ConfigFooterStatus");
+export const ConfigListAction = inert("ConfigListAction");
+export const ConfigPanelShell = inert("ConfigPanelShell");
+export const ConfigSectionTitle = inert("ConfigSectionTitle");
+export const ConfigSidebar = inert("ConfigSidebar");
+export const ConfigSidebarGroupLabel = inert("ConfigSidebarGroupLabel");
+export const ConfigSidebarGroupStatus = inert("ConfigSidebarGroupStatus");
+export const ConfigSidebarItem = inert("ConfigSidebarItem");
+export const ConfigSidebarList = inert("ConfigSidebarList");
+export const ConfigSidebarText = inert("ConfigSidebarText");
+export const ConfigSplitView = inert("ConfigSplitView");
+export const ConfigStatusDot = inert("ConfigStatusDot");
+export const ConfigSwitch = inert("ConfigSwitch");

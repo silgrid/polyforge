@@ -5,6 +5,22 @@ in the right panel's existing tab bar. Each terminal tab keeps the cwd it was
 created with. Files still mount only their active viewer; terminal panels stay
 mounted behind inactive tabs, hidden panels, and session or project switches.
 
+## One-shot login terminals (polyforge#142, 85a2)
+
+The account page's 「打开终端」 buttons run one adapter-declared login command
+(claude `auth login`, `claude setup-token`) in a terminal of a different kind:
+`POST /api/terminal` with `login: {harness, id, cell?}` spawns the declared
+argv directly — never a workspace shell, never through a shell — on the
+operator's environment, and everything else is the server's own resolution
+(the whitelist is `lib/harness-login-commands.ts`, built from the adapters'
+`loginCommands` declarations; a body that carries `command`, `env`, `argv`
+or `cwd` beside a login is refused, and so is an undeclared harness or id).
+A login terminal is one-shot (owner ruling Q5 B): it never enters the
+restore list, and the moment its command exits the server destroys the
+record and discards its replay buffer — a `claude setup-token` output holds
+a token, so nothing of it stays server-side. The panel embeds it inline in
+the account page, not in the terminal tab bar.
+
 ## Lifecycle
 
 - Each new tab generates a random terminal ID before creation. Creation with
