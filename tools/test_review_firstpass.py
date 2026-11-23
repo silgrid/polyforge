@@ -7,10 +7,11 @@ the class/model summary, and the unknown-outcome reasons. Expected values are
 hand-derived from the ticket, never read out of the tool.
 
 polyforge#261 adds the delivery-metric regressions: the rework measure counts
-each dispatch of overlapping rewind windows once and subtracts a coordinator
-pause (`job_finished{reason: paused}` to the next `job_started`), and the
-estimate line ignores a description line, a fenced code block and the
-`## 历次分析` archive.
+each dispatch of overlapping rewind windows once (all gates' windows merged into
+one union, the owner's ruling of 2026-11-23) and subtracts a coordinator pause
+(`job_finished{reason: paused}` to the next `job_started`) once, even when it
+overlaps an owner wait; the estimate line ignores a description line, a fenced
+code block and the `## 历次分析` archive.
 
 Run from the repository root:
   python3 -m unittest discover -s tools -p 'test_review_firstpass*.py'
@@ -491,6 +492,132 @@ class EstimateScopeTest(unittest.TestCase):
         with open(os.path.join(cap, 'runtime-state', 'work-item.json'), 'w') as f:
             json.dump({'content': self._CONTENT}, f)
         self.assertEqual(rf.parse_estimate(cap), 5)
+
+def _event_file(timeline):
+    """One capsule's events file from `(clock, kind, body)` rows."""
+    cap = tempfile.mkdtemp()
+    with open(os.path.join(cap, 'capsule.json'), 'w') as f:
+        json.dump({'work_item_id': 'wi_test'}, f)
+    events_dir = os.path.join(cap, 'events')
+    os.makedirs(events_dir)
+    with open(os.path.join(events_dir, 'wi-wi_test.jsonl'), 'w') as f:
+        for seq, (clock, kind, body) in enumerate(timeline, start=1):
+            f.write(json.dumps({'seq': seq, 'at': '2026-11-10T' + clock + 'Z',
+                                'kind': kind, 'body': body}) + '\n')
+    return rf.load_events(cap, events_dir)
+
+
+def _rework(events):
+    return rf.rework_s(events, rf.dispatch_records(events, rf.owner_wait_intervals(events)))
+
+
+class ReworkEdgeTest(unittest.TestCase):
+    """AC1 edge cases of polyforge#261 (review r1#1/#4/#5): a pause that
+    falls inside an owner wait is subtracted once, nested cross-gate rewind
+    windows count each dispatch once (the owner's ruling of 2026-11-23), and
+    two non-overlapping rewind windows both count while the gap between them
+    does not. Every expected value is hand-computed from the timeline."""
+
+    _PAUSE_IN_OWNER_WAIT = [
+        # build 09:00 -> 09:10, review FAIL 09:20, rewind; the redo build
+        # dispatch runs 09:20 -> 10:20 (60m) and waits on the owner
+        # 09:40 -> 10:05 (25m), the coordinator pausing 09:45 -> 09:55 (10m)
+        # entirely inside that wait; review 10:20 -> 10:30 PASS.
+        ('09:00:00', 'job_started', {}),
+        ('09:00:00', 'step_started', {'step': 'build'}),
+        ('09:10:00', 'step_done', {'step': 'build'}),
+        ('09:10:00', 'step_started', {'step': 'review'}),
+        ('09:20:00', 'gate_verdict', {'step': 'review'}),
+        ('09:20:00', 'rewind', {'gate': 'review', 'target': 'build'}),
+        ('09:20:00', 'step_started', {'step': 'build'}),
+        ('09:40:00', 'awaiting_owner', {'step': 'build', 'question_id': 'q1',
+                                        'ask_at': '2026-11-10T09:40:00Z'}),
+        ('09:45:00', 'job_finished', {'reason': 'paused'}),
+        ('09:55:00', 'job_started', {}),
+        ('10:05:00', 'owner_message', {'step': 'build', 'ask_at': '2026-11-10T09:40:00Z',
+                                       'text': 'ok'}),
+        ('10:20:00', 'step_done', {'step': 'build'}),
+        ('10:20:00', 'step_started', {'step': 'review'}),
+        ('10:30:00', 'step_done', {'step': 'review'}),
+        ('10:30:00', 'terminal', {'status': 'completed'}),
+    ]
+
+    _NESTED = [
+        # review PASS 09:10 -> 09:20, sync 09:20 -> 09:25, verification FAIL
+        # 09:35, rewind (verification window 09:35 -> 10:20); inside it build
+        # 09:35 -> 09:45, review FAIL 09:50 and rewind (review window
+        # 09:50 -> 10:10, nested in the verification window); build
+        # 09:50 -> 10:00, review PASS 10:00 -> 10:10, verification PASS
+        # 10:10 -> 10:20. Union = [09:35, 10:20]: 10+5+10+10+10 = 45m; a
+        # per-gate sum would count build+review 20m twice (65m).
+        ('09:00:00', 'job_started', {}),
+        ('09:00:00', 'step_started', {'step': 'build'}),
+        ('09:10:00', 'step_done', {'step': 'build'}),
+        ('09:10:00', 'step_started', {'step': 'review'}),
+        ('09:20:00', 'step_done', {'step': 'review'}),
+        ('09:20:00', 'step_started', {'step': 'sync'}),
+        ('09:25:00', 'step_done', {'step': 'sync'}),
+        ('09:25:00', 'step_started', {'step': 'verification'}),
+        ('09:35:00', 'gate_verdict', {'step': 'verification'}),
+        ('09:35:00', 'rewind', {'gate': 'verification', 'target': 'build'}),
+        ('09:35:00', 'step_started', {'step': 'build'}),
+        ('09:45:00', 'step_done', {'step': 'build'}),
+        ('09:45:00', 'step_started', {'step': 'review'}),
+        ('09:50:00', 'gate_verdict', {'step': 'review'}),
+        ('09:50:00', 'rewind', {'gate': 'review', 'target': 'build'}),
+        ('09:50:00', 'step_started', {'step': 'build'}),
+        ('10:00:00', 'step_done', {'step': 'build'}),
+        ('10:00:00', 'step_started', {'step': 'review'}),
+        ('10:10:00', 'step_done', {'step': 'review'}),
+        ('10:10:00', 'step_started', {'step': 'verification'}),
+        ('10:20:00', 'step_done', {'step': 'verification'}),
+        ('10:20:00', 'terminal', {'status': 'completed'}),
+    ]
+
+    _NON_OVERLAPPING = [
+        # review FAIL 09:20, rewind (window 09:20 -> 09:40 with build
+        # 09:20 -> 09:30 and review 09:30 -> 09:40); sync 09:40 -> 09:45
+        # sits in the gap; verification FAIL 09:55, rewind (window
+        # 09:55 -> 10:15 with build 09:55 -> 10:05 and verification
+        # 10:05 -> 10:15). 10+10+10+10 = 40m; a "first rewind to last
+        # step_done" sum would also count sync (45m).
+        ('09:00:00', 'job_started', {}),
+        ('09:00:00', 'step_started', {'step': 'build'}),
+        ('09:10:00', 'step_done', {'step': 'build'}),
+        ('09:10:00', 'step_started', {'step': 'review'}),
+        ('09:20:00', 'gate_verdict', {'step': 'review'}),
+        ('09:20:00', 'rewind', {'gate': 'review', 'target': 'build'}),
+        ('09:20:00', 'step_started', {'step': 'build'}),
+        ('09:30:00', 'step_done', {'step': 'build'}),
+        ('09:30:00', 'step_started', {'step': 'review'}),
+        ('09:40:00', 'step_done', {'step': 'review'}),
+        ('09:40:00', 'step_started', {'step': 'sync'}),
+        ('09:45:00', 'step_done', {'step': 'sync'}),
+        ('09:45:00', 'step_started', {'step': 'verification'}),
+        ('09:55:00', 'gate_verdict', {'step': 'verification'}),
+        ('09:55:00', 'rewind', {'gate': 'verification', 'target': 'build'}),
+        ('09:55:00', 'step_started', {'step': 'build'}),
+        ('10:05:00', 'step_done', {'step': 'build'}),
+        ('10:05:00', 'step_started', {'step': 'verification'}),
+        ('10:15:00', 'step_done', {'step': 'verification'}),
+        ('10:15:00', 'terminal', {'status': 'completed'}),
+    ]
+
+    def test_owner_wait_containing_a_pause_is_deducted_once(self):
+        events = _event_file(self._PAUSE_IN_OWNER_WAIT)
+        rework = _rework(events)
+        # 60m span - 25m (owner wait, which contains the 10m pause) + 10m review.
+        self.assertEqual(rework, 45 * 60)
+        self.assertEqual(rf.wall_s(events), 90 * 60)
+        self.assertLessEqual(rework, rf.wall_s(events))
+
+    def test_nested_cross_gate_rewinds_count_each_dispatch_once(self):
+        events = _event_file(self._NESTED)
+        self.assertEqual(_rework(events), 45 * 60)
+
+    def test_non_overlapping_rewind_windows_both_count(self):
+        events = _event_file(self._NON_OVERLAPPING)
+        self.assertEqual(_rework(events), 40 * 60)
 
 
 if __name__ == '__main__':
