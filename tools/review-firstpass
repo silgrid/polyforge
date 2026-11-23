@@ -612,7 +612,10 @@ def owner_rulings(cap):
 
 def outcome_of_line(line):
     """the outcome a follow-up review line names for the item it references."""
-    if re.search(r'仍在|残留|未修|依然|仍存在|还在|未解决|没有修|没有改|still open', line, re.I):
+    # An explicit "not fixed yet" outranks a "fixed" elsewhere on the line
+    # (`部分已修 … 仍未修`); a bare `残留`/`还在` describes the item's
+    # provenance or the files' presence and must not reopen a fix.
+    if re.search(r'仍未修|未修|仍未|仍在|依然|仍存在|未解决|没有修|没有改|still[ -]open', line, re.I):
         return 'still-open'
     if re.search(r'撤回|收回|不成立|接受 build|build 证据成立|证据成立|不构成|推翻|withdraw', line, re.I):
         if re.search(r'owner|所有者|裁定|改判|放行', line, re.I):
@@ -622,6 +625,8 @@ def outcome_of_line(line):
         return 'withdrawn-unknown'
     if re.search(r'已修复|已修|修好|修掉|已解决|已改|已补|fixed', line, re.I):
         return 'fixed'
+    if re.search(r'残留', line):
+        return 'still-open'
     return None
 
 
