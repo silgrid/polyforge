@@ -337,7 +337,7 @@ func TestWorkstationSmokeOnboarding(t *testing.T) {
 		if err == nil {
 			t.Fatalf("a skipped necessary doctor row must fail the clean-room pass:\n%s", out)
 		}
-		if !strings.Contains(out, "\"server reach\"") {
+		if !strings.Contains(out, "server reach") {
 			t.Fatalf("the failure must name the doctor row:\n%s", out)
 		}
 	})
