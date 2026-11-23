@@ -9,6 +9,7 @@ package supervisor
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -524,4 +525,23 @@ func TestSuperviseStopAfterARestart(t *testing.T) {
 			t.Fatalf("the daemon restarted after the stop: pid %d (was %d), want no relaunch", got, first)
 		}
 	})
+}
+
+// TestSupKillReportsOnlyARunningChild (polyforge#251, AC2): kill is
+// the grace's end, so it answers whether it really SIGKILLed a running
+// child — a child that already ended is not a straggler, and the run
+// must not report the grace as having killed one.
+func TestSupKillReportsOnlyARunningChild(t *testing.T) {
+	cmd := exec.Command("/bin/sh", "-c", "exec sleep 300")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	p := &supProc{cmd: cmd}
+	if !p.kill() {
+		t.Fatalf("kill on a running child answered false, want true")
+	}
+	_ = cmd.Wait()
+	if p.kill() {
+		t.Fatalf("kill on a child that already exited answered true, want false")
+	}
 }
