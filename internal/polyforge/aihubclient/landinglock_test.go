@@ -35,26 +35,34 @@ func TestLeaseClientRoundTrip(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
-			t.Fatalf("read body: %v", err)
+			http.Error(w, "unreadable body", http.StatusBadRequest)
+			return
 		}
 		ts, _ := strconv.ParseInt(r.Header.Get(machinesign.HeaderTimestamp), 10, 64)
 		if !machinesign.Verify(pub, time.Now(), r.Method, r.URL.Path, body, ts,
 			r.Header.Get(machinesign.HeaderMachineID), r.Header.Get(machinesign.HeaderSignature), nil) {
-			w.WriteHeader(http.StatusUnauthorized)
+			http.Error(w, "unsigned", http.StatusUnauthorized)
 			return
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer k-lease" {
-			t.Fatalf("Authorization = %q", got)
+			http.Error(w, "wrong bearer "+got, http.StatusUnauthorized)
+			return
 		}
 		seen = append(seen, r.Method+" "+r.URL.RequestURI())
-		var req struct {
+		req := struct {
 			Key       string `json:"key"`
 			RequestID string `json:"request_id"`
 			WorkItem  string `json:"work_item"`
 			Token     string `json:"token"`
+		}{}
+		if len(body) > 0 {
+			if err := json.Unmarshal(body, &req); err != nil {
+				http.Error(w, "bad body: "+err.Error(), http.StatusBadRequest)
+				return
+			}
 		}
-		if err := json.Unmarshal(body, &req); err != nil {
-			t.Fatalf("decode request: %v", err)
+		if strings.HasPrefix(r.URL.Path, "/api/v1/leases/requests/") {
+			req.RequestID = strings.TrimPrefix(r.URL.Path, "/api/v1/leases/requests/")
 		}
 		g := api.LeaseGrant{Kind: "landing", Key: req.Key, RequestID: req.RequestID, Status: "granted"}
 		switch {
@@ -63,7 +71,8 @@ func TestLeaseClientRoundTrip(t *testing.T) {
 			g.ExpiresAt = "2026-11-23T12:05:00Z"
 		case strings.HasSuffix(r.URL.Path, "/renew"):
 			if req.Token != "tok" {
-				t.Fatalf("renew token = %q", req.Token)
+				http.Error(w, "renew token = "+req.Token, http.StatusBadRequest)
+				return
 			}
 		case strings.HasSuffix(r.URL.Path, "/release"):
 			g.Status = "released"
