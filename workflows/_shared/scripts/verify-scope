@@ -2902,9 +2902,13 @@ class Engine:
                     self.commands.append(["", "scoped", "conf", c])
 
             self.name_commands()
-            # polyforge#244: bind the declared groups to the plan's commands
-            # (the plan is complete; a group names a full-phase command).
-            self.resolve_groups()
+            # polyforge#244: bind the declared groups to the full plan's
+            # commands (the plan is complete; a group names a full-phase
+            # command). Only the full report carries full-phase commands, so
+            # the light, scoped and micro reports stay silent about the
+            # declaration instead of accusing it of naming nothing (r1#2).
+            if self.mode == "full":
+                self.resolve_groups()
 
             if self.since_set:
                 self.since_query()
