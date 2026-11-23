@@ -6,7 +6,8 @@
 // owner's ruling: no grouping, oldest start/queue first, the type told
 // apart by its badge and color, a queued run named and not offered a stop
 // it cannot take (the controller's stop semantics; a running subagent stops
-// in its own chat).
+// in its own chat). polyforge#255: both a running and a queued run open the
+// same in-chat progress panel (Q7 A); the box stays disabled while queued.
 // Settled tasks never list and never occupy the area (#189, AC1): the
 // running list aligns with Claude's — nothing renders while no subagent
 // runs or is queued and no task runs (the node itself is gone, so the
@@ -63,7 +64,7 @@ export function PiRunningList({ subagents, tasks, onOpenSubagent, onOpenTask, no
           data-pi-subagent-item={run.sessionId}
           data-pi-subagent-status={run.status}
           title={label}
-          onClick={() => { if (running) onOpenSubagent(run.sessionId, label); }}
+          onClick={() => onOpenSubagent(run.sessionId, label)}
           // Opening the subagent's chat leaves the focus where it was.
           onMouseDown={(event) => event.preventDefault()}
           style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", minWidth: 0, padding: "2px 8px", borderRadius: 6, border: `1px solid rgba(139,92,246,0.3)`, background: "rgba(139,92,246,0.06)", color: "var(--text-muted)", cursor: "pointer", fontSize: 12, lineHeight: "18px" }}

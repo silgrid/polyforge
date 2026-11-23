@@ -202,8 +202,11 @@ export function parseWorkspaceWriteKey(key: string): string | null {
 /** The pf release that first carries the [step_tiers] catalog — the
  *  family's own floor, independent of the panel's 2.20.x line (the
  *  summarize precedent in lib/polyforge-memory.ts: a v0.2.x pf ranks
- *  above every 2.20.x floor, an unparseable version is never capable). */
-export const POLYFORGE_CONFIG_STEP_TIERS_MINIMUM_PF_VERSION = "0.2.4";
+ *  above every 2.20.x floor, an unparseable version is never capable).
+ *  The floor is `0.2.4-0`: a v0.2.4-dev.N build is the 0.2.4 line's own
+ *  pre-release, so it is above `0.2.4-0` and below `0.2.4`, while `0.2.3`
+ *  and every 2.20.x build stay below it (polyforge#256 B1). */
+export const POLYFORGE_CONFIG_STEP_TIERS_MINIMUM_PF_VERSION = "0.2.4-0";
 
 /** The tier name a `step_tiers.<tier>` key addresses, or null when the key
  *  is not a catalog key with a well-formed tier name (the panel's and the

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { isPolyforgeVersionBelowMinimum } from "./polyforge-detect";
+import { isPolyforgeVersionBelowMinimum } from "./polyforge-version";
 import { polyforgePfBin } from "./polyforge-pf-bin";
 import { probePolyforgeVersion } from "./polyforge-status";
 import { polyforgeNamedCell, type PolyforgeConfigScope, type PolyforgeScopeArgv } from "./polyforge-cells-pure";

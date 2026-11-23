@@ -10,7 +10,7 @@ import { createJiti } from "jiti";
 
 const jiti = createJiti(import.meta.url);
 const lib = await jiti.import("./polyforge-work-items.ts");
-const detect = await jiti.import("./polyforge-detect.ts");
+const detect = await jiti.import("./polyforge-version.ts");
 const cells = await jiti.import("./polyforge-cells.ts");
 const status = await jiti.import("./polyforge-status.ts");
 
