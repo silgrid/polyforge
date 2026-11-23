@@ -626,6 +626,35 @@ registry_digest() {
   printf '%s\n' "$_o" | tail -n 1 >&2
   return 2
 }
+# index_platforms <ref>: the platforms the multi-arch index carries, one
+# <os>/<arch> per line (polyforge#86). buildx imagetools names each child
+# manifest on a Platform: line; without buildx the `docker manifest inspect
+# -v` fallback prints each child's platform block, and the awk pairs the
+# architecture with its os. Empty output with exit 0 is an index that carries
+# no platform the reader can see (a single-arch image); exit 2 when the
+# registry cannot be read - never guessed.
+index_platforms() {
+  if _o=$(docker buildx imagetools inspect "$1" 2>&1); then
+    printf '%s\n' "$_o" | sed -n 's/^[[:space:]]*Platform:[[:space:]]*//p' | LC_ALL=C sort -u
+    return 0
+  fi
+  case "$_o" in
+    *"not a docker command"*|*"unknown command"*) ;;   # no buildx: docker manifest
+    *"not found"*|*"manifest unknown"*|*MANIFEST_UNKNOWN*) return 1 ;;
+    *) printf '%s\n' "$_o" | tail -n 1 >&2; return 2 ;;
+  esac
+  if _o=$(docker manifest inspect -v "$1" 2>&1); then
+    printf '%s\n' "$_o" | awk '
+      /"platform"/ { _in = 1; _arch = "" }
+      _in && /"architecture"/ { _arch = $0; sub(/.*"architecture": *"/, "", _arch); sub(/".*/, "", _arch) }
+      _in && /"os"/ { _os = $0; sub(/.*"os": *"/, "", _os); sub(/".*/, "", _os); if (_arch != "") print _os "/" _arch; _in = 0 }
+    ' | LC_ALL=C sort -u
+    return 0
+  fi
+  case "$_o" in *"no such manifest"*|*"manifest unknown"*|*"not found"*) return 1 ;; esac
+  printf '%s\n' "$_o" | tail -n 1 >&2
+  return 2
+}
 # tgz_version <tarball>: the version in the packed package/package.json.
 tgz_version() {
   tar -xzOf "$1" package/package.json 2>/dev/null | sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1
@@ -798,6 +827,32 @@ if [ "${1:-}" = "--verify" ]; then
       pass "workstation image index digest $GOTW matches workstation-image.digest"
     else
       fail "workstation image digest mismatch: registry $GOTW vs workstation-image.digest ${WANTW:-<empty>}"
+    fi
+    # 4c. the index carries both platforms (a single-arch push, or a broken
+    # index, must never pass as the workstation image).
+    if _plat=$(index_platforms "$WS_IMAGE:$VTAG"); then
+      for _p in linux/amd64 linux/arm64; do
+        if printf '%s\n' "$_plat" | grep -qx "$_p"; then
+          pass "workstation index platform $_p present"
+        else
+          fail "workstation image index lacks $_p (it carries: $(printf '%s' "$_plat" | tr '\n' ' '))"
+        fi
+      done
+    else
+      fail "the platforms of the workstation index $WS_IMAGE:$VTAG are unreadable"
+    fi
+    # 5. the public channel's anonymous read (polyforge#86 Q2): the
+    # workstation image must pull with no credential at all - that is the
+    # install story (image address + version, no gh). The suffixed (internal)
+    # channel is private by design and makes no anonymous check.
+    if [ -z "$SUFFIX" ]; then
+      _anon=$(mktemp -d "${TMPDIR:-/tmp}/release-anon.XXXXXX")
+      if DOCKER_CONFIG="$_anon" registry_digest "$WS_IMAGE:$VTAG" >/dev/null 2>&1; then
+        pass "anonymous read of $WS_IMAGE:$VTAG (empty DOCKER_CONFIG)"
+      else
+        fail "anonymous read of $WS_IMAGE:$VTAG failed (empty DOCKER_CONFIG) - the package is private: once, an org owner makes it public (the package's settings, Change visibility), then verify again"
+      fi
+      rm -rf "$_anon"
     fi
   else
     fail "gh release download: $(head -1 "$VWORK/dl.log")"
