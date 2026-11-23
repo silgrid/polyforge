@@ -138,7 +138,7 @@ interface Props {
   modelNames?: Record<string, string>;
   cwd?: string;
   onOpenFile?: (filePath: string, page?: number) => void;
-  onOpenSubagent?: (sessionId: string, label: string) => void;
+  onOpenSubagent?: (sessionId: string, label: string, toolCallId?: string) => void;
   /** Opens one of this session's built-in background tasks' detail panel by task id (#189: the bg_run card's button). */
   onOpenPiTask?: (taskId: string) => void;
   entryId?: string;
@@ -623,7 +623,7 @@ function AssistantMessageView({
   modelNames?: Record<string, string>;
   cwd?: string;
   onOpenFile?: (filePath: string, page?: number) => void;
-  onOpenSubagent?: (sessionId: string, label: string) => void;
+  onOpenSubagent?: (sessionId: string, label: string, toolCallId?: string) => void;
   onOpenPiTask?: (taskId: string) => void;
   showTimestamp?: boolean;
   prevTimestamp?: number;
@@ -956,7 +956,7 @@ function AssistantMessageView({
   );
 }
 
-function BlockView({ block, searchTarget, toolResults, isStreaming, streamingDuration, toolCallDurations, cwd, onOpenFile, onOpenSubagent, onOpenPiTask, sessionId, entryId, blockIndex }: { block: AssistantContentBlock; searchTarget?: boolean; toolResults?: Map<string, ToolResultMessage>; isStreaming?: boolean; streamingDuration?: number; toolCallDurations?: Map<string, number>; cwd?: string; onOpenFile?: (filePath: string, page?: number) => void; onOpenSubagent?: (sessionId: string, label: string) => void; onOpenPiTask?: (taskId: string) => void; sessionId?: string; entryId?: string; blockIndex: number }) {
+function BlockView({ block, searchTarget, toolResults, isStreaming, streamingDuration, toolCallDurations, cwd, onOpenFile, onOpenSubagent, onOpenPiTask, sessionId, entryId, blockIndex }: { block: AssistantContentBlock; searchTarget?: boolean; toolResults?: Map<string, ToolResultMessage>; isStreaming?: boolean; streamingDuration?: number; toolCallDurations?: Map<string, number>; cwd?: string; onOpenFile?: (filePath: string, page?: number) => void; onOpenSubagent?: (sessionId: string, label: string, toolCallId?: string) => void; onOpenPiTask?: (taskId: string) => void; sessionId?: string; entryId?: string; blockIndex: number }) {
   // A claude session's runs; empty elsewhere, so every other card is unchanged.
   const claudeSubagents = useContext(ClaudeSubagentContext);
   if (block.type === "text") {
@@ -1095,7 +1095,7 @@ function bgRunTaskIdFromDetails(value: unknown): string | null {
 // Polyforge progress cards (components/ToolCallCard.tsx).
 export { formatToolDuration };
 
-function ToolCallBlock({ block, result, duration, onOpenSubagent, onOpenPiTask }: { block: ToolCallContent; result?: ToolResultMessage; duration?: number; onOpenSubagent?: (sessionId: string, label: string) => void; onOpenPiTask?: (taskId: string) => void }) {
+function ToolCallBlock({ block, result, duration, onOpenSubagent, onOpenPiTask }: { block: ToolCallContent; result?: ToolResultMessage; duration?: number; onOpenSubagent?: (sessionId: string, label: string, toolCallId?: string) => void; onOpenPiTask?: (taskId: string) => void }) {
   const { t } = useI18n();
   const [expanded, setExpanded] = useState(() => isToolCallExpanded(block.toolCallId));
   const toggleExpanded = () => {
@@ -1175,15 +1175,17 @@ function ToolCallBlock({ block, result, duration, onOpenSubagent, onOpenPiTask }
         {duration !== undefined && <ToolCallCardStat>{formatToolDuration(duration)}</ToolCallCardStat>}
       </>}
       aside={subagent && onOpenSubagent && (
-        <button
-          type="button"
-          onClick={() => onOpenSubagent(subagent.sessionId, subagent.description || subagent.profile)}
-          title={t("subagent.openTab")}
-          aria-label={t("subagent.openTab")}
-          style={{ width: 32, display: "grid", placeItems: "center", border: "none", borderLeft: "1px solid var(--border)", background: "none", color: "var(--text-muted)", cursor: "pointer", flexShrink: 0 }}
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="5" y="7" width="14" height="11" rx="2" /><path d="M9 11h.01M15 11h.01M9 15h6M12 7V4M10 4h4" /></svg>
-        </button>
+        <span data-pi-agent-tool-call={block.toolCallId} style={{ display: "flex", flexShrink: 0 }}>
+          <button
+            type="button"
+            onClick={() => onOpenSubagent(subagent.sessionId, subagent.description || subagent.profile, block.toolCallId)}
+            title={t("piSubagent.openPanel")}
+            aria-label={t("piSubagent.openPanel")}
+            style={{ width: 32, display: "grid", placeItems: "center", border: "none", borderLeft: "1px solid var(--border)", background: "none", color: "var(--text-muted)", cursor: "pointer", flexShrink: 0 }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="5" y="7" width="14" height="11" rx="2" /><path d="M9 11h.01M15 11h.01M9 15h6M12 7V4M10 4h4" /></svg>
+          </button>
+        </span>
       ) || (bgTaskId && onOpenPiTask && (
         <button
           type="button"

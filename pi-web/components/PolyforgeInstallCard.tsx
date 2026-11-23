@@ -9,6 +9,7 @@ import {
   type PolyforgeInstallRun,
   type PolyforgeInstallVersions,
 } from "@/lib/polyforge-install-pure";
+import { isPolyforgePrerelease } from "@/lib/polyforge-version";
 import { ConfigButton, ConfigDetailGrid, ConfigDetailGridRow } from "./SettingsUi";
 
 /**
@@ -270,6 +271,19 @@ export function PolyforgeInstallView({
   const running = run?.state === "running" && !streamError;
   const flags = versions ? polyforgeVersionFlags(versions) : null;
   const installed = versions?.installed ?? unknown;
+  // The install/update entry exists only where a run would install, update or
+  // write the missing cli.toml key — never on a machine ahead of the channel
+  // (polyforge#256 B2).
+  const canRun = Boolean(versions && !flags?.aheadOfChannel
+    && (!versions.pfPresent || flags?.updateAvailable || versions.needsConfig));
+  // The one entry's label says what the run would do (owner ruling 2026-11-23,
+  // polyforge#256 r1#7 1A): an installed, current pf whose cli.toml still
+  // needs its key writes the configuration, it never "updates" a same version.
+  const startLabel = !versions?.pfPresent
+    ? t("polyforge.install.install")
+    : flags?.updateAvailable
+      ? t("polyforge.install.update")
+      : t("polyforge.install.configure");
   // A run this page lost the stream of is no longer shown as running.
   const shownState = run?.state === "running" && streamError ? "lost" : run?.state;
   const conclusion = !run
@@ -329,6 +343,13 @@ export function PolyforgeInstallView({
           {t("polyforge.install.flagUpdate", { latest: versions.latest ?? "", installed })}
         </p>
       )}
+      {versions && flags?.aheadOfChannel && (
+        <p className="polyforge-install-flag" data-pf-install-flag="ahead">
+          {t(isPolyforgePrerelease(versions.installed ?? "")
+            ? "polyforge.install.flagAheadPrerelease"
+            : "polyforge.install.flagAheadStable", { latest: versions.latest ?? "", installed })}
+        </p>
+      )}
       {versions && flags?.daemonStale && (
         <p className="polyforge-install-flag is-warning" data-pf-install-flag="daemon-stale">
           {t("polyforge.install.flagDaemonStale", { running: versions.running ?? "", installed })}
@@ -345,17 +366,17 @@ export function PolyforgeInstallView({
         </p>
       )}
 
-      {versions?.needsConfig && !running && !imageManaged && (
+      {versions?.needsConfig && canRun && !running && !imageManaged && (
         <div className="polyforge-install-credentials" data-pf-install-credentials>
           <p className="polyforge-config-card-hint">{t("polyforge.install.firstInstallHint")}</p>
           <input aria-label={t("polyforge.install.host")} placeholder={t("polyforge.install.host")} value={host} onChange={(event) => onHost(event.target.value)} />
           <input type="password" autoComplete="off" aria-label={t("polyforge.install.apiKey")} placeholder={t("polyforge.install.apiKey")} value={apiKey} onChange={(event) => onApiKey(event.target.value)} />
         </div>
       )}
-      {!imageManaged && (
+      {!imageManaged && canRun && (
         <div className="polyforge-install-actions">
           <ConfigButton variant="primary" disabled={!versions || running || posting} onClick={onStart} data-pf-install-start>
-            {versions?.pfPresent ? t("polyforge.install.update") : t("polyforge.install.install")}
+            {startLabel}
           </ConfigButton>
           {running && <span className="config-scope-switch-reason">{t("polyforge.install.busyReason")}</span>}
         </div>
@@ -365,7 +386,7 @@ export function PolyforgeInstallView({
       {run && (
         <div className="polyforge-install-run" data-pf-install-run={run.state}>
           <p role="status" className={`polyforge-install-conclusion is-${shownState}`} data-pf-install-conclusion={shownState}>{conclusion}</p>
-          {run.state === "refused" && (
+          {run.state === "refused" && canRun && (
             <div className="polyforge-install-refusal" data-pf-install-refusal>
               {run.refusal && run.refusal.jobs.length > 0 && (
                 <>

@@ -15,7 +15,7 @@ const status = await jiti.import("./polyforge-status.ts");
 
 test("the Memory floor is 2.20.12 (browse-mode recall) and the boundary is inclusive", async () => {
   assert.equal(lib.POLYFORGE_MEMORY_MINIMUM_PF_VERSION, "2.20.12");
-  const detect = await jiti.import("./polyforge-detect.ts");
+  const detect = await jiti.import("./polyforge-version.ts");
   assert.equal(detect.isPolyforgeVersionBelowMinimum("v2.20.11", lib.POLYFORGE_MEMORY_MINIMUM_PF_VERSION), true, "2.20.11 is below the floor");
   assert.equal(detect.isPolyforgeVersionBelowMinimum("v2.20.12", lib.POLYFORGE_MEMORY_MINIMUM_PF_VERSION), false, "2.20.12 is the floor");
   assert.equal(detect.isPolyforgeVersionBelowMinimum("v2.21.0", lib.POLYFORGE_MEMORY_MINIMUM_PF_VERSION), false);
@@ -131,7 +131,7 @@ test("the writer display string shows the kind plus only the valued known detail
 });
 
 test("the writer filter's own floor is pf 0.2.3: same-core prereleases and the retired 2.20.x line stay below", async () => {
-  const detect = await jiti.import("./polyforge-detect.ts");
+  const detect = await jiti.import("./polyforge-version.ts");
   assert.equal(lib.POLYFORGE_MEMORY_WRITER_FILTER_MINIMUM_PF_VERSION, "0.2.3",
     "the filter rides the first official release that carries --writer-kind (polyforge#119, after v0.2.2; deploy/sql/v0.2.3)");
   const below = (v) => detect.isPolyforgeVersionBelowMinimum(v, lib.POLYFORGE_MEMORY_WRITER_FILTER_MINIMUM_PF_VERSION, true);

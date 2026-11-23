@@ -71,6 +71,41 @@ test("the unified block's values: pi's own note where it does not support the fi
   assert.deepEqual(view.unifiedValues("sandbox", null, { pi: "", claude: "" }), []);
 });
 
+// polyforge#256 (T1, B6): a supported-but-unset sandbox is 「未设置」, never the
+// 「没有已安装的 harness 支持此项」 state; the UnifiedSetting protocol is
+// unchanged (status stays `ready`, the display carries the localized text),
+// and pi's own unsupported note stays exactly as it was.
+test("supported unset sandbox is not unsupported: ready with a localized 未设置, pi still unsupported", async () => {
+  const unsetCompare = {
+    field: "sandbox",
+    status: "inconsistent",
+    values: {
+      pi: { supported: false, neutral: null, raw: null },
+      claude: { supported: true, neutral: null, raw: null },
+    },
+  };
+  const sandbox = view.unifiedValues("sandbox", unsetCompare, { pi: "pi has no sandbox", claude: "", unset: "Not set" });
+  assert.deepEqual(sandbox, [
+    { harness: "pi", status: "unsupported", value: null, reason: "pi has no sandbox" },
+    { harness: "claude", status: "ready", value: "Not set" },
+  ], "claude's unset sandbox is ready with 「未设置」, not unsupported");
+  const { unifiedStatus } = await jiti.import("./UnifiedSetting.tsx");
+  assert.equal(unifiedStatus(sandbox), "inconsistent", "the page must not claim no harness supports the sandbox");
+  // a supported and set sandbox still shows its own value, never the unset text
+  const setCompare = { ...unsetCompare, values: { ...unsetCompare.values, claude: { supported: true, neutral: "on", raw: "on" } } };
+  assert.equal(view.unifiedValues("sandbox", setCompare, { pi: "pi has no sandbox", claude: "", unset: "Not set" })[1].value, "on");
+  // pi alone unsupported (no claude support at all) stays unsupported
+  const noneCompare = { ...unsetCompare, values: { pi: { supported: false, neutral: null, raw: null }, claude: { supported: false, neutral: null, raw: null } } };
+  assert.equal(unifiedStatus(view.unifiedValues("sandbox", noneCompare, { pi: "pi has no sandbox", claude: "no claude", unset: "Not set" })), "unsupported");
+  // without the unset text the helper keeps the old protocol shape (null)
+  assert.equal(view.unifiedValues("sandbox", unsetCompare, { pi: "pi has no sandbox", claude: "" })[1].value, null);
+  // the page passes the localized unset text to the sandbox projection only
+  const source = await jiti.import("node:fs/promises").then((fs) => fs.readFile(new URL("./HarnessPermissionSettings.tsx", import.meta.url), "utf8"));
+  assert.match(source, /values=\{unifiedValues\("sandbox", sandboxCompare, \{/, "the sandbox block reads the projection");
+  assert.match(source, /unset: t\("settings\.permissionSandboxUnset"\)/, "the sandbox block passes the localized unset text");
+  assert.match(source, /onChange=\{\(enabled\) => void saveClaude\(\{ sandboxEnabled: enabled \}\)\}/, "the switch writes only on the user's change");
+});
+
 test("the trust unify target: every differing harness set to the first ready value, null when they agree or none answers", () => {
   // pi trusted, claude not: claude is the target, written to pi's value.
   assert.deepEqual(view.trustUnifyTargets({

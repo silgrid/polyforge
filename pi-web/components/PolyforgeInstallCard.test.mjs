@@ -85,14 +85,17 @@ test("AC3: an installed pf with no cli.toml key asks for the host and the key to
   assert.match(installed, /data-pf-install-credentials/);
   assert.match(installed, /<input aria-label="aihub host"/);
   assert.match(installed, /<input type="password" autoComplete="off" aria-label="API key"[^>]*value=""/);
-  assert.match(installed, /<button type="button"(?! disabled)[^>]*data-pf-install-start[^>]*>Update pf<\/button>/, "the update stays startable");
+  assert.match(installed, /<button type="button"(?! disabled)[^>]*data-pf-install-start[^>]*>Write configuration<\/button>/, "the config write stays startable, and never calls itself an update");
   // a reinstall onto an existing cli.toml key needs neither
   assert.doesNotMatch(view({ versions: versions({ pfPresent: false, installed: null, needsConfig: false }) }), /data-pf-install-credentials/);
   // the start's browser-side check follows the same rule, pf installed or
   // not: no request without a host and a key of at least 8 characters
   assert.match(source, /\} else if \(versions\?\.needsConfig\) \{\s*const trimmed = host\.trim\(\);\s*if \(!trimmed\) \{\s*setProblem\(t\("polyforge\.install\.needHost"\)\);\s*return;\s*\}\s*if \(typedKey\.length < 8\) \{\s*setProblem\(t\("polyforge\.install\.needKey"\)\);\s*return;\s*\}\s*body\.host = trimmed;\s*body\.apiKey = typedKey;/);
-  assert.match(source, /\{versions\?\.needsConfig && !running && !imageManaged && \(\s*<div className="polyforge-install-credentials"/);
-  assert.doesNotMatch(source, /pfPresent[^\n]*needsConfig|needsConfig[^\n]*pfPresent/, "pf's presence never decides whether the credentials are asked for");
+  assert.match(source, /\{versions\?\.needsConfig && canRun && !running && !imageManaged && \(\s*<div className="polyforge-install-credentials"/);
+  // the form is asked for by needsConfig itself (first install or an installed
+  // pf whose cli.toml has no key); the B2 test pins that canRun folds presence,
+  // update and needsConfig — never presence alone
+  assert.match(source, /const canRun = Boolean\(versions && !flags\?\.aheadOfChannel\s*&& \(!versions\.pfPresent \|\| flags\?\.updateAvailable \|\| versions\.needsConfig\)\)/);
 });
 
 test("the line naming tools/install.sh shows only while an install or update is relevant", () => {
@@ -102,7 +105,7 @@ test("the line naming tools/install.sh shows only while an install or update is 
   assert.equal(hint({ versions: null }), false, "unknown versions prove nothing");
   assert.equal(hint({ versions: versions({ pfPresent: false, installed: null, running: null, daemonReachable: null }) }), true, "pf absent");
   assert.equal(hint({ versions: versions({ latest: "v0.2.6" }) }), true, "a newer release on the channel");
-  assert.equal(hint({ versions: versions({ running: "v0.2.4" }) }), true, "the daemon on an older binary");
+  assert.equal(hint({ versions: versions({ running: "v0.2.4" }) }), false, "a stale daemon is a status, not an update");
   for (const state of ["running", "refused", "failed"]) {
     assert.equal(hint({ versions: null, run: run({ state }) }), true, `a ${state} run`);
   }
@@ -110,7 +113,7 @@ test("the line naming tools/install.sh shows only while an install or update is 
 });
 
 test("AC2: a running install disables the button, says why, and shows its output line by line", () => {
-  const html = view({ run: run(), lines: ["== 1/5 prepare", "   release channel: example-org/forge"] });
+  const html = view({ versions: versions({ latest: "v0.2.6" }), run: run(), lines: ["== 1/5 prepare", "   release channel: example-org/forge"] });
   assert.match(html, /<button type="button" disabled=""[^>]*data-pf-install-start/);
   assert.ok(text(html).includes("An install is running."));
   assert.match(html, /data-pf-install-conclusion="running"/);
@@ -127,7 +130,7 @@ test("AC2: a clear conclusion — succeeded, or failed with install.sh's reason"
 
 test("AC2: a refusal shows install.sh's reason and jobs; the force needs a second, separate confirmation naming its cost", () => {
   const refusal = { reason: "the daemon is running jobs; Upgrade refused", jobs: ["demo#7 (running)", "demo#9 (recovering)"] };
-  const refused = view({ run: run({ state: "refused", exitCode: 3, refusal }) });
+  const refused = view({ versions: versions({ latest: "v0.2.6" }), run: run({ state: "refused", exitCode: 3, refusal }) });
   const shown = text(refused);
   assert.ok(shown.includes("Refused by install.sh: the daemon is running jobs; Upgrade refused"));
   assert.ok(shown.includes("demo#7 (running)") && shown.includes("demo#9 (recovering)"));
@@ -135,7 +138,7 @@ test("AC2: a refusal shows install.sh's reason and jobs; the force needs a secon
   assert.doesNotMatch(refused, /data-pf-install-force-go/, "no force control before the confirmation opens");
   // the confirmation lists the jobs running NOW (the re-read versions), not
   // the ones the refusal named
-  const now = versions({ jobs: [{ slug: "demo#11", status: "running" }] });
+  const now = versions({ latest: "v0.2.6", jobs: [{ slug: "demo#11", status: "running" }] });
   const confirming = view({ versions: now, run: run({ state: "refused", exitCode: 3, refusal }), confirmingForce: true });
   assert.match(confirming, /role="alertdialog" aria-label="Force the update \(PF_INSTALL_FORCE=1\)\?"/);
   assert.ok(text(confirming).includes("the agent tree of every running job is terminated"));
@@ -144,9 +147,9 @@ test("AC2: a refusal shows install.sh's reason and jobs; the force needs a secon
   assert.ok(!dialog.includes("demo#7"), "the refusal's job list is not passed off as the current one");
   assert.match(confirming, /data-pf-install-force-go/);
   assert.ok(text(confirming).includes("Cancel"));
-  const idle = text(view({ versions: versions({ jobs: [] }), run: run({ state: "refused", exitCode: 3, refusal }), confirmingForce: true }));
+  const idle = text(view({ versions: versions({ latest: "v0.2.6", jobs: [] }), run: run({ state: "refused", exitCode: 3, refusal }), confirmingForce: true }));
   assert.ok(idle.includes("No job is running now: a plain update no longer needs the force."));
-  const down = text(view({ versions: versions({ daemonReachable: false, jobs: [] }), run: run({ state: "refused", exitCode: 3, refusal }), confirmingForce: true }));
+  const down = text(view({ versions: versions({ latest: "v0.2.6", daemonReachable: false, jobs: [] }), run: run({ state: "refused", exitCode: 3, refusal }), confirmingForce: true }));
   assert.ok(down.includes("whether jobs run is unknown"));
 });
 
@@ -182,6 +185,49 @@ test("the Host pane hosts the card, re-detects when a run ends, and 重新检测
   assert.match(configSource, /void runDetect\(true\); void runCellsRead\(\); setInstallRefresh\(\(n\) => n \+ 1\);/, "重新检测 re-reads the card past its caches");
   assert.match(source, /if \(seenRefresh\.current === refreshKey\) return;\s*seenRefresh\.current = refreshKey;\s*void sync\(true\);/);
   assert.match(configSource, /const onInstallFinished = useCallback\(\(\) => \{\s*void runDetect\(true\);\s*void runCellsRead\(\);/);
+});
+
+test("AC2/B2: an installed version ahead of the channel shows its own note and no update entry — a prerelease and a stable release are worded apart", () => {
+  const prerelease = view({ versions: versions({ installed: "v0.2.4-dev.49", latest: "v0.2.3", running: "v0.2.4-dev.49", piWeb: "0.2.4-dev.49" }) });
+  assert.match(prerelease, /data-pf-install-flag="ahead"/, "the ahead note shows");
+  assert.doesNotMatch(prerelease, /data-pf-install-flag="update"/, "an older channel release is never an update");
+  assert.doesNotMatch(prerelease, /data-pf-install-start/, "no 「更新 pf」 button on an ahead machine");
+  assert.doesNotMatch(prerelease, /data-pf-install-hint/, "no install.sh line either");
+  assert.ok(text(prerelease).includes("installed prerelease is ahead of the release channel"), text(prerelease));
+  const stable = view({ versions: versions({ installed: "v0.2.5", latest: "v0.2.4", running: "v0.2.5", piWeb: "0.2.5" }) });
+  assert.match(stable, /data-pf-install-flag="ahead"/);
+  assert.ok(text(stable).includes("installed version is ahead of the release channel"), "a stable ahead is never called a prerelease");
+  assert.doesNotMatch(stable, /data-pf-install-start/);
+  // a real update below the channel still shows the update flag and the button
+  const below = view({ versions: versions({ installed: "v0.2.4-dev.49", latest: "v0.2.4", running: "v0.2.4-dev.49", piWeb: "0.2.4-dev.49" }) });
+  assert.match(below, /data-pf-install-flag="update"/);
+  assert.match(below, /<button type="button"[^>]*data-pf-install-start[^>]*>Update pf<\/button>/);
+});
+
+test("B2/r1#7: the one entry exists only where a run is possible — ahead/current/unknown render no start, force or credential control", () => {
+  // ahead, current and an unparseable version: no run entry of any kind
+  for (const versionSet of [
+    versions({ installed: "v0.2.5", latest: "v0.2.4", running: "v0.2.5" }),
+    versions(),
+    versions({ installed: "oops", latest: "v0.2.6", running: "oops" }),
+  ]) {
+    const html = view({ versions: versionSet });
+    assert.doesNotMatch(html, /data-pf-install-start/, "no install/update entry");
+    assert.doesNotMatch(html, /data-pf-install-force/, "no force entry");
+    assert.doesNotMatch(html, /data-pf-install-credentials/, "no host/key form");
+  }
+  // ahead + needsConfig stays status-only (owner ruling 2026-11-23 1A/2A)
+  const aheadNeedsConfig = view({ versions: versions({ installed: "v0.2.4-dev.49", latest: "v0.2.3", running: "v0.2.4-dev.49", needsConfig: true }) });
+  assert.doesNotMatch(aheadNeedsConfig, /data-pf-install-start/);
+  assert.doesNotMatch(aheadNeedsConfig, /data-pf-install-credentials/);
+  // a current installed pf whose cli.toml has no key writes the configuration
+  // (its own label), while a pf behind the channel updates
+  const configure = view({ versions: versions({ needsConfig: true }) });
+  assert.match(configure, /data-pf-install-start/);
+  assert.match(configure, />Write configuration</);
+  assert.doesNotMatch(configure, />Update pf</, "a same-version config write is never called an update");
+  assert.match(view({ versions: versions({ latest: "v0.2.6", needsConfig: true }) }), />Update pf</, "behind the channel with a missing key is an update");
+  assert.match(view({ versions: versions({ latest: "v0.2.6" }) }), />Update pf</);
 });
 
 test("every install string exists in all three locales", async () => {
