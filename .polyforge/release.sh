@@ -1238,7 +1238,6 @@ echo "release: preflight passed (tools, node, buildx and the arm64 platform, reg
 # may hold either one alone).
 if [ -n "$RESUME" ]; then
   REG_SNAP=$(registry_snapshot registry_digest "$IMAGE:$TAG" aihub) || die "cannot read the registry state of $IMAGE:$TAG: $(head -n 1 "$WORK/reg.err-aihub") - retryable; nothing published"
-  WS_SNAP=$(registry_snapshot index_digest "$WS_IMAGE:$TAG" ws) || die "cannot read the registry state of $WS_IMAGE:$TAG: $(head -n 1 "$WORK/reg.err-ws") - retryable; nothing published"
   case "$REG_SNAP" in
     "present "*)
       DIGEST=${REG_SNAP#present }
@@ -1248,16 +1247,6 @@ if [ -n "$RESUME" ]; then
       echo "release: resume $TAG: image $IMAGE:$TAG is already in the registry ($DIGEST) - kept, not rebuilt or pushed" ;;
     absent)
       [ -z "$DIGEST_PUB" ] || die "release $TAG publishes image digest $DIGEST_PUB but the registry has no $IMAGE:$TAG - a human decides; nothing published" ;;
-  esac
-  case "$WS_SNAP" in
-    "present "*)
-      WS_DIGEST=${WS_SNAP#present }
-      printf '%s' "$WS_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$' || die "the registry digest of $WS_IMAGE:$TAG is unreadable (\"$WS_DIGEST\") - retryable; nothing published"
-      [ -z "$WS_DIGEST_PUB" ] || [ "$WS_DIGEST_PUB" = "$WS_DIGEST" ] || die "the published workstation-image.digest of $TAG ($WS_DIGEST_PUB) is not the registry's digest of $WS_IMAGE:$TAG ($WS_DIGEST) - a human decides; nothing published"
-      NEED_WS_IMAGE=""
-      echo "release: resume $TAG: workstation image $WS_IMAGE:$TAG is already in the registry ($WS_DIGEST) - kept, not rebuilt or pushed" ;;
-    absent)
-      [ -z "$WS_DIGEST_PUB" ] || die "release $TAG publishes workstation image digest $WS_DIGEST_PUB but the registry has no $WS_IMAGE:$TAG - a human decides; nothing published" ;;
   esac
   NEED_BIN=""
   for _a in pf-linux-amd64 pf-darwin-arm64 pf-darwin-amd64; do [ -f "$OUT/$_a" ] || NEED_BIN=1; done
@@ -1274,15 +1263,12 @@ fi
 # release go on. A resume of the same release keeps its own images as
 # before (1b above).
 if [ -z "$RESUME" ]; then
-  for _spec in "aihub $IMAGE RELEASE_IMAGE registry_digest" "ws $WS_IMAGE RELEASE_WORKSTATION_IMAGE index_digest"; do
-    set -- $_spec; _key=$1; _img=$2; _var=$3; _rd=$4
-    if "$_rd" "$_img:$TAG" >"$WORK/regdigest-$_key" 2>"$WORK/reg.err-$_key"; then _r=0; else _r=$?; fi
-    case "$_r" in
-      0) die "refusing to release: $_img:$TAG already exists in the registry ($(tr -d ' \t\r\n' <"$WORK/regdigest-$_key")), but $TAG is no release of $REMOTE to resume - a push would overwrite that image; publish to another package ($_var) or remove the tag from the package by hand, then run again; nothing built or published, no version claimed" ;;
-      1) echo "release: image $_img:$TAG is not in the registry yet" ;;
-      *) die "refusing to release: cannot read whether $_img:$TAG exists in the registry ($(head -n 1 "$WORK/reg.err-$_key")) - retryable; nothing built or published, no version claimed" ;;
-    esac
-  done
+  if registry_digest "$IMAGE:$TAG" >"$WORK/regdigest-aihub" 2>"$WORK/reg.err-aihub"; then _r=0; else _r=$?; fi
+  case "$_r" in
+    0) die "refusing to release: $IMAGE:$TAG already exists in the registry ($(tr -d ' \t\r\n' <"$WORK/regdigest-aihub")), but $TAG is no release of $REMOTE to resume - a push would overwrite that image; publish to another package (RELEASE_IMAGE) or remove the tag from the package by hand, then run again; nothing built or published, no version claimed" ;;
+    1) echo "release: image $IMAGE:$TAG is not in the registry yet" ;;
+    *) die "refusing to release: cannot read whether $IMAGE:$TAG exists in the registry ($(head -n 1 "$WORK/reg.err-aihub")) - retryable; nothing built or published, no version claimed" ;;
+  esac
 fi
 
 # 1c. PR-only: every commit that entered the branch since the previous release
