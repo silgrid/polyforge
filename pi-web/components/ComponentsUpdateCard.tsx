@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import type { ComponentsStatus } from "@/lib/components-upgrade";
 import { pollComponentsStatus } from "@/lib/components-update-client";
+import { ConfigButton } from "./SettingsUi";
 
 export function ComponentsUpdateView({snapshot,error,onAction}:{snapshot:ComponentsStatus|null;error:string|null;onAction:(operation:string,force?:boolean)=>void}) {
  if(!snapshot?.imageManaged) return null;
@@ -13,11 +14,11 @@ export function ComponentsUpdateView({snapshot,error,onAction}:{snapshot:Compone
   <p role="status">{state==="done"?"升级成功":state==="failed"?"升级失败":state==="waiting-drain"?"等待作业结束":state==="cancelled"?"已取消":busy?"正在更新":"准备就绪"} {snapshot.status?.to}</p>
   {snapshot.status?.error && <p role="alert">{snapshot.status.error}</p>}
   {error && <p role="alert">{error}</p>}
-  <button type="button" disabled={busy} onClick={()=>onAction("upgrade")}>更新</button>
-  <button type="button" disabled={busy || !snapshot.previous} onClick={()=>onAction("rollback")}>回到上一版</button>
-  {state==="waiting-drain" && <button type="button" onClick={()=>onAction("cancel")}>取消并重启 daemon</button>}
-  {state==="running" && <button type="button" onClick={()=>onAction("cancel")}>恢复中断的编排</button>}
-  {state==="waiting-drain" && <button type="button" onClick={()=>onAction(snapshot.status?.operation ?? "upgrade",true)}>强制更新</button>}
+  <ConfigButton size="small" disabled={busy} onClick={()=>onAction("upgrade")}>更新</ConfigButton>
+  <ConfigButton size="small" disabled={busy || !snapshot.previous} onClick={()=>onAction("rollback")}>回到上一版</ConfigButton>
+  {state==="waiting-drain" && <ConfigButton size="small" onClick={()=>onAction("cancel")}>取消并重启 daemon</ConfigButton>}
+  {state==="running" && <ConfigButton size="small" onClick={()=>onAction("cancel")}>恢复中断的编排</ConfigButton>}
+  {state==="waiting-drain" && <ConfigButton size="small" variant="danger" onClick={()=>onAction(snapshot.status?.operation ?? "upgrade",true)}>强制更新</ConfigButton>}
  </section>;
 }
 

@@ -296,7 +296,7 @@ export function SettingsPanel({
                 <button
                   key={item.id}
                   type="button"
-                  className={item.legacy ? "settings-section-tab is-legacy" : "settings-section-tab"}
+                  className="settings-section-tab"
                   disabled={disabled}
                   title={disabled ? t("settings.projectRequired") : item.label}
                   aria-current={selected ? "page" : undefined}

@@ -3568,6 +3568,8 @@ select.mcp-add-input {
 .harness-apply-to-targets > li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; min-width: 0; }
 .harness-apply-to-target { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px; }
 .harness-apply-to-target.is-disabled { cursor: default; opacity: 0.55; }
+.harness-apply-to-target input,
+.harness-apply-to-mode input { margin: 0; accent-color: var(--accent); }
 .harness-apply-to-target-reason { color: var(--text-dim); font-size: 11px; }
 .harness-apply-to-results { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; font-size: 11px; }
 .harness-apply-to-results li[data-ok="true"] { color: #16a34a; }
@@ -3623,14 +3625,42 @@ select.mcp-add-input {
 }
 .settings-model-table [data-step-tier-badge] { display: inline-block; margin: 1px 6px 1px 0; padding: 0 6px; border: 1px solid var(--border); border-radius: 999px; font-size: 10px; }
 
+/* 模型页的每个分区：标题与内容留出间距（review r1#7 的标题粘连），
+   默认模型下拉与 claude 自定义模型编辑器各自有规则（review r1#1）。 */
+.settings-model-section { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.settings-model-section > h3 { margin: 0; color: var(--text); font-size: 13px; font-weight: 650; }
+.settings-model-default-select,
+.settings-claude-model-input {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 420px;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+}
+.settings-model-default-select:focus-visible,
+.settings-claude-model-input:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.settings-claude-models { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.settings-claude-models > h4 { margin: 0; }
+.settings-claude-add { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.settings-claude-preview { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-panel); }
+.settings-claude-names { display: flex; flex-direction: column; gap: 3px; margin: 0; padding: 0; list-style: none; }
+.settings-claude-names > li { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.settings-claude-names code { padding: 1px 5px; border-radius: 4px; background: var(--bg-selected); font-family: var(--font-mono); font-size: 11px; overflow-wrap: anywhere; }
+.settings-claude-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+/* 一个开关行：原生 checkbox 由这一行统一着色 */
+.settings-toggle input { margin: 0; accent-color: var(--accent); }
+
 /* 技能清单里每行的 harness 标签 */
 .skill-harness-chips { display: inline-flex; flex-wrap: wrap; gap: 3px; }
 .skill-harness-chip { display: inline-flex; align-items: center; padding: 0 5px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-muted); font-family: var(--font-mono); font-size: 10px; }
 .skill-harness-chip.is-pi { border-color: var(--accent); color: var(--accent); }
 .skill-harness-chip.is-claude { border-color: rgba(217, 119, 6, 0.45); color: #d97706; }
-
-/* 已退场的导航项：仍可达，但强调它是旧的 */
-.settings-section-tab.is-legacy { font-style: italic; }
 
 /* ---- Polyforge 页 ---- */
 .polyforge-config-package,
@@ -3644,6 +3674,18 @@ select.mcp-add-input {
 .polyforge-config-unclassified { min-width: 0; margin-top: 8px; padding: 8px 10px; border: 1px dashed var(--border); border-radius: 8px; }
 .polyforge-config-unclassified-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; margin: 0; color: var(--text-dim); font-size: 11px; }
 .polyforge-workflow-card { min-width: 0; }
+.polyforge-workflow-project { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.polyforge-workflow-project select {
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+}
 .polyforge-install-card { min-width: 0; }
 .polyforge-config-notifications { min-width: 0; }
 .polyforge-config-notification-permission { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }

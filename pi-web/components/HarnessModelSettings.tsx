@@ -268,9 +268,9 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount }: { cwd: str
       <div className="config-split-view">
       <HarnessModelSidebar rows={rows} selectedProvider={selectedProvider} onSelect={setSelectedProvider} />
       <ConfigDetail>
-      <section aria-label={t("models.defaultHeading")}>
+      <section className="settings-model-section" aria-label={t("models.defaultHeading")}>
         <h3>{t("models.defaultHeading")}</h3>
-        <select aria-label={t("models.defaultHeading")} disabled={saving} value={selected}
+        <select className="settings-model-default-select" aria-label={t("models.defaultHeading")} disabled={saving} value={selected}
           onChange={(event) => {
             const choice = JSON.parse(event.target.value) as ModelIdentity;
             void write(`/api/models/default${query}`, choice.harness === "claude"
@@ -286,7 +286,7 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount }: { cwd: str
           </option>)}
         </select>
       </section>
-      <section aria-label={t("models.listHeading")}>
+      <section className="settings-model-section" aria-label={t("models.listHeading")}>
         <h3>{t("models.listHeading")}</h3>
         {tierColumn && !tierColumn.capable && tierColumn.reason && (
           <p role="note" data-step-tier-reason="" style={{ color: "var(--text-dim)", margin: "0 0 4px" }}>{tierColumn.reason}</p>
@@ -307,11 +307,11 @@ export function HarnessModelSettings({ cwd, onClose, onOpenAccount }: { cwd: str
           tier={tierColumn ?? undefined}
           onEffort={(provider, id, level) => { void write(`/api/harness/pi/model${query}`, { modelThinkingLevel: { key: `${provider}/${id}`, level: level || null } }); }} />
       </section>
-      <section aria-label="pi">
+      <section className="settings-model-section" aria-label="pi">
         <h3>pi</h3>
         <ModelsConfig embedded cwd={cwd} onClose={onClose ?? (() => {})} onOpenAccount={onOpenAccount} enabledModels={enabled} />
       </section>
-      <section aria-label="claude">
+      <section className="settings-model-section" aria-label="claude">
         <h3>claude</h3>
         <ClaudeCustomModels onRefresh={() => setRevision((previous) => previous + 1)} />
       </section>
