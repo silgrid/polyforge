@@ -11,6 +11,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { createStepGuard } from "./index.ts";
 
 interface Handlers {
@@ -201,4 +202,181 @@ test("tool_call ignores other tools and clean commands", async () => {
 	assert.equal(read, undefined);
 	const clean = await handlers["tool_call"]({ toolName: "bash", input: { command: "ls -la" } }, { cwd: "/" });
 	assert.equal(clean, undefined);
+});
+
+// ------------------------------------------------ build whole-suite gate
+
+// The real shared engine, so the handler is driven through the production
+// path: verify-scope's schema-1 projection over a temporary git fixture.
+const sharedDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../../../workflows/_shared");
+
+interface Fixture {
+	conf?: string;
+	files?: Record<string, string>;
+}
+
+function git(cwd: string, ...args: string[]): void {
+	const r = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+	if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
+}
+
+function fixtureRepo(t: { after(fn: () => void): void }, f: Fixture = {}): string {
+	const capsule = fs.mkdtempSync(path.join(os.tmpdir(), "guard-build-"));
+	t.after(() => fs.rmSync(capsule, { recursive: true, force: true }));
+	const repo = path.join(capsule, "repos", "r");
+	fs.mkdirSync(repo, { recursive: true });
+	if (f.conf !== undefined) {
+		fs.mkdirSync(path.join(repo, ".polyforge"), { recursive: true });
+		fs.writeFileSync(path.join(repo, ".polyforge", "verify-scope.conf"), f.conf);
+	}
+	for (const [rel, content] of Object.entries(f.files ?? {})) {
+		const p = path.join(repo, rel);
+		fs.mkdirSync(path.dirname(p), { recursive: true });
+		fs.writeFileSync(p, content);
+	}
+	git(repo, "init", "-q", "-b", "main");
+	git(repo, "config", "user.email", "a@b.c");
+	git(repo, "config", "user.name", "a");
+	git(repo, "add", "-A");
+	git(repo, "commit", "-qm", "init");
+	return capsule;
+}
+
+function buildEnv(capsule: string, over: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+	return {
+		PATH: process.env.PATH,
+		PF_STEP: "build",
+		PF_CAPSULE: capsule,
+		PF_SHARED_DIR: sharedDir,
+		PF_PYTHON: process.env.PF_PYTHON || "python3",
+		...over,
+	};
+}
+
+interface Blocked {
+	block: boolean;
+	reason: string;
+}
+
+async function bashCall(opts: Parameters<typeof createStepGuard>[0], cwd: string, command: string): Promise<Blocked | undefined> {
+	const handlers = loadGuard(opts);
+	return (await handlers["tool_call"]({ toolName: "bash", input: { command } }, { cwd, hasUI: false })) as Blocked | undefined;
+}
+
+test("build blocks the analyzer's default go whole-tree run", async (t) => {
+	const capsule = fixtureRepo(t, { files: { "go.mod": "module example.com/r\n\ngo 1.21\n", "pkg/a.go": "package pkg\n" } });
+	const r = await bashCall({ env: buildEnv(capsule) }, path.join(capsule, "repos", "r"), "GOWORK=off go test ./... -count=1");
+	assert.ok(r, "the whole-tree run is blocked");
+	assert.equal(r.block, true);
+	assert.match(r.reason, /^step guard: blocked/);
+	assert.match(r.reason, /fast_checks\.py" --repo r --close-scoped/);
+	assert.match(r.reason, /-run/);
+});
+
+test("build blocks the declared substitution form against a whole-tree run", async (t) => {
+	const capsule = fixtureRepo(t, {
+		conf: "stack=none\nfull_command=GOWORK=off go test $(GOWORK=off go list ./... | grep -v '/test$') -count=1\n",
+	});
+	const r = await bashCall({ env: buildEnv(capsule) }, path.join(capsule, "repos", "r"), "go test ./...");
+	assert.ok(r && r.block);
+});
+
+test("build tracks a leading cd from the capsule root", async (t) => {
+	const capsule = fixtureRepo(t, { conf: "stack=none\nfull_command=go test ./...\n" });
+	const r = await bashCall({ env: buildEnv(capsule) }, capsule, "cd repos/r && go test ./... > l 2>&1; echo exit=$?");
+	assert.ok(r && r.block, "the effective directory is the repo root");
+});
+
+test("build blocks a nested declaration at its effective directory", async (t) => {
+	const capsule = fixtureRepo(t, {
+		conf: "stack=none\nfull_command=cd sub && npm run test:e2e:all\n",
+		files: { "sub/x.txt": "x\n" },
+	});
+	const r = await bashCall({ env: buildEnv(capsule) }, path.join(capsule, "repos", "r"), "cd sub && npm run test:e2e:all");
+	assert.ok(r && r.block);
+});
+
+test("build allows a test the declaration puts in the fast phase", async (t) => {
+	const capsule = fixtureRepo(t, {
+		files: { "package.json": '{"name":"r","version":"1.0.0","scripts":{"test":"vitest run"}}\n' },
+	});
+	const r = await bashCall({ env: buildEnv(capsule) }, path.join(capsule, "repos", "r"), "npm test");
+	assert.equal(r, undefined, "a zero-config npm repo declares npm test in the fast phase");
+});
+
+test("build allows the written fast-check command itself", async (t) => {
+	const capsule = fixtureRepo(t, { conf: "stack=none\nfull_command=go test ./...\n" });
+	const r = await bashCall(
+		{ env: buildEnv(capsule) },
+		path.join(capsule, "repos", "r"),
+		'"$PF_PYTHON" "$PF_SHARED_DIR/scripts/fast_checks.py" --repo r --phase fast',
+	);
+	assert.equal(r, undefined);
+});
+
+test("build blocks a whole-tree segment beside the fast-check command", async (t) => {
+	const capsule = fixtureRepo(t, { conf: "stack=none\nfull_command=go test ./...\n" });
+	const r = await bashCall(
+		{ env: buildEnv(capsule) },
+		path.join(capsule, "repos", "r"),
+		'"$PF_PYTHON" "$PF_SHARED_DIR/scripts/fast_checks.py" --repo r --phase fast && go test ./...',
+	);
+	assert.ok(r && r.block, "the fast_checks.py segment exempts nothing else in the same command");
+});
+
+test("build allows a targeted package run and a filtered run", async (t) => {
+	const capsule = fixtureRepo(t, { files: { "go.mod": "module example.com/r\n\ngo 1.21\n", "pkg/a.go": "package pkg\n" } });
+	const repo = path.join(capsule, "repos", "r");
+	assert.equal(await bashCall({ env: buildEnv(capsule) }, repo, "go test ./pkg/ -count=1"), undefined);
+	assert.equal(await bashCall({ env: buildEnv(capsule) }, repo, "go test ./... -run TestX"), undefined);
+});
+
+test("build blocks a declared single-package full run only literally", async (t) => {
+	const capsule = fixtureRepo(t, {
+		conf: "stack=none\nfull_command=go test -race -count=1 -timeout 30m ./pkg/\n",
+		files: { "pkg/a.go": "package pkg\n" },
+	});
+	const repo = path.join(capsule, "repos", "r");
+	assert.ok((await bashCall({ env: buildEnv(capsule) }, repo, "go test -race -timeout 30m ./pkg/ -count=1"))?.block);
+	assert.equal(await bashCall({ env: buildEnv(capsule) }, repo, "go test ./pkg/ -run TestX"), undefined);
+});
+
+test("build allows a filtered npm run and blocks the bare one", async (t) => {
+	const capsule = fixtureRepo(t, { conf: "stack=none\nfull_command=npm test\n" });
+	const repo = path.join(capsule, "repos", "r");
+	assert.ok((await bashCall({ env: buildEnv(capsule) }, repo, "npm test"))?.block);
+	assert.equal(await bashCall({ env: buildEnv(capsule) }, repo, "npm test -- one.test.ts"), undefined);
+});
+
+test("a non-build step passes a whole-tree run", async (t) => {
+	const capsule = fixtureRepo(t, { conf: "stack=none\nfull_command=go test ./...\n" });
+	const repo = path.join(capsule, "repos", "r");
+	assert.equal(await bashCall({ env: buildEnv(capsule, { PF_STEP: "verification" }) }, repo, "go test ./..."), undefined);
+	assert.equal(await bashCall({ env: buildEnv(capsule, { PF_STEP: "" }) }, repo, "go test ./..."), undefined);
+});
+
+test("the guard fails open without an engine or outside the capsule's repos", async (t) => {
+	const capsule = fixtureRepo(t, { conf: "stack=none\nfull_command=go test ./...\n" });
+	const repo = path.join(capsule, "repos", "r");
+	assert.equal(await bashCall({ env: buildEnv(capsule, { PF_SHARED_DIR: "" }) }, repo, "go test ./..."), undefined);
+	assert.equal(
+		await bashCall({ env: buildEnv(capsule, { PF_SHARED_DIR: path.join(capsule, "missing") }) }, repo, "go test ./..."),
+		undefined,
+	);
+	assert.equal(await bashCall({ env: buildEnv(capsule) }, capsule, "go test ./..."), undefined);
+});
+
+test("the existing background rule still blocks a whole-tree run first", async (t) => {
+	const capsule = fixtureRepo(t, { conf: "stack=none\nfull_command=go test ./...\n" });
+	const r = await bashCall({ env: buildEnv(capsule) }, path.join(capsule, "repos", "r"), "go test ./... &");
+	assert.ok(r && r.block);
+	assert.match(r.reason, /starts a background job/);
+});
+
+test("build reloads the projection when the conf changes", async (t) => {
+	const capsule = fixtureRepo(t, { conf: "stack=none\nfull_command=go test ./...\n" });
+	const repo = path.join(capsule, "repos", "r");
+	assert.ok((await bashCall({ env: buildEnv(capsule) }, repo, "go test ./..."))?.block);
+	fs.writeFileSync(path.join(repo, ".polyforge", "verify-scope.conf"), "stack=none\n# no full command any more\n");
+	assert.equal(await bashCall({ env: buildEnv(capsule) }, repo, "go test ./..."), undefined);
 });
