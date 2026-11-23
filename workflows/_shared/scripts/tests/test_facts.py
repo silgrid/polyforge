@@ -1033,7 +1033,8 @@ class PlanPrefixNormalizeTest(GitCase):
                            {"pi-web/app/page.tsx": "new\n"},
                            prefix_plan("`app/page.tsx` (write)", "`app/docs/page.md` (the row)"))
         code, res = self.plan_conformance(cap)
-        self.assertEqual(code, 0, res["summary"])
+        self.assertEqual(code, 1, res["summary"],
+                         "an unchanged coupled obligation is judged red (conformant())")
         self.assertEqual(res["details"]["unchanged_obligations"], ["app/docs/page.md"])
         self.assertEqual(res["details"]["released"], [])
         cap = self.capsule("prefix-obligation-lapsed", base,
