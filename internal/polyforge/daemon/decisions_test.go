@@ -243,7 +243,7 @@ func TestFeedPersistsAndIsBounded(t *testing.T) {
 		}
 	}
 	// ids never repeat across a reopen, even after pruning
-	g.Ingest("default", evAt(f, "wi_new", "submit_dropped", ""), nil)
+	g.Ingest("default", evAt(g, "wi_new", "submit_dropped", ""), nil)
 	if e := newest(g); e.ID != int64(decisionFeedMax+5+2) {
 		t.Fatalf("next id = %d", e.ID)
 	}
