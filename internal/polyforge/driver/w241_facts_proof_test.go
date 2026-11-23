@@ -18,13 +18,14 @@ func TestW241FactsProofDeclaration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadWorkflowGraph: %v", err)
 	}
-	var build *StepSpec
+	var build StepSpec
+	found := false
 	for _, s := range wf.Steps {
 		if s.ID == "build" {
-			build = s
+			build, found = s, true
 		}
 	}
-	if build == nil {
+	if !found {
 		t.Fatal("develop carries no build step")
 	}
 	if build.FactsProof == nil {
