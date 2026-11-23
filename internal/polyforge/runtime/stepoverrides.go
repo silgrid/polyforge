@@ -376,7 +376,62 @@ func applyAspect(entries map[string]*capsule.StepOverride, ch OverrideChange, se
 // daemon-local pending record (a tier clear then keeps the tombstone the
 // claim's merge applies).
 func applyAspectAt(entries map[string]*capsule.StepOverride, ch OverrideChange, pendingRecord, sealed bool) (bool, *capsule.StepOverride) {
-	return false, nil
+	e := entries[ch.Step]
+	if e == nil {
+		e = &capsule.StepOverride{}
+		entries[ch.Step] = e
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	switch {
+	case ch.Models != nil:
+		if equalCandidates(e.Models, ch.Models) {
+			return false, e
+		}
+		e.Models = append([]string(nil), ch.Models...)
+		e.ModelsBy, e.ModelsAt, e.ModelsCleared = ch.Operator, now, false
+	case ch.ClearModels:
+		if e.Models == nil && (!sealed || e.ModelsCleared) {
+			return false, e
+		}
+		e.Models, e.ModelsBy, e.ModelsAt = nil, ch.Operator, now
+		e.ModelsCleared = sealed
+	case ch.Tier != "":
+		if e.Tier == ch.Tier && !e.TierCleared {
+			return false, e
+		}
+		e.Tier, e.TierBy, e.TierAt, e.TierCleared = ch.Tier, ch.Operator, now, false
+	case ch.ClearTier:
+		if e.Tier == "" && (!sealed || e.TierCleared) {
+			return false, e
+		}
+		e.Tier, e.TierBy, e.TierAt = "", ch.Operator, now
+		e.TierCleared = pendingRecord
+	case ch.Skip != nil:
+		if e.Skip != nil && *e.Skip == *ch.Skip {
+			return false, e
+		}
+		skip := *ch.Skip
+		e.Skip = &skip
+		e.SkipBy, e.SkipAt = ch.Operator, now
+	case ch.Param != nil:
+		if p := e.Params[ch.Param.Name]; p != nil && !p.Cleared && p.Value == ch.Param.Value {
+			return false, e
+		}
+		if e.Params == nil {
+			e.Params = map[string]*capsule.ParamOverride{}
+		}
+		e.Params[ch.Param.Name] = &capsule.ParamOverride{Value: ch.Param.Value, By: ch.Operator, At: now}
+	case ch.ClearParam != "":
+		p := e.Params[ch.ClearParam]
+		if (p == nil && !sealed) || (p != nil && p.Cleared) {
+			return false, e
+		}
+		if e.Params == nil {
+			e.Params = map[string]*capsule.ParamOverride{}
+		}
+		e.Params[ch.ClearParam] = &capsule.ParamOverride{By: ch.Operator, At: now, Cleared: true}
+	}
+	return true, e
 }
 
 // mutateOverlay is the capsule's read-modify-write: exactly one aspect
@@ -410,6 +465,10 @@ func (r *Runtime) tapOverride(wi string, ch OverrideChange, posture string, publ
 		aspect, value = "models", strings.Join(ch.Models, ",")
 	case ch.ClearModels:
 		kind, aspect, value = EventOverrideClear, "models", "cleared"
+	case ch.Tier != "":
+		aspect, value = "tier", ch.Tier
+	case ch.ClearTier:
+		kind, aspect, value = EventOverrideClear, "tier", "cleared"
 	case ch.Skip != nil:
 		aspect, value = "skip", fmt.Sprintf("%v", *ch.Skip)
 		if !*ch.Skip {
@@ -432,6 +491,9 @@ func (r *Runtime) tapOverride(wi string, ch OverrideChange, posture string, publ
 	}
 	if param != "" {
 		body["param"] = param
+	}
+	if ch.Tier != "" {
+		body["tier"] = ch.Tier
 	}
 	r.tap(wi, kind, body)
 }
@@ -673,6 +735,14 @@ func mergePendingMarked(ov capsule.StepOverrides, pending map[string]*capsule.St
 			}
 			a.Models = true
 		}
+		if (p.Tier != "" || p.TierCleared) && pendingAspectApplies(p.TierAt, e.TierAt) {
+			if p.TierCleared {
+				e.Tier, e.TierBy, e.TierAt = "", p.TierBy, p.TierAt
+			} else {
+				e.Tier, e.TierBy, e.TierAt = p.Tier, p.TierBy, p.TierAt
+			}
+			a.Tier = true
+		}
 		if p.Skip != nil && pendingAspectApplies(p.SkipAt, e.SkipAt) {
 			skip := *p.Skip
 			e.Skip, e.SkipBy, e.SkipAt = &skip, p.SkipBy, p.SkipAt
@@ -696,7 +766,7 @@ func mergePendingMarked(ov capsule.StepOverrides, pending map[string]*capsule.St
 			e.Params[name] = &pc
 			a.Params = true
 		}
-		if a.Models || a.Skip || a.Params {
+		if a.Models || a.Tier || a.Skip || a.Params {
 			applied[id] = a
 		}
 	}
