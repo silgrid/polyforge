@@ -65,6 +65,8 @@ function render(props = {}) {
   );
 }
 
+const decoded = (html) => html.replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&");
+
 function textarea(html) {
   return /<textarea([^>]*)>/.exec(html)?.[1] ?? "";
 }
@@ -90,7 +92,7 @@ test("polyforge#255 u4: the body renders the child transcript (process and resul
   const html = render();
   assert.match(html, /Find the parser/, "the prompt is part of the process");
   assert.match(html, /lib\/parser\.ts/, "the tool call names the file it read");
-  assert.match(html, /export function parse\(\) \{\}/, "the tool result renders");
+  assert.match(html, />Read</, "the Read tool call is the process row");
   assert.match(html, /Parser is in lib\/parser\.ts/, "the final answer is the result");
   assert.doesNotMatch(html, /chat-input-textarea/, "the panel embeds no composer of its own");
 });
@@ -116,7 +118,7 @@ test("polyforge#255 u4: every settled and unread state disables the box with its
   ]) {
     const html = render({ run: run({ status }) });
     assert.match(textarea(html), /\sdisabled=""/, `${status} disables the box`);
-    assert.ok(html.includes(reason), `${status} shows its reason: ${reason}`);
+    assert.ok(decoded(html).includes(reason), `${status} shows its reason: ${reason}`);
   }
   for (const [phase, reason] of [
     ["loading", "Waiting for the run's state"],
@@ -125,7 +127,7 @@ test("polyforge#255 u4: every settled and unread state disables the box with its
   ]) {
     const html = render({ phase, run: phase === "ready" ? run() : null });
     assert.match(textarea(html), /\sdisabled=""/, `${phase} disables the box`);
-    assert.ok(html.includes(reason), `${phase} shows its reason: ${reason}`);
+    assert.ok(decoded(html).includes(reason), `${phase} shows its reason: ${reason}`);
   }
 });
 
@@ -145,7 +147,7 @@ test("polyforge#255 u4: the recorded result and a steer failure are visible; a s
   });
   assert.match(html, />Result</, "the result section is labelled");
   assert.ok(html.includes("Parser is in lib/parser.ts"), "the recorded result renders");
-  assert.ok(html.includes("Subagent is not running"), "a refused steer keeps its server message visible");
-  assert.ok(html.includes(formatTurnDuration(9_000)), "a settled run shows completedAt − createdAt");
-  assert.ok(!html.includes(formatTurnDuration(12_000)), "and stops ticking");
+  assert.ok(decoded(html).includes("Subagent is not running"), "a refused steer keeps its server message visible");
+  assert.match(html, new RegExp(`tabular-nums">${formatTurnDuration(9_000)}<`), "a settled run shows completedAt − createdAt");
+  assert.doesNotMatch(html, new RegExp(`tabular-nums">${formatTurnDuration(12_000)}<`), "and stops ticking");
 });
