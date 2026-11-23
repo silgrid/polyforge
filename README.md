@@ -61,20 +61,15 @@ by the installer's `--with-pi-web`, not from npm — see
 
 ## Try it in 30 seconds
 
-Two preconditions make this real: a configured `pf` (an api key against
-your aihub server — see the [user guide](docs/user-guide.md)) and a
-running local daemon:
+The recommended first run is the workstation image: Docker on the host, the
+published image, compose up, and the first boot hands you a working machine
+with a local AIHub, Pi Web and the daemon on it —
+[getting started](docs/getting-started.md) walks it from zero to a first
+submitted work item.
 
-```
-pf daemon ensure
-pf file create --project <project> --bundle develop --goal "Add X"
-pf submit <WI_ID>
-pf watch <WI_ID> --once
-```
-
-`pf file create` prints the new work item's id; `pf submit` asks the
-local daemon to claim it; `pf watch --once` shows one snapshot of the
-run — status, current step and latest events.
+Already running a team's aihub on a host? The
+[host installation](docs/install.md) is one line, and the
+[user guide](docs/user-guide.md) takes you from there to competent daily use.
 
 ## What you get
 
@@ -126,6 +121,8 @@ The three pillars, in features:
 ## Documentation
 
 - 中文导读 (Chinese orientation): [docs/zh.md](docs/zh.md)
+- New to Polyforge? The workstation image mainline from Docker to your first
+  work item: [getting started](docs/getting-started.md)
 - What a term means: [concepts and glossary](docs/concepts.md) — every
   term a newcomer meets, defined once
 - Installing, platforms, upgrading a work machine: [install](docs/install.md)

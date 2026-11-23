@@ -1,5 +1,10 @@
 # Install — platforms, the one-liner, upgrades
 
+**Host installation.** This page is the host-installed path — a `pf` binary on
+your own machine, for a machine joining an existing team and for macOS. A
+workstation image already carries the whole machine; newcomers on the image
+start at [getting started](getting-started.md) instead.
+
 The ops page of the work-machine install: the platform support
 matrix, the one-line install and what an upgrade does. The two
 Quickstarts — [developers](quickstart-developers.md),
