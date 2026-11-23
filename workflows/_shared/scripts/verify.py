@@ -524,12 +524,10 @@ class Verification:
         self.protected: List[str] = []
         self.boxes: List[container.Box] = []
         # polyforge#253: the grouped bar's own state — the shared log
-        # counter's lock, the progress stream's lock, the group containers
-        # (removed when the bar ends) and why the run is not judged (a
-        # group's container could not be had or was lost)
+        # counter's lock, the progress stream's lock and why the run is not
+        # judged (a group's container could not be had or was lost)
         self.log_mu = threading.Lock()
         self.say_mu = threading.Lock()
-        self.group_boxes: List[container.Box] = []
         self.bar_incomplete = ""
         self.interrupted = False
 
@@ -1009,7 +1007,6 @@ class Verification:
                           " run" % (rr.name, err.ref, container.IMAGE_MISSING_MARK))
         except container.BoxError as err:
             return None, "repos/%s: the verification container could not be prepared: %s" % (rr.name, err)
-        self.group_boxes.append(box)
         return box, ""
 
     def unmet(self, c: EngineCommand, rr: RepoRun, box: Optional[container.Box] = None) -> str:
