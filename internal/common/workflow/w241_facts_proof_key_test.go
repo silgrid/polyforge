@@ -91,7 +91,7 @@ func TestW241FactsProofRegistry(t *testing.T) {
 		t.Fatal(err)
 	}
 	schema := string(raw)
-	for _, want := range []string{`"facts_proof"`, `"artifacts`} {
+	for _, want := range []string{`"facts_proof"`, `\{repo\}`} {
 		if !strings.Contains(schema, want) {
 			t.Errorf("the lane schema carries no %q", want)
 		}
