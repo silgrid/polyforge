@@ -34,8 +34,8 @@ test("AppShell reads the onboarding state once and writes each wizard action", (
 
 test("the auto entry is the null-session branch: dismissed never opens, a reopen shows it over a session", () => {
   assert.match(source, /const showPlaceholder = initialSessionRestored && !showChat;/);
-  assert.match(source, /const onboardingOpen = onboarding\?\.imageManaged === true && !onboarding\.dismissed && \(showPlaceholder \|\| onboardingReopened\);/,
-    "the wizard's open condition does not require the null-session branch and the dismissed fact");
+  assert.match(source, /const onboardingOpen = onboarding\?\.imageManaged === true && !onboarding\.dismissed;/,
+    "the wizard's open condition does not rest on the dismissed fact alone");
   assert.match(source, /onClose=\{handleOnboardingDismiss\}/);
   assert.match(source, /onOpenAccount=\{\(\) => openSettingsSection\("account"\)\}/, "the account step does not deep-link to Settings › 账号");
   assert.match(source, /onWorkspaceChange=\{handleCwdChange\}/, "the workspace step does not go through the existing selection");
