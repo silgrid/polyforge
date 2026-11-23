@@ -53,13 +53,29 @@ definition's judgment.
    deadline: wait one minute and run that line again, at most twice; still 2 — hand off
    `blocked`, the summary and the log's tail in the body.
 2. **Class the facts** (the judgment's items name each class):
+
+**The hand-off gate's subset.** The deterministic items the build's `done` gate already
+judges (`facts_proof`, polyforge#241) are not, on their own, a blocking finding here: a
+unit's test-first commits or its replay not red at the test commit, a skip or a changed
+`carries:` header with no cited finding, an e2e suite without a matching `carries:`, a
+listed analysis test that does not exist, an existing test changed outside the plan's
+write set, an undeclared write, an unchanged coupled obligation, an unmapped decided
+ruling. Recompute them — the gate only reads build's file, and a fresh recomputation is the
+only way to catch a bypass — record each hit as non-blocking and name it "the hand-off gate
+should have refused this"; it fails the review only beside a hit of another class. A hit
+the gate's `facts_proof` result did not carry at the judged HEAD is not that: the gate was
+bypassed or its result forged, which is blocking `guarantee`, naming the item. The semantic
+items around this subset — a relaxed assertion, a weakened helper or input, a fixed-delay
+e2e, a missing test-quality record, a document left stale — stay as classed above and block
+on their own.
    - `build.json`: a unit that does not resolve, whose `commits` names a test-first problem,
      or whose `replay` is not red (it exited 0 on the tree of its `test_commit`: the test
-     passes on the code before its implementation) is blocking `test_weakened`, naming the
-     unit; read every `test_weakened[]` hunk against build's 关键决定和理由. The resolution and commits facts are
+     passes on the code before its implementation) is in the hand-off gate's subset above —
+     non-blocking when its proof stood, blocking `guarantee` when the gate was bypassed;
+     name the unit; read every `test_weakened[]` hunk against build's 关键决定和理由. The resolution and commits facts are
      static — the same ones build's close ran without the replay (`facts.py build`) — and
-     they block in every round, an owner message that explicitly accepts the finding
-     excepted.
+     they follow the hand-off gate's subset above: non-blocking when its proof stood,
+     blocking `guarantee` when the gate was bypassed.
      A unit declared `pre_existing_red` (its reproduction test already exists and is red
      before the change) carries no `test_commit`: its `replay` runs on the tree of the
      change's base, and red there is its red evidence — a replay that exited 0 there (the
@@ -68,23 +84,21 @@ definition's judgment.
      `replay` carries `not_runnable` has no red evidence: its run could not run on the tree
      of its `test_commit` (a build, setup, compile or import error, a missing module or
      package — `[setup failed]`, `ERR_MODULE_NOT_FOUND` — the matched line and its `rule`
-     are in it), so it is neither red nor a pass. It is blocking `test_weakened`, naming the
+     are in it), so it is neither red nor a pass. It is in the same subset, naming the
      unit and its `rule`; reading the code by hand never stands in for the missing red. The
      fix is build's: a test that runs on the replay tree (a project declares the preparation
      such a tree needs as `base_setup=` in `.polyforge/verify-scope.conf`, and the replay
      runs it). It is the result's exit 1, a fact to class, never the exit 2 retried above.
      A unit whose `replay` was killed at its own limit (`limit_kill`) has no red evidence
-     either — its red-state run did not exit non-zero within its limit — and is blocking
-     `test_weakened` the same way: the fix is build's (a bounded wait, an assertion that
+     either — its red-state run did not exit non-zero within its limit — and is in the
+     same subset the same way: the fix is build's (a bounded wait, an assertion that
      fails at once, or the unit self-reports a higher `timeout` in units.json).
-   - `carries.json`: each `problems` entry is blocking `test_weakened`, in every round
-     (the same conclusion build's close reached) — an owner message that explicitly
-     accepts the finding excepted.
-   - `analysis.json`: every entry problem is a blocking `test_weakened` finding, naming the
-     entry and the rule it violates — a listed test that does not exist, a run that cannot
-     run as written, or one whose run does not show its marker. This fact red is never
-     classed away: the lane goes back to `build` — the build was told to fix it before
-     handing off.
+   - `carries.json`: each `problems` entry is in the hand-off gate's subset above — the
+     same conclusion build's close reached, non-blocking when its proof stood and blocking
+     `guarantee` when the gate was bypassed.
+   - `analysis.json`: every entry problem is in the hand-off gate's subset above — a listed
+     test that does not exist, a run that cannot run as written, or one whose run does not
+     show its marker — naming the entry and the rule it violates; the fix stays build's.
    - `plan-conformance.json`: `undeclared` and `unchanged_obligations` entries are facts,
      blocking only inside a class.
    - The owner's words: the messages quoted in build's section headers (and
@@ -116,12 +130,13 @@ and its section). Run two faces over the current tree:
   none of what it brought in is the fix.
 
 From the second round on, a blocking finding is one of: a residual; a new defect on the fix
-surface; a `bug` anywhere in the change; a `project_rule` violation anywhere; and — in
-every round, never downgraded as a hit outside the fix surface — the two static facts
-reds: a unit that does not resolve or whose `commits` names a test-first problem, and
-a carries problem. These two are the same static facts build's close runs without the
-replay, so a red here is a red handed off on; only an owner message that explicitly
-accepts the finding is an exception to them. Every other hit is non-blocking. An owner
+surface; a `bug` anywhere in the change; a `project_rule` violation anywhere; and the two
+static facts reds — a unit that does not resolve or whose `commits` names a test-first
+problem, and a carries problem — when the hand-off gate's `facts_proof` result did not
+carry them (the gate was bypassed or its result forged: blocking `guarantee`). These two are
+the same static facts build's close runs without the replay; when the gate's proof stood
+they are non-blocking, recorded as "the hand-off gate should have refused this". Every other
+hit is non-blocking. An owner
 message quoted in a header that settles a finding (rules it moot, or accepts it) is not
 re-raised: cite it.
 

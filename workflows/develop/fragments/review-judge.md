@@ -62,6 +62,21 @@
    recorded one, not a missing symbol's or a typo's; and a test, of any kind, that breaks
    the bar's settle duty (an asynchronously settling state asserted on one read right
    after the action, or a race fixed by a relaxed or "at least" assertion).
+**The hand-off gate's subset.** The deterministic items the build's `done` gate already
+judges (`facts_proof`, polyforge#241) are not, on their own, a blocking finding here: a
+unit's test-first commits or its replay not red at the test commit, a skip or a changed
+`carries:` header with no cited finding, an e2e suite without a matching `carries:`, a
+listed analysis test that does not exist, an existing test changed outside the plan's
+write set, an undeclared write, an unchanged coupled obligation, an unmapped decided
+ruling. Recompute them — the gate only reads build's file, and a fresh recomputation is the
+only way to catch a bypass — record each hit as non-blocking and name it "the hand-off gate
+should have refused this"; it fails the review only beside a hit of another class. A hit
+the gate's `facts_proof` result did not carry at the judged HEAD is not that: the gate was
+bypassed or its result forged, which is blocking `guarantee`, naming the item. The semantic
+items around this subset — a relaxed assertion, a weakened helper or input, a fixed-delay
+e2e, a missing test-quality record, a document left stale — stay as classed above and block
+on their own.
+
 4. **e2e quality (`test_weakened`).** Read every e2e suite the diff adds or changes.
    Blocking `test_weakened`: a scenario synchronised by a fixed delay instead of
    polling the condition it awaits (a bounded poll deadline is fine); one that asserts

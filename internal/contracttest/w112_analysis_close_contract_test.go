@@ -31,7 +31,7 @@ func TestW112AnalysisCloseTextContract(t *testing.T) {
 		},
 		"workflows/_shared/skills/review.md": {
 			line,
-			"This fact red is never classed away: the lane goes back to `build`",
+			"every entry problem is in the hand-off gate's subset above",
 			"naming the entry and the rule it violates",
 			"`artifacts/facts/analysis.json`",
 		},
