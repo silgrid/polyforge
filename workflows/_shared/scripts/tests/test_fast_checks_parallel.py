@@ -279,14 +279,18 @@ class HostSemanticsTest(ParallelCase):
         """r2#2: a failing unit in one group's command is re-run once by the
         check itself in the parallel plan too, recorded flaky, and the whole
         command confirmed — the serial plan's record exactly."""
-        self.two_root_repo(files={"app/app_test.go": FLAKY_GATE_TEST})
+        self.two_root_repo(
+            conf=("stack=go\n"
+                  "fast_gate=%s\n"
+                  "fast_gate=GOWORK=off go test -count=1 ./app\n") % gate(self.events, "A1"),
+            nested_conf=self.nested_conf, files={"app/app_test.go": FLAKY_GATE_TEST})
         code, parallel = self.run_checks(out=os.path.join(self.capsule, "parallel.json"))
         self.assertEqual(code, 0, parallel.get("summary"))
         self.clear_flaky_marker()
         code, serial = self.run_checks(("--parallel", "1"), out=os.path.join(self.capsule, "serial.json"))
         self.assertEqual(code, 0, serial.get("summary"))
         for res in (parallel, serial):
-            scoped = [c for c in self.commands_of(res) if c["phase"] == "scoped"]
+            scoped = [c for c in self.commands_of(res) if "go test" in c["cmd"]]
             self.assertEqual(len(scoped), 1, res.get("summary"))
             self.assertNotEqual(scoped[0]["exit_code"], 0, "the first run failed")
             u = scoped[0]["units"][0]
@@ -303,19 +307,25 @@ class HostSemanticsTest(ParallelCase):
         change's baseline in the parallel plan too — the same signature
         there records pre-existing and the command turns green in its skip
         form, exactly as the serial plan."""
-        self.two_root_repo(files={"app/app_test.go": ALWAYS_RED_TEST})
+        self.two_root_repo(
+            conf=("stack=go\n"
+                  "fast_gate=%s\n"
+                  "fast_gate=GOWORK=off go test -count=1 ./app\n") % gate(self.events, "A1"),
+            nested_conf=self.nested_conf, files={"app/app_test.go": ALWAYS_RED_TEST})
         code, parallel = self.run_checks(out=os.path.join(self.capsule, "parallel.json"))
         self.assertEqual(code, 0, parallel.get("summary"))
         code, serial = self.run_checks(("--parallel", "1"), out=os.path.join(self.capsule, "serial.json"))
         self.assertEqual(code, 0, serial.get("summary"))
         for res in (parallel, serial):
-            scoped = [c for c in self.commands_of(res) if c["phase"] == "scoped"]
+            scoped = [c for c in self.commands_of(res) if "go test" in c["cmd"]]
+            self.assertEqual(len(scoped), 1, res.get("summary"))
             u = scoped[0]["units"][0]
             self.assertEqual(u["status"], "pre_existing")
             self.assertEqual(u["class"], "pre_existing")
             self.assertIn("fails the same way on all 1 base runs", u["detail"])
             self.assertIn("-skip", scoped[0]["confirmed"])
-        self.assertEqual(serial["details"]["reds"], [])
+            self.assertEqual([r["class"] for r in res["details"]["reds"]], ["pre_existing"],
+                             "every still-red unit is pre-existing; the run stays green")
 
     def test_heads_and_reds_are_the_serial_ones(self) -> None:
         """The same tree and plan: the serial and the parallel run record
