@@ -694,17 +694,74 @@ def _unknown_reason(verdicts, last_round, owner_msgs, still_open=False):
 
 
 def chain_findings(cap, versions):
-    """Scaﬀold for the u2 re-cut: every chain is unknown for the moment."""
-    out = []
-    stamps = {s['round']: s for s in review_stamps(cap)}
+    """The blocker chains of one capsule: one entry per chain, with its
+    class, model, final outcome and the rounds it spans. Only a
+    disposition line (see `_dispositions`) sets an outcome; an item line
+    links the earlier items it names (association only)."""
+    nodes, parent = {}, {}
     for v in versions:
-        items = v['items'] if 'items' in v else parse_blocking_items(v['text'], v['round'])
-        for it in items:
-            out.append({'capsule': os.path.basename(cap), 'first_round': v['round'],
-                        'last_round': v['round'], 'item': it['item'], 'class': it['class'],
-                        'model': (stamps.get(v['round']) or {}).get('model') or 'unknown',
-                        'outcome': 'unknown', 'reason': 'no later round',
-                        'rounds': [v['round']], 'evidence': ''})
+        for it in v['items']:
+            key = (v['round'], it['item'])
+            if key in nodes:
+                continue
+            nodes[key] = {'round': v['round'], 'item': it['item'], 'class': it['class'],
+                          'label': it['label']}
+            parent[key] = key
+    if not nodes:
+        return []
+    verdicts = {v['round']: v['verdict'] for v in versions}
+    stamps = {s['round']: s for s in review_stamps(cap)}
+    owner_msgs = owner_messages(cap)
+    events = []
+    for v in versions:
+        for line in v['text'].split('\n'):
+            label = _item_label(line)
+            num, ref_round = _item_number(label, None)
+            enc = (v['round'], num) if (
+                num is not None and (ref_round is None or ref_round == v['round'])
+                and (v['round'], num) in nodes) else None
+            if enc:
+                for m in BLOCK_REF.finditer(label):
+                    ref = (int(m.group(1)), int(m.group(2)))
+                    if ref in nodes and ref != enc:
+                        _union(parent, enc, ref)
+            for ref, status in _dispositions(line):
+                if ref not in nodes:
+                    continue
+                oc = outcome_of_line(status)
+                if oc:
+                    events.append((v['round'], ref, oc, line.strip()))
+                for m in BLOCK_THIS_ROUND.finditer(status):
+                    other = (v['round'], int(m.group(1)))
+                    if other in nodes:
+                        _union(parent, ref, other)
+    for rnd, item, at, text in owner_rulings(cap):
+        if (rnd, item) in nodes:
+            events.append((rnd + 0.5, (rnd, item), 'owner', text))
+    chains = {}
+    for key in nodes:
+        chains.setdefault(_find(parent, key), []).append(key)
+    out = []
+    for root, keys in chains.items():
+        keys.sort()
+        first = keys[0]
+        rel = [e for e in events if _find(parent, e[1]) == root]
+        rel.sort(key=lambda e: e[0])
+        if rel:
+            last_round, _, oc, evidence = rel[-1]
+            if oc == 'still-open':
+                outcome, reason = _unknown_reason(verdicts, last_round, owner_msgs, still_open=True)
+            else:
+                outcome, reason = oc, ''
+        else:
+            evidence = ''
+            outcome, reason = _unknown_reason(verdicts, max(k[0] for k in keys), owner_msgs)
+        model = (stamps.get(first[0]) or {}).get('model') or 'unknown'
+        out.append({'capsule': os.path.basename(cap), 'first_round': first[0],
+                    'last_round': max(k[0] for k in keys), 'item': nodes[first]['item'],
+                    'class': nodes[first]['class'], 'model': model, 'outcome': outcome,
+                    'reason': reason, 'rounds': sorted({k[0] for k in keys}),
+                    'evidence': evidence})
     return out
 
 
