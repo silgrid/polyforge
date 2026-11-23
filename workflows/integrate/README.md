@@ -114,6 +114,11 @@ integration_batch`). What a later step's command needs travels in files, never i
   `--mark-green` and `--keep-going` (the gate runs every command, never
   stopping at the first failing one, so one red batch records every failing
   command and none is left `not_run`), so a pass writes the green tag itself.
+  A repo that declares parallel groups in its `.polyforge/verify-scope.conf`
+  runs them side by side, each group in plan order in its own container:
+  the progress lines of two groups interleave (read a command's start and
+  its PASS/FAIL by its `[i/n]` prefix, never by adjacency), while the
+  result and the summary stay in plan order.
   A gated repo needs only `.polyforge/verify-scope.conf` and
   `.polyforge/Dockerfile.verify` (or, when the full-gate step's `image`
   parameter names a prepared image, no Dockerfile at all): the scope engine and the gate id each

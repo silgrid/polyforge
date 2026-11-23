@@ -708,7 +708,13 @@ before any container starts. Any other value is a named error before any
 container or check starts (exit 2, the fixed mark `pf-audit-param-invalid`
 in the summary). The container's
 limits are the script's flags (`--cpus` / `--memory` / `--pids`, default
-min(8, cores) / `16g` / 4096; design r2 D7).
+min(8, cores) / `16g` / 4096; design r2 D7). `--parallel <N>` is the full
+gate's parallelism, overriding the repository's declared `full_parallel`
+(polyforge#244): a positive integer, `1` running the plan serially — the
+parallel comparison's serial baseline and the manual override; any other
+value is a usage error before any container starts. A repository that
+declares no group runs serially whatever the flag says, and the plan a run
+records names the parallelism it ran at.
 
 - On the clone at the working directory (the release's run): progress and,
   with `--mark-green --summary <text>`, the green tag's name on stdout;

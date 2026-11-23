@@ -520,7 +520,12 @@ and the release:
   (the `<hash>` half of the tag — with a prepared image, its local ID),
   the container's cpus / memory / pids and
   every command in order with its name, phase, command line, declared
-  `requires_env` / `requires_cmd` and the timeout it runs under; the
+  `requires_env` / `requires_cmd` and the timeout it runs under; a
+  repository that declares full-gate groups (polyforge#244) records each
+  bound command's group and the parallelism the gate ran at — the plan
+  digest moves with them, only when a group is declared, so a repository
+  that declares none keeps its digest (and the green tags it already
+  carries) byte for byte, and the gate id is untouched either way; the
   clone's own path inside a command line (the engine's appended audit names
   it) reads `<clone>`, so where a clone lives never changes the digest; on
   the lane's engine the snapshot's engine directory (the appended audit
