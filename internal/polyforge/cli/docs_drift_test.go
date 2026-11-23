@@ -35,6 +35,7 @@ var docsSetPages = []string{
 	"docs/install.md",
 	"docs/quickstart-developers.md",
 	"docs/quickstart-macos.md",
+	"docs/getting-started.md",
 	"docs/extending.md",
 	"docs/bundles.md",
 	"docs/architecture.md",
