@@ -124,6 +124,7 @@ process runs.
 | `hub` | `{verbs, attrs}` ([hub keys](#hub-keys)): what this step may call through `pf step hub`; default none |
 | `wrap_attrs` | the wrap attrs this step registers, a list of names (`^[a-z][a-z0-9_]{0,63}$`), each at most once; default none (`WFC-112`). Its round's `pf step handoff --status done` is refused until each was registered with `pf step hub wrap-attrs <name> @<file>`, so a record the wrap must carry cannot be forgotten; listing one grants the step `wrap-attrs`. When the steps at the lane's end are skipped (`skippable` steps a project switched off), their `wrap_attrs` pass to the last step that runs: it is granted `wrap-attrs` and its done is refused until it registered them |
 | `fast_check_proof` | `{result, command}` ([fast_check_proof keys](#fast_check_proof-keys)); default none. The step's `done` is refused unless every task repo whose HEAD it moved has a `pf-step-result/1` result at `result` (with `{repo}` replaced by the repo's name) whose `verdict` is `pass` and whose `heads` carries that repo at its current HEAD; a repo at its round's start commit, and a fast-forward (no commit on HEAD that no remote-tracking ref carries), needs none, a start commit the round did not record needs the result like a changed repo. The daemon only reads the file; the refusal names the repo, the failing check and the line `command` writes. A red the change did not cause — the default branch already red, an `error`/`partial` result, or a lane that planned no check — is the owner's: `pf step ask`, and on the release hand off `done` with `--per-owner <the reply's at>`; the section's header records it (the same release a spent rewind budget gives a gate's `fail`) |
+| `facts_proof` | `{result, command}` ([facts_proof keys](#facts_proof-keys)); default none. The step's `done` is refused unless every task repo whose HEAD it moved has a `pf-step-result/1` result at `result` (with `{repo}` replaced by the repo's name) whose `verdict` is `pass` and whose `heads` carries that repo at its current HEAD — the mechanical facts summary `facts.py handoff` writes (polyforge#241). The same exemptions as `fast_check_proof` apply (an unchanged repo, a fast-forward, a round start the record does not carry), the refusal names every hit the result carries beside the result file (each hit one line, the tail clipped and named), and `--per-owner` releases a red the change did not cause |
 
 ### fast_check_proof keys
 
@@ -131,6 +132,13 @@ process runs.
 |---|---|
 | `result` | string, required, the `pf-step-result/1` file's path relative to the capsule, carrying `{repo}` (`WFC-112` otherwise: absolute, a `..` segment, or no `{repo}` is refused): `<repo>` is the task repo's name under `repos/` |
 | `command` | string, required, one line carrying `{repo}` (`WFC-112` otherwise: empty, more than one line, or no `{repo}` is refused): the command a refusal quotes, so the step re-runs the check and hands off again |
+
+### facts_proof keys
+
+| Key | Rule |
+|---|---|
+| `result` | string, required, the `pf-step-result/1` file's path relative to the capsule, carrying `{repo}` (`WFC-112` otherwise: absolute, a `..` segment, or no `{repo}` is refused): `<repo>` is the task repo's name under `repos/` |
+| `command` | string, required, one line carrying `{repo}` (`WFC-112` otherwise: empty, more than one line, or no `{repo}` is refused): the command a refusal quotes, so the step re-runs the mechanical facts summary and hands off again |
 
 ### on_fail keys
 
@@ -621,6 +629,17 @@ are wrong exits non-zero at once, naming why. The command's flags are
   the reason falls in it, else `max_rewinds` — a `fail` without
   `--per-owner` is refused: ask the owner first
   (`pf step ask`) — so no work item parks on a spent budget;
+- a `done` from a step whose lane declares `facts_proof` is refused
+  unless every task repo its round moved has a `pf-step-result/1` result at
+  the declared path (verdict `pass`, `heads` carrying that repo at its
+  HEAD) — the mechanical facts summary `facts.py handoff` writes: the
+  deterministic items (a unit's commits and red-state replay, an undeclared
+  write, an unchanged coupled obligation, an unmapped decided ruling, an e2e
+  suite without `carries:`, a listed test that does not exist, a skip or a
+  `carries:` change after the test commit, and an existing test changed
+  outside the plan's write set) refuse the hand-off and are returned one
+  line each; the same exemptions as `fast_check_proof` apply, and
+  `--per-owner` releases a red the change did not cause;
 - a `done` from a step whose lane declares `fast_check_proof` is refused
   unless every task repo its round moved has a `pf-step-result/1` result at
   the declared path (verdict `pass`, `heads` carrying that repo at its

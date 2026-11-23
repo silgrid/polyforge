@@ -199,7 +199,9 @@ class WeakenedTest(GitCase):
             "a deleted assertion": (WEAK_TEST.replace('\t\tt.Fatal("Answer must be 42")\n', "", 1), "1 of them assertion-looking", "", False),
             "a relaxed assertion": (WEAK_TEST.replace("!= 42", "< 0", 1), "deletes or changes 1 line(s)", "", False),
             "an added skip": (WEAK_TEST.replace("func TestAnswer(t *testing.T) {\n", "func TestAnswer(t *testing.T) {\n\tt.Skip(\"later\")\n", 1), "adds a skip", "", False),
-            "a changed carries header": (WEAK_TEST.replace("// carries: app.go", "// carries: nothing.go", 1), "changes the `carries:` header", "", False),
+            # a Go test file outside the harness directory is no suite: its
+            # carries comment is a semantic hunk, never D5's marker (polyforge#241 r2 N15)
+            "a changed carries comment": (WEAK_TEST.replace("// carries: app.go", "// carries: nothing.go", 1), "deletes or changes 1 line(s)", "", False),
             "a change the summary cites": (WEAK_TEST.replace("!= 42", "!= 43", 1), "deletes or changes", "app_test.go fixed per review s4#2 (the expected value was wrong)", True),
             "a citation naming no file": (WEAK_TEST.replace("!= 42", "!= 43", 1), "deletes or changes", "fixed per review s4#2", False),
             "a file named without a ref": (WEAK_TEST.replace("!= 42", "!= 43", 1), "deletes or changes", "changed app_test.go", False),
@@ -223,6 +225,26 @@ class WeakenedTest(GitCase):
                     self.assertIn(reason, f["reason"])
                     self.assertEqual((f["path"], f["unit"]), ("app_test.go", "u1"))
                     self.assertIn("@@", f["hunk"])
+
+
+    def test_a_suite_carries_header_change(self) -> None:
+        # an e2e suite's carries: header is its selection declaration: a
+        # change with no cited finding is D5's marker (polyforge#241)
+        base = os.path.join(self.tmp, "suite%d" % len(os.listdir(self.tmp)))
+        r = Repo(os.path.join(base, "repos", "app"), {
+            "app.go": "package app\n",
+            "web/.polyforge/verify-scope.conf": "stack=npm\n",
+            "web/package.json": '{"scripts":{}}\n',
+            "web/e2e/run.mjs": "// carries: lib/run*\nimport 'node:assert';\n",
+        })
+        r.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        tc = r.commit("u1: test", {"web/e2e/run.mjs": "// carries: lib/run*\nimport 'node:assert';\n\n// edit\n"})
+        ic = r.commit("u1: impl", {"app.go": "package app\n\nvar X = 1\n"})
+        units = facts.units_of(os.path.dirname(r.dir), ["app"], [{"id": "u1", "test_commit": tc, "impl_commit": ic, "run": None, "marker": ""}])
+        r.commit("later", {"web/e2e/run.mjs": "// carries: lib/panel*\nimport 'node:assert';\n\n// edit\n"})
+        weakened, _ = facts.weakened_facts(os.path.dirname(r.dir), units, "")
+        reasons = " ".join(f["reason"] for f in weakened)
+        self.assertIn("changes the `carries:` header", reasons)
 
 
 CONFORMANCE_PLAN = json.loads('''{"touched_files":[

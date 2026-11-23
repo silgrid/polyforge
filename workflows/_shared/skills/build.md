@@ -215,6 +215,15 @@ record exactly what ran.
    line, `facts.py analysis` — the same shared validator `verification` calls; its red names
    the entry and the rule it violates, and the close check must be green before the hand-off.
 
+   Then run the mechanical facts gate once per touched repo — the line the lane's `facts_proof`
+declares, the summary `review` recomputes, over the final tree:
+   `"$PF_PYTHON" "$PF_SHARED_DIR/scripts/facts.py" handoff --json --out artifacts/build/handoff-facts/<repo>.json`
+   Exit 1 names the deterministic item the build must fix — a unit's commits or red-state replay,
+   an undeclared write, an existing test outside the plan's write set, an e2e suite without
+   `carries:`, a listed test that does not exist, a skip after the test commit — and `done` is
+   refused until it is green; a sub-item it could not judge (exit 2) is recorded in
+   `details.not_judged` and is no hit, except `carries`, whose exit 2 stays no pass.
+
 ## 交接要写什么 — what your hand-off carries
 
 - **Status.** `done` only on a green build: every unit red then green, the fast checks and
