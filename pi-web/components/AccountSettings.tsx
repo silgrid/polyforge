@@ -271,6 +271,19 @@ export function CredentialWriteResults({ results }: { results: { target: string;
   );
 }
 
+/** The account read's state (polyforge#256 B3) — signatures first. */
+export interface AccountReadState {
+  read: AccountRead | null;
+  loading: boolean;
+  readError: string | null;
+  capabilities: Record<string, AccountHarnessCap>;
+  load: () => void;
+}
+
+export function useAccountRead(): AccountReadState {
+  return { read: null, loading: false, readError: null, capabilities: {}, load: () => {} };
+}
+
 /** The shell: the two panes over the route's read, plus the one-shot login
  * terminal (Q5) a declared login command opens. */
 export function AccountSettings({ embedded = true }: { embedded?: boolean }) {
