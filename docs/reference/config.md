@@ -1037,7 +1037,7 @@ steps:
       params: { <name>: <value> }   # one value per param the step's lane declares
 ```
 
-For develop `build`, the daemon-owned pi worker switch is `pi_subagents`: `on` enables the worker path; empty or `off` keeps the main-agent path; other values are refused.
+For develop `build`, the daemon-owned pi worker switch is `pi_subagents`: `on` enables the worker path only when that dispatch's startup checks pass — every built-in step-agent resource (the guard included) and the pi capability probe (version, required flags, the real extension load and subagent tool registration, under one 10-second budget); empty or `off` keeps the main-agent path and probes nothing; any other value is refused at that dispatch with `pi_subagents_invalid`, and so is an `on` dispatch whose check fails, with its class — `pi_resources` for the built-in resources, else `pi_version`, `pi_flag`, `pi_api`, `pi_tool_registration` or `pi_timeout`.
 
 A lane step may declare `params` in its workflow.yaml — each parameter
 name (`^[a-z][a-z0-9_]{0,63}$`) to its lane default

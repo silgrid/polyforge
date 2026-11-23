@@ -4,6 +4,7 @@ package spawn
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -52,6 +53,15 @@ type Params struct {
 	// exported as EnvParamName(name) each; nil = the step declares none.
 	Params  map[string]string
 	Journal func(pid int, startedAt string) error
+	// FinalPrompt, when set, builds the initial prompt AFTER the runtime
+	// has verified this dispatch's pi capability (polyforge#227): the
+	// runtime parses the switch, validates the built-in resources and runs
+	// the compatibility probe, then calls it exactly once with the verified
+	// capability and uses its answer as the process's initial prompt. The
+	// driver sets it for a pi step that carries the sub-agent rules, so the
+	// prompt's sub-agent fact and the runtime's gate are one judgment; a
+	// direct Spawn without it still runs the same gate.
+	FinalPrompt func(Capability) (string, error)
 	// OnRecord, when set, receives every raw stdout record line the
 	// process emits (the harness translator's input). It runs on the
 	// stdout reader: it must be cheap and must never block.
@@ -183,6 +193,43 @@ const (
 	EnvDeployEnv   = "PF_DEPLOY_ENV"
 	EnvCellTargets = "PF_CELL_TARGETS"
 )
+
+// Capability is the verified capability profile of one pi dispatch: what
+// the runtime's startup gate proved about this derivation, handed to
+// Params.FinalPrompt so the prompt states it and the gate enforces it from
+// the same answer.
+type Capability struct {
+	// PiSubagents: the pi sub-agent worker may be used by this dispatch —
+	// pi_subagents is on AND the built-in resources and the pi capability
+	// probe both passed.
+	PiSubagents bool
+}
+
+// InvalidPiSubagentsError is the switch's one parse rule: the value is
+// neither empty, off nor on. It is refused before any probe or dispatch.
+type InvalidPiSubagentsError struct {
+	Value string
+}
+
+func (e *InvalidPiSubagentsError) Error() string {
+	return fmt.Sprintf("pi_subagents %q is invalid: want on or off", e.Value)
+}
+
+// PiSubagents parses the pi sub-agent switch (owner ruling 2026-11-22 Q1):
+// empty and off disable it, on enables it (trimmed and case-insensitive);
+// anything else is InvalidPiSubagentsError. One parser, used by the driver
+// and the runtime alike.
+func PiSubagents(params map[string]string) (bool, error) {
+	value := strings.TrimSpace(params["pi_subagents"])
+	switch {
+	case value == "", strings.EqualFold(value, "off"):
+		return false, nil
+	case strings.EqualFold(value, "on"):
+		return true, nil
+	default:
+		return false, &InvalidPiSubagentsError{Value: value}
+	}
+}
 
 // EnvParamPrefix starts the name a step param reaches the step process
 // under (polyforge#78): EnvParamName.

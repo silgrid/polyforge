@@ -165,10 +165,9 @@ func (a *StepSpawnAdapter) SpawnStep(ctx context.Context, sp StepSpawn) (StepRun
 		parts.Skill = renderSkill(sk)
 	}
 	h := harness.Of(sp.Harness)
-	if value := strings.TrimSpace(sp.Params["pi_subagents"]); value != "" && !strings.EqualFold(value, "on") && !strings.EqualFold(value, "off") {
-		return nil, fmt.Errorf("driver: invalid pi_subagents value %q (want on or off)", value)
+	if _, err := spawn.PiSubagents(sp.Params); err != nil {
+		return nil, fmt.Errorf("driver: %w", err)
 	}
-	parts.NoSubagents = subagentsFact(a.BundleDir, sp.StepID, h, sp.Params)
 	var transcript, hsession string
 	resume := sp.Resume
 	// degraded names why a resume the driver ordered became a new
@@ -318,25 +317,21 @@ const piNoSubagents = "This dispatch runs on pi with the daemon-owned worker ava
 	"keep the current main-agent path, do the analysis and build every unit yourself, record each unit's " +
 	"implemented_by as main, and do not dispatch a sub-agent."
 
-// subagentsFact answers the sub-agent fact of one dispatch: piNoSubagents
-// on a pi dispatch of a step whose definition includes the sub-agent
-// rules, else "".
-func subagentsFact(bundleDir, stepID, h string, params map[string]string) string {
-	if h != harness.Pi {
-		return ""
-	}
+// stepUsesSubagentsRules answers whether the step's definition includes the
+// sub-agent rules fragment.
+func stepUsesSubagentsRules(bundleDir, stepID string) bool {
 	raw, err := os.ReadFile(workflow.StepDefinitionPath(bundleDir, stepID))
-	if err != nil || !strings.Contains(string(raw), "{{"+subagentsRulesVar+"}}") {
-		return ""
-	}
-	if piSubagentsEnabled(params) {
+	return err == nil && strings.Contains(string(raw), "{{"+subagentsRulesVar+"}}")
+}
+
+// subagentsFact answers the sub-agent fact of one dispatch from the
+// capability the runtime VERIFIED (owner ruling Q3), never from the
+// parameter: the two judges are one judgment.
+func subagentsFact(capability spawn.Capability) string {
+	if capability.PiSubagents {
 		return ""
 	}
 	return piNoSubagents
-}
-
-func piSubagentsEnabled(params map[string]string) bool {
-	return strings.EqualFold(strings.TrimSpace(params["pi_subagents"]), "on")
 }
 
 // launch derives the step process for an assembled prompt: the dispatch's
@@ -358,6 +353,26 @@ func (a *StepSpawnAdapter) launch(ctx context.Context, sp StepSpawn, parts promp
 		hsession = id
 	}
 	translator, sink := a.newTranslator(h, sp.SpawnN)
+	initialPrompt := assembleStepPrompt(parts)
+	var finalPrompt func(spawn.Capability) (string, error)
+	if h == harness.Pi && stepUsesSubagentsRules(a.BundleDir, sp.StepID) {
+		// the fact is part of the prompt only after the runtime's gate: the
+		// callback receives the verified capability and the prompt is built
+		// from it (a refused dispatch never reaches here).
+		initialPrompt = ""
+		verifiedParts := parts
+		finalPrompt = func(capability spawn.Capability) (string, error) {
+			verifiedParts.NoSubagents = subagentsFact(capability)
+			if resume {
+				// every resume shape restates the CURRENT verified
+				// capability and revokes the old fact (owner ruling Q3); a
+				// fresh dispatch carries it through part 1 and the
+				// definition instead.
+				verifiedParts.PiCapability = piCapabilityFact(capability)
+			}
+			return assembleStepPrompt(verifiedParts), nil
+		}
+	}
 	p := spawn.Params{
 		WorkItemID:     a.WI.ID,
 		CapsuleDir:     a.WI.CapsuleDir,
@@ -368,7 +383,8 @@ func (a *StepSpawnAdapter) launch(ctx context.Context, sp StepSpawn, parts promp
 		Resume:         resume,
 		Harness:        h,
 		HarnessSession: hsession,
-		InitialPrompt:  assembleStepPrompt(parts),
+		InitialPrompt:  initialPrompt,
+		FinalPrompt:    finalPrompt,
 		Model:          sp.Model,
 		Effort:         sp.Effort,
 		Round:          sp.Round,
@@ -563,6 +579,10 @@ type promptParts struct {
 	// NoSubagents is the driver's fact that this dispatch dispatches no
 	// sub-agent (subagentsFact); "" = none.
 	NoSubagents string
+	// PiCapability is a resume's restatement of this dispatch's verified
+	// pi capability (piCapabilityFact); "" = none (not a resume, another
+	// harness, or a step without the sub-agent rules).
+	PiCapability string
 	// PriorEndedWithoutResult: the previous dispatch's turn ended without
 	// `pf step handoff` (retry feedback).
 	PriorEndedWithoutResult bool
@@ -612,18 +632,19 @@ const (
 	continuationHeading = "# Continuing this step"
 )
 
-func piCapabilityChange(changed map[string]string, h string) string {
-	if h != harness.Pi {
-		return ""
+// piCapabilityFact is a RESUME's capability restatement (owner ruling Q3,
+// polyforge#215): the value is the capability the runtime VERIFIED this
+// dispatch — never the parameter alone, and never the change since the
+// dispatch it resumes — and the sentence says so, so a same-value resume
+// and an on→on resume restate it exactly like a changed one and the old
+// fact is revoked. The full prompt's fresh dispatch carries the same
+// capability through part 1's fact and the step definition; every resume
+// shape (the full prompt, ShortEwr and ShortMessage) carries this line.
+func piCapabilityFact(capability spawn.Capability) string {
+	if capability.PiSubagents {
+		return "\nPi subagents are enabled for this dispatch (the capability the runtime verified): use the daemon `subagent` tool with `agent: \"worker\"`, one task at a time. This dispatch's capability replaces the one stated in any earlier dispatch."
 	}
-	value, ok := changed["pi_subagents"]
-	if !ok {
-		return ""
-	}
-	if strings.EqualFold(strings.TrimSpace(value), "on") {
-		return "\nPi subagents are enabled for this dispatch: use the daemon `subagent` tool with `agent: \"worker\"`, one task at a time."
-	}
-	return "\nPi subagents are disabled for this dispatch; keep `implemented_by: main` and do not dispatch a worker."
+	return "\nPi subagents are disabled for this dispatch (the capability the runtime verified): keep `implemented_by: main` and do not dispatch a worker. This dispatch's capability replaces the one stated in any earlier dispatch."
 }
 
 // from the six fixed parts of workflow contract 4 (design #483 §8), in
@@ -647,8 +668,8 @@ func assembleStepPrompt(p promptParts) string {
 		if s := paramsChangedSection(p.ParamsChanged); s != "" {
 			parts = append(parts, s)
 		}
-		if s := piCapabilityChange(p.ParamsChanged, p.Harness); s != "" {
-			parts = append(parts, s)
+		if p.PiCapability != "" {
+			parts = append(parts, p.PiCapability)
 		}
 		if len(parts) == 0 {
 			return renderOwnerMessages(p.OwnerMessages)
@@ -656,7 +677,7 @@ func assembleStepPrompt(p promptParts) string {
 		return renderOwnerMessages(p.OwnerMessages) + "\n" + strings.Join(parts, "\n")
 	}
 	if p.ShortEwrResume {
-		return ewrResumeReminder(p) + continuationPart(promptParts{OwnerMessages: p.OwnerMessages, ParamsChanged: p.ParamsChanged}) + piCapabilityChange(p.ParamsChanged, p.Harness)
+		return ewrResumeReminder(p) + continuationPart(promptParts{OwnerMessages: p.OwnerMessages, ParamsChanged: p.ParamsChanged}) + p.PiCapability
 	}
 	var b strings.Builder
 	// 1. the dispatch
@@ -683,6 +704,9 @@ func assembleStepPrompt(p promptParts) string {
 	b.WriteString(p.Skill)
 	// 6. the continuation
 	b.WriteString(continuationPart(p))
+	// a resume of a pi dispatch that carries the sub-agent rules also
+	// restates the capability it was verified with (owner ruling Q3)
+	b.WriteString(p.PiCapability)
 	return b.String()
 }
 

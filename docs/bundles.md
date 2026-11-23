@@ -33,6 +33,12 @@ A bundle is a directory under the daemon's workflows dir:
         steps/<id>.md        # one step definition per step id
       ...
 
+polyforge#228 adds no bundle-format change (`none`): the daemon-owned step
+agent (the builtin `worker` definition and the embedded subagent extension)
+is runtime state under the harness root, not bundle content, and no fragment,
+step key or `workflow.yaml` field was added — the pi worker reuses the
+existing format and the subagent tool's existing output protocol.
+
 A work item runs the bundle it was filed with (`pf file create --bundle
 <name>`). A step with no file of its own in the bundle falls back to the
 shared `workflows/_shared/steps/<id>.md` beside the bundles (the
