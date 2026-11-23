@@ -394,3 +394,19 @@ func TestW91PageRegistry(t *testing.T) {
 		}
 	}
 }
+
+// TestW91WebWorkbenchMode: the README's Web workbench section says Pi Web
+// ships with the GitHub Release and is installed by the installer's
+// --with-pi-web; it must also name the workstation image as the other path
+// that carries Pi Web, so a newcomer on the image does not read the host
+// installer's step as theirs (polyforge#166 计划审补充 3: the README
+// Web-workbench paragraph gains the host/image distinction).
+func TestW91WebWorkbenchMode(t *testing.T) {
+	sec := w91Norm(w91Section(t, w91Read(t, "README.md"), "web workbench"))
+	if !regexp.MustCompile(`(?i)workstation image`).MatchString(sec) {
+		t.Fatalf("README's Web workbench section must name the workstation image as the path that carries Pi Web (the installer's --with-pi-web is the host path):\n%s", sec)
+	}
+	if !regexp.MustCompile(`(?i)\bhost\b`).MatchString(sec) {
+		t.Fatalf("README's Web workbench section must label --with-pi-web as the host path:\n%s", sec)
+	}
+}
