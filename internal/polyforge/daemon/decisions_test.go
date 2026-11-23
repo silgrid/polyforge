@@ -32,8 +32,12 @@ func testFeed(t *testing.T) *decisionFeed {
 	return f
 }
 
-func evAt(wi, kind, body string) protocol.EventEntry {
-	e := protocol.EventEntry{WI: wi, Kind: kind, At: "2026-11-09T10:00:00Z"}
+// evAt builds an event entry whose time comes from the feed's own clock,
+// one hour before "now": persistLocked prunes closed entries older than
+// decisionFeedMaxAge by that same clock, so a test never writes a date the
+// wall clock eventually turns into a prune (polyforge#260).
+func evAt(f *decisionFeed, wi, kind, body string) protocol.EventEntry {
+	e := protocol.EventEntry{WI: wi, Kind: kind, At: f.now().Add(-time.Hour).UTC().Format(time.RFC3339)}
 	if body != "" {
 		e.Body = json.RawMessage(body)
 	}
@@ -116,8 +120,8 @@ func TestEveryDecisionKindBecomesAFeedEntry(t *testing.T) {
 
 func TestNonDecisionsAndDaemonScopeEventsAreIgnored(t *testing.T) {
 	f := testFeed(t)
-	for _, e := range []protocol.EventEntry{evAt("wi_1", "step_started", ""), evAt("wi_1", "rewind", ""),
-		evAt("", "model_unhealthy", `{}`), evAt("", "submit_dropped", `{}`)} {
+	for _, e := range []protocol.EventEntry{evAt(f, "wi_1", "step_started", ""), evAt(f, "wi_1", "rewind", ""),
+		evAt(f, "", "model_unhealthy", `{}`), evAt(f, "", "submit_dropped", `{}`)} {
 		f.Ingest("default", e, nil)
 	}
 	if got := f.List(); len(got.Decisions) != 0 {
@@ -128,50 +132,70 @@ func TestNonDecisionsAndDaemonScopeEventsAreIgnored(t *testing.T) {
 // TestResolution: the step's result resolves the pending question, a
 // later state supersedes it, and a job start resolves everything
 // announced before.
-func TestResolution(t *testing.T) {
-	f := testFeed(t)
-	f.Ingest("default", evAt("wi_1", "awaiting_owner", `{"question_id":"q-1"}`), nil)
+// assertResolutionFlow runs the Resolution scenario on f: a pending question
+// resolved by a delivered step, a terminal superseding the next, occurrences
+// kept, a restart clearing attention, and another Cell's equal literal left
+// alone. Every event time comes from evAt, so the flow runs the same at any
+// injected feed clock.
+func assertResolutionFlow(t *testing.T, f *decisionFeed) {
+	t.Helper()
+	f.Ingest("default", evAt(f, "wi_1", "awaiting_owner", `{"question_id":"q-1"}`), nil)
 	// the driver re-announces the same pending question after a restart:
 	// one entry, not two
-	f.Ingest("default", evAt("wi_1", "awaiting_owner", `{"question_id":"q-1","resumed":true}`), nil)
+	f.Ingest("default", evAt(f, "wi_1", "awaiting_owner", `{"question_id":"q-1","resumed":true}`), nil)
 	if got := f.List(); len(got.Decisions) != 1 || got.Attention != 1 {
 		t.Fatalf("re-announced question duplicated: %+v", got)
 	}
-	f.Ingest("default", evAt("wi_1", "step_done", `{"step":"fix"}`), nil)
+	f.Ingest("default", evAt(f, "wi_1", "step_done", `{"step":"fix"}`), nil)
 	if e := newest(f); !e.Resolved || f.List().Attention != 0 {
 		t.Fatalf("the question of a step that delivered its result is still open: %+v", e)
 	}
 	// a new question of the same work item is a new entry
-	f.Ingest("default", evAt("wi_1", "awaiting_owner", `{"question_id":"q-2"}`), nil)
-	f.Ingest("default", evAt("wi_1", "terminal", `{"status":"failed_gate"}`), nil)
+	f.Ingest("default", evAt(f, "wi_1", "awaiting_owner", `{"question_id":"q-2"}`), nil)
+	f.Ingest("default", evAt(f, "wi_1", "terminal", `{"status":"failed_gate"}`), nil)
 	feed := f.List()
 	if len(feed.Decisions) != 3 || !feed.Decisions[1].Resolved || feed.Decisions[0].Class != "failed" || feed.Attention != 1 {
 		t.Fatalf("a terminal state must supersede the pending question: %+v", feed)
 	}
 	// occurrences are recorded every time
-	f.Ingest("default", evAt("wi_1", "submit_rejected", `{}`), nil)
-	f.Ingest("default", evAt("wi_1", "submit_rejected", `{}`), nil)
+	f.Ingest("default", evAt(f, "wi_1", "submit_rejected", `{}`), nil)
+	f.Ingest("default", evAt(f, "wi_1", "submit_rejected", `{}`), nil)
 	if got := f.List(); got.Attention != 3 {
 		t.Fatalf("attention = %d, want failed + two rejects", got.Attention)
 	}
 	// the work item runs again: every earlier entry is over
-	f.Ingest("default", evAt("wi_1", "job_started", `{"spawn_n":1}`), nil)
+	f.Ingest("default", evAt(f, "wi_1", "job_started", `{"spawn_n":1}`), nil)
 	if got := f.List(); got.Attention != 0 {
 		t.Fatalf("job_started left open entries: %+v", got)
 	}
 	// another Cell's equal literal is another work item
-	f.Ingest("alpha", evAt("wi_1", "blocked", `{}`), nil)
-	f.Ingest("default", evAt("wi_1", "job_started", `{}`), nil)
+	f.Ingest("alpha", evAt(f, "wi_1", "blocked", `{}`), nil)
+	f.Ingest("default", evAt(f, "wi_1", "job_started", `{}`), nil)
 	if e := newest(f); e.Profile != "alpha" || e.Resolved {
 		t.Fatalf("a default-Cell start resolved an alpha entry: %+v", e)
 	}
 }
 
+func TestResolution(t *testing.T) {
+	assertResolutionFlow(t, testFeed(t))
+}
+
+// TestResolutionAtFarFuture pins that Resolution reads the feed's injected
+// clock, not the wall clock: a year after the base, the event times still
+// sit inside decisionFeedMaxAge, so no closed entry is pruned away and the
+// newest-entry read stays in bounds (polyforge#260).
+func TestResolutionAtFarFuture(t *testing.T) {
+	f := testFeed(t)
+	base := time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC)
+	f.now = func() time.Time { return base.Add(365 * 24 * time.Hour) }
+	assertResolutionFlow(t, f)
+}
+
 func TestDismiss(t *testing.T) {
 	f := testFeed(t)
-	f.Ingest("default", evAt("wi_1", "blocked", `{}`), nil)
-	f.Ingest("default", evAt("wi_2", "submit_dropped", `{}`), nil)
-	f.Ingest("default", evAt("wi_3", "candidates_exhausted", `{}`), nil)
+	f.Ingest("default", evAt(f, "wi_1", "blocked", `{}`), nil)
+	f.Ingest("default", evAt(f, "wi_2", "submit_dropped", `{}`), nil)
+	f.Ingest("default", evAt(f, "wi_3", "candidates_exhausted", `{}`), nil)
 	if n, err := f.Dismiss([]int64{2}, false); err != nil || n != 1 {
 		t.Fatalf("dismiss = %d %v", n, err)
 	}
@@ -219,7 +243,7 @@ func TestFeedPersistsAndIsBounded(t *testing.T) {
 		}
 	}
 	// ids never repeat across a reopen, even after pruning
-	g.Ingest("default", evAt("wi_new", "submit_dropped", ""), nil)
+	g.Ingest("default", evAt(g, "wi_new", "submit_dropped", ""), nil)
 	if e := newest(g); e.ID != int64(decisionFeedMax+5+2) {
 		t.Fatalf("next id = %d", e.ID)
 	}
@@ -338,7 +362,7 @@ func TestMachineRoleRoute(t *testing.T) {
 // stood open. A reason another source already recorded is not recorded twice.
 func TestJobFinishedRecordsTheActualEnd(t *testing.T) {
 	f := testFeed(t)
-	f.Ingest("default", evAt("wi_wrap", observe.EvJobFinished, `{"reason":"blocked"}`), nil)
+	f.Ingest("default", evAt(f, "wi_wrap", observe.EvJobFinished, `{"reason":"blocked"}`), nil)
 	if e := newest(f); e.WI != "wi_wrap" || e.Class != "blocked" || !e.Open() {
 		t.Fatalf("a degraded wrap = %+v", e)
 	}
@@ -346,14 +370,14 @@ func TestJobFinishedRecordsTheActualEnd(t *testing.T) {
 		t.Fatalf("the blocked end must be tracked: %v", got)
 	}
 	// a terminal completed followed by the release (wrapped): one entry
-	f.Ingest("default", evAt("wi_done", "terminal", `{"status":"completed"}`), nil)
-	f.Ingest("default", evAt("wi_done", observe.EvJobFinished, `{"reason":"wrapped"}`), nil)
+	f.Ingest("default", evAt(f, "wi_done", "terminal", `{"status":"completed"}`), nil)
+	f.Ingest("default", evAt(f, "wi_done", observe.EvJobFinished, `{"reason":"wrapped"}`), nil)
 	// a terminal failed_gate followed by the release (failed): one entry
-	f.Ingest("default", evAt("wi_fail", "terminal", `{"status":"failed_gate"}`), nil)
-	f.Ingest("default", evAt("wi_fail", observe.EvJobFinished, `{"reason":"failed"}`), nil)
+	f.Ingest("default", evAt(f, "wi_fail", "terminal", `{"status":"failed_gate"}`), nil)
+	f.Ingest("default", evAt(f, "wi_fail", observe.EvJobFinished, `{"reason":"failed"}`), nil)
 	// the driver's blocked event followed by the bounded-fail release
-	f.Ingest("default", evAt("wi_bf", "blocked", `{}`), nil)
-	f.Ingest("default", evAt("wi_bf", observe.EvJobFinished, `{"reason":"blocked"}`), nil)
+	f.Ingest("default", evAt(f, "wi_bf", "blocked", `{}`), nil)
+	f.Ingest("default", evAt(f, "wi_bf", observe.EvJobFinished, `{"reason":"blocked"}`), nil)
 	count := map[string]int{}
 	for _, e := range f.List().Decisions {
 		count[e.WI]++
@@ -362,13 +386,13 @@ func TestJobFinishedRecordsTheActualEnd(t *testing.T) {
 		t.Fatalf("a release already recorded must not repeat: %v", count)
 	}
 	// a bounded-fail block with no driver event before it still appears
-	f.Ingest("default", evAt("wi_bf2", observe.EvJobFinished, `{"reason":"blocked"}`), nil)
+	f.Ingest("default", evAt(f, "wi_bf2", observe.EvJobFinished, `{"reason":"blocked"}`), nil)
 	if e := newest(f); e.WI != "wi_bf2" || e.Class != "blocked" {
 		t.Fatalf("bounded fail = %+v", e)
 	}
 	// a supersede (a hub cancel of a held job) resolves the open question
-	f.Ingest("default", evAt("wi_q", "awaiting_owner", `{"question_id":"q-1"}`), nil)
-	f.Ingest("default", evAt("wi_q", observe.EvJobFinished, `{"reason":"superseded"}`), nil)
+	f.Ingest("default", evAt(f, "wi_q", "awaiting_owner", `{"question_id":"q-1"}`), nil)
+	f.Ingest("default", evAt(f, "wi_q", observe.EvJobFinished, `{"reason":"superseded"}`), nil)
 	for _, e := range f.List().Decisions {
 		if e.WI == "wi_q" && e.Open() {
 			t.Fatalf("superseded left an open entry: %+v", e)
@@ -480,7 +504,7 @@ func TestCorruptFeedIsQuarantined(t *testing.T) {
 	if raw, _ := os.ReadFile(aside[0]); string(raw) != "{not json" {
 		t.Fatalf("the set-aside copy = %q", raw)
 	}
-	f.Ingest("default", evAt("wi_1", "submit_dropped", ""), nil)
+	f.Ingest("default", evAt(f, "wi_1", "submit_dropped", ""), nil)
 	if _, err := newDecisionFeed(path); err != nil {
 		t.Fatalf("the fresh feed is readable again: %v", err)
 	}
@@ -544,8 +568,8 @@ func TestExplicitRoleSurvivesARestart(t *testing.T) {
 // no claim about the work item's state.
 func TestReleaseSupersedesTheEarlierEnd(t *testing.T) {
 	f := testFeed(t)
-	f.Ingest("default", evAt("wi_w", "terminal", `{"status":"completed"}`), nil)
-	f.Ingest("default", evAt("wi_w", observe.EvJobFinished, `{"reason":"blocked"}`), nil)
+	f.Ingest("default", evAt(f, "wi_w", "terminal", `{"status":"completed"}`), nil)
+	f.Ingest("default", evAt(f, "wi_w", observe.EvJobFinished, `{"reason":"blocked"}`), nil)
 	var open, closed []string
 	for _, e := range f.List().Decisions {
 		if e.WI != "wi_w" {
@@ -561,27 +585,27 @@ func TestReleaseSupersedesTheEarlierEnd(t *testing.T) {
 		t.Fatalf("open %v, superseded %v", open, closed)
 	}
 	// a supersede: the open question resolves, an informational entry says so
-	f.Ingest("default", evAt("wi_s", "awaiting_owner", `{"question_id":"q-1"}`), nil)
-	f.Ingest("default", evAt("wi_s", observe.EvJobFinished, `{"reason":"superseded"}`), nil)
+	f.Ingest("default", evAt(f, "wi_s", "awaiting_owner", `{"question_id":"q-1"}`), nil)
+	f.Ingest("default", evAt(f, "wi_s", observe.EvJobFinished, `{"reason":"superseded"}`), nil)
 	if e := newest(f); e.WI != "wi_s" || e.Class != "superseded" || e.Attention || e.Open() {
 		t.Fatalf("superseded = %+v", e)
 	}
 	// notOurs at restart: the hub says canceled / blocked
-	f.Ingest("default", evAt("wi_c", observe.EvJobFinished, `{"reason":"canceled"}`), nil)
+	f.Ingest("default", evAt(f, "wi_c", observe.EvJobFinished, `{"reason":"canceled"}`), nil)
 	if e := newest(f); e.WI != "wi_c" || e.Class != "canceled" {
 		t.Fatalf("hub canceled = %+v", e)
 	}
-	f.Ingest("default", evAt("wi_b", observe.EvJobFinished, `{"reason":"blocked"}`), nil)
+	f.Ingest("default", evAt(f, "wi_b", observe.EvJobFinished, `{"reason":"blocked"}`), nil)
 	if e := newest(f); e.WI != "wi_b" || e.Class != "blocked" || !e.Open() {
 		t.Fatalf("hub blocked = %+v", e)
 	}
 	// a re-queued work item: its open entries resolve, nothing is recorded
-	f.Ingest("default", evAt("wi_b", observe.EvJobFinished, `{"reason":"queued"}`), nil)
+	f.Ingest("default", evAt(f, "wi_b", observe.EvJobFinished, `{"reason":"queued"}`), nil)
 	if e := newest(f); e.WI != "wi_b" || !e.Resolved {
 		t.Fatalf("re-queued = %+v", e)
 	}
 	// an unconfirmed local seal records superseded, not the requested end
-	f.Ingest("default", evAt("wi_l", observe.EvJobFinished, `{"reason":"wrapped","unconfirmed":true}`), nil)
+	f.Ingest("default", evAt(f, "wi_l", observe.EvJobFinished, `{"reason":"wrapped","unconfirmed":true}`), nil)
 	if e := newest(f); e.WI != "wi_l" || e.Class != "superseded" {
 		t.Fatalf("unconfirmed local seal = %+v", e)
 	}
@@ -595,8 +619,8 @@ func TestReleaseSupersedesTheEarlierEnd(t *testing.T) {
 func TestUnconfirmedEndNeverHidesABlock(t *testing.T) {
 	f := testFeed(t)
 	// an open block, then a local seal of a wrap the hub never confirmed
-	f.Ingest("default", evAt("wi_a", "blocked", `{}`), nil)
-	f.Ingest("default", evAt("wi_a", observe.EvJobFinished, `{"reason":"wrapped","unconfirmed":true}`), nil)
+	f.Ingest("default", evAt(f, "wi_a", "blocked", `{}`), nil)
+	f.Ingest("default", evAt(f, "wi_a", observe.EvJobFinished, `{"reason":"wrapped","unconfirmed":true}`), nil)
 	blockedOpen := false
 	for _, e := range f.List().Decisions {
 		if e.WI == "wi_a" && e.Class == "blocked" && e.Open() {
@@ -607,17 +631,17 @@ func TestUnconfirmedEndNeverHidesABlock(t *testing.T) {
 		t.Fatalf("an unconfirmed end resolved the open block: %+v", f.List().Decisions)
 	}
 	// an unconfirmed blocked end (STALE_SESSION, status unknown) is blocked
-	f.Ingest("default", evAt("wi_b", observe.EvJobFinished, `{"reason":"blocked","unconfirmed":true}`), nil)
+	f.Ingest("default", evAt(f, "wi_b", observe.EvJobFinished, `{"reason":"blocked","unconfirmed":true}`), nil)
 	if e := newest(f); e.WI != "wi_b" || e.Class != "blocked" || !e.Open() {
 		t.Fatalf("unconfirmed blocked = %+v", e)
 	}
-	f.Ingest("default", evAt("wi_p", observe.EvJobFinished, `{"reason":"paused","unconfirmed":true}`), nil)
+	f.Ingest("default", evAt(f, "wi_p", observe.EvJobFinished, `{"reason":"paused","unconfirmed":true}`), nil)
 	if e := newest(f); e.WI != "wi_p" || e.Class != "paused" {
 		t.Fatalf("unconfirmed paused = %+v", e)
 	}
 	// the crash-mid-seal case with aihub saying blocked: the release is confirmed blocked
-	f.Ingest("default", evAt("wi_c", "awaiting_owner", `{"question_id":"q"}`), nil)
-	f.Ingest("default", evAt("wi_c", observe.EvJobFinished, `{"reason":"blocked"}`), nil)
+	f.Ingest("default", evAt(f, "wi_c", "awaiting_owner", `{"question_id":"q"}`), nil)
+	f.Ingest("default", evAt(f, "wi_c", observe.EvJobFinished, `{"reason":"blocked"}`), nil)
 	if e := newest(f); e.WI != "wi_c" || e.Class != "blocked" || !e.Open() {
 		t.Fatalf("confirmed blocked = %+v", e)
 	}
@@ -688,7 +712,7 @@ func TestOwnerReplyMarksTheQuestionReplied(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Ingest("default", evAt("wi_r", "awaiting_owner", `{"step":"build","question_id":"`+ask+`"}`), nil)
+	f.Ingest("default", evAt(f, "wi_r", "awaiting_owner", `{"step":"build","question_id":"`+ask+`"}`), nil)
 	if e := questionEntry(t, f, "default", "wi_r", ask); !e.Open() || f.List().Attention != 1 {
 		t.Fatalf("the question is not open: %+v", f.List())
 	}
@@ -710,11 +734,11 @@ func TestOwnerReplyMarksTheQuestionReplied(t *testing.T) {
 	}
 	check(g, "reloaded feed")
 
-	f.Ingest("default", evAt("wi_r", "step_done", `{"step":"build"}`), nil)
+	f.Ingest("default", evAt(f, "wi_r", "step_done", `{"step":"build"}`), nil)
 	if e := questionEntry(t, f, "default", "wi_r", ask); !e.Resolved || !e.Replied {
 		t.Fatalf("the step's hand-over did not resolve the replied question: %+v", e)
 	}
-	f.Ingest("default", evAt("wi_r", "awaiting_owner", `{"step":"build","question_id":"`+ask2+`"}`), nil)
+	f.Ingest("default", evAt(f, "wi_r", "awaiting_owner", `{"step":"build","question_id":"`+ask2+`"}`), nil)
 	if e := questionEntry(t, f, "default", "wi_r", ask2); !e.Open() || e.Replied || f.List().Attention != 1 {
 		t.Fatalf("a later question is not a new open entry: %+v", f.List())
 	}
@@ -730,9 +754,9 @@ func TestOnlyTheAnsweredAskIsMarkedReplied(t *testing.T) {
 		ask2 = "2026-11-12T01:20:00.222222222Z"
 	)
 	f := testFeed(t)
-	f.Ingest("default", evAt("wi_a", "awaiting_owner", `{"step":"plan","question_id":"`+ask1+`"}`), nil)
-	f.Ingest("default", evAt("wi_a", "step_done", `{"step":"plan"}`), nil)
-	f.Ingest("default", evAt("wi_a", "awaiting_owner", `{"step":"build","question_id":"`+ask2+`"}`), nil)
+	f.Ingest("default", evAt(f, "wi_a", "awaiting_owner", `{"step":"plan","question_id":"`+ask1+`"}`), nil)
+	f.Ingest("default", evAt(f, "wi_a", "step_done", `{"step":"plan"}`), nil)
+	f.Ingest("default", evAt(f, "wi_a", "awaiting_owner", `{"step":"build","question_id":"`+ask2+`"}`), nil)
 	first := questionEntry(t, f, "default", "wi_a", ask1)
 	if !first.Resolved {
 		t.Fatalf("setup: the first question is not resolved: %+v", first)
@@ -783,8 +807,8 @@ func TestFinalEndResolvesCarrierPushFailed(t *testing.T) {
 		return protocol.Decision{}
 	}
 	// the push failed, then the work item wrapped
-	f.Ingest("default", evAt("wi_w", "carrier_push_failed", `{"repo":"app"}`), nil)
-	f.Ingest("default", evAt("wi_w", observe.EvJobFinished, `{"reason":"wrapped"}`), nil)
+	f.Ingest("default", evAt(f, "wi_w", "carrier_push_failed", `{"repo":"app"}`), nil)
+	f.Ingest("default", evAt(f, "wi_w", observe.EvJobFinished, `{"reason":"wrapped"}`), nil)
 	if e := carrier("wi_w"); !e.Resolved {
 		t.Fatalf("wrapped: carrier entry still open: %+v", e)
 	}
@@ -792,16 +816,16 @@ func TestFinalEndResolvesCarrierPushFailed(t *testing.T) {
 		t.Fatalf("wrapped: attention = %d, want 0", n)
 	}
 	// the driver's terminal event came first, the push failed at the close
-	f.Ingest("default", evAt("wi_t", "terminal", `{"status":"completed"}`), nil)
-	f.Ingest("default", evAt("wi_t", "carrier_push_failed", `{"repo":"app"}`), nil)
-	f.Ingest("default", evAt("wi_t", observe.EvJobFinished, `{"reason":"wrapped"}`), nil)
+	f.Ingest("default", evAt(f, "wi_t", "terminal", `{"status":"completed"}`), nil)
+	f.Ingest("default", evAt(f, "wi_t", "carrier_push_failed", `{"repo":"app"}`), nil)
+	f.Ingest("default", evAt(f, "wi_t", observe.EvJobFinished, `{"reason":"wrapped"}`), nil)
 	if e := carrier("wi_t"); !e.Resolved {
 		t.Fatalf("terminal then wrapped: carrier entry still open: %+v", e)
 	}
 	// a block keeps it (a resume is still possible); a later cancel the hub
 	// read observed resolves it
-	f.Ingest("default", evAt("wi_b", "carrier_push_failed", `{"repo":"app"}`), nil)
-	f.Ingest("default", evAt("wi_b", observe.EvJobFinished, `{"reason":"blocked"}`), nil)
+	f.Ingest("default", evAt(f, "wi_b", "carrier_push_failed", `{"repo":"app"}`), nil)
+	f.Ingest("default", evAt(f, "wi_b", observe.EvJobFinished, `{"reason":"blocked"}`), nil)
 	if e := carrier("wi_b"); e.Resolved {
 		t.Fatalf("blocked: carrier entry resolved: %+v", e)
 	}
@@ -812,8 +836,8 @@ func TestFinalEndResolvesCarrierPushFailed(t *testing.T) {
 		t.Fatalf("canceled: carrier entry still open: %+v", e)
 	}
 	// a failed end
-	f.Ingest("default", evAt("wi_f", "carrier_push_failed", `{"repo":"app"}`), nil)
-	f.Ingest("default", evAt("wi_f", observe.EvJobFinished, `{"reason":"failed"}`), nil)
+	f.Ingest("default", evAt(f, "wi_f", "carrier_push_failed", `{"repo":"app"}`), nil)
+	f.Ingest("default", evAt(f, "wi_f", observe.EvJobFinished, `{"reason":"failed"}`), nil)
 	if e := carrier("wi_f"); !e.Resolved {
 		t.Fatalf("failed: carrier entry still open: %+v", e)
 	}
