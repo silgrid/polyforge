@@ -181,11 +181,17 @@ With --events the report also gains the blocking-findings block
                reference. A mention elsewhere on a line (an explanation, a
                facts table) links at most and never overrides the
                disposition; a `；`/`;`/`。` clause starts its own subject.
-  outcomes     fixed (a later round says repaired), rebutted (withdrawn
-               on the build's evidence), owner-overturned (the withdrawal
-               names the owner's ruling, or an asks.jsonl reply/message
-               names the item and rules it non-blocking),
-               withdrawn-unknown (withdrawn with no attributable reason),
+  outcomes     fixed (a later round says repaired, or says it was fixed by
+               the owner's ruling — `已按 owner 裁定修`); rebutted
+               (withdrawn on the build's evidence); owner-overturned (a
+               withdrawal names the owner's ruling, or an owner
+               disposition accepts / releases / reclassifies the item —
+               `owner 已裁定`, `已由 owner 裁定`, `owner 裁定已处理`,
+               `owner 裁定移出`, `owner「b」接受 … → 非阻断` — or an
+               asks.jsonl reply/message names the item and rules it
+               non-blocking); a pending `留/交/待/需要 owner 决定|裁定`
+               is not a ruling and does not set the outcome;
+               withdrawn-unknown (withdrawn with no attributable reason);
                unknown (the reasons below, counted apart).
   rate         the suspected false-positive rate is the numerator
                (rebutted + owner-overturned + withdrawn-unknown) over the
@@ -195,7 +201,11 @@ With --events the report also gains the blocking-findings block
                line counts a PASS round that names no item as fixed.
   unknown      no later round, later rounds do not mention it, a PASS
                round without naming it, owner words without an item
-               number, multiple candidates, last mention still open.
+               number, multiple candidates, last mention still open. A
+               last mention still open outranks the PASS-without-naming
+               reason; a disposition line that names the item but whose
+               status cannot be read is never reported as a PASS round
+               without naming it.
   unparsable   a FAIL version whose conclusion names blockers but whose
                items cannot be parsed is counted apart and enters no
                denominator.
