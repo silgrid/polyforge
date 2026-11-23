@@ -21,30 +21,31 @@ const { PiRunningList } = await jiti.import("./PiRunningList.tsx");
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
 await jiti.import("@/lib/i18n/messages/en");
 
-const [appShell, chatWindow, messageView, runningList] = await Promise.all([
+const [appShell, chatWindow, messageView, runningList, agentSessionPanel] = await Promise.all([
   readFile(new URL("./AppShell.tsx", import.meta.url), "utf8"),
   readFile(new URL("./ChatWindow.tsx", import.meta.url), "utf8"),
   readFile(new URL("./MessageView.tsx", import.meta.url), "utf8"),
   readFile(new URL("./PiRunningList.tsx", import.meta.url), "utf8"),
+  readFile(new URL("./AgentSessionPanel.tsx", import.meta.url), "utf8"),
 ]);
 const appAst = ts.createSourceFile("AppShell.tsx", appShell, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const chatAst = ts.createSourceFile("ChatWindow.tsx", chatWindow, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const messageAst = ts.createSourceFile("MessageView.tsx", messageView, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const listAst = ts.createSourceFile("PiRunningList.tsx", runningList, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const agentAst = ts.createSourceFile("AgentSessionPanel.tsx", agentSessionPanel, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 
 const plain = (value) => JSON.parse(JSON.stringify(value));
 function run(text, sandbox) {
   return new Script(ts.transpileModule(`(${text})`, { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText).runInNewContext(sandbox);
 }
 
-/** The arrow function whose source contains `marker`. */
+/** The smallest arrow function whose source contains `marker` (the inner handler, not its map's JSX). */
 function arrow(source, fileAst, marker) {
   let found = null;
   function walk(node) {
-    if (found) return;
-    if (ts.isArrowFunction(node) && node.getText(fileAst).includes(marker)) {
-      found = node.getText(fileAst);
-      return;
+    if (ts.isArrowFunction(node)) {
+      const text = node.getText(fileAst);
+      if (text.includes(marker) && (found === null || text.length < found.length)) found = text;
     }
     ts.forEachChild(node, walk);
   }
@@ -148,7 +149,7 @@ test("polyforge#255 u5: a queued running-list row opens the same in-chat panel",
 });
 
 test("polyforge#255 u5: the top bar's subagent row opens the panel; the current child's row is inert", () => {
-  const onOpenArrow = arrow(appShell, appAst, "if (session.id === selectedSessionId) return;");
+  const onOpenArrow = arrow(agentSessionPanel, agentAst, "if (session.id === selectedSessionId) return;");
   const calls = [];
   const open = run(onOpenArrow, {
     session: { id: "child-1", relation: { kind: "subagent", description: "Find parser", profile: "Explore" } },

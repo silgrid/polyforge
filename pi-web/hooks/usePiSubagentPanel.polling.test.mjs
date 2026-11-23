@@ -62,14 +62,14 @@ test("polyforge#255 r2: a read slower than the 2 s interval still lands; no seco
 
 test("polyforge#255 r2: a poll snapshot that does not overlap the loaded transcript replaces it instead of dropping the gap", () => {
   const merged = mergePiSubagentEntries(
-    [["old-1", assistant("old 1")], ["old-2", assistant("old 2")]],
-    [["new-1", assistant("new 1")], ["new-2", assistant("new 2")]],
+    [{ id: "old-1", message: assistant("old 1") }, { id: "old-2", message: assistant("old 2") }],
+    [{ id: "new-1", message: assistant("new 1") }, { id: "new-2", message: assistant("new 2") }],
     "append",
   );
   assert.deepEqual(merged.map((entry) => entry.id), ["new-1", "new-2"], "a non-overlapping snapshot is a hole: show it whole");
   const overlapping = mergePiSubagentEntries(
-    [["old-1", assistant("old 1")], ["old-2", assistant("old 2")]],
-    [["old-2", assistant("old 2")], ["new-1", assistant("new 1")]],
+    [{ id: "old-1", message: assistant("old 1") }, { id: "old-2", message: assistant("old 2") }],
+    [{ id: "old-2", message: assistant("old 2") }, { id: "new-1", message: assistant("new 1") }],
     "append",
   );
   assert.deepEqual(overlapping.map((entry) => entry.id), ["old-1", "old-2", "new-1"], "an overlapping snapshot still appends only the new tail");

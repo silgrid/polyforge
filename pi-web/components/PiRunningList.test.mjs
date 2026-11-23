@@ -154,10 +154,9 @@ test("polyforge#255 u5: a queued subagent opens the same in-chat panel as a runn
   const ast = ts.createSourceFile("PiRunningList.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   let handler = null;
   const walk = (node) => {
-    if (handler) return;
-    if (ts.isArrowFunction(node) && node.getText(ast).includes("onOpenSubagent(run.sessionId")) {
-      handler = node.getText(ast);
-      return;
+    if (ts.isArrowFunction(node)) {
+      const text = node.getText(ast);
+      if (text.includes("onOpenSubagent(run.sessionId") && (handler === null || text.length < handler.length)) handler = text;
     }
     ts.forEachChild(node, walk);
   };

@@ -23,15 +23,33 @@ const ast = ts.createSourceFile("AgentSessionPanel.tsx", source, ts.ScriptTarget
 function arrow(marker) {
   let found = null;
   const walk = (node) => {
-    if (found) return;
-    if (ts.isArrowFunction(node) && node.getText(ast).includes(marker)) {
-      found = node.getText(ast);
-      return;
+    if (ts.isArrowFunction(node)) {
+      const text = node.getText(ast);
+      if (text.includes(marker) && (found === null || text.length < found.length)) found = text;
     }
     ts.forEachChild(node, walk);
   };
   walk(ast);
   assert.ok(found, `no arrow contains ${JSON.stringify(marker)}`);
+  return found;
+}
+
+/** The expression of the JSX attribute `name` whose text contains `marker`. */
+function attributeExpression(name, marker) {
+  let found = null;
+  const walk = (node) => {
+    if (found) return;
+    if (ts.isJsxAttribute(node) && node.name.getText(ast) === name && node.initializer && ts.isJsxExpression(node.initializer)) {
+      const expression = node.initializer.expression;
+      if (expression && expression.getText(ast).includes(marker)) {
+        found = expression.getText(ast);
+        return;
+      }
+    }
+    ts.forEachChild(node, walk);
+  };
+  walk(ast);
+  assert.ok(found, `no ${name} attribute contains ${JSON.stringify(marker)}`);
   return found;
 }
 
@@ -69,7 +87,7 @@ test("polyforge#255 u5: the row body opens the in-chat panel; no side-panel togg
   assert.doesNotMatch(source, /onToggleSubagentTab|subagent\.openTab|subagent\.closeTab/, "the old side-panel toggle is deleted");
   // The row button's own click: main selects, a subagent opens the panel.
   const calls = [];
-  const onClick = arrow("main ? onSelect : onOpen");
+  const onClick = attributeExpression("onClick", "main ? onSelect : onOpen");
   const click = new Function("main", "onSelect", "onOpen", `return (${onClick})`)(false, () => calls.push("select"), () => calls.push("open"));
   click();
   assert.deepEqual(JSON.parse(JSON.stringify(calls)), ["open"], "a subagent row opens the panel");
