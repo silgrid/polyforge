@@ -10,9 +10,16 @@ import assert from "node:assert/strict";
 import {
 	MAX_SLEEP_SECONDS,
 	checkBashCommand,
+	commandKey,
+	isWholeTreeRun,
+	judgeFullSuite,
+	normalizeArgv,
+	parseCommandSegments,
 	syntaxCheckPlan,
 	interpretCheckerRun,
 	checkJsonText,
+	testRunner,
+	type RootProjection,
 	type SyntaxCheckPlan,
 } from "./rules.ts";
 
@@ -299,4 +306,140 @@ test("checkJsonText: the error carries the line and column from the message", ()
 		assert.equal(o.finding.line, 3);
 		assert.equal(o.finding.column, 2);
 	}
+});
+
+// ------------------------------------------------ build full-suite guard
+
+const guardRoot = "/caps/repos/r";
+
+function entry(dir: string, ...argv: string[]): { dir: string; argv: string[] } {
+	return { dir, argv };
+}
+
+test("parseCommandSegments: a leading cd sets the effective directory", () => {
+	const segs = parseCommandSegments("cd repos/r && go test ./... > l 2>&1; echo exit=$?", "/caps");
+	assert.equal(segs.length, 2, JSON.stringify(segs));
+	assert.deepEqual(segs[0], { dir: "/caps/repos/r", argv: ["go", "test", "./..."] });
+	assert.equal(segs[1].dir, "/caps/repos/r");
+	assert.deepEqual(segs[1].argv, ["echo", "exit=$?"]);
+});
+
+test("parseCommandSegments: assignments and wrappers are not the command word", () => {
+	assert.deepEqual(parseCommandSegments("GOWORK=off go test ./... -count=1", guardRoot), [
+		{ dir: guardRoot, argv: ["go", "test", "./...", "-count=1"] },
+	]);
+	assert.deepEqual(parseCommandSegments("timeout 10s nice -n 5 go test ./...", guardRoot), [
+		{ dir: guardRoot, argv: ["go", "test", "./..."] },
+	]);
+});
+
+test("parseCommandSegments: an unresolvable cd target is not guessed", () => {
+	const segs = parseCommandSegments('cd "$PF_CAPSULE/repos/r" && go test ./...', "/caps");
+	assert.equal(segs.length, 1);
+	assert.equal(segs[0].dir, "/caps");
+});
+
+test("testRunner: the known test runners and their tails", () => {
+	assert.deepEqual(testRunner(["go", "test", "./...", "-count=1"]), { words: ["go", "test"], rest: ["./...", "-count=1"] });
+	assert.deepEqual(testRunner(["npm", "test"]), { words: ["npm", "test"], rest: [] });
+	assert.deepEqual(testRunner(["npm", "run", "test:e2e:all"]), { words: ["npm", "run", "test:e2e:all"], rest: [] });
+	assert.deepEqual(testRunner(["pytest"]), { words: ["pytest"], rest: [] });
+	assert.deepEqual(testRunner(["cargo", "test"]), { words: ["cargo", "test"], rest: [] });
+	for (const argv of [
+		["npm", "ci"],
+		["npm", "run", "lint"],
+		["node_modules/.bin/tsc", "--noEmit"],
+		["sh", "test/e2e-parallel.sh"],
+		["python", "-m", "compileall", "-q"],
+		["$PF_PYTHON", "$PF_SHARED_DIR/scripts/fast_checks.py", "--repo", "r"],
+	]) {
+		assert.equal(testRunner(argv), undefined, JSON.stringify(argv));
+	}
+});
+
+test("isWholeTreeRun: tree targets and bare runners are whole; filters and narrow targets are not", () => {
+	for (const argv of [
+		["go", "test", "./..."],
+		["go", "test", "./...", "-count=1"],
+		["go", "test"],
+		["go", "test", "-v", "./..."],
+		["npm", "test"],
+		["npm", "run", "test:e2e:all"],
+		["pytest"],
+		["cargo", "test"],
+	]) {
+		assert.equal(isWholeTreeRun(argv), true, JSON.stringify(argv));
+	}
+	for (const argv of [
+		["go", "test", "./...", "-run", "TestX"],
+		["go", "test", "./internal/x/", "-count=1"],
+		["go", "test", "./pkg/"],
+		["npm", "test", "--", "one.test.ts"],
+		["pytest", "-k", "x"],
+		["pytest", "tests/test_x.py"],
+		["cargo", "test", "--", "--exact", "name"],
+	]) {
+		assert.equal(isWholeTreeRun(argv), false, JSON.stringify(argv));
+	}
+});
+
+test("normalizeArgv: quotes drop and -count moves to the end", () => {
+	assert.deepEqual(normalizeArgv(["go", "test", "-count", "1", '"./pkg/"', "-v"]), ["go", "test", "./pkg/", "-v", "-count=1"]);
+	assert.equal(
+		commandKey(guardRoot, ["go", "test", "-count", "1", '"./..."']),
+		commandKey(guardRoot, ["go", "test", "./...", "-count=1"]),
+	);
+});
+
+test("judgeFullSuite: the declared full test command blocks literally", () => {
+	const full: RootProjection = {
+		root: guardRoot,
+		full: [entry(guardRoot, "go", "test", "-race", "-count=1", "-timeout", "30m", "./pkg/")],
+		cheap: [],
+	};
+	const v = judgeFullSuite(parseCommandSegments("go test -race -timeout 30m ./pkg/ -count=1", guardRoot), [full], "/caps");
+	assert.ok(v, "the literal declared command is blocked");
+	assert.equal(v.rule, "full-test");
+	assert.match(v.reason, /fast_checks\.py --repo r --close-scoped/);
+	assert.match(v.reason, /-run/);
+});
+
+test("judgeFullSuite: a whole-tree agent run matches a runner declared with a substitution", () => {
+	const full: RootProjection = { root: guardRoot, full: [entry(guardRoot, "go", "test")], cheap: [] };
+	assert.ok(judgeFullSuite(parseCommandSegments("GOWORK=off go test ./... -count=1", guardRoot), [full], "/caps"));
+	assert.equal(judgeFullSuite(parseCommandSegments("go test ./... -run TestX", guardRoot), [full], "/caps"), undefined);
+	assert.equal(judgeFullSuite(parseCommandSegments("go test ./internal/polyforge/runtime/ -count=1", guardRoot), [full], "/caps"), undefined);
+});
+
+test("judgeFullSuite: the cd-tracking flag reaches a capsule-root command", () => {
+	const full: RootProjection = { root: guardRoot, full: [entry(guardRoot, "go", "test")], cheap: [] };
+	const segs = parseCommandSegments("cd repos/r && go test ./... > l 2>&1; echo exit=$?", "/caps");
+	assert.ok(judgeFullSuite(segs, [full], "/caps"));
+});
+
+test("judgeFullSuite: a nested root's declaration is matched at its effective directory", () => {
+	const sub = "/caps/repos/r/sub";
+	const full: RootProjection = { root: sub, full: [entry(sub, "npm", "run", "test:e2e:all")], cheap: [] };
+	assert.ok(judgeFullSuite(parseCommandSegments("cd sub && npm run test:e2e:all", guardRoot), [full], "/caps"));
+});
+
+test("judgeFullSuite: a cheaper-phase declaration at the same directory subtracts the full one", () => {
+	const sub = "/caps/repos/r/pi-web";
+	const rootProj: RootProjection = { root: guardRoot, full: [entry(sub, "npm", "test")], cheap: [] };
+	const nested: RootProjection = { root: sub, full: [], cheap: [entry(sub, "npm", "test")] };
+	assert.equal(judgeFullSuite(parseCommandSegments("cd pi-web && npm test", guardRoot), [rootProj, nested], "/caps"), undefined);
+});
+
+test("judgeFullSuite: a fast_checks.py command passes, and a whole-suite segment beside it does not", () => {
+	const full: RootProjection = { root: guardRoot, full: [entry(guardRoot, "go", "test")], cheap: [] };
+	const pass = parseCommandSegments('"$PF_PYTHON" "$PF_SHARED_DIR/scripts/fast_checks.py" --repo r --phase fast', "/caps");
+	assert.equal(judgeFullSuite(pass, [full], "/caps"), undefined);
+	const compound = parseCommandSegments('"$PF_PYTHON" "$PF_SHARED_DIR/scripts/fast_checks.py" --repo r --phase fast && go test ./...', "/caps");
+	assert.ok(judgeFullSuite(compound, [full], "/caps"));
+});
+
+test("judgeFullSuite: a command outside the capsule's repos or a non-test command is not judged", () => {
+	const full: RootProjection = { root: guardRoot, full: [entry(guardRoot, "go", "test")], cheap: [] };
+	assert.equal(judgeFullSuite(parseCommandSegments("go test ./...", "/elsewhere"), [full], "/caps"), undefined);
+	assert.equal(judgeFullSuite(parseCommandSegments("npm ci", guardRoot), [full], "/caps"), undefined);
 });
